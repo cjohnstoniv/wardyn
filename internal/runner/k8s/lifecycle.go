@@ -132,8 +132,8 @@ func (d *Driver) StopSandbox(ctx context.Context, ref string) error {
 	return d.teardown(ctx, ref, nil)
 }
 
-// KillSandbox is the immediate kill-switch teardown path (zero grace period —
-// SIGKILL now). Idempotent on a gone sandbox.
+// KillSandbox is the immediate kill-switch teardown path (the shortest grace the
+// kubelet confirms; see teardownByRunID). Idempotent on a gone sandbox.
 func (d *Driver) KillSandbox(ctx context.Context, ref string) error {
 	zero := int64(0)
 	return d.teardown(ctx, ref, &zero)
@@ -187,6 +187,9 @@ func (d *Driver) teardownByRunID(ctx context.Context, runID uuid.UUID, gracePeri
 	}
 	ns := d.cfg.Namespace
 	listOpts := metav1.ListOptions{LabelSelector: labelRun + "=" + runID.String()}
+	// Never a force delete here either: a zero grace removes the pods without
+	// the kubelet confirming, and the wait below would then prove nothing.
+	gracePeriodSeconds = runnerGrace(gracePeriodSeconds)
 
 	if err := d.clientset.CoreV1().Pods(ns).DeleteCollection(ctx, metav1.DeleteOptions{GracePeriodSeconds: gracePeriodSeconds}, listOpts); err != nil && !isNotFound(err) {
 		return fmt.Errorf("k8s: teardown: delete pods: %w", err)

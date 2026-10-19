@@ -47,6 +47,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/api"
 	"github.com/cjohnstoniv/wardyn/internal/approval"
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
@@ -166,69 +167,137 @@ func (s *memSecrets) For(owner string) secretstore.Store {
 
 // approval service adapter (copied from cmd/wardynd/adapters.go)
 //
-// cmd/wardynd is package `main`, so its approvalService adapter cannot be
-// imported. It is copied here verbatim (the ~20-line adapter the lane brief
-// describes) so the e2e server runs the SAME real approval FSM the daemon runs:
-// Request -> approval.RequestApproval, Decide -> approval.Decide, Get ->
-// store.GetApproval, List -> store.ListApprovals over the live pool.
+// cmd/wardynd is package `main`, so its approvalStore and approvalService
+// cannot be imported. They are copied here verbatim, including every optional
+// capability the api handlers type-assert for (the pagers, the counts, the
+// escalation readers), so the e2e server runs the SAME approval service the
+// daemon runs and a handler that gains a capability branch is exercised, not
+// silently taken down its fallback path. Keep the two in step.
 
-// approvalStore adapts the function-style internal/store API + the audit
-// Recorder to the narrow approval.Store interface.
+// approvalStore satisfies the narrow approval.Store interface: the embedded
+// store.PG carries the four CRUD methods verbatim, and only Record is adapted.
+//
+// FIX #5: rec is an audit.Recorder (the masked + SIEM-fanout recorder, maskedRec),
+// NOT a plain store.Recorder. The approval FSM used to record decide/expire events
+// straight to Postgres via store.Recorder, bypassing masking and the file/webhook/
+// syslog sinks. Holding the interface here lets main.go inject maskedRec so those
+// events fan out to SIEM exactly like idp/broker events. (store.PG has no Record
+// method, so this one can never be shadowed back to the plain store recorder.)
 type approvalStore struct {
-	pool *pgxpool.Pool
-	rec  store.Recorder
+	store.PG
+	rec audit.Recorder
 }
 
-func (a approvalStore) CreateApproval(ctx context.Context, ar types.ApprovalRequest) (types.ApprovalRequest, error) {
-	return store.NewPG(a.pool).CreateApproval(ctx, ar)
-}
-func (a approvalStore) GetApproval(ctx context.Context, id uuid.UUID) (types.ApprovalRequest, error) {
-	return store.NewPG(a.pool).GetApproval(ctx, id)
-}
-func (a approvalStore) ListExpiredPendingApprovals(ctx context.Context, now, cutoff time.Time, afterID uuid.UUID, limit int) ([]types.ApprovalRequest, error) {
-	return store.NewPG(a.pool).ListExpiredPendingApprovals(ctx, now, cutoff, afterID, limit)
-}
-func (a approvalStore) ListPendingApprovalsForRuns(ctx context.Context, runIDs []uuid.UUID) ([]types.ApprovalRequest, error) {
-	return store.NewPG(a.pool).ListPendingApprovalsForRuns(ctx, runIDs)
-}
-func (a approvalStore) DecideApproval(ctx context.Context, id uuid.UUID, decision types.ApprovalDecision) (types.ApprovalRequest, error) {
-	return store.NewPG(a.pool).DecideApproval(ctx, id, decision)
-}
 func (a approvalStore) Record(ctx context.Context, ev types.AuditEvent) error {
 	return a.rec.Record(ctx, ev)
 }
 
 var _ approval.Store = approvalStore{}
 
-// approvalService implements api.ApprovalService over the real approval FSM.
+// approvalService implements api.ApprovalService over the approval FSM package.
+// FIX #5: st.rec is the masked+fanout audit.Recorder (maskedRec), so decide
+// events recorded by the FSM reach SIEM sinks, not just Postgres.
 type approvalService struct {
-	pool *pgxpool.Pool
-	rec  store.Recorder
+	st approvalStore
 }
-
-func (s *approvalService) st() approvalStore { return approvalStore{pool: s.pool, rec: s.rec} }
 
 func (s *approvalService) Request(ctx context.Context, req types.ApprovalRequest) (types.ApprovalRequest, error) {
-	return approval.RequestApproval(ctx, s.st(), req)
+	return approval.RequestApproval(ctx, s.st, req)
 }
 func (s *approvalService) Decide(ctx context.Context, id uuid.UUID, decidedByType types.ActorType, decision types.ApprovalDecision) (types.ApprovalRequest, error) {
-	return approval.Decide(ctx, s.st(), id, decidedByType, decision)
+	return approval.Decide(ctx, s.st, id, decidedByType, decision)
 }
 func (s *approvalService) Get(ctx context.Context, id uuid.UUID) (types.ApprovalRequest, error) {
-	return store.NewPG(s.pool).GetApproval(ctx, id)
+	return s.st.GetApproval(ctx, id)
 }
 func (s *approvalService) List(ctx context.Context, state types.ApprovalState) ([]types.ApprovalRequest, error) {
-	return store.NewPG(s.pool).ListApprovals(ctx, state)
+	return s.st.ListApprovals(ctx, state)
 }
 func (s *approvalService) CancelForRun(ctx context.Context, runID uuid.UUID, reason string) (map[string]int, error) {
-	return approval.CancelForRun(ctx, s.st(), runID, reason)
+	return approval.CancelForRun(ctx, s.st, runID, reason)
 }
 func (s *approvalService) ExpireOne(ctx context.Context, id uuid.UUID, actor, reason string) error {
-	return approval.ExpireOne(ctx, s.st(), id, actor, reason)
+	return approval.ExpireOne(ctx, s.st, id, actor, reason)
 }
 func (s *approvalService) CountForRun(ctx context.Context, runID uuid.UUID) (int, error) {
-	return store.NewPG(s.pool).CountApprovalsForRun(ctx, runID)
+	return s.st.CountApprovalsForRun(ctx, runID)
 }
+
+// ListApprovalsPage is the OPTIONAL paged lister the api handler type-asserts
+// for (same pattern as store.Pager): the console polls four single-state lists
+// every 10s and decided approvals are never deleted, so the unpaged read grew
+// with deployment age. Promoted from the embedded store.PG; pure delegation,
+// like List — the approval FSM owns decisions, not reads.
+func (s *approvalService) ListApprovalsPage(ctx context.Context, state types.ApprovalState, p store.Page) ([]types.ApprovalRequest, error) {
+	return s.st.ListApprovalsPage(ctx, state, p)
+}
+
+// ListApprovalsPageByRunCreator is item 2 / M2's ownership-scoped analogue of
+// ListApprovalsPage above — the api handler type-asserts for it (same
+// optional-capability pattern as store.Pager) to serve a member's unscoped
+// GET /approvals fail-closed rather than fail-open. Pure delegation, promoted
+// from the embedded store.PG exactly like ListApprovalsPage.
+func (s *approvalService) ListApprovalsPageByRunCreator(ctx context.Context, createdBy string, state types.ApprovalState, p store.Page) ([]types.ApprovalRequest, error) {
+	return s.st.ListApprovalsPageByRunCreator(ctx, createdBy, state, p)
+}
+
+var _ store.ApprovalsByRunCreatorPager = (*approvalService)(nil)
+
+// ListApprovalsPageByRun is the ?run_id= analogue — the shape the CLI and the
+// console's run detail page poll. Without this delegation the handler's
+// type-assert misses and a run-scoped list falls back to reading EVERY approval
+// row in the deployment and filtering in Go (F072). Pure delegation, promoted
+// from the embedded store.PG exactly like ListApprovalsPage.
+func (s *approvalService) ListApprovalsPageByRun(ctx context.Context, runID uuid.UUID, state types.ApprovalState, p store.Page) ([]types.ApprovalRequest, error) {
+	return s.st.ListApprovalsPageByRun(ctx, runID, state, p)
+}
+
+var _ store.ApprovalsByRunPager = (*approvalService)(nil)
+
+// ListPendingApprovalsForRuns is #1197's attention-projection read: the api
+// handler type-asserts for it on s.cfg.Approvals (not s.cfg.Store — see that
+// lane's own finding on where this capability belongs), the same
+// optional-capability pattern as the two pagers above. Pure delegation,
+// promoted from the embedded store.PG.
+func (s *approvalService) ListPendingApprovalsForRuns(ctx context.Context, runIDs []uuid.UUID) ([]types.ApprovalRequest, error) {
+	return s.st.ListPendingApprovalsForRuns(ctx, runIDs)
+}
+
+// CountPendingApprovals / CountPendingApprovalsByRunCreator back
+// GET /me/attention's pending_approvals count in each view — counted in the
+// database rather than listed, the same fix CountApprovalsForRun's own doc
+// argues for. Pure delegation, promoted from the embedded store.PG.
+func (s *approvalService) CountPendingApprovals(ctx context.Context) (int, error) {
+	return s.st.CountPendingApprovals(ctx)
+}
+
+func (s *approvalService) CountPendingApprovalsByRunCreator(ctx context.Context, createdBy string) (int, error) {
+	return s.st.CountPendingApprovalsByRunCreator(ctx, createdBy)
+}
+
+var _ store.ApprovalsForRunsPager = (*approvalService)(nil)
+
+// ListDecidedAlwaysEgressPage is the leader-term heal's narrow, keyset-paged
+// read of decided `always` egress verdicts; the api heal type-asserts for it on
+// s.cfg.Approvals and errors without it. Pure delegation, promoted from the
+// embedded store.PG.
+func (s *approvalService) ListDecidedAlwaysEgressPage(ctx context.Context, state types.ApprovalState, afterRequestedAt time.Time, afterID uuid.UUID, limit int) ([]types.ApprovalRequest, error) {
+	return s.st.ListDecidedAlwaysEgressPage(ctx, state, afterRequestedAt, afterID, limit)
+}
+
+var _ store.DecidedAlwaysEgressPager = (*approvalService)(nil)
+
+// ApprovalEscalations / ApprovalNotifyChannelStats back the approvals list's escalation chips and
+// GET /approval-notify/status. Pure delegation, promoted from the embedded store.PG.
+func (s *approvalService) ApprovalEscalations(ctx context.Context, ids []uuid.UUID, now time.Time) (map[uuid.UUID]types.ApprovalEscalation, error) {
+	return s.st.ApprovalEscalations(ctx, ids, now)
+}
+
+func (s *approvalService) ApprovalNotifyChannelStats(ctx context.Context, now time.Time) ([]types.ApprovalNotifyChannelStat, error) {
+	return s.st.ApprovalNotifyChannelStats(ctx, now)
+}
+
+var _ store.ApprovalNotifyReader = (*approvalService)(nil)
 
 // fake runner
 
@@ -436,7 +505,7 @@ func newHarness(t *testing.T, opts harnessOpts) *harness {
 	// identity, and a fake github minter (the only external dependency).
 	brk := broker.New(broker.NewPgxStore(pool), secrets, rec, idp, gh)
 
-	approvals := &approvalService{pool: pool, rec: rec}
+	approvals := &approvalService{st: approvalStore{PG: store.NewPG(pool), rec: rec}}
 
 	policy := types.RunPolicySpec{
 		AllowedDomains:      []string{"api.anthropic.com"},

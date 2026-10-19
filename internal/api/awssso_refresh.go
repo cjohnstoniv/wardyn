@@ -472,8 +472,9 @@ const AWSSSOSpentTokenRetention = 90 * 24 * time.Hour
 // the mark exists precisely BECAUSE that store's write just failed (see
 // refreshAWSSSOBlob's persist-error arm below). A cache MISS (the first check
 // of one fingerprint since this process started) costs one best-effort row
-// read; every check after that — including every check in a process that has
-// never restarted — is answered from the map alone.
+// read; every check after a SPENT answer is served from the map alone. A
+// not-spent answer is not memoized (the map would otherwise grow one entry per
+// rotation), so each not-spent check costs one row read.
 //
 // Only a DEFINITIVE answer is memoized. A failed read answers not-spent for
 // this one call and is asked again on the next: caching it would mask a
@@ -493,12 +494,16 @@ func (s *Server) awsSSOTokenSpent(fingerprint string) bool {
 	}
 
 	s.ssoRefreshMu.Lock()
-	if s.ssoRefreshSpent == nil {
-		s.ssoRefreshSpent = map[string]bool{}
+	defer s.ssoRefreshMu.Unlock()
+	if spent {
+		if s.ssoRefreshSpent == nil {
+			s.ssoRefreshSpent = map[string]bool{}
+		}
+		s.ssoRefreshSpent[fingerprint] = true
 	}
-	s.ssoRefreshSpent[fingerprint] = spent
-	s.ssoRefreshMu.Unlock()
-	return spent
+	// A mark that landed while the row was being read wins over the row's
+	// stale not-spent answer (#2292); not-spent is never memoized (#2138).
+	return spent || s.ssoRefreshSpent[fingerprint]
 }
 
 // readAWSSSOTokenSpentRow is awsSSOTokenSpent's cache-miss path.

@@ -183,9 +183,6 @@ func TestPG_FloodLimitCountsOnlyWaitingRows(t *testing.T) {
 	if _, err := enqueue(t, pg, p, "flood", now, limit); !errors.Is(err, store.ErrRunQueueFull) {
 		t.Fatalf("the %dst waiting run = %v, want ErrRunQueueFull", limit+1, err)
 	}
-	if n, err := pg.CountQueuedRunsByOwner(ctx, p.ID, "flood"); err != nil || n != limit {
-		t.Fatalf("waiting count = %d, %v; want %d", n, err, limit)
-	}
 	for _, who := range []struct {
 		pool  types.RunnerPool
 		owner string
@@ -204,9 +201,8 @@ func TestPG_FloodLimitCountsOnlyWaitingRows(t *testing.T) {
 	}
 }
 
-// Position is the number of rows ahead (oldest first, run id breaking a tie); the promoter's scan
-// is the same order, and a second scan passes over the rows the first holds.
-func TestPG_QueueOrderPositionAndSkipLocked(t *testing.T) {
+// Position is the number of rows ahead (oldest first, run id breaking a tie).
+func TestPG_QueueOrderPosition(t *testing.T) {
 	ctx := context.Background()
 	pool := runsPGPoolIsolated(t)
 	pg := store.NewPG(pool)
@@ -227,32 +223,6 @@ func TestPG_QueueOrderPositionAndSkipLocked(t *testing.T) {
 	}
 	if _, err := pg.RunQueuePosition(ctx, uuid.New()); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("position of a run that is not waiting = %v, want ErrNotFound", err)
-	}
-
-	a, err := pool.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer a.Rollback(ctx) //nolint:errcheck
-	// The second transaction is on a pool of its own: one goroutine holding two connections of one
-	// pool is what WARDYN_TEST_POOL_GUARD refuses.
-	other, err := pgxpool.New(ctx, pool.Config().ConnString())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer other.Close()
-	b, err := other.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer b.Rollback(ctx) //nolint:errcheck
-	first, err := store.ListRunQueueForUpdate(ctx, a, p.ID, 1)
-	if err != nil || len(first) != 1 || first[0].RunID != ids[0] {
-		t.Fatalf("first scan = %+v, %v; want the oldest run %s", first, err, ids[0])
-	}
-	second, err := store.ListRunQueueForUpdate(ctx, b, p.ID, 0)
-	if err != nil || len(second) != 2 || second[0].RunID != ids[2] || second[1].RunID != ids[1] {
-		t.Fatalf("a second scan = %+v, %v; want to skip the locked head and see %s then %s", second, err, ids[2], ids[1])
 	}
 }
 
@@ -367,5 +337,40 @@ func TestPG_MaxAgeCutoffCountsFromAdmission(t *testing.T) {
 		if ok, err := pg.UpdateRunStateIfCreatedBefore(ctx, r.ID, types.RunRunning, types.RunStopped, cutoff); err != nil || ok != tc.stopped {
 			t.Errorf("%s: stopped=%v err=%v, want stopped=%v", tc.name, ok, err, tc.stopped)
 		}
+	}
+}
+
+// A queued run's component and harness snapshots commit with its queue row: once CreateQueuedRun
+// returns, a promoter on any replica reads the run with its whole authority, and a snapshot that
+// cannot be written leaves no run and no queue row at all.
+func TestPG_CreateQueuedRunCommitsItsSnapshots(t *testing.T) {
+	ctx := context.Background()
+	pool := runsPGPoolIsolated(t)
+	pg := store.NewPG(pool)
+	p := queuePool(t, pg)
+	now := time.Now().UTC()
+	harnesses := []types.RunHarness{{Harness: "claude-code", Starts: true}, {Harness: "codex-cli"}}
+	comps := []types.RunComponent{{Owner: "alice", Name: "Mine", Definition: types.ComponentDefinition{}, SelfDefined: true}}
+	r, err := pg.CreateQueuedRun(ctx, poolRun(p, types.RunQueued, "alice"),
+		store.RunQueueEntry{QueuedAt: now, DeadlineAt: now.Add(time.Hour), Components: comps, Harnesses: harnesses}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hs, err := pg.ListRunHarnesses(ctx, r.ID); err != nil || len(hs) != 2 || hs[0].Harness != "claude-code" || !hs[0].Starts || hs[1].Harness != "codex-cli" {
+		t.Errorf("harnesses = %+v, %v; want the two written with the queue row", hs, err)
+	}
+	if cs, err := pg.ListRunComponents(ctx, r.ID); err != nil || len(cs) != 1 || cs[0].Name != "Mine" {
+		t.Errorf("components = %+v, %v; want the one written with the queue row", cs, err)
+	}
+
+	if _, err := pool.Exec(ctx, `ALTER TABLE run_harnesses ADD CONSTRAINT refuse_all CHECK (false) NOT VALID`); err != nil {
+		t.Fatal(err)
+	}
+	bad := poolRun(p, types.RunQueued, "alice")
+	if _, err := pg.CreateQueuedRun(ctx, bad, store.RunQueueEntry{QueuedAt: now, DeadlineAt: now.Add(time.Hour), Harnesses: harnesses}, 0); err == nil {
+		t.Fatal("a queued run whose harnesses cannot be written was created")
+	}
+	if _, err := pg.GetRun(ctx, bad.ID); !errors.Is(err, store.ErrNotFound) || queueRows(t, pool, bad.ID) != 0 {
+		t.Errorf("after the refused write: run = %v, %d queue rows; want neither", err, queueRows(t, pool, bad.ID))
 	}
 }

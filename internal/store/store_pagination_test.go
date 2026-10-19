@@ -10,6 +10,7 @@
 package store
 
 import (
+	"math"
 	"reflect"
 	"testing"
 )
@@ -86,5 +87,18 @@ func TestPageAppendTo(t *testing.T) {
 				t.Errorf("args = %v, want %v", gotArgs, tt.wantArgs)
 			}
 		})
+	}
+}
+
+// A huge offset must not wrap Limit+Offset negative: Postgres refuses a negative LIMIT and the
+// caller sees a 500.
+func TestRunsByCreatorOrSponsorQuerySaturatesArmLimit(t *testing.T) {
+	_, args := runsByCreatorOrSponsorQuery("alice", Page{Limit: 50, Offset: math.MaxInt})
+	if got := args[1]; got != math.MaxInt {
+		t.Fatalf("arm LIMIT = %v, want saturation at %d", got, math.MaxInt)
+	}
+	_, args = runsByCreatorOrSponsorQuery("alice", Page{Limit: 50, Offset: 10})
+	if got := args[1]; got != 60 {
+		t.Fatalf("arm LIMIT = %v, want 60", got)
 	}
 }

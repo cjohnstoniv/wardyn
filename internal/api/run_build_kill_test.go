@@ -409,3 +409,36 @@ func TestLaunchRecordRun_AnUnreadRunAborts(t *testing.T) {
 		t.Errorf("broker.revoked = %v, want the aborted run %s revoked", h.broker.revoked, fake.createdRunID)
 	}
 }
+
+// failingBaseBuilder fails every base-image wrap, as an unreachable registry or a
+// deleted tag does.
+type failingBaseBuilder struct{ stoppableBuilder }
+
+func (*failingBaseBuilder) FinalizeBase(context.Context, string, string, io.Writer, bool) (BuiltImage, error) {
+	return BuiltImage{}, errors.New("pull denied")
+}
+
+// TestCreateRunImage_BaseImageWrapFailureFailsTheRunOnTheWorkspaceDoorsAlike: a
+// workspace reached through a mount or repo (no workspace_id) whose chosen base
+// image cannot be wrapped ends the run FAILED, as the workspace_id door does,
+// instead of launching on the convention image.
+func TestCreateRunImage_BaseImageWrapFailureFailsTheRunOnTheWorkspaceDoorsAlike(t *testing.T) {
+	srv, st, audit, run, ctx := runBuildFixture(t, newStoppableBuilder())
+	srv.cfg.ImageBuilder = &failingBaseBuilder{}
+	image, failed := srv.resolveCreateRunImage(ctx, createRunRequest{Agent: "claude-code"}, run, []types.Workspace{buildDoorWorkspace()})
+	if !failed {
+		t.Fatalf("resolveCreateRunImage launched on %q after the chosen base image failed to wrap", image)
+	}
+	if got := st.state(run.ID); got != types.RunFailed {
+		t.Errorf("run state = %s, want FAILED", got)
+	}
+	rows := 0
+	for _, ev := range audit.snapshot() {
+		if ev.Action == "run.build" && ev.Outcome == "failure" {
+			rows++
+		}
+	}
+	if rows != 1 {
+		t.Errorf("run.build failure rows = %d, want exactly one", rows)
+	}
+}

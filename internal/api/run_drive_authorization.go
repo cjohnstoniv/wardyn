@@ -87,6 +87,8 @@ func driveRunError(err error) *runRefusal {
 		return runError(http.StatusForbidden, reasonGroupsSnapshotStale, groupsSnapshotStaleMsg)
 	case errors.Is(err, errUserTypeUnknown):
 		return runError(http.StatusForbidden, driveUnavailableUserType, userTypeUnknownMsg)
+	case errors.Is(err, errDriveSubjectUnsupported):
+		return runError(http.StatusUnprocessableEntity, driveRefusalSubjectUnsupported, strings.TrimPrefix(err.Error(), errDriveUnmountable.Error()+": "))
 	case errors.Is(err, errDriveUnmountable):
 		return runError(http.StatusUnprocessableEntity, driveUnavailableUnmountable, strings.TrimPrefix(err.Error(), errDriveUnmountable.Error()+": "))
 	default:

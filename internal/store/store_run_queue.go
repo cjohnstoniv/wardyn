@@ -40,6 +40,11 @@ type RunQueueEntry struct {
 	PolicyRef  json.RawMessage
 	Authority  json.RawMessage
 	Launch     json.RawMessage
+	// Components and Harnesses are the run's authorised snapshots, which CreateQueuedRun writes in
+	// the queue row's own transaction, so no promotable row exists without them. Write-only: a
+	// queue row read back never carries them.
+	Components []types.RunComponent
+	Harnesses  []types.RunHarness
 }
 
 const runQueueCols = `run_id, pool_id, owner, queued_at, deadline_at, policy_ref, authority, launch`
@@ -61,7 +66,7 @@ func jsonOrEmpty(raw json.RawMessage) json.RawMessage {
 }
 
 // CreateQueuedRun inserts r (state QUEUED, bound to a pool), its launch intent when it carries one,
-// and its queue row in one transaction that holds the pool row FOR NO KEY UPDATE, the lock promotion
+// its queue row and e's component and harness snapshots in one transaction that holds the pool row FOR NO KEY UPDATE, the lock promotion
 // takes first, so the owner's waiting count and the insert cannot interleave with a promotion.
 // maxPerOwner <= 0 is unlimited; otherwise an owner with that many runs already waiting for the pool
 // gets ErrRunQueueFull and nothing is written. The queue row's pool and owner are the run's own.
@@ -134,6 +139,16 @@ func (s PG) CreateQueuedRun(ctx context.Context, r types.AgentRun, e RunQueueEnt
 		jsonOrEmpty(e.PolicyRef), jsonOrEmpty(e.Authority), jsonOrEmpty(e.Launch)); err != nil {
 		return types.AgentRun{}, fmt.Errorf("store: insert run queue row: %w", err)
 	}
+	if len(e.Components) > 0 {
+		if err := insertRunComponents(ctx, tx, created.ID, e.Components); err != nil {
+			return types.AgentRun{}, fmt.Errorf("store: put run components: %w", err)
+		}
+	}
+	if len(e.Harnesses) > 0 {
+		if err := insertRunHarnesses(ctx, tx, created.ID, e.Harnesses); err != nil {
+			return types.AgentRun{}, fmt.Errorf("store: put run harnesses: %w", err)
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return types.AgentRun{}, err
 	}
@@ -159,15 +174,6 @@ func (s PG) LeaveRunQueue(ctx context.Context, id uuid.UUID, to types.RunState, 
 	return moved > 0, nil
 }
 
-// CountQueuedRunsByOwner is how many runs owner has waiting for poolID: the flood limit's one read.
-func (s PG) CountQueuedRunsByOwner(ctx context.Context, poolID uuid.UUID, owner string) (int, error) {
-	var n int
-	if err := s.Pool.QueryRow(ctx, `SELECT count(*) FROM run_queue WHERE pool_id = $1 AND owner = $2`, poolID, owner).Scan(&n); err != nil {
-		return 0, fmt.Errorf("store: count queued runs by owner: %w", err)
-	}
-	return n, nil
-}
-
 // RunQueuePosition is how many runs wait ahead of run id in its pool (a count, never whose), or
 // ErrNotFound when the run is not waiting.
 func (s PG) RunQueuePosition(ctx context.Context, id uuid.UUID) (int, error) {
@@ -182,30 +188,6 @@ func (s PG) RunQueuePosition(ctx context.Context, id uuid.UUID) (int, error) {
 		return 0, fmt.Errorf("store: run queue position: %w", err)
 	}
 	return ahead, nil
-}
-
-// ListRunQueueForUpdate is the promoter's scan: poolID's waiting runs oldest first (queued_at, then
-// run_id), each row locked FOR UPDATE SKIP LOCKED so a second promoter passes over what the first holds.
-// q must be a transaction that already holds the pool row's lock. limit <= 0 is every row.
-func ListRunQueueForUpdate(ctx context.Context, q Querier, poolID uuid.UUID, limit int) ([]RunQueueEntry, error) {
-	if limit <= 0 {
-		limit = 1 << 30
-	}
-	rows, err := q.Query(ctx, `SELECT `+runQueueCols+` FROM run_queue WHERE pool_id = $1
-		ORDER BY queued_at, run_id LIMIT $2 FOR UPDATE SKIP LOCKED`, poolID, limit)
-	if err != nil {
-		return nil, fmt.Errorf("store: list run queue: %w", err)
-	}
-	defer rows.Close()
-	var out []RunQueueEntry
-	for rows.Next() {
-		e, err := scanRunQueueEntry(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, e)
-	}
-	return out, rows.Err()
 }
 
 // countPoolSlotHolders counts the runs holding one of poolID's slots: a slot-holding state whose

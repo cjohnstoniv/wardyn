@@ -355,7 +355,7 @@ func TestLaunchRecordRun_ThreadsActingPrincipalCeiling(t *testing.T) {
 	// riding into dispatch, and govProfile carries Limits{DenyInteractive:true}
 	// incidentally for the create-path tests it was written for. A record
 	// session is always interactive, so once the Limits axis binds this lane
-	// (recordCeilingLimits) that stray limit refuses the launch before the
+	// (stepRunCeilingLimits) that stray limit refuses the launch before the
 	// dispatch spec this test reads is ever built. Clearing it states the
 	// fixture's real intent; the assertion below is unchanged and still fails if
 	// the deny stops riding along.

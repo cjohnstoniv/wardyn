@@ -106,17 +106,16 @@
   --fence-fg: #8f5825;
   --fence-border: rgba(176, 114, 58, 0.45);
   --wall-bg: rgba(154, 163, 171, 0.18);
-  --wall-fg: #5c6a74;
+  --wall-fg: #58666f;
   --wall-border: rgba(154, 163, 171, 0.6);
   --vault-bg: rgba(201, 162, 39, 0.16);
-  --vault-fg: #8a6a12;
+  --vault-fg: #806210;
   --vault-border: rgba(201, 162, 39, 0.5);
 
   --border: #e5e5e5;
   --border-strong: #d4d4d4;
   --input: #e5e5e5;
   --input-background: #ffffff;
-  --switch-background: #e5e5e5;
   /* focus ring: #a3a3a3 measured 2.52:1 on this background — below WCAG
      1.4.11's 3:1 non-text minimum. Reuses --muted-foreground's value, now
      proven at 5.33:1 on white here (F7-F1: was a hand-copied #737373 with a
@@ -218,7 +217,6 @@
   --border-strong: #404040;
   --input: #262626;
   --input-background: #1f1f1f;
-  --switch-background: #262626;
   /* focus ring: #404040 measured 1.91:1 on this background — below WCAG
      1.4.11's 3:1 non-text minimum. Reuses --muted-foreground's value, already
      proven at 7.85:1 here. */
@@ -298,7 +296,6 @@
   --color-border-strong: var(--border-strong);
   --color-input: var(--input);
   --color-input-background: var(--input-background);
-  --color-switch-background: var(--switch-background);
   --color-ring: var(--ring);
   --color-chart-4: var(--chart-4);
 

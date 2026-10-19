@@ -68,7 +68,7 @@ export function HowItWorksStrip() {
         const tone = NODE_TONE[n.tone];
         return (
           <li key={n.title} className="flex items-center gap-2 lg:flex-1">
-            <div className={cn("flex-1 rounded-xl border bg-card p-3", tone.ring)}>
+            <div data-testid="how-it-works-card" className={cn("flex-1 self-stretch rounded-xl border bg-card p-3", tone.ring)}>
               <div className={cn("mb-2 inline-flex size-8 items-center justify-center rounded-lg", tone.iconWrap)}>
                 <n.Icon className="size-4" aria-hidden />
               </div>

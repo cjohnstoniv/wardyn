@@ -104,9 +104,6 @@ export const CAPABILITY = {
     "A private SSH key is written to disk in the sandbox — the process running there can read it.",
 } as const;
 
-// Risk grades (D8) — deterministic, computed by Wardyn's rules (not the model).
-// Only High gates an acknowledgment.
-export const RISK_ATTRIBUTION = "Graded by Wardyn's rules, not the model.";
 
 // Viewer/operator role gate (console-side UX only — internal/api/http.go's
 // requireOperator/isOperator is the real enforcement and stays the backstop;

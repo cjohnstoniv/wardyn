@@ -161,7 +161,8 @@ const BACKEND_LABELS = [...DOCKER_BACKENDS, ...K8S_BACKENDS];
 // exercised by every test that needs the screen, not only by the one that
 // asserts it.
 async function gotoDrives(page: Page): Promise<void> {
-  await gotoConsole(page);
+  // The Admin view: the User view's Workspaces has no door (#2887).
+  await gotoConsole(page, "admin");
   await navTo(page, "Workspaces");
   await page.getByRole("button", { name: DRIVES.TITLE, exact: true }).click();
   await expect(page.getByRole("heading", { name: DRIVES.TITLE, level: 1 })).toBeVisible();
@@ -575,7 +576,7 @@ test.describe("drives — the registry is SUPER's, and no super admin's nav list
   test("an admin reaches it from Workspaces and from the Settings card — and never from the sidebar", async ({
     page,
   }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     // No Drives nav entry for a super admin, in either view (§6): the two entry
     // points below are the whole door. Only a security admin's Admin view
     // lists it, for its grants and preview (packet M-A, view-switch.spec.ts).
@@ -864,11 +865,12 @@ test.describe("drives — an admin's New run says none of the member's sentences
     }
     await dialog.getByRole("button", { name: NR_SHARED.CANCEL, exact: true }).click();
 
-    // …and the surfaces that ARE the admin's are live on the same session. The draft has a shape by now,
-    // so leaving it is confirmed.
+    // …and this User-view session offers no door to the admin's drive registry (#2887). The draft has a shape
+    // by now, so leaving it is confirmed.
     await navTo(page, "Workspaces");
     await page.getByRole("alertdialog", { name: UNSAVED_GUARD.TITLE }).getByRole("button", { name: UNSAVED_GUARD.LEAVE }).click();
-    await expect(page.getByRole("button", { name: DRIVES.TITLE, exact: true })).toBeVisible();
+    // The User view's Workspaces has no door to /admin/drives (#2887); the Admin view keeps it.
+    await expect(page.getByRole("button", { name: DRIVES.TITLE, exact: true })).toHaveCount(0);
   });
 });
 

@@ -46,6 +46,7 @@ export function Cockpit({
   grants,
   egress,
   audit,
+  auditGap,
   held,
   outcomeReady,
   pending,
@@ -62,6 +63,8 @@ export function Cockpit({
   grants: CredentialGrant[];
   egress: EgressDecision[];
   audit: AuditEvent[];
+  /** The oldest and newest audit pages did not meet, so counts read off `audit` are a floor. */
+  auditGap?: boolean;
   /** What a killed run held that a kill cannot revoke; undefined while loading. */
   held: HeldCredentials | undefined;
   /** False while a KILLED run's ending facts are still being read: no outcome block yet. */
@@ -177,6 +180,7 @@ export function Cockpit({
     // render; this is the state the alarm chip states.
     heldCount: pending.filter(isHeld).length,
     audit,
+    auditGap,
     onGoAudit,
     onGoPolicy,
     terminalPane,

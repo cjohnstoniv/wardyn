@@ -149,9 +149,9 @@ test.describe("Approvals screen", () => {
 
   test("renders the approvals page header and HITL copy", async ({ page }) => {
     await expect(page.getByRole("heading", { name: "Approvals" })).toBeVisible();
-    // The page description explains an approval only AUTHORIZES a later broker mint.
+    // The page description says each card states exactly what approving grants.
     await expect(
-      page.getByText(/Approving a credential authorizes the broker to mint/i),
+      page.getByText(/Each card says exactly what approving grants/i),
     ).toBeVisible();
     // Both tabs exist.
     await expect(page.getByRole("tab", { name: /Pending/ })).toBeVisible();
@@ -189,7 +189,7 @@ test.describe("Approvals screen", () => {
       page.getByText(/The run works through a short-lived, scoped credential/i),
     ).toBeVisible();
     await expect(
-      page.getByText(/The broker mints a short-lived, scoped credential bound to this run's identity/i),
+      page.getByText(/Wardyn mints a credential bound to this run's identity/i),
     ).toBeVisible();
   });
 
@@ -567,6 +567,35 @@ test.describe("Approvals — decision-scope split button (run cockpit)", () => {
       await expect(page.locator('[data-slot="popover-content"]')).toHaveCount(0);
     } finally {
       deleteApproval(id);
+    }
+  });
+});
+
+test.describe("Approvals — a deny confirmation whose request vanishes (run cockpit)", () => {
+  test("the dialog does not come back for the vanished request when the next row arrives", async ({ page }) => {
+    clearPending();
+    const runId = runningRunId();
+    const first = uniqueMarker("vanish-a");
+    const second = uniqueMarker("vanish-b");
+    const firstId = seedPending({ kind: "egress_domain", scope: { host: first, port: 443 } });
+    let secondId = "";
+    try {
+      await page.goto(`/runs/${runId}`);
+      const row = page.getByTestId("live-approval-row");
+      await expect(row.getByText(markerRe(first))).toBeVisible();
+      await row.getByRole("button", { name: "Deny" }).first().click();
+      await expect(page.getByRole("alertdialog")).toBeVisible();
+
+      // The request leaves PENDING elsewhere; the strip empties and the dialog goes with it.
+      deleteApproval(firstId);
+      await expect(page.getByRole("alertdialog")).toHaveCount(0, { timeout: 10_000 });
+
+      secondId = seedPending({ kind: "egress_domain", scope: { host: second, port: 443 } });
+      await expect(page.getByTestId("live-approval-row").getByText(markerRe(second))).toBeVisible({ timeout: 10_000 });
+      await expect(page.getByRole("alertdialog")).toHaveCount(0);
+    } finally {
+      deleteApproval(firstId);
+      if (secondId) deleteApproval(secondId);
     }
   });
 });

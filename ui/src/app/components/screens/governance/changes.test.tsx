@@ -10,7 +10,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { toast } from "sonner";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
@@ -56,11 +56,16 @@ function change(over: Partial<GovernanceChange> = {}): GovernanceChange {
   };
 }
 
+function Where() {
+  return <p data-testid="where">{useLocation().pathname}</p>;
+}
+
 function renderTab(changes: GovernanceChange[], principal = "bo@example.com", onChanged = vi.fn()) {
   render(
     <MemoryRouter>
       <OperatorProvider operator={false} principal={principal}>
         <ChangesTab changes={changes} loadError={null} onChanged={onChanged} />
+        <Where />
       </OperatorProvider>
     </MemoryRouter>,
   );
@@ -131,11 +136,23 @@ describe("the Changes tab", () => {
     expect(screen.getByText("group:eng")).toBeInTheDocument();
   });
 
-  it("with nothing pending shows the empty state, with no action", () => {
+  // #2907: the lead and the empty text were one sentence said twice; the empty block says it once, and its
+  // one door is the audit trail, where the decided changes are.
+  it("with nothing pending shows one empty block, and its button opens the audit trail", async () => {
     renderTab([]);
-    expect(screen.getByText(CHANGES.EMPTY_TITLE)).toBeInTheDocument();
-    expect(screen.getByText(CHANGES.EMPTY_BODY)).toBeInTheDocument();
-    expect(screen.queryByRole("button")).toBeNull();
+    const block = screen.getByTestId("changes-empty");
+    expect(within(block).getByText(CHANGES.EMPTY_TITLE)).toBeInTheDocument();
+    expect(within(block).getByText(CHANGES.EMPTY_BODY)).toBeInTheDocument();
+    expect(screen.queryByText(CHANGES.LEAD)).toBeNull();
+    expect(screen.queryByRole("heading", { name: CHANGES.TAB })).toBeNull();
+    await userEvent.click(within(block).getByTestId("changes-empty-audit"));
+    expect(screen.getByTestId("where")).toHaveTextContent("/admin/audit");
+  });
+
+  it("with changes waiting the list replaces the empty block and keeps the lead", () => {
+    renderTab([change()]);
+    expect(screen.queryByTestId("changes-empty")).toBeNull();
+    expect(screen.getByText(CHANGES.LEAD)).toBeInTheDocument();
   });
 });
 

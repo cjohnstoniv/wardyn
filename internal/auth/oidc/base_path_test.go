@@ -181,6 +181,23 @@ func TestBasePathMiddlewareClearsSessionEverywhere(t *testing.T) {
 	}
 }
 
+// TestBasePathDeniedLoginClearsSessionEverywhere: a denied sign-in clears wardyn_session at both
+// paths too, or a pre-move Path=/ session keeps authenticating the person the login just refused.
+func TestBasePathDeniedLoginClearsSessionEverywhere(t *testing.T) {
+	for _, tc := range basePathCases {
+		wantPaths := []string{tc.cookiePath}
+		if tc.base != "" {
+			wantPaths = append(wantPaths, "/")
+		}
+		env := newIdPEnv(t)
+		cb := doCallbackFlow(t, env, env.newBasePathAuth(t, tc.base, []string{"allowed.example"}))
+		if cb.Code != http.StatusFound || !strings.Contains(cb.Header().Get("Location"), "auth_error=") {
+			t.Fatalf("base %q: callback = %d Location %q, want a redirect to the auth error page", tc.base, cb.Code, cb.Header().Get("Location"))
+		}
+		assertClearsSessionEverywhere(t, "base "+tc.base+" denied", cb.Result().Cookies(), wantPaths...)
+	}
+}
+
 // TestBasePathLoginCookiesAndCallback: the one-time login cookies share the
 // session's Path — the browser only returns them to a callback under it —
 // and the IdP is told the callback under the base.
@@ -208,5 +225,13 @@ func TestBasePathRefusedSignInReturnsUnderTheBase(t *testing.T) {
 	if loc := cb.Header().Get("Location"); cb.Code != http.StatusFound || !strings.HasPrefix(loc, "/wardyn/?auth_error=") {
 		t.Fatalf("refused callback = %d Location %q, want 302 to /wardyn/?auth_error=…", cb.Code, loc)
 	}
-	assertCookiePaths(t, "refused callback", cb.Result().Cookies(), "/wardyn")
+	// The session is also cleared at "/", where a pre-base-path cookie lives; every other cookie
+	// stays under the base.
+	var underBase []*http.Cookie
+	for _, c := range cb.Result().Cookies() {
+		if c.Name != "wardyn_session" || c.Path != "/" || c.MaxAge >= 0 {
+			underBase = append(underBase, c)
+		}
+	}
+	assertCookiePaths(t, "refused callback", underBase, "/wardyn")
 }

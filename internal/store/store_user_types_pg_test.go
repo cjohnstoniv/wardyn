@@ -136,3 +136,21 @@ func TestPG_UserTypes_DeleteRefusedWhileATokenCarriesIt(t *testing.T) {
 		t.Fatalf("delete after revoke: %v", err)
 	}
 }
+
+// Recreating a type id that a governance assignment still names (the type was deleted under it) is refused
+// with the referenced-id sentinel, which is still a conflict; a plainly taken id is only a conflict.
+func TestPG_CreateUserTypeNamesAnOrphanedReference(t *testing.T) {
+	st := store.NewPG(runsPGPool(t))
+	ctx := context.Background()
+	uniq := uuid.NewString()
+	id := seedSubjectUserType(t, st, "orphan")
+	seedGovernanceAssignment(t, st, types.GovernanceAssignment{
+		SubjectType: types.CapabilitySubjectUserType, Subject: id, ProfileID: seedGovernanceProfile(t, st, "orphan-profile-"+uniq).ID})
+	if _, err := st.Pool.Exec(ctx, `DELETE FROM user_types WHERE id = $1`, id); err != nil {
+		t.Fatal(err)
+	}
+	_, err := st.CreateUserType(ctx, types.UserType{ID: id, Name: "Again " + uniq})
+	if !errors.Is(err, store.ErrUserTypeIDReferenced) || !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("recreate an orphaned id = %v, want ErrUserTypeIDReferenced (an ErrConflict)", err)
+	}
+}

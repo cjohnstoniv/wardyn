@@ -16,10 +16,11 @@ import (
 // reservedEnvNames is the closed list, written out here on purpose: a name
 // dropped from the validator's list has to be dropped from this one too.
 var reservedEnvNames = []string{
-	"PATH", "HOME", "SHELL", "BASH_ENV", "ENV", "PROMPT_COMMAND",
-	"NODE_OPTIONS", "NODE_PATH", "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP",
-	"PERL5OPT", "PERL5LIB", "RUBYOPT", "RUBYLIB",
+	"PATH", "HOME", "SHELL", "BASH_ENV", "ENV", "PROMPT_COMMAND", "SHELLOPTS", "BASHOPTS", "PS4",
+	"NODE_OPTIONS", "NODE_PATH", "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "PYTHONUSERBASE",
+	"PERL5OPT", "PERL5LIB", "RUBYOPT", "RUBYLIB", "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS",
 	"GIT_EXEC_PATH", "GIT_SSH", "GIT_SSH_COMMAND", "GIT_PROXY_COMMAND", "CLAUDE_CONFIG_DIR",
+	"GIT_EXTERNAL_DIFF", "GIT_ASKPASS", "SSH_ASKPASS", "GIT_TEMPLATE_DIR",
 	"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
 	"SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
 	"NODE_EXTRA_CA_CERTS", "GIT_SSL_CAINFO", "GIT_SSL_NO_VERIFY",
@@ -66,6 +67,8 @@ func TestComponentDefinitionValidate_ReservedEnvironmentNamesAreExact(t *testing
 	ok := []string{
 		"PATHS", "MY_PATH", "APP_HOME", "HOMEPAGE", "ENVIRONMENT", "NODE_ENV", "PYTHONUNBUFFERED",
 		"LDFLAGS", "GIT_AUTHOR_NAME", "GIT_CONFIG", "CLAUDE_MODEL_HINT", "PROXY_URL", "SSL_MODE", "REGION",
+		// Editor and pager choices are the person's own preference, not reserved.
+		"EDITOR", "VISUAL", "PAGER", "GIT_EDITOR", "GIT_PAGER", "GIT_SEQUENCE_EDITOR",
 	}
 	config := map[string]string{}
 	for _, name := range ok {

@@ -168,7 +168,7 @@ narration_end
 | **Beats** | `kubectl get pods -n wardyn` → `wardyn run ssh --print <run-id>` → `ssh <run-id>@127.0.0.1 -p 2222 hostname` → `'exit 37'` and `echo $?` → `wardyn audit <run-id> --action-prefix ssh.` |
 | **Script** | [`scripts/demo-beats/13-terminal-to-the-cluster.sh`](../scripts/demo-beats/13-terminal-to-the-cluster.sh) — terminal-only, one pane, no tmux (V12 needs three because its subject is three identities; this one's is one operator and one cluster) |
 | **Stack** | the `make kind-quickstart` cluster, **not** `make setup`'s compose stack. Preflight asserts `/healthz` reports `runner=k8s`, because both publish `127.0.0.1:8080` and a 200 says nothing about who answered |
-| **Auth** | the install's own admin token, read from `Secret wardyn-auth` and **exported, never typed** — `wardyn audit` takes it from `WARDYN_ADMIN_TOKEN`. Never film a `--help`: cobra renders that flag's default, and the default *is* the token |
+| **Auth** | the install's admin token, read from `Secret wardyn-auth` and **exported, never typed**; `wardyn audit` takes it from `WARDYN_ADMIN_TOKEN`. `--help` prints no token, but a typed one would show |
 | **Key** | the operator's own `~/.ssh/id_ed25519.pub`, registered silently (201, or 409 on a retake). Key management is V12's subject, not this one's |
 | **Verifier** | `WARDYN_DEMO_VIDEO=13` → three audit checks: the `ssh.exec` row for `hostname`, the one carrying `exit 37`, and every `ssh.authenticate` success attributed to the run's owner |
 | **Knobs** | four, all with a default that is what the table above describes; see [below](#v13-knobs) |
@@ -430,9 +430,11 @@ WARDYN_DEMO_SHELL_ACT5=1 make record-demo
 - **Check quota before a long take**, or you find out 25 minutes in:
 
 ```sh
-wardyn run --agent claude-code --task-mode exec --task 'echo ok' \
+wardyn run --agent claude-code --task 'Reply with the single word ok' \
   --policy-file examples/policies/sandbox.yaml --wait --timeout 3m
 ```
+
+- Leave `--task-mode exec` out: an exec task runs a plain shell command, never calls the model, and so passes on an exhausted quota.
 
 ## Beat sheet
 

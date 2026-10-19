@@ -77,7 +77,9 @@ func TestGatewayIPRefused(t *testing.T) {
 		"224.0.0.1", "ff02::1", // multicast
 		"0.0.0.0", "::", // unspecified
 		"64:ff9b::a9fe:a9fe", "64:ff9b::808:808", "64:ff9b:1::a9fe:a9fe", // NAT64-embedded
-		"fd00:ec2::254", "fd00:ec2::23", "100.100.100.200", // cloud metadata inside ULA / CGNAT space
+		"fd00:ec2::254", "fd00:ec2::23", "fd20:ce::254", "100.100.100.200", // cloud metadata inside ULA / CGNAT space
+		"::127.0.0.1", "::169.254.169.254", // IPv4-compatible, embedding loopback / metadata
+		"2002:7f00:1::1", "2002:a9fe:a9fe::1", // 6to4, embedding loopback / metadata
 	} {
 		if !GatewayIPRefused(net.ParseIP(ip)) {
 			t.Errorf("GatewayIPRefused(%s) = false, want true — a model gateway can never legitimately be this address", ip)
@@ -87,6 +89,7 @@ func TestGatewayIPRefused(t *testing.T) {
 		"10.0.0.5", "172.16.0.1", "192.168.1.1", "fd00::1", "100.64.0.1", // where an internal gateway lives
 		"0.1.2.3", "192.0.0.1", "198.18.0.1", "255.255.255.255", // reserved, but not this predicate's business
 		"8.8.8.8", "2001:4860:4860::8888",
+		"::10.0.0.5", "2002:a00:5::1", // IPv4-compatible / 6to4 embedding an internal address
 	} {
 		if GatewayIPRefused(net.ParseIP(ip)) {
 			t.Errorf("GatewayIPRefused(%s) = true, want false — refusing it would break the internal-gateway feature", ip)

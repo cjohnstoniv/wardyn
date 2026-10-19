@@ -125,6 +125,18 @@ describe("main drive", () => {
     expect(screen.getAllByText(NR_SHARED.COMING_SOON).length).toBeGreaterThanOrEqual(1);
   });
 
+  // #2860: the reuse row was a 150px grid that stacked the checkbox, label and
+  // chip on three lines and floated the tooltip away. One wrapping flex row now.
+  it("keeps the reuse checkbox, label, chip and tooltip in one flex row", () => {
+    show();
+    const row = screen.getByLabelText(NR_FILES.REUSE_LABEL).parentElement!.parentElement!;
+    expect(row.className).toContain("flex");
+    expect(row.className).not.toContain("grid");
+    expect(within(row).getByText(NR_FILES.REUSE_LABEL)).toBeInTheDocument();
+    expect(within(row).getByText(NR_SHARED.COMING_SOON)).toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: NR_FILES.REUSE_ARIA })).toBeInTheDocument();
+  });
+
   it("clamps a size over the cap to the cap on blur and names the pool", async () => {
     show();
     await screen.findByText(NR_FILES.UP_TO("8 GiB"));

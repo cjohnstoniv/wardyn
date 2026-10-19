@@ -10,7 +10,7 @@
 # edits, deletes or retags a release or image.
 # The image list is derived from .github/workflows/release.yml (every `- name: <image>` matrix entry); the
 # expected assets are one sbom-<image>.cdx.json per image, every name on the release-assets job's `for want in`
-# list (that list includes the macOS runner package, wardyn-runnerd.pkg, which exists from 0.9.3; older versions are checked without it), and wardyn-$V.tgz. A missing name AND an extra name are each a failure.
+# list (that list includes the macOS runner package, wardyn-runnerd.pkg, which exists from 0.9.3, and the licence tarball, wardyn-licenses.tar.gz, which exists from 0.9.4; older versions are checked without them), and wardyn-$V.tgz. A missing name AND an extra name are each a failure.
 # Every image index must also contain linux/amd64 and linux/arm64; a missing platform fails with the image name.
 # WSL law: an empty DOCKER_CONFIG so the desktop credential helper cannot break anonymous pulls of public packages.
 # Exit status = the number of failures (capped at 255).
@@ -24,8 +24,12 @@ RELEASE_YML="$(cd "$(dirname "$0")/.." && pwd)/.github/workflows/release.yml"
 [ -r "$RELEASE_YML" ] || { echo "cannot read $RELEASE_YML" >&2; exit 2; }
 IMAGES=$(grep -oE '^[[:space:]]+- name: [a-z0-9-]+$' "$RELEASE_YML" | awk '{print $3}' | sort -u)
 WANT=$(sed -n '/for want in/,/; do/p' "$RELEASE_YML" | sed -e 's/.*for want in//' -e 's/; do.*//' -e 's/\\$//' | tr -s ' \n' '\n\n' | grep .)
-# The macOS package first shipped in 0.9.3; an older tag never had it.
+# The macOS package first shipped in 0.9.3-rc.3; an older tag, and the 0.9.3 rc.1 and rc.2 built just before
+# its job landed, never had it. (A plain sort -V on the full string cannot say this: it puts 0.9.3 before its rcs.)
+case "$V" in 0.9.3-rc.1|0.9.3-rc.2) WANT=$(grep -vx 'wardyn-runnerd.pkg' <<<"$WANT") ;; esac
 [ "$(printf '%s\n' "${V%%-*}" 0.9.3 | sort -V | head -1)" = 0.9.3 ] || WANT=$(grep -vx 'wardyn-runnerd.pkg' <<<"$WANT")
+# The licence tarball first shipped in 0.9.4.
+[ "$(printf '%s\n' "${V%%-*}" 0.9.4 | sort -V | head -1)" = 0.9.4 ] || WANT=$(grep -vx 'wardyn-licenses.tar.gz' <<<"$WANT")
 [ -n "$IMAGES" ] && [ -n "$WANT" ] || { echo "could not derive the image or asset list from $RELEASE_YML" >&2; exit 2; }
 OUT=$(mktemp -d)
 export DOCKER_CONFIG="$OUT/dockercfg"; mkdir -p "$DOCKER_CONFIG"; echo '{}' > "$DOCKER_CONFIG/config.json"
@@ -40,9 +44,9 @@ ID="https://github.com/cjohnstoniv/wardyn/.github/workflows/release.yml@refs/tag
 ISS=https://token.actions.githubusercontent.com
 for img in $IMAGES; do
   ref="ghcr.io/cjohnstoniv/$img:$V"
-  digest=$(docker buildx imagetools inspect "$ref" --format '{{json .Manifest.Digest}}' 2>/dev/null | tr -d '"')
+  digest=$(docker buildx imagetools inspect "$ref" --format '{{json .Manifest.Digest}}' 2>"$OUT/imagetools-$img.err" | tr -d '"')
   plats=$(docker buildx imagetools inspect "$ref" --format '{{range .Manifest.Manifests}}{{.Platform.OS}}/{{.Platform.Architecture}} {{end}}' 2>/dev/null)
-  if [[ -z "$digest" ]]; then echo "FAIL $img: no index digest"; fails=$((fails+1)); continue; fi
+  if [[ -z "$digest" ]]; then echo "FAIL $img: no index digest"; tail -3 "$OUT/imagetools-$img.err"; fails=$((fails+1)); continue; fi
   # Every published index must carry both laptop architectures (an arm64 laptop pulls the same tag).
   for plat in linux/amd64 linux/arm64; do
     [[ " $plats" == *" $plat "* ]] || { echo "FAIL $img: index has no $plat [$plats]"; fails=$((fails+1)); }

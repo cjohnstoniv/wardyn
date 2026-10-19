@@ -261,13 +261,13 @@ func TestResolverReintersectsGrantsAgainstEachBase(t *testing.T) {
 	if len(got.Ceiling.EligibleGrants) != 1 || !strings.Contains(string(got.Ceiling.EligibleGrants[0].Scope), "a.example") {
 		t.Errorf("grants = %v, want only the one the base holds (b.example is within the deployment but not the base)", got.Ceiling.EligibleGrants)
 	}
-	if len(got.Warnings) != 1 || strings.Contains(strings.Join(got.Warnings, ""), "base") && !strings.Contains(got.Warnings[0], `"leaf"`) {
+	if len(got.Warnings) != 1 || !strings.Contains(got.Warnings[0], `"leaf"`) {
 		t.Errorf("warnings = %v, want one naming the leaf", got.Warnings)
 	}
 }
 
-// TestResolverStrictAtWriteMeetAtResolve: the same overlay a write refuses resolves, narrowed with a
-// warning, once the base has narrowed since.
+// TestResolverComposesOnTheDeploymentDefault: a profile with no base composes on the deployment
+// default, keeping the overlay's allowlist and the deployment's denies.
 func TestResolverComposesOnTheDeploymentDefault(t *testing.T) {
 	deployment := govDeployment()
 	srv := &Server{cfg: Config{DefaultPolicy: deployment}}

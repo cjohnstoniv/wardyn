@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { onUnauthorized, probeAuth, setToken } from "./core";
+import { isSessionEnded, onUnauthorized, probeAuth, probeAuthWithReason, setToken } from "./core";
 
 // R4/F027 — probeAuth must tell THREE things apart, because the console spends
 // each of them differently:
@@ -43,6 +43,18 @@ describe("probeAuth — a rejected caller, a broken daemon and a dead network ar
   it("a REAL 401 is 'unauthed' — the only answer that means the caller is signed out", async () => {
     fetchMock.mockResolvedValue(new Response("", { status: 401, statusText: "Unauthorized" }));
     expect(await probeAuth()).toBe("unauthed");
+  });
+
+  // #2110: the server names why it refused a session cookie; the cold load shows the notice for those.
+  it("a 401 carries the reason the server named, so a session that ended is told apart from no session", async () => {
+    const body = (reason: string) => JSON.stringify({ error: "your session expired — sign in again", reason });
+    fetchMock.mockResolvedValue(new Response(body("expired_session"), { status: 401 }));
+    expect(await probeAuthWithReason()).toEqual({ probe: "unauthed", reason: "expired_session" });
+    fetchMock.mockResolvedValue(new Response("", { status: 401 }));
+    expect(await probeAuthWithReason()).toEqual({ probe: "unauthed", reason: "" });
+    expect(["expired_session", "revoked_session", "role_stamp_stale", "invalid_session"].every(isSessionEnded)).toBe(true);
+    expect(isSessionEnded("")).toBe(false);
+    expect(isSessionEnded("session_revocation_unavailable")).toBe(false);
   });
 
   it("a daemon 5xx is 'unreachable', NOT 'unauthed' — nothing judged the credentials", async () => {

@@ -32,12 +32,32 @@ export interface LaunchedRead {
   pool: WaitingPool | undefined;
 }
 
+/** The name and limit of the pool a queued run waits for; undefined until the pool list answers. */
+export function useWaitingPool(poolId: string | undefined): WaitingPool | undefined {
+  const [pool, setPool] = React.useState<WaitingPool>();
+  React.useEffect(() => {
+    setPool(undefined);
+    if (!poolId) return;
+    let live = true;
+    runnerPools.list().then(
+      (list) => {
+        const row = list.pools.find((p) => p.id === poolId);
+        if (live && row) setPool({ name: row.name, max: row.slots?.max });
+      },
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+  }, [poolId]);
+  return pool;
+}
+
 /** `seed` is what a create just answered with; the run is read at once either way. */
 export function useLaunchedRun(runId: string, seed?: LaunchedRun): LaunchedRead {
   const [run, setRun] = React.useState<LaunchedRun | null | undefined>(seed);
   const [failed, setFailed] = React.useState(false);
   const [now, setNow] = React.useState(Date.now);
-  const [pool, setPool] = React.useState<WaitingPool>();
   const current = React.useRef(runId);
   current.current = runId;
 
@@ -55,28 +75,13 @@ export function useLaunchedRun(runId: string, seed?: LaunchedRun): LaunchedRead 
 
   React.useEffect(() => {
     setRun(seed);
-    setPool(undefined);
     void read();
     // The seed only starts the screen; the id is what a read is for.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runId]);
   usePoll(read, LAUNCHED_POLL_MS, !failed && !stillLaunching(run));
 
-  const poolId = run?.queue?.pool_id;
-  React.useEffect(() => {
-    if (!poolId) return;
-    let live = true;
-    runnerPools.list().then(
-      (list) => {
-        const row = list.pools.find((p) => p.id === poolId);
-        if (live && row) setPool({ name: row.name, max: row.slots?.max });
-      },
-      () => {},
-    );
-    return () => {
-      live = false;
-    };
-  }, [poolId]);
+  const pool = useWaitingPool(run?.queue?.pool_id);
 
   return { run, failed, now, reload: () => void read(), pool };
 }

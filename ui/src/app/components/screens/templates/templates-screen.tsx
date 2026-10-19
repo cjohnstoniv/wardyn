@@ -132,11 +132,6 @@ export function TemplatesScreen() {
         icon={LayoutTemplate}
         title={T.EMPTY_TITLE}
         description={T.EMPTY_BODY}
-        action={
-          <Button asChild variant="outline">
-            <Link to={NEW_RUN_PATH}>{T.EMPTY_ACTION}</Link>
-          </Button>
-        }
       />
     );
   else if (shown.length === 0)

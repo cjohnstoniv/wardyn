@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/erasure"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
@@ -68,6 +69,9 @@ func (s *Server) erasureOrchestrator(credRep *secretstore.EraseReport, want *era
 			if err == nil {
 				err = s.eraseLoginGroups(ctx, person, want)
 			}
+			if err == nil {
+				err = s.eraseTokenHistory(ctx, person, want)
+			}
 			if credRep != nil {
 				*credRep = rep
 			}
@@ -109,7 +113,7 @@ func (s *Server) erasureOrchestrator(credRep *secretstore.EraseReport, want *era
 }
 
 // The two answers credential.erase gives for what held back a writer that began before it:
-// the owner's erase generation, which refuses it in any process, or the in-process locks alone,
+// the owner's erase generation, which refuses it in any process, or the credential locks alone,
 // for a store that keeps no generation.
 const (
 	writeFenceGeneration = "generation"
@@ -371,7 +375,8 @@ func (s *Server) provedNames(ctx context.Context, person string, want *erasureNa
 
 // eraseAuditSealKeys is the audit_personal_fields scope for person, the principal the route resolved
 // (resolveSecretOwner): it destroys, in every version, the key the person's sealed audit fields are
-// under, and clears the person from the governance changes they proposed or decided (migration 0126).
+// under, and clears the person from the governance changes they proposed or decided (migration 0126)
+// and from the approvals they decided, with the reason they typed.
 // The fields are sealed under the person's principal; a name the directory did not yet know when a row
 // was written is under its own key, so the keys of the person's proved names (erasureNames) are
 // destroyed too (a destroy that finds no live key writes only a tombstone). A governance change matches on its
@@ -383,8 +388,21 @@ func (s *Server) eraseAuditSealKeys(ctx context.Context, person string, want *er
 		return nil, err
 	}
 	names := slices.Concat([]string{person}, proved.entra, proved.aliases)
+	keyOwners := names
+	// Under WARDYN_AUDIT_SEAL=full a row's actor is the person's subject id, which an identity row
+	// unbound and bound again hands to someone else: destroying under the subject too keeps the
+	// rows written before now erased whoever the subject names later (audit.Sealer renderSubject).
+	if sd, ok := s.cfg.Store.(audit.SubjectDirectory); ok {
+		id, found, err := sd.AuditSubjectFor(ctx, person)
+		if err != nil {
+			return nil, err
+		}
+		if found {
+			keyOwners = append(slices.Clone(names), audit.SubjectActorPrefix+id)
+		}
+	}
 	generations := 0
-	for _, name := range names {
+	for _, name := range keyOwners {
 		gens, err := s.cfg.SubjectKeys.Destroy(ctx, name, subjectkey.PurposeAuditSeal)
 		if err != nil {
 			return nil, err
@@ -401,7 +419,19 @@ func (s *Server) eraseAuditSealKeys(ctx context.Context, person string, want *er
 		}
 		detail["governance_changes"] = n
 	}
+	if ae, ok := s.cfg.Store.(approvalDecisionEraser); ok {
+		n, err := ae.EraseApprovalDecisionPersonalFields(ctx, names)
+		if err != nil {
+			return nil, err
+		}
+		detail["approvals"] = n
+	}
 	return detail, nil
+}
+
+// approvalDecisionEraser clears who decided an approval and the reason they typed (store.PG).
+type approvalDecisionEraser interface {
+	EraseApprovalDecisionPersonalFields(ctx context.Context, principals []string) (int, error)
 }
 
 // erasureSelfTarget reports whether the person an erasure names is the caller:

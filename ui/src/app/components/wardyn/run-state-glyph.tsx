@@ -18,7 +18,7 @@ export type RunAttention =
   | "working" // RUNNING and streaming
   | "active" // RUNNING, idle
   | "starting"
-  | "queued" // PENDING
+  | "queued" // QUEUED or PENDING
   | "done"
   | "inactive"; // STOPPED / ARCHIVED
 
@@ -69,6 +69,7 @@ export function attentionFor(state: RunState | string, s: AttentionSignals = {})
       return s.working ? "working" : "active";
     case "STARTING":
       return "starting";
+    case "QUEUED":
     case "PENDING":
       return "queued";
     case "COMPLETED":

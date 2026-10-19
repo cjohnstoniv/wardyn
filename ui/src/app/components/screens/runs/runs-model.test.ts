@@ -150,7 +150,7 @@ describe("rowPresentation — plain state words with no attention", () => {
   it.each([
     ["RUNNING", "blue", "Running"],
     ["STARTING", "blue", "Starting"],
-    ["PENDING", "blue", "Queued"],
+    ["PENDING", "blue", "Pending"],
     ["COMPLETED", "grey", "Completed"],
     ["FAILED", "red", "Failed"],
     ["KILLED", "grey", "Killed"],

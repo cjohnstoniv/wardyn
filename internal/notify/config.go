@@ -93,6 +93,9 @@ type Channel struct {
 	To       []string `json:"to"`
 	Username string   `json:"username"`
 	Password string   `json:"password"`
+	// Helo is the name EHLO announces; empty announces "localhost". A relay that rejects a non-FQDN
+	// HELO needs this set to a name it accepts.
+	Helo string `json:"helo"`
 }
 
 // Parse validates raw and returns the config. An empty value means notifications are off and returns
@@ -301,7 +304,7 @@ var hostRe = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$`)
 // and the field, never its value.
 func (ch *Channel) validateSMTP() error {
 	type field struct{ name, value string }
-	fields := []field{{"host", ch.Host}, {"from", ch.From}, {"username", ch.Username}, {"password", ch.Password}}
+	fields := []field{{"host", ch.Host}, {"from", ch.From}, {"username", ch.Username}, {"password", ch.Password}, {"helo", ch.Helo}}
 	for i, to := range ch.To {
 		fields = append(fields, field{"to #" + strconv.Itoa(i+1), to})
 	}
@@ -315,6 +318,9 @@ func (ch *Channel) validateSMTP() error {
 	}
 	if !hostRe.MatchString(ch.Host) && net.ParseIP(ch.Host) == nil {
 		return fmt.Errorf("approval notify config: channel %q: smtp host must be a DNS name or IP address (value withheld)", ch.ID)
+	}
+	if ch.Helo != "" && !hostRe.MatchString(ch.Helo) {
+		return fmt.Errorf("approval notify config: channel %q: smtp helo must be a DNS name (value withheld)", ch.ID)
 	}
 	if ch.Port < 1 || ch.Port > 65535 {
 		return fmt.Errorf("approval notify config: channel %q: smtp port must be 1 to 65535", ch.ID)

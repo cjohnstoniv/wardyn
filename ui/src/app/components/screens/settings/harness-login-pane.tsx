@@ -223,6 +223,7 @@ export function HarnessLoginPane({
   // Rolling buffer of recent PTY output + latches so we act on each thing once.
   const outBufRef = React.useRef("");
   const savedRef = React.useRef(false);
+  const failedTokenRef = React.useRef("");
   // The launch-after-dismiss race: harnessLogin's POST answers with the run id
   // after dispatch has already created the run, so a cancellation that lands
   // while it is in flight sees `runId === null` and kills nothing — the run is
@@ -231,6 +232,7 @@ export function HarnessLoginPane({
   const dismissedRef = React.useRef(false);
   const failedRef = React.useRef(false);
   const openedUrlRef = React.useRef(false);
+  const authUrlRef = React.useRef("");
   const signedInRef = React.useRef(false);
   // Once-only completion (Codex #9): guards completeCapture below.
   const completedRef = React.useRef(false);
@@ -279,6 +281,7 @@ export function HarnessLoginPane({
     dismissedRef.current = false;
     failedRef.current = false;
     openedUrlRef.current = false;
+    authUrlRef.current = "";
     setAutoCaptured(false);
     setEverAttached(false);
     pollFailuresRef.current = 0;
@@ -500,7 +503,9 @@ function startingSentenceOf(run: AgentRun | undefined): string {
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
         setPhase("attached"); // stay on the terminal so they can retry the paste
-        savedRef.current = false; // allow another attempt (auto or manual)
+        setAutoCaptured(false); // so the paste fallback and Cancel render again
+        failedTokenRef.current = t; // the scrape must not re-send a token the server refused
+        savedRef.current = false; // allow another attempt (manual)
       }
     },
     [modelProvider, token, runId, onDone],
@@ -544,12 +549,17 @@ function startingSentenceOf(run: AgentRun | undefined): string {
   const handleOutput = React.useCallback(
     (chunk: string) => {
       outBufRef.current = (outBufRef.current + chunk).slice(-16384);
-      if (!openedUrlRef.current) {
-        const url = flow.capture === "helper" ? extractDeviceVerificationUrl(outBufRef.current) : extractAuthUrl(outBufRef.current);
-        if (url) {
-          openedUrlRef.current = true;
-          setAuthUrl(url);
-        }
+      // The device flow reads on every chunk, not once: a retried login prints a new code and a repaint
+      // can finish a truncated one, and its extractor picks the latest whole attempt. The OAuth
+      // extractor returns the first URL, so that flow stays latched. openedUrlRef only says a URL has
+      // been seen (the self-run grace check).
+      const helper = flow.capture === "helper";
+      const url = helper ? extractDeviceVerificationUrl(outBufRef.current) : openedUrlRef.current ? null : extractAuthUrl(outBufRef.current);
+      if (url && url !== authUrlRef.current) {
+        openedUrlRef.current = true;
+        authUrlRef.current = url;
+        setAuthUrl(url);
+        setTabOpened(false); // a tab opened for the old code is not this one
       }
       // Finding 7b: a HINT; only swaps CAPTURE_HANDOFF in (checked before the
       // marker latches so it fires even when the marker never arrives).
@@ -586,7 +596,7 @@ function startingSentenceOf(run: AgentRun | undefined): string {
         return;
       }
       const tok = extractSetupToken(outBufRef.current);
-      if (tok) {
+      if (tok && tok !== failedTokenRef.current) {
         setToken(tok);
         setAutoCaptured(true);
         void saveToken(tok);

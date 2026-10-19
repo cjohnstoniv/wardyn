@@ -364,6 +364,39 @@ grep -qF 'BuildArch:      ${RPM_ARCH}' "${PKGR}" \
 grep -q 'PREFIX="${PAYLOAD}/usr/local/lib/wardyn"' "${PKGR}" \
   || fail "${PKGR}'s payload prefix changed — wardyn-desktop.sh's REPO_ROOT='../..' depends on the deploy/ level being present"
 
+# The tarball is unpacked at / as root: every entry root-owned, and no './'
+# entry that would re-own / itself. Built for real, with stubs for go (no
+# compile) and the .deb tools.
+pkg_tmp="$(mktemp -d)"
+mkdir -p "${pkg_tmp}/bin" "${pkg_tmp}/out"
+cat > "${pkg_tmp}/bin/go" <<'STUB'
+#!/usr/bin/env bash
+case "$1" in
+  env) echo amd64 ;;
+  build) while [ $# -gt 0 ]; do [ "$1" = -o ] && { : > "$2"; exit 0; }; shift; done ;;
+esac
+STUB
+printf '#!/usr/bin/env bash\nexec "$@"\n' > "${pkg_tmp}/bin/fakeroot"
+printf '#!/usr/bin/env bash\ncase "$1" in --build) : > "$3" ;; --contents) echo "x ./usr/" ;; esac\n' > "${pkg_tmp}/bin/dpkg-deb"
+chmod +x "${pkg_tmp}/bin/"*
+PATH="${pkg_tmp}/bin:${PATH}" "${PKGR}" --version 0.0.0-test --out "${pkg_tmp}/out" >"${pkg_tmp}/log" 2>&1 \
+  || { cat "${pkg_tmp}/log" >&2; fail "${PKGR} failed with stubbed go/dpkg-deb"; }
+tarball="${pkg_tmp}/out/wardyn-desktop-0.0.0-test-amd64.tar.gz"
+listing="$(tar --numeric-owner -tvzf "${tarball}")"
+[ -n "${listing}" ] || fail "${tarball} is empty"
+not_root="$(awk '$2 != "0/0"' <<<"${listing}")"
+[ -z "${not_root}" ] || fail "the desktop tarball has entries not owned 0/0 — unpacked at / as root they belong to the builder's uid:
+${not_root}"
+# One read of the names: a `tar | grep -q` pipeline under pipefail fails whenever grep exits
+# first and tar takes the SIGPIPE.
+names="$(tar -tzf "${tarball}")"
+if grep -qE '^\.(/|$)' <<<"${names}"; then
+  fail "the desktop tarball has a './' entry — unpacked at / as root it re-owns / itself"
+fi
+grep -qx 'usr/local/lib/wardyn/deploy/desktop/wardyn-desktop.sh' <<<"${names}" \
+  || fail "the desktop tarball no longer carries usr/local/lib/wardyn/deploy/desktop/wardyn-desktop.sh"
+rm -rf "${pkg_tmp}"
+
 echo "test-desktop-profile: m-prime invariants PASS"
 
 # ── F185: /etc/wardyn/secret.env is a trust boundary, not formatting ────────
@@ -393,6 +426,7 @@ f185_fixture() { # MODE -> managed dir
   local mode="$1" md
   md="$(mktemp -d -p "${F185_TMP}")"
   printf 'WARDYN_WARDYND_IMAGE=ghcr.io/example/wardynd@sha256:aa\n' > "${md}/wardyn.env"
+  chmod 0644 "${md}/wardyn.env"
   printf 'AGE-SECRET-KEY-1FAKE\n' > "${md}/age.key"
   # secret.env IS a shell script, which is what dot-sourcing means.
   printf 'WARDYN_OIDC_CLIENT_SECRET=s3cret\ntouch "%s/PWNED"\n' "${md}" > "${md}/secret.env"
@@ -431,6 +465,35 @@ md="$(f185_fixture 0600)"; f185_run "${md}" >/dev/null
   || fail "a root-owned 0600 secret.env was NOT sourced — the audit-sink bearer token and OIDC client secret never reach the stack (F185)"
 echo "test-desktop-profile: secret.env trust-boundary invariants PASS"
 
+# 4. The other MDM envelope files the launcher acts on as root (wardyn.env,
+#    policy.json, site-config.json) get the same owner and write rule: one
+#    another account can write is refused before anything is sourced or run;
+#    readable stays fine (the table ships them 0644).
+for f in wardyn.env policy.json site-config.json; do
+  md="$(f185_fixture 0600)"
+  [ -f "${md}/${f}" ] || printf '{}\n' > "${md}/${f}"
+  chmod 0666 "${md}/${f}"
+  out="$(f185_run "${md}")"
+  [ ! -e "${md}/PWNED" ] \
+    || fail "wardyn-desktop.sh went on past a group/world-writable ${f} — whoever can write it chooses what this root process runs"
+  printf '%s' "${out}" | grep -q "${f} is owned by uid .* group/world-writable" \
+    || fail "wardyn-desktop.sh did not refuse a group/world-writable ${f} by name. Got: $(printf '%s' "${out}" | tail -1)"
+done
+md="$(f185_fixture 0600)"
+printf '{}\n' > "${md}/policy.json"; printf '{}\n' > "${md}/site-config.json"
+chmod 0644 "${md}/policy.json" "${md}/site-config.json"
+f185_run "${md}" >/dev/null
+[ -e "${md}/PWNED" ] \
+  || fail "root-owned 0644 envelope files were refused — the check must refuse only what another account can write"
+# A symlinked wardyn.env is judged by the file it points at: a link to a
+# root-owned 0644 file starts as it does today.
+md="$(f185_fixture 0600)"
+mkdir "${md}/real"; mv "${md}/wardyn.env" "${md}/real/wardyn.env"; ln -s real/wardyn.env "${md}/wardyn.env"
+f185_run "${md}" >/dev/null
+[ -e "${md}/PWNED" ] \
+  || fail "a symlinked wardyn.env pointing at a root-owned 0644 file was refused — the check must follow the link"
+echo "test-desktop-profile: envelope file trust-boundary invariants PASS"
+
 # ── #1493: the published port the launcher probes is the one compose publishes ─
 #
 # Compose takes WARDYN_UP_PORT from the process environment, then --env-file.
@@ -441,10 +504,10 @@ f1493_run() { # MANAGED_DIR [VAR=VALUE...] -> exit code; argv logs in MANAGED_DI
   local md="$1"; shift
   : > "${md}/curl.log"; : > "${md}/docker.log"
   printf '#!/usr/bin/env bash\necho "$*" >> "%s/curl.log"\nexit 0\n' "${md}" > "${md}/bin-curl"
-  printf '#!/usr/bin/env bash\necho "$*" >> "%s/docker.log"\nexit 0\n' "${md}" > "${md}/bin-docker"
+  printf '#!/usr/bin/env bash\necho "$* internal_issuer=${WARDYN_OIDC_INTERNAL_ISSUER-unset}" >> "%s/docker.log"\nexit 0\n' "${md}" > "${md}/bin-docker"
   mkdir -p "${md}/bin"; mv "${md}/bin-curl" "${md}/bin/curl"; mv "${md}/bin-docker" "${md}/bin/docker"
   chmod +x "${md}/bin/curl" "${md}/bin/docker"
-  printf '{}\n' > "${md}/site-config.json"
+  printf '{}\n' > "${md}/site-config.json"; chmod 0644 "${md}/site-config.json"
   timeout 30 env -u WARDYN_UP_PORT PATH="${md}/bin:${PATH}" \
       DOCKER_HOST="unix:///nonexistent-f1493.sock" WARDYN_MANAGED_DIR="${md}" "$@" \
       "${DESKTOP_SH}" up >"${md}/out.log" 2>&1
@@ -452,6 +515,7 @@ f1493_run() { # MANAGED_DIR [VAR=VALUE...] -> exit code; argv logs in MANAGED_DI
 f1493_fixture() { # ENVELOPE_PORT_LINE [SECRET_LINE] -> managed dir
   local md; md="$(mktemp -d -p "${F185_TMP}")"
   printf 'WARDYN_WARDYND_IMAGE=ghcr.io/example/wardynd@sha256:aa\n%s\ntouch "%s/ENVELOPE_SOURCED"\n' "$1" "${md}" > "${md}/wardyn.env"
+  chmod 0644 "${md}/wardyn.env"
   printf 'AGE-SECRET-KEY-1FAKE\n' > "${md}/age.key"
   if [ -n "${2:-}" ]; then printf '%s\n' "$2" > "${md}/secret.env"; chmod 0600 "${md}/secret.env"; fi
   printf '%s' "${md}"
@@ -491,6 +555,108 @@ for bad in 'abc' '"8097"' '0' '65536' '8097 ' '-1'; do
   [ ! -s "${md}/curl.log" ] || fail "launcher probed after refusing WARDYN_UP_PORT='${bad}' (#1493)"
 done
 echo "test-desktop-profile: published-port resolution PASS"
+
+# ── #2151: an envelope naming a real IdP reaches it server-side too ─────────
+# compose defaults WARDYN_OIDC_INTERNAL_ISSUER to Dex's http://dex:5556, which
+# no desktop stack runs. Unset everywhere, the launcher hands compose the issuer.
+f2151_internal() { grep ' up -d ' "$1/docker.log" | sed -n 's/.* internal_issuer=//p'; }
+entra='https://login.microsoftonline.com/t/v2.0'
+md="$(f1493_fixture "WARDYN_OIDC_ISSUER=${entra}")"
+f1493_run "${md}" || fail "launcher failed with an IdP issuer in the envelope (#2151): $(tail -1 "${md}/out.log")"
+[ "$(f2151_internal "${md}")" = "${entra}" ] || fail "an envelope IdP issuer with no internal issuer reached compose as internal '$(f2151_internal "${md}")', not the issuer (#2151)"
+md="$(f1493_fixture 'WARDYN_OIDC_ISSUER=http://localhost:5556')"
+f1493_run "${md}" || fail "launcher failed with the Dex issuer (#2151)"
+[ "$(f2151_internal "${md}")" = unset ] || fail "the Dex (loopback) issuer no longer keeps compose's dex:5556 default (#2151): '$(f2151_internal "${md}")'"
+md="$(f1493_fixture "$(printf 'WARDYN_OIDC_ISSUER=%s\nWARDYN_OIDC_INTERNAL_ISSUER=https://idp.internal' "${entra}")")"
+f1493_run "${md}" || fail "launcher failed with both issuers in the envelope (#2151)"
+[ "$(f2151_internal "${md}")" = unset ] || fail "the launcher overrode the envelope's own internal issuer (#2151): '$(f2151_internal "${md}")'"
+md="$(f1493_fixture "WARDYN_OIDC_ISSUER=${entra}")"
+f1493_run "${md}" WARDYN_OIDC_INTERNAL_ISSUER=https://shell.internal || fail "launcher failed with a shell internal issuer (#2151)"
+[ "$(f2151_internal "${md}")" = https://shell.internal ] || fail "a shell WARDYN_OIDC_INTERNAL_ISSUER no longer wins (#2151): '$(f2151_internal "${md}")'"
+echo "test-desktop-profile: OIDC internal issuer resolution PASS"
+
+# ── #2161/#2162: what the launcher hands compose ────────────────────────────
+#
+# Stubs only: docker records the environment it was started with, curl answers.
+f21_run() { # MANAGED_DIR -> runs `up`; the stub's environment lands in MANAGED_DIR/env.log
+  local md="$1"
+  mkdir -p "${md}/bin"
+  cat > "${md}/bin/docker" <<'DOCKER_STUB'
+#!/usr/bin/env bash
+printf 'SOCK=%s\nHOST=%s\nSINKS=%s\n' "${WARDYN_DOCKER_SOCK-<unset>}" "${DOCKER_HOST-<unset>}" "${WARDYN_AUDIT_SINKS-<unset>}" >> "${ENVLOG}"
+exit 0
+DOCKER_STUB
+  printf '#!/usr/bin/env bash\nexit 0\n' > "${md}/bin/curl"
+  chmod +x "${md}/bin/docker" "${md}/bin/curl"
+  printf '{}\n' > "${md}/site-config.json"
+  : > "${md}/env.log"
+  timeout 30 env -u WARDYN_DOCKER_SOCK -u WARDYN_AUDIT_SINKS PATH="${md}/bin:${PATH}" ENVLOG="${md}/env.log" \
+      DOCKER_HOST="unix:///nonexistent-f21.sock" WARDYN_MANAGED_DIR="${md}" "${DESKTOP_SH}" up >"${md}/out.log" 2>&1
+}
+f21_fixture() { # ENVELOPE_LINE [SECRET_FILE_BODY] -> managed dir
+  local md; md="$(mktemp -d -p "${F185_TMP}")"
+  printf 'WARDYN_WARDYND_IMAGE=ghcr.io/example/wardynd@sha256:aa\n%s\n' "$1" > "${md}/wardyn.env"
+  printf 'AGE-SECRET-KEY-1FAKE\n' > "${md}/age.key"
+  if [ -n "${2:-}" ]; then printf '%s\n' "$2" > "${md}/secret.env"; chmod 0600 "${md}/secret.env"; fi
+  printf '%s' "${md}"
+}
+
+# #2162: an envelope WARDYN_DOCKER_SOCK goes through the same Colima/Rancher
+# remap as an auto-detected one (the host-side socket is not bind-mountable);
+# any other socket is mounted as given.
+for pair in '/Users/dev/.colima/default/docker.sock=/var/run/docker.sock' \
+            '/Users/dev/.rd/docker.sock=/var/run/docker.sock' \
+            '/run/user/1000/docker.sock=/run/user/1000/docker.sock'; do
+  given="${pair%%=*}"; want="${pair#*=}"
+  md="$(f21_fixture "WARDYN_DOCKER_SOCK=${given}")"
+  f21_run "${md}" || fail "launcher failed with WARDYN_DOCKER_SOCK=${given} in the envelope (#2162): $(tail -1 "${md}/out.log")"
+  grep -qx "SOCK=${want}" "${md}/env.log" \
+    || fail "an envelope WARDYN_DOCKER_SOCK=${given} reached compose as '$(grep -m1 '^SOCK=' "${md}/env.log")', not ${want} (#2162)"
+  grep -qx "HOST=unix://${given}" "${md}/env.log" \
+    || fail "DOCKER_HOST no longer follows the envelope socket ${given} (#2162): $(grep -m1 '^HOST=' "${md}/env.log")"
+done
+echo "test-desktop-profile: envelope docker socket remap PASS"
+
+# #2161: secret.env is sourced as shell, so the envelopes' WARDYN_AUDIT_SINKS
+# example must survive that: sourced verbatim it has to reach compose as JSON.
+for envelope in "${DESK_DIR}"/wardyn.env*.example; do
+  line="$(grep -m1 '^# WARDYN_AUDIT_SINKS=' "${envelope}" | sed 's/^# //')"
+  [ -n "${line}" ] || fail "${envelope} no longer carries a WARDYN_AUDIT_SINKS example"
+  md="$(f21_fixture '# no sock' "${line}")"
+  f21_run "${md}" || fail "launcher failed on ${envelope}'s own WARDYN_AUDIT_SINKS example in secret.env (#2161): $(tail -1 "${md}/out.log")"
+  grep -m1 '^SINKS=' "${md}/env.log" | sed 's/^SINKS=//' | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null \
+    || fail "${envelope}: the WARDYN_AUDIT_SINKS example, copied into secret.env, reaches compose as '$(grep -m1 '^SINKS=' "${md}/env.log")' - not JSON, so wardynd would refuse to boot (#2161)"
+done
+echo "test-desktop-profile: audit-sinks example survives secret.env PASS"
+
+# ── #2163: a plain uninstall that cannot stop the stack says so ──────────────
+#
+# install.sh runs as root and removes init files, so it is exercised from a copy
+# in a scratch tree with `id`, `rm` and the init tools stubbed: nothing real is touched.
+f2163_run() { # LAUNCHER_RC DOCKER_RC -> runs install.sh --uninstall; docker argv in $t/docker.log
+  local t; t="$(mktemp -d -p "${F185_TMP}")"
+  mkdir -p "${t}/deploy/desktop" "${t}/scripts/lib" "${t}/bin"
+  cp "${DESK_DIR}/install.sh" "${t}/deploy/desktop/install.sh"
+  cp "${REPO_ROOT}/scripts/lib/common.sh" "${t}/scripts/lib/common.sh"
+  printf '#!/usr/bin/env bash\nexit %s\n' "$1" > "${t}/deploy/desktop/wardyn-desktop.sh"
+  chmod +x "${t}/deploy/desktop/wardyn-desktop.sh"
+  printf '#!/usr/bin/env bash\n[ "${1:-}" = -u ] && { echo 0; exit 0; }\nexec /usr/bin/id "$@"\n' > "${t}/bin/id"
+  printf '#!/usr/bin/env bash\necho "$*" >> "%s/docker.log"\nexit %s\n' "${t}" "$2" > "${t}/bin/docker"
+  for stub in rm launchctl systemctl; do printf '#!/usr/bin/env bash\nexit 0\n' > "${t}/bin/${stub}"; done
+  chmod +x "${t}/bin/"*
+  : > "${t}/docker.log"
+  F2163_DIR="${t}"
+  PATH="${t}/bin:${PATH}" timeout 30 bash "${t}/deploy/desktop/install.sh" --uninstall >"${t}/out.log" 2>&1
+}
+f2163_run 1 0 || fail "plain uninstall failed although 'docker compose -p wardyn-desktop down' stopped the stack (#2163): $(tail -2 "${F2163_DIR}/out.log")"
+grep -qx 'compose -p wardyn-desktop down' "${F2163_DIR}/docker.log" \
+  || fail "plain uninstall did not fall back to the project-label down when the launcher failed (#2163): $(cat "${F2163_DIR}/docker.log")"
+if f2163_run 1 1; then fail "plain uninstall exited 0 although nothing stopped the stack (#2163)"; fi
+grep -q 'docker compose -p wardyn-desktop down' "${F2163_DIR}/out.log" \
+  || fail "plain uninstall did not name the command that stops the stack (#2163): $(tail -3 "${F2163_DIR}/out.log")"
+f2163_run 0 1 || fail "plain uninstall failed although the launcher stopped the stack (#2163)"
+[ ! -s "${F2163_DIR}/docker.log" ] || fail "plain uninstall ran the fallback although the launcher stopped the stack (#2163)"
+echo "test-desktop-profile: plain uninstall stop fallback PASS"
 
 # ── F113/F184: the enrolment image is disclosed where it is decided ─────────
 #

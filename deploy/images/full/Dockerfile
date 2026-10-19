@@ -20,8 +20,8 @@
 # go >= 1.26 (running go 1.23.5; GOTOOLCHAIN=local)". Keep this at or above the
 # `toolchain` line of the repos you build (this digest is go1.27.2; wardyn itself
 # pins toolchain go1.26.9). Bump the pin rather than relaxing GOTOOLCHAIN.
-FROM golang:1.27.2@sha256:5bc7f572bbaa98885a3a1fd9c0aa76b59e3e14e8628bfc316bbfd0c701e4818c AS goroot
-FROM rust:1.98.1-slim-trixie@sha256:4cd829461bd5c4d511c32e269da9cb8929223b666519d8004e35fc8d1d771ab7 AS rustroot
+FROM golang:1.27.2@sha256:820153096fda4de6ac1b7194d12e416b7dd8f4e9a33d17e0345b111b945162d8 AS goroot
+FROM rust:1.99.0-slim-trixie@sha256:2752b332db73fdbb7dc576f06c82ed1f312005784ef913d7e04a28f5f55dc581 AS rustroot
 
 # Not digest-pinned: this is a locally-built image tag (produced by
 # deploy/images/claude-code/Dockerfile), not a registry image — it has no
@@ -83,16 +83,29 @@ ARG PNPM_VERSION=9.15.4
 RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi; \
     if [ -n "$HTTP_PROXY" ]; then npm config set proxy "$HTTP_PROXY"; fi; \
     if [ -n "$HTTPS_PROXY" ]; then npm config set https-proxy "$HTTPS_PROXY"; fi; \
-    npm install -g "pnpm@${PNPM_VERSION}" && pnpm --version
+    npm install -g "pnpm@${PNPM_VERSION}" && pnpm --version \
+ && npm config delete proxy https-proxy
 
 # JDK 21 (Temurin) + Maven, for jsoup (needs 21) and JVM projects generally.
+# Adoptium's signing key is checked by FINGERPRINT, as the Azure CLI block below
+# checks Microsoft's (key id 843C48A565F8F04B, the key Adoptium's own build
+# scripts trust), and its repository supplies temurin-21-jdk and the CA bundle
+# that package depends on, never any other package name.
 ARG TARGETARCH
-RUN install -d /etc/apt/keyrings \
-    && wget -qO - https://packages.adoptium.net/artifactory/api/gpg/key/public | gpg --dearmor -o /etc/apt/keyrings/adoptium.gpg \
-    && echo "deb [signed-by=/etc/apt/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb trixie main" > /etc/apt/sources.list.d/adoptium.list \
-    && apt-get update && apt-get install -y --no-install-recommends temurin-21-jdk maven \
-    && rm -rf /var/lib/apt/lists/* \
-    && ln -s "/usr/lib/jvm/temurin-21-jdk-${TARGETARCH:-$(dpkg --print-architecture)}" /usr/lib/jvm/temurin-21-jdk
+RUN set -eu; \
+    install -d /etc/apt/keyrings; export GNUPGHOME=/tmp/adoptium-gnupg; install -d -m 0700 "$GNUPGHOME"; \
+    wget -qO /tmp/adoptium.asc https://packages.adoptium.net/artifactory/api/gpg/key/public; \
+    keys="$(gpg --show-keys --with-colons /tmp/adoptium.asc)"; \
+    [ "$(printf '%s\n' "$keys" | grep -c '^pub:')" = 1 ] || { echo "Adoptium's package signing key file does not hold exactly one key" >&2; exit 1; }; \
+    fpr="$(printf '%s\n' "$keys" | awk -F: '$1 == "fpr" { print $10; exit }')"; \
+    [ "$fpr" = "3B04D753C9050D9A5D343F39843C48A565F8F04B" ] || { echo "Adoptium's package signing key is not the pinned one: $fpr" >&2; exit 1; }; \
+    gpg --dearmor -o /etc/apt/keyrings/adoptium.gpg /tmp/adoptium.asc; \
+    rm -rf /tmp/adoptium.asc "$GNUPGHOME"; \
+    echo "deb [signed-by=/etc/apt/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb trixie main" > /etc/apt/sources.list.d/adoptium.list; \
+    printf 'Package: *\nPin: origin packages.adoptium.net\nPin-Priority: -1\n\nPackage: temurin-21-jdk adoptium-ca-certificates\nPin: origin packages.adoptium.net\nPin-Priority: 500\n' > /etc/apt/preferences.d/adoptium; \
+    apt-get update; apt-get install -y --no-install-recommends temurin-21-jdk maven; \
+    rm -rf /var/lib/apt/lists/*; \
+    ln -s "/usr/lib/jvm/temurin-21-jdk-${TARGETARCH:-$(dpkg --print-architecture)}" /usr/lib/jvm/temurin-21-jdk
 # The JDK installs under an architecture-suffixed directory (-amd64, -arm64); the arch-neutral link keeps JAVA_HOME one value.
 ENV JAVA_HOME=/usr/lib/jvm/temurin-21-jdk
 
@@ -158,8 +171,12 @@ RUN chmod -R a+rwX /opt/rust
 # tool binaries under go/bin stay put) so a k8s run's fill lands on the volume
 # ephemeralScratchVolumes mounts there (internal/runner/k8s/naming.go) and
 # counts against disk_mib instead of the pod's unmetered writable layer.
-RUN install -d -o agent -g agent /home/agent/go /home/agent/.cache/go-build \
-      /home/agent/.cache/gotmp /home/agent/.cache/go/mod /home/agent/.cache/npm
+# The parents are named so they get the owner too: `install -d` leaves the ones it
+# creates implicitly (.cache, .cache/go) root-owned, and the agent then cannot create
+# ~/.cache/ms-playwright, node-gyp's devdir or pip's cache.
+RUN install -d -o agent -g agent /home/agent/go /home/agent/.cache /home/agent/.cache/go \
+      /home/agent/.cache/go-build /home/agent/.cache/gotmp /home/agent/.cache/go/mod \
+      /home/agent/.cache/npm
 
 # Maven proxy: unlike npm/pip/cargo/go/git, Maven does NOT honor the sandbox's
 # HTTP(S)_PROXY env vars — it resolves Maven Central directly and fails

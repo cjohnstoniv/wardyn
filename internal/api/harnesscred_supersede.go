@@ -281,9 +281,10 @@ func (s *Server) supersedeOneLoginRun(ctx context.Context, run types.AgentRun, a
 //     before X's insert, so it sees only itself; X then inserts and its pass
 //     sees both, but Y does not PRECEDE X, so it kills nothing. Two live
 //     sign-ins survive — and neither is KILLED, so the capture PUT's guard does
-//     not apply to that pair either. A third sign-in clears it. Closing it needs
-//     a per-actor advisory lock around insert + pass; that is not built, and it
-//     is a LOW residual of a LOW finding.
+//     not apply to that pair either. A third sign-in clears it. The per-actor
+//     advisory lock around insert + pass (lockLoginSupersede) closes it for the
+//     launches that take it; where a store cannot lock, this residual remains,
+//     and it is a LOW residual of a LOW finding.
 //   - NEVER ZERO. A launch's own run can only be ended by a pass that ran after
 //     its insert, and the LAST insert is followed only by its own pass, which
 //     never takes itself. There is always a survivor. The one shape that could

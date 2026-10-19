@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"hash/crc32"
+	"math"
 	"time"
 
 	"github.com/google/uuid"
@@ -28,6 +29,9 @@ import (
 type Page struct {
 	Limit  int
 	Offset int
+	// Newest asks a per-run audit read for the newest window first (ORDER BY seq DESC) instead of
+	// the oldest. No other query reads it.
+	Newest bool
 }
 
 // appendTo appends " LIMIT $n [OFFSET $n+1]" to q, using positional args
@@ -109,12 +113,44 @@ func sponsoredServicePrincipalsSQL(sponsor string) string {
 	return "(SELECT '" + types.ServicePrincipalPrefix + "' || name FROM service_identities WHERE sponsor = " + sponsor + ")"
 }
 
+// runsByCreatorOrSponsorQuery is ListRunsPageByCreatorOrSponsor's SQL. Two created_by arms, each ordered and
+// limited on its own: `created_by = $1 OR created_by IN (subquery)` cannot use agent_runs_created_by_idx,
+// so the planner walked agent_runs_created_at_idx and filtered, reading the whole table for a member with
+// few runs. Each arm asks for offset+limit rows, which is all the outer page can need from it. The id
+// breaks a created_at tie, so the page boundary is the same on every read; the second arm skips the
+// caller's own rows, so a row never comes back twice.
+func runsByCreatorOrSponsorQuery(principal string, p Page) (string, []any) {
+	arm := func(where string) string {
+		q := `SELECT ` + runCols + ` FROM agent_runs WHERE ` + where + ` ORDER BY created_at DESC, id DESC`
+		if p.Limit > 0 {
+			q += ` LIMIT $2`
+		}
+		return `(` + q + `)`
+	}
+	args := []any{principal}
+	if p.Limit > 0 {
+		args = append(args, p.armLimit())
+	}
+	q := `SELECT ` + runCols + ` FROM (` +
+		arm(`created_by = $1`) + ` UNION ALL ` +
+		arm(`created_by <> $1 AND created_by IN `+sponsoredServicePrincipalsSQL("$1")) +
+		`) u ORDER BY created_at DESC, id DESC`
+	return p.appendTo(q, args)
+}
+
+// armLimit is Limit+Offset, saturating at MaxInt: a sum that wrapped negative would send a negative
+// LIMIT, which Postgres refuses and the caller sees as a 500.
+func (p Page) armLimit() int {
+	if p.Offset > math.MaxInt-p.Limit {
+		return math.MaxInt
+	}
+	return p.Limit + p.Offset
+}
+
 // ListRunsPageByCreatorOrSponsor is ListRunsPageByCreator plus the runs of the service identities principal
 // sponsors, same order.
 func (s PG) ListRunsPageByCreatorOrSponsor(ctx context.Context, principal string, p Page) ([]types.AgentRun, error) {
-	q, args := p.appendTo(`
-		SELECT `+runCols+`
-		FROM agent_runs WHERE created_by = $1 OR created_by IN `+sponsoredServicePrincipalsSQL("$1")+` ORDER BY created_at DESC`, []any{principal})
+	q, args := runsByCreatorOrSponsorQuery(principal, p)
 	return collect(ctx, s.Pool, "list", "runs by creator or sponsor", q, args, scanRun)
 }
 
@@ -485,12 +521,20 @@ func (s PG) ListApprovalsPage(ctx context.Context, stateFilter types.ApprovalSta
 // order, bounded by p. audit_events_run_seq_idx makes WHERE run_id + ORDER
 // BY seq an indexed range scan with no sort; OFFSET pages forward without
 // flipping to DESC, so the per-run trail stays ASC (docs/sdk.md's exit-code
-// contract) and a caller pages to the newest events with ?offset=.
+// contract) and a caller reads the newest events with ?offset= or with Page.Newest.
 func (s PG) QueryAuditEventsPage(ctx context.Context, runID uuid.UUID, p Page) ([]types.AuditEvent, error) {
 	q, args := p.appendTo(`
 		SELECT `+auditCols+`
-		FROM audit_events WHERE run_id=$1 ORDER BY seq ASC`, []any{runID})
+		FROM audit_events WHERE run_id=$1 ORDER BY seq `+auditRunOrder(p), []any{runID})
 	return collect(ctx, s.Pool, "query", "audit events", q, args, scanAuditEvent)
+}
+
+// auditRunOrder is a per-run audit read's direction: chronological unless the caller asked for the newest window.
+func auditRunOrder(p Page) string {
+	if p.Newest {
+		return "DESC"
+	}
+	return "ASC"
 }
 
 // QueryRecentAuditEventsPage returns the newest-first global audit feed,

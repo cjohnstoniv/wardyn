@@ -83,6 +83,11 @@ func TestPolicyPreviewInheritedProviderRefusal(t *testing.T) {
 	if w.Code != 403 || strings.Contains(w.Body.String(), "hidden-pin") || strings.Contains(w.Body.String(), `"spec"`) {
 		t.Fatalf("pin authorization leaked: %d %s", w.Code, w.Body.String())
 	}
+	// Any 403 would pass the check above: the preview must refuse for the reason the launch door does.
+	launch := doSSO(t, srv, http.MethodPost, "/api/v1/runs", ssoSession(t, "member", "m@example.com", oidc.RoleUser), `{"agent":"claude-code","workspace_id":"`+ws.ID.String()+`"}`)
+	if got := errorReason(w); got == "" || launch.Code != w.Code || errorReason(launch) != got {
+		t.Fatalf("preview refusal %d %q differs from the launch door's %d %q", w.Code, got, launch.Code, errorReason(launch))
+	}
 }
 
 func TestPolicyPreviewADOWithoutCredentialValuesOrConfiguredHosts(t *testing.T) {

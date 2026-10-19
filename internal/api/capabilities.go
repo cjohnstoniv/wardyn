@@ -885,10 +885,14 @@ func (s *Server) ownsSecretMemoized(ctx context.Context, owner, name string) boo
 		// Names only, own rows only — the same read ownsSecret makes, and the
 		// same reason: an ownership claim must be provable, never merely
 		// unrefuted.
-		if names, err := s.cfg.Secrets.For(owner).List(ctx); err == nil {
-			for _, n := range names {
-				set[n] = true
-			}
+		names, err := s.cfg.Secrets.For(owner).List(ctx)
+		if err != nil {
+			// Fail closed (no ownership proven), but not silently: a store fault
+			// otherwise reads as "you hold no such secret".
+			slog.WarnContext(ctx, "api: list a person's own secrets for an ownership check", slog.Any("err", err))
+		}
+		for _, n := range names {
+			set[n] = true
 		}
 		memo.byOwner[owner] = set
 	}

@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -212,5 +213,24 @@ func TestRunLimitsReclamp_OnlyTheCapturedProfile(t *testing.T) {
 	sweepLimits(t, f)
 	if run := st.current(); run.RunLimits != captured || !run.EndsAt.Equal(f.now.Add(20*day)) {
 		t.Errorf("run = %+v ends %v; want untouched by another profile", run.RunLimits, run.EndsAt)
+	}
+}
+
+// TestRunLimitsReclamp_LocalRunIsReleasedWhenItsEndMoves: a sweep that cuts a
+// local run's end re-sends the run's lease (#2791). The fixture store cannot
+// lease, so the attempt shows as the re-lease failure line naming the run.
+func TestRunLimitsReclamp_LocalRunIsReleasedWhenItsEndMoves(t *testing.T) {
+	f, st, profile := newReclampFixture(t, types.RunLimits{MaxEndAheadSec: 30 * 86400}, 20*day, 3600)
+	runner := uuid.New()
+	st.mu.Lock()
+	st.run.Placement, st.run.RunnerID = types.PlacementLocal, &runner
+	st.mu.Unlock()
+	st.setProfile(profile, types.RunLimits{MaxEndAheadSec: 2 * 86400})
+	logs := captureSlog(t)
+
+	sweepLimits(t, f)
+
+	if !strings.Contains(logs.String(), "re-leasing a run whose end changed failed") {
+		t.Fatalf("no re-lease attempted after the end moved; log = %q", logs.String())
 	}
 }

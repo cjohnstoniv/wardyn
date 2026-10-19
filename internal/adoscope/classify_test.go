@@ -218,6 +218,22 @@ func TestClassifyWorkItemBatch(t *testing.T) {
 	})
 }
 
+// A pull-request sub-resource write whose body is an array (reviewers, the
+// properties JSON-Patch) or raw bytes (an attachment) is still a pull-request
+// write; the same shapes on the PR itself stay refused.
+func TestClassifyPullRequestSubResourceBodies(t *testing.T) {
+	pr := "/acme/proj/_apis/git/repositories/r1/pullrequests/7"
+	prProject := "/acme/proj/_apis/git/pullrequests/7"
+	runCases(t, []caseT{
+		{name: "reviewers create (array)", req: adoReq(http.MethodPost, pr+"/reviewers", `[{"id":"a1b2"}]`), want: CapPR},
+		{name: "reviewers update (array)", req: adoReq(http.MethodPatch, pr+"/reviewers", `[{"id":"a1b2","vote":10}]`), want: CapPR},
+		{name: "properties JSON-Patch", req: adoReq(http.MethodPatch, pr+"/properties", `[{"op":"add","path":"/k","value":"v"}]`), want: CapPR},
+		{name: "attachment upload (bytes)", req: adoReq(http.MethodPost, pr+"/attachments/x.bin", "\x00\x01binary"), want: CapPR},
+		{name: "project-route reviewers (array)", req: adoReq(http.MethodPost, prProject+"/reviewers", `[{"id":"a1b2"}]`), want: CapPR},
+		{name: "an array on the PR itself stays refused", req: adoReq(http.MethodPatch, pr, `[{"status":"completed"}]`), wantErr: true},
+	})
+}
+
 // HAZARD 4 — the bounded body peek for a policy-bypassing pull-request
 // completion, and the two ways a body can lie about itself.
 func TestClassifyPullRequestBodyPeek(t *testing.T) {

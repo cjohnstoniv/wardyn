@@ -299,6 +299,11 @@ cmd_down_quiet() {
   local pid; pid="$(cat "${PID_FILE}")"
   rm -f "${PID_FILE}"
   kill -0 "${pid}" 2>/dev/null || return 0
+  # A stale pid file may now name an unrelated process (the number was recycled): TERM/KILL only a
+  # process whose command line names this e2e wardynd, otherwise just drop the file (done above).
+  local cmd
+  cmd="$(tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null || ps -p "${pid}" -o args= 2>/dev/null || true)"
+  [[ "${cmd}" == *"${BIN_DIR}/wardynd"* ]] || { log "pid file ${PID_FILE##*/} names pid ${pid}, which is not this e2e wardynd; not signalling it"; return 0; }
 
   # Stop ONLY the process this script itself started and tracked in
   # PID_FILE — never a port-based kill (no `fuser -k`). A port-based kill can
@@ -404,13 +409,14 @@ SQL
     local extra=""
     [[ "${i}" == "4" ]] && extra=',"tool_approvals":"hold"'
     # U-08: no `|| true` here — a refused create used to renumber every
-    # fixture after it (the row_number()->state map below is positional),
+    # fixture after it (the fixture-number->state map below needs every fixture),
     # which broke runs/recording/audit specs with an unrelated-looking
     # failure instead of a loud seed error at the actual cause. `set -e`
     # (top of file) does the rest.
     api POST /api/v1/runs "{\"agent\":\"${agents[$i]}\",\"repo\":\"acme/widgets\",\"title\":\"${titles[$i]}\",\"task\":\"e2e fixture ${i}\"${extra}}" >/dev/null
   done
-  # Diversify states deterministically by created order so specs can target them.
+  # Diversify states deterministically by fixture number (fixture i gets row i+1 below) so specs can
+  # target them. Not by created_at: two creates can land out of order, which moved fixture 1 off STARTING.
   # #1197 L3: a real terminal transition always stamps ended_at in the same
   # statement (migration 0092, store.go's UPDATE ... ended_at=CASE WHEN ...) —
   # this raw SQL bypasses that write path, so it stamps it here too. Without
@@ -423,7 +429,8 @@ SQL
   # "should not happen past migration 0092").
   psql_e2e >/dev/null <<'SQL' || true
 WITH ordered AS (
-  SELECT id, row_number() OVER (ORDER BY created_at) AS rn FROM agent_runs
+  SELECT id, substring(task FROM '^e2e fixture ([0-9]+)$')::int + 1 AS rn
+    FROM agent_runs WHERE task ~ '^e2e fixture [0-9]+$'
 )
 UPDATE agent_runs a SET state = v.state,
   ended_at = CASE WHEN v.state IN ('COMPLETED','STOPPED','FAILED','KILLED','ARCHIVED') THEN now() ELSE NULL END

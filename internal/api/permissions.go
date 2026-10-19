@@ -81,7 +81,9 @@ func (s *Server) markInertGrants(r *http.Request, grants []types.CapabilityGrant
 			// the write boundary refuses it, so re-saving is no remedy.
 			out[i].Inert = true
 			retired = append(retired, g.Capability+"="+g.Value)
-		case err != nil || canonical != g.Value:
+		// A stored egress_host row is matched host-only whatever its spelling
+		// (an older row may carry a ":port"), so only a refusal makes it inert.
+		case err != nil || (canonical != g.Value && g.Capability != capEgressHost):
 			out[i].Inert = true
 			if staged, ok := stagedFeatureAllow(g.Capability, g.Effect, g.Value); !ok || staged != g.Value {
 				inert = append(inert, g.Capability+"="+g.Value)
@@ -265,7 +267,8 @@ func validateCapabilityGrant(g *types.CapabilityGrant) error {
 // Per kind, and each arm states what the resolver is actually asked about:
 //
 //   - egress_host: the proxy's own entry grammar (proxy.ValidDomainEntry), the
-//     same check every allowed_domains ingest runs. Without it "*example.com"
+//     same check every allowed_domains ingest runs, with a ":port" stored as
+//     its host (the resolver ignores the port). Without it "*example.com"
 //     stored fine and then covered "evilexample.com" (entryCoversAny is a bare
 //     suffix test), and a mid-label or URL-shaped value stored as a row that can
 //     never match — a deny that protects nothing.
@@ -323,6 +326,13 @@ func canonicalGrantValue(capability, value string) (string, error) {
 	case capEgressHost:
 		if err := proxy.ValidDomainEntry(v); err != nil {
 			return "", fmt.Errorf("value: %w", err)
+		}
+		// The resolver compares hosts only (egressEntryHost drops a ":port"), so
+		// a port is stored as the host the grant already covered: the same
+		// requests match, and the row reads as what it does. An IPv6 literal's
+		// colons are its own and stay.
+		if strings.Count(v, ":") == 1 {
+			v, _, _ = strings.Cut(v, ":")
 		}
 	case capImage:
 		// Verbatim, as above, but never a dot-segment path: the base-image doors'

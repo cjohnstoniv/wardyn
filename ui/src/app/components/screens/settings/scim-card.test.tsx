@@ -50,9 +50,9 @@ describe("ScimCard", () => {
     expect(
       within(card).getByText("Not set up. Someone removed in your identity provider keeps their sessions, tokens and runs here until an admin revokes them."),
     ).toBeInTheDocument();
-    expect(
-      within(card).getByText(/^Set WARDYN_SCIM_TOKEN on wardynd, then point your Entra ID provisioning at the endpoint below\./),
-    ).toBeInTheDocument();
+    // #2877: the env var is set in mono like every other literal on the page, so the sentence spans two nodes.
+    expect(card.textContent).toMatch(/Set WARDYN_SCIM_TOKEN on wardynd, then point your Entra ID provisioning at the endpoint below\./);
+    expect(within(card).getByText("WARDYN_SCIM_TOKEN")).toHaveClass("font-mono");
     expect(within(card).getByRole("link", { name: "Leaver runbook" })).toHaveAttribute("href", expect.stringContaining("OPERATIONS.md#leavers-and-scim"));
     expect(within(card).getByText("Endpoint")).toBeInTheDocument();
     expect(within(card).getByText(/\/scim\/v2$/)).toBeInTheDocument();
@@ -78,6 +78,13 @@ describe("ScimCard", () => {
     expect(within(card).queryByText(/^A purge lists these/)).toBeNull();
   });
 
+  it("a full 200-row page reads '200+', not '200': the server stops listing there and sends no total", async () => {
+    const page = Array.from({ length: 200 }, (_, i) => ({ person: `p${i}@example.com`, deactivated_at: ago(DAY) }));
+    getStatusMock.mockReset().mockResolvedValue(status({ deactivated: page }));
+    render(<ScimCard />);
+    expect(await screen.findByRole("button", { name: /^SCIM provisioning\s*200\+ deactivated · 0 unfinished/ })).toBeInTheDocument();
+  });
+
   it("set up with work to show: the three lists, their hints, the summary counts", async () => {
     const card = await open(
       status({
@@ -91,6 +98,7 @@ describe("ScimCard", () => {
           { person: "ada@example.com", step: "kill_run", last_error: "runner: teardown timed out" },
           { person: "ada@example.com", step: "sweep", last_error: "store: busy" },
           { person: "bob@example.com", step: "audit_deprovision", last_error: "audit sink unavailable" },
+          { person: "bob@example.com", step: "refusal_audit/denied/owner_ambiguous", last_error: "audit sink unavailable" },
         ],
         drives: [{ person: "ada@example.com", drive: "Team share", purged_at: ago(DAY) }],
       }),
@@ -114,8 +122,9 @@ describe("ScimCard", () => {
     expect(within(tables[1]).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Person", "Step", "Last error"]);
     expect(within(tables[1]).getByText("Stop runs")).toBeInTheDocument();
     expect(within(tables[1]).getByText("Revoke tokens and SSH keys")).toBeInTheDocument();
+    expect(within(tables[1]).getByText("Record deprovisioning")).toBeInTheDocument();
     // A step the copy does not name shows as its own key.
-    expect(within(tables[1]).getByText("audit_deprovision")).toBeInTheDocument();
+    expect(within(tables[1]).getByText("refusal_audit/denied/owner_ambiguous")).toBeInTheDocument();
     expect(within(tables[1]).getByText("runner: teardown timed out")).toBeInTheDocument();
     expect(
       within(card).getByText(

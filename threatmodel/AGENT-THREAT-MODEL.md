@@ -55,7 +55,7 @@ this space is an axis substitution.
 | 3 | **Credential exfiltration** | the agent obtains a secret and moves it out | 🟢 **mitigated, with a published exception list.** The sandbox holds a placeholder, and the exceptions are enumerated in [THREAT-MODEL.md](THREAT-MODEL.md) §5.1a; see [below](#category-3-verdict). |
 | 4 | **Data exfiltration via the model channel** | data leaves inside a legitimate model request | ⛔ **not addressed as prevention; instrumented.** An agent can encode, split across turns, or encrypt around any scanner; do not describe this as DLP, see [below](#category-4-verdict). |
 | 5 | **Data exfiltration via other egress** | data leaves over an ordinary network call | 🟡 **mitigated for unlisted destinations; partial for allowlisted ones.** Default-deny plus first-use approval. Bypass class: a permitted destination that is also attacker-reachable (dual-use hosts, DNS through the permitted resolver) |
-| 6 | **Model-traffic interception** | someone reads the model channel — including the platform itself | 🟡 **partial, by design, both directions.** TLS interception of the model channel is opt-in per run and its CA key stays in proxy memory. Teams need a neutral name for "we MITM our own agents" or each invents one |
+| 6 | **Model-traffic interception** | someone reads the model channel — including the platform itself | 🟡 **partial, by design, both directions.** Proxy credential injection terminates model TLS; only inspection is opt-in. The CA key also sits beyond proxy memory (residuals 59, 69). Teams need a neutral name for "we MITM our own agents". |
 | 7 | **Sandbox escape** | code leaves the isolation boundary | 🟢 **mitigated to the declared class, honestly bounded.** Each confinement class documents what it does **not** stop, and a demanded class that cannot be enforced fails closed rather than silently downgrading |
 | 8 | **Lateral movement** | one run reaches another, or the host | 🟢 **mitigated, with a published exception list.** Per-run networks with no default route; on Kubernetes a default-deny NetworkPolicy verified by a boot-time canary, with two operator overrides; see [below](#category-8-verdict). |
 | 9a | **Supply chain — the platform's own artifacts** | you pull a tampered platform image | 🟢 **mitigated.** Keyless signing, SBOMs scanned from the image rather than the source tree, build provenance |
@@ -64,7 +64,7 @@ this space is an axis substitution.
 | 10 | **Privilege escalation within the platform** | a member gains operator powers | 🟡 **partial.** A capability-grant model exists with deny-beats-allow precedence — but **every enforcement switch ships off**, so an upgraded deployment enforces nothing until an admin turns kinds on |
 | 11 | **Attribution evasion** | an action cannot be traced to a human sponsor | 🟡 **partial.** The run token carries both the human and the agent; audit events record a single actor field, so sponsor and agent are not separable per event |
 | 12 | **Audit tampering** | the record is altered after the fact | 🟡 **partial, deliberately graded.** Append-only enforcement plus a hash chain — which is tamper-**evidence**, not tamper-proofness, and only if a head hash is retained off-box. Session recordings are writable by the run that produces them |
-| 13 | **Approval fatigue** | the human approves everything because there are too many prompts | ⛔ **not addressed, by omission.** The platform has no rate limit, no batching guard, no anomaly signal on approval volume, and no separation of duty; see [below](#category-13-verdict). |
+| 13 | **Approval fatigue** | the human approves everything because there are too many prompts | ⛔ **not addressed, by omission.** It has no rate limit, batching guard or anomaly signal on approval volume, and only opt-in separation of duty; see [below](#category-13-verdict). |
 | 14 | **Resource abuse / denial of wallet** | the agent burns money rather than data | 🟡 **partial, and the enforced set differs BY SUBSTRATE.** `WARDYN_RUN_MAX_AGE` is off by default, and there is no token-spend or model-call budget anywhere; see [below](#category-14-verdict). |
 
 - **Deliberately excluded**, so the absence reads as a decision:
@@ -110,7 +110,7 @@ would claim coverage of a framework nothing here is tested against.
 #### Category 13 verdict
 
 - ⛔ **not addressed, by omission.**
-- The platform leans heavily on human approvals and has no rate limit, no batching guard, no anomaly signal on approval volume, and no separation of duty.
+- The platform leans heavily on human approvals and has no rate limit, batching guard or anomaly signal on approval volume, and only opt-in separation of duty (`WARDYN_{EGRESS,CAPABILITY,GOVERNANCE}_SECOND_HUMAN`).
 - This is the failure mode every approval-based control shares, and no code fixes it
 
 #### Category 14 verdict
@@ -119,11 +119,13 @@ would claim coverage of a framework nothing here is tested against.
 - Docker: CPU, memory and PIDs are requested and the run fails closed BEFORE start if the daemon reports it discarded one (`verifyCapsEnforced`;
   - `WARDYN_ALLOW_UNENFORCEABLE_CAPS=1` downgrades that to a warning;
   - environment builds apply the same check but never honour the override) —
-- a DISK cap degrades to uncapped-with-a-warning on a storage driver that cannot take a size quota, by design.
+- a DISK size the policy writes is refused when the runner cannot cap it (`main_drive_unenforceable`).
+- A requested or default size is soft: it runs uncapped, with a warning, on a storage driver that cannot take a size quota.
 - Kubernetes: CPU, memory and — since 0.7.2 — DISK.
 - A run's `disk_mib` is now requested as the agent container's `resources.limits[ephemeral-storage]` (with a small fixed 256Mi request,
   - so scheduling is unchanged apart from a node genuinely short on allocatable ephemeral storage newly rejecting the pod),
-  - and the kubelet bounds the writable layer the clone, `$HOME` and every ephemeral workspace target live on.
+  - and `disk_mib` bounds `/tmp`, `/home/agent/work` and `/home/agent/.cache`, which are emptyDirs.
+  - The rest of `$HOME` and any authored target elsewhere sit on the ephemeral container's unmetered writable layer, so a large write there is not metered or evicted ([known gaps](../docs/operations/kubernetes-known-gaps.md#what-is-still-outside-the-cap)).
 - It is `eviction`, not a quota:
   - the kubelet measures periodically and KILLS the pod, so the agent never sees `ENOSPC`, in-flight work is lost, and a burst between two measurements can overshoot —
   - and a deployment with no `storage.ephemeral.default_disk_mib` still leaves node-level eviction as the only bound on a run that asked for nothing.

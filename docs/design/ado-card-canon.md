@@ -9,7 +9,7 @@ decision record, not a second source of truth the parser checks).
 ## What #458 fixed
 
 Go grades an admin-token or local-mode caller `not_applicable`
-(`scmaccess.go:137-139`, `isMechanism := subject == ""`). The Settings Azure DevOps card had no
+(`scmAccessForRow` in `scmaccess.go`, `isMechanism := subject == ""`). The Settings Azure DevOps card had no
 branch for that state — it returned early only for an absent row (`state === ""`), so an admin who
 had just configured a per-user row with the admin token saw a card titled "Azure DevOps" with an
 empty body. Two smaller defects rode along: the capability card's consent CTA ("Allow and

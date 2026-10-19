@@ -4,7 +4,9 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -36,9 +38,18 @@ func TestExamplePoliciesValidate(t *testing.T) {
 			if rerr != nil {
 				t.Fatalf("read %s: %v", f, rerr)
 			}
+			// The CLI's policyToJSON reads exactly one document and its JSON decode
+			// refuses unknown fields; the same two rules here, or an example that
+			// the CLI would refuse passes.
+			ydec := yaml.NewDecoder(bytes.NewReader(b))
 			var doc any
-			if uerr := yaml.Unmarshal(b, &doc); uerr != nil {
+			if uerr := ydec.Decode(&doc); uerr != nil {
 				t.Errorf("%s: parse yaml: %v", f, uerr)
+				continue
+			}
+			var extra yaml.Node
+			if eerr := ydec.Decode(&extra); eerr != io.EOF {
+				t.Errorf("%s: want exactly one yaml document, got a second (or a parse error): %v", f, eerr)
 				continue
 			}
 			j, merr := json.Marshal(doc)
@@ -47,7 +58,9 @@ func TestExamplePoliciesValidate(t *testing.T) {
 				continue
 			}
 			var spec types.RunPolicySpec
-			if derr := json.Unmarshal(j, &spec); derr != nil {
+			jdec := json.NewDecoder(bytes.NewReader(j))
+			jdec.DisallowUnknownFields()
+			if derr := jdec.Decode(&spec); derr != nil {
 				t.Errorf("%s: decode spec: %v", f, derr)
 				continue
 			}

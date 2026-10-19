@@ -576,3 +576,28 @@ func TestTwoRoles_RefusedWhereTheySeparateNothing(t *testing.T) {
 		}
 	}
 }
+
+// Vault's metadata POST replaces custom_metadata, so a rewrite of the binding must carry the keys an
+// organisation added (#2814): bound() promises to leave them alone.
+func TestPut_KeepsOrganisationCustomMetadataWhenRewritingTheBinding(t *testing.T) {
+	f := newFakeVault(t)
+	s := newFakeStore(t, f)
+	ref, err := s.Put(t.Context(), "alice", "pat", "", []byte("v1"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rel, _ := s.rel("alice", "pat")
+	f.mu.Lock()
+	f.kv[rel].custom["team"] = "payments"
+	f.kv[rel].maxVersions = s.maxVersions + 4 // forces the metadata rewrite
+	f.mu.Unlock()
+	if _, err := s.Put(t.Context(), "alice", "pat", ref, []byte("v2"), false); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	e := f.kv[rel]
+	if e.maxVersions != s.maxVersions || e.custom["team"] != "payments" || e.custom[metaOwner] != "alice" {
+		t.Fatalf("after the rewrite: max_versions %d, custom %v; want %d with team=payments kept and the binding intact", e.maxVersions, e.custom, s.maxVersions)
+	}
+}

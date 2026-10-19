@@ -99,6 +99,11 @@ func judgeFit(fit runner.Fit, waits bool) runFitVerdict {
 			}
 			return v
 		}
+		// A run that waits and needs more than is left now simply queues until a
+		// slot frees: "would fill to 130%, -2 left" is nonsense for it (#2790).
+		if waits && len(breachedAxes(q.Axes, false)) > 0 {
+			continue
+		}
 		if pct, ok := nearFullPct(q.Axes); ok {
 			v.warnings = append(v.warnings, quotaNearFullWarning(q.Name, pct, q.Axes))
 		}

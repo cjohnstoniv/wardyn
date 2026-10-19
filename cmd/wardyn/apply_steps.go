@@ -37,3 +37,13 @@ func printApplySteps(w io.Writer, steps []sdk.ApplyStep) {
 		fmt.Fprintln(w)
 	}
 }
+
+// printApplyWarnings writes what the server warned of on each write, nothing when it warned of nothing
+// (a ceiling that omits a deny the deployment default carries is applied, and only this says so).
+func printApplyWarnings(w io.Writer, steps []sdk.ApplyStep) {
+	for _, s := range steps {
+		for _, warning := range s.Warnings {
+			fmt.Fprintf(w, "warning: %s %s: %s\n", s.Kind, s.Name, warning)
+		}
+	}
+}

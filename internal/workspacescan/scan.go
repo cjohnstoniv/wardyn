@@ -101,7 +101,7 @@ func DeriveProfile(facts ScanFacts) WorkspaceProfile {
 		PackageManagers: gitremote.ToSorted(pkgMgrs),
 		EgressDomains:   gitremote.ToSorted(egress),
 		Tools:           gitremote.ToSorted(tools),
-		GitRemotes:      facts.GitRemotes,
+		GitRemotes:      validateGitRemotes(facts.GitRemotes),
 		HasDevcontainer: hasDevcontainer,
 		HasDockerfile:   hasDockerfile,
 		Source:          SourceDeterministic,
@@ -385,4 +385,31 @@ func scrub(s string) string {
 		}
 	}
 	return b.String()
+}
+
+const (
+	maxGitRemotes   = 512 // entries kept per list: far above any real repo tree
+	maxGitRemoteLen = 256 // bytes per entry: a 253-byte host, or owner/repo
+)
+
+// validateGitRemotes re-checks the untrusted remotes with the predicate the
+// deterministic scan already applies (gitremote.FieldSafe: no control
+// character, no whitespace), then bounds each entry's length and each list's
+// count, de-duplicated and sorted. What the deterministic scan produces
+// passes unchanged.
+func validateGitRemotes(raw GitRemotes) GitRemotes {
+	keep := func(in []string) []string {
+		set := map[string]struct{}{}
+		for _, v := range in {
+			if v != "" && len(v) <= maxGitRemoteLen && gitremote.FieldSafe(v) {
+				set[v] = struct{}{}
+			}
+		}
+		out := gitremote.ToSorted(set)
+		if len(out) > maxGitRemotes {
+			out = out[:maxGitRemotes]
+		}
+		return out
+	}
+	return GitRemotes{GitHub: keep(raw.GitHub), OtherHosts: keep(raw.OtherHosts)}
 }

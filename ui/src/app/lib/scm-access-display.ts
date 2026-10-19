@@ -8,7 +8,7 @@
 // connected panel lives in (Getting started, Settings), so they cannot
 // render the state differently. Pure: no React, no fetch.
 import { ADO } from "./ado-entra-copy";
-import { ADO_PAT, gettingStartedOwnChip } from "./ado-pat-copy";
+import { ADO_PAT, gettingStartedOwnChip, ownChipWord } from "./ado-pat-copy";
 import { adoOrgLabel, daysLeft, formatDay } from "./ado-pat-display";
 import type { SCMAccess } from "./types";
 
@@ -119,4 +119,24 @@ export function scmOwnTokenAction(access: SCMAccess): { line: string; button: "a
     default:
       return null;
   }
+}
+
+/** One organisation's line when the person has several own-token rows (#2146): the organisation as people name
+ *  it, what its token holds in Settings' chip words ("No token yet" when none is stored), and the one button
+ *  Getting started offers for it. */
+export function ownTokenOrgLine(access: SCMAccess, now: number = Date.now()): { org: string; label: string; tone: "success" | "warning" | "danger" | "neutral"; button: "add" | "replace" | null } {
+  const org = adoOrgLabel(access.org ?? "");
+  const button = scmOwnTokenAction(access)?.button ?? null;
+  const kind = ownTokenKind(access);
+  if (!kind) return { org, label: ADO_PAT.OWN_NO_TOKEN, tone: "neutral", button };
+  const days = kind === "expiring" && access.expires_on ? daysLeft(access.expires_on, now) : 0;
+  const tone = { connected: "success", expiring: "warning", refused: "danger", expired: "danger" } as const;
+  return { org, label: ownChipWord(kind, days), tone: tone[kind], button };
+}
+
+/** The organisations whose own token a launch needs added or replaced: no token stored, or an expired one. */
+export function ownTokenOrgsNeedingToken(rows: readonly SCMAccess[]): string[] {
+  return rows
+    .filter((r) => r.token_mode === "own_pat" && (r.state === "not_configured" || r.state === "expired_signin"))
+    .map((r) => adoOrgLabel(r.org ?? ""));
 }

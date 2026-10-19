@@ -469,6 +469,35 @@ func (f *residentFix) deliveredRun(t *testing.T) types.AgentRun {
 	return run
 }
 
+// A kill kicks the erase of the values its runner holds resident at once, as
+// every other run end does, rather than leaving them to the next sweep.
+func TestResidentErase_KillKicksTheErase(t *testing.T) {
+	f := newResidentFix(t, nil, residentEnvPolicy)
+	ctx := t.Context()
+	f.side.erasedCh = make(chan uuid.UUID, 4)
+	run := f.startingRun(t, nil)
+	if !f.srv.deliverResident(ctx, run, types.RunPolicySpec{}, []residentValue{f.value(t, run, "held")}) {
+		t.Fatal("delivery refused")
+	}
+	if ok, err := f.st.UpdateRunStateIf(ctx, run.ID, types.RunStarting, types.RunKilled); err != nil || !ok {
+		t.Fatalf("kill run: %v %v", ok, err)
+	}
+	run.State = types.RunKilled
+	f.srv.killTeardownTail(ctx, run, types.ActorHuman, run.CreatedBy, nil, false)
+	select {
+	case id := <-f.side.erasedCh:
+		if id != run.ID {
+			t.Fatalf("the kick erased %s, want the killed run", id)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("a kill did not kick the resident erase")
+	}
+	f.srv.WaitBackground()
+	if _, _, erased, _, _ := f.obligation(t, run.ID); erased == nil {
+		t.Fatal("the kicked erase did not close the obligation")
+	}
+}
+
 // A revoked runner's obligation is closed unconfirmed, with the org's
 // runner.resident.erase row, and the runner is not asked.
 func TestResidentEraseSweep_RevokedRunnerAbandonedUnconfirmed(t *testing.T) {

@@ -183,6 +183,26 @@ describe("WorkspaceDetailScreen — header: name, source line, and Start a run",
   });
 });
 
+describe("WorkspaceDetailScreen — header of a multi-source workspace (#2587)", () => {
+  it("names the composition, never 'empty — discarded after the run'", async () => {
+    getWorkspaceMock.mockResolvedValue(
+      ws({
+        kind: "",
+        source: "",
+        ref: undefined,
+        sources: [
+          { type: "local_dir", path: "/src/app" },
+          { type: "repo", source: "org/lib" },
+        ],
+      }),
+    );
+    renderDetail();
+    await screen.findByRole("heading", { name: "payments" });
+    expect(screen.getByText("1 dir · 1 repo")).toBeInTheDocument();
+    expect(screen.queryByText(/discarded after the run/)).not.toBeInTheDocument();
+  });
+});
+
 // #922 (UT-7c), the person side: "Start a run" only NAVIGATES (it launches
 // nothing itself), so this is the one place on this page a member-facing
 // launch consequence belongs. Both reasons fold into the SAME generic
@@ -328,6 +348,30 @@ describe("WorkspaceDetailScreen — Start a run survives a write response with n
     expect(screen.getByRole("button", { name: /^start a run$/i })).toBeEnabled();
     expect(screen.queryByText("This workspace isn't available to you.")).toBeNull();
   });
+
+  it("a bulk approve that skipped model-provider hosts says so in the toast", async () => {
+    const rr: RecordResult = {
+      run_id: "r1",
+      label: "build & test",
+      mode: "interactive",
+      status: "recorded",
+      observations: {
+        domains: [{ host: "evil.example.com", allow_count: 1, deny_count: 0, pending_count: 0 }],
+        minted_grant_ids: [],
+      } as unknown as RecordResult["observations"],
+    };
+    getWorkspaceMock.mockResolvedValue(ws({ record_results: { "build-test": rr } }));
+    promoteRecordEgressMock.mockResolvedValue({ ...ws({}), skipped_hosts: ["bedrock-runtime.us-east-1.amazonaws.com"] });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderDetail();
+
+    await user.click(await screen.findByRole("button", { name: /approve 1 observed host/i }));
+    await user.click(await screen.findByRole("button", { name: /approve host/i }));
+    await waitFor(() => expect(promoteRecordEgressMock).toHaveBeenCalled());
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith(
+      "Approved 0 hosts. Skipped 1 model-provider host: bedrock-runtime.us-east-1.amazonaws.com",
+    ));
+  });
 });
 
 describe("WorkspaceDetailScreen — image row: three honest variants, never a /build fetch to find out", () => {
@@ -373,6 +417,16 @@ describe("WorkspaceDetailScreen — Delete workspace", () => {
     getWorkspaceMock.mockResolvedValue(ws());
     renderDetail("ws-1", false);
     expect(await screen.findByRole("button", { name: /delete this workspace/i })).toBeDisabled();
+  });
+
+  // #2885: the reason is a paragraph beside the control, not text inside a 32px icon button.
+  it("a viewer's reason is visible text outside the icon button", async () => {
+    getWorkspaceMock.mockResolvedValue(ws());
+    renderDetail("ws-1", false);
+    const trigger = await screen.findByRole("button", { name: /delete this workspace/i });
+    const reason = screen.getAllByText(OPERATOR_ONLY_REASON).find((el) => !trigger.contains(el));
+    expect(reason).toBeDefined();
+    expect(trigger).toHaveTextContent("");
   });
 });
 

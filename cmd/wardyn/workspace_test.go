@@ -33,6 +33,15 @@ func TestParseWorkspaceSourceArg(t *testing.T) {
 			want: sdk.WorkspaceSource{Type: sdk.WorkspaceSourceTypeRepo, Source: "org/lib", Target: "/work/lib"},
 		},
 		{
+			// An "@" in the clone URL is the URL's; the target follows the last "@" and starts with "/".
+			in:   "repo:ssh://git@github.com/acme/web",
+			want: sdk.WorkspaceSource{Type: sdk.WorkspaceSourceTypeRepo, Source: "ssh://git@github.com/acme/web"},
+		},
+		{
+			in:   "repo:git@github.com:acme/web.git@/work/web",
+			want: sdk.WorkspaceSource{Type: sdk.WorkspaceSourceTypeRepo, Source: "git@github.com:acme/web.git", Target: "/work/web"},
+		},
+		{
 			in:   "ephemeral:@/home/scratch",
 			want: sdk.WorkspaceSource{Type: sdk.WorkspaceSourceTypeEphemeral, Target: "/home/scratch"},
 		},

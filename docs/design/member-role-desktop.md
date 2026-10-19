@@ -5,9 +5,11 @@ SPDX-License-Identifier: Apache-2.0
 
 # Member-role desktop — ownership + safe local_dir mounts (M0 design)
 
-Status: **DESIGN ONLY** (the gate before any member-role code; the owner reads this
-before M1). No code in this milestone. Every boundary below is anchored to the real
-code it will change and carries the threat argument for why it exists.
+> **Superseded design record.** The member-role code shipped. The `WARDYN_MEMBER_*` names below are
+> removed and boot refuses them; the shipped names are `WARDYN_USER_*`, documented in [ENV.md](../ENV.md).
+
+Status (historical): **DESIGN ONLY** (the gate before any member-role code). Every boundary below is
+anchored to the real code it would change and carries the threat argument for why it exists.
 
 **0.7.3 citation note:** every `http.go:<line>` citation below had already rotted by
 the 0.7.2 base — `internal/api/http.go` grows a middleware roughly every release, and

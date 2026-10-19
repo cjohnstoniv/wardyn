@@ -234,6 +234,8 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, reserve
 		// Not retried: log the cause so a refusal outside the retry set isn't
 		// a bare 400 with nothing to explain why.
 		a.logUnretriedRefusal(r, widened, idpErr)
+		a.redirectAuthError(w, r, idpRefusalCode(idpErr))
+		return
 	}
 
 	// (2) Exchange code for tokens, supplying the PKCE verifier.
@@ -299,7 +301,7 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, reserve
 			denied = authErrorSignInRefused // the page never says the identity is deactivated
 		}
 		// A denied login must not leave a pre-existing session cookie still valid.
-		a.clearCookie(w, sessionCookieName)
+		a.clearSessionCookie(w)
 		a.redirectAuthError(w, r, denied)
 		return
 	}
@@ -338,7 +340,16 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, reserve
 	a.RecordAttach(r, sess)
 	http.SetCookie(w, cookie)
 	a.rememberDevice(w, cc)
-	http.Redirect(w, r, a.cfg.BasePath+"/", http.StatusFound)
+	http.Redirect(w, r, a.consumeReturnTo(w, r), http.StatusFound)
+}
+
+// idpRefusalCode is the auth_error code of an identity-provider refusal that was not retried: the
+// provider's own transient answers are a try-again, anything else a refusal.
+func idpRefusalCode(idpErr string) string {
+	if idpErr == "temporarily_unavailable" || idpErr == "server_error" {
+		return authErrorOIDCTransient
+	}
+	return authErrorOIDCRefused
 }
 
 // loginFacts is what an admitted sign-in hands OnLogin. Only an Entra token carrying a well-formed

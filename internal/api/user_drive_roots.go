@@ -54,7 +54,7 @@ func (s *Server) driveHostRootNesting(r *http.Request, d types.UserDrive) (int, 
 		// 500, never "no other drives": a list that failed cannot say the tree is
 		// clear, and treating it as clear is how the check silently stops biting
 		// on exactly the deployment whose database is unhappy.
-		return http.StatusInternalServerError, "list user drives: " + err.Error()
+		return http.StatusInternalServerError, loggedMsg(r.Context(), "list user drives", err)
 	}
 	// One bound for the whole gate, for userDriveHostRootsUsableWithin's reason:
 	// this loop resolves EVERY stored host_path root, so without a deadline on

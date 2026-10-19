@@ -184,3 +184,24 @@ func TestPGStore_KeyBoundBeforePool(t *testing.T) {
 		}()
 	}
 }
+
+// A suffix the store's validKey refuses (a backslash or NUL) is a 404 before
+// authorize or the store is asked, not a store refusal answered 500 (#2784).
+func TestHandler_UnservableSuffixNotFoundWithoutStoreCall(t *testing.T) {
+	const run = "0a000000-0000-4000-8000-000000000011"
+	for _, suffix := range []string{"~a%5Cb", "~a%00b"} {
+		store := &countingStore{}
+		authorized := false
+		authorize := func(*http.Request, string) bool { authorized = true; return true }
+		srv := httptest.NewServer(newTestRouterWithAuth(store, authorize))
+		resp, err := http.Get(srv.URL + "/api/v1/runs/" + run + "/recording/" + run + suffix)
+		srv.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound || len(store.calls) != 0 || authorized {
+			t.Errorf("suffix %q: status %d, store calls %v, authorized %v; want 404 and neither asked", suffix, resp.StatusCode, store.calls, authorized)
+		}
+	}
+}

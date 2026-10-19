@@ -49,11 +49,40 @@ func (s *Server) StatePageFromRunner(ctx context.Context, runnerID uuid.UUID, se
 	return nil
 }
 
+// inventoryHoldAuditEvery spaces one runner's runner.inventory.hold rows. The hold lasts up to 90 days
+// and the runner reconnects about once a minute, so a row on each would be thousands that say nothing
+// new; the first is written at once and a hold that lasts is said again each interval.
+var inventoryHoldAuditEvery = time.Hour
+
+// inventoryHoldAudit remembers when each runner's hold was last audited. ponytail: in memory, so a
+// restart or another replica audits once more; a stored stamp would make the spacing exact.
+type inventoryHoldAudit struct {
+	mu   sync.Mutex
+	last map[uuid.UUID]time.Time
+}
+
+// due reports whether the runner's hold is audited now, and counts it as audited when it is.
+func (a *inventoryHoldAudit) due(id uuid.UUID, now time.Time) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if at, ok := a.last[id]; ok && now.Sub(at) < inventoryHoldAuditEvery {
+		return false
+	}
+	if a.last == nil {
+		a.last = map[uuid.UUID]time.Time{}
+	}
+	a.last[id] = now
+	return true
+}
+
 // RecordRunnerInventoryHold writes runner.inventory.hold: a page reported a
 // run the org has no row for, past the runner's cap of asserted subjects, so
 // nothing was queued for it and the runner stays not-ready until an operator
 // acts. Its owner and admins see the runner's audit; other runners continue.
 func (s *Server) RecordRunnerInventoryHold(ctx context.Context, id uuid.UUID) {
+	if !s.inventoryHoldAudit.due(id, s.cfg.Now()) {
+		return
+	}
 	s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "runner:"+id.String(),
 		placement.ActionRunnerInventoryHold, id.String(), "denied", mustJSON(map[string]any{"reason": "asserted_cap", "cap": types.RunnerAssertedSubjectCap})))
 }

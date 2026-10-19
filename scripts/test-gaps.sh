@@ -183,13 +183,16 @@ classify() {
       }
       next
     }
-    # Phase 2: the union profile — inventory exported funcs at 0.0%.
-    FILENAME==unionfile && $2 ~ /^[A-Z]/ && $3=="0.0%" {
+    # Phase 2: the union profile — inventory exported funcs at 0.0%. The ordinal
+    # is taken over EVERY exported func first (as Phase 1 does), so a covered
+    # earlier sibling still counts toward the k-th position of a 0.0% later one.
+    FILENAME==unionfile && $2 ~ /^[A-Z]/ {
       loc=$1; sub(mod,"",loc); sub(/:$/,"",loc)     # relpath:line
       file=loc; sub(/:[0-9]+$/,"",file)             # relpath
       pkg=file; sub(/\/[^\/]+$/,"",pkg)             # dir
       key=file "\t" $2
       key=key "\t" ++uord[key]                    # k-th same-named func in this file
+      if ($3 != "0.0%") next
       if (key in pgcov && pgcov[key]) cat="PG"
       else if (pkg ~ dockerre)        cat="DOCKER"
       else if (pkg ~ k8sre)           cat="K8S"
@@ -276,6 +279,18 @@ self_test() {
     "UNTESTED	internal/store	UpdateRunState	internal/store/store.go:84" | LC_ALL=C sort)"
   if [ "$got" != "$want" ]; then
     echo "test-gaps: self-test FAIL (pg missing)" >&2
+    diff <(printf '%s\n' "$want") <(printf '%s\n' "$got") >&2 || true
+    exit 1
+  fi
+  # ORDINALS COUNT COVERED SIBLINGS: the FIRST Close is covered in the union, the second is 0.0% in
+  # BOTH lanes. Numbering only the 0.0% union rows made the second look like ordinal 1 and match the
+  # PG lane's covered first Close, filing a func no lane runs under "PG-gated".
+  printf '%sinternal/egress/proxy/relay.go:20:\tClose\t80.0%%\n%sinternal/egress/proxy/relay.go:71:\tClose\t0.0%%\n' "$MODULE" "$MODULE" > "$d/u2"
+  printf '%sinternal/egress/proxy/relay.go:18:\tClose\t92.3%%\n%sinternal/egress/proxy/relay.go:64:\tClose\t0.0%%\n' "$MODULE" "$MODULE" > "$d/pg2"
+  got="$(classify "$d/u2" "$d/pg2")"
+  want="$(printf 'UNTESTED\tinternal/egress/proxy\tClose\tinternal/egress/proxy/relay.go:71')"
+  if [ "$got" != "$want" ]; then
+    echo "test-gaps: self-test FAIL (covered earlier sibling)" >&2
     diff <(printf '%s\n' "$want") <(printf '%s\n' "$got") >&2 || true
     exit 1
   fi
@@ -422,15 +437,16 @@ render_cat() {
   # above), so they get no numeric bucket of their own — listed here so the
   # k8s surface is not read as touched only by the package above.
   cat <<'K8SGATED'
-### Manual cluster lanes no coverage profile can see at all
+### Cluster lanes no coverage profile can see at all
 
-No workflow runs the first two, and `-coverpkg` never observes any of the
-three — not even as the K8S-gated bucket above, since they exercise code far
+The nightly workflow runs the first two (the `kind-sso-walk` and
+`kind-sso-ado-walk` jobs) and no workflow runs the third, and `-coverpkg` never
+observes any of the three — not even as the K8S-gated bucket above, since they exercise code far
 beyond `internal/runner/k8s`. Listed here so the k8s surface is not read as
 untouched. `make test-conformance-k8s` is the exception: CI runs it on kind +
 Calico (the `conformance-k8s` job, busybox conformance-agent image, runc
-only) — the other two self-skip without `WARDYN_TEST_K8S=1` and a green
-result for them is evidence only for the tip somebody actually ran it on.
+only) — the three above self-skip without `WARDYN_TEST_K8S=1`, and the third
+is evidence only for the tip somebody actually ran it on.
 
 - `scripts/kind-sso-walk.sh` — **the AWS SSO walk** (0.7.4). Two Dex principals
   on a kind cluster, the containerized `aws sso login` against an on-cluster
@@ -458,6 +474,17 @@ result for them is evidence only for the tip somebody actually ran it on.
   Resize/Write, every one of them listed in the K8S-gated bucket above.
 - `make test-conformance-k8s` — the containment conformance suite against a
   NetworkPolicy-enforcing CNI.
+
+### Test arms no CI lane runs
+
+- **PostgreSQL 12 refusal** (#2683): every CI Postgres lane runs 17, so `TestMigratePG13Floor`'s
+  refuse-and-record-nothing arm (`internal/db/migrate_pg13_floor_test.go`) never executes there. To run it, start a
+  `postgres:12` container, point `WARDYN_TEST_PG` at it and run only that test: every other migrating test fails on
+  PG12 by design.
+- **Credential-reauth hold timing out, live** (#2716): the `test.fixme` walk `negative (credential-reauth-hold): a
+  hold nobody answers times out, and the request stays open` (`ui/e2e/walk/sso-reauth-hold.spec.ts`) asserts too
+  early to drive the row. The proxy's own credhold tests (`internal/egress/proxy/credhold_test.go`) pin that path
+  hermetically; no live walk covers it.
 K8SGATED
 } > "$OUT"
 

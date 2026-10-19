@@ -125,6 +125,21 @@ func TestCreateSandbox_RejectsMounts(t *testing.T) {
 	}
 }
 
+// A runner's own bundle joins the staged CA in one environment string. A pair too big for one is
+// refused at create, naming why, before anything exists; every exec would otherwise fail E2BIG. A
+// pair under it is not refused.
+func TestCreatePreflight_RefusesACATrustOverOneEnvString(t *testing.T) {
+	d, _ := newTestDriver(t, Config{RunnerID: testRunnerID, Arch: "amd64", Evidence: &memEvidence{}, HardDeny: &HardDeny{}, TrustedCAPEM: strings.Repeat("r", runner.MaxEnvTrustedCAPEM)})
+	spec := runner.SandboxSpec{RunID: uuid.New(), Env: map[string]string{mitmCAPEMEnv: strings.Repeat("o", 64<<10)}}
+	if _, _, _, err := d.createPreflight(context.Background(), spec); !errors.Is(err, errTrustedCATooBig) {
+		t.Fatalf("createPreflight with 128 KiB of CA trust = %v, want %v", err, errTrustedCATooBig)
+	}
+	spec.Env[mitmCAPEMEnv] = strings.Repeat("o", 60<<10)
+	if _, _, _, err := d.createPreflight(context.Background(), spec); errors.Is(err, errTrustedCATooBig) {
+		t.Fatalf("createPreflight with 124 KiB of CA trust = %v, want no CA refusal", err)
+	}
+}
+
 // TestCreateSandbox_OrderAndRef covers the required creation order — BOTH
 // NetworkPolicies before any pod exists, proxy pod before agent pod — and
 // that the returned Sandbox.Ref is the agent pod name.
@@ -915,10 +930,9 @@ func TestCreateSandbox_DriveReadOnlyOnBothHalves(t *testing.T) {
 
 // TestCreateSandbox_DriveSurvivesTeardown is the other half of "no run label":
 // the run's whole sweep runs and the person's storage is still there. The
-// selector assertion is the load-bearing one — the fake's DeleteCollection
-// support does not filter by label, so the proof that the sweep CANNOT reach
-// the claim is that the claim carries no key the selector names, and that no
-// delete verb is ever issued against a claim at all (the chart grants none).
+// selector assertion is the load-bearing one: the proof that the sweep CANNOT
+// reach the claim is that the claim carries no key the selector names, and that
+// no delete verb is ever issued against a claim at all (the chart grants none).
 func TestCreateSandbox_DriveSurvivesTeardown(t *testing.T) {
 	d, cs := newTestDriver(t, Config{})
 	installProxyIPReactor(t, cs, "10.244.0.7")
@@ -1346,6 +1360,7 @@ func TestCreateSandbox_ProxyPodCarriesTheOperatorKnobs(t *testing.T) {
 	// this substrate until it rode this list, which is the whole point of there
 	// being ONE list.
 	t.Setenv("WARDYN_CREDENTIAL_REAUTH_TIMEOUT", "45s")
+	t.Setenv("WARDYN_GIT_APPROVAL_TIMEOUT", "10m")
 
 	d, cs := newTestDriver(t, Config{})
 	installProxyIPReactor(t, cs, "10.244.0.7")
@@ -1367,6 +1382,7 @@ func TestCreateSandbox_ProxyPodCarriesTheOperatorKnobs(t *testing.T) {
 		"WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS": "app:false,pat:on",
 		"WARDYN_LLM_SCAN":                     "off",
 		"WARDYN_CREDENTIAL_REAUTH_TIMEOUT":    "45s",
+		"WARDYN_GIT_APPROVAL_TIMEOUT":         "10m",
 	} {
 		if got[name] != want {
 			t.Errorf("proxy pod env %s = %q, want %q — the knob is set on wardynd and unreachable in the pod",
@@ -1391,6 +1407,7 @@ func TestCreateSandbox_ProxyPodCarriesNoUnsetKnob(t *testing.T) {
 		"WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS",
 		"WARDYN_LLM_SCAN",
 		"WARDYN_CREDENTIAL_REAUTH_TIMEOUT",
+		"WARDYN_GIT_APPROVAL_TIMEOUT",
 	} {
 		t.Setenv(k, "") // t.Setenv cannot unset; clear then Unsetenv below
 		if err := os.Unsetenv(k); err != nil {
@@ -1498,5 +1515,13 @@ func TestWaitPodIP_ReportsTheProxyPodsReason(t *testing.T) {
 	}
 	if len(seen) != 1 || !strings.HasPrefix(seen[0], "pod: Unschedulable: ") || !strings.Contains(seen[0], taint) {
 		t.Fatalf("OnWaiting calls = %q, want exactly one carrying the scheduler's own verdict", seen)
+	}
+}
+
+// A Kubernetes runner tells the org it cannot keep an ended sandbox (runnerwire.Caps.EndsUnkept),
+// which wardyn-runnerd derives from the Driver not being a runner.SandboxEnder.
+func TestDriverIsNoSandboxEnder(t *testing.T) {
+	if _, ok := any(&Driver{}).(runner.SandboxEnder); ok {
+		t.Fatal("the k8s Driver keeps an ended sandbox; runnerd would advertise the keep its pods cannot give")
 	}
 }

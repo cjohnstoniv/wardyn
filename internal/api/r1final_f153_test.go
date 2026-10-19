@@ -7,34 +7,36 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// The first fix added recordCeilingLimits, which reads the two
-// named limits — and it CANNOT FIRE on the record route, so that
+// The first fix added a guard that reads the two named limits (now
+// stepRunCeilingLimits) — and it CANNOT FIRE on the record route, so that
 // route's behaviour was byte-for-byte unchanged:
 //
 //	POST /workspaces/{id}/record is mounted operatorOnly (routes.go);
 //	requireOperator gates on s.isOperator; resolveEffectiveCeiling
 //	short-circuits to a nil-Profile deployment ceiling on that SAME predicate;
-//	and recordCeilingLimits returns nil at its first line for a nil Profile.
+//	and stepRunCeilingLimits returns nil at its first line for a nil Profile.
 //
 // So every principal who can reach the route arrives unwalled, and the guard's
 // own comment rested on a false premise ("a SECURITY-tier route, so a security
 // admin can open one" — a security admin gets 403 at the door).
 //
-// The residue is closed by binding the LANE rather than two of its limits: this
+// The residue is closed by the route's tier, which the tests below pin: this
 // lane skips the member clamp and opens an interactive, attachable, allow-all,
-// operator-credentialed sandbox, so a principal with ANY assigned profile may
-// not use it at all. That is the strongest form of the finding's `expected`,
-// and it is what makes the route's tier and its governance story one fact
-// instead of two that can drift.
+// operator-credentialed sandbox, so it stays operator-only. The limit check
+// itself is limit by limit (deny_interactive, max_concurrent_runs), not a
+// refusal of every assigned profile; a walled principal with neither limit set
+// is not refused by it.
 
 // f153RecordSrv drives launchRecordRun over a store that hands `profile` to
 // whoever asks, with `active` runs already going.
@@ -157,4 +159,50 @@ func TestRecordRouteStaysOnTheOperatorTier(t *testing.T) {
 			}
 		})
 	}
+}
+
+// f153ScanDoor serves the one repo source both scan handlers launch.
+type f153ScanDoor struct {
+	*f153ScanStore
+	src types.Source
+}
+
+func (s *f153ScanDoor) GetSource(context.Context, uuid.UUID) (types.Source, error) { return s.src, nil }
+func (s *f153ScanDoor) GetSourcesByIDs(context.Context, []uuid.UUID) (map[uuid.UUID]types.Source, error) {
+	return map[uuid.UUID]types.Source{s.src.ID: s.src}, nil
+}
+
+// A member at their run cap who scans is told the limit and the remedy (403),
+// never a 500 "launch scan run": both scan handlers answer through
+// writeScanLaunchRefusal, like the record and sign-in lanes.
+func TestScanHandlersAnswerTheRunCapWith403(t *testing.T) {
+	p := govProfile("two-at-a-time")
+	p.Limits = types.GovernanceLimits{MaxConcurrentRuns: 2}
+	srv, st, _ := govEscapeFixture(t, assignedStore(p))
+	srv.cfg.Runner = &fakeRunner{}
+	src := types.Source{ID: uuid.New(), Kind: types.SourceRepo, Locator: govWorkspaceRepo}
+	srv.cfg.Store = &f153ScanDoor{f153ScanStore: &f153ScanStore{scanLaneStore: &scanLaneStore{govEscapeStore: st}, active: 2}, src: src}
+	req := func() *http.Request {
+		rctx := chi.NewRouteContext()
+		rctx.URLParams.Add("id", src.ID.String())
+		ctx := context.WithValue(govMemberCtx([]string{"eng"}, false), chi.RouteCtxKey, rctx)
+		return httptest.NewRequest(http.MethodPost, "/scan", nil).WithContext(ctx)
+	}
+	check := func(t *testing.T, w *httptest.ResponseRecorder) {
+		t.Helper()
+		if w.Code != http.StatusForbidden || reasonOf(t, w) != reasonRecordCeilingLimit || !strings.Contains(w.Body.String(), "Stop one first") {
+			t.Fatalf("= %d %s, want 403 %s naming the remedy", w.Code, w.Body.String(), reasonRecordCeilingLimit)
+		}
+	}
+	t.Run("workspace fan-out", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		ws := types.Workspace{ID: uuid.New(), Attachments: []types.WorkspaceAttachment{{SourceID: &src.ID}}}
+		srv.scanAttachedSources(w, req(), ws)
+		check(t, w)
+	})
+	t.Run("single source", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		srv.handleScanSource(w, req())
+		check(t, w)
+	})
 }

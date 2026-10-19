@@ -1247,8 +1247,9 @@ erases one person's retained records by explicit scope, in one audited act
 | `components` | the components the person saved, the launch intents of their runs, and what each run's snapshot of one they defined says about it; the run keeps a content-free row, which is what a revived run is checked against. A finished run's resolved policy and grants keep the hosts and secret names the run used, as for any other policy, and so do its `run.env_secret.resolve`, `run.file_secret.resolve`, `secret.read` and `run.policy.resolve` rows |
 | `run_setups` | the person's own run templates and every revision of them, the launch intents of their runs, their group template-manager grants, and their name as the author of shared templates, revisions and grants, which stay without it |
 | `runner_pools` | the person's own user pools, deleted as their own delete would, their name on every pool row of theirs, and their stored preferences (the pool they default to, their last view); their runners stay |
-| `audit_personal_fields` | the person's audit-seal key, every generation: each sealed audit field of theirs reads `[erased]` everywhere it was copied, and the chain still verifies |
-| `credentials` | the person's stored credentials, their encryption key and provider connection-change records (also erased by `DELETE /people/{principal}/credentials`) |
+| `member_drives` | the drives the person created for themselves, each deleted with its files as their own delete would; a drive a run still holds fails the scope, naming the drive |
+| `audit_personal_fields` | the person's audit-seal key, every generation: each sealed audit field of theirs reads `[erased]` everywhere it was copied, and the chain still verifies; the approvals they decided keep their state but lose the person's name and the reason they typed |
+| `credentials` | the person's stored credentials, their encryption key and provider connection-change records (also erased by `DELETE /people/{principal}/credentials`), their delegated tokens, and the Azure DevOps token rows of their runs that are revoked or past their expiry |
 
 - The scopes run in the order above whatever order the body lists them: the person's live consumers are fenced first,
   the data they could still reach next, the keys last.
@@ -1276,7 +1277,7 @@ erases one person's retained records by explicit scope, in one audited act
   - Every write of a stored credential reads that generation when it begins and is refused if it has moved: `409` `credential_erased_during_write`, nothing saved.
   - A write that begins after the erase lands, so reconnecting works at once.
   - The check is in Postgres, so it holds across wardynd replicas and in store mode (the value is not sent to Vault or Key Vault first).
-  - The `credential.erase` row's `write_fence` is `generation`, or `locks_only` for a store that keeps no generation: then only the in-process locks hold back a writer.
+  - The `credential.erase` row's `write_fence` is `generation`, or `locks_only` for a store that keeps no generation: then only the credential locks hold back a writer.
   - Migration `0156_secret_owner_generations` adds one counter per person; an owner with no row is generation 0, so every existing credential keeps working.
   - The counter holds a number and a time, never a credential, and refuses nothing later.
   - After a person is erased, `secret_owner_generations` still holds their subject id, the counter and the time of its last change; Wardyn never deletes that row.
@@ -1439,8 +1440,10 @@ erases one person's retained records by explicit scope, in one audited act
 
 ##### Erase
 
-- The person's stored credentials and the masking copies of them, through the same erasure entry point as
-  `POST /people/{principal}/erasure`, with the `credentials` and `mask_copies` scopes.
+- The person's stored credentials, the masking copies of them, the components they saved, their run templates and
+  their own Self-Hosted runner pools, through the same erasure entry point as
+  `POST /people/{principal}/erasure`, with the `credentials`, `mask_copies`, `components`, `run_setups` and
+  `runner_pools` scopes.
 - Audit fields, run tasks, run outputs and recordings are not part of a purge: records retention usually outlives the
   leaver window, so erasing them stays a deliberate `POST /people/{principal}/erasure`
 
@@ -1514,6 +1517,7 @@ lose access now, do not wait for it:
   again. A group removal also lags for API tokens when the sign-in's groups claim carries names, not the object ids
   the group's `externalId` holds ("Turn it on", step 5): it then cuts sessions only.
 - **No identity-provider logout.** Signing out at the identity provider does not end a Wardyn session: Wardyn has no front- or back-channel logout, and SCIM deprovisioning is a separate revocation, not the propagation of an IdP logout. A person's own sign-out ends their console sessions only (`session.revoke` with `sessions_only`, [AUDIT-ACTIONS](AUDIT-ACTIONS.md)).
+- **Shared computers.** After an SSO sign-out the console tells the person to sign out of the identity provider too. That session stays live, so the next person could press Sign in with SSO and arrive as them.
 - **Long-lived connections.** A suspension kills every live run, which ends its attach and SSH sessions. Other
   console streams end at their next authentication check or reconnect.
 - **A database writer** can clear `deactivated_at`, as it could any other row. The authority epoch only rises, so
@@ -1612,6 +1616,7 @@ and, with `hmac_secret` set, `X-Wardyn-Signature`. Only these fields are ever se
 - **SMTP mail.**
   - An `smtp` channel takes `host`, `port`, `from`, an optional static `to` (a list of addresses) and optional
     `username` and `password`, which are set together; it takes no `url`.
+  - An optional `helo` sets the name `EHLO` announces (default `localhost`), for a relay that rejects a non-FQDN one.
   - It sends a plain-text message, `Subject: [Wardyn] ` plus the same title as above, with the same allowlisted lines
     as the chat bodies and nothing else.
   - It sends over **verified STARTTLS only**:
@@ -1677,7 +1682,7 @@ at tier 0. With `routes` set, the first route that matches an approval chooses i
 drops duplicates on `delivery_id`. A row that is retried keeps its `delivery_id`.
 
 - **Retries and failure.**
-  - Network errors, timeouts, HTTP 408, 429 and 5xx retry after 30 s, 1 m, 2 m and 4 m.
+  - Network errors, timeouts, HTTP 408, 429 and 5xx retry after 30 s, 1 m, 2 m, 4 m (±20%).
   - A row goes dead on its fifth failure,
     - on any other 4xx or a 3xx (redirects are never followed: a redirect would hand the body and signature to a host
       you did not name),
@@ -1904,7 +1909,9 @@ Moved to [member-mode.md](operations/member-mode.md#exercising-member-mode-as-an
 2. **Turn Dex on, and choose who's an admin.**
    - Dex is the `sso` compose profile.
    - Every other OIDC var already defaults to match the bundled [`deploy/compose/dex.yaml`](../deploy/compose/dex.yaml) client (defaults in the `wardynd` service's `environment` block in `docker-compose.yaml`), so the two you set are the issuer and the operator allowlist.
-   - With OIDC configured an **empty** `WARDYN_OIDC_OPERATOR_EMAILS` refuses to boot, so list yourself: everyone listed is an **admin**, everyone else who can sign in is a **member** (add `WARDYN_OIDC_ROLE_MAP` to derive admin/member from SSO roles/groups instead).
+   - With OIDC configured an **empty** `WARDYN_OIDC_OPERATOR_EMAILS` refuses to boot, so list yourself: everyone listed is an **admin**, everyone else who can sign in is a **user** (`WARDYN_OIDC_ROLE_MAP` derives admin/user from SSO roles/groups instead).
+   - A fresh `.env` from `make setup` already carries `WARDYN_OIDC_ROLE_MAP` (`demo@wardyn.local=admin,member@wardyn.local=user`).
+   - A non-empty role map is a hard switch: a person it does not name is denied unless `WARDYN_OIDC_DEFAULT_ROLE` is set.
 
    ```sh
    echo 'WARDYN_OIDC_ISSUER=http://localhost:5556'        >> deploy/compose/.env
@@ -1937,7 +1944,7 @@ Moved to [member-mode.md](operations/member-mode.md#exercising-member-mode-as-an
        hash: "$2a$10$SDMtAYUgJDDzcanSySsoBuLPINvmRvxVpqg3WU9jfThQABkwBvaiK"
        username: "member"
        userID: "member-0001"
-     - email: "reviewer2@wardyn.local"   # not in the operator list ⇒ a member;
+     - email: "reviewer2@wardyn.local"   # not in the operator list ⇒ a user, once the role map or default role admits them;
        hash: "<paste the whole generated hash>"  # domain must clear WARDYN_OIDC_EMAIL_DOMAINS
        username: "reviewer2"
        userID: "reviewer2-0001"
@@ -1949,6 +1956,11 @@ Moved to [member-mode.md](operations/member-mode.md#exercising-member-mode-as-an
    ```sh
    docker compose -f deploy/compose/docker-compose.yaml restart dex
    ```
+
+   Then admit the new identity to Wardyn, or Dex authenticates it and Wardyn refuses the login with no role:
+   - add `reviewer2@wardyn.local=user` to the `WARDYN_OIDC_ROLE_MAP` already in `deploy/compose/.env`,
+   - or set `WARDYN_OIDC_DEFAULT_ROLE=user`,
+   - then `up -d wardynd` so it reads the new value.
 
 4. **Each person signs in on their own.**
    - The browser is redirected to Dex directly for the login leg.
@@ -2138,7 +2150,7 @@ Moved to [integrations.md](operations/integrations.md#integrations).
 - The fields below that shape a run's own egress — `internal_hosts`, `upstream_proxy_no_proxy`, `trusted_ca_pem`, the egress redirects — are compiled into the sidecar's proxy config at dispatch and read once at sidecar startup.
 - A run already running keeps the config it started with for the rest of its life, however many times you fix the SiteConfig underneath it.
 - `PUT /site-config`'s response says so (`applies_from: "next_dispatch"`), **and since 0.7.2 the console repeats it on save** — BOTH halves of the Network step.
-- The upstream-proxy saves ([`ui/src/app/components/screens/setup/corp-network-proxy.tsx:570,589,604`](../ui/src/app/components/screens/setup/corp-network-proxy.tsx)) and the egress-redirect saves (`corp-network-egress.tsx:430`, the one chokepoint every add, edit and remove passes through) carry it as the toast's description.
+- The upstream-proxy saves (`saveUrl`, `saveAsSecret` and `saveSecretRef` in [`corp-network-proxy.tsx`](../ui/src/app/components/screens/setup/corp-network-proxy.tsx)) and the egress-redirect saves (`setRedirects` in `corp-network-egress.tsx`, the one chokepoint every add, edit and remove passes through) carry it as the toast's description.
 - So the operator who just changed a field reads the lifetime at the moment they change it rather than in this document afterwards.
 - Both matter for the same reason: the redirects are one of the compiled-at-dispatch fields listed above, so a save that said nothing about its lifetime was the one most likely to be acted on twice.
 - Every OTHER console write of site config still repeats nothing — the toast is not a general rule you can rely on elsewhere.
@@ -2486,19 +2498,17 @@ Delivery per install path:
 - `egress_redirects` is a list of `{from, to, token_secret_ref, token_integration_ref, ecosystem}` entries.
 - Each substitutes a public/upstream URL or host for a corporate-internal one in every run's egress, with an optional token injected proxy-side as a Bearer credential for `to`'s host (the sandbox never holds it).
 
-- The egress entry a redirect adds is scoped to `to`'s **port**: the one `to` spells, else the default of the scheme `to` spells (`80` for an explicit `http://`, `443` otherwise).
+- The egress entry a redirect adds is scoped to `to`'s **port**: the one `to` spells, else the default of its scheme (`80` for an explicit `http://`, `443` otherwise).
 - That is the same port its TLS termination and token injection use.
 - So a `to` on a literal IP is never trusted on some other port of that address.
 - Reach the mirror on a different port by naming that port in `to`.
 
-- It replaced the old `artifact_overrides` map (one entry per package ecosystem) because a corporate estate redirects container registries and internal appliances too.
-- The shape generalized to "a list of From → To pairs over any URL, host, or IP".
+- It replaced the old `artifact_overrides` map (one entry per package ecosystem) because a corporate estate redirects container registries and internal appliances too: a list of From → To pairs over any URL, host, or IP.
 - The token comes from either of two places, mutually exclusive — a row setting both is rejected.
 - `token_secret_ref` names a bare secret directly.
 - `token_integration_ref` instead names an [**Integration**](operations/integrations.md) (above) to take the token from: the integration owns the system and its credential, the redirect owns rerouting a public endpoint to it.
-- Pointing at an integration carries more than its secret name.
-- The header and format of that row's `proxy_header` delivery come with it, so a feed authenticating with something other than `Authorization: Bearer` (the bare-secret path's hardcoded shape) finally can.
-- Which secret that is follows the delivery, not the role name: whatever the row calls it, its `proxy_header` secret is the credential this redirect presents.
+- An integration also supplies its `proxy_header` header and format, so a feed that authenticates with something other than `Authorization: Bearer` can.
+- The credential is the secret that delivery names, whatever role the row gives it.
 - There is no UI control for picking an integration here yet; the seam is usable today via `PUT /site-config` and `wardyn site-config set`.
 - On a run that uses the per-person Azure DevOps lane, a redirect whose `to` is one of that lane's hosts (a package feed on `pkgs.dev.azure.com`, say) is applied without its token: the person's own token serves that host, and the run's audit shows `run.artifact.redirect` with outcome `denied`. Runs that do not use the lane keep the redirect's token.
 
@@ -2510,13 +2520,12 @@ What you get depends on whether `ecosystem` is set:
 | empty (**network only**) | 🟢 yes | 🟢 yes | ⛔ no |
 
 - An ecosystem row gets the per-tool config file `EmitArtifactConfig` ([`internal/workspacescan/gen.go`](../internal/workspacescan/gen.go)) writes at workspace-import time — `.npmrc`, `.config/pip/pip.conf`, `.cargo/config.toml`, `.m2/settings.xml`, `GOPROXY`/`GOSUMDB`, or `.nuget/NuGet/NuGet.Config` — on top of the egress substitution and token injection every redirect gets.
+- Several rows can share one `ecosystem` (pip, go and maven name two public hosts, cargo three): the row whose `from` is the first public host (`registry.npmjs.org`, `pypi.org`, `crates.io`, `repo.maven.apache.org`, `proxy.golang.org`, `api.nuget.org`) names the mirror in the config. With none, the last row does.
 - A `go` redirect keeps Go's checksum database on, reached through the mirror: `GOSUMDB` is `sum.golang.org <to>/sumdb/sum.golang.org`, so the mirror must proxy that path.
-- A mirror that cannot proxy it sets `go_checksum_db_off` on its redirect, which writes `GOSUMDB=off` for runs through it: modules it serves are then trusted without a check against `sum.golang.org`, and only `go.sum` still protects. Keep each repository's `go.sum` committed.
+- A mirror that cannot proxy it sets `go_checksum_db_off` on its redirect, which writes `GOSUMDB=off` for runs through it: modules it serves are then trusted without a check against `sum.golang.org`, and only `go.sum` still protects. Keep each repository's `go.sum` committed. With several `go` rows, the last one's `go_checksum_db_off` decides.
 - Setting `go_checksum_db_off` shows a warning on the `artifact_repo` setup check and is recorded in `site_config.write`; it is accepted only on a `go` row.
 - A network-only row (empty `ecosystem`: a container registry, an internal appliance, a bare host or IP) gets the network half only: host substituted into the run's egress allowlist, token injected proxy-side.
-- But **no config file is written**.
-- There is no `.npmrc` equivalent for an arbitrary host.
-- That is a real cost: the workspace still needs telling to pull from the mirror itself.
+- **No config file is written**: there is no `.npmrc` equivalent for an arbitrary host, so the workspace still needs telling to pull from the mirror.
 - Examples: `docker login` against the internal registry, an appliance client's own config.
 - Otherwise a run reaches an allowed, credentialed host that nothing in the sandbox asks for.
 
@@ -2600,11 +2609,13 @@ The residuals an operator should plan for:
 - Every declared CIDR (once you have that evidence) must still lie entirely inside the liftable set; `PUT /site-config` 400s one that doesn't (`0.0.0.0/0`, `169.254.0.0/16`, `127.0.0.0/8` are the obvious mistakes it catches).
 - This lifts ONE thing: the SSRF builtin.
 - The run's own policy allowlist (`allowed_domains`) still has to name the host separately.
-- Two more exclusions apply automatically: an address on the proxy's own network interfaces, and the resolved control-plane (`wardynd`) host — the sidecar shares its Docker network with Postgres/Dex/the registry container.
-- On Kubernetes the sidecar's interface carries only the pod's own address and the control plane's neighbours are ClusterIP Services off that interface, so only the resolved `wardynd` address is excluded there.
+- Two more exclusions apply automatically: an address inside the subnet of one of the proxy's own network interfaces, and the resolved control-plane (`wardynd`) host — the sidecar shares its Docker network with Postgres/Dex/the registry container.
+- On Kubernetes the interface's subnet is whatever the CNI's mask makes it, often the pod CIDR, so a pod IP may be excluded. A ClusterIP is off that interface and is not, apart from the resolved `wardynd` address.
 - This IS the case where you, the cluster operator, have real sandbox-side evidence.
-- Use a WORKLOAD-SPECIFIC suffix (one Service's own name, never the bare `svc.cluster.local`, which would reach every Service in the cluster) and narrow `cidrs` to that workload's own Pod range.
+- Use a WORKLOAD-SPECIFIC suffix (one Service's own name, never the bare `svc.cluster.local`, which would reach every Service in the cluster).
+- For a ClusterIP Service, set `cidrs` to that Service's ClusterIP as a `/32`, not the whole Service range.
 - ClusterIPs come from ONE cluster-wide range, so a Service-range CIDR lifts the whole cluster, control plane included.
+- A pod-range scope fits only a headless Service (its name resolves to pod IPs), and only where the pod CIDR is not on the sidecar's own interface subnet.
 - The lift applies wherever the proxy resolves a hostname for a direct dial — the sandbox's CONNECT/plain-HTTP path, the MITM path, and the `git_pat` PAT-broker lane (its forge host is grant-derived).
 - So a declared suffix covering a self-hosted forge lets the brokered PAT reach it.
 - A lifted decision's audit `rule_source` reads `site-config:internal-host` instead of the default `policy:allowed`.
@@ -2630,17 +2641,17 @@ The residuals an operator should plan for:
 }
 ```
 
-- Add `cidrs` only for the Kubernetes in-cluster case above, once you know the ranges the SANDBOX resolves into — and scope the suffix to the one workload, never to the whole cluster:
+- Add `cidrs` only for the Kubernetes in-cluster case above, once you know the addresses the SANDBOX resolves into — and scope the suffix to the one workload, never to the whole cluster:
 
 ```json
 {
   "internal_hosts": [
-    { "host_suffix": "svc-a.apps.svc.cluster.local", "cidrs": ["10.244.3.0/24"] }
+    { "host_suffix": "svc-a.apps.svc.cluster.local", "cidrs": ["10.96.14.20/32"] }
   ]
 }
 ```
 
-(`10.244.3.0/24` stands for that workload's Pod range; a Service-range CIDR such as `10.96.0.0/12` would lift every ClusterIP in the cluster.)
+(`10.96.14.20/32` stands for that Service's ClusterIP; a Service-range CIDR such as `10.96.0.0/12` would lift every ClusterIP in the cluster.)
 
 ### Bedrock on a private endpoint
 
@@ -3049,7 +3060,7 @@ kubectl -n "$WARDYN_NS" describe pod -l wardyn.run-id="$RUN_ID" | sed -n '/Event
   - The fake is addressed by its **Service** name, never a pod IP, and site-config `internal_hosts` must lift it **before the first sign-in**.
   - The sandbox's egress goes through the proxy sidecar, which denies any host resolving to a private address unless an `internal_hosts` rule lifts it — and the lift refuses the proxy's own interface subnets.
   - A pod IP is on the pod CIDR, which IS that subnet, so a pod IP can never be lifted however it is declared; a ClusterIP is on the Service CIDR, which can.
-  - Scope the rule to the Service CIDR your cluster actually uses.
+  - The throwaway walk scopes the rule to the Service CIDR your cluster actually uses; on a cluster you keep, scope it to the fake's ClusterIP as a `/32`.
   - Read it off the apiserver's `--service-cluster-ip-range`, do not assume `10.96.0.0/16`.
   - [`scripts/kind-sso-walk.sh`](../scripts/kind-sso-walk.sh) reads it off the apiserver itself.
   - A set `WARDYN_KIND_SSO_SERVICE_CIDR` wins over that read, which is also how you rescue a failed one.
@@ -3062,7 +3073,7 @@ kubectl -n "$WARDYN_NS" describe pod -l wardyn.run-id="$RUN_ID" | sed -n '/Event
 > This is a throwaway cluster by design, never one you keep state on.
 
 - Then both principals sign in through Dex, the admin declares the `per_user` lane and pins the account/role, the member completes the containerized `aws sso login` from their own seat.
-- `/setup/status` reads `model_access.state: "live"` for the member and `not_configured` for the admin at the same moment.
+- `/setup/status` reads the walk provider's `provider_access` row `live` for the member and `not_configured` for the admin at the same moment.
 - The closing assertion is the one that is not Wardyn asserting about itself: the fake's own `/_seen` reports which account and role real botocore asked it to mint, and that the Bedrock stub was hit.
 - **What the second spec adds (0.7.5).**
   - The walk now runs TWO spec files in one invocation and against one cluster — `./scripts/run-ui-e2e.sh sso-member sso-member-recovery` — in that order, because the second inherits the state the first leaves.
@@ -3087,9 +3098,9 @@ kubectl -n "$WARDYN_NS" describe pod -l wardyn.run-id="$RUN_ID" | sed -n '/Event
 - It then asserts that the console says the start is SLOW, and never that Wardyn cannot read the sandbox, with the pane's own 2-second poll answering 200 throughout.
 - That is the live twin of the Go characterization test, and it is the datum that tells an operator whether an "unreadable" they saw was estate-side.
 - The 65 seconds are not arbitrary and neither is what they hold up.
-- A sandbox creates its PROXY pod first and waits for that pod's IP for **90 seconds** before the agent pod exists at all.
-- So under a taint it is the proxy pod that sits `Pending`, and 90 seconds is the point at which the run itself fails.
-- The hold is therefore five seconds past the 60 at which the slow-start sentence appears, and the taint comes off the moment the assertion is made — about 25 seconds of margin.
+- A sandbox creates its PROXY pod first and waits for that pod's IP before the agent pod exists at all, so under a taint it is the proxy pod that sits `Pending`.
+- Since 0.8.6 an unschedulable pod waits under `WARDYN_SANDBOX_CAPACITY_WAIT` instead of failing at 90 seconds, so the run survives the hold.
+- The hold is five seconds past the 60 at which the slow-start sentence appears, and the taint comes off the moment the assertion is made.
 - A walk that is killed mid-case would leave the node unschedulable, so the walk script clears that taint before its own restarts and again on exit.
 - **Run it on images built from the tip you are judging.**
   - The console is baked into the daemon image.
@@ -3127,44 +3138,30 @@ Naming these is the point of the walk, not a caveat on it:
 
 ### Where people are told about model access
 
-- From 0.7.6 an actionable model-access state reaches a person on every console screen, not only on Getting Started.
-- The console reads `model_access` from `GET /setup/status` once per session and then every five minutes (a hidden tab skips its ticks and a returning one refreshes at once).
-- It renders a banner for the three states a person can act on — `not_configured`, `expired_signin`, `expiring` — plus `shared_expired`, which a member cannot.
-- The banner carries the sign-in itself: the same AWS SSO login pane Settings mounts, in a dialog, on whatever screen they were on.
-- Two suppressions are deliberate.
-  - On Getting Started the page IS the door.
-  - On Settings and the Providers screen the banner is withheld for an ADMIN only, because those pages already mount the same pane for the same states.
-  - A member keeps the banner there, because the Settings card's AWS button is admin-only and would otherwise strand them on the page they were sent to.
-- `not_configured` (the first-run state) and, for a non-admin, `shared_expired` carry a "Not now" that hides the banner for that person in that browser session.
-- A lapse — `expired_signin` or `expiring` — cannot be dismissed.
-- Under a `shared` row the one credential is the admin's.
-- A member whose runs depend on it is told when it dies ("Your admin's model credential expired — ask them to reconnect it") with no button, because nobody but an admin can repair it.
-- The ADMIN reading the same state sees the blast radius named: "The shared AWS sign-in no longer works — every Claude Code run needs it".
-- The ADMIN also gets the sign-in, which is the path `authorizeHarnessLogin` has always admitted for an operator.
-- Wardyn has no way for that member to notify the admin; that gap is listed in the [CHANGELOG](../CHANGELOG.md).
+- Each person's connection to each model provider they may run on is the `provider_access` list in `GET /setup/status`: the provider id, a state (`live`, `expiring`, `expired_signin`, `not_configured` or `not_applicable`), a composed action sentence and, when the state names one, a deadline.
+- A caller that is not a person, such as the shared admin token, reads `not_applicable` with no action.
+- The console reads it once per session and then every five minutes (a hidden tab skips its ticks and a returning one refreshes at once).
+- A strip above every User-view screen speaks per provider, in two cases:
+  - the default provider of an agent the person may run, while their credential for it is `not_configured`, `expired_signin` or `expiring`;
+  - any provider where they hold a credential that is `expiring` or no longer works.
+- A Claude sign-in that is only `expiring` is left to Getting started.
+- The strip carries the way back in: the provider's own sign-in or typed-key door, in a dialog on whatever screen they were on.
+- Only the first-run line (`not_configured`) has a "Not now", which hides that provider's line for that person in that browser session. A lapse cannot be dismissed.
+- The Admin view shows no strip, because a credential is a person's own and belongs to the User view.
 
 ### A run refused for a model credential
 
-- When an `AgentProviders` row says HOW an agent reaches its model and the credential that lane needs is dead at dispatch, the run is failed with the server's own sentence.
-- From 0.7.6 that refusal is also machine-readable.
-- The `run.create` failure row it already wrote carries `reason: model_credential` and the run's DECLARED `mechanism`.
-- The console grades that ending `credential` and renders the sentence with the AWS sign-in beside it, in a dialog, on the run page.
-
-- The button is offered only where a sign-in the reader can complete would repair the state:
-  - the refused run's declared lane must still be the deployment's Claude Code lane;
-  - the reader's own `model_access` must be actionable;
-  - the reader must be the person who created the run.
-- An admin reading somebody else's failed run is shown the sentence alone, because their sign-in repairs nothing for that run.
-
-- A refusal whose renewal merely did not complete ("launch again in a moment") grades `live` and gets no button either, correctly: nothing is wrong with that credential.
-- In the Admin view (`/admin/runs/:id`) the button never renders, even on the admin's own run.
-- The admin's own per-user run carries **Open in user view** in its place, since the Admin monitor carries no credential door of its own (M-7).
+- When the model provider a run chose has no usable credential for its owner, the run is refused with the server's own sentence: a `422` at create, or a failed run if the credential died before dispatch.
+- Both carry `reason: model_credential` with the `provider` and its `kind`, and only for a credential refusal; a provider that is off or unset gets no sign-in door.
+- The dispatch refusal's `run.create` failure row carries the same three fields.
+- The console grades that ending `credential` and renders the sentence with the provider's door beside it, in a dialog, on the run page.
+- The button is offered only to the person who created the run, in the User view, and only while they still have a door for that provider.
+- Anyone else, and every run in the Admin view, reads whose credential it was and gets no button, because a sign-in lands in the signer's own namespace and can serve nobody else's run.
+- The admin's own run carries **Open in user view** in its place.
 - Signing in from there does not restart anything.
 - The run stays FAILED; relaunch is the run header's "Start a run like this one".
-- **The refusal sentences' destination.**
-  - The refusals that name a destination — the dispatch refusal, its create-time 422 twin, the stored-AWS-identity refusal and the spent-renewal sentence — now name a door the reader can open.
-  - Under a `per_user` row that is the console's Getting started page or the model-access banner every screen carries; under a `shared` row it stays Settings → Model provider, which is the admin's own page.
-  - The CLI prints the same sentence, and Getting started is the destination that is true for its reader too.
+- The refusal sentences name a door the reader can open: Getting started or the model-access strip.
+- The CLI prints the same sentence.
 
 ### A run is holding for a sign-in
 
@@ -3687,7 +3684,7 @@ docker compose -f deploy/compose/docker-compose.yaml up -d wardynd
   next splits by where it lives.
 - A stored **workspace** source IS re-validated,
   at run-create — `seedRequestWorkspace` re-runs `ValidateAuthoredTarget` over
-  every `ws.Sources` target ([`internal/api/runs_create.go:94-115`](../internal/api/runs_create.go)) — and is
+  every `ws.Sources` target ([`internal/api/runs_create.go`](../internal/api/runs_create.go)) — and is
   refused `422` with `workspace <id> source target: target /home/agent/drive is
   reserved for the user drive`.
 - A stored **policy**'s `workspace_mounts` or
@@ -3697,12 +3694,12 @@ docker compose -f deploy/compose/docker-compose.yaml up -d wardynd
 - `buildRunMounts` re-checks the reserved target there and
   **drops** the mount rather than failing the run, logging `wardynd: stored
   policy binds the reserved user-drive target; dropping that mount` at WARN
-  ([`internal/api/runs_dispatch_mounts.go:96-104`](../internal/api/runs_dispatch_mounts.go)).
+  ([`buildRunMounts` in `internal/api/runs_dispatch_mounts.go`](../internal/api/runs_dispatch_mounts.go)).
 - The run starts one bind
   short.
 - `buildRepoRecords` makes the same drop for a stored policy's
   `workspace_repos[].target`, folded into its destination validation
-  ([`internal/api/runs_scm.go:166`](../internal/api/runs_scm.go)), but with **no** distinct log line for that
+  ([`buildRepoRecords` in `internal/api/runs_scm.go`](../internal/api/runs_scm.go)), but with **no** distinct log line for that
   arm.
 - That WARN is the *only* run-time signal a stored policy row produces —
   no HTTP error, nothing the member sees.
@@ -3920,6 +3917,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0185` (`0185_runner_pool_org_default_revision`) adds `runner_pool_org_defaults.revision` (`0152`'s table), which starts at 1 and rises by one on every write of the organisation's runner-pool defaults.
 - `0188` (`0188_run_renewed_token_jtis`) adds `token_jti` and `token_prev_jti` to `agent_runs` (`0001`'s table): the ids of the two tokens a run's proxy last held across a renewal, which a revive revokes.
 - `0189` (`0189_run_containment_pending`) replaces the `binding` check on `runner_pending_actions` (`0139`'s table) so a `stop_proxy` may carry a node record in place of an outage loss, beside its new `run_containment_pending` and `run_node_records` tables.
+- `0191` (`0191_secrets_value_rev`) adds `secrets.value_rev` (`0001`'s table), an identity column every write of a value moves; adding it rewrites `secrets` once under an exclusive lock.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
@@ -3966,7 +3964,9 @@ image digests in `wardyn.env`, not a re-run of anything
 - The permission error itself has no way forward except giving the migrator
   ownership; do that on the restored database, not on the half-upgraded one.
 
-Run this as the role you have today, the one in `WARDYN_PG_DSN`:
+Run this as the role you have today, the one in `WARDYN_PG_DSN`, with
+`psql -v ON_ERROR_STOP=1` so the first failed statement stops the script rather
+than leaving the later grants half-applied:
 
 ```sql
 -- 1. The new LEAST-PRIVILEGE app role. Migrations create no roles by design
@@ -3989,10 +3989,11 @@ REVOKE UPDATE, DELETE, TRUNCATE, TRIGGER, REFERENCES ON audit_events FROM wardyn
 --     (0111) does this once for every role that held INSERT at the upgrade;
 --     run it yourself for a role you create after that. The same GRANT ALL
 --     TABLES in step 2 also reached the table's partitions and its bookkeeping
---     tables, so take their write privileges back too.
+--     tables, so take their write privileges back too. The loop below reaches
+--     every partition, audit_events_legacy included while it exists.
 REVOKE INSERT ON audit_events FROM wardyn_app;
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE, TRIGGER, REFERENCES
-  ON audit_partition_meta, audit_chain_anchors, audit_events_legacy FROM wardyn_app;
+  ON audit_partition_meta, audit_chain_anchors FROM wardyn_app;
 DO $$
 DECLARE p regclass;
 BEGIN
@@ -4042,8 +4043,8 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
 - And it logs one of two lines:
   - `migrations applied via WARDYN_PG_MIGRATE_DSN … app role is a verified
     non-owner of audit_events — the append-only guard is DDL-protected`
-  - `WARDYN_PG_MIGRATE_DSN is set but the app role … still owns audit_events or is
-    a superuser — DDL protection is NOT in effect`
+  - `WARDYN_PG_MIGRATE_DSN is set but the app role (WARDYN_PG_DSN) can still reach past
+    audit_events' append-only guard by the route(s) named here — DDL protection is NOT in effect`
 - The second line now carries a `bypass_routes` field naming the route(s) that
   fired, because the remedy differs per route.
 - The first two are closed by
@@ -4885,6 +4886,7 @@ curl -fsS -X PUT "$WARDYN_URL/api/v1/drives/<drive-id>?confirm=rehome" \
 - This whole collision does not
   exist for an `id`-scheme drive, by construction rather than by convention.
 - `GET /api/v1/drives/{id}` reports which scheme a drive is on.
+- A database that no longer holds a `slug` drive cannot get it back: `wardyn drive set` re-creates it as `id`, so its homes get new, empty objects and the old ones are left unused. `set` warns for each such drive.
 
 > [!NOTE]
 > Both refusals also cover the loser of a create race.
@@ -5160,6 +5162,10 @@ What the switch needs, and refuses to render or boot without:
     key from both `env` and `extraEnv` (`extraEnv` renders after `env` and wins), and
     refuses `fs` from either; it also refuses `persistence.enabled=true`, whose
     ReadWriteOnce volume exists for the per-pod `fs` store.
+  - Turning `persistence` off keeps the old claim and its `fs` recordings
+    (`helm.sh/resource-policy: keep`); delete it with `kubectl delete pvc`.
+    A claim made before 0.9.4 lacks the annotation: run `kubectl annotate pvc
+    <fullname>-data helm.sh/resource-policy=keep` before turning `persistence` off.
 - **An audit spool on the per-pod `tmp` emptyDir.** The chart renders
   `WARDYN_AUDIT_SPOOL=/tmp/audit-spool.jsonl` and refuses a `WARDYN_AUDIT_SPOOL`
   set in `env` or `extraEnv` anywhere outside `/tmp`.
@@ -5167,7 +5173,7 @@ What the switch needs, and refuses to render or boot without:
   holds its lock on a connection of its own, outside `pool_max_conns`, so every
   replica elects and is fenced on a pool of any size ([ENV.md](ENV.md),
   `WARDYN_PG_DSN`).
-- **A PodDisruptionBudget** (`minAvailable: 1`) and a preferred **pod anti-affinity**
+- **A PodDisruptionBudget** (`minAvailable: 1`, at two or more replicas) and a preferred **pod anti-affinity**
   across nodes (soft, so a one-node cluster still schedules every replica; an
   `affinity.podAntiAffinity` of your own replaces it).
 - **Per-replica limits add up.** The `via_org` byte total of a local run is 8 GiB per

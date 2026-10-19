@@ -27,3 +27,14 @@ test/e2e/fixtures/**/*.cast
 # images/cache. The compose stack passes .env at RUNTIME (env_file), never at build.
 .env
 **/.env
+# The other secret-bearing local files .gitignore names: a registry token in an
+# .npmrc, local configs and keys, real-key composer configs, local env overrides.
+# deploy/images/*-bin stay IN the context: the agent images COPY those staged binaries.
+.npmrc
+**/.npmrc
+local/
+.env.local
+**/.env.local
+**/.env.*.local
+examples/composer-configs/anthropic-api.json
+examples/composer-configs/openai-api.json

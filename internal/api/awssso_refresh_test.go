@@ -805,3 +805,65 @@ func TestAWSSSOTokenSpent_AFailedReadIsNotMemoized(t *testing.T) {
 		t.Fatalf("the definitive answer must be memoized; reads = %d", st.reads)
 	}
 }
+
+// racingSpentStore reports not-spent for the row it reads, but a concurrent
+// writer marks the token spent while that read is in flight.
+type racingSpentStore struct {
+	store.Store
+	s     *Server
+	reads int
+}
+
+func (r *racingSpentStore) AWSSSOTokenSpent(_ context.Context, fp string) (bool, error) {
+	r.reads++
+	if r.s != nil {
+		r.s.ssoRefreshMu.Lock()
+		r.s.ssoRefreshSpent = map[string]bool{fp: true}
+		r.s.ssoRefreshMu.Unlock()
+	}
+	return false, nil
+}
+
+func (r *racingSpentStore) MarkAWSSSOTokenSpent(context.Context, string, string, time.Time) error {
+	return nil
+}
+
+func (r *racingSpentStore) PruneAWSSSOSpentTokens(context.Context, time.Time) (int, error) {
+	return 0, nil
+}
+
+// A not-spent answer is not memoized: the map holds spent marks only, so it
+// does not grow one entry per rotation (#2138).
+func TestAWSSSOTokenSpent_NotSpentIsNotMemoized(t *testing.T) {
+	st := &racingSpentStore{}
+	s := &Server{cfg: Config{Store: st, BaseCtx: context.Background()}}
+	fp := awsSSOTokenFingerprint("rt-live")
+
+	for range 2 {
+		if s.awsSSOTokenSpent(fp) {
+			t.Fatal("a token with no spent row answered spent")
+		}
+	}
+	if _, cached := s.ssoRefreshSpent[fp]; cached {
+		t.Fatal("the not-spent answer was memoized; the map grows per rotation")
+	}
+	if st.reads != 2 {
+		t.Fatalf("store reads = %d, want 2 (each not-spent check reads the row)", st.reads)
+	}
+}
+
+// A mark written while the cache-miss read is in flight survives the read's
+// stale not-spent answer (#2292).
+func TestAWSSSOTokenSpent_ConcurrentMarkIsNotOverwritten(t *testing.T) {
+	st := &racingSpentStore{}
+	s := &Server{cfg: Config{Store: st, BaseCtx: context.Background()}}
+	st.s = s
+	fp := awsSSOTokenFingerprint("rt-racing")
+
+	if !s.awsSSOTokenSpent(fp) {
+		t.Fatal("the check answered not-spent although a mark landed during the read")
+	}
+	if !s.ssoRefreshSpent[fp] {
+		t.Fatal("the relock write overwrote the concurrent spent mark with false")
+	}
+}

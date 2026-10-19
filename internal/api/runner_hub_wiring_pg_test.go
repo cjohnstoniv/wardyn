@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -221,5 +222,40 @@ func TestRunnerHubWiringPG_SessionWithoutCapsKeepsConnectBeforeDisconnect(t *tes
 	}
 	if got, err := f.st.GetRunner(f.ctx, f.rn.ID); err != nil || got.LastSeenAt == nil || got.Version != f.rn.Version {
 		t.Fatalf("runner row = %+v, err %v; want last_seen_at set and the version kept", got, err)
+	}
+}
+
+// A superseded session's caps, handled after the runner's next session reported its own, write
+// nothing over them: the version, machine name, architecture and retire capability stay the current
+// session's.
+func TestRunnerCapsPG_ASupersededSessionWritesNothing(t *testing.T) {
+	pool, cfg, rn, _, _, _ := runnerExitAPIFixture(t)
+	ctx := t.Context()
+	st := cfg.Store.(store.PG)
+	srv := New(cfg)
+	old, cur := uuid.NewString(), uuid.NewString()
+	caps := func(session, version, arch string, retire bool) {
+		data := mustJSON(runnerwire.Caps{Version: version, MachineName: "host-" + version, Arch: arch, Retire: retire})
+		srv.capsFromRunner(ctx, rn.ID, session, runnerwire.Event{Kind: runnerwire.EventCaps, Data: data})
+	}
+	if err := st.BeginRunnerInventory(ctx, rn.ID, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.BeginRunnerInventory(ctx, rn.ID, cur); err != nil {
+		t.Fatal(err)
+	}
+	caps(cur, "0.9.4", "arm64", true)
+	caps(old, "0.9.2", "amd64", false)
+	got, err := st.GetRunner(ctx, rn.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var retire bool
+	if err := pool.QueryRow(ctx, `SELECT retire_capable FROM runners WHERE id = $1`, rn.ID).Scan(&retire); err != nil {
+		t.Fatal(err)
+	}
+	if got.Version != "0.9.4" || got.MachineName != "host-0.9.4" || got.Arch != "arm64" || !retire {
+		t.Fatalf("runner = version %q, machine %q, arch %q, retire %v; want the current session's 0.9.4, host-0.9.4, arm64, true",
+			got.Version, got.MachineName, got.Arch, retire)
 	}
 }

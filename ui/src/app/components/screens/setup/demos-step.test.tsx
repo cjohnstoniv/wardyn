@@ -135,13 +135,14 @@ describe("DemoDetail — the single demo renderer", () => {
     expect(screen.getByTestId(`demo-start-${FIRST.id}`)).toBeDisabled();
   });
 
-  // No onJump (the User view's Getting Started): the hint names the admin-side
-  // Environment step in plain text, never a button that goes nowhere.
-  it("without onJump the not-ready hint names the Environment step but offers no button", async () => {
+  // No onJump (the User view's Getting Started): a member has no Environment
+  // step, so the hint asks the admin instead of naming it (#2842).
+  it("without onJump the not-ready hint asks the admin and never names the Environment step", async () => {
     renderDemo(FIRST, false, { noJump: true });
     const hint = await screen.findByTestId("demos-step-not-ready");
-    expect(within(hint).getByText("Environment step")).toBeInTheDocument();
-    expect(within(hint).queryByRole("button", { name: "Environment step" })).not.toBeInTheDocument();
+    expect(hint).toHaveTextContent("ask your admin to set up a barrier");
+    expect(hint).not.toHaveTextContent("Environment step");
+    expect(within(hint).queryByRole("button")).not.toBeInTheDocument();
   });
 
   it("an active demo shows the terminal, live approvals, the inline audit panel, and End demo", async () => {
@@ -210,6 +211,35 @@ describe("DemoDetail — the single demo renderer", () => {
       timeout: 3000,
     });
     expect(await screen.findByTestId("demo-terminated")).toBeInTheDocument();
+  });
+
+  // One failed poll (a daemon restart, a Wi-Fi drop) says nothing about the run: GET /runs/{id} resolves undefined
+  // only on a 404, so a rejection must keep the terminal mounted and the resume entry stored.
+  it("a poll that fails once keeps the live terminal and the resume entry", async () => {
+    renderDemo();
+    await user.click(await screen.findByTestId(`demo-start-${FIRST.id}`));
+    await screen.findByTestId("attach-terminal");
+    const before = getRunMock.mock.calls.length;
+
+    getRunMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    await waitFor(() => expect(getRunMock.mock.calls.length).toBeGreaterThan(before), { timeout: 3500 });
+
+    expect(screen.getByTestId("attach-terminal")).toBeInTheDocument();
+    expect(localStorage.getItem("wardyn-demo-runs")).not.toBeNull();
+    expect(screen.queryByTestId(`demo-start-${FIRST.id}`)).not.toBeInTheDocument();
+  }, 10_000);
+
+  it("a reload that lands during a blip keeps the resume entry; a real 404 drops it", async () => {
+    localStorage.setItem("wardyn-demo-runs", JSON.stringify({ [FIRST.id]: "demo-run-1" }));
+    getRunMock.mockRejectedValue(new TypeError("Failed to fetch"));
+    const { unmount } = renderDemo();
+    await screen.findByTestId("demo-starting");
+    expect(localStorage.getItem("wardyn-demo-runs")).not.toBeNull();
+    unmount();
+
+    getRunMock.mockReset().mockResolvedValue(undefined);
+    renderDemo();
+    await waitFor(() => expect(localStorage.getItem("wardyn-demo-runs")).toBeNull());
   });
 
   // The "Turn this into a policy" payoff was wired ONLY in the deleted

@@ -92,7 +92,9 @@ func TestPG_RunOutputChunks(t *testing.T) {
 		t.Fatal(err)
 	}
 	var left int
-	_ = pool.QueryRow(ctx, `SELECT count(*) FROM run_output_chunks WHERE run_id = $1`, run3).Scan(&left)
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM run_output_chunks WHERE run_id = $1`, run3).Scan(&left); err != nil {
+		t.Fatalf("count the erased run's chunks: %v", err)
+	}
 	if left != 0 {
 		t.Fatalf("%d chunks left after the erasure", left)
 	}

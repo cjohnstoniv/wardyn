@@ -343,14 +343,13 @@ test.describe("Secrets screen", () => {
     // ... the confirm dialog stays open so the operator can retry ...
     await expect(confirm).toBeVisible();
 
-    // ... and the secret is still really present (verified out-of-band so the
-    // intercept doesn't mask the truth).
+    // ... and the row is still listed: a UI that dropped it optimistically before the DELETE
+    // answered would pretend the secret is gone. (The DELETE is stubbed above, so the server's own
+    // copy is untouched by construction and checking it would prove nothing.)
+    // (A tr locator, not getByRole: the open dialog marks the page behind it aria-hidden.)
+    await expect(page.locator("tr").filter({ hasText: victim })).toBeVisible();
+
     await page.unroute(`**/api/v1/secrets/${encodeURIComponent(victim)}`);
-    const list = await page.request.get(`/api/v1/secrets`, {
-      headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
-    });
-    const body = (await list.json()) as { names: string[] };
-    expect(body.names).toContain(victim);
 
     // Cleanup: now actually delete it (intercept removed).
     await page.request.delete(`/api/v1/secrets/${encodeURIComponent(victim)}`, {

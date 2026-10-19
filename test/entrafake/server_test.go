@@ -327,6 +327,51 @@ func TestRotationInvalidatesTheOldRefreshToken(t *testing.T) {
 	}
 }
 
+// A refresh token is single-use even when it is presented twice at once: of any number of
+// concurrent redemptions exactly one is answered, the rest are invalid_grant.
+func TestConcurrentRedemptionsOfOneRefreshTokenAnswerExactlyOne(t *testing.T) {
+	s := entrafake.New()
+	defer s.Close()
+
+	for round := 0; round < 5; round++ {
+		first := redeemCode(t, s, "verifier-0000000000000000000000000000000000000000",
+			"openid", "offline_access", s.ConsentedScopes()[1])
+		token, _ := first["refresh_token"].(string)
+
+		const redeemers = 16
+		start := make(chan struct{})
+		statuses := make(chan int, redeemers)
+		for i := 0; i < redeemers; i++ {
+			go func() {
+				<-start
+				resp, err := http.PostForm(s.TokenURL(), url.Values{
+					"client_id": {s.ClientID()}, "grant_type": {"refresh_token"}, "refresh_token": {token},
+				})
+				if err != nil {
+					statuses <- -1
+					return
+				}
+				_ = resp.Body.Close()
+				statuses <- resp.StatusCode
+			}()
+		}
+		close(start)
+		ok := 0
+		for i := 0; i < redeemers; i++ {
+			switch st := <-statuses; st {
+			case http.StatusOK:
+				ok++
+			case http.StatusBadRequest:
+			default:
+				t.Fatalf("round %d: unexpected status %d", round, st)
+			}
+		}
+		if ok != 1 {
+			t.Fatalf("round %d: %d of %d concurrent redemptions of one refresh token were answered, want exactly 1", round, ok, redeemers)
+		}
+	}
+}
+
 // TestInjectedRefusals covers the three knobs a consumer's error
 // classification is graded against: a dead grant, a revoked consent and a
 // Conditional Access policy that wants a human.

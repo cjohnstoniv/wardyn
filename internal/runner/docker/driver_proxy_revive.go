@@ -69,12 +69,47 @@ const proxyConfigWriteTimeout = 30 * time.Second
 var _ runner.ProxyReviver = (*Driver)(nil)
 var _ runner.SandboxStarter = (*Driver)(nil)
 
+// proxyPrep is the part of a proxy's start that can fail before any container is touched: its hosts
+// entries (the relay's, on a runner) and its config with the runner's trusted CA and upstream proxy in.
+type proxyPrep struct {
+	extraHosts []string
+	cfgJSON    []byte
+}
+
+// prepareProxy computes runID's proxyPrep from the control plane's cfgJSON. ReplaceProxy runs it before
+// it removes the running proxy, so a refused relay, a failed subnet read or an unusable CA or upstream
+// proxy keeps that proxy rather than costing it. The decision sink's key is not part of it: Succeed
+// refuses while the old proxy's producer is unsettled, so startProxy takes it after the remove.
+func (d *Driver) prepareProxy(ctx context.Context, runID uuid.UUID, cfgJSON []byte) (proxyPrep, error) {
+	hosts := []string{"host.docker.internal:host-gateway"}
+	if d.cfg.ControlPlaneRelay != nil {
+		name, target, err := d.relayHostsEntry(cfgJSON)
+		if err != nil {
+			return proxyPrep{}, err
+		}
+		if err := d.checkRelayOutsideRunSubnet(ctx, runID, target); err != nil {
+			return proxyPrep{}, err
+		}
+		hosts = []string{"host.docker.internal:" + target, name + ":" + target}
+	}
+	hosts = append(hosts, d.cfg.TestProxyExtraHosts...) // empty outside tests (New)
+	cfgJSON, err := runner.WithTrustedCA(cfgJSON, d.cfg.TrustedCAPEM)
+	if err != nil {
+		return proxyPrep{}, err
+	}
+	if cfgJSON, err = withUpstreamProxy(cfgJSON, d.cfg.UpstreamProxyURL); err != nil {
+		return proxyPrep{}, err
+	}
+	return proxyPrep{extraHosts: hosts, cfgJSON: cfgJSON}, nil
+}
+
 // startProxy creates the wardyn-proxy sidecar for runID on the per-run
 // network, joins it to the control-plane-facing network, starts it and hands
-// it cfgJSON on stdin. ip, when valid, is the address it must take on the
+// it prep's config on stdin. ip, when valid, is the address it must take on the
 // per-run network (the one the agent's hosts entry pins). On any failure it
 // removes what it created.
-func (d *Driver) startProxy(ctx context.Context, runID uuid.UUID, labels map[string]string, env []string, cfgJSON []byte, ip netip.Addr) (string, error) {
+func (d *Driver) startProxy(ctx context.Context, runID uuid.UUID, labels map[string]string, env []string, prep proxyPrep, ip netip.Addr) (string, error) {
+	cfgJSON := prep.cfgJSON
 	cfg := &container.Config{
 		Image:    d.proxyImage(),
 		Hostname: "wardyn-proxy",
@@ -114,7 +149,7 @@ func (d *Driver) startProxy(ctx context.Context, runID uuid.UUID, labels map[str
 		// guard) — general egress is NOT broadened. On a runner both this name
 		// and the control-plane name map to the relay's target below, so the
 		// proxy's control-plane clamp covers the one address either resolves to.
-		ExtraHosts: []string{"host.docker.internal:host-gateway"},
+		ExtraHosts: prep.extraHosts,
 		// SECURITY: the proxy only relays HTTP, so a tight resource envelope
 		// still leaves ample headroom while bounding a compromised proxy: its
 		// own PID cap (fork-bomb guard) and a modest memory cap (MemorySwap
@@ -124,25 +159,7 @@ func (d *Driver) startProxy(ctx context.Context, runID uuid.UUID, labels map[str
 	if d.cfg.ProxyBinaryHostPath != "" {
 		host.Binds = []string{d.cfg.ProxyBinaryHostPath + ":/usr/local/bin/wardyn-proxy:ro"}
 	}
-	if d.cfg.ControlPlaneRelay != nil {
-		name, target, err := d.relayHostsEntry(cfgJSON)
-		if err != nil {
-			return "", err
-		}
-		if err := d.checkRelayOutsideRunSubnet(ctx, runID, target); err != nil {
-			return "", err
-		}
-		host.ExtraHosts = []string{"host.docker.internal:" + target, name + ":" + target}
-	}
-	host.ExtraHosts = append(host.ExtraHosts, d.cfg.TestProxyExtraHosts...) // empty outside tests (New)
-	cfgJSON, err := runner.WithTrustedCA(cfgJSON, d.cfg.TrustedCAPEM)
-	if err != nil {
-		return "", err
-	}
-	if cfgJSON, err = withUpstreamProxy(cfgJSON, d.cfg.UpstreamProxyURL); err != nil {
-		return "", err
-	}
-	cfgJSON, err = d.runnerSinkConfig(runID, cfgJSON)
+	cfgJSON, err := d.runnerSinkConfig(runID, cfgJSON)
 	if err != nil {
 		return "", err
 	}
@@ -413,13 +430,18 @@ func (d *Driver) ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) e
 	if err := d.ensureImage(ctx, d.proxyImage(), "", func() {}); err != nil {
 		return err
 	}
+	// Not ErrProxyReplaceFailed either: nothing is removed yet, so the revive keeps the running proxy.
+	prep, err := d.prepareProxy(ctx, id, cfgJSON)
+	if err != nil {
+		return fmt.Errorf("docker: replace proxy: %w", err)
+	}
 	d.drainSink(ctx, id)
 	// A failed remove may still have removed it.
 	if err := d.removeProxy(ctx, id); err != nil {
 		return fmt.Errorf("%w: %w", runner.ErrProxyReplaceFailed, err)
 	}
-	if _, err := d.startProxy(ctx, id, wardynLabels(id, componentProxy, agentLabels),
-		proxyEnvFromJSON(id, cp.ControlPlaneURL), cfgJSON, ip); err != nil {
+	if _, err := d.startProxy(ctx, id, d.labels(id, componentProxy, agentLabels),
+		proxyEnvFromJSON(id, cp.ControlPlaneURL), prep, ip); err != nil {
 		return fmt.Errorf("%w: %w", runner.ErrProxyReplaceFailed, err)
 	}
 	return nil

@@ -140,6 +140,8 @@ var proxySidecarEnvKnobNames = []string{
 	// The mid-run credential re-auth hold's budget. A knob missing from this
 	// list is not "default", it is UNREACHABLE on a managed substrate.
 	"WARDYN_CREDENTIAL_REAUTH_TIMEOUT",
+	// The git broker's wait for a wait_for_review mint approval (docs/ENV.md).
+	"WARDYN_GIT_APPROVAL_TIMEOUT",
 }
 
 // ProxySidecarEnvKnobNames returns a COPY of the knob-name list: exported for the

@@ -245,9 +245,20 @@ func TestMiscCovSweepRunOutputs(t *testing.T) {
 // A stale pending row of a run that cannot be read, or whose terminal is an interactive session, becomes
 // a capture gap rather than a recovery.
 func TestMiscCovResolveStalePendingWritesAGapWhenThereIsNothingToRecover(t *testing.T) {
-	t.Run("a run that cannot be read", func(t *testing.T) {
+	t.Run("a transient read fault keeps the row pending for the next sweep", func(t *testing.T) {
 		f, cs := miscCovOutFixture(t)
 		cs.getRunErr = errors.New("run unreadable")
+		f.srv.resolveStalePending(t.Context(), cs, f.run.ID)
+		if r, ok := f.mem.row(f.run.ID); ok && r.CaptureGap {
+			t.Errorf("row = %+v, a transient GetRun error must not write a permanent capture gap", r)
+		}
+		if got := miscCovFinalizeData(t, f); len(got) != 0 {
+			t.Errorf("audit = %v, want no gap row", got)
+		}
+	})
+	t.Run("a run that no longer exists", func(t *testing.T) {
+		f, cs := miscCovOutFixture(t)
+		cs.getRunErr = store.ErrNotFound
 		f.srv.resolveStalePending(t.Context(), cs, f.run.ID)
 		if r, ok := f.mem.row(f.run.ID); !ok || !r.CaptureGap {
 			t.Errorf("row = %+v (found %v), want a capture gap", r, ok)

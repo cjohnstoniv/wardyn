@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -100,6 +101,12 @@ func (s *Server) handleCLISignIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	row, err := cs.GetComponent(r.Context(), id, "")
+	if errors.Is(err, store.ErrNotFound) {
+		// An id that names no row answers as a row the caller may not attach,
+		// so whether it exists is not observable.
+		runDenied(authz.Deny(authz.ReasonCapabilityComponent, "runs.component", componentUnavailableRefusal)).write(s, w, r)
+		return
+	}
 	if err != nil {
 		writeServerError(w, r, "read component", err)
 		return
@@ -155,8 +162,13 @@ func (s *Server) storeCLISignIn(ctx context.Context, stamp loginRunStamp, scope 
 		return true, nil
 	}
 	row, err := cs.GetComponent(ctx, id, "")
-	if err != nil {
+	if errors.Is(err, store.ErrNotFound) {
 		return true, nil
+	}
+	if err != nil {
+		// A read that failed says nothing about the row: refuse nothing, store
+		// nothing, and let the caller see the failure.
+		return false, err
 	}
 	aws := attachedAWSCLI(attachedComponent{snapshot: types.RunComponent{ComponentID: &id, Definition: row.Definition}})
 	if aws == nil || aws.StartURL != stamp.SSOStartURL || aws.SSORegion != stamp.SSORegion ||

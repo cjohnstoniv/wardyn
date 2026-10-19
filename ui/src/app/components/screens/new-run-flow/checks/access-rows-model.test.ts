@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import type { ComponentFact } from "../../../../lib/types/components";
+import type { ComponentFact, ComponentSecretFact } from "../../../../lib/types/components";
 import { ACCESS_ROWS as T } from "../../../wardyn/copy/components";
 import { accessIssues, accessRow, accessRows, overlayFacts, rowDomId, rowIdFromDomId } from "./access-rows-model";
 
@@ -164,8 +164,15 @@ describe("accessRow — what the open row shows", () => {
     expect(accessRow(git({ lane: undefined })).laneNote).toBeNull();
   });
   it("never puts a secret's name on a row", () => {
-    const row = accessRow(custom({ secrets: [{ delivery: "header", shared: true }] }));
-    expect(JSON.stringify(row.secrets)).not.toMatch(/secret_name|name/);
+    // The wire fact must not carry a name, but a field that arrives anyway has to stop at the row.
+    const withName = { delivery: "header", shared: true, name: "prod-api-key", secret_name: "prod-api-key" } as ComponentSecretFact;
+    const row = accessRow(custom({ secrets: [withName] }));
+    expect(row.secrets).toEqual([{ delivery: "header", shared: true }]);
+    expect(JSON.stringify(row.secrets)).not.toContain("prod-api-key");
+  });
+  it("keeps how an organisation-held secret reaches the runner", () => {
+    const row = accessRow(custom({ secrets: [{ delivery: "env", shared: true, local_delivery: "via_org" }] }));
+    expect(row.secrets).toEqual([{ delivery: "env", shared: true, local_delivery: "via_org" }]);
   });
 });
 

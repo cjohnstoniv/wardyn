@@ -87,6 +87,8 @@ describe("UserDrivesCard", () => {
     getDrivesMock.mockResolvedValue(rows(0, 0));
     renderCard();
     expect(await screen.findByText(DRIVES.CARD_EMPTY)).toBeInTheDocument();
+    // #2883: a collapsed card summary ends without a full stop, like its siblings.
+    expect(DRIVES.CARD_EMPTY).not.toMatch(/\.$/);
     expect(screen.getByText(DRIVES.CARD_OPEN)).toBeInTheDocument();
   });
 

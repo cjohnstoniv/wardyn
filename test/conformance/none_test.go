@@ -25,6 +25,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -427,6 +428,28 @@ func TestRecordingCapabilityCatchesPretender(t *testing.T) {
 func TestRecordingCapabilityRejectsProbedNonRecorder(t *testing.T) {
 	assertNegativeControlFails(t, "TestNegCtl_ProbedNonRecorder",
 		"recording gate accepted a probe against a SessionRecording=false driver; a non-recorder must not be treated as a recorder")
+}
+
+// TestConformanceAttachFailureIsNotASkip proves a driver that claims confinement
+// classes and creates a sandbox but fails Attach FAILS the InteractiveAttach case
+// instead of skipping it. downgradingRunner is that driver (its Attach errors); the
+// child's own verbose output says what InteractiveAttach did.
+func TestConformanceAttachFailureIsNotASkip(t *testing.T) {
+	const child = "TestNegCtl_AttachFailure"
+	cmd := exec.Command(os.Args[0], "-test.run", "^"+child+"$", "-test.count=1", "-test.v")
+	cmd.Env = append(os.Environ(), negctlEnv+"="+child)
+	out, _ := cmd.CombinedOutput()
+	if !strings.Contains(string(out), "--- FAIL: "+child+"/InteractiveAttach") {
+		t.Errorf("a failing Attach on a driver that claims confinement classes did not fail InteractiveAttach (a skip lets a broken attach go green); child output:\n%s", out)
+	}
+}
+
+// TestNegCtl_AttachFailure is the guarded child of TestConformanceAttachFailureIsNotASkip.
+func TestNegCtl_AttachFailure(t *testing.T) {
+	if os.Getenv(negctlEnv) != "TestNegCtl_AttachFailure" {
+		return
+	}
+	conformance.Run(t, downgradingRunner{}, conformance.Options{Timeout: 5 * time.Second})
 }
 
 // TestNegCtl_SilentDowngrade is the guarded child of

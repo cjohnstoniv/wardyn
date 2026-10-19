@@ -394,7 +394,9 @@ export const runs = {
   async reviveRun(id: string): Promise<ReviveResult> {
     const res = await wfetch(`/runs/${encodeURIComponent(id)}/revive`, { method: "POST" });
     if (!res.ok) throw new HttpError(res.status, await errText(res));
-    return asJson<ReviveResult>(res);
+    // An older server answers null when the owner's ceiling added no host.
+    const body = await asJson<ReviveResult>(res);
+    return { ...body, denied_added: body.denied_added ?? [] };
   },
 
   // POST /api/v1/runs/{id}/resume — owner or super admin: thaw a run the

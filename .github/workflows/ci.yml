@@ -177,7 +177,7 @@ jobs:
         # Evidence, not a gate: a storage-side error must not fail a REQUIRED job
         # (#372). The step below says so loudly.
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ci-full-tree-${{ steps.tree.outputs.tree }}
           path: tested-tree.txt
@@ -339,7 +339,7 @@ jobs:
       # rather than leaving `build` to fail later on a missing directory.
       - name: Upload the suite's reports and coverage profile
         if: always() && matrix.suite != 'lint' && needs.changes.outputs.backend != 'false'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: go-test-reports-${{ matrix.suite }}
           path: test/reports/go/${{ matrix.suite }}/**
@@ -398,7 +398,7 @@ jobs:
         run: for a in amd64 arm64; do GOOS=darwin GOARCH=$a CGO_ENABLED=0 go build -tags docker -o /dev/null ./cmd/wardyn-runnerd || exit 1; done
       - name: Download the three suites' profiles
         if: needs.changes.outputs.backend != 'false'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: go-test-reports-*
           path: test/reports/go
@@ -422,7 +422,7 @@ jobs:
         # loudly, because a run that is green with no reports attached is the one
         # case where you need them.
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: go-test-reports-union
           path: test/reports/go/union/**
@@ -595,7 +595,7 @@ jobs:
         # loudly, because a run that is green with no reports attached is the one
         # case where you need them.
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ui-test-reports
           path: test/reports/ui/**
@@ -709,6 +709,14 @@ jobs:
         env:
           WARDYN_GOVERNANCE_SECOND_HUMAN: "true"
         run: scripts/run-ui-e2e.sh governance-changes
+      - name: Run Playwright UI e2e, console served under a base path
+        # The step above runs base-path.spec.ts at the root, where its proxy-only assertions are off.
+        # WARDYN_BASE_PATH is only exercised with the backend under a sub-path behind
+        # test/basepathproxy, which run-ui-e2e.sh sets up for this variable. Once per run: shard 1.
+        if: matrix.shard == 1
+        env:
+          WARDYN_E2E_BASE_PATH: /wardyn
+        run: scripts/run-ui-e2e.sh base-path
       - name: Upload Playwright report
         id: upload_playwright_report
         if: always()
@@ -718,7 +726,7 @@ jobs:
         # loudly, because a run that is green with no reports attached is the one
         # case where you need them.
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: playwright-report-${{ matrix.shard }}
           path: |
@@ -731,7 +739,7 @@ jobs:
       - name: Upload the flaky-test list
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: e2e-flaky-${{ matrix.shard }}
           path: test/reports/e2e/flaky.tsv
@@ -881,7 +889,7 @@ jobs:
           load: true
           cache-from: type=gha,scope=wardyn-proxy
           cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=wardyn-proxy' || '' }}
-      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         if: needs.changes.outputs.backend != 'false'
         with:
           cluster_name: wardyn-test
@@ -1142,7 +1150,7 @@ jobs:
       # own doc and deploy/kind/Dockerfile.conformance-agent.
       - name: Build the conformance agent image (busybox:1.36 + wardyn-rec)
         run: make build-conformance-agent-image CONFORMANCE_AGENT_IMAGE=wardyn/conformance-agent:kind-test
-      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
           cluster_name: wardyn-conformance-k8s
           config: deploy/kind/conformance-kind-config.yaml
@@ -1182,7 +1190,7 @@ jobs:
         # No continue-on-error: a real conformance failure must block the build.
       - name: Upload conformance-k8s test reports
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: conformance-k8s-test-reports
           path: test/reports/go/conformance-k8s/**
@@ -1246,6 +1254,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
+          cache: false
       - name: Start the user's systemd manager
         run: |
           set -euo pipefail
@@ -1385,7 +1394,7 @@ jobs:
         # No continue-on-error: a real conformance failure must block the build.
       - name: Upload conformance-docker test reports
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: conformance-docker-test-reports
           path: test/reports/go/conformance-docker/**
@@ -1393,6 +1402,10 @@ jobs:
         env:
           WARDYN_TEST_DOCKER: "1"
         run: go test -count=1 -v -run '^TestPG_OldBinaryAgainstV1Store$' ./cmd/wardynd/
+      # The distinct-UID permission proofs skip on every non-root suite; this runs them as root in a
+      # throwaway container and fails if either does not run and pass (scripts/test-root-uid.sh).
+      - name: Distinct-UID recording permission proofs (root, throwaway container)
+        run: ./scripts/test-root-uid.sh
       - name: Save Go build cache (push to main only)
         if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -1454,7 +1467,7 @@ jobs:
         # cycle must block the build.
       - name: Upload envbuild test reports
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: envbuild-test-reports
           path: test/reports/go/envbuild/**
@@ -1587,7 +1600,7 @@ jobs:
         # loudly, because a run that is green with no reports attached is the one
         # case where you need them.
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: pg-test-reports-${{ matrix.shard }}
           path: test/reports/go/${{ matrix.suite }}/**
@@ -1628,10 +1641,10 @@ jobs:
   # D3. Covers a surface no existing gate does: `govulncheck` reads Go modules,
   # `make npm-audit` reads the UI's production dependencies — NEITHER sees the
   # Debian packages, the node runtime or the globally-installed agent CLI that
-  # the agent images actually ship. The scan targets are the eight images the
-  # release publishes (the matrix below): wardynd, wardynd-fips and wardyn-proxy,
-  # plus the five agent images (agent-base, agent-codex-cli, agent-aws-sso,
-  # agent-vscode, agent-novnc). wardynd, wardynd-fips and wardyn-proxy are
+  # the agent images actually ship. The scan targets are the nine images the
+  # release publishes (the jobs below): wardynd, wardynd-fips, wardyn-proxy and
+  # wardyn-runnerd, plus the five agent images (agent-base, agent-codex-cli,
+  # agent-aws-sso, agent-vscode, agent-novnc). The four wardyn images are
   # distroless-static, which carries
   # essentially no OS package surface; the agent images (trixie + node/python +
   # git/ssh/tmux/socat) are where the OS findings land.
@@ -1801,6 +1814,7 @@ jobs:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       TRIVY_IMAGE: wardyn-runnerd
       TRIVY_DOCKERFILE: deploy/compose/Dockerfile.runnerd
+      TRIVY_PRIME: '/library/(golang:[0-9.]+-alpine)@'
       TRIVY_BUILD_ARGS: ''
     steps: *trivy_steps
   trivy-agent-base:
@@ -2099,7 +2113,7 @@ jobs:
       # One list per ui-e2e shard, each in its own directory (flaky/e2e-flaky-<n>/).
       - name: Download the flaky-test lists
         continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: e2e-flaky-*
           path: flaky

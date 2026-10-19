@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -138,8 +139,13 @@ func TestRunnerStreamLimitsOneRunnerReconnectingInALoop(t *testing.T) {
 				t.Fatalf("connect %d: status %d, err %v", i, status, err)
 			}
 		}
-		if _, err := h.dial(t, ctx, id, key); err == nil {
+		_, err := h.dial(t, ctx, id, key)
+		if err == nil {
 			t.Fatal("runner reconnecting past the burst was not limited")
+		}
+		// The runner is told why, and is not sent the GOAWAY that would clear its session.
+		if !strings.Contains(err.Error(), reasonRunnerStreamRateLimited) || errors.Is(err, runnerwire.ErrGoaway) {
+			t.Errorf("refusal past the burst = %v, want the %s reason and no GOAWAY", err, reasonRunnerStreamRateLimited)
 		}
 	}
 }

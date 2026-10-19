@@ -80,6 +80,22 @@ func TestSMTP_VerifiedServerReceivesTheMessageAfterTLS(t *testing.T) {
 	}
 }
 
+// TestSMTP_HeloIsConfigurable: EHLO announces "localhost" unless the channel sets helo, so a relay that
+// rejects a non-FQDN HELO has a setting to work around it.
+func TestSMTP_HeloIsConfigurable(t *testing.T) {
+	for _, tc := range []struct{ helo, want string }{{"", "localhost"}, {"wardyn.corp.example", "wardyn.corp.example"}} {
+		f := newFakeSMTP(t, true)
+		ch := mailChannel(f)
+		ch.Helo = tc.helo
+		if class, _ := sendTo(t, ch, f.trust); class != "" {
+			t.Fatalf("helo %q: class = %q, want success", tc.helo, class)
+		}
+		if got := f.ehloNames(); !slices.Equal(got, []string{tc.want, tc.want}) {
+			t.Fatalf("helo %q: EHLO names = %v, want %q twice", tc.helo, got, tc.want)
+		}
+	}
+}
+
 // TestSMTP_AuthFollowsTheRelaysAdvertisedMechanism: Exchange Online lists LOGIN and XOAUTH2 without PLAIN,
 // so a PLAIN attempt dies on a 504. LOGIN is used when PLAIN is absent, PLAIN is preferred when both are
 // offered, and a relay offering neither is refused as auth_unsupported before any credential is sent.

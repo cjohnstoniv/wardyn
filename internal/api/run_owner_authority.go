@@ -630,7 +630,7 @@ func (s *Server) reviveOwnerRecheck(ctx context.Context, run types.AgentRun, cfg
 		err = s.refreshDeploymentConfig(ctx, run, cfg)
 	}
 	if err != nil {
-		return reviveRefused(http.StatusServiceUnavailable, reasonReviveOwnerAuthorityUnreadable, "re-check the run owner's authority: "+err.Error())
+		return reviveRefused(http.StatusServiceUnavailable, reasonReviveOwnerAuthorityUnreadable, loggedMsg(ctx, "re-check the run owner's authority", err))
 	}
 	if ref != nil {
 		s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "denied",
@@ -644,10 +644,10 @@ func (s *Server) reviveOwnerRecheck(ctx context.Context, run types.AgentRun, cfg
 // that proxy will load them. A config it would refuse is refused now, before
 // the claim and before the old proxy is touched: replacing a proxy with one
 // that exits at config load leaves the run no proxy at all.
-func encodeRevivedConfig(cfg *proxy.Config) ([]byte, *reviveError) {
+func encodeRevivedConfig(ctx context.Context, cfg *proxy.Config) ([]byte, *reviveError) {
 	b, err := json.Marshal(cfg)
 	if err != nil {
-		return nil, reviveRefused(http.StatusInternalServerError, reasonReviveEncodeConfigFailed, "encode proxy config: "+err.Error())
+		return nil, reviveRefused(http.StatusInternalServerError, reasonReviveEncodeConfigFailed, loggedMsg(ctx, "encode proxy config", err))
 	}
 	if _, err := proxy.LoadConfigBytes(b); err != nil {
 		return nil, reviveRefused(http.StatusConflict, reasonReviveConfigDoesNotLoad,
@@ -698,7 +698,7 @@ func (s *Server) extendRefusal(r *http.Request, run types.AgentRun) *ownerRefusa
 	}
 	if err != nil {
 		return &ownerRefusal{status: http.StatusServiceUnavailable, reason: reasonOwnerUnverifiable,
-			msg: "re-check the run owner's authority: " + err.Error()}
+			msg: loggedMsg(ctx, "re-check the run owner's authority", err)}
 	}
 	return ref
 }

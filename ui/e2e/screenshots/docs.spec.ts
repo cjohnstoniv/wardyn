@@ -112,6 +112,31 @@ async function settle(page: Page): Promise<void> {
   await page.waitForTimeout(400);
 }
 
+// The ONE GET /setup/status fixture both shots share: Fence Ready on a none-runner backend, so neither
+// photographs the red "No sandbox barrier on this host" alert. has_runs:true exercises the Launch step's
+// "First run launched" line (far below the getting-started fold — /setup carries no gate any more).
+async function serveReadySetupStatus(page: Page): Promise<void> {
+  await page.route("**/api/v1/setup/status*", (route) =>
+    route.fulfill({
+      json: {
+        ready: true,
+        checks: [],
+        auth: { mode: "local", local_loopback: true },
+        runner: {
+          driver: "docker",
+          confinement_classes: ["CC1"],
+          confinement_substrates: { CC1: "runc" },
+        },
+        providers: [],
+        secrets: { present: [], github_app: false },
+        age_key: { durable: true },
+        has_runs: true,
+        platform: { os: "linux", wsl: false, kvm: true },
+      },
+    }),
+  );
+}
+
 test.describe("Docs screenshots", () => {
   test.beforeEach(async ({ page }) => {
     // Force the dark-first console deterministically (theme-provider.tsx storage
@@ -139,31 +164,11 @@ test.describe("Docs screenshots", () => {
   // real single-host install shows. kvm:true keeps Vault at "Needs setup"
   // rather than "Incompatible here" (that split is a hardware fact).
   test("getting-started.png — barrier picker", async ({ page }) => {
-    await page.route("**/api/v1/setup/status*", (route) =>
-      route.fulfill({
-        json: {
-          ready: true,
-          checks: [],
-          auth: { mode: "local", local_loopback: true },
-          runner: {
-            driver: "docker",
-            confinement_classes: ["CC1"],
-            confinement_substrates: { CC1: "runc" },
-          },
-          providers: [],
-          secrets: { present: [], github_app: false },
-          age_key: { durable: true },
-          // has_runs:true so the Launch step's "First run launched" line is
-          // exercised (far below this shot's fold — /setup carries no gate any
-          // more, so this isn't clearing one; see setup-gate.ts).
-          has_runs: true,
-          platform: { os: "linux", wsl: false, kvm: true },
-        },
-      }),
-    );
-    // Straight to /setup rather than gotoConsole: this shot is the funnel, and
-    // the fixture only routes /setup/status.
-    await page.goto("/setup");
+    await serveReadySetupStatus(page);
+    // Straight to /admin/setup (the Admin view is the /admin/* URL space; bare /setup is the
+    // member funnel) rather than gotoConsole: this shot is the funnel, and the fixture only
+    // routes /setup/status.
+    await page.goto("/admin/setup");
     await expect(page.getByRole("heading", { name: "Getting started", level: 1 })).toBeVisible();
     const matrix = page.getByRole("radiogroup", { name: "Barrier tier" });
     await expect(matrix.getByText("Ready", { exact: true })).toHaveCount(1);
@@ -177,11 +182,14 @@ test.describe("Docs screenshots", () => {
   // runs-board.png (new): the Runs board after re-staging presentable data.
   test("runs-board.png — populated runs board", async ({ page }) => {
     await restagePresentableRuns(page);
-    await gotoConsole(page);
+    await serveReadySetupStatus(page);
+    await gotoConsole(page, "admin");
     await expect(page.getByRole("heading", { name: "Runs", level: 1 })).toBeVisible();
     // Wait for the re-staged cards to render (first + last of the set).
     await expect(page.getByText("Fix flaky webhook retry test")).toBeVisible();
     await expect(page.getByText("Refactor session cache eviction")).toBeVisible();
+    // The none-runner backend would otherwise photograph NoBarrierBanner above a healthy board.
+    await expect(page.getByText(/No sandbox barrier on this host/)).toHaveCount(0);
     // The sidebar Getting-started chip polls setup status — don't capture its
     // transient "Checking..." state.
     await expect(page.getByText(/Checking/)).toHaveCount(0, { timeout: 10_000 });

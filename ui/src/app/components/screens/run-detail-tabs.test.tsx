@@ -342,6 +342,79 @@ describe("RunDetailScreen — Audit tab names a rule-decided tool call", () => {
   });
 });
 
+// #2917: below sm a run's audit row is two lines, the target on its own line; from sm up it is one line.
+describe("RunDetailScreen — Audit tab row shape", () => {
+  it("keeps the target in the row but lets it wrap onto its own line below sm", async () => {
+    listAuditMock.mockImplementation((_id: string, action?: unknown) =>
+      Promise.resolve(
+        action
+          ? []
+          : [
+              {
+                id: "e1",
+                time: new Date().toISOString(),
+                actor_type: "system",
+                actor: "wardynd",
+                action: "run.create",
+                outcome: "success",
+                run_id: "run-1",
+                target: "ws-target-1",
+              },
+            ],
+      ),
+    );
+    renderRun(RUN);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /audit/i }));
+
+    const row = await screen.findByTestId("run-audit-row");
+    const target = within(row).getByTestId("run-audit-target");
+    expect(target).toHaveTextContent("ws-target-1");
+    expect(row.className).toContain("flex-wrap");
+    expect(row.className).toContain("sm:flex-nowrap");
+    expect(target.className).toContain("basis-full");
+    expect(target.className).toContain("sm:basis-0");
+  });
+});
+
+// #2925: the empty card has the populated list's width, so the content does not jump between tabs.
+describe("RunDetailScreen — Approvals tab empty card", () => {
+  it("is capped at the populated list's width", async () => {
+    renderRun({ ...RUN, state: "COMPLETED" });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /approvals/i }));
+    const card = await screen.findByTestId("run-approvals-empty");
+    expect(card).toHaveTextContent("No approvals for this run");
+    expect(card.className).toContain("max-w-3xl");
+  });
+});
+
+// #2924: the requested scope of a pending tool call wraps, so the command being decided on is fully on screen.
+describe("RunDetailScreen — Approvals tab requested scope", () => {
+  it("wraps a long command instead of scrolling it out of sight", async () => {
+    listApprovalsMock.mockResolvedValue([
+      {
+        id: "a1",
+        run_id: "run-1",
+        kind: "tool_call",
+        state: "PENDING",
+        requested_at: new Date().toISOString(),
+        requested_scope: { tool: "Bash", command: "rm -rf node_modules && pnpm install --frozen-lockfile" },
+      },
+    ]);
+    renderRun({ ...RUN, state: "RUNNING" });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /approvals/i }));
+
+    const pre = (await screen.findAllByText(/rm -rf node_modules/))
+      .map((el) => el.closest("pre"))
+      .find((el): el is HTMLPreElement => el !== null);
+    expect(pre).toBeDefined();
+    expect(pre!.parentElement!.className).toContain("[&_pre]:whitespace-pre-wrap");
+    expect(pre!.parentElement!.className).toContain("[&_pre]:break-all");
+  });
+});
+
 // W25-W25.2-3: /audit is run-scoped for a member (empty 200 without ?run_id=),
 // so the Audit tab's "open full Audit" link must carry the run — a bare /audit
 // drops a member on a feed that can never fill. M-1b: the full-page Audit
@@ -419,7 +492,7 @@ describe("RunDetailScreen — Recordings library link", () => {
 // (listApprovals("")) and filter in the browser — i.e. AFTER the server's
 // requested_at DESC window — so past LIST_LIMIT lifetime approvals a run's own
 // holds vanished from its own detail page, PENDING badge and all
-// (internal/api/approvals.go:56-61). The fetch must carry ?run_id=.
+// (handleListApprovals in internal/api/approvals.go). The fetch must carry ?run_id=.
 describe("RunDetailScreen — its approvals are scoped server-side", () => {
   it("asks /approvals for THIS run, so an old run past the list window still shows its holds", async () => {
     // The honest server: an un-scoped read answers with the newest window,
@@ -547,6 +620,17 @@ describe("RunDetailScreen — the Policy tab", () => {
     expect(await screen.findByText("Started from a policy written for this run.")).toBeInTheDocument();
     expect(getPolicyMock).toHaveBeenCalledTimes(1);
     expect(getPolicyMock).toHaveBeenCalledWith("run-1");
+  });
+
+  // #2911: in the light theme the transparent TabsList hides the primitive's white
+  // active pill, so the run tabs carry their own selected treatment.
+  it("every tab has a muted label and a visible fill when selected", async () => {
+    renderRun(RUN);
+    const tabs = await screen.findAllByRole("tab");
+    expect(tabs).toHaveLength(6);
+    for (const tab of tabs) {
+      expect(tab).toHaveClass("text-muted-foreground", "data-[state=active]:bg-muted", "data-[state=active]:text-foreground");
+    }
   });
 
   it("the identity rail's Policy row is a View link that opens the tab, for a run with no saved policy", async () => {

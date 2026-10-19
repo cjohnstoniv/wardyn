@@ -5,6 +5,7 @@ package composer
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -154,6 +155,21 @@ func TestGrade_GitPATAndSSHKeyAreHigh_ButNeverFloorConfinement(t *testing.T) {
 	// hosts (see the note on grantIsWriteCapable).
 	if floor := RequiredConfinementFloor(spec, Baseline{}); floor != "" {
 		t.Fatalf("git_pat/ssh_key must not floor confinement, got %q", floor)
+	}
+}
+
+// The git_pat rationale reaches members on Review and preflight: it must name both PAT broker postures and
+// never assert an unconditional "never resident".
+func TestGrade_GitPATRationaleNamesBothBrokerPostures(t *testing.T) {
+	spec := types.RunPolicySpec{MinConfinementClass: types.CC1, EligibleGrants: []types.GrantSpec{
+		{Kind: types.GrantGitPAT, RequiresApproval: true},
+	}}
+	it, ok := find(Grade(RunInput{}, spec), "eligible_grants[0]")
+	if !ok {
+		t.Fatal("git_pat item missing")
+	}
+	if strings.Contains(it.Rationale, "never resident") || !strings.Contains(it.Rationale, "WARDYN_GIT_PAT_BROKER=off") {
+		t.Errorf("git_pat rationale must name the broker-off posture and not claim never resident: %q", it.Rationale)
 	}
 }
 

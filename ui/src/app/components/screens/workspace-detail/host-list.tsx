@@ -42,7 +42,7 @@ export function HostList({ rows, emptyText, canRemove, removing, onRemove }: {
               size="icon"
               variant="ghost"
               className="size-7 shrink-0"
-              disabled={!canRemove || !!r.removeBlockedReason || removing === r.host}
+              disabled={!canRemove || !!r.removeBlockedReason || removing !== null}
               onClick={() => onRemove(r.host)}
               aria-label={`Remove ${r.host}`}
               title={r.removeBlockedReason}

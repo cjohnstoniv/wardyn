@@ -209,7 +209,18 @@ func (s *Server) handleSaveMyComponent(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusConflict, reasonComponentNameConflict, "you already have a component with that name")
 		return
 	}
-	created, err := cs.CreateComponent(r.Context(), c)
+	// The list above only words the common refusal; the capped create is what holds the cap when
+	// two saves race past it.
+	var created types.Component
+	if cc, ok := cs.(store.CappedComponentCreator); ok {
+		created, err = cc.CreateComponentCapped(r.Context(), c, componentsMaxPerPerson)
+	} else {
+		created, err = cs.CreateComponent(r.Context(), c)
+	}
+	if errors.Is(err, store.ErrComponentCap) {
+		saveRefusal(w, reasonComponentCapReached, fmt.Sprintf("too many saved components (max %d); remove one first", componentsMaxPerPerson))
+		return
+	}
 	if errors.Is(err, store.ErrConflict) {
 		writeErrorReason(w, http.StatusConflict, reasonComponentNameConflict, "you already have a component with that name")
 		return

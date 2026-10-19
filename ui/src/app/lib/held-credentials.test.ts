@@ -56,6 +56,14 @@ describe("heldCredentials", () => {
     expect(heldCredentials([grant("g1", "env_secret")], [])).toEqual({ readable: true, items: [{ kind: "env_secret" }] });
   });
 
+  it("a file_secret grant is held without any mint row, beside an env_secret one", () => {
+    expect(heldCredentials([grant("g1", "file_secret")], [])).toEqual({ readable: true, items: [{ kind: "file_secret" }] });
+    expect(heldCredentials([grant("g1", "env_secret"), grant("g2", "file_secret")], [])).toEqual({
+      readable: true,
+      items: [{ kind: "env_secret" }, { kind: "file_secret" }],
+    });
+  });
+
   it("a git token or SSH key whose grant carries no host gives no line rather than an invented one", () => {
     expect(heldCredentials([grant("g1", "git_pat")], [mint("g1")])).toEqual({ readable: true, items: [] });
   });

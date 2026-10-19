@@ -178,6 +178,7 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
   // A row is one twelfth of the visible pane, so a preset that adds up to
   // GRID_ROWS fills the cockpit exactly and nothing scrolls. Floors keep the
   // arithmetic sane before the first measurement (and under jsdom).
+  // Floored at 480: below that the right column scrolls sideways inside the pane (#2909). Stacking the tiles is 0.10.
   const gridWidth = Math.max(width, 480);
   const rowHeight = Math.max(
     28,
@@ -251,7 +252,8 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <div
           ref={ref}
-          className="scroll-thin min-h-0 w-full flex-1 overflow-y-auto overflow-x-hidden"
+          data-testid="run-canvas-scroll"
+          className="scroll-thin min-h-0 w-full flex-1 overflow-y-auto overflow-x-auto"
           style={editing ? DOT_GRID : undefined}
         >
           <GridLayout
@@ -291,7 +293,8 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
                 >
                   {editing && (
                     <TileHandle
-                      def={def}
+                      // The pane calls itself Output on an autonomous run; the handle says the same (#2928).
+                      def={id === "terminal" && !ctx.run.interactive ? { ...def, label: RUN_COCKPIT.outputPane } : def}
                       size={active?.i === id ? sizeLabel(active.w, active.h) : undefined}
                       onRemove={def.required ? undefined : () => toggleWidget(id)}
                     />

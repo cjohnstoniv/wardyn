@@ -94,6 +94,8 @@ describe("RunnerCredentials — the rows", () => {
     expect(option("github_token", "runner_resident")).toBeDisabled();
     expect(screen.getByText(DELIVERY.BOUND_NO_RESIDENT_GITHUB)).toBeInTheDocument();
     expect(option("api_key", "via_org")).toBeEnabled();
+    // #2897: the radio is the label's `peer`, which is what lets peer-disabled dim a bound option's label.
+    expect(option("env_secret", "via_org")).toHaveClass("peer");
   });
 
   it("an organisation's Azure DevOps tokens can be stored on a runner, with the connection note", async () => {

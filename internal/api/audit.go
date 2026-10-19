@@ -9,6 +9,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/go-chi/chi/v5/middleware"
@@ -138,6 +139,8 @@ func (s *Server) handleQueryAudit(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// ?order=desc on a run's trail answers its newest window, newest first; the default stays oldest-first.
+	page.Newest = scope != nil && r.URL.Query().Get("order") == "desc"
 	var pageFn func(store.Page) ([]types.AuditEvent, error)
 	if pager != nil {
 		pageFn = func(p store.Page) ([]types.AuditEvent, error) {
@@ -161,13 +164,19 @@ func (s *Server) handleQueryAudit(w http.ResponseWriter, r *http.Request) {
 			return served(filter.Keep(all), err)
 		}
 		all, err := s.cfg.Store.QueryAuditEvents(r.Context(), *scope, 0)
-		return served(filter.Keep(all), err)
+		rows, err := served(filter.Keep(all), err)
+		if page.Newest {
+			// The pager arm reads DESC; windowing the reversed list gives the same newest-first window.
+			slices.Reverse(rows)
+		}
+		return rows, err
 	})
 }
 
 // auditRowsFor is how rows leave for this caller, on both feed reads: sealed
 // fields opened, and for anyone auditScope narrowed to a run of their own, no
-// reference to an organisation's shared secret (sharedRefs). The caller it
+// reference to an organisation's shared secret (sharedRefs) and no node record's
+// source id (withoutNodeRecordSource). The caller it
 // exempts is the one auditScope hands the whole log — the same predicate, so
 // the two cannot drift: the security tier reads every operator row there is,
 // the rows that name the operator's secrets among them.
@@ -184,7 +193,10 @@ func (s *Server) auditRowsFor(r *http.Request, scope *uuid.UUID) func([]types.Au
 		if evs, err = s.unsealed(ctx, evs, err); err != nil {
 			return nil, err
 		}
-		return refs.events(evs)
+		if evs, err = refs.events(evs); err != nil {
+			return nil, err
+		}
+		return withoutNodeRecordSource(evs), nil
 	}
 }
 
@@ -286,11 +298,20 @@ func (s *Server) handleExportAudit(w http.ResponseWriter, r *http.Request) {
 	served := s.auditRowsFor(r, scope)
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	wrote := false // a byte has reached the response: the 200 is committed
-	offset := 0
+	offset := 0    // rows read so far; the OFFSET of a store without keyset paging, the log's position otherwise
+	var after int64
+	keyset, _ := pager.(store.AuditKeysetPager)
 	fail := func(what string, err error) { s.failAuditExport(w, r, what, offset, wrote, err) }
 	for {
-		page, err := pager.QueryAuditEventsFilteredPage(r.Context(), scope, filter,
-			store.Page{Limit: auditExportPageSize, Offset: offset})
+		var page []types.AuditEvent
+		var err error
+		if keyset != nil {
+			// By position, not OFFSET: rows written while the export runs cannot move a later page.
+			page, after, err = keyset.QueryAuditEventsFilteredAfter(r.Context(), scope, filter, after, auditExportPageSize)
+		} else {
+			page, err = pager.QueryAuditEventsFilteredPage(r.Context(), scope, filter,
+				store.Page{Limit: auditExportPageSize, Offset: offset})
+		}
 		if err != nil {
 			fail("page read", err)
 			return

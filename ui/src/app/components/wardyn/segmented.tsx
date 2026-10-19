@@ -69,8 +69,9 @@ export function Segmented<T extends string>({
       </div>
     );
   }
+  // max-w-full + overflow-x-auto: an over-wide set scrolls inside its card instead of being clipped (#2870).
   return (
-    <div className="inline-flex w-fit overflow-hidden rounded-lg border border-border-strong">
+    <div className="inline-flex w-fit max-w-full overflow-x-auto rounded-lg border border-border-strong">
       {options.map((o) => (
         <button
           key={o.value}
@@ -79,7 +80,7 @@ export function Segmented<T extends string>({
           disabled={disabled}
           onClick={() => onChange(o.value)}
           className={cn(
-            "flex items-center gap-1.5 border-l border-border px-3 py-1.5 text-xs transition-colors first:border-l-0 disabled:cursor-not-allowed disabled:opacity-50",
+            "flex items-center gap-1.5 whitespace-nowrap border-l border-border px-3 py-1.5 text-xs transition-colors first:border-l-0 disabled:cursor-not-allowed disabled:opacity-50",
             value === o.value
               ? o.value === "deny"
                 ? "bg-danger-subtle font-medium text-danger"

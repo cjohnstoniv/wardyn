@@ -218,6 +218,9 @@ func TestRevive_NoComponentRowsIsALegacyRunAndAnUnreadableSnapshotRefuses(t *tes
 			if code != http.StatusServiceUnavailable || !strings.Contains(body, reasonReviveOwnerAuthorityUnreadable) {
 				t.Fatalf("revive = %d %s, want 503 %s", code, body, reasonReviveOwnerAuthorityUnreadable)
 			}
+			if strings.Contains(body, "connection refused") {
+				t.Errorf("revive body carries the store's error text: %s", body)
+			}
 			if len(f.rr.replaced) != 0 {
 				t.Error("a revive that could not re-check the run's components replaced the proxy")
 			}
@@ -297,10 +300,22 @@ type extendComponentStore struct {
 	store.ComponentStore
 	snapshot []types.RunComponent
 	exists   bool
+	listErr  error
 }
 
 func (s *extendComponentStore) ListRunComponents(context.Context, uuid.UUID) ([]types.RunComponent, error) {
-	return s.snapshot, nil
+	return s.snapshot, s.listErr
+}
+
+// An extension whose owner re-check cannot be answered refuses with a 503 that
+// names the action, never the store's error text (#2121).
+func TestOwnerCapability_ExtensionUnreadableSnapshotDoesNotEchoTheError(t *testing.T) {
+	f := newEndWaitFixture(t, types.RunLimits{MaxEndAheadSec: 30 * 86400})
+	f.srv.cfg.Store = &extendComponentStore{leaseStore: f.st, listErr: errors.New("dial tcp db.internal.example:5432: connection refused")}
+	code, _, body := f.patchRaw(t, ssoSession(t, endWaitOwner, ownerEmail, oidc.RoleUser), endsAtBody(f.now.Add(7*24*time.Hour)))
+	if code != http.StatusServiceUnavailable || strings.Contains(body, "db.internal.example") {
+		t.Fatalf("extend = %d %s, want a 503 without the store's error text", code, body)
+	}
 }
 
 func (s *extendComponentStore) GetComponent(_ context.Context, id uuid.UUID, _ string) (types.Component, error) {

@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -201,17 +200,32 @@ func (s *Server) sweepOrphanedSandboxes(ctx context.Context) error {
 	if !ok {
 		return nil
 	}
-	runs, err := s.cfg.Store.ListRuns(ctx)
-	if err != nil {
-		return fmt.Errorf("sweep orphaned sandboxes: list runs: %w", err)
+	// A store with the narrow read is asked about each container's run as the substrate reports it; any
+	// other store is listed once up front, as before.
+	var preloaded map[uuid.UUID]types.AgentRun
+	if _, narrow := s.cfg.Store.(store.RunSweepReader); !narrow {
+		var err error
+		if preloaded, err = s.runsByID(ctx, nil); err != nil {
+			return fmt.Errorf("sweep orphaned sandboxes: list runs: %w", err)
+		}
 	}
-	byID := make(map[uuid.UUID]types.AgentRun, len(runs))
-	for _, run := range runs {
-		byID[run.ID] = run
+	var lookupErr error
+	lookup := func(runID uuid.UUID) (run types.AgentRun, known bool, err error) {
+		if preloaded != nil {
+			run, known = preloaded[runID]
+			return run, known, nil
+		}
+		byID, err := s.runsByID(ctx, []uuid.UUID{runID})
+		run, known = byID[runID]
+		return run, known, err
 	}
 	leaser, hasLease := s.cfg.Store.(store.RunWatcherLeaser)
 	isOrphan := func(runID uuid.UUID) bool {
-		run, known := byID[runID]
+		run, known, err := lookup(runID)
+		if err != nil {
+			lookupErr = errors.Join(lookupErr, err)
+			return false // a run that cannot be read is never torn down
+		}
 		if !known {
 			return true // no run row owns these containers — pure leak
 		}
@@ -233,11 +247,15 @@ func (s *Server) sweepOrphanedSandboxes(ctx context.Context) error {
 		}
 		return true
 	}
-	swept, err := sweeper.SweepOrphanedSandboxes(ctx, undispatchedGrace, isOrphan)
+	// A wedged substrate must not hold boot or the single-threaded sweeper (reconcileFinalizeTimeout's
+	// hazard); what one sweep leaves, the next takes.
+	sctx, cancel := context.WithTimeout(ctx, reconcileFinalizeTimeout)
+	defer cancel()
+	swept, err := sweeper.SweepOrphanedSandboxes(sctx, undispatchedGrace, isOrphan)
 	if swept > 0 {
 		slog.InfoContext(ctx, "wardynd: orphaned sandbox sweep", slog.Int("swept", swept))
 	}
-	if err != nil {
+	if err = errors.Join(err, lookupErr); err != nil {
 		return fmt.Errorf("sweep orphaned sandboxes: %w", err)
 	}
 	return nil
@@ -273,14 +291,11 @@ func (s *Server) sweepOrphanedSandboxes(ctx context.Context) error {
 // already-denied token/credential is a no-op), so re-running it on an
 // already-revoked run costs one wasted call, never a double-effect.
 func (s *Server) reconcileOrphanedSandbox(ctx context.Context) error {
-	runs, err := s.cfg.Store.ListRuns(ctx)
+	runs, err := s.terminalRunsWithSandbox(ctx)
 	if err != nil {
 		return fmt.Errorf("reconcile orphaned sandboxes: list runs: %w", err)
 	}
 	for _, run := range runs {
-		if !isTerminalRunState(run.State) || run.SandboxRef == "" {
-			continue
-		}
 		s.revokeRunCascade(ctx, run.ID)
 		kind, outcome, answered := s.lastRunnerTeardown(ctx, run)
 		torn := false
@@ -292,11 +307,11 @@ func (s *Server) reconcileOrphanedSandbox(ctx context.Context) error {
 		case answered && (kind == types.RunnerActionKill || outcome == types.RunnerActionRefused):
 			// A record the runner keeps only for containment refuses an end, every boot, but takes
 			// a kill, which stops its agent.
-			torn = s.teardownOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.orphan.sweep", s.cfg.Runner.KillSandbox)
+			torn = s.teardownOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.orphan.sweep", boundedTeardown(s.cfg.Runner.KillSandbox))
 		case s.cfg.Runner != nil && run.RunnerID != nil && strings.HasPrefix(run.SandboxRef, placement.RunnerRefPrefix(run.RunnerID.String())):
 			// The same record refuses a direct stop from an online runner, which leaves no answer to
 			// follow next boot, so a refused stop is followed by one kill. One audit row covers both.
-			torn = s.teardownOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.orphan.sweep", func(ctx context.Context, ref string) error {
+			torn = s.teardownOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.orphan.sweep", boundedTeardown(func(ctx context.Context, ref string) error {
 				err := s.cfg.Runner.StopSandbox(ctx, ref)
 				if err == nil || errors.Is(err, runner.ErrPendingOnRunner) {
 					return err // stopped, or an end queued for an offline runner, whose answer the next boot follows
@@ -305,9 +320,9 @@ func (s *Server) reconcileOrphanedSandbox(ctx context.Context) error {
 					return errors.Join(err, kerr)
 				}
 				return nil
-			})
+			}))
 		default:
-			torn = s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.orphan.sweep")
+			torn = s.cfg.Runner == nil || s.teardownOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.orphan.sweep", boundedTeardown(s.cfg.Runner.StopSandbox))
 		}
 		if !torn {
 			continue // still stuck; audited above, ref stays set for the next boot
@@ -318,6 +333,17 @@ func (s *Server) reconcileOrphanedSandbox(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// boundedTeardown bounds one teardown call of the boot orphan pass like a finalize
+// (reconcileFinalizeTimeout): a substrate that never answers would otherwise hold boot before the
+// control plane serves, every restart. A timed-out teardown is audited and keeps its ref for the next boot.
+func boundedTeardown(teardown func(context.Context, string) error) func(context.Context, string) error {
+	return func(ctx context.Context, ref string) error {
+		ctx, cancel := context.WithTimeout(ctx, reconcileFinalizeTimeout)
+		defer cancel()
+		return teardown(ctx, ref)
+	}
 }
 
 // lastRunnerTeardown is the runner's latest answer to a queued end or kill of
@@ -424,7 +450,7 @@ const undispatchedGrace = 2 * imageBuildTimeout
 // how long a healthy run can legitimately sit here, so past it nothing on any
 // replica is still provisioning the run and only a dead process can explain it.
 func (s *Server) finalizeUndispatchedRuns(ctx context.Context) error {
-	runs, err := s.cfg.Store.ListRuns(ctx)
+	runs, err := s.undispatchedRuns(ctx)
 	if err != nil {
 		return err
 	}
@@ -432,9 +458,6 @@ func (s *Server) finalizeUndispatchedRuns(ctx context.Context) error {
 	leaser, hasLease := s.cfg.Store.(store.RunWatcherLeaser)
 	var finalized int
 	for _, run := range runs {
-		if !slices.Contains(types.SlotHoldingRunStates, run.State) || run.SandboxRef != "" {
-			continue
-		}
 		// A promoted run's dispatch window starts when it left the queue, not when it was requested.
 		started := run.CreatedAt
 		if run.AdmittedAt != nil {

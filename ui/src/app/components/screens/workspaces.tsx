@@ -18,6 +18,7 @@ import {
 import { useMyCapabilities } from "../../lib/capabilities";
 import type { Workspace, WorkspaceKind, WorkspaceProfile } from "../../lib/types";
 import { PROVIDERS } from "../../lib/workspace-providers-copy";
+import { WORKSPACE_DETAIL_EXTRA } from "../../lib/workspace-copy";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import {
@@ -32,11 +33,13 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import { Mono } from "../wardyn/code-block";
 import { DeleteConfirmDialog } from "../wardyn/delete-confirm-dialog";
-import { Chip, OperatorOnlyHint } from "../wardyn/primitives";
+import { Chip } from "../wardyn/primitives";
+import { OPERATOR_ONLY_REASON } from "../wardyn/copy";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { AddWorkspaceDialog } from "./add-workspace-dialog";
@@ -45,6 +48,7 @@ import { DENIED, MEMBER_WORKSPACE } from "../../lib/permissions-copy";
 import { useShellSetupStatus } from "../wardyn/model-access-context";
 import { DRIVES } from "../../lib/user-drives-copy";
 import { useCanMutate, useOperator, useRole } from "../wardyn/operator-context";
+import { useConsoleMode } from "../wardyn/console-view";
 
 // Icon + label for the three onboardable kinds. "ephemeral" is scratch space
 // discarded after the run, so it gets an hourglass rather than reusing the
@@ -102,15 +106,19 @@ export function workspaceImage(ws: Workspace): { kind: WorkspaceImageKind; label
 function DeleteMenuItem({ ws, onPick }: { ws: Workspace; onPick: () => void }) {
   const allowed = useCanMutate(ws.owned_by);
   return (
-    <DropdownMenuItem onClick={onPick} disabled={!allowed} className="text-danger focus:text-danger">
-      <Trash2 className="size-4" /> Delete…
-      {!allowed && <OperatorOnlyHint />}
-    </DropdownMenuItem>
+    <>
+      <DropdownMenuItem onClick={onPick} disabled={!allowed} className="text-danger focus:text-danger">
+        <Trash2 className="size-4" /> Delete…
+      </DropdownMenuItem>
+      {/* Beside the item, not in it: a disabled item is drawn at half opacity and would fade its own reason (#2886). */}
+      {!allowed && <DropdownMenuLabel className="pt-0 text-meta font-normal text-muted-foreground">{OPERATOR_ONLY_REASON}</DropdownMenuLabel>}
+    </>
   );
 }
 
 export function WorkspacesScreen() {
   const operator = useOperator();
+  const view = useConsoleMode();
   const role = useRole();
   const navigate = useNavigate();
   // #922: the shared shell status (already fetched for the app shell's own
@@ -162,7 +170,7 @@ export function WorkspacesScreen() {
   // are actually shared. See MEMBER_WORKSPACE.WORKSPACES_HEADER_MEMBER.
   const description =
     role === "user"
-      ? MEMBER_WORKSPACE.WORKSPACES_HEADER_MEMBER(workspaces.length)
+      ? MEMBER_WORKSPACE.WORKSPACES_HEADER_MEMBER
       : "A repo or directory a run can attach. Runs can only attach what's listed here.";
 
   return (
@@ -175,8 +183,10 @@ export function WorkspacesScreen() {
             {/* The one door to /admin/drives from a nav-less screen (user-drives
                 §6). `outline`: the teal stays on Add workspace, and a drive is
                 allocated rather than onboarded. SUPER only — a member and a
-                security admin have nothing to act on there. */}
-            {operator && (
+                security admin have nothing to act on there — and only in the
+                Admin view: the door lands on /admin/drives, which would switch
+                the console view under a User-view reader (#2887). */}
+            {operator && view === "admin" && (
               <Button variant="outline" onClick={() => navigate("/admin/drives")}>
                 {DRIVES.TITLE}
               </Button>
@@ -194,9 +204,9 @@ export function WorkspacesScreen() {
             placeholder="Search by name or source…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            className="max-w-sm"
+            className="min-w-0 max-w-sm"
           />
-          <span className="ml-auto text-sm text-muted-foreground">
+          <span className="ml-auto whitespace-nowrap text-sm text-muted-foreground">
             {filtered.length} of {workspaces.length} workspace{workspaces.length === 1 ? "" : "s"}
           </span>
           <Button variant="outline" size="icon" onClick={load} aria-label="Refresh">
@@ -340,7 +350,9 @@ export function WorkspacesScreen() {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
-                          <DropdownMenuItem onClick={() => openDetail(w.id)}>Open</DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => openDetail(w.id)}>
+                            <FolderOpen className="size-4" /> Open
+                          </DropdownMenuItem>
                           <DeleteMenuItem ws={w} onPick={() => setToDelete(w)} />
                         </DropdownMenuContent>
                       </DropdownMenu>
@@ -368,7 +380,7 @@ export function WorkspacesScreen() {
         name={toDelete?.name ?? null}
         allowed={canDeleteSelected}
         entity="workspace"
-        description="Runs can no longer attach this source. Any run already using it is unaffected — this only gates NEW runs. This cannot be undone."
+        description={WORKSPACE_DETAIL_EXTRA.DELETE_BODY}
         onOpenChange={(o) => !o && setToDelete(null)}
         onDelete={() => api.deleteWorkspace(toDelete!.id)}
         onDeleted={() => {

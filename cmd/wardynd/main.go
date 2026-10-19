@@ -198,7 +198,7 @@ func run() error {
 	// replicas>1 refusal is render-time only. Claimed here, immediately after
 	// the pool exists and before anything registers process-local state, and
 	// held until shutdown. See claimSingleInstance for the ceiling.
-	releaseInstance, err := claimSingleInstance(rootCtx, pool, *f.ha)
+	releaseInstance, err := claimSingleInstanceFor(rootCtx, pool, f)
 	if err != nil {
 		return err
 	}
@@ -359,8 +359,6 @@ func run() error {
 		return err
 	}
 
-	warnPublicAPIDisabled(*f.adminToken, lm.enabled)
-
 	// Optional subsystems (recording replay, OIDC SSO, devcontainer builds,
 	// advisory AI scan fallback) — each nil/off when unconfigured; see
 	// buildOptionalFeatures.
@@ -368,6 +366,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	warnPublicAPIDisabled(*f.adminToken, lm.enabled, feats.authn != nil)
 	warnGovernAdminRunsUnbound(*f.governAdminRuns, feats.authn != nil)
 
 	// MEMBER-MODE DESKTOP posture (validateHybridPosture already ran above,

@@ -74,7 +74,7 @@ export function ProvidersCard({
         setRows(providers.git ?? []);
       })
       // A failed read leaves the summary ABSENT rather than claiming
-      // "No providers enabled." — a confident empty state over an unloaded
+      // "No providers enabled" — a confident empty state over an unloaded
       // snapshot is a false claim, and the link still goes where the real
       // page is.
       .catch(() => {});

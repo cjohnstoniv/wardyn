@@ -91,24 +91,26 @@ describe("ApprovalsScreen — copy + EXPIRED inclusion", () => {
     });
   });
 
-  it("fetches CANCELLED approvals on load and shows them in the decided view", async () => {
+  it("fetches CANCELLED approvals when the Decided tab opens and shows them", async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     render(
       <MemoryRouter>
         <ApprovalsScreen />
       </MemoryRouter>,
     );
-    await waitFor(() => expect(listApprovalsMock).toHaveBeenCalledWith("CANCELLED"));
     const decidedTab = await screen.findByRole("tab", { name: /decided/i });
     await user.click(decidedTab);
-    await waitFor(() => expect(screen.getByText(/run_cancelled_77/)).toBeInTheDocument());
+    await waitFor(() => expect(listApprovalsMock).toHaveBeenCalledWith("CANCELLED"));
+    await waitFor(() => expect(screen.getByTitle("Open run run_cancelled_77")).toBeInTheDocument());
+    // #2853: the row prints a short id, so the request title keeps its width.
+    expect(screen.getByTitle("Open run run_cancelled_77")).toHaveTextContent(/^run_canc$/);
     // The badge reads the ONE copy key, not a title-cased wire value.
     expect(screen.getByText(APPROVAL.STATE_CANCELLED)).toBeInTheDocument();
   });
 
-  it("fetches EXPIRED approvals on load", async () => {
+  it("fetches EXPIRED approvals when the Decided tab opens", async () => {
     render(
-      <MemoryRouter>
+      <MemoryRouter initialEntries={["/approvals?tab=decided"]}>
         <ApprovalsScreen />
       </MemoryRouter>,
     );
@@ -126,7 +128,7 @@ describe("ApprovalsScreen — copy + EXPIRED inclusion", () => {
     const decidedTab = await screen.findByRole("tab", { name: /decided/i });
     await user.click(decidedTab);
     // The EXPIRED request's run id must render in the decided list.
-    await waitFor(() => expect(screen.getByText(/run_expired_42/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTitle("Open run run_expired_42")).toBeInTheDocument());
   });
 
   it("labels the approve dialog 'Approve', not 'Approve & mint'", async () => {

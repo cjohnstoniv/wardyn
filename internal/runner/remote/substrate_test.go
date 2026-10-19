@@ -62,6 +62,28 @@ func TestNameAndClassesServedFromCaps(t *testing.T) {
 	}
 }
 
+// A runner that says its substrate cannot keep an ended sandbox (a Kubernetes runner) advertises no keep;
+// one that says nothing (older than 0.9.4) keeps, as before.
+func TestAdvertisedKeepFollowsTheRunnerWord(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		caps string
+		keep bool
+	}{
+		{"unkept", `{"support":{"Classes":["CC1"]},"version":"0.9.4","ends_unkept":true}`, false},
+		{"older runner", `{"support":{"Classes":["CC1"]},"version":"0.9.3"}`, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rig := runnertest.NewRig(t, rid)
+			rig.Sub.HandleEvent(runnerwire.Event{Kind: runnerwire.EventCaps, Data: []byte(c.caps)})
+			f, ok := rig.Sub.Advertised()
+			if !ok || f.KeepsEnded != c.keep {
+				t.Fatalf("Advertised = %+v, %v; want KeepsEnded %v", f, ok, c.keep)
+			}
+		})
+	}
+}
+
 // A runner's advertised facts carry its own disk word and drive support, and the remote substrate keeps
 // an ended sandbox.
 func TestAdvertisedCarriesDiskWordKeepAndDrives(t *testing.T) {

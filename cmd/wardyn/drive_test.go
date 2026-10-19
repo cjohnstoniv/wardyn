@@ -109,7 +109,7 @@ func (f *fakeDriveServer) handler() http.HandlerFunc {
 			}
 			d := sdk.UserDrive{ID: uuid.New(), Name: req.Name, Backend: req.Backend,
 				HostRoot: req.HostRoot, StorageClass: req.StorageClass, HomeTemplate: req.HomeTemplate,
-				SizeMiB: req.SizeMiB, Writable: req.Writable, Reclaim: req.Reclaim}
+				SizeMiB: req.SizeMiB, Writable: req.Writable, Reclaim: req.Reclaim, ObjectScheme: "id"}
 			f.drives[d.ID] = d
 			w.WriteHeader(http.StatusCreated)
 			_ = json.NewEncoder(w).Encode(d)
@@ -127,9 +127,15 @@ func (f *fakeDriveServer) handler() http.HandlerFunc {
 				_ = json.NewEncoder(w).Encode(map[string]string{"error": "a user drive named " + req.Name + " already exists"})
 				return
 			}
+			// The scheme is the server's: a row keeps its own, and one this PUT
+			// creates gets the id naming, as store.UpsertUserDrive does.
+			scheme := f.drives[id].ObjectScheme
+			if scheme == "" {
+				scheme = "id"
+			}
 			d := sdk.UserDrive{ID: id, Name: req.Name, Backend: req.Backend,
 				HostRoot: req.HostRoot, StorageClass: req.StorageClass, HomeTemplate: req.HomeTemplate,
-				SizeMiB: req.SizeMiB, Writable: req.Writable, Reclaim: req.Reclaim}
+				SizeMiB: req.SizeMiB, Writable: req.Writable, Reclaim: req.Reclaim, ObjectScheme: scheme}
 			f.drives[id] = d
 			_ = json.NewEncoder(w).Encode(d)
 
@@ -320,6 +326,41 @@ func TestDriveApply_GetApplyRoundTripIsANoOp(t *testing.T) {
 	}
 	if !reflect.DeepEqual(before, after) {
 		t.Errorf("get before apply(get()) != get after — the round trip changed something.\nbefore: %+v\nafter:  %+v", before, after)
+	}
+}
+
+// TestDriveApply_WarnsWhenALegacyDriveIsRecreated: a drive exported under the
+// legacy slug object naming that the server no longer holds (a restore after
+// `make reset`) is created again under the id naming, so `set` warns that its
+// homes will get new, empty objects (#2335). One the server still holds keeps
+// its scheme and draws no warning.
+func TestDriveApply_WarnsWhenALegacyDriveIsRecreated(t *testing.T) {
+	fake := newFakeDriveServer()
+	kept := sdk.UserDrive{ID: uuid.New(), Name: "kept-legacy", Backend: sdk.DriveBackendDockerVolume,
+		HomeTemplate: sdk.HomeTemplateSub, Reclaim: sdk.DriveReclaimRetain, ObjectScheme: "slug"}
+	fake.drives[kept.ID] = kept
+	srv := httptest.NewServer(fake.handler())
+	t.Cleanup(srv.Close)
+	gone := kept
+	gone.ID, gone.Name = uuid.New(), "restored-legacy"
+	b, err := json.Marshal(sdk.DrivesDocument{Drives: []sdk.UserDriveListItem{{UserDrive: kept}, {UserDrive: gone}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "drives.json")
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root := rootCmd()
+	stderr := &strings.Builder{}
+	root.SetArgs([]string{"drive", "set", path, "--url", srv.URL, "--token", "tok"})
+	root.SetOut(&strings.Builder{})
+	root.SetErr(stderr)
+	if err := root.Execute(); err != nil {
+		t.Fatalf("drive set: %v", err)
+	}
+	if got := stderr.String(); !strings.Contains(got, `warning: drive "restored-legacy" (`+gone.ID.String()+`)`) || strings.Contains(got, "kept-legacy") {
+		t.Fatalf("stderr = %q; want one warning, naming the re-created legacy drive only", got)
 	}
 }
 

@@ -7,7 +7,9 @@
 // ordered blocker list, and Launch only on a current, fresh, clean check.
 
 import * as React from "react";
+import { MoreHorizontal } from "lucide-react";
 import { Button } from "../../../ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../../ui/dropdown-menu";
 import { Chip } from "../../../wardyn/primitives";
 import { Segmented } from "../../../wardyn/segmented";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
@@ -133,7 +135,8 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
       eyebrow={NR_REVIEW.EYEBROW}
       title={NR_REVIEW.TITLE}
       lede={NR_REVIEW.LEDE}
-      primary={{ label: NR_REVIEW.LAUNCH_RUN, onActivate: () => onLaunch?.(), disabled: !open, describedBy: BLOCKERS_ID, arrow: false }}
+      primary={{ label: NR_REVIEW.LAUNCH_RUN, onActivate: () => onLaunch?.(), disabled: !open, describedBy: BLOCKERS_ID, arrow: false, className: "max-sm:order-3 max-sm:col-span-2 max-sm:h-11" }}
+      phoneBar
       headingAside={
         <div role="group" aria-label={NR_REVIEW.VIEW_ARIA}>
           <Segmented<"pretty" | "yaml" | "json"> size="compact" value={view} options={[...VIEWS]} onChange={(v) => go({ screen: "review", view: v }, { replace: true })} />
@@ -146,7 +149,23 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
             <Button type="button" variant="outline" onClick={() => openSave("policy")}>{NR_REVIEW.SAVE_POLICY}</Button>
           </>
         ),
-        end: !open && !issues.length && <Button type="button" variant="outline" onClick={checkAgain}>{NR_REVIEW.CHECK_AGAIN}</Button>,
+        end: (
+          <>
+            {!open && !issues.length && <Button type="button" variant="outline" className="max-sm:order-1 max-sm:col-start-1" onClick={checkAgain}>{NR_REVIEW.CHECK_AGAIN}</Button>}
+            {/* Below sm the two Save actions live here; from sm up they are the footer's own buttons. */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button type="button" variant="outline" aria-label={NR_REVIEW.MORE_ARIA} className="order-2 col-start-2 sm:hidden">
+                  <MoreHorizontal className="size-4" aria-hidden /> {NR_REVIEW.MORE}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => openSave("template")}>{NR_REVIEW.SAVE_TEMPLATE}</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => openSave("policy")}>{NR_REVIEW.SAVE_POLICY}</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </>
+        ),
       }}
     >
       <Notices poolName={pool} slots={pre?.runner_pool_slots} applied={pre?.resources_applied} askedByYou={changedFromOrigin(draft, ["resources"])} warnings={pre?.warnings} diskCut={!!pre?.main_drive?.clamped_by && pre.main_drive.clamped_by !== "policy"} />

@@ -161,9 +161,17 @@ func (d *Driver) exec(ctx context.Context, ref string, argv []string, out io.Wri
 	if d.cfg.Record {
 		// Recover the run id and the run's own recording choice from the
 		// container labels so wardyn-rec names the recording deterministically.
-		// If we cannot, record under a nil id rather than failing the exec.
+		// An inspect that fails again on one retry refuses the exec rather than
+		// guess the choice either way.
 		runID, record := uuid.Nil, true
-		if insp, err := d.cli.ContainerInspect(ctx, ref, client.ContainerInspectOptions{}); err == nil && insp.Container.Config != nil {
+		insp, err := d.cli.ContainerInspect(ctx, ref, client.ContainerInspectOptions{})
+		if err != nil {
+			insp, err = d.cli.ContainerInspect(ctx, ref, client.ContainerInspectOptions{})
+		}
+		if err != nil {
+			return "", fmt.Errorf("docker: exec: %w: %v", runner.ErrRecordingChoiceUnknown, err)
+		}
+		if insp.Container.Config != nil {
 			record = d.recordsLabels(insp.Container.Config.Labels)
 			if id, perr := parseRunID(insp.Container.Config.Labels[labelRun]); perr == nil {
 				runID = id
@@ -573,9 +581,15 @@ func (d *Driver) AgentStatus(ctx context.Context, ref, agentExecID string) (runn
 	insp, err := d.cli.ExecInspectRaw(ctx, agentExecID)
 	if err != nil {
 		if isNotFound(err) {
-			// Only definitive when the container is also gone/stopped.
-			if cst, cerr := d.Status(ctx, ref); cerr == nil && cst.State == types.RunStopped {
+			// Only definitive when the container is also gone/stopped. One that exited non-zero or was
+			// OOM killed (a daemon restart or a host reboot stops it with 143) is as definitive, and its
+			// own status carries the exit code the run's end, and a reboot's keep, read.
+			cst, cerr := d.Status(ctx, ref)
+			if cerr == nil && cst.State == types.RunStopped {
 				return runner.Status{State: types.RunStopped, Message: "agent exec and container both gone"}, nil
+			}
+			if cerr == nil && cst.State == types.RunFailed {
+				return cst, nil
 			}
 			return runner.Status{}, fmt.Errorf("docker: agent exec %q not found but container still running (ambiguous; daemon restart under live-restore?)", agentExecID)
 		}

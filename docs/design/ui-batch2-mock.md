@@ -393,7 +393,7 @@ member-facing "why not" moments)
 | `m3:root-hint` | `(root, string interpolated)` → `` Mounted from this machine into the sandbox. Must be under ${root} — your admin set this boundary. `` |
 | `m3:local-dir-unavailable-option` | `Local directory · unavailable` |
 | `m3:local-dir-unavailable-body` | `Local directories aren't set up for your account. Ask your admin to configure a projects root, or use a repository.` |
-| `m3:workspaces-header-member` | `` (n: number) => `Workspaces · ${n}` `` (deliberately *not* `runs.tsx`'s `` `Your runs · ${n}` `` shape — that list really is member-exclusive; this one includes every operator-owned row too, so "Your" would overclaim) |
+| `m3:workspaces-header-member` | `A repo or directory a run can attach — including the ones shared with you.` (0.9.4 #2889: was `` (n: number) => `Workspaces · ${n}` ``, which only repeated the title and the count; deliberately *not* `runs.tsx`'s `` `Your runs · ${n}` `` shape — that list really is member-exclusive; this one includes every operator-owned row too, so "Your" would overclaim) |
 
 ### States covered
 

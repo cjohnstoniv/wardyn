@@ -11,10 +11,11 @@ launch: manual
 tiers: [CC1, CC2, CC3]
 grader_image: alpine:3.20   # grade.sh is a trivial placeholder; real grading is stream-based
 
-# The orchestrator (TestLive_Interactive) attaches via WS-PTY and drives a
-# sequence like the one below, asserting each expectation against the PTY output
-# stream (NOT the workspace); it then KILLS the run to tear the sandbox down
-# (interactive runs idle, so there is no self-exit/eof step).
+# DOCUMENTATION ONLY: nothing parses this block. TestLive_Interactive
+# (live/interactive_test.go) attaches via WS-PTY and drives the sequence below FROM CODE,
+# asserting each expectation against the PTY output stream (NOT the workspace); it then
+# KILLS the run to tear the sandbox down (interactive runs idle, so there is no self-exit
+# or EOF step). Change the code and this block together.
 expects:
   - send: "echo wardyn-pty-$((6*7))\n"
     expect_contains: "wardyn-pty-42"

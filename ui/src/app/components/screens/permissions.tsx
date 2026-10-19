@@ -25,7 +25,7 @@ import { toast } from "sonner";
 import { HttpError, PendingChangeError } from "../../lib/api/core";
 import { permissions as api } from "../../lib/api/permissions";
 import { runs as runsApi } from "../../lib/api/runs";
-import { getErrorMessage, relativeTime } from "../../lib/format";
+import { absoluteTime, getErrorMessage, relativeTime } from "../../lib/format";
 import { CAPABILITY_KINDS, KIND, PERM, PERM_EXTRA, type CapabilityKind } from "../../lib/permissions-copy";
 import type {
   AgentRun,
@@ -424,7 +424,7 @@ export function PermissionsScreen() {
                         </Chip>
                       )}
                     </TableCell>
-                    <TableCell className="whitespace-nowrap text-muted-foreground" title={g.created_at}>
+                    <TableCell className="whitespace-nowrap text-muted-foreground" title={absoluteTime(g.created_at)}>
                       {relativeTime(g.created_at)}
                     </TableCell>
                     <TableCell>
@@ -688,7 +688,7 @@ export function AddGrantForm({
 
   const body = (
     <>
-      <div className="mt-4 grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="mt-4 grid gap-4 md:grid-cols-2 lg:grid-cols-[auto_1fr_1fr_auto]">
         <Field label={PERM.FIELD_WHO} hint={fixed ? undefined : whoHint}>
           {fixed ? (
             <div className="flex h-9 items-center gap-2 rounded-md border border-input bg-input-background px-3 text-body">

@@ -26,7 +26,7 @@
 # Daemon-free, network-free.
 set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SCRIPT="$ROOT/scripts/release-patch.sh"
+SCRIPT="${SCRIPT:-"$ROOT/scripts/release-patch.sh"}"
 [ -x "$SCRIPT" ] || { echo "FAIL: $SCRIPT is missing or not executable"; exit 1; }
 
 WORK="$(mktemp -d)"
@@ -102,7 +102,7 @@ case "$1 ${2:-}" in
       */nightly.yml/runs) emit "$key" '{"workflow_runs":[]}' ;;
       */releases) emit "$key" '[]' ;;
       */actions/runs/*/jobs) [ -f "$FIX/$key" ] && emit "$key" '{}' || { echo "gh: no fixture for $ep (HTTP 404)" >&2; exit 1; } ;;
-      */actions/runs/*) emit "$key" "{\"created_at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"updated_at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" ;;
+      */actions/runs/*) [ -f "$FIX/$key.fail" ] && { echo "gh: HTTP 500 for $ep" >&2; exit 1; }; emit "$key" "{\"created_at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"updated_at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" ;;
       *) [ -f "$FIX/$key" ] && emit "$key" '{}' || { echo "gh: no fixture for $ep (HTTP 404)" >&2; exit 1; } ;;
     esac ;;
   *) echo "gh shim: unhandled: $*" >&2; exit 1 ;;
@@ -417,10 +417,10 @@ refused "P: refuses a DRY_RUN other than 0 or 1" 'DRY_RUN'
 
 # ── R. F1: a local tag left at an older head is never pushed ────────────────
 mkfix R
-rp V=0.8.4 PHASE=prepare MERGE=origin/main
+# An interrupted run left the tag on the candidate before its release commit, so this run's merge and release commit move HEAD past it.
+g -C "$WK" checkout -q -b chore/release-0.8.4 origin/release/0.8
 g -C "$WK" tag -a v0.8.4 -m old
 OLD=$(g -C "$WK" rev-parse HEAD)
-g clone -q "$OR" "$WORK/R/other" && (cd "$WORK/R/other" && echo more >MORE && g add MORE && g commit -q -s -m "more main" && g push -q origin main)
 rp V=0.8.4 MERGE=origin/main
 if [ "$RC" != 0 ] && [ "$(g -C "$WK" rev-parse HEAD)" != "$OLD" ] && out_has 'local tag v0\.8\.4 is at' \
   && [ -z "$(g -C "$OR" tag -l v0.8.4)" ] && log_lacks push.log 'refs/tags|v0\.8\.4$' && log_lacks push.log 'refs/heads/release/' && log_lacks gh.log 'release edit'; then
@@ -428,6 +428,21 @@ if [ "$RC" != 0 ] && [ "$(g -C "$WK" rev-parse HEAD)" != "$OLD" ] && out_has 'lo
 else bad "R: stale local tag (rc=$RC)"; sed 's/^/      /' "$FIX/out.txt"; fi
 keep_pushes
 check "R: the tag is pushed by its full ref when it is right" bash -c "grep -q 'refs/tags/v0.8.4' '$ALLPUSH'"
+
+# ── RS. a resume never widens a release that already has its release commit ─
+# A usage limit hits in the hour-long wait; lanes keep merging into main; the
+# operator re-runs the documented command. The candidate already carries
+# "release: X", so its CHANGELOG entries, notes and checks describe exactly what
+# it holds: the commits main gained since must not ride into the release.
+mkfix RS
+rp V=0.8.4 PHASE=prepare MERGE=origin/main
+CUT=$(g -C "$WK" rev-parse HEAD)
+g clone -q "$OR" "$WORK/RS/other" && (cd "$WORK/RS/other" && echo more >MORE && g add MORE && g commit -q -s -m "more main" && g push -q origin main)
+rp V=0.8.4 PHASE=prepare MERGE=origin/main
+if [ "$RC" = 0 ] && [ "$(g -C "$WK" rev-parse HEAD)" = "$CUT" ] && [ ! -e "$WK/MORE" ] && out_has 'frozen|already (has|carries)'; then
+  ok "RS: a resume keeps the cut candidate as it is and says why MERGE was not taken again"
+else bad "RS: resume widened the candidate (rc=$RC)"; sed 's/^/      /' "$FIX/out.txt"; fi
+keep_pushes
 
 # ── MC. a conflicting MERGE tells the operator to commit signed off ───────────
 mkfix MC
@@ -440,11 +455,11 @@ mkfix MC
 rp V=0.8.4 MERGE=origin/main
 refused "MC: a conflicting MERGE stops and says to commit with git commit -s --no-edit" 'git commit -s --no-edit'
 
-# ── S. F2: a nightly older than 24 hours is absent ───────────────────────────
+# ── S. F2: a nightly older than 23 hours is absent ───────────────────────────
 mkfix S
 rp V=0.8.4 PHASE=prepare
 STREE=$(g -C "$WK" rev-parse 'HEAD^{tree}')
-OLDTS=$(date -u -d '30 hours ago' +%Y-%m-%dT%H:%M:%SZ); NEWTS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+OLDTS=$(date -u -d '30 hours ago' +%Y-%m-%dT%H:%M:%SZ); EDGETS=$(date -u -d '1410 minutes ago' +%Y-%m-%dT%H:%M:%SZ); NEWTS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 runs_json() { printf '{"workflow_runs":[{"id":9,"event":"workflow_dispatch","status":"completed","conclusion":"success","created_at":"%s","updated_at":"%s","head_commit":{"tree_id":"%s"}}]}' "$1" "${2:-$1}" "$STREE"; }
 printf '{"jobs":[{"name":"w1","conclusion":"success"},{"name":"w2","conclusion":"success"},{"name":"w3","conclusion":"success"},{"name":"multi-arch build (x)","conclusion":"success"}]}' >"$FIX/api_repos_acme_wardyn_actions_runs_9_jobs.json"
 W1=$(grep -c '^workflow run nightly' "$FIX/gh.log")
@@ -454,6 +469,11 @@ check "S: a green nightly from now is not dispatched again" bash -c "[ \"\$(grep
 runs_json "$OLDTS" >"$FIX/api_repos_acme_wardyn_actions_workflows_nightly.yml_runs.json"
 rp V=0.8.4 PHASE=prepare
 check "S: a green nightly 30 hours old is dispatched afresh" bash -c "[ \"\$(grep -c '^workflow run nightly' '$FIX/gh.log')\" = $((W1 + 1)) ]"
+# 23 h, not 24: release.yml's promote preflight refuses a nightly older than 23 h
+W3=$(grep -c '^workflow run nightly' "$FIX/gh.log")
+runs_json "$EDGETS" >"$FIX/api_repos_acme_wardyn_actions_workflows_nightly.yml_runs.json"
+rp V=0.8.4 PHASE=prepare
+check "S: a green nightly 23.5 hours old is dispatched afresh" bash -c "[ \"\$(grep -c '^workflow run nightly' '$FIX/gh.log')\" = $((W3 + 1)) ]"
 # A rerun of failed jobs keeps the old image jobs and moves updated_at: the age is created_at
 W2=$(grep -c '^workflow run nightly' "$FIX/gh.log")
 runs_json "$OLDTS" "$NEWTS" >"$FIX/api_repos_acme_wardyn_actions_workflows_nightly.yml_runs.json"
@@ -462,11 +482,16 @@ check "S: a green nightly created 30 hours ago but updated now (a rerun) is disp
 # wait and publish: green-by-tree passes on the old run (nightly_run=2), the run is stale
 printf '{"created_at":"%s","updated_at":"%s"}' "$OLDTS" "$NEWTS" >"$FIX/api_repos_acme_wardyn_actions_runs_2.json"
 rp V=0.8.4 PHASE=publish
-if [ "$RC" != 0 ] && out_has 'more than 24 hours' && [ "$(lines "$FIX/push.log")" = 1 ] && log_lacks push.log 'release/0\.8$|v0\.8\.4'; then ok "S: publish refuses a stale nightly before any push"
+if [ "$RC" != 0 ] && out_has 'more than 23 hours' && [ "$(lines "$FIX/push.log")" = 1 ] && log_lacks push.log 'release/0\.8$|v0\.8\.4'; then ok "S: publish refuses a stale nightly before any push"
 else bad "S: publish with a stale nightly (rc=$RC)"; sed 's/^/      /' "$FIX/out.txt"; fi
 rp V=0.8.4 PHASE=wait
-if [ "$RC" != 0 ] && out_has 'more than 24 hours'; then ok "S: wait does not accept a stale nightly with nothing running"
+if [ "$RC" != 0 ] && out_has 'more than 23 hours'; then ok "S: wait does not accept a stale nightly with nothing running"
 else bad "S: wait with a stale nightly (rc=$RC)"; fi
+# an unreadable nightly run says so on the operator's terminal (it used to be written to the temp file)
+: >"$FIX/api_repos_acme_wardyn_actions_runs_2.json.fail"
+rp V=0.8.4 PHASE=wait
+if [ "$RC" != 0 ] && out_has 'cannot read nightly run'; then ok "S: an unreadable nightly run is named in the output"
+else bad "S: an unreadable nightly run was not named (rc=$RC)"; sed 's/^/      /' "$FIX/out.txt"; fi
 keep_pushes
 
 # ── T. an rc never moves release/X.Y ─────────────────────────────────────────

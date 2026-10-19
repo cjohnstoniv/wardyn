@@ -300,7 +300,7 @@ func TestProbeRelayRefusesAnUnrunnableProxyImage(t *testing.T) {
 
 func TestProbeDriveRefusesAnUnrunnableImage(t *testing.T) {
 	d, f := archDriver("aarch64", map[string]string{defaultDriveProbeImage: "amd64"})
-	_, err := d.ProbeDrive(context.Background(), probeDriveFixture())
+	_, err := d.ProbeDrive(context.Background(), probeDriveFixture(t, d))
 	if !errors.Is(err, ErrImageArch) {
 		t.Fatalf("got %v, want ErrImageArch", err)
 	}

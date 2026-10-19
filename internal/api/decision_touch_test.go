@@ -7,6 +7,7 @@ import (
 	"context"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -89,5 +90,34 @@ func TestInternalDecisionTouchesRun(t *testing.T) {
 	}
 	if len(st.touched) != 3 {
 		t.Fatalf("TouchRun calls after a credential:reauth-timeout decision = %v, want no new touch (still 3)", st.touched)
+	}
+}
+
+// The toolgate polls the approval it is blocked on every 2s, and the proxy relays each
+// poll as a decision. That is waiting, not agent activity: counting it kept a run
+// whose tool call nobody answered from ever idling out, while the pause clock and the
+// runner-side Activity flag already excluded it. shouldTouch must use their predicate.
+func TestShouldTouch_ApprovalPollAndReauthTimeoutAreNotActivity(t *testing.T) {
+	srv := &Server{}
+	for _, src := range []string{ruleSourceApprovalsPoll, ruleSourceCredentialReauthTimeout} {
+		if srv.shouldTouch(uuid.New(), src) {
+			t.Errorf("shouldTouch(%q) = true; it is not agent activity", src)
+		}
+	}
+	if !srv.shouldTouch(uuid.New(), "allow-list") {
+		t.Error("shouldTouch(real decision) = false; a real decision must restart the idle clock")
+	}
+}
+
+// With the expiry sweeper off for a non-positive age, the ceiling handed to the
+// sandbox stays the 24h default (toolgate's own), so it never waits on nothing.
+func TestApprovalExpiryCeiling_NonPositiveFallsBackToTheDefault(t *testing.T) {
+	for _, in := range []time.Duration{0, -time.Hour} {
+		if got := approvalExpiryCeiling(in); got != 24*time.Hour {
+			t.Errorf("approvalExpiryCeiling(%v) = %v, want 24h", in, got)
+		}
+	}
+	if got := approvalExpiryCeiling(2 * time.Hour); got != 2*time.Hour {
+		t.Errorf("approvalExpiryCeiling(2h) = %v", got)
 	}
 }

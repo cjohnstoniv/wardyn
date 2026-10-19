@@ -116,6 +116,14 @@ describe("AvailabilityControl — states.html", () => {
     expect(screen.getByRole("button", { name: AVAILABILITY.ADD_CTA })).toBeDisabled();
   });
 
+  // #2874: the placeholder is prose in the sans face and the input is wide enough to show it whole; typed ids stay mono.
+  it("sets the adder's placeholder in sans inside a mono input that fits it", async () => {
+    getAvailabilityMock.mockResolvedValue(view(false));
+    render(policyControl());
+    const input = await screen.findByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER);
+    expect(input).toHaveClass("font-mono", "placeholder:font-sans", "max-w-[280px]");
+  });
+
   it("state 2: chips name a type, mark a group and show a person's email, each removable by name", async () => {
     getAvailabilityMock.mockResolvedValue(view(true, [DEV, PM, DATA, ALICE]));
     render(policyControl());

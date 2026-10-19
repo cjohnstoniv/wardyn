@@ -41,6 +41,9 @@ const (
 	auditRunContainmentPending = "run.containment.hold"
 
 	maxNodeRecordSourceID = 256
+
+	// nodeRecordReasonWithheld is what a reader below the security tier reads for a refused record.
+	nodeRecordReasonWithheld = "The runner refused this record. A security operator can see why."
 )
 
 // The sentences the reviewer of a held node record reads beside the diff.
@@ -112,10 +115,14 @@ func (s *Server) handleGetRunContainment(w http.ResponseWriter, r *http.Request)
 		writeServerError(w, r, "read node records", err)
 		return
 	}
-	// A record's source id names infrastructure, as the tuple does: security operators only.
+	// A record's source id and the runner's refusal text name infrastructure, as the tuple does:
+	// security operators only. Others read a fixed sentence for the reason.
 	if !s.isSecurityOperator(r.Context()) {
 		for i := range out.Records {
 			out.Records[i].SourceID = ""
+			if out.Records[i].Reason != "" {
+				out.Records[i].Reason = nodeRecordReasonWithheld
+			}
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -183,6 +190,10 @@ func (s *Server) handlePostRunNodeRecord(w http.ResponseWriter, r *http.Request)
 	}
 	if isAdminTokenCaller(r) {
 		writeErrorReason(w, http.StatusForbidden, reasonNodeRecordHumanOnly, "A node record is made by people. The admin token cannot make one.")
+		return
+	}
+	if apiTokenIDFromContext(r.Context()) != uuid.Nil {
+		writeErrorReason(w, http.StatusForbidden, reasonNodeRecordHumanOnly, "A node record is made from a signed-in session. An API token cannot make one.")
 		return
 	}
 	var req types.RunNodeRecordRequest
@@ -324,12 +335,18 @@ func (s *Server) deliverNodeRecord(ctx context.Context, runnerID uuid.UUID) {
 }
 
 // applyRunNodeRecordChange applies a held node record inside the decision transaction: the proposer and
-// the approver are its two people. The admin token is never one of them. The store re-checks the run's
+// the approver are its two people. The admin token is never one of them, and neither is an API token:
+// both sides act from a signed-in session. The store re-checks the run's
 // containment record against what the proposal was shown; a moved record lapses the approvals.
 func applyRunNodeRecordChange(s *Server, r *http.Request, q store.Querier, ch types.GovernanceChange) (govApplied, error) {
 	if isAdminTokenCaller(r) {
 		return govApplied{}, &govRefusal{why: "admin token on a node record", write: func(w http.ResponseWriter, _ *http.Request) {
 			writeErrorReason(w, http.StatusForbidden, reasonNodeRecordHumanOnly, "A node record is made by people. The admin token cannot approve one.")
+		}}
+	}
+	if apiTokenIDFromContext(r.Context()) != uuid.Nil {
+		return govApplied{}, &govRefusal{why: "api token on a node record", write: func(w http.ResponseWriter, _ *http.Request) {
+			writeErrorReason(w, http.StatusForbidden, reasonNodeRecordHumanOnly, "A node record is approved from a signed-in session. An API token cannot approve one.")
 		}}
 	}
 	var c runNodeRecordChange

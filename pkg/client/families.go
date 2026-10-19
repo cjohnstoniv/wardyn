@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"slices"
@@ -297,6 +298,30 @@ type SiteConfigPutResult struct {
 // otherwise be refused whole. The server's refusal stays for PutSiteConfig and every other caller;
 // EgressBaselineIgnored reports a baseline in cfg that the stored one does not match.
 func (c *Client) PutSiteConfigResult(ctx context.Context, cfg types.SiteConfig) (SiteConfigPutResult, error) {
+	return c.PutSiteConfigClearing(ctx, cfg, nil)
+}
+
+// SiteConfigClearForms maps each field PutSiteConfigClearing can clear to the
+// empty JSON value that clears it: the server carries a stored value forward
+// when its key is silent, and encoding/json omits these fields when empty
+// (omitempty), so a plain cfg can never name them.
+var SiteConfigClearForms = map[string]string{
+	"internal_hosts":          "[]",
+	"upstream_proxy_no_proxy": "[]",
+	"sign_in_help_text":       `""`,
+	"sign_in_help_url":        `""`,
+}
+
+// PutSiteConfigClearing is PutSiteConfigResult that also names each key in
+// clearFields on the wire with its empty value, which is how the server tells "clear
+// this" from "silent, keep the stored one". A name outside the clearable set is
+// refused before any request.
+func (c *Client) PutSiteConfigClearing(ctx context.Context, cfg types.SiteConfig, clearFields []string) (SiteConfigPutResult, error) {
+	for _, name := range clearFields {
+		if _, ok := SiteConfigClearForms[name]; !ok {
+			return SiteConfigPutResult{}, fmt.Errorf("site config field %q cannot be cleared this way; clearable: %s", name, strings.Join(slices.Sorted(maps.Keys(SiteConfigClearForms)), ", "))
+		}
+	}
 	sent := cfg
 	cfg.Integrations = nil
 	cfg.Runners = nil
@@ -305,8 +330,23 @@ func (c *Client) PutSiteConfigResult(ctx context.Context, cfg types.SiteConfig) 
 	for i := range cfg.InternalHosts {
 		cfg.InternalHosts[i].Baseline = false
 	}
+	var body any = cfg
+	if len(clearFields) > 0 {
+		raw, err := json.Marshal(cfg)
+		if err != nil {
+			return SiteConfigPutResult{}, fmt.Errorf("marshal site config: %w", err)
+		}
+		doc := map[string]json.RawMessage{}
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			return SiteConfigPutResult{}, fmt.Errorf("marshal site config: %w", err)
+		}
+		for _, name := range clearFields {
+			doc[name] = json.RawMessage(SiteConfigClearForms[name])
+		}
+		body = doc
+	}
 	var resp SiteConfigPutResult
-	err := c.do(ctx, http.MethodPut, "/api/v1/site-config", cfg, &resp)
+	err := c.do(ctx, http.MethodPut, "/api/v1/site-config", body, &resp)
 	if err == nil {
 		resp.EgressBaselineIgnored = baselineAsserted(sent, resp.SiteConfig)
 	}

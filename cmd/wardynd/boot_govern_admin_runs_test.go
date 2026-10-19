@@ -44,6 +44,35 @@ func TestWarnGovernAdminRunsUnbound(t *testing.T) {
 	}
 }
 
+// TestWarnPublicAPIDisabled: boot warns the API is disabled only when nothing lets anyone in; an
+// SSO-only deployment (no admin token, OIDC configured) is not disabled and does not warn.
+func TestWarnPublicAPIDisabled(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		token       string
+		local, oidc bool
+		wantWarned  bool
+	}{
+		{"nothing configured", "", false, false, true},
+		{"OIDC only", "", false, true, false},
+		{"admin token", "tok", false, false, false},
+		{"local mode", "", true, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			prev := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+			t.Cleanup(func() { slog.SetDefault(prev) })
+
+			warnPublicAPIDisabled(tc.token, tc.local, tc.oidc)
+
+			if warned := strings.Contains(buf.String(), "public API is DISABLED"); warned != tc.wantWarned {
+				t.Errorf("warned = %v, want %v; log: %q", warned, tc.wantWarned, buf.String())
+			}
+		})
+	}
+}
+
 // TestParseGovernAdminRunsExempt: the only value is "recording"; anything else
 // exits 2; set without the switch it warns that it does nothing.
 func TestParseGovernAdminRunsExempt(t *testing.T) {

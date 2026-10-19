@@ -122,7 +122,7 @@ export const DRIVES = {
   // header's outline button, the setup card's title and the Settings card's
   // title — the way GOVERNANCE.TITLE serves nav and heading (§7.2 prose).
   TITLE: "User drives",
-  LEAD: "Persistent storage a run can mount at /home/agent/drive. An admin registers a drive and allocates it to people or groups; each person gets their own directory in it, and chooses per run whether to mount it.",
+  LEAD: "Persistent storage a run can mount. An admin registers a drive and allocates it to people or groups; each person gets their own directory in it, and chooses per run whether to mount it. A person's first drive mounts at /home/agent/drive; any others mount beside it, under /home/agent/drives or /home/agent/shared.",
   // The org switch (the `disabled` field on GET /drives's snapshot): renders
   // ABOVE the table it still shows in full — everything here is kept, nothing
   // mounts until the switch is back on. Q9 (workspace-providers-prompt.md,
@@ -194,6 +194,11 @@ export const DRIVES = {
   HOME_SUB_HINT: "The subject id your identity provider sends, lowercased. Stable, but rarely what a share already calls a person.",
   HOME_EMAIL_LOCAL: "Email, before the @",
   HOME_EMAIL_LOCAL_HINT: "The part before the @, lowercased — the usual shape of a corporate home directory.",
+  // Why a Directory-name option is greyed out, per backend (homeTemplateDisabled).
+  HOME_UNAVAILABLE_MANAGED:
+    "Not available for a Wardyn-managed volume: the directory name would be printed by docker volume ls / kubectl get pvc.",
+  HOME_UNAVAILABLE_SHARE: "Not available for a share: a derived id would name a directory nobody made.",
+  HOME_UNAVAILABLE_CLAIM: "Not available for a pre-created claim: it would fold two people's claims onto one volume.",
   HOME_RULE:
     "A directory name is lowercase letters and digits, then any of . _ -, up to 63 characters. A person whose claim cannot name one is refused at their run, never guessed.",
   FIELD_SIZE: "Size (MiB)",
@@ -232,7 +237,7 @@ export const DRIVES = {
 
   // ---- §7.3 allocations and the preview ----
   ALLOC_TITLE: "Allocations",
-  ALLOC_LEAD: "Who gets a drive. A person's own row beats their group's; a group's beats everyone's. One drive per person.",
+  ALLOC_LEAD: "Who gets a drive. A person's own row beats their group's; a group's beats everyone's. A person can be given more than one drive.",
   PRECEDENCE:
     "The most specific allocation wins: a person beats a group, and a group beats everyone. Within a person, the sign-in subject beats the email. Between groups, the higher priority wins, then the drive name.",
   // EFFECT_NOTE and SIGNIN_NOTE are two halves of ONE fact and render
@@ -339,7 +344,7 @@ export const DRIVES = {
   // The Workspaces header's outline button is TITLE. The card and the button
   // render for SUPER only.
   CARD_LEAD: "Persistent storage people can mount into a run — separate from any workspace.",
-  CARD_EMPTY: "No drives yet.",
+  CARD_EMPTY: "No drives yet",
   CARD_DRIVES: (n: number) => `${n} drive${n === 1 ? "" : "s"}`,
   CARD_ALLOCATIONS: (n: number) => `${n} allocation${n === 1 ? "" : "s"}`,
   CARD_SUMMARY: (drives: string, allocations: string) => `${drives} · ${allocations}`,

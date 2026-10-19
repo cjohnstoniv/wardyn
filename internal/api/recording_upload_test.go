@@ -365,3 +365,29 @@ func TestUploadRecording_RunReadFailure(t *testing.T) {
 		})
 	}
 }
+
+// A plain log that happens to open like a cast header, uploaded by a recorder that says it is a log, is cut at
+// the store's limit like any other log: the prefix no longer decides. Masking expands each secret line, so the
+// 40 MiB body comes out past the 64 MiB limit.
+func TestUploadRecording_DeclaredPlainLogIsCutDespiteACastLookingStart(t *testing.T) {
+	runID := uuid.New()
+	reg := secretmask.NewRegistry()
+	if err := reg.Add(runID, []byte("secrettt")); err != nil {
+		t.Fatal(err)
+	}
+	store := &fakeRecordingStore{}
+	h := newRecordingHarness(t, store, reg)
+	body := `{"version": 2, "diagnostic": true}` + "\n" + strings.Repeat("secrettt\n", (40<<20)/9)
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/internal/recordings/"+runID.String(), strings.NewReader(body))
+	r.Header.Set("Authorization", "Bearer "+h.mintRunToken(t, runID))
+	r.Header.Set(recording.FormatHeader, recording.FormatLog)
+	r.Host, r.RemoteAddr = "127.0.0.1", "127.0.0.1:54321"
+	w := httptest.NewRecorder()
+	panicFails(t, h.srv.Handler()).ServeHTTP(deadlineRecorder{w}, r)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("code = %d: %s", w.Code, w.Body.String())
+	}
+	if len(store.saved) > recording.MaxCastBytes || !strings.HasSuffix(string(store.saved), maskCutMarker(recording.MaxCastBytes)) {
+		t.Errorf("stored %d bytes (limit %d), ends %q; want the log cut at the limit with the server's marker", len(store.saved), recording.MaxCastBytes, store.saved[len(store.saved)-80:])
+	}
+}

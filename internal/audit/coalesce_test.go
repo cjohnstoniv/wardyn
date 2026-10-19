@@ -242,3 +242,39 @@ func TestDenialCoalescerWindowClosesOnTimer(t *testing.T) {
 	}
 	t.Fatalf("no summary after the window: %d rows", len(inner.events()))
 }
+
+// A portal's refused dry runs for a person are not the person's own repeats: the
+// delegated attempts get their own window and row, and their summary names the
+// portal (#2311).
+func TestDenialCoalescerKeepsDelegatedAttemptsApart(t *testing.T) {
+	inner := &syncRecorder{}
+	c := &DenialCoalescer{}
+	c.Inner = inner
+	rec := DelegationRecorder{Inner: DryRunRecorder{Inner: c}}
+	via := types.DelegationVia{Delegate: uuid.New(), Grant: uuid.New()}
+	own := WithDryRun(context.Background())
+	delegated := WithDelegation(own, via)
+	for _, ctx := range []context.Context{own, delegated, delegated} {
+		if err := rec.Record(ctx, denial("sub-a", "runs.image", "byoi_user")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c.Flush(context.Background())
+	got := inner.events()
+	if len(got) != 3 {
+		t.Fatalf("rows = %d, want the person's, the portal's first, and the portal's summary", len(got))
+	}
+	if _, ok := dataOf(t, got[0])["via"]; ok {
+		t.Errorf("the person's own row names a portal: %s", got[0].Data)
+	}
+	if _, ok := dataOf(t, got[1])["via"]; !ok {
+		t.Errorf("the delegated row names no portal: %s", got[1].Data)
+	}
+	sum := dataOf(t, got[2])
+	if got[2].Action != CoalesceAction || sum["count"] != float64(2) {
+		t.Fatalf("summary = %s %v, want the delegated window's count 2", got[2].Action, sum)
+	}
+	if v, ok := sum["via"].(map[string]any); !ok || v["delegate"] != via.Delegate.String() {
+		t.Errorf("summary via = %v, want the portal %s", sum["via"], via.Delegate)
+	}
+}

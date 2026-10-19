@@ -7,7 +7,7 @@
 // The small "server & session" surface the shell always needs.
 import { SERVER_OWNED_SITE_CONFIG_KEYS, type SiteConfig } from "../types";
 import type { DriveBackend, StorageEnforcement } from "./drives";
-import { WFETCH_TIMEOUT_MS, asJson, wfetch } from "./core";
+import { LAUNCH_DEADLINE_MS, WFETCH_TIMEOUT_MS, asJson, wfetch } from "./core";
 import { appURL } from "../base-path";
 
 // GET /me's `user_drive` (0.7, migration 0054) — what this caller would mount
@@ -133,7 +133,9 @@ export interface Me {
   // and 500 used to wear that same answer. A closed set, matching the server's
   // own vocabulary beside writeDriveError: "groups_snapshot_stale" (sign in
   // again), "unmountable" (an allocation exists and an admin must fix its
-  // directory name), "unavailable" (the allocation could not be read), and
+  // directory name), "drive_subject_unsupported" (no directory name is derived
+  // from this sign-in name; an admin sets a home override), "unavailable" (the
+  // allocation could not be read), and
   // "governance_unavailable" (the ceiling could not be read, so whether the
   // door is open is unknown — the allocation is withheld with it), and
   // "user_type_unknown" (the caller's user type was deleted after sign-in).
@@ -304,10 +306,14 @@ export const health = {
   // comes back as a 400 (asJson throws), surfaced by the caller like any other
   // write failure — never papered over.
   async testProxy(url?: string): Promise<ProxyTestResult> {
-    const res = await wfetch("/site-config/test-proxy", {
-      method: "POST",
-      ...(url ? { body: JSON.stringify({ url }) } : {}),
-    });
+    // The probe brings a sandbox up and the server holds the request for up to 90s, so it rides
+    // the launch floor: the 60s default would abort it into a "control plane unreachable" error
+    // in place of the honest timed_out verdict.
+    const res = await wfetch(
+      "/site-config/test-proxy",
+      { method: "POST", ...(url ? { body: JSON.stringify({ url }) } : {}) },
+      LAUNCH_DEADLINE_MS,
+    );
     if (res.status === 404) {
       return { state: "no_runner", detail: "This server build has no test-proxy endpoint." };
     }
@@ -318,10 +324,7 @@ export const health = {
   // egress redirect. A redirect has no server-side id, so it's identified by
   // its from/to pair (what the row already holds client-side).
   async testRedirect(from: string, to: string): Promise<ProxyTestResult> {
-    const res = await wfetch("/site-config/test-redirect", {
-      method: "POST",
-      body: JSON.stringify({ from, to }),
-    });
+    const res = await wfetch("/site-config/test-redirect", { method: "POST", body: JSON.stringify({ from, to }) }, LAUNCH_DEADLINE_MS);
     if (res.status === 404) {
       return { state: "no_runner", detail: "This server build has no test-redirect endpoint." };
     }

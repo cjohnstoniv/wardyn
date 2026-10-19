@@ -132,6 +132,11 @@ func (s *Server) handleCreateUserType(w http.ResponseWriter, r *http.Request) {
 	}
 	t.CreatedBy = principalFromRequest(r)
 	saved, err := s.cfg.Store.CreateUserType(r.Context(), t)
+	if errors.Is(err, store.ErrUserTypeIDReferenced) {
+		writeErrorReason(w, http.StatusConflict, reasonUserTypeConflict,
+			fmt.Sprintf("The id %q is already taken, or a grant, assignment or service identity still names it (left by a deleted type); pick another id.", t.ID))
+		return
+	}
 	if errors.Is(err, store.ErrConflict) {
 		writeErrorReason(w, http.StatusConflict, reasonUserTypeConflict,
 			fmt.Sprintf("A user type with the id %q or the name %q already exists.", t.ID, t.Name))

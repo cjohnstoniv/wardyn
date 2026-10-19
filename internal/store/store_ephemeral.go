@@ -119,3 +119,29 @@ func (s PG) ConsumeAttachTicket(ctx context.Context, token string, now time.Time
 	}
 	return t, true, nil
 }
+
+// EphemeralSweeper deletes the short-lived handoff rows (attach tickets, delegated tokens) that have
+// expired. Deliberately NOT part of Store, like RunLayoutStore: the mint path sweeps only on the next
+// mint, so on a quiet install an expired row would keep its principal and email until then.
+type EphemeralSweeper interface {
+	SweepExpiredEphemeral(ctx context.Context, now time.Time) (int64, error)
+}
+
+var _ EphemeralSweeper = PG{}
+
+// SweepExpiredEphemeral deletes every attach ticket and delegated token that expired at or before now
+// (the caller's clock, as the mint-time sweeps compare) and returns how many rows went.
+func (s PG) SweepExpiredEphemeral(ctx context.Context, now time.Time) (int64, error) {
+	var total int64
+	for _, q := range []string{
+		`DELETE FROM attach_tickets WHERE expires_at <= $1`,
+		`DELETE FROM delegated_tokens WHERE expires_at <= $1`,
+	} {
+		tag, err := s.Pool.Exec(ctx, q, now)
+		if err != nil {
+			return total, fmt.Errorf("store: sweep expired ephemeral rows: %w", err)
+		}
+		total += tag.RowsAffected()
+	}
+	return total, nil
+}

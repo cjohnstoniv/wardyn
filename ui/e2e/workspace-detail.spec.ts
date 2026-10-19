@@ -105,14 +105,19 @@ test.describe("Workspace detail — the member delete gate", () => {
     // test is about the ownership-aware Delete gate specifically.
     const deleteBtn = page.getByRole("button", { name: "Delete this workspace" });
     await expect(deleteBtn).toBeEnabled();
-    await expect(deleteBtn.getByText("Requires the admin role.")).toHaveCount(0);
+    await expect(deleteBtn).toHaveText("");
+    // The reason is a paragraph beside the icon button (#2885), not text inside it. Only the delete gate
+    // renders it as p.mt-2.text-xs; sibling cards use p.text-meta, so the owner has none and the non-owner one.
+    const reason = page.locator("p.mt-2.text-xs", { hasText: "Requires the admin role." }).first();
+    await expect(reason).toHaveCount(0);
 
     // Same row, a DIFFERENT member — not its owner.
     principal = OTHER;
     await page.reload();
     await expect(page.getByRole("heading", { name, level: 1 })).toBeVisible();
     await expect(deleteBtn).toBeDisabled();
-    await expect(deleteBtn.getByText("Requires the admin role.")).toBeVisible();
+    await expect(deleteBtn).toHaveText("");
+    await expect(reason).toBeVisible();
   });
 });
 

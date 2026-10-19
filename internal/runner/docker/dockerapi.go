@@ -5,10 +5,10 @@
 
 // Package docker implements the runner.Runner contract on the Docker Engine API.
 //
-// INVARIANT (ARCHITECTURE.md invariant 3, L0 structural egress): the agent container is created with
-// NetworkMode "none" and reaches the network only through the wardyn-proxy sidecar, addressable solely on
-// a per-run internal network. Internal=true networks have no gateway, so it can't route off-host even if a
-// route existed; only the proxy bridges to wardyn-internal. The agent has exactly one egress path: proxy:3128.
+// INVARIANT (ARCHITECTURE.md invariant 3, L0 structural egress): the agent container is created attached
+// only to its per-run internal network and reaches the network only through the wardyn-proxy sidecar on it.
+// Internal=true networks have no gateway, so it can't route off-host even if a route existed; only the
+// proxy bridges to wardyn-internal. The agent has exactly one egress path: proxy:3128.
 package docker
 
 import (

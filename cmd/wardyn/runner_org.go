@@ -71,11 +71,17 @@ func runnerOrgCmds(client clientFn) []*cobra.Command {
 	return []*cobra.Command{orgToken, claimOrg, trust, nodeRecordCmd(client)}
 }
 
+// nodeRecordLong is node-record's help: the record is a signed-in person's, so
+// a token-only CLI call is refused outside local mode.
+const nodeRecordLong = "Record that a held run's machines are powered off, or that no other machine held its node name (security operator).\n\n" +
+	"A node record is proposed and approved from a signed-in session; the admin token and personal API tokens are refused. " +
+	"This command works in local mode only: on an SSO deployment, propose and approve the record in the console."
+
 // nodeRecordCmd is a security operator's node record for a run its Kubernetes runner holds as containment
 // pending: it reads the machines the runner recorded, prints them, and sends the record naming them.
 func nodeRecordCmd(client clientFn) *cobra.Command {
 	var attestation, source, sourceID string
-	cmd := &cobra.Command{Use: "node-record <run-id>", Short: "Record that a held run's machines are powered off, or that no other machine held its node name (security operator)", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+	cmd := &cobra.Command{Use: "node-record <run-id>", Short: "Record that a held run's machines are powered off, or that no other machine held its node name (security operator)", Long: nodeRecordLong, Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		id, err := uuid.Parse(args[0])
 		if err != nil {
 			return fmt.Errorf("run id %q is not a UUID", args[0])

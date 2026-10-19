@@ -243,6 +243,13 @@ function summarize(
   const hold = asStrings(push?.require_review_paths) ?? [];
   if (deny.length > 0) tools.push(row(SUMMARY.pushDeny, deny.map((p) => mono(p, { mark: marks?.of("push_rules", p) }))));
   if (hold.length > 0) tools.push(row(SUMMARY.pushHold, hold.map((p) => mono(p, { mark: marks?.of("push_rules", p) }))));
+  // A limit the broker enforces, so a reviewer sees why a push was refused or timed out.
+  const maxFile = asNumber(push?.max_file_size_mib);
+  const holdFor = asNumber(push?.hold_seconds);
+  const inspect = asNumber(push?.max_inspect_pack_mib);
+  if (maxFile) tools.push(row(SUMMARY.pushMaxFile, [text(SUMMARY.mibValue(maxFile))]));
+  if (holdFor) tools.push(row(SUMMARY.pushHoldFor, [text(SUMMARY.secondsValue(holdFor))]));
+  if (inspect) tools.push(row(SUMMARY.pushInspectPack, [text(SUMMARY.mibValue(inspect))]));
   const anyBranch = take("git_push_any_branch", asBool);
   if (anyBranch !== undefined) tools.push(row(SUMMARY.pushes, [text(anyBranch ? SUMMARY.anyBranch : SUMMARY.ownBranch)]));
   add(SUMMARY.tools, tools);

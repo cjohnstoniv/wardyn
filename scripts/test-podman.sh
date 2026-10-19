@@ -91,11 +91,16 @@ fi
 _net="wardyn-podman-probe-$$"
 if D network create --internal --driver bridge "${_net}" >/dev/null 2>&1; then
   pass "Internal bridge network created (--internal supported)"
-  # A container on an internal network must NOT reach the public internet.
-  if D run --rm --network "${_net}" alpine:3.20 sh -c 'wget -q -T 3 -O /dev/null http://1.1.1.1 2>/dev/null' >/dev/null 2>&1; then
+  # A container on an internal network must NOT reach the public internet. A probe that fails proves
+  # nothing unless the same probe SUCCEEDS on a normal network, so run that control first.
+  _probe='wget -q -T 3 -O /dev/null http://1.1.1.1 2>/dev/null'
+  if D run --rm alpine:3.20 sh -c "${_probe}" >/dev/null 2>&1; then _control=1; else _control=0; fi
+  if D run --rm --network "${_net}" alpine:3.20 sh -c "${_probe}" >/dev/null 2>&1; then
     diverge "CRITICAL: container on an --internal network reached the public internet — Podman's Internal semantics differ from Moby's; the L0 no-default-route guarantee does NOT hold here."
-  else
+  elif [ "${_control}" = 1 ]; then
     pass "Internal network blocks off-host egress (L0 guarantee holds)"
+  else
+    warn "inconclusive: the control probe on a normal network could not reach 1.1.1.1 either (no internet from this host?), so the --internal block above proves nothing."
   fi
   D network rm "${_net}" >/dev/null 2>&1 || true
 else

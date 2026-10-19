@@ -21,7 +21,7 @@ import (
 
 // ProxyRunURL reads and validates WARDYN_PROXY_URL and WARDYN_RUN_ID from the
 // environment and returns the brokered result URL for the given result kind
-// (e.g. "scan", "verify"): "${WARDYN_PROXY_URL}/wardyn/v1/${kind}-results/${WARDYN_RUN_ID}".
+// (e.g. "scan"): "${WARDYN_PROXY_URL}/wardyn/v1/${kind}-results/${WARDYN_RUN_ID}".
 func ProxyRunURL(kind string) (string, error) {
 	proxyURL := strings.TrimRight(os.Getenv("WARDYN_PROXY_URL"), "/")
 	if proxyURL == "" {

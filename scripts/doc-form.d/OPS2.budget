@@ -1,7 +1,7 @@
 # Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the base prose words, so growth fails.
 # docs/operations/integrations.md 2683 adds 74 over 2609: 0.9 final docs pass 2, measured: signing in for an AWS or Azure CLI component.
 # docs/operations/integrations.md 2753 adds 70: Azure Activity Log attribution and the ARM-only scope line (0.9.3 FIN-B2).
-docs/operations/integrations.md=2753 share=30
+docs/operations/integrations.md=2763 share=30
 # docs/operations/launch-presets.md 432 adds 42: the preset-version-restarts-on-recreate line (0.9.3 FIN-B2).
 docs/operations/launch-presets.md=432 share=35
 docs/operations/console-branding.md=943 share=35
@@ -62,7 +62,8 @@ docs/operations/console-branding.md=943 share=35
 # docs/operations/hybrid-laptops.md 4618 = 4579 + 39, measured: posture age and a class with no requirement
 # docs/operations/hybrid-laptops.md 4625 = 4618 + 7, measured: rollback rule for any 0.9.3 run state, poll interval
 # docs/operations/hybrid-laptops.md 4668 = 4625 + 43, measured: the pre-0.9.3 containment-only run loop and why preserving spools/ and offline/ was not enough
-docs/operations/hybrid-laptops.md=4668 share=35
+# 0.9.4 L8: docs/operations/hybrid-laptops.md 4682 adds 14 over 4668: the reliable-reconnect guidance for a shared ingress.
+docs/operations/hybrid-laptops.md=4709 share=35
 # docs/operations/hybrid-laptops.md 4024 adds 2 over 4022, measured: the control-plane restart row says the next restart kills an agent kept only for containment.
 # docs/operations/hybrid-laptops.md 4195 = 3926 + 269, measured: the reset section and the recording default.
 # docs/operations/hybrid-laptops.md 4380 = 4195 + 185, measured: how audit decisions reach the organisation (the decision sink), less the removed state-directory check.

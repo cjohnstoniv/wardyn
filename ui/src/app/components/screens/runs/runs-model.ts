@@ -140,7 +140,7 @@ export function rowPresentation(run: AgentRun, adminView: boolean): RowPresentat
     case "PENDING":
       return {
         hue: "blue",
-        word: RUNS_ROW_WORD.QUEUED,
+        word: RUNS_ROW_WORD.PENDING,
         subword: statusDetailSentence(run.status_detail, run.status_reason) || undefined,
         action: null,
         needsYou: false,

@@ -113,3 +113,19 @@ func TestContainerizedCgroup(t *testing.T) {
 		})
 	}
 }
+
+// DetectSCMPosture sits on every GET /setup/status, so its git probe must go through the bounded
+// helper (a hung git yields an error, not a hung request).
+func TestDetectSCMPosture_GitProbeUsesTheBoundedHelper(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	orig := execCommandOutput
+	defer func() { execCommandOutput = orig }()
+	var asked []string
+	execCommandOutput = func(name string, args ...string) ([]byte, error) {
+		asked = append(asked, name+" "+strings.Join(args, " "))
+		return []byte("store\n"), nil
+	}
+	if got := DetectSCMPosture().CredentialHelper; got != "store" {
+		t.Errorf("CredentialHelper = %q (probes %v), want store from the bounded helper", got, asked)
+	}
+}

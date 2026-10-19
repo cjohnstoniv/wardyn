@@ -36,6 +36,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -336,12 +337,12 @@ type userDriveRequest = client.DriveRequest
 //     — a 422 for the same reason as 3, and LAST because it is the only gate
 //     that reads the database: a row that is malformed or outside the ceiling
 //     must be refused without a store round-trip.
-func (s *Server) decodeUserDriveRequest(w http.ResponseWriter, r *http.Request, id uuid.UUID) (types.UserDrive, int, string) {
+func (s *Server) decodeUserDriveRequest(w http.ResponseWriter, r *http.Request, id uuid.UUID) (d types.UserDrive, code int, reason, msg string) {
 	var req userDriveRequest
 	if msg := decodeStrictMsg(w, r, &req); msg != "" {
-		return types.UserDrive{}, http.StatusBadRequest, msg
+		return types.UserDrive{}, http.StatusBadRequest, "", msg
 	}
-	d := types.UserDrive{
+	d = types.UserDrive{
 		ID:           id,
 		Name:         req.Name,
 		Backend:      req.Backend,
@@ -354,15 +355,16 @@ func (s *Server) decodeUserDriveRequest(w http.ResponseWriter, r *http.Request, 
 		CreatedBy:    principalFromRequest(r),
 	}
 	if err := types.ValidateUserDrive(&d, s.cfg.RunnerTarget); err != nil {
-		return types.UserDrive{}, http.StatusBadRequest, "invalid drive: " + err.Error()
+		return types.UserDrive{}, http.StatusBadRequest, "", "invalid drive: " + err.Error()
 	}
 	// The org switch and the deployment ceiling, in the same arm as the env
 	// host_root ceiling below and for the same reason — both are facts about the
 	// DEPLOYMENT, so both are 422s. Before the host_path gates, because they apply
 	// to every backend and neither costs a store read the switch has already
 	// settled.
-	if code, _, msg := s.userDriveWriteRefusal(r.Context(), d.SizeMiB); msg != "" {
-		return types.UserDrive{}, code, msg
+	// Its own reason survives to the wire: the three causes have three remedies.
+	if code, reason, msg := s.userDriveWriteRefusal(r.Context(), d.SizeMiB); msg != "" {
+		return types.UserDrive{}, code, reason, msg
 	}
 	if d.Backend == types.DriveBackendHostPath {
 		// Bounded: the same ceiling rules, asked inside driveShareProbe,
@@ -370,13 +372,13 @@ func (s *Server) decodeUserDriveRequest(w http.ResponseWriter, r *http.Request, 
 		// the request — and a kernel thread — for as long as the mount takes.
 		if err := s.userDriveHostRootCheckBounded(r.Context())(d.HostRoot); err != nil {
 			code, msg := driveRootCeilingRefusal(d.HostRoot, err)
-			return types.UserDrive{}, code, msg
+			return types.UserDrive{}, code, serverFaultReason(code, reasonUserDriveCeilingUnavailable), msg
 		}
 		if code, msg := s.driveHostRootNesting(r, d); msg != "" {
-			return types.UserDrive{}, code, msg
+			return types.UserDrive{}, code, serverFaultReason(code, reasonUserDriveRehomeListUnavailable), msg
 		}
 	}
-	return d, 0, ""
+	return d, 0, "", ""
 }
 
 // writeUserDrive is the shared body of POST and PUT: decode, validate against
@@ -388,9 +390,9 @@ func (s *Server) decodeUserDriveRequest(w http.ResponseWriter, r *http.Request, 
 // handleCreateUserDrive mints a fresh uuid, so a create finds nothing and the
 // guard is a single list read that returns immediately.
 func (s *Server) writeUserDrive(w http.ResponseWriter, r *http.Request, id uuid.UUID, status int) {
-	d, code, msg := s.decodeUserDriveRequest(w, r, id)
+	d, code, reason, msg := s.decodeUserDriveRequest(w, r, id)
 	if msg != "" {
-		writeErrorReason(w, code, reasonUserDriveRequestInvalid, msg)
+		writeErrorReason(w, code, cmp.Or(reason, reasonUserDriveRequestInvalid), msg)
 		return
 	}
 	code, reason, msg, rehome, refuseIfAllocated := s.driveRehomeGuard(r, d)

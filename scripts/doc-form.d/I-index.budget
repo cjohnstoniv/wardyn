@@ -4,7 +4,9 @@
 # Figures add their alt-text words only: README.md +90 (opener pair 60, run figure 30) -> 2213, +2 for "by default" in the lead bullet -> 2215; docs/README.md +60 (opener pair) -> 577.
 # README.md 2227 adds 12: the architecture bullet about decision logs and masked casts became two.
 # README.md 2253 adds 26: 17 (the lead bullet links docs/CREDENTIALS.md) and 9 (the architecture bullet says the proxy adds most credentials, with a link).
-README.md=2253 share=35
+# README.md 2281 = 2253 + 28, measured: the how-Wardyn-is-built paragraph
+# 0.9.4 L8: README.md 2329 adds 48 over 2281: honest credential posture lines and the token export before the first run.
+README.md=2329 share=35
 # docs/README.md 597 adds 20: the index row for docs/CREDENTIALS.md.
 # 0.9 F-1519 (#1519): docs/README.md 720 adds 123 over 597 — eleven new index rows for the multi-user
 # split (the admin-only tier table, capabilities, the two-human gate, per-user API tokens, user drives
@@ -13,10 +15,13 @@ README.md=2253 share=35
 # docs/README.md 752 adds 32 over 720: 0.9 final docs pass, measured: the index rows for the New run guide and the self-hosted runner pages.
 # docs/README.md 735 adds 15 over 720 (0.9 RP-4): the runner pools row.
 # docs/README.md 767 measured at merge: the final docs pass over the runner limits, pool words and Azure CLI lanes.
+# docs/README.md 784 = 767 + 17, measured: the how-Wardyn-is-built index row
 # docs/README.md 793 adds 26 over 767 (0.9.3 K7): the organisation-runner-in-a-cluster row, measured.
-docs/README.md=793 share=35
+# docs/README.md 810 measured at the 0.9.3 forward-port: both index rows above.
+docs/README.md=810 share=35
 # docs/TRY-IT.md 3209 adds 8: the demo/default difference names idle auto-stop.
 # docs/TRY-IT.md 3243 adds 34: the branch-confinement warning names what the token broker reads and when it confines.
 # docs/TRY-IT.md 3254 adds 11: the default policy's model access goes through a model provider, not an authored grant.
 # docs/TRY-IT.md 3309 adds 55 over 3254 (setup sets the server runner's limits): make setup sets the server runner's limits; measured.
-docs/TRY-IT.md=3309 share=35
+# 0.9.4 L8: docs/TRY-IT.md 3371 adds 62 over 3309: the brokered-repo note, the setup-token wording and the rc-safe tag.
+docs/TRY-IT.md=3377 share=35

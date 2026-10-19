@@ -42,6 +42,42 @@ func createComponentQ(ctx context.Context, q Querier, c types.Component) (types.
 	return scanComponent(q.QueryRow(ctx, stmt, c.ID, c.Owner, c.Name, def, c.CreatedBy))
 }
 
+// ErrComponentCap is CreateComponentCapped's answer when the owner already holds the cap.
+var ErrComponentCap = errors.New("store: the owner already holds the most components allowed")
+
+// CappedComponentCreator creates a component only while its owner holds fewer than max rows, the count
+// and the insert under one lock, so concurrent saves cannot pass the cap. Optional beside ComponentStore.
+type CappedComponentCreator interface {
+	// CreateComponentCapped is CreateComponent, refused with ErrComponentCap when c.Owner already has max rows.
+	CreateComponentCapped(ctx context.Context, c types.Component, max int) (types.Component, error)
+}
+
+var _ CappedComponentCreator = PG{}
+
+// CreateComponentCapped — see CappedComponentCreator.
+func (s PG) CreateComponentCapped(ctx context.Context, c types.Component, max int) (types.Component, error) {
+	var out types.Component
+	err := s.inTx(ctx, func(q Querier) error {
+		if _, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('components.create:' || $1))`, c.Owner); err != nil {
+			return err
+		}
+		var n int
+		if err := q.QueryRow(ctx, `SELECT count(*) FROM components WHERE owner = $1`, c.Owner).Scan(&n); err != nil {
+			return fmt.Errorf("store: count components: %w", err)
+		}
+		if n >= max {
+			return ErrComponentCap
+		}
+		var err error
+		out, err = createComponentQ(ctx, q, c)
+		return err
+	})
+	if err != nil {
+		return types.Component{}, err
+	}
+	return out, nil
+}
+
 // UpdateComponent — see ComponentStore.
 func (s PG) UpdateComponent(ctx context.Context, c types.Component) (types.Component, error) {
 	def, err := marshalComponentDefinition(c.Definition)
@@ -131,29 +167,7 @@ func (s PG) PutRunComponents(ctx context.Context, runID uuid.UUID, comps []types
 	if len(comps) == 0 {
 		return errors.New("store: put run components: no components; a run without any writes no snapshot")
 	}
-	defs := make([][]byte, len(comps))
-	for i, c := range comps {
-		def, err := marshalComponentDefinition(c.Definition)
-		if err != nil {
-			return err
-		}
-		defs[i] = def
-	}
-	err := s.inTx(ctx, func(q Querier) error {
-		const ins = `
-			INSERT INTO run_components (run_id, ordinal, component_id, owner, name, version, definition, self_defined, mcp_harnesses)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`
-		for i, c := range comps {
-			harnesses := c.MCPHarnesses
-			if harnesses == nil {
-				harnesses = []string{}
-			}
-			if _, err := q.Exec(ctx, ins, runID, i, c.ComponentID, c.Owner, c.Name, c.Version, defs[i], c.SelfDefined, harnesses); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
+	err := s.inTx(ctx, func(q Querier) error { return insertRunComponents(ctx, q, runID, comps) })
 	var pgErr *pgconn.PgError
 	switch {
 	case errors.As(err, &pgErr) && pgErr.Code == "23503":
@@ -162,6 +176,27 @@ func (s PG) PutRunComponents(ctx context.Context, runID uuid.UUID, comps []types
 		return ErrConflict
 	case err != nil:
 		return fmt.Errorf("store: put run components: %w", err)
+	}
+	return nil
+}
+
+// insertRunComponents writes comps as runID's snapshot rows on q.
+func insertRunComponents(ctx context.Context, q Querier, runID uuid.UUID, comps []types.RunComponent) error {
+	const ins = `
+		INSERT INTO run_components (run_id, ordinal, component_id, owner, name, version, definition, self_defined, mcp_harnesses)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`
+	for i, c := range comps {
+		def, err := marshalComponentDefinition(c.Definition)
+		if err != nil {
+			return err
+		}
+		harnesses := c.MCPHarnesses
+		if harnesses == nil {
+			harnesses = []string{}
+		}
+		if _, err := q.Exec(ctx, ins, runID, i, c.ComponentID, c.Owner, c.Name, c.Version, def, c.SelfDefined, harnesses); err != nil {
+			return err
+		}
 	}
 	return nil
 }

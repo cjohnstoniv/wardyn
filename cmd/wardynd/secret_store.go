@@ -45,6 +45,7 @@ func openSecretStore(ctx context.Context, pool *pgxpool.Pool, f *bootFlags, rec 
 	if err := verifyKeyDomains(ctx, s); err != nil {
 		return nil, err
 	}
+	warnUnderivedPointers(ctx, s)
 	st := secretstore.Audited(s, rec)
 	if err := refuseKEKRequired(*f.vault.kekRequired, st); err != nil {
 		return nil, err
@@ -74,6 +75,46 @@ func verifyKeyDomains(ctx context.Context, s secretstore.Store) error {
 		return fmt.Errorf("refusing to start: %w", err)
 	}
 	return nil
+}
+
+// pointerAuditor is the part of the PG secret store warnUnderivedPointers reads.
+type pointerAuditor interface {
+	UnderivedPointers(ctx context.Context) (n int, example string, err error)
+	ExternalName() string
+}
+
+// warnUnderivedPointers warns at a serving boot about pointer rows the
+// configured external store does not derive. Its naming settings are fixed once
+// rows exist: a changed one makes every read of those rows a refusal that names
+// a moved or forged pointer, and this line names the likelier cause.
+func warnUnderivedPointers(ctx context.Context, s secretstore.Store) {
+	ps, ok := s.(pointerAuditor)
+	if !ok {
+		return
+	}
+	n, ref, err := ps.UnderivedPointers(ctx)
+	if err != nil {
+		// A diagnostic only: the boot goes on, but a scan that cannot run leaves a trace.
+		slog.DebugContext(ctx, "wardynd: could not scan for secret pointer rows the external store does not derive", slog.Any("err", err))
+		return
+	}
+	if n == 0 {
+		return
+	}
+	slog.WarnContext(ctx, underivedPointersWarning(ps.ExternalName()), slog.Int("rows", n), slog.String("example_ref", ref))
+}
+
+// underivedPointersWarning is warnUnderivedPointers' message for the named store.
+func underivedPointersWarning(store string) string {
+	settings := "the external store's settings"
+	switch store {
+	case vaultkv.Name:
+		settings = "WARDYN_VAULT_KV_MOUNT or WARDYN_VAULT_KV_PREFIX"
+	case azurekv.Name:
+		settings = "WARDYN_AZURE_KV_PREFIX or WARDYN_AZURE_KV_URL (its spelling, an explicit port included)"
+	}
+	return "wardynd: secret rows point to values " + store + " does not derive from them, and every read of them is refused. " +
+		"These settings are fixed once rows exist: if " + settings + " changed since the rows were written, set it back"
 }
 
 // buildStoreClients builds the configured external store client and key
@@ -432,7 +473,7 @@ func registerVaultFlags() vaultFlags {
 		role:               flagEnv("vault-role", "WARDYN_VAULT_ROLE", "", "Vault Kubernetes-auth role wardynd logs in as"),
 		rolePlatform:       flagEnv("vault-role-platform", "WARDYN_VAULT_ROLE_PLATFORM", "", "optional second Kubernetes-auth role wardynd reads and writes its own signing, session and SSH host keys as (the <prefix>/platform/ paths); WARDYN_VAULT_ROLE then serves only the credentials. Empty = one role for both. Recommended; see docs/operations/secrets-and-keys.md"),
 		k8sTokenFile:       flagEnv("vault-k8s-token-file", "WARDYN_VAULT_K8S_TOKEN_FILE", "", "path of the projected service-account token (audience vault) for Kubernetes auth; re-read at every login"),
-		tokenFile:          flagEnv("vault-token-file", "WARDYN_VAULT_TOKEN_FILE", "", "path of a file holding a Vault token (WARDYN_VAULT_AUTH=token-file); re-read on every 403"),
+		tokenFile:          flagEnv("vault-token-file", "WARDYN_VAULT_TOKEN_FILE", "", "path of a file holding a Vault token (WARDYN_VAULT_AUTH=token-file); re-read when Vault answers 401 or 403, at most once every 30s"),
 		caCertFile:         flagEnv("vault-cacert-file", "WARDYN_VAULT_CACERT_FILE", "", "PEM bundle added to the system roots for the Vault client only; empty = WARDYN_TRUSTED_CA_FILE, else system roots"),
 		kvMount:            flagEnv("vault-kv-mount", "WARDYN_VAULT_KV_MOUNT", "wardyn", "Vault KV v2 mount the vaultkv store writes under"),
 		kvPrefix:           flagEnv("vault-kv-prefix", "WARDYN_VAULT_KV_PREFIX", "wardyn", "path prefix under the mount for this install (the chart sets the release namespace)"),
@@ -469,7 +510,7 @@ func registerAzureFlags() azureFlags {
 		tenantID:           flagEnv("azure-tenant-id", "WARDYN_AZURE_TENANT_ID", "", "Entra tenant id (workload identity)"),
 		clientID:           flagEnv("azure-client-id", "WARDYN_AZURE_CLIENT_ID", "", "client id of the app registration or user-assigned identity wardynd runs as"),
 		federatedTokenFile: flagEnv("azure-federated-token-file", "WARDYN_AZURE_FEDERATED_TOKEN_FILE", os.Getenv("AZURE_FEDERATED_TOKEN_FILE"), "path of the projected token exchanged for an Entra token; default: AZURE_FEDERATED_TOKEN_FILE, which the workload identity webhook sets. Re-read at every exchange"),
-		authorityHost:      flagEnv("azure-authority-host", "WARDYN_AZURE_AUTHORITY_HOST", "https://login.microsoftonline.com", "Entra authority host (a sovereign cloud's, if not the public one)"),
+		authorityHost:      flagEnv("azure-authority-host", "WARDYN_AZURE_AUTHORITY_HOST", "https://login.microsoftonline.com", "Entra authority host. The Key Vault client always asks for the public cloud's vault.azure.net resource, so this does not make a sovereign-cloud vault work"),
 		prefix:             flagEnv("azure-kv-prefix", "WARDYN_AZURE_KV_PREFIX", "wardyn", "prefix of every secret name this install writes (the chart sets the release namespace)"),
 		maxVersions:        flagIntEnv("azure-kv-max-versions", "WARDYN_AZURE_KV_MAX_VERSIONS", 100, "versions a secret holds before the next write starts a new name and deletes the old one"),
 		purge:              flagEnv("azure-kv-purge", "WARDYN_AZURE_KV_PURGE", azurekv.PurgeAuto, `"auto": purge a deleted secret when the vault allows it; "never": leave it soft-deleted for the vault's retention`),

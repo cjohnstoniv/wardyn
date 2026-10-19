@@ -84,7 +84,7 @@ export const STARTING_RAW_PREFIX = "Waiting: ";
 // reads as "nothing is happening" rather than "the request is in flight".
 // Superseded the instant a real stage line lands: run-detail-summary-header.tsx
 // only reaches for this sentence while status_detail is still empty.
-export const PENDING_NO_DETAIL = "Queued — Wardyn is getting this run ready.";
+export const PENDING_NO_DETAIL = "Pending — Wardyn is getting this run ready.";
 
 // The short register. The header chip is `max-w-[160px]`, so the
 // sentences above truncate to a restatement of the starting badge — "Starting
@@ -324,6 +324,8 @@ export function runStartupView(
     state: string;
     created_at: string;
     updated_at: string;
+    /** When the run left the pool queue; PENDING is clocked from here, not from the time it spent waiting. */
+    admitted_at?: string | null;
     status_detail?: string | null;
     status_reason?: string | null;
   },
@@ -342,7 +344,7 @@ export function runStartupView(
   const detail = starting && reason !== STATUS_REASON_BUILDING ? run.status_detail : "";
   const stepReason = starting && reason !== STATUS_REASON_BUILDING ? reason : "";
 
-  const since = Date.parse(starting ? run.updated_at : run.created_at);
+  const since = Date.parse(starting ? run.updated_at : (run.admitted_at ?? run.created_at));
   const elapsed = Number.isNaN(since) ? 0 : Math.max(0, now - since);
 
   const last = (mark: StartupMark): StartupRow[] =>

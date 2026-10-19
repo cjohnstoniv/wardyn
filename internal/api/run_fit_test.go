@@ -269,3 +269,17 @@ func TestRunFit_AsksAboutTheRunsLifetimeCap(t *testing.T) {
 		t.Errorf("fit asked about a cap of %v for a run with none, want 0", fr.asked.LifetimeCap)
 	}
 }
+
+// A run that waits for a slot and needs more than is left now is not told it
+// "would fill the quota to 130%" with a negative amount left (#2790): it queues.
+func TestJudgeFit_WaitingRunOverTheLeftoverGetsNoNearFullWarning(t *testing.T) {
+	fit := runner.Fit{Quotas: runner.ReadOK, Nodes: runner.ReadSkipped, Quota: []runner.QuotaFit{
+		{Name: "runs-quota", Axes: []runner.QuotaAxis{{Key: "requests.cpu", Need: 3000, Left: 2000, Hard: 4000}}},
+	}}
+	if v := judgeFit(fit, true); v.refusal != "" || len(v.warnings) != 0 {
+		t.Fatalf("a waiting run over the leftover must queue silently, got refusal=%q warnings=%q", v.refusal, v.warnings)
+	}
+	if v := judgeFit(fit, false); v.refusal == "" {
+		t.Fatal("the same ask from a run that does not wait stays refused")
+	}
+}

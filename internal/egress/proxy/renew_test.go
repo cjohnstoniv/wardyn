@@ -456,3 +456,71 @@ func TestRenewTokenParsesFreshTokenAndExpiry(t *testing.T) {
 		t.Fatal("renewToken accepted a 401 response — a refused renew must be an error")
 	}
 }
+
+// A failing renew never backs off past the held token's expiry: a gap that would land after it
+// shrinks to the margin before it, never below firstRetry; with no held expiry known, or one
+// already past, the backoff stands.
+func TestRenewer_RetryGapStopsShortOfTheHeldTokensExpiry(t *testing.T) {
+	tune := renewerTuning{firstRetry: 10 * time.Millisecond, expiryMargin: 2 * time.Minute}
+	now := time.Now()
+	for _, tc := range []struct {
+		name    string
+		backoff time.Duration
+		heldExp time.Time
+		want    time.Duration
+	}{
+		{"would pass the expiry", 30 * time.Minute, now.Add(10 * time.Minute), 8 * time.Minute},
+		{"lands before the margin", time.Minute, now.Add(10 * time.Minute), time.Minute},
+		{"inside the margin", 30 * time.Minute, now.Add(time.Minute), 10 * time.Millisecond},
+		{"expiry unknown", 30 * time.Minute, time.Time{}, 30 * time.Minute},
+		{"already expired", 30 * time.Minute, now.Add(-time.Minute), 30 * time.Minute},
+	} {
+		if got := tune.retryGap(tc.backoff, tc.heldExp, now); got != tc.want {
+			t.Errorf("%s: retryGap = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// The loop keeps the renewed token's expiry and retries inside the margin before it, one firstRetry
+// apart, where the doubling backoff alone would have spaced the tries out. The clock stands still
+// 60ms before the expiry, so each gap is firstRetry however loaded the machine is.
+func TestRenewer_BackoffLandsBeforeTheHeldTokenExpires(t *testing.T) {
+	var mu sync.Mutex
+	var exp time.Time
+	attempts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		attempts++
+		if attempts > 1 {
+			w.WriteHeader(http.StatusServiceUnavailable) // the control plane is down from here on
+			return
+		}
+		exp = time.Now().Add(100 * time.Millisecond)
+		_ = json.NewEncoder(w).Encode(map[string]any{"token": "renewed-1", "expires_at": exp.UTC().Format(time.RFC3339Nano)})
+	}))
+	defer srv.Close()
+	clock := func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		if exp.IsZero() {
+			return time.Now()
+		}
+		return exp.Add(-60 * time.Millisecond)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	// The healthy renew waits half the life (~50ms); without the expiry the failures would then back
+	// off 10, 20, 40, 80, 160, 320ms: eight tries in the window. With it they come every 10ms, some
+	// ninety, so even a loaded machine clears twelve.
+	runTokenRenewerTuned(ctx, newTokenSource("startup-token"), srv.URL, srv.Client(), renewerTuning{
+		firstRetry: 10 * time.Millisecond, maxInterval: 500 * time.Millisecond,
+		giveUpAfter: 5 * time.Second, expiryMargin: 50 * time.Millisecond, now: clock,
+	})
+	mu.Lock()
+	defer mu.Unlock()
+	if attempts < 12 {
+		t.Fatalf("renew attempts in 1s = %d, want >= 12: the failures backed off past the held token's expiry", attempts)
+	}
+}

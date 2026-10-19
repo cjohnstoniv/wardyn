@@ -9,7 +9,9 @@
 # docs/USERS.md 4629 adds 196 over 4433 (0.9.3 RV5), measured: new section on how long a session lasts and what sign-out cuts and leaves.
 # docs/USERS.md 4653 adds 24 over 4629, measured: a person's stored preferences are erased with the runner_pools scope and by a SCIM purge.
 # docs/USERS.md 4681 adds 28 over 4653, measured: the renewal bullet: use keeps the session going and a terminal reconnects across a renewal (0.9.3 console session lifetime).
-docs/USERS.md=4681 share=35
+# 0.9.4 L4a +24: docs/USERS.md 4705 adds 24 over 4681, measured by hosted lint: the drive_subject_unsupported token in the GET /me drive-state list.
+# 0.9.4 W4-DOCS-1: docs/USERS.md 4720 adds 15 over 4705, measured: #2369: runner trust class and run node record in the approver list.
+docs/USERS.md=4748 share=35
 # docs/SSH.md 5396 adds 84 (0.9 SSH lane): the wardyn-sync subsystem and its env, the sync cap, the configurable channel cap and the sync audit action.
 # docs/SSH.md 5508 adds 112 over 5396 (0.9 E-S1): the `wardyn sync` section (command, safety rules, the rsync alternative).
 # docs/SSH.md 5586 adds 78 over 5508 (0.9 E-S1 round 1): the pull byte limits, the plain-http refusal, the invisible-name and normalisation rules, the one-second mtime limit and the rsync caveat.
@@ -27,7 +29,9 @@ docs/USERS.md=4681 share=35
 # docs/SSH.md 5722 = 5706 + 16 (RV5), measured at the wave-A merge.
 # docs/SSH.md 5808 = 5722 + 86, measured: the keepalive bound and what a close leaves behind
 # docs/SSH.md 5813 = 5808 + 5, measured: keepalive bound stated as 30 to 60 seconds
-docs/SSH.md=5813 share=35
+# docs/SSH.md 5849 = 5813 + 36, measured: the never-reap bullet names the shipped ceiling.
+# docs/SSH.md 5865 adds 52 over 5813, measured: 0.9.4 L4b, the connection bounds.
+docs/SSH.md=5901 share=35
 # docs/UI-SANDBOXES.md 5341 measured after C-mode-doors merge.
 # docs/UI-SANDBOXES.md 5472 adds 131 over 5341 (0.9.3 lane B): the reasons table for a refusal an SDK reads.
 # docs/UI-SANDBOXES.md 5477 adds 5 (0.9.3 lane B review): the AWS no-credential 404 in the reasons table.
@@ -36,7 +40,7 @@ docs/SSH.md=5813 share=35
 # docs/UI-SANDBOXES.md 5544 adds 21 (0.9.3 DR-0255): the audit-refusal message form and the shared-gateway plain answer.
 # docs/UI-SANDBOXES.md 5558 adds 14 (0.9.3 lane B round 5): a plain request straight to a shared gateway is uninspected_channel.
 # docs/UI-SANDBOXES.md 5566 adds 8 (0.9.3 DR-0265): which methods the shared-gateway refusal covers.
-docs/UI-SANDBOXES.md=5566 share=35
+docs/UI-SANDBOXES.md=5584 share=35
 # docs/NEW-RUN.md 2905 measured (0.9 final docs pass): the New run guide.
 # docs/NEW-RUN.md 2914 adds 9 over 2905: 0.9 final docs pass 2, measured: the runner-limit wait reason and the runner pools links.
 # docs/NEW-RUN.md 2915 adds 1 over 2914: docs fix: run --file overlay; a policy's own * rule stays in force on a routed run, measured.
@@ -47,4 +51,5 @@ docs/UI-SANDBOXES.md=5566 share=35
 # docs/NEW-RUN.md 2990 adds 24 over 2966 (0.9.3 FIN-E), measured: the AWS CLI region note on a Bedrock-provider run.
 # docs/NEW-RUN.md 3056, measured at the FIN-E2 merge into the final train (both sides' sentences).
 # docs/NEW-RUN.md 3072 = 3056 + 16, measured: a wait row for a required recording with no store
-docs/NEW-RUN.md=3072 share=35
+# 0.9.4 W4-DOCS-1: docs/NEW-RUN.md 3073 adds 1 over 3072, measured: #2320: --max-wait among the run --file companion flags.
+docs/NEW-RUN.md=3073 share=35

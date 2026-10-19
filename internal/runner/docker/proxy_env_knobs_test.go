@@ -30,6 +30,7 @@ func TestProxyEnv_CarriesTheOperatorKnobs(t *testing.T) {
 	// deployment whose SDK is less patient than the hold lowers it — and could
 	// not, on either substrate, until it rode this list.
 	t.Setenv("WARDYN_CREDENTIAL_REAUTH_TIMEOUT", "45s")
+	t.Setenv("WARDYN_GIT_APPROVAL_TIMEOUT", "10m")
 
 	env, _, err := proxyEnv(uuid.New(), runner.ProxyConfig{ControlPlaneURL: "http://wardynd:8080"}, runner.ProxyListenPort)
 	if err != nil {
@@ -45,6 +46,7 @@ func TestProxyEnv_CarriesTheOperatorKnobs(t *testing.T) {
 		"WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS": "pat:on",
 		"WARDYN_LLM_SCAN":                     "off",
 		"WARDYN_CREDENTIAL_REAUTH_TIMEOUT":    "45s",
+		"WARDYN_GIT_APPROVAL_TIMEOUT":         "10m",
 	} {
 		if got[name] != want {
 			t.Errorf("proxy container env %s = %q, want %q", name, got[name], want)

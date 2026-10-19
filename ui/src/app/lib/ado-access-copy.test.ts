@@ -8,6 +8,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { ADO_CAPABILITIES } from "./ado-capabilities";
 import { ADO_CAP_COPY } from "./workspace-providers-copy";
+import { ADO_ACCESS } from "./ado-access-copy";
 
 function repoRoot(): string {
   let dir = resolve(process.cwd());
@@ -56,5 +57,11 @@ describe("ADO capability copy — no branch policy Wardyn never read", () => {
     expect(labels).not.toBeNull();
     const all = [...Object.values(ADO_CAP_COPY).map((c) => c.consequence), labels![1]].join("\n");
     expect(all).not.toMatch(/no policy protects|protected branch|policy-protected|past a branch policy/i);
+  });
+});
+
+describe("ADO_ACCESS organisation hint canon (#2146)", () => {
+  it("names the organisations that refuse a capability others allow", () => {
+    expect(ADO_ACCESS.NOT_ALLOWED_FOR("beta")).toBe("Not allowed for beta.");
   });
 });

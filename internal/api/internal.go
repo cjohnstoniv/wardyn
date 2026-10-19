@@ -109,7 +109,7 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	if dl.Decision == egress.Deny && isPolicyDeny(dl.RuleSource) {
 		s.metrics.egressDenied()
 	}
-	s.countReauthTimeout(dl)
+	s.countReauthTimeout(r.Context(), dl)
 
 	// Optional outbound content-inspection summary rides the same decision. When
 	// present it becomes a SEPARATE, content-free llm.scan.* audit event so the

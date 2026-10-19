@@ -138,15 +138,16 @@ func resolveTLSPosture(dsn, tlsCert, tlsKey, listen string, tlsTerminated, allow
 //     non-terminal by a previous process (crash/restart) so it is not stranded
 //     RUNNING forever with a live sandbox and un-revoked credentials.
 //     Best-effort; a reconciliation error never blocks startup.
-func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Server, run runner.Runner, pool *pgxpool.Pool, st store.PG, idp identity.Provider, brk *broker.Broker, maskedRec audit.Recorder, recStore recording.Store, leader *db.SweeperLeader, ticks *sweephealth.Tracker) {
+func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Server, run runner.Runner, pool *pgxpool.Pool, st store.PG, idp identity.Provider, _ *broker.Broker, maskedRec audit.Recorder, recStore recording.Store, leader *db.SweeperLeader, ticks *sweephealth.Tracker) {
 	if leader != nil {
 		go goSafe("sweeper.leader", func() { leader.Run(rootCtx) })
 	}
 	// Every replica registers every sweep this install runs, whether or not it
 	// ever holds the sweeper lock, so a follower can see a stopped leader.
 	_, recSweepable := recStore.(recordingSweepable)
+	approvalExpiry := approvalExpirySweepInterval(*f.approvalExpiryInterval, *f.approvalExpiryAfter)
 	registerSweepHealth(ticks, sweepInstall{
-		runner: run != nil, autoStop: *f.autoStopInterval, approvalExpiry: *f.approvalExpiryInterval,
+		runner: run != nil, autoStop: *f.autoStopInterval, approvalExpiry: approvalExpiry,
 		recordingSweepable: recSweepable, recordingRetentionDays: *f.recordingRetention,
 		runOutputPersist: *f.runOutputPersist,
 		api:              srv.HealthSweeps(),
@@ -161,7 +162,10 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 		reaper := lifecycle.New(
 			lifecycleStore{pool: pool},
 			lifecycleStopper{
-				pool: pool, runner: run, identity: idp, broker: brk,
+				pool: pool, runner: run,
+				// The revocation half of the same cascade, threaded in for the
+				// same reason as cancelApprovals below.
+				revoke: srv.RevokeStoppedRun,
 				// The third terminal writer's approval cascade (V1-D1). srv owns the
 				// approvals service; the reaper owns the STOPPED transition. Threading
 				// the one method is smaller than giving the reaper its own approval
@@ -182,13 +186,13 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 		slog.Info("wardynd: groundtruth token rotator started", slog.String("file", gtFile))
 	}
 
-	if *f.approvalExpiryInterval > 0 {
+	if approvalExpiry > 0 {
 		leaderGo(rootCtx, leader, "approval.sweeper", func(ctx context.Context) {
 			// FIX #5: sweeper shares maskedRec so approval.expire events fan out to SIEM.
-			runApprovalSweeper(ctx, approvalStore{PG: store.NewPG(pool), rec: maskedRec}, *f.approvalExpiryInterval, *f.approvalExpiryAfter, srv, ticks)
+			runApprovalSweeper(ctx, approvalStore{PG: store.NewPG(pool), rec: maskedRec}, approvalExpiry, *f.approvalExpiryAfter, srv, ticks)
 		})
 		slog.Info("wardynd: approval expiry sweeper started",
-			slog.Duration("interval", *f.approvalExpiryInterval),
+			slog.Duration("interval", approvalExpiry),
 			slog.Duration("after", *f.approvalExpiryAfter),
 		)
 	}

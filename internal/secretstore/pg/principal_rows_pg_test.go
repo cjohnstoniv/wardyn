@@ -554,3 +554,35 @@ func TestPkVersionOf(t *testing.T) {
 		}
 	}
 }
+
+// A v3 row under a destroyed generation (restored after an erasure) is left by
+// SealToPrincipalKeys without minting a key for the erased owner, and is not
+// counted as left to move, before or after the owner signs in again (#2813).
+func TestSealToPrincipalKeys_LeavesARowUnderADestroyedGeneration(t *testing.T) {
+	pool := rekeyDatabase(t)
+	on := mixedStore(t, pool, mustIdentity(t), true, nil, false)
+	mustPut(t, on, "bob", "pk-1", "bob-v3")
+	var wrapped, ct []byte
+	if err := pool.QueryRow(t.Context(), `SELECT wrapped_dek, ciphertext FROM secrets WHERE owned_by='bob' AND name='pk-1'`).Scan(&wrapped, &ct); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := secretstore.EraseOwner(t.Context(), on, "bob"); err != nil {
+		t.Fatalf("EraseOwner: %v", err)
+	}
+	if _, err := pool.Exec(t.Context(), `INSERT INTO secrets (owned_by, name, enc_version, kek_id, wrapped_dek, ciphertext) VALUES ('bob', 'pk-1', 3, 'pk:v1', $1, $2)`, wrapped, ct); err != nil {
+		t.Fatal(err)
+	}
+	res, err := on.SealToPrincipalKeys(t.Context())
+	if err != nil || res.Moved != 0 || res.Remaining != 0 {
+		t.Fatalf("SealToPrincipalKeys over a row under a destroyed key = (%+v, %v); want nothing moved and none remaining", res, err)
+	}
+	if n := count(t, pool, `SELECT count(*) FROM principal_keys WHERE owner='bob' AND destroyed_at IS NULL`); n != 0 {
+		t.Fatalf("the erased owner holds %d live principal keys after the move; want 0", n)
+	}
+	// Signing in again makes a live generation; the restored row still has
+	// nothing to move into it.
+	mustPut(t, on, "bob", "pk-new", "bob-again")
+	if res, err = on.SealToPrincipalKeys(t.Context()); err != nil || res.Remaining != 0 {
+		t.Fatalf("SealToPrincipalKeys after a new sign-in = (%+v, %v); want none remaining", res, err)
+	}
+}

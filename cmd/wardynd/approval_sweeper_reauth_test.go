@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -223,5 +224,30 @@ func TestRunApprovalSweeper_ReportsNothingWhenNoReauthExpires(t *testing.T) {
 	runApprovalSweeper(ctx, st, 5*time.Millisecond, time.Hour, counter, nil)
 	if got := counter.total(); got != 0 {
 		t.Errorf("the sweep reported %d re-auth expiries with none present", got)
+	}
+}
+
+// A zero or negative WARDYN_APPROVAL_EXPIRY_AFTER used to put the sweep cutoff at
+// or past now, expiring every PENDING approval on the first tick. It now keeps the
+// sweeper off (with a boot warning), and the sandbox's ceiling stays the 24h default.
+func TestApprovalExpirySweepInterval_NonPositiveAgeKeepsTheSweeperOff(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		interval, after time.Duration
+		want            time.Duration
+		warns           bool
+	}{
+		{"zero age", 10 * time.Minute, 0, 0, true},
+		{"negative age", 10 * time.Minute, -24 * time.Hour, 0, true},
+		{"default", 10 * time.Minute, 24 * time.Hour, 10 * time.Minute, false},
+		{"interval off already", 0, 0, 0, false},
+	} {
+		buf := captureSlog(t)
+		if got := approvalExpirySweepInterval(tc.interval, tc.after); got != tc.want {
+			t.Errorf("%s: interval = %v, want %v", tc.name, got, tc.want)
+		}
+		if warned := strings.Contains(buf.String(), "WARDYN_APPROVAL_EXPIRY_AFTER"); warned != tc.warns {
+			t.Errorf("%s: warned = %v, want %v (log: %s)", tc.name, warned, tc.warns, buf.String())
+		}
 	}
 }

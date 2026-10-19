@@ -313,7 +313,7 @@ What the table admits, under a repository the grant's `repos` names (an absent `
   - **Dispatch.** For a policy stored before this rule existed, `confineGitBrokerEgress` denies the forge's `ssh.<forge>` endpoint alongside the HTTPS hosts above.
   - `dropBrokeredGrants` withholds that forge's `ssh_key` **and** `git_pat` grants from the sandbox env entirely.
   - The credential is never minted, not merely unable to reach its forge, logging an `slog` warning and a `run.ssh.drop` / `run.git_pat.drop` audit event so neither withholding is ever silent.
-  - **Mint.** `POST /api/v1/internal/credentials/mint` refuses either kind for a brokered forge before it opens the broker transaction (`brokeredForgeMintKind`, [`internal/api/internal.go`](../internal/api/internal.go)).
+  - **Mint.** `POST /api/v1/internal/credentials/mint` refuses either kind for a brokered forge before it opens the broker transaction (`brokeredForgeMintKind`, [`internal/api/internal_mint.go`](../internal/api/internal_mint.go)).
   - This is the seam that matters most for `git_pat`.
   - The proxy's own mint refusal (`isBrokeredGitGrant`) matches `github_token` grant ids only, and its `git_pat` refusal (`isBrokeredPATGrant`) applies only while the PAT broker is on.
   - So a caller that POSTs the mint route directly — rather than going through `wardyn-git-helper`, which every GitHub host on a brokered run already refuses — used to be answered with the PAT.
@@ -331,7 +331,7 @@ What the table admits, under a repository the grant's `repos` names (an absent `
 - An `ssh_key` or `git_pat` grant for a **different** host (`gitlab.com` or a GHES host, say, alongside a `github.com` `github_token`) is untouched by any of it.
 - Every mechanism keys on the same forge, and that non-GitHub lane is what `git_pat` is for.
 - (An `ssh_key` grant for an Azure DevOps host is dropped at dispatch with a warning, and a stored git token for one is read from the run owner's own row only.)
-- There the old shape still applies for `ssh_key`: the key is resident for the clone only.
+- There the old shape still applies for `ssh_key`: the key file is written for the clone and wiped after, and an approval-gated grant is delivered once ([CREDENTIALS.md](CREDENTIALS.md) bounds the other cases).
 - `agent-run` mints it, writes it `0400`, clones, then removes it (`shred -u` falling back to `rm -f`: a `0400` file is not writable, so the file is unlinked, not overwritten) and unsets `GIT_SSH_COMMAND` before exec'ing the agent.
 - It is a real narrowing and not a confinement, since the grant id rides the sandbox env (`WARDYN_SSH_GRANTS`).
 - An auto-mintable grant is re-mintable by design (`MintForGrant` — only `requires_approval: true` makes it single-use).
@@ -526,7 +526,7 @@ What the check does and does not settle:
 - The legacy `approved_egress` list is not read-only.
 - The hold-approval write-back and Promote no longer write here.
 - Both now land on the requirements contract instead, one destination for what used to be two.
-- But the record pane's own per-host **Approve** button, on a blocked or pending-approval host under "Off-policy attempts caught," still calls `PUT /workspaces/{id}/approved-egress` (`handleSetApprovedEgress`, [`internal/api/workspaces.go`](../internal/api/workspaces.go)) directly and appends the new host.
+- But the record pane's own per-host **Approve** button, on a blocked or pending-approval host under "Off-policy attempts caught," still calls `PUT /workspaces/{id}/approved-egress` (`handleSetApprovedEgress`, [`internal/api/workspaces_egress.go`](../internal/api/workspaces_egress.go)) directly and appends the new host.
 - That is a live write path this migration left untouched.
 - Whatever `approved_egress` already holds, from that button or from before this migration, is still unioned into a confined replay's allowlist.
 - An `egress:<host>` requirement row is kept safe by who may write it (the write-side authorization) and by its provenance (only `operator_set` rows are auto-added at launch), not by a clamp at fold time. With [`WARDYN_REQUIRE_OPERATOR_SET_EGRESS`](ENV.md#wardyn_require_operator_set_egress) set to `false`, the operator has chosen to drop the provenance gate, and no fold-time clamp replaces it.
@@ -738,7 +738,7 @@ What the check does and does not settle:
 
 - `host` + `key_secret_ref` required; reserved secret names refused for either ref.
 - `host` must be an SSH-over-443 provider Wardyn supports (`github.com`, `dev.azure.com`); a `dev.azure.com` grant is accepted but dropped at dispatch with a warning (Azure DevOps has no SSH lane from 0.8.2).
-- A **documented exception** to the no-resident-secret rule: the key lands as a 0400 file for the clone and is wiped right after —
+- A **documented exception** to the no-resident-secret rule: the key lands as a 0400 file for the clone and is wiped right after; an approval-gated grant is delivered once ([CREDENTIALS.md](CREDENTIALS.md) bounds the other cases) —
   - except for the same forge as a co-declared `github_token` grant, which this kind may not be combined with (see "The `ssh_key` and `git_pat` lanes are closed too").
 
 ### `env_secret`
@@ -834,7 +834,7 @@ What the check does and does not settle:
 **Provider admission is decided WITHOUT reading this policy.**
 
 - Since 0.7.2 the org's `site_config.workspace_providers.git` rows decide which clone URLs this deployment admits at all.
-- The check runs at run create over the RESOLVED spec ([`internal/api/runs.go:477-478`](../internal/api/runs.go)) — so it sees the repositories a hand-authored `inline_policy` asked for exactly as it sees a stored policy's.
+- The check runs at run create over the RESOLVED spec (`seedAuthorizedWorkspace`, [`internal/api/run_workspace_authorization.go`](../internal/api/run_workspace_authorization.go)) — so it sees the repositories a hand-authored `inline_policy` asked for exactly as it sees a stored policy's.
 - Neither can argue with it, because nothing in the spec is an input to the verdict: the only things it reads are the clone URL and the org's provider rows.
 - A repository whose host no enabled row admits is refused with a `422` for an OPERATOR, listing the allowed addresses (or naming the row that claims the host and refused anyway).
 - It is refused with a `403` for a MEMBER that names nothing but the fact — `GET /workspace-providers` is a security-tier door precisely because base URLs name corporate topology.
@@ -1187,7 +1187,8 @@ So an entry a pattern matches is judged one of two ways:
 
 - Operator-declared secret **names**, resolved against the at-rest secret store.
 - This is what you author — the storable form of the detection corpus.
-- A name is not sensitive the way a value is, so it round-trips freely through a stored policy, a read, or a proposal.
+- A name is not sensitive the way a value is, so it round-trips through a stored policy, a proposal and an operator's read.
+- A member's read of a policy strips these names (`redactSpecForUser`, [`internal/api/policies.go`](../internal/api/policies.go)).
 - A **reserved platform-internal name** (`wardyn-signing-key`, `wardyn-session-key`, the harness OAuth blobs, the resident AWS SigV4 secrets, every per-person model-provider credential `wardyn-provider-*`) is refused at write time and skipped at dispatch —
   - resolution puts the value in the proxy sidecar, so this field is a credential sink and takes the same reserved-name guard every other sink does.
 

@@ -450,8 +450,9 @@ describe("GitTab", () => {
   it("S.GIT_FOOTER renders once, as the plain note under the tab", () => {
     render(<Harness initial={[]} />);
     expect(
-      screen.getByText(/Only the GitHub App lane keeps its token outside the sandbox/),
+      screen.getByText(/The GitHub App lane, and a PAT while the PAT broker is on, keep the token at the proxy/),
     ).toBeInTheDocument();
+    expect(screen.getByText(/an approval-gated grant is delivered once\. Public/)).toBeInTheDocument();
   });
 
   it("Remove opens a confirm dialog naming the kind, and clears the row on confirm", async () => {
@@ -703,6 +704,18 @@ describe("GitTab", () => {
     expect(textarea).toHaveAttribute("aria-invalid", "false");
     expect(within(row).queryByText(PROVIDERS.BASE_URLS_REQUIRED)).not.toBeInTheDocument();
     expect(within(row).queryByText(PROVIDERS.LANES_NEED_ADDRESS)).not.toBeInTheDocument();
+  });
+
+  it("an off row names every other cause that withholds Save, not only 'no addresses' (#2520)", () => {
+    render(
+      <Harness
+        initial={[
+          { id: "ado", kind: "azure_devops", base_urls: ["https://dev.azure.com/"], disabled: true },
+        ]}
+      />,
+    );
+    const row = screen.getByTestId("provider-row-azure_devops");
+    expect(within(row).getByText(PROVIDERS.BASE_URL_INVALID)).toBeInTheDocument();
   });
 
   it("an off row with no addresses keeps the reason readable — its textarea is collapsed", () => {

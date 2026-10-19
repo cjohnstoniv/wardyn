@@ -28,6 +28,18 @@ import (
 // serving one database is the point. The masking registry, the cross-replica
 // locks and the sweeper leader election are what make that safe, and none of
 // them needs this lock.
+// claimSingleInstanceFor is claimSingleInstance for this process's flags.
+// -print-groundtruth-token mints a token and exits without serving; it is run with
+// `docker compose exec` beside the live daemon, so it must not take (and be refused)
+// the lock.
+func claimSingleInstanceFor(ctx context.Context, pool *pgxpool.Pool, f *bootFlags) (func(), error) {
+	if *f.printGroundtruthToken && !*f.ha {
+		slog.Info("wardynd: -print-groundtruth-token mints a token and exits; the single-instance lock is not taken")
+		return func() {}, nil
+	}
+	return claimSingleInstance(ctx, pool, *f.ha)
+}
+
 func claimSingleInstance(ctx context.Context, pool *pgxpool.Pool, ha bool) (func(), error) {
 	if ha {
 		slog.Info("wardynd: WARDYN_HA is set; the single-instance lock is not taken, and other replicas may serve this database")

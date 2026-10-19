@@ -17,6 +17,10 @@ env:
   # Dex static passwords carry no group or App Role claim, so the live role
   # walk's People-step case can only map an email.
   WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS: "true"
+  # The quickstart's map plus aws-sso: the "Sign in to AWS" login pod resolves its image from this map, and
+  # without the entry it asks for the published ghcr ref instead of the wardyn/agent-aws-sso:local that
+  # overlay.sh loads into the cluster. Keep the other two in step with deploy/kind/quickstart.sh.
+  WARDYN_AGENT_IMAGES: '{"base":"wardyn/agent-base:local","claude-code":"wardyn/agent-claude-code:local","aws-sso":"wardyn/agent-aws-sso:local"}'
 extraEnv:
   - name: WARDYN_OIDC_CLIENT_SECRET
     value: "wardyn-oidc-secret"   # demo literal — must match dex.yaml staticClients

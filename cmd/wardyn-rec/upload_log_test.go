@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/cjohnstoniv/wardyn/internal/recording"
 )
 
 // logPut is what the fake control plane saw of one PUT.
@@ -230,5 +232,29 @@ func TestRun_LogUploadKeepsAgentExit(t *testing.T) {
 	srv.Close() // the upload came from another process: wait for the handler before reading what it stored
 	if len(*puts) != 1 || !bytes.HasSuffix((*puts)[0].tail, []byte("agent-output\n")) {
 		t.Errorf("the log of a failed agent must still upload: %+v", *puts)
+	}
+}
+
+// A log goes up declared as a log, so the server need not guess from its first bytes; a cast does not.
+func TestUploadLog_DeclaresItsFormat(t *testing.T) {
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.Header.Get(recording.FormatHeader))
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	path := filepath.Join(t.TempDir(), "run.log")
+	if err := os.WriteFile(path, []byte(`{"version": 2}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := uploadLog(path, srv.URL, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := putCast([]byte("{}\n"), srv.URL, ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0] != recording.FormatLog || got[1] != "" {
+		t.Errorf("format headers = %q, want the log declared and the cast not", got)
 	}
 }

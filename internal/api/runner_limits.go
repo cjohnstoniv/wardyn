@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -20,83 +21,47 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// machineNameStore records the host name a runner reports on connect.
-type machineNameStore interface {
-	SetRunnerMachineName(ctx context.Context, id uuid.UUID, name string) error
+// runnerCapsStore records a session's caps report on the runner row, fenced to that session.
+type runnerCapsStore interface {
+	RecordRunnerCaps(ctx context.Context, id uuid.UUID, session string, r store.RunnerCapsReport, now time.Time) (bool, error)
 }
 
-// archStore records the CPU architecture a runner reports on connect.
-type archStore interface {
-	SetRunnerArch(ctx context.Context, id uuid.UUID, arch string) error
-}
+var _ runnerCapsStore = store.PG{}
 
-// retireCapStore records whether a runner's caps say it settles retire_run.
-type retireCapStore interface {
-	SetRunnerRetireCapable(ctx context.Context, id uuid.UUID, capable bool) error
-}
-
-var (
-	_ machineNameStore = store.PG{}
-	_ archStore        = store.PG{}
-	_ retireCapStore   = store.PG{}
-)
-
-// capsFromRunner keeps the machine name, the architecture and the retire capability a runner's caps event reports, the latest
-// winning. A name past types.MachineNameMax or with a control character, or an architecture that is not
-// types.ValidArch, is not stored, and neither it nor a failed write refuses the event: caps is
-// acknowledged before the runner may become ready, and both are labels, never something a run is
-// admitted by. A runner registered before it reported an architecture gets one on its next connect.
+// capsFromRunner keeps the version, the machine name, the architecture and the retire capability a
+// runner's caps event reports, the latest session winning: a superseded session's late caps write
+// nothing (store.PG.RecordRunnerCaps). A version or name past types.MachineNameMax or with a control
+// character, or an architecture that is not types.ValidArch, is not stored, and neither it nor a failed
+// write refuses the event: caps is acknowledged before the runner may become ready, and all are labels,
+// never something a run is admitted by. A runner registered before it reported an architecture gets
+// one on its next connect. Every caps event sets the retire capability: a runner without caps.retire
+// (older than 0.9.3) is never sent a retire_run. The runner.connect row Connected owed the session is
+// written last, so it carries the version.
 func (s *Server) capsFromRunner(ctx context.Context, runnerID uuid.UUID, session string, ev runnerwire.Event) {
 	var caps runnerwire.Caps
 	if runnerwire.Unmarshal(ev.Data, &caps) != nil {
 		return
 	}
+	r := store.RunnerCapsReport{Version: strings.TrimSpace(caps.Version), MachineName: strings.TrimSpace(caps.MachineName), Arch: caps.Arch, RetireCapable: caps.Retire}
+	if !types.ValidMachineName(r.Version) {
+		slog.WarnContext(ctx, "wardynd: runner reported an unusable version", slog.String("runner_id", runnerID.String()), slog.Int("bytes", len(r.Version)))
+		r.Version = ""
+	}
+	if !types.ValidMachineName(r.MachineName) {
+		slog.WarnContext(ctx, "wardynd: runner reported an unusable machine name", slog.String("runner_id", runnerID.String()), slog.Int("bytes", len(r.MachineName)))
+		r.MachineName = ""
+	}
+	if !types.ValidArch(r.Arch) {
+		slog.WarnContext(ctx, "wardynd: runner reported an unknown architecture", slog.String("runner_id", runnerID.String()), slog.String("arch", strings.ToValidUTF8(r.Arch, "?")))
+		r.Arch = ""
+	}
+	if cs, ok := s.cfg.Store.(runnerCapsStore); ok {
+		if _, err := cs.RecordRunnerCaps(ctx, runnerID, session, r, s.cfg.Now()); err != nil {
+			slog.WarnContext(ctx, "wardynd: record runner caps", slog.String("runner_id", runnerID.String()), slog.Any("err", err))
+		}
+	}
 	if rs, ok := s.cfg.Store.(store.RunnerStore); ok {
-		s.recordRunnerVersion(ctx, rs, runnerID, session, strings.TrimSpace(caps.Version))
-	}
-	if ms, ok := s.cfg.Store.(machineNameStore); ok {
-		s.recordMachineName(ctx, ms, runnerID, strings.TrimSpace(caps.MachineName))
-	}
-	if as, ok := s.cfg.Store.(archStore); ok && caps.Arch != "" {
-		if !types.ValidArch(caps.Arch) {
-			slog.WarnContext(ctx, "wardynd: runner reported an unknown architecture", slog.String("runner_id", runnerID.String()), slog.String("arch", strings.ToValidUTF8(caps.Arch, "?")))
-		} else if err := as.SetRunnerArch(ctx, runnerID, caps.Arch); err != nil {
-			slog.WarnContext(ctx, "wardynd: record runner arch", slog.String("runner_id", runnerID.String()), slog.Any("err", err))
-		}
-	}
-	// Every caps event sets it: a runner without caps.retire (older than
-	// 0.9.3) is never sent a retire_run.
-	if rs, ok := s.cfg.Store.(retireCapStore); ok {
-		if err := rs.SetRunnerRetireCapable(ctx, runnerID, caps.Retire); err != nil {
-			slog.WarnContext(ctx, "wardynd: record runner retire capability", slog.String("runner_id", runnerID.String()), slog.Any("err", err))
-		}
-	}
-}
-
-// recordRunnerVersion stamps the runner's session (last_seen_at) with the version it reported, then writes
-// the runner.connect row Connected owed that session, so the row carries that version. A version that is not bounded
-// printable text is not stored; neither it nor a failed write refuses the event.
-func (s *Server) recordRunnerVersion(ctx context.Context, st store.RunnerStore, runnerID uuid.UUID, session, version string) {
-	if !types.ValidMachineName(version) {
-		slog.WarnContext(ctx, "wardynd: runner reported an unusable version", slog.String("runner_id", runnerID.String()), slog.Int("bytes", len(version)))
-		version = ""
-	}
-	if err := st.TouchRunner(ctx, runnerID, version, s.cfg.Now()); err != nil {
-		slog.WarnContext(ctx, "wardynd: record runner version", slog.String("runner_id", runnerID.String()), slog.Any("err", err))
-	}
-	s.writeOwedRunnerConnect(ctx, st, runnerID, session, version)
-}
-
-func (s *Server) recordMachineName(ctx context.Context, ms machineNameStore, runnerID uuid.UUID, name string) {
-	if name == "" {
-		return
-	}
-	if !types.ValidMachineName(name) {
-		slog.WarnContext(ctx, "wardynd: runner reported an unusable machine name", slog.String("runner_id", runnerID.String()), slog.Int("bytes", len(name)))
-		return
-	}
-	if err := ms.SetRunnerMachineName(ctx, runnerID, name); err != nil {
-		slog.WarnContext(ctx, "wardynd: record runner machine name", slog.String("runner_id", runnerID.String()), slog.Any("err", err))
+		s.writeOwedRunnerConnect(ctx, rs, runnerID, session, r.Version)
 	}
 }
 

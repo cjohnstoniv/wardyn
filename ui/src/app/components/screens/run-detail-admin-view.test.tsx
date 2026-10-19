@@ -10,6 +10,7 @@
 // run-detail.test.tsx is at the size gate.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import type { ApprovalRequest, RunEnding } from "../../lib/types";
 
@@ -44,7 +45,7 @@ vi.mock("sonner", () => ({ toast: { warning: vi.fn(), error: vi.fn(), success: v
 import { RunDetailScreen } from "./run-detail";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { ModelAccessProvider } from "../wardyn/model-access-context";
-import { RUN } from "../wardyn/copy";
+import { RUN, SECURITY_ONLY_REASON } from "../wardyn/copy";
 import { MODEL_ACCESS_RUN_DOOR, REAUTH_ROW } from "../wardyn/model-access-copy";
 import { OPEN_IN_USER_VIEW } from "../wardyn/copy/console-view";
 import { MODEL_PROVIDERS, providerStatus } from "../../lib/test-fixtures";
@@ -137,6 +138,36 @@ describe("RunDetailScreen at /admin/runs/:id — the monitor (M-7)", () => {
     const block = await screen.findByTestId("run-failure-block");
     expect(within(block).getByRole("button", { name: MODEL_ACCESS_RUN_DOOR.SIGN_IN_ARIA })).toBeInTheDocument();
     expect(switchLink()).not.toBeInTheDocument();
+  });
+});
+
+// #2518: the run's Approvals tab offered the owner a disabled Approve/Deny and "Requires the admin or security
+// admin role" on a row nobody can decide. It holds the same door the strip and /approvals do.
+describe("RunDetailScreen Approvals tab — a held sign-in is a door, not a decision (#2518)", () => {
+  async function openApprovalsTab(path: string) {
+    listApprovalsMock.mockResolvedValue([heldReauth()]);
+    mount(path, RUN_ROW);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /approvals/i }));
+    return screen.findByTestId("approvals-tab-reauth");
+  }
+  const noPair = () => {
+    expect(screen.queryByRole("button", { name: /^approve$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^deny$/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(SECURITY_ONLY_REASON)).not.toBeInTheDocument();
+  };
+
+  it("the owner gets the sign-in button and no disabled pair", async () => {
+    const door = await openApprovalsTab("/runs/run-1");
+    expect(within(door).getByRole("button", { name: REAUTH_ROW.ariaLabel })).toBeInTheDocument();
+    noPair();
+  });
+
+  it("the admin's own run in the Admin view: the switch link, no sign-in, no pair", async () => {
+    const door = await openApprovalsTab("/admin/runs/run-1");
+    expect(within(door).queryByRole("button", { name: REAUTH_ROW.ariaLabel })).not.toBeInTheDocument();
+    expect(within(door).getByRole("button", { name: OPEN_IN_USER_VIEW })).toBeInTheDocument();
+    noPair();
   });
 });
 

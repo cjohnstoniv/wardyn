@@ -251,14 +251,12 @@ func (s *Server) loadMaskManifests(ctx context.Context) error {
 	if m == nil || s.cfg.Store == nil {
 		return nil
 	}
-	runs, err := s.cfg.Store.ListRuns(ctx)
+	runs, err := s.liveRuns(ctx)
 	if err != nil {
 		return err
 	}
 	for _, run := range runs {
-		if !isTerminalRunState(run.State) {
-			m.Covered(ctx, run.ID)
-		}
+		m.Covered(ctx, run.ID)
 	}
 	return nil
 }

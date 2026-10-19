@@ -499,7 +499,9 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 
 		droppedLane = s.dropBrokeredLanes(c, p, sandboxEnv)
 		droppedLane = append(droppedLane, dropGitHubDoor(c.deny, policy, p, sandboxEnv)...)
-		droppedLane = append(droppedLane, narrowCeilingBedrockLane(c, llm, mitmHosts, sandboxEnv)...)
+		lanes, lane := narrowCeilingBedrockLane(c, llm, mitmHosts, injections, sandboxEnv)
+		droppedLane = append(droppedLane, lanes...)
+		droppedInjection = append(droppedInjection, lane...)
 		slices.Sort(droppedLane)
 		// A component's header host the ceiling denies loses its interception
 		// entry with its injection rule (dropped above, and listed there): the
@@ -654,9 +656,15 @@ const bedrockCeilingLane = "bedrock"
 // doc). A run that asked for no model call, or that has another lane, still
 // launches; one that needed Bedrock meets the deny at the proxy with the
 // ordinary refusal, which is the same thing it already did for the bearer mode.
-func narrowCeilingBedrockLane(c dispatchCeiling, llm *llmTransport, mitmHosts *[]string, sandboxEnv map[string]string) []string {
+func narrowCeilingBedrockLane(c dispatchCeiling, llm *llmTransport, mitmHosts *[]string, injections *[]runner.InjectionGrant, sandboxEnv map[string]string) (lanes, droppedInjection []string) {
 	if llm == nil || !llm.bedrockReady || !ceilingDeniesAny(c.deny, llm.bedrock.egressHosts) {
-		return nil
+		return nil, nil
+	}
+	laneHosts := llm.bedrock.egressHosts // read before the lane is reset below
+	laneHost := func(h string) bool {
+		return slices.ContainsFunc(laneHosts, func(x string) bool {
+			return strings.EqualFold(componentMITMHost(x), componentMITMHost(h))
+		})
 	}
 	// By KEY, from the plan applyBedrockTransport actually wrote: deleting by an
 	// "AWS_" prefix would also take an env_secret grant's variable (resolved
@@ -668,17 +676,30 @@ func narrowCeilingBedrockLane(c dispatchCeiling, llm *llmTransport, mitmHosts *[
 	llm.bedrock = bedrockAuth{}
 	llm.bedrockReady = false
 	llm.injectBedrockBearer = false
-	// The captured-SSO lane is narrowed with its sibling, and it MUST be: its
-	// injection grant is authored AFTER this phase, so leaving the flag set
-	// would author a grant and a portal.sso MITM entry for a lane whose egress
-	// this ceiling just denied — a credential wired to a host the run cannot
-	// reach, and a MITM entry for it.
+	// The captured-SSO lane's grant is authored BEFORE this phase (resolveLLMInjections),
+	// so clearing the flag is not enough: its injection rule and portal.sso MITM entry
+	// are dropped below with the rest of the lane's own hosts.
 	llm.injectBedrockSSO = false
 	llm.secretEnvKeys = nil
+	// Only the lane's own hosts: the shared list also carries the AWS CLI row's portal
+	// entry, which the ceiling did not deny and whose injection rule stays.
 	if mitmHosts != nil {
-		*mitmHosts = nil
+		*mitmHosts = slices.DeleteFunc(*mitmHosts, func(entry string) bool {
+			return laneHost(strings.TrimPrefix(entry, "http://"))
+		})
 	}
-	return []string{bedrockCeilingLane}
+	if injections != nil {
+		kept := (*injections)[:0:0]
+		for _, in := range *injections {
+			if laneHost(in.Rule.Host) {
+				droppedInjection = append(droppedInjection, in.Rule.Host)
+				continue
+			}
+			kept = append(kept, in)
+		}
+		*injections = kept
+	}
+	return []string{bedrockCeilingLane}, droppedInjection
 }
 
 // nonNilStrings returns s, or an empty slice for nil, so it marshals as [].

@@ -109,6 +109,7 @@ export const CollapsibleCard = React.forwardRef<HTMLElement, CollapsibleCardProp
               </span>
               {summary && (
                 <span
+                  data-testid={testId ? `${testId}-summary` : undefined}
                   className={`block truncate text-body text-muted-foreground ${open ? "mt-0.5 leading-snug" : "leading-tight"}`}
                 >
                   {summary}

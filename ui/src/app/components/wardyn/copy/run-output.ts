@@ -58,6 +58,7 @@ export const RUN_OUTPUT = {
   interactiveLink: "Open the Recording tab →",
   notCapturedTitle: "Output isn't captured for Kubernetes runs yet",
   notCapturedDesc: "The run's recording has it.",
+  maskTitle: "Live output isn't shown on this server",
   maskUnavailable:
     "This server can't show the live output safely right now. It shows here once the run ends.",
 } as const;

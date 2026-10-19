@@ -393,6 +393,9 @@ func TestRelay_InjectionAndMintServeOnlyOwn(t *testing.T) {
 				if name == "injection" && (w.Code != http.StatusOK || !strings.Contains(w.Body.String(), served)) {
 					t.Errorf("injection of an own grant = %d %s, want it served with the stored key", w.Code, w.Body.String())
 				}
+				if name == "mint" && w.Code != http.StatusOK {
+					t.Errorf("mint of an own grant = %d %s, want 200", w.Code, w.Body.String())
+				}
 				continue
 			}
 			if w.Code != http.StatusForbidden || reasonOf(t, w) != tc.reason {

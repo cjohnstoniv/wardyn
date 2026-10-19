@@ -203,10 +203,11 @@ The console has no door for an AWS or Azure CLI component's sign-in yet. Tools a
 | Model providers a member may name | Narrows |
 | Git providers their work may come from | Narrows |
 | Stored policies a member may select | Narrows |
+| Organisation components a member may attach to a run | Narrows |
 | Whether they may add an **SSH key** or mint an **API token** at all (`feature`) | About the member rather than a run |
 
 - ([Capabilities: what one member, or one group, may do](../OPERATIONS.md#capabilities-what-one-member-or-one-group-may-do) has the kind table.)
-- Eight of the nine *narrow* — until you enforce one, members keep exactly the powers they had, and a deny bites even before you do.
+- Nine of the ten *narrow* — until you enforce one, members keep exactly the powers they had, and a deny bites even before you do.
 - Base images are the one that *widens*.
 
 A permission always bounds what the **member** chose and never what you pre-authorized.

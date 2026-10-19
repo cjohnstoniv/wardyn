@@ -145,6 +145,7 @@ case $? in
      ledger "not run" "label-gate-skipped rc=${rc}" ;;
 esac
 
+CHAIN_RC=0   # nonzero once any attempt ends in a failure; TAKE_OK is the only way out at 0
 while :; do
   attempt=$((attempt + 1))
   echo "=== take ${VIDEO} attempt ${attempt}: waiting for a live interop socket $(date +%T) ==="
@@ -166,7 +167,7 @@ while :; do
   MP4="$(ls -t "${OUT_DIR}"/wardyn-"${VIDEO}"-*.mp4 2>/dev/null | head -1)"
   [[ -n "${MP4}" && "$(stat -c %Y "${MP4}")" -ge "${t0}" ]] || MP4=""
   if [[ "${rc}" -eq 0 && -z "${MP4}" ]]; then
-    ledger "${rc}" "FAIL" "—"; echo "NO_MP4 ${VIDEO} — exit 0 but nothing new under ${OUT_DIR}"; break
+    ledger "${rc}" "FAIL" "—"; echo "NO_MP4 ${VIDEO} — exit 0 but nothing new under ${OUT_DIR}"; CHAIN_RC=1; break
   fi
 
   if [[ "${rc}" -eq 0 ]]; then
@@ -176,6 +177,7 @@ while :; do
     ledger "${rc}" "$([[ "${vrc}" -eq 0 ]] && echo PASS || echo FAIL)" "${MP4##*/}"
     [[ "${vrc}" -eq 0 ]] && { echo "TAKE_OK ${VIDEO} ${MP4}"; break; }
     echo "VERIFY_FAILED ${VIDEO} — the take recorded but does not prove what it claims"
+    CHAIN_RC=1
     break   # a verify failure is a CONTENT problem; re-shooting it blind just films it again
   fi
 
@@ -183,9 +185,10 @@ while :; do
   # The weekly model limit is unretryable — the next attempt burns a take slot
   # for nothing (episodes 06 and 07 were lost that way).
   if grep -qiE "weekly limit|quota" "${REPO_ROOT}"/ui/test-results/demo-video-"${VIDEO}"/pw/*/error-context.md 2>/dev/null; then
-    echo "QUOTA_PARKED=${VIDEO} — stop, this does not retry"; break
+    echo "QUOTA_PARKED=${VIDEO} — stop, this does not retry"; CHAIN_RC=1; break
   fi
-  [[ "${attempt}" -ge "${ATTEMPTS}" ]] && { echo "HALTED=${VIDEO} after ${attempt} attempts"; break; }
+  [[ "${attempt}" -ge "${ATTEMPTS}" ]] && { echo "HALTED=${VIDEO} after ${attempt} attempts"; CHAIN_RC=1; break; }
   sleep 20
 done
 echo "TAKE_CHAIN_DONE ${VIDEO} $(date +%T)"
+exit "${CHAIN_RC}"

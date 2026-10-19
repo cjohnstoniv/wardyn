@@ -23,7 +23,7 @@ import { createRenderer, type RendererControl, type RendererPref, type RendererS
 import { createCopyGate, isMacPlatform, type CopyGate, type CopyOffer, type GateTerm } from "./attach-terminal-clipboard";
 import { runs } from "../lib/api/runs";
 import { wsURL } from "../lib/base-path";
-import { HttpError } from "../lib/api/core";
+import { HttpError, TIMEOUT_STATUS } from "../lib/api/core";
 import { sessionExpiry } from "../lib/api/session-activity";
 import { ATTACH_CAP_REASON, entryErrorMessage } from "../lib/run-entry";
 import { attachWheelCoalescer } from "./attach-terminal-wheel";
@@ -38,6 +38,11 @@ export type ConnState = "connecting" | "open" | "reconnecting" | "closed" | "err
 // 1000, e.g. component unmount or the run finishing) is intentional and is never
 // retried.
 export const MAX_RECONNECT_ATTEMPTS = 4;
+
+// Only a refusal that will not change ends a ticket mint for good (owner-only, the session cap, signed out, not
+// found). No answer at all, a 5xx and a 429 are the network or the daemon coming back.
+const mintMayRecover = (e: unknown): boolean =>
+  !(e instanceof HttpError) || e.status === TIMEOUT_STATUS || e.status === 429 || e.status >= 500;
 const RECONNECT_BASE_DELAY_MS = 600;
 const RECONNECT_MAX_DELAY_MS = 5000;
 
@@ -110,6 +115,8 @@ export interface UseAttachSessionArgs {
   mayEnter: boolean;
   /** What to say when it is false. */
   refusal: string;
+  /** Who created the run: a service run's sponsor arm is the one that answers a 404 run_not_found. */
+  createdBy?: string;
   tokenOnlyMode: boolean;
   containerRef: React.RefObject<HTMLDivElement | null>;
   panelRef: React.RefObject<HTMLDivElement | null>;
@@ -152,6 +159,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
     operatorResolved,
     mayEnter,
     refusal,
+    createdBy,
     tokenOnlyMode,
     containerRef,
     panelRef,
@@ -379,9 +387,15 @@ export function useAttachSession(args: UseAttachSessionArgs) {
           })
           .catch((e: unknown) => {
             if (disposed || g !== gen) return;
+            // A mint that failed for want of a network or a healthy daemon is the same drop a socket close is:
+            // spend the reconnect budget instead of ending on a final error with no way back but a reload.
+            if (mintMayRecover(e)) {
+              retry();
+              return;
+            }
             setConnState("error");
             setErrorMsg(
-              entryErrorMessage(e, (err) => `Could not mint an attach ticket: ${err instanceof Error ? err.message : String(err)}`),
+              entryErrorMessage(e, (err) => `Could not mint an attach ticket: ${err instanceof Error ? err.message : String(err)}`, { created_by: createdBy }),
             );
             onCloseRef.current?.();
           });
@@ -389,6 +403,37 @@ export function useAttachSession(args: UseAttachSessionArgs) {
       }
       const sz = connectSize();
       openSocket(buildWsUrl(runId, undefined, sz.cols, sz.rows), true);
+    };
+
+    // Unexpected drop: re-attach to the persistent tmux session with backoff.
+    const retry = () => {
+      if (disposed) return;
+      if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+        // Drop the stale attach mode, exactly as the taken-over branch does.
+        // Whether we come back as writer or observer is the SERVER's call,
+        // announced by the next attach-mode frame — carrying the old answer
+        // across the gap asserts "you are driving" for a whole round trip on
+        // a socket that currently holds nothing. That is inferring mode from
+        // silence, which this protocol exists to avoid.
+        setMode(null);
+        reconnectAttempts += 1;
+        const delay = Math.min(
+          RECONNECT_MAX_DELAY_MS,
+          RECONNECT_BASE_DELAY_MS * 2 ** (reconnectAttempts - 1),
+        );
+        setConnState("reconnecting");
+        // #216 — was a writeln; TerminalConnectionStatus below the grid
+        // renders the same count, outside the buffer.
+        setReconnectAttempt(reconnectAttempts);
+        reconnectTimer = setTimeout(connect, delay);
+        return;
+      }
+      // Budget exhausted: give up and surface the closed state.
+      // #216 — was a writeln; TerminalConnectionStatus below now carries it,
+      // with Reconnect, instead of scrolling out of view.
+      setReconnectExhausted(true);
+      setConnState("closed");
+      onCloseRef.current?.();
     };
 
     const openSocket = (url: string, direct = false) => {
@@ -498,37 +543,6 @@ export function useAttachSession(args: UseAttachSessionArgs) {
         } catch {
           /* not JSON — nothing to do, same as before */
         }
-      };
-
-      // Unexpected drop: re-attach to the persistent tmux session with backoff.
-      const retry = () => {
-        if (disposed) return;
-        if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-          // Drop the stale attach mode, exactly as the taken-over branch does.
-          // Whether we come back as writer or observer is the SERVER's call,
-          // announced by the next attach-mode frame — carrying the old answer
-          // across the gap asserts "you are driving" for a whole round trip on
-          // a socket that currently holds nothing. That is inferring mode from
-          // silence, which this protocol exists to avoid.
-          setMode(null);
-          reconnectAttempts += 1;
-          const delay = Math.min(
-            RECONNECT_MAX_DELAY_MS,
-            RECONNECT_BASE_DELAY_MS * 2 ** (reconnectAttempts - 1),
-          );
-          setConnState("reconnecting");
-          // #216 — was a writeln; TerminalConnectionStatus below the grid
-          // renders the same count, outside the buffer.
-          setReconnectAttempt(reconnectAttempts);
-          reconnectTimer = setTimeout(connect, delay);
-          return;
-        }
-        // Budget exhausted: give up and surface the closed state.
-        // #216 — was a writeln; TerminalConnectionStatus below now carries it,
-        // with Reconnect, instead of scrolling out of view.
-        setReconnectExhausted(true);
-        setConnState("closed");
-        onCloseRef.current?.();
       };
 
       ws.onclose = (ev) => {
@@ -814,7 +828,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
     // terminal down. operator, operatorResolved and signedOut are read
     // through refs; signedOut acts through suspendRef below.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- refs and setters are stable identities (useRef/useState in the caller)
-  }, [runId, tokenOnlyMode, refit, mayEnter, refusal]);
+  }, [runId, tokenOnlyMode, refit, mayEnter, refusal, createdBy]);
 
   // Declared after the effect above, so on mount it finds suspendRef already
   // set to the state that effect started in, and does nothing.

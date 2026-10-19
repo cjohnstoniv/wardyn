@@ -45,6 +45,16 @@ import (
 // The wrapped cause names the field an admin has to fix.
 var errDriveUnmountable = errors.New("drive_unmountable")
 
+// errDriveSubjectUnsupported is errDriveUnmountable for a subject no home is
+// derived from (types.DriveSubjectFoldsOntoASCII): every errDriveUnmountable
+// answer still applies, and the launch and preview doors name it with
+// driveRefusalSubjectUnsupported.
+var errDriveSubjectUnsupported = fmt.Errorf("%w", errDriveUnmountable)
+
+// driveSubjectUnsupportedMsg is the member sentence for errDriveSubjectUnsupported.
+const driveSubjectUnsupportedMsg = "drive: your sign-in name contains a character this deployment cannot name a drive directory from — " +
+	"ask an admin to set your directory name"
+
 // errDrivesDisabled is the ORG SWITCH (storage.user_drive.disabled) reaching the
 // resolver, so the three surfaces a drive is answered on cannot disagree about
 // whether this deployment offers drives at all.
@@ -110,6 +120,8 @@ func driveUnavailableReason(err error) string {
 		return driveUnavailableGroups
 	case errors.Is(err, errUserTypeUnknown):
 		return driveUnavailableUserType
+	case errors.Is(err, errDriveSubjectUnsupported):
+		return driveRefusalSubjectUnsupported
 	case errors.Is(err, errDriveUnmountable):
 		return driveUnavailableUnmountable
 	default:
@@ -182,6 +194,9 @@ func writeDriveError(w http.ResponseWriter, r *http.Request, err error) {
 		writeErrorReason(w, http.StatusForbidden, reasonGroupsSnapshotStale, groupsSnapshotStaleMsg)
 	case errors.Is(err, errUserTypeUnknown):
 		writeErrorReason(w, http.StatusForbidden, driveUnavailableUserType, userTypeUnknownMsg)
+	case errors.Is(err, errDriveSubjectUnsupported):
+		writeErrorReason(w, http.StatusUnprocessableEntity, driveRefusalSubjectUnsupported,
+			strings.TrimPrefix(err.Error(), errDriveUnmountable.Error()+": "))
 	case errors.Is(err, errDriveUnmountable):
 		// The sentinel's own name is stripped: what is left is the frozen
 		// MEMBER sentence (docs/design/user-drives-prompt.md's DRIVE_MEMBER
@@ -572,6 +587,13 @@ func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
 		override = g.HomeOverride
 	}
 	subject := driveHomeSubject(d.HomeTemplate, users)
+	// An admin's override names the home without the subject; a derived home needs a subject that
+	// cannot fold onto another one.
+	if strings.TrimSpace(override) == "" && types.DriveSubjectFoldsOntoASCII(d.HomeTemplate, subject) {
+		slog.Warn("wardynd: user drive: no home is derived from this principal's subject; a home override names one",
+			slog.String("drive", d.Name), slog.String("home_template", string(d.HomeTemplate)))
+		return nil, fmt.Errorf("%w: %s", errDriveSubjectUnsupported, driveSubjectUnsupportedMsg)
+	}
 	home, err := types.DriveHomeName(*d, subject, override)
 	if err != nil {
 		// The BODY is the frozen member sentence and NOTHING ELSE. What this
@@ -597,7 +619,7 @@ func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
 			slog.String("drive", d.Name), slog.String("backend", string(d.Backend)),
 			slog.String("home_template", string(d.HomeTemplate)),
 			slog.Bool("home_override_set", strings.TrimSpace(override) != ""),
-			slog.String("err", err.Error()))
+			slog.String("failure", driveHomeFailureClass(*d, subject, override)))
 		// Filed, not fixed here — the sentence blames the member for an admin's
 		// value. When an override is set it is the ONLY thing that can have
 		// failed (see the short-circuit above), yet this interpolates
@@ -641,6 +663,22 @@ func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
 	// it stamps it on were decided by one claim.
 	resolved.SubjectHash = types.DriveSubjectHash(subject)
 	return resolved, nil
+}
+
+// driveHomeFailureClass names why types.DriveHomeName refused, without the
+// error text, which embeds the subject, the derived name or the override.
+func driveHomeFailureClass(d types.UserDrive, subject, override string) string {
+	switch {
+	case strings.TrimSpace(override) != "":
+		return "override_invalid"
+	case strings.TrimSpace(subject) == "":
+		return "no_subject"
+	case d.HomeTemplate != types.HomeTemplateHash && d.HomeTemplate != "" && !d.HomeTemplate.Valid():
+		return "unknown_template"
+	case d.HomeTemplate == types.HomeTemplateEmailLocal && !strings.Contains(subject, "@"):
+		return "no_email_claim"
+	}
+	return "derived_invalid"
 }
 
 // driveHomeSubject picks WHICH of the caller's identities the drive's home

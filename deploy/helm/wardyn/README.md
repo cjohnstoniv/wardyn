@@ -54,9 +54,10 @@ Wardyn is up.
 
 ## Prerequisites
 
-Platform requirements, in one breath: **Kubernetes 1.20+, Helm 3, a NetworkPolicy-enforcing CNI, and Postgres 13+.** Everything else the control plane needs (ServiceAccount, namespaced RBAC, NetworkPolicies, Secrets wiring) is rendered by this chart. In detail:
+Platform requirements, in one breath: **Kubernetes 1.20+ (1.25+ with `k8s.enabled`), Helm 3, a NetworkPolicy-enforcing CNI, and Postgres 13+.** Everything else the control plane needs (ServiceAccount, namespaced RBAC, NetworkPolicies, Secrets wiring) is rendered by this chart. In detail:
 
 - **Kubernetes 1.20+** and **Helm 3**.
+  - With `k8s.enabled` the floor is **1.25+**: exec and attach add an ephemeral container (`UpdateEphemeralContainers`), which is GA from 1.25.
 - **A CNI that enforces NetworkPolicy** (Calico, Cilium, ...).
   - The chart renders portable `networking.k8s.io/v1` policies — no specific CNI required — but enforcement is load-bearing:
     - with `k8s.enabled`, a boot-time egress canary verifies it and refuses to start the substrate on a non-enforcing CNI
@@ -84,7 +85,7 @@ docker build -f deploy/compose/Dockerfile.wardynd -t "$REGISTRY/wardynd:$TAG" .
 docker push "$REGISTRY/wardynd:$TAG"
 ```
 
-- [`Dockerfile.wardynd`](../../compose/Dockerfile.wardynd) is the same build the compose stack uses — it builds wardynd with `-tags docker` onto `distroless:nonroot` (uid 65532), which is what this chart's `podSecurityContext` already assumes.
+- [`Dockerfile.wardynd`](../../compose/Dockerfile.wardynd) is the same build the compose stack uses — it builds wardynd with `-tags docker,k8s` (`GO_BUILD_TAGS`; `--build-arg GO_BUILD_TAGS=docker` is the docker-only override) onto `distroless:nonroot` (uid 65532), which is what this chart's `podSecurityContext` already assumes.
 - **`k8s.enabled` also needs `wardyn-proxy` built and pushed** — the chart refuses to render without `k8s.proxyImage` set (see below), and the quickstart a few sections down assumes `$REGISTRY/wardyn-proxy:$TAG` already exists:
 
 ```bash
@@ -603,7 +604,7 @@ helm upgrade --install wardyn ./deploy/helm/wardyn -n wardyn \
 ## Control-plane to proxy TLS
 
 - Every run's proxy resolves credential values from wardynd, so that hop is TLS.
-- The chart renders `WARDYN_CONTROL_PLANE_URL` as `https://<release>.<namespace>.svc.cluster.local:<service.internalPort>` and passes `-internal-listen=:<service.internalPort>` (default 8443).
+- The chart renders `WARDYN_CONTROL_PLANE_URL` as `https://<release>.<namespace>.svc.<k8s.clusterDomain>:<service.internalPort>` (`k8s.clusterDomain` defaults to `cluster.local`) and passes `-internal-listen=:<service.internalPort>` (default 8443).
 - The certificate comes from wardynd's **own** internal CA, minted on first boot into its secret store (age-encrypted in Postgres, beside the signing key) and kept across restarts and upgrades —
   - so there is no CA Secret, no cert-manager dependency and nothing to rotate by hand, and a GitOps render (`helm template`, Argo CD, Flux) cannot churn it the way a chart-generated certificate would.
 - Each proxy gets the CA certificate in its sealed per-run Secret and trusts it alone.
@@ -963,11 +964,10 @@ spec:
 - Runs still have to declare `ui_apps` in policy ([docs/POLICIES.md](../../../docs/POLICIES.md)) and run an image that ships the matching `/usr/local/bin/wardyn-ui-<name>` launcher — enabling the gateway on its own opens nothing.
 
 > [!NOTE]
-> **Published from the NEXT tagged release, not before.**
-> [`release.yml`](../../../.github/workflows/release.yml)'s publish matrix now includes `agent-vscode` and `agent-novnc` (`ghcr.io/cjohnstoniv/agent-vscode`, `ghcr.io/cjohnstoniv/agent-novnc`, #141) — both build `FROM` the `agent-base` image that same run just pushed, never from the unpublished `agent-claude-code`.
+> **Published with every release since 0.8.0.**
+> [`release.yml`'s](../../../.github/workflows/release.yml) publish matrix includes `agent-vscode` and `agent-novnc` (`ghcr.io/cjohnstoniv/agent-vscode`, `ghcr.io/cjohnstoniv/agent-novnc`, #141) — both build `FROM` the `agent-base` image that same run just pushed, never from the unpublished `agent-claude-code`.
 
-- Until the next `vX.Y.Z` tag actually runs that workflow, though, no digest exists at either ref, so enabling `uiSandbox` on a cluster that pulls only published images still opens a gateway with nothing to serve.
-- Until then, build the UI image yourself and push it to a registry your nodes can pull, and pin it in `WARDYN_AGENT_IMAGES` or per-run.
+- To run your own build instead, push the UI image to a registry your nodes can pull and pin it in `WARDYN_AGENT_IMAGES` or per-run.
 
 ### What is actually proven on Kubernetes
 
@@ -1044,6 +1044,9 @@ spec:
     - so there is no HA reason to force the unbounded-by-default `pg` store on every install.
   - Without the pin, wardynd's own process default (`pg`) would win instead, ignoring `WARDYN_RECORDING_DIR` and persisting every PTY asciicast into the control-plane database with `WARDYN_RECORDING_RETENTION_DAYS` defaulting to keep-forever.
   - An operator who wants that anyway can opt in with one key: `env.WARDYN_RECORDING_STORE=pg` (leave `persistence` off — the `pg` store needs no PVC).
+  - The `<fullname>-data` claim has `helm.sh/resource-policy: keep`: turning `persistence` off (as HA requires) or `helm uninstall` keeps it and its recordings.
+    - Delete it deliberately: `kubectl delete pvc <fullname>-data`.
+    - A claim made before 0.9.4 lacks the annotation: run `kubectl annotate pvc <fullname>-data helm.sh/resource-policy=keep` before turning `persistence` off.
 - `networkPolicy.*`: default-deny policy knobs (Postgres port, ingress sources, extra egress)
 - `k8s.*`: the Kubernetes runner substrate, off by default — see [Kubernetes runner substrate](#kubernetes-runner-substrate-k8senabled) above.
 - `drives.enabled`: adds `persistentvolumeclaims: get, create` to the k8s-runner Role so runs can mount per-person storage, off by default — see [User drives](#user-drives-drivesenabled) above.
@@ -1059,6 +1062,7 @@ spec:
 - `ha.enabled`: **high availability.**
   - Runs two or more replicas so that one node failing does not stop the control plane.
   - Sets `WARDYN_HA=true`, lifts the `replicas > 1` refusal, adds a PodDisruptionBudget (`minAvailable: 1`) and a preferred pod anti-affinity across nodes (an `affinity.podAntiAffinity` of your own replaces it), and keeps the audit spool on the per-pod `/tmp` emptyDir.
+  - The PodDisruptionBudget renders only at two or more replicas, since one pod would block every node drain.
   - Default `false`.
   - It replaces `allowMultiReplica`, a documented clean break: a values file that still sets `allowMultiReplica=true` is refused with a pointer here, and wardynd refuses the `-allow-multi-instance` flag with a pointer to `WARDYN_HA`.
   - The chart refuses to render HA unless `WARDYN_RECORDING_STORE` is `pg` or `off` (read from both `env` and `extraEnv`;

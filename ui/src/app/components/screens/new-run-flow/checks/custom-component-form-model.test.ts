@@ -97,13 +97,18 @@ describe("validateDraft", () => {
   });
 
   describe("environment variable and file delivery", () => {
-    it.each(["PATH", "HOME", "NODE_OPTIONS", "LD_PRELOAD", "GIT_CONFIG_COUNT", "CLAUDE_CODE_X", "HTTPS_PROXY"])(
+    it.each(["PATH", "HOME", "NODE_OPTIONS", "LD_PRELOAD", "GIT_CONFIG_COUNT", "CLAUDE_CODE_X", "HTTPS_PROXY", "SHELLOPTS", "PS4", "GIT_EXTERNAL_DIFF", "GIT_ASKPASS", "SSH_ASKPASS", "JAVA_TOOL_OPTIONS"])(
       "refuses the reserved variable %s",
       (v) => {
         const s = { ...blankSecret(), secret_name: "k", mode: "env" as const, var: v };
         expect(validateDraft(base({ secrets: [s] }), OPTS)[secretField(s, "var")]).toMatch(/reserved/);
       },
     );
+
+    it("accepts EDITOR, a person's own preference", () => {
+      const s = { ...blankSecret(), secret_name: "k", mode: "env" as const, var: "EDITOR" };
+      expect(validateDraft(base({ secrets: [s] }), OPTS)[secretField(s, "var")]).toBeUndefined();
+    });
 
     it("refuses WARDYN_*, a lower-case name and an empty one, each with its own sentence", () => {
       const at = (v: string) => {

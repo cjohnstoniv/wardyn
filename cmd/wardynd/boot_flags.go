@@ -506,7 +506,7 @@ func parseBootFlags() *bootFlags {
 		autoStopInterval: flagDuration("autostop-interval", "WARDYN_AUTOSTOP_INTERVAL", time.Minute, "how often the lifecycle reaper scans for idle runs (duration; 0 disables)"),
 
 		approvalExpiryInterval: flagDuration("approval-expiry-interval", "WARDYN_APPROVAL_EXPIRY_INTERVAL", 10*time.Minute, "how often to sweep stale PENDING approvals (duration; 0 disables)"),
-		approvalExpiryAfter:    flagDuration("approval-expiry-after", "WARDYN_APPROVAL_EXPIRY_AFTER", 24*time.Hour, "PENDING approvals older than this transition to EXPIRED (duration)"),
+		approvalExpiryAfter:    flagDuration("approval-expiry-after", "WARDYN_APPROVAL_EXPIRY_AFTER", 24*time.Hour, "PENDING approvals older than this transition to EXPIRED (duration; 0 or negative turns the sweeper off, with a boot warning)"),
 		endedRunGrace:          flagDuration("ended-run-grace", "WARDYN_ENDED_RUN_GRACE", 7*24*time.Hour, "how long a run past its end keeps its files, stopped with no network and no broker credentials, before it is torn down (duration; 0 tears it down at its end)"),
 		// A maximum GAP between two IDENTICAL consecutive auth.fail rows, not a
 		// cap on how long a streak may run: the flood this bounds was one row a
@@ -526,14 +526,11 @@ func parseBootFlags() *bootFlags {
 		scanAIAdvisor:   flagBool("scan-ai-advisor", "WARDYN_SCAN_AI_ADVISOR", false, "enable the advisory AI workspace-scan fallback that gap-fills empty profile fields when the deterministic scanner is unsure; advisory-only and fail-open. Requires a resident claude CLI on the host PATH (default false, deterministic-only)"),
 		// #12: the SAME provenance gate applyWorkspaceRequirements already
 		// applies to a scan_seeded SECRET requirement (never auto-grant from
-		// untrusted repo content), now optionally applied to a scan_seeded
-		// EGRESS requirement too. Default OFF: today every scan-seeded egress
-		// host a workspace scan finds is auto-added at launch regardless of
-		// provenance, and flipping that off by default would silently narrow
-		// egress for every existing workspace on upgrade. An operator in a
-		// higher-trust posture (repo content is reviewed, or the exfil risk
-		// inline_policy.go's filterUserGrants comment names matters more than
-		// the convenience) opts in here.
+		// untrusted repo content), applied to a scan_seeded EGRESS requirement
+		// too. Default ON since 0.7: a scan-seeded egress host is skipped at
+		// launch until an operator sets it. An operator who accepts the exfil
+		// risk inline_policy.go's filterUserGrants comment names, for the
+		// convenience of auto-adding what a scan finds, opts out here.
 		requireOpSetEgress: flagBool("require-operator-set-egress", "WARDYN_REQUIRE_OPERATOR_SET_EGRESS", true, "require a workspace egress requirement's provenance to be operator_set before it is auto-added at launch; a scan_seeded egress host is skipped instead"),
 		gitPATBroker:       flagEnv("git-pat-broker", "WARDYN_GIT_PAT_BROKER", "on", `never-resident git_pat lane: "on" mints a non-GitHub forge's PAT proxy-side so it never enters the sandbox; "off" mints it into the sandbox process instead, for a forge that misbehaves under the broker's rewrite`),
 

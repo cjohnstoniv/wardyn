@@ -115,6 +115,10 @@ func TestDialHint_RefusedVsAPI(t *testing.T) {
 	if hint := dialHint(&sdk.APIError{Status: 401, Body: `{"error":"missing bearer token"}`}); !strings.Contains(hint, "WARDYN_ADMIN_TOKEN") {
 		t.Errorf("dialHint(APIError 401) = %q, want the --token/WARDYN_ADMIN_TOKEN hint", hint)
 	}
+	// No `wardyn setup` subcommand prints a token: the hint names only where the compose token is.
+	if hint := dialHint(&sdk.APIError{Status: 401}); strings.Contains(hint, "wardyn setup") || !strings.Contains(hint, "deploy/compose/README.md") {
+		t.Errorf("dialHint(APIError 401) = %q, want deploy/compose/README.md and no `wardyn setup`", hint)
+	}
 	if hint := dialHint(fmt.Errorf("list: %w", &sdk.APIError{Status: 401})); !strings.Contains(hint, "WARDYN_ADMIN_TOKEN") {
 		t.Errorf("dialHint(wrapped 401) = %q, want the token hint via errors.As", hint)
 	}

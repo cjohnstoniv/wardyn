@@ -287,14 +287,29 @@ func TestPG_ConcurrentGraphWritesNeverMakeACycleOrADepthFourChain(t *testing.T) 
 			{c.ID, c.Name, b.ID}, {d.ID, d.Name, c.ID},
 		}
 		var wg sync.WaitGroup
-		for _, w := range writes {
+		codes := make([]int, len(writes))
+		for i, w := range writes {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				e.put(w.id, `{"name":"`+w.name+`","base_profile_id":"`+w.base.String()+`","overlay":{}}`)
+				codes[i] = e.put(w.id, `{"name":"`+w.name+`","base_profile_id":"`+w.base.String()+`","overlay":{}}`).code
 			}()
 		}
 		wg.Wait()
+		// Each writer lands or is refused as a client error; a 5xx (a lock timeout, say) is neither,
+		// and with every writer failing the graph checks below would hold on the untouched rows.
+		landed := 0
+		for i, code := range codes {
+			switch {
+			case code == http.StatusOK:
+				landed++
+			case code < 400 || code >= 500:
+				t.Fatalf("round %d: concurrent write of %s answered %d, want 200 or a 4xx refusal", round, writes[i].name, code)
+			}
+		}
+		if landed == 0 {
+			t.Fatalf("round %d: no concurrent write landed (%v): the race proved nothing", round, codes)
+		}
 		all, err := e.pg.ListGovernanceProfiles(e.ctx)
 		if err != nil {
 			t.Fatal(err)
@@ -368,7 +383,7 @@ func TestPG_AuditRecordsTheEffectiveAllowAll(t *testing.T) {
 	}
 }
 
-// TestPG_GovernanceListShowsTheChainToAdminsOnly: GET /governance carries effective, with the base-level
+// TestPG_GovernanceListShowsEffective: GET /governance carries effective, with the base-level
 // warnings and the reason a broken chain has no content.
 func TestPG_GovernanceListShowsEffective(t *testing.T) {
 	e := newComposedWriteEnv(t)

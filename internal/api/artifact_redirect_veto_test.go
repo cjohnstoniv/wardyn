@@ -5,11 +5,14 @@ package api
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -202,5 +205,37 @@ func TestPlanArtifactRedirect_SecondPortOfATokenHostIsAudited(t *testing.T) {
 				t.Errorf("denied rows = %d, want a row=%v", denied, tc.wantRow)
 			}
 		})
+	}
+}
+
+// listFailSecrets is a secret store whose List fails, as a transient backend
+// error would.
+type listFailSecrets struct{ secretstore.Store }
+
+func (listFailSecrets) List(context.Context) ([]string, error) {
+	return nil, errors.New("backend unavailable")
+}
+
+// A transient failure listing the secret store must not be audited as a missing
+// secret (#2777): the denied row says the store could not be listed, and the run
+// still degrades to redirect-only.
+func TestPlanArtifactRedirect_SecretListFailureIsNotAMissingSecret(t *testing.T) {
+	s, rec := newVetoRedirectServer("corp-token")
+	s.cfg.Secrets = listFailSecrets{Store: s.cfg.Secrets}
+	sc := types.SiteConfig{EgressRedirects: []types.EgressRedirect{
+		{From: "registry.example.com", To: "mirror.corp.example", TokenSecretRef: "corp-token"},
+	}}
+	plan := s.planArtifactRedirect(context.Background(), types.AgentRun{ID: uuid.New()}, sc, []string{"registry.example.com"}, nil)
+	if len(plan.injections) != 0 {
+		t.Fatalf("no token may inject when the store cannot be listed, got %+v", plan.injections)
+	}
+	var detail string
+	for _, ev := range rec.snapshot() {
+		if ev.Action == "run.artifact.redirect" && ev.Outcome == "denied" {
+			detail = string(ev.Data)
+		}
+	}
+	if !strings.Contains(detail, "could not be listed") || strings.Contains(detail, "not found") {
+		t.Fatalf("denied row must name the list failure, not a missing secret; got %q", detail)
 	}
 }

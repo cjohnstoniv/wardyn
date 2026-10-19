@@ -422,7 +422,9 @@ func (f *forgeRepo) get(ctx context.Context, path string, v any) (int, error) {
 	}
 	req.Header.Set("Authorization", "Bearer "+f.tok)
 	req.Header.Set("Accept", "application/vnd.github+json")
-	resp, err := f.p.transport.RoundTrip(req)
+	// roundTripUpstream, not the transport: the forge host may speak HTTP/2
+	// unasked, and a bodyless GET is always resendable over the fallback.
+	resp, err := f.p.roundTripUpstream(req)
 	if err != nil {
 		return 0, err
 	}

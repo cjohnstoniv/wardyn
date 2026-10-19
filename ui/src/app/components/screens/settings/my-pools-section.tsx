@@ -297,7 +297,7 @@ export function MyPoolsSection({ pools, runners, bare = false }: { pools: Pools;
   }
   const body = (
     <>
-      <p className="mb-2 text-muted-foreground">{MY_POOLS.LEDE}</p>
+      <p className="mb-2 text-body text-muted-foreground">{MY_POOLS.LEDE}</p>
       {pools.defaultGone && (
         <p role="alert" className="mb-2 rounded-lg border border-danger bg-danger-subtle p-2.5 text-body text-foreground">
           {MY_POOLS.DEFAULT_GONE}

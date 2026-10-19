@@ -49,7 +49,7 @@ func MatchSecretFormat(text string) (string, bool) {
 type regexSecretDetector struct{}
 
 func (regexSecretDetector) Scan(s Span, dst *[]Finding) {
-	path := sanitizePath(s.FieldPath)
+	path := maskFormats(s.FieldPath)
 	for _, rule := range secretRules {
 		if loc := rule.re.FindStringIndex(s.Text); loc != nil {
 			*dst = append(*dst, Finding{
@@ -80,7 +80,7 @@ const (
 type entropyDetector struct{}
 
 func (entropyDetector) Scan(s Span, dst *[]Finding) {
-	path := sanitizePath(s.FieldPath)
+	path := maskFormats(s.FieldPath)
 	for _, tok := range entropyTokens(s.Text) {
 		if len(tok.text) < entropyMinLen || isAllHex(tok.text) {
 			continue
@@ -187,14 +187,19 @@ const maxFieldPathBytes = 256
 // head+tail form keeps both ends an operator navigates by and states the
 // original length. Idempotent.
 func sanitizePath(path string) string {
-	if path == "" {
-		return path
-	}
+	return truncateFieldPath(maskFormats(path))
+}
+
+// maskFormats is sanitizePath without the truncation. Detectors use this and
+// leave the cut to Engine.sanitizeFieldPath, which masks the operator corpus
+// first: a corpus value must be masked while the path is whole, or a cut
+// through it leaves a prefix no complete-value mask can find.
+func maskFormats(path string) string {
 	out := path
 	for _, rule := range secretRules {
 		out = rule.re.ReplaceAllString(out, maskedPlaceholder)
 	}
-	return truncateFieldPath(out)
+	return out
 }
 
 // truncateFieldPath cuts a path to maxFieldPathBytes, on rune boundaries so the

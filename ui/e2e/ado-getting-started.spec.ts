@@ -107,4 +107,24 @@ test.describe("Getting started — the Azure DevOps chip (mocked /setup/status.s
     await expect(popup).toHaveURL(/\/api\/v1\/scm\/azure-devops\/signin/);
     await popup.close();
   });
+
+  // #2146: /setup/status carries only the first row; /me/scm-access carries every one, so each own-token
+  // organisation gets its own line and button.
+  test("several own-token organisations: a line each, with its own state and button", async ({ page }) => {
+    const own = { source: "own", token_mode: "own_pat", max_days: 30 };
+    const acme = { ...own, state: "live", org: "https://dev.azure.com/acme", kind: "azure_devops", expires_on: aheadByHours(20 * 24).slice(0, 10) };
+    const beta = { ...own, state: "not_configured", org: "https://dev.azure.com/beta", kind: "azure_devops" };
+    await mockScmAccess(page, acme);
+    await page.route("**/api/v1/me/scm-access", (route) => route.fulfill({ json: [acme, beta] }));
+    await gotoConsole(page);
+    await navToRoute(page, "/setup");
+    const orgs = page.getByTestId("ado-own-token-orgs");
+    await expect(orgs).toBeVisible();
+    await expect(orgs.getByTestId("ado-own-org-acme").getByText("Connected")).toBeVisible();
+    const betaLine = orgs.getByTestId("ado-own-org-beta");
+    await expect(betaLine.getByText(ADO_PAT.OWN_NO_TOKEN)).toBeVisible();
+    await expect(orgs.getByTestId("ado-own-org-acme").getByRole("button")).toHaveCount(0);
+    await betaLine.getByRole("button", { name: ADO_PAT.OWN_ADD_CTA }).click();
+    await expect(page.getByRole("dialog", { name: ADO_PAT.OWN_DIALOG_TITLE })).toBeVisible();
+  });
 });

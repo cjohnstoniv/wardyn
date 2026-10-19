@@ -59,7 +59,8 @@ test.describe("Runs landing — lost and lease-ended rows (F1, design.md:158)", 
     await page.route(`**/api/v1/runs/${lostId}/revive`, async (route) => {
       revived = true;
       list.setRows([baseRun(lostId, "e2e lost run")]); // the server's own post-revive shape: RUNNING, no attention
-      await route.fulfill({ json: { run_id: lostId, denied_added: [], proxy_release: "r1" } });
+      // null, as a server with no deny ceiling once answered: it must read as a success.
+      await route.fulfill({ json: { run_id: lostId, denied_added: null, proxy_release: "r1" } });
     });
 
     await gotoConsole(page);
@@ -77,6 +78,7 @@ test.describe("Runs landing — lost and lease-ended rows (F1, design.md:158)", 
     // you and the row itself now reads Running.
     await expect(page.getByRole("heading", { name: "Needs you" })).toHaveCount(0);
     await expect(page.getByTestId("run-row").filter({ hasText: "e2e lost run" }).getByText("Running")).toBeVisible();
+    await expect(page.getByText("Couldn't revive this run")).toHaveCount(0);
   });
 
   // A revive on a runner can outlast the console's 60s wait (the server allows it 3 minutes): the wait ending
@@ -103,7 +105,7 @@ test.describe("Runs landing — lost and lease-ended rows (F1, design.md:158)", 
     await expect(row).toBeVisible();
     await page.evaluate(() => ((window as unknown as { __shortWait?: boolean }).__shortWait = true));
     await row.getByRole("button", { name: "Revive" }).click();
-    await expect(page.getByText("The runner is still starting this run. Check back in a minute.")).toBeVisible();
+    await expect(page.getByText("No answer from the runner yet, so the revive may still be starting. Check the run's state before you try again.")).toBeVisible();
     await expect(page.getByText("Couldn't revive this run")).toHaveCount(0);
     await expect(row.getByRole("button", { name: "Revive" })).toBeVisible();
   });

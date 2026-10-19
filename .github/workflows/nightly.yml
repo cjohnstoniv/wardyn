@@ -60,6 +60,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
+          cache: false
       - name: Docker available
         run: docker --version
       # test/e2e/e2e.sh prints its per-check PASS/FAIL lines and its summary to
@@ -81,7 +82,7 @@ jobs:
           make test-e2e 2>&1 | tee test/reports/e2e/security-e2e.log
       - name: Upload e2e results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: e2e-live-results
           path: test/reports/e2e/security-e2e.log
@@ -107,6 +108,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
+          cache: false
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 9
@@ -129,7 +131,7 @@ jobs:
           make test-e2e-live 2>&1 | tee test/reports/e2e/task-e2e.log
       - name: Upload e2e results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: task-e2e-live-results
           path: test/reports/e2e/task-e2e.log
@@ -161,6 +163,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
+          cache: false
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 9
@@ -213,7 +216,7 @@ jobs:
           make test-e2e-live 2>&1 | tee test/reports/e2e/cc2-task-e2e.log
       - name: Upload CC2 results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: gvisor-cc2-live-results
           path: test/reports/e2e/cc2-*.log
@@ -240,6 +243,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
+          cache: false
       - name: Docker available
         run: docker --version
       # Same evidence problem as e2e-live above: run-e2e-ssh.sh writes no
@@ -254,7 +258,7 @@ jobs:
           make test-e2e-ssh 2>&1 | tee test/reports/e2e/ssh-e2e.log
       - name: Upload e2e results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ssh-e2e-live-results
           path: test/reports/e2e/ssh-e2e.log
@@ -328,7 +332,7 @@ jobs:
           [ "$code" -eq 3 ] || { echo "expected exit 3, got $code"; exit 1; }
       - name: Upload run artifacts
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ci-mode-dogfood-artifacts
           path: |
@@ -361,10 +365,11 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
+          cache: false
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
-      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
           install_only: "true"
       - name: Docker available
@@ -393,7 +398,7 @@ jobs:
           grep -q '^kind-ci-model-run: PASS' ci-artifacts-model-fake/kind-ci-model-run.log || { echo "::error::the run never reached its own closing PASS line"; exit 1; }
       - name: Upload evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ci-mode-dogfood-model-fake-artifacts
           path: ci-artifacts-model-fake/
@@ -419,6 +424,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
+          cache: false
       - name: Docker available
         run: docker --version
       # test/e2e/live's newHarness FATALs (not skips) once WARDYN_TEST_DOCKER=1
@@ -462,7 +468,7 @@ jobs:
           ./scripts/test-report.sh docker -tags docker "${pkgs[@]}"
       - name: Upload docker-tagged test reports
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: docker-tagged-live-reports
           path: test/reports/go/docker/**
@@ -511,6 +517,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
+          cache: false
       - name: Docker available
         run: docker --version
       # The test's two subfake instances (control-plane + vendor) run inside
@@ -532,7 +539,7 @@ jobs:
           go test -tags docker -count=1 -v -timeout 300s ./internal/api -run '^TestProviderSubscriptionDocker_' 2>&1 | tee test/reports/go/provider-subscription-docker-pg.log
       - name: Upload test report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: provider-subscription-docker-pg-report
           path: test/reports/go/provider-subscription-docker-pg.log
@@ -574,7 +581,7 @@ jobs:
         run: make test-e2e-concurrent
       - name: Upload up-command logs
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: test-e2e-concurrent-results
           path: test/reports/e2e/test-concurrent-*-up.log
@@ -627,7 +634,7 @@ jobs:
           make test-e2e-byoi 2>&1 | tee test/reports/e2e/byoi-e2e.log
       - name: Upload e2e results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: byoi-e2e-live-results
           path: test/reports/e2e/byoi-e2e.log
@@ -655,6 +662,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
+          cache: false
       - name: Docker available
         run: docker --version
       - name: Live UI-sandbox relay e2e (dedicated compose stack)
@@ -666,7 +674,7 @@ jobs:
           make test-e2e-ui-sandbox 2>&1 | tee test/reports/e2e/ui-sandbox-e2e.log
       - name: Upload e2e results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ui-sandbox-e2e-live-results
           path: test/reports/e2e/ui-sandbox-e2e.log
@@ -965,7 +973,7 @@ jobs:
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
-      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
           install_only: "true"
       - name: Docker available
@@ -1068,7 +1076,7 @@ jobs:
           ./scripts/check-kind-sso-walk-log.sh default "$log"
       - name: Upload walk evidence (log + manifest + per-spec results)
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: kind-sso-walk-results
           path: |
@@ -1124,7 +1132,7 @@ jobs:
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
-      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
           install_only: "true"
       - name: Docker available
@@ -1157,7 +1165,7 @@ jobs:
         run: ./scripts/check-kind-sso-walk-log.sh ado test/reports/e2e/kind-sso-ado-walk.log
       - name: Upload walk evidence (log + per-step evidence)
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: kind-sso-ado-walk-results
           path: |
@@ -1232,7 +1240,7 @@ jobs:
           fi
       - name: Upload walk evidence (log + per-shape results)
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: compose-sso-roles-results
           path: |
@@ -1260,10 +1268,11 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
+          cache: false
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
-      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
           install_only: "true"
       - name: Docker available
@@ -1304,7 +1313,7 @@ jobs:
           grep -q '^kind-survival-walk: PASS' "$log" || { echo "::error::the walk never reached its own closing PASS line"; exit 1; }
       - name: Upload walk evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: kind-survival-walk-results
           path: test/reports/e2e/kind-survival-walk.log
@@ -1337,10 +1346,11 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
+          cache: false
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
-      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
           install_only: "true"
       - name: Kubernetes runner kind conformance (floor and latest kubelet)
@@ -1369,7 +1379,7 @@ jobs:
           grep -q '^k6-kind-conformance: PASS' "$log" || { echo "::error::the harness never reached its own closing PASS line"; exit 1; }
       - name: Upload harness evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: k6-kind-conformance-results
           path: test/reports/e2e/
@@ -1395,10 +1405,11 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
+          cache: false
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
-      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
           install_only: "true"
       - name: Docker available
@@ -1440,7 +1451,7 @@ jobs:
           grep -q '^hybrid-walk: PASS' "$log" || { echo "::error::the walk never reached its own closing PASS line"; exit 1; }
       - name: Upload walk evidence (log + relay/wardynd logs)
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: hybrid-walk-results
           path: |
@@ -1475,7 +1486,7 @@ jobs:
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
-      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
           install_only: "true"
       - name: Docker available
@@ -1509,7 +1520,7 @@ jobs:
           grep -q '^kind-upgrade-walk: PASS' "$log" || { echo "::error::the walk never reached its own closing PASS line"; exit 1; }
       - name: Upload walk evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: kind-upgrade-walk-results
           path: test/reports/e2e/kind-upgrade-walk.log
@@ -1535,6 +1546,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
+          cache: false
       - name: Runner/organisation version compatibility walk
         env:
           WARDYN_TEST_DOCKER: "1"
@@ -1561,7 +1573,7 @@ jobs:
           grep -q '^runner-compat-walk: PASS' "$log" || { echo "::error::the walk never reached its own closing PASS line"; exit 1; }
       - name: Upload walk evidence (log, wardynd and serve logs, run reads)
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: runner-compat-walk-results
           path: |
@@ -1587,10 +1599,11 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
+          cache: false
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
-      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
           install_only: "true"
       - name: Vault + OpenBao dev servers
@@ -1599,7 +1612,7 @@ jobs:
         run: make test-kek-conformance-kind
       - name: Upload kek-conformance test reports (docker + kind legs)
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: kek-conformance-reports
           path: test/reports/go/kek-*/**
@@ -1631,10 +1644,11 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
+          cache: false
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
-      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
           install_only: "true"
       - name: WARDYN_DAEMON_PROXY_SECRET on kind, defaultMode 0440 + 0400
@@ -1661,6 +1675,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
+          cache: false
       - name: Fuzz the session decoder
         run: go test -run '^$' -fuzz '^FuzzDecodeSession$' -fuzztime 5m ./internal/auth/oidc/
 
@@ -1729,17 +1744,25 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
+      # Scheduled checks build only same-repo refs and run without credentials:
+      # no persisted checkout token, no setup-go cache, and the checks step
+      # below has no token in its env.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
-      - name: Octopus scratch merge + stacked-base retarget check
+          cache: false
+      - name: List and fetch same-repo PR heads
         env:
           GH_TOKEN: ${{ github.token }}
+        run: ./scripts/nightly-migration-merge-check.sh --fetch-only "$RUNNER_TEMP/prs.json"
+      - name: Octopus scratch merge + stacked-base retarget check
+        env:
           WARDYN_TEST_PG: postgres://postgres:wardyn@localhost:5432/wardyn?sslmode=disable
-        run: ./scripts/nightly-migration-merge-check.sh
+        run: ./scripts/nightly-migration-merge-check.sh --check-only "$RUNNER_TEMP/prs.json"
 
   # Managed-settings drift probe (#1279, from #705). internal/agentpolicy writes
   # keys into /etc/claude-code/managed-settings.json that only the Claude Code CLI

@@ -45,6 +45,7 @@ vi.mock("../../lib/api/setup", () => ({
 
 import { PoliciesScreen } from "./policies";
 import { toYaml } from "../wardyn/yaml-block";
+import { POLICIES_PAGE, POLICY_DIALOG } from "../wardyn/copy/policy-dialog";
 
 function policy(over: Partial<RunPolicy> = {}): RunPolicy {
   return {
@@ -134,6 +135,17 @@ describe("PoliciesScreen — required fields + error announcement (ui-secretsPol
 
     expect(screen.getByLabelText(/^name/i)).toBeRequired();
     expect(screen.getByLabelText(/^spec/i)).toBeRequired();
+  });
+
+  it("describes what a policy is for in the dialog, not how the server handles the spec", async () => {
+    render(<PoliciesScreen />);
+    await screen.findByText(/no policies yet/i);
+    await userEvent.click(screen.getByRole("button", { name: /new policy/i }));
+
+    expect(
+      screen.getByText(POLICY_DIALOG.LEDE),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/admin-gated|validated server-side/i)).not.toBeInTheDocument();
   });
 
   it("announces a rejected save via role=alert and wires it to the Save button", async () => {
@@ -265,7 +277,7 @@ describe("PoliciesScreen — reading a policy never writes it", () => {
     fireEvent.keyDown(sheet, { key: "Escape", code: "Escape" });
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 
-    fireEvent.click(await screen.findByText(/^Default \(ceiling\) policy/));
+    fireEvent.click(await screen.findByText(POLICIES_PAGE.CEILING_CAPTION));
     expect(await screen.findByText("mirror.example")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "YAML" }));
 
@@ -313,5 +325,44 @@ describe("PoliciesScreen — the editor opens in YAML and saves what it parses t
     expect(save).toBeDisabled();
     fireEvent.click(save);
     expect(updatePolicyMock).not.toHaveBeenCalled();
+  });
+});
+
+// #2833 and #2834: the page speaks in console voice, not wire names, and has one filled "new" action.
+describe("PoliciesScreen — plain copy and one primary action (#2833, #2834)", () => {
+  beforeEach(() => {
+    listPoliciesMock.mockReset();
+    getDefaultPolicyMock.mockReset();
+  });
+
+  it("names no wire field in the lede, the ceiling row, the fallback line or the editor", async () => {
+    listPoliciesMock.mockResolvedValue([policy()]);
+    getDefaultPolicyMock.mockRejectedValue(new Error("none"));
+    const { container, unmount } = render(<PoliciesScreen />);
+    await screen.findByText("payments-strict");
+    expect(container.textContent).not.toMatch(/policy_id|supplied inline|server-side/);
+    expect(screen.getByText(/A run names a stored policy or carries its own\./)).toBeInTheDocument();
+    expect(screen.getByText(/A run that names no policy falls back/)).toBeInTheDocument();
+    unmount();
+
+    getDefaultPolicyMock.mockResolvedValue({ allowed_domains: [] });
+    render(<PoliciesScreen />);
+    expect(await screen.findByText(POLICIES_PAGE.CEILING_CAPTION)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /new policy/i }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/Wardyn checks the spec when you save and shows any problem here\./)).toBeInTheDocument();
+    expect(dialog.textContent).not.toMatch(/server-side|admin-gated/);
+  });
+
+  it("an empty list has the header's New policy filled and the card's Create your first policy outlined", async () => {
+    listPoliciesMock.mockResolvedValue([]);
+    getDefaultPolicyMock.mockRejectedValue(new Error("none"));
+    render(<PoliciesScreen />);
+    const first = await screen.findByRole("button", { name: /create your first policy/i });
+    const header = screen.getByRole("button", { name: /^new policy$/i });
+    expect(first.className).toMatch(/\bborder\b/);
+    expect(first.className).not.toBe(header.className);
+    expect(header.className).toMatch(/bg-primary/);
+    expect(first.className).not.toMatch(/(^| )bg-primary( |$)/);
   });
 });

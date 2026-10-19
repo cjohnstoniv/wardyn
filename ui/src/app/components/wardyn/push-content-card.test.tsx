@@ -203,10 +203,14 @@ describe("PushContentCard — the held note flips to HELD_EXPIRED at the window 
   });
 
   it("clears its timer on unmount (no act() warning, no leaked timer)", () => {
+    const idle = vi.getTimerCount();
     const { unmount } = render(
       <PushContentCard item={push()} securityOperator run={RUNNING} busy={null} onApprove={vi.fn()} onDeny={vi.fn()} />,
     );
+    // The card arms a timer for the window's end; unmounting must cancel it.
+    expect(vi.getTimerCount()).toBeGreaterThan(idle);
     unmount();
+    expect(vi.getTimerCount()).toBe(idle);
     expect(() => vi.advanceTimersByTime(600_001)).not.toThrow();
   });
 });

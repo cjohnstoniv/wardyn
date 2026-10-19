@@ -18,8 +18,8 @@ import (
 )
 
 // TestReviewRev08HistoricalUIAppEnvelope is the independent 0.8 release
-// review's reproduction of F07 (#1062), adopted verbatim from
-// /tmp/claude-1000/rev08/evidence/compatibility/review_rev08_compatibility_test.go:
+// review's reproduction of F07 (#1062), adopted verbatim from its evidence
+// file review_rev08_compatibility_test.go:
 // a run whose policy envelope was persisted under the pre-0.8 action name lost
 // its UI apps (403) while the identical envelope under the new name resolved
 // fine. RED on main before canonicalAction (audit_legacy.go); GREEN with it.

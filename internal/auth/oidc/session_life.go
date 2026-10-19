@@ -108,7 +108,7 @@ func (a *Authenticator) touchSession(w http.ResponseWriter, r *http.Request, ses
 // every answer rather than only a renewing one, so a tab learns of a renewal another tab's request made.
 func (a *Authenticator) announceExpiry(w http.ResponseWriter, sess Session) {
 	if a.cfg.SessionRenewCap > 0 {
-		w.Header().Set(sessionExpiresHeader, sess.Expiry.UTC().Format(time.RFC3339))
+		w.Header().Set(sessionExpiresHeader, a.enforcedExpiry(sess).UTC().Format(time.RFC3339))
 	}
 }
 

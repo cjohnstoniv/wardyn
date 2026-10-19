@@ -106,6 +106,8 @@ describe("AccessPanel — states", () => {
     renderPanel(null, "sso_unavailable");
     expect(screen.getByText(ACCESS_STATE.SSO_UNAVAILABLE_TITLE)).toBeInTheDocument();
     expect(screen.getByText(ACCESS_STATE.SSO_UNAVAILABLE_BODY)).toBeInTheDocument();
+    // #2903: People mounts this panel too, where reloading shows no explainer.
+    expect(ACCESS_STATE.SSO_UNAVAILABLE_BODY).not.toMatch(/stale view|reload/i);
   });
 
   it("fetch_failed is distinct from sso_unavailable and offers Retry", async () => {

@@ -109,7 +109,12 @@ cmd_reset_all() {
   _ra_rundir="${HOME}/.wardyn"
   # :local is the current locally-built tag; the :demo variants are the
   # pre-rename generation still present on boxes that set up before it.
-  _ra_images="wardyn/wardynd:local wardyn/wardyn-proxy:local wardyn/agent-base:local wardyn/agent-claude-code:local wardyn/agent-codex-cli:local wardyn/agent-oracle:local wardyn/wardyn-tetragon-ingest:local wardyn/wardynd:demo wardyn/wardyn-proxy:demo wardyn/agent-claude-code:demo wardyn/agent-codex-cli:demo wardyn/agent-oracle:demo wardyn/wardyn-tetragon-ingest:demo"
+  _ra_images="wardyn/wardynd:local wardyn/wardyn-proxy:local wardyn/agent-base:local wardyn/agent-claude-code:local wardyn/agent-codex-cli:local wardyn/agent-aws-sso:local wardyn/agent-vscode:local wardyn/agent-oracle:local wardyn/wardyn-tetragon-ingest:local wardyn/wardynd:demo wardyn/wardyn-proxy:demo wardyn/agent-claude-code:demo wardyn/agent-codex-cli:demo wardyn/agent-oracle:demo wardyn/wardyn-tetragon-ingest:demo"
+  # up.sh's pull-first path also leaves ghcr.io/cjohnstoniv/<img>:<version> behind; untagging :local alone keeps its layers.
+  _ra_ver="$(grep -oE 'Version = "[^"]+"' "${REPO_ROOT}/internal/version/version.go" | head -1 | cut -d'"' -f2 || true)"
+  if [ -n "${_ra_ver}" ]; then
+    for _ra_n in wardynd wardyn-proxy agent-base agent-codex-cli agent-aws-sso; do _ra_images="${_ra_images} ghcr.io/cjohnstoniv/${_ra_n}:${_ra_ver}"; done
+  fi
 
   # ── gather facts (read-only) ─────────────────────────────────────────
   _ra_host_pid=$(cat "${_ra_rundir}/host-wardynd.pid" 2>/dev/null || true)
@@ -169,13 +174,22 @@ cmd_reset_all() {
   # (below) only tears down services declared in docker-compose.yaml, so a run
   # mid-flight when reset-all fires leaves these live and unlisted. Once -v
   # drops the Postgres volume a few lines down there is no run row left to
-  # reconcile against either, so they become unreapable garbage. Selector-free
-  # by construction: labelManaged tags every wardynd-owned object, and every
-  # per-run internal network is named wardyn-int-<runID>.
-  _ra_sandbox_ids=$(docker ps -aq --filter "label=wardyn.managed=true" 2>/dev/null || true)
+  # reconcile against either, so they become unreapable garbage. labelManaged tags
+  # every wardynd-owned object and every per-run internal network is named
+  # wardyn-int-<runID>, but another stack on this daemon (WARDYN_NS, a CI job, a
+  # laptop runnerd) tags its own the same way. Since 0.9.4 each object also names its
+  # deployment (the control-plane network, ${_ra_netname}): a different name is left
+  # alone and listed [keep]. An object with no such label predates that and is reaped
+  # as before.
+  _ra_sandbox_ids=$(docker ps -a --filter "label=wardyn.managed=true" --format '{{.ID}} {{.Label "wardyn.deployment"}}' 2>/dev/null \
+    | awk -v d="${_ra_netname}" 'NF == 1 || $2 == d { print $1 }' || true)
   _ra_sandbox_containers=$(printf '%s\n' "${_ra_sandbox_ids}" | grep -c . || true)
-  _ra_sandbox_net_ids=$(docker network ls -q --filter "name=^wardyn-int-" 2>/dev/null || true)
+  _ra_sandbox_net_ids=$(docker network ls --filter "name=^wardyn-int-" --format '{{.ID}} {{.Label "wardyn.deployment"}}' 2>/dev/null \
+    | awk -v d="${_ra_netname}" 'NF == 1 || $2 == d { print $1 }' || true)
   _ra_sandbox_nets=$(printf '%s\n' "${_ra_sandbox_net_ids}" | grep -c . || true)
+  _ra_foreign=$({ docker ps -a --filter "label=wardyn.managed=true" --format '{{.ID}} {{.Label "wardyn.deployment"}}' 2>/dev/null
+                  docker network ls --filter "name=^wardyn-int-" --format '{{.ID}} {{.Label "wardyn.deployment"}}' 2>/dev/null; } \
+    | awk -v d="${_ra_netname}" 'NF == 2 && $2 != d { n++ } END { print n + 0 }' || true)
 
   _ra_testpg=0
   docker inspect wardyn-test-pg >/dev/null 2>&1 && _ra_testpg=1
@@ -223,9 +237,10 @@ cmd_reset_all() {
     _ra_mark 0 "docker network ${_ra_netname}"
   fi
   _ra_mark "$([ "${_ra_sandbox_containers:-0}" -gt 0 ] && echo 1 || echo 0)" \
-    "live per-run sandbox containers: ${_ra_sandbox_containers:-0} (label wardyn.managed=true — compose down never touches these)"
+    "live per-run sandbox containers: ${_ra_sandbox_containers:-0} (this stack's wardyn.managed=true — compose down never touches these)"
   _ra_mark "$([ "${_ra_sandbox_nets:-0}" -gt 0 ] && echo 1 || echo 0)" \
     "per-run internal networks: ${_ra_sandbox_nets:-0} (wardyn-int-*)"
+  [ "${_ra_foreign:-0}" -gt 0 ] && printf '  [keep]    sandbox containers/networks of OTHER Wardyn stacks on this daemon: %s (not labelled for %s)\n' "${_ra_foreign}" "${_ra_netname}"
   _ra_mark "${_ra_testpg}" "dev/e2e postgres container wardyn-test-pg (:55432)"
   _ra_mark "$([ -n "${_ra_install}" ] && echo 1 || echo 0)" "~/.wardyn install files: ${_ra_install:-none }(includes STAGED CLAUDE CREDS — re-stage after next setup)"
   [ -n "${_ra_preserved}" ] && printf '  [keep]    ~/.wardyn PRESERVED (not Wardyn setup'\''s): %s\n' "${_ra_preserved}"

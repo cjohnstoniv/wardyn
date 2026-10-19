@@ -21,6 +21,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/cjohnstoniv/wardyn/internal/testfloor"
 )
 
 func TestPG_BootCanaryRefusesAChainTriggerThatDoesNotChain(t *testing.T) {
@@ -133,6 +135,7 @@ func TestPG_BootCanaryCommitsNothing(t *testing.T) {
 // canary reads the head the way the trigger does, so it must still pass, and the next real append
 // must still chain from the removed row's hash, which no retained row carries.
 func TestPG_BootCanarySurvivesARemovedTailRow(t *testing.T) {
+	testfloor.Mark(t, "pg")
 	pool, schema := probeSchemaPool(t)
 	ctx := context.Background()
 
@@ -140,8 +143,10 @@ func TestPG_BootCanarySurvivesARemovedTailRow(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT rolsuper FROM pg_roles WHERE rolname = current_user`).Scan(&super); err != nil {
 		t.Fatalf("read role: %v", err)
 	}
+	// probeSchemaPool already skipped a non-URL DSN, so reaching here the DSN is URL-form.
+	mustNotSkip := probeMustNotSkip(t, super, true)
 	if !super {
-		t.Skip("WARDYN_TEST_PG role is not a superuser, so the tail row cannot be removed past the append-only triggers")
+		skipOrFatal(t, mustNotSkip, "WARDYN_TEST_PG role is not a superuser, so the tail row cannot be removed past the append-only triggers")
 	}
 
 	appendRow := func(action string) (id, rowHash, prevHash string) {
@@ -167,7 +172,7 @@ func TestPG_BootCanarySurvivesARemovedTailRow(t *testing.T) {
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // best-effort on the failure path
 	if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
-		t.Skipf("no trigger bypass: %v", err)
+		skipOrFatal(t, mustNotSkip, "no trigger bypass: %v", err)
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM audit_events WHERE id = $1::uuid`, tailID); err != nil {
 		t.Fatalf("remove the newest row: %v", err)

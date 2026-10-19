@@ -206,48 +206,20 @@
 
 ## Planned
 
-- Everything below is **planned, unbuilt, and undated**.
+- Everything below is **planned, unbuilt, and undated** unless it says it shipped.
 - Where a seam exists but no implementation does, [docs/PLUGGABILITY.md](docs/PLUGGABILITY.md) says so per row.
 
-- v0.8 is the remaining path to alpha.
-- The cloud base and permissioning 0.6 owed are shipped, and so is 0.7's governance and desktop work (above, through `v0.7.12`), so what is left below is the alpha RC and beyond.
-
-- **v0.8.0 shipped as a pre-release on 2026-09-29, and the 0.8.1 patch shipped the same day; 0.8.2 is in progress.**
-- The plan — every lane, decision and open question — is [docs/design/0.8/PLAN.md](docs/design/0.8/PLAN.md); the remaining work is tracked on the `0.8.2` milestone, one issue per lane, and nothing starts before its issue carries the `approved` label ([CONTRIBUTING.md](CONTRIBUTING.md)).
-
-- **New for 0.8: posture-gated autonomy** —
-  - an org-defined rubric mapping a sandbox's containment posture (egress reach, secrets present, confinement class) to a permitted autonomy level,
-  - enforced both at the Wardyn boundary and, for agents that support managed settings, by generating that agent's enterprise policy file.
-- Researched during 0.7 and deliberately not built in it; the groundwork is that the posture inputs and the approval FSM it would ride already exist.
-
-- **Planned for 0.9: hybrid local + remote, as client-mode runners ([design](docs/design/0.9/PLAN.md)).**
-- Where this section still says laptops "enrol" into the org, 0.9 supersedes it: the laptop runs `wardyn-runnerd`, its owner claims it, and the org is the only scheduler and audit writer. 0.8's enrolment (`WARDYN_ORG_URL`) is deprecated in 0.9 and removed in 1.0.
-- Today Wardyn has two tiers that do not know about each other —
-  - an org control plane on Kubernetes ([docs/OPERATIONS.md](docs/OPERATIONS.md)) and a local daemon per laptop, MDM-managed, one machine per developer ([docs/DESKTOP.md](docs/DESKTOP.md): "A local daemon per laptop. No shared control plane, no cluster").
-- Hybrid is the deployment where they are one product:
-  - the org runs the control plane on the cluster, MDM installs Wardyn on the laptop in member mode,
-  - and the **same person under the same org-managed policy flexes a sandbox between local and remote hardware** —
-  - a quick edit on the laptop's own CPU, a long build on the cluster's —
-  - with one identity, one ceiling, one audit stream.
-- The disk half follows: a local directory synced into a remote sandbox (`wardyn sync`), with drive-as-source as the shortcut when storage is shared.
-- The groundwork exists —
-  - member mode (`m′`) already makes the developer a non-operator against an org IdP,
-  - 0.7.2's `SiteConfig.WorkspaceProviders` is already an org-authored provider policy MDM delivers as `/etc/wardyn/site-config.json`,
-  - and the SSH gateway already carries an sftp channel into a running sandbox.
-- What does not exist is enrolment of a desktop into a *remote* control plane, per-run placement, and any link between a laptop's filesystem and a cluster sandbox.
-- Researched in 0.7.2 and written up in [docs/design/hybrid-0.8.md](docs/design/hybrid-0.8.md).
-- **0.8 ships the seams, not the rollout:**
-  - device enrolment into an org control plane and the one audit stream (the laptop's audit rows federated to the org) have landed,
-  - and 0.8's authorization decisions serialize, with stable refusal codes, a versioned list of resource kinds, and a principal that carries its device and origin.
-- **The rollout is 0.9:**
-  - client-mode runners, with the org as the only decider and a runner offline starting nothing new,
-  - per-run placement between the laptop and the org's cluster and mixing the two, and the disk link.
-- Tracked on milestone `0.9.0`.
+- **v0.8 and v0.9 have shipped** (the Shipped table above, through `v0.9.3`).
+- 0.9 delivered the hybrid local and remote runs described in [docs/design/0.9/PLAN.md](docs/design/0.9/PLAN.md):
+  - a laptop runs `wardyn-runnerd`, its owner claims it, and the org is the only scheduler and audit writer;
+  - 0.8's enrolment (`WARDYN_ORG_URL`) is deprecated in 0.9 and removed in 1.0.
+- 0.9.4 is bug fixes and console UX only; it adds no feature.
+- What is still **planned** starts at 0.10, below.
 
 | Milestone | Scope |
 |---|---|
-| **v0.8** | **Alpha RC.** The follow-through on 0.6/0.7 — the remaining enterprise-deployment enhancements, tools, and pieces — and the **last planned release candidate before the alpha go-live** |
-| **v0.9** | **Hybrid local + remote.** See [below](#v09-scope); [design](docs/design/0.9/PLAN.md). |
+| **v0.8** | **Alpha RC.** Shipped as `v0.8.0` through `v0.8.9`; see the Shipped table. |
+| **v0.9** | **Hybrid local + remote.** Shipped as `v0.9.0` through `v0.9.3`; 0.9.4 is fixes only. See [below](#v09-scope); [design](docs/design/0.9/PLAN.md). |
 | **v0.10** | The New Run items marked Coming soon; see [below](#v010-scope). |
 | **v1.0** | SPIRE identity provider, OpenBao secret store, L3 MCP/tool gateway and the rest of the 1.0 list; see [below](#v10-scope). |
 | **v1.0 (git-token ref confinement)** | **Token-side** branch-namespace confinement for minted git tokens; see [below](#v10-git-token-ref-confinement-scope). |
@@ -288,7 +260,7 @@ New Run shows these as Coming soon in 0.9.
 | The AI composer | #1993 |
 | Application and server sandboxes | #1994 |
 
-- Session continuity across tabs and sign-ins (#1995) and session lifetime (#1996) target a 0.9.x release.
+- Session continuity across tabs and sign-ins (#1995) targets a 0.9.x release; session lifetime (#1996) shipped in 0.9.3 as `WARDYN_OIDC_SESSION_RENEW_CAP` and `WARDYN_OIDC_SESSION_IDLE_TIMEOUT`.
 
 ### v1.0 scope
 
@@ -300,7 +272,7 @@ New Run shows these as Coming soon in 0.9.
 - OTLP/OCSF SIEM sinks (file/webhook/syslog sinks already ship) ·
 - Docker/Compose L1 default-deny via nftables (the k8s target's L1 already ships — NetworkPolicy, boot-time-canary-enforced, blocking `169.254.169.254`; Docker/Compose still relies on L0 structural confinement alone) ·
 - HA completion — closing the still-open per-process blockers a second replica hits (chiefly the in-memory, fail-open secret-masking registry;
-- see [docs/OPERATIONS.md](docs/OPERATIONS.md)'s "One replica, by construction" for the exact list and what v0.5 already closed) ·
+- see [docs/OPERATIONS.md](docs/OPERATIONS.md)'s "High availability" section for the exact list and what v0.5 already closed) ·
 - k8s substrate parity with Docker: BYOI/devcontainer builds, `local_dir` mounts, a per-pod PIDs limit, and a k8s ground-truth correlator (see [deploy/helm/wardyn/README.md](deploy/helm/wardyn/README.md)'s "Known gaps") ·
 - CC3/Vault (Kata) packaged and GA — experimental today ·
 - Cilium `toFQDNs` ·
@@ -382,10 +354,10 @@ New Run shows these as Coming soon in 0.9.
   - There is also no scheduled or automatic rotation, and no `wardyn secret rotate`: the CLI deliberately never touches the key.
 - **react-router 7 → 8 major bump.**
   - No longer security-forced: GHSA-qwww-vcr4-c8h2 patches at 7.18.2 as well as 8.3.0, the console ships 7.18.2, and the pnpm-audit suppression that once covered it is deleted — `make npm-audit` is green with nothing ignored.
-  - What remains is the major itself, blocked twice over:
-    - every stable 8.x peer-depends on React >=19.2.7 (this console is on 18.3.1, so v8 means a React 19 migration first),
+  - What remains is the major itself:
+    - every stable 8.x peer-depends on React >=19.2.7 (this console is already on React 19, so that half is met),
     - and `react-router-dom` has no 8.x at all — v8 is also a package rename to `react-router`.
-  - Needs a UI owner and a React 19 decision, not an advisory deadline.
+  - Needs a UI owner, not an advisory deadline.
 - **Kata/TPROXY/io_uring composer quick-hits.**
   - Parked since the composer-readiness work.
 - **A member's inline model-access grant needs an operator integration.**
@@ -425,8 +397,8 @@ New Run shows these as Coming soon in 0.9.
   - Per-user BEARER/API-key credentials (`per_user` is `bedrock_sso`-only in 0.7.2) ·
     - an explicit opt-in cross-mechanism fallback (needs a policy field, a ceiling term and an audit story) ·
     - the rest of the mid-run renewal design (the legacy no-block path still ships refresh fields in the sandbox cache;
-    - a renewal channel for runs longer than one access token) ·
-    - a background renewer, if dispatch-time refresh proves insufficient.
+    - a renewal channel for runs longer than one access token).
+    - (The background renewer shipped: `RenewAWSSSOCredentials`.)
 - **Review-round findings with a written shape, deliberately not pulled.**
   - An `llm_inspection` scan-budget policy (fields and their POLICIES rows) and a re-derivation of the docker/k8s hardening-cap rationale have no 0.8/0.8.1 issue.
   - The console copy/state residue this bullet used to also carry is tracked by #157 (part of #84):

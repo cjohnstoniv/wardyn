@@ -245,6 +245,8 @@ export function AddWorkspaceDialog({
                 selected={kind === "local_dir"}
                 onClick={() => setKind("local_dir")}
                 title={localDirUnavailable ? MEMBER_WORKSPACE.LOCAL_DIR_UNAVAILABLE_OPTION : "Local directory"}
+                // Stays selectable (it explains itself below), but reads as unavailable (#2889).
+                className={localDirUnavailable ? "border-dashed text-muted-foreground" : undefined}
               />
             )}
             <OptionCard selected={kind === "ephemeral"} onClick={() => setKind("ephemeral")} title="Empty" />
@@ -296,7 +298,7 @@ export function AddWorkspaceDialog({
           )}
           {kind === "ephemeral" && (
             <p className="text-meta leading-snug text-muted-foreground">
-              An empty scratch directory at <span className="font-mono">/home/agent/work</span>, discarded when the
+              An empty scratch directory at <span className="font-mono">{mountPathOrDefault}</span>, discarded when the
               run ends. Use this when the container is the point.
             </p>
           )}

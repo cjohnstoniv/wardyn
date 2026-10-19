@@ -56,6 +56,11 @@ export const C = {
 // Shipped copy, frozen by #206 — not part of the byte-parity `C` export above
 // (workspace-copy.test.ts's byte-checks parse only `C`).
 export const WORKSPACE_DETAIL_EXTRA = {
+  // The delete confirm, one string for the list's menu and the detail page: the
+  // same Store.DeleteWorkspace removes the row with its requirements and
+  // recorded sessions, so both dialogs must say so.
+  DELETE_BODY:
+    "Existing runs keep their history and audit trail. New runs can no longer attach it; its requirements and recorded sessions are removed. This cannot be undone.",
   // F5-F6: the Add-workspace dialog's one honest image choice — replaces the
   // two dishonest "devcontainer.json" / "standard sandbox image" picks that
   // stored byte-identical state. TITLE is used at both the OptionCard and the

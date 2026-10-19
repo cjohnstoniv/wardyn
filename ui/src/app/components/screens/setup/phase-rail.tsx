@@ -20,6 +20,8 @@ import {
   type StepBadge,
 } from "./steps";
 
+const RAIL_LOCKED = "Locked until Network is tested";
+
 const TONE_DOT: Record<StepBadge["tone"], string> = {
   success: "text-success",
   warning: "text-warning",
@@ -89,9 +91,11 @@ function RailItem({
             {STEP_LABEL[stepId]}
           </span>
           <span className={cn("block text-xs", TONE_DOT[badge.tone])}>{badge.text}</span>
-          {/* #459/#497: the refusal reason as visible text, not a title
-              tooltip a disabled control can't surface. */}
-          {refusal && <span className="block text-xs text-muted-foreground">{refusal}</span>}
+          {/* #459/#497: the refusal as visible text, not a title tooltip a
+              disabled control can't surface. A short fixed caption: the gate's
+              full paragraph is the footer's, and four copies of it read as
+              each step's own description (#2838). */}
+          {refusal && <span className="block text-xs text-muted-foreground">{RAIL_LOCKED}</span>}
         </span>
       </button>
     </li>

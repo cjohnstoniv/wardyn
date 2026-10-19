@@ -125,7 +125,7 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 
 ### Session recordings
 
-**Recording defaults to `preferred`: a runner that does not record (started with `--recording-store off`, or older than 0.9.3) still takes runs, and they run unrecorded.** To refuse those runs instead, an admin sets `"recording": "required"` on the organisation's defaults (`PUT /api/v1/runner-pool-defaults`) or on a pool (`PUT /api/v1/runner-pools/{id}`).
+**Recording defaults to `preferred`: a runner that does not record (started with `--recording-store off`, or older than 0.9.3) still takes runs, and they run unrecorded.** To refuse those runs instead, an admin sets `"recording": "required"` on the organisation's defaults (`PUT /api/v1/runner-pool-defaults`) or on a pool (`PUT /api/v1/runner-pools/{id}`). Read the organisation's defaults first: that `PUT` replaces the whole document, so a write that leaves `pool_id` or `barrier` out clears it (leaving `recording` out keeps it).
 
 - `wardyn-rec` uploads a laptop run's cast to `wardyn-proxy:3128`, as on a cluster. The proxy's in-cluster control-plane name maps to the runner's relay by design, which carries the upload to the organisation bound to the run's own runner.
 - The organisation decides per run, at dispatch. With its recording store off (`WARDYN_RECORDING_STORE=off`) the run page says `org_off`.
@@ -290,7 +290,7 @@ Three routes are open to callers with no credential yet. Each has its own rate-l
 | `/api/v1/devices/enrol` | `429` `device_enrol_rate_limited` |
 
 - A runner that proves its key, or a registration that redeems a valid token, is refunded. Anonymous traffic and failed attempts still drain the bucket, so without trusted proxies one peer can lock every runner out.
-- Set `WARDYN_TRUSTED_PROXIES` to your ingress addresses so each client gets its own bucket, or allow-list your runners' source networks on these three paths, or give runners a dedicated ingress or hostname. Per-client limits at the ingress do not close it on their own.
+- Reconnecting runners stay reliable only if you do one of these. Set `WARDYN_TRUSTED_PROXIES` to your ingress addresses so each client gets its own bucket. Or allow-list your runners' source networks on `/api/v1/runners/*/stream` and the other two paths. Or give runners a dedicated ingress or hostname. Per-client limits at the ingress do not close it on their own.
 - The buckets are per replica, so an HA install's effective limit is the per-replica limit times the replica count.
 
 The runner stream has two more anonymous limits and one per-runner limit, all per replica:

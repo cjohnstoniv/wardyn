@@ -35,7 +35,7 @@
 # A final X.Y.Z moves release/X.Y (fast-forward) and tags the candidate. A real
 # X.Y.Z-rc.N never moves release/X.Y: it is tagged and published as a pre-release
 # from the candidate branch.
-# A dispatched nightly older than NIGHTLY_MAX_AGE (24 h, what release.yml's promote
+# A dispatched nightly older than NIGHTLY_MAX_AGE (23 h, what release.yml's promote
 # preflight allows) counts as absent: prepare dispatches a fresh one, wait does not
 # accept the old one, and publish checks again before each irreversible push.
 #
@@ -57,7 +57,7 @@ PHASE="${PHASE:-all}"
 DRY_RUN="${DRY_RUN:-0}"
 WAIT_INTERVAL="${WAIT_INTERVAL:-60}"
 RUN_POLL_INTERVAL="${RUN_POLL_INTERVAL:-5}"
-NIGHTLY_MAX_AGE=86400 # seconds; release.yml's promote preflight refuses older staging
+NIGHTLY_MAX_AGE=82800 # seconds (23 h); release.yml's promote preflight refuses older staging
 BODY_LIMIT=125000 # GitHub's release body limit, in characters
 
 say() { echo "release-patch: $*"; }
@@ -280,6 +280,12 @@ phase_prepare() {
     begin "merge $MERGE"
     git rev-parse --verify -q "$MERGE^{commit}" >/dev/null || die "MERGE '$MERGE' is not a commit"
     if git merge-base --is-ancestor "$MERGE" HEAD; then finish "skipped (already in)"
+    elif git grep -qF -e "## [$V]" HEAD -- CHANGELOG.md; then
+      # A resume after the release commit: the release's notes, checks and scope were fixed
+      # there. Commits $MERGE gained since (lanes keep merging during the wait) are not
+      # part of $V; taking them would publish code the Release body never mentions.
+      say "$MERGE has $(git rev-list --count "HEAD..$MERGE") commit(s) this candidate lacks; not merging them: $V is frozen at its release commit. Cut the next patch for them"
+      finish "skipped (candidate already cut; scope frozen)"
     else
       git -c rerere.enabled=false merge --no-ff --no-edit --signoff "$MERGE" \
         || die "merging $MERGE conflicted. Resolve it, commit with \`git commit -s --no-edit\` (so the merge is signed off), and re-run: it resumes here"
@@ -371,9 +377,9 @@ phase_prepare() {
 nightly_fresh() {
   local created
   [ -n "$1" ] || { echo "release-patch: green-by-tree named no nightly run" >&2; return 1; }
-  created="$(gh api -X GET "repos/$REPO/actions/runs/$1" --jq .created_at)" || die "cannot read nightly run $1"
+  created="$(gh api -X GET "repos/$REPO/actions/runs/$1" --jq .created_at)" || { echo "release-patch: cannot read nightly run $1" >&2; return 1; }
   if [ "$(age_s "$created")" -gt "$NIGHTLY_MAX_AGE" ]; then
-    echo "release-patch: nightly run $1 was created $created, more than 24 hours ago: release.yml's promote preflight would refuse it" >&2
+    echo "release-patch: nightly run $1 was created $created, more than 23 hours ago: release.yml's promote preflight would refuse it" >&2
     return 1
   fi
   return 0

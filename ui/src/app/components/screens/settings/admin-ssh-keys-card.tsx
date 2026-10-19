@@ -34,6 +34,10 @@ import { CollapsibleCard } from "../../wardyn/collapsible-card";
 import { absoluteTime, relativeTime } from "../../../lib/format";
 import { AddSSHKeyDialog, RemoveSSHKeyDialog } from "../ssh-keys";
 
+// The key in its gold tile (#2873, owner ruling). The one place that colours it: dropping this constant's value
+// to "" returns the tile to the standard grey.
+const KEY_TILE = "border-vault-border bg-vault-bg text-vault-fg";
+
 export const ADMIN_SSH_KEYS = {
   TITLE: "Admin SSH keys",
   LEDE: "Keys added here reach runs you don't own. Each is refreshed when you sign in, and expires on its own if you don't.",
@@ -91,7 +95,14 @@ export function AdminSshKeysCard() {
         ) : status === "error" ? (
           <ErrorState onRetry={load} />
         ) : adminKeys.length === 0 ? (
-          <EmptyState icon={KeyRound} title={ADMIN_SSH_KEYS.EMPTY_TITLE} description={ADMIN_SSH_KEYS.EMPTY_BODY} />
+          <EmptyState
+            icon={KeyRound}
+            title={ADMIN_SSH_KEYS.EMPTY_TITLE}
+            description={ADMIN_SSH_KEYS.EMPTY_BODY}
+            as="h4"
+            className="py-8"
+            tileClassName={KEY_TILE}
+          />
         ) : (
           <Table>
             <TableHeader>

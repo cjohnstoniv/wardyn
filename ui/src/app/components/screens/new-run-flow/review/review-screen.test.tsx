@@ -434,6 +434,26 @@ describe("Review Save as", () => {
   });
 });
 
+// #2864: below sm the footer is a phone bar and the two Save actions sit behind More; the menu runs the same handlers.
+describe("Review phone bar", () => {
+  it("offers both Save actions in the More menu, which open the same dialogs", async () => {
+    const user = userEvent.setup();
+    open(AGENT);
+    await ready();
+    await user.click(screen.getByRole("button", { name: NR_REVIEW.MORE_ARIA }));
+    await user.click(await screen.findByRole("menuitem", { name: NR_REVIEW.SAVE_POLICY }));
+    expect(await screen.findByRole("dialog")).toHaveTextContent(NR_SAVE.TITLE_POLICY);
+  });
+
+  it("keeps Launch run the footer's primary button and marks the footer for the phone bar", async () => {
+    open(AGENT);
+    await ready();
+    const footer = screen.getByTestId("step-footer");
+    expect(within(footer).getByRole("button", { name: NR_REVIEW.LAUNCH_RUN })).toBeInTheDocument();
+    expect(within(footer).getByRole("button", { name: NR_REVIEW.MORE_ARIA })).toBeInTheDocument();
+  });
+});
+
 describe("Review requests", () => {
   it("sends no body while the draft has a local issue, and the serialised draft once it is clean", async () => {
     open({ ...AGENT, tools: [] });

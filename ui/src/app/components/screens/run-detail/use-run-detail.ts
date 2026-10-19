@@ -20,6 +20,7 @@ import { heldCredentials } from "../../../lib/held-credentials";
 import { recordings as recordingsApi } from "../../../lib/api/recordings";
 import { useRecordingDisabled } from "../../../lib/hooks/use-recording-disabled";
 import { usePoll } from "../../../lib/use-poll";
+import { withNewestEvents } from "./audit-window";
 
 // Live refresh cadence for a non-terminal run's detail.
 const DETAIL_POLL_MS = 4000;
@@ -34,6 +35,8 @@ export function useRunDetail(id: string) {
   const [egress, setEgress] = React.useState<EgressDecision[]>([]);
   const [approvals, setApprovals] = React.useState<ApprovalRequest[]>([]);
   const [audit, setAudit] = React.useState<AuditEvent[]>([]);
+  // The oldest and newest pages of a very long trail did not meet: counts read off `audit` are a floor.
+  const [auditGap, setAuditGap] = React.useState(false);
   // The run's session.recording(.write) events (RECORDING_ACTIONS), via a
   // SEPARATE action_prefix fetch so the general trail's cap can't crowd them out.
   const [recordingAudit, setRecordingAudit] = React.useState<AuditEvent[]>([]);
@@ -129,7 +132,7 @@ export function useRunDetail(id: string) {
         // and new action names — not itself a legacy action name (Conductor ruling, #1062).
         auditApi.listAudit(id, { actionPrefix: "session.recording" }),
       ])
-        .then(([r, g, runApprovals, a, recA]) => {
+        .then(async ([r, g, runApprovals, a, recA]) => {
           // A run answer for a different id than this page shows is dropped:
           // the page never renders, or acts on, a run it was not asked for.
           // Case-insensitive: a non-canonical UUID in the URL is still this run.
@@ -143,12 +146,16 @@ export function useRunDetail(id: string) {
             if (foreground) setStatus("error");
             return;
           }
+          // The first page is the OLDEST 1000 rows; a run past that joins its newest page on, so the live
+          // evidence (egress, mints) keeps moving instead of freezing at row 1000.
+          const trail = a.status === "fulfilled" ? await withNewestEvents(id, a.value) : undefined;
           setRun(r.value ?? null);
           setGrantsReadable(g.status === "fulfilled");
           if (g.status === "fulfilled") setGrants(g.value);
-          if (a.status === "fulfilled") {
-            setEgress(egressFromAudit(a.value));
-            setAudit(a.value);
+          if (trail) {
+            setEgress(egressFromAudit(trail.events));
+            setAudit(trail.events);
+            setAuditGap(trail.gap);
           }
           // The ?run_id= above is what makes this list this run's; the filter
           // is a belt-and-braces no-op kept so a backend that ignored the
@@ -267,7 +274,7 @@ export function useRunDetail(id: string) {
   usePoll(() => load(false), DETAIL_POLL_MS, terminal && !killSettling);
 
   return {
-    run, grants, egress, approvals, audit, recordingAudit, status, tab, setTab,
+    run, grants, egress, approvals, audit, auditGap, recordingAudit, status, tab, setTab,
     recording, recState, setRecState, recKey, setRecKey, recordingDisabled,
     load, terminal, pending, endingEvents, held, killAgain, outcomeReady,
   };

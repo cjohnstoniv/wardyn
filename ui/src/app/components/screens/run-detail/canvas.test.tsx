@@ -138,6 +138,16 @@ describe("RunCanvas — loading a layout", () => {
     );
   });
 
+  // #2909 (stopgap): the grid is floored at 480px, so on a phone the pane scrolls sideways instead of slicing the right column.
+  it("scrolls the grid pane sideways rather than hiding the overflow", async () => {
+    render(<RunCanvas ctx={ctx()} />);
+    const tile = await screen.findByTestId("run-terminal-pane");
+    const pane = screen.getByTestId("run-canvas-scroll");
+    expect(pane).toContainElement(tile);
+    expect(pane).toHaveClass("overflow-x-auto");
+    expect(pane).not.toHaveClass("overflow-x-hidden");
+  });
+
   it("falls through to the preset default when nothing is saved", async () => {
     render(<RunCanvas ctx={ctx()} />);
 
@@ -284,6 +294,20 @@ describe("RunCanvas — the terminal cannot be arranged away", () => {
     await user.click(screen.getByRole("button", { name: RUN_COCKPIT.addWidget }));
     const catalog = await screen.findByRole("dialog");
     expect(within(catalog).getByRole("button", { name: "Terminal" })).toBeDisabled();
+  });
+
+  it("names the terminal tile's edit handle with the word its pane uses (#2928)", async () => {
+    const user = userEvent.setup();
+    const handle = () => screen.getByTestId("run-terminal-pane").querySelector("[data-drag-handle]");
+    const { unmount } = render(<RunCanvas ctx={ctx()} />);
+    await screen.findByRole("heading", { name: "Egress" });
+    await user.click(screen.getByRole("button", { name: RUN_COCKPIT.editLayout }));
+    expect(handle()).toHaveTextContent("Output");
+    unmount();
+    render(<RunCanvas ctx={ctx({ run: { ...RUN, interactive: true } as unknown as WidgetContext["run"] })} />);
+    await screen.findByRole("heading", { name: "Egress" });
+    await user.click(screen.getByRole("button", { name: RUN_COCKPIT.editLayout }));
+    expect(handle()).toHaveTextContent("Terminal");
   });
 
   it("puts it back when a saved layout arrives without it", async () => {

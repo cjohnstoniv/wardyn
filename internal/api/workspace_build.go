@@ -482,6 +482,11 @@ func (s *Server) handleBuildWorkspace(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, view) // honest "none" + detail; not an error
 		return
 	}
+	// A build pulls and builds on this daemon's host as a run launch does, so
+	// it answers to the same host-capacity limits (both off by default).
+	if writeHostCapacityRefusal(w, r, s.admitHostCapacity(r.Context(), principalFromRequest(r), "build", true)) {
+		return
+	}
 	now := s.cfg.Now().UTC()
 	if !s.builds.begin(ws.ID, now, refresh) {
 		already := s.builds.get(ws.ID)

@@ -675,6 +675,38 @@ func TestRunAttach_MintsTicketThenDialsWithIt(t *testing.T) {
 	}
 }
 
+// TestRunAttach_DialFailureKeepsTheTicketOut: the mint succeeds, then the
+// WebSocket dial fails at the transport. The error still classes as a transport
+// failure, and never carries the live ticket.
+func TestRunAttach_DialFailureKeepsTheTicketOut(t *testing.T) {
+	const ticket = "0123456789abcdef0123456789abcdef"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/attach/ticket") {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ticket":"` + ticket + `"}`))
+			return
+		}
+		conn, _, err := http.NewResponseController(w).Hijack()
+		if err == nil {
+			_ = conn.Close() // reset before any answer: a transport failure
+		}
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := runAttach(ctx, &sdk.Client{BaseURL: srv.URL, Token: "member-own-token"}, "run-1")
+	if err == nil {
+		t.Fatal("runAttach = nil, want the dial failure")
+	}
+	if strings.Contains(err.Error(), ticket) {
+		t.Errorf("dial error carries the minted ticket: %v", err)
+	}
+	if got := exitCodeFor(err); got != 5 {
+		t.Errorf("exitCodeFor = %d, want 5 (a transport failure)", got)
+	}
+}
+
 // TestRunAttach_AdminTokenMintsAndDials: an admin-token caller (e.g. CI) is
 // unaffected by the ticket lane — the mint endpoint authorizes an admin on
 // ANY run (attach_ticket.go's isOperator arm), so the same mint-then-dial

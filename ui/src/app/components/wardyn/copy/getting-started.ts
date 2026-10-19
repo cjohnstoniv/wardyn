@@ -40,7 +40,7 @@ export const MEMBER_GETTING_STARTED = {
   APPROVALS_TITLE: "Approvals you can decide",
   APPROVALS_BODY: "When one of your runs reaches a host that isn't on the list, it holds at the door.",
   APPROVALS_HINT:
-    "You decide — once, for this run, until, or always. Credential and tool-call approvals stay with your admin.",
+    "You decide — once, for this run, or until a time you pick. Saving a host to the workspace, and credential and tool-call approvals, stay with your admin.",
   APPROVALS_ACTION: "Open approvals",
   CONNECT_TITLE: "Connect your tools",
   CONNECT_BODY: "Attach from your own terminal or editor over SSH.",
@@ -78,3 +78,9 @@ export const RUNS_MEMBER_EMPTY = {
 // groups by need then time, not by title), and it was RUNS_WAIT's only
 // consumer.
 
+// The operator welcome's closing note (onboarding-screen.tsx). The setup funnel
+// is the Admin view's "Setup" entry in the sidebar's lower nav (app-shell.tsx);
+// "Getting started" there is the User view's member page, not the funnel.
+export const WELCOME = {
+  NOTE: "A quick guided setup — the barrier is the only requirement; a model or agent is optional. You can revisit anytime under “Setup” in the sidebar.",
+} as const;

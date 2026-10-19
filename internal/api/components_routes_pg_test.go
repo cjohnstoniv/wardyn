@@ -265,6 +265,34 @@ func TestPG_Components_RowCaps(t *testing.T) {
 	}
 }
 
+// TestPG_Components_ConcurrentSavesHoldThePersonalCap: saves racing past the list-then-create check
+// still end at the cap, not over it.
+func TestPG_Components_ConcurrentSavesHoldThePersonalCap(t *testing.T) {
+	e := newComponentsPG(t)
+	ctx := context.Background()
+	for i := 0; i < componentsMaxPerPerson-1; i++ {
+		if _, err := e.st.CreateComponent(ctx, types.Component{ID: uuid.New(), Owner: "sub-member", Name: fmt.Sprintf("p%02d", i)}); err != nil {
+			t.Fatalf("seed person row %d: %v", i, err)
+		}
+	}
+	const racers = 12
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := 0; i < racers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			e.do(t, http.MethodPost, "/api/v1/me/components", e.member, saveComponentBody(fmt.Sprintf("racer %02d", i), stripeDef))
+		}()
+	}
+	close(start)
+	wg.Wait()
+	if n, err := e.st.CountComponents(ctx, "sub-member"); err != nil || n != componentsMaxPerPerson {
+		t.Fatalf("rows after %d racing saves at %d of %d = %d (%v), want exactly the cap", racers, componentsMaxPerPerson-1, componentsMaxPerPerson, n, err)
+	}
+}
+
 // TestPG_Components_MembersAreIsolatedAndCannotWriteOrgRows: one person cannot
 // read, change or delete another's row; no member can reach the org routes; the
 // admin's org listing carries org rows only.

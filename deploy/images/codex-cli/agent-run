@@ -142,7 +142,9 @@ if [[ "${1:-}" == "--selftest" ]]; then
     echo "  NO_PROXY=${NO_PROXY:-<unset>}"
     echo "  WARDYN_PROXY_URL=${WARDYN_PROXY_URL:-<unset>}"
     echo "  WARDYN_GITHUB_GRANT_ID=${WARDYN_GITHUB_GRANT_ID:-<unset (no github_token grant)>}"
-    echo "  OPENAI_API_KEY=${OPENAI_API_KEY:+<set (${#OPENAI_API_KEY} chars)>}${OPENAI_API_KEY:-<unset — expected; proxy injects via grant>}"
+    # Length only: a ${VAR:-default} expansion would print the key itself when it is set.
+    if [[ -n "${OPENAI_API_KEY:-}" ]]; then _key_state="<set (${#OPENAI_API_KEY} chars)>"; else _key_state="<unset — expected; proxy injects via grant>"; fi
+    echo "  OPENAI_API_KEY=${_key_state}"
     selftest_report_mitm_ca
     selftest_report_repo_and_git || ok=0
     if [[ $ok -eq 1 ]]; then
@@ -425,7 +427,15 @@ maybe_exec_task_mode "$task"
 
 # Run Codex CLI in non-interactive exec mode.
 # `codex exec "<prompt>"` runs a single task without REPL interaction.
+#   --skip-git-repo-check  a task's work dir need not be a git repository.
+#   --dangerously-bypass-approvals-and-sandbox  no per-call approval and no
+#     codex-side sandbox, the same autonomy posture as claude -p
+#     --dangerously-skip-permissions (claude-code/agent-run). Codex's own
+#     sandbox cannot start under Wardyn's hardening (no user namespaces under
+#     the default seccomp profile), so without this every write fails. Wardyn
+#     IS the boundary: default-deny egress, proxy-injected credentials,
+#     confinement class and the audit trail govern the run (#2174).
 # The exit code from `codex` propagates to the caller.
-exec_argv=(codex exec)
+exec_argv=(codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox)
 if [[ -n "${WARDYN_CODEX_MODEL:-}" ]]; then exec_argv+=(-m "$WARDYN_CODEX_MODEL"); fi
 exec "${exec_argv[@]}" "$task"

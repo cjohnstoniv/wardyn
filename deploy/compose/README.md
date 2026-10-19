@@ -4,7 +4,7 @@
 |------------|------|
 | `postgres` | System of record (the only required dependency). |
 | `dex`      | OIDC IdP for human SSO; details below. |
-| `wardynd`  | Control plane, **built with `-tags docker`** so the docker runner can launch real governed sandboxes. |
+| `wardynd`  | Control plane, **built with `-tags docker,k8s`** so the docker runner can launch real governed sandboxes. |
 
 ## Overview
 
@@ -83,12 +83,12 @@ bearer token, so the CLI keeps working with the token while humans use SSO.
 docker compose -f deploy/compose/docker-compose.yaml --profile sso up -d dex
 ```
 
-- and set `WARDYN_OIDC_ISSUER=http://localhost:5556` in `deploy/compose/.env` before restarting `wardynd` — the issuer alone (with no operator allowlist, no role map, no override) REFUSES TO BOOT.
+- and set `WARDYN_OIDC_ISSUER=http://localhost:5556` and `WARDYN_LOCAL_MODE=false` in `deploy/compose/.env` before restarting `wardynd` ([`scripts/up.sh`](../../scripts/up.sh) wrote `true`, and `wardynd` refuses local mode together with an issuer) — the issuer alone (with no operator allowlist, no role map, no override) REFUSES TO BOOT.
 - A **fresh** `.env` (created from [`deploy/compose/.env.example`](.env.example) by [`scripts/up.sh`](../../scripts/up.sh)/`make setup`) already carries `WARDYN_OIDC_ROLE_MAP=demo@wardyn.local=admin,member@wardyn.local=user`, which satisfies that guard on its own: sign in as `demo@wardyn.local` for admin, `member@wardyn.local` for a real member-mode walk.
 - An **existing** `.env` from before this pair was added does NOT gain it automatically.
   - The installer never rewrites a `.env` that already exists, on purpose, so an upgrade never silently changes who is admin (see [`.env.example`](.env.example)'s own comment).
 - Add the row yourself, or set your own `WARDYN_OIDC_OPERATOR_EMAILS=you@example.com` (or `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true`) to use your own login as admin instead — and set `WARDYN_OIDC_EMAIL_DOMAINS` to your own domain
-  - Compose defaults it to `wardyn.local`, which denies every other address.
+  - Compose defaults it to `wardyn.local` when it is unset, which denies every other address; set it empty (`WARDYN_OIDC_EMAIL_DOMAINS=`) to allow any domain (an IdP that omits `email_verified`, such as Entra, needs that).
 
 ## No-login local mode (`WARDYN_LOCAL_MODE`)
 
@@ -211,10 +211,9 @@ remains the source of truth.
 # 2. (OPTIONAL — the rotator above supersedes this.) Mint a static host-sensor token
 #    (aud=wardyn-groundtruth; audit-write-only — it can
 #    never mint credentials or decide approvals). The exec'd wardynd inherits
-#    WARDYN_AGE_KEY from the container env, so it loads the same keys:
+#    WARDYN_AGE_KEY and WARDYN_PG_DSN from the container env:
 export WARDYN_GROUNDTRUTH_TOKEN=$(docker compose exec -T wardynd \
-  /usr/local/bin/wardynd -print-groundtruth-token \
-  -dsn "postgres://wardyn:wardyn-dev@postgres:5432/wardyn?sslmode=disable")
+  /wardynd -print-groundtruth-token)
 # 3. Build + start the tier:
 docker compose --profile groundtruth build
 docker compose --profile groundtruth up -d tetragon wardyn-tetragon-ingest

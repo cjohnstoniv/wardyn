@@ -203,15 +203,18 @@ func TestSecurityAdminReadsForeignWorkspace(t *testing.T) {
 	// build recipe.
 	t.Run("GET env-as-code did not widen with the read", func(t *testing.T) {
 		srv, st := newWorkspaceReadServer(t, memberSub)
+		// A scanned profile, or every reader gets the 422 "nothing to emit" and the checks below
+		// would pass for the wrong reason.
+		st.ws.Profile = json.RawMessage(`{"languages":["Go"]}`)
 		p := fmt.Sprintf("/api/v1/workspaces/%s/env-as-code", st.ws.ID)
 		for who, session := range map[string]*http.Cookie{"security_admin": sec, "a foreign member": other} {
-			if w := doSSO(t, srv, http.MethodGet, p, session, ""); w.Code == http.StatusOK {
-				t.Errorf("%s read the operator's committable environment (200) — this route moved to owner-or-super "+
-					"with its operatorOnly write twin; body=%s", who, w.Body.String())
+			if w := doSSO(t, srv, http.MethodGet, p, session, ""); w.Code != http.StatusNotFound {
+				t.Errorf("%s: status = %d, want the owner-or-super 404 — this route moved to owner-or-super "+
+					"with its operatorOnly write twin; body=%s", who, w.Code, w.Body.String())
 			}
 		}
 		// And the OWNER keeps it: the move is a tier, not a shutdown.
-		if w := doSSO(t, srv, http.MethodGet, p, member, ""); w.Code == http.StatusNotFound || w.Code == http.StatusForbidden {
+		if w := doSSO(t, srv, http.MethodGet, p, member, ""); w.Code != http.StatusOK {
 			t.Errorf("the workspace's OWNER lost their own env-as-code (%d); body=%s", w.Code, w.Body.String())
 		}
 	})
@@ -277,26 +280,7 @@ func TestSecurityAdminForeignWorkspaceFieldByField(t *testing.T) {
 		t.Fatalf("decode: %v; body=%s", err, w.Body.String())
 	}
 
-	// the host axis, field by field
-	for i, src := range got.Sources {
-		if src.Type == types.WorkspaceSourceTypeLocalDir && src.Path != "" {
-			t.Errorf("sources[%d].path = %q, want blank — this is the exact datum /sources answers this tier 403 for",
-				i, src.Path)
-		}
-	}
-	if got.Source != "" {
-		t.Errorf("source = %q, want blank — the derived single-source mirror carries the same host path", got.Source)
-	}
-	if got.BaseImage != nil && got.BaseImage.Image != "" {
-		t.Errorf("base_image.image = %q, want blank — the operator's authored registry coordinate is the same class "+
-			"/base-images answers this tier 403 for", got.BaseImage.Image)
-	}
-	for key := range got.Requirements {
-		if typ, _, ok := types.SplitRequirementKey(key); ok && (typ == "secret" || typ == "write") {
-			t.Errorf("requirements has %q — a secret: key names a stored credential and a write: key is the host "+
-				"path just blanked above", key)
-		}
-	}
+	assertNoHostAxis(t, got)
 
 	// what the tier keeps, because withholding it would break the decision
 	// this tier is widened to make
@@ -334,6 +318,73 @@ func TestSecurityAdminForeignWorkspaceFieldByField(t *testing.T) {
 		if _, ok := profile[k]; !ok {
 			t.Errorf("profile lost %q — the egress axis is what this tier reads the profile FOR", k)
 		}
+	}
+}
+
+// assertNoHostAxis checks the host axis of a security-admin workspace answer,
+// field by field.
+func assertNoHostAxis(t *testing.T, got types.Workspace) {
+	t.Helper()
+	for i, src := range got.Sources {
+		if src.Type == types.WorkspaceSourceTypeLocalDir && src.Path != "" {
+			t.Errorf("sources[%d].path = %q, want blank — this is the exact datum /sources answers this tier 403 for",
+				i, src.Path)
+		}
+	}
+	if got.Source != "" {
+		t.Errorf("source = %q, want blank — the derived single-source mirror carries the same host path", got.Source)
+	}
+	if got.BaseImage != nil && got.BaseImage.Image != "" {
+		t.Errorf("base_image.image = %q, want blank — the operator's authored registry coordinate is the same class "+
+			"/base-images answers this tier 403 for", got.BaseImage.Image)
+	}
+	for key := range got.Requirements {
+		if typ, _, ok := types.SplitRequirementKey(key); ok && (typ == "secret" || typ == "write") {
+			t.Errorf("requirements has %q — a secret: key names a stored credential and a write: key is the host "+
+				"path just blanked above", key)
+		}
+	}
+}
+
+// TestSecurityAdminEgressWriteEchoIsProjected: the egress writes this tier is
+// widened for answer with the updated workspace, and that echo is the same
+// document a read of it is, so it carries the same projection.
+// egressTopologyStore completes the topology double for the two egress writes:
+// each stores the list on the one workspace and returns the full row, so the
+// echo carries every field class the read projection must cut.
+type egressTopologyStore struct{ *r3TopologyStore }
+
+func (s egressTopologyStore) SetWorkspaceApprovedEgress(_ context.Context, id uuid.UUID, doms []string) (types.Workspace, error) {
+	if id != s.ws.ID {
+		return types.Workspace{}, store.ErrNotFound
+	}
+	s.ws.ApprovedEgress = doms
+	return s.ws, nil
+}
+
+func (s egressTopologyStore) SetWorkspaceDeniedEgress(_ context.Context, id uuid.UUID, doms []string) (types.Workspace, error) {
+	if id != s.ws.ID {
+		return types.Workspace{}, store.ErrNotFound
+	}
+	s.ws.DeniedEgress = doms
+	return s.ws, nil
+}
+
+func TestSecurityAdminEgressWriteEchoIsProjected(t *testing.T) {
+	srv, st := newTopologyWorkspaceServer(t, "sub-ws-owner")
+	srv.cfg.Store = egressTopologyStore{st}
+	srv.router = srv.routes()
+	sec := ssoSession(t, secAdminSub, secAdminMail, oidc.RoleSecurityAdmin)
+	for _, route := range []string{"/approved-egress", "/denied-egress"} {
+		w := doSSO(t, srv, http.MethodPut, "/api/v1/workspaces/"+st.ws.ID.String()+route, sec, `{"domains":["x.example"]}`)
+		if w.Code != http.StatusOK {
+			t.Fatalf("security_admin PUT %s = %d, want 200; body=%s", route, w.Code, w.Body.String())
+		}
+		var got types.Workspace
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode %s: %v; body=%s", route, err, w.Body.String())
+		}
+		t.Run(route, func(t *testing.T) { assertNoHostAxis(t, got) })
 	}
 }
 

@@ -20,6 +20,7 @@ const (
 	adoMsgNotSignedIn = "not signed in to Azure DevOps"
 	adoMsgRefused     = "may have expired, it may have been revoked, or it may be missing a permission"
 	adoMsgNoAccess    = "your Azure DevOps account lacks access to "
+	adoMsgNotFound    = "Azure DevOps could not find "
 	adoMsgScopeClaim  = "lacks the scope"
 )
 
@@ -37,7 +38,7 @@ var adoRefusalCases = []adoRefusalCase{
 	{"SignInPage203", adofake.FaultSignInPage, http.StatusNonAuthoritativeInfo, adoUpstreamNotSignedIn, adoMsgNotSignedIn},
 	{"Basic401", adofake.FaultBasicUnauthorized, http.StatusUnauthorized, adoUpstreamRefused, adoMsgRefused},
 	{"BearerTF400813", adofake.FaultBearerTF400813, http.StatusUnauthorized, adoUpstreamRefused, adoMsgRefused},
-	{"RepoNotFoundTF401019", adofake.FaultRepoNotFound, http.StatusNotFound, adoUpstreamNoAccess, adoMsgNoAccess},
+	{"RepoNotFoundTF401019", adofake.FaultRepoNotFound, http.StatusNotFound, adoUpstreamNoAccess, adoMsgNotFound},
 	{"PolicyTF402455", adofake.FaultPolicyRejected, http.StatusForbidden, adoUpstreamNoAccess, adoMsgNoAccess},
 }
 

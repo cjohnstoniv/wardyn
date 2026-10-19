@@ -26,6 +26,7 @@ import { RUN_COCKPIT, RUN_MODE } from "../../wardyn/copy";
 import { LOCAL_RUN, runnerLabel } from "../../wardyn/copy/runners";
 import type { StartupLastStep } from "../run-status-detail";
 import { StartupProgress } from "./startup-progress";
+import { QueuedWait } from "./queued-wait";
 
 export function TerminalPane({
   run,
@@ -123,6 +124,19 @@ export function TerminalPane({
     );
   }
 
+  // Waiting for a pool slot: there is no startup to narrate yet, so the hero says why it waits and where it stands.
+  // A queue the wire did not carry falls through to the plain frame below.
+  if (run.state === "QUEUED" && run.queue) {
+    return (
+      <PaneFrame
+        title={run.interactive ? "Terminal" : "Output"}
+        chip={run.interactive ? undefined : execMode ? RUN_COCKPIT.execNoHarness : RUN_COCKPIT.autonomous}
+      >
+        <QueuedWait queue={run.queue} />
+      </PaneFrame>
+    );
+  }
+
   // Coming up (PENDING/STARTING): the startup step list replaces the notice,
   // fed by the fields the page already polls. The last row names what comes
   // next; an interactive run this caller can never attach to has none, and
@@ -201,7 +215,8 @@ function PaneFrame({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border bg-[#0d1117]">
+    // `dark`: the pane is always near-black, so its tokens come from the dark block in both themes (#2910).
+    <div data-testid="run-pane-frame" className="dark flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border bg-[#0d1117]">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-card/60 px-3">
         <SquareTerminal className="size-3.5 text-muted-foreground" aria-hidden />
         <span className="label-eyebrow">{title}</span>

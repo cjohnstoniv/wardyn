@@ -200,7 +200,7 @@ export function ComponentEditor({
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="scroll-thin max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+      <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>{component ? T.EDITOR_EDIT : T.EDITOR_NEW}</DialogTitle>
         </DialogHeader>

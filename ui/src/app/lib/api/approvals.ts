@@ -31,13 +31,19 @@ export const approvals = {
   // maxListLimit lifetime approvals an older run's own rows vanish from its
   // detail page — silently, with a PENDING badge of 0. Any per-run consumer
   // (run detail, the live strip) MUST pass runId rather than post-filter.
+  //
+  // view ("user" | "admin") is the console view the page is in. The server only ever
+  // narrows with it: view=user scopes an operator to the approvals of runs they
+  // created, the same scope the nav badge counts. Omitted, nothing changes.
   async listApprovals(
     state: "PENDING" | "APPROVED" | "DENIED" | "EXPIRED" | "CANCELLED" | "" = "PENDING",
     runId = "",
+    view?: "user" | "admin",
   ): Promise<ApprovalRequest[]> {
     const params = new URLSearchParams();
     if (state) params.set("state", state);
     if (runId) params.set("run_id", runId);
+    if (view) params.set("view", view);
     const qs = params.toString();
     const res = await wfetch(withLimit(`/approvals${qs ? `?${qs}` : ""}`), { method: "GET" });
     return unwrapList<ApprovalRequest>(await asJson<unknown>(res));

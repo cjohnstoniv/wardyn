@@ -33,9 +33,13 @@ file-header note already recorded once).
   a hairline divider. A member's own three-item nav (Runs · Approvals · Workspaces) is unchanged —
   the item is gated on `role !== "user"` in `app-shell.tsx#SidebarNav`, the same file that already
   gates it on identity being resolved (#217).
+  - **Superseded (packet M-A):** nav is now chosen by console view in `navItemsForView`. Settings sits in
+    the lower links of a super-admin's Admin view only; the User view's lower links are Getting started and Your account.
 - **Q460-2 (avatar menu).** The account menu (`top-bar.tsx`) keeps its own Settings entry, for every
   role, unconditionally — the sidebar addition is a second door, not a replacement. Existing muscle
   memory (and a member's only way in) doesn't break.
+  - **Superseded (packet M-A):** the account menu is slimmed to identity and Sign out; Setup, Settings
+    and Your account live in the sidebar (`top-bar.tsx`).
 - **Q460-3 (conflict-copy scope).** "Copy my changes" puts the **WHOLE document** on the clipboard,
   as the editor currently holds it — reversing #217's original "changed fields only" rule
   (`saved-elsewhere-banner.tsx`). A partial copy risked leaving out an edit the admin never noticed

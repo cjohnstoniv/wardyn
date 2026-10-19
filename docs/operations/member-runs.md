@@ -13,7 +13,7 @@ an interactive first run still asks the operator.
 - `run` exists because a `git_pat` installs a *standing* credential helper git invokes on every operation ([`docs/adoption/corp-network-onboarding-findings.md`](../adoption/corp-network-onboarding-findings.md) B2).
 - Approving with `decision_scope=run` (`wardyn approval approve <id> --scope run`) makes that one decision re-mintable for the rest of the run.
 - Three things bound it:
-  - **`git_pat` only** (`github_token` is brokered proxy-side, `ssh_key` is materialized once and wiped, `api_key` never leaves the broker, so none has the standing-consumer problem, and `broker.leaseCoversRemint` refuses a lease for them even under a `run`-scoped decision);
+  - **`git_pat` only** (`github_token` is brokered proxy-side, `ssh_key`'s file is wiped after the clone and an approval-gated grant is delivered once (see [CREDENTIALS.md](../CREDENTIALS.md)), `api_key` never leaves the broker, so none has the standing-consumer problem, and `broker.leaseCoversRemint` refuses a lease for them even under a `run`-scoped decision);
   - **per scope** (if the grant's scope no longer matches what the human approved, the lease does not carry over);
   - and **killed by revocation** (a leased re-mint still runs the whole mint transaction, so the kill-switch cascade ends it the moment the revocation commits).
 
@@ -39,7 +39,7 @@ an interactive first run still asks the operator.
 
 - Full-replace, same shape as `approved-egress` (omit a host to un-deny it — there is no per-host delete).
 - Deny beats allow everywhere the proxy evaluates policy, so a `deny · always` on a model-provider host, or one a required integration injects into, permanently breaks that workspace's proxy-side injection for every future run.
-- `denied-egress`'s validator is deliberately narrower than `approved-egress`'s (plain host shape only, no model-provider reject set) so it keeps working as the escape hatch even when the workspace is already bricked (`handleSetDeniedEgress`, [`internal/api/workspaces.go`](../../internal/api/workspaces.go)).
+- `denied-egress`'s validator is deliberately narrower than `approved-egress`'s (plain host shape only, no model-provider reject set) so it keeps working as the escape hatch even when the workspace is already bricked (`handleSetDeniedEgress`, [`internal/api/workspaces_egress.go`](../../internal/api/workspaces_egress.go)).
 
 **A member's own policy is clamped, not trusted.**
 

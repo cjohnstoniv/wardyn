@@ -59,10 +59,12 @@ type SyslogSink struct {
 
 	w syslogWriter
 
-	queue chan []byte    // bounded buffer of pre-marshalled JSON messages
-	drops atomic.Int64   // events dropped due to overflow or write timeout
-	wg    sync.WaitGroup // tracks the background writer goroutine
-	stop  chan struct{}  // closed by Close to drain+terminate the writer
+	queue   chan []byte    // bounded buffer of pre-marshalled JSON messages
+	drops   atomic.Int64   // events dropped due to overflow or write timeout
+	wg      sync.WaitGroup // tracks the background writer goroutine
+	stop    chan struct{}  // closed by Close to drain+terminate the writer
+	abandon chan struct{}  // closed when Close gives up waiting; the writer stops draining
+	giveUp  sync.Once      // closes abandon once, however many Closes time out
 }
 
 // NewSyslogSink dials the syslog connection and starts the background writer goroutine that keeps Emit
@@ -83,6 +85,7 @@ func newSyslogSinkWith(w syslogWriter, network, addr string) *SyslogSink {
 		w:       w,
 		queue:   make(chan []byte, syslogBufferSize),
 		stop:    make(chan struct{}),
+		abandon: make(chan struct{}),
 	}
 	s.wg.Add(1)
 	go s.writeLoop()
@@ -93,10 +96,12 @@ func newSyslogSinkWith(w syslogWriter, network, addr string) *SyslogSink {
 func (s *SyslogSink) Name() string { return "syslog" }
 
 // Emit serialises ev to JSON and hands it to the background writer as an INFO syslog entry. A cancelled
-// context skips the write without error. Emit NEVER blocks: a full buffer drops+counts instead.
+// context skips the write without error and counts a drop. Emit NEVER blocks: a full buffer drops+counts
+// instead.
 func (s *SyslogSink) Emit(ctx context.Context, ev types.AuditEvent) error {
 	select {
 	case <-ctx.Done():
+		s.drops.Add(1)
 		return nil
 	default:
 	}
@@ -127,9 +132,12 @@ func (s *SyslogSink) writeLoop() {
 		case b := <-s.queue:
 			s.timedWrite(b)
 		case <-s.stop:
-			// Best-effort drain of anything already queued, still bounded.
+			// Best-effort drain of anything already queued, still bounded; Close
+			// abandons it (and counts what is left) once its own bound passes.
 			for {
 				select {
+				case <-s.abandon:
+					return
 				case b := <-s.queue:
 					s.timedWrite(b)
 				default:
@@ -172,7 +180,24 @@ func (s *SyslogSink) timedWrite(b []byte) {
 // Drops returns events dropped by overflow or write timeout, matching WebhookSink.Drops.
 func (s *SyslogSink) Drops() int64 { return s.drops.Load() }
 
-// Close signals the background writer to drain and stop, then closes the syslog connection.
+// SyslogCloseTimeout bounds SyslogSink.Close: the final drain plus closing the
+// connection. A collector that has stopped reading would otherwise hold Close for
+// as long as the queue takes to time out write by write, and with it every sink
+// closed after this one. wardynd's shutdown grace is sized on it (internal/api
+// TestShutdownGraceCoversTheBudget).
+const SyslogCloseTimeout = 10 * time.Second
+
+// syslogCloseTimeoutNS lets a test shrink the bound, as syslogWriteTimeoutNS does.
+var syslogCloseTimeoutNS = func() *atomic.Int64 {
+	var v atomic.Int64
+	v.Store(int64(SyslogCloseTimeout))
+	return &v
+}()
+
+// Close signals the background writer to drain and stop, then closes the syslog connection, all within
+// SyslogCloseTimeout. Past it, whatever is still queued counts as dropped and the connection is closed without
+// waiting for a write that holds the writer's lock; the abandoned goroutines end when the collector answers or
+// the process exits.
 func (s *SyslogSink) Close() error {
 	// Signal the writer to drain and exit; guard against a double Close.
 	select {
@@ -180,6 +205,28 @@ func (s *SyslogSink) Close() error {
 	default:
 		close(s.stop)
 	}
-	s.wg.Wait()
-	return s.w.Close()
+	// Nine tenths of the bound for the drain, the rest for the connection close.
+	budget := time.Duration(syslogCloseTimeoutNS.Load())
+	drainTimer := time.NewTimer(budget * 9 / 10)
+	defer drainTimer.Stop()
+	drained := make(chan struct{})
+	go func() { s.wg.Wait(); close(drained) }()
+	select {
+	case <-drained:
+	case <-drainTimer.C:
+		s.giveUp.Do(func() { close(s.abandon) })
+		s.drops.Add(int64(len(s.queue)))
+		slog.Error("sinks.syslog: close timed out draining to the collector; dropping the rest",
+			slog.Int("dropped", len(s.queue)), slog.Int64("drops", s.drops.Load()))
+	}
+	closeTimer := time.NewTimer(budget / 10)
+	defer closeTimer.Stop()
+	closed := make(chan error, 1)
+	go func() { closed <- s.w.Close() }()
+	select {
+	case err := <-closed:
+		return err
+	case <-closeTimer.C:
+		return fmt.Errorf("sinks.syslog: close: connection busy with a stalled write; abandoned after %s", SyslogCloseTimeout)
+	}
 }

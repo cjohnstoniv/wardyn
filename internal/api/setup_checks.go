@@ -233,9 +233,10 @@ func formatStartDeadline(seconds int) string {
 // two: a non-k8s driver; a k8s daemon build that predates this computation;
 // AND a genuine k8s driver whose Capabilities() call itself just errored
 // (setupRunnerInfo's own early-return path, which already leaves Driver
-// "k8s" with nothing else resolved). All three grade identically here: an
-// honest "can't confirm", never a silent Enforcing.
-func k8sEgressContainmentCheck(driver, netpolProven string) (SetupCheck, bool) {
+// "k8s" with nothing else resolved). All three grade FAIL here: an honest
+// "can't confirm", never a silent Enforcing. The last (capsUnreadable) points at
+// substrate_health, since no upgrade changes a runner that did not answer.
+func k8sEgressContainmentCheck(driver, netpolProven string, capsUnreadable bool) (SetupCheck, bool) {
 	if driver != "k8s" {
 		return SetupCheck{}, false
 	}
@@ -270,6 +271,16 @@ func k8sEgressContainmentCheck(driver, netpolProven string) (SetupCheck, bool) {
 				"CNI/NetworkPolicy support to restore real confinement.",
 		}, true
 	default:
+		if capsUnreadable {
+			// The runner did not answer, so there is no verdict to be missing: upgrading wardynd would
+			// not help. The substrate_health row says what is wrong.
+			return SetupCheck{
+				ID: id, Label: label, Status: "fail",
+				Detail: "Indeterminate — the Kubernetes runner did not report its capabilities, so its NetworkPolicy canary verdict " +
+					"is unknown and egress containment cannot be confirmed.",
+				Fix: "The substrate_health row says what is wrong with the runner's substrate; this row clears once the runner answers.",
+			}, true
+		}
 		return SetupCheck{
 			ID: id, Label: label, Status: "fail",
 			Detail: "Indeterminate — this control plane reports a Kubernetes runner but not its NetworkPolicy canary verdict, " +
@@ -670,7 +681,16 @@ func (s *Server) firstBrokeredRepoFromRuns(ctx context.Context) string {
 // a secret-NAME prefix scan, not a grant-usage check (grants are
 // per-run, not standing config) — the <host-slug> convention (dots→hyphens,
 // e.g. git-pat-github-com) is the contract the ScmProviderStep UI follows.
-func scmProviderCheck(githubApp bool, secretNames []string, posture setup.SCMPosture) SetupCheck {
+// patResidencyNote is what the scm_provider row says about a stored PAT: the PAT broker (the default) sets it at
+// the proxy, and WARDYN_GIT_PAT_BROKER=off restores the in-sandbox lane where it is minted into the agent's process.
+func patResidencyNote(patBrokerOff bool) string {
+	if patBrokerOff {
+		return "minted into the sandbox for each clone (resident while git runs), because the PAT broker is off; turn it back on (WARDYN_GIT_PAT_BROKER) to keep the PAT at the proxy."
+	}
+	return "set at the proxy for each clone and never resident."
+}
+
+func scmProviderCheck(githubApp bool, secretNames []string, posture setup.SCMPosture, patBrokerOff bool) SetupCheck {
 	var pats, sshKeys []string
 	for _, n := range secretNames {
 		switch {
@@ -698,7 +718,7 @@ func scmProviderCheck(githubApp bool, secretNames []string, posture setup.SCMPos
 	case len(sshKeys) > 0:
 		detail := "SSH key secret(s) configured (" + strings.Join(sshKeys, ", ") + "): a STANDING credential, resident in the sandbox for each clone, that Wardyn can neither scope nor expire. It works — a safer rung exists."
 		if len(pats) > 0 {
-			detail += " PAT secret(s) also present (" + strings.Join(pats, ", ") + "): those are brokered per-clone and never resident."
+			detail += " PAT secret(s) also present (" + strings.Join(pats, ", ") + "): those are " + patResidencyNote(patBrokerOff)
 		}
 		return SetupCheck{
 			ID: "scm_provider", Label: "SCM provider credentials", Status: "warn",
@@ -708,7 +728,7 @@ func scmProviderCheck(githubApp bool, secretNames []string, posture setup.SCMPos
 	case len(pats) > 0:
 		return SetupCheck{
 			ID: "scm_provider", Label: "SCM provider credentials", Status: "info",
-			Detail: "PAT secret(s) configured (" + strings.Join(pats, ", ") + "), brokered per-clone and never resident. If it is a classic whole-account PAT, re-issue it fine-grained + repo-scoped + short-expiry; a GitHub App is safer still.",
+			Detail: "PAT secret(s) configured (" + strings.Join(pats, ", ") + "), " + patResidencyNote(patBrokerOff) + " If it is a classic whole-account PAT, re-issue it fine-grained + repo-scoped + short-expiry; a GitHub App is safer still.",
 		}
 	case loosePosture:
 		return SetupCheck{

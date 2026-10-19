@@ -39,7 +39,7 @@ Supporting evidence a reviewer can check independently:
 
 ## Contributors
 
-- Every commit to date is from a single human contributor.
+- Every commit to date is from a single human contributor, apart from dependency-update commits authored by the Dependabot bot.
 - `git shortlog -sne` lists that person under more than one address (a GitHub `noreply` address plus personal ones, from different machines);
   - [`AUTHORS`](AUTHORS) lists the canonical identity, and it is [`AUTHORS`](AUTHORS) — not the shortlog — that defines "The Wardyn Authors" in the copyright notice.
 - Run both: the addresses differ, the human does not.
@@ -78,6 +78,6 @@ Parts of this codebase were written with AI assistance. The project's position:
 - AI assistance is permitted.
 - The **human** who signs off under the DCO takes full responsibility for the contribution — that it is theirs to submit, that it is licence-clean, and that it does not reproduce third-party code without attribution.
 - All such output is human-reviewed before it is committed.
-- Commits authored by a tooling identity acting on a contributor's behalf are that contributor's responsibility. No such commit exists on the released line.
+- Commits authored by a tooling identity acting on a contributor's behalf are that contributor's responsibility. The one exception on the released line is Dependabot (`dependabot[bot]`), whose dependency-update commits arrive as pull requests and are reviewed before merge.
 
 This is stated because it is an increasingly common intake question, and an undisclosed non-human `Author:` line is a worse discovery than a disclosed policy.

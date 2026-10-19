@@ -131,9 +131,11 @@ dd_appr = any(h.endswith("datadoghq.com") and dec == "APPROVED" for (h, _s, dec)
 print("TELEMETRY_APPROVED", dd_appr)
 print("SCOPES", json.dumps(scopes))
 ' > /tmp/_demo_audit.$$ 2>/dev/null
+  [[ -s /tmp/_demo_audit.$$ ]] || bad "the audit could not be read (no output from the audit parser)"
   # shellcheck disable=SC1090
   while read -r k v; do
     case "$k" in
+      PARSE_FAIL)         bad "the audit JSON could not be parsed" ;;
       MODEL_ALLOWED)      if [[ "${WARDYN_DEMO_SHELL_ACT5:-}" == "1" ]]; then
                             printf '    (shell Act 5: no model is used, so no anthropic egress expected)\n'
                           elif [[ "$v" == True ]]; then ok "api.anthropic.com allowed (the model path works)"

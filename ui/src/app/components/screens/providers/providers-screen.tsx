@@ -25,6 +25,7 @@
 // needs its own frozen row (§7.7 has none), and an empty body is the
 // smaller change of the two.
 import * as React from "react";
+import { useNavigate } from "react-router-dom";
 import { AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import { HttpError } from "../../../lib/api/core";
@@ -46,7 +47,9 @@ import { Chip, OperatorOnlyHint } from "../../wardyn/primitives";
 import { SavedElsewhereBanner } from "../../wardyn/saved-elsewhere-banner";
 import { useDiscardReload } from "../../wardyn/use-discard-reload";
 import { EmptyState, TableSkeleton, loadFailStatus } from "../../wardyn/states";
-import { useOperator } from "../../wardyn/operator-context";
+import { useOperator, useOperatorResolved } from "../../wardyn/operator-context";
+import { ViewNotice } from "../../wardyn/console-view";
+import { PROVIDERS_SUPER_ONLY } from "../../wardyn/copy/console-view";
 import { Segmented } from "../../wardyn/segmented";
 import { AgentsTab } from "./agents-tab";
 import { gitRowInvalid } from "./display";
@@ -63,6 +66,14 @@ const EMPTY: WorkspaceProviders = {};
 
 export function ProvidersScreen() {
   const operator = useOperator();
+  const navigate = useNavigate();
+  // #2880: a security admin is not a super admin, so this page is not theirs. The page refuses, as Settings does,
+  // and nothing behind it is fetched.
+  const operatorResolved = useOperatorResolved();
+  const refused = operatorResolved && !operator;
+  // Same fail-open rationale as Settings: before /me resolves `operator` reads the default TRUE, so the admin reads
+  // wait for a real answer rather than firing on a default that might still flip to "refused".
+  const adminReads = operatorResolved && operator;
   const [status, setStatus] = React.useState<ScreenStatus>("loading");
   const [setupStatus, setSetupStatus] = React.useState<SetupStatus | null>(null);
   const [draft, setDraft] = React.useState<WorkspaceProviders>(EMPTY);
@@ -110,7 +121,9 @@ export function ProvidersScreen() {
       // the tier, not the network (drives-screen.tsx's own comment).
       .catch((e) => setStatus(loadFailStatus(e)));
   }, []);
-  React.useEffect(load, [load]);
+  React.useEffect(() => {
+    if (adminReads) load();
+  }, [load, adminReads]);
 
   const discard = useDiscardReload(load);
 
@@ -215,6 +228,16 @@ export function ProvidersScreen() {
   const secretsPresent = setupStatus?.secrets.present ?? [];
   const githubApp = setupStatus?.secrets.github_app ?? false;
   const enforcement = setupStatus?.runner.ephemeral_disk_enforcement;
+
+  if (refused) {
+    return (
+      <ViewNotice title={PROVIDERS_SUPER_ONLY.TITLE} body={PROVIDERS_SUPER_ONLY.BODY}>
+        <Button size="sm" onClick={() => navigate("/admin/runs")}>
+          {PROVIDERS_SUPER_ONLY.CTA}
+        </Button>
+      </ViewNotice>
+    );
+  }
 
   return (
     <div className="mx-auto max-w-[900px] px-6 py-6">

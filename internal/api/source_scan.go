@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -110,12 +111,19 @@ func (s *Server) handleScanSource(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// writeScanLaunchRefusal answers the two policy refusals a scan launch can end
-// in, the provider admission and the placement denial, and reports whether it did.
+// writeScanLaunchRefusal answers the policy refusals a scan launch can end in,
+// the provider admission, the placement denial and a governance run limit, and
+// reports whether it did.
 func (s *Server) writeScanLaunchRefusal(w http.ResponseWriter, r *http.Request, err error) bool {
 	var denied *placementDeniedError
 	if errors.As(err, &denied) {
 		return denied.refusal.write(s, w, r)
+	}
+	// A limit refuses a well-formed request, so 403 with the limit's own
+	// sentence, as the record and sign-in lanes answer it.
+	if errors.Is(err, errRecordCeilingLimit) {
+		writeErrorReasonPolicy(w, http.StatusForbidden, reasonRecordCeilingLimit, strings.TrimPrefix(err.Error(), errRecordCeilingLimit.Error()+": "), recordCeilingRef(err))
+		return true
 	}
 	return s.writeAdmissionLaunchRefusal(w, r, err)
 }
@@ -223,9 +231,16 @@ func (s *Server) launchSourceScanRun(ctx context.Context, actor string, src type
 	// From here every failure releases the fence and restores the source's
 	// prior status — a launch that never dispatched must not strand the row
 	// in `scanning`.
+	runCreated := false
 	release := func(cause error) error {
-		_ = s.cfg.Store.ClearSourceActiveRun(ctx, src.ID, runID)
-		_, _ = s.cfg.Store.SetSourceScanResultUnfenced(ctx, src.ID, src.Profile, src.Status, nil)
+		// One write, fenced on this run's claim: it restores the status and clears the fence only
+		// while the claim is still ours, so a newer claim's scan is never overwritten.
+		_, _ = s.cfg.Store.SetSourceScanResult(ctx, src.ID, src.Profile, src.Status, runID, nil)
+		if runCreated {
+			// The PENDING row would otherwise hold its slot, run token and any
+			// clone grant until the undispatched sweep (claimImportStep's compensator).
+			s.failAndRevoke(ctx, runID, types.RunPending, "the source scan could not start")
+		}
 		return cause
 	}
 
@@ -277,6 +292,7 @@ func (s *Server) launchSourceScanRun(ctx context.Context, actor string, src type
 	if err != nil {
 		return types.AgentRun{}, release(fmt.Errorf("create scan run: %w", err))
 	}
+	runCreated = true
 
 	ghGrantID, sshGrants, gerr := s.workspaceSourceGrants(ctx, runID, run.CreatedAt, url)
 	if gerr != nil {
@@ -421,6 +437,14 @@ func (s *Server) scanAttachedSources(w http.ResponseWriter, r *http.Request, ws 
 		}
 		switch src.Kind {
 		case types.SourceLocalDir:
+			// The member mount gate the run door re-runs (validateWorkspaceSources):
+			// a scan reads the directory host-side, so roots narrowed after
+			// onboarding, or a source repointed since, refuse it here too.
+			if err := userMountAllowed(s.cfg.UserMounts, ws.OwnedBy, types.WorkspaceMount{Source: src.Locator}); err != nil {
+				partialAudit(id, err.Error())
+				writeErrorReason(w, http.StatusUnprocessableEntity, reasonWorkspaceSourceMountNotAllowed, err.Error())
+				return
+			}
 			if _, _, _, detail, ok := s.scanLocalDirSource(r.Context(), src); !ok {
 				partialAudit(id, detail)
 				writeErrorReason(w, http.StatusUnprocessableEntity, reasonSourceScanFailed, detail)
