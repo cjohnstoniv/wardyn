@@ -238,6 +238,13 @@ var server5xxStatusIdents = map[string]bool{
 // identical logic against a synthetic source string instead of a real file
 // on disk.
 func scanFileForLeaks(fset *token.FileSet, name string, file *ast.File, src []byte) map[string][]string {
+	return scanFileForLeaksWith(serverErrorForwarders, fset, name, file, src)
+}
+
+// scanFileForLeaksWith is scanFileForLeaks over a caller's forwarder table, so a guard can follow a
+// helper (a run_revive.go reviveRefused, a local refuse closure) in the files that were fixed without
+// flagging every older site in the package.
+func scanFileForLeaksWith(forwarders map[string]serverErrorForwarder, fset *token.FileSet, name string, file *ast.File, src []byte) map[string][]string {
 	found := map[string][]string{}
 	for _, decl := range file.Decls {
 		fd, ok := decl.(*ast.FuncDecl)
@@ -264,7 +271,7 @@ func scanFileForLeaks(fset *token.FileSet, name string, file *ast.File, src []by
 				// itself carries writeError's (status, msg) pair as ordinary
 				// arguments at fixed positions.
 				callee := calleeName(node)
-				fwd, ok := serverErrorForwarders[callee]
+				fwd, ok := forwarders[callee]
 				if !ok {
 					return true
 				}
@@ -604,4 +611,55 @@ func exprSourceLine(src []byte, n int) string {
 		return ""
 	}
 	return lines[n-1]
+}
+
+// TestFixedDriverTextSitesStayFixed holds the two files whose 5xx and run-failure messages were made
+// driver-text free (#2121 the run owner's authority re-check on revive, #2147 the Azure grant write):
+// a reviveRefused 5xx in run_owner_authority.go, or a refuse(...) in provider_azure.go, built from
+// err.Error() fails here. The wider package keeps its older reviveRefused sites; they are not in scope.
+func TestFixedDriverTextSitesStayFixed(t *testing.T) {
+	forwarders := map[string]serverErrorForwarder{
+		"reviveRefused": {statusArg: 0, msgArg: 2},  // reviveRefused(status, reason, msg)
+		"refuse":        {statusArg: -1, msgArg: 1}, // authorAzureInjection's local refuse(reason, msg)
+	}
+	// provider_azure.go's grant_scope arm reports why the injection did not compile: the text is the
+	// operator's own policy shape (config validation), not a driver error, and it is the one site.
+	allowed := map[string]bool{"provider_azure.go:Server.authorAzureInjection:refuse": true}
+	fset := token.NewFileSet()
+	for _, name := range []string{"run_owner_authority.go", "provider_azure.go"} {
+		src, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		file, err := parser.ParseFile(fset, name, src, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		for key, sites := range scanFileForLeaksWith(forwarders, fset, name, file, src) {
+			if allowed[key] && len(sites) == 1 {
+				continue
+			}
+			t.Errorf("%s builds a refusal message from err.Error(): %v\nuse loggedMsg(ctx, \"<action>\", err)", key, sites)
+		}
+	}
+}
+
+// The guard sees both shapes it exists for: a reviveRefused 5xx and a refuse(...) built from err.Error().
+func TestFixedDriverTextSites_GuardFlagsBothShapes(t *testing.T) {
+	const src = `package api
+func (s *Server) a() error { return reviveRefused(http.StatusServiceUnavailable, "r", "x: "+err.Error()) }
+func (s *Server) b() { refuse("r", "x: "+err.Error()) }
+func (s *Server) c() error { return reviveRefused(http.StatusConflict, "r", "x: "+err.Error()) }
+`
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "x.go", src, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := scanFileForLeaksWith(map[string]serverErrorForwarder{
+		"reviveRefused": {statusArg: 0, msgArg: 2}, "refuse": {statusArg: -1, msgArg: 1},
+	}, fset, "x.go", file, []byte(src))
+	if len(got) != 2 || len(got["x.go:Server.a:reviveRefused"]) != 1 || len(got["x.go:Server.b:refuse"]) != 1 {
+		t.Fatalf("flagged %v, want the 5xx reviveRefused and the refuse, not the 409", got)
+	}
 }
