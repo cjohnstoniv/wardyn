@@ -17,7 +17,7 @@ const MaxCalls = 256
 
 type pendingCall struct {
 	method    string // the call's method, which a runner-opened stream's kind may depend on
-	abandoned bool // the caller stopped waiting; guarded by Peer.mu
+	abandoned bool   // the caller stopped waiting; guarded by Peer.mu
 	reply     chan Reply
 	notify    chan struct{}
 	onEvent   func(Event)

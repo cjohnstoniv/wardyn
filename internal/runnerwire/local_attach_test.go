@@ -58,11 +58,14 @@ func containsKey(b []byte, key string) bool {
 }
 
 func TestLocalAttachMessagesRoundTrip(t *testing.T) {
-	check := func(in, out any) {
+	check := func(in, out any, golden string) {
 		t.Helper()
 		b, err := Marshal(in)
 		if err != nil {
 			t.Fatal(err)
+		}
+		if string(b) != golden {
+			t.Fatalf("wire form %s, want %s", b, golden)
 		}
 		if err := Unmarshal(b, out); err != nil {
 			t.Fatal(err)
@@ -71,9 +74,12 @@ func TestLocalAttachMessagesRoundTrip(t *testing.T) {
 			t.Fatalf("round trip %s -> %s", b, got)
 		}
 	}
-	check(LocalAttachArgs{Ref: "runner:r/c", Nonce: "n", Tee: true}, &LocalAttachArgs{})
-	check(LocalAttachModeArgs{Stream: 7, Observer: true, Cols: 80, Rows: 24}, &LocalAttachModeArgs{})
-	check(LocalAttachTeeAckArgs{Stream: 7, Offset: 1 << 40}, &LocalAttachTeeAckArgs{})
+	check(LocalAttachArgs{Ref: "runner:r/c", Nonce: "n", Tee: true}, &LocalAttachArgs{},
+		`{"ref":"runner:r/c","nonce":"n","options":{"Cols":0,"Rows":0,"Observer":false},"tee":true}`)
+	check(LocalAttachModeArgs{Stream: 7, Observer: true, Cols: 80, Rows: 24}, &LocalAttachModeArgs{},
+		`{"stream":7,"observer":true,"cols":80,"rows":24}`)
+	check(LocalAttachTeeAckArgs{Stream: 7, Offset: 1 << 40}, &LocalAttachTeeAckArgs{},
+		`{"stream":7,"offset":1099511627776}`)
 	// An older runner answers a call it does not know with a refusal, which Call surfaces and the
 	// session survives: the new methods are plain calls, not frame types.
 	for _, m := range []string{MethodLocalAttach, MethodLocalAttachMode, MethodLocalAttachTeeAck} {
@@ -174,8 +180,12 @@ func TestLocalAttachTeeOpenIsRefusedOutsideALocalAttachCall(t *testing.T) {
 	})
 	t.Run("runner side", func(t *testing.T) {
 		// Only the org accepts this kind: it is the runner's reply to the org's local_attach call.
-		r := newRaw(t, PeerConfig{Org: false})
-		open, _ := json.Marshal(Open{Kind: KindPTYTee, Call: 0})
+		// It accepts every stream it is offered and has a local_attach call in flight, so only the
+		// side check refuses.
+		r := newRaw(t, PeerConfig{Org: false, OnOpen: func(*Stream, Open) error { return nil }})
+		go func() { _ = r.p.Call(ctxT(t), MethodLocalAttach, nil, nil) }()
+		call := r.readType(t, TypeCall)
+		open, _ := json.Marshal(Open{Kind: KindPTYTee, Call: call.Stream})
 		r.write(t, Frame{Type: TypeOpen, Stream: 2, Payload: open})
 		rst := r.readType(t, TypeReset)
 		if code, _ := DecodeReset(rst.Payload); code != ResetRefused {

@@ -88,10 +88,11 @@ func (s *Substrate) LocalAttach(ctx context.Context, ref string, req runner.Loca
 // localSession is the org's end of one local attach: the pty_tee stream. Closing it resets the
 // stream, which is how the org ends the session.
 type localSession struct {
-	sess session
-	st   *runnerwire.Stream
-	tee  bool
-	read atomic.Int64 // bytes Read has returned: the most AckTee may acknowledge
+	sess  session
+	st    *runnerwire.Stream
+	tee   bool
+	read  atomic.Int64 // bytes Read has returned: the most AckTee may acknowledge
+	acked atomic.Int64 // the highest offset the runner has been told
 }
 
 func (l *localSession) Read(b []byte) (int, error) {
@@ -119,7 +120,15 @@ func (l *localSession) AckTee(ctx context.Context, offset int64) error {
 	if offset < 0 || offset > l.read.Load() {
 		return fmt.Errorf("remote: tee ack %d is past the %d bytes read", offset, l.read.Load())
 	}
-	return l.sess.Call(ctx, runnerwire.MethodLocalAttachTeeAck, runnerwire.LocalAttachTeeAckArgs{Stream: l.st.ID(), Offset: offset}, nil)
+	if offset <= l.acked.Load() { // cumulative: nothing new to tell the runner
+		return nil
+	}
+	if err := l.sess.Call(ctx, runnerwire.MethodLocalAttachTeeAck, runnerwire.LocalAttachTeeAckArgs{Stream: l.st.ID(), Offset: offset}, nil); err != nil {
+		return err
+	}
+	for cur := l.acked.Load(); offset > cur && !l.acked.CompareAndSwap(cur, offset); cur = l.acked.Load() {
+	}
+	return nil
 }
 
 // ExecStream starts an exec on the runner: stdin and stdout share the `exec`
