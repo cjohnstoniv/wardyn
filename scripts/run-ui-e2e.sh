@@ -300,15 +300,19 @@ run_lane() {
   # ports (the same pick-then-bind way the lane setup above does) and rebuild
   # the base URL from them. Lane-local: exports are invisible to siblings.
   repick_lane_ports() {
-    export WARDYN_E2E_ADDR="127.0.0.1:$(pick_free_port)" WARDYN_E2E_UI_ADDR="127.0.0.1:$(pick_free_port)"
-    export WARDYN_E2E_INTERNAL_ADDR="127.0.0.1:$(pick_free_port)"
+    # Each address keeps the host the caller gave it; only the port is re-picked.
+    export WARDYN_E2E_ADDR="${WARDYN_E2E_ADDR%:*}:$(pick_free_port)" WARDYN_E2E_UI_ADDR="${WARDYN_E2E_UI_ADDR%:*}:$(pick_free_port)"
+    export WARDYN_E2E_INTERNAL_ADDR="${WARDYN_E2E_INTERNAL_ADDR%:*}:$(pick_free_port)"
     if [[ -z "${LIVE_BASE_URL}" ]]; then
       export WARDYN_E2E_BASE_URL="$(e2e_base_url "${WARDYN_E2E_ADDR}")"
       if [[ -n "${WARDYN_E2E_BASE_PATH:-}" ]]; then
-        export WARDYN_E2E_PROXY_ADDR="127.0.0.1:$(pick_free_port)"
+        export WARDYN_E2E_PROXY_ADDR="${WARDYN_E2E_PROXY_ADDR%:*}:$(pick_free_port)"
         export WARDYN_E2E_BASE_URL="$(e2e_base_url "${WARDYN_E2E_PROXY_ADDR}")${WARDYN_E2E_BASE_PATH}/"
       fi
     fi
+    # cleanup_all runs in the top-level shell and cannot see these exports: record where this lane
+    # now listens so an interrupted run tears the re-picked backend down too (pid files are per port).
+    printf '%s\n' "${WARDYN_E2E_ADDR}" "${WARDYN_E2E_UI_ADDR}" "${WARDYN_E2E_INTERNAL_ADDR}" "${WARDYN_E2E_PROXY_ADDR:-}" > "${work}/repick-${lane}"
   }
   # Per-lane, not per-$$ ("${work}/up-${lane}.log" is unique per lane; "$$"
   # is NOT — bash keeps $$ pinned to the top-level shell's PID inside a
@@ -457,15 +461,23 @@ kill_tree() {
 # not sit around waiting on a slower sibling — cmd_down_quiet is idempotent,
 # so calling it again here for an already-down lane is a safe no-op.
 cleanup_all() {
-  rm -rf "${work}"
-  [[ -n "${LIVE_BASE_URL}" ]] && return 0
-  local i
+  if [[ -n "${LIVE_BASE_URL}" ]]; then rm -rf "${work}"; return 0; fi
+  local i re
   for ((i = 0; i < NUM_LANES; i++)); do
     (
       export WARDYN_E2E_ADDR="${LANE_ADDR[i]}" WARDYN_E2E_UI_ADDR="${LANE_UI_ADDR[i]}"
       export WARDYN_E2E_INTERNAL_ADDR="${LANE_INTERNAL_ADDR[i]}" WARDYN_E2E_PG_DBNAME="${LANE_DB[i]}"
       ./scripts/e2e-backend.sh down >/dev/null 2>&1
     ) || true
+    # A lane whose backend-up was retried listens on re-picked ports (repick_lane_ports in run_lane).
+    if [[ -f "${work}/repick-${i}" ]]; then
+      mapfile -t re < "${work}/repick-${i}"
+      (
+        export WARDYN_E2E_ADDR="${re[0]}" WARDYN_E2E_UI_ADDR="${re[1]}" WARDYN_E2E_INTERNAL_ADDR="${re[2]}" WARDYN_E2E_PG_DBNAME="${LANE_DB[i]}"
+        [[ -z "${re[3]:-}" ]] || export WARDYN_E2E_PROXY_ADDR="${re[3]}"
+        ./scripts/e2e-backend.sh down >/dev/null 2>&1
+      ) || true
+    fi
     # A caller-named base database is the caller's to keep; nothing else
     # would ever drop it. Its derived per-lane siblings (${DB}_lane<i>) follow
     # the same rule, tied to the SAME db_autonamed flag as the base.
@@ -473,6 +485,7 @@ cleanup_all() {
     docker exec "${WARDYN_E2E_PG_CONTAINER}" psql -U wardyn -d wardyn \
       -c "DROP DATABASE IF EXISTS \"${LANE_DB[i]}\" WITH (FORCE)" >/dev/null 2>&1 || true
   done
+  rm -rf "${work}"
 }
 trap cleanup_all EXIT
 
