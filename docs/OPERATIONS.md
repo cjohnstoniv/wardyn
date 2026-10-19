@@ -3174,6 +3174,7 @@ Naming these is the point of the walk, not a caveat on it:
 - The AWS SSO renewer runs every minute on the sweeper leader and renews a live run's session inside `WARDYN_AWS_SSO_REFRESH_SKEW` of its expiry, while the token in hand still works.
 - The proxy's own resolve renews too, but only when the sandbox asks; the renewer covers a run that is quiet through the window.
 - So the hold is for a session that could not be renewed: its refresh token was refused or is gone, or AWS failed until it expired.
+- A refused refresh token is remembered in `aws_sso_refused_tokens` (migration `0192_aws_sso_refused_tokens`), so every replica grades it alike until a sign-in or a renewal replaces it.
 - Each renewal writes one `harness.credential.refresh` row; the renewer's carry `trigger: renewer`, and its passes are the `aws_sso_renewal` sweep in [sweep health](operations/monitoring.md#substrate-and-sweep-health).
 - It skips a paused, lost or revoked run; the proxy's own resolve still renews for any run it serves.
 
