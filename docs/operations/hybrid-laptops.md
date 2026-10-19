@@ -130,7 +130,7 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 - `wardyn-rec` uploads a laptop run's cast to `wardyn-proxy:3128`, as on a cluster. The proxy's in-cluster control-plane name maps to the runner's relay by design, which carries the upload to the organisation bound to the run's own runner.
 - The organisation decides per run, at dispatch. With its recording store off (`WARDYN_RECORDING_STORE=off`) the run page says `org_off`.
 - `wardyn-runnerd serve --recording-store off` is the runner's ceiling: it never records a run's terminal session. Otherwise the runner records the runs its organisation asks it to; a runner older than 0.9.3 records by its own setting, and counts as not recording.
-- The organisation, not the runner, records console and SSH sessions opened through it, even on a run marked not recorded, while it has a recording store.
+- The organisation, not the runner, records console and SSH sessions opened through it, and terminals attached on the laptop itself (`WARDYN_ATTACH_LOCAL`), even on a run marked not recorded, while it has a recording store.
 - Under `required`, a run only a non-recording runner could take is refused `runner_recording_off`, and with the store off every run is refused `recording_store_off`, as is saving `required`. A defaults write that leaves `recording` out keeps it.
 - Under `preferred` the page says `runner_declined`. A cast from a recording runner older than 0.9.3 clears it; any other runner's upload is refused `409` `recording_off`.
 - An upload with no store is answered `409` `recording_off`, a reason the `brokered:recording` row and `wardyn-rec`'s log carry (migration `0180_run_recording`).

@@ -266,6 +266,16 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusBadGateway, reasonAttachResumeFailed, "run is paused and could not be resumed; try again")
 		return
 	}
+	// transport=local (attach_local.go) is checked only here, after every check above, thaw
+	// included, so a local attach is refused exactly where a relay one is (C1). Do not reorder.
+	var local *localAttachTarget
+	if r.URL.Query().Get("transport") == attachTransportLocal {
+		t, ok := s.localAttachTargetFor(w, r, run)
+		if !ok {
+			return
+		}
+		local = &t
+	}
 
 	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		InsecureSkipVerify: true,
@@ -339,6 +349,11 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	}
 	holder.lastOutput.Store(time.Now().UnixNano())
 	wa.holder = holder
+	var la *localAttach
+	if local != nil {
+		la = newLocalAttach(wa, *local, r.URL.Query().Get("local_nonce"))
+		holder.source, holder.notify, holder.displace, holder.demoted = attachSourceLocal, la.notify, la.displace, la.kick
+	}
 	readOnly, releaseHolder := s.registerAttachHolder(id, holder)
 	// Deferred as the crash backstop, NOT the release point (see the explicit
 	// call right after attachPump returns, below): a panicking pump would
@@ -359,10 +374,10 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// outcome is a second row, never an update; this one exists before any
 	// take-over can be audited against it.
 	s.recordStreamAudit(finishCtx, run.SandboxRef, s.auditEvent(&id, principalType, principal, "session.attach",
-		id.String(), "success", mustJSON(withSponsorEntry(run, map[string]any{
+		id.String(), "success", mustJSON(withSponsorEntry(run, wa.with(map[string]any{
 			"sandbox_ref": run.SandboxRef, "cols": opts.Cols, "rows": opts.Rows,
 			"state": "attaching", "read_only": readOnly,
-		}))))
+		})))))
 
 	// An observer KEEPS its holder object: holder.writable is the read-only
 	// marker now (attach_holder.go), and nulling it here is exactly what left a
@@ -375,9 +390,12 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// pump's own writer. A write failure here means the socket is already gone;
 	// the pump below ends on its own, so there is nothing to do about it beyond
 	// not pretending it succeeded.
-	wa.modeMu.Lock()
-	_ = writeAttachMode(ctx, c, !holder.canWrite(), s.attachHolderFor(id))
-	wa.modeMu.Unlock()
+	// A local socket sends its first frame once the runner has taken the grant (localAttach.run).
+	if la == nil {
+		wa.modeMu.Lock()
+		_ = writeAttachMode(ctx, c, !holder.canWrite(), s.attachHolderFor(id))
+		wa.modeMu.Unlock()
+	}
 
 	// Provenance: record this interactive session as a replayable
 	// asciicast so the human-in-sandbox is in the audit trail. We tee the server
@@ -412,7 +430,13 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// Bidirectional pump. closeReason is filled by whichever side ends first.
 	// castTee (may be nil when no RecordingStore is wired) receives a copy of the
 	// masked PTY output for the asciicast.
-	closeReason := s.attachPump(pumpCtx, c, id, holder, castTee, wa.open)
+	// A local session's bytes are on the runner's computer; this socket is its control half.
+	var closeReason string
+	if la != nil {
+		closeReason = la.run(castTee)
+	} else {
+		closeReason = s.attachPump(pumpCtx, c, id, holder, castTee, wa.open)
+	}
 	cancel()
 	closeReason = endedFromOutside(closeReason)
 	if wa.failed.Load() {
@@ -461,7 +485,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// ends as a writer, and recording its connect-time mode would say the human
 	// who was driving had only been watching.
 	s.recordStreamAudit(finishCtx, run.SandboxRef, s.auditEvent(&id, principalType, principal, "session.detach",
-		id.String(), "success", mustJSON(map[string]any{"reason": closeReason, "read_only": !holder.writable.Load()})))
+		id.String(), "success", mustJSON(wa.with(map[string]any{"reason": closeReason, "read_only": !holder.writable.Load()}))))
 
 	// Best-effort clean close; the deferred CloseNow is the fail-closed backstop.
 	// A failed attach was already closed with its own status (failAttach).

@@ -566,3 +566,9 @@ const reasonHostCapacityRefused = "host_capacity_refused"
 // PUT /workspaces/{id}/approved-egress naming a host on the workspace's denied list (handleSetApprovedEgress):
 // deny beats allow, so the approval would change nothing.
 const reasonWorkspaceApprovedEgressDenied = "workspace_approved_egress_denied"
+
+// GET /runs/{id}/attach?transport=local (attach_local.go), after every check of the attach door has
+// passed: this run cannot be attached on its runner's own computer, and the CLI attaches through the
+// organisation instead. A transport's answer, not a refusal; errorBody.Detail says why. Declared here
+// because reasons_routes.go is at scripts/check-file-size.sh's limit.
+const reasonAttachLocalUnavailable = "attach_local_unavailable"

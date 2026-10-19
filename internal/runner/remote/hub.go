@@ -70,6 +70,9 @@ type HubConfig struct {
 	// for its reported architecture); AUTH_OK carries it, so the runner follows the organisation's
 	// upgrades. "" says nothing.
 	ProxyImage func(types.Runner) string
+	// LocalAttach, when set, says whether AUTH_OK tells a claimed runner the organisation allows local
+	// attach (runnerwire.AuthOK.LocalAttach). Nil says false.
+	LocalAttach func(types.Runner) bool
 }
 
 type hubSession struct {
@@ -339,6 +342,9 @@ func (h *Hub) start(ctx context.Context, conn runnerwire.Conn, row types.Runner,
 	ok := runnerwire.AuthOK{SessionID: s.id, Resumed: resumed, PingInterval: runnerwire.PingInterval, LastSeq: cfg.LastReceived}
 	if h.cfg.ProxyImage != nil {
 		ok.ProxyImage = h.cfg.ProxyImage(current)
+	}
+	if h.cfg.LocalAttach != nil {
+		ok.LocalAttach = h.cfg.LocalAttach(current)
 	}
 	if err := runnerwire.WriteControl(ctx, conn, runnerwire.TypeAuthOK, ok); err != nil {
 		return nil, err

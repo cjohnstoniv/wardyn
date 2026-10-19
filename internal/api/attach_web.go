@@ -37,6 +37,9 @@ type webAttach struct {
 	holder        *attachHolder
 	modeMu        sync.Mutex
 	failed        atomic.Bool // the exec could not be opened or replaced
+	// fields ride on every session row this socket writes: transport and runner_id on a local one
+	// (attach_local.go), nothing on the relay.
+	fields map[string]any
 }
 
 // fail ends a connection whose exec could not be opened or replaced: the
@@ -57,8 +60,17 @@ func (wa *webAttach) fail(err error, promotion bool) {
 
 func (wa *webAttach) audit(outcome string, data map[string]any) {
 	id := wa.run.ID
+	data = wa.with(data)
 	wa.s.recordStreamAudit(wa.finishCtx, wa.run.SandboxRef, wa.s.auditEvent(&id, wa.principalType, wa.principal, "session.attach",
 		id.String(), outcome, mustJSON(withSponsorEntry(wa.run, data))))
+}
+
+// with adds this socket's fields to a session row's data.
+func (wa *webAttach) with(data map[string]any) map[string]any {
+	for k, v := range wa.fields {
+		data[k] = v
+	}
+	return data
 }
 
 // open opens the exec and writes the second session.attach row, the outcome,
