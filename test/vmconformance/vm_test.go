@@ -102,10 +102,10 @@ func setup(t *testing.T) *env {
 		}
 	})
 	for name, args := range map[string][]string{
-		"proxy":  {"-f", "deploy/compose/Dockerfile.proxy"},
-		"vmnet":  {"-f", "deploy/compose/Dockerfile.vmnet"},
-		"vm":     {"-f", "test/vmconformance/testdata/Dockerfile", "--target", "vm"},
-		"origin": {"-f", "test/vmconformance/testdata/Dockerfile", "--target", "origin"},
+		"proxy":  {"-f", filepath.Join(root, "deploy/compose/Dockerfile.proxy")},
+		"vmnet":  {"-f", filepath.Join(root, "deploy/compose/Dockerfile.vmnet")},
+		"vm":     {"-f", filepath.Join(root, "test/vmconformance/testdata/Dockerfile"), "--target", "vm"},
+		"origin": {"-f", filepath.Join(root, "test/vmconformance/testdata/Dockerfile"), "--target", "origin"},
 	} {
 		e.images[name] = "wardyn-vmconf/" + name + ":" + e.id
 		e.must(t, append(append([]string{"build", "-q", "-t", e.images[name]}, args...), root)...)
