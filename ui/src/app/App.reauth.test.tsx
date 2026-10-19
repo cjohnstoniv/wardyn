@@ -729,6 +729,30 @@ describe("App — the other tabs of this browser (DR-0020)", () => {
     expect(await screen.findByLabelText("Note")).toBeInTheDocument();
   });
 
+  // The deliberate-sign-out hold is per sign-out: entering again through another tab's sign-in and signing out a second
+  // time holds focus out again, and the second return works the same way.
+  it("a second deliberate sign-out after re-entering through another tab is held and heard the same way", async () => {
+    await mountWithDraft();
+    const signOut = async () => {
+      const headerButtons = within(screen.getByRole("banner")).getAllByRole("button");
+      await user.click(headerButtons[headerButtons.length - 1]);
+      await user.click(within(await screen.findByRole("menu")).getByText("Sign out"));
+      await screen.findByText("Admin token", { exact: true });
+    };
+    await signOut();
+    await fromAnotherTab("changed");
+    await screen.findByLabelText("Note");
+
+    await signOut();
+    act(() => void window.dispatchEvent(new Event("focus")));
+    await act(async () => {
+      vi.advanceTimersByTime(3000);
+    });
+    expect(screen.getByText("Admin token", { exact: true })).toBeInTheDocument();
+    await fromAnotherTab("changed");
+    expect(await screen.findByLabelText("Note")).toBeInTheDocument();
+  });
+
   it("announces this tab's own sign-out and sign-in to the others", async () => {
     await mountWithDraft();
     const header = screen.getByRole("banner");

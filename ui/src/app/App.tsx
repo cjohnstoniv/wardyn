@@ -128,7 +128,7 @@ const UserTypesScreen = React.lazy(() =>
     default: m.UserTypesScreen,
   })),
 );
-// Stored credentials (CS-8, design F-1) — who holds a credential for which
+// Credentials (CS-8, design F-1) — who holds a credential for which
 // model provider, and offboarding's erase. securityOps server-side, like
 // User types; no member route.
 const CredentialsScreen = React.lazy(() =>
@@ -470,6 +470,8 @@ export default function App() {
       if (!fromOtherTab && signedOutHereRef.current) return;
       void probeAuth().then((probe) => {
         if (!alive || probe !== "authed" || authRef.current !== "unauthed") return;
+        // Back in, by another tab's sign-in: a later sign-out here starts from a clean slate.
+        signedOutHereRef.current = false;
         setSignedOut(false);
         setAuth("authed");
       });

@@ -3,10 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, gotoConsole, navTo, navToRoute } from "./fixtures";
+import { test, expect, expandCard, gotoConsole, navTo, navToRoute } from "./fixtures";
 import type { Page } from "@playwright/test";
 import { GOVERNANCE as GOV, PERM, PREVIEW } from "../src/app/lib/governance-copy";
 import { aheadByHours } from "../src/app/lib/test-clock";
+import { SESSION_EXPIRES_HEADER } from "../src/app/lib/api/session-activity";
 
 // Screens that must not act on an answer, or fail to act on a refusal, that no longer belongs to what is on
 // screen: the Governance previews and delete confirms. The snapshot is stubbed at its route; the writes are held
@@ -128,5 +129,76 @@ test.describe("Components: a delete is sent once, and its dialog holds until it 
     release();
     await expect(dialog).toHaveCount(0);
     expect(deletes).toBe(1);
+  });
+});
+
+const inMinutes = (m: number) => new Date(Date.now() + m * 60_000).toISOString();
+const nextFrames = (page: Page) => page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+
+test.describe("Session expiry: answers are ordered by when their request started", () => {
+  test("a slower, older answer naming an earlier expiry does not bring the expiry banner back", async ({ page }) => {
+    // The first answer (a preview, held) names an expiry two minutes out; a later request (the Permissions
+    // read) names an hour out and answers first. The held answer then lands: it is older, so it changes nothing.
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let started!: () => void;
+    const previewStarted = new Promise<void>((resolve) => (started = resolve));
+    await page.route("**/api/v1/governance/preview", async (route) => {
+      started();
+      await held;
+      await route.fulfill({
+        headers: { [SESSION_EXPIRES_HEADER.toLowerCase()]: inMinutes(2) },
+        json: { profile_id: PLATFORM.id, profile_name: PLATFORM.name, matched_tier: "group" },
+      });
+    });
+    await page.route("**/api/v1/permissions*", async (route) => {
+      const response = await route.fetch();
+      const headers = { ...response.headers(), [SESSION_EXPIRES_HEADER.toLowerCase()]: inMinutes(60) };
+      delete headers["content-length"];
+      await route.fulfill({ response, headers });
+    });
+    await openGovernance(page, { profiles: [PLATFORM], assignments: [] });
+
+    await page.getByLabel(PREVIEW.FIELD_CLAIMS).fill("wardyn.platform");
+    const previewAnswered = page.waitForResponse((r) => r.url().includes("/governance/preview"));
+    await page.getByRole("button", { name: GOV.PREVIEW_RUN_CTA }).click();
+    await previewStarted;
+    const permissionsAnswered = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/v1/permissions");
+    await navTo(page, "Permissions");
+    await permissionsAnswered;
+    release();
+    await previewAnswered;
+    await nextFrames(page);
+    await expect(page.getByText("Your session is expiring soon.")).toHaveCount(0);
+  });
+});
+
+test.describe("Admin settings: a slow first read cannot overwrite the resolved one", () => {
+  test("the Host card keeps saying the proxy is in use after the first setup read lands late", async ({ page }) => {
+    // The first /setup/status answer waits for the second to be asked for (or four seconds, so a load that
+    // only asks once is never stuck), then lands after it.
+    let seen = 0;
+    let askedAgain!: () => void;
+    const second = new Promise<void>((resolve) => (askedAgain = resolve));
+    let firstLanded = false;
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      seen += 1;
+      if (seen > 1) askedAgain();
+      if (seen !== 1) return route.fallback();
+      await Promise.race([second, new Promise((resolve) => setTimeout(resolve, 4000))]);
+      const response = await route.fetch();
+      await route.fulfill({ response });
+      firstLanded = true;
+    });
+    await page.route("**/api/v1/site-config", (route) =>
+      route.request().method() === "GET" ? route.fulfill({ json: { upstream_proxy_url: "http://proxy.corp.example:3128" } }) : route.fallback(),
+    );
+    await page.goto("/admin/settings");
+    await expect(page.getByRole("heading", { name: "Admin SSH keys" })).toBeVisible();
+    await expandCard(page, "Host");
+    await expect(page.getByTestId("host-tile-internet-pill")).toHaveText("Through the corporate proxy");
+    await expect.poll(() => firstLanded).toBe(true);
+    await nextFrames(page);
+    await expect(page.getByTestId("host-tile-internet-pill")).toHaveText("Through the corporate proxy");
   });
 });

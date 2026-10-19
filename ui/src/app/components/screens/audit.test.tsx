@@ -911,4 +911,32 @@ describe("AuditScreen — the liveness chip stops claiming a feed that stopped a
     });
     expect(screen.getByText("Live · appending")).toBeInTheDocument();
   });
+
+  // A read slower than the poll interval must still paint: the next tick waits for it instead of overtaking it,
+  // because the request-id guard drops every answer that is not the newest request's.
+  it("a read slower than the poll interval still paints, and the chip stays live", async () => {
+    vi.useFakeTimers();
+    listAuditMock.mockResolvedValueOnce([ev({ id: "e1", run_id: "run_111", action: "egress.allow" })]);
+    renderScreen();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(screen.getByText("1 event")).toBeInTheDocument();
+
+    // Each later read takes 7 s, longer than the 5 s poll.
+    listAuditMock.mockImplementation(
+      () =>
+        new Promise((resolve) =>
+          setTimeout(
+            () => resolve([ev({ id: "e1", run_id: "run_111", action: "egress.allow" }), ev({ id: "e2", run_id: "run_111", action: "egress.deny" })]),
+            7000,
+          ),
+        ),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(13000);
+    });
+    expect(screen.getByText("2 events")).toBeInTheDocument();
+    expect(screen.getByText("Live · appending")).toBeInTheDocument();
+  });
 });

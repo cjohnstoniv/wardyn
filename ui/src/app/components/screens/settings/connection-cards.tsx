@@ -24,6 +24,7 @@ import { getErrorMessage } from "../../../lib/format";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Field } from "../../wardyn/form-primitives";
+import { PROVIDERS_EXTRA } from "../../../lib/workspace-providers-copy";
 import { DeleteConfirmDialog } from "../../wardyn/delete-confirm-dialog";
 import { Mono } from "../../wardyn/code-block";
 import { cn } from "../../ui/utils";
@@ -222,7 +223,7 @@ export function SecretLane({
           name={confirming ? secretName : null}
           entity="credential"
           allowed
-          description="The stored value is deleted from Wardyn and can't be shown again. Runs that clone with it stop working until you connect a new one. This cannot be undone."
+          description={PROVIDERS_EXTRA.DISCONNECT_CREDENTIAL_BODY}
           onOpenChange={(o) => !o && setConfirming(false)}
           onDelete={() => secretsApi.deleteSecret(secretName)}
           onDeleted={() => {

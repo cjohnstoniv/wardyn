@@ -380,8 +380,10 @@ export function AuditScreen() {
   // Live-tail: audit is append-only, so a background poll is meaningful (new
   // events only ever get added). Refresh quietly — never flip back to the
   // loading skeleton, that would flicker the whole list every tick.
+  // Returned, so usePoll's in-flight guard holds the next tick until this read answers: a read slower than the
+  // interval would otherwise be overtaken by the next tick and dropped by the request-id guard above, every time.
   const tick = React.useCallback(() => {
-    fetchEvents()
+    return fetchEvents()
       .then(() => setPollStale(false))
       .catch(() => {
         /* transient poll failure — keep the last good view and retry next

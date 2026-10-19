@@ -6,7 +6,7 @@
 import { randomUUID } from "node:crypto";
 import type { Page } from "@playwright/test";
 import { test, expect, MEMBER_PRINCIPAL, asRealMember, asRealSecurityAdmin, consoleAPI, gotoConsole, sql } from "./fixtures";
-import { APPROVAL, RUN_COCKPIT, SECURITY_ONLY_REASON } from "../src/app/components/wardyn/copy";
+import { APPROVAL, RUN_COCKPIT, SECURITY_ONLY_REASON, UNTIL_PAST } from "../src/app/components/wardyn/copy";
 import { APPROVALS } from "../src/app/lib/approvals-copy";
 import { REAUTH_ROW, REAUTH_TITLE } from "../src/app/components/wardyn/model-access-copy";
 import { toDatetimeLocalValue } from "../src/app/lib/datetime-local";
@@ -909,7 +909,7 @@ test.describe("F-12 — LiveApprovals row gate mirrors canDecideApproval, not a 
       const field = dialog.getByLabel("Pick a time");
       const approve = dialog.getByRole("button", { name: "Approve", exact: true });
       await field.fill(toDatetimeLocalValue(new Date(aheadByHours(-9600))));
-      await expect(dialog.getByRole("alert")).toHaveText("That time has already passed. Pick a later one.");
+      await expect(dialog.getByRole("alert")).toHaveText(UNTIL_PAST);
       await expect(approve).toBeDisabled();
       await field.fill(toDatetimeLocalValue(new Date(aheadByHours(9600))));
       await expect(dialog.getByRole("alert")).toHaveCount(0);
