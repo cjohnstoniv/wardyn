@@ -68,6 +68,11 @@ var memberDeniedSegments = map[string]bool{
 	".kube":            true, // cluster credentials
 	".netrc":           true,
 	".git-credentials": true,
+	".codex":           true, // the Codex harness login
+	".azure":           true, // Azure CLI token cache
+	".gemini":          true, // another agent CLI's login
+	".npmrc":           true, // registry auth tokens
+	".pypirc":          true,
 }
 
 // memberDeniedPairs are two-segment denials — a bare ".config" or ".git" is an
@@ -75,6 +80,7 @@ var memberDeniedSegments = map[string]bool{
 // hold credentials (gh's token) and remote/credential config.
 var memberDeniedPairs = [][2]string{
 	{".config", "gh"},
+	{".config", "gcloud"},
 	{".git", "config"},
 }
 
