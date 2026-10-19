@@ -61,6 +61,10 @@ type Bus struct {
 
 	mu       sync.Mutex
 	handlers map[string][]func(Message)
+
+	// lastFail is the listener's last logged failure (step and error), "" while it listens.
+	// Only the listen goroutine touches it.
+	lastFail string
 }
 
 // New returns a Bus over pool whose notices carry origin, this replica's identity.
@@ -120,18 +124,22 @@ func (b *Bus) listen(ctx context.Context) {
 func (b *Bus) listenOnce(ctx context.Context) {
 	conn, err := pgx.ConnectConfig(ctx, b.pool.Config().ConnConfig.Copy())
 	if err != nil {
-		listenFailed(ctx, "connect", err)
+		b.listenFailed(ctx, "connect", err)
 		return
 	}
 	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
 	if _, err := conn.Exec(ctx, "LISTEN "+Channel); err != nil {
-		listenFailed(ctx, "listen", err)
+		b.listenFailed(ctx, "listen", err)
 		return
+	}
+	if b.lastFail != "" {
+		slog.InfoContext(ctx, "livebus: the listener reconnected")
+		b.lastFail = ""
 	}
 	for {
 		n, err := conn.WaitForNotification(ctx)
 		if err != nil {
-			listenFailed(ctx, "wait", err)
+			b.listenFailed(ctx, "wait", err)
 			return
 		}
 		b.dispatch(ctx, n.Payload)
@@ -139,9 +147,14 @@ func (b *Bus) listenOnce(ctx context.Context) {
 }
 
 // listenFailed logs why the listener is about to reconnect: until it does, this replica hears
-// no notice, and nothing else says so. A stop on ctx is not a failure.
-func listenFailed(ctx context.Context, step string, err error) {
-	if ctx.Err() == nil {
+// no notice, and nothing else says so. A stop on ctx is not a failure. The same failure on every
+// retry is logged once, not every listenRetry; a different one, and the recovery, are logged again.
+func (b *Bus) listenFailed(ctx context.Context, step string, err error) {
+	if ctx.Err() != nil {
+		return
+	}
+	if key := step + ": " + err.Error(); key != b.lastFail {
+		b.lastFail = key
 		slog.WarnContext(ctx, "livebus: the listener failed; reconnecting", slog.String("step", step), slog.Any("err", err))
 	}
 }
