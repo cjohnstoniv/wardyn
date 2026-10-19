@@ -11,6 +11,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -19,6 +20,9 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+// errCredentialDeliveryStale is the If-Match check refusing the document it was handed.
+var errCredentialDeliveryStale = errors.New("credential delivery policy changed")
 
 const (
 	govKindCredentialDelivery = types.GovernanceTargetCredentialDelivery
@@ -105,29 +109,51 @@ func (s *Server) handlePutCredentialDelivery(w http.ResponseWriter, r *http.Requ
 		writeErrorReason(w, http.StatusBadRequest, reasonCredentialDeliveryInvalid, err.Error())
 		return
 	}
-	doc, err := st.GetCredentialDeliveryPolicy(r.Context())
-	if err != nil {
-		writeServerError(w, r, "get credential delivery policy", err)
-		return
+	staleIfMatch := func(cur types.CredentialDeliveryPolicyDoc) (placement.DeliveryPolicy, error) {
+		before, err := deliveryPolicyOf(cur.Policy)
+		if err != nil {
+			return before, err
+		}
+		if !ifMatchSatisfied(r, computeETag(before)) {
+			return before, errCredentialDeliveryStale
+		}
+		return before, nil
 	}
-	before, err := deliveryPolicyOf(doc.Policy)
-	if err != nil {
-		writeServerError(w, r, "get credential delivery policy", err)
-		return
-	}
-	if !ifMatchSatisfied(r, computeETag(before)) {
+	writeStale := func() {
 		writeErrorReason(w, http.StatusPreconditionFailed, reasonCredentialDeliveryStale,
 			"If-Match does not match the current credential delivery policy — GET /governance/credential-delivery again and retry")
-		return
 	}
+	var before placement.DeliveryPolicy
 	if mode == govQueue {
+		doc, err := st.GetCredentialDeliveryPolicy(r.Context())
+		if err != nil {
+			writeServerError(w, r, "get credential delivery policy", err)
+			return
+		}
+		if before, err = staleIfMatch(doc); errors.Is(err, errCredentialDeliveryStale) {
+			writeStale()
+			return
+		} else if err != nil {
+			writeServerError(w, r, "get credential delivery policy", err)
+			return
+		}
 		s.proposeGovernanceChange(w, r, govProposal{
 			kind: govKindCredentialDelivery, op: "replace", key: govCredentialDeliveryKey, payload: after,
 			before: before, after: after, changed: changedPaths(before, after), baseState: before,
 		})
 		return
 	}
-	stored, err := st.PutCredentialDeliveryPolicy(r.Context(), mustJSON(after), principalFromRequest(r), time.Now().UTC())
+	// The If-Match check and the write share one transaction under the target lock, so a stale
+	// ETag answers 412 even when another write landed between a read and this one.
+	stored, err := st.PutCredentialDeliveryPolicyIf(r.Context(), mustJSON(after), principalFromRequest(r), time.Now().UTC(),
+		func(cur types.CredentialDeliveryPolicyDoc) (err error) {
+			before, err = staleIfMatch(cur)
+			return err
+		})
+	if errors.Is(err, errCredentialDeliveryStale) {
+		writeStale()
+		return
+	}
 	if err != nil {
 		writeServerError(w, r, "put credential delivery policy", err)
 		return

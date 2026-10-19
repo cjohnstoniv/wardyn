@@ -45,6 +45,9 @@ type RunnerStore interface {
 
 	GetCredentialDeliveryPolicy(ctx context.Context) (types.CredentialDeliveryPolicyDoc, error)
 	PutCredentialDeliveryPolicy(ctx context.Context, policy json.RawMessage, by string, now time.Time) (types.CredentialDeliveryPolicyDoc, error)
+	// PutCredentialDeliveryPolicyIf reads the document under the governance target lock and writes
+	// only if check accepts it; check's error is returned and nothing is written.
+	PutCredentialDeliveryPolicyIf(ctx context.Context, policy json.RawMessage, by string, now time.Time, check func(current types.CredentialDeliveryPolicyDoc) error) (types.CredentialDeliveryPolicyDoc, error)
 }
 
 var _ RunnerStore = PG{}
@@ -431,6 +434,28 @@ func GetCredentialDeliveryPolicyQ(ctx context.Context, q Querier) (types.Credent
 // PutCredentialDeliveryPolicy upserts the document. The caller has validated it (placement.DeliveryPolicy.Validate).
 func (s PG) PutCredentialDeliveryPolicy(ctx context.Context, policy json.RawMessage, by string, now time.Time) (types.CredentialDeliveryPolicyDoc, error) {
 	return PutCredentialDeliveryPolicyQ(ctx, s.Pool, policy, by, now)
+}
+
+// PutCredentialDeliveryPolicyIf is PutCredentialDeliveryPolicy behind a check of the document as it stands: the
+// read, check and write run in one transaction under the lock an approval of a held replacement takes
+// too, so a write checked against a stale read cannot land after a change that moved the document.
+func (s PG) PutCredentialDeliveryPolicyIf(ctx context.Context, policy json.RawMessage, by string, now time.Time, check func(current types.CredentialDeliveryPolicyDoc) error) (types.CredentialDeliveryPolicyDoc, error) {
+	var out types.CredentialDeliveryPolicyDoc
+	err := s.inTx(ctx, func(q Querier) error {
+		if err := LockGovernanceTarget(ctx, q, types.GovernanceTargetCredentialDelivery); err != nil {
+			return err
+		}
+		cur, err := GetCredentialDeliveryPolicyQ(ctx, q)
+		if err != nil {
+			return err
+		}
+		if err := check(cur); err != nil {
+			return err
+		}
+		out, err = PutCredentialDeliveryPolicyQ(ctx, q, policy, by, now)
+		return err
+	})
+	return out, err
 }
 
 // PutCredentialDeliveryPolicyQ is PutCredentialDeliveryPolicy on q.
