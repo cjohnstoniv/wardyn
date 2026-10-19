@@ -93,16 +93,6 @@ jobs:
       images: ${{ steps.classify.outputs.images }}
       notices: ${{ steps.classify.outputs.notices }}
     steps:
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # On a pull_request HEAD is GitHub's merge commit and HEAD^1 the base
@@ -243,6 +233,7 @@ jobs:
             tags: k8s
     steps:
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
+        if: matrix.suite != 'lint'
         run: |
           command -v dockerd >/dev/null || exit 0
           f=/etc/docker/daemon.json
@@ -375,16 +366,6 @@ jobs:
           LEGS: ${{ needs.go.result }}
         run: |
           [ "$LEGS" = success ] || { echo "::error::a go leg did not pass (result: $LEGS); see the go (…) checks"; exit 1; }
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: needs.changes.outputs.backend != 'false'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
@@ -437,16 +418,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 2
@@ -500,16 +471,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
@@ -1926,16 +1887,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
@@ -1987,16 +1938,6 @@ jobs:
       matrix:
         gate: [govulncheck, staticcheck, licenses, license-headers, gitleaks]
     steps:
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
@@ -2037,16 +1978,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # Fetch full history so all commits in the PR are visible.
