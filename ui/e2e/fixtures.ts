@@ -175,7 +175,7 @@ export type NavLabel =
   | "Secrets"
   | "Audit"
   | "Recordings"
-  // A security admin's Admin view only (packet M-A).
+  // No admin tier lists it since #2827; kept so a spec can assert it is absent.
   | "Drives"
   // #217's slot, under a divider (app-shell.tsx#SidebarNav): Setup and
   // Settings in the Admin view, Getting started and Your account in the User

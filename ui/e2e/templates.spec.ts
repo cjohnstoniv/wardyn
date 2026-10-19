@@ -133,6 +133,8 @@ test.describe("Templates: filters and rows", () => {
     await stubCatalogue(page, { rows: CATALOGUE, publish: { ...ME_ONLY, groups_unverified: true } });
     await openTemplates(page);
     await expect(page.getByText(T.GROUPS_UNVERIFIED)).toBeVisible();
+    // #2830: the advice to sign in again is for an SSO sign-in only; a token session cannot act on it.
+    await expect(page.getByText("If you signed in with SSO, sign in again to see them.", { exact: false })).toBeVisible();
     await expect(names(page)).toHaveText(CATALOGUE.map((r) => r.name));
     await page.unrouteAll({ behavior: "ignoreErrors" });
     await stubCatalogue(page, { rows: CATALOGUE, publish: ME_ONLY });

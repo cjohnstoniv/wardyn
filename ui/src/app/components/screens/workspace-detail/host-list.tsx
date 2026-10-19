@@ -23,6 +23,8 @@ export interface HostRow {
   removeBlockedReason?: string;
 }
 
+const reasonId = (host: string) => `host-remove-reason-${host}`;
+
 export function HostList({ rows, emptyText, canRemove, removing, onRemove }: {
   rows: HostRow[];
   emptyText: string;
@@ -35,7 +37,15 @@ export function HostList({ rows, emptyText, canRemove, removing, onRemove }: {
     <ul className="space-y-2">
       {rows.map((r) => (
         <li key={r.host} className="flex items-center gap-3 rounded-lg border border-border p-2.5">
-          <Mono className="flex-1 text-foreground">{r.host}</Mono>
+          <div className="min-w-0 flex-1">
+            <Mono className="text-foreground">{r.host}</Mono>
+            {/* A disabled control says why in visible text, never in a title alone (CONSOLE-RULES). */}
+            {r.removable && r.removeBlockedReason && (
+              <p id={reasonId(r.host)} className="text-meta text-muted-foreground">
+                {r.removeBlockedReason}
+              </p>
+            )}
+          </div>
           <span className="text-meta text-muted-foreground">{r.provenance}</span>
           {r.removable ? (
             <Button
@@ -45,7 +55,7 @@ export function HostList({ rows, emptyText, canRemove, removing, onRemove }: {
               disabled={!canRemove || !!r.removeBlockedReason || removing !== null}
               onClick={() => onRemove(r.host)}
               aria-label={`Remove ${r.host}`}
-              title={r.removeBlockedReason}
+              aria-describedby={r.removeBlockedReason ? reasonId(r.host) : undefined}
             >
               <X className="size-3.5" />
             </Button>

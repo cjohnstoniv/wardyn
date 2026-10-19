@@ -49,6 +49,32 @@ test.describe("Workspaces — the four-column list", () => {
   });
 });
 
+test.describe("Workspaces — search", () => {
+  // #2592: a multi-source workspace has no single `source`, so the search reads each attached source.
+  test("finds a multi-source workspace by one of its source paths", async ({ page }) => {
+    await page.route("**/api/v1/workspaces", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const response = await route.fetch();
+      const mono = {
+        id: "e2e-mono-ws",
+        name: "mono",
+        kind: "local_dir",
+        source: "",
+        status: "scanned",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        sources: [{ type: "local_dir", path: "/srv/api" }, { type: "repo", source: "org/lib" }],
+      };
+      await route.fulfill({ response, json: [...(await response.json()), mono] });
+    });
+    await gotoConsole(page);
+    await page.goto("/workspaces");
+    await page.getByPlaceholder(/search by name or source/i).fill("org/lib");
+    await expect(page.getByRole("row", { name: /mono/ })).toBeVisible();
+    await expect(page.getByRole("row", { name: /payments/ })).toHaveCount(0);
+  });
+});
+
 test.describe("Add workspace dialog", () => {
   test("Add workspace is disabled until a Repository URL is entered", async ({ page }) => {
     const dlg = await openAddWorkspaceDialog(page);

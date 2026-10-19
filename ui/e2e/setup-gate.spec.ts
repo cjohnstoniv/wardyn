@@ -450,6 +450,27 @@ test.describe("setup gate — forced on access, never a prison", () => {
   });
 });
 
+// #2577: the Secrets step's link is read in the view the funnel is in. In the admin view /secrets is the User
+// view's page, which the admin token on an SSO install cannot enter.
+test.describe("setup Secrets step — the link stays in the admin view (#2577)", () => {
+  test("Secrets page links to /admin/secrets and opens the org secrets screen", async ({ page }) => {
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.onboarding_complete = false;
+      await route.fulfill({ response, json });
+    });
+    await skipHero(page);
+    await page.goto("/admin/setup?step=integrations");
+
+    const link = page.getByRole("link", { name: "Secrets page" });
+    await expect(link).toHaveAttribute("href", "/admin/secrets");
+    await link.click();
+    await expect(page).toHaveURL(/\/admin\/secrets$/);
+    await expect(page.getByRole("heading", { name: "Secrets", exact: true })).toBeVisible();
+  });
+});
+
 // #213 — the step counter counts only what blocks a run, the rail keeps three
 // categories apart (Required / Optional setup / Demos, not one flat
 // "optional" list), and the barrier recommendation is derived from what the

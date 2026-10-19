@@ -25,7 +25,6 @@ only as a duplicate of the now-visible text, never as the sole explanation.
 |---|---|---|
 | `record-pane.tsx` — per-host Approve button (`CaughtHosts`, in a row with the host) | trailing meta | `OperatorOnlyHint` (`OPERATOR_ONLY_REASON`) |
 | `record-pane.tsx` — "Approve N selected hosts and replay again" (standing alone) | helper text under | `OPERATOR_ONLY_REASON` |
-| `recording.tsx` — search field, recording disabled on this deployment | helper text under | `RECORDINGS.SEARCH_DISABLED_HINT` |
 | `recording.tsx` — true-empty library (no runs at all) | `EmptyState` title + body | `RECORDINGS.EMPTY_TITLE` / `RECORDINGS.EMPTY_BODY` |
 | `audit.tsx` `AuditScreen` — member's unfiltered feed | `EmptyState` title (already visible; verified, left as-is) | `AUDIT.MEMBER_FEED_TITLE` (`screens/audit-copy.ts`) |
 | `sign-in.tsx:394` — disabled SSO button | **not touched** — removed outright by #457 | — |
@@ -40,7 +39,6 @@ only as a duplicate of the now-visible text, never as the sole explanation.
 |---|---|---|
 | Check error fallback (`checkFailureText`, `new-run-flow/draft/use-intent-checks.ts`; the preflight blocker and the Tools step's failed-preview alert both use it) | Changed (#497) — was "Preflight failed.", spoken twice after the prefix | "No reason was given." |
 | `OPERATOR_ONLY_REASON` (`wardyn/copy.ts`) | Reused | "Requires the admin role." |
-| `RECORDINGS.SEARCH_DISABLED_HINT` (`recording-copy.ts`) | New | "Session recording is disabled on this deployment — there is nothing to search." |
 | `RECORDINGS.EMPTY_TITLE` (`recording-copy.ts`) | Reused (mock naming) | "No recordings yet" |
 | `RECORDINGS.EMPTY_BODY` (`recording-copy.ts`) | Changed | "Recordings appear once a run's terminal session is captured." |
 | `RECORDING_DISABLED_TITLE` (`wardyn/copy/recording-disabled.ts`) | Reused, unchanged | "Session recording is disabled on this deployment" |
