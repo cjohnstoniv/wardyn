@@ -91,6 +91,9 @@ var bareWriteErrorAllowlist = map[string]bareWriteErrorEntry{
 	// carry a reason in — the response IS the HTML page, or in this one
 	// failure arm, plain text — so #656's reason contract, which is about
 	// errorBody{error,reason}, does not reach this handler at all.
+	// writeError itself: its one forwarding call writeErrorReason(w, status, "", msg) is what a
+	// reason-less writeError is, and every caller of writeError is found at its own call site.
+	"http.go:writeError": {1, "writeError's own forward to writeErrorReason with an empty reason; its callers are counted individually"},
 	"ui.go:Server.serveIndex": {1, "not the JSON API: serves index.html; a read failure here has no errorBody to carry a reason in"},
 }
 
@@ -133,6 +136,11 @@ func findBareWriteErrorCalls(fset *token.FileSet, name string, file *ast.File, s
 				isBareWriteError = true
 			} else if fn, ok := call.Fun.(*ast.Ident); ok && fn.Name == "runError" && len(call.Args) == 3 {
 				if reason, ok := call.Args[1].(*ast.BasicLit); ok && reason.Value == `""` {
+					isBareWriteError = true
+				}
+			} else if fn, ok := call.Fun.(*ast.Ident); ok && fn.Name == "writeErrorReason" && len(call.Args) == 4 {
+				// A reason spelled "" is writeError by another name.
+				if reason, ok := call.Args[2].(*ast.BasicLit); ok && reason.Value == `""` {
 					isBareWriteError = true
 				}
 			} else if isHTTPDotError(call) {
