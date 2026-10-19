@@ -39,7 +39,7 @@ an interactive first run still asks the operator.
 
 - Full-replace, same shape as `approved-egress` (omit a host to un-deny it — there is no per-host delete).
 - Deny beats allow everywhere the proxy evaluates policy, so a `deny · always` on a model-provider host, or one a required integration injects into, permanently breaks that workspace's proxy-side injection for every future run.
-- `denied-egress`'s validator is deliberately narrower than `approved-egress`'s (plain host shape only, no model-provider reject set) so it keeps working as the escape hatch even when the workspace is already bricked (`handleSetDeniedEgress`, [`internal/api/workspaces.go`](../../internal/api/workspaces.go)).
+- `denied-egress`'s validator is deliberately narrower than `approved-egress`'s (plain host shape only, no model-provider reject set) so it keeps working as the escape hatch even when the workspace is already bricked (`handleSetDeniedEgress`, [`internal/api/workspaces_egress.go`](../../internal/api/workspaces_egress.go)).
 
 **A member's own policy is clamped, not trusted.**
 

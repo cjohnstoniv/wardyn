@@ -23,10 +23,13 @@ residual risks are listed there and are out of scope for this process (see below
 
 In your report, please include:
 
-- The affected component(s): `wardynd` (control plane, which is also where the
-  docker runner driver runs), `wardyn-proxy`, `wardyn-rec`, `wardyn-git-helper`,
-  the `wardyn` CLI, or a deployment artifact (`deploy/compose`, `deploy/helm`).
-- The version / commit, deployment surface (Docker Compose or Kubernetes/Helm),
+- The affected component(s): `wardynd` (control plane and docker runner driver),
+  `wardyn-{proxy,rec,git-helper}`, `wardyn-runnerd`,
+  `wardyn-{toolgate,scan,aws-sso,tetragon-ingest}`, the `wardyn` CLI, or a
+  deployment artifact (`deploy/{compose,helm,desktop}`,
+  [`deploy/runner/install.sh`](deploy/runner/install.sh)).
+- The version / commit, deployment (Compose, Kubernetes/Helm,
+  laptop runner or desktop), runner trust class (`personal|managed_device|org_cluster`),
   and Confinement Class in use (CC1/CC2/CC3 — CC3/Vault is experimental; see
   [`ARCHITECTURE.md`](ARCHITECTURE.md) "Security invariants" #5).
 - A clear description, impact, and the most minimal reproduction you can provide.
