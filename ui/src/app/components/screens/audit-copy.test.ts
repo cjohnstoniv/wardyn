@@ -8,7 +8,7 @@ import type { AuditEvent } from "../../lib/types";
 import { describeAction, describeEvent } from "./audit-copy";
 
 const ev = (action: string, target = "", extra: Partial<AuditEvent> = {}): AuditEvent =>
-  ({ id: "e", time: "2026-01-01T00:00:00Z", actor_type: "system", actor: "x", action, outcome: "success", target, ...extra }) as AuditEvent;
+  ({ id: "e", time: new Date().toISOString(), actor_type: "system", actor: "x", action, outcome: "success", target, ...extra }) as AuditEvent;
 
 describe("audit sentences", () => {
   it("joins the target to the sentence for the whole line, and leaves it off the action", () => {

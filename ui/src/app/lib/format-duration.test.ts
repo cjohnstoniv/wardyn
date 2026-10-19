@@ -34,7 +34,7 @@ describe("formatDuration", () => {
   });
 
   it("time left rounds to the nearest hour from an hour up", () => {
-    const now = Date.UTC(2026, 0, 1);
+    const now = Date.now();
     expect(timeLeft(new Date(now + 40 * 60_000).toISOString(), now)).toBe("40 minutes");
     expect(timeLeft(new Date(now + 23 * 3600_000).toISOString(), now)).toBe("23 hours");
   });
