@@ -275,21 +275,35 @@ type awsSigV4ActionGuard struct {
 var awsSigV4ActionGuards = map[string]awsSigV4ActionGuard{
 	"sts": {allow: []string{"GetCallerIdentity"},
 		why: "Wardyn re-signs only GetCallerIdentity on AWS STS; its other actions hand out credentials, which would put them in the sandbox"},
-	"iam": {deny: []string{"CreateAccessKey", "CreateLoginProfile", "CreateServiceSpecificCredential", "UpdateLoginProfile", "CreateVirtualMFADevice"},
+	"iam": {deny: []string{"CreateAccessKey", "CreateLoginProfile", "CreateServiceSpecificCredential", "ResetServiceSpecificCredential",
+		"UpdateLoginProfile", "CreateVirtualMFADevice", "UploadSSHPublicKey", "UploadSigningCertificate"},
 		why: "Wardyn does not re-sign the IAM actions that create long-lived credentials or sign-ins"},
 }
+
+// awsActionName is the shape of an AWS action name; a value of any other shape (empty, padded,
+// carrying a NUL or punctuation) is refused rather than judged, since the service may read it
+// differently than a list compare does.
+var awsActionName = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]*$`)
+
+// awsQueryKey is the shape of a query-protocol parameter name (Action, Version, Tags.member.1.Key).
+// A key of any other shape (a NUL, a tab) could be an Action the service reads and a compare
+// misses, so a guarded request carrying one is refused.
+var awsQueryKey = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 // awsSigV4ActionRefusal judges a guarded request on what the service runs: the one Action its
 // query and plain form body name between them. A request the proxy cannot read that way is
 // refused: an action named in a header (X-Amz-Target, Smithy-Protocol), any Content-Encoding, a
-// chunked or streamed body, a body or content type that is not a form, a query or form that does
-// not parse, and no Action, more than one, or one the guard refuses. "" admits it.
+// chunked or streamed body, a body or content type that is not a form (or more than one Content-Type),
+// a query or form that does not parse, and no Action, more than one, one not shaped like an action
+// name, or one the guard refuses (the deny list compared under any case). "" admits it.
 func awsSigV4ActionRefusal(r *http.Request, payload string, body []byte, g awsSigV4ActionGuard) string {
 	ct := r.Header.Get("Content-Type")
 	mt, _, err := mime.ParseMediaType(ct)
 	switch {
 	case len(r.Header.Values("X-Amz-Target")) > 0 || len(r.Header.Values("Smithy-Protocol")) > 0:
 		return "it names its action in a header, and Wardyn judges this service's action only from the Action parameter"
+	case len(r.Header.Values("Content-Type")) > 1:
+		return "it carries more than one Content-Type, and Wardyn judges this service's action only from a plain form body"
 	case len(r.Header.Values("Content-Encoding")) > 0 || len(r.TransferEncoding) > 0 || strings.HasPrefix(payload, "STREAMING-"):
 		return "its body is encoded, chunked or streamed, and Wardyn judges this service's action only from a plain form body"
 	case (ct != "" || len(body) > 0) && (err != nil || mt != "application/x-www-form-urlencoded"):
@@ -303,14 +317,17 @@ func awsSigV4ActionRefusal(r *http.Request, payload string, body []byte, g awsSi
 		return "its query or form body does not parse, so Wardyn cannot tell which action it runs"
 	case len(actions) != 1:
 		return fmt.Sprintf("it names %d actions between its query and its body, and Wardyn re-signs only a request that names exactly one", len(actions))
-	case (g.allow != nil && !slices.Contains(g.allow, actions[0])) || slices.Contains(g.deny, actions[0]):
+	case !awsActionName.MatchString(actions[0]):
+		return fmt.Sprintf("its Action %q is not an action name, and Wardyn re-signs only one it can read", actions[0])
+	case (g.allow != nil && !slices.Contains(g.allow, actions[0])) || // exact: folding would widen an allow list
+		slices.ContainsFunc(g.deny, func(d string) bool { return strings.EqualFold(d, actions[0]) }):
 		return g.why
 	}
 	return ""
 }
 
 // awsQueryActions is every Action value a query string or form body names, under any case of
-// the name; false when it does not parse.
+// the name; false when it does not parse or names a parameter not shaped like one (awsQueryKey).
 func awsQueryActions(raw string) ([]string, bool) {
 	q, err := url.ParseQuery(raw)
 	if err != nil {
@@ -318,7 +335,10 @@ func awsQueryActions(raw string) ([]string, bool) {
 	}
 	var out []string
 	for k, v := range q {
-		if strings.EqualFold(strings.TrimSpace(k), "Action") {
+		if !awsQueryKey.MatchString(k) {
+			return nil, false
+		}
+		if strings.EqualFold(k, "Action") {
 			out = append(out, v...)
 		}
 	}

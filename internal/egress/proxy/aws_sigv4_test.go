@@ -637,6 +637,7 @@ func TestAWSSigV4_GuardsQueryProtocolActions(t *testing.T) {
 		{"sts GetCallerIdentity in the body", req{"POST", sigv4STSLondon, "/", "Action=GetCallerIdentity&Version=2011-06-15", form, "sts", "eu-west-2", false, ""}, "sts"},
 		{"sts-fips GetCallerIdentity", req{"POST", sigv4STSFIPS, "/", "Action=GetCallerIdentity&Version=2011-06-15", form, "sts", "us-east-1", false, ""}, "sts"},
 		{"iam ListUsers", req{"POST", sigv4IAM, "/", "Action=ListUsers&Version=2010-05-08", form, "iam", "us-east-1", false, ""}, "iam"},
+		{"iam TagUser with member keys", req{"POST", sigv4IAM, "/", "Action=TagUser&UserName=u&Tags.member.1.Key=team&Tags.member.1.Value=a_b-c&Version=2010-05-08", form, "iam", "us-east-1", false, ""}, "iam"},
 	}
 	for _, tc := range allowed {
 		t.Run(tc.name, func(t *testing.T) {
@@ -672,6 +673,50 @@ func TestAWSSigV4_GuardsQueryProtocolActions(t *testing.T) {
 		{"an sts host signed for another service", awsSigV4Scope, req{"POST", sigv4STS, "/", "Action=AssumeRole&RoleArn=arn&RoleSessionName=s", form, "iam", "us-east-1", false, ""}},
 		{"another service's host signed for sts", awsSigV4Scope, req{"POST", sigv4Bedrock, "/", "Action=AssumeRole&RoleArn=arn&RoleSessionName=s", form, "sts", "us-east-1", false, ""}},
 	}
+	refused = append(refused,
+		struct {
+			name, code string
+			r          req
+		}{"two Content-Type headers", awsSigV4Action, req{"POST", sigv4STS, "/", "Action=GetCallerIdentity", form, "sts", "us-east-1", false, ""}},
+		struct {
+			name, code string
+			r          req
+		}{"iam CreateAccessKey with a trailing space", awsSigV4Action, req{"POST", sigv4IAM, "/", "Action=CreateAccessKey+&UserName=u", form, "iam", "us-east-1", false, ""}},
+		struct {
+			name, code string
+			r          req
+		}{"iam createaccesskey", awsSigV4Action, req{"POST", sigv4IAM, "/", "Action=createaccesskey&UserName=u", form, "iam", "us-east-1", false, ""}},
+		struct {
+			name, code string
+			r          req
+		}{"iam CreateAccessKey with a NUL", awsSigV4Action, req{"POST", sigv4IAM, "/", "Action=CreateAccessKey%00&UserName=u", form, "iam", "us-east-1", false, ""}},
+		struct {
+			name, code string
+			r          req
+		}{"an empty iam Action", awsSigV4Action, req{"POST", sigv4IAM, "/", "Action=&UserName=u", form, "iam", "us-east-1", false, ""}},
+		struct {
+			name, code string
+			r          req
+		}{"sts getcalleridentity under another case", awsSigV4Action, req{"POST", sigv4STS, "/", "Action=getcalleridentity", form, "sts", "us-east-1", false, ""}},
+		struct {
+			name, code string
+			r          req
+		}{"a NUL key beside a query Action", awsSigV4Action, req{"POST", sigv4STS, "/?Action=GetCallerIdentity", "Action%00=AssumeRole&RoleArn=arn&RoleSessionName=s", form, "sts", "us-east-1", false, ""}},
+		struct {
+			name, code string
+			r          req
+		}{"a key with a tab", awsSigV4Action, req{"POST", sigv4IAM, "/?Action=ListUsers", "Act%09ion=CreateAccessKey&UserName=u", form, "iam", "us-east-1", false, ""}})
+	for _, action := range []string{"ResetServiceSpecificCredential", "UploadSSHPublicKey", "UploadSigningCertificate"} {
+		refused = append(refused,
+			struct {
+				name, code string
+				r          req
+			}{"iam " + action + " in the query", awsSigV4Action, req{"GET", sigv4IAM, "/?Action=" + action + "&UserName=u", "", nil, "iam", "us-east-1", false, ""}},
+			struct {
+				name, code string
+				r          req
+			}{"iam " + action + " in the body", awsSigV4Action, req{"POST", sigv4IAM, "/", "Action=" + action + "&UserName=u", form, "iam", "us-east-1", false, ""}})
+	}
 	for _, action := range []string{"AssumeRole", "GetSessionToken", "GetFederationToken", "AssumeRoleWithWebIdentity"} {
 		refused = append(refused,
 			struct {
@@ -693,6 +738,9 @@ func TestAWSSigV4_GuardsQueryProtocolActions(t *testing.T) {
 			}
 			if r.wireQuery != "" {
 				in.URL.RawQuery = r.wireQuery
+			}
+			if tc.name == "two Content-Type headers" {
+				in.Header.Add("Content-Type", "application/x-amz-json-1.0")
 			}
 			rec := h.send(t, in, r.host)
 			if rec.Code != http.StatusForbidden || rec.Header().Get("X-Wardyn-Reason") != tc.code {
