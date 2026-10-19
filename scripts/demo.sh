@@ -32,11 +32,13 @@ source "${REPO_ROOT}/scripts/lib/common.sh"
 # shellcheck source=scripts/lib/runner-limits.sh
 source "${REPO_ROOT}/scripts/lib/runner-limits.sh"
 
-# wardyn runs the shipped CLI inside the wardynd container with the admin token.
+# wardyn runs the shipped CLI inside the wardynd container. The admin token is
+# already in wardynd's own environment (compose interpolates it), so `exec`
+# inherits it; passing it with -e would put it on the host docker argv, as
+# scripts/ci-run.sh's copy of this shim explains.
 wardyn() {
   "${COMPOSE[@]}" exec -T \
     -e WARDYN_URL="http://localhost:8080" \
-    -e WARDYN_ADMIN_TOKEN="${ADMIN_TOKEN}" \
     wardynd /usr/local/bin/wardyn "$@"
 }
 
