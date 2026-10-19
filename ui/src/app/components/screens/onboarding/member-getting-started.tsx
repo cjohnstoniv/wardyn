@@ -64,7 +64,7 @@ import { MEMBER } from "../../../lib/governance-copy";
 import { DRIVE_MEMBER } from "../../../lib/user-drives-copy";
 import { driveModeWord, driveSizeLabel } from "../../../lib/user-drives-display";
 import { MEMBER_WORKSPACE } from "../../../lib/permissions-copy";
-import { EPISODES } from "../../../lib/demo-videos";
+import { EPISODES, recordedOnly } from "../../../lib/demo-videos";
 import { EpisodeRow } from "./episode-card";
 import type { AgentRun, SetupStatus } from "../../../lib/types";
 import { DEMOS, type Demo } from "../demos/demo-catalog";
@@ -269,8 +269,8 @@ export function MemberGettingStarted() {
   // Shape C (approved mock round 2026-08-31): the member's own path leads
   // (every member-audience episode — which now includes 13, whose lesson is
   // the member terminal), then the core "watch first" set.
-  const memberEpisodes = EPISODES.filter((e) => e.audience === "member");
-  const coreEpisodes = EPISODES.filter((e) => e.path === "core");
+  const memberEpisodes = recordedOnly(EPISODES.filter((e) => e.audience === "member"));
+  const coreEpisodes = recordedOnly(EPISODES.filter((e) => e.path === "core"));
 
   const userType = useUserType();
   // M-6 (D5): the same two Demo.section groups the admin funnel used to walk

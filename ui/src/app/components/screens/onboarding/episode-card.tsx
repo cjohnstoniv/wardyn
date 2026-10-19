@@ -16,7 +16,7 @@ import { Play } from "lucide-react";
 import { Button } from "../../ui/button";
 import { Chip, SectionLabel } from "../../wardyn/primitives";
 import { EPISODES_COPY as T } from "../../wardyn/copy";
-import { EPISODES, episodeUrl, episodesFor, releasePageUrl, type Episode } from "../../../lib/demo-videos";
+import { EPISODES, episodeUrl, episodesFor, recordedOnly, releasePageUrl, type Episode } from "../../../lib/demo-videos";
 import { useDemoVideoBaseUrl } from "../../wardyn/operator-context";
 
 export function EpisodeRow({ episode, chip }: { episode: Episode; chip?: string }) {
@@ -92,7 +92,7 @@ export function EpisodeRow({ episode, chip }: { episode: Episode; chip?: string 
 }
 
 export function StepEpisodes({ stepId }: { stepId: string }) {
-  const rows = episodesFor(stepId);
+  const rows = recordedOnly(episodesFor(stepId));
   if (rows.length === 0) return null;
   return (
     <div className="mt-6">

@@ -96,6 +96,11 @@ export function releasePageUrl(tag: string): string {
   return `https://github.com/cjohnstoniv/wardyn/releases/tag/${tag}`;
 }
 
+/** The episodes that have a video; a Getting started list shows no placeholder rows (#3068). */
+export function recordedOnly(rows: Episode[]): Episode[] {
+  return rows.filter((e) => e.tag !== null);
+}
+
 export function episodesFor(stepId: string): Episode[] {
   return EPISODES.filter((e) => e.steps.includes(stepId));
 }
