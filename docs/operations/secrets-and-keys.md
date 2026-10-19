@@ -15,7 +15,7 @@ flowchart LR
 
 ## Secrets from files (Vault Agent / CSI)
 
-- Every secret-carrying `wardynd` boot setting has a `<VAR>_FILE` twin that holds a **path** instead of the value: `WARDYN_PG_DSN_FILE`, `WARDYN_PG_MIGRATE_DSN_FILE`, `WARDYN_ADMIN_TOKEN_FILE`, `WARDYN_AGE_KEY_FILE`, `WARDYN_OIDC_CLIENT_SECRET_FILE`, `WARDYN_DIRECTORY_CLIENT_SECRET_FILE`, `WARDYN_AUDIT_SINKS_FILE`, `WARDYN_APPROVAL_NOTIFY_FILE` and `WARDYN_ORG_ENROLMENT_TOKEN_FILE` ([ENV.md](../ENV.md)).
+- Every secret-carrying `wardynd` boot setting has a `<VAR>_FILE` twin that holds a **path** instead of the value: `WARDYN_PG_DSN_FILE`, `WARDYN_PG_MIGRATE_DSN_FILE`, `WARDYN_ADMIN_TOKEN_FILE`, `WARDYN_AGE_KEY_FILE`, `WARDYN_OIDC_CLIENT_SECRET_FILE`, `WARDYN_DIRECTORY_CLIENT_SECRET_FILE`, `WARDYN_AUDIT_SINKS_FILE`, `WARDYN_APPROVAL_NOTIFY_FILE`, `WARDYN_ORG_ENROLMENT_TOKEN_FILE`, `WARDYN_SCIM_TOKEN_FILE` and `WARDYN_SCIM_TOKEN_NEXT_FILE` ([ENV.md](../ENV.md)).
 - Use them when a control requires secrets delivered at runtime (Vault Agent injector, Secrets Store CSI driver, projected volumes), or when a posture scanner flags secret env vars.
 
 How `wardynd` reads them (`resolveSecretFiles`, [`cmd/wardynd/secret_file.go`](../../cmd/wardynd/secret_file.go)):
@@ -334,7 +334,11 @@ Keep the key at `exportable=false`, `allow_plaintext_backup=false` and `deletion
 ```hcl
 path "transit/encrypt/wardyn" { capabilities = ["update"] }
 path "transit/decrypt/wardyn" { capabilities = ["update"] }
+path "auth/token/lookup-self" { capabilities = ["read"] }
+path "auth/token/renew-self" { capabilities = ["update"] }
 ```
+
+The two `auth/token/` paths are the client's own token upkeep (`token-file` authentication reads the token's TTL with `lookup-self`; a renewable token is kept alive with `renew-self`). Vault's `default` policy already grants both; state them when the token is issued without it.
 
 **Binding.** Every wrap carries the row's owner and name as Transit `associated_data`, so a wrapped data key moved to another row does not unwrap.
 
@@ -826,7 +830,15 @@ path "wardyn/data/{{identity.entity.aliases.<accessor>.metadata.service_account_
 path "wardyn/metadata/{{identity.entity.aliases.<accessor>.metadata.service_account_namespace}}/*" {
   capabilities = ["create", "update", "read", "delete", "list"]
 }
+path "auth/token/lookup-self" {
+  capabilities = ["read"]
+}
+path "auth/token/renew-self" {
+  capabilities = ["update"]
+}
 ```
+
+- The two `auth/token/` stanzas are the client's own token upkeep: `token-file` authentication reads the token's TTL with `lookup-self`, and a renewable token is kept alive with `renew-self`. Vault's `default` policy already grants both; state them when the token is issued without it.
 
 - With token-file authentication (compose, VMs) there is no Kubernetes alias to template on: write the install's `WARDYN_VAULT_KV_PREFIX` literally, as `wardyn/data/<prefix>/*` and `wardyn/metadata/<prefix>/*`.
 - Give each install its own policy.
