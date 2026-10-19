@@ -43,7 +43,7 @@ func TestValidateModelProviders_LocalModel(t *testing.T) {
 			p.BaseURL, p.Auth = "https://10.0.4.7:8000", &types.ProviderAuth{}
 		}), ""},
 		{"bounds set", with(func(p *types.ModelProvider) {
-			p.Local.MaxContext, p.Local.MaxTokens, p.Local.KeepAliveSeconds = 8192, 4096, 600
+			p.Local.MaxContext, p.Local.MaxOutput, p.Local.KeepAliveSeconds = 8192, 4096, 600
 		}), ""},
 		{"no base url", with(func(p *types.ModelProvider) { p.BaseURL = "" }), "base_url is required for a local_model"},
 		{"localhost", with(func(p *types.ModelProvider) { p.BaseURL = "http://localhost:11434" }), "proxy's own loopback"},
@@ -62,7 +62,7 @@ func TestValidateModelProviders_LocalModel(t *testing.T) {
 				p.Local.Models = append(p.Local.Models, "m"+strings.Repeat("x", i))
 			}
 		}), "at most"},
-		{"a negative bound", with(func(p *types.ModelProvider) { p.Local.MaxTokens = -1 }), "local.max_tokens must be between"},
+		{"a negative bound", with(func(p *types.ModelProvider) { p.Local.MaxOutput = -1 }), "local.max_output must be between"},
 		{"a keep-alive over a day", with(func(p *types.ModelProvider) { p.Local.KeepAliveSeconds = maxLocalKeepAlive + 1 }), "local.keep_alive_seconds"},
 		{"a harness model off the allowlist", with(func(p *types.ModelProvider) { p.Harnesses[0].Model = "mistral:7b" }), "must be one of local.models"},
 		{"a harness with no model", with(func(p *types.ModelProvider) { p.Harnesses[1].Model = "" }), "must be one of local.models"},
@@ -147,7 +147,7 @@ func TestProviderDispatch_LocalModel(t *testing.T) {
 			}
 			lm, found := plan.localModels[p.BaseURL]
 			if !found || !slices.Equal(lm.Models, p.Local.Models) || lm.MaxContext != types.DefaultLocalMaxContext ||
-				lm.MaxTokens != types.DefaultLocalMaxTokens || lm.KeepAliveSeconds != types.DefaultLocalKeepAliveSeconds {
+				lm.MaxOutput != types.DefaultLocalMaxOutput || lm.KeepAliveSeconds != types.DefaultLocalKeepAliveSeconds {
 				t.Errorf("local models = %+v, want the allowlist with the default bounds", plan.localModels)
 			}
 			switch tc.agent {

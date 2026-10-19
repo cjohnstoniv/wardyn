@@ -3327,7 +3327,7 @@ No provider of this kind registered means today's behaviour, unchanged.
 | `base_url` | The server's root, as the proxy sees it | `http://` or `https://`, no path, no credential, not `localhost` or a loopback literal |
 | `local.models` | The exact model names runs may use, tag included | 1 to 64; no `/` (a registry or namespace) and no `:cloud` or `-cloud` tag |
 | `local.max_context` | Cap on a request's `options.num_ctx` | 0 = 32768 |
-| `local.max_tokens` | Cap on `max_tokens`, `max_completion_tokens`, `max_output_tokens` and `options.num_predict` | 0 = 32768 |
+| `local.max_output` | Cap on `max_tokens`, `max_completion_tokens`, `max_output_tokens` and `options.num_predict` | 0 = 32768 |
 | `local.keep_alive_seconds` | Cap on `keep_alive`; a negative ("forever") value is capped too | 0 = 1800, at most 86400 |
 | `auth` | How each person's own token is sent, when the server wants one | Unset = no credential at all |
 | `harnesses[].model` | The model that agent asks for | Required; one of `local.models` |

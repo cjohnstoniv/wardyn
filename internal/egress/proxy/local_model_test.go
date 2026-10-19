@@ -135,7 +135,7 @@ func TestLocalModel_RefusedAndAudited(t *testing.T) {
 // included, reaches the server as sent.
 func TestLocalModel_BoundsReplaceOnlyTheirOwnValues(t *testing.T) {
 	up := captureUpstream(t, false, `{}`)
-	p, _ := localModelProxy(t, upstreamAddr(up.srv), nil, types.LocalModelSettings{MaxContext: 8192, MaxTokens: 4096, KeepAliveSeconds: 600})
+	p, _ := localModelProxy(t, upstreamAddr(up.srv), nil, types.LocalModelSettings{MaxContext: 8192, MaxOutput: 4096, KeepAliveSeconds: 600})
 	in := `{"model":"qwen2.5:3b","messages":[{"role":"user","content":"x"}], "keep_alive" : -1,` +
 		`"options":{"temperature":0,"num_ctx":131072,"NUM_PREDICT":1e6},"max_tokens":2048}`
 	want := `{"model":"qwen2.5:3b","messages":[{"role":"user","content":"x"}], "keep_alive" : 600,` +

@@ -152,7 +152,7 @@ type AzureSettings struct {
 type LocalModelSettings struct {
 	Models           []string `json:"models"`
 	MaxContext       int      `json:"max_context,omitempty"`        // cap on a request's options.num_ctx
-	MaxTokens        int      `json:"max_tokens,omitempty"`         // cap on max_tokens and its per-API spellings
+	MaxOutput        int      `json:"max_output,omitempty"`         // cap on max_tokens and its per-API spellings
 	KeepAliveSeconds int      `json:"keep_alive_seconds,omitempty"` // cap on keep_alive, so no run pins a model in memory
 }
 
@@ -160,7 +160,7 @@ type LocalModelSettings struct {
 // run cannot hold a model in memory indefinitely.
 const (
 	DefaultLocalMaxContext       = 32768
-	DefaultLocalMaxTokens        = 32768
+	DefaultLocalMaxOutput        = 32768
 	DefaultLocalKeepAliveSeconds = 1800
 )
 
@@ -169,8 +169,8 @@ func (s LocalModelSettings) LocalModelBounds() LocalModelSettings {
 	if s.MaxContext == 0 {
 		s.MaxContext = DefaultLocalMaxContext
 	}
-	if s.MaxTokens == 0 {
-		s.MaxTokens = DefaultLocalMaxTokens
+	if s.MaxOutput == 0 {
+		s.MaxOutput = DefaultLocalMaxOutput
 	}
 	if s.KeepAliveSeconds == 0 {
 		s.KeepAliveSeconds = DefaultLocalKeepAliveSeconds

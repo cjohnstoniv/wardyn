@@ -260,7 +260,7 @@ func boundLocalRequest(body []byte, b types.LocalModelSettings) ([]byte, string,
 		case "model":
 			seenModel = json.Unmarshal(body[f.start:f.end], &model) == nil
 		case "max_tokens", "max_completion_tokens", "max_output_tokens":
-			err = bound(f, b.MaxTokens)
+			err = bound(f, b.MaxOutput)
 		case "keep_alive":
 			v, kerr := boundKeepAlive(body[f.start:f.end], b.KeepAliveSeconds)
 			if kerr == nil && v != "" {
@@ -281,7 +281,7 @@ func boundLocalRequest(body []byte, b types.LocalModelSettings) ([]byte, string,
 				case "num_ctx":
 					err = errors.Join(err, bound(o, b.MaxContext))
 				case "num_predict":
-					err = errors.Join(err, bound(o, b.MaxTokens))
+					err = errors.Join(err, bound(o, b.MaxOutput))
 				}
 			}
 		}

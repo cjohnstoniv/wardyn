@@ -531,7 +531,7 @@ func validateProviderLocal(mp types.ModelProvider) error {
 		v, d, hi int
 	}{
 		{"max_context", l.MaxContext, types.DefaultLocalMaxContext, maxLocalBound},
-		{"max_tokens", l.MaxTokens, types.DefaultLocalMaxTokens, maxLocalBound},
+		{"max_output", l.MaxOutput, types.DefaultLocalMaxOutput, maxLocalBound},
 		{"keep_alive_seconds", l.KeepAliveSeconds, types.DefaultLocalKeepAliveSeconds, maxLocalKeepAlive},
 	} {
 		if b.v < 0 || b.v > b.hi {
