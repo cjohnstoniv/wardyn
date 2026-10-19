@@ -242,24 +242,23 @@ func (s *Server) wallsDryRun(ctx context.Context, walls types.OrgWalls) (wallsRe
 	if s.cfg.Store == nil {
 		return report, nil
 	}
-	profiles, err := s.cfg.Store.ListGovernanceProfiles(ctx)
+	profiles, err := s.resolveAllProfiles(ctx)
 	if err != nil {
 		return wallsReport{}, fmt.Errorf("list governance profiles: %w", err)
 	}
 	byProfile := map[uuid.UUID]wallsReportRow{}
 	for _, p := range profiles {
-		res := s.resolveForDiff(profiles, p.ID)
-		if res == nil {
+		if p.Err != nil || p.Resolved == nil {
 			continue // a profile that does not compose resolves to no ceiling at all
 		}
-		changes, err := meet(res.Ceiling, res.Limits)
+		changes, err := meet(p.Resolved.Ceiling, p.Resolved.Limits)
 		if err != nil {
 			return wallsReport{}, err
 		}
 		if len(changes) > 0 {
-			row := wallsReportRow{ID: p.ID, Name: p.Name, Changes: changes}
+			row := wallsReportRow{ID: p.Row.ID, Name: p.Row.Name, Changes: changes}
 			report.Profiles = append(report.Profiles, row)
-			byProfile[p.ID] = row
+			byProfile[p.Row.ID] = row
 		}
 	}
 	policies, err := s.cfg.Store.ListPolicies(ctx)
