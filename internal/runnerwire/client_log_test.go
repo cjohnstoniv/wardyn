@@ -19,6 +19,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/federation"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 type logBuffer struct {
@@ -209,5 +212,80 @@ func TestOfflineLogIsQuietWhileTheLinkIsUp(t *testing.T) {
 	l.logWhileOffline(ctx)
 	if warns := logs.records(t, "WARN"); len(warns) != 0 {
 		t.Fatalf("an up link logged %v", warns)
+	}
+}
+
+// An attempt that is stuck says which step it is on and how long ago the last one failed, so it reads
+// differently from one that keeps failing.
+func TestOfflineLogSaysWhatItWaitsOn(t *testing.T) {
+	logs := captureLog(t)
+	prev := offlineLogEvery
+	offlineLogEvery = 20 * time.Millisecond
+	t.Cleanup(func() { offlineLogEvery = prev })
+	pub, key, _ := ed25519.GenerateKey(rand.Reader)
+	const orgURL = "https://org.example"
+	row := types.Runner{ID: uuid.New(), PublicKey: pub, OrgURLSHA256: federation.OrgURLSHA256(orgURL), State: types.RunnerClaimed}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	inventory := make(chan struct{})
+	dials := 0
+	dial := func(context.Context) (Conn, error) {
+		if dials++; dials == 1 {
+			return nil, errors.New("boom")
+		}
+		org, run := Loopback()
+		go func() {
+			defer org.Close()
+			if _, err := AuthenticateRunner(ctx, org, row, orgURL); err != nil {
+				return
+			}
+			if WriteControl(ctx, org, TypeAuthOK, AuthOK{SessionID: uuid.NewString(), PingInterval: PingInterval}) != nil {
+				return
+			}
+			peer := NewPeer(org, PeerConfig{Org: true})
+			if peer.Start(ctx, 0) != nil {
+				return
+			}
+			defer peer.Close()
+			if payload, err := Marshal([]PendingAction{}); err == nil {
+				_ = peer.Send(ctx, Frame{Type: TypePending, Payload: payload})
+			}
+			<-ctx.Done()
+		}()
+		return run, nil
+	}
+	hooks := idleHooks()
+	hooks.StatePages = func(ctx context.Context, _ func(StatePage) error) error {
+		close(inventory)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	client, err := NewClient(ClientConfig{OrgURL: orgURL, RunnerID: row.ID.String(), PrivateKey: key, Hooks: hooks, Dial: dial})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- client.Run(ctx) }()
+	select {
+	case <-inventory:
+	case <-ctx.Done():
+		t.Fatal("the attempt never reached the inventory")
+	}
+	var got map[string]any
+	for got == nil && ctx.Err() == nil {
+		for _, r := range logs.records(t, "WARN") {
+			if r["msg"] == "runner still offline, retrying" && r["waiting_on"] == "inventory" {
+				got = r
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	if got == nil {
+		t.Fatal("no offline warning named the inventory as the step it waits on")
+	}
+	if got["last_error"] != "boom" || got["last_error_age"] == nil {
+		t.Fatalf("offline warning lacks the last failure or its age: %v", got)
 	}
 }

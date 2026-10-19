@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -136,6 +137,7 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 		if err != nil {
 			return err
 		}
+		slog.InfoContext(cmd.Context(), "runner's connection to the organisation", "route", runnerwire.OrgRoute(org, identity.RunnerID.String()))
 		return runRunnerServices(cmd.Context(), client.Run, runtime.run)
 	}
 	cmd.Flags().StringVar(&org, "org", "", "organisation public HTTPS URL used at registration (default: the OrgURL managed preference)")

@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -69,4 +71,33 @@ func distinguished(n pkix.Name) string {
 		return "an unnamed subject"
 	}
 	return strings.Join(parts, " ")
+}
+
+// OrgRoute is how the runner's own session to the organisation will leave this computer, for the one
+// line serve logs at startup: "direct", or "via proxy host:port (HTTPS_PROXY)". It reads the same
+// environment the dial's transport does and prints the proxy's host and port only.
+func OrgRoute(orgURL, runnerID string) string {
+	return orgRoute(orgURL, runnerID, http.ProxyFromEnvironment)
+}
+
+func orgRoute(orgURL, runnerID string, proxyFor func(*http.Request) (*url.URL, error)) string {
+	address, err := StreamURL(orgURL, runnerID)
+	if err != nil {
+		return "direct"
+	}
+	u, err := url.Parse(address)
+	if err != nil {
+		return "direct"
+	}
+	variable := "HTTPS_PROXY"
+	if u.Scheme == "ws" {
+		u.Scheme, variable = "http", "HTTP_PROXY"
+	} else {
+		u.Scheme = "https"
+	}
+	proxy, err := proxyFor(&http.Request{URL: u})
+	if err != nil || proxy == nil {
+		return "direct"
+	}
+	return fmt.Sprintf("via proxy %s (%s)", proxy.Host, variable)
 }
