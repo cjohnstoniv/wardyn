@@ -192,3 +192,7 @@ have unit, Postgres or kind coverage, but not on this hardware.
 - **The proxy NetworkPolicy's cluster-DNS peer** (0.9.3): proven against the fake Kubernetes clientset only, not against a
   network plugin that selects pods by identity (Cilium, Calico eBPF). On a kind cluster running Cilium, apply the
   generated proxy NetworkPolicy and run `kubectl exec <proxy-pod> -- nslookup kubernetes.default`; it must resolve.
+- **SCIM provisioning from a live Entra tenant** (#2691): none of the SCIM fixtures in `internal/scim/testdata/entra`
+  was captured from Entra; they are published examples and RFC 7644 shapes. Which request shapes a live provisioning
+  job sends, and in which mode, has not been checked. To close it, point a test tenant's provisioning job at a capture
+  endpoint and diff what it sends against those files (`internal/scim/testdata/entra/RECORD.md`).
