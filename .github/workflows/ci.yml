@@ -264,7 +264,8 @@ jobs:
       # the day's first. The save needs a green run, so an early failure never
       # leaves a near-empty newest entry. The unhashed restore-key keeps a
       # go.mod/go.sum change warm (both caches are content-addressed, so an
-      # older entry is safe to restore).
+      # older entry is safe to restore). The last restore-key also matches the
+      # entries saved before the key carried the OS and run id.
       - name: Restore Go build cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -276,6 +277,7 @@ jobs:
           restore-keys: |
             go-${{ matrix.suite }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
             go-${{ matrix.suite }}-${{ runner.os }}-
+            go-${{ matrix.suite }}-
       # The lint leg's `make lint` also runs the console's ESLint
       # (ui/eslint.config.js), so that leg sets up pnpm and node.
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
@@ -614,6 +616,7 @@ jobs:
           restore-keys: |
             go-ui-e2e-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
             go-ui-e2e-${{ runner.os }}-
+            go-ui-e2e-
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 9
@@ -1079,6 +1082,7 @@ jobs:
           restore-keys: |
             go-conformance-k8s-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
             go-conformance-k8s-${{ runner.os }}-
+            go-conformance-k8s-
       # Cached image build: see helm-install-test's build step.
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
         id: buildx
@@ -1300,6 +1304,7 @@ jobs:
           restore-keys: |
             go-conformance-docker-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
             go-conformance-docker-${{ runner.os }}-
+            go-conformance-docker-
       - name: Docker smoke check
         run: docker run --rm hello-world
       # T-33: the Vault Transit KEK and the Vault KV store against the official
@@ -1405,6 +1410,7 @@ jobs:
           restore-keys: |
             go-envbuild-integration-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
             go-envbuild-integration-${{ runner.os }}-
+            go-envbuild-integration-
       - name: Docker smoke check
         run: docker run --rm hello-world
       - name: Run envbuild integration test (docker)
@@ -1520,6 +1526,7 @@ jobs:
           restore-keys: |
             go-test-pg-${{ matrix.shard }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
             go-test-pg-${{ matrix.shard }}-${{ runner.os }}-
+            go-test-pg-${{ matrix.shard }}-
       # WARDYN_TEST_PG_SUPERUSER asserts what this lane already is: `postgres`,
       # over a URL-form DSN, which can satisfy every precondition the append-only
       # probes guard on. With it set, a probe that would have SKIPPED (and so
@@ -1887,6 +1894,7 @@ jobs:
           restore-keys: |
             go-notices-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
             go-notices-${{ runner.os }}-
+            go-notices-
       - run: go mod download
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
@@ -1938,6 +1946,7 @@ jobs:
           restore-keys: |
             go-gates-${{ matrix.gate }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
             go-gates-${{ matrix.gate }}-${{ runner.os }}-
+            go-gates-${{ matrix.gate }}-
       - name: make ${{ matrix.gate }}
         run: make ${{ matrix.gate }}
       - name: Save Go build cache (push to main only)
