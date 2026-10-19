@@ -1,0 +1,46 @@
+{
+  "_comment": "The internal API as the wardyn-proxy of the previous minor (v0.8.9) calls it, beside the older internal_api_v0.7.json (which stays: a 0.7.12 proxy is still served). Taken from that release's internal/egress/proxy: the 0.7 routes plus POST /internal/activity (activity.go reportActivity: no body, the response is discarded). The decision, approval and mint bodies are unchanged from the 0.7 fixture and stay pinned there.",
+  "release": "0.8.9",
+  "routes": [
+    {
+      "method": "POST",
+      "path": "/api/v1/internal/token/renew"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/internal/decisions"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/internal/approvals"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/internal/approvals/{id}"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/internal/credentials/mint"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/internal/injection/{id}"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/internal/recordings/{run}"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/internal/scan-results/{run}"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/internal/sso-token/{run}"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/internal/activity"
+    }
+  ]
+}
