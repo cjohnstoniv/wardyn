@@ -82,6 +82,28 @@ func DeliveryClasses() []string {
 // AllowedModes is the set of modes a class may be delivered under; nil for an unknown class.
 func AllowedModes(class string) []Mode { return slices.Clone(classModes[class]) }
 
+// BuildableModes is the subset of AllowedModes(class) a local run can be
+// delivered under today: via_org only where a via_org-shaped table row names
+// the class, runner_resident only where its delivery is built (residentBuilt).
+// A stored policy may still name the other modes; they refuse at every door.
+func BuildableModes(class string) []Mode {
+	var out []Mode
+	for _, m := range classModes[class] {
+		switch m {
+		case ModeViaOrg:
+			if !slices.ContainsFunc(Table, func(e Entry) bool { return e.ViaOrg && e.Rule != RuleNotConfigured && e.Delivery == class }) {
+				continue
+			}
+		case ModeRunnerResident:
+			if !residentBuilt[class] {
+				continue
+			}
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
 // Writable reports whether a policy may configure the class.
 func Writable(class string) bool {
 	_, known := classModes[class]
