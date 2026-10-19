@@ -27,11 +27,24 @@ if [ ! -f "$G/pricing.py" ]; then
 fi
 
 cd "$G" || { echo "FAIL cannot cd $G"; exit 1; }
-python3 -m unittest -v test_pricing
+# Run isolated: the workspace is the agent's, so it must not be able to shadow the stdlib
+# (a unittest.py or sitecustomize.py beside the code) or end the process before a test
+# runs. -I keeps the working directory off sys.path; the workspace is appended AFTER the
+# stdlib so only its own modules are importable from it. Exit 0 alone proves nothing (a
+# module that exits 0 on import passes it), so the verdict is the run itself: at least
+# one test ran and unittest said OK.
+out=$(python3 -I -c 'import os, sys, unittest
+sys.path.append(os.getcwd())
+unittest.main(module=None, argv=["unittest", "-v"] + sys.argv[1:])' test_pricing 2>&1)
 rc=$?
-if [ "$rc" -eq 0 ]; then
+printf '%s\n' "$out"
+ran=0
+if printf '%s\n' "$out" | grep -Eq '^Ran [1-9][0-9]* tests? in ' && printf '%s\n' "$out" | grep -qx 'OK'; then
+    ran=1
+fi
+if [ "$rc" -eq 0 ] && [ "$ran" -eq 1 ]; then
     echo "PASS fix-failing-test: all pricing tests green (fail-to-pass + pass-to-pass)"
     exit 0
 fi
-echo "FAIL fix-failing-test: pricing tests still failing (unittest rc=$rc)"
+echo "FAIL fix-failing-test: pricing tests still failing (unittest rc=$rc, ran-and-ok=$ran)"
 exit 1
