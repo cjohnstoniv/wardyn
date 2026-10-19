@@ -296,7 +296,7 @@ func TestProbeDrive_LabelledAndRemovedAfterAClientSideCreateTimeout(t *testing.T
 	f.images[defaultDriveProbeImage] = true
 	d := newWithClient(createTimesOut{f}, Config{ProxyImage: "wardyn-proxy:dev", RunnerID: "r-1"})
 
-	if _, err := d.ProbeDrive(context.Background(), probeDriveFixture()); err == nil {
+	if _, err := d.ProbeDrive(context.Background(), probeDriveFixture(t, d)); err == nil {
 		t.Fatal("ProbeDrive with a failed create returned no error")
 	}
 	if len(f.containers) != 1 {
