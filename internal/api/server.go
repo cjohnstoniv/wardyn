@@ -287,6 +287,20 @@ type Config struct {
 	// UNAFFECTED either way (legacy, still boot-warned separately — see
 	// buildOptionalFeatures).
 	AllowEmailMappings bool
+	// CapabilityGrantsVerifiedEmail is WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL: a
+	// capability ALLOW row written for a person's email matches them only when
+	// sign-in vouches for the email (unverifiedEmailSubject). Default false keeps
+	// the match and logs it. Deny rows match the email either way.
+	CapabilityGrantsVerifiedEmail bool
+	// GovernanceProfilePutExistingOnly is WARDYN_GOVERNANCE_PROFILE_PUT_EXISTING_ONLY:
+	// PUT /governance/profiles/{id} replaces an existing profile only, and a
+	// new one is created through POST. Default false keeps create-at-id and logs it.
+	GovernanceProfilePutExistingOnly bool
+	// EgressHostPortGrantsInert is WARDYN_EGRESS_HOST_PORT_GRANTS_INERT: a stored
+	// egress_host ALLOW row whose value carries a ":port" (written before the
+	// write boundary stored the host alone) is inert, marked and never matched.
+	// Default false keeps matching it by host and logs it. Deny rows keep matching.
+	EgressHostPortGrantsInert bool
 	// UserMounts is the operator/MDM-set posture for MEMBER-authored local_dir
 	// binds (WARDYN_USER_WORKSPACE_ROOTS + _MAP + WARDYN_USER_WRITABLE_ROOTS
 	// + _DENY, parsed at boot by runner.ParseUserMountPolicy). The ZERO VALUE

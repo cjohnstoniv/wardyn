@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"reflect"
 	"slices"
@@ -244,6 +245,9 @@ func (s *Server) writeGovernanceProfile(w http.ResponseWriter, r *http.Request, 
 	createdBy := principalFromRequest(r)
 	saved, err := s.cfg.Store.WriteGovernanceProfile(r.Context(), id,
 		func(all []types.GovernanceProfile, assignments []types.GovernanceAssignment) (types.GovernanceProfile, error) {
+			if refusal := s.profilePutCreateRefusal(r, id, status, all); refusal != nil {
+				return types.GovernanceProfile{}, refusal
+			}
 			p, res, err := s.buildGovernanceProfile(createdBy, id, req, all)
 			effective = res
 			exemptCtx := withGovernanceAssignments(r.Context(), assignments)
@@ -284,6 +288,23 @@ func (s *Server) writeGovernanceProfile(w http.ResponseWriter, r *http.Request, 
 		warns = append(warns, posture)
 	}
 	writeJSON(w, status, governanceProfileResponse{Profile: newProfileView(saved, effective, nil), Warnings: warns})
+}
+
+// profilePutCreateRefusal answers a PUT (status 200) naming an id no profile in all holds. A run keeps
+// the id of the profile it was created under, so a profile created at a deleted one's id would
+// govern that profile's runs: with Config.GovernanceProfilePutExistingOnly the PUT is a 404 and a
+// new profile comes through POST, which mints its id. Off, the create goes through and is logged.
+func (s *Server) profilePutCreateRefusal(r *http.Request, id uuid.UUID, status int, all []types.GovernanceProfile) *profileWriteError {
+	if status != http.StatusOK || slices.ContainsFunc(all, func(p types.GovernanceProfile) bool { return p.ID == id }) {
+		return nil
+	}
+	if s.cfg.GovernanceProfilePutExistingOnly {
+		return &profileWriteError{status: http.StatusNotFound, reason: reasonGovernanceProfileNotFoundByID,
+			msg: "governance profile not found; create a profile with POST /api/v1/governance/profiles"}
+	}
+	slog.InfoContext(r.Context(), "api: a PUT created a governance profile at the id it named; WARDYN_GOVERNANCE_PROFILE_PUT_EXISTING_ONLY would refuse it",
+		"profile_id", id.String())
+	return nil
 }
 
 // profileWriteAuditData is the governance.profile.write row's data, shared by a direct write and an
