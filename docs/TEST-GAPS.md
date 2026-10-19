@@ -137,15 +137,16 @@ per-PR run has." Classified by package (no cluster here to prove it).
 
 - **internal/runner/k8s**: `Measure`, `Read`, `Write`
 
-### Manual cluster lanes no coverage profile can see at all
+### Cluster lanes no coverage profile can see at all
 
-No workflow runs the first two, and `-coverpkg` never observes any of the
-three — not even as the K8S-gated bucket above, since they exercise code far
+The nightly workflow runs the first two (the `kind-sso-walk` and
+`kind-sso-ado-walk` jobs) and no workflow runs the third, and `-coverpkg` never
+observes any of the three — not even as the K8S-gated bucket above, since they exercise code far
 beyond `internal/runner/k8s`. Listed here so the k8s surface is not read as
 untouched. `make test-conformance-k8s` is the exception: CI runs it on kind +
 Calico (the `conformance-k8s` job, busybox conformance-agent image, runc
-only) — the other two self-skip without `WARDYN_TEST_K8S=1` and a green
-result for them is evidence only for the tip somebody actually ran it on.
+only) — the three above self-skip without `WARDYN_TEST_K8S=1`, and the third
+is evidence only for the tip somebody actually ran it on.
 
 - `scripts/kind-sso-walk.sh` — **the AWS SSO walk** (0.7.4). Two Dex principals
   on a kind cluster, the containerized `aws sso login` against an on-cluster
