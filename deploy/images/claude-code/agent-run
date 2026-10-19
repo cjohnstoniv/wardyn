@@ -159,19 +159,20 @@ apply_anthropic_mode() {
 }
 
 # ── SSH SCM lane (git-over-SSH clone via SSH-over-443) ────────────────────────
-# SSH is the DOCUMENTED EXCEPTION to Wardyn's no-resident-secret invariant: git's
-# SSH transport has NO credential-helper seam (git credential.helper is HTTP-only),
-# so — unlike a github_token / git_pat (brokered to the git helper, never on disk)
-# or an api_key (proxy-injected, never in the sandbox) — the private key MUST land
-# as a file the ssh client reads. We mint it from the broker at clone time, write
-# it 0400 agent-owned, use it for the clone through the wardyn-proxy CONNECT tunnel
-# to ssh.<provider>.com:443 (no port-22 egress), then WIPE it. The readable window
-# is the clone only; within it, code running AS the agent uid can read the key —
-# the same residual posture as WARDYN_GIT_HELPER_SECRET. See GrantSSHKey.
+# git's SSH transport has NO credential-helper seam (git credential.helper is
+# HTTP-only), so the proxy cannot add the credential to a request the way it does
+# for a github_token / git_pat / api_key. Instead the private key stays in the
+# run's proxy, which signs the SSH sign-in: GIT_SSH_COMMAND runs ssh under
+# `wardyn-git-helper ssh-exec`, which opens an agent socket per grant
+# (IdentityAgent ${WARDYN_SSH_AGENT_DIR}/<slug>.sock) for that one ssh process and
+# relays it to the proxy's ssh agent. The clone rides the wardyn-proxy CONNECT
+# tunnel to ssh.<provider>.com:443 (no port-22 egress). wipe_ssh_grants closes the
+# proxy's agent once the start-up clone is done, before the agent or an attach
+# starts, so nothing in the run can sign with the key after it. No key and no
+# known_hosts file is written. See GrantSSHKey.
 #
 # WARDYN_SSH_GRANTS is a JSON object {host: grant_id} (non-secret grant ids), set
-# by dispatch. The key VALUE is never in env — it is minted via the proxy here.
-WARDYN_SSH_KEYFILES=()  # files to shred after the clone (keys + any known_hosts)
+# by dispatch.
 
 # ssh_endpoint maps a supported SCM host to its SSH-over-443 "hostname port".
 # Returns non-zero for an unsupported host (only GitHub + Azure DevOps publish an
@@ -184,41 +185,18 @@ ssh_endpoint() {  # $1=host
     esac
 }
 
-# mint_ssh_key POSTs to the proxy's local broker mint route for an ssh_key grant
-# and writes the returned private key to $2 (0400) and, when the grant named a
-# known_hosts_secret_ref, the returned known_hosts to $3 (0644). The key material
-# streams curl->node->file (never on disk except the 0400 target; never logged).
-# NO_PROXY already excludes wardyn-proxy; --noproxy '*' makes curl dial the proxy
-# directly with an origin-form path so the proxy serves the route locally and
-# injects the run token (exactly as wardyn-git-helper does).
-mint_ssh_key() {  # $1=grant_id $2=key_out $3=known_hosts_out
-    local grant_id="$1" proxy="${WARDYN_PROXY_URL:-http://wardyn-proxy:3128}"
-    curl -fsS --noproxy '*' -X POST -H 'Content-Type: application/json' \
-        --data "{\"grant_id\":\"${grant_id}\"}" \
-        "${proxy%/}/wardyn/v1/credentials/mint" \
-    | KEY_OUT="$2" KH_OUT="$3" node -e '
-        const fs = require("fs");
-        let d = "";
-        process.stdin.on("data", c => d += c).on("end", () => {
-          let o; try { o = JSON.parse(d); } catch (e) { process.exit(4); }
-          if (!o.token) process.exit(3);
-          const key = o.token.endsWith("\n") ? o.token : o.token + "\n";
-          fs.writeFileSync(process.env.KEY_OUT, key, { mode: 0o400 });
-          if (o.known_hosts) fs.writeFileSync(process.env.KH_OUT, o.known_hosts, { mode: 0o644 });
-        });'
-}
-
-# provision_ssh_grants mints each ssh_key grant, writes the 0400 key + a per-host
-# ~/.ssh config stanza (HostName->ssh.<provider>.com:443, ProxyCommand corkscrew
-# via wardyn-proxy, IdentityFile, StrictHostKeyChecking=yes against the baked
-# /etc/ssh/ssh_known_hosts or an operator-supplied one), and points git at that
-# config via GIT_SSH_COMMAND. No-op without WARDYN_SSH_GRANTS. MUST be called
-# directly (the export must survive). Never echoes the key.
+# provision_ssh_grants writes a per-host ~/.ssh config stanza (HostName->
+# ssh.<provider>.com:443, ProxyCommand corkscrew via wardyn-proxy, the proxy's
+# agent as IdentityAgent, StrictHostKeyChecking=yes against the baked
+# /etc/ssh/ssh_known_hosts plus the grant's own known_hosts from the proxy) and
+# points git at it through `wardyn-git-helper ssh-exec`. No-op without
+# WARDYN_SSH_GRANTS. MUST be called directly (the export must survive).
 provision_ssh_grants() {
     [[ -n "${WARDYN_SSH_GRANTS:-}" ]] || return 0
+    local helper=/usr/local/bin/wardyn-git-helper
     if ! command -v ssh >/dev/null 2>&1 || ! command -v corkscrew >/dev/null 2>&1 \
-       || ! command -v node >/dev/null 2>&1; then
-        echo "agent-run: WARNING ssh/corkscrew/node not in image; SSH clone disabled this run" >&2
+       || ! command -v node >/dev/null 2>&1 || [[ ! -x "$helper" ]]; then
+        echo "agent-run: WARNING ssh/corkscrew/node/wardyn-git-helper not in image; SSH clone disabled this run" >&2
         return 0
     fi
     local proxy purl proxy_host proxy_port
@@ -233,7 +211,7 @@ provision_ssh_grants() {
     mkdir -p "$ssh_dir"; chmod 0700 "$ssh_dir"
     : > "$cfg"; chmod 0600 "$cfg"
 
-    local host gid eps ep_host ep_port slug keyfile khfile ukh
+    local host gid eps ep_host ep_port slug agents=()
     while IFS=$'\t' read -r host gid; do
         [[ -n "$host" && -n "$gid" ]] || continue
         if ! eps="$(ssh_endpoint "$host")"; then
@@ -242,57 +220,34 @@ provision_ssh_grants() {
         fi
         read -r ep_host ep_port <<< "$eps"
         slug="$(printf '%s' "$host" | tr -c 'a-zA-Z0-9' '_')"
-        keyfile="${ssh_dir}/id_wardyn_${slug}"
-        khfile="${ssh_dir}/known_hosts_${slug}"
-        rm -f "$keyfile" "$khfile"
-        if ! mint_ssh_key "$gid" "$keyfile" "$khfile"; then
-            echo "agent-run: WARNING ssh_key mint failed for ${host} (egress or broker may have refused); SSH clone for it disabled" >&2
-            rm -f "$keyfile" "$khfile"
-            continue
-        fi
-        chmod 0400 "$keyfile" 2>/dev/null || true
-        WARDYN_SSH_KEYFILES+=("$keyfile")
-        # Prefer an operator-supplied known_hosts (grant's known_hosts_secret_ref);
-        # otherwise the image-baked file (authoritative for github.com / ADO).
-        ukh="/etc/ssh/ssh_known_hosts"
-        if [[ -s "$khfile" ]]; then
-            ukh="$khfile"
-            WARDYN_SSH_KEYFILES+=("$khfile")
-        else
-            rm -f "$khfile"
-        fi
+        agents+=(--agent "${slug}=${gid}")
         printf '%s\n' \
           "Host ${host}" \
           "    HostName ${ep_host}" \
           "    Port ${ep_port}" \
           "    User git" \
-          "    IdentityFile ${keyfile}" \
-          "    IdentitiesOnly yes" \
+          "    IdentityAgent \${WARDYN_SSH_AGENT_DIR}/${slug}.sock" \
           "    StrictHostKeyChecking yes" \
-          "    UserKnownHostsFile ${ukh}" \
+          "    UserKnownHostsFile /dev/null" \
+          "    KnownHostsCommand ${helper} ssh-known-hosts ${gid}" \
           "    ProxyCommand corkscrew ${proxy_host} ${proxy_port} %h %p" \
           "" >> "$cfg"
-        echo "agent-run: SSH SCM lane wired for ${host} -> ${ep_host}:${ep_port} (via wardyn-proxy CONNECT)" >&2
+        echo "agent-run: SSH SCM lane wired for ${host} -> ${ep_host}:${ep_port} (via wardyn-proxy CONNECT; signed by the proxy's ssh agent)" >&2
     done < <(node -e 'const m=JSON.parse(process.env.WARDYN_SSH_GRANTS||"{}");for(const[h,g]of Object.entries(m))process.stdout.write(h+"\t"+g+"\n")')
 
-    if [[ ${#WARDYN_SSH_KEYFILES[@]} -gt 0 ]]; then
+    if [[ ${#agents[@]} -gt 0 ]]; then
         # -F our config: git-over-ssh clones of git@<host>:... transparently route
-        # to ssh.<provider>.com:443 through the proxy with the minted key.
-        export GIT_SSH_COMMAND="ssh -F ${cfg}"
+        # to ssh.<provider>.com:443 through the proxy, signed by its agent.
+        export GIT_SSH_COMMAND="${helper} ssh-exec ${agents[*]} -- ssh -F ${cfg}"
     fi
 }
 
-# wipe_ssh_grants shreds the minted key(s) + any known_hosts and removes the ssh
-# config + GIT_SSH_COMMAND. Called right after the clone (before exec) so the key
-# is resident for the clone; also armed as an EXIT trap so a mid-clone abort
-# still wipes. Idempotent; never fatal.
+# wipe_ssh_grants closes the proxy's ssh agent for the rest of the run and
+# removes the ssh config + GIT_SSH_COMMAND. Called right after the clone (before
+# exec); also armed as an EXIT trap so a mid-clone abort still closes it.
+# Idempotent; never fatal.
 wipe_ssh_grants() {
-    local f
-    for f in "${WARDYN_SSH_KEYFILES[@]:-}"; do
-        [[ -n "$f" ]] || continue
-        shred -u "$f" 2>/dev/null || rm -f "$f"
-    done
-    WARDYN_SSH_KEYFILES=()
+    close_ssh_agent
     rm -f "${HOME}/.ssh/wardyn_ssh_config" 2>/dev/null || true
     unset GIT_SSH_COMMAND || true
 }
@@ -349,7 +304,7 @@ if [[ "${1:-}" == "--selftest" ]]; then
         echo "  ~/.claude creds: ABSENT (no subscription OAuth creds mounted)"
     fi
     selftest_report_repo_and_git || ok=0
-    echo "--- SSH SCM lane (selftest never mints/writes a key) ---"
+    echo "--- SSH SCM lane (selftest never opens the ssh agent) ---"
     echo "  WARDYN_SSH_GRANTS=${WARDYN_SSH_GRANTS:-<unset (no ssh_key grants)>}"
     for sbin in ssh corkscrew; do
         if command -v "$sbin" >/dev/null 2>&1; then
@@ -364,7 +319,7 @@ if [[ "${1:-}" == "--selftest" ]]; then
         echo "  baked known_hosts: ABSENT (StrictHostKeyChecking would fail closed)"
     fi
     if [[ -n "${WARDYN_SSH_GRANTS:-}" ]]; then
-        echo "  SSH SCM lane: ACTIVE at task time (agent-run mints a 0400 key, clones via ssh-over-443 through wardyn-proxy, then WIPES the key)"
+        echo "  SSH SCM lane: ACTIVE at task time (agent-run clones via ssh-over-443 through wardyn-proxy, signed by the proxy's ssh agent, then closes the agent)"
     else
         echo "  SSH SCM lane: not provisioned (no ssh_key grant)"
     fi
@@ -500,7 +455,7 @@ fi
 # ── idle mode (INTERACTIVE runs) ──────────────────────────────────────────────
 # The interactive counterpart to task mode: prepare the workspace EXACTLY as task
 # mode does — install the MITM CA, artifact config, git-helper caller-auth secret,
-# SSH keys, and CLONE the run's repo(s) into ~/work — then hold the container open
+# SSH lane, and CLONE the run's repo(s) into ~/work — then hold the container open
 # for `wardyn run attach`. Without this, an interactive run came up with an EMPTY ~/work
 # (the human attached to a bare shell with no repo). The human then drives claude in
 # the attach shell; the repo is already there.
@@ -701,9 +656,9 @@ materialize_azure_cli_config
 # WARDYN_GIT_HELPER_SECRET export survives into this shell.  No-op without a grant.
 provision_git_helper_secret
 
-# SSH SCM lane: mint the resident SSH key(s) + wire GIT_SSH_COMMAND before the
-# clone (no-op without WARDYN_SSH_GRANTS).  Arm an EXIT trap so a mid-clone abort
-# still wipes the key; the success path wipes explicitly right after the clone.
+# SSH SCM lane: wire GIT_SSH_COMMAND onto the proxy's ssh agent before the clone
+# (no-op without WARDYN_SSH_GRANTS).  Arm an EXIT trap so a mid-clone abort still
+# closes the agent; the success path closes it explicitly right after the clone.
 provision_ssh_grants
 trap wipe_ssh_grants EXIT
 
@@ -720,9 +675,9 @@ trust_mounted_repos  # host-owned mounts: git dubious-ownership refusal breaks g
 configure_git_broker_insteadof; configure_git_pat_broker_insteadof
 dispatch_repo_clones
 
-# WIPE the resident SSH key(s) now that the clone is done: the agent process
-# below never needs them (clone-only SSH lane), so the readable-key window is the
-# clone only.  Disarm the EXIT trap since we have wiped explicitly (the exec'd
+# CLOSE the proxy's ssh agent now that the clone is done: the agent process below
+# never needs it (clone-only SSH lane), so nothing after this signs in with the
+# key.  Disarm the EXIT trap since we have closed explicitly (the exec'd
 # agent/scan/verify replaces this process, so the EXIT trap would not fire anyway).
 wipe_ssh_grants
 trap - EXIT

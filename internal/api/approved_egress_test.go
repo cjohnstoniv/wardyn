@@ -38,6 +38,10 @@ func (s *approvedEgressStore) SetWorkspaceApprovedEgress(_ context.Context, _ uu
 	return ws, nil
 }
 
+func (s *approvedEgressStore) GetWorkspace(context.Context, uuid.UUID) (types.Workspace, error) {
+	return s.ws, nil
+}
+
 func TestSetApprovedEgressValidation(t *testing.T) {
 	h := newHarness(t)
 	id := uuid.New().String()
@@ -59,6 +63,8 @@ func TestSetApprovedEgressValidation(t *testing.T) {
 		// construction on every future run. Reject it explicitly instead.
 		{"git-broker-managed host", "/api/v1/workspaces/" + id + "/approved-egress", `{"domains":["github.com"]}`},
 		{"git-broker-managed host (api)", "/api/v1/workspaces/" + id + "/approved-egress", `{"domains":["api.github.com"]}`},
+		// Under the broker's own *.githubusercontent.com wildcard: dispatch strips and denies it on every brokered run.
+		{"host under a git-broker wildcard", "/api/v1/workspaces/" + id + "/approved-egress", `{"domains":["objects.githubusercontent.com"]}`},
 	}
 	for _, c := range cases {
 		if w := do(t, h.srv, http.MethodPut, c.path, adminToken, c.body); w.Code != http.StatusBadRequest {
@@ -290,5 +296,21 @@ func TestObservedEgress_MemberSeesOnlyOwnRuns(t *testing.T) {
 	}
 	if examined != 2 {
 		t.Errorf("admin runs_examined = %d, want 2", examined)
+	}
+}
+
+// An approval of a host the workspace denies would answer 200 and change nothing, since a deny beats an
+// allow at the proxy: it is refused, and the deny list is left as it is.
+func TestSetApprovedEgress_DeniedHostRefused(t *testing.T) {
+	h := newHarness(t)
+	wsID := uuid.New()
+	fake := &approvedEgressStore{ws: types.Workspace{ID: wsID, Name: "w", Status: types.WorkspaceScanned, DeniedEgress: []string{"x.example"}}}
+	srv := New(baseTestConfig(h, fake))
+	w := do(t, srv, http.MethodPut, "/api/v1/workspaces/"+wsID.String()+"/approved-egress", adminToken, `{"domains":["ok.example","X.example"]}`)
+	if w.Code != http.StatusBadRequest || decodeErrorBody(t, w).Reason != reasonWorkspaceApprovedEgressDenied {
+		t.Fatalf("approving a denied host = %d %s, want 400 %s", w.Code, w.Body, reasonWorkspaceApprovedEgressDenied)
+	}
+	if fake.updated != nil {
+		t.Errorf("a refused approval was written: %+v", fake.updated.ApprovedEgress)
 	}
 }

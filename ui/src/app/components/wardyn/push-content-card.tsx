@@ -31,7 +31,7 @@ import * as React from "react";
 import { Check, Loader2, X } from "lucide-react";
 import type { AgentRun, ApprovalRequest } from "../../lib/types";
 import { isHeld, isTerminalRunState, type PushContentScope } from "../../lib/types";
-import { relativeTime } from "../../lib/format";
+import { absoluteTime, relativeTime } from "../../lib/format";
 import { PUSH } from "./copy/push";
 import { APPROVAL, APPROVAL_BANNER_LABEL, SECURITY_ONLY_REASON } from "./copy";
 import { Button } from "../ui/button";
@@ -247,7 +247,7 @@ export function PushContentCard({
         ) : (
           <Chip tone="neutral">{SECURITY_ONLY_REASON}</Chip>
         )}
-        <span className="ml-auto text-xs text-muted-foreground" title={item.requested_at}>
+        <span className="ml-auto text-xs text-muted-foreground" title={absoluteTime(item.requested_at)}>
           requested {relativeTime(item.requested_at)}
         </span>
       </div>

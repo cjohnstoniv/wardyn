@@ -76,12 +76,12 @@ describe("ApprovalsScreen — credentialKind banner per grant shape", () => {
       { ...base, requested_scope: { host: "github.com", key_secret_ref: "ssh-key-github.com" } },
     ];
     renderScreen();
-    // "written to disk" appears in both the "what" and "blast" lines by design
-    // (both reuse the same honest wording) — match the host-qualified "what"
-    // line specifically so a single element is found.
-    await screen.findByText(/ssh key for github\.com is written to disk/i);
+    // The "what" line names the host; the "blast" line carries the shared
+    // sshKeyLine, so match the host-qualified line to find a single element.
+    await screen.findByText(/sign this run's Git SSH sign-in for github\.com/i);
+    expect(screen.queryByText(/written to disk/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/attached to the request by the proxy/i)).not.toBeInTheDocument();
-    // ssh_key is a resident, agent-readable, non-downscopable key like a PAT —
+    // ssh_key is a non-downscopable key like a PAT, signed with at the proxy —
     // it still earns the "grants git write" capability chip.
     expect(screen.getByText(/grants git write/i)).toBeInTheDocument();
   });

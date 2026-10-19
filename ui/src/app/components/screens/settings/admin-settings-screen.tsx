@@ -319,7 +319,11 @@ export function AdminSettingsScreen() {
   // makes POSITIVE claims from it, so it is the one that is told.
   const [configFailed, setConfigFailed] = React.useState(false);
 
+  // Only the latest load may write: a slow first load (made before /me resolved, so without the site-config
+  // read) landing after the second would reset the config to null and claim a proxied deployment goes direct.
+  const loadId = React.useRef(0);
   const load = React.useCallback(() => {
+    const mine = ++loadId.current;
     let failed = false;
     Promise.all([
       setupApi.getSetupStatus(),
@@ -331,12 +335,15 @@ export function AdminSettingsScreen() {
         : Promise.resolve(null),
     ])
       .then(([s, cfg]) => {
+        if (mine !== loadId.current) return;
         setStatus(s);
         setSiteConfig(cfg);
         setConfigFailed(failed);
         setState("ready");
       })
-      .catch(() => setState("error"));
+      .catch(() => {
+        if (mine === loadId.current) setState("error");
+      });
   }, [adminReads]);
   // S-5: nothing is fetched for a refused caller — the effect below never
   // fires `load()` for one, not merely a page that fetches then hides itself.

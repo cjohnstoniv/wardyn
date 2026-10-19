@@ -372,6 +372,8 @@ func (s *Server) fanoutWriterResize(ctx context.Context, runID uuid.UUID, writer
 		}
 		if err := o.mux.Resize(ctx, cols, rows); err != nil {
 			slog.WarnContext(ctx, "wardynd: observer resize failed", "run_id", runID, "err", err)
+		} else {
+			o.recordResize(cols, rows)
 		}
 		if o.notify != nil {
 			go o.notify(true, writer)

@@ -19,9 +19,9 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 for f in "$BUILD" "${SRC}/runnerd-managed-start.sh" "${SRC}/pkg-scripts/preinstall" "${SRC}/pkg-scripts/postinstall"; do
-  head -1 "$f" | grep -Eq '^#!/(usr/bin/env bash|bin/sh)$' || fail "$f has no shebang"
+  head -1 "$f" | grep -E '^#!/(usr/bin/env bash|bin/sh)$' >/dev/null || fail "$f has no shebang"
   [ -x "$f" ] || fail "$f is not executable (pkgbuild would ship a script macOS cannot run)"
-  "$(head -1 "$f" | grep -q bash && echo bash || echo sh)" -n "$f" || fail "$f has a syntax error"
+  "$(head -1 "$f" | grep bash >/dev/null && echo bash || echo sh)" -n "$f" || fail "$f has a syntax error"
   if command -v shellcheck >/dev/null 2>&1; then shellcheck "$f" || fail "shellcheck rejected $f"; fi
 done
 
@@ -112,7 +112,7 @@ build "${WORK}/inst.pkg" APPLE_DEVELOPER_ID_INSTALLER_P12_BASE64="$CERT" APPLE_D
 grep -q '^productsign --sign Developer ID Installer: Test (TEAM) ' "$STUB_LOG" || fail "productsign did not run with the installer secrets"
 grep -q '^codesign' "$STUB_LOG" && fail "codesign ran without the application certificate"
 grep -q '^xcrun' "$STUB_LOG" && fail "notarization ran with an unsigned binary"
-tail -1 "${WORK}/inst.pkg" | grep -q signed || fail "the output is not the productsign result"
+tail -1 "${WORK}/inst.pkg" | grep signed >/dev/null || fail "the output is not the productsign result"
 
 # Everything set: sign the binary, sign the package, notarize, staple, in that order, and never print a secret.
 build "${WORK}/full.pkg" APPLE_DEVELOPER_ID_INSTALLER_P12_BASE64="$CERT" APPLE_DEVELOPER_ID_INSTALLER_P12_PASSWORD=pw-secret "APPLE_DEVELOPER_ID_INSTALLER_IDENTITY=Developer ID Installer: Test (TEAM)" \

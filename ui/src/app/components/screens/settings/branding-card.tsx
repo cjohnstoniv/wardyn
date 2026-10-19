@@ -27,6 +27,7 @@ import {
 } from "../../ui/alert-dialog";
 import { Field, fieldHintId, OptionCard } from "../../wardyn/form-primitives";
 import { ApprovalStateBadge } from "../../wardyn/primitives";
+import { ErrorState } from "../../wardyn/states";
 import { CollapsibleCard } from "../../wardyn/collapsible-card";
 import { useThemeName } from "../../wardyn/theme-provider";
 import { BrandingContext } from "../../wardyn/branding-context";
@@ -160,9 +161,24 @@ export function BrandingCard() {
   // dark pair was set.
   const [, setConsoleBrand] = React.useContext(BrandingContext);
   const [brand, setBrand] = React.useState<Branding | null>(null);
+  // A failed read is not "Default branding": the form would start empty and a Save would replace the stored
+  // document (support link, dark pair) the admin never saw. The card says it could not read, and offers Retry.
+  const [loadFailed, setLoadFailed] = React.useState(false);
+  const [attempt, setAttempt] = React.useState(0);
   React.useEffect(() => {
-    brandingApi.getSettings().then((b) => setBrand(b.org_name ? b : null), () => {});
-  }, []);
+    let live = true;
+    brandingApi.getSettings().then(
+      (b) => {
+        if (!live) return;
+        setLoadFailed(false);
+        setBrand(b.org_name ? b : null);
+      },
+      () => live && setLoadFailed(true),
+    );
+    return () => {
+      live = false;
+    };
+  }, [attempt]);
   const [draft, setDraft] = React.useState<Draft>(() => draftFrom(brand));
   const [saving, setSaving] = React.useState(false);
   const [confirm, setConfirm] = React.useState<"logo" | "all" | null>(null);
@@ -245,7 +261,7 @@ export function BrandingCard() {
   const ink = inDark ? (draft.darkOn ? draft.darkText : derived?.text) : draft.text;
   const swatch = fill && ink && isHexColour(fill) && isHexColour(ink) ? { background: fill, color: ink } : undefined;
   // #1200 compact cards — one line, collapsed or expanded.
-  const brandingSummary = brand ? `Custom — ${brand.org_name}` : "Default branding";
+  const brandingSummary = loadFailed ? BRANDING.LOAD_FAILED_SUMMARY : brand ? `Custom — ${brand.org_name}` : "Default branding";
 
   return (
     <CollapsibleCard
@@ -255,115 +271,121 @@ export function BrandingCard() {
       aria-labelledby="branding-title"
     >
       <p className="text-body leading-snug text-muted-foreground">{BRANDING.LEDE}</p>
-      <div className="mt-4 grid gap-6 md:grid-cols-2">
-        <div className="space-y-4">
-          <Field label={BRANDING.ORG_NAME_LABEL} htmlFor="brand-org">
-            <Input id="brand-org" value={draft.orgName} maxLength={64} onChange={(e) => set({ orgName: e.target.value })} />
-          </Field>
-          <Field label={BRANDING.NAME_FORMAT_LABEL}>
-            <div className="grid gap-2">
-              {(["prefix", "suffix"] as const).map((f) => (
-                <OptionCard
-                  key={f}
-                  selected={draft.nameFormat === f}
-                  onClick={() => set({ nameFormat: f })}
-                  title={orgName ? (f === "prefix" ? BRAND_NAME.PREFIX(orgName) : BRAND_NAME.SUFFIX(orgName)) : (f === "prefix" ? BRANDING.FORMAT_PREFIX_HINT : BRANDING.FORMAT_SUFFIX_HINT)}
-                  // With no name typed the title is already the placeholder shape; saying it twice adds nothing.
-                  hint={orgName ? (f === "prefix" ? BRANDING.FORMAT_PREFIX_HINT : BRANDING.FORMAT_SUFFIX_HINT) : undefined}
-                />
+      {loadFailed ? (
+        <div className="mt-4">
+          <ErrorState onRetry={() => setAttempt((n) => n + 1)} />
+        </div>
+      ) : (
+        <div className="mt-4 grid gap-6 md:grid-cols-2">
+          <div className="space-y-4">
+            <Field label={BRANDING.ORG_NAME_LABEL} htmlFor="brand-org">
+              <Input id="brand-org" value={draft.orgName} maxLength={64} onChange={(e) => set({ orgName: e.target.value })} />
+            </Field>
+            <Field label={BRANDING.NAME_FORMAT_LABEL}>
+              <div className="grid gap-2">
+                {(["prefix", "suffix"] as const).map((f) => (
+                  <OptionCard
+                    key={f}
+                    selected={draft.nameFormat === f}
+                    onClick={() => set({ nameFormat: f })}
+                    title={orgName ? (f === "prefix" ? BRAND_NAME.PREFIX(orgName) : BRAND_NAME.SUFFIX(orgName)) : (f === "prefix" ? BRANDING.FORMAT_PREFIX_HINT : BRANDING.FORMAT_SUFFIX_HINT)}
+                    // With no name typed the title is already the placeholder shape; saying it twice adds nothing.
+                    hint={orgName ? (f === "prefix" ? BRANDING.FORMAT_PREFIX_HINT : BRANDING.FORMAT_SUFFIX_HINT) : undefined}
+                  />
+                ))}
+              </div>
+            </Field>
+            <ColourField id="brand-primary" label={BRANDING.PRIMARY_LABEL} value={draft.primary} bad={light.fillBad}
+              onChange={(primary) => set({ primary })} />
+            <ColourField id="brand-text" label={BRANDING.TEXT_LABEL} value={draft.text} bad={light.textBad}
+              onChange={(text) => set({ text })}>
+              <ContrastLine ratio={light.ratio} low={light.low} />
+            </ColourField>
+            <Field label={BRANDING.LOGO_LABEL} htmlFor={brand?.logo_from_file ? undefined : "brand-logo"} hint={BRANDING.LOGO_HINT}>
+              <div className="space-y-2">
+                {brand?.logo_url && (
+                  <div className="flex items-center gap-2.5">
+                    <img src={brand.logo_url} alt="" data-testid="branding-stored-logo" className="size-7 rounded-md object-contain" />
+                    {!brand.logo_from_file && (
+                      <Button type="button" size="sm" variant="outline" className={DANGER_OUTLINE} onClick={() => setConfirm("logo")}>
+                        {BRANDING.REMOVE_LOGO}
+                      </Button>
+                    )}
+                  </div>
+                )}
+                {brand?.logo_from_file ? (
+                  <p className="rounded-md bg-surface-2 px-2.5 py-2 text-xs text-muted-foreground">{BRANDING.FILE_LOGO_NOTE}</p>
+                ) : (
+                  <Input id="brand-logo" aria-describedby={fieldHintId("brand-logo")} type="file" accept="image/svg+xml,image/png"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      set({ logo: file ? { name: file.name, size: file.size, type: file.type, file } : null });
+                    }} />
+                )}
+              </div>
+            </Field>
+            {draft.logo && (
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between gap-2 text-xs">
+                  <span className="truncate font-mono">{draft.logo.name}</span>
+                  <span className="text-muted-foreground">{logoSizeText(draft.logo.size)}</span>
+                </div>
+                {logoBad && <ErrLine>{BRANDING.ERR_LOGO(logoSizeText(draft.logo.size))}</ErrLine>}
+              </div>
+            )}
+            <Field label={BRANDING.LINK_LABEL} htmlFor="brand-link" hint={BRANDING.LINK_HINT}>
+              <Input id="brand-link" value={draft.link} className="font-mono" aria-invalid={linkBad || undefined}
+                onChange={(e) => set({ link: e.target.value.trim() })} />
+            </Field>
+            {linkBad && <ErrLine>{BRANDING.ERR_LINK}</ErrLine>}
+            <div className="flex items-center gap-2">
+              <Checkbox id="brand-dark" checked={draft.darkOn} onCheckedChange={(v) => set({ darkOn: v === true })} />
+              <Label htmlFor="brand-dark">{BRANDING.DARK_LABEL}</Label>
+            </div>
+            {dark && (
+              <>
+                <ColourField id="brand-dark-primary" label={BRANDING.PRIMARY_LABEL} value={draft.darkPrimary}
+                  bad={dark.fillBad} onChange={(darkPrimary) => set({ darkPrimary })} />
+                <ColourField id="brand-dark-text" label={BRANDING.TEXT_LABEL} value={draft.darkText}
+                  bad={dark.textBad} onChange={(darkText) => set({ darkText })}>
+                  <ContrastLine ratio={dark.ratio} low={dark.low} />
+                </ColourField>
+              </>
+            )}
+            <div className="flex items-center gap-3">
+              <Button onClick={() => void save()} disabled={!canSave}>{BRANDING.SAVE}</Button>
+              {brand && (
+                <Button type="button" variant="outline" className={DANGER_OUTLINE} onClick={() => setConfirm("all")}>
+                  {BRANDING.REMOVE_BRANDING}
+                </Button>
+              )}
+              {problems > 0 && (
+                <span className="text-meta text-muted-foreground">{problems > 1 ? BRANDING.FIX_MANY : BRANDING.FIX_ONE}</span>
+              )}
+            </div>
+          </div>
+          <div className="space-y-3">
+            <div className="text-sm font-medium text-foreground">{BRANDING.PREVIEW_TITLE}</div>
+            <div data-testid="branding-preview" className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2">
+              {draft.logo || !brand?.logo_url ? (
+                <span aria-hidden className="flex size-7 items-center justify-center rounded-md bg-primary text-xs font-bold text-primary-foreground" style={swatch}>
+                  {monogram(orgName)}
+                </span>
+              ) : (
+                <img src={brand.logo_url} alt="" className="size-7 rounded-md object-contain" />
+              )}
+              <span className="text-base font-semibold tracking-tight text-foreground">{productName(previewBrand)}</span>
+              <Button size="sm" className="ml-auto" style={swatch} tabIndex={-1}>New run</Button>
+            </div>
+            <div className="label-eyebrow">{BRANDING.FIXED_TITLE}</div>
+            <div className="flex flex-wrap gap-2">
+              {(["PENDING", "APPROVED", "DENIED", "EXPIRED", "CANCELLED"] as const).map((s) => (
+                <ApprovalStateBadge key={s} state={s} />
               ))}
             </div>
-          </Field>
-          <ColourField id="brand-primary" label={BRANDING.PRIMARY_LABEL} value={draft.primary} bad={light.fillBad}
-            onChange={(primary) => set({ primary })} />
-          <ColourField id="brand-text" label={BRANDING.TEXT_LABEL} value={draft.text} bad={light.textBad}
-            onChange={(text) => set({ text })}>
-            <ContrastLine ratio={light.ratio} low={light.low} />
-          </ColourField>
-          <Field label={BRANDING.LOGO_LABEL} htmlFor={brand?.logo_from_file ? undefined : "brand-logo"} hint={BRANDING.LOGO_HINT}>
-            <div className="space-y-2">
-              {brand?.logo_url && (
-                <div className="flex items-center gap-2.5">
-                  <img src={brand.logo_url} alt="" data-testid="branding-stored-logo" className="size-7 rounded-md object-contain" />
-                  {!brand.logo_from_file && (
-                    <Button type="button" size="sm" variant="outline" className={DANGER_OUTLINE} onClick={() => setConfirm("logo")}>
-                      {BRANDING.REMOVE_LOGO}
-                    </Button>
-                  )}
-                </div>
-              )}
-              {brand?.logo_from_file ? (
-                <p className="rounded-md bg-surface-2 px-2.5 py-2 text-xs text-muted-foreground">{BRANDING.FILE_LOGO_NOTE}</p>
-              ) : (
-                <Input id="brand-logo" aria-describedby={fieldHintId("brand-logo")} type="file" accept="image/svg+xml,image/png"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    set({ logo: file ? { name: file.name, size: file.size, type: file.type, file } : null });
-                  }} />
-              )}
-            </div>
-          </Field>
-          {draft.logo && (
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between gap-2 text-xs">
-                <span className="truncate font-mono">{draft.logo.name}</span>
-                <span className="text-muted-foreground">{logoSizeText(draft.logo.size)}</span>
-              </div>
-              {logoBad && <ErrLine>{BRANDING.ERR_LOGO(logoSizeText(draft.logo.size))}</ErrLine>}
-            </div>
-          )}
-          <Field label={BRANDING.LINK_LABEL} htmlFor="brand-link" hint={BRANDING.LINK_HINT}>
-            <Input id="brand-link" value={draft.link} className="font-mono" aria-invalid={linkBad || undefined}
-              onChange={(e) => set({ link: e.target.value.trim() })} />
-          </Field>
-          {linkBad && <ErrLine>{BRANDING.ERR_LINK}</ErrLine>}
-          <div className="flex items-center gap-2">
-            <Checkbox id="brand-dark" checked={draft.darkOn} onCheckedChange={(v) => set({ darkOn: v === true })} />
-            <Label htmlFor="brand-dark">{BRANDING.DARK_LABEL}</Label>
-          </div>
-          {dark && (
-            <>
-              <ColourField id="brand-dark-primary" label={BRANDING.PRIMARY_LABEL} value={draft.darkPrimary}
-                bad={dark.fillBad} onChange={(darkPrimary) => set({ darkPrimary })} />
-              <ColourField id="brand-dark-text" label={BRANDING.TEXT_LABEL} value={draft.darkText}
-                bad={dark.textBad} onChange={(darkText) => set({ darkText })}>
-                <ContrastLine ratio={dark.ratio} low={dark.low} />
-              </ColourField>
-            </>
-          )}
-          <div className="flex items-center gap-3">
-            <Button onClick={() => void save()} disabled={!canSave}>{BRANDING.SAVE}</Button>
-            {brand && (
-              <Button type="button" variant="outline" className={DANGER_OUTLINE} onClick={() => setConfirm("all")}>
-                {BRANDING.REMOVE_BRANDING}
-              </Button>
-            )}
-            {problems > 0 && (
-              <span className="text-meta text-muted-foreground">{problems > 1 ? BRANDING.FIX_MANY : BRANDING.FIX_ONE}</span>
-            )}
           </div>
         </div>
-        <div className="space-y-3">
-          <div className="text-sm font-medium text-foreground">{BRANDING.PREVIEW_TITLE}</div>
-          <div data-testid="branding-preview" className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2">
-            {draft.logo || !brand?.logo_url ? (
-              <span aria-hidden className="flex size-7 items-center justify-center rounded-md bg-primary text-xs font-bold text-primary-foreground" style={swatch}>
-                {monogram(orgName)}
-              </span>
-            ) : (
-              <img src={brand.logo_url} alt="" className="size-7 rounded-md object-contain" />
-            )}
-            <span className="text-base font-semibold tracking-tight text-foreground">{productName(previewBrand)}</span>
-            <Button size="sm" className="ml-auto" style={swatch} tabIndex={-1}>New run</Button>
-          </div>
-          <div className="label-eyebrow">{BRANDING.FIXED_TITLE}</div>
-          <div className="flex flex-wrap gap-2">
-            {(["PENDING", "APPROVED", "DENIED", "EXPIRED", "CANCELLED"] as const).map((s) => (
-              <ApprovalStateBadge key={s} state={s} />
-            ))}
-          </div>
-        </div>
-      </div>
+      )}
       <AlertDialog open={confirm !== null} onOpenChange={(o) => !o && !removing && setConfirm(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>

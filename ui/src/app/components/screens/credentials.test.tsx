@@ -3,12 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// CredentialsScreen — the admin "Stored credentials" inventory (design F-1/
+// CredentialsScreen — the admin "Credentials" inventory (design F-1/
 // F-2, packet F §4) and its erase flow (F-5/F-6, packet F §5). Every
 // assertion reads its expected string from the copy modules (INVENTORY/ERASE,
 // wardyn/copy/credentials.ts).
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
@@ -89,7 +89,7 @@ describe("the inventory", () => {
   it("lists a person's row with their email and the provider's name (design F-2)", async () => {
     listInventoryMock.mockResolvedValue(inventory([aliceRow], { "corp-gw": 1 }));
     renderScreen();
-    expect(await screen.findByText("Stored credentials")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Credentials" })).toBeInTheDocument();
     const row = (await screen.findByText("alice@corp.example")).closest("tr")!;
     expect(within(row).getByText("sub-alice")).toBeInTheDocument();
     expect(within(row).getByText("Corp gateway")).toBeInTheDocument();
@@ -211,6 +211,21 @@ describe("erasing a listed person (design F-5)", () => {
     expect(eraseMock).toHaveBeenCalledWith("sub-alice");
     expect(await screen.findByText("Erased 4 credentials for alice@corp.example.")).toBeInTheDocument();
     expect(screen.getByText(ERASE.DONE_AUDIT)).toBeInTheDocument();
+  });
+
+  // #2499: Escape or an outside click while the erase runs must not hide the result the admin is waiting for.
+  it("stays open through Escape while the erase runs, then shows the result", async () => {
+    let finish!: (v: { count: number }) => void;
+    listInventoryMock.mockResolvedValue(inventory([aliceRow], { "corp-gw": 1 }));
+    eraseMock.mockReturnValue(new Promise((r) => (finish = r)));
+    renderScreen();
+    await userEvent.click(await screen.findByRole("button", { name: INVENTORY.ERASE_ROW }));
+    await userEvent.type(screen.getByLabelText(ERASE.CONFIRM_LABEL("alice@corp.example")), "alice@corp.example");
+    await userEvent.click(screen.getByRole("button", { name: ERASE.CONFIRM }));
+    await userEvent.keyboard("{Escape}");
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    await act(async () => finish({ count: 4 }));
+    expect(await screen.findByText("Erased 4 credentials for alice@corp.example.")).toBeInTheDocument();
   });
 
   it("count 0: nothing was stored, so nothing was erased", async () => {
@@ -443,7 +458,7 @@ describe("the admin-minted tokens list waits for the screen to be allowed", () =
   it("is not requested while the inventory is still loading", async () => {
     listInventoryMock.mockReturnValue(new Promise(() => {}));
     renderScreen();
-    await screen.findByText("Stored credentials");
+    await screen.findByRole("heading", { name: "Credentials" });
     expect(listMintedMock).not.toHaveBeenCalled();
   });
 });

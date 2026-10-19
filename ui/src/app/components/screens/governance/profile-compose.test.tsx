@@ -40,7 +40,7 @@ vi.mock("../../../lib/api/setup", () => ({
 
 import { HttpError } from "../../../lib/api/core";
 import type { GovernanceProfile } from "../../../lib/api/governance";
-import { GOVERNANCE as GOV } from "../../../lib/governance-copy";
+import { GOVERNANCE as GOV, LIMITS_CHIP } from "../../../lib/governance-copy";
 import { baseStatus } from "../../../lib/test-fixtures";
 import type { RunPolicySpec } from "../../../lib/types";
 import { aheadByHours } from "../../../lib/test-clock";
@@ -333,6 +333,24 @@ describe("ProfileEditor — the effective view", () => {
     expect(within(view).getByText(GOV.LIMIT_INTERACTIVE_LABEL)).toBeInTheDocument();
     expect(within(view).getByText(GOV.LIMIT_QUOTA_LABEL(2))).toBeInTheDocument();
     expect(within(view).queryByRole("textbox")).toBeNull();
+  });
+
+  // #2506: a composed profile whose overlay narrows only memory (or any limit
+  // the chips lacked) used to read "None" here.
+  it("a view whose only bounds are numeric caps or a placement denial names them, not 'None'", () => {
+    const child = row({
+      id: "pc",
+      name: "Team A",
+      ceiling: {} as RunPolicySpec,
+      base_profile_id: "pb",
+      overlay: {},
+      effective: { ceiling: SPEC, limits: { max_memory_mib: 2048, deny_placements: ["remote"] } },
+    });
+    renderEditor(child, [BASE, child]);
+    const limits = within(screen.getByTestId("governance-effective-limits"));
+    expect(limits.getByText(`${LIMITS_CHIP.MEMORY}: 2048`)).toBeInTheDocument();
+    expect(limits.getByText(LIMITS_CHIP.PLACEMENT("remote"))).toBeInTheDocument();
+    expect(limits.queryByText(GOV.LIMITS_NONE)).toBeNull();
   });
 
   it("a new or standalone profile shows no effective view", () => {

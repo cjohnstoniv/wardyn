@@ -25,17 +25,28 @@ read.
 - **A ceiling refusal names the policy that caused it.**
   - A refusal made by the resolved ceiling (`governance_profile` and `run_quota`, plus the Record Mode and provider sign-in launches that answer `record_ceiling_limit`) carries a `policy` object beside `error` and `reason`:
     - `source` (`profile` or `deployment`), the leaf profile's `name`, and the contact it published (`owner`, `email`, `request_url`, `request_text`, each present only when set and still valid).
+    - `layer` (0.10): the layer kind that refused, `profile` or `deployment`; `source` stays.
   - A member bound by the deployment is named as `deployment` with the site config's `policy_help`.
-  - An operator is never refused by a ceiling, so never gets one.
+  - An operator is refused only by the deployment's own rules (`components.autonomy_cap`, named as `deployment`), never by a profile.
   - The `error` text and the status are unchanged.
   - The key is never on a hidden door (the `404` twin of a missing resource) and never on a decision whose wire reason was rewritten, so those stay byte-identical to a missing resource.
-  - An `authz.denied` row never carries the owner or email, only the `reason` and `target` it always had.
+  - An `authz.denied` row never carries the owner or email. Since 0.10 it adds `layer`, and `layer_name` (the leaf) for `profile`.
+  - `record_ceiling_limit` and `run_quota` write no row, so their layer is on the wire only.
   - `GET /me` carries `governance_contact`: the caller's own `policy` object, or `null` for
     an operator, when the ceiling cannot be resolved, and on a stale group snapshot. It
     never fails the read, and for a member bound by the deployment it is `{"source":
     "deployment"}` without a site-config read.
   - `GET /runs/{id}` carries `policy`: the profile the run was launched under, else the
     deployment's `policy_help`, else the key is absent. A store failure omits it.
+  - `GET /runs/{id}/policy` carries `provenance` (0.10): per top-level policy key, the layer
+    that set its value at create.
+    - `layer`: `deployment` or `profile` (a ceiling set or narrowed it), `member` (the run's own
+      policy or edits) or `operator` (no ceiling binds the run).
+    - `name`: the leaf profile, or `deployment`, never a base. `contact`: the leaf's, or the
+      site's `policy_help`, as of the read. `locked`: absent until org walls or delegation can
+      forbid lower layers to change a value.
+    - `run.policy.resolve` records the map without contacts. Hosts added at launch are listed in
+      `changes`, not here.
   - `wardyn` prints one `governed by …, to request a change: …` line after the error when the
     refusal carries a `policy`. Exit codes are unchanged, and the Go SDK exposes it as
     `APIError.Policy`.
@@ -90,7 +101,7 @@ read.
 | `audit_retention_digest_mismatch` | 0.8.6: the same door, when the digest supplied is not the one the database computes for the partition. Export the partition again, check the archive, and submit the digest from its footer | ⛔ `409` |
 | `audit_retention_actor_reserved` | 0.9: the same door, when the caller's actor name is `wardynd`, the name the database reads as the retention sweeper (a system drop with no attested caller). Local mode takes the name from `X-Wardyn-Principal`, and an OIDC subject is whatever the provider issued, so the door refuses it before the database sees it. Target `audit.retention` | ⛔ `403` |
 | `user_view_type_deleted` | 0.8: an admin in the user view made a request after the user type the view looks through was deleted. The request is refused — never answered as the admin, because its tier was already read as `user` — and the session's view is turned off on the cookie, so the next request is in the Admin view. The body is `The <type> user type was removed, so you're back in the Admin view…`; `POST /runs` and `POST /runs/preflight` answer `409` with `reason` `admin_view` instead. The row carries `user_view: true` and the deleted `user_type`. `GET /me` is never refused: it drops back and says so (`user_view_dropped`) | ⛔ `403` |
-| `user_view_preview` | 0.8.6, with `WARDYN_GOVERN_ADMIN_RUNS` on: an admin or security admin whose User view looks through a user type other than their own stamped type sent a request that is not a `GET`, `HEAD` or `OPTIONS` (`POST /runs`, `POST /runs/preflight`, a workspace create, any write). The view is a read-only preview. The body names the remedy: switch the view to your own type to make changes or launch. `POST /me/view`, `POST /auth/logout` and `POST /policies/grade` are still served. The row carries `user_view: true`, `viewed_user_type` and `stamped_user_type` | ⛔ `409` |
+| `user_view_preview` | 0.8.6: a security admin (since 0.10, with the switch off too), or a super admin with `WARDYN_GOVERN_ADMIN_RUNS` on, whose User view looks through a user type other than their own stamped type sent a request that is not a `GET`, `HEAD` or `OPTIONS` (`POST /runs`, `POST /runs/preflight`, a workspace create, any write). The view is a read-only preview. The body names the remedy: switch the view to your own type to make changes or launch. `POST /me/view`, `POST /auth/logout` and `POST /policies/grade` are still served. The row carries `user_view: true`, `viewed_user_type` and `stamped_user_type` | ⛔ `409` |
 
 - The drop rows are why `POST /runs` mostly *narrows* rather than refuses: a member whose whole allowlist is ungranted gets a run with no member-authored egress, not a `403`, because the run's admin-authored egress is still there.
 - A drop is never silent.

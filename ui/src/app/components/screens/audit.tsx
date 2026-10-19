@@ -25,7 +25,7 @@ import { audit as api } from "../../lib/api/audit";
 import { LIST_LIMIT } from "../../lib/api/core";
 import { health as healthApi } from "../../lib/api/health";
 import { runs as runsApi } from "../../lib/api/runs";
-import { absoluteTime, clockTime } from "../../lib/format";
+import { absoluteTime, clockTime, mediumDate } from "../../lib/format";
 import { usePoll } from "../../lib/use-poll";
 import { Input } from "../ui/input";
 import { Button } from "../ui/button";
@@ -275,7 +275,8 @@ function dayLabel(ts: number): string {
   const oneDayMs = 86_400_000;
   if (ts === todayStart) return "Today";
   if (ts === todayStart - oneDayMs) return "Yesterday";
-  return new Date(ts).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "2-digit" });
+  // A row with an unreadable time yields a NaN day; say so instead of throwing.
+  return Number.isNaN(ts) ? "Unknown date" : mediumDate(new Date(ts).toISOString());
 }
 
 function groupByDay(events: AuditEvent[]): DayGroup[] {
@@ -342,7 +343,11 @@ export function AuditScreen() {
   // Must NOT client re-sort by wall-clock time — the server returns events in
   // authoritative append (seq) order; re-sorting by `time` can reorder events
   // that share a timestamp and misrepresent causality. Preserve as-is.
+  // Only the LATEST events read may write the list: a poll tick still in flight for the previous run filter
+  // would otherwise land after the new filter's read and show the wrong run's trail under it.
+  const eventsRequestId = React.useRef(0);
   const fetchEvents = React.useCallback(() => {
+    const requestId = ++eventsRequestId.current;
     // The kernel sensor's health rides along with every audit refresh (initial
     // load AND each poll tick): "unavailable" and "degraded" are the ABSENCE of
     // events, so an event list structurally cannot show them — a dead sensor
@@ -350,7 +355,9 @@ export function AuditScreen() {
     void healthApi.health().then((h) => setGroundTruth(h.ebpf_groundtruth?.state ? h.ebpf_groundtruth : undefined));
     // A run's trail is served oldest-first, so a long one is cut off at its END, the part an operator is
     // investigating: ask for its newest page.
-    return (runFilter ? api.listAudit(runFilter, { newest: true }) : api.listAudit(undefined)).then(setEvents);
+    return (runFilter ? api.listAudit(runFilter, { newest: true }) : api.listAudit(undefined)).then((list) => {
+      if (eventsRequestId.current === requestId) setEvents(list);
+    });
   }, [runFilter]);
 
   // Whether the LAST read actually answered. `status` cannot carry this: the
@@ -374,8 +381,10 @@ export function AuditScreen() {
   // Live-tail: audit is append-only, so a background poll is meaningful (new
   // events only ever get added). Refresh quietly — never flip back to the
   // loading skeleton, that would flicker the whole list every tick.
+  // Returned, so usePoll's in-flight guard holds the next tick until this read answers: a read slower than the
+  // interval would otherwise be overtaken by the next tick and dropped by the request-id guard above, every time.
   const tick = React.useCallback(() => {
-    fetchEvents()
+    return fetchEvents()
       .then(() => setPollStale(false))
       .catch(() => {
         /* transient poll failure — keep the last good view and retry next

@@ -19,7 +19,7 @@
 // caller who ever renders this page now — so they are ported below unchanged,
 // alongside the Host card's own #1228/#1200 coverage.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
@@ -508,6 +508,27 @@ describe("AdminSettingsScreen — the Host card's status tiles", () => {
       expect(screen.getByTestId(`host-tile-${id}-pill`)).toHaveAttribute("data-tone", "success");
       expect(screen.queryByTestId(`host-tile-${id}-sub`)).toBeNull();
     }
+  });
+
+  // #2548: the first load (before /me resolved, so without the site-config read) can answer after the second.
+  it("a slow first load cannot overwrite the resolved one and claim a proxied host goes direct", async () => {
+    let answerFirst!: (s: ReturnType<typeof baseStatus>) => void;
+    getSetupStatusMock.mockReset().mockReturnValueOnce(new Promise((r) => (answerFirst = r))).mockResolvedValue(baseStatus());
+    getSiteConfigMock.mockResolvedValue({ upstream_proxy_url: "http://proxy.corp.example:3128" });
+    const tree = (resolved: boolean) => (
+      <MemoryRouter initialEntries={["/admin/settings"]}>
+        <OperatorProvider operator operatorResolved={resolved} securityOperator>
+          <AdminSettingsScreen />
+        </OperatorProvider>
+      </MemoryRouter>
+    );
+    const { rerender } = render(tree(false));
+    rerender(tree(true));
+    await openHost();
+    expect(screen.getByTestId("host-tile-internet-pill")).toHaveTextContent(/^Through the corporate proxy$/);
+
+    await act(async () => answerFirst(baseStatus()));
+    expect(screen.getByTestId("host-tile-internet-pill")).toHaveTextContent(/^Through the corporate proxy$/);
   });
 
   it("keeps its gating: no builder tile on a redacted body, no Internet tile when the read failed", async () => {

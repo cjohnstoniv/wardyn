@@ -698,6 +698,27 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     expect(await screen.findByText(/run-9/)).toBeInTheDocument();
   });
 
+  // #2500: a read still in flight for the previous run filter must not overwrite the list the new filter loaded.
+  it("a slow read for a cleared run filter does not repaint that run's trail over the all-events list", async () => {
+    let resolveRun!: (v: AuditEvent[]) => void;
+    listAuditMock.mockImplementation((runId?: string) =>
+      runId ? new Promise<AuditEvent[]>((r) => (resolveRun = r)) : Promise.resolve([ev({ id: "g1", action: "global.only" })]),
+    );
+    render(
+      <MemoryRouter initialEntries={["/audit?run_id=run-A"]}>
+        <AuditScreen />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith("run-A", { newest: true }));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Show all events" }));
+    expect(await screen.findByText("global.only")).toBeInTheDocument();
+
+    await act(async () => resolveRun([ev({ id: "a1", run_id: "run-A", action: "run.a.only" })]));
+    expect(screen.queryByText("run.a.only")).not.toBeInTheDocument();
+    expect(screen.getByText("global.only")).toBeInTheDocument();
+  });
+
   // A dead or missing kernel sensor is the ABSENCE of events, so the list can
   // never show it — only this chip can. Nothing is claimed when the daemon
   // doesn't report the field at all.
@@ -888,6 +909,34 @@ describe("AuditScreen — the liveness chip stops claiming a feed that stopped a
     await act(async () => {
       await vi.advanceTimersByTimeAsync(6000);
     });
+    expect(screen.getByText("Live · appending")).toBeInTheDocument();
+  });
+
+  // A read slower than the poll interval must still paint: the next tick waits for it instead of overtaking it,
+  // because the request-id guard drops every answer that is not the newest request's.
+  it("a read slower than the poll interval still paints, and the chip stays live", async () => {
+    vi.useFakeTimers();
+    listAuditMock.mockResolvedValueOnce([ev({ id: "e1", run_id: "run_111", action: "egress.allow" })]);
+    renderScreen();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(screen.getByText("1 event")).toBeInTheDocument();
+
+    // Each later read takes 7 s, longer than the 5 s poll.
+    listAuditMock.mockImplementation(
+      () =>
+        new Promise((resolve) =>
+          setTimeout(
+            () => resolve([ev({ id: "e1", run_id: "run_111", action: "egress.allow" }), ev({ id: "e2", run_id: "run_111", action: "egress.deny" })]),
+            7000,
+          ),
+        ),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(13000);
+    });
+    expect(screen.getByText("2 events")).toBeInTheDocument();
     expect(screen.getByText("Live · appending")).toBeInTheDocument();
   });
 });

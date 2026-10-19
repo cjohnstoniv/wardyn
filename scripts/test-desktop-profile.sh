@@ -113,11 +113,52 @@ grep -qE '^\s*-\s*\$\{WARDYN_MANAGED_DIR:-[^}]+\}:/etc/wardyn:ro\s*$' "${REPO_RO
   || fail "deploy/compose/docker-compose.yaml no longer bind-mounts \${WARDYN_MANAGED_DIR}:/etc/wardyn:ro — WARDYN_DEFAULT_POLICY would point at a path the container can't see"
 grep -qE '^\s*export\s+WARDYN_MANAGED_DIR=' "${DESK_DIR}/wardyn-desktop.sh" \
   || fail "deploy/desktop/wardyn-desktop.sh no longer exports WARDYN_MANAGED_DIR — the managed dir would mount as the empty default"
-grep -qE '^\s*-\s*path:\s*\.\./compose/docker-compose\.yaml\s*$' "${DESK_DIR}/docker-compose.yaml" \
+grep -qE '^\s*-\s*\.\./compose/docker-compose\.yaml\s*$' "${DESK_DIR}/docker-compose.yaml" \
   || fail "deploy/desktop/docker-compose.yaml no longer includes ../compose/docker-compose.yaml — it would no longer be a configuration of the same stack"
 if grep -qE '^\s*services:\s*$' "${DESK_DIR}/docker-compose.yaml"; then
   fail "deploy/desktop/docker-compose.yaml re-declares services: beside its include: — that collides with the imported stack on older Compose (services.wardynd conflicts with imported resource)"
 fi
+
+# The tier publishes only the console and SSH ports. The base stack also maps
+# Postgres 5432, the registry 5010 and the UI relay 8081 on loopback, which fails
+# `compose up` on a laptop already running its own Postgres or Metro (#2165).
+if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+  pub="$(docker compose --env-file "${DESK_DIR}/wardyn.env.example" -f "${DESK_DIR}/docker-compose.yaml" config 2>/dev/null | awk '/published:/ {gsub(/"/, "", $2); print $2}' | sort -n | tr '\n' ' ')"
+  [ "${pub}" = "2222 8080 " ] \
+    || fail "the desktop compose config publishes host ports [${pub}], want exactly [2222 8080]: the Postgres, registry and UI-relay publishes must stay dropped (deploy/desktop/docker-compose.ports.yaml)"
+fi
+
+# ── install.sh refuses --purge without --uninstall (#2171) ─────────────────
+# The refusal sits before the root check, so this runs unprivileged.
+purge_out="$(bash "${DESK_DIR}/install.sh" --purge 2>&1)" && purge_rc=0 || purge_rc=$?
+{ [ "${purge_rc}" -ne 0 ] && grep -q -- '--purge only works with --uninstall' <<<"${purge_out}"; } \
+  || fail "install.sh --purge without --uninstall must refuse with '--purge only works with --uninstall' (rc=${purge_rc}): ${purge_out}"
+
+# ── the packages require the compose plugin, not just a docker binary (#2183) ─
+grep -qE '^Depends: .*docker-compose-plugin \(>= 2\.24\.4\) \| docker-compose-v2 \(>= 2\.24\.4\)' "${REPO_ROOT}/scripts/build-desktop-package.sh" \
+  || fail "the .deb Depends no longer requires the Docker Compose v2 plugin; wardyn-desktop.sh runs 'docker compose'"
+grep -qE '^Requires:\s+\(docker-compose-plugin >= 2\.24\.4 or docker-compose >= 2\.24\.4\)' "${REPO_ROOT}/scripts/build-desktop-package.sh" \
+  || fail "the .rpm Requires no longer names the Docker Compose v2 plugin"
+grep -q "docker compose version" "${DESK_DIR}/install.sh" \
+  || fail "install.sh no longer preflights 'docker compose version'; a host without the plugin registers a converge job that fails every tick"
+
+# ── the Compose floor is 2.24.4, enforced (#2165) ───────────────────────────
+# `!override` replaces a list from 2.24.4; 2.24.0 merges it and still publishes
+# 5432, 5010 and 8081. Drives the REAL compose_too_old() from install.sh against a
+# stub `docker` that reports each version; the launcher must carry the same check.
+fn="$(sed -n '/^compose_too_old() {/,/^}/p' "${DESK_DIR}/install.sh")"
+[ -n "${fn}" ] || fail "could not extract compose_too_old() from install.sh"
+eval "${fn}"
+docker() { printf '%s\n' "${STUB_COMPOSE_VERSION}"; }
+for v in v2.24.0 2.24.3 2.23.9 1.29.2 v2.9.0; do
+  STUB_COMPOSE_VERSION="${v}"; compose_too_old || fail "compose_too_old accepted Compose ${v}, which is below the 2.24.4 floor"
+done
+for v in 2.24.4 v2.24.4-desktop.1 2.24.10 2.30.1 3.0.0 "" unknown; do
+  STUB_COMPOSE_VERSION="${v}"; compose_too_old && fail "compose_too_old refused '${v}'; it is at or above the floor or unparseable"
+done
+unset -f docker
+grep -q 'compose_too_old' "${DESK_DIR}/install.sh" && grep -q 'compose_too_old &&' "${DESK_DIR}/wardyn-desktop.sh" \
+  || fail "install.sh and wardyn-desktop.sh must both refuse a Compose older than 2.24.4"
 
 # ── 5. the plist is valid XML ────────────────────────────────────────────────
 PLIST="${DESK_DIR}/com.wardyn.daemon.plist"
@@ -444,7 +485,7 @@ f185_run() { # MANAGED_DIR -> combined output (never fatal here)
 md="$(f185_fixture 0666)"; out="$(f185_run "${md}")"
 [ ! -e "${md}/PWNED" ] \
   || fail "wardyn-desktop.sh SOURCED a world-writable ${md}/secret.env as root — any local account can put a command in that file and have this timer run it (F185)"
-printf '%s' "${out}" | grep -qi 'writable' \
+printf '%s' "${out}" | grep -i 'writable' >/dev/null \
   || fail "wardyn-desktop.sh refused a world-writable secret.env without saying the mode was why — the MDM operator cannot fix what is not named (F185). Got: $(printf '%s' "${out}" | tail -1)"
 
 # 2. group/world READABLE (0644 — the mode docs/DESKTOP.md's table forbids):
@@ -455,7 +496,7 @@ md="$(f185_fixture 0644)"; out="$(f185_run "${md}")"
 mode="$(stat -c '%a' "${md}/secret.env" 2>/dev/null || stat -f '%OLp' "${md}/secret.env")"
 [ "${mode}" = "600" ] \
   || fail "a 0644 secret.env was left at mode ${mode} — its live credentials stay readable by every local account on the device (F185)"
-printf '%s' "${out}" | grep -qi 'readable by every local account' \
+printf '%s' "${out}" | grep -i 'readable by every local account' >/dev/null \
   || fail "wardyn-desktop.sh silently re-permed a 0644 secret.env — the credentials in it are org-wide and already exposed, so this has to be loud enough to trigger a rotation (F185)"
 
 # 3. the counterweight: a correct 0600 file must still be sourced, or 1 and 2
@@ -476,7 +517,7 @@ for f in wardyn.env policy.json site-config.json; do
   out="$(f185_run "${md}")"
   [ ! -e "${md}/PWNED" ] \
     || fail "wardyn-desktop.sh went on past a group/world-writable ${f} — whoever can write it chooses what this root process runs"
-  printf '%s' "${out}" | grep -q "${f} is owned by uid .* group/world-writable" \
+  printf '%s' "${out}" | grep "${f} is owned by uid .* group/world-writable" >/dev/null \
     || fail "wardyn-desktop.sh did not refuse a group/world-writable ${f} by name. Got: $(printf '%s' "${out}" | tail -1)"
 done
 md="$(f185_fixture 0600)"
@@ -525,28 +566,28 @@ f1493_probed() { head -1 "$1/curl.log"; }
 # envelope only: probes the envelope's port, then applies site-config.
 md="$(f1493_fixture 'WARDYN_UP_PORT=8097')"
 f1493_run "${md}" || fail "launcher failed with WARDYN_UP_PORT=8097 only in the envelope (#1493): $(tail -1 "${md}/out.log")"
-f1493_probed "${md}" | grep -q '127.0.0.1:8097/healthz' \
+f1493_probed "${md}" | grep '127.0.0.1:8097/healthz' >/dev/null \
   || fail "launcher probed '$(f1493_probed "${md}")', not the envelope's port 8097 (#1493)"
 grep -q 'site-config set' "${md}/docker.log" || fail "site-config was never applied with an envelope-only port (#1493)"
 [ ! -e "${md}/ENVELOPE_SOURCED" ] || fail "the envelope was SOURCED as root shell code to read one value (#1493)"
 # the shell wins over the envelope.
 md="$(f1493_fixture 'WARDYN_UP_PORT=8097')"
 f1493_run "${md}" WARDYN_UP_PORT=8098 || fail "launcher failed with a shell WARDYN_UP_PORT (#1493)"
-f1493_probed "${md}" | grep -q '127.0.0.1:8098/healthz' || fail "a shell WARDYN_UP_PORT no longer beats the envelope (#1493): $(f1493_probed "${md}")"
+f1493_probed "${md}" | grep '127.0.0.1:8098/healthz' >/dev/null || fail "a shell WARDYN_UP_PORT no longer beats the envelope (#1493): $(f1493_probed "${md}")"
 # a SET-but-empty process value (a blank line in secret.env under set -a) wins
 # over the envelope and means 8080, because compose's ${WARDYN_UP_PORT:-8080}
 # sees the shell variable first and treats empty as unset.
 md="$(f1493_fixture 'WARDYN_UP_PORT=8097')"
 f1493_run "${md}" WARDYN_UP_PORT= || fail "launcher failed with an empty shell WARDYN_UP_PORT (#1493)"
-f1493_probed "${md}" | grep -q '127.0.0.1:8080/healthz' || fail "a set-but-empty WARDYN_UP_PORT did not resolve to 8080 as compose does (#1493): $(f1493_probed "${md}")"
+f1493_probed "${md}" | grep '127.0.0.1:8080/healthz' >/dev/null || fail "a set-but-empty WARDYN_UP_PORT did not resolve to 8080 as compose does (#1493): $(f1493_probed "${md}")"
 # secret.env is part of the process environment, so its value wins over the envelope.
 md="$(f1493_fixture 'WARDYN_UP_PORT=8097' 'WARDYN_UP_PORT=8099')"
 f1493_run "${md}" || fail "launcher failed with a secret.env WARDYN_UP_PORT (#1493)"
-f1493_probed "${md}" | grep -q '127.0.0.1:8099/healthz' || fail "a secret.env WARDYN_UP_PORT did not beat the envelope (#1493): $(f1493_probed "${md}")"
+f1493_probed "${md}" | grep '127.0.0.1:8099/healthz' >/dev/null || fail "a secret.env WARDYN_UP_PORT did not beat the envelope (#1493): $(f1493_probed "${md}")"
 # neither: 8080.
 md="$(f1493_fixture '# no port')"
 f1493_run "${md}" || fail "launcher failed with no WARDYN_UP_PORT anywhere (#1493)"
-f1493_probed "${md}" | grep -q '127.0.0.1:8080/healthz' || fail "the default port is no longer 8080 (#1493): $(f1493_probed "${md}")"
+f1493_probed "${md}" | grep '127.0.0.1:8080/healthz' >/dev/null || fail "the default port is no longer 8080 (#1493): $(f1493_probed "${md}")"
 # an unusable value dies naming the key, before any probe or compose call that publishes it.
 for bad in 'abc' '"8097"' '0' '65536' '8097 ' '-1'; do
   md="$(f1493_fixture "WARDYN_UP_PORT=${bad}")"

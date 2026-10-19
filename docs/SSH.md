@@ -386,19 +386,26 @@ scp ./local-file <run-id>@<advertise-host>:/home/agent/  -P <port>
   Wardyn's side.
 - See [Image contract](#image-contract-byoi) if this 404s.
 - **`wardyn-sync`** runs the same `sftp-server` with `-d <dir>`, after `env` requests `WARDYN_SYNC_DIR` (absolute, under `/home/agent/`, no `..`; default `/home/agent/work`) and `WARDYN_SYNC_DIRECTION` (`push` or `pull`), read on this subsystem only.
+- After each pass the client sends a `wardyn-sync-pass` request, its own account of the pass. Its laptop deletes join the audit row; a complete pass [releases a held agent](#hold-the-agent-for-a-local-folder).
   - A refused directory launches nothing; a missing one launches at the sandbox's working directory, so check `RealPath(".")` and use absolute paths.
 
 ### Sync a directory (`wardyn sync`)
 
 ```sh
 wardyn ssh-key ensure                      # once
-wardyn sync <run-id> ./project [--remote-dir /home/agent/work] [--watch] [--pull] [--max-pull-bytes N] [--json]
+wardyn sync <run-id> ./project [--remote-dir /home/agent/work] [--watch] [--pull [--pull-deletes [--max-pull-deletes N]]] [--git] [--pull-commits] [--max-pull-bytes N] [--json]
 ```
 
 Rules, enforced by the CLI (the gateway only relays bytes) and not overridable:
 
 - Laptop to sandbox; `--pull` is per run and is the audit row's `direction`.
-- Never deletes; refuses symlinks both ways; a pulled file never gets an exec bit.
+- Refuses symlinks both ways; a pulled file never gets an exec bit.
+- Every `.gitignore` and `.wardynignore` applies both ways, in git's syntax; a `.wardynignore` `!name` re-includes a git-ignored file. Only the laptop's own apply: the sandbox never writes, replaces or deletes one there.
+- The organisation's [`WARDYN_SYNC_DENY`](ENV.md#wardyn_sync_deny) patterns apply above every ignore file, which cannot undo them. They bind `wardyn sync` only: `sftp` can still copy any file.
+- A laptop delete or rename reaches the sandbox only for a file this sync sent and the sandbox left unchanged. A sandbox edit is kept and listed as a conflict. An empty, unreadable or ignored laptop directory deletes nothing.
+- A sandbox delete removes a laptop file only under `--pull-deletes`, if the laptop copy is unchanged. Deletes are listed first, capped by `--max-pull-deletes` (20; over it, none), and moved into `~/.local/state/wardyn/sync/<run-id>-deleted/`.
+- `--git` sends the current branch as a git bundle (no hooks, no config). The sandbox fetches it into a new hook-free repository, or into `refs/remotes/laptop/<branch>` if one exists.
+- `--pull-commits` fetches the sandbox's later commits, as a verified bundle, into the laptop branch `wardyn/sync-<run>`, never the working tree. Both git flags run once, over an SSH exec channel, from the top of a work tree.
 - Never syncs `.git/`, `.envrc`, `.direnv/`, `.vscode/tasks.json`, `.vscode/launch.json`, `.idea/runConfigurations/`, `.idea/workspace.xml`.
 - A file changed on both sides since the last sync is not pulled: the laptop's copy wins and the path is listed.
 - Paths equal under case or Unicode normalisation, and names with invisible characters, are refused. State lives in `~/.local/state/wardyn/sync/<run-id>.json`.
@@ -406,6 +413,12 @@ Rules, enforced by the CLI (the gateway only relays bytes) and not overridable:
 - It refuses a plain-http, non-loopback server: the gateway address and host key come from `/healthz`.
 - The directory is a start point, not a boundary; the CLI aborts unless `RealPath(".")` is the directory it asked for.
 - The sandbox's mtime has one-second resolution, so a same-size edit inside that second is not seen.
+
+#### Hold the agent for a local folder
+
+`wardyn run --task ... --local-folder ./project` creates the run, waits for its sandbox and syncs the folder in once. The agent starts only after that pass completes, within `WARDYN_LOCAL_FOLDER_SEED_WAIT` (10 minutes) and the run's end. A failed or missing pass fails the run with a reason naming the folder. `wardyn sync <run-id> ./project` can seed it within the wait. Audit: `run.seed.hold`, `run.seed`.
+
+Interactive runs, background-only runs, exec-less (krun) runtimes and deployments without an SSH gateway refuse `local_folder` (`local_folder_unsupported`).
 
 `rsync` works too, over `wardyn run ssh --config`'s `Host` block; add `--chmod=F644,D755` to pull. It applies none of the conflict, collision or size rules, so prefer `wardyn sync --pull`:
 
@@ -634,9 +647,10 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
   - A failure reply counts as an answer; OpenSSH, PuTTY, paramiko and `wardyn sync` all give one.
   - A client suspended or asleep for more than 30 seconds can lose its session, where TCP alone would have kept it for minutes.
   - The close writes no audit row and no log line.
-- **Connections.** At most 64 connections handshake at once (each within 15 seconds) and, counted apart, 64 authenticated ones stay open.
-  - Over the handshake bound a connection is closed before any byte; over the other, once it authenticates.
-  - Either refusal logs a `connection refused at a cap` warning, at most once a minute.
+- **Connections.** At most 64 connections handshake at once (each within 15 seconds), at most 16 of them from one source address, and, counted apart, 64 authenticated ones stay open.
+  - `WARDYN_SSH_MAX_HANDSHAKES_PER_SOURCE` and `WARDYN_SSH_MAX_CONNECTIONS` set them. Behind a NAT, raise the per-source one.
+  - Over a handshake bound a connection is closed before any byte; over the authenticated one, once it authenticates.
+  - Every refusal counts in `wardyn_ssh_connections_refused_total{bound}` and logs a `connection refused at a cap` warning, at most once a minute.
 - **Auth.** Registered public keys only — no password, no keyboard-interactive.
 - `MaxAuthTries` is bounded per connection; an unknown key or a malformed
   username (anything that isn't a run id) is rejected and audited (`ssh.authenticate`,
@@ -750,8 +764,8 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
   surface, not a nuisance:
   - a per-connection handshake deadline (cleared once auth succeeds — an
     established session is never killed by it);
-  - a bounded total concurrent-connection count (a connection over the cap is
-    closed immediately, before any handshake byte is exchanged);
+  - bounded concurrent-connection counts, total and per source (a connection
+    over either is closed before any handshake byte);
   - a small, documented cap on concurrent SSH channels — `session` (shell/
     exec/sftp) AND `direct-tcpip` (`-L` forwards) draw from the SAME per-run
     counter. So one run cannot exhaust the daemon's own resources by opening
@@ -788,7 +802,7 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
     `session.attach` with `transport:ssh` in its data (the shell path, same
     action name the browser terminal uses, so both show up together in a run's
     timeline), `ssh.exec` (`argv`, `exit`), `ssh.forward` (`port`, `bytes`).
-  - `ssh.sftp.transfer` (`bytes`, `bytes_in`, `bytes_out`), `ssh.sync.transfer` (`dir`, `direction` client-declared, `bytes_in`, `bytes_out`).
+  - `ssh.sftp.transfer` (`bytes`, `bytes_in`, `bytes_out`), `ssh.sync.transfer` (`dir`, `direction` client-declared, `bytes_in`, `bytes_out`, `remove_requests` and `rename_requests` counted from the sftp framing, `laptop_deletes_reported` client-declared).
   - This is the source of record for these five;
     [`docs/AUDIT-ACTIONS.md`](AUDIT-ACTIONS.md) is the vocabulary reference for
     every other audit action in the system and points back here for these.

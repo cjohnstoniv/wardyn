@@ -129,3 +129,27 @@ func TestStartMetricsListener(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+// A UI-sandbox gateway address already in use refuses boot (#2331); before, the bind failure
+// was a log line in a goroutine and the daemon served on with /healthz advertising the gateway.
+func TestListenUISandboxGatewayRefusesBind(t *testing.T) {
+	taken, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer taken.Close()
+	if _, err := listenUISandboxGateway(taken.Addr().String(), true); err == nil || !strings.Contains(err.Error(), "ui-sandbox gateway listener") {
+		t.Fatalf("bind on an occupied address = %v, want a refusal naming the gateway listener", err)
+	}
+	if ln, err := listenUISandboxGateway("", true); ln != nil || err != nil {
+		t.Fatalf("gateway off (no address) = (%v, %v), want (nil, nil)", ln, err)
+	}
+	if ln, err := listenUISandboxGateway(taken.Addr().String(), false); ln != nil || err != nil {
+		t.Fatalf("gateway with no handler = (%v, %v), want (nil, nil) and no bind", ln, err)
+	}
+	ln, err := listenUISandboxGateway("127.0.0.1:0", true)
+	if err != nil || ln == nil {
+		t.Fatalf("free address = (%v, %v), want a listener", ln, err)
+	}
+	_ = ln.Close()
+}

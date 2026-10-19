@@ -115,7 +115,7 @@ export function EraseDataDialog({
   };
 
   return (
-    <Dialog open onOpenChange={(o) => !o && close(!!result)}>
+    <Dialog open onOpenChange={(o) => !o && !busy && close(!!result)}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{ERASE_DATA.BY_EMAIL_TITLE}</DialogTitle>

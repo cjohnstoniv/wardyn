@@ -113,6 +113,7 @@ export function ChangesTab({
           // trail, where the decided ones are.
           <div data-testid="changes-empty">
             <EmptyState
+              size="compact"
               icon={Inbox}
               title={CHANGES.EMPTY_TITLE}
               description={CHANGES.EMPTY_BODY}
@@ -154,7 +155,7 @@ export function ChangesTab({
                   <TableCell className="whitespace-nowrap text-muted-foreground" title={absoluteTime(c.proposed_at)}>
                     {relativeTime(c.proposed_at)}
                   </TableCell>
-                  <TableCell className="whitespace-nowrap text-muted-foreground" title={c.expires_at}>
+                  <TableCell className="whitespace-nowrap text-muted-foreground" title={absoluteTime(c.expires_at)}>
                     {relativeTime(c.expires_at)}
                   </TableCell>
                 </TableRow>

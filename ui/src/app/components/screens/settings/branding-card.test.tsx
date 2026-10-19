@@ -73,6 +73,24 @@ describe("Branding card — the logo input's hint", () => {
   });
 });
 
+// #2550: a failed read is not "Default branding" with an empty form a Save would write over the stored document.
+describe("Branding card: a failed read", () => {
+  it("says it could not read, offers no form to save, and Retry brings the stored brand back", async () => {
+    getSettings.mockRejectedValueOnce(new Error("HTTP 502")).mockResolvedValue({ org_name: "Acme", name_format: "suffix", primary: "#7c3aed", primary_text: "#ffffff" });
+    renderCard();
+    await expandCard(BRANDING.TITLE);
+    expect(await screen.findByRole("button", { name: "Retry" })).toBeInTheDocument();
+    expect(screen.getByText(BRANDING.LOAD_FAILED_SUMMARY)).toBeInTheDocument();
+    expect(screen.queryByText("Default branding")).toBeNull();
+    expect(screen.queryByRole("button", { name: BRANDING.SAVE })).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("Custom — Acme")).toBeInTheDocument();
+    expect(saveButton()).toBeInTheDocument();
+    expect(screen.queryByText(BRANDING.LOAD_FAILED_SUMMARY)).toBeNull();
+  });
+});
+
 describe("Branding card (#1125)", () => {
   it("renders the canon heading, lede and labels", async () => {
     await validDraft();

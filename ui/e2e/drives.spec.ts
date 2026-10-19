@@ -1121,9 +1121,28 @@ test.describe("drives — the admin's authoring walk (needs a runner that can mo
     // Unallocating is reversible and deletes nothing — the directory stays
     // until the admin reclaims it, and the confirm says so.
     await expect(confirm.getByText(/Nothing on the drive is deleted/)).toBeVisible();
-    await confirm.getByRole("button", { name: PERM.REMOVE, exact: true }).click();
+
+    // The real DELETE is held, so the dialog is the thing under test: Escape must not dismiss it mid-request,
+    // and the confirm and Cancel are disabled so a second click cannot send a second delete.
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let deletes = 0;
+    await page.route("**/api/v1/drives/grants/*", async (route) => {
+      if (route.request().method() !== "DELETE") return route.fallback();
+      deletes += 1;
+      await held;
+      await route.continue();
+    });
+    const remove = confirm.getByRole("button", { name: PERM.REMOVE, exact: true });
+    await remove.click();
+    await expect(remove).toBeDisabled();
+    await expect(confirm.getByRole("button", { name: "Cancel" })).toBeDisabled();
+    await page.keyboard.press("Escape");
+    await expect(confirm).toBeVisible();
+    release();
 
     await expect(page.getByText(DRIVES.EMPTY_ALLOC_TITLE)).toBeVisible();
+    expect(deletes).toBe(1);
     await expect(page.getByText(DRIVES.ALLOCATED_NONE)).toBeVisible();
 
     // Now the supported way out: the dialog carries the plain consequence and

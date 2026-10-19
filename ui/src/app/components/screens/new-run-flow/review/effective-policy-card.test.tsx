@@ -164,6 +164,21 @@ describe("Effective policy card", () => {
     expect(document.querySelector("[data-policy-row=tools]")).not.toHaveTextContent(NR_REVIEW.POLICY_ACCEPTS_EDITS);
   });
 
+  // #2428: the accept-edits source describes only the default for a tool no rule names. The sentence must not
+  // claim every other tool asks while the policy's named rules allow or deny some of them.
+  it("qualifies the accept-edits sentence to tools no rule names, with named allow and deny rules present", () => {
+    const rule = (tool: string, effect: string) => ({ tool, effect, source: { kind: "policy", name: "Team policy" } });
+    const access = {
+      ...SCENARIO_ACCESS.member,
+      harnesses: [{ ...harnessDefault("claude-code", "hold"), policy_rules: [rule("Read", "allow"), rule("Bash", "deny")], default: { ...CLAUDE_UNGATED.default, effective: "hold", source: { kind: "harness", id: "accept_edits" } } }],
+    } as never;
+    render(<EffectivePolicyCard draft={draftOf(BASE)} pre={{ ...SCENARIO_PREFLIGHT.member, access } as never} preview={null} />);
+    const tools = document.querySelector("[data-policy-row=tools]") as HTMLElement;
+    expect(tools).toHaveTextContent("For tools without a named rule");
+    expect(tools).toHaveTextContent("Named rules still apply.");
+    expect(tools).not.toHaveTextContent("Every other tool asks first");
+  });
+
   it.each([[["pypi.org"], NR_REVIEW.POLICY_HOST_ONE], [["pypi.org", "registry.npmjs.org"], NR_REVIEW.POLICY_HOSTS(2)]])(
     "counts the allowed hosts with a singular for one (%j)", (hosts, text) => {
       const preview = { spec: { allowed_domains: hosts }, source: { name: "Source" } } as unknown as PolicyPreviewResult;

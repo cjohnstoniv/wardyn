@@ -36,6 +36,7 @@ import { ADO } from "../../lib/ado-entra-copy";
 import { APPROVALS } from "../../lib/approvals-copy";
 import { REAUTH_ROW, REAUTH_HEADING, REAUTH_SIGNED_IN_TOAST } from "./model-access-copy";
 import { approvals as api } from "../../lib/api/approvals";
+import { HttpError } from "../../lib/api/core";
 import { getErrorMessage } from "../../lib/format";
 import { usePoll } from "../../lib/use-poll";
 import { useDeferredBusy } from "../../lib/use-deferred-busy";
@@ -324,6 +325,15 @@ export function LiveApprovals({
   // function, right after this one) — NOT decide() — because decisionArgs'
   // omit-for-"run" convention would collide with adoDecisionRule's own
   // different bodyless default; see decideAdo's doc.
+  // Rows the server refused with capability_egress_host: the list cannot tell who holds the host, so the first
+  // refusal is what turns that row's buttons off and names the admin.
+  const [adminOnly, setAdminOnly] = React.useState<ReadonlySet<string>>(new Set());
+  const noteRefusal = (id: string, e: unknown) => {
+    if (e instanceof HttpError && e.status === 403 && e.reason === "capability_egress_host") {
+      setAdminOnly((cur) => new Set(cur).add(id));
+    }
+  };
+  const canDecide = (a: ApprovalRequest) => canDecideApproval(securityOperator, a.kind) && !adminOnly.has(a.id);
   const decide = async (a: ApprovalRequest, approve: boolean, scope: ApprovalScope = "run", until?: string) => {
     setBusy(a.id);
     try {
@@ -340,6 +350,7 @@ export function LiveApprovals({
       }
       await refresh();
     } catch (e) {
+      noteRefusal(a.id, e);
       toast.error(approve ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED, {
         description: getErrorMessage(e),
       });
@@ -456,7 +467,7 @@ export function LiveApprovals({
             // decide it — with or without a `run` object in hand. Without
             // this, a run's own owner read "requires the admin role" on a row
             // their own card lets them decide, on the very same strip.
-            (a) => a.kind !== "credential_reauth" && !canDecideApproval(securityOperator, a.kind) && !isAdoCapabilityRequest(a),
+            (a) => a.kind !== "credential_reauth" && !canDecide(a) && !isAdoCapabilityRequest(a),
           ) && (
           <span className="ml-auto text-meta font-normal normal-case text-muted-foreground">
             {SECURITY_ONLY_REASON}
@@ -554,7 +565,7 @@ export function LiveApprovals({
               size="sm"
               variant="outline"
               className="h-7 rounded-r-none border-r-0"
-              disabled={!canDecideApproval(securityOperator, a.kind) || busy === a.id}
+              disabled={!canDecide(a) || busy === a.id}
               onClick={() => decide(a, true)}
             >
               {busy === a.id && decidingSpinner ? (
@@ -577,7 +588,7 @@ export function LiveApprovals({
               size="sm"
               variant="outline"
               className="h-7 ml-1 rounded-r-none border-r-0"
-              disabled={!canDecideApproval(securityOperator, a.kind) || busy === a.id}
+              disabled={!canDecide(a) || busy === a.id}
               onClick={() => setDenyTarget({ request: a, scope: "run" })}
             >
               {busy === a.id && decidingSpinner ? (

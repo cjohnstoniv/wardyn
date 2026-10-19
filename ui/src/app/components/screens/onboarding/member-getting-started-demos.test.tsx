@@ -179,7 +179,7 @@ describe("MemberGettingStarted — demos (M-6 D5)", () => {
     expect(screen.queryByText("Authorized, not issued")).not.toBeInTheDocument();
     expect(screen.queryByText("A bearer token for a real API")).not.toBeInTheDocument();
     expect(screen.queryByText("A PAT that only ever exists in a pipe")).not.toBeInTheDocument();
-    expect(screen.queryByText("The one that touches disk — briefly")).not.toBeInTheDocument();
+    expect(screen.queryByText("The SSH key that stays at the proxy")).not.toBeInTheDocument();
   });
 
   it("offers the model- and secret-gated demos once the preconditions they need are met", async () => {
@@ -198,7 +198,7 @@ describe("MemberGettingStarted — demos (M-6 D5)", () => {
     expect(screen.getByText("Authorized, not issued")).toBeInTheDocument();
     expect(screen.getByText("A bearer token for a real API")).toBeInTheDocument();
     expect(screen.getByText("A PAT that only ever exists in a pipe")).toBeInTheDocument();
-    expect(screen.getByText("The one that touches disk — briefly")).toBeInTheDocument();
+    expect(screen.getByText("The SSH key that stays at the proxy")).toBeInTheDocument();
   });
 
   it("?step=<id> pre-opens that row's demo card", async () => {

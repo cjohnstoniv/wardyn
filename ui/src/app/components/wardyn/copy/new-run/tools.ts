@@ -194,6 +194,10 @@ export const NR_TOOLS = {
   NO_CREDENTIALS: "No credentials.",
   FROM_ROW: (name: string | number) => `from ${name}`,
   FOR_ROW: (name: string | number) => `for ${name}`,
+  /** #2541: follows the provider name on the resident SSO access token, so it is not mistaken for the role credentials. */
+  SSO_TOKEN: "sign-in token",
+  /** #2541: a credential that outlives the run's end on its provider's clock, with no lifetime of our own to show. */
+  EXPIRES_OWN: "Expires on its own schedule, not when the run ends.",
   NET_ALLOWED: "Allowed",
   NET_NEEDS_APPROVAL: "Needs approval",
   /** pending W-35: the recommended text until the owner answers. */

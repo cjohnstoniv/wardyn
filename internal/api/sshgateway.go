@@ -15,12 +15,14 @@ package api
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -114,16 +116,20 @@ const (
 	// so the bound is self-documenting here, not implicit in a zero value.
 	sshMaxAuthTries = 6
 	// maxSSHHandshakes bounds connections this process is handshaking at
-	// once, from Accept until NewServerConn returns. A connection accepted
-	// over it is closed immediately — before any handshake byte is read or
-	// written — so the bound bites before a goroutine or a NewServerConn call
-	// is spent on it.
+	// once, from Accept until NewServerConn returns, and
+	// Config.SSHMaxHandshakesPerSource bounds one source address's share of
+	// them. A connection accepted over either is closed immediately — before
+	// any handshake byte is read or written — so the bound bites before a
+	// goroutine or a NewServerConn call is spent on it.
 	maxSSHHandshakes = 64
-	// maxSSHConnections bounds established (authenticated) SSH connections.
-	// It is counted apart from maxSSHHandshakes, so long-lived sessions never
-	// use up the handshake bound and connections still handshaking never use
-	// up this one; a connection authenticated over it is closed.
-	maxSSHConnections = 64
+	// DefaultSSHMaxHandshakesPerSource is Config.SSHMaxHandshakesPerSource's default.
+	DefaultSSHMaxHandshakesPerSource = 16
+	// DefaultSSHMaxConnections is Config.SSHMaxConnections' default: the bound
+	// on established (authenticated) SSH connections. It is counted apart from
+	// the handshake bounds, so long-lived sessions never use them up and
+	// connections still handshaking never use up this one; a connection
+	// authenticated over it is closed.
+	DefaultSSHMaxConnections = 64
 	// defaultSSHSessionsPerRun is Config.SSHMaxSessionsPerRun's fallback
 	// (WARDYN_SSH_MAX_SESSIONS_PER_RUN). It bounds concurrent SSH channels —
 	// "session" (shell/exec/sftp) AND "direct-tcpip" (-L forwards) both draw
@@ -210,7 +216,8 @@ func (s *Server) ServeSSHGateway(ctx context.Context) error {
 		_ = ln.Close()
 	}()
 
-	lim := &sshConnLimits{handshakes: make(chan struct{}, maxSSHHandshakes), established: make(chan struct{}, maxSSHConnections)}
+	lim := &sshConnLimits{handshakes: make(chan struct{}, maxSSHHandshakes), established: make(chan struct{}, cmp.Or(s.cfg.SSHMaxConnections, DefaultSSHMaxConnections)),
+		perSource: cmp.Or(s.cfg.SSHMaxHandshakesPerSource, DefaultSSHMaxHandshakesPerSource), sources: map[string]int{}, metrics: &s.metrics}
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -219,30 +226,70 @@ func (s *Server) ServeSSHGateway(ctx context.Context) error {
 			}
 			return fmt.Errorf("ssh gateway: accept: %w", err)
 		}
+		// Over a handshake cap: reject before any handshake byte is
+		// read/written — the DoS bound has to bite here, not after a
+		// goroutine and a NewServerConn call are already spent on it.
+		src := peerKey(conn.RemoteAddr().String())
+		if !lim.enterSource(src) {
+			lim.refused(sshBoundSource, lim.perSource)
+			_ = conn.Close()
+			continue
+		}
 		select {
 		case lim.handshakes <- struct{}{}:
-			sshGo(func() { s.handleSSHConn(ctx, conn, cfg, lim) })
+			sshGo(func() { s.handleSSHConn(ctx, conn, cfg, lim, src) })
 		default:
-			// Over the handshake cap: reject before any handshake byte is
-			// read/written — the DoS bound has to bite here, not after a
-			// goroutine and a NewServerConn call are already spent on it.
-			lim.refused("handshake", maxSSHHandshakes)
+			lim.leaveSource(src)
+			lim.refused(sshBoundHandshake, maxSSHHandshakes)
 			_ = conn.Close()
 		}
 	}
 }
 
-// sshConnLimits is the gateway's two connection bounds (maxSSHHandshakes,
-// maxSSHConnections) and the throttled warning a refusal at either writes.
+// The bounds a refusal names, in its warning and its metric label.
+const (
+	sshBoundHandshake   = "handshake"
+	sshBoundSource      = "source"
+	sshBoundEstablished = "established"
+)
+
+// sshConnLimits is the gateway's connection bounds (maxSSHHandshakes, the
+// per-source share of it, Config.SSHMaxConnections) and the throttled warning
+// a refusal at any of them writes.
 type sshConnLimits struct {
 	handshakes, established chan struct{}
+	perSource               int
+	sourcesMu               sync.Mutex
+	sources                 map[string]int // handshakes in progress per source, under sourcesMu
+	metrics                 *metrics
 	lastWarn                atomic.Int64 // unix nanos of the last warning
 	quiet                   atomic.Int64 // refusals since it
 }
 
-// refused records one connection closed at a cap: a warning at most every
-// sshCapWarnEvery, carrying how many were refused since the last one.
+// enterSource takes one of src's handshake slots; false when it holds them all.
+func (l *sshConnLimits) enterSource(src string) bool {
+	l.sourcesMu.Lock()
+	defer l.sourcesMu.Unlock()
+	if l.sources[src] >= l.perSource {
+		return false
+	}
+	l.sources[src]++
+	return true
+}
+
+func (l *sshConnLimits) leaveSource(src string) {
+	l.sourcesMu.Lock()
+	defer l.sourcesMu.Unlock()
+	if l.sources[src]--; l.sources[src] <= 0 {
+		delete(l.sources, src)
+	}
+}
+
+// refused records one connection closed at a cap: the
+// wardyn_ssh_connections_refused_total count, and a warning at most every
+// sshCapWarnEvery carrying how many were refused since the last one.
 func (l *sshConnLimits) refused(bound string, limit int) {
+	l.metrics.sshRefusedInc(bound)
 	n := l.quiet.Add(1)
 	now, last := time.Now().UnixNano(), l.lastWarn.Load()
 	if now-last < int64(sshCapWarnEvery) || !l.lastWarn.CompareAndSwap(last, now) {
@@ -543,18 +590,19 @@ func (s *Server) sshVerifiedAuth(conn ssh.ConnMetadata, key ssh.PublicKey, perms
 // this one (sshgateway_channels.go). connCtx is cancelled the moment this
 // function returns (the connection died, one way or another), so no channel
 // handler outlives its connection.
-func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.ServerConfig, lim *sshConnLimits) {
+func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.ServerConfig, lim *sshConnLimits, src string) {
 	defer nc.Close()
 	_ = nc.SetDeadline(time.Now().Add(sshHandshakeTimeout()))
 
 	sconn, chans, globalReqs, err := ssh.NewServerConn(nc, cfg)
 	<-lim.handshakes
+	lim.leaveSource(src)
 	if err == nil {
 		select {
 		case lim.established <- struct{}{}:
 			defer func() { <-lim.established }()
 		default:
-			lim.refused("established", maxSSHConnections)
+			lim.refused(sshBoundEstablished, cap(lim.established))
 			_ = sconn.Close()
 			return
 		}

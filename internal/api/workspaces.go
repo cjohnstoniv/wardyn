@@ -592,6 +592,9 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	// 0032 drops them), and the store's hydrate pass makes attachments the
 	// authoritative read the moment they exist. No prior attachments to carry
 	// Overrides forward from — this is a brand-new workspace.
+	if s.refuseTakenWorkspaceName(w, r, owner, req.Name, uuid.Nil) {
+		return
+	}
 	atts, baseImageID, aerr := s.upsertAndAttach(r, req.Sources, req.BaseImage, nil)
 	if aerr != nil {
 		writeServerError(w, r, "attach sources", aerr)
@@ -700,6 +703,9 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.denyUserWorkspaceProviders(w, r, "workspaces.source_provider", repoSourceLocators(req.Sources)...) {
+		return
+	}
+	if req.Name != ws.Name && s.refuseTakenWorkspaceName(w, r, ws.OwnedBy, req.Name, id) {
 		return
 	}
 	// This GET→mutate→UPDATE writes the whole row back, so the store applies it
