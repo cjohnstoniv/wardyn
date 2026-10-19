@@ -127,7 +127,16 @@ func (s *Server) handleInternalMint(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt:  minted.ExpiresAt.UTC().Format(time.RFC3339),
 		Injection:  s.mintedRule(r.Context(), claims, body.GrantID, minted),
 		KnownHosts: minted.KnownHosts,
+		Host:       sshKeyHost(minted),
 	})
+}
+
+// sshKeyHost is an ssh_key mint's SSH host, "" for any other kind.
+func sshKeyHost(m broker.Minted) string {
+	if m.Kind != types.GrantSSHKey {
+		return ""
+	}
+	return m.Metadata["host"]
 }
 
 // mintedRule is the injection rule a mint answers with. The proxy relays this

@@ -898,6 +898,9 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// never see the client's opening flight. Same readerConn the MITM lane uses
 	// for the same reason.
 	watch := newTunnelWatch(upstream)
+	dest := net.JoinHostPort(host, strconv.Itoa(port))
+	watch.onSSH = func() error { return p.sshAgent.sshTunnel(watch, dest) }
+	defer p.sshAgent.dropTunnel(watch)
 	first, err := tunnel(p.countActivity(&readerConn{Conn: clientConn, r: brw.Reader}), watch)
 	p.tunnelEnded(log, host, watch, first, err)
 }

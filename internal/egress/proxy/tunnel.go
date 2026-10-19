@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"regexp"
+	"strings"
 	"sync/atomic"
 	"syscall"
 
@@ -144,6 +145,37 @@ type tunnelWatch struct {
 	relayed atomic.Int64 // upstream bytes handed on to the client
 	alert   atomic.Int32 // alertNone, alertUnread, or the first record's alert description
 	refused atomic.Pointer[tunnelRefusal]
+
+	// onSSH, when set, is told once either side opens with an SSH
+	// identification; its error ends the tunnel before those bytes are relayed.
+	onSSH      func() error
+	clientHead []byte // Write's goroutine only: the client's first bytes, up to len(sshIdent)
+	sshRefused atomic.Bool
+}
+
+// sshIdent opens every SSH identification string (RFC 4253 §4.2).
+const sshIdent = "SSH-"
+
+// sawSSH tells onSSH, recording a refusal.
+func (w *tunnelWatch) sawSSH() error {
+	if err := w.onSSH(); err != nil {
+		w.sshRefused.Store(true)
+		return err
+	}
+	return nil
+}
+
+// clientSSH gathers the client's first bytes across writes and tells onSSH,
+// before they leave, when they are an SSH identification.
+func (w *tunnelWatch) clientSSH(b []byte) error {
+	if w.onSSH == nil || len(w.clientHead) >= len(sshIdent) || !strings.HasPrefix(sshIdent, string(w.clientHead)) {
+		return nil
+	}
+	w.clientHead = append(w.clientHead, b[:min(len(b), len(sshIdent)-len(w.clientHead))]...)
+	if string(w.clientHead) != sshIdent {
+		return nil
+	}
+	return w.sawSSH()
 }
 
 func newTunnelWatch(upstream net.Conn) *tunnelWatch {
@@ -163,6 +195,9 @@ func (w *tunnelWatch) Write(b []byte) (int, error) {
 			opened = clientTLS
 		}
 		w.client.Store(opened)
+	}
+	if err := w.clientSSH(b); err != nil {
+		return 0, err
 	}
 	return w.Conn.Write(b)
 }
@@ -193,6 +228,17 @@ func (w *tunnelWatch) Read(b []byte) (int, error) {
 func (w *tunnelWatch) vet() error {
 	if _, err := w.br.Peek(1); err != nil {
 		return err
+	}
+	if w.onSSH != nil && w.client.Load() != clientTLS {
+		flight, _ := w.br.Peek(w.br.Buffered())
+		if len(flight) < len(sshIdent) && strings.HasPrefix(sshIdent, string(flight)) {
+			flight, _ = w.br.Peek(len(sshIdent))
+		}
+		if bytes.HasPrefix(flight, []byte(sshIdent)) {
+			if err := w.sawSSH(); err != nil {
+				return err
+			}
+		}
 	}
 	switch w.client.Load() {
 	case clientTLS:
@@ -257,6 +303,9 @@ func (w *tunnelWatch) refuse(armed bool) error {
 // operator's proxy without sending a byte, so the phrase is never known to be
 // the operator's wording.
 func (w *tunnelWatch) failure(upstreamFirst bool, err error) string {
+	if w.sshRefused.Load() {
+		return "tunnel ssh: while the run's ssh agent holds a key, SSH goes only to its grants' own SSH hosts; nothing more was relayed"
+	}
 	if r := w.refused.Load(); r != nil {
 		got := "bytes that are not a TLS record"
 		switch {

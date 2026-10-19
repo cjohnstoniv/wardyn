@@ -174,13 +174,16 @@ apply_anthropic_mode() {
 # WARDYN_SSH_GRANTS is a JSON object {host: grant_id} (non-secret grant ids), set
 # by dispatch.
 
-# ssh_endpoint maps a supported SCM host to its SSH-over-443 "hostname port".
+# ssh_endpoint maps a supported SCM host to its SSH-over-443 "hostname port" and
+# its ssh PubkeyAuthentication: host-bound for GitHub, whose server offers the
+# host-bound sign-in (OpenSSH >= 8.9; the image ships 10) and whose grant the
+# proxy's agent signs no other way; Azure DevOps offers only the plain one.
 # Returns non-zero for an unsupported host (only GitHub + Azure DevOps publish an
 # :443 SSH endpoint; a custom host would need port-22 egress, out of scope).
 ssh_endpoint() {  # $1=host
     case "$(printf '%s' "$1" | tr 'A-Z' 'a-z')" in
-        github.com|ssh.github.com)        echo "ssh.github.com 443" ;;
-        dev.azure.com|ssh.dev.azure.com)  echo "ssh.dev.azure.com 443" ;;
+        github.com|ssh.github.com)        echo "ssh.github.com 443 host-bound" ;;
+        dev.azure.com|ssh.dev.azure.com)  echo "ssh.dev.azure.com 443 yes" ;;
         *) return 1 ;;
     esac
 }
@@ -211,14 +214,14 @@ provision_ssh_grants() {
     mkdir -p "$ssh_dir"; chmod 0700 "$ssh_dir"
     : > "$cfg"; chmod 0600 "$cfg"
 
-    local host gid eps ep_host ep_port slug agents=()
+    local host gid eps ep_host ep_port ep_auth slug agents=()
     while IFS=$'\t' read -r host gid; do
         [[ -n "$host" && -n "$gid" ]] || continue
         if ! eps="$(ssh_endpoint "$host")"; then
             echo "agent-run: WARNING SSH host ${host} is not a supported SSH-over-443 provider; skipping" >&2
             continue
         fi
-        read -r ep_host ep_port <<< "$eps"
+        read -r ep_host ep_port ep_auth <<< "$eps"
         slug="$(printf '%s' "$host" | tr -c 'a-zA-Z0-9' '_')"
         agents+=(--agent "${slug}=${gid}")
         printf '%s\n' \
@@ -226,6 +229,7 @@ provision_ssh_grants() {
           "    HostName ${ep_host}" \
           "    Port ${ep_port}" \
           "    User git" \
+          "    PubkeyAuthentication ${ep_auth}" \
           "    IdentityAgent \${WARDYN_SSH_AGENT_DIR}/${slug}.sock" \
           "    StrictHostKeyChecking yes" \
           "    UserKnownHostsFile /dev/null" \
