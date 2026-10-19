@@ -109,7 +109,12 @@ cmd_reset_all() {
   _ra_rundir="${HOME}/.wardyn"
   # :local is the current locally-built tag; the :demo variants are the
   # pre-rename generation still present on boxes that set up before it.
-  _ra_images="wardyn/wardynd:local wardyn/wardyn-proxy:local wardyn/agent-base:local wardyn/agent-claude-code:local wardyn/agent-codex-cli:local wardyn/agent-oracle:local wardyn/wardyn-tetragon-ingest:local wardyn/wardynd:demo wardyn/wardyn-proxy:demo wardyn/agent-claude-code:demo wardyn/agent-codex-cli:demo wardyn/agent-oracle:demo wardyn/wardyn-tetragon-ingest:demo"
+  _ra_images="wardyn/wardynd:local wardyn/wardyn-proxy:local wardyn/agent-base:local wardyn/agent-claude-code:local wardyn/agent-codex-cli:local wardyn/agent-aws-sso:local wardyn/agent-vscode:local wardyn/agent-oracle:local wardyn/wardyn-tetragon-ingest:local wardyn/wardynd:demo wardyn/wardyn-proxy:demo wardyn/agent-claude-code:demo wardyn/agent-codex-cli:demo wardyn/agent-oracle:demo wardyn/wardyn-tetragon-ingest:demo"
+  # up.sh's pull-first path also leaves ghcr.io/cjohnstoniv/<img>:<version> behind; untagging :local alone keeps its layers.
+  _ra_ver="$(grep -oE 'Version = "[^"]+"' "${REPO_ROOT}/internal/version/version.go" | head -1 | cut -d'"' -f2 || true)"
+  if [ -n "${_ra_ver}" ]; then
+    for _ra_n in wardynd wardyn-proxy agent-base agent-codex-cli agent-aws-sso; do _ra_images="${_ra_images} ghcr.io/cjohnstoniv/${_ra_n}:${_ra_ver}"; done
+  fi
 
   # ── gather facts (read-only) ─────────────────────────────────────────
   _ra_host_pid=$(cat "${_ra_rundir}/host-wardynd.pid" 2>/dev/null || true)
