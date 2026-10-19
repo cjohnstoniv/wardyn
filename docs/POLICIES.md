@@ -1005,6 +1005,14 @@ So an entry a pattern matches is judged one of two ways:
 - So it re-sends its history — its shallow boundary commit, or everything — and the first commit of that history would read as though the push added every file the repository has.
 - Those commits are put to the same question: the ones GitHub places in the current history of the default branch or an updated branch are taken out, and the push is judged against them.
 
+**A push that adds no commits.**
+
+- Creating a branch at a commit the forge already has, or rolling a branch back, sends no objects, so the rules have nothing to read.
+- The broker asks GitHub, with the run's own credential, whether each commit the push points a ref at is in the current history of the default branch or of a branch the push updates.
+- When every one is, the push goes through as carrying no new content; the branch-namespace rules still apply.
+- Otherwise it is refused: "This push adds no new commits; the remote already has them.", with the reason (the forge is not GitHub, a commit sits only on another branch, or the read failed).
+- A push that carries objects but points a ref at a commit it does not carry is still refused, naming that ref.
+
 - **When the comparison cannot be made, the entry refuses the push, and the refusal says why:** the forge is not GitHub (a `git_pat` grant for another host, or the Azure DevOps Entra lane).
 - No parent counts; or a read fails, answers other than `200`, comes back truncated, needs more than 64 reads, or takes longer than 20 seconds.
 - The reads happen only for a push the pack alone would refuse, while it holds the sidecar's inspection slot, and the credential is normally the one the push's own discovery request already minted.
