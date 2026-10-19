@@ -87,6 +87,10 @@ async function saveProviders(page: Page): Promise<void> {
   // refusal", not merely "no refusal has rendered yet".
   await expect(page.getByText(PROVIDERS.SAVE_ERROR)).toHaveCount(0);
   await expect(page.getByText(PROVIDERS.SAVE_REFUSED_TITLE)).toHaveCount(0);
+  // The toast shows before the screen commits the PUT response as its new draft
+  // and baseline. An edit made in that gap is overwritten by the commit, so wait
+  // for the unsaved marker to clear: draft and baseline are then the response.
+  await expect(page.getByTestId("unsaved-marker")).toHaveCount(0);
 }
 
 // Reset the document to a known-empty state before the authoring walk, so
