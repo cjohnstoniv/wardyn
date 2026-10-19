@@ -26,10 +26,11 @@
 #   docker build -f deploy/images/oracle/Dockerfile -t wardyn/agent-oracle:local .
 
 # ── Stage 1: Go builder (wardyn-rec) ──────────────────────────────────────────
-# Module-cache seed: empty unless a build passes `--build-context gomodcache=<dir>`
-# (scripts/lib/image-build.sh does when WARDYN_BUILD_GOMODCACHE names a directory), so
-# a CI job's already-filled module cache feeds `go mod download` below instead of
-# the network. An ordinary and a release build leave it empty and download as before.
+# Module-download seed: empty unless a build passes `--build-context gomodcache=<dir>`
+# (scripts/lib/image-build.sh passes the job's <module cache>/cache/download when
+# WARDYN_BUILD_GOMODCACHE names one), so a CI job's already-filled module cache feeds
+# `go mod download` below instead of the network. An ordinary and a release build
+# leave it empty and download as before.
 FROM scratch AS gomodcache
 
 FROM golang:1.27.2@sha256:5bc7f572bbaa98885a3a1fd9c0aa76b59e3e14e8628bfc316bbfd0c701e4818c AS builder
@@ -56,14 +57,19 @@ RUN if [ -f /corp-ca/corp-ca.pem ]; then \
     fi
 
 COPY go.mod go.sum ./
-# The seed's cache/download (zips + hashes) is copied in first; `go mod download`
-# then fetches only what it lacks, and go.sum verifies every module either way.
+# The seed (a module cache's cache/download tree) is copied in first; `go mod download`
+# then fetches only what it lacks. go.sum is checked against each module's recorded
+# hash, as with any module cache, and `go mod verify` re-checks the cache when a seed
+# was used.
 RUN --mount=type=bind,from=gomodcache,target=/gomodcache-seed \
-    if [ -d /gomodcache-seed/cache/download ]; then \
-        mkdir -p "$(go env GOMODCACHE)/cache" && \
-        cp -a /gomodcache-seed/cache/download "$(go env GOMODCACHE)/cache/"; \
+    seed=; \
+    if [ -n "$(ls -A /gomodcache-seed)" ]; then \
+        seed=1 && \
+        mkdir -p "$(go env GOMODCACHE)/cache/download" && \
+        cp -a /gomodcache-seed/. "$(go env GOMODCACHE)/cache/download/"; \
     fi && \
-    go mod download
+    go mod download && \
+    if [ -n "$seed" ]; then go mod verify; fi
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/wardyn-rec ./cmd/wardyn-rec
 

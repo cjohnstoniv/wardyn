@@ -19,7 +19,7 @@ fail() { echo "test-image-build-logs: FAIL: $*" >&2; exit 1; }
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "${TMP}"' EXIT
-mkdir "${TMP}/bin" "${TMP}/seed"
+mkdir -p "${TMP}/bin" "${TMP}/seed/cache/download" "${TMP}/tmpdir"
 ERR_LINE="go: example.com/m@v1.0.0: Get proxy.golang.org: dial tcp: i/o timeout"
 
 # A docker that records its argv and fails (or, FAKE_DOCKER_OK=1, passes) a build.
@@ -63,6 +63,15 @@ grep -qF -- "${ERR_LINE}" <<<"${out}" || fail "wardyn_docker_build dropped the e
 out="$(FAKE_DOCKER_OK=1 wardyn_docker_build -t x . 2>&1)" || fail "a clean build returned non-zero"
 [[ -z "${out}" ]] || fail "a clean build printed output: ${out}"
 
+# 3b. Bare under `bash -e` (a workflow step's default shell): the tail is still printed,
+#     and no log is left behind.
+out="$(PATH="${TMP}/bin:${PATH}" TMPDIR="${TMP}/tmpdir" bash -e -c 'source "$1"; wardyn_docker_build -t x .; echo UNREACHED' _ "${REPO_ROOT}/scripts/lib/image-build.sh" 2>&1)"
+rc=$?
+[[ ${rc} -ne 0 ]] || fail "bare wardyn_docker_build under bash -e exited 0 on a failed build"
+grep -qF -- "${ERR_LINE}" <<<"${out}" || fail "bare wardyn_docker_build under bash -e dropped the error line (output: ${out})"
+grep -q UNREACHED <<<"${out}" && fail "bash -e ran on past a failed build"
+[[ -z "$(ls -A "${TMP}/tmpdir")" ]] || fail "a build log was left behind: $(ls "${TMP}/tmpdir")"
+
 # 4. --build-context gomodcache= is passed only when the variable names a directory.
 build_args() { : >"${TMP}/docker.args"; FAKE_DOCKER_OK=1 wardyn_go_image_build -t x . ; cat "${TMP}/docker.args"; }
 unset WARDYN_BUILD_GOMODCACHE
@@ -70,8 +79,10 @@ grep -q 'gomodcache' <<<"$(build_args)" && fail "build-context passed with the v
 export WARDYN_BUILD_GOMODCACHE="${TMP}/missing"
 grep -q 'gomodcache' <<<"$(build_args)" && fail "build-context passed for a directory that does not exist"
 export WARDYN_BUILD_GOMODCACHE="${TMP}/seed"
-grep -qF -- "--build-context gomodcache=${TMP}/seed" <<<"$(build_args)" \
-  || fail "build-context not passed for an existing directory"
+grep -qF -- "--build-context gomodcache=${TMP}/seed/cache/download" <<<"$(build_args)" \
+  || fail "build-context not passed for a module cache with a cache/download tree"
+export WARDYN_BUILD_GOMODCACHE="${TMP}/tmpdir"
+grep -q 'gomodcache' <<<"$(build_args)" && fail "build-context passed for a directory with no cache/download"
 
 # 5. No script still discards a build's output.
 for f in run-e2e-live run-e2e-byoi daemon-proxy-secret-kind; do

@@ -600,7 +600,7 @@ Docker Hub rate-limited CI even after `docker/login-action`, so CI reads the Doc
 
 ### Go module cache for image builds
 
-`WARDYN_BUILD_GOMODCACHE` names a Go module cache directory. The e2e scripts pass it to the proxy and oracle image builds as `--build-context gomodcache=<dir>`, so `go mod download` reads the job's cache; go.sum still verifies every module. Unset, builds download as before. Release builds do not set it.
+`WARDYN_BUILD_GOMODCACHE` names a Go module cache directory. The e2e scripts pass its `cache/download` tree to the proxy and oracle builds as `--build-context gomodcache=<dir>`, so `go mod download` reads them. go.sum is checked against each module's recorded hash, as with any module cache. Unset, builds download.
 
 ### Self-hosted canary
 

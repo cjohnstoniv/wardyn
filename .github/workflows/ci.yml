@@ -2390,9 +2390,12 @@ jobs:
           path: ~/go/pkg/mod/cache/download
           key: ${{ steps.key.outputs.key }}
           lookup-only: true
+      # All seven tools in one step: the per-tool cold maxima sum to about 114 s
+      # (licenses 67, gitleaks 17, staticcheck 11, golangci-lint 9, govulncheck 5, addlicense 3,
+      # actionlint 1); 3x is 6 min.
       - name: Fetch gate tools
         if: steps.have.outputs.cache-hit != 'true'
-        timeout-minutes: 4
+        timeout-minutes: 6
         run: scripts/fetch-gate-tools.sh && du -sh ~/go/pkg/mod/cache/download
       - name: Save the gate tools' downloads
         if: steps.have.outputs.cache-hit != 'true'
