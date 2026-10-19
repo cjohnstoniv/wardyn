@@ -359,7 +359,7 @@ func (d *Driver) StopSandbox(ctx context.Context, ref string) error {
 func (d *Driver) EndSandbox(ctx context.Context, ref string) error {
 	if v := d.vmFor(ctx, ref); v != nil {
 		d.vmPowerdown(ctx, v, ref)
-		defer d.removeVMSidecars(ctx, v.runID)
+		defer d.warnVMSidecars(ctx, v.runID)
 	}
 	timeout := int(stopTimeout.Seconds())
 	if _, err := d.cli.ContainerStop(ctx, ref, client.ContainerStopOptions{Timeout: &timeout}); err != nil && !isNotFound(err) {
@@ -501,6 +501,7 @@ func (d *Driver) teardown(ctx context.Context, agentRef string) error {
 	delete(d.creating, agentRef)
 	d.mu.Unlock()
 	d.execOutputs.Delete(agentRef)
+	d.notVMs.Delete(agentRef)
 
 	var id uuid.UUID
 	res, err := d.cli.ContainerInspect(ctx, agentRef, client.ContainerInspectOptions{})
@@ -524,6 +525,13 @@ func (d *Driver) teardown(ctx context.Context, agentRef string) error {
 		return fmt.Errorf("docker: inspect for teardown: %w", err)
 	}
 
+	// A VM's sidecars (virtiofsd holds the member's folders) and run directory go on every return
+	// from here, whatever fails below; the closure reads id as resolved by then.
+	defer func() {
+		if id != uuid.Nil {
+			d.teardownVM(ctx, agentRef, id)
+		}
+	}()
 	if _, err := d.cli.ContainerRemove(ctx, agentRef, client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
 		return fmt.Errorf("docker: remove agent: %w", err)
 	}
@@ -561,7 +569,6 @@ func (d *Driver) teardown(ctx context.Context, agentRef string) error {
 	if _, err := d.cli.ContainerRemove(ctx, driveSeedName(id), client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
 		return fmt.Errorf("docker: remove drive seed: %w", err)
 	}
-	d.teardownVM(ctx, agentRef, id)
 	return nil
 }
 
@@ -605,7 +612,7 @@ type containerListerAPI interface {
 // the real client must implement it.
 var _ containerListerAPI = (*client.Client)(nil)
 
-// SweepOrphanedSandboxes removes leftover drive seeds (sweepDriveSeeds), then tears down the sandbox objects (agent container + sibling proxy + per-run
+// SweepOrphanedSandboxes removes leftover drive seeds (sweepDriveSeeds) and VM residue (sweepVMOrphans), then tears down the sandbox objects (agent container + sibling proxy + per-run
 // internal network) of every run whose row no longer owns them — the residue of a crash BETWEEN
 // CreateSandbox and SetSandboxRef, which leaves those containers running under a run row with no
 // sandbox_ref, so no ref-keyed teardown ever revisits them. isOrphan (supplied by the control plane,
@@ -624,6 +631,8 @@ func (d *Driver) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duratio
 		return 0, nil
 	}
 	seeds, seedErr := d.sweepDriveSeeds(ctx, lister, minAge)
+	cutoff := time.Now().Add(-minAge)
+	vms, vmErr := d.sweepVMOrphans(ctx, lister, cutoff)
 	res, err := lister.ContainerList(ctx, client.ContainerListOptions{
 		All:     true, // a crashed sandbox's agent may be exited, not running
 		Filters: client.Filters{}.Add("label", labelComponent+"="+componentAgent),
@@ -631,8 +640,7 @@ func (d *Driver) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duratio
 	if err != nil {
 		return 0, fmt.Errorf("docker: list containers for orphan sweep: %w", err)
 	}
-	cutoff := time.Now().Add(-minAge)
-	swept, errs := seeds, []error{seedErr}
+	swept, errs := seeds+vms, []error{seedErr, vmErr}
 	for _, c := range res.Items {
 		runID, perr := parseRunID(c.Labels[labelRun])
 		if perr != nil {

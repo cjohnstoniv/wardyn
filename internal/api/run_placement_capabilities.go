@@ -260,6 +260,10 @@ func requestDemands(req createRunRequest, ceiling governanceCeiling) placementDe
 // linuxVMOnRemote is the refusal of a Linux VM on the deployment's own executor.
 const linuxVMOnRemote = "Linux VM sandboxes run only on a registered runner that offers them"
 
+// linuxVMAgentStart is the refusal of interactive_start: agent on a Linux VM, whose terminal is a
+// plain shell in this release (no shared session to open in the agent CLI or to take over).
+const linuxVMAgentStart = "a Linux VM sandbox's terminal opens a shell, not the agent CLI, in this release: set interactive_start to shell"
+
 // runnerCaps is the runner's own last caps event, which remote.Substrate keeps.
 type runnerCaps interface {
 	Caps() (runnerwire.Caps, bool)
@@ -307,6 +311,9 @@ func (s *Server) placementCapabilityRefusal(ctx context.Context, req createRunRe
 	demands := requestDemands(req, ceiling)
 	if demands.LinuxVM && p != types.PlacementLocal {
 		return runError(placement.ReasonPlacementCapability.Status(), string(placement.ReasonPlacementCapability), linuxVMOnRemote)
+	}
+	if demands.LinuxVM && requestIsInteractive(req) && req.InteractiveStart == "agent" {
+		return runError(placement.ReasonPlacementCapability.Status(), string(placement.ReasonPlacementCapability), linuxVMAgentStart)
 	}
 	if p != types.PlacementLocal || (!demands.IdlePause && !demands.LinuxVM) {
 		return nil

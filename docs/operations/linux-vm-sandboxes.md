@@ -15,10 +15,11 @@
 | The boot | Direct kernel boot of the image's own kernel and initrd, with `noresume` |
 | The agent | The Wardyn guest agent in the guest starts the harness and serves terminals, as `agent` (uid 1000) |
 | Shared folders | One unprivileged `virtiofsd` container per mount; read-only mounts are served read-only |
-| Confinement | The VM boundary: the run reports `CC3`, the class of hardware virtualisation |
+| Confinement | The VM boundary, which the runner treats as the `CC3` family (hardware virtualisation). The run's recorded `confinement_class` stays the one it asked for |
 | Network | None until the network relay ships: QEMU's only link goes to a socket nothing answers. Then every connection the desktop makes goes through Wardyn's network relay, which hands allowed ones to the proxy and drops the rest |
 
 - Not in this release: drives, session recording, reviving a stopped VM, replacing its proxy, and recovering its output after the VM is gone. Each is refused with a reason.
+- A VM's terminal is a plain shell. Opening it in the agent CLI (`interactive_start: agent`) and watching or taking over the agent's terminal are refused too.
 
 ## Requirements
 

@@ -39,6 +39,9 @@ import (
 // labelMachineKind marks the QEMU container: every per-ref method looks for it.
 const labelMachineKind = "wardyn.machine-kind"
 
+// envInteractiveStart is the sandbox env the control plane sets for interactive_start: agent.
+const envInteractiveStart = "WARDYN_INTERACTIVE_START"
+
 const (
 	componentVMFS   = "vmfs"   // a virtiofsd sidecar
 	componentVMPrep = "vmprep" // a one-shot prep container (image conversion, the overlay)
@@ -139,7 +142,8 @@ func (d *Driver) newVMRun(runID uuid.UUID, dir string) *vmRun {
 }
 
 // vmFor is the VM behind ref, or nil for a container (or when VMs are off, which costs nothing).
-// After a runner restart the VM is found again by its container's label.
+// After a runner restart the VM is found again by its container's label. A ref found to be a
+// container is remembered as one until its teardown, so it is inspected once, not on every call.
 func (d *Driver) vmFor(ctx context.Context, ref string) *vmRun {
 	vc := d.vmConfig()
 	if vc == nil {
@@ -148,8 +152,15 @@ func (d *Driver) vmFor(ctx context.Context, ref string) *vmRun {
 	if v, ok := d.vms.Load(ref); ok {
 		return v.(*vmRun)
 	}
+	if _, ok := d.notVMs.Load(ref); ok {
+		return nil
+	}
 	res, err := d.cli.ContainerInspect(ctx, ref, client.ContainerInspectOptions{})
-	if err != nil || res.Container.Config == nil || res.Container.Config.Labels[labelMachineKind] != string(types.MachineLinuxVM) {
+	if err != nil {
+		return nil
+	}
+	if res.Container.Config == nil || res.Container.Config.Labels[labelMachineKind] != string(types.MachineLinuxVM) {
+		d.notVMs.Store(ref, struct{}{})
 		return nil
 	}
 	id, err := parseRunID(res.Container.Config.Labels[labelRun])
@@ -176,6 +187,9 @@ func (d *Driver) refuseVMSpec(spec runner.SandboxSpec) error {
 	}
 	if spec.RecordWithin(d.cfg.Record) {
 		return errors.New("docker: a Linux VM sandbox is not recorded in this release; turn recording off for this run")
+	}
+	if spec.Interactive && spec.Env[envInteractiveStart] == "agent" {
+		return errors.New("docker: a Linux VM sandbox's terminal opens a shell, not the agent CLI, in this release; set interactive_start to shell")
 	}
 	return d.preflightSpec(spec)
 }
@@ -246,7 +260,7 @@ func (d *Driver) createVM(ctx context.Context, spec runner.SandboxSpec) (runner.
 	}
 
 	// One virtiofsd per mount, started before QEMU, which connects to its socket at start.
-	rollback = append(rollback, func() { d.removeVMSidecars(context.Background(), spec.RunID) })
+	rollback = append(rollback, func() { d.warnVMSidecars(context.Background(), spec.RunID) })
 	guestMounts := make([]guestagent.Mount, 0, len(shares))
 	for n, m := range shares {
 		if err := d.startVirtiofsd(ctx, spec, n, m, part("fs")); err != nil {
@@ -531,16 +545,33 @@ func (d *Driver) startVirtiofsd(ctx context.Context, spec runner.SandboxSpec, n 
 	return nil
 }
 
+// maxVMShares bounds the virtiofsd names removeVMSidecars tries when removals keep failing.
+const maxVMShares = 64
+
 // removeVMSidecars removes a run's virtiofsd and prep containers. Their names are deterministic
-// and their count small, so no list is needed: removal stops at the first absent share.
-func (d *Driver) removeVMSidecars(ctx context.Context, runID uuid.UUID) {
-	for n := 0; ; n++ {
-		if _, err := d.cli.ContainerRemove(ctx, vmfsName(runID, n), client.ContainerRemoveOptions{Force: true}); err != nil {
-			break
+// and their count small, so no list is needed: the shares end at the first absent one. A failed
+// removal does not stop the others; every failure is returned.
+func (d *Driver) removeVMSidecars(ctx context.Context, runID uuid.UUID) error {
+	var errs []error
+	remove := func(name string) bool {
+		_, err := d.cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true})
+		if err != nil && !isNotFound(err) {
+			errs = append(errs, fmt.Errorf("docker: remove %s: %w", name, err))
 		}
+		return err == nil || !isNotFound(err)
+	}
+	for n := 0; n < maxVMShares && remove(vmfsName(runID, n)); n++ {
 	}
 	for _, what := range []string{"export", "image", "overlay"} {
-		_, _ = d.cli.ContainerRemove(ctx, vmPrepName(runID, what), client.ContainerRemoveOptions{Force: true})
+		remove(vmPrepName(runID, what))
+	}
+	return errors.Join(errs...)
+}
+
+// warnVMSidecars is removeVMSidecars where nothing can act on a failure but the log and a later sweep.
+func (d *Driver) warnVMSidecars(ctx context.Context, runID uuid.UUID) {
+	if err := d.removeVMSidecars(ctx, runID); err != nil {
+		slog.Warn("docker: remove a VM's sidecars", slog.String("run_id", runID.String()), slog.String("err", err.Error()))
 	}
 }
 
@@ -686,8 +717,72 @@ func (d *Driver) teardownVM(ctx context.Context, agentRef string, runID uuid.UUI
 		v.(*vmRun).stop()
 		v.(*vmRun).agent.Close()
 	}
-	d.removeVMSidecars(ctx, runID)
+	d.warnVMSidecars(ctx, runID)
 	if err := os.RemoveAll(vc.runDir(runID)); err != nil {
 		slog.Warn("docker: remove a VM run directory", slog.String("run_id", runID.String()), slog.String("err", err.Error()))
 	}
+}
+
+// sweepVMOrphans removes the VM residue a teardown cannot reach: virtiofsd and prep containers,
+// and run directories, older than cutoff whose run has no agent (QEMU) container. They are made
+// before the QEMU container, so the age gate keeps a create in flight safe. It answers how many
+// runs it cleaned. The containers are swept even with VMs off; the directories need the config.
+func (d *Driver) sweepVMOrphans(ctx context.Context, lister containerListerAPI, cutoff time.Time) (int, error) {
+	gone := map[uuid.UUID]bool{}
+	agentGone := func(runID uuid.UUID) bool {
+		if g, ok := gone[runID]; ok {
+			return g
+		}
+		_, err := d.cli.ContainerInspect(ctx, agentContainerName(runID), client.ContainerInspectOptions{})
+		gone[runID] = isNotFound(err)
+		return gone[runID]
+	}
+	cleaned := map[uuid.UUID]bool{}
+	var errs []error
+	for _, comp := range []string{componentVMFS, componentVMPrep} {
+		res, err := lister.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: client.Filters{}.Add("label", labelComponent+"="+comp)})
+		if err != nil {
+			errs = append(errs, fmt.Errorf("docker: list VM sidecars for orphan sweep: %w", err))
+			continue
+		}
+		for _, c := range res.Items {
+			runID, perr := parseRunID(c.Labels[labelRun])
+			if perr != nil || c.Labels[labelComponent] != comp {
+				continue
+			}
+			if c.Labels[runner.LabelRunnerID] != d.cfg.RunnerID || d.otherDeployment(c.Labels) {
+				continue
+			}
+			if time.Unix(c.Created, 0).After(cutoff) || !agentGone(runID) {
+				continue
+			}
+			if _, err := d.cli.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
+				errs = append(errs, fmt.Errorf("docker: remove orphaned VM sidecar %s: %w", c.ID, err))
+				continue
+			}
+			cleaned[runID] = true
+		}
+	}
+	if vc := d.vmConfig(); vc != nil {
+		entries, err := os.ReadDir(filepath.Join(vc.StateDir, "runs"))
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			errs = append(errs, fmt.Errorf("docker: read VM run directories: %w", err))
+		}
+		for _, e := range entries {
+			runID, perr := uuid.Parse(e.Name())
+			if perr != nil || !e.IsDir() {
+				continue
+			}
+			fi, ierr := e.Info()
+			if ierr != nil || fi.ModTime().After(cutoff) || !agentGone(runID) {
+				continue
+			}
+			if err := os.RemoveAll(vc.runDir(runID)); err != nil {
+				errs = append(errs, fmt.Errorf("docker: remove orphaned VM run directory %s: %w", runID, err))
+				continue
+			}
+			cleaned[runID] = true
+		}
+	}
+	return len(cleaned), errors.Join(errs...)
 }

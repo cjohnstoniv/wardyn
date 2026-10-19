@@ -42,6 +42,18 @@ func TestPlacementCapability_LinuxVMNeedsARunnerThatOffersIt(t *testing.T) {
 	if ref := s.placementCapabilityRefusal(capsCtx, createRunRequest{Placement: types.PlacementLocal, RunnerID: offers.String(), MachineKind: "linux_vm"}, runPlacement{}, governanceCeiling{}); ref != nil {
 		t.Fatalf("a runner that offers Linux VMs was refused: %+v", ref)
 	}
+	// The VM's terminal is a plain shell: an interactive run that asks to open in the agent CLI is
+	// refused up front, before it reaches the runner; a shell start, or a batch run, is not.
+	agentStart := createRunRequest{Placement: types.PlacementLocal, RunnerID: offers.String(), MachineKind: "linux_vm", Interactive: true, InteractiveStart: "agent"}
+	if ref := s.placementCapabilityRefusal(capsCtx, agentStart, runPlacement{}, governanceCeiling{}); ref == nil ||
+		ref.body.Reason != string(placement.ReasonPlacementCapability) || !strings.Contains(ref.body.Error, "interactive_start") {
+		t.Errorf("interactive_start agent on a VM: refusal = %+v, want 422 placement_capability naming interactive_start", ref)
+	}
+	shellStart := agentStart
+	shellStart.InteractiveStart = "shell"
+	if ref := s.placementCapabilityRefusal(capsCtx, shellStart, runPlacement{}, governanceCeiling{}); ref != nil {
+		t.Errorf("interactive_start shell on a VM was refused: %+v", ref)
+	}
 	// A container run asks nothing of either runner, as before the knob existed.
 	for _, id := range []uuid.UUID{offers, older} {
 		for _, kind := range []string{"", "container"} {

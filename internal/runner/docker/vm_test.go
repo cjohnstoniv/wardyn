@@ -392,6 +392,11 @@ func TestVMImageIsConvertedOncePerImage(t *testing.T) {
 	}
 }
 
+// agentStart is an interactive run that opens its terminal in the agent CLI.
+func agentStart(s *runner.SandboxSpec) {
+	s.Interactive, s.Env = true, map[string]string{envInteractiveStart: "agent"}
+}
+
 func TestVMSpecRefusalsCreateNothing(t *testing.T) {
 	for name, tc := range map[string]struct {
 		off  bool
@@ -403,6 +408,7 @@ func TestVMSpecRefusalsCreateNothing(t *testing.T) {
 		"unknown kind": {mut: func(s *runner.SandboxSpec) { s.MachineKind = "windows_vm" }, want: "unknown machine kind"},
 		"drives":       {mut: func(s *runner.SandboxSpec) { s.Drives = []types.DriveMount{{ObjectName: "d"}} }, want: "no drives"},
 		"record":       {rec: true, want: "not recorded"},
+		"agent start":  {mut: agentStart, want: "not the agent CLI"},
 		"tiny":         {mut: func(s *runner.SandboxSpec) { s.Resources.MemoryMiB = 512 }, want: "256 MiB"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -526,5 +532,152 @@ func TestVMProbeQMPFailureNamesTheFixFromQEMUsLog(t *testing.T) {
 	qmpErr := errors.New("qemu: QMP qmp_capabilities: read: connection reset by peer")
 	if err := d.probeExited(context.Background(), created.ID, qmpErr); err == nil || !strings.Contains(err.Error(), "WARDYN_RUNNER_VM_CPU_MODEL") {
 		t.Fatalf("probe error = %v, want the CPU model fix", err)
+	}
+}
+
+// A teardown that fails part-way (here the proxy's removal) still removes the VM's virtiofsd
+// sidecars, which hold the member's folders, and its run directory.
+func TestVMTeardownRemovesSidecarsAndDirWhenProxyRemovalFails(t *testing.T) {
+	r := newVMRig(t)
+	spec := vmSpec()
+	spec.Mounts = []runner.Mount{{Source: t.TempDir(), Target: "/home/agent/work"}}
+	ctx := context.Background()
+	sb, err := r.d.CreateSandbox(ctx, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.f.mu.Lock()
+	r.f.failRemove = map[string]int{proxyContainerName(spec.RunID): 1}
+	r.f.mu.Unlock()
+	if err := r.d.KillSandbox(ctx, sb.Ref); err == nil || !strings.Contains(err.Error(), "remove proxy") {
+		t.Fatalf("kill = %v, want the proxy removal's failure", err)
+	}
+	if c := r.container(t, vmfsName(spec.RunID, 0)); !c.removed {
+		t.Fatal("the virtiofsd sidecar survived a teardown whose proxy removal failed")
+	}
+	if _, err := os.Stat(r.vc.runDir(spec.RunID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the run directory survived a teardown whose proxy removal failed: %v", err)
+	}
+}
+
+// The sweep removes VM sidecars and run directories whose run has no QEMU container any more, and
+// only those: not a live VM's, not a create still in flight (too young), not another runner's.
+func TestVMSweepRemovesOrphanedSidecarsAndRunDirs(t *testing.T) {
+	state, err := os.MkdirTemp("", "wvm") // short: the config bounds socket paths
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(state) })
+	rid := uuid.NewString()
+	f := newFakeDocker()
+	d := newWithClient(f, Config{ProxyImage: "p", RunnerID: rid})
+	vc := VMConfig{StateDir: state, QEMUImage: "q", CPUModel: "Haswell-v4", MachineType: "pc-q35-10.0", UID: 1000, GID: 1000, KVMGID: "1"}
+	if err := d.EnableVM(&vc); err != nil {
+		t.Fatal(err)
+	}
+	orphan, live, young, theirs := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	old, past := time.Now().Add(-time.Hour), time.Now().Add(-time.Hour).Unix()
+	f.containers[agentContainerName(live)] = &createdContainer{name: agentContainerName(live)}
+	mine := map[string]string{runner.LabelRunnerID: rid}
+	var items []container.Summary
+	add := func(name string, id uuid.UUID, comp string, created int64, extra map[string]string) {
+		f.containers[name] = &createdContainer{name: name}
+		items = append(items, container.Summary{ID: name, Created: created, Labels: wardynLabels(id, comp, extra)})
+	}
+	for _, id := range []uuid.UUID{orphan, live} {
+		add(vmfsName(id, 0), id, componentVMFS, past, mine)
+		add(vmPrepName(id, "overlay"), id, componentVMPrep, past, mine)
+	}
+	add(vmfsName(young, 0), young, componentVMFS, time.Now().Unix(), mine)
+	add(vmfsName(theirs, 0), theirs, componentVMFS, past, map[string]string{runner.LabelRunnerID: uuid.NewString()})
+	f.listItems = items
+	for _, id := range []uuid.UUID{orphan, live, young} {
+		if err := os.MkdirAll(filepath.Join(vc.runDir(id), "ctl"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if id != young {
+			if err := os.Chtimes(vc.runDir(id), old, old); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	n, err := d.SweepOrphanedSandboxes(context.Background(), 10*time.Minute, func(uuid.UUID) bool { return false })
+	if err != nil || n != 1 {
+		t.Fatalf("sweep = %d, %v; want the one orphaned run", n, err)
+	}
+	for _, it := range items {
+		id, _ := parseRunID(it.Labels[labelRun])
+		if f.containers[it.ID].removed != (id == orphan) {
+			t.Errorf("%s removed = %v", it.ID, f.containers[it.ID].removed)
+		}
+	}
+	for _, id := range []uuid.UUID{orphan, live, young} {
+		if _, err := os.Stat(vc.runDir(id)); errors.Is(err, os.ErrNotExist) != (id == orphan) {
+			t.Errorf("run dir of %s: %v", id, err)
+		}
+	}
+}
+
+// A container's ref is inspected once while VMs are on, not on every per-ref call, and forgotten
+// at its teardown.
+func TestVMForRemembersAContainerUntilItsTeardown(t *testing.T) {
+	f := newFakeDocker()
+	d := newTestDriver(f)
+	if err := d.EnableVM(&VMConfig{StateDir: "/tmp/vmx", QEMUImage: "q", CPUModel: "Haswell-v4", MachineType: "pc-q35-10.0", UID: 1000, GID: 1000, KVMGID: "1"}); err != nil {
+		t.Fatal(err)
+	}
+	id := uuid.New()
+	seedSandbox(f, id)
+	ref := agentContainerName(id)
+	for range 3 {
+		if v := d.vmFor(context.Background(), ref); v != nil {
+			t.Fatal("a container was taken for a VM")
+		}
+	}
+	f.mu.Lock()
+	calls := f.inspectCalls[ref]
+	f.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("%d inspects of a container's ref, want 1", calls)
+	}
+	if err := d.KillSandbox(context.Background(), ref); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := d.notVMs.Load(ref); ok {
+		t.Fatal("a torn-down ref is still remembered as a container")
+	}
+}
+
+// A VM's terminal is its own shell: a watcher would get a shell, not a view of the run's terminal,
+// so a watching attach is refused.
+func TestVMAttachRefusesAWatcher(t *testing.T) {
+	r := newVMRig(t)
+	sb, err := r.d.CreateSandbox(context.Background(), vmSpec())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.d.Attach(context.Background(), sb.Ref, runner.AttachOptions{Observer: true}); !errors.Is(err, errVMUnsupported) {
+		t.Fatalf("watching attach = %v, want refused", err)
+	}
+}
+
+// One sidecar that will not go does not keep the others: each is tried, and every failure is told.
+func TestVMSidecarRemovalContinuesPastAFailure(t *testing.T) {
+	r := newVMRig(t)
+	spec := vmSpec()
+	spec.Mounts = []runner.Mount{{Source: t.TempDir(), Target: "/home/agent/work"}, {Source: t.TempDir(), Target: "/workspace/ref", ReadOnly: true}}
+	if _, err := r.d.CreateSandbox(context.Background(), spec); err != nil {
+		t.Fatal(err)
+	}
+	r.f.mu.Lock()
+	r.f.failRemove = map[string]int{vmfsName(spec.RunID, 0): 1}
+	r.f.mu.Unlock()
+	err := r.d.removeVMSidecars(context.Background(), spec.RunID)
+	if err == nil || !strings.Contains(err.Error(), vmfsName(spec.RunID, 0)) {
+		t.Fatalf("removal = %v, want the first share's failure", err)
+	}
+	if !r.container(t, vmfsName(spec.RunID, 1)).removed || !r.container(t, vmPrepName(spec.RunID, "overlay")).removed {
+		t.Fatal("a failed share removal stopped the rest")
 	}
 }

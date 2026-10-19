@@ -128,6 +128,10 @@ var vmShell = []string{"/bin/sh", "-c", "if command -v bash >/dev/null; then exe
 
 // vmAttach is Attach for a VM: an attached guest exec of a login shell with a pty.
 func (d *Driver) vmAttach(ctx context.Context, v *vmRun, opts runner.AttachOptions) (runner.Session, error) {
+	if opts.Observer {
+		// No shared terminal to watch or take over in this release: each attach is its own shell.
+		return nil, fmt.Errorf("%w: watching a terminal", errVMUnsupported)
+	}
 	s, err := v.agent.Exec(ctx, guestagent.ExecRequest{Argv: vmShell, TTY: true, Cols: opts.Cols, Rows: opts.Rows})
 	if err != nil {
 		return nil, fmt.Errorf("docker: VM attach: %w", err)

@@ -256,6 +256,11 @@ type fakeDocker struct {
 	lastListFilters client.Filters
 	lastListAll     bool
 
+	// failRemove makes ContainerRemove of a name fail that many times first; inspectCalls counts
+	// ContainerInspect calls per name.
+	failRemove   map[string]int
+	inspectCalls map[string]int
+
 	// probeExitCode is the exit code ContainerWait reports for a container
 	// whose name carries the drive-probe prefix ("wardyn-drive-probe-") —
 	// there is no real command interpreter here to run `test -r/-x` against a
@@ -765,6 +770,10 @@ func (f *fakeDocker) containerStart(id string) (client.ContainerStartResult, err
 func (f *fakeDocker) ContainerInspect(ctx context.Context, id string, _ client.ContainerInspectOptions) (client.ContainerInspectResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.inspectCalls == nil {
+		f.inspectCalls = map[string]int{}
+	}
+	f.inspectCalls[id]++
 	if f.inspectFailures > 0 {
 		f.inspectFailures--
 		return client.ContainerInspectResult{}, errors.New("fake: inspect: daemon busy")
@@ -931,6 +940,10 @@ func (f *fakeDocker) ContainerUnpause(ctx context.Context, id string, _ client.C
 func (f *fakeDocker) ContainerRemove(ctx context.Context, id string, opts client.ContainerRemoveOptions) (client.ContainerRemoveResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failRemove[id] > 0 {
+		f.failRemove[id]--
+		return client.ContainerRemoveResult{}, errors.New("fake: remove: daemon busy")
+	}
 	c := f.containers[id]
 	if c == nil {
 		return client.ContainerRemoveResult{}, fakeNotFound{msg: "no such container: " + id}

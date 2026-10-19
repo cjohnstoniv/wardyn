@@ -3,7 +3,7 @@
 
 # The reference guest image of a Linux VM sandbox (machine_kind=linux_vm): an ordinary OCI image
 # that wardyn-runnerd converts to an ext4 disk and boots under QEMU/KVM. No desktop. The image
-# contract it meets (docs/LINUX-VM-SANDBOXES.md): one /boot/vmlinuz-* and /boot/initrd.img-*, root
+# contract it meets (docs/operations/linux-vm-sandboxes.md): one /boot/vmlinuz-* and /boot/initrd.img-*, root
 # on /dev/vda, systemd, qemu-guest-agent, the Wardyn guest agent with its unit, the CA install unit,
 # and the agent user (uid 1000, home /home/agent).
 FROM --platform=$BUILDPLATFORM golang:1.27.2@sha256:5bc7f572bbaa98885a3a1fd9c0aa76b59e3e14e8628bfc316bbfd0c701e4818c AS builder
