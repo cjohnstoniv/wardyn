@@ -510,7 +510,7 @@ func registerAzureFlags() azureFlags {
 		tenantID:           flagEnv("azure-tenant-id", "WARDYN_AZURE_TENANT_ID", "", "Entra tenant id (workload identity)"),
 		clientID:           flagEnv("azure-client-id", "WARDYN_AZURE_CLIENT_ID", "", "client id of the app registration or user-assigned identity wardynd runs as"),
 		federatedTokenFile: flagEnv("azure-federated-token-file", "WARDYN_AZURE_FEDERATED_TOKEN_FILE", os.Getenv("AZURE_FEDERATED_TOKEN_FILE"), "path of the projected token exchanged for an Entra token; default: AZURE_FEDERATED_TOKEN_FILE, which the workload identity webhook sets. Re-read at every exchange"),
-		authorityHost:      flagEnv("azure-authority-host", "WARDYN_AZURE_AUTHORITY_HOST", "https://login.microsoftonline.com", "Entra authority host (a sovereign cloud's, if not the public one)"),
+		authorityHost:      flagEnv("azure-authority-host", "WARDYN_AZURE_AUTHORITY_HOST", "https://login.microsoftonline.com", "Entra authority host. The Key Vault client always asks for the public cloud's vault.azure.net resource, so this does not make a sovereign-cloud vault work"),
 		prefix:             flagEnv("azure-kv-prefix", "WARDYN_AZURE_KV_PREFIX", "wardyn", "prefix of every secret name this install writes (the chart sets the release namespace)"),
 		maxVersions:        flagIntEnv("azure-kv-max-versions", "WARDYN_AZURE_KV_MAX_VERSIONS", 100, "versions a secret holds before the next write starts a new name and deletes the old one"),
 		purge:              flagEnv("azure-kv-purge", "WARDYN_AZURE_KV_PURGE", azurekv.PurgeAuto, `"auto": purge a deleted secret when the vault allows it; "never": leave it soft-deleted for the vault's retention`),
