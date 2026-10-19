@@ -44,3 +44,17 @@ func TestRunSecretRefsRefusal_StoreFaultHasNoInvalidPrefix(t *testing.T) {
 		t.Fatalf("a genuine policy fault must keep 422 %s, got %d %+v", reasonInlinePolicyInvalid, ref.status, ref.body)
 	}
 }
+
+// POST /runs with an inline secret grant while the secret store cannot be listed answers 503 with
+// the transient store reason, never a 422 "invalid inline_policy" (#2781).
+func TestCreateRun_InlineSecretListFailureIs503(t *testing.T) {
+	h, _ := newSecretsHarness(t)
+	h.srv.cfg.Secrets = listFailSecrets{Store: &memSecrets{}}
+	body := `{"agent":"claude-code","repo":"acme/widgets","inline_policy":{` +
+		`"min_confinement_class":"CC2","eligible_grants":[{"kind":"api_key",` +
+		`"scope":{"host":"api.example.com","secret_name":"anthropic-api-key"}}]}}`
+	w := do(t, h.srv, http.MethodPost, "/api/v1/runs", adminToken, body)
+	if w.Code != http.StatusServiceUnavailable || errorReason(w) != reasonSinkStoreUnavailable {
+		t.Fatalf("inline secret with an unlistable store = %d %s, want 503 %s", w.Code, w.Body.String(), reasonSinkStoreUnavailable)
+	}
+}

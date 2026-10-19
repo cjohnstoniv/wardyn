@@ -104,6 +104,16 @@ func (s *Server) driveRootRealWithin(ctx context.Context, root string) string {
 	return real
 }
 
+// serverFaultReason is reason for a 5xx answer and "" for a refusal of the request, which keeps the
+// write's default reason: the drive write's 503 (a share that did not answer) and 500 (a drive list
+// that could not be read) are the deployment's, so they name their own cause on the wire.
+func serverFaultReason(code int, reason string) string {
+	if code >= http.StatusInternalServerError {
+		return reason
+	}
+	return ""
+}
+
 // driveRootCeilingRefusal turns a bounded ceiling error into the status and the
 // sentence the drive write answers with — the "decided answer" half of the
 // bound: an unanswered probe is a 503 about the deployment, a refusal is the

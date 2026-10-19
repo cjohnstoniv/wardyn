@@ -190,7 +190,7 @@ func (s *Server) mintRunPAT(ctx context.Context, runID uuid.UUID, sn adoEntraSco
 	// whose renderings cannot be recorded is never handed out: it is revoked here.
 	if err := s.maskMintedValue(ctx, runID, []byte(pat.Token),
 		[]byte(base64.StdEncoding.EncodeToString([]byte(":"+pat.Token))), []byte(adoRunPATValue(pat.Token))); err != nil {
-		s.revokeNeverRecordedPAT(ctx, runID, client, sn.Organisation, access.AccessToken, pat.AuthorizationID, "masking_unrecorded")
+		s.revokeNeverRecordedPAT(ctx, runID, client, sn.Organisation, access.AccessToken, pat.AuthorizationID, adoPATRevokeUnrecorded)
 		return adoPAT{}, fmt.Errorf("record the run token's masking renderings: %w", err)
 	}
 	if pat.ValidTo.IsZero() {
@@ -206,7 +206,7 @@ func (s *Server) mintRunPAT(ctx context.Context, runID uuid.UUID, sn adoEntraSco
 	if err != nil {
 		// An unrecorded token is never handed out: nothing could revoke it
 		// after a crash. Revoke it now, best-effort.
-		s.revokeNeverRecordedPAT(ctx, runID, client, sn.Organisation, access.AccessToken, pat.AuthorizationID, "row_unrecorded")
+		s.revokeNeverRecordedPAT(ctx, runID, client, sn.Organisation, access.AccessToken, pat.AuthorizationID, adoPATRevokeUnrecorded)
 		return adoPAT{}, fmt.Errorf("record the run's personal access token: %w", err)
 	}
 	why, ended, err := s.adoSignInEndedSince(ctx, sn.OwnerSubject, ends)

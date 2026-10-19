@@ -502,3 +502,25 @@ func TestPresetPolicyOverlayIsRedactedForMembersOnly(t *testing.T) {
 		t.Errorf("stored request after the round trip = %s, lost operator details", stored)
 	}
 }
+
+// A credential in a repository URL of a stored policy_overlay (a legacy row) is not served on either
+// read, to a member or to the author alike: the same userinfo redaction an inline_policy's
+// workspace_repos get, applied to the overlay through the request's repository URLs.
+func TestPresetOverlayRepoCredentialIsRedactedOnReads(t *testing.T) {
+	f := newMemPresetFixture(t)
+	f.store.rows = map[string]types.LaunchPreset{"legacy": {
+		Name: "legacy", Version: 1,
+		Request: json.RawMessage(`{"agent":"claude-code","repo":"acme/widgets","policy_overlay":{"workspace_repos":` +
+			`[{"repo":"https://ci:hunter2-token@git.corp.example/acme/app.git","target":"/work/app"}]}}`),
+	}}
+	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
+	admin := ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
+	for _, cookie := range []*http.Cookie{member, admin} {
+		for _, path := range []string{"/api/v1/presets/legacy", "/api/v1/presets"} {
+			w := doSSO(t, f.srv, http.MethodGet, path, cookie, "")
+			if w.Code != http.StatusOK || strings.Contains(w.Body.String(), "hunter2-token") || !strings.Contains(w.Body.String(), "git.corp.example") {
+				t.Errorf("GET %s = %d %s, want 200 with the repository host kept and its credential gone", path, w.Code, w.Body.String())
+			}
+		}
+	}
+}

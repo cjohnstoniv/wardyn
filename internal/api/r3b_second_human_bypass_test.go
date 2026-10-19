@@ -238,3 +238,19 @@ func TestDecidedApprovalOnEndedRunAnswersAlreadyDecided(t *testing.T) {
 		t.Fatalf("decide on a decided approval of an ended run = %d %s, want 409 %s", w.Code, w.Body.String(), reasonApprovalAlreadyDecided)
 	}
 }
+
+// The run's own end cancels its waiting approvals, so a late decision lands on a CANCELLED row. That
+// is the run-ended answer, not already_decided: nobody decided it. Even with a store that would
+// answer already_decided, the handler refuses first.
+func TestCancelledApprovalOnEndedRunAnswersRunEnded(t *testing.T) {
+	h, srv, runID := endedRunBypassFixture(t)
+	apID := seedEgressApproval(h, runID, "registry.npmjs.org")
+	ap := h.approvals.byID[apID]
+	ap.State = types.ApprovalCancelled
+	h.approvals.byID[apID] = ap
+	h.approvals.decideErr = approval.ErrAlreadyDecided
+	w := do(t, srv, http.MethodPost, "/api/v1/approvals/"+apID.String()+"/approve", adminToken, "")
+	if w.Code != http.StatusConflict || errorReason(w) != reasonApprovalRunEnded {
+		t.Fatalf("decide on a cancelled approval of an ended run = %d %s, want 409 %s", w.Code, w.Body.String(), reasonApprovalRunEnded)
+	}
+}

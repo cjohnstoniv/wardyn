@@ -225,16 +225,17 @@ const approvalRunEndedBody = "the run ended before anyone decided this; the appr
 // asker no longer exists. It costs at most two reads, and only on the paths
 // that had not already loaded the rows (the member gate loads both; an
 // explicit scope loads the approval); the rows it loads are handed back so
-// the caller never reads them twice. ok=false means the response is written.
+// the caller never reads them twice. ok=false means the response is written, and the last
+// return names why (not_found or run_ended) for the break-glass failure row.
 func (s *Server) refuseIfRunEnded(
 	w http.ResponseWriter, r *http.Request, id uuid.UUID,
 	ap types.ApprovalRequest, run types.AgentRun, haveAP, haveRun bool,
-) (types.ApprovalRequest, types.AgentRun, bool, bool, bool) {
+) (types.ApprovalRequest, types.AgentRun, bool, bool, bool, string) {
 	if !haveAP {
 		var err error
 		if ap, err = s.cfg.Approvals.Get(r.Context(), id); err != nil {
 			writeErrorReason(w, http.StatusNotFound, reasonApprovalNotFound, "approval not found")
-			return ap, run, haveAP, haveRun, false
+			return ap, run, haveAP, haveRun, false, "not_found"
 		}
 		haveAP = true
 	}
@@ -243,14 +244,40 @@ func (s *Server) refuseIfRunEnded(
 			run, haveRun = got, true
 		}
 	}
-	// An approval already decided is not stranded by the run's end: it falls through to Decide, whose
-	// already_decided answer is the true one. (An empty state is a row no store writes; treated as open.)
-	if haveRun && isTerminalRunState(run.State) && (ap.State == "" || ap.State == types.ApprovalPending) {
+	// Only an approval a human already decided falls through to Decide, whose already_decided answer
+	// is the true one. Anything else (pending, or cancelled by the run's own end) answers run_ended.
+	if haveRun && isTerminalRunState(run.State) && ap.State != types.ApprovalApproved && ap.State != types.ApprovalDenied {
 		s.cancelRunApprovals(r.Context(), ap.RunID)
 		writeErrorReason(w, http.StatusConflict, reasonApprovalRunEnded, approvalRunEndedBody)
-		return ap, run, haveAP, haveRun, false
+		return ap, run, haveAP, haveRun, false, "run_ended"
 	}
-	return ap, run, haveAP, haveRun, true
+	return ap, run, haveAP, haveRun, true, ""
+}
+
+// recordBypassFailure writes the break-glass failure row when the admin token spent the four-eyes
+// bypass (switch is non-empty) on a decision that then was not made; class says why.
+func (s *Server) recordBypassFailure(r *http.Request, id uuid.UUID, ap types.ApprovalRequest, haveAP bool, bypassSwitch, class string) {
+	if bypassSwitch == "" {
+		return
+	}
+	decidedByType, decidedBy := actorFromRequest(r)
+	s.recordAudit(r.Context(), s.auditEvent(bypassRunID(ap, haveAP), decidedByType, decidedBy,
+		"approval.second_human.bypass", id.String(), "failure", mustJSON(map[string]any{
+			"reason": "admin_token_break_glass", "switch": bypassSwitch, "error": class,
+		})))
+}
+
+// writeDecideError answers a failed Decide. One sentinel: approval.ErrAlreadyDecided IS
+// store.ErrAlreadyDecided.
+func writeDecideError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, approval.ErrAlreadyDecided):
+		writeErrorReason(w, http.StatusConflict, reasonApprovalAlreadyDecided, "approval already decided")
+	case errors.Is(err, store.ErrNotFound):
+		writeErrorReason(w, http.StatusNotFound, reasonApprovalNotFound, "approval not found")
+	default:
+		writeServerError(w, r, "decide approval", err)
+	}
 }
 
 func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
@@ -419,16 +446,11 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	// for their reason: PENDING -> decided is one-way.
 	// The run row it loads is only consulted for the terminal check itself;
 	// nothing below reads it, so only the approval is taken back.
-	if ap, _, haveAP, _, ok = s.refuseIfRunEnded(w, r, id, ap, run, haveAP, haveRun); !ok {
+	var refusal string
+	if ap, _, haveAP, _, ok, refusal = s.refuseIfRunEnded(w, r, id, ap, run, haveAP, haveRun); !ok {
 		// The admin token got past the four-eyes gate above before this refusal, so the break-glass
 		// leaves its failure row here as it does when Decide fails (docs/ENV.md: every bypass writes one).
-		if bypassSwitch != "" {
-			decidedByType, decidedBy := actorFromRequest(r)
-			s.recordAudit(r.Context(), s.auditEvent(bypassRunID(ap, haveAP), decidedByType, decidedBy,
-				"approval.second_human.bypass", id.String(), "failure", mustJSON(map[string]any{
-					"reason": "admin_token_break_glass", "switch": bypassSwitch, "error": "run_ended",
-				})))
-		}
+		s.recordBypassFailure(r, id, ap, haveAP, bypassSwitch, refusal)
 		return
 	}
 
@@ -464,22 +486,8 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 		// would otherwise have to notice for themselves. The scope checks that
 		// moved ABOVE the break-glass branch still hold, so a failure row can
 		// only ever name an egress_domain approval that exists.
-		if bypassSwitch != "" {
-			s.recordAudit(r.Context(), s.auditEvent(bypassRunID(ap, haveAP), decidedByType, decidedBy,
-				"approval.second_human.bypass", id.String(), "failure", mustJSON(map[string]any{
-					"reason": "admin_token_break_glass", "switch": bypassSwitch,
-					"error": decideErrorClass(err),
-				})))
-		}
-		switch {
-		// One sentinel: approval.ErrAlreadyDecided IS store.ErrAlreadyDecided.
-		case errors.Is(err, approval.ErrAlreadyDecided):
-			writeErrorReason(w, http.StatusConflict, reasonApprovalAlreadyDecided, "approval already decided")
-		case errors.Is(err, store.ErrNotFound):
-			writeErrorReason(w, http.StatusNotFound, reasonApprovalNotFound, "approval not found")
-		default:
-			writeServerError(w, r, "decide approval", err)
-		}
+		s.recordBypassFailure(r, id, ap, haveAP, bypassSwitch, decideErrorClass(err))
+		writeDecideError(w, r, err)
 		return
 	}
 	// Counted HERE, at the one service call both handlers (and every non-human

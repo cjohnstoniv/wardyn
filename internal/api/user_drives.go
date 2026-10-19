@@ -372,10 +372,10 @@ func (s *Server) decodeUserDriveRequest(w http.ResponseWriter, r *http.Request, 
 		// the request — and a kernel thread — for as long as the mount takes.
 		if err := s.userDriveHostRootCheckBounded(r.Context())(d.HostRoot); err != nil {
 			code, msg := driveRootCeilingRefusal(d.HostRoot, err)
-			return types.UserDrive{}, code, "", msg
+			return types.UserDrive{}, code, serverFaultReason(code, reasonUserDriveCeilingUnavailable), msg
 		}
 		if code, msg := s.driveHostRootNesting(r, d); msg != "" {
-			return types.UserDrive{}, code, "", msg
+			return types.UserDrive{}, code, serverFaultReason(code, reasonUserDriveRehomeListUnavailable), msg
 		}
 	}
 	return d, 0, "", ""

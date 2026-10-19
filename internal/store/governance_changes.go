@@ -33,7 +33,8 @@ const governanceChangeColsRead = `id, target_kind, op, target_key, payload, diff
 	CASE WHEN state = 'pending' AND expires_at <= now() THEN 'expired' ELSE state END,
 	decided_by, decided_by_email, decided_at, reason`
 
-// MaxGovernanceChangeList bounds one list read; the newest changes come first.
+// MaxGovernanceChangeList bounds one list read; the newest changes come first. The store reads one
+// row past it, so a caller can tell a list that was cut from one that ends exactly at the bound.
 const MaxGovernanceChangeList = 500
 
 // ErrGovernanceChangePending is a proposal's refusal when a live change already holds the target: ID is
@@ -214,7 +215,7 @@ func (s PG) pendingRefusal(ctx context.Context, ch types.GovernanceChange) error
 	return &ErrGovernanceChangePending{ID: id}
 }
 
-// ListGovernanceChanges returns changes newest first. state narrows to one state ("" is every state);
+// ListGovernanceChanges returns changes newest first, at most MaxGovernanceChangeList+1 of them. state narrows to one state ("" is every state);
 // a pending row past its expiry reads as expired.
 func (s PG) ListGovernanceChanges(ctx context.Context, state string) ([]types.GovernanceChange, error) {
 	q := `SELECT ` + governanceChangeColsRead + ` FROM governance_changes`
@@ -223,7 +224,7 @@ func (s PG) ListGovernanceChanges(ctx context.Context, state string) ([]types.Go
 		q = `SELECT * FROM (` + q + `) c WHERE c.state = $1`
 		args = append(args, state)
 	}
-	q += fmt.Sprintf(` ORDER BY proposed_at DESC, id LIMIT %d`, MaxGovernanceChangeList)
+	q += fmt.Sprintf(` ORDER BY proposed_at DESC, id LIMIT %d`, MaxGovernanceChangeList+1)
 	return collect(ctx, s.Pool, "list", "governance changes", q, args, scanGovernanceChange)
 }
 

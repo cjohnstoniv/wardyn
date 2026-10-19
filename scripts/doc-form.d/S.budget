@@ -163,7 +163,8 @@
 # docs/sdk.md 19085 = 19033 + 52, measured: the workspace_name_taken and workspace_update_conflict rows.
 # docs/sdk.md 19048 adds 15 over 19033, measured: 0.9.4 L4b, node_record_human_only names the API token.
 # 0.9.4 L6b +19: docs/sdk.md 19052 adds 19 over 19033 for the additive `cause` on the git_credential 422 row.
-docs/sdk.md=19217 share=21
+# docs/sdk.md=19242 adds 25 (0.9.4 W4-API-B): the drive write 503/500 reasons and POST /runs store_unavailable (#2767, #2781).
+docs/sdk.md=19242 share=21
 # docs/sdk.md 18691 adds 28 over 18663, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
