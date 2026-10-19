@@ -353,7 +353,7 @@ echo_up=0
 for _ in $(seq 1 10); do
   if docker exec "${AGENT_CTR}" sh -c \
       "printf 'GET /setup-probe HTTP/1.0\r\n\r\n' | socat - TCP:127.0.0.1:${ECHO_PORT}" 2>/dev/null \
-      | grep -q ECHO-END; then
+      | grep ECHO-END >/dev/null; then
     echo_up=1; break
   fi
   sleep 1

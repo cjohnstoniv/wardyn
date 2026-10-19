@@ -82,6 +82,8 @@
 #      a repo-root `COPY . .` cannot layer one into a builder stage or its cache.
 #  23. an agent image that sets npm's proxy keys for an install deletes them again
 #      in the same RUN, so a build proxy URL never stays in the shipped layer.
+#  24. every scripts/*-walk.sh is run by a Makefile recipe or a workflow step (a comment does not count), or is named
+#      in HAND_RUN_WALKS with the reason it cannot run on a hosted runner.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -107,6 +109,8 @@ ok()  { echo "ok: $*"; }
 # first time it actually meets a hosted runner's docker/compose. Add it back to
 # notify-new-lanes' needs: once it has gone green on a real nightly (same
 # posture PR #1245 used for daemon-proxy-secret-kind).
+# kind-acceptance-walks (#3110): kind-components-walk and kind-run-output-walk had no caller
+# until this job; none of its three legs has run on a hosted runner. Same promotion rule.
 # kind-survival-walk (#700), hybrid-walk (#701) and kind-upgrade-walk (#690)
 # are exempt for the SAME reason PR #1245 gave daemon-proxy-secret-kind: none
 # of the three has ever run on a real nightly yet, so watching them from day
@@ -128,7 +132,7 @@ ok()  { echo "ok: $*"; }
 # release is the fix for a red here. It is NOT in release.yml's watched= (so not in
 # notify-new-lanes.needs, which guard 13 pins to it); it opens its own issue.
 NIGHTLY=.github/workflows/nightly.yml
-NOTIFY_EXEMPT="e2e-live notify-new-lanes migration-merge-check test-e2e-concurrent kind-survival-walk hybrid-walk kind-upgrade-walk k6-kind-conformance ci-mode-dogfood-model-fake published-image-scan notify-published-image-scan"
+NOTIFY_EXEMPT="e2e-live notify-new-lanes migration-merge-check test-e2e-concurrent kind-survival-walk hybrid-walk kind-upgrade-walk k6-kind-conformance kind-acceptance-walks ci-mode-dogfood-model-fake published-image-scan notify-published-image-scan"
 jobs="$(awk '/^jobs:/{j=1;next} j && /^  [a-z0-9-]+:$/{gsub(/[ :]/,"");print}' "$NIGHTLY" | tr '\n' ' ')"
 needs="$(awk '/^  notify-new-lanes:$/{n=1;next} n && /^    needs:/{print;exit}' "$NIGHTLY")"
 [ -n "$needs" ] || bad "$NIGHTLY: notify-new-lanes has no needs: line"
@@ -179,7 +183,7 @@ else
         [ -n "$svc" ] || continue
         # Case-insensitive whole-word: the doc writes the product name (Dex) for
         # some services and the compose key (`registry`) for others.
-        printf '%s' "$section" | tr 'A-Z' 'a-z' | grep -qw -- "$svc" \
+        printf '%s' "$section" | tr 'A-Z' 'a-z' | grep -w -- "$svc" >/dev/null \
             || bad "$ARCH: compose service '$svc' (profiles: ${profiles:-<default>}) is not named in the compose-stack section"
     done <<EOF
 $(yq -r '.services | to_entries[] | .key + "|" + ((.value.profiles // []) | join(","))' "$COMPOSE")
@@ -312,7 +316,7 @@ if [ "$port_bind_fail" = 0 ]; then ok "every docker run/create publish in script
 #      how the original trap was born. Grepping the SCRIPT SOURCE, not a
 #      render, so an edit that strips the line fails here rather than in CI.
 quickstart_values_heredoc="$(awk '/values\.yaml" <<EOF/{f=1;next} f&&/^EOF$/{exit} f{print}' deploy/kind/quickstart.sh)"
-if printf '%s' "$quickstart_values_heredoc" | grep -qE 'WARDYN_DEFAULT_POLICY|(CC2|CC3): *"?[A-Za-z0-9]' ; then
+if printf '%s' "$quickstart_values_heredoc" | grep -E 'WARDYN_DEFAULT_POLICY|(CC2|CC3): *"?[A-Za-z0-9]' >/dev/null ; then
     ok "deploy/kind/quickstart.sh's generated values state their own confinement floor"
 else
     bad "deploy/kind/quickstart.sh's generated values.yaml heredoc names neither WARDYN_DEFAULT_POLICY nor a runtimeClasses pin — the cluster then inherits the image's floor instead of stating its own (R-01); see deploy/compose/docker-compose.yaml's WARDYN_DEFAULT_POLICY override for the shape"
@@ -413,7 +417,7 @@ for wf in .github/workflows/*.yml; do
             *) continue ;;
         esac
         job_block="$(awk -v j="  $job:" '$0==j{f=1;next} f&&/^  [a-z0-9-]+:$/{exit} f{print}' "$wf")"
-        printf '%s' "$job_block" | grep -qF 'GH_REPO: ${{ github.repository }}' \
+        printf '%s' "$job_block" | grep -F 'GH_REPO: ${{ github.repository }}' >/dev/null \
             || { bad "$wf: $job calls gh without GH_REPO (no checkout)"; notify_gh_repo_fail=1; }
     done
 done
@@ -470,7 +474,7 @@ else
     # to `|| true`, and one review round found it untested.
     preflight_block="$(awk '$0=="  preflight-green:"{f=1;next} f&&/^  [a-z0-9-]+:$/{exit} f{print}' "$REL")"
     [ -n "$preflight_block" ] || { bad "$REL: no 'preflight-green:' job found — guard 13 is pointing at nothing"; preflight_fail=1; }
-    if printf '%s' "$preflight_block" | grep -qE '\|\| *true|\|\| *:([[:space:]]|$)|continue-on-error'; then
+    if printf '%s' "$preflight_block" | grep -E '\|\| *true|\|\| *:([[:space:]]|$)|continue-on-error' >/dev/null; then
         bad "$REL: preflight-green contains \`|| true\`, \`|| :\`, or \`continue-on-error\` — its gate can be satisfied without actually being green"
         preflight_fail=1
     fi
@@ -485,9 +489,9 @@ else
         # Every nightly job named "multi-arch build (...)" is matched by that name
         # PREFIX in release.yml, never listed in watched=.
         nightly_multiarch="$(yq -r '.jobs | to_entries[] | select((.value.name // "") | test("^multi-arch build \\(")) | .key' "$NIGHTLY" 2>/dev/null)"
-        printf '%s\n' "$nightly_multiarch" | grep -qx 'buildx-smoke' \
+        printf '%s\n' "$nightly_multiarch" | grep -x 'buildx-smoke' >/dev/null \
             || { bad "$NIGHTLY: buildx-smoke no longer has a \`multi-arch build (...)\` name — release.yml's separate matrix-row handling for it is now pointing at nothing"; preflight_fail=1; }
-        printf '%s\n' "$nightly_needs_raw" | grep -qx 'buildx-smoke' \
+        printf '%s\n' "$nightly_needs_raw" | grep -x 'buildx-smoke' >/dev/null \
             || { bad "$NIGHTLY: notify-new-lanes.needs no longer lists buildx-smoke — release.yml's separate matrix-row handling for it is now pointing at nothing"; preflight_fail=1; }
         nightly_watched_sorted="$(printf '%s\n' "$nightly_needs_raw" | grep -vxF -f <(printf '%s\n' "$nightly_multiarch") | sort)"
         rel_watched_sorted="$(printf '%s\n' $rel_watched | sort)"
@@ -558,11 +562,11 @@ else
     for n in $published; do
         want="$(printf '%s\n' "$rel_pairs" | grep -E "^$n " || true)"
         [ -n "$want" ] || { bad "$REL: published image '$n' has no matrix row with a dockerfile — guard 16 cannot compare it"; stage_fail=1; continue; }
-        printf '%s\n' "$staged_pairs" | grep -qxF "$want" \
+        printf '%s\n' "$staged_pairs" | grep -xF "$want" >/dev/null \
             || { bad "$NIGHTLY: published image '$n' has no staged row with release.yml's dockerfile ('$want') in buildx-smoke (stage: \"true\") or buildx-smoke-ui-sandbox — a release would have nothing to promote"; stage_fail=1; }
     done
     for n in $(printf '%s\n' "$staged_pairs" | awk '{print $1}'); do
-        printf '%s\n' "$published" | grep -qx "$n" \
+        printf '%s\n' "$published" | grep -x "$n" >/dev/null \
             || { bad "$NIGHTLY: staged image '$n' is not in $REL's publish set — a local-only or vendor-CLI image must never be pushed to staging"; stage_fail=1; }
     done
     for n in $(yq -r '.jobs.images.strategy.matrix.include[].name' "$REL"); do
@@ -599,7 +603,7 @@ else
     [ "$got_base" = "$want_base" ] \
         || { bad "$NIGHTLY: buildx-smoke-ui-sandbox's build-args must be exactly '$want_base' (the staged agent-base digest), not '$got_base'"; stage_fail=1; }
     base_run="$(yq -r '.jobs["buildx-smoke-ui-sandbox"].steps[] | select(.id == "base") | .run' "$NIGHTLY")"
-    printf '%s' "$base_run" | grep -qF '@sha256:[0-9a-f]{64}$' \
+    printf '%s' "$base_run" | grep -F '@sha256:[0-9a-f]{64}$' >/dev/null \
         || { bad "$NIGHTLY: buildx-smoke-ui-sandbox's base step no longer checks the ref is an @sha256 digest"; stage_fail=1; }
     # The promote job copies these digests, so its rows are the build jobs' rows
     # (name, dockerfile, float-latest) and preflight-green's staging step keeps
@@ -620,16 +624,16 @@ else
     nocomment() { sed -E '/^[[:space:]]*#/d'; }
     staging_run="$(yq -r '.jobs["preflight-green"].steps[] | select(.id == "staging") | .run' "$REL" | nocomment)"
     for pat in '^[[:space:]]*gh attestation verify ' '^[[:space:]]*--signer-workflow ' '^[[:space:]]*--source-digest ' 'org\.opencontainers\.image\.revision' '\-gt 86400 \]'; do
-        printf '%s' "$staging_run" | grep -qE -- "$pat" \
+        printf '%s' "$staging_run" | grep -E -- "$pat" >/dev/null \
             || { bad "$REL: preflight-green's staging step no longer has a command matching '$pat' — a promoted digest would lose part of its proof (attestation call, signer workflow, source commit, revision label, 86400-second age limit)"; stage_fail=1; }
     done
     # The age is the run's created_at: updated_at moves on `gh run rerun --failed`
     # while the image jobs it keeps stay as old as they were.
-    printf '%s' "$staging_run" | grep -qE -- '--jq \.created_at' && ! printf '%s' "$staging_run" | grep -q 'updated_at' \
+    printf '%s' "$staging_run" | grep -E -- '--jq \.created_at' >/dev/null && ! printf '%s' "$staging_run" | grep 'updated_at' >/dev/null \
         || { bad "$REL: preflight-green's staging step must read the nightly run's .created_at for its age and never updated_at (a rerun refreshes updated_at, so stale images would pass)"; stage_fail=1; }
     promote_copy="$(yq -r '.jobs.promote.steps[] | select(.name | test("^Copy the verified digest")) | .run' "$REL" | nocomment)"
-    printf '%s' "$promote_copy" | grep -qE '^[[:space:]]*cosign copy --force ' \
-        && printf '%s' "$promote_copy" | grep -qF 'test "$got" = "$DIGEST"' \
+    printf '%s' "$promote_copy" | grep -E '^[[:space:]]*cosign copy --force ' >/dev/null \
+        && printf '%s' "$promote_copy" | grep -F 'test "$got" = "$DIGEST"' >/dev/null \
         || { bad "$REL: the promote job's copy step must run cosign copy --force (a final tag's :latest already exists, and cosign refuses to move it without) and then check the tag's digest equals \$DIGEST"; stage_fail=1; }
     if [ "$stage_fail" = 0 ]; then ok "nightly's staged rows and build steps match release.yml's publish set (names, dockerfiles, build-args, platforms, provenance, no cache), and no local-only image is staged"; fi
 fi
@@ -661,7 +665,7 @@ missing="$(comm -23 <(printf '%s\n' "$from_keys") <(printf '%s\n' "$listed_keys"
 # A workflow naming the GHCR copy directly (the Postgres service containers)
 # must name a digest the mirror actually copies.
 for d in $(git grep -hoE 'ghcr\.io/cjohnstoniv/base-images[^[:space:]"'\'']*@sha256:[0-9a-f]{64}' -- .github/workflows | sed -E 's/.*@//' | sort -u); do
-    printf '%s\n' "$listed_keys" | grep -qF "@$d" \
+    printf '%s\n' "$listed_keys" | grep -F "@$d" >/dev/null \
         || { bad ".github/workflows names ghcr.io/cjohnstoniv/base-images@$d, which $BASE_LIST does not list (so it is never mirrored)"; mirror_fail=1; }
 done
 if [ "$mirror_fail" = 0 ]; then ok "every Docker Hub FROM pin ($(printf '%s\n' "$from_keys" | wc -l | tr -d ' ')) and every base-images digest a workflow names is in $BASE_LIST"; fi
@@ -684,7 +688,7 @@ else
     for job in $jobs; do
         has_if="$(yq -r ".jobs[\"$job\"].if // \"\"" "$NIGHTLY")"
         case "$job" in notify-*) want_skip=no ;; *) want_skip=yes ;; esac
-        printf '%s\n' "$scope_needs" | grep -qx "$job" && want_skip=no
+        printf '%s\n' "$scope_needs" | grep -x "$job" >/dev/null && want_skip=no
         if [ "$want_skip" = yes ] && [ "$has_if" != "$scope_if" ]; then
             bad "$NIGHTLY: job '$job' is not watched (not in notify-new-lanes.needs) so it must carry \`if: $scope_if\`, or scope=candidate runs it for nothing"; scope_fail=1
         fi
@@ -694,6 +698,11 @@ else
     done
     [ "$(yq -r '.on.workflow_dispatch.inputs.scope.default' "$NIGHTLY")" = full ] \
         || { bad "$NIGHTLY: workflow_dispatch input 'scope' must exist and default to full"; scope_fail=1; }
+    # ci.yml's train-suites job calls this workflow with scope=candidate (workflow_call), so the called
+    # input must exist, be a string (no choice type there) and default to full like the dispatch one.
+    [ "$(yq -r '.on.workflow_call.inputs.scope.default' "$NIGHTLY")" = full ] \
+        && [ "$(yq -r '.on.workflow_call.inputs.scope.type' "$NIGHTLY")" = string ] \
+        || { bad "$NIGHTLY: workflow_call input 'scope' must exist, be a string and default to full"; scope_fail=1; }
     if [ "$scope_fail" = 0 ]; then ok "nightly scope=candidate skips exactly the unwatched lanes"; fi
 fi
 
@@ -725,7 +734,7 @@ RELEASE_YML="${RELEASE_YML:-.github/workflows/release.yml}"
 if ! grep -qE 'tar -czf assets/wardyn-licenses\.tar\.gz .*licenses/texts' "$RELEASE_YML" \
     || ! grep -qE 'tar -czf assets/wardyn-licenses\.tar\.gz .*THIRD-PARTY-NOTICES\.md' "$RELEASE_YML"; then
     bad "$RELEASE_YML: 'Assemble the asset set' does not build assets/wardyn-licenses.tar.gz from licenses/texts and THIRD-PARTY-NOTICES.md"
-elif ! awk '/for want in/ { on = 1 } on { print } on && /; do/ { exit }' "$RELEASE_YML" | grep -q 'wardyn-licenses\.tar\.gz'; then
+elif ! awk '/for want in/ { on = 1 } on { print } on && /; do/ { exit }' "$RELEASE_YML" | grep 'wardyn-licenses\.tar\.gz' >/dev/null; then
     bad "$RELEASE_YML: the required-asset loop does not name wardyn-licenses.tar.gz"
 else
     ok "release.yml bundles the licence texts as wardyn-licenses.tar.gz and requires it"
@@ -778,6 +787,37 @@ if [ -n "$leaky" ]; then
     bad "an agent image keeps npm's build proxy in its layer:${leaky} — delete proxy https-proxy in the RUN that sets them"
 else
     ok "every agent image that sets npm's proxy keys deletes them in the same RUN"
+fi
+
+# ── 24. every walk script has a caller ──────────────────────────────────────
+# Two kind acceptance walks sat unreferenced until #3110, so the properties they
+# assert had no gate. A walk is named by the Makefile or a workflow, or here with
+# the reason it cannot run on a hosted runner.
+HAND_RUN_WALKS="runner-laptop-walk.sh survival-walk.sh"
+# runner-laptop-walk.sh: needs Docker Desktop and a second engine for the org.
+# survival-walk.sh: restarts the host's Docker daemon, so it needs a spare host
+# (its kind leg, kind-survival-walk.sh, is the nightly's).
+# A line that is only a comment names a script without running it. (No `grep -q` on the pipe: under
+# pipefail it can SIGPIPE git grep and turn a match into a failure.)
+walk_called() {
+    [ -n "$(git grep -hE "(^|[^A-Za-z0-9_-])$1" -- Makefile .github | grep -vE '^[[:space:]]*#' || true)" ]
+}
+orphan_walks=""
+for f in scripts/*-walk.sh; do
+    b="$(basename "$f")"
+    case " $HAND_RUN_WALKS " in *" $b "*) continue ;; esac
+    walk_called "$b" || orphan_walks="$orphan_walks $b"
+done
+for b in $HAND_RUN_WALKS; do
+    [ -f "scripts/$b" ] || bad "HAND_RUN_WALKS names '$b', which is not a script any more — drop it"
+    if walk_called "$b"; then
+        bad "HAND_RUN_WALKS names '$b', which the Makefile or a workflow now runs — drop it from the list"
+    fi
+done
+if [ -n "$orphan_walks" ]; then
+    bad "walk scripts that nothing runs:${orphan_walks} — wire each into the Makefile or a workflow (nightly.yml), or add it to HAND_RUN_WALKS with the reason"
+else
+    ok "every scripts/*-walk.sh has a caller or a stated reason it has none"
 fi
 
 if [ "$fail" = 0 ]; then echo "--- test-repo-guards: PASS ---"; else echo "--- test-repo-guards: FAIL ---"; fi

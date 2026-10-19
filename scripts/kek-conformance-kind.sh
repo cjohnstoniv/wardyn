@@ -36,7 +36,7 @@ cleanup() {
   rm -rf "$WORK"
 }
 
-kind get clusters 2>/dev/null | grep -qx "$CLUSTER" && die "a kind cluster named $CLUSTER already exists; set CLUSTER to another name"
+kind get clusters 2>/dev/null | grep -x "$CLUSTER" >/dev/null && die "a kind cluster named $CLUSTER already exists; set CLUSTER to another name"
 # The trap is installed only after the guard passes, so a pre-existing
 # cluster of the same name is never torn down by this script exiting.
 trap cleanup EXIT

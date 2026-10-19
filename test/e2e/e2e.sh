@@ -280,20 +280,20 @@ log "(h) auto-launched wardyn-proxy sidecar is healthy"
 PROXY_STATE="$(docker inspect "wardyn-proxy-${RUN_ID}" --format '{{.State.Status}} restarts={{.RestartCount}}' 2>/dev/null || echo missing)"
 if [[ "${PROXY_STATE}" == running* ]]; then ok "proxy sidecar ${PROXY_STATE}"; else
   bad "proxy sidecar not running: ${PROXY_STATE}"; fi
-if docker logs "wardyn-proxy-${RUN_ID}" 2>&1 | grep -q "listening"; then
+if docker logs "wardyn-proxy-${RUN_ID}" 2>&1 | grep "listening" >/dev/null; then
   ok "proxy logs show it is listening (config accepted, policy loaded)"; else
   bad "proxy logs missing 'listening': $(docker logs "wardyn-proxy-${RUN_ID}" 2>&1 | tail -3)"; fi
 
 # The sidecar's config must not be readable from its container (#1176): no
 # run token in its environment, however the config is delivered.
 if docker inspect "wardyn-proxy-${RUN_ID}" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
-     | grep -q 'run_token'; then bad "proxy container env carries its config (run token)";
+     | grep 'run_token' >/dev/null; then bad "proxy container env carries its config (run token)";
 else ok "proxy container env carries no config"; fi
 
 # ── 3a/b. L0 structural egress + metadata block (LIVE agent) ───────────────--
 log "(a) agent has NO default route"
 ROUTE="$(docker exec "${AGENT}" ip route 2>&1)"
-if echo "${ROUTE}" | grep -qw default; then bad "agent HAS a default route (L0 violated): ${ROUTE}";
+if echo "${ROUTE}" | grep -w default >/dev/null; then bad "agent HAS a default route (L0 violated): ${ROUTE}";
 else ok "no default route (only on-link internal subnet): ${ROUTE//$'\n'/ ; }"; fi
 
 log "(b) metadata IP 169.254.169.254 unreachable from sandbox"
@@ -361,7 +361,7 @@ else bad "(d) allow-listed proxy.golang.org was not tunnelled (http_connect=${AL
 
 DENY="$(docker exec "${AGENT}" curl -sS -m 12 --connect-timeout 8 \
          -x http://wardyn-proxy:3128 https://evil.example.com/ 2>&1)"
-if echo "${DENY}" | grep -q '403'; then ok "(c) unknown evil.example.com HELD by proxy (403, first-use approval)";
+if echo "${DENY}" | grep '403' >/dev/null; then ok "(c) unknown evil.example.com HELD by proxy (403, first-use approval)";
 else bad "(c) unknown domain was not 403-held: ${DENY}"; fi
 
 log "(c) first-use approval raised for the unknown domain"
@@ -545,9 +545,9 @@ GH_STDERR="$(cat "${GH_ERR}" 2>/dev/null || true)"
 echo "--- wardyn-git-helper (brokered run) ---"
 echo "stdout: ${GH_STDOUT:-<empty>}"
 echo "stderr: ${GH_STDERR}"
-if echo "${GH_STDOUT}" | grep -q '^password='; then
+if echo "${GH_STDOUT}" | grep '^password=' >/dev/null; then
   bad "(ii-a) git-helper emitted a credential on a BROKERED run — the installation token entered the sandbox"
-elif echo "${GH_STDERR}" | grep -qiE 'brokered through wardyn-proxy|refusing to mint'; then
+elif echo "${GH_STDERR}" | grep -iE 'brokered through wardyn-proxy|refusing to mint' >/dev/null; then
   ok "(ii-a) git-helper refused the brokered App lane — no token in the sandbox"
 else
   bad "(ii-a) git-helper neither refused nor emitted; unexpected: ${GH_STDERR:-<empty>}"
@@ -604,7 +604,7 @@ if [[ -n "${CRED_APID}" ]]; then
     "curl -sS -o /dev/null -m 30 -w '%{http_code}' \"${GB_URL}\"" 2>&1 || true)"
   GB_BODY="$(docker exec "${CC_AGENT_CTR}" sh -c "curl -sS -m 30 \"${GB_URL}\"" 2>&1 || true)"
   echo "git-broker route http_code=${GB_CODE} body=${GB_BODY}"
-  if echo "${GB_BODY}" | grep -qE 'ghs_|"token"|password='; then
+  if echo "${GB_BODY}" | grep -E 'ghs_|"token"|password=' >/dev/null; then
     bad "(ii-c) the git-broker route returned credential material to the sandbox"
   elif [[ "${GB_CODE}" == "200" ]]; then
     bad "(ii-c) brokered route returned 200 with no GitHub App configured — fail-closed broken"
@@ -624,7 +624,7 @@ LLM_BODY="$(docker exec "${CC_AGENT_CTR}" sh -c \
 LLM_CODE="$(docker exec "${CC_AGENT_CTR}" sh -c \
   'curl -sS -o /dev/null -m 20 -w "%{http_code}" "${ANTHROPIC_BASE_URL}/v1/messages" -H "content-type: application/json" -d "{\"model\":\"x\",\"max_tokens\":1,\"messages\":[]}"' 2>&1 || true)"
 echo "llm http_code=${LLM_CODE} body=${LLM_BODY}"
-if [[ "${LLM_CODE}" == "404" ]] && echo "${LLM_BODY}" | grep -q 'no_llm_credential'; then
+if [[ "${LLM_CODE}" == "404" ]] && echo "${LLM_BODY}" | grep 'no_llm_credential' >/dev/null; then
   ok "(iii) LLM route fail-closed: 404 no_llm_credential JSON (proxy holds/injects, none brokered)"
 else
   bad "(iii) LLM route did not fail closed (code=${LLM_CODE} body=${LLM_BODY})"
@@ -669,18 +669,18 @@ echo "absolute-uri internal-mint attempt -> ${ABS_BODY}"
 # token/jti/kind. The forward-proxy path must instead yield a policy deny (403)
 # or a connection/tunnel failure — proving the absolute-URI never hit the local
 # route and the run token was never injected onto it.
-if echo "${ABS_BODY}" | grep -qE '"token"|"jti"|"kind"|"expires_at"'; then
+if echo "${ABS_BODY}" | grep -E '"token"|"jti"|"kind"|"expires_at"' >/dev/null; then
   bad "(iv) absolute-URI request was MINTED (origin-form gating / no-inject broken): ${ABS_BODY}"
-elif echo "${ABS_BODY}" | grep -qiE 'grant_id is required|missing run claims|invalid decision'; then
+elif echo "${ABS_BODY}" | grep -iE 'grant_id is required|missing run claims|invalid decision' >/dev/null; then
   bad "(iv) absolute-URI reached the internal mint endpoint (run token injected on forward path): ${ABS_BODY}"
-elif echo "${ABS_BODY}" | grep -qiE 'approval.pending|first.?use'; then
+elif echo "${ABS_BODY}" | grep -iE 'approval.pending|first.?use' >/dev/null; then
   # The unknown control-plane host is HELD by the proxy's egress allowlist as a
   # first-use approval (demo policy first_use_approval=true) — the SAME hold as
   # an unknown domain (assertion c). It never reached the internal mint and no
   # run token was injected: the local route + token injection are origin-form
   # only, exactly as the fixed convention requires.
   ok "(iv) absolute-URI HELD by egress allowlist (first-use), never minted, run token NOT injected"
-elif echo "${ABS_BODY}" | grep -qiE '403|denied|Forbidden|refused|not allowed|could not|failed|error'; then
+elif echo "${ABS_BODY}" | grep -iE '403|denied|Forbidden|refused|not allowed|could not|failed|error' >/dev/null; then
   ok "(iv) absolute-URI policy-denied, never reached internal mint, run token NOT injected"
 else
   # No recognized signal (no held/first-use, no policy-deny, no mint). Do NOT

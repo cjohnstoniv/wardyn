@@ -96,7 +96,7 @@ consent export WARDYN_FORCE_RESET=1 WARDYN_AGE_KEY=AGE-SECRET-KEY-ENVFILE || fai
 consent export WARDYN_FORCE_RESET=1 WARDYN_AGE_KEY=AGE-SECRET-KEY-OTHER && fail "a shell WARDYN_AGE_KEY that differs from the .env key was allowed to TRUNCATE secrets that the .env key still decrypts (#2198)"
 consent export WARDYN_FORCE_RESET=1 WARDYN_AGE_KEY_FILE=/tmp/other.key && fail "a WARDYN_AGE_KEY_FILE in the shell was allowed to TRUNCATE the secrets (#2198)"
 consent export WARDYN_FORCE_RESET=1 WARDYN_PLATFORM_KEY_FILE=/tmp/other.key && fail "a WARDYN_PLATFORM_KEY_FILE in the shell was allowed to TRUNCATE the secrets (#2198)"
-grep -B3 "TRUNCATE secrets;'" "${SETUP_SH}" | grep -q 'stale_secrets_wipe_consent' \
+grep -B3 "TRUNCATE secrets;'" "${SETUP_SH}" | grep 'stale_secrets_wipe_consent' >/dev/null \
   || fail "setup.sh runs TRUNCATE secrets without asking stale_secrets_wipe_consent first (#2198)"
 unset -f ask_yn
 
@@ -113,7 +113,7 @@ for d in "${wr}/home/me/projects" "${wr}/home/me/projects/" "${wr}/home/me2" "${
   broad "${d}" && fail "workspaces_root_too_broad refused ${d}, which is not home or a folder above it"
 done
 rm -rf "${wr}"
-grep -B4 'env_set "${ROOT}/deploy/compose/.env" WARDYN_WORKSPACES_ROOT' "${SETUP_SH}" | grep -q 'workspaces_root_too_broad "${_eff_root}"' \
+grep -B4 'env_set "${ROOT}/deploy/compose/.env" WARDYN_WORKSPACES_ROOT' "${SETUP_SH}" | grep 'workspaces_root_too_broad "${_eff_root}"' >/dev/null \
   || fail "setup.sh remembers WARDYN_WORKSPACES_ROOT without checking a root from the environment or .env"
 
 echo "test-setup-launch: self-test PASS"

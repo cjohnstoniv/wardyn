@@ -151,7 +151,7 @@ cleanup() {
   rm -rf "${WORK}"
 }
 
-kind get clusters 2>/dev/null | grep -qx "${CLUSTER}" && die "a kind cluster named ${CLUSTER} already exists; set CLUSTER to another name"
+kind get clusters 2>/dev/null | grep -x "${CLUSTER}" >/dev/null && die "a kind cluster named ${CLUSTER} already exists; set CLUSTER to another name"
 trap cleanup EXIT
 
 HTTP_PORT="${WARDYN_KIND_UPGRADE_HTTP_PORT:-8380}"   # host-published, and the chart's own service.port

@@ -139,7 +139,7 @@ else
 fi
 
 # ── 2. cluster + a CNI that actually enforces NetworkPolicy ─────────────────
-if kind get clusters 2>/dev/null | grep -qx "${CLUSTER}"; then
+if kind get clusters 2>/dev/null | grep -x "${CLUSTER}" >/dev/null; then
   step "kind cluster ${CLUSTER} already exists — reusing it"
 else
   step "creating kind cluster ${CLUSTER}"

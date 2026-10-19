@@ -198,7 +198,7 @@ if [ "${candidate}" = 1 ]; then
     [ -f "${f}" ] && e2e_specs+=("$(basename "${f}" .spec.ts)")
   done < <(grep -E '^ui/e2e/[^/]+\.spec\.ts$' <<<"${changed}" || true)
   if [ "${#e2e_specs[@]}" -gt 0 ]; then
-    ss -ltn 2>/dev/null | grep -q ':8088 ' && log "[candidate] note: :8088 is held by another process; run-ui-e2e.sh picks free ports itself, so this does not collide"
+    ss -ltn 2>/dev/null | grep ':8088 ' >/dev/null && log "[candidate] note: :8088 is held by another process; run-ui-e2e.sh picks free ports itself, so this does not collide"
     # As in ci.yml: governance-changes needs the second-human switch on in the daemon, which changes every
     # other spec's writes, so it skips by name beside them and runs on its own with the switch on.
     four_eyes=0

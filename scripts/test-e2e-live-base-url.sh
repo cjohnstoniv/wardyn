@@ -35,7 +35,7 @@ fail() { echo "test-e2e-live-base-url: FAIL: $*" >&2; exit 1; }
 # this test), then close it as a standalone function.
 preamble="$(sed -n '/^run_lane() {$/,/^  if \[\[ -n "\${label}" \]\]; then$/p' "${RUN_E2E_SH}" | head -n -1)"
 [[ -n "${preamble}" ]] || fail "run_lane() preamble not found in ${RUN_E2E_SH}"
-echo "${preamble}" | grep -q 'WARDYN_E2E_BASE_URL' \
+echo "${preamble}" | grep 'WARDYN_E2E_BASE_URL' >/dev/null \
   || fail "extracted preamble no longer sets WARDYN_E2E_BASE_URL — extraction markers are stale"
 eval "${preamble}
 }"
