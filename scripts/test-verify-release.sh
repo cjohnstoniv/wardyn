@@ -169,10 +169,10 @@ pass "an imagetools failure reports its cause"
 
 # 3d. the chart is held to its own signature and to this release's appVersion (#2227).
 CHART_UNSIGNED=1 run 0.8.3 v0.8.3 bundle
-[ "${rc}" != 0 ] && printf '%s' "${out}" | grep -q '^FAIL helm chart cosign verify$' && ! printf '%s' "${out}" | grep -q '^FAIL .*wardynd' \
+[ "${rc}" != 0 ] && printf '%s' "${out}" | grep '^FAIL helm chart cosign verify$' >/dev/null && ! printf '%s' "${out}" | grep '^FAIL .*wardynd' >/dev/null \
   || fail "an unsigned chart (images signed) was not the one failure: rc=${rc} $(printf '%s' "${out}" | grep FAIL)"
 APP_VER=0.8.2 run 0.8.3 v0.8.3 bundle
-[ "${rc}" != 0 ] && printf '%s' "${out}" | grep -q "^FAIL helm chart appVersion '0.8.2' is not 0.8.3$" \
+[ "${rc}" != 0 ] && printf '%s' "${out}" | grep "^FAIL helm chart appVersion '0.8.2' is not 0.8.3$" >/dev/null \
   || fail "a chart whose appVersion is another release was accepted: rc=${rc}"
 run 0.8.3 v0.8.3 bundle
 grep -q '^helm show chart oci://ghcr.io/cjohnstoniv/charts/wardyn@sha256:0*1$' "${dir}/log" \
