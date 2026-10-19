@@ -57,7 +57,7 @@ export function isLiveRunState(state: RunState): boolean {
  * offers Review either way, and the decision card underneath is where the
  * real ceiling is enforced — same as today).
  */
-export function rowPresentation(run: AgentRun, adminView: boolean): RowPresentation {
+export function rowPresentation(run: AgentRun, _adminView: boolean): RowPresentation {
   // a lease-ended run (lost_reason "ended") stays RUNNING until
   // the ended-run grace stops it, but it has no network and is already OVER
   // — the server excludes it from the live set (store_runs_filtered.go's
@@ -75,11 +75,7 @@ export function rowPresentation(run: AgentRun, adminView: boolean): RowPresentat
       case "approval":
         return {
           hue: "amber",
-          word: you
-            ? adminView
-              ? RUNS_ROW_WORD.NEEDS_DECISION
-              : RUNS_ROW_WORD.NEEDS_APPROVAL
-            : RUNS_ROW_WORD.WAITING_FOR_ADMIN,
+          word: you ? RUNS_ROW_WORD.NEEDS_APPROVAL : RUNS_ROW_WORD.WAITING_FOR_ADMIN,
           subword: RUN_WAIT.waitingHeld(a.pending),
           action: you ? "review" : null,
           needsYou: you,

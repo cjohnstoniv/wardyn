@@ -18,7 +18,6 @@ describe("a waiting decision has one phrase", () => {
     expect(RUN_WAIT.waiting(3)).toBe("Needs 3 decisions");
     expect(RUN_WAIT.waitingHeld(1)).toBe("Needs a decision · sandbox held");
     expect(RUNS_ROW_WORD.NEEDS_APPROVAL).toBe("Needs a decision");
-    expect(RUNS_ROW_WORD.NEEDS_DECISION).toBe(RUNS_ROW_WORD.NEEDS_APPROVAL);
     expect(RUN_COCKPIT.held(1)).toBe("1 needs a decision");
     expect(RUN_COCKPIT.held(2)).toBe("2 need a decision");
   });

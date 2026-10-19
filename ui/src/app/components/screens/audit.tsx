@@ -152,7 +152,8 @@ function dayLabel(ts: number): string {
   const oneDayMs = 86_400_000;
   if (ts === todayStart) return "Today";
   if (ts === todayStart - oneDayMs) return "Yesterday";
-  return mediumDate(new Date(ts).toISOString());
+  // A row with an unreadable time yields a NaN day; say so instead of throwing.
+  return Number.isNaN(ts) ? "Unknown date" : mediumDate(new Date(ts).toISOString());
 }
 
 function groupByDay(events: AuditEvent[]): DayGroup[] {
