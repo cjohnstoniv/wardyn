@@ -16,7 +16,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// RunLocalFolders is the local-folder seed surface (0192). Optional for RunReviver's reason: the
+// RunLocalFolders is the local-folder seed surface (0195). Optional for RunReviver's reason: the
 // test doubles that embed store.Store would route these calls to a nil interface. The api layer
 // type-asserts, and refuses a local folder on a store without it; production is always PG.
 type RunLocalFolders interface {

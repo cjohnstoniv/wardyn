@@ -19,7 +19,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// A run's local folder (types.RunLocalFolder, migration 0192): a folder on the
+// A run's local folder (types.RunLocalFolder, migration 0195): a folder on the
 // person's computer that `wardyn sync` seeds into the sandbox. Dispatch holds
 // the agent's start until the first sync of it has completed, so the agent
 // never works on an empty or partial tree. The sync client says when a pass

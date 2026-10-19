@@ -178,7 +178,7 @@ type AgentRun struct {
 	// memory it was given and its main drive, written once at insert and summed as the runner's In use.
 	Reserved RunnerAmounts `json:"-"`
 	// LocalFolder is the folder on the creator's computer that `wardyn sync` seeds before the agent
-	// starts (0192, run_local_folder.go): written with the row, read back only by dispatch's hold.
+	// starts (0195, run_local_folder.go): written with the row, read back only by dispatch's hold.
 	LocalFolder *RunLocalFolder `json:"-"`
 	SandboxRef  string          `json:"sandbox_ref,omitempty"`
 	Image       string          `json:"image,omitempty"` // resolved sandbox image, kept for provenance; empty for legacy rows

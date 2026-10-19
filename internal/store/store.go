@@ -426,7 +426,7 @@ const runInsertCols = `id, created_at, updated_at, created_by, agent, repo, task
 const runReservedCols = `reserved_cpu_millis, reserved_memory_mib, reserved_disk_mib`
 
 // runInsertOnlyCols are written at insert and read back only by their own reader: local_folder
-// (0192, types.AgentRun.LocalFolder) by RunLocalFolderSeed.
+// (0195, types.AgentRun.LocalFolder) by RunLocalFolderSeed.
 const runInsertOnlyCols = `local_folder`
 
 const runCols = runInsertCols + `, failure_hint, status_detail, lost_at, lost_reason, containment_error, containment_error_at, ended_at, paused_at, paused_reason, active_at, end_tightened_at, admitted_at, not_recorded`

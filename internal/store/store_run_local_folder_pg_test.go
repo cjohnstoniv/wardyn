@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Postgres-backed tests for agent_runs.local_folder and its seed (migration
-// 0192). Guarded by WARDYN_TEST_PG; skipped cleanly when unset.
+// 0195). Guarded by WARDYN_TEST_PG; skipped cleanly when unset.
 package store_test
 
 import (
