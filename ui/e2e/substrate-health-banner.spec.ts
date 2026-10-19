@@ -5,7 +5,7 @@
 
 import type { Page } from "@playwright/test";
 
-import { test, expect, mockMemberRole } from "./fixtures";
+import { test, expect, mockMemberRole, navToRoute } from "./fixtures";
 import { VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
 import { SUBSTRATE_BANNER } from "../src/app/lib/substrate-banner-copy";
 
@@ -53,6 +53,18 @@ test.describe("the substrate_health band", () => {
 
     row = { ...FAILING, status: "ok", cause: undefined };
     await Promise.all([page.waitForResponse((r) => r.url().includes("/api/v1/setup/status")), page.reload()]);
+    await page.waitForLoadState("networkidle");
+    await expect(page.getByText(SUBSTRATE_BANNER.TITLE_AUTH, { exact: true })).toHaveCount(0);
+  });
+
+  // An admin who leaves the Admin view for the User view loses the band: it is shown first on the same
+  // stubbed row, so its absence on the User view's runs list is the view gate, not a status not yet landed.
+  test("an admin in the User view sees no band", async ({ page }) => {
+    await stubSubstrateRow(page, () => FAILING);
+    await page.goto("/admin/setup?step=environment");
+    await expect(page.getByText(SUBSTRATE_BANNER.TITLE_AUTH, { exact: true })).toBeVisible();
+    await navToRoute(page, "/runs");
+    await expect(page).toHaveURL(/\/runs$/);
     await page.waitForLoadState("networkidle");
     await expect(page.getByText(SUBSTRATE_BANNER.TITLE_AUTH, { exact: true })).toHaveCount(0);
   });

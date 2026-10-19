@@ -373,6 +373,8 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
       .then(() => setDecidedStatus("ready"))
       .catch(() => setDecidedStatus((st) => (st === "ready" ? st : "error")));
   }, [fetchDecided]);
+  // A view switch keeps this screen mounted: the other view's decided rows are not "ready" for this one.
+  React.useEffect(() => setDecidedStatus("idle"), [view]);
   React.useEffect(() => {
     if (filter === "decided") loadDecided();
   }, [filter, loadDecided]);
