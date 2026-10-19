@@ -6,6 +6,7 @@ package proxy
 import (
 	"bufio"
 	"crypto/tls"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -112,6 +113,24 @@ func TestVMNetContract(t *testing.T) {
 			t.Fatalf("the proxy dialled for a fronted flow (%d dials)", accepted.Load())
 		}
 	})
+	t.Run("refused flows inside one second: one row each, each its own flow", func(t *testing.T) {
+		buf.Reset()
+		const n = 3
+		for i := 0; i < n; i++ {
+			_, _ = get(fmt.Sprintf("f%d.other.test", i))
+		}
+		rs := waitRows(t, buf, n)
+		flows := map[string]bool{}
+		for _, r := range rs {
+			if r.RuleSource != "vmnet:sni-mismatch" || r.Flow == "" || r.Request.Host != "origin.test" || r.Request.Port != 443 || r.Repeat != 0 {
+				t.Fatalf("row %+v", r)
+			}
+			flows[r.Flow] = true
+		}
+		if len(rs) != n || len(flows) != n {
+			t.Fatalf("%d rows over %d flows for %d refused flows: %+v", len(rs), len(flows), n, rs)
+		}
+	})
 	t.Run("a bare host on :22 is refused by the port rule", func(t *testing.T) {
 		buf.Reset()
 		if c, err := g.Dial(addr, 22, 3*time.Second); err == nil {
@@ -165,7 +184,7 @@ func TestVMNetPlainHTTPMethodRule(t *testing.T) {
 	if resp.StatusCode != http.StatusForbidden || resp.Header.Get(egressHeaderReason) != "policy:method" {
 		t.Fatalf("POST = %d %v, want the proxy's policy:method refusal", resp.StatusCode, resp.Header)
 	}
-	rs := rows(t, buf)
+	rs := waitRows(t, buf, 2)
 	if len(rs) != 2 || rs[0].Request.Method != http.MethodGet || rs[0].Request.Path != "/p" || rs[1].RuleSource != "policy:method" {
 		t.Fatalf("rows %+v: want the GET allowed and the POST refused, each with its method and path", rs)
 	}

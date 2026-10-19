@@ -58,6 +58,8 @@ const (
 type env struct {
 	id, sockDir, caB64 string
 	images             map[string]string
+	accel              string   // QEMU's accelerator: kvm when /dev/kvm is a device here, else tcg
+	kvmArgs            []string // the docker run flags that hand /dev/kvm to the QEMU container
 }
 
 func docker(ctx context.Context, args ...string) (string, error) {
@@ -149,6 +151,13 @@ func setup(t *testing.T) *env {
 
 	// The run volume: vmnet (uid 65532) makes net.sock in it and QEMU, the
 	// same uid, connects.
+	// No silent fallback: with /dev/kvm present QEMU must get KVM or fail.
+	e.accel = "tcg"
+	if fi, err := os.Stat("/dev/kvm"); err == nil && fi.Mode()&os.ModeDevice != 0 {
+		e.accel, e.kvmArgs = "kvm", []string{"--device", "/dev/kvm", "--group-add", fmt.Sprint(kvmGroup(fi))}
+	}
+	t.Logf("QEMU accelerator: %s", e.accel)
+
 	e.sockDir = t.TempDir()
 	if err := os.Chmod(e.sockDir, 0o777); err != nil {
 		t.Fatal(err)
@@ -207,12 +216,7 @@ type probeRow struct {
 // the origin's network is the control.
 func (e *env) boot(t *testing.T, pinned bool) map[string]probeRow {
 	t.Helper()
-	args := []string{"run", "--rm", "--name", e.id + "-vm", "--cap-drop", "ALL", "--security-opt", "no-new-privileges"}
-	accel := "tcg"
-	if fi, err := os.Stat("/dev/kvm"); err == nil && fi.Mode()&os.ModeDevice != 0 {
-		accel = "kvm:tcg"
-		args = append(args, "--device", "/dev/kvm", "--group-add", fmt.Sprint(kvmGroup(fi)))
-	}
+	args := append([]string{"run", "--rm", "--name", e.id + "-vm", "--cap-drop", "ALL", "--security-opt", "no-new-privileges"}, e.kvmArgs...)
 	netdev, dns := "user,id=n0", "10.0.2.3"
 	if pinned {
 		args = append(args, "--network", "none", "-v", e.sockDir+":/run/vm")
@@ -221,7 +225,7 @@ func (e *env) boot(t *testing.T, pinned bool) map[string]probeRow {
 		args = append(args, "--network", e.id+"-up")
 	}
 	args = append(args, e.images["vm"],
-		"-machine", "q35,accel="+accel, "-cpu", "max", "-m", "512", "-smp", "2",
+		"-machine", "q35,accel="+e.accel, "-cpu", "max", "-m", "512", "-smp", "2",
 		"-nographic", "-no-reboot", "-kernel", "/vm/vmlinuz", "-initrd", "/vm/initrd.gz",
 		"-append", fmt.Sprintf("console=ttyS0 quiet panic=-1 vmprobe.dns=%s vmprobe.origin=%s vmprobe.proxy=%s vmprobe.ca=%s", dns, originIP, proxyIP, e.caB64),
 		"-netdev", netdev, "-device", "virtio-net-pci,netdev=n0,romfile=")

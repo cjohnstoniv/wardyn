@@ -127,7 +127,7 @@ func TestVMFlowStaging(t *testing.T) {
 		if line, _ := br.ReadString('\n'); line != "echo hello\n" {
 			t.Fatalf("tunnel carried %q", line)
 		}
-		rs := rows(t, buf)
+		rs := waitRows(t, buf, 1)
 		if dials.Load() != 1 || len(rs) != 1 || rs[0].Decision != egress.Allow || rs[0].Flow != flowA || rs[0].Request.Method != http.MethodConnect {
 			t.Fatalf("%d dials, rows %+v; want one dial and one allow carrying the flow", dials.Load(), rs)
 		}
@@ -144,7 +144,7 @@ func TestVMFlowStaging(t *testing.T) {
 		if st := postRefusal(t, srv.URL, `{"flow":"`+flowB+`","reason":"sni-mismatch","host":"origin.test","port":443,"detail":"other.test"}`); st != http.StatusNoContent {
 			t.Fatalf("refusal = %d", st)
 		}
-		rs := rows(t, buf)
+		rs := waitRows(t, buf, 2)
 		if len(rs) != 2 || rs[0].RuleSource != ruleSourcePort || rs[0].Flow != flowB {
 			t.Fatalf("rows %+v", rs)
 		}
@@ -190,7 +190,7 @@ func TestVMFlowStaging(t *testing.T) {
 				t.Errorf("%s = %d, want %d", body, st, want)
 			}
 		}
-		for _, r := range rows(t, buf) {
+		for _, r := range waitRows(t, buf, 4) {
 			if strings.ContainsAny(r.Request.Host, "\r\n") || !strings.HasPrefix(r.RuleSource, "vmnet:") {
 				t.Fatalf("row %+v", r)
 			}
@@ -212,7 +212,7 @@ func TestVMFlowContainerRunUnchanged(t *testing.T) {
 	if st != http.StatusOK || dials.Load() != 1 {
 		t.Fatalf("container CONNECT with relay headers = %d after %d dials, want an ordinary 200 tunnel", st, dials.Load())
 	}
-	if rs := rows(t, buf); len(rs) != 1 || rs[0].Flow != "" {
+	if rs := waitRows(t, buf, 1); len(rs) != 1 || rs[0].Flow != "" {
 		t.Fatalf("rows %+v: a container row never carries a flow", rs)
 	}
 	if st := postRefusal(t, srv.URL, `{"reason":"udp"}`); st != http.StatusNotFound {

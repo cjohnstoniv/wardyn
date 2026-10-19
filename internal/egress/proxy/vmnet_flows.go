@@ -29,7 +29,9 @@ import (
 //     parked decision and runs handleConnect's ordinary path (dial, allow row,
 //     tunnel). A refusal the relay makes instead is reported to
 //     routeVMNetRefusals, which consumes the parked decision and logs the deny,
-//     so an asked flow ends in exactly one row.
+//     so an asked flow ends in at most one row: the allow or the relay's deny
+//     (the relay never rate-limits a refusal that names a flow). A flow the guest
+//     abandons before its first flight expires from the table with none.
 //
 // A flow id the proxy does not hold (expired, or never parked because the table
 // was full) is evaluated afresh: never a free pass. Container runs ignore the

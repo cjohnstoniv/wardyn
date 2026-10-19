@@ -4,11 +4,41 @@
 package vmnet
 
 import (
+	"fmt"
 	"log/slog"
 	"sync"
 	"testing"
 	"time"
 )
+
+// TestReporterNeverHoldsAFlowsRefusal: refusals that end asked flows each go
+// out at once with their own flow, host and port, however many arrive in one
+// interval; only flow-less kinds are rate limited.
+func TestReporterNeverHoldsAFlowsRefusal(t *testing.T) {
+	c := &clock{t: time.Unix(1e9, 0)}
+	sent := make(chan refusal, 16)
+	rp := newReporter(c.now, slog.New(slog.DiscardHandler), func(r refusal) { sent <- r })
+	const n = 5
+	for i := 0; i < n; i++ {
+		rp.refuse(refusal{Flow: fmt.Sprintf("%016x", i), Reason: "sni-mismatch", Host: fmt.Sprintf("h%d.test", i), Port: 443 + i})
+		c.t = c.t.Add(100 * time.Millisecond)
+	}
+	got := map[string]refusal{}
+	for i := 0; i < n; i++ {
+		select {
+		case r := <-sent:
+			got[r.Flow] = r
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%d of %d flows' refusals sent within one interval", len(got), n)
+		}
+	}
+	for i := 0; i < n; i++ {
+		r, ok := got[fmt.Sprintf("%016x", i)]
+		if !ok || r.Host != fmt.Sprintf("h%d.test", i) || r.Port != 443+i || r.Repeat != 0 {
+			t.Fatalf("flow %d: %+v (sent %+v)", i, r, got)
+		}
+	}
+}
 
 func TestReporterRateLimitsPerKind(t *testing.T) {
 	c := &clock{t: time.Unix(1e9, 0)}

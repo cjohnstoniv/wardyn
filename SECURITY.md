@@ -91,8 +91,8 @@ disclose them — but a *more severe than documented* instance is in scope):
   interception ships only for operator-listed MITM-eligible hosts (opt-in, off by
   default); arbitrary-domain interception is planned for v1.0 (see [`ROADMAP.md`](ROADMAP.md)).
 - On a container run, a bare `allowed_domains` host is reachable on **every port**, as
-  [`docs/POLICIES.md`](docs/POLICIES.md) states. `WARDYN_EGRESS_PORT_RULE=on` (off by default, always on for desktop VM
-  runs) narrows it to ports 80 and 443 plus `host:port` entries. A port reached with the rule off is not a bypass.
+  [`docs/POLICIES.md`](docs/POLICIES.md) states. `WARDYN_EGRESS_PORT_RULE=on` (off by default) narrows it to ports 80
+  and 443 plus `host:port` entries; the proxy turns the rule on for every run dispatched as a desktop VM. A port reached with the rule off is not a bypass.
 - Kernel 0-day on a CC1 (shared-kernel runc) host; gVisor-sentry 0-day on CC2.
 - The `ld-linux`/`mmap` bypass of in-guest exec hooks (detection, not prevention).
 - The bounded minted-token usage window before kill-switch revocation.

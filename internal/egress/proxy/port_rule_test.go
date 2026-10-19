@@ -156,7 +156,7 @@ func TestPortRuleRefusalOverTheWire(t *testing.T) {
 		!strings.Contains(resp.Header.Get(egressHeaderDetail), "ports 80 and 443") {
 		t.Fatalf("status %d headers %v", resp.StatusCode, resp.Header)
 	}
-	if rs := rows(t, buf); len(rs) != 1 || rs[0].RuleSource != ruleSourcePort || rs[0].Request.Port != 22 {
+	if rs := waitRows(t, buf, 1); len(rs) != 1 || rs[0].RuleSource != ruleSourcePort || rs[0].Request.Port != 22 {
 		t.Fatalf("rows %+v", rs)
 	}
 	if !policyDecidedReason(ruleSourcePort) {
