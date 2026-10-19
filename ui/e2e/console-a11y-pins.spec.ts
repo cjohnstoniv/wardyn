@@ -48,7 +48,7 @@ test.describe("Console accessibility pins", () => {
     await expect(opener).toBeFocused();
   });
 
-  test("a destructive button's focus ring is full alpha, not a faint halo", async ({ page }) => {
+  test("a destructive button's focus ring is the same full ring as Cancel's, not a faint red halo", async ({ page }) => {
     const person = await seedPerson(page.request);
     await openPersonDrawerByKeyboard(page, person.email);
     await page.getByRole("dialog").getByRole("button", { name: "Sign out everywhere" }).click();
@@ -58,14 +58,17 @@ test.describe("Console accessibility pins", () => {
     await expect(confirm.getByRole("button", { name: "Cancel" })).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(action).toBeFocused();
-    // The ring eases in (transition-all), so read it once settled: the full 3px, and no alpha channel
-    // (rgba(...) or "/ 0.2") — a translucent ring is the faint halo.
-    await expect
-      .poll(async () => {
-        const shadow = await action.evaluate((el) => getComputedStyle(el).boxShadow);
-        return shadow.includes("3px") && !/rgba\(|\/\s*[\d.]+%?\s*\)/.test(shadow);
-      })
-      .toBe(true);
+    // The ring eases in (transition-all), so read each one once settled at its full 3px. The destructive
+    // action's ring must be the very ring Cancel gets: the faint red halo was a different, translucent one.
+    const ring = async (button: typeof action) => {
+      await expect.poll(() => button.evaluate((el) => getComputedStyle(el).boxShadow)).toContain("3px");
+      return button.evaluate((el) => getComputedStyle(el).boxShadow);
+    };
+    const destructive = await ring(action);
+    await page.keyboard.press("Shift+Tab");
+    const cancel = confirm.getByRole("button", { name: "Cancel" });
+    await expect(cancel).toBeFocused();
+    expect(destructive).toBe(await ring(cancel));
   });
 
   test("a chip with a reason is a named image, so a screen reader announces the reason", async ({ page }) => {

@@ -37,7 +37,7 @@ test("signed out in one tab, the other says so and carries on once signed back i
 });
 
 // The tab that signed out deliberately shows the sign-in gate; it must still hear another tab sign in, which
-// it shows by asking who is signed in again. (A token typed in the other tab is that tab's own, so this tab
+// it shows by probing the session again. (A token typed in the other tab is that tab's own, so this tab
 // has nothing to carry on with here; a shared cookie session is what lets it in, and the unit test pins that.)
 test("the tab that signed out re-checks who is signed in when the other tab signs in", async ({ page }) => {
   await gotoConsole(page);
@@ -50,7 +50,7 @@ test("the tab that signed out re-checks who is signed in when the other tab sign
 
   const dialog = other.getByRole("dialog", { name: REAUTH_DIALOG.TITLE });
   await expect(dialog).toBeVisible({ timeout: 15_000 });
-  const asked = page.waitForRequest((r) => new URL(r.url()).pathname === "/api/v1/me", { timeout: 15_000 });
+  const asked = page.waitForRequest((r) => new URL(r.url()).pathname === "/api/v1/runs", { timeout: 15_000 });
   await dialog.locator("#reauth-token").fill(ADMIN_TOKEN);
   await dialog.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(dialog).toBeHidden({ timeout: 15_000 });

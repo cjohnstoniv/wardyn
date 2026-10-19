@@ -892,7 +892,7 @@ test.describe("F-12 — LiveApprovals row gate mirrors canDecideApproval, not a 
   test("the Until picker refuses a time that has passed, and a card's hover reads as a date, not raw ISO", async ({ page }) => {
     clearPending();
     const marker = uniqueMarker("until-past");
-    const id = seedPending({ kind: "egress_domain", scope: { domain: marker, port: 443 } });
+    const id = seedPending({ kind: "egress_domain", scope: { domain: marker, port: 443 }, runId: runningRunId() });
     try {
       await gotoConsole(page);
       await gotoApprovals(page);
