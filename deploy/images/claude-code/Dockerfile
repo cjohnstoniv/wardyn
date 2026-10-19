@@ -152,12 +152,19 @@ COPY deploy/images/common/tmux.conf /etc/tmux.conf
 # MITM proxy. The proxy/registry knobs are build-only ARGs (NOT ENV) — a persistent
 # proxy ENV would leak into agent RUNS, whose only egress is wardyn-proxy.
 COPY deploy/images/README.md deploy/images/corp-ca.pem* /corp-ca/
+# NODE_EXTRA_CA_CERTS points at node-extra-ca.pem, NOT corp-ca.pem (#1114, as in the base
+# image): corp-ca.pem exists only when a corp CA was staged, and a dangling path makes Node
+# print "Ignoring extra certs" on every start of a default build. node-extra-ca.pem exists in
+# both branches: empty without a CA, the CA's bytes with one.
 RUN if [ -f /corp-ca/corp-ca.pem ]; then \
         mkdir -p /usr/local/share/ca-certificates && \
         cp /corp-ca/corp-ca.pem /usr/local/share/ca-certificates/corp-ca.crt && \
-        update-ca-certificates; \
+        update-ca-certificates && \
+        cp /corp-ca/corp-ca.pem /corp-ca/node-extra-ca.pem; \
+    else \
+        : > /corp-ca/node-extra-ca.pem; \
     fi
-ENV NODE_EXTRA_CA_CERTS=/corp-ca/corp-ca.pem
+ENV NODE_EXTRA_CA_CERTS=/corp-ca/node-extra-ca.pem
 
 # Install the Claude Code CLI. DEFAULT: npm (@anthropic-ai/claude-code, installs
 # the `claude` binary). Behind a corp proxy where public npm is blocked, set

@@ -125,7 +125,7 @@ agent-run --idle          # mode 3: interactive runs only — see step 3
   - Claude Code continues its last conversation (`claude --continue`) when the run landed the human in the agent; codex-cli starts a fresh session on the first attach.
   - An image without it re-runs `--idle` as on the first boot, so a seeded run starts its seed over.
 
-- When the control plane sets `WARDYN_TASK_MODE=exec` (BYOA/CI lane — see [`docs/CI.md`](../../docs/CI.md)), `agent-run` runs the task as a plain shell command (`/bin/sh -lc "<task>"`) instead of the agent harness: same MITM-CA/clone/ brokered-credential wiring, no model call.
+- When the control plane sets `WARDYN_TASK_MODE=exec` (BYOA/CI lane — see [`docs/CI.md`](../../docs/CI.md)), `agent-run` runs the task as a plain shell command (`/bin/sh -c "<task>"`, not a login shell: that would rebuild PATH from `/etc/profile` and lose the image's own toolchain PATH) instead of the agent harness: same MITM-CA/clone/ brokered-credential wiring, no model call.
 - The selftest relaxes accordingly (the harness binary becomes optional; `git` gates only when repo wiring is present).
 
 ### 3. `/usr/local/bin/wardyn-rec`
