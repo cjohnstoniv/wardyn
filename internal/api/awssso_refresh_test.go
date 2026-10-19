@@ -839,8 +839,10 @@ func TestAWSSSOTokenSpent_NotSpentIsNotMemoized(t *testing.T) {
 	s := &Server{cfg: Config{Store: st, BaseCtx: context.Background()}}
 	fp := awsSSOTokenFingerprint("rt-live")
 
-	if s.awsSSOTokenSpent(fp) || s.awsSSOTokenSpent(fp) {
-		t.Fatal("a token with no spent row answered spent")
+	for range 2 {
+		if s.awsSSOTokenSpent(fp) {
+			t.Fatal("a token with no spent row answered spent")
+		}
 	}
 	if _, cached := s.ssoRefreshSpent[fp]; cached {
 		t.Fatal("the not-spent answer was memoized; the map grows per rotation")
