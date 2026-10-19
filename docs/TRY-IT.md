@@ -130,7 +130,7 @@ wardyn run attach <id>
 <!-- Regenerated with `make screenshots` (docs.spec.ts) for 0.7.4. Freshness is
      flagged per-PR, as an advisory annotation from ci.yml's diagrams job
      (RELEASING.md "Prerequisites"), not by a release-cut step. -->
-![The runs board — every governed run with its state, barrier tier, and workspace](img/runs-board.png)
+![The runs board — every governed run with its state and workspace](img/runs-board.png)
 
 What you can verify live, even without keys:
 
