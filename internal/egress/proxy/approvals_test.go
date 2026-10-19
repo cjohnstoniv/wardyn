@@ -335,6 +335,56 @@ func TestResolveWaitHold(t *testing.T) {
 	})
 }
 
+// TestResolveWaitRejoinNamesTheHeldRow: a wait_for_review retry that re-enters
+// the hold on a cached PENDING approval tells the control plane so (rejoin_id),
+// which measures the console's hold from now; the first hold, which raised the
+// row, sends no rejoin. (Siblings held together send none: the concurrent
+// first-touch case in TestResolveWaitHold counts one POST at the default gap.)
+func TestResolveWaitRejoinNamesTheHeldRow(t *testing.T) {
+	saved := holdPollInterval
+	holdPollInterval = 5 * time.Millisecond
+	defer func() { holdPollInterval = saved }()
+	apID := uuid.New()
+	var mu sync.Mutex
+	var raises int
+	var rejoins []string
+	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			var body struct {
+				RejoinID string `json:"rejoin_id"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			mu.Lock()
+			if body.RejoinID != "" {
+				rejoins = append(rejoins, body.RejoinID)
+			} else {
+				raises++
+			}
+			mu.Unlock()
+			w.WriteHeader(http.StatusCreated)
+		}
+		_ = json.NewEncoder(w).Encode(types.ApprovalRequest{ID: apID, State: types.ApprovalPending})
+	}))
+	defer cp.Close()
+	ap := newApprovalClient(cp.URL, newTokenSource("tok"), uuid.New(), cp.Client())
+	ap.configureHold(types.FirstUseWaitForReview, 30*time.Millisecond, 4)
+
+	for i := range 2 {
+		if res := ap.ResolveWait(context.Background(), "egress.test"); res.State != apPending || res.ApprovalID != apID {
+			t.Fatalf("hold %d -> %+v, want pending on %s", i+1, res, apID)
+		}
+		// The retry comes later than rejoinGap after the first hold began.
+		ap.mu.Lock()
+		ap.hosts["egress.test"].holdStart = time.Now().Add(-2 * rejoinGap)
+		ap.mu.Unlock()
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if raises != 1 || len(rejoins) != 1 || rejoins[0] != apID.String() {
+		t.Fatalf("raises = %d, rejoins = %v; want one raise, then one rejoin naming %s", raises, rejoins, apID)
+	}
+}
+
 // the hold deadline must bound the WHOLE of ResolveWait, not just the
 // parked wait at the end of it.
 //

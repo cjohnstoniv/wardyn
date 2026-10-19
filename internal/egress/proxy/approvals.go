@@ -85,7 +85,14 @@ type hostApproval struct {
 	// once/run/always entry, or an `until` an older peer sent with no expiry —
 	// behaving like run is the honest read of that shape).
 	expiresAt time.Time
+	// holdStart is when the control plane last learned that a hold began on approvalID: the raise,
+	// or the last rejoin (see claimRejoin).
+	holdStart time.Time
 }
+
+// rejoinGap is how long after holdStart a further held request counts as re-entering the hold
+// (a rejoin the control plane is told of) rather than as a sibling of the hold under way.
+var rejoinGap = time.Second
 
 const pollInterval = 2 * time.Second
 
@@ -298,6 +305,9 @@ func (a *approvalClient) ResolveWait(ctx context.Context, host string) resolveRe
 	default:
 		return r
 	}
+	if a.claimRejoin(host, r.ApprovalID) {
+		a.rejoin(ctx, host, r.ApprovalID)
+	}
 
 	timeout := time.NewTimer(a.holdTimeout)
 	defer timeout.Stop()
@@ -473,6 +483,7 @@ func (a *approvalClient) Resolve(ctx context.Context, host string) resolveResult
 			st.state = apPending
 			st.approvalID = newID
 			st.lastPoll = time.Now()
+			st.holdStart = st.lastPoll
 		}
 		return resolveResult{State: apPending, ApprovalID: st.approvalID}
 	case needPoll:
@@ -533,18 +544,49 @@ type egressScope struct {
 type raiseBody struct {
 	Kind           string      `json:"kind"`
 	RequestedScope egressScope `json:"requested_scope"`
+	// RejoinID names the PENDING approval a held request re-enters the hold on (see rejoin).
+	RejoinID string `json:"rejoin_id,omitempty"`
 }
 
 func (a *approvalClient) raise(ctx context.Context, host string) (uuid.UUID, error) {
-	scope := egressScope{Host: host, Mode: string(a.firstUseMode)}
-	if a.firstUseMode == types.FirstUseWaitForReview {
-		scope.HoldSeconds = int(a.holdTimeout / time.Second)
-	}
-	body, err := json.Marshal(raiseBody{Kind: string(types.ApprovalEgressDomain), RequestedScope: scope})
+	body, err := json.Marshal(a.egressRaise(host))
 	if err != nil {
 		return uuid.Nil, err
 	}
 	return a.raiseBytes(ctx, body)
+}
+
+func (a *approvalClient) egressRaise(host string) raiseBody {
+	scope := egressScope{Host: host, Mode: string(a.firstUseMode)}
+	if a.firstUseMode == types.FirstUseWaitForReview {
+		scope.HoldSeconds = int(a.holdTimeout / time.Second)
+	}
+	return raiseBody{Kind: string(types.ApprovalEgressDomain), RequestedScope: scope}
+}
+
+// claimRejoin reports whether this hold on approval id re-enters it (rejoinGap or more after the
+// hold the control plane last learned of), claiming the rejoin so siblings held with it send none.
+func (a *approvalClient) claimRejoin(host string, id uuid.UUID) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	st := a.hosts[host]
+	if st == nil || st.approvalID != id || time.Since(st.holdStart) < rejoinGap {
+		return false
+	}
+	st.holdStart = time.Now()
+	return true
+}
+
+// rejoin tells the control plane that a held request re-entered the hold on the PENDING approval
+// id, so the console reads the row as held for this hold too (approval.Hold measures from the
+// rejoin). The raise body names the row, so the control plane stamps it and never creates one, even
+// if it was decided meanwhile. Best effort: a failure leaves only the console's reading behind.
+func (a *approvalClient) rejoin(ctx context.Context, host string, id uuid.UUID) {
+	rb := a.egressRaise(host)
+	rb.RejoinID = id.String()
+	if body, err := json.Marshal(rb); err == nil {
+		_, _ = a.raiseBytes(ctx, body)
+	}
 }
 
 // raiseRefusedError is a raise the control plane answered with a refusal that

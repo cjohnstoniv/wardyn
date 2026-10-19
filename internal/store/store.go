@@ -725,7 +725,7 @@ func (s PG) DecideApproval(ctx context.Context, id uuid.UUID, decision types.App
 // scanApproval's order. Same shape as agent_runs: the read list adds the
 // columns a raise does not set (see CreateApproval).
 const approvalInsertCols = `id, run_id, grant_id, kind, requested_scope, state, requested_at, decided_at, decided_by, minted_jti, reason`
-const approvalCols = approvalInsertCols + `, decision_scope, decision_expires_at, ` + approvalExpiresAtSQL
+const approvalCols = approvalInsertCols + `, decision_scope, decision_expires_at, ` + approvalExpiresAtSQL + `, last_rejoined_at`
 
 // approvalExpiresAtSQL computes a request's expiry from its run's CURRENT end
 // and wait: min(requested_at + wait_budget_sec, ends_at); NULL when the run has
@@ -745,6 +745,7 @@ func scanApproval(row pgx.Row) (types.ApprovalRequest, error) {
 	err := row.Scan(
 		&a.ID, &a.RunID, &a.GrantID, &kind, &scopeRaw, &state, &a.RequestedAt,
 		&a.DecidedAt, &a.DecidedBy, &a.MintedJTI, &a.Reason, &decisionScope, &a.DecisionExpiresAt, &a.ExpiresAt,
+		&a.LastRejoinedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.ApprovalRequest{}, ErrNotFound
