@@ -219,7 +219,7 @@ export function PhaseRail({
               {required.length > 0 && (
                 <div>
                   <div className="mb-2 flex items-center justify-between gap-2">
-                    <span className="text-xs uppercase tracking-wide text-muted-foreground">Required</span>
+                    <span className="label-eyebrow">Required</span>
                     <span className="text-xs text-muted-foreground">· {required.length}</span>
                   </div>
                   <ul className="flex flex-col gap-1">
@@ -231,7 +231,7 @@ export function PhaseRail({
               {configSteps.length > 0 && (
                 <div>
                   <div className="mb-2 flex items-center justify-between gap-2">
-                    <span className="text-xs uppercase tracking-wide text-muted-foreground">
+                    <span className="label-eyebrow">
                       Optional setup
                     </span>
                     <span className="text-xs text-muted-foreground">· {configSteps.length}</span>
@@ -243,7 +243,7 @@ export function PhaseRail({
               {demoCount > 0 && (
                 <div>
                   <div className="mb-2 flex items-center justify-between gap-2">
-                    <span className="text-xs uppercase tracking-wide text-muted-foreground">Demos</span>
+                    <span className="label-eyebrow">Demos</span>
                     <span className="text-xs text-muted-foreground">· {demoCount}</span>
                   </div>
                   {egressDemos.length > 0 && (

@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -190,5 +192,31 @@ func TestReRegistrationLeavesAnUnprovenContainerAlone(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "previous", earlier.String(), "offline", "state.json")); err != nil {
 		t.Fatalf("the state was not set aside: %v", err)
+	}
+}
+
+// TestReRegistrationSetAsideIsBoundedOnAHungEngine re-registers with two earlier runs while the engine
+// never answers: each run's call has its own bound, the first that runs out ends the pass (the next
+// would wait the same way), the start error names the container, and nothing moves.
+func TestReRegistrationSetAsideIsBoundedOnAHungEngine(t *testing.T) {
+	m, sub, _, org := managerFixture(t)
+	dir := m.dir
+	createLocal(t, m, org)
+	createLocal(t, m, org)
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+	defer func(b time.Duration) { setAsideCallBound = b }(setAsideCallBound)
+	setAsideCallBound = 50 * time.Millisecond
+	sub.hung = make(chan struct{}, 2)
+	err := SetAsidePrevious(t.Context(), dir, uuid.New(), sub, uuid.UUID.String)
+	if err == nil || !strings.Contains(err.Error(), "the container engine did not answer within 50ms for ") {
+		t.Fatalf("SetAsidePrevious = %v, want the bounded refusal naming the container", err)
+	}
+	if n := len(sub.hung); n != 1 {
+		t.Fatalf("the pass waited on %d containers, want 1", n)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "offline", "state.json")); err != nil {
+		t.Fatalf("state moved while its proxies were not stopped: %v", err)
 	}
 }

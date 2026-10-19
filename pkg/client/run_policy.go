@@ -36,6 +36,10 @@ type RunPolicyView struct {
 	Complete bool              `json:"complete"`
 	// StoredPolicyNow is set when the run started from a saved policy.
 	StoredPolicyNow *StoredPolicyNow `json:"stored_policy_now,omitempty"`
+	// Provenance is which layer set each top-level policy value (its json
+	// name): deployment, profile (the leaf's name), member or operator, the
+	// contact to ask, and whether the value is locked.
+	Provenance map[string]PolicyProvenance `json:"provenance,omitempty"`
 }
 
 // The RunPolicyView.State values.

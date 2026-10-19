@@ -1333,7 +1333,7 @@ func sshSessionRefusedBy(t *testing.T, client *ssh.Client, start func(*ssh.Sessi
 // TCP level (no auth needed to observe it; the cap bites before
 // NewServerConn is even called).
 func TestSSHGateway_MaxConnectionsEnforced(t *testing.T) {
-	h := newSSHTestHarness(t, newSSHMemStore(), &sshFakeRunner{})
+	h := newSSHTestHarness(t, newSSHMemStore(), &sshFakeRunner{}, func(c *Config) { c.SSHMaxHandshakesPerSource = maxSSHHandshakes })
 
 	var conns []net.Conn
 	defer func() {
@@ -1363,16 +1363,17 @@ func TestSSHGateway_MaxConnectionsEnforced(t *testing.T) {
 }
 
 // TestSSHGateway_EstablishedSessionsLeaveTheHandshakeBound: an authenticated
-// connection is counted against maxSSHConnections, not maxSSHHandshakes, so
-// with one session open every handshake slot is still free: the last of
-// maxSSHHandshakes raw connections still gets the server's version banner.
+// connection is counted against the established ceiling, not
+// maxSSHHandshakes, so with one session open every handshake slot is still
+// free: the last of maxSSHHandshakes raw connections still gets the server's
+// version banner.
 func TestSSHGateway_EstablishedSessionsLeaveTheHandshakeBound(t *testing.T) {
 	st := newSSHMemStore()
 	runID := uuid.New()
 	st.putRun(types.AgentRun{ID: runID, CreatedBy: "alice@example.com", State: types.RunRunning, SandboxRef: "sbx-1"})
 	priv, pub := mustSSHKeypair(t)
 	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(pub), Principal: "alice@example.com", PublicKey: string(ssh.MarshalAuthorizedKey(pub))})
-	h := newSSHTestHarness(t, st, &sshFakeRunner{})
+	h := newSSHTestHarness(t, st, &sshFakeRunner{}, func(c *Config) { c.SSHMaxHandshakesPerSource = maxSSHHandshakes })
 
 	client, err := sshDial(t, h, runID.String(), priv)
 	if err != nil {

@@ -56,6 +56,22 @@ describe("EmptyState / ErrorState — heading level", () => {
     expect(screen.getByRole("heading", { name: "Nothing here yet", level: 3 })).toBeInTheDocument();
   });
 
+  it("a compact EmptyState is the quieter in-card look: py-8 and an h4 title, still overridable", () => {
+    const { container, rerender } = render(<EmptyState size="compact" icon={() => null} title="Nothing here yet" />);
+    expect(screen.getByRole("heading", { name: "Nothing here yet", level: 4 })).toBeInTheDocument();
+    expect(container.firstElementChild).toHaveAttribute("data-size", "compact");
+    expect(container.firstElementChild).toHaveClass("py-8");
+    expect(container.firstElementChild).not.toHaveClass("py-16");
+    rerender(<EmptyState size="compact" icon={() => null} title="Nothing here yet" as="h3" />);
+    expect(screen.getByRole("heading", { name: "Nothing here yet", level: 3 })).toBeInTheDocument();
+  });
+
+  it("a page EmptyState keeps the hero spacing", () => {
+    const { container } = render(<EmptyState icon={() => null} title="Nothing here yet" />);
+    expect(container.firstElementChild).toHaveAttribute("data-size", "page");
+    expect(container.firstElementChild).toHaveClass("py-16");
+  });
+
   it("ErrorState's title is an h2 by default", () => {
     render(<ErrorState />);
     expect(screen.getByRole("heading", { name: "Something went wrong", level: 2 })).toBeInTheDocument();

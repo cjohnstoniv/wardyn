@@ -20,7 +20,7 @@ sandboxes inside the ceiling your admin set. There is nothing to install.
 - With `WARDYN_OIDC_SESSION_IDLE_TIMEOUT` set, a console tab left with no activity for that long is signed out, even before the session would otherwise lapse. The knob is in [ENV.md](ENV.md#wardyn_oidc_session_idle_timeout).
 - When it lapses you sign in again. A terminal you had open closes: the server re-checks it every 30 seconds, and a lapse or a cut ends it.
 - **Sign out** clears your cookie and ends every console session you have, in every browser. Your personal API tokens, SSH keys and runs keep working, except a console-launched run still waiting in a pool queue, which fails when it would start.
-- Signing out of Wardyn does not sign you out of your identity provider, nor the reverse: Wardyn has no front- or back-channel logout. A session ends at expiry, at your sign-out, or when an admin or SCIM deprovisioning cuts it.
+- Signing out of Wardyn does not sign you out of your identity provider, nor the reverse: Wardyn has no front-channel logout, and back-channel logout is off unless your operator turned it on ([ENV.md](ENV.md#wardyn_oidc_backchannel_logout)). A session ends at expiry, at your sign-out, or when an admin, SCIM deprovisioning or that back-channel logout cuts it.
 - A run's idle clock does not stop when your terminal closes. A lapse that closes your terminal leaves the run under its own idle and end limits, which [run lifetime](operations/run-lifetime.md#the-clocks-that-end-or-freeze-a-run) explains. A run with idle stop off never stops for inactivity.
 
 ## What you can and cannot do

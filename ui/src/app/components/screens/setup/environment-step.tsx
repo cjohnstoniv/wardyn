@@ -371,7 +371,7 @@ export function EnvironmentStep({
           <thead>
             <tr>
               <th className="w-[220px] border-b bg-muted/40 px-4 py-3 text-left align-bottom font-normal">
-                <span className="text-xs uppercase tracking-wide text-muted-foreground">
+                <span className="label-eyebrow">
                   Barrier tier
                 </span>
               </th>

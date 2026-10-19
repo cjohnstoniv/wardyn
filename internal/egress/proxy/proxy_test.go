@@ -485,7 +485,9 @@ func approvalCPStub(getState *atomic.Value, raises, gets *atomic.Int32) *httptes
 	apID := uuid.New()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
-			if raises != nil {
+			// A rejoin (rejoin_id) names a raised row and creates none, so it is not counted as a raise.
+			b, _ := io.ReadAll(r.Body)
+			if raises != nil && !bytes.Contains(b, []byte(`"rejoin_id"`)) {
 				raises.Add(1)
 			}
 			w.WriteHeader(http.StatusCreated)

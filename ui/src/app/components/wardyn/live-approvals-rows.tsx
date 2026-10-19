@@ -22,8 +22,10 @@ import {
   DENY_SCOPE_HINT,
   DENY_SCOPE_LABEL,
   SECURITY_ONLY_REASON,
+  UNTIL_PAST,
   UNTIL_PRESETS,
 } from "./copy";
+import { toDatetimeLocalValue } from "../../lib/datetime-local";
 
 // outline-none + the three focus-visible: classes are CONSOLE-RULES.md §34's
 // standard ring (button.tsx#buttonVariants carries the same three) — these
@@ -76,6 +78,8 @@ export function ScopeMenu({
   // hour/minute/AM-PM, and pick() commits the decision (or, for deny, opens
   // the confirm dialog pre-loaded with whatever value fired last).
   const [customUntil, setCustomUntil] = React.useState<string | null>(null);
+  // Set when a confirm lands on a time that passed while the menu was open, so the hint shows without a re-render trigger.
+  const [stale, setStale] = React.useState(false);
   const labels = verb === "approve" ? APPROVAL_SCOPE_LABEL : DENY_SCOPE_LABEL;
   const hints = verb === "approve" ? APPROVAL_SCOPE_HINT : DENY_SCOPE_HINT;
   const alwaysDisabled = !hasWorkspace || !securityOperator;
@@ -85,8 +89,10 @@ export function ScopeMenu({
     setOpen(false);
     setUntilMode(false);
     setCustomUntil(null);
+    setStale(false);
     onPick(scope, until);
   };
+  const untilPast = !!customUntil && (stale || Date.parse(customUntil) <= Date.now());
 
   return (
     <Popover
@@ -167,15 +173,28 @@ export function ScopeMenu({
               <input
                 type="datetime-local"
                 aria-label="Pick a time"
-                onChange={(e) => setCustomUntil(e.target.value ? new Date(e.target.value).toISOString() : null)}
+                min={toDatetimeLocalValue(new Date())}
+                onChange={(e) => {
+                  setStale(false);
+                  setCustomUntil(e.target.value ? new Date(e.target.value).toISOString() : null);
+                }}
                 className="h-7 w-full rounded-md border border-border bg-background px-1.5 text-xs text-foreground"
               />
+              {untilPast && (
+                <p role="alert" className="text-meta text-danger">
+                  {UNTIL_PAST}
+                </p>
+              )}
               <Button
                 size="sm"
                 variant="outline"
                 className="h-6 w-full text-meta"
-                disabled={!customUntil}
-                onClick={() => pick("until", customUntil ?? undefined)}
+                disabled={!customUntil || untilPast}
+                onClick={() => {
+                  // The time may have passed while the menu sat open: re-check at the click, not only at render.
+                  if (customUntil && Date.parse(customUntil) <= Date.now()) return setStale(true);
+                  pick("until", customUntil ?? undefined);
+                }}
               >
                 Use this time
               </Button>

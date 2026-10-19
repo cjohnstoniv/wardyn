@@ -29,6 +29,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Every boolean `wardynd` and the runner substrates read goes through that one parser (`1`/`true`/`yes`/`on`, `0`/`false`/`no`/`off`, anything else exits 2 at boot).
 - The exception is `WARDYN_ENVBUILD_REGISTRY_INSECURE`: it takes Go's `strconv.ParseBool` forms (`1`/`t`/`true`, `0`/`f`/`false`, no `yes` or `on`) and fails the build on anything else.
 - The six `internal/api` switches read per request (`WARDYN_EGRESS_SECOND_HUMAN`, `WARDYN_CAPABILITY_SECOND_HUMAN`, `WARDYN_GOVERNANCE_SECOND_HUMAN`, `WARDYN_ALLOW_USER_ENV_SECRET`, `WARDYN_ALLOW_AGENT_TELEMETRY`, `WARDYN_GIT_PAT_API_BITBUCKET_SERVER`) are also read once at boot so a bad value is refused there.
+- So is `WARDYN_COMPONENT_ENV_RESERVE_EDITORS`, read on every component check.
 - Two `wardyn-proxy` parsers are kept on purpose.
 - `WARDYN_LLM_SCAN` is a kill switch that can only disable.
 - It also accepts `disable`/`disabled`/`none` and `enable`/`enabled`, and a garbage value exits 2.
@@ -157,6 +158,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_RUNNERD_HARD_DENY_CIDRS` | CIDR list | (unset) | **`serve --substrate k8s`**, chart-set: further in-cluster CIDRs (pod and Service ranges) every proxy hard-denies |
 | `WARDYN_RUNNERD_POD_SELECTOR` | JSON object | (required) | **`serve --substrate k8s`**, chart-set: runnerd's own pod labels, which each run's proxy NetworkPolicy admits for the relay and sink ports |
 | `WARDYN_RUNNERD_ARCH` | `amd64` or `arm64` | (required for k8s) | **`register`, `serve --substrate k8s`**, `--arch`'s twin, chart `sandbox.arch`: run pods get this `kubernetes.io/arch` node selector and the runner reports it. Another selector arch refuses boot; Docker refuses it. Mixed clusters install one release per arch |
+| `WARDYN_DOCKER_PROXY_SANDBOX_PEERS_ONLY` | bool | off | **`wardynd` and `wardyn-runnerd`, Docker substrate**: each run's proxy serves only callers on the run's own network; others are closed before a byte is read |
 | `WARDYN_ALLOW_UNENFORCEABLE_CAPS` | bool | off | escape hatch: allow a run to start on a host where the resource caps (memory/pids/cpu) can't actually be enforced. Off by default, the gate fails closed; it applies to sandbox launches only. [Details](#wardyn_allow_unenforceable_caps) |
 | `WARDYN_SANDBOX_DEFAULT_CPU_MILLIS` | int | `0` (= `2000`) | milli-CPU limit for a sandbox whose policy sets none, read by every fallback site through `runner.EffectiveLimits()` (flag `-sandbox-default-cpu-millis`). The Helm chart sets `1000`. [Details](#wardyn_sandbox_default_cpu_millis) |
 | `WARDYN_SANDBOX_DEFAULT_MEMORY_MIB` | int | `0` (= `4096`) | memory limit (MiB) for a sandbox whose policy sets none, same sites as `WARDYN_SANDBOX_DEFAULT_CPU_MILLIS` (flag `-sandbox-default-memory-mib`). The Helm chart sets `2048` (`runner.sandbox.defaultResources.memoryMiB`) |
@@ -196,12 +198,14 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_GEN_AGE_KEY` | bool | `false` | generate a fresh age identity and exit (flag `-gen-age-key`) |
 | `WARDYN_LOCAL_MODE` | bool | `false` | LOCAL HOST MODE: bypass public-API auth (flag `-local-mode`) |
 | `WARDYN_LOCAL_OPERATOR` | string | `local:<os-user>` | operator principal stamped in local-mode (flag `-local-operator`) |
-| `WARDYN_LOCAL_TRUST_FORWARDER` | bool | **binary: `false`; compose: `true`** | accept a non-loopback peer under local-mode (flag `-local-trust-forwarder`) |
+| `WARDYN_LOCAL_TRUST_FORWARDER` | bool | **binary: `false`; compose: `true`** | under local-mode, also accept the peers `WARDYN_LOCAL_TRUSTED_PEERS` names (flag `-local-trust-forwarder`) |
+| `WARDYN_LOCAL_TRUSTED_PEERS` | string (IP/CIDR list) | (unset: resolved at boot) | the non-loopback peers `WARDYN_LOCAL_TRUST_FORWARDER` trusts (flag `-local-trusted-peers`). Unset: the default gateway and wardynd's own addresses, where published-port traffic arrives (measured on Linux Docker and rootless Podman 4.9) |
 | `WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC` | bool | `false` | override: allow boot with `-local-mode` explicitly set alongside a configured `WARDYN_OIDC_ISSUER`, which silently disables the configured OIDC/SSO admin-member RBAC deployment; normally refused (`resolveLocalMode`, [`cmd/wardynd/boot_flags.go`](../cmd/wardynd/boot_flags.go)) (flag `-allow-local-mode-with-oidc`). [Details](#wardyn_allow_local_mode_with_oidc) |
 | `WARDYN_USER_DESKTOP` | bool | `false` | **user desktop**: asserts that the human using this daemon is a **user**; boot is **refused** unless local mode is off and OIDC is configured (flag `-member-mode`). Set `WARDYN_ORG_URL` to enrol, see [Enrolling into an org control plane](DESKTOP.md#enrolling-into-an-org-control-plane). [Details](#wardyn_user_desktop) |
 | `WARDYN_ORG_URL` | string | (unset) | Desktop enrolment URL (`-org-url`); unset disables hybrid posture. Requires `WARDYN_USER_DESKTOP`; failed enrolment refuses boot. [Details](#wardyn_org_url) |
 | `WARDYN_RUNNER_ORG_URL` | string | (unset) | Public runner identity binding (`-runner-org-url`); invalid/unset refuses registration/streams. HTTPS or loopback HTTP; no userinfo/query/fragment. Never inferred from headers. |
 | `WARDYN_RUNNER_STATE_DIR` | path | (unset) | **`wardyn-runnerd setup`** writes it into the service's env file ([`setup_host.go`](../cmd/wardyn-runnerd/setup_host.go)), the private directory holding the runner's identity (`runner.json`). The Linux unit passes it, and the macOS LaunchAgent that directory, as `serve --state-dir`; `wardyn-runnerd` never reads the variable. |
+| `WARDYN_RUNNER_STREAM_HANDSHAKES_PER_ADDRESS` | int | `32` | runner-stream handshakes in progress per client address, per replica (flag `-runner-stream-handshakes-per-address`); over it: `429` |
 | `WARDYN_TRUSTED_PROXIES` | string (CIDR list) | (unset) | Reverse proxies whose `X-Forwarded-For` names the client (`-trusted-proxies`), read right to left to the first unlisted address; a bad chain keeps the peer, kept in audit as `data.proxy_peer`. `/0` refuses boot. [Details](operations/hybrid-laptops.md#trusted-proxies) |
 | `WARDYN_ORG_ENROLMENT_TOKEN` 🔒 | string | (unset) | Secret enrolment token this device presents to `WARDYN_ORG_URL`. Setting it with `WARDYN_ORG_URL` unset is **refused** at boot; it is required on first boot (flag `-org-enrolment-token`). [Details](#wardyn_org_enrolment_token) |
 | `WARDYN_ORG_ENROLMENT_TOKEN_FILE` | string (path) | (unset) | File holding `WARDYN_ORG_ENROLMENT_TOKEN`'s value, read once at boot. Setting it together with `WARDYN_ORG_ENROLMENT_TOKEN` refuses boot (`resolveSecretFiles`, [`cmd/wardynd/secret_file.go`](../cmd/wardynd/secret_file.go)). [Details](#wardyn_org_enrolment_token_file) |
@@ -269,6 +273,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_PRINT_GROUNDTRUTH_TOKEN` | bool | `false` | mint+print a host-sensor token and exit (flag `-print-groundtruth-token`) |
 | `WARDYN_AGENT_IMAGES` | string (JSON) | (unset) | agent-name → OCI image ref map (flag `-agent-images`). The `base` key is what the setup probe resolves (only `curl`). Refs should be multi-arch indexes; for one architecture per tag add `<key>@arm64` or `@amd64` beside the required plain key ([why](adoption/corp-image-authoring.md#multi-arch-images)) |
 | `WARDYN_ALLOW_AGENT_TELEMETRY` | bool | (unset) | re-enable the agent CLI's own telemetry inside sandboxes. Default-unset SUPPRESSES it. [Details](#wardyn_allow_agent_telemetry) |
+| `WARDYN_COMPONENT_ENV_RESERVE_EDITORS` | bool | off | reserves `EDITOR`, `VISUAL`, `PAGER`, `GIT_EDITOR`, `GIT_PAGER` and `GIT_SEQUENCE_EDITOR`: no component may set them. A stored component that does is refused at its next save or attach |
 | `WARDYN_ALLOW_USER_ENV_SECRET` | bool | (unset) | let MEMBERS hold `env_secret` and `file_secret` grants. Default-unset DROPS a member's `env_secret` or `file_secret` grant even when the operator's ceiling lists the exact pairing (`dropAdminOnlyEnvSecretGrants`, `inline_policy_bounds.go`). [Details](#wardyn_allow_user_env_secret) |
 | `WARDYN_EGRESS_SECOND_HUMAN` | bool | (unset) | four-eyes on egress approvals: the human who DECIDES an `egress_domain` approval must not be the human who created the run (`requireSecondHuman`, `approvals_second_human.go`). **Local mode REFUSES it**, and the `admin-token` principal BYPASSES it. [Details](#wardyn_egress_second_human) |
 | `WARDYN_CAPABILITY_SECOND_HUMAN` | bool | (unset) | four-eyes on Azure DevOps capability escalations: the human who DECIDES one must not be the human who created the run. **Local mode REFUSES it**, and the `admin-token` principal BYPASSES it. [Details](#wardyn_capability_second_human) |
@@ -288,9 +293,13 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_SSH_LISTEN` | string | daemon: (unset); **one-line install and desktop envelope: `:2222`** | SSH gateway listen address, e.g. `:2222` (flag `-ssh-listen`). **Empty = off = no listener, no new surface** — the host key is not even generated/persisted unless this is set (`buildOptionalFeatures`, [`cmd/wardynd/boot_deps.go`](../cmd/wardynd/boot_deps.go)). [Details](#wardyn_ssh_listen) |
 | `WARDYN_SSH_ADVERTISE` | string | (unset) | externally-reachable `host[:port]` for the SSH gateway (flag `-ssh-advertise`); purely advisory copy, the gateway itself binds `WARDYN_SSH_LISTEN`. [Details](#wardyn_ssh_advertise) |
 | `WARDYN_SSH_PROXY_COMMAND` | string | (unset) | an ssh `ProxyCommand` published on `/healthz` as `ssh.proxy_command` (flag `-ssh-proxy-command`), for an estate whose only way in is a TLS-terminating listener on 443. [Details](#wardyn_ssh_proxy_command) |
+| `WARDYN_SSH_MAX_CONNECTIONS` | int | `64` | authenticated SSH gateway connections, per replica (flag `-ssh-max-connections`). See [SSH.md](SSH.md#bounds) |
+| `WARDYN_SSH_MAX_HANDSHAKES_PER_SOURCE` | int | `16` | SSH gateway handshakes in progress per source address, per replica (flag `-ssh-max-handshakes-per-source`) |
 | `WARDYN_SSH_MAX_SESSIONS_PER_RUN` | int | `4` | most concurrent SSH channels one run may hold, 1 to 64 (flag `-ssh-max-sessions-per-run`); boot refuses others. [Details](#wardyn_ssh_max_sessions_per_run) |
 | `WARDYN_SYNC_DIR` | path | `/home/agent/work` | not daemon env: an SSH `env` request read only by the `wardyn-sync` subsystem; see [SSH.md](SSH.md) |
 | `WARDYN_SYNC_DIRECTION` | enum | `unknown` | not daemon env: as `WARDYN_SYNC_DIR`; client-declared `push` or `pull`; see [SSH.md](SSH.md) |
+| `WARDYN_SYNC_DENY` | string | (unset) | comma-separated ignore patterns `wardyn sync` always leaves out (flag `-sync-deny`). [Details](#wardyn_sync_deny) |
+| `WARDYN_LOCAL_FOLDER_SEED_WAIT` | duration | `10m` | how long a run holds its agent for its `local_folder`'s first sync (flag `-local-folder-seed-wait`). [Details](#wardyn_local_folder_seed_wait) |
 | `WARDYN_SSH_ROLE_TTL` | duration | `24h` | how stale a registered SSH key's admin-override stamp may be before `sshAuth` refuses the override (flag `-ssh-role-ttl`); since 0.8.5 it bounds only runs with no personal owner. [Details](#wardyn_ssh_role_ttl) |
 | `WARDYN_API_TOKEN_MAX_TTL` | duration | (unset: no cap) | longest lifetime a newly minted per-user API token may have (flag `-api-token-max-ttl`); with no cap set, an omitted TTL means the token never expires. [Details](#wardyn_api_token_max_ttl) |
 | `WARDYN_ROLE_STAMP_TTL` | duration | (unset = off) | the oldest an API token's or console session's role stamp may be (flag `-role-stamp-ttl`); an older stamp sends the owner through sign-in again. Unset or `0` changes nothing. [Details](#wardyn_role_stamp_ttl) |
@@ -300,6 +309,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_OIDC_SILENT_REAUTH` | bool | `false` | a browser that signed in, and has not signed out since, first asks the identity provider with `prompt=none` (flag `-oidc-silent-reauth`). `false` changes nothing. [Details](#wardyn_oidc_silent_reauth) |
 | `WARDYN_OIDC_LOGIN_HINT` | bool | `false` | a browser that signed in sends that account as `login_hint` on its next sign-in (flag `-oidc-login-hint`). `false` changes nothing. [Details](#wardyn_oidc_login_hint) |
 | `WARDYN_OIDC_BROWSER_SESSION_COOKIE` | bool | `false` | sends the console session cookie without an expiry, so the browser drops it when it closes (flag `-oidc-browser-session-cookie`). `false` changes nothing. [Details](#wardyn_oidc_browser_session_cookie) |
+| `WARDYN_OIDC_BACKCHANNEL_LOGOUT` | bool | `false` | serves `POST /auth/backchannel-logout`, where the provider's signed logout token ends that person's console sessions (flag `-oidc-backchannel-logout`). `false` changes nothing. [Details](#wardyn_oidc_backchannel_logout) |
 | `WARDYN_UI_SANDBOX_LISTEN` | string | (unset) | UI-sandbox gateway listen address, e.g. `:8081` (flag `-ui-sandbox-listen`); empty means off, with no listener. It must differ from `WARDYN_LISTEN` and boot refuses if it does not. [Details](#wardyn_ui_sandbox_listen) |
 | `WARDYN_UI_SANDBOX_ADVERTISE` | string | (unset) | externally-reachable base URL of that gateway, e.g. `https://wardyn-ui.example.com` (flag `-ui-sandbox-advertise`); purely advisory copy, the gateway binds `WARDYN_UI_SANDBOX_LISTEN`, not this; unset logs a boot warning. [Details](#wardyn_ui_sandbox_advertise) |
 | `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` | string | (unset) | optional per-run origin for the UI-sandbox gateway, e.g. `https://run-{run}.ui.example.com` (flag `-ui-sandbox-origin-template`); needs wildcard DNS and a wildcard certificate. [Details](#wardyn_ui_sandbox_origin_template) |
@@ -631,7 +641,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 ### `WARDYN_HOST_MIN_MEM_AVAILABLE_MIB`
 
-- Refuse every run launch (new run, record, harness sign-in, source scan, site-config probe) with 503 `host_capacity_refused`, a `reason` and `Retry-After`, while `/proc/meminfo` `MemAvailable` is below this many MiB; checked before any run row or identity exists.
+- Refuse every run launch (new run, record, harness sign-in, source scan, site-config probe) with 503 `host_capacity_refused`, a `reason`, a `message` and `Retry-After`, while `/proc/meminfo` `MemAvailable` is below this many MiB; checked before any run row or identity exists.
 - A workspace image build (`POST /workspaces/{id}/build`) is refused the same way.
 - `0` (the default) disables it.
 - Read from the kernel wardynd runs on, never its own cgroup's `memory.max`: runs are sibling containers or pods, not children of wardynd's cgroup, so that limit says nothing about room for another run.
@@ -1374,7 +1384,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Every other member-reusable kind is bounded after delivery:
   - `api_key` never leaves the broker;
   - `git_pat` is set at the proxy (or, with the broker off, reaches git through the helper);
-  - `ssh_key` is wiped after the clone, and an approval-gated grant is delivered once.
+  - `ssh_key` stays at the proxy, behind an SSH agent closed after the clone.
   - [CREDENTIALS.md](CREDENTIALS.md) says which kinds enter.
 - While an `env_secret` is a raw value in the process env for the run's whole life, and a `file_secret` a file for the same time, each with no mint, no TTL and nothing to revoke.
 - An operator's own runs are unaffected either way — the ceiling authority is never clamped by its own ceiling.
@@ -1574,6 +1584,15 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - The per-run cap on `session` and `direct-tcpip` channels together (flag `-ssh-max-sessions-per-run`).
 - The ceiling of 64 is the gateway's connection cap. `wardyn-sync` has its own fixed cap of `2` ([SSH.md](SSH.md)).
 
+### `WARDYN_SYNC_DENY`
+
+- Gitignore-syntax patterns, e.g. `.env*,*.pem`, served as `sync.deny` on `GET /runs/{id}`. No ignore file can re-include one.
+- Boot refuses over 64 patterns, one over 256 bytes, or a control character. See [SSH.md](SSH.md#sync-a-directory-wardyn-sync).
+
+### `WARDYN_LOCAL_FOLDER_SEED_WAIT`
+
+- Never past the run's end; when it runs out the run fails and its agent never starts. See [SSH.md](SSH.md#hold-the-agent-for-a-local-folder).
+
 ### `WARDYN_SSH_ROLE_TTL`
 
 - How stale a registered SSH key's admin-override stamp (`ssh_public_keys.role_checked_at`, migration `0046`) may be before `sshAuth` refuses the override (flag `-ssh-role-ttl`).
@@ -1654,6 +1673,17 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Off by default; it spares an Entra browser holding several accounts the account picker.
 - The account rides in an `HttpOnly` cookie for 30 days; signing out clears it.
 - The hint only preselects an account: the identity provider still authenticates.
+
+### `WARDYN_OIDC_BACKCHANNEL_LOGOUT`
+
+- Serves `POST /auth/backchannel-logout` for OpenID Connect Back-Channel Logout (flag `-oidc-backchannel-logout`); off, the route does not exist.
+- Register `https://<your Wardyn host>/auth/backchannel-logout` as the client's back-channel logout URI at the identity provider.
+- A logout token the provider signed for this client ends that person's console sessions as their sign-out does; tokens, keys and runs keep working.
+- It needs the logout event as a JSON object, a `sub`, a `jti`, no `nonce` and an `iat` within five minutes.
+- Anything else, including a `sid` without a `sub`, gets `400`; a cut that cannot be written gets `503`.
+- Past five tokens that fail to verify, then one a second per process, a POST gets `429` before verification, so forged tokens cannot drive unbounded key fetches.
+- Each cut is a `session.revoke` row with `source` `idp_back_channel_logout`.
+- Front-channel logout, which Entra ID offers, is not supported, and a person set up by Entra object id before first sign-in is not reached by `sub`.
 
 ### `WARDYN_OIDC_BROWSER_SESSION_COOKIE`
 
@@ -2373,7 +2403,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_NOVNC_GEOMETRY` | string (`WxHxDEPTH`) | `1280x800x24` | the `novnc` image's X display geometry (`deploy/images/novnc/wardyn-ui-novnc`) |
 | `WARDYN_REC_WRAP` | internal (bash array) | empty | `boot_seed_rec_wrap` (`agent-run-lib.sh`) fills this **same-process, never-exported** array with the `wardyn-rec` prefix a boot-seed pane's argv runs under when `WARDYN_RECORDING=1`; both agent images' `--boot-seed` branches share the one function rather than each keeping their own copy |
 | `WARDYN_SESSION_START` | internal (shell var) | empty | `start_wardyn_session`'s own return signal (`created` / `respawned`), read back by the same `agent-run` invocation that set it — never exported, never read by another process |
-| `WARDYN_SSH_KEYFILES` | internal (bash array) | empty | `deploy/images/claude-code/agent-run`'s own list of minted SSH key/known-hosts files to `shred` after an SSH-remote clone (`wipe_ssh_grants`, also armed as an `EXIT` trap); never exported |
+| `WARDYN_SSH_AGENT_DIR` | internal (path) | per `ssh` | `wardyn-git-helper ssh-exec` ([`cmd/wardyn-git-helper/sshagent.go`](../cmd/wardyn-git-helper/sshagent.go)) sets it for its `ssh`: the `0700` directory of the agent sockets `agent-run`'s ssh config names; removed when `ssh` exits |
 
 ### `WARDYN_CODEX_BIN_URL`
 

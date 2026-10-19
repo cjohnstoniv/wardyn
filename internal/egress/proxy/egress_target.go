@@ -410,9 +410,36 @@ func (p *Proxy) vetHost(host string) IPGuardResult {
 	if !ok {
 		return refused
 	}
-	return vetHostLift(host, res, func(ip net.IP) bool {
+	clamped := false
+	guard := vetHostLift(host, res, func(ip net.IP) bool {
+		if p.onOwnSubnetOrControlPlane(ip) {
+			clamped = true
+			return false
+		}
 		return p.liftInternalHost(normalized, ip)
 	})
+	// vetHostLift stops at the first address it refuses, so a clamp seen is the refusal's cause:
+	// the operator is told that, not to declare an internal_hosts entry that could never lift it.
+	if guard.Denied && clamped {
+		guard.kind = p.clampKind()
+	}
+	return guard
+}
+
+// blockOwnNetwork and blockExclusionUnknown are a private address refused by onOwnSubnetOrControlPlane:
+// on this proxy's own network or the control plane's, or every address because the capture of those
+// failed. Each has its own denial sentence (clampDetail); neither is liftable by anything an operator declares.
+const (
+	blockOwnNetwork       blockKind = 0x81
+	blockExclusionUnknown blockKind = 0x82
+)
+
+// clampKind is the block kind onOwnSubnetOrControlPlane's refusal carries on this proxy.
+func (p *Proxy) clampKind() blockKind {
+	if p.exclusionUnknown {
+		return blockExclusionUnknown
+	}
+	return blockOwnNetwork
 }
 
 // liftInternalHost reports whether ip may be lifted for host under a declared

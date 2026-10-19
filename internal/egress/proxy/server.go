@@ -9,6 +9,7 @@ package proxy
 // proxy.go is the request path itself.
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -18,6 +19,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"time"
 
 	"github.com/google/uuid"
@@ -41,6 +43,8 @@ type Server struct {
 	renewStopped chan struct{}
 	// maskKey is a ViaOrgEngine's own procRegistry key, evicted at Shutdown; uuid.Nil for a sidecar.
 	maskKey uuid.UUID
+	// allowedPeers is Config.AllowedPeers.
+	allowedPeers []netip.Prefix
 }
 
 // NewServer wires a Proxy from a validated Config and dependencies. It mints
@@ -339,7 +343,7 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		WriteTimeout:      0,
 		IdleTimeout:       90 * time.Second,
 	}
-	out := &Server{proxy: p, http: srv, sink: sink}
+	out := &Server{proxy: p, http: srv, sink: sink, allowedPeers: cfg.AllowedPeers}
 
 	// Start the run-token renewer, which keeps this sidecar's short-TTL token
 	// fresh for the life of the run and, alongside it, the activity reporter
@@ -376,7 +380,16 @@ func startRunTokenRenewer(out *Server, p *Proxy, ts *tokenSource, cfg *Config, c
 
 // ListenAndServe starts serving and blocks until the server stops.
 func (s *Server) ListenAndServe() error {
-	if err := s.http.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	var err error
+	if len(s.allowedPeers) == 0 {
+		err = s.http.ListenAndServe()
+	} else {
+		var ln net.Listener
+		if ln, err = net.Listen("tcp", cmp.Or(s.http.Addr, ":http")); err == nil {
+			err = s.http.Serve(&peerListener{Listener: ln, allowed: s.allowedPeers})
+		}
+	}
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil

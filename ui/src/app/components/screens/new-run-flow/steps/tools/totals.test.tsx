@@ -155,6 +155,19 @@ describe("Credentials total", () => {
     expect(credentials().getByText(NR_TOOLS.DELIVERY_FILE)).toBeInTheDocument();
     expect(credentials().queryByText(NR_TOOLS.CREDENTIALS_POLICY)).not.toBeInTheDocument();
   });
+
+  // #2541: the two rows carry the same provider name, so the resident token is named and both say they outlive the run.
+  it("with the switch off, names the resident SSO token apart from the role credentials and says neither ends with the run", () => {
+    render(<Totals names={HARNESS_NAMES} access={BEDROCK_SSO_SWITCH_OFF} answered providers={new Map([["claude-code", "Bedrock (team)"]])} />);
+    expect(credentials().getAllByText("Bedrock (team)", { exact: false })).toHaveLength(2);
+    expect(credentials().getAllByText(`Bedrock (team) ${NR_TOOLS.SSO_TOKEN}`, { exact: false })).toHaveLength(1);
+    expect(credentials().getAllByText(NR_TOOLS.EXPIRES_OWN)).toHaveLength(2);
+  });
+
+  it("a credential that ends with the run carries no expiry sentence", () => {
+    render(<Totals names={HARNESS_NAMES} access={MEMBER} answered />);
+    expect(credentials().queryByText(NR_TOOLS.EXPIRES_OWN)).not.toBeInTheDocument();
+  });
 });
 
 describe("Credentials total: a run whose Azure DevOps token Wardyn creates", () => {

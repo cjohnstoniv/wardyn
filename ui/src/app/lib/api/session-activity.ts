@@ -35,12 +35,20 @@ export function recentlyActive(): boolean {
 }
 
 let expiresAt: number | null = null;
+// When the request that named `expiresAt` started. Answers arrive out of order, so a slower, older request must not
+// move the expiry back; a LATER request that names an earlier expiry (a sign-out, a revoke) still does.
+let namedBy = 0;
 const expiryListeners = new Set<() => void>();
 
-/** Record the session expiry an answer named; an absent or unreadable value changes nothing. */
-export function noteSessionExpiry(value: string | null | undefined): void {
+/**
+ * Record the session expiry an answer named; an absent or unreadable value changes nothing, and neither does an
+ * answer to a request that started before the one the current value came from. `requestedAt` is that start time.
+ */
+export function noteSessionExpiry(value: string | null | undefined, requestedAt: number = Date.now()): void {
   const at = value ? Date.parse(value) : NaN;
-  if (Number.isNaN(at) || at === expiresAt) return;
+  if (Number.isNaN(at) || requestedAt < namedBy) return;
+  namedBy = requestedAt;
+  if (at === expiresAt) return;
   expiresAt = at;
   for (const listener of expiryListeners) listener();
 }

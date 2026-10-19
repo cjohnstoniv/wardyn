@@ -24,7 +24,12 @@ import (
 //     through .WithPolicy(...), or
 //   - reasonRecordCeilingLimit reaches writeErrorReason instead of
 //     writeErrorReasonPolicy (that door bypasses refuse, so WithPolicy cannot
-//     reach it).
+//     reach it), or
+//   - a refusal could ship its policy without the layer that refused (#2951):
+//     WithPolicy(nil) or writeErrorReasonPolicy(..., nil); a policyref.Ref
+//     built by hand rather than by policyref.Project, so its source, and so its
+//     layer, may be one the wire does not know; or an errorBody whose Policy is
+//     not stamped by policyref.Layered.
 //
 // It reads syntax only, so it cannot see a decision built into a variable and
 // wrapped elsewhere; a door that wants that shape has to be added here by hand,
@@ -132,6 +137,31 @@ func policyCensusViolations(fset *token.FileSet, name string, f *ast.File) []str
 		if isBare(call.Fun, "writeErrorReason") && callMentions(call, "reasonRecordCeilingLimit") {
 			at(call, "reasonRecordCeilingLimit written by writeErrorReason, not writeErrorReasonPolicy")
 		}
+		if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "WithPolicy" && len(call.Args) == 1 && isBare(call.Args[0], "nil") {
+			at(call, "a refusal that names no policy, so no layer: WithPolicy(nil)")
+		}
+		if isBare(call.Fun, "writeErrorReasonPolicy") && len(call.Args) > 0 && isBare(call.Args[len(call.Args)-1], "nil") {
+			at(call, "a refusal that names no policy, so no layer: writeErrorReasonPolicy(..., nil)")
+		}
+		return true
+	})
+	ast.Inspect(f, func(n ast.Node) bool {
+		lit, ok := n.(*ast.CompositeLit)
+		if !ok {
+			return true
+		}
+		if isQualified(lit.Type, "policyref", "Ref") {
+			at(lit, "a policyref.Ref built by hand: build it with policyref.Project, so its source and layer are ones the wire knows")
+		}
+		if isBare(lit.Type, "errorBody") {
+			for _, e := range lit.Elts {
+				if kv, ok := e.(*ast.KeyValueExpr); ok && isBare(kv.Key, "Policy") {
+					if call, ok := kv.Value.(*ast.CallExpr); !ok || !isQualified(call.Fun, "policyref", "Layered") {
+						at(kv, "an errorBody whose Policy skips policyref.Layered, so it may carry no layer")
+					}
+				}
+			}
+		}
 		return true
 	})
 	return out
@@ -229,6 +259,17 @@ func f(s *Server, src autonomySource) { s.refuse(w, r, authz.Deny(src.reason, "r
 func f(s *Server, k capKind) { s.refuse(w, r, authz.Deny(k.reason, "runs.x", "no")) }`, 0},
 		{"an unrelated reason is not a ceiling refusal", `package api
 func f(s *Server) { s.refuse(w, r, authz.Deny(authz.ReasonNotOwner, "run", "no")) }`, 0},
+		// #2951: a refusal must not ship its policy without the layer that refused.
+		{"a ceiling refusal wrapped with no policy", `package api
+func f(s *Server) { s.refuse(w, r, authz.Deny(authz.ReasonGovernanceProfile, "runs.x", "no").WithPolicy(nil)) }`, 1},
+		{"reasonRecordCeilingLimit with no policy", `package api
+func f() { writeErrorReasonPolicy(w, http.StatusForbidden, reasonRecordCeilingLimit, "no", nil) }`, 1},
+		{"a hand-built policy ref", `package api
+func f(s *Server) { s.refuse(w, r, authz.Deny(authz.ReasonRunQuota, "runs.quota", "no").WithPolicy(&policyref.Ref{Source: "walls"})) }`, 1},
+		{"an error body whose policy skips the layer stamp", `package api
+func f(d authz.Decision) { writeJSON(w, 403, errorBody{Error: "no", Policy: d.Policy}) }`, 1},
+		{"an error body whose policy is stamped passes", `package api
+func f(d authz.Decision) { writeJSON(w, 403, errorBody{Error: "no", Policy: policyref.Layered(d.Policy)}) }`, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fset := token.NewFileSet()

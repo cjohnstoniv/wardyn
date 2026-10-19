@@ -66,6 +66,9 @@ type metrics struct {
 	// this is precisely the shape that has to be graphable: audit rows flat and
 	// this series climbing IS the attack.
 	authFailedSuppressed int64
+	// sshRefused counts SSH gateway connections closed at a connection bound,
+	// by the bound's name (sshConnLimits.refused).
+	sshRefused map[string]int64
 	// deviceIngestSuppressed is authFailedSuppressed's twin for
 	// device.audit.ingest: a refusal whose row was folded into its device's
 	// streak or dropped by the per-device bucket (device_audit_bounds.go).
@@ -273,6 +276,16 @@ func (m *metrics) ssoRefreshRecorded(outcome string) {
 	m.ssoRefreshOutcomes[outcome]++
 }
 
+// sshRefusedInc records one SSH gateway connection closed at bound.
+func (m *metrics) sshRefusedInc(bound string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.sshRefused == nil {
+		m.sshRefused = map[string]int64{}
+	}
+	m.sshRefused[bound]++
+}
+
 // authFailedSuppressedInc records one dropped auth.fail audit emit.
 func (m *metrics) authFailedSuppressedInc() {
 	m.mu.Lock()
@@ -460,6 +473,11 @@ func (m *metrics) write(w io.Writer) {
 	fmt.Fprintf(w, "# HELP wardyn_auth_failed_suppressed_total Authentication failures and ticket or key refusals whose audit row (auth.fail, ssh.authenticate, session.attach or ui.authorize) "+
 		"was dropped by a rate limiter: the shared one (about 1 row/sec) or, for refusals naming a registered SSH key, that key's own bucket. This series — not the audit trail — is what grows during a burst.\n"+
 		"# TYPE wardyn_auth_failed_suppressed_total counter\nwardyn_auth_failed_suppressed_total %d\n", m.authFailedSuppressed)
+	fmt.Fprint(w, "# HELP wardyn_ssh_connections_refused_total SSH gateway connections closed at a connection bound, by bound: handshake (all handshakes in progress), source (one source address's share of them) or established (authenticated connections).\n"+
+		"# TYPE wardyn_ssh_connections_refused_total counter\n")
+	for _, bound := range []string{sshBoundHandshake, sshBoundSource, sshBoundEstablished} {
+		fmt.Fprintf(w, "wardyn_ssh_connections_refused_total{bound=%q} %d\n", bound, m.sshRefused[bound])
+	}
 	fmt.Fprintf(w, "# HELP wardyn_device_ingest_failures_suppressed_total Refused device audit pushes whose device.audit.ingest row was folded into a streak or dropped by the per-device rate limit.\n"+
 		"# TYPE wardyn_device_ingest_failures_suppressed_total counter\nwardyn_device_ingest_failures_suppressed_total %d\n", m.deviceIngestSuppressed)
 	fmt.Fprintf(w, "# HELP wardyn_auth_store_errors_total Requests an authentication lane could not decide because its store read failed (answered 503, retry later; the SSO session lane also writes an auth.fail row, every other lane writes none). Not covered by wardyn_store_up, which only pings.\n"+

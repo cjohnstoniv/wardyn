@@ -915,6 +915,38 @@ func TestExec_NoRecorderWhenDisabled(t *testing.T) {
 // CreateSandbox must DEFER agent creation and Exec must create the container with
 // the (recorder-wrapped) workload as its MAIN process; Wait then returns the
 // container's own exit code. This is the CC3/Vault execution path.
+// TestCreateSandbox_NamesTheSubnetRemedy: every sandbox holds one subnet of the daemon's default address
+// pools, which run out near 30; the raw daemon error says nothing about the daemon.json remedy.
+func TestCreateSandbox_NamesTheSubnetRemedy(t *testing.T) {
+	f := newFakeDocker()
+	f.images["busybox:latest"] = true
+	f.networkCreateErr = errors.New("could not find an available, non-overlapping IPv4 address pool among the defaults to assign to the network")
+	_, err := newTestDriver(f).CreateSandbox(context.Background(), testSpec())
+	if err == nil || !strings.Contains(err.Error(), "default-address-pools in daemon.json") || !strings.Contains(err.Error(), "non-overlapping IPv4 address pool") {
+		t.Fatalf("CreateSandbox = %v, want the remedy and the daemon's own words", err)
+	}
+}
+
+// TestExecLess_RefusesAnInteractiveRun: an exec-less runtime defers the agent to the first Exec, and
+// an interactive run never makes one, so it used to read RUNNING with no container to attach to. It is
+// refused before anything is created, with the remedy.
+func TestExecLess_RefusesAnInteractiveRun(t *testing.T) {
+	f := newFakeDocker()
+	f.info = infoWithRuntimes("krun")
+	f.images["busybox:latest"] = true
+	d := newWithClient(f, Config{ProxyImage: "wardyn-proxy:dev"})
+	spec := testSpec()
+	spec.ConfinementClass = types.CC3
+	spec.Interactive = true
+	_, err := d.CreateSandbox(context.Background(), spec)
+	if err == nil || !strings.Contains(err.Error(), "install the Kata runtime") || !strings.Contains(err.Error(), "with a task") {
+		t.Fatalf("CreateSandbox = %v, want the interactive refusal naming the remedy", err)
+	}
+	if len(f.containers) != 0 || len(f.networks) != 0 {
+		t.Fatalf("the refusal left %d container(s) and %d network(s) behind", len(f.containers), len(f.networks))
+	}
+}
+
 func TestExecLess_MainProcessLifecycle(t *testing.T) {
 	f := newFakeDocker()
 	f.info = infoWithRuntimes("krun") // CC3 via krun; krun has no docker exec
@@ -1413,6 +1445,11 @@ func TestWait_NotFoundFailsFast(t *testing.T) {
 	case werr := <-done:
 		if werr == nil {
 			t.Fatal("Wait must return an error for a vanished exec")
+		}
+		// The daemon drops a container's execs with it, so callers (the sftp launch note) must read
+		// this end as the sandbox gone, not as the exec's own failure.
+		if !errors.Is(werr, runner.ErrSandboxGone) {
+			t.Errorf("Wait = %v, want it to wrap runner.ErrSandboxGone", werr)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Wait retried a not-found exec instead of failing fast")

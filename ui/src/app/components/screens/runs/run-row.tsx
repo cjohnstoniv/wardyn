@@ -15,7 +15,7 @@
 import * as React from "react";
 import { Link, useNavigate } from "react-router-dom";
 import type { AgentRun } from "../../../lib/types";
-import { relativeTime } from "../../../lib/format";
+import { formatDuration, relativeTime } from "../../../lib/format";
 import { OpenInUserView, runPath, useConsoleMode } from "../../wardyn/console-view";
 import { ownerLabel } from "../../wardyn/copy/console-view";
 import { useOperator, usePrincipal } from "../../wardyn/operator-context";
@@ -34,14 +34,6 @@ import { RUNNER_OFFLINE_WORD, runnerLabel, runOnChip } from "../../../lib/nav-co
 // chunk. The gate (sign-in-run) is eager, and decides whether this loads at all.
 const RowSignInProbe = React.lazy(() => import("../run-detail/row-sign-in-probe"));
 
-function formatDuration(startIso: string, endIso: string): string {
-  const mins = Math.max(0, Math.round((Date.parse(endIso) - Date.parse(startIso)) / 60000));
-  if (mins < 60) return `${mins} min`;
-  const h = Math.floor(mins / 60);
-  const m = mins % 60;
-  return `${h} h ${m} min`;
-}
-
 function metaLine(run: AgentRun, adminView: boolean, own: boolean): string {
   const parts: string[] = [repoLabel(run).text];
   // 0.9 (M-RN-3 RS8): a local run names its computer, and says so while it is offline, in neutral words in
@@ -57,7 +49,7 @@ function metaLine(run: AgentRun, adminView: boolean, own: boolean): string {
   // …" like a live run, even though rowPresentation already renders it grey.
   const endedIso = run.ended_at ?? (run.lost_reason === "ended" ? run.lost_at : undefined);
   if (endedIso) {
-    parts.push(`ended ${relativeTime(endedIso)} · ran ${formatDuration(run.created_at, endedIso)}`);
+    parts.push(`ended ${relativeTime(endedIso)} · ran ${formatDuration(Date.parse(endedIso) - Date.parse(run.created_at))}`);
   } else {
     parts.push(`started ${relativeTime(run.created_at)}`);
   }

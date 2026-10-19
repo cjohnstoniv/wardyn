@@ -104,6 +104,28 @@ describe("WorkspacesScreen — list columns", () => {
     expect(await screen.findByText("2 dirs · 1 repo")).toBeInTheDocument();
   });
 
+  // #2592: `source` is "" for a multi-source workspace, so the search reads its attached sources too.
+  it("search finds a multi-source workspace by any of its source paths", async () => {
+    const mono = ws({}, {
+      name: "mono",
+      source: "",
+      sources: [{ type: "local_dir", path: "/srv/api" }, { type: "repo", source: "org/lib" }],
+    });
+    listWorkspacesMock.mockResolvedValue([mono, ws({}, { id: "ws-2", name: "payments" })]);
+    renderScreen();
+    await screen.findByText("mono");
+    const search = screen.getByPlaceholderText(/search by name or source/i);
+    await userEvent.type(search, "ORG/lib");
+    expect(screen.getByText("mono")).toBeInTheDocument();
+    expect(screen.queryByText("payments")).not.toBeInTheDocument();
+    await userEvent.clear(search);
+    await userEvent.type(search, "/srv/api");
+    expect(screen.getByText("mono")).toBeInTheDocument();
+    await userEvent.clear(search);
+    await userEvent.type(search, "/nowhere");
+    expect(screen.queryByText("mono")).not.toBeInTheDocument();
+  });
+
   it("Image column: standard sandbox image when nothing was detected and nothing was pinned", async () => {
     listWorkspacesMock.mockResolvedValue([ws({}, { status: "scanned" })]);
     renderScreen();

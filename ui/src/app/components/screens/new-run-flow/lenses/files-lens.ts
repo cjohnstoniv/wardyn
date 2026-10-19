@@ -141,6 +141,9 @@ export function commitSize(text: string, capMib: number | undefined, unit: SizeU
 export const chooseNothing = (intent: RunIntent): RunIntent =>
   withKeys(intent, { no_repositories_or_drives: true, workspaces: undefined, drive: undefined, drives: undefined, start_folder: undefined });
 
+/** Takes the "only the main drive" choice back: the step is then unsettled until something is added. */
+export const clearNothing = (intent: RunIntent): RunIntent => withKeys(intent, { no_repositories_or_drives: undefined });
+
 /**
  * Moves an older `drive: {enabled}` into `drives[]` as the catalogue's legacy drive, so the request never
  * carries both (400 drive_selection_conflict). A start on the legacy drive moves with it. With no legacy

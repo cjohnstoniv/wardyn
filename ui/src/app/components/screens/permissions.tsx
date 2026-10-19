@@ -378,7 +378,7 @@ export function PermissionsScreen() {
           ) : status === "error" || !snap ? (
             <ErrorState onRetry={load} />
           ) : snap.grants.length === 0 ? (
-            <EmptyState icon={ShieldCheck} title={PERM.EMPTY_TITLE} description={PERM.EMPTY_BODY} />
+            <EmptyState size="compact" icon={ShieldCheck} title={PERM.EMPTY_TITLE} description={PERM.EMPTY_BODY} />
           ) : (
             <Table>
               <TableHeader>

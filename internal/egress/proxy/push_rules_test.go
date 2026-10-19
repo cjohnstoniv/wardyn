@@ -302,8 +302,10 @@ func TestPushRulesRefuseWhatCannotBeInspected(t *testing.T) {
 		if !strings.Contains(sink.String(), `"rule_source":"`+ruleSourceGitPackBlind+`"`) {
 			t.Errorf("decision log = %q, want a %s deny row", sink.String(), ruleSourceGitPackBlind)
 		}
-		if up.mintCalls != 0 {
-			t.Errorf("a refused push minted %d credentials, want 0", up.mintCalls)
+		// The broker asks the forge whether it holds the commit (one API read,
+		// TestPushRulesPassAPushThatAddsNoNewCommits); this one cannot say so.
+		if up.gitHost != githubAPIHost || strings.HasSuffix(up.gitPath, "git-receive-pack") {
+			t.Errorf("the last forge request was %s %s, want the API lookup and no forwarded push", up.gitHost, up.gitPath)
 		}
 	})
 

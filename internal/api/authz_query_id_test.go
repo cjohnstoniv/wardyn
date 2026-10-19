@@ -129,6 +129,7 @@ var queryIDMatrix = map[string]queryIDRoute{
 // function is NOT covered here — it needs its own queryIDMatrix row.
 var queryParamNotAnID = map[string]string{
 	"limit":                     "page window (parseListPage)",
+	"purpose":                   "POST /runs/{id}/attach/ticket: ui marks a UI-app ticket, which skips the terminal session cap; the run is the path's, already authorised, and the word names no entity",
 	"runner_pool_id":            "GET /me/drives: an organisation runner pool the caller's own drive catalogue is checked against; a pool the caller may not use answers exactly as one that does not exist (pool_checked false), and no principal's entity is selected",
 	"run_type":                  "GET /runner-pools: background or interactive, the kind of run the caller's own pool list is judged for; it names no entity",
 	"filter":                    "GET /scim/v2/Users and GET /scim/v2/Groups (SCIM bearer only, never a member): the identity provider's own userName, externalId or emails.value eq filter (displayName or externalId for Groups); the routes admit no human credential at all (classSCIM)",

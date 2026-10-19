@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -311,9 +312,9 @@ func startSSHGateway(rootCtx context.Context, f *bootFlags, srv *api.Server) {
 // deadline (a relayed editor holds a long-lived streaming connection), a
 // header-read deadline, and a capped header size. Shutdown rides rootCtx: the
 // listener closes when the daemon does.
-func startUISandboxGateway(rootCtx context.Context, f *bootFlags, posture tlsPosture, srv *api.Server) {
+func startUISandboxGateway(rootCtx context.Context, f *bootFlags, posture tlsPosture, srv *api.Server, ln net.Listener) {
 	handler := srv.UIGatewayHandler()
-	if *f.uiListen == "" || handler == nil {
+	if ln == nil || handler == nil {
 		return
 	}
 	httpSrv := &http.Server{
@@ -334,14 +335,39 @@ func startUISandboxGateway(rootCtx context.Context, f *bootFlags, posture tlsPos
 		slog.Info("wardynd: ui-sandbox gateway listening", slog.String("listen", *f.uiListen), slog.Bool("tls", posture.tlsEnabled))
 		var err error
 		if posture.tlsEnabled {
-			err = httpSrv.ListenAndServeTLS("", "")
+			err = httpSrv.ServeTLS(ln, "", "")
 		} else {
-			err = httpSrv.ListenAndServe()
+			err = httpSrv.Serve(ln)
 		}
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("wardynd: ui-sandbox gateway stopped", slog.Any("err", err))
 		}
 	})
+}
+
+// bindOptionalListeners binds the metrics listener and the UI-sandbox gateway's
+// socket, each off when unset. The gateway's socket is returned to be served later
+// by startUISandboxGateway.
+func bindOptionalListeners(rootCtx context.Context, f *bootFlags, srv *api.Server) (net.Listener, error) {
+	if err := startMetricsListener(rootCtx, *f.metricsListen, srv.MetricsListenerHandler()); err != nil {
+		return nil, err
+	}
+	return listenUISandboxGateway(*f.uiListen, srv.UIGatewayHandler() != nil)
+}
+
+// listenUISandboxGateway binds the UI-sandbox gateway's address before background
+// work starts, like startMetricsListener, so a port already in use refuses boot
+// instead of leaving a daemon that serves on while every Open fails. It returns
+// nil when the gateway is off (no address, or no handler built).
+func listenUISandboxGateway(addr string, hasHandler bool) (net.Listener, error) {
+	if addr == "" || !hasHandler {
+		return nil, nil
+	}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("ui-sandbox gateway listener %q: %w", addr, err)
+	}
+	return ln, nil
 }
 
 // forwarderJoinWait bounds serveAndShutdown's wait for the org federation

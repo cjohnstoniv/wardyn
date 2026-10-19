@@ -45,6 +45,13 @@ func profileRefFor(name, tag string) policyref.Ref {
 		RequestURL: c.RequestURL, RequestText: c.RequestText}
 }
 
+// refusalRef is r as a refusal names it: stamped with the layer kind that
+// refused (#2951). A read surface (GET /runs/{id}, /me) carries r unstamped.
+func refusalRef(r policyref.Ref) policyref.Ref {
+	r.Layer = r.Source
+	return r
+}
+
 // refusalWire is a refusal body as the SDK reads it.
 type refusalWire struct {
 	Error  string         `json:"error"`
@@ -117,7 +124,7 @@ func TestCeilingRefusalsNameThePolicy(t *testing.T) {
 			if got.Reason != tc.wantReason || got.Error == "" {
 				t.Errorf("body = %+v, want reason %q and the door's own sentence", got, tc.wantReason)
 			}
-			if got.Policy == nil || *got.Policy != want {
+			if got.Policy == nil || *got.Policy != refusalRef(want) {
 				t.Errorf("policy = %+v, want %+v", got.Policy, want)
 			}
 			if !strings.Contains(got.Error, `"`+name+`"`) {
@@ -132,6 +139,11 @@ func TestCeilingRefusalsNameThePolicy(t *testing.T) {
 				}
 				if ev.Target == tc.wantTarget {
 					sawTarget = true
+					// The row names the layer that refused and the leaf, never its contact (#2951).
+					var datum map[string]any
+					if err := json.Unmarshal(ev.Data, &datum); err != nil || datum["layer"] != "profile" || datum["layer_name"] != name {
+						t.Errorf("authz.denied row = %s, want layer profile and layer_name %q", ev.Data, name)
+					}
 				}
 				for _, secret := range []string{want.Owner, want.Email} {
 					if strings.Contains(string(ev.Data), secret) {
@@ -152,7 +164,7 @@ func TestCeilingRefusalsNameThePolicy(t *testing.T) {
 		if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
 			t.Fatal(err)
 		}
-		if got := string(raw["policy"]); got != `{"source":"profile","name":"walled"}` {
+		if got := string(raw["policy"]); got != `{"source":"profile","name":"walled","layer":"profile"}` {
 			t.Errorf("policy = %s", got)
 		}
 	})
@@ -179,7 +191,7 @@ func TestDriveDoorNamesThePolicy(t *testing.T) {
 		t.Fatalf("seed = ok %v, status %d, want the 403 door: %s", ok, w.Code, w.Body.String())
 	}
 	got := decodeRefusal(t, w)
-	if want := profileRefFor("contractors", "alpha"); got.Policy == nil || *got.Policy != want {
+	if want := profileRefFor("contractors", "alpha"); got.Policy == nil || *got.Policy != refusalRef(want) {
 		t.Errorf("policy = %+v, want %+v", got.Policy, want)
 	}
 	if want := driveDeniedByProfileMsg("contractors"); got.Error != want {
@@ -206,7 +218,7 @@ func TestLiveRunDoorsNameTheRunsPolicy(t *testing.T) {
 			t.Fatal("attach was not refused")
 		}
 		got := decodeRefusal(t, w)
-		if got.Policy == nil || *got.Policy != want {
+		if got.Policy == nil || *got.Policy != refusalRef(want) {
 			t.Errorf("policy = %+v, want %+v", got.Policy, want)
 		}
 	})
@@ -216,7 +228,7 @@ func TestLiveRunDoorsNameTheRunsPolicy(t *testing.T) {
 			t.Fatal("ui gateway was not refused")
 		}
 		got := decodeRefusal(t, w)
-		if got.Policy == nil || *got.Policy != want {
+		if got.Policy == nil || *got.Policy != refusalRef(want) {
 			t.Errorf("policy = %+v, want %+v", got.Policy, want)
 		}
 	})
@@ -318,7 +330,7 @@ func TestRecordAndProviderSignInNameThePolicy(t *testing.T) {
 		if err := json.Unmarshal([]byte(body), &got); err != nil {
 			t.Fatal(err)
 		}
-		if got.Reason != reasonRecordCeilingLimit || got.Policy == nil || *got.Policy != want {
+		if got.Reason != reasonRecordCeilingLimit || got.Policy == nil || *got.Policy != refusalRef(want) {
 			t.Errorf("body = %s, want reason %s and policy %+v", body, reasonRecordCeilingLimit, want)
 		}
 		if !strings.HasPrefix(got.Error, "interactive runs are not allowed by your governance profile") {
@@ -357,7 +369,7 @@ func TestRecordAndProviderSignInNameThePolicy(t *testing.T) {
 		if err := json.Unmarshal([]byte(body), &got); err != nil {
 			t.Fatal(err)
 		}
-		if got.Reason != reasonRecordCeilingLimit || got.Policy == nil || *got.Policy != want {
+		if got.Reason != reasonRecordCeilingLimit || got.Policy == nil || *got.Policy != refusalRef(want) {
 			t.Errorf("body = %s, want reason %s and policy %+v", body, reasonRecordCeilingLimit, want)
 		}
 	})

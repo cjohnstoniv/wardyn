@@ -46,6 +46,7 @@ if [[ "${1:-}" == "--idle" ]]; then
     mkdir -p "$workdir"
     make_ephemeral_dirs; make_toolchain_dirs; trust_mounted_repos
     dispatch_repo_clones
+    close_ssh_agent  # this image signs in over SSH for nothing; close the proxy's agent
     resolve_workdir
     mkdir -p "$HOME/.wardyn"
     printf '%s\n' "$workdir" > "$HOME/.wardyn/workdir"
@@ -58,7 +59,7 @@ fi
 # An exec task with an accepted starting folder (WARDYN_START_FOLDER) runs there, after the same workspace
 # prep --idle does (artifact config and the git helper secret before the clones). Without one (the
 # connectivity probe) it runs where the launcher put it, untouched. ssh_key grants are provisioned by
-# a harness image's own agent-run, which this stub is replaced by; this image has no such function.
+# a harness image's own agent-run, which this stub is replaced by; this image only closes the agent.
 if [[ "${WARDYN_TASK_MODE:-}" == "exec" && -n "${WARDYN_START_FOLDER:-}" ]]; then
     : "${HOME:=/home/agent}"; export HOME
     install_artifact_config
@@ -67,6 +68,7 @@ if [[ "${WARDYN_TASK_MODE:-}" == "exec" && -n "${WARDYN_START_FOLDER:-}" ]]; the
     mkdir -p "$workdir"
     make_ephemeral_dirs; make_toolchain_dirs; trust_mounted_repos
     dispatch_repo_clones
+    close_ssh_agent  # this image signs in over SSH for nothing; close the proxy's agent
     resolve_workdir
     cd "$workdir"
 fi

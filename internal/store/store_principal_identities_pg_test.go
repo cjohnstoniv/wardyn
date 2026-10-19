@@ -157,6 +157,18 @@ func TestPG_LoginIdentity_BindingIsImmutable(t *testing.T) {
 	if _, err := st.UpsertLoginIdentity(ctx, elsewhere, time.Now().UTC()); err == nil {
 		t.Error("the same principal under another object id was accepted")
 	}
+	// Same principal and object id, another tenant: refused, nothing written.
+	otherTenant := in
+	otherTenant.TenantID = uuid.NewString()
+	if _, err := st.UpsertLoginIdentity(ctx, otherTenant, time.Now().UTC()); !errors.Is(err, store.ErrConflict) {
+		t.Errorf("same object id under another tenant: err = %v, want ErrConflict", err)
+	}
+	// Same principal, another issuer: a separate row under that issuer; this row is untouched.
+	otherIssuer := in
+	otherIssuer.Issuer = "https://dex.example"
+	if got, err := st.UpsertLoginIdentity(ctx, otherIssuer, time.Now().UTC()); err != nil || got.ID == orig.ID {
+		t.Errorf("another issuer: %+v, %v; want a separate row", got, err)
+	}
 
 	got, err := st.GetIdentityByObject(ctx, idIssuer, idTenant, oid)
 	if err != nil {
@@ -165,8 +177,18 @@ func TestPG_LoginIdentity_BindingIsImmutable(t *testing.T) {
 	if got.ID != orig.ID || got.Principal != orig.Principal || got.Issuer != orig.Issuer || got.TenantID != orig.TenantID || got.ObjectID != orig.ObjectID {
 		t.Errorf("binding changed: %+v, was %+v", got, orig)
 	}
-	if n := identityCount(t, pool); n != 1 {
-		t.Errorf("identity rows = %d, want 1", n)
+	byPrincipal, err := st.IdentitiesByPrincipal(ctx, in.Principal)
+	if err != nil {
+		t.Fatalf("by principal: %v", err)
+	}
+	if len(byPrincipal) != 2 {
+		t.Fatalf("identities for the principal = %d, want 2 (one per issuer)", len(byPrincipal))
+	}
+	if first := byPrincipal[0]; first.ID != orig.ID || first.Issuer != orig.Issuer || first.TenantID != orig.TenantID || first.ObjectID != orig.ObjectID || first.Principal != orig.Principal {
+		t.Errorf("oldest row = %+v, want the original %+v", first, orig)
+	}
+	if n := identityCount(t, pool); n != 2 {
+		t.Errorf("identity rows = %d, want 2 (one per issuer)", n)
 	}
 }
 

@@ -335,6 +335,8 @@ func TestWorkspaceObservedEgress_WithholdsWhatApprovingCannotHelp(t *testing.T) 
 			{Action: "egress.deny", Target: "wardynd"},             // the control plane itself
 			{Action: "egress.deny", Target: "blocked.example.com"}, // explicitly denied
 			{Action: "egress.deny", Target: "feeds.datagolf.com"},  // NEGATIVE CONTROL: promotable
+			// under the broker's *.githubusercontent.com wildcard
+			{Action: "egress.deny", Target: "objects.githubusercontent.com"},
 		}},
 	}
 	srv := New(baseTestConfig(h, fake))

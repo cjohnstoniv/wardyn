@@ -105,6 +105,9 @@ export const DENY_SCOPE_HINT: Record<ApprovalScope, string> = {
 
 // Preset durations behind "Until…" (Phase 0's control shape). ms, not sec —
 // callers do `new Date(Date.now() + ms)`.
+// Shown beside a picked time that has already passed; the server refuses it with decision_expires_at in the past.
+export const UNTIL_PAST = "That time has already passed. Pick a later one.";
+
 export const UNTIL_PRESETS: { label: string; ms: number }[] = [
   { label: "15 minutes", ms: 15 * 60_000 },
   { label: "1 hour", ms: 60 * 60_000 },
@@ -251,8 +254,8 @@ export type CredentialKind = "git_pat" | "github_token" | "api_key" | "ssh_key" 
 // only the wire-level "credential"/"egress_domain"/"tool_call"), so this stays a
 // key-sniffing heuristic. Order matters:
 //  - key_secret_ref is UNIQUE to ssh_key (broker.sshKeyScope) — must be checked
-//    before the git_pat fallback, or every ssh_key approval (a resident,
-//    agent-readable PRIVATE KEY, not a PAT) rendered the git_pat banner.
+//    before the git_pat fallback, or every ssh_key approval (a PRIVATE KEY
+//    the proxy signs with, not a PAT) rendered the git_pat banner.
 //  - api_key's scope ALSO carries secret_name (the broker requires it), so the
 //    api_key discriminators (header/format) must be checked before the git_pat
 //    fallback — otherwise every api_key approval renders the git_pat banner,

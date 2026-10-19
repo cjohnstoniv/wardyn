@@ -1516,7 +1516,7 @@ lose access now, do not wait for it:
 - **Role changes that are not SCIM group removals** at the identity provider still lag until the person signs in
   again. A group removal also lags for API tokens when the sign-in's groups claim carries names, not the object ids
   the group's `externalId` holds ("Turn it on", step 5): it then cuts sessions only.
-- **No identity-provider logout.** Signing out at the identity provider does not end a Wardyn session: Wardyn has no front- or back-channel logout, and SCIM deprovisioning is a separate revocation, not the propagation of an IdP logout. A person's own sign-out ends their console sessions only (`session.revoke` with `sessions_only`, [AUDIT-ACTIONS](AUDIT-ACTIONS.md)).
+- **Identity-provider logout is opt-in, and back-channel only.** Signing out at the identity provider does not end a Wardyn session unless `WARDYN_OIDC_BACKCHANNEL_LOGOUT` is on and the provider posts its logout token to `/auth/backchannel-logout` ([ENV.md](ENV.md#wardyn_oidc_backchannel_logout)). Wardyn has no front-channel logout, which is what Entra ID offers, and SCIM deprovisioning is a separate revocation. A person's own sign-out ends their console sessions only (`session.revoke` with `sessions_only`, [AUDIT-ACTIONS](AUDIT-ACTIONS.md)).
 - **Shared computers.** After an SSO sign-out the console tells the person to sign out of the identity provider too. That session stays live, so the next person could press Sign in with SSO and arrive as them.
 - **Long-lived connections.** A suspension kills every live run, which ends its attach and SSH sessions. Other
   console streams end at their next authentication check or reconnect.
@@ -2956,6 +2956,23 @@ The line is the substrate's own words, in the shape `<component>: <Reason>[: <me
 > [!WARNING]
 > Residual: a run whose teardown failed after it reached a terminal state is not counted, though its pods may still exist; `POST /admin/sandboxes/sweep` reaps those.
 
+### Docker host: one subnet per run
+
+- Every Docker sandbox gets its own internal network, and each network holds one subnet from the daemon's `default-address-pools`.
+- The daemon's defaults hold about 30 networks, shared with `docker0`, the Wardyn control-plane network and every compose stack on the host.
+- So a host with the default `daemon.json` starts failing new sandboxes near 28 concurrent runs.
+- `WARDYN_MAX_CONCURRENT_RUNS` defaults to unlimited, so nothing in Wardyn stops a run before the daemon does.
+- A create that finds no subnet fails with a sentence naming this remedy, then the daemon's own error.
+
+| Setting in `/etc/docker/daemon.json` | Networks it holds |
+|---|---|
+| none (the daemon's defaults) | about 30 |
+| `"default-address-pools": [{"base": "10.200.0.0/16", "size": 28}]` | 4096 |
+
+1. Pick a base range the host does not route anywhere else (not a corporate or VPN range).
+2. Add the `default-address-pools` line to `daemon.json` and restart the daemon; networks that already exist keep their subnets.
+3. Optionally set `WARDYN_MAX_CONCURRENT_RUNS` below what the pool holds.
+
 ### The start deadlines
 
 The pane will wait; the **runner** will not wait forever, and these are the bounds an operator sizes:
@@ -3174,6 +3191,7 @@ Naming these is the point of the walk, not a caveat on it:
 - The AWS SSO renewer runs every minute on the sweeper leader and renews a live run's session inside `WARDYN_AWS_SSO_REFRESH_SKEW` of its expiry, while the token in hand still works.
 - The proxy's own resolve renews too, but only when the sandbox asks; the renewer covers a run that is quiet through the window.
 - So the hold is for a session that could not be renewed: its refresh token was refused or is gone, or AWS failed until it expired.
+- A refused refresh token is remembered in `aws_sso_refused_tokens` (migration `0194_aws_sso_refused_tokens`), so every replica grades it alike until a sign-in or a renewal replaces it.
 - Each renewal writes one `harness.credential.refresh` row; the renewer's carry `trigger: renewer`, and its passes are the `aws_sso_renewal` sweep in [sweep health](operations/monitoring.md#substrate-and-sweep-health).
 - It skips a paused, lost or revoked run; the proxy's own resolve still renews for any run it serves.
 
@@ -3403,6 +3421,7 @@ curl -s -X POST http://localhost:8080/api/v1/site-config/test-proxy \
 
 - It runs two fetches in one sandbox.
 - The mirror (`to`) goes through the normal path, then the public endpoint (`from`) again with the proxy deliberately bypassed — to catch a redirect that's configured but not enforced.
+- A row with a token (`token_secret_ref` or `token_integration_ref`) is fetched with that token, injected by the proxy exactly as a run's is: it never enters the probe sandbox, the response or the audit row.
 - Both return `200` with `{"state", "detail", "elapsed_ms"}`.
 - `test-proxy` adds three qualifiers so a client never has to string-match `detail`:
   - `via` (`proxy`/`direct`);
@@ -3918,6 +3937,9 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0188` (`0188_run_renewed_token_jtis`) adds `token_jti` and `token_prev_jti` to `agent_runs` (`0001`'s table): the ids of the two tokens a run's proxy last held across a renewal, which a revive revokes.
 - `0189` (`0189_run_containment_pending`) replaces the `binding` check on `runner_pending_actions` (`0139`'s table) so a `stop_proxy` may carry a node record in place of an outage loss, beside its new `run_containment_pending` and `run_node_records` tables.
 - `0191` (`0191_secrets_value_rev`) adds `secrets.value_rev` (`0001`'s table), an identity column every write of a value moves; adding it rewrites `secrets` once under an exclusive lock.
+- `0192` (`0192_workspace_name_per_owner`) replaces `workspaces.name`'s deployment-wide uniqueness (`0008`'s table) with one per owner (`owned_by`, `name`); operator-owned workspaces stay unique among themselves.
+- `0193` (`0193_approval_last_rejoined_at`) adds `approvals.last_rejoined_at` (`0001`'s table), when a held push or egress request last re-entered the hold on a PENDING row; the console's held reading starts from it.
+- `0195` (`0195_agent_runs_local_folder`) adds `local_folder`, `local_folder_seeded_at` and `local_folder_seed_error` to `agent_runs` (`0001`'s table): the folder a run holds its agent for, and that folder's first sync.
 - `0192` (`0192_deprovision_event_pin`) adds `audit_event_id` and `audit_event_at` to `deprovision_jobs` (`0127`'s table): the id and time of the audit event an owed row writes, pinned on its first drain and cleared when the row reopens.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the

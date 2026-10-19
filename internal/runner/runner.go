@@ -234,6 +234,10 @@ type Resources struct {
 	// run has no cap. Only the k8s substrate reads it, as the run pods'
 	// activeDeadlineSeconds and the quota scope that deadline selects.
 	LifetimeCap time.Duration
+	// ProxyAzure says the run's proxy carries an Azure route gate, which raises the proxy's memory
+	// (ProxyLimitsFor). Only FitChecker.CheckFit reads it, in-process; the sandbox create reads
+	// ProxyConfig.AzureGates, so it never rides the runner wire.
+	ProxyAzure bool `json:"-"`
 }
 
 // AttachOptions configures an interactive attach; zero Cols/Rows let the driver pick a sane default (e.g. 80x24).

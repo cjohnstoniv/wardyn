@@ -943,6 +943,59 @@ func redirectAttachIO(t *testing.T) (stdinW *os.File, stdout, stderr func() stri
 		drain(stderrW, stderrR, oldStderr, &os.Stderr)
 }
 
+// TestAttach_PipedStdinEOFKeepsShowingOutput pins #2317: `printf 'make test\n' |
+// wardyn run attach` sent its line, read EOF at once and detached before the
+// remote command's output arrived. After EOF the session now keeps showing
+// frames, and detaches (exit 0) once it has been quiet for attachDrainIdle.
+func TestAttach_PipedStdinEOFKeepsShowingOutput(t *testing.T) {
+	oldIn, oldIdle := attachStdin, attachDrainIdle
+	t.Cleanup(func() { attachStdin, attachDrainIdle = oldIn, oldIdle })
+	attachStdin = strings.NewReader("make test\n")
+	attachDrainIdle = 400 * time.Millisecond
+
+	var gotInput atomic.Value
+	srv := httptest.NewServer(withMintOK(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		_, in, err := c.Read(r.Context())
+		if err != nil {
+			return
+		}
+		gotInput.Store(string(in))
+		// The command's output arrives after stdin's EOF, in two frames.
+		time.Sleep(150 * time.Millisecond)
+		_ = c.Write(r.Context(), websocket.MessageBinary, []byte("PASS one\n"))
+		time.Sleep(150 * time.Millisecond)
+		_ = c.Write(r.Context(), websocket.MessageBinary, []byte("PASS two\n"))
+		<-r.Context().Done() // never closes: the idle drain is what ends the session
+	}))
+	defer srv.Close()
+
+	_, stdout, stderr := redirectAttachIO(t)
+	start := time.Now()
+	err := runAttach(context.Background(), &sdk.Client{BaseURL: srv.URL}, "run-1")
+	stdoutGot, stderrGot := stdout(), stderr()
+
+	if err != nil {
+		t.Fatalf("runAttach = %v, want nil (a clean detach)", err)
+	}
+	if gotInput.Load() != "make test\n" {
+		t.Errorf("server read %v, want the piped line", gotInput.Load())
+	}
+	if stdoutGot != "PASS one\nPASS two\n" {
+		t.Errorf("stdout = %q, want both output frames that arrived after stdin's EOF", stdoutGot)
+	}
+	if !strings.Contains(stderrGot, "detached") {
+		t.Errorf("stderr = %q, want the usual \"detached\" line", stderrGot)
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Errorf("session took %v; the idle drain should end it", d)
+	}
+}
+
 // TestAttach_ReadOnlyDialPrintsNoticeAndDetachesCleanly pins the read-only
 // half of the fix: the first attach-mode frame (read_only:true) prints ONE
 // stderr line naming the holder and where they attached from, stdout carries

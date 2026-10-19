@@ -1914,6 +1914,11 @@ var _ store.RunsByCreatorPager = (*authzStore)(nil)
 
 func (s *authzStore) Ping(_ context.Context) error { return nil }
 
+// RunCapacity answers the fleet capacity read so the matrix's admin probes reach the handler's 200.
+func (s *authzStore) RunCapacity(context.Context, store.RunCapacityOpts) (store.RunCapacity, error) {
+	return store.RunCapacity{}, nil
+}
+
 func (s *authzStore) CreateRun(_ context.Context, r types.AgentRun) (types.AgentRun, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
