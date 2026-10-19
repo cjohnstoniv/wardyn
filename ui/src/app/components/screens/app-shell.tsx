@@ -20,6 +20,7 @@ import {
   Contact,
   Fingerprint,
   FolderOpen,
+  HardDrive,
   KeyRound,
   Laptop,
   LayoutTemplate,
@@ -131,10 +132,9 @@ interface NavItem {
   icon: React.ElementType;
   badge?: "approvals" | "attention";
   // Which admin tier the item belongs to, when only one: a security admin's
-  // nav shows only what that tier can write or read org-wide (§2.1). Secrets
-  // is super-only; Recordings waits for F1 (packet M-A QM-5). Drives has no
-  // item for either tier: the page reads GET /drives, which is super-only, so
-  // a security admin's item was a dead end (#2827).
+  // nav shows only what that tier can write or read org-wide (§2.1). Drives
+  // joins it (grants and preview are securityOps); Secrets is super-only;
+  // Recordings waits for F1 (packet M-A QM-5).
   tier?: "super" | "security";
   // Other paths that keep this item lit (see SidebarLowerLinks).
   also?: string[];
@@ -164,6 +164,7 @@ const ADMIN_NAV: NavItem[] = [
   // User types (0.8, UT-7a) sits beside Permissions — the subject it and
   // Governance name. securityOps server-side, so both admin tiers see it.
   { to: "/admin/user-types", label: USER_TYPES_NAV_TITLE, icon: UsersRound },
+  { to: "/admin/drives", label: "Drives", icon: HardDrive, tier: "security" },
   { to: "/admin/secrets", label: "Secrets", icon: Lock, tier: "super" },
   { to: "/admin/audit", label: "Audit", icon: ScrollText },
   { to: "/admin/recordings", label: "Recordings", icon: Play, tier: "super" },

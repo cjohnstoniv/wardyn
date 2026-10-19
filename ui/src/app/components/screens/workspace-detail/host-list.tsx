@@ -4,6 +4,7 @@
  */
 
 // The one removable-host row both egress cards (allowed, denied) render.
+import * as React from "react";
 import { X } from "lucide-react";
 import { Button } from "../../ui/button";
 import { Mono } from "../../wardyn/code-block";
@@ -23,8 +24,6 @@ export interface HostRow {
   removeBlockedReason?: string;
 }
 
-const reasonId = (host: string) => `host-remove-reason-${host}`;
-
 export function HostList({ rows, emptyText, canRemove, removing, onRemove }: {
   rows: HostRow[];
   emptyText: string;
@@ -32,21 +31,22 @@ export function HostList({ rows, emptyText, canRemove, removing, onRemove }: {
   removing: string | null;
   onRemove: (host: string) => void;
 }) {
+  // Per list: the allowed and denied cards can both hold a host.
+  const listId = React.useId();
+  const reasonId = (host: string) => `${listId}-reason-${host}`;
   if (rows.length === 0) return <p className="text-xs text-muted-foreground">{emptyText}</p>;
   return (
     <ul className="space-y-2">
       {rows.map((r) => (
         <li key={r.host} className="flex items-center gap-3 rounded-lg border border-border p-2.5">
-          <div className="min-w-0 flex-1">
-            <Mono className="text-foreground">{r.host}</Mono>
-            {/* A disabled control says why in visible text, never in a title alone (CONSOLE-RULES). */}
-            {r.removable && r.removeBlockedReason && (
-              <p id={reasonId(r.host)} className="text-meta text-muted-foreground">
-                {r.removeBlockedReason}
-              </p>
-            )}
-          </div>
+          <Mono className="flex-1 text-foreground">{r.host}</Mono>
           <span className="text-meta text-muted-foreground">{r.provenance}</span>
+          {/* A disabled control says why in visible text beside it, never in a title alone (CONSOLE-RULES). */}
+          {r.removable && r.removeBlockedReason && (
+            <span id={reasonId(r.host)} className="max-w-[32ch] text-meta text-muted-foreground">
+              {r.removeBlockedReason}
+            </span>
+          )}
           {r.removable ? (
             <Button
               size="icon"

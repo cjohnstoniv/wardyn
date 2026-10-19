@@ -36,4 +36,20 @@ describe("HostList — a blocked removal says why", () => {
     expect(button).not.toHaveAttribute("title");
     expect(screen.getByRole("button", { name: "Remove b.example" })).not.toHaveAccessibleDescription();
   });
+
+  // The allowed and denied cards each mount a HostList, and one host may sit in both.
+  it("gives each list its own reason ids, so a host in two lists never shares one", () => {
+    const blocked: HostRow = { ...row("a.example"), removeBlockedReason: "Only a security admin can remove this." };
+    render(
+      <>
+        <HostList rows={[blocked]} emptyText="none" canRemove removing={null} onRemove={vi.fn()} />
+        <HostList rows={[blocked]} emptyText="none" canRemove removing={null} onRemove={vi.fn()} />
+      </>,
+    );
+    const ids = screen.getAllByText("Only a security admin can remove this.").map((el) => el.id);
+    expect(new Set(ids).size).toBe(2);
+    for (const button of screen.getAllByRole("button", { name: "Remove a.example" })) {
+      expect(button).toHaveAccessibleDescription("Only a security admin can remove this.");
+    }
+  });
 });

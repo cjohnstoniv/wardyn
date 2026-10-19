@@ -691,10 +691,9 @@ describe("SidebarNav — per view (M-2)", () => {
     expect(within(sheet).getByRole("link", { name: /^Runs/ })).toHaveAttribute("href", "/admin/runs");
   });
 
-  // #2827: the Drives page reads GET /drives, which is super-only, so no admin tier gets a nav item for it.
-  it("a security admin's Admin view: Credentials and User types join; Drives, Secrets, Recordings, Setup and Settings do not", async () => {
+  it("a security admin's Admin view: Credentials, User types and Drives join; Secrets, Recordings, Setup and Settings do not", async () => {
     const { labels } = await open("security_admin");
-    expect(labels).toEqual(["Runs", "Approvals", "People", "Runners", "Workspaces", "Policies", "Templates", "Governance", "Permissions", "Credentials", "User types", "Audit"]);
+    expect(labels).toEqual(["Runs", "Approvals", "People", "Runners", "Workspaces", "Policies", "Templates", "Governance", "Permissions", "Credentials", "User types", "Drives", "Audit"]);
   });
 
   it("Templates (0.9): after Runs in the User view, after Policies in the Admin view, both admin tiers", async () => {

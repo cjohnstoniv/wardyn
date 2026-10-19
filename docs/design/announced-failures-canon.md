@@ -25,6 +25,7 @@ only as a duplicate of the now-visible text, never as the sole explanation.
 |---|---|---|
 | `record-pane.tsx` — per-host Approve button (`CaughtHosts`, in a row with the host) | trailing meta | `OperatorOnlyHint` (`OPERATOR_ONLY_REASON`) |
 | `record-pane.tsx` — "Approve N selected hosts and replay again" (standing alone) | helper text under | `OPERATOR_ONLY_REASON` |
+| `workspace-detail/host-list.tsx` — a blocked Remove X (#2584) | trailing meta (beside the control, `aria-describedby`; no `title`) | the row's `removeBlockedReason` (`OPERATOR_ONLY_REASON`, `SECURITY_ONLY_REASON`, `EGRESS.INHERITED_REASON`, `EGRESS.SCAN_SEEDED_REASON`) |
 | `recording.tsx` — true-empty library (no runs at all) | `EmptyState` title + body | `RECORDINGS.EMPTY_TITLE` / `RECORDINGS.EMPTY_BODY` |
 | `audit.tsx` `AuditScreen` — member's unfiltered feed | `EmptyState` title (already visible; verified, left as-is) | `AUDIT.MEMBER_FEED_TITLE` (`screens/audit-copy.ts`) |
 | `sign-in.tsx:394` — disabled SSO button | **not touched** — removed outright by #457 | — |
