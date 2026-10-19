@@ -87,6 +87,7 @@ func TestADOResident_OptInIsPerConnection(t *testing.T) {
 			Delivery:          placement.DeliveryPolicy{Classes: map[string]placement.ClassPolicy{placement.ClassADOMintedPAT: {Mode: placement.ModeRunnerResident}}},
 			Posture:           &types.RunnerPosture{OS: "linux"},
 			Trust:             types.RunnerTrustPersonal,
+			OwnerKind:         types.RunnerOwnerPerson,
 		})
 		return r
 	}

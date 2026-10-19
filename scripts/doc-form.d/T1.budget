@@ -57,7 +57,8 @@
 # 0.9.4 W4 train +3: DOCS-1 and DEPLOY edits to the same THREAT-MODEL lines, measured at the merge.
 # 0.9.4 W4 train +6: REST and API-B each used the same THREAT-MODEL slack, measured at the API-B merge.
 # threatmodel/THREAT-MODEL.md 64613 adds 72 over 64541 (0.9.7 MINT-L backport), measured: residual #76 and its summaries name the Azure DevOps minted token held in the runner proxy's memory.
-threatmodel/THREAT-MODEL.md=64613
+# threatmodel/THREAT-MODEL.md 64619 adds 6 over 64613 (0.9.7 MINT-L backport), measured: #76 names a person's own runner, the 15-minute re-judge and the revoke on refusal.
+threatmodel/THREAT-MODEL.md=64619
 # threatmodel/THREAT-MODEL.md 63171 adds 78 over 63093, measured: the console session under the role-stamp residual: renewal up to its cap, never moving the sign-in time, and the copied-cookie bound (0.9.3 console session lifetime).
 # threatmodel/THREAT-MODEL.md 63123 adds 30 over 63093: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
 # threatmodel/THREAT-MODEL.md 63025 = 62948 + 77, measured: the laptop decision-sink crossing row and #77's sink and loss-row bullets.
