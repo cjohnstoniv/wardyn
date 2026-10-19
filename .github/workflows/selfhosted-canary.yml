@@ -48,6 +48,9 @@ jobs:
           no() { echo "::error title=selfhosted-canary::$1"; fail=1; }
           grep -q 'Starting gVisor' <<<"$(dmesg 2>/dev/null)" || no "not inside gVisor (runsc)"
           [ "$(id -u)" != 0 ] || no "the job runs as root"
+          # setpriv reads the flag with prctl; gVisor leaves NoNewPrivs out of /proc/self/status.
+          grep -q '^no_new_privs: 1$' <<<"$(setpriv --dump 2>/dev/null)" || no "no_new_privs is not set"
+          ! sudo -n true 2>/dev/null || no "sudo gives root"
           for s in /var/run/docker.sock /run/docker.sock /var/run/wardyn-docker.sock /run/wardyn-docker.sock; do
             [ ! -e "$s" ] || no "a Docker socket is present: $s"
           done
