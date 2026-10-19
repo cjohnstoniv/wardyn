@@ -122,7 +122,7 @@ Section: devel
 Priority: optional
 Architecture: ${GOARCH_PKG}
 Maintainer: The Wardyn Authors <noreply@github.com>
-Depends: docker.io | docker-ce | podman
+Depends: docker-ce-cli | docker.io, docker-compose-plugin | docker-compose-v2
 Description: Wardyn desktop tier — governed agent sandboxes on a managed laptop
  Installs the compose payload, the converge job (systemd timer) and the wardyn
  CLI. It does NOT deliver the MDM envelope: /etc/wardyn/wardyn.env, secret.env,
@@ -184,6 +184,7 @@ License:        Apache-2.0
 BuildArch:      ${RPM_ARCH}
 Source0:        $(basename "${TARBALL}")
 Requires:       /usr/bin/docker
+Requires:       (docker-compose-plugin or docker-compose)
 AutoReqProv:    no
 
 %description

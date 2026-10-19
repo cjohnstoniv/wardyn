@@ -566,8 +566,9 @@ func run() error {
 		return err
 	}
 
-	// Refuse a metrics bind failure before workers or optional gateways start.
-	if err := startMetricsListener(rootCtx, *f.metricsListen, srv.MetricsListenerHandler()); err != nil {
+	// Refuse a metrics or UI-sandbox gateway bind failure before workers or the other gateways start.
+	uiLn, err := bindOptionalListeners(rootCtx, f, srv)
+	if err != nil {
 		return err
 	}
 
@@ -581,7 +582,7 @@ func run() error {
 
 	// UI-sandbox gateway: a SECOND HTTP listener on its own origin (see
 	// startUISandboxGateway; a no-op when -ui-sandbox-listen is empty).
-	startUISandboxGateway(rootCtx, f, posture, srv)
+	startUISandboxGateway(rootCtx, f, posture, srv, uiLn)
 
 	// Serve until signal/error, then drain: HTTP first, audit sinks last, the
 	// org federation forwarder (if any) joined so it never outlives the

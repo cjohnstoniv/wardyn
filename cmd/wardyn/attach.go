@@ -15,6 +15,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/spf13/cobra"
@@ -32,6 +33,14 @@ var (
 	restoreTerminalFn = term.Restore
 	getSizeFn         = term.GetSize
 )
+
+// attachStdin is the input Half 2 relays; nil means os.Stdin. A test seam, so a
+// piped session's EOF can be driven without closing the process's real stdin.
+var attachStdin io.Reader
+
+// attachDrainIdle is how long a piped session (stdin at EOF) keeps showing
+// output after the last frame before it detaches. A var so tests can shorten it.
+var attachDrainIdle = 2 * time.Second
 
 // attachCmd returns the cobra command for `wardyn run attach <run-id>`.
 //
@@ -62,6 +71,8 @@ The local terminal is placed into raw mode for the duration of the session:
 Ctrl-C is relayed to the remote PTY as input, not used locally to detach.
 Send TERM/HUP/INT from another terminal (or let the remote side close the
 session) to detach.
+With piped input (not a terminal), attach sends what it reads, then keeps
+showing output until the session closes or stays quiet for 2 seconds, and exits 0.
 
 Authentication: your own token (WARDYN_TOKEN) or WARDYN_ADMIN_TOKEN (or --token).
 `,
@@ -259,6 +270,13 @@ func runAttach(ctx context.Context, c *sdk.Client, runID string) error {
 	// errCh collects the first termination reason from either pump half.
 	errCh := make(chan error, 3)
 
+	// stdinEOF closes when piped stdin ends, and activity pings on every frame
+	// Half 1 shows: together they let the session keep draining output after the
+	// input is gone, then detach once it goes quiet.
+	stdinEOF := make(chan struct{})
+	activity := make(chan struct{}, 1)
+	in := attachInput()
+
 	// attachMode tracks the read/write state this socket has been told about
 	// across attach-mode frames (see handleAttachModeFrame) — read only by
 	// Half 1 below, so it needs no lock.
@@ -288,6 +306,7 @@ func runAttach(ctx context.Context, c *sdk.Client, runID string) error {
 				cancel()
 				return
 			}
+			signalAttachActivity(activity)
 		}
 	}()
 
@@ -295,7 +314,7 @@ func runAttach(ctx context.Context, c *sdk.Client, runID string) error {
 	go func() {
 		buf := make([]byte, 4096)
 		for {
-			n, rerr := os.Stdin.Read(buf)
+			n, rerr := in.Read(buf)
 			if n > 0 {
 				if werr := conn.Write(pumpCtx, websocket.MessageBinary, buf[:n]); werr != nil {
 					errCh <- werr
@@ -305,10 +324,10 @@ func runAttach(ctx context.Context, c *sdk.Client, runID string) error {
 			}
 			if rerr != nil {
 				if rerr == io.EOF {
-					errCh <- nil // clean EOF (piped stdin finished)
-				} else {
-					errCh <- rerr
+					close(stdinEOF) // piped stdin finished: stop sending, keep draining
+					return
 				}
+				errCh <- rerr
 				cancel()
 				return
 			}
@@ -331,8 +350,8 @@ func runAttach(ctx context.Context, c *sdk.Client, runID string) error {
 		}
 	}()
 
-	// Block until a pump half ends.
-	firstErr := <-errCh
+	// Block until a pump half ends (or, after stdin EOF, the output goes quiet).
+	firstErr := waitAttachEnd(errCh, stdinEOF, activity)
 	cancel()
 
 	// Attempt a clean WebSocket close.
@@ -583,4 +602,50 @@ func isNormalClose(err error) bool {
 	// read.go/write.go), so context.Canceled is a real sentinel here, not just
 	// a string — errors.Is is exact, no substring guessing needed.
 	return errors.Is(err, context.Canceled)
+}
+
+// waitAttachEnd blocks until a pump half reports its end and returns that error.
+// After stdin EOF the remote command's output is still arriving, so it also
+// returns (nil) once attachDrainIdle passes with no frame shown, rather than
+// detaching before any of that output is.
+func waitAttachEnd(errCh <-chan error, stdinEOF <-chan struct{}, activity <-chan struct{}) error {
+	var idle *time.Timer
+	var idleC <-chan time.Time
+	defer func() {
+		if idle != nil {
+			idle.Stop()
+		}
+	}()
+	for {
+		select {
+		case err := <-errCh:
+			return err
+		case <-stdinEOF:
+			stdinEOF = nil
+			idle = time.NewTimer(attachDrainIdle)
+			idleC = idle.C
+		case <-activity:
+			if idle != nil {
+				idle.Reset(attachDrainIdle)
+			}
+		case <-idleC:
+			return nil
+		}
+	}
+}
+
+// attachInput is what Half 2 relays: attachStdin when a test set it, else os.Stdin.
+func attachInput() io.Reader {
+	if attachStdin != nil {
+		return attachStdin
+	}
+	return os.Stdin
+}
+
+// signalAttachActivity records, without blocking, that a frame was just shown.
+func signalAttachActivity(activity chan<- struct{}) {
+	select {
+	case activity <- struct{}{}:
+	default:
+	}
 }

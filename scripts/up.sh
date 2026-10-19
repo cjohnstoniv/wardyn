@@ -259,12 +259,42 @@ cosign_verify() {
 # to point at — the containerized path installs no `wardyn` on PATH otherwise.
 seed_host_proxy() {
   _shp_bin="${REPO_ROOT}/bin/wardyn"
+  _shp_mark="${REPO_ROOT}/bin/.wardyn-from-image"
   mkdir -p "${REPO_ROOT}/bin" 2>/dev/null || return 0
-  # distroless has no shell, so `docker run … cat` can't work — create, cp, rm.
-  _shp_cid=$(docker create wardyn/wardynd:local 2>/dev/null) || return 0
-  docker cp "${_shp_cid}:/host/wardyn" "${_shp_bin}" >/dev/null 2>&1 || true
-  docker rm -f "${_shp_cid}" >/dev/null 2>&1 || true
-  [ -x "${_shp_bin}" ] || { unset _shp_bin _shp_cid; return 0; }
+  # A CLI already on this host that runs is the operator's (a `go build`, a
+  # package): keep it. Only a binary this function extracted earlier (marked), or
+  # one that cannot run here (a foreign-arch seed from before 0.10), is replaced.
+  if [ -x "${_shp_bin}" ] && { [ ! -e "${_shp_mark}" ] && "${_shp_bin}" --help >/dev/null 2>&1; }; then
+    :
+  else
+    _shp_os="${WARDYN_HOST_GOOS:-linux}"
+    _shp_arch="${WARDYN_HOST_GOARCH:-$(host_goarch)}"
+    _shp_new="${_shp_bin}.new"
+    rm -f "${_shp_new}"
+    # distroless has no shell, so `docker run … cat` can't work — create, cp, rm.
+    _shp_cid=$(docker create wardyn/wardynd:local 2>/dev/null) || { unset _shp_os _shp_arch _shp_new _shp_cid; return 0; }
+    # The image carries one CLI per host platform. /host/wardyn alone is the
+    # image's own build target: the host's when built from this tree, linux/amd64
+    # in a pulled image, so it is only right where those agree.
+    if ! docker cp "${_shp_cid}:/host/wardyn-${_shp_os}-${_shp_arch}" "${_shp_new}" >/dev/null 2>&1; then
+      if [ "${IMAGES_ORIGIN}" = built ] || { [ "${_shp_os}" = linux ] && [ "${_shp_arch}" = amd64 ]; }; then
+        docker cp "${_shp_cid}:/host/wardyn" "${_shp_new}" >/dev/null 2>&1 || true
+      fi
+    fi
+    docker rm -f "${_shp_cid}" >/dev/null 2>&1 || true
+    if [ -f "${_shp_new}" ] && chmod +x "${_shp_new}" && "${_shp_new}" --help >/dev/null 2>&1; then
+      mv -f "${_shp_new}" "${_shp_bin}"
+      : > "${_shp_mark}"
+    else
+      rm -f "${_shp_new}"
+      # A seed that cannot run here is worse than none: the hand-off would print
+      # it as the command to run.
+      [ ! -x "${_shp_bin}" ] || "${_shp_bin}" --help >/dev/null 2>&1 || rm -f "${_shp_bin}"
+      warn "No wardyn CLI in the image runs on this host (${_shp_os}/${_shp_arch}); skipping host proxy detection. Build one: go install github.com/cjohnstoniv/wardyn/cmd/wardyn@latest"
+    fi
+    unset _shp_os _shp_arch _shp_new _shp_cid
+  fi
+  [ -x "${_shp_bin}" ] || { unset _shp_bin _shp_mark; return 0; }
   # This is HOST-NATIVE execution of a binary taken out of a container image —
   # not a container entrypoint, so no confinement applies to it at all. Fine
   # when the image was built from this tree, and fine when cosign verified it;
@@ -279,7 +309,7 @@ seed_host_proxy() {
       log "Host proxy detection seeded from this host (the container can't read your shell/OS/PAC settings)."
     fi
   fi
-  unset _shp_bin _shp_cid _shp_json _shp_b64
+  unset _shp_bin _shp_mark _shp_json _shp_b64
 }
 
 # wardyn_cli_prefix REPO_ROOT_DIR -> invocation prefix for example commands.

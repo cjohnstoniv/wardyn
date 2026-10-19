@@ -11,11 +11,16 @@ package main
 
 import (
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -367,7 +372,8 @@ func TestSiteConfigSet_NoOmittedFieldsNoteIsSilent(t *testing.T) {
 	srv := applyServer(t, &got)
 
 	_, stderr, err := runSiteConfigSet(t, srv.URL,
-		`{"scm_hosts":["gitlab.corp"],"upstream_proxy_no_proxy":[],"internal_hosts":[],"workspace_providers":{},"agent_providers":{}}`)
+		`{"scm_hosts":["gitlab.corp"],"upstream_proxy_no_proxy":[],"internal_hosts":[],"workspace_providers":{},"agent_providers":{},`+
+			`"model_providers":{},"sign_in_help_text":"","sign_in_help_url":"","branding":{},"policy_help":{},"components":{}}`)
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}
@@ -523,5 +529,43 @@ func TestSiteConfigSet_WarnsTheEgressBaselineWasNotApplied(t *testing.T) {
 	}
 	if strings.Contains(quiet, "egress baseline") {
 		t.Errorf("stderr = %q, want silence when the stored baseline is the file's", quiet)
+	}
+}
+
+// TestSiteConfigFieldsAfter066MatchesServer pins #2325: the CLI's copy of the
+// carry-forward list had drifted to 4 keys against the server's 10, so `set`
+// printed no "left as the server already has it" note for the other six. The
+// server's list is an unexported var in internal/api, so it is read from source.
+func TestSiteConfigFieldsAfter066MatchesServer(t *testing.T) {
+	src := filepath.Join("..", "..", "internal", "api", "site_config.go")
+	file, err := parser.ParseFile(token.NewFileSet(), src, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var server []string
+	ast.Inspect(file, func(n ast.Node) bool {
+		vs, ok := n.(*ast.ValueSpec)
+		if !ok || len(vs.Names) != 1 || vs.Names[0].Name != "siteConfigFieldsAfter066" || len(vs.Values) != 1 {
+			return true
+		}
+		cl, ok := vs.Values[0].(*ast.CompositeLit)
+		if !ok {
+			return true
+		}
+		for _, el := range cl.Elts {
+			if lit, ok := el.(*ast.BasicLit); ok {
+				v, _ := strconv.Unquote(lit.Value)
+				server = append(server, v)
+			}
+		}
+		return false
+	})
+	if len(server) == 0 {
+		t.Fatalf("found no siteConfigFieldsAfter066 list in %s; the parity check would pass vacuously", src)
+	}
+	got := slices.Sorted(slices.Values(siteConfigFieldsAfter066))
+	want := slices.Sorted(slices.Values(server))
+	if !slices.Equal(got, want) {
+		t.Errorf("cmd/wardyn siteConfigFieldsAfter066 = %v, want the server's %v", got, want)
 	}
 }

@@ -154,6 +154,13 @@ describe("PolicyPanel — helper rail", () => {
     expect(FIELD_HELP.workspace_mounts).toBeTruthy();
   });
 
+  // #2603: the help named neither the enforced push size cap nor the two resident grant kinds the server accepts.
+  it("push_rules and eligible_grants help name max_file_size_mib, env_secret and file_secret", () => {
+    expect(FIELD_HELP.push_rules.values).toMatch(/max_file_size_mib \(0-1024/);
+    expect(FIELD_HELP.eligible_grants.values).toMatch(/\| env_secret \| file_secret/);
+    expect(FIELD_HELP.eligible_grants.values).toMatch(/resident, never revoked, and admin-only/);
+  });
+
   it("no snippet anywhere authors workspace_secret_values (refused on write)", () => {
     const json = JSON.stringify(Object.values(FIELD_HELP).map((h) => h.snippet));
     expect(json).not.toContain("workspace_secret_values");

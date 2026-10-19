@@ -113,11 +113,34 @@ grep -qE '^\s*-\s*\$\{WARDYN_MANAGED_DIR:-[^}]+\}:/etc/wardyn:ro\s*$' "${REPO_RO
   || fail "deploy/compose/docker-compose.yaml no longer bind-mounts \${WARDYN_MANAGED_DIR}:/etc/wardyn:ro — WARDYN_DEFAULT_POLICY would point at a path the container can't see"
 grep -qE '^\s*export\s+WARDYN_MANAGED_DIR=' "${DESK_DIR}/wardyn-desktop.sh" \
   || fail "deploy/desktop/wardyn-desktop.sh no longer exports WARDYN_MANAGED_DIR — the managed dir would mount as the empty default"
-grep -qE '^\s*-\s*path:\s*\.\./compose/docker-compose\.yaml\s*$' "${DESK_DIR}/docker-compose.yaml" \
+grep -qE '^\s*-\s*\.\./compose/docker-compose\.yaml\s*$' "${DESK_DIR}/docker-compose.yaml" \
   || fail "deploy/desktop/docker-compose.yaml no longer includes ../compose/docker-compose.yaml — it would no longer be a configuration of the same stack"
 if grep -qE '^\s*services:\s*$' "${DESK_DIR}/docker-compose.yaml"; then
   fail "deploy/desktop/docker-compose.yaml re-declares services: beside its include: — that collides with the imported stack on older Compose (services.wardynd conflicts with imported resource)"
 fi
+
+# The tier publishes only the console and SSH ports. The base stack also maps
+# Postgres 5432, the registry 5010 and the UI relay 8081 on loopback, which fails
+# `compose up` on a laptop already running its own Postgres or Metro (#2165).
+if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+  pub="$(docker compose --env-file "${DESK_DIR}/wardyn.env.example" -f "${DESK_DIR}/docker-compose.yaml" config 2>/dev/null | awk '/published:/ {gsub(/"/, "", $2); print $2}' | sort -n | tr '\n' ' ')"
+  [ "${pub}" = "2222 8080 " ] \
+    || fail "the desktop compose config publishes host ports [${pub}], want exactly [2222 8080]: the Postgres, registry and UI-relay publishes must stay dropped (deploy/desktop/docker-compose.ports.yaml)"
+fi
+
+# ── install.sh refuses --purge without --uninstall (#2171) ─────────────────
+# The refusal sits before the root check, so this runs unprivileged.
+purge_out="$(bash "${DESK_DIR}/install.sh" --purge 2>&1)" && purge_rc=0 || purge_rc=$?
+{ [ "${purge_rc}" -ne 0 ] && grep -q -- '--purge only works with --uninstall' <<<"${purge_out}"; } \
+  || fail "install.sh --purge without --uninstall must refuse with '--purge only works with --uninstall' (rc=${purge_rc}): ${purge_out}"
+
+# ── the packages require the compose plugin, not just a docker binary (#2183) ─
+grep -qE '^Depends: .*docker-compose-plugin \| docker-compose-v2' "${REPO_ROOT}/scripts/build-desktop-package.sh" \
+  || fail "the .deb Depends no longer requires the Docker Compose v2 plugin; wardyn-desktop.sh runs 'docker compose'"
+grep -qE '^Requires:\s+\(docker-compose-plugin or docker-compose\)' "${REPO_ROOT}/scripts/build-desktop-package.sh" \
+  || fail "the .rpm Requires no longer names the Docker Compose v2 plugin"
+grep -q "docker compose version" "${DESK_DIR}/install.sh" \
+  || fail "install.sh no longer preflights 'docker compose version'; a host without the plugin registers a converge job that fails every tick"
 
 # ── 5. the plist is valid XML ────────────────────────────────────────────────
 PLIST="${DESK_DIR}/com.wardyn.daemon.plist"

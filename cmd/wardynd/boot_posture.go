@@ -355,7 +355,7 @@ func plural(n int, one, many string) string {
 // The TLS posture is taken rather than re-derived so this listener answers to
 // the SAME plaintext refusal the console does (refusePlaintextListen): the
 // relay session cookie is a bearer credential, and it travels on this address.
-func validateUISandboxConfig(uiListen, listen, sshListen, originTemplate, stripCookies string, posture tlsPosture, allowPlaintextListen bool) error {
+func validateUISandboxConfig(uiListen, listen, internalListen, sshListen, originTemplate, stripCookies string, posture tlsPosture, allowPlaintextListen bool) error {
 	if uiListen == "" {
 		return nil // off: nothing to validate, no listener, no new surface
 	}
@@ -367,6 +367,9 @@ func validateUISandboxConfig(uiListen, listen, sshListen, originTemplate, stripC
 			"the UI-sandbox gateway relays the SANDBOX's own pages, and serving them on the console's origin would let that "+
 			"sandbox-authored code read the console session and drive every admin action the operator can; "+
 			"give the gateway its own address (e.g. \":8081\") or unset WARDYN_UI_SANDBOX_LISTEN to disable it", uiListen)
+	}
+	if internalListen != "" && sameListenAddress(uiListen, internalListen) {
+		return fmt.Errorf("refusing to start: -ui-sandbox-listen %q is the same address as -internal-listen; give each listener its own address", uiListen)
 	}
 	if sshListen != "" && sameListenAddress(uiListen, sshListen) {
 		return fmt.Errorf("refusing to start: -ui-sandbox-listen %q is the same address as -ssh-listen; give each gateway its own address", uiListen)
@@ -425,7 +428,7 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 	if err := validateHAPosture(f); err != nil {
 		return err
 	}
-	if err := validateUISandboxConfig(*f.uiListen, *f.listen, *f.sshListen, *f.uiOriginTemplate, *f.uiStripCookies, posture, *f.allowPlaintextListen); err != nil {
+	if err := validateUISandboxConfig(*f.uiListen, *f.listen, *f.internalListen, *f.sshListen, *f.uiOriginTemplate, *f.uiStripCookies, posture, *f.allowPlaintextListen); err != nil {
 		return err
 	}
 	if err := validateMetricsListenConfig(*f.metricsListen, *f.listen, *f.internalListen, *f.sshListen, *f.uiListen); err != nil {

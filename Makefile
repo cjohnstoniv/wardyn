@@ -701,6 +701,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-image-pins.sh
 	./scripts/test-install-sh-trust.sh
 	./scripts/test-install-sh.sh
+	./scripts/test-kind-follow-main.sh
 	./scripts/test-kind-sso-walk-log.sh
 	./scripts/test-lane-preflight.sh
 	./scripts/test-migration-numbers.sh
@@ -719,6 +720,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-reset-host-gate.sh
 	./scripts/test-reset-network-ns.sh
 	./scripts/test-setup-launch.sh
+	./scripts/test-up-seed-host-proxy.sh
 	./scripts/test-up-policy.sh
 	./scripts/test-up-probes.sh
 	./scripts/test-ui-licenses-tsv.sh

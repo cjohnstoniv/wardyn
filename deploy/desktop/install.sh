@@ -49,6 +49,13 @@ for arg in "$@"; do
   esac
 done
 
+# --purge destroys data, so it never rides along with an install: alone it would
+# fall through to the install branch and converge the stack instead.
+if [ "${PURGE}" = 1 ] && [ "${MODE}" != uninstall ]; then
+  echo "install.sh: --purge only works with --uninstall (sudo ./install.sh --uninstall --purge)" >&2
+  exit 1
+fi
+
 if [ "$(id -u)" != "0" ]; then
   echo "install.sh: must run as root (sudo ./install.sh) — it writes /etc/wardyn and the system init directory" >&2
   exit 1
@@ -166,6 +173,9 @@ else
   command -v systemctl >/dev/null 2>&1 || { echo "install.sh: systemctl not found — this Linux path targets systemd. docs/DESKTOP.md covers running wardyn-desktop.sh from another supervisor." >&2; exit 1; }
 fi
 command -v docker >/dev/null 2>&1 || { echo "install.sh: docker not found on PATH — install Docker Desktop, Colima or Docker Engine first" >&2; exit 1; }
+# wardyn-desktop.sh runs `docker compose`, the v2 plugin: a docker CLI without it
+# registers a converge job that fails on every tick.
+docker compose version >/dev/null 2>&1 || { echo "install.sh: 'docker compose' is not available — install the Docker Compose v2 plugin (docker-compose-plugin, or docker-compose-v2 on Debian/Ubuntu) first" >&2; exit 1; }
 
 # ── Which Docker socket (enrolment half) ───────────────────────────────────
 # This installer runs as ROOT, and Docker Desktop, Colima, rootless Docker and
