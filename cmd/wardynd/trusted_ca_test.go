@@ -241,3 +241,24 @@ func TestLoadTrustedCA_RefusesOversizedBundle(t *testing.T) {
 		t.Fatalf("loadTrustedCA(oversized) = %v, want a refusal naming the remedy", err)
 	}
 }
+
+// A bundle someone other than the owner can write is refused, since the writer picks the roots; a
+// world-readable one is a normal CA bundle.
+func TestLoadTrustedCA_RefusesAWritableBundle(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(path, genTestCert(t, "mode-test"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, n, err := loadTrustedCA(path); err != nil || n != 1 {
+		t.Fatalf("a 0644 bundle = %d certs, %v; want it loaded", n, err)
+	}
+	for _, mode := range []os.FileMode{0o664, 0o666, 0o646} {
+		if err := os.Chmod(path, mode); err != nil {
+			t.Fatal(err)
+		}
+		_, _, _, err := loadTrustedCA(path)
+		if err == nil || !strings.Contains(err.Error(), "WARDYN_TRUSTED_CA_FILE") {
+			t.Errorf("a %04o bundle was not refused: %v", mode, err)
+		}
+	}
+}

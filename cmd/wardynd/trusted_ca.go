@@ -7,11 +7,13 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
@@ -45,9 +47,9 @@ func loadTrustedCA(path string) (pemBundle string, pool *x509.CertPool, n int, e
 	if path == "" {
 		return "", nil, 0, nil
 	}
-	raw, rerr := os.ReadFile(path)
+	raw, rerr := readTrustedCAFile(path)
 	if rerr != nil {
-		return "", nil, 0, fmt.Errorf("WARDYN_TRUSTED_CA_FILE: %w", rerr)
+		return "", nil, 0, rerr
 	}
 	bundle, certs, perr := runner.TrustedCABundle(raw)
 	if perr != nil {
@@ -64,6 +66,29 @@ func loadTrustedCA(path string) (pemBundle string, pool *x509.CertPool, n int, e
 		sys.AddCert(c)
 	}
 	return bundle, sys, len(certs), nil
+}
+
+// readTrustedCAFile reads the bundle from the file it checked: a group- or world-writable bundle is
+// refused, as for a secret file, because whoever can write it chooses the roots wardynd and every
+// sandbox trust. Other-read is fine; a CA bundle is public.
+func readTrustedCAFile(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("WARDYN_TRUSTED_CA_FILE: %w", err)
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("WARDYN_TRUSTED_CA_FILE: %w", err)
+	}
+	if err := cliutil.CheckSecretFileMode("WARDYN_TRUSTED_CA_FILE", path, fi.Mode().Perm(), -1, os.Geteuid()); err != nil {
+		return nil, err
+	}
+	raw, err := io.ReadAll(f)
+	if err != nil {
+		return nil, fmt.Errorf("WARDYN_TRUSTED_CA_FILE: %w", err)
+	}
+	return raw, nil
 }
 
 // installTrustedCA additively sets pool as the RootCAs of tr's TLS config —
