@@ -1757,9 +1757,9 @@ hiding them would repeat the failure mode we are designed to avoid.
     - A `Content-Security-Policy: connect-src 'self'` would narrow, not close, this — it stops in-page `fetch`/`XHR`/WebSocket egress but not navigation or a form submit — and is not implemented.
 
 22. **The UI-relay's session cookie re-asserts ownership and revocation every 30 seconds; only a role demotion waits for the TTL.**
-    - `uiSessionTTL` is 8 hours by default (`WARDYN_UI_SANDBOX_SESSION_TTL`); the cookie is minted once at `handleUIEnter` against the caller's role at that moment.
-    - Every 30 seconds (`uiReassertInterval`, `uiSessionStillAuthorized`) the relay re-checks that the principal may still enter the run, that no revocation postdates the session, and that a portal grant is live.
-    - Demoting an admin does not end their cookie: its role is a login-time snapshot, so it keeps the admin's reach until the TTL lapses or the run stops. `WARDYN_SSH_ROLE_TTL` bounds the SSH admin override the same way.
+    - `uiSessionTTL` is 8 hours (`WARDYN_UI_SANDBOX_SESSION_TTL`); the cookie is minted once at `handleUIEnter` against the caller's role at that moment.
+    - Every 30 seconds (`uiReassertInterval`, `uiSessionStillAuthorized`) the relay re-checks, per request, that the principal may still enter the run, that no revocation postdates the session, and that a portal grant is live; an upgraded WebSocket is checked only at its start.
+    - Demoting an admin does not end their cookie: its role is a login-time snapshot, so it keeps the admin's reach until the TTL lapses or the run stops.
 
 23. **The shipped default deployment collapses the audited insider into the trusted operator.**
     - §1 treats "Platform operator / SRE" as trusted and out of scope and "Malicious insider (developer)" as the audited adversary — the SAME person on the topology Wardyn ships today.
