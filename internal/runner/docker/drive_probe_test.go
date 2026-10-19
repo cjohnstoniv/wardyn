@@ -229,3 +229,34 @@ func makeRootOwnedHostDir(ctx context.Context, t *testing.T, d *Driver, hostRoot
 	}
 	return filepath.Join(hostRoot, name)
 }
+
+// createTimesOut is a daemon that finishes the create the client already gave up on.
+type createTimesOut struct{ *fakeDocker }
+
+func (c createTimesOut) ContainerCreate(ctx context.Context, opts client.ContainerCreateOptions) (client.ContainerCreateResult, error) {
+	_, _ = c.fakeDocker.ContainerCreate(ctx, opts)
+	return client.ContainerCreateResult{}, context.DeadlineExceeded
+}
+
+// The probe container is labelled as Wardyn's (with the runner's id, so a sweeper can claim a stray),
+// and a create that timed out client-side is still removed by name.
+func TestProbeDrive_LabelledAndRemovedAfterAClientSideCreateTimeout(t *testing.T) {
+	f := newFakeDocker()
+	f.images[defaultDriveProbeImage] = true
+	d := newWithClient(createTimesOut{f}, Config{ProxyImage: "wardyn-proxy:dev", RunnerID: "r-1"})
+
+	if _, err := d.ProbeDrive(context.Background(), probeDriveFixture()); err == nil {
+		t.Fatal("ProbeDrive with a failed create returned no error")
+	}
+	if len(f.containers) != 1 {
+		t.Fatalf("containers = %d, want the one the daemon made", len(f.containers))
+	}
+	for name, c := range f.containers {
+		if c.cfg.Labels[labelManaged] != "true" || c.cfg.Labels[runner.LabelRunnerID] != "r-1" {
+			t.Errorf("%s labels = %v, want wardyn's managed label and the runner id", name, c.cfg.Labels)
+		}
+		if !c.removed || !c.forceRemoved {
+			t.Errorf("%s removed=%v force=%v, want force-removed by name", name, c.removed, c.forceRemoved)
+		}
+	}
+}

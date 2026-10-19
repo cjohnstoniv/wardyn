@@ -288,6 +288,32 @@ func (s *Server) teardownOrAudit(ctx context.Context, runID uuid.UUID, ref, acti
 // It is shared by handleKillRun and the completion watcher so EVERY terminal
 // transition revokes (matching the documented cascade-on-every-stop promise).
 func (s *Server) revokeRunCascade(ctx context.Context, runID uuid.UUID) error {
+	data := s.revokeRunSteps(ctx, runID)
+	if len(data) > 0 {
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.revoke", runID.String(), "failure", mustJSON(data)))
+	}
+	if _, pending := data["pat_revoke_pending"]; len(data) == 0 || (pending && len(data) == 1) {
+		return ctx.Err()
+	}
+	return fmt.Errorf("run revoke incomplete: %v", data)
+}
+
+// RevokeStoppedRun is revokeRunCascade for the idle reaper (cmd/wardynd's
+// lifecycleStopper), the one terminal writer outside this package. It runs the
+// same steps and returns what failed or is still pending, keyed as the cascade's
+// run.revoke row is, without auditing it: the reaper writes that row itself
+// from the map it is handed. An empty map is a clean revoke.
+func (s *Server) RevokeStoppedRun(ctx context.Context, runID uuid.UUID) map[string]string {
+	out := map[string]string{}
+	for k, v := range s.revokeRunSteps(ctx, runID) {
+		out[k] = fmt.Sprint(v)
+	}
+	return out
+}
+
+// revokeRunSteps is the cascade's work, unaudited: every step runs, and each
+// failure (or the count of PATs still unrevoked) is returned under its key.
+func (s *Server) revokeRunSteps(ctx context.Context, runID uuid.UUID) map[string]any {
 	data := map[string]any{}
 	if s.cfg.Identity != nil {
 		if rerr := s.cfg.Identity.RevokeRun(ctx, runID); rerr != nil {
@@ -312,13 +338,7 @@ func (s *Server) revokeRunCascade(ctx context.Context, runID uuid.UUID) error {
 			data["pat_revoke_pending"] = len(rows)
 		}
 	}
-	if len(data) > 0 {
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.revoke", runID.String(), "failure", mustJSON(data)))
-	}
-	if _, pending := data["pat_revoke_pending"]; len(data) == 0 || (pending && len(data) == 1) {
-		return ctx.Err()
-	}
-	return fmt.Errorf("run revoke incomplete: %v", data)
+	return data
 }
 
 // cancelRunApprovals is the approval half of the terminal cascade: every

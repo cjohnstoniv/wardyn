@@ -177,6 +177,7 @@ func governanceSetCmd(client clientFn) *cobra.Command {
 				return err
 			}
 			res, err := client().ApplyGovernanceResult(cmd.Context(), doc, prune)
+			printApplyWarnings(cmd.ErrOrStderr(), res.Steps)
 			if err != nil {
 				if len(res.Steps) > 0 {
 					printApplySteps(cmd.ErrOrStderr(), res.Steps)

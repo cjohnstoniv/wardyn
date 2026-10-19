@@ -753,8 +753,10 @@ func warnGovernAdminRunsUnbound(governAdminRuns, oidcConfigured bool) {
 	}
 }
 
-func warnPublicAPIDisabled(adminToken string, localMode bool) {
-	if adminToken == "" && !localMode {
+// warnPublicAPIDisabled says so when no way in is configured: no admin token, no OIDC sign-in and
+// not local mode. An SSO-only deployment serves its API to signed-in people, so it does not warn.
+func warnPublicAPIDisabled(adminToken string, localMode, oidcConfigured bool) {
+	if adminToken == "" && !localMode && !oidcConfigured {
 		slog.Warn("wardynd: admin token unset; the public API is DISABLED (only /healthz responds). Set WARDYN_ADMIN_TOKEN, enable OIDC, or use -local-mode for single-developer localhost use.")
 	}
 }

@@ -45,7 +45,7 @@ func (b *Broker) prepareMint(ctx context.Context, caller *identity.Claims, grant
 	minted, err := b.mintKind(ctx, caller, before.grantSpec)
 	if err == nil {
 		if err = b.maskMinted(caller.RunID, minted); err != nil {
-			b.discardMinted(ctx, minted)
+			b.discardMinted(ctx, caller.RunID, grantID, minted)
 		}
 	}
 	if err != nil {

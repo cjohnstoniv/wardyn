@@ -449,7 +449,7 @@ func (w *walker) diff(prefix, oldOID, newOID string, depth int) error {
 	}
 	w.diffed[key] = true
 	if depth > maxTreeDepth {
-		return fmt.Errorf("gitpack: trees nested deeper than %d", maxTreeDepth)
+		return ErrTooDeep
 	}
 	next, ok, err := w.tree(newOID)
 	if err != nil {
@@ -516,7 +516,7 @@ func (w *walker) walk(prefix, oid string, depth int) error {
 
 func (w *walker) walkEntries(prefix string, entries []treeEntry, depth int) error {
 	if depth > maxTreeDepth {
-		return fmt.Errorf("gitpack: trees nested deeper than %d", maxTreeDepth)
+		return ErrTooDeep
 	}
 	if err := w.charge(len(entries)); err != nil {
 		return err

@@ -51,10 +51,23 @@ func (d *Driver) ProbeDrive(ctx context.Context, drive types.DriveMount) (runner
 		return runner.DriveProbe{}, fmt.Errorf("docker: probe drive: %w", err)
 	}
 
+	// Labelled and removed as disk_probe's container is: a stray carries the runner's id, and the
+	// cleanup is bounded, so a wedged daemon cannot hold the request goroutine.
+	name := driveProbeNamePrefix + uuid.New().String()
+	labels := map[string]string{labelManaged: "true", labelComponent: componentDriveProbe}
+	if d.cfg.RunnerID != "" {
+		labels[runner.LabelRunnerID] = d.cfg.RunnerID
+	}
+	remove := func(id string) {
+		rctx, rcancel := context.WithTimeout(context.Background(), diskProbeCleanup)
+		defer rcancel()
+		_, _ = d.cli.ContainerRemove(rctx, id, client.ContainerRemoveOptions{Force: true})
+	}
 	created, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
-		Name: "wardyn-drive-probe-" + uuid.New().String(),
+		Name: name,
 		Config: &container.Config{
-			Image: image,
+			Image:  image,
+			Labels: labels,
 			// The agent image's own contract (uid 1000), not the daemon's root.
 			User: driveProbeUser,
 			// -r AND -x: a directory must be both readable and searchable to
@@ -80,14 +93,12 @@ func (d *Driver) ProbeDrive(ctx context.Context, drive types.DriveMount) (runner
 		},
 	})
 	if err != nil {
+		remove(name) // a create that timed out client-side may still have made it
 		return runner.DriveProbe{}, fmt.Errorf("docker: probe drive: create: %w", err)
 	}
-	defer func() {
-		// Background, not ctx: the caller's bound may already be exhausted
-		// by the time the probe answers, and a leak is worse than cleanup
-		// outliving the request.
-		_, _ = d.cli.ContainerRemove(context.Background(), created.ID, client.ContainerRemoveOptions{Force: true})
-	}()
+	// Background, not ctx: the caller's bound may already be exhausted by the time the probe
+	// answers, and a leak is worse than cleanup outliving the request.
+	defer remove(created.ID)
 
 	if _, err := d.cli.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
 		return runner.DriveProbe{}, fmt.Errorf("docker: probe drive: start: %w", err)
@@ -116,8 +127,10 @@ func (d *Driver) ProbeDrive(ctx context.Context, drive types.DriveMount) (runner
 // container's own bind target, internal to this file (never the reserved
 // runner.DriveTarget the real agent mounts at).
 const (
-	driveProbeUser   = "1000:1000"
-	driveProbeTarget = "/wardyn-probe"
+	driveProbeUser       = "1000:1000"
+	driveProbeTarget     = "/wardyn-probe"
+	driveProbeNamePrefix = "wardyn-drive-probe-"
+	componentDriveProbe  = "drive-probe"
 	// defaultDriveProbeImage is the busybox-class placeholder ProbeDrive runs
 	// `sh`/`test` in when Config.DriveProbeImage is unset. Pinned by digest,
 	// not `:latest`: it's bind-mounted with a host directory on the request

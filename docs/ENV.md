@@ -978,12 +978,12 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - The absolute host directories a **member's own** `local_dir` workspace source may live under.
 - A member source is allowed only if its **canonicalized real path** (`filepath.EvalSymlinks`) is inside one of these
 - So a symlink *inside* a root pointing *out* of every root is refused
-- And never if it is or traverses a credential dotfile path (`.ssh`, `.aws`, `.claude`, `.wardyn`, `.gnupg`, `.docker`, `.kube`, `.config/gh`, `.netrc`, `.git-credentials`, `.git/config`), which holds even when a root is set too wide.
+- And never if it is or traverses a credential dotfile path (`.ssh`, `.aws`, `.claude`, `.wardyn`, `.gnupg`, `.docker`, `.kube`, `.config/gh`, `.netrc`, `.git-credentials`, `.git/config`), even when a root is too wide.
 - Checked at onboarding, again at run-create on the resolved spec, and a **third** time in the docker driver immediately before the bind.
 - Unset (the default) fails closed: a member can still onboard repos and use operator-owned workspaces.
-- Point it at a dedicated projects directory — **never `$HOME` or `/`**, which boot WARNs about but permits
+- Use a dedicated projects directory — **never `$HOME` or `/`**; boot WARNs about `/` and the daemon's `$HOME`, not a person's, but permits
 - And never a tree `WARDYN_USER_DRIVE_HOST_ROOTS` names (see that row: the overlap lets a member bind a whole share one person's home at a time was the point of, and boot WARNs about the pair).
-- Operator mounts are never narrowed by it.
+- It never narrows operator mounts.
 - ([`internal/runner/member_mount.go`](../internal/runner/member_mount.go); flag `-member-workspace-roots`)
 
 ### `WARDYN_USER_WORKSPACE_ROOTS_MAP`

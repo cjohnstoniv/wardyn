@@ -114,3 +114,38 @@ func TestDriveSet_FailurePrintsStepsOnStderr(t *testing.T) {
 		}
 	}
 }
+
+// TestGovernanceSet_PrintsTheServersWarningsOnStderr: a profile write the server applies with a warning
+// (a ceiling that omits a deny the deployment default carries) says so on stderr; stdout stays the document.
+func TestGovernanceSet_PrintsTheServersWarningsOnStderr(t *testing.T) {
+	const warning = "the deployment default denies evil.example and this ceiling does not"
+	inner := newFakeGovernanceServer().handler()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/governance/profiles" {
+			inner(w, r)
+			return
+		}
+		rec := httptest.NewRecorder()
+		inner(rec, r)
+		var body map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Errorf("fake profile write: %v", err)
+		}
+		body["warnings"] = []string{warning}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(rec.Code)
+		_ = json.NewEncoder(w).Encode(body)
+	}))
+	t.Cleanup(srv.Close)
+	path := writeDocFile(t, sdk.GovernanceDocument{Profiles: []sdk.GovernanceProfile{{Name: "fresh"}}})
+	stdout, stderr, err := runCaptured(t, "governance", "set", path, "--url", srv.URL, "--token", "tok")
+	if err != nil {
+		t.Fatalf("governance set: %v\n%s", err, stderr)
+	}
+	if want := "warning: profile fresh: " + warning + "\n"; !strings.Contains(stderr, want) {
+		t.Errorf("stderr = %q, want it to contain %q", stderr, want)
+	}
+	if strings.Contains(stdout, warning) {
+		t.Errorf("stdout = %q, want the document only", stdout)
+	}
+}

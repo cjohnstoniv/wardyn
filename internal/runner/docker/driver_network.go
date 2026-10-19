@@ -90,8 +90,12 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if err != nil {
 		return fail(err)
 	}
-	proxyID, err := d.startProxy(ctx, spec.RunID, d.labels(spec.RunID, componentProxy, spec.Labels),
-		proxyEnvs, proxyCfg, netip.Addr{})
+	prep, err := d.prepareProxy(ctx, spec.RunID, proxyCfg)
+	var proxyID string
+	if err == nil {
+		proxyID, err = d.startProxy(ctx, spec.RunID, d.labels(spec.RunID, componentProxy, spec.Labels),
+			proxyEnvs, prep, netip.Addr{})
+	}
 	if err != nil {
 		// startProxy's own exit-watch failure deliberately leaves the container behind so its logs
 		// still name the cause; it holds no config, so on CREATE nothing needs it kept, and THIS

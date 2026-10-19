@@ -4,6 +4,8 @@
 package main
 
 import (
+	"bytes"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,6 +49,32 @@ func TestSetupScriptTeamModeCopyIsHonest(t *testing.T) {
 		if !strings.Contains(tc.body, "v0.5") {
 			t.Errorf("%s: missing the 'shipped in v0.5' callout for admin/member RBAC + SSO", tc.name)
 		}
+	}
+}
+
+// TestOperatorAllowlistPostureNamesTodaysTiers: the SSO posture lines boot logs name the role tiers 0.9
+// has (admin, security_admin, user), never the removed member tier, and never claim SCIM joiner
+// provisioning is missing (POST /scim/v2/Users exists).
+func TestOperatorAllowlistPostureNamesTodaysTiers(t *testing.T) {
+	for name, ops := range map[string]string{"operator list set": "ops@example.com", "operator list unset": ""} {
+		t.Run(name, func(t *testing.T) {
+			var buf bytes.Buffer
+			prev := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+			t.Cleanup(func() { slog.SetDefault(prev) })
+			domains, verified := "example.com", false
+			logOperatorAllowlistPosture(&bootFlags{oidcOperatorEmails: &ops, oidcEmailDomains: &domains, oidcRequireEmailVerified: &verified})
+
+			out := buf.String()
+			for _, stale := range []string{"MEMBERS", "a member", "admin/member", "SCIM provisioning of joiners"} {
+				if strings.Contains(out, stale) {
+					t.Errorf("boot log names %q, which 0.9 does not have: %s", stale, out)
+				}
+			}
+			if !strings.Contains(out, "user") {
+				t.Errorf("boot log names no user tier: %s", out)
+			}
+		})
 	}
 }
 

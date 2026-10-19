@@ -64,7 +64,7 @@ import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/
 import { PageHeader } from "../wardyn/page-header";
 import { CC_META } from "../wardyn/cc-meta";
 import { OPERATOR_ONLY_REASON, POLICY_UI_APPS, RESIDUAL_PREFIX } from "../wardyn/copy";
-import { POLICY_DIALOG } from "../wardyn/copy/policy-dialog";
+import { POLICIES_PAGE, POLICY_DIALOG } from "../wardyn/copy/policy-dialog";
 import { useOperator } from "../wardyn/operator-context";
 import {
   AvailabilityControl,
@@ -145,7 +145,7 @@ export function PoliciesScreen() {
         <details className="group mb-4 rounded-lg border border-border">
           <summary className="flex cursor-pointer select-none items-center gap-1.5 px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground">
             <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" />
-            Default (ceiling) policy — applied to runs that name no policy, and to every member's inline policy
+            {POLICIES_PAGE.CEILING_CAPTION}
           </summary>
           <PolicyDocumentView className="m-3 mt-1" spec={defaultPolicy} />
         </details>

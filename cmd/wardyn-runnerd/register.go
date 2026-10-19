@@ -115,15 +115,16 @@ func readRegistrationToken(path string) (string, error) {
 }
 
 // registrationFailure keeps the server's own refusal and advises a fresh token
-// only when the server refused this token or had already spent it. A timeout or a
-// 5xx with no reason of its own says nothing about the token: the server may have
-// spent it before it failed, so the person is sent to My runners, not back to the token.
+// only when the server refused this token or had already spent it. A timeout or any
+// 5xx (internal_error included: the server's own 500 can follow the token's spend) says
+// nothing about the token: the server may have spent it before it failed, so the person
+// is sent to My runners, not back to the token.
 func registrationFailure(err error) error {
 	var refused *sdk.APIError
 	if errors.As(err, &refused) && (refused.Reason == string(placement.ReasonRunnerTokenInvalid) || refused.Status == http.StatusConflict) {
 		return fmt.Errorf("runner registration refused: %w. This token cannot be used again: obtain a fresh token and choose a new private state directory before retrying (the local key was preserved)", err)
 	}
-	if !errors.As(err, &refused) || (refused.Status >= http.StatusInternalServerError && refused.Reason == "") {
+	if !errors.As(err, &refused) || refused.Status >= http.StatusInternalServerError {
 		return fmt.Errorf("runner registration failed: %w. The server may have spent the token before it failed: check Your account → My runners, and if this host is not there mint a new token and choose a new private state directory (the local key was preserved)", err)
 	}
 	return fmt.Errorf("runner registration failed: %w. The server did not refuse the token: retry with it and a new private state directory (the local key was preserved)", err)

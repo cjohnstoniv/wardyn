@@ -361,16 +361,17 @@ func isStaleInstallation(err error) bool {
 // name cannot contain "/"), requires a single shared owner, and returns owner
 // plus bare names. Gates both policy-write validation and minting, and must
 // agree with githubScopeRepos (api package) or a bad shape could dispatch a
-// run with neither the broker route nor the injected host deny.
+// run with neither the broker route nor the injected host deny. Entries are trimmed as
+// githubScopeRepos trims them, and owners compare case-insensitively, as GitHub does.
 func splitRepos(repos []string) (owner string, names []string, err error) {
 	for _, r := range repos {
-		parts := strings.Split(r, "/")
+		parts := strings.Split(strings.TrimSpace(r), "/")
 		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 			return "", nil, fmt.Errorf("broker: repo %q is not in owner/name form", r)
 		}
 		if owner == "" {
 			owner = parts[0]
-		} else if owner != parts[0] {
+		} else if !strings.EqualFold(owner, parts[0]) {
 			return "", nil, fmt.Errorf("broker: all repos in one grant must share an owner (got %q and %q)", owner, parts[0])
 		}
 		names = append(names, parts[1])

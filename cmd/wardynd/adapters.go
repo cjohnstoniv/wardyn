@@ -652,10 +652,14 @@ func groundtruthRotatorLock(pool *pgxpool.Pool) func(context.Context) (func(), b
 // failure to the reaper. It is idempotent: a missing sandbox or already-stopped
 // run is not an error (the runner's StopSandbox is itself idempotent).
 type lifecycleStopper struct {
-	pool     *pgxpool.Pool
-	runner   runner.Runner
-	identity runRevoker // nil-safe; deny-lists the run token on idle stop
-	broker   runRevoker // nil-safe; revokes minted broker credentials on idle stop
+	pool   *pgxpool.Pool
+	runner runner.Runner
+	// revoke is the REVOCATION half of the cascade — api.Server's
+	// RevokeStoppedRun: the run token, minted broker credentials, the stored
+	// proxy config, the run's Azure DevOps PATs and its resident values, the
+	// same steps the kill and the completion watcher run. It returns each
+	// failed step under its run.revoke key, and the reaper audits them. Nil-safe.
+	revoke func(context.Context, uuid.UUID) map[string]string
 	// cancelApprovals is the APPROVAL half of the same cascade — api.Server's
 	// CancelTerminalRunApprovals, threaded in rather than reimplemented, because
 	// this is the THIRD terminal writer and the other two already call it. Nil-safe
@@ -674,14 +678,6 @@ type lifecycleStopper struct {
 	// snapshotPane is api.Server's SnapshotRunPane: an interactive run's pane
 	// snapshot, taken after the revocations and before StopSandbox. Nil-safe.
 	snapshotPane func(context.Context, uuid.UUID)
-}
-
-// runRevoker is the minimal revocation surface the idle reaper needs so a run
-// stopped on idle also runs the kill-switch cascade's revocation half — matching
-// the documented promise that revocation fires on every run stop, not only an
-// explicit kill. Both *embedded.Provider and *broker.Broker satisfy it.
-type runRevoker interface {
-	RevokeRun(context.Context, uuid.UUID) error
 }
 
 var _ lifecycle.Stopper = lifecycleStopper{}
@@ -724,8 +720,7 @@ func (l lifecycleStopper) stop(ctx context.Context, runID uuid.UUID, transition 
 	}
 
 	// We won the idle RUNNING->STOPPED transition. Now free the sandbox and run the
-	// kill-switch revocation half (deny-list the run token + revoke minted broker
-	// creds), matching the documented cascade-on-every-stop. Each step is
+	// kill-switch revocation half (api.Server's RevokeStoppedRun), matching the documented cascade-on-every-stop. Each step is
 	// best-effort + nil-safe and does NOT block the stop (the state is already
 	// STOPPED), but a failure MUST be surfaced to the reaper (finding N1) — a
 	// silently-failed teardown leaves a routable sandbox, a silently-failed revoke
@@ -747,22 +742,14 @@ func (l lifecycleStopper) stop(ctx context.Context, runID uuid.UUID, transition 
 	// Revocations BEFORE the teardown, so the pane snapshot's seconds never
 	// extend a live credential: finalizeRunTail's order (revoke, snapshot,
 	// StopSandbox, finish). The CAS above still decides first whether any of it runs.
-	if l.identity != nil {
-		if rerr := l.identity.RevokeRun(ctx, runID); rerr != nil {
-			slog.ErrorContext(ctx, "wardynd: lifecycle idle-stop identity revoke FAILED -- run token may still be usable",
+	if l.revoke != nil {
+		for step, msg := range l.revoke(ctx, runID) {
+			slog.ErrorContext(ctx, "wardynd: lifecycle idle-stop revoke FAILED -- a run credential may still be usable",
 				slog.String("run_id", runID.String()),
-				slog.Any("err", rerr),
+				slog.String("step", step),
+				slog.String("err", msg),
 			)
-			errs["identity_error"] = rerr.Error()
-		}
-	}
-	if l.broker != nil {
-		if rerr := l.broker.RevokeRun(ctx, runID); rerr != nil {
-			slog.ErrorContext(ctx, "wardynd: lifecycle idle-stop broker revoke FAILED -- minted broker credentials may still be usable",
-				slog.String("run_id", runID.String()),
-				slog.Any("err", rerr),
-			)
-			errs["broker_error"] = rerr.Error()
+			errs[step] = msg
 		}
 	}
 	if l.snapshotPane != nil {

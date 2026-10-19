@@ -448,9 +448,12 @@ func (p *Proxy) inspectPush(w http.ResponseWriter, r *http.Request, rules *pushR
 	}
 	res, err := gitpack.Inspect(buf)
 	if errors.Is(err, gitpack.ErrTooLarge) {
+		remedy := "push fewer commits at a time"
+		if errors.Is(err, gitpack.ErrTooDeep) {
+			remedy = "push a tree with fewer levels of nested directories"
+		}
 		p.refusePush(w, r, subject, deny, ruleSourceGitPackBig, http.StatusRequestEntityTooLarge,
-			"wardyn: cannot enforce push content rules on this push: "+err.Error()+
-				"\npush fewer commits at a time")
+			"wardyn: cannot enforce push content rules on this push: "+err.Error()+"\n"+remedy)
 		return nil, pushReview{}, noRelease, false
 	}
 	var absent *gitpack.MissingObjectError

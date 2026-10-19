@@ -45,7 +45,9 @@ func (s *PgxStore) BeginReadCommitted(ctx context.Context) (Tx, error) {
 // (deduped) with audit_events' credential.mint successes, which cover every
 // credential actually handed out. The LEFT JOIN keeps a mint whose grant row was
 // deleted (kind ""); grant_id is matched as TEXT so a malformed
-// data->>'grant_id' cannot abort the cascade with an invalid-uuid error.
+// data->>'grant_id' cannot abort the cascade with an invalid-uuid error. A TEXT
+// match cannot use the uuid key, so the join is held to the run's own grants (the
+// run index; a mint only ever uses a grant of its own run) rather than every grant.
 const mintedCredentialsSQL = `
 	SELECT minted_jti AS jti, COALESCE(g.spec->>'kind', '') AS kind
 	  FROM approvals a
@@ -54,7 +56,7 @@ const mintedCredentialsSQL = `
 	UNION
 	SELECT e.data->>'jti' AS jti, COALESCE(g.spec->>'kind', '') AS kind
 	  FROM audit_events e
-	  LEFT JOIN credential_grants g ON g.id::text = e.data->>'grant_id'
+	  LEFT JOIN credential_grants g ON g.run_id = $1 AND g.id::text = e.data->>'grant_id'
 	 WHERE e.run_id = $1 AND e.action = 'credential.mint' AND e.outcome = 'success'
 	   AND COALESCE(e.data->>'jti', '') <> ''`
 

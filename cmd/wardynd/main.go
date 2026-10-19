@@ -359,8 +359,6 @@ func run() error {
 		return err
 	}
 
-	warnPublicAPIDisabled(*f.adminToken, lm.enabled)
-
 	// Optional subsystems (recording replay, OIDC SSO, devcontainer builds,
 	// advisory AI scan fallback) — each nil/off when unconfigured; see
 	// buildOptionalFeatures.
@@ -368,6 +366,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	warnPublicAPIDisabled(*f.adminToken, lm.enabled, feats.authn != nil)
 	warnGovernAdminRunsUnbound(*f.governAdminRuns, feats.authn != nil)
 
 	// MEMBER-MODE DESKTOP posture (validateHybridPosture already ran above,

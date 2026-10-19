@@ -226,7 +226,15 @@ func (h setupHost) checkServiceChoice(ctx context.Context, noService bool, planP
 	if !noService {
 		return h.checkServiceManager(ctx, planPaths)
 	}
-	if installed := paths.installedService(); installed != "" {
+	installed := paths.installedService()
+	if xdg := filepath.Join(h.xdgConfig, "systemd", "user", serviceUnit); installed == "" && h.goos == "linux" && h.xdgConfig != "" {
+		// paths() names only the HOME unit; a service setup may have put it where the manager's
+		// UnitPath looks first, $XDG_CONFIG_HOME/systemd/user (checkServiceManager).
+		if _, err := os.Stat(xdg); err == nil {
+			installed = xdg
+		}
+	}
+	if installed != "" {
 		// Refused rather than disabled: --no-service promises to touch no service, and a unit left running beside
 		// the foreground command would be a second process with this one identity, which the organisation
 		// refuses.
