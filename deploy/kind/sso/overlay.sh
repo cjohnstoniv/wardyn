@@ -237,10 +237,11 @@ kubectl --context "${CONTEXT}" -n "${NAMESPACE}" rollout status deployment/wardy
 kubectl --context "${CONTEXT}" -n "${NAMESPACE}" rollout status deployment/wardyn-awsssofake --timeout=180s
 
 # ── 2. the chart, re-rendered on OIDC ───────────────────────────────────────
-# --reuse-values so the quickstart's image/substrate values persist; the default
-# policy rides along floored to CC1 — redundant since 0.7.8 (the baked default
-# floors at CC1 now), kept so this Fence-only cluster states its own floor
-# rather than inheriting the image's.
+# --reuse-values so the quickstart's image/substrate values persist. The default
+# policy rides along floored to CC1, but it is SHADOWED: the quickstart sets
+# env.WARDYN_DEFAULT_POLICY=demo.json and the chart lets an explicit env value
+# win over defaultPolicy (values.yaml), so the walks run on demo.json. The floor
+# is CC1 either way since 0.7.8 (the baked default floors at CC1 now).
 step "helm upgrade ${RELEASE} onto Dex SSO"
 helm --kube-context "${CONTEXT}" upgrade "${RELEASE}" deploy/helm/wardyn \
   -n "${NAMESPACE}" --reuse-values -f deploy/kind/sso/values.yaml \
