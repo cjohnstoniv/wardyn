@@ -8,6 +8,7 @@ ado_grants.hosts
 ado_grants.organization
 attribution
 attribution.email
+attribution.layer
 attribution.name
 attribution.overridden
 attribution.owner

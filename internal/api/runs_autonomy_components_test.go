@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -66,6 +67,7 @@ type componentCapResult struct {
 	body     errorBody
 	written  bool
 	denied   string // the last authz.denied target
+	layer    any    // that row's layer (#2951)
 }
 
 // callComponentCap runs resolveRunAutonomy for a member, on an empty spec at
@@ -89,7 +91,14 @@ func callComponentCap(t *testing.T, ceiling governanceCeiling, comps runComponen
 			t.Fatalf("refusal body is not an error object: %v (%s)", err, w.Body.String())
 		}
 	}
-	out.denied = lastAuthzDenied(audit.snapshot())
+	events := audit.snapshot()
+	out.denied = lastAuthzDenied(events)
+	for _, ev := range events {
+		var datum map[string]any
+		if ev.Action == authz.AuditAction && json.Unmarshal(ev.Data, &datum) == nil {
+			out.layer = datum["layer"]
+		}
+	}
 	return out
 }
 
@@ -218,6 +227,10 @@ func assertComponentCapRefusal(t *testing.T, got componentCapResult, target, pol
 	}
 	if got.body.Policy == nil || got.body.Policy.Source != policySource {
 		t.Fatalf("policy = %+v, want source %q", got.body.Policy, policySource)
+	}
+	// The layer that refused, on the wire and on the authz.denied row (#2951).
+	if got.body.Policy.Layer != policySource || got.layer != policySource {
+		t.Errorf("layer = %q on the wire, %v on the row, want %q on both", got.body.Policy.Layer, got.layer, policySource)
 	}
 	if policySource == policyref.SourceDeployment && got.body.Policy.Owner != componentCapHelp.Owner {
 		t.Errorf("policy = %+v, want the deployment's policy_help", got.body.Policy)

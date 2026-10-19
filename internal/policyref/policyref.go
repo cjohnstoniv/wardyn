@@ -32,6 +32,14 @@ const (
 	SourceProfile    = "profile"
 	SourceDeployment = "deployment"
 
+	// The layer kinds: which layer set a limit (Ref.Layer) or a value of a run's
+	// effective policy (Provenance.Layer). A ceiling is a deployment or a profile
+	// layer; member is the run's own policy and operator a run no ceiling binds.
+	LayerDeployment = SourceDeployment
+	LayerProfile    = SourceProfile
+	LayerMember     = "member"
+	LayerOperator   = "operator"
+
 	mailtoScheme = "mailto:"
 )
 
@@ -74,6 +82,36 @@ type Ref struct {
 	// cards), inside what their ceiling allows. A refusal then names the policy
 	// as changed, so the person is not sent to the owner of a policy they edited.
 	Overridden bool `json:"overridden,omitempty"`
+	// Layer is the kind of layer that set the limit (LayerDeployment or
+	// LayerProfile today). Layered stamps it on a refusal's policy; the
+	// proxy's attribution never carries it, because its wire predates the key.
+	Layer string `json:"layer,omitempty"`
+}
+
+// Provenance is which layer set one value of a run's effective policy. Name is
+// the leaf profile's name, or "deployment", and never a profile it is built
+// from. Contact is the leaf's (or the deployment's policy_help), filled on read
+// and never written to the audit. Locked says the person cannot widen the value.
+type Provenance struct {
+	Layer   string   `json:"layer"`
+	Name    string   `json:"name,omitempty"`
+	Contact *Contact `json:"contact,omitempty"`
+	Locked  bool     `json:"locked"`
+}
+
+// Layered is a copy of ref stamped with the layer kind its source names
+// (deployment or profile; none for any other source), nil for nil. The one place
+// a refusal's policy gains its layer.
+func Layered(ref *Ref) *Ref {
+	if ref == nil {
+		return nil
+	}
+	cp := *ref
+	cp.Layer = ""
+	if cp.Source == SourceProfile || cp.Source == SourceDeployment {
+		cp.Layer = cp.Source
+	}
+	return &cp
 }
 
 // UnsafeRune is what no free-text or header-bound field may carry: C0/C1

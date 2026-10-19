@@ -38,7 +38,7 @@ var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.RunnerPosture]():        strings.Fields("MDMManaged DiskEncrypted OS OSVersion Evidence"),
 	reflect.TypeFor[egress.InjectionRule]():       strings.Fields("Host Header SecretName Format RequireTLS PinPath PinQuery PinRoutes"),
 	reflect.TypeFor[egress.PinRoute]():            strings.Fields("Method Path"),
-	reflect.TypeFor[policyref.Ref]():              strings.Fields("Source Name Owner Email RequestURL RequestText Overridden"),
+	reflect.TypeFor[policyref.Ref]():              strings.Fields("Source Name Owner Email RequestURL RequestText Overridden Layer"),
 	reflect.TypeFor[proxy.ADOGrantConfig]():       strings.Fields("Organization Capabilities Hosts"),
 	reflect.TypeFor[proxy.AzureGateConfig]():      strings.Fields("Host Route Models BodyCap"),
 	reflect.TypeFor[proxy.GitHubAPIGrant]():       strings.Fields("Capabilities Repos Grants"),

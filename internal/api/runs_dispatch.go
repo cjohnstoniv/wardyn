@@ -117,6 +117,10 @@ type dispatchParams struct {
 	// proxy's refusal then names the policy as changed for this run
 	// (policyref.Ref.Overridden).
 	PolicyOverridden bool
+	// Provenance is which layer set each value of the run's policy as create
+	// resolved it, recorded on run.policy.resolve. Nil for every lane with no
+	// create resolution (scans, record, verify, logins, probes).
+	Provenance knobProvenance
 	// PushRuleSets are the push content rules per SCM entry the run brings
 	// (pushRuleSetsFor), the product after the ceiling. When set, the proxy
 	// carries them INSTEAD of the policy's run-wide push_rules.
@@ -641,6 +645,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.policy.resolve",
 		run.ID.String(), "success", mustJSON(effectivePolicyDatum{
 			RunPolicySpec: auditablePolicy(policy), DiskMiBFilled: diskSoft, DiskMiBBasis: p.MainDrive.basis(), DiskMiBDefaultSource: p.MainDrive.defaultSource(),
+			Provenance: p.Provenance,
 		})))
 
 	// Held BEFORE CreateSandbox, not after: the row still carries the

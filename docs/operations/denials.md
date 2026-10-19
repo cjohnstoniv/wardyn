@@ -25,17 +25,27 @@ read.
 - **A ceiling refusal names the policy that caused it.**
   - A refusal made by the resolved ceiling (`governance_profile` and `run_quota`, plus the Record Mode and provider sign-in launches that answer `record_ceiling_limit`) carries a `policy` object beside `error` and `reason`:
     - `source` (`profile` or `deployment`), the leaf profile's `name`, and the contact it published (`owner`, `email`, `request_url`, `request_text`, each present only when set and still valid).
+    - `layer` (0.10): the layer kind that refused, `profile` or `deployment`; `source` stays.
   - A member bound by the deployment is named as `deployment` with the site config's `policy_help`.
   - An operator is never refused by a ceiling, so never gets one.
   - The `error` text and the status are unchanged.
   - The key is never on a hidden door (the `404` twin of a missing resource) and never on a decision whose wire reason was rewritten, so those stay byte-identical to a missing resource.
-  - An `authz.denied` row never carries the owner or email, only the `reason` and `target` it always had.
+  - An `authz.denied` row never carries the owner or email. Since 0.10 it adds `layer`, and `layer_name` (the leaf) for `profile`.
+  - `record_ceiling_limit` and `run_quota` write no row, so their layer is on the wire only.
   - `GET /me` carries `governance_contact`: the caller's own `policy` object, or `null` for
     an operator, when the ceiling cannot be resolved, and on a stale group snapshot. It
     never fails the read, and for a member bound by the deployment it is `{"source":
     "deployment"}` without a site-config read.
   - `GET /runs/{id}` carries `policy`: the profile the run was launched under, else the
     deployment's `policy_help`, else the key is absent. A store failure omits it.
+  - `GET /runs/{id}/policy` carries `provenance` (0.10): per top-level policy key, the layer
+    that set its value at create.
+    - `layer`: `deployment` or `profile` (a ceiling set or narrowed it), `member` (the run's own
+      policy or edits) or `operator` (no ceiling binds the run).
+    - `name`: the leaf profile, or `deployment`, never a base. `contact`: the leaf's, or the
+      site's `policy_help`, as of the read. `locked`: the person cannot widen the value.
+    - `run.policy.resolve` records the map without contacts. Hosts added at launch are listed in
+      `changes`, not here.
   - `wardyn` prints one `governed by …, to request a change: …` line after the error when the
     refusal carries a `policy`. Exit codes are unchanged, and the Go SDK exposes it as
     `APIError.Policy`.

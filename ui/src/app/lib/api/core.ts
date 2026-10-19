@@ -529,7 +529,7 @@ function policyField(v: unknown): PolicyRef | undefined {
   const o = v as Record<string, unknown>;
   if (typeof o.source !== "string" || !o.source) return undefined;
   const ref: PolicyRef = { source: o.source };
-  for (const k of ["name", "owner", "email", "request_url", "request_text"] as const) {
+  for (const k of ["name", "owner", "email", "request_url", "request_text", "layer"] as const) {
     const x = o[k];
     if (typeof x === "string" && x) ref[k] = x;
   }
