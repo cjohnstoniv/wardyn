@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -78,7 +79,10 @@ func Handler(store Store, authorize Authorizer) http.Handler {
 		// error part-way would end the body short of its tail after a 200, and a short cast is
 		// still a well-formed one; log it and abort the response so the client sees a failed transfer.
 		var readErr error
-		_, _ = io.Copy(w, readerFunc(func(p []byte) (int, error) {
+		rctl := http.NewResponseController(w)
+		// With no server WriteTimeout nothing else resets the deadline, and a kept-alive connection would carry it into its next request.
+		defer func() { _ = rctl.SetWriteDeadline(time.Time{}) }()
+		_, _ = io.Copy(deadlineWriter{w: w, rc: rctl}, readerFunc(func(p []byte) (int, error) {
 			n, err := rc.Read(p)
 			if err != nil && !errors.Is(err, io.EOF) {
 				readErr = err
@@ -91,6 +95,24 @@ func Handler(store Store, authorize Authorizer) http.Handler {
 		}
 	})
 	return r
+}
+
+// replayWriteTimeout bounds each write of a replay to its client. The server sets no write timeout, and an
+// open cast holds one of the few read slots until the reader is closed, so a client that stops reading
+// (a zero TCP window) would pin the slot, and its buffered payload, indefinitely. A write that outlasts
+// the bound fails, the copy ends, and the deferred Close frees the slot.
+var replayWriteTimeout = 30 * time.Second
+
+// deadlineWriter arms a fresh write deadline before every write. A writer that does not support
+// deadlines (a recorder) is written to without one.
+type deadlineWriter struct {
+	w  io.Writer
+	rc *http.ResponseController
+}
+
+func (d deadlineWriter) Write(p []byte) (int, error) {
+	_ = d.rc.SetWriteDeadline(time.Now().Add(replayWriteTimeout))
+	return d.w.Write(p)
 }
 
 // servableKey reports whether key may be asked of the store at all. Handler

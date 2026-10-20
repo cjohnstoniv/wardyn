@@ -69,3 +69,10 @@ func SetCastWriteChunk(t testing.TB, n int) {
 	castWriteChunk = n
 	t.Cleanup(func() { castWriteChunk = old })
 }
+
+// SetReplayWriteTimeout sets the per-write bound of a replay and returns a restore func.
+func SetReplayWriteTimeout(d time.Duration) (restore func()) {
+	old := replayWriteTimeout
+	replayWriteTimeout = d
+	return func() { replayWriteTimeout = old }
+}
