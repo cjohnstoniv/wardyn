@@ -48,6 +48,12 @@ type signInOrg struct {
 	issueLife, refreshLife time.Duration
 	// refreshBarrier holds the first refresh up to this long for a second to arrive.
 	refreshBarrier time.Duration
+	// expire refuses an access token once it is inside the CLI's renewal margin (a server whose clock runs
+	// that far ahead), so a test sees a spent token refused without waiting out the margin.
+	expire bool
+	// refusePost makes POST /api/v1/runs a 401; posts and polls count the run calls.
+	refusePost   bool
+	posts, polls int
 
 	mu        sync.Mutex
 	signIns   map[uuid.UUID]*fakeSignIn
@@ -74,6 +80,7 @@ type fakeSession struct {
 type fakeToken struct {
 	session uuid.UUID
 	kind    string
+	exp     time.Time
 }
 
 const fakeEmail = "you@example.com"
@@ -91,6 +98,9 @@ func newSignInOrg(t *testing.T) *signInOrg {
 	mux.HandleFunc("POST /api/v1/cli/sessions/{id}/refresh", f.refresh)
 	mux.HandleFunc("GET /api/v1/me", f.me)
 	mux.HandleFunc("DELETE /api/v1/me/cli-sessions/{id}", f.signOut)
+	mux.HandleFunc("POST /api/v1/runs", f.createRun)
+	mux.HandleFunc("GET /api/v1/runs/{id}", f.getRun)
+	mux.HandleFunc("GET /api/v1/audit", func(w http.ResponseWriter, _ *http.Request) { writeFake(w, http.StatusOK, []types.AuditEvent{}) })
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		if a := r.Header.Get("Authorization"); a != "" {
@@ -162,8 +172,8 @@ func (f *signInOrg) approve(id uuid.UUID) (code, redirect string) {
 
 func (f *signInOrg) grant(sess uuid.UUID, kind string, life time.Duration) types.CLISessionGrant {
 	tok := "wdn_" + uuid.NewString()
-	f.tokens[tok] = fakeToken{session: sess, kind: kind}
 	now := time.Now()
+	f.tokens[tok] = fakeToken{session: sess, kind: kind, exp: now.Add(life)}
 	return types.CLISessionGrant{SessionID: sess, AccessToken: tok, Kind: kind, AccessExpiresAt: now.Add(life),
 		SessionExpiresAt: now.Add(30 * 24 * time.Hour), IdleExpiresAt: now.Add(7 * 24 * time.Hour), Store: types.CLIStoreKeychain}
 }
@@ -261,10 +271,39 @@ func (f *signInOrg) owner(r *http.Request) (*fakeToken, *fakeSession) {
 		return nil, nil
 	}
 	sess := f.sessions[tok.session]
-	if sess == nil || sess.ended != "" {
+	if sess == nil || sess.ended != "" || f.expire && !time.Now().Add(cliTokenMargin).Before(tok.exp) {
 		return nil, nil
 	}
 	return &tok, sess
+}
+
+// fakeRunID is the run createRun makes; getRun answers RUNNING for its first 20 polls, then COMPLETED.
+var fakeRunID = uuid.MustParse("00000000-0000-4000-8000-000000000001")
+
+func (f *signInOrg) createRun(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.posts++
+	if tok, _ := f.owner(r); tok == nil || f.refusePost {
+		f.refuseBearer(w, r)
+		return
+	}
+	writeFake(w, http.StatusCreated, types.AgentRun{ID: fakeRunID, State: types.RunPending})
+}
+
+func (f *signInOrg) getRun(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if tok, _ := f.owner(r); tok == nil {
+		f.refuseBearer(w, r)
+		return
+	}
+	f.polls++
+	state := types.RunRunning
+	if f.polls > 20 {
+		state = types.RunCompleted
+	}
+	writeFake(w, http.StatusOK, types.AgentRun{ID: fakeRunID, State: state})
 }
 
 // refuseBearer is the server's 401 for no bearer (sign_in_required) or one it does not know, such as an
@@ -1187,4 +1226,41 @@ func TestLoginOriginIsTheOneDialled(t *testing.T) {
 			t.Error("the proof does not carry exactly the origin it was given")
 		}
 	})
+}
+
+// TestLongCommandRenewsTheStoredSignIn: run --wait sends the bearer current at each poll. The access token
+// it started with comes inside the renewal margin a few polls in; the next poll renews it under the lock and
+// the polls carry on. A refused POST is sent once.
+func TestLongCommandRenewsTheStoredSignIn(t *testing.T) {
+	setWaitPollInterval(t, 50*time.Millisecond)
+	f := newSignInOrg(t)
+	cliEnv(t, approveInBrowser(t, f, nil))
+	f.issueLife = cliTokenMargin + 400*time.Millisecond
+	if _, _, err := runCLI(t, "", "login", f.srv.URL); err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	f.expire = true
+	_, errOut, err := runCLI(t, "", "run", "--url", f.srv.URL, "--agent", "claude-code", "--wait")
+	f.mu.Lock()
+	refreshes, polls := f.refreshes, f.polls
+	f.mu.Unlock()
+	if err != nil || refreshes != 1 || polls != 21 {
+		t.Fatalf("run --wait: err %v after %d polls and %d refreshes, want the run to finish after 21 polls and 1 refresh\n%s",
+			err, polls, refreshes, errOut)
+	}
+	if got := storedItem(t, f.srv.URL); got.AccessToken == "" || !time.Now().Before(got.AccessExpiresAt) {
+		t.Errorf("stored access token %q expires %v, want the renewed one", got.AccessToken, got.AccessExpiresAt)
+	}
+
+	f.mu.Lock()
+	f.refusePost, f.posts = true, 0
+	f.mu.Unlock()
+	if _, _, err := runCLI(t, "", "run", "--url", f.srv.URL, "--agent", "claude-code"); err == nil {
+		t.Fatal("a refused run create succeeded")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.posts != 1 {
+		t.Errorf("the refused POST was sent %d times, want once", f.posts)
+	}
 }

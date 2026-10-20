@@ -242,6 +242,7 @@ const tokenFromLogin = "wardyn login"
 // --token, WARDYN_ADMIN_TOKEN and WARDYN_TOKEN all name none.
 type sessionState struct {
 	once sync.Once
+	mu   sync.Mutex // guards s and err after resolve, for bearer
 	s    storedSession
 	err  error
 }
@@ -256,6 +257,26 @@ func (st *sessionState) resolve(serverURL string) {
 		}
 		st.s, st.err = loadSession(context.Background(), origin)
 	})
+}
+
+// bearer is the stored sign-in's bearer for the next request. The cached token is sent while it is outside
+// the renewal margin; inside it, loadSession reads the item again and renews it under the lock. An admin
+// step-up is never renewed: once it is spent, the ordinary access token is sent. A sign-in that has ended
+// stays ended, and one that is no longer stored sends no bearer. origin is the sign-in's organisation,
+// "" when none is stored.
+func (st *sessionState) bearer(ctx context.Context) (token, origin string) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.s.kind == "" {
+		return "", ""
+	}
+	if tok, kind := st.s.item.bearer(time.Now()); tok != "" {
+		st.s.token, st.s.tokenKind = tok, kind
+		return tok, st.s.origin
+	}
+	st.s, st.err = loadSession(ctx, st.s.origin)
+	authHintFor.session = st.err
+	return st.s.token, st.s.origin
 }
 
 func rootCmd() *cobra.Command {
@@ -315,16 +336,20 @@ func rootCmd() *cobra.Command {
 	// serverURL (wardyn login), renewed when its access token is spent. A sign-in that cannot be used
 	// leaves the request without a bearer and puts the reason in the 401's hint.
 	client := func() *sdk.Client {
-		t := token
+		t, hc := token, orgClient(serverURL, 30*time.Second)
 		if t == "" {
 			sess.resolve(serverURL)
-			if t = sess.s.token; t != "" && authHintFor.tokenFrom != tokenFromLogin {
+			var origin string
+			if t, origin = sess.bearer(context.Background()); t != "" && authHintFor.tokenFrom != tokenFromLogin {
 				authHintFor.tokenFrom = tokenFromLogin
 				warnPlaintextToken(root.ErrOrStderr(), serverURL, t)
 			}
 			authHintFor.session = sess.err
+			if origin != "" {
+				hc.Transport = sessionTransport{base: orgTransport(hc), origin: origin, sess: sess}
+			}
 		}
-		return &sdk.Client{BaseURL: serverURL, Token: t, HTTPClient: orgClient(serverURL, 30*time.Second)}
+		return &sdk.Client{BaseURL: serverURL, Token: t, HTTPClient: hc}
 	}
 
 	root.AddCommand(

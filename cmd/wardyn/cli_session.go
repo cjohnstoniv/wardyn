@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -388,6 +389,28 @@ func (s *storedSession) refresh(ctx context.Context, st sessionStore) error {
 	}
 	s.token, s.tokenKind = g.AccessToken, types.APITokenKindCLIAccess
 	return nil
+}
+
+// sessionTransport puts the stored sign-in's current bearer on each request to its own organisation, so a
+// long command (run --wait polls for up to 30 minutes) renews its access token instead of sending a spent
+// one. It sends each request once: a refused one, a POST above all, is never sent again.
+type sessionTransport struct {
+	base   http.RoundTripper // the orgClient's own (orgTransport)
+	origin string            // the sign-in's organisation (CLIOrigin form): no URL outside it is sent its bearer
+	sess   *sessionState
+}
+
+func (t sessionTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if u := types.CLIOrigin(req.URL); u != t.origin && !strings.HasPrefix(u, t.origin+"/") {
+		return t.base.RoundTrip(req)
+	}
+	r := req.Clone(req.Context())
+	if tok, _ := t.sess.bearer(req.Context()); tok != "" {
+		r.Header.Set("Authorization", "Bearer "+tok)
+	} else {
+		r.Header.Del("Authorization")
+	}
+	return t.base.RoundTrip(r)
 }
 
 // cliCall sends one JSON request to origin+route through orgClient, with bearer when it is not "". A
