@@ -900,9 +900,9 @@ const (
 	reasonGovernanceChangeStateInvalid   = "governance_change_state_invalid"    // ?state= is not one of the five change states
 )
 
-// reasonIdentityDeactivated: a run, API token, SSH key or stored credential was refused because its
-// owner's identity is deactivated or was suspended since the caller was admitted (leaver
-// deprovisioning). One sentence, so a suspension reads like a cut session.
+// reasonIdentityDeactivated: a run, API token, SSH key, stored credential or runner registration
+// token was refused because its owner's identity is deactivated or was suspended since the caller
+// was admitted (leaver deprovisioning). One sentence, so a suspension reads like a cut session.
 const reasonIdentityDeactivated = "identity_deactivated"
 
 // applyRunComponents' own refusals (components_run.go): the component gate at

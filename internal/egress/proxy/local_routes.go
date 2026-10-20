@@ -101,6 +101,8 @@ func (p *Proxy) handleLocalRoute(w http.ResponseWriter, r *http.Request) {
 		p.handleBrokerScanResult(w, r)
 	case r.Method == http.MethodPut && strings.HasPrefix(path, routeSSOToken):
 		p.handleBrokerSSOToken(w, r)
+	case p.vm && r.Method == http.MethodPost && path == routeVMNetRefusals:
+		p.handleVMNetRefusal(w, r)
 	case strings.HasPrefix(path, llmAnthropicPrefix):
 		p.handleLLMAnthropic(w, r)
 	case strings.HasPrefix(path, llmOpenAIPrefix):

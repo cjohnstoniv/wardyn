@@ -102,6 +102,8 @@ type bootFlags struct {
 	// governAdminRunsExempt is WARDYN_GOVERN_ADMIN_RUNS_EXEMPT: the lanes left
 	// ungoverned under the switch. The only value is "recording".
 	governAdminRunsExempt *string
+	// egressPortRule is WARDYN_EGRESS_PORT_RULE (boot_egress.go).
+	egressPortRule *string
 	// runnerTargetOverride is WARDYN_RUNNER_TARGET, and it is a TEST-HARNESS
 	// knob: the substrate name STORED objects validate against while -runner is
 	// "none". A runner-less daemon resolves the target "none", which no drive
@@ -137,6 +139,9 @@ type bootFlags struct {
 	// value) — precedent WARDYN_DEFAULT_POLICY. Empty = unset = every outbound
 	// TLS client in this process trusts exactly the system roots, as today.
 	trustedCAFile *string
+	// refuseWritableCA is WARDYN_TRUSTED_CA_REFUSE_WRITABLE: refuse boot, rather than warn,
+	// when that bundle is group- or world-writable (readTrustedCAFile).
+	refuseWritableCA *bool
 	// daemonProxyURL / daemonNoProxy are WARDYN_DAEMON_PROXY_URL /
 	// WARDYN_DAEMON_NO_PROXY (see daemon_proxy.go): a forward proxy for
 	// wardynd's OWN outbound HTTP calls (OIDC discovery/JWKS, audit webhooks,
@@ -458,6 +463,7 @@ func parseBootFlags() *bootFlags {
 		scimLeaverWorkspaces:   flagEnv("scim-leaver-workspaces", "WARDYN_SCIM_LEAVER_WORKSPACES", scimWorkspacesReassign, "what a purge does with the workspaces a purged person owns: reassign hands them to the operator (default), keep leaves them"),
 		userDriveHostRoots:     flagEnv("user-drive-host-roots", "WARDYN_USER_DRIVE_HOST_ROOTS", "", "comma-separated absolute host directories a host_path user drive may be registered inside, typically the mount point of a share the operator mounted host-side. Empty (default) means no host_path drive may be registered; never $HOME or /"),
 		governAdminRuns:        flagBool("govern-admin-runs", "WARDYN_GOVERN_ADMIN_RUNS", false, "govern every run an SSO admin or an admin-role personal token launches, like a member's; the admin token and local mode stay ungoverned and are marked governance_exempt on run.create. With OIDC unset it binds nobody (default false)"),
+		egressPortRule:         flagEnv("egress-port-rule", "WARDYN_EGRESS_PORT_RULE", "off", "container runs' egress port rule: off (default; a bare allowlist host is open on every port), dry_run (nothing refused; each allow the rule would refuse is marked port_rule=dry_run in the audit log) or on (ports 80 and 443 plus host:port allowlist entries). The proxy turns it on for runs dispatched as a desktop VM. Any other value is refused at boot"),
 		governAdminRunsExempt:  flagEnv("govern-admin-runs-exempt", "WARDYN_GOVERN_ADMIN_RUNS_EXEMPT", "", "comma-separated lanes left ungoverned under -govern-admin-runs; the only value is \"recording\" (Record Mode runs as before). Any other value is refused at boot; set without -govern-admin-runs it does nothing"),
 		ssoOnly:                flagBool("sso-only", "WARDYN_SSO_ONLY", false, "declare SSO the only way into the console; refuses to start unless OIDC is configured and the admin token, local mode, member mode and no-operator-list override are all unset (default false)"),
 		uiDir:                  flagEnv("ui-dir", "WARDYN_UI_DIR", "", "directory holding the built web UI (optional)"),
@@ -479,6 +485,7 @@ func parseBootFlags() *bootFlags {
 		policyPath:             flagEnv("default-policy", "WARDYN_DEFAULT_POLICY", "examples/policies/default.json", "path to the default RunPolicy spec JSON"),
 		siteConfigSeedFile:     flagEnv("site-config-seed-file", "WARDYN_SITE_CONFIG_SEED_FILE", "", "path to a JSON file of network settings (upstream_proxy_url or upstream_proxy_secret_ref, upstream_proxy_no_proxy, internal_hosts) written at boot into a site config that does not have them; a setting the database has is never overwritten. Any other key, or a malformed file, refuses boot. Empty (default) seeds nothing"),
 		trustedCAFile:          flagEnv("trusted-ca-file", "WARDYN_TRUSTED_CA_FILE", "", "path to a PEM bundle of additional trusted roots, e.g. a corporate TLS-inspecting proxy's CA; added to the system roots for wardynd's own outbound TLS, the proxy sidecar and every sandbox. Empty (default) trusts only the system roots"),
+		refuseWritableCA:       flagBool("trusted-ca-refuse-writable", "WARDYN_TRUSTED_CA_REFUSE_WRITABLE", false, "refuse boot when the -trusted-ca-file bundle is group- or world-writable; off, boot logs a warning naming the file and mode (default false)"),
 		daemonProxyURL:         flagEnv("daemon-proxy-url", "WARDYN_DAEMON_PROXY_URL", "", "forward proxy (http:// or https://, no user:pass@) for wardynd's own outbound HTTP calls: OIDC discovery/JWKS, audit webhooks, GitHub App token minting, AWS SSO token renewal and Entra directory sync. Empty (default) leaves the default transport untouched"),
 		daemonNoProxy:          flagEnv("daemon-no-proxy", "WARDYN_DAEMON_NO_PROXY", "", "NO_PROXY-style bypass list for -daemon-proxy-url (host, .suffix, CIDR or *); ignored when the proxy URL is unset"),
 		daemonProxySecretFile:  flagEnv("daemon-proxy-secret-file", "WARDYN_DAEMON_PROXY_SECRET", "", "path to a file holding one forward-proxy URL that may embed user:pass@, the credentialed form of -daemon-proxy-url; refused if group- or world-writable, or if other-readable and owned by wardynd's own non-root uid (group-read, as a Kubernetes Secret mount gives, is accepted). Mutually exclusive with -daemon-proxy-url"),
@@ -697,6 +704,7 @@ func finalizeBootFlags(f *bootFlags) {
 	// budget left for another early return).
 	exitOnBadSecretFiles(f)
 	exitOnGovernanceFlags(f)
+	exitOnBadPortRule(f)
 }
 
 // exitOnBadSecretFiles is parseBootFlags' <VAR>_FILE resolution, extracted

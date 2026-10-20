@@ -54,9 +54,14 @@ func parsePlacement(raw string) (Placement, error) {
 	return p, nil
 }
 
+// runtimeAnnotationPrefixes are the annotation namespaces a node's container runtime reads to change how
+// a sandbox is confined, so no operator key may sit in one.
+var runtimeAnnotationPrefixes = []string{"io.katacontainers.", "io.kubernetes.cri-o.", "io.kubernetes.cri.", "io.containerd.", "dev.gvisor.", "run.oci."}
+
 // validate refuses, never merges or drops, anything that could reach confinement: a reserved wardyn
-// label (the NetworkPolicies select on them) and any kubernetes.io/ or k8s.io/ key other than
-// safeToEvictKey (an AppArmor "unconfined" annotation is one such key).
+// label (the NetworkPolicies select on them), any kubernetes.io/ or k8s.io/ key other than
+// safeToEvictKey (an AppArmor "unconfined" annotation is one such key), and an annotation in a
+// container runtime's namespace (runtimeAnnotationPrefixes).
 func (p Placement) validate() error {
 	for k, v := range p.PodLabels {
 		if err := checkPlacementKey("podLabels", k); err != nil {
@@ -73,6 +78,12 @@ func (p Placement) validate() error {
 	for k := range p.PodAnnotations {
 		if err := checkPlacementKey("podAnnotations", k); err != nil {
 			return err
+		}
+		lower := strings.ToLower(k)
+		for _, prefix := range runtimeAnnotationPrefixes {
+			if strings.HasPrefix(lower, prefix) {
+				return fmt.Errorf("podAnnotations key %q is refused: %s keys are read by the node's container runtime and can loosen confinement", k, prefix)
+			}
 		}
 	}
 	if p.PriorityClassName != "" {
@@ -126,7 +137,11 @@ func (p Placement) apply(pod *corev1.Pod, runID uuid.UUID, component string, ext
 		if pod.Annotations == nil {
 			pod.Annotations = map[string]string{}
 		}
-		maps.Copy(pod.Annotations, p.PodAnnotations)
+		for k, v := range p.PodAnnotations {
+			if _, set := pod.Annotations[k]; !set { // an annotation Wardyn already set stands
+				pod.Annotations[k] = v
+			}
+		}
 	}
 	pod.Spec.NodeSelector = maps.Clone(p.NodeSelector)
 	for i := range p.Tolerations {

@@ -21,6 +21,7 @@ import { CopyButton } from "../../../wardyn/copy-button";
 import { RUN_PLACEMENT, RUN_RECORDING, runnerLabel } from "../../../wardyn/copy/runners";
 import { usePrincipal } from "../../../wardyn/operator-context";
 import { WidgetCard } from "../../../wardyn/primitives";
+import { innerWallsText } from "../../new-run-flow/review/format";
 import { IDENTITY_POLICY_VIEW } from "../policy-tab-copy";
 import { SyncRows } from "./identity-sync";
 
@@ -122,6 +123,7 @@ export function IdentityWidget({
           >
             {IDENTITY_POLICY_VIEW}
           </button>
+          {run.inner_walls && <div className="truncate text-muted-foreground">{innerWallsText(run.inner_walls)}</div>}
         </dd>
 
         {runsOn && (

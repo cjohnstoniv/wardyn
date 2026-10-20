@@ -169,7 +169,7 @@ func run() error {
 	// sandbox get the SAME pemBundle forwarded at dispatch time (api.Config
 	// below); see trusted_ca.go. Refuse boot on error: an operator-typed trust
 	// boundary that fails to parse must not silently fall back to a narrower one.
-	trustedCAPEM, trustedCAPool, trustedCACount, err := loadTrustedCA(*f.trustedCAFile)
+	trustedCAPEM, trustedCAPool, trustedCACount, err := loadTrustedCA(*f.trustedCAFile, *f.refuseWritableCA)
 	if err != nil {
 		return err
 	}
@@ -426,6 +426,7 @@ func run() error {
 		TrustDomain:         *f.trustDomain,
 		DefaultPolicy:       knobs.defaultPolicy,
 		TrustedCAPEM:        trustedCAPEM,
+		EgressPortRule:      egressPortRule(*f.egressPortRule),
 		DemoVideoBaseURL:    knobs.demoVideoBaseURL,
 		RunnerTarget:        runnerTarget,
 		RunnerOrgURL:        *f.runnerOrgURL,
