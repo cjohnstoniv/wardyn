@@ -142,3 +142,16 @@ func TestADOEntraRedeemable_RefusesBeforeTheLockIsTaken(t *testing.T) {
 		t.Errorf("a single named scope = %v, want accepted", err)
 	}
 }
+
+func TestAdoEntraRowIDFromSecretName(t *testing.T) {
+	for _, id := range []string{"row-1", "A", "ado-row-2"} {
+		if got, ok := adoEntraRowIDFromSecretName(adoEntraSecretName(id)); !ok || got != id {
+			t.Errorf("round trip %q = %q, %v", id, got, ok)
+		}
+	}
+	for _, name := range []string{"wardyn-harness-ado-oauth", "wardyn-harness-adoown-row-1-oauth", "wardyn-harness-aws-oauth", "other", "wardyn-harness-ado--oauth"} {
+		if got, ok := adoEntraRowIDFromSecretName(name); ok {
+			t.Errorf("%q parsed as row %q", name, got)
+		}
+	}
+}
