@@ -172,7 +172,8 @@ func TestRunnerProxyWithoutASchemeIsReadAsHTTP(t *testing.T) {
 		t.Errorf("runner_proxy ftp: %v; want a refusal naming the scheme rule", err)
 	}
 	// Values Go reads as http://<value> with a user name, whatever the text before the first colon looks like.
-	for _, v := range []string{"alice:a://b@proxy:3128", "alice:secret@proxy:3128/?u=http://x", "alice@proxy:3128", "alice:secret@proxy:3128/a://b"} {
+	for _, v := range []string{"alice:a://b@proxy:3128", "alice:secret@proxy:3128/?u=http://x", "alice@proxy:3128", "alice:secret@proxy:3128/a://b",
+		"http://alice:secret@", "socks5://alice:secret@", "http://alice:secret@proxy :3128", "http://alice:sec ret@proxy:3128", "http://alice:secret@[::1", "https://alice:secret@proxy:abc"} {
 		for _, field := range []string{"runner_proxy", "upstream_proxy"} {
 			_, err := loadRunnerFile(writeConfig(t, `{"`+field+`": "`+v+`"}`), true)
 			if err == nil || strings.Contains(err.Error(), "alice") || strings.Contains(err.Error(), "secret") {

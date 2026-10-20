@@ -238,3 +238,18 @@ func TestSetupWarnsAboutHTTPProxyOnlyWhenNoHTTPSProxyIsSet(t *testing.T) {
 		t.Errorf("want HTTPS_PROXY carried and no HTTP_PROXY warning:\n%s", out)
 	}
 }
+
+// A blank HTTPS_PROXY carries nothing, so it does not hide the warning that HTTP_PROXY alone reaches nothing.
+func TestSetupWarnsAboutHTTPProxyBesideABlankHTTPSProxy(t *testing.T) {
+	clearProxyEnv(t)
+	t.Setenv("HTTPS_PROXY", "   ")
+	t.Setenv("HTTP_PROXY", "http://h.corp:8080")
+	f := newSetupFixture(t, "linux")
+	out, err := f.run(setupOptions{tokenFile: f.tokenFile})
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if !strings.Contains(out, "HTTP_PROXY is set in this shell, but setup does not carry it") {
+		t.Errorf("want the HTTP_PROXY warning:\n%s", out)
+	}
+}

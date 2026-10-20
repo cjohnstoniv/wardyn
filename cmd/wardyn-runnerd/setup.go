@@ -366,7 +366,7 @@ func proxyForService(out io.Writer, paths setupPaths, existing runnerFile) ([]ca
 func proxyEnvNames(getenv func(string) string) []string {
 	var set []string
 	// HTTP_PROXY only matters when no HTTPS_PROXY is carried in its place: the usual laptop sets both.
-	httpsSet := getenv("HTTPS_PROXY") != "" || getenv("https_proxy") != ""
+	httpsSet := strings.TrimSpace(getenv("HTTPS_PROXY")) != "" || strings.TrimSpace(getenv("https_proxy")) != ""
 	for _, k := range []string{"ALL_PROXY", "all_proxy", "HTTP_PROXY", "http_proxy"} {
 		if httpsSet && strings.HasPrefix(strings.ToUpper(k), "HTTP_") {
 			continue

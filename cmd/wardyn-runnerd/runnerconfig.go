@@ -260,7 +260,9 @@ func refuseProxyCredential(field, raw, envName string, schemes ...string) error 
 	if err != nil {
 		return fmt.Errorf("%s: not a URL (the value is not repeated here: it may hold a credential)", field)
 	}
-	if u.User != nil {
+	// The text is checked as well as the parse: a value the re-parse cannot split (a bad port, a space, an
+	// unclosed bracket) still holds its credential, and setup refuses by the same rule.
+	if _, had := stripUserinfo(raw); had || u.User != nil {
 		return fmt.Errorf("%s: carries a user name or password, and this file never holds a credential: remove it here and set %s in the service's environment instead "+
 			"(a systemd drop-in EnvironmentFile on Linux; see docs/runner-registration.md#a-runner-behind-a-corporate-proxy)", field, envName)
 	}
