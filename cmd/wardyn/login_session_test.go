@@ -4,6 +4,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
@@ -33,13 +34,26 @@ import (
 // cli_sessions.go ship: it checks the PKCE verifier, the device proof against its own URL, single-use codes,
 // secret rotation and reuse, and the per-device sign-out.
 type signInOrg struct {
-	t     *testing.T
-	srv   *httptest.Server
-	paste bool
+	t       *testing.T
+	srv     *httptest.Server
+	paste   bool
+	version string // /healthz.version
+	// origin is /healthz.cli_sign_in_origin ("" sends none) and the origin proofs are checked over;
+	// "" checks them over the server's own URL.
+	origin string
+	// signOutFails makes DELETE /me/cli-sessions/{id} a 500; signOut401 a 401 with that reason.
+	signOutFails bool
+	signOut401   string
 	// issueLife and refreshLife are the access token lifetimes of the token call and of a refresh.
 	issueLife, refreshLife time.Duration
 	// refreshBarrier holds the first refresh up to this long for a second to arrive.
 	refreshBarrier time.Duration
+	// expire refuses an access token once it is inside the CLI's renewal margin (a server whose clock runs
+	// that far ahead), so a test sees a spent token refused without waiting out the margin.
+	expire bool
+	// refusePost makes POST /api/v1/runs a 401; posts and polls count the run calls.
+	refusePost   bool
+	posts, polls int
 
 	mu        sync.Mutex
 	signIns   map[uuid.UUID]*fakeSignIn
@@ -66,6 +80,7 @@ type fakeSession struct {
 type fakeToken struct {
 	session uuid.UUID
 	kind    string
+	exp     time.Time
 }
 
 const fakeEmail = "you@example.com"
@@ -76,13 +91,16 @@ func newSignInOrg(t *testing.T) *signInOrg {
 		sessions: map[uuid.UUID]*fakeSession{}, tokens: map[string]fakeToken{}, inflight: make(chan struct{}, 8)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		writeFake(w, http.StatusOK, map[string]any{"status": "ok", "cli_sign_in": true, "cli_paste_sign_in": f.paste})
+		writeFake(w, http.StatusOK, map[string]any{"status": "ok", "cli_sign_in": true, "cli_paste_sign_in": f.paste, "version": f.version, "cli_sign_in_origin": f.origin})
 	})
 	mux.HandleFunc("POST /api/v1/cli/sign-ins", f.create)
 	mux.HandleFunc("POST /api/v1/cli/sign-ins/{id}/token", f.token)
 	mux.HandleFunc("POST /api/v1/cli/sessions/{id}/refresh", f.refresh)
 	mux.HandleFunc("GET /api/v1/me", f.me)
 	mux.HandleFunc("DELETE /api/v1/me/cli-sessions/{id}", f.signOut)
+	mux.HandleFunc("POST /api/v1/runs", f.createRun)
+	mux.HandleFunc("GET /api/v1/runs/{id}", f.getRun)
+	mux.HandleFunc("GET /api/v1/audit", func(w http.ResponseWriter, _ *http.Request) { writeFake(w, http.StatusOK, []types.AuditEvent{}) })
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		if a := r.Header.Get("Authorization"); a != "" {
@@ -120,7 +138,7 @@ func (f *signInOrg) proofOK(pub ed25519.PublicKey, route string, id uuid.UUID, s
 	sig, err := base64.RawURLEncoding.DecodeString(p.Signature)
 	at := time.Unix(p.Time, 0)
 	return err == nil && time.Since(at).Abs() <= types.CLIProofSkew &&
-		ed25519.Verify(pub, types.CLIProofMessage(f.srv.URL, route, id, secret, p.Time), sig)
+		ed25519.Verify(pub, types.CLIProofMessage(cmp.Or(f.origin, f.srv.URL), route, id, secret, p.Time), sig)
 }
 
 func (f *signInOrg) create(w http.ResponseWriter, r *http.Request) {
@@ -154,8 +172,8 @@ func (f *signInOrg) approve(id uuid.UUID) (code, redirect string) {
 
 func (f *signInOrg) grant(sess uuid.UUID, kind string, life time.Duration) types.CLISessionGrant {
 	tok := "wdn_" + uuid.NewString()
-	f.tokens[tok] = fakeToken{session: sess, kind: kind}
 	now := time.Now()
+	f.tokens[tok] = fakeToken{session: sess, kind: kind, exp: now.Add(life)}
 	return types.CLISessionGrant{SessionID: sess, AccessToken: tok, Kind: kind, AccessExpiresAt: now.Add(life),
 		SessionExpiresAt: now.Add(30 * 24 * time.Hour), IdleExpiresAt: now.Add(7 * 24 * time.Hour), Store: types.CLIStoreKeychain}
 }
@@ -236,6 +254,11 @@ func (f *signInOrg) refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess.secret = "wdc_" + uuid.NewString()
+	for tok, owner := range f.tokens { // a rotation revokes the access token it replaces
+		if owner.session == id && owner.kind == types.APITokenKindCLIAccess {
+			delete(f.tokens, tok)
+		}
+	}
 	g := f.grant(id, types.APITokenKindCLIAccess, f.refreshLife)
 	g.Secret = sess.secret
 	writeFake(w, http.StatusOK, g)
@@ -248,10 +271,49 @@ func (f *signInOrg) owner(r *http.Request) (*fakeToken, *fakeSession) {
 		return nil, nil
 	}
 	sess := f.sessions[tok.session]
-	if sess == nil || sess.ended != "" {
+	if sess == nil || sess.ended != "" || f.expire && !time.Now().Add(cliTokenMargin).Before(tok.exp) {
 		return nil, nil
 	}
 	return &tok, sess
+}
+
+// fakeRunID is the run createRun makes; getRun answers RUNNING for its first 20 polls, then COMPLETED.
+var fakeRunID = uuid.MustParse("00000000-0000-4000-8000-000000000001")
+
+func (f *signInOrg) createRun(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.posts++
+	if tok, _ := f.owner(r); tok == nil || f.refusePost {
+		f.refuseBearer(w, r)
+		return
+	}
+	writeFake(w, http.StatusCreated, types.AgentRun{ID: fakeRunID, State: types.RunPending})
+}
+
+func (f *signInOrg) getRun(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if tok, _ := f.owner(r); tok == nil {
+		f.refuseBearer(w, r)
+		return
+	}
+	f.polls++
+	state := types.RunRunning
+	if f.polls > 20 {
+		state = types.RunCompleted
+	}
+	writeFake(w, http.StatusOK, types.AgentRun{ID: fakeRunID, State: state})
+}
+
+// refuseBearer is the server's 401 for no bearer (sign_in_required) or one it does not know, such as an
+// ended session's revoked token (the admin-token fallback's admin_token_not_configured).
+func (f *signInOrg) refuseBearer(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Authorization") == "" {
+		refuseFake(w, 401, "sign_in_required", "missing bearer token")
+		return
+	}
+	refuseFake(w, 401, "admin_token_not_configured", "admin token not configured; public API disabled")
 }
 
 func (f *signInOrg) me(w http.ResponseWriter, r *http.Request) {
@@ -263,7 +325,7 @@ func (f *signInOrg) me(w http.ResponseWriter, r *http.Request) {
 	}
 	tok, _ := f.owner(r)
 	if tok == nil {
-		refuseFake(w, 401, "sign_in_required", "missing bearer token")
+		f.refuseBearer(w, r)
 		return
 	}
 	role := "user"
@@ -277,12 +339,21 @@ func (f *signInOrg) signOut(w http.ResponseWriter, r *http.Request) {
 	id, _ := uuid.Parse(r.PathValue("id"))
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	tok, sess := f.owner(r)
-	if tok == nil {
-		refuseFake(w, 401, "sign_in_required", "missing bearer token")
+	if f.signOutFails {
+		refuseFake(w, 500, "", "internal error")
 		return
 	}
-	if tok.session != id {
+	if f.signOut401 != "" {
+		refuseFake(w, 401, f.signOut401, "refused")
+		return
+	}
+	// One person holds every session here; the server ends any live session of the caller's.
+	if tok, _ := f.owner(r); tok == nil {
+		f.refuseBearer(w, r)
+		return
+	}
+	sess := f.sessions[id]
+	if sess == nil || sess.ended != "" {
 		refuseFake(w, 404, "cli_session_not_found", "no such CLI sign-in")
 		return
 	}
@@ -604,7 +675,8 @@ func TestSessionFileFallbackWithNoBus(t *testing.T) {
 		t.Fatalf("login: %v", err)
 	}
 	path := filepath.Join(dir, cliSessionFile)
-	if want := fmt.Sprintf(copyFileStore, path); !strings.Contains(stderr, want) {
+	// The cap in the line is the one the server enforces on a file-store session, in words.
+	if want := fmt.Sprintf(copyFileStore, path, inWords(types.CLIFileStoreSessionCap)); !strings.Contains(stderr, want) {
 		t.Errorf("stderr %q, want the file-store line %q", stderr, want)
 	}
 	_, si := f.onlySignIn(t)
@@ -692,6 +764,9 @@ func TestSessionEndedIsNamedAndNotSentAgain(t *testing.T) {
 	}
 	if f.liveSessions() != 0 {
 		t.Error("the replayed secret did not end the session at the server")
+	}
+	if it := storedItem(t, f.srv.URL); it.Secret != "" || it.KeySeed != "" || it.AccessToken != "" || it.AdminToken != "" {
+		t.Errorf("an ended item still holds its secret, key or tokens: %+v", it)
 	}
 	before := f.refreshes
 	if _, _, err := runCLI(t, "", "whoami", "--url", f.srv.URL); err == nil || err.Error() != want {
@@ -837,5 +912,355 @@ func TestLoginAdminStepUp(t *testing.T) {
 	out, _, err = runCLI(t, "", "whoami", "--url", f.srv.URL)
 	if err != nil || !strings.Contains(out, fakeEmail+" (admin; admin access ends in ") {
 		t.Errorf("whoami after the step-up: %q, %v", out, err)
+	}
+}
+
+// TestLoginVersionNotice: after a successful login or whoami, at most once a day per URL, one stderr line
+// says the organisation runs another release; never on stdout, and never from a development build.
+func TestLoginVersionNotice(t *testing.T) {
+	f := newSignInOrg(t)
+	cliEnv(t, nil)
+	openBrowser = func(approve string) error { go approveInBrowser(t, f, nil)(approve); return nil }
+	prev := cliVersion
+	t.Cleanup(func() { cliVersion = prev })
+	cliVersion = func() string { return "0.10.0" }
+	f.version = "0.10.2+abc1234"
+	want := fmt.Sprintf(copyNoticeServerNewer, "0.10.0", f.srv.URL, "0.10.2+abc1234") + "\n"
+
+	out, stderr, err := runCLI(t, "", "login", f.srv.URL)
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	if strings.Count(stderr, want) != 1 || strings.Contains(out, "this CLI is") {
+		t.Errorf("login: stderr %q stdout %q, want the notice once on stderr only", stderr, out)
+	}
+	out, stderr, err = runCLI(t, "", "whoami", "--url", f.srv.URL)
+	if err != nil || strings.Contains(stderr+out, "this CLI is") {
+		t.Errorf("whoami within the day printed the notice again: stderr %q, %v", stderr, err)
+	}
+	// A day later it checks, and says it, again.
+	path := filepath.Join(os.Getenv("XDG_CACHE_HOME"), "wardyn", noticeCacheFile)
+	checks := map[string]noticeCheck{}
+	raw, _ := os.ReadFile(path)
+	if err := json.Unmarshal(raw, &checks); err != nil || checks[f.srv.URL].Version == "" {
+		t.Fatalf("cache %s = %q, %v", path, raw, err)
+	}
+	checks[f.srv.URL] = noticeCheck{CheckedAt: time.Now().Add(-25 * time.Hour), Version: "0.10.2"}
+	raw, _ = json.Marshal(checks)
+	_ = os.WriteFile(path, raw, 0o644)
+	if _, stderr, err = runCLI(t, "", "whoami", "--url", f.srv.URL); err != nil || strings.Count(stderr, want) != 1 {
+		t.Errorf("whoami a day later: stderr %q, %v; want the notice", stderr, err)
+	}
+
+	t.Run("a development build never checks", func(t *testing.T) {
+		cliVersion = func() string { return "0.10.0+80852d67f-dirty" }
+		_ = os.Remove(path)
+		if _, stderr, err := runCLI(t, "", "whoami", "--url", f.srv.URL); err != nil || strings.Contains(stderr, "this CLI is") {
+			t.Errorf("a development build printed %q (%v)", stderr, err)
+		}
+	})
+	for _, tc := range []struct{ cli, server, want string }{
+		{"0.10.0", "0.10.0", ""},
+		{"0.10.0", "0.10.0+abc1234", ""},
+		{"0.10.0", "0.10.2", fmt.Sprintf(copyNoticeServerNewer, "0.10.0", "https://o", "0.10.2")},
+		{"0.10.2", "0.9.6", fmt.Sprintf(copyNoticeServerOlder, "0.10.2", "https://o", "0.9.6")},
+		{"0.10.0", "dev", fmt.Sprintf(copyNoticeServerNewer, "0.10.0", "https://o", "dev")},
+	} {
+		if got := noticeLine(tc.cli, "https://o", tc.server); got != tc.want {
+			t.Errorf("noticeLine(%q, %q) = %q, want %q", tc.cli, tc.server, got, tc.want)
+		}
+	}
+}
+
+// TestLoginReplacingEndsThePreviousSession: signing in again on the same computer signs the old session
+// out at the server once the new one is stored; when that fails, the new sign-in still stands and stderr
+// says the old one was not ended.
+func TestLoginReplacingEndsThePreviousSession(t *testing.T) {
+	for _, fails := range []bool{false, true} {
+		t.Run(fmt.Sprintf("sign-out fails=%v", fails), func(t *testing.T) {
+			f := newSignInOrg(t)
+			cliEnv(t, nil)
+			openBrowser = func(approve string) error { go approveInBrowser(t, f, nil)(approve); return nil }
+			if _, _, err := runCLI(t, "", "login", f.srv.URL); err != nil {
+				t.Fatalf("first login: %v", err)
+			}
+			first := storedItem(t, f.srv.URL).SessionID
+			f.signOutFails = fails
+			_, stderr, err := runCLI(t, "", "login", f.srv.URL)
+			if err != nil {
+				t.Fatalf("second login: %v (a failed sign-out of the old session must not fail it)", err)
+			}
+			second := storedItem(t, f.srv.URL)
+			if second.SessionID == first || second.AccessToken == "" {
+				t.Fatalf("the new sign-in was not stored: %+v", second)
+			}
+			f.mu.Lock()
+			oldEnded, newEnded := f.sessions[first].ended, f.sessions[second.SessionID].ended
+			f.mu.Unlock()
+			if newEnded != "" {
+				t.Errorf("the new session ended (%s)", newEnded)
+			}
+			warned := strings.Contains(stderr, "the sign-in this one replaces could not be signed out")
+			switch {
+			case !fails && oldEnded != types.CLISessionEndSignedOut:
+				t.Errorf("the replaced session is %q at the server, want signed_out", oldEnded)
+			case !fails && warned, fails && !warned:
+				t.Errorf("stderr %q (sign-out fails=%v)", stderr, fails)
+			}
+		})
+	}
+}
+
+// TestLoginAdminStepUpKeepsTheSecretARefreshRotated: a refresh in another command while the step-up's
+// browser is open rotates the secret; the step-up then adds its token to the item as stored now, so the
+// rotated secret survives and the next refresh is not a reuse.
+func TestLoginAdminStepUpKeepsTheSecretARefreshRotated(t *testing.T) {
+	f := newSignInOrg(t)
+	cliEnv(t, nil)
+	openBrowser = func(approve string) error { go approveInBrowser(t, f, nil)(approve); return nil }
+	if _, _, err := runCLI(t, "", "login", f.srv.URL); err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	// Every token from here on is spent at once, so each command refreshes.
+	it := storedItem(t, f.srv.URL)
+	it.AccessExpiresAt = time.Now()
+	_ = (keychainStore{}).put(f.srv.URL, it)
+	f.refreshLife = 0
+	openBrowser = func(approve string) error {
+		go func() {
+			if _, err := loadSession(context.Background(), f.srv.URL); err != nil {
+				t.Errorf("the other command's refresh: %v", err)
+			}
+			approveInBrowser(t, f, nil)(approve)
+		}()
+		return nil
+	}
+	if _, _, err := runCLI(t, "", "login", "--admin", f.srv.URL); err != nil {
+		t.Fatalf("login --admin: %v", err)
+	}
+	got := storedItem(t, f.srv.URL)
+	f.mu.Lock()
+	current, refreshes := f.sessions[got.SessionID].secret, f.refreshes
+	f.mu.Unlock()
+	if refreshes != 2 || got.Secret != current || got.AdminToken == "" {
+		t.Errorf("after %d refreshes the stored secret is %q, the server's %q, admin token %q; want the rotated secret kept beside the admin token",
+			refreshes, got.Secret, current, got.AdminToken)
+	}
+}
+
+// TestLogoutDeletesTheItemWhenTheServerIsNotTold: an unreachable organisation, a 500 and a refusal other
+// than an unknown token each leave logout's error naming the server, with the item and its profile entry
+// gone; a token refused as unknown means the session already ended, which is a clean sign-out.
+func TestLogoutDeletesTheItemWhenTheServerIsNotTold(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		set       func(f *signInOrg)
+		signedOut bool
+	}{
+		{"unreachable", func(f *signInOrg) { f.srv.Close() }, false},
+		{"500", func(f *signInOrg) { f.signOutFails = true }, false},
+		{"401 role_stamp_stale", func(f *signInOrg) { f.signOut401 = "role_stamp_stale" }, false},
+		{"already ended at the server", func(f *signInOrg) {
+			f.mu.Lock()
+			for _, sess := range f.sessions {
+				sess.ended = types.CLISessionEndSessionsCut
+			}
+			f.mu.Unlock()
+		}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newSignInOrg(t)
+			dir := cliEnv(t, nil)
+			openBrowser = func(approve string) error { go approveInBrowser(t, f, nil)(approve); return nil }
+			if _, _, err := runCLI(t, "", "login", f.srv.URL); err != nil {
+				t.Fatalf("login: %v", err)
+			}
+			tc.set(f)
+			out, _, err := runCLI(t, "", "logout", "--url", f.srv.URL)
+			wantErr := fmt.Sprintf("signed out on this computer, but %s did not end the session (", f.srv.URL)
+			switch {
+			case tc.signedOut && (err != nil || out != fmt.Sprintf(copyLoggedOut+"\n", f.srv.URL)):
+				t.Errorf("logout: %q, %v; want a clean sign-out", out, err)
+			case !tc.signedOut && (err == nil || !strings.HasPrefix(err.Error(), wantErr)):
+				t.Errorf("logout: %v; want it to start %q", err, wantErr)
+			}
+			if _, err := keyring.Get(cliKeyringService, f.srv.URL); !errors.Is(err, keyring.ErrNotFound) {
+				t.Errorf("the keychain item is still there (%v)", err)
+			}
+			if k, _ := cliprofile.ReadSessionStore(dir, f.srv.URL); k != "" {
+				t.Errorf("the profile still names %q", k)
+			}
+		})
+	}
+}
+
+// TestLoginAdminStepUpDoesNotRestoreAReplacedSession: when this computer's sign-in is replaced while the
+// step-up's browser is open, the step-up stores nothing and says so; the replacement stays.
+func TestLoginAdminStepUpDoesNotRestoreAReplacedSession(t *testing.T) {
+	f := newSignInOrg(t)
+	cliEnv(t, nil)
+	openBrowser = func(approve string) error { go approveInBrowser(t, f, nil)(approve); return nil }
+	if _, _, err := runCLI(t, "", "login", f.srv.URL); err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	replacement := cliItem{SessionID: uuid.New(), Secret: "wdc_other", KeySeed: "other-key", AccessToken: "wdn_other",
+		AccessExpiresAt: time.Now().Add(time.Hour), SessionExpiresAt: time.Now().Add(time.Hour), IdleExpiresAt: time.Now().Add(time.Hour)}
+	openBrowser = func(approve string) error {
+		go func() {
+			_ = (keychainStore{}).put(f.srv.URL, replacement) // another login on this computer
+			approveInBrowser(t, f, nil)(approve)
+		}()
+		return nil
+	}
+	_, _, err := runCLI(t, "", "login", "--admin", f.srv.URL)
+	if err == nil || err.Error() != fmt.Sprintf(errStepUpLost, f.srv.URL) {
+		t.Fatalf("login --admin: %v, want %q", err, fmt.Sprintf(errStepUpLost, f.srv.URL))
+	}
+	if got := storedItem(t, f.srv.URL); got.SessionID != replacement.SessionID || got.AdminToken != "" {
+		t.Errorf("the stored item is %+v; want the replacement, without the admin token", got)
+	}
+}
+
+// TestLogoutUsesTheTokenStoredNow: a refresh in another command between logout's renewal and its
+// sign-out rotates the access token (revoking the one logout read first); logout signs out with the
+// token stored now, so the session really ends.
+func TestLogoutUsesTheTokenStoredNow(t *testing.T) {
+	f := newSignInOrg(t)
+	cliEnv(t, nil)
+	openBrowser = func(approve string) error { go approveInBrowser(t, f, nil)(approve); return nil }
+	if _, _, err := runCLI(t, "", "login", f.srv.URL); err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	prev := beforeLogoutLock
+	t.Cleanup(func() { beforeLogoutLock = prev })
+	beforeLogoutLock = func() {
+		it := storedItem(t, f.srv.URL)
+		it.AccessExpiresAt = time.Now()
+		_ = (keychainStore{}).put(f.srv.URL, it)
+		if _, err := loadSession(context.Background(), f.srv.URL); err != nil {
+			t.Errorf("the other command's refresh: %v", err)
+		}
+	}
+	out, _, err := runCLI(t, "", "logout", "--url", f.srv.URL)
+	if err != nil || out != fmt.Sprintf(copyLoggedOut+"\n", f.srv.URL) {
+		t.Fatalf("logout: %q, %v", out, err)
+	}
+	if f.refreshes != 1 || f.liveSessions() != 0 {
+		t.Errorf("refreshes %d, live sessions %d; want the refresh, then the session ended", f.refreshes, f.liveSessions())
+	}
+}
+
+// TestLoginLoopbackPageWaitsForTheStore: the browser is told "Signed in" only once the sign-in is stored;
+// a store that fails shows the failed page, and login fails.
+func TestLoginLoopbackPageWaitsForTheStore(t *testing.T) {
+	f := newSignInOrg(t)
+	cliEnv(t, nil)
+	pages := make(chan string, 1)
+	openBrowser = func(approve string) error {
+		go func() {
+			keyring.MockInitWithError(errors.New("the keychain is locked")) // after the store was chosen
+			approveInBrowser(t, f, pages)(approve)
+		}()
+		return nil
+	}
+	if _, _, err := runCLI(t, "", "login", f.srv.URL); err == nil {
+		t.Fatal("login succeeded with a keychain that refuses the write")
+	}
+	if page := <-pages; !strings.Contains(page, pageFailed) || strings.Contains(page, pageSignedIn) {
+		t.Errorf("the browser's page = %q, want %q", page, pageFailed)
+	}
+}
+
+// TestLoginOriginIsTheOneDialled: the CLI signs proofs only over the URL it dials (normalised) and compares
+// /healthz.cli_sign_in_origin with it. Another spelling of the same origin is accepted; a different origin
+// is refused before any proof exists, with the URL to use named.
+func TestLoginOriginIsTheOneDialled(t *testing.T) {
+	t.Run("localhost is not 127.0.0.1", func(t *testing.T) {
+		f := newSignInOrg(t)
+		cliEnv(t, func(string) { t.Error("a refused login opened the browser") })
+		loopbackWait = time.Second // a login that is not refused waits for no browser
+		f.origin = f.srv.URL       // http://127.0.0.1:<port>
+		dialled := strings.Replace(f.srv.URL, "127.0.0.1", "localhost", 1)
+		_, _, err := runCLI(t, "", "login", dialled)
+		if want := fmt.Sprintf(errOtherOrigin, f.srv.URL, dialled, f.srv.URL); err == nil || err.Error() != want {
+			t.Fatalf("login %s: %v, want %q", dialled, err, want)
+		}
+		if len(f.signIns) != 0 {
+			t.Errorf("a refused login still asked for %d sign-ins", len(f.signIns))
+		}
+	})
+	t.Run("a host-case difference and a trailing slash are the same origin", func(t *testing.T) {
+		f := newSignInOrg(t)
+		cliEnv(t, nil)
+		openBrowser = func(approve string) error { go approveInBrowser(t, f, nil)(approve); return nil }
+		f.origin = strings.Replace(f.srv.URL, "127.0.0.1", "localhost", 1)
+		typed := strings.Replace(f.srv.URL, "127.0.0.1", "LocalHost", 1) + "/"
+		if _, _, err := runCLI(t, "", "login", typed); err != nil {
+			t.Fatalf("login %s against an organisation at %s: %v", typed, f.origin, err)
+		}
+		// The fake checked the token call's proof over its origin, which is the normalised URL dialled.
+		if storedItem(t, f.origin).AccessToken == "" {
+			t.Error("no sign-in stored under the normalised URL")
+		}
+	})
+	t.Run("an advertised origin is never signed over", func(t *testing.T) {
+		f := newSignInOrg(t)
+		cliEnv(t, func(string) { t.Error("a refused login opened the browser") })
+		loopbackWait = time.Second              // a login that is not refused waits for no browser
+		f.origin = "https://wardyn.example.com" // a look-alike naming the real organisation
+		_, _, err := runCLI(t, "", "login", f.srv.URL)
+		if want := fmt.Sprintf(errOtherOrigin, f.origin, f.srv.URL, f.origin); err == nil || err.Error() != want {
+			t.Fatalf("login: %v, want %q", err, want)
+		}
+		if len(f.signIns) != 0 {
+			t.Errorf("the look-alike got %d sign-in requests (and so could ask for a proof)", len(f.signIns))
+		}
+	})
+	t.Run("a proof signs the origin dialled", func(t *testing.T) {
+		key := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
+		id := uuid.New()
+		p := cliProof(key, "http://localhost:1", "/r", id, "k", time.Unix(100, 0))
+		sig, _ := base64.RawURLEncoding.DecodeString(p.Signature)
+		if !ed25519.Verify(key.Public().(ed25519.PublicKey), types.CLIProofMessage("http://localhost:1", "/r", id, "k", 100), sig) ||
+			ed25519.Verify(key.Public().(ed25519.PublicKey), types.CLIProofMessage("https://wardyn.example.com", "/r", id, "k", 100), sig) {
+			t.Error("the proof does not carry exactly the origin it was given")
+		}
+	})
+}
+
+// TestLongCommandRenewsTheStoredSignIn: run --wait sends the bearer current at each poll. The access token
+// it started with comes inside the renewal margin a few polls in; the next poll renews it under the lock and
+// the polls carry on. A refused POST is sent once.
+func TestLongCommandRenewsTheStoredSignIn(t *testing.T) {
+	setWaitPollInterval(t, 50*time.Millisecond)
+	f := newSignInOrg(t)
+	cliEnv(t, approveInBrowser(t, f, nil))
+	f.issueLife = cliTokenMargin + 400*time.Millisecond
+	if _, _, err := runCLI(t, "", "login", f.srv.URL); err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	f.expire = true
+	_, errOut, err := runCLI(t, "", "run", "--url", f.srv.URL, "--agent", "claude-code", "--wait")
+	f.mu.Lock()
+	refreshes, polls := f.refreshes, f.polls
+	f.mu.Unlock()
+	if err != nil || refreshes != 1 || polls != 21 {
+		t.Fatalf("run --wait: err %v after %d polls and %d refreshes, want the run to finish after 21 polls and 1 refresh\n%s",
+			err, polls, refreshes, errOut)
+	}
+	if got := storedItem(t, f.srv.URL); got.AccessToken == "" || !time.Now().Before(got.AccessExpiresAt) {
+		t.Errorf("stored access token %q expires %v, want the renewed one", got.AccessToken, got.AccessExpiresAt)
+	}
+
+	f.mu.Lock()
+	f.refusePost, f.posts = true, 0
+	f.mu.Unlock()
+	if _, _, err := runCLI(t, "", "run", "--url", f.srv.URL, "--agent", "claude-code"); err == nil {
+		t.Fatal("a refused run create succeeded")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.posts != 1 {
+		t.Errorf("the refused POST was sent %d times, want once", f.posts)
 	}
 }

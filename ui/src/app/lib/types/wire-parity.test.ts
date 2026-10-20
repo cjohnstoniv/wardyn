@@ -156,6 +156,17 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(new Set(tsInlineKeys(setupTs, "SetupStatus", member))).toEqual(new Set(goTags));
   });
 
+  it("CLISignInHealthz: every Go tag is on /healthz and in health()'s mirror", () => {
+    const goTags = goJSONTags(readFileSync(join(root, "internal/types/cli_sign_in.go"), "utf8"), "CLISignInHealthz");
+    const healthzGo = readFileSync(join(root, "internal/api/healthz.go"), "utf8");
+    const healthTs = stripComments(readFileSync(join(root, "ui/src/app/lib/api/health.ts"), "utf8"));
+    expect(goTags).toEqual(["cli_sign_in", "cli_paste_sign_in", "cli_sign_in_origin"]);
+    for (const tag of goTags) {
+      expect(healthzGo, tag).toContain(`"${tag}"`);
+      expect(healthTs, tag).toMatch(new RegExp(`\\b${tag}\\?:`));
+    }
+  });
+
   it("SetupProviderAccess (`provider_access`): full parity with the TS mirror", () => {
     const providerAccessGo = readFileSync(join(root, "internal/api/provider_access.go"), "utf8");
     const goTags = goJSONTags(providerAccessGo, "SetupProviderAccess");

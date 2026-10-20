@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/cjohnstoniv/wardyn/internal/cliprofile"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -64,8 +65,13 @@ func whoamiCmd(client func() *sdk.Client, sess *sessionState) *cobra.Command {
 				}
 				from = fmt.Sprintf(copyWhoStore, sess.s.kind, inWords(it.SessionExpiresAt.Sub(now)), inWords(it.IdleExpiresAt.Sub(now)))
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s\n%s (%s)\n%s\n", origin, me.name(), role, from)
-			return err
+			if _, err = fmt.Fprintf(cmd.OutOrStdout(), "%s\n%s (%s)\n%s\n", origin, me.name(), role, from); err != nil {
+				return err
+			}
+			if u, err := cliprofile.Normalize(origin); err == nil {
+				versionNotice(cmd.Context(), cmd.ErrOrStderr(), u, "")
+			}
+			return nil
 		},
 	}
 }

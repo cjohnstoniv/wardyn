@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/api"
+	"github.com/cjohnstoniv/wardyn/internal/cliprofile"
 )
 
 // CLI sign-in is off unless WARDYN_CLI_SIGN_IN is set, paste-back is off unless WARDYN_CLI_PASTE_SIGN_IN is
@@ -46,6 +47,20 @@ func TestCLISignInFlags(t *testing.T) {
 	want := api.CLISignInConfig{Enabled: true, Paste: true, FileStoreOff: true, SessionTTL: 48 * time.Hour, Origin: "https://wardyn.corp.example/wardyn"}
 	if cfg != want {
 		t.Fatalf("config = %+v, want %+v", cfg, want)
+	}
+	// The proof origin is in the form the CLI signs over (cliprofile.Normalize): lower-case scheme and
+	// host, no default port, so the same organisation written two ways is one origin on both sides.
+	for _, c := range []struct{ redirect, typed string }{
+		{"HTTPS://Wardyn.Corp.Example:443/wardyn/auth/callback", "https://wardyn.corp.example/wardyn/"},
+		{"https://wardyn.corp.example/wardyn/auth/callback", "https://WARDYN.corp.example:443/wardyn"},
+		{"http://wardyn.lan:80/auth/callback", "http://Wardyn.LAN"},
+		{"https://wardyn.corp.example:8443/auth/callback", "https://wardyn.corp.example:8443/"},
+	} {
+		got := cliSignInFlags{enabled: b(true)}.config(c.redirect).Origin
+		typed, err := cliprofile.Normalize(c.typed)
+		if err != nil || got != typed {
+			t.Errorf("redirect %q gives origin %q; the CLI signs %q over %q (%v): want them equal", c.redirect, got, c.typed, typed, err)
+		}
 	}
 }
 

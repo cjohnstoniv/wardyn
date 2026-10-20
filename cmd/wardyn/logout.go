@@ -4,11 +4,14 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
 	"github.com/cjohnstoniv/wardyn/internal/cliprofile"
@@ -40,18 +43,31 @@ func logoutCmd(serverURL func() string) *cobra.Command {
 				_, err = fmt.Fprintf(cmd.OutOrStdout(), copyNotSignedIn+"\n", origin)
 				return err
 			}
-			s, loadErr := loadSession(cmd.Context(), origin)
+			// Renew a spent token first (this takes and releases the lock itself).
+			_, loadErr := loadSession(cmd.Context(), origin)
+			beforeLogoutLock()
+			unlock, ok, err := lockRefresh(dir)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return fmt.Errorf(errRenewBusy, origin)
+			}
+			defer unlock()
+			// The item as stored now, under the lock: another command may have rotated it since.
 			var serverErr error
-			switch {
-			case s.token != "":
-				serverErr = cliCall(cmd.Context(), origin, http.MethodDelete, "/api/v1/me/cli-sessions/"+s.item.SessionID.String(), s.token, nil, nil)
-				// 404: the session already ended; 401: its tokens no longer authenticate, so neither does it.
-				var ae *sdk.APIError
-				if errors.As(serverErr, &ae) && (ae.Status == http.StatusNotFound || ae.Status == http.StatusUnauthorized) {
-					serverErr = nil
+			if it, found, err := storeFor(kind, dir).get(origin); err == nil && found {
+				now := time.Now()
+				switch tok, _ := it.bearer(now); {
+				case tok != "":
+					serverErr = signOutAt(cmd.Context(), origin, it.SessionID, tok)
+				case it.endedWhy(now) == "":
+					// A live session this command could not renew to sign out.
+					serverErr = loadErr
+					if serverErr == nil {
+						serverErr = errors.New("no live token to sign it out with")
+					}
 				}
-			case loadErr != nil && s.item.endedWhy(time.Now()) == "":
-				serverErr = loadErr // a live session this command could not renew to sign out
 			}
 			if err := storeFor(kind, dir).del(origin); err != nil {
 				return err
@@ -66,4 +82,27 @@ func logoutCmd(serverURL func() string) *cobra.Command {
 			return err
 		},
 	}
+}
+
+// beforeLogoutLock runs between logout's renewal and its lock; a test runs another command's refresh there.
+var beforeLogoutLock = func() {}
+
+// tokenRefusedReasons are the 401 reasons a bearer the organisation no longer knows gets: an ended
+// session's tokens are revoked, so its token is refused as unknown (the admin-token fallback's reasons).
+var tokenRefusedReasons = []string{"cli_session_invalid", "admin_token_not_configured", "invalid_admin_token"}
+
+// signOutAt ends session at origin with token. A session already gone (404, or its token refused as
+// unknown) is not an error; any other refusal, such as a stale role stamp, is.
+func signOutAt(ctx context.Context, origin string, session uuid.UUID, token string) error {
+	return sessionGone(cliCall(ctx, origin, http.MethodDelete, "/api/v1/me/cli-sessions/"+session.String(), token, nil, nil))
+}
+
+// sessionGone is err, or nil when it says the session or its token is already gone.
+func sessionGone(err error) error {
+	var ae *sdk.APIError
+	if errors.As(err, &ae) && (ae.Status == http.StatusNotFound ||
+		ae.Status == http.StatusUnauthorized && slices.Contains(tokenRefusedReasons, ae.Reason)) {
+		return nil
+	}
+	return err
 }

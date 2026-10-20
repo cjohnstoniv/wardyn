@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -265,8 +266,10 @@ func (f fileStore) save(items map[string]cliItem) error {
 	return nil
 }
 
-// lockRefresh takes <dir>/cli.lock, waiting up to cliLockWait, so two commands never refresh at once and
-// look like a replay. ok is false when another holder kept it that long.
+// lockRefresh takes <dir>/cli.lock, waiting up to cliLockWait. Every write of a stored item happens under
+// it (a refresh, login, the admin step-up, logout), as one read-modify-write against the current item, so
+// two commands never refresh at once and look like a replay, and none writes back a rotated-past secret.
+// ok is false when another holder kept it that long.
 func lockRefresh(dir string) (unlock func(), ok bool, err error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, false, err
@@ -350,7 +353,8 @@ func loadSession(ctx context.Context, origin string) (storedSession, error) {
 	if why := s.item.endedWhy(time.Now()); why != "" {
 		return s, fmt.Errorf(errSessionEnded, origin, why)
 	}
-	return s, s.refresh(ctx, st)
+	err = s.refresh(ctx, st)
+	return s, err
 }
 
 // refresh renews s's session at the server and stores the rotated secret before anything else reads it.
@@ -368,7 +372,9 @@ func (s *storedSession) refresh(ctx context.Context, st sessionStore) error {
 	err = cliCall(ctx, s.origin, http.MethodPost, route, "", req, &g)
 	var ae *sdk.APIError
 	if errors.As(err, &ae) && ae.Status == http.StatusUnauthorized && ae.Reason == "cli_session_invalid" {
+		// The secret, the key and the tokens are of no further use: only the session id and why stay.
 		s.item.Ended = fmt.Sprintf(endReasonServer, ae.Reason)
+		s.item.Secret, s.item.KeySeed, s.item.AccessToken, s.item.AdminToken = "", "", "", ""
 		if perr := st.put(s.origin, s.item); perr != nil {
 			return perr
 		}
@@ -383,6 +389,28 @@ func (s *storedSession) refresh(ctx context.Context, st sessionStore) error {
 	}
 	s.token, s.tokenKind = g.AccessToken, types.APITokenKindCLIAccess
 	return nil
+}
+
+// sessionTransport puts the stored sign-in's current bearer on each request to its own organisation, so a
+// long command (run --wait polls for up to 30 minutes) renews its access token instead of sending a spent
+// one. It sends each request once: a refused one, a POST above all, is never sent again.
+type sessionTransport struct {
+	base   http.RoundTripper // the orgClient's own (orgTransport)
+	origin string            // the sign-in's organisation (CLIOrigin form): no URL outside it is sent its bearer
+	sess   *sessionState
+}
+
+func (t sessionTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if u := types.CLIOrigin(req.URL); u != t.origin && !strings.HasPrefix(u, t.origin+"/") {
+		return t.base.RoundTrip(req)
+	}
+	r := req.Clone(req.Context())
+	if tok, _ := t.sess.bearer(req.Context()); tok != "" {
+		r.Header.Set("Authorization", "Bearer "+tok)
+	} else {
+		r.Header.Del("Authorization")
+	}
+	return t.base.RoundTrip(r)
 }
 
 // cliCall sends one JSON request to origin+route through orgClient, with bearer when it is not "". A

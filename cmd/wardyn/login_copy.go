@@ -20,8 +20,15 @@ const (
 	copyAdminFirst    = "Admin access needs a CLI sign-in on this computer: signing in first."
 	copyAdminSignedIn = "Admin access to %s as %s until %s. It does not refresh." // host, person, local time
 
-	// The file store, on stderr at login.
-	copyFileStore = "wardyn: this computer has no keychain, so the sign-in is kept in %s, which only you can read, and lasts at most 7 days"
+	// A login that replaces this computer's sign-in could not sign the old one out (stderr; login succeeds).
+	copyPreviousNotEnded = "wardyn: the sign-in this one replaces could not be signed out (%v); it ends on its own, or sign it out under Your account → Signed-in CLIs"
+
+	// A login whose write waited on another command's lock too long, and a step-up whose session changed.
+	errStoreBusy  = "another wardyn command held the CLI sign-in for %s too long; run `wardyn login` again"
+	errStepUpLost = "the CLI sign-in for %s changed while the browser was open: run `wardyn login --admin` again"
+
+	// The file store, on stderr at login: the path, and types.CLIFileStoreSessionCap in words.
+	copyFileStore = "wardyn: this computer has no keychain, so the sign-in is kept in %s, which only you can read, and lasts at most %s"
 
 	// The loopback page (boards MATT2-Approve, MATT2-States).
 	pageTitle       = "Wardyn CLI"
@@ -37,6 +44,7 @@ const (
 	errNoCallbackPaste  = "the browser did not come back to the CLI within 5 minutes: run `wardyn login --no-browser`"
 	errNoCallback       = "the browser did not come back to the CLI within 5 minutes: sign in on a computer with a browser, or set WARDYN_TOKEN"
 	errNoPasteMode      = "your organisation has not turned on sign-in without a browser (WARDYN_CLI_PASTE_SIGN_IN): sign in on a computer with a browser, or set WARDYN_TOKEN"
+	errOtherOrigin      = "this organisation signs CLIs in at %s, not %s: run `wardyn login %s`" // its origin, the URL given, its origin
 	errNoCode           = "no code was pasted; nothing was saved"
 	errNoOrg            = "name your organisation: `wardyn login <url>`"
 	errUnreachable      = "saved %s, but could not reach it to sign in: %v"
@@ -56,6 +64,10 @@ const (
 	copyWhoStore   = "%s · session ends in %s · idle end in %s" // store, durations
 	copyWhoToken   = "token from %s"                            // --token, WARDYN_ADMIN_TOKEN or WARDYN_TOKEN
 	errNotSignedIn = "not signed in to %s: run `wardyn login`"
+
+	// The version notice, on stderr (design 11.7; board ATT1-Terminal frame 5): this CLI, the URL, the server.
+	copyNoticeServerNewer = "this CLI is %s and %s runs %s: update with the line under Get the CLI"
+	copyNoticeServerOlder = "this CLI is %s and %s runs %s, an older release: if a command is refused, install the matching CLI with the line under Get the CLI"
 
 	// logout.
 	copyLoggedOut   = "Signed out of %s on this computer."

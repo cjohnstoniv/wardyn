@@ -19,8 +19,9 @@ const (
 	hint401Default = "authenticate with --token or WARDYN_ADMIN_TOKEN/WARDYN_TOKEN (the compose quick-start's token is in deploy/compose/README.md)"
 	// sign_in_required: no credential was sent to a deployment that signs people in with single sign-on.
 	hintSignInCLI    = "run `wardyn login`"
-	hintSignInBefore = "this organisation signs people in with single sign-on and has no admin token, so --token and " +
-		"WARDYN_ADMIN_TOKEN cannot work here. Set WARDYN_TOKEN to a personal API token: a Wardyn admin can invite you to " +
+	hintSignInBefore = "this organisation signs people in with single sign-on and has no admin token. Set WARDYN_TOKEN to a " +
+		"personal API token (--token and WARDYN_ADMIN_TOKEN take one too; --token shows it in the process list): a " +
+		"Wardyn admin can invite you to " +
 		"create one, and you claim it under Your account in the console."
 	// admin_token_not_configured: a bearer was sent that this organisation does not know.
 	hintUnknownTokenTail = " is not one this organisation knows (unknown, revoked or expired)"

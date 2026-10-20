@@ -142,8 +142,8 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/jso
 > It is published as a residual ([`threatmodel/THREAT-MODEL.md`](../../threatmodel/THREAT-MODEL.md) §5, "A per-user API token's role AND group snapshot are bounded-stale, not frozen").
 ## CLI sign-in (`wardyn login`)
 
-Off unless the operator sets `WARDYN_CLI_SIGN_IN=true`; it needs SSO. The CLI half is a separate change; this is
-what the server does.
+Off unless the operator sets `WARDYN_CLI_SIGN_IN=true`; it needs SSO. The CLI half: `wardyn login`, `whoami`, `logout`;
+a new login ends the last.
 
 - **Sign-in.** The CLI asks for a sign-in and opens the console. The person checks the computer name, the code and the
   address on the approve page, which also shows the lifetimes that apply, and presses Approve or Deny. Approving needs
