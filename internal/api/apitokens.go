@@ -592,7 +592,17 @@ func (s *Server) listAPITokensFor(w http.ResponseWriter, r *http.Request, princi
 // authority over the verdict, not reach into a run, which is the line that puts
 // a route on that tier; it names other humans, so it is not a member surface.
 func (s *Server) handleListAllAPITokens(w http.ResponseWriter, r *http.Request) {
-	tokens, err := s.cfg.Store.ListAPITokens(r.Context())
+	mintedForOthers := r.URL.Query().Get("minted_for_others") == "true"
+	withRevoked := r.URL.Query().Get("include_revoked") == "true"
+	now := s.cfg.Now()
+	var tokens []types.APIToken
+	var err error
+	lister, sqlFilter := s.cfg.Store.(store.APITokensMintedForOthersLister)
+	if mintedForOthers && sqlFilter {
+		tokens, err = lister.ListAPITokensMintedForOthers(r.Context(), withRevoked, now)
+	} else {
+		tokens, err = s.cfg.Store.ListAPITokens(r.Context())
+	}
 	if err != nil {
 		writeServerError(w, r, "list api tokens", err)
 		return
@@ -602,13 +612,13 @@ func (s *Server) handleListAllAPITokens(w http.ResponseWriter, r *http.Request) 
 	// ones too with &include_revoked=true, so a finished move or claim stays
 	// visible, as an expired one does. The route that created them is gone; they keep working until
 	// revoked or expired. Each admin-minted row carries its disposition (#1508).
-	if r.URL.Query().Get("minted_for_others") == "true" {
-		withRevoked := r.URL.Query().Get("include_revoked") == "true"
-		now := s.cfg.Now()
-		tokens = slices.DeleteFunc(tokens, func(t types.APIToken) bool {
-			finished := t.RevokedAt != nil || (t.ExpiresAt != nil && !t.ExpiresAt.After(now))
-			return t.MintedBy == "" || t.MintedBy == t.Principal || (finished && !withRevoked)
-		})
+	if mintedForOthers {
+		if !sqlFilter {
+			tokens = slices.DeleteFunc(tokens, func(t types.APIToken) bool {
+				finished := t.RevokedAt != nil || (t.ExpiresAt != nil && !t.ExpiresAt.After(now))
+				return t.MintedBy == "" || t.MintedBy == t.Principal || (finished && !withRevoked)
+			})
+		}
 		// Only the still-work view: include_revoked lists every row, finished or not, whoever owns it.
 		if !withRevoked {
 			if tokens, err = s.dropDeactivatedOwners(r.Context(), tokens); err != nil {
