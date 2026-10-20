@@ -160,17 +160,16 @@ export { expect };
 export type NavLabel =
   | "Runs"
   | "Approvals"
-  // 0.8.6 (ppl-p2) — right after Approvals, both admin tiers.
+  // 0.8.6 (ppl-p2) — first under Access (#3056), both admin tiers.
   | "People"
   | "Workspaces"
   | "Policies"
-  // 0.7 — sits between Policies and Permissions (app-shell.tsx's NAV_ITEMS), so
-  // the three read as one narrowing sequence. Never in MEMBER_NAV_PATHS.
+  // 0.7 — under Limits, after Policies (#3056). Never in MEMBER_NAV_PATHS.
   | "Governance"
   | "Permissions"
-  // 0.8 (UT-7a) — both admin tiers, beside Permissions.
+  // 0.8 (UT-7a) — both admin tiers, under Access.
   | "User types"
-  // CS-8 (design F-1) — right after Permissions, both admin tiers too.
+  // CS-8 (design F-1) — under Keys, both admin tiers too.
   | "Credentials"
   | "Secrets"
   | "Audit"

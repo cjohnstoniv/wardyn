@@ -544,26 +544,25 @@ describe("SidebarNav (member role)", () => {
   // Recordings is back on the admin sidebar (mock M6) after Audit: the route
   // and screen already existed and were reachable only by deep link, which
   // made the evidence trail undiscoverable.
-  it("admin nav carries every item, with Recordings last — after Audit", async () => {
+  it("admin nav carries every item, with Recordings right after Audit", async () => {
     const user = userEvent.setup();
     renderMobileNav("admin");
     await user.click(
       screen.getByRole("button", { name: /open navigation menu/i }),
     );
 
-    // Governance sits BETWEEN Policies and Permissions (mock Q1) — the order is
-    // the contract this asserts, not an accident of the array.
+    // The grouped order (#3056) — the contract this asserts, not an accident of the array.
     const labels = [
       "Runs",
       "Approvals",
-      "People",
-      "Workspaces",
-      "Policies",
-      "Governance",
-      "Permissions",
-      "Secrets",
       "Audit",
       "Recordings",
+      "Workspaces",
+      "People",
+      "Permissions",
+      "Policies",
+      "Governance",
+      "Secrets",
     ];
     for (const label of labels) {
       expect(
@@ -681,38 +680,52 @@ describe("SidebarNav — per view (M-2)", () => {
     return { sheet, labels };
   }
 
-  it("an admin's Admin view: the eyebrow, the fourteen items, then Setup and Settings", async () => {
+  it("an admin's Admin view: the eyebrow, fourteen items under five headings, then Setup and Settings", async () => {
     const { sheet, labels } = await open("admin");
     expect(within(sheet).getByText("Admin view", { selector: ".label-eyebrow" })).toBeInTheDocument();
     expect(labels).toEqual([
-      "Runs", "Approvals", "People", "Runners", "Workspaces", "Policies", "Templates", "Governance", "Permissions", "Credentials", "User types",
-      "Secrets", "Audit", "Recordings", "Setup", "Settings",
+      "Runs", "Approvals", "Audit", "Recordings", "Workspaces", "Templates", "Runners", "People", "User types", "Permissions",
+      "Policies", "Governance", "Credentials", "Secrets", "Setup", "Settings",
     ]);
+    expect(within(sheet).getAllByTestId(/^nav-group-/).map((el) => el.textContent)).toEqual([
+      "Activity", "Build", "Access", "Limits", "Keys",
+    ]);
+    // Each heading sits right before its group's first item.
+    for (const [group, first] of [["activity", "Runs"], ["build", "Workspaces"], ["access", "People"], ["limits", "Policies"], ["keys", "Credentials"]]) {
+      expect(within(sheet).getByTestId(`nav-group-${group}`).nextElementSibling).toBe(
+        within(sheet).getByRole("link", { name: new RegExp(`^${first}`) }),
+      );
+    }
     expect(within(sheet).getByRole("link", { name: /^Runs/ })).toHaveAttribute("href", "/admin/runs");
   });
 
   it("a security admin's Admin view: Credentials, User types and Drives join; Secrets, Recordings, Setup and Settings do not", async () => {
     const { labels } = await open("security_admin");
-    expect(labels).toEqual(["Runs", "Approvals", "People", "Runners", "Workspaces", "Policies", "Templates", "Governance", "Permissions", "Credentials", "User types", "Drives", "Audit"]);
+    expect(labels).toEqual([
+      "Runs", "Approvals", "Audit", "Workspaces", "Templates", "Runners", "Drives", "People", "User types", "Permissions", "Policies",
+      "Governance", "Credentials",
+    ]);
   });
 
-  it("Templates (0.9): after Runs in the User view, after Policies in the Admin view, both admin tiers", async () => {
+  it("Templates (0.9): the shared items keep one order in both views (#3056), both admin tiers", async () => {
+    const shared = ["Runs", "Approvals", "Workspaces", "Templates"];
     const member = await open("user");
-    expect(member.labels.slice(0, 2)).toEqual(["Runs", "Templates"]);
+    expect(member.labels.slice(0, 4)).toEqual(shared);
     expect(within(member.sheet).getByRole("link", { name: /^Templates/ })).toHaveAttribute("href", "/templates");
     cleanup();
     for (const role of ["admin", "security_admin"] as const) {
       const { sheet, labels } = await open(role);
-      expect(labels.indexOf("Templates")).toBe(labels.indexOf("Policies") + 1);
+      expect(labels.filter((l) => shared.includes(l))).toEqual(shared);
       expect(within(sheet).getByRole("link", { name: /^Templates/ })).toHaveAttribute("href", "/admin/templates");
       cleanup();
     }
   });
 
-  it("People (ppl-p2): right after Approvals for the super admin and a security admin; not for a member or an admin in the User view", async () => {
+  it("People (ppl-p2): first under Access for the super admin and a security admin; not for a member or an admin in the User view", async () => {
     for (const role of ["admin", "security_admin"] as const) {
       const { sheet, labels } = await open(role);
-      expect(labels.slice(0, 3)).toEqual(["Runs", "Approvals", "People"]);
+      expect(within(sheet).getByTestId("nav-group-access").nextElementSibling).toHaveTextContent(/^People$/);
+      expect(labels).toContain("People");
       expect(within(sheet).getByRole("link", { name: /^People/ })).toHaveAttribute("href", "/admin/people");
       cleanup();
     }
@@ -723,10 +736,10 @@ describe("SidebarNav — per view (M-2)", () => {
     expect(within(userView.sheet).queryByRole("link", { name: /^People/ })).toBeNull();
   });
 
-  it("Runners (0.9): right after People for both admin tiers; not for a member or an admin in the User view", async () => {
+  it("Runners (0.9): under Build, after Templates, for both admin tiers; not for a member or an admin in the User view", async () => {
     for (const role of ["admin", "security_admin"] as const) {
       const { sheet, labels } = await open(role);
-      expect(labels.indexOf("Runners")).toBe(labels.indexOf("People") + 1);
+      expect(labels.indexOf("Runners")).toBe(labels.indexOf("Templates") + 1);
       expect(within(sheet).getByRole("link", { name: /^Runners/ })).toHaveAttribute("href", "/admin/runners");
       cleanup();
     }
@@ -740,13 +753,14 @@ describe("SidebarNav — per view (M-2)", () => {
   it("a user: no eyebrow, four items, then Getting started and Your account", async () => {
     const { sheet, labels } = await open("user");
     expect(within(sheet).queryByText("Admin view", { selector: ".label-eyebrow" })).toBeNull();
-    expect(labels).toEqual(["Runs", "Templates", "Approvals", "Workspaces", "Getting started", "Your account"]);
+    expect(labels).toEqual(["Runs", "Approvals", "Workspaces", "Templates", "Getting started", "Your account"]);
+    expect(within(sheet).queryAllByTestId(/^nav-group-/)).toHaveLength(0);
     expect(within(sheet).queryByRole("group", { name: "Console view" })).toBeNull();
   });
 
   it("an admin in the User view gets the user's nav, and the switch tops the sheet", async () => {
     const { sheet, labels } = await open("user", true);
-    expect(labels).toEqual(["Runs", "Templates", "Approvals", "Workspaces", "Getting started", "Your account"]);
+    expect(labels).toEqual(["Runs", "Approvals", "Workspaces", "Templates", "Getting started", "Your account"]);
     const group = within(sheet).getByRole("group", { name: "Console view" });
     expect(within(group).getByRole("button", { name: "User view" })).toHaveAttribute("aria-pressed", "true");
   });

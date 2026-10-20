@@ -11,12 +11,11 @@ import { VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
 
 // Navigation + theme + error-boundary coverage for the Wardyn admin console.
 //
-// The shell (app-shell.tsx) renders one flat sidebar per view (M-2, packet
-// M-A) of react-router <NavLink>s (role="link"), with no group headings. The
-// Admin view: Runs, Approvals, Workspaces, Policies, Governance, Permissions,
-// Secrets, Audit, Recordings, then Setup and Settings under a divider (#217's
-// slot). The User view: Runs, Approvals, Workspaces, then Getting started and
-// Your account. The harness is a single-operator install, so the URL is the
+// The shell (app-shell.tsx) renders one sidebar per view (M-2, packet M-A) of
+// react-router <NavLink>s (role="link"). The Admin view groups them under
+// Activity, Build, Access, Limits and Keys (#3056), then Setup and Settings
+// under a divider (#217's slot). The User view: Runs, Approvals, Workspaces,
+// Templates, then Getting started and Your account. The harness is a single-operator install, so the URL is the
 // view: gotoConsole(page, "admin") lands in the Admin view. The avatar menu
 // holds identity and Sign out only (view-switch.spec.ts).
 // The top bar carries a "Toggle theme" button (aria-label) and no posture
@@ -165,19 +164,31 @@ test.describe("navigation + shell", () => {
 
   // #217 — Settings sits last in the Admin view's rail, under a divider, with
   // Setup above it (M-2, packet M-A).
-  test("#217 — Settings is last in the sidebar, after Setup and Recordings, and opens the real screen", async ({ page }) => {
+  test("#217 — Settings is last in the sidebar, after Setup and Secrets, and opens the real screen", async ({ page }) => {
     await gotoConsole(page, "admin");
     // Order is the contract: within the desktop rail, Settings is the LAST
-    // link, Setup above it, Recordings above that.
+    // link, Setup above it, Secrets (the end of Keys) above that.
     const rail = page.locator("aside").getByRole("link");
     const names = await rail.allTextContents();
     expect(names[names.length - 1]).toMatch(/^Settings/);
     expect(names[names.length - 2]).toMatch(/^Setup/);
-    expect(names[names.length - 3]).toMatch(/^Recordings/);
+    expect(names[names.length - 3]).toMatch(/^Secrets/);
 
     await navTo(page, "Settings");
     await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
     await expect(page.getByText(/This host, what runs your agents/i)).toBeVisible();
+  });
+
+  // #3056 — the Admin view's rail is grouped under five headings, and the items both views share keep one order.
+  test("#3056 — the admin rail is grouped Activity, Build, Access, Limits, Keys", async ({ page }) => {
+    await gotoConsole(page, "admin");
+    const aside = page.locator("aside");
+    await expect(aside.getByTestId(/^nav-group-/)).toHaveText(["Activity", "Build", "Access", "Limits", "Keys"]);
+    const names = (await aside.getByRole("link").allTextContents()).map((n) => n.replace(/\d+$/, ""));
+    expect(names).toEqual([
+      "Runs", "Approvals", "Audit", "Recordings", "Workspaces", "Templates", "Runners", "People", "User types", "Permissions",
+      "Policies", "Governance", "Credentials", "Secrets", "Setup", "Settings",
+    ]);
   });
 
   // M-1b — /settings is deleted, and the rail's lower slot splits by view: the
