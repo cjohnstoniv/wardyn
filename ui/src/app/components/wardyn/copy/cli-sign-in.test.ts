@@ -17,7 +17,8 @@ describe("the /cli/sign-in page", () => {
     ["Requested from", SIGN_IN.FROM],
     ["Requested", SIGN_IN.REQUESTED],
     ["Expires in 10 minutes", SIGN_IN.EXPIRES_IN(600)],
-    ["19 Oct 2026, 18:42 UTC", stampOf("2026-10-19T18:42:07Z")],
+    // 1792435327000 ms is 2026-10-19 18:42:07 UTC, the instant the board draws.
+    ["19 Oct 2026, 18:42 UTC", stampOf(new Date(1792435327000).toISOString())],
     ["Code from your terminal", SIGN_IN.CODE],
     ["Approve only if your terminal printed this same code.", SIGN_IN.CODE_NOTE],
     ["What this allows", SIGN_IN.ALLOWS],

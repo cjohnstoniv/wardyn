@@ -13,6 +13,11 @@ import type { CLISignInView } from "../../lib/types/cli-sign-in";
 import { SIGN_IN as T } from "../wardyn/copy/cli-sign-in";
 import { CliSignInScreen, isLoopbackCallback } from "./cli-sign-in";
 
+// Every time in this file is an offset in seconds from one start instant, 2026-10-19 18:42:00 UTC as epoch
+// milliseconds, so no fixture is a calendar literal. The clock is faked, so the start can be a fixed instant.
+const START = 1792435320000;
+const at = (seconds: number) => new Date(START + seconds * 1000).toISOString();
+
 const ID = "5e1d9b0c-0000-4000-8000-000000000001";
 const CALLBACK = `http://127.0.0.1:53124/callback?id=${ID}&code=abc123`;
 const json = (body: unknown, status = 200) =>
@@ -29,8 +34,8 @@ const view = (over: Partial<CLISignInView> = {}): CLISignInView => ({
   request_address: "203.0.113.24",
   approver_address: "203.0.113.24",
   address_match: true,
-  created_at: "2026-10-19T18:42:00Z",
-  expires_at: "2026-10-19T18:52:00Z",
+  created_at: at(0),
+  expires_at: at(600),
   session_ttl_seconds: 30 * 86400,
   session_idle_seconds: 7 * 86400,
   access_ttl_seconds: 3600,
@@ -43,9 +48,9 @@ let assign: ReturnType<typeof vi.fn>;
 let me: Record<string, unknown>;
 const realLocation = window.location;
 beforeEach(() => {
-  // 30 s into a request that lives 10 minutes (18:42:00 to 18:52:00).
+  // 30 s into a request that lives 10 minutes (created at 0 s, expires at 600 s).
   vi.useFakeTimers({ toFake: ["Date"] });
-  vi.setSystemTime(Date.parse("2026-10-19T18:42:30Z"));
+  vi.setSystemTime(Date.parse(at(30)));
   me = { principal: "sub-1", email: "you@example.com", role: "user", method: "sso" };
   calls = [];
   answers = { [`GET /api/v1/me/cli-sign-ins/${ID}`]: () => json(view()) };
@@ -134,30 +139,30 @@ describe("the lead and the clock", () => {
   });
 
   it("shows the time left, not the whole lifetime: 8 minutes into 10 says 2 minutes", async () => {
-    vi.setSystemTime(Date.parse("2026-10-19T18:50:00Z"));
+    vi.setSystemTime(Date.parse(at(480)));
     mount();
     expect(await screen.findByText("Expires in 2 minutes")).toBeVisible();
     expect(screen.queryByText("Expires in 10 minutes")).toBeNull();
   });
 
   it("rounds the last seconds up to a minute rather than saying 0", async () => {
-    vi.setSystemTime(Date.parse("2026-10-19T18:51:40Z"));
+    vi.setSystemTime(Date.parse(at(580)));
     mount();
     expect(await screen.findByText("Expires in 1 minute")).toBeVisible();
   });
 
   it("is the expired page once the time is up, and offers no Approve", async () => {
-    vi.setSystemTime(Date.parse("2026-10-19T18:52:00Z"));
+    vi.setSystemTime(Date.parse(at(600)));
     mount();
     expect(await screen.findByRole("heading", { name: T.EXPIRED_TITLE })).toBeVisible();
     expect(screen.queryByRole("button", { name: T.APPROVE })).toBeNull();
   });
 
   it("turns into the expired page while it is open when the clock runs out", async () => {
-    vi.setSystemTime(Date.parse("2026-10-19T18:51:59Z"));
+    vi.setSystemTime(Date.parse(at(599)));
     mount();
     expect(await screen.findByText("Expires in 1 minute")).toBeVisible();
-    vi.setSystemTime(Date.parse("2026-10-19T18:52:01Z"));
+    vi.setSystemTime(Date.parse(at(601)));
     expect(await screen.findByRole("heading", { name: T.EXPIRED_TITLE }, { timeout: 3000 })).toBeVisible();
   });
 });
