@@ -206,6 +206,63 @@ describe("RecordPane — new session", () => {
     expect(onRecord).toHaveBeenCalledWith("agent dev loop");
   });
 
+  describe("a name that matches a recorded session (#2582)", () => {
+    const settled = { "build-test": { run_id: "r1", label: "build & test", mode: "interactive", status: "recorded" } as RecordResult };
+
+    it("asks the Re-record question first, and records only on confirm", async () => {
+      const onRecord = vi.fn();
+      renderPane({ record_results: settled }, { onRecord });
+      const user = userEvent.setup({ pointerEventsCheck: 0 });
+      const form = screen.getByTestId("record-new-session");
+      const input = within(form).getByLabelText(/session name/i);
+      await user.clear(input);
+      setField(input, "Build & Test");
+      await user.click(within(form).getByRole("button", { name: /start recording/i }));
+
+      expect(onRecord).not.toHaveBeenCalled();
+      const dialog = await screen.findByRole("alertdialog");
+      expect(dialog).toHaveTextContent("The current recorded review for this session will be replaced");
+      await user.click(within(dialog).getByRole("button", { name: "Re-record" }));
+      expect(onRecord).toHaveBeenCalledWith("Build & Test");
+    });
+
+    it("Cancel records nothing", async () => {
+      const onRecord = vi.fn();
+      renderPane({ record_results: settled }, { onRecord });
+      const user = userEvent.setup({ pointerEventsCheck: 0 });
+      const input = within(screen.getByTestId("record-new-session")).getByLabelText(/session name/i);
+      await user.clear(input);
+      setField(input, "build & test");
+      await user.click(input);
+      await user.keyboard("{Enter}");
+      await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Cancel" }));
+      expect(onRecord).not.toHaveBeenCalled();
+    });
+
+    it("a different name starts at once", async () => {
+      const onRecord = vi.fn();
+      renderPane({ record_results: settled }, { onRecord });
+      const user = userEvent.setup({ pointerEventsCheck: 0 });
+      const input = within(screen.getByTestId("record-new-session")).getByLabelText(/session name/i);
+      setField(input, "lint");
+      await user.click(input);
+      await user.keyboard("{Enter}");
+      expect(onRecord).toHaveBeenCalledWith("lint");
+    });
+  });
+
+  it("Enter does nothing while Start recording is disabled (#2582)", async () => {
+    const onRecord = vi.fn();
+    const rec = { "other": { run_id: "r2", label: "other", mode: "interactive", status: "recording" } as RecordResult };
+    renderPane({ record_results: rec }, { onRecord });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const input = within(screen.getByTestId("record-new-session")).getByLabelText(/session name/i);
+    setField(input, "lint");
+    await user.click(input);
+    await user.keyboard("{Enter}");
+    expect(onRecord).not.toHaveBeenCalled();
+  });
+
   it("shows the never-recorded helper line when there are no sessions yet", () => {
     renderPane();
     expect(screen.getByText(/never recorded/i)).toBeInTheDocument();

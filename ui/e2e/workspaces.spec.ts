@@ -275,3 +275,45 @@ test.describe("Workspaces — a member deletes the row they own", () => {
     await expect(page.getByRole("row", { name: new RegExp(mine) })).toHaveCount(0);
   });
 });
+
+test.describe("Workspaces — a new session named like a recorded one", () => {
+  test("asks the Re-record question first and sends no launch until it is confirmed", async ({ page }) => {
+    const WS_ID = "e2e-rerecord-ws";
+    await page.route(`**/api/v1/workspaces/${WS_ID}`, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: WS_ID,
+          name: "rerecord-e2e",
+          kind: "repo",
+          source: "acme/rerecord",
+          status: "scanned",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+          requirements: {},
+          record_results: {
+            "build-test": { run_id: "run-rr1", label: "build & test", mode: "interactive", status: "recorded" },
+          },
+        }),
+      }),
+    );
+    let launches = 0;
+    await page.route(`**/api/v1/workspaces/${WS_ID}/record`, (route) => {
+      launches++;
+      return route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: "mocked" }) });
+    });
+    await gotoConsole(page);
+    await page.goto(`/workspaces/${WS_ID}`);
+    const form = page.getByTestId("record-new-session");
+    await form.getByLabel("Session name").fill("build & test");
+    await form.getByRole("button", { name: "Start recording" }).click();
+
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog.getByRole("heading", { name: 'Re-record "build & test"?' })).toBeVisible();
+    expect(launches).toBe(0);
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).toHaveCount(0);
+    expect(launches).toBe(0);
+  });
+});
