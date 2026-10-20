@@ -44,6 +44,10 @@ const (
 	// MethodSelftest runs a BYOI image's contract check on a runner that
 	// advertises Caps.BYOISelftest: never an Exec, so it spends no generation.
 	MethodSelftest = "byoi_selftest"
+	// MethodCreateVM creates a Linux VM sandbox on a runner whose caps carry LinuxVM. It is its own
+	// method so a runner that predates VMs refuses it instead of reading it as create_sandbox and
+	// starting a container; every later verb on the VM's ref is the container one.
+	MethodCreateVM = "create_vm"
 	// MethodListFolders, MethodSyncFolder and MethodSyncFolderWait are a
 	// folder-only runner's (Caps.Folders): the folders under its roots, and one
 	// `wardyn sync` pass between one of them and a run's sandbox.

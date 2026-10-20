@@ -114,6 +114,10 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 		writeErrorReason(w, http.StatusBadRequest, reasonRunTaskReserved, fmt.Sprintf("task %q is set by the server and cannot be requested directly", req.Task))
 		return req, noCeiling, "", "", false
 	}
+	if err := types.MachineKind(req.MachineKind).Validate(); err != nil {
+		writeErrorReason(w, http.StatusBadRequest, reasonMachineKindUnknown, err.Error())
+		return req, noCeiling, "", "", false
+	}
 
 	// The request-level fields a member does not get to choose freely (see
 	// denyUserRequest) — checked before the XOR/builder validation below so a

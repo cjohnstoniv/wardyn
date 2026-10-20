@@ -367,6 +367,7 @@ The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 | `envbuild-integration` | 60 | 3.6 | 4.0 | 20 |
 | `gates (staticcheck)` | 60 | 2.7 | 2.9 | 15 |
 | `helm-install-test` | – | pending | pending | 20 |
+| `vm` | – | pending | pending | 30 |
 | `trivy-wardynd` (check `trivy (wardynd)`) | 50 | 2.0 | 2.5 | 40 |
 | `trivy-wardynd-fips` (check `trivy (wardynd-fips)`) | 49 | 2.0 | 2.3 | 40 |
 | `trivy-agent-novnc` (check `trivy (agent-novnc)`) | 51 | 1.6 | 2.2 | 40 |
@@ -522,7 +523,8 @@ Three mechanisms (#932), on top of the per-job Go cache (#470) and the single ra
 
 So:
 
-- `test-pg` (the aggregator over its `test-pg-shard` matrix, which fails unless every shard passed), `conformance`, `conformance-k8s`, `helm` and `envbuild-integration` skip on `backend == 'false'`, `notices` on `notices == 'false'`, the nine `trivy (<image>)` jobs on `images == 'false'`.
+- `test-pg` (the aggregator over its `test-pg-shard` matrix, which fails unless every shard passed), `conformance`, `conformance-k8s`, `vm`, `helm` and `envbuild-integration` skip on `backend == 'false'`, `notices` on `notices == 'false'`, the nine `trivy (<image>)` jobs on `images == 'false'`.
+- `vm` boots the reference Linux VM guest under QEMU/KVM through the real Docker driver ([`test/conformance/vm/vm_test.go`](../test/conformance/vm/vm_test.go)), after GitHub's documented udev rule opens `/dev/kvm`. It is not a required check.
 - `build` needs every `go` leg and runs with `if: !cancelled()`.
   - Its first step fails unless every leg passed, so the `build` context is green only when all four legs and the union floor are.
   - The union steps carry `if: needs.changes.outputs.backend != 'false'`, so only an explicit docs- or console-only classification skips them.

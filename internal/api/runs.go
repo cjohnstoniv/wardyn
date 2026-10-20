@@ -451,6 +451,7 @@ func newRunRow(ctx context.Context, in runRowInput) types.AgentRun {
 		ConfinementClass: in.enforced,
 		RunnerTarget:     in.runnerTarget,
 		Interactive:      req.Interactive,
+		MachineKind:      types.MachineKind(req.MachineKind).Normalize(),
 		Experience:       req.Experience,
 		LocalFolder:      req.LocalFolder,
 		WorkspacePath:    in.workspacePath,

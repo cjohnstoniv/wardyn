@@ -118,6 +118,9 @@ type SandboxSpec struct {
 	// and the substrate records by its own setting, as before; a substrate never records past its own
 	// setting either way (RecordWithin).
 	Record *bool `json:"record,omitempty"`
+	// MachineKind is the sandbox's kind; empty is a container. A substrate that cannot start the kind
+	// refuses the create before creating anything, never falls back to a container.
+	MachineKind types.MachineKind `json:"machine_kind,omitempty"`
 }
 
 // RecordWithin is whether this run is recorded on a substrate whose own setting is ceiling.
@@ -286,6 +289,10 @@ type Session interface {
 // ExecStream when unimplemented, so the conformance suite can skip cleanly.
 var ErrExecStreamUnsupported = errors.New("runner: ExecStream not supported")
 
+// ErrObserveUnsupported is Attach's answer for an observer when the sandbox has no shared terminal to
+// watch (a Linux VM): a capability the sandbox lacks, so the console says so and does not retry.
+var ErrObserveUnsupported = errors.New("runner: this sandbox does not support watching a terminal")
+
 // ErrSandboxGone is what a Runner/Substrate wraps around an ExecStream failure
 // whose cause is that the sandbox (the pod or container) no longer exists: a
 // finishing run's sandbox is torn down a moment before its state flips, and an
@@ -347,6 +354,8 @@ type Sandbox struct {
 	Ref           string // container ID / pod name
 	Driver        string
 	EnforcedClass types.ConfinementClass // what the driver actually applied (>= requested or error)
+	// Machine is the virtual hardware a VM sandbox was started with; nil for a container.
+	Machine *types.VMMachine `json:",omitempty"`
 }
 
 // Status reports observed sandbox state.

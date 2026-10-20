@@ -78,6 +78,7 @@ describe("template field registry", () => {
       "description",
       "integration_id",
       "local_folder",
+      "machine_kind",
       "max_wait_sec",
       "mode_contract",
       "policy_overlay",

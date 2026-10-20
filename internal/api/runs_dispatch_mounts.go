@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"maps"
 	"net/url"
@@ -721,6 +722,33 @@ func (s *Server) recordSandboxRef(ctx context.Context, runID uuid.UUID, ref stri
 		err = s.cfg.Store.SetSandboxRef(ctx, runID, ref)
 	}
 	return err
+}
+
+// recordStartedSandbox records what CreateSandbox started: its ref, then a VM's machine.
+func (s *Server) recordStartedSandbox(ctx context.Context, run types.AgentRun, sb runner.Sandbox) error {
+	if err := s.recordSandboxRef(ctx, run.ID, sb.Ref); err != nil {
+		return err
+	}
+	return s.recordVMMachine(ctx, run, sb)
+}
+
+// recordVMMachine writes the virtual hardware a VM run was started with (#2996). A VM whose machine is
+// missing from the runner's answer, or cannot be written, never runs: it could not later be checked
+// against a move or a restore. A container run writes nothing.
+func (s *Server) recordVMMachine(ctx context.Context, run types.AgentRun, sb runner.Sandbox) error {
+	if !run.MachineKind.IsVM() {
+		return nil
+	}
+	if !sb.Machine.Complete() {
+		return errors.New("the runner did not say which machine it started the VM on")
+	}
+	st, ok := s.cfg.Store.(interface {
+		SetRunVMMachine(context.Context, uuid.UUID, types.VMMachine) error
+	})
+	if !ok {
+		return errors.New("this store cannot record a VM's machine")
+	}
+	return st.SetRunVMMachine(ctx, run.ID, *sb.Machine)
 }
 
 // abortUnrecordedSandbox ends a dispatch whose sandbox ref could not be recorded, while this dispatch

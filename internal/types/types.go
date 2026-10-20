@@ -166,6 +166,12 @@ type AgentRun struct {
 	// NotRecorded says why the run has no session recording, decided once at dispatch and kept for
 	// the run's life; empty when the run is recorded (or predates the field).
 	NotRecorded RunNotRecorded `json:"not_recorded,omitempty"`
+	// MachineKind is the kind of the run's sandbox: empty for a container (every run before the
+	// field), or linux_vm. Written once at create.
+	MachineKind MachineKind `json:"machine_kind,omitempty"`
+	// VMMachine is the virtual hardware a VM run was started with, recorded after its create; nil
+	// for a container.
+	VMMachine *VMMachine `json:"vm_machine,omitempty"`
 	// RunnerPoolID is the runner pool the run was admitted into, and the next three fields say how
 	// (all written once at create). A pool is a label for a choice and never admission: the run
 	// goes to the exact runner recorded in RunnerID (a self-hosted runner) or RunnerPoolExecutor (a

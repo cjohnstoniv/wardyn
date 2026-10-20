@@ -347,6 +347,19 @@ export interface AgentRun {
   // tracking, so an inline nested object's own keys (kind/by/pending) would
   // misread as top-level AgentRun keys and fail that parity test.
   attention?: RunAttention;
+  // AgentRun.MachineKind / VMMachine (migration 0196): "linux_vm" for a run
+  // in a Linux VM, with the virtual hardware its runner started. Absent for a
+  // container run. A named interface for the same line-scrape reason as above.
+  machine_kind?: "linux_vm";
+  vm_machine?: VMMachine;
+}
+
+// internal/types/machine.go's VMMachine.
+export interface VMMachine {
+  machine_type: string;
+  cpu_model: string;
+  accelerator: string;
+  qemu_version: string;
 }
 
 export interface RunAttention {

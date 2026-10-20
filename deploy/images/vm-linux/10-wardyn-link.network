@@ -1,0 +1,8 @@
+# The VM's one NIC comes up with an IPv6 link-local address and nothing else. Its addressing is the
+# network relay's contract; until the relay serves the run, no frame the guest sends is answered.
+[Match]
+Type=ether
+
+[Network]
+LinkLocalAddressing=ipv6
+IPv6AcceptRA=no

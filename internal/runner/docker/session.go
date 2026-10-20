@@ -68,6 +68,9 @@ func (d *Driver) Attach(ctx context.Context, ref string, opts runner.AttachOptio
 	if ref == "" {
 		return nil, fmt.Errorf("docker: attach: empty sandbox ref")
 	}
+	if v := d.vmFor(ctx, ref); v != nil {
+		return d.vmAttach(ctx, v, opts)
+	}
 
 	execCfg := client.ExecCreateOptions{
 		TTY:          true,
@@ -179,6 +182,9 @@ func (s execStdin) Close() error                { return s.resp.CloseWrite() }
 func (d *Driver) ExecStream(ctx context.Context, ref string, spec runner.ExecSpec) (*runner.ExecSession, error) {
 	if len(spec.Argv) == 0 {
 		return nil, errors.New("docker: exec stream: empty argv")
+	}
+	if v := d.vmFor(ctx, ref); v != nil {
+		return d.vmExecStream(ctx, v, spec)
 	}
 
 	execCfg := client.ExecCreateOptions{

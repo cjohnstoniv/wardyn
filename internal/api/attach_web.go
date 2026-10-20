@@ -12,6 +12,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -41,7 +42,8 @@ type webAttach struct {
 
 // fail ends a connection whose exec could not be opened or replaced: the
 // outcome is audited and the socket closed with a status the console can tell
-// from a dropped link.
+// from a dropped link. A capability the sandbox lacks is no fault: it closes
+// normally with the reason, which the console prints and does not retry.
 func (wa *webAttach) fail(err error, promotion bool) {
 	wa.failed.Store(true)
 	data := map[string]any{"state": "attaching", "error": err.Error()}
@@ -51,7 +53,11 @@ func (wa *webAttach) fail(err error, promotion bool) {
 	wa.audit("failure", data)
 	// The close frame first, then the cancel: cancelling first would have the
 	// library tear the connection down without one.
-	_ = wa.c.Close(websocket.StatusInternalError, "attach failed")
+	if errors.Is(err, runner.ErrObserveUnsupported) {
+		_ = wa.c.Close(websocket.StatusNormalClosure, "this sandbox does not support watching a terminal")
+	} else {
+		_ = wa.c.Close(websocket.StatusInternalError, "attach failed")
+	}
 	wa.cancel()
 }
 

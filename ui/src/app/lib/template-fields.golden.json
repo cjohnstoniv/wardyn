@@ -693,6 +693,11 @@
       "why": "A folder on one person's computer is named at each launch; a template cannot know where it is."
     },
     {
+      "name": "machine_kind",
+      "excluded": "launch",
+      "why": "The kind of sandbox is chosen at each launch in this release; a template never prefills a Linux VM."
+    },
+    {
       "name": "max_wait_sec",
       "excluded": "launch",
       "why": "How long a run may wait for a slot in a full pool is chosen at each launch; the default wait suits a template's runs."

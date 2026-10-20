@@ -82,8 +82,10 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 	if err != nil {
 		return runnerRuntime{}, errors.Join(err, sink.Close())
 	}
+	extras := sink.extras(sub, ev)
+	extras.linuxVM = enableLinuxVM(ctx, sub, stateDir, os.Getenv)
 	// The runtime first: its startup containment pass stops lapsed runs even when the check below fails.
-	rt, err := localRunnerRuntime(ctx, identity, stateDir, sub, docker.SandboxRef, relay, dockerCapacity, sink.extras(sub, ev))
+	rt, err := localRunnerRuntime(ctx, identity, stateDir, sub, docker.SandboxRef, relay, dockerCapacity, extras)
 	if err != nil {
 		return runnerRuntime{}, errors.Join(err, sink.Close())
 	}
@@ -331,6 +333,9 @@ type runtimeExtras struct {
 	started func(context.Context, *offline.Manager) error
 	// closeAlso runs when the runtime closes (the decision sink).
 	closeAlso func() error
+	// linuxVM, set when the operator turned Linux VM sandboxes on and the probe passed, is what the
+	// runner's caps offer; nil offers none and refuses create_vm.
+	linuxVM *runnerwire.VMCaps
 }
 
 func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, stateDir string, sub substrate.Substrate, ref func(uuid.UUID) string, relay *localRelay, capacity func(context.Context) placement.Capacity, extra runtimeExtras) (runnerRuntime, error) {
@@ -385,7 +390,7 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		MutationFinished: manager.MutationFinished,
 		ExecutionResult:  manager.ExecutionResult,
 		Streams:          streams.Call, Output: streams.Output, BindOutput: streams.BindOutput, ForgetOutput: streams.ForgetOutput,
-		Resident: resident,
+		Resident: resident, LinuxVM: extra.linuxVM != nil,
 	})
 	if err != nil {
 		return runnerRuntime{}, err
@@ -422,7 +427,7 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 			if arch == "" {
 				arch = engineArch(ctx)
 			}
-			data, err := runnerwire.Marshal(runnerwire.Caps{Support: support, Version: version.String(), MachineName: machine, Arch: arch, Capacity: capacity(ctx), BYOISelftest: dispatcher.Selftests(), Retire: true, Resident: dispatcher.Residents(), EndsUnkept: !keeps})
+			data, err := runnerwire.Marshal(runnerwire.Caps{Support: support, Version: version.String(), MachineName: machine, Arch: arch, Capacity: capacity(ctx), BYOISelftest: dispatcher.Selftests(), Retire: true, Resident: dispatcher.Residents(), EndsUnkept: !keeps, LinuxVM: extra.linuxVM})
 			if err != nil {
 				return err
 			}

@@ -31,6 +31,9 @@ import (
 //
 //nolint:funlen // Deliberate: one linear container-assembly sequence whose teardown-on-failure compensations must stay in one scope; low branching, just long.
 func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (runner.Sandbox, error) {
+	if spec.MachineKind.Normalize() != "" {
+		return d.createVM(ctx, spec)
+	}
 	infoRes, err := d.cli.Info(ctx, client.InfoOptions{})
 	if err != nil {
 		return runner.Sandbox{}, fmt.Errorf("docker: info: %w", err)
@@ -74,63 +77,18 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		return runner.Sandbox{}, err
 	}
 
-	// (1) Per-run internal network. Internal=true => Docker provisions no gateway, so the network
-	// cannot route off-host: this is what upholds L0 even though the agent is *connected* to it.
-	intNetID, err := d.createRunNetwork(ctx, spec.RunID, d.labels(spec.RunID, "network", spec.Labels))
+	// (1) Per-run internal network and (2) the wardyn-proxy sidecar on it.
+	intNetID, proxyIP, undoNet, err := d.runNetworkAndProxy(ctx, spec)
 	if err != nil {
 		return runner.Sandbox{}, err
 	}
 	// rollback collects teardown steps to run on any later failure.
-	var rollback []func()
-	rollback = append(rollback, func() { _, _ = d.cli.NetworkRemove(context.Background(), intNetID, client.NetworkRemoveOptions{}) })
+	rollback := []func(){undoNet}
 	fail := func(err error) (runner.Sandbox, error) {
 		for i := len(rollback) - 1; i >= 0; i-- {
 			rollback[i]()
 		}
 		return runner.Sandbox{}, err
-	}
-
-	// (2) wardyn-proxy sidecar: attached to the per-run internal network now; the control-plane-facing
-	// network is joined after create. Its config reaches it on stdin, never in its environment.
-	proxyEnvs, proxyCfg, err := proxyEnv(spec.RunID, spec.ProxyConfig, runner.ProxyListenPort)
-	if err != nil {
-		return fail(err)
-	}
-	prep, err := d.prepareProxy(ctx, spec.RunID, proxyCfg)
-	var proxyID string
-	if err == nil {
-		proxyID, err = d.startProxy(ctx, spec.RunID, d.labels(spec.RunID, componentProxy, spec.Labels),
-			proxyEnvs, prep, netip.Addr{})
-	}
-	if err != nil {
-		// startProxy's own exit-watch failure deliberately leaves the container behind so its logs
-		// still name the cause; it holds no config, so on CREATE nothing needs it kept, and THIS
-		// caller removes it before rolling back the rest.
-		_ = d.removeProxy(context.Background(), spec.RunID)
-		return fail(err)
-	}
-	rollback = append(rollback, func() { _ = d.removeProxy(context.Background(), spec.RunID) })
-
-	// Resolve the proxy's IP on the per-run internal network so the agent can reach it via a static
-	// /etc/hosts entry instead of Docker's embedded DNS: gVisor's netstack (CC2/runsc) does NOT
-	// traverse the embedded resolver at 127.0.0.11, so resolving the "wardyn-proxy" alias fails under
-	// runsc. A static hosts entry works under every runtime and weakens nothing — the agent still has
-	// no default route, so the proxy remains its sole egress path.
-	proxyInspectRes, err := d.cli.ContainerInspect(ctx, proxyID, client.ContainerInspectOptions{})
-	if err != nil {
-		return fail(fmt.Errorf("docker: inspect proxy for its network IP: %w", err))
-	}
-	proxyInspect := proxyInspectRes.Container
-	proxyIP := ""
-	if proxyInspect.NetworkSettings != nil {
-		// v29: IPAddress is a netip.Addr. Guard on IsValid so the zero Addr maps to "" (fail closed
-		// below), not the "invalid IP" string a zero Addr would stringify to.
-		if ep := proxyInspect.NetworkSettings.Networks[internalNetName(spec.RunID)]; ep != nil && ep.IPAddress.IsValid() {
-			proxyIP = ep.IPAddress.String()
-		}
-	}
-	if proxyIP == "" {
-		return fail(fmt.Errorf("docker: proxy has no IP on the per-run internal network %q", internalNetName(spec.RunID)))
 	}
 
 	// (3) Agent container: attached ONLY to the per-run internal network, which (Internal=true) has
@@ -269,6 +227,74 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	}, nil
 }
 
+// runNetworkAndProxy brings up a run's per-run internal network and its wardyn-proxy sidecar, for a
+// container and a VM alike. It returns the network's id, the proxy's IP on it, and the undo that
+// removes both; on an error it has already undone them.
+func (d *Driver) runNetworkAndProxy(ctx context.Context, spec runner.SandboxSpec) (intNetID, proxyIP string, undo func(), err error) {
+	// (1) Per-run internal network. Internal=true => Docker provisions no gateway, so the network
+	// cannot route off-host: this is what upholds L0 even though the agent is *connected* to it.
+	intNetID, err = d.createRunNetwork(ctx, spec.RunID, d.labels(spec.RunID, "network", spec.Labels))
+	if err != nil {
+		return "", "", nil, err
+	}
+	// rollback collects teardown steps to run on any later failure.
+	var rollback []func()
+	rollback = append(rollback, func() { _, _ = d.cli.NetworkRemove(context.Background(), intNetID, client.NetworkRemoveOptions{}) })
+	undo = func() {
+		for i := len(rollback) - 1; i >= 0; i-- {
+			rollback[i]()
+		}
+	}
+	fail := func(err error) (string, string, func(), error) {
+		undo()
+		return "", "", nil, err
+	}
+
+	// (2) wardyn-proxy sidecar: attached to the per-run internal network now; the control-plane-facing
+	// network is joined after create. Its config reaches it on stdin, never in its environment.
+	proxyEnvs, proxyCfg, err := proxyEnv(spec.RunID, spec.ProxyConfig, runner.ProxyListenPort)
+	if err != nil {
+		return fail(err)
+	}
+	prep, err := d.prepareProxy(ctx, spec.RunID, proxyCfg)
+	var proxyID string
+	if err == nil {
+		proxyID, err = d.startProxy(ctx, spec.RunID, d.labels(spec.RunID, componentProxy, spec.Labels),
+			proxyEnvs, prep, netip.Addr{})
+	}
+	if err != nil {
+		// startProxy's own exit-watch failure deliberately leaves the container behind so its logs
+		// still name the cause; it holds no config, so on CREATE nothing needs it kept, and THIS
+		// caller removes it before rolling back the rest.
+		_ = d.removeProxy(context.Background(), spec.RunID)
+		return fail(err)
+	}
+	rollback = append(rollback, func() { _ = d.removeProxy(context.Background(), spec.RunID) })
+
+	// Resolve the proxy's IP on the per-run internal network so the agent can reach it via a static
+	// /etc/hosts entry instead of Docker's embedded DNS: gVisor's netstack (CC2/runsc) does NOT
+	// traverse the embedded resolver at 127.0.0.11, so resolving the "wardyn-proxy" alias fails under
+	// runsc. A static hosts entry works under every runtime and weakens nothing — the agent still has
+	// no default route, so the proxy remains its sole egress path.
+	proxyInspectRes, err := d.cli.ContainerInspect(ctx, proxyID, client.ContainerInspectOptions{})
+	if err != nil {
+		return fail(fmt.Errorf("docker: inspect proxy for its network IP: %w", err))
+	}
+	proxyInspect := proxyInspectRes.Container
+	proxyIP = ""
+	if proxyInspect.NetworkSettings != nil {
+		// v29: IPAddress is a netip.Addr. Guard on IsValid so the zero Addr maps to "" (fail closed
+		// below), not the "invalid IP" string a zero Addr would stringify to.
+		if ep := proxyInspect.NetworkSettings.Networks[internalNetName(spec.RunID)]; ep != nil && ep.IPAddress.IsValid() {
+			proxyIP = ep.IPAddress.String()
+		}
+	}
+	if proxyIP == "" {
+		return fail(fmt.Errorf("docker: proxy has no IP on the per-run internal network %q", internalNetName(spec.RunID)))
+	}
+	return intNetID, proxyIP, undo, nil
+}
+
 // createRunNetwork creates runID's internal network with a user-specified IPv4 subnet and returns
 // its id. ReplaceProxy pins the proxy's address on this network, and Docker only accepts a pinned
 // address on a network created with a subnet in the request (a daemon-assigned subnet, even read
@@ -326,6 +352,9 @@ func (d *Driver) daemonSubnet(ctx context.Context, name string, opts client.Netw
 // StopSandbox is the graceful path: SIGTERM, then SIGKILL after the timeout,
 // then remove. Idempotent on a missing sandbox.
 func (d *Driver) StopSandbox(ctx context.Context, ref string) error {
+	if v := d.vmFor(ctx, ref); v != nil {
+		d.vmPowerdown(ctx, v, ref)
+	}
 	timeout := int(stopTimeout.Seconds())
 	if _, err := d.cli.ContainerStop(ctx, ref, client.ContainerStopOptions{Timeout: &timeout}); err != nil && !isNotFound(err) {
 		return fmt.Errorf("docker: stop: %w", err)
@@ -343,6 +372,10 @@ func (d *Driver) StopSandbox(ctx context.Context, ref string) error {
 // A wipe that failed is answered, once the end itself has succeeded, as runner.ErrAWSCacheWipeFailed.
 func (d *Driver) EndSandbox(ctx context.Context, ref string) error {
 	wipeErr := d.wipeAWSCaches(ctx, ref)
+	if v := d.vmFor(ctx, ref); v != nil {
+		d.vmPowerdown(ctx, v, ref)
+		defer d.warnVMSidecars(ctx, v.runID)
+	}
 	timeout := int(stopTimeout.Seconds())
 	if _, err := d.cli.ContainerStop(ctx, ref, client.ContainerStopOptions{Timeout: &timeout}); err != nil && !isNotFound(err) {
 		return fmt.Errorf("docker: stop agent: %w", err)
@@ -486,6 +519,7 @@ func (d *Driver) teardown(ctx context.Context, agentRef string) error {
 	delete(d.creating, agentRef)
 	d.mu.Unlock()
 	d.execOutputs.Delete(agentRef)
+	d.notVMs.Delete(agentRef)
 
 	var id uuid.UUID
 	res, err := d.cli.ContainerInspect(ctx, agentRef, client.ContainerInspectOptions{})
@@ -509,6 +543,13 @@ func (d *Driver) teardown(ctx context.Context, agentRef string) error {
 		return fmt.Errorf("docker: inspect for teardown: %w", err)
 	}
 
+	// A VM's sidecars (virtiofsd holds the member's folders) and run directory go on every return
+	// from here, whatever fails below; the closure reads id as resolved by then.
+	defer func() {
+		if id != uuid.Nil {
+			d.teardownVM(ctx, agentRef, id)
+		}
+	}()
 	if _, err := d.cli.ContainerRemove(ctx, agentRef, client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
 		return fmt.Errorf("docker: remove agent: %w", err)
 	}
@@ -589,7 +630,7 @@ type containerListerAPI interface {
 // the real client must implement it.
 var _ containerListerAPI = (*client.Client)(nil)
 
-// SweepOrphanedSandboxes removes leftover drive seeds (sweepDriveSeeds), then tears down the sandbox objects (agent container + sibling proxy + per-run
+// SweepOrphanedSandboxes removes leftover drive seeds (sweepDriveSeeds) and VM residue (sweepVMOrphans), then tears down the sandbox objects (agent container + sibling proxy + per-run
 // internal network) of every run whose row no longer owns them — the residue of a crash BETWEEN
 // CreateSandbox and SetSandboxRef, which leaves those containers running under a run row with no
 // sandbox_ref, so no ref-keyed teardown ever revisits them. isOrphan (supplied by the control plane,
@@ -610,6 +651,8 @@ func (d *Driver) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duratio
 		return 0, nil
 	}
 	seeds, seedErr := d.sweepDriveSeeds(ctx, lister, minAge)
+	cutoff := time.Now().Add(-minAge)
+	vms, vmErr := d.sweepVMOrphans(ctx, lister, cutoff, isOrphan)
 	res, err := lister.ContainerList(ctx, client.ContainerListOptions{
 		All: true, // a crashed sandbox's agent may be exited, not running
 		// Values of one label key are ANDed, so the component is matched below.
@@ -618,8 +661,7 @@ func (d *Driver) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duratio
 	if err != nil {
 		return 0, fmt.Errorf("docker: list containers for orphan sweep: %w", err)
 	}
-	cutoff := time.Now().Add(-minAge)
-	swept, errs := seeds, []error{seedErr}
+	swept, errs := seeds+vms, []error{seedErr, vmErr}
 	seen := map[uuid.UUID]bool{}
 	for _, c := range res.Items {
 		if comp := c.Labels[labelComponent]; comp != componentAgent && comp != componentProxy {
