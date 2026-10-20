@@ -199,8 +199,7 @@ test.describe("Admin settings: an older read cannot overwrite the newer one", ()
       olderLanded = true;
     });
     await page.goto("/admin/settings");
-    // A load that asks once waits out the four-second hold above, so the default 5 s leaves no margin on a slow runner.
-    await expect(page.getByRole("heading", { name: "Admin SSH keys" })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole("heading", { name: "Admin SSH keys" })).toBeVisible();
     await expandCard(page, "Host");
     await expect(page.getByTestId("host-tile-internet-pill")).toHaveText("Through the corporate proxy");
     const recheck = page.getByRole("button", { name: "Re-check" });
