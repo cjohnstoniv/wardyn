@@ -150,9 +150,11 @@ const applicationUIAppsDeniedMsg = "This profile does not allow UI apps, so an a
 // applicationUIAppsRefusal refuses a shape-application run whose declared app deny_ui_apps would strip: the run
 // is an application only through that app, so creating it anyway would make a run that is not what was asked for.
 // resolveRunPolicy calls it for create and for preflight alike, on the policy as resolved, before boundUIApps drops
-// anything. Other shapes keep the strip-and-warn behaviour.
+// anything. Other shapes keep the strip-and-warn behaviour. It keys on what the request declared
+// (applicationServer), never on the resolved spec alone: a background application that declares no app still
+// inherits the ceiling's, and denying that one strips nothing the person asked for.
 func (s *Server) applicationUIAppsRefusal(r *http.Request, req createRunRequest, spec types.RunPolicySpec, ceiling governanceCeiling) *runRefusal {
-	if req.Shape != client.RunShapeApplication || !s.uiAppsDenied(r, spec, ceiling) {
+	if req.Shape != client.RunShapeApplication || !applicationServer(req) || !s.uiAppsDenied(r, spec, ceiling) {
 		return nil
 	}
 	return runError(http.StatusUnprocessableEntity, reasonRunApplicationUIAppsDenied, applicationUIAppsDeniedMsg)

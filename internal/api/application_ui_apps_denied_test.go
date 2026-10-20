@@ -55,3 +55,24 @@ func TestApplicationRunRefusedWhenTheProfileStripsItsApp(t *testing.T) {
 		})
 	}
 }
+
+// A background application declares no app. Its ceiling may still name one, and under deny_ui_apps the default arm
+// copies it and strips it; that run asked for no app, so it is created, as it was before the refusal existed.
+func TestApplicationRunWithoutADeclaredAppIsNotRefusedForTheCeilingsApp(t *testing.T) {
+	const bg = `"shape":"application","experience":"background","workload":{"kind":"command","command":"make"},` + noRepos
+	for _, door := range contractDoors {
+		t.Run(door.name, func(t *testing.T) {
+			p := limitsProfile("no-ui", types.GovernanceLimits{DenyUIApps: true})
+			p.Ceiling.UIApps = []types.UIApp{{Name: "admin", Port: 8080}}
+			srv, _, _ := govEscapeFixture(t, assignedStore(p))
+			w := doSSO(t, srv, http.MethodPost, door.path, govSession(t, "sub-walled", []string{"eng"}, false), modeBody(bg))
+			want := http.StatusOK
+			if door.name == "create" {
+				want = http.StatusCreated
+			}
+			if w.Code != want {
+				t.Fatalf("%s = %d %s, want %d", door.name, w.Code, w.Body.String(), want)
+			}
+		})
+	}
+}
