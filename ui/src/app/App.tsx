@@ -173,6 +173,13 @@ const YourAccountScreen = React.lazy(() =>
     default: m.YourAccountScreen,
   })),
 );
+// /cli/sign-in: the approve page `wardyn login` opens (ATT-LOGIN-UI). Outside the setup gate, like /setup: a
+// person finishing a sign-in must reach it whatever the setup checks say.
+const CliSignInScreen = React.lazy(() =>
+  import("./components/screens/cli-sign-in").then((m) => ({
+    default: m.CliSignInScreen,
+  })),
+);
 const WorkspacesScreen = React.lazy(() =>
   import("./components/screens/workspaces").then((m) => ({
     default: m.WorkspacesScreen,
@@ -810,6 +817,7 @@ export default function App() {
             path="/admin/setup"
             element={<SetupRoute onDone={() => navigate("/runs")} status={setupStatus} />}
           />
+          <Route path="/cli/sign-in" element={suspend(<CliSignInScreen />)} />
           <Route element={<RequireSetup status={setupStatus} />}>
             <Route
               path="/"

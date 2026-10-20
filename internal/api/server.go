@@ -148,6 +148,10 @@ type Config struct {
 	// ponytail: process-local. Under WARDYN_HA a replica that does not hold a runner's session
 	// answers offline for a runner attached to another; the upgrade is a shared presence read.
 	RunnerOnline func(id uuid.UUID) bool
+	// AttachLocal (WARDYN_ATTACH_LOCAL=on, off by default) allows a person's CLI on their own runner's
+	// computer to attach to their run there (transport=local, attach_local.go), and tells such runners
+	// so in AUTH_OK. Off, a transport=local attach answers 409 attach_local_unavailable (flag_off).
+	AttachLocal bool
 	// RunnersDisabled runs after runners are switched off (a true→false change), once the write and
 	// its audit row are done and the site-config lock is released. Nil defaults to
 	// Server.RunnersDisabled, which ends every runner session this process holds.
@@ -686,6 +690,8 @@ type Config struct {
 	// asks for no TTL gets this one; a mint that asks for more is clamped to it.
 	// It never touches a token already minted.
 	APITokenMaxTTL time.Duration
+	// CLISignIn is CLI sign-in (wardyn login, cli_sign_in.go); the zero value is off.
+	CLISignIn CLISignInConfig
 	// RoleStampTTL is WARDYN_ROLE_STAMP_TTL: the oldest an API token's role and
 	// group stamp (api_tokens.identity_stamped_at) may be before apiTokenAuth
 	// refuses it until its owner signs in again. Zero, the default, is off: no
@@ -747,6 +753,12 @@ type Config struct {
 	// boundary as TrustedCAPEM above — never a SiteConfig field,
 	// never agent-reachable.
 	DemoVideoBaseURL string
+	// OrgCAFingerprints is WARDYN_ORG_CA_FINGERPRINTS, parsed at boot by
+	// ParseOrgCAFingerprints: "sha256:<lowercase hex>" of each CA certificate
+	// the operator publishes for `wardyn ca add` to be compared against.
+	// /healthz publishes it as org_ca_fingerprints; nil (the default)
+	// publishes nothing.
+	OrgCAFingerprints []string
 }
 
 // Server is the control-plane HTTP server. It is safe for concurrent use.
@@ -797,6 +809,10 @@ type Server struct {
 	// on a millisecond clock instead of the real 30s budget.
 	pingEvery     time.Duration
 	authorityTest attachAuthorityTimings // per-server test overrides, the same shape as pingEvery
+	// localAttachSubs replaces a runner's substrate for a local attach (localAttachSubFor), tests only.
+	localAttachSubs func(id uuid.UUID) localAttachSub
+	// localCovered replaces a local promotion's corpus proof (promotionCovered), tests only.
+	localCovered func(runID uuid.UUID) bool
 	// pauseLimit overrides attachWriteTimeout as the bound on an unresumed
 	// output pause for THIS server only (tests).
 	pauseLimit time.Duration
@@ -914,6 +930,7 @@ type Server struct {
 	preflightLimiter     *principalLimiter
 	policyPreviewLimiter *principalLimiter
 	deviceRouteState     // the device routes' process state (server_devices.go)
+	cliSignInState       // CLI sign-in's rate limiters (cli_sign_in.go)
 	scimState            // the SCIM routes' rate limiters (scim_auth.go)
 	runLeaseState        // the run lease sweep's process state (run_lease_server.go)
 	// pause is the pause sweep's process-local state (run_pause.go).

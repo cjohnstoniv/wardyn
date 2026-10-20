@@ -11,7 +11,7 @@ import (
 )
 
 // seedCLIProfile points the wardyn CLI at the organisation this computer was set up for, so
-// `wardyn run attach <id>` needs no URL. A profile that already names a URL is the person's choice and is
+// `wardyn attach <id>` needs no URL. A profile that already names a URL is the person's choice and is
 // kept. It installs no CLI: the CLI is the person's, installed before this runner.
 func (h setupHost) seedCLIProfile(p setupPaths, org string, out io.Writer) error {
 	have, err := cliprofile.Read(p.cliProfile)

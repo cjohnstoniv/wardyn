@@ -315,9 +315,10 @@ func (s PG) DryRunGovernance(ctx context.Context, fn func(q Querier) error) erro
 	return fn(tx)
 }
 
-// EraseGovernanceChangePersonalFields clears the proposer and decider (their emails too, and the
-// reason a decider typed) of every change whose recorded principal is one of principals or whose
-// recorded email is one of emails (case folded), and returns how many rows it touched. A principal is
+// EraseGovernanceChangePersonalFields clears the proposer and decider (their emails too, the reason a
+// decider typed, and the reason a proposer typed into a runner trust change's payload) of every change
+// whose recorded principal is one of principals or whose recorded email is one of emails (case
+// folded), and returns how many rows it touched. A principal is
 // never matched against the email column: that column holds the claim the proposer signed in with,
 // which can spell another person's principal. A pending change whose proposer is erased leaves
 // pending in the same statement (to expired), so a change with no recorded proposer can never be
@@ -336,10 +337,12 @@ func (s PG) EraseGovernanceChangePersonalFields(ctx context.Context, principals,
 			proposed_by_email = CASE WHEN proposed_by = ANY($1) OR lower(proposed_by_email) = ANY($2) THEN '' ELSE proposed_by_email END,
 			decided_by        = CASE WHEN decided_by = ANY($1) OR lower(decided_by_email) = ANY($2) THEN '' ELSE decided_by END,
 			decided_by_email  = CASE WHEN decided_by = ANY($1) OR lower(decided_by_email) = ANY($2) THEN '' ELSE decided_by_email END,
-			reason            = CASE WHEN decided_by = ANY($1) OR lower(decided_by_email) = ANY($2) THEN '' ELSE reason END
+			reason            = CASE WHEN decided_by = ANY($1) OR lower(decided_by_email) = ANY($2) THEN '' ELSE reason END,
+			payload           = CASE WHEN target_kind = $3 AND (proposed_by = ANY($1) OR lower(proposed_by_email) = ANY($2))
+			                         THEN jsonb_set(payload, '{reason}', '""'::jsonb) ELSE payload END
 		WHERE proposed_by = ANY($1) OR lower(proposed_by_email) = ANY($2)
 		   OR decided_by = ANY($1) OR lower(decided_by_email) = ANY($2)`,
-		principals, lowerAll(emails))
+		principals, lowerAll(emails), types.GovernanceTargetRunnerTrust)
 	if err != nil {
 		return 0, fmt.Errorf("store: erase governance change personal fields: %w", err)
 	}
