@@ -115,7 +115,7 @@ func (e *desktopFilesEnv) path(name string) string {
 func (e *desktopFilesEnv) transferRows(direction string) []types.AuditEvent {
 	var out []types.AuditEvent
 	for _, ev := range e.audit.snapshot() {
-		if ev.Action == "desktop.file."+direction {
+		if ev.Action == "desktop.file.transfer" && strings.Contains(string(ev.Data), `"direction":"`+direction+`"`) {
 			out = append(out, ev)
 		}
 	}
@@ -196,7 +196,7 @@ func TestDesktopFiles_RefusalsBeforeTheSandbox(t *testing.T) {
 	r.ContentLength = maxDesktopUploadBytes + 1
 	r.AddCookie(e.ses["owner"])
 	w := httptest.NewRecorder()
-	e.srv.Handler().ServeHTTP(w, r)
+	panicFails(t, e.srv.Handler()).ServeHTTP(w, r)
 	if w.Code != http.StatusRequestEntityTooLarge || !strings.Contains(w.Body.String(), "Nothing was sent.") {
 		t.Fatalf("an upload over the limit: %d %s", w.Code, w.Body.String())
 	}
@@ -248,5 +248,51 @@ func TestDesktopFiles_SponsorIsRefusedOnEveryEndpoint(t *testing.T) {
 	}
 	if e.folder.execs != 0 || len(e.transferRows("upload"))+len(e.transferRows("download")) != 0 {
 		t.Fatalf("a sponsor's request reached the sandbox (%d execs) or wrote transfer rows", e.folder.execs)
+	}
+}
+
+// backgroundFilesStore makes the env's run a background-only one.
+type backgroundFilesStore struct{ *envelopeStore }
+
+func (s *backgroundFilesStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
+	run, err := s.envelopeStore.GetRun(ctx, id)
+	run.Experience = types.ExperienceBackground
+	return run, err
+}
+
+// Only the person who may enter the desktop reaches its files, on every Files endpoint: another
+// person and the security tier get a missing run's 404, a super admin on a person's run the 403,
+// and the owner of a background-only run the desktop door's 409. Nothing reaches the sandbox.
+func TestDesktopFiles_OnlyWhoMayEnterTheDesktopReachesIt(t *testing.T) {
+	allowed := &types.DesktopControls{Upload: types.TransferAllowed, Download: types.TransferAllowed}
+	e := newDesktopFilesEnv(t, allowed)
+	bg := newDesktopFilesEnv(t, allowed)
+	bg.srv.cfg.Store = &backgroundFilesStore{bg.srv.cfg.Store.(*envelopeStore)}
+	notFound := func(w *httptest.ResponseRecorder) bool { return w.Code == http.StatusNotFound }
+	for _, c := range []struct {
+		who  string
+		env  *desktopFilesEnv
+		ses  *http.Cookie
+		want func(*httptest.ResponseRecorder) bool
+	}{
+		{"another person", e, ssoSession(t, "sub-other", "other@corp.example", oidc.RoleUser), notFound},
+		{"the security tier, who can view the run", e, e.ses["security"], notFound},
+		{"a super admin on a person's run", e, e.ses["admin"], func(w *httptest.ResponseRecorder) bool { return refusedOwnerOnly(w.Code, w.Body.String()) }},
+		{"the owner of a background-only run", bg, bg.ses["owner"], func(w *httptest.ResponseRecorder) bool {
+			return w.Code == http.StatusConflict && reasonOf(t, w) == reasonRunBackgroundOnly
+		}},
+	} {
+		for _, r := range []struct{ method, name, body string }{
+			{http.MethodGet, "", ""}, {http.MethodPut, "in.txt", "x"}, {http.MethodGet, "agent-report.csv", ""},
+		} {
+			if w := doSSO(t, c.env.srv, r.method, c.env.path(r.name), c.ses, r.body); !c.want(w) {
+				t.Errorf("%s on %s %s: %d %s", c.who, r.method, c.env.path(r.name), w.Code, w.Body.String())
+			}
+		}
+	}
+	for _, env := range []*desktopFilesEnv{e, bg} {
+		if env.folder.execs != 0 || len(env.transferRows("upload"))+len(env.transferRows("download")) != 0 {
+			t.Fatalf("a refused request reached the sandbox (%d execs) or wrote transfer rows", env.folder.execs)
+		}
 	}
 }
