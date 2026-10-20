@@ -277,7 +277,7 @@ func (st *sessionState) bearer(ctx context.Context) (token, origin string) {
 	if st.s.kind == "" {
 		return "", ""
 	}
-	if tok, kind := st.s.item.bearer(time.Now()); tok != "" {
+	if tok, kind := st.s.item.bearer(cliNow()); tok != "" {
 		st.s.token, st.s.tokenKind = tok, kind
 		return tok, st.s.origin
 	}

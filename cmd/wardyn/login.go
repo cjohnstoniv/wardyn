@@ -278,7 +278,7 @@ func (l *login) store(kind string, it cliItem, stepUp bool) (prev cliItem, repla
 			return prev, false, err
 		}
 		// The same session with the same device key, still live; a replaced or ended one is not restored.
-		if !found || cur.SessionID != it.SessionID || cur.KeySeed != it.KeySeed || cur.endedWhy(time.Now()) != "" {
+		if !found || cur.SessionID != it.SessionID || cur.KeySeed != it.KeySeed || cur.endedWhy(cliNow()) != "" {
 			return prev, false, fmt.Errorf(errStepUpLost, l.origin)
 		}
 		cur.AdminToken, cur.AdminExpiresAt = it.AdminToken, it.AdminExpiresAt
@@ -301,7 +301,7 @@ func (l *login) previous() (cliItem, bool) {
 		return cliItem{}, false
 	}
 	it, ok, err := storeFor(kind, l.dir).get(l.origin)
-	return it, err == nil && ok && it.endedWhy(time.Now()) == ""
+	return it, err == nil && ok && it.endedWhy(cliNow()) == ""
 }
 
 // endPrevious signs the replaced session out at the server (DELETE /api/v1/me/cli-sessions/{id}) with the
@@ -312,7 +312,7 @@ func (l *login) endPrevious(ctx context.Context, prev cliItem, token string) {
 	route := "/api/v1/me/cli-sessions/" + prev.SessionID.String()
 	err := cliCall(ctx, l.origin, http.MethodDelete, route, token, nil, nil)
 	var ae *sdk.APIError
-	if old, _ := prev.bearer(time.Now()); old != "" && errors.As(err, &ae) && ae.Status == http.StatusNotFound {
+	if old, _ := prev.bearer(cliNow()); old != "" && errors.As(err, &ae) && ae.Status == http.StatusNotFound {
 		err = cliCall(ctx, l.origin, http.MethodDelete, route, old, nil, nil)
 	}
 	if err = sessionGone(err); err != nil {

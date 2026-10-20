@@ -55,7 +55,7 @@ type setupRig struct {
 	runnerdPath       string
 	signInOrigin      string                   // /healthz.cli_sign_in_origin
 	authorize         func(*http.Request) bool // when set, a request to /api/v1/ (but the anonymous CLI sign-in) it refuses is a 401
-	mintDelay         time.Duration            // how long a mint takes to answer, once it is authorised
+	afterMint         func()                   // runs when a mint is authorised and answered
 }
 
 const setupTestToken = "wdr_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -113,8 +113,10 @@ func (r *setupRig) serve(w http.ResponseWriter, req *http.Request) {
 	case p == "/healthz":
 		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "cli_artifact_base": r.advertised, "cli_sign_in": r.signIn, "cli_sign_in_origin": r.signInOrigin})
 	case req.Method == http.MethodPost && p == "/api/v1/me/runners/tokens":
+		if r.afterMint != nil {
+			defer r.afterMint()
+		}
 		r.mints++
-		time.Sleep(r.mintDelay)
 		r.mintBearer = strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer ")
 		if r.mintStatus != 0 {
 			w.WriteHeader(r.mintStatus)
@@ -710,13 +712,12 @@ func TestRunnerSetupRefusesAnotherSignInOrigin(t *testing.T) {
 	}
 }
 
-// A sign-in made inside the command is renewed like a stored one: the mint is slow enough that the access
-// token is inside the renewal margin by the time of the claim, which then goes out on a refreshed token,
-// after exactly one refresh.
+// A sign-in made inside the command is renewed like a stored one: the mint moves the clock until the access
+// token is inside the renewal margin, so the claim goes out on a refreshed token, after exactly one refresh.
 func TestRunnerSetupRenewsItsOwnSignIn(t *testing.T) {
 	r, f, _ := signInRig(t)
-	f.issueLife = cliTokenMargin + 500*time.Millisecond
-	r.mintDelay = 700 * time.Millisecond
+	advance := skewClock(t)
+	r.afterMint = func() { advance(intoMargin) }
 	f.expire = true
 	r.authorize = func(req *http.Request) bool {
 		f.mu.Lock()

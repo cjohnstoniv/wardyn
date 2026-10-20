@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -54,6 +55,8 @@ type signInOrg struct {
 	// refusePost makes POST /api/v1/runs a 401; posts and polls count the run calls.
 	refusePost   bool
 	posts, polls int
+	// atPoll runs on the poll with that number, after it is answered: a test moves the clock with it.
+	atPoll func(n int)
 
 	mu        sync.Mutex
 	signIns   map[uuid.UUID]*fakeSignIn
@@ -84,6 +87,21 @@ type fakeToken struct {
 }
 
 const fakeEmail = "you@example.com"
+
+// skewClock makes the CLI's lifetime clock (cliNow) read the real time plus an offset the test moves with
+// the returned function, so an access token enters its renewal margin on an event, not after a wait that a
+// stepping wall clock can shorten or stretch.
+func skewClock(t *testing.T) (advance func(time.Duration)) {
+	t.Helper()
+	var offset atomic.Int64
+	prev := cliNow
+	cliNow = func() time.Time { return time.Now().Add(time.Duration(offset.Load())) }
+	t.Cleanup(func() { cliNow = prev })
+	return func(d time.Duration) { offset.Add(int64(d)) }
+}
+
+// intoMargin is a step that leaves an access token granted a moment ago inside the renewal margin.
+const intoMargin = time.Hour - cliTokenMargin/2
 
 func newSignInOrg(t *testing.T) *signInOrg {
 	t.Helper()
@@ -172,7 +190,7 @@ func (f *signInOrg) approve(id uuid.UUID) (code, redirect string) {
 
 func (f *signInOrg) grant(sess uuid.UUID, kind string, life time.Duration) types.CLISessionGrant {
 	tok := "wdn_" + uuid.NewString()
-	now := time.Now()
+	now := cliNow()
 	f.tokens[tok] = fakeToken{session: sess, kind: kind, exp: now.Add(life)}
 	return types.CLISessionGrant{SessionID: sess, AccessToken: tok, Kind: kind, AccessExpiresAt: now.Add(life),
 		SessionExpiresAt: now.Add(30 * 24 * time.Hour), IdleExpiresAt: now.Add(7 * 24 * time.Hour), Store: types.CLIStoreKeychain}
@@ -271,7 +289,7 @@ func (f *signInOrg) owner(r *http.Request) (*fakeToken, *fakeSession) {
 		return nil, nil
 	}
 	sess := f.sessions[tok.session]
-	if sess == nil || sess.ended != "" || f.expire && !time.Now().Add(cliTokenMargin).Before(tok.exp) {
+	if sess == nil || sess.ended != "" || f.expire && !cliNow().Add(cliTokenMargin).Before(tok.exp) {
 		return nil, nil
 	}
 	return &tok, sess
@@ -299,6 +317,9 @@ func (f *signInOrg) getRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f.polls++
+	if f.atPoll != nil {
+		defer f.atPoll(f.polls)
+	}
 	state := types.RunRunning
 	if f.polls > 20 {
 		state = types.RunCompleted
@@ -1235,7 +1256,12 @@ func TestLongCommandRenewsTheStoredSignIn(t *testing.T) {
 	setWaitPollInterval(t, 50*time.Millisecond)
 	f := newSignInOrg(t)
 	cliEnv(t, approveInBrowser(t, f, nil))
-	f.issueLife = cliTokenMargin + 400*time.Millisecond
+	advance := skewClock(t)
+	f.atPoll = func(n int) {
+		if n == 5 {
+			advance(intoMargin)
+		}
+	}
 	if _, _, err := runCLI(t, "", "login", f.srv.URL); err != nil {
 		t.Fatalf("login: %v", err)
 	}

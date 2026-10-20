@@ -43,6 +43,9 @@ const (
 	cliTokenMargin = time.Minute
 )
 
+// cliNow is the time the CLI judges a stored sign-in's lifetimes by; a test replaces it to move that time.
+var cliNow = time.Now
+
 // cliLockWait is how long a command waits for another one's refresh before it re-reads the item.
 var cliLockWait = 10 * time.Second
 
@@ -320,7 +323,7 @@ func loadSession(ctx context.Context, origin string) (storedSession, error) {
 		it, ok, err := st.get(origin)
 		s.item = it
 		if ok {
-			s.token, s.tokenKind = it.bearer(time.Now())
+			s.token, s.tokenKind = it.bearer(cliNow())
 		}
 		return ok, err
 	}
@@ -331,7 +334,7 @@ func loadSession(ctx context.Context, origin string) (storedSession, error) {
 	if s.token != "" {
 		return s, nil
 	}
-	if why := s.item.endedWhy(time.Now()); why != "" {
+	if why := s.item.endedWhy(cliNow()); why != "" {
 		return s, fmt.Errorf(errSessionEnded, origin, why)
 	}
 	unlock, locked, err := lockRefresh(dir)
@@ -350,7 +353,7 @@ func loadSession(ctx context.Context, origin string) (storedSession, error) {
 	if _, err := read(); err != nil || s.token != "" {
 		return s, err
 	}
-	if why := s.item.endedWhy(time.Now()); why != "" {
+	if why := s.item.endedWhy(cliNow()); why != "" {
 		return s, fmt.Errorf(errSessionEnded, origin, why)
 	}
 	err = s.refresh(ctx, st)
