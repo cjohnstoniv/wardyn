@@ -143,8 +143,12 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host str
 	// A local model server's gate runs before anything else (local_model.go);
 	// one with no auth configured is served with no credential at all.
 	lm := p.localModelAt(host, port)
-	if lm != nil && p.localModelRefused(w, r, host, port, rest, lm) {
-		return
+	if lm != nil {
+		release, refused := p.localModelRefused(w, r, host, port, rest, lm)
+		defer release()
+		if refused {
+			return
+		}
 	}
 	hdr, ok, ierr := p.inject.resolveCtx(r.Context(), host)
 	if !ok && lm == nil {
@@ -501,8 +505,16 @@ func (p *Proxy) scanBufferedBody(w http.ResponseWriter, r *http.Request, host st
 	noRelease := func() {}
 	// Read before the scan slot, charged to the engine's retained budget for
 	// the buffer's whole life (scanBudget.readBody), so a slow body holds only
-	// the bytes it has sent. A budget wait that expires fails CLOSED.
-	buffered, release, rerr := p.scan.readBody(r.Context(), r.Body, r.ContentLength, int64(maxLLMScanBody))
+	// the bytes it has sent. A budget wait that expires fails CLOSED. A body a
+	// door already holds charged (holdChargedBody) is scanned as it is.
+	unread := r.Body
+	buffered, held := r.Context().Value(chargedBodyKey{}).([]byte)
+	release, rerr := noRelease, error(nil)
+	if held {
+		unread = http.NoBody
+	} else {
+		buffered, release, rerr = p.scan.readBody(r.Context(), r.Body, r.ContentLength, int64(maxLLMScanBody))
+	}
 	if rerr != nil {
 		emit(egress.Deny, ruleSourceLLM, nil)
 		status := http.StatusBadRequest
@@ -519,7 +531,7 @@ func (p *Proxy) scanBufferedBody(w http.ResponseWriter, r *http.Request, host st
 			writeScanBlockedShaped(w, shape, 0, nil, "body_oversize")
 			return nil, nil, noRelease, true
 		}
-		return io.MultiReader(bytes.NewReader(buffered), r.Body),
+		return io.MultiReader(bytes.NewReader(buffered), unread),
 			p.skipSummary("skip", "body_oversize", channel), release, false
 	}
 	// The scan slot (maxConcurrentScans) bounds extraction's live heap against

@@ -148,42 +148,60 @@ func (p *Proxy) refuseLocalModel(w http.ResponseWriter, r *http.Request, host st
 }
 
 // localModelRefused is the gate: true when it refused (and answered) the
-// request. A request it lets through carries its bounded body.
-func (p *Proxy) localModelRefused(w http.ResponseWriter, r *http.Request, host string, port int, rest string, lm *localModel) bool {
+// request. A request it lets through carries its bounded body, charged to the
+// retained budget before the read; the caller defers the returned release.
+func (p *Proxy) localModelRefused(w http.ResponseWriter, r *http.Request, host string, port int, rest string, lm *localModel) (func(), bool) {
+	none := func() {}
 	path := "/" + rest
 	if name, ok := strings.CutPrefix(path, "/v1/models/"); ok && r.Method == http.MethodGet {
 		if !lm.models[name] {
-			return p.refuseLocalModel(w, r, host, port, http.StatusForbidden, reasonEgressDenied,
+			return none, p.refuseLocalModel(w, r, host, port, http.StatusForbidden, reasonEgressDenied,
 				fmt.Sprintf("model %q is not on this run's model allowlist", name))
 		}
-		return false
+		return none, false
 	}
 	method, ok := localModelRoutes[path]
 	if !ok || r.Method != method {
-		return p.refuseLocalModel(w, r, host, port, http.StatusForbidden, reasonEgressDenied,
+		return none, p.refuseLocalModel(w, r, host, port, http.StatusForbidden, reasonEgressDenied,
 			fmt.Sprintf("%s %s is not a route a run may call on a local model server", r.Method, path))
 	}
 	if method == http.MethodGet {
 		r.Header.Del("Accept-Encoding") // the listing filter reads the answer
-		return false
+		return none, false
 	}
 	if ce := r.Header.Get("Content-Encoding"); ce != "" && !strings.EqualFold(ce, "identity") {
-		return p.refuseLocalModel(w, r, host, port, http.StatusBadRequest, reasonNotInspected, "an encoded request body cannot be checked")
+		return none, p.refuseLocalModel(w, r, host, port, http.StatusBadRequest, reasonNotInspected, "an encoded request body cannot be checked")
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, int64(maxLLMScanBody)+1))
+	body, release, err := p.scan.readBody(r.Context(), r.Body, r.ContentLength, int64(maxLLMScanBody))
+	if errors.Is(err, errScanBusy) {
+		p.emitLLMDecision(r, host, port, egress.Deny, ruleSourceLLM, nil)
+		p.scanFault(w, p.shapeOf(r, host), "read llm body", err, http.StatusBadGateway)
+		return none, true
+	}
 	if err != nil || len(body) > maxLLMScanBody {
-		return p.refuseLocalModel(w, r, host, port, http.StatusBadRequest, reasonNotInspected, "the request body could not be read whole")
+		release()
+		return none, p.refuseLocalModel(w, r, host, port, http.StatusBadRequest, reasonNotInspected, "the request body could not be read whole")
 	}
 	out, model, err := boundLocalRequest(body, lm.bounds)
 	if err != nil {
-		return p.refuseLocalModel(w, r, host, port, http.StatusBadRequest, reasonNotInspected, err.Error())
+		release()
+		return none, p.refuseLocalModel(w, r, host, port, http.StatusBadRequest, reasonNotInspected, err.Error())
 	}
 	if !lm.models[model] {
-		return p.refuseLocalModel(w, r, host, port, http.StatusForbidden, reasonEgressDenied,
+		release()
+		return none, p.refuseLocalModel(w, r, host, port, http.StatusForbidden, reasonEgressDenied,
 			fmt.Sprintf("model %q is not on this run's model allowlist", model))
 	}
-	r.Body, r.ContentLength = io.NopCloser(bytes.NewReader(out)), int64(len(out))
-	return false
+	// A spliced copy replaces body, so body's charge carries over; only its growth is charged.
+	grown, err := p.scan.chargeMore(r.Context(), int64(len(body)), int64(len(out)-len(body)))
+	if err != nil {
+		release()
+		p.emitLLMDecision(r, host, port, egress.Deny, ruleSourceLLM, nil)
+		p.scanFault(w, p.shapeOf(r, host), "read llm body", err, http.StatusBadGateway)
+		return none, true
+	}
+	holdChargedBody(r, out)
+	return func() { grown(); release() }, false
 }
 
 // jsonField is one member of a JSON object: its key and its value's byte span.
