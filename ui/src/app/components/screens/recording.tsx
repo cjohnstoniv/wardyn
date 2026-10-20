@@ -134,16 +134,19 @@ export function RecordingScreen() {
   React.useEffect(load, [load]);
 
   // #159: fetch the next PAGE_SIZE rows starting where the loaded set ends.
-  // `runs.length` IS the next offset — every row this screen holds came from
-  // one of these paged fetches, one page at a time, so nothing else can have
-  // advanced it out from under this call.
+  // `runs.length` is the next offset; a run created since the last page shifts
+  // the window, so rows already held are skipped by id (ponytail: offset
+  // paging; keyset paging if a deleted run's skipped neighbour matters).
   const loadMore = React.useCallback(() => {
     setLoadingMore(true);
     setPageError(false);
     runsApi
       .listRuns({ includeRecordingMeta: true, limit: PAGE_SIZE, offset: runs.length })
       .then((got) => {
-        setRuns((prev) => [...prev, ...got.runs]);
+        setRuns((prev) => {
+          const held = new Set(prev.map((r) => r.id));
+          return [...prev, ...got.runs.filter((r) => !held.has(r.id))];
+        });
         setTruncated(got.truncated);
       })
       .catch(() => setPageError(true))

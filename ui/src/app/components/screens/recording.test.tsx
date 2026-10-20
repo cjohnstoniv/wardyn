@@ -459,6 +459,19 @@ describe("RecordingScreen — paging (#159)", () => {
     expect(screen.getByText("All 2 recordings are loaded.")).toBeInTheDocument();
   });
 
+  it("#2522: a run that moved the window between pages is shown once, and counted once", async () => {
+    listRunsMock.mockResolvedValueOnce(page([recorded("run_1", { task: "fix the leak" })], true));
+    listRunsMock.mockResolvedValueOnce(page([recorded("run_1", { task: "fix the leak" }), recorded("run_2", { task: "bump deps" })], false));
+    renderScreen();
+
+    await screen.findByText("fix the leak");
+    fireEvent.click(screen.getByRole("button", { name: "Search 100 more runs" }));
+
+    await screen.findByText("bump deps");
+    expect(screen.getAllByText("fix the leak")).toHaveLength(1);
+    expect(screen.getByText("All 2 recordings are loaded.")).toBeInTheDocument();
+  });
+
   it("a failed Load more keeps what already loaded, names the count, and Retry resumes from the same offset", async () => {
     listRunsMock.mockResolvedValueOnce(page([recorded("run_1", { task: "fix the leak" })], true));
     listRunsMock.mockRejectedValueOnce(new Error("boom"));
