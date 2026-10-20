@@ -194,6 +194,7 @@ push_rule_sets.rules.require_review_paths
 resident_mints
 resident_mints.expires_at
 resident_mints.grant_id
+resident_mints.host
 resident_mints.kind
 resident_mints.known_hosts
 resident_mints.token
