@@ -118,6 +118,10 @@ func (s *Server) handlePutCredentialDelivery(w http.ResponseWriter, r *http.Requ
 		writeErrorReason(w, http.StatusBadRequest, reasonCredentialDeliveryInvalid, err.Error())
 		return
 	}
+	if err := after.CheckBuildable(); err != nil {
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonCredentialDeliveryInvalid, err.Error())
+		return
+	}
 	staleIfMatch := func(cur types.CredentialDeliveryPolicyDoc) (placement.DeliveryPolicy, error) {
 		before, err := deliveryPolicyOf(cur.Policy)
 		if err != nil {
@@ -189,6 +193,9 @@ func applyCredentialDeliveryChange(s *Server, r *http.Request, q store.Querier, 
 	}
 	if err := after.Validate(); err != nil {
 		return govApplied{}, writeRefusal(http.StatusBadRequest, reasonCredentialDeliveryInvalid, "%s", err.Error())
+	}
+	if err := after.CheckBuildable(); err != nil {
+		return govApplied{}, writeRefusal(http.StatusUnprocessableEntity, reasonCredentialDeliveryInvalid, "%s", err.Error())
 	}
 	if err := store.LockGovernanceTarget(ctx, q, govKindCredentialDelivery); err != nil {
 		return govApplied{}, err
