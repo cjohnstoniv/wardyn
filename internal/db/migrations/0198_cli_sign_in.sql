@@ -13,9 +13,15 @@
 -- and generation counts its rotations: a refresh with a valid device proof and any other secret is a
 -- reuse and ends the row. ended_at and end_reason are set together, once.
 --
--- The pairings the code keeps (ended_at with end_reason, a loopback mode with its port, a CLI kind with
--- its cli_session_id) have no CHECK of their own: a closed-enum column carries exactly one CHECK, its
--- list of literals (internal/db/migrations_check_test.go).
+-- Three named cross-column CHECKs hold the pairings: cli_sessions_end_pair (ended_at with end_reason),
+-- cli_sign_ins_loopback_port (a loopback sign-in has its port, a paste one none) and
+-- api_tokens_cli_session_kind (a CLI token has its session, a personal token none). The closed-enum
+-- guards count only enum-membership CHECKs: the migration-text guard reads `<col> IN (` lists, and the
+-- live-catalog guard (enumCheckDefs in internal/db/migrations_check_pg_test.go) skips a CHECK over
+-- several columns that holds no list for the column. So each enum column here keeps exactly one list.
+--
+-- A create deletes requests that expired over an hour ago (store.PG.CreateCLISignIn), so cli_sign_ins
+-- holds about the last hour.
 --
 -- api_tokens gains kind (api, cli_access, cli_admin) and cli_session_id. A CLI token belongs to its
 -- session and stops authenticating when the session ends (the token read joins it), and a personal
@@ -43,7 +49,8 @@ CREATE TABLE IF NOT EXISTS cli_sessions (
     last_refresh_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     expires_at          TIMESTAMPTZ NOT NULL,
     ended_at            TIMESTAMPTZ,
-    end_reason          TEXT CHECK (end_reason IN ('signed_out', 'revoked', 'sessions_cut', 'reuse_detected', 'expired', 'idle', 'deactivated'))
+    end_reason          TEXT CHECK (end_reason IN ('signed_out', 'revoked', 'sessions_cut', 'reuse_detected', 'expired', 'idle', 'deactivated')),
+    CONSTRAINT cli_sessions_end_pair CHECK ((ended_at IS NULL) = (end_reason IS NULL))
 );
 
 CREATE INDEX IF NOT EXISTS cli_sessions_live_principal_idx ON cli_sessions (principal) WHERE ended_at IS NULL;
@@ -77,7 +84,8 @@ CREATE TABLE IF NOT EXISTS cli_sign_ins (
     code_sha256      TEXT,
     code_expires_at  TIMESTAMPTZ,
     redeemed_at      TIMESTAMPTZ,
-    CHECK (admin = (session_id IS NOT NULL))
+    CHECK (admin = (session_id IS NOT NULL)),
+    CONSTRAINT cli_sign_ins_loopback_port CHECK ((mode = 'loopback') = (port IS NOT NULL))
 );
 
 CREATE INDEX IF NOT EXISTS cli_sign_ins_expires_at_idx ON cli_sign_ins (expires_at);
@@ -85,5 +93,7 @@ CREATE INDEX IF NOT EXISTS cli_sign_ins_expires_at_idx ON cli_sign_ins (expires_
 ALTER TABLE api_tokens ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'api'
     CHECK (kind IN ('api', 'cli_access', 'cli_admin'));
 ALTER TABLE api_tokens ADD COLUMN IF NOT EXISTS cli_session_id UUID REFERENCES cli_sessions (id) ON DELETE CASCADE;
+ALTER TABLE api_tokens DROP CONSTRAINT IF EXISTS api_tokens_cli_session_kind;
+ALTER TABLE api_tokens ADD CONSTRAINT api_tokens_cli_session_kind CHECK ((kind = 'api') = (cli_session_id IS NULL));
 
 CREATE INDEX IF NOT EXISTS api_tokens_cli_session_idx ON api_tokens (cli_session_id) WHERE cli_session_id IS NOT NULL;

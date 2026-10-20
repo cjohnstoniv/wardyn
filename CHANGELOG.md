@@ -16,8 +16,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   AWS refused cannot be marked, read or cleared, so replicas do not share that mark.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
   `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE` on `cli_sessions` and
-  `cli_sign_ins` (migration `0198_cli_sign_in`, which also adds `kind` and `cli_session_id` to `api_tokens`). Without
-  it every API token read fails, because a token's liveness now reads `cli_sessions`.
+  `SELECT, INSERT, UPDATE, DELETE` on `cli_sign_ins` (migration `0198_cli_sign_in`, which also adds `kind` and
+  `cli_session_id` to `api_tokens`). Without it every API token read fails, because a token's liveness now reads
+  `cli_sessions`.
 
 ### Added
 

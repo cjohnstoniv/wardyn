@@ -1803,6 +1803,8 @@ Moved to [custom-components.md](operations/custom-components.md#custom-component
 
 Moved to [api-tokens.md](operations/api-tokens.md#per-user-api-tokens-stop-sharing-the-admin-token).
 
+CLI sign-in: `WARDYN_CLI_SIGN_IN` is off by default and needs SSO. On, `wardyn login` signs a CLI in through the console with a device-bound session that renews a 1-hour token ([api-tokens.md](operations/api-tokens.md#cli-sign-in-wardyn-login)); while it is off, the CLI keeps using `WARDYN_TOKEN`.
+
 ### Tokens for a person who never signs in
 
 Moved to [api-tokens.md](operations/api-tokens.md#tokens-for-a-person-who-never-signs-in).

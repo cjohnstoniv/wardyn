@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -705,5 +706,118 @@ func TestPG_CLISession_AccessTokenLivesAnHour(t *testing.T) {
 	g2 := decodeJSON[types.CLISessionGrant](t, cl.refresh(g.SessionID, g.Secret))
 	if g2.AccessExpiresAt.Sub(e.clock) != 30*time.Minute {
 		t.Fatalf("refreshed access token = %+v, want 30 min from the refresh", g2)
+	}
+}
+
+// /healthz reports whether CLI sign-in works here, not the raw switch: WARDYN_CLI_SIGN_IN on with no SSO
+// is off (every route a 404), and paste-back is on only when sign-in is.
+func TestPG_CLISignIn_HealthzNeedsSSO(t *testing.T) {
+	for _, c := range []struct {
+		name      string
+		sso, want bool
+	}{{"with SSO", true, true}, {"without SSO", false, false}} {
+		t.Run(c.name, func(t *testing.T) {
+			e := newCLIEnv(t, func(cfg *Config) {
+				cfg.CLISignIn.Paste = true
+				if !c.sso {
+					cfg.OIDC = nil
+				}
+			})
+			body := e.req(http.MethodGet, "/healthz", "", nil, "", "", "").Body.String()
+			for _, key := range []string{"cli_sign_in", "cli_paste_sign_in"} {
+				if want := fmt.Sprintf(`"%s":%v`, key, c.want); !strings.Contains(body, want) {
+					t.Errorf("/healthz %s with the switches on = %s, want %s", c.name, body, want)
+				}
+			}
+			code := e.req(http.MethodPost, "/api/v1/cli/sign-ins", "", nil, "", "", e.client().createBody(nil)).Code
+			if (code == http.StatusCreated) != c.want {
+				t.Errorf("POST /cli/sign-ins %s = %d, want created %v", c.name, code, c.want)
+			}
+		})
+	}
+}
+
+func liveSessionTokens(t *testing.T, e *cliEnv, session uuid.UUID) int {
+	t.Helper()
+	var n int
+	if err := e.pool.QueryRow(context.Background(), `SELECT count(*) FROM api_tokens
+		WHERE cli_session_id = $1 AND kind = 'cli_access' AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())`,
+		session).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// A refresh revokes the access token it replaces, so ten refreshes leave one live access token.
+func TestPG_CLISession_RotationKeepsOneLiveToken(t *testing.T) {
+	e := newCLIEnv(t)
+	c, g := e.signIn(e.user, nil)
+	for i := 0; i < 10; i++ {
+		e.advance(time.Minute)
+		w := c.refresh(g.SessionID, g.Secret)
+		if w.Code != http.StatusOK {
+			t.Fatalf("refresh %d = %d %s", i+1, w.Code, w.Body)
+		}
+		g = decodeJSON[types.CLISessionGrant](t, w)
+	}
+	if n := liveSessionTokens(t, e, g.SessionID); n != 1 {
+		t.Fatalf("live access tokens after 10 refreshes = %d, want 1", n)
+	}
+}
+
+// The access token a refresh rotated past is refused as a bearer at once; the new one works.
+func TestPG_CLISession_RotatedPastTokenRefused(t *testing.T) {
+	e := newCLIEnv(t)
+	c, g := e.signIn(e.user, nil)
+	e.advance(time.Minute)
+	g2 := decodeJSON[types.CLISessionGrant](t, c.refresh(g.SessionID, g.Secret))
+	if code, _ := e.me(g.AccessToken); code != http.StatusUnauthorized {
+		t.Fatalf("the rotated-past access token = %d as a bearer, want 401", code)
+	}
+	if code, _ := e.me(g2.AccessToken); code != http.StatusOK {
+		t.Fatalf("the new access token = %d, want 200", code)
+	}
+}
+
+// A rotation is count-neutral under the 20-token cap: a person with 19 personal tokens and one CLI
+// session (20 live) still refreshes.
+func TestPG_CLISession_RefreshAtTheTokenCap(t *testing.T) {
+	e := newCLIEnv(t)
+	for i := 0; i < apiTokenMaxPerPrincipal-1; i++ {
+		if _, err := e.pg.CreateAPIToken(context.Background(), types.APIToken{ID: uuid.New(), Principal: "sub-user", Email: "user@corp.example",
+			Role: oidc.RoleUser, UserType: types.UserTypeStandard, Name: fmt.Sprintf("ci-%d", i)}, "wdn_"+uuid.NewString()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c, g := e.signIn(e.user, nil)
+	e.advance(time.Minute)
+	if w := c.refresh(g.SessionID, g.Secret); w.Code != http.StatusOK {
+		t.Fatalf("refresh at %d live tokens = %d %s, want 200", apiTokenMaxPerPrincipal, w.Code, w.Body)
+	}
+}
+
+// A session that ends between a refresh's read and its rotation is a refused refresh (reason ended),
+// not a reuse.
+func TestPG_CLISession_EndedDuringRefreshIsNotReuse(t *testing.T) {
+	e := newCLIEnv(t)
+	c, g := e.signIn(e.user, nil)
+	e.advance(time.Minute)
+	e.rev.setLateCheck(func() {
+		if _, err := e.pool.Exec(context.Background(), `UPDATE cli_sessions SET ended_at = now(), end_reason = 'signed_out' WHERE id = $1`, g.SessionID); err != nil {
+			t.Error(err)
+		}
+	})
+	wantCLIReason(t, c.refresh(g.SessionID, g.Secret), http.StatusUnauthorized, reasonCLISessionInvalid)
+	events := e.h.audit.snapshot()
+	for _, ev := range events {
+		if ev.Action == "cli.session.reuse_detected" {
+			t.Fatalf("a session ended during its refresh wrote reuse_detected: %s", ev.Data)
+		}
+	}
+	if ev := lastAuditEvent(t, events, "cli.session.refresh_refused"); !strings.Contains(string(ev.Data), `"reason":"ended"`) {
+		t.Fatalf("refresh_refused = %s, want reason ended", ev.Data)
+	}
+	if got, _ := e.pg.GetCLISession(context.Background(), g.SessionID); got.EndReason != types.CLISessionEndSignedOut {
+		t.Fatalf("session = %+v, want it to keep its own end reason", got)
 	}
 }

@@ -4,6 +4,8 @@
 package main
 
 import (
+	"bytes"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -44,5 +46,32 @@ func TestCLISignInFlags(t *testing.T) {
 	want := api.CLISignInConfig{Enabled: true, Paste: true, FileStoreOff: true, SessionTTL: 48 * time.Hour, Origin: "https://wardyn.corp.example/wardyn"}
 	if cfg != want {
 		t.Fatalf("config = %+v, want %+v", cfg, want)
+	}
+}
+
+// Boot warns when WARDYN_CLI_SIGN_IN is on without SSO, the one case where the switch is silently off.
+func TestCLISignInWarnsWithoutSSO(t *testing.T) {
+	on, off := true, false
+	for _, tc := range []struct {
+		name       string
+		enabled    *bool
+		sso, warns bool
+	}{
+		{"on without SSO", &on, false, true},
+		{"on with SSO", &on, true, false},
+		{"off without SSO", &off, false, false},
+		{"unregistered", nil, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			prev := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+			t.Cleanup(func() { slog.SetDefault(prev) })
+			cliSignInFlags{enabled: tc.enabled}.warnWithoutSSO(tc.sso)
+			out := buf.String()
+			if warned := strings.Contains(out, "level=WARN") && strings.Contains(out, "WARDYN_CLI_SIGN_IN is set but SSO is not configured"); warned != tc.warns {
+				t.Errorf("warned = %v, want %v; log: %q", warned, tc.warns, out)
+			}
+		})
 	}
 }

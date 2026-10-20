@@ -537,7 +537,7 @@ func (s *Server) apiTokenCapReached(w http.ResponseWriter, r *http.Request, prin
 	}
 	live := 0
 	for _, e := range existing {
-		if e.RevokedAt == nil && (e.ExpiresAt == nil || e.ExpiresAt.After(s.cfg.Now())) {
+		if e.RevokedAt == nil && (e.ExpiresAt == nil || e.ExpiresAt.After(s.cfg.Now())) && !replacedByRotation(r.Context(), e) {
 			live++
 		}
 	}

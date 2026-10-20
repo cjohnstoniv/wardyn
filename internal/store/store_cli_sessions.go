@@ -7,9 +7,11 @@ package store
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -104,7 +106,7 @@ type CLISessionRow struct {
 
 // CLISecretMatches reports whether secret is the session's current one.
 func (r CLISessionRow) CLISecretMatches(secret string) bool {
-	return hashToken(secret) == r.SecretSHA256
+	return subtle.ConstantTimeCompare([]byte(hashToken(secret)), []byte(r.SecretSHA256)) == 1
 }
 
 const cliSignInCols = `id, user_code, challenge, COALESCE(port, 0), machine, public_key, mode, store, admin, session_id,
@@ -133,6 +135,9 @@ func scanCLISignIn(row pgx.Row) (CLISignIn, error) {
 	return si, nil
 }
 
+// cliSignInPruneBatch bounds how many long-expired sign-in requests one create deletes.
+const cliSignInPruneBatch = 100
+
 // CreateCLISignIn inserts si, timed from now. The pending cap is read in the same statement.
 //
 // ponytail: two concurrent creates can both pass the count and overshoot the cap by one each; it
@@ -142,7 +147,12 @@ func (s PG) CreateCLISignIn(ctx context.Context, si CLISignIn, maxPending int, n
 	if si.Port != 0 {
 		port = &si.Port
 	}
+	// Each create also deletes up to cliSignInPruneBatch requests that expired over an hour ago, so the
+	// table holds about the last hour of sign-ins without a sweep of its own.
 	tag, err := s.Pool.Exec(ctx, `
+		WITH pruned AS (
+			DELETE FROM cli_sign_ins WHERE id IN (
+				SELECT id FROM cli_sign_ins WHERE expires_at < $12::timestamptz - interval '1 hour' LIMIT `+strconv.Itoa(cliSignInPruneBatch)+`))
 		INSERT INTO cli_sign_ins (id, user_code, challenge, port, machine, public_key, mode, store, admin, session_id, request_addr, created_at, expires_at)
 		SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
 		WHERE (SELECT count(*) FROM cli_sign_ins WHERE expires_at > $12 AND redeemed_at IS NULL AND decision IS DISTINCT FROM 'denied') < $14`,
@@ -281,6 +291,13 @@ func (s PG) RotateCLISession(ctx context.Context, id uuid.UUID, generation int64
 		}
 		if tag.RowsAffected() != 1 {
 			return ErrConflict
+		}
+		// The new access token replaces the old: a session holds one live cli_access token, so a
+		// rotation is count-neutral under the per-person token cap and a rotated-past token stops at
+		// once. A cli_admin step-up keeps its own hour.
+		if _, err := tx.Exec(ctx, `UPDATE api_tokens SET revoked_at = clock_timestamp()
+			WHERE cli_session_id = $1 AND kind = 'cli_access' AND revoked_at IS NULL`, id); err != nil {
+			return fmt.Errorf("store: revoke rotated cli token: %w", err)
 		}
 		out, err = s.insertAPIToken(ctx, tx, tok, raw)
 		return err

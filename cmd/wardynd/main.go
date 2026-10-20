@@ -368,6 +368,7 @@ func run() error {
 	}
 	warnPublicAPIDisabled(*f.adminToken, lm.enabled, feats.authn != nil)
 	warnGovernAdminRunsUnbound(*f.governAdminRuns, feats.authn != nil)
+	f.cliSignIn.warnWithoutSSO(feats.authn != nil)
 
 	// MEMBER-MODE DESKTOP posture (validateHybridPosture already ran above,
 	// beside validateConfig). Checked here, not there, because both of its

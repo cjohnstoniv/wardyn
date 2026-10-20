@@ -311,6 +311,7 @@ func (s *Server) cliSessionCutsPass(w http.ResponseWriter, r *http.Request, sess
 
 // rotateCLISession is a refresh that passed: a new secret and a new access token, written together.
 func (s *Server) rotateCLISession(w http.ResponseWriter, r *http.Request, sess store.CLISessionRow, now time.Time) {
+	r = r.WithContext(withCLIRotation(r.Context(), sess.ID))
 	tok, mr, ok := s.mintCLIToken(w, r, sess.Identity, now, types.APITokenKindCLIAccess, sess.Machine, sess.ID,
 		min(s.cliAccessLife(), sess.ExpiresAt.Sub(now)))
 	if !ok {
@@ -319,7 +320,7 @@ func (s *Server) rotateCLISession(w http.ResponseWriter, r *http.Request, sess s
 	secret, raw := newBearer(types.CLISessionSecretPrefix), newBearer(apiTokenPrefix)
 	created, err := s.cliStore().RotateCLISession(guardOwner(mr.Context(), sess.Identity.Principal), sess.ID, sess.Generation, secret, now, tok, raw)
 	if errors.Is(err, store.ErrConflict) {
-		s.cliReuseDetected(w, r, sess, now)
+		s.rotateConflict(w, r, sess.ID, now)
 		return
 	}
 	if err != nil {
@@ -328,6 +329,21 @@ func (s *Server) rotateCLISession(w http.ResponseWriter, r *http.Request, sess s
 	}
 	writeJSON(w, http.StatusOK, s.cliGrantTimes(types.CLISessionGrant{SessionID: sess.ID, Secret: secret, AccessToken: raw,
 		Kind: created.Kind, AccessExpiresAt: *tok.ExpiresAt}, sess.ExpiresAt, now, sess.Store))
+}
+
+// rotateConflict answers a rotation whose compare-and-set lost: the session ended (or expired) since it
+// was read, which is a refused refresh, or another refresh moved its secret on, which is a reuse.
+func (s *Server) rotateConflict(w http.ResponseWriter, r *http.Request, id uuid.UUID, now time.Time) {
+	sess, err := s.cliStore().GetCLISession(r.Context(), id)
+	if err != nil {
+		cliWriteFailed(w, r, err, cliSessionInvalid)
+		return
+	}
+	if reason := s.cliSessionEnded(sess, now); reason != "" {
+		s.refuseRefresh(w, r, sess, reason, now)
+		return
+	}
+	s.cliReuseDetected(w, r, sess, now)
 }
 
 // handleListCLISessions is GET /api/v1/me/cli-sessions: the caller's live CLI sessions, never a secret.
@@ -395,4 +411,18 @@ func (s *Server) liveCLISessions(ctx context.Context, name string) int {
 		slog.WarnContext(ctx, "api: count cli sessions for a session.revoke row failed", "error", err)
 	}
 	return n
+}
+
+type cliRotationKey struct{}
+
+// withCLIRotation marks a mint as session's rotation: its new access token replaces the one the
+// session holds (RotateCLISession revokes it), so the per-person cap does not count that one.
+func withCLIRotation(ctx context.Context, session uuid.UUID) context.Context {
+	return context.WithValue(ctx, cliRotationKey{}, session)
+}
+
+// replacedByRotation reports whether t is the access token the mint on ctx replaces.
+func replacedByRotation(ctx context.Context, t types.APIToken) bool {
+	session, ok := ctx.Value(cliRotationKey{}).(uuid.UUID)
+	return ok && t.Kind == types.APITokenKindCLIAccess && t.CLISessionID != nil && *t.CLISessionID == session
 }

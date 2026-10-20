@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -212,5 +213,55 @@ func TestPG_CLISession_LoginRestampsLiveSessions(t *testing.T) {
 	got, err := st.GetCLISession(ctx, sess.ID)
 	if err != nil || got.Identity.Role != "user" || len(got.Identity.Groups) != 1 || time.Since(got.IdentityStampedAt) > time.Minute {
 		t.Fatalf("session after a sign-in = %+v, %v; want the new role, groups and a fresh stamp", got, err)
+	}
+}
+
+// The three named cross-column CHECKs of migration 0198 refuse a row that breaks its pairing: a CLI token
+// with no session, an ended session with no reason, a loopback sign-in with no port.
+func TestPG_CLISession_CrossColumnChecks(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	ctx := context.Background()
+	for constraint, sql := range map[string]string{
+		"api_tokens_cli_session_kind": `INSERT INTO api_tokens (id, principal, email, role, user_type, name, token_sha256, kind)
+			VALUES (gen_random_uuid(), 'sub-orphan', 'orphan@corp.example', 'user', 'standard', 'CLI: laptop', md5(random()::text), 'cli_access')`,
+		"cli_sessions_end_pair": `INSERT INTO cli_sessions (id, principal, email, role, user_type, machine, store, public_key, secret_sha256, expires_at, ended_at)
+			VALUES (gen_random_uuid(), 'sub-orphan', 'orphan@corp.example', 'user', 'standard', 'laptop', 'keychain', decode(repeat('00', 32), 'hex'),
+			        md5(random()::text), now() + interval '1 day', now())`,
+		"cli_sign_ins_loopback_port": `INSERT INTO cli_sign_ins (id, user_code, challenge, machine, public_key, mode, store, request_addr, expires_at)
+			VALUES (gen_random_uuid(), 'ABCD-EFGH', 'c', 'laptop', decode(repeat('00', 32), 'hex'), 'loopback', 'keychain', '192.0.2.1', now() + interval '10 minutes')`,
+	} {
+		_, err := pool.Exec(ctx, sql)
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != "23514" || pgErr.ConstraintName != constraint {
+			t.Errorf("a row breaking %s = %v, want check_violation on %s", constraint, err, constraint)
+		}
+	}
+}
+
+// A create deletes requests that expired over an hour ago, and keeps a request that expired less than an
+// hour ago and one still waiting.
+func TestPG_CLISignIn_CreatePrunesLongExpiredRequests(t *testing.T) {
+	st := store.NewPG(runsPGPoolIsolated(t))
+	ctx := context.Background()
+	now := time.Now().UTC()
+	at := func(created time.Time) uuid.UUID {
+		t.Helper()
+		id := uuid.New()
+		if ok, err := st.CreateCLISignIn(ctx, store.CLISignIn{ID: id, UserCode: "ABCD-EFGH", Challenge: "c", Port: 4711, Machine: "laptop",
+			PublicKey: cliTestKey(t), Mode: types.CLISignInModeLoopback, Store: types.CLIStoreKeychain, RequestAddr: "10.0.0.1"}, 1000, created); !ok || err != nil {
+			t.Fatalf("create = %v, %v", ok, err)
+		}
+		return id
+	}
+	old := at(now.Add(-2 * time.Hour))       // expired 1 h 50 min ago
+	recent := at(now.Add(-30 * time.Minute)) // expired 20 min ago
+	waiting := at(now)                       // the create that prunes
+	if _, err := st.GetCLISignIn(ctx, old); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("a request expired over an hour ago = %v, want pruned", err)
+	}
+	for name, id := range map[string]uuid.UUID{"expired 20 min ago": recent, "waiting": waiting} {
+		if _, err := st.GetCLISignIn(ctx, id); err != nil {
+			t.Errorf("the request %s = %v, want kept", name, err)
+		}
 	}
 }
