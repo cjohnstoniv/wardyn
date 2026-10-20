@@ -219,7 +219,7 @@ export const NR_TOOLS = {
   MCP_REFUSED: (harness: string | number, server: string | number) =>
     `${harness} can't apply rules for ${server}'s tools, so this run would be refused. Turn ${server} off for ${harness}, or remove its rules for ${harness}.`,
   CODEX_NOTE_REMOTE:
-    "Codex CLI can't pause a tool call for approval, and Wardyn can't block its own tools. Rules for its remote MCP tools are enforced by the proxy.",
+    "Rules for Codex CLI's remote MCP tools are enforced by the proxy.",
   CC_INTRO:
     "Bundle the hosts and secrets one tool needs, so you can reuse it. Saved components appear under Add tools and access next time.",
   CC_NAME: "Name",

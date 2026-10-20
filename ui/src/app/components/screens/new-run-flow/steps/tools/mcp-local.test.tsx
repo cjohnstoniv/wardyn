@@ -303,6 +303,17 @@ describe("Harness setup", () => {
     expect(screen.getAllByText("Wardyn can't block Codex CLI's own tools. Rules for its remote MCP tools still apply.").length).toBeGreaterThan(0);
   });
 
+  it("states each Codex CLI limit once beside the remote note while local servers are on", () => {
+    on();
+    show();
+    const codex = card("Codex CLI");
+    expect(codex.getByText("Rules for Codex CLI's remote MCP tools are enforced by the proxy.")).toBeTruthy();
+    expect(codex.getAllByText("Codex CLI can't pause a tool call for approval.")).toHaveLength(1);
+    expect(codex.getAllByText("Wardyn can't block Codex CLI's own tools. Rules for its remote MCP tools still apply.")).toHaveLength(1);
+    expect(codex.getAllByText(/can't pause a tool call/)).toHaveLength(1);
+    expect(codex.getAllByText(/can't block Codex CLI's own tools/)).toHaveLength(1);
+  });
+
   it("keeps the golden's sentence in the rule dialog with the switch off", async () => {
     show();
     await userEvent.click(card("Codex CLI").getByRole("button", { name: NR_TOOLS.ADD_RULE }));
