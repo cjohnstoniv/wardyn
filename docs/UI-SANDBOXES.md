@@ -231,8 +231,8 @@ export WARDYN_AGENT_IMAGES='{"vscode":"wardyn/agent-vscode:local"}'
 ```
 
 - It is an ordinary interactive run: the gates above, `deny_interactive` and `deny_ui_apps` all apply.
-- The command starts once at boot and stops with the run; it is not restarted.
-- With no launcher, the gateway waits up to 20s for a seeded run's port before the 502 below.
+- The command starts once, after the workspace is prepared, in the run's terminal session (attach shows its output); it stops with the run and is not restarted if it exits. A revive starts it again.
+- With no launcher, the gateway waits up to 20s for a seeded run's port before the 502 below. The wait counts from when the app is opened, so an open during a long workspace preparation can still show the error.
 
 ## 3. Open an app
 
