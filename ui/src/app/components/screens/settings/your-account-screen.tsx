@@ -34,6 +34,7 @@ import { MyComponentsCard } from "./my-components-card";
 import { MyRunnerAndPoolsCards } from "./my-pools-card";
 import { InvitationsCard } from "./invitations-card";
 import { ServiceIdentitiesCard } from "./service-identities-card";
+import { SignedInClisCard } from "./signed-in-clis-card";
 import { SshKeysPane } from "../ssh-keys";
 import { ErrorState, TableSkeleton } from "../../wardyn/states";
 
@@ -77,6 +78,9 @@ export function YourAccountScreen() {
               nothing while runners are off. */}
           {!adminView && <MyRunnerAndPoolsCards />}
           <SshKeysPane heading="h3" />
+          {/* ATT-LOGIN-UI: the computers signed in with the Wardyn CLI, each with its own Sign out. Absent where
+              CLI sign-in is not served. */}
+          <SignedInClisCard />
           {/* #1508: the service identities this person sponsors, and their tokens. Renders nothing for a
               person who sponsors none. */}
           <ServiceIdentitiesCard />
