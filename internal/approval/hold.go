@@ -30,9 +30,9 @@ func Hold(ap types.ApprovalRequest, now time.Time) (held bool, until time.Time) 
 	if TallyKey(ap) == TallyToolCallADO {
 		return boundedHold(holdStart(ap), now, types.HoldWindowADOCapability)
 	}
-	// PENDING alone is live for both of these, at any age: only the row's own server-side
+	// PENDING alone is live for these, at any age (a takeover request: the agent is waiting): only the row's own server-side
 	// expiry (approval.ExpireStale) ends it — no client-side ceiling belongs here.
-	if ap.Kind == types.ApprovalToolCall || ap.Kind == types.ApprovalCredentialReauth {
+	if ap.Kind == types.ApprovalToolCall || ap.Kind == types.ApprovalCredentialReauth || ap.Kind == types.ApprovalHumanTakeover {
 		return true, time.Time{}
 	}
 	// push_content is a SHORT proxy hold, unlike tool_call/credential_reauth's unconditional

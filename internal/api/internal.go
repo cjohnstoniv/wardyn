@@ -384,7 +384,7 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 		return
 	}
 	switch body.Kind {
-	case types.ApprovalEgressDomain, types.ApprovalToolCall, types.ApprovalPushContent:
+	case types.ApprovalEgressDomain, types.ApprovalToolCall, types.ApprovalPushContent, types.ApprovalHumanTakeover:
 		// Sidecars may only raise egress/tool/held-push approvals. credential
 		// approvals are created by the broker mint path, never by an untrusted
 		// sidecar.
@@ -432,6 +432,13 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 		writeJSON(w, http.StatusOK, ap)
 		return
 	}
+	if body.Kind == types.ApprovalHumanTakeover {
+		var ok bool
+		if body.RequestedScope, ok = takeoverScopeOf(body.RequestedScope); !ok {
+			writeErrorReason(w, http.StatusBadRequest, reasonInternalApprovalRequestInvalid, "invalid approval request")
+			return
+		}
+	}
 	if body.Kind == types.ApprovalPushContent {
 		var ok bool
 		if body.RequestedScope, ok = s.admitPushContentRaise(w, r, claims, body.RequestedScope, body.PathList); !ok {
@@ -464,6 +471,9 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 	}
 	if body.PathList != nil && !s.recordPushPathList(w, r, claims, created, *body.PathList) {
 		return
+	}
+	if created.Kind == types.ApprovalHumanTakeover && created.LastRejoinedAt == nil {
+		s.auditTakeoverRequest(r.Context(), claims.SPIFFEID, created)
 	}
 	writeJSON(w, http.StatusCreated, created)
 }
@@ -558,7 +568,7 @@ func (s *Server) handleInternalExpireApproval(w http.ResponseWriter, r *http.Req
 		writeServerError(w, r, "get approval", err)
 		return
 	}
-	if ap.RunID != claims.RunID || ap.Kind != types.ApprovalToolCall || ap.GrantID != nil {
+	if ap.RunID != claims.RunID || (ap.Kind != types.ApprovalToolCall && ap.Kind != types.ApprovalHumanTakeover) || ap.GrantID != nil {
 		// Do not confirm existence of another run's approval, or of an
 		// approval this route was never meant to touch.
 		writeErrorReason(w, http.StatusNotFound, reasonApprovalNotFound, "approval not found")

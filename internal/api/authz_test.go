@@ -864,6 +864,10 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/approvals/{id}/approve":    {class: classOwner, entity: entityApproval, ownerTier: tierSecurity},
 	"POST /api/v1/approvals/{id}/deny":       {class: classOwner, entity: entityApproval, ownerTier: tierSecurity},
 	"GET /api/v1/approvals/{id}/paths":       {class: classOwner, entity: entityApproval, ownerTier: tierSecurity},
+	// #2963: answering a "Needs you" request is interactive entry to its run (admitRunEntry).
+	"POST /api/v1/approvals/{id}/take-over": {class: classOwner, entity: entityApproval, ownerTier: tierEntry},
+	"POST /api/v1/approvals/{id}/hand-back": {class: classOwner, entity: entityApproval, ownerTier: tierEntry},
+	"POST /api/v1/approvals/{id}/decline":   {class: classOwner, entity: entityApproval, ownerTier: tierEntry},
 
 	// GET /runs/{id}/attach (the interactive PTY WebSocket) is a SPECIAL case:
 	// its ticket-LESS fallback lane (ticketOrHumanAuth) is plain admin-only
@@ -1671,9 +1675,10 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// DELETE /me/components/{id}; 33 since 0.9 added GET
 		// /workspaces/{id}/branches; 34 since 0.9 added GET
 		// /runs/{id}/launch-intent; 35 since 0.9.3 added GET
-		// /runs/{id}/containment.
-		if probed != 35 {
-			t.Errorf("probed %d classOwner routes, want 35 — a route that left classOwner takes its tier "+
+		// /runs/{id}/containment; 38 since #2963 added POST
+		// /approvals/{id}/take-over, hand-back and decline.
+		if probed != 38 {
+			t.Errorf("probed %d classOwner routes, want 38 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})

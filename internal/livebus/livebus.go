@@ -44,6 +44,9 @@ const (
 	KindAttachEvict = "attach_evict"
 	// KindAttachFree: a run's attach lease was released; observers queued on any replica may take it.
 	KindAttachFree = "attach_free"
+	// KindRecordingGap: a run's recording paused or resumed for a "Needs you" takeover; the recorder
+	// holding the run's screen or terminal stops or restarts frames.
+	KindRecordingGap = "recording_gap"
 )
 
 // Message is one notice.

@@ -93,6 +93,9 @@ const (
 	reasonApprovalRunEnded             = "approval_run_ended"              // the run ended before the approval was decided; it was auto-cancelled
 	reasonCredentialReauthNotDecidable = "credential_reauth_not_decidable" // a credential-reauth approval is resolved by signing in again, not Approve/Deny
 	reasonDecisionScopeInvalidForKind  = "decision_scope_invalid_for_kind" // decision_scope was sent on an approval kind that does not accept one
+	reasonTakeoverNotDecidable         = "takeover_not_decidable"          // a takeover request is answered by taking over or declining, not Approve/Deny
+	reasonNotATakeoverRequest          = "not_a_takeover_request"          // take over, hand back or decline named an approval of another kind
+	reasonTakeoverNotHolder            = "takeover_not_holder"             // hand back by someone who does not have control
 	reasonApprovalAlreadyDecided       = "approval_already_decided"        // the approval was already approved or denied
 	reasonInvalidRequestBody           = "invalid_request_body"            // the JSON body did not decode
 	reasonInvalidViewParam             = "invalid_view_param"              // ?view= is not one of "", "user", "admin" (approvals AND runs listings)

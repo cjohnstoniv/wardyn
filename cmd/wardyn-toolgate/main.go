@@ -38,6 +38,9 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "needs-you" {
+		os.Exit(needsYou(os.Args[2:], os.Stderr))
+	}
 	if err := run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, "wardyn-toolgate:", err)
 		os.Exit(1)
