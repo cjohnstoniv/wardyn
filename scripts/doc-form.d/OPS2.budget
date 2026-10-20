@@ -70,7 +70,9 @@ docs/operations/console-branding.md=943 share=35
 # docs/operations/hybrid-laptops.md 4806 = ours 4767 + theirs 4756 - base 4717 at the 0.10 W3 merge of ATT-PKG onto the train.
 # 0.10 HYBB (#2982): docs/operations/hybrid-laptops.md 5145, measured: the computer-folder section, its credential list and the single-replica note.
 # docs/operations/hybrid-laptops.md 5234 = ours 4806 + theirs 5145 - base 4717 at the 0.10 W3 merge of HYBB onto the train.
-docs/operations/hybrid-laptops.md=5234 share=35
+# 0.9.6 DIAG: docs/operations/hybrid-laptops.md 4721 adds 12 over 4709, measured: the pointer to a runner behind a corporate proxy.
+# docs/operations/hybrid-laptops.md 5246 = ours 5234 + theirs 4721 - base 4709 at the 0.9.6 forward-port.
+docs/operations/hybrid-laptops.md=5246 share=35
 # docs/operations/hybrid-laptops.md 4024 adds 2 over 4022, measured: the control-plane restart row says the next restart kills an agent kept only for containment.
 # docs/operations/hybrid-laptops.md 4195 = 3926 + 269, measured: the reset section and the recording default.
 # docs/operations/hybrid-laptops.md 4380 = 4195 + 185, measured: how audit decisions reach the organisation (the decision sink), less the removed state-directory check.
