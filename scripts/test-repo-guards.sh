@@ -84,6 +84,11 @@
 #      in the same RUN, so a build proxy URL never stays in the shipped layer.
 #  24. every scripts/*-walk.sh is run by a Makefile recipe or a workflow step (a comment does not count), or is named
 #      in HAND_RUN_WALKS with the reason it cannot run on a hosted runner.
+#  25. every scripts/test-*.sh that runs `git init`, `git clone` or `git commit` turns
+#      off git's auto-maintenance (maintenance.auto and gc.auto), or its EXIT trap
+#      can lose `rm -rf` to a detached git still writing under .git (#3328).
+#  26. release.yml's CLI build targets (binaries' TARGETS), its cli-<os>-<arch> upload steps and the CLI
+#      names in its release-asset assert are one set, so a target added to one list cannot ship nothing.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -609,11 +614,21 @@ else
     # (name, dockerfile, float-latest) and preflight-green's staging step keeps
     # every part of the proof. Once R10 removes the build jobs, the promote rows
     # are the only source and the row comparison has nothing to compare.
-    promote_rows='[.jobs.promote.strategy.matrix.include[] | {"name": .name, "dockerfile": .dockerfile, "float": (.["float-latest"] // "")}] | sort_by(.name)'
+    # The promote job is one job, not a matrix: its rows are the YAML text in its
+    # IMAGES env (kept as `- name:` rows so the greps in verify-release.sh,
+    # check-image-pins.sh and gpl-source-offer.sh still read them).
+    promote_rows='[.[] | {"name": .name, "dockerfile": .dockerfile, "float": (.["float-latest"] // "")}] | sort_by(.name)'
     build_rows='[(.jobs.images.strategy.matrix.include[], .jobs["images-ui-sandbox"].strategy.matrix.include[]) | {"name": .name, "dockerfile": .dockerfile, "float": (.["float-latest"] // "")}] | sort_by(.name)'
-    promote_got="$(yq -o=json -I=0 "$promote_rows" "$REL")"
-    [ "$(yq -r '.jobs.promote.strategy.matrix.include | length' "$REL")" -gt 0 ] \
-        || { bad "$REL: the promote job has no matrix rows — guard 16 is pointing at nothing"; stage_fail=1; }
+    promote_images="$(yq -r '.jobs.promote.env.IMAGES' "$REL")"
+    promote_got="$(printf '%s\n' "$promote_images" | yq -o=json -I=0 "$promote_rows")"
+    [ "$(printf '%s\n' "$promote_images" | yq 'length')" -gt 0 ] \
+        || { bad "$REL: the promote job has no IMAGES rows — guard 16 is pointing at nothing"; stage_fail=1; }
+    # One Attest build provenance step per row (an action cannot run in a loop), each
+    # on the row's own digest: the set of steps must be exactly the set of rows.
+    prov_got="$(yq -r '.jobs.promote.steps[] | select(.uses // "" | test("^actions/attest-build-provenance@")) | .with["subject-name"] + " " + .with["subject-digest"]' "$REL" | sort)"
+    prov_want="$(printf '%s\n' "$promote_images" | yq -r '.[].name' | awk '{printf "ghcr.io/cjohnstoniv/%s ${{ fromJSON(needs.preflight-green.outputs.digests)[\047%s\047] }}\n", $1, $1}' | sort)"
+    [ "$prov_got" = "$prov_want" ] \
+        || { bad "$REL: the promote job's Attest build provenance steps do not match its IMAGES rows one for one (subject-name and digest) — got: $(echo $prov_got) wanted: $(echo $prov_want)"; stage_fail=1; }
     if [ "$(yq -r '.jobs.images | type' "$REL")" != "!!null" ]; then
         build_got="$(yq -o=json -I=0 "$build_rows" "$REL")"
         [ "$promote_got" = "$build_got" ] \
@@ -631,10 +646,22 @@ else
     # while the image jobs it keeps stay as old as they were.
     printf '%s' "$staging_run" | grep -E -- '--jq \.created_at' >/dev/null && ! printf '%s' "$staging_run" | grep 'updated_at' >/dev/null \
         || { bad "$REL: preflight-green's staging step must read the nightly run's .created_at for its age and never updated_at (a rerun refreshes updated_at, so stale images would pass)"; stage_fail=1; }
-    promote_copy="$(yq -r '.jobs.promote.steps[] | select(.name | test("^Copy the verified digest")) | .run' "$REL" | nocomment)"
+    promote_copy="$(yq -r '.jobs.promote.steps[] | select(.name | test("^Promote, sign and attest each image")) | .run' "$REL" | nocomment)"
     printf '%s' "$promote_copy" | grep -E '^[[:space:]]*cosign copy --force ' >/dev/null \
         && printf '%s' "$promote_copy" | grep -F 'test "$got" = "$DIGEST"' >/dev/null \
         || { bad "$REL: the promote job's copy step must run cosign copy --force (a final tag's :latest already exists, and cosign refuses to move it without) and then check the tag's digest equals \$DIGEST"; stage_fail=1; }
+    for pat in '^[[:space:]]*cosign sign --yes ' '^[[:space:]]*cosign attest --yes --type cyclonedx ' '^[[:space:]]*syft "registry:' 'refusing to attest it' 'set -euo pipefail; promote_one'; do
+        printf '%s' "$promote_copy" | grep -E -- "$pat" >/dev/null \
+            || { bad "$REL: the promote job's loop no longer has a command matching '$pat' — a promoted image would lose its signature, SBOM attestation, or its per-image failure isolation"; stage_fail=1; }
+    done
+    # The loop's verdict: after the FAILED summary the step must exit 1, or a failed image passes the job.
+    printf '%s' "$promote_copy" | grep -A1 -F 'echo "FAILED: ' | grep -E '^[[:space:]]*exit 1$' >/dev/null \
+        || { bad "$REL: the promote job's loop no longer runs \`exit 1\` right after its FAILED summary — a failed image would pass the job"; stage_fail=1; }
+    # One cosign initialize, before the parallel loop, so the shared TUF cache is set up once.
+    init_idx="$(yq -r '.jobs.promote.steps | to_entries[] | select(.value.run // "" | test("^cosign initialize")) | .key' "$REL" | head -1)"
+    loop_idx="$(yq -r '.jobs.promote.steps | to_entries[] | select(.value.name // "" | test("^Promote, sign and attest each image")) | .key' "$REL" | head -1)"
+    { [ -n "$init_idx" ] && [ -n "$loop_idx" ] && [ "$init_idx" -lt "$loop_idx" ]; } \
+        || { bad "$REL: the promote job must run \`cosign initialize\` in a step before the parallel loop (shared TUF cache)"; stage_fail=1; }
     if [ "$stage_fail" = 0 ]; then ok "nightly's staged rows and build steps match release.yml's publish set (names, dockerfiles, build-args, platforms, provenance, no cache), and no local-only image is staged"; fi
 fi
 
@@ -819,6 +846,60 @@ if [ -n "$orphan_walks" ]; then
     bad "walk scripts that nothing runs:${orphan_walks} — wire each into the Makefile or a workflow (nightly.yml), or add it to HAND_RUN_WALKS with the reason"
 else
     ok "every scripts/*-walk.sh has a caller or a stated reason it has none"
+fi
+
+# ── 25. throwaway repos start no background git ─────────────────────────────
+# A shell test that commits in a temp repo and removes it in an EXIT trap races
+# git's detached `maintenance run --auto`: rm -rf fails "Directory not empty"
+# (#3328, hosted run 39343470618, test-kind-follow-main.sh). A command-position
+# `git ... init|clone|commit` needs maintenance.auto and gc.auto named in the
+# same file, as a GIT_CONFIG_KEY_n export or a `git config`.
+unsilenced_git() {  # $1 = file -> prints it when it runs git init/clone/commit without the setting
+    grep -vE '^[[:space:]]*#' "$1" \
+        | grep -E '(^|[;&|(][[:space:]]*)git[[:space:]]([^|;&]*[[:space:]])?(init|clone|commit)([[:space:]]|$)' >/dev/null || return 0
+    grep -q 'maintenance\.auto' "$1" && grep -q 'gc\.auto' "$1" || printf '%s\n' "$1"
+}
+planted="$(mktemp -d)"
+printf 'git -C "$d" init -q\ngit -C "$d" commit -q -m x\n' >"$planted/bad.sh"
+printf 'export GIT_CONFIG_KEY_0=maintenance.auto GIT_CONFIG_KEY_1=gc.auto\ngit init -q\n' >"$planted/good.sh"
+printf '# git commit in a comment\necho "grep git clone x"\n' >"$planted/quiet.sh"
+selftest_fail=0
+[ -n "$(unsilenced_git "$planted/bad.sh")" ] \
+    || { bad "guard 25 self-test: a git init/commit with no maintenance setting was not caught"; selftest_fail=1; }
+[ -z "$(unsilenced_git "$planted/good.sh")" ] \
+    || { bad "guard 25 self-test: a script that sets maintenance.auto and gc.auto false-flagged"; selftest_fail=1; }
+[ -z "$(unsilenced_git "$planted/quiet.sh")" ] \
+    || { bad "guard 25 self-test: git named only in a comment or a string false-flagged"; selftest_fail=1; }
+rm -rf "$planted"
+if [ "$selftest_fail" = 0 ]; then ok "guard 25's detector catches an unsilenced git init/commit (self-test)"; fi
+loud=""
+for f in scripts/test-*.sh; do
+    [ "$f" = scripts/test-repo-guards.sh ] && continue
+    hit="$(unsilenced_git "$f")"
+    [ -z "$hit" ] || loud="$loud $hit"
+done
+if [ -n "$loud" ]; then
+    bad "shell tests that run git init/clone/commit without maintenance.auto and gc.auto off:${loud} — export GIT_CONFIG_COUNT/KEY/VALUE for maintenance.auto=false, gc.auto=0 and gc.autoDetach=false (see scripts/test-kind-follow-main.sh)"
+else
+    ok "every scripts/test-*.sh that runs git init/clone/commit turns auto-maintenance off"
+fi
+
+# ── 26. release.yml's CLI targets, upload steps and asserted assets agree ────
+# The binaries job builds every TARGETS entry in one step, but each target has its
+# own fixed upload step and its own line in the release-asset assert. A target in
+# one list and not the others builds a CLI that never ships, or fails only on the
+# tag. Windows ships wardyn-windows-<arch>.exe.
+cli_targets="$(sed -n 's/^ *TARGETS: "\(.*\)"$/\1/p' "$REL" | tr ' ' '\n' | sed '/^$/d; s#/#-#' | sort)"
+cli_uploads="$(sed -n 's/^ *name: cli-\([a-z0-9]*-[a-z0-9]*\)$/\1/p' "$REL" | sort)"
+cli_asserted="$(sed -n '/Assert every required asset actually landed/,/done$/p' "$REL" \
+    | grep -oE 'wardyn-(linux|darwin|windows)-[a-z0-9]+(\.exe)?' | sed 's/^wardyn-//' | sort -u)"
+cli_want_assert="$(printf '%s\n' "$cli_targets" | sed '/^windows-/s/$/.exe/' | sort)"
+if [ -z "$cli_targets" ]; then
+    bad "release.yml: no binaries TARGETS line found — guard 26 checks nothing"
+elif [ "$cli_uploads" != "$cli_targets" ] || [ "$cli_asserted" != "$cli_want_assert" ]; then
+    bad "release.yml: CLI TARGETS ($(echo $cli_targets)) != upload steps cli-* ($(echo $cli_uploads)) or asserted assets ($(echo $cli_asserted)); a target needs its cli-<os>-<arch> upload step and its wardyn-<os>-<arch> (.exe on windows) assert line"
+else
+    ok "release.yml's $(echo "$cli_targets" | wc -l) CLI targets each have an upload step and an asserted release asset"
 fi
 
 if [ "$fail" = 0 ]; then echo "--- test-repo-guards: PASS ---"; else echo "--- test-repo-guards: FAIL ---"; fi

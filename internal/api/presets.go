@@ -245,7 +245,7 @@ func (s *Server) validatePresetRequest(w http.ResponseWriter, r *http.Request, n
 		return false
 	}
 	if req.Request.InlinePolicy != nil {
-		if err := validatePolicySpec(*req.Request.InlinePolicy); err != nil {
+		if err := validateAuthoredPolicySpec(*req.Request.InlinePolicy); err != nil {
 			writeErrorReason(w, http.StatusBadRequest, specRefusalReason(err, reasonPresetRequestInvalid), "request: invalid inline_policy: "+err.Error())
 			return false
 		}
@@ -350,6 +350,9 @@ func (s *Server) decodeRunRequest(w http.ResponseWriter, r *http.Request, req *c
 	// for the placement gate to refuse.
 	if id, err := uuid.Parse(req.RunnerID); err == nil {
 		req.RunnerID = id.String()
+	}
+	if s.multiAgentTasksOffRefusal(*req).write(s, w, r) {
+		return false
 	}
 	// After the preset, which can bring its own request: a new client's carriers
 	// are refused or projected onto the legacy fields here, before any gate reads them.

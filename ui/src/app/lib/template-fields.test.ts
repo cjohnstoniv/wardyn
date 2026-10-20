@@ -88,9 +88,14 @@ describe("template field registry", () => {
     expect(templateFieldRule("title")?.excluded).toBe("launch");
     expect(TEMPLATE_POLICY_FIELDS.filter((r) => r.excluded)).toEqual([]);
     expect(TEMPLATE_NESTED_EXCLUDED.map((e) => e.path)).toEqual([
+      "GrantSpec.owner_only_refs",
+      "IncludedTool.task",
       "LLMInspectionSpec.workspace_secret_values",
+      "RunLocalFolder.direction",
       "RunLocalFolder.name",
+      "RunLocalFolder.path",
       "RunLocalFolder.remote_dir",
+      "RunLocalFolder.runner_id",
     ]);
     expect(TEMPLATE_NESTED_CARRIED.LLMInspectionSpec).not.toContain("workspace_secret_values");
   });

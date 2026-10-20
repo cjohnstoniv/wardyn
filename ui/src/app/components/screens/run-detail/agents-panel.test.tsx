@@ -7,7 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { RunAgent, RunOutput, SetupStatus } from "../../../lib/types";
+import type { RunDetailAgent, RunOutput, SetupStatus } from "../../../lib/types";
 import { SCENARIO_HARNESSES } from "../../../lib/new-run-fixtures/scenarios/harnesses";
 import { ModelAccessProvider } from "../../wardyn/model-access-context";
 import { RUN_AGENTS } from "../../wardyn/copy";
@@ -18,7 +18,7 @@ const getMock = vi.fn();
 vi.mock("../../../lib/api/run-output", () => ({ runOutput: { get: (...a: unknown[]) => getMock(...a) } }));
 vi.mock("../../../lib/api/health", () => ({ health: { health: () => Promise.resolve({}) } }));
 
-const AGENTS: RunAgent[] = [{ agent: "claude-code" }, { agent: "codex-cli", task: "Write tests that cover the login retry path." }];
+const AGENTS: RunDetailAgent[] = [{ agent: "claude-code" }, { agent: "codex-cli", task: "Write tests that cover the login retry path." }];
 const LINES = [
   "wardyn-agents: claude-code=running codex-cli=running",
   "[claude-code] Reading tests/login.spec.ts",

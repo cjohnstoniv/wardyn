@@ -1,7 +1,7 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package main
+package foldersync
 
 import (
 	"os"
@@ -37,16 +37,16 @@ func TestSyncRemoteDir(t *testing.T) {
 		"/home/agent/work/proj/": "/home/agent/work/proj",
 		"/home/agent//x/./y":     "/home/agent/x/y",
 	} {
-		if got, err := syncRemoteDir(in); err != nil || got != want {
-			t.Errorf("syncRemoteDir(%q) = %q, %v; want %q", in, got, err, want)
+		if got, err := RemoteDir(in); err != nil || got != want {
+			t.Errorf("RemoteDir(%q) = %q, %v; want %q", in, got, err, want)
 		}
 	}
 	for _, in := range []string{
 		"work", "./work", "/", "/etc", "/home/agent", "/home/agent/", "/home/agentx/w", "/home/agent/../etc",
 		"/home/agent/work/..", "/home/agent/%d", "/home/agent/a\nb", "/home/agent/a\x7f", "/home/agent/\xff",
 	} {
-		if got, err := syncRemoteDir(in); err == nil {
-			t.Errorf("syncRemoteDir(%q) = %q, want refused", in, got)
+		if got, err := RemoteDir(in); err == nil {
+			t.Errorf("RemoteDir(%q) = %q, want refused", in, got)
 		}
 	}
 }
@@ -105,45 +105,45 @@ func TestSyncCheckLocal(t *testing.T) {
 
 func TestSyncStateStaysOutsideTheTree(t *testing.T) {
 	root := t.TempDir()
-	if err := syncStateOutside(root, filepath.Join(root, "x", "state.json")); err == nil {
+	if err := StateOutside(root, filepath.Join(root, "x", "state.json")); err == nil {
 		t.Error("a state file inside the synced directory was accepted")
 	}
-	if err := syncStateOutside(root, filepath.Join(filepath.Dir(root), "elsewhere", "state.json")); err != nil {
+	if err := StateOutside(root, filepath.Join(filepath.Dir(root), "elsewhere", "state.json")); err != nil {
 		t.Errorf("a state file outside refused: %v", err)
 	}
 	t.Setenv("HOME", root)
-	p, err := syncStatePath("run-1")
+	p, err := StatePath("run-1")
 	if err != nil || !strings.HasSuffix(filepath.ToSlash(p), ".local/state/wardyn/sync/run-1.json") {
 		t.Errorf("state path = %q, %v", p, err)
 	}
-	if err := syncStateOutside(root, p); err == nil {
+	if err := StateOutside(root, p); err == nil {
 		t.Error("syncing $HOME would put the state file in the tree")
 	}
 }
 
 func TestSyncStateRoundTripAndPairing(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "s", "state.json")
-	st, err := loadSyncState(file, "/l", "/home/agent/r")
+	st, err := LoadState(file, "/l", "/home/agent/r")
 	if err != nil || len(st.Files) != 0 {
 		t.Fatalf("fresh state: %v %+v", err, st)
 	}
-	st.Files["a"] = syncFileSeen{Local: syncSide{1, 2}, Remote: syncSide{3, 4}}
-	if err := st.save(file); err != nil {
+	st.Files["a"] = FileSeen{Local: Side{1, 2}, Remote: Side{3, 4}}
+	if err := st.Save(file); err != nil {
 		t.Fatal(err)
 	}
 	if fi, _ := os.Stat(file); fi.Mode().Perm() != 0o600 {
 		t.Errorf("state mode = %v", fi.Mode())
 	}
-	back, _ := loadSyncState(file, "/l", "/home/agent/r")
+	back, _ := LoadState(file, "/l", "/home/agent/r")
 	if !slices.Equal(keysOf(back.Files), []string{"a"}) {
 		t.Errorf("state not restored: %+v", back)
 	}
-	other, _ := loadSyncState(file, "/l2", "/home/agent/r")
+	other, _ := LoadState(file, "/l2", "/home/agent/r")
 	if len(other.Files) != 0 {
 		t.Error("state for another directory pairing was reused")
 	}
 	_ = os.WriteFile(file, []byte("{"), 0o600)
-	if _, err := loadSyncState(file, "/l", "/home/agent/r"); err == nil {
+	if _, err := LoadState(file, "/l", "/home/agent/r"); err == nil {
 		t.Error("a corrupt state file was silently ignored")
 	}
 }

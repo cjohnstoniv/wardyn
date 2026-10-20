@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"syscall"
 )
 
 // ReadSecretFile reads the secret file path that setting names and returns
@@ -25,11 +24,7 @@ func ReadSecretFile(setting, path string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s=%q is unreadable: %w", setting, path, err)
 	}
-	owner := -1
-	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
-		owner = int(st.Uid)
-	}
-	if err := CheckSecretFileMode(setting, path, fi.Mode().Perm(), owner, os.Geteuid()); err != nil {
+	if err := CheckSecretFileMode(setting, path, fi.Mode().Perm(), fileOwnerUID(fi), os.Geteuid()); err != nil {
 		return nil, err
 	}
 	raw, err := io.ReadAll(f)

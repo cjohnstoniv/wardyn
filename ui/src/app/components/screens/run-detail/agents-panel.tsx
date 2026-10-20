@@ -5,7 +5,7 @@
 
 // The Agents panel on a run with two or more agents: each agent's harness, its task and its own
 // status, then the rule for how the run ends. The status words are the run states' own.
-import type { RunAgent, RunAgentState, RunState } from "../../../lib/types";
+import type { RunDetailAgent, RunAgentState, RunState } from "../../../lib/types";
 import { RUN_AGENTS } from "../../wardyn/copy";
 import { AgentBadge, RunStateBadge } from "../../wardyn/primitives";
 import { useAgentName } from "../../wardyn/use-agent-name";
@@ -38,7 +38,7 @@ export function AgentsPanel({
   runTask,
   live,
 }: {
-  agents: readonly RunAgent[];
+  agents: readonly RunDetailAgent[];
   /** From the output read; absent until the run has printed its first status line. */
   states?: readonly RunAgentState[];
   /** The run's own agent and task: that agent's task is the run's, not a harness row's. */

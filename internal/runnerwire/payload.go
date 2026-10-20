@@ -129,6 +129,10 @@ type Caps struct {
 	// (it is no runner.SandboxEnder: Kubernetes deletes a stopped pod). Absent
 	// (a runner older than 0.9.4) reads as keeps, as before.
 	EndsUnkept bool `json:"ends_unkept,omitempty"`
+	// Folders says the runner serves list_folders and sync_folder: a folder-only
+	// runner (0.10 on). Absent (an older runner) reads as none, so a person sees
+	// "no runner on your computer" rather than a refused call.
+	Folders bool `json:"folders,omitempty"`
 	// LocalAttach says the runner serves MethodLocalAttach, MethodLocalAttachMode and
 	// MethodLocalAttachTeeAck. The org sends them only to a runner that says so; an older runner
 	// reads as absent and the org refuses a local attach before any call.
@@ -234,6 +238,8 @@ const (
 	KindExecStderr = "exec_stderr"
 	KindRelay      = "relay"
 	KindOutput     = "output"
+	// KindFolder is the sftp stream of one sync_folder pass.
+	KindFolder = "folder"
 	// KindPTYTee carries a local attach session's output from the runner to the org's recorder. It is
 	// opened only by the runner, only as the reply stream of a local_attach call, and carries bytes
 	// in that one direction: the org's writes are reset. The org ends the session by resetting it.
@@ -253,7 +259,7 @@ type Open struct {
 // Validate refuses a kind outside the closed list.
 func (o Open) Validate() error {
 	switch o.Kind {
-	case KindPTY, KindExec, KindExecStderr, KindRelay, KindOutput, KindPTYTee:
+	case KindPTY, KindExec, KindExecStderr, KindRelay, KindOutput, KindFolder, KindPTYTee:
 		return nil
 	}
 	return fmt.Errorf("%w: unknown stream kind %q", ErrBadFrame, o.Kind)

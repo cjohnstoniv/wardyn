@@ -25,6 +25,12 @@ export interface WireResult {
 const carried = (rows: readonly TemplateFieldRule[]) => new Set(rows.filter((r) => !r.excluded && !r.pending).map((r) => r.name));
 
 /**
+ * Fields chosen at each launch that the draft may still hold: sent, never saved (Save as skips their
+ * `excluded` home). `local_folder` is the folder on the person's computer (M4, #2982).
+ */
+const LAUNCH_CHOSEN = new Set(["local_folder"]);
+
+/**
  * A serializer over one registry. The overlay's row may be named either way
  * (`inline_policy` today, `policy_overlay` once the server renames it).
  */
@@ -49,7 +55,7 @@ export function wireSerializer(requestRows: readonly TemplateFieldRule[], policy
     for (const [key, value] of Object.entries(intent)) {
       if (value === undefined) continue;
       const overlay = key === "inline_policy";
-      if (overlay ? !overlayCarried : !REQUEST.has(key)) {
+      if (overlay ? !overlayCarried : !REQUEST.has(key) && !LAUNCH_CHOSEN.has(key)) {
         unsupported.push(key);
         continue;
       }

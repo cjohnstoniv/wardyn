@@ -148,6 +148,10 @@ type Config struct {
 	// ponytail: process-local. Under WARDYN_HA a replica that does not hold a runner's session
 	// answers offline for a runner attached to another; the upgrade is a shared presence read.
 	RunnerOnline func(id uuid.UUID) bool
+	// AttachLocal (WARDYN_ATTACH_LOCAL=on, off by default) allows a person's CLI on their own runner's
+	// computer to attach to their run there (transport=local, attach_local.go), and tells such runners
+	// so in AUTH_OK. Off, a transport=local attach answers 409 attach_local_unavailable (flag_off).
+	AttachLocal bool
 	// RunnersDisabled runs after runners are switched off (a true→false change), once the write and
 	// its audit row are done and the site-config lock is released. Nil defaults to
 	// Server.RunnersDisabled, which ends every runner session this process holds.
@@ -371,6 +375,11 @@ type Config struct {
 	// downgrade. See runs_dispatch_sso_inject.go for the default and docs/ENV.md
 	// for the operator-facing contract.
 	AWSSSOProxyInject bool
+	// AWSSigV4AtProxy is WARDYN_AWS_SIGV4_AT_PROXY (ResolveAWSSigV4AtProxy, default off): when
+	// true, an AWS sign-in lane whose hosts the proxy can all re-sign dispatches a placeholder
+	// key pair and the proxy re-signs its requests with role credentials the sandbox never
+	// holds (runs_dispatch_aws_sigv4.go). Read at dispatch; a running sandbox keeps its lane.
+	AWSSigV4AtProxy bool
 	// AWSSSORefresh is the operator's tuning of the AWS SSO renewal; a zero
 	// field keeps its default (AWSSSORefreshTuning, awssso_refresh.go).
 	AWSSSORefresh AWSSSORefreshTuning
@@ -578,6 +587,11 @@ type Config struct {
 	// the broker is off, a resident PAT on an operator's run too; a member's
 	// run is refused it either way (patNarrowingRefusal).
 	RefuseGitPATBrokerOff bool
+	// MultiAgentTasks (WARDYN_MULTI_AGENT_TASKS, off by default in 0.10.0) lets a
+	// background agent task run several agents side by side, each on its own
+	// tools[].task. Off, a request carrying one is refused multi_agent_tasks_off
+	// and every other request is unchanged.
+	MultiAgentTasks bool
 	// ScrubProxyResponses (WARDYN_PROXY_RESPONSE_SCRUB) stamps
 	// proxy.Config.ScrubResponses on every new dispatch.
 	ScrubProxyResponses bool
@@ -673,11 +687,16 @@ type Config struct {
 	// holds a run's agent for the first sync of its local folder, never past
 	// the run's own end (run_local_folder.go). Zero is DefaultLocalFolderSeedWait.
 	LocalFolderSeedWait time.Duration
+	// ComputerFolders is WARDYN_COMPUTER_FOLDERS: a run may take a folder from its creator's own
+	// folder-only runner, which Wardyn seeds itself (run_computer_folder.go). Off by default.
+	ComputerFolders bool
 	// APITokenMaxTTL is WARDYN_API_TOKEN_MAX_TTL: the longest lifetime a newly
 	// minted API token may have. Zero (the default) means no cap. A mint that
 	// asks for no TTL gets this one; a mint that asks for more is clamped to it.
 	// It never touches a token already minted.
 	APITokenMaxTTL time.Duration
+	// CLISignIn is CLI sign-in (wardyn login, cli_sign_in.go); the zero value is off.
+	CLISignIn CLISignInConfig
 	// RoleStampTTL is WARDYN_ROLE_STAMP_TTL: the oldest an API token's role and
 	// group stamp (api_tokens.identity_stamped_at) may be before apiTokenAuth
 	// refuses it until its owner signs in again. Zero, the default, is off: no
@@ -739,6 +758,12 @@ type Config struct {
 	// boundary as TrustedCAPEM above — never a SiteConfig field,
 	// never agent-reachable.
 	DemoVideoBaseURL string
+	// OrgCAFingerprints is WARDYN_ORG_CA_FINGERPRINTS, parsed at boot by
+	// ParseOrgCAFingerprints: "sha256:<lowercase hex>" of each CA certificate
+	// the operator publishes for `wardyn ca add` to be compared against.
+	// /healthz publishes it as org_ca_fingerprints; nil (the default)
+	// publishes nothing.
+	OrgCAFingerprints []string
 }
 
 // Server is the control-plane HTTP server. It is safe for concurrent use.
@@ -789,6 +814,10 @@ type Server struct {
 	// on a millisecond clock instead of the real 30s budget.
 	pingEvery     time.Duration
 	authorityTest attachAuthorityTimings // per-server test overrides, the same shape as pingEvery
+	// localAttachSubs replaces a runner's substrate for a local attach (localAttachSubFor), tests only.
+	localAttachSubs func(id uuid.UUID) localAttachSub
+	// localCovered replaces a local promotion's corpus proof (promotionCovered), tests only.
+	localCovered func(runID uuid.UUID) bool
 	// pauseLimit overrides attachWriteTimeout as the bound on an unresumed
 	// output pause for THIS server only (tests).
 	pauseLimit time.Duration
@@ -906,6 +935,7 @@ type Server struct {
 	preflightLimiter     *principalLimiter
 	policyPreviewLimiter *principalLimiter
 	deviceRouteState     // the device routes' process state (server_devices.go)
+	cliSignInState       // CLI sign-in's rate limiters (cli_sign_in.go)
 	scimState            // the SCIM routes' rate limiters (scim_auth.go)
 	runLeaseState        // the run lease sweep's process state (run_lease_server.go)
 	// pause is the pause sweep's process-local state (run_pause.go).

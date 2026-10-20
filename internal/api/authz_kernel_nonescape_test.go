@@ -70,6 +70,8 @@ var kernelDoors = map[string][]string{
 	// Minting a personal credential.
 	"handleAddSSHKey": {"capFeature"},
 	"mintGuards":      {"capFeature"}, // both mint doors: POST /me/tokens and an invitation claim
+	// A CLI session's refresh re-asks the api_token feature on every rotation.
+	"cliSessionCutsPass": {"capFeature"},
 	// Self-hosting: POST /me/runners/tokens asks the self_host_runner value.
 	"handleRunnerTokenSelf": {"capFeature"},
 	// A sponsor entering a service identity's run: service_attach, asked with the operator step off (F6).
@@ -91,6 +93,9 @@ var kernelDoors = map[string][]string{
 	// may still use a row whose token they are removing (#1479).
 	"adoOwnPATRowState":              {"capWorkspaceProvider"},
 	"userVisibleOperatorSecretNames": {"capSecret"},
+	// GET/PUT/DELETE /me/scm/github/token(s): the GitHub own-token rows the
+	// caller may use, and the DELETE audit row_state (gh_own_pat.go).
+	"gitHubOwnTokenRows": {"capWorkspaceProvider"},
 	// #1267: GET /workspaces' and GET /workspaces/{id}'s per-row
 	// available_to_you, over the two values that apply to EVERY run type —
 	// the model-provider arm stays client-side, isAgent-gated (#1249).

@@ -11,7 +11,7 @@ import { AlertTriangle, Loader2, Logs } from "lucide-react";
 import { HttpError } from "../../../lib/api/core";
 import { runOutput } from "../../../lib/api/run-output";
 import { useRecordingDisabled } from "../../../lib/hooks/use-recording-disabled";
-import type { RunAgent, RunOutput } from "../../../lib/types";
+import type { RunDetailAgent, RunOutput } from "../../../lib/types";
 import { RUN_AGENTS, RUN_COCKPIT, RUN_OUTPUT } from "../../wardyn/copy";
 import { CopyButton } from "../../wardyn/copy-button";
 import { Segmented } from "../../wardyn/segmented";
@@ -75,7 +75,7 @@ export function OutputTab({
   state: string;
   endedAt?: string;
   /** Every agent of a run with several agents, with its task; the output's own agent states stand in until the run read carries them. The Agents panel and the output filter show for two or more. */
-  agents?: readonly RunAgent[];
+  agents?: readonly RunDetailAgent[];
   runAgent?: string;
   runTask?: string;
   onGoRecording: () => void;
@@ -91,7 +91,7 @@ export function OutputTab({
   const [showLoading, setShowLoading] = React.useState(false);
   const recordingOff = useRecordingDisabled() === true;
   const stopped = state === "STOPPED";
-  const agents: readonly RunAgent[] = declared?.length ? declared : (out?.agents ?? []).map(({ agent }) => ({ agent }));
+  const agents: readonly RunDetailAgent[] = declared?.length ? declared : (out?.agents ?? []).map(({ agent }) => ({ agent }));
   const multi = agents.length >= 2;
   const [filter, setFilter] = React.useState("all");
   const agentName = useAgentName();

@@ -71,7 +71,7 @@ func harnessSet(req createRunRequest) []types.RunHarness {
 	var set []types.RunHarness
 	for _, t := range req.Tools {
 		if t.Kind == client.IncludedToolHarness {
-			set = append(set, types.RunHarness{Harness: t.ID, ModelProviderID: t.ModelProvider, Starts: startsHarness(req, t.ID)})
+			set = append(set, types.RunHarness{Harness: t.ID, ModelProviderID: t.ModelProvider, Starts: startsHarness(req, t.ID), Task: t.Task})
 		}
 	}
 	if w := req.Workload; len(set) == 0 && w != nil && w.Kind == client.WorkloadAgentTask {
@@ -436,6 +436,9 @@ func stampHarnessSet(data map[string]any, set []types.RunHarness, image *client.
 		rows := make([]map[string]any, len(set))
 		for i, h := range set {
 			rows[i] = map[string]any{"id": h.Harness, "model_provider": h.ModelProviderID, "starts": h.Starts}
+			if h.Task != "" {
+				rows[i]["task"] = true // runs a task of its own; the text is the person's, so never here
+			}
 		}
 		data["harnesses"] = rows
 	}

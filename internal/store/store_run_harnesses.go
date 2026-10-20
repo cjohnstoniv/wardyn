@@ -36,10 +36,10 @@ func (s PG) PutRunHarnesses(ctx context.Context, runID uuid.UUID, hs []types.Run
 // insertRunHarnesses writes hs as runID's harness rows on q.
 func insertRunHarnesses(ctx context.Context, q Querier, runID uuid.UUID, hs []types.RunHarness) error {
 	const ins = `
-		INSERT INTO run_harnesses (run_id, ordinal, harness, model_provider_id, starts)
-		VALUES ($1, $2, $3, $4, $5)`
+		INSERT INTO run_harnesses (run_id, ordinal, harness, model_provider_id, starts, task)
+		VALUES ($1, $2, $3, $4, $5, $6)`
 	for i, h := range hs {
-		if _, err := q.Exec(ctx, ins, runID, i, h.Harness, h.ModelProviderID, h.Starts); err != nil {
+		if _, err := q.Exec(ctx, ins, runID, i, h.Harness, h.ModelProviderID, h.Starts, h.Task); err != nil {
 			return err
 		}
 	}
@@ -48,14 +48,14 @@ func insertRunHarnesses(ctx context.Context, q Querier, runID uuid.UUID, hs []ty
 
 // ListRunHarnesses — see RunHarnessStore.
 func (s PG) ListRunHarnesses(ctx context.Context, runID uuid.UUID) ([]types.RunHarness, error) {
-	const q = `SELECT harness, model_provider_id, starts
+	const q = `SELECT harness, model_provider_id, starts, task
 		FROM run_harnesses WHERE run_id = $1 ORDER BY ordinal`
 	return collect(ctx, s.Pool, "list", "run harnesses", q, []any{runID}, scanRunHarness)
 }
 
 func scanRunHarness(row pgx.Row) (types.RunHarness, error) {
 	var h types.RunHarness
-	if err := row.Scan(&h.Harness, &h.ModelProviderID, &h.Starts); err != nil {
+	if err := row.Scan(&h.Harness, &h.ModelProviderID, &h.Starts, &h.Task); err != nil {
 		return types.RunHarness{}, fmt.Errorf("store: scan run harness: %w", err)
 	}
 	return h, nil

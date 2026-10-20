@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -425,5 +426,26 @@ func TestRegisterTrustsTheNamedCABundle(t *testing.T) {
 	}
 	if err := run("good", "--trusted-ca-file", bundle); err != nil || !called {
 		t.Fatalf("a server signed by the named CA was refused: called=%v err=%v", called, err)
+	}
+}
+
+// An unknown authority drops the key made for that call, so the retry with --org-ca-file is not refused for
+// finding it; a key an earlier registration left (--if-unregistered) is the one the organisation may already
+// hold, so it stays.
+func TestDropUnsentKeyKeepsAReusedKey(t *testing.T) {
+	for _, reuse := range []bool{false, true} {
+		dir := t.TempDir()
+		key := writeFile(t, filepath.Join(dir, "runner.key"), "key")
+		dropUnsentKey(x509.UnknownAuthorityError{}, registerArgs{reuseKey: reuse}, dir)
+		_, err := os.Stat(key)
+		if kept := err == nil; kept != reuse {
+			t.Errorf("reuseKey=%v: key kept=%v (stat err %v)", reuse, kept, err)
+		}
+	}
+	dir := t.TempDir()
+	key := writeFile(t, filepath.Join(dir, "runner.key"), "key")
+	dropUnsentKey(errors.New("connection refused"), registerArgs{}, dir)
+	if _, err := os.Stat(key); err != nil {
+		t.Errorf("a failure that is not an unknown authority removed the key: %v", err)
 	}
 }

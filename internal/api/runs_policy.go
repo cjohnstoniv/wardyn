@@ -276,6 +276,12 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		// Sync lists the wardyn-sync sessions open now (sync.open), from the
 		// gateway's live per-run sync budget; always present, empty when none.
 		Sync runSyncView `json:"sync"`
+		// ComputerFolder is the run's folder from the person's computer, held by their runner, and
+		// its passes (run_computer_folder.go); absent on every other run.
+		ComputerFolder *computerFolderRunView `json:"computer_folder,omitempty"`
+		// Agents (#1987) is every agent of a background run with several, the run's own
+		// first, each with its own task; absent on every other run.
+		Agents []runDetailAgent `json:"agents,omitempty"`
 	}{
 		AgentRun: run, UIApps: apps, UserTypeName: s.runUserTypeName(r, run.UserType),
 		ModelProviderName: providerName, ModelProviderDeleted: providerDeleted,
@@ -284,6 +290,8 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		KeptUntil:      s.endedRunKeptUntil(run),
 		Policy:         s.runPolicyRef(r.Context(), run),
 		Sync:           s.runSyncOpenView(run.ID),
+		ComputerFolder: s.computerFolderRunView(r.Context(), run.ID),
+		Agents:         s.runDetailAgents(r.Context(), run),
 	})
 }
 

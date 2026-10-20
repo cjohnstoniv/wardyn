@@ -352,7 +352,7 @@ RUN set -eu; \
     rm -rf /var/lib/apt/lists/*
 
 # Never let the CLI's pager block a non-tty exec (agent-run / a scripted
-# selftest have no terminal to page through); an interactive `wardyn run attach`
+# selftest have no terminal to page through); an interactive `wardyn attach`
 # shell can still `less` things manually.
 ENV AWS_PAGER=""
 

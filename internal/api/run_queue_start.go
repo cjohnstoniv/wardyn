@@ -404,7 +404,7 @@ func (s *Server) queueNarrowOnly(st *queuedStart) *queueEnd {
 func (s *Server) queueLaunch(st *queuedStart, req createRunRequest, ceiling governanceCeiling) *queueEnd {
 	// Create's local_folder refusal again: the deployment may have lost what holds the agent for the
 	// folder (its SSH gateway, a store that keeps the seed) while the run waited.
-	if s.localFolderRefusal(&req).write(s, st.cw, st.r) {
+	if s.localFolderRefusal(st.r.Context(), &req).write(s, st.cw, st.r) {
 		return st.refusalEnd()
 	}
 	f := st.f

@@ -125,6 +125,9 @@ type SetupStatus struct {
 	// redactSetupStatusForUser does not zero it — a bare count carries no
 	// PEM content, host name, or other detail members are barred from.
 	TrustedCACerts int `json:"trusted_ca_certs,omitempty"`
+	// Features is the server's feature switches the console offers a step by. A
+	// switch, never a person's state, so the member redaction keeps it.
+	Features SetupFeatures `json:"features"`
 	// ModelProviders is the model providers THIS PRINCIPAL may use, in the
 	// member-safe shape (SetupModelProvider) — the same for every tier, so the
 	// member redaction has nothing to strip. `omitzero`, not `omitempty`:
@@ -186,6 +189,9 @@ type SetupRunner struct {
 	// them the Docker host's /dev/kvm remedy for Vault. A boolean, deliberately
 	// not the driver name or anything a substrate reports about itself.
 	Kubernetes bool `json:"kubernetes,omitempty"`
+	// ComputerFolders is WARDYN_COMPUTER_FOLDERS, kept in a member's redacted body: New Run shows
+	// "Your computer" as blocked by the organisation while it is off (run_computer_folder.go).
+	ComputerFolders bool `json:"computer_folders,omitempty"`
 	// SandboxStart is the Kubernetes sandbox start deadlines (WARDYN_SANDBOX_START_TIMEOUT,
 	// WARDYN_SANDBOX_CAPACITY_WAIT), kept in a member's redacted body because the run page's
 	// "taking longer than expected" bound follows them. Absent off Kubernetes.
@@ -232,6 +238,13 @@ type SetupPlatform struct {
 	KVM bool `json:"kvm"`
 }
 
+// SetupFeatures holds SetupStatus.Features, one key per switch.
+type SetupFeatures struct {
+	// MultiAgentTasks is WARDYN_MULTI_AGENT_TASKS: a background agent task may give
+	// each agent its own task (#1987).
+	MultiAgentTasks bool `json:"multi_agent_tasks"`
+}
+
 // llmPathExists is LLMReady: at least one enabled model provider serves an
 // agent. A deployment fact, never a person's.
 func llmPathExists(sc types.SiteConfig) bool {
@@ -266,6 +279,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rnr, k8sNetpolProven := setupRunnerInfo(ctx, s.cfg.Runner)
+	rnr.ComputerFolders = s.cfg.ComputerFolders
 
 	providers := s.setupProviders()
 
@@ -439,6 +453,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		// A count derived from the SAME PEM string TrustedCAPEM's doc comment
 		// describes — no second boot-time field to keep in sync. 0 when unset.
 		TrustedCACerts: strings.Count(s.cfg.TrustedCAPEM, "-----BEGIN CERTIFICATE-----"),
+		Features:       SetupFeatures{MultiAgentTasks: s.cfg.MultiAgentTasks},
 	}
 	resp.HarnessSets = visibleHarnessSets(s.cfg.AgentImages, resp.Harnesses)
 	// DELIBERATELY isOperator (three-tier doctrine, internal/auth/oidc's
@@ -538,7 +553,7 @@ func redactSetupStatusForUser(st SetupStatus) SetupStatus {
 	st.ChecksRedacted = true
 	st.Providers = []SetupProvider{}
 	st.Secrets = SetupSecrets{Present: demoSecretPresence(st.Secrets.Present)}
-	st.Runner = SetupRunner{ConfinementClasses: st.Runner.ConfinementClasses, Kubernetes: st.Runner.Kubernetes, SandboxStart: st.Runner.SandboxStart}
+	st.Runner = SetupRunner{ConfinementClasses: st.Runner.ConfinementClasses, Kubernetes: st.Runner.Kubernetes, ComputerFolders: st.Runner.ComputerFolders, SandboxStart: st.Runner.SandboxStart}
 	// Host credential/environment posture — a description of the OPERATOR'S
 	// MACHINE, not of anything a member can act on, and the last place a member
 	// could read it off this endpoint. SCM names which git credentials sit on

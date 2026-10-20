@@ -161,6 +161,10 @@ type bootFlags struct {
 	// once at boot, control-plane-authored only. Mutually exclusive with
 	// daemonProxyURL (bootDaemonProxy refuses boot if both are set).
 	daemonProxySecretFile *string
+	// orgCAFingerprints is WARDYN_ORG_CA_FINGERPRINTS (see
+	// internal/api/org_ca_fingerprints.go): published on /healthz for
+	// `wardyn ca add` to be compared against. Empty (default) = none.
+	orgCAFingerprints *string
 	// demoVideoBaseURL is WARDYN_DEMO_VIDEO_BASE_URL (see
 	// internal/api/llm_gateway.go's ValidateDemoVideoBaseURL): an
 	// operator-run mirror re-pointing the Getting Started demo episodes for
@@ -269,9 +273,15 @@ type bootFlags struct {
 	// gitPATBrokerOffRefused extends the member-run refusal of a resident PAT
 	// (broker off) to operators' runs: the staged retirement of `off`.
 	gitPATBrokerOffRefused *bool
+	// multiAgentTasks lets a background agent task run several agents side by side
+	// (off by default in 0.10.0).
+	multiAgentTasks *bool
 	// proxyResponseScrub has every run's proxy replace a value it injected when a
 	// relayed response echoes it back (off by default in 0.10.0).
 	proxyResponseScrub *bool
+	// attachLocal lets a person's CLI attach to their run on their own runner's computer (off by
+	// default in 0.10.0; only "on" enables it).
+	attachLocal *string
 	// envSecretPlaceholders / fileSecretPlaceholders keep a host-bound env or
 	// file secret's value at the proxy (off by default in 0.10.0).
 	envSecretPlaceholders  *bool
@@ -288,7 +298,10 @@ type bootFlags struct {
 	// awsSSOProxyInject was the PHASE B kill switch; its `off` (the token written
 	// into the sandbox) is retired and refused by refuseAWSSSOProxyInjectOff. A
 	// STRING, not a bool flag, so an unrecognised value still takes the default.
-	awsSSOProxyInject  *string
+	awsSSOProxyInject *string
+	// awsSigV4AtProxy is AWS re-signing at the proxy, off by default
+	// (api.ResolveAWSSigV4AtProxy): only on, true or 1 turns it on.
+	awsSigV4AtProxy    *string
 	allowTestEndpoints *bool
 	// ssoRefresh is the AWS SSO renewal tuning, validated at boot.
 	ssoRefresh awsSSORefreshFlags
@@ -385,6 +398,8 @@ type bootFlags struct {
 	syncDeny *string
 	// localFolderSeedWait is api.Config.LocalFolderSeedWait.
 	localFolderSeedWait *time.Duration
+	// computerFolders is api.Config.ComputerFolders.
+	computerFolders *bool
 	// apiTokenMaxTTL caps a newly minted API token's lifetime — see
 	// api.Config.APITokenMaxTTL.
 	apiTokenMaxTTL *time.Duration
@@ -396,6 +411,8 @@ type bootFlags struct {
 	oidcSessionTTL *time.Duration
 	// sessionLife is the console session-lifetime behaviours, each off by default.
 	sessionLife sessionLifeFlags
+	// cliSignIn is CLI sign-in (wardyn login), off by default.
+	cliSignIn cliSignInFlags
 	// governanceChangeTTL is how long a governance change held for a second human waits — see
 	// api.Config.GovernanceChangeTTL.
 	governanceChangeTTL *time.Duration
@@ -489,6 +506,7 @@ func parseBootFlags() *bootFlags {
 		daemonProxyURL:         flagEnv("daemon-proxy-url", "WARDYN_DAEMON_PROXY_URL", "", "forward proxy (http:// or https://, no user:pass@) for wardynd's own outbound HTTP calls: OIDC discovery/JWKS, audit webhooks, GitHub App token minting, AWS SSO token renewal and Entra directory sync. Empty (default) leaves the default transport untouched"),
 		daemonNoProxy:          flagEnv("daemon-no-proxy", "WARDYN_DAEMON_NO_PROXY", "", "NO_PROXY-style bypass list for -daemon-proxy-url (host, .suffix, CIDR or *); ignored when the proxy URL is unset"),
 		daemonProxySecretFile:  flagEnv("daemon-proxy-secret-file", "WARDYN_DAEMON_PROXY_SECRET", "", "path to a file holding one forward-proxy URL that may embed user:pass@, the credentialed form of -daemon-proxy-url; refused if group- or world-writable, or if other-readable and owned by wardynd's own non-root uid (group-read, as a Kubernetes Secret mount gives, is accepted). Mutually exclusive with -daemon-proxy-url"),
+		orgCAFingerprints:      flagEnv("org-ca-fingerprints", "WARDYN_ORG_CA_FINGERPRINTS", "", "comma-separated sha256:<hex> fingerprints of the organisation's CA certificates, published on the anonymous /healthz as org_ca_fingerprints for people to compare with what 'wardyn ca add' prints. Empty (default) publishes none"),
 		demoVideoBaseURL:       flagEnv("demo-video-base-url", "WARDYN_DEMO_VIDEO_BASE_URL", "", "mirror base URL (https://) re-pointing the Getting Started demo episodes for an air-gapped deployment where github.com is unreachable. Empty (default) uses the two GitHub hosts"),
 		ageKey:                 flagEnv("age-key", "WARDYN_AGE_KEY", "", "age X25519 identity (AGE-SECRET-KEY-...) for the secret store; generated and logged if empty"),
 		platformKeyFile:        flagEnv("platform-key-file", "WARDYN_PLATFORM_KEY_FILE", "", "path to a second age identity that alone protects wardynd's signing, session and SSH host keys, and the key that seals every run's stored proxy config, when secrets are sealed locally. Empty (default): WARDYN_AGE_KEY protects both. Set on an existing install, run wardynd -rewrap -rewrap-adopt-boot-keys once; see docs/operations/secrets-and-keys.md"),
@@ -573,11 +591,14 @@ func parseBootFlags() *bootFlags {
 		gitPATBroker:           flagEnv("git-pat-broker", "WARDYN_GIT_PAT_BROKER", "on", `never-resident git_pat lane: "on" mints a non-GitHub forge's PAT proxy-side so it never enters the sandbox; "off" mints it into the sandbox process instead, for a forge that misbehaves under the broker's rewrite`),
 		envSecretPlaceholders:  flagBool("env-secret-placeholders", "WARDYN_ENV_SECRET_PLACEHOLDERS", false, "an env_secret grant whose scope names a host gets a placeholder in the sandbox, which the run's proxy replaces with the value on requests to that host (default false)"),
 		fileSecretPlaceholders: flagBool("file-secret-placeholders", "WARDYN_FILE_SECRET_PLACEHOLDERS", false, "a file_secret grant whose scope names a host gets a placeholder file in the sandbox, which the run's proxy replaces with the value on requests to that host (default false)"),
+		attachLocal:            flagEnv("attach-local", "WARDYN_ATTACH_LOCAL", "off", `"on": a person's CLI on their own runner's computer attaches to their run there, the terminal staying on that computer while the organisation keeps the admission, the writer lease, the recording and the audit; anything else keeps every attach on the relay`),
 		proxyResponseScrub:     flagBool("proxy-response-scrub", "WARDYN_PROXY_RESPONSE_SCRUB", false, "have each run's egress proxy replace a credential it added when an upstream response echoes it back to the sandbox (default false)"),
 		gitPATBrokerOffRefused: flagBool("git-pat-broker-off-refused", "WARDYN_GIT_PAT_BROKER_OFF_REFUSED", false, "while WARDYN_GIT_PAT_BROKER is off, refuse a run that would hold a resident PAT on operators' runs too; a member's run is refused it either way (default false)"),
+		multiAgentTasks:        flagBool("multi-agent-tasks", "WARDYN_MULTI_AGENT_TASKS", false, "let a background agent task run several agents side by side in one sandbox, each on its own tools[].task: every agent's rules are met (strictest wins), the run ends when the last agent exits and fails if any failed; off refuses a request that gives an agent its own task"),
 
 		awsSSOEndpointOverride: flagEnv("aws-sso-endpoint-override", "WARDYN_AWS_SSO_ENDPOINT_OVERRIDE", "", "TEST ONLY: re-point both AWS IAM Identity Center services (sso-oidc and the sso portal) at this base URL, so an AWS SSO walk can run with no real AWS tenant. Requires -allow-test-endpoints; warns at every boot. Empty (default) uses the real AWS endpoints"),
 		awsSSOProxyInject:      flagEnv("aws-sso-proxy-inject", "WARDYN_AWS_SSO_PROXY_INJECT", api.AWSSSOProxyInjectFlagDefault(), `"on": inject a captured AWS SSO session proxy-side, leaving only a placeholder in the sandbox. "off" was removed in 0.10.0 and refuses boot; an unrecognised value takes the default`),
+		awsSigV4AtProxy:        flagEnv("aws-sigv4-at-proxy", "WARDYN_AWS_SIGV4_AT_PROXY", api.AWSSigV4AtProxyFlagDefault, `"on" or "off": on, an AWS sign-in lane's sandbox holds a placeholder key pair and the proxy re-signs each AWS request with role credentials the sandbox never holds; a lane with a host the proxy cannot re-sign stays as it was. Applies to new dispatches only; anything but on is off`),
 		ssoRefresh:             registerAWSSSORefreshFlags(),
 		allowTestEndpoints:     flagBool("allow-test-endpoints", "WARDYN_ALLOW_TEST_ENDPOINTS", false, "acknowledge this is a TEST deployment; unlocks -aws-sso-endpoint-override and a model provider's unencrypted http:// bedrock.base_url, both refused otherwise. Never set on a deployment holding a real credential (default false)"),
 		// harnessLoginCPUMillis/harnessLoginMemoryMiB (#1100): see api.Config.HarnessLoginCPUMillis/HarnessLoginMemoryMiB.
@@ -666,6 +687,7 @@ func parseBootFlags() *bootFlags {
 		sshAdvertise:           flagEnv("ssh-advertise", "WARDYN_SSH_ADVERTISE", "", `externally-reachable host[:port] for the SSH gateway, shown in the run-detail Connect pane; advisory only. Empty (default) publishes no address, so "wardyn run ssh" refuses`),
 		oidcSessionTTL:         flagDuration("oidc-session-ttl", "WARDYN_OIDC_SESSION_TTL", 0, "how long a console session lasts from sign-in, instead of ending at the ID token's expiry (duration; 0 = the ID token's expiry; at most 24h)"),
 		sessionLife:            registerSessionLifeFlags(),
+		cliSignIn:              registerCLISignInFlags(),
 		sshProxyCommand:        flagEnv("ssh-proxy-command", "WARDYN_SSH_PROXY_COMMAND", "", `ssh ProxyCommand published on /healthz for people to reach the SSH gateway through a TLS-terminating listener on 443; the console and "wardyn run ssh" show it, the daemon never runs it. No control characters, newlines or single quotes; at most 512 bytes. Empty (default) publishes none`),
 		roleStampTTL:           flagDuration("role-stamp-ttl", "WARDYN_ROLE_STAMP_TTL", 0, "how old an API token's or console session's role stamp may be before its owner must sign in again (duration; 0 = off)"),
 		governanceChangeTTL:    flagDuration("governance-change-ttl", "WARDYN_GOVERNANCE_CHANGE_TTL", 72*time.Hour, "how long a governance change held for a second human (WARDYN_GOVERNANCE_SECOND_HUMAN) waits for approval before it expires (duration; must be positive)"),
@@ -674,6 +696,7 @@ func parseBootFlags() *bootFlags {
 		sshMaxConns:            flagIntEnv("ssh-max-connections", "WARDYN_SSH_MAX_CONNECTIONS", api.DefaultSSHMaxConnections, "most authenticated SSH gateway connections open at once, per replica (integer, at least 1); one authenticated over it is closed"),
 		sshPerSource:           flagIntEnv("ssh-max-handshakes-per-source", "WARDYN_SSH_MAX_HANDSHAKES_PER_SOURCE", api.DefaultSSHMaxHandshakesPerSource, "most SSH gateway connections one source address may have handshaking at once, per replica (integer, at least 1); one over it is closed before any byte"),
 		localFolderSeedWait:    flagDuration("local-folder-seed-wait", "WARDYN_LOCAL_FOLDER_SEED_WAIT", api.DefaultLocalFolderSeedWait, "how long a run with a local folder holds its agent for the folder's first 'wardyn sync' before it fails, never past the run's own end (duration, positive)"),
+		computerFolders:        flagBool("computer-folders", "WARDYN_COMPUTER_FOLDERS", false, "let a run take a folder from its creator's own folder-only runner ('wardyn-runnerd serve --substrate folders'), which Wardyn seeds before the agent starts (default false)"),
 		sshRoleTTL:             flagDuration("ssh-role-ttl", "WARDYN_SSH_ROLE_TTL", 24*time.Hour, "how stale a registered SSH key's admin-override stamp may be before the gateway refuses it (duration)"),
 		apiTokenMaxTTL:         flagDuration("api-token-max-ttl", "WARDYN_API_TOKEN_MAX_TTL", 0, "longest lifetime a newly minted API token may have; a mint that asks for none gets this, one that asks for more is clamped to it (duration; 0 = no cap)"),
 		allowUnknownMigrations: flagBool("allow-unknown-migrations", "WARDYN_ALLOW_UNKNOWN_MIGRATIONS", false, "BREAK-GLASS: boot even though the database records migrations this wardynd does not ship (a newer wardynd migrated it). Normally refused — a downgrade is unsupported; restore the pre-upgrade dump instead"),
