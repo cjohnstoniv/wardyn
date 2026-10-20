@@ -1714,7 +1714,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - A logout token the provider signed for this client ends that person's console sessions as their sign-out does; tokens, keys and runs keep working.
 - It needs the logout event as a JSON object, a `sub`, a `jti`, no `nonce` and an `iat` within five minutes.
 - Anything else, including a `sid` without a `sub`, gets `400`; a cut that cannot be written gets `503`.
-- Past five tokens that fail to verify, then one a second per process, a POST gets `429` before verification, so forged tokens cannot drive unbounded key fetches.
+- Past five tokens that fail to verify, then one a second per process, a POST gets `429` before verification, so forged tokens cannot drive unbounded key fetches. While it lasts, a provider's genuine logout gets `429` too; sign-out and admin revocation still cut sessions.
 - Each cut is a `session.revoke` row with `source` `idp_back_channel_logout`.
 - Front-channel logout, which Entra ID offers, is not supported, and a person set up by Entra object id before first sign-in is not reached by `sub`.
 
