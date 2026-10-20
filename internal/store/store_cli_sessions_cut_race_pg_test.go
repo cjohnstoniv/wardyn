@@ -57,7 +57,9 @@ func TestPG_CLISession_CreateAfterUnseenSessionsCut(t *testing.T) {
 	raw := "wdn_" + uuid.NewString()
 	if _, err := st.CreateCLISession(guarded, sess, "wdc_"+uuid.NewString(), types.APIToken{ID: uuid.New(), Principal: sub, Email: email,
 		Role: "user", UserType: types.UserTypeStandard, Name: "CLI: laptop", CreatedAt: now, ExpiresAt: &exp, RevSeq: approved,
-		Kind: types.APITokenKindCLIAccess, CLISessionID: &sess.ID}, raw); err == nil {
+		Kind: types.APITokenKindCLIAccess, CLISessionID: &sess.ID}, raw); err != nil && !errors.Is(err, store.ErrIdentityDeactivated) {
+		t.Fatalf("CreateCLISession after an unseen sessions-only cut = %v, want ErrIdentityDeactivated or a written session that is ended", err)
+	} else if err == nil {
 		if got, _ := st.GetCLISession(ctx, sess.ID); got.EndedAt == nil {
 			t.Errorf("CreateCLISession after an unseen sessions-only cut wrote a live session: %+v", got)
 		}

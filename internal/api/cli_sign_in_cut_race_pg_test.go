@@ -45,6 +45,9 @@ func TestPG_CLISignIn_CutDuringTokenCallEndsTheNewSession(t *testing.T) {
 			if got, _ := e.pg.GetCLISession(ctx, old.SessionID); got.EndedAt == nil {
 				t.Errorf("the session from before the %s = %+v, want ended", c.name, got)
 			}
+			if w.Code != http.StatusCreated && w.Code != http.StatusUnauthorized {
+				t.Errorf("the token call across the %s = %d %s, want 201 or the 401 refusal", c.name, w.Code, w.Body)
+			}
 			if w.Code == http.StatusCreated {
 				g := decodeJSON[types.CLISessionGrant](t, w)
 				if code, _ := e.me(g.AccessToken); code != http.StatusUnauthorized {
