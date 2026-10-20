@@ -13,7 +13,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func runnerCmd(client clientFn) *cobra.Command {
+func runnerCmd(client clientFn, sess *sessionState) *cobra.Command {
 	cmd := &cobra.Command{Use: "runner", Short: "Register, claim and list runners, and set your runner pool defaults"}
 	var stateDir, owner, pool string
 	var makeDefault bool
@@ -60,7 +60,7 @@ func runnerCmd(client clientFn) *cobra.Command {
 		return nil
 	}}
 	mint.Flags().StringVar(&owner, "owner", "", "person's principal (operator only); omit for yourself")
-	cmd.AddCommand(claim, mint, runnerSetupCmd(client), runnerListCmd(client), runnerSetCmd(client), runnerRevokeCmd(client), runnerTokensCmd(client), runnerPoolCmd(client), runnerRemoteCmd(client))
+	cmd.AddCommand(claim, mint, runnerSetupCmd(client, sess), runnerListCmd(client), runnerSetCmd(client), runnerRevokeCmd(client), runnerTokensCmd(client), runnerPoolCmd(client), runnerRemoteCmd(client))
 	cmd.AddCommand(runnerOrgCmds(client)...)
 	return subcommandGroup(cmd)
 }

@@ -90,11 +90,10 @@ any computer and asks for the code the page shows, where the organisation allows
 			}
 			l := &login{origin: u, dir: dir, out: cmd.OutOrStdout(), errOut: cmd.ErrOrStderr(), in: cmd.InOrStdin(),
 				noBrowser: noBrowser, paste: h.CLIPasteSignIn}
+			if err := otherOrigin(h.CLISignInHealthz, u); err != nil {
+				return err
+			}
 			switch {
-			case h.CLISignIn && h.CLISignInOrigin != "" && h.CLISignInOrigin != u:
-				// Proofs are signed over u, the URL dialled, never over the one the server names: it is
-				// only compared, so a look-alike cannot obtain a proof for the origin it advertises.
-				return fmt.Errorf(errOtherOrigin, h.CLISignInOrigin, u, h.CLISignInOrigin)
 			case !h.CLISignIn:
 				_, err = fmt.Fprintf(cmd.OutOrStdout(), "Saved %s. %s\nThe profile is %s; --url and WARDYN_URL still take precedence.\n",
 					u, noSignInLine, filepath.Join(dir, cliprofile.FileName))
@@ -112,6 +111,16 @@ any computer and asks for the code the page shows, where the organisation allows
 	cmd.Flags().BoolVar(&admin, "admin", false, "ask for admin access for 1 hour (approved again in the browser)")
 	cmd.Flags().BoolVar(&noBrowser, "no-browser", false, "sign in from a computer with no browser: open the address elsewhere and paste the code back")
 	return cmd
+}
+
+// otherOrigin is the refusal when h offers a sign-in at an origin other than u, the URL dialled, else nil.
+// Proofs are signed over u, never over the one the server names: it is only compared, so a look-alike
+// cannot obtain a proof for the origin it advertises.
+func otherOrigin(h types.CLISignInHealthz, u string) error {
+	if h.CLISignIn && h.CLISignInOrigin != "" && h.CLISignInOrigin != u {
+		return fmt.Errorf(errOtherOrigin, h.CLISignInOrigin, u, h.CLISignInOrigin)
+	}
+	return nil
 }
 
 // login is one `wardyn login` against origin.
