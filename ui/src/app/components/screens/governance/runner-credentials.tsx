@@ -17,7 +17,7 @@
 import * as React from "react";
 import { AlertTriangle, Loader2 } from "lucide-react";
 import { HttpError, PendingChangeError } from "../../../lib/api/core";
-import { credentialDelivery } from "../../../lib/api/credential-delivery";
+import { credentialDelivery, type CredentialDeliverySnapshot } from "../../../lib/api/credential-delivery";
 import { getErrorMessage } from "../../../lib/format";
 import { DELIVERY } from "../../../lib/governance-copy";
 import { ACCESS_STATE } from "../../../lib/people-access-copy";
@@ -27,7 +27,6 @@ import {
   FIXED_CLASSES,
   POSTURE_OSES,
   type ClassPolicy,
-  type CredentialDeliveryPolicyDoc,
   type DeliveryClass,
   type DeliveryMode,
   type DeliveryPolicy,
@@ -128,7 +127,7 @@ export function RunnerCredentials({ onSubmitted }: { onSubmitted?: () => void })
   const [stored, setStored] = React.useState<DeliveryPolicy>({ classes: {} });
   const [draft, setDraft] = React.useState<Draft>(() => draftFrom({ classes: {} }));
   // GET's buildable_modes: the modes the server can build per class. Null on a server that does not send it.
-  const [buildable, setBuildable] = React.useState<CredentialDeliveryPolicyDoc["buildable_modes"] | null>(null);
+  const [buildable, setBuildable] = React.useState<CredentialDeliverySnapshot["buildable_modes"] | null>(null);
   const [runnersOn, setRunnersOn] = React.useState<boolean | null>(null);
   const [outcome, setOutcome] = React.useState<{ kind: "saved" | "submitted" } | { kind: "refused"; message: string } | null>(null);
   const [busy, setBusy] = React.useState(false);
@@ -299,7 +298,7 @@ function ClassRow({
 }: {
   cls: DeliveryClass;
   row: RowDraft;
-  buildable: CredentialDeliveryPolicyDoc["buildable_modes"] | null;
+  buildable: CredentialDeliverySnapshot["buildable_modes"] | null;
   disabled: boolean;
   onEdit: (patch: Partial<RowDraft>) => void;
 }) {
