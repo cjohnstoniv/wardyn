@@ -239,9 +239,9 @@ func TestCredentialDeliveryWrite_UnbuildableModeRefused(t *testing.T) {
 	}
 	empty := stored()
 	for body, want := range map[string]string{
-		`{"classes":{"api_key":{"mode":"runner_resident"}}}`:                                                   `class "api_key" cannot be delivered as "runner_resident" yet (the server can build: via_org, refuse)`,
-		`{"classes":{"git_pat_broker":{"mode":"via_org"}}}`:                                                    `class "git_pat_broker" cannot be delivered as "via_org" yet (the server can build: refuse)`,
-		`{"classes":{},"by_trust":{"personal":{"classes":{"bedrock_role_creds":{"mode":"runner_resident"}}}}}`: `class "by_trust.personal.bedrock_role_creds" cannot be delivered as "runner_resident" yet (the server can build: refuse)`,
+		`{"classes":{"api_key":{"mode":"runner_resident"}}}`:                                                         `class "api_key" cannot be delivered as "runner_resident" yet (the server can build: via_org, refuse)`,
+		`{"classes":{"git_pat_broker":{"mode":"via_org"}}}`:                                                          `class "git_pat_broker" cannot be delivered as "via_org" yet (the server can build: refuse)`,
+		`{"classes":{},"by_trust":{"personal":{"classes":{"bedrock_role_credentials":{"mode":"runner_resident"}}}}}`: `class "by_trust.personal.bedrock_role_credentials" cannot be delivered as "runner_resident" yet (the server can build: refuse)`,
 	} {
 		for who, w := range map[string]*httptest.ResponseRecorder{
 			"direct": e.admin(http.MethodPut, credentialDeliveryPath, body),
@@ -266,12 +266,12 @@ func TestCredentialDeliveryWrite_UnbuildableModeRefused(t *testing.T) {
 	}
 
 	// An unbuildable document already stored (written before this check) is read back and left alone.
-	const old = `{"classes":{"bedrock_role_creds":{"mode":"runner_resident"}}}`
+	const old = `{"classes":{"bedrock_role_credentials":{"mode":"runner_resident"}}}`
 	if _, err := e.pg.PutCredentialDeliveryPolicy(context.Background(), json.RawMessage(old), "seed", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	before := stored()
-	if w := e.call(e.alice, http.MethodGet, credentialDeliveryPath, ""); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "bedrock_role_creds") {
+	if w := e.call(e.alice, http.MethodGet, credentialDeliveryPath, ""); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "bedrock_role_credentials") {
 		t.Errorf("GET of a stored unbuildable document = %d %s, want 200 with it", w.Code, w.Body)
 	}
 	if got := stored(); got != before {
