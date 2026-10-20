@@ -3989,6 +3989,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0198` (`0198_runner_pending_actions_run_index`) adds the index `runner_pending_actions_run_kind_queued` on `runner_pending_actions` (`0139`'s table), which a run's lease checks read its action history through; the build holds a lock on the table for its duration.
 - `0199` (`0199_approval_notifications_purge_index`) adds the partial index `approval_notifications_purge_idx` on `approval_notifications` (`0118`'s table) over its sent, cancelled and dead rows, which the outbox purge reads; the build holds a lock on the table for its duration.
 - `0200` (`0200_principal_identity_scim_lookup_indexes`) adds indexes on `principal_identities` (`0113`'s table) over `lower(scim_user_name)`, `lower(scim_external_id)`, `object_id` and `email_lower`, and on `principal_identity_aliases` over `value_lower`, which SCIM user lookups read; the builds hold a lock on each table for their duration.
+- `0201` (`0201_principal_lower_indexes`) adds indexes over `lower(principal)` on `principal_identities` (`0113`), `people` (`0090`) and `api_tokens` (`0045`), and over `lower(owned_by)` on `workspaces` (`0008`), which the case-folded name lookup behind a person's erasure and a SCIM group removal reads; the builds hold a lock on each table for their duration.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
