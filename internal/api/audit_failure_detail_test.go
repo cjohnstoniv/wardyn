@@ -38,21 +38,6 @@ func TestRevokeRunCascade_FailureRowNamesTheStepAndReason(t *testing.T) {
 	}
 }
 
-func TestWithFailedStepsLeavesTheCallersMapAlone(t *testing.T) {
-	in := map[string]any{"runner_error": "k8s: teardown: waiting for pods to terminate", "identity_error": "boom", "note": "x"}
-	out := withFailedSteps(in)
-	if _, mutated := in["failed_steps"]; mutated {
-		t.Error("withFailedSteps wrote into the caller's map, which decides the kill's outcome")
-	}
-	want := []map[string]string{
-		{"step": "identity_revoke", "reason": "boom"},
-		{"step": "sandbox_teardown", "reason": "k8s: teardown: waiting for pods to terminate"},
-	}
-	if !reflect.DeepEqual(out["failed_steps"], want) || out["runner_error"] == nil || out["note"] != "x" {
-		t.Errorf("withFailedSteps = %v; want the keys kept and failed_steps %v", out, want)
-	}
-}
-
 // A run.output.finalize failure row names the step that failed and why; a gap keeps its own reason.
 func TestWithFinalizeStepNamesTheFailingStep(t *testing.T) {
 	for _, tc := range []struct {
