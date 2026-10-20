@@ -70,7 +70,11 @@ var backgroundDoors = []backgroundDoor{
 	// handleUIEnter only parses and delegates to uiEnterCommon, and handleUIBind
 	// sets a binding cookie without reading any run, so neither can ask honestly.
 	{Door: "web application gateway", Owner: "C-mode-doors", Symbols: []string{"uiEnterCommon", "uiSessionStillAuthorized"}, Enforced: true},
-	{Door: "desktop", Owner: "C-mode-doors (no desktop surface exists yet; its first owner adds the symbols here)"},
+	// The desktop's own display is the novnc app, behind the web application
+	// gateway above. Its routes here are the person's sign-in inside it (#2972):
+	// signinRun is the one read every sign-in route makes before it acts.
+	{Door: "desktop", Owner: "CTL-C (desktop sign-ins)", Symbols: []string{"signinRun"},
+		Routes: []string{"POST /runs/{id}/desktop-signin", "POST /runs/{id}/desktop-signin/shares", "POST /runs/{id}/desktop-signin/end"}, Enforced: true},
 }
 
 // passiveRunRoutes are the /runs/{id} routes that are not interactive doors: they

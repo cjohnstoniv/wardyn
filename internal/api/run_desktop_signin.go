@@ -177,7 +177,7 @@ func (s *Server) signinRun(w http.ResponseWriter, r *http.Request) (types.AgentR
 		s.refuseRunOwnerOnly(w, r, run)
 		return types.AgentRun{}, nil, false
 	}
-	if s.refuseBackgroundOnly(w, r, run, "desktop sign-in") {
+	if s.refuseBackgroundOnly(w, r, run, "desktop") {
 		return types.AgentRun{}, nil, false
 	}
 	if run.State != types.RunRunning || run.SandboxRef == "" || runIsKept(run) {

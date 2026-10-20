@@ -488,6 +488,22 @@ func TestDesktopSignin_OnlyTheRunsCreator(t *testing.T) {
 	}
 }
 
+// TestDesktopSignin_BackgroundRunHasNoDesktop: a background task's creator
+// gets the background-only 409 on every sign-in route, before anything runs.
+func TestDesktopSignin_BackgroundRunHasNoDesktop(t *testing.T) {
+	f := newSigninFixture(t)
+	f.run.Experience = types.ExperienceBackground
+	f.st.putRun(f.run)
+	for _, path := range []string{"/desktop-signin", "/desktop-signin/shares", "/desktop-signin/end"} {
+		if code, body := f.post(t, path, `{"site":"site.test"}`); code != http.StatusConflict || !strings.Contains(body, reasonRunBackgroundOnly) {
+			t.Fatalf("%s = %d %s, want 409 %s", path, code, body, reasonRunBackgroundOnly)
+		}
+	}
+	if got := f.rn.seen(); len(got) != 0 {
+		t.Fatalf("calls = %v, want none", got)
+	}
+}
+
 // TestDesktopSignin_OffByDefault: with the knob off no route acts and no run
 // gets the store or the lane.
 func TestDesktopSignin_OffByDefault(t *testing.T) {
