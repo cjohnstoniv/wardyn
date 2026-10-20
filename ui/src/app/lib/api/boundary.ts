@@ -99,7 +99,7 @@ export const boundary = {
 
   // POST /api/v1/governance/dry-run: what the drafted spec and limits would narrow, judged as hard_limits.
   async dryRun(body: Pick<BoundaryWrite, "spec" | "limits">): Promise<BoundaryReport> {
-    const res = await wfetch("/governance/dry-run", { method: "POST", body: JSON.stringify(body) });
+    const res = await wfetch("/governance/dry-run", { method: "POST", asPerson: true, body: JSON.stringify(body) });
     const r = await asJson<Partial<BoundaryReport>>(res);
     return { deployment: r.deployment ?? [], profiles: r.profiles ?? [], stored_policies: r.stored_policies ?? [], assignments: r.assignments ?? [] };
   },
