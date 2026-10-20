@@ -981,7 +981,7 @@ test("B6 — the unseen host, and the one we skipped", async () => {
   // on-camera decision IS this video; the honest outcome then is a fast loud
   // failure naming that, not five minutes polling for a header that can no
   // longer render (the exact way a V05 take died on the run-detail strip).
-  const heldHeader = card.getByText("Needs you · sandbox held — approve to let it through");
+  const heldHeader = card.getByText("Sandbox is waiting — approve to let it through");
   const held = await Promise.race([
     heldHeader.waitFor({ state: "visible", timeout: APPROVAL_APPEARS }).then(
       () => "held" as const,

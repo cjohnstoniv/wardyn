@@ -166,7 +166,7 @@ describe("SummaryHeader — command bar", () => {
         <SummaryHeader run={taskRun} terminal={false} pendingApprovalCount={2} onKill={() => {}} />
       </OperatorProvider>,
     );
-    expect(screen.getByText(/Needs you · 2/)).toBeInTheDocument();
+    expect(screen.getByText(/2 waiting/i)).toBeInTheDocument();
   });
 
   it("renders no pending-approval chip when the count is zero", () => {
@@ -175,7 +175,7 @@ describe("SummaryHeader — command bar", () => {
         <SummaryHeader run={taskRun} terminal={false} pendingApprovalCount={0} onKill={() => {}} />
       </OperatorProvider>,
     );
-    expect(screen.queryByText(/Needs you/)).toBeNull();
+    expect(screen.queryByText(/waiting/i)).toBeNull();
   });
 });
 

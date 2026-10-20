@@ -160,7 +160,7 @@ export function decisionArgs(scope: ApprovalScope, until?: string): [] | [Decisi
 // window passes rather than waiting for the next poll.
 //
 // Exported because the run cockpit's command bar and the board's card state
-// the same fact ("Needs you · N · sandbox held"). Two copies of this test would be
+// the same fact ("N waiting · sandbox held"). Two copies of this test would be
 // two truths that can disagree, and the disagreement would read as "nothing is
 // holding the sandbox" while the sandbox is, in fact, held.
 // ─── Azure DevOps capability escalation (plan slice S10) ───────────────────

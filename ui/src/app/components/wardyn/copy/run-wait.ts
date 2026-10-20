@@ -10,13 +10,7 @@
 // states, evidence widgets, focus mode, ...) into the entry chunk. RUN_COCKPIT
 // spreads this in below, so run-detail's cockpit still reads
 // RUN_COCKPIT.waiting/.waitingHeld unchanged.
-// #3040: one phrase for "a person has to decide" wherever a person can act: "Needs you", with the count
-// after it when there is more than one, and "sandbox held" only as the modifier for a parked sandbox.
-function needsYou(n: number): string {
-  return n === 1 ? "Needs you" : `Needs you · ${n}`;
-}
-
 export const RUN_WAIT = {
-  waiting: needsYou,
-  waitingHeld: (n: number) => `${needsYou(n)} · sandbox held`,
+  waiting: (n: number) => `${n} waiting`,
+  waitingHeld: (n: number) => `${n} waiting · sandbox held`,
 } as const;

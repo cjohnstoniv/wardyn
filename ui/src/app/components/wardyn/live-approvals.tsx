@@ -435,7 +435,7 @@ export function LiveApprovals({
     : allAdoConsent
       ? ADO.STRIP_HEADING_CONSENT
       : anyHeld
-        ? "Needs you · sandbox held — approve to let it through"
+        ? "Sandbox is waiting — approve to let it through"
         : pending.every((a) => a.kind === "egress_domain")
           ? "Approval needed — off-policy egress"
           : "Approval needed — the agent is waiting on you";

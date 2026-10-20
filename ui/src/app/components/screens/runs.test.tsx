@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import type { AgentRun } from "../../lib/types";
 
@@ -124,6 +124,20 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
     expect(screen.queryByRole("form", { name: "Start a run" })).not.toBeInTheDocument();
   });
 
+  it("Admin view: a decision this admin can make sits under Needs you, with the R6 row's held count", async () => {
+    listRunsFilteredMock.mockResolvedValue({
+      runs: [run({ id: "d1", task: "Held for me", attention: { kind: "approval", by: "you", pending: 1 } })],
+      truncated: false,
+      hiddenOlder: 0,
+      hiddenKilled: 0,
+    });
+    renderScreen(undefined, "/admin/runs");
+    expect(await screen.findByRole("heading", { name: "Needs you" })).toBeInTheDocument();
+    const row = screen.getByText("Held for me").closest('[data-testid="run-row"]') as HTMLElement;
+    expect(within(row).getByText("Needs you")).toBeInTheDocument();
+    expect(within(row).getByText("1 held")).toBeInTheDocument();
+  });
+
   it("all quiet: nothing needs you and nothing is running, Ended sections still show", async () => {
     // has_runs=true with a truly empty AND nothing-hidden window can't occur in
     // real data (a run is always either live or accounted for by a hidden
@@ -166,6 +180,7 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
     // runsList.length (home-runs-1197-packet.html:672, design §2.1).
     expect(screen.getByText("Your runs · 8")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Needs you" })).toBeInTheDocument();
+    expect(screen.getByText("1 decision needs you")).toBeInTheDocument();
     expect(screen.getByText("Still running")).toBeInTheDocument();
     expect(screen.getAllByText("Running", { exact: true }).length).toBeGreaterThan(0);
     expect(screen.getByText("All done")).toBeInTheDocument();

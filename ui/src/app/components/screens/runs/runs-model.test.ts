@@ -30,17 +30,18 @@ const run = (over: Partial<AgentRun> = {}): AgentRun => ({
 });
 
 describe("rowPresentation — held approval (design.md §2.2 row 1)", () => {
-  it("by=you in the user view: Needs you, amber, Review, needsYou", () => {
-    const r = run({ attention: { kind: "approval", by: "you", pending: 1 } });
-    const p = rowPresentation(r, false);
-    expect(p).toMatchObject({ hue: "amber", word: "Needs you", action: "review", needsYou: true });
-    expect(p.subword).toBe("Needs you · sandbox held");
+  it("by=you in the user view: the M8 wording, amber, Review, needsYou", () => {
+    const p = rowPresentation(run({ attention: { kind: "approval", by: "you", pending: 1 } }), false);
+    expect(p).toMatchObject({ hue: "amber", word: "1 decision needs you", action: "review", needsYou: true });
+    expect(p.subword).toBe("1 waiting · sandbox held");
+    expect(rowPresentation(run({ attention: { kind: "approval", by: "you", pending: 3 } }), false).word).toBe(
+      "3 decisions need you",
+    );
   });
 
-  it("by=you in the admin view: Needs you, still Review", () => {
-    const r = run({ attention: { kind: "approval", by: "you", pending: 2 } });
-    const p = rowPresentation(r, true);
-    expect(p).toMatchObject({ hue: "amber", word: "Needs you", action: "review", needsYou: true });
+  it("by=you in the admin view: the R6 row, Needs you with its held count, still Review", () => {
+    const p = rowPresentation(run({ attention: { kind: "approval", by: "you", pending: 2 } }), true);
+    expect(p).toMatchObject({ hue: "amber", word: "Needs you", subword: "2 held", action: "review", needsYou: true });
   });
 
   it("by=admin (H-3): Waiting for an admin, amber, no action, NOT needs-you — in either view", () => {
@@ -57,6 +58,9 @@ describe("rowPresentation — held approval (design.md §2.2 row 1)", () => {
       action: null,
       needsYou: false,
     });
+    // Neutral wait copy: a row this viewer cannot clear never says "needs you".
+    expect(rowPresentation(r, false).subword).toBe("1 waiting · sandbox held");
+    expect(rowPresentation(r, true).subword).toBe("1 waiting · sandbox held");
   });
 });
 

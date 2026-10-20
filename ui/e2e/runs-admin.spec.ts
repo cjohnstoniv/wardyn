@@ -79,6 +79,24 @@ test.describe("Runs Admin view — sections, Everyone/Mine, saved views, Group b
     await expect(page.getByRole("heading", { name: "Needs you" })).toHaveCount(0);
   });
 
+  test("a decision the admin can make sits under Needs you with the R6 row's held count", async ({ page }) => {
+    await mockRunsList(page, () => ({
+      runs: [
+        baseRun("h1", "Held for the admin", {
+          state: "RUNNING",
+          created_by: "admin-token",
+          attention: { kind: "approval", by: "you", pending: 1 },
+        }),
+      ],
+    }));
+    await gotoConsole(page, "admin");
+
+    await expect(page.getByRole("heading", { name: "Needs you" })).toBeVisible();
+    const row = page.getByTestId("run-row").filter({ hasText: "Held for the admin" });
+    await expect(row.getByText("Needs you", { exact: true })).toBeVisible();
+    await expect(row.getByText("1 held", { exact: true })).toBeVisible();
+  });
+
   test("Mine narrows the list to the admin's own runs", async ({ page }) => {
     await mockRunsList(page, (url) => {
       const mineOnly = url.searchParams.get("owner") === "me";
