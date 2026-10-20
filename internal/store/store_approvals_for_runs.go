@@ -55,6 +55,26 @@ func (s PG) ListPendingApprovalsForRuns(ctx context.Context, runIDs []uuid.UUID)
 	return collect(ctx, s.Pool, "list", "pending approvals for runs", q, []any{runIDs}, scanApproval)
 }
 
+// PendingApprovalsByKindPager reads the PENDING approvals of one kind, fleet-wide: a capture-time
+// resolver wants only the few credential_reauth rows, never the thousands of tool_call or egress
+// rows a sandbox can leave pending. A capability interface like ApprovalsKeysetByRunPager.
+type PendingApprovalsByKindPager interface {
+	ListPendingApprovalsByKind(ctx context.Context, kind types.ApprovalKind) ([]types.ApprovalRequest, error)
+}
+
+var _ PendingApprovalsByKindPager = PG{}
+
+// ListPendingApprovalsByKind — see PendingApprovalsByKindPager. The partial approvals_state_idx
+// bounds the read to the pending set; the kind test is a row filter over it.
+func (s PG) ListPendingApprovalsByKind(ctx context.Context, kind types.ApprovalKind) ([]types.ApprovalRequest, error) {
+	q := `
+		SELECT ` + approvalCols + `
+		FROM approvals
+		WHERE state = 'PENDING' AND kind = $1
+		ORDER BY requested_at DESC`
+	return collect(ctx, s.Pool, "list", "pending approvals by kind", q, []any{string(kind)}, scanApproval)
+}
+
 // ListExpiredPendingApprovals — see approval.Store. Keyset on id, so a failed row never makes the next
 // page re-read it and a page is at most limit rows in memory. The partial pending index is on (state), not
 // id, so each page reads the pending rows and orders them by id: that set is small, because decided rows

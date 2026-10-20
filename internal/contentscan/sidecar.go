@@ -33,6 +33,14 @@ func newSidecarDetector(url string, client *http.Client) *sidecarDetector {
 	return &sidecarDetector{url: url, client: client}
 }
 
+// maxSidecarCallsPerRequest bounds the sidecar round trips one scanned request may
+// cost: a body of many one-character strings is one span each, and the byte budget
+// does not see them. Past it the sidecar counts as failed for the request, as any
+// other sidecar error does, but is recorded as sidecar_call_cap so audit can tell a cap from an outage.
+const maxSidecarCallsPerRequest = 64
+
+var errSidecarCallCap = fmt.Errorf("sidecar: more than %d spans in one request", maxSidecarCallsPerRequest)
+
 type sidecarRequest struct {
 	Text      string `json:"text"`
 	FieldPath string `json:"field_path"`
@@ -55,18 +63,18 @@ type sidecarResponse struct {
 // directly instead, so it can record a failed scan as degraded rather than
 // indistinguishable from a genuinely clean inspection.
 func (d *sidecarDetector) Scan(s Span, dst *[]Finding) {
-	_ = d.scanReport(s, dst)
+	_ = d.scanReport(context.Background(), s, dst)
 }
 
 // scanReport returns a non-nil error when the sidecar could NOT be consulted,
 // letting the Engine mark Result.Skipped/"sidecar_error" so ShouldBlock can
 // honor OnScannerError. The traffic path never blocks on this error directly.
-func (d *sidecarDetector) scanReport(s Span, dst *[]Finding) error {
+func (d *sidecarDetector) scanReport(ctx context.Context, s Span, dst *[]Finding) error {
 	body, err := json.Marshal(sidecarRequest{Text: s.Text, FieldPath: s.FieldPath})
 	if err != nil {
 		return fmt.Errorf("sidecar: marshal request: %w", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.url, bytes.NewReader(body))
 	if err != nil {

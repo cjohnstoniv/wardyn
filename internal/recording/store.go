@@ -36,6 +36,10 @@ var ErrNotFound = errors.New("recording: not found")
 // ErrErased refuses access to a run whose recordings were durably erased.
 var ErrErased = errors.New("recording: erased")
 
+// ErrReadBusy refuses an open of a cast while the store's read slots are all held. It is a wait, not
+// a fault: the replay handler answers it 503 with a Retry-After.
+var ErrReadBusy = errors.New("recording: too many casts are open for reading")
+
 // Store is the recording persistence contract.
 //
 // SaveCast persists the asciicast bytestream from r under runID, replacing
@@ -47,7 +51,8 @@ var ErrErased = errors.New("recording: erased")
 // equivalent to SaveCast.
 //
 // OpenCast returns a ReadCloser (caller closes it) or ErrNotFound. The key is
-// either a bare runID or a "<runID>~<suffix>" composite.
+// either a bare runID or a "<runID>~<suffix>" composite. A store that buffers a
+// cast may answer ErrReadBusy instead of opening one more.
 //
 // StatAndTail reports a key's size and its last tailBytes without returning
 // the whole payload; tailBytes clamps to size when the cast is smaller.

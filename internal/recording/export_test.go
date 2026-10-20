@@ -16,6 +16,12 @@ var CastSaveSlots = streamSaveSlots.size
 // CastSaveSlotsHeld reports how many stream save slots are held right now.
 func CastSaveSlotsHeld() int { return streamSaveSlots.Held() }
 
+// CastReadSlots is the number of opened casts a PGStore allows at once.
+var CastReadSlots = readSlots.size
+
+// CastReadSlotsHeld reports how many read slots are held right now.
+func CastReadSlotsHeld() int { return readSlots.Held() }
+
 // InMemorySaveSlotHeld reports whether the in-memory save slot is held.
 func InMemorySaveSlotHeld() bool { return inMemorySaveSlot.Held() > 0 }
 
@@ -62,4 +68,11 @@ func SetCastWriteChunk(t testing.TB, n int) {
 	old := castWriteChunk
 	castWriteChunk = n
 	t.Cleanup(func() { castWriteChunk = old })
+}
+
+// SetReplayWriteTimeout sets the per-write bound of a replay and returns a restore func.
+func SetReplayWriteTimeout(d time.Duration) (restore func()) {
+	old := replayWriteTimeout
+	replayWriteTimeout = d
+	return func() { replayWriteTimeout = old }
 }

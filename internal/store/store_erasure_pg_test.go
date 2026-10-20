@@ -8,10 +8,13 @@ package store_test
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -488,4 +491,85 @@ func TestPG_PersonErasure_PrincipalsNamedIgnoresASignInOfAnotherTenant(t *testin
 	if got, err := st.PrincipalsNamed(ctx, entra); err != nil || !slices.Equal(got, []string{entra}) {
 		t.Errorf("PrincipalsNamed(%q) = %v, %v, want the people row alone", entra, got, err)
 	}
+}
+
+// A name no principal is spelled like is folded to lower case over four tables, and a SCIM group removal
+// resolves each of a member's emails so: each is read by index rather than by scanning the table. The
+// identities carry no object id, as an issuer other than Entra's leaves them.
+func TestPG_PersonErasure_PrincipalsNamedFoldsCaseByIndex(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	ctx := t.Context()
+	for _, q := range []string{
+		`INSERT INTO principal_identities (principal, issuer, email_lower) SELECT 'sub-' || g, '` + idIssuer + `', 'u' || g || '@corp.example' FROM generate_series(1, 20000) g`,
+		`INSERT INTO people (principal, email, created_by) SELECT 'Person-' || g, 'p' || g || '@corp.example', 'admin' FROM generate_series(1, 20000) g`,
+		`INSERT INTO api_tokens (id, principal, email, token_sha256) SELECT gen_random_uuid(), 'tok-' || g, 't' || g || '@corp.example', 'sha' || g FROM generate_series(1, 20000) g`,
+		`INSERT INTO workspaces (id, name, attachments, owned_by) SELECT gen_random_uuid(), 'w' || g, '[]'::jsonb, 'Owner-' || g FROM generate_series(1, 20000) g`,
+	} {
+		if _, err := pool.Exec(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `ANALYZE principal_identities; ANALYZE people; ANALYZE api_tokens; ANALYZE workspaces`); err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]struct {
+		name string
+		idx  []string
+	}{
+		"a name":   {"Nobody-Here", []string{"principal_identities_lower_principal_idx", "people_lower_principal_idx", "api_tokens_lower_principal_idx", "workspaces_lower_owned_by_idx"}},
+		"an email": {"Nobody@Corp.Example", []string{"principal_identities_email_lower_idx", "people_email_lower_uniq", "api_tokens_lower_email_idx"}},
+	} {
+		plan := planOfCall(t, ctx, pool, func(st store.PG) { _, _ = st.PrincipalsNamed(ctx, c.name) })
+		t.Logf("%s plan:\n%s", name, plan)
+		for _, table := range []string{"principal_identities", "people", "api_tokens", "workspaces"} {
+			if strings.Contains(plan, "Seq Scan on "+table) {
+				t.Errorf("%s scans %s:\n%s", name, table, plan)
+			}
+		}
+		for _, idx := range c.idx {
+			if !strings.Contains(plan, idx) {
+				t.Errorf("%s does not use %s:\n%s", name, idx, plan)
+			}
+		}
+	}
+}
+
+// signedInAs's join to the identity directory excludes an empty object id on both sides; this holds the
+// added exclusion on the identity side to the answer the join gave without it.
+func TestPG_PersonErasure_SignedInJoinMatchesWithoutTheIdentityExclusion(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	ctx := t.Context()
+	for _, q := range []string{
+		`INSERT INTO principal_identities (principal, issuer, tenant_id, object_id) VALUES
+			('sub-bound', 'i', 't', 'o1'), ('sub-plain', 'i', '', ''), ('sub-other', 'j', 't', 'o1'), (NULL, 'i', 't', 'o2')`,
+		`INSERT INTO people (principal, issuer, tenant_id, object_id, created_by) VALUES
+			('entra:t:o1', 'i', 't', 'o1', 'admin'), ('entra:t:o2', 'i', 't', 'o2', 'admin'), ('typed', '', '', '', 'admin'), ('sub-plain', '', '', '', 'admin')`,
+	} {
+		if _, err := pool.Exec(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const join = `SELECT DISTINCT COALESCE(i.principal, h.principal) FROM (SELECT principal FROM people
+		UNION SELECT principal FROM principal_identities WHERE principal IS NOT NULL) h(principal)
+		LEFT JOIN people p ON p.principal = h.principal AND p.object_id <> ''
+		LEFT JOIN principal_identities i ON i.issuer = p.issuer AND i.tenant_id = p.tenant_id AND i.object_id = p.object_id`
+	const tail = ` AND i.principal IS NOT NULL ORDER BY 1`
+	got := queryStrings(t, pool, join+` AND i.object_id <> ''`+tail)
+	want := queryStrings(t, pool, join+tail)
+	if !slices.Equal(got, want) || len(want) < 4 {
+		t.Errorf("with the exclusion %v, without %v", got, want)
+	}
+}
+
+func queryStrings(t *testing.T, pool *pgxpool.Pool, q string) []string {
+	t.Helper()
+	rows, err := pool.Query(t.Context(), q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
 }

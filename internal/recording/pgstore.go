@@ -117,7 +117,19 @@ const castStreamSlots = 1
 // once; a smaller one makes the database rewrite the growing value more often (each append copies it).
 var castWriteChunk = 16 << 20
 
+// castReadSlots is how many opened casts a process holds at once. OpenCast buffers a whole payload (up to
+// 64 MiB, and pgx holds a second copy while it scans), and the server sets no write timeout, so a stalled
+// reader keeps its buffer pinned; an open past the limit is refused with ErrReadBusy rather than queued.
+// The slot is held from before the scan until the reader is closed. A joined replay opens its parts one at
+// a time, and a part after the first waits for a slot (see continuingReplay) so a replay already under
+// way is never cut short by a newcomer.
+//
+// ponytail: two, sized with castStreamSlots against GOMEMLIMIT but not measured on the read side;
+// re-measure the resident peak of two 64 MiB replays beside an upload before raising it.
+const castReadSlots = 2
+
 var (
+	readSlots        = &slotQueue{size: castReadSlots}
 	streamSaveSlots  = &slotQueue{size: castStreamSlots}
 	inMemorySaveSlot = &slotQueue{size: 1}
 	groupSavesMu     sync.Mutex
@@ -212,6 +224,17 @@ func (q *slotQueue) take(ctx context.Context) (func(), error) {
 	return nil, ctx.Err()
 }
 
+// tryTake hands the caller a slot if one is free right now.
+func (q *slotQueue) tryTake() (func(), bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.held >= q.size {
+		return nil, false
+	}
+	q.held++
+	return q.release, true
+}
+
 func (q *slotQueue) release() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -302,14 +325,16 @@ func (s *PGStore) SaveCast(ctx context.Context, runID string, r io.Reader) error
 	// Written in castWriteChunk pieces in one transaction: pgx copies a bytea parameter twice more
 	// while sending it, so a whole 64 MiB payload in one statement peaked at three copies of it,
 	// and a chunk's copies are a fraction. A reader still sees the old row or the whole new one.
+	tail := data[max(len(data)-castTailKept, 0):]
 	return s.runTx(ctx, runID, false, func(tx pgx.Tx) error {
 		first := data[:min(len(data), castWriteChunk)]
 		_, err := tx.Exec(ctx, `
-		INSERT INTO recordings (cast_key, payload)
-		VALUES ($1, $2)
+		INSERT INTO recordings (cast_key, payload, size_bytes, tail, stat_updated_at)
+		VALUES ($1, $2, $3, $4, now())
 		ON CONFLICT (cast_key) DO UPDATE
-			SET payload = EXCLUDED.payload, updated_at = now()`,
-			runID, first,
+			SET payload = EXCLUDED.payload, size_bytes = EXCLUDED.size_bytes, tail = EXCLUDED.tail,
+			    stat_updated_at = now(), updated_at = now()`,
+			runID, first, len(data), tail,
 		)
 		if err != nil {
 			return fmt.Errorf("recording: save cast %q: %w", runID, err)
@@ -325,29 +350,75 @@ func (s *PGStore) SaveCast(ctx context.Context, runID string, r io.Reader) error
 }
 
 // OpenCast returns a ReadCloser over the stored bytes for key (either a bare
-// runID or a "<runID>~<suffix>" composite). Returns ErrNotFound when absent.
+// runID or a "<runID>~<suffix>" composite). Returns ErrNotFound when absent, and ErrReadBusy when
+// castReadSlots casts are already open.
 func (s *PGStore) OpenCast(ctx context.Context, key string) (io.ReadCloser, error) {
 	if err := validKey(key); err != nil {
 		return nil, err
 	}
+	release, err := admitCastRead(ctx)
+	if err != nil {
+		return nil, err
+	}
 	var payload []byte
-	err := s.runTx(ctx, key, false, func(tx pgx.Tx) error {
+	err = s.runTx(ctx, key, false, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx,
 			`SELECT payload FROM recordings WHERE cast_key = $1`, key,
 		).Scan(&payload)
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
+		release()
 		return nil, ErrNotFound
 	}
 	if err != nil {
+		release()
 		return nil, fmt.Errorf("recording: open cast %q: %w", key, err)
 	}
-	return io.NopCloser(bytes.NewReader(payload)), nil
+	return &heldCast{Reader: bytes.NewReader(payload), release: sync.OnceFunc(release)}, nil
 }
+
+type continuingReplayKey struct{}
+
+// continuingReplay marks ctx as belonging to a joined replay that already read its first part.
+func continuingReplay(ctx context.Context) context.Context {
+	return context.WithValue(ctx, continuingReplayKey{}, true)
+}
+
+// admitCastRead takes a read slot: at once or not at all for a new open, and by waiting for a part of a
+// replay under way.
+func admitCastRead(ctx context.Context) (func(), error) {
+	if cont, _ := ctx.Value(continuingReplayKey{}).(bool); cont {
+		return readSlots.take(ctx)
+	}
+	release, ok := readSlots.tryTake()
+	if !ok {
+		return nil, ErrReadBusy
+	}
+	return release, nil
+}
+
+// heldCast is an opened cast that holds a read slot until it is closed; closing also drops the bytes, so
+// a caller that keeps the reader does not keep the payload after its slot is gone.
+type heldCast struct {
+	*bytes.Reader
+	release func()
+}
+
+func (c *heldCast) Close() error {
+	c.Reader = bytes.NewReader(nil)
+	c.release()
+	return nil
+}
+
+// castTailKept is how many of a cast's last bytes SaveCast stores beside it, so StatAndTail reads a
+// tail up to this long without detoasting the payload; a longer tail is computed from the payload.
+const castTailKept = 8 << 10
 
 // StatAndTail reports the cast's byte size and its last tailBytes, computed and sliced
 // server-side so a caller wanting only a size and duration never pulls the whole payload
-// across the wire. tailBytes is clamped to size when the cast is smaller.
+// across the wire. tailBytes is clamped to size when the cast is smaller. A row whose stored
+// size and tail were not written with its current payload (stat_updated_at differs from updated_at:
+// a binary from before those columns saved it) is read from its payload.
 func (s *PGStore) StatAndTail(ctx context.Context, key string, tailBytes int64) (int64, []byte, error) {
 	if err := validKey(key); err != nil {
 		return 0, nil, err
@@ -356,10 +427,14 @@ func (s *PGStore) StatAndTail(ctx context.Context, key string, tailBytes int64) 
 	var tail []byte
 	err := s.runTx(ctx, key, false, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `
-		SELECT octet_length(payload),
-		       substring(payload from greatest(octet_length(payload) - $2::int + 1, 1)::int for $2::int)
-		FROM recordings WHERE cast_key = $1`,
-			key, tailBytes,
+		SELECT CASE WHEN fresh THEN size_bytes ELSE octet_length(payload) END,
+		       CASE WHEN fresh AND ($2::int <= $3::int OR size_bytes <= $3::int)
+		            THEN substring(tail from greatest(octet_length(tail) - $2::int + 1, 1)::int for $2::int)
+		            ELSE substring(payload from greatest(octet_length(payload) - $2::int + 1, 1)::int for $2::int)
+		       END
+		FROM (SELECT payload, size_bytes, tail, stat_updated_at = updated_at AS fresh
+		      FROM recordings WHERE cast_key = $1) r`,
+			key, tailBytes, castTailKept,
 		).Scan(&size, &tail)
 	})
 	if errors.Is(err, pgx.ErrNoRows) {

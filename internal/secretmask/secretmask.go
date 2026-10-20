@@ -77,6 +77,9 @@ type Registry struct {
 	// consumers do that per event, so this avoids re-deriving an unchanged set
 	// thousands of times per run. Evict drops a run's entry with its secrets.
 	cached map[uuid.UUID]*runMaskers
+	// shared is the globals' half of every run's Maskers, derived once per change of
+	// globals instead of once per run; reflattenLocked drops it.
+	shared *globalMasks
 
 	// backend, when set, is the committed corpus every replica shares (see
 	// Backend). The maps above are then this process's cache of it.
@@ -116,6 +119,16 @@ type runMaskers struct {
 	plain       Masker
 	variant     Masker
 	haveVariant bool
+}
+
+// globalMasks is the process-global values (and, lazily, their JSON-escaped
+// variants) prepared for masking: filtered, sorted longest-first, immutable, and
+// shared by every run's Maskers. The sets let a run's own values skip what the
+// shared half already holds.
+type globalMasks struct {
+	plain, variant       [][]byte
+	plainSet, variantSet map[string]struct{}
+	haveVariant          bool
 }
 
 // NewRegistry returns an empty, ready-to-use Registry.
@@ -436,6 +449,7 @@ func (r *Registry) reflattenLocked() {
 		return
 	}
 	r.globals = out
+	r.shared = nil
 	r.gen++
 }
 
@@ -498,17 +512,56 @@ func (r *Registry) rebuild(runID uuid.UUID, withVariant bool) *runMaskers {
 	defer r.mu.Unlock()
 	c := r.cached[runID]
 	if c == nil || c.gen != r.gen {
-		c = &runMaskers{gen: r.gen, plain: NewMasker(r.snapshotLocked(runID))}
+		g := r.sharedLocked()
+		c = &runMaskers{gen: r.gen, plain: newMaskerOver(r.perRun[runID], g.plain, g.plainSet)}
 		if r.cached == nil {
 			r.cached = map[uuid.UUID]*runMaskers{}
 		}
 		r.cached[runID] = c
 	}
 	if withVariant && !c.haveVariant {
-		c.variant = NewMasker(JSONEscapedVariants(c.plain.secrets))
+		g := r.sharedLocked()
+		if !g.haveVariant {
+			g.variant = NewMasker(JSONEscapedVariants(g.plain)).secrets
+			g.variantSet = setOf(g.variant)
+			g.haveVariant = true
+		}
+		own := ownValues(r.perRun[runID], g.plainSet)
+		c.variant = newMaskerOver(JSONEscapedVariants(own), g.variant, g.variantSet)
 		c.haveVariant = true
 	}
 	return c
+}
+
+// sharedLocked returns the globals' shared masking state, deriving it once after
+// each change of globals. The caller holds r.mu for writing.
+func (r *Registry) sharedLocked() *globalMasks {
+	if r.shared == nil {
+		g := &globalMasks{}
+		g.plain = NewMasker(r.globals).secrets
+		g.plainSet = setOf(g.plain)
+		r.shared = g
+	}
+	return r.shared
+}
+
+func setOf(secrets [][]byte) map[string]struct{} {
+	set := make(map[string]struct{}, len(secrets))
+	for _, s := range secrets {
+		set[string(s)] = struct{}{}
+	}
+	return set
+}
+
+// ownValues is a run's own values without those the shared set already holds.
+func ownValues(own [][]byte, shared map[string]struct{}) [][]byte {
+	out := make([][]byte, 0, len(own))
+	for _, v := range own {
+		if _, dup := shared[string(v)]; !dup {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // snapshotLocked is Snapshot's body without the lock. The caller holds r.mu.
@@ -639,6 +692,9 @@ func jsonStringEscape(s []byte, escapeHTML bool) ([]byte, bool) {
 // set once per element. Nil outside tests.
 var scanned *int
 
+// searched, when a test points it somewhere, counts the secrets runs searches p for.
+var searched *int
+
 func containsSlice(set [][]byte, v []byte) bool {
 	if scanned != nil {
 		*scanned += len(set)
@@ -684,6 +740,29 @@ func NewMasker(secrets [][]byte) Masker {
 	return Masker{secrets: kept, maxLen: maxLen}
 }
 
+// newMaskerOver is NewMasker over own plus shared, where shared is already filtered,
+// sorted longest-first and not to be modified: it is referenced, not cloned, so runs
+// built over one shared set hold it once. A value of own that shared holds is left out.
+func newMaskerOver(own [][]byte, shared [][]byte, sharedSet map[string]struct{}) Masker {
+	mine := NewMasker(ownValues(own, sharedSet)).secrets
+	merged := make([][]byte, 0, len(mine)+len(shared))
+	i, j := 0, 0
+	for i < len(mine) || j < len(shared) {
+		if j == len(shared) || (i < len(mine) && len(mine[i]) > len(shared[j])) {
+			merged = append(merged, mine[i])
+			i++
+		} else {
+			merged = append(merged, shared[j])
+			j++
+		}
+	}
+	m := Masker{secrets: merged}
+	if len(merged) > 0 {
+		m.maxLen = len(merged[0])
+	}
+	return m
+}
+
 // Secrets returns the masking set, longest-first, filtered to values of at
 // least MinLen (exactly the set Mask applies), for a caller needing the
 // corpus as well as the masking to read it off the cached Masker instead of
@@ -718,7 +797,17 @@ func (m Masker) Mask(p []byte) []byte {
 // overlap join one run; occurrences that only touch stay two.
 func (m Masker) runs(p []byte) [][2]int {
 	var occ [][2]int
+	var present [256]bool
+	for _, b := range p {
+		present[b] = true
+	}
 	for _, s := range m.secrets {
+		if !present[s[0]] {
+			continue
+		}
+		if searched != nil {
+			*searched++
+		}
 		for i := 0; ; {
 			j := bytes.Index(p[i:], s)
 			if j < 0 {

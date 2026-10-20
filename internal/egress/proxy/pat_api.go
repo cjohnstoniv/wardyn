@@ -212,7 +212,7 @@ func (p *Proxy) forwardAPIDoor(w http.ResponseWriter, r *http.Request, host stri
 	if p.scanner != nil && p.scanner.Mode() != contentscan.ModeOff {
 		if p.scanner.InspectForwardEgress() {
 			if q, err := url.QueryUnescape(r.URL.RawQuery); err == nil && q != "" {
-				res, _, serr := p.scanner.ScanRequest(contentscan.ChannelGeneric, []byte(q))
+				res, _, serr := p.scanner.ScanRequestContext(r.Context(), contentscan.ChannelGeneric, []byte(q))
 				if p.scanner.ShouldBlock(res) {
 					p.emitLLMDecision(r, host, port, egress.Deny, ruleSourceLLMBlocked, scanSummaryFrom(res, serr, p.scanner, "block", contentscan.ChannelGeneric))
 					writeScanBlocked(w, len(res.Findings), categoriesOf(res.Findings), res.SkipReason)

@@ -533,7 +533,7 @@ func (p *Proxy) scanBufferedBody(w http.ResponseWriter, r *http.Request, host st
 		p.scanFault(w, shape, readErrMsg, err, http.StatusBadGateway)
 		return nil, nil, noRelease, true
 	}
-	res, _, serr := p.scanner.ScanRequest(channel, buffered)
+	res, _, serr := p.scanner.ScanRequestContext(r.Context(), channel, buffered)
 	free()
 	if p.scanner.ShouldBlock(res) {
 		release()

@@ -115,7 +115,7 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 	if s.cfg.Store == nil {
 		return workspaceSeed{}, seedErr(http.StatusUnprocessableEntity, reasonWorkspaceSeedStoreUnavailable, fmt.Errorf("workspace_id requires a store, but none is configured"))
 	}
-	all, lerr := s.cfg.Store.ListWorkspaces(ctx)
+	all, lerr := s.listWorkspaces(ctx)
 	if lerr != nil {
 		return workspaceSeed{}, seedErr(http.StatusUnprocessableEntity, reasonWorkspaceSeedUnreadable, fmt.Errorf("list workspaces: %w", lerr))
 	}
@@ -380,7 +380,7 @@ func (s *Server) authorizeSpecWorkspaceSources(ctx context.Context, r *http.Requ
 	if s.cfg.Store == nil || (len(spec.WorkspaceMounts) == 0 && len(spec.WorkspaceRepos) == 0) {
 		return 0, "", nil
 	}
-	all, err := s.cfg.Store.ListWorkspaces(ctx)
+	all, err := s.listWorkspaces(ctx)
 	if err != nil {
 		return http.StatusUnprocessableEntity, reasonWorkspaceSourcesListUnavailable, fmt.Errorf("list workspaces: %w", err)
 	}

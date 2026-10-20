@@ -126,7 +126,7 @@ func (j *joinedCast) openNext() (bool, error) {
 	if j.next > types.RecordingMaxParts {
 		return false, nil
 	}
-	rc, err := j.s.OpenCast(j.ctx, CastKey(j.runID, PartSuffix(j.next)))
+	rc, err := j.s.OpenCast(continuingReplay(j.ctx), CastKey(j.runID, PartSuffix(j.next)))
 	if errors.Is(err, ErrNotFound) {
 		return false, nil
 	}

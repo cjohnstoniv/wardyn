@@ -114,7 +114,7 @@ type ScanSummary struct {
 	Action     string        `json:"action"`                // "alert" | "block" | "skip" | "bypass" | "fail"
 	Channel    string        `json:"channel,omitempty"`     // e.g. "anthropic.messages"
 	Skipped    bool          `json:"skipped,omitempty"`     // a span/the body was not fully scanned
-	SkipReason string        `json:"skip_reason,omitempty"` // "span_oversize" | "parse_error" | "sidecar_error" | "body_oversize" | "uninspected_channel" | "findings_capped"
+	SkipReason string        `json:"skip_reason,omitempty"` // "span_oversize" | "parse_error" | "sidecar_error" | "sidecar_call_cap" | "body_oversize" | "uninspected_channel" | "findings_capped"
 	Findings   []ScanFinding `json:"findings,omitempty"`
 	// FindingsCapped and FindingsPastCap put the per-request findings cap ON
 	// THE WIRE, since Findings above carries at most the cap's worth of rows

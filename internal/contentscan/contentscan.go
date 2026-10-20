@@ -22,6 +22,8 @@
 package contentscan
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -134,7 +136,7 @@ type Result struct {
 	Scanned    bool      `json:"scanned"`
 	Findings   []Finding `json:"findings,omitempty"`
 	Skipped    bool      `json:"skipped,omitempty"`     // at least one span/the body was not fully scanned
-	SkipReason string    `json:"skip_reason,omitempty"` // "span_oversize" | "parse_error" | "sidecar_error" | "attachment_decode_error" | "scan_budget" | "findings_capped"
+	SkipReason string    `json:"skip_reason,omitempty"` // "span_oversize" | "parse_error" | "sidecar_error" | "sidecar_call_cap" | "attachment_decode_error" | "scan_budget" | "findings_capped"
 
 	// FindingsDropped counts every finding examined past the per-request cap
 	// once exceeded, including a block-relevant finding kept back rather than
@@ -367,6 +369,12 @@ func (e *Engine) capFindings(res *Result, vetted, displace int) (int, int) {
 // A malformed/unknown body is reported as Skipped{parse_error} plus the
 // error; the caller decides allow-vs-block via ShouldBlock (honoring fail-open).
 func (e *Engine) ScanRequest(channel Channel, body []byte) (res Result, out []byte, err error) {
+	return e.ScanRequestContext(context.Background(), channel, body)
+}
+
+// ScanRequestContext is ScanRequest with the request's context bounding every
+// sidecar call, so a caller that went away stops costing the sidecar.
+func (e *Engine) ScanRequestContext(ctx context.Context, channel Channel, body []byte) (res Result, out []byte, err error) {
 	if e == nil || e.mode == ModeOff {
 		return Result{Scanned: false}, body, nil
 	}
@@ -385,6 +393,9 @@ func (e *Engine) ScanRequest(channel Channel, body []byte) (res Result, out []by
 	// displace is that arm's cursor into the RETAINED head, carried across
 	// spans so each position is examined at most once.
 	displace := 0
+	// Once the sidecar fails (or its call cap is hit) it is not asked again for this request:
+	// one outage must not cost a timeout per remaining span.
+	sidecarCalls, sidecarDown := 0, false
 	scanSpan := func(s Span) {
 		if e.maxBytes > 0 && len(s.Text) > e.maxBytes {
 			res.Skipped = true
@@ -412,9 +423,23 @@ func (e *Engine) ScanRequest(channel Channel, body []byte) (res Result, out []by
 			// can tell "inspected clean" from "scanner never ran". !res.Skipped
 			// guards a later outage from clobbering an earlier skip reason.
 			if sc, ok := d.(*sidecarDetector); ok {
-				if serr := sc.scanReport(s, &res.Findings); serr != nil && !res.Skipped {
-					res.Skipped = true
-					res.SkipReason = "sidecar_error"
+				if sidecarDown {
+					continue
+				}
+				serr := errSidecarCallCap
+				if sidecarCalls < maxSidecarCallsPerRequest {
+					sidecarCalls++
+					serr = sc.scanReport(ctx, s, &res.Findings)
+				}
+				if serr != nil {
+					sidecarDown = true
+					if !res.Skipped {
+						res.Skipped = true
+						res.SkipReason = "sidecar_error"
+						if errors.Is(serr, errSidecarCallCap) {
+							res.SkipReason = "sidecar_call_cap"
+						}
+					}
 				}
 				continue
 			}
@@ -448,7 +473,7 @@ func (e *Engine) ScanRequest(channel Channel, body []byte) (res Result, out []by
 // blockMin) blocks. A SKIP (uninspectable content) blocks ONLY when
 // fail-open is disabled (OnScannerError=block); by default a skip never
 // blocks, since oversize/odd bodies are normal for coding agents and
-// bricking the only model path would be a self-DoS. "sidecar_error" is
+// bricking the only model path would be a self-DoS. "sidecar_error" and "sidecar_call_cap" are
 // treated the same: fail-open by default, fail-CLOSED only when the
 // operator has explicitly set OnScannerError=block.
 func (e *Engine) ShouldBlock(res Result) bool {
@@ -462,7 +487,7 @@ func (e *Engine) ShouldBlock(res Result) bool {
 	}
 	if res.Skipped && !e.failOpen &&
 		(res.SkipReason == "parse_error" || res.SkipReason == "span_oversize" ||
-			res.SkipReason == "sidecar_error" || res.SkipReason == "attachment_decode_error" ||
+			res.SkipReason == "sidecar_error" || res.SkipReason == "sidecar_call_cap" || res.SkipReason == "attachment_decode_error" ||
 			res.SkipReason == "scan_budget" || res.SkipReason == "findings_capped") {
 		return true
 	}

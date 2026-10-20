@@ -122,7 +122,7 @@ func (s *Server) stepWorkspaces(f *runFold, rec *foldRecorder) bool {
 	// referencedWorkspaces does.
 	var all []types.Workspace
 	if s.cfg.Store != nil {
-		all, _ = s.cfg.Store.ListWorkspaces(f.r.Context())
+		all, _ = s.listWorkspaces(f.r.Context())
 	}
 	carriers := s.launchCarrierRule(f.r, f.seed.attached).index(all)
 	f.wsRefs = attachedWorkspaceRefs(f.seed.attached, referencedWorkspacesBy(carriers, f.spec))

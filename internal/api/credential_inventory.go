@@ -207,21 +207,25 @@ func (s *Server) annotateKeyDomains(ctx context.Context, inv *credentialInventor
 	if svc == nil {
 		return
 	}
-	placed := map[string]keydomain.Placement{}
+	var people []string
+	for _, row := range inv.Credentials {
+		people = append(people, row.Person)
+	}
+	placed := svc.PlaceMany(ctx, people)
+	warned := map[string]bool{}
 	for i := range inv.Credentials {
 		row := &inv.Credentials[i]
-		p, seen := placed[row.Person]
-		if !seen {
-			var err error
-			if p, err = svc.Place(ctx, row.Person); err != nil {
-				if errors.Is(err, keydomain.ErrAmbiguous) || errors.Is(err, keydomain.ErrGroupsTruncated) {
-					p = keydomain.Placement{Source: "conflict"}
-				} else {
-					slog.WarnContext(ctx, "wardynd: reading a person's key domain failed", slog.Any("err", err))
-					p = keydomain.Placement{}
-				}
+		p, err := placed[row.Person].Placement, placed[row.Person].Err
+		switch {
+		case err == nil:
+		case errors.Is(err, keydomain.ErrAmbiguous) || errors.Is(err, keydomain.ErrGroupsTruncated):
+			p = keydomain.Placement{Source: "conflict"}
+		default:
+			if !warned[row.Person] {
+				warned[row.Person] = true
+				slog.WarnContext(ctx, "wardynd: reading a person's key domain failed", slog.Any("err", err))
 			}
-			placed[row.Person] = p
+			p = keydomain.Placement{}
 		}
 		row.KeyDomain, row.KeyDomainSource, row.KeyDomainGroup = p.Domain, p.Source, p.Group
 	}

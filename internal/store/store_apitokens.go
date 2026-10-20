@@ -168,6 +168,31 @@ func (s PG) ListAPITokens(ctx context.Context) ([]types.APIToken, error) {
 	return queryAPITokens(ctx, s, q)
 }
 
+// APITokensMintedForOthersLister is the SQL form of the minted-for-others inventory: only the tokens an
+// admin minted for someone else, the filter GET /tokens?minted_for_others=true applies, so the
+// deployment's finished tokens are not read to be thrown away. A capability interface like
+// APITokensByPrincipalPager.
+type APITokensMintedForOthersLister interface {
+	ListAPITokensMintedForOthers(ctx context.Context, withFinished bool, now time.Time) ([]types.APIToken, error)
+}
+
+var _ APITokensMintedForOthersLister = PG{}
+
+// ListAPITokensMintedForOthers returns, newest first, the tokens whose minter is set and is not their
+// owner. A finished token (revoked, or expired at now) is left out unless withFinished.
+func (s PG) ListAPITokensMintedForOthers(ctx context.Context, withFinished bool, now time.Time) ([]types.APIToken, error) {
+	q := `
+		SELECT ` + apiTokenCols + `
+		FROM api_tokens WHERE COALESCE(minted_by, '') <> '' AND minted_by <> principal`
+	var args []any
+	if !withFinished {
+		q += ` AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > $1)`
+		args = append(args, now)
+	}
+	q += ` ORDER BY created_at DESC`
+	return queryAPITokens(ctx, s, q, args...)
+}
+
 // RefreshAPITokenIdentity re-stamps role, user type, and the group snapshot
 // (with its completeness bit) on EVERY token principal holds — the api-token
 // twin of RefreshSSHKeyRoles; OnLogin fires both so one login bounds both

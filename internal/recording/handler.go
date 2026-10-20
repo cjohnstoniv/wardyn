@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -34,7 +35,8 @@ type Authorizer func(r *http.Request, runIDPrefix string) bool
 // are enforced equal (case-insensitive, on the run-id prefix) before
 // authorize runs, so a caller can't request .../runs/A/recording/B to read
 // run B's cast under an authorization scoped to run A. Both checks collapse
-// to the same 404 (no existence oracle). Store errors produce 500. A bare run
+// to the same 404 (no existence oracle). Store errors produce 500, and a store with every read slot
+// held (ErrReadBusy) a 503 with Retry-After. A bare run
 // id is served joined across its tail-uploaded parts (OpenJoined).
 //
 // A key servableKey or canonicalRunID refuses gets that same 404 before
@@ -58,6 +60,11 @@ func Handler(store Store, authorize Authorizer) http.Handler {
 			http.Error(w, "recording not found", http.StatusNotFound)
 			return
 		}
+		if errors.Is(err, ErrReadBusy) {
+			w.Header().Set("Retry-After", "5")
+			http.Error(w, "too many recordings are being replayed; retry shortly", http.StatusServiceUnavailable)
+			return
+		}
 		if err != nil {
 			slog.ErrorContext(req.Context(), "recording: replay open failed", "run", prefix, "error", err)
 			http.Error(w, "recording store error", http.StatusInternalServerError)
@@ -72,7 +79,8 @@ func Handler(store Store, authorize Authorizer) http.Handler {
 		// error part-way would end the body short of its tail after a 200, and a short cast is
 		// still a well-formed one; log it and abort the response so the client sees a failed transfer.
 		var readErr error
-		_, _ = io.Copy(w, readerFunc(func(p []byte) (int, error) {
+		// The last write's deadline also covers the final flush; the server clears it before the next request.
+		_, _ = io.Copy(deadlineWriter{w: w, rc: http.NewResponseController(w)}, readerFunc(func(p []byte) (int, error) {
 			n, err := rc.Read(p)
 			if err != nil && !errors.Is(err, io.EOF) {
 				readErr = err
@@ -85,6 +93,24 @@ func Handler(store Store, authorize Authorizer) http.Handler {
 		}
 	})
 	return r
+}
+
+// replayWriteTimeout bounds each write of a replay to its client. The server sets no write timeout, and an
+// open cast holds one of the few read slots until the reader is closed, so a client that stops reading
+// (a zero TCP window) would pin the slot, and its buffered payload, indefinitely. A write that outlasts
+// the bound fails, the copy ends, and the deferred Close frees the slot.
+var replayWriteTimeout = 30 * time.Second
+
+// deadlineWriter arms a fresh write deadline before every write. A writer that does not support
+// deadlines (a recorder) is written to without one.
+type deadlineWriter struct {
+	w  io.Writer
+	rc *http.ResponseController
+}
+
+func (d deadlineWriter) Write(p []byte) (int, error) {
+	_ = d.rc.SetWriteDeadline(time.Now().Add(replayWriteTimeout))
+	return d.w.Write(p)
 }
 
 // servableKey reports whether key may be asked of the store at all. Handler

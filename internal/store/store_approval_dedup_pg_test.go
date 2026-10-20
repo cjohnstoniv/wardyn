@@ -10,7 +10,10 @@ package store_test
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -103,5 +106,33 @@ func TestPG_RequestApproval_ConcurrentDedupOneRow(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("got %d PENDING rows, want exactly 1 (0022 unique index must reject duplicates)", count)
+	}
+}
+
+// TestPG_CreateApproval_LargeScopeKeepsDedup: a pending scope too large for a btree entry (4 KiB of
+// incompressible hex, as a tool_call carrying a token-laden command is) must still insert, an identical
+// second one must still be refused as a duplicate, and a different scope must insert alongside it.
+func TestPG_CreateApproval_LargeScopeKeepsDedup(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	run := persistRun(t, ctx, pool, newRun(types.RunRunning))
+
+	big := func() string {
+		b := make([]byte, 2048)
+		if _, err := rand.Read(b); err != nil {
+			t.Fatalf("rand: %v", err)
+		}
+		return `{"cmd":"` + hex.EncodeToString(b) + `"}`
+	}
+	scope := big()
+	if _, err := st.CreateApproval(ctx, pendingApproval(run.ID, types.ApprovalToolCall, scope)); err != nil {
+		t.Fatalf("4 KiB scope must insert: %v", err)
+	}
+	if _, err := st.CreateApproval(ctx, pendingApproval(run.ID, types.ApprovalToolCall, scope)); !errors.Is(err, store.ErrDuplicatePending) {
+		t.Fatalf("identical pending scope = %v, want ErrDuplicatePending", err)
+	}
+	if _, err := st.CreateApproval(ctx, pendingApproval(run.ID, types.ApprovalToolCall, big())); err != nil {
+		t.Fatalf("a different scope must insert: %v", err)
 	}
 }

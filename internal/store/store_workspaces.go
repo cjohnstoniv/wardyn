@@ -145,6 +145,21 @@ func (s PG) ListWorkspaces(ctx context.Context) ([]types.Workspace, error) {
 	return s.ListWorkspacesPage(ctx, Page{})
 }
 
+// WorkspaceOwnerChecker answers whether anyone names owner as a workspace's owner, without reading
+// the workspaces. A capability interface like WorkspacesByOwnerPager.
+type WorkspaceOwnerChecker interface {
+	OwnsWorkspace(ctx context.Context, owner string) (bool, error)
+}
+
+var _ WorkspaceOwnerChecker = PG{}
+
+// OwnsWorkspace reports whether any workspace is owned_by owner exactly; workspaces_owned_by_idx serves it.
+func (s PG) OwnsWorkspace(ctx context.Context, owner string) (bool, error) {
+	var owns bool
+	err := s.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM workspaces WHERE owned_by = $1)`, owner).Scan(&owns)
+	return owns, err
+}
+
 // UpdateWorkspace replaces a workspace's editable composition via a
 // FULL-column write of every scan-owned field (profile, image_ref,
 // built_profile_hash, status, etc.), WITH ONE DELIBERATE EXCEPTION:

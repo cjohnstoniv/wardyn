@@ -80,11 +80,13 @@ var _ PrincipalDirectoryStore = PG{}
 // the principal their credentials, runs and audit rows carry. The link is the one the sign-in itself
 // makes (samePersonKey): the same issuer, tenant and object id. The people row's own namespace is
 // empty, and erasing it would report success over a person's data left behind.
+// The join's own empty-object-id exclusion on i repeats the one on p, so that it can read the partial
+// principal_identities_object_key instead of every identity.
 func signedInAs(query string) string {
 	return `SELECT DISTINCT COALESCE(i.principal, h.principal) FROM (` + query + `) h(principal)
 	  LEFT JOIN people p ON p.principal = h.principal AND p.object_id <> ''
 	  LEFT JOIN principal_identities i ON i.issuer = p.issuer AND i.tenant_id = p.tenant_id
-	   AND i.object_id = p.object_id AND i.principal IS NOT NULL`
+	   AND i.object_id = p.object_id AND i.object_id <> '' AND i.principal IS NOT NULL`
 }
 
 func (s PG) PrincipalsNamed(ctx context.Context, name string) ([]string, error) {

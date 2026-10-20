@@ -12,6 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
 	"github.com/cjohnstoniv/wardyn/internal/setup"
@@ -1038,6 +1041,68 @@ func TestSetupStatus_KEKLocalRowsAbsentForAMember(t *testing.T) {
 	}
 	if reads.Load() != 0 {
 		t.Errorf("the local-row count was read %d time(s) for a member", reads.Load())
+	}
+}
+
+// connectCounter counts the connections a pool tries to open, which is one for each read it is asked.
+type connectCounter struct{ n atomic.Int32 }
+
+func (c *connectCounter) TraceConnectStart(ctx context.Context, _ pgx.TraceConnectStartData) context.Context {
+	c.n.Add(1)
+	return ctx
+}
+
+func (c *connectCounter) TraceConnectEnd(context.Context, pgx.TraceConnectEndData) {}
+
+func (c *connectCounter) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryStartData) context.Context {
+	return ctx
+}
+
+func (c *connectCounter) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+// handleSetupStatus redacts every check for anyone but an operator, so a security admin's status call
+// reads neither the key-custody rows nor the local-row count; an admin's reads both.
+func TestSetupStatus_KeyCustodyRowsAreOnlyReadForAnOperator(t *testing.T) {
+	var keyReads connectCounter
+	cfgPool, err := pgxpool.ParseConfig("postgres://wardyn@127.0.0.1:1/wardyn?sslmode=disable&connect_timeout=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfgPool.ConnConfig.Tracer = &keyReads
+	pool, err := pgxpool.NewWithConfig(t.Context(), cfgPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	var localReads atomic.Int32
+	h := newHarness(t)
+	cfg := baseTestConfig(h, &integStore{govEscapeStore: newGovEscapeStore(&capStore{})})
+	cfg.Runner = &fakeRunner{}
+	cfg.Secrets = &memSecrets{m: map[string][]byte{}}
+	cfg.OIDC = &oidc.Authenticator{}
+	cfg.KEKRequired, cfg.SecretKeyService = true, "Vault Transit at vault.example:8200"
+	cfg.SecretLocalRows = func(context.Context) (int, error) { localReads.Add(1); return 4, nil }
+	cfg.KeyDomains = keydomain.NewService(pool, []string{"finance"})
+	srv := New(cfg)
+	status := func(role string) {
+		t.Helper()
+		if code, _ := decodeSetupSSO(t, srv, ssoSession(t, "sub-"+role, role+"@corp.example", role)); code != 200 {
+			t.Fatalf("%s GET /setup/status: code = %d, want 200", role, code)
+		}
+	}
+
+	status(oidc.RoleAdmin)
+	if localReads.Load() == 0 || keyReads.n.Load() == 0 {
+		t.Fatalf("an admin's status read the local-row count %d time(s) and tried %d key-domain read(s); the fixture is not exercising the rows",
+			localReads.Load(), keyReads.n.Load())
+	}
+	localReads.Store(0)
+	keyReads.n.Store(0)
+	status(oidc.RoleSecurityAdmin)
+	if localReads.Load() != 0 || keyReads.n.Load() != 0 {
+		t.Errorf("a security admin's status read the local-row count %d time(s) and tried %d key-domain read(s); both are redacted for them",
+			localReads.Load(), keyReads.n.Load())
 	}
 }
 

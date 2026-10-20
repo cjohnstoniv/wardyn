@@ -352,9 +352,8 @@ func (k peopleKeying) subKnown(ctx context.Context, sub string) (bool, error) {
 			return len(runs) > 0, err
 		}
 	}
-	wss, err := st.ListWorkspaces(ctx)
-	if err != nil || slices.ContainsFunc(wss, func(w types.Workspace) bool { return w.OwnedBy == sub }) {
-		return err == nil, err
+	if owns, err := k.ownsWorkspace(ctx, sub); err != nil || owns {
+		return owns, err
 	}
 	if k.s.cfg.Secrets == nil {
 		return false, nil
@@ -363,6 +362,17 @@ func (k peopleKeying) subKnown(ctx context.Context, sub string) (bool, error) {
 	// are exactly what a re-key would orphan.
 	names, err := k.s.cfg.Secrets.For(sub).List(ctx)
 	return len(names) > 0, err
+}
+
+// ownsWorkspace reports whether any workspace is owned by sub. A store that answers it asks the
+// database; any other lists the workspaces.
+func (k peopleKeying) ownsWorkspace(ctx context.Context, sub string) (bool, error) {
+	st := k.s.cfg.Store
+	if oc, ok := st.(store.WorkspaceOwnerChecker); ok {
+		return oc.OwnsWorkspace(ctx, sub)
+	}
+	wss, err := st.ListWorkspaces(ctx)
+	return slices.ContainsFunc(wss, func(w types.Workspace) bool { return w.OwnedBy == sub }), err
 }
 
 // attachIgnored writes the denied person.attach for a sign-in that matched an

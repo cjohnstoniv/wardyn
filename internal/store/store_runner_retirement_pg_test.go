@@ -440,3 +440,119 @@ func TestPG_StageRunnerExit_TerminalReceiptOnlyNotInWork(t *testing.T) {
 		t.Fatalf("receipt = %+v, want the stored exit's hash %s", receipt, hash)
 	}
 }
+
+// oldRetirementCandidatesSQL is RunnerRetirementCandidates as it read before it was driven from the open
+// set: from every watermark row.
+const oldRetirementCandidatesSQL = `SELECT r.id FROM runner_output_watermarks w
+	JOIN agent_runs r ON r.id = w.run_id
+	JOIN runner_spool_cursors c ON c.run_id = r.id AND c.runner_id = r.runner_id
+	JOIN runners rn ON rn.id = r.runner_id AND rn.state = 'claimed' AND rn.revoked_at IS NULL AND rn.retire_capable
+	LEFT JOIN runner_retirements t ON t.run_id = r.id
+	WHERE NOT (r.state = ANY($1)) AND (t.state IN ('kill', 'retire') OR (t.run_id IS NULL AND r.sandbox_ref <> ''))
+		AND NOT EXISTS (SELECT 1 FROM runner_pending_actions p WHERE p.run_id = r.id AND p.obligation_id = t.obligation_id AND p.applied_at IS NULL)
+	ORDER BY r.id`
+
+// The open-set query answers exactly what the watermark-driven one did, over every run state, every
+// retirement state (or none), an empty and a live ref, and every way the runner join can fail.
+func TestPG_RunnerRetirementCandidates_MatchesTheWatermarkDrivenQuery(t *testing.T) {
+	f := newActionFixture(t)
+	if err := f.st.SetRunnerRetireCapable(t.Context(), f.rn.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	other := claimed(t, f.st, t.Context(), "action-owner-2")
+	revoked := claimed(t, f.st, t.Context(), "action-owner-3")
+	for _, id := range []uuid.UUID{other.ID, revoked.ID} {
+		if err := f.st.SetRunnerRetireCapable(t.Context(), id, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := f.pool.Exec(t.Context(), `UPDATE runners SET revoked_at = now() WHERE id = $1`, revoked.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(t.Context(), `UPDATE runners SET retire_capable = false WHERE id = $1`, other.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	states := []types.RunState{types.RunQueued, types.RunPending, types.RunStarting, types.RunRunning, types.RunWaiting,
+		types.RunCompleted, types.RunFailed, types.RunKilled, types.RunStopped, types.RunArchived}
+	retirements := []string{"", "kill", "retire", "settled", "refused", "abandoned"}
+	seed := func(rn types.Runner, state types.RunState, retirement string, ref, watermark, cursor bool) uuid.UUID {
+		run := f.localRun(t, rn, rn.Owner)
+		sandboxRef := run.SandboxRef
+		if !ref {
+			sandboxRef = ""
+		}
+		exec := func(q string, args ...any) {
+			t.Helper()
+			if _, err := f.pool.Exec(t.Context(), q, args...); err != nil {
+				t.Fatalf("%s: %v", q, err)
+			}
+		}
+		exec(`UPDATE agent_runs SET state = $2, sandbox_ref = $3 WHERE id = $1`, run.ID, string(state), sandboxRef)
+		if watermark {
+			exec(`INSERT INTO runner_output_watermarks (run_id, capture) VALUES ($1, true)`, run.ID)
+		}
+		if cursor {
+			exec(`INSERT INTO runner_spool_cursors (run_id, runner_id, spool_id, last_seq, recent_hashes) VALUES ($1, $2, $3, 0, '{}')`, run.ID, rn.ID, uuid.New())
+		}
+		if retirement != "" {
+			exec(`INSERT INTO runner_retirements (run_id, runner_id, obligation_id, ref, state, settled_at)
+				VALUES ($1, $2, $3, $4, $5, CASE WHEN $5 IN ('kill', 'retire') THEN NULL ELSE now() END)`,
+				run.ID, rn.ID, uuid.New(), run.SandboxRef, retirement)
+		}
+		return run.ID
+	}
+	var open []uuid.UUID
+	for _, state := range states {
+		for _, retirement := range retirements {
+			for _, ref := range []bool{false, true} {
+				id := seed(f.rn, state, retirement, ref, true, true)
+				if retirement == "kill" && ref {
+					open = append(open, id)
+				}
+			}
+		}
+	}
+	for _, rn := range []types.Runner{other, revoked} {
+		for _, retirement := range retirements {
+			seed(rn, types.RunCompleted, retirement, true, true, true)
+		}
+	}
+	seed(f.rn, types.RunCompleted, "", true, false, true)
+	seed(f.rn, types.RunCompleted, "kill", true, true, false)
+	for _, id := range open[:2] {
+		if _, err := f.pool.Exec(t.Context(), `INSERT INTO runner_pending_actions (id, runner_id, run_id, kind, ref, binding_version, owner, obligation_id)
+			SELECT gen_random_uuid(), runner_id, run_id, 'kill', ref, 1, $2, obligation_id FROM runner_retirements WHERE run_id = $1`, id, f.rn.Owner); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	nonTerminal := make([]string, 0, len(types.NonTerminalRunStates))
+	for _, st := range types.NonTerminalRunStates {
+		nonTerminal = append(nonTerminal, string(st))
+	}
+	var want []uuid.UUID
+	rows, err := f.pool.Query(t.Context(), oldRetirementCandidatesSQL, nonTerminal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		want = append(want, id)
+	}
+	rows.Close()
+	got, err := f.st.RunnerRetirementCandidates(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := make([]uuid.UUID, 0, len(got))
+	for _, c := range got {
+		ids = append(ids, c.RunID)
+	}
+	if len(want) < 10 || !slices.Equal(ids, want) {
+		t.Fatalf("candidates = %d runs, the watermark-driven query returns %d (want equal, and a corpus that selects some)", len(ids), len(want))
+	}
+}
