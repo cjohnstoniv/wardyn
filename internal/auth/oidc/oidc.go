@@ -302,7 +302,8 @@ type Subject struct {
 // only when KeysPeopleByObjectID; every other issuer signs in as its `sub`, exactly as before.
 type PersonKeying interface {
 	// PrincipalFor is the principal s signs in as: the person keyed by exactly s.Issuer,
-	// s.TenantID and s.ObjectID if there is one and s.Sub names no one yet, else s.Sub. refused is true when s.Sub itself
+	// s.TenantID and s.ObjectID if there is one and either s.Sub names no one yet or that identity
+	// is already bound to the person, else s.Sub. refused is true when s.Sub itself
 	// names a person keyed by an object id this token does not carry. An email never enters it.
 	PrincipalFor(ctx context.Context, s Subject) (principal string, refused bool, err error)
 	// Attached records an admitted sign-in that resolved to such a person, naming both parties.
