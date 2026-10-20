@@ -14,6 +14,7 @@ import { RUNNER_POOL_REFUSAL } from "../../../../../lib/runner-pool-refusals";
 import type { RunnerPoolCatalogueEntry, RunnerPoolList } from "../../../../../lib/types/runner-pools";
 import { NR_RUN } from "../../../../wardyn/copy/new-run/run";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
+import { NR_MACHINE } from "../../../../wardyn/copy/new-run/machine";
 import type { RunIntent } from "../../draft/run-intent";
 import { poolScope } from "../../lenses/run-lens";
 import { NewRunDraftProvider, useNewRunDispatch, useNewRunDraft } from "../../new-run-route";
@@ -416,5 +417,40 @@ describe("Run step: mode, timing and command", () => {
     await userEvent.click(screen.getByRole("button", { name: NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_HARNESSES) }));
     expect(screen.getByLabelText(new RegExp(NR_RUN.COMMAND_LABEL))).toHaveFocus();
     expect(go).not.toHaveBeenCalled();
+  });
+});
+
+describe("Run step: machine kind (M5-Revised)", () => {
+  it("starts on Container, with the barriers, and writes nothing until the person picks", async () => {
+    show(AGENT);
+    await poolSelect();
+    expect(screen.getByRole("button", { name: NR_MACHINE.CONTAINER })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText(NR_MACHINE.CONTAINER_HELP)).toBeInTheDocument();
+    expect(barrierRadio("Wall")).toBeInTheDocument();
+    expect(intentNow().machine_kind).toBeUndefined();
+  });
+
+  it("a virtual machine names Linux, says the VM is the barrier, drops the container barrier and comes back", async () => {
+    show({ ...AGENT, confinement_class: "CC3" });
+    await poolSelect();
+    await userEvent.click(screen.getByRole("button", { name: NR_MACHINE.VM }));
+    expect(intentNow().machine_kind).toBe("linux_vm");
+    expect(intentNow().confinement_class).toBeUndefined();
+    expect(screen.getByText(NR_MACHINE.VM_HELP)).toBeInTheDocument();
+    expect(within(screen.getByRole("group", { name: NR_MACHINE.OS_LABEL })).getByRole("button", { name: NR_MACHINE.OS_LINUX })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText(NR_MACHINE.OS_LATER)).toBeInTheDocument();
+    const fact = screen.getByTestId("nr-vm-barrier");
+    expect(within(fact).getByText(NR_MACHINE.BARRIER_VM)).toBeInTheDocument();
+    expect(within(fact).getByText(NR_MACHINE.BARRIER_VM_WHY)).toBeInTheDocument();
+    const changes = screen.getByRole("region", { name: NR_MACHINE.CHANGES_TITLE });
+    expect(within(changes).getByText(NR_MACHINE.CHANGES_NETWORK_BODY)).toBeInTheDocument();
+    expect(within(changes).getByText(NR_MACHINE.CHANGES_CLIPBOARD_BODY)).toBeInTheDocument();
+    expect(screen.queryAllByRole("radio", { name: "Wall" }).filter((r) => !isInaccessible(r))).toHaveLength(0);
+    // The pool stays: a VM still lands on a pool.
+    expect(await poolSelect()).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: NR_MACHINE.CONTAINER }));
+    expect(intentNow().machine_kind).toBeUndefined();
+    expect(barrierRadio("Wall")).toBeInTheDocument();
   });
 });

@@ -22,7 +22,10 @@ export interface WireResult {
   unsupported: string[];
 }
 
-const carried = (rows: readonly TemplateFieldRule[]) => new Set(rows.filter((r) => !r.excluded && !r.pending).map((r) => r.name));
+// A row excluded at "launch" is one a template never carries but each launch names (machine_kind):
+// the draft is a launch, so it sends it. Save as template drops it (save-as-dialog.model.ts).
+const carried = (rows: readonly TemplateFieldRule[]) =>
+  new Set(rows.filter((r) => (!r.excluded || r.excluded === "launch") && !r.pending).map((r) => r.name));
 
 /**
  * A serializer over one registry. The overlay's row may be named either way

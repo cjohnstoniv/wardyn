@@ -143,3 +143,11 @@ describe("the overlay's registry row, under either name", () => {
     expect(wireSerializer(without, TEMPLATE_POLICY_FIELDS)(overlay)).toEqual({ body: { mode_contract: "0.9" }, unsupported: ["inline_policy"] });
   });
 });
+
+describe("launch-only fields", () => {
+  it("sends the machine kind each launch names, which a template never carries", () => {
+    const { body, unsupported } = intentToWire({ machine_kind: "linux_vm" });
+    expect(unsupported).toEqual([]);
+    expect(body).toEqual({ mode_contract: "0.9", machine_kind: "linux_vm" });
+  });
+});

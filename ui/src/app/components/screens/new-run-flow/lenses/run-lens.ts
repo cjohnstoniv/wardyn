@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Owns experience, workload.kind, workload.command, runner_pool_id and
-// confinement_class.
+// Owns experience, workload.kind, workload.command, runner_pool_id,
+// machine_kind and confinement_class.
 
 import type { ConfinementClass } from "../../../../lib/types/runs";
 import type { RunnerPoolScope } from "../../../../lib/types/runner-pools";
@@ -26,6 +26,13 @@ export type PoolScope = RunnerPoolScope;
 export const poolScope = (scope: RunnerPoolScope): PoolScope => scope;
 
 export const choosePool = (intent: RunIntent, poolId: string): RunIntent => withKeys(intent, { runner_pool_id: poolId });
+
+/**
+ * The machine kind. A container is the default, so it is the absent key; a VM is its own barrier, so a
+ * barrier chosen for a container is dropped with the switch.
+ */
+export const chooseMachineKind = (intent: RunIntent, kind: "container" | "linux_vm"): RunIntent =>
+  kind === "linux_vm" ? withKeys(intent, { machine_kind: "linux_vm", confinement_class: undefined }) : withKeys(intent, { machine_kind: undefined });
 
 /** Called only when the person changes the barrier: an untouched draft lets the server choose. */
 export const chooseBarrier = (intent: RunIntent, cc: ConfinementClass): RunIntent => withKeys(intent, { confinement_class: cc });

@@ -27,6 +27,8 @@ export interface CreateRunInput {
   description?: string;
   policy_id?: string;
   confinement_class?: ConfinementClass;
+  // pkg/client.CreateRunRequest.MachineKind: absent is a container; "linux_vm" a Linux desktop VM.
+  machine_kind?: "container" | "linux_vm";
   interactive?: boolean;
   // Bring Your Own Image: a user-supplied base image the backend WRAPS with the
   // runner tools (FROM <image> + COPY tools + cleared ENTRYPOINT) before use.
