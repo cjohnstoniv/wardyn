@@ -63,6 +63,19 @@ func takeoverScopeOf(raw json.RawMessage) (json.RawMessage, bool) {
 	return out, err == nil
 }
 
+// refuseBackgroundTakeoverRaise answers a raise from a Background run with the 409 the takeover verbs
+// give it (run_background_only): nobody can take over a run with no terminal or desktop, so no request
+// is stored and no banner asks for one, and `wardyn needs-you` prints the refusal and returns at once
+// rather than waiting for a person who cannot come. True when it has answered.
+func (s *Server) refuseBackgroundTakeoverRaise(w http.ResponseWriter, r *http.Request, runID uuid.UUID) bool {
+	run, err := s.cfg.Store.GetRun(r.Context(), runID)
+	if err != nil {
+		writeServerError(w, r, "load run for human_takeover", err)
+		return true
+	}
+	return s.refuseBackgroundOnly(w, r, run, "terminal")
+}
+
 // takeoverReason is a human_takeover row's reason ("" when the scope does not parse).
 func takeoverReason(ap types.ApprovalRequest) string {
 	var sc types.TakeoverScope
