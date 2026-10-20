@@ -36,7 +36,8 @@ var _ runnerCapsStore = store.PG{}
 // never something a run is admitted by. A runner registered before it reported an architecture gets
 // one on its next connect. Every caps event sets the retire capability: a runner without caps.retire
 // (older than 0.9.3) is never sent a retire_run. The runner.connect row Connected owed the session is
-// written last, so it carries the version.
+// written last, so it carries the version. The offline summary and relay status are kept apart
+// (healthFromRunner).
 func (s *Server) capsFromRunner(ctx context.Context, runnerID uuid.UUID, session string, ev runnerwire.Event) {
 	var caps runnerwire.Caps
 	if runnerwire.Unmarshal(ev.Data, &caps) != nil {
@@ -60,6 +61,7 @@ func (s *Server) capsFromRunner(ctx context.Context, runnerID uuid.UUID, session
 			slog.WarnContext(ctx, "wardynd: record runner caps", slog.String("runner_id", runnerID.String()), slog.Any("err", err))
 		}
 	}
+	s.healthFromRunner(ctx, runnerID, caps)
 	if rs, ok := s.cfg.Store.(store.RunnerStore); ok {
 		s.writeOwedRunnerConnect(ctx, rs, runnerID, session, r.Version)
 	}

@@ -26,6 +26,8 @@ const (
 	ActionRunnerTrustWrite        = "runner.trust.write"
 	// ActionRunnerRecoveryRequest: a revive queued recover_containment for a run its runner held contained.
 	ActionRunnerRecoveryRequest = "runner.recovery.request"
+	// ActionRunnerOfflineSummary: a runner that connected again reported why it could not before.
+	ActionRunnerOfflineSummary = "runner.offline_summary"
 )
 
 // AuditActions lists them all.
@@ -34,5 +36,5 @@ var AuditActions = []string{
 	ActionRunnerConnect, ActionRunnerDisconnect, ActionRunnerActionRequest, ActionRunnerActionApply, ActionRunnerActionRefuse,
 	ActionRunnerPostureRecord, ActionRunnerResidentErase, ActionCredentialDeliveryWrite,
 	ActionSSHSyncTransfer, ActionRunnersEnabledSet, ActionRunnerInventoryHold, ActionRunnerUpdate,
-	ActionRunnerTrustWrite, ActionRunnerRecoveryRequest,
+	ActionRunnerTrustWrite, ActionRunnerRecoveryRequest, ActionRunnerOfflineSummary,
 }

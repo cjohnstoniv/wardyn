@@ -222,7 +222,22 @@ Both restart `serve` after a crash. On Linux the unit runs while you are logged 
 - Names are shown and values are not: no token, password or proxy credential appears in either format, and a proxy is shown as its host and port.
 - The proxy stage reads this shell's environment. An installed service does not inherit it, so the line says so ([a runner behind a corporate proxy](#a-runner-behind-a-corporate-proxy)).
 - `wardyn doctor` runs the same network stages for the CLI, adds who `/api/v1/me` says you are, and runs this command's engine, image and relay stages when a runner is installed on the computer.
-- Not checked yet: the service's own state, the runner's last error and a proxy that strips the WebSocket upgrade. Read the log for those ([a runner that never connected](#a-runner-that-never-connected)).
+- Not checked yet: the service's own state and a proxy that strips the WebSocket upgrade. The runner's last error reaches the organisation once it connects ([what the organisation sees](#what-the-organisation-sees-when-a-runner-cannot-connect)). Read the log for those ([a runner that never connected](#a-runner-that-never-connected)).
+
+## What the organisation sees when a runner cannot connect
+
+A runner keeps why it could not connect, or could not start, and reports it the next time it connects. The runner's read (`GET /api/v1/me/runners/{id}` for its owner, `GET /api/v1/runners/{id}` for administrators) shows the last report.
+
+| Field | Holds |
+|---|---|
+| `offline_summary` | The first and last failure, the stage of the last one (a doctor stage name: `dns`, `proxy`, `tls`, `healthz`, `identity`, `engine`, `proxy-image` or `relay`) and a short reason |
+| `relay_status` | A Docker runner's last relay check: `reachable` or `unreachable`, since when, and why |
+
+- Both are runner-reported, and absent until a runner of this release reports them. An older runner sends neither, and an older server ignores both.
+- The reason never holds a credential: the runner removes the user and password of any URL and its own proxy password, and the server removes any URL's user information again. It is cut to 256 bytes.
+- A refusal at start (`engine`, `proxy-image`, `relay`) is kept in the state directory, so it reaches the organisation once a later start connects. A runner that never connects reports nothing.
+- One report per runner is kept, replaced by the next, at most one every 10 seconds. Each stored report writes a `runner.offline_summary` audit row.
+- While serving, a Docker runner checks its relay again on every reconnect and every 5 minutes, without starting a container. A relay that stops answering logs `run relay unreachable` (`warning=relay_unreachable`) and reports `unreachable`; the warning clears when it answers again.
 
 ## A runner behind a corporate proxy
 

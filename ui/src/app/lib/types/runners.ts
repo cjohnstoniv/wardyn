@@ -95,6 +95,34 @@ export interface RunnerView {
   /** The administrators' routes only: who last wrote the trust class, and when. */
   trust_set_by?: string;
   trust_set_at?: string;
+  /** One-runner reads only: the runner's last report of why it could not reach the organisation; runner-reported, absent until a runner that sends one has. */
+  offline_summary?: RunnerOfflineSummary;
+  /** One-runner reads only: the runner's last run relay check; runner-reported, absent for a runner with no relay. */
+  relay_status?: RunnerRelayStatus;
+}
+
+/** The `wardyn-runnerd doctor` stage names an offline summary names. Go: types.RunnerStages. */
+export type RunnerStage = "dns" | "proxy" | "tls" | "healthz" | "identity" | "engine" | "proxy-image" | "relay";
+
+/**
+ * Go: types.RunnerOfflineSummary. Why a runner could not connect, or start, before its latest connect: the
+ * first and last failure, the stage of the last one and a short reason with any credential removed.
+ * reported_at is when the organisation received it.
+ */
+export interface RunnerOfflineSummary {
+  stage: RunnerStage;
+  reason: string;
+  first_failure_at: string;
+  last_failure_at: string;
+  reported_at?: string;
+}
+
+/** Go: types.RunnerRelayStatus. A Docker runner's last run relay check; reason only when unreachable. */
+export interface RunnerRelayStatus {
+  state: "reachable" | "unreachable";
+  since: string;
+  reason?: string;
+  reported_at?: string;
 }
 
 /** Go: types.RunnerAmounts: CPU in milli-CPU, memory and disk in MiB. */

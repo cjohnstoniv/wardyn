@@ -55,11 +55,18 @@ func foldersRunnerHooks(ctx context.Context, _ runneridentity.Identity, stateDir
 		},
 		Replay: func(ctx context.Context, peer *runnerwire.Peer) error {
 			machine, _ := os.Hostname()
-			data, err := runnerwire.Marshal(runnerwire.Caps{Version: version.String(), MachineName: machine, Folders: true})
+			caps := runnerwire.Caps{Version: version.String(), MachineName: machine, Folders: true}
+			report := connectReport{log: opts.offline}
+			report.fill(ctx, &caps, false)
+			data, err := runnerwire.Marshal(caps)
 			if err != nil {
 				return err
 			}
-			return peer.EventAck(ctx, runnerwire.Event{Kind: runnerwire.EventCaps, Data: data})
+			if err := peer.EventAck(ctx, runnerwire.Event{Kind: runnerwire.EventCaps, Data: data}); err != nil {
+				return err
+			}
+			report.sent(caps)
+			return nil
 		},
 		BeforeReady: func(context.Context, *runnerwire.Peer, bool) error { return nil },
 		Lease:       func(context.Context, runnerwire.Lease) error { return nil },

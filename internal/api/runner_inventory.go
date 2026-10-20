@@ -270,7 +270,8 @@ func (s *Server) handleGetMyRunner(w http.ResponseWriter, r *http.Request) {
 	s.getRunnerView(w, r, owner, false)
 }
 
-// getRunnerView serves one runner. A non-empty owner confines it to that person's own live runners.
+// getRunnerView serves one runner, with its last offline summary and relay status. A non-empty owner
+// confines it to that person's own live runners.
 func (s *Server) getRunnerView(w http.ResponseWriter, r *http.Request, owner string, admin bool) {
 	rs, ok := s.runnerInventoryStore(w)
 	if !ok {
@@ -294,6 +295,13 @@ func (s *Server) getRunnerView(w http.ResponseWriter, r *http.Request, owner str
 	views, ok := s.runnerViews(w, r, rs, []types.Runner{row}, admin)
 	if !ok {
 		return
+	}
+	if hs, ok := s.cfg.Store.(runnerHealthStore); ok {
+		views[0].OfflineSummary, views[0].RelayStatus, err = hs.RunnerHealth(r.Context(), id)
+		if err != nil {
+			writeServerError(w, r, "read runner health", err)
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, views[0])
 }
