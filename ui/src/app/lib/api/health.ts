@@ -379,6 +379,12 @@ export const health = {
     // mirror — token_login already folds it into whether the token form
     // shows. Absent on an older daemon, which must read the same as `false`.
     sso_only?: boolean;
+    // CLI sign-in (internal/types CLISignInHealthz): whether wardyn login can sign in here, whether it can
+    // without a browser, and the origin device proofs are checked against. Wire mirror only; absent on an
+    // older daemon.
+    cli_sign_in?: boolean;
+    cli_paste_sign_in?: boolean;
+    cli_sign_in_origin?: string;
     // SSH gateway discovery (run-detail's "Connect via SSH" pane): absent /
     // undefined on a deployment with the gateway off (WARDYN_SSH_LISTEN
     // unset) or an older daemon — both must read as "no pane", never a

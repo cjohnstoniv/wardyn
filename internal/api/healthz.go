@@ -180,6 +180,11 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	if netpolVerdict != "" {
 		body["network_policy"] = netpolVerdict
 	}
+	// cli_sign_in_origin is the origin device proofs are checked against (types.CLISignInHealthz), so a
+	// CLI that dials this organisation another way can name the URL to sign in at instead of failing.
+	if s.cliStore() != nil && s.cfg.CLISignIn.Origin != "" {
+		body["cli_sign_in_origin"] = s.cfg.CLISignIn.Origin
+	}
 	// org_ca_fingerprints is WARDYN_ORG_CA_FINGERPRINTS: the operator's
 	// published CA fingerprints, each "sha256:<64 lowercase hex>", for a person
 	// to compare with what `wardyn ca add` prints. Absent while unset, so a

@@ -17,6 +17,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // FileName is the profile's name inside Dir.
@@ -138,20 +140,20 @@ func store(dir string, p profile) error {
 	return nil
 }
 
-// Normalize is raw as an organisation URL: scheme, host and base path, with no trailing slash, query,
-// fragment or credentials. Whether the scheme is safe to send a token over is the caller's concern.
+// Normalize is raw as an organisation URL: scheme, host and base path in types.CLIOrigin form (lower-case
+// scheme and host, no default port, no trailing slash), with no query, fragment or credentials. Whether the scheme is safe to send a token over is the caller's concern.
 func Normalize(raw string) (string, error) {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {
 		return "", fmt.Errorf("not a URL: %w", err)
 	}
-	if (u.Scheme != "https" && u.Scheme != "http") || u.Hostname() == "" {
+	if scheme := strings.ToLower(u.Scheme); (scheme != "https" && scheme != "http") || u.Hostname() == "" {
 		return "", fmt.Errorf("%q is not an organisation URL: it starts https://<host> (or http://<host> for a loopback one)", raw)
 	}
 	if u.User != nil {
 		return "", errors.New("the organisation URL must not carry a user name or password")
 	}
-	return u.Scheme + "://" + u.Host + strings.TrimRight(u.EscapedPath(), "/"), nil
+	return types.CLIOrigin(u), nil
 }
 
 // NormalizeArtifactBase is raw as a release download base: Normalize's form, and https only, because the
