@@ -38,12 +38,13 @@ export interface DesktopSocket {
 const openSocket = (path: string): DesktopSocket =>
   new WebSocket(`${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}${path}`, ["binary"]);
 
-// The gateway's close codes (uigateway_desktop.go): an ended session or run is final; anything else retries.
+// The gateway's close codes (uigateway_desktop.go): an ended session or run is final; anything else retries,
+// except a socket the gateway refused before it opened (403: the session expired, was closed or was revoked).
 const SESSION_ENDED = 4001;
 const RUN_ENDED = 4002;
 const NOT_AUTHORIZED = 4003;
 
-type Phase = "starting" | "connected" | "closed" | "expired" | "run_ended";
+type Phase = "starting" | "connected" | "closed" | "expired" | "run_ended" | "refused";
 
 export function DesktopViewer({ boot, connect = openSocket, small }: { boot: Boot; connect?: (path: string) => DesktopSocket; small?: boolean }) {
   if (boot.state === "refused") return <LinkRefused said={boot.said} />;
@@ -67,6 +68,10 @@ function Desktop({ boot, connect, viewOnly }: { boot: Extract<Boot, { state: "op
       const ws = connect(boot.rfb);
       socket.current = ws;
       ws.binaryType = "arraybuffer";
+      let opened = false;
+      ws.onopen = () => {
+        opened = true;
+      };
       const rfb = new RfbClient((b) => ws.send(b), canvasDisplay(canvas), {
         connected: () => {
           delay = 1000;
@@ -83,10 +88,18 @@ function Desktop({ boot, connect, viewOnly }: { boot: Extract<Boot, { state: "op
         else if (ev.code === SESSION_ENDED) setPhase("expired");
         else if (ev.code === RUN_ENDED) setPhase("run_ended");
         else {
-          // Booting, restarting or briefly unreachable: the same tab connects on its own.
+          // Booting, restarting or briefly unreachable: the same tab connects on its own. A browser hides a
+          // refused handshake's status, so a socket that never opened asks the gateway once whether it was 403.
           setPhase("starting");
-          retry = setTimeout(dial, delay);
-          delay = Math.min(delay * 2, 10_000);
+          const again = () => {
+            if (!live) return;
+            retry = setTimeout(dial, delay);
+            delay = Math.min(delay * 2, 10_000);
+          };
+          if (opened) return again();
+          void fetch(boot.rfb, { credentials: "same-origin" })
+            .then((r) => (r.status === 403 ? live && setPhase("refused") : again()))
+            .catch(again);
         }
       };
     };
@@ -107,7 +120,7 @@ function Desktop({ boot, connect, viewOnly }: { boot: Extract<Boot, { state: "op
   };
 
   const input = viewOnly || phase !== "connected" ? {} : inputHandlers(canvas, client, pressed.current);
-  const ended = phase === "closed" || phase === "expired" || phase === "run_ended";
+  const ended = phase === "closed" || phase === "expired" || phase === "run_ended" || phase === "refused";
   return (
     <div className="flex h-dvh flex-col bg-background text-foreground">
       <header className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-2 text-xs">
@@ -150,6 +163,7 @@ function Notice({ phase }: { phase: Exclude<Phase, "connected"> }) {
     phase === "starting" ? [DESKTOP.starting, DESKTOP.startingBody]
     : phase === "expired" ? [DESKTOP.sessionEnded, DESKTOP.sessionEndedBody]
     : phase === "run_ended" ? [DESKTOP.runEnded, undefined]
+    : phase === "refused" ? [DESKTOP.sessionEnded, DESKTOP.refusedBody]
     : [DESKTOP.sessionEnded, undefined];
   return (
     <div role="status" className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-6 text-center">

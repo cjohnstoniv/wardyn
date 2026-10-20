@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import { keysymOf } from "./keysym";
-import { RfbClient, type RfbDisplay } from "./rfb";
+import { MAX_CUT_TEXT, MAX_DIM, MAX_RAW_BYTES, MAX_TEXT, RfbClient, type RfbDisplay } from "./rfb";
 
 const ascii = (s: string) => new TextEncoder().encode(s);
 const u16 = (n: number) => [n >> 8, n & 0xff];
@@ -93,6 +93,74 @@ describe("RfbClient", () => {
     rfb.key(0xff0d, true);
     rfb.pointer(5, -3, 1);
     expect(sent.slice(before)).toEqual([[4, 1, 0, 0, ...u32(0xff0d)], [5, 1, ...u16(1), ...u16(0)]]);
+  });
+});
+
+// Each cap fails the connection on the header alone: the oversized body is never awaited, so nothing is held.
+describe("RfbClient bounds what a desktop can make it hold", () => {
+  const connected = (init = SERVER_INIT) => {
+    const r = rig();
+    r.rfb.receive(Uint8Array.from([...ascii("RFB 003.008\n"), 1, 1, ...u32(0), ...init]));
+    return r;
+  };
+  const filler = new Uint8Array(64 << 10);
+  const init = (w: number, h: number, name: number[] = []) => [...u16(w), ...u16(h), ...new Array(16).fill(0), ...u32(name.length), ...name];
+
+  it("keeps received chunks without re-joining them, and handles a message split across them", () => {
+    const { rfb, calls } = connected();
+    const update = [0, 0, ...u16(1), ...u16(0), ...u16(0), ...u16(2), ...u16(1), ...s32(0), 1, 2, 3, 0, 4, 5, 6, 0];
+    rfb.receive(Uint8Array.from(update.slice(0, 5)));
+    const middle = Uint8Array.from(update.slice(5, 19));
+    rfb.receive(middle);
+    expect(rfb.buffered).toBe(15);
+    middle[13] = 9; // the chunk is held as it came, not copied into a joined buffer
+    rfb.receive(Uint8Array.from(update.slice(19)));
+    expect(calls.at(-1)).toBe("raw 0,0 2x1 1.2.9.0.4.5.6.0");
+    expect(rfb.buffered).toBe(0);
+  });
+
+  it("refuses a Raw rectangle outside the negotiated screen, or over the byte budget", () => {
+    const out = connected();
+    out.rfb.receive(Uint8Array.from([0, 0, ...u16(1), ...u16(1), ...u16(0), ...u16(2), ...u16(1), ...s32(0)]));
+    out.rfb.receive(filler);
+    expect(out.events.at(-1)).toBe("failed the desktop sent a rectangle outside its screen");
+    expect(out.rfb.buffered).toBe(0);
+
+    const big = connected(init(MAX_DIM, MAX_DIM));
+    const side = Math.ceil(Math.sqrt(MAX_RAW_BYTES / 4)) + 1; // inside the screen, over the budget
+    big.rfb.receive(Uint8Array.from([0, 0, ...u16(1), ...u16(0), ...u16(0), ...u16(side), ...u16(side), ...s32(0)]));
+    big.rfb.receive(filler);
+    expect(big.events.at(-1)).toBe("failed the desktop sent a rectangle outside its screen");
+    expect(big.rfb.buffered).toBe(0);
+  });
+
+  it("refuses a desktop name over MAX_TEXT", () => {
+    const r = rig();
+    r.rfb.receive(Uint8Array.from([...ascii("RFB 003.008\n"), 1, 1, ...u32(0), ...u16(2), ...u16(1), ...new Array(16).fill(0), ...u32(MAX_TEXT + 1)]));
+    r.rfb.receive(filler);
+    expect(r.events).toEqual([`failed the desktop's name is over ${MAX_TEXT} bytes`]);
+    expect(r.rfb.buffered).toBe(0);
+  });
+
+  it("refuses cut text over MAX_CUT_TEXT, and an extended-clipboard length", () => {
+    for (const len of [MAX_CUT_TEXT + 1, -8 >>> 0]) {
+      const r = connected();
+      r.rfb.receive(Uint8Array.from([3, 0, 0, 0, ...u32(len)]));
+      r.rfb.receive(filler);
+      expect(r.events.at(-1)).toBe(`failed the desktop sent over ${MAX_CUT_TEXT} bytes of cut text`);
+      expect(r.rfb.buffered).toBe(0);
+    }
+  });
+
+  it("refuses a screen over MAX_DIM a side, in ServerInit and in DesktopSize", () => {
+    const r = rig();
+    r.rfb.receive(Uint8Array.from([...ascii("RFB 003.008\n"), 1, 1, ...u32(0), ...init(MAX_DIM + 1, 1)]));
+    expect(r.events).toEqual([`failed the desktop is larger than ${MAX_DIM} pixels a side`]);
+
+    const d = connected();
+    d.rfb.receive(Uint8Array.from([0, 0, ...u16(1), ...u16(0), ...u16(0), ...u16(1), ...u16(MAX_DIM + 1), ...s32(-223)]));
+    expect(d.events.at(-1)).toBe(`failed the desktop is larger than ${MAX_DIM} pixels a side`);
+    expect(d.calls).not.toContain(`resize 1x${MAX_DIM + 1}`);
   });
 });
 

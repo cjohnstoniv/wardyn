@@ -6,7 +6,8 @@
 // A small RFB 3.3/3.7/3.8 client (RFC 6143) for the desktop of a Linux VM: QEMU's VNC server on the runner,
 // relayed by the UI gateway over one WebSocket. It asks for no authentication (the socket is reachable only
 // through the gateway's session), 32-bit true colour, and the Raw and CopyRect encodings plus DesktopSize.
-// Cut text from the desktop is read and dropped: copy out is blocked.
+// Cut text from the desktop is read and dropped. Every length the server sends is bounded before any of it
+// is held, so a desktop cannot make the viewer buffer more than the caps below.
 
 /** Where the framebuffer lands. Pixels arrive as R, G, B, unused, per pixel. */
 export interface RfbDisplay {
@@ -25,10 +26,21 @@ const ENC_COPYRECT = 1;
 const ENC_DESKTOPSIZE = -223;
 const SEC_NONE = 1;
 
+/** The largest framebuffer the viewer accepts, in ServerInit and DesktopSize: an 8K screen fits. */
+export const MAX_DIM = 8192;
+/** The most bytes one Raw rectangle may hold (a 4096 by 4096 rectangle at 4 bytes a pixel). */
+export const MAX_RAW_BYTES = 64 << 20;
+/** The longest desktop name or failure reason. RFC 6143 sets no limit; QEMU's names are a few dozen bytes. */
+export const MAX_TEXT = 4 << 10;
+/** The longest cut text: the rfbfilter relay's own WebSocket frame cap is 8 MiB, and the viewer drops it anyway. */
+export const MAX_CUT_TEXT = 1 << 20;
+
 type State = "version" | "security" | "security33" | "result" | "init" | "normal" | "failed";
 
 export class RfbClient {
-  private buf = new Uint8Array(0);
+  private chunks: Uint8Array[] = []; // received and not yet handled, kept as they came
+  /** Bytes received and not yet handled. */
+  buffered = 0;
   private state: State = "version";
   private minor = 8;
   private rects = 0; // rectangles still to read of the current framebuffer update
@@ -43,12 +55,12 @@ export class RfbClient {
 
   /** Feeds bytes from the server; whole messages are handled as soon as they are in. */
   receive(chunk: ArrayBuffer | Uint8Array): void {
+    if (this.state === "failed") return;
     const data = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
-    const next = new Uint8Array(this.buf.length + data.length);
-    next.set(this.buf);
-    next.set(data, this.buf.length);
-    this.buf = next;
-    while (this.state !== "failed" && this.step()) {
+    if (data.length === 0) return;
+    this.chunks.push(data);
+    this.buffered += data.length;
+    while (this.step()) {
       /* each step consumed one whole unit */
     }
   }
@@ -78,19 +90,46 @@ export class RfbClient {
 
   private fail(reason: string): false {
     this.state = "failed";
+    this.chunks = [];
+    this.buffered = 0;
     this.events.failed(reason);
     return false;
   }
 
-  private take(n: number): Uint8Array | null {
-    if (this.buf.length < n) return null;
-    const out = this.buf.slice(0, n);
-    this.buf = this.buf.subarray(n);
+  /** The next n bytes in one array, consumed or left in place; null until they are all in. */
+  private read(n: number, consume: boolean): Uint8Array | null {
+    if (this.buffered < n) return null;
+    if ((this.chunks[0]?.length ?? 0) >= n) {
+      const head = this.chunks[0];
+      if (!consume) return head.subarray(0, n);
+      this.chunks[0] = head.subarray(n);
+      if (this.chunks[0].length === 0) this.chunks.shift();
+      this.buffered -= n;
+      return head.slice(0, n);
+    }
+    const out = new Uint8Array(n);
+    let off = 0;
+    let i = 0;
+    while (off < n) {
+      const c = this.chunks[i];
+      const k = Math.min(c.length, n - off);
+      out.set(c.subarray(0, k), off);
+      off += k;
+      if (!consume) i++;
+      else if (k === c.length) this.chunks.shift();
+      else this.chunks[0] = c.subarray(k);
+    }
+    if (consume) this.buffered -= n;
     return out;
   }
 
+  private take(n: number): Uint8Array | null {
+    return this.read(n, true);
+  }
+
   private peek(n: number): DataView | null {
-    return this.buf.length < n ? null : new DataView(this.buf.buffer, this.buf.byteOffset, n);
+    const b = this.read(n, false);
+    return b && new DataView(b.buffer, b.byteOffset, n);
   }
 
   private step(): boolean {
@@ -140,6 +179,8 @@ export class RfbClient {
         const v = this.peek(24);
         if (!v) return false;
         const nameLen = v.getUint32(20);
+        if (nameLen > MAX_TEXT) return this.fail(`the desktop's name is over ${MAX_TEXT} bytes`);
+        if (!fits(v.getUint16(0), v.getUint16(2))) return this.fail(`the desktop is larger than ${MAX_DIM} pixels a side`);
         const b = this.take(24 + nameLen);
         if (!b) return false;
         const d = new DataView(b.buffer);
@@ -165,6 +206,7 @@ export class RfbClient {
     const v = this.peek(skip + 4);
     if (!v) return false;
     const len = v.getUint32(skip);
+    if (len > MAX_TEXT) return this.fail("the desktop refused the connection");
     const b = this.take(skip + 4 + len);
     if (!b) return false;
     return this.fail(new TextDecoder().decode(b.subarray(skip + 4)) || "the desktop refused the connection");
@@ -208,7 +250,9 @@ export class RfbClient {
       case 3: {
         const h = this.peek(8);
         if (!h) return false;
-        return this.take(8 + h.getUint32(4)) !== null; // the desktop's cut text, dropped
+        const len = h.getUint32(4); // an extended-clipboard length is negative, so it reads as huge
+        if (len > MAX_CUT_TEXT) return this.fail(`the desktop sent over ${MAX_CUT_TEXT} bytes of cut text`);
+        return this.take(8 + len) !== null; // the desktop's cut text, dropped
       }
       default:
         return this.fail("the desktop sent a message this viewer does not know");
@@ -221,6 +265,10 @@ export class RfbClient {
     const [x, y, w, ht, enc] = [h.getUint16(0), h.getUint16(2), h.getUint16(4), h.getUint16(6), h.getInt32(8)];
     const size = enc === ENC_RAW ? w * ht * 4 : enc === ENC_COPYRECT ? 4 : enc === ENC_DESKTOPSIZE ? 0 : -1;
     if (size < 0) return this.fail("the desktop sent an encoding this viewer did not ask for");
+    if (enc === ENC_RAW && (x + w > this.width || y + ht > this.height || size > MAX_RAW_BYTES)) {
+      return this.fail("the desktop sent a rectangle outside its screen");
+    }
+    if (enc === ENC_DESKTOPSIZE && !fits(w, ht)) return this.fail(`the desktop is larger than ${MAX_DIM} pixels a side`);
     const b = this.take(12 + size);
     if (!b) return false;
     if (enc === ENC_RAW) this.display.putRaw(x, y, w, ht, b.subarray(12));
@@ -237,6 +285,8 @@ export class RfbClient {
     return true;
   }
 }
+
+const fits = (w: number, h: number) => w <= MAX_DIM && h <= MAX_DIM;
 
 const clamp = (n: number, max: number) => Math.max(0, Math.min(Math.round(n), Math.max(0, max - 1)));
 

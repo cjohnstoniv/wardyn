@@ -25,6 +25,8 @@ export const DESKTOP = {
   sessionEnded: "This desktop session ended",
   sessionEndedBody: "It ran for 1 hour, the longest one session lasts. The run is still going. Open the desktop again from the run page.",
   runEnded: "This run has ended. The desktop closed with it.",
+  // Not on the boards: the gateway refused this tab's session (403 on the socket), so it stops retrying.
+  refusedBody: "Wardyn no longer accepts this tab's session. Open the desktop again from the run page.",
   // A link that no longer opens anything (the approved Why card shape).
   linkBlocked: "Blocked: this desktop link",
   linkRefused: "Refused at the gateway",

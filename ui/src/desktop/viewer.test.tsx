@@ -29,6 +29,9 @@ class FakeSocket implements DesktopSocket {
   end(code: number) {
     act(() => this.onclose?.({ code } as CloseEvent));
   }
+  opened() {
+    act(() => this.onopen?.({} as Event));
+  }
 }
 
 const HANDSHAKE = [...new TextEncoder().encode("RFB 003.008\n"), 1, 1, 0, 0, 0, 0, 0, 2, 0, 1, ...new Array(16).fill(0), 0, 0, 0, 0];
@@ -75,12 +78,42 @@ describe("DesktopViewer", () => {
   it("retries a desktop that is not reachable yet, on its own", () => {
     vi.useFakeTimers();
     const { sockets, connect } = open();
+    sockets[0].opened();
     sockets[0].end(4004);
     expect(screen.getByRole("status")).toHaveTextContent(DESKTOP.starting);
     act(() => {
       vi.advanceTimersByTime(1000);
     });
     expect(connect).toHaveBeenCalledTimes(2);
+  });
+
+  it("asks the gateway why a socket never opened: a 403 stops the retries and says to open the desktop again", async () => {
+    vi.useFakeTimers();
+    const status = { code: 403 };
+    const fetchMock = vi.fn(async () => new Response(null, { status: status.code }));
+    vi.stubGlobal("fetch", fetchMock);
+    const a = open();
+    a.sockets[0].end(1006);
+    await act(async () => {});
+    expect(fetchMock).toHaveBeenCalledWith(OPEN.state === "open" ? OPEN.rfb : "", { credentials: "same-origin" });
+    expect(screen.getByText(DESKTOP.sessionEnded)).toBeInTheDocument();
+    expect(screen.getByText(DESKTOP.refusedBody)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: DESKTOP.close })).toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(20_000);
+    });
+    expect(a.connect).toHaveBeenCalledTimes(1);
+    cleanup();
+
+    status.code = 426; // the session is good: the plain GET is just not an upgrade, so it retries
+    const b = open();
+    b.sockets[0].end(1006);
+    await act(async () => {});
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(b.connect).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("status")).toHaveTextContent(DESKTOP.starting);
   });
 
   it("says the session ended at its bound, or the run ended, and does not retry", () => {
