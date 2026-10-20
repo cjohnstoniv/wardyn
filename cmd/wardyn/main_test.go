@@ -275,7 +275,7 @@ func TestDialHintOnSingleSignOn(t *testing.T) {
 	for _, tc := range []struct {
 		name, reason, token, want string
 	}{
-		{"sign_in_required", "sign_in_required", "", "this organisation signs people in with single sign-on and has no admin token, so --token and WARDYN_ADMIN_TOKEN cannot work here. Set WARDYN_TOKEN to a personal API token: a Wardyn admin can invite you to create one, and you claim it under Your account in the console."},
+		{"sign_in_required", "sign_in_required", "", "this organisation signs people in with single sign-on and has no admin token. Set WARDYN_TOKEN to a personal API token (--token and WARDYN_ADMIN_TOKEN take one too; --token shows it in the process list): a Wardyn admin can invite you to create one, and you claim it under Your account in the console."},
 		{"admin_token_not_configured, no token sent", "admin_token_not_configured", "", generic},
 		{"admin_token_not_configured, token sent", "admin_token_not_configured", "t0k", "the token in --token is not one this organisation knows (unknown, revoked or expired)"},
 		{"no reason", "", "", generic},

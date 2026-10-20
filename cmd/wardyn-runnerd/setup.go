@@ -34,7 +34,9 @@ var errProxyImageUnavailable = errors.New("the proxy image is not on this engine
 
 // setupOptions are `setup`'s flags.
 type setupOptions struct {
-	org, tokenFile, name             string
+	org, tokenFile, name string
+	// token is the registration token already read from a /dev/fd/N --token-file, "" otherwise.
+	token                            string
 	proxyImage, relayListen, network string
 	relayHostTarget, trustedCAFile   string
 	// orgCAFile is --org-ca-file: roots for this runner's own connection to the organisation only.
@@ -51,6 +53,8 @@ func newSetupCommand() *cobra.Command {
 	var o setupOptions
 	cmd := &cobra.Command{Use: "setup", Short: "Register this computer, install wardyn-runnerd as a login service and start it (or, with --no-service, only write its environment)", Args: cobra.NoArgs}
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
+		// First: a token handed over as /dev/fd/N is never inherited by a child.
+		markTokenFD(o.tokenFile)
 		// On a Mac with the configuration profile, --org is optional.
 		if !cmd.Flags().Changed("org") {
 			o.org = cmp.Or(managedPref("OrgURL"), o.org)
@@ -107,6 +111,13 @@ type setupPlan struct {
 
 func runSetup(cmd *cobra.Command, h setupHost, o setupOptions) error {
 	out := cmd.OutOrStdout()
+	token, fromFD, err := readTokenFD(o.tokenFile)
+	if err != nil {
+		return err
+	}
+	if fromFD {
+		o.token = token
+	}
 	plan, err := h.preflight(cmd, o)
 	if err != nil {
 		return err
@@ -120,7 +131,7 @@ func runSetup(cmd *cobra.Command, h setupHost, o setupOptions) error {
 	sayNoDiskCap(cmd.Context(), out)
 	if !plan.registered {
 		fmt.Fprintln(out, "Registering this computer. At a terminal it asks for the runner's limits (Enter takes each suggestion); otherwise it registers with the limits it suggests.")
-		done, err := registerRunner(cmd, registerArgs{org: plan.org, tokenFile: plan.tokenFile, stateDir: plan.paths.stateDir, name: plan.name, limits: &plan.limits, proxyImage: plan.proxyImage,
+		done, err := registerRunner(cmd, registerArgs{org: plan.org, tokenFile: plan.tokenFile, token: plan.token, stateDir: plan.paths.stateDir, name: plan.name, limits: &plan.limits, proxyImage: plan.proxyImage,
 			trustedCAFile: plan.trustedCAFile, orgCAFile: plan.orgCAFile})
 		if err != nil {
 			return err
@@ -429,7 +440,7 @@ func (h setupHost) preflight(cmd *cobra.Command, o setupOptions) (setupPlan, err
 		if o.tokenFile == "" {
 			return setupPlan{}, errors.New("no runner identity yet: pass --token-file <file> holding the wdr_ token an administrator minted for you")
 		}
-		if _, err := os.Stat(o.tokenFile); err != nil {
+		if _, err := os.Stat(o.tokenFile); err != nil && o.token == "" {
 			return setupPlan{}, fmt.Errorf("token file not found: %s", o.tokenFile)
 		}
 	}
