@@ -73,7 +73,7 @@ func dialHint(err error) string {
 		case "sign_in_required":
 			return "this organisation signs people in with single sign-on and has no admin token, so --token and WARDYN_ADMIN_TOKEN cannot work here. " + personalTokenRemedy
 		case "admin_token_not_configured":
-			return "this organisation does not know the token sent (unknown, revoked or expired) and has no admin token, so --token and WARDYN_ADMIN_TOKEN cannot work here. " + personalTokenRemedy
+			return "this organisation does not recognise the token sent (unknown, revoked or expired) and has no admin token, so --token and WARDYN_ADMIN_TOKEN cannot work here. " + personalTokenRemedy
 		}
 		return "authenticate with --token or WARDYN_ADMIN_TOKEN/WARDYN_TOKEN (the compose quick-start's token is in deploy/compose/README.md)"
 	}
@@ -81,7 +81,7 @@ func dialHint(err error) string {
 }
 
 // personalTokenRemedy is how a person reaches a deployment with no admin token from the CLI.
-const personalTokenRemedy = "Set WARDYN_TOKEN to a personal API token: a Wardyn admin can invite you to create one, and you claim it under Your account in the console."
+const personalTokenRemedy = "Set WARDYN_TOKEN to a personal API token: sign in to the console and create one under Your account, or claim the invitation your Wardyn admin sent you there."
 
 // noRedirect hands a 3xx back to the caller instead of following it. A followed
 // redirect turns a write into a GET of wherever Location points (so it "succeeds"

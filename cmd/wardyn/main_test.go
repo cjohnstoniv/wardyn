@@ -268,12 +268,11 @@ func TestAdminTokenFromEnvStillAuthenticates(t *testing.T) {
 // sign-on and has no admin token, it never sends the person to an admin token or the compose quick-start;
 // every other 401 keeps the token hint.
 func TestDialHintOnSingleSignOn(t *testing.T) {
-	const remedy = "Set WARDYN_TOKEN to a personal API token: a Wardyn admin can invite you to create one, and you claim it under Your account in the console."
+	const remedy = "Set WARDYN_TOKEN to a personal API token: sign in to the console and create one under Your account, or claim the invitation your Wardyn admin sent you there."
 	for _, tc := range []struct{ reason, want string }{
 		{"sign_in_required", "this organisation signs people in with single sign-on and has no admin token, so --token and WARDYN_ADMIN_TOKEN cannot work here. " + remedy},
-		{"admin_token_not_configured", "this organisation does not know the token sent (unknown, revoked or expired) and has no admin token, so --token and WARDYN_ADMIN_TOKEN cannot work here. " + remedy},
+		{"admin_token_not_configured", "this organisation does not recognise the token sent (unknown, revoked or expired) and has no admin token, so --token and WARDYN_ADMIN_TOKEN cannot work here. " + remedy},
 		{"", "authenticate with --token or WARDYN_ADMIN_TOKEN/WARDYN_TOKEN (the compose quick-start's token is in deploy/compose/README.md)"},
-		{"invalid_bearer_token", "authenticate with --token or WARDYN_ADMIN_TOKEN/WARDYN_TOKEN (the compose quick-start's token is in deploy/compose/README.md)"},
 	} {
 		t.Run(cmp.Or(tc.reason, "no reason"), func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -287,8 +286,20 @@ func TestDialHintOnSingleSignOn(t *testing.T) {
 			if got != tc.want {
 				t.Fatalf("dialHint = %q\nwant %q", got, tc.want)
 			}
-			if tc.reason != "" && tc.reason != "invalid_bearer_token" && (strings.Contains(got, "compose") || strings.Contains(got, "authenticate with")) {
+			if tc.reason != "" && (strings.Contains(got, "compose") || strings.Contains(got, "authenticate with")) {
 				t.Errorf("a single sign-on 401 points at the admin token or the compose quick-start: %q", got)
+			}
+		})
+	}
+}
+
+// #3308: every 401 that is not a single sign-on case keeps the generic token hint, byte for byte.
+func TestDialHint401GenericTextUnchanged(t *testing.T) {
+	const generic = "authenticate with --token or WARDYN_ADMIN_TOKEN/WARDYN_TOKEN (the compose quick-start's token is in deploy/compose/README.md)"
+	for _, reason := range []string{"missing_bearer_token", "invalid_admin_token"} {
+		t.Run(reason, func(t *testing.T) {
+			if got := dialHint(&sdk.APIError{Status: http.StatusUnauthorized, Reason: reason}); got != generic {
+				t.Fatalf("dialHint(401 %s) = %q\nwant %q", reason, got, generic)
 			}
 		})
 	}
