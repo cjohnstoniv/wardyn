@@ -54,7 +54,8 @@ func (s *Server) handleInternalMint(w http.ResponseWriter, r *http.Request) {
 	}
 	// Before the single-lane check and MintForGrant: a relayed mint of a grant
 	// not delivered `own` opens no transaction and consumes no minted_jti.
-	if s.refuseRelayedDelivery(w, r, claims, body.GrantID, false) {
+	if s.refuseRelayedDelivery(w, r, claims, body.GrantID, false) ||
+		s.refuseResidentGitHubOwnToken(w, r, claims.RunID, body.GrantID, claims.SPIFFEID) {
 		return
 	}
 

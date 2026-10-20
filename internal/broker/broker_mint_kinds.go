@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
@@ -107,6 +108,10 @@ func (b *Broker) mintGitPAT(ctx context.Context, caller *identity.Claims, spec t
 	if err != nil {
 		return Minted{}, fmt.Errorf("broker: decode git_pat scope: %w", err)
 	}
+	// Before the reserved-name check, which refuses this name to every other grant.
+	if types.IsGitHubOwnTokenSecret(sc.SecretName) {
+		return b.mintGitHubOwnToken(ctx, caller, spec, sc)
+	}
 	if reservedBrokerSecret(sc.SecretName) {
 		return Minted{}, fmt.Errorf("broker: git_pat secret name %q is reserved for platform internals", sc.SecretName)
 	}
@@ -125,6 +130,51 @@ func (b *Broker) mintGitPAT(ctx context.Context, caller *identity.Claims, spec t
 		ExpiresAt: time.Now().Add(ttlFor(spec)),
 		Token:     string(value),
 		Username:  GitPATUsername(sc.Host, sc.Username),
+		Metadata:  map[string]string{"secret_name": sc.SecretName, "host": sc.Host, "secret_scope": row.Scope()},
+	}, nil
+}
+
+// mintGitHubOwnToken resolves a person's own GitHub token (internal/api
+// gh_own_pat.go) for the run's proxy. Create writes this name onto a git_pat
+// grant only for a github.com host, owner_only and with the PAT broker on, and
+// no policy can name it (it is a reserved name), so the host and owner_only are
+// checked again here. The token is read from the run owner's own row only,
+// never the operator's, and stops at the expiry the person entered.
+func (b *Broker) mintGitHubOwnToken(ctx context.Context, caller *identity.Claims, spec types.GrantSpec, sc types.GitPATScope) (Minted, error) {
+	if !spec.OwnerOnly || caller == nil || caller.OperatorOwned || !strings.EqualFold(sc.Host, "github.com") {
+		return Minted{}, errors.New("broker: a person's own GitHub token is minted only for github.com, from the run owner's own row")
+	}
+	if b.secrets == nil {
+		return Minted{}, errors.New("broker: git_pat grant but no secret store configured (fail closed)")
+	}
+	gctx, row := secretstore.GrantRead(ctx, true)
+	raw, err := b.secrets.For(ownerOf(caller)).Get(secretstore.WithPurpose(gctx, secretstore.PurposeBrokerMint), sc.SecretName)
+	if err != nil {
+		return Minted{}, grantReadError("git_pat", sc.SecretName, true, err)
+	}
+	var tok types.GitHubOwnToken
+	// The decode error is not wrapped: a JSON syntax error can quote the value.
+	if json.Unmarshal(raw, &tok) != nil || !tok.Valid() {
+		return Minted{}, errors.New("broker: the stored GitHub token is not one Wardyn wrote")
+	}
+	now := time.Now()
+	if tok.Expired(now) {
+		return Minted{}, errors.New("broker: the run owner's GitHub token has reached the expiry they entered")
+	}
+	expires := now.Add(ttlFor(spec))
+	if tok.ExpiresOn.Before(expires) {
+		expires = tok.ExpiresOn
+	}
+	username := tok.Login // GitHub's documented user name for a token
+	if username == "" {
+		username = GitPATUsername(sc.Host, "")
+	}
+	return Minted{
+		Kind:      types.GrantGitPAT,
+		JTI:       newJTI(),
+		ExpiresAt: expires,
+		Token:     tok.Token,
+		Username:  username,
 		Metadata:  map[string]string{"secret_name": sc.SecretName, "host": sc.Host, "secret_scope": row.Scope()},
 	}, nil
 }

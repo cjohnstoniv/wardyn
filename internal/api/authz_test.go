@@ -648,6 +648,10 @@ var routeMatrix = map[string]classifiedRoute{
 	// The caller's own Azure DevOps token (ado_own_pat.go): own namespace only.
 	"PUT /api/v1/me/scm/azure-devops/token":    {class: classMember},
 	"DELETE /api/v1/me/scm/azure-devops/token": {class: classMember},
+	// The caller's own GitHub token (gh_own_pat.go): own namespace only.
+	"GET /api/v1/me/scm/github/tokens":   {class: classMember},
+	"PUT /api/v1/me/scm/github/token":    {class: classMember},
+	"DELETE /api/v1/me/scm/github/token": {class: classMember},
 	// The per-user Azure DevOps sign-in (ado_entra.go): classMember, and for
 	// the same reason as /me/ssh-keys above — a member signs in FOR
 	// THEMSELVES. Both doors refuse a caller with no identity provider
