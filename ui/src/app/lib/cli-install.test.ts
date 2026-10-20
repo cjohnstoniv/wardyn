@@ -43,7 +43,7 @@ describe("installLines", () => {
   });
 
   it("never draws a mirror that is not a plain https URL into a shell line", () => {
-    for (const bad of ["http://a.example/x", "https://a.example/x';rm -rf ~;'", "https://a.example/$(id)", "https://a.example/ x", "ftp://a"]) {
+    for (const bad of ["http://a.example/x", "https://a.example/x';rm -rf ~;'", "https://a.example/$(id)", "https://a.example/ x", "ftp://a", "https://a.example/~root"]) {
       expect(installLines("0.10.0", bad)).toBeNull();
     }
   });

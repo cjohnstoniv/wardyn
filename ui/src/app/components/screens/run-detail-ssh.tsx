@@ -104,6 +104,7 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
   const [cliFacts, setCLIFacts] = React.useState<{ version?: string; artifactBase?: string; fingerprints: ReturnType<typeof orgCAFingerprints> }>({
     fingerprints: [],
   });
+  const [cliLoaded, setCLILoaded] = React.useState(false);
   const [attempt, setAttempt] = React.useState(0);
   // Which declared app's ticket-mint/open is in flight, and the last failure
   // (scoped to one app — the other rows stay untouched per the mock's S5).
@@ -120,6 +121,7 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
       // Only a real answer licenses the OFF copy; a swallowed failure ({})
       // leaves both lanes as their heading alone.
       setHealthAnswered(h.status === "ok");
+      setCLILoaded(true);
       setCLIFacts({
         version: h.version,
         artifactBase: h.cli_artifact_base,
@@ -258,6 +260,7 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
         artifactBase={cliFacts.artifactBase}
         fingerprints={cliFacts.fingerprints}
         healthAnswered={healthAnswered}
+        loaded={cliLoaded}
         onRetry={() => setAttempt((n) => n + 1)}
       />
 

@@ -752,6 +752,8 @@ describe("ConnectSSHCard — the attach command carries no prefix", () => {
     // Any prefix at all fails: `WARDYN_URL=… wardyn attach <id>`, `FOO=1 wardyn attach <id>`, `env … `.
     expect(cmd.textContent).toMatch(new RegExp(`^wardyn attach ${baseRun.id}$`));
     expect(cmd.textContent).not.toMatch(/TOKEN|ticket|wdn_/i);
+    // ...and nothing sits beside it in the same block either (a sibling prefix would fail here).
+    expect(cmd.parentElement!.textContent).toBe(attachCommand);
   });
 
   it("copies exactly that string, and no WARDYN_URL= appears anywhere on the card", async () => {

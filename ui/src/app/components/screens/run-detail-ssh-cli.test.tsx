@@ -121,6 +121,30 @@ describe("Get the CLI — the install line", () => {
 });
 
 describe("Get the CLI — no install line", () => {
+  // Revert proof: drop the `loaded` gate in GetTheCli and the first assertion goes red.
+  it("draws nothing in Get the CLI until the first /healthz result arrives", async () => {
+    let resolve!: (v: unknown) => void;
+    healthMock.mockReturnValue(new Promise((r) => (resolve = r)));
+    renderCard();
+    await waitFor(() => expect(healthMock).toHaveBeenCalled());
+    expect(screen.queryByText(RUN_CLI.GET_TITLE)).toBeNull();
+    expect(screen.queryByRole("button", { name: RUN_CLI.TRY_AGAIN })).toBeNull();
+    expect(screen.queryByText(RUN_CLI.NO_INSTALL_LINE)).toBeNull();
+    resolve({});
+    await screen.findByRole("button", { name: RUN_CLI.TRY_AGAIN });
+  });
+
+  it("a mirror the card rejects claims neither a version nor a missing one", async () => {
+    healthMock.mockResolvedValue({ status: "ok", version: "0.10.0", cli_artifact_base: "https://a.example/~x" });
+    renderCard();
+    await screen.findByText(RUN_CLI.GET_TITLE);
+    expect(screen.queryByText(RUN_CLI.NO_INSTALL_LINE)).toBeNull();
+    expect(screen.queryByText(RUN_CLI.VERSION("0.10.0"))).toBeNull();
+    expect(screen.queryByRole("button", { name: RUN_CLI.TRY_AGAIN })).toBeNull();
+    expect(codeLines().some((l) => l?.includes("install-cli"))).toBe(false);
+    expect(screen.getByRole("link", { name: RUN_CLI.OTHER_WAYS })).toBeInTheDocument();
+  });
+
   it("answered without a version: says so, no Try again, command and first-time line stay", async () => {
     healthMock.mockResolvedValue({ status: "ok" });
     renderCard();

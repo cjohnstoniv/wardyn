@@ -16,7 +16,7 @@ import { cn } from "../../ui/utils";
 import { Mono, makeMono } from "../../wardyn/code-block";
 import { CopyButton } from "../../wardyn/copy-button";
 import { RUN_CLI, RUN_SSH } from "../../wardyn/copy";
-import { installLines, viewerIsWindows, type OrgCAFingerprint } from "../../../lib/cli-install";
+import { installLines, mirrorRejected, viewerIsWindows, type OrgCAFingerprint } from "../../../lib/cli-install";
 
 // Where "Other ways to install" points: the ranked table of the install docs.
 export const INSTALL_DOCS_URL = "https://github.com/cjohnstoniv/wardyn/blob/main/docs/runner-registration.md#install-the-cli";
@@ -97,14 +97,18 @@ export function GetTheCli({
   artifactBase,
   fingerprints,
   healthAnswered,
+  loaded,
   onRetry,
 }: {
   version: string | undefined;
   artifactBase: string | undefined;
   fingerprints: OrgCAFingerprint[];
   healthAnswered: boolean;
+  /** The first /healthz result (answered or not) has arrived; until then nothing is drawn. */
+  loaded: boolean;
   onRetry: () => void;
 }) {
+  if (!loaded) return null;
   const lines = installLines(version, artifactBase);
   const windows = viewerIsWindows();
   const unix = lines && { label: RUN_CLI.UNIX, text: lines.sh, copy: RUN_CLI.COPY_INSTALL_UNIX };
@@ -115,7 +119,7 @@ export function GetTheCli({
       <p className="text-xs font-medium text-foreground">{RUN_CLI.GET_TITLE}</p>
       {lines && lead && other ? (
         <>
-          <p className="mt-0.5 text-meta leading-relaxed text-muted-foreground">{RUN_CLI.VERSION(lines.version)}</p>
+          <p className="mt-0.5 hidden text-meta leading-relaxed text-muted-foreground sm:block">{RUN_CLI.VERSION(lines.version)}</p>
           <p className="mt-0.5 text-meta leading-relaxed text-muted-foreground sm:hidden">{RUN_CLI.PHONE_LINE}</p>
           <p className="mt-2 mb-1 text-meta text-muted-foreground">{lead.label}</p>
           <CmdRow text={lead.text} label={lead.copy} />
@@ -130,7 +134,7 @@ export function GetTheCli({
           </details>
           {lines.mirror && <p className="mt-1.5 text-meta leading-relaxed text-muted-foreground">{RUN_CLI.MIRROR_NOTE}</p>}
         </>
-      ) : (
+      ) : mirrorRejected(artifactBase) ? null : (
         <div className="mt-0.5 flex flex-wrap items-center gap-2">
           <p className="text-meta leading-relaxed text-muted-foreground">{RUN_CLI.NO_INSTALL_LINE}</p>
           {!healthAnswered && (

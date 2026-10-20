@@ -18,7 +18,13 @@ const RELEASE_VERSION = /^v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/;
 // The mirror is drawn into a shell line and a PowerShell line, so nothing that
 // either would parse as syntax is let through (the daemon's boot check already
 // requires https and no userinfo, query or fragment).
-const SAFE_BASE = /^https:\/\/[A-Za-z0-9._~:/%+-]+$/;
+const SAFE_BASE = /^https:\/\/[A-Za-z0-9._:/%+-]+$/;
+
+/** The mirror /healthz advertised is one the card refuses to draw into a shell line. */
+export function mirrorRejected(artifactBase: string | undefined): boolean {
+  const base = (artifactBase ?? "").trim().replace(/\/+$/, "");
+  return base !== "" && !SAFE_BASE.test(base);
+}
 
 export interface InstallLines {
   version: string;

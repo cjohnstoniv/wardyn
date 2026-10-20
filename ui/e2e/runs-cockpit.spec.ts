@@ -229,6 +229,10 @@ test.describe("Attach card — a failing /healthz claims nothing about the deplo
 // Get the CLI follows /healthz (the release's install line, or the operator's mirror, plus the
 // org CA fingerprints). The vitest pins the same strings; this one proves them in a real browser.
 test.describe("Attach card — the terminal command and Get the CLI", () => {
+  // Playwright's "Desktop Chrome" preset reports a Windows user agent, which would lead with the
+  // PowerShell line; these tests pin the non-Windows lead, so say which OS the viewer is on.
+  test.use({ userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36" });
+
   test("copies `wardyn attach <id>` with no prefix and shows the install line from /healthz", async ({ page, context }) => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     await openRuns(page);
@@ -298,6 +302,29 @@ test.describe("Attach card — the terminal command and Get the CLI", () => {
     await expect(card.getByText(RUN_CLI.NO_INSTALL_LINE)).toBeVisible();
     await expect(card.getByRole("button", { name: RUN_CLI.TRY_AGAIN })).toHaveCount(0);
     await expect(card.locator("code", { hasText: /^wardyn attach / })).toBeVisible();
+    await page.unroute("**/healthz");
+  });
+});
+
+// On Windows the PowerShell line leads and the sh line is the folded one.
+test.describe("Attach card — Get the CLI on a Windows viewer", () => {
+  test.use({ userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36" });
+
+  test("leads with the PowerShell line and folds the curl line under Another operating system", async ({ page }) => {
+    await openRuns(page);
+    await page.route("**/healthz", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "ok", version: "0.10.0" }) }),
+    );
+    await page.getByText("e2e fixture 2").click();
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
+    const card = page.getByRole("heading", { name: "Attach from your terminal" }).locator("xpath=ancestor::section[1]");
+    const REL = "https://github.com/cjohnstoniv/wardyn/releases/download/v0.10.0";
+    const ps = card.locator("code", { hasText: `irm ${REL}/install-cli.ps1 | iex` });
+    const sh = card.locator("code", { hasText: `curl -fsSL ${REL}/install-cli.sh | sh` });
+    await expect(ps).toBeVisible();
+    await expect(sh).toBeHidden();
+    await card.getByText(RUN_CLI.OTHER_OS).click();
+    await expect(sh).toBeVisible();
     await page.unroute("**/healthz");
   });
 });
