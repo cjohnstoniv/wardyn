@@ -853,7 +853,7 @@ const (
 	brandReasonLinkShape  = "invalid_link"
 	brandReasonLogoSize   = "logo_too_large"
 	brandReasonLogo       = "invalid_logo"
-	// brandReasonLogoFromFile: remove_logo on a logo the site config delivers (#1215).
+	// brandReasonLogoFromFile: remove_logo or a new logo on a logo the site config delivers (#1215).
 	brandReasonLogoFromFile = "logo_from_site_config"
 )
 
