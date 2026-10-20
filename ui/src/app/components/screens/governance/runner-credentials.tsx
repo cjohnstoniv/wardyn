@@ -14,7 +14,7 @@
 // an absent one; the server's 400 stays the gate. An absent class means Don't allow, so the editor writes
 // only the classes that are not set to it.
 import * as React from "react";
-import { AlertTriangle, Ban, Loader2 } from "lucide-react";
+import { AlertTriangle, Loader2 } from "lucide-react";
 import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import { credentialDelivery } from "../../../lib/api/credential-delivery";
 import { getErrorMessage } from "../../../lib/format";
@@ -42,6 +42,7 @@ import { RadioGroup, RadioGroupItem } from "../../ui/radio-group";
 import { useSecurityOperator } from "../../wardyn/operator-context";
 import { EmptyState, TableSkeleton } from "../../wardyn/states";
 import { Chip } from "../../wardyn/primitives";
+import { Ban } from "lucide-react";
 import { Note } from "./display";
 import { SubmittedNote } from "./submitted-note";
 
