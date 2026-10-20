@@ -239,6 +239,10 @@ func (s *Server) routes() chi.Router {
 			// OWNER only, or a super admin on a run with no personal owner
 			// (mayEnterRun); any other super admin gets 403 run_owner_only.
 			r.Post("/runs/{id}/attach/takeover", s.handleAttachTakeover)
+			// Ends the run and brings its computer folder back first: the run's OWNER ONLY
+			// (ownsRun, no admin bypass), as it writes onto that person's computer
+			// (run_computer_folder_bring_back.go). Off unless WARDYN_COMPUTER_FOLDERS is set.
+			r.Post("/runs/{id}/computer-folder/bring-back", s.handleBringComputerFolderBack)
 
 			// Single-use WS attach tickets: browsers cannot put the admin
 			// bearer on a WebSocket handshake, so the UI first POSTs here

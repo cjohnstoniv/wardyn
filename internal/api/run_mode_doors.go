@@ -98,6 +98,8 @@ var passiveRunRoutes = map[string]string{
 	"POST /runs/{id}/profile/synthesize": "synthesise a profile from audit",
 	"POST /runs/{id}/resume":             "lifecycle: resume a paused run",
 	"POST /runs/{id}/revive":             "lifecycle recovery; the revived run keeps its stored experience, so every door above still refuses it",
+
+	"POST /runs/{id}/computer-folder/bring-back": "lifecycle: end the run, bringing its computer folder back first; opens no shell",
 }
 
 // backgroundOnlyRefusal is the one call every interactive door makes: nil when
