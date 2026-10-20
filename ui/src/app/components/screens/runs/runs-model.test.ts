@@ -386,3 +386,24 @@ describe("rowPresentation — a QUEUED run (DR-0259)", () => {
     expect(p.subword).toBeUndefined();
   });
 });
+
+describe("rowPresentation — a scheduled run", () => {
+  const q = (reason: string) => ({ pool_id: "p", queued_at: "", deadline_at: "", position: 0, reason, start_at: "2026-10-21T02:00:00Z", time_zone: "UTC" });
+
+  it("says Scheduled, and offers its owner Cancel run", () => {
+    const p = rowPresentation(run({ state: "QUEUED" as RunState, queue: q("scheduled") }), false);
+    expect(p).toMatchObject({ hue: "blue", word: "Scheduled", action: "cancel", needsYou: false });
+    expect(p.subword).toBeUndefined();
+  });
+
+  it("says Waiting for sign-in once due, amber, with the Sign in action", () => {
+    const p = rowPresentation(run({ state: "QUEUED" as RunState, queue: q("owner_sign_in") }), false);
+    expect(p).toMatchObject({ hue: "amber", word: "Waiting for sign-in", action: "sign-in", needsYou: false });
+    expect(glyphKindFor(p.hue, p.word, "QUEUED")).toBe("need");
+  });
+
+  it("offers the Admin view no button on either", () => {
+    expect(rowPresentation(run({ state: "QUEUED" as RunState, queue: q("scheduled") }), true)).toMatchObject({ word: "Scheduled", action: null });
+    expect(rowPresentation(run({ state: "QUEUED" as RunState, queue: q("owner_sign_in") }), true)).toMatchObject({ word: "Waiting for sign-in", action: null });
+  });
+});

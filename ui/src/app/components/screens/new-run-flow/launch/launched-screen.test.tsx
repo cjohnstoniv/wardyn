@@ -11,6 +11,8 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { runnerPools } from "../../../../lib/api/runner-pools";
 import { runs } from "../../../../lib/api/runs";
 import { shortTime } from "../../../../lib/format";
+import { whenText } from "../../../../lib/schedule";
+import { SCHEDULED_RUN } from "../../../wardyn/copy/scheduled-runs";
 import type { RunnerPoolList } from "../../../../lib/types/runner-pools";
 import { NR_LAUNCH } from "../../../wardyn/copy/new-run/launch";
 import { OperatorProvider } from "../../../wardyn/operator-context";
@@ -110,6 +112,21 @@ describe("Launched: Waiting (U13)", () => {
     expect(killRun).not.toHaveBeenCalled();
     await userEvent.click(confirm.querySelector("button:last-of-type") as HTMLElement);
     await waitFor(() => expect(killRun).toHaveBeenCalledWith(ID));
+  });
+});
+
+describe("Launched: a scheduled run", () => {
+  const START = new Date(Date.now() + 12 * HOUR).toISOString();
+
+  it("says when it starts and what is checked then, with no place in line, and can still be cancelled", async () => {
+    getRun.mockResolvedValue(run({ state: "QUEUED", queue: queue({ reason: "scheduled", start_at: START, time_zone: "UTC", position: 0 }) }));
+    open();
+    const body = await screen.findByTestId("launched-scheduled");
+    expect(body).toHaveTextContent(SCHEDULED_RUN.PAGE_STARTS(whenText(START, "UTC"), "12h"));
+    expect(body).toHaveTextContent(SCHEDULED_RUN.PAGE_NOTE);
+    expect(screen.queryByText(NR_LAUNCH.POSITION)).not.toBeInTheDocument();
+    expect(screen.queryByText(NR_LAUNCH.WAITING_BODY("CI jobs", 40))).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: NR_LAUNCH.CANCEL_RUN })).toBeInTheDocument();
   });
 });
 
