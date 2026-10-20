@@ -154,7 +154,7 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 		slog.InfoContext(cmd.Context(), "runner's connection to the organisation", "route", runnerwire.OrgRoute(org, identity.RunnerID.String()))
 		return runRunnerServices(cmd.Context(), client.Run, runtime.run)
 	}
-	cmd.Flags().StringVar(&org, "org", "", "organisation public HTTPS URL used at registration (default: the OrgURL managed preference)")
+	cmd.Flags().StringVar(&org, "org", "", "organisation public HTTPS URL used at registration (default: the OrgURL managed preference, else org_url in runnerd.json)")
 	cmd.Flags().StringVar(&configPath, "config", "", "the runner's settings file (default: <user configuration directory>/wardyn/runnerd.json, which may be absent); the file never holds a credential")
 	cmd.Flags().StringVar(&stateDir, "state-dir", "", "private runner state directory (defaults to the user configuration directory)")
 	cmd.Flags().StringVar(&opts.proxyImage, "proxy-image", "", "Wardyn proxy image matching this daemon version (defaults to the image the organisation named at registration, else the release image on a release build)")

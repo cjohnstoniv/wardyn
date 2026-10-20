@@ -125,6 +125,41 @@ func TestRunnerFileRefusesAProxyCredential(t *testing.T) {
 	}
 }
 
+// A scheme-less value is read the way Go reads HTTPS_PROXY (as http://<value>), so a credential written
+// without a scheme is refused and a bare host:port keeps working; a scheme the runner cannot use is refused by name.
+func TestRunnerProxyWithoutASchemeIsReadAsHTTP(t *testing.T) {
+	for _, field := range []string{"runner_proxy", "upstream_proxy"} {
+		_, err := loadRunnerFile(writeConfig(t, `{"`+field+`": "alice:hunter2@proxy.example:3128"}`), true)
+		if err == nil || !strings.Contains(err.Error(), "user name or password") || strings.Contains(err.Error(), "hunter2") {
+			t.Errorf("%s: scheme-less userinfo: %v; want the credential refusal without the value", field, err)
+		}
+	}
+	if _, err := loadRunnerFile(writeConfig(t, `{"runner_proxy": "proxy.example:3128"}`), true); err != nil {
+		t.Errorf("runner_proxy bare host:port: %v", err)
+	}
+	for _, ok := range []string{"http://p:1", "https://p:1", "socks5://p:1", "socks5h://p:1"} {
+		if _, err := loadRunnerFile(writeConfig(t, `{"runner_proxy": "`+ok+`"}`), true); err != nil {
+			t.Errorf("runner_proxy %s: %v", ok, err)
+		}
+	}
+	_, err := loadRunnerFile(writeConfig(t, `{"runner_proxy": "ftp://proxy.example:21"}`), true)
+	if err == nil || !strings.Contains(err.Error(), `"ftp"`) {
+		t.Errorf("runner_proxy ftp: %v; want a refusal naming the scheme", err)
+	}
+}
+
+// A flag or an environment value that is only whitespace is unset, the way the old serve trimmed it.
+func TestRunnerConfigWhitespaceOnlyIsUnset(t *testing.T) {
+	got := resolveRunnerConfig(inputs(map[string]string{"upstream-proxy": "  "}, map[string]string{"WARDYN_UPSTREAM_PROXY": " http://p:1 "}, nil, runnerFile{})).field("upstream_proxy")
+	if got.Value != "http://p:1" || got.Source != "environment WARDYN_UPSTREAM_PROXY" {
+		t.Errorf("blank flag: %+v; want the environment's trimmed value", got)
+	}
+	got = resolveRunnerConfig(inputs(map[string]string{"upstream-proxy": " http://f:1 "}, nil, nil, runnerFile{})).field("upstream_proxy")
+	if got.Value != "http://f:1" {
+		t.Errorf("padded flag: %+v; want it trimmed", got)
+	}
+}
+
 func TestRunnerFileRefusesAnUnknownField(t *testing.T) {
 	_, err := loadRunnerFile(writeConfig(t, `{"org_url": "https://wardyn.example", "relay_adress": "127.0.0.1"}`), true)
 	if err == nil || !strings.Contains(err.Error(), "relay_adress") {

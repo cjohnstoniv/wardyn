@@ -133,8 +133,8 @@ func (f runnerField) resolve(in runnerInputs) resolvedField {
 		return resolvedField{Name: f.name, Value: value, Source: source}
 	}
 	if f.flag != "" && in.flag != nil {
-		if v, ok := in.flag(f.flag); ok {
-			return got(v, sourceFlag+" --"+f.flag)
+		if v, ok := in.flag(f.flag); ok && strings.TrimSpace(v) != "" {
+			return got(strings.TrimSpace(v), sourceFlag+" --"+f.flag)
 		}
 	}
 	if f.managed != "" && in.managed != nil {
@@ -228,7 +228,7 @@ func checkRunnerFile(f runnerFile) error {
 	if err := refuseProxyCredential("upstream_proxy", f.UpstreamProxy, "WARDYN_UPSTREAM_PROXY"); err != nil {
 		return err
 	}
-	if err := refuseProxyCredential("runner_proxy", f.RunnerProxy, "HTTPS_PROXY"); err != nil {
+	if err := refuseProxyCredential("runner_proxy", f.RunnerProxy, "HTTPS_PROXY", "http", "https", "socks5", "socks5h"); err != nil {
 		return err
 	}
 	if err := proxy.ValidUpstreamProxyURL(f.UpstreamProxy); err != nil {
@@ -237,10 +237,16 @@ func checkRunnerFile(f runnerFile) error {
 	return nil
 }
 
-// refuseProxyCredential keeps a credential out of the file. The value is never repeated in the error.
-func refuseProxyCredential(field, raw, envName string) error {
+// refuseProxyCredential keeps a credential out of the file. The value is never repeated in the error. A URL
+// without "://" is read the way Go's proxy-from-environment reads it, as http://<value>, so a scheme-less
+// "user:pass@host:port" is refused as the credential it is; scheme, when the field limits it, is checked
+// after that.
+func refuseProxyCredential(field, raw, envName string, schemes ...string) error {
 	if raw == "" {
 		return nil
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "http://" + raw
 	}
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -249,6 +255,9 @@ func refuseProxyCredential(field, raw, envName string) error {
 	if u.User != nil {
 		return fmt.Errorf("%s: carries a user name or password, and this file never holds a credential: remove it here and set %s in the service's environment instead "+
 			"(a systemd drop-in EnvironmentFile on Linux; see docs/runner-registration.md#a-runner-behind-a-corporate-proxy)", field, envName)
+	}
+	if len(schemes) > 0 && !slices.Contains(schemes, strings.ToLower(u.Scheme)) {
+		return fmt.Errorf("%s: scheme %q is not one of %s", field, u.Scheme, strings.Join(schemes, ", "))
 	}
 	return nil
 }
