@@ -143,6 +143,7 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 - Start `serve` with `--upstream-proxy http://proxy.example:3128` or `WARDYN_UPSTREAM_PROXY`. Only `http://` is supported. The URL is checked at startup, never sent to the organisation, and never printed.
 - Setup does not write it. Add it to the service's environment after setup (the env file on Linux, mode `0600`), and again after a rerun, which rewrites that file.
 - Put a credential in the variable, not the flag: a flag shows in the process list.
+- Its own organisation connection needs `HTTPS_PROXY`: [a runner behind a corporate proxy](../runner-registration.md#a-runner-behind-a-corporate-proxy).
 - On macOS do not put a credential in the LaunchAgent: the plist is mode `0644`, readable by every local account. Use a proxy URL without one, or run with `--no-service` and a `0600` environment file that holds `WARDYN_UPSTREAM_PROXY`. See [`WARDYN_UPSTREAM_PROXY`](../ENV.md#wardyn_upstream_proxy).
 
 ### Running without a service

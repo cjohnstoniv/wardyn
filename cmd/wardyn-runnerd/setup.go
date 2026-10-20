@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/spf13/cobra"
@@ -303,6 +304,9 @@ func proxyForService(out io.Writer, paths setupPaths) ([]carriedProxy, error) {
 	}
 	if slices.ContainsFunc(carried, func(c carriedProxy) bool { return !isNoProxyName(c.name) }) {
 		fmt.Fprintln(out, proxyCarryLine(carried, stripped))
+		if len(stripped) > 0 {
+			fmt.Fprintln(out, proxyCredentialWarning(stripped))
+		}
 		return carried, nil
 	}
 	earlier, _, err := carryProxy(paths.setting)
@@ -321,6 +325,38 @@ func proxyForService(out io.Writer, paths setupPaths) ([]carriedProxy, error) {
 		fmt.Fprintln(out, keptAddressesLine(kept))
 	}
 	return append(kept, carried...), nil
+}
+
+// proxyEnvNames are the proxy variables set in the environment that setup does not carry, by name: a value
+// may hold a credential. The runner's connection reads only the variables carryProxy carries.
+func proxyEnvNames(getenv func(string) string) []string {
+	var set []string
+	for _, k := range []string{"ALL_PROXY", "all_proxy"} {
+		if getenv(k) != "" {
+			set = append(set, k)
+		}
+	}
+	return set
+}
+
+// shellProxyWarning says that a proxy variable setup does not carry reaches neither the service nor the
+// runner's own connection to the organisation, which reads HTTPS_PROXY, HTTP_PROXY and NO_PROXY.
+func shellProxyWarning(names []string) string {
+	verb := "is"
+	if len(names) > 1 {
+		verb = "are"
+	}
+	return strings.Join(names, ", ") + " " + verb + " set in this shell, but setup does not carry it into the service, and the " +
+		"runner's own connection to the organisation reads only HTTPS_PROXY, HTTP_PROXY and NO_PROXY, so it will not use " +
+		"that proxy. Set HTTPS_PROXY in this shell and run setup again: see docs/runner-registration.md#a-runner-behind-a-corporate-proxy."
+}
+
+// proxyCredentialWarning is the line setup prints for each carried proxy variable that held a user name and
+// password, naming the variables only: the service gets the address without them.
+func proxyCredentialWarning(stripped []string) string {
+	return strings.Join(stripped, ", ") + " in this shell contains a credential; the service gets it without the credential. " +
+		"For a proxy that needs a password, use a systemd drop-in on Linux (systemctl --user edit wardyn-runnerd): see " +
+		"docs/runner-registration.md#a-runner-behind-a-corporate-proxy. Never put a proxy credential in the LaunchAgent: every local account can read it."
 }
 
 // preflight validates every input and checks Docker, so that a refusal comes before the single-use
@@ -348,6 +384,9 @@ func (h setupHost) preflight(cmd *cobra.Command, o setupOptions) (setupPlan, err
 	if ssl := os.Getenv("SSL_CERT_FILE"); ssl != "" && cmp.Or(o.trustedCAFile, keptCA, o.orgCAFile, keptOrgCA) == "" {
 		fmt.Fprintf(cmd.OutOrStdout(), "SSL_CERT_FILE is set (%s); pass --trusted-ca-file %s if runs must trust it (64 KiB at most), or --org-ca-file %s to trust it for this runner's connection to the organisation only (the CLI's own anchors: wardyn ca add)\n", ssl, ssl, ssl)
 	}
+	if names := proxyEnvNames(os.Getenv); len(names) > 0 && !o.noService {
+		fmt.Fprintln(cmd.OutOrStdout(), shellProxyWarning(names))
+	}
 	if o.trustedCAFile, err = checkedTrustedCAFile(o.trustedCAFile, keptCA, cmp.Or(paths.envFile, paths.plistFile)); err != nil {
 		return setupPlan{}, err
 	}
@@ -357,6 +396,10 @@ func (h setupHost) preflight(cmd *cobra.Command, o setupOptions) (setupPlan, err
 	carried, err := proxyForService(cmd.OutOrStdout(), paths)
 	if err != nil {
 		return setupPlan{}, err
+	}
+	_, caWarnings := trustedCAFileCheck(o.trustedCAFile, time.Now())
+	for _, w := range caWarnings {
+		fmt.Fprintln(cmd.OutOrStdout(), "warning: "+w)
 	}
 	plan := setupPlan{proxy: carried, setupOptions: o, paths: paths, dockerHost: h.dockerHost, want: want, flagged: o.proxyImage != ""}
 	if _, err := os.Stat(plan.paths.identity()); err == nil {

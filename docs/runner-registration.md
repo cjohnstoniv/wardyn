@@ -135,15 +135,14 @@ Migration `0144_runner_minted_by` records on each runner who minted the registra
 
 ## Serving
 
-`wardyn-runnerd setup` starts `serve` for you. To run it by hand, build `wardyn-runnerd` with the `docker` tag, then connect the registered identity:
+`wardyn-runnerd setup` starts `serve` for you. To run it by hand, use the prebuilt `wardyn-runnerd-<os>-<arch>` from the release (a source build needs the `docker` tag), then connect the registered identity:
 
 ```sh
 wardyn-runnerd serve --org https://wardyn.example \
-  --proxy-image ghcr.io/cjohnstoniv/wardyn-proxy:<matching-version> \
   --internal-network wardyn-internal
 ```
 
-The console prints the same command from the token mint answer, with its `proxy_image` unless the organisation keeps one proxy image per architecture, and a note on `--total-disk` for VM-backed Docker. The relay flags are needed only when the [startup check](#the-startup-reachability-check) refuses.
+Leave `--proxy-image` out and the runner follows the proxy image the organisation names at every connect. Giving it, as the console's command does where the organisation keeps one proxy image, pins that image: the runner never follows the organisation again, and logs a warning when the organisation names a different release. The relay flags are needed only when the [startup check](#the-startup-reachability-check) refuses.
 
 | Setting | Behaviour |
 |---|---|
@@ -201,3 +200,46 @@ On a computer that is not a runner, download `wardyn-<os>-<arch>` alone.
 Both restart `serve` after a crash. On Linux the unit runs while you are logged in; run `loginctl enable-linger $USER` to keep it running after logout and from boot. Setup prints that command and never runs it. A `DOCKER_HOST` set when you run setup is carried into the service.
 
 `./install.sh --uninstall` stops the service and removes the unit or agent, the settings file and the installed `wardyn-runnerd`. It keeps `runner.json` and `runner.key`, and it never removes the `wardyn` CLI or `cli.json`: they are yours, not the runner's. Revoke the runner itself in *My runner*.
+
+## A runner behind a corporate proxy
+
+Several settings keep a runner working behind a proxy that inspects TLS. A service started by systemd or launchd does not inherit the shell's exports, so `setup` writes the five settings marked `setup` in the table into the service.
+
+| Setting | For | Written by | Without it |
+|---|---|---|---|
+| `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` | The runner's own connection to the organisation | `setup` carries the shell's, without a user name and password | Registered, never connected |
+| `WARDYN_TRUSTED_CA_FILE` | An inspecting proxy's root | `setup --trusted-ca-file` | Certificate errors that name an unknown issuer |
+| `WARDYN_UPSTREAM_PROXY` | The runs' egress | You, after setup | Runs reach nothing outside |
+| `WARDYN_PROXY_IMAGE` (and `_PINNED`) | A mirror of the proxy image | `setup --proxy-image` | `serve` refuses at startup when the image cannot be pulled; a pin has to be moved on each organisation upgrade |
+| `DOCKER_HOST` | A non-default engine socket | `setup` carries it | `serve` refuses at startup: the engine is not reachable |
+| `WARDYN_RELAY_LISTEN` / `_HOST_TARGET` | The relay pair | `setup` pins what its probe proved | `serve` refuses at startup: the relay is unreachable |
+
+`setup` carries `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` and their lowercase forms from the shell it runs in: into `runnerd.env` on Linux, into the LaunchAgent on macOS.
+
+- It prints the names it carried, never the values, and adds no `NO_PROXY` default.
+- It removes a user name and password from a proxy URL and warns, naming the variable. A proxy that needs them refuses the runner.
+- A rerun from a shell that sets no proxy address keeps the addresses the earlier setup carried. A shell that sets only `NO_PROXY` keeps them and replaces the exclusion list.
+- `ALL_PROXY` is not carried, and the runner's connection does not read it. Setup warns when it is set: set `HTTPS_PROXY` instead.
+
+For a proxy that needs a password, on Linux:
+
+1. Write `~/.config/wardyn/runnerd-proxy.env`, mode `0600`, holding `HTTPS_PROXY=http://user:password@proxy.example:3128`.
+2. Run `systemctl --user edit wardyn-runnerd` and add `[Service]` with `EnvironmentFile=%h/.config/wardyn/runnerd-proxy.env`. systemd reads it after `runnerd.env`, so its value wins. A drop-in survives a rerun of `setup`, which rewrites the unit and `runnerd.env`.
+3. Run `systemctl --user restart wardyn-runnerd`.
+
+- Never put a proxy URL that holds a credential in the LaunchAgent: the plist is mode `0644`, readable by every local account.
+- Every runner behind one proxy shares one address at the organisation's ingress: see [Behind a shared ingress](operations/hybrid-laptops.md#behind-a-shared-ingress).
+
+### A runner that never connected
+
+The console shows a runner that registered but has not connected as Offline. Read its log on that computer: `~/Library/Logs/wardyn/runnerd.log` on macOS, `journalctl --user -u wardyn-runnerd` on Linux.
+
+| Log line | Says |
+|---|---|
+| `runner's connection to the organisation` | At startup: `route=direct` or `via proxy host:port (HTTPS_PROXY)`. |
+| `runner connection to the organisation failed` | The error, and a `hint` for an untrusted or mismatched certificate (the subject and issuer presented), a proxy that refused (its host and port) or a name that does not resolve. |
+| `runner still offline, retrying` | Once a minute: `offline_for` and `last_error`, the last attempt's error. |
+| `the trusted CA file …` | A certificate in `--trusted-ca-file` that expired or is not a CA, or a file another account can change. The file is still used. |
+
+- Docker, the CA file, the proxy image and the relay are each checked before the first connection. A refusal there appears at the top of the log, and the service restarts and repeats it.
+
