@@ -151,7 +151,7 @@ export type { CredentialKind } from "./copy/approvals";
 export { credentialKind } from "./copy/approvals";
 export { RUN_COCKPIT } from "./copy/run-cockpit";
 export { RUN_OUTPUT } from "./copy/run-output";
-export { RUN_SSH } from "./copy/run-ssh";
+export { RUN_SSH, RUN_CLI } from "./copy/run-ssh";
 export { RUN_SIGN_IN } from "./copy/run-sign-in";
 export { UI_APPS_LANE, UI_APPS_LAUNCHER_MISSING_PREFIX, POLICY_UI_APPS } from "./copy/ui-apps";
 export { MEMBER_GETTING_STARTED, RUNS_MEMBER_EMPTY } from "./copy/getting-started";

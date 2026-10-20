@@ -5,7 +5,7 @@
 
 import { randomUUID } from "node:crypto";
 import { test, expect, ADMIN_TOKEN, gotoConsole, layoutSettled, navTo, sql } from "./fixtures";
-import { RUN_COCKPIT, UI_APPS_LANE } from "../src/app/components/wardyn/copy";
+import { RUN_CLI, RUN_COCKPIT, RUN_SSH, UI_APPS_LANE } from "../src/app/components/wardyn/copy";
 import { MODEL_ACCESS_BANNER, MODEL_ACCESS_RUN_DOOR } from "../src/app/components/wardyn/model-access-copy";
 import { AGENTS } from "../src/app/lib/workspace-providers-copy";
 import { CONNECTIONS } from "../src/app/components/wardyn/copy/door";
@@ -220,6 +220,111 @@ test.describe("Attach card — a failing /healthz claims nothing about the deplo
     // Both headings stay — the lanes exist, their state is simply unknown.
     await expect(page.getByText("UI apps")).toBeVisible();
 
+    await page.unroute("**/healthz");
+  });
+});
+
+// M-ATT-1 (ATT-CARD): the card's primary action is `wardyn attach <run id>`, byte for byte, with
+// no environment prefix; the console's address reaches the CLI once, in the first-time line; and
+// Get the CLI follows /healthz (the release's install line, or the operator's mirror, plus the
+// org CA fingerprints). The vitest pins the same strings; this one proves them in a real browser.
+test.describe("Attach card — the terminal command and Get the CLI", () => {
+  // Playwright's "Desktop Chrome" preset reports a Windows user agent, which would lead with the
+  // PowerShell line; these tests pin the non-Windows lead, so say which OS the viewer is on.
+  test.use({ userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36" });
+
+  test("copies `wardyn attach <id>` with no prefix and shows the install line from /healthz", async ({ page, context }) => {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await openRuns(page);
+    const MIRROR = "https://artifacts.example.test/wardyn";
+    await page.route("**/healthz", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          status: "ok",
+          version: "0.10.0",
+          cli_artifact_base: MIRROR,
+          org_ca_fingerprints: [{ subject: "E2E Root CA", sha256: "sha256:9d2f6c1a07e84b35" }],
+        }),
+      }),
+    );
+
+    await page.getByText("e2e fixture 2").click(); // RUNNING — the card's gate
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
+    const runId = new URL(page.url()).pathname.split("/").pop()!;
+    const heading = page.getByRole("heading", { name: "Attach from your terminal" });
+    await expect(heading).toBeVisible();
+    const card = heading.locator("xpath=ancestor::section[1]");
+
+    // The command: exactly this string, nothing before it, and the visible button copies exactly it.
+    const command = `wardyn attach ${runId}`;
+    await expect(card.locator("code", { hasText: /^wardyn attach / })).toHaveText(command);
+    await card.getByRole("button", { name: RUN_SSH.COPY_CLI }).click();
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(command);
+
+    // The one first-time line, with the console's own address; no assignment, no token shape.
+    const origin = new URL(page.url()).origin;
+    await expect(card.getByText(`${RUN_CLI.FIRST_TIME} wardyn login ${origin}`)).toBeVisible();
+    const text = (await card.textContent()) ?? "";
+    expect(text).not.toContain("WARDYN_URL=");
+    expect(text).not.toMatch(/wdn_|WARDYN_TOKEN=|wardyn run attach|wardyn auth/);
+
+    // Get the CLI: the mirror is the script URL and WARDYN_ARTIFACT_BASE; Windows is folded.
+    await expect(card.getByText(RUN_CLI.VERSION("0.10.0"))).toBeVisible();
+    await expect(
+      card.locator("code", { hasText: `curl -fsSL ${MIRROR}/v0.10.0/install-cli.sh | WARDYN_ARTIFACT_BASE=${MIRROR} sh` }),
+    ).toBeVisible();
+    await expect(card.getByText(RUN_CLI.MIRROR_NOTE)).toBeVisible();
+    await expect(card.getByText(`irm ${MIRROR}/v0.10.0/install-cli.ps1`, { exact: false })).toBeHidden();
+    await card.getByText(RUN_CLI.OTHER_OS).click();
+    await expect(
+      card.locator("code", { hasText: `$env:WARDYN_ARTIFACT_BASE='${MIRROR}'; irm ${MIRROR}/v0.10.0/install-cli.ps1 | iex` }),
+    ).toBeVisible();
+    await expect(card.getByText(RUN_CLI.CA_TITLE)).toBeVisible();
+    await expect(card.getByText("sha256:9d2f6c1a07e84b35")).toBeVisible();
+
+    // SSH is demoted: a folded disclosure after Get the CLI.
+    const ssh = card.locator("details", { has: page.locator("summary", { hasText: RUN_CLI.SSH_TITLE }) });
+    await expect(ssh).not.toHaveAttribute("open", "");
+
+    await page.unroute("**/healthz");
+  });
+
+  test("a /healthz with no version says there is no install line, and keeps the command", async ({ page }) => {
+    await openRuns(page);
+    await page.route("**/healthz", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "ok" }) }),
+    );
+    await page.getByText("e2e fixture 2").click();
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
+    const card = page.getByRole("heading", { name: "Attach from your terminal" }).locator("xpath=ancestor::section[1]");
+    await expect(card.getByText(RUN_CLI.NO_INSTALL_LINE)).toBeVisible();
+    await expect(card.getByRole("button", { name: RUN_CLI.TRY_AGAIN })).toHaveCount(0);
+    await expect(card.locator("code", { hasText: /^wardyn attach / })).toBeVisible();
+    await page.unroute("**/healthz");
+  });
+});
+
+// On Windows the PowerShell line leads and the sh line is the folded one.
+test.describe("Attach card — Get the CLI on a Windows viewer", () => {
+  test.use({ userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36" });
+
+  test("leads with the PowerShell line and folds the curl line under Another operating system", async ({ page }) => {
+    await openRuns(page);
+    await page.route("**/healthz", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "ok", version: "0.10.0" }) }),
+    );
+    await page.getByText("e2e fixture 2").click();
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
+    const card = page.getByRole("heading", { name: "Attach from your terminal" }).locator("xpath=ancestor::section[1]");
+    const REL = "https://github.com/cjohnstoniv/wardyn/releases/download/v0.10.0";
+    const ps = card.locator("code", { hasText: `irm ${REL}/install-cli.ps1 | iex` });
+    const sh = card.locator("code", { hasText: `curl -fsSL ${REL}/install-cli.sh | sh` });
+    await expect(ps).toBeVisible();
+    await expect(sh).toBeHidden();
+    await card.getByText(RUN_CLI.OTHER_OS).click();
+    await expect(sh).toBeVisible();
     await page.unroute("**/healthz");
   });
 });

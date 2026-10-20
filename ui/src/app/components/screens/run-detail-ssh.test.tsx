@@ -32,7 +32,7 @@ import { ConnectSSHCard } from "./run-detail-ssh";
 import { HttpError } from "../../lib/api/core";
 import { RUN_OWNER_ONLY } from "../../lib/run-entry";
 import { OperatorProvider } from "../wardyn/operator-context";
-import { RUN_SSH, UI_APPS_LANE } from "../wardyn/copy";
+import { RUN_CLI, RUN_SSH, UI_APPS_LANE } from "../wardyn/copy";
 import { aheadByHours } from "../../lib/test-clock";
 
 const OWNER = "alice@example.com";
@@ -111,7 +111,7 @@ describe("ConnectSSHCard — visibility", () => {
     listKeysMock.mockResolvedValue([]);
     renderCard({ created_by: "service:ci-bot" }, "sam@example.com", false);
     await waitFor(() => expect(screen.getByText("Attach from your terminal")).toBeInTheDocument());
-    expect(screen.getByText((t) => t.includes(`wardyn run attach ${baseRun.id}`))).toBeInTheDocument();
+    expect(screen.getByText(`wardyn attach ${baseRun.id}`)).toBeInTheDocument();
     expect(screen.queryByText("SSH")).toBeNull();
     expect(screen.queryByText("Manage SSH keys")).toBeNull();
   });
@@ -133,11 +133,7 @@ describe("ConnectSSHCard — visibility", () => {
     renderCard();
     await waitFor(() => expect(healthMock).toHaveBeenCalled());
     expect(screen.getByText("Attach from your terminal")).toBeInTheDocument();
-    // jsdom's origin is not the CLI's default, so the block also carries a
-    // WARDYN_URL= prefix — match on the command within it.
-    expect(
-      screen.getByText((t) => t.includes(`wardyn run attach ${baseRun.id}`)),
-    ).toBeInTheDocument();
+    expect(screen.getByText(`wardyn attach ${baseRun.id}`)).toBeInTheDocument();
     // Both SSH and the UI-apps lane are off with an empty healthz response,
     // so match SSH's off text specifically rather than the shared "Off on
     // this deployment" prefix both lanes now share.
@@ -153,7 +149,7 @@ describe("ConnectSSHCard — visibility", () => {
     renderCard();
     await waitFor(() => expect(healthMock).toHaveBeenCalled());
     expect(screen.getByText(/same session/)).toBeInTheDocument();
-    expect(screen.getByText(/WARDYN_ADMIN_TOKEN/)).toBeInTheDocument();
+    expect(screen.getByText(RUN_CLI.NOTE)).toBeInTheDocument();
   });
 });
 
@@ -622,10 +618,8 @@ describe("ConnectSSHCard — Sync a folder lane", () => {
     healthMock.mockResolvedValue(SSH_ON);
     renderCard(live);
     const title = await screen.findByText("Sync a folder");
-    // The same WARDYN_URL prefix rule as the CLI lane (cliEnv): whatever precedes `wardyn run attach` precedes `wardyn sync`.
-    const code = (end: string) => screen.getByText((_, el) => el?.tagName === "CODE" && !!el.textContent?.endsWith(end));
-    const prefix = code(`wardyn run attach ${baseRun.id}`).textContent?.replace(`wardyn run attach ${baseRun.id}`, "");
-    expect(code(`wardyn sync ${baseRun.id} ./my-folder`).textContent).toBe(`${prefix}wardyn sync ${baseRun.id} ./my-folder`);
+    // Like the attach command, the sync command carries no environment prefix.
+    expect(screen.getByText(`wardyn sync ${baseRun.id} ./my-folder`)).toBeInTheDocument();
     expect(screen.getByText(/Copies a folder from your computer into the sandbox/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copy sync command" })).toBeInTheDocument();
     const cli = screen.getByText("Wardyn CLI");
@@ -733,23 +727,81 @@ describe("ConnectSSHCard — a FAILED /healthz asserts nothing about the deploym
   });
 });
 
-// #1485: the CLI hint's WARDYN_URL named the bare origin, but under
-// WARDYN_BASE_PATH the API is served beneath the prefix, and a root URL would
-// aim the CLI (and its bearer token) at whatever else owns the host root.
-describe("ConnectSSHCard — the CLI hint's WARDYN_URL keeps the base path", () => {
+// M-ATT-1 (release-blocking): the copied command is `wardyn attach <id>` byte for byte. No
+// environment prefix of ANY kind (the old card printed `WARDYN_URL=<origin> `), no token and
+// no ticket. The console's address reaches the CLI once, through `wardyn login <url>`.
+describe("ConnectSSHCard — the attach command carries no prefix", () => {
   afterEach(() => {
     delete document.documentElement.dataset.wardynBase;
   });
 
-  it("is origin + base path, never the bare origin", async () => {
+  const attachCommand = `wardyn attach ${baseRun.id}`;
+  const copyTexts = () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    return writeText;
+  };
+
+  it("is exactly `wardyn attach <id>` in the block, with nothing before it", async () => {
+    healthMock.mockResolvedValue({ status: "ok" });
+    listKeysMock.mockResolvedValue([]);
+    renderCard();
+    await waitFor(() => expect(healthMock).toHaveBeenCalled());
+    const cmd = screen.getByText(attachCommand);
+    expect(cmd.textContent).toBe(attachCommand);
+    // Any prefix at all fails: `WARDYN_URL=… wardyn attach <id>`, `FOO=1 wardyn attach <id>`, `env … `.
+    expect(cmd.textContent).toMatch(new RegExp(`^wardyn attach ${baseRun.id}$`));
+    expect(cmd.textContent).not.toMatch(/TOKEN|ticket|wdn_/i);
+    // ...and nothing sits beside it in the same block either (a sibling prefix would fail here).
+    expect(cmd.parentElement!.textContent).toBe(attachCommand);
+  });
+
+  it("copies exactly that string, and no WARDYN_URL= appears anywhere on the card", async () => {
+    healthMock.mockResolvedValue({ status: "ok", ssh: { enabled: true, advertise_addr: "wardyn.corp.example:2222" } });
+    listKeysMock.mockResolvedValue([]);
+    const writeText = copyTexts();
+    const { container } = renderCard({ agent_exec_id: "exec-1", placement: "remote" });
+    await screen.findByText("Sync a folder");
+    const btn = screen.getByRole("button", { name: RUN_SSH.COPY_CLI });
+    expect(btn).toHaveTextContent(RUN_SSH.COPY_CLI);
+    btn.click();
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(attachCommand));
+    expect(container.textContent).not.toContain("WARDYN_URL");
+    expect(container.textContent).not.toMatch(/wardyn run attach|wardyn auth/);
+    expect(container.textContent).not.toMatch(/\bwdn_|WARDYN_TOKEN=|WARDYN_ADMIN_TOKEN/);
+  });
+
+  // The console's address reaches the CLI once, in `wardyn login <url>`, and keeps the base path
+  // (#1485): under WARDYN_BASE_PATH the API is beneath it, and a root URL would aim the CLI's
+  // bearer token at whatever else owns the host root.
+  it("names the first-time line with origin + base path, never the bare origin", async () => {
     document.documentElement.dataset.wardynBase = "/wardyn";
     healthMock.mockResolvedValue({ status: "ok" });
     listKeysMock.mockResolvedValue([]);
     renderCard();
     await waitFor(() => expect(healthMock).toHaveBeenCalled());
-    const cmd = screen.getByText((t) => t.includes(`wardyn run attach ${baseRun.id}`));
-    expect(cmd.textContent).toContain(`WARDYN_URL=${window.location.origin}/wardyn wardyn run attach`);
-    expect(cmd.textContent).not.toContain(`WARDYN_URL=${window.location.origin} `);
+    const line = screen.getByText(`wardyn login ${window.location.origin}/wardyn`);
+    expect(line.textContent).toBe(`wardyn login ${window.location.origin}/wardyn`);
+  });
+
+  // The first-time line is ONE line: it reads the same whatever /healthz says about CLI sign-in
+  // (an older control plane's CLI explains the token path itself), so there is no second form,
+  // no assignment and no token shape in it. Revert proof: put back a `cli_sign_in` branch that
+  // shows `wardyn auth set-url` / `WARDYN_TOKEN=` and the not-signed-in rows go red.
+  it.each([
+    ["cli_sign_in true", { status: "ok", cli_sign_in: true }],
+    ["cli_sign_in false", { status: "ok", cli_sign_in: false }],
+    ["an older /healthz with no cli_sign_in", { status: "ok" }],
+    ["a /healthz that did not answer", {}],
+  ])("shows the one first-time line when /healthz says %s", async (_n, body) => {
+    healthMock.mockResolvedValue(body);
+    listKeysMock.mockResolvedValue([]);
+    const { container } = renderCard();
+    await waitFor(() => expect(healthMock).toHaveBeenCalled());
+    const url = window.location.origin;
+    const p = screen.getByText((_t, el) => el?.tagName === "P" && !!el.textContent?.startsWith(RUN_CLI.FIRST_TIME));
+    expect(p.textContent).toBe(`First time on this computer? wardyn login ${url}`);
+    expect(container.textContent).not.toMatch(/wdn_|WARDYN_TOKEN=|WARDYN_URL=|auth set-url|auth login/);
   });
 });
 
@@ -787,7 +839,8 @@ describe("ConnectSSHCard — an advertised ProxyCommand", () => {
     renderCard();
     await screen.findByText(RUN_SSH.PROXY_NOTE);
     const config = screen.getByText((_, el) => el?.tagName === "CODE" && el.textContent === cliConfig);
-    expect(config.closest("details")).toBeNull();
+    // Nearest <details> is the folded SSH lane itself, not a disclosure of its own.
+    expect(config.closest("details")!.querySelector("summary")!.textContent).toContain(RUN_CLI.SSH_TITLE);
     const oneLiner = screen.getByText(cliPrint);
     const details = oneLiner.closest("details");
     expect(details).not.toBeNull();
