@@ -18,6 +18,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -38,7 +39,13 @@ func fillDispatch(t *testing.T, kind types.GrantKind, on bool) (types.Credential
 	f := newResidentFix(t, nil, residentAllClassesPolicy)
 	f.srv.cfg.RunConfigKey = make([]byte, kek.DEKSize)
 	f.srv.cfg.RunnerSecretPlaceholders = on
-	f.reportCaps(t, true)
+	// reportCaps advertises CC2 only; a run with no class asks for CC1, which
+	// the create needs to reach the runner.
+	caps, err := json.Marshal(runnerwire.Caps{Support: substrate.ClassSupport{Classes: []types.ConfinementClass{types.CC1, types.CC2}, ManagedFiles: true}, Version: "test", Resident: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.srv.runnerEndpoint(f.rn.ID).sub.HandleEvent(runnerwire.Event{Kind: runnerwire.EventCaps, Data: caps})
 	ctx := t.Context()
 	if err := f.cfg.Secrets.(*memSecrets).Put(ctx, "op-secret", []byte(fillTestValue)); err != nil {
 		t.Fatal(err)
@@ -68,7 +75,15 @@ func fillDispatch(t *testing.T, kind types.GrantKind, on bool) (types.Credential
 	created := slices.Clone(f.side.created)
 	f.side.mu.Unlock()
 	if len(created) != 1 {
-		t.Fatalf("%d create_sandbox calls, want one", len(created))
+		var failed []string
+		f.audit.mu.Lock()
+		for _, ev := range f.audit.events {
+			if ev.Outcome == "failure" {
+				failed = append(failed, ev.Action+" "+string(ev.Data))
+			}
+		}
+		f.audit.mu.Unlock()
+		t.Fatalf("%d create_sandbox calls, want one; failures: %v", len(created), failed)
 	}
 	rows, err := f.st.ListGrantsByRun(ctx, run.ID)
 	if err != nil {
