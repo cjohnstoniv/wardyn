@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package cliprofile is the per-computer profile the wardyn CLI reads: the organisation's URL, so
-// `wardyn run attach <id>` needs none on the command line, and optionally the base URL its release downloads
+// `wardyn attach <id>` needs none on the command line, and optionally the base URL its release downloads
 // come from. It holds no secret (mode 0644) and is written by `wardyn login <url>` and by
 // `wardyn-runnerd setup`. Writing one field keeps the other.
 package cliprofile
