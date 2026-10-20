@@ -215,6 +215,11 @@ func (q queuedCreate) answer(s *Server, w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	s.recordPolicyApplyAudits(ctx, q.f.source)
+	if refusal := s.keepWorkFolder(r, q.f.keep, created); refusal != nil {
+		s.abortQueuedRun(ctx, created.ID, createRunKeepAbortHint)
+		refusal.write(s, w, r)
+		return
+	}
 	if rows := entry.Components; len(rows) > 0 {
 		err := errors.New("api: the store cannot record run components")
 		if st, ok := s.cfg.Store.(store.ComponentStore); ok {
@@ -283,7 +288,7 @@ func (q queuedCreate) entry(s *Server, ctx context.Context, waitSec int) (store.
 		Request: q.original, ProviderID: q.f.mpChoice.provider.ID, MaxWaitSec: waitSec, ConfinementDefault: q.f.confinementDefault,
 		Repos: runRepos(types.AgentRun{Repo: q.req.Repo}, nil), LifetimeCapSec: q.f.end.capSec,
 		Resources: s.runFitSpec(q.f.spec, q.f.mainDrive).Resources, Unbound: q.f.place.unbound,
-		Barrier: q.f.enforced, Drives: len(q.f.drives) > 0, NoLocal: q.f.place.noLocal,
+		Barrier: q.f.enforced, Drives: mountsDrives(q.f.drives, q.f.keep), NoLocal: q.f.place.noLocal,
 	}
 	launch.Repos = append(launch.Repos, repoLocatorsOf(q.f.spec.WorkspaceRepos)...)
 	if q.f.ceiling.Profile != nil {

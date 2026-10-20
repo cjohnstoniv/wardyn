@@ -264,6 +264,9 @@ type UserDrive struct {
 	// DeleteStartedAt is a member drive's delete tombstone: while set, the
 	// drive is being destroyed and is treated as absent.
 	DeleteStartedAt *time.Time `json:"-"`
+	// KeptFromRun is the run a member drive was kept from (keep_work_folder),
+	// written once on create; nil on a drive made by hand.
+	KeptFromRun *uuid.UUID `json:"-"`
 }
 
 // UserDriveGrant allocates one drive to one subject (migration 0054's

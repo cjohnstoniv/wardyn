@@ -153,6 +153,13 @@ type CreateRunRequest struct {
 	// Drives is 400 drive_selection_conflict. One drive that cannot be mounted
 	// refuses the run; none is dropped.
 	Drives []DriveAttachment `json:"drives,omitempty"`
+	// KeepWorkFolder keeps the run's work folder (/home/agent/work, and nothing
+	// else: not home, agent settings or /tmp) as the caller's own drive, which
+	// stays until they delete it and counts toward their drive limit. A later
+	// run attaches it through Drives. Refused unless the organisation allows
+	// member drives and storage.user_drive.member_create.keep_main_drive is on.
+	// Whatever the agent leaves in the folder comes back in that later run.
+	KeepWorkFolder bool `json:"keep_work_folder,omitempty"`
 	// Components attaches custom components to this run: each entry names a
 	// stored component by id or carries a run-only definition inline. Nil and
 	// empty are the same and attach nothing, byte for byte today.

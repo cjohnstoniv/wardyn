@@ -65,6 +65,9 @@ func (s *Server) memberDriveCreateState(r *http.Request) *client.MemberDriveCrea
 		return nil
 	}
 	out := &client.MemberDriveCreate{}
+	if provider, err := s.userDriveProvider(ctx); err == nil && provider.MemberCreate != nil {
+		out.KeepWorkFolder = provider.MemberCreate.KeepMainDrive
+	}
 	ms, ok := s.cfg.Store.(store.MemberDriveStore)
 	if !ok {
 		out.Reason = client.MemberDriveCreateUnsupported
@@ -76,8 +79,11 @@ func (s *Server) memberDriveCreateState(r *http.Request) *client.MemberDriveCrea
 		return out
 	}
 	out.Count = len(mine)
-	_, policy, refusal := s.memberDriveCreateDoors(r)
+	row, policy, refusal := s.memberDriveCreateDoors(r)
 	out.Limit = policy.MaxPerPerson
+	if refusal == nil {
+		out.Enforcement = types.EnforcementFor(row.Backend)
+	}
 	switch {
 	case refusal == nil && out.Count >= out.Limit:
 		out.Reason = client.MemberDriveCreateLimitReached

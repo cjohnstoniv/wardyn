@@ -49,6 +49,13 @@ type MemberDriveCreate struct {
 	Count int `json:"count"`
 	// Limit is the switch's drives per person; 0 when the switch is off.
 	Limit int `json:"limit"`
+	// KeepWorkFolder is the organisation's keep_main_drive switch
+	// (CreateRunRequest.KeepWorkFolder), reported whether or not Allowed, so a
+	// screen tells a closed door (Reason) from a switch that is off.
+	KeepWorkFolder bool `json:"keep_work_folder"`
+	// Enforcement is what binds a new drive's size here: none on Docker, whose
+	// volumes have no size limit, so a screen says the size is not enforced.
+	Enforcement types.StorageEnforcement `json:"enforcement,omitempty"`
 }
 
 // MemberDriveCreateReason is why a person cannot create a drive now. Closed;
@@ -98,6 +105,9 @@ type MeDrive struct {
 	// Owned is true for a drive the caller created (POST /me/drives). Only an
 	// owned drive takes DELETE /me/drives/{id}.
 	Owned bool `json:"owned"`
+	// KeptFromRun is the id of the run whose work folder this drive kept
+	// (CreateRunRequest.KeepWorkFolder); "" on a drive made by hand.
+	KeptFromRun string `json:"kept_from_run,omitempty"`
 }
 
 // MemberDriveCreateRequest is POST /api/v1/me/drives: a person creates their

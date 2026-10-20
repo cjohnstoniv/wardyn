@@ -343,3 +343,42 @@ func TestGetMemberDrive(t *testing.T) {
 		}
 	}
 }
+
+// TestMemberDriveKeptFromRun: a drive kept from a run reads back with that
+// run on every member read and on the admin list; a drive made by hand reads
+// back with none.
+func TestMemberDriveKeptFromRun(t *testing.T) {
+	st := store.NewPG(runsPGPoolIsolated(t))
+	ctx := context.Background()
+	run := uuid.New()
+	kept := memberDrive("alice", "Kept")
+	kept.ID, kept.KeptFromRun = uuid.New(), &run
+	if d, err := st.CreateMemberDrive(ctx, kept, 5); err != nil || d.ID != kept.ID || d.KeptFromRun == nil || *d.KeptFromRun != run {
+		t.Fatalf("CreateMemberDrive(kept) = %+v, %v; want id %s from run %s", d, err, kept.ID, run)
+	}
+	hand, err := st.CreateMemberDrive(ctx, memberDrive("alice", "By hand"), 5)
+	if err != nil || hand.KeptFromRun != nil {
+		t.Fatalf("CreateMemberDrive(by hand) = %+v, %v; want no run", hand, err)
+	}
+	if got, err := st.GetMemberDriveOf(ctx, "alice", kept.ID); err != nil || got.KeptFromRun == nil || *got.KeptFromRun != run {
+		t.Fatalf("GetMemberDriveOf(kept) = %+v, %v; want from run %s", got, err, run)
+	}
+	mine, err := st.ListMemberDrivesOf(ctx, "alice")
+	if err != nil || len(mine) != 2 {
+		t.Fatalf("ListMemberDrivesOf = %+v, %v", mine, err)
+	}
+	for _, d := range mine {
+		if (d.ID == kept.ID) != (d.KeptFromRun != nil) {
+			t.Errorf("ListMemberDrivesOf: %s kept_from_run = %v", d.Name, d.KeptFromRun)
+		}
+	}
+	all, err := st.ListUserDrives(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range all {
+		if d.ID == kept.ID && (d.KeptFromRun == nil || *d.KeptFromRun != run) {
+			t.Errorf("ListUserDrives: kept drive kept_from_run = %v, want %s", d.KeptFromRun, run)
+		}
+	}
+}

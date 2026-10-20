@@ -274,8 +274,15 @@ func memberMeDrive(d types.UserDrive) client.MeDrive {
 	return client.MeDrive{
 		ID: d.ID.String(), Name: d.Name, Section: client.MeDriveSectionUser, Source: client.MeDriveSourcePersonal,
 		Backend: d.Backend, Target: runner.DriveTargetFor(types.ResolvedDrive{Drive: d}, false), Writable: true,
-		SizeMiB: d.SizeMiB, Enforcement: types.EnforcementFor(d.Backend), Owned: true,
+		SizeMiB: d.SizeMiB, Enforcement: types.EnforcementFor(d.Backend), Owned: true, KeptFromRun: keptFromRunOf(d),
 	}
+}
+
+func keptFromRunOf(d types.UserDrive) string {
+	if d.KeptFromRun == nil {
+		return ""
+	}
+	return d.KeptFromRun.String()
 }
 
 // auditMemberDriveCreate writes drive.member.create. count is the owner's

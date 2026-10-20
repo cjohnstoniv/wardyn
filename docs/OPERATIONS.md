@@ -3986,6 +3986,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0195` (`0195_agent_runs_local_folder`) adds `local_folder`, `local_folder_seeded_at` and `local_folder_seed_error` to `agent_runs` (`0001`'s table): the folder a run holds its agent for, and that folder's first sync.
 - `0196` (`0196_deprovision_event_pin`) adds `audit_event_id` and `audit_event_at` to `deprovision_jobs` (`0127`'s table): the id and time of the audit event an owed row writes, pinned on its first drain and cleared when the row reopens.
 - `0197` (`0197_run_inner_walls`) adds `inner_walls` to `agent_runs` (`0001`'s table): the harness's own walls a run launched with, under its policy's `harness_inner_walls`.
+- `0199` (`0199_user_drives_kept_from_run`) adds `kept_from_run` to `user_drives` (`0054`'s table): the run a person's drive was kept from (`keep_work_folder`), NULL on every drive made by hand.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
@@ -4674,6 +4675,7 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 | `size_mib` | The claim size on Kubernetes. It must be 0 on Docker, which has no byte cap |
 | `storage_class` | The claim's StorageClass on Kubernetes. Empty is the cluster default |
 | profile `deny_member_drives` | A governance profile refuses creation for its people. A person can still delete a drive they have |
+| `keep_main_drive` | Lets a run keep its work folder as its person's drive (`keep_work_folder` on the run). Off by default |
 
 **What differs by substrate.**
 
@@ -4687,6 +4689,16 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 - Turning on `drives.reclaim.enabled` lets a compromised wardynd delete any claim in the runs namespace.
 - That is already true of the admin reclaim verb. Read the chart's `drives.reclaim` comment first.
 - A person's own runner never mounts a member drive. The volume would sit on that person's laptop, out of the server's reach.
+
+**Keep a run's work folder.**
+
+- With `keep_main_drive: true`, a run that asks for `keep_work_folder` gets a member drive, named after the run, mounted at `/home/agent/work` in place of scratch.
+- Only the work folder is kept. The home folder, agent settings and `/tmp` are not.
+- The drive belongs to the person who launched the run. It counts toward `max_per_person`, is refused at the limit, and stays until that person deletes it.
+- **Whatever an agent leaves in the work folder comes back when a later run attaches the drive**, including a planted script or a token written to a file.
+- On Docker the drive has no byte cap, so the run's disk size no longer bounds the work folder. The catalogue reports `enforcement: none`.
+- Refused with 422 `keep_work_folder_disabled` while member drives or `keep_main_drive` are off. Creation is audited as `drive.member.create` with `from_run`.
+- My drives marks the drive with the run it was kept from (`kept_from_run`).
 
 **List and delete as an admin** (super admin).
 

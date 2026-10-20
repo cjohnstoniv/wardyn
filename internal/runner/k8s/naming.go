@@ -228,7 +228,10 @@ const (
 // scratchCachePath shadows the full image's pre-created /home/agent/.cache/go-build with an empty
 // directory, so the Go build cache starts cold; the kubelet creates it root-owned but 0777, writable
 // without FSGroup.
-func ephemeralScratchVolumes(diskMiB int64) ([]corev1.Volume, []corev1.VolumeMount) {
+//
+// keptWork drops the workdir emptyDir: a drive (the kept work folder) mounts there instead, and
+// is bounded by its own claim rather than disk_mib.
+func ephemeralScratchVolumes(diskMiB int64, keptWork bool) ([]corev1.Volume, []corev1.VolumeMount) {
 	if diskMiB <= 0 {
 		return nil, nil
 	}
@@ -236,6 +239,9 @@ func ephemeralScratchVolumes(diskMiB int64) ([]corev1.Volume, []corev1.VolumeMou
 		{scratchTmpVolumeName, scratchTmpPath},
 		{scratchWorkVolumeName, scratchWorkPath},
 		{scratchCacheVolumeName, scratchCachePath},
+	}
+	if keptWork {
+		targets = slices.DeleteFunc(targets, func(t struct{ name, path string }) bool { return t.path == scratchWorkPath })
 	}
 	vols := make([]corev1.Volume, 0, len(targets))
 	mounts := make([]corev1.VolumeMount, 0, len(targets))

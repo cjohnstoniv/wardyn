@@ -415,7 +415,8 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	}
 	// Scratch volumes, only when the run carries a disk budget: puts the
 	// agent's own writes inside disk_mib.
-	scratchVols, scratchMounts := ephemeralScratchVolumes(spec.Resources.DiskMiB)
+	keptWork := slices.ContainsFunc(spec.Drives, func(d types.DriveMount) bool { return d.Target == scratchWorkPath })
+	scratchVols, scratchMounts := ephemeralScratchVolumes(spec.Resources.DiskMiB, keptWork)
 	addMainContainerVolumes(agentPod, scratchVols, scratchMounts)
 	// Managed files, read-only off the Secret, in the pod's filesystem before
 	// any container starts, so there's no window where the agent runs without them.

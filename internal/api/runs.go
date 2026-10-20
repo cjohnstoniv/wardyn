@@ -39,6 +39,8 @@ const (
 	createRunComponentsAbortHint = "the run's components could not be recorded, so it was never started"
 	// createRunHarnessesAbortHint is the same for the run's harness set.
 	createRunHarnessesAbortHint = "the run's harnesses could not be recorded, so it was never started"
+	// createRunKeepAbortHint is the same for the drive keep_work_folder makes.
+	createRunKeepAbortHint = "the drive for the run's work folder could not be made, so it was never started"
 	// devcontainerNoBuilderWarning is the 201 warning for a devcontainer_repo run
 	// on a deployment with no image builder wired: the build silently fell
 	// through to the convention image, which is a different sandbox from the one
@@ -275,6 +277,14 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// is harmless (WithoutCancel of a detached ctx is a no-op in effect) and
 	// keeps the two concerns independent.
 	abort := s.abortHalfBuiltRun(ctx, runID)
+
+	// The kept work folder's drive, counted again at the insert: a race past the
+	// fold's count is refused here and the run is never started.
+	if refusal := s.keepWorkFolder(r, f.keep, created); refusal != nil {
+		abort(createRunKeepAbortHint)
+		refusal.write(s, w, r)
+		return
+	}
 
 	// The components this run launched with, recorded before anything else is
 	// built on the row: a revive re-checks the doors they needed from this

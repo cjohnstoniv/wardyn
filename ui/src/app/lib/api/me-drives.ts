@@ -30,6 +30,8 @@ export interface MeDrive {
   unavailable_reason?: MeDriveUnavailableReason;
   /** The caller created it; only an owned drive takes DELETE /me/drives/{id}. */
   owned: boolean;
+  /** The run whose work folder this drive kept (keep_work_folder); absent on a drive made by hand. */
+  kept_from_run?: string;
 }
 
 /** GET /me/drives (pkg/client.MeDriveCatalogue). */

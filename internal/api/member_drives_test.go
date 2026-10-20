@@ -76,7 +76,9 @@ func (s *memberDriveStore) CreateMemberDrive(_ context.Context, d types.UserDriv
 			return types.UserDrive{}, store.ErrMemberDriveNameTaken
 		}
 	}
-	d.ID = uuid.New()
+	if d.ID == uuid.Nil { // as the store keeps a caller's id
+		d.ID = uuid.New()
+	}
 	d.HomeTemplate, d.ObjectScheme, d.Writable, d.Reclaim = types.HomeTemplateHash, types.DriveObjectSchemeID, true, types.DriveReclaimDelete
 	s.drives[d.ID] = d
 	return d, nil
