@@ -4,8 +4,10 @@
  */
 
 // Policies -> Wardyn boundary (boards T2 and T4, round 4). Rendered by
-// components/screens/policies/boundary-screen.tsx. Every string is byte-exact from the boards except the ones
+// components/screens/boundary/boundary-screen.tsx. Every string is byte-exact from the boards except the ones
 // marked "not on the boards", which the PR lists under "Copy not on the boards".
+import { RUN_LIMITS } from "./governance-copy";
+
 export const BOUNDARY = {
   BREADCRUMB_PARENT: "Policies",
   TITLE: "Wardyn boundary",
@@ -29,10 +31,10 @@ export const BOUNDARY = {
   MODE: "Mode",
   MODE_HARD: "Hard limits",
   RECOMMENDED: "Recommended",
-  NEW_INSTALLS: "New installs",
   MODE_HARD_BODY: "A short list of what no Wardyn run may ever do. Teams give access inside it; the Default team gives everyone else a working setup.",
+  /** not on the boards: why the Hard limits choice is off until the boundary bounds brokered credential paths. */
+  HARD_GATED: "Not available yet. Hard limits can't be switched on until the Wardyn boundary bounds every brokered credential path a run is given.",
   MODE_ORG: "As your organisation's boundary allows",
-  NEEDS_SECOND_ADMIN: "Needs a second admin",
   MODE_ORG_BODY: "Wardyn adds no limits of its own at the top. Only the walls below and your organisation's boundary apply.",
 
   // Hard limits.
@@ -48,7 +50,6 @@ export const BOUNDARY = {
 
   // The off state (no_limits).
   ORG_PANEL: "Wardyn adds no limits here. What runs can reach is whatever your organisation's own boundary allows, then what the walls below allow.",
-  ORG_PANEL_NOTE: "Not recommended. Saving sends this to another security admin.",
 
   // Who it binds.
   BINDS_TITLE: "Who the Wardyn boundary binds",
@@ -58,14 +59,14 @@ export const BOUNDARY = {
   BREAK_GLASS_BODY: "A break-glass run lifts team walls and restrictions only, never the Wardyn boundary. It needs a reason, is capped at the run-limit maximum and is tagged in the run and the audit log.",
 
   // The pinned footer.
-  FOOTER: "Every save shows a dry run first. Changing the mode needs a second admin.",
+  // The board's footer is "Every save shows a dry run first. Changing the mode needs a second admin."; the
+  // second sentence is true only when the deployment requires a second person, which the console can't read.
+  FOOTER: "Every save shows a dry run first.",
   DISCARD: "Discard",
   REVIEW: "Review changes",
 
   /** not on the boards: the page's load failure. */
   FETCH_FAILED_TITLE: "Couldn't load the Wardyn boundary",
-  /** not on the boards: a direct save (no second admin required on this deployment). */
-  SAVED: "Saved.",
 } as const;
 
 // The dry run (board T4's report anatomy, for the Wardyn boundary).
@@ -78,14 +79,16 @@ export const BOUNDARY_DRY_RUN = {
   TODAY: "Today",
   AFTER: "After approval",
   MODE: "Mode",
-  /** not on the boards: tile labels for the boundary report's counts. */
-  TILE_TEAMS: "teams narrow",
-  TILE_POLICIES: "stored policies narrow",
-  TILE_PEOPLE: "people narrow",
+  // Tile labels. T4's are "team below narrows" and "people narrow"; the other forms are not on the boards.
+  TILE_TEAMS: (n: number) => (n === 1 ? "team below narrows" : "teams below narrow"),
+  TILE_POLICIES: (n: number) => (n === 1 ? "stored policy narrows" : "stored policies narrow"),
+  TILE_PEOPLE: (n: number) => (n === 1 ? "person narrows" : "people narrow"),
   TEAMS: "Teams below",
   /** not on the boards. */
   POLICIES: "Stored policies",
   PEOPLE: "People",
+  /** not on the boards: assignments to an IdP group, a user type or everyone (T3 says "IdP group"). */
+  OTHER_ASSIGNMENTS: "Assigned to a group, a user type or everyone",
   DEFAULT_TEAM: "Default",
   NARROWED: "Narrowed",
   NO_CHANGE: "No change",
@@ -104,5 +107,6 @@ export const BOUNDARY_DRY_RUN = {
     min_confinement_class: "Confinement floor",
     eligible_grants: "Credentials",
     "limits.max_end_ahead_sec": "Longest run",
+    "limits.default_end_sec": RUN_LIMITS.DEFAULT_END_LABEL, // canon: the profile limit's own label
   } as Record<string, string>,
 } as const;

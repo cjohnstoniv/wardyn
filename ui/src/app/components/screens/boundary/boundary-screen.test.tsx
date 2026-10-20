@@ -4,8 +4,9 @@
  */
 
 // Policies -> Wardyn boundary (board T2) and its dry run (board T4's report): the stored mode is what the page
-// shows, every save runs the dry run before anything is written, the PUT carries the draft with the ETag it
-// read, the gated hard_limits refusal reads in the server's words, and a held write is the submitted note.
+// shows, Hard limits stays off while the server gates it, every save runs the dry run before anything is
+// written, a stale dry-run reply is dropped, the PUT carries the draft with the ETag it read, the 409 fallback
+// reads in the server's words, and a held write is the submitted note. The page is security-admin only.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -21,13 +22,17 @@ vi.mock("../../../lib/api/boundary", () => ({
 import { setField } from "../../../../test/set-field";
 import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import { BOUNDARY, BOUNDARY_DRY_RUN } from "../../../lib/boundary-copy";
-import { BASELINE, CHANGES } from "../../../lib/governance-copy";
+import { BASELINE, CHANGES, DELIVERY, RUN_LIMITS } from "../../../lib/governance-copy";
 import type { GovernanceChange } from "../../../lib/types";
+import type { BoundaryReport } from "../../../lib/api/boundary";
+import { SECURITY_ONLY_REASON } from "../../wardyn/copy";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { BoundaryScreen } from "./boundary-screen";
 
-const stored = { mode: "no_limits", spec: {}, limits: {}, etag: '"b1"' };
-const emptyReport = { deployment: [], profiles: [], stored_policies: [], assignments: [] };
+const noLimits = { mode: "no_limits", spec: {}, limits: {}, etag: '"b1"' };
+// A boundary already in hard_limits (set through the store): the only way the editor is reachable while gated.
+const hardLimits = { mode: "hard_limits", spec: {}, limits: {}, etag: '"b1"' };
+const emptyReport: BoundaryReport = { deployment: [], profiles: [], stored_policies: [], assignments: [] };
 const GATED = "hard_limits cannot be set yet: the Wardyn boundary does not bound every brokered credential path a run is given, so it stays in no_limits until it does";
 
 function renderScreen(securityOperator = true) {
@@ -40,13 +45,20 @@ function renderScreen(securityOperator = true) {
   );
 }
 
-async function draftHardLimits(user: ReturnType<typeof userEvent.setup>, hosts: string) {
-  await user.click(await screen.findByRole("radio", { name: new RegExp(BOUNDARY.MODE_HARD_BODY.slice(0, 20)) }));
-  setField(screen.getByLabelText(BOUNDARY.BLOCKED_LABEL), hosts);
+const hardRadio = () => screen.getByRole("radio", { name: new RegExp(BOUNDARY.MODE_HARD_BODY.slice(0, 20)) });
+
+async function draftHosts(hosts: string) {
+  setField(await screen.findByLabelText(BOUNDARY.BLOCKED_LABEL), hosts);
+}
+
+function deferred<T>() {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>((r) => (resolve = r));
+  return { promise, resolve };
 }
 
 beforeEach(() => {
-  getMock.mockReset().mockResolvedValue(stored);
+  getMock.mockReset().mockResolvedValue(noLimits);
   putMock.mockReset().mockImplementation((body: unknown) => Promise.resolve({ ...(body as object), etag: '"b2"' }));
   dryRunMock.mockReset().mockResolvedValue(emptyReport);
 });
@@ -63,29 +75,55 @@ describe("BoundaryScreen", () => {
     expect(screen.getByRole("group", { name: BOUNDARY.RINGS_LABEL })).toHaveTextContent(BOUNDARY.NOT_VISIBLE);
   });
 
-  it("picking Hard limits shows the list editor and the floor's barrier, and Discard puts the stored mode back", async () => {
+  it("while the server gates hard limits, the Hard limits choice is off, says why, and the list can't be reached", async () => {
     const user = userEvent.setup();
     renderScreen();
-    await draftHardLimits(user, "");
-    const hardPanel = screen.getByTestId("boundary-hard-limits");
+    await screen.findByText(BOUNDARY.ORG_PANEL);
+    expect(hardRadio()).toBeDisabled();
+    expect(hardRadio()).toHaveAccessibleDescription(BOUNDARY.HARD_GATED);
+    await user.click(hardRadio());
+    expect(screen.queryByTestId("boundary-hard-limits")).toBeNull();
+    expect(screen.queryByText(BOUNDARY.HARD_HEADING)).toBeNull();
+    expect(screen.queryByText(BOUNDARY.BLOCKED_HINT)).toBeNull();
+    expect(screen.getByRole("button", { name: BOUNDARY.REVIEW })).toBeDisabled();
+  });
+
+  it("no second-admin claim before a submit, and no New installs chip", async () => {
+    renderScreen();
+    await screen.findByText(BOUNDARY.ORG_PANEL);
+    expect(screen.queryByText(/second admin|another security admin/)).toBeNull();
+    expect(screen.queryByText("New installs")).toBeNull();
+    expect(screen.getByText(BOUNDARY.FOOTER)).toBeInTheDocument();
+  });
+
+  it("a stored hard-limits boundary shows the list editor and the floor's barrier, and Discard puts the stored draft back", async () => {
+    getMock.mockResolvedValue(hardLimits);
+    const user = userEvent.setup();
+    renderScreen();
+    const hardPanel = await screen.findByTestId("boundary-hard-limits");
     expect(screen.getByTestId("boundary-mode-chip")).toHaveTextContent(BOUNDARY.CHIP_HARD);
-    expect(within(hardPanel).getByText(BOUNDARY.HARD_HEADING)).toBeInTheDocument();
+    expect(hardRadio()).toBeEnabled();
     expect(within(hardPanel).getByText(new RegExp(BOUNDARY.BLOCKED_EMPTY))).toBeInTheDocument();
     await user.selectOptions(screen.getByLabelText(BOUNDARY.FLOOR_LABEL), "CC2");
     expect(within(hardPanel).getByText(BOUNDARY.FLOOR_TAIL("Wall"))).toBeInTheDocument();
-    expect(screen.queryByTestId("boundary-org")).toBeNull();
-    await user.click(screen.getByRole("button", { name: BOUNDARY.DISCARD }));
+    expect(within(hardPanel).queryByText(new RegExp(BOUNDARY.BLOCKED_EMPTY))).toBeNull();
+    await user.click(screen.getByRole("radio", { name: new RegExp(BOUNDARY.MODE_ORG_BODY.slice(0, 20)) }));
     expect(screen.getByTestId("boundary-org")).toBeInTheDocument();
+    expect(screen.getByTestId("boundary-mode-chip")).toHaveTextContent(BOUNDARY.CHIP_ORG_DRAFT);
+    await user.click(screen.getByRole("button", { name: BOUNDARY.DISCARD }));
+    expect(screen.getByTestId("boundary-hard-limits")).toBeInTheDocument();
+    expect(screen.getByLabelText(BOUNDARY.FLOOR_LABEL)).toHaveValue("CC1");
   });
 
   it("Review changes runs the dry run on the draft and writes nothing until Submit", async () => {
+    getMock.mockResolvedValue(hardLimits);
     dryRunMock.mockResolvedValue({
       ...emptyReport,
       profiles: [{ id: "p1", name: "Platform team", changes: [{ knob: "denied_domains", before: null, after: ["paste.example.org"] }] }],
     });
     const user = userEvent.setup();
     renderScreen();
-    await draftHardLimits(user, "paste.example.org\n  10.20.0.0/16 \n");
+    await draftHosts("paste.example.org\n  10.20.0.0/16 \n");
     await user.click(screen.getByRole("button", { name: BOUNDARY.REVIEW }));
     const report = await screen.findByTestId("boundary-dry-run");
     expect(dryRunMock).toHaveBeenCalledWith({ spec: { denied_domains: ["paste.example.org", "10.20.0.0/16"] }, limits: {} });
@@ -94,51 +132,98 @@ describe("BoundaryScreen", () => {
     expect(await within(report).findByText("Platform team")).toBeInTheDocument();
     expect(within(report).getByText(`${BOUNDARY.BLOCKED_LABEL}: ${CHANGES.DIFF_UNSET} → paste.example.org`)).toBeInTheDocument();
     expect(within(report).getByText(BOUNDARY_DRY_RUN.COMPARED)).toBeInTheDocument();
-    expect(within(screen.getByTestId("boundary-dry-run-tiles")).getByText(BOUNDARY_DRY_RUN.TILE_TEAMS).previousSibling).toHaveTextContent("1");
     await user.click(within(report).getByRole("button", { name: BOUNDARY_DRY_RUN.BACK }));
     expect(screen.getByLabelText(BOUNDARY.BLOCKED_LABEL)).toHaveValue("paste.example.org\n  10.20.0.0/16 \n");
   });
 
-  it("an empty report says No change", async () => {
+  it("a dry-run reply that lands after Back and an edit doesn't bring the report back", async () => {
+    getMock.mockResolvedValue(hardLimits);
+    const late = deferred<BoundaryReport>();
+    dryRunMock.mockReturnValueOnce(late.promise);
     const user = userEvent.setup();
     renderScreen();
-    await draftHardLimits(user, "paste.example.org");
+    await draftHosts("paste.example.org");
+    await user.click(screen.getByRole("button", { name: BOUNDARY.REVIEW }));
+    const report = await screen.findByTestId("boundary-dry-run");
+    await user.click(within(report).getByRole("button", { name: BOUNDARY_DRY_RUN.BACK }));
+    await draftHosts("paste.example.org\nother.example.org");
+    late.resolve({ ...emptyReport, profiles: [{ id: "p1", name: "Platform team", changes: [] }] });
+    await late.promise;
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.queryByTestId("boundary-dry-run")).toBeNull();
+    expect(screen.getByLabelText(BOUNDARY.BLOCKED_LABEL)).toHaveValue("paste.example.org\nother.example.org");
+  });
+
+  it("the tiles count people only for user assignments, with T4's singular, and other kinds get their own rows", async () => {
+    getMock.mockResolvedValue(hardLimits);
+    const c = [{ knob: "limits.default_end_sec", before: 3600, after: 1800 }];
+    dryRunMock.mockResolvedValue({
+      ...emptyReport,
+      profiles: [{ id: "p1", name: "Platform team", changes: c }],
+      assignments: [
+        { id: "a1", subject_type: "user", subject: "jonas@example.org", profile_id: "p1", profile_name: "Platform team", changes: c },
+        { id: "a2", subject_type: "group", subject: "platform-leads", profile_id: "p1", profile_name: "Platform team", changes: c },
+      ],
+    });
+    const user = userEvent.setup();
+    renderScreen();
+    await draftHosts("paste.example.org");
+    await user.click(screen.getByRole("button", { name: BOUNDARY.REVIEW }));
+    const report = await screen.findByTestId("boundary-dry-run");
+    const tiles = await within(report).findByTestId("boundary-dry-run-tiles");
+    expect(within(tiles).getByText("team below narrows").previousSibling).toHaveTextContent("1");
+    expect(within(tiles).getByText("person narrows").previousSibling).toHaveTextContent("1");
+    expect(within(tiles).getByText("stored policies narrow").previousSibling).toHaveTextContent("0");
+    expect(within(report).getByText(BOUNDARY_DRY_RUN.OTHER_ASSIGNMENTS)).toBeInTheDocument();
+    expect(within(report).getByText("platform-leads · Platform team")).toBeInTheDocument();
+    expect(within(report).getAllByText(new RegExp(`^${RUN_LIMITS.DEFAULT_END_LABEL}: `)).length).toBeGreaterThan(0);
+    expect(BOUNDARY_DRY_RUN.TILE_TEAMS(2)).toBe("teams below narrow");
+    expect(BOUNDARY_DRY_RUN.TILE_PEOPLE(2)).toBe("people narrow");
+  });
+
+  it("an empty report says No change", async () => {
+    getMock.mockResolvedValue(hardLimits);
+    const user = userEvent.setup();
+    renderScreen();
+    await draftHosts("paste.example.org");
     await user.click(screen.getByRole("button", { name: BOUNDARY.REVIEW }));
     expect(await within(await screen.findByTestId("boundary-dry-run")).findByText(BOUNDARY_DRY_RUN.NO_CHANGE)).toBeInTheDocument();
   });
 
   it("Submit sends the draft with the ETag it read, and the gated hard_limits 409 reads in the server's words", async () => {
+    getMock.mockResolvedValue(hardLimits);
     putMock.mockRejectedValue(new HttpError(409, GATED, "boundary_hard_limits_gated"));
     const user = userEvent.setup();
     renderScreen();
-    await draftHardLimits(user, "paste.example.org");
+    await draftHosts("paste.example.org");
     await user.click(screen.getByRole("button", { name: BOUNDARY.REVIEW }));
     const report = await screen.findByTestId("boundary-dry-run");
     await user.click(await within(report).findByRole("button", { name: BOUNDARY_DRY_RUN.SUBMIT }));
     expect(putMock).toHaveBeenCalledWith({ mode: "hard_limits", spec: { denied_domains: ["paste.example.org"] }, limits: {} }, '"b1"');
     expect(await within(report).findByText(BASELINE.REFUSED_TITLE)).toBeInTheDocument();
     expect(within(report).getByText(GATED)).toBeInTheDocument();
-    expect(within(report).getByText(BOUNDARY.NEEDS_SECOND_ADMIN)).toBeInTheDocument();
   });
 
   it("a held write is the submitted note and Submit goes off until the draft changes", async () => {
+    getMock.mockResolvedValue(hardLimits);
     putMock.mockRejectedValue(new PendingChangeError({ id: "c1" } as GovernanceChange));
     const user = userEvent.setup();
     renderScreen();
-    await draftHardLimits(user, "paste.example.org");
+    await draftHosts("paste.example.org");
     await user.click(screen.getByRole("button", { name: BOUNDARY.REVIEW }));
     const report = await screen.findByTestId("boundary-dry-run");
     await user.click(await within(report).findByRole("button", { name: BOUNDARY_DRY_RUN.SUBMIT }));
     expect(await within(report).findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
-    expect(screen.queryByText(BOUNDARY.SAVED)).toBeNull();
+    expect(screen.queryByText(DELIVERY.SAVED)).toBeNull();
     expect(within(report).getByRole("button", { name: BOUNDARY_DRY_RUN.SUBMIT })).toBeDisabled();
   });
 
   it("a failed dry run can't be submitted, and Try again runs it again", async () => {
+    getMock.mockResolvedValue(hardLimits);
     dryRunMock.mockRejectedValueOnce(new HttpError(500, "boom"));
     const user = userEvent.setup();
     renderScreen();
-    await draftHardLimits(user, "paste.example.org");
+    await draftHosts("paste.example.org");
     await user.click(screen.getByRole("button", { name: BOUNDARY.REVIEW }));
     const report = await screen.findByTestId("boundary-dry-run");
     expect(await within(report).findByText(BOUNDARY_DRY_RUN.FAILED_TITLE)).toBeInTheDocument();
@@ -148,21 +233,30 @@ describe("BoundaryScreen", () => {
     expect(await within(report).findByText(BOUNDARY_DRY_RUN.NO_CHANGE)).toBeInTheDocument();
   });
 
-  it("a direct save adopts the stored document and its ETag", async () => {
+  it("a direct save says Saved and adopts the stored document", async () => {
+    getMock.mockResolvedValue(hardLimits);
     putMock.mockImplementation(() => Promise.resolve({ mode: "no_limits", spec: { denied_domains: ["x.example"] }, limits: {}, etag: '"b2"' }));
     const user = userEvent.setup();
     renderScreen();
-    await draftHardLimits(user, "x.example");
+    await draftHosts("x.example");
     await user.click(screen.getByRole("button", { name: BOUNDARY.REVIEW }));
     await user.click(await within(await screen.findByTestId("boundary-dry-run")).findByRole("button", { name: BOUNDARY_DRY_RUN.SUBMIT }));
-    expect(await screen.findByText(BOUNDARY.SAVED)).toBeInTheDocument();
+    expect(await screen.findByText(DELIVERY.SAVED)).toBeInTheDocument();
     expect(screen.getByTestId("boundary-org")).toBeInTheDocument();
   });
 
-  it("a member who isn't a security admin can't change the mode", async () => {
+  it("an admin who isn't a security admin gets the security-only line, no fetch and no Retry", async () => {
     renderScreen(false);
-    await screen.findByText(BOUNDARY.ORG_PANEL);
-    for (const radio of screen.getAllByRole("radio")) expect(radio).toBeDisabled();
+    expect(await screen.findByText(SECURITY_ONLY_REASON)).toBeInTheDocument();
+    expect(getMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
+  it("a 403 from the server is the security-only line, not a retry", async () => {
+    getMock.mockRejectedValueOnce(new HttpError(403, "forbidden"));
+    renderScreen();
+    expect(await screen.findByText(SECURITY_ONLY_REASON)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
   it("the load failure offers a retry", async () => {

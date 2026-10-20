@@ -6,17 +6,19 @@
 // Policies -> Wardyn boundary (board T2) and its dry run (board T4's report anatomy), over
 // GET/PUT /governance/boundary and POST /governance/dry-run. Every save shows the dry run first; the PUT goes
 // through the governance-writes path (202 -> SubmittedNote, 412 -> reload). While the server refuses
-// hard_limits (409 boundary_hard_limits_gated) the refusal is shown in its own words.
+// hard_limits (409 boundary_hard_limits_gated) the Hard limits choice is off (DESIGN-TREE §8 "UI lanes"); the 409
+// is still shown in the server's words should a hard-limits write reach it. The route is security-admin only, as
+// the server's GET is.
 //
 // EVERY user-visible string comes from lib/boundary-copy.ts, or is canon reused from governance-copy.ts.
 import * as React from "react";
 import { Link } from "react-router-dom";
 import { AlertTriangle, Loader2 } from "lucide-react";
 import { HttpError, PendingChangeError } from "../../../lib/api/core";
-import { boundary as boundaryApi, type Boundary, type BoundaryChange, type BoundaryMode, type BoundaryReport, type BoundaryWrite } from "../../../lib/api/boundary";
+import { boundary as boundaryApi, type BoundaryChange, type BoundaryMode, type BoundaryReport, type BoundaryReportAssign, type BoundarySnapshot, type BoundaryWrite } from "../../../lib/api/boundary";
 import type { ConfinementClass } from "../../../lib/types/runs";
 import { BOUNDARY, BOUNDARY_DRY_RUN } from "../../../lib/boundary-copy";
-import { BASELINE, CHANGES } from "../../../lib/governance-copy";
+import { BASELINE, CHANGES, DELIVERY } from "../../../lib/governance-copy";
 import { ACCESS_STATE } from "../../../lib/people-access-copy";
 import { getErrorMessage } from "../../../lib/format";
 import { Button } from "../../ui/button";
@@ -26,11 +28,16 @@ import { Chip } from "../../wardyn/primitives";
 import { CC_META } from "../../wardyn/cc-meta";
 import { useSecurityOperator } from "../../wardyn/operator-context";
 import { SavedElsewhereBanner } from "../../wardyn/saved-elsewhere-banner";
-import { EmptyState, TableSkeleton } from "../../wardyn/states";
+import { SECURITY_ONLY_REASON } from "../../wardyn/copy";
+import { EmptyState, TableSkeleton, loadFailStatus, type ScreenStatus } from "../../wardyn/states";
 import { Note } from "../governance/display";
 import { SubmittedNote } from "../governance/submitted-note";
 
 const CLASSES: ConfinementClass[] = ["CC1", "CC2", "CC3"];
+
+// Off until the boundary bounds every brokered credential path a run is given (#3238): the server refuses
+// hard_limits with 409 boundary_hard_limits_gated until then, and that lane turns this on.
+export const HARD_LIMITS_SWITCH_ON = false;
 
 interface Draft {
   mode: BoundaryMode;
@@ -69,7 +76,7 @@ type ReportState = { status: "loading" } | { status: "error" } | { status: "read
 
 export function BoundaryScreen() {
   const securityOperator = useSecurityOperator();
-  const [status, setStatus] = React.useState<"loading" | "ready" | "error">("loading");
+  const [status, setStatus] = React.useState<ScreenStatus>(securityOperator ? "loading" : "forbidden");
   const [stored, setStored] = React.useState<BoundaryWrite>({ mode: "no_limits", spec: {}, limits: {} });
   const [draft, setDraft] = React.useState<Draft>({ mode: "no_limits", blocked: "", floor: "" });
   const [report, setReport] = React.useState<ReportState | null>(null);
@@ -78,8 +85,10 @@ export function BoundaryScreen() {
   const [savedElsewhere, setSavedElsewhere] = React.useState<string | null>(null);
   const [submittedJson, setSubmittedJson] = React.useState<string | null>(null);
   const etagRef = React.useRef<string | null>(null);
+  // The dry run a reply belongs to: Back, a new review or an edit makes any earlier reply stale.
+  const dryRunRef = React.useRef(0);
 
-  const adopt = (doc: Boundary) => {
+  const adopt = (doc: BoundarySnapshot) => {
     const b: BoundaryWrite = { mode: doc.mode, spec: doc.spec ?? {}, limits: doc.limits ?? {}, ...(doc.contact ? { contact: doc.contact } : {}) };
     setStored(b);
     setDraft(draftFrom(b));
@@ -88,6 +97,10 @@ export function BoundaryScreen() {
   };
 
   const load = React.useCallback(() => {
+    if (!securityOperator) {
+      setStatus("forbidden");
+      return;
+    }
     setStatus("loading");
     boundaryApi
       .get()
@@ -95,8 +108,8 @@ export function BoundaryScreen() {
         adopt(doc);
         setStatus("ready");
       })
-      .catch(() => setStatus("error"));
-  }, []);
+      .catch((e) => setStatus(loadFailStatus(e)));
+  }, [securityOperator]);
   React.useEffect(load, [load]);
 
   const body = React.useMemo(() => bodyFrom(draft, stored), [draft, stored]);
@@ -104,18 +117,24 @@ export function BoundaryScreen() {
   const dirty = json !== JSON.stringify(bodyFrom(draftFrom(stored), stored)) && json !== submittedJson;
 
   const edit = (patch: Partial<Draft>) => {
+    dryRunRef.current++;
     setOutcome(null);
     setDraft((d) => ({ ...d, ...patch }));
   };
 
   // The dry run judges the drafted knobs as hard_limits; a draft in no_limits narrows nothing.
   const runDryRun = React.useCallback(() => {
+    const id = ++dryRunRef.current;
     setReport({ status: "loading" });
     const knobs = body.mode === "hard_limits" ? { spec: body.spec, limits: body.limits } : { spec: {}, limits: {} };
     boundaryApi
       .dryRun(knobs)
-      .then((r) => setReport({ status: "ready", report: r }))
-      .catch(() => setReport({ status: "error" }));
+      .then((r) => {
+        if (id === dryRunRef.current) setReport({ status: "ready", report: r });
+      })
+      .catch(() => {
+        if (id === dryRunRef.current) setReport({ status: "error" });
+      });
   }, [body]);
 
   const review = () => {
@@ -150,6 +169,9 @@ export function BoundaryScreen() {
 
   const disabled = !securityOperator || busy;
   const hard = draft.mode === "hard_limits";
+  const hardSelectable = HARD_LIMITS_SWITCH_ON || stored.mode === "hard_limits";
+  // "No hard limits yet" only while the draft names no knob at all.
+  const noKnobs = [...Object.values(body.spec), ...Object.values(body.limits)].every((v) => v === undefined);
   const chip = hard ? (
     <Chip tone="primary">{BOUNDARY.CHIP_HARD}</Chip>
   ) : (
@@ -177,6 +199,8 @@ export function BoundaryScreen() {
         </div>
       )}
 
+      {status === "forbidden" && <p className="mt-6 text-sm text-muted-foreground">{SECURITY_ONLY_REASON}</p>}
+
       {status === "error" && (
         <EmptyState
           icon={AlertTriangle}
@@ -197,24 +221,32 @@ export function BoundaryScreen() {
             <fieldset disabled={disabled}>
               <legend className="text-sm font-medium text-foreground">{BOUNDARY.MODE}</legend>
               <div className="mt-2 grid gap-2 md:grid-cols-2">
-                <label className="flex gap-2 rounded-lg border border-border p-3">
-                  <input type="radio" name="boundary-mode" checked={hard} onChange={() => edit({ mode: "hard_limits" })} />
+                <label className={`flex gap-2 rounded-lg border border-border p-3${hardSelectable ? "" : " opacity-60"}`}>
+                  <input
+                    type="radio"
+                    name="boundary-mode"
+                    checked={hard}
+                    disabled={!hardSelectable}
+                    aria-describedby={hardSelectable ? undefined : "boundary-hard-gated"}
+                    onChange={() => edit({ mode: "hard_limits" })}
+                  />
                   <span className="flex flex-col gap-1">
                     <span className="flex flex-wrap items-center gap-1.5 font-medium">
                       <span>{BOUNDARY.MODE_HARD}</span>
                       <Chip tone="primary">{BOUNDARY.RECOMMENDED}</Chip>
-                      <Chip tone="neutral">{BOUNDARY.NEW_INSTALLS}</Chip>
                     </span>
                     <span className="text-xs text-muted-foreground">{BOUNDARY.MODE_HARD_BODY}</span>
+                    {!hardSelectable && (
+                      <span id="boundary-hard-gated" className="text-xs text-muted-foreground">
+                        {BOUNDARY.HARD_GATED}
+                      </span>
+                    )}
                   </span>
                 </label>
                 <label className="flex gap-2 rounded-lg border border-border p-3">
                   <input type="radio" name="boundary-mode" checked={!hard} onChange={() => edit({ mode: "no_limits" })} />
                   <span className="flex flex-col gap-1">
-                    <span className="flex flex-wrap items-center gap-1.5 font-medium">
-                      <span>{BOUNDARY.MODE_ORG}</span>
-                      <Chip tone="warning">{BOUNDARY.NEEDS_SECOND_ADMIN}</Chip>
-                    </span>
+                    <span className="font-medium">{BOUNDARY.MODE_ORG}</span>
                     <span className="text-xs text-muted-foreground">{BOUNDARY.MODE_ORG_BODY}</span>
                   </span>
                 </label>
@@ -236,7 +268,7 @@ export function BoundaryScreen() {
                   onChange={(e) => edit({ blocked: e.target.value })}
                 />
                 <p id="boundary-blocked-hint" className="text-xs text-muted-foreground">
-                  {lines(draft.blocked).length === 0 ? `${BOUNDARY.BLOCKED_EMPTY} ` : ""}
+                  {noKnobs ? `${BOUNDARY.BLOCKED_EMPTY} ` : ""}
                   {BOUNDARY.BLOCKED_HINT}
                 </p>
               </div>
@@ -268,10 +300,6 @@ export function BoundaryScreen() {
           ) : (
             <section data-testid="boundary-org" className="mt-4 flex flex-col gap-2 rounded-xl border border-dashed border-border px-5 py-4">
               <p className="text-body text-foreground">{BOUNDARY.ORG_PANEL}</p>
-              <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                <Chip tone="warning">{BOUNDARY.NEEDS_SECOND_ADMIN}</Chip>
-                <span>{BOUNDARY.ORG_PANEL_NOTE}</span>
-              </div>
             </section>
           )}
 
@@ -291,7 +319,7 @@ export function BoundaryScreen() {
 
           <div className="mt-4 flex flex-col gap-2">
             {savedElsewhere !== null && <SavedElsewhereBanner reloaded documentText={savedElsewhere} onDiscard={() => setSavedElsewhere(null)} />}
-            {outcome?.kind === "saved" && <Note role="status">{BOUNDARY.SAVED}</Note>}
+            {outcome?.kind === "saved" && <Note role="status">{DELIVERY.SAVED}</Note>}
             <div className="flex flex-wrap items-center justify-end gap-2">
               <span className="mr-auto text-xs text-muted-foreground">{BOUNDARY.FOOTER}</span>
               <Button variant="ghost" disabled={disabled || !dirty} onClick={() => edit(draftFrom(stored))}>
@@ -315,6 +343,7 @@ export function BoundaryScreen() {
           busy={busy}
           onRetry={runDryRun}
           onBack={() => {
+            dryRunRef.current++;
             setOutcome(null);
             setReport(null);
           }}
@@ -484,7 +513,6 @@ function DryRunReport({
           </Note>
         )}
         <div className="flex flex-wrap items-center justify-end gap-2">
-          {body.mode !== stored.mode && <Chip tone="warning">{BOUNDARY.NEEDS_SECOND_ADMIN}</Chip>}
           <Button variant="ghost" onClick={onBack}>
             {BOUNDARY_DRY_RUN.BACK}
           </Button>
@@ -504,16 +532,18 @@ function ReportBody({ report }: { report: BoundaryReport }) {
     ...report.profiles.map((p) => ({ key: p.id, name: p.name, changes: p.changes })),
   ];
   const policies = report.stored_policies.map((p) => ({ key: p.id, name: p.name, changes: p.changes }));
-  const people = report.assignments.map((a) => ({ key: a.id, name: `${a.subject} · ${a.profile_name}`, changes: a.changes }));
-  const none = teams.length + policies.length + people.length === 0;
+  const row = (a: BoundaryReportAssign) => ({ key: a.id, name: `${a.subject} · ${a.profile_name}`, changes: a.changes });
+  const people = report.assignments.filter((a) => a.subject_type === "user").map(row);
+  const others = report.assignments.filter((a) => a.subject_type !== "user").map(row);
+  const none = teams.length + policies.length + people.length + others.length === 0;
   return (
     <>
       <div className="mt-4 grid grid-cols-3 gap-2" data-testid="boundary-dry-run-tiles">
         {(
           [
-            [teams.length, BOUNDARY_DRY_RUN.TILE_TEAMS],
-            [policies.length, BOUNDARY_DRY_RUN.TILE_POLICIES],
-            [people.length, BOUNDARY_DRY_RUN.TILE_PEOPLE],
+            [teams.length, BOUNDARY_DRY_RUN.TILE_TEAMS(teams.length)],
+            [policies.length, BOUNDARY_DRY_RUN.TILE_POLICIES(policies.length)],
+            [people.length, BOUNDARY_DRY_RUN.TILE_PEOPLE(people.length)],
           ] as const
         ).map(([n, label]) => (
           <div key={label} className="rounded-lg border border-border px-3 py-2">
@@ -531,6 +561,7 @@ function ReportBody({ report }: { report: BoundaryReport }) {
           <ReportRows title={BOUNDARY_DRY_RUN.TEAMS} rows={teams} />
           <ReportRows title={BOUNDARY_DRY_RUN.POLICIES} rows={policies} />
           <ReportRows title={BOUNDARY_DRY_RUN.PEOPLE} rows={people} />
+          <ReportRows title={BOUNDARY_DRY_RUN.OTHER_ASSIGNMENTS} rows={others} />
         </>
       )}
     </>

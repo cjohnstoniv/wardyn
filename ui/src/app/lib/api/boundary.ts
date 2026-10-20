@@ -35,8 +35,18 @@ export interface BoundaryWrite {
   contact?: PolicyContact;
 }
 
-/** types.Boundary, with the ETag the response carried. */
-export type Boundary = BoundaryWrite & { updated_by?: string; updated_at?: string; etag?: string | null };
+/** types.Boundary. */
+export interface Boundary {
+  mode: BoundaryMode;
+  spec: BoundarySpec;
+  limits: BoundaryLimits;
+  contact?: PolicyContact;
+  updated_by?: string;
+  updated_at?: string;
+}
+
+/** The document with the ETag the response carried, which the next PUT sends back as If-Match. */
+export type BoundarySnapshot = Boundary & { etag?: string | null };
 
 /** boundaryChange: one knob the drafted boundary narrows, as the read redaction shows it. */
 export interface BoundaryChange {
@@ -68,16 +78,16 @@ export interface BoundaryReport {
   assignments: BoundaryReportAssign[];
 }
 
-const withEtag = async (res: Response): Promise<Boundary> => ({ ...(await asJson<Boundary>(res)), etag: res.headers.get("ETag") });
+const withEtag = async (res: Response): Promise<BoundarySnapshot> => ({ ...(await asJson<Boundary>(res)), etag: res.headers.get("ETag") });
 
 export const boundary = {
   // GET /api/v1/governance/boundary. No row reads as no_limits.
-  async get(): Promise<Boundary> {
+  async get(): Promise<BoundarySnapshot> {
     return withEtag(await wfetch("/governance/boundary", { method: "GET" }));
   },
 
   // PUT /api/v1/governance/boundary: 200 -> the stored document, 202 -> PendingChangeError, 400/409/412 -> HttpError.
-  async put(body: BoundaryWrite, etag?: string | null): Promise<Boundary> {
+  async put(body: BoundaryWrite, etag?: string | null): Promise<BoundarySnapshot> {
     return withEtag(
       await wfetch("/governance/boundary", {
         method: "PUT", asPerson: true,
