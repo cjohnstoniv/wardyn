@@ -194,6 +194,22 @@ var syslogCloseTimeoutNS = func() *atomic.Int64 {
 	return &v
 }()
 
+// abandonQueued takes every event still queued and counts it as dropped. Taking each off the queue, rather
+// than counting its length, gives every event one owner: one the writer already took counts itself if its
+// write fails, and one the writer takes after this is never counted here as well as delivered.
+func (s *SyslogSink) abandonQueued() int {
+	n := 0
+	for {
+		select {
+		case <-s.queue:
+			n++
+		default:
+			s.drops.Add(int64(n))
+			return n
+		}
+	}
+}
+
 // Close signals the background writer to drain and stop, then closes the syslog connection, all within
 // SyslogCloseTimeout. Past it, whatever is still queued counts as dropped and the connection is closed without
 // waiting for a write that holds the writer's lock; the abandoned goroutines end when the collector answers or
@@ -215,9 +231,9 @@ func (s *SyslogSink) Close() error {
 	case <-drained:
 	case <-drainTimer.C:
 		s.giveUp.Do(func() { close(s.abandon) })
-		s.drops.Add(int64(len(s.queue)))
+		dropped := s.abandonQueued()
 		slog.Error("sinks.syslog: close timed out draining to the collector; dropping the rest",
-			slog.Int("dropped", len(s.queue)), slog.Int64("drops", s.drops.Load()))
+			slog.Int("dropped", dropped), slog.Int64("drops", s.drops.Load()))
 	}
 	closeTimer := time.NewTimer(budget / 10)
 	defer closeTimer.Stop()

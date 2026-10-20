@@ -10,6 +10,7 @@ import (
 	"net"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -391,6 +392,55 @@ func TestSyslogSink_CloseIsBoundedAgainstAStalledCollector(t *testing.T) {
 	case <-closed:
 	case <-time.After(3 * time.Second):
 		t.Fatal("a second Close did not return")
+	}
+}
+
+// gatedWriter holds every write until gate closes, then delivers it, counting deliveries.
+type gatedWriter struct {
+	gate      chan struct{}
+	inflight  chan struct{}
+	once      sync.Once
+	delivered atomic.Int64
+}
+
+func (w *gatedWriter) Info(string) error {
+	w.once.Do(func() { close(w.inflight) })
+	<-w.gate
+	w.delivered.Add(1)
+	return nil
+}
+func (w *gatedWriter) Close() error { return nil }
+
+// Close abandoning a stalled drain counts each event exactly once: the one in flight is the writer's, and
+// an event Close counted as dropped is never also delivered once the collector recovers. Repeated because
+// the writer's pick between a queued event and the abandon signal was random.
+func TestSyslogSink_CloseDropCountIsExactWithAnEventInFlight(t *testing.T) {
+	prevWrite := setSyslogWriteTimeout(10 * time.Second)
+	prevClose := syslogCloseTimeoutNS.Swap(int64(60 * time.Millisecond))
+	t.Cleanup(func() { setSyslogWriteTimeout(prevWrite); syslogCloseTimeoutNS.Store(prevClose) })
+
+	const emitted = 4
+	for round := 0; round < 20; round++ {
+		w := &gatedWriter{gate: make(chan struct{}), inflight: make(chan struct{})}
+		s := newSyslogSinkWith(w, "tcp", "collector.invalid:514")
+		if err := s.Emit(context.Background(), makeSyslogEvent("syslog.close.exact")); err != nil {
+			t.Fatalf("Emit: %v", err)
+		}
+		<-w.inflight
+		for i := 1; i < emitted; i++ {
+			if err := s.Emit(context.Background(), makeSyslogEvent("syslog.close.exact")); err != nil {
+				t.Fatalf("Emit: %v", err)
+			}
+		}
+		if err := s.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		close(w.gate)
+		s.wg.Wait()
+		if got := s.Drops() + w.delivered.Load(); got != emitted {
+			t.Fatalf("round %d: %d dropped + %d delivered = %d, want each of the %d events counted once",
+				round, s.Drops(), w.delivered.Load(), got, emitted)
+		}
 	}
 }
 
