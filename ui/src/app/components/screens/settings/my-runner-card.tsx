@@ -11,23 +11,21 @@
 // itself is labelled as reported. The card renders nothing while runners are off.
 import * as React from "react";
 import { useLocation } from "react-router-dom";
-import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { HttpError } from "../../../lib/api/core";
 import { RUNNERS_DISABLED, runners as runnersApi } from "../../../lib/api/runners";
-import { absoluteTime, getErrorMessage, relativeTime, shortDate, shortTime } from "../../../lib/format";
-import type { RunnerRegistrationToken, RunnerView } from "../../../lib/types/runners";
+import { absoluteTime, relativeTime, shortDate } from "../../../lib/format";
+import type { RunnerView } from "../../../lib/types/runners";
 import { MY_POOLS, RES, RUNNER_V6 } from "../../wardyn/copy/runner-pools";
 import { MY_RUNNER, RUNNER, RUNNERS } from "../../wardyn/copy/runners";
+import { AddComputerBlock } from "../../wardyn/add-computer-block";
 import { CollapsibleCard } from "../../wardyn/collapsible-card";
-import { makeMono, Mono } from "../../wardyn/code-block";
-import { CopyButton } from "../../wardyn/copy-button";
+import { Mono } from "../../wardyn/code-block";
 import { usePrincipal } from "../../wardyn/operator-context";
 import { STATES } from "../../wardyn/states";
 import { Button } from "../../ui/button";
 import { ConfirmDialog } from "../runners/confirm-dialog";
 import { LimitsDialog } from "../runners/limits-dialog";
-import { registerCommand, StartRunnerSteps } from "../runners/mint-token-dialog";
 import { Hint, KindChip, OfflineNote, ResourceTable, RunsLine, Sec } from "../runners/resource-table";
 import { amountsText, proposeLimits, runnerRes } from "../runners/resources";
 import { ArchText, MachineText } from "../runners/runner-card";
@@ -40,8 +38,6 @@ import { useMyPools } from "./use-my-pools";
 const POLL_MS = 5000;
 // These two 403s mean the card has no use for this caller: runners are off, or the credential is not a person's own session.
 const NO_CARD_REASONS = [RUNNERS_DISABLED, "runner_session_required"];
-const COPY_BUTTON = "gap-1.5 rounded-md border border-border bg-card px-2.5 py-1 text-xs text-foreground hover:bg-surface-2";
-const withMono = makeMono(["wardyn runner claim"]);
 
 type Status = "loading" | "ready" | "error" | "hidden";
 
@@ -209,47 +205,6 @@ function RevokedNotice({ r }: { r: RunnerView }) {
   );
 }
 
-function TokenBlock({ token, expired, onDone }: { token: RunnerRegistrationToken; expired: boolean; onDone: () => void }) {
-  const eyebrow = React.useRef<HTMLHeadingElement | null>(null);
-  React.useEffect(() => eyebrow.current?.focus(), []);
-  if (expired) return <p className="text-body text-muted-foreground">{MY_RUNNER.TOKEN_EXPIRED}</p>;
-  const command = registerCommand(token, "~/wardyn-runner-token");
-  const expires = shortTime(token.expires_at);
-  return (
-    <section className="space-y-3 rounded-lg border border-border p-3">
-      <div className="flex items-baseline justify-between gap-3">
-        <h4 ref={eyebrow} tabIndex={-1} className="label-eyebrow outline-none">
-          {RUNNER.TOKEN_LABEL}
-        </h4>
-        <span className="text-meta text-muted-foreground">{MY_RUNNER.TOKEN_SHOWN_ONCE}</span>
-      </div>
-      <div className="flex items-center justify-between gap-2 rounded-lg border border-border bg-surface-2/60 p-3">
-        <code className="min-w-0 break-all font-mono text-xs">{token.token}</code>
-        <CopyButton text={token.token ?? ""} label={RUNNER.COPY_TOKEN} className={COPY_BUTTON}>
-          {RUNNER.COPY_TOKEN}
-        </CopyButton>
-      </div>
-      <p className="text-meta text-muted-foreground">{MY_RUNNER.TOKEN_EXPIRES(expires)}</p>
-      <p className="text-body text-muted-foreground">{MY_RUNNER.STEP_SAVE_RUN}</p>
-      <div className="flex items-center justify-between gap-2 rounded-lg border border-border bg-surface-2/60 p-3">
-        <code className="min-w-0 break-all font-mono text-xs">{command}</code>
-        <CopyButton text={command} label={RUNNER.COPY_COMMAND} className={COPY_BUTTON}>
-          {RUNNER.COPY_COMMAND}
-        </CopyButton>
-      </div>
-      <StartRunnerSteps token={token} />
-      <p className="text-body text-foreground">{MY_POOLS.REGISTER_ONE_PER_COMPUTER}</p>
-      <p className="text-xs text-muted-foreground">{MY_POOLS.REGISTER_ASKS_LIMITS}</p>
-      <p className="text-body text-muted-foreground">{withMono(MY_RUNNER.STEP_CLAIM)}</p>
-      <div className="flex justify-end">
-        <Button variant="ghost" size="sm" onClick={onDone}>
-          {RUNNER.DONE}
-        </Button>
-      </div>
-    </section>
-  );
-}
-
 export function MyRunnerCard({ onHidden }: { onHidden?: (reason: string) => void } = {}) {
   const me = usePrincipal();
   const location = useLocation();
@@ -257,16 +212,10 @@ export function MyRunnerCard({ onHidden }: { onHidden?: (reason: string) => void
   const [open, setOpen] = React.useState(false);
   const [status, setStatus] = React.useState<Status>("loading");
   const [rows, setRows] = React.useState<RunnerView[]>([]);
-  const [token, setToken] = React.useState<RunnerRegistrationToken | null>(null);
-  const [now, setNow] = React.useState(() => Date.now());
-  const [registering, setRegistering] = React.useState(false);
-  const [registerError, setRegisterError] = React.useState("");
-  const [note, setNote] = React.useState<{ id: string; text: string } | null>(null);
   const [claiming, setClaiming] = React.useState<RunnerView | null>(null);
   const [revoking, setRevoking] = React.useState<{ runner: RunnerView; notMine: boolean } | null>(null);
   const [confirming, setConfirming] = React.useState(false);
   const [limitsFor, setLimitsFor] = React.useState<RunnerView | null>(null);
-  const idsAtMint = React.useRef(new Set<string>());
   const seq = React.useRef(0);
   // Read through a ref: `read` is built once, and the parent may pass a new function each render.
   const hiddenRef = React.useRef(onHidden);
@@ -298,15 +247,14 @@ export function MyRunnerCard({ onHidden }: { onHidden?: (reason: string) => void
     return abandon;
   }, [read, abandon]);
 
-  const expired = token !== null && now >= Date.parse(token.expires_at);
   const live = rows.filter((r) => r.state !== "revoked");
   const waiting = live.filter((r) => r.state === "unclaimed");
-  // The card polls only while a token shows or a runner waits, and never announces a poll.
-  const polling = status === "ready" && ((token !== null && !expired) || waiting.length > 0);
+  // The card polls only while it is open with no runner to show, so a runner `wardyn runner setup` just registered
+  // appears, or while one waits to be claimed; it never announces a poll.
+  const polling = status === "ready" && (waiting.length > 0 || (open && live.length === 0));
   React.useEffect(() => {
     if (!polling) return;
     const tick = () => {
-      setNow(Date.now());
       if (document.visibilityState === "visible") read(true);
     };
     const id = setInterval(tick, POLL_MS);
@@ -316,24 +264,6 @@ export function MyRunnerCard({ onHidden }: { onHidden?: (reason: string) => void
       document.removeEventListener("visibilitychange", tick);
     };
   }, [polling, read]);
-  // The token block turns into its expiry sentence at the minute, even between polls.
-  React.useEffect(() => {
-    if (!token) return;
-    const id = setTimeout(() => setNow(Date.now()), Math.max(0, Date.parse(token.expires_at) - Date.now()) + 50);
-    return () => clearTimeout(id);
-  }, [token]);
-
-  // A runner that was not there when the token was made has registered with it: the token is spent.
-  React.useEffect(() => {
-    if (!token) return;
-    const fresh = waiting.find((r) => !idsAtMint.current.has(r.id));
-    if (!fresh) return;
-    setToken(null);
-    setNote({ id: fresh.id, text: MY_RUNNER.REGISTERED_NOW(fresh.name) });
-  }, [rows, token]); // eslint-disable-line react-hooks/exhaustive-deps -- `waiting` derives from rows
-  React.useEffect(() => {
-    if (note && !waiting.some((r) => r.id === note.id)) setNote(null);
-  }, [rows, note]); // eslint-disable-line react-hooks/exhaustive-deps -- `waiting` derives from rows
 
   const available = status === "ready" || status === "error";
   const pools = useMyPools(status === "ready");
@@ -347,25 +277,6 @@ export function MyRunnerCard({ onHidden }: { onHidden?: (reason: string) => void
 
   if (status === "hidden") return null;
 
-  const register = async () => {
-    setRegistering(true);
-    setRegisterError("");
-    try {
-      const t = await runnersApi.mintMine();
-      idsAtMint.current = new Set(rows.map((r) => r.id));
-      setNow(Date.now());
-      setToken(t);
-    } catch (e) {
-      setRegisterError(getErrorMessage(e));
-    } finally {
-      setRegistering(false);
-    }
-  };
-  const done = () => {
-    setToken(null);
-    requestAnimationFrame(() => sectionRef.current?.querySelector<HTMLElement>("[data-claim], [data-register]")?.focus());
-  };
-
   let summary: React.ReactNode;
   if (status === "ready") {
     if (waiting.length > 0) summary = MY_RUNNER.SUMMARY_WAITING(waiting.length);
@@ -375,20 +286,6 @@ export function MyRunnerCard({ onHidden }: { onHidden?: (reason: string) => void
   }
 
   const sorted = sortRunners(rows);
-  const showToken = token !== null;
-  const registerBlock = (!showToken || expired) && (
-    <div className="space-y-1.5">
-      <Button variant="outline" data-register disabled={registering} onClick={() => void register()}>
-        {registering && <Loader2 className="size-3.5 animate-spin" />}
-        {MY_RUNNER.REGISTER}
-      </Button>
-      {registerError && (
-        <p role="alert" className="text-body text-danger">
-          {registerError}
-        </p>
-      )}
-    </div>
-  );
   return (
     <>
       <CollapsibleCard
@@ -415,14 +312,7 @@ export function MyRunnerCard({ onHidden }: { onHidden?: (reason: string) => void
               {live.length === 0 && (
                 <>
                   <p className="text-body text-foreground">{MY_RUNNER.NO_RUNNER}</p>
-                  <p className="text-body text-muted-foreground">{MY_POOLS.NO_RUNNER_NEXT}</p>
                 </>
-              )}
-              {showToken && <TokenBlock token={token} expired={expired} onDone={done} />}
-              {note && (
-                <p role="status" className="text-body text-foreground">
-                  {note.text}
-                </p>
               )}
               {sorted.length > 0 && (
                 <ul>
@@ -457,9 +347,9 @@ export function MyRunnerCard({ onHidden }: { onHidden?: (reason: string) => void
                   )}
                 </ul>
               )}
-              {live.length === 0 && registerBlock}
+              {live.length === 0 && <AddComputerBlock />}
               <MyPoolsSection pools={pools} runners={live} />
-              {live.length > 0 && registerBlock}
+              {live.length > 0 && <AddComputerBlock />}
             </>
           )}
         </div>

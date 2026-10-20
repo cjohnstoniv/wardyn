@@ -431,6 +431,14 @@ export const health = {
     // mean "no mirror" — lib/demo-videos.ts's episodeUrl falls back to its
     // own hardcoded GitHub base either way.
     demo_video_base_url?: string;
+    // WARDYN_CLI_ARTIFACT_BASE (internal/api/healthz.go on lane ATT-INSTALL, not on
+    // main yet): the operator's internal mirror of the release assets, already
+    // validated at boot (https, no userinfo/query/fragment). Absent while unset and
+    // on an older daemon. The card's Get the CLI lines fetch from it when present.
+    cli_artifact_base?: string;
+    // wardyn login can sign in through the browser here (WARDYN_CLI_SIGN_IN on, with
+    // SSO). Absent on an older daemon, which reads the same as false.
+    cli_sign_in?: boolean;
   }> {
     try {
       // /healthz is un-prefixed (not under /api/v1), so it is the ONE call
