@@ -14,6 +14,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on
   `aws_sso_refused_tokens` (migration `0194_aws_sso_refused_tokens`). Without it an AWS SSO session whose renewal
   AWS refused cannot be marked, read or cleared, so replicas do not share that mark.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
+  `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE` on
+  `governance_boundary` (migration `0199_governance_boundary`). Without it the Wardyn boundary cannot be read or
+  written. The same migration's `agent_runs.break_glass` column needs no grant.
 
 ## [0.9.5] — 2026-10-19
 
