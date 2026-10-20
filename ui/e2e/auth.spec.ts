@@ -182,6 +182,19 @@ test.describe("auth / sign-in gate", () => {
     expect(await readToken(page)).toBe(GOOD_TOKEN);
   });
 
+  // #2493: the token form used to land every sign-in on /runs, dropping the link the person opened.
+  test("a token sign-in returns to the deep link that was opened", async ({ page }) => {
+    await clearTokenInit(page);
+    await page.goto("/admin/policies");
+
+    await expect(signInToken(page)).toBeVisible();
+    await signInToken(page).fill(GOOD_TOKEN);
+    await useTokenButton(page).click();
+
+    await expect(runsNav(page)).toBeVisible();
+    await expect(page).toHaveURL(/\/admin\/policies$/);
+  });
+
   test("a per-person token works through the token field", async ({ page }) => {
     await page.goto("/");
     await signInToken(page).fill(MEMBER_TOKEN);
