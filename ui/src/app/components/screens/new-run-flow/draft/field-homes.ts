@@ -90,6 +90,8 @@ export const HOME_OF_REASON: Record<KnownLaunchReason, FieldHome> = {
   run_mode_required: "run", run_mode_invalid: "run", run_mode_conflict: "run", run_background_only: "run",
   start_folder_invalid: "files", main_drive_unenforceable: "files",
   run_shape_conflict: "shape",
+  // An application needs its app, so the way out is the shape: pick another, since the console has no field for the app.
+  run_application_ui_apps_denied: "shape",
   runner_pool_invalid: "run", runner_pool_required: "run", runner_pool_not_found: "run", runner_pool_unavailable: "run",
   runner_pool_default_unavailable: "run", runner_pool_stale: "run", runner_pool_no_eligible_member: "run",
   runner_pool_member_mismatch: "run", runner_pools_unavailable: "run", runner_pool_run_type_not_allowed: "run", runner_pool_run_type_missing: "run",
