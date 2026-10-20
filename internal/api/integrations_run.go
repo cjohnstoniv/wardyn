@@ -104,7 +104,7 @@ func (s *Server) applyIntegrationRequirement(ctx context.Context, present map[st
 			events = append(events, requirementSkip(id, reason, map[string]any{"integration_id": id, "hosts": modelHosts}))
 		}
 		if len(unlistedHosts) > 0 {
-			events = append(events, requirementSkip(id, skipHostNotAllowlisted, map[string]any{"integration_id": id, "hosts": unlistedHosts}))
+			events = append(events, requirementSkip(id, reasonRequirementHostNotAllowed, map[string]any{"integration_id": id, "hosts": unlistedHosts}))
 		}
 	}
 	if len(addedEgress) == 0 && len(grantedHosts) == 0 {

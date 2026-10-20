@@ -251,7 +251,7 @@ func TestIntegrationFold_DegradesNeverBricks(t *testing.T) {
 		}
 		var skipped []string
 		for _, ev := range events {
-			if ev.action == "run.requirement.skip" && ev.data["reason"] == skipHostNotAllowlisted {
+			if ev.action == "run.requirement.skip" && ev.data["reason"] == reasonRequirementHostNotAllowed {
 				skipped, _ = ev.data["hosts"].([]string)
 			}
 		}

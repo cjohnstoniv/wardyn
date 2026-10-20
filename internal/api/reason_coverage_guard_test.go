@@ -276,10 +276,9 @@ var bareErrorBodyAllowlist = map[string]bareWriteErrorEntry{
 // instead of in the closed set is invisible to TestReasonDocsMatchReasonsGo,
 // which reads only reasonsGoFiles.
 var reasonConstOutsideReasonFilesAllowlist = map[string]string{
-	"runs_create_requirements.go:reasonRequirementModelHost":        "the audit data.reason of a run.requirement.skip entry, never an errorBody reason",
-	"runs_create_requirements.go:reasonRequirementModelHostUnknown": "the audit data.reason of a run.requirement.skip entry, never an errorBody reason",
-	"person_erasure.go:reasonIdentityDirectoryUnreadable":           "the audit data.reason of a person.erasure or credential.erase failure; the response is writeServerError's 500, never an errorBody reason",
-	"access_reasons.go:reasonRepoNoCredential":                      "a repository row's reason on the access preview (accessSentences), never a refusal or an errorBody reason",
+	"runs_create_requirements.go:reasonRequirementModelHost": "the audit data.reason of a run.requirement.skip entry, never an errorBody reason",
+	"person_erasure.go:reasonIdentityDirectoryUnreadable":    "the audit data.reason of a person.erasure or credential.erase failure; the response is writeServerError's 500, never an errorBody reason",
+	"access_reasons.go:reasonRepoNoCredential":               "a repository row's reason on the access preview (accessSentences), never a refusal or an errorBody reason",
 }
 
 // findBareErrorBodyLiterals walks file for an errorBody{...} composite

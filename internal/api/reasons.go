@@ -26,6 +26,10 @@ package api
 // convention changes — TestReasonDocsMatchReasonsGo and TestNoAdHocAuthz both
 // read that file too.
 const (
+	// The data.reason of a run.requirement.skip audit row (requirementSkip), read from GET /audit.
+	reasonRequirementModelHostUnknown = "model_host_unknown"   // the site config could not be read, so every host is skipped as a possible model host
+	reasonRequirementHostNotAllowed   = "host_not_allowlisted" // the integration's host is not an exact allowlist entry, or a deny list in force names it
+
 	// Shared by every lane's resolve arm: the dispatch-time-snapshot family
 	// of refusals (I1-I3 in the Azure DevOps and AWS SSO doc comments).
 	reasonMissingScopeSnapshot = "missing_scope_snapshot" // the grant names no dispatch-time snapshot

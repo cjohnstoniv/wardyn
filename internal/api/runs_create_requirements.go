@@ -257,16 +257,6 @@ func effectiveRequirements(ws types.Workspace) map[string]types.WorkspaceRequire
 // key (#547).
 const reasonRequirementModelHost = "model_host"
 
-// reasonRequirementModelHostUnknown is the skip when the site config could not
-// be read, so which hosts serve a model is unknown: every one is skipped.
-const reasonRequirementModelHostUnknown = "model_host_unknown"
-
-// skipHostNotAllowlisted is the skip for an integration credential whose host is not an exact entry
-// of the run's allowlist, or that a deny list in force names (its egress_host capability is off and
-// nothing else lists it): the proxy refuses an injection rule for such a host at startup, which would
-// fail every run. An audit data.reason only, never an errorBody reason, so it is not reason-named.
-const skipHostNotAllowlisted = "host_not_allowlisted"
-
 // requirementSkip is the audit entry for a requirement credential the fold
 // declined to grant, named by what it would have granted and why.
 func requirementSkip(target, reason string, data map[string]any) requirementAuditEntry {
