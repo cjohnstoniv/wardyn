@@ -144,11 +144,11 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 		if code, err := s.validateRunSecretRefs(ctx, s.secretOwnerFromRequest(r), runIdentitySubject(ctx, principalFromRequest(r)), spec, credentials); err != nil {
 			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, runSecretRefsRefusal("invalid inline_policy: ", code, err)
 		}
-		// The CPU and memory half for the inline arm, the same helper the stored arm
-		// calls below. The main drive is sized by stepMainDrive, for every door.
 		if refusal := s.applicationUIAppsRefusal(r, *req, spec, ceiling); refusal != nil {
 			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
 		}
+		// The CPU and memory half for the inline arm, the same helper the stored arm
+		// calls below. The main drive is sized by stepMainDrive, for every door.
 		source.knobs.step(ceiling.provenance(), &spec, func() {
 			s.boundResources(ctx, r, &spec, ceiling)
 			clampWarnings = append(clampWarnings, s.boundUIApps(ctx, r, &spec, ceiling, dryRun)...)
@@ -278,15 +278,15 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 		}
 		storedWarns = append(storedWarns, warns...)
 	}
+	if refusal := s.applicationUIAppsRefusal(r, *req, spec, ceiling); refusal != nil {
+		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
+	}
 	// The CPU and memory half, for the arm composer.Clamp never reaches. The block
 	// above runs only for a member who SELECTED a stored row (policyID != nil), but
 	// the commonest member request there is carries no policy at all — and its spec
 	// is then the profile's OWN ceiling, which an admin may well have written wider
 	// than the limit standing beside it. Both arms call the SAME helper
 	// (runs_dispatch_ceiling.go).
-	if refusal := s.applicationUIAppsRefusal(r, *req, spec, ceiling); refusal != nil {
-		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
-	}
 	source.knobs.step(ceiling.provenance(), &spec, func() {
 		s.boundResources(ctx, r, &spec, ceiling)
 		storedWarns = append(storedWarns, s.boundUIApps(ctx, r, &spec, ceiling, dryRun)...)
