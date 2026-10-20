@@ -36,7 +36,7 @@ func newSidecarDetector(url string, client *http.Client) *sidecarDetector {
 // maxSidecarCallsPerRequest bounds the sidecar round trips one scanned request may
 // cost: a body of many one-character strings is one span each, and the byte budget
 // does not see them. Past it the sidecar counts as failed for the request, as any
-// other sidecar error does.
+// other sidecar error does, but is recorded as sidecar_call_cap so audit can tell a cap from an outage.
 const maxSidecarCallsPerRequest = 64
 
 var errSidecarCallCap = fmt.Errorf("sidecar: more than %d spans in one request", maxSidecarCallsPerRequest)

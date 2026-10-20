@@ -93,8 +93,8 @@ func TestSidecarCallsAreCappedPerRequest(t *testing.T) {
 			if got := calls.Load(); got != maxSidecarCallsPerRequest {
 				t.Fatalf("sidecar called %d times for one request, want the cap %d", got, maxSidecarCallsPerRequest)
 			}
-			if !res.Skipped || res.SkipReason != "sidecar_error" {
-				t.Fatalf("want skipped/sidecar_error, got %+v", res)
+			if !res.Skipped || res.SkipReason != "sidecar_call_cap" {
+				t.Fatalf("want skipped/sidecar_call_cap, got %+v", res)
 			}
 			if got := eng.ShouldBlock(res); got != tc.wantBlock {
 				t.Fatalf("ShouldBlock = %v, want %v", got, tc.wantBlock)
