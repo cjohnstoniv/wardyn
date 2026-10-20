@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 	"unicode"
@@ -43,12 +44,15 @@ var localFolderSeedPoll = 2 * time.Second
 // door to come in by: a task run (the agent exec), not interactive (whose
 // start is the person's own attach), not background-only (which refuses SSH),
 // on a deployment with an SSH gateway and a store that keeps the seed.
-func (s *Server) localFolderRefusal(req *createRunRequest) *runRefusal {
+func (s *Server) localFolderRefusal(ctx context.Context, req *createRunRequest) *runRefusal {
 	f := req.LocalFolder
 	if f == nil {
 		return nil
 	}
 	name := strings.TrimSpace(f.Name)
+	if f.RunnerID != nil && name == "" {
+		name = filepath.Base(f.Path) // a computer folder may leave its name to its path
+	}
 	if name == "" || len(name) > maxLocalFolderName || !utf8.ValidString(name) || strings.ContainsFunc(name, unicode.IsControl) {
 		return runError(http.StatusBadRequest, reasonLocalFolderInvalid,
 			fmt.Sprintf("local_folder.name must be 1 to %d bytes of UTF-8 with no control characters", maxLocalFolderName))
@@ -56,6 +60,9 @@ func (s *Server) localFolderRefusal(req *createRunRequest) *runRefusal {
 	dir, err := sshSyncDir(f.RemoteDir)
 	if err != nil {
 		return runError(http.StatusBadRequest, reasonLocalFolderInvalid, "local_folder.remote_dir: "+strings.TrimPrefix(err.Error(), sshSyncDirEnv+" "))
+	}
+	if f.RunnerID != nil {
+		return s.computerFolderRefusal(ctx, req, name, dir)
 	}
 	unsupported := func(why string) *runRefusal {
 		return runError(http.StatusUnprocessableEntity, reasonLocalFolderUnsupported, "local_folder: "+why)
@@ -158,6 +165,14 @@ func (s *Server) holdForLocalFolder(ctx context.Context, run types.AgentRun, ref
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.seed.hold", run.ID.String(), "success",
 		mustJSON(map[string]any{"folder": folder.Name, "remote_dir": folder.RemoteDir, "wait_sec": int(wait.Seconds())})))
+	if folder.RunnerID != nil && seed.SeededAt == nil && seed.Error == "" {
+		// A computer folder is seeded here, through its runner, rather than awaited from `wardyn sync`.
+		run.SandboxRef = ref
+		s.seedComputerFolder(ctx, run, *folder, wait)
+		if _, next, err := st.RunLocalFolderSeed(ctx, run.ID); err == nil {
+			seed = next
+		}
+	}
 	deadline := s.cfg.Now().Add(wait)
 	for {
 		switch {

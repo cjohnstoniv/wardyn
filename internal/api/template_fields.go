@@ -321,11 +321,19 @@ var templateNestedCarried = map[string]string{
 }
 
 var templateNestedExcluded = map[string]TemplateFieldRule{
+	"GrantSpec.owner_only_refs": excludedField("owner_only_refs", templateExcludeOrigin,
+		"Wardyn sets it at each launch; a template marks the grant owner_only."),
 	"LLMInspectionSpec.workspace_secret_values": excludedField("workspace_secret_values", templateExcludeSecret,
 		"Secret values are runtime-only: the server resolves them, and a template names secrets instead."),
 	"RunLocalFolder.name": excludedField("name", templateExcludeLaunch,
 		"Part of local_folder, which is named at each launch."),
 	"RunLocalFolder.remote_dir": excludedField("remote_dir", templateExcludeLaunch,
+		"Part of local_folder, which is named at each launch."),
+	"RunLocalFolder.runner_id": excludedField("runner_id", templateExcludeLaunch,
+		"Part of local_folder, which is named at each launch."),
+	"RunLocalFolder.path": excludedField("path", templateExcludeLaunch,
+		"Part of local_folder, which is named at each launch."),
+	"RunLocalFolder.direction": excludedField("direction", templateExcludeLaunch,
 		"Part of local_folder, which is named at each launch."),
 }
 

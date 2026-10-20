@@ -108,7 +108,11 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		// mode, member mode, the no-operator-list override) was refused, so the
 		// sign-in screen can safely drop SIGNIN.ROLE_SOURCE's "everyone is an
 		// admin" caveat: that branch of role derivation is unreachable here.
-		"sso_only":          s.cfg.SSOOnly,
+		"sso_only": s.cfg.SSOOnly,
+		// cli_sign_in says wardyn login can sign in through the browser here (WARDYN_CLI_SIGN_IN on, with
+		// SSO); cli_paste_sign_in that it can do so without one (WARDYN_CLI_PASTE_SIGN_IN).
+		"cli_sign_in":       s.cliStore() != nil,
+		"cli_paste_sign_in": s.cliStore() != nil && s.cfg.CLISignIn.Paste,
 		"identity_provider": idp,
 		"trust_domain":      s.cfg.TrustDomain,
 		"runner":            runnerName,
@@ -175,6 +179,14 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	// deployment's /healthz shape never sprouts a k8s-only field.
 	if netpolVerdict != "" {
 		body["network_policy"] = netpolVerdict
+	}
+	// org_ca_fingerprints is WARDYN_ORG_CA_FINGERPRINTS: the operator's
+	// published CA fingerprints, each "sha256:<64 lowercase hex>", for a person
+	// to compare with what `wardyn ca add` prints. Absent while unset, so a
+	// deployment that publishes none keeps its body byte-for-byte. Read over
+	// the connection it describes, it is a consistency hint, never the proof.
+	if len(s.cfg.OrgCAFingerprints) > 0 {
+		body["org_ca_fingerprints"] = s.cfg.OrgCAFingerprints
 	}
 	// org_federation is present ONLY on a hybrid laptop (WARDYN_ORG_URL set),
 	// so every other deployment's body is byte-for-byte what it was

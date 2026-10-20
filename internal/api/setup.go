@@ -186,6 +186,9 @@ type SetupRunner struct {
 	// them the Docker host's /dev/kvm remedy for Vault. A boolean, deliberately
 	// not the driver name or anything a substrate reports about itself.
 	Kubernetes bool `json:"kubernetes,omitempty"`
+	// ComputerFolders is WARDYN_COMPUTER_FOLDERS, kept in a member's redacted body: New Run shows
+	// "Your computer" as blocked by the organisation while it is off (run_computer_folder.go).
+	ComputerFolders bool `json:"computer_folders,omitempty"`
 	// SandboxStart is the Kubernetes sandbox start deadlines (WARDYN_SANDBOX_START_TIMEOUT,
 	// WARDYN_SANDBOX_CAPACITY_WAIT), kept in a member's redacted body because the run page's
 	// "taking longer than expected" bound follows them. Absent off Kubernetes.
@@ -266,6 +269,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rnr, k8sNetpolProven := setupRunnerInfo(ctx, s.cfg.Runner)
+	rnr.ComputerFolders = s.cfg.ComputerFolders
 
 	providers := s.setupProviders()
 
@@ -538,7 +542,7 @@ func redactSetupStatusForUser(st SetupStatus) SetupStatus {
 	st.ChecksRedacted = true
 	st.Providers = []SetupProvider{}
 	st.Secrets = SetupSecrets{Present: demoSecretPresence(st.Secrets.Present)}
-	st.Runner = SetupRunner{ConfinementClasses: st.Runner.ConfinementClasses, Kubernetes: st.Runner.Kubernetes, SandboxStart: st.Runner.SandboxStart}
+	st.Runner = SetupRunner{ConfinementClasses: st.Runner.ConfinementClasses, Kubernetes: st.Runner.Kubernetes, ComputerFolders: st.Runner.ComputerFolders, SandboxStart: st.Runner.SandboxStart}
 	// Host credential/environment posture — a description of the OPERATOR'S
 	// MACHINE, not of anything a member can act on, and the last place a member
 	// could read it off this endpoint. SCM names which git credentials sit on

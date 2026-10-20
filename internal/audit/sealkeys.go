@@ -84,11 +84,15 @@ var sealFields = map[string][]SealField{
 	// The identity provider's sub of the person signing in, who is the actor on both rows: the
 	// attached person on success, the sub's own person when the attach is ignored.
 	"person.attach": {{Path: "sub", Subject: SubjectActor}},
+	// The free text the security admin typed to justify a runner's trust change.
+	"runner.trust.write": {{Path: "reason", Subject: SubjectActor}},
+	// The run's title before and after a rename, which the owner typed or copied from the task.
+	"run.title.set": {{Path: "from", Subject: SubjectActor}, {Path: "to", Subject: SubjectActor}},
 }
 
 // SealLeafNames is the closed set of data key names a field may carry to be a
 // candidate for sealing. It does not seal anything by itself.
-var SealLeafNames = []string{"task", "prompt", "message", "reason", "comment", "note", "email", "display_name", "query", "command", "sub", "target", "secret_owner"}
+var SealLeafNames = []string{"task", "prompt", "message", "reason", "comment", "note", "email", "display_name", "query", "command", "sub", "target", "secret_owner", "from", "to"}
 
 // UnsealedActions are actions whose rows are never sealed, so the record of an
 // erasure survives the key it destroys and a person's key is named in the

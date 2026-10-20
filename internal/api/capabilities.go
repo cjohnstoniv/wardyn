@@ -907,26 +907,37 @@ func withOwnedSecretMemo(ctx context.Context) context.Context {
 // ever fans out over one memo, this needs a mutex — say so here rather than
 // discovering it as a race.
 func (s *Server) ownsSecretMemoized(ctx context.Context, owner, name string) bool {
-	memo, ok := ctx.Value(ownedSecretMemoKey{}).(*ownedSecretMemo)
-	if !ok || owner == "" || name == "" || s.cfg.Secrets == nil {
+	if _, ok := ctx.Value(ownedSecretMemoKey{}).(*ownedSecretMemo); !ok || owner == "" || name == "" || s.cfg.Secrets == nil {
 		return s.ownsSecret(ctx, owner, name)
 	}
-	set, loaded := memo.byOwner[owner]
-	if !loaded {
-		set = map[string]bool{}
-		// Names only, own rows only — the same read ownsSecret makes, and the
-		// same reason: an ownership claim must be provable, never merely
-		// unrefuted.
-		names, err := s.cfg.Secrets.For(owner).List(ctx)
-		if err != nil {
-			// Fail closed (no ownership proven), but not silently: a store fault
-			// otherwise reads as "you hold no such secret".
-			slog.WarnContext(ctx, "api: list a person's own secrets for an ownership check", slog.Any("err", err))
+	return s.ownedSecretNames(ctx, owner)[name]
+}
+
+// ownedSecretNames is every name owner holds in their own namespace, through the
+// request's memo when one is installed (read once per owner per request) and a
+// fresh read otherwise. The set is the memo's own: callers read it, never write it.
+func (s *Server) ownedSecretNames(ctx context.Context, owner string) map[string]bool {
+	memo, _ := ctx.Value(ownedSecretMemoKey{}).(*ownedSecretMemo)
+	if memo != nil {
+		if set, loaded := memo.byOwner[owner]; loaded {
+			return set
 		}
-		for _, n := range names {
-			set[n] = true
-		}
+	}
+	set := map[string]bool{}
+	// Names only, own rows only — the same read ownsSecret makes, and the
+	// same reason: an ownership claim must be provable, never merely
+	// unrefuted.
+	names, err := s.cfg.Secrets.For(owner).List(ctx)
+	if err != nil {
+		// Fail closed (no ownership proven), but not silently: a store fault
+		// otherwise reads as "you hold no such secret".
+		slog.WarnContext(ctx, "api: list a person's own secrets for an ownership check", slog.Any("err", err))
+	}
+	for _, n := range names {
+		set[n] = true
+	}
+	if memo != nil {
 		memo.byOwner[owner] = set
 	}
-	return set[name]
+	return set
 }

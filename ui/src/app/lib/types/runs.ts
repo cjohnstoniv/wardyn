@@ -493,6 +493,31 @@ export interface RunDetail extends AgentRun {
   policy?: PolicyRef;
   // Wardyn-sync sessions open now (GET /runs/{id} only); see RunSync.
   sync?: RunSync;
+  // The run's folder from the person's computer and its passes (GET /runs/{id} only); see RunComputerFolder.
+  computer_folder?: RunComputerFolder;
+}
+
+// GET /runs/{id}'s computer_folder (internal/api/run_computer_folder.go computerFolderRunView): the run's
+// folder held by the person's own runner. The path on that computer is never sent, only its name.
+export interface RunComputerFolder {
+  name: string;
+  runner: string;
+  remote_dir: string;
+  direction: "both" | "in";
+  // The first sync's: waiting, synced or failed (error says why).
+  state: "waiting" | "synced" | "failed";
+  error?: string;
+  seed?: RunFolderPass;
+  back?: RunFolderPass;
+}
+
+// One pass as the runner counted it (types.FolderPassRecord).
+export interface RunFolderPass {
+  at: string;
+  files: number;
+  bytes: number;
+  refused: { path: string; reason: string }[];
+  error?: string;
 }
 
 // GET /api/v1/runs/{id}/policy — the policy a run actually got (the run page's
@@ -652,6 +677,9 @@ export interface AttachModeMsg {
   type: "attach-mode";
   read_only: boolean;
   holder?: AttachHolder;
+  // "local" on a socket the CLI opened with transport=local (its terminal stays on the runner's own
+  // computer); absent on the console's relay socket.
+  transport?: "local";
 }
 
 // Who currently holds the run's shared tmux PTY (GET /runs/{id}/attach/holder).

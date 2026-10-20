@@ -111,7 +111,7 @@ describe("ConnectSSHCard — visibility", () => {
     listKeysMock.mockResolvedValue([]);
     renderCard({ created_by: "service:ci-bot" }, "sam@example.com", false);
     await waitFor(() => expect(screen.getByText("Attach from your terminal")).toBeInTheDocument());
-    expect(screen.getByText((t) => t.includes(`wardyn run attach ${baseRun.id}`))).toBeInTheDocument();
+    expect(screen.getByText((t) => t.includes(`wardyn attach ${baseRun.id}`))).toBeInTheDocument();
     expect(screen.queryByText("SSH")).toBeNull();
     expect(screen.queryByText("Manage SSH keys")).toBeNull();
   });
@@ -136,7 +136,7 @@ describe("ConnectSSHCard — visibility", () => {
     // jsdom's origin is not the CLI's default, so the block also carries a
     // WARDYN_URL= prefix — match on the command within it.
     expect(
-      screen.getByText((t) => t.includes(`wardyn run attach ${baseRun.id}`)),
+      screen.getByText((t) => t.includes(`wardyn attach ${baseRun.id}`)),
     ).toBeInTheDocument();
     // Both SSH and the UI-apps lane are off with an empty healthz response,
     // so match SSH's off text specifically rather than the shared "Off on
@@ -622,9 +622,9 @@ describe("ConnectSSHCard — Sync a folder lane", () => {
     healthMock.mockResolvedValue(SSH_ON);
     renderCard(live);
     const title = await screen.findByText("Sync a folder");
-    // The same WARDYN_URL prefix rule as the CLI lane (cliEnv): whatever precedes `wardyn run attach` precedes `wardyn sync`.
+    // The same WARDYN_URL prefix rule as the CLI lane (cliEnv): whatever precedes `wardyn attach` precedes `wardyn sync`.
     const code = (end: string) => screen.getByText((_, el) => el?.tagName === "CODE" && !!el.textContent?.endsWith(end));
-    const prefix = code(`wardyn run attach ${baseRun.id}`).textContent?.replace(`wardyn run attach ${baseRun.id}`, "");
+    const prefix = code(`wardyn attach ${baseRun.id}`).textContent?.replace(`wardyn attach ${baseRun.id}`, "");
     expect(code(`wardyn sync ${baseRun.id} ./my-folder`).textContent).toBe(`${prefix}wardyn sync ${baseRun.id} ./my-folder`);
     expect(screen.getByText(/Copies a folder from your computer into the sandbox/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copy sync command" })).toBeInTheDocument();
@@ -747,8 +747,8 @@ describe("ConnectSSHCard — the CLI hint's WARDYN_URL keeps the base path", () 
     listKeysMock.mockResolvedValue([]);
     renderCard();
     await waitFor(() => expect(healthMock).toHaveBeenCalled());
-    const cmd = screen.getByText((t) => t.includes(`wardyn run attach ${baseRun.id}`));
-    expect(cmd.textContent).toContain(`WARDYN_URL=${window.location.origin}/wardyn wardyn run attach`);
+    const cmd = screen.getByText((t) => t.includes(`wardyn attach ${baseRun.id}`));
+    expect(cmd.textContent).toContain(`WARDYN_URL=${window.location.origin}/wardyn wardyn attach`);
     expect(cmd.textContent).not.toContain(`WARDYN_URL=${window.location.origin} `);
   });
 });

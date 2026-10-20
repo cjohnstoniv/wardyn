@@ -419,6 +419,7 @@ func Synthesize(obs Observations, runGrants []types.CredentialGrant, run types.A
 			warnings = append(warnings, fmt.Sprintf("minted grant %s was added by an organisation's component; omitted from eligible_grants (attach the component at launch to use it again)", id))
 			continue
 		}
+		gs.OwnerOnlyRefs = nil // decided again at each launch, and refused when authored
 		spec.EligibleGrants = append(spec.EligibleGrants, gs)
 		if gs.Kind == types.GrantGitHubToken {
 			warnings = append(warnings, fmt.Sprintf("eligible grant %s (github_token) carries scope permissions %s; confirm they intersect the least-privilege need", id, githubPermSummary(gs.Scope)))

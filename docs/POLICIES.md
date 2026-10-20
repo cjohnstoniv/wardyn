@@ -653,6 +653,7 @@ What the check does and does not settle:
 | `ttl_seconds` | `int` | `3600` | An upper bound Wardyn *requests* for the minted credential's freshness window, honored by no grant kind today; 1h is the default and the maximum, and negative is rejected. See [`ttl_seconds`](#ttl_seconds). |
 | `requires_approval` | `bool` | `false` | Force a human approval before the broker will mint, instead of auto-minting on policy. |
 | `owner_only` | `bool` | `false` | For a grant that names a stored secret, resolves it from the run owner's own row only, never the operator's; refused on `github_token` and `cloud_sts`. See [`owner_only`](#owner_only). |
+| `owner_only_refs` | `[string]` | `[]` | `owner_only` for the named secrets alone. See [`owner_only_refs`](#owner_only_refs). |
 
 | `kind` | `scope` shape | Write-time rules |
 |---|---|---|
@@ -687,6 +688,12 @@ What the check does and does not settle:
   - So a stored grant without the flag keeps the fallback for them even when the deployment default marks the same pairing `owner_only`.
   - Mark it on the stored policy too.
 - Upgrade the proxy image together with wardynd before setting it: an older proxy refuses a policy carrying the key, so such a run fails at proxy start.
+
+### `owner_only_refs`
+
+- `owner_only` per stored secret, for an `ssh_key` grant whose key and `known_hosts` resolve from different rows; Wardyn sets it at launch, and a policy, profile or preset naming it is refused (use `owner_only`).
+- A member's own ref, admitted because they hold it, reads their row alone; a ref their `secret` capability grants reads their row, then the operator's.
+- On a person's own runner such a grant is refused unless every ref is their own.
 
 ### `github_token`
 

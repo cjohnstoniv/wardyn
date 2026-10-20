@@ -202,7 +202,13 @@
 # docs/AUDIT-ACTIONS.md 48957 = 48940 (0.10 API-2: workspace.reassign renamed_to, the host-capacity message, and expired egress approvals asked again) + 48851 - 48834 at the main merge.
 # API-5: docs/AUDIT-ACTIONS.md 48868 adds 17 over 48851 (the IdP back-channel logout source on session.revoke), measured after merging main.
 # docs/AUDIT-ACTIONS.md=48851 adds 43 (0.10 HYB-A): ssh.sync.transfer delete/rename counts, run.seed.hold and run.seed rows
+# docs/AUDIT-ACTIONS.md 49174 adds 124 over 49050: the brokered:aws-sigv4 and brokered:aws-sigv4:refused rows, measured at the main merge.
+# docs/AUDIT-ACTIONS.md 49215 adds 41 over 49174, measured: the run.ended aws_cache_wipe keys and the STS and IAM action refusals on the aws-sigv4 refused row.
 # docs/AUDIT-ACTIONS.md 49187 = ours 48988 + theirs 49050 - base 48851 at the 0.10.0 SEC-1 merge of main; re-measured below if higher.
+# docs/AUDIT-ACTIONS.md 49486 adds 299 over 49187, measured (0.10.0 GHPAT): github_pat.own.store, .delete and .resolve, and the credential.mint denial for a person's own GitHub token while the PAT broker is off.
+# docs/AUDIT-ACTIONS.md 49352 is 49215 + 49187 - 49050: both sides' additions over the merge base.
+# docs/AUDIT-ACTIONS.md 49373 adds 21 over 49352, measured: a failed kept-end wipe is recorded only for an end the control plane serves.
+# 0.10: docs/AUDIT-ACTIONS.md 49261 adds 74, measured: transport local, runner_id and the two local detach reasons on the session rows (ATT-SRV).
 # docs/AUDIT-ACTIONS.md=48834 adds 8 (0.10): identity.unbind counts runners and runner tokens.
 # docs/AUDIT-ACTIONS.md 49195 = ours 49187 + theirs 49058 - base 49050 at the 0.10 W2 merge of SEC-2c onto the train.
 # docs/AUDIT-ACTIONS.md 49319 = ours 49195 + theirs 49174 - base 49050 at the 0.10 W2 merge of VM-B onto the train.
@@ -214,7 +220,20 @@
 # docs/AUDIT-ACTIONS.md 49013 adds 146 over 48867, measured (0.10 LAY-A): the three governance.walls rows, run.break_glass.open, the run.create break_glass keys and the enable and disable verbs.
 # docs/AUDIT-ACTIONS.md 49030 measured after merging main into 0.10 LAY-A.
 # docs/AUDIT-ACTIONS.md 49499 = ours 49315 + theirs 49371 - base 49187 at the main merge into 0.10 BOUNDARY.
-docs/AUDIT-ACTIONS.md=49499 share=8
+# docs/AUDIT-ACTIONS.md 49670 = ours 49486 + theirs 49371 - base 49187 at the 0.10 GHPAT merge of main onto the lane.
+# 0.10 HYBB (#2982): docs/AUDIT-ACTIONS.md 49235 adds 48, measured: the run.folder.transfer row, both directions.
+# docs/AUDIT-ACTIONS.md 49419 = ours 49235 + theirs 49371 - base 49187 at the 0.10 merge of main (W2) into HYBB.
+# docs/AUDIT-ACTIONS.md 49718 = ours 49670 + theirs 49419 - base 49371 at the 0.10 W3 merge of HYBB onto the train.
+# docs/AUDIT-ACTIONS.md 49557 = ours 49373 + theirs 49371 - base 49187 at the 0.10 merge of main (W2) into SEC-1c.
+# docs/AUDIT-ACTIONS.md 49904 = ours 49718 + theirs 49557 - base 49371 at the 0.10 W3 merge of SEC-1c onto the train.
+# docs/AUDIT-ACTIONS.md 49445 = ours 49261 + theirs 49371 - base 49187 at the ATT-SRV merge of main (W2 train).
+# docs/AUDIT-ACTIONS.md 49978 = ours 49904 + theirs 49445 - base 49371 at the 0.10 W4a merge of ATT-SRV onto the train.
+# 0.10 ATT-LOGIN-SRV: docs/AUDIT-ACTIONS.md 49814 adds 443 over 49371: the seven cli.* rows and the token.create/session.revoke fields, measured.
+# docs/AUDIT-ACTIONS.md 50421 = ours 49978 + theirs 49814 - base 49371 at the 0.10 W4a merge of ATT-LOGIN-SRV onto the train.
+# docs/AUDIT-ACTIONS.md 49506 adds 135 over 49371, measured (0.10 PRIV-1): the recording.read row, the runner.trust.write and run.title.set sealed fields, and the person.erasure run_tasks, run_setups and credentials detail.
+# docs/AUDIT-ACTIONS.md 50556 = ours 50421 + theirs 49506 - base 49371 at the 0.10 W4a merge of PRIV-1 onto the train.
+# docs/AUDIT-ACTIONS.md 50684 = ours 49499 + theirs 50556 - base 49371 at the 0.10 LANES merge of main onto BOUNDARY.
+docs/AUDIT-ACTIONS.md=50684 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.
@@ -245,3 +264,4 @@ docs/AUDIT-ACTIONS.md=49499 share=8
 # docs/AUDIT-ACTIONS.md 46536 adds 147 over 46389, measured (0.9.3 RR-b): the runner-resident secret.read sink fields, the run.dispatch resident refusal reasons, and runner.resident.erase report identity and the org abandonment variant.
 # docs/AUDIT-ACTIONS.md 46428 adds 39 over 46389, measured (0.9.3 RV4a R1-0009): the approval:refused decision-log reason.
 # docs/AUDIT-ACTIONS.md 46394 adds 5 over 46389, measured (0.9.3 UIa, DR-0263): run.create resources_applied also carries pids_limit.
+# docs/AUDIT-ACTIONS.md 48975 adds 124 over 48851, measured (0.10 AWS re-signing): the brokered:aws-sigv4 and brokered:aws-sigv4:refused decision-log rows.

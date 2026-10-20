@@ -173,3 +173,21 @@ func TestHarnessToolRules_OneHarnessKeepsTheRunWideRegime(t *testing.T) {
 		t.Errorf("two harnesses carried %d sets, want 2", len(sets))
 	}
 }
+
+// TestSidecarPolicyLeavesOwnerOnlyRefsOff: the sidecar never reads
+// owner_only_refs (the broker reads it from the grant row), so its config
+// leaves the key off for a proxy that predates it, without editing the run's
+// own policy.
+func TestSidecarPolicyLeavesOwnerOnlyRefsOff(t *testing.T) {
+	policy := types.RunPolicySpec{EligibleGrants: []types.GrantSpec{{Kind: types.GrantSSHKey, OwnerOnlyRefs: []string{"my-key"}}}}
+	raw, err := json.Marshal(sidecarPolicy(policy, dispatchParams{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "owner_only_refs") {
+		t.Fatalf("sidecar policy = %s, want no owner_only_refs", raw)
+	}
+	if !slices.Equal(policy.EligibleGrants[0].OwnerOnlyRefs, []string{"my-key"}) {
+		t.Fatalf("run policy grant = %+v, want its owner_only_refs kept", policy.EligibleGrants[0])
+	}
+}

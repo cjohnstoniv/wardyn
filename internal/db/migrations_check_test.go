@@ -479,6 +479,14 @@ func closedEnumChecks() []closedEnumCheck {
 		// moving together, and is what makes ADDING the CHECK safe -- without it
 		// the constraint would re-import 0053's incident onto token minting.
 		{"api_tokens", "role", stringSet(oidc.Roles...)},
+		// 0199: CLI sign-in's closed sets, each the Go list beside its constants (internal/types
+		// cli_sign_in.go), so a kind, mode, store, decision or end reason added on one side only fails here.
+		{"api_tokens", "kind", stringSet(types.APITokenKinds...)},
+		{"cli_sessions", "store", stringSet(types.CLIStores...)},
+		{"cli_sessions", "end_reason", stringSet(types.CLISessionEndReasons...)},
+		{"cli_sign_ins", "mode", stringSet(types.CLISignInModes...)},
+		{"cli_sign_ins", "store", stringSet(types.CLIStores...)},
+		{"cli_sign_ins", "decision", stringSet(types.CLISignInDecisions...)},
 		// 0052's governance_assignments.subject_type — the SAME closed enum
 		// capability_grants.subject_type above carries, reused rather than
 		// re-enumerated (types.CapabilitySubjectType is the one Go definition

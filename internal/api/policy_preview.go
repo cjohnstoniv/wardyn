@@ -129,7 +129,7 @@ func (s *Server) authorizePreviewRequest(r *http.Request, req createRunRequest) 
 	if refusal != nil {
 		return ceiling, "", refusal
 	}
-	if refusal = s.localFolderRefusal(&req); refusal != nil {
+	if refusal = s.localFolderRefusal(r.Context(), &req); refusal != nil {
 		return ceiling, "", refusal
 	}
 	if refusal = s.runTextFieldsRefusal(req); refusal != nil {

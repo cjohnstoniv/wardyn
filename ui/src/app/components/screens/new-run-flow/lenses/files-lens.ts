@@ -230,7 +230,8 @@ export function setStartSubpath(intent: RunIntent, subpath: string | undefined):
 export const filesIssues: StepValidator = (intent) => {
   const out: StepIssue[] = [];
   const attached = attachmentCount(intent);
-  if (!attached && intent.no_repositories_or_drives !== true) out.push(issue("files", "files_choice_required"));
+  // A folder from the person's computer (local_folder) is a choice too: it lands on the main drive.
+  if (!attached && !intent.local_folder && intent.no_repositories_or_drives !== true) out.push(issue("files", "files_choice_required"));
   if (attached && !intent.start_folder) out.push(issue("files", "starts_here_required"));
   return out;
 };

@@ -50,7 +50,7 @@ type dispatchParams struct {
 	GitPATGrants     map[string]string       // {host: grant_id} for non-GitHub PAT hosts
 	SSHGrants        map[string]string       // {host: grant_id} for SSH clone hosts
 	Injections       []runner.InjectionGrant // proxy-side credential injections
-	Interactive      bool                    // idle box for `wardyn run attach` (no agent exec, no completion watcher)
+	Interactive      bool                    // idle box for `wardyn attach` (no agent exec, no completion watcher)
 	TaskMode         string                  // "exec" for the BYOA/CI plain-command lane; "" for the agent harness
 	InteractiveStart string                  // "agent" opens the attach shell in the image's agent CLI; "" / "shell" = a bare shell. Interactive runs only.
 	SeedAutoTools    bool                    // true lets an interactive run's boot seed use tools before attach (--dangerously-skip-permissions for that pre-attach span). Interactive + agent-started + non-empty seed only.
@@ -162,7 +162,7 @@ type dispatchParams struct {
 // start the completion watcher (there is no agent process to wait on — the
 // watcher would otherwise mark the idle run COMPLETED the moment Wait failed).
 // The sandbox comes up idle (the container holds open via the TERM-aware idle
-// loop, AgentIdleScript / `agent-run --idle`) so a human can `wardyn run attach
+// loop, AgentIdleScript / `agent-run --idle`) so a human can `wardyn attach
 // <id>` and drive it. A non-interactive run is
 // unchanged. Pair an interactive run with a never-reap policy (AutoStopAfterSec
 // < 0) or the idle reaper will stop the idle sandbox.
@@ -535,7 +535,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		// these roots — see runner/member_mount.go.
 		UserMountRoots: p.UserMounts.Roots,
 		UserWritable:   p.UserMounts.Writable,
-		// Interactive runs come up idle for `wardyn run attach`; the driver prepares the
+		// Interactive runs come up idle for `wardyn attach`; the driver prepares the
 		// workspace (clones the repo into ~/work) on the idle process so the attach
 		// shell isn't empty. A non-interactive run's task exec does this itself.
 		Interactive: p.Interactive,
@@ -585,6 +585,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// The Azure CLI door's grant (runs_dispatch_cli_azure.go): nil without
 			// the row, and nil when a later phase withheld its credential.
 			AzureARM: azureARM,
+			// The re-signed AWS lane's grant (runs_dispatch_aws_sigv4.go): nil while
+			// WARDYN_AWS_SIGV4_AT_PROXY is off and on every lane it does not re-sign.
+			AWSSigV4: plan.awsSigV4,
 			// The azure_foundry lane's route gate (provider_azure.go), and the hosts inspected as a model host without being a
 			// brokered upstream: that lane's endpoint and a Claude subscription's route-through host. Empty on every other run.
 			AzureGates:      plan.azure.gates,

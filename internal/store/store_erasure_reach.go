@@ -25,17 +25,21 @@ func (s PG) EraseApprovalDecisionPersonalFields(ctx context.Context, principals 
 
 // DeleteSettledRunPATsOf deletes the Azure DevOps token history of owners: every ado_run_pats row
 // already revoked or past its valid_to. A row still live at Azure DevOps stays, since revoking it
-// needs it. It returns the rows it deleted.
-func (s PG) DeleteSettledRunPATsOf(ctx context.Context, owners []string) (int64, error) {
+// needs it. It returns the rows it deleted and the live rows it left.
+func (s PG) DeleteSettledRunPATsOf(ctx context.Context, owners []string) (deleted, liveLeft int64, err error) {
 	if len(owners) == 0 {
-		return 0, nil
+		return 0, 0, nil
 	}
-	tag, err := s.Pool.Exec(ctx,
-		`DELETE FROM ado_run_pats WHERE owner = ANY($1) AND (revoked_at IS NOT NULL OR valid_to <= now())`, owners)
+	// The count reads the snapshot from before the delete, so it is the rows the delete leaves.
+	err = s.Pool.QueryRow(ctx, `
+		WITH gone AS (DELETE FROM ado_run_pats WHERE owner = ANY($1) AND (revoked_at IS NOT NULL OR valid_to <= now()) RETURNING 1)
+		SELECT (SELECT count(*) FROM gone),
+		       (SELECT count(*) FROM ado_run_pats WHERE owner = ANY($1) AND revoked_at IS NULL AND (valid_to IS NULL OR valid_to > now()))`,
+		owners).Scan(&deleted, &liveLeft)
 	if err != nil {
-		return 0, fmt.Errorf("store: delete settled run tokens: %w", err)
+		return 0, 0, fmt.Errorf("store: delete settled run tokens: %w", err)
 	}
-	return tag.RowsAffected(), nil
+	return deleted, liveLeft, nil
 }
 
 // DeleteDelegatedTokensOf deletes every delegated token minted for one of principals, live or

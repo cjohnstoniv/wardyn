@@ -16,7 +16,7 @@ import (
 //
 // Interactive mode: skip the agent Exec AND the completion watcher. The
 // sandbox is RUNNING and idle (the container holds open), ready for a human to
-// `wardyn run attach`. There is no agent process, so there is nothing for the
+// `wardyn attach`. There is no agent process, so there is nothing for the
 // watcher to Wait on — starting it would have it observe an immediate Wait
 // failure (no tracked agent exec) and could prematurely terminate the run.
 // BYOI runtime preflight: a wrapped arbitrary base is guaranteed to carry the
