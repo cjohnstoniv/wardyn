@@ -27,6 +27,7 @@ import { templateSource } from "../steps/shape/shape-sources";
 import { StepShell, useAnnounce } from "../steps/step-shell";
 import { BLOCKERS_ID, BlockerList } from "./blocker-list";
 import { buildBlockers, groupsBlockedBy, missingSetup } from "./blockers";
+import { localMcpConflicts, useHarnessNames } from "../steps/tools/local-mcp";
 import { EffectivePolicyCard } from "./effective-policy-card";
 import { AccessGroup } from "./groups/access-group";
 import { LimitsGroup } from "./groups/limits-group";
@@ -85,6 +86,7 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
   });
   const pre = checks.preflightResult as PreflightResult | null as ReviewPreflight | null;
   const template = useTemplateNeeds(draft.origin, draft.intent);
+  const harnessNames = useHarnessNames();
 
   const gate = (blockers: number) =>
     launchGateOpen({ blockers, preflight: checks.preflightRead, generation: checks.generation, now: Date.now() });
@@ -96,6 +98,8 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
     // A credential refusal is not a blocker: Launch's own refusal opens the provider's sign-in door.
     refusal: checks.preflightError === null || checks.preflightRefusal ? null : { text: checks.preflightError, reason: checks.preflightReason },
     setupItems: missingSetup(pre ?? (checks.preflightRefusal && { setup_items: checks.preflightRefusal.setupItems }), checks.preview.result),
+    localMcp: localMcpConflicts(pre?.access ?? checks.preview.result?.access, draft.intent),
+    harnessLabel: (id: string) => harnessNames.get(id) ?? id,
   };
   const blockers = buildBlockers({ ...inputs, stale: !gate(0) });
   const hard = blockers.filter((b) => b.kind !== "stale");

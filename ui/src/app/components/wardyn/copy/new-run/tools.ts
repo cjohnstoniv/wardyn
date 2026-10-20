@@ -172,6 +172,30 @@ export const NR_TOOLS = {
   MCP_NO_TOKEN: "No token",
   MCP_LOCAL_SOON: "Servers that run inside the sandbox (a local command) are Coming soon.",
   MCP_ERR_URL: "Enter the server URL.",
+  /** Switch on (features.mcp_local_servers): F1MCP-1r2. */
+  MCP_CARD_BODY_LOCAL: "Connect a remote MCP server by URL, or start one in a sandbox. A remote server's token stays with the proxy.",
+  MCP_TAB_REMOTE: "Remote (HTTPS)",
+  MCP_TAB_LOCAL: "Runs in a sandbox",
+  MCP_WHERE: "Where it runs",
+  MCP_WHERE_RUN: "This run's sandbox",
+  MCP_WHERE_RUN_HINT:
+    "A server Wardyn starts as a command inside this run's sandbox. It runs with the agent's access: anything the agent can read or reach, the server can too, and the agent can use the server's secrets.",
+  MCP_WHERE_OWN: "Its own sandbox",
+  MCP_WHERE_OWN_HINT: "Runs the server in a sandbox of its own, apart from the agent, with its own access.",
+  MCP_LOCAL_NAME_PLACEHOLDER: "e.g. docs-search",
+  MCP_COMMAND_HELP: "The command and its arguments, started in the sandbox and spoken to over stdio. Pin the package version, for example @1.4.2.",
+  MCP_ERR_COMMAND: "Enter the command.",
+  MCP_ERR_PIN: "Pin the package version, for example @example/mcp-server@1.4.2.",
+  MCP_HOSTS_PLACEHOLDER: "e.g. api.example.com",
+  MCP_HOSTS_HELP: "The hosts the server reaches. Your organisation's ceiling still applies.",
+  MCP_DELIVERY_NOTE: "A request header is added by the proxy and never enters the sandbox. An environment variable or a file is placed in the sandbox.",
+  MCP_HARNESS_RULES: "Rules for this server's tools are applied by the harness, not by Wardyn's proxy.",
+  MCP_RUNS_IN_SANDBOX: "Runs in the sandbox",
+  MCP_SANDBOX_READABLE: "Any process in the sandbox can read it, the agent included.",
+  MCP_REFUSED: (harness: string | number, server: string | number) =>
+    `${harness} can't apply rules for ${server}'s tools, so this run would be refused. Turn ${server} off for ${harness}, or remove its rules for ${harness}.`,
+  CODEX_NOTE_REMOTE:
+    "Codex CLI can't pause a tool call for approval, and Wardyn can't block its own tools. Rules for its remote MCP tools are enforced by the proxy.",
   CC_INTRO:
     "Bundle the hosts and secrets one tool needs, so you can reuse it. Saved components appear under Add tools and access next time.",
   CC_NAME: "Name",

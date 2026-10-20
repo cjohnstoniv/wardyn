@@ -25,11 +25,13 @@ export interface AddRuleDialogProps {
   harnessName: string;
   /** The person's own rules already on this harness: a tool has at most one. */
   existing: readonly ToolRule[];
+  /** Local MCP servers are on: Codex's sentence says its remote MCP tools. */
+  remoteMcp?: boolean;
   onAdd: (rule: ToolRule) => void;
   onClose: () => void;
 }
 
-export function AddRuleDialog({ fact, harnessName, existing, onAdd, onClose }: AddRuleDialogProps) {
+export function AddRuleDialog({ fact, harnessName, existing, remoteMcp, onAdd, onClose }: AddRuleDialogProps) {
   const toolId = React.useId();
   const effectLabelId = React.useId();
   const [typed, setTyped] = React.useState("");
@@ -37,7 +39,7 @@ export function AddRuleDialog({ fact, harnessName, existing, onAdd, onClose }: A
   const [submitted, setSubmitted] = React.useState(false);
 
   const tool = typed.trim();
-  const choices = React.useMemo(() => ruleChoices(fact, harnessName, tool), [fact, harnessName, tool]);
+  const choices = React.useMemo(() => ruleChoices(fact, harnessName, tool, remoteMcp), [fact, harnessName, tool, remoteMcp]);
   // What was picked stands only while it is still offered for this tool.
   const effect = choices.find((c) => c.effect === picked && c.available)?.effect ?? choices.find((c) => c.available)?.effect;
   const duplicate = existing.some((r) => r.tool === tool);

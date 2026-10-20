@@ -150,6 +150,7 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     ["SetupSecrets", "secrets"],
     ["SetupAgeKey", "age_key"],
     ["SetupPlatform", "platform"],
+    ["SetupFeatures", "features"],
   ])("%s: full parity with SetupStatus.%s's inline TS type", (goName, member) => {
     const goTags = goJSONTags(setupGo, goName);
     expect(goTags.length).toBeGreaterThan(0);
@@ -425,6 +426,8 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     ["internal/types/component.go", "Component", "Component"],
     ["internal/types/component.go", "ComponentRef", "ComponentRef"],
     ["internal/types/component.go", "ComponentCLI", "ComponentCLI"],
+    ["internal/types/component.go", "ComponentMCP", "ComponentMCP"],
+    ["internal/types/component.go", "ComponentMCPLaunch", "ComponentMCPLaunch"],
     ["internal/types/component.go", "CLIAWS", "CLIAWS"],
     ["internal/types/component.go", "CLIAzure", "CLIAzure"],
     ["pkg/client/components.go", "ComponentRequest", "ComponentRequest"],

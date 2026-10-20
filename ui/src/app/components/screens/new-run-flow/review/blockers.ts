@@ -13,6 +13,7 @@ import { NR_HARNESSES } from "../../../wardyn/copy/new-run/harnesses";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { NR_RUN } from "../../../wardyn/copy/new-run/run";
 import { NR_SHAPE } from "../../../wardyn/copy/new-run/shape";
+import { NR_TOOLS } from "../../../wardyn/copy/new-run/tools";
 import { NR_TEMPLATES } from "../../../wardyn/copy/new-run/templates";
 import type { SetupItem } from "../../../../lib/types/preflight";
 import type { TemplateSetupNeed } from "../../../../lib/types/templates";
@@ -76,6 +77,10 @@ export interface BlockerInput {
   /** The server's refusal of this draft: its own sentence and reason. */
   refusal: { text: string; reason: string } | null;
   setupItems: readonly SetupItem[];
+  /** A local MCP server on for a harness that cannot apply the rules it is under: the run would be refused. */
+  localMcp?: readonly { harness: string; server: string }[];
+  /** The harness's display name; its id until the roster answers. */
+  harnessLabel?: (id: string) => string;
   /** The result for this draft is missing or older than a minute. */
   stale: boolean;
 }
@@ -92,7 +97,12 @@ export function buildBlockers(input: BlockerInput): Blocker[] {
     out.push({ id: `template:${need.field}`, kind: "template_setup", text: NR_TEMPLATES.NEEDS_SETUP(fieldLabel(need.field)), to: locationOfHome(homeOfPath(need.field)), field: need.field });
   }
   if (input.templateUnread) out.push({ id: "template:unread", kind: "template_unread", text: NR_REVIEW.BLOCKER_STALE });
-  if (input.refusal) {
+  for (const c of input.localMcp ?? []) {
+    const name = input.harnessLabel?.(c.harness) ?? c.harness;
+    out.push({ id: `local_mcp:${c.harness}:${c.server}`, kind: "refusal", text: NR_TOOLS.MCP_REFUSED(name, c.server), to: { screen: "step", step: "tools" } });
+  }
+  // The server's own refusal of the same conflict says it in other words; the one above stands for it.
+  if (input.refusal && !(input.localMcp?.length && input.refusal.reason === "request_field_unavailable")) {
     const field = (FIELD_OF_REASON as Record<string, string | undefined>)[input.refusal.reason];
     out.push({ id: "refusal", kind: "refusal", text: input.refusal.text, to: locationOfHome(homeOfReason(input.refusal.reason)), ...(field && { field }) });
   }

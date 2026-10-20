@@ -35,6 +35,7 @@ import { addHeaderSecret, attachComponent, detachComponent, removeAllowedHost, r
 import { addedMark, CARD_ICON, CLI_CARD } from "./catalogue-pending";
 import { IconTile } from "./icon-tile";
 import { CustomComponentDialog } from "./custom-component-dialog";
+import { isLocalMcp, useLocalMcpOn } from "./local-mcp";
 
 type Category = "all" | "cli" | "mcp" | "api" | "secret";
 type Door = "secret" | "host" | "mcp" | "custom";
@@ -168,6 +169,7 @@ export function AddTools({ access, answered, intent, answeredFor }: AddToolsProp
   const dispatch = useNewRunDispatch();
   const announce = useAnnounce();
   const { mine, failed } = useMyComponents();
+  const localMcp = useLocalMcpOn();
   const [category, setCategory] = React.useState<Category>("all");
   const [door, setDoor] = React.useState<Door | null>(null);
   // A dialog that chains into another (the custom form into the full editor) unmounts the button that opened it, so
@@ -340,7 +342,7 @@ export function AddTools({ access, answered, intent, answeredFor }: AddToolsProp
           <>
             <DoorCard icon={CARD_ICON.secret} title={NR_TOOLS.SECRET_CARD_TITLE} body={NR_TOOLS.SECRET_CARD_BODY} button={NR_TOOLS.SECRET_CARD_BUTTON} onOpen={() => open("secret")} />
             <DoorCard icon={CARD_ICON.host} title={NR_TOOLS.HOST_CARD_TITLE} body={NR_TOOLS.HOST_CARD_BODY} button={NR_TOOLS.HOST_CARD_BUTTON} onOpen={() => open("host")} />
-            <DoorCard icon={CARD_ICON.mcp} title={NR_TOOLS.MCP_CARD_TITLE} body={NR_TOOLS.MCP_CARD_BODY} button={NR_TOOLS.MCP_CARD_BUTTON} reason={noDefine} onOpen={() => open("mcp")} />
+            <DoorCard icon={CARD_ICON.mcp} title={NR_TOOLS.MCP_CARD_TITLE} body={localMcp ? NR_TOOLS.MCP_CARD_BODY_LOCAL : NR_TOOLS.MCP_CARD_BODY} button={NR_TOOLS.MCP_CARD_BUTTON} reason={noDefine} onOpen={() => open("mcp")} />
           </>
         )}
       </ul>
@@ -353,6 +355,7 @@ export function AddTools({ access, answered, intent, answeredFor }: AddToolsProp
                 <IconTile mark={addedMark(row)} />
                 <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{row.name}</span>
                 <Chip>{FROM_KIND[row.kind] ?? NR_TOOLS.FROM_CUSTOM}</Chip>
+                {isLocalMcp(row) && <Chip>{NR_TOOLS.MCP_RUNS_IN_SANDBOX}</Chip>}
                 <Status status={row.status} answered={answered} />
                 {answered && sentence(row.reason) && <span className="basis-full text-muted-foreground">{sentence(row.reason)}</span>}
                 <Button type="button" variant="ghost" size="sm" aria-label={`${NR_TOOLS.ROW_REMOVE} ${row.name}`} onClick={() => removeAdded(row)}>{NR_TOOLS.ROW_REMOVE}</Button>
@@ -374,7 +377,9 @@ export function AddTools({ access, answered, intent, answeredFor }: AddToolsProp
           onClose={close}
         />
       )}
-      {door === "mcp" && names && <AddMcpDialog names={names} namesFailure={namesFailure} onAdd={attach} onClose={close} />}
+      {door === "mcp" && names && (
+        <AddMcpDialog names={names} namesFailure={namesFailure} localServers={localMcp} residentAllowed={residentAllowed} residentOffReason={residentOff} onAdd={attach} onClose={close} />
+      )}
       {door === "custom" && names && <CustomComponentDialog names={names} namesFailure={namesFailure} residentAllowed={residentAllowed} secretsPath={SECRETS_PATH} onAttach={attach} onClose={close} />}
     </section>
   );

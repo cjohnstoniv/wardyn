@@ -19,6 +19,9 @@ import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
 import { RUN_WAIT } from "../../../../lib/runner-pool-refusals";
 import { SCENARIO_PREFLIGHT } from "../../../../lib/new-run-fixtures/scenarios/preflight";
 import { SCENARIO_ACCESS } from "../../../../lib/new-run-fixtures/scenarios/tools";
+import { CODEX, MCP_LOCAL } from "../../../../lib/new-run-fixtures/scenarios/tools-harness";
+import { NR_TOOLS } from "../../../wardyn/copy/new-run/tools";
+import { mcpLocalRef } from "../steps/tools/catalogue-edits";
 import type { PreflightResult } from "../../../../lib/types/preflight";
 import { intentToWire } from "../draft/intent-to-wire";
 import { PREFLIGHT_FRESH_MS } from "../draft/launch-gate";
@@ -178,6 +181,31 @@ describe("Review Launch gate (U11)", () => {
       open(AGENT);
       await ready();
       expect(launch()).toBeDisabled();
+    });
+  });
+
+  describe("a server that runs in the sandbox", () => {
+    const LOCAL = mcpLocalRef("docs-search", "npx -y @example/mcp-server@1.4.2", ["docs.example.com"]);
+    const withRule = (effect: "deny" | "allow"): RunIntent => ({
+      ...AGENT, components: [LOCAL], tools: [{ id: "codex-cli", kind: "harness", tool_rules: [{ tool: "mcp__docs-search__write_page", effect }] }],
+    });
+    const access = { ...SCENARIO_ACCESS.member, harnesses: [CODEX], rows: [MCP_LOCAL] };
+    const previewWith = { result: { spec: {}, source: { name: "Default" }, pending: [], warnings: [], repository_access: [], access }, retry };
+
+    it("holds Launch while Codex CLI is asked to block one of its tools, and links to Tools and access", async () => {
+      checks.current = answered(SCENARIO_PREFLIGHT.member, 1000, { preview: previewWith });
+      open(withRule("deny"));
+      await ready();
+      expect(launch()).toBeDisabled();
+      fireEvent.click(within(blockerList()).getByRole("button", { name: NR_TOOLS.MCP_REFUSED("codex-cli", "docs-search") }));
+      expect(path()).toContain("step=tools");
+    });
+
+    it("leaves Launch open under a rule that only allows", async () => {
+      checks.current = answered(SCENARIO_PREFLIGHT.member, 1000, { preview: previewWith });
+      open(withRule("allow"));
+      await ready();
+      expect(launch()).toBeEnabled();
     });
   });
 
