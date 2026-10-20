@@ -297,7 +297,9 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 	// byte for byte; only the audit reason says which it was.
 	if !s.uiTicketBound(w, r, ticket) {
 		s.auditUIRefusedBounded(runID, app, map[string]any{"reason": "ticket not bound to this browser"})
-		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayTicketInvalid, "invalid, expired, or already-used attach ticket")
+		if !s.uiDesktopLinkRefused(w, r, runID, app) {
+			writeErrorReason(w, http.StatusForbidden, reasonUIGatewayTicketInvalid, uiTicketInvalidMsg)
+		}
 		return
 	}
 	ta, v, err := s.redeemAttachTicket(r.Context(), ticket, runID)
@@ -310,7 +312,11 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 		return
 	}
 	if v != verdictOK {
-		s.refuseUITicket(w, runID, app, ta, v)
+		if v != verdictInvalid || !s.uiDesktopLinkRefused(w, r, runID, app) {
+			s.refuseUITicket(w, runID, app, ta, v)
+		} else {
+			s.auditUIRefusedBounded(runID, app, map[string]any{"reason": "invalid, expired, or already-used ticket"})
+		}
 		return
 	}
 
@@ -360,6 +366,11 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 		return
 	}
 
+	if app == uiDesktopApp {
+		s.uiEnterDesktop(w, r, run, ta, superAdmin, redirectStatus)
+		return
+	}
+
 	apps, err := s.effectiveUIApps(r.Context(), runID)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "wardynd: ui gateway policy lookup failed", "run_id", runID, "err", err)
@@ -380,25 +391,8 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 		return
 	}
 
-	now := s.cfg.Now()
-	expires := ta.sessionExpiry(now, s.uiSessionTTL())
-	sess := uiSession{
-		Run: runID, App: declared.Name, Port: declared.Port,
-		Principal: ta.principal, Role: ta.role, Email: ta.email,
-		Expires: expires.Unix(), IssuedAt: now.Unix(), AuthorizedAt: ta.authorizedAt.Unix(), AuthorizedNs: int64(ta.authorizedAt.Nanosecond()), RevSeq: ta.revSeq, Via: ta.via, Service: sponsoredService(run),
-	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     uiCookieName,
-		Value:    s.encodeUISession(sess),
-		Path:     s.uiBasePath() + uiCookiePath(runID, declared.Name),
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Secure:   s.cfg.OIDCSecureCookies,
-		Expires:  expires,
-	})
-	s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", declared.Name, "success",
-		ta.withVia(withSponsorEntry(run, map[string]any{"app": declared.Name, "port": declared.Port})))
-	http.Redirect(w, r, s.uiBasePath()+uiRelayPrefix(runID, declared.Name)+declared.PathOrRoot(), redirectStatus)
+	sess := s.newUISession(run, ta, declared.Name, declared.Port, s.uiSessionTTL())
+	s.startUISession(w, r, run, ta, sess, map[string]any{"app": declared.Name, "port": declared.Port}, declared.PathOrRoot(), redirectStatus)
 }
 
 // uiRunOrigin returns the host this run's apps must be served on in HOST mode
@@ -433,9 +427,13 @@ func (s *Server) handleUIRelay(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusNotFound, reasonUIGatewayNotFound, "not found on the Wardyn UI gateway (open an app from the run detail page)")
 		return
 	}
+	if app == uiDesktopApp {
+		s.handleDesktopRelay(w, r, runID)
+		return
+	}
 	sess, ok := s.decodeUISession(r, s.cfg.Now())
-	if !ok || sess.Run != runID || sess.App != app {
-		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayNoSession, "no valid UI session for this run — open the app again from its run page")
+	if !ok || sess.Run != runID || sess.App != app || sess.Desktop {
+		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayNoSession, uiNoSessionMsg)
 		return
 	}
 	// Re-assert the human here as well as in uiDial, debounced: net/http dials

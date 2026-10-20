@@ -407,6 +407,17 @@ type SandboxEnder interface {
 // whose substrate for ref cannot keep a stopped (or lost) sandbox.
 var ErrEndUnsupported = errors.New("runner: this substrate cannot keep an ended sandbox")
 
+// DesktopDialer is an OPTIONAL Runner capability: open a byte stream to a VM sandbox's display, the
+// RFB server QEMU keeps on a unix socket outside the guest, so the guest cannot tamper with it. The
+// UI gateway relays it to the person's browser; nothing inside the sandbox is reached.
+type DesktopDialer interface {
+	DialDesktop(ctx context.Context, ref string) (io.ReadWriteCloser, error)
+}
+
+// ErrDesktopUnsupported is DialDesktop's answer for a sandbox with no desktop to open (a container),
+// or from a router or runner that cannot open one.
+var ErrDesktopUnsupported = errors.New("runner: this sandbox has no desktop to open")
+
 // ProxyStopper is an OPTIONAL Runner capability: stop a sandbox's proxy
 // sidecar and leave its agent running (a run lost to a control-plane outage).
 // The stopped proxy is removed, not kept: the config lives in the run's

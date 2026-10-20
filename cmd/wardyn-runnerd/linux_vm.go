@@ -44,5 +44,6 @@ func enableLinuxVM(ctx context.Context, sub *docker.Driver, stateDir string, get
 		return nil
 	}
 	slog.InfoContext(ctx, "Linux VM sandboxes are on", "machine_type", c.MachineType, "cpu_model", c.CPUModel, "qemu", c.QEMUVersion)
-	return &runnerwire.VMCaps{MachineType: c.MachineType, CPUModel: c.CPUModel, QEMUVersion: c.QEMUVersion}
+	// Desktop: the driver opens every VM's display (docker.Driver.DialDesktop).
+	return &runnerwire.VMCaps{MachineType: c.MachineType, CPUModel: c.CPUModel, QEMUVersion: c.QEMUVersion, Desktop: true}
 }

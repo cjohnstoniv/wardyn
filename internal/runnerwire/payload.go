@@ -137,6 +137,8 @@ type VMCaps struct {
 	MachineType string `json:"machine_type"`
 	CPUModel    string `json:"cpu_model"`
 	QEMUVersion string `json:"qemu_version"`
+	// Desktop says the runner opens a VM's display (dial_desktop). A runner without it is never asked.
+	Desktop bool `json:"desktop,omitempty"`
 }
 
 // Waiting is the `waiting` event's data.
@@ -238,6 +240,7 @@ const (
 	KindExecStderr = "exec_stderr"
 	KindRelay      = "relay"
 	KindOutput     = "output"
+	KindDesktop    = "desktop"
 )
 
 // Open is the OPEN payload.
@@ -253,7 +256,7 @@ type Open struct {
 // Validate refuses a kind outside the closed list.
 func (o Open) Validate() error {
 	switch o.Kind {
-	case KindPTY, KindExec, KindExecStderr, KindRelay, KindOutput:
+	case KindPTY, KindExec, KindExecStderr, KindRelay, KindOutput, KindDesktop:
 		return nil
 	}
 	return fmt.Errorf("%w: unknown stream kind %q", ErrBadFrame, o.Kind)

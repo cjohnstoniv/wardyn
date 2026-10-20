@@ -684,6 +684,19 @@ func (o *Orchestrator) ExecStream(ctx context.Context, ref string, spec runner.E
 	return s.ExecStream(ctx, ref, spec)
 }
 
+// DialDesktop forwards to ref's substrate when it implements runner.DesktopDialer.
+func (o *Orchestrator) DialDesktop(ctx context.Context, ref string) (io.ReadWriteCloser, error) {
+	s, err := o.subForRef(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	d, ok := s.(runner.DesktopDialer)
+	if !ok {
+		return nil, runner.ErrDesktopUnsupported
+	}
+	return d.DialDesktop(ctx, ref)
+}
+
 // RecoverOutput forwards a run's output recovery to ref's substrate when it
 // implements runner.OutputRecoverer; one that does not has nothing to read.
 func (o *Orchestrator) RecoverOutput(ctx context.Context, ref string, w io.Writer) error {

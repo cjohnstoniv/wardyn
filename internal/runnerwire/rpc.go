@@ -48,6 +48,9 @@ const (
 	// method so a runner that predates VMs refuses it instead of reading it as create_sandbox and
 	// starting a container; every later verb on the VM's ref is the container one.
 	MethodCreateVM = "create_vm"
+	// MethodDialDesktop opens a `desktop` stream to a VM sandbox's display (QEMU's RFB socket) on a
+	// runner whose caps carry LinuxVM.Desktop; an older runner never gets the call.
+	MethodDialDesktop = "dial_desktop"
 )
 
 // CreateSandboxArgs carries the spec minus OnWaiting and ExecOutput (both are
@@ -98,6 +101,11 @@ type WaitResult struct {
 type AttachArgs struct {
 	Ref     string               `json:"ref"`
 	Options runner.AttachOptions `json:"options"`
+}
+
+// DialDesktopArgs names the VM sandbox whose display dial_desktop opens.
+type DialDesktopArgs struct {
+	Ref string `json:"ref"`
 }
 
 // StreamResult names the byte stream a call opened (the pty stream of Attach).

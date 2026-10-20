@@ -54,6 +54,30 @@ func (p *ptySession) Resize(ctx context.Context, cols, rows uint16) error {
 	return p.sess.Call(ctx, runnerwire.MethodResize, runnerwire.ResizeArgs{Stream: p.st.ID(), Cols: cols, Rows: rows}, nil)
 }
 
+// DialDesktop opens a VM sandbox's display on the runner (runner.DesktopDialer). A runner whose caps do
+// not offer it is refused here, so a runner that predates the call never sees it.
+func (s *Substrate) DialDesktop(ctx context.Context, ref string) (io.ReadWriteCloser, error) {
+	if err := s.own(ref); err != nil {
+		return nil, err
+	}
+	if c, ok := s.Caps(); !ok || c.LinuxVM == nil || !c.LinuxVM.Desktop {
+		return nil, runner.ErrDesktopUnsupported
+	}
+	sess, err := s.pin()
+	if err != nil {
+		return nil, err
+	}
+	var res runnerwire.StreamResult
+	if err := sess.Call(ctx, runnerwire.MethodDialDesktop, runnerwire.DialDesktopArgs{Ref: ref}, &res); err != nil {
+		return nil, err
+	}
+	st, err := sess.TakeStream(res.Stream)
+	if err != nil {
+		return nil, err
+	}
+	return st, nil
+}
+
 // ExecStream starts an exec on the runner: stdin and stdout share the `exec`
 // stream (stdin half-close is CLOSE) and stderr is its own stream, drained
 // concurrently by the caller as runner.ExecSession requires.

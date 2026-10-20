@@ -835,6 +835,9 @@ type Server struct {
 	uiReassert   map[string]time.Time
 	uiProxyOnce  sync.Once
 	uiProxy      *httputil.ReverseProxy
+	// uiDesktop holds the desktop sessions their person closed and the live desktop streams, by
+	// uiReassertKey (uigateway_desktop.go). Process-local like the maps above.
+	uiDesktop uiDesktopSessions
 	// attachIgnoredSeen holds the sub+person pairs whose sub_known person.attach row this process already
 	// wrote (people.go attachIgnored); ponytail: per process, so a restart or another replica writes it
 	// once more. A durable mark on the person row would need a migration.

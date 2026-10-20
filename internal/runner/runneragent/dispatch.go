@@ -104,7 +104,7 @@ func (d *Dispatcher) Call(ctx context.Context, peer *runnerwire.Peer, id uint32,
 		return d.create(ctx, peer, id, method, args)
 	case runnerwire.MethodExecutionResult:
 		return d.executionResult(ctx, args)
-	case runnerwire.MethodAttach, runnerwire.MethodExecStream, runnerwire.MethodResize, runnerwire.MethodExecWait, runnerwire.MethodRecoverOutput, runnerwire.MethodOutputAck, runnerwire.MethodExecClose:
+	case runnerwire.MethodAttach, runnerwire.MethodDialDesktop, runnerwire.MethodExecStream, runnerwire.MethodResize, runnerwire.MethodExecWait, runnerwire.MethodRecoverOutput, runnerwire.MethodOutputAck, runnerwire.MethodExecClose:
 		if d.cfg.Streams == nil {
 			return nil, runnerwire.Refuse("runner stream adapter is unavailable")
 		}
