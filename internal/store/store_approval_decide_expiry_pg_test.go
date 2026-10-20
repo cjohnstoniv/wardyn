@@ -39,7 +39,11 @@ func TestPG_DecideApprovalRefusesAPastExpiry(t *testing.T) {
 		if err != nil {
 			t.Fatalf("create approval: %v", err)
 		}
-		_, err = st.DecideApproval(ctx, ap.ID, types.ApprovalDecision{State: state, DecidedBy: "u"})
+		by := "u"
+		if state == types.ApprovalExpired {
+			by = "system"
+		}
+		_, err = st.DecideApproval(ctx, ap.ID, types.ApprovalDecision{State: state, DecidedBy: by})
 		return err
 	}
 
@@ -60,7 +64,8 @@ func TestPG_DecideApprovalRefusesAPastExpiry(t *testing.T) {
 }
 
 // The run-end cascade is a system CANCELLED write: it must land on a row whose run's end has already
-// passed, or the row stays PENDING for a run that is over.
+// passed, or the row stays PENDING for a run that is over. A person's decision past that end stays
+// refused, and so does a person's CANCELLED: only the system actor takes the exemption.
 func TestPG_CancelForRunCancelsPastTheRunsEnd(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()
@@ -74,6 +79,13 @@ func TestPG_CancelForRunCancelsPastTheRunsEnd(t *testing.T) {
 	ap, err := st.CreateApproval(ctx, newApproval(run.ID, time.Now().UTC().Add(-time.Hour)))
 	if err != nil {
 		t.Fatalf("create approval: %v", err)
+	}
+
+	for _, state := range []types.ApprovalState{types.ApprovalApproved, types.ApprovalCancelled} {
+		_, err := approval.Decide(ctx, approvalStore{st}, ap.ID, types.ActorHuman, types.ApprovalDecision{State: state, DecidedBy: "u"})
+		if !errors.Is(err, approval.ErrAlreadyDecided) {
+			t.Fatalf("a person's %s past the run's end: err = %v, want ErrAlreadyDecided", state, err)
+		}
 	}
 
 	byKind, err := approval.CancelForRun(ctx, approvalStore{st}, run.ID, "run ended")

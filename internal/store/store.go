@@ -737,7 +737,7 @@ func (s PG) DecideApproval(ctx context.Context, id uuid.UUID, decision types.App
 		UPDATE approvals
 		SET state=$1, decided_at=$2, decided_by=$3, reason=$4, decision_scope=$5, decision_expires_at=$6
 		WHERE id=$7 AND state='PENDING'
-		  AND ($1 IN ('EXPIRED', 'CANCELLED') OR COALESCE(` + approvalExpiresAtSQL + ` > $2, true))
+		  AND (($1 IN ('EXPIRED', 'CANCELLED') AND $3 = 'system') OR COALESCE(` + approvalExpiresAtSQL + ` > $2, true))
 		RETURNING ` + approvalCols
 	a, err := scanApproval(s.Pool.QueryRow(ctx, q,
 		string(decision.State), anchor.Translate(decidedAt), decision.DecidedBy, decision.Reason,
@@ -745,7 +745,7 @@ func (s PG) DecideApproval(ctx context.Context, id uuid.UUID, decision types.App
 	))
 	if errors.Is(err, ErrNotFound) {
 		// Distinguish "not PENDING or past its expires_at" from "doesn't exist" by checking existence.
-		// A human decision on a PENDING row past its expiry is refused like a decided one; the sweeper moves it to EXPIRED, and a system CANCELLED (the run-end cascade) still lands.
+		// A person's decision on a PENDING row past its expiry is refused like a decided one; only the system actor (the sweeper's EXPIRED, the run-end cascade's CANCELLED) still lands there.
 		var exists bool
 		if qerr := s.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM approvals WHERE id=$1)`, id).Scan(&exists); qerr != nil {
 			return types.ApprovalRequest{}, fmt.Errorf("store: decide approval existence check: %w", qerr)
