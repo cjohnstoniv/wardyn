@@ -20,10 +20,12 @@ package api
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"html"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -34,6 +36,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/rfbfilter"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -302,9 +305,11 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 	}()
 
 	conn := websocket.NetConn(r.Context(), ws, websocket.MessageBinary)
+	filtered := s.desktopClipboardFilter(ctx, sess, &wsFramed{raw: display, wsUnframer: wsUnframer{w: display}})
+	defer func() { _ = filtered.Close() }()
 	done := make(chan struct{}, 2)
-	go func() { _, _ = io.Copy(display, conn); done <- struct{}{} }()
-	go func() { _, _ = io.Copy(conn, display); done <- struct{}{} }()
+	go func() { _, _ = io.Copy(wsFramer{filtered}, conn); done <- struct{}{} }()
+	go func() { _, _ = io.Copy(&wsUnframer{w: conn}, filtered); done <- struct{}{} }()
 	tick := time.NewTicker(uiDesktopRecheck)
 	defer tick.Stop()
 	for {
@@ -352,3 +357,108 @@ func (s *Server) desktopRunCheck(ctx context.Context, sess uiSession) (types.Age
 	}
 	return run, 0, ""
 }
+
+// desktopClipboardFilter is uiFilterUpgrade's clipboard filter on a VM's display: the same desktop
+// copy_out and paste_in rules and the same ui.clipboard rows (direction, size and hash, never the
+// text). QEMU's VNC has no clipboard peer in the guest (no qemu-vdagent, internal/vm/qemu/args.go),
+// so no cut text flows today; the filter holds the rules for when one does.
+func (s *Server) desktopClipboardFilter(ctx context.Context, sess uiSession, display io.ReadWriteCloser) *rfbfilter.Conn {
+	d := s.effectiveDesktop(ctx, sess.Run)
+	rules := rfbfilter.Rules{PasteIn: d.PasteIn == types.TransferAllowed, CopyOut: d.CopyOut == types.TransferAllowed}
+	filtered := rfbfilter.Wrap(display, rules, func(ev rfbfilter.Event) { s.auditUIClipboard(sess, ev) }, func(err error) {
+		slog.WarnContext(ctx, "wardynd: desktop relay closed a VM display it could not follow", "run_id", sess.Run, "err", err)
+		if errors.Is(err, rfbfilter.ErrNotRFB) {
+			s.auditUISession(sess, "ui.clipboard", "", "failure", map[string]any{"app": sess.App, "reason": "not_rfb"})
+		}
+	})
+	if s.uiDesktopSink != nil {
+		filtered.SetSink(s.uiDesktopSink(sess))
+	}
+	return filtered
+}
+
+// rfbfilter follows RFB inside WebSocket frames, as websockify's socket carries it on the noVNC
+// path. Both hops of a VM's display are raw RFB, so each chunk goes into the filter as one unmasked
+// binary frame (wsFramed on the display's side, wsFramer on the viewer's) and comes out unframed.
+const wsFrameHeader = 10 // the longest unmasked header: 2 bytes and a 64-bit length
+
+func appendWSBinary(dst, p []byte) []byte {
+	switch n := len(p); {
+	case n < 126:
+		dst = append(dst, 0x82, byte(n))
+	case n <= 0xffff:
+		dst = binary.BigEndian.AppendUint16(append(dst, 0x82, 126), uint16(n))
+	default:
+		dst = binary.BigEndian.AppendUint64(append(dst, 0x82, 127), uint64(n))
+	}
+	return append(dst, p...)
+}
+
+// wsFramer frames what the viewer sends.
+type wsFramer struct{ w io.Writer }
+
+func (f wsFramer) Write(p []byte) (int, error) {
+	if _, err := f.w.Write(appendWSBinary(nil, p)); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+// wsUnframer writes the payloads of the filter's frames. They are the unmasked frames the framers
+// made, re-encoded by the filter, so no mask is ever set.
+type wsUnframer struct {
+	w       io.Writer
+	pending []byte
+}
+
+func (u *wsUnframer) Write(p []byte) (int, error) {
+	u.pending = append(u.pending, p...)
+	for {
+		b := u.pending
+		if len(b) < 2 {
+			return len(p), nil
+		}
+		size, off := uint64(b[1]&0x7f), 2
+		switch size {
+		case 126:
+			if len(b) < 4 {
+				return len(p), nil
+			}
+			size, off = uint64(binary.BigEndian.Uint16(b[2:])), 4
+		case 127:
+			if len(b) < 10 {
+				return len(p), nil
+			}
+			size, off = binary.BigEndian.Uint64(b[2:]), 10
+		}
+		if uint64(len(b)-off) < size {
+			return len(p), nil
+		}
+		end := off + int(size)
+		if end > off {
+			if _, err := u.w.Write(b[off:end]); err != nil {
+				return 0, err
+			}
+		}
+		u.pending = b[end:]
+	}
+}
+
+// wsFramed is the display as the filter's backend: reads come framed, writes go out unframed.
+type wsFramed struct {
+	raw io.ReadWriteCloser
+	wsUnframer
+}
+
+func (f *wsFramed) Read(p []byte) (int, error) {
+	if len(p) <= wsFrameHeader {
+		return 0, io.ErrShortBuffer
+	}
+	n, err := f.raw.Read(p[wsFrameHeader:])
+	if n == 0 {
+		return 0, err
+	}
+	return copy(p, appendWSBinary(nil, p[wsFrameHeader:wsFrameHeader+n])), err
+}
+
+func (f *wsFramed) Close() error { return f.raw.Close() }

@@ -26,10 +26,11 @@ import (
 )
 
 // desktopFakeRunner is the harness runner plus a VM display: each dial is one end of a pipe whose
-// other end greets as QEMU's RFB server does and then echoes.
+// other end is qemuDisplay(after).
 type desktopFakeRunner struct {
 	*sshFakeRunner
 	dialled chan string
+	after   func(net.Conn)
 }
 
 func (f *desktopFakeRunner) DialDesktop(_ context.Context, ref string) (io.ReadWriteCloser, error) {
@@ -37,12 +38,95 @@ func (f *desktopFakeRunner) DialDesktop(_ context.Context, ref string) (io.ReadW
 	a, b := net.Pipe()
 	go func() {
 		defer b.Close()
-		if _, err := b.Write([]byte("RFB 003.008\n")); err != nil {
-			return
-		}
-		_, _ = io.Copy(b, b)
+		qemuDisplay(b, f.after)
 	}()
 	return a, nil
+}
+
+// qemuDisplay is QEMU's RFB server in miniature: version 3.8, security None, ServerInit, then after
+// (nil: it stays open, reading what the viewer sends).
+func qemuDisplay(b net.Conn, after func(net.Conn)) {
+	in := make([]byte, 12)
+	for _, step := range []struct {
+		out  []byte
+		read int
+	}{{[]byte("RFB 003.008\n"), 12}, {[]byte{1, 1}, 1}, {[]byte{0, 0, 0, 0}, 1}} {
+		if _, err := b.Write(step.out); err != nil {
+			return
+		}
+		if _, err := io.ReadFull(b, in[:step.read]); err != nil {
+			return
+		}
+	}
+	if _, err := b.Write(rfbServerInit()); err != nil {
+		return
+	}
+	if after == nil {
+		_, _ = io.Copy(io.Discard, b)
+		return
+	}
+	after(b)
+}
+
+// desktopViewer is the viewer's end of the desktop socket, read as a byte stream.
+type desktopViewer struct {
+	t   *testing.T
+	ctx context.Context
+	ws  *websocket.Conn
+	buf []byte
+}
+
+func (v *desktopViewer) read(n int) []byte {
+	v.t.Helper()
+	for len(v.buf) < n {
+		_, msg, err := v.ws.Read(v.ctx)
+		if err != nil {
+			v.t.Fatalf("reading %d bytes from the desktop (have %q): %v", n, v.buf, err)
+		}
+		v.buf = append(v.buf, msg...)
+	}
+	out := v.buf[:n]
+	v.buf = v.buf[n:]
+	return out
+}
+
+func (v *desktopViewer) write(b []byte) {
+	v.t.Helper()
+	if err := v.ws.Write(v.ctx, websocket.MessageBinary, b); err != nil {
+		v.t.Fatal(err)
+	}
+}
+
+// handshake answers qemuDisplay as the viewer does, through to ServerInit.
+func (v *desktopViewer) handshake() {
+	v.t.Helper()
+	if got := string(v.read(12)); got != "RFB 003.008\n" {
+		v.t.Fatalf("greeting = %q", got)
+	}
+	v.write([]byte("RFB 003.008\n"))
+	if got := v.read(2); got[0] != 1 || got[1] != 1 {
+		v.t.Fatalf("security types = %v", got)
+	}
+	v.write([]byte{1})
+	if got := v.read(4); string(got) != "\x00\x00\x00\x00" {
+		v.t.Fatalf("security result = %v", got)
+	}
+	v.write([]byte{1})
+	if got := v.read(len(rfbServerInit())); string(got) != string(rfbServerInit()) {
+		v.t.Fatalf("ServerInit = %x", got)
+	}
+}
+
+// dialDesktop opens the desktop socket with the session cookie c.
+func dialDesktop(t *testing.T, ctx context.Context, h *uiHarness, srvURL string, c *http.Cookie) *desktopViewer {
+	t.Helper()
+	ws, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(srvURL, "http")+desktopPath(h, uiDesktopRFB),
+		&websocket.DialOptions{HTTPHeader: http.Header{"Cookie": {c.Name + "=" + c.Value}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ws.CloseNow() })
+	return &desktopViewer{t: t, ctx: ctx, ws: ws}
 }
 
 const desktopTestViewer = `<!doctype html><html lang="en" data-wardyn-desktop=""><head><script type="module" src="./assets/desktop-1.js"></script></head><body></body></html>`
@@ -199,25 +283,11 @@ func TestDesktopStreamCarriesTheDisplayAndCloseEndsTheSession(t *testing.T) {
 	c := desktopCookie(t, h.enterDesktop(h.ticket(h.run.ID, h.owner, oidc.RoleUser)))
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	ws, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http")+desktopPath(h, uiDesktopRFB),
-		&websocket.DialOptions{HTTPHeader: http.Header{"Cookie": {c.Name + "=" + c.Value}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ws.CloseNow()
+	v := dialDesktop(t, ctx, h, srv.URL, c)
 	if ref := <-dr.dialled; ref != h.run.SandboxRef {
 		t.Fatalf("dialled %q, want the run's sandbox", ref)
 	}
-	_, msg, err := ws.Read(ctx)
-	if err != nil || string(msg) != "RFB 003.008\n" {
-		t.Fatalf("greeting = %q, %v", msg, err)
-	}
-	if err := ws.Write(ctx, websocket.MessageBinary, []byte("RFB 003.008\n")); err != nil {
-		t.Fatal(err)
-	}
-	if _, msg, err = ws.Read(ctx); err != nil || string(msg) != "RFB 003.008\n" {
-		t.Fatalf("echo = %q, %v", msg, err)
-	}
+	v.handshake() // both directions carried, through the clipboard filter
 
 	req, _ := http.NewRequest(http.MethodPost, srv.URL+desktopPath(h, uiDesktopClose), nil)
 	req.AddCookie(c)
@@ -226,7 +296,7 @@ func TestDesktopStreamCarriesTheDisplayAndCloseEndsTheSession(t *testing.T) {
 		t.Fatalf("close = %v %v", resp, err)
 	}
 	_ = resp.Body.Close()
-	_, _, err = ws.Read(ctx)
+	_, _, err = v.ws.Read(ctx)
 	var ce websocket.CloseError
 	if !errors.As(err, &ce) || ce.Code != desktopCloseSessionEnded {
 		t.Fatalf("the open stream after Close = %v, want close %d", err, desktopCloseSessionEnded)
@@ -263,5 +333,118 @@ func TestDesktopStreamOnAnEndedRunIsToldSo(t *testing.T) {
 	}
 	if len(dr.dialled) != 0 {
 		t.Fatal("an ended run's display was dialled")
+	}
+}
+
+// The VM display rides CTL-A's clipboard filter: a ServerCutText from the VM's side is dropped when
+// the run's desktop rules block copy out and passed when they allow it, a ClientCutText is passed or
+// dropped by paste in, and each is audited by direction, size and hash, never by its text.
+func TestDesktopRelayFiltersCutTextByTheRunsDesktopRules(t *testing.T) {
+	keyEvent := []byte{4, 1, 0, 0, 0, 0, 0, 'a'}
+	for _, tc := range []struct {
+		name             string
+		rules            *types.DesktopControls
+		copyOut, pasteIn bool
+	}{
+		{"defaults block copy out and allow paste in", nil, false, true},
+		{"copy out allowed, paste in blocked", &types.DesktopControls{CopyOut: types.TransferAllowed, PasteIn: types.TransferBlocked}, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, dr := newDesktopHarness(t)
+			if tc.rules != nil {
+				h.store.putEffectivePolicy(h.run.ID, types.RunPolicySpec{MinConfinementClass: types.CC2, Desktop: tc.rules})
+			}
+			paste := rfbCut(6, pasteSentinel)
+			reached := make(chan []byte, 1)
+			dr.after = func(b net.Conn) {
+				if _, err := b.Write(append(rfbCut(3, copySentinel), 2)); err != nil { // the copy, then a Bell
+					return
+				}
+				want := len(keyEvent)
+				if tc.pasteIn {
+					want += len(paste)
+				}
+				got := make([]byte, want)
+				if _, err := io.ReadFull(b, got); err == nil {
+					reached <- got
+				}
+			}
+			srv := httptest.NewServer(h.gateway)
+			t.Cleanup(srv.Close)
+			c := desktopCookie(t, h.enterDesktop(h.ticket(h.run.ID, h.owner, oidc.RoleUser)))
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			v := dialDesktop(t, ctx, h, srv.URL, c)
+			<-dr.dialled
+			v.handshake()
+			next := []byte{2}
+			if tc.copyOut {
+				next = append(rfbCut(3, copySentinel), 2)
+			}
+			if got := v.read(len(next)); string(got) != string(next) {
+				t.Fatalf("after ServerInit the viewer got %q, want %q", got, next)
+			}
+			v.write(append(paste, keyEvent...))
+			want := keyEvent
+			if tc.pasteIn {
+				want = append(append([]byte(nil), paste...), keyEvent...)
+			}
+			select {
+			case got := <-reached:
+				if string(got) != string(want) {
+					t.Fatalf("the VM got %q, want %q", got, want)
+				}
+			case <-ctx.Done():
+				t.Fatal("the viewer's bytes never reached the VM")
+			}
+			outcome := map[bool]string{true: "success", false: "denied"}
+			wantRows := map[string]struct {
+				outcome   string
+				bytes     int
+				sum, text string
+			}{
+				"copy_out": {outcome[tc.copyOut], len(copySentinel), digest(copySentinel), copySentinel},
+				"paste_in": {outcome[tc.pasteIn], len(pasteSentinel), digest(pasteSentinel), pasteSentinel},
+			}
+			rows := clipboardRows(t, h, 2)
+			if len(rows) != 2 {
+				t.Fatalf("ui.clipboard rows = %+v, want 2", rows)
+			}
+			for _, row := range rows {
+				var d struct {
+					App       string `json:"app"`
+					Direction string `json:"direction"`
+					Bytes     int    `json:"bytes"`
+					SHA256    string `json:"sha256"`
+				}
+				_ = json.Unmarshal(row.Data, &d)
+				w := wantRows[d.Direction]
+				if row.Outcome != w.outcome || d.Bytes != w.bytes || d.SHA256 != w.sum || row.Target != d.Direction || d.App != uiDesktopAppName {
+					t.Errorf("ui.clipboard row %s/%s %s, want %+v", row.Outcome, row.Target, row.Data, w)
+				}
+				if strings.Contains(string(row.Data), w.text) {
+					t.Errorf("a ui.clipboard row carries the text: %s", row.Data)
+				}
+			}
+		})
+	}
+}
+
+// The viewer cannot see a refused handshake's status, so it asks with a plain GET of the socket path:
+// 403 while the session is gone (no cookie, or Closed) and 426 while it is good, which it retries.
+func TestDesktopStreamPlainGetTellsAGoneSessionFromAGoodOne(t *testing.T) {
+	h, _ := newDesktopHarness(t)
+	c := desktopCookie(t, h.enterDesktop(h.ticket(h.run.ID, h.owner, oidc.RoleUser)))
+	if got := uiGet(h, desktopPath(h, uiDesktopRFB), c); got.Code != http.StatusUpgradeRequired {
+		t.Fatalf("plain GET with a good session = %d, want 426", got.Code)
+	}
+	if got := uiGet(h, desktopPath(h, uiDesktopRFB), nil); got.Code != http.StatusForbidden {
+		t.Fatalf("plain GET without a session = %d, want 403", got.Code)
+	}
+	req := httptest.NewRequest(http.MethodPost, desktopPath(h, uiDesktopClose), nil)
+	req.AddCookie(c)
+	h.gateway.ServeHTTP(httptest.NewRecorder(), req)
+	if got := uiGet(h, desktopPath(h, uiDesktopRFB), c); got.Code != http.StatusForbidden {
+		t.Fatalf("plain GET after Close = %d, want 403", got.Code)
 	}
 }
