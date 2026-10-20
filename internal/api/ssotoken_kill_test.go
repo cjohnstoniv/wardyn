@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -372,4 +373,31 @@ func TestKillSignInRunAfterCapture_TransientReadIsRetriedOnce(t *testing.T) {
 			t.Errorf("run.kill rows = %d, want none", len(rows))
 		}
 	})
+}
+
+// countingBlockedGetRunStore's GetRun counts its calls and waits for its context, as a wedged read does.
+type countingBlockedGetRunStore struct {
+	ssoLoginRunStore
+	calls atomic.Int32
+}
+
+func (s *countingBlockedGetRunStore) GetRun(ctx context.Context, _ uuid.UUID) (types.AgentRun, error) {
+	s.calls.Add(1)
+	<-ctx.Done()
+	return types.AgentRun{}, ctx.Err()
+}
+
+// A read that timed out is not retried: the retry is for a store error that came back fast, and a second wait
+// would push the read phase past signInCaptureReadTimeout and the background shutdown budget.
+func TestReadSignInRunToEnd_ATimedOutReadIsNotRetried(t *testing.T) {
+	st := &countingBlockedGetRunStore{}
+	srv := New(baseTestConfig(newHarness(t), st))
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := srv.readSignInRunToEnd(ctx, uuid.New()); err == nil {
+		t.Fatal("a read that timed out returned no error")
+	}
+	if got := st.calls.Load(); got != 1 {
+		t.Fatalf("GetRun was called %d times for a read that timed out, want 1", got)
+	}
 }
