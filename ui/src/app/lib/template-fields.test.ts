@@ -83,6 +83,8 @@ describe("template field registry", () => {
       "policy_overlay",
       "preset",
       "preset_version",
+      "start_at",
+      "start_time_zone",
       "title",
     ]);
     expect(templateFieldRule("title")?.excluded).toBe("launch");
