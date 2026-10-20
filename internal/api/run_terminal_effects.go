@@ -22,6 +22,8 @@ func (s *Server) finalizeRunEffects(ctx context.Context, runID uuid.UUID, ref, a
 		s.prepareRunOutput(ctx, runID, gracefulStop)
 		s.finishRunOutput(ctx, runID)
 	}
+	// A computer folder's changes come back while the sandbox still holds them (run_computer_folder.go).
+	s.bringComputerFolderBack(ctx, runID, ref)
 	teardownOK := false
 	if ref != "" && s.cfg.Runner != nil {
 		if serr := s.cfg.Runner.StopSandbox(ctx, ref); serr != nil {

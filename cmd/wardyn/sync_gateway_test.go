@@ -1,6 +1,10 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
+//go:build !windows
+
+// internal/api is not portable to Windows, and the CLI cross-vet compiles tests.
+
 package main
 
 import (
@@ -30,6 +34,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/cjohnstoniv/wardyn/internal/api"
+	"github.com/cjohnstoniv/wardyn/internal/foldersync"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -290,7 +295,7 @@ func (l fileLister) ListAt(out []os.FileInfo, off int64) (int, error) {
 // file with a distinct 255-byte name.
 type endlessLister struct{ served *atomic.Int64 }
 
-const endlessEntries = maxSyncEntries + 50_000
+const endlessEntries = foldersync.MaxEntries + 50_000
 
 type longEntry struct{ name string }
 
@@ -423,8 +428,8 @@ func (g *syncRig) dial() *ssh.Client {
 	return c
 }
 
-// syncer opens a session and returns a syncer over it plus the session.
-func (g *syncRig) syncer(remote string, pull bool) (*syncer, *syncSession, string) {
+// syncer opens a session and returns a Syncer over it plus the session.
+func (g *syncRig) syncer(remote string, pull bool) (*foldersync.Syncer, *syncSession, string) {
 	g.t.Helper()
 	root := g.t.TempDir()
 	stateFile := filepath.Join(g.t.TempDir(), "state.json")
@@ -437,7 +442,7 @@ func (g *syncRig) syncer(remote string, pull bool) (*syncer, *syncSession, strin
 		g.t.Fatal(err)
 	}
 	g.t.Cleanup(func() { _ = sess.close() })
-	st, err := loadSyncState(stateFile, root, remote)
+	st, err := foldersync.LoadState(stateFile, root, remote)
 	if err != nil {
 		g.t.Fatal(err)
 	}
@@ -446,7 +451,7 @@ func (g *syncRig) syncer(remote string, pull bool) (*syncer, *syncSession, strin
 		g.t.Fatal(err)
 	}
 	g.t.Cleanup(func() { _ = lroot.Close() })
-	return &syncer{c: sess.sftp, meter: sess.meter, root: lroot, o: syncOptions{remote: remote, pull: pull, maxPullBytes: defaultMaxPullBytes}, st: st, stateFile: stateFile}, sess, root
+	return &foldersync.Syncer{Client: sess.sftp, Meter: sess.meter, Root: lroot, Opts: foldersync.Options{Remote: remote, Pull: pull, MaxPullBytes: foldersync.DefaultMaxPullBytes}, State: st, StateFile: stateFile}, sess, root
 }
 
 func putSyncFile(t *testing.T, p, body string, mode os.FileMode) {
@@ -471,9 +476,9 @@ func getSyncFile(t *testing.T, p string) string {
 	return string(b)
 }
 
-func mustPass(t *testing.T, sy *syncer) *syncReport {
+func mustPass(t *testing.T, sy *foldersync.Syncer) *foldersync.Report {
 	t.Helper()
-	rep, err := sy.pass(context.Background())
+	rep, err := sy.Pass(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -503,13 +508,13 @@ func TestSyncGateway_PushIsTheDefaultAndIdempotent(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "theirs.txt")); err == nil {
 		t.Error("without --pull a sandbox file reached the laptop")
 	}
-	if rep := mustPass(t, sy); !rep.empty() {
+	if rep := mustPass(t, sy); !rep.Empty() {
 		t.Errorf("a second pass with nothing changed did something: %+v", rep)
 	}
 	putSyncFile(t, filepath.Join(box, "a.txt"), "changed in the sandbox", 0o644)
 	later := time.Now().Add(time.Hour)
 	_ = os.Chtimes(filepath.Join(box, "a.txt"), later, later)
-	if rep := mustPass(t, sy); !rep.empty() || getSyncFile(t, filepath.Join(root, "a.txt")) != "alpha" {
+	if rep := mustPass(t, sy); !rep.Empty() || getSyncFile(t, filepath.Join(root, "a.txt")) != "alpha" {
 		t.Errorf("without --pull a changed sandbox file was pulled or reported: %+v", rep)
 	}
 	putSyncFile(t, filepath.Join(root, "a.txt"), "alpha two", 0o644)
@@ -789,7 +794,7 @@ func TestSyncCommand_EndToEnd(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	var rep syncReport
+	var rep foldersync.Report
 	if err := json.Unmarshal([]byte(out.String()), &rep); err != nil || !slices.Equal(rep.Pushed, []string{"main.go"}) {
 		t.Fatalf("output %q: %v %+v", out.String(), err, rep)
 	}

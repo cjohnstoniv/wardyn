@@ -34,7 +34,7 @@
 ## Resident credentials and posture
 
 > [!NOTE]
-> A runner holds four classes as `runner_resident`: `env_secret`, `file_secret`, `ssh_key` and `git_pat_helper`. Any other class set to `runner_resident` is still refused.
+> A runner holds four classes as `runner_resident` in its OS keystore: `env_secret`, `file_secret`, `ssh_key` and `git_pat_helper`. Its proxy holds a fifth, `ado_minted_pat`, in memory only. Any other class set to `runner_resident` is still refused.
 > A refusal is `runner_posture_unmet` when the run's confinement floor or the runner's posture misses the class's requirement, otherwise `placement_credential`. Whoever controls the laptop as root can read a value while the runner holds it, so erasure is best-effort and never promised.
 
 | Credential class | Modes |
@@ -66,6 +66,7 @@
 - A grant that requires approval is never `runner_resident`.
 - `git_pat_helper` applies only with `WARDYN_GIT_PAT_BROKER=off`. Turning the broker on refuses new runs, dispatches and revives that would need one.
 - A git token for an Azure DevOps host is never `runner_resident` (`placement_credential`).
+- `ado_minted_pat` also needs the connection's opt-in and a person's own runner. The runner's proxy fetches the per-run token from the organisation at most 15 minutes apart; a refused fetch revokes it ([Azure DevOps on a laptop runner](../AZURE-DEVOPS.md#on-a-laptop-runner-local-placement)).
 - A `require_posture` class is refused at launch until per-runner placement lands.
 - On Linux the Secret Service needs a login session bus (`DBUS_SESSION_BUS_ADDRESS`, or the user bus socket under `/run/user/<uid>`), so a system service with no login session has no keystore.
 - Posture is self-reported, and a run with a CC3 floor never takes a resident credential.
@@ -142,6 +143,7 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 - Start `serve` with `--upstream-proxy http://proxy.example:3128` or `WARDYN_UPSTREAM_PROXY`. Only `http://` is supported. The URL is checked at startup, never sent to the organisation, and never printed.
 - Setup does not write it. Add it to the service's environment after setup (the env file on Linux, mode `0600`), and again after a rerun, which rewrites that file.
 - Put a credential in the variable, not the flag: a flag shows in the process list.
+- Its own organisation connection needs `HTTPS_PROXY`: [a runner behind a corporate proxy](../runner-registration.md#a-runner-behind-a-corporate-proxy).
 - On macOS do not put a credential in the LaunchAgent: the plist is mode `0644`, readable by every local account. Use a proxy URL without one, or run with `--no-service` and a `0600` environment file that holds `WARDYN_UPSTREAM_PROXY`. See [`WARDYN_UPSTREAM_PROXY`](../ENV.md#wardyn_upstream_proxy).
 
 ### Running without a service
@@ -196,8 +198,8 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 
 ## Installing with a macOS package and MDM
 
-- Every release from 0.9.3 carries `wardyn-runnerd.pkg`, a universal (Apple silicon and Intel) installer for `wardyn-runnerd`, and a managed-preferences profile template, `deploy/runner/macos/wardyn-runnerd.mobileconfig` (also inside the package and `wardyn-runner-units.tar.gz`).
-- The package installs the binary and a LaunchAgent. It cannot register the laptop: that needs a person's single-use token ([Claiming a runner](#claiming-a-runner)).
+- Every release from 0.9.3 carries `wardyn-runnerd.pkg`, a universal (Apple silicon and Intel) installer for `wardyn-runnerd` (from 0.10.0 also the `wardyn` CLI), and a managed-preferences profile template, `deploy/runner/macos/wardyn-runnerd.mobileconfig` (also inside the package and `wardyn-runner-units.tar.gz`).
+- The package installs both binaries and a LaunchAgent. It is the recommended macOS install: nobody compiles the CLI ([Set up a runner](../runner-registration.md#set-up-a-runner) lists the downloads). It cannot register the laptop: that needs a person's single-use token ([Claiming a runner](#claiming-a-runner)).
 - **Until the release is signed, the package is unsigned.** Gatekeeper refuses a double-click.
   - On macOS 15 and later, open **System Settings**, then **Privacy & Security**, and choose **Open Anyway** (right-click, **Open** no longer works there).
   - Apple's native MDM app install needs a Developer ID Installer signature, so push the package from an MDM agent or script (a Jamf or Kandji policy, or `installer -pkg` run as root).
@@ -206,6 +208,7 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 | Installed path | What it is |
 |---|---|
 | `/usr/local/wardyn/bin/wardyn-runnerd` | the runner (linked to `/usr/local/bin/wardyn-runnerd`) |
+| `/usr/local/wardyn/bin/wardyn` | the CLI (linked to `/usr/local/bin/wardyn`) |
 | `/Library/LaunchAgents/com.wardyn.runnerd.managed.plist` | starts the runner at login, like the agent `setup` writes |
 | `/usr/local/wardyn/bin/runnerd-managed-start` | the agent's launcher: idle until the person is registered |
 | `/usr/local/wardyn/share/wardyn-runnerd.mobileconfig` | the profile template |
@@ -214,7 +217,7 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 2. Push `wardyn-runnerd.pkg` with the same MDM, as a policy or script that runs `installer -pkg wardyn-runnerd.pkg -target /` as root (see above).
 3. Deliver each person's registration token to a file only they can read ([Claiming a runner](#claiming-a-runner), step 2).
 4. As that person, run `wardyn-runnerd register --org <url> --token-file <file>`, then `launchctl kickstart gui/$(id -u)/com.wardyn.runnerd.managed` (or log out and in).
-5. The person claims the runner as usual.
+5. The person claims the runner as usual, then runs `wardyn login <url>` once (`setup` does that itself).
 
 - **Without MDM** install the package, then run `wardyn-runnerd setup --token-file <file>`, adding `--org <url>` when no profile is installed.
   - `setup` stops the managed agent, writes the agent `com.wardyn.runnerd` in the person's own `~/Library/LaunchAgents`, and the managed agent stays idle. `serve` also takes a lock in the runner state directory, so a second `serve` for one identity exits with a message.
@@ -235,6 +238,47 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 | `TrustedCAFile` | `--trusted-ca-file` | a PEM bundle path; deliver the file with a separate MDM file payload ([A corporate CA](#a-corporate-ca-on-a-laptop-runner)) |
 | `RecordingStore` | `--recording-store` | `pg`, `fs` or `off` |
 | `DockerHost` | `DOCKER_HOST` | the engine's socket, when it is not the default |
+
+## A folder on your computer for a remote sandbox
+
+A run on another machine can take a folder from your computer. Your runner serves it in a folder-only mode, so there is
+one install, outbound only, the same as a laptop runner today.
+
+1. An admin sets `WARDYN_COMPUTER_FOLDERS=true` ([ENV.md](../ENV.md#wardyn_computer_folders)). It is off by default.
+2. On your computer, claim a runner as in [Claiming a runner](#claiming-a-runner), then serve it in folder-only mode:
+
+   ```sh
+   wardyn-runnerd serve --substrate folders
+   ```
+
+   It holds no sandbox and needs no Docker. It lists folders under your home folder by default. Use
+   `--folder-root <dir>` (repeatable) to narrow that.
+3. In New Run, add "Your computer" under Files, pick the folder, and choose **Both ways** or **Copy in only**.
+
+What happens:
+
+- Wardyn copies the folder into the sandbox before the agent starts, and holds the agent until that first copy lands. A
+  failed copy fails the run, naming the folder. The run detail shows the first copy, the files and bytes, and any
+  refused paths.
+- One side edits at a time. The sandbox edits while the run is live. With **Both ways**, its changes come back when the
+  run ends, before the sandbox is stopped. A file changed on both sides keeps your computer's copy, and nothing on
+  your computer is deleted. With **Copy in only**, nothing comes back.
+- The copy follows the `wardyn sync` rules: `.git` stays on your computer, `.gitignore` and `.wardynignore` apply,
+  symlinks are refused, and `WARDYN_SYNC_DENY` applies to every pass.
+- The runner checks every path itself:
+  - It lists only folders under its roots, and never sends a root whole: open it and choose a folder inside.
+  - It follows no symlink.
+  - It refuses a credential folder. Each pass, both ways, also leaves out every credential folder inside the one you
+    chose. Any depth and any letter case count: `.ssh`, `.aws`, `.azure`, `.claude`, `.wardyn`, `.gnupg`, `.docker`,
+    `.kube`, `.config/gh`, `.config/gcloud`, `.netrc`, `.git-credentials`, `.git/config` and `Library/Keychains`.
+    A project's own `.claude` or `.docker` folder is left out too.
+  - Only folder names, file counts and sizes reach Wardyn while you browse. No file is sent until a run starts.
+- The runner opens no port and Wardyn never connects in: each pass rides the runner's own outbound session. The
+  runner never reaches into a sandbox. Wardyn joins its stream to the sandbox's own `sftp-server`.
+
+Not yet: bringing changes back when you take over a live run, live sync while the run runs, and **Pause sync**.
+For now this needs a single-replica deployment: Wardyn reaches the runner only from the replica it is connected to,
+so with several replicas a runner connected to another one reads as offline.
 
 ## Offline and revocation
 

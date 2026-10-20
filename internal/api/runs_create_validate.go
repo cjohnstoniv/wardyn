@@ -170,7 +170,7 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	if refusal.write(s, w, r) {
 		return req, noCeiling, "", "", false
 	}
-	if s.localFolderRefusal(&req).write(s, w, r) {
+	if s.localFolderRefusal(r.Context(), &req).write(s, w, r) {
 		return req, noCeiling, "", "", false
 	}
 

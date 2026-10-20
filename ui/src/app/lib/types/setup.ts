@@ -368,6 +368,9 @@ export interface SetupStatus {
     // because `driver` is blanked for them and the Vault remedy differs by
     // substrate. Absent on an older daemon or off Kubernetes.
     kubernetes?: boolean;
+    // WARDYN_COMPUTER_FOLDERS (internal/api/setup.go, SetupRunner.ComputerFolders), kept in a
+    // member's redacted body: off, New Run shows "Your computer" as blocked by the organisation.
+    computer_folders?: boolean;
     // How long a Kubernetes sandbox has to start, and how much longer one that no machine
     // has room for waits (internal/api/setup.go, SetupSandboxStart). Kept in a member's
     // redacted body: the run page's overdue bound follows it. Absent off Kubernetes.

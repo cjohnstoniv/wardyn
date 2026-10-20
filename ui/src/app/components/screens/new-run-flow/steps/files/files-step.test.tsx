@@ -60,11 +60,21 @@ let workspaceList: Workspace[];
 let catalogue: MeDriveCatalogue;
 let k8s: boolean;
 let drivesDown = false;
+// "Your computer" (M4): WARDYN_COMPUTER_FOLDERS, the person's runners, and the folders their runner lists by path.
+let computerFolders: boolean;
+let myRunners: object[];
+const HOME = "/Users/alice";
+const dir = (name: string, path: string, files: number, bytes: number) => [{ name, path, files, bytes }];
+const TREE: Record<string, object[]> = { "": dir("alice", HOME, 9000, 9e9), [HOME]: dir("code", `${HOME}/code`, 2000, 5e7),
+  [`${HOME}/code`]: dir("payments-service", `${HOME}/code/payments-service`, 1284, 46 * 1024 * 1024) };
+const LAPTOP = { id: "rn-laptop", name: "laptop-7f2", state: "claimed", online: true, folders: true, last_seen_at: new Date().toISOString() };
 beforeEach(() => {
   workspaceList = [...SCENARIO_FILES_WORKSPACES.member, FOLDER_WS];
   catalogue = CATALOGUE;
   drivesDown = false;
   k8s = false;
+  computerFolders = false;
+  myRunners = [];
   checks.result = filesPreflight(MAIN_DRIVE_FACTS.filesystem);
   branches = LISTED;
   checks.bodies.length = 0;
@@ -74,7 +84,14 @@ beforeEach(() => {
     if (path.includes("/branches")) return branches instanceof Response ? branches : json(branches);
     if (path.startsWith("/workspaces")) return json(workspaceList);
     if (path.startsWith("/me/drives")) return drivesDown ? json({ error: "drives unavailable" }, 503) : json(catalogue);
-    if (path.startsWith("/setup/status")) return json({ runner: { driver: "", confinement_classes: [], kubernetes: k8s } });
+    if (path.startsWith("/setup/status")) return json({ runner: { driver: "", confinement_classes: [], kubernetes: k8s, computer_folders: computerFolders } });
+    if (path.startsWith("/me/runners/rn-laptop/folders")) {
+      const q = new URLSearchParams(path.split("?")[1] ?? "");
+      const at = q.get("path") ?? "";
+      const survey = q.get("survey") === "1" ? { files: 1284, bytes: 46 * 1024 * 1024, left_out: [".git"], ignored: 3 } : undefined;
+      return json({ path: at, runner: "laptop-7f2", folders: TREE[at] ?? [], survey });
+    }
+    if (path.startsWith("/me/runners")) return json(myRunners);
     throw new Error(`unexpected ${path}`);
   });
 });
@@ -133,7 +150,7 @@ async function add(type: string, name: string) {
 const card = (name: string) => screen.getAllByTestId("nr-attach-card").find((c) => within(c).queryByText(name, { selector: "strong" }))!;
 
 describe("the list and the Add dialog", () => {
-  it("starts empty with No extra files, and Add opens on Type with five types, Your computer Coming soon", async () => {
+  it("starts empty with No extra files, and Add opens on Type with five types, Your computer blocked by the organisation", async () => {
     catalogue = NO_LEGACY;
     show();
     expect(screen.getByRole("heading", { level: 2, name: NR_FILES.ATTACH_TITLE })).toBeInTheDocument();
@@ -144,9 +161,9 @@ describe("the list and the Add dialog", () => {
       expect(dialogButton(new RegExp(`^${t}`))).toBeEnabled();
     }
     const computer = dialogButton(new RegExp(`^${NR_FILES.COMPUTER_TITLE}`));
-    expect(computer).toBeDisabled();
-    expect(within(computer).getByText(NR_SHARED.COMING_SOON)).toBeInTheDocument();
-    expect(within(computer).getByText(NR_FILES.COMPUTER_SOON)).toBeInTheDocument();
+    await waitFor(() => expect(computer).toBeDisabled());
+    expect(within(computer).getByText(NR_FILES.COMPUTER_BLOCKED)).toBeInTheDocument();
+    expect(within(computer).queryByText(NR_SHARED.COMING_SOON)).toBeNull();
   });
 
   it("adds a repository at a picked branch; the first thing added is where it starts, its card open", async () => {
@@ -549,14 +566,77 @@ describe("folders", () => {
     expect(within(dialog()).queryByRole("radio")).toBeNull();
   });
 
-  it("is disabled with its reason when the server runs its sandboxes on Kubernetes", async () => {
+  it("is hidden, not refused, when the server runs its sandboxes on Kubernetes (M4)", async () => {
     k8s = true;
     show(BACKGROUND);
     await openAdd();
-    await waitFor(() => expect(dialogButton(new RegExp(`^${NR_FILES.FOLDER_TITLE}`))).toBeDisabled());
-    expect(within(dialog()).getByText(NR_FILES.FOLDER_REMOTE)).toBeInTheDocument();
-    // FR-0094: the unavailable kind is hatched, not faded, so its reason line keeps the AA contrast the hatch pins.
-    expect(dialogButton(new RegExp(`^${NR_FILES.FOLDER_TITLE}`)).className).not.toContain("opacity-");
+    await waitFor(() => expect(within(dialog()).queryByRole("button", { name: new RegExp(`^${NR_FILES.FOLDER_TITLE}`) })).toBeNull());
+    expect(within(dialog()).queryByText(NR_FILES.FOLDER_REMOTE)).toBeNull();
+    expect(dialogButton(new RegExp(`^${NR_FILES.COMPUTER_TITLE}`))).toBeInTheDocument();
+  });
+});
+
+describe("Your computer (M4)", () => {
+  const toComputer = async () => {
+    show(BACKGROUND);
+    await openAdd();
+    const tile = dialogButton(new RegExp(`^${NR_FILES.COMPUTER_TITLE}`));
+    await waitFor(() => expect(tile).toBeEnabled());
+    await userEvent.click(tile);
+  };
+
+  it("with no runner that shares folders, says so and links to setting one up", async () => {
+    computerFolders = true;
+    myRunners = [{ ...LAPTOP, folders: false }];
+    await toComputer();
+    expect(await within(dialog()).findByText(NR_FILES.COMPUTER_NO_RUNNER)).toBeInTheDocument();
+    expect(within(dialog()).getByText(NR_FILES.COMPUTER_NO_RUNNER_BODY)).toBeInTheDocument();
+    expect(within(dialog()).getByRole("link", { name: NR_FILES.COMPUTER_SET_UP })).toHaveAttribute("href", "/account");
+    await userEvent.click(dialogButton(NR_FILES.COMPUTER_NOT_NOW));
+    expect(within(dialog()).getByRole("heading", { name: NR_FILES.DIALOG_TITLE })).toBeInTheDocument();
+  });
+
+  it("with the runner offline, names it and what to do", async () => {
+    computerFolders = true;
+    myRunners = [{ ...LAPTOP, online: false }];
+    await toComputer();
+    expect(await within(dialog()).findByText(NR_FILES.COMPUTER_OFFLINE)).toBeInTheDocument();
+    expect(within(dialog()).getByText(NR_FILES.COMPUTER_OFFLINE_BODY("laptop-7f2"))).toBeInTheDocument();
+    expect(dialogButton(NR_FILES.COMPUTER_NEXT)).toBeDisabled();
+  });
+
+  it("browses the runner's folders, shows what the sandbox will see, and adds the folder Copy in only", async () => {
+    computerFolders = true;
+    myRunners = [LAPTOP];
+    await toComputer();
+    const openHome = await within(dialog()).findByRole("button", { name: NR_FILES.COMPUTER_OPEN("alice") });
+    expect(within(dialog()).queryByRole("radio", { name: "alice" })).toBeNull(); // a shared root is opened, never picked
+    await userEvent.click(openHome);
+    await userEvent.click(await within(dialog()).findByRole("button", { name: NR_FILES.COMPUTER_OPEN("code") }));
+    await userEvent.click(await within(dialog()).findByRole("radio", { name: "payments-service" }));
+    const seen = await within(dialog()).findByTestId("nr-computer-will-see");
+    await waitFor(() => expect(seen).toHaveTextContent(NR_FILES.COMPUTER_COUNT("1,284", "46.0 MB")));
+    expect(seen).toHaveTextContent(`${NR_FILES.COMPUTER_LEFT_OUT}: ${NR_FILES.LIST_AND(".git", NR_FILES.COMPUTER_IGNORED("3"))}`);
+    expect(within(dialog()).getByText(NR_FILES.COMPUTER_BROWSE_NOTE)).toBeInTheDocument();
+    await userEvent.click(dialogButton(NR_FILES.COMPUTER_NEXT));
+    expect(within(dialog()).getByRole("textbox", { name: NR_FILES.STEP_MOUNT })).toHaveValue("/home/agent/work");
+    await userEvent.click(within(dialog()).getByRole("radio", { name: new RegExp(`^${NR_FILES.COMPUTER_COPY_IN}`) }));
+    await userEvent.click(dialogButton(NR_FILES.ADD_CONFIRM));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(drawn().local_folder).toEqual({
+      runner_id: "rn-laptop", path: `${HOME}/code/payments-service`, name: "payments-service", remote_dir: "/home/agent/work", direction: "in",
+    });
+    const c = screen.getByTestId("nr-computer-card");
+    expect(within(c).getByText(NR_FILES.COMPUTER_TITLE)).toBeInTheDocument();
+    expect(await within(c).findByText(NR_FILES.COMPUTER_ON("laptop-7f2"))).toBeInTheDocument();
+    expect(within(c).getByText(NR_FILES.COMPUTER_ONLINE)).toBeInTheDocument();
+    expect(within(c).getByText(NR_FILES.COMPUTER_FIRST_SYNC_BODY)).toBeInTheDocument();
+    // A computer folder is a choice: No extra files is not asked for beside it.
+    expect(screen.queryByRole("checkbox", { name: NR_FILES.NO_EXTRA })).toBeNull();
+    await userEvent.click(within(c).getByRole("radio", { name: new RegExp(`^${NR_FILES.COMPUTER_BOTH}`) }));
+    expect(drawn().local_folder?.direction).toBe("both");
+    await userEvent.click(within(c).getByRole("button", { name: NR_FILES.REMOVE_NAMED("payments-service") }));
+    expect(drawn().local_folder).toBeUndefined();
   });
 });
 

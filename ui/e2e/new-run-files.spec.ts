@@ -46,7 +46,7 @@ const DRIVE = {
 const CAP_MIB = 20480;
 const DEFAULT_MIB = 10240;
 
-type Body = { workspaces?: { workspace_id: string; repos?: { repo: string; ref?: string }[] }[]; drive?: object; drives?: { drive_id: string; read_only?: boolean }[]; start_folder?: { attachment?: string; repo?: string; drive_id?: string }; resources?: { disk_mib?: number }; no_repositories_or_drives?: boolean; experience?: string };
+type Body = { local_folder?: object; workspaces?: { workspace_id: string; repos?: { repo: string; ref?: string }[] }[]; drive?: object; drives?: { drive_id: string; read_only?: boolean }[]; start_folder?: { attachment?: string; repo?: string; drive_id?: string }; resources?: { disk_mib?: number }; no_repositories_or_drives?: boolean; experience?: string };
 
 const unlimited = { default: { value: 0, unlimited: true }, cap: { value: 0, unlimited: true } };
 const limitsFor = (run_type: string, capSource: string, capMib = CAP_MIB) => ({
@@ -454,15 +454,61 @@ test.describe("New Run, Files: the person's drive (public)", () => {
     expect(last(sent).drives).toBeUndefined();
   });
 
-  test("a kind that is not available yet is hatched, disabled and still fully legible (FR-0094)", async ({ page }) => {
+  test("a kind the organisation does not allow is hatched, disabled and still fully legible (FR-0094, M4)", async ({ page }) => {
     await stub(page, {});
     await toFiles(page, "application");
     await press(page, NR_FILES.ADD_ARIA);
+    // WARDYN_COMPUTER_FOLDERS is off on the seeded backend.
     const computer = dialog(page).getByRole("button", { name: new RegExp(`^${NR_FILES.COMPUTER_TITLE}`) });
     await expect(computer).toBeDisabled();
-    await expect(computer).toContainText(NR_FILES.COMPUTER_SOON);
+    await expect(computer).toContainText(NR_FILES.COMPUTER_BLOCKED);
     // The reason line is the explanation, so the tile must not also be dimmed under it.
     await expect(computer).toHaveCSS("opacity", "1");
+  });
+
+  test("a folder on your computer: browse through your runner, add it Both ways, and the request carries it (M4)", async ({ page }) => {
+    const sent = await stub(page, {});
+    const home = "/Users/alice";
+    const tree: Record<string, { name: string; path: string; files: number; bytes: number }[]> = {
+      "": [{ name: "alice", path: home, files: 9000, bytes: 9e9 }],
+      [home]: [{ name: "payments-service", path: `${home}/payments-service`, files: 1284, bytes: 46 * 1024 * 1024 }],
+      [`${home}/payments-service`]: [],
+    };
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      await route.fulfill({ response, json: { ...json, runner: { ...json.runner, computer_folders: true } } });
+    });
+    await page.route("**/api/v1/me/runners*", (route) =>
+      route.fulfill({ json: [{ id: "rn-laptop", name: "laptop-7f2", state: "claimed", online: true, folders: true, kind: "self_hosted" }] }));
+    await page.route("**/api/v1/me/runners/rn-laptop/folders*", (route) => {
+      const q = new URL(route.request().url()).searchParams;
+      const at = q.get("path") ?? "";
+      return route.fulfill({
+        json: { path: at, runner: "laptop-7f2", folders: tree[at] ?? [], survey: q.get("survey") === "1" ? { files: 1284, bytes: 46 * 1024 * 1024, left_out: [".git"], ignored: 3 } : undefined },
+      });
+    });
+    await toFiles(page, "application");
+    await press(page, NR_FILES.ADD_ARIA);
+    await dialog(page).getByRole("button", { name: new RegExp(`^${NR_FILES.COMPUTER_TITLE}`) }).click();
+    // The shared root is opened, never picked whole: it has no radio.
+    await expect(dialog(page).getByRole("button", { name: NR_FILES.COMPUTER_OPEN("alice") })).toBeVisible();
+    await expect(dialog(page).getByRole("radio", { name: "alice" })).toHaveCount(0);
+    await dialog(page).getByRole("button", { name: NR_FILES.COMPUTER_OPEN("alice") }).click();
+    await dialog(page).getByRole("radio", { name: "payments-service" }).check();
+    await expect(dialog(page).getByTestId("nr-computer-will-see")).toContainText(NR_FILES.COMPUTER_COUNT("1,284", "46.0 MB"));
+    await expect(dialog(page).getByText(NR_FILES.COMPUTER_BROWSE_NOTE)).toBeVisible();
+    await dialog(page).getByRole("button", { name: NR_FILES.COMPUTER_NEXT, exact: true }).click();
+    await expect(dialog(page).getByRole("textbox", { name: NR_FILES.STEP_MOUNT })).toHaveValue("/home/agent/work");
+    await dialog(page).getByRole("button", { name: NR_FILES.ADD_CONFIRM, exact: true }).click();
+    await expect(dialog(page)).toBeHidden();
+    const card = page.getByTestId("nr-computer-card");
+    await expect(card.getByText(NR_FILES.COMPUTER_ON("laptop-7f2"))).toBeVisible();
+    await expect(card.getByText(NR_FILES.COMPUTER_ONLINE)).toBeVisible();
+    await expect(noExtra(page)).toHaveCount(0);
+    await expect.poll(() => last(sent).local_folder).toEqual({
+      runner_id: "rn-laptop", path: `${home}/payments-service`, name: "payments-service", remote_dir: "/home/agent/work", direction: "both",
+    });
   });
 
   test("a drive the profile refuses is one sentence where the drives would be", async ({ page }) => {

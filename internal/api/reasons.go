@@ -203,6 +203,10 @@ const (
 	reasonTaskModeUnknown                      = "task_mode_unknown"                        // task_mode is not "harness" or "exec"
 	reasonLocalFolderInvalid                   = "local_folder_invalid"                     // local_folder's name or remote_dir is malformed
 	reasonLocalFolderUnsupported               = "local_folder_unsupported"                 // local_folder on a run or deployment that cannot hold the agent for it
+	reasonComputerFoldersOff                   = "computer_folders_off"                     // WARDYN_COMPUTER_FOLDERS is off: no folder from a personal computer
+	reasonComputerRunnerOffline                = "computer_runner_offline"                  // the runner holding the folder is not connected, or did not answer
+	reasonComputerRunnerNoFolders              = "computer_runner_no_folders"               // the runner does not share folders (older than 0.10, or not --substrate folders)
+	reasonComputerFolderRefused                = "computer_folder_refused"                  // the runner refused that path (outside its roots, a symlink, a credential folder)
 	reasonInteractiveStartUnknown              = "interactive_start_unknown"                // interactive_start is not "shell" or "agent"
 	reasonToolApprovalsUnknown                 = "tool_approvals_unknown"                   // tool_approvals is not "auto" or "hold"
 	reasonToolApprovalsHoldUnsupportedAgent    = "tool_approvals_hold_unsupported_agent"    // tool_approvals=hold on an agent with no external tool-approval contract (codex-cli)
@@ -571,3 +575,21 @@ const reasonHostCapacityRefused = "host_capacity_refused"
 // PUT /workspaces/{id}/approved-egress naming a host on the workspace's denied list (handleSetApprovedEgress):
 // deny beats allow, so the approval would change nothing.
 const reasonWorkspaceApprovedEgressDenied = "workspace_approved_egress_denied"
+
+// A person's own GitHub token (gh_own_pat.go): the doors that set and remove it, and the run it is
+// used on (gh_own_pat_run.go).
+const (
+	reasonGitHubOwnPATNoSession        = "github_own_pat_no_session"        // the caller has no browser sign-in to store the token under
+	reasonGitHubOwnPATPreviewBlocked   = "github_own_pat_preview_blocked"   // refused in the user view: the token is stored under the caller's own identity
+	reasonGitHubOwnPATUnknownRow       = "github_own_pat_unknown_row"       // no own-token GitHub row the caller may use has this address
+	reasonGitHubOwnPATTokenInvalid     = "github_own_pat_token_invalid"     // not one fine-grained token (github_pat_…), or too long, or has spaces
+	reasonGitHubOwnPATExpiryInvalid    = "github_own_pat_expiry_invalid"    // expires_on is not a date after today
+	reasonGitHubOwnPATExpiryTooLong    = "github_own_pat_expiry_too_long"   // expires_on is past the 30-day limit
+	reasonGitHubOwnPATRejected         = "github_own_pat_rejected"          // GitHub did not accept the token
+	reasonGitHubOwnPATCheckUnavailable = "github_own_pat_check_unavailable" // GitHub could not be asked; nothing is known
+	reasonGitHubOwnPATAccountMismatch  = "github_own_pat_account_mismatch"  // another GitHub account than the one linked, and no relink
+	reasonGitHubOwnTokenRequired       = "github_own_token_required"        // create: the run's owner has no usable token of their own for the row
+	reasonGitHubOwnTokenExpired        = "github_own_token_expired"         // create: the owner's token has reached the expiry they entered
+	reasonGitHubOwnTokenUndeliverable  = "github_own_token_undeliverable"   // create: the token could not stay out of the sandbox (PAT broker off, a run on a person's runner) or two rows claim the host
+	reasonGitHubOwnTokenResident       = "github_own_token_resident"        // mint: the PAT broker is off, so the token would be handed into the sandbox
+)

@@ -15,6 +15,41 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `aws_sso_refused_tokens` (migration `0194_aws_sso_refused_tokens`). Without it an AWS SSO session whose renewal
   AWS refused cannot be marked, read or cleared, so replicas do not share that mark.
 
+## [0.9.6] — 2026-10-20
+
+A fix release on top of 0.9.5. A person's own Azure DevOps token now works on their own runner, credential and posture refusals say which policy or field refused, the credential delivery screen lists what each class can be delivered by, runners that cannot reach the server say why, and session recordings no longer store typed input. No migration and no new setting.
+
+### Security
+
+- Session recordings no longer store typed input. Recordings made by earlier versions may contain keystrokes typed into an attached terminal, including at prompts that hide what you type, such as passwords. Treat those recordings as sensitive: restrict who can read them, or delete them.
+
+### Fixed
+
+- An Azure DevOps connection using a person's own token (`own_pat`) now works on that person's own runner. Before, the run failed at dispatch. The token reaches the runner's proxy only; the sandbox holds a placeholder. Organisation-held Azure DevOps tokens (`minted_pat`, `bearer`) are still refused on a person's own runner.
+- The AWS sign-in dialog's step list moves to "Waiting for AWS" as soon as the dialog shows a device code. Before, it could stay on "Starting the sign-in sandbox" while the code and the waiting prompt were already on screen.
+- A brief server error while the console first loads no longer leaves a signed-in person on the sign-in screen.
+- A failed `run.output.finalize` audit row from the recording path now carries `step`, as every other finalize failure row does. No existing key changes.
+
+### Changed
+
+- A refusal of a credential on a person's own runner names the delivery policy that refused it, for example `(delivery policy: refuse)`. A runner of unknown trust class is told it gets organisation delivery only. The reason code and status are unchanged (`placement_credential`, 422).
+- `runner_posture_unmet` names every posture field that is not met, with the requirement. For a runner that has not reported its posture, it says that an unreported posture meets no requirement. The reason code and status are unchanged.
+
+- A runner that registered but has never connected to the server says so in the console, with where to find its log on each system.
+- `wardyn-runnerd` logs the proxy it reaches the server through, by host and port only, and a connection the proxy refuses is reported as a proxy refusal.
+- `wardyn-runnerd setup` warns when proxy variables are set in the shell but will not reach the service it installs. It prints the variable names only.
+- `wardyn-runnerd` warns about certificates in its trusted CA file that are expired or not a CA, and about a file that another user owns or others can write. The file loads as before.
+- On a single sign-on deployment, the CLI's answer to a 401 points at a personal API token.
+- `wardyn-runnerd` warns when its pinned proxy image is a different release than the runner, or the organisation names a different one, since runs may then fail to start.
+
+### Added
+
+- `GET /governance/credential-delivery` returns `buildable_modes` beside the policy: the delivery modes each credential class can use today. The stored policy and `PUT` are unchanged.
+
+### Before you upgrade
+
+- Scripts that match the old refusal text for a local credential refusal, or a single posture field before the colon, must match the new sentences. Reason codes are unchanged.
+
 ## [0.9.5] — 2026-10-19
 
 A small fix release on top of 0.9.4 for the sign-in and setup paths: the AWS sign-in dialog shows its code and moves

@@ -16,6 +16,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/cliprofile"
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/version"
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
@@ -35,7 +36,10 @@ func (e *exitError) Unwrap() error { return e.err }
 func main() {
 	if err := rootCmd().Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "wardyn:", err)
-		if hint := dialHint(err); hint != "" {
+		if hint := dialHint(err, clientTokenSent); hint != "" {
+			fmt.Fprintln(os.Stderr, "wardyn:", hint)
+		}
+		if hint := noOrgHint(err, urlFromDefault); hint != "" {
 			fmt.Fprintln(os.Stderr, "wardyn:", hint)
 		}
 		if hint := policyHint(err); hint != "" {
@@ -51,7 +55,11 @@ func main() {
 // we did reach wardynd, so it gets no hint.
 // keys on the whole *url.Error transport class, not just ECONNREFUSED —
 // any failure to reach the daemon deserves the same "is wardynd running?" nudge.
-func dialHint(err error) string {
+//
+// tokenSent is whether the request carried a bearer. On a deployment with neither single sign-on
+// nor an admin token, the server answers admin_token_not_configured before it reads one, so that
+// reason names a token only when one was sent.
+func dialHint(err error, tokenSent bool) string {
 	var ue *url.Error
 	if errors.As(err, &ue) {
 		// `wardyn setup` is deliberately NOT named here: it's a subcommand group
@@ -61,15 +69,73 @@ func dialHint(err error) string {
 		// work of its own to do.)
 		return "is wardynd running? (start it with `make setup`, the compose quick-start; point the CLI elsewhere with --url or WARDYN_URL)"
 	}
-	// Auth failure: we DID reach wardynd but it refused the bearer token. Name
-	// the two ways to supply one, so first contact against the compose stack
-	// (which boots with an admin token set) is recoverable without docs.
+	// Auth failure: we DID reach wardynd but it refused the bearer token. The
+	// 401's reason says which case it is. A deployment that signs people in
+	// with single sign-on and has no admin token gets a personal API token
+	// remedy; every other 401 names the two ways to supply a token, so first
+	// contact against the compose stack (which boots with an admin token set)
+	// is recoverable without docs.
 	var ae *sdk.APIError
 	if errors.As(err, &ae) && ae.Status == http.StatusUnauthorized {
+		switch ae.Reason {
+		case "sign_in_required":
+			return "this organisation signs people in with single sign-on and has no admin token, so --token and WARDYN_ADMIN_TOKEN cannot work here. " + personalTokenRemedy
+		case "admin_token_not_configured":
+			if !tokenSent {
+				break
+			}
+			return "this organisation does not recognise the token sent (unknown, revoked or expired) and has no admin token, so --token and WARDYN_ADMIN_TOKEN cannot work here. " + personalTokenRemedy
+		}
 		return "authenticate with --token or WARDYN_ADMIN_TOKEN/WARDYN_TOKEN (the compose quick-start's token is in deploy/compose/README.md)"
 	}
 	return ""
 }
+
+// defaultURL is where the CLI dials when nothing names an organisation.
+const defaultURL = "http://localhost:8080"
+
+// urlFromDefault is whether the URL the running command dials is defaultURL because --url, WARDYN_URL and
+// the profile all named none; main reads it to tell a person with no organisation set what to do.
+var urlFromDefault bool
+
+// noOrgHint is the line printed after a refused dial against the built-in default: that dial reached no
+// organisation because none was set. A URL the person named gets none, as a typed API error does.
+func noOrgHint(err error, fromDefault bool) string {
+	var ue *url.Error
+	if !fromDefault || !errors.As(err, &ue) {
+		return ""
+	}
+	return "no organisation set: run `wardyn login <url>` with your organisation's address"
+}
+
+// resolveURL settles the control plane URL: --url, then WARDYN_URL, then the profile `wardyn login`
+// wrote, then defaultURL. current is the flag's value, which already carries WARDYN_URL. A profile that
+// cannot be read is reported and skipped, so it never blocks a command that names its own URL.
+func resolveURL(cmd *cobra.Command, current string) (resolved string, fromDefault bool) {
+	if cmd.Flags().Changed("url") || os.Getenv("WARDYN_URL") != "" {
+		return current, false
+	}
+	dir, err := cliprofile.Dir()
+	if err != nil {
+		return current, true
+	}
+	profileURL, err := cliprofile.Read(dir)
+	if err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "wardyn: ignoring the CLI profile: %v\n", err)
+		return current, true
+	}
+	if profileURL == "" {
+		return current, true
+	}
+	return profileURL, false
+}
+
+// clientTokenSent is whether the SDK client the last command built carries a bearer: pkg/client
+// sends no Authorization header for an empty token.
+var clientTokenSent bool
+
+// personalTokenRemedy is how a person reaches a deployment with no admin token from the CLI.
+const personalTokenRemedy = "Set WARDYN_TOKEN to a personal API token: sign in to the console and create one under Your account, or claim the invitation your Wardyn admin sent you there."
 
 // noRedirect hands a 3xx back to the caller instead of following it. A followed
 // redirect turns a write into a GET of wherever Location points (so it "succeeds"
@@ -139,16 +205,23 @@ func warnPlaintextToken(w io.Writer, rawURL, token string) {
 	if token == "" || cliutil.EnvBool("WARDYN_CLI_ALLOW_PLAINTEXT", false) {
 		return
 	}
+	if host := plaintextHost(rawURL); host != "" {
+		fmt.Fprintf(w, "wardyn: WARNING: sending the admin token in cleartext to %s over http:// — "+
+			"use https://, or set WARDYN_CLI_ALLOW_PLAINTEXT=1 if TLS terminates in front of it\n", host)
+	}
+}
+
+// plaintextHost is the host of a plain http:// URL that is not loopback, else "".
+func plaintextHost(rawURL string) string {
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Scheme != "http" {
-		return
+		return ""
 	}
 	host := u.Hostname()
 	if host == "localhost" || net.ParseIP(host).IsLoopback() {
-		return
+		return ""
 	}
-	fmt.Fprintf(w, "wardyn: WARNING: sending the admin token in cleartext to %s over http:// — "+
-		"use https://, or set WARDYN_CLI_ALLOW_PLAINTEXT=1 if TLS terminates in front of it\n", host)
+	return host
 }
 
 func rootCmd() *cobra.Command {
@@ -177,11 +250,12 @@ func rootCmd() *cobra.Command {
 			if token == "" {
 				token = cliutil.EnvOr("WARDYN_ADMIN_TOKEN", os.Getenv("WARDYN_TOKEN"))
 			}
+			serverURL, urlFromDefault = resolveURL(cmd, serverURL)
 			warnPlaintextToken(cmd.ErrOrStderr(), serverURL, token)
 		},
 	}
-	root.PersistentFlags().StringVar(&serverURL, "url", cliutil.EnvOr("WARDYN_URL", "http://localhost:8080"),
-		"control plane base URL (env WARDYN_URL)")
+	root.PersistentFlags().StringVar(&serverURL, "url", cliutil.EnvOr("WARDYN_URL", defaultURL),
+		"control plane base URL (env WARDYN_URL; else the one `wardyn login` saved; else this default)")
 	// WARDYN_ADMIN_TOKEN takes precedence, then WARDYN_TOKEN — resolved in
 	// PersistentPreRun above, NOT here. A non-empty string default is echoed by
 	// cobra as `(default "<value>")` in `wardyn --help` and in the usage block
@@ -199,10 +273,12 @@ func rootCmd() *cobra.Command {
 	// server can't wedge a single request forever; the shared client reuses one
 	// connection pool across those polls.
 	client := func() *sdk.Client {
+		clientTokenSent = token != ""
 		return &sdk.Client{BaseURL: serverURL, Token: token, HTTPClient: &http.Client{Timeout: 30 * time.Second, CheckRedirect: noRedirect}}
 	}
 
 	root.AddCommand(
+		loginCmd(),
 		runCmd(client),
 		approvalCmd(client),
 		auditCmd(client),

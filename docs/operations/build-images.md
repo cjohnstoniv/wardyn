@@ -193,7 +193,7 @@ The emulation warning and the `runner_arch_images` row of `GET /api/v1/setup/sta
 
 - A New Run request's image comes from its harnesses: the agent base image for none, and a harness's own image for one. Otherwise it is the smallest image declared for the set, under a `WARDYN_AGENT_IMAGES` key that joins sorted harness ids with `+`.
 - A harness no image here carries is refused (`harness_not_installed`). On a published install Claude Code maps to the agent base image, so it is not installed.
-- Migration `0164_run_harnesses` records each run's harnesses. A split-role install grants the app role `SELECT, INSERT` on `run_harnesses`, and `UPDATE` too once `WARDYN_MULTI_AGENT_TASKS` is on (migration `0198`: person erasure blanks an agent's own task).
+- Migration `0164_run_harnesses` records each run's harnesses. A split-role install grants the app role `SELECT, INSERT` on `run_harnesses`, and `UPDATE` too once `WARDYN_MULTI_AGENT_TASKS` is on (migration `0199`: person erasure blanks an agent's own task).
 
 ### Offering two harnesses in one run
 
