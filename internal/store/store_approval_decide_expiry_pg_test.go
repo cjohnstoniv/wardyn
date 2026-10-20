@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/approval"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -55,5 +56,38 @@ func TestPG_DecideApprovalRefusesAPastExpiry(t *testing.T) {
 	}
 	if _, err := st.DecideApproval(ctx, uuid.New(), types.ApprovalDecision{State: types.ApprovalApproved, DecidedBy: "u"}); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("unknown id: err = %v, want ErrNotFound", err)
+	}
+}
+
+// The run-end cascade is a system CANCELLED write: it must land on a row whose run's end has already
+// passed, or the row stays PENDING for a run that is over.
+func TestPG_CancelForRunCancelsPastTheRunsEnd(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	run := persistRun(t, ctx, pool, func() types.AgentRun {
+		r := newRun(types.RunRunning)
+		end := time.Now().UTC().Add(-time.Minute)
+		r.EndsAt = &end
+		return r
+	}())
+	ap, err := st.CreateApproval(ctx, newApproval(run.ID, time.Now().UTC().Add(-time.Hour)))
+	if err != nil {
+		t.Fatalf("create approval: %v", err)
+	}
+
+	byKind, err := approval.CancelForRun(ctx, approvalStore{st}, run.ID, "run ended")
+	if err != nil {
+		t.Fatalf("CancelForRun: %v", err)
+	}
+	if got := approval.TallyKey(ap); byKind[got] != 1 {
+		t.Errorf("byKind = %v, want %s counted once", byKind, got)
+	}
+	got, err := st.GetApproval(ctx, ap.ID)
+	if err != nil {
+		t.Fatalf("get approval: %v", err)
+	}
+	if got.State != types.ApprovalCancelled {
+		t.Errorf("state = %s, want CANCELLED", got.State)
 	}
 }
