@@ -11,7 +11,7 @@
 # docs/CI.md 7774 = 7708 + 66, measured: the runner-compat-walk.sh bullet (the nightly runner/organisation version compatibility job)
 # docs/CI.md 7789 = 7774 + 15, measured: the compat bullet states the below-0.9.3 refusal contract
 # 0.9.4 L12 +30: ci-run.sh binds all five host ports and kills a remote run it stops waiting on (#2184, #2185).
-# 0.10 CI-6 +120: the "Self-hosted canary" section (the dispatch-only workflow, its trust test and isolation proof).
+# 0.10 CI-6 +120 was the "Self-hosted canary" section; removed when self-hosted CI was dropped (budget left, not re-measured).
 # 0.10 W1 train: docs/CI.md tightened to 8035, measured after merging main (#3221).
 # lane fragments merged: +7 (0.10.0 VM-B): the vm-conformance job row;
 # docs/CI.md 8046 = ours 8039 + theirs 8042 - base 8035 at the 0.10 W2 merge of VM-B onto the train.
