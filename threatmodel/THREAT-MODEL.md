@@ -2551,7 +2551,7 @@ hiding them would repeat the failure mode we are designed to avoid.
       - Its traffic still leaves through the run's proxy and egress policy. Its hosts join the run's allowlist as raw egress, with no broker route in front of them (`rawEgressHosts`).
       - The broker never sees its tool calls, so the harness applies the run's rules to them, and the in-sandbox relay that asks is cooperative.
       - Hold or block rules on its tools are refused at create where the harness can't apply them: Codex CLI in any mode, and any harness a command starts (`localMCPRulesRefusal`, [`internal/api/run_harness_tool_rules.go`](../internal/api/run_harness_tool_rules.go)).
-      - The person chooses which package runs. An `npx` package must pin one exact version (`validateLocal`, [`internal/types/component.go`](../internal/types/component.go)), which bounds that supply-chain risk but does not remove it.
+      - The person chooses which package runs. An `npx` package must pin one exact version (`validateLocal`, [`internal/types/component.go`](../internal/types/component.go)), which bounds that supply-chain risk but does not remove it; an absolute program in the image is trusted as the image is.
 
 65. **Behind a shared ingress every runner connection shares one pre-auth address, so one unauthenticated peer can hold that address's handshake bound (0.9; bounded in 0.10).**
     - `handleRunnerStream` ([`internal/api/runner_stream.go`](../internal/api/runner_stream.go)) limits handshakes in progress per peer address (`WARDYN_RUNNER_STREAM_HANDSHAKES_PER_ADDRESS`, default 32) before any read, and refuses a peer whose rate bucket is empty. Behind an ingress that address is the ingress's own.

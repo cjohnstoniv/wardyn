@@ -103,6 +103,7 @@
 # docs/ENV.md 40525 = ours 40416 + theirs 40438 - base 40329 at the 0.10 W2 merge of SEC-2c onto the train.
 # docs/ENV.md 40671 = ours 40525 + theirs 40177 - base 40031 at the 0.10 W2 merge of VM-B onto the train.
 # docs/ENV.md 41191 adds 520 over 40671 (0.10 FEAT-1MCP), measured: the WARDYN_MCP_LOCAL_SERVERS row and details with its before-you-upgrade lines and its setup-status feature bit, and the WARDYN_MCP_STDIO_TOML row and details, which the env-doc guard requires.
-docs/ENV.md=41191 share=5
+# docs/ENV.md 41208 adds 17 over 41191 (0.10 FEAT-1MCP review): the npx pin applies to the npx form only; an absolute program is trusted as the image is.
+docs/ENV.md=41208 share=5
 # docs/ENV.md 39047 adds 478 over 38569: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
 # docs/ENV.md 38607 adds 38 over 38569, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
