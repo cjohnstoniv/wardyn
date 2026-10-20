@@ -4,11 +4,13 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -56,6 +58,15 @@ func (s *Server) handleWriteEnvAsCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	skipped, werr := writeEnvAsCode(localDirs[0].Path, files)
+	if errors.Is(werr, errEnvRootDenied) {
+		// The stored path was vetted when it was written; it names a host path no sandbox may be given now.
+		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+			"workspace.envcode.write", id.String(), "denied",
+			auditWorkspaceData(r, ws.OwnedBy, map[string]any{"reason": reasonWorkspaceRequestInvalid})))
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonWorkspaceRequestInvalid,
+			"the workspace's source directory is, or now resolves to, a host path no sandbox may be given; nothing was written. Edit the workspace's source")
+		return
+	}
 	if werr != nil {
 		writeServerError(w, r, "write env-as-code", werr)
 		return
@@ -138,6 +149,31 @@ func (s *Server) handleGetEnvAsCode(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"emitted_files": files})
 }
 
+// errEnvRootDenied marks a root writeEnvAsCode refuses to write under: the handler answers it with a
+// 422 and a denied audit row, not a 500.
+var errEnvRootDenied = errors.New("env-as-code root is a denied host path")
+
+// denyOpenedRoot refuses a root whose opened directory is a path no sandbox may be given, running the
+// mount deny-list on the directory the descriptor holds (the real path /proc/self/fd/<fd> names), so a
+// symlink swapped in after any earlier check cannot redirect the write. Linux only: where /proc is
+// missing (macOS, Windows) the real path cannot be read, and the write is refused (fail closed)
+// rather than admitted on the unchecked path.
+func denyOpenedRoot(root *os.Root) error {
+	dir, err := root.Open(".")
+	if err != nil {
+		return fmt.Errorf("%w: cannot open the opened root: %v", errEnvRootDenied, err)
+	}
+	defer dir.Close()
+	real, err := os.Readlink("/proc/self/fd/" + strconv.Itoa(int(dir.Fd())))
+	if err != nil {
+		return fmt.Errorf("%w: cannot resolve the opened directory (needs Linux /proc): %v", errEnvRootDenied, err)
+	}
+	if err := runner.ValidateMountSource(real); err != nil {
+		return fmt.Errorf("%w: %v", errEnvRootDenied, err)
+	}
+	return nil
+}
+
 // writeEnvAsCode writes generated env-as-code files under root, returning the
 // subset of keys it left untouched because they already existed. Paths are
 // the fixed, safe outputs of EmitEnvAsCode.
@@ -152,16 +188,20 @@ func (s *Server) handleGetEnvAsCode(w http.ResponseWriter, r *http.Request) {
 // regenerate path for a file Wardyn wrote itself.
 func writeEnvAsCode(rootPath string, files map[string]string) ([]string, error) {
 	cleanRoot := filepath.Clean(rootPath)
-	// The stored path was vetted when the workspace was written; a symlink planted there since can
-	// point it at a path no sandbox may be given, and os.Root only holds writes inside what it opened.
-	if err := runner.ValidateMountSource(cleanRoot); err != nil {
-		return nil, err
+	if err := runner.ValidateMountSourceLexical(cleanRoot); err != nil {
+		return nil, fmt.Errorf("%w: %v", errEnvRootDenied, err)
 	}
 	root, err := os.OpenRoot(cleanRoot)
 	if err != nil {
 		return nil, err
 	}
 	defer root.Close()
+	// The stored path was vetted when the workspace was written; a symlink planted there since can
+	// point it at a path no sandbox may be given, and os.Root only holds writes inside what it opened.
+	// So the check runs on the directory actually opened, not on the path a moment before the open.
+	if err := denyOpenedRoot(root); err != nil {
+		return nil, err
+	}
 	var skipped []string
 	for rel, content := range files {
 		dst := filepath.Join(cleanRoot, filepath.FromSlash(rel))

@@ -64,6 +64,27 @@ func TestHandleWriteEnvAsCode(t *testing.T) {
 			t.Errorf("audit rows %v, want none for a failed write", got)
 		}
 	})
+	t.Run("a source directory that resolves to a denied path is refused, audited denied and writes nothing", func(t *testing.T) {
+		tmp := t.TempDir()
+		denied := filepath.Join(tmp, "docker.sock") // denied by basename; a temp dir, never a system path
+		if err := os.Mkdir(denied, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		link := filepath.Join(tmp, "src")
+		if err := os.Symlink(denied, link); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+		h, srv, path := write(t, localDirWS(link))
+		if w := do(t, srv, http.MethodPost, path, adminToken, ""); w.Code != http.StatusUnprocessableEntity || reasonOf(t, w) != reasonWorkspaceRequestInvalid {
+			t.Errorf("= %d %s, want 422 %s", w.Code, w.Body.String(), reasonWorkspaceRequestInvalid)
+		}
+		if got := h.auditOutcomes("workspace.envcode.write"); !slices.Equal(got, []string{"denied"}) {
+			t.Errorf("audit outcomes %v, want [denied]", got)
+		}
+		if entries, _ := os.ReadDir(denied); len(entries) != 0 {
+			t.Errorf("%d file(s) written under the denied path", len(entries))
+		}
+	})
 	t.Run("keeps an operator's own AGENTS.md, rewrites one it generated, and says so", func(t *testing.T) {
 		dir := t.TempDir()
 		const operatorNotes = "# my notes, hand written\n"
