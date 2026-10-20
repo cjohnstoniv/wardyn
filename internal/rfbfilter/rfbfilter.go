@@ -177,8 +177,16 @@ func (c *Conn) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// flushHeld forwards the held browser bytes once the server's first frame has decided.
+// flushHeld forwards the held browser bytes once the server's first frame has decided. With
+// nothing held it returns without wmu: a browser Write blocked in the backend must never stall
+// the server's bytes, or a desktop busy writing a frame and a large paste wait on each other.
 func (c *Conn) flushHeld() error {
+	c.mu.Lock()
+	pending := c.mode != sniffing && len(c.held) > 0
+	c.mu.Unlock()
+	if !pending {
+		return nil
+	}
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
 	c.mu.Lock()
@@ -236,8 +244,15 @@ func (c *Conn) fail(err error) error {
 	return err
 }
 
-// Close closes the backend.
-func (c *Conn) Close() error { return c.backend.Close() }
+// Close stops the hold timer and closes the backend.
+func (c *Conn) Close() error {
+	c.mu.Lock()
+	if c.holdTimer != nil {
+		c.holdTimer.Stop()
+	}
+	c.mu.Unlock()
+	return c.backend.Close()
+}
 
 func (c *Conn) filter(pending *[]byte, in []byte, fromServer bool) ([]byte, error) {
 	var events []Event

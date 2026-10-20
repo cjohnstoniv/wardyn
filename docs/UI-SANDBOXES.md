@@ -80,6 +80,8 @@
   paste in allowed and copy out blocked unless the policy says otherwise.
 - The desktop is the app declared as `"name": "novnc"`. Every WebSocket of that app is RFB or it closes. The relay
   follows the RFB stream inside it and drops a blocked `ClientCutText` or `ServerCutText`.
+- Only that app is filtered. A member may declare the same desktop server under another name, so a ceiling that
+  blocks copy out should also pin `ui_apps` to the desktop app. An SSH port forward to the VNC port is outside the relay.
 - The server speaks first in RFB. Browser frames that arrive before the server's first frame are held, up to
   64 KiB and 5 seconds, then read in order. A desktop whose first frame is not an RFB version is closed, and a
   `ui.clipboard` `failure` row records `reason: not_rfb`.

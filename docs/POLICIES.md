@@ -882,6 +882,9 @@ What the check does and does not settle:
 - The file rules are enforced at the run's Files panel endpoints, which move files to and from `~/Transfers` in the desktop.
 - A member's run can only block more than its ceiling, the defaults included: to let members copy out, the ceiling has to allow it.
 - What it does not stop: what the desktop shows on screen, and what a UI app serves over HTTP.
+- The clipboard rules bind the relay of the app named `novnc` only. A member may declare the same desktop server
+  under another app name, so a ceiling that blocks copy out should also pin `ui_apps` to the desktop app. An SSH
+  port forward to the desktop's VNC port is outside the relay.
 
 | Field | Type | Default | What it does |
 |---|---|---|---|

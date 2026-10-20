@@ -39,7 +39,8 @@
 # docs/POLICIES.md=18607 adds 187 (0.10.0 VM-B): the port-rule box and the relay residual (#3193).
 # docs/POLICIES.md 19292 = ours 19105 + theirs 18777 - base 18590 at the 0.10 W2 merge of VM-B onto the train.
 # docs/POLICIES.md 19490 adds 198 (0.10 CTL-A): the desktop field and its section (#2967).
-docs/POLICIES.md=19490 share=12
+# docs/POLICIES.md 19542 adds 52 (0.10 CTL-A r3): the desktop rules bind the novnc app's relay only (#2967).
+docs/POLICIES.md=19542 share=12
 # 0.9.4 W1 merge +3: L8 and an earlier W1 lane both edited the README; the merged text measures 3 over the sum.
 examples/policies/README.md=1446 share=5
 # docs/POLICIES.md 18013 adds 40 over 17973, measured: a member's private-range workspace clone host.
