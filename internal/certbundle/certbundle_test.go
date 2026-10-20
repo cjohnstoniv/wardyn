@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-var now = time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+var now = time.Now().UTC().Truncate(time.Second)
 
 // mint is a certificate named cn, signed by parent (self-signed when nil).
 func mint(t *testing.T, cn string, isCA bool, notAfter time.Time, parent *x509.Certificate, parentKey *ecdsa.PrivateKey) (*x509.Certificate, *ecdsa.PrivateKey) {
