@@ -14,7 +14,10 @@ package recording_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -271,6 +274,126 @@ func TestPGStore_StatAndTailUsesStoredStats(t *testing.T) {
 		t.Fatalf("backfilled size_bytes = %d, %v; want 16", size, err)
 	}
 	check(runID, []byte("0123456789abcdef"), 4)
+}
+
+// An opened cast holds a read slot until it is closed: with castReadSlots held a further open is refused,
+// a close frees exactly its own slot (a second close frees nothing), and a missing cast takes none.
+func TestPGStore_OpenCastHoldsAReadSlotUntilClosed(t *testing.T) {
+	s := recording.NewPGStore(pgPool(t))
+	ctx := context.Background()
+	runID := uuid.NewString()
+	if err := s.SaveCast(ctx, runID, strings.NewReader("cast")); err != nil {
+		t.Fatal(err)
+	}
+	if held := recording.CastReadSlotsHeld(); held != 0 {
+		t.Fatalf("%d read slots held before the test opened anything", held)
+	}
+
+	var open []io.ReadCloser
+	for range recording.CastReadSlots {
+		rc, err := s.OpenCast(ctx, runID)
+		if err != nil {
+			t.Fatalf("open within the slots: %v", err)
+		}
+		open = append(open, rc)
+	}
+	if _, err := s.OpenCast(ctx, runID); !errors.Is(err, recording.ErrReadBusy) {
+		t.Fatalf("open with every slot held = %v, want ErrReadBusy", err)
+	}
+	open[0].Close()
+	open[0].Close()
+	if held := recording.CastReadSlotsHeld(); held != recording.CastReadSlots-1 {
+		t.Fatalf("after closing one cast twice %d slots are held, want %d", held, recording.CastReadSlots-1)
+	}
+	rc, err := s.OpenCast(ctx, runID)
+	if err != nil {
+		t.Fatalf("open after a close: %v", err)
+	}
+	open[0] = rc
+	for _, rc := range open {
+		rc.Close()
+	}
+	if _, err := s.OpenCast(ctx, uuid.NewString()); !errors.Is(err, recording.ErrNotFound) {
+		t.Fatalf("open of a missing cast = %v, want ErrNotFound", err)
+	}
+	if held := recording.CastReadSlotsHeld(); held != 0 {
+		t.Fatalf("%d read slots still held after every close and a failed open", held)
+	}
+}
+
+// The replay handler answers a full set of read slots 503 with Retry-After, and serves again once one is free.
+func TestPGStore_ReplayIs503WithRetryAfterWhileReadSlotsAreFull(t *testing.T) {
+	s := recording.NewPGStore(pgPool(t))
+	ctx := context.Background()
+	runID := uuid.NewString()
+	if err := s.SaveCast(ctx, runID, strings.NewReader("cast")); err != nil {
+		t.Fatal(err)
+	}
+	var open []io.ReadCloser
+	for range recording.CastReadSlots {
+		rc, err := s.OpenCast(ctx, runID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		open = append(open, rc)
+	}
+	srv := httptest.NewServer(newTestRouter(s))
+	defer srv.Close()
+	get := func() *http.Response {
+		resp, err := http.Get(srv.URL + "/api/v1/runs/" + runID + "/recording/" + runID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp
+	}
+	if resp := get(); resp.StatusCode != http.StatusServiceUnavailable || resp.Header.Get("Retry-After") == "" {
+		t.Fatalf("replay with every slot held: %d, Retry-After %q; want 503 with one", resp.StatusCode, resp.Header.Get("Retry-After"))
+	}
+	for _, rc := range open {
+		rc.Close()
+	}
+	if resp := get(); resp.StatusCode != http.StatusOK {
+		t.Fatalf("replay after the slots were freed: %d, want 200", resp.StatusCode)
+	}
+	if held := recording.CastReadSlotsHeld(); held != 0 {
+		t.Fatalf("%d read slots held after the replay finished", held)
+	}
+}
+
+// A joined replay holds one slot at a time, so it finishes with the other slot taken, and frees both.
+func TestPGStore_JoinedReplayNeedsOneReadSlotAtATime(t *testing.T) {
+	s := recording.NewPGStore(pgPool(t))
+	ctx := context.Background()
+	runID := "run-pg-" + uuid.NewString()
+	saveParts(t, s, runID, partHeader+partEv1, partHeader+partEv2, partHeader+partEv3)
+	other := uuid.NewString()
+	if err := s.SaveCast(ctx, other, strings.NewReader("cast")); err != nil {
+		t.Fatal(err)
+	}
+	var held []io.ReadCloser
+	for range recording.CastReadSlots - 1 {
+		rc, err := s.OpenCast(ctx, other)
+		if err != nil {
+			t.Fatal(err)
+		}
+		held = append(held, rc)
+	}
+	rc, err := recording.OpenJoined(ctx, s, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(rc)
+	rc.Close()
+	if err != nil || string(got) != partHeader+partEv1+partEv2+partEv3 {
+		t.Fatalf("joined replay = %q, %v", got, err)
+	}
+	for _, rc := range held {
+		rc.Close()
+	}
+	if n := recording.CastReadSlotsHeld(); n != 0 {
+		t.Fatalf("%d read slots held after the replay", n)
+	}
 }
 
 // DeleteRun is what a person's erasure reaches recordings through: the run's

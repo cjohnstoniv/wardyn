@@ -34,7 +34,8 @@ type Authorizer func(r *http.Request, runIDPrefix string) bool
 // are enforced equal (case-insensitive, on the run-id prefix) before
 // authorize runs, so a caller can't request .../runs/A/recording/B to read
 // run B's cast under an authorization scoped to run A. Both checks collapse
-// to the same 404 (no existence oracle). Store errors produce 500. A bare run
+// to the same 404 (no existence oracle). Store errors produce 500, and a store with every read slot
+// held (ErrReadBusy) a 503 with Retry-After. A bare run
 // id is served joined across its tail-uploaded parts (OpenJoined).
 //
 // A key servableKey or canonicalRunID refuses gets that same 404 before
@@ -56,6 +57,11 @@ func Handler(store Store, authorize Authorizer) http.Handler {
 		rc, err := open(req.Context(), key)
 		if errors.Is(err, ErrNotFound) || errors.Is(err, ErrErased) {
 			http.Error(w, "recording not found", http.StatusNotFound)
+			return
+		}
+		if errors.Is(err, ErrReadBusy) {
+			w.Header().Set("Retry-After", "5")
+			http.Error(w, "too many recordings are being replayed; retry shortly", http.StatusServiceUnavailable)
 			return
 		}
 		if err != nil {
