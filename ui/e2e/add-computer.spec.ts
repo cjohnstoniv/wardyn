@@ -7,11 +7,14 @@
 // harness keeps runners off and has no runner, so the runner reads and /healthz are answered at the network boundary;
 // every locator is scoped to the block (`[data-add-computer]`), never to the page's text, and nothing waits on a timer.
 import type { Page } from "@playwright/test";
-import { test, expect, asRealMember, gotoConsole, navTo } from "./fixtures";
+import { test, expect, asRealMember, gotoConsole, navTo, MEMBER_PRINCIPAL } from "./fixtures";
 import { aheadByHours } from "../src/app/lib/test-clock";
 
 const SH = "curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.10.0/install-cli.sh | sh";
 const PS = "irm https://github.com/cjohnstoniv/wardyn/releases/download/v0.10.0/install-cli.ps1 | iex";
+// Playwright's Desktop Chrome preset reports a Windows user agent, so each state names the viewer's system.
+const LINUX = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36";
+const WINDOWS = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36";
 const NO_CLI_SIGN_IN =
   "This server does not offer CLI sign-in yet. Set WARDYN_TOKEN to a personal API token first; a personal token works for setup. A Wardyn admin can invite you to create one, and you claim it under Your account.";
 
@@ -45,6 +48,7 @@ async function adminRunners(page: Page, runners: unknown[] = []) {
 }
 
 test.describe("Admin -> Runners: Add this computer", () => {
+  test.use({ userAgent: LINUX });
   test("the three steps replace the header action; the other OS and MDM are folded", async ({ page }) => {
     await healthz(page, { version: "0.10.0", cli_sign_in: true });
     const block = await adminRunners(page);
@@ -136,7 +140,7 @@ test.describe("Admin -> Runners: Add this computer", () => {
   });
 
   test.describe("viewing from Windows", () => {
-    test.use({ userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36" });
+    test.use({ userAgent: WINDOWS });
     test("the block says the runner runs in WSL2 and shows only the shell line", async ({ page }) => {
       await healthz(page, { version: "0.10.0", cli_sign_in: true });
       const block = await adminRunners(page);
@@ -148,10 +152,11 @@ test.describe("Admin -> Runners: Add this computer", () => {
   });
 
   test.describe("on a phone", () => {
-    test.use({ viewport: { width: 390, height: 844 } });
     test("the steps stack, each copy button and fold is 44 px tall, and the page does not scroll sideways", async ({ page }) => {
       await healthz(page, { version: "0.10.0", cli_sign_in: true });
+      // The console's own sign-in landing is walked at desktop width (its nav collapses on a phone), then the page narrows.
       const block = await adminRunners(page);
+      await page.setViewportSize({ width: 390, height: 844 });
       await expect(block.getByText(SH, { exact: true })).toBeVisible();
       for (const name of ["Copy install line for macOS, Linux and WSL2", "Copy sign-in command", "Copy setup command"]) {
         const box = await block.getByRole("button", { name }).boundingBox();
@@ -167,6 +172,25 @@ test.describe("Admin -> Runners: Add this computer", () => {
 });
 
 test.describe("Your account -> My runner: Add this computer", () => {
+  test.use({ userAgent: LINUX });
+  test("with one runner and the card open, a second computer that registers appears without a reload", async ({ page }) => {
+    await healthz(page, { version: "0.10.0", cli_sign_in: true });
+    const none = { runs: 0, cpu_millis: 0, memory_mib: 0, disk_mib: 0 };
+    const mine = (id: string, name: string) => ({ ...mbp(aheadByHours(-2)), id, name, owner: MEMBER_PRINCIPAL, usage: { online: true, in_use: none, available: none, disk_capped: true } });
+    let list = [mine("r-one", "desk-1")];
+    await page.route("**/api/v1/me/runners*", (r) => (r.request().method() === "GET" ? r.fulfill({ json: list }) : r.fallback()));
+    await asRealMember(page);
+    await gotoConsole(page, "user");
+    await navTo(page, "Your account");
+    await page.getByRole("button", { name: /^My runner/ }).click();
+    await expect(page.locator("[data-add-computer]")).toBeVisible();
+    const mineCard = page.locator("#my-runner");
+    await expect(mineCard.getByRole("heading", { name: "desk-1", level: 4 })).toBeVisible();
+    list = [...list, mine("r-two", "desk-2")];
+    // The card re-reads on its own 5 s poll while open; the new row is awaited, never slept for.
+    await expect(mineCard.getByRole("heading", { name: "desk-2", level: 4 })).toBeVisible({ timeout: 15_000 });
+  });
+
   test("with no runner, the same three steps stand in place of Register a runner, without the MDM section", async ({ page }) => {
     await healthz(page, { version: "0.10.0", cli_sign_in: true });
     await page.route("**/api/v1/me/runners*", (r) => (r.request().method() === "GET" ? r.fulfill({ json: [] }) : r.fallback()));
