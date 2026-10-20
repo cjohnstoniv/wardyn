@@ -67,7 +67,7 @@ test.describe("Run detail — Desktop", () => {
     const runId = await openVMRun(page);
     const desk = page.getByRole("region", { name: DESKTOP.title });
     await desk.scrollIntoViewIfNeeded();
-    await expect(desk.getByText(DESKTOP.ready)).toBeVisible();
+    await expect(desk.getByText(DESKTOP.ready, { exact: true })).toBeVisible();
     await expect(desk.getByText(DESKTOP.kind)).toBeVisible();
 
     let captured: { url: string; postData: string | null; cookie: string } | null = null;
@@ -101,7 +101,7 @@ test.describe("Run detail — Desktop", () => {
     await openVMRun(page);
     const desk = page.getByRole("region", { name: DESKTOP.title });
     await desk.scrollIntoViewIfNeeded();
-    await expect(desk.getByText(DESKTOP.statusOff)).toBeVisible();
+    await expect(desk.getByText(DESKTOP.statusOff, { exact: true })).toBeVisible();
     await expect(desk.getByText(/^Off on this deployment\. It relays the desktop of a sandbox/)).toBeVisible();
     await expect(desk.getByRole("button")).toHaveCount(0);
   });
