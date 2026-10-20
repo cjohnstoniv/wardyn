@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -48,6 +49,9 @@ func readOrgCA(path string, self int, now time.Time) (string, int, error) {
 	if st.Mode().Perm()&0o022 != 0 {
 		return "", 0, fmt.Errorf("mode %04o lets group or others write it, so another account could add a root this runner trusts: chmod go-w it", st.Mode().Perm())
 	}
+	if err := checkOrgCADir(filepath.Dir(path)); err != nil {
+		return "", 0, err
+	}
 	if uid, ok := fileOwner(st); ok && uid != 0 && uid != self {
 		return "", 0, fmt.Errorf("owned by another account (uid %d): a root this runner trusts must be owned by you or by root", uid)
 	}
@@ -68,6 +72,26 @@ func readOrgCA(path string, self int, now time.Time) (string, int, error) {
 		}
 	}
 	return bundle, len(certs), nil
+}
+
+// checkOrgCADir refuses a directory group or others can write, which lets another account replace the file
+// beside the check. A sticky directory owned by root (/tmp) is allowed: only the file's owner can replace
+// it there.
+func checkOrgCADir(dir string) error {
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs
+	}
+	st, err := os.Stat(dir)
+	if err != nil {
+		return err
+	}
+	if st.Mode().Perm()&0o022 == 0 {
+		return nil
+	}
+	if uid, ok := fileOwner(st); st.Mode()&os.ModeSticky != 0 && (!ok || uid == 0) {
+		return nil
+	}
+	return fmt.Errorf("the directory %s (mode %04o) lets group or others write, so another account could replace the file: put it in a directory only you can write", dir, st.Mode().Perm())
 }
 
 func checkOrgCACert(c *x509.Certificate, now time.Time) error {

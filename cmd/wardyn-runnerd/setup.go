@@ -289,6 +289,27 @@ func (h setupHost) checkSettings(plan setupPlan) error {
 	return nil
 }
 
+// proxyForService settles the proxy variables the service carries: the shell's, else the ones an earlier setup
+// carried, and says which, by name.
+func proxyForService(out io.Writer, paths setupPaths) ([]carriedProxy, error) {
+	carried, stripped, err := carryProxy(os.Getenv)
+	if err != nil {
+		return nil, err
+	}
+	if len(carried) > 0 {
+		fmt.Fprintln(out, proxyCarryLine(carried, stripped))
+		return carried, nil
+	}
+	// The shell sets none, so a rerun keeps what an earlier setup carried, as it keeps the CA files.
+	if carried, _, err = carryProxy(paths.setting); err != nil {
+		return nil, fmt.Errorf("%w (kept from the earlier setup, %s)", err, cmp.Or(paths.envFile, paths.plistFile))
+	}
+	if len(carried) > 0 {
+		fmt.Fprintln(out, proxyKeptLine(carried))
+	}
+	return carried, nil
+}
+
 // preflight validates every input and checks Docker, so that a refusal comes before the single-use
 // token is spent or any file is written.
 func (h setupHost) preflight(cmd *cobra.Command, o setupOptions) (setupPlan, error) {
@@ -320,12 +341,9 @@ func (h setupHost) preflight(cmd *cobra.Command, o setupOptions) (setupPlan, err
 	if o.orgCAFile, err = checkedOrgCAFile(o.orgCAFile, keptOrgCA, cmp.Or(paths.envFile, paths.plistFile)); err != nil {
 		return setupPlan{}, err
 	}
-	carried, stripped, err := carryProxy(os.Getenv)
+	carried, err := proxyForService(cmd.OutOrStdout(), paths)
 	if err != nil {
 		return setupPlan{}, err
-	}
-	if len(carried) > 0 {
-		fmt.Fprintln(cmd.OutOrStdout(), proxyCarryLine(carried, stripped))
 	}
 	plan := setupPlan{proxy: carried, setupOptions: o, paths: paths, dockerHost: h.dockerHost, want: want, flagged: o.proxyImage != ""}
 	if _, err := os.Stat(plan.paths.identity()); err == nil {

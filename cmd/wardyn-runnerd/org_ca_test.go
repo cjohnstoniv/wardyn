@@ -301,3 +301,31 @@ func TestSetupWritesKeepsAndRegistersWithTheOrgCA(t *testing.T) {
 		})
 	}
 }
+
+// A file in a directory group or others can write is refused, since another account could replace it
+// after the check; a directory only the account writes is fine, and so is a sticky root-owned one (/tmp).
+func TestLoadOrgCARefusesAWritableDirectory(t *testing.T) {
+	dir := t.TempDir()
+	path := writeFile(t, filepath.Join(dir, "ca.pem"), testCAPEM(t, "corp"))
+	if _, _, err := loadOrgCA(path); err != nil {
+		t.Fatalf("a private directory: %v", err)
+	}
+	for _, mode := range []os.FileMode{0o770, 0o707, 0o777, 0o777 | os.ModeSticky} {
+		if err := os.Chmod(dir, mode); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := loadOrgCA(path); err == nil || !strings.Contains(err.Error(), "the directory "+dir) || !strings.Contains(err.Error(), path) {
+			t.Errorf("directory mode %v: err=%v; want a refusal naming the directory and the file", mode, err)
+		}
+	}
+	if st, err := os.Stat(os.TempDir()); err == nil && st.Mode()&os.ModeSticky != 0 && st.Mode().Perm() == 0o777 {
+		if owner, ok := fileOwner(st); ok && owner == 0 {
+			file := filepath.Join(os.TempDir(), "wardyn-org-ca-test-"+filepath.Base(dir)+".pem")
+			writeFile(t, file, testCAPEM(t, "corp"))
+			t.Cleanup(func() { os.Remove(file) })
+			if _, _, err := loadOrgCA(file); err != nil {
+				t.Errorf("a file directly in the sticky, root-owned %s: %v", os.TempDir(), err)
+			}
+		}
+	}
+}

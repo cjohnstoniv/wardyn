@@ -82,3 +82,13 @@ func proxyCarryLine(carried []carriedProxy, stripped []string) string {
 	}
 	return line
 }
+
+// proxyKeptLine is the one line setup prints when the shell sets no proxy variable and the service keeps the
+// ones an earlier setup carried, naming variables only.
+func proxyKeptLine(carried []carriedProxy) string {
+	names := make([]string, len(carried))
+	for i, c := range carried {
+		names[i] = c.name
+	}
+	return "This shell sets no proxy variable, so the runner service keeps " + strings.Join(names, ", ") + " from the earlier setup."
+}

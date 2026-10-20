@@ -182,3 +182,47 @@ func TestSetupRefusesAnUncarriableProxyBeforeSpendingTheToken(t *testing.T) {
 		t.Error("the token was spent")
 	}
 }
+
+// A rerun from a shell that sets none of the proxy variables keeps what the earlier setup carried, and says
+// which by name; a shell that sets any of them replaces the earlier set.
+func TestSetupRerunKeepsTheCarriedProxyWhenTheShellSetsNone(t *testing.T) {
+	for _, goos := range []string{"linux", "darwin"} {
+		t.Run(goos, func(t *testing.T) {
+			clearProxyEnv(t)
+			t.Setenv("HTTPS_PROXY", "http://u:keptpw-91@proxy.corp:3128")
+			t.Setenv("NO_PROXY", "localhost,.corp")
+			f := newSetupFixture(t, goos)
+			if out, err := f.run(setupOptions{tokenFile: f.tokenFile}); err != nil {
+				t.Fatalf("%v\n%s", err, out)
+			}
+			p := mustPaths(t, f)
+			service := func() string {
+				if goos == "linux" {
+					return f.read(p.envFile)
+				}
+				return f.read(p.plistFile)
+			}
+			first := service()
+			clearProxyEnv(t)
+			f.flagless = true
+			out, err := f.run(setupOptions{})
+			if err != nil {
+				t.Fatalf("%v\n%s", err, out)
+			}
+			if got := service(); got != first {
+				t.Errorf("a rerun with no proxy in the shell changed the service:\n%s\nwas:\n%s", got, first)
+			}
+			if !strings.Contains(out, "This shell sets no proxy variable, so the runner service keeps HTTPS_PROXY, NO_PROXY from the earlier setup.") || strings.Contains(out, "keptpw-91") {
+				t.Errorf("the rerun did not name the kept variables, or leaked a value:\n%s", out)
+			}
+			// A shell that sets one replaces the earlier set, as on the first run.
+			t.Setenv("HTTP_PROXY", "http://other.corp:80")
+			if out, err := f.run(setupOptions{}); err != nil {
+				t.Fatalf("%v\n%s", err, out)
+			}
+			if got := service(); !strings.Contains(got, "http://other.corp:80") || strings.Contains(got, "proxy.corp:3128") || strings.Contains(got, "NO_PROXY") {
+				t.Errorf("the shell's own set should replace the earlier one:\n%s", got)
+			}
+		})
+	}
+}

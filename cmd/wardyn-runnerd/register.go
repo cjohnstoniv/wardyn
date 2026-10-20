@@ -186,6 +186,29 @@ type registerArgs struct {
 	reuseKey bool
 }
 
+// registrationClient is the HTTP client of the registration call: the system roots plus the run-wide
+// --trusted-ca-file and the org-only --org-ca-file, like the runner's own connection. nil is the default.
+func registrationClient(a registerArgs) (*http.Client, error) {
+	bundle, _, err := loadTrustedCA(a.trustedCAFile)
+	if err != nil {
+		return nil, err
+	}
+	orgOnly, _, err := loadOrgCA(a.orgCAFile)
+	if err != nil {
+		return nil, err
+	}
+	return orgHTTPClient(bundle + orgOnly)
+}
+
+// dropUnsentKey removes the key made for this call when the failure was an unknown authority: nothing left
+// this computer, and the retry with --org-ca-file must not be refused for finding it.
+func dropUnsentKey(err error, a registerArgs, stateDir string) {
+	var unknown x509.UnknownAuthorityError
+	if errors.As(err, &unknown) && !a.reuseKey {
+		_ = os.Remove(filepath.Join(stateDir, "runner.key"))
+	}
+}
+
 // registeredRunner is what a registration left on this host and with the organisation.
 type registeredRunner struct {
 	name, fingerprint string
@@ -216,15 +239,7 @@ func registerRunner(cmd *cobra.Command, a registerArgs) (registeredRunner, error
 		return registeredRunner{}, err
 	}
 	// Read before anything is spent, like the token: an unusable bundle keeps both.
-	bundle, _, err := loadTrustedCA(a.trustedCAFile)
-	if err != nil {
-		return registeredRunner{}, err
-	}
-	orgOnly, _, err := loadOrgCA(a.orgCAFile)
-	if err != nil {
-		return registeredRunner{}, err
-	}
-	orgClient, err := orgHTTPClient(bundle + orgOnly)
+	orgClient, err := registrationClient(a)
 	if err != nil {
 		return registeredRunner{}, err
 	}
@@ -273,12 +288,7 @@ func registerRunner(cmd *cobra.Command, a registerArgs) (registeredRunner, error
 	}
 	registered, err := client.RegisterRunner(cmd.Context(), sdk.RunnerRegisterRequest{Token: token, PublicKey: key.Public().(ed25519.PublicKey), Name: name, Limits: &limits, MachineName: machine, Arch: arch})
 	if err != nil {
-		var unknown x509.UnknownAuthorityError
-		if errors.As(err, &unknown) && !a.reuseKey {
-			// Nothing left this computer: the key made for this call goes, so the run with --org-ca-file is not
-			// refused for finding it.
-			_ = os.Remove(filepath.Join(stateDir, "runner.key"))
-		}
+		dropUnsentKey(err, a, stateDir)
 		return registeredRunner{}, registrationFailure(err)
 	}
 	fingerprint := runnerwire.Fingerprint(key.Public().(ed25519.PublicKey))

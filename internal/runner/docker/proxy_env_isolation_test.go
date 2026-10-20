@@ -14,7 +14,7 @@ import (
 // `wardyn-runnerd setup` copies the shell's proxy variables into the runner service only. They are the
 // runner's own route to the organisation: a run's container and its proxy sidecar build their environment
 // from the run, never from the daemon's, so neither may carry them.
-func TestCreateSandbox_NeitherContainerCarriesTheServicesProxyVariables(t *testing.T) {
+func TestCreateSandbox_EnvCarriesNoServiceProxyVariables(t *testing.T) {
 	const planted = "http://svc-user:planted-pw@corp-proxy.example:3128"
 	for _, k := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy"} {
 		t.Setenv(k, planted)
