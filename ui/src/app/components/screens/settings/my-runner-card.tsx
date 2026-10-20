@@ -249,9 +249,9 @@ export function MyRunnerCard({ onHidden }: { onHidden?: (reason: string) => void
 
   const live = rows.filter((r) => r.state !== "revoked");
   const waiting = live.filter((r) => r.state === "unclaimed");
-  // The card polls only while it is open with no runner to show, so a runner `wardyn runner setup` just registered
-  // appears, or while one waits to be claimed; it never announces a poll.
-  const polling = status === "ready" && (waiting.length > 0 || (open && live.length === 0));
+  // The card polls only while it is open (Add this computer is shown then, so a runner `wardyn runner setup` just
+  // registered appears) or while one waits to be claimed; a closed card does not poll, and a poll is never announced.
+  const polling = status === "ready" && (waiting.length > 0 || open);
   React.useEffect(() => {
     if (!polling) return;
     const tick = () => {

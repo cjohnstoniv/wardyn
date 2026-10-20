@@ -109,6 +109,8 @@ describe("Add this computer: no install line", () => {
     expect(screen.getByRole("link", { name: "Other ways to install" })).toBeInTheDocument();
     // Nothing is claimed about CLI sign-in from a /healthz that said nothing.
     expect(screen.queryByText(NO_CLI_SIGN_IN)).not.toBeInTheDocument();
+    // ...nor does it promise the browser sign-in.
+    expect(screen.queryByText(SIGN_IN_NOTE)).not.toBeInTheDocument();
     healthz({ version: "0.10.0", cli_sign_in: true });
     await user.click(screen.getByRole("button", { name: "Try again" }));
     expect(await screen.findByText(SH)).toBeInTheDocument();

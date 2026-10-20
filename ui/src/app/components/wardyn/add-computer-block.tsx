@@ -143,7 +143,8 @@ export function AddComputerBlock({ mdm }: { /** The folded "Managed install (MDM
         <InstallStep facts={facts} onRetry={retry} />
         <Step n={2} title={ADD_COMPUTER.STEP_SIGN_IN}>
           <CmdRow text={ADD_COMPUTER_COMMANDS.login(url)} label={ADD_COMPUTER.COPY_SIGN_IN} />
-          {facts.loaded && <p className={NOTE}>{facts.answered && !facts.cliSignIn ? ADD_COMPUTER.NO_CLI_SIGN_IN : ADD_COMPUTER.SIGN_IN_NOTE}</p>}
+          {/* Silent until /healthz answers: nothing is promised about sign-in capability that was not read. */}
+          {facts.answered && <p className={NOTE}>{facts.cliSignIn ? ADD_COMPUTER.SIGN_IN_NOTE : ADD_COMPUTER.NO_CLI_SIGN_IN}</p>}
         </Step>
         <Step n={3} title={ADD_COMPUTER.STEP_SETUP}>
           <CmdRow text={ADD_COMPUTER_COMMANDS.setup} label={ADD_COMPUTER.COPY_SETUP} />

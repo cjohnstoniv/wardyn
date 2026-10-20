@@ -401,6 +401,28 @@ describe("My runner card: Add this computer and the 5 second poll", () => {
     expect(screen.queryByRole("button", { name: "Register a runner" })).toBeNull();
   });
 
+  it("with one claimed runner and the card open, a second computer registered through the block appears on the next tick", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      listMineMock.mockResolvedValue([CLAIMED]);
+      const user = userEvent.setup({ advanceTimers: (ms) => vi.advanceTimersByTime(ms) });
+      renderCard();
+      await expand(user);
+      await screen.findByRole("heading", { name: "Add this computer" });
+      const reads = listMineMock.mock.calls.length;
+      listMineMock.mockResolvedValue([CLAIMED, runner({ id: "r-second", name: "desk-2" })]);
+      await act(async () => {
+        vi.advanceTimersByTime(5000);
+      });
+      await waitFor(() => expect(listMineMock.mock.calls.length).toBeGreaterThan(reads));
+      expect(await screen.findByText("desk-2", { selector: "h4" })).toBeInTheDocument();
+      // A poll is silent: no live region announces it.
+      expect(screen.queryByRole("status")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("polls every 5 s while open with nothing registered, and shows the runner that setup registered", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     try {
@@ -422,26 +444,13 @@ describe("My runner card: Add this computer and the 5 second poll", () => {
     }
   });
 
-  it("does not poll while the card is closed, or once a runner is registered with nothing waiting", async () => {
+  it("does not poll while the card is closed", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     try {
-      listMineMock.mockResolvedValue([]);
-      const user = userEvent.setup({ advanceTimers: (ms) => vi.advanceTimersByTime(ms) });
-      const { unmount } = renderCard();
-      await screen.findByRole("button", { name: /^My runner/ });
-      let reads = listMineMock.mock.calls.length;
-      await act(async () => {
-        vi.advanceTimersByTime(20_000);
-      });
-      expect(listMineMock.mock.calls.length).toBe(reads);
-      unmount();
-      cleanup();
-
       listMineMock.mockResolvedValue([CLAIMED]);
       renderCard();
-      await expand(user);
-      await screen.findByText("laptop-7", { selector: "h4" });
-      reads = listMineMock.mock.calls.length;
+      await screen.findByRole("button", { name: /^My runner/ });
+      const reads = listMineMock.mock.calls.length;
       await act(async () => {
         vi.advanceTimersByTime(20_000);
       });
@@ -456,7 +465,8 @@ describe("My runner card: Add this computer and the 5 second poll", () => {
     try {
       listMineMock.mockResolvedValue([WAITING]);
       renderCard();
-      await screen.findByRole("button", { name: /^My runner/ });
+      // The read has landed (the summary names the waiting runner) before the interval is advanced.
+      await screen.findByRole("button", { name: /^My runner\s*1 waiting for you to claim/ });
       const reads = listMineMock.mock.calls.length;
       await act(async () => {
         vi.advanceTimersByTime(5000);
