@@ -190,8 +190,11 @@ func TestKubectlCLI_CatalogueAndView(t *testing.T) {
 	if cards[4].State != client.CLIStateAvailable || len(cards[4].Rows) != 1 {
 		t.Fatalf("kubectl card = %+v, want available with the row", cards[4])
 	}
-	if v.CLI.Cluster != "k8s.example.com" || len(v.CLI.Namespaces) != 1 || v.CLI.Access != "read" {
+	if v.CLI.Cluster != "k8s.example.com" || v.CLI.Server != "https://k8s.example.com:6443" || len(v.CLI.Namespaces) != 1 || v.CLI.Access != "read" {
 		t.Errorf("view = %+v", v.CLI)
+	}
+	if s := orgComponentView(types.Component{ID: f.id, Definition: kubectlRowDef("https://k8s.example.com/", "", "a")}).CLI.Server; s != "https://k8s.example.com:443" {
+		t.Errorf("default port: server = %q", s)
 	}
 	if raw := string(mustJSON(v)); strings.Contains(raw, "service_account") || strings.Contains(raw, "ca_pem") {
 		t.Errorf("the member's view carries the account or the CA: %s", raw)
@@ -484,6 +487,33 @@ func TestKubectlCLI_SetupStatusFeature(t *testing.T) {
 		}
 		if got := redactSetupStatusForUser(st).Features.KubectlCLI; got != on {
 			t.Errorf("switch %v: the member's redaction says %v", on, got)
+		}
+	}
+}
+
+// Review's credential for a kubectl row says which namespaces the cluster
+// account reaches and whether it may change them.
+func TestKubectlCLI_AccessCredentialScope(t *testing.T) {
+	for access, want := range map[string]string{types.ComponentAccessRead: "read_only", types.ComponentAccessWrite: "read_write"} {
+		id := uuid.New()
+		def := kubectlRowDef("https://k8s.example.com:6443", "", "team-a", "team-b")
+		def.CLI.Kubectl.Access = access
+		comps := runComponents{attached: []attachedComponent{{source: componentSourceOrg, snapshot: types.RunComponent{
+			ComponentID: &id, Name: "Cluster", Definition: def}}}}
+		req := createRunRequest{Agent: "claude-code", Task: "t"}
+		facts := componentFacts(componentFactInputs{req: &req, comps: comps}, nil)
+		got, err := (&Server{}).accessFor(httptest.NewRequest(http.MethodPost, preflightDoor, nil), accessInputs{req: &req, comps: comps, facts: facts})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var cred *client.AccessCredential
+		for i := range got.Credentials {
+			if got.Credentials[i].Kind == credKindKubeAPI {
+				cred = &got.Credentials[i]
+			}
+		}
+		if cred == nil || cred.Access != want || strings.Join(cred.Namespaces, ",") != "team-a,team-b" {
+			t.Errorf("%s: credential = %+v, want %s on team-a,team-b", access, cred, want)
 		}
 	}
 }

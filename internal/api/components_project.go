@@ -4,7 +4,9 @@
 package api
 
 import (
+	"net"
 	"net/http"
+	"strconv"
 
 	"github.com/google/uuid"
 
@@ -46,7 +48,9 @@ func cliView(c *types.ComponentCLI) *client.CLIView {
 	case c.GitHub != nil:
 		v.Capabilities = append([]ghscope.Capability{}, c.GitHub.Capabilities...)
 	case c.Kubectl != nil:
-		v.Cluster, _, _ = c.Kubectl.HostPort()
+		if host, port, ok := c.Kubectl.HostPort(); ok {
+			v.Cluster, v.Server = host, "https://"+net.JoinHostPort(host, strconv.Itoa(port))
+		}
 		v.Namespaces, v.Access = append([]string{}, c.Kubectl.Namespaces...), c.Kubectl.Access
 	}
 	return v

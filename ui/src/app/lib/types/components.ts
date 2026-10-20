@@ -198,6 +198,8 @@ export interface CLIView {
   capabilities?: string[];
   // kubectl: the API server's host and the namespaces; `access` above.
   cluster?: string;
+  // The API server's URL with scheme and port.
+  server?: string;
   namespaces?: string[];
 }
 
