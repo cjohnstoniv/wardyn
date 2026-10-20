@@ -79,6 +79,9 @@ export function RunsScreen() {
   const [hiddenOlder, setHiddenOlder] = React.useState(0);
   const [hiddenKilled, setHiddenKilled] = React.useState(0);
   const [truncated, setTruncated] = React.useState(false);
+  // Every run the caller owns, as of the last fetch no filter narrowed: a search, a status or a
+  // workspace filter changes the rows shown, not how many runs there are.
+  const [owned, setOwned] = React.useState<{ n: number; more: boolean } | null>(null);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   // whether ANY fetch has ever landed. Only the very first load
   // shows the full-page skeleton (design.md §2.1's "Loading" state); every
@@ -119,6 +122,9 @@ export function RunsScreen() {
           setHiddenOlder(res.hiddenOlder);
           setHiddenKilled(res.hiddenKilled);
           setTruncated(res.truncated);
+          if (!adminView && filters.q === "" && filters.status === "all" && filters.workspace === "all") {
+            setOwned({ n: res.runs.length + res.hiddenOlder + res.hiddenKilled, more: res.truncated });
+          }
           setStatus("ready");
           setLoadedOnce(true);
         },
@@ -225,7 +231,7 @@ export function RunsScreen() {
   // example (13 shown + 4 older + 1 killed = "Your runs · 18").
   const description = adminView
     ? "Every run, live — each confined behind its own barrier."
-    : `Your runs · ${runsList.length + hiddenOlder + hiddenKilled}${truncated ? "+" : ""}`;
+    : `Your runs · ${owned?.n ?? runsList.length + hiddenOlder + hiddenKilled}${(owned?.more ?? truncated) ? "+" : ""}`;
 
   const clearFilters = () => setFilters(DEFAULT_RUNS_FILTERS);
 
