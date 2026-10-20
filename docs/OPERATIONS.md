@@ -3711,7 +3711,7 @@ docker compose -f deploy/compose/docker-compose.yaml up -d wardynd
 - Every image
   under [`deploy/images`](../deploy/images) now pre-creates it owned by `agent` — the ones on a public
   base do it themselves, the ones on a sibling image inherit it.
-- So a fresh
+- A person's fresh
   managed volume takes that ownership through Docker's copy-up.
 - **No pre-0.7 image
   has the directory**: 0.6.6's base image created `/home/agent/work` and nothing

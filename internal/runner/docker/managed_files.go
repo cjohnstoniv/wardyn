@@ -43,7 +43,7 @@ var managedFileEpoch = time.Unix(0, 0).UTC()
 //
 // WHY THE OWNERSHIP SURVIVES. Every header goes out with Uid/Gid 0 and
 // CopyToContainerOptions.CopyUIDGID stays FALSE — that flag would instead
-// make the daemon chown the tree to the IMAGE'S USER (agentUID for every
+// make the daemon chown the tree to the IMAGE'S USER (runner.AgentUID for every
 // Wardyn agent image), exactly the agent-writable outcome runner.ManagedFile
 // exists to rule out. The one exception is an AgentOwned file (a delivered
 // secret), whose header alone carries the agent's uid; see managedFilesTar.

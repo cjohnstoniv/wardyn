@@ -254,7 +254,7 @@ WARDYN_USER_DRIVE_HOST_ROOT=/srv/wardyn-drives    # compose binds this one, RO, 
 
 - A **BYOI** image is your own to get right on this one point: a custom base that never creates `/home/agent/drive` gets a root-owned one from the daemon at mount time.
 - So a drive you allocated writable is unwritable by uid 1000 on its first run.
-- [`deploy/images/README.md`](../../deploy/images/README.md)'s image contract states the one line that fixes it; wardynd will not chown volume state to compensate.
+- [`deploy/images/README.md`](../../deploy/images/README.md)'s image contract states the one line that fixes it; wardynd never chowns a person's volume to compensate.
 
 - **gVisor (CC2): if a share bind misbehaves under `runsc`, turn `directfs` off.**
 - Wardyn does not claim this is required — `runsc`'s own filesystem guidance ([gvisor.dev](https://gvisor.dev/docs/user_guide/filesystem/)) is the reference, and whether a given network-backed mount needs direct host-FD access disabled depends on the share.

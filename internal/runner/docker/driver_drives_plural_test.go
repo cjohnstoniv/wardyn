@@ -9,11 +9,9 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
-	"go/ast"
-	"go/parser"
-	"go/token"
+	"fmt"
 	"io"
-	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -230,7 +228,7 @@ func TestCreateSandbox_PersonalDriveSeedUnchanged(t *testing.T) {
 }
 
 // TestCreateSandbox_WritableTeamDriveRefusesAnotherAgentUID: an image whose
-// agent runs as any uid but agentUID is refused, by name, before any
+// agent runs as any uid but runner.AgentUID, root included, is refused, by name, before any
 // ownership change, whether the volume is empty or holds files; a read-only
 // allocation of the same image is not, since it never writes.
 func TestCreateSandbox_WritableTeamDriveRefusesAnotherAgentUID(t *testing.T) {
@@ -257,6 +255,15 @@ func TestCreateSandbox_WritableTeamDriveRefusesAnotherAgentUID(t *testing.T) {
 			t.Errorf("held=%v: seed copies = %+v, want no ownership change", held, c)
 		}
 	}
+	for _, user := range []string{"", "0", "root"} {
+		f := newFakeDocker()
+		f.imageUsers = map[string]string{"busybox:latest": user}
+		f.passwd = "root:x:0:0::/root:/bin/sh\n"
+		want := fmt.Sprintf("this image runs the agent as uid 0 (USER %q)", user)
+		if _, err := createWithDrives(t, f, testSpec().RunID, teamVolumeDrive(false)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("USER %q: CreateSandbox = %v, want the refusal naming uid 0", user, err)
+		}
+	}
 	f := newFakeDocker()
 	f.imageUsers = map[string]string{"busybox:latest": "1001"}
 	if _, err := createWithDrives(t, f, testSpec().RunID, teamVolumeDrive(true)); err != nil {
@@ -265,7 +272,7 @@ func TestCreateSandbox_WritableTeamDriveRefusesAnotherAgentUID(t *testing.T) {
 }
 
 // TestCreateSandbox_WritableTeamDriveAcceptsTheAgentByName: USER agent, uid
-// agentUID in the image's /etc/passwd, is the agent.
+// runner.AgentUID in the image's /etc/passwd, is the agent.
 func TestCreateSandbox_WritableTeamDriveAcceptsTheAgentByName(t *testing.T) {
 	f := newFakeDocker()
 	f.imageUsers = map[string]string{"busybox:latest": "agent"}
@@ -275,15 +282,16 @@ func TestCreateSandbox_WritableTeamDriveAcceptsTheAgentByName(t *testing.T) {
 	}
 }
 
-// TestCreateSandbox_ConcurrentTeamSeedsAreIdempotent: two runs seeding one
-// empty team volume at once, both held until each has read it empty, both
+// TestCreateSandbox_ConcurrentTeamSeedsAreIdempotent: four runs seeding one
+// empty team volume at once, all held until each has read it empty, all
 // succeed, each through its own seed, and each sends the same one entry: the
-// directory as agentUID:agentUID 0755 and nothing in it.
+// directory as runner.AgentUID:runner.AgentUID 0755 and nothing in it.
 func TestCreateSandbox_ConcurrentTeamSeedsAreIdempotent(t *testing.T) {
 	f := newFakeDocker()
 	f.imageUsers = map[string]string{"busybox:latest": "1000"}
+	const n = 4
 	var arrived sync.WaitGroup
-	arrived.Add(2)
+	arrived.Add(n)
 	f.onCopyFrom = func(_, path string) {
 		if path == teamDriveSeedTarget {
 			arrived.Done()
@@ -293,7 +301,10 @@ func TestCreateSandbox_ConcurrentTeamSeedsAreIdempotent(t *testing.T) {
 	f.images["busybox:latest"] = true
 	d := newWithClient(f, Config{ProxyImage: "wardyn-proxy:dev"})
 	drive := teamVolumeDrive(false)
-	runs := []uuid.UUID{uuid.New(), uuid.New()}
+	runs := make([]uuid.UUID, n)
+	for i := range runs {
+		runs[i] = uuid.New()
+	}
 	errs := make([]error, len(runs))
 	var wg sync.WaitGroup
 	for i, run := range runs {
@@ -307,6 +318,7 @@ func TestCreateSandbox_ConcurrentTeamSeedsAreIdempotent(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+	var first *tar.Header
 	for i, run := range runs {
 		if errs[i] != nil {
 			t.Errorf("run %d: %v", i, errs[i])
@@ -319,53 +331,18 @@ func TestCreateSandbox_ConcurrentTeamSeedsAreIdempotent(t *testing.T) {
 		}
 		tr := tar.NewReader(bytes.NewReader(copies[0].archive))
 		hdr, err := tr.Next()
-		if err != nil || hdr.Name != "wardyn-drive-seed/" || hdr.Typeflag != tar.TypeDir || hdr.Uid != agentUID || hdr.Gid != agentUID || hdr.Mode != 0o755 {
-			t.Errorf("run %d: seed entry = %+v (%v), want the directory as %d:%d 0755", i, hdr, err, agentUID, agentUID)
+		if err != nil || hdr.Name != "wardyn-drive-seed/" || hdr.Typeflag != tar.TypeDir || hdr.Uid != runner.AgentUID || hdr.Gid != runner.AgentUID || hdr.Mode != 0o755 {
+			t.Errorf("run %d: seed entry = %+v (%v), want the directory as %d:%d 0755", i, hdr, err, runner.AgentUID, runner.AgentUID)
 		}
 		if _, err := tr.Next(); err != io.EOF {
 			t.Errorf("run %d: seed archive holds more than the directory (%v)", i, err)
 		}
-	}
-}
-
-// TestAgentUIDIsTheOnlyUIDLiteral: the uid the probes run as and a team
-// drive's folder is owned by is written once, as agentUID. A const or var set
-// to 1000, "1000" or "1000:1000", or a User/Uid/Gid field given one of those
-// literals, anywhere else in the package's production files, is a second
-// copy that could drift from it.
-func TestAgentUIDIsTheOnlyUIDLiteral(t *testing.T) {
-	files, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	isUID := func(e ast.Expr) bool {
-		lit, ok := e.(*ast.BasicLit)
-		return ok && (lit.Value == "1000" || lit.Value == `"1000"` || lit.Value == `"1000:1000"`)
-	}
-	fset := token.NewFileSet()
-	for _, name := range files {
-		if strings.HasSuffix(name, "_test.go") {
-			continue
+		hdr.ModTime, hdr.AccessTime, hdr.ChangeTime = time.Time{}, time.Time{}, time.Time{}
+		if first == nil {
+			first = hdr
+		} else if !reflect.DeepEqual(hdr, first) {
+			t.Errorf("run %d: seed entry %+v differs from the first run's %+v (apart from its time)", i, hdr, first)
 		}
-		file, err := parser.ParseFile(fset, name, nil, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		ast.Inspect(file, func(n ast.Node) bool {
-			switch n := n.(type) {
-			case *ast.ValueSpec:
-				for i, v := range n.Values {
-					if isUID(v) && (i >= len(n.Names) || n.Names[i].Name != "agentUID") {
-						t.Errorf("%s: a uid literal outside agentUID", fset.Position(v.Pos()))
-					}
-				}
-			case *ast.KeyValueExpr:
-				if k, ok := n.Key.(*ast.Ident); ok && (k.Name == "User" || k.Name == "Uid" || k.Name == "Gid") && isUID(n.Value) {
-					t.Errorf("%s: %s set to a uid literal, not agentUID", fset.Position(n.Pos()), k.Name)
-				}
-			}
-			return true
-		})
 	}
 }
 

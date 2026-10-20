@@ -195,7 +195,7 @@ func TestPersonalDrive_StillSeededFromTheImage_RealDocker(t *testing.T) {
 	}
 }
 
-// An image whose agent is not agentUID is refused a writable team drive, by
+// An image whose agent is not runner.AgentUID is refused a writable team drive, by
 // name, and the volume is left as Docker made it.
 func TestTeamDrive_AnotherAgentUIDIsRefused_RealDocker(t *testing.T) {
 	l := newDriveLive(t)

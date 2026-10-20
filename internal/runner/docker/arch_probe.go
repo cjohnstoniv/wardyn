@@ -28,8 +28,8 @@ const (
 	archProbeClean = 10 * time.Second
 )
 
-// archProbeUser runs the probe as the agent (agentUID), never as root.
-var archProbeUser = strconv.Itoa(agentUID)
+// archProbeUser runs the probe as the agent (runner.AgentUID), never as root.
+var archProbeUser = strconv.Itoa(runner.AgentUID)
 
 // archProbeWait is how long the probe container may run before the image is taken to start fine.
 // A variable so a test need not wait it out.

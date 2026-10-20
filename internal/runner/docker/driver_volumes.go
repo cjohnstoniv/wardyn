@@ -197,7 +197,7 @@ const driveSeedRemoveTimeout = 30 * time.Second
 // member's choice, and whatever it holds at runner.DriveTarget would reach
 // every member. A read-only allocation needs no seed at all. A writable one
 // mounts the volume with NoCopy at teamDriveSeedTarget in the same
-// never-started container, refuses an image whose agent is not agentUID
+// never-started container, refuses an image whose agent is not runner.AgentUID
 // (checkTeamDriveUser), and gives it to the agent with ownEmptyTeamVolume.
 func (d *Driver) seedDriveVolume(ctx context.Context, runID uuid.UUID, image string, drive *types.DriveMount) error {
 	if drive.Team && drive.ReadOnly {
@@ -265,7 +265,7 @@ func teamDriveVolumeOptions(drive *types.DriveMount) *mount.VolumeOptions {
 }
 
 // checkTeamDriveUser refuses a writable team drive when the run's image runs
-// its agent as any uid but agentUID, the owner of every team drive's folder:
+// its agent as any uid but runner.AgentUID, the owner of every team drive's folder:
 // the run would start with a drive it cannot write. It reads the seed's USER
 // as the daemon merged it from the image, resolved like a managed file's
 // (managedFileUID), before any ownership change and whatever the volume holds.
@@ -282,24 +282,26 @@ func (d *Driver) checkTeamDriveUser(ctx context.Context, seed string, drive *typ
 	if err != nil {
 		return err
 	}
-	if uid != agentUID {
+	if uid != runner.AgentUID {
 		return fmt.Errorf("team drive %s is writable for this run, but this image runs the agent as uid %d (USER %q), "+
 			"and a team drive's folder belongs to uid %d, the user Wardyn images run the agent as. "+
 			"Use an image whose agent runs as uid %d, or ask an admin for a read-only allocation",
-			runner.DriveSubject(drive), uid, user, agentUID, agentUID)
+			runner.DriveSubject(drive), uid, user, runner.AgentUID, runner.AgentUID)
 	}
 	return nil
 }
 
 // ownEmptyTeamVolume gives an EMPTY team volume's top directory to the agent
-// (agentUID, mode 0755), which a NoCopy mount leaves root-owned. It runs
+// (runner.AgentUID, mode 0755), which a NoCopy mount leaves root-owned. It runs
 // on the never-started seed container: the daemon reads the volume through the
 // archive API, and, only when the volume holds nothing, extracts one directory
 // entry for the mount point, whose owner and mode it applies to the volume's
 // existing top directory. Nothing in the image runs, nothing from it is copied,
 // and a volume that already holds anything is left as it is, as Docker's own
 // copy into an empty volume would. A seed path that is not a directory (an
-// image with a link there) is refused rather than left unwritable.
+// image with a link there) is refused rather than left unwritable. A team
+// volume emptied by its members is empty again, so the next writable run
+// resets its top directory to runner.AgentUID 0755: accepted.
 func (d *Driver) ownEmptyTeamVolume(ctx context.Context, seed string) error {
 	res, err := d.cli.CopyFromContainer(ctx, seed, client.CopyFromContainerOptions{SourcePath: teamDriveSeedTarget})
 	if err != nil {
@@ -328,7 +330,7 @@ func (d *Driver) ownEmptyTeamVolume(ctx context.Context, seed string) error {
 	tw := tar.NewWriter(&buf)
 	if err := tw.WriteHeader(&tar.Header{
 		Name: strings.TrimPrefix(teamDriveSeedTarget, "/") + "/", Typeflag: tar.TypeDir, Mode: 0o755,
-		Uid: agentUID, Gid: agentUID, ModTime: time.Now(),
+		Uid: runner.AgentUID, Gid: runner.AgentUID, ModTime: time.Now(),
 	}); err != nil {
 		return err
 	}

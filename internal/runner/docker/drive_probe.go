@@ -132,13 +132,8 @@ func (d *Driver) ProbeDrive(ctx context.Context, drive types.DriveMount) (runner
 	}
 }
 
-// agentUID is the uid, and gid, every Wardyn agent image runs its agent as
-// (`USER agent`, the image contract): the one value the probes run as and a
-// writable team drive's folder is owned by.
-const agentUID = 1000
-
-// driveProbeUser is agentUID as uid:gid, never the daemon's root.
-var driveProbeUser = fmt.Sprintf("%d:%d", agentUID, agentUID)
+// driveProbeUser is runner.AgentUID as uid:gid, never the daemon's root.
+var driveProbeUser = fmt.Sprintf("%d:%d", runner.AgentUID, runner.AgentUID)
 
 // driveProbeTarget is the throwaway probe container's own bind target,
 // internal to this file (never the reserved runner.DriveTarget the real agent
