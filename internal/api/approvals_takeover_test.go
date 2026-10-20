@@ -259,6 +259,47 @@ func TestTakeover_Refusals(t *testing.T) {
 	}
 }
 
+// TestTakeover_EntryShapes: the three verbs keep the attach ticket's entry shapes. A super admin on
+// a run that is not theirs gets the 403 naming why; a security admin, who also sees every run, gets
+// the missing approval's 404 like any stranger; and a Background run's owner gets 409
+// run_background_only, so a takeover never opens a door the run's shape closes.
+func TestTakeover_EntryShapes(t *testing.T) {
+	f := newTakeoverFixture(t, true)
+	id := f.seed(types.ApprovalHumanTakeover, types.ApprovalPending, "")
+	verbs := []string{"/take-over", "/hand-back", "/decline"}
+	admin := ssoSession(t, "sub-super-admin", "admin@corp.example", oidc.RoleAdmin)
+	security := ssoSession(t, "sub-security-admin", "security@corp.example", oidc.RoleSecurityAdmin)
+	for _, verb := range verbs {
+		if w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+verb, admin, ""); w.Code != http.StatusForbidden ||
+			reasonOf(t, w) != runOwnerOnlyReason {
+			t.Errorf("super admin %s: %d %s, want 403 %s", verb, w.Code, w.Body.String(), runOwnerOnlyReason)
+		}
+		w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+verb, security, "")
+		missing := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+uuid.New().String()+verb, security, "")
+		if w.Code != http.StatusNotFound || w.Body.String() != missing.Body.String() {
+			t.Errorf("security admin %s: %d %q, want the missing approval's %d %q", verb, w.Code, w.Body.String(), missing.Code, missing.Body.String())
+		}
+	}
+	ast := f.srv.cfg.Store.(*authzStore)
+	ast.mu.Lock()
+	run := ast.runs[f.run]
+	run.Experience = types.ExperienceBackground
+	ast.runs[f.run] = run
+	ast.mu.Unlock()
+	for _, verb := range verbs {
+		if w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+verb, f.owner, ""); w.Code != http.StatusConflict ||
+			reasonOf(t, w) != reasonRunBackgroundOnly {
+			t.Errorf("owner %s on a background run: %d %s, want 409 %s", verb, w.Code, w.Body.String(), reasonRunBackgroundOnly)
+		}
+	}
+	f.aap.mu.Lock()
+	got := f.aap.byID[id]
+	f.aap.mu.Unlock()
+	if got.State != types.ApprovalPending || got.TakeoverHolder != "" {
+		t.Fatalf("a refused verb changed the request: %+v", got)
+	}
+}
+
 // TestTakeover_InputIsNotTeedToTheAttachRecorder: what the person types into the console terminal
 // while they drive is not teed to the console's per-attach session recorder; only what the terminal
 // shows is. The boot seed's cast is wardyn-rec's (cmd/wardyn-rec TestRec_TypedInputIsNotRecorded).
