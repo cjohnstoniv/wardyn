@@ -154,7 +154,7 @@ func (d *Driver) driveMount(ctx context.Context, drive *types.DriveMount, runID 
 	// has no other validating boundary. Named by DriveSubject, never
 	// drive.ObjectName: this refusal becomes the run's failure_hint verbatim,
 	// and on a SHARE the object name is the operator's absolute share path.
-	if err := runner.ValidateDriveTarget(drive.Target, drive.Backend); err != nil {
+	if err := runner.ValidateDriveTarget(drive); err != nil {
 		return nil, fmt.Errorf("docker: denied user drive (%s) -> %q: %w (%v)",
 			runner.DriveSubject(drive), drive.Target, errDriveTargetInvalid, err)
 	}

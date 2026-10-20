@@ -261,6 +261,10 @@ type UserDrive struct {
 	// one person who owns it. Written once on create and never decoded from a
 	// request; "" on every admin row.
 	OwnerSubject string `json:"owner,omitempty"`
+	// Team marks an admin drive whose group allocations share ONE folder
+	// (#1988), honoured only while storage.user_drive.team_drives is on; with it
+	// off the drive resolves per person, as every drive did before.
+	Team bool `json:"team,omitempty"`
 	// DeleteStartedAt is a member drive's delete tombstone: while set, the
 	// drive is being destroyed and is treated as absent.
 	DeleteStartedAt *time.Time `json:"-"`
@@ -284,6 +288,9 @@ type UserDriveGrant struct {
 	// HomeOverride names this subject's directory verbatim. USER TIER ONLY:
 	// on a group/all row it would give every member ONE home.
 	HomeOverride string `json:"home_override,omitempty"`
+	// MembersCanWrite is a team drive's write bit: without it the group's runs
+	// mount the shared folder read-only, whatever the drive allows.
+	MembersCanWrite bool `json:"members_can_write,omitempty"`
 	// Enabled is the admin's off switch. A disabled row still wins its tier:
 	// the winner's bit folds to ResolvedDrive.Paused rather than silently
 	// falling through to the wider row beneath it.
@@ -298,6 +305,14 @@ type UserDriveGrant struct {
 type UserDriveListItem struct {
 	UserDrive
 	GrantCount int `json:"grant_count"`
+	// SingleHost is set on a team drive whose folder is a Docker volume: it
+	// lives on one Docker host, so runs on another host see a different folder.
+	SingleHost bool `json:"single_host,omitempty"`
+}
+
+// TeamSingleHost reports whether d is a team drive held on one Docker host.
+func (d UserDrive) TeamSingleHost() bool {
+	return d.Team && d.Backend == DriveBackendDockerVolume
 }
 
 // ResolvedDrive is THE answer for one principal: the winning drive, the grant
@@ -324,6 +339,9 @@ type ResolvedDrive struct {
 	// and nothing may be mounted, but the row still wins its tier (DESIGN
 	// §2.2) rather than falling through.
 	Paused bool
+	// Team is set when the drive resolved as a team drive: one folder for the
+	// whole group (DriveTeamHome), with no per-person fingerprint.
+	Team bool
 }
 
 // DriveMount is the RESOLVED answer the runner acts on: one principal's
@@ -363,6 +381,9 @@ type DriveMount struct {
 	ReadOnly    bool               `json:"read_only,omitempty"`
 	SizeMiB     int                `json:"size_mib,omitempty"`
 	Enforcement StorageEnforcement `json:"enforcement"`
+	// Team marks a team drive's shared folder, which mounts under SharedRoot
+	// whatever its backend.
+	Team bool `json:"team,omitempty"`
 }
 
 // UserDriveHostRootCheck is the signature of the deployment's ENV CEILING over
@@ -433,6 +454,15 @@ func DriveHomeName(d UserDrive, subject, override string) (string, error) {
 			d.HomeTemplate, seg, driveHomeSegmentRule(d.Backend))
 	}
 	return seg, nil
+}
+
+// DriveTeamHome is a team drive's one folder: `t-` + the first 20 hex of
+// sha256("team\n" + drive id). Derived from the drive alone, so every member
+// resolves the same folder, and its `t-` prefix keeps it apart from every `d-`
+// hash home.
+func DriveTeamHome(d UserDrive) string {
+	sum := sha256.Sum256([]byte("team\n" + d.ID.String()))
+	return "t-" + hex.EncodeToString(sum[:])[:driveHomeHashLen]
 }
 
 // DriveSubjectHash fingerprints the principal a drive object was allocated
@@ -594,8 +624,8 @@ func ShareBackendRejectsTemplate(backend DriveBackend, tmpl HomeTemplate) bool {
 // against drive d and the subject's current allocation prev (nil: none), or "". That tier
 // allocates a drive with its own posture or narrower. Only a super admin newly states a
 // home_override, which names where on the storage the files live and is compared only with other
-// typed names, never with a derived home, or widens writability: true, or dropping a read-only
-// override on a writable drive. An unchanged re-send on the same drive is not new, unless it
+// typed names, never with a derived home, or widens writability: true, dropping a read-only
+// override on a writable drive, or newly letting a team drive's members write. An unchanged re-send on the same drive is not new, unless it
 // enables a row that was disabled: a disabled row's home_override or writable exception is not in
 // force, so turning the row on with one puts it in force and is the super admin's to do.
 func DriveGrantWidens(d UserDrive, prev *UserDriveGrant, g UserDriveGrant) string {
@@ -607,6 +637,8 @@ func DriveGrantWidens(d UserDrive, prev *UserDriveGrant, g UserDriveGrant) strin
 	case g.WritableOverride != nil && *g.WritableOverride && !(held && prev.WritableOverride != nil && *prev.WritableOverride),
 		g.WritableOverride == nil && d.Writable && prev != nil && prev.WritableOverride != nil && !*prev.WritableOverride:
 		return "writable_override"
+	case g.MembersCanWrite && !(held && prev.MembersCanWrite):
+		return "members_can_write"
 	}
 	return ""
 }

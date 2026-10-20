@@ -122,7 +122,9 @@
 # docs/OPERATIONS.md 57856 = ours 57824 + theirs 56776 - base 56744 at the 0.10 W4c merge of VM-A onto the train.
 # docs/OPERATIONS.md 57431 adds 39 over 57392 (0.10 DSK-B), measured: the human_takeover approval migration line.
 # docs/OPERATIONS.md 57895 = ours 57856 + theirs 57431 - base 57392 at the 0.10 W4c merge of DSK-B 12054370b onto the train.
-docs/OPERATIONS.md=57895 share=35
+# docs/OPERATIONS.md 58062 adds 670 over 57392, measured: the 0198 migration line and the Team drives section, its before-you-upgrade line and the team-drive erasure notes (0.10 FEAT-2TEAM).
+# docs/OPERATIONS.md 58565 = ours 57895 + theirs 58062 - base 57392 at the 0.10 W4c merge of FEAT-2TEAM onto the train.
+docs/OPERATIONS.md=58565 share=35
 # docs/OPERATIONS.md 55848 adds 132 over 55716: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
 # docs/OPERATIONS.md 55840 adds 124 over 55716, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # docs/OPERATIONS.md 55867 adds 27 over 55840, measured: a run whose runner cannot be asked falls back to this deployment's runner, the older-runner exception, pooled runs, and the runner_offline gap reason.

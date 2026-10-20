@@ -199,6 +199,10 @@ func (s *Server) handleReclaimUserDrive(w http.ResponseWriter, r *http.Request) 
 	if memberOwnedRefusal(w, d) {
 		return
 	}
+	if code, msg := s.driveTeamReclaimRefusal(r.Context(), d); msg != "" {
+		writeErrorReason(w, code, reasonUserDriveNotReclaimable, msg)
+		return
+	}
 	if code, msg := driveReclaimableHere(d, s.cfg.RunnerTarget); msg != "" {
 		writeErrorReason(w, code, reasonUserDriveNotReclaimable, msg)
 		return

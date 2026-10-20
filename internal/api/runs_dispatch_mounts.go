@@ -642,22 +642,29 @@ func applyUserDriveEnv(sandboxEnv map[string]string, drives []types.DriveMount) 
 // promise. `drive_id` and the in-sandbox `target` say which drive went where
 // when a run attaches several. Seven fields, matching docs/AUDIT-ACTIONS.md.
 //
+// A TEAM drive's row adds `team` and `mounted_by`, the run's creator: the folder
+// is the whole group's, so "who mounted it" is no longer implied by whose it is.
+//
 // The nil test lives HERE rather than at the assembly site for a mechanical
 // reason worth stating: dispatchRun sits at its gocyclo ceiling, so one more
 // branch there is a lint failure. It belongs with the payload anyway.
-func (s *Server) auditDriveMount(ctx context.Context, runID uuid.UUID, drives []types.DriveMount) {
+func (s *Server) auditDriveMount(ctx context.Context, runID uuid.UUID, mountedBy string, drives []types.DriveMount) {
 	for i := range drives {
 		drive := &drives[i]
+		data := map[string]any{
+			"backend":     drive.Backend,
+			"drive":       drive.HomeName,
+			"drive_id":    drive.DriveID,
+			"enforcement": drive.Enforcement,
+			"mode":        driveAuditMode(drive.ReadOnly),
+			"object":      driveAuditTarget(drive),
+			"target":      drive.Target,
+		}
+		if drive.Team {
+			data["team"], data["mounted_by"] = true, mountedBy
+		}
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.drive.mount",
-			driveAuditTarget(drive), "success", mustJSON(map[string]any{
-				"backend":     drive.Backend,
-				"drive":       drive.HomeName,
-				"drive_id":    drive.DriveID,
-				"enforcement": drive.Enforcement,
-				"mode":        driveAuditMode(drive.ReadOnly),
-				"object":      driveAuditTarget(drive),
-				"target":      drive.Target,
-			})))
+			driveAuditTarget(drive), "success", mustJSON(data)))
 	}
 }
 

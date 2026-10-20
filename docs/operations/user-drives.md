@@ -8,6 +8,7 @@ object, the share recipe, and the ordered reclaim procedure for someone who has 
 ## Reclaiming a departed person's storage
 
 - Deleting a drive removes its row and deleting an allocation stops the mount; neither deletes a byte.
+- A team drive is not a person's storage: with team drives on, a person's reclaim refuses one (422). A team drive's files are kept by design: they belong to the drive's groups, so erasing or deprovisioning a person does not remove what their agents wrote to a team drive. See "Team drives" in [OPERATIONS.md](../OPERATIONS.md#team-drives).
 - The storage object one person's allocation resolved to — a Docker named volume, a PersistentVolumeClaim, or a directory on a share — outlives both.
 
 > [!WARNING]

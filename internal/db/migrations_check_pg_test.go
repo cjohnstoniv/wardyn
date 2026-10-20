@@ -49,7 +49,7 @@ func liveCheckDef(t *testing.T, table, column string) string {
 		WHERE con.contype = 'c' AND rel.relname = $1 AND a.attname = $2
 		  AND n.nspname = ANY (current_schemas(false))
 		  -- A cross-column CHECK is not the column's enum.
-		  AND con.conname <> 'user_drives_member_managed'`, table, column)
+		  AND con.conname NOT IN ('user_drives_member_managed', 'user_drives_team_shape')`, table, column)
 	if err != nil {
 		t.Fatalf("read the live CHECK for %s.%s: %v", table, column, err)
 	}
