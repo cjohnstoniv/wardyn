@@ -214,6 +214,7 @@ crash or a usage limit resumes with the same command:
    - the annotated tag `vX.Y.Z` and its push (by full ref; a local `vX.Y.Z` that points anywhere but the commit just verified is refused by name),
    - `gh run watch` on `release.yml`'s run for the tag, `gh release edit vX.Y.Z --draft=false` (with the pre-release and latest flags `PRERELEASE` picks) on the draft that `release-assets` made, and [`scripts/verify-release.sh`](scripts/verify-release.sh), which must end `fails=0`.
    - The forward-port commands are printed, never run. The last, before the push, is [`scripts/forward-port-check.sh`](scripts/forward-port-check.sh), which fails when the port deletes a line only `main` has; the `dco` job runs it on every `chore/forward-port-*` pull request into `main`.
+   - A removal the port makes on purpose is listed in `scripts/forward-port-check.d/X.Y.Z.allow`, committed with the port: one `path<TAB>exact removed line<TAB>reason` per line, budget sums included. An entry the port does not need, or with no real reason, fails; so does a port that edits the script or another version's file.
    - After a final release, rehearse the runner compatibility walk against it once: `WARDYN_TEST_DOCKER=1
      WARDYN_COMPAT_RELEASED=vX.Y.Z scripts/runner-compat-walk.sh` on a native Docker engine, or a nightly on `main`.
      From 0.9.3 on it also rolls back a runner that has retired a run, which no earlier release could rehearse.

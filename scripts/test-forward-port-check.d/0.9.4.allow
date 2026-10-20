@@ -1,0 +1,7 @@
+# Removals the real v0.9.4 forward-port (merge 0220cfdba on main) makes, with the reason each is intended.
+# Test fixture for scripts/test-forward-port-check.sh; real releases keep theirs in scripts/forward-port-check.d/.
+CHANGELOG.md	  are built without the shared Go cache; the distinct-UID recording permission proofs run as root in a throwaway	the release commit (22c513f65) reworded and rewrapped these [Unreleased] entries as it moved them under [0.9.4]
+CHANGELOG.md	  container and fail if skipped.	the release commit (22c513f65) reworded and rewrapped these [Unreleased] entries as it moved them under [0.9.4]
+CHANGELOG.md	  counted and skipped) and runs its checks in a step with no token in its environment; the signed release binaries	the release commit (22c513f65) reworded and rewrapped these [Unreleased] entries as it moved them under [0.9.4]
+CHANGELOG.md	- New 409 reasons `workspace_name_taken` and `workspace_update_conflict`. A bulk record promote answers with an	the release commit (22c513f65) reworded and rewrapped these [Unreleased] entries as it moved them under [0.9.4]
+scripts/test-claims-match-code.sh	UNRELEASED_FROM=0191 # v0.9.3, the last final release, ships migrations up to 0190	UNRELEASED_FROM moves from 0191 to 0192 after 0.9.4's last migration (4b86a76bc)

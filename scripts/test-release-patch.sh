@@ -260,7 +260,7 @@ check "A: release edit came after the run watch" bash -c "[ \$(grep -n '^run wat
 check "A: verify-release ran for 0.8.4" log_has verify.log '^V=0\.8\.4$'
 check "A: prints the table with the total from T0" out_has 'total from T0'
 check "A: prints the forward-port commands without running them" out_has 'forward-port'
-check "A: prints the forward-port check against the previous tag" out_has 'forward-port-check\.sh v0\.8\.3 origin/main HEAD'
+check "A: prints the forward-port check against the previous tag" out_has 'forward-port-check\.sh --version 0\.8\.4 v0\.8\.3 origin/main HEAD'
 check "A: no push to main" log_lacks push.log 'refs/heads/main'
 keep_pushes
 
