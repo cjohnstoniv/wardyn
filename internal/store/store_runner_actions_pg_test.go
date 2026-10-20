@@ -6,6 +6,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -807,5 +808,38 @@ func TestPG_RunnerActions_DeferredStopProxyIsNeverReissued(t *testing.T) {
 	}
 	if has, _ := f.st.RunHasPendingRunnerAction(ctx, run.ID); !has {
 		t.Fatal("the deferred obligation stopped fencing")
+	}
+}
+
+// A run's lease checks read its action history by run, not the table: every earlier index is partial on
+// the open or unsettled rows, and a run that ended leaves applied rows those cannot serve.
+func TestPG_RunnerActions_RunReadsUseTheRunIndex(t *testing.T) {
+	f := newActionFixture(t)
+	ctx := t.Context()
+	run := f.run(t)
+	if _, err := f.pool.Exec(ctx, `
+		INSERT INTO agent_runs (id, created_at, created_by, agent, repo, confinement_class, state, spiffe_id, runner_target)
+		SELECT gen_random_uuid(), now(), 'history', 'claude-code', 'o/r', 'CC2', 'COMPLETED', 'spiffe://x/' || g, 'docker'
+		FROM generate_series(1, 10000) g`); err != nil {
+		t.Fatalf("seed runs: %v", err)
+	}
+	if _, err := f.pool.Exec(ctx, `
+		INSERT INTO runner_pending_actions (id, runner_id, run_id, kind, ref, binding_version, owner, applied_at, outcome, observed_at)
+		SELECT gen_random_uuid(), $1, r.id, k, 'ref', 1, 'o', now(), 'success', now()
+		FROM agent_runs r, unnest(ARRAY['kill', 'end']) k WHERE r.created_by = 'history'`, f.rn.ID); err != nil {
+		t.Fatalf("seed actions: %v", err)
+	}
+	if _, err := f.pool.Exec(ctx, `ANALYZE runner_pending_actions`); err != nil {
+		t.Fatal(err)
+	}
+	for name, call := range map[string]func(store.PG){
+		"RunHeldContainedOnRunner": func(st store.PG) { _, _ = st.RunHeldContainedOnRunner(ctx, run.ID) },
+		"LastRunnerTeardown":       func(st store.PG) { _, _, _, _ = st.LastRunnerTeardown(ctx, run.ID, run.SandboxRef) },
+	} {
+		plan := planOfCall(t, ctx, f.pool, call)
+		t.Logf("%s plan:\n%s", name, plan)
+		if strings.Contains(plan, "Seq Scan on runner_pending_actions") || !strings.Contains(plan, "runner_pending_actions_run_kind_queued") {
+			t.Errorf("%s does not use runner_pending_actions_run_kind_queued:\n%s", name, plan)
+		}
 	}
 }
