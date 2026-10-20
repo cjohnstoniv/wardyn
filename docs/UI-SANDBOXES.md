@@ -217,6 +217,24 @@ export WARDYN_AGENT_IMAGES='{"vscode":"wardyn/agent-vscode:local"}'
 - Your own image serves an app the same way — see
   [Image contract](#image-contract-byoi).
 
+### Or start the app with the run (an application server)
+
+- Instead of a launcher, an interactive run's startup command can serve the
+  declared port, sent with `shape: application` (0.10, [run documents](sdk.md#run-documents)):
+
+```json
+{
+  "shape": "application",
+  "experience": "interactive",
+  "startup": { "kind": "command", "command": "npm run dev -- --port 3000" },
+  "policy_overlay": { "ui_apps": [{ "name": "web", "port": 3000 }] }
+}
+```
+
+- It is an ordinary interactive run: the gates above, `deny_interactive` and `deny_ui_apps` all apply.
+- The command starts once at boot and stops with the run; it is not restarted.
+- With no launcher, the gateway waits up to 20s for a seeded run's port before the 502 below.
+
 ## 3. Open an app
 
 - A background task's UI apps cannot be opened (`409 run_background_only`).

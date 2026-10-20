@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
@@ -161,12 +162,23 @@ func TestRunShapeConflict(t *testing.T) {
 	// A command with no agent runs in an image the run names; a workspace is the
 	// attachment that supplies one without a builder.
 	const cmdWorkload = `"experience":"background","workload":{"kind":"command","command":"make"},"workspaces":[{"workspace_id":"` + wsID + `","target":"/home/agent/work"}]`
+	// An application server (#1994): an interactive run that starts a command and
+	// declares the app it serves.
+	const (
+		serverStart = `"startup":{"kind":"command","command":"npm run dev"}`
+		serverApp   = `"inline_policy":{"ui_apps":[{"name":"web","port":3000}]}`
+		notAnApp    = "an application is a background run of a command, or an interactive run that starts a command and declares its app: " +
+			"set experience background and workload kind command, or experience interactive with startup kind command and ui_apps"
+	)
 	for _, tc := range []struct {
 		name, fields, detail string
 	}{
 		{"application: a command", `"shape":"application",` + cmdWorkload, ""},
-		{"application: an agent task is not an application", `"shape":"application",` + bgAgentTask, "an application is a background run of a command: set experience background and workload kind command"},
-		{"application: interactive is not an application", `"shape":"application",` + interactiveOK, "an application is a background run of a command: set experience background and workload kind command"},
+		{"application: an interactive server", `"shape":"application",` + interactiveOK + `,` + serverStart + `,` + serverApp, ""},
+		{"application: an agent task is not an application", `"shape":"application",` + bgAgentTask, notAnApp},
+		{"application: interactive is not an application", `"shape":"application",` + interactiveOK, notAnApp},
+		{"application: a server needs its app", `"shape":"application",` + interactiveOK + `,` + serverStart, notAnApp},
+		{"application: a server needs its command", `"shape":"application",` + interactiveOK + `,` + serverApp, notAnApp},
 		{"environment: interactive", `"shape":"environment",` + interactiveOK, ""},
 		{"environment: background is not an environment", `"shape":"environment",` + bgAgentTask, "an environment is interactive: set experience interactive"},
 		{"agent_task: background agent task", `"shape":"agent_task",` + bgAgentTask, ""},
@@ -225,6 +237,31 @@ func TestRunShapeConflict(t *testing.T) {
 	}
 	if refusal := runShapeRefusal(createRunRequest{}); refusal != nil {
 		t.Fatalf("a request with no shape was refused: %+v", refusal)
+	}
+	// The server's app may come in a policy_overlay, as New Run sends one.
+	server := createRunRequest{Shape: client.RunShapeApplication, Experience: client.ExperienceInteractive,
+		Startup: &client.RunStartup{Kind: client.StartupCommand, Command: "npm run dev"}, PolicyOverlay: json.RawMessage(`{"ui_apps":[{"name":"web","port":3000}]}`)}
+	if refusal := runShapeRefusal(server); refusal != nil {
+		t.Fatalf("an application server with its app in policy_overlay was refused: %+v", refusal)
+	}
+	server.Startup = &client.RunStartup{Kind: client.StartupHarness, Tool: "claude-code"}
+	if refusal := runShapeRefusal(server); refusal == nil || refusal.body.Reason != reasonRunShapeConflict {
+		t.Fatalf("an application that starts a harness, not a command, was not refused: %+v", refusal)
+	}
+}
+
+// TestRunCreateAuditRecordsShape: run.create names the shape a run was set up
+// from, so an application run is recorded as one whether or not its launch
+// intent is kept; a request with no shape writes the row it always did.
+func TestRunCreateAuditRecordsShape(t *testing.T) {
+	audit := func(req createRunRequest) map[string]any {
+		return createRunAuditData(req, nil, types.CC2, "", "jti", nil, types.AutonomyResolution{}, false, runProviderChoice{})
+	}
+	if got := audit(createRunRequest{Shape: client.RunShapeApplication})["shape"]; got != client.RunShapeApplication {
+		t.Fatalf("run.create shape = %v, want application", got)
+	}
+	if _, present := audit(createRunRequest{Agent: "claude-code"})["shape"]; present {
+		t.Fatal("run.create carries a shape the request did not name")
 	}
 }
 

@@ -199,7 +199,9 @@
 # docs/sdk.md 20140 = ours 20128 + theirs 19694 - base 19682 at the 0.10 W4c merge of OC-CLEAN2 onto the train.
 # docs/sdk.md 20070 adds 10 over 20060, measured (0.10 OC-API1b): a max-age stop ends the event stream with ended alone.
 # docs/sdk.md 20150 = ours 20140 + theirs 20070 - base 20060 at the 0.10 W4c merge of OC-API1b onto the train.
-docs/sdk.md=20150 share=21
+# docs/sdk.md 19701 adds 19 over 19682 (0.10 FEAT-1APP): the interactive application shape row (#1994).
+# docs/sdk.md 20169 = ours 20150 + theirs 19701 - base 19682 at the 0.10 W4c merge of FEAT-1APP onto the train.
+docs/sdk.md=20169 share=21
 # docs/sdk.md 18691 adds 28 over 18663, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.

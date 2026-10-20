@@ -482,7 +482,7 @@ A `wardyn/v1` document with `kind: Run` is a draft of one run. Its `intent` hold
 
 | `shape` | Requires |
 |---|---|
-| `application` | `experience: background` and `workload.kind: command` |
+| `application` | `experience: background` and `workload.kind: command`; or, for a server (0.10), `experience: interactive`, `startup.kind: command` and at least one `ui_apps` entry in `inline_policy` or `policy_overlay` |
 | `environment` | `experience: interactive` |
 | `agent_task` | With `background`, `workload.kind: agent_task`; with `interactive`, a `tools[]` entry of kind `harness` |
 
