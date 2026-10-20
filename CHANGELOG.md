@@ -14,6 +14,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on
   `aws_sso_refused_tokens` (migration `0194_aws_sso_refused_tokens`). Without it an AWS SSO session whose renewal
   AWS refused cannot be marked, read or cleared, so replicas do not share that mark.
+- Split-role installs as above: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `desktop_signins` and
+  `desktop_signin_shares` (migration `0198_desktop_signins`). Without it a desktop sign-in cannot begin, and the sweep
+  that ends one cannot read it.
+- **Desktop sign-ins are new and off** (`WARDYN_DESKTOP_SIGNINS`, default `off`). Turned on, a run's creator can sign
+  in to websites inside the run's desktop while the agent is stopped, and share one site's login with the agent. The
+  person's browser is a different uid in the same sandbox, not a sandbox of its own, and after a share the agent holds
+  that site's cookies within its egress until the run ends: read [THREAT-MODEL §5.1a](threatmodel/THREAT-MODEL.md)
+  before turning it on. The desktop image (`agent-novnc`) grows by about 920 MB on disk for the person's browser and display.
 
 ## [0.9.5] — 2026-10-19
 

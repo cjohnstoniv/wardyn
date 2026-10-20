@@ -74,6 +74,27 @@
   each of them bigger, and because the decision to ship it anyway was taken with
   them in view rather than around them.
 
+### Signing in to websites inside the desktop (0.10, off by default)
+
+- With `WARDYN_DESKTOP_SIGNINS=on`, the creator of a run that declares `novnc`
+  can sign in to a website in a browser of their own inside the desktop, while
+  the agent is stopped, and share one site's login with the agent.
+- `POST /api/v1/runs/{id}/desktop-signin` stops the agent and starts the
+  person's display; it opens through this gateway as the reserved app
+  `_signin`, offered only to the person who holds the sign-in.
+  `POST .../desktop-signin/shares` with `{"site": "example.com"}` copies that
+  site's cookies into the agent's browser profile (`wardyn-signin browser`,
+  or any browser that reads `~/.wardyn/logins/<site>.json`, which is
+  Playwright `storageState`). `POST .../desktop-signin/end` closes the display
+  and resumes the agent. A sign-in ends by itself after 30 minutes.
+- The person's browser is a different uid in the same sandbox, not a
+  sandbox of its own: [THREAT-MODEL §5.1a](../threatmodel/THREAT-MODEL.md)
+  states what that holds and what it does not. After a share the agent holds
+  that site's login, within its egress, until the run ends.
+- The Docker runner only; a remote or Kubernetes runner refuses a sign-in. The
+  console has no button for it yet.
+- `make test-image-novnc-signin` is the image's own gate.
+
 ## Diagnosing a blocked request
 
 - A relayed editor is the place developers most often meet the egress policy, and

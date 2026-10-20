@@ -210,6 +210,11 @@ type Config struct {
 	// the default: a bare allowlist host is open on every port), "dry_run" or
 	// "on" (80/443 plus host:port entries). Desktop VM runs always have it on.
 	EgressPortRule string
+	// DesktopSignins is WARDYN_DESKTOP_SIGNINS=on: a run whose policy declares
+	// the desktop gets the person's sign-in store and the proxy's sign-in lane,
+	// and its owner may sign in to websites there (run_desktop_signin.go).
+	// Off by default.
+	DesktopSignins bool
 	// RunnerTarget records which target a run is dispatched to ("docker"|"k8s"),
 	// or "none" for a headless control plane (-runner none: runs stay PENDING).
 	// Defaults to "docker".

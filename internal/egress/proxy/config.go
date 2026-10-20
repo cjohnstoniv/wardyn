@@ -473,6 +473,17 @@ func ValidUpstreamProxyURL(raw string) error {
 	return err
 }
 
+// validateSigninListen: the sign-in lane, when set, is a host:port of its own.
+func (c *Config) validateSigninListen() error {
+	if c.SigninListen == "" {
+		return nil
+	}
+	if _, _, err := net.SplitHostPort(c.SigninListen); err != nil || c.SigninListen == c.Listen {
+		return fmt.Errorf("config: signin_listen must be a host:port other than listen")
+	}
+	return nil
+}
+
 func (c *Config) applyDefaultsAndValidate() error {
 	if c.Listen == "" {
 		c.Listen = defaultListen
@@ -489,10 +500,8 @@ func (c *Config) applyDefaultsAndValidate() error {
 	if c.RunToken == "" {
 		return fmt.Errorf("config: run_token is required")
 	}
-	if c.SigninListen != "" {
-		if _, _, err := net.SplitHostPort(c.SigninListen); err != nil || c.SigninListen == c.Listen {
-			return fmt.Errorf("config: signin_listen must be a host:port other than listen")
-		}
+	if err := c.validateSigninListen(); err != nil {
+		return err
 	}
 	if err := hoptls.CheckURL(c.ControlPlaneURL); err != nil {
 		return fmt.Errorf("config: %w", err)

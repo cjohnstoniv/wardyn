@@ -701,6 +701,11 @@ func (s *Server) mountRunLeaseRoutes(r chi.Router) {
 	r.Get("/runs/{id}/launch-intent", s.handleGetLaunchIntent)
 	r.Post("/runs/{id}/kill", s.handleKillRun)
 	r.Post("/runs/{id}/revive", s.handleReviveRun) // owner or super admin (run_revive.go); they open no shell, so #1476 leaves them
+	// Desktop sign-ins (#2972): the run's creator only, off unless
+	// WARDYN_DESKTOP_SIGNINS=on (run_desktop_signin.go).
+	r.Post("/runs/{id}/desktop-signin", s.handleBeginDesktopSignin)
+	r.Post("/runs/{id}/desktop-signin/shares", s.handleShareDesktopSignin)
+	r.Post("/runs/{id}/desktop-signin/end", s.handleEndDesktopSignin)
 }
 
 // mountAccountRoutes registers the caller's own account surfaces — per-user
@@ -902,6 +907,9 @@ func (s *Server) mountInternalRoutes(r chi.Router) {
 	// raised instead of leaving it PENDING for the sweep.
 	r.Post("/internal/approvals/{id}/expire", s.handleInternalExpireApproval)
 	r.Post("/internal/credentials/mint", s.handleInternalMint)
+	// The run proxy's sign-in lane asks whether a credential is the run's
+	// open sign-in's (run_desktop_signin.go).
+	r.Post("/internal/desktop-signin/check", s.handleInternalDesktopSigninCheck)
 	// via_org egress (design 0.9 §7.3): a local run's request for a via_org
 	// destination, served by the organisation; via_org.go.
 	s.mountViaOrgRoute(r)

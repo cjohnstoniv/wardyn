@@ -427,6 +427,7 @@ func run() error {
 		DefaultPolicy:       knobs.defaultPolicy,
 		TrustedCAPEM:        trustedCAPEM,
 		EgressPortRule:      egressPortRule(*f.egressPortRule),
+		DesktopSignins:      *f.desktopSignins == "on",
 		DemoVideoBaseURL:    knobs.demoVideoBaseURL,
 		RunnerTarget:        runnerTarget,
 		RunnerOrgURL:        *f.runnerOrgURL,

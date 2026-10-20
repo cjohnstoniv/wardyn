@@ -72,6 +72,12 @@ USER root
 # An X stack is simply expensive, and python3-numpy (websockify's fast path)
 # plus the fonts openbox and xterm pull in are most of it.
 #
+# Desktop sign-ins (#2972) add Chromium, cage, wayvnc and wardyn-signin.
+# MEASURED 2026-10-20 on one agent-base (1.13 GB on disk): this image without
+# them is 1.67 GB, with them 2.59 GB, so +~920 MB (+~268 MB compressed). That
+# is past the ceiling below; whether they move to an image of their own is
+# open, and the ceiling is not raised here.
+#
 # CEILING: if a change pushes this past ~1.4 GB, drop xterm and then openbox
 # before raising it — a relayed app needs neither, they exist only so a first
 # open is not an empty grey square, and they are the cheapest things to lose.
