@@ -25,6 +25,7 @@ import { JsonBlock } from "../wardyn/yaml-block";
 import { EmptyState } from "../wardyn/states";
 import { AdoCapabilityCard } from "../wardyn/ado-capability-card";
 import { isPushContentRequest, PushContentCard } from "../wardyn/push-content-card";
+import { isTakeoverRequest, TakeoverCard } from "../wardyn/takeover-card";
 import { PUSH } from "../wardyn/copy/push";
 import { usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
 import { useConsoleMode } from "../wardyn/console-view";
@@ -39,6 +40,8 @@ export function ApprovalsTab({
   onDecide,
   onAdoDecide,
   onPushDecide,
+  onTakeOver,
+  onDecline,
 }: {
   approvals: ApprovalRequest[];
   // Round 2 (F2) — this page always has the run loaded by the time this tab
@@ -49,6 +52,9 @@ export function ApprovalsTab({
   onDecide: (id: string, action: "approve" | "deny", kind: ApprovalRequest["kind"]) => void;
   onAdoDecide: (id: string, approve: boolean, opts: [DecisionOptions]) => Promise<void>;
   onPushDecide: (id: string, approve: boolean) => Promise<void>;
+  // #2963 — a "Needs you" request: Take over goes to the run's Overview, under its banner.
+  onTakeOver?: () => void;
+  onDecline?: (id: string) => Promise<void>;
 }) {
   // useSecurityOperator (0.7 §B): the only thing this reads is
   // canDecideApproval, which mirrors authorizeUserDecision's early return
@@ -120,6 +126,21 @@ export function ApprovalsTab({
         // JsonBlock below would render the raw requested_scope, exposing
         // acts_as (a credential reference) and, for an Azure DevOps REST
         // push, the request-body digest under the wire key "commits".
+        if (isTakeoverRequest(a) && a.state === "PENDING") {
+          return (
+            <TakeoverCard
+              key={a.id}
+              item={a}
+              busy={busy?.id === a.id}
+              onTakeOver={() => onTakeOver?.()}
+              onDecline={async () => {
+                setBusy({ id: a.id, action: "deny" });
+                await onDecline?.(a.id);
+                setBusy(null);
+              }}
+            />
+          );
+        }
         if (isPushContentRequest(a) && a.state === "PENDING") {
           return (
             <PushContentCard

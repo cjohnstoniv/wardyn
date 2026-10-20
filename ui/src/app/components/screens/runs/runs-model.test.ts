@@ -386,3 +386,15 @@ describe("rowPresentation — a QUEUED run (DR-0259)", () => {
     expect(p.subword).toBeUndefined();
   });
 });
+
+describe("rowPresentation — a takeover request (#2963, M8-Banner-A runs list)", () => {
+  it("by=you: Needs you to take over, with Take over, in the Needs you section", () => {
+    const p = rowPresentation(run({ attention: { kind: "takeover", by: "you", pending: 1 } }), false);
+    expect(p).toMatchObject({ hue: "amber", word: "Needs you to take over", action: "take-over", needsYou: true });
+  });
+
+  it("by=owner: no action and not this viewer's to clear", () => {
+    const p = rowPresentation(run({ attention: { kind: "takeover", by: "owner", pending: 1 } }), true);
+    expect(p).toMatchObject({ action: null, needsYou: false });
+  });
+});

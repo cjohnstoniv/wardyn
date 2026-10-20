@@ -388,6 +388,8 @@ const kindTone: Record<ApprovalKind, Tone> = {
   // Same reasoning: a held push parks the sandbox exactly like a re-auth
   // request does (isHeld treats both the same way — lib/types/approvals.ts).
   push_content: "warning",
+  // The agent is waiting on a person, like the two above.
+  human_takeover: "warning",
 };
 export function ApprovalKindChip({ kind }: { kind: ApprovalKind }) {
   const tone = metaFor(kindTone, kind as string, "neutral" as Tone);

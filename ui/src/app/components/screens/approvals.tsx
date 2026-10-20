@@ -37,6 +37,7 @@ import { REAUTH_ROW, REAUTH_TITLE, reauthRowHint, type ReauthAudience } from "..
 import { useOperator, useRole } from "../wardyn/operator-context";
 import { useConsoleMode } from "../wardyn/console-view";
 import { ADO } from "../../lib/ado-entra-copy";
+import { NEEDS_YOU } from "../wardyn/copy/needs-you";
 import { APPROVALS } from "../../lib/approvals-copy";
 import { PUSH } from "../wardyn/copy/push";
 import {
@@ -462,6 +463,19 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // decideAdoDirect above takes for its own kind, minus the scope.
   const decidePushDirect = (id: string, approve: boolean): Promise<void> => decideAdoDirect(id, approve, []);
 
+  // #2963 — a "Needs you" request's Decline: not a decide() verb (approvals_takeover.go).
+  const declineTakeover = async (id: string): Promise<void> => {
+    try {
+      await api.decline(id);
+      fetchAll().catch(() => {
+        /* transient refresh failure — the decline itself already succeeded */
+      });
+      onChanged?.();
+    } catch (err) {
+      toast.error(NEEDS_YOU.failed.decline, { description: getErrorMessage(err) });
+    }
+  };
+
   // The pending queue's own tool_call items, and only those — the screen-
   // level honesty note (ADO.TOOL_CALL_NOTE) is worth a line only
   // when a tool_call approval is actually in view.
@@ -542,6 +556,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
                 onAct={(action) => setPrompt({ id: a.id, action, kind: a.kind })}
                 onAdoDecide={decideAdoDirect}
                 onPushDecide={decidePushDirect}
+                onDecline={declineTakeover}
               />
             ))}
           </div>

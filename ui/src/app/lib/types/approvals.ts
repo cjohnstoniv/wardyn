@@ -11,7 +11,9 @@
 // push_content (#181/#494): a brokered git push matched push_rules.
 // require_review_paths and is parked at the proxy for an admin's decision —
 // see PushContentScope below and internal/types/push_content.go.
-export type ApprovalKind = "credential" | "egress_domain" | "tool_call" | "credential_reauth" | "push_content";
+// human_takeover (#2963, "Needs you"): the run's agent asked a person to take over its desktop or
+// terminal. Answered with take-over / hand-back / decline, never approve/deny.
+export type ApprovalKind = "credential" | "egress_domain" | "tool_call" | "credential_reauth" | "push_content" | "human_takeover";
 
 // CANCELLED is the terminal state a run's own end writes: the run reached
 // COMPLETED/FAILED/STOPPED/KILLED while this approval was still PENDING, so
@@ -55,6 +57,9 @@ export interface ApprovalRequest {
   // transitions the row once this passes — the console derives "expired"
   // client-side (see copy.ts's approvalScopeBadge).
   decision_expires_at?: string;
+  // human_takeover only: who has control (the latest to take over) and when they handed back.
+  takeover_holder?: string;
+  handed_back_at?: string;
   // When a PENDING request stops waiting and the sweep moves it to EXPIRED:
   // min(requested_at + the run's wait, the run's end), computed server-side
   // from the run row (#567). Absent for a run created before run limits; the
