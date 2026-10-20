@@ -44,6 +44,9 @@ type RunnerHooks struct {
 	Online      func(*Peer, bool)
 	// ProxyImage, when set, is told the proxy image the organisation named in AUTH_OK (never "").
 	ProxyImage func(string)
+	// LocalAttach, when set, is told on every connect whether the organisation's AUTH_OK allows local
+	// attach (false from an organisation that does not say).
+	LocalAttach func(bool)
 	// StreamOffline releases per-connection PTY/exec resources, not sandboxes.
 	StreamOffline func(*Peer)
 }
@@ -219,6 +222,9 @@ func (c *Client) Connect(ctx context.Context) error {
 	}
 	if ok.ProxyImage != "" && c.cfg.Hooks.ProxyImage != nil {
 		c.cfg.Hooks.ProxyImage(ok.ProxyImage)
+	}
+	if c.cfg.Hooks.LocalAttach != nil {
+		c.cfg.Hooks.LocalAttach(ok.LocalAttach)
 	}
 	c.session, c.ready = ok.SessionID, false
 	return c.serve(ctx, conn, cfg, ok)

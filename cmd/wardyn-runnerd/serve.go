@@ -45,6 +45,9 @@ type serveOptions struct {
 	maxPodLifetime                               time.Duration
 	// folderRoots is --folder-root: the folders a --substrate folders runner shares (default: home).
 	folderRoots []string
+	// localAttach is --local-attach, the runner's own ceiling on local attach; orgURL is --org, which
+	// the local attach pointer file names.
+	localAttach, orgURL string
 }
 
 func (o serveOptions) recordingEnabled() (bool, error) {
@@ -55,6 +58,19 @@ func (o serveOptions) recordingEnabled() (bool, error) {
 		return false, nil
 	default:
 		return false, errors.New("runner recording mode must be pg, fs or off")
+	}
+}
+
+// localAttachEnabled is --local-attach: on lets the organisation turn local attach on, off withdraws
+// the capability and the socket whatever the organisation says. Unset is the flag's default, on.
+func (o serveOptions) localAttachEnabled() (bool, error) {
+	switch o.localAttach {
+	case "on", "":
+		return true, nil
+	case "off":
+		return false, nil
+	default:
+		return false, errors.New("runner local attach must be on or off")
 	}
 }
 
@@ -120,6 +136,7 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 		if err := proxy.ValidUpstreamProxyURL(opts.upstreamProxy); err != nil {
 			return fmt.Errorf("--upstream-proxy / WARDYN_UPSTREAM_PROXY: %w (the URL is not repeated here: it may hold a credential)", err)
 		}
+		opts.orgURL = org
 		if build == nil {
 			return errors.New("runner execution and durable offline handlers are unavailable")
 		}
@@ -155,6 +172,7 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 	cmd.Flags().StringVar(&opts.upstreamProxy, "upstream-proxy", "", "this runner's own corporate upstream proxy, http://[user:pass@]host[:port], that every run's proxy chains its egress through; "+
 		"never sent to the organisation. Prefer the WARDYN_UPSTREAM_PROXY environment variable when it holds a credential (it is read after the flags are parsed, so --help never shows it). Read at startup only")
 	cmd.Flags().StringVar(&opts.recording, "recording-store", cmp.Or(os.Getenv("WARDYN_RECORDING_STORE"), "pg"), "organisation recording mode: pg, fs or off (off disables local capture)")
+	cmd.Flags().StringVar(&opts.localAttach, "local-attach", "on", "on lets a person's CLI on this computer attach to its runs over a per-user socket when the organisation allows it; off never opens the socket")
 	cmd.Flags().StringVar(&opts.substrate, "substrate", "docker", "where runs execute: docker (this host's engine) or k8s (a runs namespace of the cluster runnerd runs in); "+
 		"folders runs nothing and only shares folders on this computer with runs elsewhere")
 	cmd.Flags().StringArrayVar(&opts.folderRoots, "folder-root", nil, "folders: a folder this runner may share, with everything under it (repeatable; default: your home folder)")
