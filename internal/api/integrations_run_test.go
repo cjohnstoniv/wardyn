@@ -339,7 +339,8 @@ func TestIntegrationFold_MemberOwnKeySatisfiesRequirement(t *testing.T) {
 // TestIntegrationFold_PreviewAndCreateJudgeTheSameAllowlist: a workspace lists a host, the integration
 // targets it with egress_host off. Create folds the requirement before the workspace's egress is
 // unioned into the spec, the dry doors after; both must grant the credential, and neither may when no
-// workspace lists the host.
+// workspace lists the host or when a deny list in force (the workspace's DeniedEgress, the ceiling's
+// denied domains, a wildcard or trailing-dot spelling of either) names it.
 func TestIntegrationFold_PreviewAndCreateJudgeTheSameAllowlist(t *testing.T) {
 	const host = "artifactory.corp.internal"
 	integ := feedIntegration()
@@ -348,13 +349,19 @@ func TestIntegrationFold_PreviewAndCreateJudgeTheSameAllowlist(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		approved []string
+		wsDenied []string
+		ceilDeny []string
 		want     []string
 	}{
-		{"a workspace lists the host", []string{host}, []string{host}},
-		{"no workspace lists the host", nil, nil},
+		{"a workspace lists the host", []string{host}, nil, nil, []string{host}},
+		{"no workspace lists the host", nil, nil, nil, nil},
+		{"the workspace denies the host", []string{host}, []string{host}, nil, nil},
+		{"the workspace denies the host by wildcard", []string{host}, []string{"*.corp.internal"}, nil, nil},
+		{"the ceiling denies the host", []string{host}, nil, []string{host}, nil},
+		{"the ceiling denies the host by a trailing-dot spelling", []string{host}, nil, []string{"Artifactory.corp.internal."}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ws := types.Workspace{ID: uuid.New(), ApprovedEgress: tc.approved,
+			ws := types.Workspace{ID: uuid.New(), ApprovedEgress: tc.approved, DeniedEgress: tc.wsDenied,
 				Requirements: map[string]types.WorkspaceRequirement{"integration:corp-artifactory": {Level: "required", Provenance: "operator_set"}}}
 			granted := func(steps ...func(*Server, *runFold, *foldRecorder) bool) []string {
 				srv := runIntegrationSrv(t, []types.Integration{integ}, map[string][]byte{"artifactory-token": []byte("tok")})
@@ -363,6 +370,7 @@ func TestIntegrationFold_PreviewAndCreateJudgeTheSameAllowlist(t *testing.T) {
 					req: &createRunRequest{Agent: "claude-code"}, wsRefs: []types.Workspace{ws},
 					seed: workspaceSeed{attached: []types.Workspace{ws}},
 				}
+				f.ceiling.Spec.DeniedDomains = tc.ceilDeny
 				for _, step := range steps {
 					if !step(srv, f, &foldRecorder{}) {
 						t.Fatalf("a fold step refused: %v", f.w.(*httptest.ResponseRecorder).Body)

@@ -220,10 +220,12 @@ func (s *Server) stepRequirements(f *runFold, rec *foldRecorder) bool {
 	f.present = s.presentSecretNamesFor(ctx, s.secretOwnerFromRequest(f.r))
 	selections := resolveWorkspaceSelections(*f.req)
 	ahead := previewWorkspaceEgressHosts(f.wsRefs, f.ceiling.Spec.AllowedDomains)
+	// The denies create unions after this fold; the dry doors already hold the workspaces' in f.spec.
+	denied := slices.Concat(f.ceiling.Spec.DeniedDomains, workspaceDeniedEgress(f.wsRefs))
 	// One workspace at a time, so each one's additions are its own.
 	for _, ws := range f.wsRefs {
 		before := f.spec.Clone()
-		bound := &egressBound{trusted: f.ceiling.Spec.AllowedDomains, ahead: ahead}
+		bound := &egressBound{trusted: f.ceiling.Spec.AllowedDomains, ahead: ahead, denied: denied}
 		events, refusal := s.applyWorkspaceRequirementsFor(ctx, f.present, &f.spec, f.req.Agent, []types.Workspace{ws}, f.seed.attached, selections, bound)
 		if refusal != nil {
 			return !runError(refusal.status, refusal.reason, refusal.Error()).write(s, f.w, f.r)

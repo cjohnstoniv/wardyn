@@ -64,7 +64,7 @@ import (
 // `present` is the caller's presence map — the SAME one `rows` was derived
 // from (applyWorkspaceRequirementsFor), owner-scoped on a request so a member's
 // own key both synthesises its row AND passes the stored-secret guard below.
-func (s *Server) applyIntegrationRequirement(ctx context.Context, present map[string]bool, rows []integrationRow, spec *types.RunPolicySpec, id string, ahead []string) []requirementAuditEntry {
+func (s *Server) applyIntegrationRequirement(ctx context.Context, present map[string]bool, rows []integrationRow, spec *types.RunPolicySpec, id string, ahead, denied []string) []requirementAuditEntry {
 	integ, found := resolveIntegrationRefFrom(rows, id)
 	if !found || integ.Disabled || len(integ.Egress) == 0 {
 		return nil
@@ -99,7 +99,7 @@ func (s *Server) applyIntegrationRequirement(ctx context.Context, present map[st
 	}
 	_, header, _, hasHeader := integ.HeaderSecret()
 	if !disabledCap["credential"] {
-		grantedHosts, unlistedHosts = applyIntegrationInjection(present, spec, integ, modelHosts, ahead)
+		grantedHosts, unlistedHosts = applyIntegrationInjection(present, spec, integ, modelHosts, ahead, denied)
 		if hasHeader && len(modelHosts) > 0 {
 			events = append(events, requirementSkip(id, reason, map[string]any{"integration_id": id, "hosts": modelHosts}))
 		}
@@ -169,10 +169,13 @@ func (s *Server) applyIntegrationRequirement(ctx context.Context, present map[st
 //     egress_host capability is off opens nothing. Skipped, and audited. The
 //     list is the spec's plus ahead, the hosts the workspaces union in after
 //     this fold on create, so preview and create judge the same allowlist.
+//     A host any deny list in force names (the spec's plus denied, which create
+//     unions after this fold) is skipped the same way: the proxy refuses an
+//     injection rule for a denied host at startup.
 //   - a host that already has an api_key grant is left alone — never
 //     double-grant a host, mirroring applyRequiredSecretGrant.
 //     Whichever caller proposed it first wins.
-func applyIntegrationInjection(present map[string]bool, spec *types.RunPolicySpec, integ types.Integration, skip, ahead []string) (granted, unlisted []string) {
+func applyIntegrationInjection(present map[string]bool, spec *types.RunPolicySpec, integ types.Integration, skip, ahead, denied []string) (granted, unlisted []string) {
 	// HeaderSecret is the row's proxy_header-delivered secret; an empty stored
 	// format is already materialized as "%s" (the raw secret IS the header
 	// value — the right default for a custom credential header like x-api-key
@@ -186,7 +189,8 @@ func applyIntegrationInjection(present map[string]bool, spec *types.RunPolicySpe
 		if !bareExactHost(host) || slices.Contains(skip, host) {
 			continue
 		}
-		if !domainAllowedExact(spec.AllowedDomains, host) && !domainAllowedExact(ahead, host) {
+		if hostDeniedBy(slices.Concat(spec.DeniedDomains, denied), host) ||
+			!domainAllowedExact(spec.AllowedDomains, host) && !domainAllowedExact(ahead, host) {
 			unlisted = append(unlisted, host)
 			continue
 		}
