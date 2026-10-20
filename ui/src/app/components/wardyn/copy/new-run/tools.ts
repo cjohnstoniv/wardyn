@@ -91,7 +91,7 @@ export const NR_TOOLS = {
   CODEX_HOLD_TIP: "Codex CLI can't pause a tool call for approval.",
   /** pending W-32: the recommended text until the owner answers. */
   CODEX_NOTE:
-    "Codex CLI can't pause a tool call for approval, and Wardyn can't block its own tools. Rules for its MCP tools are enforced by the proxy.",
+    "Rules for its MCP tools are enforced by the proxy.",
   RULES_LABEL: "Tool rules",
   /** Lead wording 2026-10-17 (FUG-L771): read out on a policy's locked rule row, which shows a lock icon only. */
   ROW_LOCKED: "Set by your organisation's policy",

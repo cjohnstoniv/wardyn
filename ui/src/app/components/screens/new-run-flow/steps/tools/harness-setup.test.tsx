@@ -268,6 +268,29 @@ describe("HarnessSetup", () => {
       expect(screen.getByText("Codex CLI can't pause a tool call for approval.")).toBeTruthy();
     });
 
+    it("states each Codex CLI limit once and never the generic Ask first sentence (#3395)", () => {
+      for (const operator of [false, true]) {
+        h.operator = operator;
+        show([CODEX], BOTH);
+        const row = card("Codex CLI");
+        expect(row.queryByText(/Ask first holds the call/)).toBeNull();
+        expect(row.getAllByText(/can't pause a tool call/)).toHaveLength(1);
+        expect(row.getAllByText(/can't block Codex CLI's own tools/)).toHaveLength(1);
+        expect(row.getByText("Rules for its MCP tools are enforced by the proxy.")).toBeTruthy();
+        cleanup();
+      }
+    });
+
+    it("leaves another harness's row text as it was (#3395)", () => {
+      show([CLAUDE_GATED]);
+      expect(screen.getByText("Ask first holds the call until an admin approves it.")).toBeTruthy();
+      expect(screen.queryByText(/Rules for its MCP tools/)).toBeNull();
+      cleanup();
+      h.operator = true;
+      show([CLAUDE_GATED]);
+      expect(screen.getByText("Ask first holds the call until you or another admin approves it.")).toBeTruthy();
+    });
+
     it("turns Codex CLI's rule choices off for its own tools in the Add dialog", async () => {
       show([CODEX], BOTH);
       await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.ADD_RULE }));

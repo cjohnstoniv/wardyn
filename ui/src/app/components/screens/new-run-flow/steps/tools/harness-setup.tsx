@@ -127,7 +127,9 @@ function HarnessCard({ fact, access, harnessSet, intent, answeredFor, name, answ
   const [picked, setPicked] = React.useState<ToolEffect>();
   React.useEffect(() => { if (answered) setPicked(undefined); }, [answered]);
   const selected = (!answered && picked) || tool?.default_effect || fact.default.effective;
-  const help = fact.lane === "attended" ? NR_TOOLS.DEFAULT_HELP_ATTENDED : door.operator ? NR_TOOLS.DEFAULT_HELP_OPERATOR : NR_TOOLS.DEFAULT_HELP_GATED;
+  // Codex CLI cannot hold a call, so the generic Ask first sentence is false for it; its greyed options say what it can't do.
+  const codex = fact.rule_tools === "mcp_only";
+  const help = codex ? null : fact.lane === "attended" ? NR_TOOLS.DEFAULT_HELP_ATTENDED : door.operator ? NR_TOOLS.DEFAULT_HELP_OPERATOR : NR_TOOLS.DEFAULT_HELP_GATED;
   const servers = access.rows.filter((r) => r.kind === "mcp" && r.mcp);
 
   const componentId = (server: AccessRow) => server.source.id ?? server.id;
@@ -158,8 +160,8 @@ function HarnessCard({ fact, access, harnessSet, intent, answeredFor, name, answ
               choices={defaultChoices(fact, name)}
               onChange={(effect) => { setPicked(effect); edit((i) => setDefaultEffect(i, fact.harness, effect)); }}
             />
-            <p className="text-sm text-muted-foreground">{help}</p>
-            {fact.rule_tools === "mcp_only" && <p className="text-sm text-muted-foreground">{NR_TOOLS.CODEX_NOTE}</p>}
+            {help && <p className="text-sm text-muted-foreground">{help}</p>}
+            {codex && <p className="text-sm text-muted-foreground">{NR_TOOLS.CODEX_NOTE}</p>}
           </div>
         )}
       </div>

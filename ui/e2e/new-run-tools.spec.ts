@@ -19,7 +19,7 @@ import { NR_TOOLS } from "../src/app/components/wardyn/copy/new-run/tools";
 import { SCENARIO_HARNESSES, SCENARIO_HARNESS_SETS } from "../src/app/lib/new-run-fixtures/scenarios/harnesses";
 import { SCENARIO_PREFLIGHT } from "../src/app/lib/new-run-fixtures/scenarios/preflight";
 import { BEDROCK_SSO_SWITCH_OFF, SCENARIO_ACCESS, SETUP_ITEMS } from "../src/app/lib/new-run-fixtures/scenarios/tools";
-import { CLAUDE_ATTENDED, CLAUDE_UNGATED, MCP_DOCS, withFacts } from "../src/app/lib/new-run-fixtures/scenarios/tools-harness";
+import { CLAUDE_ATTENDED, CLAUDE_UNGATED, CODEX, MCP_DOCS, withFacts } from "../src/app/lib/new-run-fixtures/scenarios/tools-harness";
 import { MY_COMPONENTS } from "../src/app/components/wardyn/copy/components";
 import { MY_COMPONENTS as CATALOGUE, ORG_LINEAR } from "../src/app/lib/new-run-fixtures/scenarios/catalogue";
 
@@ -256,6 +256,16 @@ test.describe("New Run, step 5: the harness card", () => {
     await expect(dialog.getByRole("radio", { name: NR_TOOLS.EFFECT_ALLOW })).toBeEnabled();
     await dialog.getByLabel(NR_TOOLS.RULE_TOOL).fill("Bash");
     await expect(dialog.getByRole("radio", { name: NR_TOOLS.EFFECT_ALLOW })).toBeDisabled();
+  });
+
+  test("the Codex CLI row says it cannot pause or block once, and never that Ask first holds the call (#3395)", async ({ page }) => {
+    const lines = ["shape: environment", "experience: interactive", "no_repositories_or_drives: true", "tools:", "  - id: codex-cli", "    kind: harness"];
+    await openToolsFor(page, lines, withFacts(SCENARIO_ACCESS.app, [CODEX]));
+    const row = card(page, "Codex CLI");
+    await expect(row.getByText("Codex CLI can't pause a tool call for approval.")).toHaveCount(1);
+    await expect(row.getByText("Wardyn can't block Codex CLI's own tools.", { exact: false })).toHaveCount(1);
+    await expect(row.getByText(NR_TOOLS.CODEX_NOTE)).toBeVisible();
+    await expect(row.getByText(/Ask first holds the call/)).toHaveCount(0);
   });
 
   test("a policy's locked rule row is read out as set by the policy, not only shown with a lock (FUG-L771)", async ({ page }) => {
