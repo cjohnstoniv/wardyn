@@ -45,6 +45,8 @@ vi.mock("./lib/use-poll", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./lib/use-poll")>()),
   usePoll: () => {},
 }));
+// The shell's Needs you notices poll on their own interval, which is not this test's backoff.
+vi.mock("./components/wardyn/needs-you-notices", () => ({ NeedsYouNotices: () => null }));
 
 import App from "./App";
 
