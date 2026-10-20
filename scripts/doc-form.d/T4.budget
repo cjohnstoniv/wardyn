@@ -59,6 +59,7 @@
 # threatmodel/THREAT-MODEL.md 65598 = ours 65489 + theirs 65198 - base 65089 at the 0.10 W3 merge of SEC-1c onto the train.
 # threatmodel/THREAT-MODEL.md 65791 adds 193 over 65598, measured: the keep_work_folder bullets in §4.6 People's own drives (#1991): what is kept, that it persists into the next run, the honest limit, where delivered secrets land instead, and the queued drive's commit.
 # threatmodel/THREAT-MODEL.md 65846 adds 55 over 65791, measured: the git broker-off exception and the harness-project-files bullet in §4.6 keep_work_folder (#1991 review round 2).
-threatmodel/THREAT-MODEL.md=65846 share=20
+# threatmodel/THREAT-MODEL.md 65860 adds 14 over 65846, measured (FEAT-2KEEP review): turning keep off stops new keeps only, an already-kept drive comes back until emptied or deleted.
+threatmodel/THREAT-MODEL.md=65860 share=20
 # threatmodel/THREAT-MODEL.md 63171 adds 78 over 63093, measured: the console session under the role-stamp residual: renewal up to its cap, never moving the sign-in time, and the copied-cookie bound (0.9.3 console session lifetime).
 # threatmodel/THREAT-MODEL.md 63025 = 62948 + 77, measured: the laptop decision-sink crossing row and #77's sink and loss-row bullets.

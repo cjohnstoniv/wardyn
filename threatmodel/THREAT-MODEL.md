@@ -1393,7 +1393,7 @@ ADMIN pre-authorized** —
   - Home, agent settings and `/tmp` stay the sandbox's and are not kept.
   - Whatever the agent writes in the work folder persists in that drive and comes back on every later run that mounts it.
   - That includes any token, key or script the agent wrote there, such as an `env_secret` value it copied into a file; the later run's agent can read or run it.
-  - That includes harness project files such as `.claude/settings.json` hooks, `.mcp.json` and `CLAUDE.md`: a later run's harness loads them itself, so what one run writes there can steer the next. Turning keep off, or emptying the folder, stops it.
+  - That includes harness project files such as `.claude/settings.json` hooks, `.mcp.json` and `CLAUDE.md`: a later run's harness loads them itself, so what one run writes there can steer the next. Turning keep off stops new keeps only: a drive already kept comes back whenever it is attached, until it is emptied or deleted.
   - Wardyn doesn't put secrets on the kept drive, but anything the run can read and writes into the work folder stays on it.
   - Delivered file secrets land only in `/run/wardyn/secrets` (`ComponentSecretDir`), which no mount can cover, and managed settings only in `/etc/claude-code`.
   - Git credentials are brokered by default: the proxy mints them, and a repo cloned into the work folder holds none in its config. With `WARDYN_GIT_PAT_BROKER=off`, a `git_pat` reaches git through the helper, in memory, never in a file. SSH keys stay in the proxy.
