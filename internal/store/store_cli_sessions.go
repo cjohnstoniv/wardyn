@@ -1,7 +1,7 @@
 // Copyright 2026 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// CLI sign-in requests and CLI sessions (migration 0198_cli_sign_in). The secrets never reach SQL:
+// CLI sign-in requests and CLI sessions (migration 0199_cli_sign_in). The secrets never reach SQL:
 // the code K and the wdc_ session secret are stored as hashToken digests, like api_tokens.
 package store
 

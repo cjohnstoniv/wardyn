@@ -18,7 +18,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   that calls `wardyn run attach <run-id>` changes to `wardyn attach <run-id>`. `wardyn run ssh` is unchanged.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
   `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE` on `cli_sessions` and
-  `SELECT, INSERT, UPDATE, DELETE` on `cli_sign_ins` (migration `0198_cli_sign_in`, which also adds `kind` and
+  `SELECT, INSERT, UPDATE, DELETE` on `cli_sign_ins` (migration `0199_cli_sign_in`, which also adds `kind` and
   `cli_session_id` to `api_tokens`). Without it every API token read fails, because a token's liveness now reads
   `cli_sessions`.
 
@@ -28,7 +28,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   organisation allows it (`WARDYN_ATTACH_LOCAL`, off by default); otherwise it goes through the organisation, as
   before. One line on stderr names the path. `--via local|relay|auto` forces a path, and `--take-over` takes the
   terminal from whoever holds it. On Windows the runner lives in WSL2, so attach goes through the organisation.
-- CLI sign-in, server half (migration `0198_cli_sign_in`), off unless `WARDYN_CLI_SIGN_IN=true` and SSO is set up.
+- CLI sign-in, server half (migration `0199_cli_sign_in`), off unless `WARDYN_CLI_SIGN_IN=true` and SSO is set up.
   `wardyn login` asks for a sign-in, the person approves the computer in the console, and the CLI gets a session
   secret, bound to an Ed25519 device key, that renews a 1-hour access token. The secret DOES live on the laptop, in
   the keychain or a file only its owner can read; [THREAT-MODEL.md](threatmodel/THREAT-MODEL.md) says what protects

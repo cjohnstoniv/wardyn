@@ -1,7 +1,7 @@
 // Copyright 2026 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// CLI sign-in's store half (migration 0198_cli_sign_in). Guarded by WARDYN_TEST_PG like the rest of this
+// CLI sign-in's store half (migration 0199_cli_sign_in). Guarded by WARDYN_TEST_PG like the rest of this
 // package's Postgres tests: skipped cleanly when unset, must PASS when set.
 package store_test
 
@@ -216,7 +216,7 @@ func TestPG_CLISession_LoginRestampsLiveSessions(t *testing.T) {
 	}
 }
 
-// The three named cross-column CHECKs of migration 0198 refuse a row that breaks its pairing: a CLI token
+// The three named cross-column CHECKs of migration 0199 refuse a row that breaks its pairing: a CLI token
 // with no session, an ended session with no reason, a loopback sign-in with no port.
 func TestPG_CLISession_CrossColumnChecks(t *testing.T) {
 	pool := runsPGPoolIsolated(t)

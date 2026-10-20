@@ -265,7 +265,7 @@ type recordingErrorf struct{ n int }
 func (r *recordingErrorf) Errorf(string, ...any) { r.n++ }
 func (r *recordingErrorf) Helper()               {}
 
-// cliPairingChecks are migration 0198's named cross-column CHECKs: an ended
+// cliPairingChecks are migration 0199's named cross-column CHECKs: an ended
 // CLI session has its reason, a loopback sign-in its port, a CLI token its
 // session. None names a value outside its column's list.
 var cliPairingChecks = []string{"cli_sessions_end_pair", "cli_sign_ins_loopback_port", "api_tokens_cli_session_kind"}
