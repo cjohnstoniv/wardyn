@@ -94,13 +94,13 @@ function ProxyVerdict({ result }: { result: ProxyTestResult }) {
   if (result.intercepted) {
     return (
       <span className="flex flex-wrap items-center gap-2">
-        <Chip tone="warning" dot>Blocked · intercepted</Chip>
+        <Chip tone="danger" dot>Blocked · intercepted</Chip>
         <span className="text-meta text-muted-foreground">answered 200 OK — with someone else&apos;s page</span>
       </span>
     );
   }
   return (
-    <Chip tone="warning" dot>
+    <Chip tone={result.state === "bypass" ? "warning" : "danger"} dot>
       {result.state === "bypass" ? "Redirect not enforced" : "Blocked"}
     </Chip>
   );
@@ -115,29 +115,20 @@ export function ProxyTestBlock({
   customReject,
   customDraft,
   onCustomDraftChange,
-  hideButton,
 }: {
   state: ProbeUiState;
   /** The default multi-target check ("Test connectivity" / "Test again"). */
   onTest: () => void;
-  /** The custom-endpoint probe — fired by Enter in the custom field here; the
-   *  gate row's relabeled button is the primary launch point (steps.ts). */
+  /** The custom-endpoint probe — fired by Enter in the custom field and by its own button. */
   onTestCustom: () => void;
   operator: boolean;
   /** What the builtin probe is about to do, endpoints and chain named — shown while running. */
   probeLine: string;
   /** A rejected custom URL's server message, rendered inline in the custom block (never a toast — T.CUSTOM_REJECT_WHY). */
   customReject: string | null;
-  /** Lifted to the orchestrator (CorpNetworkState.customDraft): the gate's
-   *  action label derives from it ("Test this URL" once non-empty). */
+  /** Lifted to the orchestrator (CorpNetworkState.customDraft). */
   customDraft: string;
   onCustomDraftChange: (v: string) => void;
-  /** One Test button per screen (the mock's stepTest): while the gate row
-   *  below carries the action, the panel's own button is suppressed and this
-   *  block shows only the result/hint. Once the gate has moved on to Next,
-   *  the button returns here — as "Test again" — so re-testing stays
-   *  reachable. */
-  hideButton: boolean;
 }) {
   const running = state.kind === "running";
   const hasResult = state.kind === "done";
@@ -146,11 +137,12 @@ export function ProxyTestBlock({
   const brief = state.kind === "done" ? proxyVerdictBrief(state.result) : null;
   return (
     <div
+      data-testid="connectivity-tile"
       className={cn(
         // overflow-wrap inherits: probe results name real endpoints
         // (www.msftconnecttest.com/connecttest.txt) — unbreakable tokens whose
         // min-content width exceeds any narrow container.
-        "flex items-start gap-3 rounded-lg border p-3 [overflow-wrap:anywhere]",
+        "space-y-2 rounded-lg border p-3 [overflow-wrap:anywhere]",
         // The mock's okcustom container: a dashed info frame, so even the box
         // around a custom pass reads differently from a verified one.
         customPass
@@ -163,41 +155,44 @@ export function ProxyTestBlock({
             : "border-border",
       )}
     >
-      {!hideButton && (
-        <div className="shrink-0 space-y-1">
-          <Button size="sm" variant="outline" disabled={running || !operator} onClick={onTest}>
-            {running ? <Loader2 className="size-3.5 animate-spin" /> : null}
-            {running ? "Testing…" : hasResult ? "Test again" : "Test connectivity"}
-          </Button>
-          {/* #459: standing alone (not beside another control in a row) —
-              helper text under it, not a title tooltip. */}
-          {!operator && <p className="text-meta text-muted-foreground">{T.VIEWER_HINT}</p>}
-        </div>
-      )}
-      <div className="min-w-0 flex-1 space-y-1">
+      <div className="flex flex-wrap items-center gap-2">
+        <h3 className="text-body font-semibold text-foreground">{T.TILE_TITLE}</h3>
+        {state.kind === "idle" && <Chip tone="neutral">Not tested</Chip>}
+        {running && <Chip tone="info">Testing…</Chip>}
+        {state.kind === "done" && (
+          // F3-F9: the probe verdict is announced to a screen reader the moment
+          // it lands — the ticker below (elapsedSec, "running" branch) stays
+          // outside this region on purpose, or a live announcement would fire
+          // every second while the sandbox is out.
+          <div role="status" aria-live="polite">
+            <ProxyVerdict result={state.result} />
+          </div>
+        )}
+      </div>
+      <div className="min-w-0 space-y-1">
         {state.kind === "idle" && (
           <>
-            <span className="text-meta text-muted-foreground">Not tested</span>
+            <p className="text-xs leading-snug text-foreground">{T.TILE_UNTESTED}</p>
             <p className="text-meta leading-snug text-muted-foreground">{T.TEST_PROXY_HINT}</p>
           </>
         )}
         {state.kind === "running" && (
           <>
+            <p className="text-xs leading-snug text-foreground">{T.GATE_RUNNING}</p>
             <p className="text-xs text-info">Starting a throwaway sandbox — {state.elapsedSec}s</p>
             {!state.custom && <p className="text-meta leading-snug text-muted-foreground">{probeLine}</p>}
           </>
         )}
         {state.kind === "done" && (
-          // F3-F9: the probe verdict is announced to a screen reader the moment
-          // it lands — the ticker above (elapsedSec, "running" branch) stays
-          // outside this region on purpose, or a live announcement would fire
-          // every second while the sandbox is out.
-          <div role="status" aria-live="polite">
-            {/* Headline first, then the chip, then the wire detail, then
-                this verdict's own note. The order is the argument — the
-                operator reads what happened before they read who owns it. */}
+          <div className="space-y-1">
+            {/* Headline first, then the wire detail, then this verdict's own
+                note, under the pill in the tile's header. The order is the
+                argument — the operator reads what happened before they read
+                who owns it. */}
             {brief && <p className="text-body font-medium text-foreground">{brief.head}</p>}
-            <ProxyVerdict result={state.result} />
+            {state.result.state === "reached" && !state.result.custom && (
+              <p className="text-xs leading-snug text-foreground">{T.TILE_REACHED}</p>
+            )}
             {/* no_runner is the one state with no wire detail worth quoting:
                 nothing launched, and its note says what to DO (configure a
                 barrier), which the server's own line doesn't. */}
@@ -261,17 +256,15 @@ export function ProxyTestBlock({
                       className="font-mono"
                     />
                   </Field>
-                  {!hideButton && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="shrink-0"
-                      disabled={!operator || !customDraft.trim()}
-                      onClick={onTestCustom}
-                    >
-                      Test this URL
-                    </Button>
-                  )}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="shrink-0"
+                    disabled={!operator || !customDraft.trim()}
+                    onClick={onTestCustom}
+                  >
+                    Test this URL
+                  </Button>
                 </div>
                 {customReject && (
                   <div className="space-y-1.5">
@@ -285,6 +278,14 @@ export function ProxyTestBlock({
             )}
           </div>
         )}
+      </div>
+      <div className="space-y-1">
+        <Button size="sm" variant={hasResult ? "outline" : "default"} disabled={running || !operator} onClick={onTest}>
+          {running ? <Loader2 className="size-3.5 animate-spin" /> : null}
+          {running ? "Testing…" : hasResult ? "Test again" : "Test connectivity"}
+        </Button>
+        {/* #459: standing alone — helper text under it, not a title tooltip. */}
+        {!operator && <p className="text-meta text-muted-foreground">{T.VIEWER_HINT}</p>}
       </div>
     </div>
   );

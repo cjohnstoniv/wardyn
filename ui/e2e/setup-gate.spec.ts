@@ -758,3 +758,42 @@ test.describe("Corporate network step — typed values the server would refuse (
     await expect(page.getByRole("button", { name: "+ Add redirect" })).toBeDisabled();
   });
 });
+
+// #3066: the probe is a status tile with its button inside, and the footer is Back and Next.
+test.describe("Network step — the Connectivity tile and the Back/Next footer (#3066)", () => {
+  test("Test connectivity lives in the tile; Next is disabled with its reason until the probe answers", async ({ page }) => {
+    await mockGatedStatus(page);
+    await skipHero(page);
+    await page.goto("/admin/setup");
+    const rail = page.getByRole("navigation", { name: /setup steps/i }).last();
+    await expect(rail).toBeVisible({ timeout: 15_000 });
+    await rail.getByRole("button", { name: /^Network/ }).click();
+
+    const tile = page.getByTestId("connectivity-tile");
+    await expect(tile.getByRole("heading", { name: INTEGRATIONS.TILE_TITLE })).toBeVisible();
+    await expect(tile.getByText("Not tested", { exact: true })).toBeVisible();
+    const next = page.getByRole("button", { name: /^Next:/i });
+    await expect(next).toBeDisabled();
+    await expect(page.getByText(INTEGRATIONS.GATE_HEAD_UNTESTED)).toBeVisible();
+    await expect(page.getByRole("button", { name: /^Test connectivity$/i })).toHaveCount(1);
+
+    // The e2e backend runs `-runner none`: the probe answers no_runner, the one honest bypass.
+    await tile.getByRole("button", { name: /^Test connectivity$/i }).click();
+    await expect(tile.getByText("Can't test here", { exact: true })).toBeVisible();
+    await expect(tile.getByRole("button", { name: /^Test again$/i })).toBeVisible();
+    await expect(next).toBeEnabled();
+  });
+
+  test("the footer is pinned to the bottom of the scrolling view", async ({ page }) => {
+    await mockGatedStatus(page);
+    await skipHero(page);
+    await page.goto("/admin/setup");
+    const rail = page.getByRole("navigation", { name: /setup steps/i }).last();
+    await expect(rail).toBeVisible({ timeout: 15_000 });
+    await rail.getByRole("button", { name: /^Network/ }).click();
+
+    const footer = page.locator("main footer").filter({ has: page.getByRole("button", { name: /^Back$/ }) });
+    await expect(footer).toBeVisible();
+    expect(await footer.evaluate((el) => getComputedStyle(el).position)).toBe("sticky");
+  });
+});

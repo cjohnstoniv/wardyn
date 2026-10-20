@@ -10,7 +10,7 @@
 // (that comes from the caller). Reads the step data layer (./steps.ts) and
 // the StatusChip API. Review is the last step and has no launch CTA of its own
 // (step-bodies.tsx): the top bar's New run button is the one launch point.
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useId, useState } from "react";
 import { ArrowLeft, ArrowRight, Eye, X } from "lucide-react";
 import { Button } from "../../ui/button";
 import { cn } from "../../ui/utils";
@@ -26,6 +26,10 @@ import { StatusChip } from "../../wardyn/status-chip";
 import { HowItWorksStrip, IntroBlurb } from "../onboarding/intro";
 import { StepEpisodes } from "../onboarding/episode-card";
 import { OPERATOR_ONLY_REASON } from "../../wardyn/copy";
+
+// Pinned to the bottom of the scrolling view, as New run's StepShell footer is,
+// so Back and Next stay reachable on a long step.
+const FOOTER = "sticky bottom-0 z-10 mt-10 flex flex-wrap items-start gap-2 border-t bg-background py-3";
 
 export function SetupLayout({
   current,
@@ -114,6 +118,7 @@ export function SetupLayout({
   children: ReactNode;
 }) {
   const [showIntro, setShowIntro] = useState(false);
+  const gateId = useId();
   // #213 — `order` is now the REQUIRED walk only (steps.ts's REQUIRED_STEPS,
   // 4 long): `current` not being in it means an OPTIONAL step, reached via
   // the rail or Review rather than by walking Next through it. That is the
@@ -220,7 +225,7 @@ export function SetupLayout({
               "Finish setup" completes it (barrier is the only requirement; launching
               a run is offered but optional). */}
           {isOptional ? (
-            <footer className="mt-10 flex flex-wrap items-center justify-end gap-2 border-t pt-5">
+            <footer className={cn(FOOTER, "justify-end")}>
               <Button variant="outline" onClick={() => returnTo && onSelect(returnTo)}>
                 <ArrowLeft className="size-4" aria-hidden />
                 Back to required steps
@@ -238,7 +243,7 @@ export function SetupLayout({
               </div>
             </footer>
           ) : (
-          <footer className="mt-10 flex flex-wrap items-center justify-end gap-2 border-t pt-5">
+          <footer className={cn(FOOTER, "justify-between")}>
             <Button
               variant="outline"
               disabled={!prev && !backOverride}
@@ -248,70 +253,53 @@ export function SetupLayout({
               Back
             </Button>
             {next ? (
-              <>
+              // Next on the right with its reason under it: a disabled Next
+              // always says why, and a gate's own action (a link, never a
+              // second primary) sits beside the reason.
+              <div className="flex min-w-0 max-w-md flex-col items-end gap-1">
+                <Button
+                  onClick={() => (nextGate?.onNext ? nextGate.onNext() : onSelect(next))}
+                  disabled={!!nextGate?.blocked || !!refusal}
+                  aria-describedby={nextGate?.blocked && nextGate.head ? `${gateId}-head` : undefined}
+                >
+                  {nextGate?.nextLabel ?? `Next: ${STEP_LABEL[next]}`}
+                  <ArrowRight className="size-4" aria-hidden />
+                </Button>
                 {nextGate && (nextGate.head || nextGate.reason) && (
                   // F3-F9: the gate's verdict is announced the moment it changes
                   // (a probe landing, a redirect proving reached) — nothing here
                   // ticks, so a live region carries no repeat-announcement risk.
-                  <div role="status" aria-live="polite" className="min-w-0 max-w-md space-y-0.5">
+                  <div role="status" aria-live="polite" className="min-w-0 space-y-0.5 text-right">
                     {nextGate.head && (
                       <p
+                        id={`${gateId}-head`}
                         className={cn(
-                          "flex items-start gap-1.5 text-body font-medium leading-snug",
+                          "text-xs font-medium leading-snug",
                           nextGate.tone === "neutral" ? "text-foreground" : "text-warning",
                         )}
                       >
-                        <span
-                          className={cn(
-                            "mt-1.5 size-1.5 shrink-0 rounded-full",
-                            nextGate.tone === "neutral" ? "bg-border-strong" : "bg-warning",
-                          )}
-                        />
                         {nextGate.head}
                       </p>
                     )}
                     {nextGate.reason && (
-                      <p className={cn("text-xs leading-snug text-muted-foreground", nextGate.head && "pl-3.5")}>
-                        {nextGate.reason}
-                      </p>
+                      <p className="text-meta leading-snug text-muted-foreground">{nextGate.reason}</p>
                     )}
                   </div>
                 )}
-                {nextGate?.blocked && nextGate.action ? (
-                  // #459: standing alone in the footer — helper text under it,
-                  // not a title tooltip a disabled control can't surface.
-                  <div className="space-y-1">
-                    <Button onClick={nextGate.action.onClick} disabled={!operator}>
-                      {nextGate.action.label}
-                    </Button>
-                    {!operator && (
-                      <p className="text-right text-meta text-muted-foreground">{OPERATOR_ONLY_REASON}</p>
-                    )}
-                  </div>
-                ) : (
-                  // #459/#497: a nextGate.blocked reason is already visible
-                  // above (the head/reason live region, always populated
-                  // together — see corpNetworkGate); only the plain
-                  // crossing-rule refusal (refuseNext, no nextGate involved)
-                  // has nowhere else to show, so it gets its own helper text
-                  // instead of a title tooltip a disabled control can't
-                  // surface.
-                  <div className="space-y-1">
-                    <Button
-                      onClick={() => (nextGate?.onNext ? nextGate.onNext() : onSelect(next))}
-                      disabled={!!nextGate?.blocked || !!refusal}
-                    >
-                      {nextGate?.nextLabel ?? `Next: ${STEP_LABEL[next]}`}
-                      <ArrowRight className="size-4" aria-hidden />
-                    </Button>
-                    {!nextGate?.blocked && refusal && (
-                      <p className="text-right text-meta text-muted-foreground">{refusal}</p>
-                    )}
-                  </div>
+                {nextGate?.blocked && nextGate.action && (
+                  <Button variant="link" size="sm" onClick={nextGate.action.onClick} disabled={!operator}>
+                    {nextGate.action.label}
+                  </Button>
                 )}
-              </>
+                {nextGate?.blocked && nextGate.action && !operator && (
+                  <p className="text-right text-meta text-muted-foreground">{OPERATOR_ONLY_REASON}</p>
+                )}
+                {!nextGate?.blocked && refusal && (
+                  <p className="text-right text-meta text-muted-foreground">{refusal}</p>
+                )}
+              </div>
             ) : (
-              <>
+              <div className="flex flex-wrap items-center justify-end gap-2">
                 {/* #214 — same visual shape as the nextGate dot+head+reason
                     above, for the one gate this footer can carry with no
                     `next` step left to render it beside. */}
@@ -328,7 +316,7 @@ export function SetupLayout({
                   Finish setup
                   <ArrowRight className="size-4" aria-hidden />
                 </Button>
-              </>
+              </div>
             )}
           </footer>
           )}

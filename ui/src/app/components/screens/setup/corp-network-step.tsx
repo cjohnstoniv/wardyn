@@ -47,7 +47,7 @@ import { EgressTab, useElapsedTimer, type ProbeUiState } from "./corp-network-eg
 // compactEndpoint moved with the egress family; re-exported so its tests and
 // any caller keep one import path for this step's helpers.
 export { compactEndpoint } from "./corp-network-egress";
-import { keepCurrentRedirects, upstreamKey, type CorpNetworkGate, type CorpNetworkState } from "./steps";
+import { keepCurrentRedirects, upstreamKey, type CorpNetworkState } from "./steps";
 // HostProxyTab (+ EvidenceBlock/ProxyTestBlock and the evidence-reading pure
 // helpers) moved to corp-network-proxy.tsx — the same size-gate split
 // corp-network-egress.tsx already got for the Egress tab. Re-exported so every
@@ -78,7 +78,6 @@ export function CorpNetworkStep({
   gate,
   onGateChange,
   onRecheck = reloadSiteConfig,
-  gateResult,
   registerActions,
   tab: tabProp,
   onTabChange,
@@ -102,12 +101,6 @@ export function CorpNetworkStep({
    *  reloadSiteConfig (site-config only — detection never changes) for
    *  standalone/test renders that don't wire the orchestrator up. */
   onRecheck?: () => void;
-  /** The orchestrator's computed gate (the SAME corpNetworkGate call that
-   *  drives the footer) — this step only READS on/action from it, to suppress
-   *  the panel's own Test button while the gate row carries the action. One
-   *  derivation, no recompute drift. Absent in standalone renders (tests),
-   *  where the panel keeps its button. */
-  gateResult?: CorpNetworkGate;
   registerActions?: (a: CorpStepActions | null) => void;
   /** Controlled sub-tab (the orchestrator owns it so the FOOTER can walk the
    *  tabs — Next on Host proxy goes to Egress redirection, not the exit; see
@@ -253,10 +246,6 @@ export function CorpNetworkStep({
     return () => registerActions(null);
   }, [registerActions, setTab]);
 
-  // One Test button per screen (the mock's stepTest): while the gate row
-  // below is offering the action, the panel's own button is suppressed.
-  const hideProbeButton = !!gateResult && !gateResult.on && !!gateResult.action;
-
   // The dot means only "configured rows not yet proven" — never "you haven't
   // looked" (no rung demands a visit any more; see steps.ts).
   const redirectRows = siteConfig?.egress_redirects ?? [];
@@ -307,7 +296,6 @@ export function CorpNetworkStep({
             customReject,
             customDraft: gate.customDraft,
             onCustomDraftChange: (v) => onGateChange({ customDraft: v }),
-            hideButton: hideProbeButton,
           }}
         />
       ) : (
