@@ -515,8 +515,8 @@ func (a *approvalClient) Resolve(ctx context.Context, host string) resolveResult
 		return resolveResult{State: apPending, ApprovalID: st.approvalID}
 	case needPoll:
 		// A pending approval, or an approved entry past its TTL being
-		// re-validated; a transient poll error leaves the prior state (a
-		// deliberate availability-over-strictness tradeoff under a persistent CP outage).
+		// re-validated; a transient poll error leaves the prior state, but an approved entry goes
+		// without a re-check for at most maxApprovalStaleness (see below).
 		pollCtx, cancel := context.WithTimeout(ctx, approvalCallTimeout)
 		decided, newState, polledScope, polledExpiry := a.poll(pollCtx, id)
 		cancel()
