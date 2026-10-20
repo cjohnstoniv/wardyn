@@ -46,6 +46,9 @@ export const INVENTORY = {
   OPEN_AUDIT: "Open Audit",
   ERASE_ROW: "Erase credentials",
   ERASE_BY_EMAIL: "Erase someone's credentials",
+  MORE: "More",
+  ERASE_MENU_DATA: "Erase someone's data…",
+  ERASE_MENU_CREDS: "Erase someone's credentials…",
   EMPTY_TITLE: "No one has stored a credential yet",
   // The store's canon 503 is a supported configuration, not a fault: the card is titled for what is true, not "Something went wrong".
   NO_META_TITLE: "Nothing to list on this store",
@@ -113,6 +116,10 @@ export const ERASE_DATA = {
   SEALING_NOTE:
     "Personal details are erasable only for events recorded while audit sealing was on. Earlier events keep them until retention drops their partition.",
   KEEPS: "The events themselves stay, and the log still verifies.",
+  CHANGE: "Change",
+  PICK_NONE: "No one matches",
+  PICK_USE: (typed: string) => `Use “${typed}”`,
+  NOT_LISTED: "not listed",
   CONFIRM: "Erase data",
   ERASED: "Erased",
   NOT_DONE: "Not finished",

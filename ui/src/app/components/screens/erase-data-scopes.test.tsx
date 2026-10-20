@@ -12,6 +12,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 const erasePersonMock = vi.fn();
+vi.mock("../../lib/api/people", () => ({ people: { list: () => Promise.resolve({ people: [] }) } }));
 vi.mock("../../lib/api/credentials", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../lib/api/credentials")>()),
   credentials: { erasePerson: (...a: unknown[]) => erasePersonMock(...a) },
@@ -38,7 +39,7 @@ describe("Erase someone's data: the scopes", () => {
   it("sends every server scope once each is ticked, and leaves the three newest unticked on open", async () => {
     expect(goScopes).toHaveLength(10);
     erasePersonMock.mockResolvedValue({ person: "sub-ana", scopes: [], outcome: {} });
-    render(<EraseDataDialog open retentionLine="" onOpenChange={() => {}} onErased={() => {}} />);
+    render(<EraseDataDialog open onOpenChange={() => {}} onErased={() => {}} />);
     const dialog = screen.getByRole("dialog");
     for (const label of ["Run templates", "Runner pools", "Drives"]) {
       const box = within(dialog).getByRole("checkbox", { name: new RegExp(`^${label}`) });

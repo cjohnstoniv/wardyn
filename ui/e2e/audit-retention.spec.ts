@@ -179,7 +179,8 @@ test.describe("Erase someone's data (security admin)", () => {
     await asRealSecurityAdmin(page);
     await gotoConsole(page, "admin");
     await navTo(page, "Credentials");
-    await page.getByRole("button", { name: "Erase someone's data" }).click();
+    await page.getByRole("button", { name: "More" }).click();
+    await page.getByRole("menuitem", { name: "Erase someone's data…" }).click();
 
     const dialog = page.getByRole("dialog");
     await expect(dialog.getByText("Erase someone's data", { exact: true }).first()).toBeVisible();
@@ -215,7 +216,8 @@ test.describe("Erase someone's data (security admin)", () => {
     await asRealSecurityAdmin(page);
     await gotoConsole(page, "admin");
     await navTo(page, "Credentials");
-    await page.getByRole("button", { name: "Erase someone's data" }).click();
+    await page.getByRole("button", { name: "More" }).click();
+    await page.getByRole("menuitem", { name: "Erase someone's data…" }).click();
 
     const dialog = page.getByRole("dialog");
     await dialog.getByRole("checkbox", { name: /^Recordings/ }).click();
