@@ -166,6 +166,11 @@ func (s *Server) readResidentValue(ctx context.Context, run types.AgentRun, gran
 	if class == "" || grant.Delivery != types.GrantDeliveryResident || grant.RunID != run.ID || run.RunnerID == nil || s.cfg.Secrets == nil {
 		return residentValue{}, errors.New("api: the grant cannot be delivered runner_resident")
 	}
+	// The organisation's row is read here, so a ref bound to a person's own
+	// row is never served (an operator-owned run's own row is that one).
+	if grant.Spec.OwnerOnlyFor(secretName) && !run.OperatorOwned {
+		return residentValue{}, errors.New("api: the grant reads its owner's own secret, which is never delivered runner_resident")
+	}
 	data := map[string]any{"purpose": string(secretstore.PurposeRunnerResident), "grant_id": grant.ID, "runner_id": *run.RunnerID,
 		"delivery": class, "owner": "", "posture_source": types.RunnerPostureSourceRunnerAsserted}
 	if posture, err := s.runnerPosture(ctx, *run.RunnerID); err == nil && posture != nil {

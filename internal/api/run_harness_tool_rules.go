@@ -330,5 +330,13 @@ func sidecarPolicy(policy types.RunPolicySpec, p dispatchParams) types.RunPolicy
 	if len(p.HarnessToolRules) > 0 {
 		policy.ToolRules = nil
 	}
+	// owner_only_refs is read by the broker from the grant row, never by the
+	// sidecar; left off its config so a proxy that predates the key loads it.
+	if slices.ContainsFunc(policy.EligibleGrants, func(g types.GrantSpec) bool { return g.OwnerOnlyRefs != nil }) {
+		policy.EligibleGrants = slices.Clone(policy.EligibleGrants)
+		for i := range policy.EligibleGrants {
+			policy.EligibleGrants[i].OwnerOnlyRefs = nil
+		}
+	}
 	return policy
 }

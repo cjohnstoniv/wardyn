@@ -8,6 +8,7 @@ package types
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -292,6 +293,17 @@ type GrantSpec struct {
 	// RequiresApproval forces a human approval to mint (vs auto-mint on policy).
 	RequiresApproval bool `json:"requires_approval"`
 	OwnerOnly        bool `json:"owner_only,omitempty"` // stored secret from the run owner's own row only, never the operator's
+	// OwnerOnlyRefs is owner_only for the named stored secrets alone: a grant
+	// with two refs (ssh_key's key and known_hosts) whose refs resolve from
+	// different rows. Set at launch for a ref admitted only because the run's
+	// owner holds a secret of that name.
+	OwnerOnlyRefs []string `json:"owner_only_refs,omitempty"`
+}
+
+// OwnerOnlyFor reports whether the grant reads the stored secret ref from the
+// run owner's own row only.
+func (g GrantSpec) OwnerOnlyFor(ref string) bool {
+	return g.OwnerOnly || slices.Contains(g.OwnerOnlyRefs, ref)
 }
 
 // CredentialGrant records what a run is ELIGIBLE for — not issuance: minting happens only via the

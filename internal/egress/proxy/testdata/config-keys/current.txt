@@ -108,6 +108,7 @@ policy.denied_domains
 policy.eligible_grants
 policy.eligible_grants.kind
 policy.eligible_grants.owner_only
+policy.eligible_grants.owner_only_refs
 policy.eligible_grants.requires_approval
 policy.eligible_grants.scope
 policy.eligible_grants.ttl_seconds

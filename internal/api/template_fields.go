@@ -321,6 +321,8 @@ var templateNestedCarried = map[string]string{
 }
 
 var templateNestedExcluded = map[string]TemplateFieldRule{
+	"GrantSpec.owner_only_refs": excludedField("owner_only_refs", templateExcludeOrigin,
+		"Wardyn sets it at each launch; a template marks the grant owner_only."),
 	"LLMInspectionSpec.workspace_secret_values": excludedField("workspace_secret_values", templateExcludeSecret,
 		"Secret values are runtime-only: the server resolves them, and a template names secrets instead."),
 	"RunLocalFolder.name": excludedField("name", templateExcludeLaunch,
