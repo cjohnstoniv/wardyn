@@ -213,8 +213,8 @@ func (l *login) signIn(ctx context.Context, base *storedSession) error {
 	var g types.CLISessionGrant
 	err = cliCall(ctx, l.origin, http.MethodPost, route, "", types.CLISignInTokenRequest{Code: code, Verifier: verifier,
 		Proof: cliProof(key, l.origin, route, created.ID, code, time.Now())}, &g)
-	finish(err == nil)
 	if err != nil {
+		finish(false)
 		return err
 	}
 	it := cliItem{KeySeed: base64.RawURLEncoding.EncodeToString(key.Seed()), Machine: machine}
@@ -222,13 +222,15 @@ func (l *login) signIn(ctx context.Context, base *storedSession) error {
 		it = base.item
 	}
 	it.applyGrant(g)
-	prev, replacing := l.previous()
-	if err := l.store(kind, it); err != nil {
+	prev, replacing, err := l.store(kind, it, base != nil)
+	// The browser hears "Signed in" only once the sign-in is stored.
+	finish(err == nil)
+	if err != nil {
 		return err
 	}
 	// The previous session ends only once the new one is stored: ended first, a failed sign-in would
 	// leave this computer with none.
-	if replacing && base == nil && prev.SessionID != g.SessionID {
+	if replacing && prev.SessionID != g.SessionID {
 		l.endPrevious(ctx, prev, g.AccessToken)
 	}
 	who := whoIs(ctx, l.origin, g.AccessToken)
@@ -244,15 +246,40 @@ func (l *login) signIn(ctx context.Context, base *storedSession) error {
 	return err
 }
 
-// store saves it in kind's store and points the profile at it, removing one another store held.
-func (l *login) store(kind string, it cliItem) error {
+// store saves it under cli.lock, as one read-modify-write against the item stored now. A new session
+// replaces the item (and one another store held) and points the profile at kind; it returns the live item
+// it replaced. A step-up keeps the stored item, which a refresh may have rotated while the browser was
+// open, and adds only the cli_admin token to it.
+func (l *login) store(kind string, it cliItem, stepUp bool) (prev cliItem, replacing bool, err error) {
+	unlock, ok, err := lockRefresh(l.dir)
+	if err != nil {
+		return prev, false, err
+	}
+	if !ok {
+		return prev, false, fmt.Errorf(errStoreBusy, l.origin)
+	}
+	defer unlock()
+	st := storeFor(kind, l.dir)
+	if stepUp {
+		cur, found, err := st.get(l.origin)
+		if err != nil {
+			return prev, false, err
+		}
+		// The same session with the same device key, still live; a replaced or ended one is not restored.
+		if !found || cur.SessionID != it.SessionID || cur.KeySeed != it.KeySeed || cur.endedWhy(time.Now()) != "" {
+			return prev, false, fmt.Errorf(errStepUpLost, l.origin)
+		}
+		cur.AdminToken, cur.AdminExpiresAt = it.AdminToken, it.AdminExpiresAt
+		return prev, false, st.put(l.origin, cur)
+	}
+	prev, replacing = l.previous()
 	if old, _ := cliprofile.ReadSessionStore(l.dir, l.origin); old != "" && old != kind {
 		_ = storeFor(old, l.dir).del(l.origin)
 	}
-	if err := storeFor(kind, l.dir).put(l.origin, it); err != nil {
-		return err
+	if err := st.put(l.origin, it); err != nil {
+		return prev, false, err
 	}
-	return cliprofile.WriteSessionStore(l.dir, l.origin, kind)
+	return prev, replacing, cliprofile.WriteSessionStore(l.dir, l.origin, kind)
 }
 
 // previous is the live sign-in this computer holds for the organisation, which a new one replaces.
@@ -273,15 +300,10 @@ func (l *login) endPrevious(ctx context.Context, prev cliItem, token string) {
 	route := "/api/v1/me/cli-sessions/" + prev.SessionID.String()
 	err := cliCall(ctx, l.origin, http.MethodDelete, route, token, nil, nil)
 	var ae *sdk.APIError
-	if errors.As(err, &ae) && ae.Status == http.StatusNotFound {
-		if old, _ := prev.bearer(time.Now()); old != "" {
-			err = cliCall(ctx, l.origin, http.MethodDelete, route, old, nil, nil)
-		}
+	if old, _ := prev.bearer(time.Now()); old != "" && errors.As(err, &ae) && ae.Status == http.StatusNotFound {
+		err = cliCall(ctx, l.origin, http.MethodDelete, route, old, nil, nil)
 	}
-	if errors.As(err, &ae) && (ae.Status == http.StatusNotFound || ae.Status == http.StatusUnauthorized) {
-		return
-	}
-	if err != nil {
+	if err = sessionGone(err); err != nil {
 		fmt.Fprintf(l.errOut, copyPreviousNotEnded+"\n", err)
 	}
 }

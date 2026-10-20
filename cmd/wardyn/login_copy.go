@@ -23,6 +23,10 @@ const (
 	// A login that replaces this computer's sign-in could not sign the old one out (stderr; login succeeds).
 	copyPreviousNotEnded = "wardyn: the sign-in this one replaces could not be signed out (%v); it ends on its own, or sign it out under Your account → Signed-in CLIs"
 
+	// A login whose write waited on another command's lock too long, and a step-up whose session changed.
+	errStoreBusy  = "another wardyn command held the CLI sign-in for %s too long; run `wardyn login` again"
+	errStepUpLost = "the CLI sign-in for %s changed while the browser was open: run `wardyn login --admin` again"
+
 	// The file store, on stderr at login: the path, and types.CLIFileStoreSessionCap in words.
 	copyFileStore = "wardyn: this computer has no keychain, so the sign-in is kept in %s, which only you can read, and lasts at most %s"
 

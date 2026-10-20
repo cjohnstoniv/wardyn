@@ -37,8 +37,9 @@ type signInOrg struct {
 	srv     *httptest.Server
 	paste   bool
 	version string // /healthz.version
-	// signOutFails makes DELETE /me/cli-sessions/{id} a 500.
+	// signOutFails makes DELETE /me/cli-sessions/{id} a 500; signOut401 a 401 with that reason.
 	signOutFails bool
+	signOut401   string
 	// issueLife and refreshLife are the access token lifetimes of the token call and of a refresh.
 	issueLife, refreshLife time.Duration
 	// refreshBarrier holds the first refresh up to this long for a second to arrive.
@@ -239,6 +240,11 @@ func (f *signInOrg) refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess.secret = "wdc_" + uuid.NewString()
+	for tok, owner := range f.tokens { // a rotation revokes the access token it replaces
+		if owner.session == id && owner.kind == types.APITokenKindCLIAccess {
+			delete(f.tokens, tok)
+		}
+	}
 	g := f.grant(id, types.APITokenKindCLIAccess, f.refreshLife)
 	g.Secret = sess.secret
 	writeFake(w, http.StatusOK, g)
@@ -257,6 +263,16 @@ func (f *signInOrg) owner(r *http.Request) (*fakeToken, *fakeSession) {
 	return &tok, sess
 }
 
+// refuseBearer is the server's 401 for no bearer (sign_in_required) or one it does not know, such as an
+// ended session's revoked token (the admin-token fallback's admin_token_not_configured).
+func (f *signInOrg) refuseBearer(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Authorization") == "" {
+		refuseFake(w, 401, "sign_in_required", "missing bearer token")
+		return
+	}
+	refuseFake(w, 401, "admin_token_not_configured", "admin token not configured; public API disabled")
+}
+
 func (f *signInOrg) me(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -266,7 +282,7 @@ func (f *signInOrg) me(w http.ResponseWriter, r *http.Request) {
 	}
 	tok, _ := f.owner(r)
 	if tok == nil {
-		refuseFake(w, 401, "sign_in_required", "missing bearer token")
+		f.refuseBearer(w, r)
 		return
 	}
 	role := "user"
@@ -284,9 +300,13 @@ func (f *signInOrg) signOut(w http.ResponseWriter, r *http.Request) {
 		refuseFake(w, 500, "", "internal error")
 		return
 	}
+	if f.signOut401 != "" {
+		refuseFake(w, 401, f.signOut401, "refused")
+		return
+	}
 	// One person holds every session here; the server ends any live session of the caller's.
 	if tok, _ := f.owner(r); tok == nil {
-		refuseFake(w, 401, "sign_in_required", "missing bearer token")
+		f.refuseBearer(w, r)
 		return
 	}
 	sess := f.sessions[id]
@@ -702,6 +722,9 @@ func TestSessionEndedIsNamedAndNotSentAgain(t *testing.T) {
 	if f.liveSessions() != 0 {
 		t.Error("the replayed secret did not end the session at the server")
 	}
+	if it := storedItem(t, f.srv.URL); it.Secret != "" || it.KeySeed != "" || it.AccessToken != "" || it.AdminToken != "" {
+		t.Errorf("an ended item still holds its secret, key or tokens: %+v", it)
+	}
 	before := f.refreshes
 	if _, _, err := runCLI(t, "", "whoami", "--url", f.srv.URL); err == nil || err.Error() != want {
 		t.Fatalf("second whoami: %v, want %q", err, want)
@@ -942,5 +965,165 @@ func TestLoginReplacingEndsThePreviousSession(t *testing.T) {
 				t.Errorf("stderr %q (sign-out fails=%v)", stderr, fails)
 			}
 		})
+	}
+}
+
+// TestLoginAdminStepUpKeepsTheSecretARefreshRotated: a refresh in another command while the step-up's
+// browser is open rotates the secret; the step-up then adds its token to the item as stored now, so the
+// rotated secret survives and the next refresh is not a reuse.
+func TestLoginAdminStepUpKeepsTheSecretARefreshRotated(t *testing.T) {
+	f := newSignInOrg(t)
+	cliEnv(t, nil)
+	openBrowser = func(approve string) error { go approveInBrowser(t, f, nil)(approve); return nil }
+	if _, _, err := runCLI(t, "", "login", f.srv.URL); err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	// Every token from here on is spent at once, so each command refreshes.
+	it := storedItem(t, f.srv.URL)
+	it.AccessExpiresAt = time.Now()
+	_ = (keychainStore{}).put(f.srv.URL, it)
+	f.refreshLife = 0
+	openBrowser = func(approve string) error {
+		go func() {
+			if _, err := loadSession(context.Background(), f.srv.URL); err != nil {
+				t.Errorf("the other command's refresh: %v", err)
+			}
+			approveInBrowser(t, f, nil)(approve)
+		}()
+		return nil
+	}
+	if _, _, err := runCLI(t, "", "login", "--admin", f.srv.URL); err != nil {
+		t.Fatalf("login --admin: %v", err)
+	}
+	got := storedItem(t, f.srv.URL)
+	f.mu.Lock()
+	current, refreshes := f.sessions[got.SessionID].secret, f.refreshes
+	f.mu.Unlock()
+	if refreshes != 2 || got.Secret != current || got.AdminToken == "" {
+		t.Errorf("after %d refreshes the stored secret is %q, the server's %q, admin token %q; want the rotated secret kept beside the admin token",
+			refreshes, got.Secret, current, got.AdminToken)
+	}
+}
+
+// TestLogoutDeletesTheItemWhenTheServerIsNotTold: an unreachable organisation, a 500 and a refusal other
+// than an unknown token each leave logout's error naming the server, with the item and its profile entry
+// gone; a token refused as unknown means the session already ended, which is a clean sign-out.
+func TestLogoutDeletesTheItemWhenTheServerIsNotTold(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		set       func(f *signInOrg)
+		signedOut bool
+	}{
+		{"unreachable", func(f *signInOrg) { f.srv.Close() }, false},
+		{"500", func(f *signInOrg) { f.signOutFails = true }, false},
+		{"401 role_stamp_stale", func(f *signInOrg) { f.signOut401 = "role_stamp_stale" }, false},
+		{"already ended at the server", func(f *signInOrg) {
+			f.mu.Lock()
+			for _, sess := range f.sessions {
+				sess.ended = types.CLISessionEndSessionsCut
+			}
+			f.mu.Unlock()
+		}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newSignInOrg(t)
+			dir := cliEnv(t, nil)
+			openBrowser = func(approve string) error { go approveInBrowser(t, f, nil)(approve); return nil }
+			if _, _, err := runCLI(t, "", "login", f.srv.URL); err != nil {
+				t.Fatalf("login: %v", err)
+			}
+			tc.set(f)
+			out, _, err := runCLI(t, "", "logout", "--url", f.srv.URL)
+			wantErr := fmt.Sprintf("signed out on this computer, but %s did not end the session (", f.srv.URL)
+			switch {
+			case tc.signedOut && (err != nil || out != fmt.Sprintf(copyLoggedOut+"\n", f.srv.URL)):
+				t.Errorf("logout: %q, %v; want a clean sign-out", out, err)
+			case !tc.signedOut && (err == nil || !strings.HasPrefix(err.Error(), wantErr)):
+				t.Errorf("logout: %v; want it to start %q", err, wantErr)
+			}
+			if _, err := keyring.Get(cliKeyringService, f.srv.URL); !errors.Is(err, keyring.ErrNotFound) {
+				t.Errorf("the keychain item is still there (%v)", err)
+			}
+			if k, _ := cliprofile.ReadSessionStore(dir, f.srv.URL); k != "" {
+				t.Errorf("the profile still names %q", k)
+			}
+		})
+	}
+}
+
+// TestLoginAdminStepUpDoesNotRestoreAReplacedSession: when this computer's sign-in is replaced while the
+// step-up's browser is open, the step-up stores nothing and says so; the replacement stays.
+func TestLoginAdminStepUpDoesNotRestoreAReplacedSession(t *testing.T) {
+	f := newSignInOrg(t)
+	cliEnv(t, nil)
+	openBrowser = func(approve string) error { go approveInBrowser(t, f, nil)(approve); return nil }
+	if _, _, err := runCLI(t, "", "login", f.srv.URL); err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	replacement := cliItem{SessionID: uuid.New(), Secret: "wdc_other", KeySeed: "other-key", AccessToken: "wdn_other",
+		AccessExpiresAt: time.Now().Add(time.Hour), SessionExpiresAt: time.Now().Add(time.Hour), IdleExpiresAt: time.Now().Add(time.Hour)}
+	openBrowser = func(approve string) error {
+		go func() {
+			_ = (keychainStore{}).put(f.srv.URL, replacement) // another login on this computer
+			approveInBrowser(t, f, nil)(approve)
+		}()
+		return nil
+	}
+	_, _, err := runCLI(t, "", "login", "--admin", f.srv.URL)
+	if err == nil || err.Error() != fmt.Sprintf(errStepUpLost, f.srv.URL) {
+		t.Fatalf("login --admin: %v, want %q", err, fmt.Sprintf(errStepUpLost, f.srv.URL))
+	}
+	if got := storedItem(t, f.srv.URL); got.SessionID != replacement.SessionID || got.AdminToken != "" {
+		t.Errorf("the stored item is %+v; want the replacement, without the admin token", got)
+	}
+}
+
+// TestLogoutUsesTheTokenStoredNow: a refresh in another command between logout's renewal and its
+// sign-out rotates the access token (revoking the one logout read first); logout signs out with the
+// token stored now, so the session really ends.
+func TestLogoutUsesTheTokenStoredNow(t *testing.T) {
+	f := newSignInOrg(t)
+	cliEnv(t, nil)
+	openBrowser = func(approve string) error { go approveInBrowser(t, f, nil)(approve); return nil }
+	if _, _, err := runCLI(t, "", "login", f.srv.URL); err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	prev := beforeLogoutLock
+	t.Cleanup(func() { beforeLogoutLock = prev })
+	beforeLogoutLock = func() {
+		it := storedItem(t, f.srv.URL)
+		it.AccessExpiresAt = time.Now()
+		_ = (keychainStore{}).put(f.srv.URL, it)
+		if _, err := loadSession(context.Background(), f.srv.URL); err != nil {
+			t.Errorf("the other command's refresh: %v", err)
+		}
+	}
+	out, _, err := runCLI(t, "", "logout", "--url", f.srv.URL)
+	if err != nil || out != fmt.Sprintf(copyLoggedOut+"\n", f.srv.URL) {
+		t.Fatalf("logout: %q, %v", out, err)
+	}
+	if f.refreshes != 1 || f.liveSessions() != 0 {
+		t.Errorf("refreshes %d, live sessions %d; want the refresh, then the session ended", f.refreshes, f.liveSessions())
+	}
+}
+
+// TestLoginLoopbackPageWaitsForTheStore: the browser is told "Signed in" only once the sign-in is stored;
+// a store that fails shows the failed page, and login fails.
+func TestLoginLoopbackPageWaitsForTheStore(t *testing.T) {
+	f := newSignInOrg(t)
+	cliEnv(t, nil)
+	pages := make(chan string, 1)
+	openBrowser = func(approve string) error {
+		go func() {
+			keyring.MockInitWithError(errors.New("the keychain is locked")) // after the store was chosen
+			approveInBrowser(t, f, pages)(approve)
+		}()
+		return nil
+	}
+	if _, _, err := runCLI(t, "", "login", f.srv.URL); err == nil {
+		t.Fatal("login succeeded with a keychain that refuses the write")
+	}
+	if page := <-pages; !strings.Contains(page, pageFailed) || strings.Contains(page, pageSignedIn) {
+		t.Errorf("the browser's page = %q, want %q", page, pageFailed)
 	}
 }
