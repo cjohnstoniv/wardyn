@@ -35,7 +35,7 @@ var folderCopy = struct {
 	progress:    "Bringing changes back…\n",
 	broughtBack: "Last changes synced back at %s. %d files came back to you.\n",
 	deleted:     "The sandbox copy was deleted when the run ended.\n",
-	notDeleted:  "The sandbox copy could not be deleted yet. Wardyn tries again within about two hours, and the next time the server starts.\n",
+	notDeleted:  "The sandbox copy could not be deleted yet. Wardyn tries again within about two hours (for a runner that is offline, after it reconnects).\n",
 	leftOut:     "left out: %s (%s)\n",
 	notBack:     "the run is stopped, but its folder did not come back: %s",
 }
