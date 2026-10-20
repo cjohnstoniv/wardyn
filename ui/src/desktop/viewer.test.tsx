@@ -167,6 +167,28 @@ describe("DesktopViewer", () => {
     closeSpy.mockRestore();
   });
 
+  it("a socket that drops while a Close is in flight reconnects, and a Close that then fails says so", async () => {
+    vi.useFakeTimers();
+    let answer: (r: Response) => void = () => {};
+    const fetchMock = vi.fn(() => new Promise<Response>((resolve) => (answer = resolve)));
+    vi.stubGlobal("fetch", fetchMock);
+    const closeSpy = vi.spyOn(window, "close").mockImplementation(() => {});
+    const { sockets, connect } = open();
+    sockets[0].opened();
+    sockets[0].serve(HANDSHAKE);
+    act(() => screen.getByRole("button", { name: DESKTOP.close }).click());
+    sockets[0].end(1006);
+    await act(async () => answer(new Response(null, { status: 503 })));
+    expect(screen.getByRole("alert")).toHaveTextContent("Close didn't go through, so this desktop is still open. Try again.");
+    expect(screen.getByRole("button", { name: DESKTOP.close })).toBeInTheDocument();
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(connect).toHaveBeenCalledTimes(2);
+    expect(closeSpy).not.toHaveBeenCalled();
+    closeSpy.mockRestore();
+  });
+
   it("opens view only on a small screen, and says so", () => {
     const { sockets } = open(true);
     sockets[0].serve(HANDSHAKE);

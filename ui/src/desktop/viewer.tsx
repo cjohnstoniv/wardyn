@@ -113,16 +113,16 @@ function Desktop({ boot, connect, viewOnly }: { boot: Extract<Boot, { state: "op
   }, [boot.rfb, connect]);
 
   // The desktop stays open until the gateway answers 204: any other answer (503: the Close was not stored)
-  // leaves the session valid, so the person is told and can try again.
+  // leaves the session valid, so the person is told and can try again. closing is set only then, so a socket
+  // that drops while the Close is in flight reconnects as any other drop does.
   const close = async () => {
-    closing.current = true;
     setCloseFailed(false);
     const r = await fetch(boot.close, { method: "POST", credentials: "same-origin" }).catch(() => null);
     if (r?.status !== 204) {
-      closing.current = false;
       setCloseFailed(true);
       return;
     }
+    closing.current = true;
     socket.current?.close();
     setPhase("closed");
     window.close();
