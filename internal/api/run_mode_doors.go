@@ -70,7 +70,10 @@ var backgroundDoors = []backgroundDoor{
 	// handleUIEnter only parses and delegates to uiEnterCommon, and handleUIBind
 	// sets a binding cookie without reading any run, so neither can ask honestly.
 	{Door: "web application gateway", Owner: "C-mode-doors", Symbols: []string{"uiEnterCommon", "uiSessionStillAuthorized"}, Enforced: true},
-	{Door: "desktop", Owner: "C-mode-doors (no desktop surface exists yet; its first owner adds the symbols here)"},
+	// The Files panel moves files in and out of the graphical desktop, so it is the desktop door.
+	// The desktop app itself is reached through the web application gateway, which refuses above.
+	{Door: "desktop", Owner: "CTL-A (desktop Files panel)", Symbols: []string{"desktopRun"},
+		Routes: []string{"GET /runs/{id}/desktop/files", "PUT /runs/{id}/desktop/files/{name}", "GET /runs/{id}/desktop/files/{name}"}, Enforced: true},
 }
 
 // passiveRunRoutes are the /runs/{id} routes that are not interactive doors: they

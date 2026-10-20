@@ -70,7 +70,8 @@ func validDesktopFileName(name string) bool {
 }
 
 // desktopRun loads the run for a transfer: the person who may enter it, while it runs, with a
-// desktop declared. It mirrors handleAttachTicket's entry rule (mayEnterRun) without the sponsor arm.
+// desktop declared. It mirrors handleAttachTicket's entry rule (mayEnterRun) without the sponsor arm,
+// and it is the desktop door: a background-only run has no desktop to move files to.
 func (s *Server) desktopRun(w http.ResponseWriter, r *http.Request) (types.AgentRun, types.DesktopControls, bool) {
 	id, ok := parseIDParam(w, r, "id", "run")
 	if !ok {
@@ -90,6 +91,9 @@ func (s *Server) desktopRun(w http.ResponseWriter, r *http.Request) (types.Agent
 		return run, types.DesktopControls{}, false
 	}
 	if !superAdmin && s.refuseUIAppsDenied(w, r, run) {
+		return run, types.DesktopControls{}, false
+	}
+	if s.refuseBackgroundOnly(w, r, run, "desktop") {
 		return run, types.DesktopControls{}, false
 	}
 	switch {
@@ -153,7 +157,7 @@ func (s *Server) auditDesktopTransfer(r *http.Request, run types.AgentRun, direc
 	if sum != "" {
 		data["sha256"] = sum
 	}
-	s.recordAudit(r.Context(), s.auditEvent(&run.ID, at, principal, "desktop.file."+direction, desktopTransferFolder, outcome, mustJSON(data)))
+	s.recordAudit(r.Context(), s.auditEvent(&run.ID, at, principal, "desktop.file.transfer", desktopTransferFolder, outcome, mustJSON(data)))
 }
 
 // handleListDesktopFiles is GET /runs/{id}/desktop/files.
