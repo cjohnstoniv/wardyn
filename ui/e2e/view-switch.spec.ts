@@ -185,6 +185,26 @@ test.describe("the view switch", () => {
     await expectUserChrome(other);
   });
 
+  test("a brief server error on a second tab's first load retries and lands in the view it opened", async ({ page, context }) => {
+    await ssoAdminSession(context);
+    await gotoConsole(page, "admin");
+    // Tab B's cold-load probe (GET /runs?limit=1) meets a 503. That is not a signed-out person: B asks again
+    // rather than parking on the sign-in screen, and enters the Admin view it opened.
+    const other = await context.newPage();
+    let probes = 0;
+    await other.route(
+      (url) => url.pathname.endsWith("/api/v1/runs") && url.searchParams.get("limit") === "1",
+      (route) =>
+        probes++ === 0
+          ? route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "busy" }) })
+          : route.fallback(),
+    );
+    await gotoConsole(other, "admin");
+    expect(probes).toBeGreaterThanOrEqual(2);
+    await expect(other).toHaveURL(/\/admin\/runs$/);
+    await expectAdminChrome(other);
+  });
+
   test("a 403 in a tab left in the old view re-reads the session and follows it", async ({ page, context }) => {
     const session = await ssoAdminSession(context);
     await gotoConsole(page, "admin");
