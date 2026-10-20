@@ -1243,9 +1243,9 @@ erases one person's retained records by explicit scope, in one audited act
 | `mask_copies` | the masking manifests of the runs the person created, after their live attaches, SSH shells and relays are fenced |
 | `run_outputs` | the stored output of those runs (404 `run_output_erased` afterwards, on every replica and after a restart) |
 | `recordings` | their session recordings and `source: "recording"` output rows, with durable per-run fences against later writes; direct stdout and pane snapshots retain their independent `run_outputs` scope |
-| `run_tasks` | the task text of the runs the person created, and the launch intents of those runs |
+| `run_tasks` | the task text, title and description of the runs the person created, and the launch intents of those runs |
 | `components` | the components the person saved, the launch intents of their runs, and what each run's snapshot of one they defined says about it; the run keeps a content-free row, which is what a revived run is checked against. A finished run's resolved policy and grants keep the hosts and secret names the run used, as for any other policy, and so do its `run.env_secret.resolve`, `run.file_secret.resolve`, `secret.read` and `run.policy.resolve` rows |
-| `run_setups` | the person's own run templates and every revision of them, the launch intents of their runs, their group template-manager grants, and their name as the author of shared templates, revisions and grants, which stay without it |
+| `run_setups` | the person's own run templates and every revision of them, the launch intents of their runs, their group template-manager grants, and their name as the author of shared templates, revisions, grants and launch presets, which stay without it |
 | `runner_pools` | the person's own user pools, deleted as their own delete would, their name on every pool row of theirs, and their stored preferences (the pool they default to, their last view); their runners stay |
 | `member_drives` | the drives the person created for themselves, each deleted with its files as their own delete would; a drive a run still holds fails the scope, naming the drive |
 | `audit_personal_fields` | the person's audit-seal key, every generation: each sealed audit field of theirs reads `[erased]` everywhere it was copied, and the chain still verifies; the approvals they decided keep their state but lose the person's name and the reason they typed |
@@ -1262,6 +1262,15 @@ erases one person's retained records by explicit scope, in one audited act
   A record found only by that address keeps it.
 - No scope reaches runners, invitations or service identities; a [purge](#what-a-purge-removes) does, but a retired
   service identity keeps its last sponsor.
+- Two tables keep a person's name after every scope, on purpose:
+  - `aws_sso_spent_tokens.owner` names whose AWS sign-in a spent refresh-token fingerprint came from. It holds no
+    credential, and the reaper deletes each row 90 days after it was written.
+  - `ado_signin_ends.owner` counts the ends of a person's Azure DevOps sign-in, so a run token created on another
+    replica across one revokes itself. Deleting it would reset the count to 0 and let such a token stand, as
+    `secret_owner_generations` below would.
+- The `credentials` scope's detail counts the token history it deleted, `pats_deleted` and `delegated_deleted`, and
+  `live_left`, the Azure DevOps token rows still live because Azure DevOps has not confirmed them revoked. Run the
+  erasure again once they expire to delete them.
 
 - **A launch intent (a run's setup, kept for Run again) is erased with every launch whose run insert began before the erase.**
   - A run's insert takes a per-person Postgres lock first, shared and without waiting, and writes the intent in the same transaction.
