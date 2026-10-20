@@ -35,7 +35,7 @@ func (e *exitError) Unwrap() error { return e.err }
 func main() {
 	if err := rootCmd().Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "wardyn:", err)
-		if hint := dialHint(err); hint != "" {
+		if hint := dialHint(err, clientTokenSent); hint != "" {
 			fmt.Fprintln(os.Stderr, "wardyn:", hint)
 		}
 		if hint := policyHint(err); hint != "" {
@@ -51,7 +51,11 @@ func main() {
 // we did reach wardynd, so it gets no hint.
 // keys on the whole *url.Error transport class, not just ECONNREFUSED —
 // any failure to reach the daemon deserves the same "is wardynd running?" nudge.
-func dialHint(err error) string {
+//
+// tokenSent is whether the request carried a bearer. On a deployment with neither single sign-on
+// nor an admin token, the server answers admin_token_not_configured before it reads one, so that
+// reason names a token only when one was sent.
+func dialHint(err error, tokenSent bool) string {
 	var ue *url.Error
 	if errors.As(err, &ue) {
 		// `wardyn setup` is deliberately NOT named here: it's a subcommand group
@@ -73,12 +77,19 @@ func dialHint(err error) string {
 		case "sign_in_required":
 			return "this organisation signs people in with single sign-on and has no admin token, so --token and WARDYN_ADMIN_TOKEN cannot work here. " + personalTokenRemedy
 		case "admin_token_not_configured":
+			if !tokenSent {
+				break
+			}
 			return "this organisation does not recognise the token sent (unknown, revoked or expired) and has no admin token, so --token and WARDYN_ADMIN_TOKEN cannot work here. " + personalTokenRemedy
 		}
 		return "authenticate with --token or WARDYN_ADMIN_TOKEN/WARDYN_TOKEN (the compose quick-start's token is in deploy/compose/README.md)"
 	}
 	return ""
 }
+
+// clientTokenSent is whether the SDK client the last command built carries a bearer: pkg/client
+// sends no Authorization header for an empty token.
+var clientTokenSent bool
 
 // personalTokenRemedy is how a person reaches a deployment with no admin token from the CLI.
 const personalTokenRemedy = "Set WARDYN_TOKEN to a personal API token: sign in to the console and create one under Your account, or claim the invitation your Wardyn admin sent you there."
@@ -211,6 +222,7 @@ func rootCmd() *cobra.Command {
 	// server can't wedge a single request forever; the shared client reuses one
 	// connection pool across those polls.
 	client := func() *sdk.Client {
+		clientTokenSent = token != ""
 		return &sdk.Client{BaseURL: serverURL, Token: token, HTTPClient: &http.Client{Timeout: 30 * time.Second, CheckRedirect: noRedirect}}
 	}
 
