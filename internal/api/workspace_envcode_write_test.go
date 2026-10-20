@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/google/uuid"
@@ -61,6 +62,47 @@ func TestHandleWriteEnvAsCode(t *testing.T) {
 		}
 		if got := h.auditOutcomes("workspace.envcode.write"); len(got) != 0 {
 			t.Errorf("audit rows %v, want none for a failed write", got)
+		}
+	})
+	t.Run("keeps an operator's own AGENTS.md, rewrites one it generated, and says so", func(t *testing.T) {
+		dir := t.TempDir()
+		const operatorNotes = "# my notes, hand written\n"
+		agents := filepath.Join(dir, "AGENTS.md")
+		if err := os.WriteFile(agents, []byte(operatorNotes), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, srv, path := write(t, localDirWS(dir))
+		w := do(t, srv, http.MethodPost, path, adminToken, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("= %d %s, want 200", w.Code, w.Body.String())
+		}
+		var got struct {
+			Written map[string]string `json:"written_files"`
+			Skipped []string          `json:"skipped_files"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Contains(got.Skipped, "AGENTS.md") {
+			t.Errorf("skipped = %v, want the operator's AGENTS.md named", got.Skipped)
+		}
+		if kept, _ := os.ReadFile(agents); string(kept) != operatorNotes {
+			t.Errorf("the operator's AGENTS.md was changed to %q", kept)
+		}
+		if _, listed := got.Written["AGENTS.md"]; listed {
+			t.Error("written_files lists the AGENTS.md that was skipped")
+		}
+		// Regenerating over Wardyn's own output is not a conflict.
+		if err := os.Remove(agents); err != nil {
+			t.Fatal(err)
+		}
+		do(t, srv, http.MethodPost, path, adminToken, "")
+		again := do(t, srv, http.MethodPost, path, adminToken, "")
+		var second struct {
+			Skipped []string `json:"skipped_files"`
+		}
+		if err := json.Unmarshal(again.Body.Bytes(), &second); err != nil || len(second.Skipped) != 0 {
+			t.Errorf("a regenerate over Wardyn's own files skipped %v (err %v), want none", second.Skipped, err)
 		}
 	})
 	t.Run("writes the emitted files, keeps an operator Dockerfile and says so", func(t *testing.T) {

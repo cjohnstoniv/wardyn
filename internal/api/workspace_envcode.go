@@ -144,11 +144,11 @@ func (s *Server) handleGetEnvAsCode(w http.ResponseWriter, r *http.Request) {
 // symlink escaping root: the sandbox agent (and any imported repo) can write
 // this tree, so `<root>/AGENTS.md -> ~/.bashrc` would otherwise truncate an
 // operator file. The lexical check is only a cheap first gate against `..`.
-// workspacescan.EnvAsCodeDockerfilePath is special-cased: .devcontainer/Dockerfile
-// is where an operator already keeps their OWN Dockerfile, so an existing one is
-// left alone and reported UNLESS byte-identical to what Wardyn would write now
-// (genAgentToolDockerfile is pure, so that is Wardyn's own stub) — keying on
-// existence alone would permanently block the regenerate path for this file.
+// An existing file is left alone and reported (skipped) UNLESS it is byte-identical to
+// what Wardyn would write now: .devcontainer/Dockerfile, AGENTS.md and the artifact
+// config files (.npmrc, pip.conf, .cargo/config.toml) are all places an operator keeps
+// hand-written content, and keying on existence alone would permanently block the
+// regenerate path for a file Wardyn wrote itself.
 func writeEnvAsCode(rootPath string, files map[string]string) ([]string, error) {
 	cleanRoot := filepath.Clean(rootPath)
 	root, err := os.OpenRoot(cleanRoot)
@@ -169,21 +169,23 @@ func writeEnvAsCode(rootPath string, files map[string]string) ([]string, error) 
 			}
 		}
 		flag := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
-		if rel == workspacescan.EnvAsCodeDockerfilePath {
-			// The EXCL guard is needed only when a pre-existing file can't
-			// already be PROVEN to be Wardyn's own: byte-identical to what
-			// would be written right now (genAgentToolDockerfile is a pure
-			// function of tools, so only Wardyn's own previous stub can
-			// match). A read error — including "does not exist" — falls
-			// through to the guard, the safe default: create fresh, or fail
-			// closed into the EEXIST-skip path below rather than guess.
-			if existing, rerr := root.ReadFile(relPath); rerr != nil || string(existing) != content {
-				flag = os.O_WRONLY | os.O_CREATE | os.O_EXCL
-			}
+		// The EXCL guard is needed only when a pre-existing file can't already be
+		// PROVEN to be Wardyn's own: byte-identical to what would be written right
+		// now (every emitted file is a pure function of the profile). A read
+		// error — including "does not exist" — falls through to the guard, the
+		// safe default: create fresh, or fail closed into the EEXIST-skip path
+		// below rather than guess.
+		if existing, rerr := root.ReadFile(relPath); rerr != nil || string(existing) != content {
+			flag = os.O_WRONLY | os.O_CREATE | os.O_EXCL
 		}
 		f, err := root.OpenFile(relPath, flag, 0o644)
 		if err != nil {
 			if os.IsExist(err) {
+				// O_EXCL reports an existing symlink before os.Root follows it, so an
+				// escaping link would read as a kept file; Stat follows it and refuses.
+				if _, serr := root.Stat(relPath); serr != nil && !os.IsNotExist(serr) {
+					return nil, fmt.Errorf("refusing to write %s: %w", rel, serr)
+				}
 				skipped = append(skipped, rel)
 				continue
 			}
