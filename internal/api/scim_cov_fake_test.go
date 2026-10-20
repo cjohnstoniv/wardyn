@@ -497,6 +497,14 @@ func (s *scimCovStore) SuspendIdentity(_ context.Context, p store.SuspendPlan) (
 		s.jobs = append(s.jobs, &store.DeprovisionJob{IdentityID: p.IdentityID, Kind: store.JobKindSuspend, Step: cutoff.Step,
 			Done: p.Partial == "", LastError: p.Partial, Attempts: 1, Detail: detail})
 	}
+	for _, k := range p.OwedAudit {
+		if j := s.findJob(p.IdentityID, store.JobKindSuspend, k); j != nil {
+			j.Done, j.Attempts, j.LastError, j.EventID, j.EventAt = false, j.Attempts+1, store.RefusalAuditOwedMsg, uuid.Nil, time.Time{}
+		} else {
+			s.jobs = append(s.jobs, &store.DeprovisionJob{IdentityID: p.IdentityID, Kind: store.JobKindSuspend, Step: k.Step, Target: k.Target,
+				Attempts: 1, LastError: store.RefusalAuditOwedMsg})
+		}
+	}
 	res.Epoch = target.AuthorityEpoch
 	return res, nil
 }
@@ -597,9 +605,25 @@ func (s *scimCovStore) ReopenDeprovisionJob(_ context.Context, id uuid.UUID, kin
 		return err
 	}
 	if j := s.findJob(id, kind, k); j != nil {
-		j.Done = false
+		j.Done, j.EventID, j.EventAt = false, uuid.Nil, time.Time{}
 	}
 	return nil
+}
+
+func (s *scimCovStore) PinDeprovisionEvent(_ context.Context, id uuid.UUID, kind string, k store.JobKey, eventID uuid.UUID, at time.Time) (uuid.UUID, time.Time, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.enter("PinDeprovisionEvent", kind); err != nil {
+		return uuid.Nil, time.Time{}, err
+	}
+	j := s.findJob(id, kind, k)
+	if j == nil {
+		return uuid.Nil, time.Time{}, store.ErrNotFound
+	}
+	if j.EventID == uuid.Nil {
+		j.EventID, j.EventAt = eventID, at
+	}
+	return j.EventID, j.EventAt, nil
 }
 
 // ---- store.LeaverStore: purge and status ----
