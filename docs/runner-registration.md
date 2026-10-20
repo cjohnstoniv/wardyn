@@ -151,6 +151,7 @@ Leave `--proxy-image` out and the runner follows the proxy image the organisatio
 | `--relay-listen` / `WARDYN_RELAY_LISTEN` | Where the run relay listens, instead of the engine's default; any engine, loopback included. See [the startup check](#the-startup-reachability-check). |
 | `--relay-host-target` / `WARDYN_RELAY_HOST_TARGET` | The address a run's proxy dials to reach the relay: `host-gateway` or an IP address. `setup` pins the one it proved on a VM-backed engine. |
 | `--trusted-ca-file` / `WARDYN_TRUSTED_CA_FILE` | Extra roots for every run's proxy and sandbox, 64 KiB at most; `SSL_CERT_FILE` and `SSL_CERT_DIR` are not read. On a Kubernetes runner it and the organisation's bundle share one 128 KiB environment variable, and a run whose pair is bigger is refused at create. See [A corporate CA on a laptop runner](operations/hybrid-laptops.md#a-corporate-ca-on-a-laptop-runner). |
+| `--org-ca-file` / `WARDYN_ORG_CA_FILE` | Extra roots for the runner's own connection to the organisation, registration included, and for nothing else: no run's proxy or sandbox gets them. Not writable by group or others; owned by you or root. With `--trusted-ca-file` too, the organisation connection trusts both. |
 | `--internal-network` / `WARDYN_INTERNAL_NETWORK` | Local Docker bridge for proxy sidecars; defaults to `wardyn-internal` and is created when missing. |
 | `--recording-store` / `WARDYN_RECORDING_STORE` | Organisation recording mode: `pg` or `fs` enables capture; `off` disables capture. Default `pg`; no local database is created. |
 
@@ -183,7 +184,7 @@ On a computer that is not a runner, download `wardyn-<os>-<arch>` alone.
 
 - `--claim` uses your own personal API token from `WARDYN_TOKEN`. `--pool NAME` needs `--claim` and `--default` needs `--pool`; both are refused before the token is spent.
 - Setup checks the inputs, Docker and the user service manager, and proves with a probe container that a proxy on this engine reaches the relay ([the startup check](#the-startup-reachability-check)). With no image the engine has yet, that proof waits for the organisation's answer, after the token is spent; a refusal then needs no new token.
-- It accepts `--name`, `--proxy-image`, `--relay-listen`, `--relay-host-target`, `--internal-network`, `--trusted-ca-file` and the limit flags of `register`. At a terminal it asks for each limit not given; with output sent to a file it asks nothing.
+- It accepts `--name`, `--proxy-image`, `--relay-listen`, `--relay-host-target`, `--internal-network`, `--trusted-ca-file`, `--org-ca-file` and the limit flags of `register`. At a terminal it asks for each limit not given; with output sent to a file it asks nothing.
 - A release binary uses `ghcr.io/cjohnstoniv/wardyn-proxy:<version>` without pinning it, so replacing the binary moves the proxy too. A named image is pinned and kept by a rerun. Installs from before 0.9.3 pinned the release image: run setup once after replacing the binary. A development build without `--proxy-image` uses the organisation's answer and refuses when there is none.
 - Rolling a runner back to 0.9.2 after it ran anything under 0.9.3 needs its state directory cleared (0.9.3 records a captured-output flag for an ordinary run, which 0.9.2 refuses to read), so it registers and is claimed again; rolling back from a later release to 0.9.3 keeps its identity and run state, but let the runner reconnect until its audit spool is empty first: a spooled decision written by a later release may fail 0.9.3's integrity check.
 - `setup` installs no CLI: the `wardyn` CLI is yours, installed before the runner (the macOS `.pkg` links it into `/usr/local/bin`). `setup` points it at the organisation, in `cli.json` beside the runner's settings. The file holds the URL and nothing secret, and an existing URL is kept.
@@ -214,15 +215,16 @@ Both run `serve --config <path to runnerd.json>` and hold no setting themselves.
 | `relay_listen`, `relay_host_target` | probed | `WARDYN_RELAY_LISTEN`, `WARDYN_RELAY_HOST_TARGET` | `--relay-listen`, `--relay-host-target` |
 | `internal_network` | `wardyn-internal` | `WARDYN_INTERNAL_NETWORK` | `--internal-network` |
 | `trusted_ca_file` | none | `WARDYN_TRUSTED_CA_FILE` | `--trusted-ca-file` |
+| `org_ca_file` | none | `WARDYN_ORG_CA_FILE` | `--org-ca-file` |
 | `upstream_proxy` | none | `WARDYN_UPSTREAM_PROXY` | `--upstream-proxy` |
-| `runner_proxy` | none | `HTTPS_PROXY` | |
+| `runner_proxy`, `runner_no_proxy` | none | `HTTPS_PROXY`, `NO_PROXY` | |
 | `recording_store` | `pg` | `WARDYN_RECORDING_STORE` | `--recording-store` |
 
 - A setting comes from the first of these that has it: the flag, the managed preference (macOS profile), the environment, the file, the default.
 - A `proxy_image` in the file is a pin: `serve` keeps it. `proxy_image_mirror` is a repository without a tag, such as `registry.example/wardyn-proxy`: `serve` pulls the tag the organisation names from it.
 - The file never holds a credential. A proxy URL with a user name or password is refused where it is read, with the variable to set instead.
 - `serve` checks the file at every start and refuses an unknown field or a bad value by name. An absent default file is fine; a `--config` that does not exist is not.
-- `setup` rewrites what it owns (`org_url`, `state_dir`, `docker_host`, `internal_network`, the relay pair, `trusted_ca_file` and a named `proxy_image`) and keeps the rest, so a mirror or a proxy you added survives a rerun.
+- `setup` rewrites what it owns (`org_url`, `state_dir`, `docker_host`, `internal_network`, the relay pair, `trusted_ca_file`, `org_ca_file`, the proxy `setup` carried and a named `proxy_image`) and keeps the rest, so a mirror or a proxy you added survives a rerun.
 
 An install from before the file keeps working: its environment file or LaunchAgent is still read, and the environment outranks the file. Run `setup` again to move those settings into `runnerd.json` and out of the LaunchAgent, which every local account can read.
 
@@ -232,12 +234,23 @@ Several settings keep a runner working behind a proxy that inspects TLS. Each ha
 
 | Field (or variable) | For | Written by | Without it |
 |---|---|---|---|
-| `runner_proxy` (or `HTTPS_PROXY` / `NO_PROXY`) | The runner's own connection to the organisation | You, in `runnerd.json` | Registered, never connected |
+| `runner_proxy` and `runner_no_proxy` (or `HTTPS_PROXY` / `NO_PROXY`) | The runner's own connection to the organisation | `setup` carries the shell's, without a user name and password; or you, in `runnerd.json` | Registered, never connected |
 | `trusted_ca_file` (or `WARDYN_TRUSTED_CA_FILE`) | An inspecting proxy's root | `setup --trusted-ca-file` | Certificate errors that name an unknown issuer |
 | `upstream_proxy` (or `WARDYN_UPSTREAM_PROXY`) | The runs' egress | You, in `runnerd.json` | Runs reach nothing outside |
 | `proxy_image` and `proxy_image_mirror` (or `WARDYN_PROXY_IMAGE`, `_PINNED`) | A mirror of the proxy image | `setup --proxy-image` writes the pin; you write the mirror | `serve` refuses at startup when the image cannot be pulled; a pin has to be moved on each organisation upgrade |
 | `docker_host` (or `DOCKER_HOST`) | A non-default engine socket | `setup` | `serve` refuses at startup: the engine is not reachable |
 | `relay_listen` / `relay_host_target` (or `WARDYN_RELAY_LISTEN` / `_HOST_TARGET`) | The relay pair | `setup` pins what its probe proved | `serve` refuses at startup: the relay is unreachable |
+
+| `org_ca_file` (or `WARDYN_ORG_CA_FILE`) | A root for the runner's own connection to the organisation only | `setup --org-ca-file` | Certificate errors on that connection |
+
+`setup` carries `HTTPS_PROXY` and `NO_PROXY` (and their lowercase forms) from the shell it runs in, into `runner_proxy` and `runner_no_proxy` in `runnerd.json`.
+
+- It prints the names it carried, never the values, and adds no `NO_PROXY` default.
+- It removes a user name and password from a proxy URL and warns, naming the variable. A proxy that needs them refuses the runner.
+- `HTTP_PROXY` is not carried: the runner's connection to the organisation is HTTPS.
+- A rerun from a shell that sets no proxy address keeps the addresses in the file. A shell that sets only `NO_PROXY` keeps them and replaces the exclusion list.
+- `ALL_PROXY` is not carried, and the runner's connection does not read it. Setup warns when it is set: set `HTTPS_PROXY` instead.
+- `runner_proxy` takes `http`, `https`, `socks5` or `socks5h`, or a bare `host:port`, read as `http`.
 
 A proxy that needs a user name and password cannot go in `runnerd.json`: the file refuses a URL with one and names the variable to set. To give the service a proxy with a credential:
 

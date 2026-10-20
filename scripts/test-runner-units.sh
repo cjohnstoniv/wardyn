@@ -111,9 +111,10 @@ mkdir -p "$H/.config/systemd/user" "$H/.config/wardyn/runner" "$H/.local/share/w
 : >"$H/.config/systemd/user/wardyn-runnerd.service"; : >"$H/.config/wardyn/runnerd.env"; : >"$H/.config/wardyn/runnerd.json"
 : >"$H/.local/share/wardyn/bin/wardyn-runnerd"; : >"$H/.config/wardyn/runner/runner.json"
 : >"$H/.local/share/wardyn/bin/wardyn"; : >"$H/.config/wardyn/cli.json"
+: >"$H/.local/share/wardyn/bin/wardyn-runnerd.previous"
 run_install linux --uninstall
 [ "$RC" -eq 0 ] || fail "Linux uninstall failed (rc=$RC): $OUT"
-for gone in .config/systemd/user/wardyn-runnerd.service .config/wardyn/runnerd.env .config/wardyn/runnerd.json .local/share/wardyn/bin/wardyn-runnerd; do
+for gone in .config/systemd/user/wardyn-runnerd.service .config/wardyn/runnerd.env .config/wardyn/runnerd.json .local/share/wardyn/bin/wardyn-runnerd .local/share/wardyn/bin/wardyn-runnerd.previous; do
   [ ! -e "$H/$gone" ] || fail "uninstall left $gone"
 done
 [ -e "$H/.config/wardyn/runner/runner.json" ] || fail "uninstall removed the runner identity"
@@ -151,8 +152,9 @@ M="$WORK/home-mac"
 mkdir -p "$M/Library/LaunchAgents" "$M/Library/Application Support/wardyn/bin"
 : >"$M/Library/LaunchAgents/com.wardyn.runnerd.plist"; : >"$M/Library/Application Support/wardyn/runnerd.json"; : >"$M/Library/Application Support/wardyn/bin/wardyn-runnerd"
 : >"$M/Library/Application Support/wardyn/bin/wardyn"; : >"$M/Library/Application Support/wardyn/cli.json"
+: >"$M/Library/Application Support/wardyn/bin/wardyn-runnerd.previous"
 run_install mac --uninstall
-[ "$RC" -eq 0 ] && [ ! -e "$M/Library/LaunchAgents/com.wardyn.runnerd.plist" ] && [ ! -e "$M/Library/Application Support/wardyn/bin/wardyn-runnerd" ] && [ ! -e "$M/Library/Application Support/wardyn/runnerd.json" ] || fail "macOS uninstall left the agent, binary or runnerd.json (rc=$RC): $OUT"
+[ "$RC" -eq 0 ] && [ ! -e "$M/Library/LaunchAgents/com.wardyn.runnerd.plist" ] && [ ! -e "$M/Library/Application Support/wardyn/bin/wardyn-runnerd" ] && [ ! -e "$M/Library/Application Support/wardyn/bin/wardyn-runnerd.previous" ] && [ ! -e "$M/Library/Application Support/wardyn/runnerd.json" ] || fail "macOS uninstall left the agent, binary, rollback copy or runnerd.json (rc=$RC): $OUT"
 [ -e "$M/Library/Application Support/wardyn/bin/wardyn" ] && [ -e "$M/Library/Application Support/wardyn/cli.json" ] || fail "macOS uninstall removed the person's wardyn CLI or cli.json"
 
 echo "test-runner-units: PASS"

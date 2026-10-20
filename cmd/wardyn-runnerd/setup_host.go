@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"errors"
@@ -196,10 +197,36 @@ func (h setupHost) installBinary(ctx context.Context, dst string, stopService bo
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
+	if err := keepPrevious(dst, h.exe); err != nil {
+		return fmt.Errorf("keep the previous %s: %w", dst, err)
+	}
 	if err := writeAtomic(dst, 0o755, func(w io.Writer) error { _, err := io.Copy(w, src); return err }); err != nil {
 		return fmt.Errorf("install %s: %w", dst, err)
 	}
 	return nil
+}
+
+// keepPrevious keeps the binary an upgrade is about to replace as dst+".previous", a hard link taken
+// before the rename (else a copy), so a refused start has a way back. One copy is kept: a second upgrade
+// replaces it, and a first install, or a binary identical to the installed one, leaves it alone.
+func keepPrevious(dst, newExe string) error {
+	old, err := os.ReadFile(dst)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if cur, err := os.ReadFile(newExe); err == nil && bytes.Equal(cur, old) {
+		return nil
+	}
+	prev := dst + ".previous"
+	tmp := prev + ".tmp"
+	_ = os.Remove(tmp)
+	if err := os.Link(dst, tmp); err != nil {
+		return writeAtomic(prev, 0o755, func(w io.Writer) error { _, err := w.Write(old); return err })
+	}
+	return os.Rename(tmp, prev)
 }
 
 // writeAtomic writes a sibling temporary file and renames it over path, so a reader never sees half of it.
@@ -254,8 +281,21 @@ func (p setupPlan) runnerFile() runnerFile {
 	if p.flagged {
 		f.ProxyImage = p.proxyImage
 	}
-	f.RelayListen, f.RelayHostTarget, f.TrustedCAFile = p.relayListen, p.relayHostTarget, p.trustedCAFile
+	f.RelayListen, f.RelayHostTarget, f.TrustedCAFile, f.OrgCAFile = p.relayListen, p.relayHostTarget, p.trustedCAFile, p.orgCAFile
+	f.RunnerProxy, f.RunnerNoProxy = carriedValue(p.proxy, "HTTPS_PROXY", "https_proxy"), carriedValue(p.proxy, "NO_PROXY", "no_proxy")
 	return f
+}
+
+// carriedValue is the value of the first of names the shell's proxy variables carried, "" when none.
+func carriedValue(carried []carriedProxy, names ...string) string {
+	for _, name := range names {
+		for _, c := range carried {
+			if c.name == name {
+				return c.value
+			}
+		}
+	}
+	return ""
 }
 
 // dropLegacyEnv removes the environment file an earlier setup wrote for the service, or --no-service wrote:
@@ -364,18 +404,27 @@ func (p setupPlan) pinMarker() string {
 	return ""
 }
 
-// keptPins reads the proxy image and CA file an earlier setup wrote, so setup run again without
-// --proxy-image or --trusted-ca-file keeps them: from runnerd.json, else from the service definition a
-// setup before it wrote. An unmarked release image of this project in that definition is what a setup
-// before 0.9.3 derived, not a pin, and is dropped.
-func (p setupPaths) keptPins(file runnerFile) (image, caFile string) {
+// keptPins reads the proxy image and the CA files an earlier setup wrote, so setup run again without
+// --proxy-image, --trusted-ca-file or --org-ca-file keeps them: from runnerd.json, else from the service
+// definition a setup before it wrote. An unmarked release image of this project in that definition is what a
+// setup before 0.9.3 derived, not a pin, and is dropped.
+func (p setupPaths) keptPins(file runnerFile) (image, caFile, orgCAFile string) {
 	if image = file.ProxyImage; image == "" {
 		image = p.setting("WARDYN_PROXY_IMAGE")
 		if tag, ok := strings.CutPrefix(image, releaseProxyRepo+":"); ok && releaseVersion.MatchString(tag) && p.setting("WARDYN_PROXY_IMAGE_PINNED") != "1" {
 			image = ""
 		}
 	}
-	return image, cmp.Or(file.TrustedCAFile, p.setting("WARDYN_TRUSTED_CA_FILE"))
+	return image, cmp.Or(file.TrustedCAFile, p.setting("WARDYN_TRUSTED_CA_FILE")), cmp.Or(file.OrgCAFile, p.setting("WARDYN_ORG_CA_FILE"))
+}
+
+// keptFrom names where a kept value came from, for a refusal: runnerd.json when it held the value, else the
+// service definition a setup before it wrote.
+func (p setupPaths) keptFrom(inFile string) string {
+	if inFile != "" {
+		return p.configFile()
+	}
+	return cmp.Or(p.envFile, p.plistFile)
 }
 
 // setting is the value a setup before runnerd.json wrote for key into the service definition, "" when there

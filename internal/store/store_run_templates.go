@@ -384,6 +384,11 @@ func (s PG) EraseRunSetupsOf(ctx context.Context, person string) (RunSetupsErase
 				WHERE created_by = $1 OR updated_by = $1`},
 			{&out.AuthorshipCleared, `UPDATE run_template_revisions SET created_by = '' WHERE created_by = $1`},
 			{&out.AuthorshipCleared, `UPDATE template_group_admins SET granted_by = '' WHERE granted_by = $1`},
+			// A launch preset stores its writer as they signed in, not lower-cased.
+			{&out.AuthorshipCleared, `UPDATE launch_presets
+				SET created_by = CASE WHEN created_by = $1 OR lower(created_by) = $1 THEN '' ELSE created_by END,
+				    updated_by = CASE WHEN updated_by = $1 OR lower(updated_by) = $1 THEN '' ELSE updated_by END
+				WHERE created_by = $1 OR lower(created_by) = $1 OR updated_by = $1 OR lower(updated_by) = $1`},
 		} {
 			if err := count(step.dst, step.stmt); err != nil {
 				return err

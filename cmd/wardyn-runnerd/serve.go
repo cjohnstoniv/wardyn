@@ -34,6 +34,9 @@ type serveOptions struct {
 	// trustedCAFile is --trusted-ca-file; trustedCA is the bundle validated at startup, and
 	// trustedCAPath the file it was written to for sandboxes to mount (trustedCAAtStartup).
 	trustedCAFile, trustedCA, trustedCAPath string
+	// orgCAFile is --org-ca-file: extra roots for runnerd's own connection to the organisation only. It is
+	// read by serve and register, and never reaches a sandbox or a run's proxy.
+	orgCAFile string
 	// proxyImagePinned is whether proxyImage was named on purpose (proxyImagePinned), so the
 	// organisation's answer at connect does not replace it.
 	proxyImagePinned bool
@@ -83,9 +86,11 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 			return err
 		}
 		// http.ProxyFromEnvironment reads the variable once, at the first connection.
-		if f := cfg.field("runner_proxy"); strings.HasPrefix(f.Source, sourceFile) {
-			if err := os.Setenv("HTTPS_PROXY", f.Value); err != nil {
-				return err
+		for _, v := range [][2]string{{"runner_proxy", "HTTPS_PROXY"}, {"runner_no_proxy", "NO_PROXY"}} {
+			if f := cfg.field(v[0]); strings.HasPrefix(f.Source, sourceFile) {
+				if err := os.Setenv(v[1], f.Value); err != nil {
+					return err
+				}
 			}
 		}
 		if stateDir == "" {
@@ -127,6 +132,14 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 		if err := trustedCAAtStartup(cmd.Context(), &opts, stateDir); err != nil {
 			return err
 		}
+		// The org-only roots stay in this function: opts goes to the runtime that builds the sandboxes' trust.
+		orgCA, orgCAs, err := loadOrgCA(opts.orgCAFile)
+		if err != nil {
+			return err
+		}
+		if orgCA != "" {
+			slog.InfoContext(cmd.Context(), "organisation-only CA trust configured", "file", opts.orgCAFile, "cert_count", orgCAs)
+		}
 		if err := proxy.ValidUpstreamProxyURL(opts.upstreamProxy); err != nil {
 			return fmt.Errorf("--upstream-proxy / WARDYN_UPSTREAM_PROXY / runnerd.json upstream_proxy (%s): %w (the URL is not repeated here: it may hold a credential)", cfg.field("upstream_proxy").Source, err)
 		}
@@ -143,11 +156,13 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 		if runtime.run == nil || runtime.close == nil {
 			return errors.New("runner containment runtime is unavailable")
 		}
-		httpClient, err := orgHTTPClient(opts.trustedCA)
+		httpClient, err := orgHTTPClient(opts.trustedCA + orgCA)
 		if err != nil {
 			return err
 		}
-		client, err := runnerwire.NewClient(runnerwire.ClientConfig{OrgURL: org, RunnerID: identity.RunnerID.String(), PrivateKey: identity.PrivateKey, Hooks: runtime.hooks, HTTPClient: httpClient})
+		status := newStatusWriter(stateDir)
+		defer status.stopped()
+		client, err := runnerwire.NewClient(runnerwire.ClientConfig{OrgURL: org, RunnerID: identity.RunnerID.String(), PrivateKey: identity.PrivateKey, Hooks: runtime.hooks, HTTPClient: httpClient, LinkChanged: status.linkChanged})
 		if err != nil {
 			return err
 		}
@@ -163,6 +178,8 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 	cmd.Flags().StringVar(&opts.network, "internal-network", "", "Docker bridge for proxy sidecars (created when missing; default wardyn-internal)")
 	cmd.Flags().StringVar(&opts.trustedCAFile, "trusted-ca-file", "", "PEM bundle of extra roots (e.g. a TLS-inspecting corporate proxy's CA) that runnerd's own org session and every run's proxy and sandbox trust "+
 		"beside the system roots; 64 KiB at most. SSL_CERT_FILE and SSL_CERT_DIR are not read. Read at startup only")
+	cmd.Flags().StringVar(&opts.orgCAFile, "org-ca-file", "", "PEM file of extra roots that runnerd's own connection to the organisation trusts beside the system roots, and nothing else: no run's proxy or sandbox gets them. "+
+		"It must not be writable by group or others and must be owned by you or root. Read at startup only (environment WARDYN_ORG_CA_FILE, or runnerd.json org_ca_file)")
 	cmd.Flags().StringVar(&opts.upstreamProxy, "upstream-proxy", "", "this runner's own corporate upstream proxy, http://[user:pass@]host[:port], that every run's proxy chains its egress through; "+
 		"never sent to the organisation. Prefer the WARDYN_UPSTREAM_PROXY environment variable when it holds a credential (it is read after the flags are parsed, so --help never shows it). Read at startup only")
 	cmd.Flags().StringVar(&opts.recording, "recording-store", "", "organisation recording mode: pg, fs or off (off disables local capture; default pg)")
@@ -192,4 +209,5 @@ func (c runnerConfig) applyTo(org, stateDir *string, o *serveOptions) {
 	o.proxyImage, o.proxyImageMirror = c.get("proxy_image"), c.get("proxy_image_mirror")
 	o.relayListen, o.relayHostTarget, o.network = c.get("relay_listen"), c.get("relay_host_target"), c.get("internal_network")
 	o.trustedCAFile, o.upstreamProxy, o.recording = c.get("trusted_ca_file"), c.get("upstream_proxy"), c.get("recording_store")
+	o.orgCAFile = c.get("org_ca_file")
 }

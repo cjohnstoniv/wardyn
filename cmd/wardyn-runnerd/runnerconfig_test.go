@@ -54,6 +54,31 @@ func TestRunnerConfigPrecedence(t *testing.T) {
 	}
 }
 
+// org_ca_file follows the same order as every other field, one case per level.
+func TestRunnerConfigOrgCAFileOrder(t *testing.T) {
+	file := runnerFile{OrgCAFile: "/from/file.pem"}
+	env := map[string]string{"WARDYN_ORG_CA_FILE": "/from/env.pem"}
+	managed := map[string]string{"OrgCAFile": "/from/managed.pem"}
+	flags := map[string]string{"org-ca-file": "/from/flag.pem"}
+	for _, tc := range []struct {
+		level, want string
+		in          runnerInputs
+	}{
+		{"flag", "/from/flag.pem", inputs(flags, env, managed, file)},
+		{"managed preference", "/from/managed.pem", inputs(nil, env, managed, file)},
+		{"environment", "/from/env.pem", inputs(nil, env, nil, file)},
+		{"file", "/from/file.pem", inputs(nil, nil, nil, file)},
+		{"default", "", inputs(nil, nil, nil, runnerFile{})},
+	} {
+		if got := resolveRunnerConfig(tc.in).get("org_ca_file"); got != tc.want {
+			t.Errorf("%s: org_ca_file = %q, want %q", tc.level, got, tc.want)
+		}
+	}
+	if _, err := loadRunnerFile(writeConfig(t, `{"org_ca_file": "relative.pem"}`), true); err == nil || !strings.Contains(err.Error(), "org_ca_file") {
+		t.Errorf("a relative org_ca_file: %v; want a refusal naming it", err)
+	}
+}
+
 // Every field is reachable at every level it has, and an unset one is empty.
 func TestRunnerConfigEveryFieldResolvesFromEachSource(t *testing.T) {
 	for _, f := range runnerFields {

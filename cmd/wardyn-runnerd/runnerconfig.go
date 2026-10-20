@@ -45,10 +45,14 @@ type runnerFile struct {
 	RelayHostTarget  string `json:"relay_host_target,omitempty"`
 	InternalNetwork  string `json:"internal_network,omitempty"`
 	TrustedCAFile    string `json:"trusted_ca_file,omitempty"`
+	// OrgCAFile holds extra roots for the runner's own connection to the organisation, and for nothing else.
+	OrgCAFile string `json:"org_ca_file,omitempty"`
 	// UpstreamProxy is the proxy every run's egress chains through; RunnerProxy is the one runnerd's own
 	// connection to the organisation uses (its environment twin is HTTPS_PROXY).
-	UpstreamProxy  string `json:"upstream_proxy,omitempty"`
-	RunnerProxy    string `json:"runner_proxy,omitempty"`
+	UpstreamProxy string `json:"upstream_proxy,omitempty"`
+	RunnerProxy   string `json:"runner_proxy,omitempty"`
+	// RunnerNoProxy is the NO_PROXY list that goes with RunnerProxy.
+	RunnerNoProxy  string `json:"runner_no_proxy,omitempty"`
 	RecordingStore string `json:"recording_store,omitempty"`
 }
 
@@ -83,8 +87,10 @@ var runnerFields = []runnerField{
 	{name: "relay_host_target", flag: "relay-host-target", env: []string{"WARDYN_RELAY_HOST_TARGET"}, managed: "RelayHostTarget", file: func(f *runnerFile) *string { return &f.RelayHostTarget }},
 	{name: "internal_network", flag: "internal-network", env: []string{"WARDYN_INTERNAL_NETWORK"}, managed: "InternalNetwork", def: "wardyn-internal", file: func(f *runnerFile) *string { return &f.InternalNetwork }},
 	{name: "trusted_ca_file", flag: "trusted-ca-file", env: []string{"WARDYN_TRUSTED_CA_FILE"}, managed: "TrustedCAFile", file: func(f *runnerFile) *string { return &f.TrustedCAFile }},
+	{name: "org_ca_file", flag: "org-ca-file", env: []string{"WARDYN_ORG_CA_FILE"}, managed: "OrgCAFile", file: func(f *runnerFile) *string { return &f.OrgCAFile }},
 	{name: "upstream_proxy", flag: "upstream-proxy", env: []string{"WARDYN_UPSTREAM_PROXY"}, file: func(f *runnerFile) *string { return &f.UpstreamProxy }},
 	{name: "runner_proxy", env: []string{"HTTPS_PROXY", "https_proxy"}, file: func(f *runnerFile) *string { return &f.RunnerProxy }},
+	{name: "runner_no_proxy", env: []string{"NO_PROXY", "no_proxy"}, file: func(f *runnerFile) *string { return &f.RunnerNoProxy }},
 	{name: "recording_store", flag: "recording-store", env: []string{"WARDYN_RECORDING_STORE"}, managed: "RecordingStore", def: "pg", file: func(f *runnerFile) *string { return &f.RecordingStore }},
 }
 
@@ -203,7 +209,7 @@ func checkRunnerFile(f runnerFile) error {
 			return fmt.Errorf("org_url: %w", err)
 		}
 	}
-	for _, p := range []struct{ name, v string }{{"state_dir", f.StateDir}, {"trusted_ca_file", f.TrustedCAFile}} {
+	for _, p := range []struct{ name, v string }{{"state_dir", f.StateDir}, {"trusted_ca_file", f.TrustedCAFile}, {"org_ca_file", f.OrgCAFile}} {
 		if p.v != "" && !filepath.IsAbs(p.v) {
 			return fmt.Errorf("%s: must be an absolute path", p.name)
 		}

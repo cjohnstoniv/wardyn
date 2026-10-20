@@ -308,7 +308,7 @@ func TestSetupOnlyHintsAtSSLCertFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hint := "SSL_CERT_FILE is set (" + ssl + "); pass --trusted-ca-file " + ssl + " if runs must trust it (64 KiB at most)\n"
+	hint := "SSL_CERT_FILE is set (" + ssl + "); pass --trusted-ca-file " + ssl + " if runs must trust it (64 KiB at most), or --org-ca-file " + ssl + " to trust it for this runner's connection to the organisation only (the CLI's own anchors: wardyn ca add)\n"
 	if strings.Count(out, hint) != 1 {
 		t.Errorf("setup output lacks the one hint %q:\n%s", hint, out)
 	}

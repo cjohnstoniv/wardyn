@@ -368,6 +368,7 @@ func run() error {
 	}
 	warnPublicAPIDisabled(*f.adminToken, lm.enabled, feats.authn != nil)
 	warnGovernAdminRunsUnbound(*f.governAdminRuns, feats.authn != nil)
+	f.cliSignIn.warnWithoutSSO(feats.authn != nil)
 
 	// MEMBER-MODE DESKTOP posture (validateHybridPosture already ran above,
 	// beside validateConfig). Checked here, not there, because both of its
@@ -428,6 +429,7 @@ func run() error {
 		TrustedCAPEM:        trustedCAPEM,
 		EgressPortRule:      egressPortRule(*f.egressPortRule),
 		DemoVideoBaseURL:    knobs.demoVideoBaseURL,
+		OrgCAFingerprints:   knobs.orgCAFingerprints,
 		RunnerTarget:        runnerTarget,
 		RunnerOrgURL:        *f.runnerOrgURL,
 		TrustedProxies:      knobs.trustedProxies,
@@ -507,6 +509,7 @@ func run() error {
 		DisableGitPATBroker:    strings.EqualFold(strings.TrimSpace(*f.gitPATBroker), "off"),
 		RefuseGitPATBrokerOff:  *f.gitPATBrokerOffRefused,
 		ScrubProxyResponses:    *f.proxyResponseScrub,
+		AttachLocal:            strings.EqualFold(strings.TrimSpace(*f.attachLocal), "on"),
 		EnvSecretPlaceholders:  *f.envSecretPlaceholders,
 		FileSecretPlaceholders: *f.fileSecretPlaceholders,
 		// First-run setup readiness inputs (GET /api/v1/setup/status).
@@ -539,6 +542,7 @@ func run() error {
 		LocalFolderSeedWait:  *f.localFolderSeedWait,
 		ComputerFolders:      *f.computerFolders,
 		APITokenMaxTTL:       *f.apiTokenMaxTTL,
+		CLISignIn:            f.cliSignIn.config(*f.oidcRedirectURL),
 		RoleStampTTL:         *f.roleStampTTL,
 		// The SSH gateway's established-connection ceiling and per-source handshake bound.
 		SSHMaxConnections:         *f.sshMaxConns,
@@ -888,6 +892,7 @@ type serveKnobs struct {
 	defaultPolicy         types.RunPolicySpec
 	siteConfigSeed        *api.SiteConfigSeed
 	demoVideoBaseURL      string
+	orgCAFingerprints     []string
 	governAdminRunsExempt []string
 	trustedProxies        []netip.Prefix
 }
@@ -895,7 +900,7 @@ type serveKnobs struct {
 // parseServeKnobs reads, once at boot and failing closed on a malformed value, the two
 // files the Server is given (WARDYN_DEFAULT_POLICY and WARDYN_SITE_CONFIG_SEED_FILE) and
 // the free-text knobs api.Config carries parsed: WARDYN_DEMO_VIDEO_BASE_URL,
-// WARDYN_GOVERN_ADMIN_RUNS_EXEMPT and WARDYN_TRUSTED_PROXIES.
+// WARDYN_ORG_CA_FINGERPRINTS, WARDYN_GOVERN_ADMIN_RUNS_EXEMPT and WARDYN_TRUSTED_PROXIES.
 func parseServeKnobs(f *bootFlags) (k serveKnobs, err error) {
 	if k.defaultPolicy, err = api.LoadPolicySpec(*f.policyPath); err != nil {
 		return serveKnobs{}, err
@@ -904,6 +909,9 @@ func parseServeKnobs(f *bootFlags) (k serveKnobs, err error) {
 		return serveKnobs{}, err
 	}
 	if k.demoVideoBaseURL, err = api.ValidateDemoVideoBaseURL(*f.demoVideoBaseURL); err != nil {
+		return serveKnobs{}, err
+	}
+	if k.orgCAFingerprints, err = api.ParseOrgCAFingerprints(*f.orgCAFingerprints); err != nil {
 		return serveKnobs{}, err
 	}
 	if k.trustedProxies, err = api.ParseTrustedProxies(*f.trustedProxies); err != nil {
