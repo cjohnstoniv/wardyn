@@ -81,14 +81,11 @@ func (s *Server) memberDriveCreateState(r *http.Request) *client.MemberDriveCrea
 	out.Count = len(mine)
 	row, policy, refusal := s.memberDriveCreateDoors(r)
 	out.Limit = policy.MaxPerPerson
-	if refusal == nil {
-		out.Enforcement = types.EnforcementFor(row.Backend)
-	}
 	switch {
 	case refusal == nil && out.Count >= out.Limit:
 		out.Reason = client.MemberDriveCreateLimitReached
 	case refusal == nil:
-		out.Allowed = true
+		out.Allowed, out.Enforcement = true, types.EnforcementFor(row.Backend)
 	case refusal.body.Reason == reasonMemberDrivesDisabled:
 		out.Reason = client.MemberDriveCreateDisabled
 	case refusal.body.Reason == reasonMemberDrivesDeniedByProfile:

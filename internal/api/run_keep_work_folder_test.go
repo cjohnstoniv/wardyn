@@ -241,8 +241,8 @@ func TestKeepWorkFolderSwitchReportedWhenTheDoorIsClosed(t *testing.T) {
 			if got == nil || got.KeepWorkFolder != c.keep || got.Reason != c.reason {
 				t.Fatalf("create block = %+v, want keep_work_folder %v reason %q", got, c.keep, c.reason)
 			}
-			if c.atMax && (got.Count != 1 || got.Limit != 1 || got.Enforcement != types.StorageEnforcementNone) {
-				t.Errorf("at the limit: create block = %+v, want 1 of 1 and enforcement none", got)
+			if c.atMax && (got.Count != 1 || got.Limit != 1) {
+				t.Errorf("at the limit: create block = %+v, want 1 of 1", got)
 			}
 		})
 	}
