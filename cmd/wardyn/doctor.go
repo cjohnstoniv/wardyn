@@ -127,11 +127,14 @@ func runnerStages(ctx context.Context, serverVersion string) []doctor.Stage {
 	defer cancel()
 	c := exec.CommandContext(ctx, path, args...) // #nosec G204 -- the binary setup installed for this person
 	c.Env = cliutil.ScrubChildEnv(os.Environ())
+	// On timeout, interrupt rather than kill, so the child's deferred probe-container removal runs.
+	c.Cancel = func() error { return c.Process.Signal(os.Interrupt) }
+	c.WaitDelay = 15 * time.Second
 	// A failing stage exits 1 and still prints its stages, so the output decides, not the exit code.
 	out, runErr := c.Output()
 	var report struct{ Stages []doctor.Stage }
 	if err := json.Unmarshal(out, &report); err != nil || len(report.Stages) == 0 {
-		return []doctor.Stage{doctor.FailStage("runner", fmt.Sprintf("the installed runner (%s) did not report its stages: %v", path, errors.Join(runErr, err)), "", "")}
+		return []doctor.Stage{doctor.FailStage("runner", fmt.Sprintf("the installed runner (%s) did not report its stages: %v", path, errors.Join(runErr, err)), "WARDYN_RUNNER_STATE_DIR", "the directory of the identity this computer's runner uses; run wardyn-runnerd doctor yourself to see why it printed no stages")}
 	}
 	return report.Stages
 }

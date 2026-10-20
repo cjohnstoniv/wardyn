@@ -123,6 +123,9 @@ func TestEveryStageNamesItsSetting(t *testing.T) {
 	moved := newOrg(t, func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "https://elsewhere.example.com/healthz", http.StatusFound)
 	})
+	proxyAuth := newOrg(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusProxyAuthRequired)
+	})
 	locked := newOrg(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/healthz" {
 			healthy(w, r)
@@ -169,6 +172,11 @@ func TestEveryStageNamesItsSetting(t *testing.T) {
 			n.ProxyFor = viaProxy(t, proxyThatAnswers(t, http.StatusProxyAuthRequired))
 			return n
 		}, "tls", "HTTPS_PROXY", "407"},
+		{"407 with no environment proxy", func() Network {
+			n := base(proxyAuth)
+			n.SystemRoots = proxyAuth.pool
+			return n
+		}, "healthz", "HTTPS_PROXY", "a proxy on the route (not HTTPS_PROXY) answered 407"},
 		{"proxy forbids the destination", func() Network {
 			n := base(good)
 			n.ProxyFor = viaProxy(t, proxyThatAnswers(t, http.StatusForbidden))
@@ -179,7 +187,8 @@ func TestEveryStageNamesItsSetting(t *testing.T) {
 			n.ProxyFor = viaProxy(t, "http://"+closedAddr(t))
 			return n
 		}, "tls", "HTTPS_PROXY", "did not accept the connection"},
-		{"unknown authority", func() Network { return base(good) }, "tls", "WARDYN_TRUSTED_CA_FILE", "Acme Co"},
+		{"unknown authority", func() Network { return base(good) }, "tls", "SSL_CERT_FILE", "Acme Co"},
+		{"unknown authority for a runner", func() Network { n := base(good); n.ExtraCATrusted = true; return n }, "tls", "WARDYN_TRUSTED_CA_FILE", "Acme Co"},
 		{"certificate for another name", func() Network {
 			n := base(good)
 			n.OrgURL = strings.Replace(good.srv.URL, "127.0.0.1", "localhost", 1)
@@ -192,6 +201,16 @@ func TestEveryStageNamesItsSetting(t *testing.T) {
 		{"a portal answers", func() Network { n := base(portal); n.SystemRoots = portal.pool; return n }, "healthz", "WARDYN_URL", "not Wardyn's health report"},
 		{"redirected", func() Network { n := base(moved); n.SystemRoots = moved.pool; return n }, "healthz", "WARDYN_URL", "elsewhere.example.com"},
 		{"token refused", func() Network { n := base(good); n.SystemRoots = good.pool; n.Token = "wrong-token-9999"; return n }, "identity", "WARDYN_TOKEN", "was refused"},
+		{"admin token refused", func() Network {
+			n := base(good)
+			n.SystemRoots, n.Token, n.TokenSource = good.pool, "wrong-token-9999", "WARDYN_ADMIN_TOKEN"
+			return n
+		}, "identity", "WARDYN_ADMIN_TOKEN", "the token from WARDYN_ADMIN_TOKEN was refused"},
+		{"token flag refused", func() Network {
+			n := base(good)
+			n.SystemRoots, n.Token, n.TokenSource = good.pool, "wrong-token-9999", "--token"
+			return n
+		}, "identity", "WARDYN_TOKEN", "the token from --token was refused"},
 		{"no token", func() Network { n := base(good); n.SystemRoots = good.pool; n.Token = ""; return n }, "identity", "WARDYN_TOKEN", "no token was sent"},
 		{"me forbidden", func() Network { n := base(locked); n.SystemRoots = locked.pool; return n }, "identity", "WARDYN_TOKEN", "403"},
 	} {

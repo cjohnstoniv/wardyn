@@ -53,7 +53,9 @@ type setupHost struct {
 	// proxy image resolves from, "local" or "registry", without pulling it.
 	inspect func(ctx context.Context, want relayPair) (dockerEngine, error)
 	image   func(ctx context.Context, ref string) (string, error)
-	relay   func(ctx context.Context, image, network string, eng dockerEngine, want relayPair) (relayPair, error)
+	// hasNetwork says whether the named Docker network exists, read-only, for doctor.
+	hasNetwork func(ctx context.Context, name string) (bool, error)
+	relay      func(ctx context.Context, image, network string, eng dockerEngine, want relayPair) (relayPair, error)
 }
 
 func osSetupHost() (setupHost, error) {
@@ -75,7 +77,7 @@ func osSetupHost() (setupHost, error) {
 		return setupHost{}, err
 	}
 	return setupHost{goos: runtime.GOOS, home: home, xdgConfig: os.Getenv("XDG_CONFIG_HOME"), xdgData: os.Getenv("XDG_DATA_HOME"),
-		dockerHost: cmp.Or(os.Getenv("DOCKER_HOST"), defaultDockerSocket), uid: os.Geteuid(), exe: exe, run: runCommand, engine: readySetupEngine, inspect: inspectSetupEngine, image: resolveProxyImage, relay: probeSetupRelay}, nil
+		dockerHost: cmp.Or(os.Getenv("DOCKER_HOST"), defaultDockerSocket), uid: os.Geteuid(), exe: exe, run: runCommand, engine: readySetupEngine, inspect: inspectSetupEngine, image: resolveProxyImage, hasNetwork: inspectSetupNetwork, relay: probeSetupRelay}, nil
 }
 
 func runCommand(ctx context.Context, name string, args ...string) ([]byte, error) {

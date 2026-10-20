@@ -21,3 +21,5 @@ func inspectSetupEngine(context.Context, relayPair) (dockerEngine, error) {
 }
 
 func resolveProxyImage(context.Context, string) (string, error) { return "", errSetupNeedsDocker }
+
+func inspectSetupNetwork(context.Context, string) (bool, error) { return false, errSetupNeedsDocker }

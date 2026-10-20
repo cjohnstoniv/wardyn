@@ -216,7 +216,7 @@ Both restart `serve` after a crash. On Linux the unit runs while you are logged 
 | `proxy-image` | The image is on the engine or in its registry; a pinned image of another release than the organisation's is a version-skew failure | `WARDYN_PROXY_IMAGE` |
 | `relay` | The relay address is allowed and a probe container reaches it, through `setup`'s own check | `WARDYN_RELAY_LISTEN` |
 
-- Each setting is read as the service reads it: a flag, else the settings `setup` recorded, else this shell. The flags are `--org`, `--state-dir`, `--proxy-image`, `--relay-listen`, `--relay-host-target` and `--trusted-ca-file`.
+- Each setting is read as the service reads it: a flag, else the settings `setup` recorded, else this shell. The flags are `--org`, `--state-dir`, `--proxy-image`, `--relay-listen`, `--relay-host-target` and `--trusted-ca-file`. The organisation address alone takes the `OrgURL` managed preference (macOS, set by an MDM profile) after `--org` and before the recorded settings; the line shows which one it came from.
 - It writes nothing and changes no setting. It never creates the proxy bridge, never pulls an image and never connects to the organisation as the runner.
 - The relay stage starts one throwaway container, removed afterwards, and only when the proxy image is already on the engine; otherwise it says `skip`.
 - Names are shown and values are not: no token, password or proxy credential appears in either format, and a proxy is shown as its host and port.

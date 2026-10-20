@@ -31,6 +31,7 @@ type doctorRig struct {
 	imageAt   string
 	relayErr  error
 	relayRan  bool
+	noNet     bool
 	pulled    bool
 	orgPool   *x509.CertPool
 	org       string
@@ -56,7 +57,8 @@ func (r *doctorRig) run(o doctorOptions) doctor.Report {
 			}
 			return dockerEngine{desc: `"Ubuntu" (box)`, version: "27.1.0", native: true, gateway: netip.MustParseAddr("172.17.0.1")}, nil
 		},
-		image: func(context.Context, string) (string, error) { return r.imageAt, r.imageErr },
+		image:      func(context.Context, string) (string, error) { return r.imageAt, r.imageErr },
+		hasNetwork: func(context.Context, string) (bool, error) { return !r.noNet, nil },
 		relay: func(context.Context, string, string, dockerEngine, relayPair) (relayPair, error) {
 			r.relayRan = true
 			return relayPair{bind: netip.MustParseAddr("172.17.0.1"), target: hostGateway}, r.relayErr
@@ -124,6 +126,8 @@ func TestRunnerDoctorStagesNameTheirSetting(t *testing.T) {
 			_ = os.MkdirAll(dir, 0o700)
 			_ = os.WriteFile(filepath.Join(dir, "runnerd.env"), []byte("WARDYN_RELAY_LISTEN=192.0.2.9\n"), 0o600)
 		}, doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"}, "relay", "WARDYN_RELAY_LISTEN", "refusing to listen on 192.0.2.9"},
+		{"organisation certificate no root signed", func(r *doctorRig) { r.orgPool = x509.NewCertPool() }, doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"}, "tls", "WARDYN_TRUSTED_CA_FILE", "no trusted root signed"},
+		{"proxy network missing", func(r *doctorRig) { r.noNet = true }, doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"}, "relay", "WARDYN_INTERNAL_NETWORK", "wardyn-internal that run proxies attach to does not exist"},
 		{"organisation URL not https", func(r *doctorRig) { r.env["WARDYN_RUNNER_ORG_URL"] = "http://wardyn.example.com" }, doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"}, "org-url", "WARDYN_RUNNER_ORG_URL", "https://"},
 		{"no organisation set", func(r *doctorRig) { delete(r.env, "WARDYN_RUNNER_ORG_URL") }, doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"}, "org-url", "WARDYN_RUNNER_ORG_URL", "no organisation"},
 		{"CA bundle unreadable", func(*doctorRig) {}, doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0", trustedCAFile: "/nonexistent/ca.pem"}, "trusted-ca", "WARDYN_TRUSTED_CA_FILE", "/nonexistent/ca.pem"},
@@ -137,6 +141,16 @@ func TestRunnerDoctorStagesNameTheirSetting(t *testing.T) {
 				t.Errorf("%s = %s setting %q detail %q fix %q, want FAIL naming %s and %q", tc.stage, s.Status, s.Setting, s.Detail, s.Fix, tc.setting, tc.in)
 			}
 		})
+	}
+}
+
+func TestMissingProxyNetworkSkipsTheRelayProbe(t *testing.T) {
+	r := newRig(t)
+	r.noNet = true
+	r.env["WARDYN_INTERNAL_NETWORK"] = "corp-proxies"
+	rep := r.run(doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"})
+	if got := stage(t, rep, "relay").Detail; r.relayRan || !strings.Contains(got, "corp-proxies") {
+		t.Errorf("relayRan = %v, relay detail %q, want no probe and the configured network named", r.relayRan, got)
 	}
 }
 

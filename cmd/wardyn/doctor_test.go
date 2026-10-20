@@ -88,7 +88,7 @@ func TestDoctorUnknownAuthorityExitsOneAndNamesTheSetting(t *testing.T) {
 	if !errors.As(err, &ee) || ee.code != 1 {
 		t.Fatalf("err = %v, want exit code 1", err)
 	}
-	for _, want := range []string{"FAIL  tls", "WARDYN_TRUSTED_CA_FILE", "Acme Co", "skip  healthz", "skip  identity"} {
+	for _, want := range []string{"FAIL  tls", "set SSL_CERT_FILE to", "Acme Co", "skip  healthz", "skip  identity"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}
@@ -278,7 +278,7 @@ func TestDoctorSaysWhenTheInstalledRunnerSaysNothing(t *testing.T) {
 	t.Cleanup(srv.Close)
 	installRunnerd(t, home, "not json", 1)
 	out, err := runDoctorCmd(t, "--url", srv.URL)
-	if err == nil || !strings.Contains(out, "FAIL  runner") {
+	if err == nil || !strings.Contains(out, "FAIL  runner") || !strings.Contains(out, "set WARDYN_RUNNER_STATE_DIR to") {
 		t.Errorf("err = %v, output:\n%s", err, out)
 	}
 }

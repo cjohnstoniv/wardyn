@@ -272,8 +272,12 @@ func (n *Network) certFailure(p *probe, u *url.URL) Stage {
 		return FailStage("tls", presented+"; only "+p.store+" verifies it, and this command does not read that setting", "SSL_CERT_FILE",
 			"a PEM bundle holding that root (Linux), or add the root to the system trust store; wardyn-runnerd reads "+p.store+" instead")
 	case errors.As(p.verifyErr, &unknown):
-		return FailStage("tls", presented+", which no trusted root signed (a proxy that inspects TLS does this)", "WARDYN_TRUSTED_CA_FILE",
-			"a PEM file holding that issuer's root CA for a runner (this CLI reads the system trust store: SSL_CERT_FILE on Linux, or add the root to it)")
+		detail := presented + ", which no trusted root signed (a proxy that inspects TLS does this)"
+		if !n.ExtraCATrusted {
+			return FailStage("tls", detail, "SSL_CERT_FILE",
+				"a PEM bundle holding that issuer's root CA (Linux), or add the root to the system trust store; wardyn-runnerd reads WARDYN_TRUSTED_CA_FILE instead")
+		}
+		return FailStage("tls", detail, "WARDYN_TRUSTED_CA_FILE", "a PEM file holding that issuer's root CA")
 	case errors.As(p.verifyErr, &wrongHost):
 		return FailStage("tls", presented+", which does not cover "+u.Hostname(), n.OrgSetting, "the address that certificate covers")
 	case errors.As(p.verifyErr, &invalid):
@@ -314,7 +318,12 @@ func (n *Network) healthStage(u, proxy *url.URL, p *probe, resp *http.Response, 
 	case err != nil:
 		return n.connFailure("healthz", err, p, u, proxy)
 	case resp.StatusCode == http.StatusProxyAuthRequired:
-		return FailStage("healthz", fmt.Sprintf("the proxy %s answered 407: it wants proxy authentication", proxy.Host), proxyVar(u), "a proxy address that includes credentials it accepts")
+		// With no environment proxy the 407 came from the server or a transparent proxy on the route.
+		who := "a proxy on the route (not " + proxyVar(u) + ")"
+		if proxy != nil {
+			who = "the proxy " + proxy.Host
+		}
+		return FailStage("healthz", who+" answered 407: it wants proxy authentication", proxyVar(u), "a proxy address that includes credentials it accepts")
 	case resp.StatusCode >= 300 && resp.StatusCode < 400:
 		to := "elsewhere"
 		if loc, err := resp.Location(); err == nil {
@@ -347,7 +356,11 @@ func (n *Network) identityStage(ctx context.Context, u *url.URL, tr *http.Transp
 		if n.Token != "" {
 			from = "the token from " + n.TokenSource + " was refused"
 		}
-		return FailStage("identity", fmt.Sprintf("/api/v1/me answered %d: %s", ae.Status, from), "WARDYN_TOKEN",
+		setting := "WARDYN_TOKEN"
+		if n.TokenSource == "WARDYN_ADMIN_TOKEN" {
+			setting = n.TokenSource
+		}
+		return FailStage("identity", fmt.Sprintf("/api/v1/me answered %d: %s", ae.Status, from), setting,
 			"a personal API token: sign in to the console and create one under Your account (a deployment with single sign-on and no admin token takes nothing else)")
 	case err != nil:
 		return FailStage("identity", "/api/v1/me did not answer: "+unwrapURL(err).Error(), n.OrgSetting, "your organisation's Wardyn address")
