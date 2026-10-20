@@ -609,11 +609,21 @@ else
     # (name, dockerfile, float-latest) and preflight-green's staging step keeps
     # every part of the proof. Once R10 removes the build jobs, the promote rows
     # are the only source and the row comparison has nothing to compare.
-    promote_rows='[.jobs.promote.strategy.matrix.include[] | {"name": .name, "dockerfile": .dockerfile, "float": (.["float-latest"] // "")}] | sort_by(.name)'
+    # The promote job is one job, not a matrix: its rows are the YAML text in its
+    # IMAGES env (kept as `- name:` rows so the greps in verify-release.sh,
+    # check-image-pins.sh and gpl-source-offer.sh still read them).
+    promote_rows='[.[] | {"name": .name, "dockerfile": .dockerfile, "float": (.["float-latest"] // "")}] | sort_by(.name)'
     build_rows='[(.jobs.images.strategy.matrix.include[], .jobs["images-ui-sandbox"].strategy.matrix.include[]) | {"name": .name, "dockerfile": .dockerfile, "float": (.["float-latest"] // "")}] | sort_by(.name)'
-    promote_got="$(yq -o=json -I=0 "$promote_rows" "$REL")"
-    [ "$(yq -r '.jobs.promote.strategy.matrix.include | length' "$REL")" -gt 0 ] \
-        || { bad "$REL: the promote job has no matrix rows — guard 16 is pointing at nothing"; stage_fail=1; }
+    promote_images="$(yq -r '.jobs.promote.env.IMAGES' "$REL")"
+    promote_got="$(printf '%s\n' "$promote_images" | yq -o=json -I=0 "$promote_rows")"
+    [ "$(printf '%s\n' "$promote_images" | yq 'length')" -gt 0 ] \
+        || { bad "$REL: the promote job has no IMAGES rows — guard 16 is pointing at nothing"; stage_fail=1; }
+    # One Attest build provenance step per row (an action cannot run in a loop), each
+    # on the row's own digest: the set of steps must be exactly the set of rows.
+    prov_got="$(yq -r '.jobs.promote.steps[] | select(.uses // "" | test("^actions/attest-build-provenance@")) | .with["subject-name"] + " " + .with["subject-digest"]' "$REL" | sort)"
+    prov_want="$(printf '%s\n' "$promote_images" | yq -r '.[].name' | awk '{printf "ghcr.io/cjohnstoniv/%s ${{ fromJSON(needs.preflight-green.outputs.digests)[\047%s\047] }}\n", $1, $1}' | sort)"
+    [ "$prov_got" = "$prov_want" ] \
+        || { bad "$REL: the promote job's Attest build provenance steps do not match its IMAGES rows one for one (subject-name and digest) — got: $(echo $prov_got) wanted: $(echo $prov_want)"; stage_fail=1; }
     if [ "$(yq -r '.jobs.images | type' "$REL")" != "!!null" ]; then
         build_got="$(yq -o=json -I=0 "$build_rows" "$REL")"
         [ "$promote_got" = "$build_got" ] \
@@ -631,10 +641,14 @@ else
     # while the image jobs it keeps stay as old as they were.
     printf '%s' "$staging_run" | grep -E -- '--jq \.created_at' >/dev/null && ! printf '%s' "$staging_run" | grep 'updated_at' >/dev/null \
         || { bad "$REL: preflight-green's staging step must read the nightly run's .created_at for its age and never updated_at (a rerun refreshes updated_at, so stale images would pass)"; stage_fail=1; }
-    promote_copy="$(yq -r '.jobs.promote.steps[] | select(.name | test("^Copy the verified digest")) | .run' "$REL" | nocomment)"
+    promote_copy="$(yq -r '.jobs.promote.steps[] | select(.name | test("^Promote, sign and attest each image")) | .run' "$REL" | nocomment)"
     printf '%s' "$promote_copy" | grep -E '^[[:space:]]*cosign copy --force ' >/dev/null \
         && printf '%s' "$promote_copy" | grep -F 'test "$got" = "$DIGEST"' >/dev/null \
         || { bad "$REL: the promote job's copy step must run cosign copy --force (a final tag's :latest already exists, and cosign refuses to move it without) and then check the tag's digest equals \$DIGEST"; stage_fail=1; }
+    for pat in '^[[:space:]]*cosign sign --yes ' '^[[:space:]]*cosign attest --yes --type cyclonedx ' '^[[:space:]]*syft "registry:' 'refusing to attest it' 'set -euo pipefail; promote_one'; do
+        printf '%s' "$promote_copy" | grep -E -- "$pat" >/dev/null \
+            || { bad "$REL: the promote job's loop no longer has a command matching '$pat' — a promoted image would lose its signature, SBOM attestation, or its per-image failure isolation"; stage_fail=1; }
+    done
     if [ "$stage_fail" = 0 ]; then ok "nightly's staged rows and build steps match release.yml's publish set (names, dockerfiles, build-args, platforms, provenance, no cache), and no local-only image is staged"; fi
 fi
 
