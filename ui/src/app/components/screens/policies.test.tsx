@@ -46,6 +46,9 @@ vi.mock("../../lib/api/setup", () => ({
 import { PoliciesScreen } from "./policies";
 import { toYaml } from "../wardyn/yaml-block";
 import { POLICIES_PAGE, POLICY_DIALOG } from "../wardyn/copy/policy-dialog";
+import { MemoryRouter } from "react-router-dom";
+import { OperatorProvider } from "../wardyn/operator-context";
+import { BOUNDARY } from "../../lib/boundary-copy";
 
 function policy(over: Partial<RunPolicy> = {}): RunPolicy {
   return {
@@ -364,5 +367,32 @@ describe("PoliciesScreen — plain copy and one primary action (#2833, #2834)", 
     expect(first.className).not.toBe(header.className);
     expect(header.className).toMatch(/bg-primary/);
     expect(first.className).not.toMatch(/(^| )bg-primary( |$)/);
+  });
+});
+
+describe("PoliciesScreen — the door to the Wardyn boundary", () => {
+  beforeEach(() => {
+    listPoliciesMock.mockReset();
+    listPoliciesMock.mockResolvedValue([]);
+  });
+
+  const renderAs = (securityOperator: boolean) =>
+    render(
+      <MemoryRouter>
+        <OperatorProvider operator securityOperator={securityOperator}>
+          <PoliciesScreen />
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+
+  it("a security admin gets a Wardyn boundary link to its page", async () => {
+    renderAs(true);
+    expect(await screen.findByRole("link", { name: BOUNDARY.TITLE })).toHaveAttribute("href", "/admin/policies/boundary");
+  });
+
+  it("an admin who isn't a security admin gets none", async () => {
+    renderAs(false);
+    await screen.findByRole("button", { name: /New policy/ });
+    expect(screen.queryByRole("link", { name: BOUNDARY.TITLE })).toBeNull();
   });
 });

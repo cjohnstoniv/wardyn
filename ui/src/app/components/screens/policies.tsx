@@ -4,6 +4,7 @@
  */
 
 import * as React from "react";
+import { Link, useInRouterContext } from "react-router-dom";
 import {
   UserCog,
   Plus,
@@ -65,7 +66,8 @@ import { PageHeader } from "../wardyn/page-header";
 import { CC_META } from "../wardyn/cc-meta";
 import { OPERATOR_ONLY_REASON, POLICY_UI_APPS, RESIDUAL_PREFIX } from "../wardyn/copy";
 import { POLICIES_PAGE, POLICY_DIALOG } from "../wardyn/copy/policy-dialog";
-import { useOperator } from "../wardyn/operator-context";
+import { useOperator, useSecurityOperator } from "../wardyn/operator-context";
+import { BOUNDARY } from "../../lib/boundary-copy";
 import {
   AvailabilityControl,
   AvailabilityDraft,
@@ -88,6 +90,8 @@ const STARTER_SPEC: RunPolicySpec = minimalSpec();
 
 export function PoliciesScreen() {
   const operator = useOperator();
+  const securityOperator = useSecurityOperator();
+  const routed = useInRouterContext();
   const [policies, setPolicies] = React.useState<RunPolicy[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [query, setQuery] = React.useState("");
@@ -129,6 +133,11 @@ export function PoliciesScreen() {
         actions={
           <>
             {!operator && <Chip tone="neutral">{OPERATOR_ONLY_REASON}</Chip>}
+            {securityOperator && routed && (
+              <Button variant="outline" asChild>
+                <Link to="/admin/policies/boundary">{BOUNDARY.TITLE}</Link>
+              </Button>
+            )}
             <Button onClick={() => setEditor({ mode: "create" })} disabled={!operator}>
               <Plus className="size-4" /> New policy
             </Button>
