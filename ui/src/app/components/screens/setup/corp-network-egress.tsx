@@ -194,11 +194,13 @@ function RedirectRowExpanded({
   onSave,
   onCancel,
   onRemove,
+  operator,
 }: {
   r: EgressRedirect;
   onSave: (next: EgressRedirect) => void;
   onCancel: () => void;
   onRemove: () => void;
+  operator: boolean;
 }) {
   const [from, setFrom] = React.useState(r.from);
   const [to, setTo] = React.useState(r.to);
@@ -234,6 +236,7 @@ function RedirectRowExpanded({
       <div className="flex items-center gap-2">
         <Button
           size="sm"
+          disabled={!operator}
           onClick={() => {
             // WIRE-3: typing a bare secret name here is the operator switching
             // AWAY from the integration-sourced token — clear it, or a
@@ -254,8 +257,9 @@ function RedirectRowExpanded({
         <Button size="sm" variant="ghost" onClick={onCancel}>
           Cancel
         </Button>
+        {!operator && <span className="text-meta text-muted-foreground">{T.VIEWER_HINT}</span>}
         <span className="flex-1" />
-        <Button size="sm" variant="ghost" className="text-danger hover:text-danger" onClick={onRemove}>
+        <Button size="sm" variant="ghost" className="text-danger hover:text-danger" disabled={!operator} onClick={onRemove}>
           Remove
         </Button>
       </div>
@@ -508,6 +512,7 @@ export function EgressTab({
                 <div key={r.from} className={i > 0 ? "border-t border-border" : undefined}>
                   <RedirectRowExpanded
                     r={r}
+                    operator={operator}
                     onCancel={() => setExpandedFrom(null)}
                     onSave={async (next) => {
                       if (await setRedirects(redirects.map((row) => (row.from === r.from ? next : row)))) setExpandedFrom(null);

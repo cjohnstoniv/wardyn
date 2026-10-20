@@ -349,6 +349,24 @@ describe("Egress redirection — rows, network-only chip, the From combobox", ()
     expect(screen.getByRole("button", { name: /^cancel$/i })).toBeInTheDocument();
   });
 
+  it("a viewer's expanded redirect row disables Save and Remove, as the collapsed row does (#2564)", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <OperatorProvider operator={false}>
+          <Harness siteConfig={{ egress_redirects: redirects }} />
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    await user.click(screen.getByRole("tab", { name: /egress redirection/i }));
+    await user.click(screen.getByTitle("https://ghcr.io → https://registry.corp.internal/ghcr-remote"));
+
+    expect(screen.getByRole("button", { name: /^save$/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^remove$/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^cancel$/i })).toBeEnabled();
+    expect(screen.getAllByText(T.VIEWER_HINT).length).toBeGreaterThan(0);
+  });
+
   // WIRE-3: an integration-backed redirect must not render identically to an
   // untokened one — that reads as the token having been lost.
   it("an integration-sourced token renders its own distinct chip, not the bare-secret one", async () => {
