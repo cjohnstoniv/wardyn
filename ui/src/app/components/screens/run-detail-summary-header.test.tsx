@@ -775,3 +775,36 @@ describe("SummaryHeader — Rename draft seeding and empty-submit", () => {
     expect(onRename).toHaveBeenCalledWith("A real new title");
   });
 });
+
+describe("SummaryHeader: total run time of an ended run (#2521)", () => {
+  it("is measured to ended_at, not to a later updated_at from teardown or the boot sweep", () => {
+    const run = {
+      ...runningInteractive,
+      state: "COMPLETED",
+      created_at: "2026-01-01T10:00:00Z",
+      ended_at: "2026-01-01T10:05:00Z",
+      updated_at: "2026-01-03T10:00:00Z",
+    } as RunDetail;
+    renderHeader(
+      <OperatorProvider operator={false} principal="me">
+        <SummaryHeader run={run} terminal={true} onKill={() => {}} />
+      </OperatorProvider>,
+    );
+    expect(screen.getByLabelText("Total run time 5m 0s")).toBeInTheDocument();
+  });
+
+  it("falls back to updated_at when the run has no ended_at", () => {
+    const run = {
+      ...runningInteractive,
+      state: "COMPLETED",
+      created_at: "2026-01-01T10:00:00Z",
+      updated_at: "2026-01-01T10:07:00Z",
+    } as RunDetail;
+    renderHeader(
+      <OperatorProvider operator={false} principal="me">
+        <SummaryHeader run={run} terminal={true} onKill={() => {}} />
+      </OperatorProvider>,
+    );
+    expect(screen.getByLabelText("Total run time 7m 0s")).toBeInTheDocument();
+  });
+});

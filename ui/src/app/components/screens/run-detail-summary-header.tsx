@@ -36,17 +36,18 @@ import {
 import { titleFromTask } from "../../lib/run-title";
 
 
-// Live-ticking duration since `createdAt`, frozen at `updatedAt` once the run
+// Live-ticking duration since `createdAt`, frozen at `endedAt` once the run
 // is terminal — a terminal run's elapsed time must not keep growing every
-// time someone happens to reopen the page days later.
-function useElapsed(createdAt: string, updatedAt: string, terminal: boolean): string {
+// time someone happens to reopen the page days later. `endedAt` falls back to
+// updated_at only when absent: teardown retries bump updated_at long after the end.
+function useElapsed(createdAt: string, endedAt: string, terminal: boolean): string {
   const [now, setNow] = React.useState(() => Date.now());
   React.useEffect(() => {
     if (terminal) return;
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, [terminal]);
-  const end = terminal ? new Date(updatedAt).getTime() : now;
+  const end = terminal ? new Date(endedAt).getTime() : now;
   return formatDuration(end - new Date(createdAt).getTime());
 }
 
@@ -135,7 +136,7 @@ export function SummaryHeader({
   const principal = usePrincipal();
   const owned = !!run.created_by && run.created_by === principal;
   const canAttach = mayEnterRunOrUnknown(run, principal, operator, useOperatorResolved());
-  const elapsed = useElapsed(run.created_at, run.updated_at, terminal);
+  const elapsed = useElapsed(run.created_at, run.ended_at ?? run.updated_at, terminal);
   const shortId = run.id.replace(/^run_/, "").slice(0, 8);
   // "" whenever there is nothing to say. The SERVER has already blanked
   // status_detail for every run that is not STARTING (PENDING included —

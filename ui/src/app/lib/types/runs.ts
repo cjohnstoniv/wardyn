@@ -296,8 +296,7 @@ export interface AgentRun {
   // legacy row the backfill could not date exactly. A lease-ended run (
   // lost_reason "ended") stays RUNNING until the ended-run grace makes it
   // terminal, so ITS end time is lost_at, not this field — internal/types/
-  // types.go's AgentRun.EndedAt doc. Nothing in the console reads this field
-  // yet; it is a live wire field and the mirror rule forbids dropping one.
+  // types.go's AgentRun.EndedAt doc. The run header's total run time reads it.
   ended_at?: string;
   // Set while a kept run's stop could not be confirmed (migration 0088,
   // #1060): the latest stop error and when containment first failed. The
