@@ -278,3 +278,32 @@ func TestCredentialDeliveryWrite_UnbuildableModeRefused(t *testing.T) {
 		t.Errorf("GET rewrote the stored document: %s, want %s", got, before)
 	}
 }
+
+// A document stored before the write check, the one `ado_minted_pat` set to runner_resident that a 0.9.6
+// server accepted and could not build, is read back unchanged, and ado_minted_pat now lists runner_resident
+// among its buildable modes. TestPG_LocalRun_ADOMintedPATResidentAtCreate seeds the same document and
+// admits a run under it with the three gates on.
+func TestCredentialDeliveryGET_StoredADOResidentDocumentWorksAfterTheBackport(t *testing.T) {
+	e := newGovEnv(t)
+	const stored = `{"classes":{"ado_minted_pat":{"mode":"runner_resident"}}}`
+	if _, err := e.pg.PutCredentialDeliveryPolicy(context.Background(), json.RawMessage(stored), "seed", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	w := e.call(e.alice, http.MethodGet, credentialDeliveryPath, "")
+	var resp struct {
+		Policy         json.RawMessage             `json:"policy"`
+		BuildableModes map[string][]placement.Mode `json:"buildable_modes"`
+	}
+	uerr := json.Unmarshal(w.Body.Bytes(), &resp)
+	got, err := deliveryPolicyOf(resp.Policy)
+	if w.Code != http.StatusOK || uerr != nil || err != nil || len(got.Classes) != 1 ||
+		got.Classes[placement.ClassADOMintedPAT].Mode != placement.ModeRunnerResident {
+		t.Fatalf("GET = %d %s (%v), want the stored document %s", w.Code, w.Body, err, stored)
+	}
+	if !slices.Contains(resp.BuildableModes[placement.ClassADOMintedPAT], placement.ModeRunnerResident) {
+		t.Errorf("buildable_modes[ado_minted_pat] = %v, want runner_resident among them", resp.BuildableModes[placement.ClassADOMintedPAT])
+	}
+	if w := e.admin(http.MethodPut, credentialDeliveryPath, stored); w.Code != http.StatusOK {
+		t.Errorf("PUT of the same document = %d %s, want 200", w.Code, w.Body)
+	}
+}
