@@ -209,6 +209,23 @@ func TestLocalMCPRulesRefusal_AtTheDoors(t *testing.T) {
 	}
 }
 
+// TestSetupStatus_FeaturesMCPLocalServers: the authenticated setup status
+// carries WARDYN_MCP_LOCAL_SERVERS as features.mcp_local_servers, to a member
+// too, so the console offers local servers only where the API takes them.
+func TestSetupStatus_FeaturesMCPLocalServers(t *testing.T) {
+	srv := carrierServer(t, types.SiteConfig{}, nil, nil)
+	for env, want := range map[string]bool{"": false, "0": false, "1": true} {
+		t.Setenv(envMCPLocalServers, env)
+		_, m := getJSON(t, srv, "/api/v1/setup/status", memberCookie(t))
+		var features struct {
+			MCPLocalServers *bool `json:"mcp_local_servers"`
+		}
+		if err := json.Unmarshal(m["features"], &features); err != nil || features.MCPLocalServers == nil || *features.MCPLocalServers != want {
+			t.Errorf("%q: features %s, want mcp_local_servers %v", env, m["features"], want)
+		}
+	}
+}
+
 // TestAccessFacts_LocalMCPHasNoBrokerEnforcer: step 5 never says the broker
 // enforces Codex CLI's rules when its only server runs in the sandbox, and the
 // server's hosts are raw egress.

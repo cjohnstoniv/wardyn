@@ -40,6 +40,11 @@ const setupRecheckParam = "recheck"
 
 // SetupStatus is the aggregate readiness snapshot for GET /api/v1/setup/status.
 type SetupStatus struct {
+	// Features is which switch-gated features this deployment has on, for every
+	// signed-in caller: the console shows a gated surface only where the API
+	// takes it. Here, not on the anonymous /healthz, since it says which
+	// credential paths are on.
+	Features SetupFeatures `json:"features"`
 	// Ready is server-computed and CONSERVATIVE (false when the runner is nil),
 	// so the wizard opens rather than hiding a half-configured bootstrap.
 	Ready bool `json:"ready"`
@@ -232,6 +237,13 @@ type SetupPlatform struct {
 	KVM bool `json:"kvm"`
 }
 
+// SetupFeatures is SetupStatus.Features.
+type SetupFeatures struct {
+	// MCPLocalServers is WARDYN_MCP_LOCAL_SERVERS: a component may define an
+	// MCP server that runs in the run's sandbox.
+	MCPLocalServers bool `json:"mcp_local_servers"`
+}
+
 // llmPathExists is LLMReady: at least one enabled model provider serves an
 // agent. A deployment fact, never a person's.
 func llmPathExists(sc types.SiteConfig) bool {
@@ -415,6 +427,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	ready := s.cfg.Runner != nil && len(rnr.ConfinementClasses) > 0
 
 	resp := SetupStatus{
+		Features:           SetupFeatures{MCPLocalServers: envEnabled(envMCPLocalServers)},
 		Ready:              ready,
 		Checks:             checks,
 		Auth:               SetupAuth{Mode: authMode, LocalLoopback: s.cfg.LocalLoopback, GovernAdminRuns: s.cfg.GovernAdminRuns, GovernAdminRunsExempt: s.cfg.GovernAdminRunsExempt},
