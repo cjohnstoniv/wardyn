@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -536,16 +537,25 @@ func TestWriteEnvAsCode_RefusesSymlinkEscape(t *testing.T) {
 }
 
 // TestWriteEnvAsCode_RefusesARootThatResolvesToADeniedPath: the workspace's stored source path was
-// vetted when it was written; one that is now a symlink into a denied host path is refused before
-// anything is opened or written there.
+// vetted when it was written; one that is now a symlink into a denied host path is refused, checked on
+// the directory actually opened, and nothing is written there. The denied path is a temp directory
+// named docker.sock (denied by basename), so a regression can never write a real system path.
 func TestWriteEnvAsCode_RefusesARootThatResolvesToADeniedPath(t *testing.T) {
-	link := filepath.Join(t.TempDir(), "src")
-	if err := os.Symlink("/etc", link); err != nil {
+	tmp := t.TempDir()
+	denied := filepath.Join(tmp, "docker.sock")
+	if err := os.Mkdir(denied, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(tmp, "src")
+	if err := os.Symlink(denied, link); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	skipped, err := writeEnvAsCode(link, map[string]string{"AGENTS.md": "generated content"})
-	if err == nil || !strings.Contains(err.Error(), "denied host path") {
-		t.Fatalf("writeEnvAsCode through a link to /etc = (%v, %v), want a denied-path refusal", skipped, err)
+	if !errors.Is(err, errEnvRootDenied) || !strings.Contains(err.Error(), "container-runtime socket") {
+		t.Fatalf("writeEnvAsCode through a link to a denied path = (%v, %v), want a denied-root refusal", skipped, err)
+	}
+	if _, serr := os.Stat(filepath.Join(denied, "AGENTS.md")); serr == nil {
+		t.Error("a file was written under the denied path")
 	}
 }
 
