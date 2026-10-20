@@ -238,3 +238,33 @@ func TestHubAuthenticationBeforeAdmission(t *testing.T) {
 		})
 	}
 }
+
+// An unclaimed runner is sent its AUTH_OK and then a GOAWAY, so the refusal arrives after the handshake. The
+// client still reports the registration stage, from the typed reason, and a runner the organisation revoked
+// after admitting it does too.
+func TestHubUnclaimedRunnerReportsTheRegistrationStage(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	pub, key, _ := ed25519.GenerateKey(rand.Reader)
+	row := types.Runner{ID: uuid.New(), PublicKey: pub, OrgURLSHA256: federation.OrgURLSHA256("https://org.example"), State: types.RunnerUnclaimed, CreatedAt: time.Now()}
+	hub := NewHub(ctx, HubConfig{OrgURL: "https://org.example", Lookup: func(context.Context, uuid.UUID) (types.Runner, error) { return row, nil },
+		Admit: func(context.Context, types.Runner) (Admission, error) {
+			return Admission{}, errors.New("an unclaimed runner is never admitted")
+		}})
+	defer hub.Close()
+	org, run := runnerwire.Loopback()
+	go func() { _ = hub.Serve(ctx, org, row.ID) }()
+	online, resumed := make(chan *runnerwire.Peer, 1), make(chan bool, 1)
+	client, err := runnerwire.NewClient(runnerwire.ClientConfig{OrgURL: "https://org.example", RunnerID: row.ID.String(), PrivateKey: key,
+		Hooks: sessionHooks(online, resumed), Dial: func(context.Context) (runnerwire.Conn, error) { return run, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = client.Connect(ctx)
+	if !errors.Is(err, runnerwire.ErrGoaway) {
+		t.Fatalf("connect = %v, want the GOAWAY", err)
+	}
+	if got := runnerwire.StageOf(err); got != runnerwire.StageRegistration {
+		t.Errorf("stage = %q, want registration (%v)", got, err)
+	}
+}

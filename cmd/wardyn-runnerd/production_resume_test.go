@@ -283,7 +283,9 @@ func TestCapsCarryTheLastFailureAndARefreshReportsTheRelay(t *testing.T) {
 		t.Fatalf("connect reported %+v", first.LastFailure)
 	}
 	failure.Store(&runnerwire.Failure{Stage: runnerwire.StageRelay, At: at, Ongoing: true})
-	f.runtime.refreshCaps(f.ctx)
+	if err := f.runtime.refreshCaps(f.ctx); err != nil {
+		t.Fatal(err)
+	}
 	again := resumeAwait(t, f.ctx, caps)
 	if again.LastFailure == nil || again.LastFailure.Stage != runnerwire.StageRelay || !again.LastFailure.Ongoing {
 		t.Fatalf("refresh reported %+v", again.LastFailure)

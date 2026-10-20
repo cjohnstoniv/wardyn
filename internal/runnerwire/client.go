@@ -233,7 +233,8 @@ func (c *Client) Connect(ctx context.Context) error {
 		c.cfg.Hooks.ProxyImage(ok.ProxyImage)
 	}
 	c.session, c.ready = ok.SessionID, false
-	return c.serve(ctx, conn, cfg, ok)
+	err = c.serve(ctx, conn, cfg, ok)
+	return withStage(serveStage(err), err)
 }
 
 func (c *Client) resume(ctx context.Context) (PeerConfig, *Resume) {

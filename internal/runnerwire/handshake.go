@@ -143,11 +143,22 @@ func goaway(payload []byte) error {
 	if Unmarshal(payload, &r) != nil || r.Reason == "" {
 		return ErrGoaway
 	}
+	err := fmt.Errorf("%w: %s", ErrGoaway, r.Reason)
 	if say, ok := goawaySentences[r.Reason]; ok {
-		return fmt.Errorf("%w: %s (%s)", ErrGoaway, say, r.Reason)
+		err = fmt.Errorf("%w: %s (%s)", ErrGoaway, say, r.Reason)
 	}
-	return fmt.Errorf("%w: %s", ErrGoaway, r.Reason)
+	return &goawayReasonError{reason: r.Reason, err: err}
 }
+
+// goawayReasonError is a GOAWAY's error with the reason code the organisation gave, so the stage is
+// read from the code and never from the message.
+type goawayReasonError struct {
+	reason string
+	err    error
+}
+
+func (e *goawayReasonError) Error() string { return e.err.Error() }
+func (e *goawayReasonError) Unwrap() error { return e.err }
 
 // goawaySentences say what the org's GOAWAY reasons mean to the person reading the runner's log.
 var goawaySentences = map[string]string{

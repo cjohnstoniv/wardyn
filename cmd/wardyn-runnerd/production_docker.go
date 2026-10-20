@@ -102,15 +102,16 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 	slog.InfoContext(ctx, "run relay reachable", "engine", eng.desc, "listen", pair.bind, "target", pair.target)
 	rt.run = watchRelay(rt.run, relayWatch{
 		check: func(ctx context.Context) error { return tryRelayPair(ctx, sub.ProbeRelay, eng, pair) }, every: relayRecheckEvery,
-		report: func(ctx context.Context, reachable bool, err error) {
+		proves: func(err error) bool { return errors.Is(err, docker.ErrRelayUnreachable) },
+		changed: func(ctx context.Context, reachable bool, err error) {
 			logRelayChange(ctx, reachable, err, pair)
 			reason := ""
 			if err != nil {
 				reason = err.Error()
 			}
 			opts.status.relayChanged(reachable, reason)
-			rt.refreshCaps(ctx)
-		}}, relay.sessionUp)
+		},
+		send: rt.refreshCaps}, relay.sessionUp)
 	return rt, nil
 }
 
@@ -491,16 +492,18 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		}()
 		return manager.Run(ctx)
 	}
-	refresh := func(ctx context.Context) {
+	refresh := func(ctx context.Context) error {
 		peer := live.get()
 		if peer == nil {
-			return // offline: the next connect reports it
+			return nil // offline: the next connect reports it
 		}
 		ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		defer cancel()
-		if err := sendCaps(ctx, peer); err != nil {
-			slog.WarnContext(ctx, "runner could not report its state to the organisation", "error", err)
+		err := sendCaps(ctx, peer)
+		if err != nil {
+			slog.WarnContext(ctx, "runner could not report its state to the organisation; it will try again at the next check", "error", err)
 		}
+		return err
 	}
 	return runnerRuntime{hooks: hooks, run: run, refreshCaps: refresh, close: func() error {
 		err := errors.Join(manager.Close(), relay.Close())

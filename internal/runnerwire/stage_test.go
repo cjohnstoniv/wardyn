@@ -178,3 +178,27 @@ func TestConnectRecordsTheHandshakeStage(t *testing.T) {
 		})
 	}
 }
+
+// serveStage reads the typed GOAWAY reason: the registration reasons land on registration, any other
+// reason, a bare GOAWAY and a plain error on session, and a message that merely says so does not count.
+func TestServeStageReadsTheGoawayReasonNotTheText(t *testing.T) {
+	reason := func(r string) []byte { b, _ := Marshal(Reason{Reason: r}); return b }
+	for _, c := range []struct {
+		name string
+		err  error
+		want Stage
+	}{
+		{"unclaimed", goaway(reason("runner_unclaimed")), StageRegistration},
+		{"lapsed", goaway(reason(ReasonRegistrationLapsed)), StageRegistration},
+		{"owner inactive", goaway(reason("runner_owner_inactive")), StageRegistration},
+		{"revoked frame", ErrRevoked, StageRegistration},
+		{"another reason", goaway(reason("maintenance")), StageSession},
+		{"no reason", goaway(nil), StageSession},
+		{"text only", fmt.Errorf("%w: runner_unclaimed", ErrGoaway), StageSession},
+		{"plain", errors.New("link down"), StageSession},
+	} {
+		if got := serveStage(c.err); got != c.want {
+			t.Errorf("%s: stage = %q, want %q", c.name, got, c.want)
+		}
+	}
+}

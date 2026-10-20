@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -133,26 +134,30 @@ func TestRelayLossIsOngoingUntilRegained(t *testing.T) {
 	}
 }
 
-// The watch reports a relay that is lost once, says nothing while it stays lost, and reports it again
-// when it is regained; a check cut short by shutdown is not a loss.
+var errRelayDown = errors.New("relay unreachable")
+
+func watchFor(check func(context.Context) error) relayWatch {
+	return relayWatch{check: check, proves: func(err error) bool { return errors.Is(err, errRelayDown) },
+		changed: func(context.Context, bool, error) {}, send: func(context.Context) error { return nil }}
+}
+
+// The watch records a relay that is lost once, says nothing while it stays lost, records it again when
+// it is regained; a check cut short by shutdown is not a loss.
 func TestRelayWatchReportsEachChangeOnce(t *testing.T) {
-	probe := errors.New("no container reached the relay")
 	var next error
 	var got []bool
-	w := relayWatch{
-		check: func(context.Context) error { return next },
-		report: func(_ context.Context, reachable bool, err error) {
-			if reachable == (err != nil) {
-				t.Errorf("reachable=%v with err=%v", reachable, err)
-			}
-			got = append(got, reachable)
-		},
+	w := watchFor(func(context.Context) error { return next })
+	w.changed = func(_ context.Context, reachable bool, err error) {
+		if reachable == (err != nil) {
+			t.Errorf("reachable=%v with err=%v", reachable, err)
+		}
+		got = append(got, reachable)
 	}
 	ctx := t.Context()
 	for _, step := range []struct {
 		err  error
 		want []bool
-	}{{nil, nil}, {probe, []bool{false}}, {probe, []bool{false}}, {nil, []bool{false, true}}, {nil, []bool{false, true}}} {
+	}{{nil, nil}, {errRelayDown, []bool{false}}, {errRelayDown, []bool{false}}, {nil, []bool{false, true}}, {nil, []bool{false, true}}} {
 		next = step.err
 		w.once(ctx)
 		if len(got) != len(step.want) {
@@ -168,10 +173,59 @@ func TestRelayWatchReportsEachChangeOnce(t *testing.T) {
 	}
 }
 
+// Only an error that proves the relay down marks it lost; a probe that could not run leaves the state as
+// it was, whichever way it was.
+func TestRelayWatchOnlyAProvenLossMarksItLost(t *testing.T) {
+	var next error
+	changes := 0
+	w := watchFor(func(context.Context) error { return next })
+	w.changed = func(context.Context, bool, error) { changes++ }
+	ctx := t.Context()
+	couldNotRun := errors.New("docker: probe relay: proxy image is not present locally")
+	next = couldNotRun
+	w.once(ctx)
+	if w.lost || changes != 0 {
+		t.Fatalf("a probe that could not run marked the relay lost: lost=%v changes=%d", w.lost, changes)
+	}
+	next = fmt.Errorf("%w (3 attempts)", errRelayDown)
+	w.once(ctx)
+	if !w.lost || changes != 1 {
+		t.Fatalf("a proven loss: lost=%v changes=%d", w.lost, changes)
+	}
+	next = couldNotRun
+	w.once(ctx)
+	if !w.lost || changes != 1 {
+		t.Errorf("a probe that could not run changed a lost relay: lost=%v changes=%d", w.lost, changes)
+	}
+}
+
+// A report that fails stays pending and is sent at a later check whose state is unchanged, once; no
+// change is recorded twice.
+func TestRelayWatchRetriesAReportThatFailed(t *testing.T) {
+	var next = errRelayDown
+	changes, sends := 0, 0
+	sendErr := errors.New("session ended")
+	w := watchFor(func(context.Context) error { return next })
+	w.changed = func(context.Context, bool, error) { changes++ }
+	w.send = func(context.Context) error { sends++; return sendErr }
+	ctx := t.Context()
+	w.once(ctx)
+	w.once(ctx)
+	if changes != 1 || sends != 2 || !w.pending {
+		t.Fatalf("while the send fails: changes=%d sends=%d pending=%v", changes, sends, w.pending)
+	}
+	sendErr = nil
+	w.once(ctx)
+	w.once(ctx)
+	if changes != 1 || sends != 3 || w.pending {
+		t.Errorf("after it succeeds: changes=%d sends=%d pending=%v, want 1, 3, false", changes, sends, w.pending)
+	}
+}
+
 // A session coming up (kick) and the interval each run a check; nothing runs before either.
 func TestRelayWatchChecksOnKickAndOnTheInterval(t *testing.T) {
 	checks := make(chan struct{}, 8)
-	w := relayWatch{every: 20 * time.Millisecond, check: func(context.Context) error { checks <- struct{}{}; return nil }, report: func(context.Context, bool, error) {}}
+	w := watchFor(func(context.Context) error { checks <- struct{}{}; return nil })
 	kick := make(chan struct{}, 1)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -189,7 +243,8 @@ func TestRelayWatchChecksOnKickAndOnTheInterval(t *testing.T) {
 		t.Fatal("a session coming up did not re-check the relay")
 	}
 	cancel()
-	w2 := relayWatch{every: 10 * time.Millisecond, check: func(context.Context) error { checks <- struct{}{}; return nil }, report: func(context.Context, bool, error) {}}
+	w2 := watchFor(func(context.Context) error { checks <- struct{}{}; return nil })
+	w2.every = 10 * time.Millisecond
 	ctx2, cancel2 := context.WithCancel(t.Context())
 	defer cancel2()
 	go w2.run(ctx2, nil)
@@ -215,7 +270,8 @@ func TestRelayOnlineKicksTheWatch(t *testing.T) {
 // watchRelay runs the watch beside the runner's own loop and stops it with that loop's context.
 func TestWatchRelayRunsBesideTheLoop(t *testing.T) {
 	checked := make(chan struct{}, 1)
-	w := relayWatch{every: time.Hour, check: func(context.Context) error { checked <- struct{}{}; return nil }, report: func(context.Context, bool, error) {}}
+	w := watchFor(func(context.Context) error { checked <- struct{}{}; return nil })
+	w.every = time.Hour
 	kick := make(chan struct{}, 1)
 	ctx, cancel := context.WithCancel(t.Context())
 	loop := watchRelay(func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }, w, kick)

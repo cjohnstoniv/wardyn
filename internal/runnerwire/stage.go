@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"net"
+	"slices"
 	"time"
 )
 
@@ -125,6 +126,24 @@ func authStage(err error) Stage {
 	case errors.Is(err, ErrAuth):
 		return StageAuth
 	case errors.Is(err, ErrGoaway), errors.Is(err, ErrRevoked):
+		return StageRegistration
+	}
+	return StageSession
+}
+
+// registrationReasons are the GOAWAY reasons that mean the organisation will not admit this registration.
+// An unclaimed runner is sent its AUTH_OK first and then the GOAWAY, so the refusal arrives mid-session.
+var registrationReasons = []string{ReasonRegistrationLapsed, "runner_unclaimed", "runner_owner_inactive", "runner_revoked"}
+
+// serveStage is the Stage a session that ended with err stopped at: registration when the organisation
+// sent a GOAWAY for one of registrationReasons or revoked the runner, else session. It reads the typed
+// reason code only.
+func serveStage(err error) Stage {
+	var g *goawayReasonError
+	switch {
+	case errors.Is(err, ErrRevoked):
+		return StageRegistration
+	case errors.As(err, &g) && slices.Contains(registrationReasons, g.reason):
 		return StageRegistration
 	}
 	return StageSession
