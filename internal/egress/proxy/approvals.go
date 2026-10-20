@@ -46,10 +46,11 @@ const (
 )
 
 // approvalClient implements the first-use approval flow against the control
-// plane's internal approval endpoints. It NEVER blocks a request: on an
+// plane's internal approval endpoints. It never holds a request for a decision: on an
 // unknown host it raises an egress_domain ApprovalRequest, caches the pending
-// id, and returns Pending immediately. Subsequent requests to that host
-// lazily poll the approval and transition the cached state.
+// id, and returns Pending without waiting for one. Subsequent requests to that host
+// lazily poll the approval and transition the cached state. The raise and the poll
+// are single round trips bounded by approvalCallTimeout.
 type approvalClient struct {
 	base   string // control plane base URL
 	token  *tokenSource
@@ -180,6 +181,11 @@ var approvalCapWarnOnce sync.Once
 // flowing until proxy/run restart (fail-open staleness). Fresh approvals inside
 // the window are still served from cache with no per-request network call.
 const approvalTTL = 60 * time.Second
+
+// approvalCallTimeout bounds the raise and the re-check Resolve runs on a request's own path, so a
+// stalled control plane delays that request by at most this and no more; the client's 130 s ceiling
+// is sized for forwards, not for this. A var only so a test need not wait it out.
+var approvalCallTimeout = 5 * time.Second
 
 func newApprovalClient(base string, token *tokenSource, runID uuid.UUID, client *http.Client) *approvalClient {
 	return &approvalClient{
@@ -457,7 +463,9 @@ func (a *approvalClient) Resolve(ctx context.Context, host string) resolveResult
 	case needRaise:
 		// We already claimed apPending under the lock above, so exactly one
 		// goroutine reaches here for the first use of host — no duplicate raise.
-		newID, err := a.raise(ctx, host)
+		raiseCtx, cancel := context.WithTimeout(ctx, approvalCallTimeout)
+		newID, err := a.raise(raiseCtx, host)
+		cancel()
 		a.mu.Lock()
 		defer a.mu.Unlock()
 		st = a.hosts[host]
@@ -490,7 +498,9 @@ func (a *approvalClient) Resolve(ctx context.Context, host string) resolveResult
 		// A pending approval, or an approved entry past its TTL being
 		// re-validated; a transient poll error leaves the prior state (a
 		// deliberate availability-over-strictness tradeoff under a persistent CP outage).
-		decided, newState, polledScope, polledExpiry := a.poll(ctx, id)
+		pollCtx, cancel := context.WithTimeout(ctx, approvalCallTimeout)
+		decided, newState, polledScope, polledExpiry := a.poll(pollCtx, id)
+		cancel()
 		a.mu.Lock()
 		defer a.mu.Unlock()
 		st = a.hosts[host]
