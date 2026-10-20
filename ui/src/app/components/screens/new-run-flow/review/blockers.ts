@@ -71,6 +71,8 @@ export function specifies(intent: RunIntent, field: string): boolean {
 export interface BlockerInput {
   issues: readonly StepIssue[];
   unsupported: readonly string[];
+  /** The refusal for harnesses no one declared image carries together (combinationReason), when the draft has them. */
+  combination?: string;
   templateNeeds: readonly TemplateSetupNeed[];
   /** The template's needs are unread or could not be read: fail closed with the stale line. */
   templateUnread?: boolean;
@@ -86,6 +88,7 @@ export function buildBlockers(input: BlockerInput): Blocker[] {
   for (const i of input.issues) {
     out.push({ id: `local:${i.code}`, kind: "local", text: ISSUE_TEXT[i.code], to: locationOfHome(i.home) });
   }
+  if (input.combination) out.push({ id: "local:combination", kind: "local", text: input.combination, to: locationOfHome("harnesses") });
   for (const path of input.unsupported) {
     out.push({ id: `unsupported:${path}`, kind: "unsupported", text: NR_REVIEW.BLOCKER_UNSUPPORTED(path), to: locationOfHome(homeOfPath(path) ?? "document"), field: path });
   }

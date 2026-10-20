@@ -192,12 +192,13 @@ export function LiveApprovals({
   // The signed-in viewer's own subject — see the `run` prop's doc above for
   // why the ADO card needs both.
   const principal = usePrincipal();
-  // Only a run with two or more agents says which one asked.
+  // Only a tool or MCP call on a run with two or more agents says which one asked; plain network
+  // egress has no per-harness credential, so an egress row never names an agent.
   const agentName = useAgentName();
   const agentCount = run?.agents?.length ?? 0;
   const asker = (a: ApprovalRequest): string | undefined => {
     const harness = a.requested_scope?.harness;
-    return agentCount >= 2 && typeof harness === "string" && harness ? harness : undefined;
+    return a.kind === "tool_call" && agentCount >= 2 && typeof harness === "string" && harness ? harness : undefined;
   };
   const [pending, setPending] = React.useState<ApprovalRequest[]>([]);
   const [busy, setBusy] = React.useState<string | null>(null);

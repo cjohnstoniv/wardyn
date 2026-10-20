@@ -18,12 +18,15 @@ import { NR_SHAPE } from "../../../wardyn/copy/new-run/shape";
 import { NR_TEMPLATES } from "../../../wardyn/copy/new-run/templates";
 import type { PreflightResult } from "../../../../lib/types/preflight";
 import type { Template, TemplateKind, TemplatePublish } from "../../../../lib/types/templates";
+import { harnessIds } from "../lenses/lens-keys";
 import { intentToWire } from "../draft/intent-to-wire";
 import { launchGateOpen } from "../draft/launch-gate";
 import type { NewRunLocation } from "../draft/new-run-url";
 import { useDraftIdentity, useIntentChecks } from "../draft/use-intent-checks";
 import { useLocalIssues, useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../new-run-route";
+import { combinationReason, loadRoster } from "../steps/harnesses/roster";
 import { templateSource } from "../steps/shape/shape-sources";
+import { useLoaded } from "../steps/shape/use-loaded";
 import { StepShell, useAnnounce } from "../steps/step-shell";
 import { BLOCKERS_ID, BlockerList } from "./blocker-list";
 import { buildBlockers, groupsBlockedBy, missingSetup } from "./blockers";
@@ -85,12 +88,17 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
   });
   const pre = checks.preflightResult as PreflightResult | null as ReviewPreflight | null;
   const template = useTemplateNeeds(draft.origin, draft.intent);
+  // Harnesses no declared image carries together: the Harnesses step refuses them, and a draft that got here another way is held too.
+  const roster = useLoaded(loadRoster);
+  const ids = harnessIds(draft.intent);
+  const combination = roster.status === "ready" ? combinationReason(roster.value, ids, ids[0]) : undefined;
 
   const gate = (blockers: number) =>
     launchGateOpen({ blockers, preflight: checks.preflightRead, generation: checks.generation, now: Date.now() });
   const inputs = {
     issues,
     unsupported: wire.unsupported,
+    combination,
     templateNeeds: template.needs,
     templateUnread: template.unread,
     // A credential refusal is not a blocker: Launch's own refusal opens the provider's sign-in door.

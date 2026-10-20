@@ -121,10 +121,11 @@ export function PendingCard({
       reauth.provider
     : "";
   const runEnded = !!run && isTerminalRunState(run.state);
-  // Only a run with two or more agents says which one asked.
+  // Only a tool or MCP call on a run with two or more agents says which one asked; plain network
+  // egress has no per-harness credential, so an egress row never names an agent.
   const agentName = useAgentName();
   const agentCount = run?.agents?.length ?? 0;
-  const asker = agentCount >= 2 && typeof scope.harness === "string" && scope.harness ? scope.harness : undefined;
+  const asker = item.kind === "tool_call" && agentCount >= 2 && typeof scope.harness === "string" && scope.harness ? scope.harness : undefined;
   const canDecide = kindDecidable && !hostUngranted && !runEnded;
 
   // S10 — an Azure DevOps escalation (or the Entra-consent chain it can

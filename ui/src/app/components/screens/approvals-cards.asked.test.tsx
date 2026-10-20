@@ -22,11 +22,15 @@ const item = makeApproval({
   id: "a1", run_id: "r1", kind: "tool_call", state: "PENDING", requested_at: "",
   requested_scope: { tool: "Bash", cmd: "rm -rf node_modules && npm ci", harness: "codex-cli" },
 });
-const show = () =>
+const egress = makeApproval({
+  id: "a2", run_id: "r1", kind: "egress_domain", state: "PENDING", requested_at: "",
+  requested_scope: { host: "registry.npmjs.org", harness: "codex-cli" },
+});
+const show = (it = item) =>
   render(
     <MemoryRouter>
       <ModelAccessProvider status={{ harnesses: SCENARIO_HARNESSES.full } as SetupStatus} onRefresh={() => {}}>
-        <PendingCard item={item} caps={null} onAct={() => {}} onAdoDecide={async () => {}} onPushDecide={async () => {}} />
+        <PendingCard item={it} caps={null} onAct={() => {}} onAdoDecide={async () => {}} onPushDecide={async () => {}} />
       </ModelAccessProvider>
     </MemoryRouter>,
   );
@@ -42,6 +46,13 @@ describe("PendingCard: the asking agent", () => {
   it("says nothing on a run with one agent", async () => {
     mockAgents = undefined;
     show();
+    await screen.findByText("Login test fix");
+    expect(screen.queryByText(/Asked by/)).toBeNull();
+  });
+
+  it("says nothing on an egress row, even on a run with two agents", async () => {
+    mockAgents = [{ agent: "claude-code" }, { agent: "codex-cli" }];
+    show(egress);
     await screen.findByText("Login test fix");
     expect(screen.queryByText(/Asked by/)).toBeNull();
   });

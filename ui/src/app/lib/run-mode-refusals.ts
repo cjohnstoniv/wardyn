@@ -27,6 +27,8 @@ export const RUN_MODE_REASON = {
   HARNESS_SET_NO_IMAGE: "harness_set_no_image",
   HARNESS_SET_CUSTOM_IMAGE: "harness_set_custom_image",
   HARNESS_PROVIDERS_CONFLICT: "harness_providers_conflict",
+  /** tools[].task while the server's WARDYN_MULTI_AGENT_TASKS switch is off. */
+  MULTI_AGENT_TASKS_OFF: "multi_agent_tasks_off",
   /** The run's policy writes a disk size that the runner it lands on cannot cap. */
   MAIN_DRIVE_UNENFORCEABLE: "main_drive_unenforceable",
 } as const;

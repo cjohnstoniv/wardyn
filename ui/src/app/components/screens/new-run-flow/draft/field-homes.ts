@@ -103,7 +103,7 @@ export const HOME_OF_REASON: Record<KnownLaunchReason, FieldHome> = {
   template_not_found: "review", template_revision_conflict: "review", templates_unavailable: "review",
   template_name_taken: "review", template_limit_reached: "review", template_policy_field_refused: "review",
   harness_not_installed: "harnesses", harness_set_no_image: "harnesses", harness_set_custom_image: "harnesses",
-  harness_providers_conflict: "harnesses",
+  harness_providers_conflict: "harnesses", multi_agent_tasks_off: "harnesses",
 };
 
 /** The one field a refusal names, where it names one: the run's runner, chosen through its pool. */
