@@ -215,6 +215,7 @@ const (
 	reasonDesktopTransferUnavailable           = "desktop_transfer_unavailable"             // the run declares no UI app, so it has no desktop
 	reasonDesktopTransferNotFound              = "desktop_transfer_not_found"               // no regular file of that name in the transfer folder
 	reasonDesktopTransferFailed                = "desktop_transfer_failed"                  // the in-sandbox half of a transfer failed
+	reasonDesktopRulesUnreadable               = "desktop_rules_unreadable"                 // the run's desktop rules could not be read (a failed read, or no recorded policy): the desktop socket and the Files panel refuse
 	reasonIntegrationIDRetired                 = "integration_id_retired"                   // integration_id no longer chooses a model credential; a run's model provider does
 	reasonRunKillAlreadyTerminal               = "run_kill_already_terminal"                // the run is already in a terminal state other than killed
 	reasonRunKillStateChanged                  = "run_kill_state_changed"                   // the run moved to another state between the read and the write

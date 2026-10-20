@@ -6,10 +6,12 @@ package api
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -18,6 +20,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/rfbfilter"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -172,9 +176,14 @@ func desktopHarness(t *testing.T, backend http.Handler, desktop *types.DesktopCo
 // upgradeApp sends the browser's WebSocket upgrade for app (offering compression, as browsers do).
 func upgradeApp(t *testing.T, h *uiHarness, app string) desktopSession {
 	t.Helper()
+	return upgradeAppWith(t, h, app, h.openAppSession(app))
+}
+
+// upgradeAppWith is upgradeApp on a session already opened.
+func upgradeAppWith(t *testing.T, h *uiHarness, app string, cookie *http.Cookie) desktopSession {
+	t.Helper()
 	gw := httptest.NewServer(h.gateway)
 	t.Cleanup(gw.Close)
-	cookie := h.openAppSession(app)
 	conn, err := net.Dial("tcp", gw.Listener.Addr().String())
 	if err != nil {
 		t.Fatalf("dial gateway: %v", err)
@@ -351,5 +360,70 @@ func TestUIGateway_ClipboardClosesADesktopThatIsNotRFB(t *testing.T) {
 	}
 	if len(rows) != 1 || !strings.Contains(string(rows[0].Data), `"reason":"not_rfb"`) || strings.Contains(string(rows[0].Data), "direction") {
 		t.Fatalf("ui.clipboard.transfer failure rows = %+v", rows)
+	}
+}
+
+// desktopReadStore is the UI harness's store with the envelope read broken on demand: readErr fails
+// it, noEnvelope answers a log with no envelope in it.
+type desktopReadStore struct {
+	*uiMemStore
+	mu         sync.Mutex
+	readErr    error
+	noEnvelope bool
+}
+
+func (s *desktopReadStore) set(readErr error, noEnvelope bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.readErr, s.noEnvelope = readErr, noEnvelope
+}
+
+func (s *desktopReadStore) QueryAuditEvents(ctx context.Context, runID uuid.UUID, limit int) ([]types.AuditEvent, error) {
+	s.mu.Lock()
+	readErr, none := s.readErr, s.noEnvelope
+	s.mu.Unlock()
+	if readErr != nil || none {
+		return nil, readErr
+	}
+	return s.uiMemStore.QueryAuditEvents(ctx, runID, limit)
+}
+
+// A session opened while the rules could be read, whose desktop socket is upgraded while they
+// cannot (the read fails, or the log holds no envelope), is refused with 503: never relayed under
+// the defaults, which allow paste in where the run blocks it. No cut text reaches the desktop.
+// Once the read answers again, the desktop opens.
+func TestUIGateway_ClipboardRefusesWhenTheRulesCannotBeRead(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		readErr    error
+		noEnvelope bool
+	}{
+		{"the read fails", errors.New("audit store unavailable"), false},
+		{"the run has no envelope", nil, true},
+	} {
+		offered, pasted := make(chan string, 1), make(chan []byte, 1)
+		h := desktopHarness(t, rfbDesktopBackend(t, offered, pasted, false),
+			&types.DesktopControls{PasteIn: types.TransferBlocked, Upload: types.TransferBlocked})
+		st := &desktopReadStore{uiMemStore: h.store}
+		h.srv.cfg.Store = st
+		cookie := h.openAppSession("novnc")
+		st.set(c.readErr, c.noEnvelope)
+		ds := upgradeAppWith(t, h, "novnc", cookie)
+		<-offered
+		body, _ := io.ReadAll(ds.resp.Body)
+		if ds.resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(string(body), reasonDesktopRulesUnreadable) {
+			t.Fatalf("%s: upgrade = %d %s, want 503 %s", c.name, ds.resp.StatusCode, body, reasonDesktopRulesUnreadable)
+		}
+		_, _ = ds.conn.Write(wsFrame(rfbCut(6, pasteSentinel), true))
+		select {
+		case got := <-pasted:
+			t.Fatalf("%s: the desktop got %q through a refused socket", c.name, got)
+		case <-time.After(300 * time.Millisecond):
+		}
+		st.set(nil, false)
+		if ds := openDesktop(t, h, "novnc"); ds.resp.StatusCode != http.StatusSwitchingProtocols {
+			t.Fatalf("%s, recovered: upgrade = %d, want 101", c.name, ds.resp.StatusCode)
+		}
+		<-offered
 	}
 }

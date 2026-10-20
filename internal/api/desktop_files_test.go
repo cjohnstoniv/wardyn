@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -23,13 +24,25 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// envelopeStore answers the run's run.policy.resolve envelope, the source desktopRun reads.
+// envelopeStore answers the run's run.policy.resolve envelope, the source desktopRun reads, or
+// readErr, or (noEnvelope) a log with no envelope in it. With answered > 0 it answers that many
+// reads and fails every later one.
 type envelopeStore struct {
 	store.Store
-	spec types.RunPolicySpec
+	spec            types.RunPolicySpec
+	readErr         error
+	noEnvelope      bool
+	reads, answered int
 }
 
 func (s *envelopeStore) QueryAuditEvents(_ context.Context, runID uuid.UUID, _ int) ([]types.AuditEvent, error) {
+	s.reads++
+	if s.answered > 0 && s.reads > s.answered {
+		return nil, errors.New("audit store unavailable")
+	}
+	if s.readErr != nil || s.noEnvelope {
+		return nil, s.readErr
+	}
 	data, _ := json.Marshal(s.spec)
 	return []types.AuditEvent{{ID: uuid.New(), RunID: &runID, Action: "run.policy.resolve", Outcome: "success", Data: data}}, nil
 }
@@ -294,5 +307,58 @@ func TestDesktopFiles_OnlyWhoMayEnterTheDesktopReachesIt(t *testing.T) {
 		if env.folder.execs != 0 || len(env.transferRows("upload"))+len(env.transferRows("download")) != 0 {
 			t.Fatalf("a refused request reached the sandbox (%d execs) or wrote transfer rows", env.folder.execs)
 		}
+	}
+}
+
+// When the run's desktop rules cannot be read (the read fails, or the log holds no envelope), every
+// Files endpoint refuses before the sandbox, whatever the rules would have said: never the defaults,
+// which allow upload. Once the read answers again, the stored rules decide.
+func TestDesktopFiles_UnreadableRulesRefuseEveryTransfer(t *testing.T) {
+	refused := func(w *httptest.ResponseRecorder) bool {
+		return w.Code == http.StatusServiceUnavailable && reasonOf(t, w) == reasonDesktopRulesUnreadable
+	}
+	for _, c := range []struct {
+		name string
+		fail func(*envelopeStore)
+	}{
+		{"the read fails", func(s *envelopeStore) { s.readErr = errors.New("audit store unavailable") }},
+		{"the run has no envelope", func(s *envelopeStore) { s.noEnvelope = true }},
+	} {
+		for _, rule := range []types.TransferRule{types.TransferBlocked, types.TransferAllowed} {
+			e := newDesktopFilesEnv(t, &types.DesktopControls{PasteIn: rule, Upload: rule, Download: rule})
+			st := e.srv.cfg.Store.(*envelopeStore)
+			c.fail(st)
+			for _, r := range []struct{ method, name, body string }{
+				{http.MethodGet, "", ""}, {http.MethodPut, "in.txt", fileSentinel}, {http.MethodGet, "agent-report.csv", ""},
+			} {
+				if w := doSSO(t, e.srv, r.method, e.path(r.name), e.ses["owner"], r.body); !refused(w) {
+					t.Errorf("%s, upload %s: %s %s = %d %s, want 503 %s", c.name, rule, r.method, r.name, w.Code, w.Body.String(), reasonDesktopRulesUnreadable)
+				}
+			}
+			if e.folder.execs != 0 || e.folder.files["in.txt"] != nil {
+				t.Fatalf("%s, upload %s: %d execs reached the sandbox", c.name, rule, e.folder.execs)
+			}
+			st.readErr, st.noEnvelope = nil, false
+			w := doSSO(t, e.srv, http.MethodPut, e.path("in.txt"), e.ses["owner"], fileSentinel)
+			if rule == types.TransferBlocked && (w.Code != http.StatusForbidden || reasonOf(t, w) != reasonDesktopTransferBlocked) {
+				t.Errorf("%s, recovered: the stored upload block must decide: %d %s", c.name, w.Code, w.Body.String())
+			}
+			if rule == types.TransferAllowed && (w.Code != http.StatusOK || string(e.folder.files["in.txt"]) != fileSentinel) {
+				t.Errorf("%s, recovered: an allowed upload must land: %d %s", c.name, w.Code, w.Body.String())
+			}
+		}
+	}
+}
+
+// One read decides a transfer: when the read that found the run's desktop is the last one that
+// answers, the upload is still judged by the stored block, never by defaults a later failed read
+// would fall back to. Nothing reaches the sandbox.
+func TestDesktopFiles_OneReadDecidesTheTransfer(t *testing.T) {
+	e := newDesktopFilesEnv(t, &types.DesktopControls{Upload: types.TransferBlocked})
+	st := e.srv.cfg.Store.(*envelopeStore)
+	st.answered = 1
+	w := doSSO(t, e.srv, http.MethodPut, e.path("in.txt"), e.ses["owner"], fileSentinel)
+	if w.Code != http.StatusForbidden || reasonOf(t, w) != reasonDesktopTransferBlocked || e.folder.execs != 0 {
+		t.Fatalf("an upload the stored rules block: %d %s (%d execs), want 403 %s and no exec", w.Code, w.Body.String(), e.folder.execs, reasonDesktopTransferBlocked)
 	}
 }

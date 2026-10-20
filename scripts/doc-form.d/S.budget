@@ -183,7 +183,9 @@
 # docs/sdk.md 19545 adds 2 (0.10 Linux VM): the machine_kind_unknown reason.
 # docs/sdk.md 19570 adds 25 (0.10 Linux VM): interactive_start agent on a Linux VM is a placement_capability.
 # docs/sdk.md 19770 = ours 19570 + theirs 19743 - base 19543 at the 0.10 W2 merge of CTL-A onto DSK-A.
-docs/sdk.md=19770 share=21
+# docs/sdk.md 19772 adds 29 (0.10 CTL-A r3): desktop_rules_unreadable, the desktop's refusal when its rules cannot be read (#2967).
+# docs/sdk.md 19799 = ours 19770 + theirs 19772 - base 19743 at the 0.10 W2 merge of CTL-A r3 onto DSK-A.
+docs/sdk.md=19799 share=21
 # docs/sdk.md 18691 adds 28 over 18663, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
