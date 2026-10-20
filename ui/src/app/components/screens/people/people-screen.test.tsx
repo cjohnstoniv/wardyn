@@ -154,6 +154,20 @@ describe("the people table", () => {
     await waitFor(() => expect(listMock).toHaveBeenLastCalledWith(expect.objectContaining({ q: "ana", state: "deactivated" })));
   });
 
+  it("keeps the same rows mounted while a re-read is in flight, so the opener a drawer returns focus to survives", async () => {
+    renderScreen();
+    const opener = await screen.findByRole("button", { name: "ana@example.com" });
+    let answer!: (page: { people: PersonSummary[] }) => void;
+    listMock.mockReturnValueOnce(new Promise((done) => { answer = done; }));
+    setField(screen.getByRole("textbox", { name: "Search people" }), "ana");
+    await waitFor(() => expect(listMock).toHaveBeenLastCalledWith(expect.objectContaining({ q: "ana" })));
+    expect(opener.isConnected).toBe(true);
+    expect(screen.getByRole("button", { name: "ana@example.com" })).toBe(opener);
+    answer({ people: [ROWS[0]] });
+    await waitFor(() => expect(screen.queryByText("new@example.com")).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "ana@example.com" })).toBe(opener);
+  });
+
   it("pages: Load more appends the next page by cursor", async () => {
     listMock.mockResolvedValueOnce({ people: [ROWS[0]], next_cursor: "c1" }).mockResolvedValueOnce({ people: [ROWS[1]] });
     const user = userEvent.setup();

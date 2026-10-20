@@ -140,6 +140,11 @@ func TestPlacement_RefusedAtBoot(t *testing.T) {
 	}{
 		{"apparmor annotation", `{"podAnnotations": {"container.apparmor.security.beta.kubernetes.io/agent": "unconfined"}}`, "container.apparmor.security.beta.kubernetes.io/agent"},
 		{"seccomp annotation", `{"podAnnotations": {"seccomp.security.alpha.kubernetes.io/pod": "unconfined"}}`, "seccomp.security.alpha.kubernetes.io/pod"},
+		{"kata annotation", `{"podAnnotations": {"io.katacontainers.config.hypervisor.virtio_fs_extra_args": "[]"}}`, "io.katacontainers.config.hypervisor.virtio_fs_extra_args"},
+		{"cri-o annotation", `{"podAnnotations": {"io.kubernetes.cri-o.Devices": "/dev/fuse"}}`, "io.kubernetes.cri-o.Devices"},
+		{"gvisor annotation", `{"podAnnotations": {"dev.gvisor.flag.directfs": "true"}}`, "dev.gvisor.flag.directfs"},
+		{"containerd annotation, any case", `{"podAnnotations": {"IO.Containerd.x": "y"}}`, "IO.Containerd.x"},
+		{"runtime namespace as a label", `{"podLabels": {"dev.gvisor.team": "x"}}`, ""},
 		{"k8s.io annotation", `{"podAnnotations": {"foo.k8s.io/x": "y"}}`, "foo.k8s.io/x"},
 		{"kubernetes.io label", `{"podLabels": {"app.kubernetes.io/name": "x"}}`, "app.kubernetes.io/name"},
 		{"safe-to-evict as a label", `{"podLabels": {"cluster-autoscaler.kubernetes.io/safe-to-evict": "true"}}`, ""},
@@ -249,5 +254,17 @@ func TestPlacement_RunnerArchRefusals(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestPlacement_ApplyKeepsAnnotationsWardynSet: an operator annotation never overwrites one the pod already
+// carries.
+func TestPlacement_ApplyKeepsAnnotationsWardynSet(t *testing.T) {
+	p := Placement{PodAnnotations: map[string]string{"team.example.com/owner": "platform", "dev.gvisor.spec.mount.drive.directfs": "on"}}
+	pod := &corev1.Pod{}
+	pod.Annotations = map[string]string{"dev.gvisor.spec.mount.drive.directfs": "off"}
+	p.apply(pod, uuid.New(), componentAgent, nil)
+	if pod.Annotations["dev.gvisor.spec.mount.drive.directfs"] != "off" || pod.Annotations["team.example.com/owner"] != "platform" {
+		t.Errorf("annotations = %v", pod.Annotations)
 	}
 }

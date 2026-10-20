@@ -290,6 +290,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_HA` | bool | `false` | multi-replica mode (flag `-ha`): skip the single-instance lock so several wardynd replicas can serve one database; refused at boot unless the runner is the Kubernetes substrate. [Details](#wardyn_ha) |
 | `WARDYN_GOVERN_ADMIN_RUNS` | bool | (unset) | constrained-admin mode: govern every run an SSO admin or an admin-role personal API token launches, like a member's (flag `-govern-admin-runs`). **With OIDC unset the switch binds nobody**, and boot WARNs it (`warnGovernAdminRunsUnbound`, [`cmd/wardynd/boot_posture.go`](../cmd/wardynd/boot_posture.go)). [Details](#wardyn_govern_admin_runs) |
 | `WARDYN_GOVERN_ADMIN_RUNS_EXEMPT` | CSV | (unset) | the lanes left ungoverned under `WARDYN_GOVERN_ADMIN_RUNS`; the only value is `recording` (flag `-govern-admin-runs-exempt`). [Details](#wardyn_govern_admin_runs_exempt) |
+| `WARDYN_EGRESS_PORT_RULE` | enum | `off` | container runs' egress port rule, `off`, `dry_run` or `on` (flag `-egress-port-rule`); the proxy turns it on for runs dispatched as a desktop VM. [Details](#wardyn_egress_port_rule) |
 | `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` | string (URL) | (unset) | **TEST ONLY.** Re-points **both** AWS IAM Identity Center services at this base URL (flag `-aws-sso-endpoint-override`; `ValidateAWSSSOEndpointOverride`, [`internal/api/awssso_endpoint.go`](../internal/api/awssso_endpoint.go)); **REFUSED unless `WARDYN_ALLOW_TEST_ENDPOINTS=true`**. [Details](#wardyn_aws_sso_endpoint_override) |
 | `WARDYN_AWS_SSO_PROXY_INJECT` | enum | `on` | a captured AWS SSO session is injected **proxy-side** (flag `-aws-sso-proxy-inject`). `off` was removed in 0.10.0 and refuses boot. On a private-endpoint estate whose corporate proxy is also TLS-intercepting, the MITM re-origination fails closed unless `WARDYN_TRUSTED_CA_FILE` is ALSO staged. [Details](#wardyn_aws_sso_proxy_inject) |
 | `WARDYN_AWS_SSO_REFRESH_SKEW` | duration | `10m` | how long before a captured AWS SSO session's access token expires Wardyn renews it, at dispatch and for a live run (flag `-aws-sso-refresh-skew`); `5m` to `30m`. [Details](#wardyn_aws_sso_refresh_skew) |
@@ -324,7 +325,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_UI_SANDBOX_SESSION_TTL` | duration | `8h` | how long a UI-sandbox relay session stays usable (flag `-ui-sandbox-session-ttl`); shortening this binds the cookies already in browsers. [Details](#wardyn_ui_sandbox_session_ttl) |
 | `WARDYN_UI_SANDBOX_STRIP_COOKIES` | string | (unset) | inbound cookie policy for the UI-sandbox gateway (flag `-ui-sandbox-strip-cookies`): `allow:<names>` forwards only the listed cookies, `deny:<names>` strips them. Unset forwards every cookie except `wardyn_*`. [Details](#wardyn_ui_sandbox_strip_cookies) |
 | `WARDYN_METRICS_LISTEN` | string | (unset) | dedicated metrics listener address (flag `-metrics-listen`); empty means off. Set, it serves `GET /metrics` in plain HTTP with no credential, and boot refuses an address shared with another listener (`validateMetricsListenConfig`, [`cmd/wardynd/boot_metrics.go`](../cmd/wardynd/boot_metrics.go)). [Details](#wardyn_metrics_listen) |
-| `WARDYN_TRUSTED_CA_FILE` | string (path) | (unset) | path to a PEM bundle of additional trusted roots, additive to the system roots (flag `-trusted-ca-file`; `loadTrustedCA`, [`cmd/wardynd/trusted_ca.go`](../cmd/wardynd/trusted_ca.go)); a missing file or one with no parseable certificate refuses boot. [Details](#wardyn_trusted_ca_file) |
+| `WARDYN_TRUSTED_CA_FILE` | string (path) | (unset) | path to a PEM bundle of additional trusted roots, additive to the system roots (flag `-trusted-ca-file`; `loadTrustedCA`, [`cmd/wardynd/trusted_ca.go`](../cmd/wardynd/trusted_ca.go)); a missing or unparseable file refuses boot; a group- or world-writable one warns. [Details](#wardyn_trusted_ca_file) |
+| `WARDYN_TRUSTED_CA_REFUSE_WRITABLE` | bool | `false` | refuse boot, instead of warning, when `WARDYN_TRUSTED_CA_FILE` is group- or world-writable (flag `-trusted-ca-refuse-writable`). [Details](#wardyn_trusted_ca_refuse_writable) |
 | `WARDYN_UPSTREAM_PROXY` | string (URL) | (unset) | **`wardyn-runnerd serve`** (flag `--upstream-proxy`): this runner's own corporate upstream proxy, `http://[user:pass@]host[:port]`, that every run's proxy chains its egress through. Checked at startup with the proxy's own rule; never sent to the organisation. [Details](#wardyn_upstream_proxy) |
 | `WARDYN_DAEMON_PROXY_URL` | string (URL) | (unset = direct) | the forward proxy wardynd's own outbound HTTP calls traverse (flag `-daemon-proxy-url`; `installDaemonProxy`, [`cmd/wardynd/daemon_proxy.go`](../cmd/wardynd/daemon_proxy.go)); a malformed value refuses boot. [Details](#wardyn_daemon_proxy_url) |
 | `WARDYN_DAEMON_NO_PROXY` | string (CSV) | (unset) | destinations `WARDYN_DAEMON_PROXY_URL` must not be used for, in `NO_PROXY` spelling (flag `-daemon-no-proxy`; `x/net/http/httpproxy` semantics). Wardynd appends `KUBERNETES_SERVICE_HOST`, any `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` or `WARDYN_OIDC_INTERNAL_ISSUER` host, and the AWS link-local credential endpoints. Ignored when the proxy URL is unset |
@@ -741,6 +743,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Where the `k8s` substrate puts every pod it creates: the agent pod, the proxy pod and the boot-time egress canary (`-tags k8s`).
 - An object with any of `nodeSelector`, `tolerations`, `affinity`, `priorityClassName`, `podAnnotations`, `podLabels` (Kubernetes field shapes); an unknown field is refused.
 - Boot refuses a `podLabels` key that is `wardyn.managed`, `wardyn.run-id` or `wardyn.component` (the run NetworkPolicies select on them), and any annotation or label key under `kubernetes.io/` or `k8s.io/` other than `cluster-autoscaler.kubernetes.io/safe-to-evict`, naming the key.
+- Boot also refuses a `podAnnotations` key starting `io.katacontainers.`, `io.kubernetes.cri-o.`, `io.kubernetes.cri.`, `io.containerd.`, `dev.gvisor.` or `run.oci.`: a container runtime reads those.
 - Chart: `k8s.sandbox.*`.
 
 ### `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL`
@@ -997,6 +1000,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - A member source is allowed only if its **canonicalized real path** (`filepath.EvalSymlinks`) is inside one of these
 - So a symlink *inside* a root pointing *out* of every root is refused
 - And never if it is or traverses a credential dotfile path (`.ssh`, `.aws`, `.claude`, `.wardyn`, `.gnupg`, `.docker`, `.kube`, `.config/gh`, `.netrc`, `.git-credentials`, `.git/config`), even when a root is too wide.
+- The same list covers `.codex`, `.azure`, `.gemini`, `.npmrc`, `.pypirc` and `.config/gcloud`.
 - Checked at onboarding, again at run-create on the resolved spec, and a **third** time in the docker driver immediately before the bind.
 - Unset (the default) fails closed: a member can still onboard repos and use operator-owned workspaces.
 - Use a dedicated projects directory — **never `$HOME` or `/`**; boot WARNs about `/` and the daemon's `$HOME`, not a person's, but permits
@@ -1508,6 +1512,15 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Any other value exits 2 at boot; set without `WARDYN_GOVERN_ADMIN_RUNS` it does nothing and boot warns.
 - Not a secret, so it has no `_FILE` twin (flag `-govern-admin-runs-exempt`).
 
+### `WARDYN_EGRESS_PORT_RULE`
+
+- The egress port rule for container runs (flag `-egress-port-rule`; the proxy side is [`internal/egress/proxy/port_rule.go`](../internal/egress/proxy/port_rule.go)).
+- `off` (the default) is today's behaviour: a bare `allowed_domains` host, a wildcard, `allow_all_egress` and a first-use approval reach every port.
+- `on`: they reach ports 80 and 443 only, and another port needs an entry that names it (`db.example.com:5432`, `*.example.com:8443`). A refusal is `403` with `rule_source` `policy:port`, and no first-use approval is raised for it.
+- `dry_run`: nothing is refused; each allow the rule would refuse carries `port_rule: "dry_run"` on its `egress.allow` row.
+- The proxy turns the rule on for every run dispatched as a desktop VM, whatever this says.
+- Any other value exits 2 at boot. Not a secret, so it has no `_FILE` twin.
+
 ### `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE`
 
 - **TEST ONLY.** Re-points **both** AWS IAM Identity Center services — `sso-oidc` and the `sso` portal — at this base URL (flag `-aws-sso-endpoint-override`; `ValidateAWSSSOEndpointOverride`, [`internal/api/awssso_endpoint.go`](../internal/api/awssso_endpoint.go)).
@@ -1778,6 +1791,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Path to a PEM bundle of additional trusted roots (certificates only — a private key or CSR in the file is refused at boot).
 - E.g. a corporate TLS-inspecting middlebox's CA — ADDITIVE to the system roots, read once at boot (flag `-trusted-ca-file`; `loadTrustedCA`, [`cmd/wardynd/trusted_ca.go`](../cmd/wardynd/trusted_ca.go)).
 - A missing file or content with no parseable certificate refuses boot naming the var; unset is byte-identical to today (system roots only).
+- A group- or world-writable file logs a boot warning naming the path, the mode and `chmod 644`; `WARDYN_TRUSTED_CA_REFUSE_WRITABLE` refuses it instead.
 - Reaches three trust boundaries.
 - `wardynd`'s OWN outbound TLS (mutates the shared `http.DefaultTransport` — GitHub App, OIDC, the audit webhook sink all ride it).
 - The `wardyn-proxy` sidecar's forwarding transport (forwarded per run as `trusted_ca_pem` in the proxy config).
@@ -1806,6 +1820,12 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - A CA trust variable the organisation staged for the run keeps its value on every runner substrate, Docker and Kubernetes alike; the runner sets only the ones left unset.
 - On `wardynd` boot warns over 64 KiB and refuses over 120 KiB: the sandbox gets it in one environment variable, which Linux caps at 128 KiB.
 - `setup --trusted-ca-file` writes it into the service definition; a rerun keeps it.
+
+### `WARDYN_TRUSTED_CA_REFUSE_WRITABLE`
+
+- Off (default), a group- or world-writable `WARDYN_TRUSTED_CA_FILE` logs a boot warning and boot continues.
+- On, boot refuses it, naming the path, the mode and `chmod 644` (`readTrustedCAFile`, [`cmd/wardynd/trusted_ca.go`](../cmd/wardynd/trusted_ca.go)).
+- Other-read is fine either way: a CA bundle is public.
 
 ### `WARDYN_UPSTREAM_PROXY`
 

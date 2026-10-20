@@ -186,6 +186,25 @@ test.describe("the AWS sign-in door (#628)", () => {
     await expect(page.getByText(SIGNIN_PROGRESS.WAIT_HINT("AWS"))).toBeVisible();
   });
 
+  test("#3235: a device code moves the step list to Waiting for AWS while the audit read has no row and the run reads as starting", async ({ page }) => {
+    const door = await openAwsDoor(page);
+    await expect(step(page, SIGNIN_PROGRESS.STEP_START)).toHaveAttribute("data-state", "active");
+
+    // The run's own read stays stale (PENDING) and the audit read has no run.interactive.start row;
+    // only the sign-in read says the sandbox is up, with a device code.
+    door.setSignIn({ state: "waiting", user_code: "KHDW-PQRS", verification_url: DEVICE_URL });
+    const strip = page.getByTestId("harness-login-pane").getByTestId("run-sign-in-strip");
+    await expect(strip.getByTestId("signin-device-code")).toHaveText("KHDW-PQRS", { timeout: 15_000 });
+    await expect(step(page, SIGNIN_PROGRESS.STEP_START)).toHaveAttribute("data-state", "done");
+    await expect(step(page, SIGNIN_PROGRESS.STEP_DOWNLOAD)).toHaveAttribute("data-state", "done");
+    await expect(step(page, SIGNIN_PROGRESS.STEP_WAIT("AWS"))).toHaveAttribute("data-state", "active");
+
+    // The step never goes back: the sign-in read stops waiting, the list stays where it got to.
+    door.setSignIn({ state: "not_waiting" });
+    await expect(page.getByText(RUN_SIGN_IN.NO_LONGER)).toBeVisible({ timeout: 15_000 });
+    await expect(step(page, SIGNIN_PROGRESS.STEP_WAIT("AWS"))).toHaveAttribute("data-state", "active");
+  });
+
   test("#3181: the device code and its verification URL show in the dialog before the terminal attaches", async ({ page }) => {
     const door = await openAwsDoor(page);
     // The run is still not RUNNING as far as the pane has read, but the sign-in read already has a code.

@@ -175,7 +175,13 @@
 # docs/sdk.md=19378 adds 22 (0.10 HYB-A): local_folder reasons and launch exclusion
 # docs/sdk.md 19635 = ours 19470 + theirs 19543 - base 19378 at the 0.10.0 SEC-1 merge of main; re-measured below if higher.
 # 0.10: docs/sdk.md 19659 adds 24, measured: the attach_local_unavailable reason and its detail (ATT-SRV).
-docs/sdk.md=19659 share=21
+# docs/sdk.md=19309 adds 6 (0.10): identity_principal_in_use names runners and runner tokens.
+# docs/sdk.md=19315 adds 3 (0.10): identity_deactivated names runner registration tokens.
+# docs/sdk.md 19644 = ours 19635 + theirs 19552 - base 19543 at the 0.10 W2 merge of SEC-2c onto the train.
+# #2822: docs/sdk.md 19581 adds 38 over 19543, measured at the main merge: the three harness_inner_walls reasons.
+# docs/sdk.md 19682 = ours 19644 + theirs 19581 - base 19543 at the 0.10 W2 merge of HRN onto the train.
+# docs/sdk.md 19706 = ours 19659 + theirs 19682 - base 19635 at the ATT-SRV merge of main (W2 train).
+docs/sdk.md=19706 share=21
 # docs/sdk.md 18691 adds 28 over 18663, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.

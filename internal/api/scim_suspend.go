@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -232,15 +233,26 @@ func (s *Server) refuseDeprovision(ctx context.Context, ident store.PrincipalIde
 // recordDeprovisionRefusal writes the person.deprovision row of a refused step, naming the unproved form when a purge
 // stopped on one, and says whether it was durably accepted.
 func (s *Server) recordDeprovisionRefusal(ctx context.Context, ident store.PrincipalIdentity, kind, outcome, reason, unproved string) bool {
+	return s.recordDeprovisionRefusalAs(ctx, ident, kind, outcome, reason, unproved, uuid.Nil, time.Time{})
+}
+
+// recordDeprovisionRefusalAs is recordDeprovisionRefusal for an owed row: with a non-zero id the event
+// carries that id and time, the pair the ledger pinned (PinDeprovisionEvent), so every replay of one
+// obligation is the same event.
+func (s *Server) recordDeprovisionRefusalAs(ctx context.Context, ident store.PrincipalIdentity, kind, outcome, reason, unproved string, id uuid.UUID, at time.Time) bool {
 	data := map[string]any{"kind": kind, "reason": reason}
 	if unproved != "" {
 		data["unproved"] = unproved
 	}
-	return s.recordAuditDurably(ctx, s.auditEvent(nil, types.ActorSystem, scimActor, "person.deprovision", ident.ID.String(), outcome, mustJSON(data)))
+	ev := s.auditEvent(nil, types.ActorSystem, scimActor, "person.deprovision", ident.ID.String(), outcome, mustJSON(data))
+	if id != uuid.Nil {
+		ev.ID, ev.Time = id, at
+	}
+	return s.recordAuditDurably(ctx, ev)
 }
 
 // errRefusalAuditOwed is the ledger error of a refusal row that is still owed.
-var errRefusalAuditOwed = errors.New("the refusal's audit row is not yet written")
+var errRefusalAuditOwed = errors.New(store.RefusalAuditOwedMsg)
 
 // oweRefusalAudit leaves the ledger owing the refusal row key names: a pending row of its own, whatever an
 // earlier row of the same name says, that no resolution, completion or reset clears until
@@ -255,7 +267,9 @@ func oweRefusalAudit(ctx context.Context, st scimStore, id uuid.UUID, kind strin
 // before the step goes on to cut or complete anything. A row durably accepted marks its ledger row done; one
 // that is not stays owed. A purge's owed row is keyed by the unproved form it stopped on.
 // Delivery is at least once: nothing claims the row, so two replicas draining it at once both write it,
-// and an owe that reopens a row a concurrent drain just finished writes it again.
+// and an owe that reopens a row a concurrent drain just finished writes it again. Every write of one
+// obligation carries the same event id and time (the first drain pins them on the ledger row), so a
+// repeat is recognisable as the same event.
 func (s *Server) drainRefusalAudits(ctx context.Context, st scimStore, ident store.PrincipalIdentity, kind string, jobs []store.DeprovisionJob) error {
 	var errs []error
 	for _, j := range jobs {
@@ -269,7 +283,15 @@ func (s *Server) drainRefusalAudits(ctx context.Context, st scimStore, ident sto
 			unproved = j.Target
 		}
 		key := store.JobKey{Step: j.Step, Target: j.Target}
-		if s.recordDeprovisionRefusal(ctx, ident, kind, outcome, reason, unproved) {
+		id, at := j.EventID, j.EventAt
+		if id == uuid.Nil {
+			var err error
+			if id, at, err = st.PinDeprovisionEvent(ctx, ident.ID, kind, key, uuid.New(), s.cfg.Now().UTC()); err != nil {
+				errs = append(errs, err)
+				continue
+			}
+		}
+		if s.recordDeprovisionRefusalAs(ctx, ident, kind, outcome, reason, unproved, id, at) {
 			errs = append(errs, st.FinishDeprovisionJob(ctx, ident.ID, kind, key, nil))
 		} else {
 			errs = append(errs, st.FailDeprovisionJob(ctx, ident.ID, kind, key, errRefusalAuditOwed))
@@ -377,8 +399,13 @@ func (s *Server) suspendStepOne(ctx context.Context, st scimStore, id uuid.UUID)
 			return ident, forms, nil, errors.Join(err, st.FailDeprovisionJob(ctx, id, store.JobKindSuspend, key, errors.New(forms.refusal)))
 		}
 		if stepOne {
-			_, partialErr := st.SuspendIdentity(ctx, store.SuspendPlan{IdentityID: id, Principal: ident.Principal,
-				Principals: proven, CutoffSubs: proven, Partial: forms.refusal})
+			// The owed row rides in the cut's own transaction: if the owe above failed, the marker that makes a
+			// retry treat the refusal as recorded is never stored without the obligation to write it.
+			plan := store.SuspendPlan{IdentityID: id, Principal: ident.Principal, Principals: proven, CutoffSubs: proven, Partial: forms.refusal}
+			if owed != "" {
+				plan.OwedAudit = []store.JobKey{{Step: owed}}
+			}
+			_, partialErr := st.SuspendIdentity(ctx, plan)
 			err = errors.Join(err, partialErr)
 		}
 		return ident, forms, nil, err
