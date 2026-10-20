@@ -445,6 +445,22 @@ func (s *Spool) CanRecord(ctx context.Context) error {
 	})
 }
 
+// Full reports whether the spool has no room left for another decision: it holds MaxRecords less the
+// slot kept for the loss row, or fewer than one record envelope of bytes remain once LossReserveBytes
+// is kept. It is the point where nextGrant stops issuing credit, so a proxy admits nothing more. A
+// sealed spool is not full: its run is retired.
+func (s *Spool) Full(ctx context.Context) (full bool, err error) {
+	err = s.locked(ctx, func() error {
+		m, err := s.readManifest()
+		if err != nil || m.Sealed {
+			return err
+		}
+		full = int64(MaxRecords)-(m.Last-m.Ack.Seq)-1 <= 0 || int64(MaxBytes)-m.Bytes-LossReserveBytes-grantRecordEnvelope <= 0
+		return nil
+	})
+	return full, err
+}
+
 // Refuse durably counts one egress admission refused because capacity is full.
 func (s *Spool) Refuse(ctx context.Context) error {
 	return s.locked(ctx, func() error {
