@@ -709,7 +709,7 @@ func (sy *syncer) push(ctx context.Context, rel string, l syncFile, rep *syncRep
 // bit. The bytes counted against the budget are the bytes read, not the size
 // the sandbox listed.
 func (sy *syncer) pull(ctx context.Context, rel string, r os.FileInfo, walked *syncFile, rep *syncReport, pulled *int64) error {
-	if syncIsIgnoreFile(rel) {
+	if syncNamesIgnoreFile(rel) {
 		rep.refuse(rel, "ignore file")
 		return nil
 	}

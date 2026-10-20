@@ -121,6 +121,30 @@ func TestSyncGateway_AnIgnoredFileIsNeverDeleted(t *testing.T) {
 	}
 }
 
+func TestSyncGateway_TheSandboxNeverMakesADirectoryOfTheLaptopsRuleNames(t *testing.T) {
+	g := newSyncRig(t)
+	box := g.mkSandboxDir(syncRemote)
+	sy, _, root := g.syncer(syncRemote, true)
+	putSyncFile(t, filepath.Join(box, ".wardynignore/notes.txt"), "x", 0o644)
+	putSyncFile(t, filepath.Join(box, "sub/.GitIgnore/deep/notes.txt"), "x", 0o644)
+	putSyncFile(t, filepath.Join(box, "ok/notes.txt"), "x", 0o644)
+
+	rep := mustPass(t, sy)
+	for _, rel := range []string{".wardynignore/notes.txt", "sub/.GitIgnore/deep/notes.txt"} {
+		if !slices.Contains(rep.Refused, syncRefusal{Path: rel, Reason: "ignore file"}) {
+			t.Errorf("%s was not refused as an ignore file: %+v", rel, rep.Refused)
+		}
+	}
+	for _, p := range []string{".wardynignore", "sub"} {
+		if _, err := os.Lstat(filepath.Join(root, p)); err == nil {
+			t.Errorf("%s was created on the laptop", p)
+		}
+	}
+	if getSyncFile(t, filepath.Join(root, "ok/notes.txt")) != "x" {
+		t.Error("an ordinary directory's file was not pulled")
+	}
+}
+
 func TestSyncGateway_TheSandboxNeverWritesTheLaptopsRules(t *testing.T) {
 	g := newSyncRig(t)
 	box := g.mkSandboxDir(syncRemote)
