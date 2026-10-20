@@ -32,6 +32,7 @@ A knob the boundary does not name is left as the layers below set it. `contact` 
 - A policy wider than the boundary is narrowed with a warning (`the Wardyn boundary narrowed <knob>`). A run is never refused for having been wider.
 - The run's policy record names the layer `boundary` for each knob the boundary decided.
 - At dispatch and revive the final seal meets the run's assembled egress with the boundary again, after every host a launch adds (workspace, clone, component, model and source-control hosts). A host outside its allowlist is cut and its denies are added. If the boundary cannot be read there, the run is sealed to no egress.
+- The seal keeps an explicit `allow_all_egress: false` on its own: with no `allowed_domains` it turns allow-all off and keeps the run's own allowlist, so a paused run that allowed all egress is revived closed.
 - In `hard_limits` no one can approve an egress request for a host the boundary denies or does not allow. The refusal is `403 boundary_host`.
 
 ## Changing it

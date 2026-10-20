@@ -40,6 +40,7 @@ import (
 // "file function" and how many it holds. A new one is only listed once it runs
 // before the seal on every path that dispatches or revives a run.
 var lateAddCensus = map[string]int{
+	"run_policy_seal.go boundarySealEgress":                     2, // the seal's own overlay: it narrows, never adds
 	"boundary.go validateBoundarySpec":                          1,
 	"inline_policy_bounds.go narrowUserInlinePolicy":            1,
 	"profile.go handleSynthesizeProfile":                        1,
