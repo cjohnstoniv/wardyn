@@ -64,6 +64,14 @@ describe("Application / server carriers (#1994)", () => {
     expect(appsOf(editApp(SERVER, 0, { port: 8080 }))[0]).toEqual({ name: "web", port: 8080, path: "/" });
     expect(appsOf(removeApp(SERVER, 0))).toEqual([]);
   });
+
+  it("names an added port with an appN no other row has", () => {
+    let intent = chooseAppKind(SCRIPT, "server");
+    intent = addApp(addApp(intent));
+    intent = addApp(removeApp(intent, 1));
+    const names = appsOf(intent).map((a) => a.name);
+    expect(new Set(names).size).toBe(names.length);
+  });
 });
 
 describe("Application / server issues", () => {
@@ -77,6 +85,8 @@ describe("Application / server issues", () => {
   it("flags an empty, zero or out-of-range port and focuses that row", () => {
     expect(appIssues(apps(3000, 70000))).toEqual([{ home: "run", code: "app_port_invalid", focus: "nr-app-port-1" }]);
     expect(appIssues(apps(0))[0]).toMatchObject({ code: "app_port_invalid", focus: "nr-app-port-0" });
+    expect(appIssues(apps(1, 65535))).toEqual([]);
+    expect(appIssues(apps(65536))[0]).toMatchObject({ code: "app_port_invalid" });
   });
 
   it("flags the later of two rows that share a port, naming the port", () => {

@@ -52,8 +52,16 @@ export function chooseAppKind(intent: RunIntent, kind: AppKind): RunIntent {
   return setApps(moved, []);
 }
 
+/** The first appN name no row has: the server refuses two apps with one name. */
+function freeAppName(apps: readonly UIApp[]): string {
+  const taken = new Set(apps.map((a) => a.name));
+  let n = apps.length + 1;
+  while (taken.has(`app${n}`)) n++;
+  return `app${n}`;
+}
+
 export const addApp = (intent: RunIntent): RunIntent =>
-  appsOf(intent).length >= MAX_APPS ? intent : setApps(intent, [...appsOf(intent), { name: `app${appsOf(intent).length + 1}`, port: 0, path: "/" }]);
+  appsOf(intent).length >= MAX_APPS ? intent : setApps(intent, [...appsOf(intent), { name: freeAppName(appsOf(intent)), port: 0, path: "/" }]);
 
 export const editApp = (intent: RunIntent, index: number, patch: Partial<UIApp>): RunIntent =>
   setApps(intent, appsOf(intent).map((a, i) => (i === index ? { ...a, ...patch } : a)));
