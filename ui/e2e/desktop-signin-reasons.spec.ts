@@ -4,7 +4,6 @@
  */
 
 import { test, expect, ADMIN_TOKEN } from "./fixtures";
-import { DESKTOP_SIGNIN_REASON_LINE } from "../src/app/lib/desktop-signin-reasons";
 
 // A sign-in Wardyn could not close out kills its run with the reason
 // desktop_signin_resume_failed. The run page's failure block says why in a sentence;
@@ -24,7 +23,7 @@ test.describe("Run cockpit — a run killed for a desktop sign-in", () => {
     });
     await page.goto(`runs/${id}`);
     const block = page.getByTestId("run-failure-block");
-    await expect(block).toContainText(DESKTOP_SIGNIN_REASON_LINE.desktop_signin_resume_failed);
+    await expect(block).toContainText("Wardyn couldn't resume the agent after a sign-in, so it ended the run rather than leave it frozen. Start the run again.");
     await expect(block).not.toContainText("desktop_signin_resume_failed");
   });
 });

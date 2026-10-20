@@ -12,6 +12,10 @@
 // routes (the HttpError's `reason`), or, for desktop_signin_resume_failed, the `reason`
 // on a run.kill row, which the run page's failure block shows (failure-block.tsx).
 
+// The one reason no person ever meets: the run proxy's own check answers it (POST /internal/desktop-signin/check).
+// The guard in desktop-signin-reasons.test.ts exempts it by this name alone.
+export const PROXY_INTERNAL_REASONS = ["desktop_signin_credential_refused"] as const;
+
 export const DESKTOP_SIGNIN_REASON_LINE: Readonly<Record<string, string>> = {
   desktop_signins_off: "Sign-ins in a desktop are turned off on this deployment. Ask an admin to turn them on.",
   desktop_signin_not_running: "This run isn't running, so there is no desktop to sign in to.",
@@ -23,16 +27,15 @@ export const DESKTOP_SIGNIN_REASON_LINE: Readonly<Record<string, string>> = {
   desktop_signin_not_open: "No sign-in is open on this run.",
   desktop_signin_not_holder: "Someone else began this sign-in, so you can't change it.",
   desktop_signin_pause_failed:
-    "Wardyn couldn't prove the agent stopped, so the sign-in didn't start. Wardyn resumes the agent. Try again in a moment.",
+    "Wardyn couldn't confirm the agent had stopped, so the sign-in didn't start and the agent carries on. Try again in a moment.",
   desktop_signin_start_failed: "The sign-in desktop didn't start, and the agent was resumed. Try again.",
   desktop_signin_end_failed:
-    "Wardyn couldn't prove the sign-in desktop closed. The agent stays stopped, and Wardyn keeps trying to close it.",
-  desktop_signin_site_invalid: "Give a host name under a public suffix, such as example.com.",
+    "Wardyn couldn't confirm the sign-in desktop closed. The agent stays stopped, and Wardyn keeps trying to close it.",
+  desktop_signin_site_invalid: "Enter the site's domain, such as example.com.",
   desktop_signin_share_failed: "That site's login couldn't be shared with the agent. Nothing was shared.",
   desktop_signin_unavailable: "Wardyn couldn't read or save this run's sign-in just now. Try again.",
-  desktop_signin_credential_refused: "That isn't the credential of an open sign-in on this run.",
   desktop_signin_resume_failed:
-    "A sign-in began and Wardyn couldn't continue the agent afterwards, so it stopped the run rather than leave it frozen. Start the run again.",
+    "Wardyn couldn't resume the agent after a sign-in, so it ended the run rather than leave it frozen. Start the run again.",
 };
 
 /** The sentence for a sign-in reason, undefined for any other value. */
