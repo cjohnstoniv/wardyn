@@ -79,7 +79,7 @@ func validateDriveMount(drive *types.DriveMount) error {
 		return fmt.Errorf("k8s: drive: a managed drive's allocation is its volume request and %d MiB cannot be requested: %w",
 			drive.SizeMiB, errDriveAllocationInvalid)
 	}
-	if err := runner.ValidateDriveTarget(drive.Target, drive.Backend); err != nil {
+	if err := runner.ValidateDriveTarget(drive); err != nil {
 		return fmt.Errorf("k8s: drive: %v: %w", err, errDriveTargetInvalid)
 	}
 	return nil

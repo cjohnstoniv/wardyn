@@ -52,7 +52,7 @@ var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[runner.Mount]():               strings.Fields("Source Target ReadOnly MemberAuthored DriveAuthored"),
 	reflect.TypeFor[runner.UserWritableCeiling](): strings.Fields("Roots Deny"),
 	reflect.TypeFor[runner.Resources]():           strings.Fields("CPUMillis MemoryMiB CPURequestMillis MemoryRequestMiB PidsLimit DiskMiB DiskMiBSoft LifetimeCap ProxyAzure"),
-	reflect.TypeFor[types.DriveMount]():           strings.Fields("DriveID Backend ObjectName HostRoot DriveName StorageClass HomeName SubjectHash Target ReadOnly SizeMiB Enforcement"),
+	reflect.TypeFor[types.DriveMount]():           strings.Fields("DriveID Backend ObjectName HostRoot DriveName StorageClass HomeName SubjectHash Target ReadOnly SizeMiB Enforcement Team"),
 	reflect.TypeFor[types.GrantSpec]():            strings.Fields("Kind Scope TTLSeconds RequiresApproval OwnerOnly"),
 	reflect.TypeFor[types.InternalHost]():         strings.Fields("HostSuffix CIDRs Baseline"),
 	reflect.TypeFor[types.LLMInspectionSpec]():    strings.Fields("Mode WorkspaceSecretNames WorkspaceSecretValues DetectSecrets DetectSecretPatterns DetectEntropy DetectPII DetectorSidecarURL ClassifiedMarkers ScanAttachments InspectForwardEgress MaxScanBytes OnScannerError RequireInspectableLLM InterceptTLS BlockMinSeverity"),

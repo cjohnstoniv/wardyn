@@ -384,6 +384,7 @@ func (s *Server) driveMountFor(ctx context.Context, w http.ResponseWriter, d run
 		ReadOnly:    d.readOnly(),
 		SizeMiB:     resolved.SizeMiB,
 		Enforcement: resolved.Enforcement,
+		Team:        resolved.Team,
 	}, true
 }
 

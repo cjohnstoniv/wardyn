@@ -34,7 +34,11 @@ type reachableDrive struct {
 
 // target is where this drive mounts (runner.DriveTargetFor).
 func (d reachableDrive) target() string {
-	return runner.DriveTargetFor(types.ResolvedDrive{Drive: d.winner.Drive}, d.legacy)
+	rd := types.ResolvedDrive{Drive: d.winner.Drive}
+	if d.resolved != nil {
+		rd = *d.resolved
+	}
+	return runner.DriveTargetFor(rd, d.legacy)
 }
 
 // reachableDrives resolves every drive the caller on ctx reaches, each through

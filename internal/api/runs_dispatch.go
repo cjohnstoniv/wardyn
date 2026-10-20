@@ -745,7 +745,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// that the very next event — `run.create` `failure` — contradicted. Nothing
 	// downstream of here can refuse the drive, so this row is now true when it
 	// is written.
-	s.auditDriveMount(ctx, run.ID, p.Drives)
+	s.auditDriveMount(ctx, run.ID, run.CreatedBy, p.Drives)
 	auditAgentPolicy := func() { s.auditAgentPolicy(ctx, run, agentPolicy, spec) }
 	if !agentPolicy.execLess {
 		auditAgentPolicy()

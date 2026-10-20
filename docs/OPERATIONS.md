@@ -3986,6 +3986,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0195` (`0195_agent_runs_local_folder`) adds `local_folder`, `local_folder_seeded_at` and `local_folder_seed_error` to `agent_runs` (`0001`'s table): the folder a run holds its agent for, and that folder's first sync.
 - `0196` (`0196_deprovision_event_pin`) adds `audit_event_id` and `audit_event_at` to `deprovision_jobs` (`0127`'s table): the id and time of the audit event an owed row writes, pinned on its first drain and cleared when the row reopens.
 - `0197` (`0197_run_inner_walls`) adds `inner_walls` to `agent_runs` (`0001`'s table): the harness's own walls a run launched with, under its policy's `harness_inner_walls`.
+- `0198` (`0198_user_drives_team`) adds `user_drives.team` (`0054`'s table), with a check keeping it off a person's own drive and off `k8s_pvc`, and `user_drive_grants.members_can_write` (`0054`'s table, false by default): a team drive and its allocations' write bit (`storage.user_drive.team_drives`). A write setting `team` on a `k8s_pvc` or member-owned row now fails.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
@@ -4716,6 +4717,38 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 
 - Member drives live in `user_drives` rows with an owner. An older wardynd would list them in `GET /drives` and let a super admin edit or delete the row without the volume.
 - Migrations are forward-only; see "Upgrades".
+
+### Team drives
+
+- A **team drive** is an admin drive that gives the groups it is allocated to **one shared folder**, instead of one folder per person.
+- It is off by default. Turn it on with `storage.user_drive.team_drives: true` in the workspace providers (`PUT /api/v1/workspace-providers`).
+- With the switch off, `team: true` on a drive write answers 422, and a drive already marked team resolves per person, as every drive did before.
+
+**Make one** (super admin).
+
+1. `POST /api/v1/drives` with `team: true` on a `host_path`, `k8s_pvc_static` or `docker_volume` drive. A `k8s_pvc` claim mounts in one pod at a time, so it is refused.
+2. Allocate it to groups with `POST /api/v1/drives/grants`, `subject_type: group`. Any other subject type, and `home_override`, are refused.
+3. An allocation is **read-only** unless it sets `members_can_write: true`, which needs a writable drive.
+
+**What a member's run sees.**
+
+- The folder mounts at `/home/agent/shared/<name-slug>`, read-only unless the allocation says `members_can_write`. A run asking to write a read-only one is refused.
+- Its home segment is `t-` plus 20 hex characters, derived from the drive id: `<host_root>/t-…` on `host_path` (create that directory; Wardyn never creates one on a share) and a claim or volume named `wardyn-drive-<drive-id-hex>-t-…`. `POST /api/v1/drives/preview` for any group member prints it.
+- People outside the allocated groups never get the mount.
+- Every run's mount writes `run.drive.mount` with `team: true` and `mounted_by`, the person whose run mounted it.
+
+**Security.** One person's agent reads, and with `members_can_write` may run, files another person's agent wrote there. Any secret an agent writes there is visible to the whole group. Keep allocations read-only unless the group needs a shared working area.
+
+**What differs by backend.**
+
+- `docker_volume`: the volume lives on **one Docker host**. Runs on another host see a different, empty folder. `GET /drives` marks such a drive `single_host: true`.
+- `host_path`: one folder on the operator's tree. It is shared across hosts only if the operator's mount is.
+- `k8s_pvc_static`: the claim you pre-create. It is shared across nodes only if its access mode is `ReadWriteMany`.
+
+**Changing and removing.**
+
+- `team` cannot change while the drive is allocated (409). Remove the allocations first.
+- A person's reclaim (`POST /api/v1/drives/{id}/reclaim`, a leaver's cleanup) refuses a team drive (422): the folder is the group's. A person's erasure never touches one either. Remove the folder on the substrate, as for any drive, once the group no longer needs it.
 
 ### User drives on Kubernetes
 
