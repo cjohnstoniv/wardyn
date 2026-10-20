@@ -425,6 +425,7 @@ that ceiling down; each run receives only the minimal subset its task needs.
 | Laptop proxy → runnerd (decisions) | TLS pinned to runnerd's key; a key per proxy; runnerd the spool's only writer, sharing no directory with the proxy | #77 |
 | Link down | No new run; cached policy and a bounded, fail-closed spool until the lapse | #77 |
 | CLI ↔ runnerd (local attach, `WARDYN_ATTACH_LOCAL`, off by default) [0.10] | The organisation admits it exactly as a relay attach (same ticket, same checks), then grants it only for the ticket's owner, on that owner's own person runner, over the runner's stream; it keeps the writer lease, the recording and the audit rows, and every ender resets `pty_tee` | #94 |
+| A corporate root for the runner's own connection | `--org-ca-file` is trusted for that connection and registration only, never a sandbox mount or run proxy; a uid-and-mode hygiene rule for the trust store adds no reach | #70 |
 
 - B1–B11 are unchanged for a run placed `remote`.
 

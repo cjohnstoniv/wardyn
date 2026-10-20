@@ -57,6 +57,8 @@
 # threatmodel/THREAT-MODEL.md 65598 = ours 65489 + theirs 65198 - base 65089 at the 0.10 W3 merge of SEC-1c onto the train.
 # 0.10: threatmodel/THREAT-MODEL.md 65376 adds 287, measured: the local attach crossing row and residual #94 (ATT-SRV).
 # threatmodel/THREAT-MODEL.md 65885 = ours 65598 + theirs 65376 - base 65089 at the 0.10 W4a merge of ATT-SRV onto the train.
-threatmodel/THREAT-MODEL.md=65885
+# threatmodel/THREAT-MODEL.md 65126 adds 37 over 65089 (0.10 ATT-SETUP-NET), measured: the org-only CA crossing row in B12.
+# threatmodel/THREAT-MODEL.md 65922 = ours 65885 + theirs 65126 - base 65089 at the 0.10 W4a merge of ATT-SETUP-NET onto the train.
+threatmodel/THREAT-MODEL.md=65922
 # threatmodel/THREAT-MODEL.md 63171 adds 78 over 63093, measured: the console session under the role-stamp residual: renewal up to its cap, never moving the sign-in time, and the copied-cookie bound (0.9.3 console session lifetime).
 # threatmodel/THREAT-MODEL.md 63025 = 62948 + 77, measured: the laptop decision-sink crossing row and #77's sink and loss-row bullets.
