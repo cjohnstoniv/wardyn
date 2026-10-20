@@ -127,7 +127,7 @@ beforeEach(() => {
 });
 
 describe("the kind step", () => {
-  it("lists all five kinds in order, and Cancel — no Next", async () => {
+  it("lists all six kinds in order, and Cancel — no Next", async () => {
     const { onClose, user } = renderEditor();
     expect(screen.getByRole("heading", { name: MODEL_PROVIDERS.ADD_CTA })).toBeInTheDocument();
     const group = screen.getByRole("group", { name: E.KIND_TITLE });
@@ -137,6 +137,7 @@ describe("the kind step", () => {
       MODEL_PROVIDERS.KIND.anthropic_api_key,
       MODEL_PROVIDERS.KIND.openai_api_key,
       MODEL_PROVIDERS.KIND.custom_endpoint,
+      MODEL_PROVIDERS.KIND.local_model,
     ]);
     await user.click(screen.getByRole("button", { name: E.CANCEL }));
     expect(onClose).toHaveBeenCalled();
@@ -154,7 +155,7 @@ describe("the kind step", () => {
     expect(subscription).toBeDisabled();
     await user.click(subscription);
     expect(screen.queryByText(E.PROVIDES_CLAUDE)).toBeNull();
-    // The other four options stay enabled.
+    // The other options stay enabled.
     expect(screen.getByRole("button", { name: MODEL_PROVIDERS.KIND.bedrock_sso })).toBeEnabled();
   });
 });

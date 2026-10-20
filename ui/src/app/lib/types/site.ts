@@ -270,7 +270,8 @@ export type ModelProviderKind =
   | "anthropic_api_key"
   | "openai_api_key"
   | "bedrock_bearer"
-  | "custom_endpoint";
+  | "custom_endpoint"
+  | "local_model";
 
 // One provider. No credential lives here — each person supplies their own.
 export interface ModelProvider {
@@ -285,17 +286,34 @@ export interface ModelProvider {
   // Negative-sense: absent is ENABLED. A disabled provider may still be an
   // agent's default, whose runs are then refused rather than moved elsewhere.
   disabled?: boolean;
-  // custom_endpoint: required. Anthropic/OpenAI kinds: an optional
+  // custom_endpoint and local_model: required. Anthropic/OpenAI kinds: an optional
   // route-through gateway. Bedrock kinds: never (see bedrock.base_url).
   base_url?: string;
-  // custom_endpoint only: how each person's token is sent. The server fills
-  // Authorization / "Bearer %s" when absent.
+  // custom_endpoint, or local_model when its server wants a token: how each
+  // person's token is sent. The server fills Authorization / "Bearer %s" when
+  // absent; a local_model with no auth has no token at all.
   auth?: ProviderAuth;
   // bedrock_sso / bedrock_bearer only.
   bedrock?: BedrockSettings;
+  // local_model only: the model allowlist and the caps on each request.
+  local?: LocalModelSettings;
   // The agents this provider may serve, with the settings for each.
   harnesses?: ProviderHarness[];
 }
+
+// Go's types.LocalModelSettings (internal/types/model_provider.go). A zero
+// (absent) cap is the default below.
+export interface LocalModelSettings {
+  models: string[];
+  max_context?: number;
+  max_output?: number;
+  keep_alive_seconds?: number;
+}
+
+// Go's types.DefaultLocal* and the API's maxLocalModels, maxLocalBound and
+// maxLocalKeepAlive (internal/api/model_providers.go).
+export const LOCAL_MODEL_DEFAULTS = { max_context: 32768, max_output: 32768, keep_alive_seconds: 1800 } as const;
+export const LOCAL_MODEL_LIMITS = { models: 64, bound: 1048576, keep_alive_seconds: 86400 } as const;
 
 export interface ProviderAuth {
   header?: string;
