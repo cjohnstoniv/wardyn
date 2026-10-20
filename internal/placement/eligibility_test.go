@@ -52,6 +52,41 @@ func TestLocalEligibilityUnimplementedDeliveryCannotAuthorize(t *testing.T) {
 	}
 }
 
+// A refusal names the class, the runner's trust class and the delivery policy that applied, one exact
+// sentence per case. bedrock_bearer has no table row today, so it is judged against one of the same shape.
+func TestLocalEligibilityNotDeliveredSentences(t *testing.T) {
+	bedrockRow := func(st, field string) []Entry {
+		return []Entry{{Struct: st, Field: field, Class: ClassBrokered, Rule: RuleDelivery, Delivery: ClassBedrockBearer, Reason: ReasonPlacementCredential}}
+	}
+	for _, c := range []struct {
+		class   string
+		entries entrySource
+		path    string
+	}{{ClassADOMintedPAT, Entries, adoPath}, {ClassBedrockBearer, bedrockRow, "ProxyConfig.Injection[0]"}} {
+		for _, tc := range []struct {
+			name   string
+			policy map[string]ClassPolicy
+			trust  types.RunnerTrustClass
+			want   string
+		}{
+			{"refuse", map[string]ClassPolicy{c.class: {Mode: ModeRefuse}}, types.RunnerTrustPersonal,
+				c.class + " credential is not delivered to a local runner of trust class personal (delivery policy: refuse)"},
+			{"via_org", map[string]ClassPolicy{c.class: {Mode: ModeViaOrg}}, types.RunnerTrustPersonal,
+				c.class + " credential is not delivered to a local runner of trust class personal: via_org delivery of this credential is not built yet (delivery policy: via_org)"},
+			{"absent", nil, types.RunnerTrustManagedDevice,
+				c.class + " credential is not delivered to a local runner of trust class managed_device (delivery policy: refuse)"},
+			{"unknown trust", map[string]ClassPolicy{c.class: {Mode: ModeRefuse}}, "",
+				c.class + " credential is not delivered to a local runner of trust class unknown (a runner of unknown trust class gets via_org delivery only)"},
+		} {
+			p := LocalPlan{Delivery: DeliveryPolicy{Classes: tc.policy}, Trust: tc.trust}
+			r := classifyCredential(c.entries, c.path, CredentialOrigin{Class: ClassBrokered, Delivery: c.class}, p, reflect.Value{})
+			if r == nil || r.Reason != ReasonPlacementCredential || r.Field != c.path || r.Detail != tc.want {
+				t.Errorf("%s %s: %+v\n want %q", c.class, tc.name, r, tc.want)
+			}
+		}
+	}
+}
+
 func TestLocalEligibilityApprovalGrantAndUnknownKind(t *testing.T) {
 	path := "ProxyConfig.Policy.EligibleGrants[0]"
 	p := LocalPlan{Spec: runner.SandboxSpec{ProxyConfig: runner.ProxyConfig{Policy: types.RunPolicySpec{EligibleGrants: []types.GrantSpec{{Kind: types.GrantAPIKey, RequiresApproval: true}}}}}, Origins: map[string]CredentialOrigin{path: {Class: ClassOperator, Delivery: ClassAPIKey, GrantKind: types.GrantAPIKey}}}

@@ -83,7 +83,16 @@ func (s *Server) handleGetCredentialDelivery(w http.ResponseWriter, r *http.Requ
 	if p, err := deliveryPolicyOf(doc.Policy); err == nil {
 		w.Header().Set("ETag", computeETag(p))
 	}
-	writeJSON(w, http.StatusOK, doc)
+	// buildable_modes sits beside policy, never inside it: PUT decodes the policy strictly, and a client
+	// that sends GET's policy back must not carry it.
+	resp := struct {
+		types.CredentialDeliveryPolicyDoc
+		BuildableModes map[string][]placement.Mode `json:"buildable_modes"`
+	}{doc, map[string][]placement.Mode{}}
+	for _, class := range placement.DeliveryClasses() {
+		resp.BuildableModes[class] = placement.BuildableModes(class)
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // handlePutCredentialDelivery replaces the whole document. securityOps (routes.go). If-Match is optional
