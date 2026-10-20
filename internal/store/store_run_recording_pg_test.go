@@ -5,7 +5,10 @@ package store_test
 
 import (
 	"context"
+	"errors"
 	"testing"
+
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -42,5 +45,26 @@ func TestPG_RunRecordingLevelRoundTrips(t *testing.T) {
 	}
 	if got, err = pg.GetRun(ctx, untouched.ID); err != nil || got.RecordingLevel != "" || got.NotRecorded != "" {
 		t.Fatalf("untouched run: level %q not_recorded %q err %v", got.RecordingLevel, got.NotRecorded, err)
+	}
+}
+
+// TestPG_SetRunRecordingOff: the off decision is one write, the level and policy_off together, and a
+// run that is not there is ErrNotFound.
+func TestPG_SetRunRecordingOff(t *testing.T) {
+	ctx := context.Background()
+	pg := store.NewPG(runsPGPool(t))
+	run, err := pg.CreateRun(ctx, newRun(types.RunStarting))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pg.SetRunRecordingOff(ctx, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err := pg.GetRun(ctx, run.ID)
+	if err != nil || got.RecordingLevel != types.RecordingOff || got.NotRecorded != types.NotRecordedPolicyOff {
+		t.Fatalf("level %q not_recorded %q err %v, want off policy_off", got.RecordingLevel, got.NotRecorded, err)
+	}
+	if err := pg.SetRunRecordingOff(ctx, uuid.New()); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("missing run: err %v, want ErrNotFound", err)
 	}
 }
