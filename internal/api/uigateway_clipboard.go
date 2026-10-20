@@ -71,7 +71,7 @@ func (s *Server) uiFilterUpgrade(resp *http.Response, sess uiSession) error {
 	filtered := rfbfilter.Wrap(body, rules, func(ev rfbfilter.Event) { s.auditUIClipboard(sess, ev) }, func(err error) {
 		slog.WarnContext(ctx, "wardynd: ui relay closed a desktop socket it could not follow", "run_id", sess.Run, "app", sess.App, "err", err)
 		if errors.Is(err, rfbfilter.ErrNotRFB) {
-			s.auditUISession(sess, "ui.clipboard", "", "failure", map[string]any{"app": sess.App, "reason": "not_rfb"})
+			s.auditUISession(sess, "ui.clipboard.transfer", "", "failure", map[string]any{"app": sess.App, "reason": "not_rfb"})
 		}
 	})
 	if s.uiDesktopSink != nil {
@@ -88,6 +88,6 @@ func (s *Server) auditUIClipboard(sess uiSession, ev rfbfilter.Event) {
 	if !ev.Allowed {
 		outcome = "denied"
 	}
-	s.auditUISession(sess, "ui.clipboard", string(ev.Direction), outcome,
+	s.auditUISession(sess, "ui.clipboard.transfer", string(ev.Direction), outcome,
 		map[string]any{"app": sess.App, "direction": string(ev.Direction), "bytes": ev.Bytes, "sha256": ev.SHA256})
 }

@@ -201,7 +201,7 @@ func clipboardRows(t *testing.T, h *uiHarness, n int) []types.AuditEvent {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		rows := append(h.audit.auditRows("ui.clipboard", "denied"), h.audit.auditRows("ui.clipboard", "success")...)
+		rows := append(h.audit.auditRows("ui.clipboard.transfer", "denied"), h.audit.auditRows("ui.clipboard.transfer", "success")...)
 		if len(rows) >= n || time.Now().After(deadline) {
 			return rows
 		}
@@ -344,10 +344,10 @@ func TestUIGateway_ClipboardClosesADesktopThatIsNotRFB(t *testing.T) {
 		t.Fatalf("a non-RFB desktop reached the browser: %q", got)
 	}
 	deadline := time.Now().Add(5 * time.Second)
-	rows := h.audit.auditRows("ui.clipboard", "failure")
+	rows := h.audit.auditRows("ui.clipboard.transfer", "failure")
 	for len(rows) == 0 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
-		rows = h.audit.auditRows("ui.clipboard", "failure")
+		rows = h.audit.auditRows("ui.clipboard.transfer", "failure")
 	}
 	if len(rows) != 1 || !strings.Contains(string(rows[0].Data), `"reason":"not_rfb"`) || strings.Contains(string(rows[0].Data), "direction") {
 		t.Fatalf("ui.clipboard failure rows = %+v", rows)
