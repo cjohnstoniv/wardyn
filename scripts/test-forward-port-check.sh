@@ -108,6 +108,16 @@ mkdir -p scripts/forward-port-check.d; printf '# other\n' >scripts/forward-port-
 commit touchother
 TOUCHOTHER="$(git rev-parse HEAD)"
 
+branch gitattr "$BAD"
+printf '* -diff\n' >.gitattributes
+commit gitattr
+GITATTR="$(git rev-parse HEAD)"
+
+branch linkdir "$GOOD"
+mkdir -p scripts; ln -s ../docs scripts/forward-port-check.d
+commit linkdir
+LINKDIR="$(git rev-parse HEAD)"
+
 branch ownallow "$BUDGET"
 mkdir -p scripts/forward-port-check.d
 printf 'scripts/doc-form.d/A.budget\tbudget 12\tbudget: main 12 replaced by the release value 13\n' >scripts/forward-port-check.d/1.2.3.allow
@@ -178,6 +188,10 @@ want_rc 1 "a port that edits the script" -- --version 1.2.3 v1.2.2 "$MAIN" "$TOU
 grep -q 'may not change scripts/forward-port-check.sh' "$out" || fail "script edit not named: $(cat "$out")"
 want_rc 1 "a port that edits another version's allow file" -- --version 1.2.3 v1.2.2 "$MAIN" "$TOUCHOTHER"
 grep -q 'may not change scripts/forward-port-check.d/1.2.4.allow' "$out" || fail "other allow file not named: $(cat "$out")"
+want_rc 1 "a port that carries a .gitattributes" -- --version 1.2.3 v1.2.2 "$MAIN" "$GITATTR"
+grep -q 'may not change .gitattributes' "$out" || fail ".gitattributes not named: $(cat "$out")"
+want_rc 1 "a port that replaces the allow directory with a link" -- --version 1.2.3 v1.2.2 "$MAIN" "$LINKDIR"
+grep -q 'may not change scripts/forward-port-check.d$' "$out" || fail "linked allow directory not named: $(cat "$out")"
 want_rc 1 "a port that edits an allow file with no version given" -- v1.2.2 "$MAIN" "$OWNALLOW"
 git checkout -q ownallow   # CI runs the check in a checkout of the port, so its own allow file is on disk
 want_rc 0 "a port that carries its own allow file" -- --version 1.2.3 v1.2.2 "$MAIN" "$OWNALLOW"

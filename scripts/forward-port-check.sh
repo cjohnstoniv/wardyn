@@ -82,11 +82,12 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 git diff --no-renames --name-only -z "$BASE" "$HEAD_REF" >"$TMP/names" || die "git diff $BASE $HEAD_REF failed"
 
-# A port may not edit the check or widen its own exceptions: only V's allow file.
+# A port may not edit the check or widen its own exceptions: only V's allow file. Nor may it
+# carry a .gitattributes, which git reads from the checkout and which can mark files -diff.
 refused=0
 while IFS= read -r -d '' f; do
   case "$f" in
-    scripts/forward-port-check.sh) ;;
+    scripts/forward-port-check.sh | scripts/forward-port-check.d | .gitattributes | */.gitattributes) ;;
     scripts/forward-port-check.d/*) [ -n "$VERSION" ] && [ "$f" = "scripts/forward-port-check.d/$VERSION.allow" ] && continue ;;
     *) continue ;;
   esac

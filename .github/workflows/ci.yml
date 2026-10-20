@@ -2169,10 +2169,12 @@ jobs:
         run: |
           V="$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?' <<<"$HEAD_REF" | head -1)"
           [ -n "$V" ] || { echo "no version in the branch name $HEAD_REF" >&2; exit 1; }
-          PREV="$(scripts/forward-port-check.sh --prev-tag "$V" "$BASE_SHA")"
+          # main's copy of the check, never the port's own: a port could edit the check.
+          git show "$BASE_SHA:scripts/forward-port-check.sh" >"$RUNNER_TEMP/fpc.sh"
+          PREV="$(bash "$RUNNER_TEMP/fpc.sh" --prev-tag "$V" "$BASE_SHA")"
           [ -n "$PREV" ] || { echo "no release tag below v$V" >&2; exit 1; }
           # Merge-base, not the base tip: main may have moved since the branch was cut.
-          scripts/forward-port-check.sh --version "$V" "$PREV" "$(git merge-base "$BASE_SHA" "$PR_HEAD")" "$PR_HEAD"
+          bash "$RUNNER_TEMP/fpc.sh" --version "$V" "$PREV" "$(git merge-base "$BASE_SHA" "$PR_HEAD")" "$PR_HEAD"
 
   # ── ci-ran: this workflow ran on the pull request ──────────────────────────
   # A pull request with a merge conflict gets no pull_request run at all, so its
