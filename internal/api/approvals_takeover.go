@@ -9,8 +9,11 @@
 //
 // Nothing here lets the run reach more. No credential is stored, brokered or handed to the agent;
 // the person types into the desktop or terminal the run already has, and what they type is never
-// recorded: the console terminal records output only (attach.go), the desktop relay records nothing
-// (uigateway.go), and every row below carries a closed set of keys.
+// recorded as input: the boot seed's cast is output only (wardyn-rec runs asciinema without
+// --stdin), so is the console terminal's session cast (attach.go), the desktop relay records
+// nothing (uigateway.go), and every row below carries a closed set of keys. What the terminal shows,
+// echoed characters included, is output, and a recorded run keeps it: recording.pause marks the
+// gap, but no recorder acts on recording_gap yet.
 package api
 
 import (
@@ -135,13 +138,14 @@ func (s *Server) takeoverSurface(ctx context.Context, run types.AgentRun) string
 	return "terminal"
 }
 
-// takeoverRecorded reports whether run is being recorded, so a takeover has a recording to pause.
+// takeoverRecorded reports whether run is being recorded, so a takeover's gap is marked.
 func (s *Server) takeoverRecorded(run types.AgentRun) bool {
 	return s.cfg.RecordingStore != nil && !runIsUnrecordable(run)
 }
 
 // recordingGap writes recording.pause or recording.resume (the gap's start or end, with its reason,
-// in the tamper-evident log) and tells every replica's recorder over the live bus.
+// in the tamper-evident log) and tells every replica's recorder over the live bus. Nothing consumes
+// the notice yet, so the screen output of the gap is still recorded.
 func (s *Server) recordingGap(ctx context.Context, ap types.ApprovalRequest, paused bool, data map[string]any) {
 	action := "recording.resume"
 	if paused {
