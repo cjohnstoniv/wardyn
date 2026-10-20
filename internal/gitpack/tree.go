@@ -586,7 +586,7 @@ func (w *walker) record(c Change) error {
 }
 
 // newerBase is the BaseMode one entry keeps when two parents report it: a
-// known base other than the entry's own executable mode wins (against that
+// known base other than an executable mode wins (against that
 // parent the entry is new), then an unknown one, so a rule about new
 // executables errs towards refusing.
 func newerBase(a, b string) string {

@@ -1148,7 +1148,7 @@ So an entry a pattern matches is judged one of two ways:
 - `deny_new_executables` refuses a file executable in the pushed tree that the carried parent tree held not executable, or not at all (`gitpack.Change.BaseMode`).
   - Any regular-file mode with the user-execute bit counts, since git checks it out executable.
 - Without that tree, the forge must show the path executable, or a directory unchanged, in any commit the push builds on. That is any parent of a pushed commit already in the history of the default branch or of a branch the push updates.
-  - So a path executable in any such commit, a merge parent included, may stay executable or become executable again, and its content is not judged, as with an edit to an existing executable.
+  - So a path executable in any such commit, a merge parent included, may stay executable or become executable again, and its content is not judged, as with an edit to an existing executable. The exception is a parent tree the push carries that held it not executable, which the first bullet refuses.
   - A lane whose forge cannot be read refuses nearly every push.
 - A symlink or a submodule pointer is not an executable file; what a submodule brings in is not judged.
 - The Azure DevOps REST door refuses every content push while it is on: a REST push names no file modes.
