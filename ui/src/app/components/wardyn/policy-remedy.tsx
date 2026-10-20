@@ -38,15 +38,18 @@ export function safeRequestHref(v: string | undefined): string {
   }
 }
 
+const COPIED_MS = 2000;
 const LINK = "underline underline-offset-2 hover:text-foreground";
 const REQUEST_BUTTON =
   "inline-flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-foreground hover:bg-muted";
 
-// setByLabel names the wall that set the limit from the refusal's own layer
-// (source on a proxy attribution, whose wire predates the layer key).
-function setByLabel(policy: PolicyRef): string {
+// setByLabel names the wall that set the limit, from a refusal's own layer. A run's policy reference carries no
+// layer and a proxy refusal cannot know it, so without one the Set by row is not drawn at all: naming a wall
+// there would be a guess.
+function setByLabel(policy: PolicyRef): string | null {
+  if (!policy.layer) return null;
   if (policy.overridden) return WHY_CARD.RUN_POLICY;
-  if ((policy.layer ?? policy.source) === "deployment") return WHY_CARD.BOUNDARY;
+  if (policy.layer === "deployment") return WHY_CARD.BOUNDARY;
   return policy.name ? WHY_CARD.TEAM(policy.name) : WHY_CARD.TEAM_FALLBACK;
 }
 
@@ -59,14 +62,17 @@ export interface PolicyRemedyProps {
   canChange?: string;
   /** Show the Copy details button. */
   copyable?: boolean;
+  /** The one-line owner-and-ask form, for a refusal that is not a governance limit. */
+  line?: boolean;
 }
 
-export function PolicyRemedy({ policy, className, enforced, canChange, copyable }: PolicyRemedyProps) {
+export function PolicyRemedy({ policy, className, enforced, canChange, copyable, line }: PolicyRemedyProps) {
   const [copied, setCopied] = React.useState(false);
+  const resetTimer = React.useRef<number>(undefined);
+  React.useEffect(() => () => window.clearTimeout(resetTimer.current), []);
   if (!policy) return null;
   const href = safeRequestHref(policy.request_url);
   const mail = policy.email ? safeRequestHref(`mailto:${policy.email}`) : "";
-  const setBy = setByLabel(policy);
   let action: React.ReactNode = null;
   if (href) {
     action = (
@@ -84,20 +90,39 @@ export function PolicyRemedy({ policy, className, enforced, canChange, copyable 
     );
   } else if (policy.request_text) {
     action = policy.request_text;
+  } else if (line) {
+    action = null;
   } else if (policy.owner) {
     action = WHY_CARD.NO_WAY_TO_ASK(policy.owner);
   } else {
     action = WHY_CARD.NO_OWNER;
   }
-  const rows: Array<[string, React.ReactNode]> = [
-    [WHY_CARD.SET_BY, setBy],
-    [WHY_CARD.OWNER, policy.owner || WHY_CARD.NOT_LISTED],
-  ];
+  if (line) {
+    if (!policy.owner && !action) return null;
+    return (
+      <span data-testid="policy-remedy" className={cn("block text-xs text-muted-foreground", className)}>
+        {policy.owner && POLICY_REMEDY.OWNER(policy.owner)}
+        {policy.owner && action && POLICY_REMEDY.SEP}
+        {action}
+      </span>
+    );
+  }
+  const setBy = setByLabel(policy);
+  const rows: Array<[string, React.ReactNode]> = [[WHY_CARD.OWNER, policy.owner || WHY_CARD.NOT_LISTED]];
+  if (setBy) rows.unshift([WHY_CARD.SET_BY, setBy]);
   if (enforced) rows.push([WHY_CARD.ENFORCED, enforced]);
   if (canChange) rows.push([WHY_CARD.CAN_CHANGE, canChange]);
   const copy = () => {
     const text = rows.map(([k, v]) => `${k}: ${typeof v === "string" ? v : ""}`.trimEnd()).join("\n");
-    void navigator.clipboard?.writeText(text).then(() => setCopied(true));
+    // A refused or missing clipboard changes nothing on screen; "Copied" only follows a write that landed.
+    navigator.clipboard?.writeText(text).then(
+      () => {
+        setCopied(true);
+        window.clearTimeout(resetTimer.current);
+        resetTimer.current = window.setTimeout(() => setCopied(false), COPIED_MS);
+      },
+      () => {},
+    );
   };
   return (
     <div

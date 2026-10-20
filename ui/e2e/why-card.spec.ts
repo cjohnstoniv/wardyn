@@ -13,6 +13,7 @@ import type { Page } from "@playwright/test";
 import { test, expect, gotoConsole, mockPreflightClear, navTo, navToRoute, newRunHeading, submitLaunch, walkGuidedToReview } from "./fixtures";
 import { NR_START } from "../src/app/components/wardyn/copy/new-run/start";
 import { findRunningFixture } from "./attach-stub";
+import { ATTACH_CAP_REASON } from "../src/app/lib/run-entry";
 
 const POLICY = {
   source: "profile",
@@ -22,6 +23,8 @@ const POLICY = {
   request_url: "https://example.com/access",
 };
 const NO_CONTACT = { source: "profile", layer: "profile", name: "Platform team" };
+// What GET /runs/{id} carries as the run's own policy: no layer, since only a refusal's own reference names one.
+const RUN_POLICY = { source: "profile", name: "Platform team", owner: "Platform Security", request_url: "https://example.com/access" };
 
 async function asMember(page: Page): Promise<void> {
   await page.route("**/api/v1/me", async (route) => {
@@ -53,23 +56,29 @@ test("a refused launch shows the card under the server's sentence", async ({ pag
   const card = naming.getByTestId("policy-remedy");
   await expect(card).toContainText("Set byPlatform team walls");
   await expect(card).toContainText("OwnerPlatform Security");
-  await expect(card).toContainText("Can changeNot from here. The owner can.");
+  await expect(card).not.toContainText("Can change");
   await expect(card.getByRole("link", { name: "Request access" })).toHaveAttribute("href", "https://example.com/access");
 });
 
 test("a refused attach shows the card with where it was enforced and Copy details", async ({ page }) => {
   const { id: runId } = await findRunningFixture(page);
+  // Cache the first read, as stubInteractiveRun does: the run page polls it and a disposed response fails the case.
+  let cached: Record<string, unknown> | null = null;
   await page.route(`**/api/v1/runs/${runId}`, async (route) => {
     if (route.request().method() !== "GET") return route.fallback();
-    const response = await route.fetch();
-    const json = await response.json();
-    json.interactive = true;
-    json.state = "RUNNING";
-    json.policy = NO_CONTACT;
-    await route.fulfill({ response, json });
+    if (!cached) {
+      const response = await route.fetch();
+      cached = (await response.json()) as Record<string, unknown>;
+      cached.interactive = true;
+      cached.state = "RUNNING";
+    }
+    await route.fulfill({ json: cached });
   });
   await page.route(`**/api/v1/runs/${runId}/attach/ticket`, (route) =>
-    route.fulfill({ status: 403, json: { error: "Your governance profile allows 1 attached terminal session per run." } }),
+    route.fulfill({
+      status: 403,
+      json: { error: "Your governance profile allows 1 attached terminal session per run.", reason: ATTACH_CAP_REASON, policy: NO_CONTACT },
+    }),
   );
   await page.goto(`/runs/${runId}`);
 
@@ -87,7 +96,7 @@ test("a refused egress row on the Audit tab shows the card on its own line", asy
     if (route.request().method() !== "GET") return route.fallback();
     const response = await route.fetch();
     const json = await response.json();
-    if (json.task === "e2e fixture 6") json.policy = POLICY;
+    if (json.task === "e2e fixture 6") json.policy = RUN_POLICY;
     await route.fulfill({ response, json });
   });
   await page.route("**/api/v1/audit*", async (route) => {
@@ -117,7 +126,8 @@ test("a refused egress row on the Audit tab shows the card on its own line", asy
   const row = page.getByTestId("run-audit-row").filter({ hasText: "pypi.org" });
   await expect(row.getByText("Refused by policy")).toBeVisible();
   const card = row.getByTestId("policy-remedy");
-  await expect(card).toContainText("Set byPlatform team walls");
+  // The run's policy reference carries no layer and the proxy cannot know one, so no wall is named.
+  await expect(card).not.toContainText("Set by");
   await expect(card).toContainText("OwnerPlatform Security");
   await expect(card.getByRole("link", { name: "Request access" })).toBeVisible();
 });

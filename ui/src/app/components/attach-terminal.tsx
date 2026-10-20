@@ -182,6 +182,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   const wsRef = React.useRef<WebSocket | null>(null);
   const [connState, setConnState] = React.useState<ConnState>("connecting");
   const [errorMsg, setErrorMsg] = React.useState<string>("");
+  const [refusalCard, setRefusalCard] = React.useState<{ policy?: PolicyRef } | null>(null);
   // What the server told us this socket is (attach-mode frame). null = it has
   // not told us yet: the frame arrives on EVERY connect, so silence means "not
   // yet", never "you are driving" — an assumed-writer UI is how a spectator
@@ -361,6 +362,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     observerPinRef,
     setConnState,
     setErrorMsg,
+    setRefusalCard,
     setMode,
     setTakenOverBy,
     setReconnectAttempt,
@@ -556,7 +558,11 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
           <TriangleAlert className="mt-0.5 size-4 shrink-0" />
           <div className="flex flex-col gap-2">
             <p>{errorMsg}</p>
-            <PolicyRemedy policy={policy} enforced={WHY_CARD.ENFORCED_AT_ATTACH} canChange={WHY_CARD.CAN_CHANGE_NOT_HERE} copyable />
+            {refusalCard ? (
+              <PolicyRemedy policy={refusalCard.policy ?? policy} enforced={WHY_CARD.ENFORCED_AT_ATTACH} canChange={WHY_CARD.CAN_CHANGE_NOT_HERE} copyable />
+            ) : (
+              <PolicyRemedy policy={policy} line />
+            )}
           </div>
         </div>
       )}

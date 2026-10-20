@@ -3,8 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, vi } from "vitest";
+import { act, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { PolicyRemedy, safeRequestHref } from "./policy-remedy";
 
 const ref = (over: Record<string, string>) => ({ source: "profile", name: "Contractors", ...over });
@@ -64,8 +65,45 @@ describe("PolicyRemedy", () => {
     expect(screen.getByTestId("policy-remedy")).toHaveTextContent("Set byWardyn boundary");
     rerender(<PolicyRemedy policy={{ source: "profile", layer: "profile", name: "Platform team" }} />);
     expect(screen.getByTestId("policy-remedy")).toHaveTextContent("Set byPlatform team walls");
-    rerender(<PolicyRemedy policy={{ source: "profile", name: "Platform team", overridden: true }} />);
+    rerender(<PolicyRemedy policy={{ source: "profile", layer: "profile", name: "Platform team", overridden: true }} />);
     expect(screen.getByTestId("policy-remedy")).toHaveTextContent("Set byThis run's policy");
+  });
+
+  it("draws no Set by row without a layer: a run's policy reference and a proxy refusal cannot name the wall", () => {
+    render(<PolicyRemedy policy={{ source: "profile", name: "Platform team", owner: "Platform Security" }} />);
+    const card = screen.getByTestId("policy-remedy");
+    expect(card).not.toHaveTextContent("Set by");
+    expect(card).not.toHaveTextContent("Platform team walls");
+    expect(card).toHaveTextContent("OwnerPlatform Security");
+  });
+
+  it("Copy details says Copied only after the write lands, then resets; a refused clipboard changes nothing", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      // After setup(): user-event installs its own clipboard stub there.
+      const write = vi.fn().mockRejectedValueOnce(new Error("denied")).mockResolvedValueOnce(undefined);
+      Object.defineProperty(navigator, "clipboard", { value: { writeText: write }, configurable: true });
+      render(<PolicyRemedy policy={ref({ owner: "Platform Security" })} copyable />);
+      await user.click(screen.getByRole("button", { name: "Copy details" }));
+      await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
+      expect(screen.getByRole("button", { name: "Copy details" })).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Copy details" }));
+      expect(await screen.findByRole("button", { name: "Copied" })).toBeInTheDocument();
+      act(() => {
+        vi.advanceTimersByTime(2500);
+      });
+      expect(screen.getByRole("button", { name: "Copy details" })).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the line form is one owner-and-ask line, never the card", () => {
+    render(<PolicyRemedy line policy={ref({ owner: "Platform Security", request_url: "https://example.com/access" })} />);
+    const line = screen.getByTestId("policy-remedy");
+    expect(line).toHaveTextContent("Owned by Platform Security · Request access");
+    expect(line.querySelector("dl")).toBeNull();
   });
 
   it("says who to ask when the limit lists an owner but no way to ask, or neither", () => {

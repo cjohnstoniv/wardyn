@@ -36,7 +36,6 @@ import { useNewRunDispatch, useNewRunDraft } from "../new-run-route";
 import { BarrierChip } from "../review/barrier-chip";
 import { cpuNumber, resolvedLifetime, resolvedLifetimeText } from "../review/format";
 import type { ReviewPreflight } from "../review/review-seams";
-import { WHY_CARD } from "../../../../lib/why-card-copy";
 import { AdoLaunchDialog } from "./ado-launch-dialog";
 import { useLaunchRun, type PendingLaunch } from "./use-launch-run";
 
@@ -212,7 +211,7 @@ function NameRunForm({ onOpenChange, onCreated, pending }: Pick<NameRunDialogPro
         {sentence && !refusalIsAdoNote && (
           <div id="name-run-sentence" role="alert" className="text-sm text-danger">
             <p>{sentence}</p>
-            {create.refusal && <PolicyRemedy policy={create.policy} canChange={WHY_CARD.CAN_CHANGE_NOT_HERE} className="mt-1" />}
+            {create.refusal && <PolicyRemedy policy={create.policy} className="mt-1" />}
           </div>
         )}
         {/* Several organisations each take their own token: say which ones an Azure DevOps credential refusal is missing one for. */}

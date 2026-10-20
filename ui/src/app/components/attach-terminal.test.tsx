@@ -122,8 +122,9 @@ import { OperatorProvider } from "./wardyn/operator-context";
 import { RUN_COCKPIT } from "./wardyn/copy";
 import { runs } from "../lib/api/runs";
 import { HttpError } from "../lib/api/core";
+import type { PolicyRef } from "../lib/api/health";
 import { aheadByHours } from "../lib/test-clock";
-import { RUN_OWNER_ONLY } from "../lib/run-entry";
+import { ATTACH_CAP_REASON, RUN_OWNER_ONLY } from "../lib/run-entry";
 
 // The attach-mode control frame the daemon sends as a TEXT frame on EVERY
 // connect (internal/api/attach_holder.go), read_only=false included.
@@ -339,9 +340,9 @@ describe("AttachTerminal — role-aware attach", () => {
     expect(FakeWebSocket.instances).toHaveLength(0);
   });
 
-  // deny-f4: the refused state carries the run's own policy contact, from
-  // GET /runs/{id}, beside the sentence it never rewords.
-  it("refused state shows the Request access remedy from the run's policy, and none without one", async () => {
+  // deny-f4: a refused entry that is not a governance limit keeps the one owner-and-ask line from the run's own
+  // policy; the why card is only for a refusal that is a limit (#2951).
+  it("an owner-only refusal shows the one-line remedy from the run's policy, not the why card, and none without one", async () => {
     const policy = { source: "profile", owner: "Platform Security", request_url: "https://example.com/access" };
     const { unmount } = render(
       <OperatorProvider operator={false} principal="alice@example.com">
@@ -349,8 +350,10 @@ describe("AttachTerminal — role-aware attach", () => {
       </OperatorProvider>,
     );
     expect(await screen.findByText(RUN_OWNER_ONLY, { exact: false })).toBeInTheDocument();
-    expect(screen.getByTestId("policy-remedy")).toHaveTextContent("Platform Security");
-    expect(screen.getByTestId("policy-remedy")).toHaveTextContent("EnforcedBy Wardyn, before the terminal opens");
+    const remedy = screen.getByTestId("policy-remedy");
+    expect(remedy).toHaveTextContent("Owned by Platform Security · Request access");
+    expect(remedy.querySelector("dl")).toBeNull();
+    expect(screen.queryByText("Enforced")).toBeNull();
     unmount();
     render(
       <OperatorProvider operator={false} principal="alice@example.com">
@@ -359,6 +362,34 @@ describe("AttachTerminal — role-aware attach", () => {
     );
     expect(await screen.findByText(RUN_OWNER_ONLY, { exact: false })).toBeInTheDocument();
     expect(screen.queryByTestId("policy-remedy")).toBeNull();
+  });
+
+  it("the session-cap refusal and an envelope that carries a policy get the why card; any other mint error does not", async () => {
+    const attachTicket = vi.mocked(runs.attachTicket);
+    const run = (policy?: PolicyRef) => (
+      <OperatorProvider operator={false} principal="alice@example.com">
+        <AttachTerminal runId="run_1" policy={policy} />
+      </OperatorProvider>
+    );
+    attachTicket.mockReset();
+    attachTicket.mockRejectedValueOnce(new HttpError(403, "Too many sessions.", ATTACH_CAP_REASON));
+    const first = render(run({ source: "profile", owner: "Platform Security" }));
+    expect(await screen.findByText(/Too many sessions/)).toBeInTheDocument();
+    expect(screen.getByTestId("policy-remedy")).toHaveTextContent("EnforcedBy Wardyn, before the terminal opens");
+    expect(screen.getByRole("button", { name: "Copy details" })).toBeInTheDocument();
+    first.unmount();
+
+    attachTicket.mockRejectedValueOnce(new HttpError(403, "Not allowed here.", "", "", "", "", { source: "profile", layer: "deployment", owner: "Platform Security" }));
+    const second = render(run());
+    expect(await screen.findByText(/Not allowed here/)).toBeInTheDocument();
+    expect(screen.getByTestId("policy-remedy")).toHaveTextContent("Set byWardyn boundary");
+    second.unmount();
+
+    attachTicket.mockRejectedValueOnce(new HttpError(401, "Sign in again."));
+    render(run({ source: "profile", owner: "Platform Security" }));
+    expect(await screen.findByText(/Sign in again/)).toBeInTheDocument();
+    expect(screen.getByTestId("policy-remedy")).toHaveTextContent("Owned by Platform Security");
+    expect(screen.queryByText("Enforced")).toBeNull();
   });
 
   // P1: a member's own run must reach its terminal even when the login pane
