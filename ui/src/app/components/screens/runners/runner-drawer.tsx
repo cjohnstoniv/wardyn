@@ -139,7 +139,7 @@ export function RunnerDrawer({
                   ) : (
                     <p>{RES.LIMITS_NOT_SET}</p>
                   )}
-                  {!runner.online && <OfflineNote />}
+                  {!runner.online && <OfflineNote neverConnected={claimed && !runner.last_seen_at} />}
                   <Hint>{RUNNER_V6.OWNER_ONLY}</Hint>
                   {runner.usage.reported && (
                     <Hint>

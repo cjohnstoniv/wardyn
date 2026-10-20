@@ -627,21 +627,27 @@ test.describe("Run detail — the Azure DevOps decline", () => {
   test("a run the Azure DevOps lane declined says why in its Credentials panel", async ({ page }) => {
     await openRuns(page);
     await page.route("**/api/v1/audit*", async (route) => {
-      const res = await route.fetch();
-      const rows = (await res.json()) as Array<Record<string, unknown>>;
-      const runId = new URL(route.request().url()).searchParams.get("run_id") ?? "";
-      rows.push({
-        id: "e2e-ado-lane-skip",
-        time: new Date().toISOString(),
-        run_id: runId,
-        actor_type: "system",
-        actor: "wardynd",
-        action: "run.ado_lane.skip",
-        target: runId,
-        outcome: "denied",
-        data: { reason: "row_not_admitted", detail },
-      });
-      await route.fulfill({ response: res, json: rows });
+      // A poll still in flight when the page moves on is already handled: fulfilling it throws, and the throw
+      // is charged to the test. The next poll is spliced the same way, so this one is let go.
+      try {
+        const res = await route.fetch();
+        const rows = (await res.json()) as Array<Record<string, unknown>>;
+        const runId = new URL(route.request().url()).searchParams.get("run_id") ?? "";
+        rows.push({
+          id: "e2e-ado-lane-skip",
+          time: new Date().toISOString(),
+          run_id: runId,
+          actor_type: "system",
+          actor: "wardynd",
+          action: "run.ado_lane.skip",
+          target: runId,
+          outcome: "denied",
+          data: { reason: "row_not_admitted", detail },
+        });
+        await route.fulfill({ response: res, json: rows });
+      } catch {
+        // the request was abandoned
+      }
     });
 
     await page.getByText("e2e fixture 4").click();

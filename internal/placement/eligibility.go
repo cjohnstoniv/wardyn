@@ -207,12 +207,28 @@ func classifyCredential(entries entrySource, path string, origin CredentialOrigi
 				}
 				return residentValueRefusal(path, row.Delivery, st == StructGrantKind, leaf)
 			}
-			return refuse(ReasonPlacementCredential, path, fmt.Sprintf("%s credential is unavailable on a local runner of trust class %s (delivery %s has no implemented authority)", row.Delivery, trustName(p.Trust), mode))
+			return refuse(ReasonPlacementCredential, path, notDeliveredDetail(row.Delivery, p.Trust, mode))
 		default:
 			return refuse(ReasonPlacementCredential, path, "credential row has a rule this server does not implement")
 		}
 	}
 	return refuse(ReasonPlacementCredential, path, "credential variant has no permitted local rule")
+}
+
+// notDeliveredDetail is the refusal of a class no admitted mode delivers to a
+// runner of trust: it names the class, the trust class and the delivery policy
+// that applied.
+func notDeliveredDetail(class string, trust types.RunnerTrustClass, mode Mode) string {
+	at := class + " credential is not delivered to a local runner of trust class " + trustName(trust)
+	switch {
+	case mode == ModeViaOrg: // a via_org-shaped row would have been admitted (viaOrgAdmits)
+		return at + ": via_org delivery of this credential is not built yet (delivery policy: via_org)"
+	case !trust.Valid():
+		return at + " (a runner of unknown trust class gets via_org delivery only)"
+	case mode == ModeRefuse || mode == "":
+		return at + " (delivery policy: refuse)"
+	}
+	return at + " (delivery policy: " + string(mode) + ")"
 }
 
 // ResidentAdmits is the runner_resident gate (OD-12, design §7.4, Q7) for a
@@ -236,8 +252,12 @@ func ResidentAdmits(origin CredentialOrigin, p LocalPlan, path string) *Refusal 
 	case p.ConfinementFloor != "":
 		return refuse(ReasonRunnerPostureUnmet, path, "confinement_class: a runner-asserted class never meets the "+string(p.ConfinementFloor)+" floor for a runner_resident credential")
 	}
-	if field := PostureUnmet(cp.RequirePosture, p.Posture); field != "" {
-		return refuse(ReasonRunnerPostureUnmet, path, field+": the runner's reported posture does not meet "+class+"'s requirement")
+	switch unmet := PostureUnmetAll(cp.RequirePosture, p.Posture); {
+	case len(unmet) == 0:
+	case p.Posture == nil:
+		return refuse(ReasonRunnerPostureUnmet, path, "posture: no reported posture to judge. At launch no runner is chosen yet, and a runner that has not reported its posture meets no requirement, so a delivery policy with require_posture refuses (requires "+cp.RequirePosture.requires()+")")
+	default:
+		return refuse(ReasonRunnerPostureUnmet, path, strings.Join(unmet, ", ")+": the runner's reported posture does not meet "+class+"'s requirement (requires "+cp.RequirePosture.requires()+")")
 	}
 	return nil
 }

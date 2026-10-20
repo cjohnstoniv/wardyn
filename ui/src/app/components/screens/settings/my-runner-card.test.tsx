@@ -267,6 +267,30 @@ describe("My runner card: a claimed runner", () => {
     expect(screen.queryByText("Disk not encrypted")).toBeNull();
   });
 
+  // Board D2a: a runner that registered but never connected names the service and its log, whether or not
+  // limits are set; one that dropped keeps today's notice.
+  it("a runner that never connected names the service and its log, with or without limits", async () => {
+    listMineMock.mockResolvedValue([
+      runner({ id: "r-a", name: "mbp-dev", online: false, last_seen_at: undefined, limits: undefined, usage: usageWith(0) }),
+      runner({ id: "r-b", name: "desk-9", online: false, last_seen_at: undefined, usage: usageWith(0) }),
+      runner({ id: "r-c", name: "old-1", online: false, last_seen_at: aheadByHours(-3), usage: usageWith(0) }),
+    ]);
+    const user = userEvent.setup();
+    renderCard();
+    await expand(user);
+    const rowOf = async (name: string) => (await screen.findByRole("heading", { name })).closest("li") as HTMLElement;
+    for (const name of ["mbp-dev", "desk-9"]) {
+      const notes = (await rowOf(name)).querySelectorAll("[data-offline-note]");
+      expect(notes).toHaveLength(1);
+      expect(notes[0].textContent).toBe("This runner registered but has never connected to this server. On that computer, check that wardyn-runnerd runs as a service (wardyn-runnerd setup installs one) and read its log: ~/Library/Logs/wardyn/runnerd.log on macOS, journalctl --user -u wardyn-runnerd on Linux. Behind a proxy, the service needs its own HTTPS_PROXY.");
+      expect([...notes[0].querySelectorAll("code")].map((c) => c.textContent)).toEqual(["wardyn-runnerd setup", "~/Library/Logs/wardyn/runnerd.log", "journalctl --user -u wardyn-runnerd", "HTTPS_PROXY"]);
+    }
+    const old = await rowOf("old-1");
+    expect(old.querySelectorAll("[data-offline-note]")).toHaveLength(1);
+    expect(within(old).getByText("This runner is offline. Its capacity isn't counted as available until it reconnects.")).toBeInTheDocument();
+    expect(within(old).queryByText(/never connected to this server/)).toBeNull();
+  });
+
   it("revoking your own runner confirms with the run count and sends no not-mine marker", async () => {
     revokeMineMock.mockResolvedValue({ id: "r-laptop", state: "revoked", runs_killed: 2 });
     const user = userEvent.setup();

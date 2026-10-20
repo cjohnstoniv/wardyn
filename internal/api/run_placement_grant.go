@@ -38,8 +38,9 @@ func (s *Server) createDispatchGrant(ctx context.Context, run types.AgentRun, g 
 
 // localCapturedGrantOrigin inspects the raw snapshot rather than permitting
 // an opaque JSON child to escape the closed schema. Only known, owner-bound
-// provider captures are own. Minted ADO credentials remain brokered even when
-// the captured sign-in is held by a person.
+// provider captures are own. An Azure DevOps grant is own only for the owner's
+// own PAT; a minted ADO credential is refused even when the captured sign-in is
+// held by a person.
 func (s *Server) localCapturedGrantOrigin(ctx context.Context, owner string, g types.GrantSpec) (placement.CredentialOrigin, bool, error) {
 	if g.Kind != types.GrantAPIKey {
 		return placement.CredentialOrigin{}, false, nil
@@ -57,6 +58,9 @@ func (s *Server) localCapturedGrantOrigin(ctx context.Context, owner string, g t
 	if err != nil {
 		return placement.CredentialOrigin{}, true, err
 	}
+	if rule.SecretName == types.ADOEntraAccessTokenSecret {
+		return s.localADOGrantOrigin(ctx, owner, outer.Snapshot)
+	}
 	sc, err := s.siteConfigForDispatch(ctx)
 	if err != nil {
 		return placement.CredentialOrigin{}, true, err
@@ -69,10 +73,29 @@ func (s *Server) localCapturedGrantOrigin(ctx context.Context, owner string, g t
 	return placement.CredentialOrigin{GrantKind: g.Kind, Class: placement.ClassOwn, Delivery: placement.ClassAPIKey, Stored: true, OwnNamespace: own, OwnerOnly: own}, true, nil
 }
 
-func localCapturedSecretName(sc types.SiteConfig, owner, sentinel string, raw json.RawMessage) (string, error) {
-	if sentinel == types.ADOEntraAccessTokenSecret {
-		return "", fmt.Errorf("captured ADO token delivery is not implemented")
+// localADOGrantOrigin classifies one Azure DevOps lane grant from its snapshot
+// with the lane's own decision, localADOOrigin: own only for the run owner's own
+// PAT proven in their namespace. A token the organisation mints from a captured
+// sign-in has no local delivery, so every other token mode refuses.
+func (s *Server) localADOGrantOrigin(ctx context.Context, owner string, raw json.RawMessage) (placement.CredentialOrigin, bool, error) {
+	var sn adoEntraScopeSnapshot
+	if err := closedLocalSnapshot(raw, &sn); err != nil {
+		return placement.CredentialOrigin{}, true, err
 	}
+	switch types.ADOTokenMode(sn.TokenMode) {
+	case types.ADOTokenModeOwnPAT:
+		origin := s.localADOOrigin(ctx, owner, adoEntraRun{rowID: sn.ProviderRowID, owner: sn.OwnerSubject, tokenMode: types.ADOTokenModeOwnPAT})
+		if origin.Class != placement.ClassOwn {
+			return placement.CredentialOrigin{}, true, fmt.Errorf("ADO own PAT is not the run owner's")
+		}
+		origin.GrantKind, origin.Delivery = types.GrantAPIKey, placement.ClassAPIKey
+		return origin, true, nil
+	default:
+		return placement.CredentialOrigin{}, true, fmt.Errorf("captured ADO token delivery is not implemented")
+	}
+}
+
+func localCapturedSecretName(sc types.SiteConfig, owner, sentinel string, raw json.RawMessage) (string, error) {
 	var sn providerGrantSnapshot
 	var part string
 	if sentinel == types.AWSSSOAccessTokenSecret {
