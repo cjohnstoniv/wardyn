@@ -152,6 +152,7 @@ func (s *Server) uiEnterDesktop(w http.ResponseWriter, r *http.Request, run type
 	}
 	sess := s.newUISession(run, ta, uiDesktopAppName, 0, min(s.uiSessionTTL(), uiDesktopSessionTTL))
 	sess.Desktop = true
+	sess.Boot = s.bootEpoch
 	s.startUISession(w, r, run, ta, sess, map[string]any{"app": uiDesktopAppName, "machine_kind": string(run.MachineKind)}, "/", redirectStatus)
 }
 

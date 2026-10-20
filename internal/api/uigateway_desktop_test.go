@@ -448,3 +448,32 @@ func TestDesktopStreamPlainGetTellsAGoneSessionFromAGoodOne(t *testing.T) {
 		t.Fatalf("plain GET after Close = %d, want 403", got.Code)
 	}
 }
+
+// A restart is a new process with the same cookie key, an empty Closed set and a new boot epoch. A
+// desktop cookie from before it is refused after it, Closed or still open: Close stays closed.
+func TestDesktopSessionDoesNotOutliveARestart(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		closed bool
+	}{{"closed before the restart", true}, {"open at the restart", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _ := newDesktopHarness(t)
+			c := desktopCookie(t, h.enterDesktop(h.ticket(h.run.ID, h.owner, oidc.RoleUser)))
+			want := http.StatusUpgradeRequired
+			if tc.closed {
+				req := httptest.NewRequest(http.MethodPost, desktopPath(h, uiDesktopClose), nil)
+				req.AddCookie(c)
+				h.gateway.ServeHTTP(httptest.NewRecorder(), req)
+				want = http.StatusForbidden
+			}
+			if got := uiGet(h, desktopPath(h, uiDesktopRFB), c); got.Code != want {
+				t.Fatalf("plain GET before the restart = %d, want %d", got.Code, want)
+			}
+			h.srv = New(h.srv.cfg)
+			h.gateway = h.srv.UIGatewayHandler()
+			if got := uiGet(h, desktopPath(h, uiDesktopRFB), c); got.Code != http.StatusForbidden {
+				t.Fatalf("plain GET after the restart = %d, want 403", got.Code)
+			}
+		})
+	}
+}

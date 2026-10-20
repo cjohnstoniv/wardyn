@@ -103,8 +103,7 @@
 - The desktop cookie lasts at most 1 hour, whatever `WARDYN_UI_SANDBOX_SESSION_TTL` allows. The shorter bound applies.
 - **Close** (`POST /r/<run>/__desktop/__close`) ends the session for every copy of the cookie: it clears the cookie,
   cuts the open stream, and the gateway answers 403 to that cookie after.
-- Residual: the closed-session set lives in wardynd's memory. The cookie's signing key is stored, so after a restart
-  a Closed desktop's cookie works again until its 1-hour bound.
+- A restart of the control plane ends every open desktop session, and the person opens it again.
 - The relay filters cut text on this display by the run's `desktop` rules, with the same `ui.clipboard` rows as the
   `novnc` app. No clipboard flows today: QEMU's VNC passes cut text only to a guest clipboard agent (`qemu-vdagent`),
   and the VM has none. The rules take effect once one exists.

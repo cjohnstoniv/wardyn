@@ -38,6 +38,7 @@ func New(cfg Config) *Server {
 		branchLimiter:      principalLimiter{rate: branchListRatePerSec, burst: branchListBurst, max: branchListMaxPeople},
 		backchannelLimiter: principalLimiter{rate: backchannelLogoutRatePerSec, burst: backchannelLogoutBurst, max: 1},
 		deviceRouteState:   newDeviceRouteState(),
+		bootEpoch:          newBearer(""),
 	}
 	s.scimState = newSCIMState()
 	s.defaultRunnerHooks()

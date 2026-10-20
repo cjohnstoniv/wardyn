@@ -130,6 +130,8 @@ type uiSession struct {
 	// Desktop marks a session on a VM's desktop (App uiDesktopAppName, no Port): it lasts at most
 	// uiDesktopSessionTTL and ends when its person closes it (uigateway_desktop.go).
 	Desktop bool `json:"d,omitempty"`
+	// Boot is the bootEpoch of the process that minted a desktop session; empty on every other session.
+	Boot string `json:"b,omitempty"`
 }
 
 // auditUISession writes one ui.* row for sess: its run, its principal, and the
@@ -280,7 +282,8 @@ func (s *Server) decodeUISession(r *http.Request, now time.Time) (uiSession, boo
 	if sess.IssuedAt <= 0 || sess.AuthorizedAt <= 0 || now.Sub(time.Unix(sess.IssuedAt, 0)) >= s.uiSessionTTLFor(sess) {
 		return uiSession{}, false
 	}
-	if sess.Desktop && s.uiDesktopClosed(sess, now) {
+	// The Closed set is process memory, so a restart ends every desktop session: one from another boot is refused.
+	if sess.Desktop && (sess.Boot != s.bootEpoch || s.uiDesktopClosed(sess, now)) {
 		return uiSession{}, false
 	}
 	return sess, true
