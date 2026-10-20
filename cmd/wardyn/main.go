@@ -36,7 +36,7 @@ func (e *exitError) Unwrap() error { return e.err }
 func main() {
 	if err := rootCmd().Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "wardyn:", err)
-		if hint := dialHint(err); hint != "" {
+		if hint := dialHint(err, clientTokenSent); hint != "" {
 			fmt.Fprintln(os.Stderr, "wardyn:", hint)
 		}
 		if hint := noOrgHint(err, urlFromDefault); hint != "" {
@@ -55,7 +55,11 @@ func main() {
 // we did reach wardynd, so it gets no hint.
 // keys on the whole *url.Error transport class, not just ECONNREFUSED —
 // any failure to reach the daemon deserves the same "is wardynd running?" nudge.
-func dialHint(err error) string {
+//
+// tokenSent is whether the request carried a bearer. On a deployment with neither single sign-on
+// nor an admin token, the server answers admin_token_not_configured before it reads one, so that
+// reason names a token only when one was sent.
+func dialHint(err error, tokenSent bool) string {
 	var ue *url.Error
 	if errors.As(err, &ue) {
 		// `wardyn setup` is deliberately NOT named here: it's a subcommand group
@@ -65,11 +69,23 @@ func dialHint(err error) string {
 		// work of its own to do.)
 		return "is wardynd running? (start it with `make setup`, the compose quick-start; point the CLI elsewhere with --url or WARDYN_URL)"
 	}
-	// Auth failure: we DID reach wardynd but it refused the bearer token. Name
-	// the two ways to supply one, so first contact against the compose stack
-	// (which boots with an admin token set) is recoverable without docs.
+	// Auth failure: we DID reach wardynd but it refused the bearer token. The
+	// 401's reason says which case it is. A deployment that signs people in
+	// with single sign-on and has no admin token gets a personal API token
+	// remedy; every other 401 names the two ways to supply a token, so first
+	// contact against the compose stack (which boots with an admin token set)
+	// is recoverable without docs.
 	var ae *sdk.APIError
 	if errors.As(err, &ae) && ae.Status == http.StatusUnauthorized {
+		switch ae.Reason {
+		case "sign_in_required":
+			return "this organisation signs people in with single sign-on and has no admin token, so --token and WARDYN_ADMIN_TOKEN cannot work here. " + personalTokenRemedy
+		case "admin_token_not_configured":
+			if !tokenSent {
+				break
+			}
+			return "this organisation does not recognise the token sent (unknown, revoked or expired) and has no admin token, so --token and WARDYN_ADMIN_TOKEN cannot work here. " + personalTokenRemedy
+		}
 		return "authenticate with --token or WARDYN_ADMIN_TOKEN/WARDYN_TOKEN (the compose quick-start's token is in deploy/compose/README.md)"
 	}
 	return ""
@@ -113,6 +129,13 @@ func resolveURL(cmd *cobra.Command, current string) (resolved string, fromDefaul
 	}
 	return profileURL, false
 }
+
+// clientTokenSent is whether the SDK client the last command built carries a bearer: pkg/client
+// sends no Authorization header for an empty token.
+var clientTokenSent bool
+
+// personalTokenRemedy is how a person reaches a deployment with no admin token from the CLI.
+const personalTokenRemedy = "Set WARDYN_TOKEN to a personal API token: sign in to the console and create one under Your account, or claim the invitation your Wardyn admin sent you there."
 
 // noRedirect hands a 3xx back to the caller instead of following it. A followed
 // redirect turns a write into a GET of wherever Location points (so it "succeeds"
@@ -250,6 +273,7 @@ func rootCmd() *cobra.Command {
 	// server can't wedge a single request forever; the shared client reuses one
 	// connection pool across those polls.
 	client := func() *sdk.Client {
+		clientTokenSent = token != ""
 		return &sdk.Client{BaseURL: serverURL, Token: token, HTTPClient: &http.Client{Timeout: 30 * time.Second, CheckRedirect: noRedirect}}
 	}
 

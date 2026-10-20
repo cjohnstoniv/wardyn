@@ -61,7 +61,7 @@ ha:
 # of the Service's endpoints; liveness and startup stay on /healthz either way.
 #
 # ONLY OVERRIDE THIS FOR AN OLD IMAGE. /readyz was added in 0.6, and the empty
-# image.tag above resolves to .Chart.AppVersion, which is 0.9.5 — so the default
+# image.tag above resolves to .Chart.AppVersion, which is 0.9.6 — so the default
 # install serves it. An image.tag PINNED at or below 0.5.0 does not: the probe
 # 404s forever, the pod never becomes Ready, and the rollout hangs with no other
 # symptom. Pin it back with `--set readinessProbe.path=/healthz` and accept
@@ -668,9 +668,7 @@ k8s:
   #
   # podAnnotations and podLabels may not carry a reserved wardyn label (wardyn.managed, wardyn.run-id,
   # wardyn.component) or any key under kubernetes.io/ or k8s.io/ other than
-  # cluster-autoscaler.kubernetes.io/safe-to-evict, and podAnnotations may not carry a key under a
-  # container runtime's namespace (io.katacontainers., io.kubernetes.cri-o., io.kubernetes.cri.,
-  # io.containerd., dev.gvisor., run.oci.): wardynd refuses to boot naming the key. Such keys
+  # cluster-autoscaler.kubernetes.io/safe-to-evict: wardynd refuses to boot naming the key. Such keys
   # reach confinement the pod spec sets on purpose (an AppArmor "unconfined" annotation, for one).
   # No safe-to-evict annotation is set by default.
   sandbox:

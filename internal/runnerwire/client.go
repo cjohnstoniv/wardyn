@@ -183,7 +183,11 @@ func (l *connectLog) failed(ctx context.Context, err error, retry time.Duration)
 		return
 	}
 	l.last = err.Error()
-	slog.WarnContext(ctx, "runner connection to the organisation failed", slog.Any("err", err), slog.Duration("retry_in", retry))
+	attrs := []any{slog.Any("err", err), slog.Duration("retry_in", retry)}
+	if hint := connectHint(err); hint != "" {
+		attrs = append(attrs, slog.String("hint", hint))
+	}
+	slog.WarnContext(ctx, "runner connection to the organisation failed", attrs...)
 }
 
 func reconnectDelay(attempt int) time.Duration {
