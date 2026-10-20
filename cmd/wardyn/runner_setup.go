@@ -537,7 +537,7 @@ func waitConnected(ctx context.Context, c *sdk.Client, out io.Writer, id uuid.UU
 		fmt.Fprintf(&msg, "\n"+copySetupLastError, status.LastError)
 	}
 	if prev := filepath.Join(installedRunnerdDir(), "wardyn-runnerd.previous"); fileExists(prev) {
-		fmt.Fprintf(&msg, "\n"+copySetupRestore, oldVersion, prev, org)
+		msg.WriteString("\n" + restoreLine(oldVersion, prev, org))
 	}
 	return errors.New(msg.String())
 }
@@ -549,4 +549,22 @@ func installedRunnerdDir() string {
 		return filepath.Join(home, "Library", "Application Support", "wardyn", "bin")
 	}
 	return filepath.Join(cmp.Or(os.Getenv("XDG_DATA_HOME"), filepath.Join(home, ".local", "share")), "wardyn", "bin")
+}
+
+// shellPlain is what a POSIX shell reads as one word without quoting.
+var shellPlain = regexp.MustCompile(`^[A-Za-z0-9_./:@%+=,-]+$`)
+
+// shellArg is s as one POSIX shell word: unchanged when it needs no quoting, else single-quoted with each
+// ' written as '\”.
+func shellArg(s string) string {
+	if shellPlain.MatchString(s) {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// restoreLine is copySetupRestore with the path and URL quoted, so the command pastes as printed (a macOS
+// path holds "Application Support").
+func restoreLine(oldVersion, prev, org string) string {
+	return fmt.Sprintf(copySetupRestore, oldVersion, shellArg(prev), shellArg(org))
 }

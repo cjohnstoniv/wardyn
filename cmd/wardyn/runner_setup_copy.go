@@ -17,7 +17,7 @@ const (
 	// The step-up line printed under the server's own self_host_runner refusal.
 	copySetupStepUp = "If you are a Wardyn admin: run `wardyn login --admin` (1 hour), then this command again."
 	// The restore line (design ATTACH 11.4 Upgrade); copySetupOldVersion stands in when the old version is not known.
-	copySetupRestore    = "To go back to %s: `%s setup --org %s`" // old version, the .previous path, org URL
+	copySetupRestore    = "To go back to %s: `%s setup --org %s`" // old version, the .previous path, org URL (both shell-quoted when needed)
 	copySetupOldVersion = "the previous version"
 	copySetupLastError  = "wardyn-runnerd's last error: %s"
 

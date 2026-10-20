@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -452,7 +453,7 @@ func TestRunnerSetupNotConnectedNamesTheRestoreLine(t *testing.T) {
 	r.claimed, r.online, r.version = true, false, "0.9.6"
 	_, err := r.run("--token", "wdn_personal", "--runnerd", bin)
 	want := fmt.Sprintf(errSetupNotConnected, setupConnectWait) + "\n" + fmt.Sprintf(copySetupLastError, "WARDYN_ORG_CA_FILE: not a PEM file") +
-		"\n" + fmt.Sprintf(copySetupRestore, "0.9.6", prev, r.srv.URL)
+		"\n" + restoreLine("0.9.6", prev, r.srv.URL)
 	if err == nil || err.Error() != want {
 		t.Fatalf("err = %q\nwant  %q", err, want)
 	}
@@ -594,5 +595,71 @@ func TestRunnerSetupRefusedClaimOnARegisteredHostNamesTheStateDir(t *testing.T) 
 	}
 	if r.mints != 0 {
 		t.Fatal("a registered host minted a token")
+	}
+}
+
+// posixWords splits a command as a POSIX shell would for the quoting restoreLine uses: single quotes,
+// backslash outside quotes, and blanks. It never runs anything.
+func posixWords(t *testing.T, line string) []string {
+	t.Helper()
+	var words []string
+	var cur strings.Builder
+	in, inWord := false, false
+	for i := 0; i < len(line); i++ {
+		c := line[i]
+		switch {
+		case in && c == '\'':
+			in = false
+		case in:
+			cur.WriteByte(c)
+		case c == '\'':
+			in, inWord = true, true
+		case c == '\\' && i+1 < len(line):
+			i++
+			cur.WriteByte(line[i])
+			inWord = true
+		case c == ' ' || c == '\t':
+			if inWord {
+				words = append(words, cur.String())
+				cur.Reset()
+				inWord = false
+			}
+		default:
+			cur.WriteByte(c)
+			inWord = true
+		}
+	}
+	if in {
+		t.Fatalf("unterminated quote in %q", line)
+	}
+	if inWord {
+		words = append(words, cur.String())
+	}
+	return words
+}
+
+func TestRunnerSetupRestoreLinePastesAsPrinted(t *testing.T) {
+	const org = "https://wardyn.example.com"
+	for _, tc := range []struct{ name, prev string }{
+		{"macOS default", "/Users/me/Library/Application Support/wardyn/bin/wardyn-runnerd.previous"},
+		{"space", "/home/me/my runners/wardyn/bin/wardyn-runnerd.previous"},
+		{"single quote", "/home/o'brien/.local/share/wardyn/bin/wardyn-runnerd.previous"},
+		{"plain Linux", "/home/me/.local/share/wardyn/bin/wardyn-runnerd.previous"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			line := restoreLine("0.9.6", tc.prev, org)
+			start, end := strings.Index(line, "`"), strings.LastIndex(line, "`")
+			if start < 0 || end <= start {
+				t.Fatalf("no command in %q", line)
+			}
+			got := posixWords(t, line[start+1:end])
+			want := []string{tc.prev, "setup", "--org", org}
+			if !slices.Equal(got, want) {
+				t.Fatalf("%q parses as %q, want %q", line, got, want)
+			}
+			if tc.name == "plain Linux" && line != fmt.Sprintf(copySetupRestore, "0.9.6", tc.prev, org) {
+				t.Fatalf("a plain path was quoted: %q", line)
+			}
+		})
 	}
 }
