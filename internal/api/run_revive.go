@@ -234,6 +234,9 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	if rerr := s.reviveOwnerRecheck(ctx, run, cfg, actorType, actor); rerr != nil {
 		return reviveResult{}, rerr
 	}
+	if rerr := s.reviveLocalMCPRefusal(ctx, run, rebooted, actorType, actor); rerr != nil {
+		return reviveResult{}, rerr
+	}
 	if rerr := s.reviveCapPrecheck(ctx, run, rebooted); rerr != nil {
 		return reviveResult{}, rerr
 	}
@@ -656,6 +659,32 @@ func (s *Server) stripRevivedModelInjections(ctx context.Context, run types.Agen
 		s.auditDroppedInjection(ctx, run, runner.InjectionGrant{GrantID: in.GrantID, Rule: in.InjectionRule}, "model_credential_not_provider_authored")
 		return true
 	})
+	return nil
+}
+
+// reviveLocalMCPRefusal refuses a rebooted revive whose frozen components hold an MCP server
+// that runs in the sandbox while WARDYN_MCP_LOCAL_SERVERS is off. Starting the agent again
+// admits the run anew, as a queued run's admission does, so it meets the switch the same way:
+// componentDefinitionProblem's reason and sentence, never a dropped server. A revive that
+// leaves the agent running leaves its server running too, until the run ends.
+func (s *Server) reviveLocalMCPRefusal(ctx context.Context, run types.AgentRun, rebooted bool, actorType types.ActorType, actor string) *reviveError {
+	if !rebooted {
+		return nil
+	}
+	comps, err := s.runComponentSnapshot(ctx, run.ID)
+	if err != nil {
+		return reviveRefused(http.StatusServiceUnavailable, reasonReviveOwnerAuthorityUnreadable, loggedMsg(ctx, "re-check the run's components", err))
+	}
+	for _, rc := range comps {
+		problem := mcpLocalOffProblem(rc.Definition)
+		if problem == "" {
+			continue
+		}
+		ref := componentRefused(attachedComponent{snapshot: rc}, rc.Ordinal, reasonComponentDefinitionInvalid, problem, "has a definition that is not valid here.").refusal
+		s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "denied",
+			mustJSON(map[string]any{"subject": run.CreatedBy, "reason": reasonComponentDefinitionInvalid})))
+		return reviveRefused(ref.status, ref.body.Reason, ref.body.Error)
+	}
 	return nil
 }
 

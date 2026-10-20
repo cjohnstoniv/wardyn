@@ -288,3 +288,63 @@ func TestDispatchMCP_RemoteOnlyGolden(t *testing.T) {
 		t.Fatalf("dispatch output drifted from the golden (%v):\n%s", err, got)
 	}
 }
+
+// TestRevive_LocalMCPMeetsTheSwitchAsTheQueueDoes: a rebooted revive starts the
+// agent again, which admits the run anew, so a local server in the run's frozen
+// components meets WARDYN_MCP_LOCAL_SERVERS as a queued run's admission does.
+// Turned off after launch, the revive is refused with the gate's reason and
+// sentence and the agent is not started; still on, the run revives. A revive
+// that leaves the agent running keeps its server.
+func TestRevive_LocalMCPMeetsTheSwitchAsTheQueueDoes(t *testing.T) {
+	def := *localInline("Files").Inline
+	def.Secrets = nil
+	row := types.RunComponent{SelfDefined: true, Owner: "sub-owner", Name: "Files", Definition: def}
+	revive := func(f *reviveFixture) (int, errorBody) {
+		w := do(t, f.srv, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/revive", adminToken, "")
+		var body errorBody
+		_ = json.Unmarshal(w.Body.Bytes(), &body)
+		return w.Code, body
+	}
+
+	t.Run("on", func(t *testing.T) {
+		t.Setenv(envMCPLocalServers, "1")
+		f, sr := newRebootFixture(t)
+		f.withRunComponents(row)
+		if code, body := revive(f); code != http.StatusOK || !slices.Equal(sr.starts(), []int{1}) {
+			t.Fatalf("revive = %d %+v, starts %v; want 200 and the agent started", code, body, sr.starts())
+		}
+	})
+
+	t.Run("off after launch", func(t *testing.T) {
+		t.Setenv(envMCPLocalServers, "")
+		gate := newComponentFixture(t)
+		r := httptest.NewRequest(http.MethodPost, componentDoors[0], nil).WithContext(memberCtx([]string{"eng"}))
+		req := createRunRequest{Components: []types.ComponentRef{localInline("Files")}}
+		req.Tools = harnessTools("claude-code")
+		spec := govDeployment()
+		_, queued := gate.srv.applyRunComponents(r, req, &spec, governanceCeiling{Spec: govDeployment()}, nil, true)
+		if queued == nil {
+			t.Fatal("the gate admitted a local server with the switch off")
+		}
+		f, sr := newRebootFixture(t)
+		f.withRunComponents(row)
+		code, body := revive(f)
+		if code != queued.status || body.Reason != queued.body.Reason || body.Error != queued.body.Error {
+			t.Fatalf("revive = %d %q %q; want the gate's %d %q %q", code, body.Reason, body.Error,
+				queued.status, queued.body.Reason, queued.body.Error)
+		}
+		if got := sr.starts(); len(got) != 0 {
+			t.Errorf("StartSandbox calls = %v; a refused revive started the agent", got)
+		}
+		f.assertReviveRefused(t, reasonComponentDefinitionInvalid)
+	})
+
+	t.Run("off, agent still running", func(t *testing.T) {
+		t.Setenv(envMCPLocalServers, "")
+		f := newReviveFixture(t)
+		f.withRunComponents(row)
+		if code, body := revive(f); code != http.StatusOK {
+			t.Fatalf("revive = %d %+v; want 200, the running agent keeps its server", code, body)
+		}
+	})
+}
