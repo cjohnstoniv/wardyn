@@ -37,4 +37,4 @@ export const DESKTOP_SIGNIN_REASON_LINE: Readonly<Record<string, string>> = {
 
 /** The sentence for a sign-in reason, undefined for any other value. */
 export const desktopSigninReasonLine = (reason: string | undefined): string | undefined =>
-  reason !== undefined && Object.hasOwn(DESKTOP_SIGNIN_REASON_LINE, reason) ? DESKTOP_SIGNIN_REASON_LINE[reason] : undefined;
+  reason !== undefined && Object.prototype.hasOwnProperty.call(DESKTOP_SIGNIN_REASON_LINE, reason) ? DESKTOP_SIGNIN_REASON_LINE[reason] : undefined;
