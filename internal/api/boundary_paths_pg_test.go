@@ -251,9 +251,18 @@ func TestBoundaryCapsABreakGlassRunsEndToATightenedMaximum(t *testing.T) {
 	}
 }
 
+// TestBoundaryHoldsABreakGlassRunsEndWhenTheMaximumLoosens: a break-glass run created under a one-hour
+// maximum keeps it when the boundary loosens to two hours: loosening frees nothing.
+func TestBoundaryHoldsABreakGlassRunsEndWhenTheMaximumLoosens(t *testing.T) {
+	oneHour := boundaryMaxEnd
+	if ahead := breakGlassEndUnderALaterMaximum(t, &oneHour, 2*boundaryMaxEnd); ahead > boundaryMaxEnd*time.Second {
+		t.Errorf("ends %v ahead, want at most the captured maximum %ds", ahead, boundaryMaxEnd)
+	}
+}
+
 // TestBoundarySweepCapsEveryUnprofiledLiveRun: an operator's live run and a break-glass live run,
 // neither of which captured a profile, are left alone by the sweep in no_limits and held to the
-// boundary's maximum end once it is set, as every profiled run is.
+// boundary's maximum end once it is set, as every profiled run is; each cut is audited source boundary.
 func TestBoundarySweepCapsEveryUnprofiledLiveRun(t *testing.T) {
 	e := newGovEnvOn(t, throwawayPGPool(t))
 	ctx := context.Background()
@@ -294,6 +303,17 @@ func TestBoundarySweepCapsEveryUnprofiledLiveRun(t *testing.T) {
 	for i, end := range ends() {
 		if end == nil || end.After(cut) {
 			t.Errorf("run %d ends at %v, want at most %v", i, end, cut)
+		}
+	}
+	// Each cut is audited as the boundary's, not a profile's.
+	rows := e.audits("run.end.set")
+	if len(rows) != 2 {
+		t.Fatalf("run.end.set rows = %d, want one per run", len(rows))
+	}
+	for _, row := range rows {
+		var data map[string]any
+		if err := json.Unmarshal(row.Data, &data); err != nil || data["reason"] != "limits_tightened" || data["source"] != "boundary" || data["profile_id"] != nil {
+			t.Errorf("run.end.set data = %s (%v), want limits_tightened, source boundary, no profile_id", row.Data, err)
 		}
 	}
 }
