@@ -302,7 +302,7 @@ export function AddTools({ access, answered, intent, answeredFor, githubRepos = 
           ]}
         />
       </div>
-      <ul className="grid gap-2.5 [grid-template-columns:repeat(auto-fill,minmax(320px,1fr))]">
+      <ul data-testid="nr-tool-grid" className="grid items-start gap-2.5 [grid-template-columns:repeat(auto-fill,minmax(min(320px,100%),1fr))]">
         {show("cli") && cliCards.map(({ key, title, cli, row }) => {
           const generic = CLI_CARD[cli.kind];
           const on = !!row && attached(row.id);
@@ -317,6 +317,7 @@ export function AddTools({ access, answered, intent, answeredFor, githubRepos = 
               key={key}
               icon={generic.icon}
               title={title}
+              org={!!row}
               body={row?.description || generic.body}
               access={kind && breakdown(on, reason, kind)}
               brings={row && !kind && <Brings hosts={row.hosts} deliveries={delivery ? [delivery] : []} />}
