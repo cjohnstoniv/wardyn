@@ -4,12 +4,14 @@
 package docker
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -429,13 +431,72 @@ exit "$rc"
 	return home, binDir, tmuxLog
 }
 
-// ccRunIdle runs the real `agent-run --idle` under `timeout`, the same proof
-// oracle_agent_run_idle_test.go uses: a script that holds the container open is
-// KILLED by timeout (124); one that exits on its own reports its own code.
+// runIdleUntilPrep runs the real `agent-run --idle` and reports how it ended: a
+// script that exits on its own reports its own code; one that holds the container
+// open is KILLED (124) once this boot's prep has finished, or after 30 s if it
+// never writes prep-done. A fixed `timeout 3s` ended before a loaded machine had
+// run the prep, so the revive tests read the PREVIOUS boot's files (#3430).
+// prep-done is written last and --idle then makes its post-prep tmux call, so the
+// extra 300 ms lets that call land before the kill. prep-done only counts when
+// its mtime is no older than the start (to the second), so a file the last boot
+// left behind is not mistaken for this one's.
+func runIdleUntilPrep(t *testing.T, home, script string, env []string) (code int, out string) {
+	t.Helper()
+	cmd := exec.Command("bash", script, "--idle")
+	cmd.Env = env
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	var buf bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &buf, &buf
+	started := time.Now().Truncate(time.Second)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting agent-run --idle: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	killGroup := func() {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		<-done
+	}
+	exited := func(err error) (int, string) {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return exitErr.ExitCode(), buf.String()
+		}
+		if err != nil {
+			t.Fatalf("running agent-run --idle: %v\noutput: %s", err, buf.String())
+		}
+		return 0, buf.String()
+	}
+	prepDone := filepath.Join(home, ".wardyn", "prep-done")
+	deadline := time.After(30 * time.Second)
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case err := <-done:
+			return exited(err)
+		case <-deadline:
+			killGroup()
+			return 124, buf.String()
+		case <-tick.C:
+			if fi, err := os.Stat(prepDone); err != nil || fi.ModTime().Before(started) {
+				continue
+			}
+			select {
+			case err := <-done:
+				return exited(err)
+			case <-time.After(300 * time.Millisecond):
+			}
+			killGroup()
+			return 124, buf.String()
+		}
+	}
+}
+
+// ccRunIdle runs the claude-code image's real `agent-run --idle` through
+// runIdleUntilPrep.
 func ccRunIdle(t *testing.T, home, binDir, tmuxLog string, extraEnv ...string) (code int, out string) {
 	t.Helper()
-	cmd := exec.Command("timeout", "3s", "bash", ccRunnableAgentRun(t), "--idle")
-	cmd.Env = append(os.Environ(), append([]string{
+	env := append(os.Environ(), append([]string{
 		"HOME=" + home,
 		"PATH=" + binDir + string(os.PathListSeparator) + os.Getenv("PATH"),
 		"TMUX_LOG=" + tmuxLog,
@@ -449,14 +510,7 @@ func ccRunIdle(t *testing.T, home, binDir, tmuxLog string, extraEnv ...string) (
 		"WARDYN_GITHUB_GRANT_ID=",
 		"WARDYN_CLAUDE_MANAGED_B64=",
 	}, extraEnv...)...)
-	b, err := cmd.CombinedOutput()
-	if exitErr, ok := err.(*exec.ExitError); ok {
-		return exitErr.ExitCode(), string(b)
-	}
-	if err != nil {
-		t.Fatalf("running agent-run --idle: %v\noutput: %s", err, b)
-	}
-	return 0, string(b)
+	return runIdleUntilPrep(t, home, ccRunnableAgentRun(t), env)
 }
 
 const ccSeedEnv = "WARDYN_INTERACTIVE_SEED=say hello in five words"

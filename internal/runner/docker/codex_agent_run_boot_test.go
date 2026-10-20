@@ -47,14 +47,13 @@ func cxRunnableAgentRun(t *testing.T) string {
 	return dst
 }
 
-// cxRunIdle runs the real `agent-run --idle` under `timeout`: a script that holds
-// the container open is KILLED by timeout (124); one that exits on its own
+// cxRunIdle runs the real `agent-run --idle` through runIdleUntilPrep: a script
+// that holds the container open is KILLED (124); one that exits on its own
 // reports its own code. The fake tmux is ccIdleEnv's — the same argv+facts
 // recorder, because the claim being checked is the same one.
 func cxRunIdle(t *testing.T, home, binDir, tmuxLog string, extraEnv ...string) (code int, out string) {
 	t.Helper()
-	cmd := exec.Command("timeout", "3s", "bash", cxRunnableAgentRun(t), "--idle")
-	cmd.Env = append(os.Environ(), append([]string{
+	env := append(os.Environ(), append([]string{
 		"HOME=" + home,
 		"PATH=" + binDir + string(os.PathListSeparator) + os.Getenv("PATH"),
 		"TMUX_LOG=" + tmuxLog,
@@ -68,14 +67,7 @@ func cxRunIdle(t *testing.T, home, binDir, tmuxLog string, extraEnv ...string) (
 		"WARDYN_GITHUB_GRANT_ID=",
 		"WARDYN_CLAUDE_MANAGED_B64=",
 	}, extraEnv...)...)
-	b, err := cmd.CombinedOutput()
-	if exitErr, ok := err.(*exec.ExitError); ok {
-		return exitErr.ExitCode(), string(b)
-	}
-	if err != nil {
-		t.Fatalf("running agent-run --idle: %v\noutput: %s", err, b)
-	}
-	return 0, string(b)
+	return runIdleUntilPrep(t, home, cxRunnableAgentRun(t), env)
 }
 
 // TestCodexAgentRun_BootSessionPrecedesPrep — the session must win the `wardyn`
