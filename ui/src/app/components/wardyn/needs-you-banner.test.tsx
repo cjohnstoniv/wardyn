@@ -109,6 +109,14 @@ describe("NeedsYouBanner", () => {
     expect(screen.queryByTestId("needs-you-recording")).not.toBeInTheDocument();
   });
 
+  it("a harness login run, which is never recorded, says Recording off", () => {
+    mount([request({ state: "APPROVED", decided_at: new Date().toISOString(), takeover_holder: "dev-sub" })], {
+      ...run,
+      task: "harness login",
+    } as RunDetail);
+    expect(screen.getByTestId("needs-you-recording").textContent).toBe(NEEDS_YOU.strip.off);
+  });
+
   it("someone else holding control is shown in use, with Take over", () => {
     mount([request({ state: "APPROVED", decided_at: new Date().toISOString(), takeover_holder: "priya" })]);
     const tile = screen.getByTestId("needs-you-in-use");

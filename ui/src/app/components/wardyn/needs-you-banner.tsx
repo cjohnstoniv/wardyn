@@ -17,6 +17,7 @@ import { mayEnterRunOrUnknown } from "../../lib/run-entry";
 import { Button } from "../ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { enterUIApp } from "../screens/run-detail-ssh";
+import { HARNESS_LOGIN_TASK } from "../screens/run-detail/sign-in-run";
 import { useOperator, useOperatorResolved, usePrincipal } from "./operator-context";
 import { NEEDS_YOU, askedAgo, heldClock, type TakeoverSurface } from "./copy/needs-you";
 import { toast } from "sonner";
@@ -82,9 +83,10 @@ export function NeedsYouBanner({
     return () => window.clearInterval(t);
   }, [apId]);
 
-  // A runner that declined still has the console and SSH sessions recorded here; only an organisation
-  // that keeps no recordings means a takeover is not recorded (the server's takeoverRecorded).
-  const recorded = run.not_recorded !== "org_off";
+  // Mirrors the server's takeoverRecorded: a runner that declined still has the console and SSH
+  // sessions recorded here; an organisation that keeps no recordings, or a harness login run (never
+  // recorded), means the takeover is not recorded.
+  const recorded = run.not_recorded !== "org_off" && run.task !== HARNESS_LOGIN_TASK;
 
   if (done) {
     return (
