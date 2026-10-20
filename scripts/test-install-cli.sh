@@ -99,7 +99,7 @@ reset_home
 run "${GOOD[@]}" --org https://wardyn.example
 expect_ok "happy path"
 [ -x "$d1/wardyn" ] || fail "happy path: $d1/wardyn is not an executable file: $out"
-"$d1/wardyn" | grep -q "wardyn fixture $VER" || fail "happy path: the installed binary is not the served one"
+grep -q "wardyn fixture $VER" <<<"$("$d1/wardyn")" || fail "happy path: the installed binary is not the served one"
 grep -q 'signature: not checked (cosign not found)' <<<"$out" || fail "no cosign: the 'not checked' line is missing: $out"
 grep -q 'catches a broken download, not a tampered release' <<<"$out" || fail "the checksum line does not say what the check is: $out"
 grep -q 'Next: wardyn login https://wardyn.example$' <<<"$out" || fail "--org did not print the exact login line: $out"
@@ -270,7 +270,7 @@ run "${GOOD[@]}"
 expect_refused "unpublished arch"; grep -q 'mips' <<<"$out" || fail "the arch refusal does not name it: $out"
 stub uname 'case "$1" in -s) echo Darwin ;; *) echo arm64 ;; esac'
 run "${GOOD[@]}"
-expect_ok "darwin/arm64"; "$d1/wardyn" | grep -q 'darwin-arm64' || fail "Darwin arm64 did not fetch wardyn-darwin-arm64"
+expect_ok "darwin/arm64"; grep -q 'darwin-arm64' <<<"$("$d1/wardyn")" || fail "Darwin arm64 did not fetch wardyn-darwin-arm64"
 pass "an unpublished platform is refused by name; Darwin arm64 maps to wardyn-darwin-arm64"
 
 # ── 12. where it goes, and the piped form ─────────────────────────────────
@@ -294,7 +294,7 @@ for needle in 'WARDYN_ARTIFACT_BASE' 'ArtifactBase' 'RequireSignature' 'Get-File
 done
 ! grep -q 'cli\.json' "$PS1_SCRIPT" || fail "install-cli.ps1 mentions cli.json"
 if command -v pwsh >/dev/null 2>&1; then
-  pwsh -NoProfile -Command "\$null = [System.Management.Automation.Language.Parser]::ParseFile('$PS1_SCRIPT', [ref]\$null, [ref]\$e); if (\$e) { \$e; exit 1 }" \
+  pwsh -NoProfile -Command "\$e = \$null; \$t = \$null; [void][System.Management.Automation.Language.Parser]::ParseFile('$PS1_SCRIPT', [ref]\$t, [ref]\$e); if (\$e.Count) { \$e | Out-String | Write-Host; exit 1 }" \
     || fail "install-cli.ps1 does not parse"
 fi
 pass "install-cli.ps1 carries the same checks (parsed by pwsh when present)"
