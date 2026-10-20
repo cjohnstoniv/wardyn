@@ -122,3 +122,24 @@ func TestApplicationRunRefusedWhenTheAllowedAppsLackItsApp(t *testing.T) {
 		})
 	}
 }
+
+// The stored arm resolves an application that rides policy_overlay, a second place the refusal is called from. The
+// ceiling names the app the overlay keeps, so only deny_ui_apps strips it there.
+func TestApplicationRunRefusedWhenTheProfileStripsItsOverlayApp(t *testing.T) {
+	const app = `"shape":"application","experience":"interactive",` + noRepos + `,"startup":{"kind":"command","command":"npm run dev"},` +
+		`"policy_overlay":{"ui_apps":[{"name":"web","port":3000}]}`
+	for _, door := range contractDoors {
+		t.Run(door.name, func(t *testing.T) {
+			p := limitsProfile("no-ui", types.GovernanceLimits{DenyUIApps: true})
+			p.Ceiling.UIApps = []types.UIApp{{Name: "web", Port: 3000}}
+			srv, _, _ := govEscapeFixture(t, assignedStore(p))
+			w := doSSO(t, srv, http.MethodPost, door.path, govSession(t, "sub-walled", []string{"eng"}, false), modeBody(app))
+			if w.Code != http.StatusUnprocessableEntity || errorReason(w) != reasonRunApplicationUIAppsDenied {
+				t.Fatalf("%s = %d %s, want 422 %s", door.name, w.Code, w.Body.String(), reasonRunApplicationUIAppsDenied)
+			}
+			if got := refusalBody(t, w); got != applicationUIAppsDeniedMsg {
+				t.Fatalf("sentence = %q, want %q", got, applicationUIAppsDeniedMsg)
+			}
+		})
+	}
+}
