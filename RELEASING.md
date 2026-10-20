@@ -404,7 +404,8 @@ crash or a usage limit resumes with the same command:
        **pushed image** (not the source tree, which sees no OS packages) and a build
        provenance statement,
      - then a `release-assets` job uploads those SBOMs,
-       `THIRD-PARTY-NOTICES.md`, `LICENSE`, `NOTICE`, `install.sh`, the four
+       `THIRD-PARTY-NOTICES.md`, `LICENSE`, `NOTICE`, `install.sh`, `install-cli.sh`,
+       `install-cli.ps1`, the four
        `wardyn-<os>-<arch>` CLI binaries and a cosign-signed `SHA256SUMS`
        to the Release —
      - creating a draft Release first if you have not cut one yet —
@@ -566,7 +567,7 @@ JSON
     is what triggers it.
   - It also attests a per-digest CycloneDX SBOM and build
     provenance, publishes the Helm chart to `oci://ghcr.io/cjohnstoniv/charts`,
-    - and uploads the SBOMs, notices, `install.sh`, the four `wardyn-<os>-<arch>`
+    - and uploads the SBOMs, notices, `install.sh`, `install-cli.sh` and `install-cli.ps1` (each stamped with the tag's version), the four `wardyn-<os>-<arch>`
       CLI binaries, the four `wardyn-runnerd-<os>-<arch>` runner binaries,
       `wardyn-runner-units.tar.gz`, `wardyn-licenses.tar.gz`, `wardyn-runnerd.pkg` and a cosign-signed `SHA256SUMS` to the Release —
     - failing if any asset did not land (the required set is the `for want in …`

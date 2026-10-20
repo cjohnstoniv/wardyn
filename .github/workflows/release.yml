@@ -995,17 +995,24 @@ jobs:
           # the bare release (no +<commit> suffix) — this job only runs from a
           # `v*` tag push or a manual dispatch, never from a plain commit build.
           ldflags="-X github.com/cjohnstoniv/wardyn/internal/version.releaseBuild=true"
-          go build -trimpath -ldflags "$ldflags" -o "$out" ./cmd/wardyn
+          # The runner is built FIRST, and the CLI is stamped with its SHA-256, so
+          # each wardyn-<os>-<arch> pins the same platform's wardyn-runnerd-<os>-<arch>
+          # (`wardyn runner setup` checks the runner it installs against that).
           # The runner needs the docker tag: without it the build is the stub
           # that refuses to serve.
+          # Windows has no runner, so its CLI pins none (cmd/wardyn/pinned.go).
+          pin=""
           if [ "$GOOS" != windows ]; then
             go build -tags docker -trimpath -ldflags "$ldflags" -o "$runnerd" ./cmd/wardyn-runnerd
+            pin="$(sha256sum "$runnerd" | cut -d' ' -f1)"
           fi
+          go build -trimpath -ldflags "$ldflags -X main.pinnedRunnerdSHA256=$pin" -o "$out" ./cmd/wardyn
           # A cross-built binary that cannot report its own version is a binary
           # nobody can support. Only checkable natively.
           if [ "$GOOS" = linux ] && [ "$GOARCH" = amd64 ]; then
             "./$out" --version || "./$out" version
             "./$runnerd" --version
+            test "$("./$out" version --json | jq -r .runnerd_sha256)" = "$pin"
           fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: matrix.goos != 'windows'
@@ -1176,9 +1183,19 @@ jobs:
       - name: Assemble the asset set
         env:
           RELEASE_PATH: ${{ needs.preflight-green.outputs.path }}
+          TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           cp THIRD-PARTY-NOTICES.md LICENSE NOTICE install.sh assets/
+          # The CLI installers carry their own release version (they never ask
+          # releases/latest, which skips pre-releases). Each stamp rewrites exactly
+          # one line; the grep fails the job if that line did not change.
+          ver="${TAG#v}"
+          sed "s|^RELEASE_VERSION=\"@WARDYN_VERSION@\"\$|RELEASE_VERSION=\"${ver}\"|" scripts/install-cli.sh > assets/install-cli.sh
+          sed "s|^\$ReleaseVersion = '@WARDYN_VERSION@'\$|\$ReleaseVersion = '${ver}'|" scripts/install-cli.ps1 > assets/install-cli.ps1
+          grep -qx "RELEASE_VERSION=\"${ver}\"" assets/install-cli.sh
+          grep -qxF "\$ReleaseVersion = '${ver}'" assets/install-cli.ps1
+          chmod +x assets/install-cli.sh
           # The standalone binaries are copies: the verbatim licence texts travel with them.
           tar -czf assets/wardyn-licenses.tar.gz THIRD-PARTY-NOTICES.md licenses/texts
           chmod +x assets/wardyn-{linux,darwin}-* assets/wardyn-runnerd-{linux,darwin}-* 2>/dev/null || true
@@ -1196,6 +1213,16 @@ jobs:
           have=$(ls -1 sbom-*.cdx.json | wc -l)
           test "$have" -eq "$want" || { echo "expected $want image SBOMs, found $have"; ls -1; exit 1; }
           sha256sum ./* > SHA256SUMS
+          # Each CLI must carry the SHA-256 that this very SHA256SUMS lists for its
+          # platform's runner. -a: the CLI is a binary. The linux/amd64 CLI also
+          # runs, so `version --json` is checked as the person will see it.
+          for p in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
+            want=$(awk -v n="wardyn-runnerd-$p" '{x=$2; sub(/^\.\//,"",x); if (x==n) print $1}' SHA256SUMS)
+            test -n "$want" || { echo "SHA256SUMS lists no wardyn-runnerd-$p"; exit 1; }
+            grep -aqF "$want" "wardyn-$p" || { echo "wardyn-$p does not carry the SHA-256 of wardyn-runnerd-$p ($want)"; exit 1; }
+          done
+          want=$(awk '{x=$2; sub(/^\.\//,"",x); if (x=="wardyn-runnerd-linux-amd64") print $1}' SHA256SUMS)
+          test "$(./wardyn-linux-amd64 version --json | jq -r .runnerd_sha256)" = "$want"
       - name: Sign the checksums (keyless)
         working-directory: assets
         run: |
@@ -1221,7 +1248,7 @@ jobs:
           set -euo pipefail
           have=$(gh release view "$TAG" --json assets -q '.assets[].name' | sort)
           for want in SHA256SUMS SHA256SUMS.sig SHA256SUMS.pem THIRD-PARTY-NOTICES.md LICENSE NOTICE \
-                      install.sh wardyn-linux-amd64 wardyn-linux-arm64 wardyn-darwin-amd64 wardyn-darwin-arm64 \
+                      install.sh install-cli.sh install-cli.ps1 wardyn-linux-amd64 wardyn-linux-arm64 wardyn-darwin-amd64 wardyn-darwin-arm64 \
                       wardyn-windows-amd64.exe wardyn-windows-arm64.exe \
                       wardyn-runnerd-linux-amd64 wardyn-runnerd-linux-arm64 wardyn-runnerd-darwin-amd64 wardyn-runnerd-darwin-arm64 \
                       wardyn-runner-units.tar.gz wardyn-runnerd.pkg wardyn-licenses.tar.gz; do

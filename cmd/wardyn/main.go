@@ -279,6 +279,7 @@ func rootCmd() *cobra.Command {
 
 	root.AddCommand(
 		loginCmd(),
+		versionCmd(),
 		runCmd(client),
 		approvalCmd(client),
 		auditCmd(client),

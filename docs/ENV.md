@@ -336,6 +336,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_DAEMON_NO_PROXY` | string (CSV) | (unset) | destinations `WARDYN_DAEMON_PROXY_URL` must not be used for, in `NO_PROXY` spelling (flag `-daemon-no-proxy`; `x/net/http/httpproxy` semantics). Wardynd appends `KUBERNETES_SERVICE_HOST`, any `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` or `WARDYN_OIDC_INTERNAL_ISSUER` host, and the AWS link-local credential endpoints. Ignored when the proxy URL is unset |
 | `WARDYN_DAEMON_PROXY_SECRET` | string (path) | (unset) | path to a file holding one forward-proxy URL that MAY embed `user:pass@` (flag `-daemon-proxy-secret-file`; `installDaemonProxySecret`, [`cmd/wardynd/daemon_proxy.go`](../cmd/wardynd/daemon_proxy.go)); a group- or world-writable file refuses boot. [Details](#wardyn_daemon_proxy_secret) |
 | `WARDYN_DEMO_VIDEO_BASE_URL` | string (URL) | (unset) | operator-run mirror base URL re-pointing the Getting Started demo episodes (flag `-demo-video-base-url`; `ValidateDemoVideoBaseURL`, [`internal/api/llm_gateway.go`](../internal/api/llm_gateway.go)) for an air-gapped deployment; unset downloads from GitHub directly. [Details](#wardyn_demo_video_base_url) |
+| `WARDYN_CLI_ARTIFACT_BASE` | string (URL) | (unset) | internal mirror of the release assets, published on the anonymous `/healthz` as `cli_artifact_base` (flag `-cli-artifact-base`; `ValidateCLIArtifactBase`, [`internal/api/cli_artifact_base.go`](../internal/api/cli_artifact_base.go)). The console's install line and `wardyn runner setup` fetch from it; unset publishes nothing. [Details](#wardyn_cli_artifact_base) |
 
 ### `WARDYN_ADMIN_TOKEN`
 
@@ -1915,6 +1916,17 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - The console's `episodeUrl` ([`ui/src/app/lib/demo-videos.ts`](../ui/src/app/lib/demo-videos.ts)) reads it off that poll to build each episode's download URL.
 - And the CSP's `media-src` (`cspMediaSrc`, [`internal/api/security_headers.go`](../internal/api/security_headers.go)) names ONLY this origin instead of the two hardcoded GitHub hosts once it is set.
 - Both re-derive from the SAME validated value, run through `cspSafeHost` before interpolation like every other CSP source.
+
+### `WARDYN_CLI_ARTIFACT_BASE`
+
+- An internal mirror of the release assets, for computers that cannot reach the public release host (flag `-cli-artifact-base`; `ValidateCLIArtifactBase`, [`internal/api/cli_artifact_base.go`](../internal/api/cli_artifact_base.go)).
+- The mirror holds the release's own layout, `<base>/v<version>/<asset>`, under the same asset names, including `install-cli.sh`, `SHA256SUMS` and `wardyn-<os>-<arch>`.
+- Unset (the default) = nothing is published and the console uses the release host.
+- Must be `https://`, with a non-empty host and no user name, password, query or fragment. A malformed value refuses boot, naming `WARDYN_CLI_ARTIFACT_BASE`.
+- Published on `/healthz` as `cli_artifact_base`, and absent while unset.
+- **`/healthz` is anonymous**: the mirror's host name is visible to anyone who can reach the console. The value holds no credential.
+- The console's install line uses it twice, as the script's own URL and as `--artifact-base`. `wardyn runner setup` takes it as the default base for the runner download.
+- The mirror is trusted as the console is, because it serves the script. Its checksum file catches corruption only; the CLI's pinned runner hash and cosign still apply ([VERIFY.md](VERIFY.md#what-install-cli-checks)).
 
 ### Retired in 0.8.2 (boot refuses)
 

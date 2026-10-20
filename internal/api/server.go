@@ -747,6 +747,12 @@ type Config struct {
 	// boundary as TrustedCAPEM above — never a SiteConfig field,
 	// never agent-reachable.
 	DemoVideoBaseURL string
+	// CLIArtifactBase is WARDYN_CLI_ARTIFACT_BASE, validated at boot by
+	// ValidateCLIArtifactBase: an internal mirror that holds the release's
+	// assets under <base>/v<version>/. /healthz publishes it as
+	// cli_artifact_base (the console's install line and `wardyn runner setup`
+	// read it there); empty (the default) publishes nothing.
+	CLIArtifactBase string
 }
 
 // Server is the control-plane HTTP server. It is safe for concurrent use.

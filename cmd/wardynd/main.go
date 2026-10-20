@@ -428,6 +428,7 @@ func run() error {
 		TrustedCAPEM:        trustedCAPEM,
 		EgressPortRule:      egressPortRule(*f.egressPortRule),
 		DemoVideoBaseURL:    knobs.demoVideoBaseURL,
+		CLIArtifactBase:     knobs.cliArtifactBase,
 		RunnerTarget:        runnerTarget,
 		RunnerOrgURL:        *f.runnerOrgURL,
 		TrustedProxies:      knobs.trustedProxies,
@@ -888,6 +889,7 @@ type serveKnobs struct {
 	defaultPolicy         types.RunPolicySpec
 	siteConfigSeed        *api.SiteConfigSeed
 	demoVideoBaseURL      string
+	cliArtifactBase       string
 	governAdminRunsExempt []string
 	trustedProxies        []netip.Prefix
 }
@@ -895,7 +897,7 @@ type serveKnobs struct {
 // parseServeKnobs reads, once at boot and failing closed on a malformed value, the two
 // files the Server is given (WARDYN_DEFAULT_POLICY and WARDYN_SITE_CONFIG_SEED_FILE) and
 // the free-text knobs api.Config carries parsed: WARDYN_DEMO_VIDEO_BASE_URL,
-// WARDYN_GOVERN_ADMIN_RUNS_EXEMPT and WARDYN_TRUSTED_PROXIES.
+// WARDYN_CLI_ARTIFACT_BASE, WARDYN_GOVERN_ADMIN_RUNS_EXEMPT and WARDYN_TRUSTED_PROXIES.
 func parseServeKnobs(f *bootFlags) (k serveKnobs, err error) {
 	if k.defaultPolicy, err = api.LoadPolicySpec(*f.policyPath); err != nil {
 		return serveKnobs{}, err
@@ -904,6 +906,9 @@ func parseServeKnobs(f *bootFlags) (k serveKnobs, err error) {
 		return serveKnobs{}, err
 	}
 	if k.demoVideoBaseURL, err = api.ValidateDemoVideoBaseURL(*f.demoVideoBaseURL); err != nil {
+		return serveKnobs{}, err
+	}
+	if k.cliArtifactBase, err = api.ValidateCLIArtifactBase(*f.cliArtifactBase); err != nil {
 		return serveKnobs{}, err
 	}
 	if k.trustedProxies, err = api.ParseTrustedProxies(*f.trustedProxies); err != nil {

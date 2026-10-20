@@ -7,7 +7,9 @@
 # README.md 2281 = 2253 + 28, measured: the how-Wardyn-is-built paragraph
 # 0.9.4 L8: README.md 2329 adds 48 over 2281: honest credential posture lines and the token export before the first run.
 # README.md 2339 adds 10 over 2329 (ATT-PKG), measured: the CLI needs no toolchain, prebuilt binaries are release assets.
-README.md=2339 share=35
+# 0.10.0 ATT-INSTALL (#3319): README.md 2344 adds 15 over 2329, measured: the CLI-only install bullet.
+# README.md 2354 = ours 2339 + theirs 2344 - base 2329 at the 0.10 W4c merge of ATT-INSTALL onto the train.
+README.md=2354 share=35
 # docs/README.md 597 adds 20: the index row for docs/CREDENTIALS.md.
 # 0.9 F-1519 (#1519): docs/README.md 720 adds 123 over 597 — eleven new index rows for the multi-user
 # split (the admin-only tier table, capabilities, the two-human gate, per-user API tokens, user drives

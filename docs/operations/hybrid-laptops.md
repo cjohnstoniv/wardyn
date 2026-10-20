@@ -199,7 +199,7 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 ## Installing with a macOS package and MDM
 
 - Every release from 0.9.3 carries `wardyn-runnerd.pkg`, a universal (Apple silicon and Intel) installer for `wardyn-runnerd` (from 0.10.0 also the `wardyn` CLI), and a managed-preferences profile template, `deploy/runner/macos/wardyn-runnerd.mobileconfig` (also inside the package and `wardyn-runner-units.tar.gz`).
-- The package installs both binaries and a LaunchAgent. It is the recommended macOS install: nobody compiles the CLI ([Set up a runner](../runner-registration.md#set-up-a-runner) lists the downloads). It cannot register the laptop: that needs a person's single-use token ([Claiming a runner](#claiming-a-runner)).
+- The package installs both binaries and a LaunchAgent. It is for managed Macs, listed under *Other ways to install* ([ranked install paths](../runner-registration.md#install-the-cli)); a person installs the CLI with `install-cli.sh`. It cannot register the laptop: that needs a person's single-use token ([Claiming a runner](#claiming-a-runner)).
 - **Until the release is signed, the package is unsigned.** Gatekeeper refuses a double-click.
   - On macOS 15 and later, open **System Settings**, then **Privacy & Security**, and choose **Open Anyway** (right-click, **Open** no longer works there).
   - Apple's native MDM app install needs a Developer ID Installer signature, so push the package from an MDM agent or script (a Jamf or Kandji policy, or `installer -pkg` run as root).
