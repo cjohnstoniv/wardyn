@@ -28,7 +28,7 @@ const (
 	// AuditPersonalFields: the key every sealed audit field of the person is
 	// under, destroyed in every version.
 	AuditPersonalFields Scope = "audit_personal_fields"
-	// RunTasks: the task text of the person's runs.
+	// RunTasks: the task text, title and description of the person's runs.
 	RunTasks Scope = "run_tasks"
 	// RunOutputs: the stored output of the person's runs.
 	RunOutputs Scope = "run_outputs"

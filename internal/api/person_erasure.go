@@ -212,7 +212,7 @@ func (s *Server) personErasureStore() (store.PersonErasureStore, error) {
 	return nil, fmt.Errorf("%w: the store cannot list a person's runs", erasure.ErrNotAvailable)
 }
 
-// eraseRunTasks blanks the task text of every run the person created. A run of theirs still waiting
+// eraseRunTasks blanks the task text, title and description of every run the person created. A run of theirs still waiting
 // in a pool's queue is cancelled first: its queue row holds the whole request, task and identity
 // snapshot included, and it would start under the very person being erased.
 func (s *Server) eraseRunTasks(ctx context.Context, person string) (any, error) {

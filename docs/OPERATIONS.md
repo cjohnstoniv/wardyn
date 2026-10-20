@@ -1243,7 +1243,7 @@ erases one person's retained records by explicit scope, in one audited act
 | `mask_copies` | the masking manifests of the runs the person created, after their live attaches, SSH shells and relays are fenced |
 | `run_outputs` | the stored output of those runs (404 `run_output_erased` afterwards, on every replica and after a restart) |
 | `recordings` | their session recordings and `source: "recording"` output rows, with durable per-run fences against later writes; direct stdout and pane snapshots retain their independent `run_outputs` scope |
-| `run_tasks` | the task text of the runs the person created, and the launch intents of those runs |
+| `run_tasks` | the task text, title and description of the runs the person created, and the launch intents of those runs |
 | `components` | the components the person saved, the launch intents of their runs, and what each run's snapshot of one they defined says about it; the run keeps a content-free row, which is what a revived run is checked against. A finished run's resolved policy and grants keep the hosts and secret names the run used, as for any other policy, and so do its `run.env_secret.resolve`, `run.file_secret.resolve`, `secret.read` and `run.policy.resolve` rows |
 | `run_setups` | the person's own run templates and every revision of them, the launch intents of their runs, their group template-manager grants, and their name as the author of shared templates, revisions and grants, which stay without it |
 | `runner_pools` | the person's own user pools, deleted as their own delete would, their name on every pool row of theirs, and their stored preferences (the pool they default to, their last view); their runners stay |

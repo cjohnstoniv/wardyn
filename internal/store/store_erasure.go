@@ -23,8 +23,8 @@ import (
 type PersonErasureStore interface {
 	// RunIDsCreatedBy lists every run created_by createdBy.
 	RunIDsCreatedBy(ctx context.Context, createdBy string) ([]uuid.UUID, error)
-	// BlankRunTasks empties the task text of every run created_by createdBy and
-	// returns how many it changed. It never touches updated_at: the idle reaper
+	// BlankRunTasks empties the task text, title and description of every run
+	// created_by createdBy and returns how many it changed. It never touches updated_at: the idle reaper
 	// reads it.
 	BlankRunTasks(ctx context.Context, createdBy string) (int, error)
 	// PrincipalAliases lists the names the identity directory knows principal
@@ -178,7 +178,8 @@ func (s PG) RunIDsCreatedBy(ctx context.Context, createdBy string) ([]uuid.UUID,
 }
 
 func (s PG) BlankRunTasks(ctx context.Context, createdBy string) (int, error) {
-	tag, err := s.Pool.Exec(ctx, `UPDATE agent_runs SET task = '' WHERE created_by = $1 AND task <> ''`, createdBy)
+	tag, err := s.Pool.Exec(ctx, `UPDATE agent_runs SET task = '', title = '', description = ''
+		WHERE created_by = $1 AND (task <> '' OR title <> '' OR description <> '')`, createdBy)
 	if err != nil {
 		return 0, fmt.Errorf("store: blank a person's run tasks: %w", err)
 	}

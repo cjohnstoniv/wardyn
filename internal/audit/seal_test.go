@@ -461,8 +461,8 @@ func TestIsPendingParsesTheRowNotItsText(t *testing.T) {
 	}
 }
 
-// The text a person types on a runner trust change (#2305) is sealed under the typing actor's key, and
-// reads [erased] once that key is destroyed.
+// The text a person types on a runner trust change (#2305) and a run's title on either side of a
+// rename (#2306) are sealed under the typing actor's key, and read [erased] once that key is destroyed.
 func TestSealTypedTextOfTrustChangesAndRunTitles(t *testing.T) {
 	for _, tc := range []struct {
 		action string
@@ -470,6 +470,7 @@ func TestSealTypedTextOfTrustChangesAndRunTitles(t *testing.T) {
 		paths  []string
 	}{
 		{"runner.trust.write", map[string]any{"before": "personal", "after": "org_cluster", "reason": "laptop handed to IT"}, []string{"reason"}},
+		{"run.title.set", map[string]any{"from": "Reconcile payroll for a named person", "to": "renamed"}, []string{"from", "to"}},
 	} {
 		t.Run(tc.action, func(t *testing.T) {
 			s, mk := newSealer(t)

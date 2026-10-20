@@ -36,7 +36,7 @@ func personEraseCmd(client clientFn) *cobra.Command {
   mask_copies            the masking manifests of their runs, after their live consumers are fenced
   run_outputs            the stored output of those runs
   recordings             their session recordings (nothing deletes one unless you ask)
-  run_tasks              the task text of the runs they created
+  run_tasks              the task text, title and description of the runs they created
   components             the components they saved and the content of each run's snapshot of one they defined; the snapshot row stays
   run_setups             their own run templates and revisions, their group template grants, and their name on shared templates
   runner_pools           their own user pools (deleted; their runners stay)
