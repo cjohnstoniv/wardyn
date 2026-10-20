@@ -38,7 +38,7 @@ func TestPG_RunnerHealthStoredRedactedAndShownToItsReaders(t *testing.T) {
 
 	rows := e.audits(placement.ActionRunnerOfflineSummary)
 	if len(rows) != 1 || rows[0].Actor != "runner:"+id.String() || strings.Contains(string(rows[0].Data), secret) {
-		t.Fatalf("audit rows = %+v; want one runner.offline_summary by the runner, with no credential", rows)
+		t.Fatalf("audit rows = %+v; want one runner.offline_summary.record by the runner, with no credential", rows)
 	}
 	read := func(w interface{ Result() *http.Response }, code int) types.RunnerView {
 		t.Helper()
@@ -80,6 +80,6 @@ func TestPG_RunnerHealthStoredRedactedAndShownToItsReaders(t *testing.T) {
 		t.Fatalf("an older runner shows health %+v %+v", v.OfflineSummary, v.RelayStatus)
 	}
 	if n := len(e.audits(placement.ActionRunnerOfflineSummary)); n != 1 {
-		t.Fatalf("%d runner.offline_summary rows after an older runner's caps, want 1", n)
+		t.Fatalf("%d runner.offline_summary.record rows after an older runner's caps, want 1", n)
 	}
 }

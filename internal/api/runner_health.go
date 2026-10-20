@@ -26,14 +26,14 @@ type runnerHealthStore interface {
 
 var _ runnerHealthStore = store.PG{}
 
-// runnerSummaryGap is the least time between two stored offline summaries (and runner.offline_summary
+// runnerSummaryGap is the least time between two stored offline summaries (and runner.offline_summary.record
 // rows) of one runner; a summary sooner than that is dropped.
 const runnerSummaryGap = 10 * time.Second
 
 // healthFromRunner keeps the offline summary and relay status a runner's caps carry, once each is
 // checked: a stage that is not a doctor stage name, a missing time or an unknown relay state drops that
 // part; each reason is scrubbed again of any URL's user information and clipped, whatever the runner did.
-// A stored summary writes runner.offline_summary. Like the rest of caps, nothing here refuses the event.
+// A stored summary writes runner.offline_summary.record. Like the rest of caps, nothing here refuses the event.
 func (s *Server) healthFromRunner(ctx context.Context, runnerID uuid.UUID, caps runnerwire.Caps) {
 	now := s.cfg.Now().UTC()
 	summary, relay := checkedOfflineSummary(caps.OfflineSummary, now), checkedRelayStatus(caps.Relay, now)

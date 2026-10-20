@@ -236,7 +236,7 @@ A runner keeps why it could not connect, or could not start, and reports it the 
 - Both are runner-reported, and absent until a runner of this release reports them. An older runner sends neither, and an older server ignores both.
 - The reason never holds a credential: the runner removes the user and password of any URL and its own proxy password, and the server removes any URL's user information again. It is cut to 256 bytes.
 - A refusal at start (`engine`, `proxy-image`, `relay`) is kept in the state directory, so it reaches the organisation once a later start connects. A runner that never connects reports nothing.
-- One report per runner is kept, replaced by the next, at most one every 10 seconds. Each stored report writes a `runner.offline_summary` audit row.
+- One report per runner is kept, replaced by the next, at most one every 10 seconds. Each stored report writes a `runner.offline_summary.record` audit row.
 - While serving, a Docker runner checks its relay again on every reconnect and every 5 minutes, without starting a container. A relay that stops answering logs `run relay unreachable` (`warning=relay_unreachable`) and reports `unreachable`; the warning clears when it answers again.
 
 ## A runner behind a corporate proxy

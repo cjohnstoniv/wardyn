@@ -27,7 +27,7 @@ const (
 	// ActionRunnerRecoveryRequest: a revive queued recover_containment for a run its runner held contained.
 	ActionRunnerRecoveryRequest = "runner.recovery.request"
 	// ActionRunnerOfflineSummary: a runner that connected again reported why it could not before.
-	ActionRunnerOfflineSummary = "runner.offline_summary"
+	ActionRunnerOfflineSummary = "runner.offline_summary.record"
 )
 
 // AuditActions lists them all.

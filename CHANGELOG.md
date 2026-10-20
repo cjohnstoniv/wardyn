@@ -20,7 +20,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 - A runner that could not connect, or could not start, reports why when it next connects: the first and last failure,
   the stage and a redacted reason. The runner's read shows it as `offline_summary`, and each report writes a
-  `runner.offline_summary` audit row. A refusal at start is shown only once a later start connects.
+  `runner.offline_summary.record` audit row. A refusal at start is shown only once a later start connects.
 - A Docker runner checks its relay on every reconnect and every 5 minutes, logs `run relay unreachable` when the relay
   stops answering, and reports it as `relay_status` on the runner's read.
 
