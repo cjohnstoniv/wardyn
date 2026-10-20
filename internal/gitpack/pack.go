@@ -139,6 +139,13 @@ type Change struct {
 	// OID is the object id the tree entry names: an entry whose mode and OID
 	// match the same path in a commit the push builds on is unchanged.
 	OID string
+	// BaseMode is the mode the same path has in the parent tree this entry
+	// was diffed against, set only when the pack carries that tree: ModeAbsent
+	// when the parent has no entry there, "" when no carried parent says (the
+	// commit's whole tree was walked, or the parent's tree is not carried).
+	// It is not part of an entry's identity: the same entry reached against
+	// two parents is one Change, holding the base that makes it newest.
+	BaseMode string
 }
 
 // Carried reports whether the pack holds the object c names; one it does not
