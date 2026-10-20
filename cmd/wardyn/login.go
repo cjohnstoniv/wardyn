@@ -32,6 +32,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/cliprofile"
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // noSignInLine is what login says about signing in while no control plane offers a browser sign-in.
@@ -221,8 +222,14 @@ func (l *login) signIn(ctx context.Context, base *storedSession) error {
 		it = base.item
 	}
 	it.applyGrant(g)
+	prev, replacing := l.previous()
 	if err := l.store(kind, it); err != nil {
 		return err
+	}
+	// The previous session ends only once the new one is stored: ended first, a failed sign-in would
+	// leave this computer with none.
+	if replacing && base == nil && prev.SessionID != g.SessionID {
+		l.endPrevious(ctx, prev, g.AccessToken)
 	}
 	who := whoIs(ctx, l.origin, g.AccessToken)
 	host := l.origin
@@ -246,6 +253,37 @@ func (l *login) store(kind string, it cliItem) error {
 		return err
 	}
 	return cliprofile.WriteSessionStore(l.dir, l.origin, kind)
+}
+
+// previous is the live sign-in this computer holds for the organisation, which a new one replaces.
+func (l *login) previous() (cliItem, bool) {
+	kind, err := cliprofile.ReadSessionStore(l.dir, l.origin)
+	if err != nil || kind == "" {
+		return cliItem{}, false
+	}
+	it, ok, err := storeFor(kind, l.dir).get(l.origin)
+	return it, err == nil && ok && it.endedWhy(time.Now()) == ""
+}
+
+// endPrevious signs the replaced session out at the server (DELETE /api/v1/me/cli-sessions/{id}) with the
+// new session's token, or, when that is another person's sign-in (404), with the old session's own token
+// while it lasts. A session that already ended is not an error; any other failure is one stderr line, and
+// the new sign-in stands.
+func (l *login) endPrevious(ctx context.Context, prev cliItem, token string) {
+	route := "/api/v1/me/cli-sessions/" + prev.SessionID.String()
+	err := cliCall(ctx, l.origin, http.MethodDelete, route, token, nil, nil)
+	var ae *sdk.APIError
+	if errors.As(err, &ae) && ae.Status == http.StatusNotFound {
+		if old, _ := prev.bearer(time.Now()); old != "" {
+			err = cliCall(ctx, l.origin, http.MethodDelete, route, old, nil, nil)
+		}
+	}
+	if errors.As(err, &ae) && (ae.Status == http.StatusNotFound || ae.Status == http.StatusUnauthorized) {
+		return
+	}
+	if err != nil {
+		fmt.Fprintf(l.errOut, copyPreviousNotEnded+"\n", err)
+	}
 }
 
 // whoIs names the person a fresh token belongs to, for the signed-in line: email, else principal.

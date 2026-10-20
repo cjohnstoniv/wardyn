@@ -20,6 +20,9 @@ const (
 	copyAdminFirst    = "Admin access needs a CLI sign-in on this computer: signing in first."
 	copyAdminSignedIn = "Admin access to %s as %s until %s. It does not refresh." // host, person, local time
 
+	// A login that replaces this computer's sign-in could not sign the old one out (stderr; login succeeds).
+	copyPreviousNotEnded = "wardyn: the sign-in this one replaces could not be signed out (%v); it ends on its own, or sign it out under Your account → Signed-in CLIs"
+
 	// The file store, on stderr at login: the path, and types.CLIFileStoreSessionCap in words.
 	copyFileStore = "wardyn: this computer has no keychain, so the sign-in is kept in %s, which only you can read, and lasts at most %s"
 

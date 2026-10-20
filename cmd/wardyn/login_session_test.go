@@ -37,6 +37,8 @@ type signInOrg struct {
 	srv     *httptest.Server
 	paste   bool
 	version string // /healthz.version
+	// signOutFails makes DELETE /me/cli-sessions/{id} a 500.
+	signOutFails bool
 	// issueLife and refreshLife are the access token lifetimes of the token call and of a refresh.
 	issueLife, refreshLife time.Duration
 	// refreshBarrier holds the first refresh up to this long for a second to arrive.
@@ -278,12 +280,17 @@ func (f *signInOrg) signOut(w http.ResponseWriter, r *http.Request) {
 	id, _ := uuid.Parse(r.PathValue("id"))
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	tok, sess := f.owner(r)
-	if tok == nil {
+	if f.signOutFails {
+		refuseFake(w, 500, "", "internal error")
+		return
+	}
+	// One person holds every session here; the server ends any live session of the caller's.
+	if tok, _ := f.owner(r); tok == nil {
 		refuseFake(w, 401, "sign_in_required", "missing bearer token")
 		return
 	}
-	if tok.session != id {
+	sess := f.sessions[id]
+	if sess == nil || sess.ended != "" {
 		refuseFake(w, 404, "cli_session_not_found", "no such CLI sign-in")
 		return
 	}
@@ -896,5 +903,44 @@ func TestLoginVersionNotice(t *testing.T) {
 		if got := noticeLine(tc.cli, "https://o", tc.server); got != tc.want {
 			t.Errorf("noticeLine(%q, %q) = %q, want %q", tc.cli, tc.server, got, tc.want)
 		}
+	}
+}
+
+// TestLoginReplacingEndsThePreviousSession: signing in again on the same computer signs the old session
+// out at the server once the new one is stored; when that fails, the new sign-in still stands and stderr
+// says the old one was not ended.
+func TestLoginReplacingEndsThePreviousSession(t *testing.T) {
+	for _, fails := range []bool{false, true} {
+		t.Run(fmt.Sprintf("sign-out fails=%v", fails), func(t *testing.T) {
+			f := newSignInOrg(t)
+			cliEnv(t, nil)
+			openBrowser = func(approve string) error { go approveInBrowser(t, f, nil)(approve); return nil }
+			if _, _, err := runCLI(t, "", "login", f.srv.URL); err != nil {
+				t.Fatalf("first login: %v", err)
+			}
+			first := storedItem(t, f.srv.URL).SessionID
+			f.signOutFails = fails
+			_, stderr, err := runCLI(t, "", "login", f.srv.URL)
+			if err != nil {
+				t.Fatalf("second login: %v (a failed sign-out of the old session must not fail it)", err)
+			}
+			second := storedItem(t, f.srv.URL)
+			if second.SessionID == first || second.AccessToken == "" {
+				t.Fatalf("the new sign-in was not stored: %+v", second)
+			}
+			f.mu.Lock()
+			oldEnded, newEnded := f.sessions[first].ended, f.sessions[second.SessionID].ended
+			f.mu.Unlock()
+			if newEnded != "" {
+				t.Errorf("the new session ended (%s)", newEnded)
+			}
+			warned := strings.Contains(stderr, "the sign-in this one replaces could not be signed out")
+			switch {
+			case !fails && oldEnded != types.CLISessionEndSignedOut:
+				t.Errorf("the replaced session is %q at the server, want signed_out", oldEnded)
+			case !fails && warned, fails && !warned:
+				t.Errorf("stderr %q (sign-out fails=%v)", stderr, fails)
+			}
+		})
 	}
 }
