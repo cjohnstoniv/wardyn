@@ -345,6 +345,7 @@ One image carrying Claude Code and Codex, for a run that carries both.
 - Declare it with a `+` key (ids sorted), then restart wardynd: `WARDYN_AGENT_IMAGES='{"claude-code+codex-cli":"wardyn/agent-harnesses:local"}'`. On k8s, push it to a registry the cluster pulls from and declare that ref.
 - `/usr/local/bin/agent-run` is `common/agent-run-set`; each harness's own launcher is at `/usr/local/lib/wardyn/harness/<id>/agent-run`.
 - With `WARDYN_HARNESSES` and `WARDYN_START_HARNESS` from dispatch, `--idle` runs `--prepare-only` (CLI configuration only) for every other harness, then the start harness's `--idle`. The attach shell's auto-start launches the start harness's CLI.
+- `--tasks <id> <task> ...` (`WARDYN_MULTI_AGENT_TASKS`) runs each agent's launcher on its own task, side by side, after the one before it finished the shared prep. Lines are prefixed `[<id>] `; a `wardyn-agents:` line gives every agent's state after each exit. It exits after the last agent, `0` only if all exited `0`.
 
 ## UI-sandbox image (`vscode/`)
 

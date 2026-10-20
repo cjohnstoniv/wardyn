@@ -14,6 +14,8 @@
 #   --selftest                      every harness's selftest; fails if any fails
 #   <task>                          prepare the others, then the start (else first)
 #                                   harness runs the task, preparing itself
+#   --tasks <id> <task> [...]       several agents side by side, each on its own
+#                                   task (run_tasks below)
 set -euo pipefail
 
 harness_dir=/usr/local/lib/wardyn/harness
@@ -46,7 +48,66 @@ prepare_others() {
     done
 }
 
+# run_tasks: a background run with several agents (WARDYN_MULTI_AGENT_TASKS).
+# Every agent's own launcher runs its own task in this one sandbox. The shared
+# prep (clone, git helper secret, CA) is not safe to run twice at once, so each
+# launcher starts only once the one before it has finished its prep
+# (WARDYN_TASK_PREPPED, touched by maybe_exec_task_mode) or has exited. Every
+# line an agent prints is prefixed "[<id>] "; the only unprefixed lines are this
+# supervisor's "wardyn-agents:" status lines, one at the start and one after each
+# agent exits, naming every agent as running or exited=<code>. The run ends when
+# the LAST agent exits, and succeeds only if every agent exited 0.
+run_tasks() {
+    local -a ids=() tasks=() pids=() codes=() running=() left=()
+    local i rc done_pid marks
+    while (($#)); do
+        (($# >= 2)) || { echo "agent-run-set: --tasks takes <id> <task> pairs" >&2; exit 1; }
+        [[ " ${harnesses[*]} " == *" $1 "* ]] \
+            || { echo "agent-run-set: agent '$1' is not one of this run's harnesses" >&2; exit 1; }
+        ids+=("$1"); tasks+=("$2"); shift 2
+    done
+    ((${#ids[@]})) || { echo "agent-run-set: --tasks names no agent" >&2; exit 1; }
+    marks="$(mktemp -d)"
+    trap 'kill -TERM "${pids[@]}" 2>/dev/null || true' TERM INT
+    agents_status() {
+        local j line="wardyn-agents:"
+        for j in "${!ids[@]}"; do
+            if [[ -n "${codes[j]:-}" ]]; then line+=" ${ids[j]}=exited=${codes[j]}"; else line+=" ${ids[j]}=running"; fi
+        done
+        echo "$line"
+    }
+    agents_status
+    for i in "${!ids[@]}"; do
+        (
+            WARDYN_TASK_PREPPED="$marks/${ids[i]}" "$harness_dir/${ids[i]}/agent-run" "${tasks[i]}" 2>&1 \
+                | sed -u "s/^/[${ids[i]}] /"
+            exit "${PIPESTATUS[0]}"
+        ) &
+        pids[i]=$!
+        while [[ ! -e "$marks/${ids[i]}" ]] && kill -0 "${pids[i]}" 2>/dev/null; do sleep 0.2; done
+    done
+    running=("${pids[@]}")
+    while ((${#running[@]})); do
+        rc=0
+        wait -n -p done_pid "${running[@]}" || rc=$?
+        left=()
+        for i in "${!pids[@]}"; do
+            if [[ "${pids[i]}" == "$done_pid" ]]; then codes[i]=$rc
+            elif [[ -z "${codes[i]:-}" ]]; then left+=("${pids[i]}"); fi
+        done
+        running=("${left[@]}")
+        agents_status
+    done
+    rm -rf "$marks"
+    for rc in "${codes[@]}"; do ((rc == 0)) || exit 1; done
+    exit 0
+}
+
 case "${1:-}" in
+    --tasks)
+        shift
+        run_tasks "$@"
+        ;;
     --selftest)
         rc=0
         for h in "${harnesses[@]}"; do "$harness_dir/$h/agent-run" --selftest || rc=1; done
