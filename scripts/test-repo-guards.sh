@@ -87,6 +87,8 @@
 #  25. every scripts/test-*.sh that runs `git init`, `git clone` or `git commit` turns
 #      off git's auto-maintenance (maintenance.auto and gc.auto), or its EXIT trap
 #      can lose `rm -rf` to a detached git still writing under .git (#3328).
+#  26. release.yml's CLI build targets (binaries' TARGETS), its cli-<os>-<arch> upload steps and the CLI
+#      names in its release-asset assert are one set, so a target added to one list cannot ship nothing.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -880,6 +882,24 @@ if [ -n "$loud" ]; then
     bad "shell tests that run git init/clone/commit without maintenance.auto and gc.auto off:${loud} — export GIT_CONFIG_COUNT/KEY/VALUE for maintenance.auto=false, gc.auto=0 and gc.autoDetach=false (see scripts/test-kind-follow-main.sh)"
 else
     ok "every scripts/test-*.sh that runs git init/clone/commit turns auto-maintenance off"
+fi
+
+# ── 26. release.yml's CLI targets, upload steps and asserted assets agree ────
+# The binaries job builds every TARGETS entry in one step, but each target has its
+# own fixed upload step and its own line in the release-asset assert. A target in
+# one list and not the others builds a CLI that never ships, or fails only on the
+# tag. Windows ships wardyn-windows-<arch>.exe.
+cli_targets="$(sed -n 's/^ *TARGETS: "\(.*\)"$/\1/p' "$REL" | tr ' ' '\n' | sed '/^$/d; s#/#-#' | sort)"
+cli_uploads="$(sed -n 's/^ *name: cli-\([a-z0-9]*-[a-z0-9]*\)$/\1/p' "$REL" | sort)"
+cli_asserted="$(sed -n '/Assert every required asset actually landed/,/done$/p' "$REL" \
+    | grep -oE 'wardyn-(linux|darwin|windows)-[a-z0-9]+(\.exe)?' | sed 's/^wardyn-//' | sort -u)"
+cli_want_assert="$(printf '%s\n' "$cli_targets" | sed '/^windows-/s/$/.exe/' | sort)"
+if [ -z "$cli_targets" ]; then
+    bad "release.yml: no binaries TARGETS line found — guard 26 checks nothing"
+elif [ "$cli_uploads" != "$cli_targets" ] || [ "$cli_asserted" != "$cli_want_assert" ]; then
+    bad "release.yml: CLI TARGETS ($(echo $cli_targets)) != upload steps cli-* ($(echo $cli_uploads)) or asserted assets ($(echo $cli_asserted)); a target needs its cli-<os>-<arch> upload step and its wardyn-<os>-<arch> (.exe on windows) assert line"
+else
+    ok "release.yml's $(echo "$cli_targets" | wc -l) CLI targets each have an upload step and an asserted release asset"
 fi
 
 if [ "$fail" = 0 ]; then echo "--- test-repo-guards: PASS ---"; else echo "--- test-repo-guards: FAIL ---"; fi
