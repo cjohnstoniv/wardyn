@@ -9,7 +9,8 @@ docs/PLUGGABILITY.md=3229 share=35
 # docs/VERIFY.md 1547 adds 15 over 1532 (0.9.3 PKG), measured: the runner-package release-asset bullet.
 # docs/VERIFY.md 1559 adds 12 over 1547 (0.9.4 L9, #2472): the licence bundle among the release assets, measured.
 # docs/VERIFY.md 1804 adds 245 over 1559 (0.10.0 ATT-INSTALL, #3319), measured: the "What install-cli checks" section and the installer release-asset bullet.
-docs/VERIFY.md=1804 share=35
+# docs/VERIFY.md 1810 adds 6 over 1804 at the 0.10 W4c train, measured: main's "(from 0.10.0 with the `wardyn` CLI)" on the package bullet (ATT-PKG, inside main's slack) beside ATT-INSTALL's installer bullet.
+docs/VERIFY.md=1810 share=35
 docs/EXPORT.md=507 share=35
 docs/RECORDING-ROOT-READ.md=332 share=35
 docs/adoption/README.md=249 share=35
