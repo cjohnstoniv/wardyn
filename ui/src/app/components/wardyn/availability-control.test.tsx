@@ -9,7 +9,7 @@
 // to the canon string it renders. The real-backend round trip through an
 // editor is providers.spec.ts's Playwright pin.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as React from "react";
 import { HttpError, PendingChangeError } from "../../lib/api/core";
@@ -109,16 +109,28 @@ describe("AvailabilityControl — states.html", () => {
     // The only-these option reads as the canon string whole.
     expect(screen.getByTestId("availability-only").textContent).toBe(AVAILABILITY.POLICY_ONLY_HINT);
     expect(screen.getByText(AVAILABILITY.POLICY_NOTE)).toBeInTheDocument();
+    // #3065: the picker belongs to Only these; under Everyone there is nothing to add to.
+    expect(screen.queryByTestId("availability-audience")).toBeNull();
+    expect(screen.queryByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER)).toBeNull();
+    expect(screen.queryByRole("button", { name: AVAILABILITY.ADD_CTA })).toBeNull();
+  });
+
+  it("state 1b: Only these is an indented sub-row with the adder, per #919", async () => {
+    getAvailabilityMock.mockResolvedValue(view(true, [DEV]));
+    render(policyControl());
+
+    const sub = await screen.findByTestId("availability-audience");
     for (const seg of [PERM.SUBJECT_USER_TYPE, PERM.SUBJECT_GROUP, PERM.SUBJECT_USER]) {
-      expect(screen.getByRole("button", { name: seg })).toBeInTheDocument();
+      expect(within(sub).getByRole("button", { name: seg })).toBeInTheDocument();
     }
-    expect(screen.getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER)).toHaveAccessibleName(AVAILABILITY.HINT_USER_TYPE);
-    expect(screen.getByRole("button", { name: AVAILABILITY.ADD_CTA })).toBeDisabled();
+    expect(within(sub).getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER)).toHaveAccessibleName(AVAILABILITY.HINT_USER_TYPE);
+    expect(within(sub).getByRole("button", { name: AVAILABILITY.ADD_CTA })).toBeDisabled();
+    expect(within(sub).getByText("Developer")).toBeInTheDocument();
   });
 
   // #2874: the placeholder is prose in the sans face and the input is wide enough to show it whole; typed ids stay mono.
   it("sets the adder's placeholder in sans inside a mono input that fits it", async () => {
-    getAvailabilityMock.mockResolvedValue(view(false));
+    getAvailabilityMock.mockResolvedValue(view(true, [DEV]));
     render(policyControl());
     const input = await screen.findByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER);
     expect(input).toHaveClass("font-mono", "placeholder:font-sans", "max-w-[280px]");
@@ -136,42 +148,52 @@ describe("AvailabilityControl — states.html", () => {
     expect(screen.queryByText(AVAILABILITY.LAST_AUDIENCE_LOCKED)).not.toBeInTheDocument();
   });
 
-  it("state 2: the list is written while Everyone, then choosing Only these turns it on", async () => {
-    getAvailabilityMock.mockResolvedValueOnce(view(false)).mockResolvedValueOnce(view(false, [DEV]));
-    upsertGrantMock.mockResolvedValue({ grant: DEV, updated: false });
-    putAvailabilityMock.mockResolvedValue(view(true, [DEV]));
+  it("state 2: the first Add under a pending Only these writes the allow row, then restricts", async () => {
+    const calls: string[] = [];
+    getAvailabilityMock.mockResolvedValue(view(false));
+    upsertGrantMock.mockImplementation(async () => {
+      calls.push("grant");
+      return { grant: DEV, updated: false };
+    });
+    putAvailabilityMock.mockImplementation(async () => {
+      calls.push("only");
+      return view(true, [DEV]);
+    });
     render(policyControl());
     await screen.findByText(AVAILABILITY.LABEL);
 
+    await userEvent.click(only());
     await userEvent.type(screen.getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER), "developer");
     await userEvent.click(screen.getByRole("button", { name: AVAILABILITY.ADD_CTA }));
-    await waitFor(() =>
-      expect(upsertGrantMock).toHaveBeenCalledWith({
-        subject_type: "user_type",
-        subject: "developer",
-        capability: KIND,
-        value: ID,
-        effect: "allow",
-      }),
-    );
-    expect(await screen.findByText("Developer")).toBeInTheDocument();
-    expect(first()).toBeChecked();
 
-    await userEvent.click(only());
-    expect(putAvailabilityMock).toHaveBeenCalledWith(KIND, ID, true);
-    await waitFor(() => expect(only()).toBeChecked());
+    await waitFor(() => expect(putAvailabilityMock).toHaveBeenCalledWith(KIND, ID, true));
+    expect(upsertGrantMock).toHaveBeenCalledWith({
+      subject_type: "user_type",
+      subject: "developer",
+      capability: KIND,
+      value: ID,
+      effect: "allow",
+    });
+    expect(calls).toEqual(["grant", "only"]);
+    await waitFor(() => expect(screen.queryByTestId("availability-pending")).toBeNull());
+    expect(only()).toBeChecked();
   });
 
-  it("state 3: Only these with nobody listed shows the server's sentence as sent, and stays on Everyone", async () => {
+  it("state 3: Only these with nobody listed is a pending state, not a refusal: nothing is sent", async () => {
     getAvailabilityMock.mockResolvedValue(view(false));
-    putAvailabilityMock.mockRejectedValue(new HttpError(400, EMPTY_ONLY));
     render(policyControl());
     await screen.findByText(AVAILABILITY.LABEL);
 
     await userEvent.click(only());
 
-    expect(await screen.findByText(EMPTY_ONLY)).toBeInTheDocument();
-    expect(first()).toBeChecked();
+    expect(await screen.findByTestId("availability-pending")).toHaveTextContent(AVAILABILITY.PENDING_NOTE);
+    expect(only()).toBeChecked();
+    expect(putAvailabilityMock).not.toHaveBeenCalled();
+    expect(screen.queryByText(EMPTY_ONLY)).not.toBeInTheDocument();
+
+    await userEvent.click(first());
+    expect(screen.queryByTestId("availability-audience")).toBeNull();
+    expect(putAvailabilityMock).not.toHaveBeenCalled();
   });
 
   it("state 4: the last one on the list is locked while Only these is on, with the reason twice", async () => {
@@ -202,7 +224,7 @@ describe("AvailabilityControl — states.html", () => {
   });
 
   it("state 6: a change in flight disables the whole control at once; only Add spins, after ~200ms", async () => {
-    getAvailabilityMock.mockResolvedValue(view(false, [DEV]));
+    getAvailabilityMock.mockResolvedValue(view(true, [DEV]));
     let resolveAdd: () => void = () => {};
     upsertGrantMock.mockReturnValue(new Promise<void>((r) => (resolveAdd = r)));
     const { container } = render(policyControl());
@@ -235,7 +257,7 @@ describe("AvailabilityControl — states.html", () => {
     getAvailabilityMock.mockResolvedValue(view(false, [DEV]));
     putAvailabilityMock.mockReturnValue(new Promise(() => {}));
     const { container } = render(policyControl());
-    await screen.findByText("Developer");
+    await screen.findByText(AVAILABILITY.LABEL);
 
     await userEvent.click(only());
     await new Promise((r) => setTimeout(r, 250));
@@ -248,6 +270,7 @@ describe("AvailabilityControl — states.html", () => {
     upsertGrantMock.mockRejectedValue(new HttpError(400, UNKNOWN_TYPE));
     const { container } = render(policyControl());
     await screen.findByText(AVAILABILITY.LABEL);
+    await userEvent.click(only());
 
     await userEvent.type(screen.getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER), "analyst");
     await userEvent.click(screen.getByRole("button", { name: AVAILABILITY.ADD_CTA }));
@@ -318,7 +341,7 @@ describe("AvailabilityControl — states.html", () => {
 
   it("a user type's id stands in for its name when the type list can't be read", async () => {
     listUserTypesMock.mockRejectedValue(new HttpError(500, "boom"));
-    getAvailabilityMock.mockResolvedValue(view(false, [DEV]));
+    getAvailabilityMock.mockResolvedValue(view(true, [DEV]));
     render(policyControl());
 
     expect(await screen.findByText("developer")).toBeInTheDocument();
@@ -363,10 +386,10 @@ describe("AvailabilityDraft + writeAvailability — a creation form (decision 4)
     render(<Harness onDraft={onDraft} />);
 
     expect(screen.getByRole("radio", { name: AVAILABILITY.ADMINS_ONLY })).toBeChecked();
+    await userEvent.click(screen.getByRole("radio", { name: AVAILABILITY.ONLY }));
     await userEvent.type(screen.getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER), "portfolio-manager");
     await userEvent.click(screen.getByRole("button", { name: AVAILABILITY.ADD_CTA }));
     expect(await screen.findByText("Portfolio manager")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("radio", { name: AVAILABILITY.ONLY }));
 
     expect(onDraft).toHaveBeenLastCalledWith({
       restricted: true,
@@ -424,7 +447,7 @@ describe("AvailabilityControl — a 202 is submitted, never saved", () => {
     getAvailabilityMock.mockResolvedValue(view(false, [DEV]));
     putAvailabilityMock.mockRejectedValue(held());
     render(policyControl());
-    await screen.findByText("Developer");
+    await screen.findByText(AVAILABILITY.LABEL);
 
     await userEvent.click(only());
 
@@ -438,6 +461,7 @@ describe("AvailabilityControl — a 202 is submitted, never saved", () => {
     render(policyControl());
     await screen.findByText(AVAILABILITY.LABEL);
     getAvailabilityMock.mockClear();
+    await userEvent.click(only());
 
     await userEvent.type(screen.getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER), "developer");
     await userEvent.click(screen.getByRole("button", { name: AVAILABILITY.ADD_CTA }));

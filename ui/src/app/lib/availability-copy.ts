@@ -27,6 +27,11 @@ export const AVAILABILITY = {
   REMOVE_ARIA: (chip: string) => `Remove ${chip}`,
   ADD_PLACEHOLDER: "Add a type, group or person…",
   ADD_CTA: "Add",
+  // "Only these" chosen with nobody listed yet: held on screen, nothing saved, so the
+  // server still has the resource open to everyone (or admins only, on an image).
+  PENDING_NOTE: "Not saved yet. Until you add someone, this stays available to everyone.",
+  PENDING_NOTE_AGENT: "Not saved yet. Until you add someone, this agent stays available to everyone.",
+  PENDING_NOTE_IMAGE: "Not saved yet. Until you add someone, this image stays admins only.",
   LOAD_FAILED: "Available to — couldn't load.",
   HINT_USER: "An email address or the sign-in subject id.",
   HINT_GROUP: "A group or app-role name exactly as your identity provider sends it in the token.",

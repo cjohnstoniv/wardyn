@@ -69,10 +69,11 @@ test.describe("Available to — base images (#923)", () => {
 
     await dialog.getByLabel(IMAGES.REF).fill(LISTED);
     // "standard" is the built-in user type every deployment has (UT-1).
+    // The adder is the sub-row of Only these, so that is chosen first.
+    await dialog.getByRole("radio", { name: AVAILABILITY.ONLY }).click();
     await dialog.getByPlaceholder(AVAILABILITY.ADD_PLACEHOLDER).fill("standard");
     await dialog.getByRole("button", { name: AVAILABILITY.ADD_CTA, exact: true }).click();
     await expect(dialog.getByText("Standard user")).toBeVisible();
-    await dialog.getByRole("radio", { name: AVAILABILITY.ONLY }).click();
     await dialog.getByRole("button", { name: IMAGES.ADD_CTA, exact: true }).click();
     await expect(dialog).toHaveCount(0);
 
@@ -111,14 +112,12 @@ test.describe("Available to — base images (#923)", () => {
     expect(catalog.base_images.map((b: { image: string }) => b.image)).toEqual(expect.arrayContaining([LISTED, UNLISTED]));
   });
 
-  test("Only these on an image with nobody listed is refused as sent, and stays Admins only", async ({ page }) => {
+  test("Only these on an image with nobody listed is held as not saved yet, and the server stays Admins only", async ({ page }) => {
     await gotoImages(page);
     const r = row(page, UNLISTED);
     await r.getByRole("radio", { name: AVAILABILITY.ONLY }).click();
-    await expect(
-      r.getByText("Add at least one person, group or user type before choosing Only, or nobody could use this."),
-    ).toBeVisible();
-    await expect(r.getByRole("radio", { name: AVAILABILITY.ADMINS_ONLY })).toBeChecked();
+    await expect(r.getByTestId("availability-pending")).toHaveText(AVAILABILITY.PENDING_NOTE_IMAGE);
+    await expect(r.getByPlaceholder(AVAILABILITY.ADD_PLACEHOLDER)).toBeVisible();
     expect((await availability(page, UNLISTED)).restricted).toBe(false);
   });
 
@@ -127,9 +126,9 @@ test.describe("Available to — base images (#923)", () => {
     await page.getByRole("button", { name: IMAGES.ADD_CTA, exact: true }).click();
     const dialog = page.getByRole("dialog");
     await dialog.getByLabel(IMAGES.REF).fill(PARTIAL);
+    await dialog.getByRole("radio", { name: AVAILABILITY.ONLY }).click();
     await dialog.getByPlaceholder(AVAILABILITY.ADD_PLACEHOLDER).fill("portfolio-mgr");
     await dialog.getByRole("button", { name: AVAILABILITY.ADD_CTA, exact: true }).click();
-    await dialog.getByRole("radio", { name: AVAILABILITY.ONLY }).click();
     await dialog.getByRole("button", { name: IMAGES.ADD_CTA, exact: true }).click();
 
     await expect(dialog.getByText(AVAILABILITY.CREATE_PARTIAL_TITLE)).toBeVisible();
@@ -193,10 +192,11 @@ test.describe("Available to — a stored policy (#923)", () => {
     await expect(dialog.getByText(AVAILABILITY.POLICY_NOTE)).toBeVisible();
     await dialog.getByLabel("Name", { exact: true }).fill(POLICY_NAME);
     await dialog.getByLabel(SPEC_LABEL).fill(POLICY_SPEC);
+    await expect(dialog.getByPlaceholder(AVAILABILITY.ADD_PLACEHOLDER)).toHaveCount(0);
+    await dialog.getByRole("radio", { name: AVAILABILITY.ONLY }).click();
     await dialog.getByPlaceholder(AVAILABILITY.ADD_PLACEHOLDER).fill("portfolio-manager");
     await dialog.getByRole("button", { name: AVAILABILITY.ADD_CTA, exact: true }).click();
     await expect(dialog.getByText("Portfolio manager")).toBeVisible();
-    await dialog.getByRole("radio", { name: AVAILABILITY.ONLY }).click();
     await dialog.getByRole("button", { name: "Create policy" }).click();
     await expect(dialog).toHaveCount(0);
 
@@ -272,10 +272,10 @@ test.describe("Available to — a model provider (#923)", () => {
     await expect(dialog.getByRole("radio", { name: AVAILABILITY.EVERYONE })).toBeChecked();
     await expect(dialog.getByTestId("availability-only")).toHaveText(AVAILABILITY.MODEL_PROVIDER_ONLY_HINT);
     await dialog.getByLabel(PROVIDER_EDITOR.NAME).fill("Bloomberg gateway");
+    await dialog.getByRole("radio", { name: AVAILABILITY.ONLY }).click();
     await dialog.getByPlaceholder(AVAILABILITY.ADD_PLACEHOLDER).fill("standard");
     await dialog.getByRole("button", { name: AVAILABILITY.ADD_CTA, exact: true }).click();
     await expect(dialog.getByText("Standard user")).toBeVisible();
-    await dialog.getByRole("radio", { name: AVAILABILITY.ONLY }).click();
     await dialog.getByRole("button", { name: PROVIDER_EDITOR.SAVE, exact: true }).click();
     await expect(dialog).toHaveCount(0);
 

@@ -150,10 +150,10 @@ describe("New policy asks who gets it (decision 4)", () => {
     expect(within(dialog).getByRole("radio", { name: AVAILABILITY.EVERYONE })).toBeChecked();
     expect(within(dialog).getByTestId("availability-only").textContent).toBe(AVAILABILITY.POLICY_ONLY_HINT);
     expect(within(dialog).getByText(AVAILABILITY.POLICY_NOTE)).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("radio", { name: AVAILABILITY.ONLY }));
     await userEvent.type(within(dialog).getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER), "portfolio-manager");
     await userEvent.click(within(dialog).getByRole("button", { name: AVAILABILITY.ADD_CTA }));
     expect(await within(dialog).findByText("Portfolio manager")).toBeInTheDocument();
-    await userEvent.click(within(dialog).getByRole("radio", { name: AVAILABILITY.ONLY }));
     expect(upsertGrantMock).not.toHaveBeenCalled();
     await userEvent.click(within(dialog).getByRole("button", { name: /create policy/i }));
 
@@ -170,9 +170,9 @@ describe("New policy asks who gets it (decision 4)", () => {
     upsertGrantMock.mockRejectedValue(new HttpError(400, UNKNOWN_TYPE));
     const dialog = await openNew();
 
+    await userEvent.click(within(dialog).getByRole("radio", { name: AVAILABILITY.ONLY }));
     await userEvent.type(within(dialog).getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER), "portfolio-mgr");
     await userEvent.click(within(dialog).getByRole("button", { name: AVAILABILITY.ADD_CTA }));
-    await userEvent.click(within(dialog).getByRole("radio", { name: AVAILABILITY.ONLY }));
     await userEvent.click(within(dialog).getByRole("button", { name: /create policy/i }));
 
     expect(await within(dialog).findByText(AVAILABILITY.CREATE_PARTIAL_TITLE)).toBeInTheDocument();

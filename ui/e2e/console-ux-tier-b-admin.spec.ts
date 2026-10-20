@@ -296,7 +296,9 @@ test.describe("Tier B computed styles", () => {
     await gotoConsole(page, "admin");
     await navTo(page, "Policies");
     await page.getByRole("button", { name: "New policy" }).first().click();
-    const input = page.getByRole("dialog").filter({ hasText: "New policy" }).getByPlaceholder(AVAILABILITY.ADD_PLACEHOLDER);
+    const dialog = page.getByRole("dialog").filter({ hasText: "New policy" });
+    await dialog.getByRole("radio", { name: AVAILABILITY.ONLY }).click();
+    const input = dialog.getByPlaceholder(AVAILABILITY.ADD_PLACEHOLDER);
     await expect(input).toBeVisible();
     const faces = await input.evaluate((el) => ({
       value: getComputedStyle(el).fontFamily,

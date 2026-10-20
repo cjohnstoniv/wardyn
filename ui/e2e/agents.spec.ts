@@ -30,6 +30,7 @@ import {
   AGENTS,
   PROVIDERS,
 } from "../src/app/lib/workspace-providers-copy";
+import { AVAILABILITY } from "../src/app/lib/availability-copy";
 import { RUN_DETAIL } from "../src/app/components/wardyn/copy/run-cockpit";
 import type { Page } from "@playwright/test";
 
@@ -362,5 +363,24 @@ test.describe("agents — the roster-unknown and empty-roster states withhold Sa
     await expect(page.getByText(AGENTS.AGENTS_LEAD)).toBeVisible();
     await expect(page.getByTestId("agent-row-claude-code")).toHaveCount(0);
     await expect(page.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toHaveCount(0);
+  });
+});
+
+// #3065: the audience picker belongs to Only these, and choosing it with nobody listed is held on
+// screen. Nothing is written, so this block leaves the roster and the availability as it found them.
+test.describe("agents — Available to shows its picker only under Only these", () => {
+  test("Everyone hides the picker; Only these with nobody listed is pending, with no Enabled chip beside the switch", async ({ page }) => {
+    await gotoAgentsTab(page);
+    const row = page.getByTestId("agent-row-claude-code");
+    await expect(row.getByRole("radio", { name: AVAILABILITY.EVERYONE })).toBeChecked();
+    await expect(row.getByPlaceholder(AVAILABILITY.ADD_PLACEHOLDER)).toHaveCount(0);
+    await expect(row.getByText(PROVIDERS.FIELD_ENABLED, { exact: true })).toHaveCount(0);
+
+    await row.getByRole("radio", { name: AVAILABILITY.ONLY }).click();
+    await expect(row.getByTestId("availability-pending")).toHaveText(AVAILABILITY.PENDING_NOTE_AGENT);
+    await expect(row.getByPlaceholder(AVAILABILITY.ADD_PLACEHOLDER)).toBeVisible();
+
+    await row.getByRole("radio", { name: AVAILABILITY.EVERYONE }).click();
+    await expect(row.getByPlaceholder(AVAILABILITY.ADD_PLACEHOLDER)).toHaveCount(0);
   });
 });
