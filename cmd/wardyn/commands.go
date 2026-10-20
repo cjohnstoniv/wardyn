@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -110,27 +109,6 @@ func interactiveLine(startup *sdk.RunStartup, id string) string {
 		return "  interactive: starts " + startup.Tool + "; " + attach
 	}
 	return "  interactive: starts " + startup.Command + "; " + attach
-}
-
-// readRunPolicyFile reads --policy-file as the inline RunPolicySpec.
-func readRunPolicyFile(policyFile string) (types.RunPolicySpec, error) {
-	data, err := os.ReadFile(policyFile)
-	if err != nil {
-		return types.RunPolicySpec{}, fmt.Errorf("read --policy-file: %w", err)
-	}
-	// Accept JSON or YAML: bridge to canonical JSON, then unmarshal the
-	// same json-tagged spec the server validates.
-	if data, err = policyToJSON(data); err != nil {
-		return types.RunPolicySpec{}, fmt.Errorf("parse --policy-file %s: %w", policyFile, err)
-	}
-	// Strict decode (DisallowUnknownFields, shared with `policy set`/
-	// `policy render`): a misspelled spec field fails here, not as a
-	// silently-dropped setting the server never sees.
-	spec, err := decodeSpecStrict(data)
-	if err != nil {
-		return types.RunPolicySpec{}, fmt.Errorf("parse --policy-file %s: %w", policyFile, err)
-	}
-	return spec, nil
 }
 
 // runCmd is the single "run" noun: a bare invocation creates a run, and the
