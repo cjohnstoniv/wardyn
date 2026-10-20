@@ -89,10 +89,21 @@ func TestAttachParityTable(t *testing.T) {
 	}
 	for _, row := range rows {
 		t.Run(row.row, func(t *testing.T) {
-			for _, transport := range []string{"relay", "local"} {
+			// "local, flag off" pins the C1 order: with local attach disabled a refused attach still
+			// answers its own reason, never attach_local_unavailable / flag_off.
+			for _, transport := range []string{"relay", "local", "local, flag off"} {
 				o := localRigOpts{}
 				if row.opts != nil {
 					o = row.opts(t)
+				}
+				if transport == "local, flag off" {
+					prev := o.cfg
+					o.cfg = func(c *Config) {
+						if prev != nil {
+							prev(c)
+						}
+						c.AttachLocal = false
+					}
 				}
 				rig := newLocalRig(t, o)
 				if row.prepare != nil {
@@ -107,12 +118,15 @@ func TestAttachParityTable(t *testing.T) {
 					tk = rig.ticket(t, principal, role)
 				}
 				query := ""
-				if transport == "local" {
+				if transport != "relay" {
 					query = localQuery
 				}
 				w := do(t, rig.srv, http.MethodGet, "/api/v1/runs/"+rig.run.ID.String()+"/attach?ticket="+tk+query, "", "")
 				if w.Code != row.status || reasonOf(t, w) != row.reason {
 					t.Errorf("%s: %d %s, want %d %s", transport, w.Code, w.Body.String(), row.status, row.reason)
+				}
+				if strings.Contains(w.Body.String(), localAttachFlagOff) {
+					t.Errorf("%s: answered %s, not its own reason", transport, localAttachFlagOff)
 				}
 				if n := rig.sub.calls(); n != 0 {
 					t.Errorf("%s: %d local_attach calls for a refused attach", transport, n)
