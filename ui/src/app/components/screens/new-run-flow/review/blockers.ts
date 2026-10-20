@@ -23,7 +23,7 @@ import type { NewRunLocation } from "../draft/new-run-url";
 import type { RunIntent } from "../draft/run-intent";
 import type { StepIssue, StepIssueCode } from "../lenses/step-issues";
 
-export type BlockerKind = "local" | "unsupported" | "template_setup" | "template_unread" | "refusal" | "setup_item" | "stale";
+export type BlockerKind = "local" | "gateway_off" | "unsupported" | "template_setup" | "template_unread" | "refusal" | "setup_item" | "stale";
 
 export interface Blocker {
   id: string;
@@ -41,13 +41,15 @@ export function locationOfHome(home: FieldHome | undefined): NewRunLocation | un
   return home === "document" ? { screen: "document", format: "yaml" } : { screen: "step", step: home };
 }
 
-/** Every local issue code has a sentence of its own. */
-const ISSUE_TEXT: Record<StepIssueCode, string> = {
+/** Every local issue code has a sentence of its own; a duplicate port names the port, so its sentence is built where the issue is read. */
+const ISSUE_TEXT: Record<Exclude<StepIssueCode, "app_port_duplicate">, string> = {
   shape_required: NR_SHAPE.SHAPE_REQUIRED,
   harness_required: NR_HARNESSES.HARNESS_REQUIRED,
   task_required: NR_HARNESSES.TASK_ERROR,
   command_required: NR_RUN.COMMAND_REQUIRED,
   pool_required: NR_RUN.POOL_HELP,
+  app_required: NR_RUN.PORT_REQUIRED,
+  app_port_invalid: NR_RUN.PORT_INVALID,
   main_drive_size_required: NR_FILES.SIZE_ERROR,
   files_choice_required: NR_FILES.CHOOSE_FILES,
   starts_here_required: NR_FILES.STARTS_HERE_REQUIRED,
@@ -76,6 +78,8 @@ export interface BlockerInput {
   /** The server's refusal of this draft: its own sentence and reason. */
   refusal: { text: string; reason: string } | null;
   setupItems: readonly SetupItem[];
+  /** An application server is drafted and this server's web app gateway is off, so its ports could never be opened. */
+  gatewayOff?: boolean;
   /** The result for this draft is missing or older than a minute. */
   stale: boolean;
 }
@@ -83,7 +87,7 @@ export interface BlockerInput {
 export function buildBlockers(input: BlockerInput): Blocker[] {
   const out: Blocker[] = [];
   for (const i of input.issues) {
-    out.push({ id: `local:${i.code}`, kind: "local", text: ISSUE_TEXT[i.code], to: locationOfHome(i.home) });
+    out.push({ id: `local:${i.code}`, kind: "local", text: i.code === "app_port_duplicate" ? NR_RUN.PORT_DUPLICATE(i.port ?? "") : ISSUE_TEXT[i.code], to: locationOfHome(i.home) });
   }
   for (const path of input.unsupported) {
     out.push({ id: `unsupported:${path}`, kind: "unsupported", text: NR_REVIEW.BLOCKER_UNSUPPORTED(path), to: locationOfHome(homeOfPath(path) ?? "document"), field: path });
@@ -98,6 +102,9 @@ export function buildBlockers(input: BlockerInput): Blocker[] {
   }
   for (const item of input.setupItems) {
     out.push({ id: `setup:${item.id}`, kind: "setup_item", text: item.detail || item.label, to: { screen: "step", step: "tools" } });
+  }
+  if (input.gatewayOff) {
+    out.push({ id: "gateway_off", kind: "gateway_off", text: NR_REVIEW.BLOCKER_GATEWAY_OFF, to: { screen: "step", step: "run" }, field: "inline_policy.ui_apps" });
   }
   // A stale result only matters when nothing else already holds Launch.
   if (input.stale && out.length === 0) out.push({ id: "stale", kind: "stale", text: NR_REVIEW.BLOCKER_STALE });

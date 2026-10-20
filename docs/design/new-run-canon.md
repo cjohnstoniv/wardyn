@@ -107,7 +107,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `ENV_SUB` | pending (A18) | Interactive · Your drive is attached when you have one |
 | `APP_TITLE` | mock | Application sandbox |
 | `APP_BODY` | mock | Run a sandboxed command, automation or script on its own. |
-| `APP_SUB` | mock | Automation / script · Application / server coming soon |
+| `APP_SUB` | mock | Automation / script · Application / server |
 
 ### 7.3 Run
 
@@ -116,6 +116,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `TITLE_AGENT` | mock | Choose how and where it runs |
 | `TITLE_ENV` | mock | Choose where the environment runs |
 | `TITLE_APP` | mock | Choose where the automation runs |
+| `TITLE_APP_SERVER` | mock | Choose where the application runs |
 | `LEDE_ORG` | pending (W-05) | Your organisation's defaults are selected. |
 | `LEDE_PERSONAL` | pending (W-05) | Your defaults are selected. |
 | `LEDE_NONE` | pending (W-05) | Choose where it runs. |
@@ -134,7 +135,20 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `APP_AUTOMATION_BODY` | mock | A command or job that runs on its own. |
 | `APP_AUTOMATION_META` | mock | Available now |
 | `APP_SERVER` | mock | Application / server |
-| `APP_SERVER_BODY` | mock | App servers and MCP servers. |
+| `APP_SERVER_BODY` | mock | A web app, API or dev server you open in your browser. |
+| `START_COMMAND_LABEL` | mock | Start command |
+| `START_COMMAND_HELP` | mock | Run verbatim in the sandbox when it starts. The run keeps going until you end it or it reaches its lifetime limit. |
+| `PORTS_LABEL` | mock | Ports |
+| `PORTS_HELP` | mock | Each port opens from the run page through Wardyn's web app gateway. Only people who may enter this run can open it. |
+| `PORT_COL_NAME` | mock | Name |
+| `PORT_COL_PORT` | mock | Port |
+| `PORT_COL_PATH` | mock | Path |
+| `PORT_ADD` | mock | Add a port |
+| `PORTS_FULL` | mock | A run can open up to 8 ports. |
+| `PORT_INVALID` | mock | Enter a port from 1 to 65535. |
+| `PORT_DUPLICATE(port)` | mock | Two apps can't share port {port}. |
+| `PORT_REQUIRED` | deviation (lead wording 2026-10-20, FEAT-1APP-UI) | An application needs at least one port to open. |
+| `APP_TERMINAL_NOTE` | mock | The sandbox also has a terminal, as an Environment sandbox does. |
 | `COMMAND_LABEL` | mock | Command |
 | `COMMAND_HELP` | mock | Run verbatim in the sandbox. The run ends when the command exits. |
 | `COMMAND_REQUIRED` | deviation (lead wording 2026-10-17, FR-0099) | A command run needs a command to run. |
@@ -718,6 +732,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `SETUP_AGENT_AUTONOMOUS` | mock | Autonomous agent task |
 | `SETUP_AGENT_INTERACTIVE` | mock | Interactive agent task |
 | `SETUP_APPLICATION` | mock | Background automation |
+| `SETUP_APPLICATION_SERVER` | mock | Application server |
 | `SETUP_ENVIRONMENT` | mock | Interactive environment |
 | `BADGE_ATTENTION` | mock | Needs attention |
 | `BADGE_COMPLETE` | mock | Complete |
@@ -731,6 +746,10 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `VALUE_APPLICATION` | mock | Application sandbox |
 | `VALUE_ENVIRONMENT` | mock | Environment sandbox |
 | `TIMING_APPLICATION` | mock | Background automation · Runs when launched |
+| `TIMING_APPLICATION_SERVER` | mock | Application server · Starts when launched |
+| `APP_PORT(port)` | mock | Port {port} |
+| `APP_OPENS(path)` | mock | {path} · Opens through the web app gateway |
+| `BLOCKER_GATEWAY_OFF` | mock | The web app gateway is off on this server, so this run's apps can't be opened. Ask your admin to turn it on. |
 | `TIMING_INTERACTIVE` | mock | Interactive · Starts when launched |
 | `TIMING_NOW` | mock | Autonomous · Run now |
 | `WHERE_VALUE(pool)` | mock | {pool} pool |
@@ -747,6 +766,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `WORK_ITEMS(n)` | mock | {n} items attached |
 | `MAIN_DRIVE(size)` | mock | Main drive · {size} |
 | `NO_HARNESSES` | mock | No harnesses |
+| `TOOLS_START_COMMAND` | mock | Start command · no harness |
 | `TOOLS_COMMAND_ONE` | mock | Command · 1 optional harness |
 | `TOOLS_COMMAND(n)` | mock | Command · {n} optional harnesses |
 | `TOOLS_NONE` | mock | Optional · none added |

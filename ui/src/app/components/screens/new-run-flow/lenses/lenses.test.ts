@@ -9,7 +9,8 @@ import { attachWorkspace, chooseNothing, detachWorkspace, setStartsHere } from "
 import { addHarness, removeHarness, setStarter, setTask } from "./harness-lens";
 import { setCpu, setMemory } from "./limits-lens";
 import { firstInvalidStep, localIssues, stepIssues } from "./local-issues";
-import { chooseBarrier, chooseMode, choosePool, setCommand } from "./run-lens";
+import { setCommand } from "./apps-lens";
+import { chooseBarrier, chooseMode, choosePool } from "./run-lens";
 import { chooseShape, shapeCarriers } from "./shape-lens";
 import { addAllowedHost, setModelProvider } from "./tools-lens";
 

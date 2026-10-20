@@ -16,12 +16,14 @@ import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { NR_SAVE } from "../../../wardyn/copy/new-run/save";
 import { NR_SHAPE } from "../../../wardyn/copy/new-run/shape";
 import { NR_TEMPLATES } from "../../../wardyn/copy/new-run/templates";
+import { useUIGateway } from "../../../../lib/hooks/use-ui-gateway";
 import type { PreflightResult } from "../../../../lib/types/preflight";
 import type { Template, TemplateKind, TemplatePublish } from "../../../../lib/types/templates";
 import { intentToWire } from "../draft/intent-to-wire";
 import { launchGateOpen } from "../draft/launch-gate";
 import type { NewRunLocation } from "../draft/new-run-url";
 import { useDraftIdentity, useIntentChecks } from "../draft/use-intent-checks";
+import { isServer } from "../lenses/apps-lens";
 import { useLocalIssues, useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../new-run-route";
 import { templateSource } from "../steps/shape/shape-sources";
 import { StepShell, useAnnounce } from "../steps/step-shell";
@@ -59,6 +61,7 @@ export interface ReviewScreenProps extends NewRunScreenProps {
 }
 
 function setupTitle(intent: ReturnType<typeof useNewRunDraft>["intent"]): string | undefined {
+  if (isServer(intent)) return NR_REVIEW.SETUP_APPLICATION_SERVER;
   if (intent.shape === "application") return NR_REVIEW.SETUP_APPLICATION;
   if (intent.shape === "environment") return NR_REVIEW.SETUP_ENVIRONMENT;
   if (intent.shape !== "agent_task") return undefined;
@@ -85,6 +88,7 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
   });
   const pre = checks.preflightResult as PreflightResult | null as ReviewPreflight | null;
   const template = useTemplateNeeds(draft.origin, draft.intent);
+  const gateway = useUIGateway();
 
   const gate = (blockers: number) =>
     launchGateOpen({ blockers, preflight: checks.preflightRead, generation: checks.generation, now: Date.now() });
@@ -95,6 +99,7 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
     templateUnread: template.unread,
     // A credential refusal is not a blocker: Launch's own refusal opens the provider's sign-in door.
     refusal: checks.preflightError === null || checks.preflightRefusal ? null : { text: checks.preflightError, reason: checks.preflightReason },
+    gatewayOff: isServer(draft.intent) && gateway === false,
     setupItems: missingSetup(pre ?? (checks.preflightRefusal && { setup_items: checks.preflightRefusal.setupItems }), checks.preview.result),
   };
   const blockers = buildBlockers({ ...inputs, stale: !gate(0) });

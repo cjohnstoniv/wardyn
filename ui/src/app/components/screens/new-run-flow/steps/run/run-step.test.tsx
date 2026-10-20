@@ -398,16 +398,115 @@ describe("Run step: mode, timing and command", () => {
     expect(screen.getByRole("heading", { name: NR_RUN.TITLE_ENV })).toBeInTheDocument();
   });
 
-  it("takes a command for an application, with Application / server Coming soon", async () => {
+  it("takes a command for an application, with both cards available", async () => {
     show({ shape: "application", experience: "background", workload: { kind: "command", command: "" } });
     await poolSelect();
     expect(screen.getByRole("heading", { name: NR_RUN.TITLE_APP })).toBeInTheDocument();
     const server = screen.getByRole("radio", { name: NR_RUN.APP_SERVER });
-    expect(server).toBeDisabled();
-    expect(within(server.closest("label") as HTMLElement).getByText(NR_SHARED.COMING_SOON)).toBeInTheDocument();
+    expect(server).toBeEnabled();
+    expect(within(server.closest("label") as HTMLElement).getByText(NR_RUN.APP_SERVER_BODY)).toBeInTheDocument();
+    expect(within(server.closest("label") as HTMLElement).queryByText(NR_SHARED.COMING_SOON)).not.toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: NR_RUN.APP_AUTOMATION })).toBeChecked();
     setField(screen.getByLabelText(new RegExp(NR_RUN.COMMAND_LABEL)), "make test");
     expect(intentNow().workload).toEqual({ kind: "command", command: "make test" });
     expect(screen.getByText(NR_RUN.COMMAND_HELP)).toBeInTheDocument();
+    expect(screen.queryByText(NR_RUN.PORTS_LABEL)).not.toBeInTheDocument();
+  });
+
+  describe("Application / server (#1994)", () => {
+    const SERVER: RunIntent = {
+      shape: "application", experience: "interactive", startup: { kind: "command", command: "npm run dev" },
+      inline_policy: { ui_apps: [{ name: "web", port: 3000, path: "/" }, { name: "api", port: 3000, path: "/api" }] },
+    };
+    const rows = () => Array.from(document.querySelectorAll<HTMLElement>("[data-app-row]"));
+    const field = (row: number, label: string) => within(rows()[row]).getByLabelText(label);
+
+    it("choosing the server card moves the draft to an interactive run that starts the command, with one port to edit", async () => {
+      show({ shape: "application", experience: "background", workload: { kind: "command", command: "make dev" } });
+      await poolSelect();
+      await userEvent.click(screen.getByRole("radio", { name: NR_RUN.APP_SERVER }));
+      expect(screen.getByRole("heading", { name: NR_RUN.TITLE_APP_SERVER })).toBeInTheDocument();
+      expect(intentNow()).toMatchObject({ experience: "interactive", startup: { kind: "command", command: "make dev" }, inline_policy: { ui_apps: [{ name: "web", port: 3000, path: "/" }] } });
+      expect(intentNow().workload).toBeUndefined();
+      expect(screen.getByLabelText(new RegExp(NR_RUN.START_COMMAND_LABEL))).toHaveValue("make dev");
+      expect(screen.getByText(NR_RUN.START_COMMAND_HELP)).toBeInTheDocument();
+      expect(screen.getByText(NR_RUN.PORTS_HELP)).toBeInTheDocument();
+      expect(screen.getByText(NR_RUN.APP_TERMINAL_NOTE)).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("radio", { name: NR_RUN.APP_AUTOMATION }));
+      expect(intentNow()).toMatchObject({ experience: "background", workload: { kind: "command", command: "make dev" } });
+      expect(intentNow().inline_policy).toBeUndefined();
+    });
+
+    it("writes the start command, name, port and path of a row to the policy's ui_apps", async () => {
+      show(SERVER);
+      await poolSelect();
+      setField(screen.getByLabelText(new RegExp(NR_RUN.START_COMMAND_LABEL)), "pnpm dev");
+      expect(intentNow().startup).toEqual({ kind: "command", command: "pnpm dev" });
+      setField(field(1, NR_RUN.PORT_COL_NAME), "backend");
+      setField(field(1, NR_RUN.PORT_COL_PORT), "8080");
+      setField(field(1, NR_RUN.PORT_COL_PATH), "/v1");
+      expect(intentNow().inline_policy?.ui_apps).toEqual([{ name: "web", port: 3000, path: "/" }, { name: "backend", port: 8080, path: "/v1" }]);
+    });
+
+    it("says a port outside 1 to 65535 and a port two rows share, on the row, as an alert", async () => {
+      show({ ...SERVER, inline_policy: { ui_apps: [...(SERVER.inline_policy?.ui_apps ?? []), { name: "admin", port: 70000, path: "/admin" }] } });
+      await poolSelect();
+      expect(within(rows()[0]).queryByRole("alert")).not.toBeInTheDocument();
+      expect(within(rows()[1]).getByRole("alert")).toHaveTextContent(NR_RUN.PORT_DUPLICATE(3000));
+      expect(within(rows()[2]).getByRole("alert")).toHaveTextContent(NR_RUN.PORT_INVALID);
+      expect(field(2, NR_RUN.PORT_COL_PORT)).toHaveAttribute("aria-invalid", "true");
+      setField(field(1, NR_RUN.PORT_COL_PORT), "8080");
+      expect(within(rows()[1]).queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("adds a row named for its place, removes one, and stops at eight with its reason", async () => {
+      show(SERVER);
+      await poolSelect();
+      await userEvent.click(screen.getByRole("button", { name: NR_RUN.PORT_ADD }));
+      expect(rows()).toHaveLength(3);
+      expect(field(2, NR_RUN.PORT_COL_NAME)).toHaveValue("app3");
+      expect(field(2, NR_RUN.PORT_COL_PORT)).toHaveValue("");
+      expect(within(rows()[2]).getByRole("alert")).toHaveTextContent(NR_RUN.PORT_INVALID);
+      await userEvent.click(within(rows()[0]).getByRole("button", { name: NR_SHARED.REMOVE }));
+      expect(rows()).toHaveLength(2);
+      expect(intentNow().inline_policy?.ui_apps?.map((a) => a.name)).toEqual(["api", "app3"]);
+      for (let n = 0; n < 6; n++) await userEvent.click(screen.getByRole("button", { name: NR_RUN.PORT_ADD }));
+      expect(rows()).toHaveLength(8);
+      expect(screen.getByRole("button", { name: NR_RUN.PORT_ADD })).toBeDisabled();
+      expect(screen.getByText(NR_RUN.PORTS_FULL)).toBeInTheDocument();
+    });
+
+    it("says a port is needed when the last row is removed", async () => {
+      show({ ...SERVER, inline_policy: { ui_apps: [{ name: "web", port: 3000, path: "/" }] } });
+      await poolSelect();
+      expect(screen.queryByText(NR_RUN.PORT_REQUIRED)).not.toBeInTheDocument();
+      await userEvent.click(within(rows()[0]).getByRole("button", { name: NR_SHARED.REMOVE }));
+      expect(screen.getByRole("alert")).toHaveTextContent(NR_RUN.PORT_REQUIRED);
+      expect(intentNow().inline_policy).toBeUndefined();
+    });
+
+    it("keeps only digits in a port", async () => {
+      show(SERVER);
+      await poolSelect();
+      setField(field(0, NR_RUN.PORT_COL_PORT), "80a80");
+      expect(intentNow().inline_policy?.ui_apps?.[0].port).toBe(8080);
+    });
+
+    it("keeps Continue on a bad port, and puts focus on that row's port", async () => {
+      const { go } = show({ ...SERVER, inline_policy: { ui_apps: [{ name: "web", port: 3000, path: "/" }, { name: "api", port: 70000, path: "/" }] } });
+      await poolSelect();
+      await userEvent.click(screen.getByRole("button", { name: NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_HARNESSES) }));
+      expect(field(1, NR_RUN.PORT_COL_PORT)).toHaveFocus();
+      expect(go).not.toHaveBeenCalled();
+    });
+
+    it("asks for the start command before it continues", async () => {
+      const { go } = show({ ...SERVER, startup: { kind: "command", command: "" } });
+      await poolSelect();
+      await userEvent.click(screen.getByRole("button", { name: NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_HARNESSES) }));
+      expect(screen.getByLabelText(new RegExp(NR_RUN.START_COMMAND_LABEL))).toHaveFocus();
+      expect(go).not.toHaveBeenCalled();
+    });
   });
 
   it("keeps Continue on an application until the command is written", async () => {
