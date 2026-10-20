@@ -22,6 +22,20 @@
 - Not in this release: drives, session recording, reviving a stopped VM, replacing its proxy, and recovering its output after the VM is gone. Each is refused with a reason.
 - A VM's terminal is a plain shell. Opening it in the agent CLI (`interactive_start: agent`) and watching or taking over the agent's terminal are refused too.
 
+## When the organisation is unreachable
+
+| Situation | Behaviour |
+|---|---|
+| The link is down when a VM would start, or its first lease has lapsed | Refused `runner_offline`, as for a container. No VM, intent or run row exists |
+| The link drops while a VM runs | The VM keeps running with its files. Its proxy keeps enforcing the policy it holds and spools decisions |
+| The run token goes unrenewed for 1h5m | The runner stops the VM's proxy. The guest keeps running with no network path |
+| A credential the proxy injects from an expiring grant | Dropped at its expiry plus 15 minutes if it cannot be renewed. A fixed one (an API key) is held until the proxy stops at 1h5m |
+| The VM's audit spool fills (50,000 decisions or 32 MiB) | The runner asks the guest to power down, keeps the stopped VM and removes the proxy. The runner's log names the run |
+
+- These rules apply only on a runner that offers Linux VM sandboxes. A container run keeps the hold-then-`503` for a full spool.
+- The spool is self-reported by the runner, so it is as trustworthy as the computer. A resident credential stops at its own cap ([hybrid laptops](hybrid-laptops.md#offline-and-revocation)).
+- Not in this release: a window that says the organisation is unreachable.
+
 ## Requirements
 
 | Requirement | Detail |
