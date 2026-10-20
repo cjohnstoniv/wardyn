@@ -77,8 +77,14 @@ describe("PolicyRemedy", () => {
     expect(card).toHaveTextContent("OwnerPlatform Security");
   });
 
+  it("the card's Request access is a button-styled link", () => {
+    render(<PolicyRemedy policy={ref({ owner: "Platform Security", request_url: "https://example.com/access" })} />);
+    expect(screen.getByRole("link", { name: /Request access/ })).toHaveClass("border");
+  });
+
   it("Copy details says Copied only after the write lands, then resets; a refused clipboard changes nothing", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
+    const original = Object.getOwnPropertyDescriptor(navigator, "clipboard");
     try {
       const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
       // After setup(): user-event installs its own clipboard stub there.
@@ -96,6 +102,8 @@ describe("PolicyRemedy", () => {
       expect(screen.getByRole("button", { name: "Copy details" })).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
+      if (original) Object.defineProperty(navigator, "clipboard", original);
+      else Reflect.deleteProperty(navigator, "clipboard");
     }
   });
 
@@ -104,6 +112,9 @@ describe("PolicyRemedy", () => {
     const line = screen.getByTestId("policy-remedy");
     expect(line).toHaveTextContent("Owned by Platform Security · Request access");
     expect(line.querySelector("dl")).toBeNull();
+    // Main's line form: an underlined link, not the card's button.
+    expect(screen.getByRole("link", { name: /Request access/ })).toHaveClass("underline");
+    expect(screen.getByRole("link", { name: /Request access/ })).not.toHaveClass("border");
   });
 
   it("says who to ask when the limit lists an owner but no way to ask, or neither", () => {

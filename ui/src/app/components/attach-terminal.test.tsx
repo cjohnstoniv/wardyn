@@ -372,10 +372,14 @@ describe("AttachTerminal — role-aware attach", () => {
       </OperatorProvider>
     );
     attachTicket.mockReset();
-    attachTicket.mockRejectedValueOnce(new HttpError(403, "Too many sessions.", ATTACH_CAP_REASON));
+    // The real cap: a 503 naming its reason, with no policy (attach_ticket.go).
+    attachTicket.mockRejectedValueOnce(new HttpError(503, "Too many sessions.", ATTACH_CAP_REASON));
     const first = render(run({ source: "profile", owner: "Platform Security" }));
     expect(await screen.findByText(/Too many sessions/)).toBeInTheDocument();
+    expect(attachTicket).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("policy-remedy")).toHaveTextContent("EnforcedBy Wardyn, before the terminal opens");
+    expect(screen.getByTestId("policy-remedy")).toHaveTextContent("OwnerPlatform Security");
+    expect(screen.getByTestId("policy-remedy")).not.toHaveTextContent("Set by");
     expect(screen.getByRole("button", { name: "Copy details" })).toBeInTheDocument();
     first.unmount();
 

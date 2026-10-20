@@ -22,7 +22,6 @@ const POLICY = {
   owner: "Platform Security",
   request_url: "https://example.com/access",
 };
-const NO_CONTACT = { source: "profile", layer: "profile", name: "Platform team" };
 // What GET /runs/{id} carries as the run's own policy: no layer, since only a refusal's own reference names one.
 const RUN_POLICY = { source: "profile", name: "Platform team", owner: "Platform Security", request_url: "https://example.com/access" };
 
@@ -71,22 +70,25 @@ test("a refused attach shows the card with where it was enforced and Copy detail
       cached = (await response.json()) as Record<string, unknown>;
       cached.interactive = true;
       cached.state = "RUNNING";
+      cached.policy = RUN_POLICY;
     }
     await route.fulfill({ json: cached });
   });
   await page.route(`**/api/v1/runs/${runId}/attach/ticket`, (route) =>
     route.fulfill({
-      status: 403,
-      json: { error: "Your governance profile allows 1 attached terminal session per run.", reason: ATTACH_CAP_REASON, policy: NO_CONTACT },
+      // The real cap (attach_ticket.go): a 503 naming its reason, with no policy.
+      status: 503,
+      json: { error: "too many open terminal sessions for this run (max 4) — close one and retry", reason: ATTACH_CAP_REASON },
     }),
   );
   await page.goto(`/runs/${runId}`);
 
   const card = page.getByTestId("run-terminal-pane").getByTestId("policy-remedy");
-  await expect(card).toContainText("Set byPlatform team walls");
-  await expect(card).toContainText("OwnerNot listed");
+  // No policy in the envelope, so the card is the run's own: Owner and the ask, no wall named.
+  await expect(card).not.toContainText("Set by");
+  await expect(card).toContainText("OwnerPlatform Security");
   await expect(card).toContainText("EnforcedBy Wardyn, before the terminal opens");
-  await expect(card).toContainText("This limit names no owner. Ask your Wardyn admin.");
+  await expect(card.getByRole("link", { name: "Request access" })).toBeVisible();
   await expect(card.getByRole("button", { name: "Copy details" })).toBeVisible();
 });
 

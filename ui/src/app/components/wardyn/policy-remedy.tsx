@@ -76,7 +76,7 @@ export function PolicyRemedy({ policy, className, enforced, canChange, copyable,
   let action: React.ReactNode = null;
   if (href) {
     action = (
-      <a href={href} target="_blank" rel="noopener noreferrer" className={REQUEST_BUTTON}>
+      <a href={href} target="_blank" rel="noopener noreferrer" className={line ? LINK : REQUEST_BUTTON}>
         {POLICY_REMEDY.LINK} <span aria-hidden="true">↗</span>
       </a>
     );

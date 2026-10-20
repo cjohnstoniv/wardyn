@@ -41,9 +41,11 @@ export type ConnState = "connecting" | "open" | "reconnecting" | "closed" | "err
 export const MAX_RECONNECT_ATTEMPTS = 4;
 
 // Only a refusal that will not change ends a ticket mint for good (owner-only, the session cap, signed out, not
-// found). No answer at all, a 5xx and a 429 are the network or the daemon coming back.
+// found). No answer at all, a 5xx and a 429 are the network or the daemon coming back, except the session cap:
+// the server answers it with a 503 that names its reason, and it will not change by asking again.
 const mintMayRecover = (e: unknown): boolean =>
-  !(e instanceof HttpError) || e.status === TIMEOUT_STATUS || e.status === 429 || e.status >= 500;
+  !(e instanceof HttpError) ||
+  (e.reason !== ATTACH_CAP_REASON && (e.status === TIMEOUT_STATUS || e.status === 429 || e.status >= 500));
 const RECONNECT_BASE_DELAY_MS = 600;
 const RECONNECT_MAX_DELAY_MS = 5000;
 
