@@ -112,6 +112,7 @@ test.describe("providers — legacy open mode, with no rows at all", () => {
     await expect(page.getByText(PROVIDERS.LEGACY_OPEN_TITLE)).toBeVisible();
     await expect(page.getByText(PROVIDERS.LEGACY_OPEN_BODY)).toBeVisible();
     await expect(page.getByText(PROVIDERS.LEGACY_OPEN_OTHER_HOSTS)).toBeVisible();
+    await expect(page.getByText(PROVIDERS.GIT_LEAD)).toHaveCount(0);
     // The screen's one Save is withheld while the legacy banner alone is the
     // affirmative (providers-screen.tsx) — Add provider is the state's own
     // one teal.
@@ -136,6 +137,8 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
 
     const row = page.getByTestId("provider-row-github");
     await expect(row).toBeVisible();
+    await expect(page.getByText(PROVIDERS.GIT_LEAD)).toBeVisible();
+    await expect(page.getByText(PROVIDERS.LEGACY_OPEN_TITLE)).toHaveCount(0);
     await row.locator("textarea").fill("https://github.com/acme");
     await saveProviders(page);
 
