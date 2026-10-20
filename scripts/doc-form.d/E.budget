@@ -112,7 +112,8 @@
 # docs/ENV.md 40792 = ours 40537 + theirs 40671 - base 40416 at the 0.10 merge of main (W2) into HYBB.
 # docs/ENV.md 41288 = ours 41033 + theirs 40671 - base 40416 at the 0.10 merge of main (W2) into SEC-1c.
 # docs/ENV.md 41409 = ours 40792 + theirs 41288 - base 40671 at the 0.10 W3 merge of SEC-1c onto the train.
-docs/ENV.md=41409 share=5
+# docs/ENV.md 41513 adds 104 over 41409, measured (0.10 RDIAG-A): the `wardyn doctor` subsection: what it reads, that it never prints a credential and writes nothing, that the CLI does not trust the CA bundle a runner does, and where the runner stages are documented.
+docs/ENV.md=41513 share=5
 # docs/ENV.md 39047 adds 478 over 38569: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
 # docs/ENV.md 38607 adds 38 over 38569, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # docs/ENV.md 40042 adds 422 over 39620, measured: the WARDYN_AWS_SIGV4_AT_PROXY row and section: which lanes and hosts are re-signed, the named refusals, and the no-hold, placement and new-dispatch notes.
