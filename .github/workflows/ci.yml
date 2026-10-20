@@ -436,16 +436,16 @@ jobs:
 
   # The required check. Branch protection requires a context named `build`, and
   # this is it: green only when every `go` leg passed AND the union of the three
-  # coverage profiles clears the floor. `!cancelled()` so a failed leg still
-  # runs this job, which then fails on the first step; with the default
-  # `success()` it would be SKIPPED, and a skipped required check can read as
-  # passing. On a docs- or console-only change (changes.outputs.backend ==
+  # coverage profiles clears the floor. `always()` so a failed leg, or a run a
+  # stop-early job cancelled, still runs this job, which then fails on the
+  # first step; with the default `success()` it would be SKIPPED, and a skipped
+  # required check can read as passing. On a docs- or console-only change (changes.outputs.backend ==
   # 'false') the legs ran only the guard packages and wrote no profiles, so the
   # union steps skip; any other value, including a missing one, requires the
   # union.
   build:
     needs: [changes, go, go-lint]
-    if: ${{ !cancelled() }}
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -1741,8 +1741,8 @@ jobs:
           key: go-test-pg-${{ matrix.shard }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
 
   # The required check. Branch protection requires a context named `test-pg`,
-  # and this is it: green only when every shard above passed. `!cancelled()` so
-  # a failed shard still runs this job, which then fails on its one step; with
+  # and this is it: green only when every shard above passed. `always()` so
+  # a failed or cancelled shard still runs this job, which then fails on its one step; with
   # the default `success()` it would be SKIPPED when a shard fails, and a
   # skipped required check can read as passing. Same shape as `build` over the
   # `go` legs. It skips, with the shards, only on an explicit
@@ -1750,7 +1750,7 @@ jobs:
   # ran, and a skipped `test-pg` is what branch protection accepts.
   test-pg:
     needs: [changes, test-pg-shard]
-    if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' }}
+    if: ${{ always() && needs.changes.outputs.backend != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -2236,13 +2236,15 @@ jobs:
   #   deterministic: lint and the whole-tree guards, `compose`, `gates`,
   #   `notices`, `diagrams`, `dco`. cmd/wardynd/ci_stop_early_guard_test.go pins
   #   the list.
-  # - It never fires on push, merge_group or a pull request from a fork or
-  #   Dependabot, whose token is read-only. The job is then skipped.
+  # - It never fires on push, merge_group, a train/* or prep/* pull request, or
+  #   a pull request from a fork or Dependabot, whose token is read-only. The
+  #   job is then skipped.
   # - It never changes a required check's name or lets a red run read green.
   #   The failing gate keeps its `failure` conclusion, which a cancel cannot
   #   change; every job not yet finished ends `cancelled`, which branch
-  #   protection does not accept, so `build` and `test-pg` (`!cancelled()`)
-  #   report cancelled, not skipped. docs/CI.md ("Stop a red run early") has
+  #   protection does not accept, and `build` and `test-pg` (`always()`) still
+  #   run after the cancel and fail on the legs' or shards' result, so neither
+  #   reads as passing. docs/CI.md ("Stop a red run early") has
   #   the reasoning and the runs it was read from.
   # - It holds no stored credential. The only token is this workflow's own
   #   GITHUB_TOKEN with `actions: write`, scoped to these jobs, which check out
@@ -2256,7 +2258,8 @@ jobs:
       ${{ !cancelled() && needs.go-lint.result == 'failure'
       && github.event_name == 'pull_request'
       && github.event.pull_request.head.repo.full_name == github.repository
-      && github.actor != 'dependabot[bot]' }}
+      && github.actor != 'dependabot[bot]'
+      && !startsWith(github.head_ref, 'train/') && !startsWith(github.head_ref, 'prep/') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -2278,7 +2281,8 @@ jobs:
       ${{ !cancelled() && needs.compose.result == 'failure'
       && github.event_name == 'pull_request'
       && github.event.pull_request.head.repo.full_name == github.repository
-      && github.actor != 'dependabot[bot]' }}
+      && github.actor != 'dependabot[bot]'
+      && !startsWith(github.head_ref, 'train/') && !startsWith(github.head_ref, 'prep/') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -2291,7 +2295,8 @@ jobs:
       ${{ !cancelled() && needs.gates.result == 'failure'
       && github.event_name == 'pull_request'
       && github.event.pull_request.head.repo.full_name == github.repository
-      && github.actor != 'dependabot[bot]' }}
+      && github.actor != 'dependabot[bot]'
+      && !startsWith(github.head_ref, 'train/') && !startsWith(github.head_ref, 'prep/') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -2304,7 +2309,8 @@ jobs:
       ${{ !cancelled() && needs.notices.result == 'failure'
       && github.event_name == 'pull_request'
       && github.event.pull_request.head.repo.full_name == github.repository
-      && github.actor != 'dependabot[bot]' }}
+      && github.actor != 'dependabot[bot]'
+      && !startsWith(github.head_ref, 'train/') && !startsWith(github.head_ref, 'prep/') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -2317,7 +2323,8 @@ jobs:
       ${{ !cancelled() && needs.diagrams.result == 'failure'
       && github.event_name == 'pull_request'
       && github.event.pull_request.head.repo.full_name == github.repository
-      && github.actor != 'dependabot[bot]' }}
+      && github.actor != 'dependabot[bot]'
+      && !startsWith(github.head_ref, 'train/') && !startsWith(github.head_ref, 'prep/') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -2330,7 +2337,8 @@ jobs:
       ${{ !cancelled() && needs.dco.result == 'failure'
       && github.event_name == 'pull_request'
       && github.event.pull_request.head.repo.full_name == github.repository
-      && github.actor != 'dependabot[bot]' }}
+      && github.actor != 'dependabot[bot]'
+      && !startsWith(github.head_ref, 'train/') && !startsWith(github.head_ref, 'prep/') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

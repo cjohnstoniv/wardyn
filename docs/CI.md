@@ -532,7 +532,7 @@ Three mechanisms (#932), on top of the per-job Go cache (#470) and the single ra
 So:
 
 - `test-pg` (the aggregator over its `test-pg-shard` matrix, which fails unless every shard passed), `conformance`, `conformance-k8s`, `helm` and `envbuild-integration` skip on `backend == 'false'`, `notices` on `notices == 'false'`, the nine `trivy (<image>)` jobs on `images == 'false'`.
-- `build` needs `go-lint` and every `go` leg and runs with `if: !cancelled()`.
+- `build` needs `go-lint` and every `go` leg and runs with `if: always()`.
   - Its first step fails unless every leg passed, so the `build` context is green only when all four legs and the union floor are.
   - The union steps carry `if: needs.changes.outputs.backend != 'false'`, so only an explicit docs- or console-only classification skips them.
   - A failed or missing classification runs the full suites in the legs and requires the union.
@@ -566,12 +566,12 @@ So:
 | What | Rule |
 |---|---|
 | Never fires on | `ui-e2e`, `test-pg-shard`, the `go` test legs: their reds can be flakes |
-| Events | `pull_request` from this repository; push, `merge_group`, forks and Dependabot keep a full run |
-| Required checks | none renamed or added; `build` and `test-pg` still run on `!cancelled()` |
+| Events | `pull_request` from this repository; push, `merge_group`, `train/*` and `prep/*` pull requests, forks and Dependabot keep a full run |
+| Required checks | none renamed or added; `build` and `test-pg` run on `always()` and fail after a cancel |
 | Pinned by | [`cmd/wardynd/ci_stop_early_guard_test.go`](../cmd/wardynd/ci_stop_early_guard_test.go) |
 
 - A cancelled run cannot read green: the failed gate keeps `failure`, and every unfinished job ends `cancelled`, which branch protection rejects.
-  - Read from 12 cancelled runs: `build` ended `cancelled` 12 times, `test-pg` 11 (once `failure`).
+  - `build` and `test-pg` run on `always()`, so they report `failure`, never `skipped`.
 - The cost: one failure shows at a time, a flaky gate stops the run too, and a stop job waits for a slot when the account is at its cap.
 
 **Before and after.**

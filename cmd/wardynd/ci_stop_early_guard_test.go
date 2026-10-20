@@ -26,9 +26,11 @@ type ciWorkflow struct {
 			Matrix map[string]any `yaml:"matrix"`
 		} `yaml:"strategy"`
 		Steps []struct {
-			Name string `yaml:"name"`
-			Uses string `yaml:"uses"`
-			Run  string `yaml:"run"`
+			Name            string    `yaml:"name"`
+			Uses            string    `yaml:"uses"`
+			Run             string    `yaml:"run"`
+			If              string    `yaml:"if"`
+			ContinueOnError yaml.Node `yaml:"continue-on-error"`
 		} `yaml:"steps"`
 	} `yaml:"jobs"`
 }
@@ -70,7 +72,8 @@ func ciNeeds(t *testing.T, n yaml.Node) []string {
 // exactly one cheap deterministic gate, so none can fire on a flake-prone job
 // (`ui-e2e`, `test-pg-shard`, a test leg) or wait for the slowest gate; it fires
 // only on that gate's `failure`, only on a same-repository, non-Dependabot pull
-// request (push, merge_group, forks and Dependabot keep a full run), holds no
+// request (push, merge_group, train/* and prep/* pull requests, forks and
+// Dependabot keep a full run), holds no
 // permission but `actions: write`, and runs nothing from the pull request.
 func TestCIStopEarlyJobsFireOnlyOnCheapDeterministicGates(t *testing.T) {
 	wf, raw := loadCIWorkflow(t)
@@ -102,6 +105,8 @@ func TestCIStopEarlyJobsFireOnlyOnCheapDeterministicGates(t *testing.T) {
 			"github.event_name == 'pull_request'",
 			"github.event.pull_request.head.repo.full_name == github.repository",
 			"github.actor != 'dependabot[bot]'",
+			"!startsWith(github.head_ref, 'train/')",
+			"!startsWith(github.head_ref, 'prep/')",
 		} {
 			if !strings.Contains(job.If, frag) {
 				t.Errorf("%s: if: lacks %q, so it could fire on a push, a fork, a skipped gate or a cancelled run: %s", id, frag, job.If)
@@ -140,7 +145,7 @@ func TestCIStopEarlyJobsFireOnlyOnCheapDeterministicGates(t *testing.T) {
 // `build` (a required context) needs it, so splitting it out of the `go` matrix
 // dropped no gate.
 func TestCIGoLintRunsGuardsFirstAndGatesBuild(t *testing.T) {
-	wf, _ := loadCIWorkflow(t)
+	wf, raw := loadCIWorkflow(t)
 	lint, ok := wf.Jobs["go-lint"]
 	if !ok {
 		t.Fatal("ci.yml has no go-lint job")
@@ -148,16 +153,30 @@ func TestCIGoLintRunsGuardsFirstAndGatesBuild(t *testing.T) {
 	if lint.Name != "go (lint)" {
 		t.Errorf("go-lint reports as %q, want %q", lint.Name, "go (lint)")
 	}
+	// A red guard or lint must read red on `go (lint)`: the job runs whenever the
+	// run is not cancelled, and neither step may be skipped or continue on error.
+	if lint.If != "${{ !cancelled() }}" {
+		t.Errorf("go-lint if: is %q, want ${{ !cancelled() }}", lint.If)
+	}
+	if blk := ciJobBlock(t, raw, "go-lint"); strings.Contains(blk, "continue-on-error:") {
+		t.Errorf("a go-lint step continues on error, so a red guard or lint can pass:\n%s", blk)
+	}
 	guard, mk := -1, -1
 	for i, st := range lint.Steps {
 		if strings.Contains(st.Run, "candidate-tests.py guards") {
 			guard = i
-			if !strings.Contains(st.Run, "go test -count=1 -run") || !strings.Contains(st.Run, "exit \"$rc\"") {
-				t.Errorf("the guard step no longer runs each package and fails on any red:\n%s", st.Run)
+			if !strings.Contains(st.Run, "go test -count=1 -run") || !strings.Contains(st.Run, "exit \"$rc\"") ||
+				!strings.Contains(st.Run, "|| rc=1") {
+				t.Errorf("the guard step no longer runs each package, records each red in rc and fails on any:\n%s", st.Run)
 			}
 		}
 		if st.Run == "make build tidy-check lint" {
 			mk = i
+		}
+		if guard == i || mk == i {
+			if st.If != "" || st.ContinueOnError.Kind != 0 {
+				t.Errorf("go-lint step %q has an if: (%q) or continue-on-error, so it could be skipped or pass red", st.Name, st.If)
+			}
 		}
 	}
 	if guard < 0 || mk < 0 || guard > mk {
@@ -170,6 +189,25 @@ func TestCIGoLintRunsGuardsFirstAndGatesBuild(t *testing.T) {
 	}
 	if got := ciNeeds(t, wf.Jobs["build"].Needs); !slices.Equal(got, []string{"changes", "go", "go-lint"}) {
 		t.Errorf("build needs %v, want [changes go go-lint]", got)
+	}
+	if blk := ciJobBlock(t, raw, "build"); !strings.Contains(blk, `[ "$LEGS" = success ] && [ "$LINT" = success ] ||`) {
+		t.Errorf("build no longer fails unless both the go legs and go (lint) succeeded:\n%s", blk)
+	}
+}
+
+// TestCIAggregatorsRunAfterACancel pins the two required aggregators to
+// `always()`: after a stop-early job cancels the run they still run and fail on
+// the result of the legs or shards, so a cancelled run never leaves them
+// skipped, which branch protection reads as passing.
+func TestCIAggregatorsRunAfterACancel(t *testing.T) {
+	wf, _ := loadCIWorkflow(t)
+	for id, want := range map[string]string{
+		"build":   "${{ always() }}",
+		"test-pg": "${{ always() && needs.changes.outputs.backend != 'false' }}",
+	} {
+		if got := wf.Jobs[id].If; got != want {
+			t.Errorf("%s if: is %q, want %q", id, got, want)
+		}
 	}
 }
 
