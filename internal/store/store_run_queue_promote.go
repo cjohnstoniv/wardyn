@@ -217,18 +217,20 @@ func (a admittedRun) keys() []string {
 	return append(out, a.remotes...)
 }
 
-// queuePage is one page of the pool's queue rows, oldest first (queued_at, then run_id), after the given
-// row (nil: from the head). It takes no lock: whether a run is still QUEUED is the promotion CAS's to say.
+// queuePage is one page of the pool's queue rows in line order (runQueueLine, then run_id), after the
+// given row (nil: from the head). A scheduled run whose start time is still ahead is not in the page:
+// nothing judges or promotes it before then. It takes no lock: whether a run is still QUEUED is the
+// promotion CAS's to say.
 func (s PG) queuePage(ctx context.Context, poolID uuid.UUID, after *RunQueueEntry, limit int) ([]RunQueueEntry, error) {
 	if limit <= 0 {
 		limit = 1 << 30
 	}
-	q, args := `SELECT `+runQueueCols+` FROM run_queue WHERE pool_id = $1 ORDER BY queued_at, run_id LIMIT $2`, []any{poolID, limit}
+	q, args := `SELECT `+runQueueCols+` FROM run_queue WHERE pool_id = $1 AND (start_at IS NULL OR start_at <= $3)`, []any{poolID, limit, s.now()}
 	if after != nil {
-		q = `SELECT ` + runQueueCols + ` FROM run_queue WHERE pool_id = $1 AND (queued_at, run_id) > ($3, $4)
-			ORDER BY queued_at, run_id LIMIT $2`
-		args = append(args, after.QueuedAt, after.RunID)
+		q += ` AND (` + runQueueLine + `, run_id) > ($4, $5)`
+		args = append(args, after.lineAt(), after.RunID)
 	}
+	q += ` ORDER BY ` + runQueueLine + `, run_id LIMIT $2`
 	return collect(ctx, s.Pool, "list", "promotable runs", q, args, func(row pgx.Row) (RunQueueEntry, error) { return scanRunQueueEntry(row) })
 }
 

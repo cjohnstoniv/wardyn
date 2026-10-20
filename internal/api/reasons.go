@@ -168,6 +168,12 @@ const (
 	reasonRunModeConflict    = "run_mode_conflict"    // run-mode carriers contradict each other, or an older field that replaced them
 	reasonStartFolderInvalid = "start_folder_invalid" // start_folder is malformed, names an attachment the run lacks, or escapes its mount
 	reasonRunBackgroundOnly  = "run_background_only"  // a background run has no interactive door: attach, exec, SSH, UI gateway, desktop
+	// One-time scheduled runs (run_schedule.go): start_at on a create.
+	reasonScheduledRunsOff         = "scheduled_runs_off"         // start_at sent while WARDYN_SCHEDULED_RUNS is off
+	reasonScheduledRunsUnavailable = "scheduled_runs_unavailable" // start_at on a deployment that places no runs, so no queue can hold it
+	reasonStartAtInvalid           = "start_at_invalid"           // start_at or start_time_zone is malformed, or one is sent without the other
+	reasonStartAtPast              = "start_at_past"              // start_at is not in the future
+	reasonStartAtTooFar            = "start_at_too_far"           // start_at is more than 7 days ahead
 	// The main drive (run_main_drive.go). The sentence is mainDriveUnenforceableMsg's, with a TypeScript twin.
 	reasonMainDriveUnenforceable = "main_drive_unenforceable" // the run's policy writes a disk size the runner it lands on cannot cap
 	// The run shape (run_shape.go): New Run's choice, checked against the carriers.

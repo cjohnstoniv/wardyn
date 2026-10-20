@@ -236,6 +236,8 @@ func (st *queuedStart) request() (createRunRequest, error) {
 		return req, err
 	}
 	req.RunnerPoolID = st.run.RunnerPoolID.String()
+	// A scheduled run's time has come: the replay is a start now.
+	req.StartAt, req.StartTimeZone = "", ""
 	if req.ModelProvider == "" {
 		req.ModelProvider = st.launch.ProviderID
 	}

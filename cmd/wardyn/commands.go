@@ -145,6 +145,7 @@ func runCmd(client clientFn) *cobra.Command {
 	var mode runModeFlags
 	var where runPlacementFlags
 	var ends runEndFlags
+	var sched runScheduleFlags
 	cmd := &cobra.Command{
 		Use:     "run",
 		Aliases: []string{"runs"},
@@ -211,6 +212,9 @@ func runCmd(client clientFn) *cobra.Command {
 			if err := applyQueueWait(&body, cmd.Flags().Changed("max-wait"), maxWait, wait, timeout); err != nil {
 				return err
 			}
+			if err := sched.apply(&body, wait); err != nil {
+				return err
+			}
 			if wait && body.Experience == sdk.ExperienceInteractive {
 				return fmt.Errorf("--wait and --experience interactive are mutually exclusive (an interactive run never finishes on its own)")
 			}
@@ -260,7 +264,7 @@ func runCmd(client clientFn) *cobra.Command {
 			return seedThenWait(cmd, client(), run.ID, localFolder, localFolderRemote, wait, timeout)
 		},
 	}
-	cmd.Flags().StringVar(&file, "file", "", "launch a kind: Run document (JSON or YAML, or '-' for stdin) instead of the flags below; only --title, --description, --wait, --timeout, --max-wait, --json and --dry-run go with it. A document's inline_policy is sent as an overlay on your default policy, not as a replacement")
+	cmd.Flags().StringVar(&file, "file", "", "launch a kind: Run document (JSON or YAML, or '-' for stdin) instead of the flags below; only --title, --description, --wait, --timeout, --max-wait, --start-at, --time-zone, --json and --dry-run go with it. A document's inline_policy is sent as an overlay on your default policy, not as a replacement")
 	cmd.Flags().StringVar(&repo, "repo", "", "repository (org/name; optional — omit for an ephemeral scratch run)")
 	cmd.Flags().StringVar(&agent, "agent", "", "agent name (e.g. claude-code)")
 	cmd.Flags().StringVar(&task, "task", "", "human task description")
@@ -286,6 +290,7 @@ func runCmd(client clientFn) *cobra.Command {
 	cmd.Flags().DurationVar(&maxWait, "max-wait", 0, "how long the run may wait for a free slot in a pool at its run limit (at least 1s; over 7 days is cut to 7). "+
 		"With --wait and no --max-wait the request carries --timeout minus 60s for a --timeout of 2m or more, and half of --timeout for a shorter one, so a run that waits too long should end queue_timeout (exit 1) before --timeout (exit 124); that is the limit asked of the server, not a guarantee")
 	cmd.Flags().DurationVar(&timeout, "timeout", 30*time.Minute, "give up waiting after this long (with --wait; exit 124). Bounds the requests too, and does not stop the run: it keeps running, and holds its sandbox and credentials until it ends (kill it with 'wardyn run kill'). Must be positive")
+	sched.register(cmd)
 	cmd.Flags().BoolVar(&createJSON, "json", false, "emit the created run (or the --dry-run checklist) as JSON (progress goes to stderr)")
 
 	cmd.AddCommand(runListCmd(client), runGetCmd(client), runKillCmd(client),

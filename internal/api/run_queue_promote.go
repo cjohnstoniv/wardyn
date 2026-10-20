@@ -82,13 +82,17 @@ func (s *Server) queueAdmit(ctx context.Context, pool types.RunnerPool, e store.
 	}
 	var auth queueAuthority
 	_ = json.Unmarshal(e.Authority, &auth) //nolint:errcheck // an unreadable authority fails the start's own checks
-	room, err := s.queueRunnerFree(withQueueOwner(auth.context(ctx), e.Owner, e.Authority), pool, launch)
+	octx := withQueueOwner(auth.context(ctx), e.Owner, e.Authority)
+	room, err := s.queueRunnerFree(octx, pool, launch)
 	if err != nil {
 		return store.QueueVerdict{}, err
 	}
 	if room.wait != "" {
 		// Only an unpinned run's wait is its owner's: a run pinned to one runner waits for that runner alone.
 		return store.QueueVerdict{Wait: string(room.wait), Owner: !room.pinned}, nil
+	}
+	if wait := s.queueOwnerSignIn(octx, e, launch); wait != "" {
+		return store.QueueVerdict{Wait: string(wait)}, nil
 	}
 	if s.admitHostCapacity(ctx, e.Owner, "runs", false) != nil {
 		return store.QueueVerdict{Stop: true}, nil

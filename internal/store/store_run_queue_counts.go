@@ -47,12 +47,15 @@ func (s PG) RunnerPoolSlotCounts(ctx context.Context, poolIDs []uuid.UUID) (map[
 }
 
 // RunQueueFact is a waiting run's place in its pool's queue: Ahead is the number of waiting runs
-// before it (queued_at, then run_id), a count and never whose.
+// before it in line (runQueueLine, then run_id), a count and never whose. StartAt is a scheduled
+// run's not-before time and TimeZone the zone its request gave it in.
 type RunQueueFact struct {
 	PoolID     uuid.UUID
 	QueuedAt   time.Time
 	DeadlineAt time.Time
 	Ahead      int
+	StartAt    *time.Time
+	TimeZone   string
 }
 
 // RunQueueFacts reads the place of each of ids that is still waiting, in one read; a run that is not
@@ -63,9 +66,9 @@ func (s PG) RunQueueFacts(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]R
 		return out, nil
 	}
 	rows, err := s.Pool.Query(ctx, `
-		SELECT run_id, pool_id, queued_at, deadline_at, ahead FROM (
-			SELECT run_id, pool_id, queued_at, deadline_at,
-				row_number() OVER (PARTITION BY pool_id ORDER BY queued_at, run_id) - 1 AS ahead
+		SELECT run_id, pool_id, queued_at, deadline_at, ahead, start_at, time_zone FROM (
+			SELECT run_id, pool_id, queued_at, deadline_at, start_at, COALESCE(launch->'request'->>'start_time_zone', '') AS time_zone,
+				row_number() OVER (PARTITION BY pool_id ORDER BY `+runQueueLine+`, run_id) - 1 AS ahead
 			FROM run_queue WHERE pool_id IN (SELECT pool_id FROM run_queue WHERE run_id = ANY($1))
 		) ranked WHERE run_id = ANY($1)`, ids)
 	if err != nil {
@@ -75,7 +78,7 @@ func (s PG) RunQueueFacts(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]R
 	for rows.Next() {
 		var id uuid.UUID
 		var f RunQueueFact
-		if err := rows.Scan(&id, &f.PoolID, &f.QueuedAt, &f.DeadlineAt, &f.Ahead); err != nil {
+		if err := rows.Scan(&id, &f.PoolID, &f.QueuedAt, &f.DeadlineAt, &f.Ahead, &f.StartAt, &f.TimeZone); err != nil {
 			return nil, fmt.Errorf("store: run queue facts: %w", err)
 		}
 		out[id] = f

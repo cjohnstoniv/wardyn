@@ -101,7 +101,7 @@ func (s *Server) runnerPoolSlots(ctx context.Context, p runPlacement, req create
 
 // projectRunQueue fills AgentRun.queue on each QUEUED run of runs from its queue row, in one read. It is
 // derived at read and never stored. The reason is the run's wait token (runner_pool_at_capacity until
-// the queue says another). A run that left the queue between the two reads carries none.
+// the queue says another; scheduled while a scheduled run's time is ahead). A run that left the queue between the two reads carries none.
 func (s *Server) projectRunQueue(ctx context.Context, runs []types.AgentRun) error {
 	var ids []uuid.UUID
 	for i := range runs {
@@ -126,7 +126,12 @@ func (s *Server) projectRunQueue(ctx context.Context, runs []types.AgentRun) err
 		if !runnerpool.WaitReason(reason).Valid() {
 			reason = string(runnerpool.WaitAtCapacity)
 		}
-		runs[i].Queue = &types.RunQueue{PoolID: f.PoolID, QueuedAt: f.QueuedAt, DeadlineAt: f.DeadlineAt, Position: f.Ahead, Reason: reason}
+		// A scheduled run says so until its time, whatever a pass last wrote for its pool.
+		if f.StartAt != nil && f.StartAt.After(s.cfg.Now()) {
+			reason = string(runnerpool.WaitScheduled)
+		}
+		runs[i].Queue = &types.RunQueue{PoolID: f.PoolID, QueuedAt: f.QueuedAt, DeadlineAt: f.DeadlineAt, Position: f.Ahead, Reason: reason,
+			StartAt: f.StartAt, TimeZone: f.TimeZone}
 	}
 	return nil
 }
