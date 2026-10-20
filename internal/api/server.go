@@ -739,6 +739,12 @@ type Config struct {
 	// boundary as TrustedCAPEM above — never a SiteConfig field,
 	// never agent-reachable.
 	DemoVideoBaseURL string
+	// OrgCAFingerprints is WARDYN_ORG_CA_FINGERPRINTS, parsed at boot by
+	// ParseOrgCAFingerprints: "sha256:<lowercase hex>" of each CA certificate
+	// the operator publishes for `wardyn ca add` to be compared against.
+	// /healthz publishes it as org_ca_fingerprints; nil (the default)
+	// publishes nothing.
+	OrgCAFingerprints []string
 }
 
 // Server is the control-plane HTTP server. It is safe for concurrent use.
