@@ -16,7 +16,8 @@ async function title(page: Page, label: NavLabel | "Templates") {
   const h1 = page.locator("main").getByRole("heading", { level: 1, name: label, exact: true });
   await expect(h1).toBeVisible();
   const box = await h1.boundingBox();
-  const width = await page.locator("[data-page-width]", { has: h1 }).getAttribute("data-page-width");
+  // The column the title sits in: its nearest ancestor that carries the width.
+  const width = await h1.locator("xpath=ancestor::*[@data-page-width][1]").getAttribute("data-page-width");
   const font = await h1.evaluate((el) => {
     const s = getComputedStyle(el);
     return `${s.fontSize} ${s.fontWeight}`;

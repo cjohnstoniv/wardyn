@@ -513,12 +513,20 @@ test.describe("providers — the git provider row's Available to control (UT-7b)
       expect.objectContaining({ subject_type: "user_type", subject: "standard", capability: "workspace_provider", value: "github" }),
     ]);
 
-    // Clean up: back to Everyone, then remove the audience — this row's
-    // availability must not leak into a later run of this same suite.
+    // Back to Everyone: the audience stays stored but its picker and chips are out of sight (#3065).
     await reloaded.getByRole("radio", { name: AVAILABILITY.EVERYONE }).click();
     await expect(reloaded.getByRole("radio", { name: AVAILABILITY.EVERYONE })).toBeChecked();
-    await reloaded.getByRole("button", { name: /Remove.*standard/i }).click();
     await expect(reloaded.getByText(/standard/i)).toHaveCount(0);
+    const kept = await (
+      await page.request.get("/api/v1/permissions/availability/workspace_provider/github", { headers: auth })
+    ).json();
+    expect(kept.restricted).toBe(false);
+    expect(kept.allowed_by).toHaveLength(1);
+
+    // Clean up over the API, since the screen has no door to a hidden audience: this row's availability must
+    // not leak into a later run of this same suite.
+    const gone = await page.request.delete(`/api/v1/permissions/grants/${kept.allowed_by[0].id}`, { headers: auth });
+    expect(gone.ok()).toBe(true);
   });
 });
 
