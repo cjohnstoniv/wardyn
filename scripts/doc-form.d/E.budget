@@ -112,9 +112,20 @@
 # docs/ENV.md 40792 = ours 40537 + theirs 40671 - base 40416 at the 0.10 merge of main (W2) into HYBB.
 # docs/ENV.md 41288 = ours 41033 + theirs 40671 - base 40416 at the 0.10 merge of main (W2) into SEC-1c.
 # docs/ENV.md 41409 = ours 40792 + theirs 41288 - base 40671 at the 0.10 W3 merge of SEC-1c onto the train.
+# 0.10: docs/ENV.md 40455 adds 39, measured: the WARDYN_ATTACH_LOCAL row (ATT-SRV).
+# docs/ENV.md 40710 = ours 40455 + theirs 40671 - base 40416 at the ATT-SRV merge of main (W2 train).
+# docs/ENV.md 41448 = ours 41409 + theirs 40710 - base 40671 at the 0.10 W4a merge of ATT-SRV onto the train.
+# docs/ENV.md=40851 adds 180 (0.10.0 ATT-CA, #3311), measured: the WARDYN_ORG_CA_FINGERPRINTS row and details section.
+# docs/ENV.md 41628 = ours 41448 + theirs 40851 - base 40671 at the 0.10 W4a merge of ATT-CA onto the train.
+# docs/ENV.md 40765 adds 94 over 40671 (0.10 ATT-SETUP-NET), measured: the WARDYN_ORG_CA_FILE row and the org-only CA and carried proxy variables bullets.
+# docs/ENV.md 41722 = ours 41628 + theirs 40765 - base 40671 at the 0.10 W4a merge of ATT-SETUP-NET onto the train.
+# 0.10 ATT-LOGIN-SRV: docs/ENV.md 41141 adds 470 over 40671: the five WARDYN_CLI_* settings, measured.
+# docs/ENV.md 42192 = ours 41722 + theirs 41141 - base 40671 at the 0.10 W4a merge of ATT-LOGIN-SRV onto the train.
+# 0.10 W4a train: docs/ENV.md tightened to 42189, measured at the train merge.
 # #1987: docs/ENV.md 40737 adds 66 over 40671, measured: the WARDYN_MULTI_AGENT_TASKS and WARDYN_TASK_PREPPED rows.
 # docs/ENV.md 41475 = ours 40737 + theirs 41409 - base 40671 at the 0.10 merge of main into FEAT-2MULTI.
-docs/ENV.md=41475 share=5
+# docs/ENV.md 42255 = ours 41475 + theirs 42189 - base 41409 at the 0.10 second merge of main into FEAT-2MULTI.
+docs/ENV.md=42255 share=5
 # docs/ENV.md 39047 adds 478 over 38569: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
 # docs/ENV.md 38607 adds 38 over 38569, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # docs/ENV.md 40042 adds 422 over 39620, measured: the WARDYN_AWS_SIGV4_AT_PROXY row and section: which lanes and hosts are re-signed, the named refusals, and the no-hold, placement and new-dispatch notes.

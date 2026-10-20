@@ -286,7 +286,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   // the real one. That looks pointless and is not: the session is tmux, and
   // tmux (3.5a defaults to `window-size latest`) sizes the shared window from a
   // client's most recent size, re-evaluating on a client size CHANGE.
-  // So when a second client (a `wardyn run attach` from another terminal) attaches
+  // So when a second client (a `wardyn attach` from another terminal) attaches
   // small, the browser's grid fills with tmux's `·` filler — and when that
   // client leaves, the filler can STAY, because the browser's own size never
   // changed and a same-size resize frame is a no-op tmux ignores.

@@ -132,7 +132,7 @@ wardyn governance set ci-governance.json
 | `allowed_domains` | Only the forge. A job's own policy can list fewer, never more. |
 | `first_use_approval: always_deny` | An unlisted host is refused at once. Nothing waits for a reviewer nobody is watching. |
 | `min_confinement_class` | The weakest sandbox a job may run in. A job asking for less is raised to it, and a launch the runner cannot satisfy is refused. Set it to the strongest class your substrate offers. |
-| `deny_interactive` | Refuses an interactive run, including one that omits `--task`, which comes up interactive. It also refuses `wardyn run attach` and the SSH gateway into any run under the profile, the owner's exec runs included. |
+| `deny_interactive` | Refuses an interactive run, including one that omits `--task`, which comes up interactive. It also refuses `wardyn attach` and the SSH gateway into any run under the profile, the owner's exec runs included. |
 | `deny_user_drive` | Refuses a user drive mount, the one storage that outlives a run. |
 | `max_concurrent_runs` | A launch past the cap is refused. |
 

@@ -41,6 +41,7 @@ func TestRemovedSpellingsAreUnknownCommands(t *testing.T) {
 		{"policy", "create"},
 		{"policy", "update"},
 		{"site-config", "apply"},
+		{"run", "attach", id}, // DESIGN-ATTACH 11.3: now top-level `wardyn attach`
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			err := execCmd(t, args...)

@@ -365,3 +365,44 @@ func TestProposeGovernanceChange_ARenameHoldsItsNewName(t *testing.T) {
 		}
 	})
 }
+
+// TestPG_GovernanceChange_EraseClearsTheProposersTrustReason pins #2305: a runner trust change keeps
+// the reason its proposer typed in its payload, and erasing the proposer blanks it there; another
+// kind's payload and another person's trust change are untouched.
+func TestPG_GovernanceChange_EraseClearsTheProposersTrustReason(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	who := "erase-" + uuid.NewString()
+	propose := func(kind, by string, payload string) uuid.UUID {
+		c := newChange(uuid.NewString())
+		c.TargetKind, c.ProposedBy, c.Payload = kind, by, json.RawMessage(payload)
+		saved, _, err := st.ProposeGovernanceChange(ctx, c, time.Hour)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return saved.ID
+	}
+	const trust = `{"runner_id":"r","trust_class":"org_cluster","reason":"typed by the proposer"}`
+	mine := propose(types.GovernanceTargetRunnerTrust, who, trust)
+	theirs := propose(types.GovernanceTargetRunnerTrust, "someone-else", trust)
+	other := propose("governance_profile", who, `{"name":"p","reason":"a field of another kind"}`)
+	if _, err := st.EraseGovernanceChangePersonalFields(ctx, []string{who}, nil); err != nil {
+		t.Fatal(err)
+	}
+	reason := func(id uuid.UUID) (r string) {
+		if err := pool.QueryRow(ctx, `SELECT payload->>'reason' FROM governance_changes WHERE id = $1`, id).Scan(&r); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	if r := reason(mine); r != "" {
+		t.Errorf("the erased proposer's trust reason = %q, want it blanked", r)
+	}
+	if r := reason(theirs); r != "typed by the proposer" {
+		t.Errorf("another proposer's trust reason = %q, want it untouched", r)
+	}
+	if r := reason(other); r != "a field of another kind" {
+		t.Errorf("another kind's payload = %q, want it untouched", r)
+	}
+}

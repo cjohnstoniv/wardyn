@@ -192,7 +192,7 @@ Stated honestly: profiles narrow by omission — a profile that omits secret gra
   - A maximum where no size is set is the size, so setting one can raise the member cap: such an update waits for a second approver, an overlay may not raise the cap above its base's, and a base that later stops bounding lowers the overlay's to its own. A size set in an overlay applies only over a base that sets one; over a base with none the deployment's default size applies.
 - **Limits that reach a running run (0.8.2, #1391, #1392).**
   - Two limits bind past create, keyed on the profile the run was created under as it stands now, so a limit set later reaches runs already going (a deleted profile binds nothing).
-  - `deny_interactive` also refuses a terminal attach (`wardyn run attach` and the console terminal) and every SSH-gateway connection into any run under the profile, exec runs and the run's owner included.
+  - `deny_interactive` also refuses a terminal attach (`wardyn attach` and the console terminal) and every SSH-gateway connection into any run under the profile, exec runs and the run's owner included.
   - (A super admin enters only a run of their own or one with no personal owner, so the exemption below reaches no person's run.)
   - The attach is an `authz.denied` row (`governance_profile`, target `runs.attach`), the SSH refusal an `ssh.authenticate` failure naming the profile.
   - The harness sign-in run is exempt, as it is at create.

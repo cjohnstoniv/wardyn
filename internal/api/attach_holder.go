@@ -5,7 +5,7 @@
 //
 // The problem this exists to fix: attach is a SHARED tmux session. handleAttachWS
 // (attach.go) opens a fresh Runner.Attach per client against the same persistent
-// session, so opening the run page while a `wardyn run attach` holds it from a CLI
+// session, so opening the run page while a `wardyn attach` holds it from a CLI
 // means two clients silently compete for one PTY — and neither can observe the
 // other. The Redraw button in ui/src/app/components/attach-terminal.tsx exists
 // only to clean up the tmux clamp that competition leaves behind.
@@ -39,8 +39,9 @@ import (
 // confidently reports "nobody is attached" while somebody is typing is worse
 // than one that reports nothing at all.
 const (
-	attachSourceWeb = "web"
-	attachSourceSSH = "ssh"
+	attachSourceWeb   = "web"
+	attachSourceSSH   = "ssh"
+	attachSourceLocal = "local" // the CLI on the run's own runner (attach_local.go)
 )
 
 // attachTakeoverReasonPrefix is the load-bearing half of the close reason a
@@ -74,7 +75,7 @@ type attachHolder struct {
 	principal  string
 	actorType  types.ActorType
 	since      time.Time
-	source     string // attachSourceWeb | attachSourceSSH
+	source     string // attachSourceWeb | attachSourceSSH | attachSourceLocal
 	// onInput, when set, is told before a writer's keystrokes reach the PTY:
 	// a person typing is presence, and a paused run is thawed first
 	// (run_pause.go). An observer's input is dropped, so it never counts.
@@ -186,6 +187,9 @@ type attachHolder struct {
 	// waitRemote: this observer is queued behind a lease another replica's holder had, so a
 	// free lease goes to it (firstWaiting).
 	waitRemote atomic.Bool
+	// demoted, when set, is signalled (never blocking) when this writer is put back among the
+	// observers, so a local session pushes the change to its runner at once (attach_local.go).
+	demoted chan struct{}
 }
 
 // canWrite reports whether this holder may still drive the PTY: it must hold
@@ -278,7 +282,7 @@ type attachHolderView struct {
 	Since     *time.Time `json:"since,omitempty"`
 	Cols      uint16     `json:"cols,omitempty"`
 	Rows      uint16     `json:"rows,omitempty"`
-	Source    string     `json:"source,omitempty"` // "web" | "ssh"
+	Source    string     `json:"source,omitempty"` // "web" | "ssh" | "local"
 }
 
 func (h *attachHolder) view() attachHolderView {
@@ -322,12 +326,20 @@ type attachModeMsg struct {
 	Type     string            `json:"type"` // always "attach-mode"
 	ReadOnly bool              `json:"read_only"`
 	Holder   *attachHolderView `json:"holder,omitempty"`
+	// Transport is "local" on every frame of a transport=local socket (attach_local.go), absent on
+	// the relay, so a CLI that asked for local and reads no "local" here runs the socket as a relay.
+	Transport string `json:"transport,omitempty"`
 }
 
 // writeAttachMode sends the attach-mode frame. Called from the handler
 // goroutine BEFORE the pump starts, so it never races the pump's own writer.
 func writeAttachMode(ctx context.Context, c *websocket.Conn, readOnly bool, holder *attachHolder) error {
-	msg := attachModeMsg{Type: "attach-mode", ReadOnly: readOnly}
+	return writeAttachModeAs(ctx, c, readOnly, holder, "")
+}
+
+// writeAttachModeAs is writeAttachMode naming the socket's transport ("" for the relay).
+func writeAttachModeAs(ctx context.Context, c *websocket.Conn, readOnly bool, holder *attachHolder, transport string) error {
+	msg := attachModeMsg{Type: "attach-mode", ReadOnly: readOnly, Transport: transport}
 	if holder != nil {
 		v := holder.view()
 		msg.Holder = &v

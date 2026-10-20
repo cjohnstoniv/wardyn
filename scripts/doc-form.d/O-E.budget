@@ -116,9 +116,15 @@
 # docs/OPERATIONS.md 57415 = ours 56767 + theirs 57392 - base 56744 at the 0.10 merge of main (W2) into HYBB.
 # docs/OPERATIONS.md 57478 = ours 56830 + theirs 57392 - base 56744 at the 0.10 merge of main (W2) into SEC-1c.
 # docs/OPERATIONS.md 57501 = ours 57415 + theirs 57478 - base 57392 at the 0.10 W3 merge of SEC-1c onto the train.
-# #1987: docs/OPERATIONS.md 57431 adds 39 over 57392, measured: the 0199 run_harness_task migration line.
+# 0.10 ATT-LOGIN-SRV: docs/OPERATIONS.md 57460 adds 68 over 57392: the 0198 migrator rationale line and the CLI sign-in line, measured.
+# docs/OPERATIONS.md 57569 = ours 57501 + theirs 57460 - base 57392 at the 0.10 W4a merge of ATT-LOGIN-SRV onto the train.
+# 0.10 PRIV-1: docs/OPERATIONS.md 57515 adds 123 over 57392, measured: run_tasks and run_setups reach, the two tables that keep a name and why, and the credentials token-history counts.
+# docs/OPERATIONS.md 57692 = ours 57569 + theirs 57515 - base 57392 at the 0.10 W4a merge of PRIV-1 onto the train.
+# 0.10 W4a train: docs/OPERATIONS.md tightened to 57690, measured at the train merge.
+# #1987: docs/OPERATIONS.md 57431 adds 39 over 57392, measured: the 0200 run_harness_task migration line.
 # docs/OPERATIONS.md 57540 = ours 57431 + theirs 57501 - base 57392 at the 0.10 merge of main into FEAT-2MULTI.
-docs/OPERATIONS.md=57540
+# docs/OPERATIONS.md 57729 = ours 57540 + theirs 57690 - base 57501 at the 0.10 second merge of main into FEAT-2MULTI.
+docs/OPERATIONS.md=57729
 # docs/OPERATIONS.md 55840 adds 124 over 55716, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # docs/OPERATIONS.md 55867 adds 27 over 55840, measured: a run whose runner cannot be asked falls back to this deployment's runner, the older-runner exception, pooled runs, and the runner_offline gap reason.
 # docs/OPERATIONS.md 55891 adds 24 over 55867, measured: with several executors and no pool, the executor a run lands on, and once its sandbox exists the one that holds it, decides where its output comes from.

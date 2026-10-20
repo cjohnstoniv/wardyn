@@ -17,7 +17,8 @@
   are placeholders — `wardyn-runnerd setup` (embedded from this file) renders it to
   ~/Library/LaunchAgents with them replaced, and drops the WARDYN_PROXY_IMAGE (when it is
   only this release's default), WARDYN_PROXY_IMAGE_PINNED (when no one named the image), DOCKER_HOST, WARDYN_RELAY_LISTEN, WARDYN_RELAY_HOST_TARGET and
-  WARDYN_TRUSTED_CA_FILE keys when they are empty. Committed as-is it is still valid, parseable plist XML — see
+  WARDYN_TRUSTED_CA_FILE, WARDYN_ORG_CA_FILE and the six proxy keys (HTTPS_PROXY, HTTP_PROXY, NO_PROXY and their
+  lowercase twins, which setup copies from the shell without any user name or password) when they are empty. Committed as-is it is still valid, parseable plist XML — see
   scripts/test-runner-units.sh.
 -->
 <plist version="1.0">
@@ -49,6 +50,20 @@
     <string>__RELAY_HOST_TARGET__</string>
     <key>WARDYN_TRUSTED_CA_FILE</key>
     <string>__WARDYN_TRUSTED_CA_FILE__</string>
+    <key>WARDYN_ORG_CA_FILE</key>
+    <string>__WARDYN_ORG_CA_FILE__</string>
+    <key>HTTPS_PROXY</key>
+    <string>__CARRY_HTTPS_PROXY__</string>
+    <key>https_proxy</key>
+    <string>__CARRY_https_proxy__</string>
+    <key>HTTP_PROXY</key>
+    <string>__CARRY_HTTP_PROXY__</string>
+    <key>http_proxy</key>
+    <string>__CARRY_http_proxy__</string>
+    <key>NO_PROXY</key>
+    <string>__CARRY_NO_PROXY__</string>
+    <key>no_proxy</key>
+    <string>__CARRY_no_proxy__</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>

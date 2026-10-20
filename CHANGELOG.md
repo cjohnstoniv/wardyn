@@ -14,6 +14,44 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on
   `aws_sso_refused_tokens` (migration `0194_aws_sso_refused_tokens`). Without it an AWS SSO session whose renewal
   AWS refused cannot be marked, read or cleared, so replicas do not share that mark.
+- **`wardyn run attach` is now `wardyn attach`.** The old spelling is an unknown command, with no alias. A script
+  that calls `wardyn run attach <run-id>` changes to `wardyn attach <run-id>`. `wardyn run ssh` is unchanged.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
+  `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE` on `cli_sessions` and
+  `SELECT, INSERT, UPDATE, DELETE` on `cli_sign_ins` (migration `0199_cli_sign_in`, which also adds `kind` and
+  `cli_session_id` to `api_tokens`). Without it every API token read fails, because a token's liveness now reads
+  `cli_sessions`.
+
+### Added
+
+- `wardyn attach <run-id>` keeps the terminal on this computer when the run is on your own runner here and the
+  organisation allows it (`WARDYN_ATTACH_LOCAL`, off by default); otherwise it goes through the organisation, as
+  before. One line on stderr names the path. `--via local|relay|auto` forces a path, and `--take-over` takes the
+  terminal from whoever holds it. On Windows the runner lives in WSL2, so attach goes through the organisation.
+- CLI sign-in, server half (migration `0199_cli_sign_in`), off unless `WARDYN_CLI_SIGN_IN=true` and SSO is set up.
+  `wardyn login` asks for a sign-in, the person approves the computer in the console, and the CLI gets a session
+  secret, bound to an Ed25519 device key, that renews a 1-hour access token. The secret DOES live on the laptop, in
+  the keychain or a file only its owner can read; [THREAT-MODEL.md](threatmodel/THREAT-MODEL.md) says what protects
+  it and what it does not stop.
+  - Sessions last 30 days (`WARDYN_CLI_SESSION_TTL`, up to 90), end after 7 days idle (`WARDYN_CLI_SESSION_IDLE`),
+    and at most 7 days in a file (`WARDYN_CLI_FILE_STORE=false` refuses the file). Paste-back sign-in for a computer
+    with no browser is off unless `WARDYN_CLI_PASTE_SIGN_IN=true`.
+  - Every renewal rotates the secret and re-checks revokes, sessions cuts, deactivation, the role stamp and the
+    `api_token` feature. An old secret presented again ends the session. A revoke, Sign out everywhere, a console
+    sign-out and a per-computer sign-out end it at once, with its tokens.
+  - An admin's CLI acts as role `user`; `wardyn login --admin` gives a 1-hour admin token, never renewed.
+  - Routes: `POST /api/v1/cli/sign-ins`, `POST /api/v1/cli/sign-ins/{id}/token`, `POST /api/v1/cli/sessions/{id}/refresh`,
+    `GET /api/v1/me/cli-sign-ins/{id}` with `/approve` and `/deny`, `GET /api/v1/me/cli-sessions` and
+    `DELETE /api/v1/me/cli-sessions/{id}`. `/healthz` reports `cli_sign_in` and `cli_paste_sign_in`.
+  - Audit actions `cli.sign_in.request`, `cli.sign_in.approve`, `cli.sign_in.deny`, `cli.session.create`,
+    `cli.session.revoke`, `cli.session.refresh_refused` and `cli.session.reuse_detected`. `token.create` rows carry
+    `kind`; `session.revoke` rows carry `cli_sessions_ended`.
+
+### Changed
+
+- The CLI's hint under a `401` follows the answer's reason. On a single-sign-on deployment with no admin token
+  (`sign_in_required`) it says to use a personal API token in `WARDYN_TOKEN`, not the compose stack's admin token. For
+  a token the organisation does not know (`admin_token_not_configured`) it names where the token came from.
 
 ## [0.9.6] — 2026-10-20
 
