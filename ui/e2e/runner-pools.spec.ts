@@ -139,6 +139,16 @@ test.describe("user pools against the real server", () => {
     await expect(page).toHaveURL(/\/account\/pools\/new$/);
   });
 
+  test("the qualifier is said once per fieldset, not under every resource field (#3063)", async ({ page }) => {
+    await asRealMember(page);
+    await page.goto("/account/pools/new");
+    await expect(page.getByRole("heading", { name: POOL_FORM.TITLE_NEW })).toBeVisible();
+    for (const rt of ["bg", "it"]) {
+      await expect(page.getByTestId(`f-${rt}-qualifier`)).toHaveText(`${POOL_FORM.QUALIFIER} ${POOL_FORM.RUNNERS_NOT_CHOSEN}`);
+    }
+    await expect(page.getByText(POOL_FORM.NARROWER)).toHaveCount(1);
+  });
+
   test("when Reload cannot re-read the pool, the form says so in its own words and keeps Reload (FR-0116)", async ({ page }) => {
     const name = uniqueName("Stale");
     await asRealMember(page);

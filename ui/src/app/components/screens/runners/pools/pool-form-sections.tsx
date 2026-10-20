@@ -43,7 +43,7 @@ function AmountField({
   label: string;
   values: RtValues;
   error?: string;
-  hint: string;
+  hint: string | null;
   onPatch: Patch;
 }) {
   const title = rt === "bg" ? POOL_DRAWER.BACKGROUND : POOL_DRAWER.INTERACTIVE;
@@ -70,13 +70,13 @@ function AmountField({
   return (
     <div className="space-y-2">
       <span className="text-sm font-medium" id={`${id}-l`}>
-        {label} <span className="font-normal text-muted-foreground">{POOL_FORM.NARROWER}</span>
+        {label}
       </span>
       <div className="grid grid-cols-[repeat(auto-fit,minmax(120px,1fr))] gap-x-3 gap-y-2 max-[480px]:grid-cols-1" role="group" aria-labelledby={`${id}-l`}>
         {input("D", POOL_FORM.DEFAULT)}
         {input("C", POOL_FORM.MAX_PER_RUN)}
       </div>
-      <p className="text-xs text-muted-foreground">{hint}</p>
+      {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
       <Err id={`${id}-e`}>{error}</Err>
     </div>
   );
@@ -150,9 +150,9 @@ function DurPair({
   );
 }
 
-/** What the pool's runners allow per run, as the hint under an amount: nothing chosen yet reads the other hint. */
-export function runnersHint(biggest: RunnerAmounts & { count: number }, k: "cpu" | "mem" | "disk"): string {
-  if (!biggest.count) return POOL_FORM.RUNNERS_NOT_CHOSEN;
+/** What the pool's runners allow per run, as the hint under an amount; with no runners chosen the fieldset's note says so once. */
+export function runnersHint(biggest: RunnerAmounts & { count: number }, k: "cpu" | "mem" | "disk"): string | null {
+  if (!biggest.count) return null;
   const amount = k === "cpu" ? fmtAmount("cpu", cpus(biggest.cpu_millis)) : fmtAmount(k, gb(k === "mem" ? biggest.memory_mib : biggest.disk_mib));
   return POOL_FORM.RUNNERS_ALLOW(amount);
 }
@@ -177,6 +177,9 @@ export function RtSection({
   return (
     <fieldset className="mb-3 space-y-4 rounded-xl border border-border bg-card p-4">
       <legend className="label-eyebrow px-1.5">{title}</legend>
+      <p data-testid={`f-${rt}-qualifier`} className="text-xs text-muted-foreground">
+        {biggest.count ? POOL_FORM.QUALIFIER : `${POOL_FORM.QUALIFIER} ${POOL_FORM.RUNNERS_NOT_CHOSEN}`}
+      </p>
       {amount("cpu", POOL_FORM.CPU)}
       {amount("mem", POOL_FORM.MEMORY)}
       {amount("disk", POOL_FORM.DISK)}

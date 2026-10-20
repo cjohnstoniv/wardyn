@@ -340,12 +340,13 @@ export const POOL_FORM = {
   DISK: "Disk (GB)",
   DEFAULT: "Default",
   MAX_PER_RUN: "Maximum per run",
-  RUNNERS_ALLOW: (amount: string) => `Its runners allow up to ${amount} per run. Leave empty to use that.`,
+  QUALIFIER: "Optional. Leave empty to follow its runners, and it can only narrow them.",
+  RUNNERS_ALLOW: (amount: string) => `Its runners allow up to ${amount} per run.`,
   /**
    * pending owner wording: the approved text also said "This is checked against them when you add
    * runners.", which nothing does (a pool limit wider than its runners is accepted and never takes effect).
    */
-  RUNNERS_NOT_CHOSEN: "Its runners aren't chosen yet. Leave empty to follow them.",
+  RUNNERS_NOT_CHOSEN: "Its runners aren't chosen yet.",
   LIFETIME: "Lifetime",
   IDLE: "Idle stop",
   MAXIMUM: "Maximum",
