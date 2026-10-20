@@ -276,7 +276,7 @@ describe("HarnessSetup", () => {
         expect(row.queryByText(/Ask first holds the call/)).toBeNull();
         expect(row.getAllByText(/can't pause a tool call/)).toHaveLength(1);
         expect(row.getAllByText(/can't block Codex CLI's own tools/)).toHaveLength(1);
-        expect(row.getByText("Rules for its MCP tools are enforced by the proxy.")).toBeTruthy();
+        expect(row.getByText("Rules for Codex CLI's MCP tools are enforced by the proxy.")).toBeTruthy();
         cleanup();
       }
     });
