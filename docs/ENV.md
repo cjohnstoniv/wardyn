@@ -2233,6 +2233,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - `1` tells the sandbox that session recording is configured — stamped into the agent container's env by the docker driver when its Record config is on.
 - `boot_seed_rec_wrap` (agent-run-lib.sh) keys the boot-seed pane's wardyn-rec wrap on this; env because the earlier signal (the driver's post-start `/var/log/wardyn` root exec) races the boot pane and losing silently skipped recording.
 - Absent — recording off, k8s (no Record config), or an older driver — the seed runs unrecorded rather than not at all.
+- The cast holds the pane's output only (asciinema without `--stdin`): what a person types into an attached terminal is not recorded, though anything the terminal echoes back is output and is.
 
 ### `WARDYN_PROBE_TO_CONNECT`
 

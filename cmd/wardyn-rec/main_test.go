@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -303,8 +304,8 @@ func TestUploadCast_BoundedTimeout(t *testing.T) {
 // command and records a cast. STUB_MODE=kill leaves a cast and exits 3 without
 // running the command, as a killed recorder would.
 const stubAsciinema = `#!/bin/sh
-# rec --stdin -q -c <cmd> <cast>
-cmd=$5; cast=$6
+# rec -q -c <cmd> <cast>
+cmd=$4; cast=$5
 if [ -s "$cast" ]; then echo "asciinema: $cast exists" >&2; exit 1; fi
 if [ "$STUB_MODE" = kill ]; then echo hdr > "$cast"; exit 3; fi
 sh -c "$cmd"
@@ -452,5 +453,13 @@ func TestRecordToLogReportsASignalKilledAgentAs128PlusSignal(t *testing.T) {
 	}
 	if want := 128 + int(syscall.SIGTERM); code != want {
 		t.Fatalf("exit code = %d, want %d", code, want)
+	}
+}
+
+// TestBuildAsciinemaArgv_RecordsNoInput: the cast is output only. TestRec_TypedInputIsNotRecorded
+// (docker tag) proves it against the real asciinema in a tmux pane.
+func TestBuildAsciinemaArgv_RecordsNoInput(t *testing.T) {
+	if argv := buildAsciinemaArgv("/usr/bin/asciinema", "out.cast", []string{"true"}); slices.Contains(argv, "--stdin") {
+		t.Fatalf("argv %q records the terminal's input", argv)
 	}
 }
