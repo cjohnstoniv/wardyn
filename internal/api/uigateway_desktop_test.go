@@ -413,7 +413,7 @@ func TestDesktopRelayFiltersCutTextByTheRunsDesktopRules(t *testing.T) {
 			}
 			rows := clipboardRows(t, h, 2)
 			if len(rows) != 2 {
-				t.Fatalf("ui.clipboard rows = %+v, want 2", rows)
+				t.Fatalf("ui.clipboard.transfer rows = %+v, want 2", rows)
 			}
 			for _, row := range rows {
 				var d struct {
@@ -425,10 +425,10 @@ func TestDesktopRelayFiltersCutTextByTheRunsDesktopRules(t *testing.T) {
 				_ = json.Unmarshal(row.Data, &d)
 				w := wantRows[d.Direction]
 				if row.Outcome != w.outcome || d.Bytes != w.bytes || d.SHA256 != w.sum || row.Target != d.Direction || d.App != uiDesktopAppName {
-					t.Errorf("ui.clipboard row %s/%s %s, want %+v", row.Outcome, row.Target, row.Data, w)
+					t.Errorf("ui.clipboard.transfer row %s/%s %s, want %+v", row.Outcome, row.Target, row.Data, w)
 				}
 				if strings.Contains(string(row.Data), w.text) {
-					t.Errorf("a ui.clipboard row carries the text: %s", row.Data)
+					t.Errorf("a ui.clipboard.transfer row carries the text: %s", row.Data)
 				}
 			}
 		})

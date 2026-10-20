@@ -428,7 +428,7 @@ func (s *Server) desktopRunCheck(ctx context.Context, sess uiSession) (types.Age
 }
 
 // desktopClipboardFilter is uiFilterUpgrade's clipboard filter on a VM's display: the same desktop
-// copy_out and paste_in rules and the same ui.clipboard rows (direction, size and hash, never the
+// copy_out and paste_in rules and the same ui.clipboard.transfer rows (direction, size and hash, never the
 // text). QEMU's VNC has no clipboard peer in the guest (no qemu-vdagent, internal/vm/qemu/args.go),
 // so no cut text flows today; the filter holds the rules for when one does.
 func (s *Server) desktopClipboardFilter(ctx context.Context, sess uiSession, display io.ReadWriteCloser) *rfbfilter.Conn {
@@ -437,7 +437,7 @@ func (s *Server) desktopClipboardFilter(ctx context.Context, sess uiSession, dis
 	filtered := rfbfilter.Wrap(display, rules, func(ev rfbfilter.Event) { s.auditUIClipboard(sess, ev) }, func(err error) {
 		slog.WarnContext(ctx, "wardynd: desktop relay closed a VM display it could not follow", "run_id", sess.Run, "err", err)
 		if errors.Is(err, rfbfilter.ErrNotRFB) {
-			s.auditUISession(sess, "ui.clipboard", "", "failure", map[string]any{"app": sess.App, "reason": "not_rfb"})
+			s.auditUISession(sess, "ui.clipboard.transfer", "", "failure", map[string]any{"app": sess.App, "reason": "not_rfb"})
 		}
 	})
 	if s.uiDesktopSink != nil {

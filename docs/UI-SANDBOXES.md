@@ -106,9 +106,9 @@
 - Close cuts a stream on the same replica at once, and one on another replica within 15 s.
 - A Close holds across restarts and replicas, and open desktops survive a restart.
 - While the database is unreachable, open desktops end and new opens are refused until it is back.
-- The relay filters cut text on this display by the run's `desktop` rules, with the same `ui.clipboard` rows as the
-  `novnc` app. No clipboard flows today: QEMU's VNC passes cut text only to a guest clipboard agent (`qemu-vdagent`),
-  and the VM has none. The rules take effect once one exists.
+- The relay filters cut text on this display by the run's `desktop` rules, with the same `ui.clipboard.transfer` rows
+  as the `novnc` app. No clipboard flows today: QEMU's VNC passes cut text only to a guest clipboard agent
+  (`qemu-vdagent`), and the VM has none. The rules take effect once one exists.
 - The filter is not a boundary against a run built to get data out: the run controls what its screen shows.
 
 ## Diagnosing a blocked request
