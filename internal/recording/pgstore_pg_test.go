@@ -258,7 +258,7 @@ func TestPGStore_StatAndTailUsesStoredStats(t *testing.T) {
 	}
 	check(runID, []byte("0123456789abcdef"), 4)
 	// The migration's backfill makes the stored stats current again.
-	mig, err := os.ReadFile("../db/migrations/0205_recordings_size_tail.sql")
+	mig, err := os.ReadFile("../db/migrations/0206_recordings_size_tail.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
