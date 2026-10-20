@@ -724,6 +724,18 @@ func (d *Driver) vmLogTail(ref string) string {
 	return ""
 }
 
+// EndVM ends the run's Linux VM as the lease end does (EndSandbox): the guest is asked to power down,
+// the QEMU container is stopped and kept, and the proxy is stopped and removed. It reports false and
+// touches nothing for a run that is not a VM, or when VMs are off. wardyn-runnerd calls it when a VM
+// run's audit spool is full.
+func (d *Driver) EndVM(ctx context.Context, runID uuid.UUID) (bool, error) {
+	ref := agentContainerName(runID)
+	if d.vmFor(ctx, ref) == nil {
+		return false, nil
+	}
+	return true, d.EndSandbox(ctx, ref)
+}
+
 // teardownVM removes what a VM run adds to a container run's teardown: its sidecars and its run
 // directory. Safe on any run id; a container run has neither.
 func (d *Driver) teardownVM(ctx context.Context, agentRef string, runID uuid.UUID) {

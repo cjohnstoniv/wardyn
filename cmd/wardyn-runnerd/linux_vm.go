@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/runner/docker"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 )
@@ -50,4 +52,12 @@ func enableLinuxVM(ctx context.Context, sub *docker.Driver, stateDir string, get
 // vmCaps is what the runner's caps offer for the VMs the probe found it can start.
 func vmCaps(c docker.VMConfig) *runnerwire.VMCaps {
 	return &runnerwire.VMCaps{MachineType: c.MachineType, CPUModel: c.CPUModel, QEMUVersion: c.QEMUVersion, Virtiofs: c.Virtiofs}
+}
+
+// endVMsOnFullSpool puts the full-spool rule behind the Linux VM switch: only a runner that offers VM
+// sandboxes (caps non-nil) ends a VM whose run's audit spool is full. Container runs are untouched.
+func endVMsOnFullSpool(sink *spoolSink, caps *runnerwire.VMCaps, end func(context.Context, uuid.UUID) (bool, error)) {
+	if caps != nil {
+		sink.EndVMsOnFullSpool(end)
+	}
 }

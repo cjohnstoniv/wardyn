@@ -84,6 +84,7 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 	}
 	extras := sink.extras(sub, ev)
 	extras.linuxVM = enableLinuxVM(ctx, sub, stateDir, os.Getenv)
+	endVMsOnFullSpool(sink.spoolSink, extras.linuxVM, sub.EndVM)
 	// The runtime first: its startup containment pass stops lapsed runs even when the check below fails.
 	rt, err := localRunnerRuntime(ctx, identity, stateDir, sub, docker.SandboxRef, relay, dockerCapacity, extras)
 	if err != nil {
@@ -652,7 +653,7 @@ func (d *dockerSink) proxyURL() string {
 // the manager's and every run's sink key is registered again.
 func (d *dockerSink) extras(sub *docker.Driver, ev *evidenceForwarder) runtimeExtras {
 	return runtimeExtras{
-		options: offline.Options{Tick: d.Tick},
+		options: offline.Options{Tick: func(ctx context.Context) { d.Tick(ctx); d.EndVMsWithFullSpools(ctx) }},
 		started: func(_ context.Context, m *offline.Manager) error {
 			ev.m = m
 			return sub.ReregisterSinks(m.SinkRunIDs())

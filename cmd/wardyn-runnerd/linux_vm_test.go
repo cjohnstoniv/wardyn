@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner/docker"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 )
 
 // Linux VM sandboxes are off unless the operator turns them on: no probe runs and the caps offer none.
@@ -36,5 +37,27 @@ func TestVMCapsCarryTheFolderShareProbe(t *testing.T) {
 		if caps := vmCaps(c); caps.Virtiofs != found || caps.MachineType != c.MachineType {
 			t.Fatalf("probe found virtiofsd %v, caps %+v", found, caps)
 		}
+	}
+}
+
+// The full-spool rule is behind the Linux VM switch: a runner whose caps offer no VM never ends a
+// run for a full spool, and the containment tick drives the rule on one that does.
+func TestFullSpoolRuleFollowsTheLinuxVMSwitch(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		caps *runnerwire.VMCaps
+		want int
+	}{{"VMs off", nil, 0}, {"VMs on", &runnerwire.VMCaps{}, 1}} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newSinkHarness(t)
+			e := &endCalls{isVM: true}
+			endVMsOnFullSpool(h.sink, tc.caps, e.end)
+			h.fillSpool()
+			d := &dockerSink{spoolSink: h.sink}
+			d.extras(nil, nil).options.Tick(t.Context())
+			if len(e.runs) != tc.want {
+				t.Fatalf("a tick over a full spool ended %d runs, want %d", len(e.runs), tc.want)
+			}
+		})
 	}
 }

@@ -71,6 +71,8 @@ type spoolSink struct {
 	runs   map[uuid.UUID]*sinkRun
 	lns    []net.Listener
 	closed bool
+	// endVM is set only when Linux VM sandboxes are on (EndVMsOnFullSpool).
+	endVM func(ctx context.Context, runID uuid.UUID) (isVM bool, err error)
 
 	handlers sync.WaitGroup // the session goroutines Serve started
 }
@@ -82,6 +84,8 @@ type sinkRun struct {
 	writer  *os.File // the held writer.lock; nil once the producer is settled
 	sess    *sinkSession
 	drained *runnerspool.Drained
+	// fullHandled: the run's full spool was seen and acted on (EndVMsWithFullSpools); guarded by spoolSink.mu.
+	fullHandled bool
 }
 
 type sinkSession struct {
@@ -559,6 +563,49 @@ func (s *spoolSink) Tick(ctx context.Context) {
 			if err := s.regrant(ctx, ss, 0, 0); err != nil {
 				ss.conn.Close()
 			}
+		}
+	}
+}
+
+// EndVMsOnFullSpool turns on the full-spool rule for Linux VM sandboxes: end is asked to end a run's
+// VM and reports false for a run that is not one. Without it a full spool only stops the run's proxy
+// admitting (the proxy holds a request, then answers a retryable 503).
+func (s *spoolSink) EndVMsOnFullSpool(end func(ctx context.Context, runID uuid.UUID) (bool, error)) {
+	s.mu.Lock()
+	s.endVM = end
+	s.mu.Unlock()
+}
+
+// EndVMsWithFullSpools ends the Linux VM of each run whose spool has no room left (Spool.Full). The
+// spool is capped, and a VM that keeps running past the cap would act with its decisions unrecorded.
+// Called from the containment tick; a run is acted on once, and an end that failed is tried again.
+func (s *spoolSink) EndVMsWithFullSpools(ctx context.Context) {
+	s.mu.Lock()
+	end := s.endVM
+	var runs []*sinkRun
+	for _, r := range s.runs {
+		if !r.fullHandled {
+			runs = append(runs, r)
+		}
+	}
+	s.mu.Unlock()
+	if end == nil {
+		return
+	}
+	for _, r := range runs {
+		if full, err := r.spool.Full(ctx); err != nil || !full {
+			continue
+		}
+		isVM, err := end(ctx, r.id)
+		if err != nil {
+			slog.Warn("runnerd: ending a Linux VM whose audit spool is full will retry", slog.String("run_id", r.id.String()), slog.Any("err", err))
+			continue
+		}
+		s.mu.Lock()
+		r.fullHandled = true
+		s.mu.Unlock()
+		if isVM {
+			slog.Warn("runnerd: a Linux VM's audit spool is full, so its VM was ended", slog.String("run_id", r.id.String()))
 		}
 	}
 }

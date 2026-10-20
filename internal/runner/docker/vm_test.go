@@ -844,3 +844,84 @@ func TestVMProbeVirtiofsdNeedsItsCleanExit(t *testing.T) {
 		}
 	}
 }
+
+// A lapsed lease stops a VM's proxy and nothing else: the guest keeps running with no network path
+// (OFFLINE-VM rule b), and the proxy's decisions are settled.
+func TestVMStopProxyLeavesTheGuestRunning(t *testing.T) {
+	r := newVMRig(t)
+	spec := vmSpec()
+	ctx := context.Background()
+	sb, err := r.d.CreateSandbox(ctx, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.d.StopProxy(ctx, sb.Ref); err != nil {
+		t.Fatal(err)
+	}
+	if c := r.container(t, proxyContainerName(spec.RunID)); !c.removed {
+		t.Fatal("StopProxy left the VM's proxy")
+	}
+	if c := r.container(t, sb.Ref); c.removed || c.state == nil || !c.state.Running {
+		t.Fatalf("StopProxy touched the VM: %+v", c.state)
+	}
+	r.mu.Lock()
+	powered := slices.Contains(r.qmp, "system_powerdown")
+	r.mu.Unlock()
+	if powered {
+		t.Fatal("StopProxy powered the guest down")
+	}
+}
+
+// EndVM, which the runner calls when a VM run's audit spool is full, ends a VM as the lease end
+// does: the guest is powered down, the QEMU container stopped but kept, the proxy removed. A container
+// run and an unknown run are left alone (OFFLINE-VM rule c).
+func TestVMEndVMEndsOnlyAVM(t *testing.T) {
+	r := newVMRig(t)
+	spec := vmSpec()
+	ctx := context.Background()
+	sb, err := r.d.CreateSandbox(ctx, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if isVM, err := r.d.EndVM(ctx, uuid.New()); isVM || err != nil {
+		t.Fatalf("EndVM of an unknown run = %v, %v; want false, nil", isVM, err)
+	}
+	if c := r.container(t, sb.Ref); !c.state.Running {
+		t.Fatal("EndVM of another run touched this VM")
+	}
+	if isVM, err := r.d.EndVM(ctx, spec.RunID); !isVM || err != nil {
+		t.Fatalf("EndVM = %v, %v; want true, nil", isVM, err)
+	}
+	r.mu.Lock()
+	powered := slices.Contains(r.qmp, "system_powerdown")
+	r.mu.Unlock()
+	if !powered {
+		t.Fatal("EndVM stopped the guest without asking it to power down")
+	}
+	if c := r.container(t, sb.Ref); c.removed || c.state.Running {
+		t.Fatalf("the VM after EndVM: removed %v, state %+v; want stopped and kept", c.removed, c.state)
+	}
+	if c := r.container(t, proxyContainerName(spec.RunID)); !c.removed {
+		t.Fatal("EndVM left the VM's proxy")
+	}
+}
+
+func TestVMEndVMLeavesAContainerRunAlone(t *testing.T) {
+	r := newVMRig(t)
+	r.f.images["busybox:latest"] = true
+	spec := testSpec()
+	spec.RunID = uuid.New()
+	sb, err := r.d.CreateSandbox(context.Background(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if isVM, err := r.d.EndVM(context.Background(), spec.RunID); isVM || err != nil {
+		t.Fatalf("EndVM of a container run = %v, %v; want false, nil", isVM, err)
+	}
+	if c := r.container(t, sb.Ref); c.removed || !c.state.Running {
+		t.Fatalf("EndVM touched a container run: %+v", c.state)
+	}
+	if c := r.container(t, proxyContainerName(spec.RunID)); c.removed {
+		t.Fatal("EndVM removed a container run's proxy")
+	}
+}
