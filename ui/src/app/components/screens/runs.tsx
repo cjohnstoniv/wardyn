@@ -177,8 +177,12 @@ export function RunsScreen() {
 
   const sections: RunSections = React.useMemo(() => sectionRuns(runsList), [runsList]);
   const workspaceOptions = React.useMemo(
-    () => Array.from(new Set(runsList.map((r) => r.repo).filter(Boolean))).sort(),
-    [runsList],
+    () => {
+      const labels = runsList.map((r) => r.repo || r.workspace_path).filter((l): l is string => !!l);
+      if (filters.workspace !== "all") labels.push(filters.workspace);
+      return Array.from(new Set(labels)).sort();
+    },
+    [runsList, filters.workspace],
   );
 
   // scope only ever narrows anything in the Admin view (H-4) — a stray

@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import type { AgentRun } from "../../lib/types";
 
@@ -262,6 +262,21 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
     await screen.findByText("No runs match these filters.");
     fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
     await screen.findByText("Fix flaky auth tests");
+  });
+
+  it("the Workspace filter offers a folder run's path, and the active value even when no row matches (#2544)", async () => {
+    listRunsFilteredMock.mockResolvedValue({
+      runs: [run({ repo: "", workspace_path: "/home/me/proj" })],
+      truncated: false,
+      hiddenOlder: 0,
+      hiddenKilled: 0,
+    });
+    renderScreen("user", "/runs?workspace=acme%2Fgone");
+    const trigger = within(await screen.findByRole("search")).getByRole("combobox", { name: "Workspace" });
+    expect(trigger).toHaveTextContent("acme/gone");
+    fireEvent.click(trigger);
+    expect(await screen.findByRole("option", { name: "/home/me/proj" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "acme/gone" })).toBeInTheDocument();
   });
 
   it("a refetch (search) keeps the filter bar mounted and its input focused — only the rows region shows a skeleton", async () => {
