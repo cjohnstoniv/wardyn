@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildRunContractWire,
@@ -17,8 +19,11 @@ import {
   withoutTool,
   type RunModeDraft,
 } from "./run-contract-draft";
-import golden from "./push-rule-key.golden.json";
 import { RUN_MODE_REASON, RUN_MODE_REFUSAL } from "./run-mode-refusals";
+
+// Read with JSON.parse, not imported: the table holds a lone surrogate escape
+// (the Go side's invalid-UTF-16 case) that Vite 8's JSON loader rejects.
+const golden: unknown = JSON.parse(readFileSync(join(__dirname, "push-rule-key.golden.json"), "utf8"));
 
 const claude = { id: "claude-code", kind: "harness", model_provider: "bedrock-team" } as const;
 const codex = { id: "codex-cli", kind: "harness" } as const;
