@@ -15,6 +15,9 @@ export type StepIssueCode =
   | "task_required"
   | "command_required"
   | "pool_required"
+  | "app_required"
+  | "app_port_invalid"
+  | "app_port_duplicate"
   | "main_drive_size_required"
   | "files_choice_required"
   | "starts_here_required"
@@ -30,6 +33,8 @@ export interface StepIssue {
   code: StepIssueCode;
   /** DOM id of the control a failed Continue focuses. */
   focus: string;
+  /** The port an application issue names (a duplicate says which). */
+  port?: number;
 }
 
 /** The control ids step bodies give the fields an issue points at. */
@@ -39,6 +44,9 @@ export const ISSUE_FOCUS: Record<StepIssueCode, string> = {
   task_required: "nr-task",
   command_required: "nr-command",
   pool_required: "nr-pool",
+  app_required: "nr-app-add",
+  app_port_invalid: "nr-app-port-0",
+  app_port_duplicate: "nr-app-port-0",
   main_drive_size_required: "nr-main-drive-size",
   files_choice_required: "nr-files-choice",
   starts_here_required: "nr-starts-here",

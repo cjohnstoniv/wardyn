@@ -65,4 +65,5 @@ docs/UI-SANDBOXES.md=5768 share=35
 # docs/NEW-RUN.md 3056, measured at the FIN-E2 merge into the final train (both sides' sentences).
 # docs/NEW-RUN.md 3072 = 3056 + 16, measured: a wait row for a required recording with no store
 # 0.9.4 W4-DOCS-1: docs/NEW-RUN.md 3073 adds 1 over 3072, measured: #2320: --max-wait among the run --file companion flags.
-docs/NEW-RUN.md=3073 share=35
+# docs/NEW-RUN.md 3147 adds 74 over 3073 (0.10 FEAT-1APP-UI): the Application / server card, measured (#1994).
+docs/NEW-RUN.md=3147 share=35

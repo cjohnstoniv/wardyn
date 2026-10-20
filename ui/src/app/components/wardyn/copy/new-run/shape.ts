@@ -40,5 +40,5 @@ export const NR_SHAPE = {
   ENV_SUB: "Interactive · Your drive is attached when you have one",
   APP_TITLE: "Application sandbox",
   APP_BODY: "Run a sandboxed command, automation or script on its own.",
-  APP_SUB: "Automation / script · Application / server coming soon",
+  APP_SUB: "Automation / script · Application / server",
 } as const;

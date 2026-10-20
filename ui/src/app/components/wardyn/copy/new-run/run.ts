@@ -11,6 +11,7 @@ export const NR_RUN = {
   TITLE_AGENT: "Choose how and where it runs",
   TITLE_ENV: "Choose where the environment runs",
   TITLE_APP: "Choose where the automation runs",
+  TITLE_APP_SERVER: "Choose where the application runs",
   /** pending W-05: the recommended text until the owner answers. */
   LEDE_ORG: "Your organisation's defaults are selected.",
   /** pending W-05: the recommended text until the owner answers. */
@@ -33,7 +34,23 @@ export const NR_RUN = {
   APP_AUTOMATION_BODY: "A command or job that runs on its own.",
   APP_AUTOMATION_META: "Available now",
   APP_SERVER: "Application / server",
-  APP_SERVER_BODY: "App servers and MCP servers.",
+  APP_SERVER_BODY: "A web app, API or dev server you open in your browser.",
+  START_COMMAND_LABEL: "Start command",
+  START_COMMAND_HELP:
+    "Run verbatim in the sandbox when it starts. The run keeps going until you end it or it reaches its lifetime limit.",
+  PORTS_LABEL: "Ports",
+  PORTS_HELP:
+    "Each port opens from the run page through Wardyn's web app gateway. Only people who may enter this run can open it.",
+  PORT_COL_NAME: "Name",
+  PORT_COL_PORT: "Port",
+  PORT_COL_PATH: "Path",
+  PORT_ADD: "Add a port",
+  PORTS_FULL: "A run can open up to 8 ports.",
+  PORT_INVALID: "Enter a port from 1 to 65535.",
+  PORT_DUPLICATE: (port: string | number) => `Two apps can't share port ${port}.`,
+  /** Lead wording 2026-10-20 (FEAT-1APP-UI): the Review blocker for a server with no port left. */
+  PORT_REQUIRED: "An application needs at least one port to open.",
+  APP_TERMINAL_NOTE: "The sandbox also has a terminal, as an Environment sandbox does.",
   COMMAND_LABEL: "Command",
   /** Lead wording 2026-10-17 (FR-0099): the Review blocker for a command run with no command. */
   COMMAND_REQUIRED: "A command run needs a command to run.",

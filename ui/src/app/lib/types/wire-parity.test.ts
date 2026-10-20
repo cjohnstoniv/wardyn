@@ -758,6 +758,13 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(tsInterfaceBody(govTs, "GovernanceLimits")).toMatch(/deny_placements\?: PlacementValue\[\];/);
   });
 
+  it("UIApp: the Go tags are the TS keys, and the server's application rule is the interactive form the console sends (#1994)", () => {
+    const policyGo = readFileSync(join(root, "internal/types/policy.go"), "utf8");
+    expect(tsInterfaceTopKeys(runsTs, "UIApp").sort()).toEqual(goJSONTags(policyGo, "UIApp").sort());
+    const shapeGo = readFileSync(join(root, "internal/api/run_shape.go"), "utf8");
+    expect(shapeGo).toContain("experience interactive with startup kind command and ui_apps");
+  });
+
   it("SetupItemResidency names every residency the setup checklist emits", () => {
     const goRaw = readFileSync(join(root, "internal/api/compose_setup.go"), "utf8");
     const tsRuns = readFileSync(join(root, "ui/src/app/lib/types/preflight.ts"), "utf8");

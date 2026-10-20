@@ -8,6 +8,7 @@
 
 import type { RunShape } from "../../../../lib/types/runs";
 import type { RunIntent } from "../draft/run-intent";
+import { isServer, setApps } from "./apps-lens";
 import { harnessIds, withKeys } from "./lens-keys";
 import { issue, type StepValidator } from "./step-issues";
 
@@ -43,7 +44,9 @@ export function chooseShape(intent: RunIntent, shape: RunShape): RunIntent {
   // The shape the draft already has: choosing it again changes nothing, so the starter, its prompt and the
   // task a document, a template or an earlier step set are still there after the workload press on Shape.
   if (intent.shape === shape) return intent;
-  return withKeys(intent, { shape, ...shapeCarriers(shape, undefined, intent) });
+  const next = withKeys(intent, { shape, ...shapeCarriers(shape, undefined, intent) });
+  // The ports belong to the server card: leaving it takes them along.
+  return isServer(intent) ? setApps(next, []) : next;
 }
 
 export const shapeIssues: StepValidator = (intent) => (intent.shape ? [] : [issue("shape", "shape_required")]);

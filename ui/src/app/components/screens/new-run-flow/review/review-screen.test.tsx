@@ -12,10 +12,12 @@ import { OperatorProvider } from "../../../wardyn/operator-context";
 import { NR_FILES } from "../../../wardyn/copy/new-run/files";
 import { ENDS_NONE } from "../../../wardyn/copy/run-lifetime";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
+import { NR_RUN } from "../../../wardyn/copy/new-run/run";
 import { NR_SAVE } from "../../../wardyn/copy/new-run/save";
 import { NR_SHAPE } from "../../../wardyn/copy/new-run/shape";
 import { NR_TEMPLATES } from "../../../wardyn/copy/new-run/templates";
 import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
+import { health } from "../../../../lib/api/health";
 import { RUN_WAIT } from "../../../../lib/runner-pool-refusals";
 import { SCENARIO_PREFLIGHT } from "../../../../lib/new-run-fixtures/scenarios/preflight";
 import { SCENARIO_ACCESS } from "../../../../lib/new-run-fixtures/scenarios/tools";
@@ -130,6 +132,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   wfetchMock.mockReset();
+  vi.restoreAllMocks();
 });
 
 describe("Review Launch gate (U11)", () => {
@@ -395,6 +398,103 @@ describe("Review groups", () => {
     await user.click(screen.getByRole("button", { name: `${NR_REVIEW.CHANGE} ${NR_REVIEW.GROUP_TOOLS}` }));
     setField(screen.getByLabelText(NR_REVIEW.COMMAND_LABEL), "make lint");
     expect(intentNow().workload).toEqual({ kind: "command", command: "make lint" });
+  });
+});
+
+describe("Review: an application server (#1994)", () => {
+  const SERVER: RunIntent = {
+    shape: "application", experience: "interactive", no_repositories_or_drives: true, runner_pool_id: "pool-general",
+    startup: { kind: "command", command: "npm run dev" },
+    inline_policy: { ui_apps: [{ name: "web", port: 3000, path: "/" }, { name: "api", port: 8080, path: "/api" }] },
+  };
+  const gatewayIs = (ui_sandbox?: { enabled: boolean }) => vi.spyOn(health, "health").mockResolvedValue({ status: "ok", ...(ui_sandbox && { ui_sandbox }) });
+
+  it("names the server, its start command and each port, and opens Launch with the gateway on", async () => {
+    gatewayIs({ enabled: true });
+    open(SERVER);
+    await ready();
+    await waitFor(() => expect(launch()).toBeEnabled());
+    expect(screen.getByText(NR_REVIEW.SETUP_APPLICATION_SERVER)).toBeInTheDocument();
+    const run = group("run");
+    expect(run.getByText(NR_REVIEW.VALUE_APPLICATION)).toBeInTheDocument();
+    expect(run.getByText(NR_REVIEW.TIMING_APPLICATION_SERVER)).toBeInTheDocument();
+    const rows = Array.from(document.querySelectorAll<HTMLElement>("[data-app]"));
+    expect(rows.map((r) => r.textContent)).toEqual([
+      `web${NR_REVIEW.APP_PORT(3000)}${NR_REVIEW.APP_OPENS("/")}`,
+      `api${NR_REVIEW.APP_PORT(8080)}${NR_REVIEW.APP_OPENS("/api")}`,
+    ]);
+    expect(group("tools").getByText("npm run dev")).toBeInTheDocument();
+    expect(group("tools").getByText(NR_REVIEW.TOOLS_START_COMMAND)).toBeInTheDocument();
+    expect(run.queryByText(NR_REVIEW.DOC_ONLY_CHIP)).not.toBeInTheDocument();
+  });
+
+  it("holds Launch with one blocker, on the Run group, linking to the Run step, when the gateway is off", async () => {
+    gatewayIs();
+    const user = userEvent.setup();
+    open(SERVER);
+    await ready();
+    await waitFor(() => expect(within(blockerList()).getAllByRole("listitem")).toHaveLength(1));
+    expect(blockerList()).toHaveTextContent(NR_REVIEW.BLOCKERS_ONE);
+    expect(within(blockerList()).getByRole("listitem")).toHaveTextContent(NR_REVIEW.BLOCKER_GATEWAY_OFF);
+    expect(launch()).toBeDisabled();
+    const blocked = Array.from(document.querySelectorAll("[data-review-group][data-blocked]")).map((g) => g.getAttribute("data-review-group"));
+    expect(blocked).toEqual(["run"]);
+    await user.click(within(blockerList()).getByRole("button", { name: NR_REVIEW.BLOCKER_GATEWAY_OFF }));
+    await waitFor(() => expect(path()).toContain("step=run"));
+  });
+
+  it("does not call the gateway off before /healthz has answered, and never for a script", async () => {
+    vi.spyOn(health, "health").mockResolvedValue({});
+    open(SERVER);
+    await ready();
+    expect(blockerList()).toBeEmptyDOMElement();
+    cleanup();
+    gatewayIs();
+    open(APP);
+    await ready();
+    expect(blockerList()).toBeEmptyDOMElement();
+  });
+
+  it("shows the server's clamp warning and no port rows when governance strips the apps", async () => {
+    gatewayIs({ enabled: true });
+    const warning = 'dropped 2 ui_app(s) denied by governance profile "Platform team": web:3000,api:8080';
+    checks.current = answered({ ...SCENARIO_PREFLIGHT.member, warnings: [warning] }, 1000, {
+      preview: { result: { spec: {}, source: { name: "Default" }, pending: [], warnings: [], repository_access: [] }, retry },
+    });
+    open(SERVER);
+    await ready();
+    expect(screen.getByText(warning)).toBeInTheDocument();
+    expect(document.querySelector("[data-app]")).toBeNull();
+    expect(screen.queryByText(NR_REVIEW.APP_OPENS("/"))).not.toBeInTheDocument();
+  });
+
+  it("shows the ports the policy preview kept, not the ones asked for", async () => {
+    gatewayIs({ enabled: true });
+    checks.current = answered(SCENARIO_PREFLIGHT.member, 1000, {
+      preview: { result: { spec: { ui_apps: [{ name: "web", port: 3000, path: "/" }] }, source: { name: "Default" }, pending: [], warnings: [], repository_access: [] }, retry },
+    });
+    open(SERVER);
+    await ready();
+    expect(Array.from(document.querySelectorAll("[data-app]")).map((r) => r.getAttribute("data-app"))).toEqual(["web"]);
+  });
+
+  it("edits the start command in place", async () => {
+    gatewayIs({ enabled: true });
+    const user = userEvent.setup();
+    open(SERVER);
+    await ready();
+    await user.click(screen.getByRole("button", { name: `${NR_REVIEW.CHANGE} ${NR_REVIEW.GROUP_TOOLS}` }));
+    setField(screen.getByLabelText(NR_REVIEW.COMMAND_LABEL), "pnpm dev");
+    expect(intentNow().startup).toEqual({ kind: "command", command: "pnpm dev" });
+  });
+
+  it("blocks Launch on a bad port with the Run step's sentence", async () => {
+    gatewayIs({ enabled: true });
+    open({ ...SERVER, inline_policy: { ui_apps: [{ name: "web", port: 70000 }, { name: "api", port: 70000 }] } });
+    await ready();
+    await waitFor(() => expect(within(blockerList()).getAllByRole("listitem")).toHaveLength(1));
+    expect(blockerList()).toHaveTextContent(NR_RUN.PORT_INVALID);
+    expect(launch()).toBeDisabled();
   });
 });
 
