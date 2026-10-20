@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -399,6 +400,32 @@ func TestPeopleEntra_KnownSubKeepsItsPrincipal(t *testing.T) {
 				t.Errorf("object-id person = %+v (%v), want never signed in", p, err)
 			}
 		})
+	}
+}
+
+// noWorkspaceListStore is the real store with the whole-table workspace list refused.
+type noWorkspaceListStore struct{ store.PG }
+
+func (noWorkspaceListStore) ListWorkspaces(context.Context) ([]types.Workspace, error) {
+	return nil, errors.New("the workspace list was read")
+}
+
+// subKnown asks whether a workspace is owned by the sub, not for every workspace.
+func TestPeopleEntra_SubKnownByWorkspaceReadsNoWorkspaceList(t *testing.T) {
+	e := newEntraPeoplePG(t)
+	e.h.srv.cfg.Store = noWorkspaceListStore{e.st}
+	if _, err := e.st.CreateWorkspace(context.Background(), types.Workspace{
+		ID: uuid.New(), Name: "ws-a", OwnedBy: "pairwise-a", Status: types.WorkspaceScanned,
+		Sources:   []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeEphemeral, Target: "/home/agent/work"}},
+		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	k := peopleKeying{s: e.h.srv, ps: e.st}
+	for sub, want := range map[string]bool{"pairwise-a": true, "pairwise-nobody": false} {
+		if known, err := k.subKnown(context.Background(), sub); err != nil || known != want {
+			t.Errorf("subKnown(%q) = (%v, %v), want %v", sub, known, err, want)
+		}
 	}
 }
 
