@@ -37,6 +37,7 @@ import { describe, it, expect } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { CONNECTIONS } from "../../components/wardyn/copy/door";
+import { APP_NAME_RE } from "../../components/screens/new-run-flow/lenses/apps-lens";
 
 function repoRoot(): string {
   let dir = resolve(process.cwd());
@@ -804,4 +805,11 @@ it("connection re-check sentence matches the server", () => {
   expect(sentence).not.toBeNull();
   expect(JSON.parse(sentence![1])).toBe(CONNECTIONS.STORE_UNREADABLE);
   expect(CONNECTIONS.STORE_UNREADABLE).toContain("Your credential may still be stored");
+});
+
+it("the New Run app-name rule is the server's uiAppNameRE", () => {
+  const src = readFileSync(join(repoRoot(), "internal/api/policy.go"), "utf8");
+  const m = /var uiAppNameRE = regexp\.MustCompile\(`([^`]+)`\)/.exec(src);
+  expect(m).not.toBeNull();
+  expect(APP_NAME_RE.source).toBe(m![1]);
 });

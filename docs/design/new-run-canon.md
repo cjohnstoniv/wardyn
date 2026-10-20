@@ -148,6 +148,14 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `PORT_INVALID` | mock | Enter a port from 1 to 65535. |
 | `PORT_DUPLICATE(port)` | mock | Two apps can't share port {port}. |
 | `PORT_REQUIRED` | deviation (lead wording 2026-10-20, FEAT-1APP-UI) | An application needs at least one port to open. |
+| `APP_NAME_DUPLICATE(name)` | deviation (lead wording 2026-10-20, APP-UI-2) | Two applications are named {name}. Give each its own name. |
+| `APP_NAME_INVALID` | deviation (lead wording 2026-10-20, APP-UI-2) | Use lower-case letters, numbers and dashes, up to 32 characters, starting and ending with a letter or number. |
+| `APP_PATH_INVALID` | deviation (lead wording 2026-10-20, APP-UI-2) | Start the path with a single /, with no host and no "..". |
+| `APP_ROW(n)` | deviation (lead wording 2026-10-20, APP-UI-2) | row {n} |
+| `APP_NAME_ARIA(n)` | deviation (lead wording 2026-10-20, APP-UI-2) | Name for row {n} |
+| `APP_PORT_ARIA(who)` | deviation (lead wording 2026-10-20, APP-UI-2) | Port for {who} |
+| `APP_PATH_ARIA(who)` | deviation (lead wording 2026-10-20, APP-UI-2) | Path for {who} |
+| `APP_REMOVE_ARIA(who)` | deviation (lead wording 2026-10-20, APP-UI-2) | Remove {who} |
 | `APP_TERMINAL_NOTE` | mock | The sandbox also has a terminal, as an Environment sandbox does. |
 | `COMMAND_LABEL` | mock | Command |
 | `COMMAND_HELP` | mock | Run verbatim in the sandbox. The run ends when the command exits. |

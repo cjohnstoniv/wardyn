@@ -21,7 +21,8 @@ import {
 } from "../draft/field-homes";
 import type { NewRunLocation } from "../draft/new-run-url";
 import type { RunIntent } from "../draft/run-intent";
-import type { StepIssue, StepIssueCode } from "../lenses/step-issues";
+import type { AppProblemCode, StepIssue, StepIssueCode } from "../lenses/step-issues";
+import { appIssueText } from "../steps/run/app-issue-text";
 
 export type BlockerKind = "local" | "gateway_off" | "unsupported" | "template_setup" | "template_unread" | "refusal" | "setup_item" | "stale";
 
@@ -41,20 +42,21 @@ export function locationOfHome(home: FieldHome | undefined): NewRunLocation | un
   return home === "document" ? { screen: "document", format: "yaml" } : { screen: "step", step: home };
 }
 
-/** Every local issue code has a sentence of its own; a duplicate port names the port, so its sentence is built where the issue is read. */
-const ISSUE_TEXT: Record<Exclude<StepIssueCode, "app_port_duplicate">, string> = {
+/** Every local issue code has a sentence of its own; a port row's problems name the name or port, so appIssueText builds them. */
+const ISSUE_TEXT: Record<Exclude<StepIssueCode, AppProblemCode>, string> = {
   shape_required: NR_SHAPE.SHAPE_REQUIRED,
   harness_required: NR_HARNESSES.HARNESS_REQUIRED,
   task_required: NR_HARNESSES.TASK_ERROR,
   command_required: NR_RUN.COMMAND_REQUIRED,
   pool_required: NR_RUN.POOL_HELP,
   app_required: NR_RUN.PORT_REQUIRED,
-  app_port_invalid: NR_RUN.PORT_INVALID,
   main_drive_size_required: NR_FILES.SIZE_ERROR,
   files_choice_required: NR_FILES.CHOOSE_FILES,
   starts_here_required: NR_FILES.STARTS_HERE_REQUIRED,
   doc_invalid: NR_DOCUMENT.DOC_INVALID,
 };
+
+const isAppProblem = (code: StepIssueCode): code is AppProblemCode => code.startsWith("app_") && code !== "app_required";
 
 /** "inline_policy.model_provider" as "Model provider": the field named, not a sentence about it. */
 const fieldLabel = (field: string): string => {
@@ -87,7 +89,7 @@ export interface BlockerInput {
 export function buildBlockers(input: BlockerInput): Blocker[] {
   const out: Blocker[] = [];
   for (const i of input.issues) {
-    out.push({ id: `local:${i.code}`, kind: "local", text: i.code === "app_port_duplicate" ? NR_RUN.PORT_DUPLICATE(i.port ?? "") : ISSUE_TEXT[i.code], to: locationOfHome(i.home) });
+    out.push({ id: `local:${i.code}`, kind: "local", text: isAppProblem(i.code) ? appIssueText({ ...i, code: i.code }) : ISSUE_TEXT[i.code], to: locationOfHome(i.home) });
   }
   for (const path of input.unsupported) {
     out.push({ id: `unsupported:${path}`, kind: "unsupported", text: NR_REVIEW.BLOCKER_UNSUPPORTED(path), to: locationOfHome(homeOfPath(path) ?? "document"), field: path });

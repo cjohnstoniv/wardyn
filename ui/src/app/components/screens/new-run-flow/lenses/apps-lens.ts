@@ -9,7 +9,7 @@
 import type { UIApp } from "../../../../lib/types/runs";
 import type { RunIntent } from "../draft/run-intent";
 import { withKeys } from "./lens-keys";
-import { issue, type StepIssue } from "./step-issues";
+import { issue, type AppProblemCode, type StepIssue } from "./step-issues";
 
 export const MAX_APPS = 8;
 export type AppKind = "automation" | "server";
@@ -71,25 +71,48 @@ export const removeApp = (intent: RunIntent, index: number): RunIntent =>
 
 const validPort = (port: number) => Number.isInteger(port) && port >= 1 && port <= 65535;
 
-/** Each port's problem: out of range first, then a port an earlier row already takes. */
-export function portProblems(apps: readonly UIApp[]): ({ code: "app_port_invalid" } | { code: "app_port_duplicate"; port: number } | undefined)[] {
-  const seen = new Set<number>();
+/** Mirrors the server's uiAppNameRE (internal/api/policy.go); wire-parity.test.ts keeps the two in step. */
+export const APP_NAME_RE = /^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$/;
+
+/** Mirrors the server's validateUIAppPath: empty means "/"; otherwise one leading slash, no "//" and no "..". */
+const validPath = (path: string) => path === "" || (path.startsWith("/") && !path.startsWith("//") && !path.includes(".."));
+
+export interface AppProblem {
+  code: AppProblemCode;
+  name?: string;
+  port?: number;
+}
+export type RowProblems = Partial<Record<"name" | "port" | "path", AppProblem>>;
+
+/** Each row's problems by field: a bad or repeated name, a port out of range or taken, a path the server refuses. */
+export function portProblems(apps: readonly UIApp[]): RowProblems[] {
+  const names = new Set<string>();
+  const ports = new Set<number>();
   return apps.map((a) => {
-    if (!validPort(a.port)) return { code: "app_port_invalid" };
-    if (seen.has(a.port)) return { code: "app_port_duplicate", port: a.port };
-    seen.add(a.port);
-    return undefined;
+    const row: RowProblems = {};
+    if (!APP_NAME_RE.test(a.name)) row.name = { code: "app_name_invalid" };
+    else if (names.has(a.name)) row.name = { code: "app_name_duplicate", name: a.name };
+    names.add(a.name);
+    if (!validPort(a.port)) row.port = { code: "app_port_invalid" };
+    else if (ports.has(a.port)) row.port = { code: "app_port_duplicate", port: a.port };
+    else ports.add(a.port);
+    if (!validPath(a.path ?? "")) row.path = { code: "app_path_invalid" };
+    return row;
   });
 }
 
-/** A server needs one port and every port sound; a failed Continue focuses the first bad row's port. */
+const FIELDS = ["name", "port", "path"] as const;
+
+/** A server needs one port and every row sound; a failed Continue focuses the first bad row's first bad field. */
 export function appIssues(intent: RunIntent): StepIssue[] {
   if (!isServer(intent)) return [];
   const apps = appsOf(intent);
   if (apps.length === 0) return [issue("run", "app_required")];
   const problems = portProblems(apps);
-  const at = problems.findIndex(Boolean);
-  const problem = problems[at];
-  if (!problem) return [];
-  return [{ ...issue("run", problem.code), focus: `nr-app-port-${at}`, ...(problem.code === "app_port_duplicate" && { port: problem.port }) }];
+  for (const [i, row] of problems.entries()) {
+    const field = FIELDS.find((f) => row[f]);
+    const problem = field && row[field];
+    if (field && problem) return [{ ...issue("run", problem.code), focus: `nr-app-${field}-${i}`, ...(problem.name !== undefined && { name: problem.name }), ...(problem.port !== undefined && { port: problem.port }) }];
+  }
+  return [];
 }

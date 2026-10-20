@@ -419,7 +419,9 @@ describe("Run step: mode, timing and command", () => {
       inline_policy: { ui_apps: [{ name: "web", port: 3000, path: "/" }, { name: "api", port: 3000, path: "/api" }] },
     };
     const rows = () => Array.from(document.querySelectorAll<HTMLElement>("[data-app-row]"));
-    const field = (row: number, label: string) => within(rows()[row]).getByLabelText(label);
+    const nameField = (row: number) => within(rows()[row]).getByLabelText(NR_RUN.APP_NAME_ARIA(row + 1));
+    const portField = (row: number, who: string) => within(rows()[row]).getByLabelText(NR_RUN.APP_PORT_ARIA(who));
+    const pathField = (row: number, who: string) => within(rows()[row]).getByLabelText(NR_RUN.APP_PATH_ARIA(who));
 
     it("choosing the server card moves the draft to an interactive run that starts the command, with one port to edit", async () => {
       show({ shape: "application", experience: "background", workload: { kind: "command", command: "make dev" } });
@@ -442,9 +444,9 @@ describe("Run step: mode, timing and command", () => {
       await poolSelect();
       setField(screen.getByLabelText(new RegExp(NR_RUN.START_COMMAND_LABEL)), "pnpm dev");
       expect(intentNow().startup).toEqual({ kind: "command", command: "pnpm dev" });
-      setField(field(1, NR_RUN.PORT_COL_NAME), "backend");
-      setField(field(1, NR_RUN.PORT_COL_PORT), "8080");
-      setField(field(1, NR_RUN.PORT_COL_PATH), "/v1");
+      setField(nameField(1), "backend");
+      setField(portField(1, "backend"), "8080");
+      setField(pathField(1, "backend"), "/v1");
       expect(intentNow().inline_policy?.ui_apps).toEqual([{ name: "web", port: 3000, path: "/" }, { name: "backend", port: 8080, path: "/v1" }]);
     });
 
@@ -454,8 +456,8 @@ describe("Run step: mode, timing and command", () => {
       expect(within(rows()[0]).queryByRole("alert")).not.toBeInTheDocument();
       expect(within(rows()[1]).getByRole("alert")).toHaveTextContent(NR_RUN.PORT_DUPLICATE(3000));
       expect(within(rows()[2]).getByRole("alert")).toHaveTextContent(NR_RUN.PORT_INVALID);
-      expect(field(2, NR_RUN.PORT_COL_PORT)).toHaveAttribute("aria-invalid", "true");
-      setField(field(1, NR_RUN.PORT_COL_PORT), "8080");
+      expect(portField(2, "admin")).toHaveAttribute("aria-invalid", "true");
+      setField(portField(1, "api"), "8080");
       expect(within(rows()[1]).queryByRole("alert")).not.toBeInTheDocument();
     });
 
@@ -464,10 +466,10 @@ describe("Run step: mode, timing and command", () => {
       await poolSelect();
       await userEvent.click(screen.getByRole("button", { name: NR_RUN.PORT_ADD }));
       expect(rows()).toHaveLength(3);
-      expect(field(2, NR_RUN.PORT_COL_NAME)).toHaveValue("app3");
-      expect(field(2, NR_RUN.PORT_COL_PORT)).toHaveValue("");
+      expect(nameField(2)).toHaveValue("app3");
+      expect(portField(2, "app3")).toHaveValue("");
       expect(within(rows()[2]).getByRole("alert")).toHaveTextContent(NR_RUN.PORT_INVALID);
-      await userEvent.click(within(rows()[0]).getByRole("button", { name: NR_SHARED.REMOVE }));
+      await userEvent.click(within(rows()[0]).getByRole("button", { name: NR_RUN.APP_REMOVE_ARIA("web") }));
       expect(rows()).toHaveLength(2);
       expect(intentNow().inline_policy?.ui_apps?.map((a) => a.name)).toEqual(["api", "app3"]);
       for (let n = 0; n < 6; n++) await userEvent.click(screen.getByRole("button", { name: NR_RUN.PORT_ADD }));
@@ -480,15 +482,71 @@ describe("Run step: mode, timing and command", () => {
       show({ ...SERVER, inline_policy: { ui_apps: [{ name: "web", port: 3000, path: "/" }] } });
       await poolSelect();
       expect(screen.queryByText(NR_RUN.PORT_REQUIRED)).not.toBeInTheDocument();
-      await userEvent.click(within(rows()[0]).getByRole("button", { name: NR_SHARED.REMOVE }));
-      expect(screen.getByRole("alert")).toHaveTextContent(NR_RUN.PORT_REQUIRED);
+      await userEvent.click(within(rows()[0]).getByRole("button", { name: NR_RUN.APP_REMOVE_ARIA("web") }));
+      expect(screen.getByRole("alert")).toHaveTextContent("An application needs at least one port to open.");
       expect(intentNow().inline_policy).toBeUndefined();
+    });
+
+    it("names each control of a row for a screen reader, and calls an unnamed row by its place", async () => {
+      show(SERVER);
+      await poolSelect();
+      expect(nameField(1)).toHaveValue("api");
+      expect(portField(1, "api")).toHaveValue("3000");
+      expect(pathField(1, "api")).toHaveValue("/api");
+      expect(within(rows()[1]).getByRole("button", { name: NR_RUN.APP_REMOVE_ARIA("api") })).toBeInTheDocument();
+      expect(NR_RUN.APP_NAME_ARIA(2)).toBe("Name for row 2");
+      expect(NR_RUN.APP_PORT_ARIA("api")).toBe("Port for api");
+      expect(NR_RUN.APP_PATH_ARIA("api")).toBe("Path for api");
+      expect(NR_RUN.APP_REMOVE_ARIA("api")).toBe("Remove api");
+      setField(nameField(0), "");
+      expect(portField(0, NR_RUN.APP_ROW(1)).getAttribute("aria-label")).toBe("Port for row 1");
+      expect(pathField(0, NR_RUN.APP_ROW(1)).getAttribute("aria-label")).toBe("Path for row 1");
+      expect(within(rows()[0]).getByRole("button", { name: "Remove row 1" })).toBeInTheDocument();
+    });
+
+    it("moves focus to the Add button when the last row is removed", async () => {
+      show({ ...SERVER, inline_policy: { ui_apps: [{ name: "web", port: 3000, path: "/" }] } });
+      await poolSelect();
+      await userEvent.click(within(rows()[0]).getByRole("button", { name: NR_RUN.APP_REMOVE_ARIA("web") }));
+      expect(rows()).toHaveLength(0);
+      expect(screen.getByRole("button", { name: NR_RUN.PORT_ADD })).toHaveFocus();
+    });
+
+    it("says a repeated name on the later row, a bad name and a bad path on their own rows", async () => {
+      show({
+        ...SERVER,
+        inline_policy: { ui_apps: [{ name: "web", port: 3000, path: "/" }, { name: "web", port: 3001, path: "/" }, { name: "Bad_Name", port: 3002, path: "http://evil/" }] },
+      });
+      await poolSelect();
+      expect(within(rows()[0]).queryByRole("alert")).not.toBeInTheDocument();
+      expect(within(rows()[1]).getByRole("alert")).toHaveTextContent("Two applications are named web. Give each its own name.");
+      expect(nameField(1)).toHaveAttribute("aria-invalid", "true");
+      const bad = within(rows()[2]).getAllByRole("alert").map((a) => a.textContent);
+      expect(bad).toEqual([
+        "Use lower-case letters, numbers and dashes, up to 32 characters, starting and ending with a letter or number.",
+        'Start the path with a single /, with no host and no "..".',
+      ]);
+      expect(pathField(2, "Bad_Name")).toHaveAttribute("aria-invalid", "true");
+      setField(nameField(1), "api");
+      expect(within(rows()[1]).queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("keeps Continue on a repeated name and on a bad path, and puts focus on that field", async () => {
+      const { go } = show({ ...SERVER, inline_policy: { ui_apps: [{ name: "web", port: 3000, path: "/" }, { name: "web", port: 3001, path: "/" }] } });
+      await poolSelect();
+      await userEvent.click(screen.getByRole("button", { name: NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_HARNESSES) }));
+      expect(nameField(1)).toHaveFocus();
+      setField(nameField(1), "api");
+      setField(pathField(1, "api"), "//host");
+      await userEvent.click(screen.getByRole("button", { name: NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_HARNESSES) }));
+      expect(pathField(1, "api")).toHaveFocus();
+      expect(go).not.toHaveBeenCalled();
     });
 
     it("keeps only digits in a port", async () => {
       show(SERVER);
       await poolSelect();
-      setField(field(0, NR_RUN.PORT_COL_PORT), "80a80");
+      setField(portField(0, "web"), "80a80");
       expect(intentNow().inline_policy?.ui_apps?.[0].port).toBe(8080);
     });
 
@@ -496,7 +554,7 @@ describe("Run step: mode, timing and command", () => {
       const { go } = show({ ...SERVER, inline_policy: { ui_apps: [{ name: "web", port: 3000, path: "/" }, { name: "api", port: 70000, path: "/" }] } });
       await poolSelect();
       await userEvent.click(screen.getByRole("button", { name: NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_HARNESSES) }));
-      expect(field(1, NR_RUN.PORT_COL_PORT)).toHaveFocus();
+      expect(portField(1, "api")).toHaveFocus();
       expect(go).not.toHaveBeenCalled();
     });
 
