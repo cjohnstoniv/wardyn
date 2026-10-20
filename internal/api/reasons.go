@@ -208,6 +208,12 @@ const (
 	reasonHarnessInnerWallsLooser              = "harness_inner_walls_looser"               // the policy's harness_inner_walls is looser than the walls the run's harness launches with
 	reasonHarnessInnerWallsUnmet               = "harness_inner_walls_unmet"                // the run cannot launch with the policy's harness_inner_walls on its harness and lane
 	reasonHarnessSandboxUnavailable            = "harness_sandbox_unavailable"              // harness_inner_walls.sandbox names a harness sandbox mode, which cannot start inside Wardyn's sandbox
+	reasonDesktopTransferBlocked               = "desktop_transfer_blocked"                 // the run's desktop rules block this file direction
+	reasonDesktopTransferTooLarge              = "desktop_transfer_too_large"               // the upload is over the desktop upload limit
+	reasonDesktopTransferBadRequest            = "desktop_transfer_bad_request"             // the file name is not a plain name, or the upload has no Content-Length
+	reasonDesktopTransferUnavailable           = "desktop_transfer_unavailable"             // the run declares no UI app, so it has no desktop
+	reasonDesktopTransferNotFound              = "desktop_transfer_not_found"               // no regular file of that name in the transfer folder
+	reasonDesktopTransferFailed                = "desktop_transfer_failed"                  // the in-sandbox half of a transfer failed
 	reasonIntegrationIDRetired                 = "integration_id_retired"                   // integration_id no longer chooses a model credential; a run's model provider does
 	reasonRunKillAlreadyTerminal               = "run_kill_already_terminal"                // the run is already in a terminal state other than killed
 	reasonRunKillStateChanged                  = "run_kill_state_changed"                   // the run moved to another state between the read and the write

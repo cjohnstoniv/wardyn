@@ -215,6 +215,10 @@ func (s *Server) routes() chi.Router {
 			s.mountRunLeaseRoutes(r)
 			r.Get("/runs/{id}/grants", s.handleListGrants)
 			r.Get("/runs/{id}/policy", s.handleGetRunPolicy) // owner or admin; not on the delegation list
+			// The run's Files panel (#2967): the person who may enter the run only (desktopRun).
+			r.Get("/runs/{id}/desktop/files", s.handleListDesktopFiles)
+			r.Put("/runs/{id}/desktop/files/{name}", s.handleUploadDesktopFile)
+			r.Get("/runs/{id}/desktop/files/{name}", s.handleDownloadDesktopFile)
 			// The run's Azure DevOps tokens: owner or admin; not on the delegation list.
 			r.Get("/runs/{id}/ado-tokens", s.handleListRunADOTokens)
 			// Resume a paused run (#572): owner or SUPER admin — handleResumeRun.

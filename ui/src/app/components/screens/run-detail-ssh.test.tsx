@@ -14,6 +14,9 @@ import { MemoryRouter } from "react-router-dom";
 import type { RunDetail } from "../../lib/types";
 
 const healthMock = vi.fn();
+// The Files panel has its own tests (desktop-files-panel.test.tsx); its fetch would land in the
+// global fetch stubs this file counts.
+vi.mock("./run-detail/desktop-files-panel", () => ({ DesktopFilesPanel: () => null }));
 vi.mock("../../lib/api/health", () => ({
   health: { health: (...a: unknown[]) => healthMock(...a) },
 }));

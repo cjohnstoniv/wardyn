@@ -41,6 +41,7 @@ import { RUN_SSH, UI_APPS_LANE, UI_APPS_LAUNCHER_MISSING_PREFIX } from "../wardy
 import { RUN_SYNC } from "../wardyn/copy/runners";
 import { useOperator, useOperatorResolved, usePrincipal } from "../wardyn/operator-context";
 import { WidgetCard } from "../wardyn/primitives";
+import { DesktopFilesPanel } from "./run-detail/desktop-files-panel";
 import { cn } from "../ui/utils";
 
 // Exported for run-detail-ssh.test.tsx: standalone-testable without mounting
@@ -434,6 +435,7 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
             ))}
             <p className="mt-3 text-meta leading-relaxed text-muted-foreground">{UI_APPS_LANE.newTab}</p>
             <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{UI_APPS_LANE.noRecording}</p>
+            {mayAttach && !sponsorOnly && running && <DesktopFilesPanel runId={run.id} />}
           </>
         )}
       </div>
