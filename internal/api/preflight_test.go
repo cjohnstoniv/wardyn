@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -175,6 +176,47 @@ func TestPreflight_WorkspaceIDSeeded(t *testing.T) {
 	}
 	if _, ok := findItem(resp.SetupItems, "workspace:"+wsID.String()); !ok {
 		t.Errorf("checklist must carry the seeded workspace's row; items=%+v", resp.SetupItems)
+	}
+}
+
+// listCountingStore counts the whole-table workspace reads a request makes.
+type listCountingStore struct {
+	*workspaceStoreFake
+	lists int
+}
+
+func (s *listCountingStore) ListWorkspaces(ctx context.Context) ([]types.Workspace, error) {
+	s.lists++
+	return s.workspaceStoreFake.ListWorkspaces(ctx)
+}
+
+// CreateRun ends a create after its fold, which is where the workspace reads happen.
+func (s *listCountingStore) CreateRun(context.Context, types.AgentRun) (types.AgentRun, error) {
+	return types.AgentRun{}, errors.New("create stops after the fold")
+}
+
+// TestPreflightAndCreate_ReadTheWorkspaceListOncePerRun: the seed, the onboarding gates and the
+// workspace step each need the workspace list, and one request reads it once, not once per gate.
+func TestPreflightAndCreate_ReadTheWorkspaceListOncePerRun(t *testing.T) {
+	h := newHarness(t)
+	wsID := uuid.New()
+	counting := &listCountingStore{workspaceStoreFake: &workspaceStoreFake{
+		Store: h.srv.cfg.Store,
+		ws: types.Workspace{
+			ID:      wsID,
+			Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: "/srv/app"}},
+			Status:  types.WorkspaceScanned,
+		},
+	}}
+	h.srv.cfg.Store = counting
+	body := `{"agent":"claude-code","workspace_id":"` + wsID.String() + `",` +
+		`"inline_policy":{"min_confinement_class":"CC1"}}`
+	for _, door := range []string{"/api/v1/runs/preflight", "/api/v1/runs"} {
+		counting.lists = 0
+		w := do(t, h.srv, http.MethodPost, door, adminToken, body)
+		if counting.lists != 1 {
+			t.Errorf("%s read the workspace list %d times, want once (code=%d)", door, counting.lists, w.Code)
+		}
 	}
 }
 

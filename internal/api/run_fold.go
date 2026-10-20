@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -209,6 +210,7 @@ var runFoldSteps = []runFoldStep{
 func (s *Server) foldRunRequest(w http.ResponseWriter, r *http.Request, mode foldMode,
 	req *createRunRequest, ceiling governanceCeiling, reqCC types.ConfinementClass,
 ) (runFold, bool) {
+	r = r.WithContext(context.WithValue(r.Context(), workspaceListKey{}, &workspaceListMemo{}))
 	f := runFold{mode: mode, w: w, r: r, req: req, ceiling: ceiling, reqCC: reqCC, promoted: startingPromoted(r.Context())}
 	rec := &foldRecorder{}
 	for _, step := range runFoldSteps {
