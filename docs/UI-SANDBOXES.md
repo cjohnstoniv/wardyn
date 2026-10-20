@@ -86,7 +86,7 @@
   a run built to get data out.
 - The server speaks first in RFB. Browser frames that arrive before the server's first frame are held, up to
   64 KiB and 5 seconds, then read in order. A desktop whose first frame is not an RFB version is closed, and a
-  `ui.clipboard` `failure` row records `reason: not_rfb`.
+  `ui.clipboard.transfer` `failure` row records `reason: not_rfb`.
 - It fails closed: a text frame, a WebSocket extension, a security type that encrypts the stream, or a message or
   encoding it cannot frame closes the socket, and the gateway logs which one.
 - It offers the desktop no WebSocket extension and narrows the browser's encodings to Raw, CopyRect, ZRLE and the
@@ -452,7 +452,7 @@ no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found
 | `ui.start` | the launcher was run and the app came up | app, port, launcher path |
 | `ui.open` | a relay connection opened | app, port |
 | `ui.close` | that connection closed | app, port, `duration_sec` |
-| `ui.clipboard` | a desktop clipboard transfer, relayed or dropped; or a desktop closed for not speaking RFB | app, direction, bytes, sha256 (never the text); or app, reason |
+| `ui.clipboard.transfer` | a desktop clipboard transfer, relayed or dropped; or a desktop closed for not speaking RFB | app, direction, bytes, sha256 (never the text); or app, reason |
 
 - These are deliberately **not** `session.attach`: there is no PTY and no holder,
   and a relay session must never appear in the run detail page's Recording tab as

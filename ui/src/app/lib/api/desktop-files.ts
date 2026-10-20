@@ -30,6 +30,7 @@ export const desktopFiles = {
   async upload(runId: string, file: File): Promise<DesktopTransfer> {
     const res = await wfetch(`${base(runId)}/${encodeURIComponent(file.name)}`, {
       method: "PUT",
+      asPerson: true,
       body: file,
       headers: { "Content-Type": "application/octet-stream" },
     });
