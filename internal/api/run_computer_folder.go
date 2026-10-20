@@ -174,14 +174,10 @@ func isControlRune(r rune) bool { return r < 0x20 || r == 0x7f || (r >= 0x80 && 
 // records its outcome as the folder's first sync (localFolderPassed), so the hold that follows
 // reads it as it reads a `wardyn sync` pass.
 func (s *Server) seedComputerFolder(ctx context.Context, run types.AgentRun, folder types.RunLocalFolder, wait time.Duration) {
-	ctx, cancel := context.WithTimeout(ctx, wait)
-	defer cancel()
-	res, err := s.computerFolderPass(ctx, run, folder, false)
-	errText := res.Error
-	if err != nil {
-		errText = err.Error()
-	}
+	res, errText := s.computerFolderPassWithin(ctx, wait, run, folder, false)
+	// Recorded on ctx, not the pass's own deadline: a pass that timed out still leaves its record.
 	s.recordComputerFolderPass(ctx, run.ID, func(st *types.RunLocalFolderStatus) { st.Seed = folderPassRecord(s.cfg.Now(), res, errText, false) })
+	s.auditComputerFolderPass(ctx, run.ID, folder, false, res, errText)
 	s.localFolderPassed(ctx, run.ID, run.CreatedBy, folder.RemoteDir, errText == "", errText)
 }
 
@@ -202,15 +198,31 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 		return
 	}
 	run.SandboxRef = ref
-	ctx, cancel := context.WithTimeout(ctx, computerFolderBackTimeout)
-	defer cancel()
-	res, err := s.computerFolderPass(ctx, run, *folder, true)
-	errText := res.Error
-	if err != nil {
-		errText = err.Error()
-	}
+	res, errText := s.computerFolderPassWithin(ctx, computerFolderBackTimeout, run, *folder, true)
 	s.recordComputerFolderPass(ctx, runID, func(st *types.RunLocalFolderStatus) { st.Back = folderPassRecord(s.cfg.Now(), res, errText, true) })
-	outcome, data := "success", map[string]any{"folder": folder.Name, "remote_dir": folder.RemoteDir, "files": res.Pulled, "bytes": res.BytesIn}
+	s.auditComputerFolderPass(ctx, runID, *folder, true, res, errText)
+}
+
+// computerFolderPassWithin is computerFolderPass under its own deadline of d, derived from ctx, so
+// the caller records the outcome on ctx whether or not the pass ran out of time.
+func (s *Server) computerFolderPassWithin(ctx context.Context, d time.Duration, run types.AgentRun, folder types.RunLocalFolder, pull bool) (runnerwire.FolderPass, string) {
+	passCtx, cancel := context.WithTimeout(ctx, d)
+	defer cancel()
+	res, err := s.computerFolderPass(passCtx, run, folder, pull)
+	if err != nil {
+		return res, err.Error()
+	}
+	return res, res.Error
+}
+
+// auditComputerFolderPass records one pass as run.folder.transfer: direction seed (the computer to
+// the sandbox, before the agent starts) or back (the sandbox to the computer, when the run ends).
+func (s *Server) auditComputerFolderPass(ctx context.Context, runID uuid.UUID, folder types.RunLocalFolder, back bool, res runnerwire.FolderPass, errText string) {
+	data := map[string]any{"folder": folder.Name, "remote_dir": folder.RemoteDir, "direction": "seed", "files": res.Pushed, "bytes": res.BytesOut}
+	if back {
+		data["direction"], data["files"], data["bytes"] = "back", res.Pulled, res.BytesIn
+	}
+	outcome := "success"
 	if errText != "" {
 		outcome, data["error"] = "failure", localFolderSeedError(errText)
 	}

@@ -122,6 +122,36 @@ func TestFolder_RefusesWhatIsOutsideALinkAwayOrHoldsCredentials(t *testing.T) {
 	}
 }
 
+// A root is opened to browse what is inside it, and never sent whole: not as a pass's folder, not
+// surveyed. A folder inside it is.
+func TestFolder_RefusesTheRootItself(t *testing.T) {
+	h := home(t)
+	s := newServer(t, h)
+	if _, err := s.folder(h); !refused(err) {
+		t.Errorf("the root as a pass's folder: err = %v, want a refusal", err)
+	}
+	if _, err := s.list(context.Background(), runnerwire.ListFoldersArgs{Path: h, Survey: true}); !refused(err) {
+		t.Errorf("a survey of the root: err = %v, want a refusal", err)
+	}
+	if got, err := s.list(context.Background(), runnerwire.ListFoldersArgs{Path: h}); err != nil || len(got.Folders) != 1 || got.Folders[0].Name != "code" {
+		t.Errorf("browsing the root = %+v, %v, want its code folder", got, err)
+	}
+	if _, err := s.folder(filepath.Join(h, "code")); err != nil {
+		t.Errorf("a folder inside the root was refused: %v", err)
+	}
+}
+
+// A credential folder inside the chosen folder is left out of what a run would get.
+func TestList_SurveyLeavesOutACredentialFolderInside(t *testing.T) {
+	h := home(t)
+	app := filepath.Join(h, "code", "app")
+	put(t, filepath.Join(app, ".aws", "credentials"), "fixture: not a real key")
+	got, err := newServer(t, h).list(context.Background(), runnerwire.ListFoldersArgs{Path: app, Survey: true})
+	if err != nil || got.Survey == nil || got.Survey.Files != 2 || !slices.Contains(got.Survey.LeftOut, ".aws") {
+		t.Fatalf("survey = %+v, %v, want main.go and README.md with .aws left out", got.Survey, err)
+	}
+}
+
 func TestList_SurveyCountsWhatAPassWouldSend(t *testing.T) {
 	h := home(t)
 	app := filepath.Join(h, "code", "app")

@@ -220,7 +220,10 @@ export function ComputerChoose({ value, onChange, onNotNow }: {
         </div>
         {(listing?.dir === dir ? listing.folders : []).map((f) => (
           <div key={f.path} className={cn("grid grid-cols-[18px_minmax(0,1fr)_72px_80px_28px] items-center gap-2.5 border-b border-border px-[13px] py-2 text-sm last:border-b-0", picked === f.path && "bg-primary/10")}>
-            <input type="radio" name="nr-computer-folder" aria-label={f.name} className="size-4 accent-primary" checked={picked === f.path} onChange={() => pick(f)} />
+            {/* A shared root is opened, never sent whole: the runner refuses it (folders.go folder). */}
+            {roots.includes(f.path) ? <span aria-hidden="true" /> : (
+              <input type="radio" name="nr-computer-folder" aria-label={f.name} className="size-4 accent-primary" checked={picked === f.path} onChange={() => pick(f)} />
+            )}
             <span className="truncate font-semibold">{f.name}</span>
             <span className="text-right tabular-nums text-muted-foreground">{count(f.files)}{f.more ? "+" : ""}</span>
             <span className="text-right tabular-nums text-muted-foreground">{fmtBytes(f.bytes)}{f.more ? "+" : ""}</span>

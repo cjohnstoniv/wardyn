@@ -13,6 +13,8 @@ import (
 	"testing"
 
 	"github.com/pkg/sftp"
+
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
 func TestSyncAbortIsOnlyForAConnectionOrAnInterrupt(t *testing.T) {
@@ -108,6 +110,39 @@ func TestSync_LocalWritesStayInsideTheRoot(t *testing.T) {
 	}
 	if err := sy.Root.MkdirAll("swapped/deeper", 0o755); err == nil {
 		t.Error("a directory was created through a symlink that leaves the root")
+	}
+}
+
+// A pass with Credential set leaves a credential folder inside the synced root out both ways: the
+// laptop's .ssh/id_x and .aws/credentials are never seeded, and the sandbox's .ssh/authorized_keys
+// is never written to the laptop.
+func TestSync_CredentialFoldersCrossNeitherWay(t *testing.T) {
+	sy, box, root := pipeSyncer(t, true)
+	sy.Opts.Credential = func(rel string) bool { return runner.DeniedUserSegment(rel) != "" }
+	putSyncFile(t, filepath.Join(root, "main.go"), "package main\n", 0o644)
+	putSyncFile(t, filepath.Join(root, ".ssh", "id_x"), "PRIVATE KEY", 0o600)
+	putSyncFile(t, filepath.Join(root, "deploy", ".aws", "credentials"), "fixture: not a real key", 0o600)
+	putSyncFile(t, filepath.Join(box, ".ssh", "authorized_keys"), "ssh-ed25519 AAAA attacker", 0o644)
+	rep, err := sy.Pass(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{filepath.Join(box, ".ssh", "id_x"), filepath.Join(box, "deploy", ".aws"), filepath.Join(root, ".ssh", "authorized_keys")} {
+		if _, err := os.Lstat(p); err == nil {
+			t.Errorf("%s crossed: report %+v", p, rep)
+		}
+	}
+	if got := getSyncFile(t, filepath.Join(box, "main.go")); got != "package main\n" {
+		t.Errorf("main.go in the sandbox = %q", got)
+	}
+	var credential int
+	for _, r := range rep.Refused {
+		if r.Reason == ReasonCredential {
+			credential++
+		}
+	}
+	if credential != 2 { // .ssh (one row for both sides) and deploy/.aws
+		t.Errorf("credential refusals = %d, want 2: %+v", credential, rep.Refused)
 	}
 }
 

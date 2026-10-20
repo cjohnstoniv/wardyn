@@ -491,6 +491,9 @@ test.describe("New Run, Files: the person's drive (public)", () => {
     await toFiles(page, "application");
     await press(page, NR_FILES.ADD_ARIA);
     await dialog(page).getByRole("button", { name: new RegExp(`^${NR_FILES.COMPUTER_TITLE}`) }).click();
+    // The shared root is opened, never picked whole: it has no radio.
+    await expect(dialog(page).getByRole("button", { name: NR_FILES.COMPUTER_OPEN("alice") })).toBeVisible();
+    await expect(dialog(page).getByRole("radio", { name: "alice" })).toHaveCount(0);
     await dialog(page).getByRole("button", { name: NR_FILES.COMPUTER_OPEN("alice") }).click();
     await dialog(page).getByRole("radio", { name: "payments-service" }).check();
     await expect(dialog(page).getByTestId("nr-computer-will-see")).toContainText(NR_FILES.COMPUTER_COUNT("1,284", "46.0 MB"));

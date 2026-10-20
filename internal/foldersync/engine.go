@@ -93,6 +93,10 @@ type Options struct {
 	// OrgDeny is the organisation's wall (GET /runs/{id} sync.deny): ignore
 	// patterns no file in the tree can take back.
 	OrgDeny []string
+	// Credential, when set, names the paths (slash-separated, relative to the synced root) that hold
+	// credentials. Each is left out with its whole subtree in both directions, as the denylist is.
+	// The folder-only runner sets it to runner.DeniedUserSegment; the CLI leaves it nil.
+	Credential func(rel string) bool
 	// Notify gets the list of laptop deletes before they are applied; nil drops it.
 	Notify io.Writer
 }
@@ -563,6 +567,9 @@ func (sy *Syncer) walkLocal(rep *Report) (files map[string]syncFile, dirs []stri
 		case syncDenied(rel):
 			rep.refuse(rel, "denylist")
 			return skipIf(d.IsDir())
+		case sy.Opts.Credential != nil && sy.Opts.Credential(rel):
+			rep.refuse(rel, ReasonCredential)
+			return skipIf(d.IsDir())
 		case syncInvisible(d.Name()):
 			rep.refuse(rel, "invisible character in the name")
 			return skipIf(d.IsDir())
@@ -637,6 +644,8 @@ func (sy *Syncer) walkRemote(ctx context.Context, rep *Report) (*remoteView, err
 			switch {
 			case syncDenied(childRel):
 				rep.refuse(childRel, "denylist")
+			case sy.Opts.Credential != nil && sy.Opts.Credential(childRel):
+				rep.refuse(childRel, ReasonCredential)
 			case sy.ig.orgDenied(childRel, fi.IsDir()):
 				rep.refuse(childRel, "organisation rule")
 			case sy.ig.ignored(childRel, fi.IsDir()):
@@ -829,10 +838,13 @@ type SurveyResult struct {
 	Ignored int
 }
 
-// Survey walks root as a pass would, under the same rules and the
-// organisation's orgDeny, and reads nothing but root.
-func Survey(root *os.Root, orgDeny []string) (SurveyResult, error) {
-	sy := &Syncer{Root: root, ig: newSyncIgnore(orgDeny)}
+// ReasonCredential is the refusal reason for a path Options.Credential names.
+const ReasonCredential = "credential folder"
+
+// Survey walks root as a pass would, under the same rules, the organisation's
+// orgDeny and credential (Options.Credential), and reads nothing but root.
+func Survey(root *os.Root, orgDeny []string, credential func(rel string) bool) (SurveyResult, error) {
+	sy := &Syncer{Root: root, Opts: Options{Credential: credential}, ig: newSyncIgnore(orgDeny)}
 	rep := NewReport()
 	files, _, _, err := sy.walkLocal(rep)
 	if err != nil {
@@ -843,7 +855,7 @@ func Survey(root *os.Root, orgDeny []string) (SurveyResult, error) {
 		out.Bytes += f.side.Size
 	}
 	for _, r := range rep.Refused {
-		if r.Reason == "denylist" && !strings.Contains(r.Path, "/") {
+		if (r.Reason == "denylist" || r.Reason == ReasonCredential) && !strings.Contains(r.Path, "/") {
 			out.LeftOut = append(out.LeftOut, r.Path)
 		}
 	}

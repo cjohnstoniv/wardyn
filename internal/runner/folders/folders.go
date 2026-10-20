@@ -95,6 +95,10 @@ func New(ctx context.Context, roots []string, stateDir string) (*Server, error) 
 	return s, nil
 }
 
+// credentialPath is Options.Credential for every pass and survey: a path inside the chosen folder
+// that is or goes through a credential folder (runner.DeniedUserSegment) never crosses either way.
+func credentialPath(rel string) bool { return runner.DeniedUserSegment(rel) != "" }
+
 // Roots is the resolved roots.
 func (s *Server) Roots() []string { return slices.Clone(s.roots) }
 
@@ -125,6 +129,15 @@ func (s *Server) Call(ctx context.Context, peer *runnerwire.Peer, id uint32, met
 
 // folder checks p, a path the organisation named, and returns it.
 func (s *Server) folder(p string) (string, error) {
+	if slices.Contains(s.roots, p) {
+		return "", runnerwire.Refuse("a whole shared folder is never sent: choose a folder inside it")
+	}
+	return s.browsable(p)
+}
+
+// browsable is folder's check without the root refusal: a root can be opened to list what is
+// inside it, never sent.
+func (s *Server) browsable(p string) (string, error) {
 	if !filepath.IsAbs(p) || filepath.Clean(p) != p {
 		return "", runnerwire.Refuse("the folder must be a clean absolute path")
 	}
@@ -158,9 +171,12 @@ func (s *Server) list(ctx context.Context, args runnerwire.ListFoldersArgs) (run
 		}
 		return out, nil
 	}
-	dir, err := s.folder(args.Path)
+	dir, err := s.browsable(args.Path)
 	if err != nil {
 		return runnerwire.FolderList{}, err
+	}
+	if args.Survey && slices.Contains(s.roots, dir) {
+		return runnerwire.FolderList{}, runnerwire.Refuse("a whole shared folder is never sent: choose a folder inside it")
 	}
 	root, err := os.OpenRoot(dir)
 	if err != nil {
@@ -189,7 +205,7 @@ func (s *Server) list(ctx context.Context, args runnerwire.ListFoldersArgs) (run
 		out.Folders = append(out.Folders, f)
 	}
 	if args.Survey {
-		sv, err := foldersync.Survey(root, args.Deny)
+		sv, err := foldersync.Survey(root, args.Deny, credentialPath)
 		if err != nil {
 			return runnerwire.FolderList{}, runnerwire.Refuse("this folder cannot be sent: %s", foldersync.Shown(err.Error()))
 		}
@@ -310,6 +326,7 @@ func (s *Server) run(stream duplex, dir, remote string, st *foldersync.State, st
 	defer root.Close()
 	sy := &foldersync.Syncer{Client: c, Meter: meter, Root: root, State: st, StateFile: stateFile, Opts: foldersync.Options{
 		Remote: remote, Pull: args.Pull, MaxPullBytes: foldersync.DefaultMaxPullBytes, OrgDeny: args.Deny,
+		Credential: credentialPath,
 	}}
 	rep, err := sy.Pass(ctx)
 	if err != nil {

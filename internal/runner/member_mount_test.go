@@ -120,10 +120,10 @@ func TestMemberMount_DotfileDenyUnderWideRoot(t *testing.T) {
 	p := UserMountPolicy{Roots: []string{home}}
 
 	for _, rel := range []string{
-		".ssh", ".aws", ".claude", ".wardyn", ".gnupg", ".docker", ".kube",
-		".netrc", ".git-credentials", ".config/gh", ".git/config",
+		".ssh", ".aws", ".azure", ".claude", ".wardyn", ".gnupg", ".docker", ".kube",
+		".netrc", ".git-credentials", ".config/gh", ".config/gcloud", ".git/config", "Library/Keychains",
 		// Traversed, not just named: the credential dir is a PARENT of the source.
-		".ssh/keys/work", ".config/gh/hosts",
+		".ssh/keys/work", ".config/gh/hosts", ".config/gcloud/legacy_credentials",
 	} {
 		dir := filepath.Join(home, rel)
 		if err := os.MkdirAll(dir, 0o700); err != nil {

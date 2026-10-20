@@ -157,13 +157,20 @@ func (s *computerFolderStore) GetRunner(_ context.Context, id uuid.UUID) (types.
 	return s.runner, nil
 }
 
-func (s *computerFolderStore) RunLocalFolderStatus(context.Context, uuid.UUID) (types.RunLocalFolderStatus, error) {
+// The status reads and writes fail on a done ctx, as Postgres does.
+func (s *computerFolderStore) RunLocalFolderStatus(ctx context.Context, _ uuid.UUID) (types.RunLocalFolderStatus, error) {
+	if err := ctx.Err(); err != nil {
+		return types.RunLocalFolderStatus{}, err
+	}
 	s.smu.Lock()
 	defer s.smu.Unlock()
 	return s.status, nil
 }
 
-func (s *computerFolderStore) SetRunLocalFolderStatus(_ context.Context, _ uuid.UUID, st types.RunLocalFolderStatus) (bool, error) {
+func (s *computerFolderStore) SetRunLocalFolderStatus(ctx context.Context, _ uuid.UUID, st types.RunLocalFolderStatus) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	s.smu.Lock()
 	defer s.smu.Unlock()
 	s.status = st
@@ -175,9 +182,19 @@ type folderSandboxRunner struct {
 	*execCountRunner
 	files   sftp.Handlers
 	stopped func()
+	// hang makes the sandbox's sftp-server never answer, so a pass runs out of time.
+	hang bool
 }
 
 func (r *folderSandboxRunner) ExecStream(_ context.Context, _ string, spec runner.ExecSpec) (*runner.ExecSession, error) {
+	if r.hang {
+		stdout, quiet := io.Pipe()
+		return &runner.ExecSession{
+			Stdin: nopWriteCloser{io.Discard}, Stdout: stdout, Stderr: strings.NewReader(""),
+			Wait:  func() (int, error) { return 0, nil },
+			Close: func() error { return quiet.Close() },
+		}, nil
+	}
 	dir := "/"
 	for i, a := range spec.Argv {
 		if a == "-d" && i+1 < len(spec.Argv) {
@@ -258,6 +275,10 @@ func TestHoldForLocalFolder_SeedsAComputerFolderThroughItsRunner(t *testing.T) {
 	if findAudit(audit.snapshot(), run.ID, "run.seed", "success") == nil {
 		t.Error("the seed is not audited")
 	}
+	if ev := findAudit(audit.snapshot(), run.ID, "run.folder.transfer", "success"); ev == nil ||
+		!strings.Contains(string(ev.Data), `"direction":"seed"`) || !strings.Contains(string(ev.Data), `"files":2`) {
+		t.Errorf("the seed's transfer is not audited with its direction and count: %v", ev)
+	}
 	v := s.computerFolderRunView(context.Background(), run.ID)
 	if v == nil || v.State != computerFolderSynced || v.Runner != "laptop" || v.Direction != types.ComputerFolderBoth {
 		t.Fatalf("run view = %+v", v)
@@ -316,7 +337,7 @@ func TestBringComputerFolderBack_RunsBeforeTheSandboxStopsAndOnlyForBothWays(t *
 	if cs.status.Back == nil || cs.status.Back.Files != 1 {
 		t.Errorf("back record = %+v, want 1 file", cs.status.Back)
 	}
-	if findAudit(audit.snapshot(), run.ID, "run.folder.transfer", "success") == nil {
+	if ev := findAuditData(audit.snapshot(), run.ID, "run.folder.transfer", `"direction":"back"`); ev == nil || ev.Outcome != "success" {
 		t.Error("the pass back is not audited")
 	}
 
@@ -372,4 +393,36 @@ func TestLocalFolderRefusal_AComputerFolder(t *testing.T) {
 	if got := s.localFolderRefusal(ctx, ok()); got == nil || got.body.Reason != reasonComputerFoldersOff {
 		t.Errorf("gate off: %+v", got)
 	}
+}
+
+// A pass that runs out of time still leaves its record and its audit: both are written on the
+// caller's ctx, not the pass's own deadline.
+func TestSeedComputerFolder_APassThatTimesOutIsStillRecorded(t *testing.T) {
+	s, cs, audit, run, sb, _ := computerFolderFixture(t, types.ComputerFolderBoth)
+	s.cfg.LocalFolderSeedWait = 300 * time.Millisecond
+	sb.hang = true
+	if s.holdForLocalFolder(context.Background(), run, "sbx") {
+		t.Fatal("the agent was let start with its folder's first pass timed out")
+	}
+	cs.smu.Lock()
+	seed := cs.status.Seed
+	cs.smu.Unlock()
+	if seed == nil || seed.Error == "" {
+		t.Fatalf("seed record = %+v, want the timed-out pass with its error", seed)
+	}
+	ev := findAudit(audit.snapshot(), run.ID, "run.folder.transfer", "failure")
+	if ev == nil || !strings.Contains(string(ev.Data), `"direction":"seed"`) {
+		t.Fatalf("the timed-out pass is not audited: %v", ev)
+	}
+}
+
+// findAuditData is the first run event of action whose data holds want.
+func findAuditData(events []types.AuditEvent, runID uuid.UUID, action, want string) *types.AuditEvent {
+	for i := range events {
+		ev := &events[i]
+		if ev.RunID != nil && *ev.RunID == runID && ev.Action == action && strings.Contains(string(ev.Data), want) {
+			return ev
+		}
+	}
+	return nil
 }

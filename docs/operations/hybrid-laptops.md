@@ -262,13 +262,20 @@ What happens:
   your computer is deleted. With **Copy in only**, nothing comes back.
 - The copy follows the `wardyn sync` rules: `.git` stays on your computer, `.gitignore` and `.wardynignore` apply,
   symlinks are refused, and `WARDYN_SYNC_DENY` applies to every pass.
-- The runner checks every path itself. It lists only folders under its roots, follows no symlink, and refuses
-  credential folders such as `.ssh`, `.aws` and `.kube`. Only folder names, file counts and sizes reach
-  Wardyn while you browse. No file is sent until a run starts.
+- The runner checks every path itself:
+  - It lists only folders under its roots, and never sends a root whole: open it and choose a folder inside.
+  - It follows no symlink.
+  - It refuses a credential folder. Each pass, both ways, also leaves out every credential folder inside the one you
+    chose. Any depth and any letter case count: `.ssh`, `.aws`, `.azure`, `.claude`, `.wardyn`, `.gnupg`, `.docker`,
+    `.kube`, `.config/gh`, `.config/gcloud`, `.netrc`, `.git-credentials`, `.git/config` and `Library/Keychains`.
+    A project's own `.claude` or `.docker` folder is left out too.
+  - Only folder names, file counts and sizes reach Wardyn while you browse. No file is sent until a run starts.
 - The runner opens no port and Wardyn never connects in: each pass rides the runner's own outbound session. The
   runner never reaches into a sandbox. Wardyn joins its stream to the sandbox's own `sftp-server`.
 
 Not yet: bringing changes back when you take over a live run, live sync while the run runs, and **Pause sync**.
+For now this needs a single-replica deployment: Wardyn reaches the runner only from the replica it is connected to,
+so with several replicas a runner connected to another one reads as offline.
 
 ## Offline and revocation
 

@@ -64,16 +64,20 @@ var memberDeniedSegments = map[string]bool{
 	".gnupg":           true,
 	".docker":          true, // registry auth (and config that can name a socket)
 	".kube":            true, // cluster credentials
+	".azure":           true, // Azure CLI tokens
 	".netrc":           true,
 	".git-credentials": true,
 }
 
-// memberDeniedPairs are two-segment denials — a bare ".config" or ".git" is an
-// ordinary directory a project legitimately contains, but these two children
-// hold credentials (gh's token) and remote/credential config.
+// memberDeniedPairs are two-segment denials — a bare ".config", ".git" or
+// "Library" is an ordinary directory a project legitimately contains, but these
+// children hold credentials (gh's token, gcloud's, the macOS keychains) and
+// remote/credential config.
 var memberDeniedPairs = [][2]string{
 	{".config", "gh"},
+	{".config", "gcloud"}, // gcloud's credential database
 	{".git", "config"},
+	{"Library", "Keychains"}, // macOS keychains
 }
 
 // UserMountPolicy is the operator/MDM-set posture for MEMBER-authored

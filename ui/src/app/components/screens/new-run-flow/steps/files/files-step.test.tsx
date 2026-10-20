@@ -609,7 +609,9 @@ describe("Your computer (M4)", () => {
     computerFolders = true;
     myRunners = [LAPTOP];
     await toComputer();
-    await userEvent.click(await within(dialog()).findByRole("button", { name: NR_FILES.COMPUTER_OPEN("alice") }));
+    const openHome = await within(dialog()).findByRole("button", { name: NR_FILES.COMPUTER_OPEN("alice") });
+    expect(within(dialog()).queryByRole("radio", { name: "alice" })).toBeNull(); // a shared root is opened, never picked
+    await userEvent.click(openHome);
     await userEvent.click(await within(dialog()).findByRole("button", { name: NR_FILES.COMPUTER_OPEN("code") }));
     await userEvent.click(await within(dialog()).findByRole("radio", { name: "payments-service" }));
     const seen = await within(dialog()).findByTestId("nr-computer-will-see");

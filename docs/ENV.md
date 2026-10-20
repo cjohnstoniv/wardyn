@@ -996,7 +996,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - The absolute host directories a **member's own** `local_dir` workspace source may live under.
 - A member source is allowed only if its **canonicalized real path** (`filepath.EvalSymlinks`) is inside one of these
 - So a symlink *inside* a root pointing *out* of every root is refused
-- And never if it is or traverses a credential dotfile path (`.ssh`, `.aws`, `.claude`, `.wardyn`, `.gnupg`, `.docker`, `.kube`, `.config/gh`, `.netrc`, `.git-credentials`, `.git/config`), even when a root is too wide.
+- And never if it is or traverses a credential dotfile path (`.ssh`, `.aws`, `.azure`, `.claude`, `.wardyn`, `.gnupg`, `.docker`, `.kube`, `.config/gh`, `.config/gcloud`, `.netrc`, `.git-credentials`, `.git/config`, `Library/Keychains`), even when a root is too wide.
 - Checked at onboarding, again at run-create on the resolved spec, and a **third** time in the docker driver immediately before the bind.
 - Unset (the default) fails closed: a member can still onboard repos and use operator-owned workspaces.
 - Use a dedicated projects directory — **never `$HOME` or `/`**; boot WARNs about `/` and the daemon's `$HOME`, not a person's, but permits
@@ -1618,7 +1618,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 - Off by default. When off, New Run shows "Your computer" as blocked by your organisation, and `local_folder.runner_id` is refused with `computer_folders_off`.
 - When on, a person picks a folder through their own runner in folder-only mode (`wardyn-runnerd serve --substrate folders`). Wardyn copies it into the sandbox before the agent starts. See [hybrid-laptops.md](operations/hybrid-laptops.md#a-folder-on-your-computer-for-a-remote-sandbox).
-- It reaches no more than `wardyn sync` does today. The runner lists only folders under its roots, follows no symlink, and refuses credential folders. `WARDYN_SYNC_DENY` applies to every pass.
+- It reaches no more than `wardyn sync` does today. The runner lists only folders under its roots, never sends a root whole, follows no symlink, refuses a credential folder, and leaves out every credential folder inside the chosen one, both ways ([the list](operations/hybrid-laptops.md#a-folder-on-your-computer-for-a-remote-sandbox)). `WARDYN_SYNC_DENY` applies to every pass.
 
 ### `WARDYN_SSH_ROLE_TTL`
 
