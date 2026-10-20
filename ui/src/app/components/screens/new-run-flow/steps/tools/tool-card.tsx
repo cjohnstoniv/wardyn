@@ -14,6 +14,7 @@ import { Button } from "../../../../ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../../ui/dialog";
 import { cn } from "../../../../ui/utils";
 import { NR_REVIEW } from "../../../../wardyn/copy/new-run/review";
+import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 import { RUN_COCKPIT } from "../../../../wardyn/copy/run-cockpit";
 import { Chip } from "../../../../wardyn/primitives";
@@ -53,6 +54,20 @@ const isNothing = (a: ToolAccess) => !a.network.length && !a.credentials.length 
 const HOSTS_SHOWN = 2;
 
 const NONE = <span className="text-muted-foreground">{NR_TOOLS.DETAIL_NONE}</span>;
+
+const SEP = NR_SHARED.JOIN("", "");
+
+// A short fixed part ("Read only", "No exec") stays whole; a list or a long name may wrap, or a
+// phone-width card would overflow.
+const KEEP_WHOLE = 24;
+
+/** The Other line, each short "·"-separated part kept whole so the line only wraps between parts. */
+function Segments({ text }: { text: string }) {
+  const parts = text.split(SEP);
+  if (parts.length === 1) return <>{text}</>;
+  const whole = (p: string) => p.length <= KEEP_WHOLE && !p.includes(", ");
+  return <span>{parts.map((p, i) => <React.Fragment key={i}>{i > 0 && SEP}<span className={whole(p) ? "whitespace-nowrap" : "break-words"}>{p}</span></React.Fragment>)}</span>;
+}
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -94,7 +109,7 @@ export function AccessBreakdown({ name, access }: { name: string; access: ToolAc
         )) : NONE}
       </Row>
       <Row label={NR_TOOLS.DETAIL_FILES}>{access.files.length ? access.files.join(", ") : NONE}</Row>
-      <Row label={NR_TOOLS.DETAIL_OTHER}>{access.other || NONE}</Row>
+      <Row label={NR_TOOLS.DETAIL_OTHER}>{access.other ? <Segments text={access.other} /> : NONE}</Row>
     </dl>
   );
 }
@@ -155,7 +170,7 @@ function DetailsDialog({ icon, title, org, body, access, onClose }: { icon: stri
           ) : <p className="text-sm text-muted-foreground">{NR_TOOLS.DETAIL_NONE}</p>}
         </Section>
         <Section title={NR_TOOLS.DETAIL_OTHER}>
-          {access.otherDetail ?? (access.other ? <p className="text-sm">{access.other}</p> : <p className="text-sm text-muted-foreground">{NR_TOOLS.DETAIL_NONE}</p>)}
+          {access.otherDetail ?? (access.other ? <p className="text-sm"><Segments text={access.other} /></p> : <p className="text-sm text-muted-foreground">{NR_TOOLS.DETAIL_NONE}</p>)}
         </Section>
         <DialogFooter>
           <Button type="button" variant="ghost" onClick={onClose}>{NR_REVIEW.CLOSE}</Button>

@@ -807,7 +807,6 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `HARNESS_AFTER_LONG` | mock | Available after start |
 | `HARNESS_INCLUDED` | mock | Included, not auto-started |
 | `ACCESS_NOTE` | mock | Hosts are layered onto the organisation default, then narrowed by your ceiling. |
-| `ACCESS_KUBE_LINE(namespaces)` | mock | Namespaces {namespaces} |
 | `LIMITS_DETAIL` | mock | Ends at its limit or when the work finishes |
 | `LIMITS_VALUE(cpu, memory, lifetime)` | mock | {cpu} CPU · {memory} MiB · {lifetime} |
 | `LIMIT_UP_TO(cap, source)` | pending (W-27) | Up to {cap} · Set by {source} |

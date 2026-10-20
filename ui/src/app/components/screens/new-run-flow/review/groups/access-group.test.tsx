@@ -4,11 +4,11 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MY_COMPONENTS, ORG_KUBECTL } from "../../../../../lib/new-run-fixtures/scenarios/catalogue";
 import { SCENARIO_ACCESS } from "../../../../../lib/new-run-fixtures/scenarios/tools";
-import type { AccessFacts } from "../../../../../lib/types/new-run-access";
+import type { AccessFacts, AccessHost } from "../../../../../lib/types/new-run-access";
 import { NR_REVIEW } from "../../../../wardyn/copy/new-run/review";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 import { initialDraft } from "../../draft/run-intent";
@@ -30,5 +30,20 @@ describe("Review: Access", () => {
     expect(screen.queryByText(NR_REVIEW.POLICY_CREDENTIALS)).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: `${NR_REVIEW.CHANGE} ${NR_REVIEW.GROUP_ACCESS}` }));
     expect(await screen.findByText(NR_TOOLS.KUBE_CREDENTIAL("staging"))).toBeTruthy();
+  });
+
+  it("lists and counts the cluster's API server the server adds for a kubectl row, named for the row", async () => {
+    // The shape the server's preview gives a kubectl row's host: injected, brought by the row, its source the row.
+    const kubeHost: AccessHost = {
+      host: "api.staging.example.com", via: "injected", rows: [ORG_KUBECTL.id], verdict: "allowed",
+      source: { kind: "component", id: ORG_KUBECTL.id, name: ORG_KUBECTL.name },
+    };
+    const withHost: AccessFacts = { ...access, hosts: [...access.hosts, kubeHost] };
+    render(<AccessGroup draft={initialDraft("alice")} pre={{ access: withHost } as unknown as ReviewPreflight} preview={null} docRows={[]} go={vi.fn()} dispatch={vi.fn()} />);
+    expect(screen.getByText(NR_REVIEW.POLICY_HOSTS(2))).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: `${NR_REVIEW.CHANGE} ${NR_REVIEW.GROUP_ACCESS}` }));
+    const group = screen.getByRole("group", { name: NR_REVIEW.GROUP_ACCESS });
+    const row = within(group).getByText(kubeHost.host).parentElement as HTMLElement;
+    expect(within(row).getByText(ORG_KUBECTL.name)).toBeTruthy();
   });
 });

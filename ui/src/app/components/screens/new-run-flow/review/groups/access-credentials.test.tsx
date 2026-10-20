@@ -31,7 +31,7 @@ describe("Review, Access: a kubectl cluster's credential", () => {
     expect(screen.getByRole("heading", { name: NR_REVIEW.POLICY_CREDENTIALS })).toBeTruthy();
     await waitFor(() => expect(screen.getByText(NR_TOOLS.KUBE_CREDENTIAL("staging"))).toBeTruthy());
     expect(screen.getByText(NR_TOOLS.FOR_ROW(ORG_KUBECTL.name))).toBeTruthy();
-    expect(screen.getByText(`${NR_REVIEW.ACCESS_KUBE_LINE("web, jobs")} · ${NR_TOOLS.KUBE_READ_ONLY} · ${NR_TOOLS.KUBE_NO_EXEC}`)).toBeTruthy();
+    expect(screen.getByText(`${NR_TOOLS.KUBE_NAMESPACES("web, jobs")} · ${NR_TOOLS.KUBE_READ_ONLY} · ${NR_TOOLS.KUBE_NO_EXEC}`)).toBeTruthy();
     expect(screen.getByText(NR_TOOLS.DELIVERY_PROXY)).toBeTruthy();
   });
 

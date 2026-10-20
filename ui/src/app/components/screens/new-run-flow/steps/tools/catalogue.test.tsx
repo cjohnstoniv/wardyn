@@ -590,6 +590,15 @@ describe("what a tool card brings", () => {
       ]);
     });
 
+    it("says the cluster comes from your organisation, and the grid never forces a card wider than a phone", async () => {
+      await show();
+      const heading = await screen.findByRole("heading", { name: ORG_KUBECTL.name });
+      expect(heading.closest("li")?.textContent).toContain(NR_TOOLS.FROM_ORG);
+      const grid = screen.getByTestId("nr-tool-grid");
+      expect(grid.className).toContain("minmax(min(320px,100%),1fr)");
+      expect(grid.className).toContain("items-start");
+    });
+
     it("says read and write for a row that may change things", async () => {
       const write = { ...ORG_KUBECTL, cli: { ...ORG_KUBECTL.cli!, access: "write", namespaces: ["sandbox"] } };
       h.mine.mockResolvedValue({ ...catalogue({ kubectl: [ORG_KUBECTL.id] }), org: [write] });
