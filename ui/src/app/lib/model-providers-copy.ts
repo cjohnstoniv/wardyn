@@ -89,6 +89,7 @@ export const MODEL_PROVIDERS = {
     anthropic_api_key: "Anthropic API key",
     openai_api_key: "OpenAI API key",
     custom_endpoint: "Your own endpoint",
+    local_model: "Local model server",
   } satisfies Record<ModelProviderKind, string>,
   PROVIDES: {
     SSO: "Each person signs in with one click",
@@ -123,6 +124,7 @@ export function providesLine(kind: ModelProviderKind): string {
     case "bedrock_sso":
       return MODEL_PROVIDERS.PROVIDES.SSO;
     case "custom_endpoint":
+    case "local_model": // with a token; the list says so for one without (LOCAL_MODEL_LIST.PROVIDES_NONE)
       return MODEL_PROVIDERS.PROVIDES.TOKEN;
     default:
       return MODEL_PROVIDERS.PROVIDES.KEY;

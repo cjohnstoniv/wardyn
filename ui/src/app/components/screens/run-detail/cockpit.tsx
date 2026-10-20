@@ -28,6 +28,7 @@ import { type ConsoleView } from "../../wardyn/console-view";
 import { VIEWER_APPROVAL_BLOCKS_NOTE } from "../../wardyn/copy";
 import { RunCanvas } from "./canvas";
 import { RunFailureBlock } from "./failure-block";
+import { LocalModelsCard } from "./local-models-card";
 import { LoginSandboxNote } from "./login-sandbox-note";
 import { TerminalPane } from "./terminal-notice";
 import type { WidgetContext } from "./widget-registry";
@@ -186,5 +187,10 @@ export function Cockpit({
     terminalPane,
   };
 
-  return <RunCanvas ctx={ctx} />;
+  return (
+    <>
+      <LocalModelsCard run={run} audit={audit} />
+      <RunCanvas ctx={ctx} />
+    </>
+  );
 }

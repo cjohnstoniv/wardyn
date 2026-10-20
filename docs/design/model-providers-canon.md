@@ -30,6 +30,7 @@ takes. The packet supersedes the design record's §5.1 chips: the admin's own co
 | `MODEL_PROVIDERS.KIND.anthropic_api_key` | second line, only when the name differs | Anthropic API key |
 | `MODEL_PROVIDERS.KIND.openai_api_key` | second line, only when the name differs | OpenAI API key |
 | `MODEL_PROVIDERS.KIND.custom_endpoint` | second line, only when the name differs | Your own endpoint |
+| `MODEL_PROVIDERS.KIND.local_model` | second line, only when the name differs | Local model server |
 | `MODEL_PROVIDERS.PROVIDES.SSO` | A2, A5, A9 | Each person signs in with one click |
 | `MODEL_PROVIDERS.PROVIDES.TOKEN` | A3, A4 | Each person adds their own token |
 | `MODEL_PROVIDERS.PROVIDES.KEY` | A3, A5, A7, A8 | Each person adds their own key |

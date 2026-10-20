@@ -9,13 +9,15 @@
 // from the name, every compatible agent ticked, rule 8) are testable without
 // rendering the dialog.
 import { IMPOSSIBLE } from "../../../lib/integrations";
+import { LOCAL_MODEL_EDITOR } from "../../../lib/local-model-copy";
 import { MODEL_PROVIDERS, PROVIDER_EDITOR } from "../../../lib/model-providers-copy";
 import type { ModelProvider, ModelProviderKind, ProviderHarness } from "../../../lib/types/site";
 import { agentCapabilityFor } from "../providers/agents-tab";
 
-// The five kinds the editor draws, in the kind step's order (mp-packet-B.html
-// §"Case (a) first"): Claude subscription, Amazon Bedrock, Anthropic API key,
-// OpenAI API key, Your own endpoint. "Amazon Bedrock" is ONE kind-step option
+// The six kinds the editor draws, in the kind step's order (mp-packet-B.html
+// §"Case (a) first", and M9's one added row): Claude subscription, Amazon
+// Bedrock, Anthropic API key, OpenAI API key, Your own endpoint, Local model
+// server. "Amazon Bedrock" is ONE kind-step option
 // that starts a bedrock_sso draft — the "How people sign in" toggle inside the
 // form (#538, E3) is what reaches bedrock_bearer; that kind is never a kind-
 // step option of its own; editing a stored bedrock_bearer provider reaches the
@@ -26,6 +28,7 @@ export const EDITOR_KINDS = [
   "anthropic_api_key",
   "openai_api_key",
   "custom_endpoint",
+  "local_model",
 ] as const;
 export type EditorKind = (typeof EDITOR_KINDS)[number];
 
@@ -56,10 +59,18 @@ export interface ProviderDraft {
   ssoStartUrl: string;
   ssoAccountId: string;
   ssoRoleName: string;
+  // local_model only. `useToken` is the "This server asks for a token" switch (auth is
+  // sent only while it is on); the three limits are text, empty meaning the default.
+  useToken: boolean;
+  models: string[];
+  maxContext: string;
+  maxOutput: string;
+  keepAlive: string;
   harnesses: Record<string, HarnessDraft>;
 }
 
 export const isEndpoint = (kind: ModelProviderKind) => kind === "custom_endpoint";
+export const isLocal = (kind: ModelProviderKind) => kind === "local_model";
 
 // The vendor host a key kind's route-through re-points (providerPublicHosts).
 export const vendorHost = (kind: ModelProviderKind) =>
@@ -76,6 +87,8 @@ export function editorProvidesLine(kind: ModelProviderKind): string {
       return PROVIDER_EDITOR.PROVIDES_CLAUDE;
     case "custom_endpoint":
       return PROVIDER_EDITOR.PROVIDES_TOKEN;
+    case "local_model":
+      return LOCAL_MODEL_EDITOR.DESCRIPTION;
     default:
       return PROVIDER_EDITOR.PROVIDES_KEY;
   }
@@ -108,6 +121,11 @@ export function newDraft(kind: EditorKind, harnesses: HarnessRow[]): ProviderDra
     ssoStartUrl: "",
     ssoAccountId: "",
     ssoRoleName: "",
+    useToken: false,
+    models: [],
+    maxContext: "",
+    maxOutput: "",
+    keepAlive: "",
     harnesses: Object.fromEntries(
       harnesses.map((h) => [h.id, { ticked: !incompatibleReason(kind, h.id), model: "", path: "" }]),
     ),
@@ -130,6 +148,11 @@ export function draftFrom(p: ModelProvider, harnesses: HarnessRow[]): ProviderDr
     ssoStartUrl: p.bedrock?.sso_start_url ?? "",
     ssoAccountId: p.bedrock?.sso_account_id ?? "",
     ssoRoleName: p.bedrock?.sso_role_name ?? "",
+    useToken: !!p.auth,
+    models: p.local?.models ?? [],
+    maxContext: p.local?.max_context ? String(p.local.max_context) : "",
+    maxOutput: p.local?.max_output ? String(p.local.max_output) : "",
+    keepAlive: p.local?.keep_alive_seconds ? String(p.local.keep_alive_seconds) : "",
     harnesses: rows,
   };
 }
@@ -149,11 +172,16 @@ export function providerIdFrom(name: string, taken: string[]): string {
   return id;
 }
 
+// A limit field: empty is the default (absent), anything else goes to the server as typed, so its
+// "must be between" answer is the one the admin reads.
+const limit = (v: string): number | undefined => (v.trim() === "" ? undefined : Number(v));
+
 // The record a Save writes. `base` is the stored provider when editing: its id
 // stays, and anything the editor doesn't show (turned off, a per-agent header
 // scheme) is carried through untouched.
 export function providerFrom(draft: ProviderDraft, base: ModelProvider | null, taken: string[]): ModelProvider {
   const endpoint = isEndpoint(draft.kind);
+  const local = isLocal(draft.kind);
   const bedrock = isBedrock(draft.kind);
   const sso = draft.kind === "bedrock_sso";
   const name = draft.name.trim();
@@ -162,7 +190,8 @@ export function providerFrom(draft: ProviderDraft, base: ModelProvider | null, t
     .map(([id, h]) => ({
       ...base?.harnesses?.find((x) => x.harness === id),
       harness: id,
-      model: h.model.trim() || undefined,
+      // A local model's agent asks for one of the listed models; the first when none was picked.
+      model: h.model.trim() || (local ? draft.models[0] : undefined),
       path: endpoint ? h.path.trim() : undefined,
     }));
   return {
@@ -171,8 +200,18 @@ export function providerFrom(draft: ProviderDraft, base: ModelProvider | null, t
     name,
     kind: draft.kind,
     base_url: draft.baseUrl.trim() || undefined,
-    auth: endpoint
-      ? { header: draft.authHeader.trim() || undefined, format: toWireFormat(draft.authFormat.trim()) || undefined }
+    auth:
+      endpoint || (local && draft.useToken)
+        ? { header: draft.authHeader.trim() || undefined, format: toWireFormat(draft.authFormat.trim()) || undefined }
+        : undefined,
+    local: local
+      ? {
+          ...base?.local,
+          models: draft.models,
+          max_context: limit(draft.maxContext),
+          max_output: limit(draft.maxOutput),
+          keep_alive_seconds: limit(draft.keepAlive),
+        }
       : undefined,
     // Anything the editor doesn't show (a custom Bedrock endpoint override) is
     // carried through untouched, same rule as the endpoint kind's per-harness
@@ -191,7 +230,8 @@ export function providerFrom(draft: ProviderDraft, base: ModelProvider | null, t
 }
 
 const normURL = (u?: string) => (u ?? "").trim().replace(/\/$/, "");
-const header = (p: ModelProvider) => (isEndpoint(p.kind) ? p.auth?.header?.trim() || "Authorization" : "");
+const header = (p: ModelProvider) =>
+  isEndpoint(p.kind) || (isLocal(p.kind) && p.auth) ? p.auth?.header?.trim() || "Authorization" : "";
 
 // Rule 8, the server's providerAddressChanged: where requests go, or how each
 // person's credential is sent, differs — which deletes everyone's credential
@@ -224,3 +264,25 @@ export function addressChanged(a: ModelProvider, b: ModelProvider): boolean {
     ),
   );
 }
+
+// Which field a refused save's own sentence is about (M9: the field it names is
+// outlined beside the red card). Read off the server's wording, so a refusal the
+// editor doesn't recognise outlines nothing and the card still says all of it.
+export type RefusedField = "base_url" | "models" | "max_context" | "max_output" | "keep_alive_seconds";
+
+export function refusedField(message: string | null): RefusedField | null {
+  if (!message) return null;
+  if (message.includes("model must be one of local.models")) return null; // a harness's, see refusedHarness
+  if (message.includes("base_url")) return "base_url";
+  if (message.includes("local.models")) return "models";
+  return (["max_context", "max_output", "keep_alive_seconds"] as const).find((f) => message.includes(`local.${f}`)) ?? null;
+}
+
+// The agent whose Model the server refused ("codex-cli: model must be one of local.models").
+export function refusedHarness(message: string | null): string | null {
+  return message?.match(/: ([a-z0-9-]+): model must be one of local\.models/)?.[1] ?? null;
+}
+
+// Whether the refusal names this chip ('local.models: "x" is not a model name', 'lists "x" twice').
+export const refusedModel = (message: string | null, name: string): boolean =>
+  !!message && message.includes("local.models") && message.includes(`"${name}"`);
