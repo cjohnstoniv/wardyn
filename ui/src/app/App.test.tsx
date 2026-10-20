@@ -12,7 +12,7 @@
 import { describe, it, expect, vi, afterEach, type Mock } from "vitest";
 import { act, render, screen, cleanup, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import App, { FirstRunLanding } from "./App";
 import { roleCanReach } from "./components/wardyn/reauth-layer";
 import { SESSION_ENDED_REASON } from "./lib/api/core";
@@ -199,6 +199,71 @@ describe("App — the sign-in screen's notice", () => {
 
 // The reauth dialog itself (#483) is pinned in App.reauth.test.tsx; the path a
 // different person reloads to is decided by roleCanReach, pinned directly here.
+
+function Where() {
+  const l = useLocation();
+  return <output data-testid="where">{l.pathname + l.search}</output>;
+}
+
+describe("App — where a token sign-in lands (#2493)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    sessionStorage.clear();
+    cleanup();
+  });
+
+  function renderAt(initialPath: string) {
+    return render(
+      <MemoryRouter initialEntries={[initialPath]}>
+        <App />
+        <Where />
+      </MemoryRouter>,
+    );
+  }
+
+  it("returns to the deep link the person opened, not /runs", async () => {
+    const gate = { open: false };
+    const base = mockFetch({}).fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
+        const u = String(url);
+        if (u.includes("/runs?limit=1") && !u.includes("limit=1000") && !gate.open) {
+          return Promise.resolve(jsonResponse(401, { error: "unauthorized" }));
+        }
+        return base(url, init);
+      }),
+    );
+    renderAt("/admin/settings?tab=people");
+    await screen.findByText("Admin token", { exact: true });
+
+    const user = userEvent.setup();
+    gate.open = true;
+    setField(screen.getByLabelText("Admin token"), "any-token");
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await screen.findByText("admin settings screen stub");
+    expect(screen.getByTestId("where")).toHaveTextContent("/admin/settings?tab=people");
+  });
+
+  it("after a deliberate sign-out the next person starts at /runs, not the last page", async () => {
+    vi.stubGlobal("fetch", mockFetch({}).fetch);
+    renderAt("/admin/settings");
+    const user = userEvent.setup();
+    const header = await screen.findByRole("banner");
+    await waitFor(() => expect(within(header).getByText("cj")).toBeInTheDocument());
+    const headerButtons = within(header).getAllByRole("button");
+    await user.click(headerButtons[headerButtons.length - 1]);
+    await user.click(within(await screen.findByRole("menu")).getByText("Sign out"));
+    await screen.findByText("Admin token", { exact: true });
+
+    setField(screen.getByLabelText("Admin token"), "any-token");
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await screen.findByText("runs screen stub");
+    expect(screen.getByTestId("where")).toHaveTextContent(/^\/runs$/);
+  });
+});
 
 describe("roleCanReach — pure", () => {
   // ticket: M2

@@ -643,11 +643,14 @@ export default function App() {
         <SignIn
           reason={signedOut ? SESSION_ENDED_REASON : undefined}
           onSignIn={() => {
+            // The gate does not mount the Routes, so the URL the person arrived on is still current; after
+            // a deliberate sign-out it is the previous person's last page, so the next one starts at /runs.
+            const returnTo = signedOutHereRef.current ? "/runs" : safeReturnPath(location.pathname + location.search);
             signingOutRef.current = false;
             signedOutHereRef.current = false;
             setSignedOut(false);
             setAuth("authed");
-            void navigate("/runs", { replace: true });
+            void navigate(returnTo, { replace: true });
           }}
         />
         <Toaster />
