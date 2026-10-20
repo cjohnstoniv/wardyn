@@ -1471,7 +1471,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 ### `WARDYN_GOVERNANCE_PROFILE_PUT_EXISTING_ONLY`
 
-- Off (the default): `PUT /api/v1/governance/profiles/{id}` naming an id no profile holds creates one there, logged at INFO as a create the switch would refuse.
+- Off (the default): `PUT /api/v1/governance/profiles/{id}` naming an id no profile holds creates one there. A direct write is logged at INFO as a create the switch would refuse; one held for a second person is not.
 - On: that PUT answers `404 governance_profile_not_found`; create a profile with `POST /api/v1/governance/profiles`, which mints the id (flag `-governance-profile-put-existing-only`).
 
 ### `WARDYN_EGRESS_HOST_PORT_GRANTS_INERT`
