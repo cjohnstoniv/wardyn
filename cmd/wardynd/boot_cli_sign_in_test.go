@@ -69,7 +69,8 @@ func TestCLISignInWarnsWithoutSSO(t *testing.T) {
 			t.Cleanup(func() { slog.SetDefault(prev) })
 			cliSignInFlags{enabled: tc.enabled}.warnWithoutSSO(tc.sso)
 			out := buf.String()
-			if warned := strings.Contains(out, "level=WARN") && strings.Contains(out, "WARDYN_CLI_SIGN_IN is set but SSO is not configured"); warned != tc.warns {
+			if warned := strings.Contains(out, "level=WARN") && strings.Contains(out, "WARDYN_CLI_SIGN_IN is set but SSO is not configured") &&
+				strings.Contains(out, "Set WARDYN_OIDC_ISSUER (SSO) to turn it on, or unset WARDYN_CLI_SIGN_IN"); warned != tc.warns {
 				t.Errorf("warned = %v, want %v; log: %q", warned, tc.warns, out)
 			}
 		})

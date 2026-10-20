@@ -62,6 +62,6 @@ func (c cliSignInFlags) config(oidcRedirectURL string) api.CLISignInConfig {
 // sign-in needs a browser session to approve with, so it stays off (every route a 404, /healthz false).
 func (c cliSignInFlags) warnWithoutSSO(oidcConfigured bool) {
 	if orZero(c.enabled) && !oidcConfigured {
-		slog.Warn("wardynd: WARDYN_CLI_SIGN_IN is set but SSO is not configured, so CLI sign-in stays off and the CLI keeps using WARDYN_TOKEN. Configure OIDC sign-in to turn it on, or unset it.")
+		slog.Warn("wardynd: WARDYN_CLI_SIGN_IN is set but SSO is not configured, so CLI sign-in stays off and the CLI keeps using WARDYN_TOKEN. Set WARDYN_OIDC_ISSUER (SSO) to turn it on, or unset WARDYN_CLI_SIGN_IN.")
 	}
 }
