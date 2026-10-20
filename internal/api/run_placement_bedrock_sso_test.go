@@ -140,7 +140,7 @@ func TestLocalSecretEnvKeysHaveCreateTimeIntents(t *testing.T) {
 		envKeys := f.srv.resolveEnvSecretGrants(ctx, run, policy, env)
 		if c.codexMCP {
 			var injections []runner.InjectionGrant
-			dispatchMCP([]componentMCP{{Key: "docs", URL: "https://mcp.example/", Host: "mcp.example", Harnesses: []string{codexHarness}}}, &injections, "http://proxy.invalid", false, env)
+			dispatchMCP([]componentMCP{{Key: "docs", URL: "https://mcp.example/", Host: "mcp.example", Harnesses: []string{codexHarness}}}, withholding{}, &injections, "http://proxy.invalid", false, env)
 		}
 		spec := runner.SandboxSpec{RunID: run.ID, ProxyConfig: runner.ProxyConfig{Policy: policy}}
 		spec.SecretEnv = splitSecretEnv(env, dispatchSecretEnvKeys(envKeys, llm))

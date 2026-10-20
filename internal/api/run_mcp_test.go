@@ -123,7 +123,7 @@ func TestDispatchMCP_CredentialMovesToBroker(t *testing.T) {
 		{Ordinal: 2, Key: "public", URL: "https://mcp.public.test/mcp", Host: "mcp.public.test", Harnesses: []string{"claude-code"}},
 	}
 	env := map[string]string{}
-	out := dispatchMCP(servers, &injections, "http://wardyn-proxy:3128/", false, env)
+	out := dispatchMCP(servers, withholding{}, &injections, "http://wardyn-proxy:3128/", false, env)
 	if len(injections) != 1 || injections[0].GrantID != other {
 		t.Fatalf("injections %+v: the MCP credential must leave the generic injector", injections)
 	}
@@ -154,7 +154,7 @@ func TestDispatchMCP_CredentialMovesToBroker(t *testing.T) {
 			t.Fatalf("%s: url %q, bindings %+v", harness, u, cfg.MCPBindings)
 		}
 	}
-	if out := dispatchMCP(servers[2:], &injections, "http://p:3128", true, env); out.files[0].Path != claudeMCPInteractivePath {
+	if out := dispatchMCP(servers[2:], withholding{}, &injections, "http://p:3128", true, env); out.files[0].Path != claudeMCPInteractivePath {
 		t.Fatalf("interactive file %s", out.files[0].Path)
 	}
 }
@@ -272,7 +272,7 @@ func TestMCPServerKeys_OrgKeysFollowComponentIDNotAttachOrder(t *testing.T) {
 // given it.
 func TestDispatchMCP_AutonomousRunNeverCarriesManagedMCP(t *testing.T) {
 	servers := []componentMCP{{Key: "linear", URL: "https://mcp.linear.test/mcp", Harnesses: []string{"claude-code", "codex-cli"}}}
-	out := dispatchMCP(servers, &[]runner.InjectionGrant{}, "http://p:3128", false, map[string]string{})
+	out := dispatchMCP(servers, withholding{}, &[]runner.InjectionGrant{}, "http://p:3128", false, map[string]string{})
 	for _, f := range out.files {
 		if f.Path == claudeMCPInteractivePath {
 			t.Fatalf("autonomous run carries %s", f.Path)
@@ -295,7 +295,7 @@ func TestReviveMCPBindingsNarrows_BuiltinFirst(t *testing.T) {
 		{snapshot: types.RunComponent{SelfDefined: true, Name: "Alpha", Definition: mcp("mcp.alpha.test"), MCPHarnesses: []string{"codex-cli"}}},
 		{snapshot: types.RunComponent{SelfDefined: true, Name: "Beta", Definition: mcp("mcp.beta.test"), MCPHarnesses: []string{"codex-cli"}}},
 	}}
-	out := dispatchMCP(comps.dispatch().MCP, &[]runner.InjectionGrant{}, "http://p:3128", false, map[string]string{})
+	out := dispatchMCP(comps.dispatch().MCP, withholding{}, &[]runner.InjectionGrant{}, "http://p:3128", false, map[string]string{})
 	cfg := proxy.Config{MCPServers: out.servers, MCPBindings: out.bindings}
 	rows := []types.RunComponent{{Ordinal: 0, Erased: true, MCPHarnesses: []string{"codex-cli"}},
 		{Ordinal: 1, Definition: mcp("mcp.beta.test"), MCPHarnesses: []string{"codex-cli"}}}
@@ -428,7 +428,7 @@ func TestReviveCeilingDropsADeniedMCPServer(t *testing.T) {
 		},
 		MCPBindings: []proxy.MCPBinding{{Harness: "claude-code", Servers: []string{"linear", "other"}}},
 	}
-	re, rerr := reassertProxyCeiling(run, cfg, ownerCeiling{deny: []string{"*.linear.test"}})
+	re, rerr := reassertProxyCeiling(run, cfg, ownerCeiling{deny: []string{"*.linear.test"}}, nil)
 	if rerr != nil {
 		t.Fatalf("refused: %+v", rerr)
 	}
@@ -445,7 +445,7 @@ func TestReviveCeilingDropsADeniedMCPServer(t *testing.T) {
 	injections := []runner.InjectionGrant{{GrantID: linear, Rule: egress.InjectionRule{Host: "mcp.linear.test"}}}
 	injections = slices.DeleteFunc(injections, func(in runner.InjectionGrant) bool { return ceilingDenies([]string{"*.linear.test"}, in.Rule.Host) })
 	servers := []componentMCP{{Key: "linear", URL: "https://mcp.linear.test/mcp", Host: "mcp.linear.test", Harnesses: []string{"claude-code"}, Credentialed: true}}
-	if out := dispatchMCP(servers, &injections, "http://p:3128", false, map[string]string{}); len(out.servers) != 0 {
+	if out := dispatchMCP(servers, withholding{}, &injections, "http://p:3128", false, map[string]string{}); len(out.servers) != 0 {
 		t.Errorf("dispatch brokered %+v without its withheld credential", out.servers)
 	}
 }

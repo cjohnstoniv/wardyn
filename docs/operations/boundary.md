@@ -35,6 +35,20 @@ A knob the boundary does not name is left as the layers below set it. `contact` 
 - The seal keeps an explicit `allow_all_egress: false` on its own: with no `allowed_domains` it turns allow-all off and keeps the run's own allowlist, so a paused run that allowed all egress is revived closed.
 - In `hard_limits` no one can approve an egress request for a host the boundary denies or does not allow. The refusal is `403 boundary_host`.
 
+## Credentials withheld
+
+After the seal, at dispatch and at revive, every credential lane that reaches a host the boundary denies or does not allow is withheld:
+
+- the git broker, when the boundary withholds any host it re-originates to (`github.com`, `api.github.com`, `codeload.github.com`, `*.githubusercontent.com`), with the grant id in the sandbox's env;
+- the PAT broker, per host; the GitHub CLI and Azure CLI doors; the Bedrock lane;
+- each header injection, a component's interception entry and an MCP server with its harness bindings.
+
+A revive whose git broker or Azure CLI the boundary no longer allows is refused (`409`); start a new run.
+
+`spec.eligible_grants` binds every grant a run holds, the ones its launch adds included (model provider, workspace, integration and source-control credentials). A grant outside it is dropped at dispatch with its injection, its broker entry and its env or file secret. The run's `run.ceiling.reassert` row carries `boundary: true` and the `withheld_grants` ids, also for a run no profile applies to.
+
+The mint and redeem doors check the same rules live, before anything is minted: a grant the boundary or the run's profile now withholds is refused with `403 credential_withheld` and a `credential.mint` denied row. If the run, its grants, its profile or the boundary cannot be read, the answer is `503` (`credential_withheld_unread` at mint, `store_unavailable` at redeem); retry. The AWS SSO renewer skips a grant it withholds.
+
 ## Changing it
 
 1. Draft the document and send it to `POST /api/v1/governance/dry-run`. Nothing is written. The dry run judges the draft as `hard_limits`, whatever its `mode`.
@@ -58,4 +72,4 @@ The dry run calls the same function the resolve calls in `hard_limits`, so its r
 | Gap | Follow-up |
 | --- | --- |
 | Runner placement, concurrent-run caps and door switches | Planned boundary knobs; not held by this document yet. |
-| Grants a launch adds after its policy resolves | The final seal bounds hosts only; grants follow with the brokered-credential checks. |
+| A model credential the deployment holds, not a grant (a host-configured Bedrock key) | Withheld by its host only; `eligible_grants` cannot name it. |

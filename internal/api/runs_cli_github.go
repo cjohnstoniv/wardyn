@@ -149,11 +149,12 @@ const githubDoorLane = "github_api"
 // (componentHostsBounded), as componentRefused words an organisation's component: "this component ...".
 const githubCLIBlockedOrgProblem = "uses the GitHub CLI, and GitHub is blocked by your organisation."
 
-// githubDoorWithheld reports whether a ceiling's denies take the GitHub CLI door away. The door
+// githubDoorWithheld reports whether the run's withholding takes the GitHub CLI door away. The door
 // follows the git broker's family rule, not an exact-host one: a profile that denies any host
-// the broker re-originates to (github.com among them) has walled GitHub off, and a credentialed
-// lane on api.github.com must not outlive that. Plain egress to api.github.com stays exact-host.
-func githubDoorWithheld(deny []string) bool { return ceilingDeniesAny(deny, gitBrokerManagedHosts) }
+// the broker re-originates to (github.com among them), or a Wardyn boundary that denies one or leaves
+// one out of its allowlist, has walled GitHub off, and a credentialed lane on api.github.com must not
+// outlive that. Plain egress to api.github.com stays exact-host.
+func githubDoorWithheld(w withholding) bool { return w.withheldAny(gitBrokerManagedHosts) }
 
 // closeGitHubDoor puts back what confineBrokerEgress lifted for the door: the host's :443 allow
 // goes and its deny returns, so a run whose door was withheld meets the same wall as one that
@@ -165,12 +166,18 @@ func closeGitHubDoor(policy *types.RunPolicySpec) {
 	}
 }
 
-// dropGitHubDoor withholds the door at dispatch when the ceiling walls GitHub off: no grant, no
+// dropGitHubDoor withholds the door at dispatch when the ceiling or the boundary walls GitHub off: no grant, no
 // inert token in the sandbox, and the host closed again. It returns the lane it dropped, if any.
-func dropGitHubDoor(deny []string, policy *types.RunPolicySpec, p *dispatchParams, sandboxEnv map[string]string) []string {
-	if p.Components.GitHubAPI == nil || !githubDoorWithheld(deny) {
+func dropGitHubDoor(w withholding, policy *types.RunPolicySpec, p *dispatchParams, sandboxEnv map[string]string) []string {
+	if p.Components.GitHubAPI == nil || !githubDoorWithheld(w) {
 		return nil
 	}
+	return withdrawGitHubDoor(policy, p, sandboxEnv)
+}
+
+// withdrawGitHubDoor takes the run's door away: no grant, no inert token in the sandbox, and the
+// host closed again.
+func withdrawGitHubDoor(policy *types.RunPolicySpec, p *dispatchParams, sandboxEnv map[string]string) []string {
 	p.Components.GitHubAPI = nil
 	closeGitHubDoor(policy)
 	if sandboxEnv["GH_TOKEN"] == githubCLITokenSentinel {

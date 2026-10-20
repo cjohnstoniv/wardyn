@@ -333,7 +333,7 @@ func TestGitHubCLI_DispatchWithholdsTheDoorUnderAFamilyDeny(t *testing.T) {
 			policy := types.RunPolicySpec{}
 			env := map[string]string{}
 			confineBrokerEgress(&policy, p, env)
-			dropped := dropGitHubDoor(tc.deny, &policy, &p, env)
+			dropped := dropGitHubDoor(withholding{deny: tc.deny}, &policy, &p, env)
 			if (p.Components.GitHubAPI != nil) != tc.wantDoor || (len(dropped) == 0) != tc.wantDoor {
 				t.Fatalf("door = %+v dropped %v, want present %v", p.Components.GitHubAPI, dropped, tc.wantDoor)
 			}
@@ -365,7 +365,7 @@ func TestGitHubCLI_ReviveWithholdsTheDoorUnderAFamilyDeny(t *testing.T) {
 			cfg := &proxy.Config{RunID: run.ID,
 				GitHubAPI: &proxy.GitHubAPIGrant{Repos: []string{"acme/app"}, Grants: map[string]uuid.UUID{"acme": uuid.New()}},
 				Policy:    types.RunPolicySpec{AllowedDomains: []string{"api.github.com:443"}}}
-			re, rerr := reassertProxyCeiling(run, cfg, ownerCeiling{deny: tc.deny})
+			re, rerr := reassertProxyCeiling(run, cfg, ownerCeiling{deny: tc.deny}, nil)
 			if rerr != nil {
 				t.Fatalf("refused: %+v", rerr)
 			}

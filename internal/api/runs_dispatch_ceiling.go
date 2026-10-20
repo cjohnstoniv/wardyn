@@ -5,12 +5,15 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"maps"
 	"net/http"
 	"slices"
 	"strings"
+
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -394,6 +397,88 @@ func ceilingDeniesAny(deny []string, hosts []string) bool {
 	return slices.ContainsFunc(hosts, func(h string) bool { return ceilingDenies(deny, h) })
 }
 
+// withholding decides which credentials a run is not given (#3238). A host is withheld when the
+// ceiling (a profile's walls) denies it, or an outer layer the final seal met denies it or names an
+// allowlist that does not cover it (sealLayer: the Wardyn boundary in hard_limits, or a boundary that
+// could not be read, which allows nothing). The ceiling's own allowlist never withholds: the late
+// hosts a run is trusted with (workspace, model, source control) sit outside it, bounded by their
+// source. With no ceiling denies and no layer it withholds nothing, which is every run in no_limits
+// with no profile.
+type withholding struct {
+	deny   []string
+	layers []sealLayer
+}
+
+// binds reports whether anything can be withheld at all.
+func (w withholding) binds() bool {
+	return len(w.deny) > 0 || slices.ContainsFunc(w.layers, func(l sealLayer) bool {
+		return l.grants != nil || l.egress.AllowedDomains != nil || (l.egress.DeniedDomains != nil && len(*l.egress.DeniedDomains) > 0)
+	})
+}
+
+// grantWithheld reports whether a grant is kept from the run whatever its host: a layer names the
+// grants a run may be given and none of them covers it (governanceGrantWithinCeiling, the comparator
+// the resolve meet uses). It binds every grant the run holds, the ones a launch adds (model
+// provider, workspace, integration and source-control credentials) included.
+func (w withholding) grantWithheld(g types.GrantSpec) bool {
+	return slices.ContainsFunc(w.layers, func(l sealLayer) bool {
+		return l.grants != nil && governanceGrantWithinCeiling(g, *l.grants) != nil
+	})
+}
+
+// credentialWithheld reports whether a grant is kept from the run: by its kind and scope
+// (grantWithheld), or because a host it delivers to is withheld (grantHosts).
+func (w withholding) credentialWithheld(g types.GrantSpec) bool {
+	return w.grantWithheld(g) || w.withheldAny(grantHosts(g))
+}
+
+// grantHosts is the hosts a grant's credential is delivered to: the git broker's re-origination set
+// for a GitHub installation token, the scope's host for a PAT, an SSH key or a header injection.
+// A grant with no host of its own (a cloud or a resident secret) has none.
+func grantHosts(g types.GrantSpec) []string {
+	switch g.Kind {
+	case types.GrantGitHubToken:
+		return gitBrokerManagedHosts
+	case types.GrantGitPAT:
+		if sc, err := types.DecodeGitPATScope(g.Scope); err == nil && sc.Host != "" {
+			return []string{sc.Host}
+		}
+	case types.GrantSSHKey:
+		if h, _, _, _, err := sshKeyScopeFields(g.Scope); err == nil && h != "" {
+			return []string{h}
+		}
+	case types.GrantAPIKey:
+		var sc struct {
+			Host string `json:"host"`
+		}
+		if json.Unmarshal(g.Scope, &sc) == nil && sc.Host != "" {
+			return []string{sc.Host}
+		}
+	}
+	return nil
+}
+
+// withheld reports whether a credential for host is kept from the run.
+func (w withholding) withheld(host string) bool {
+	return ceilingDenies(w.deny, host) || w.layerWithheld(host)
+}
+
+// layerWithheld is withheld by the outer layers alone.
+func (w withholding) layerWithheld(host string) bool {
+	for _, l := range w.layers {
+		if d := l.egress.DeniedDomains; d != nil && ceilingDenies(*d, host) {
+			return true
+		}
+		if a := l.egress.AllowedDomains; a != nil && !ceilingDenies(*a, host) {
+			return true
+		}
+	}
+	return false
+}
+
+// withheldAny is withheld over a set of hosts: a lane whose traffic reaches any withheld host goes.
+func (w withholding) withheldAny(hosts []string) bool { return slices.ContainsFunc(hosts, w.withheld) }
+
 // unionCeilingDenies appends the ceiling's denies the run does not already
 // carry and returns what it added.
 //
@@ -452,8 +537,13 @@ func unionCeilingDenies(policy *types.RunPolicySpec, deny []string) []string {
 //     structurally impossible" would be false at exactly the hosts holding the
 //     company's code.
 //
-// Where it runs, and why there. Immediately AFTER confineGitBrokerEgress and
-// before buildRunMounts / the ProxyConfig snapshot. Every phase that can WIDEN
+// What is withheld is decided by withholding: the ceiling's denies, and the
+// outer layers the final seal met (layers, nil in no_limits), so a host the
+// Wardyn boundary denies or does not allow loses its credential too (#3238).
+//
+// Where it runs, and why there. Immediately AFTER the final seal (itself after
+// confineGitBrokerEgress) and before buildRunMounts / the ProxyConfig snapshot,
+// so it judges the sealed policy against the same layers the seal read. Every phase that can WIDEN
 // the run is above it — the artifact substitution and its injections
 // (substituteArtifactEgress / planArtifactRedirect), the LLM transport's Bedrock
 // egress, the subscription and Bedrock-bearer injections, and the artifact
@@ -471,28 +561,30 @@ func unionCeilingDenies(policy *types.RunPolicySpec, deny []string) []string {
 // run.ConfinementClass, fixed at create — raising policy.MinConfinementClass
 // here would be decoration that looks enforced and is not.
 //
-// A provable NO-OP when the principal has no assigned profile: c.deny is empty
-// for an unassigned member and for an operator (effectiveCeiling's step-1
-// short-circuit). It is NOT a no-op merely because a lane forgot to resolve a
+// A provable NO-OP when the principal has no assigned profile and the boundary
+// is in no_limits: c.deny is empty for an unassigned member and for an operator
+// (effectiveCeiling's step-1 short-circuit), and layers is nil. It is NOT a no-op merely because a lane forgot to resolve a
 // ceiling — that state is unrepresentable now, since dispatchCeiling is a
 // required argument whose zero value dispatchRun refuses (see dispatchCeiling).
 func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
-	policy *types.RunPolicySpec, injections *[]runner.InjectionGrant, c dispatchCeiling,
-	p *dispatchParams, sandboxEnv map[string]string, llm *llmTransport, mitmHosts, componentMITMHosts *[]string,
-) {
+	policy *types.RunPolicySpec, injections *[]runner.InjectionGrant, c dispatchCeiling, layers []sealLayer,
+	grantRows []types.CredentialGrant, p *dispatchParams, sandboxEnv map[string]string, llm *llmTransport, mitmHosts, componentMITMHosts *[]string,
+) []types.CredentialGrant {
 	// THE ENFORCEMENT half is gated on the deny list, because with nothing to
 	// deny there is nothing to union, no injection to drop and no lane to
 	// withhold. The AUDIT half below is gated on the PROFILE instead — those are
 	// two different questions, and folding them into one early return is what
 	// made "always audited when a profile applies" false for the commonest
 	// assigned shape there is: a profile that grants rather than denies.
-	var added, droppedInjection, droppedLane []string
-	if len(c.deny) > 0 {
+	var added, droppedInjection, droppedLane, droppedGrant []string
+	w := withholding{deny: c.deny, layers: layers}
+	if w.binds() {
 		added = unionCeilingDenies(policy, c.deny)
+		grantRows, droppedGrant = dropWithheldGrants(w, grantRows, injections, p, policy, sandboxEnv)
 
 		kept := (*injections)[:0:0] // :0:0 — never alias the caller's array
 		for _, in := range *injections {
-			if ceilingDenies(c.deny, in.Rule.Host) {
+			if w.withheld(in.Rule.Host) {
 				droppedInjection = append(droppedInjection, in.Rule.Host)
 				continue
 			}
@@ -500,9 +592,9 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 		}
 		*injections = kept
 
-		droppedLane = s.dropBrokeredLanes(c, p, sandboxEnv)
-		droppedLane = append(droppedLane, dropGitHubDoor(c.deny, policy, p, sandboxEnv)...)
-		lanes, lane := narrowCeilingBedrockLane(c, llm, mitmHosts, injections, sandboxEnv)
+		droppedLane = s.dropBrokeredLanes(w, p, sandboxEnv)
+		droppedLane = append(droppedLane, dropGitHubDoor(w, policy, p, sandboxEnv)...)
+		lanes, lane := narrowCeilingBedrockLane(w, llm, mitmHosts, injections, sandboxEnv)
 		droppedLane = append(droppedLane, lanes...)
 		droppedInjection = append(droppedInjection, lane...)
 		slices.Sort(droppedLane)
@@ -511,23 +603,26 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 		// proxy terminates that host's TLS only to set the header.
 		if componentMITMHosts != nil {
 			*componentMITMHosts = slices.DeleteFunc(slices.Clone(*componentMITMHosts), func(entry string) bool {
-				return ceilingDenies(c.deny, componentMITMHost(entry))
+				return w.withheld(componentMITMHost(entry))
 			})
 		}
 
 		if len(droppedInjection) > 0 || len(droppedLane) > 0 {
-			slog.WarnContext(ctx, "wardynd: governance ceiling — withholding credential lanes for hosts this principal's profile denies",
+			slog.WarnContext(ctx, "wardynd: governance ceiling — withholding credential lanes for hosts this principal's profile or the Wardyn boundary denies",
 				slog.String("run_id", run.ID.String()), slog.String("profile", c.profile),
 				slog.Any("injection_hosts", droppedInjection), slog.Any("broker_lanes", droppedLane))
 		}
 	}
+	// The Wardyn boundary withheld a credential from a run no profile applies to: the row is written
+	// for it too, naming the boundary, so a stripped credential is never silent.
+	boundaryActed := len(layers) > 0 && (len(droppedInjection) > 0 || len(droppedLane) > 0 || len(droppedGrant) > 0)
 	// No assigned profile — an operator (effectiveCeiling short-circuits at step
 	// 1) or an unassigned member: no run.ceiling.reassert row, which is what
 	// makes the row's ABSENCE mean "no profile applies" rather than "this door
 	// skipped the ceiling". ceilingForDispatch leaves deny and profile empty
 	// together, so this is the same provable no-op the deny check stood for.
-	if c.profile == "" {
-		return
+	if c.profile == "" && !boundaryActed {
+		return grantRows
 	}
 	// ALWAYS audited when a profile applies, even with nothing to drop: "which
 	// ceiling did this run actually run under" is the question the envelope at
@@ -549,7 +644,13 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 		"dropped_injection_hosts": nonNilStrings(droppedInjection),
 		"dropped_broker_lanes":    nonNilStrings(droppedLane),
 	}
-	if len(added) > 0 || len(droppedInjection) > 0 || len(droppedLane) > 0 {
+	if len(layers) > 0 {
+		data["boundary"] = true
+		data["withheld_grants"] = nonNilStrings(droppedGrant)
+	}
+	if c.profile == "" {
+		data["note"] = "the Wardyn boundary denies these hosts or does not allow them, so every credential lane that reaches one is withheld"
+	} else if len(added) > 0 || len(droppedInjection) > 0 || len(droppedLane) > 0 {
 		data["note"] = "the acting principal's governance profile denies these hosts; the denies are unioned into the run policy " +
 			"(deny beats allow and allow_all_egress at the proxy) and every credential lane that reaches a denied host is withheld — " +
 			"the brokered git/PAT routes mint proxy-side and never consult denied_domains, so dropping the lane is the only thing that binds them"
@@ -569,6 +670,66 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.ceiling.reassert",
 		run.ID.String(), "success", mustJSON(data)))
+	return grantRows
+}
+
+// dropWithheldGrants keeps from the run every grant the outer layers do not let it be given
+// (withholding.grantWithheld), whatever lane would deliver it, and returns the rows it keeps with the
+// ids it dropped (sorted). Each lane that reads a grant id loses it here: its injection, the git
+// broker map (with WARDYN_GITHUB_GRANT_ID, as dropBrokeredLanes does), a PAT or SSH host, and the
+// GitHub CLI door when one of its grants goes. The kept rows are what the resident secrets and the
+// PAT allowlist below read, so a dropped env or file secret is never resolved. The mint and redeem
+// doors refuse the same grants live (refuseWithheldGrant), for a resident lane whose id is already
+// in the sandbox's env.
+func dropWithheldGrants(w withholding, rows []types.CredentialGrant, injections *[]runner.InjectionGrant, p *dispatchParams,
+	policy *types.RunPolicySpec, sandboxEnv map[string]string,
+) ([]types.CredentialGrant, []string) {
+	// The env and file secrets are resolved from the policy's own grants (resolveEnvSecretValues), so
+	// a withheld one leaves the policy too, and is never read.
+	policy.EligibleGrants = slices.DeleteFunc(slices.Clone(policy.EligibleGrants), w.grantWithheld)
+	gone := map[uuid.UUID]bool{}
+	var kept []types.CredentialGrant
+	for _, g := range rows {
+		if w.grantWithheld(g.Spec) {
+			gone[g.ID] = true
+			continue
+		}
+		kept = append(kept, g)
+	}
+	if len(gone) == 0 {
+		return rows, nil
+	}
+	*injections = slices.DeleteFunc(slices.Clone(*injections), func(in runner.InjectionGrant) bool { return gone[in.GrantID] })
+	if slices.ContainsFunc(slices.Collect(maps.Values(p.GitGrants)), func(id uuid.UUID) bool { return gone[id] }) {
+		p.GitGrants = nil
+		delete(sandboxEnv, "WARDYN_GITHUB_GRANT_ID")
+	}
+	p.GitPATGrants = keepGrantHosts(p.GitPATGrants, gone)
+	p.SSHGrants = keepGrantHosts(p.SSHGrants, gone)
+	if door := p.Components.GitHubAPI; door != nil && slices.ContainsFunc(slices.Collect(maps.Values(door.Grants)), func(id uuid.UUID) bool { return gone[id] }) {
+		withdrawGitHubDoor(policy, p, sandboxEnv)
+	}
+	var ids []string
+	for id := range gone {
+		ids = append(ids, id.String())
+	}
+	slices.Sort(ids)
+	return kept, ids
+}
+
+// keepGrantHosts is a {host: grant_id} map without the grants in gone, as a new map.
+func keepGrantHosts(m map[string]string, gone map[uuid.UUID]bool) map[string]string {
+	if m == nil {
+		return nil
+	}
+	out := map[string]string{}
+	for host, id := range m {
+		if u, err := uuid.Parse(id); err == nil && gone[u] {
+			continue
+		}
+		out[host] = id
+	}
+	return out
 }
 
 // dropBrokeredLanes withholds the git-broker and PAT-broker grants whose
@@ -604,9 +765,9 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 // filtering. This phase is about the lanes that BYPASS denied_domains; a
 // resident credential for a denied host still meets that deny on every named
 // dial.
-func (s *Server) dropBrokeredLanes(c dispatchCeiling, p *dispatchParams, sandboxEnv map[string]string) []string {
+func (s *Server) dropBrokeredLanes(w withholding, p *dispatchParams, sandboxEnv map[string]string) []string {
 	var dropped []string
-	if len(p.GitGrants) > 0 && ceilingDeniesAny(c.deny, gitBrokerManagedHosts) {
+	if len(p.GitGrants) > 0 && w.withheldAny(gitBrokerManagedHosts) {
 		dropped = append(dropped, slices.Sorted(maps.Keys(p.GitGrants))...)
 		p.GitGrants = nil
 		delete(sandboxEnv, "WARDYN_GITHUB_GRANT_ID")
@@ -614,7 +775,7 @@ func (s *Server) dropBrokeredLanes(c dispatchCeiling, p *dispatchParams, sandbox
 	if len(p.GitPATGrants) > 0 {
 		kept := map[string]string{} // a new map: the caller's is still read elsewhere
 		for host, grantID := range p.GitPATGrants {
-			if ceilingDenies(c.deny, host) {
+			if w.withheld(host) {
 				dropped = append(dropped, host)
 				continue
 			}
@@ -659,8 +820,8 @@ const bedrockCeilingLane = "bedrock"
 // doc). A run that asked for no model call, or that has another lane, still
 // launches; one that needed Bedrock meets the deny at the proxy with the
 // ordinary refusal, which is the same thing it already did for the bearer mode.
-func narrowCeilingBedrockLane(c dispatchCeiling, llm *llmTransport, mitmHosts *[]string, injections *[]runner.InjectionGrant, sandboxEnv map[string]string) (lanes, droppedInjection []string) {
-	if llm == nil || !llm.bedrockReady || !ceilingDeniesAny(c.deny, llm.bedrock.egressHosts) {
+func narrowCeilingBedrockLane(w withholding, llm *llmTransport, mitmHosts *[]string, injections *[]runner.InjectionGrant, sandboxEnv map[string]string) (lanes, droppedInjection []string) {
+	if llm == nil || !llm.bedrockReady || !w.withheldAny(llm.bedrock.egressHosts) {
 		return nil, nil
 	}
 	laneHosts := llm.bedrock.egressHosts // read before the lane is reset below

@@ -24,7 +24,7 @@ import (
 //     Policy replaced by a call's result, allow_all_egress set to anything but
 //     false or nil);
 //   - a sealed path (dispatchRun, reviveRunProxy) does not call the seal once,
-//     after its ceiling re-assertion, or after the seal adds a host itself or
+//     before its ceiling re-assertion, or after the seal adds a host itself or
 //     hands the sealed value to anything that can reach a late addition (the
 //     walk stops at a sealed path, which seals its own run, and at a detached
 //     flow, which carries another run);
@@ -77,8 +77,9 @@ var lateAddCensus = map[string]int{
 var unionHelpers = []string{"unionAllowedDomains", "unionDeniedDomains", "unionDomains"}
 
 // sealedPaths is each path that dispatches or revives a run: the ceiling
-// re-assertion its seal must follow, and the variable holding what it seals.
-var sealedPaths = map[string]struct{ after, sealed string }{
+// re-assertion that must follow its seal (it withholds credentials against the
+// layers the seal read, #3238), and the variable holding what it seals.
+var sealedPaths = map[string]struct{ reassert, sealed string }{
 	"dispatchRun":    {"reassertCeilingDenies", "policy"},
 	"reviveRunProxy": {"reassertProxyCeiling", "cfg"},
 }
@@ -282,7 +283,7 @@ func runSealCensus(fset *token.FileSet, files map[string]*ast.File) sealCensus {
 
 	sealAt := map[string]token.Pos{}
 	for _, path := range slices.Sorted(maps.Keys(sealedPaths)) {
-		after, sealed := sealedPaths[path].after, sealedPaths[path].sealed
+		reassert, sealed := sealedPaths[path].reassert, sealedPaths[path].sealed
 		if len(decls[path]) != 1 {
 			c.violations = append(c.violations, fmt.Sprintf("sealed path %s: %d declarations, want 1", path, len(decls[path])))
 			continue
@@ -295,7 +296,7 @@ func runSealCensus(fset *token.FileSet, files map[string]*ast.File) sealCensus {
 				switch calleeName(call) {
 				case "sealRunPolicy":
 					seals = append(seals, call.Pos())
-				case after:
+				case reassert:
 					reasserts = append(reasserts, call.Pos())
 				}
 			}
@@ -307,8 +308,8 @@ func runSealCensus(fset *token.FileSet, files map[string]*ast.File) sealCensus {
 		}
 		seal := seals[0]
 		sealAt[path] = seal
-		if len(reasserts) == 0 || slices.Max(reasserts) > seal {
-			fail(file, seal, "%s seals before (or without) %s", path, after)
+		if len(reasserts) == 0 || slices.Min(reasserts) < seal {
+			fail(file, seal, "%s calls %s before its seal (or not at all)", path, reassert)
 		}
 		ast.Inspect(fn.Body, func(n ast.Node) bool {
 			// Only a call handed the sealed value can change it.
@@ -447,8 +448,8 @@ func TestEveryLateHostAdditionIsSealed(t *testing.T) {
 // silent: each planted package is one a late addition could be written as.
 func TestSealCensusFiresOnAPlantedSite(t *testing.T) {
 	const paths = `package api
-func (s *Server) dispatchRun() { s.reassertCeilingDenies(); s.sealRunPolicy(); s.keepRunProxyConfig() }
-func (s *Server) reviveRunProxy() { reassertProxyCeiling(); s.sealRunPolicy(); s.storeRunProxyConfig() }
+func (s *Server) dispatchRun() { s.sealRunPolicy(); s.reassertCeilingDenies(); s.keepRunProxyConfig() }
+func (s *Server) reviveRunProxy() { s.sealRunPolicy(); reassertProxyCeiling(); s.storeRunProxyConfig() }
 `
 	for _, tc := range []struct {
 		name, src  string
@@ -497,20 +498,21 @@ func (s *Server) orphan() { s.cfg.Runner.CreateSandbox() }`, 1, 0},
 		})
 	}
 	for _, tc := range []struct{ name, dispatch string }{
-		{"a union after the seal in a sealed path", `func (s *Server) dispatchRun(policy types.RunPolicySpec) { s.reassertCeilingDenies(); s.sealRunPolicy(); unionAllowedDomains(&policy, nil) }`},
-		{"a method on the sealed config that reaches a union after the seal", `func (s *Server) dispatchRun() { s.reassertCeilingDenies(); s.sealRunPolicy() }
-func (s *Server) reviveRunProxy(cfg *proxy.Config) { reassertProxyCeiling(); s.sealRunPolicy(); cfg.widen() }
+		{"a union after the seal in a sealed path", `func (s *Server) dispatchRun(policy types.RunPolicySpec) { s.sealRunPolicy(); s.reassertCeilingDenies(); unionAllowedDomains(&policy, nil) }`},
+		{"a method on the sealed config that reaches a union after the seal", `func (s *Server) dispatchRun() { s.sealRunPolicy(); s.reassertCeilingDenies() }
+func (s *Server) reviveRunProxy(cfg *proxy.Config) { s.sealRunPolicy(); reassertProxyCeiling(); cfg.widen() }
 func (c *config) widen() { c.Policy.AllowedDomains = append(c.Policy.AllowedDomains, "x") }`},
-		{"a call handed the policy that reaches a union after the seal", `func (s *Server) dispatchRun(policy types.RunPolicySpec) { s.reassertCeilingDenies(); s.sealRunPolicy(); s.widenLate(&policy) }
+		{"a call handed the policy that reaches a union after the seal", `func (s *Server) dispatchRun(policy types.RunPolicySpec) { s.sealRunPolicy(); s.reassertCeilingDenies(); s.widenLate(&policy) }
 func (s *Server) widenLate(p *types.RunPolicySpec) { p.AllowedDomains = append(p.AllowedDomains, "x") }`},
-		{"a seal before the re-assertion", `func (s *Server) dispatchRun() { s.sealRunPolicy(); s.reassertCeilingDenies() }`},
+		{"a re-assertion before the seal", `func (s *Server) dispatchRun() { s.reassertCeilingDenies(); s.sealRunPolicy() }`},
 		{"no seal", `func (s *Server) dispatchRun() { s.reassertCeilingDenies() }`},
+		{"no re-assertion", `func (s *Server) dispatchRun() { s.sealRunPolicy() }`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fset := token.NewFileSet()
 			src := "package api\n" + tc.dispatch + "\n"
 			if !strings.Contains(src, "reviveRunProxy") {
-				src += "func (s *Server) reviveRunProxy() { reassertProxyCeiling(); s.sealRunPolicy() }\n"
+				src += "func (s *Server) reviveRunProxy() { s.sealRunPolicy(); reassertProxyCeiling() }\n"
 			}
 			f, err := parser.ParseFile(fset, "planted.go", src, 0)
 			if err != nil {

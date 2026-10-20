@@ -22,51 +22,54 @@ type reasserted struct {
 
 // reassertProxyCeiling is reassertCeilingDenies over a rendered proxy config:
 // it unions the ceiling's denies into the frozen policy and drops every
-// injection, MCP server, brokered PAT host and MITM host the ceiling denies. It never
-// re-resolves the policy and never widens it.
+// injection, MCP server, brokered PAT host and MITM host withheld from the run:
+// the ceiling denies it, or a layer the revive's seal read (layers: the Wardyn
+// boundary) denies it or does not allow it (withholding). It runs after that
+// seal, never re-resolves the policy and never widens it.
 //
 // One lane cannot be dropped here. Dispatch withholds the git broker by
 // emptying its grants AND unsetting WARDYN_GITHUB_GRANT_ID in the sandbox, and
 // the proxy refuses the mint route for a brokered grant only while its grant
 // map is non-empty (isBrokeredGitGrant). A running agent's env cannot change,
 // so emptying the map would hand the sandbox a GitHub installation token on
-// request. A revive whose ceiling denies a broker-managed host is refused, and
-// so is one whose ceiling denies the host of the run's Azure CLI door.
-func reassertProxyCeiling(run types.AgentRun, cfg *proxy.Config, c ownerCeiling) (reasserted, *reviveError) {
+// request. A revive that withholds a broker-managed host is refused, and so is
+// one that withholds the host of the run's Azure CLI door.
+func reassertProxyCeiling(run types.AgentRun, cfg *proxy.Config, c ownerCeiling, layers []sealLayer) (reasserted, *reviveError) {
 	if cfg.RunID != run.ID {
 		return reasserted{}, reviveRefused(http.StatusConflict, reasonReviveConfigRunMismatch, "the run's proxy config names another run")
 	}
 	var re reasserted
-	if len(c.deny) == 0 {
+	w := withholding{deny: c.deny, layers: layers}
+	if !w.binds() {
 		return re, nil
 	}
-	if len(cfg.GitGrants) > 0 && ceilingDeniesAny(c.deny, gitBrokerManagedHosts) {
+	if len(cfg.GitGrants) > 0 && w.withheldAny(gitBrokerManagedHosts) {
 		return re, reviveRefused(http.StatusConflict, reasonReviveCeilingDeniesGitBroker,
-			"the owner's governance profile now denies GitHub, which this run's git broker needs; start a new run")
+			"the owner's governance profile or the Wardyn boundary now denies GitHub, which this run's git broker needs; start a new run")
 	}
-	if rerr := azureCLIReviveRefusal(cfg, c.deny); rerr != nil {
+	if rerr := azureCLIReviveRefusal(cfg, w); rerr != nil {
 		return re, rerr
 	}
 	re.added = unionCeilingDenies(&cfg.Policy, c.deny)
-	if cfg.GitHubAPI != nil && githubDoorWithheld(c.deny) { // the sandbox holds only the inert token, so the door can go
+	if cfg.GitHubAPI != nil && githubDoorWithheld(w) { // the sandbox holds only the inert token, so the door can go
 		cfg.GitHubAPI = nil
 		closeGitHubDoor(&cfg.Policy)
 		re.droppedLane = append(re.droppedLane, githubDoorLane)
 	}
 	cfg.Injection = slices.DeleteFunc(cfg.Injection, func(in proxy.InjectionConfig) bool {
-		if ceilingDenies(c.deny, in.Host) {
+		if w.withheld(in.Host) {
 			re.droppedInjection = append(re.droppedInjection, in.Host)
 			return true
 		}
 		return false
 	})
 	// An MCP server keeps its header credential on its broker entry, not in Injection, so the drop
-	// above never sees it. A server on a host the ceiling now denies goes, as dispatch drops one whose
-	// injection the ceiling took (dispatchMCP), and so do the harness bindings that name it.
+	// above never sees it. A server on a withheld host goes, as dispatch drops one (dispatchMCP), and so
+	// do the harness bindings that name it.
 	gone := map[string]bool{}
 	cfg.MCPServers = slices.DeleteFunc(cfg.MCPServers, func(sv proxy.MCPServerConfig) bool {
 		d, err := types.MCPURLDestination(sv.URL)
-		if err == nil && !ceilingDenies(c.deny, d.Host) {
+		if err == nil && !w.withheld(d.Host) {
 			return false
 		}
 		gone[sv.Key] = true
@@ -79,13 +82,15 @@ func reassertProxyCeiling(run types.AgentRun, cfg *proxy.Config, c ownerCeiling)
 		cfg.MCPBindings[i].Servers = slices.DeleteFunc(cfg.MCPBindings[i].Servers, func(k string) bool { return gone[k] })
 	}
 	for host := range cfg.PATGrants {
-		if ceilingDenies(c.deny, host) {
+		if w.withheld(host) {
 			re.droppedLane = append(re.droppedLane, host)
 			delete(cfg.PATGrants, host)
 		}
 	}
 	slices.Sort(re.droppedLane)
-	cfg.MITMHosts = slices.DeleteFunc(cfg.MITMHosts, func(h string) bool { return ceilingDenies(c.deny, h) })
+	cfg.MITMHosts = slices.DeleteFunc(cfg.MITMHosts, func(h string) bool {
+		return ceilingDenies(c.deny, h) || w.layerWithheld(interceptionEntryHost(h))
+	})
 	return re, nil
 }
 

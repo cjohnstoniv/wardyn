@@ -202,7 +202,8 @@
 # 0.10 ATT-LOGIN-SRV: docs/sdk.md 19886 adds 204 over 19682: twelve CLI sign-in reasons, measured.
 # docs/sdk.md 20288 = ours 20084 + theirs 19886 - base 19682 at the 0.10 W4a merge of ATT-LOGIN-SRV onto the train.
 # docs/sdk.md 20423 = ours 19817 + theirs 20288 - base 19682 at the 0.10 LANES merge of main onto BOUNDARY.
-docs/sdk.md=20423 share=21
+# docs/sdk.md 20469 measured: the credential_withheld reasons
+docs/sdk.md=20469 share=21
 # docs/sdk.md 18691 adds 28 over 18663, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.

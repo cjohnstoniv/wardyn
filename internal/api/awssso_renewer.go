@@ -165,8 +165,8 @@ func (s *Server) RenewAWSSSOCredentials(ctx context.Context) (int, error) {
 
 // liveGrantScope is the credential g's run resolves through, re-derived for
 // the subject its run token carries as the resolve re-derives it; false when
-// the grant carries no snapshot, the run cannot be read or has ended, or
-// anything drifted. Every grant of one scope carries the same pin, the live
+// the grant carries no snapshot, the run cannot be read or has ended, the run is
+// no longer given the credential, or anything drifted. Every grant of one scope carries the same pin, the live
 // one, so the first grant's snapshot speaks for the rest.
 func (s *Server) liveGrantScope(ctx context.Context, siteCfg types.SiteConfig, g types.CredentialGrant) (awsSSOScope, awsSSOScopeSnapshot, bool) {
 	var sc struct {
@@ -177,6 +177,11 @@ func (s *Server) liveGrantScope(ctx context.Context, siteCfg types.SiteConfig, g
 	}
 	run, err := s.cfg.Store.GetRun(ctx, g.RunID)
 	if err != nil || run.State.IsTerminal() {
+		return awsSSOScope{}, awsSSOScopeSnapshot{}, false
+	}
+	// A run the credential is withheld from now (its profile or the Wardyn boundary, #3238) is not
+	// renewed for: its proxy's redeem is refused (refuseWithheldGrant), so a renewal would serve no one.
+	if w, werr := s.liveWithholding(ctx, run); werr != nil || w.credentialWithheld(g.Spec) {
 		return awsSSOScope{}, awsSSOScopeSnapshot{}, false
 	}
 	subject := run.CreatedBy // the run token's subject (run_queue_start.go mints it)

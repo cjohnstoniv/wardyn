@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -114,6 +115,9 @@ func (s *Server) handleInternalMint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.refuseWithheldGrant(w, r, claims, body.GrantID, reasonGrantWithheldUnread) {
+		return
+	}
 	minted, err := s.cfg.Broker.MintForGrant(r.Context(), claims, body.GrantID)
 	if err != nil {
 		s.writeMintError(w, r, err)
@@ -222,6 +226,83 @@ func (s *Server) brokeredForgeMintKind(ctx context.Context, runID, grantID uuid.
 		}
 	}
 	return "", "", false
+}
+
+// liveGrantWithheld reports whether the run is kept from grantID now (#3238): its captured profile as
+// it stands (runProfile: one that no longer exists adds nothing, as at the run's doors) or the Wardyn
+// boundary withholds the grant or a host it delivers to (withholding.credentialWithheld). A
+// credential is judged when it is delivered, so a boundary narrowed after dispatch reaches a running
+// run here. found=false: the run or the grant is not this store's, for the broker to refuse.
+func (s *Server) liveGrantWithheld(ctx context.Context, runID, grantID uuid.UUID) (spec types.GrantSpec, found, withheld bool, err error) {
+	grants, err := s.cfg.Store.ListGrantsByRun(ctx, runID)
+	if err != nil {
+		return spec, false, false, err
+	}
+	i := slices.IndexFunc(grants, func(g types.CredentialGrant) bool { return g.ID == grantID })
+	if i < 0 {
+		return spec, false, false, nil
+	}
+	spec = grants[i].Spec
+	run, err := s.cfg.Store.GetRun(ctx, runID)
+	if errors.Is(err, store.ErrNotFound) {
+		return spec, false, false, nil
+	}
+	if err != nil {
+		return spec, true, false, err
+	}
+	w, err := s.liveWithholding(ctx, run)
+	if err != nil {
+		return spec, true, false, err
+	}
+	return spec, true, w.credentialWithheld(spec), nil
+}
+
+// liveWithholding is a running run's withholding: its captured profile's current denies and the
+// outer layers as the seal reads them now.
+func (s *Server) liveWithholding(ctx context.Context, run types.AgentRun) (withholding, error) {
+	p, err := s.runProfile(ctx, run)
+	if err != nil {
+		return withholding{}, err
+	}
+	// An unread boundary is answered 503 here, retried by the caller, rather than the seal's
+	// fail-closed layer, whose 403 would say the credential is no longer given.
+	if _, err := s.governanceBoundary(ctx); err != nil {
+		return withholding{}, err
+	}
+	w := withholding{layers: s.outerLayers(ctx, run)}
+	if p != nil {
+		w.deny = p.Ceiling.DeniedDomains
+	}
+	return w, nil
+}
+
+// refuseWithheldGrant answers a mint or a redeem of a grant liveGrantWithheld keeps from the run:
+// 403 credential_withheld with a credential.mint denied row, or 503 with the door's unread reason
+// (credential_withheld_unread at mint, the sink's store_unavailable at redeem) when it could not be
+// read (never answered unchecked). Before MintForGrant, so nothing is minted or
+// consumed. True when it has answered.
+func (s *Server) refuseWithheldGrant(w http.ResponseWriter, r *http.Request, claims *identity.Claims, grantID uuid.UUID, unread string) bool {
+	if s.cfg.Store == nil {
+		return false
+	}
+	spec, found, withheld, err := s.liveGrantWithheld(r.Context(), claims.RunID, grantID)
+	if err != nil {
+		writeErrorReason(w, http.StatusServiceUnavailable, unread,
+			loggedMsg(r.Context(), "read the run's grants, profile or Wardyn boundary to check the credential", err))
+		return true
+	}
+	if !found || !withheld {
+		return false
+	}
+	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID, "credential.mint",
+		grantID.String(), "denied", mustJSON(map[string]any{
+			"grant_id": grantID.String(),
+			"kind":     string(spec.Kind),
+			"reason":   reasonGrantWithheld,
+		})))
+	writeErrorReason(w, http.StatusForbidden, reasonGrantWithheld,
+		"wardyn: this run is no longer given this credential: the run's governance profile or the Wardyn boundary withholds it or a host it reaches")
+	return true
 }
 
 // Mint 409-conflict "code" values, bound to the ONE home both sides of the wire
