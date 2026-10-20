@@ -148,7 +148,7 @@ func (s *Server) uiAppsDenied(r *http.Request, spec types.RunPolicySpec, ceiling
 // reason: a person has to tell a profile that denies every UI app from an allowed-apps list that lacks theirs.
 const (
 	applicationUIAppsDeniedMsg     = "This profile does not allow UI apps, so an application can't declare one."
-	applicationUIAppsNotAllowedMsg = "The organisation's allowed apps list does not include the app this application declares, so it can't be created."
+	applicationUIAppsNotAllowedMsg = "This profile's list of allowed apps does not include the app this application declares, so it can't be created."
 )
 
 // applicationUIAppsRefusal refuses a shape-application run that would be created without the app it declared:

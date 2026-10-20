@@ -83,7 +83,7 @@ func TestApplicationRunWithoutADeclaredAppIsNotRefusedForTheCeilingsApp(t *testi
 func TestApplicationRunRefusedWhenTheAllowedAppsLackItsApp(t *testing.T) {
 	const app = `"shape":"application","experience":"interactive",` + noRepos + `,"startup":{"kind":"command","command":"npm run dev"},` +
 		`"inline_policy":{"ui_apps":[{"name":"web","port":3000}]}`
-	const wantMsg = "The organisation's allowed apps list does not include the app this application declares, so it can't be created."
+	const wantMsg = "This profile's list of allowed apps does not include the app this application declares, so it can't be created."
 	profile := func(deny bool, allowed ...types.UIApp) *types.GovernanceProfile {
 		p := limitsProfile("apps", types.GovernanceLimits{DenyUIApps: deny})
 		p.Ceiling.UIApps = allowed
