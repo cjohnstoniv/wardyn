@@ -49,7 +49,12 @@
     ],
     "ComponentMCP": [
       "url",
-      "transport"
+      "transport",
+      "launch"
+    ],
+    "ComponentMCPLaunch": [
+      "command",
+      "args"
     ],
     "ComponentRef": [
       "id",
