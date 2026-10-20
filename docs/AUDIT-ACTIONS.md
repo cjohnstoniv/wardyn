@@ -848,10 +848,11 @@ These are emitted by background sweepers, not request handlers — `ActorType` i
 | `person.token.create` | `target` | the person the mint was asked for (the row's `target`) |
 | `secret.list` | `secret_owner` | the namespace owner listed (the row's `target`) |
 | `person.attach` | `sub` | the person signing in (the row's `actor`), whose identity provider sub it is |
+| `runner.trust.write` | `reason` | the security admin who wrote the change (the row's `actor`); on a held change the row's actor is the approver, so the proposer's text is sealed under the approver's key |
 
 **Retained in the clear, and why.**
 
-- Every `reason` other than the two above is a machine code a SIEM rule and the console classify on (a refusal, a lifecycle cause), never text a person typed.
+- Every `reason` other than the three above is a machine code a SIEM rule and the console classify on (a refusal, a lifecycle cause), never text a person typed.
 - Every `note` is a fixed sentence the daemon wrote (`run.ceiling.reassert`, only when it acted; also `run.dispatch`, `run.interactive.start`, `run.git_pat.drop`, `run.ssh.drop`, `credential.revoke`).
 - `task` on `run.record.start` and `workspace.record` is the import step's own task key, not a prompt.
 - `email` on `site_config.write` is a field *name* inside `policy_help_fields`, never a value.

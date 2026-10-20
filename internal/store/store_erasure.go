@@ -40,7 +40,8 @@ type PersonErasureStore interface {
 	// PrincipalsSharingObject lists the other principals bound to a sign-in with the same tenant and object
 	// id as one of principal's own, under another issuer: often the same human, never the same principal.
 	PrincipalsSharingObject(ctx context.Context, principal string) ([]string, error)
-	// EraseGovernanceChangePersonalFields clears the proposer and decider (and the decider's reason) of
+	// EraseGovernanceChangePersonalFields clears the proposer and decider (the decider's reason, and the
+	// reason a proposer typed into a runner trust change's payload) of
 	// every governance change whose recorded principal is one of principals or whose recorded email is
 	// one of emails (case-folded), and moves a pending change whose proposer is one of them to expired.
 	// A principal is never matched against the email column, where an email claim can spell it. It

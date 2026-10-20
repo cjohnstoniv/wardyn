@@ -84,6 +84,8 @@ var sealFields = map[string][]SealField{
 	// The identity provider's sub of the person signing in, who is the actor on both rows: the
 	// attached person on success, the sub's own person when the attach is ignored.
 	"person.attach": {{Path: "sub", Subject: SubjectActor}},
+	// The free text the security admin typed to justify a runner's trust change.
+	"runner.trust.write": {{Path: "reason", Subject: SubjectActor}},
 }
 
 // SealLeafNames is the closed set of data key names a field may carry to be a
