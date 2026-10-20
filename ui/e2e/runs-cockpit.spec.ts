@@ -455,6 +455,14 @@ test.describe("Focus mode — starts below the shell's banner", () => {
     await page.route("**/readyz", (route) =>
       route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ status: "unavailable" }) }),
     );
+    // The seeded backend runs with `-runner none`, so the no-barrier banner shows once the plane is reachable
+    // again and the overlay would settle under it; splice a host with a barrier, as runs-detail.spec.ts does.
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.runner = { ...json.runner, driver: "docker", confinement_classes: ["CC1"] };
+      await route.fulfill({ response, json });
+    });
 
     await page.goto(`/runs/${runId}`);
     const banner = page.getByRole("status").filter({ hasText: /Control plane unreachable/ });
