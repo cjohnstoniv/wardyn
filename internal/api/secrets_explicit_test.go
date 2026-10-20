@@ -197,6 +197,34 @@ func TestExplicitSecrets_NobodyWritesAnotherPersonsNamespace(t *testing.T) {
 	}
 }
 
+// The list routes name their namespace too, so ?owner= is refused there as on a write, whoever asks.
+func TestExplicitSecrets_ListRoutesRefuseTheOwnerParam(t *testing.T) {
+	sec := &memSecrets{m: map[string][]byte{}, owned: map[string]map[string][]byte{}}
+	_, srv := secretsRBACServer(t, sec)
+	admin := ssoSession(t, "admin-1", "admin@corp.example", oidc.RoleAdmin)
+	user := ssoSession(t, "bob", "bob@corp.example", oidc.RoleUser)
+	for _, c := range []struct {
+		who  *http.Cookie
+		path string
+	}{
+		{admin, "/api/v1/me/secrets?owner=bob"},
+		{admin, "/api/v1/shared-secrets?owner=bob"},
+		{user, "/api/v1/me/secrets?owner=alice"},
+	} {
+		w := doSSO(t, srv, http.MethodGet, c.path, c.who, "")
+		var body struct{ Reason string }
+		_ = json.Unmarshal(w.Body.Bytes(), &body)
+		if w.Code != http.StatusForbidden || body.Reason != reasonSecretOwnerParamRefused {
+			t.Errorf("GET %s = %d %s, want 403 %s", c.path, w.Code, body.Reason, reasonSecretOwnerParamRefused)
+		}
+	}
+	for _, path := range []string{"/api/v1/me/secrets", "/api/v1/shared-secrets"} {
+		if w := doSSO(t, srv, http.MethodGet, path, admin, ""); w.Code != http.StatusOK {
+			t.Errorf("GET %s without ?owner= = %d, want 200", path, w.Code)
+		}
+	}
+}
+
 // The admin token and local mode have no person, so no personal namespace: a personal route
 // answers 403 rather than guess a name that nothing reads.
 func TestExplicitSecrets_PersonalNeedsAPerson(t *testing.T) {

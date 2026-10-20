@@ -91,6 +91,14 @@ var queryIDMatrix = map[string]queryIDRoute{
 		entity: entityPrincipal, readers: []string{"refuseExplicitOwnerParam"},
 		pinnedBy: "TestExplicitSecrets_NobodyWritesAnotherPersonsNamespace",
 	},
+	"GET /api/v1/me/secrets?owner": {
+		entity: entityPrincipal, readers: []string{"refuseListOwnerParam"},
+		pinnedBy: "TestExplicitSecrets_ListRoutesRefuseTheOwnerParam",
+	},
+	"GET /api/v1/shared-secrets?owner": {
+		entity: entityPrincipal, readers: []string{"refuseListOwnerParam"},
+		pinnedBy: "TestExplicitSecrets_ListRoutesRefuseTheOwnerParam",
+	},
 	"DELETE /api/v1/secrets/{name}?owner": {
 		entity: entityPrincipal, readers: []string{"secretOwnerParam", "deleteSecretFrom"},
 		foreign: 403, pinnedBy: "TestListSecrets_AdminOwnerParam_Member403",
