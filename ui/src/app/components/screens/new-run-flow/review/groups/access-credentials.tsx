@@ -49,7 +49,7 @@ export function AccessCredentials({ access }: { access: AccessFacts | undefined 
             <span className="min-w-0">
               {row ? NR_TOOLS.KUBE_CREDENTIAL(clusterName(row.name)) : c.label}
               {forRow && <span className="text-muted-foreground"> {NR_TOOLS.FOR_ROW(forRow)}</span>}
-              {row && <span className="block text-muted-foreground">{joined([...(namespaces ? [NR_REVIEW.ACCESS_KUBE_LINE(namespaces)] : []), ...kubectlLimits(row.cli)])}</span>}
+              {row && <span className="block text-muted-foreground">{joined([...(namespaces ? [NR_TOOLS.KUBE_NAMESPACES(namespaces)] : []), ...kubectlLimits(row.cli)])}</span>}
             </span>
             {delivery && <Chip className="whitespace-normal">{delivery}</Chip>}
           </div>

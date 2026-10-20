@@ -6,6 +6,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 import { NOTHING, ToolCard, type ToolAccess } from "./tool-card";
 
@@ -89,6 +90,18 @@ describe("tool card: Details", () => {
     expect(dialog.getByText("A note under the credentials.")).toBeTruthy();
     expect(dialog.getByText("Some other line")).toBeTruthy();
     expect(dialog.getByText("What it is")).toBeTruthy();
+  });
+
+  it("keeps each part of the Other line whole, on the card and in Details, so it wraps only between parts", async () => {
+    const parts = [NR_TOOLS.KUBE_NAMESPACES("web, jobs"), NR_TOOLS.KUBE_READ_ONLY, NR_TOOLS.KUBE_NO_EXEC];
+    show({ ...ACCESS, other: parts.reduce((a, b) => NR_SHARED.JOIN(a, b)) });
+    const nowrap = (root: Element) => [...root.querySelectorAll(".whitespace-nowrap")].map((n) => n.textContent);
+    const other = [...breakdown().querySelectorAll("dd")][3];
+    expect(nowrap(other)).toEqual(parts);
+    expect(other.textContent).toBe(parts.join(NR_SHARED.JOIN("", "")));
+    await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.DETAILS_FOR("Sample") }));
+    const dialog = await screen.findByRole("dialog", { name: "Sample" });
+    expect(nowrap(within(dialog).getByRole("heading", { name: NR_TOOLS.DETAIL_OTHER }).closest("section")!)).toEqual(parts);
   });
 
   it("closes from Close", async () => {

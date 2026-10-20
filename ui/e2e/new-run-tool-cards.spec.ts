@@ -20,7 +20,7 @@ import { MY_COMPONENTS, ORG_GITHUB, ORG_KUBECTL, ORG_LINEAR } from "../src/app/l
 import { SCENARIO_HARNESSES, SCENARIO_HARNESS_SETS } from "../src/app/lib/new-run-fixtures/scenarios/harnesses";
 import { SCENARIO_PREFLIGHT } from "../src/app/lib/new-run-fixtures/scenarios/preflight";
 import { SCENARIO_ACCESS } from "../src/app/lib/new-run-fixtures/scenarios/tools";
-import type { AccessFacts } from "../src/app/lib/types/new-run-access";
+import type { AccessFacts, AccessHost } from "../src/app/lib/types/new-run-access";
 
 const DOCUMENT = "api_version: wardyn/v1\nkind: Run\nintent:\n  shape: application\n  experience: background\n  workload:\n    kind: command\n    command: npm test\n  no_repositories_or_drives: true\n";
 const press = (page: Page, name: string) => page.getByRole("button", { name, exact: true }).click();
@@ -33,8 +33,11 @@ const catalogue = {
 };
 const GITHUB_FACT = { kind: "git_provider", provider: "github", lane: "app", id: "git_provider:github:app:acme", reason: "workspace", status: "ready", requirements: [], repos: ["github.com/acme/web-app", "github.com/acme/api"] };
 const KUBE_CREDENTIAL = { id: `${ORG_KUBECTL.id}:kube_api`, row: ORG_KUBECTL.id, kind: "kube_api", owner: "shared", label: "Your organisation's cluster account", delivery: "proxy", renewed: true, after_end: "gone" };
+// The server adds the row's API server as an injected host whose source is the row.
+const KUBE_HOST: AccessHost = { host: "api.staging.example.com", via: "injected", rows: [ORG_KUBECTL.id], verdict: "allowed", source: { kind: "component", id: ORG_KUBECTL.id, name: ORG_KUBECTL.name } };
 const withKubectl: AccessFacts = {
   ...SCENARIO_ACCESS.member,
+  hosts: [...SCENARIO_ACCESS.member.hosts, KUBE_HOST],
   rows: [...SCENARIO_ACCESS.member.rows, { id: ORG_KUBECTL.id, kind: "cli", from: "added", name: ORG_KUBECTL.name, status: "ready", hosts: [], credentials: [KUBE_CREDENTIAL.id], source: { kind: "component", id: ORG_KUBECTL.id, name: ORG_KUBECTL.name } }],
   credentials: [...SCENARIO_ACCESS.member.credentials, KUBE_CREDENTIAL],
 };
@@ -125,10 +128,12 @@ test.describe("New Run, step 5: what each tool card brings", () => {
   test("Review names the cluster's service account, the namespaces and what the run may do there", async ({ page }) => {
     await openTools(page, true, withKubectl);
     await press(page, NR_TOOLS.REVIEW_RUN);
+    await expect(page.getByRole("heading", { name: NR_REVIEW.GROUP_ACCESS, level: 3 }).locator("xpath=..").locator("strong")).toHaveText(NR_REVIEW.POLICY_HOSTS(SCENARIO_ACCESS.member.hosts.length + 1));
     await press(page, `${NR_REVIEW.CHANGE} ${NR_REVIEW.GROUP_ACCESS}`);
     const group = page.getByRole("group", { name: NR_REVIEW.GROUP_ACCESS });
+    await expect(group.locator("div").filter({ has: page.locator("code", { hasText: KUBE_HOST.host }) }).getByText(ORG_KUBECTL.name, { exact: true })).toBeVisible();
     await expect(group.getByText(NR_TOOLS.KUBE_CREDENTIAL(CLUSTER))).toBeVisible();
     await expect(group.getByText(NR_TOOLS.FOR_ROW(ORG_KUBECTL.name))).toBeVisible();
-    await expect(group.getByText(`${NR_REVIEW.ACCESS_KUBE_LINE("web, jobs")} · ${NR_TOOLS.KUBE_READ_ONLY} · ${NR_TOOLS.KUBE_NO_EXEC}`)).toBeVisible();
+    await expect(group.getByText(`${NR_TOOLS.KUBE_NAMESPACES("web, jobs")} · ${NR_TOOLS.KUBE_READ_ONLY} · ${NR_TOOLS.KUBE_NO_EXEC}`)).toBeVisible();
   });
 });
