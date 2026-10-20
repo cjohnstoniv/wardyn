@@ -47,7 +47,8 @@ docs/SSH.md=6236 share=35
 # docs/UI-SANDBOXES.md 5610 adds 26 (0.10.0 VM-B): the policy:port reason row (#3193).
 # docs/UI-SANDBOXES.md 5626 adds 42 (0.10 API-2): the UI-app ticket purpose and an expired approval asked again.
 # docs/UI-SANDBOXES.md 5653: measured after the main merge.
-docs/UI-SANDBOXES.md=5653 share=35
+# docs/UI-SANDBOXES.md 5814 adds 161 (0.10 CTL-A): the desktop clipboard section and the ui.clipboard row (#2967).
+docs/UI-SANDBOXES.md=5814 share=35
 # docs/NEW-RUN.md 2905 measured (0.9 final docs pass): the New run guide.
 # docs/NEW-RUN.md 2914 adds 9 over 2905: 0.9 final docs pass 2, measured: the runner-limit wait reason and the runner pools links.
 # docs/NEW-RUN.md 2915 adds 1 over 2914: docs fix: run --file overlay; a policy's own * rule stays in force on a routed run, measured.

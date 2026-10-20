@@ -109,6 +109,8 @@ func TestPreviousProxyRefusesWhatItCannotHonour(t *testing.T) {
 	ghCaps.Policy.GitHubCapabilities = []ghscope.Capability{ghscope.CapCodeRead}
 	innerWalls := base
 	innerWalls.Policy.HarnessInnerWalls = &types.HarnessInnerWalls{Approvals: types.InnerApprovalsWardyn}
+	desktop := base
+	desktop.Policy.Desktop = &types.DesktopControls{CopyOut: types.TransferAllowed}
 	portRuleOn := base
 	portRuleOn.PortRule = proxy.PortRuleOn
 	portRuleDryRun := base
@@ -131,6 +133,8 @@ func TestPreviousProxyRefusesWhatItCannotHonour(t *testing.T) {
 		{"github capabilities chosen by the policy", ghCaps, ""},
 		// Only a run whose policy chooses inner walls carries the key, and the previous proxy refuses it.
 		{"harness inner walls chosen by the policy", innerWalls, "policy.harness_inner_walls"},
+		// Likewise desktop rules: only a policy that sets one carries the key.
+		{"desktop rules chosen by the policy", desktop, "policy.desktop"},
 		// wardynd sends the port rule's "off" as no key (cmd/wardynd egressPortRule).
 		{"port rule off, sent as no key", base, ""},
 		{"port rule on", portRuleOn, "port_rule"},

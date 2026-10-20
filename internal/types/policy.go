@@ -216,6 +216,9 @@ type RunPolicySpec struct {
 	// A choice only narrows: the create door refuses a run whose walls it cannot meet, a looser one
 	// included, so a policy never widens what Wardyn allows.
 	HarnessInnerWalls *HarnessInnerWalls `json:"harness_inner_walls,omitempty"`
+	// Desktop sets the desktop's clipboard and file-transfer rules by direction (#2967). Nil is
+	// the defaults: paste in and upload allowed, copy out and download blocked.
+	Desktop *DesktopControls `json:"desktop,omitempty"`
 }
 
 // HarnessInnerWalls is a harness's own walls inside the sandbox. On a policy each field is a choice
@@ -379,6 +382,10 @@ func (s RunPolicySpec) Clone() RunPolicySpec {
 	if s.HarnessInnerWalls != nil {
 		w := *s.HarnessInnerWalls
 		out.HarnessInnerWalls = &w
+	}
+	if s.Desktop != nil {
+		d := *s.Desktop
+		out.Desktop = &d
 	}
 	if s.PushRules != nil {
 		pr := *s.PushRules

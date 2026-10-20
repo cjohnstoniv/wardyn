@@ -165,6 +165,9 @@ func validatePolicySpecMode(spec types.RunPolicySpec, strict, resolveMounts bool
 	if err := validateHarnessInnerWalls(spec.HarnessInnerWalls); err != nil {
 		return err
 	}
+	if err := validateDesktopControls(spec.Desktop); err != nil {
+		return err
+	}
 	if err := validateUIApps(spec.UIApps); err != nil {
 		return err
 	}

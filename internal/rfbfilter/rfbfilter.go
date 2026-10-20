@@ -74,6 +74,8 @@ const (
 type Conn struct {
 	backend io.ReadWriteCloser
 	audit   func(Event)
+	refused func(error)
+	once    sync.Once
 
 	mu     sync.Mutex // mode and the RFB state both directions share
 	mode   mode
@@ -85,11 +87,13 @@ type Conn struct {
 	win       []byte // browser bytes not yet a whole frame
 }
 
-// Wrap filters backend under rules, reporting each cut text to audit. audit is
-// called outside the lock, from the goroutine that relayed the message.
-func Wrap(backend io.ReadWriteCloser, rules Rules, audit func(Event)) *Conn {
+// Wrap filters backend under rules, reporting each cut text to audit, and the
+// first thing it could not follow to refused (an error that names a message
+// type or an encoding, never content). Both are called outside the lock, from
+// the goroutine that relayed the bytes.
+func Wrap(backend io.ReadWriteCloser, rules Rules, audit func(Event), refused func(error)) *Conn {
 	s := &session{rules: rules}
-	c := &Conn{backend: backend, audit: audit, server: &parser{s: s}, client: &parser{s: s}}
+	c := &Conn{backend: backend, audit: audit, refused: refused, server: &parser{s: s}, client: &parser{s: s}}
 	c.server.msg, c.client.msg = c.server.serverMsg, c.client.clientMsg
 	c.server.expect(12, c.server.serverVersion)
 	c.client.expect(12, c.client.clientVersion)
@@ -141,6 +145,9 @@ func (c *Conn) filter(pending *[]byte, in []byte, fromServer bool) ([]byte, erro
 	for _, ev := range events {
 		c.audit(ev)
 	}
+	if err != nil {
+		c.once.Do(func() { c.refused(err) })
+	}
 	return out, err
 }
 
@@ -149,6 +156,11 @@ func (c *Conn) filterLocked(pending *[]byte, in []byte, fromServer bool, events 
 	var out []byte
 	for c.mode != rawMode {
 		f, n, err := readFrame(*pending)
+		if err != nil && c.mode == sniffing && !fromServer {
+			// The browser spoke first and not in frames: not an RFB socket, whose server speaks first.
+			c.mode = rawMode
+			break
+		}
 		if err != nil {
 			return nil, err
 		}

@@ -74,6 +74,19 @@
   each of them bigger, and because the decision to ship it anyway was taken with
   them in view rather than around them.
 
+## The desktop's clipboard
+
+- The relay filters a desktop's clipboard by the run's [`desktop`](POLICIES.md#desktop--desktopcontrols) rules:
+  paste in allowed and copy out blocked unless the policy says otherwise.
+- It follows the RFB stream inside every relayed WebSocket whose server opens with an RFB version, and drops a
+  blocked `ClientCutText` or `ServerCutText`. Other sockets pass unchanged; the app's name plays no part.
+- It fails closed: a text frame, a WebSocket extension, a security type that encrypts the stream, or a message or
+  encoding it cannot frame closes the socket, and the gateway logs which one.
+- It offers the sandbox no WebSocket extension and narrows the browser's encodings to Raw, CopyRect, ZRLE and the
+  pseudo-encodings it frames, so Tight is off on this path.
+- It filters the clipboard, not the screen: a person can still read what the desktop shows, and a page the
+  sandbox serves can still show text.
+
 ## Diagnosing a blocked request
 
 - A relayed editor is the place developers most often meet the egress policy, and
@@ -431,6 +444,7 @@ no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found
 | `ui.start` | the launcher was run and the app came up | app, port, launcher path |
 | `ui.open` | a relay connection opened | app, port |
 | `ui.close` | that connection closed | app, port, `duration_sec` |
+| `ui.clipboard` | a desktop clipboard transfer, relayed or dropped | app, direction, bytes, sha256 (never the text) |
 
 - These are deliberately **not** `session.attach`: there is no PTY and no holder,
   and a relay session must never appear in the run detail page's Recording tab as

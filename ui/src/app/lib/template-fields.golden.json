@@ -66,6 +66,12 @@
       "shared",
       "delivery"
     ],
+    "DesktopControls": [
+      "paste_in",
+      "copy_out",
+      "upload",
+      "download"
+    ],
     "DriveAttachment": [
       "drive_id",
       "read_only"
@@ -344,6 +350,14 @@
       "omitted": "unset_optional",
       "empty": "value",
       "meaning": "No application is declared for the browser.",
+      "section": "run_wide"
+    },
+    {
+      "name": "desktop",
+      "part": "tools_image",
+      "omitted": "unset_optional",
+      "empty": "same_as_omitted",
+      "meaning": "The desktop keeps its defaults: paste in and upload allowed, copy out and download blocked.",
       "section": "run_wide"
     },
     {

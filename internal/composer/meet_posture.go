@@ -70,6 +70,13 @@ func (m *meeter) meetPosture(o types.CeilingOverlay) {
 	if o.HarnessInnerWalls != nil {
 		m.meetInnerWalls(*o.HarnessInnerWalls)
 	}
+	if o.Desktop != nil {
+		if !leqDesktop(o.Desktop, c.Desktop) {
+			m.widen("desktop", "the base blocks a desktop direction, and an overlay can only block more")
+		}
+		d := c.Desktop.Meet(o.Desktop)
+		c.Desktop = &d
+	}
 	if o.GitHubCapabilities != nil {
 		if both, ok := m.meetCapabilities("github_capabilities", capStrings(c.GitHubCapabilities), capStrings(*o.GitHubCapabilities)); ok {
 			c.GitHubCapabilities = toCaps[ghscope.Capability](both)

@@ -149,6 +149,13 @@ export const FIELD_HELP = {
     doc: "ui_apps--uiapp",
     snippet: [{ name: "editor", port: 8080 }],
   },
+  desktop: {
+    what: "What may cross the desktop's edge, one rule per direction: the clipboard at the desktop relay, files at the run's Files panel.",
+    values:
+      "paste_in, copy_out, upload, download: each allowed | blocked. Omitted keeps the default: paste in and upload allowed, copy out and download blocked. A member's run can only block more than its ceiling.",
+    doc: "desktop--desktopcontrols",
+    snippet: { copy_out: "allowed" },
+  },
   tool_rules: {
     what: "Per-tool effects for a run whose tool approvals are held — the middle between approving everything and approving nothing.",
     values:

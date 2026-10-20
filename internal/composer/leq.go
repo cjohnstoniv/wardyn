@@ -147,7 +147,15 @@ func leqPosture(a, b types.RunPolicySpec) bool {
 		leqUIApps(a.UIApps, b.UIApps) &&
 		leqResources(a.Resources, b.Resources) &&
 		leqToolRules(a.ToolRules, b.ToolRules) &&
-		leqInnerWalls(a.HarnessInnerWalls, b.HarnessInnerWalls)
+		leqInnerWalls(a.HarnessInnerWalls, b.HarnessInnerWalls) &&
+		leqDesktop(a.Desktop, b.Desktop)
+}
+
+// leqDesktop holds when a allows no desktop direction b blocks, either side's defaults applied.
+func leqDesktop(a, b *types.DesktopControls) bool {
+	x, y := a.Effective(), b.Effective()
+	opens := func(p, q types.TransferRule) bool { return p == types.TransferAllowed && q == types.TransferBlocked }
+	return !opens(x.PasteIn, y.PasteIn) && !opens(x.CopyOut, y.CopyOut) && !opens(x.Upload, y.Upload) && !opens(x.Download, y.Download)
 }
 
 // leqMounts holds when every mount of a is a (source, target) mount of b, and

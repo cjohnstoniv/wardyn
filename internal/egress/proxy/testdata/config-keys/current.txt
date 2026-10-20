@@ -105,6 +105,11 @@ policy.allowed_methods
 policy.auto_stop_after_sec
 policy.azure_devops_capabilities
 policy.denied_domains
+policy.desktop
+policy.desktop.copy_out
+policy.desktop.download
+policy.desktop.paste_in
+policy.desktop.upload
 policy.eligible_grants
 policy.eligible_grants.kind
 policy.eligible_grants.owner_only

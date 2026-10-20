@@ -42,16 +42,17 @@ func (f *fakeBackend) Write(p []byte) (int, error) {
 func (f *fakeBackend) Close() error { return nil }
 
 type harness struct {
-	t      *testing.T
-	fb     *fakeBackend
-	c      *Conn
-	events []Event
-	split  bool // deliver every frame in 1-byte reads/writes, and every message in two frames
+	t       *testing.T
+	fb      *fakeBackend
+	c       *Conn
+	events  []Event
+	refused []error
+	split   bool // deliver every frame in 1-byte reads/writes, and every message in two frames
 }
 
 func newHarness(t *testing.T, rules Rules, split bool) *harness {
 	h := &harness{t: t, fb: &fakeBackend{}, split: split}
-	h.c = Wrap(h.fb, rules, func(ev Event) { h.events = append(h.events, ev) })
+	h.c = Wrap(h.fb, rules, func(ev Event) { h.events = append(h.events, ev) }, func(err error) { h.refused = append(h.refused, err) })
 	return h
 }
 
@@ -265,6 +266,19 @@ func TestNonRFBSocketRelayedUnchanged(t *testing.T) {
 	}
 }
 
+// A browser that speaks first, and not even in WebSocket frames, is not on an RFB socket: its
+// bytes, and the server's answer, pass as they are.
+func TestClientFirstUnframedBytesRelayedUnchanged(t *testing.T) {
+	h := newHarness(t, Rules{}, false)
+	if _, err := h.c.Write([]byte("ping\n")); err != nil || string(h.fb.written) != "ping\n" {
+		t.Fatalf("client-first bytes: %q (err %v)", h.fb.written, err)
+	}
+	h.fb.chunks = append(h.fb.chunks, []byte("RFB 003.008\n"))
+	if got, err := io.ReadAll(h.c); err != nil || string(got) != "RFB 003.008\n" {
+		t.Fatalf("server bytes after a raw client: %q (err %v)", got, err)
+	}
+}
+
 // Anything the relay cannot follow ends the connection.
 func TestFailsClosedOnWhatItCannotFollow(t *testing.T) {
 	cases := map[string]func(h *harness) error{
@@ -288,8 +302,8 @@ func TestFailsClosedOnWhatItCannotFollow(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			h := newHarness(t, Rules{}, false)
 			h.handshake38()
-			if err := run(h); err == nil {
-				t.Fatal("the relay carried on; it must end the connection")
+			if err := run(h); err == nil || len(h.refused) != 1 {
+				t.Fatalf("the relay carried on (err %v, %d refusals reported); it must end the connection and say why once", err, len(h.refused))
 			}
 		})
 	}

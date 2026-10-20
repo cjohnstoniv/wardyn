@@ -5,6 +5,7 @@ package api
 
 import (
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 )
@@ -109,3 +110,23 @@ func uiSetCookieAllowed(sc string) bool {
 	}
 	return true
 }
+
+// uiInterimWriter filters Set-Cookie on a 1xx (a 103 Early Hints, say). ReverseProxy copies an interim
+// response's headers straight onto the writer and never runs ModifyResponse for it, so without this
+// uiStripOutbound's rules would not apply to a sandbox's 1xx at all. Unwrap keeps flush and hijack
+// reachable through http.ResponseController.
+type uiInterimWriter struct{ http.ResponseWriter }
+
+func (w uiInterimWriter) WriteHeader(code int) {
+	if code >= 100 && code < 200 {
+		uiFilterSetCookie(w.Header())
+		w.Header().Del("Clear-Site-Data")
+	} else {
+		// ReverseProxy clears the header map after each 1xx, which takes the
+		// gateway's own Referrer-Policy with it; put it back on the final response.
+		w.Header().Set("Referrer-Policy", "no-referrer")
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w uiInterimWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }

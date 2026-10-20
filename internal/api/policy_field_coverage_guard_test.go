@@ -81,6 +81,8 @@ var runPolicySpecCoverage = map[string]policyFieldCoverage{
 		why: "closed effect enum, name charset/length, count cap; a proposal may narrow the ceiling's rules and never widen them"},
 	"HarnessInnerWalls": {validated: true, clamped: true,
 		why: "closed values, the harness's own sandbox modes refused with their own reason (validateHarnessInnerWalls); each axis the ceiling chooses stands over the proposal's (clampInnerWalls). The create door refuses a run whose walls cannot meet the choice, a looser one included (innerWallsFor)"},
+	"Desktop": {validated: true, clamped: true,
+		why: "closed values per direction (validateDesktopControls); a direction the ceiling blocks, its defaults included, is blocked in the proposal (clampDesktop)"},
 	"GitPushAnyBranch": {validated: false, clamped: true,
 		why: "forced false unless the ceiling sets it — a boolean with no shape to validate. Grade adds the item so the human is told when it is on"},
 	"AzureDevOpsCapabilities": {validated: true, clamped: false,

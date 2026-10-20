@@ -14,6 +14,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on
   `aws_sso_refused_tokens` (migration `0194_aws_sso_refused_tokens`). Without it an AWS SSO session whose renewal
   AWS refused cannot be marked, read or cleared, so replicas do not share that mark.
+- **Copying out of a desktop is now blocked by default.** The UI gateway's relay filters a desktop's clipboard: paste
+  into the desktop stays allowed, copy out of it is dropped and audited as `ui.clipboard`. Until now both directions
+  synced unfiltered. To keep copy out, set `desktop.copy_out` to `allowed` on the policy, and on the ceiling of any
+  member who should have it ([`desktop`](docs/POLICIES.md#desktop--desktopcontrols)).
 
 ## [0.9.5] — 2026-10-19
 

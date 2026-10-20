@@ -464,26 +464,6 @@ func (s *Server) handleUIRelay(w http.ResponseWriter, r *http.Request) {
 	s.serveUIRelay(w, r.WithContext(ctx))
 }
 
-// uiInterimWriter filters Set-Cookie on a 1xx (a 103 Early Hints, say). ReverseProxy copies an interim
-// response's headers straight onto the writer and never runs ModifyResponse for it, so without this
-// uiStripOutbound's rules would not apply to a sandbox's 1xx at all. Unwrap keeps flush and hijack
-// reachable through http.ResponseController.
-type uiInterimWriter struct{ http.ResponseWriter }
-
-func (w uiInterimWriter) WriteHeader(code int) {
-	if code >= 100 && code < 200 {
-		uiFilterSetCookie(w.Header())
-		w.Header().Del("Clear-Site-Data")
-	} else {
-		// ReverseProxy clears the header map after each 1xx, which takes the
-		// gateway's own Referrer-Policy with it; put it back on the final response.
-		w.Header().Set("Referrer-Policy", "no-referrer")
-	}
-	w.ResponseWriter.WriteHeader(code)
-}
-
-func (w uiInterimWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
-
 // uiReverseProxy builds the ONE shared reverse proxy (and its exec-lane
 // transport) on first use. Per-request state — which run, which port — rides
 // the request context, so nothing here is per-run and the idle-connection pool
@@ -553,6 +533,7 @@ func (s *Server) uiRewrite(pr *httputil.ProxyRequest) {
 func uiStripInbound(out *http.Request, policy UICookiePolicy) {
 	out.Header.Del("Authorization")
 	out.Header.Del("Proxy-Authorization")
+	out.Header.Del("Sec-WebSocket-Extensions") // compression would hide a desktop's RFB stream (uiFilterUpgrade)
 	// Filtered off the RAW header, never rebuilt from out.Cookies(): net/http's
 	// parser silently DROPS any cookie whose value is not RFC-6265-valid (a
 	// space, a comma, a quote), so re-serialising through it ate a sandbox
@@ -596,6 +577,9 @@ func (s *Server) uiStripOutbound(resp *http.Response) error {
 	resp.Header.Del("Clear-Site-Data")
 	if sess, ok := uiSessionFromContext(resp.Request.Context()); ok {
 		uiConfineServiceWorker(resp.Request, resp.Header, s.uiBasePath()+uiRelayPrefix(sess.Run, sess.App)+"/")
+		if resp.StatusCode == http.StatusSwitchingProtocols {
+			return s.uiFilterUpgrade(resp, sess)
+		}
 	} else {
 		resp.Header.Del("Service-Worker-Allowed")
 	}
