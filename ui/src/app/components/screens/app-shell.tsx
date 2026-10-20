@@ -557,6 +557,9 @@ export function AppShell({
             >
               Skip to main content
             </a>
+            {/* Measured for focus mode, so it starts above the reauth layer: that layer's z-50 bar
+          must grow this box, or the overlay's offset goes stale when the bar comes and goes. */}
+            <div ref={bannerStackRef} className="shrink-0">
             {/* The lazy coordinator also reconciles auth changes while no dialog or watch is active. */}
             <React.Suspense fallback={null}>
               <ReauthLayer onResumed={adoptIdentity} />
@@ -576,7 +579,6 @@ export function AppShell({
                 tier={tier}
               />
             )}
-            <div ref={bannerStackRef} className="shrink-0">
             {/* The no-credential preview's band, and its way out. FIRST of the
           banners and not hidden in focus mode: it explains the refusals the
           others might be mistaken for. The plain User view has no band. */}

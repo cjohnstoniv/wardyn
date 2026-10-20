@@ -9,7 +9,8 @@
 // credential facts as text — including the one it must NOT state, a credential
 // mint that was denied.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import * as React from "react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
@@ -34,6 +35,8 @@ import { ThemeProvider } from "../../wardyn/theme-provider";
 import { RunCanvas } from "./canvas";
 import { FocusMode } from "./focus-mode";
 import { RUN_COCKPIT } from "../../wardyn/copy";
+import { REAUTH_BAR } from "../../../lib/reauth-copy";
+import { ReauthContext, useReauthController, type Reauth } from "../../../lib/reauth";
 import { MOD, chordLabel } from "../../wardyn/kbd";
 import type { WidgetContext } from "./widget-registry";
 import { aheadByHours } from "../../../lib/test-clock";
@@ -84,7 +87,7 @@ afterEach(() => vi.unstubAllGlobals());
 // The whole point of the mode: the canvas asks, the SHELL answers. Driven
 // through the real AppShell rather than a stub context, because "the shell
 // hides its own chrome" is the assertion.
-function renderCockpitInShell() {
+function renderCockpitInShell(Wrap: React.ComponentType<{ children: React.ReactNode }> = React.Fragment) {
   vi.stubGlobal(
     "fetch",
     vi.fn((input: RequestInfo | URL) =>
@@ -105,11 +108,13 @@ function renderCockpitInShell() {
   render(
     <MemoryRouter initialEntries={["/runs/run-1"]}>
       <ThemeProvider>
-        <Routes>
-          <Route element={<AppShell pendingApprovals={0} attentionCount={0} onSignOut={() => {}} />}>
-            <Route path="/runs/:id" element={<RunCanvas ctx={ctx()} />} />
-          </Route>
-        </Routes>
+        <Wrap>
+          <Routes>
+            <Route element={<AppShell pendingApprovals={0} attentionCount={0} onSignOut={() => {}} />}>
+              <Route path="/runs/:id" element={<RunCanvas ctx={ctx()} />} />
+            </Route>
+          </Routes>
+        </Wrap>
       </ThemeProvider>
     </MemoryRouter>,
   );
@@ -129,6 +134,67 @@ describe("Focus mode — the shell gets out of the way", () => {
       expect(overlay).toHaveClass("top-[var(--shell-banner-h,0px)]");
       await user.keyboard("{Escape}");
       await waitFor(() => expect(document.documentElement.style.getPropertyValue("--shell-banner-h")).toBe(""));
+    } finally {
+      rect.mockRestore();
+    }
+  });
+
+  it("follows the re-authentication bar coming and going while focus is on", async () => {
+    const user = userEvent.setup();
+    const BAR_H = 36;
+    // jsdom has no layout and no resize events: a box is 44px plus the bar's height when the bar is inside it,
+    // and a fake observer fires only for a box whose height changed, as the real one does.
+    const height = (el: Element) => 44 + (el.textContent?.includes(REAUTH_BAR.BODY) ? BAR_H : 0);
+    const rect = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: HTMLElement) {
+        return { top: 0, bottom: height(this) } as DOMRect;
+      });
+    const watched = new Map<Element, number>();
+    const fireResizes = () =>
+      act(() => {
+        for (const [el, last] of watched) {
+          if (height(el) === last) continue;
+          watched.set(el, height(el));
+          liveObservers.forEach((o) => o.cb([], o as unknown as ResizeObserver));
+        }
+      });
+    const liveObservers = new Set<{ cb: ResizeObserverCallback }>();
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(readonly cb: ResizeObserverCallback) {
+          liveObservers.add(this);
+        }
+        observe(el: Element) {
+          watched.set(el, height(el));
+        }
+        disconnect() {
+          liveObservers.delete(this);
+        }
+        unobserve() {}
+      },
+    );
+    let reauth: Reauth | undefined;
+    function Controlled({ children }: { children: React.ReactNode }) {
+      const c = useReauthController(() => {});
+      reauth = c.reauth;
+      return <ReauthContext.Provider value={c.reauth}>{children}</ReauthContext.Provider>;
+    }
+    const offset = () => document.documentElement.style.getPropertyValue("--shell-banner-h");
+    try {
+      renderCockpitInShell(Controlled);
+      await screen.findByRole("heading", { name: "Egress" });
+      await user.click(screen.getByRole("button", { name: RUN_COCKPIT.enterFocus }));
+      expect(offset()).toBe("44px");
+      act(() => reauth?.setPhase("bar"));
+      await screen.findByText(REAUTH_BAR.BODY);
+      fireResizes();
+      expect(offset()).toBe(`${44 + BAR_H}px`);
+      act(() => reauth?.setPhase("none"));
+      await waitFor(() => expect(screen.queryByText(REAUTH_BAR.BODY)).toBeNull());
+      fireResizes();
+      expect(offset()).toBe("44px");
     } finally {
       rect.mockRestore();
     }

@@ -55,17 +55,21 @@ function TrustEditor({ runner, onChanged }: { runner: RunnerView; onChanged: () 
   const [heldChange, setHeldChange] = React.useState<GovernanceChange | null>(null);
   const held = heldChange !== null;
   const [error, setError] = React.useState("");
-  // A held proposal blocks another for the same runner (409), so Save waits: approval changes the class and remounts this,
-  // and a proposal that is no longer pending (rejected, withdrawn, expired) is dropped by the recheck below.
+  // A held proposal blocks another for the same runner (409), so Save waits. One that is no longer pending is dropped by
+  // the recheck below, which also reloads the runner: an approval changed its class and remounts this editor.
   const heldId = heldChange?.id;
+  const changedRef = React.useRef(onChanged);
+  changedRef.current = onChanged;
   React.useEffect(() => {
     if (!heldId) return;
     let live = true;
     const t = setInterval(() => {
       governance
-        .listChanges()
-        .then((pending) => {
-          if (live && !pending.some((c) => c.id === heldId)) setHeldChange(null);
+        .getChange(heldId)
+        .then((change) => {
+          if (!live || change.state === "pending") return;
+          setHeldChange(null);
+          changedRef.current();
         })
         .catch(() => {});
     }, HELD_RECHECK_MS);

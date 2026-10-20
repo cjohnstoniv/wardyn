@@ -13,10 +13,10 @@ import { toast } from "sonner";
 
 const setTrustMock = vi.fn();
 vi.mock("../../../lib/api/runners", () => ({ runners: { setTrust: (...a: unknown[]) => setTrustMock(...a), revoke: vi.fn() } }));
-const listChangesMock = vi.fn();
+const getChangeMock = vi.fn();
 vi.mock("../../../lib/api/governance", async (orig) => ({
   ...(await orig<typeof import("../../../lib/api/governance")>()),
-  governance: { listChanges: () => listChangesMock() },
+  governance: { getChange: (id: string) => getChangeMock(id) },
 }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
@@ -65,7 +65,7 @@ const trigger = () => screen.getByRole("combobox", { name: "Trust class" });
 
 beforeEach(() => {
   setTrustMock.mockReset();
-  listChangesMock.mockReset();
+  getChangeMock.mockReset();
   onChanged.mockReset();
   vi.mocked(toast.success).mockReset();
 });
@@ -145,12 +145,12 @@ describe("Admin -> Runners trust class: a person's runner, a security admin", ()
     expect(screen.getByRole("button", { name: "Change trust class" })).toBeDisabled();
   });
 
-  it("a held proposal that is rejected or withdrawn frees Save again, and one still pending keeps it off", async () => {
+  it("a held proposal that is rejected or withdrawn frees Save and reloads the runner, and one still pending does neither", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
       setTrustMock.mockRejectedValue(new PendingChangeError({ id: "chg-1" } as GovernanceChange));
-      listChangesMock.mockResolvedValue([{ id: "chg-1" }]);
+      getChangeMock.mockResolvedValue({ id: "chg-1", state: "pending" });
       open(runner());
       await user.click(await screen.findByRole("combobox", { name: "Trust class" }));
       await user.click(screen.getByRole("option", { name: "Managed device" }));
@@ -159,11 +159,13 @@ describe("Admin -> Runners trust class: a person's runner, a security admin", ()
       await user.click(save());
       await screen.findByText("Held for a second person.");
       await act(() => vi.advanceTimersByTimeAsync(16_000));
-      expect(listChangesMock).toHaveBeenCalled();
+      expect(getChangeMock).toHaveBeenCalledWith("chg-1");
       expect(save()).toBeDisabled();
-      listChangesMock.mockResolvedValue([]);
+      expect(onChanged).not.toHaveBeenCalled();
+      getChangeMock.mockResolvedValue({ id: "chg-1", state: "rejected" });
       await act(() => vi.advanceTimersByTimeAsync(16_000));
       expect(save()).toBeEnabled();
+      expect(onChanged).toHaveBeenCalledTimes(1);
       expect(screen.queryByText("Held for a second person.")).toBeNull();
     } finally {
       vi.useRealTimers();
