@@ -27,6 +27,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner/runneragent"
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 	"github.com/cjohnstoniv/wardyn/internal/runneridentity"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 )
 
 // serviceAccountNamespace is where the kubelet writes runnerd's own namespace.
@@ -126,6 +127,10 @@ func k8sRunnerHooks(ctx context.Context, identity runneridentity.Identity, state
 		return runnerRuntime{}, errors.Join(err, relay.Close(), sink.Close())
 	}
 	relay.lookup = drv.ProxyRunByIP
+	var linuxVM *runnerwire.VMCaps
+	if env.linuxVM {
+		linuxVM = enableK8sLinuxVM(ctx, drv)
+	}
 	ks := keystore.NewK8s(drv.Clientset(), ownNS, runnerID)
 	started := func(ctx context.Context, m *offline.Manager) error {
 		ev.m = m
@@ -155,6 +160,7 @@ func k8sRunnerHooks(ctx context.Context, identity runneridentity.Identity, state
 		options:   offline.Options{ProxySelfLapses: true, Tick: sink.Tick},
 		started:   started,
 		closeAlso: sink.Close,
+		linuxVM:   linuxVM,
 	})
 	if err != nil {
 		return runnerRuntime{}, errors.Join(err, relay.Close(), sink.Close())
@@ -174,6 +180,19 @@ func k8sRunnerHooks(ctx context.Context, identity runneridentity.Identity, state
 	}
 	slog.InfoContext(ctx, "k8s runner ready to connect", "runs_namespace", opts.runsNamespace, "relay", clusterIP, "listen", env.podIP)
 	return rt, nil
+}
+
+// enableK8sLinuxVM turns Linux VM sandboxes on (CC3 pods under the pinned RuntimeClass) and returns
+// what the runner's caps offer. A RuntimeClass that does not resolve logs why and offers none;
+// container runs are untouched either way.
+func enableK8sLinuxVM(ctx context.Context, drv *k8s.Driver) *runnerwire.VMCaps {
+	m, err := drv.EnableLinuxVM(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "Linux VM sandboxes are off on this runner", "reason", err.Error())
+		return nil
+	}
+	slog.InfoContext(ctx, "Linux VM sandboxes are on", "machine_type", m.MachineType)
+	return &runnerwire.VMCaps{MachineType: m.MachineType, CPUModel: m.CPUModel, QEMUVersion: m.QEMUVersion}
 }
 
 // startDecisionSink serves the state directory's sink (stateDirSink) on the pod IP at the sink port.

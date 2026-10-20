@@ -30,6 +30,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -205,6 +206,9 @@ type Driver struct {
 	// risk is not proof, and ClassSupport.NetworkPolicy must never overclaim.
 	// Surfaced as ClassSupport.NetworkPolicyAcknowledged instead.
 	netPolAcked bool
+
+	// linuxVM is set by EnableLinuxVM; unset, every non-container kind is refused.
+	linuxVM atomic.Bool
 
 	// execFactory is the test seam newExecutor (session.go) defers to when
 	// set: replaces the real SPDY/WebSocket-fallback executor (which dials

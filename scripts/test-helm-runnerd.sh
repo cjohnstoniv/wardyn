@@ -80,6 +80,12 @@ arm="$(render --set sandbox.arch=arm64 | yq 'select(.kind == "Deployment") | .sp
   || die "serve is not given WARDYN_RUNNERD_ARCH=arm64: run pods would not be pinned to arm64 nodes"
 ok "sandbox.arch reaches register --arch and serve WARDYN_RUNNERD_ARCH"
 
+vm="$(render --set k8s.linuxVM=true | yq 'select(.kind == "Deployment") | .spec.template.spec')"
+[ "$(val "$vm" '.containers[0].env[] | select(.name == "WARDYN_RUNNER_LINUX_VM") | .value')" = "1" ] \
+  || die "k8s.linuxVM=true does not give serve WARDYN_RUNNER_LINUX_VM=1"
+grep -q WARDYN_RUNNER_LINUX_VM <<<"$out" && die "Linux VM sandboxes are on by default"
+ok "k8s.linuxVM reaches serve WARDYN_RUNNER_LINUX_VM; off by default"
+
 refused() { # <label> <message pattern> <helm args...>
   local label="$1" pattern="$2" err
   shift 2

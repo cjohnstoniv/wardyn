@@ -32,6 +32,7 @@ func TestChartSetsOnlyWhatRunnerdReads(t *testing.T) {
 		"--set", "k8s.imagePullSecret=pull",
 		"--set", "k8s.sandbox.nodeSelector.pool=runs",
 		"--set", "k8s.runtimeClasses.CC2=runsc",
+		"--set", "k8s.linuxVM=true",
 		"--set", "trustedCA.configMap=corp-ca",
 		"--set", "limits.maxRuns=2", "--set", "limits.totalCPU=4", "--set", "limits.totalMemory=8", "--set", "limits.totalDisk=50",
 		"--set", "limits.perRunCPU=2", "--set", "limits.perRunMemory=4", "--set", "limits.perRunDisk=25",

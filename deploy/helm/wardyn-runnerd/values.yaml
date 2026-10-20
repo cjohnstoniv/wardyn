@@ -95,6 +95,9 @@ k8s:
   runtimeClasses:
     CC2: ""
     CC3: ""
+  # true offers Linux VM sandboxes (machine_kind linux_vm): each is a pod under runtimeClasses.CC3, which
+  # must name a microVM runtime such as Kata; runnerd offers none when that class does not resolve.
+  linuxVM: false
 
 # false: a platform team applies the ClusterRole, ClusterRoleBinding and both Roles and RoleBindings itself,
 # before the image starts (see NOTES).
