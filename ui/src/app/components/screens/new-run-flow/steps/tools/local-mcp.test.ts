@@ -39,6 +39,11 @@ describe("the command line", () => {
     expect(commandProblem(text)).toBe(problem);
   });
 
+  it("ends the server's two sentences with a period, as the overseer ruled", () => {
+    expect(NR_TOOLS.MCP_ERR_PROGRAM("uvx")).toBe('"uvx" must be npx or the absolute path of a program in the image.');
+    expect(NR_TOOLS.MCP_ERR_NPX_FLAG).toBe("npx takes only -y before the package here; name the package as its first argument.");
+  });
+
   // The server's own cases, copied from TestComponentMCP_StdioLaunch (internal/types/component_mcp_test.go): the Go
   // side is not on every tree this runs on, so its table is kept here. Change one, change the other.
   // Not mirrored: a url, a missing launch, a control byte inside one argument and the argument-count cap, which the
@@ -129,6 +134,7 @@ describe("a server that runs in the sandbox", () => {
     expect(sandboxSecrets(access, DRAFT)).toEqual([{ server: "docs-search", secret: "DOCS_TOKEN" }]);
     expect(sandboxSecrets(access, {})).toEqual([{ server: "docs-search", secret: "Your secret" }]);
     expect(sandboxSecrets({ ...access, credentials: [{ ...ENV_CREDENTIAL, delivery: "proxy" }] }, DRAFT)).toEqual([]);
+    expect(sandboxSecrets({ ...access, credentials: [{ ...ENV_CREDENTIAL, label: undefined }] }, {})).toEqual([{ server: "docs-search", secret: undefined }]);
   });
 });
 

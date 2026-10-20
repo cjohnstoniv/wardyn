@@ -100,7 +100,7 @@ export function policyRows(
     label: NR_REVIEW.POLICY_CREDENTIALS,
     value: joined(provider, ...kinds),
     detail: provider ? NR_REVIEW.POLICY_HIDDEN : kinds.length ? undefined : NR_REVIEW.POLICY_NO_CREDENTIALS,
-    ...(inSandbox.length > 0 && { notes: inSandbox.map((s) => ({ text: NR_REVIEW.POLICY_IN_SANDBOX(s.secret, s.server) })) }),
+    ...(inSandbox.length > 0 && { notes: inSandbox.map((s) => ({ text: s.secret ? NR_REVIEW.POLICY_IN_SANDBOX(s.secret, s.server) : NR_REVIEW.POLICY_IN_SANDBOX_UNNAMED(s.server) })) }),
   });
 
   const names = joined(...(pre?.attachments ?? []).map((a) => a.name));

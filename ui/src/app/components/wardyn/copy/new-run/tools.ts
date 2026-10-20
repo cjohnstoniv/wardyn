@@ -208,8 +208,8 @@ export const NR_TOOLS = {
   MCP_ERR_COMMAND: "Enter the command.",
   MCP_ERR_PIN: "Pin the package version, for example @example/mcp-server@1.4.2.",
   /** The next two are the server's own sentences (internal/types validateLocal), minus the field path the error already sits on. */
-  MCP_ERR_PROGRAM: (command: string) => `${JSON.stringify(command)} must be npx or the absolute path of a program in the image`,
-  MCP_ERR_NPX_FLAG: "npx takes only -y before the package here; name the package as its first argument",
+  MCP_ERR_PROGRAM: (command: string) => `${JSON.stringify(command)} must be npx or the absolute path of a program in the image.`,
+  MCP_ERR_NPX_FLAG: "npx takes only -y before the package here; name the package as its first argument.",
   MCP_HOSTS_PLACEHOLDER: "e.g. api.example.com",
   MCP_HOSTS_HELP: "The hosts the server reaches. Your organisation's ceiling still applies.",
   MCP_DELIVERY_NOTE: "A request header is added by the proxy and never enters the sandbox. An environment variable or a file is placed in the sandbox.",

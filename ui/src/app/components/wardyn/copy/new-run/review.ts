@@ -129,6 +129,7 @@ export const NR_REVIEW = {
   /** One harness's default when the included harnesses default differently. */
   POLICY_TOOLS_OF: (harness: string | number, effect: string | number) => `${harness}: ${effect}`,
   POLICY_IN_SANDBOX: (secret: string | number, server: string | number) => `In the sandbox: ${secret} for ${server}`,
+  POLICY_IN_SANDBOX_UNNAMED: (server: string | number) => `In the sandbox: a secret for ${server}`,
   POLICY_HARNESS_RULES: (server: string | number) => `${server}: rules applied by the harness`,
   /** The harness's own walls (#2822), on Review's tools row and the run page's policy row. */
   INNER_WALLS: (sandbox: string | number, approvals: string | number) => `Harness walls: ${sandbox}, ${approvals}`,

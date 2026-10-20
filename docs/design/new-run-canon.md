@@ -621,8 +621,8 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `MCP_COMMAND_HELP` | mock | The command and its arguments, started in the sandbox and spoken to over stdio. Pin the package version, for example @1.4.2. |
 | `MCP_ERR_COMMAND` | mock | Enter the command. |
 | `MCP_ERR_PIN` | mock | Pin the package version, for example @example/mcp-server@1.4.2. |
-| `MCP_ERR_PROGRAM(command)` | deviation (lead 2026-10-20: the server's own sentence, validateLocal) | "{command}" must be npx or the absolute path of a program in the image |
-| `MCP_ERR_NPX_FLAG` | deviation (lead 2026-10-20: the server's own sentence, validateLocal) | npx takes only -y before the package here; name the package as its first argument |
+| `MCP_ERR_PROGRAM(command)` | deviation (lead 2026-10-20: the server's own sentence, validateLocal) | "{command}" must be npx or the absolute path of a program in the image. |
+| `MCP_ERR_NPX_FLAG` | deviation (lead 2026-10-20: the server's own sentence, validateLocal) | npx takes only -y before the package here; name the package as its first argument. |
 | `MCP_HOSTS_PLACEHOLDER` | mock | e.g. api.example.com |
 | `MCP_HOSTS_HELP` | mock | The hosts the server reaches. Your organisation's ceiling still applies. |
 | `MCP_DELIVERY_NOTE` | mock | A request header is added by the proxy and never enters the sandbox. An environment variable or a file is placed in the sandbox. |
@@ -842,6 +842,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `POLICY_AUTOMATIC` | mock | Run automatically |
 | `POLICY_TOOLS_OF(harness, effect)` | mock | {harness}: {effect} |
 | `POLICY_IN_SANDBOX(secret, server)` | mock | In the sandbox: {secret} for {server} |
+| `POLICY_IN_SANDBOX_UNNAMED(server)` | deviation (lead wording, cleared by the overseer 2026-10-20, FEAT-1MCP-UI) | In the sandbox: a secret for {server} |
 | `POLICY_HARNESS_RULES(server)` | mock | {server}: rules applied by the harness |
 | `INNER_WALLS(sandbox, approvals)` | deviation (approved 2026-10-19, overseer, #2822) | Harness walls: {sandbox}, {approvals} |
 | `INNER_SANDBOX_OFF` | deviation (approved 2026-10-19, overseer, #2822) | harness sandbox off |

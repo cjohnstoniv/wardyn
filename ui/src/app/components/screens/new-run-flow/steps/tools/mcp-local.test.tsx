@@ -325,6 +325,15 @@ describe("Review", () => {
     expect(tools.getByText(NR_REVIEW.POLICY_HARNESS_RULES("docs-search"))).toBeTruthy();
   });
 
+  it("says a secret without a label by its server, with no gap where the name would be", () => {
+    on();
+    const unnamed = { ...ACCESS, credentials: [{ ...MCP_LOCAL_ENV, label: undefined }] };
+    render(<EffectivePolicyCard draft={draftOf({})} pre={{ ...pre, access: unnamed }} preview={null} />);
+    const credentials = within(document.querySelector("[data-policy-row=credentials]") as HTMLElement);
+    expect(credentials.getByText("In the sandbox: a secret for docs-search")).toBeTruthy();
+    expect(credentials.queryByText(/In the sandbox:\s{2}/)).toBeNull();
+  });
+
   it("has neither line when no local server is on the run", () => {
     render(<EffectivePolicyCard draft={draftOf(WITH_DOCS)} pre={{ ...pre, access: SCENARIO_ACCESS.member }} preview={null} />);
     expect(screen.queryByText(/In the sandbox:/)).toBeNull();

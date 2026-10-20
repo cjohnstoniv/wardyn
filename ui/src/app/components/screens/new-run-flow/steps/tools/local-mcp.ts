@@ -64,7 +64,7 @@ export function secretNames(access: AccessFacts | undefined, intent: RunIntent):
 /** A secret a local server has in the sandbox: its name when the draft's own component says it, else the credential's label. */
 export interface SandboxSecret {
   server: string;
-  secret: string;
+  secret?: string;
 }
 
 export function sandboxSecrets(access: AccessFacts | undefined, intent: RunIntent): SandboxSecret[] {
@@ -72,7 +72,7 @@ export function sandboxSecrets(access: AccessFacts | undefined, intent: RunInten
   return (access?.rows ?? []).filter(isLocalMcp).flatMap((row) =>
     (access?.credentials ?? [])
       .filter((c) => c.row === row.id && (c.delivery === "sandbox_env" || c.delivery === "sandbox_file"))
-      .map((c) => ({ server: row.name, secret: names.get(c.id) ?? c.label ?? "" })),
+      .map((c) => ({ server: row.name, secret: names.get(c.id) || c.label || undefined })),
   );
 }
 
