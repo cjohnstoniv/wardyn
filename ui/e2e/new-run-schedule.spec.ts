@@ -123,9 +123,9 @@ async function toReview(page: Page) {
 
 async function pickStart(page: Page, date: string, time: string) {
   await page.getByRole("radio", { name: NR_RUN.TIMING_LATER }).click();
-  await page.getByLabel(NR_RUN.START_ZONE).selectOption("UTC");
-  await page.getByLabel(NR_RUN.START_DATE).fill(date);
-  await page.getByLabel(NR_RUN.START_TIME).fill(time);
+  await page.getByLabel(NR_RUN.START_ZONE, { exact: true }).selectOption("UTC");
+  await page.getByLabel(NR_RUN.START_DATE, { exact: true }).fill(date);
+  await page.getByLabel(NR_RUN.START_TIME, { exact: true }).fill(time);
 }
 
 test.describe("New Run: Schedule for later", () => {
@@ -136,7 +136,7 @@ test.describe("New Run: Schedule for later", () => {
       const later = page.getByRole("radio", { name: NR_RUN.TIMING_LATER });
       await expect(later).toBeDisabled();
       await expect(page.getByText(NR_SHARED.COMING_SOON)).toBeVisible();
-      await expect(page.getByLabel(NR_RUN.START_DATE)).toHaveCount(0);
+      await expect(page.getByLabel(NR_RUN.START_DATE, { exact: true })).toHaveCount(0);
       await page.unrouteAll({ behavior: "ignoreErrors" });
     }
   });
