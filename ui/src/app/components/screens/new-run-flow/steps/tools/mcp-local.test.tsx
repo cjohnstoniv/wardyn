@@ -203,15 +203,30 @@ describe("Add an MCP server", () => {
     expect((closed.getByRole("radio", { name: NR_TOOLS.DELIVERY_HEADER_OPTION }) as HTMLInputElement).disabled).toBe(false);
   });
 
-  it("marks an added local server as running in the sandbox", async () => {
+  it("shows an added local server on the shared tool card: what it brings, where it runs, who can read its secret", async () => {
     on();
     await openDialog(WITH_DOCS, ACCESS);
-    const added = within(screen.getByRole("heading", { name: NR_TOOLS.ADDED_HEADING }).parentElement as HTMLElement);
-    expect(added.getByText("docs-search")).toBeTruthy();
-    expect(added.getByText(NR_TOOLS.MCP_RUNS_IN_SANDBOX)).toBeTruthy();
+    const card = within(screen.getByRole("heading", { name: "docs-search", level: 3 }).closest("li") as HTMLElement);
+    expect(card.getByText(NR_TOOLS.SUB_RUN_ONLY)).toBeTruthy();
+    const brings = within(card.getByLabelText(NR_TOOLS.BRINGS_FOR("docs-search")));
+    expect(brings.getByText("docs.example.com")).toBeTruthy();
+    expect(brings.getByText("DOCS_TOKEN")).toBeTruthy();
+    expect(brings.getByText(NR_TOOLS.DELIVERY_ENV)).toBeTruthy();
+    expect(brings.getByText(`${NR_TOOLS.FROM_MCP} · ${NR_TOOLS.MCP_RUNS_HERE}`)).toBeTruthy();
+    await userEvent.click(card.getByRole("button", { name: NR_TOOLS.DETAILS_FOR("docs-search") }));
+    const details = within(await screen.findByRole("dialog"));
+    expect(details.getByText(NR_TOOLS.MCP_SANDBOX_READABLE)).toBeTruthy();
+    expect(details.getByText("npx -y @example/mcp-server@1.4.2")).toBeTruthy();
+    expect(details.getByText(`${NR_TOOLS.DETAIL_MCP_BODY} ${NR_TOOLS.MCP_HARNESS_RULES}`)).toBeTruthy();
+    // A header the proxy adds never enters the sandbox: the card says nothing of the kind.
+    cleanup();
+    await openDialog(WITH_DOCS, { ...ACCESS, credentials: [{ ...MCP_LOCAL_ENV, delivery: "proxy" }] });
+    await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.DETAILS_FOR("docs-search") }));
+    expect(within(await screen.findByRole("dialog")).queryByText(NR_TOOLS.MCP_SANDBOX_READABLE)).toBeNull();
+    // A server that is not a local one keeps today's added row.
     cleanup();
     await openDialog(WITH_DOCS, withFacts(SCENARIO_ACCESS.member, [], [{ ...MCP_LOCAL, mcp: { ...MCP_LOCAL.mcp!, transport: "http" } }]));
-    expect(screen.queryByText(NR_TOOLS.MCP_RUNS_IN_SANDBOX)).toBeNull();
+    expect(screen.queryByText(NR_TOOLS.MCP_RUNS_HERE)).toBeNull();
   });
 });
 

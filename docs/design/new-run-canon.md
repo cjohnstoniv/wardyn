@@ -506,6 +506,28 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `DETAIL_NOTE` | mock | Note |
 | `DETAIL_NONE` | mock | None |
 | `DETAIL_MCP_BODY` | mock | Turn it on for a harness under Harness setup. |
+| `BRINGS_FOR(name)` | mock | What {name} brings |
+| `DETAIL_FILES` | mock | Files and drives |
+| `DETAIL_OTHER` | mock | Other |
+| `DETAIL_WHERE` | mock | Where it runs |
+| `MORE(n)` | mock | +{n} more |
+| `MCP_REMOTE` | mock | Remote (HTTPS) |
+| `GITHUB_APP` | mock | Wardyn GitHub App |
+| `GITHUB_REPOS(repos)` | mock | This run's repositories: {repos} |
+| `GITHUB_REPOS_LABEL` | mock | This run's repositories: |
+| `KUBE_CREDENTIAL(cluster)` | mock | {cluster} service account |
+| `KUBE_CREDENTIAL_NOTE` | mock | Acts as the service account your organisation set for this cluster, not as you. The cluster's audit log names that account. |
+| `KUBE_NAMESPACES(namespaces)` | mock | Namespaces: {namespaces} |
+| `KUBE_READ_ONLY` | mock | Read only |
+| `KUBE_READ_WRITE` | mock | Read and write |
+| `KUBE_NO_EXEC` | mock | No exec |
+| `KUBE_CLUSTER` | mock | Cluster |
+| `KUBE_NAMESPACES_LABEL` | mock | Namespaces |
+| `KUBE_ACCESS` | mock | Access |
+| `KUBE_EXEC` | mock | Exec |
+| `KUBE_READ_DETAIL` | mock | Read only: get, list and watch. |
+| `KUBE_WRITE_DETAIL` | mock | Read and write: also create, update, patch and delete. |
+| `KUBE_EXEC_DETAIL` | mock | Exec, attach and port-forward aren't allowed. |
 | `IMAGE_NO` | pending (W-34) | Not in this sandbox's image. The access still works if the tool is installed another way. |
 | `IMAGE_UNKNOWN` | pending (W-34) | Wardyn can't tell whether this sandbox's image has it. |
 | `NO_HARNESSES` | mock | No harnesses in this run. Add one on the Harnesses step if the sandbox should include an agent tool. |
@@ -606,6 +628,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `MCP_DELIVERY_NOTE` | mock | A request header is added by the proxy and never enters the sandbox. An environment variable or a file is placed in the sandbox. |
 | `MCP_HARNESS_RULES` | mock | Rules for this server's tools are applied by the harness, not by Wardyn's proxy. |
 | `MCP_RUNS_IN_SANDBOX` | mock | Runs in the sandbox |
+| `MCP_RUNS_HERE` | mock | Runs in this run's sandbox |
 | `MCP_SANDBOX_READABLE` | mock | Any process in the sandbox can read it, the agent included. |
 | `MCP_REFUSED(harness, server)` | mock | {harness} can't apply rules for {server}'s tools, so this run would be refused. Turn {server} off for {harness}, or remove its rules for {harness}. |
 | `CC_INTRO` | mock | Bundle the hosts and secrets one tool needs, so you can reuse it. Saved components appear under Add tools and access next time. |
@@ -784,6 +807,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `HARNESS_AFTER_LONG` | mock | Available after start |
 | `HARNESS_INCLUDED` | mock | Included, not auto-started |
 | `ACCESS_NOTE` | mock | Hosts are layered onto the organisation default, then narrowed by your ceiling. |
+| `ACCESS_KUBE_LINE(namespaces)` | mock | Namespaces {namespaces} |
 | `LIMITS_DETAIL` | mock | Ends at its limit or when the work finishes |
 | `LIMITS_VALUE(cpu, memory, lifetime)` | mock | {cpu} CPU · {memory} MiB · {lifetime} |
 | `LIMIT_UP_TO(cap, source)` | pending (W-27) | Up to {cap} · Set by {source} |

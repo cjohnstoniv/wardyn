@@ -26,6 +26,17 @@ export const ORG_AWS_DEV: OrgComponentView = {
   cli: { kind: "aws", account_id: "123456789012", role_name: "ReadOnly-Dev", region: "us-east-1" },
 };
 
+/** A kubectl row (WARDYN_KUBECTL_CLI): one cluster, two namespaces, read only. The API server's host is the row's `cluster`. */
+export const ORG_KUBECTL: OrgComponentView = {
+  id: "55555555-5555-4555-8555-555555555555", name: "kubectl · staging", category: "cli", hosts: [], secrets: [], config_keys: [],
+  cli: { kind: "kubectl", cluster: "api.staging.example.com", namespaces: ["web", "jobs"], access: "read" } as OrgComponentView["cli"],
+};
+/** A GitHub CLI row: the row carries no host of its own; the server adds api.github.com. */
+export const ORG_GITHUB: OrgComponentView = {
+  id: "66666666-6666-4666-8666-666666666666", name: "GitHub CLI", category: "cli", hosts: [], secrets: [], config_keys: [],
+  cli: { kind: "github", capabilities: ["actions"] },
+};
+
 /** Granted: AWS. Not turned on for this person: Azure and GitHub. Not built: gcloud and kubectl. */
 export const MY_COMPONENTS: MyComponents = {
   may_define: true,

@@ -137,9 +137,19 @@ test.describe("New Run, step 5: an MCP server that runs in the sandbox", () => {
     expect((JSON.parse(previews.at(-1) ?? "{}") as Sent).components?.[0]?.inline?.mcp).toEqual({ transport: "stdio", launch: { command: "npx", args: ["-y", "@example/mcp-server@1.4.2"] } });
 
     // The added row, the Credentials total and the harness card say what it is.
-    const added = page.getByRole("heading", { name: NR_TOOLS.ADDED_HEADING }).locator("xpath=..");
-    await expect(added.getByText("docs-search")).toBeVisible();
-    await expect(added.getByText(NR_TOOLS.MCP_RUNS_IN_SANDBOX)).toBeVisible();
+    const added = page.getByRole("heading", { name: "docs-search", level: 3 }).locator("xpath=ancestor::li[1]");
+    await expect(added.getByText(NR_TOOLS.SUB_RUN_ONLY)).toBeVisible();
+    const brings = added.getByLabel(NR_TOOLS.BRINGS_FOR("docs-search"));
+    await expect(brings.getByText("docs.example.com")).toBeVisible();
+    await expect(brings.getByText("DOCS_TOKEN")).toBeVisible();
+    await expect(brings.getByText(NR_TOOLS.DELIVERY_ENV)).toBeVisible();
+    await expect(brings.getByText(`${NR_TOOLS.FROM_MCP} · ${NR_TOOLS.MCP_RUNS_HERE}`)).toBeVisible();
+    await added.getByRole("button", { name: NR_TOOLS.DETAILS_FOR("docs-search") }).click();
+    const details = page.getByRole("dialog", { name: "docs-search" });
+    await expect(details.getByText(NR_TOOLS.MCP_SANDBOX_READABLE)).toBeVisible();
+    await expect(details.getByText(NR_TOOLS.MCP_RUNS_HERE).first()).toBeVisible();
+    await expect(details.getByText("npx -y @example/mcp-server@1.4.2")).toBeVisible();
+    await details.getByRole("button", { name: NR_REVIEW.CLOSE, exact: true }).last().click();
     const totals = page.getByRole("region", { name: NR_TOOLS.TOTALS_ARIA });
     await expect(totals.getByText(NR_TOOLS.MCP_SANDBOX_READABLE)).toBeVisible();
     await expect(totals.getByText(NR_TOOLS.DELIVERY_ENV)).toBeVisible();

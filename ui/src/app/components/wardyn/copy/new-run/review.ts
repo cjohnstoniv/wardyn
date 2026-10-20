@@ -86,6 +86,7 @@ export const NR_REVIEW = {
   HARNESS_AFTER_LONG: "Available after start",
   HARNESS_INCLUDED: "Included, not auto-started",
   ACCESS_NOTE: "Hosts are layered onto the organisation default, then narrowed by your ceiling.",
+  ACCESS_KUBE_LINE: (namespaces: string | number) => `Namespaces ${namespaces}`,
   LIMITS_DETAIL: "Ends at its limit or when the work finishes",
   LIMITS_VALUE: (cpu: string | number, memory: string | number, lifetime: string | number) =>
     `${cpu} CPU · ${memory} MiB · ${lifetime}`,

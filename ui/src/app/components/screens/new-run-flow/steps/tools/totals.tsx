@@ -23,7 +23,7 @@ const DELIVERY: Record<string, string> = {
   sandbox_file: NR_TOOLS.DELIVERY_FILE,
   sandbox_short_lived: NR_TOOLS.DELIVERY_SHORT_LIVED,
 };
-const BADGE: Record<HostBadge, { text: string; tone: "neutral" | "success" | "info" | "danger" }> = {
+export const BADGE: Record<HostBadge, { text: string; tone: "neutral" | "success" | "info" | "danger" }> = {
   requested: { text: NR_TOOLS.NET_REQUESTED, tone: "neutral" },
   allowed: { text: NR_TOOLS.NET_ALLOWED, tone: "success" },
   needs_approval: { text: NR_TOOLS.NET_NEEDS_APPROVAL, tone: "info" },
