@@ -159,3 +159,46 @@ func TestCodexAgentRun_ReviveStartsFresh(t *testing.T) {
 		t.Errorf("the codex revive never finished this boot's prep: %v", err)
 	}
 }
+
+// reviveStartsAppSeedOnce boots a run twice over one $HOME with the application
+// marker dispatch sets (WARDYN_APPLICATION_RUN, #1994) and a startup command
+// seed. A revive starts that command again, in one boot session made before this
+// boot's prep, where TestClaudeAgentRun_ReviveOfAShellRun pins that any other
+// shell seed is not replayed.
+func reviveStartsAppSeedOnce(t *testing.T, runIdle func(*testing.T, string, string, string, ...string) (int, string)) {
+	t.Helper()
+	home, binDir, tmuxLog := ccIdleEnv(t)
+	env := []string{ccSeedEnv, "WARDYN_INTERACTIVE_START=shell", "WARDYN_APPLICATION_RUN=1"}
+	if code, out := runIdle(t, home, binDir, tmuxLog, env...); code != 124 {
+		t.Fatalf("first boot exited %d (output: %s), want 124", code, out)
+	}
+	if err := os.Truncate(tmuxLog, 0); err != nil {
+		t.Fatal(err)
+	}
+	code, out := runIdle(t, home, binDir, tmuxLog, env...)
+	if code != 124 {
+		t.Fatalf("revive exited %d (output: %s), want 124", code, out)
+	}
+	log := ccRead(t, tmuxLog)
+	if n := ccCount(log, "argv: new-session -d -s wardyn agent-run --boot-seed"); n != 1 {
+		t.Fatalf("the revive of an application run made %d boot sessions, want exactly 1: its startup command starts again\ntmux log:\n%s", n, log)
+	}
+	if !strings.Contains(log, "prep-done: absent") {
+		t.Errorf("the last boot's prep-done was still there when the session was made; the pane would not wait for this boot's prep\ntmux log:\n%s", log)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".wardyn", "prep-done")); err != nil {
+		t.Errorf("the revive never finished this boot's prep: %v", err)
+	}
+}
+
+// TestClaudeAgentRun_ReviveOfAnApplicationRunStartsTheCommandAgain: see
+// reviveStartsAppSeedOnce.
+func TestClaudeAgentRun_ReviveOfAnApplicationRunStartsTheCommandAgain(t *testing.T) {
+	reviveStartsAppSeedOnce(t, ccRunIdle)
+}
+
+// TestCodexAgentRun_ReviveOfAnApplicationRunStartsTheCommandAgain: see
+// reviveStartsAppSeedOnce.
+func TestCodexAgentRun_ReviveOfAnApplicationRunStartsTheCommandAgain(t *testing.T) {
+	reviveStartsAppSeedOnce(t, cxRunIdle)
+}

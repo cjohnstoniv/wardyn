@@ -2130,6 +2130,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_TASK_MODE` | string | (unset) | run task mode (e.g. exec) |
 | `WARDYN_INTERACTIVE_START` | string | (unset) | `agent` makes an INTERACTIVE run's attach shell open in the image's agent CLI in the prepared workspace; unset/`shell` is a bare shell. Only ever set for interactive runs. [Details](#wardyn_interactive_start) |
 | `WARDYN_INTERACTIVE_SEED` | string | (unset) | the run's optional boot seed, its `task`, exported verbatim for an interactive run only; fires once at sandbox boot. [Details](#wardyn_interactive_seed) |
+| `WARDYN_APPLICATION_RUN` | bool | (unset) | `1` marks an interactive application run, set by dispatch only. A revive then starts the seed again |
 | `WARDYN_SEED_AUTO_TOOLS` | bool | (unset) | `1` starts the boot seed above with `--dangerously-skip-permissions` (opt-in, for that pre-attach span only); unset/absent is supervised. [Details](#wardyn_seed_auto_tools) |
 | `WARDYN_HARNESSES` | string | (unset) | the harnesses a run launched with the harness set carries, space-separated in set order (`applyHarnessSetEnv`, [`internal/api/runs_dispatch_mounts.go`](../internal/api/runs_dispatch_mounts.go)). Unset for a run launched without the set |
 | `WARDYN_START_HARNESS` | string | (unset) | the one harness of `WARDYN_HARNESSES` that starts with the run; empty when none does. Set together with `WARDYN_HARNESSES` |
