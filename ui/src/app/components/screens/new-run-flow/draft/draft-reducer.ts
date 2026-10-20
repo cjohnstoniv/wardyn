@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import type { StartChoice } from "../../../../lib/schedule";
 import { emptyGuided, initialDraft, type DocBuffer, type GuidedFacts, type NewRunDraft, type NewRunOrigin, type RunIntent } from "./run-intent";
 
 export type DraftAction =
@@ -12,6 +13,7 @@ export type DraftAction =
   | { type: "doc"; doc: DocBuffer | undefined }
   | { type: "commitDoc"; intent: RunIntent }
   | { type: "launchFields"; patch: Partial<NewRunDraft["launch"]> }
+  | { type: "schedule"; schedule: StartChoice | undefined }
   | { type: "reset"; owner: string };
 
 const startFromOf = (origin: NewRunOrigin): GuidedFacts["startFrom"] =>
@@ -22,7 +24,7 @@ export function draftReducer(draft: NewRunDraft, action: DraftAction): NewRunDra
     case "seed":
       return {
         ...draft, intent: action.intent, base: action.intent, origin: action.origin,
-        guided: emptyGuided(startFromOf(action.origin)), doc: undefined, revision: draft.revision + 1,
+        guided: emptyGuided(startFromOf(action.origin)), doc: undefined, schedule: undefined, revision: draft.revision + 1,
       };
     case "edit":
       return { ...draft, intent: action.apply(draft.intent), revision: draft.revision + 1 };
@@ -37,6 +39,8 @@ export function draftReducer(draft: NewRunDraft, action: DraftAction): NewRunDra
       };
     case "launchFields":
       return { ...draft, launch: { ...draft.launch, ...action.patch } };
+    case "schedule":
+      return { ...draft, schedule: action.schedule };
     case "reset":
       return initialDraft(action.owner);
   }
@@ -56,5 +60,5 @@ export function sameValue(a: unknown, b: unknown): boolean {
 /** The unsaved guard's rule. A successful create resets the draft, which clears it. */
 export function isDirty(draft: NewRunDraft): boolean {
   return !sameValue(draft.intent, draft.base) || draft.doc !== undefined ||
-    draft.launch.title !== "" || draft.launch.description !== "";
+    draft.launch.title !== "" || draft.launch.description !== "" || draft.schedule !== undefined;
 }

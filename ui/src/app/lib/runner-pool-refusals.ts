@@ -143,14 +143,13 @@ export const RUN_WAIT = {
   NO_RUNNER_FREE: (name: string) => `None of your runners in ${name} is online. This run starts when one is.`,
   RUNNERS_AT_CAPACITY: (name: string) => `Every runner in ${name} is at its limit. This run starts when one has room.`,
   RECORDING_STORE_OFF: () => "Recording is required, and this organisation keeps no session recordings. This run starts when the organisation's recording store is on.",
-  /** A scheduled run before its time (queue.start_at, shown in the viewer's clock when the wire carries it). */
-  SCHEDULED: (at?: string) => (at ? `This run is scheduled and starts at ${at}.` : "This run is scheduled and starts at its booked time."),
-  OWNER_SIGN_IN: () =>
-    "This run is due, and your model sign-in has expired. At the start, Wardyn renews your model sign-in if it can; if it can't, the run waits for you. Sign in again to start it.",
 } as const;
 
-/** The reason a waiting run carries for each RUN_WAIT sentence. */
-export const RUN_WAIT_REASON: Record<keyof typeof RUN_WAIT, string> = {
+/**
+ * The reason a waiting run carries for each RUN_WAIT sentence, and for the two waits of a scheduled run, whose words
+ * are the scheduled-run canon's (copy/scheduled-runs.ts) and not a pool's.
+ */
+export const RUN_WAIT_REASON: Record<keyof typeof RUN_WAIT | "SCHEDULED" | "OWNER_SIGN_IN", string> = {
   AT_CAPACITY: "runner_pool_at_capacity",
   NO_RUNNER_FREE: "runner_pool_no_runner_free",
   RUNNERS_AT_CAPACITY: "runner_pool_runners_at_capacity",

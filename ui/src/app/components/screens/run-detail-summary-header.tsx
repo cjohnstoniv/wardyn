@@ -17,6 +17,7 @@ import { runHeadline } from "../../lib/types";
 import { formatDuration } from "../../lib/format";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { scheduledBadgeWord } from "./runs/scheduled-state";
 import { AgentBadge, AutonomyChip, Chip, ConfinementChip, RunStateBadge } from "../wardyn/primitives";
 import { RunStateGlyph } from "../wardyn/run-state-glyph";
 import { RUN, RUN_COCKPIT } from "../wardyn/copy";
@@ -285,7 +286,7 @@ export function SummaryHeader({
         )}
       </div>
 
-      <RunStateBadge state={run.state} />
+      <RunStateBadge state={run.state} word={scheduledBadgeWord(run)} />
 
       {/* What a STARTING run is waiting ON. The SHORT register
           (statusDetailChip), never the sentence — this chip is max-w-[160px]

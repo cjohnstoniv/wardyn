@@ -26,6 +26,8 @@ import { glyphKindFor, RowGlyph } from "./row-glyph";
 import { rowPresentation, waitingSignInPresentation } from "./runs-model";
 import { mayReadSignIn } from "../run-detail/sign-in-run";
 import { RUNS_ROW_ACTION } from "../../wardyn/copy/runs-landing";
+import { SCHEDULED_RUN } from "../../wardyn/copy/scheduled-runs";
+import { scheduledMeta, signInTimedOut } from "./scheduled-state";
 import { REVIVE, REVIVING } from "../../wardyn/copy/run-lifetime";
 import { reviveWithToasts } from "./revive-run";
 import { RUNNER_OFFLINE_WORD, runnerLabel, runOnChip } from "../../../lib/nav-copy";
@@ -33,6 +35,8 @@ import { RUNNER_OFFLINE_WORD, runnerLabel, runOnChip } from "../../../lib/nav-co
 // Lazy: the read loop is for the rare sign-in row, so it stays out of the entry
 // chunk. The gate (sign-in-run) is eager, and decides whether this loads at all.
 const RowSignInProbe = React.lazy(() => import("../run-detail/row-sign-in-probe"));
+// Lazy for the same reason: the confirm is for the rare scheduled row.
+const CancelRunDialog = React.lazy(() => import("../run-detail/cancel-run-dialog"));
 
 function metaLine(run: AgentRun, adminView: boolean, own: boolean): string {
   const parts: string[] = [repoLabel(run).text];
@@ -48,7 +52,13 @@ function metaLine(run: AgentRun, adminView: boolean, own: boolean): string {
   // choice, for the same reason) — so without this it still reads "started
   // …" like a live run, even though rowPresentation already renders it grey.
   const endedIso = run.ended_at ?? (run.lost_reason === "ended" ? run.lost_at : undefined);
-  if (endedIso) {
+  const scheduled = scheduledMeta(run);
+  if (signInTimedOut(run)) {
+    // The sentence replaces the times: the run never started, so "ended … · ran …" would say otherwise.
+    parts.push(SCHEDULED_RUN.SIGN_IN_TIMED_OUT);
+  } else if (scheduled) {
+    parts.push(scheduled);
+  } else if (endedIso) {
     parts.push(`ended ${relativeTime(endedIso)} · ran ${formatDuration(Date.parse(endedIso) - Date.parse(run.created_at))}`);
   } else {
     parts.push(`started ${relativeTime(run.created_at)}`);
@@ -86,16 +96,19 @@ export function RunRow({ run }: { run: AgentRun }) {
       setReviving(false);
     }
   };
+  const [cancelling, setCancelling] = React.useState(false);
   const actionLabel =
     p.action === "review"
       ? RUNS_ROW_ACTION.REVIEW
       : p.action === "sign-in"
         ? RUNS_ROW_ACTION.SIGN_IN
-        : p.action === "revive"
-          ? reviving
-            ? REVIVING
-            : REVIVE
-          : null;
+        : p.action === "cancel"
+          ? SCHEDULED_RUN.CANCEL_RUN
+          : p.action === "revive"
+            ? reviving
+              ? REVIVING
+              : REVIVE
+            : null;
   const meta = metaLine(run, adminView, own);
 
   return (
@@ -155,6 +168,7 @@ export function RunRow({ run }: { run: AgentRun }) {
             onClick={(e) => {
               e.stopPropagation();
               if (p.action === "revive") void revive(e);
+              else if (p.action === "cancel") setCancelling(true);
               else void navigate(href);
             }}
           >
@@ -162,6 +176,11 @@ export function RunRow({ run }: { run: AgentRun }) {
           </Button>
         )}
       </div>
+      {cancelling && (
+        <React.Suspense fallback={null}>
+          <CancelRunDialog runId={run.id} title={title} onClose={() => setCancelling(false)} />
+        </React.Suspense>
+      )}
       {eligible && (
         <React.Suspense fallback={null}>
           <RowSignInProbe runId={run.id} createdAt={run.created_at} onChange={setWaitingSignIn} />

@@ -11,6 +11,7 @@ import type { DriveAttachment } from "../../../../lib/types/new-run-contract";
 import type { RunPolicySpec } from "../../../../lib/types/policy";
 import type { CreateRunInput } from "../../../../lib/types/run-create";
 import type { RunShape } from "../../../../lib/types/runs";
+import type { StartChoice } from "../../../../lib/schedule";
 
 /** The create-request fields with the 0.9 carriers (the request half of RunWireInput). */
 type CreateRunRequestFields = Extract<RunWireInput, CreateRunInput>;
@@ -91,6 +92,8 @@ export interface NewRunDraft {
   revision: number;
   /** The Name dialog's fields: never in the intent, never saved. */
   launch: { title: string; description: string };
+  /** A start later, chosen on the Run step: never in the intent, never saved. Absent is Run now. */
+  schedule?: StartChoice;
 }
 
 export const emptyGuided = (startFrom: GuidedFacts["startFrom"] = "scratch"): GuidedFacts => ({

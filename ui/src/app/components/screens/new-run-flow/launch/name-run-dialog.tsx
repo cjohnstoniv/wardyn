@@ -22,14 +22,17 @@ import { Input } from "../../../ui/input";
 import { Label } from "../../../ui/label";
 import { Textarea } from "../../../ui/textarea";
 import { NR_LAUNCH } from "../../../wardyn/copy/new-run/launch";
+import { NR_RUN } from "../../../wardyn/copy/new-run/run";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
 import { AdoLaunchNote, AdoOwnTokenNote, adoLaunchNoteKind } from "../../../wardyn/ado-run-token-line";
+import { scheduledRunsOn, startInstant, startWire, whenText } from "../../../../lib/schedule";
 import { useOwnTokenRows } from "../../../../lib/hooks/use-own-token-rows";
 import { useModelAccessDoor, useShellSetupStatus } from "../../../wardyn/model-access-context";
 import { PolicyRemedy } from "../../../wardyn/policy-remedy";
 import { useAdoLaunchDoor } from "../checks/use-ado-launch-door";
 import { intentToWire } from "../draft/intent-to-wire";
+import { launchStart } from "../draft/launch-start";
 import type { RunIntent } from "../draft/run-intent";
 import { useDraftIdentity, useIntentChecks } from "../draft/use-intent-checks";
 import { useNewRunDispatch, useNewRunDraft } from "../new-run-route";
@@ -38,6 +41,8 @@ import { cpuNumber, resolvedLifetime, resolvedLifetimeText } from "../review/for
 import type { ReviewPreflight } from "../review/review-seams";
 import { AdoLaunchDialog } from "./ado-launch-dialog";
 import { useLaunchRun, type PendingLaunch } from "./use-launch-run";
+
+const START_PROBLEM = { missing: NR_RUN.START_MISSING, past: NR_RUN.START_PAST, far: NR_RUN.START_FAR } as const;
 
 // Only the manual check runs here: nothing is asked again while the person types.
 const MANUAL_ONLY = { local: false, backendArm: false, modelArm: false };
@@ -116,6 +121,9 @@ function NameRunForm({ onOpenChange, onCreated, pending }: Pick<NameRunDialogPro
     wasAdoBusy.current = adoBusy;
   }, [adoBusy, check]);
   const { status } = useShellSetupStatus();
+  // A start later: its line, or the reason it can't launch yet. Nothing here when the run starts now.
+  const start = launchStart(draft, scheduledRunsOn(status), Date.now());
+  const startAt = start && !start.problem ? startInstant(start.choice) : null;
   const ownRows = useOwnTokenRows(status);
   const adoAccess = status?.unreachable ? undefined : (status?.scm_access as SCMAccessPAT | undefined);
 
@@ -141,9 +149,9 @@ function NameRunForm({ onOpenChange, onCreated, pending }: Pick<NameRunDialogPro
   const adoNote = create.refusal && adoDoor.refusal ? adoLaunchNoteKind(adoAccess, adoDoor.refusal) : null;
   const refusalIsAdoNote = adoNote === "blocked" && sentence === ADO_PAT.LAUNCH_POLICY_REFUSED;
   const named = title.trim() !== "";
-  const canLaunch = named && !checking && !create.creating && !checks.preflightBlock;
+  const canLaunch = named && !checking && !create.creating && !checks.preflightBlock && !start?.problem;
   // The visible reason a held Launch is held: the missing title, the check in flight, or the refusal.
-  const heldBy = canLaunch || create.creating ? undefined : !named ? "name-run-required" : checking ? "name-run-checking" : sentence ? "name-run-sentence" : undefined;
+  const heldBy = canLaunch || create.creating ? undefined : !named ? "name-run-required" : checking ? "name-run-checking" : sentence ? "name-run-sentence" : start?.problem ? "name-run-start" : undefined;
 
   return (
     <>
@@ -152,7 +160,7 @@ function NameRunForm({ onOpenChange, onCreated, pending }: Pick<NameRunDialogPro
         aria-busy={create.creating}
         onSubmit={(e) => {
           e.preventDefault();
-          if (canLaunch) void create.launch(intentToWire(draft.intent, { title: title.trim(), description: description.trim() }).body);
+          if (canLaunch) void create.launch(intentToWire(draft.intent, { title: title.trim(), description: description.trim(), start: start && startWire(start.choice) }).body);
         }}
       >
         <DialogTitle>{NR_LAUNCH.TITLE}</DialogTitle>
@@ -183,6 +191,12 @@ function NameRunForm({ onOpenChange, onCreated, pending }: Pick<NameRunDialogPro
             onChange={(e) => dispatch({ type: "launchFields", patch: { description: e.target.value } })}
           />
         </div>
+
+        {start && (
+          <p id="name-run-start" role={start.problem ? "alert" : "status"} className={start.problem ? "text-sm text-danger" : "text-sm"}>
+            {start.problem ? START_PROBLEM[start.problem] : <strong>{NR_RUN.STARTS(whenText(startAt ?? 0, start.choice.zone))}</strong>}
+          </p>
+        )}
 
         <div
           className={!checking && answered ? "flex gap-3 rounded-lg border border-success/25 bg-success-subtle p-3" : "flex flex-col gap-2 rounded-md border border-border p-3"}

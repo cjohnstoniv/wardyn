@@ -11,11 +11,11 @@
 import * as React from "react";
 import { getAuthGeneration, HttpError, isSignedOutHold } from "../../../../lib/api/core";
 import { runs } from "../../../../lib/api/runs";
-import { getErrorMessage } from "../../../../lib/format";
 import type { CreateRunResult } from "../../../../lib/types/run-create";
 import { useDeferredBusy } from "../../../../lib/use-deferred-busy";
 import type { DraftIdentity } from "../draft/use-intent-checks";
 import type { CreateRunWire } from "../draft/intent-to-wire";
+import { refusalText } from "./refusal-text";
 
 /**
  * Whether a create is out. It is held by the route, not the dialog or its form: Cancel unmounts the form with
@@ -64,7 +64,7 @@ export function useLaunchRun(identity: DraftIdentity, onCreated: (created: Creat
       if (still()) latest.current.onCreated(created);
     } catch (e) {
       if (!still() || !mounted.current) return;
-      setRefusal(getErrorMessage(e));
+      setRefusal(refusalText(e));
       setPolicy(e instanceof HttpError ? e.policy : undefined);
       latest.current.onRefused(e);
     } finally {
