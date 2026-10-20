@@ -35,7 +35,7 @@ const (
 	errSetupClaimLeft     = "this computer is registered but not claimed: %v; run `wardyn runner setup` again to finish (an unclaimed runner lapses %d hours after it registered)" // types.RunnerUnclaimedTTL
 	errSetupNotConnected  = "the runner did not connect within %s"
 	errSetupDefaultNoPool = "--default needs --pool"
-	errSetupTokenLeft     = "; the token minted for this run expires %s if it was not used" // the mint answer's expires_at, local time
+	errSetupTokenLeft     = "; the token minted for this setup expires %s if it was not used" // the mint answer's expires_at, local time
 	errSetupNoIdentity    = "it left no runner identity for this organisation"
 	errSetupBadIdentity   = "read %s: %w"
 	// Download failures, inside errSetupDownload.
