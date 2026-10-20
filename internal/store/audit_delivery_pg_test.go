@@ -18,7 +18,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -76,7 +78,11 @@ func statusOf(t *testing.T, st store.PG, dest string) store.AuditDeliveryStatus 
 // must never rewind the checkpoint to a head that has since moved, which would resend history
 // the collector already holds.
 func TestPG_AuditDelivery_EnsureStartsAtHeadAndNeverMoves(t *testing.T) {
-	pool := runsPGPoolIsolated(t)
+	pool := throwawayDatabase(t)
+	testutil.MarkSchemaUpgraded(t, pool) // no seed row: the table starts with no committed rows
+	if err := db.Migrate(context.Background(), pool); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
 	ctx := context.Background()
 	st := store.NewPG(pool)
 

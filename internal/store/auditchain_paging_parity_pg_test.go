@@ -24,6 +24,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 )
 
 // fullScanOracle is the pre-paging implementation, verbatim in shape: ONE
@@ -99,6 +100,7 @@ func fullScanOracle(t *testing.T, pool *pgxpool.Pool) store.AuditChainStatus {
 func chainProbeDB(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	pool := throwawayDatabase(t)
+	testutil.MarkSchemaUpgraded(t, pool) // no seed row: each case counts the chain from its first row
 	if err := db.Migrate(context.Background(), pool); err != nil {
 		t.Fatalf("migrate probe database: %v", err)
 	}

@@ -8,7 +8,8 @@
 
 ## Modes
 
-- `no_limits` matches the organisation's boundary, so it narrows nothing. An install with no boundary row is in `no_limits`, and every run resolves exactly as before.
+- `no_limits` matches the organisation's boundary, so it narrows nothing. An upgraded install stays in `no_limits`, and every run resolves exactly as before.
+- A fresh install's first boot starts the boundary in `hard_limits` with nothing listed and floor `CC1`, which reaches what `no_limits` does, so an admin only adds limits. The boot writes `governance.boundary.seed` once. A boundary a person wrote first is kept.
 - `hard_limits` is a Wardyn allow and deny list inside the organisation's boundary.
 
 ## What the boundary holds

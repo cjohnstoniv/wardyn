@@ -42,3 +42,14 @@ func SetBoundaryNoLimits(t *testing.T, pool *pgxpool.Pool) {
 		t.Fatalf("set the boundary to no_limits: %v", err)
 	}
 }
+
+// MarkSchemaUpgraded creates the migrator's tracking table on a schema no migration has run on, so
+// the next db.Migrate takes it for an upgrade and writes no fresh-install seed: the boundary stays in
+// no_limits and the audit log starts with no rows. For a test about an empty audit log.
+func MarkSchemaUpgraded(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	if _, err := pool.Exec(t.Context(), `CREATE TABLE IF NOT EXISTS schema_migrations (
+		filename TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())`); err != nil {
+		t.Fatalf("mark the schema upgraded: %v", err)
+	}
+}

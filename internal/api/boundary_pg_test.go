@@ -122,7 +122,7 @@ func TestBoundaryProvenanceNamesTheBoundary(t *testing.T) {
 	}
 }
 
-// TestBoundaryNoLimitsIsByteIdentical: with no row, with the upgrade posture SetBoundaryNoLimits
+// TestBoundaryNoLimitsIsByteIdentical: with a fresh install's seeded row, with the upgrade posture SetBoundaryNoLimits
 // writes, and with a no_limits row that keeps a drafted spec, the corpus resolves to the golden
 // recorded on a tree without the boundary.
 func TestBoundaryNoLimitsIsByteIdentical(t *testing.T) {
@@ -282,7 +282,9 @@ func TestBoundaryBreakGlass(t *testing.T) {
 // TestBoundaryBoundEgressApprovals: in hard_limits no decider admits a host the boundary does not
 // allow, a host it allows is decided as before, and a break-glass run's approval is bound the same.
 func TestBoundaryBoundEgressApprovals(t *testing.T) {
-	e := newGovEnvOn(t, throwawayPGPool(t))
+	pool := throwawayPGPool(t)
+	testutil.SetBoundaryNoLimits(t, pool) // the walled run is created before the boundary is set
+	e := newGovEnvOn(t, pool)
 	e.seedProfile("team", "pypi.org") // so the admin token's reason makes a break-glass run
 	mkRun := func(breakGlass bool) uuid.UUID {
 		r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", strings.NewReader(`{"agent":"claude-code","task":"t"}`))

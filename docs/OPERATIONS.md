@@ -4004,6 +4004,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0198` (`0198_agent_runs_local_folder_status`) adds `local_folder_status` to `agent_runs` (`0001`'s table): the passes a person's folder-only runner made for a run's computer folder, in and back.
 - `0199` (`0199_cli_sign_in`) adds `api_tokens.kind` and `api_tokens.cli_session_id` (`0045`'s table), which mark a CLI sign-in's access and admin tokens and tie them to their CLI session, and creates `cli_sessions` and `cli_sign_ins`.
 - `0200` (`0200_governance_boundary`) creates `governance_boundary` and adds `agent_runs.break_glass` (`0001`'s table), a constant-default boolean, so no row is rewritten; a split-role install grants the app role `SELECT, INSERT, UPDATE` on `governance_boundary`.
+- `0201` (`0201_governance_boundary_seed`) adds `governance_boundary.seeded_at` and the boundary's one row in `no_limits`, so an upgrade keeps its boundary as it was. Only a fresh install's first boot then moves that row to `hard_limits` with floor `CC1` and nothing listed, which reaches what `no_limits` does, and writes `governance.boundary.seed`.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.

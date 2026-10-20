@@ -143,6 +143,10 @@ func migrateConn(ctx context.Context, conn *pgxpool.Conn, allowUnknown bool) err
 // migrateOn applies pending migrations using a single executor (the advisory-
 // lock-holding connection). Separated so both the lock path and tests share it.
 func migrateOn(ctx context.Context, db migrationExecutor, allowUnknown bool) error {
+	fresh, err := freshSchema(ctx, db) // before the tracking table exists: the fresh-install seed's key (fresh_seed.go)
+	if err != nil {
+		return err
+	}
 	// Ensure the tracking table exists first (outside any migration tx).
 	if _, err := db.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -237,6 +241,9 @@ func migrateOn(ctx context.Context, db migrationExecutor, allowUnknown bool) err
 	// Months ahead, at every boot and before the listener: an insert into a month with no
 	// partition fails and sits in the audit spool until one exists.
 	if err := ensureAuditPartitions(ctx, db); err != nil {
+		return err
+	}
+	if err := seedFreshBoundary(ctx, db, fresh); err != nil {
 		return err
 	}
 	// The hardening restore is the deferred call registered above; it runs after this returns.

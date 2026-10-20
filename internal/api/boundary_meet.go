@@ -47,7 +47,14 @@ func boundaryMeet(b types.Boundary, spec types.RunPolicySpec, limits types.Gover
 	if base.Ceiling.AllowAllEgress && b.Spec.AllowedDomains != nil && (b.Spec.AllowAllEgress == nil || !*b.Spec.AllowAllEgress) {
 		base.Ceiling.AllowedDomains = slices.Clone(*b.Spec.AllowedDomains)
 	}
-	out, _, err := composer.ApplyOverlay(base, composer.Overlay{Ceiling: b.Spec.Overlay(), Limits: b.Limits.Overlay()})
+	ov := b.Spec.Overlay()
+	// A floor at the lowest class bounds nothing: every run launches at CC1 or above, so an unset
+	// floor already means CC1. It is left out of the meet, so the fresh-install seed (floor CC1)
+	// changes no value and adds no narrowed warning.
+	if ov.MinConfinementClass != nil && *ov.MinConfinementClass == types.CC1 {
+		ov.MinConfinementClass = nil
+	}
+	out, _, err := composer.ApplyOverlay(base, composer.Overlay{Ceiling: ov, Limits: b.Limits.Overlay()})
 	if err != nil {
 		return types.RunPolicySpec{}, types.GovernanceLimits{}, nil, fmt.Errorf("api: meet the Wardyn boundary: %w", err)
 	}
