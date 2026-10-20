@@ -584,7 +584,7 @@ start.
   which three and why.
 - Every OTHER reason is drawn from one of two sources:
   - the
-    closed set in [`internal/api/reasons.go`](../internal/api/reasons.go) and `reasons_routes.go` (a reason two
+    closed set in [`internal/api/reasons.go`](../internal/api/reasons.go), `reasons_routes.go` and `reasons_revive.go` (a reason two
     routes share — the dispatch-time-snapshot family below, the hold-chain
     terminal/exhausted pair — always means the same thing regardless of which one
     sent it),

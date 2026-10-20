@@ -316,12 +316,14 @@ func TestReasonDocsMatchReasonsGo(t *testing.T) {
 // name.
 var reasonWireValueShape = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
-// reasonsGoFiles is the closed set's own two files (reasons.go's header
+// reasonsGoFiles is the closed set's own three files (reasons.go's header
 // comment explains the split: #656 slice 3 pushed reasons.go past
-// scripts/check-file-size.sh's 1000-line gate). Every reader of the set —
-// this guard, driveRefusalConstants (user_drives_run_test.go) — must read
-// both, or a value declared in the second file is invisible to it.
-var reasonsGoFiles = []string{"reasons.go", "reasons_routes.go"}
+// scripts/check-file-size.sh's 1000-line gate; reasons_revive.go holds the
+// revive block moved out of reasons_routes.go for the same reason). Every
+// reader of the set — this guard, driveRefusalConstants
+// (user_drives_run_test.go) — must read all of them, or a value declared in
+// another file is invisible to it.
+var reasonsGoFiles = []string{"reasons.go", "reasons_routes.go", "reasons_revive.go"}
 
 // reasonsGoConstValues parses every top-level const's string-literal value in
 // reasonsGoFiles via go/parser rather than a line-anchored regex, so a
