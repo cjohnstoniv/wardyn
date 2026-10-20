@@ -9,6 +9,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { LOCAL_MODEL_CARD as T } from "../../../lib/local-model-copy";
 import type { AuditEvent, RunDetail } from "../../../lib/types";
 import type { ModelProvider } from "../../../lib/types/site";
+import { aheadByHours } from "../../../lib/test-clock";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { LocalModelsCard } from "./local-models-card";
 
@@ -43,7 +44,7 @@ const LAPTOP: ModelProvider = {
 const run = (patch: Partial<RunDetail> = {}) =>
   ({ id: "r1", model_provider_id: "laptop-gpu", model_provider_name: "Laptop GPU", ...patch }) as RunDetail;
 const created = (kind: string): AuditEvent[] => [
-  { id: "a1", time: "2026-10-20T10:00:00Z", actor_type: "human", actor: "alice", action: "run.create", outcome: "success", data: { model_provider: { id: "laptop-gpu", kind } } },
+  { id: "a1", time: aheadByHours(-1), actor_type: "human", actor: "alice", action: "run.create", outcome: "success", data: { model_provider: { id: "laptop-gpu", kind } } },
 ];
 
 function renderCard(r: RunDetail, audit: AuditEvent[], operator = true) {
