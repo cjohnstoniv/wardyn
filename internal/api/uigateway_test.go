@@ -358,8 +358,14 @@ func (h *uiHarness) enterPOST(form url.Values) *httptest.ResponseRecorder {
 // openSession runs the whole handoff and returns the relay cookie.
 func (h *uiHarness) openSession() *http.Cookie {
 	h.t.Helper()
+	return h.openAppSession("code")
+}
+
+// openAppSession is openSession for a named app the run's policy declares.
+func (h *uiHarness) openAppSession(app string) *http.Cookie {
+	h.t.Helper()
 	rec := h.enter(url.Values{
-		"run": {h.run.ID.String()}, "app": {"code"},
+		"run": {h.run.ID.String()}, "app": {app},
 		"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleUser)},
 	})
 	if rec.Code != http.StatusFound {

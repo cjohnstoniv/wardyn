@@ -124,7 +124,7 @@ func (s *Server) stepWorkspaces(f *runFold, rec *foldRecorder) bool {
 	if s.cfg.Store != nil {
 		all, _ = s.cfg.Store.ListWorkspaces(f.r.Context())
 	}
-	carriers := indexWorkspacesFor(all, func(ws types.Workspace) bool { return s.mayLaunchWorkspace(f.r, ws) })
+	carriers := s.launchCarrierRule(f.r, f.seed.attached).index(all)
 	f.wsRefs = attachedWorkspaceRefs(f.seed.attached, referencedWorkspacesBy(carriers, f.spec))
 	for _, ws := range f.wsRefs {
 		recordWorkspaceSources(rec, f.spec, ws)
@@ -468,16 +468,26 @@ func (s *Server) stepAutonomy(f *runFold, rec *foldRecorder) bool {
 // allow they send stands only where the policy, with the lane's default under
 // it, already allows the tool. An interactive Claude Code run's default, and
 // every tool name it carries, is held to what its managed settings can say
-// first, as step 5 greys it.
+// first, as step 5 greys it. Last, the policy's harness_inner_walls: approvals
+// in Wardyn put a background Claude Code run on the gated lane, and walls the
+// run cannot meet refuse it (innerWallsFor).
 func (s *Server) stepToolPolicy(f *runFold, rec *foldRecorder) bool {
 	before := f.spec
+	if warn := applyInnerWallsHold(f.req, f.spec); warn != "" {
+		f.policyWarns = append(f.policyWarns, warn)
+	}
 	s.applyToolPosture(f.req, &f.spec)
 	recordSpecAdds(rec, before, f.spec, provSource{Kind: provKindPosture})
 	if attendedDefaultRefusal(*f.req, f.autonomy.Level).write(s, f.w, f.r) || attendedToolNamesRefusal(*f.req, f.spec).write(s, f.w, f.r) ||
 		inheritedMCPHoldRefusal(*f.req, f.spec, f.comps).write(s, f.w, f.r) {
 		return false
 	}
-	return !s.toolRulesWithinPolicyRefusal(*f.req, f.spec).write(s, f.w, f.r)
+	if s.toolRulesWithinPolicyRefusal(*f.req, f.spec).write(s, f.w, f.r) {
+		return false
+	}
+	var refusal *runRefusal
+	f.innerWalls, refusal = innerWallsFor(*f.req, f.spec, f.harnesses)
+	return !refusal.write(s, f.w, f.r)
 }
 
 // stepGitHubCLIRepo is githubCLIRepoRefusal (runs_cli_github.go) at the doors that launch and
@@ -523,7 +533,7 @@ func (s *Server) stepADOStanding(f *runFold, rec *foldRecorder) bool {
 // doors, the same reasons and sentences, so a narrowing the run could not
 // enforce shows before the click. Create meets them at dispatch.
 func (s *Server) stepPATNarrowing(f *runFold, rec *foldRecorder) bool {
-	if reason, detail := s.patNarrowingAtDoor(f.r, *f.req, f.spec, f.scmSite); reason != "" {
+	if reason, detail := s.patNarrowingAtDoor(f.r, *f.req, f.spec, f.scmSite, f.ceiling.Operator, f.place.pooled); reason != "" {
 		writeErrorReason(f.w, http.StatusUnprocessableEntity, reason, detail)
 		return false
 	}

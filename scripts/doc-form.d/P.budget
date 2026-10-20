@@ -28,10 +28,20 @@
 # examples/policies/README.md 1374 = 1349 + 25, measured: the remote-workspace bullet names the shipped ceiling.
 # 0.9.4 L8: docs/POLICIES.md 18408 adds 26 over 18382: ssh_key delivery claims bounded.
 # 0.9.4 L8: examples/policies/README.md 1418 adds 69 over 1349: the repos-template note and the model-credential wording.
+# docs/POLICIES.md 18598 adds 178 (0.10.0 SEC-1), measured: the optional host on env_secret and file_secret scopes, and the git_pat_broker_off_resident reason row.
+# docs/POLICIES.md 18614 adds 16 (0.10.0 SEC-1 round 2), measured: the placeholder fills only the Authorization header, and the response-echo caveat.
 # 0.10 API-3: docs/POLICIES.md 18559 adds 139 over 18420, measured: a push that adds no commits passes when the forge holds every commit it sets.
 # 0.10 API-3 round 2: docs/POLICIES.md 18597 adds 38 over 18559, measured: a now-denied path in a vouched commit, and a lightweight tag under git_push_any_branch.
 # 0.10 W1 train: docs/POLICIES.md tightened to 18590, measured at the train merge.
-docs/POLICIES.md=18590 share=12
+# docs/POLICIES.md 18784 = ours 18614 + theirs 18590 - base 18420 at the 0.10.0 SEC-1 merge of main; re-measured below if higher.
+# #2822: docs/POLICIES.md 18911 adds 321 over 18590, measured at the main merge: the harness_inner_walls row and section.
+# docs/POLICIES.md 19105 = ours 18784 + theirs 18911 - base 18590 at the 0.10 W2 merge of HRN onto the train.
+# docs/POLICIES.md=18607 adds 187 (0.10.0 VM-B): the port-rule box and the relay residual (#3193).
+# docs/POLICIES.md 19292 = ours 19105 + theirs 18777 - base 18590 at the 0.10 W2 merge of VM-B onto the train.
+# docs/POLICIES.md 19490 adds 198 (0.10 CTL-A): the desktop field and its section (#2967).
+# docs/POLICIES.md 19542 adds 52 (0.10 CTL-A r3): the desktop rules bind the novnc app's relay only (#2967).
+# docs/POLICIES.md 19570 adds 28 (0.10 CTL-A r3): the desktop rules are not a boundary against a run built to get data out.
+docs/POLICIES.md=19570 share=12
 # 0.9.4 W1 merge +3: L8 and an earlier W1 lane both edited the README; the merged text measures 3 over the sum.
 examples/policies/README.md=1446 share=5
 # docs/POLICIES.md 18013 adds 40 over 17973, measured: a member's private-range workspace clone host.

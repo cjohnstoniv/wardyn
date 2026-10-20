@@ -338,10 +338,15 @@ func (s *Server) removeGroupMember(ctx context.Context, st scimStore, g store.Sc
 		}
 		j, _ := jobByKey(jobs, store.GroupRemovalSteps[i], g.ID.String())
 		owed, refused := s.refuseDeprovision(ctx, ident, store.JobKindGroupRemove, forms.refusal, err, j.LastError == forms.refusal)
+		marker := errors.New(forms.refusal)
 		if owed != "" {
-			refused = errors.Join(refused, oweRefusalAudit(ctx, st, identityID, store.JobKindGroupRemove, store.JobKey{Step: owed, Target: g.ID.String()}))
+			if oweErr := oweRefusalAudit(ctx, st, identityID, store.JobKindGroupRemove, store.JobKey{Step: owed, Target: g.ID.String()}); oweErr != nil {
+				// The step's last error is what makes a retry treat the refusal as recorded; with nothing owing the
+				// row it must not say so, or the row is lost.
+				refused, marker = errors.Join(refused, oweErr), fmt.Errorf("%s (audit row not yet owed)", forms.refusal)
+			}
 		}
-		return errors.Join(refused, finish(store.GroupRemovalSteps[i], errors.New(forms.refusal), nil))
+		return errors.Join(refused, finish(store.GroupRemovalSteps[i], marker, nil))
 	}
 	if err != nil {
 		return err

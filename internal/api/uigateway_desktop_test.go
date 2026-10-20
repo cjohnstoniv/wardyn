@@ -72,7 +72,7 @@ func newDesktopHarness(t *testing.T) (*uiHarness, *desktopFakeRunner) {
 
 func (h *uiHarness) enterDesktop(ticket string) *httptest.ResponseRecorder {
 	h.t.Helper()
-	return h.enter(url.Values{"run": {h.run.ID.String()}, "app": {uiDesktopApp}, "ticket": {ticket}})
+	return h.enter(url.Values{"run": {h.run.ID.String()}, "app": {uiDesktopAppName}, "ticket": {ticket}})
 }
 
 func desktopCookie(t *testing.T, rec *httptest.ResponseRecorder) *http.Cookie {
@@ -87,7 +87,7 @@ func desktopCookie(t *testing.T, rec *httptest.ResponseRecorder) *http.Cookie {
 }
 
 func desktopPath(h *uiHarness, rest string) string {
-	return uiRelayPrefix(h.run.ID, uiDesktopApp) + rest
+	return uiRelayPrefix(h.run.ID, uiDesktopAppName) + rest
 }
 
 // The desktop of a VM run opens on its own path for one hour, under the relay's 8 h default; the

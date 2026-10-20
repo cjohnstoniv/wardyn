@@ -86,13 +86,24 @@
 # 0.9.4 L3 +29: docs/ENV.md 39336 adds 29 over 39307 (the staged CA trust variable bullet: the value an organisation staged is kept on every runner substrate, #2104).
 # 0.9.4 W4-DOCS-1: docs/ENV.md 39587 adds 68 over 39519, measured: #2357 #2359 #2360 #2362: recording mount value form, PAT scope row, switch count and parser exception, OIDC scopes.
 # docs/ENV.md=39536 adds 17 (0.9.4 W4-API-B): the Azure authority host row says the Key Vault client stays on the public cloud (#2809).
+# docs/ENV.md 39682 adds 62 (0.10.0 SEC-1), measured: the four 0.10.0 credential switches, and the AWS SSO off removal.
+# docs/ENV.md 39707 adds 25 (0.10.0 SEC-1 round 2), measured: the Authorization-only fill, the owner's own revive role, and the streaming scrub sentence.
+# docs/ENV.md=39766 adds 146 (0.10.0 VM-B): WARDYN_EGRESS_PORT_RULE row and details (#3193).
 # docs/ENV.md 39622 adds 2 (0.10 API-2): the host-capacity 503 carries a message.
 # API-5: ENV.md 39768 adds 148 over 39620 (WARDYN_OIDC_BACKCHANNEL_LOGOUT row and Details), measured; the lead re-measures at merge.
 # API-5 r2: ENV.md 39799 adds 31 over 39768 (the logout event is an object; the 429 bound on tokens that fail to verify), measured.
 # 0.10: docs/ENV.md 39762 adds 142, measured: the connection-bound, local-peer, proxy-peer and component-env knob rows.
 # docs/ENV.md=39766 adds 4, measured: the trusted-peers row names the measured engines.
 # docs/ENV.md=39620 adds 84 (0.10 HYB-A): WARDYN_SYNC_DENY and WARDYN_LOCAL_FOLDER_SEED_WAIT
+# docs/ENV.md=39620 adds 30 (0.10): the placement runtime-annotation refusal and the longer member dotfile list.
+# docs/ENV.md=39650 adds 79 (0.10): the WARDYN_TRUSTED_CA_REFUSE_WRITABLE row and details section, and the writable-bundle warning on WARDYN_TRUSTED_CA_FILE.
+# docs/ENV.md 39918 adds 298 over 39620, measured: three default-off switch rows and details sections, which the env-doc guard requires.
+# docs/ENV.md 40416 = ours 39707 + theirs 40329 - base 39620 at the 0.10.0 SEC-1 merge of main; re-measured below if higher.
+# docs/ENV.md 40438 = ours 40140 + theirs 40329 - base 40031 at the 0.10.0 SEC-2c merge of main.
+# docs/ENV.md 40525 = ours 40416 + theirs 40438 - base 40329 at the 0.10 W2 merge of SEC-2c onto the train.
+# docs/ENV.md 40671 = ours 40525 + theirs 40177 - base 40031 at the 0.10 W2 merge of VM-B onto the train.
 # docs/ENV.md 40101 adds 70 (0.10 Linux VM): the three WARDYN_RUNNER_VM rows.
-docs/ENV.md=40101 share=5
+# docs/ENV.md 40741 = ours 40101 + theirs 40671 - base 40031 at the 0.10 W2 merge of CTL-A onto DSK-A.
+docs/ENV.md=40741 share=5
 # docs/ENV.md 39047 adds 478 over 38569: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
 # docs/ENV.md 38607 adds 38 over 38569, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.

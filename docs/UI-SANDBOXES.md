@@ -74,6 +74,27 @@
   each of them bigger, and because the decision to ship it anyway was taken with
   them in view rather than around them.
 
+## The desktop's clipboard
+
+- The relay filters a desktop's clipboard by the run's [`desktop`](POLICIES.md#desktop--desktopcontrols) rules:
+  paste in allowed and copy out blocked unless the policy says otherwise.
+- The desktop is the app declared as `"name": "novnc"`. Every WebSocket of that app is RFB or it closes. The relay
+  follows the RFB stream inside it and drops a blocked `ClientCutText` or `ServerCutText`.
+- Only that app is filtered. A member may declare the same desktop server under another name, so a ceiling that
+  blocks copy out should also pin `ui_apps` to the desktop app. An SSH port forward to the VNC port is outside the relay.
+- The desktop page comes from the sandbox, so these rules stop ordinary copy and paste; they are not a boundary against
+  a run built to get data out.
+- The server speaks first in RFB. Browser frames that arrive before the server's first frame are held, up to
+  64 KiB and 5 seconds, then read in order. A desktop whose first frame is not an RFB version is closed, and a
+  `ui.clipboard` `failure` row records `reason: not_rfb`.
+- It fails closed: a text frame, a WebSocket extension, a security type that encrypts the stream, or a message or
+  encoding it cannot frame closes the socket, and the gateway logs which one.
+- It offers the desktop no WebSocket extension and narrows the browser's encodings to Raw, CopyRect, ZRLE and the
+  pseudo-encodings it frames, so Tight is off on this path.
+- Every other app's sockets relay unfiltered, as before.
+- It filters the clipboard, not the screen: a person can still read what the desktop shows, and a page the
+  sandbox serves can still show text.
+
 ## Diagnosing a blocked request
 
 - A relayed editor is the place developers most often meet the egress policy, and
@@ -101,6 +122,7 @@
 | `approval:denied` | a human reviewed this host and said no | stop retrying |
 | `approval:expired` | the host's approval expired, or was cancelled, before anyone decided it | retry: the next request asks again, and a person still has to approve it |
 | `policy:method` | the host is allowed, the HTTP method is not | |
+| `policy:port` | the host is allowed on ports 80 and 443 only (the port rule) | ask the operator for an allowlist entry that names the port, `host:port` |
 | `builtin:private-ip` | the target resolved to a private address | the SSRF guard; not policy-tunable |
 | `builtin:resolve-failed` | the target's name could not be resolved | the proxy could not look the host up (resolver outage, no such name, no address); not policy-tunable — check the sandbox's DNS, not the allowlist |
 | `policy:evaluator-error` | the policy could not be evaluated | fail-closed; an operator problem, not yours |
@@ -111,7 +133,7 @@
   "Team A". To request a change: …"): the JSON `attribution` field on the forward
   lane, a trailing sentence in the provider-shaped message on the SDK lanes.
 - These come only with `policy:denied`,
-  `policy:default-deny`, `policy:method` and `approval:denied`, and with the git,
+  `policy:default-deny`, `policy:method`, `policy:port` and `approval:denied`, and with the git,
   PAT and Azure DevOps broker refusals the policy decides (a repository or host not
   granted, the branch namespace, the push content rules).
 - A fault (`builtin:*`,
@@ -430,6 +452,7 @@ no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found
 | `ui.start` | the launcher was run and the app came up | app, port, launcher path |
 | `ui.open` | a relay connection opened | app, port |
 | `ui.close` | that connection closed | app, port, `duration_sec` |
+| `ui.clipboard` | a desktop clipboard transfer, relayed or dropped; or a desktop closed for not speaking RFB | app, direction, bytes, sha256 (never the text); or app, reason |
 
 - These are deliberately **not** `session.attach`: there is no PTY and no holder,
   and a relay session must never appear in the run detail page's Recording tab as

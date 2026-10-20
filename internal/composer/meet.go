@@ -164,6 +164,13 @@ func (m *meeter) validatePresence(ov Overlay) {
 			}
 		}
 	}
+	if w := c.HarnessInnerWalls; w != nil && !validInnerWalls(*w) {
+		m.fail(ReasonOverlayInvalid, "harness_inner_walls", "sandbox_mode %q or approvals %q is not a value a policy may choose", w.SandboxMode, w.Approvals)
+	}
+	if d := c.Desktop; d != nil && !(types.ValidTransferRule(d.PasteIn) && types.ValidTransferRule(d.CopyOut) &&
+		types.ValidTransferRule(d.Upload) && types.ValidTransferRule(d.Download)) {
+		m.fail(ReasonOverlayInvalid, "desktop", "each direction is allowed or blocked")
+	}
 	m.validateNonNegative(ov)
 	if d := ov.Limits.DenyPlacements; d != nil {
 		for _, p := range *d {
@@ -265,3 +272,14 @@ func derefBool(p *bool) bool { return p != nil && *p }
 
 // trimJoin names a list of entries in a message.
 func trimJoin(xs []string) string { return strings.Join(xs, ",") }
+
+// validInnerWalls is the harness_inner_walls values a policy may choose: the API's
+// validateHarnessInnerWalls, whose refusal of the harness's own sandbox modes says why they are not here.
+func validInnerWalls(w types.HarnessInnerWalls) bool {
+	sandbox := w.SandboxMode == "" || w.SandboxMode == types.InnerSandboxOff
+	switch w.Approvals {
+	case "", types.InnerApprovalsHarness, types.InnerApprovalsWardyn, types.InnerApprovalsNone:
+		return sandbox
+	}
+	return false
+}

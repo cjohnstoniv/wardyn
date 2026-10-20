@@ -444,6 +444,26 @@ func TestProviderSignInClaudeCapture(t *testing.T) {
 		}
 	})
 
+	// The sandbox the token was copied from still holds it; a stored capture
+	// ends that sandbox as the AWS upload does (#2936).
+	t.Run("the sign-in sandbox goes with the capture", func(t *testing.T) {
+		srv, st, audit, _, runID := launch(t)
+		srv.signInCaptureKillGrace = 0
+		if code, body := capture(t, srv, member, p.ID, runID, token); code != http.StatusNoContent {
+			t.Fatalf("capture = %d %s, want 204", code, body)
+		}
+		srv.WaitBackground()
+		st.mu.Lock()
+		state := st.states[runID]
+		st.mu.Unlock()
+		if state != types.RunKilled {
+			t.Fatalf("sign-in run state = %s after a stored capture, want KILLED", state)
+		}
+		if data := killData(t, killRow(t, audit, runID.String())); data["reason"] != signInCapturedReason {
+			t.Errorf("run.kill reason = %v, want %q", data["reason"], signInCapturedReason)
+		}
+	})
+
 	t.Run("refused", func(t *testing.T) {
 		other := ssoSession(t, "sub-other", "other@corp.example", oidc.RoleUser)
 		for _, tc := range []struct {

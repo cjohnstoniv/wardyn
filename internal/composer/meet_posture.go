@@ -67,6 +67,16 @@ func (m *meeter) meetPosture(o types.CeilingOverlay) {
 			c.AzureDevOpsCapabilities = toCaps[adoscope.Capability](both)
 		}
 	}
+	if o.HarnessInnerWalls != nil {
+		m.meetInnerWalls(*o.HarnessInnerWalls)
+	}
+	if o.Desktop != nil {
+		if !leqDesktop(o.Desktop, c.Desktop) {
+			m.widen("desktop", "the base blocks a desktop direction, and an overlay can only block more")
+		}
+		d := c.Desktop.Meet(o.Desktop)
+		c.Desktop = &d
+	}
 	if o.GitHubCapabilities != nil {
 		if both, ok := m.meetCapabilities("github_capabilities", capStrings(c.GitHubCapabilities), capStrings(*o.GitHubCapabilities)); ok {
 			c.GitHubCapabilities = toCaps[ghscope.Capability](both)
@@ -341,4 +351,30 @@ func toCaps[C ~string](in []string) []C {
 		out = append(out, C(s))
 	}
 	return out
+}
+
+// meetInnerWalls lays an overlay's harness_inner_walls over the base's: an axis set on one side is
+// that side's, and set on both it must agree.
+func (m *meeter) meetInnerWalls(o types.HarnessInnerWalls) {
+	c := &m.out.Ceiling
+	var b types.HarnessInnerWalls
+	if c.HarnessInnerWalls != nil {
+		b = *c.HarnessInnerWalls
+	}
+	b.SandboxMode = m.meetInnerWall("harness_inner_walls.sandbox_mode", b.SandboxMode, o.SandboxMode)
+	b.Approvals = m.meetInnerWall("harness_inner_walls.approvals", b.Approvals, o.Approvals)
+	if b != (types.HarnessInnerWalls{}) {
+		c.HarnessInnerWalls = &b
+	}
+}
+
+func (m *meeter) meetInnerWall(field, base, over string) string {
+	switch {
+	case over == "":
+	case base == "":
+		return over
+	case base != over:
+		m.fail(ReasonOverlayInvalid, field, "the overlay chooses %q and the base %q; set it on one side only", over, base)
+	}
+	return base
 }

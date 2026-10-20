@@ -127,7 +127,7 @@ type uiSession struct {
 	// Service is the service identity whose run the session entered as its sponsor (#1508), empty
 	// otherwise; every row the session writes names it with entry=sponsor.
 	Service string `json:"c,omitempty"`
-	// Desktop marks a session on a VM's desktop (App uiDesktopApp, no Port): it lasts at most
+	// Desktop marks a session on a VM's desktop (App uiDesktopAppName, no Port): it lasts at most
 	// uiDesktopSessionTTL and ends when its person closes it (uigateway_desktop.go).
 	Desktop bool `json:"d,omitempty"`
 }
@@ -270,7 +270,7 @@ func (s *Server) decodeUISession(r *http.Request, now time.Time) (uiSession, boo
 		return uiSession{}, false
 	}
 	// A desktop session has no port and only the desktop has one without: neither can pass for the other.
-	if sess.Run == uuid.Nil || sess.App == "" || (sess.Port <= 0) != sess.Desktop || sess.Desktop != (sess.App == uiDesktopApp) || now.Unix() >= sess.Expires {
+	if sess.Run == uuid.Nil || sess.App == "" || (sess.Port <= 0) != sess.Desktop || sess.Desktop != (sess.App == uiDesktopAppName) || now.Unix() >= sess.Expires {
 		return uiSession{}, false
 	}
 	// Issued-at, then the CONFIGURED TTL over it. Checking the TTL here and not

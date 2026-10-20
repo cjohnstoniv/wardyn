@@ -27,6 +27,11 @@ import (
 // Dispatch and Review fill it from the same sources, so they answer alike.
 type patNarrowingEnv struct {
 	brokerOn bool // WARDYN_GIT_PAT_BROKER is not off
+	// residentRefused is whether a PAT the broker-off lane would put in the
+	// sandbox is refused: on a member's run, and on every run while
+	// WARDYN_GIT_PAT_BROKER_OFF_REFUSED is set (residentPATRefused).
+	residentRefused bool
+	retireOff       bool // WARDYN_GIT_PAT_BROKER_OFF_REFUSED, for the refusal's sentence
 	// brokered is whether the run has a GitHub-brokered forge (its github_token
 	// grant seeds the broker map): its git_pat grant for that forge is withheld.
 	brokered bool
@@ -67,6 +72,48 @@ func patNarrowingRefusal(grants []types.GrantSpec, env patNarrowingEnv) (reason,
 		}
 	}
 	return "", ""
+}
+
+// residentPATRefused is patNarrowingEnv.residentRefused: a member's run never
+// holds a PAT the broker-off lane would mint into the sandbox (0.10.0), and
+// retireOff extends that to operators' runs.
+func residentPATRefused(operator, retireOff bool) bool {
+	return !operator || retireOff
+}
+
+// brokerOffPATRefusal refuses the first git_pat grant the broker-off lane would
+// mint into the sandbox while env.residentRefused holds; "" when none. A host
+// another lane serves (Azure DevOps, a GitHub-brokered forge) never reaches that
+// lane. grants excludes runner_resident rows: that lane is the pool's own
+// delivery choice, governed by the resident-class rules, not by this switch.
+func brokerOffPATRefusal(grants []types.GrantSpec, env patNarrowingEnv) (reason, detail string) {
+	if env.brokerOn || !env.residentRefused {
+		return "", ""
+	}
+	why := "only an administrator's run may hold a PAT in its sandbox. Ask your administrator to turn the broker back on"
+	if env.retireOff {
+		why = "this deployment refuses a PAT in the sandbox on every run (WARDYN_GIT_PAT_BROKER_OFF_REFUSED)"
+	}
+	for _, g := range grants {
+		if g.Kind != types.GrantGitPAT {
+			continue
+		}
+		sc, err := types.DecodeGitPATScope(g.Scope)
+		if err != nil || patNarrowingHostUnsupported(env, sc.Host) {
+			continue
+		}
+		return reasonGitPATBrokerOffResident, fmt.Sprintf(
+			"The git_pat grant for %s would put the PAT in the sandbox, because the PAT broker is off on this deployment (WARDYN_GIT_PAT_BROKER), and %s.", sc.Host, why)
+	}
+	return "", ""
+}
+
+// brokeredLaneSpecs is the specs of rows the broker-off lane would serve: every
+// row but a runner_resident one.
+func brokeredLaneSpecs(rows []types.CredentialGrant) []types.GrantSpec {
+	return patGrantSpecs(slices.DeleteFunc(slices.Clone(rows), func(r types.CredentialGrant) bool {
+		return r.Delivery == types.GrantDeliveryResident
+	}))
 }
 
 // patSSHKeyFor reports whether grants hold an ssh_key for the same forge as
@@ -171,9 +218,12 @@ func scopePATGrants(grants map[string]proxy.PATGrant, rows []types.CredentialGra
 // narrowed git_pat grant could not be enforced (patNarrowingRefusal). rows is the
 // one ListGrantsByRun read dispatch makes.
 func (s *Server) enforceablePATNarrowing(ctx context.Context, run types.AgentRun, p dispatchParams,
-	rows []types.CredentialGrant, site types.SiteConfig, adoRun adoEntraRun, adoInject bool,
+	rows []types.CredentialGrant, site types.SiteConfig, adoRun adoEntraRun, adoInject, operator bool,
 ) bool {
-	env := patNarrowingEnvOf(p.PATBroker, p.GitGrants, site, adoRun, adoInject)
+	env := s.patNarrowingEnvOf(p.PATBroker, operator, p.GitGrants, site, adoRun, adoInject)
+	if reason, detail := brokerOffPATRefusal(brokeredLaneSpecs(rows), env); reason != "" {
+		return s.refusePATDispatch(ctx, run, reason, "This run was not launched: "+detail)
+	}
 	if reason, detail := patNarrowingRefusal(patGrantSpecs(rows), env); reason != "" {
 		return s.refusePATDispatch(ctx, run, reason, "This run was not launched: "+detail)
 	}
@@ -183,8 +233,9 @@ func (s *Server) enforceablePATNarrowing(ctx context.Context, run types.AgentRun
 // patNarrowingEnvOf is the env dispatch and revive both fill: the broker
 // switch, the run's brokered-forge map, the site config and the run's Azure
 // DevOps lane as resolveADOEntraRun decided it.
-func patNarrowingEnvOf(brokerOn bool, gitGrants map[string]uuid.UUID, site types.SiteConfig, adoRun adoEntraRun, adoOn bool) patNarrowingEnv {
-	env := patNarrowingEnv{brokerOn: brokerOn, brokered: len(gitGrants) > 0, site: site, bbsAPI: patAPIBitbucketOn()}
+func (s *Server) patNarrowingEnvOf(brokerOn, operator bool, gitGrants map[string]uuid.UUID, site types.SiteConfig, adoRun adoEntraRun, adoOn bool) patNarrowingEnv {
+	env := patNarrowingEnv{brokerOn: brokerOn, brokered: len(gitGrants) > 0, site: site, bbsAPI: patAPIBitbucketOn(),
+		residentRefused: residentPATRefused(operator, s.cfg.RefuseGitPATBrokerOff), retireOff: s.cfg.RefuseGitPATBrokerOff}
 	if adoOn {
 		env.adoHosts = adoRun.laneHosts()
 	}
@@ -229,11 +280,19 @@ func (s *Server) refusePATDispatch(ctx context.Context, run types.AgentRun, reas
 // any repository, as dispatch reads it (len(GitGrants) > 0): a wired
 // github_token grant's own repositories, or the declared github.com clones
 // beside one (githubCLIRepos derives exactly those keys).
-func (s *Server) patNarrowingAtDoor(r *http.Request, req createRunRequest, spec types.RunPolicySpec, site types.SiteConfig) (reason, detail string) {
-	env := patNarrowingEnv{brokerOn: !s.cfg.DisableGitPATBroker, site: site, bbsAPI: patAPIBitbucketOn()}
+//
+// operator is the ceiling's operator bit dispatch reads too. A pooled run is not
+// asked the broker-off refusal here: a pool may deliver its git_pat
+// runner_resident, which only dispatch knows, and dispatch still refuses it.
+func (s *Server) patNarrowingAtDoor(r *http.Request, req createRunRequest, spec types.RunPolicySpec, site types.SiteConfig, operator, pooled bool) (reason, detail string) {
+	env := patNarrowingEnv{brokerOn: !s.cfg.DisableGitPATBroker, site: site, bbsAPI: patAPIBitbucketOn(),
+		residentRefused: residentPATRefused(operator, s.cfg.RefuseGitPATBrokerOff), retireOff: s.cfg.RefuseGitPATBrokerOff}
 	env.brokered = len(githubCLIRepos(req, spec, site)) > 0
 	if lane, on := resolveADOEntraRun(site, spec.WorkspaceRepos, req.Repo, adoLaneOwnerOf(r)); on {
 		env.adoHosts = lane.laneHosts()
+	}
+	if reason, detail := brokerOffPATRefusal(spec.EligibleGrants, env); reason != "" && !pooled {
+		return reason, detail
 	}
 	return patNarrowingRefusal(spec.EligibleGrants, env)
 }

@@ -45,6 +45,8 @@ type CeilingOverlay struct {
 	PushRules               *PushRulesOverlay      `json:"push_rules,omitempty"`
 	AzureDevOpsCapabilities *[]adoscope.Capability `json:"azure_devops_capabilities,omitempty"`
 	GitHubCapabilities      *[]ghscope.Capability  `json:"github_capabilities,omitempty"`
+	HarnessInnerWalls       *HarnessInnerWalls     `json:"harness_inner_walls,omitempty"`
+	Desktop                 *DesktopControls       `json:"desktop,omitempty"`
 }
 
 // ResourcesOverlay mirrors ResourceLimits with per-field presence.

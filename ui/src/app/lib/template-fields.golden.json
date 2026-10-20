@@ -66,6 +66,12 @@
       "shared",
       "delivery"
     ],
+    "DesktopControls": [
+      "paste_in",
+      "copy_out",
+      "upload",
+      "download"
+    ],
     "DriveAttachment": [
       "drive_id",
       "read_only"
@@ -86,6 +92,10 @@
       "ttl_seconds",
       "requires_approval",
       "owner_only"
+    ],
+    "HarnessInnerWalls": [
+      "sandbox_mode",
+      "approvals"
     ],
     "IncludedTool": [
       "id",
@@ -343,6 +353,14 @@
       "section": "run_wide"
     },
     {
+      "name": "desktop",
+      "part": "tools_image",
+      "omitted": "unset_optional",
+      "empty": "same_as_omitted",
+      "meaning": "The desktop keeps its defaults: paste in and upload allowed, copy out and download blocked.",
+      "section": "run_wide"
+    },
+    {
       "name": "resources",
       "part": "resources",
       "omitted": "baseline",
@@ -358,6 +376,14 @@
       "meaning": "No tool rules are added.",
       "section": "harness",
       "keyed_by": "harness"
+    },
+    {
+      "name": "harness_inner_walls",
+      "part": "access_rules",
+      "omitted": "unset_optional",
+      "empty": "same_as_omitted",
+      "meaning": "The harness's own walls are what its lane and autonomy level give.",
+      "section": "run_wide"
     },
     {
       "name": "git_push_any_branch",

@@ -39,9 +39,9 @@ import (
 )
 
 const (
-	// uiDesktopApp is the desktop's app segment. A declared ui_app can never be named it
+	// uiDesktopAppName is the desktop's app segment. A declared ui_app can never be named it
 	// (uiAppNameRE starts with an alphanumeric), so the two never share a cookie or a path.
-	uiDesktopApp = "__desktop"
+	uiDesktopAppName = "__desktop"
 	// uiDesktopSessionTTL bounds one desktop session, whatever WARDYN_UI_SANDBOX_SESSION_TTL allows.
 	uiDesktopSessionTTL = time.Hour
 	// uiDesktopRecheck is how often an open desktop stream re-checks its person and its run.
@@ -139,7 +139,7 @@ func (s *Server) trackDesktop(sess uiSession, cancel context.CancelFunc) func() 
 // ticket, the person, background-only, deny_ui_apps, a RUNNING run that is not kept).
 func (s *Server) uiEnterDesktop(w http.ResponseWriter, r *http.Request, run types.AgentRun, ta ticketActor, superAdmin bool, redirectStatus int) {
 	if !run.MachineKind.IsVM() {
-		s.auditUI(&run.ID, types.ActorHuman, ta.principal, "ui.authorize", uiDesktopApp, "denied",
+		s.auditUI(&run.ID, types.ActorHuman, ta.principal, "ui.authorize", uiDesktopAppName, "denied",
 			ta.withVia(map[string]any{"reason": "the run is not a desktop VM"}))
 		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayAppNotDeclared, uiNoDesktopMsg)
 		return
@@ -147,16 +147,16 @@ func (s *Server) uiEnterDesktop(w http.ResponseWriter, r *http.Request, run type
 	if (!superAdmin || !s.adminDoorExempt(run)) && s.refuseInteractiveAttach(w, r.WithContext(withTicketActor(r.Context(), ta)), run) {
 		return
 	}
-	sess := s.newUISession(run, ta, uiDesktopApp, 0, min(s.uiSessionTTL(), uiDesktopSessionTTL))
+	sess := s.newUISession(run, ta, uiDesktopAppName, 0, min(s.uiSessionTTL(), uiDesktopSessionTTL))
 	sess.Desktop = true
-	s.startUISession(w, r, run, ta, sess, map[string]any{"app": uiDesktopApp, "machine_kind": string(run.MachineKind)}, "/", redirectStatus)
+	s.startUISession(w, r, run, ta, sess, map[string]any{"app": uiDesktopAppName, "machine_kind": string(run.MachineKind)}, "/", redirectStatus)
 }
 
 // handleDesktopRelay serves /r/<run>/__desktop/...: the viewer's own files (no session: they are the
 // console bundle's public assets), then, with a desktop session for this run, the viewer page, the
 // RFB stream and Close.
 func (s *Server) handleDesktopRelay(w http.ResponseWriter, r *http.Request, runID uuid.UUID) {
-	rest := strings.TrimPrefix(r.URL.Path, uiRelayPrefix(runID, uiDesktopApp))
+	rest := strings.TrimPrefix(r.URL.Path, uiRelayPrefix(runID, uiDesktopAppName))
 	if strings.HasPrefix(rest, uiDesktopAssets) {
 		s.serveDesktopAsset(w, r, strings.TrimPrefix(rest, uiDesktopAssets))
 		return
@@ -177,14 +177,14 @@ func (s *Server) handleDesktopRelay(w http.ResponseWriter, r *http.Request, runI
 	case rest == "/" && r.Method == http.MethodGet:
 		s.serveDesktopViewer(w, r, runID, map[string]any{
 			"state": "open", "expires": sess.Expires,
-			"rfb":   s.uiBasePath() + uiRelayPrefix(runID, uiDesktopApp) + uiDesktopRFB,
-			"close": s.uiBasePath() + uiRelayPrefix(runID, uiDesktopApp) + uiDesktopClose,
+			"rfb":   s.uiBasePath() + uiRelayPrefix(runID, uiDesktopAppName) + uiDesktopRFB,
+			"close": s.uiBasePath() + uiRelayPrefix(runID, uiDesktopAppName) + uiDesktopClose,
 		}, http.StatusOK)
 	case rest == uiDesktopRFB:
 		s.serveDesktopRFB(w, r, sess)
 	case rest == uiDesktopClose && r.Method == http.MethodPost:
 		s.closeDesktop(sess)
-		http.SetCookie(w, &http.Cookie{Name: uiCookieName, Value: "", Path: s.uiBasePath() + uiCookiePath(runID, uiDesktopApp),
+		http.SetCookie(w, &http.Cookie{Name: uiCookieName, Value: "", Path: s.uiBasePath() + uiCookiePath(runID, uiDesktopAppName),
 			HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: s.cfg.OIDCSecureCookies, MaxAge: -1})
 		w.WriteHeader(http.StatusNoContent)
 	default:
@@ -217,7 +217,7 @@ func (s *Server) serveDesktopAsset(w http.ResponseWriter, r *http.Request, name 
 // uiDesktopLinkRefused answers a desktop link opened a second time, or too late, with the viewer's
 // refusal page and the gateway's words; false (nothing written) for any other app, or with no viewer.
 func (s *Server) uiDesktopLinkRefused(w http.ResponseWriter, r *http.Request, runID uuid.UUID, app string) bool {
-	return app == uiDesktopApp && s.serveDesktopRefusal(w, r, runID, uiTicketInvalidMsg)
+	return app == uiDesktopAppName && s.serveDesktopRefusal(w, r, runID, uiTicketInvalidMsg)
 }
 
 // serveDesktopRefusal answers a desktop link that no longer opens anything with the viewer's refusal
@@ -238,7 +238,7 @@ func (s *Server) serveDesktopViewer(w http.ResponseWriter, r *http.Request, runI
 		return false
 	}
 	attr, _ := json.Marshal(data)
-	root := s.uiBasePath() + uiRelayPrefix(runID, uiDesktopApp) + "/"
+	root := s.uiBasePath() + uiRelayPrefix(runID, uiDesktopAppName) + "/"
 	page := strings.NewReplacer(`="./`, `="`+root, `data-wardyn-desktop=""`, `data-wardyn-desktop="`+html.EscapeString(string(attr))+`"`).Replace(string(raw))
 	h := w.Header()
 	h.Set("Content-Type", "text/html; charset=utf-8")
@@ -295,10 +295,10 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 
 	go s.attachKeepalive(ctx, sess.Run)
 	opened := s.cfg.Now()
-	s.auditUISession(sess, "ui.open", uiDesktopApp, "success", map[string]any{"app": uiDesktopApp})
+	s.auditUISession(sess, "ui.open", uiDesktopAppName, "success", map[string]any{"app": uiDesktopAppName})
 	defer func() {
-		s.auditUISession(sess, "ui.close", uiDesktopApp, "success",
-			map[string]any{"app": uiDesktopApp, "duration_sec": int(s.cfg.Now().Sub(opened).Seconds())})
+		s.auditUISession(sess, "ui.close", uiDesktopAppName, "success",
+			map[string]any{"app": uiDesktopAppName, "duration_sec": int(s.cfg.Now().Sub(opened).Seconds())})
 	}()
 
 	conn := websocket.NetConn(r.Context(), ws, websocket.MessageBinary)

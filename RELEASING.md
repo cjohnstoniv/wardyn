@@ -11,7 +11,7 @@
 - You are the maintainer (see [MAINTAINERS.md](MAINTAINERS.md)); releases push tags to `origin`, so only someone with push rights cuts them.
 - The full CI gate is green on the commit you intend to tag.
   - The gate is the [`.github/workflows/ci.yml` job list:](.github/workflows/ci.yml) `changes`, `go` (a matrix job: `lint`, `unit`, `docker`, `k8s`), `build`, `diagrams`, `ui`, `ui-e2e` (a matrix job: `1/2`, `2/2`),
-  - `helm`, `helm-install-test`, `compose`, `runner-units`, `conformance`, `conformance-k8s`, `envbuild-integration`, `vm`, `test-pg-shard` (a matrix job: `api-1`, `api-2`, `store`, `race`), `test-pg`, `gates` (a matrix job: `govulncheck`, `staticcheck`, `licenses`, `license-headers`, `gitleaks`), `dco`, `ci-ran`, `train-suites`, `train-gate`, `main-red`, `notify-flaky`, `go-modules`, `go-cache-prune`,
+  - `helm`, `helm-install-test`, `compose`, `runner-units`, `conformance`, `conformance-k8s`, `envbuild-integration`, `vm`, `vm-conformance` (not required), `test-pg-shard` (a matrix job: `api-1`, `api-2`, `store`, `race`), `test-pg`, `gates` (a matrix job: `govulncheck`, `staticcheck`, `licenses`, `license-headers`, `gitleaks`), `dco`, `ci-ran`, `train-suites`, `train-gate`, `main-red`, `notify-flaky`, `go-modules`, `go-gate-tools`, `go-cache-prune`,
   - the nine image scans (`trivy-wardynd`, `trivy-wardynd-fips`, `trivy-wardyn-proxy`, `trivy-wardyn-runnerd`, `trivy-agent-base`, `trivy-agent-codex-cli`, `trivy-agent-aws-sso`, `trivy-agent-vscode`, `trivy-agent-novnc`, each reporting as `trivy (<image>)`),
   - and **`notices`** — the copyleft / unreviewed-dependency gate.
   - `sbom-stub` used to be named here and is **gone**: it was deleted along with `make sbom` (CHANGELOG, *Removed*),
@@ -188,16 +188,17 @@ make release-patch V=0.8.4 DRY_RUN=1 BRANCH=<a branch whose tree CI tested> HIGH
 | `ISSUES` | Issue numbers. The PR body gets one `Closes #N` per line. |
 | `PHASE` | `prepare`, `wait`, `publish` or `all` (default). |
 | `DRY_RUN=1` | A rehearsal (below). |
+| `PRERELEASE` | `auto` (default), `true` or `false`. `auto`: an `X.Y.Z-rc.N` is a pre-release, a final is a full release. |
 
 The phases, each of which first detects what already exists and skips it, so a
 crash or a usage limit resumes with the same command:
 
-1. **prepare.** Branch, `MERGE`, `scripts/release-commit.sh --apply`, three local
-   checks that must each pass (`make dco DCO_RANGE="HEAD ^origin/main
-   ^origin/release/X.Y"`, the version tests, [`scripts/test-claims-match-code.sh`](scripts/test-claims-match-code.sh)), push,
-   - `scripts/lane-preflight.sh --candidate` runs before those three checks. A branch whose `lane-preflight.sh` lacks that mode stops with an error.
-   - Then `nightly.yml` is dispatched on the branch with `-f scope=candidate`, unless a dispatched nightly on the same tree is already queued, running or green.
-   - Only then does the PR into `release/X.Y` titled `release: V` open, so the nightly starts beside the PR's CI.
+1. **prepare.** Branch, `MERGE`, `scripts/release-commit.sh --apply`, push, then the local checks.
+   - The push comes first, so hosted CI runs while the local checks do. A branch without `lane-preflight.sh --candidate` stops before it.
+   - `nightly.yml` is dispatched with `-f scope=candidate`, unless a dispatched nightly on the same tree is already queued, running or green.
+   - Then the PR into `release/X.Y` titled `release: V` opens, so the nightly starts beside the PR's CI.
+   - Last, the local checks: `lane-preflight.sh --candidate` (no Playwright: hosted `ui-e2e` is the e2e gate), `make dco DCO_RANGE="HEAD ^origin/main ^origin/release/X.Y"`, the version tests and [`scripts/test-claims-match-code.sh`](scripts/test-claims-match-code.sh).
+   - A pass is recorded per head commit. After a failure, fix it and re-run; `wait` and `publish` refuse a head the checks have not passed on (`DRY_RUN=1` excepted).
    - After the merge and again after the release-commit step, duplicate CHANGELOG heading keys (including `Unreleased`, regardless of dates) stop prepare before checks, pushes, PRs or nightly dispatch.
    - This also applies when resuming an already released or pushed candidate.
    - Commit a repair preserving the notes and history, then rerun prepare; no reset, amend or force-push is needed.
@@ -211,7 +212,7 @@ crash or a usage limit resumes with the same command:
    runs are queued, then `git push origin <sha>:refs/heads/release/X.Y` (never
    forced: a rejected push means `release/X.Y` moved, so it stops),
    - the annotated tag `vX.Y.Z` and its push (by full ref; a local `vX.Y.Z` that points anywhere but the commit just verified is refused by name),
-   - `gh run watch` on `release.yml`'s run for the tag, `gh release edit vX.Y.Z --draft=false --prerelease` on the draft that `release-assets` made, and [`scripts/verify-release.sh`](scripts/verify-release.sh), which must end `fails=0`.
+   - `gh run watch` on `release.yml`'s run for the tag, `gh release edit vX.Y.Z --draft=false` (with the pre-release and latest flags `PRERELEASE` picks) on the draft that `release-assets` made, and [`scripts/verify-release.sh`](scripts/verify-release.sh), which must end `fails=0`.
    - The forward-port commands are printed, never run.
    - After a final release, rehearse the runner compatibility walk against it once: `WARDYN_TEST_DOCKER=1
      WARDYN_COMPAT_RELEASED=vX.Y.Z scripts/runner-compat-walk.sh` on a native Docker engine, or a nightly on `main`.
@@ -413,10 +414,9 @@ crash or a usage limit resumes with the same command:
    If that job is red, the Release is missing assets [`docs/VERIFY.md`](docs/VERIFY.md) tells
    consumers to check. Treat it as a failed release, not a cosmetic warning.
 
-6. **Publish the GitHub Release** for the tag, pasting that version's CHANGELOG section
-   as the body. The `release-assets` job already created it as a draft pre-release, so
-   edit rather than create: `gh release edit vX.Y.Z --draft=false --prerelease --notes-file <body>`
-   — Wardyn is pre-alpha, so it stays a pre-release.
+6. **Publish the GitHub Release** for the tag, with that version's CHANGELOG section as the body. `release-assets` already made a draft, so edit it.
+   - A final: `gh release edit vX.Y.Z --draft=false --prerelease=false --latest --notes-file <body>`. `make release-patch` runs this; `PRERELEASE=auto|true|false` picks (default `auto`).
+   - An `X.Y.Z-rc.N` gets `--prerelease`; a final with a newer final tag gets `--latest=false`.
 7. **Publish the demo videos as release assets** (after step 6 — upload needs the
    Release to exist).
    - Release assets live outside git history, so clones stay small.
@@ -444,8 +444,7 @@ crash or a usage limit resumes with the same command:
 
    - Docs link the **pinned tag** —
      `https://github.com/cjohnstoniv/wardyn/releases/download/vX.Y.Z/<name>.mp4`.
-   - (`releases/latest/download/` resolves only to non-prerelease releases; every
-     Wardyn release is a pre-release, so `latest` 404s.)
+   - (`releases/latest/download/` resolves only to non-prerelease releases.)
    - A later release that
      re-records an episode re-uploads under the same stable name and bumps the tag
      in **both** `README.md` and [`ui/src/app/lib/demo-videos.ts`](ui/src/app/lib/demo-videos.ts) — one `sed`

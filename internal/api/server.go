@@ -34,6 +34,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/livebus"
 	"github.com/cjohnstoniv/wardyn/internal/maskmanifest"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
+	"github.com/cjohnstoniv/wardyn/internal/rfbfilter"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
@@ -206,6 +207,10 @@ type Config struct {
 	// http.DefaultTransport at boot. Control-plane-authored only: never a
 	// SiteConfig field, never agent-reachable.
 	TrustedCAPEM string
+	// EgressPortRule is WARDYN_EGRESS_PORT_RULE for container runs: "" (off,
+	// the default: a bare allowlist host is open on every port), "dry_run" or
+	// "on" (80/443 plus host:port entries). Desktop VM runs always have it on.
+	EgressPortRule string
 	// RunnerTarget records which target a run is dispatched to ("docker"|"k8s"),
 	// or "none" for a headless control plane (-runner none: runs stay PENDING).
 	// Defaults to "docker".
@@ -277,6 +282,20 @@ type Config struct {
 	// UNAFFECTED either way (legacy, still boot-warned separately — see
 	// buildOptionalFeatures).
 	AllowEmailMappings bool
+	// CapabilityGrantsVerifiedEmail is WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL: a
+	// capability ALLOW row written for a person's email matches them only when
+	// sign-in vouches for the email (unverifiedEmailSubject). Default false keeps
+	// the match and logs it. Deny rows match the email either way.
+	CapabilityGrantsVerifiedEmail bool
+	// GovernanceProfilePutExistingOnly is WARDYN_GOVERNANCE_PROFILE_PUT_EXISTING_ONLY:
+	// PUT /governance/profiles/{id} replaces an existing profile only, and a
+	// new one is created through POST. Default false keeps create-at-id and logs it.
+	GovernanceProfilePutExistingOnly bool
+	// EgressHostPortGrantsInert is WARDYN_EGRESS_HOST_PORT_GRANTS_INERT: a stored
+	// egress_host ALLOW row whose value carries a ":port" (written before the
+	// write boundary stored the host alone) is inert, marked and never matched.
+	// Default false keeps matching it by host and logs it. Deny rows keep matching.
+	EgressHostPortGrantsInert bool
 	// UserMounts is the operator/MDM-set posture for MEMBER-authored local_dir
 	// binds (WARDYN_USER_WORKSPACE_ROOTS + _MAP + WARDYN_USER_WRITABLE_ROOTS
 	// + _DENY, parsed at boot by runner.ParseUserMountPolicy). The ZERO VALUE
@@ -556,6 +575,20 @@ type Config struct {
 	// unexpectedly under that rewrite must not leave a fleet unable to clone.
 	// Reverting is a flag flip and a restart, not a redeploy.
 	DisableGitPATBroker bool
+	// RefuseGitPATBrokerOff (WARDYN_GIT_PAT_BROKER_OFF_REFUSED) refuses, while
+	// the broker is off, a resident PAT on an operator's run too; a member's
+	// run is refused it either way (patNarrowingRefusal).
+	RefuseGitPATBrokerOff bool
+	// ScrubProxyResponses (WARDYN_PROXY_RESPONSE_SCRUB) stamps
+	// proxy.Config.ScrubResponses on every new dispatch.
+	ScrubProxyResponses bool
+	// EnvSecretPlaceholders / FileSecretPlaceholders (WARDYN_ENV_SECRET_PLACEHOLDERS,
+	// WARDYN_FILE_SECRET_PLACEHOLDERS; off by default in 0.10.0): an env_secret
+	// or file_secret grant whose scope names a host gets a placeholder in the
+	// sandbox, which the run's proxy fills on requests to that host
+	// (runs_dispatch_placeholders.go). Off = the value in the sandbox, as before.
+	EnvSecretPlaceholders  bool
+	FileSecretPlaceholders bool
 	// OIDCRoleMapConfigured reports whether WARDYN_OIDC_ROLE_MAP is non-empty —
 	// the sso_rbac /setup/status check's gate. Only the presence, never the
 	// mapping itself: the API layer has no use for individual entries, only
@@ -827,8 +860,12 @@ type Server struct {
 	// ready to use.
 	uiConnsMu sync.Mutex
 	uiConns   map[uuid.UUID]int
-	uiReadyMu sync.Mutex
-	uiReady   map[string]time.Time
+	// uiDesktopSink, when set, gets each desktop socket's bytes AFTER the clipboard filter, in
+	// both directions (rfbfilter.Sink): the tee point for a recorder, so a dropped cut text is
+	// never recorded. Nil (the default) tees nothing. It returns nil to skip a session.
+	uiDesktopSink func(uiSession) rfbfilter.Sink
+	uiReadyMu     sync.Mutex
+	uiReady       map[string]time.Time
 	// uiReassert debounces the relay's REQUEST-path authorization re-check, one
 	// entry per minted session (uiReassertKey) — see uiReassertRelay.
 	uiReassertMu sync.Mutex
@@ -941,55 +978,4 @@ type Server struct {
 	// real ~35s budget. Zero (the default) means "use backgroundShutdownBudget".
 	// See background.go; signInCaptureKillGrace is ssotoken.go's (tests set 0).
 	bgWaitBudget, signInCaptureKillGrace time.Duration
-}
-
-// New constructs a Server and builds its router. It does not start listening.
-func New(cfg Config) *Server {
-	if cfg.Now == nil {
-		cfg.Now = time.Now
-	}
-	if cfg.RunnerTarget == "" {
-		cfg.RunnerTarget = "docker"
-	}
-	if cfg.SSHRoleTTL <= 0 {
-		cfg.SSHRoleTTL = defaultSSHRoleTTL
-	}
-	if cfg.SSHMaxSessionsPerRun <= 0 {
-		cfg.SSHMaxSessionsPerRun = defaultSSHSessionsPerRun
-	}
-	if cfg.UISessionTTL <= 0 {
-		cfg.UISessionTTL = defaultUISessionTTL
-	}
-	if cfg.RunOutputTailBytes <= 0 {
-		cfg.RunOutputTailBytes = defaultRunOutputTailBytes
-	}
-	if cfg.ExecOutputTailTTL <= 0 {
-		cfg.ExecOutputTailTTL = defaultExecOutputTailTTL
-	}
-	if cfg.BaseCtx == nil {
-		cfg.BaseCtx = context.Background()
-	}
-	s := &Server{cfg: cfg, signInCaptureKillGrace: signInCaptureKillGrace,
-		branchLimiter:      principalLimiter{rate: branchListRatePerSec, burst: branchListBurst, max: branchListMaxPeople},
-		backchannelLimiter: principalLimiter{rate: backchannelLogoutRatePerSec, burst: backchannelLogoutBurst, max: 1},
-		deviceRouteState:   newDeviceRouteState(),
-	}
-	s.scimState = newSCIMState()
-	s.defaultRunnerHooks()
-	if cfg.PreflightRatePerMin > 0 {
-		s.preflightLimiter = &principalLimiter{rate: float64(cfg.PreflightRatePerMin) / 60, burst: preflightBurst, max: preflightLimiterMaxPeople}
-	}
-	if cfg.PolicyPreviewRatePerMin > 0 {
-		s.policyPreviewLimiter = &principalLimiter{rate: float64(cfg.PolicyPreviewRatePerMin) / 60, burst: policyPreviewBurst, max: preflightLimiterMaxPeople}
-	}
-	s.router = s.routes()
-	s.registerLiveBus()
-	// drain the durable audit-fallback spool back into the store once it
-	// recovers, so a PG outage no longer leaves spooled events permanently invisible
-	// to /audit and `wardyn audit`. Uses BaseCtx (daemon lifetime) so it survives
-	// individual requests and stops on shutdown. No-op unless both are wired.
-	if cfg.AuditSpool != nil && cfg.AuditDrainRecorder != nil {
-		go cfg.AuditSpool.StartDrain(cfg.BaseCtx, cfg.AuditDrainRecorder, auditSpoolDrainInterval, auditSpoolDrainBatch)
-	}
-	return s
 }

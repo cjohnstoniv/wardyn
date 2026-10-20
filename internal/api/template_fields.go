@@ -259,11 +259,15 @@ var templatePolicyRules = []TemplateFieldRule{
 		"Content inspection follows the organisation's policy, off unless it is turned on."),
 	carriedField("ui_apps", partTools, templateOmitOptional, templateEmptyValue,
 		"No application is declared for the browser."),
+	carriedField("desktop", partTools, templateOmitOptional, templateEmptySame,
+		"The desktop keeps its defaults: paste in and upload allowed, copy out and download blocked."),
 	carriedField("resources", partResources, templateOmitBaseline, templateEmptySame,
 		"Limits follow the platform defaults. A zero field means the default."),
 	carriedField("tool_rules", partRules, templateOmitOptional, templateEmptySame,
 		"No tool rules are added.").
 		in(templateSectionHarness, "harness"),
+	carriedField("harness_inner_walls", partRules, templateOmitOptional, templateEmptySame,
+		"The harness's own walls are what its lane and autonomy level give."),
 	carriedField("git_push_any_branch", partRules, templateOmitBaseline, templateEmptyValue,
 		"Pushes stay inside the run's own branch namespace. False is a choice to keep that.").
 		in(templateSectionSCMEntry, "provider+org"),
@@ -296,6 +300,8 @@ var templateNestedCarried = map[string]string{
 	"DriveSelection":      "enabled read_only",
 	"GitPATOverride":      "host repos access api",
 	"GrantSpec":           "kind scope ttl_seconds requires_approval owner_only",
+	"HarnessInnerWalls":   "sandbox_mode approvals",
+	"DesktopControls":     "paste_in copy_out upload download",
 	"IncludedTool":        "id kind model_provider component tool_rules default_effect",
 	"LLMInspectionSpec": "mode workspace_secret_names detect_secrets detect_secret_patterns detect_entropy detect_pii detector_sidecar_url " +
 		"classified_markers scan_attachments inspect_forward_egress max_scan_bytes on_scanner_error require_inspectable_llm intercept_tls block_min_severity",

@@ -95,7 +95,7 @@ func (s *Server) resolveFileSecretValues(ctx context.Context, run types.AgentRun
 			} else {
 				delivered[file] = true
 				files = append(files, runner.ManagedFile{
-					Path: runner.ComponentSecretDir + "/" + file, Mode: runner.ComponentSecretFileMode, AgentOwned: true,
+					Path: runner.ComponentSecretDir + "/" + file, Mode: runner.ComponentSecretFileMode, AgentOwned: true, WipeAfterRead: true,
 					Content: []byte(placement.ResidentPlaceholder(row.ID)),
 				})
 				resident = append(resident, v)
@@ -116,7 +116,7 @@ func (s *Server) resolveFileSecretValues(ctx context.Context, run types.AgentRun
 			default:
 				delivered[file] = true
 				files = append(files, runner.ManagedFile{
-					Path: runner.ComponentSecretDir + "/" + file, Mode: runner.ComponentSecretFileMode, AgentOwned: true, Content: val,
+					Path: runner.ComponentSecretDir + "/" + file, Mode: runner.ComponentSecretFileMode, AgentOwned: true, WipeAfterRead: true, Content: val,
 				})
 			}
 		}
@@ -154,6 +154,9 @@ func (s *Server) completeMaskManifestWithFileSecrets(ctx context.Context, run ty
 		return false
 	}
 	*resident = append(*resident, values...)
+	if s.cfg.FileSecretPlaceholders {
+		s.placeFileSecrets(ctx, run, policy, rows, files, spec)
+	}
 	spec.ManagedFiles = append(spec.ManagedFiles, files...)
 	return s.completeMaskManifest(ctx, run)
 }

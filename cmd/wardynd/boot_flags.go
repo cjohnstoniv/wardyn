@@ -102,6 +102,8 @@ type bootFlags struct {
 	// governAdminRunsExempt is WARDYN_GOVERN_ADMIN_RUNS_EXEMPT: the lanes left
 	// ungoverned under the switch. The only value is "recording".
 	governAdminRunsExempt *string
+	// egressPortRule is WARDYN_EGRESS_PORT_RULE (boot_egress.go).
+	egressPortRule *string
 	// runnerTargetOverride is WARDYN_RUNNER_TARGET, and it is a TEST-HARNESS
 	// knob: the substrate name STORED objects validate against while -runner is
 	// "none". A runner-less daemon resolves the target "none", which no drive
@@ -137,6 +139,9 @@ type bootFlags struct {
 	// value) — precedent WARDYN_DEFAULT_POLICY. Empty = unset = every outbound
 	// TLS client in this process trusts exactly the system roots, as today.
 	trustedCAFile *string
+	// refuseWritableCA is WARDYN_TRUSTED_CA_REFUSE_WRITABLE: refuse boot, rather than warn,
+	// when that bundle is group- or world-writable (readTrustedCAFile).
+	refuseWritableCA *bool
 	// daemonProxyURL / daemonNoProxy are WARDYN_DAEMON_PROXY_URL /
 	// WARDYN_DAEMON_NO_PROXY (see daemon_proxy.go): a forward proxy for
 	// wardynd's OWN outbound HTTP calls (OIDC discovery/JWKS, audit webhooks,
@@ -228,6 +233,10 @@ type bootFlags struct {
 	// Role/group keys, which env WARDYN_OIDC_ROLE_MAP email keys were never
 	// gated on (legacy, still boot-warned separately).
 	oidcAllowEmailMappings *bool
+	// Three default-off tightenings, each fed to the api.Config field of the same name.
+	capabilityGrantsVerifiedEmail    *bool
+	governanceProfilePutExistingOnly *bool
+	egressHostPortGrantsInert        *bool
 
 	// Directory autocomplete (§I / PF-29), strictly OPT-IN. dirProvider empty is
 	// the whole feature off: no connector, no Graph reach, every "who" field
@@ -257,6 +266,16 @@ type bootFlags struct {
 	scanAIAdvisor      *bool
 	requireOpSetEgress *bool
 	gitPATBroker       *string
+	// gitPATBrokerOffRefused extends the member-run refusal of a resident PAT
+	// (broker off) to operators' runs: the staged retirement of `off`.
+	gitPATBrokerOffRefused *bool
+	// proxyResponseScrub has every run's proxy replace a value it injected when a
+	// relayed response echoes it back (off by default in 0.10.0).
+	proxyResponseScrub *bool
+	// envSecretPlaceholders / fileSecretPlaceholders keep a host-bound env or
+	// file secret's value at the proxy (off by default in 0.10.0).
+	envSecretPlaceholders  *bool
+	fileSecretPlaceholders *bool
 
 	// awsSSOEndpointOverride / allowTestEndpoints are the TEST hatch that makes
 	// "a member signs in on Kubernetes and their Bedrock run gets per-user
@@ -266,13 +285,9 @@ type bootFlags struct {
 	// explicitly true — the same two-deliberate-acts shape as
 	// allowLocalModeWithOIDC, and for the same reason.
 	awsSSOEndpointOverride *string
-	// awsSSOProxyInject is the PHASE B kill switch: whether a captured-AWS-SSO
-	// Bedrock dispatch injects the session proxy-side (the token never resident)
-	// or writes it into the sandbox. A STRING, not a bool flag,
-	// because its two documented spellings are `on` and `off` and an
-	// unrecognised value takes the DEFAULT rather than refusing boot — see
-	// api.ResolveAWSSSOProxyInject for why a switch meant to be reached in a
-	// hurry must not be able to crash-loop a daemon.
+	// awsSSOProxyInject was the PHASE B kill switch; its `off` (the token written
+	// into the sandbox) is retired and refused by refuseAWSSSOProxyInjectOff. A
+	// STRING, not a bool flag, so an unrecognised value still takes the default.
 	awsSSOProxyInject  *string
 	allowTestEndpoints *bool
 	// ssoRefresh is the AWS SSO renewal tuning, validated at boot.
@@ -448,6 +463,7 @@ func parseBootFlags() *bootFlags {
 		scimLeaverWorkspaces:   flagEnv("scim-leaver-workspaces", "WARDYN_SCIM_LEAVER_WORKSPACES", scimWorkspacesReassign, "what a purge does with the workspaces a purged person owns: reassign hands them to the operator (default), keep leaves them"),
 		userDriveHostRoots:     flagEnv("user-drive-host-roots", "WARDYN_USER_DRIVE_HOST_ROOTS", "", "comma-separated absolute host directories a host_path user drive may be registered inside, typically the mount point of a share the operator mounted host-side. Empty (default) means no host_path drive may be registered; never $HOME or /"),
 		governAdminRuns:        flagBool("govern-admin-runs", "WARDYN_GOVERN_ADMIN_RUNS", false, "govern every run an SSO admin or an admin-role personal token launches, like a member's; the admin token and local mode stay ungoverned and are marked governance_exempt on run.create. With OIDC unset it binds nobody (default false)"),
+		egressPortRule:         flagEnv("egress-port-rule", "WARDYN_EGRESS_PORT_RULE", "off", "container runs' egress port rule: off (default; a bare allowlist host is open on every port), dry_run (nothing refused; each allow the rule would refuse is marked port_rule=dry_run in the audit log) or on (ports 80 and 443 plus host:port allowlist entries). The proxy turns it on for runs dispatched as a desktop VM. Any other value is refused at boot"),
 		governAdminRunsExempt:  flagEnv("govern-admin-runs-exempt", "WARDYN_GOVERN_ADMIN_RUNS_EXEMPT", "", "comma-separated lanes left ungoverned under -govern-admin-runs; the only value is \"recording\" (Record Mode runs as before). Any other value is refused at boot; set without -govern-admin-runs it does nothing"),
 		ssoOnly:                flagBool("sso-only", "WARDYN_SSO_ONLY", false, "declare SSO the only way into the console; refuses to start unless OIDC is configured and the admin token, local mode, member mode and no-operator-list override are all unset (default false)"),
 		uiDir:                  flagEnv("ui-dir", "WARDYN_UI_DIR", "", "directory holding the built web UI (optional)"),
@@ -469,6 +485,7 @@ func parseBootFlags() *bootFlags {
 		policyPath:             flagEnv("default-policy", "WARDYN_DEFAULT_POLICY", "examples/policies/default.json", "path to the default RunPolicy spec JSON"),
 		siteConfigSeedFile:     flagEnv("site-config-seed-file", "WARDYN_SITE_CONFIG_SEED_FILE", "", "path to a JSON file of network settings (upstream_proxy_url or upstream_proxy_secret_ref, upstream_proxy_no_proxy, internal_hosts) written at boot into a site config that does not have them; a setting the database has is never overwritten. Any other key, or a malformed file, refuses boot. Empty (default) seeds nothing"),
 		trustedCAFile:          flagEnv("trusted-ca-file", "WARDYN_TRUSTED_CA_FILE", "", "path to a PEM bundle of additional trusted roots, e.g. a corporate TLS-inspecting proxy's CA; added to the system roots for wardynd's own outbound TLS, the proxy sidecar and every sandbox. Empty (default) trusts only the system roots"),
+		refuseWritableCA:       flagBool("trusted-ca-refuse-writable", "WARDYN_TRUSTED_CA_REFUSE_WRITABLE", false, "refuse boot when the -trusted-ca-file bundle is group- or world-writable; off, boot logs a warning naming the file and mode (default false)"),
 		daemonProxyURL:         flagEnv("daemon-proxy-url", "WARDYN_DAEMON_PROXY_URL", "", "forward proxy (http:// or https://, no user:pass@) for wardynd's own outbound HTTP calls: OIDC discovery/JWKS, audit webhooks, GitHub App token minting, AWS SSO token renewal and Entra directory sync. Empty (default) leaves the default transport untouched"),
 		daemonNoProxy:          flagEnv("daemon-no-proxy", "WARDYN_DAEMON_NO_PROXY", "", "NO_PROXY-style bypass list for -daemon-proxy-url (host, .suffix, CIDR or *); ignored when the proxy URL is unset"),
 		daemonProxySecretFile:  flagEnv("daemon-proxy-secret-file", "WARDYN_DAEMON_PROXY_SECRET", "", "path to a file holding one forward-proxy URL that may embed user:pass@, the credentialed form of -daemon-proxy-url; refused if group- or world-writable, or if other-readable and owned by wardynd's own non-root uid (group-read, as a Kubernetes Secret mount gives, is accepted). Mutually exclusive with -daemon-proxy-url"),
@@ -512,6 +529,12 @@ func parseBootFlags() *bootFlags {
 		oidcRoleMap:             flagEnv("oidc-role-map", "WARDYN_OIDC_ROLE_MAP", "", `comma-separated "value=role" pairs mapping an App Role, group or email to "admin", "security_admin" or "user"; highest tier wins (user < security_admin < admin); this map is the only way to grant "security_admin". The pre-0.8 "member" is refused since 0.9. Empty (default) disables role derivation; every signed-in human is "admin"`),
 		oidcDefaultRole:         flagEnv("oidc-default-role", "WARDYN_OIDC_DEFAULT_ROLE", "", `role ("admin", "user" or a user type id; the pre-0.8 "member" is refused since 0.9) assigned when -oidc-role-map is set but nothing matched; "security_admin" is refused here. Empty (default) denies that login instead. Ignored when -oidc-role-map is empty`),
 		oidcAllowEmailMappings:  flagBool("oidc-allow-email-mappings", "WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS", false, "allow an email-shaped value on a console People-step role mapping (POST /access/mappings); refused by default in favor of an App Role or group key (default false)"),
+		capabilityGrantsVerifiedEmail: flagBool("capability-grants-verified-email", "WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL", false,
+			"a capability allow grant written for a person's email matches them only when sign-in verifies the email (WARDYN_OIDC_EMAIL_DOMAINS or WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED) or WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS is on; deny grants match either way (default false: the match is kept and logged)"),
+		governanceProfilePutExistingOnly: flagBool("governance-profile-put-existing-only", "WARDYN_GOVERNANCE_PROFILE_PUT_EXISTING_ONLY", false,
+			"PUT /api/v1/governance/profiles/{id} replaces an existing profile only and answers 404 for an id no profile holds; create through POST (default false: a PUT creates at the id and is logged)"),
+		egressHostPortGrantsInert: flagBool("egress-host-port-grants-inert", "WARDYN_EGRESS_HOST_PORT_GRANTS_INERT", false,
+			"a stored egress_host allow grant whose value carries a :port is inert: marked on the Permissions read and never matched; deny grants keep matching (default false: matched by host and logged)"),
 
 		dirProvider: flagEnv("directory-provider", "WARDYN_DIRECTORY_PROVIDER", "", `identity-directory connector for the console's "who" autocomplete: "entra" (Microsoft Graph) or empty. Empty (default) is the feature off; enabling it grants wardynd read of the whole directory`),
 		dirTenant:   flagEnv("directory-tenant", "WARDYN_DIRECTORY_TENANT", "", "Entra tenant id/domain for the directory connector. Empty (default) derives it from -oidc-issuer; set together with -directory-client-id/-secret to use a dedicated app registration"),
@@ -546,11 +569,15 @@ func parseBootFlags() *bootFlags {
 		// launch until an operator sets it. An operator who accepts the exfil
 		// risk inline_policy.go's filterUserGrants comment names, for the
 		// convenience of auto-adding what a scan finds, opts out here.
-		requireOpSetEgress: flagBool("require-operator-set-egress", "WARDYN_REQUIRE_OPERATOR_SET_EGRESS", true, "require a workspace egress requirement's provenance to be operator_set before it is auto-added at launch; a scan_seeded egress host is skipped instead"),
-		gitPATBroker:       flagEnv("git-pat-broker", "WARDYN_GIT_PAT_BROKER", "on", `never-resident git_pat lane: "on" mints a non-GitHub forge's PAT proxy-side so it never enters the sandbox; "off" mints it into the sandbox process instead, for a forge that misbehaves under the broker's rewrite`),
+		requireOpSetEgress:     flagBool("require-operator-set-egress", "WARDYN_REQUIRE_OPERATOR_SET_EGRESS", true, "require a workspace egress requirement's provenance to be operator_set before it is auto-added at launch; a scan_seeded egress host is skipped instead"),
+		gitPATBroker:           flagEnv("git-pat-broker", "WARDYN_GIT_PAT_BROKER", "on", `never-resident git_pat lane: "on" mints a non-GitHub forge's PAT proxy-side so it never enters the sandbox; "off" mints it into the sandbox process instead, for a forge that misbehaves under the broker's rewrite`),
+		envSecretPlaceholders:  flagBool("env-secret-placeholders", "WARDYN_ENV_SECRET_PLACEHOLDERS", false, "an env_secret grant whose scope names a host gets a placeholder in the sandbox, which the run's proxy replaces with the value on requests to that host (default false)"),
+		fileSecretPlaceholders: flagBool("file-secret-placeholders", "WARDYN_FILE_SECRET_PLACEHOLDERS", false, "a file_secret grant whose scope names a host gets a placeholder file in the sandbox, which the run's proxy replaces with the value on requests to that host (default false)"),
+		proxyResponseScrub:     flagBool("proxy-response-scrub", "WARDYN_PROXY_RESPONSE_SCRUB", false, "have each run's egress proxy replace a credential it added when an upstream response echoes it back to the sandbox (default false)"),
+		gitPATBrokerOffRefused: flagBool("git-pat-broker-off-refused", "WARDYN_GIT_PAT_BROKER_OFF_REFUSED", false, "while WARDYN_GIT_PAT_BROKER is off, refuse a run that would hold a resident PAT on operators' runs too; a member's run is refused it either way (default false)"),
 
 		awsSSOEndpointOverride: flagEnv("aws-sso-endpoint-override", "WARDYN_AWS_SSO_ENDPOINT_OVERRIDE", "", "TEST ONLY: re-point both AWS IAM Identity Center services (sso-oidc and the sso portal) at this base URL, so an AWS SSO walk can run with no real AWS tenant. Requires -allow-test-endpoints; warns at every boot. Empty (default) uses the real AWS endpoints"),
-		awsSSOProxyInject:      flagEnv("aws-sso-proxy-inject", "WARDYN_AWS_SSO_PROXY_INJECT", api.AWSSSOProxyInjectFlagDefault(), `"on" or "off": inject a captured AWS SSO session proxy-side, leaving only a placeholder in the sandbox, or write it into the sandbox directly. Applies to new dispatches only; an unrecognised value takes the default`),
+		awsSSOProxyInject:      flagEnv("aws-sso-proxy-inject", "WARDYN_AWS_SSO_PROXY_INJECT", api.AWSSSOProxyInjectFlagDefault(), `"on": inject a captured AWS SSO session proxy-side, leaving only a placeholder in the sandbox. "off" was removed in 0.10.0 and refuses boot; an unrecognised value takes the default`),
 		ssoRefresh:             registerAWSSSORefreshFlags(),
 		allowTestEndpoints:     flagBool("allow-test-endpoints", "WARDYN_ALLOW_TEST_ENDPOINTS", false, "acknowledge this is a TEST deployment; unlocks -aws-sso-endpoint-override and a model provider's unencrypted http:// bedrock.base_url, both refused otherwise. Never set on a deployment holding a real credential (default false)"),
 		// harnessLoginCPUMillis/harnessLoginMemoryMiB (#1100): see api.Config.HarnessLoginCPUMillis/HarnessLoginMemoryMiB.
@@ -677,6 +704,7 @@ func finalizeBootFlags(f *bootFlags) {
 	// budget left for another early return).
 	exitOnBadSecretFiles(f)
 	exitOnGovernanceFlags(f)
+	exitOnBadPortRule(f)
 }
 
 // exitOnBadSecretFiles is parseBootFlags' <VAR>_FILE resolution, extracted

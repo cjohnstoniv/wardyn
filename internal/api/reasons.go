@@ -206,6 +206,15 @@ const (
 	reasonToolApprovalsUnknown                 = "tool_approvals_unknown"                   // tool_approvals is not "auto" or "hold"
 	reasonToolApprovalsHoldUnsupportedAgent    = "tool_approvals_hold_unsupported_agent"    // tool_approvals=hold on an agent with no external tool-approval contract (codex-cli)
 	reasonToolApprovalsHoldInteractiveConflict = "tool_approvals_hold_interactive_conflict" // tool_approvals=hold on an interactive run, whose tool use is already supervised in the attach pane
+	reasonHarnessInnerWallsLooser              = "harness_inner_walls_looser"               // the policy's harness_inner_walls is looser than the walls the run's harness launches with
+	reasonHarnessInnerWallsUnmet               = "harness_inner_walls_unmet"                // the run cannot launch with the policy's harness_inner_walls on its harness and lane
+	reasonHarnessSandboxUnavailable            = "harness_sandbox_unavailable"              // harness_inner_walls.sandbox names a harness sandbox mode, which cannot start inside Wardyn's sandbox
+	reasonDesktopTransferBlocked               = "desktop_transfer_blocked"                 // the run's desktop rules block this file direction
+	reasonDesktopTransferTooLarge              = "desktop_transfer_too_large"               // the upload is over the desktop upload limit
+	reasonDesktopTransferBadRequest            = "desktop_transfer_bad_request"             // the file name is not a plain name, or the upload has no Content-Length
+	reasonDesktopTransferUnavailable           = "desktop_transfer_unavailable"             // the run declares no UI app, so it has no desktop
+	reasonDesktopTransferNotFound              = "desktop_transfer_not_found"               // no regular file of that name in the transfer folder
+	reasonDesktopTransferFailed                = "desktop_transfer_failed"                  // the in-sandbox half of a transfer failed
 	reasonIntegrationIDRetired                 = "integration_id_retired"                   // integration_id no longer chooses a model credential; a run's model provider does
 	reasonRunKillAlreadyTerminal               = "run_kill_already_terminal"                // the run is already in a terminal state other than killed
 	reasonRunKillStateChanged                  = "run_kill_state_changed"                   // the run moved to another state between the read and the write
@@ -516,6 +525,7 @@ const (
 	reasonGitPATNarrowingSSHConflict     = "git_pat_narrowing_ssh_conflict"     // a same-forge ssh_key is a second push path the broker cannot see
 	reasonGitPATNarrowingUnsupportedHost = "git_pat_narrowing_unsupported_host" // the host is served by a lane that ignores the narrowing axes
 	reasonGitPATAPIForgeDisabled         = "git_pat_api_forge_disabled"         // api: true on a forge whose API door is off on this deployment
+	reasonGitPATBrokerOffResident        = "git_pat_broker_off_resident"        // the PAT broker is off, and a member's run (or any, under WARDYN_GIT_PAT_BROKER_OFF_REFUSED) may not hold the PAT
 )
 
 // Run templates (template_document.go, template_refusals.go): the refusals of

@@ -209,7 +209,7 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/jso
   - Only a row keyed by tenant and object id can be unbound (`409`, `identity_not_rebindable`, otherwise); any other is found by its principal alone and would be orphaned.
   - A deactivated or purged identity is refused too (`409`, `identity_deactivated`).
   - The unbind clears only the row's principal. It keeps `authority_epoch`, `deactivated_at` and the SCIM linkage, and it cuts the released `sub`'s sessions.
-  - **The old `sub` must hold nothing first.** After the re-bind a suspension reaches only the new `sub`, so the unbind is refused (`409`, `identity_principal_in_use`, with the counts) while the old `sub` still holds an API token, an SSH key or a run that has not ended, sponsors a service identity, or is named by a pending invitation. Revoke or end them, then unbind.
+  - **The old `sub` must hold nothing first.** After the re-bind a suspension reaches only the new `sub`, so the unbind is refused (`409`, `identity_principal_in_use`, with the counts) while the old `sub` still holds an API token, an SSH key, a claimed runner, an unspent runner registration token or a run that has not ended, sponsors a service identity, or is named by a pending invitation. Revoke or end them, then unbind.
   - Its stored credentials, workspaces and drive stay under the old principal, which the person no longer signs in as: expect to re-create them.
   - It writes an `identity.unbind` audit row naming the principal it released and the admin who did it. The next sign-in's bind is not audited; it shows as the identity's new principal on People.
 - `POST /people` answers `409` rather than create an ambiguous identity.

@@ -13,6 +13,7 @@ import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
 import type { PolicyPreviewResult } from "../../../../lib/types/policy-preview";
 import type { ConfinementClass } from "../../../../lib/types/runs";
 import { sameValue } from "../draft/draft-reducer";
+import { innerWallsText } from "./format";
 import type { NewRunDraft, RunIntent } from "../draft/run-intent";
 import { changedFromOrigin, draftSource, intentAt, originSource, serverSource } from "./provenance";
 import type { ReviewPreflight } from "./review-seams";
@@ -110,6 +111,11 @@ export function policyRows(
     : effects.length > 1
       ? joined(...defaults.map((d) => NR_REVIEW.POLICY_TOOLS_OF(harnessLabel(d.harness), effectOf(d))))
       : effects[0];
-  rows.push({ id: "tools", label: NR_REVIEW.POLICY_TOOLS, value, detail: effects.length === 1 ? joined(defaults[0].default.source.name, defaults[0].default.source.id === ACCEPT_EDITS_SOURCE ? NR_REVIEW.POLICY_ACCEPTS_EDITS : undefined) : undefined });
+  // Each harness's own walls (#2822): one text when they agree, each harness's when they differ.
+  const walls = (access?.harnesses ?? []).flatMap((h) => (h.inner_walls ? [{ harness: h.harness, text: innerWallsText(h.inner_walls) }] : []));
+  const wallTexts = [...new Set(walls.map((w) => w.text))];
+  const wallsDetail = wallTexts.length > 1 ? joined(...walls.map((w) => NR_REVIEW.POLICY_TOOLS_OF(harnessLabel(w.harness), w.text))) : wallTexts[0];
+  const toolsDetail = effects.length === 1 ? joined(defaults[0].default.source.name, defaults[0].default.source.id === ACCEPT_EDITS_SOURCE ? NR_REVIEW.POLICY_ACCEPTS_EDITS : undefined) : undefined;
+  rows.push({ id: "tools", label: NR_REVIEW.POLICY_TOOLS, value, detail: joined(toolsDetail, wallsDetail) });
   return rows;
 }

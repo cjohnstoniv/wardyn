@@ -820,6 +820,10 @@ var routeMatrix = map[string]classifiedRoute{
 	// A waiting sign-in's device code: approving it binds the approver's
 	// cloud identity to the owner's stored session, so the owner only.
 	"GET /api/v1/runs/{id}/sign-in": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
+	// The run's Files panel moves files into and out of the owner's sandbox: entry, like a ticket.
+	"GET /api/v1/runs/{id}/desktop/files":        {class: classOwner, entity: entityRun, ownerTier: tierEntry},
+	"PUT /api/v1/runs/{id}/desktop/files/{name}": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
+	"GET /api/v1/runs/{id}/desktop/files/{name}": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
 	// Moving a run's end keeps a sandbox and its credentials alive: a write,
 	// so not the security tier's inspect-or-stop.
 	"PATCH /api/v1/runs/{id}": {class: classOwner, entity: entityRun, ownerTier: tierSuper},
@@ -1671,9 +1675,10 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// DELETE /me/components/{id}; 33 since 0.9 added GET
 		// /workspaces/{id}/branches; 34 since 0.9 added GET
 		// /runs/{id}/launch-intent; 35 since 0.9.3 added GET
-		// /runs/{id}/containment.
-		if probed != 35 {
-			t.Errorf("probed %d classOwner routes, want 35 — a route that left classOwner takes its tier "+
+		// /runs/{id}/containment; 38 since 0.10 added the three
+		// /runs/{id}/desktop/files routes.
+		if probed != 38 {
+			t.Errorf("probed %d classOwner routes, want 38 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})
@@ -2378,8 +2383,8 @@ func (s *authzStore) RevokeAPIToken(context.Context, uuid.UUID, string, time.Tim
 func (s *authzStore) UpsertCapabilityGrant(_ context.Context, g types.CapabilityGrant) (types.CapabilityGrant, error) {
 	return g, nil
 }
-func (s *authzStore) DeleteCapabilityGrant(context.Context, uuid.UUID) error {
-	return store.ErrNotFound
+func (s *authzStore) DeleteCapabilityGrant(context.Context, uuid.UUID) (types.CapabilityGrant, error) {
+	return types.CapabilityGrant{}, store.ErrNotFound
 }
 func (s *authzStore) ListCapabilityGrants(context.Context) ([]types.CapabilityGrant, error) {
 	return nil, nil
@@ -2481,8 +2486,8 @@ func (s *authzStore) ListGovernanceProfiles(context.Context) ([]types.Governance
 func (s *authzStore) UpsertGovernanceAssignment(_ context.Context, a types.GovernanceAssignment) (types.GovernanceAssignment, error) {
 	return a, nil
 }
-func (s *authzStore) DeleteGovernanceAssignment(context.Context, uuid.UUID) error {
-	return store.ErrNotFound
+func (s *authzStore) DeleteGovernanceAssignment(context.Context, uuid.UUID) (types.GovernanceAssignment, error) {
+	return types.GovernanceAssignment{}, store.ErrNotFound
 }
 func (s *authzStore) ListGovernanceAssignments(context.Context) ([]types.GovernanceAssignment, error) {
 	return nil, nil

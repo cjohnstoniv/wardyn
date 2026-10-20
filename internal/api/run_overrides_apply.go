@@ -174,7 +174,7 @@ func (s *Server) applyRunOverrides(ctx context.Context, r *http.Request, spec ty
 	e := &overrideEdits{}
 	if a := o.Agent; a != nil {
 		applyHostOverrides(&spec, *a, e)
-		if refusal := s.applySecretOverrides(ctx, r, &spec, *a, e); refusal != nil {
+		if refusal := s.applySecretOverrides(ctx, r, &spec, *a, e, req.InlinePolicy == nil); refusal != nil {
 			return spec, nil, refusal
 		}
 		applyToolRuleOverrides(&spec, a.ToolRules, e)
@@ -267,7 +267,9 @@ func applyRunEgressOverrides(spec *types.RunPolicySpec, eg client.RunEgressOverr
 // the caller's own stored secret: the operator's names and another person's are
 // refused, whatever the ceiling would later say, because naming a secret is
 // itself the claim of ownership (OwnerOnly then pins the lookup to their row).
-func (s *Server) applySecretOverrides(ctx context.Context, r *http.Request, spec *types.RunPolicySpec, a client.AgentOverrides, e *overrideEdits) *runRefusal {
+// stored is whether spec is content the caller did not author (a stored row or
+// the default), which a member reads with its secret references stripped.
+func (s *Server) applySecretOverrides(ctx context.Context, r *http.Request, spec *types.RunPolicySpec, a client.AgentOverrides, e *overrideEdits, stored bool) *runRefusal {
 	for i, sec := range a.AddSecrets {
 		if !s.ownsSecretMemoized(ctx, s.secretOwnerFromRequest(r), sec.SecretName) {
 			if ctx.Value(reviewDoorKey{}) != nil {
@@ -300,10 +302,15 @@ func (s *Server) applySecretOverrides(ctx context.Context, r *http.Request, spec
 			return runError(http.StatusUnprocessableEntity, reasonOverrideRefused, fmt.Sprintf(
 				"overrides.agent.remove_secrets[%d]: %s is not one of your stored secrets.", i, name))
 		}
+		// Owning a secret of that name says nothing about a stored grant bound to
+		// another row under the same name, so on stored content a member removes
+		// only grants bound to their own row: any other match would tell them
+		// what the content pairs.
+		ownRowOnly := stored && !s.isOperator(r.Context())
 		removed := false
 		spec.EligibleGrants = slices.DeleteFunc(spec.EligibleGrants, func(g types.GrantSpec) bool {
 			_, ref, _, covered, err := storedSecretGrantPairing(g)
-			if !covered || err != nil || ref != name {
+			if !covered || err != nil || ref != name || (ownRowOnly && !g.OwnerOnly) {
 				return false
 			}
 			e.add(fieldGrants, grantKey(g), provEffectRemoved)

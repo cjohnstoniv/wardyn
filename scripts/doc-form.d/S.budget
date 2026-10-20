@@ -167,14 +167,23 @@
 # docs/sdk.md=19242 adds 25 (0.9.4 W4-API-B): the drive write 503/500 reasons and POST /runs store_unavailable (#2767, #2781).
 # 0.10: docs/sdk.md 19314 adds 5, measured: user_view_preview names the security admin case.
 # docs/sdk.md=19378 adds 69, measured: the identity_deactivated sign-in answer on a deactivated session (#2762).
+# docs/sdk.md 19470 adds 92 (0.10.0 SEC-1, both rounds), measured: the git_pat_broker_off_resident reason row, and the owner's own revive reads their role now.
 # docs/sdk.md 19321 adds 12 (0.10 LAY-C, #2951): the refusal `layer` and the run policy `provenance`.
 # docs/sdk.md 19573 = 19504 (0.10 API-2: the sign_in_required, host_capacity_refused, workspace_name_taken and workspace_approved_egress_denied reason rows) + 19378 - 19309 at the main merge.
 # docs/sdk.md 19383 = 19309 + 5 + 69, measured after merging main into the trusted-peers lane.
 # 0.10 W1 train: docs/sdk.md tightened to 19521, measured at the train merge.
 # docs/sdk.md=19378 adds 22 (0.10 HYB-A): local_folder reasons and launch exclusion
+# docs/sdk.md 19635 = ours 19470 + theirs 19543 - base 19378 at the 0.10.0 SEC-1 merge of main; re-measured below if higher.
+# docs/sdk.md=19309 adds 6 (0.10): identity_principal_in_use names runners and runner tokens.
+# docs/sdk.md=19315 adds 3 (0.10): identity_deactivated names runner registration tokens.
+# docs/sdk.md 19644 = ours 19635 + theirs 19552 - base 19543 at the 0.10 W2 merge of SEC-2c onto the train.
+# #2822: docs/sdk.md 19581 adds 38 over 19543, measured at the main merge: the three harness_inner_walls reasons.
+# docs/sdk.md 19682 = ours 19644 + theirs 19581 - base 19543 at the 0.10 W2 merge of HRN onto the train.
+# docs/sdk.md 19743 adds 61 (0.10 CTL-A): the desktop_transfer reasons (#2967).
 # docs/sdk.md 19545 adds 2 (0.10 Linux VM): the machine_kind_unknown reason.
 # docs/sdk.md 19570 adds 25 (0.10 Linux VM): interactive_start agent on a Linux VM is a placement_capability.
-docs/sdk.md=19570 share=21
+# docs/sdk.md 19770 = ours 19570 + theirs 19743 - base 19543 at the 0.10 W2 merge of CTL-A onto DSK-A.
+docs/sdk.md=19770 share=21
 # docs/sdk.md 18691 adds 28 over 18663, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.

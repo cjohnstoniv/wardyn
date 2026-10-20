@@ -307,6 +307,31 @@ export interface RunPolicySpec {
   // of the GitHub provider row's default_profile, within its capability_ceiling.
   // Omitted keeps the row's default. No GitHub lane reads it yet.
   github_capabilities?: string[];
+  // The harness's own walls inside Wardyn's (mirrors Go's RunPolicySpec.HarnessInnerWalls, #2822):
+  // a choice per axis that only adds walls; the create door refuses a run it would loosen.
+  harness_inner_walls?: HarnessInnerWalls;
+  // The desktop's clipboard and file-transfer rules by direction (mirrors Go's
+  // RunPolicySpec.Desktop, #2967). Omitted, or an omitted direction, is the default:
+  // paste in and upload allowed, copy out and download blocked.
+  desktop?: DesktopControls;
+}
+
+export type TransferRule = "allowed" | "blocked";
+
+// Mirrors Go's types.DesktopControls.
+export interface DesktopControls {
+  paste_in?: TransferRule;
+  copy_out?: TransferRule;
+  upload?: TransferRule;
+  download?: TransferRule;
+}
+
+// Mirrors Go's types.HarnessInnerWalls. On a policy each field is a choice; on a run or a Review
+// fact it is what the harness launches with, where an absent sandbox_mode is the harness's own
+// default, which Wardyn does not set.
+export interface HarnessInnerWalls {
+  sandbox_mode?: "off" | "workspace-write" | "read-only" | (string & {});
+  approvals?: "harness" | "wardyn" | "none" | (string & {});
 }
 
 export interface RunPolicy {

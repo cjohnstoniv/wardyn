@@ -37,6 +37,7 @@ func withoutCeilingRules(s types.RunPolicySpec) types.RunPolicySpec {
 	s.AutoStopAfterSec, s.WorkspaceMounts, s.WorkspaceRepos = 0, nil, nil
 	s.LLMInspection, s.UIApps, s.Resources, s.ToolRules = nil, nil, nil, nil
 	s.GitPushAnyBranch, s.PushRules, s.AzureDevOpsCapabilities, s.GitHubCapabilities = false, nil, nil, nil
+	s.HarnessInnerWalls, s.Desktop = nil, nil
 	return s
 }
 

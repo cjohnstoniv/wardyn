@@ -211,7 +211,36 @@ type RunPolicySpec struct {
 	// reads it yet — the row block and the lanes that honour it land after this field — so today
 	// it is stored, narrowed and compared, and inert at dispatch.
 	GitHubCapabilities []ghscope.Capability `json:"github_capabilities,omitempty"`
+	// HarnessInnerWalls chooses the harness's own walls inside Wardyn's: its sandbox and where its
+	// approvals happen (#2822). Nil keeps what the run's harness, lane and autonomy level give today.
+	// A choice only narrows: the create door refuses a run whose walls it cannot meet, a looser one
+	// included, so a policy never widens what Wardyn allows.
+	HarnessInnerWalls *HarnessInnerWalls `json:"harness_inner_walls,omitempty"`
+	// Desktop sets the desktop's clipboard and file-transfer rules by direction (#2967). Nil is
+	// the defaults: paste in and upload allowed, copy out and download blocked.
+	Desktop *DesktopControls `json:"desktop,omitempty"`
 }
+
+// HarnessInnerWalls is a harness's own walls inside the sandbox. On a policy each field is a choice
+// ("" chooses nothing on that axis); on a run or a Review fact it is what the harness launches with,
+// where an empty SandboxMode is the harness's own default, which Wardyn does not set.
+type HarnessInnerWalls struct {
+	SandboxMode string `json:"sandbox_mode,omitempty"`
+	Approvals   string `json:"approvals,omitempty"`
+}
+
+// The inner-wall values. InnerSandboxWorkspaceWrite and InnerSandboxReadOnly name the harness's
+// own sandbox modes, which cannot start inside Wardyn's sandbox today, so a policy may not choose
+// them yet (the policy validator says why).
+const (
+	InnerSandboxOff            = "off"
+	InnerSandboxWorkspaceWrite = "workspace-write"
+	InnerSandboxReadOnly       = "read-only"
+
+	InnerApprovalsHarness = "harness" // the harness asks the person at its prompt
+	InnerApprovalsWardyn  = "wardyn"  // the call waits on a Wardyn approval (the hold lane)
+	InnerApprovalsNone    = "none"    // nothing asks
+)
 
 // PushRulesSpec declares content rules for a run's brokered git pushes — the counterpart to
 // GitPushAnyBranch's branch confinement: WHAT a push may touch, not WHERE it may land.
@@ -349,6 +378,14 @@ func (s RunPolicySpec) Clone() RunPolicySpec {
 	if s.Resources != nil {
 		r := *s.Resources
 		out.Resources = &r
+	}
+	if s.HarnessInnerWalls != nil {
+		w := *s.HarnessInnerWalls
+		out.HarnessInnerWalls = &w
+	}
+	if s.Desktop != nil {
+		d := *s.Desktop
+		out.Desktop = &d
 	}
 	if s.PushRules != nil {
 		pr := *s.PushRules

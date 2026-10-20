@@ -462,6 +462,7 @@ func newRunRow(ctx context.Context, in runRowInput) types.AgentRun {
 		// freezing them on the row would mirror a computation into a column
 		// nothing reads back.
 		AutonomyLevel: f.autonomy.Level,
+		InnerWalls:    f.innerWalls,
 		// The id alone — mpChoice.provider.Kind rides on the audit snapshot
 		// instead (AgentRun.ModelProviderID's own doc explains why).
 		// provider.ID is "" when mpChoice.chosen is false.

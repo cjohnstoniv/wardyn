@@ -55,6 +55,8 @@
 | `workspace_repos` | `[]WorkspaceRepo` | `[]` | Additional git repos cloned into the run — the clone counterpart of `workspace_mounts`. |
 | `ui_apps` | `[]UIApp` | `[]` | In-sandbox loopback HTTP apps the UI gateway may relay to a browser. Operator-authored, never agent-chosen, and never a command string. |
 | `tool_rules` | `[]ToolRule` | `[]` | Per-tool effects for an autonomous run's tool calls: `allow`, `hold` or `deny`. A `hold` or `deny` rule routes a background Claude Code run through the tool gate. Operator-authored, evaluated proxy-side. |
+| `desktop` | `DesktopControls` | omitted = paste in and upload allowed, copy out and download blocked | The desktop's clipboard and file-transfer rules by direction. See [below](#desktop--desktopcontrols). |
+| `harness_inner_walls` | `HarnessInnerWalls` | omitted = what the harness and lane give | The harness's own walls inside Wardyn's: its `sandbox_mode` and where its `approvals` happen. Only adds walls; a looser choice refuses the run. See [below](#harness_inner_walls--harnessinnerwalls). |
 | `git_push_any_branch` | `bool` | `false` | Turns OFF branch-namespace confinement (default **ON**) for this run's brokered pushes on every brokered lane; operator-authored, never agent-settable. See [`git_push_any_branch`](#git_push_any_branch). |
 | `push_rules` | `PushRulesSpec` | omitted = **no content rules** | Content rules for this run's brokered git pushes — WHAT a push may touch, alongside `git_push_any_branch`'s WHERE. Enforced on every brokered git lane, and on the Azure DevOps REST door, before a push is forwarded: see ["`push_rules` — `PushRulesSpec`"](#push_rules--pushrulesspec) below. |
 | `azure_devops_capabilities` | `[]string` | omitted = the provider row's `default_profile` | This run's Azure DevOps capabilities on the per-person (Entra) lane, chosen only within the row's `capability_ceiling`; unknown or unpermitted choices are refused. See [`azure_devops_capabilities`](#azure_devops_capabilities). |
@@ -253,6 +255,7 @@
 | `git_pat_narrowing_ssh_conflict` | the same policy holds an `ssh_key` for the same forge (`github.com` and `ssh.github.com` are one forge): SSH is a second push path the broker cannot see. Also refused when the policy is written |
 | `git_pat_narrowing_unsupported_host` | the host is served by a lane that does not read the axes. That is an Azure DevOps host, one the run's Azure DevOps gate covers, or the host of a forge the run is GitHub-brokered for |
 | `git_pat_api_forge_disabled` | the grant sets `api` for `bitbucket_server` and `WARDYN_GIT_PAT_API_BITBUCKET_SERVER` is off. Also refused (`400`) when the policy or a governance profile is written |
+| `git_pat_broker_off_resident` | 0.10.0: `WARDYN_GIT_PAT_BROKER` is `off`, so the PAT would be minted into the sandbox, and the run is not an operator's (or `WARDYN_GIT_PAT_BROKER_OFF_REFUSED` is set). Narrowed or not; a `runner_resident` grant and a host another lane serves are not refused |
 
 
 - Dispatch is authoritative, because the broker posture is deployment-wide and can change after a policy was written, and `POST /runs/preflight` answers the same reasons.
@@ -569,6 +572,16 @@ What the check does and does not settle:
 >   - allow-list it port-qualified instead of leaving it to first-use approval,
 >   - or deny it outright and accept that the deny is host-wide (the proxy returns on a deny before it ever considers an approval).
 
+> [!IMPORTANT]
+> **The port rule closes the other ports** (`WARDYN_EGRESS_PORT_RULE`, [docs/ENV.md](ENV.md#wardyn_egress_port_rule); [`internal/egress/proxy/port_rule.go`](../internal/egress/proxy/port_rule.go)).
+>
+> - With it on, a bare host, a wildcard, `allow_all_egress` and every approval scope above reach ports 80 and 443 only.
+> - Another port needs an allowlist entry that names it (`db.example.org:5432`); that entry opens that port and no other.
+> - A refused request is `403` with `rule_source` `policy:port`, decided after `policy:denied` and before the method check and any first-use approval, so no human is asked about a port an approval could never open.
+> - It is **off by default for container runs** (today's every-port behaviour) and `dry_run` marks, without refusing, each allow it would refuse.
+> - The proxy turns it **on for every run dispatched as a desktop VM** (`vm` in its config). For such a run, every connection the desktop makes goes through Wardyn's network relay, which hands allowed ones to the proxy and drops the rest.
+> - The relay checks the TLS server name only when a connection opens with TLS. On a granted port it carries without that check plain HTTP (except on port 80), a protocol whose server speaks first, and a STARTTLS-style protocol (cleartext first, TLS later).
+
 - An unrecognised `decision_scope` is rejected at write time, same as `first_use_approval` above — `Valid()` only accepts empty or one of the four values in the table.
 - The one place an unrecognised value can still appear is a proxy reading a decision made by a *newer* control plane.
 - There it floors to `once` rather than widening to `run`, which is fail-closed for an **allow**.
@@ -649,8 +662,8 @@ What the check does and does not settle:
 | `api_key` | `{"host":"…","header":"…","secret_name":"…","format":"…","require_tls":false}` | `host` and `secret_name` are required; `header` and `format` default to `Authorization` and `Bearer %s`, `require_tls` refuses plain-HTTP requests to `host`, and injection is proxy-side only. See [`api_key`](#api_key). |
 | `git_pat` | `{"host":"…","secret_name":"…","username":"…","repos":[…],"access":"read","api":false,"forge":"generic"}` | `host` and `secret_name` are required; four optional axes (`repos`, `access`, `api`, `forge`) narrow the **run**, not the PAT. See [`git_pat`](#git_pat). |
 | `ssh_key` | `{"host":"…","key_secret_ref":"…","username":"…","known_hosts_secret_ref":"…"}` | `host` and `key_secret_ref` are required; `host` must be an SSH-over-443 provider Wardyn supports. A **documented exception** to the no-resident-secret rule. See [`ssh_key`](#ssh_key). |
-| `env_secret` | `{"name":"MY_TOKEN","secret_name":"…"}` | Puts the stored secret's **value** into the sandbox environment under `name`; the weakest-bounded kind, admin-only by default. See [`env_secret`](#env_secret). |
-| `file_secret` | `{"file":"token","secret_name":"…"}` | Puts the stored secret's **value** in a file named `file` under `/run/wardyn/secrets`; as weakly bounded as `env_secret`, and admin-only under the same switch. See [`file_secret`](#file_secret). |
+| `env_secret` | `{"name":"MY_TOKEN","secret_name":"…","host":"…"}` | Puts the stored secret's **value** into the sandbox environment under `name`; the weakest-bounded kind, admin-only by default. The optional `host` is read only under `WARDYN_ENV_SECRET_PLACEHOLDERS`. See [`env_secret`](#env_secret). |
+| `file_secret` | `{"file":"token","secret_name":"…","host":"…"}` | Puts the stored secret's **value** in a file named `file` under `/run/wardyn/secrets`; as weakly bounded as `env_secret`, and admin-only under the same switch. See [`file_secret`](#file_secret). |
 
 ### `ttl_seconds`
 
@@ -742,7 +755,12 @@ What the check does and does not settle:
 
 ### `env_secret`
 
-- Both required.
+- `name` and `secret_name` are required.
+- The optional `host` names the one bare host the value is sent to. It is read only when the operator turns on `WARDYN_ENV_SECRET_PLACEHOLDERS` (off by default in 0.10.0):
+  - the variable then holds a placeholder (`wardyn-placeholder:<id>`), and the run's proxy intercepts `host` and replaces the placeholder with the value in the request's `Authorization` header;
+  - the value goes into the sandbox as before when `host` is not an exact `allowed_domains` entry, already carries another credential, or the value spans lines (`run.secret_placeholder.resolve` says which);
+  - only `Authorization` is filled: a placeholder in another header, inside Basic auth's base64, a URL or a body reaches `host` unchanged, and a plain-HTTP request to `host` is refused.
+  - Without `WARDYN_PROXY_RESPONSE_SCRUB`, a host that echoes the request header back returns the value to the sandbox.
 - Puts the stored secret's **value** into the sandbox environment under `name`, resolved at dispatch —
   - there is no mint, so `requires_approval` is **refused** rather than silently ignored, `ttl_seconds` means nothing, and the broker rejects the grant id outright if anything POSTs it at the mint route.
 - `name` must match `[A-Z_][A-Z0-9_]*` and may not start with `WARDYN_` (those configure the sandbox harness itself);
@@ -757,7 +775,7 @@ What the check does and does not settle:
 
 ### `file_secret`
 
-- Both `file` and `secret_name` are required, and no other key is accepted.
+- Both `file` and `secret_name` are required; the only other key accepted is `host`, which `WARDYN_FILE_SECRET_PLACEHOLDERS` reads exactly as `env_secret`'s `host` under its switch: the file then holds the placeholder.
 - `file` is a file name, never a path: `[a-z0-9][a-z0-9_.-]{0,62}`.
   - Wardyn writes it under `/run/wardyn/secrets`, so no grant can address anywhere else.
 - It follows `env_secret`'s rules: resolved at dispatch, no mint, `requires_approval` refused, reserved secret names refused.
@@ -857,6 +875,26 @@ What the check does and does not settle:
 | `port` | `int` | — (required) | The port the app listens on **inside** the sandbox, on `127.0.0.1`. Unique within the policy. The sandbox has no other reachable address, and the relay dials nothing else. |
 | `path` | `string` | `/` | Landing path after the gateway's ticket handoff. Must be an absolute same-origin path — a scheme, a host, a `//` prefix or a `..` is rejected, since that redirect would otherwise leave the UI origin. |
 
+## `desktop` — `DesktopControls`
+
+- What may cross a desktop's edge, one rule per direction. Each is `allowed` or `blocked`; an omitted field keeps its default.
+- The clipboard rules are enforced at the UI gateway's relay, outside the sandbox: it drops a blocked RFB cut-text message and audits every one as `ui.clipboard` by direction, size and SHA-256, never by content.
+- The file rules are enforced at the run's Files panel endpoints, which move files to and from `~/Transfers` in the desktop.
+- A member's run can only block more than its ceiling, the defaults included: to let members copy out, the ceiling has to allow it.
+- What it does not stop: what the desktop shows on screen, and what a UI app serves over HTTP.
+- The clipboard rules bind the relay of the app named `novnc` only. A member may declare the same desktop server
+  under another app name, so a ceiling that blocks copy out should also pin `ui_apps` to the desktop app. An SSH
+  port forward to the desktop's VNC port is outside the relay.
+- The desktop page comes from the sandbox, so these rules stop ordinary copy and paste; they are not a boundary against
+  a run built to get data out.
+
+| Field | Type | Default | What it does |
+|---|---|---|---|
+| `paste_in` | `string` | `allowed` | The browser's clipboard sent into the desktop (RFB `ClientCutText`). |
+| `copy_out` | `string` | `blocked` | The desktop's clipboard sent to the browser (RFB `ServerCutText`). |
+| `upload` | `string` | `allowed` | Files sent from the Files panel into `~/Transfers`. |
+| `download` | `string` | `blocked` | Files fetched from `~/Transfers` through the Files panel. |
+
 
 ## `tool_rules` — `[]ToolRule`
 
@@ -922,6 +960,38 @@ The match is exact, so it would never fire and would silently read as enforcemen
 | `tool` | `string` | — (required) | The tool name, matched exactly and case-sensitively (`Read`, `Bash`, `WebFetch`, …), or the literal `*` for the unmatched default. Duplicates are refused at write time: two rules for one tool means one of them does nothing. |
 | `effect` | `string` | — (required) | `allow` (run it, no human, still recorded), `hold` (raise an approval and block — the default behaviour), or `deny` (refuse it, no human). A closed enum: an unrecognised effect is a 400, never a silently-ignored rule that reads as enforcement. |
 
+
+## `harness_inner_walls` — `HarnessInnerWalls`
+
+**What it is.**
+
+- Wardyn's walls surround the run: egress, credentials, confinement and the audit trail.
+- The harness inside it, Claude Code or Codex, has walls of its own: its sandbox, and a prompt that asks before a tool runs.
+- `harness_inner_walls` lets a policy choose those inner walls. Omitted, each run keeps what its harness and lane give today.
+- It only adds walls. A choice looser than what the run launches with refuses the run (`harness_inner_walls_looser`), and so does one the run's harness and lane cannot express (`harness_inner_walls_unmet`).
+
+```json
+{ "harness_inner_walls": { "sandbox_mode": "off", "approvals": "wardyn" } }
+```
+
+| Field | Type | Values | What it does |
+|---|---|---|---|
+| `sandbox_mode` | `string` | `off` | The harness's own sandbox stays off, as Wardyn launches it today. `workspace-write` and `read-only` are refused with `harness_sandbox_unavailable`: both harnesses' sandboxes need user namespaces, which Wardyn's sandbox does not grant. |
+| `approvals` | `string` | `harness` / `wardyn` / `none` | `harness`: the harness asks the person at its prompt (interactive runs; refuses `seed_auto_tools`). `wardyn`: a background Claude Code run goes on the tool-approval hold lane, as `tool_approvals: hold` does. `none`: only where the run already asks nothing. |
+
+**What each run launches with.**
+
+| Run | `sandbox_mode` | `approvals` |
+|---|---|---|
+| Claude Code, background | `off` | `none`, or `wardyn` on the hold lane |
+| Claude Code, interactive | `off` | `harness`, or `none` with `seed_auto_tools` |
+| Codex, background | `off` | `none` |
+| Codex, interactive | Codex's own default | `harness`, or `off` and `none` with `seed_auto_tools` |
+
+- An exec run, and a custom image's agent, launch no harness whose walls Wardyn sets, so a policy that sets `harness_inner_walls` refuses them.
+- A member's inline policy keeps every axis the operator's ceiling chooses.
+- The walls a run launched with are on the run (`inner_walls`) and on New Run's Review.
+- A run whose policy sets `harness_inner_walls` needs the proxy image from the same release: an older proxy refuses the key.
 
 ## `push_rules` — `PushRulesSpec`
 

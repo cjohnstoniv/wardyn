@@ -768,6 +768,13 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `POLICY_ACCEPTS_EDITS` | deviation (qualified for tools no rule names, #2428; proposed wording awaiting approval) | For tools without a named rule, Claude Code accepts file edits without asking and asks before other tools. Named rules still apply. |
 | `POLICY_AUTOMATIC` | mock | Run automatically |
 | `POLICY_TOOLS_OF(harness, effect)` | mock | {harness}: {effect} |
+| `INNER_WALLS(sandbox, approvals)` | deviation (approved 2026-10-19, overseer, #2822) | Harness walls: {sandbox}, {approvals} |
+| `INNER_SANDBOX_OFF` | deviation (approved 2026-10-19, overseer, #2822) | harness sandbox off |
+| `INNER_SANDBOX_OWN` | deviation (approved 2026-10-19, overseer, #2822) | the harness's own sandbox |
+| `INNER_SANDBOX_MODE(mode)` | deviation (approved 2026-10-19, overseer, #2822) | harness sandbox {mode} |
+| `INNER_APPROVALS_HARNESS` | deviation (approved 2026-10-19, overseer, #2822) | approvals in the harness |
+| `INNER_APPROVALS_WARDYN` | deviation (approved 2026-10-19, overseer, #2822) | approvals in Wardyn |
+| `INNER_APPROVALS_NONE` | deviation (approved 2026-10-19, overseer, #2822) | no approvals |
 | `RAW_TITLE(format)` | mock | {format} run document |
 | `RAW_BODY` | mock | Read-only resolved draft |
 | `COPY` | mock | Copy |
