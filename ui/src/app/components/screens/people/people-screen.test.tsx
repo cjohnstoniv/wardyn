@@ -147,6 +147,19 @@ describe("the people table", () => {
     expect(screen.getByText("Nothing matches this search or filter.")).toBeInTheDocument();
   });
 
+  // #3062: a list filter is the shared Segmented (pressed buttons in one group), not tabs.
+  it("the state filter is a Segmented in its labelled group: All is pressed, Deactivated takes over", async () => {
+    const user = userEvent.setup();
+    renderScreen();
+    await screen.findByText("ana@example.com");
+    const group = screen.getByRole("group", { name: "State" });
+    expect(screen.queryByRole("tablist")).toBeNull();
+    expect(within(group).getByRole("button", { name: "All" })).toHaveAttribute("aria-pressed", "true");
+    await user.click(within(group).getByRole("button", { name: "Deactivated" }));
+    expect(within(group).getByRole("button", { name: "Deactivated" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(group).getByRole("button", { name: "All" })).toHaveAttribute("aria-pressed", "false");
+  });
+
   it("searches (debounced) and filters by state through the server", async () => {
     const user = userEvent.setup();
     renderScreen();

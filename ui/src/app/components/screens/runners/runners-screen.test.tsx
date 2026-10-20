@@ -653,8 +653,8 @@ describe("Admin -> Runners tabs", () => {
     const user = userEvent.setup();
     renderScreen();
     await screen.findByRole("button", { name: "laptop-7" });
-    const strip = screen.getByRole("navigation", { name: "Runners sections" });
-    expect(within(strip).getByRole("button", { name: "Runners" })).toHaveAttribute("aria-current", "page");
+    const strip = screen.getByRole("tablist", { name: "Runners sections" });
+    expect(within(strip).getByRole("tab", { name: "Runners" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByTestId("page-header-description")).toHaveTextContent(RUNNERS.PAGE_LEDE);
     // The longer text moved word for word into a closed How runners work, which holds both tabs' purposes.
     const how = screen.getByTestId("how-runners");
@@ -663,10 +663,26 @@ describe("Admin -> Runners tabs", () => {
     expect(within(how).getByText(/^A runner is what runs sandboxes\./)).toBeInTheDocument();
     expect(within(how).getByText(/This tab lists every runner:/)).toBeInTheDocument();
     expect(within(how).getByText(/A pool is a named choice for where a run goes\./)).toBeInTheDocument();
-    await user.click(within(strip).getByRole("button", { name: "Pools" }));
+    await user.click(within(strip).getByRole("tab", { name: "Pools" }));
     expect(await screen.findByTestId("pools-tab")).toHaveTextContent("open:none");
     expect(screen.getByTestId("page-header-description")).toHaveTextContent(RUNNERS.PAGE_LEDE);
     expect(screen.queryByRole("button", { name: "Create a registration token" })).toBeNull();
+  });
+
+  // #3062: the strip is the shared underline Tabs, so the arrow keys move selection and focus.
+  it("ArrowRight on the Runners tab moves to Pools, and ArrowLeft back", async () => {
+    const user = userEvent.setup();
+    renderScreen();
+    await screen.findByRole("button", { name: "laptop-7" });
+    const runners = screen.getByRole("tab", { name: "Runners" });
+    runners.focus();
+    await user.keyboard("{ArrowRight}");
+    const pools = screen.getByRole("tab", { name: "Pools" });
+    expect(await screen.findByTestId("pools-tab")).toBeInTheDocument();
+    expect(pools).toHaveAttribute("aria-selected", "true");
+    expect(pools).toHaveFocus();
+    await user.keyboard("{ArrowLeft}");
+    await waitFor(() => expect(runners).toHaveAttribute("aria-selected", "true"));
   });
 
   it("a runner's pool link opens that pool on the Pools tab, and a pool's member opens its runner", async () => {

@@ -19,8 +19,8 @@ import { aheadByHours } from "../src/app/lib/test-clock";
 test("Runners has one tab strip, and the tab is in the address", async ({ page }) => {
   await gotoConsole(page, "admin");
   await page.goto("/admin/runners");
-  const strip = page.getByRole("navigation", { name: RUNNER_V6.TABS_LABEL });
-  await expect(strip.getByRole("button", { name: RUNNER_V6.TAB_RUNNERS })).toHaveAttribute("aria-current", "page");
+  const strip = page.getByRole("tablist", { name: RUNNER_V6.TABS_LABEL });
+  await expect(strip.getByRole("tab", { name: RUNNER_V6.TAB_RUNNERS })).toHaveAttribute("aria-selected", "true");
   // #3060: one sentence on both tabs, the rest closed under How runners work, and the tabs never move.
   const lede = page.getByTestId("page-header-description");
   await expect(lede).toHaveText(RUNNERS.PAGE_LEDE);
@@ -33,9 +33,9 @@ test("Runners has one tab strip, and the tab is in the address", async ({ page }
   await expect(page.getByRole("heading", { name: RUNNERS.OFF_TITLE })).toBeVisible();
   await expect(page.getByRole("list", { name: RUNNER_V6.LIST_LABEL })).toHaveCount(0);
 
-  await strip.getByRole("button", { name: RUNNER_V6.TAB_POOLS }).click();
+  await strip.getByRole("tab", { name: RUNNER_V6.TAB_POOLS }).click();
   await expect(page).toHaveURL(/\/admin\/runners\?tab=pools$/);
-  await expect(strip.getByRole("button", { name: RUNNER_V6.TAB_POOLS })).toHaveAttribute("aria-current", "page");
+  await expect(strip.getByRole("tab", { name: RUNNER_V6.TAB_POOLS })).toHaveAttribute("aria-selected", "true");
   await expect(lede).toHaveText(RUNNERS.PAGE_LEDE);
   await layoutSettled(strip);
   expect((await strip.boundingBox())!.y).toBe(stripY);
@@ -43,7 +43,7 @@ test("Runners has one tab strip, and the tab is in the address", async ({ page }
   await expect(how.getByText(RUNNER_V6.TAB_PURPOSE, { exact: false })).toBeVisible();
   await expect(how.getByText(POOLS.LEAD, { exact: false })).toBeVisible();
 
-  await strip.getByRole("button", { name: RUNNER_V6.TAB_RUNNERS }).click();
+  await strip.getByRole("tab", { name: RUNNER_V6.TAB_RUNNERS }).click();
   await expect(page).toHaveURL(/\/admin\/runners$/);
   await expect(page.getByRole("heading", { name: RUNNERS.OFF_TITLE })).toBeVisible();
 });
@@ -85,6 +85,19 @@ const pickUnit = async (page: Page, caption: string, unit: string) => {
   await lifetimeUnit(page, caption).click();
   await page.getByRole("option", { name: unit, exact: true }).click();
 };
+
+// #3062: the strip is the shared underline Tabs, so an arrow key moves selection and the address follows.
+test("ArrowRight on the Runners tab moves to Pools and the address follows", async ({ page }) => {
+  await gotoConsole(page, "admin");
+  await page.goto("/admin/runners");
+  const strip = page.getByRole("tablist", { name: RUNNER_V6.TABS_LABEL });
+  const runners = strip.getByRole("tab", { name: RUNNER_V6.TAB_RUNNERS });
+  await runners.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(strip.getByRole("tab", { name: RUNNER_V6.TAB_POOLS })).toHaveAttribute("aria-selected", "true");
+  await expect(strip.getByRole("tab", { name: RUNNER_V6.TAB_POOLS })).toBeFocused();
+  await expect(page).toHaveURL(/\/admin\/runners\?tab=pools$/);
+});
 
 test.describe("user pools against the real server", () => {
   test("a user pool is created, then edited, through the form (FUG-L409)", async ({ page }) => {

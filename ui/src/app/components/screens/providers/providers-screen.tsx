@@ -51,7 +51,7 @@ import { EmptyState, TableSkeleton, loadFailStatus } from "../../wardyn/states";
 import { useOperator, useOperatorResolved } from "../../wardyn/operator-context";
 import { ViewNotice } from "../../wardyn/console-view";
 import { PROVIDERS_SUPER_ONLY } from "../../wardyn/copy/console-view";
-import { Segmented } from "../../wardyn/segmented";
+import { PageTabs } from "../../wardyn/page-tabs";
 import { AgentsTab } from "./agents-tab";
 import { gitRowInvalid } from "./display";
 import { GitTab } from "./git-tab";
@@ -282,10 +282,10 @@ export function ProvidersScreen() {
         </section>
       ) : (
         <section className="mt-6 space-y-4 rounded-xl border border-border bg-card p-5">
-          <Segmented
+          <PageTabs
             value={tab}
-            onChange={handleTabChange}
-            options={[
+            onValueChange={handleTabChange}
+            tabs={[
               // #460 — Git and Storage share this screen's one draft/Save,
               // so both chip on the SAME dirty fact: an edit made on the
               // other tab is still visible from whichever one is open.

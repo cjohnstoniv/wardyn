@@ -61,7 +61,7 @@ async function gotoAgentsTab(page: Page): Promise<void> {
   await expandCard(page, "Workspace providers");
   await page.getByTestId("providers-card").getByText(PROVIDERS.CARD_OPEN).click();
   await expect(page).toHaveURL(/\/admin\/providers$/);
-  await page.getByRole("button", { name: AGENTS.AGENTS_TITLE }).click();
+  await page.getByRole("tab", { name: AGENTS.AGENTS_TITLE }).click();
 }
 
 // An Autonomous agent task's Harnesses step with the harness it opens with: its picker is the roster as the
@@ -176,7 +176,7 @@ test.describe("agents — the admin authoring walk (real writes, real reload)", 
       // Tab selection is local React state (providers-screen.tsx's `tab`), not
       // URL-carried — a reload always re-lands on the Git tab.
       await page.reload();
-      await page.getByRole("button", { name: AGENTS.AGENTS_TITLE }).click();
+      await page.getByRole("tab", { name: AGENTS.AGENTS_TITLE }).click();
       await expect(
         page.getByTestId("agent-row-claude-code").getByRole("combobox", { name: `${AGENTS.FIELD_DEFAULT_PROVIDER} — Claude Code` }),
       ).toHaveText(AGENTS.DEFAULT_OPTION("Bedrock (prod)", "Amazon Bedrock"));

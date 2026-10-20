@@ -42,7 +42,7 @@ async function gotoImages(page: Page): Promise<void> {
   await expandCard(page, "Workspace providers");
   await page.getByTestId("providers-card").getByText(PROVIDERS.CARD_OPEN).click();
   await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toBeVisible();
-  await page.getByRole("button", { name: IMAGES.TAB, exact: true }).click();
+  await page.getByRole("tab", { name: IMAGES.TAB, exact: true }).click();
 }
 
 async function availability(page: Page, ref: string) {

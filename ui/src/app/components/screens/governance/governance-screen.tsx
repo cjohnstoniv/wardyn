@@ -51,7 +51,7 @@ import {
 } from "../../ui/alert-dialog";
 import { Button } from "../../ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../ui/table";
-import { Tabs, TabsList, TabsTrigger } from "../../ui/tabs";
+import { PageTabs } from "../../wardyn/page-tabs";
 import { Mono } from "../../wardyn/code-block";
 import { useSecurityOperator } from "../../wardyn/operator-context";
 import { PageHeader } from "../../wardyn/page-header";
@@ -201,21 +201,21 @@ export function GovernanceScreen() {
       </HowItWorks>
 
       {status !== "forbidden" && status !== "error" && (
-        <Tabs
+        <PageTabs
+          className="mt-6"
           value={tab}
           onValueChange={(v) => setSearchParams(v === "profiles" ? {} : { tab: v }, { replace: true })}
-          className="mt-6"
-        >
-          {/* Scrolls inside itself at phone width; justify-start so the first tab is never clipped (#2896). */}
-          <TabsList className="max-w-full justify-start overflow-x-auto">
-            <TabsTrigger value="profiles">{GOV.PROFILES_TITLE}</TabsTrigger>
-            {securityOperator && <TabsTrigger value="runner-credentials">{DELIVERY.TAB}</TabsTrigger>}
-            {securityOperator && <TabsTrigger value="egress-baseline">{BASELINE.TAB}</TabsTrigger>}
-            <TabsTrigger value="changes">
-              {changes.length > 0 ? CHANGES.TAB_COUNT(changes.length) : CHANGES.TAB}
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
+          tabs={[
+            { value: "profiles", label: GOV.PROFILES_TITLE },
+            ...(securityOperator
+              ? [
+                  { value: "runner-credentials", label: DELIVERY.TAB },
+                  { value: "egress-baseline", label: BASELINE.TAB },
+                ]
+              : []),
+            { value: "changes", label: changes.length > 0 ? CHANGES.TAB_COUNT(changes.length) : CHANGES.TAB },
+          ]}
+        />
       )}
 
       {status !== "forbidden" && status !== "error" && deliveryVisited && securityOperator && (

@@ -178,7 +178,7 @@ describe("GovernanceScreen — states", () => {
   it("the tab strip scrolls inside itself and starts at its left edge", async () => {
     renderScreen();
     await screen.findByRole("heading", { name: GOV.TITLE, level: 1 });
-    expect(await screen.findByRole("tablist")).toHaveClass("max-w-full", "justify-start", "overflow-x-auto");
+    expect(await screen.findByRole("tablist")).toHaveClass("justify-start", "overflow-x-auto", "border-b");
   });
 
   it("fetch_failed is distinct from empty, says enforcement is unaffected, and offers Retry", async () => {

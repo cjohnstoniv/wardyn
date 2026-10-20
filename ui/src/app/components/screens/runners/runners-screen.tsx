@@ -25,6 +25,7 @@ import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
 import { PageHeader } from "../../wardyn/page-header";
 import { PageContainer } from "../../wardyn/page-container";
+import { PageTabs } from "../../wardyn/page-tabs";
 import { HowItWorks } from "../../wardyn/how-it-works";
 import { EmptyState, STATES, TableSkeleton } from "../../wardyn/states";
 import { MintTokenDialog } from "./mint-token-dialog";
@@ -94,25 +95,6 @@ function FilterGroup({ filter, onChange }: { filter: Filter; onChange: (f: Filte
 }
 
 type Tab = "runners" | "pools";
-
-function Tabs({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
-  const item = (id: Tab, label: string) => (
-    <button
-      type="button"
-      aria-current={tab === id ? "page" : "false"}
-      onClick={() => onChange(id)}
-      className={`rounded-lg px-3 py-1 text-body font-medium ${tab === id ? "bg-background text-foreground ring-1 ring-border" : "text-muted-foreground hover:text-foreground"}`}
-    >
-      {label}
-    </button>
-  );
-  return (
-    <nav aria-label={RUNNER_V6.TABS_LABEL} className="mb-4 inline-flex max-w-full gap-0.5 rounded-xl border border-border bg-surface-2 p-0.5">
-      {item("runners", RUNNER_V6.TAB_RUNNERS)}
-      {item("pools", RUNNER_V6.TAB_POOLS)}
-    </nav>
-  );
-}
 
 export function RunnersScreen() {
   const superAdmin = useOperator();
@@ -254,7 +236,18 @@ export function RunnersScreen() {
           <span className="font-medium text-foreground">{RUNNERS.HOW_POOLS_TAB}</span> {POOLS.LEAD}
         </p>
       </HowItWorks>
-      {ready && <Tabs tab={tab} onChange={(t) => go(t)} />}
+      {ready && (
+        <PageTabs
+          className="mb-4"
+          label={RUNNER_V6.TABS_LABEL}
+          value={tab}
+          onValueChange={(t) => go(t)}
+          tabs={[
+            { value: "runners", label: RUNNER_V6.TAB_RUNNERS },
+            { value: "pools", label: RUNNER_V6.TAB_POOLS },
+          ]}
+        />
+      )}
       {body}
       {ready && tab === "runners" && <UnusedTokens tokens={tokens} onChanged={reload} />}
       <RunnerDrawer runner={selectedRunner} onClose={() => setSelected(null)} onChanged={reload} onOpenPool={openPool} />

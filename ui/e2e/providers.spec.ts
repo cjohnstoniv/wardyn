@@ -425,7 +425,7 @@ test.describe("providers — the door is SUPER's alone", () => {
     await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1, exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toHaveCount(0);
     await expect(page.getByTestId("provider-row-github")).toHaveCount(0);
-    await expect(page.getByRole("button", { name: PROVIDERS.GIT_TITLE })).toHaveCount(0);
+    await expect(page.getByRole("tab", { name: PROVIDERS.GIT_TITLE })).toHaveCount(0);
     expect(reads, "the refused page read the providers anyway").toEqual([]);
   });
 

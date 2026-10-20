@@ -251,7 +251,7 @@ test.describe("Quiet empty states inside cards (#2873)", () => {
     await navToRoute(page, "/admin/settings");
     await expandCard(page, "Workspace providers");
     await page.getByTestId("providers-card").getByText(PROVIDERS.CARD_OPEN).click();
-    await page.getByRole("button", { name: IMAGES.TAB, exact: true }).click();
+    await page.getByRole("tab", { name: IMAGES.TAB, exact: true }).click();
     const tile = page.getByTestId("empty-state-tile");
     await expect(tile).toBeVisible();
     expect(await tile.evaluate((el) => getComputedStyle(el).color)).toBe(await tokenColour(page, "color", "--muted-foreground"));

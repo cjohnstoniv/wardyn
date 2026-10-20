@@ -14,7 +14,9 @@ import { fileURLToPath } from "node:url";
 const tabsSrc = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "tabs.tsx"), "utf8");
 
 function classesFor(component: string): string[] {
-  const re = new RegExp(`function ${component}\\([\\s\\S]*?cn\\(\\s*"([^"]+)"`);
+  // The last class literal before `className,`: for TabsList/TabsTrigger that is the default (pill) look,
+  // the underline variant's literal comes first.
+  const re = new RegExp(`function ${component}\\([\\s\\S]*?"([^"]+)"[^"]*?\\n\\s*className,`);
   const m = re.exec(tabsSrc);
   if (!m) throw new Error(`${component} className not found`);
   return m[1].split(/\s+/);

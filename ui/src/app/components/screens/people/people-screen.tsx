@@ -25,6 +25,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { PageHeader } from "../../wardyn/page-header";
 import { PageContainer } from "../../wardyn/page-container";
 import { Chip } from "../../wardyn/primitives";
+import { Segmented } from "../../wardyn/segmented";
 import { EmptyState, ErrorState, TableSkeleton, loadFailStatus, type ScreenStatus } from "../../wardyn/states";
 import { AccessPanel, type AccessLoadState } from "../setup/access-panel";
 import { ScimCard } from "../settings/scim-card";
@@ -121,18 +122,12 @@ function PeopleTable({ onOpen, reloadKey }: { onOpen: (p: PersonSummary) => void
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
-        <div className="flex gap-1.5" role="group" aria-label={P.COL_STATE}>
-          {filters.map((f) => (
-            <button
-              key={f.id}
-              type="button"
-              aria-pressed={filter === f.id}
-              onClick={() => setFilter(f.id)}
-              className={`rounded-full border px-2.5 py-0.5 text-xs ${filter === f.id ? "border-primary text-foreground" : "border-border text-muted-foreground"}`}
-            >
-              {f.label}
-            </button>
-          ))}
+        <div role="group" aria-label={P.COL_STATE}>
+          <Segmented
+            value={filter}
+            onChange={setFilter}
+            options={filters.map((f) => ({ value: f.id, label: f.label }))}
+          />
         </div>
       </div>
       {status === "loading" ? (
