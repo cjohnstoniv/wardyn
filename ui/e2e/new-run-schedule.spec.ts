@@ -34,7 +34,7 @@ interface Stub {
   create: string[];
   preflight: string[];
   /** What the create answers: the queued scheduled run, or a refusal. */
-  refuse?: { status: number; body: object };
+  refuse?: { status: number; json: object };
 }
 
 async function stub(page: Page, scheduledRuns: boolean | undefined): Promise<Stub> {
@@ -188,7 +188,7 @@ test.describe("New Run: Schedule for later", () => {
     const seen = await stub(page, true);
     seen.refuse = {
       status: 422,
-      body: { error: SCHEDULE_REFUSAL.TOO_FAR("Tue 27 Oct, 15:00 (UTC)", "Mon 26 Oct, 14:00 (UTC)", 24), reason: "start_at_too_far" },
+      json: { error: SCHEDULE_REFUSAL.TOO_FAR("Tue 27 Oct, 15:00 (UTC)", "Mon 26 Oct, 14:00 (UTC)", 24), reason: "start_at_too_far" },
     };
     await toRunStep(page);
     await pickStart(page, dayAhead(6), "23:00");
