@@ -265,6 +265,44 @@ describe("App — where a token sign-in lands (#2493)", () => {
   });
 });
 
+describe("App — the nav badges across a sign-out (#2492)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    cleanup();
+  });
+
+  it("drops the previous person's counts, so the next sign-in's first paint shows none of them", async () => {
+    let answering = true;
+    const base = mockFetch({}).fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
+        if (String(url).includes("/me/attention")) {
+          return answering ? Promise.resolve(jsonResponse(200, { pending_approvals: 7, needs_you: 3 })) : new Promise<Response>(() => {});
+        }
+        return base(url, init);
+      }),
+    );
+    renderApp("/admin/settings");
+    const approvals = () => screen.getByRole("link", { name: /Approvals/ });
+    await waitFor(() => expect(approvals()).toHaveTextContent("7"));
+
+    answering = false;
+    const user = userEvent.setup();
+    const header = await screen.findByRole("banner");
+    const headerButtons = within(header).getAllByRole("button");
+    await user.click(headerButtons[headerButtons.length - 1]);
+    await user.click(within(await screen.findByRole("menu")).getByText("Sign out"));
+    await screen.findByText("Admin token", { exact: true });
+
+    setField(screen.getByLabelText("Admin token"), "any-token");
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    await screen.findByRole("banner");
+    await waitFor(() => expect(approvals()).toBeInTheDocument());
+    expect(approvals()).not.toHaveTextContent("7");
+  });
+});
+
 describe("roleCanReach — pure", () => {
   // ticket: M2
   it("a member cannot reach an operator-only route", () => {
