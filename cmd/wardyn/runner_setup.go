@@ -574,7 +574,7 @@ func installedRunnerdDir() string {
 var shellPlain = regexp.MustCompile(`^[A-Za-z0-9_./:@%+=,-]+$`)
 
 // shellArg is s as one POSIX shell word: unchanged when it needs no quoting, else single-quoted with each
-// ' written as '\''.
+// single quote written as a quote, a backslash and two quotes.
 func shellArg(s string) string {
 	if shellPlain.MatchString(s) {
 		return s
