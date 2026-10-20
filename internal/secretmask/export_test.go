@@ -14,5 +14,13 @@ func CountScanned(t testing.TB) *int {
 	return n
 }
 
+// CountSearched counts, for the rest of t, the secrets Masker.runs searches the data for.
+func CountSearched(t testing.TB) *int {
+	n := new(int)
+	searched = n
+	t.Cleanup(func() { searched = nil })
+	return n
+}
+
 // Held is how many bytes w holds back unforwarded.
 func (w *MaskingWriter) Held() int { return len(w.tail) }
