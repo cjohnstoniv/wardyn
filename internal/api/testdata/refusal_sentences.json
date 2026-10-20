@@ -37,6 +37,11 @@
   {
     "reason": "attach_ticket_foreign_run",
     "target": "run.ID.String()",
+    "sentence": "\"approval not found\""
+  },
+  {
+    "reason": "attach_ticket_foreign_run",
+    "target": "run.ID.String()",
     "sentence": "\"run not found\""
   },
   {
