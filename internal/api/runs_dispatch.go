@@ -711,7 +711,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	if !s.sandboxCreateAdmitted(ctx, run, ceiling, siteCfg, &spec, orgConfigKeys, llm, p) {
 		return
 	}
-	if !s.applyRunRecording(ctx, &run, &spec) {
+	if !s.applyRunRecording(ctx, &run, &spec, recordingChoice(run, policy, ceiling, siteCfg, siteCfgErr)) {
 		return
 	}
 	spec.ExecOutput = s.openExecOutput(run, p.Interactive)

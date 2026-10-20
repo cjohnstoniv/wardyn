@@ -56,6 +56,7 @@
 | `ui_apps` | `[]UIApp` | `[]` | In-sandbox loopback HTTP apps the UI gateway may relay to a browser. Operator-authored, never agent-chosen, and never a command string. |
 | `tool_rules` | `[]ToolRule` | `[]` | Per-tool effects for an autonomous run's tool calls: `allow`, `hold` or `deny`. A `hold` or `deny` rule routes a background Claude Code run through the tool gate. Operator-authored, evaluated proxy-side. |
 | `harness_inner_walls` | `HarnessInnerWalls` | omitted = what the harness and lane give | The harness's own walls inside Wardyn's: its `sandbox_mode` and where its `approvals` happen. Only adds walls; a looser choice refuses the run. See [below](#harness_inner_walls--harnessinnerwalls). |
+| `recording` | `string` | omitted = the organisation's level (`terminal` unless it sets one) | How much of the run is recorded: `off`, `terminal` or `screen_actions` (a desktop's screen and an action log). A ceiling's level is a minimum. `WARDYN_RECORDING_STORE=off` still records nothing. Keystrokes are never recorded at any level. See [below](#recording). |
 | `git_push_any_branch` | `bool` | `false` | Turns OFF branch-namespace confinement (default **ON**) for this run's brokered pushes on every brokered lane; operator-authored, never agent-settable. See [`git_push_any_branch`](#git_push_any_branch). |
 | `push_rules` | `PushRulesSpec` | omitted = **no content rules** | Content rules for this run's brokered git pushes — WHAT a push may touch, alongside `git_push_any_branch`'s WHERE. Enforced on every brokered git lane, and on the Azure DevOps REST door, before a push is forwarded: see ["`push_rules` — `PushRulesSpec`"](#push_rules--pushrulesspec) below. |
 | `azure_devops_capabilities` | `[]string` | omitted = the provider row's `default_profile` | This run's Azure DevOps capabilities on the per-person (Entra) lane, chosen only within the row's `capability_ceiling`; unknown or unpermitted choices are refused. See [`azure_devops_capabilities`](#azure_devops_capabilities). |
@@ -946,6 +947,15 @@ The match is exact, so it would never fire and would silently read as enforcemen
 | `tool` | `string` | — (required) | The tool name, matched exactly and case-sensitively (`Read`, `Bash`, `WebFetch`, …), or the literal `*` for the unmatched default. Duplicates are refused at write time: two rules for one tool means one of them does nothing. |
 | `effect` | `string` | — (required) | `allow` (run it, no human, still recorded), `hold` (raise an approval and block — the default behaviour), or `deny` (refuse it, no human). A closed enum: an unrecognised effect is a 400, never a silently-ignored rule that reads as enforcement. |
 
+
+## `recording`
+
+- `off` records no terminal or screen; the audit log still shows what happened. `terminal` records terminal sessions only, what every run got before the level existed. `screen_actions` also records a desktop's screen and an action log of what was opened, copied and transferred.
+- Omitted, the organisation's level applies: `site_config.recording.level`, `terminal` when unset. With `site_config.recording.locked`, that level is a minimum no policy, profile or run goes under, an operator's included.
+- A ceiling's level is a minimum: a member's policy under it may record more, never less. A member's own inline policy under a ceiling that sets no level may not go under the organisation's level.
+- A required setting (the organisation's or a runner pool's `recording: required`) records at least `terminal`. With `WARDYN_RECORDING_STORE=off` nothing is recorded at any level.
+- Keystrokes are never recorded. No value names them, and the desktop relay never reads the browser's side of the stream.
+- The level is resolved once at dispatch and kept on the run as `recording_level`; a run resolved to `off` is `not_recorded: policy_off`.
 
 ## `harness_inner_walls` — `HarnessInnerWalls`
 

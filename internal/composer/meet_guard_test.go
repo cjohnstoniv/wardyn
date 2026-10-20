@@ -60,6 +60,7 @@ var meetRules = map[string]meetRule{
 	"git_push_any_branch":              {"false", "AND"},
 	"harness_inner_walls.sandbox_mode": {"what the run's harness and lane give", "set on one side: that side's; on both: must agree"},
 	"harness_inner_walls.approvals":    {"what the run's harness and lane give", "set on one side: that side's; on both: must agree"},
+	"recording":                        {"the organisation's level", "the higher level; a lower overlay is a widening"},
 	"push_rules.deny_paths":            {"none", "union"},
 	"push_rules.max_inspect_pack_mib":  {"32 MiB under an active rule", "smaller after normalising against the composed rule"},
 	"push_rules.require_review_paths":  {"none", "union"},

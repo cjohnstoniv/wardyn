@@ -147,7 +147,8 @@ func leqPosture(a, b types.RunPolicySpec) bool {
 		leqUIApps(a.UIApps, b.UIApps) &&
 		leqResources(a.Resources, b.Resources) &&
 		leqToolRules(a.ToolRules, b.ToolRules) &&
-		leqInnerWalls(a.HarnessInnerWalls, b.HarnessInnerWalls)
+		leqInnerWalls(a.HarnessInnerWalls, b.HarnessInnerWalls) &&
+		a.Recording.Rank() >= b.Recording.Rank()
 }
 
 // leqMounts holds when every mount of a is a (source, target) mount of b, and

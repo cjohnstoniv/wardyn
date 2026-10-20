@@ -166,6 +166,9 @@ type AgentRun struct {
 	// NotRecorded says why the run has no session recording, decided once at dispatch and kept for
 	// the run's life; empty when the run is recorded (or predates the field).
 	NotRecorded RunNotRecorded `json:"not_recorded,omitempty"`
+	// RecordingLevel is the level the run is recorded at, resolved once at dispatch with NotRecorded
+	// (RecordingChoice); empty for a run dispatched before the level existed, which reads as terminal.
+	RecordingLevel RecordingLevel `json:"recording_level,omitempty"`
 	// RunnerPoolID is the runner pool the run was admitted into, and the next three fields say how
 	// (all written once at create). A pool is a label for a choice and never admission: the run
 	// goes to the exact runner recorded in RunnerID (a self-hosted runner) or RunnerPoolExecutor (a

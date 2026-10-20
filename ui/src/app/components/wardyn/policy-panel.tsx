@@ -46,6 +46,7 @@ import { PushRulesSection } from "./policy-push-rules";
 import { ADOCapabilitiesSection } from "./policy-ado-capabilities";
 import { RAIL_CHECK } from "./copy";
 import { GitPATSection } from "./policy-git-pat";
+import { RecordingSection } from "./policy-recording";
 import { DefaultPolicyPreview, type DefaultPolicyView } from "./policy-default-preview";
 import { egressSummary, lifecycleSummary } from "./policy-document/policy-facts";
 import { PolicyEditor } from "./policy-document/policy-editor";
@@ -419,6 +420,7 @@ export function PolicyPanel({
               {/* git_pat narrowing (repos, access, api, forge): one block per
                   stored-token grant, with the honesty lines packet M7 fixes. */}
               {parsed.ok && <GitPATSection spec={parsed.spec} serverError={serverError} onSpecChange={onSpecChange} />}
+              {parsed.ok && <RecordingSection spec={parsed.spec} onSpecChange={onSpecChange} />}
 
               {/* The safety meter grades the DOCUMENT as typed (debounced, advisory),
                   distinct from the run instance's Preflight of the RESOLVED run — so

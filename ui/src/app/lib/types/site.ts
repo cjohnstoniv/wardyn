@@ -9,6 +9,8 @@
 // included on the wire — only the ref NAMES the broker/proxy resolve at
 // dispatch/injection time.
 
+import type { RecordingLevel } from "./policy";
+
 /** @deprecated superseded by EgressRedirect — kept only so a PUT body saved
  *  before EgressRedirects existed keeps decoding (see SiteConfig.artifact_overrides). */
 export interface ArtifactOverride {
@@ -136,6 +138,9 @@ export interface SiteConfig {
   // the owner-decided default (no autonomy cap, env-var/file delivery allowed,
   // no CC3 floor for component credentials). No console surface writes it yet.
   components?: ComponentSettings;
+  // types.SiteConfig.Recording: the organisation's recording level (absent: terminal) and whether
+  // it is a locked minimum no policy goes under.
+  recording?: SiteRecording;
   // RESPONSE-ONLY, never-PUT: the git hosts this deployment actually admits —
   // scm_hosts MINUS every host a provider row claims, UNION every enabled row's
   // hosts (internal/api/workspace_providers.go's effectiveScmHosts). ONE
@@ -477,4 +482,10 @@ export interface SiteEgress {
 export interface EgressBaseline {
   baseline_hosts: string[];
   internal_host_suffixes: string[];
+}
+
+/** Go: types.SiteRecording (SiteConfig.recording). */
+export interface SiteRecording {
+  level?: RecordingLevel;
+  locked?: boolean;
 }

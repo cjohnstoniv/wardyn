@@ -19,6 +19,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `governance_boundary` (migration `0199_governance_boundary`). Without it the Wardyn boundary cannot be read or
   written. The same migration's `agent_runs.break_glass` column needs no grant.
 
+### Added
+
+- Recording is a level: a policy's `recording` is `off`, `terminal` or `screen_actions`, and
+  `site_config.recording` sets the organisation's level and can lock it as a minimum. Nothing set records terminal
+  sessions, as before. `WARDYN_RECORDING_STORE=off` still records nothing, and keystrokes are never recorded.
+
 ## [0.9.5] — 2026-10-19
 
 A small fix release on top of 0.9.4 for the sign-in and setup paths: the AWS sign-in dialog shows its code and moves

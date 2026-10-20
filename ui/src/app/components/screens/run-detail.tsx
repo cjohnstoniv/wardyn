@@ -374,6 +374,9 @@ function RunDetailPage({ id }: { id: string }) {
               recordingDisabled={recordingDisabled}
               runId={id}
               sessions={attachSessions(recordingAudit)}
+              recordingAudit={recordingAudit}
+              level={run.recording_level}
+              notRecorded={run.not_recorded}
               selected={recKey || id}
               onSelect={(key) => {
                 setRecKey(key);
