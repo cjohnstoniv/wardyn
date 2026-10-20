@@ -795,6 +795,8 @@ type Server struct {
 	authorityTest attachAuthorityTimings // per-server test overrides, the same shape as pingEvery
 	// localAttachSubs replaces a runner's substrate for a local attach (localAttachSubFor), tests only.
 	localAttachSubs func(id uuid.UUID) localAttachSub
+	// localCovered replaces a local promotion's corpus proof (promotionCovered), tests only.
+	localCovered func(runID uuid.UUID) bool
 	// pauseLimit overrides attachWriteTimeout as the bound on an unresumed
 	// output pause for THIS server only (tests).
 	pauseLimit time.Duration

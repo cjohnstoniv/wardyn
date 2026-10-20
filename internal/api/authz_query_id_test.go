@@ -163,6 +163,8 @@ var queryParamNotAnID = map[string]string{
 	"rows":                      "terminal geometry",
 	"tail":                      "byte count of a run's output tail, read after the path's run is authorized",
 	"cols":                      "terminal geometry",
+	"transport":                 "GET /runs/{id}/attach: relay or local, where the terminal of the path's already-authorized run is served; it names no entity",
+	"local_nonce":               "GET /runs/{id}/attach: a bearer-like single-use secret, the nonce the run's own runner issued on its local socket, passed back to that runner only after admission; it names no entity and is never logged or audited (TestAttachLocalNonceNeverLoggedOrAudited)",
 	"type":                      "directory search kind (security tier route)",
 	"q":                         "free-text search over an already-scoped listing: directory search (security tier route) and #1197's run list (every tier)",
 	"ticket":                    "single-use attach ticket: the credential itself, redeemed against the run it was minted for",

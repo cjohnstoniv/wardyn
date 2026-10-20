@@ -9,17 +9,18 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/cjohnstoniv/wardyn/internal/maskmanifest"
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -225,6 +226,67 @@ func TestAttachLocalGrantRefusalCloses4409(t *testing.T) {
 	})
 }
 
+// syncLog is a log sink the server goroutines and the test can share.
+type syncLog struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (l *syncLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *syncLog) String() string { l.mu.Lock(); defer l.mu.Unlock(); return l.b.String() }
+
+// TestAttachLocalNonceNeverLoggedOrAudited: local_nonce is a bearer-like, single-use value for the
+// runner alone. A granted session, a refused grant and a request refused at admission, each carrying
+// it, leave it in no log line and no audit row (the server logs r.URL.Path, never the query).
+func TestAttachLocalNonceNeverLoggedOrAudited(t *testing.T) {
+	const nonce = "NONCE-SENTINEL-7f3a9c"
+	logs := &syncLog{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	query := "&transport=local&local_nonce=" + nonce
+
+	granted := newLocalRig(t, localRigOpts{})
+	c, resp, err := granted.tryDial(t, granted.ticket(t, holderOwner, oidc.RoleUser), query)
+	if err != nil {
+		t.Fatalf("dial local attach: %v (%v)", err, resp)
+	}
+	readAttachMode(t, c)
+	if got := granted.sub.req(t, 0).Nonce; got != nonce {
+		t.Fatalf("the runner was asked for nonce %q, want the one on the query (the pin would prove nothing)", got)
+	}
+	_ = c.Close(websocket.StatusNormalClosure, "")
+	granted.detach(t)
+
+	refused := newLocalRig(t, localRigOpts{})
+	refused.sub.grantErr = errors.New("unknown or expired nonce")
+	c2, _, err := refused.tryDial(t, refused.ticket(t, holderOwner, oidc.RoleUser), query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, _ = c2.Read(context.Background())
+	refused.detach(t)
+
+	denied := newLocalRig(t, localRigOpts{})
+	do(t, denied.srv, http.MethodGet, "/api/v1/runs/"+denied.run.ID.String()+"/attach?ticket=not-a-ticket"+query, "", "")
+
+	if strings.Contains(logs.String(), nonce) {
+		t.Errorf("the nonce is in a log line:\n%s", logs.String())
+	}
+	for _, rig := range []*localRig{granted, refused, denied} {
+		for _, ev := range rig.audit.snapshot() {
+			if b, _ := json.Marshal(ev); strings.Contains(string(b), nonce) {
+				t.Errorf("the nonce is in audit row %s: %s", ev.Action, b)
+			}
+		}
+	}
+}
+
 // TestAttachLocalTakeOverResetsTheTee: a take-over displaces the local holder, and its runner sees
 // pty_tee reset.
 func TestAttachLocalTakeOverResetsTheTee(t *testing.T) {
@@ -297,6 +359,10 @@ func TestAttachLocalPromotionReprovesTheCorpus(t *testing.T) {
 	for _, covered := range []bool{true, false} {
 		t.Run(map[bool]string{true: "covered", false: "uncovered"}[covered], func(t *testing.T) {
 			rig := newLocalRig(t, localRigOpts{})
+			// The run loses its corpus proof after the observer is admitted; set before any request,
+			// flipped atomically, so no Config is mutated under a live server.
+			var lost atomic.Bool
+			rig.srv.localCovered = func(uuid.UUID) bool { return !lost.Load() }
 			writer := dialAttach(t, rig.ts, rig.srv, rig.run.ID, holderOwner, "")
 			readAttachMode(t, writer)
 			c := rig.dial(t)
@@ -308,17 +374,7 @@ func TestAttachLocalPromotionReprovesTheCorpus(t *testing.T) {
 			if !rig.sub.req(t, 0).Options.Observer {
 				t.Fatal("the observer was granted as a writer")
 			}
-			if !covered {
-				pool, err := pgxpool.New(context.Background(), "postgres://wardyn@127.0.0.1:1/wardyn?connect_timeout=1&sslmode=disable")
-				if err != nil {
-					t.Fatal(err)
-				}
-				t.Cleanup(pool.Close)
-				reg := rig.srv.attachRegistry() // the promotion reads the field under this lock's order
-				reg.mu.Lock()
-				rig.srv.cfg.MaskManifests = maskmanifest.New(pool, noKeys{}, secretmask.NewRegistry())
-				reg.mu.Unlock()
-			}
+			lost.Store(!covered)
 			_ = writer.Close(websocket.StatusNormalClosure, "")
 			if covered {
 				waitFor(t, "the writer push", func() bool { m := sess.modeLog(); return len(m) == 1 && !m[0] })

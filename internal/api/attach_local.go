@@ -64,6 +64,15 @@ func (s *Server) localAttachSubFor(id uuid.UUID) localAttachSub {
 	return s.runnerEndpoint(id).sub
 }
 
+// promotionCovered is maskCovered for a local observer becoming the writer (the test seam
+// localCovered replaces it: a run losing coverage mid-session without mutating Config).
+func (s *Server) promotionCovered(ctx context.Context, runID uuid.UUID) bool {
+	if s.localCovered != nil {
+		return s.localCovered(runID)
+	}
+	return s.maskCovered(ctx, runID)
+}
+
 // localAttachTarget is the runner a local attach is granted on.
 type localAttachTarget struct {
 	runnerID uuid.UUID
@@ -294,7 +303,7 @@ func (la *localAttach) sync() {
 	}
 	var cols, rows uint16
 	if !observer {
-		if !s.maskCovered(ctx, wa.run.ID) {
+		if !s.promotionCovered(ctx, wa.run.ID) {
 			la.ended.Store(true) // wa.fail closes the socket
 			la.resetTee()
 			wa.fail(errAttachUncovered, true)
