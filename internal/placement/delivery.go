@@ -267,6 +267,33 @@ func validateClasses(classes map[string]ClassPolicy, prefix string) error {
 	return nil
 }
 
+// ErrUnbuildablePolicy marks a delivery policy that sets a mode the engine cannot build for a class (a 422).
+var ErrUnbuildablePolicy = errors.New("placement: credential delivery policy sets a mode that is not built")
+
+// CheckBuildable refuses a policy that sets any class, in Classes or in any trust class's overrides, to a
+// mode outside BuildableModes(class). Validate stays the bounds check a stored document is judged on; this
+// is the write-time check only, so a stored document is never rewritten or refused by it.
+func (p DeliveryPolicy) CheckBuildable() error {
+	check := func(classes map[string]ClassPolicy, prefix string) error {
+		for _, class := range sortedKeys(classes) {
+			if m := classes[class]; !slices.Contains(BuildableModes(class), m.Mode) {
+				return fmt.Errorf("%w: class %q cannot be delivered as %q yet (the server can build: %s)",
+					ErrUnbuildablePolicy, prefix+class, m.Mode, joinModes(BuildableModes(class)))
+			}
+		}
+		return nil
+	}
+	if err := check(p.Classes, ""); err != nil {
+		return err
+	}
+	for _, trust := range slices.Sorted(maps.Keys(p.ByTrust)) {
+		if err := check(p.ByTrust[trust].Classes, "by_trust."+string(trust)+"."); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // ForTrust is a class's policy on a runner of trust class trust: the trust class's
 // override when it names the class, else the global row, else refuse. A class the
 // global row delivers via_org is the same on every runner (Validate keeps overrides

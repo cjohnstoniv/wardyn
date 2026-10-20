@@ -330,3 +330,24 @@ func pathExists(t reflect.Type, path string) bool {
 	}
 	return true
 }
+
+// A write-time check on the modes a policy sets: every class, and every trust class's override, must be
+// one the engine can build. A mode outside AllowedModes is Validate's refusal, not this one.
+func TestDeliveryPolicyCheckBuildable(t *testing.T) {
+	ok := DeliveryPolicy{
+		Classes: map[string]ClassPolicy{ClassADOMintedPAT: {Mode: ModeRunnerResident}, ClassAPIKey: {Mode: ModeViaOrg}, ClassBedrockBearer: {Mode: ModeRefuse}},
+		ByTrust: map[types.RunnerTrustClass]TrustPolicy{types.RunnerTrustPersonal: {Classes: map[string]ClassPolicy{ClassEnvSecret: {Mode: ModeRunnerResident}}}},
+	}
+	if err := ok.CheckBuildable(); err != nil {
+		t.Errorf("buildable policy: %v", err)
+	}
+	for name, p := range map[string]DeliveryPolicy{
+		"class default": {Classes: map[string]ClassPolicy{ClassAPIKey: {Mode: ModeRunnerResident}}},
+		"trust override": {ByTrust: map[types.RunnerTrustClass]TrustPolicy{
+			types.RunnerTrustManagedDevice: {Classes: map[string]ClassPolicy{ClassBedrockRoleCreds: {Mode: ModeRunnerResident}}}}},
+	} {
+		if err := p.CheckBuildable(); !errors.Is(err, ErrUnbuildablePolicy) {
+			t.Errorf("%s: %v, want ErrUnbuildablePolicy", name, err)
+		}
+	}
+}

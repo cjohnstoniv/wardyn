@@ -8,6 +8,25 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.9.7] — 2026-10-20
+
+A small release on top of 0.9.6. An Azure DevOps token that the organisation mints for a run can now be delivered to a person's own runner, off by default, and a credential delivery write that the server could not build is refused when it is made. No migration.
+
+### Added
+
+- An Azure DevOps connection with `token_mode: minted_pat` can now run on a person's own runner. Before, the run was refused at create. It is off by default and needs all three: a delivery policy that sends `ado_minted_pat` as `runner_resident` to the runner's trust class (a security admin's change, held for a second person under `WARDYN_GOVERNANCE_SECOND_HUMAN`), the connection's `entra.runner_resident` opt-in, and a runner of that trust class owned by a person.
+  - The token lives in the runner proxy's memory for the run, at most `pat_max_hours`. It is never on disk, in the keystore or in the environment, and it never enters the sandbox, which holds only an inert placeholder: `entra.runner_resident_sandbox` is stored and audited but changes no run. Root on the laptop can read the proxy's memory.
+  - The proxy fetches the token again at most 15 minutes apart, and each fetch is judged against the policy, the runner's owner, trust class and posture, and the opt-in. A refusal revokes the run's token at Azure DevOps. If the organisation is unreachable, the proxy stops injecting the token at most 30 minutes after its last fetch.
+  - A `bearer` connection and a stored git token for an Azure DevOps host are still refused on a person's own runner.
+
+### Changed
+
+- `PUT /governance/credential-delivery` refuses with `422` and `credential_delivery_invalid` a document that sets a class, or a trust class's override of it, to a mode the server cannot build for that class. The sentence names the class, the mode and the modes it can build. `GET` lists them as `buildable_modes`. A stored document is read back as before.
+
+### Before you upgrade
+
+- A credential-delivery write that sets a mode the server can't build is now refused (`credential_delivery_invalid`); a stored document is left as it is.
+
 ## [0.9.6] — 2026-10-20
 
 A fix release on top of 0.9.5. A person's own Azure DevOps token now works on their own runner, credential and posture refusals say which policy or field refused, the credential delivery screen lists what each class can be delivered by, runners that cannot reach the server say why, and session recordings no longer store typed input. No migration and no new setting.

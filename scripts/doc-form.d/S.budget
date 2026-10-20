@@ -170,7 +170,8 @@
 # docs/sdk.md 19422 adds 26 (0.9.6 P096B), measured: buildable_modes on GET /governance/credential-delivery.
 # docs/sdk.md 19440 adds 18 over 19422 (0.9.7 MINT-L backport), measured: delivery_runner_resident names the Azure DevOps minted token it serves.
 # docs/sdk.md 19445 adds 5 over 19440 (0.9.7 MINT-L backport), measured: the owner gate and the revoke on a refused relayed fetch.
-docs/sdk.md=19445 share=21
+# docs/sdk.md 19470 adds 25 over 19445 (0.9.7), measured: a credential-delivery write of a mode outside buildable_modes is 422; a stored document is left as it is.
+docs/sdk.md=19470 share=21
 # docs/sdk.md 18691 adds 28 over 18663, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.

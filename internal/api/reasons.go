@@ -274,7 +274,7 @@ const (
 	reasonEgressBaselineStale   = "egress_baseline_stale"   // If-Match does not match the current baseline ETag
 
 	// PUT /governance/credential-delivery.
-	reasonCredentialDeliveryInvalid     = "credential_delivery_invalid"     // an unknown or fixed class, a mode outside the class's bounds, or require_posture without runner_resident
+	reasonCredentialDeliveryInvalid     = "credential_delivery_invalid"     // an unknown or fixed class, a mode outside the class's bounds or one the server cannot build (422), or require_posture without runner_resident
 	reasonCredentialDeliveryUnavailable = "credential_delivery_unavailable" // the store keeps no delivery policy (not the Postgres store)
 	reasonCredentialDeliveryStale       = "credential_delivery_stale"       // If-Match does not match the current policy ETag
 

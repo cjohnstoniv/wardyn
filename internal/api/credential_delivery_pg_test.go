@@ -223,3 +223,58 @@ func TestCredentialDeliveryWrite_DirectSaveStaleAgainstAConcurrentWrite(t *testi
 		t.Fatalf("direct PUT checked before a concurrent write = %d %s, want 412 %s", got.Code, got.Body, reasonCredentialDeliveryStale)
 	}
 }
+
+// A write that sets a class, or a trust class's override of it, to a mode the engine cannot build is
+// refused 422 credential_delivery_invalid, direct or held, and nothing is stored or held. A buildable mode
+// is accepted, ado_minted_pat runner_resident among them. A document stored before the check is still
+// read back by GET, and nothing rewrites it.
+func TestCredentialDeliveryWrite_UnbuildableModeRefused(t *testing.T) {
+	e := newGovEnv(t)
+	stored := func() string {
+		doc, err := e.pg.GetCredentialDeliveryPolicy(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(doc.Policy)
+	}
+	empty := stored()
+	for body, want := range map[string]string{
+		`{"classes":{"api_key":{"mode":"runner_resident"}}}`:                                                   `class "api_key" cannot be delivered as "runner_resident" yet (the server can build: via_org, refuse)`,
+		`{"classes":{"git_pat_broker":{"mode":"via_org"}}}`:                                                    `class "git_pat_broker" cannot be delivered as "via_org" yet (the server can build: refuse)`,
+		`{"classes":{},"by_trust":{"personal":{"classes":{"bedrock_role_creds":{"mode":"runner_resident"}}}}}`: `class "by_trust.personal.bedrock_role_creds" cannot be delivered as "runner_resident" yet (the server can build: refuse)`,
+	} {
+		for who, w := range map[string]*httptest.ResponseRecorder{
+			"direct": e.admin(http.MethodPut, credentialDeliveryPath, body),
+			"held":   e.call(e.alice, http.MethodPut, credentialDeliveryPath, body),
+		} {
+			if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), reasonCredentialDeliveryInvalid) ||
+				!strings.Contains(w.Body.String(), strings.ReplaceAll(want, `"`, `\"`)) {
+				t.Errorf("%s PUT %s = %d %s, want 422 %s naming %s", who, body, w.Code, w.Body, reasonCredentialDeliveryInvalid, want)
+			}
+		}
+	}
+	if got := stored(); got != empty {
+		t.Errorf("a refused write stored %s, want %s", got, empty)
+	}
+	if n := e.pendingCount(); n != 0 {
+		t.Errorf("%d changes held for refused bodies", n)
+	}
+
+	const ok = `{"classes":{"ado_minted_pat":{"mode":"runner_resident"},"api_key":{"mode":"via_org"},"env_secret":{"mode":"refuse"}}}`
+	if w := e.admin(http.MethodPut, credentialDeliveryPath, ok); w.Code != http.StatusOK {
+		t.Fatalf("buildable PUT = %d %s, want 200", w.Code, w.Body)
+	}
+
+	// An unbuildable document already stored (written before this check) is read back and left alone.
+	const old = `{"classes":{"bedrock_role_creds":{"mode":"runner_resident"}}}`
+	if _, err := e.pg.PutCredentialDeliveryPolicy(context.Background(), json.RawMessage(old), "seed", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	before := stored()
+	if w := e.call(e.alice, http.MethodGet, credentialDeliveryPath, ""); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "bedrock_role_creds") {
+		t.Errorf("GET of a stored unbuildable document = %d %s, want 200 with it", w.Code, w.Body)
+	}
+	if got := stored(); got != before {
+		t.Errorf("GET rewrote the stored document: %s, want %s", got, before)
+	}
+}
