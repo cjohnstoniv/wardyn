@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	runnerunits "github.com/cjohnstoniv/wardyn/deploy/runner"
+	"github.com/cjohnstoniv/wardyn/internal/doctor"
 )
 
 // defaultDockerSocket is where the Docker SDK connects when DOCKER_HOST is unset. Setup writes the engine it
@@ -48,7 +49,13 @@ type setupHost struct {
 	// missing); relay then checks that a probe container reaches the relay pair serve will use
 	// (findRelay), narrowed by want, with the proxy image serve will run.
 	engine func(ctx context.Context, network string, want relayPair) (dockerEngine, error)
-	relay  func(ctx context.Context, image, network string, eng dockerEngine, want relayPair) (relayPair, error)
+	// inspect is engine's read-only half, for doctor: it never creates the network. image says where the
+	// proxy image resolves from, "local" or "registry", without pulling it.
+	inspect func(ctx context.Context, want relayPair) (dockerEngine, error)
+	image   func(ctx context.Context, ref string) (string, error)
+	// hasNetwork says whether the named Docker network exists, read-only, for doctor.
+	hasNetwork func(ctx context.Context, name string) (bool, error)
+	relay      func(ctx context.Context, image, network string, eng dockerEngine, want relayPair) (relayPair, error)
 }
 
 func osSetupHost() (setupHost, error) {
@@ -70,7 +77,7 @@ func osSetupHost() (setupHost, error) {
 		return setupHost{}, err
 	}
 	return setupHost{goos: runtime.GOOS, home: home, xdgConfig: os.Getenv("XDG_CONFIG_HOME"), xdgData: os.Getenv("XDG_DATA_HOME"),
-		dockerHost: cmp.Or(os.Getenv("DOCKER_HOST"), defaultDockerSocket), uid: os.Geteuid(), exe: exe, run: runCommand, engine: readySetupEngine, relay: probeSetupRelay}, nil
+		dockerHost: cmp.Or(os.Getenv("DOCKER_HOST"), defaultDockerSocket), uid: os.Geteuid(), exe: exe, run: runCommand, engine: readySetupEngine, inspect: inspectSetupEngine, image: resolveProxyImage, hasNetwork: inspectSetupNetwork, relay: probeSetupRelay}, nil
 }
 
 func runCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -96,9 +103,8 @@ func (p setupPaths) identity() string { return filepath.Join(p.stateDir, "runner
 func (h setupHost) paths() (setupPaths, error) {
 	switch h.goos {
 	case "linux":
-		data := filepath.Join(cmp.Or(h.xdgData, filepath.Join(h.home, ".local", "share")), "wardyn")
 		cfg := filepath.Join(h.home, ".config")
-		p := setupPaths{installed: filepath.Join(data, "bin", "wardyn-runnerd"), stateDir: filepath.Join(cfg, "wardyn", "runner"),
+		p := setupPaths{installed: doctor.RunnerdPath(h.goos, h.home, h.xdgData), stateDir: filepath.Join(cfg, "wardyn", "runner"),
 			envFile: filepath.Join(cfg, "wardyn", "runnerd.env"), unitFile: filepath.Join(cfg, "systemd", "user", serviceUnit),
 			cliProfile: filepath.Join(cmp.Or(h.xdgConfig, cfg), "wardyn")}
 		holds := func(dir string) bool { _, err := os.Stat(filepath.Join(dir, "runner.json")); return err == nil }
@@ -120,7 +126,7 @@ func (h setupHost) paths() (setupPaths, error) {
 		return p, nil
 	case "darwin":
 		data := filepath.Join(h.home, "Library", "Application Support", "wardyn")
-		return setupPaths{installed: filepath.Join(data, "bin", "wardyn-runnerd"), stateDir: filepath.Join(data, "runner"),
+		return setupPaths{installed: doctor.RunnerdPath(h.goos, h.home, h.xdgData), stateDir: filepath.Join(data, "runner"),
 			plistFile: filepath.Join(h.home, "Library", "LaunchAgents", serviceLabel+".plist"), logFile: filepath.Join(h.home, "Library", "Logs", "wardyn", "runnerd.log"),
 			cliProfile: data}, nil
 	}

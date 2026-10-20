@@ -1,0 +1,7 @@
+ok    org-url      http://ORG (from --url)
+ok    dns          127.0.0.1 is an address: nothing to resolve
+ok    proxy        direct (no proxy applies to this address)
+skip  tls          plain http://: there is no handshake to check
+ok    healthz      status ok, server version 0.10.0
+ok    identity     the token from WARDYN_TOKEN: method token, role admin
+skip  runner       no runner is installed on this computer

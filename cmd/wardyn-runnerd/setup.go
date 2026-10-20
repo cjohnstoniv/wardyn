@@ -31,6 +31,9 @@ var safeSetting = regexp.MustCompile(`^[A-Za-z0-9._:/@%+=-]+$`)
 // could not be pulled.
 var errProxyImageUnavailable = errors.New("the proxy image is not on this engine and could not be pulled")
 
+// errSetupNeedsDocker is what the build without the docker tag answers to setup's and doctor's engine checks.
+var errSetupNeedsDocker = errors.New("setup requires a build with the docker tag")
+
 // setupOptions are `setup`'s flags.
 type setupOptions struct {
 	org, tokenFile, name             string

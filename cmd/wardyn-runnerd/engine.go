@@ -44,8 +44,9 @@ type relayPair struct {
 // its OperatingSystem; otherwise an engine whose bridge interface is on this host is native, and any
 // other is VM-backed, which is never an error in itself.
 type dockerEngine struct {
-	desc string // OperatingSystem and Name as Docker reports them, for messages
-	why  string // why the engine is VM-backed
+	desc    string // OperatingSystem and Name as Docker reports them, for messages
+	version string // the engine's own version
+	why     string // why the engine is VM-backed
 	// native engines keep their default bridge's gateway and the addresses its interface holds here.
 	native  bool
 	gateway netip.Addr

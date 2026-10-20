@@ -58,7 +58,7 @@ func connectHint(err error) string {
 // certificateHint names the leaf the server presented and who issued it, which tells a proxy that
 // inspects TLS (its own issuer) from a wrong host or an expired certificate.
 func certificateHint(leaf *x509.Certificate, cause error) string {
-	hint := fmt.Sprintf("the server presented a certificate for %s issued by %s", distinguished(leaf.Subject), distinguished(leaf.Issuer))
+	hint := fmt.Sprintf("the server presented a certificate for %s issued by %s", Distinguished(leaf.Subject), Distinguished(leaf.Issuer))
 	var unknown x509.UnknownAuthorityError
 	if errors.As(cause, &unknown) {
 		hint += "; if a proxy inspects TLS here, pass its root with --trusted-ca-file"
@@ -66,8 +66,8 @@ func certificateHint(leaf *x509.Certificate, cause error) string {
 	return hint
 }
 
-// distinguished is a certificate name as "CN (O)", quoted, with whichever parts it has.
-func distinguished(n pkix.Name) string {
+// Distinguished is a certificate name as "CN (O)", quoted, with whichever parts it has.
+func Distinguished(n pkix.Name) string {
 	parts := []string{}
 	if n.CommonName != "" {
 		parts = append(parts, fmt.Sprintf("%q", n.CommonName))

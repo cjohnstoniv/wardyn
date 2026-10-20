@@ -179,6 +179,16 @@ func readDockerCapacity(ctx context.Context) (placement.Capacity, error) {
 func readyEngine(ctx context.Context, cli *client.Client, unreachable, network string, want relayPair) (dockerEngine, error) {
 	ctx, cancel := context.WithTimeout(ctx, engineCheckBound)
 	defer cancel()
+	eng, err := admittedEngine(ctx, cli, unreachable, want)
+	if err != nil {
+		return dockerEngine{}, err
+	}
+	return eng, ensureInternalNetwork(ctx, cli, network)
+}
+
+// admittedEngine is readyEngine without its one write: the engine answers and the explicit relay bind, if
+// any, is one the relay may listen on. doctor stops here.
+func admittedEngine(ctx context.Context, cli *client.Client, unreachable string, want relayPair) (dockerEngine, error) {
 	eng, err := inspectEngine(ctx, cli, unreachable)
 	if err != nil {
 		return dockerEngine{}, err
@@ -188,7 +198,7 @@ func readyEngine(ctx context.Context, cli *client.Client, unreachable, network s
 			return dockerEngine{}, err
 		}
 	}
-	return eng, ensureInternalNetwork(ctx, cli, network)
+	return eng, nil
 }
 
 // inspectEngine tells native from VM-backed. Docker Desktop is VM-backed by
@@ -202,7 +212,7 @@ func inspectEngine(ctx context.Context, cli *client.Client, unreachable string) 
 	if err != nil {
 		return dockerEngine{}, fmt.Errorf("%s; Rancher Desktop must use the dockerd (moby) engine; runnerd follows DOCKER_HOST, else a docker context that is a local unix socket: %w", unreachable, err)
 	}
-	eng := dockerEngine{desc: fmt.Sprintf("%q (%s)", info.Info.OperatingSystem, info.Info.Name)}
+	eng := dockerEngine{desc: fmt.Sprintf("%q (%s)", info.Info.OperatingSystem, info.Info.Name), version: info.Info.ServerVersion}
 	if iface, err := net.InterfaceByName(rancherWSLVeth); err == nil {
 		held, _ := ifaceAddrs(iface) // unreadable: no veth candidate, as if absent
 		for _, a := range held {
