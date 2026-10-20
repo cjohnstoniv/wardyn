@@ -153,7 +153,8 @@ func (d *kubeAPIDoor) admit(method, raw string, h http.Header) error {
 		return fmt.Errorf("the namespace %q is not one this run's kubectl may reach (%s)", ns, strings.Join(d.namespaces, ", "))
 	}
 	switch {
-	case len(rest) == 0 && method != http.MethodGet:
+	case len(rest) == 0 && method != http.MethodGet,
+		len(rest) == 1 && (rest[0] == "finalize" || rest[0] == "status"):
 		return errors.New("this run's kubectl cannot change or delete a namespace itself")
 	case len(rest) > 3:
 		return errors.New("the path is deeper than a Kubernetes resource and subresource")

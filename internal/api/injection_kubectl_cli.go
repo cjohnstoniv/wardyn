@@ -98,18 +98,15 @@ func (s *Server) resolveKubectlCLIInjection(w http.ResponseWriter, r *http.Reque
 	if host, _, ok := k.HostPort(); !ok || !hostEqual(minted.Injection.Host, host) {
 		return fail(http.StatusForbidden, reasonHostNotEndpoint, kubectlResolveHostPin, map[string]any{"host": minted.Injection.Host})
 	}
-	drift, live, err := s.kubectlCLIDrift(ctx, claims.RunID, sn)
+	drift, live, registered, readErr, err := s.kubectlResolveRow(ctx, claims.RunID, sn, name)
 	switch {
+	case readErr != nil:
+		status, reason, _ := storeReadRefusal(name, readErr)
+		return fail(status, reason, kubectlResolveUnregistered, nil)
 	case err != nil:
 		return fail(http.StatusServiceUnavailable, reasonRunUnreadable, kubectlResolveUnreadable, nil)
 	case drift != "":
 		return fail(http.StatusForbidden, reasonScopeChanged, kubectlResolveChanged, map[string]any{"drift": drift})
-	}
-	// The operator namespace only: a person's row of the same name is never read.
-	registered, err := s.cfg.Secrets.For("").Get(ctx, name)
-	if err != nil {
-		status, reason, _ := storeReadRefusal(name, err)
-		return fail(status, reason, kubectlResolveUnregistered, nil)
 	}
 	token, expires, err := mintKubectlToken(ctx, *live, string(registered), s.cfg.Now())
 	if err != nil {
@@ -130,6 +127,32 @@ func (s *Server) resolveKubectlCLIInjection(w http.ResponseWriter, r *http.Reque
 		ExpiresAt: s.subscriptionLease(minted, subscription.Token{ExpiresAt: expires}),
 	})
 	return true
+}
+
+// kubectlResolvePause is a test seam between the row check and the token read.
+var kubectlResolvePause = func() {}
+
+// kubectlResolveRow checks the live row against the snapshot and reads its
+// registered token under the lock the row's purge and the token route hold
+// (lockCLIRow), so the token read is the one registered for the row checked:
+// never one registered for a server, CA or account the row moved to between.
+// readErr is the token read's own failure, once the row has held.
+func (s *Server) kubectlResolveRow(ctx context.Context, runID uuid.UUID, sn kubectlGrantSnapshot, name string,
+) (drift string, live *types.CLIKubectl, registered []byte, readErr, err error) {
+	ctx, unlock, err := s.lockCLIRow(ctx, sn.ComponentID)
+	if err != nil {
+		return "", nil, nil, nil, err
+	}
+	defer unlock()
+	if drift, live, err = s.kubectlCLIDrift(ctx, runID, sn); err != nil || drift != "" {
+		return drift, nil, nil, nil, err
+	}
+	kubectlResolvePause()
+	// The operator namespace only: a person's row of the same name is never read.
+	if registered, readErr = s.cfg.Secrets.For("").Get(ctx, name); readErr != nil {
+		return "", nil, nil, readErr, nil
+	}
+	return "", live, registered, nil, nil
 }
 
 // kubectlMintTimeout bounds one TokenRequest round trip.

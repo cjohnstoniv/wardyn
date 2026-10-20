@@ -517,3 +517,53 @@ func TestKubectlCLI_AccessCredentialScope(t *testing.T) {
 		}
 	}
 }
+
+// A purge and a re-register for another cluster that land between the
+// resolve's row check and its token read wait for the read: the token sent to
+// the row's API server is the one registered for that server.
+func TestKubectlCLI_ResolveHoldsTheRowAgainstAPurge(t *testing.T) {
+	f := newKubeFixture(t)
+	f.sec.m[kubectlTokenSecretName(f.id.String())] = []byte(kubeRegistered)
+	inj, _, _, _, _ := f.dispatch("run-ca-cert")
+	other := newKubeAPIServer(t)
+	const otherToken = "registered-token-for-the-other-cluster"
+	moved := make(chan struct{})
+	t.Cleanup(func() { kubectlResolvePause = func() {} })
+	kubectlResolvePause = func() {
+		kubectlResolvePause = func() {}
+		go func() {
+			defer close(moved)
+			// The row's re-pin and purge, under the lock handlePutComponent holds, then the token route.
+			ctx, unlock, err := f.srv.lockCLIRow(context.Background(), f.id.String())
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			f.setRow(t, kubectlRowDef(other.srv.URL, other.caPEM(), "team-a", "team-b"))
+			if err := f.srv.purgeCLISignIns(ctx, f.id.String()); err != nil {
+				t.Error(err)
+			}
+			unlock()
+			if w := f.putToken(f.id, `{"value":"`+otherToken+`"}`); w.Code != http.StatusNoContent {
+				t.Errorf("re-register = %d %s", w.Code, w.Body)
+			}
+		}()
+		select {
+		case <-moved:
+		case <-time.After(time.Second):
+		}
+	}
+	w := f.resolve(inj[0].Rule, inj[0].GrantID, kubeOwner)
+	<-moved
+	f.api.mu.Lock()
+	seen := append([]string(nil), f.api.seen...)
+	f.api.mu.Unlock()
+	for _, s := range seen {
+		if strings.Contains(s, otherToken) {
+			t.Fatalf("the row's API server was sent the token registered for another cluster: %q", seen)
+		}
+	}
+	if w.Code != http.StatusOK || len(seen) != 1 || !strings.Contains(seen[0], "Bearer "+kubeRegistered) {
+		t.Errorf("resolve = %d %s; the API server saw %q", w.Code, w.Body, seen)
+	}
+}

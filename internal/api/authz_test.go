@@ -301,6 +301,8 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/components":         {class: classAdmin},
 	"PUT /api/v1/components/{id}":    {class: classAdmin},
 	"DELETE /api/v1/components/{id}": {class: classAdmin},
+	// The kubectl row's service-account token, written into the operator namespace.
+	"PUT /api/v1/components/{id}/kubectl-token": {class: classAdmin},
 
 	// The stored-policy WRITES stay SUPER even though /governance's profile
 	// authoring is classSecurity (§B, decided): a stored run_policy is

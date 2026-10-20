@@ -333,12 +333,13 @@ func (s *Server) authorKubectlCLI(ctx context.Context, run types.AgentRun, cli *
 	}
 	sn := kubectlSnapshotOf(cli.Kubectl)
 	sn.ComponentID, sn.OwnerSubject = cli.ComponentID, runIdentitySubject(ctx, run.CreatedBy)
-	raw, err := json.Marshal(map[string]any{
+	scope := map[string]any{
 		"host": host, "header": "Authorization", "format": "Bearer %s",
 		"secret_name": kubectlTokenSecretName(cli.ComponentID),
 		// TLS only and unpinned: the door, not the rule, decides which requests carry the token.
 		"require_tls": true, "snapshot": sn,
-	})
+	}
+	raw, err := json.Marshal(scope)
 	if err != nil {
 		return refuse("could not author kubectl's credential injection")
 	}
