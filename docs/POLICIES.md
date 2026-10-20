@@ -885,6 +885,8 @@ What the check does and does not settle:
 - The clipboard rules bind the relay of the app named `novnc` only. A member may declare the same desktop server
   under another app name, so a ceiling that blocks copy out should also pin `ui_apps` to the desktop app. An SSH
   port forward to the desktop's VNC port is outside the relay.
+- The desktop page comes from the sandbox, so these rules stop ordinary copy and paste; they are not a boundary against
+  a run built to get data out.
 
 | Field | Type | Default | What it does |
 |---|---|---|---|

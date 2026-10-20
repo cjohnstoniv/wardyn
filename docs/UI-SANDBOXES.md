@@ -82,6 +82,8 @@
   follows the RFB stream inside it and drops a blocked `ClientCutText` or `ServerCutText`.
 - Only that app is filtered. A member may declare the same desktop server under another name, so a ceiling that
   blocks copy out should also pin `ui_apps` to the desktop app. An SSH port forward to the VNC port is outside the relay.
+- The desktop page comes from the sandbox, so these rules stop ordinary copy and paste; they are not a boundary against
+  a run built to get data out.
 - The server speaks first in RFB. Browser frames that arrive before the server's first frame are held, up to
   64 KiB and 5 seconds, then read in order. A desktop whose first frame is not an RFB version is closed, and a
   `ui.clipboard` `failure` row records `reason: not_rfb`.
