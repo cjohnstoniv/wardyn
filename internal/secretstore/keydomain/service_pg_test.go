@@ -214,6 +214,40 @@ func TestService_TruncatedGroups(t *testing.T) {
 	}
 }
 
+// PlaceMany places a corpus of people in one call exactly as Place places each of them alone:
+// the same domain and source, and the same refusals.
+func TestService_PlaceManyMatchesPlace(t *testing.T) {
+	pool := subjectkeytest.ThrowawayDB(t)
+	s := keydomain.NewService(pool, []string{"a", "b", "c"})
+	login(t, s, "gina", false, "eng", "staff")
+	login(t, s, "hal", false, "eng", "ops")
+	login(t, s, "ivy", false, "ops")
+	login(t, s, "jon", true, "eng")
+	login(t, s, "kim", true, "other")
+	set(t, s, "all", "", "c")
+	set(t, s, "group", "eng", "a")
+	set(t, s, "group", "ops", "b")
+	set(t, s, "user", "ivy", "c")
+	set(t, s, "user", "kim", "a")
+	people := []string{"gina", "hal", "ivy", "jon", "kim", "nobody", "gina"}
+	got := s.PlaceMany(t.Context(), people)
+	for _, p := range people {
+		want, werr := s.Place(t.Context(), p)
+		if got[p].Placement != want || (got[p].Err == nil) != (werr == nil) || (werr != nil && got[p].Err.Error() != werr.Error()) {
+			t.Errorf("PlaceMany[%s] = (%+v, %v), Place = (%+v, %v)", p, got[p].Placement, got[p].Err, want, werr)
+		}
+	}
+	if got["gina"].Domain != "a" || got["gina"].Source != keydomain.SourceGroup || got["gina"].Group != "eng" {
+		t.Errorf("gina = %+v, want group eng -> a", got["gina"])
+	}
+	if !errors.Is(got["hal"].Err, keydomain.ErrAmbiguous) || !errors.Is(got["jon"].Err, keydomain.ErrGroupsTruncated) {
+		t.Errorf("hal = %v, jon = %v; want ErrAmbiguous and ErrGroupsTruncated", got["hal"].Err, got["jon"].Err)
+	}
+	if got["ivy"].Source != keydomain.SourceUser || got["kim"].Domain != "a" || got["nobody"].Source != keydomain.SourceAll {
+		t.Errorf("ivy = %+v, kim = %+v, nobody = %+v", got["ivy"], got["kim"], got["nobody"])
+	}
+}
+
 // An assignment naming a domain the file no longer declares fails closed.
 func TestService_UndeclaredDomainFailsClosed(t *testing.T) {
 	pool := subjectkeytest.ThrowawayDB(t)
