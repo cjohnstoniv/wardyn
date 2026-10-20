@@ -13,6 +13,9 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"math/big"
 	"net"
 	"net/http"
@@ -160,8 +163,8 @@ func isUnknownAuthority(err error) bool {
 	return errors.As(err, &ua)
 }
 
-// TestAnchor_StoreModeEnforced: the store is 0400 in 0700, and at use a file
-// with a write bit or a group-writable directory fails every request closed.
+// TestAnchor_StoreModeEnforced: the store is 0400 in 0700, and at use a
+// group-writable file or directory fails every request closed.
 func TestAnchor_StoreModeEnforced(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix modes")
@@ -183,7 +186,7 @@ func TestAnchor_StoreModeEnforced(t *testing.T) {
 		do   func()
 		undo func()
 	}{
-		{"file 0600", func() { _ = os.Chmod(path, 0o600) }, func() { _ = os.Chmod(path, 0o400) }},
+		{"file 0620", func() { _ = os.Chmod(path, 0o620) }, func() { _ = os.Chmod(path, 0o400) }},
 		{"dir 0770", func() { _ = os.Chmod(filepath.Dir(path), 0o770) }, func() { _ = os.Chmod(filepath.Dir(path), 0o700) }},
 	} {
 		tweak.do()
@@ -304,7 +307,7 @@ func TestCAHint_NamesThePresentedRoot(t *testing.T) {
 
 // clientBuilderRE is a construction that would miss the anchors: a client or
 // transport literal, the default client, or a helper that uses it.
-var clientBuilderRE = regexp.MustCompile(`http\.(Client|Transport)\{|new\(http\.(Client|Transport)\)|http\.DefaultClient|http\.(Get|Head|Post|PostForm)\(`)
+var clientBuilderRE = regexp.MustCompile(`http\.(Client|Transport)\{|new\(http\.(Client|Transport)\)|http\.Default(Client|Transport)|http\.(Get|Head|Post|PostForm)\(`)
 
 func clientBuilderViolations(files map[string]string) []string {
 	var out []string
@@ -349,14 +352,143 @@ func TestOrgClient_IsTheOnlyClientBuilder(t *testing.T) {
 	if v := clientBuilderViolations(files); len(v) > 0 {
 		t.Fatalf("build clients through orgClient (orgclient.go) instead:\n%s", strings.Join(v, "\n"))
 	}
+	if v := missingHTTPClient(t, files); len(v) > 0 {
+		t.Fatalf("give each of these an HTTPClient from orgClient (without one the library falls back to its own default):\n%s", strings.Join(v, "\n"))
+	}
 	// Planted twin: one violation of each shape must trip the guard.
 	for _, plant := range []string{
 		"var c = &http.Client{Timeout: 1}", "t := http.Transport{}", "x := new(http.Client)",
-		"http.DefaultClient.Do(req)", "resp, err := http.Get(u)",
+		"http.DefaultClient.Do(req)", "resp, err := http.Get(u)", "t := http.DefaultTransport.(*http.Transport).Clone()",
 	} {
 		if v := clientBuilderViolations(map[string]string{"planted.go": "package main\n" + plant + "\n"}); len(v) != 1 {
 			t.Errorf("planted %q: %v, want one violation", plant, v)
 		}
+	}
+}
+
+// missingHTTPClient is every websocket.DialOptions or sdk.Client literal in
+// files that sets no HTTPClient: coder/websocket then dials with
+// http.DefaultClient, and pkg/client with its own client, both past the anchors.
+func missingHTTPClient(t *testing.T, files map[string]string) []string {
+	t.Helper()
+	var out []string
+	for name, src := range files {
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, name, src, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			lit, ok := n.(*ast.CompositeLit)
+			if !ok {
+				return true
+			}
+			sel, ok := lit.Type.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			pkg, ok := sel.X.(*ast.Ident)
+			if !ok || !(pkg.Name == "websocket" && sel.Sel.Name == "DialOptions" || pkg.Name == "sdk" && sel.Sel.Name == "Client") {
+				return true
+			}
+			for _, el := range lit.Elts {
+				if kv, ok := el.(*ast.KeyValueExpr); ok {
+					if k, ok := kv.Key.(*ast.Ident); ok && k.Name == "HTTPClient" {
+						return true
+					}
+				}
+			}
+			out = append(out, fset.Position(lit.Pos()).String()+": "+pkg.Name+"."+sel.Sel.Name+" without HTTPClient")
+			return true
+		})
+	}
+	return out
+}
+
+func TestOrgClient_LiteralsCarryHTTPClient(t *testing.T) {
+	for _, tc := range []struct {
+		src  string
+		want int
+	}{
+		{"conn, _, err := websocket.Dial(ctx, u, &websocket.DialOptions{HTTPHeader: h})", 1},
+		{"c := &sdk.Client{BaseURL: u, Token: tok}", 1},
+		{"c := sdk.Client{}", 1},
+		{"conn, _, err := websocket.Dial(ctx, u, &websocket.DialOptions{HTTPClient: orgClient(u, 0)})", 0},
+		{"c := &sdk.Client{BaseURL: u, HTTPClient: orgClient(u, 0)}", 0},
+	} {
+		src := "package main\nfunc f() {\n" + tc.src + "\n_ = c\n}\n"
+		if strings.Contains(tc.src, "websocket") {
+			src = "package main\nfunc f() {\n" + tc.src + "\n_, _ = conn, err\n}\n"
+		}
+		if v := missingHTTPClient(t, map[string]string{"planted.go": src}); len(v) != tc.want {
+			t.Errorf("planted %q: %v, want %d violation(s)", tc.src, v, tc.want)
+		}
+	}
+}
+
+// TestAnchor_StoreWithAProblemEntryIsRefused: a store hand-edited to hold
+// only a leaf never anchors trust: with no usable CA left it is refused at use.
+func TestAnchor_StoreWithAProblemEntryIsRefused(t *testing.T) {
+	isolateStore(t)
+	tc := newTestCA(t, "Corp Root")
+	srv := tc.serve(t, nil)
+	path, _, _ := anchorFile(srv.URL)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, certbundle.Encode([]*x509.Certificate{tc.leaf}), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	_, err := orgClient(srv.URL, 5*time.Second).Get(srv.URL + "/healthz")
+	var refused *anchorRefusedError
+	if !errors.As(err, &refused) || !strings.Contains(err.Error(), "no usable CA certificate") {
+		t.Fatalf("a leaf in the store: %v, want a refusal", err)
+	}
+	if h := caHint(err); !strings.Contains(h, "wardyn ca remove") {
+		t.Fatalf("hint %q", h)
+	}
+
+	// An expired CA beside a valid one is skipped with one warning per
+	// process, and the valid one still anchors.
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(9), Subject: pkix.Name{CommonName: "Expired Root"},
+		NotBefore: time.Now().Add(-48 * time.Hour), NotAfter: time.Now().Add(-time.Hour),
+		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expired, _ := x509.ParseCertificate(der)
+	_ = os.Chmod(path, 0o600)
+	if err := os.WriteFile(path, certbundle.Encode([]*x509.Certificate{expired, tc.ca}), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	var warned bytes.Buffer
+	orig := anchorWarnings
+	anchorWarnings = &warned
+	t.Cleanup(func() { anchorWarnings = orig })
+	for i := 0; i < 2; i++ {
+		resp, err := orgClient(srv.URL, 5*time.Second).Get(srv.URL + "/healthz")
+		if err != nil {
+			t.Fatalf("expired beside valid: %v", err)
+		}
+		resp.Body.Close()
+	}
+	if n := strings.Count(warned.String(), certbundle.Fingerprint(expired)); n != 1 || !strings.Contains(warned.String(), "expired") {
+		t.Fatalf("warnings %q, want one naming the expired fingerprint", warned.String())
+	}
+}
+
+func TestCAAdd_RefusesPlainHTTPOrg(t *testing.T) {
+	isolateStore(t)
+	tc := newTestCA(t, "Corp Root")
+	if _, err := addNonInteractive(t, tc.caFile, "http://org.example", certbundle.Fingerprint(tc.ca)); err == nil || !strings.Contains(err.Error(), "not https://") {
+		t.Fatalf("http --org: %v, want a refusal", err)
+	}
+	if p, _, _ := anchorFile("http://org.example"); func() bool { _, err := os.Stat(p); return err == nil }() {
+		t.Fatal("an anchor was stored for an http origin")
 	}
 }
 

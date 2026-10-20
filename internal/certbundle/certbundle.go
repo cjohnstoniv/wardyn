@@ -15,6 +15,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 )
@@ -93,6 +94,37 @@ func Parse(raw []byte, now time.Time) ([]Entry, error) {
 		return nil, errors.New("the bundle holds no PEM certificate")
 	}
 	return out, nil
+}
+
+// LoadFile reads an anchor file for use: it opens the file once, checks it on
+// that descriptor (openChecked), and parses the certificates from the same
+// descriptor. Unusable entries (expired, not yet valid, not a CA) are skipped,
+// one warning each naming the fingerprint and the reason; a file with no
+// usable CA left is refused.
+func LoadFile(path string, now time.Time) (certs []*x509.Certificate, warnings []string, err error) {
+	f, err := openChecked(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer f.Close()
+	raw, err := io.ReadAll(io.LimitReader(f, MaxBytes+1))
+	if err != nil {
+		return nil, nil, err
+	}
+	entries, err := Parse(raw, now)
+	if err != nil {
+		return nil, nil, fmt.Errorf("refusing the CA file %s: %w", path, err)
+	}
+	for _, e := range entries {
+		if e.Problem != "" {
+			warnings = append(warnings, fmt.Sprintf("skipping %s in %s: %s", e.Fingerprint, path, e.Problem))
+		}
+	}
+	certs = Usable(entries)
+	if len(certs) == 0 {
+		return nil, warnings, fmt.Errorf("refusing the CA file %s: it holds no usable CA certificate", path)
+	}
+	return certs, warnings, nil
 }
 
 // Usable is the entries with no Problem.

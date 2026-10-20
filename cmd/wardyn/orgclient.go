@@ -8,12 +8,14 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/certbundle"
@@ -116,31 +118,34 @@ func anchorFile(raw string) (path, origin string, err error) {
 	return filepath.Join(dir, name), u.Scheme + "://" + u.Host, nil
 }
 
-// storedAnchors is the anchors stored for origin, nil when there are none.
-// A file that fails certbundle.CheckFile or does not parse is an error.
+// storedAnchors is the usable anchors stored for origin, nil when there are
+// none. certbundle.LoadFile checks the file on the descriptor it reads; a
+// skipped entry is warned about once per process, and a file it refuses is an
+// error.
 func storedAnchors(origin string) ([]*x509.Certificate, error) {
 	path, _, err := anchorFile(origin)
 	if err != nil {
 		// No http(s) origin (or no config dir): nothing can be stored for it.
 		return nil, nil
 	}
-	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+	if _, err := os.Lstat(path); errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
-	if err := certbundle.CheckFile(path); err != nil {
-		return nil, &anchorRefusedError{origin, err}
+	certs, warnings, err := certbundle.LoadFile(path, time.Now())
+	for _, w := range warnings {
+		if _, seen := anchorWarned.LoadOrStore(w, true); !seen {
+			fmt.Fprintln(anchorWarnings, "wardyn: warning:", w)
+		}
 	}
-	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, &anchorRefusedError{origin, err}
 	}
-	entries, err := certbundle.Parse(raw, time.Now())
-	if err != nil {
-		return nil, &anchorRefusedError{origin, fmt.Errorf("refusing the CA file %s: %w", path, err)}
-	}
-	out := make([]*x509.Certificate, 0, len(entries))
-	for _, e := range entries {
-		out = append(out, e.Cert)
-	}
-	return out, nil
+	return certs, nil
 }
+
+// anchorWarned is the skipped-entry warnings already printed; anchorWarnings
+// is where they go (a var so a test can read them).
+var (
+	anchorWarned   sync.Map
+	anchorWarnings io.Writer = os.Stderr
+)

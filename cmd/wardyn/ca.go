@@ -82,6 +82,9 @@ func caAdd(out io.Writer, in io.Reader, src, org string, given []string, now tim
 	if err != nil {
 		return err
 	}
+	if !strings.HasPrefix(origin, "https://") {
+		return fmt.Errorf("nothing was added: --org %s is not https://, and an anchor only applies to a TLS connection", org)
+	}
 	raw, err := readBundle(src)
 	if err != nil {
 		return err
@@ -258,7 +261,8 @@ func writeAnchors(path string, pemBytes []byte) error {
 	if err := os.Rename(tmp.Name(), path); err != nil {
 		return err
 	}
-	return certbundle.CheckFile(path)
+	_, _, err = certbundle.LoadFile(path, time.Now())
+	return err
 }
 
 func containsCert(set []*x509.Certificate, c *x509.Certificate) bool {
@@ -302,22 +306,17 @@ func caList(out io.Writer, now time.Time) error {
 	sort.Strings(files)
 	for _, f := range files {
 		fmt.Fprintf(out, "%s\n  file: %s\n", strings.TrimSuffix(filepath.Base(f), ".pem"), f)
-		if err := certbundle.CheckFile(f); err != nil {
-			fmt.Fprintf(out, "  mode: %v\n", err)
+		certs, warnings, err := certbundle.LoadFile(f, now)
+		for _, w := range warnings {
+			fmt.Fprintf(out, "  warning: %s\n", w)
+		}
+		if err != nil {
+			fmt.Fprintf(out, "  refused: %v\n", err)
 			continue
 		}
 		fmt.Fprintln(out, "  mode: ok")
-		raw, err := os.ReadFile(f)
-		if err != nil {
-			return err
-		}
-		entries, err := certbundle.Parse(raw, now)
-		if err != nil {
-			fmt.Fprintf(out, "  unreadable: %v\n", err)
-			continue
-		}
-		for _, e := range entries {
-			fmt.Fprintf(out, "  %s\n    expires: %s\n    %s\n", e.Cert.Subject, e.Cert.NotAfter.UTC().Format(time.RFC3339), e.Fingerprint)
+		for _, c := range certs {
+			fmt.Fprintf(out, "  %s\n    expires: %s\n    %s\n", c.Subject, c.NotAfter.UTC().Format(time.RFC3339), certbundle.Fingerprint(c))
 		}
 	}
 	return nil
@@ -400,7 +399,7 @@ func caVerify(out io.Writer, target string) error {
 		return nil
 	}
 	chain := resp.TLS.VerifiedChains[0]
-	fmt.Fprintf(out, "signed by: the Wardyn CA for this organisation: this connection is intercepted by %s\n", chain[len(chain)-1].Subject)
+	fmt.Fprintf(out, "signed by: the organisation's CA, added with `wardyn ca add`: this connection is intercepted by %s\n", chain[len(chain)-1].Subject)
 	fmt.Fprintln(out, "(interception is a heuristic: the chain verifies only through a root that is not a system root)")
 	return nil
 }

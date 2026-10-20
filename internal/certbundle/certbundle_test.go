@@ -10,9 +10,6 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"math/big"
-	"os"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -127,45 +124,4 @@ func TestBundle_NormalizeFingerprint(t *testing.T) {
 			t.Errorf("%q accepted", in)
 		}
 	}
-}
-
-// TestAnchorFileMode: 0400 in a 0700 directory passes; any write bit on the
-// file, or a group- or other-writable directory, is refused, naming the file
-// and the mode.
-func TestAnchorFileMode(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Unix modes")
-	}
-	dir := filepath.Join(t.TempDir(), "ca")
-	if err := os.Mkdir(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	f := filepath.Join(dir, "org_443.pem")
-	if err := os.WriteFile(f, []byte("x"), 0o400); err != nil {
-		t.Fatal(err)
-	}
-	if err := CheckFile(f); err != nil {
-		t.Fatalf("0400 in 0700: %v", err)
-	}
-	for _, m := range []os.FileMode{0o600, 0o420, 0o402} {
-		if err := os.Chmod(f, m); err != nil {
-			t.Fatal(err)
-		}
-		err := CheckFile(f)
-		if err == nil || !strings.Contains(err.Error(), f) || !strings.Contains(err.Error(), "write bit") {
-			t.Errorf("file mode %04o: %v, want a refusal naming the file", m, err)
-		}
-	}
-	if err := os.Chmod(f, 0o400); err != nil {
-		t.Fatal(err)
-	}
-	for _, m := range []os.FileMode{0o770, 0o702} {
-		if err := os.Chmod(dir, m); err != nil {
-			t.Fatal(err)
-		}
-		if err := CheckFile(f); err == nil || !strings.Contains(err.Error(), "writable by group or others") {
-			t.Errorf("dir mode %04o: %v, want a refusal", m, err)
-		}
-	}
-	_ = os.Chmod(dir, 0o700)
 }

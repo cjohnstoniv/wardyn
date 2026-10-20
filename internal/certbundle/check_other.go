@@ -5,12 +5,26 @@
 
 package certbundle
 
-import "os"
+import (
+	"fmt"
+	"os"
+)
 
-// CheckFile on a platform without Unix modes checks only that the file
-// exists: Windows guards a per-user profile directory with its ACL, which
-// os.FileMode does not report.
-func CheckFile(path string) error {
-	_, err := os.Stat(path)
-	return err
+// openChecked on a platform without Unix modes checks only that the target is
+// a regular file: Windows guards a per-user profile directory with its ACL,
+// which os.FileMode does not report.
+func openChecked(path string) (*os.File, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	fi, err := f.Stat()
+	if err == nil && !fi.Mode().IsRegular() {
+		err = fmt.Errorf("refusing the CA file %s: not a regular file", path)
+	}
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	return f, nil
 }
