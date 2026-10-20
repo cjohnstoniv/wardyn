@@ -225,6 +225,33 @@ func TestRunnerHubWiringPG_SessionWithoutCapsKeepsConnectBeforeDisconnect(t *tes
 	}
 }
 
+// The caps event's last failure is stored with its time and whether it is ongoing, read back on the
+// runner's row, and kept by a later report that carries none.
+func TestRunnerCapsPG_LastFailureIsStoredAndKept(t *testing.T) {
+	_, cfg, rn, _, _, _ := runnerExitAPIFixture(t)
+	ctx := t.Context()
+	st := cfg.Store.(store.PG)
+	srv := New(cfg)
+	session := uuid.NewString()
+	if err := st.BeginRunnerInventory(ctx, rn.ID, session); err != nil {
+		t.Fatal(err)
+	}
+	at := srv.cfg.Now().Add(-time.Minute).UTC().Truncate(time.Millisecond)
+	send := func(f *runnerwire.Failure) {
+		data := mustJSON(runnerwire.Caps{Version: "0.10.0", LastFailure: f})
+		srv.capsFromRunner(ctx, rn.ID, session, runnerwire.Event{Kind: runnerwire.EventCaps, Data: data})
+	}
+	send(&runnerwire.Failure{Stage: runnerwire.StageRelay, At: at, Ongoing: true})
+	send(nil)
+	got, err := st.GetRunner(ctx, rn.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LastFailure == nil || got.LastFailure.Stage != "relay" || !got.LastFailure.At.Equal(at) || !got.LastFailure.Ongoing {
+		t.Fatalf("stored failure = %+v, want relay at %v, ongoing", got.LastFailure, at)
+	}
+}
+
 // A superseded session's caps, handled after the runner's next session reported its own, write
 // nothing over them: the version, machine name, architecture and retire capability stay the current
 // session's.

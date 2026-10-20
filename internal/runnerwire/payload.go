@@ -113,6 +113,10 @@ type Caps struct {
 	// Arch is the Docker engine's CPU architecture ("amd64" or "arm64"), stored as the runner's arch;
 	// omitted when the engine could not be asked.
 	Arch string `json:"arch,omitempty"`
+	// LastFailure is the stage the runner's last attempt to connect or start stopped at, and when: the
+	// organisation shows it on the runner's row. A stage and a time only, never an error's text. Absent
+	// when the runner has none (or is older than 0.10).
+	LastFailure *Failure `json:"last_failure,omitempty"`
 	// BYOISelftest says the runner serves MethodSelftest; absent (an older
 	// runner) refuses a BYOI task run rather than skip its check.
 	BYOISelftest bool `json:"byoi_selftest,omitempty"`

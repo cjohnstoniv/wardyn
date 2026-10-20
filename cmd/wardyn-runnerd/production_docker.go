@@ -65,7 +65,7 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 	defer cli.Close()
 	eng, err := readyEngine(ctx, cli, "docker engine not reachable (set DOCKER_HOST to the engine's socket if it is not the default)", opts.network, want)
 	if err != nil {
-		return runnerRuntime{}, err
+		return runnerRuntime{}, atStage(runnerwire.StageEngine, err)
 	}
 	relay := newLocalRelay(ctx)
 	// The decision sink before the runtime: its startup containment stops the runs' proxies, and one
@@ -83,7 +83,9 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 		return runnerRuntime{}, errors.Join(err, sink.Close())
 	}
 	// The runtime first: its startup containment pass stops lapsed runs even when the check below fails.
-	rt, err := localRunnerRuntime(ctx, identity, stateDir, sub, docker.SandboxRef, relay, dockerCapacity, sink.extras(sub, ev))
+	extras := sink.extras(sub, ev)
+	extras.lastFailure = opts.status.failure
+	rt, err := localRunnerRuntime(ctx, identity, stateDir, sub, docker.SandboxRef, relay, dockerCapacity, extras)
 	if err != nil {
 		return runnerRuntime{}, errors.Join(err, sink.Close())
 	}
@@ -92,11 +94,23 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 	if err != nil {
 		return runnerRuntime{}, errors.Join(err, rt.close())
 	}
+	opts.status.relayChanged(true, "")
 	if err := sink.use(pair.bind); err != nil {
 		return runnerRuntime{}, errors.Join(fmt.Errorf("decision sink: %w", err), rt.close())
 	}
 	relay.use(pair)
 	slog.InfoContext(ctx, "run relay reachable", "engine", eng.desc, "listen", pair.bind, "target", pair.target)
+	rt.run = watchRelay(rt.run, relayWatch{
+		check: func(ctx context.Context) error { return tryRelayPair(ctx, sub.ProbeRelay, eng, pair) }, every: relayRecheckEvery,
+		report: func(ctx context.Context, reachable bool, err error) {
+			logRelayChange(ctx, reachable, err, pair)
+			reason := ""
+			if err != nil {
+				reason = err.Error()
+			}
+			opts.status.relayChanged(reachable, reason)
+			rt.refreshCaps(ctx)
+		}}, relay.sessionUp)
 	return rt, nil
 }
 
@@ -234,15 +248,16 @@ func chooseRelay(ctx context.Context, d *docker.Driver, image string, eng docker
 		err = d.EnsureProxyImage(ctx)
 	}
 	if err != nil {
-		return relayPair{}, fmt.Errorf("relay: the proxy image %s is not on this engine and could not be pulled (a registry that needs a login: docker pull it as this user first): %w", image, err)
+		return relayPair{}, atStage(runnerwire.StageImage, fmt.Errorf("relay: the proxy image %s is not on this engine and could not be pulled (a registry that needs a login: docker pull it as this user first): %w", image, err))
 	}
-	return findRelay(ctx, d.ProbeRelay, eng, want)
+	pair, err := findRelay(ctx, d.ProbeRelay, eng, want)
+	return pair, atStage(runnerwire.StageRelay, err)
 }
 
 // newLocalRelay is the relay for a Docker runtime; only the docker build has
 // one. It listens nowhere until use and a run's Ensure.
 func newLocalRelay(ctx context.Context) *localRelay {
-	return &localRelay{ctx: ctx, listeners: map[uint16]net.Listener{}, conns: map[net.Conn]*runnerwire.Peer{}}
+	return &localRelay{ctx: ctx, listeners: map[uint16]net.Listener{}, conns: map[net.Conn]*runnerwire.Peer{}, sessionUp: make(chan struct{}, 1)}
 }
 
 // ensureInternalNetwork creates the proxy sidecars' bridge when it is missing,
@@ -325,6 +340,8 @@ type runtimeExtras struct {
 	noPosture bool
 	// arch is the reported architecture; "" reads the engine's.
 	arch string
+	// lastFailure is the failure the caps event reports; nil reports none.
+	lastFailure func() *runnerwire.Failure
 	// options are the manager's substrate options; started runs once the manager exists, before
 	// the startup containment pass (the k8s runner's fence replay and first proxy list).
 	options offline.Options
@@ -398,6 +415,31 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		// admission until required containment actually succeeds.
 		slog.WarnContext(ctx, "runner startup containment will retry", "error", err)
 	}
+	// sendCaps reports the runner's classes, capacity and last failure over peer: at each connect, and
+	// again when the run relay is lost or regained.
+	sendCaps := func(ctx context.Context, peer *runnerwire.Peer) error {
+		_, keeps := sub.(runner.SandboxEnder)
+		support, err := sub.Classes(ctx)
+		if err != nil {
+			return err
+		}
+		// A host that cannot say its name reports none, and keeps the machine name it had.
+		machine, _ := os.Hostname()
+		arch := extra.arch
+		if arch == "" {
+			arch = engineArch(ctx)
+		}
+		var failure *runnerwire.Failure
+		if extra.lastFailure != nil {
+			failure = extra.lastFailure()
+		}
+		data, err := runnerwire.Marshal(runnerwire.Caps{Support: support, Version: version.String(), MachineName: machine, Arch: arch, Capacity: capacity(ctx), LastFailure: failure, BYOISelftest: dispatcher.Selftests(), Retire: true, Resident: dispatcher.Residents(), EndsUnkept: !keeps})
+		if err != nil {
+			return err
+		}
+		return peer.EventAck(ctx, runnerwire.Event{Kind: runnerwire.EventCaps, Data: data})
+	}
+	var live livePeer
 	hooks := runnerwire.RunnerHooks{
 		Call: dispatcher.Call,
 		// The org never opens a stream toward a runner: a relay is the
@@ -411,22 +453,7 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		// erase runs (lock order: Resident, then Manager).
 		Revoked: func(ctx context.Context) error { return errors.Join(manager.Revoked(ctx), resident.EraseAll(ctx)) },
 		Replay: func(ctx context.Context, peer *runnerwire.Peer) error {
-			_, keeps := sub.(runner.SandboxEnder)
-			support, err := sub.Classes(ctx)
-			if err != nil {
-				return err
-			}
-			// A host that cannot say its name reports none, and keeps the machine name it had.
-			machine, _ := os.Hostname()
-			arch := extra.arch
-			if arch == "" {
-				arch = engineArch(ctx)
-			}
-			data, err := runnerwire.Marshal(runnerwire.Caps{Support: support, Version: version.String(), MachineName: machine, Arch: arch, Capacity: capacity(ctx), BYOISelftest: dispatcher.Selftests(), Retire: true, Resident: dispatcher.Residents(), EndsUnkept: !keeps})
-			if err != nil {
-				return err
-			}
-			if err := peer.EventAck(ctx, runnerwire.Event{Kind: runnerwire.EventCaps, Data: data}); err != nil {
+			if err := sendCaps(ctx, peer); err != nil {
 				return err
 			}
 			// Posture only gates runner_resident delivery; a refused report
@@ -439,6 +466,7 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 			return manager.Replay(ctx, peer)
 		},
 		Online: func(peer *runnerwire.Peer, _ bool) {
+			live.set(peer)
 			manager.Online(peer)
 			streams.Online(peer)
 			relay.Online(peer)
@@ -447,6 +475,7 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 			}
 		},
 		StreamOffline: func(peer *runnerwire.Peer) {
+			live.clear(peer)
 			streams.Offline(peer)
 			relay.Offline(peer)
 		},
@@ -462,13 +491,40 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		}()
 		return manager.Run(ctx)
 	}
-	return runnerRuntime{hooks: hooks, run: run, close: func() error {
+	refresh := func(ctx context.Context) {
+		peer := live.get()
+		if peer == nil {
+			return // offline: the next connect reports it
+		}
+		ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		if err := sendCaps(ctx, peer); err != nil {
+			slog.WarnContext(ctx, "runner could not report its state to the organisation", "error", err)
+		}
+	}
+	return runnerRuntime{hooks: hooks, run: run, refreshCaps: refresh, close: func() error {
 		err := errors.Join(manager.Close(), relay.Close())
 		if extra.closeAlso != nil {
 			err = errors.Join(err, extra.closeAlso())
 		}
 		return err
 	}}, nil
+}
+
+// livePeer is the session that is up, for a report outside a connect.
+type livePeer struct {
+	mu   sync.Mutex
+	peer *runnerwire.Peer
+}
+
+func (l *livePeer) set(p *runnerwire.Peer) { l.mu.Lock(); l.peer = p; l.mu.Unlock() }
+func (l *livePeer) get() *runnerwire.Peer  { l.mu.Lock(); defer l.mu.Unlock(); return l.peer }
+func (l *livePeer) clear(p *runnerwire.Peer) {
+	l.mu.Lock()
+	if l.peer == p {
+		l.peer = nil
+	}
+	l.mu.Unlock()
 }
 
 // evidenceForwarder breaks the construction cycle: the driver needs the manager's evidence store,

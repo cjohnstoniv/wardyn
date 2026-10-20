@@ -8,7 +8,9 @@
 // switched off, show "Not counted" for Available: their capacity is never offered. Below 640px each
 // resource stacks with its own labels, so no column is cut off behind a sideways scroll.
 import * as React from "react";
+import { relativeTime } from "../../../lib/format";
 import type { RunnerKind } from "../../../lib/types/runner-pools";
+import type { RunnerFailure } from "../../../lib/types/runners";
 import { RES, RUNNER_KIND } from "../../wardyn/copy/runner-pools";
 import { RUNNER } from "../../wardyn/copy/runners";
 import { Notice } from "../../wardyn/notice";
@@ -102,6 +104,23 @@ export function OfflineNote({ neverConnected = false }: { neverConnected?: boole
         {neverConnected
           ? RES.NEVER_CONNECTED_NOTE.map((part, i) => (i % 2 ? <code key={i} className="font-mono">{part}</code> : part))
           : RES.OFFLINE_NOTE}
+      </Notice>
+    </div>
+  );
+}
+
+/**
+ * Why the runner last failed to connect, start or reach its run relay, as the runner reported it: the
+ * sentence for its stage and when. Warning while the failure is going on, else informational.
+ */
+export function FailureNote({ failure }: { failure?: RunnerFailure }) {
+  if (!failure) return null;
+  const sentence = RES.FAILURE_STAGE[failure.stage];
+  if (!sentence) return null;
+  return (
+    <div className="mt-2" data-failure-note>
+      <Notice tone={failure.ongoing ? "warning" : "info"} live>
+        {failure.ongoing ? RES.FAILURE_ONGOING(sentence) : RES.FAILURE_LAST(sentence, relativeTime(failure.at))}
       </Notice>
     </div>
   );

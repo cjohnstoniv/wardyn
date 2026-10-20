@@ -85,6 +85,13 @@ type resumeRuntimeFixture struct {
 
 func newResumeRuntimeFixture(t *testing.T) *resumeRuntimeFixture {
 	t.Helper()
+	return newResumeRuntimeFixtureWith(t, runtimeExtras{}, nil)
+}
+
+// newResumeRuntimeFixtureWith is the fixture with the runtime's extras, and onEvent told each event the
+// organisation's end receives.
+func newResumeRuntimeFixtureWith(t *testing.T, extra runtimeExtras, onEvent func(runnerwire.Event)) *resumeRuntimeFixture {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	t.Cleanup(cancel)
 	pub, key, err := ed25519.GenerateKey(rand.Reader)
@@ -96,7 +103,7 @@ func newResumeRuntimeFixture(t *testing.T) *resumeRuntimeFixture {
 		peers: make(chan *runnerwire.Peer, 2), conns: make(chan *resumeObservedConn, 2), connected: make(chan error, 2), hubDone: make(chan error, 2),
 		entered: make(chan struct{}), release: make(chan struct{}), frames: make(chan runnerwire.Frame, 8)}
 	f.runtime, err = runnerRuntimeWith(ctx, runneridentity.Identity{RunnerID: f.runnerID, PrivateKey: key}, f.stateDir, f.sub,
-		func(id uuid.UUID) string { return "fake-" + id.String() }, newLocalRelay(ctx), unsized, runtimeExtras{})
+		func(id uuid.UUID) string { return "fake-" + id.String() }, newLocalRelay(ctx), unsized, extra)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +118,12 @@ func newResumeRuntimeFixture(t *testing.T) *resumeRuntimeFixture {
 			return remote.Admission{Substrate: f.remote, Link: f.link,
 				Pending:        func(context.Context) ([]runnerwire.PendingAction, error) { return nil, nil },
 				BeginInventory: func(context.Context, string) error { return nil },
-				StatePage:      func(context.Context, string, runnerwire.StatePage) error { return nil }, Event: func(context.Context, runnerwire.Event) error { return nil }}, nil
+				StatePage:      func(context.Context, string, runnerwire.StatePage) error { return nil }, Event: func(_ context.Context, ev runnerwire.Event) error {
+					if onEvent != nil {
+						onEvent(ev)
+					}
+					return nil
+				}}, nil
 		},
 	})
 	t.Cleanup(hub.Close)
@@ -248,4 +260,32 @@ func TestLocalRuntimeResumeReplaysRetainedFramesBeforeNewSpool(t *testing.T) {
 	resumed.Close()
 	resumeAwait(t, f.ctx, f.connected)
 	resumeAwait(t, f.ctx, f.hubDone)
+}
+
+// The caps event reports the runner's last failure at each connect, and the runtime reports again over the
+// session that is up when the run relay is lost, so the organisation need not wait for a reconnect.
+func TestCapsCarryTheLastFailureAndARefreshReportsTheRelay(t *testing.T) {
+	var failure atomic.Pointer[runnerwire.Failure]
+	at := time.Now().UTC().Truncate(time.Second)
+	failure.Store(&runnerwire.Failure{Stage: runnerwire.StageProxy, At: at})
+	caps := make(chan runnerwire.Caps, 4)
+	f := newResumeRuntimeFixtureWith(t, runtimeExtras{lastFailure: failure.Load}, func(ev runnerwire.Event) {
+		var c runnerwire.Caps
+		if ev.Kind == runnerwire.EventCaps && runnerwire.Unmarshal(ev.Data, &c) == nil {
+			caps <- c
+		}
+	})
+	go func() { f.connected <- f.client.Connect(f.ctx) }()
+	peer := resumeAwait(t, f.ctx, f.peers)
+	defer peer.Close()
+	first := resumeAwait(t, f.ctx, caps)
+	if first.LastFailure == nil || first.LastFailure.Stage != runnerwire.StageProxy || !first.LastFailure.At.Equal(at) || first.LastFailure.Ongoing {
+		t.Fatalf("connect reported %+v", first.LastFailure)
+	}
+	failure.Store(&runnerwire.Failure{Stage: runnerwire.StageRelay, At: at, Ongoing: true})
+	f.runtime.refreshCaps(f.ctx)
+	again := resumeAwait(t, f.ctx, caps)
+	if again.LastFailure == nil || again.LastFailure.Stage != runnerwire.StageRelay || !again.LastFailure.Ongoing {
+		t.Fatalf("refresh reported %+v", again.LastFailure)
+	}
 }

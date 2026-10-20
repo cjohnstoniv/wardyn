@@ -69,6 +69,10 @@ type RunnerView struct {
 	Capacity     *RunnerCapacity    `json:"capacity,omitempty"`
 	Classes      []ConfinementClass `json:"classes,omitempty"`
 	AllowedRoots []string           `json:"allowed_roots,omitempty"`
+	// LastFailure is where the runner said its last attempt to connect, start or reach its run relay
+	// stopped, and when: runner_asserted, stored, and absent until it reports one. The console writes
+	// the sentence for the stage.
+	LastFailure *RunnerFailure `json:"last_failure,omitempty"`
 	// Folders says the runner shares folders on its computer with runs elsewhere (a folder-only
 	// runner, 0.10 on), read like Capacity.
 	Folders bool `json:"folders,omitempty"`

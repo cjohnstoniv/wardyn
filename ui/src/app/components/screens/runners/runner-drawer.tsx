@@ -20,7 +20,7 @@ import { useSecurityOperator } from "../../wardyn/operator-context";
 import { Mono } from "../../wardyn/code-block";
 import { Button } from "../../ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "../../ui/sheet";
-import { Hint, KindChip, OfflineNote, ResourceTable, RunsLine } from "./resource-table";
+import { FailureNote, Hint, KindChip, OfflineNote, ResourceTable, RunsLine } from "./resource-table";
 import { amountsText, runnerRes } from "./resources";
 import { ArchText, MachineText, PoolLinks } from "./runner-card";
 import { RunnerChip, TrustChip } from "./runner-chip";
@@ -140,6 +140,7 @@ export function RunnerDrawer({
                     <p>{RES.LIMITS_NOT_SET}</p>
                   )}
                   {!runner.online && <OfflineNote neverConnected={claimed && !runner.last_seen_at} />}
+                  <FailureNote failure={runner.last_failure} />
                   <Hint>{RUNNER_V6.OWNER_ONLY}</Hint>
                   {runner.usage.reported && (
                     <Hint>

@@ -293,3 +293,20 @@ test("My runner: a runner that registered but never connected names the service 
     "This runner registered but has never connected to this server. On that computer, check that wardyn-runnerd runs as a service (wardyn-runnerd setup installs one) and read its log: ~/Library/Logs/wardyn/runnerd.log on macOS, journalctl --user -u wardyn-runnerd on Linux. Behind a proxy, the service needs its own HTTPS_PROXY.",
   );
 });
+
+// ATT-FU (#3296): a runner that could not connect shows the stage it reported, in the sentence for that stage. The
+// e2e server keeps runners off, so the person's runner list is answered here.
+test("My runner: the stage the runner last failed at shows under its row", async ({ page }) => {
+  const none = { runs: 0, cpu_millis: 0, memory_mib: 0, disk_mib: 0 };
+  const stuck = {
+    id: "r-proxy", name: "mbp-proxy", state: "claimed", online: false, key_fingerprint: "SHA256:3Jd1d8…k2Q9", key_fingerprint_abbreviated: true,
+    version: "0.10.0", created_at: aheadByHours(-2), claimed_at: aheadByHours(-1.5), last_seen_at: aheadByHours(-1), kind: "self_hosted", pools: [],
+    last_failure: { stage: "proxy", at: aheadByHours(-5) },
+    usage: { online: false, in_use: none, available: none, disk_capped: true },
+  };
+  await page.route("**/api/v1/me/runners*", (route) => (route.request().method() === "GET" ? route.fulfill({ json: [stuck] }) : route.fallback()));
+  await gotoConsole(page, "user");
+  await navTo(page, "Your account");
+  await page.getByRole("button", { name: /^My runner/ }).click();
+  await expect(page.locator("[data-failure-note]")).toHaveText("Last problem the runner reported (5h ago): The runner's proxy refused its connection or did not answer.");
+});

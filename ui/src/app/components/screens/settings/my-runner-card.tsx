@@ -28,7 +28,7 @@ import { Button } from "../../ui/button";
 import { ConfirmDialog } from "../runners/confirm-dialog";
 import { LimitsDialog } from "../runners/limits-dialog";
 import { registerCommand, StartRunnerSteps } from "../runners/mint-token-dialog";
-import { Hint, KindChip, OfflineNote, ResourceTable, RunsLine, Sec } from "../runners/resource-table";
+import { FailureNote, Hint, KindChip, OfflineNote, ResourceTable, RunsLine, Sec } from "../runners/resource-table";
 import { amountsText, proposeLimits, runnerRes } from "../runners/resources";
 import { ArchText, MachineText } from "../runners/runner-card";
 import { RunnerChip } from "../runners/runner-chip";
@@ -101,6 +101,7 @@ function ClaimedRow({ r, pools, onRevoke, onEditLimits }: { r: RunnerView; pools
         {offline && <span className="text-meta text-muted-foreground">{r.last_seen_at ? MY_RUNNER.LAST_SEEN(relativeTime(r.last_seen_at)) : RUNNER.NEVER_CONNECTED}</span>}
       </div>
       {offline && !r.last_seen_at && <OfflineNote neverConnected />}
+      <FailureNote failure={r.last_failure} />
       {r.version && <p className="text-meta text-muted-foreground">{`${RUNNER.VERSION} ${r.version}`}</p>}
       <div>
         <MachineSec r={r} />

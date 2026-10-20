@@ -38,6 +38,9 @@ func (f *runnerRegistrationFake) RecordRunnerCaps(_ context.Context, id uuid.UUI
 		row.MachineName = cmp.Or(r.MachineName, row.MachineName)
 		row.Arch = cmp.Or(r.Arch, row.Arch)
 	}
+	if r.Failure != nil {
+		row.LastFailure = r.Failure
+	}
 	row.LastSeenAt = &now
 	f.rows[id] = row
 	return true, nil
@@ -69,6 +72,49 @@ func TestRunnerCapsRecordTheVersionAndLastSeen(t *testing.T) {
 	f.lock.Unlock()
 	if got.Version != "0.9.3-test" || got.LastSeenAt == nil {
 		t.Fatalf("runner row = version %q, last seen %v; want 0.9.3-test and a time", got.Version, got.LastSeenAt)
+	}
+}
+
+// A caps event's last failure is kept when its stage is on the closed list and its time is sane, shows on the
+// runner's row, and is never stored from anything else; an event without one leaves the held failure.
+func TestRunnerCapsKeepOnlyAClosedStageAndASaneTime(t *testing.T) {
+	srv, f, _ := newRunnerRegistrationServer(t)
+	row := f.addRunner(srv, "alice", "laptop", types.RunnerClaimed, time.Hour)
+	at := srv.cfg.Now().Add(-time.Minute).UTC()
+	send := func(failure *runnerwire.Failure) {
+		t.Helper()
+		data, _ := json.Marshal(runnerwire.Caps{Version: "0.10.0", LastFailure: failure})
+		if err := srv.EventFromRunner(context.Background(), row.ID, runnerwire.Event{Kind: runnerwire.EventCaps, Data: data}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	held := func() *types.RunnerFailure {
+		f.lock.Lock()
+		defer f.lock.Unlock()
+		return f.rows[row.ID].LastFailure
+	}
+	send(&runnerwire.Failure{Stage: runnerwire.StageTLS, At: at})
+	if got := held(); got == nil || got.Stage != "tls" || !got.At.Equal(at) || got.Ongoing {
+		t.Fatalf("held failure = %+v, want tls at %v", got, at)
+	}
+	if v := srv.runnerView(f.rows[row.ID], types.RunnerTally{}, true); v.LastFailure == nil || v.LastFailure.Stage != "tls" {
+		t.Fatalf("the runner's row shows %+v", v.LastFailure)
+	}
+	for name, bad := range map[string]*runnerwire.Failure{
+		"text for a stage": {Stage: "dial https://u:secret@proxy.corp: refused", At: at},
+		"unknown stage":    {Stage: "hacked", At: at},
+		"no time":          {Stage: runnerwire.StageProxy},
+		"a time far ahead": {Stage: runnerwire.StageProxy, At: srv.cfg.Now().Add(48 * time.Hour)},
+		"nothing reported": nil,
+	} {
+		send(bad)
+		if got := held(); got == nil || got.Stage != "tls" {
+			t.Errorf("%s replaced the held failure: %+v", name, got)
+		}
+	}
+	send(&runnerwire.Failure{Stage: runnerwire.StageRelay, At: at, Ongoing: true})
+	if got := held(); got == nil || got.Stage != "relay" || !got.Ongoing {
+		t.Fatalf("held failure = %+v, want the ongoing relay failure", got)
 	}
 }
 

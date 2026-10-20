@@ -38,6 +38,29 @@ export interface RunnerPosture {
   evidence: string;
 }
 
+/** Go: runnerwire.Stage, the closed list of where a runner's last attempt to connect or start stopped. */
+export type RunnerFailureStage =
+  | "dns"
+  | "proxy"
+  | "network"
+  | "tls"
+  | "upgrade"
+  | "auth"
+  | "registration"
+  | "session"
+  | "engine"
+  | "image"
+  | "relay"
+  | "ca";
+
+/** Go: types.RunnerFailure. What the runner asserted about its last failure: a stage and a time, never an error's text. */
+export interface RunnerFailure {
+  stage: RunnerFailureStage;
+  at: string;
+  /** True while the failure is going on (the run relay); every other stage is over when it is reported. */
+  ongoing?: boolean;
+}
+
 /**
  * Go: types.RunnerView. `owner` is present on the administrators' routes only. On a person's own
  * routes an unclaimed runner's `key_fingerprint` is abbreviated (`key_fingerprint_abbreviated`), so
@@ -74,6 +97,8 @@ export interface RunnerView {
   capacity?: RunnerCapacity;
   classes?: ConfinementClass[];
   allowed_roots?: string[];
+  /** Where the runner said its last attempt to connect, start or reach its run relay stopped, and when: runner-reported, absent until it reports one. */
+  last_failure?: RunnerFailure;
   /** The runner shares folders on its computer with runs elsewhere (`--substrate folders`, 0.10 on); read like `capacity`. */
   folders?: boolean;
   kind: "self_hosted";

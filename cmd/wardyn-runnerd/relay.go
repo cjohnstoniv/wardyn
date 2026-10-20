@@ -52,6 +52,8 @@ type localRelay struct {
 	waiting   int                           // connections in conns yet to send their first byte
 	refused   int                           // closed at the cap since capWarnAt
 	capWarnAt time.Time
+	// sessionUp is told (without blocking) each time a session comes up, so the relay watch checks again.
+	sessionUp chan struct{}
 }
 
 // relayBind admits only Docker's host-gateway address held by the Docker
@@ -215,6 +217,10 @@ func (r *localRelay) Online(peer *runnerwire.Peer) {
 	r.mu.Lock()
 	r.peer = peer
 	r.mu.Unlock()
+	select {
+	case r.sessionUp <- struct{}{}:
+	default:
+	}
 }
 
 // Offline closes every connection peer carried; its streams are reset on

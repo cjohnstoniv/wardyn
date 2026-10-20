@@ -59,6 +59,7 @@ var ErrRunnerClaimMismatch = errors.New("store: runner claim does not match the 
 const runnerCols = `id, owner, name, public_key, key_fingerprint, state, version, created_at, claimed_at,
 	last_seen_at, revoked_at, posture, posture_reported_at, posture_source, org_url_sha256, minted_by, revoked_by, revoke_reason, max_runs, machine_name, arch,
 	owner_kind, trust_class, trust_set_by, trust_set_at, registration_token_id,
+	last_failure_stage, last_failure_at, last_failure_ongoing,
 	` + runnerLimitCols
 
 // prefixedRunnerCols is runnerCols on a query that names the runners table r.
@@ -69,10 +70,13 @@ func scanRunner(row pgx.Row) (types.Runner, error) {
 	var state string
 	var posture []byte
 	var lim limitCols
+	var failStage string
+	var failAt *time.Time
+	var failOngoing bool
 	err := row.Scan(append([]any{&r.ID, &r.Owner, &r.Name, &r.PublicKey, &r.KeyFingerprint, &state, &r.Version, &r.CreatedAt,
 		&r.ClaimedAt, &r.LastSeenAt, &r.RevokedAt, &posture, &r.PostureReportedAt, &r.PostureSource, &r.OrgURLSHA256,
 		&r.MintedBy, &r.RevokedBy, &r.RevokeReason, &r.MaxRuns, &r.MachineName, &r.Arch,
-		&r.OwnerKind, &r.TrustClass, &r.TrustSetBy, &r.TrustSetAt, &r.RegistrationTokenID}, lim.targets()...)...)
+		&r.OwnerKind, &r.TrustClass, &r.TrustSetBy, &r.TrustSetAt, &r.RegistrationTokenID, &failStage, &failAt, &failOngoing}, lim.targets()...)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.Runner{}, ErrNotFound
 	}
@@ -80,6 +84,9 @@ func scanRunner(row pgx.Row) (types.Runner, error) {
 		return types.Runner{}, fmt.Errorf("store: scan runner: %w", err)
 	}
 	r.State = types.RunnerState(state)
+	if failStage != "" && failAt != nil {
+		r.LastFailure = &types.RunnerFailure{Stage: failStage, At: *failAt, Ongoing: failOngoing}
+	}
 	r.Limits = lim.limits(&r.MaxRuns)
 	if err := json.Unmarshal(posture, &r.Posture); err != nil {
 		return types.Runner{}, fmt.Errorf("store: unmarshal runner posture: %w", err)
@@ -253,6 +260,8 @@ func (s PG) TouchRunner(ctx context.Context, id uuid.UUID, version string, now t
 type RunnerCapsReport struct {
 	Version, MachineName, Arch string
 	RetireCapable              bool
+	// Failure is the runner's last failure (stage, time, whether it is going on); nil keeps the one the row holds.
+	Failure *types.RunnerFailure
 }
 
 // RecordRunnerCaps stores session's caps report: last_seen_at and the version, the machine name and
@@ -271,10 +280,20 @@ func (s PG) RecordRunnerCaps(ctx context.Context, id uuid.UUID, session string, 
 			id, session).Scan(&current); err != nil || !current {
 			return err
 		}
+		var failStage string
+		var failAt *time.Time
+		var failOngoing bool
+		if r.Failure != nil {
+			failStage, failAt, failOngoing = r.Failure.Stage, &r.Failure.At, r.Failure.Ongoing
+		}
 		_, err := q.Exec(ctx, `UPDATE runners SET last_seen_at = $2, version = COALESCE(NULLIF($3::text, ''), version),
 			machine_name = CASE WHEN $4::text <> '' AND state <> 'revoked' THEN $4::text ELSE machine_name END,
 			arch = CASE WHEN $5::text <> '' AND state <> 'revoked' THEN $5::text ELSE arch END,
-			retire_capable = $6 WHERE id = $1`, id, now, r.Version, r.MachineName, r.Arch, r.RetireCapable)
+			retire_capable = $6,
+			last_failure_stage = CASE WHEN $7::text <> '' THEN $7::text ELSE last_failure_stage END,
+			last_failure_at = CASE WHEN $7::text <> '' THEN $8::timestamptz ELSE last_failure_at END,
+			last_failure_ongoing = CASE WHEN $7::text <> '' THEN $9::boolean ELSE last_failure_ongoing END
+			WHERE id = $1`, id, now, r.Version, r.MachineName, r.Arch, r.RetireCapable, failStage, failAt, failOngoing)
 		return err
 	})
 	if err != nil {
