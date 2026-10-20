@@ -448,10 +448,14 @@ func pumpAttach(ctx context.Context, pipe *attachPipe) error {
 	// the output half's mode callback, so it needs no lock.
 	var attachMode attachModeState
 
+	// outDone is Half 1's own result too, so an end Half 2 saw first can give
+	// way to the close reason Half 1 is about to read (settleAttachEnd).
+	outDone := make(chan error, 1)
+
 	// Half 1: session output -> stdout. stdout stays byte-identical PTY
 	// output, never control JSON.
 	go func() {
-		errCh <- pipe.output(pumpCtx, func(data []byte) error {
+		err := pipe.output(pumpCtx, func(data []byte) error {
 			if _, werr := os.Stdout.Write(data); werr != nil {
 				return werr
 			}
@@ -460,10 +464,14 @@ func pumpAttach(ctx context.Context, pipe *attachPipe) error {
 		}, func(data []byte) {
 			handleAttachModeFrame(pumpCtx, pipe.resize, fd, oldState, data, &attachMode)
 		})
+		outDone <- err
+		errCh <- err
 		cancel()
 	}()
 
-	// Half 2: stdin -> session input.
+	// Half 2: stdin -> session input. It does not cancel the session on an
+	// error: the session's own close may be what failed the write, and
+	// cancelling would abort Half 1's read of its reason.
 	go func() {
 		buf := make([]byte, 4096)
 		for {
@@ -471,7 +479,6 @@ func pumpAttach(ctx context.Context, pipe *attachPipe) error {
 			if n > 0 {
 				if werr := pipe.input(pumpCtx, buf[:n]); werr != nil {
 					errCh <- werr
-					cancel()
 					return
 				}
 			}
@@ -481,7 +488,6 @@ func pumpAttach(ctx context.Context, pipe *attachPipe) error {
 					return
 				}
 				errCh <- rerr
-				cancel()
 				return
 			}
 		}
@@ -504,7 +510,7 @@ func pumpAttach(ctx context.Context, pipe *attachPipe) error {
 	}()
 
 	// Block until a pump half ends (or, after stdin EOF, the output goes quiet).
-	firstErr := waitAttachEnd(errCh, stdinEOF, activity)
+	firstErr := settleAttachEnd(waitAttachEnd(errCh, stdinEOF, activity), outDone, attachCloseGrace)
 	cancel()
 
 	// Attempt a clean close.
@@ -755,6 +761,33 @@ func isNormalClose(err error) bool {
 	// read.go/write.go), so context.Canceled is a real sentinel here, not just
 	// a string — errors.Is is exact, no substring guessing needed.
 	return errors.Is(err, context.Canceled)
+}
+
+// attachCloseGrace bounds how long an end without a close reason waits for the
+// output half's: longer than localEndGrace, which the local output half may
+// spend waiting for the organisation's close.
+var attachCloseGrace = 3 * time.Second
+
+// settleAttachEnd is the session's end as shown. When the first end carries
+// no WebSocket close (typically a keystroke's write failing because the
+// server just closed the session), it waits up to grace for the output half,
+// which reads the close, and prefers that close: the reason the server gave
+// (session ended, taken over, lease lost, 4409) is what the person sees, as
+// DESIGN-ATTACH 4.4 rows 18-19 require.
+func settleAttachEnd(first error, out <-chan error, grace time.Duration) error {
+	if first == nil || websocket.CloseStatus(first) != -1 {
+		return first
+	}
+	t := time.NewTimer(grace)
+	defer t.Stop()
+	select {
+	case err := <-out:
+		if websocket.CloseStatus(err) != -1 {
+			return err
+		}
+	case <-t.C:
+	}
+	return first
 }
 
 // waitAttachEnd blocks until a pump half reports its end and returns that error.
