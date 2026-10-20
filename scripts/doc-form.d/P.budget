@@ -41,7 +41,8 @@
 # docs/POLICIES.md=18607 adds 187 (0.10.0 VM-B): the port-rule box and the relay residual (#3193).
 # docs/POLICIES.md 19292 = ours 19105 + theirs 18777 - base 18590 at the 0.10 W2 merge of VM-B onto the train.
 # docs/POLICIES.md 19378 = ours 18870 + theirs 19292 - base 18784 at the 0.10 merge of main (W2) into SEC-92.
-docs/POLICIES.md=19378 share=12
+# docs/POLICIES.md 19390 adds 12 over 19378, measured (0.10 OC-API1b): the 5 s bound on a stalled control plane in the deny_with_review row.
+docs/POLICIES.md=19390 share=12
 # 0.9.4 W1 merge +3: L8 and an earlier W1 lane both edited the README; the merged text measures 3 over the sum.
 examples/policies/README.md=1446 share=5
 # docs/POLICIES.md 18013 adds 40 over 17973, measured: a member's private-range workspace clone host.

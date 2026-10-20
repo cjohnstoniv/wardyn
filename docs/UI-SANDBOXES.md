@@ -100,6 +100,7 @@
 | `policy:denied` | it is on the **deny** list | it was refused on purpose; deny always wins |
 | `approval:denied` | a human reviewed this host and said no | stop retrying |
 | `approval:expired` | the host's approval expired, or was cancelled, before anyone decided it | retry: the next request asks again, and a person still has to approve it |
+| `approval:stale` | the host was approved, but its approval could not be re-checked with the control plane for two minutes | retry: the next request asks again, and a person has to approve it again |
 | `policy:method` | the host is allowed, the HTTP method is not | |
 | `policy:port` | the host is allowed on ports 80 and 443 only (the port rule) | ask the operator for an allowlist entry that names the port, `host:port` |
 | `builtin:private-ip` | the target resolved to a private address | the SSRF guard; not policy-tunable |

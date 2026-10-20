@@ -218,7 +218,8 @@
 # docs/AUDIT-ACTIONS.md 49718 = ours 49670 + theirs 49419 - base 49371 at the 0.10 W3 merge of HYBB onto the train.
 # docs/AUDIT-ACTIONS.md 49557 = ours 49373 + theirs 49371 - base 49187 at the 0.10 merge of main (W2) into SEC-1c.
 # docs/AUDIT-ACTIONS.md 49904 = ours 49718 + theirs 49557 - base 49371 at the 0.10 W3 merge of SEC-1c onto the train.
-docs/AUDIT-ACTIONS.md=49904 share=8
+# docs/AUDIT-ACTIONS.md 49991 adds 87 over 49904, measured (0.10 OC-API1b): the approval:stale decision-log row, plus the run.end.set and user_type.delete wording edits from round one.
+docs/AUDIT-ACTIONS.md=49991 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.
