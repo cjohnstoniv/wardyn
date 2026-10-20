@@ -127,12 +127,12 @@ func (s *Server) setupMemberView(ctx context.Context, owner string, present map[
 	}
 	own = map[string]bool{}
 	if s.cfg.Secrets != nil {
-		names, err := reservedFilteredSecretNames(ctx, s.cfg.Secrets.For(owner))
-		if err != nil {
-			slog.WarnContext(ctx, "api: list a person's own secrets for the setup checklist", slog.Any("err", err))
-		}
-		for _, n := range names {
-			own[n] = true
+		// The request's one List of the owner's own rows (no operator fallback), shared with its
+		// ownership checks; a reserved name (a wardyn-provider- credential among them) is no row.
+		for n := range s.ownedSecretNames(ctx, owner) {
+			if !secretsAPIReserved(n) {
+				own[n] = true
+			}
 		}
 	}
 	for _, ws := range workspaces {

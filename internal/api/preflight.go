@@ -202,7 +202,9 @@ func (s *Server) advertisedConfinement(ctx context.Context, req createRunRequest
 func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// Marked before any gate runs, refuseAdminViewLaunch included: every audit row
 	// written under this request carries dry_run (audit.DryRunRecorder).
-	r = r.WithContext(audit.WithDryRun(r.Context()))
+	// One listing of the caller's own secrets for the whole request: the policy
+	// resolution's ownership checks and Review's checklist read the same answer.
+	r = r.WithContext(withOwnedSecretMemo(audit.WithDryRun(r.Context())))
 	ctx := r.Context()
 	// First, before the decode and every gate: a limited call costs no work and
 	// writes no row.
