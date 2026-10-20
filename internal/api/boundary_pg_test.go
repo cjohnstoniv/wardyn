@@ -430,15 +430,15 @@ func TestBoundaryWriteNeedsMode(t *testing.T) {
 	}
 }
 
-// TestBoundaryHardLimitsWriteGated: no write puts the boundary in hard_limits until it bounds every
-// brokered credential path (#3238): the PUT answers 409 and the boundary stays as it was.
-func TestBoundaryHardLimitsWriteGated(t *testing.T) {
+// TestBoundaryHardLimitsWritable: a security admin's write puts the boundary in hard_limits, now
+// that it bounds every brokered credential path a run is given (#3238).
+func TestBoundaryHardLimitsWritable(t *testing.T) {
 	e := newGovEnvOn(t, throwawayPGPool(t))
 	w := e.call(e.alice, http.MethodPut, "/api/v1/governance/boundary", boundaryJSON(testBoundary(types.BoundaryHardLimits)))
-	if w.Code != http.StatusConflict || wireReason(t, w) != reasonBoundaryHardLimitsGated {
-		t.Fatalf("hard_limits write = %d %s, want 409 %s", w.Code, w.Body, reasonBoundaryHardLimitsGated)
+	if w.Code != http.StatusOK {
+		t.Fatalf("hard_limits write = %d %s, want 200", w.Code, w.Body)
 	}
-	if got, err := e.pg.GetBoundary(context.Background()); err != nil || got.HardLimits() || got.Spec.AllowedDomains != nil {
-		t.Errorf("boundary after a refused write = %+v (%v)", got, err)
+	if got, err := e.pg.GetBoundary(context.Background()); err != nil || !got.HardLimits() || got.Spec.AllowedDomains == nil {
+		t.Errorf("boundary after the write = %+v (%v), want hard_limits with its allowlist", got, err)
 	}
 }

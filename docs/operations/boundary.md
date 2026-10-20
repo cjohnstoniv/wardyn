@@ -10,7 +10,6 @@
 
 - `no_limits` matches the organisation's boundary, so it narrows nothing. An install with no boundary row is in `no_limits`, and every run resolves exactly as before.
 - `hard_limits` is a Wardyn allow and deny list inside the organisation's boundary.
-- `hard_limits` cannot be set yet. A `PUT` that names it answers `409 boundary_hard_limits_gated` until the boundary bounds every brokered credential path a run is given (#3238). A `no_limits` document can be written and dry-run now.
 
 ## What the boundary holds
 

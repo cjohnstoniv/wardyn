@@ -57,16 +57,6 @@ func validateBoundary(b *types.BoundaryWrite) error {
 	return validateBoundarySpec(b.Spec, b.Limits)
 }
 
-// boundaryHardLimitsGated refuses a write into hard_limits: the boundary cannot be switched on until
-// it bounds every brokered credential path a run is given (#3238).
-func boundaryHardLimitsGated(b types.BoundaryWrite) *profileWriteError {
-	if b.Mode != types.BoundaryHardLimits {
-		return nil
-	}
-	return writeRefusal(http.StatusConflict, reasonBoundaryHardLimitsGated,
-		"hard_limits cannot be set yet: the Wardyn boundary does not bound every brokered credential path a run is given, so it stays in no_limits until it does")
-}
-
 // validateBoundarySpec refuses knobs the boundary cannot hold. They are judged by the validator a
 // stored policy passes (an unnamed confinement floor reads as the lowest), so a boundary allowlist,
 // deny list or grant is spelled as a policy's is.
@@ -130,10 +120,6 @@ func (s *Server) handlePutBoundary(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusBadRequest, reasonBoundaryInvalid, "invalid Wardyn boundary: "+err.Error())
 		return
 	}
-	if g := boundaryHardLimitsGated(body); g != nil {
-		writeErrorReason(w, g.status, g.reason, g.msg)
-		return
-	}
 	cur, err := bs.GetBoundary(r.Context())
 	if err != nil {
 		writeServerError(w, r, "read the Wardyn boundary", err)
@@ -180,9 +166,6 @@ func applyBoundaryChange(_ *Server, r *http.Request, q store.Querier, ch types.G
 	}
 	if err := validateBoundary(&held); err != nil {
 		return govApplied{}, writeRefusal(http.StatusBadRequest, reasonBoundaryInvalid, "invalid Wardyn boundary: %s", err.Error())
-	}
-	if g := boundaryHardLimitsGated(held); g != nil {
-		return govApplied{}, g
 	}
 	if err := store.LockGovernanceTarget(ctx, q, govKindBoundary); err != nil {
 		return govApplied{}, err
