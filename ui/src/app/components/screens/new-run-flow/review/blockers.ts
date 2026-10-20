@@ -14,6 +14,7 @@ import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { NR_RUN } from "../../../wardyn/copy/new-run/run";
 import { NR_SHAPE } from "../../../wardyn/copy/new-run/shape";
 import { NR_TEMPLATES } from "../../../wardyn/copy/new-run/templates";
+import { DRIVE_REFUSAL_REASON } from "../../../../lib/drive-refusals";
 import type { SetupItem } from "../../../../lib/types/preflight";
 import type { TemplateSetupNeed } from "../../../../lib/types/templates";
 import {
@@ -98,7 +99,7 @@ export function buildBlockers(input: BlockerInput): Blocker[] {
   }
   if (input.templateUnread) out.push({ id: "template:unread", kind: "template_unread", text: NR_REVIEW.BLOCKER_STALE });
   // The server refuses the same fact in its own words; the keep blocker already says it.
-  if (input.refusal && !(input.keepLimit && input.refusal.reason === "member_drive_limit_reached")) {
+  if (input.refusal && !(input.keepLimit && input.refusal.reason === DRIVE_REFUSAL_REASON.MEMBER_LIMIT_REACHED)) {
     const field = (FIELD_OF_REASON as Record<string, string | undefined>)[input.refusal.reason];
     out.push({ id: "refusal", kind: "refusal", text: input.refusal.text, to: locationOfHome(homeOfReason(input.refusal.reason)), ...(field && { field }) });
   }

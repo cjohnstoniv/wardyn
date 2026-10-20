@@ -86,7 +86,9 @@ describe("keepDoor", () => {
     expect(keepDoor(undefined, false)).toEqual({ kind: "today" });
     expect(keepDoor(CREATE_ALLOWED, false)).toEqual({ kind: "today" });
     expect(keepDoor(CREATE_DOORS.disabled, false)).toEqual({ kind: "today" });
-    expect(keepDoor(CREATE_ALLOWED, true)).toEqual({ kind: "closed", reason: undefined });
+    // A rerun that already keeps the folder, with the switch off: closed, and the tick says why.
+    expect(keepDoor(CREATE_ALLOWED, true)).toEqual({ kind: "closed", reason: NR_FILES.CREATE_DISABLED });
+    expect(keepDoor(undefined, true)).toEqual({ kind: "closed", reason: undefined });
   });
 
   it("is open when the switch is on and the person may create, and says Docker's size is not enforced", () => {
