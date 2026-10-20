@@ -222,6 +222,7 @@ export const GOVERNANCE = {
   EFFECT_NOTE: "Takes effect on their next run. A run already dispatched keeps the ceiling it started with.",
   SIGNIN_NOTE:
     "A change to someone's groups in your identity provider reaches Wardyn only when they next sign in, so they keep their current ceiling until then — or, for an API token, until it is re-minted.",
+  COMBINE_TITLE: "How assignments combine",
   COL_PROFILE: "Profile",
   COL_PRIORITY: "Priority",
   // The same em dash PEOPLE.ADDED_CHART_NA renders, kept as its OWN key

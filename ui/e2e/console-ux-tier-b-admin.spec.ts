@@ -112,7 +112,7 @@ test.describe("Tier B layout rulings at desktop width", () => {
     await page.setViewportSize(WIDE);
     await gotoConsole(page, "admin");
     await navTo(page, "Governance");
-    const grid = page.getByText(GOV.SIGNIN_NOTE).locator("xpath=following-sibling::div[1]");
+    const grid = page.getByRole("heading", { name: GOV.ADD_TITLE }).locator("xpath=following-sibling::div[1]");
     await expect(grid).toBeVisible();
     await expectWhoColumnFitsSwitch(grid.locator("xpath=./*[1]"));
   });

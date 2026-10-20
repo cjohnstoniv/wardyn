@@ -420,12 +420,28 @@ describe("GovernanceScreen — delete: the pre-fill and the race are different r
 });
 
 describe("GovernanceScreen — assignments and the resolved preview", () => {
-  it("renders both halves of the effect fact, and the precedence rule", async () => {
+  it("with rows: the lede, and the precedence rule and both halves of the effect fact in a closed disclosure", async () => {
     renderScreen();
     await screen.findByText(GOV.ASSIGN_TITLE);
-    expect(screen.getByText(GOV.PRECEDENCE)).toBeInTheDocument();
-    expect(screen.getByText(GOV.EFFECT_NOTE)).toBeInTheDocument();
-    expect(screen.getByText(GOV.SIGNIN_NOTE)).toBeInTheDocument();
+    expect(screen.getByText(GOV.ASSIGN_LEAD)).toBeInTheDocument();
+    expect(screen.queryByText(GOV.EMPTY_ASSIGN_TITLE)).toBeNull();
+    const combine = screen.getByTestId("governance-assignments-combine");
+    expect(combine).not.toHaveAttribute("open");
+    expect(within(combine).getByText(GOV.COMBINE_TITLE)).toBeInTheDocument();
+    expect(within(combine).getByText(GOV.PRECEDENCE)).toBeInTheDocument();
+    expect(within(combine).getByText(GOV.EFFECT_NOTE)).toBeInTheDocument();
+    expect(within(combine).getByText(GOV.SIGNIN_NOTE)).toBeInTheDocument();
+  });
+
+  it("empty: no lede, the empty state and the form, and the same closed disclosure under the form", async () => {
+    renderScreen(snapshot({ assignments: [] }));
+    await screen.findByText(GOV.EMPTY_ASSIGN_TITLE);
+    expect(screen.queryByText(GOV.ASSIGN_LEAD)).toBeNull();
+    const combine = screen.getByTestId("governance-assignments-combine");
+    expect(combine).not.toHaveAttribute("open");
+    expect(within(combine).getByText(GOV.PRECEDENCE)).toBeInTheDocument();
+    const form = screen.getByRole("heading", { name: GOV.ADD_TITLE });
+    expect(form.compareDocumentPosition(combine) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("priority is shown only inside the group tier — a user row reads PRIORITY_NA", async () => {

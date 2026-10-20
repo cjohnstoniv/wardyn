@@ -24,7 +24,7 @@
 //
 // Every product string comes from the copy modules. This file adds none.
 import * as React from "react";
-import { Loader2, Users } from "lucide-react";
+import { ChevronRight, Loader2, Users } from "lucide-react";
 import { toast } from "sonner";
 import { PendingChangeError } from "../../../lib/api/core";
 import {
@@ -133,8 +133,7 @@ export function AssignmentsBlock({
       <section className="mt-6 overflow-hidden rounded-xl border border-border bg-card">
         <div className="px-6 pt-5">
           <h2 className="text-sm font-medium text-foreground">{GOV.ASSIGN_TITLE}</h2>
-          <p className="mt-1 text-body text-muted-foreground">{GOV.ASSIGN_LEAD}</p>
-          <Note>{GOV.PRECEDENCE}</Note>
+          {snapshot.assignments.length > 0 && <p className="mt-1 text-body text-muted-foreground">{GOV.ASSIGN_LEAD}</p>}
           {submitted && <SubmittedNote />}
         </div>
         <div className="mt-4">
@@ -210,6 +209,17 @@ export function AssignmentsBlock({
             onSubmitted={held}
           />
         )}
+
+        <details data-testid="governance-assignments-combine" className="group border-t border-border px-6 py-3">
+          <summary className="flex cursor-pointer select-none items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground">
+            <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" />
+            {GOV.COMBINE_TITLE}
+          </summary>
+          <p className="mt-2 max-w-[82ch] text-body text-muted-foreground">{GOV.PRECEDENCE}</p>
+          {/* Two halves of one fact — see this file's header. */}
+          <p className="mt-1 max-w-[82ch] text-body text-muted-foreground">{GOV.EFFECT_NOTE}</p>
+          <p className="mt-1 max-w-[82ch] text-body text-muted-foreground">{GOV.SIGNIN_NOTE}</p>
+        </details>
       </section>
 
       <ResolvedPreview snapshot={snapshot} />
@@ -291,9 +301,6 @@ function AddAssignmentForm({
   return (
     <div className="mt-4 border-t border-border px-6 py-5">
       <h3 className="text-sm font-medium text-foreground">{GOV.ADD_TITLE}</h3>
-      {/* Two halves of one fact — see this file's header. */}
-      <p className="mt-1 max-w-[82ch] text-body text-muted-foreground">{GOV.EFFECT_NOTE}</p>
-      <p className="mt-1 max-w-[82ch] text-body text-muted-foreground">{GOV.SIGNIN_NOTE}</p>
 
       <div className="mt-4 grid gap-4 md:grid-cols-2 lg:grid-cols-[auto_1fr_1fr]">
         <Field label={PERM.FIELD_WHO} hint={whoHint}>
