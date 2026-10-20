@@ -168,6 +168,9 @@ type Proxy struct {
 	localClient *http.Client
 	// streamMoved is set when a tunnel or MITM stream moves a byte (activity.go).
 	streamMoved atomic.Bool
+	// signin caches the sign-in credentials the control plane accepted
+	// (desktop_signin_lane.go).
+	signin signinChecks
 
 	// dial connects to a vetted "ip:port" target. Both the plain-HTTP
 	// transport and the CONNECT path use this single seam; tests override it.
@@ -523,6 +526,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// A self-lapsing proxy serves nothing while closed or lapsed (§6.2).
 	if !p.lapse.serving() {
 		refuseClosed(w)
+		return
+	}
+	// The person's sign-in lane has its own listener and rules (desktop_signin_lane.go).
+	if onSigninLane(r.Context()) {
+		p.serveSignin(w, r)
 		return
 	}
 	// A via_org destination is the organisation's to decide: no spool row, no
@@ -889,7 +897,13 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 			p.emitLLMBlindOnce(host, port, http.MethodConnect)
 		}
 	}
+	p.openTunnel(w, r, host, port, target, log, p.countActivity)
+}
 
+// openTunnel dials an allowed CONNECT's destination and pipes the client leg
+// to it opaquely. count wraps the client leg (the activity counter on the
+// agent's listener; the sign-in lane passes none).
+func (p *Proxy) openTunnel(w http.ResponseWriter, r *http.Request, host string, port int, target string, log *egress.DecisionLog, count func(net.Conn) net.Conn) {
 	hj, ok := w.(http.Hijacker)
 	if !ok {
 		http.Error(w, "hijacking unsupported", http.StatusInternalServerError)
@@ -941,7 +955,11 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// never see the client's opening flight. Same readerConn the MITM lane uses
 	// for the same reason.
 	watch := newTunnelWatch(upstream)
-	first, err := tunnel(p.countActivity(&readerConn{Conn: clientConn, r: brw.Reader}), watch)
+	var client net.Conn = &readerConn{Conn: clientConn, r: brw.Reader}
+	if count != nil {
+		client = count(client)
+	}
+	first, err := tunnel(client, watch)
 	p.tunnelEnded(log, host, watch, first, err)
 }
 

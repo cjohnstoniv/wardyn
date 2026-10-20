@@ -195,6 +195,7 @@ run_id
 run_token
 scrub_responses
 self_lapse
+signin_listen
 trusted_ca_pem
 unattended
 upstream_proxy_no_proxy

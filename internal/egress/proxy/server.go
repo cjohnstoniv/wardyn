@@ -45,6 +45,8 @@ type Server struct {
 	maskKey uuid.UUID
 	// allowedPeers is Config.AllowedPeers.
 	allowedPeers []netip.Prefix
+	// signinListen is Config.SigninListen: the person's sign-in lane, "" = none.
+	signinListen string
 }
 
 // NewServer wires a Proxy from a validated Config and dependencies. It mints
@@ -354,8 +356,10 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		ReadTimeout:       0, // streaming/tunnels: no whole-request deadline
 		WriteTimeout:      0,
 		IdleTimeout:       90 * time.Second,
+		// Marks the sign-in listener's connections (desktop_signin_lane.go).
+		ConnContext: signinConnContext,
 	}
-	out := &Server{proxy: p, http: srv, sink: sink, allowedPeers: cfg.AllowedPeers}
+	out := &Server{proxy: p, http: srv, sink: sink, allowedPeers: cfg.AllowedPeers, signinListen: cfg.SigninListen}
 
 	// Start the run-token renewer, which keeps this sidecar's short-TTL token
 	// fresh for the life of the run and, alongside it, the activity reporter
@@ -392,19 +396,35 @@ func startRunTokenRenewer(out *Server, p *Proxy, ts *tokenSource, cfg *Config, c
 
 // ListenAndServe starts serving and blocks until the server stops.
 func (s *Server) ListenAndServe() error {
-	var err error
-	if len(s.allowedPeers) == 0 {
-		err = s.http.ListenAndServe()
-	} else {
-		var ln net.Listener
-		if ln, err = net.Listen("tcp", cmp.Or(s.http.Addr, ":http")); err == nil {
-			err = s.http.Serve(&peerListener{Listener: ln, allowed: s.allowedPeers})
+	// The sign-in lane listens first, so a port it cannot have fails the start.
+	if s.signinListen != "" {
+		ln, err := s.listen(s.signinListen)
+		if err != nil {
+			return err
 		}
+		go func() {
+			if err := s.http.Serve(signinListener{ln}); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				slog.Error("wardyn-proxy: the sign-in listener stopped", slog.Any("err", err))
+			}
+		}()
+	}
+	ln, err := s.listen(cmp.Or(s.http.Addr, ":http"))
+	if err == nil {
+		err = s.http.Serve(ln)
 	}
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil
+}
+
+// listen opens addr, serving only AllowedPeers when they are set.
+func (s *Server) listen(addr string) (net.Listener, error) {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil || len(s.allowedPeers) == 0 {
+		return ln, err
+	}
+	return &peerListener{Listener: ln, allowed: s.allowedPeers}, nil
 }
 
 // shutdownDrainReserve is the most of Shutdown's deadline held back for the sink drain.
