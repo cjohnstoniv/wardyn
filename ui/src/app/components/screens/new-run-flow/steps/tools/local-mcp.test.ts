@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { CLAUDE_UNGATED, CODEX, MCP_LOCAL, MCP_LOCAL_ENV, withFacts } from "../../../../../lib/new-run-fixtures/scenarios/tools-harness";
 import { SCENARIO_ACCESS } from "../../../../../lib/new-run-fixtures/scenarios/tools";
@@ -19,6 +21,34 @@ const ENV_CREDENTIAL = MCP_LOCAL_ENV;
 const REMOTE_ROW: AccessRow = { ...LOCAL_ROW, id: "inline:1", name: "issue-tracker", mcp: { server_key: "issue-tracker", transport: "http", harnesses: ["codex-cli"] }, source: { kind: "component", id: "inline:1" } };
 const DRAFT: RunIntent = { components: [mcpLocalRef("docs-search", "npx -y @example/mcp-server@1.4.2", ["docs.example.com"], { secret_name: "DOCS_TOKEN", delivery: { mode: "env", var: "DOCS_TOKEN" } })] };
 const withRule = (tool: string, effect: "hold" | "deny" | "allow", id = "codex-cli"): RunIntent => ({ ...DRAFT, tools: [{ id, kind: "harness", tool_rules: [{ tool, effect }] }] });
+
+function repoRoot(): string {
+  let dir = resolve(process.cwd());
+  for (let i = 0; i < 8; i++) {
+    if (existsSync(join(dir, "go.mod"))) return dir;
+    dir = dirname(dir);
+  }
+  throw new Error("go.mod not found walking up from " + process.cwd());
+}
+
+// serverCases reads the ok and bad maps of TestComponentMCP_StdioLaunch: each `"name": localMCP("cmd", "arg", ...)`
+// row whose arguments are plain string literals is a command line; any other row is skipped by name.
+function serverCases(): { accepts: string[]; refuses: string[]; skipped: string[] } {
+  const src = readFileSync(join(repoRoot(), "internal/types/component_mcp_test.go"), "utf8");
+  const body = src.slice(src.indexOf("func TestComponentMCP_StdioLaunch("));
+  const out = { accepts: [] as string[], refuses: [] as string[], skipped: [] as string[] };
+  for (const [key, list] of [["ok", out.accepts], ["bad", out.refuses]] as const) {
+    const from = body.indexOf(`${key} := map[string]types.ComponentDefinition{`);
+    const block = body.slice(from, body.indexOf("\n\t}\n", from));
+    for (const m of block.matchAll(/^\t\t"([^"]+)":\s*(.*),$/gm)) {
+      const call = /^localMCP\(((?:"[^"\\]*"(?:, )?)+)\)$/.exec(m[2]);
+      if (call) list.push([...call[1].matchAll(/"([^"]*)"/g)].map((a) => a[1]).join(" "));
+      else out.skipped.push(m[1]);
+    }
+  }
+  out.skipped.sort();
+  return out;
+}
 
 describe("the command line", () => {
   it("splits a command and its arguments, with no shell", () => {
@@ -44,36 +74,32 @@ describe("the command line", () => {
     expect(NR_TOOLS.MCP_ERR_NPX_FLAG).toBe("npx takes only -y before the package here; name the package as its first argument.");
   });
 
-  // The server's own cases, copied from TestComponentMCP_StdioLaunch (internal/types/component_mcp_test.go): the Go
-  // side is not on every tree this runs on, so its table is kept here. Change one, change the other.
-  // Not mirrored: a url, a missing launch, a control byte inside one argument and the argument-count cap, which the
-  // command line field cannot express or has no sentence for.
-  const SERVER_ACCEPTS = [
-    "npx -y @example/mcp-server@1.4.2 --root /work",
-    "npx mcp-server-x@0.1.0-rc.1",
-    "/usr/local/bin/mcp-files --read-only",
-    "/opt/mcp/server",
-  ];
-  const SERVER_REFUSES: [string, ReturnType<typeof commandProblem>][] = [
-    ["bin/server", "program"],
-    ["node server.js", "program"],
-    ["uvx foo", "program"],
-    ["/opt/../bin/sh", "program"],
-    ["/opt/mcp/", "program"],
-    ["npx -y @example/mcp-server", "unpinned"],
-    ["npx @example/mcp-server@latest", "unpinned"],
-    ["npx @example/mcp-server@^1.4.2", "unpinned"],
-    ["npx -y", "unpinned"],
-    ["npx --package=@example/mcp-server@1.4.2 mcp-server", "npx-flag"],
-    ["npx --package x", "npx-flag"],
-    ["/usr/bin/npx @example/mcp-server@1", "unpinned"],
-  ];
+  // The server's own cases, read by path from TestComponentMCP_StdioLaunch (internal/types/component_mcp_test.go), as
+  // wire-parity.test.ts reads Go source. Not mirrored: a url, a missing launch, a control byte inside one argument and
+  // the argument-count cap, which the command line field cannot express or has no sentence for.
+  const NOT_MIRRORED = ["control byte", "no launch", "too many args", "url"];
+  const server = serverCases();
 
-  it.each(SERVER_ACCEPTS)("accepts what the server accepts: %s", (text) => {
+  it("reads every server case it does not skip by name", () => {
+    expect(server.skipped).toEqual(NOT_MIRRORED);
+    expect(server.accepts.length).toBeGreaterThanOrEqual(4);
+    expect(server.refuses.length).toBeGreaterThanOrEqual(9);
+  });
+
+  it.each(server.accepts)("accepts what the server accepts: %s", (text) => {
     expect(commandProblem(text)).toBeUndefined();
   });
 
-  it.each(SERVER_REFUSES)("refuses what the server refuses: %s", (text, problem) => {
+  it.each(server.refuses)("refuses what the server refuses: %s", (text) => {
+    expect(commandProblem(text)).toBeDefined();
+  });
+
+  // Not in the server's table, kept from the client's own cases.
+  it.each([
+    ["uvx foo", "program"],
+    ["/opt/mcp/", "program"],
+    ["npx --package x", "npx-flag"],
+  ] as const)("refuses %s as %s", (text, problem) => {
     expect(commandProblem(text)).toBe(problem);
   });
 
