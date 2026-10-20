@@ -3580,6 +3580,49 @@ the sandbox, is still loaded, and the agent runs as the uid that owns it.
 - The approver there is the human in the pane.
 - codex-cli has no hold lane, so there is no gate for a repository config to pre-empt.
 
+### CLI sign-in: the session secret lives on the laptop (opt-in)
+
+`WARDYN_CLI_SIGN_IN` (off by default) lets `wardyn login` sign a CLI in through the console. The CLI then holds a
+session secret (`wdc_`), an Ed25519 device key and a 1-hour access token (`wdn_`, kind `cli_access`). The secret and the
+key DO live on the laptop: in the keychain (macOS Keychain, Windows Credential Manager, the Linux Secret Service), or,
+on a computer with no keychain, in a file only its owner can read. The server keeps only a SHA-256 of the secret.
+
+What protects it:
+- A copied secret alone cannot refresh. Every refresh and token call carries a signature by the device key over the
+  organisation origin, the route, the session id, the SHA-256 of the secret and the time (within 5 minutes), so a secret
+  taken from a log, a TLS-inspecting proxy or one file of a backup is refused, and a refused proof changes nothing.
+- Every refresh rotates the secret. A secret the session already rotated past, presented with a valid proof, ends the
+  session and every token it holds, with a `cli.session.reuse_detected` row.
+- Every refresh re-checks the cuts a browser session honours: a person revoke, a sessions cut (Sign out everywhere, a
+  console sign-out, an identity-provider back-channel logout), deactivation, the role stamp
+  (`WARDYN_ROLE_STAMP_TTL`) and the `api_token` feature. A revoke, Sign out everywhere, a console sign-out and a
+  per-computer sign-out also end the session and stop its access and admin tokens at once, in the same transaction as
+  the cut, so nothing waits for the hour.
+- A session lasts 30 days by default (`WARDYN_CLI_SESSION_TTL`, at most 90), ends after 7 days without a refresh
+  (`WARDYN_CLI_SESSION_IDLE`), and the file store is capped at 7 days. The access token lasts 1 hour, so a role or
+  feature change reaches a live CLI within the hour.
+- An admin's `cli_access` token acts as role `user`. Admin work needs `wardyn login --admin`: a fresh browser approval
+  that gives a 1-hour `cli_admin` token, never renewed, which ends with its session.
+- A CLI token cannot mint an API token or approve another sign-in: the mint guards refuse token callers.
+
+What it does not stop:
+- Code already running as the person (malware, a compromised tool) can read the keychain item through the same
+  system call the CLI uses, or read the file, and so holds both the secret and the key. It can refresh until the
+  person's next refresh trips reuse detection, or until a revoke. The keychain protects against copying, sync and
+  backups, not against code running as the person; the file does not protect against backups either. An organisation
+  that wants no file sets `WARDYN_CLI_FILE_STORE=false`.
+- The key is bound in software, not hardware (no Secure Enclave or TPM key).
+- The 1-hour access token is a plain bearer: whoever copies it uses it until it expires or the session ends.
+- The store the CLI reports (keychain or file) is self-asserted, so the 7-day cap and `WARDYN_CLI_FILE_STORE=false`
+  guard against accident, not against a modified CLI.
+- Nothing re-checks the identity provider during a CLI session. A person removed only at the identity provider keeps
+  CLI access until the first of the role-stamp TTL, an admin revoke, SCIM deactivation or the session's end, 30 days by
+  default; a browser session lasts at most 24 hours. Pair CLI sign-in with `WARDYN_ROLE_STAMP_TTL` (24 hours makes the
+  window match the browser's longest).
+- Paste-back sign-in (`WARDYN_CLI_PASTE_SIGN_IN`, off by default) can be phished more easily than the loopback
+  redirect. Its code works once and lasts 5 minutes, the request 10, and the approve page shows the computer name, the
+  code and whether the request came from the approver's own address; that address check is advisory.
+
 ### The unauthenticated metrics listener (opt-in)
 
 - `WARDYN_METRICS_LISTEN` (Helm `metrics.listener.enabled`, off by default) opens a second, plain-HTTP listener that answers `GET /metrics` with **no credential** and `404` to everything else (`api.Server.MetricsListenerHandler`, [`internal/api/metrics_listener.go`](../internal/api/metrics_listener.go)).

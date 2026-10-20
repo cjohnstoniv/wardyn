@@ -193,7 +193,9 @@
 # docs/sdk.md 20060 = ours 19999 + theirs 19743 - base 19682 at the 0.10 W3 merge of HYBB onto the train.
 # docs/sdk.md 19706 = ours 19659 + theirs 19682 - base 19635 at the ATT-SRV merge of main (W2 train).
 # docs/sdk.md 20084 = ours 20060 + theirs 19706 - base 19682 at the 0.10 W4a merge of ATT-SRV onto the train.
-docs/sdk.md=20084 share=21
+# 0.10 ATT-LOGIN-SRV: docs/sdk.md 19886 adds 204 over 19682: twelve CLI sign-in reasons, measured.
+# docs/sdk.md 20288 = ours 20084 + theirs 19886 - base 19682 at the 0.10 W4a merge of ATT-LOGIN-SRV onto the train.
+docs/sdk.md=20288 share=21
 # docs/sdk.md 18691 adds 28 over 18663, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.

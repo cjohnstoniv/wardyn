@@ -749,6 +749,18 @@ start.
 | `person_token_mint_removed` | `POST /people/{principal}/tokens` (securityOps, kept mounted): refused for every caller, 403, whether the person exists or not (#1477). No role creates a token that acts as another person; they sign in and create their own (`POST /me/tokens`). The two shared no-store guards below still answer first. |
 | `mint_no_human` | `POST /people/{principal}/tokens`'s OWN "needs a signed-in human" sentence — NOT shared with `api_token_no_human` below: same shape, different door, different wording, so a different reason. It answers before `person_token_mint_removed`. |
 | `api_token_from_api_token` | Shared, byte-identical, between `POST /people/{principal}/tokens`, `POST /api/v1/tokens` (self-service), `POST /me/invitations/{id}/claim` and the sponsor's `POST /me/service-identities/{name}/tokens`: an API token may not mint another. |
+| `cli_sign_in_rate_limited` | `429` from `POST /cli/sign-ins`, `POST /cli/sign-ins/{id}/token` and `POST /cli/sessions/{id}/refresh`: too many from this address, or too many refreshes of one session. |
+| `cli_sign_in_invalid_request` | `400` from `POST /cli/sign-ins`: the body is malformed; the message names the field. |
+| `cli_paste_sign_in_off` | `403` from `POST /cli/sign-ins`: a paste-back sign-in while `WARDYN_CLI_PASTE_SIGN_IN` is off. |
+| `cli_file_store_off` | `403` from `POST /cli/sign-ins`: the CLI reports the file store while `WARDYN_CLI_FILE_STORE` is off. |
+| `cli_sign_in_pending_cap` | `429` from `POST /cli/sign-ins`: too many sign-ins wait for approval deployment-wide. |
+| `cli_sign_in_not_found` | `404` from `GET /me/cli-sign-ins/{id}`, `/approve` and `/deny`: no such sign-in. |
+| `cli_sign_in_used` | `410` from the same routes: the sign-in was already approved, denied or redeemed. |
+| `cli_sign_in_expired` | `410` from the same routes: the sign-in is older than 10 minutes. |
+| `cli_admin_needs_session` | `409` from `POST /me/cli-sign-ins/{id}/approve`: a `wardyn login --admin` whose computer holds no live CLI sign-in of the approver with that device key. |
+| `cli_sign_in_invalid` | `401` from `POST /cli/sign-ins/{id}/token`: the code, the verifier, the device proof or the sign-in is not valid. One answer for all, so it tells a caller nothing. |
+| `cli_session_invalid` | `401` from `POST /cli/sessions/{id}/refresh`: the session is unknown, ended, expired or idle, was cut or reused, or the proof is bad. Sign in again. |
+| `cli_session_not_found` | `404` from `DELETE /me/cli-sessions/{id}`: no live CLI session of the caller has that id. |
 | `token_lookup_unavailable` | The API-token and delegated-token authentication middlewares' shared shape: the revocation store could not be read to authenticate the bearer. |
 | `invitation_target_invalid` / `invitation_target_unknown` / `invitation_replaces_invalid` / `invitation_ttl_invalid` / `invitation_cap_reached` | `POST /people/{principal}/invitations`: the target is reserved or unknown, `replaces_token_id` is not their admin-minted token, a lifetime is out of range, or ten are pending. |
 | `invitation_list_param_invalid` | `GET /invitations`: `state` is not `pending`, `claimed`, `expired` or `revoked`. |

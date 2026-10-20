@@ -1803,6 +1803,8 @@ Moved to [custom-components.md](operations/custom-components.md#custom-component
 
 Moved to [api-tokens.md](operations/api-tokens.md#per-user-api-tokens-stop-sharing-the-admin-token).
 
+CLI sign-in: `WARDYN_CLI_SIGN_IN` is off by default and needs SSO. On, `wardyn login` signs a CLI in through the console with a device-bound session that renews a 1-hour token ([api-tokens.md](operations/api-tokens.md#cli-sign-in-wardyn-login)); while it is off, the CLI keeps using `WARDYN_TOKEN`.
+
 ### Tokens for a person who never signs in
 
 Moved to [api-tokens.md](operations/api-tokens.md#tokens-for-a-person-who-never-signs-in).
@@ -3991,6 +3993,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0196` (`0196_deprovision_event_pin`) adds `audit_event_id` and `audit_event_at` to `deprovision_jobs` (`0127`'s table): the id and time of the audit event an owed row writes, pinned on its first drain and cleared when the row reopens.
 - `0197` (`0197_run_inner_walls`) adds `inner_walls` to `agent_runs` (`0001`'s table): the harness's own walls a run launched with, under its policy's `harness_inner_walls`.
 - `0198` (`0198_agent_runs_local_folder_status`) adds `local_folder_status` to `agent_runs` (`0001`'s table): the passes a person's folder-only runner made for a run's computer folder, in and back.
+- `0198` (`0198_cli_sign_in`) adds `api_tokens.kind` and `api_tokens.cli_session_id` (`0045`'s table), which mark a CLI sign-in's access and admin tokens and tie them to their CLI session, and creates `cli_sessions` and `cli_sign_ins`.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.

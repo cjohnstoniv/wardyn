@@ -29,10 +29,17 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // liveCheckDef returns the ONE CHECK constraint definition the live database
 // holds for table.column, as Postgres renders it.
+//
+// Every CHECK on the column counts (enumCheckDefs) except the cross-column
+// pairings skipped by name (cliPairingChecks and user_drives_member_managed):
+// each admits no value its column's list does not, and a CHECK of any other
+// shape that touches the column still refuses it.
 //
 // Exactly one, and a second is a failure rather than a merge: two CHECKs on one
 // column are ANDed, so the admitted set is their intersection and no set of
@@ -40,30 +47,9 @@ import (
 // behind — the same rule the text parser's checkGlueRe follows.
 func liveCheckDef(t *testing.T, table, column string) string {
 	t.Helper()
-	rows, err := pgPool(t).Query(context.Background(), `
-		SELECT pg_get_constraintdef(con.oid)
-		FROM pg_constraint con
-		JOIN pg_class rel ON rel.oid = con.conrelid
-		JOIN pg_namespace n ON n.oid = rel.relnamespace
-		JOIN pg_attribute a ON a.attrelid = rel.oid AND a.attnum = ANY (con.conkey)
-		WHERE con.contype = 'c' AND rel.relname = $1 AND a.attname = $2
-		  AND n.nspname = ANY (current_schemas(false))
-		  -- A cross-column CHECK is not the column's enum.
-		  AND con.conname <> 'user_drives_member_managed'`, table, column)
+	defs, err := enumCheckDefs(context.Background(), pgPool(t), table, column)
 	if err != nil {
 		t.Fatalf("read the live CHECK for %s.%s: %v", table, column, err)
-	}
-	defer rows.Close()
-	var defs []string
-	for rows.Next() {
-		var d string
-		if err := rows.Scan(&d); err != nil {
-			t.Fatalf("scan constraintdef: %v", err)
-		}
-		defs = append(defs, d)
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("read constraintdefs: %v", err)
 	}
 	switch len(defs) {
 	case 1:
@@ -278,3 +264,78 @@ type recordingErrorf struct{ n int }
 
 func (r *recordingErrorf) Errorf(string, ...any) { r.n++ }
 func (r *recordingErrorf) Helper()               {}
+
+// cliPairingChecks are migration 0198's named cross-column CHECKs: an ended
+// CLI session has its reason, a loopback sign-in its port, a CLI token its
+// session. None names a value outside its column's list.
+var cliPairingChecks = []string{"cli_sessions_end_pair", "cli_sign_ins_loopback_port", "api_tokens_cli_session_kind"}
+
+// enumCheckDefs are the CHECK definitions on table.column in the connection's
+// schemas, less the cross-column pairings skipped by name. Skipping by name,
+// not by shape, keeps every other CHECK that touches the column counted however
+// Postgres deparses it (= ANY (ARRAY[...]), OR-ed equalities, an array literal,
+// a cast-wrapped VARCHAR list).
+func enumCheckDefs(ctx context.Context, pool *pgxpool.Pool, table, column string) ([]string, error) {
+	rows, err := pool.Query(ctx, `
+		SELECT pg_get_constraintdef(con.oid)
+		FROM pg_constraint con
+		JOIN pg_class rel ON rel.oid = con.conrelid
+		JOIN pg_namespace n ON n.oid = rel.relnamespace
+		JOIN pg_attribute a ON a.attrelid = rel.oid AND a.attnum = ANY (con.conkey)
+		WHERE con.contype = 'c' AND rel.relname = $1 AND a.attname = $2
+		  AND n.nspname = ANY (current_schemas(false))
+		  -- A named cross-column pairing is not the column's enum.
+		  AND con.conname <> 'user_drives_member_managed'
+		  AND NOT (con.conname = ANY ($3::text[]))`, table, column, cliPairingChecks)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var defs []string
+	for rows.Next() {
+		var d string
+		if err := rows.Scan(&d); err != nil {
+			return nil, err
+		}
+		defs = append(defs, d)
+	}
+	return defs, rows.Err()
+}
+
+// The closed-enum guard skips the named CLI pairings and counts every other
+// CHECK that touches an enum column: a planted second list of each shape
+// Postgres deparses, on the column alone or over two columns, fails it.
+func TestPG_ClosedEnumGuardSkipsCrossColumnChecks(t *testing.T) {
+	pool, _ := probeSchemaPool(t)
+	ctx := context.Background()
+	// The pairing takes an allow-listed name; constraint names are per table.
+	if _, err := pool.Exec(ctx, `CREATE TABLE probe_enum (
+		kind  TEXT NOT NULL CHECK (kind IN ('api', 'cli_access')),
+		vkind VARCHAR(20) CHECK (vkind IN ('api', 'cli_access')),
+		sid   UUID,
+		CONSTRAINT api_tokens_cli_session_kind CHECK ((kind = 'api') = (sid IS NULL)))`); err != nil {
+		t.Fatal(err)
+	}
+	defs, err := enumCheckDefs(ctx, pool, "probe_enum", "kind")
+	if err != nil || len(defs) != 1 || !strings.Contains(defs[0], "ANY (ARRAY[") {
+		t.Fatalf("enum CHECKs beside an allow-listed pairing = %v, %v; want only the list", defs, err)
+	}
+	for _, twin := range []struct{ name, column, check string }{
+		{"a second list on the column alone", "kind", `kind IN ('api', 'cli_admin')`},
+		{"a list over two columns", "kind", `kind IN ('api', 'cli_admin') OR sid IS NOT NULL`},
+		{"OR-ed equalities", "kind", `kind = 'api' OR kind = 'cli_admin' OR sid IS NOT NULL`},
+		{"an array literal", "kind", `kind = ANY ('{api,cli_admin}'::text[]) OR sid IS NOT NULL`},
+		{"a single-value IN", "kind", `kind IN ('cli_admin') OR sid IS NOT NULL`},
+		{"a VARCHAR IN", "vkind", `vkind IN ('api', 'cli_admin') OR sid IS NOT NULL`},
+	} {
+		t.Run(twin.name, func(t *testing.T) {
+			if _, err := pool.Exec(ctx, `ALTER TABLE probe_enum ADD CONSTRAINT probe_enum_twin CHECK (`+twin.check+`)`); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _, _ = pool.Exec(ctx, `ALTER TABLE probe_enum DROP CONSTRAINT probe_enum_twin`) })
+			if defs, err := enumCheckDefs(ctx, pool, "probe_enum", twin.column); err != nil || len(defs) != 2 {
+				t.Errorf("with %s the guard reads %v, %v; want both CHECKs, so it refuses the column", twin.check, defs, err)
+			}
+		})
+	}
+}
