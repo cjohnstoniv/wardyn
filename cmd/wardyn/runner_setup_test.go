@@ -48,6 +48,7 @@ type setupRig struct {
 	signIn            bool         // /healthz.cli_sign_in
 	fallback          http.Handler // the sign-in fake, for routes this rig does not answer
 	mintBearer        string
+	mintExpires       time.Time
 	assets            map[string][]byte // download path -> bytes
 }
 
@@ -55,7 +56,8 @@ const setupTestToken = "wdr_0123456789abcdef0123456789abcdef0123456789abcdef0123
 
 func newSetupRig(t *testing.T) *setupRig {
 	t.Helper()
-	r := &setupRig{t: t, home: t.TempDir(), rec: t.TempDir(), binDir: t.TempDir(), runnerID: uuid.New(), online: true, assets: map[string][]byte{}}
+	r := &setupRig{t: t, home: t.TempDir(), rec: t.TempDir(), binDir: t.TempDir(), runnerID: uuid.New(), online: true, assets: map[string][]byte{},
+		mintExpires: time.Now().Add(time.Hour).Truncate(time.Second)}
 	// TLS, because a download base must be https; the default transport trusts this server for the test.
 	r.srv = httptest.NewTLSServer(http.HandlerFunc(r.serve))
 	t.Cleanup(r.srv.Close)
@@ -108,7 +110,7 @@ func (r *setupRig) serve(w http.ResponseWriter, req *http.Request) {
 			_, _ = w.Write([]byte(r.mintBody))
 			return
 		}
-		_ = json.NewEncoder(w).Encode(types.RunnerRegistrationToken{ID: uuid.New(), Token: setupTestToken, ExpiresAt: time.Now().Add(time.Hour)})
+		_ = json.NewEncoder(w).Encode(types.RunnerRegistrationToken{ID: uuid.New(), Token: setupTestToken, ExpiresAt: r.mintExpires})
 	case strings.Contains(p, "tokens"):
 		r.t.Errorf("setup called another mint route: %s %s", req.Method, p)
 		w.WriteHeader(http.StatusTeapot)
@@ -459,8 +461,10 @@ func TestRunnerSetupFailuresLeaveNoHalfClaimedRunner(t *testing.T) {
 	bin, sum := r.fakeRunnerd(r.binDir, 3)
 	pinnedRunnerdSHA256 = sum
 	_, err := r.run("--token", "wdn_personal", "--runnerd", bin)
-	if err == nil || !strings.HasPrefix(err.Error(), "wardyn-runnerd setup did not finish (exit status 3)") {
-		t.Fatalf("err = %v", err)
+	// The expiry is the mint answer's own, not a duration written into the copy.
+	want := fmt.Sprintf(errSetupRunnerdFail, "exit status 3") + fmt.Sprintf(errSetupTokenLeft, r.mintExpires.Local().Format(time.RFC1123))
+	if err == nil || err.Error() != want {
+		t.Fatalf("err = %q\nwant  %q", err, want)
 	}
 	if _, serr := os.Stat(filepath.Join(r.stateDir(), "runner.json")); serr == nil || len(r.called("POST /api/v1/me/runners/"+r.runnerID.String()+"/claim")) != 0 {
 		t.Fatal("a failed runnerd setup left an identity or was claimed")
@@ -471,7 +475,9 @@ func TestRunnerSetupFailuresLeaveNoHalfClaimedRunner(t *testing.T) {
 	bin2, sum2 := r2.fakeRunnerd(r2.binDir, 0)
 	pinnedRunnerdSHA256 = sum2
 	r2.claimStatus = http.StatusForbidden
-	if _, err := r2.run("--token", "wdn_personal", "--runnerd", bin2); err == nil || !strings.HasPrefix(err.Error(), "this computer is registered but not claimed:") {
+	// The lapse is types.RunnerUnclaimedTTL, formatted, not a number written into the copy.
+	lapse := fmt.Sprintf("lapses %d hours after", int(types.RunnerUnclaimedTTL.Hours()))
+	if _, err := r2.run("--token", "wdn_personal", "--runnerd", bin2); err == nil || !strings.HasPrefix(err.Error(), "this computer is registered but not claimed:") || !strings.Contains(err.Error(), lapse) {
 		t.Fatalf("claim refused: err = %v", err)
 	}
 }

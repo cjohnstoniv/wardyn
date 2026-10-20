@@ -134,7 +134,10 @@ func runRunnerSetup(cmd *cobra.Command, c *sdk.Client, f runnerSetupFlags) error
 	}
 	// Step 4: the registration token, only for a computer with no runner identity.
 	oldVersion := copySetupOldVersion
-	var token string
+	var (
+		token   string
+		expires time.Time
+	)
 	if registered {
 		fmt.Fprintf(out, copySetupRegistered+"\n", org)
 		if v, err := c.GetMyRunner(ctx, local.id.RunnerID); err == nil && v.Version != "" {
@@ -145,12 +148,16 @@ func runRunnerSetup(cmd *cobra.Command, c *sdk.Client, f runnerSetupFlags) error
 		if err != nil {
 			return selfMintRefusal(err)
 		}
-		token = minted.Token
-		fmt.Fprintf(out, copySetupMinted+"\n", minted.ExpiresAt.Local().Format(time.RFC1123))
+		token, expires = minted.Token, minted.ExpiresAt
+		fmt.Fprintf(out, copySetupMinted+"\n", expires.Local().Format(time.RFC1123))
 	}
 	// Step 5: wardyn-runnerd setup registers (when given a token), writes and starts the service.
 	if err := runRunnerdSetup(cmd, bin, org, f.name, token); err != nil {
-		return fmt.Errorf(errSetupRunnerdFail, err)
+		msg := fmt.Sprintf(errSetupRunnerdFail, err)
+		if token != "" {
+			msg += fmt.Sprintf(errSetupTokenLeft, expires.Local().Format(time.RFC1123))
+		}
+		return errors.New(msg)
 	}
 	if local, err = findRunnerIdentity(); err != nil {
 		return err
@@ -162,7 +169,7 @@ func runRunnerSetup(cmd *cobra.Command, c *sdk.Client, f runnerSetupFlags) error
 	id := local.id.RunnerID
 	if v, err := c.GetMyRunner(ctx, id); err != nil || v.State != types.RunnerClaimed {
 		if _, err := c.ClaimRunner(ctx, id, local.id.Fingerprint); err != nil {
-			return fmt.Errorf(errSetupClaimLeft, err)
+			return fmt.Errorf(errSetupClaimLeft, err, int(types.RunnerUnclaimedTTL.Hours()))
 		}
 		fmt.Fprintf(out, copySetupClaimed+"\n", id, local.id.Fingerprint)
 	}

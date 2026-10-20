@@ -31,10 +31,11 @@ const (
 	errSetupNoPin         = "this wardyn is a development build and pins no wardyn-runnerd hash, so it cannot check one: use a release wardyn, or run `wardyn-runnerd setup --org %s --token-file <file>` yourself"
 	errSetupHashMismatch  = "%s has SHA-256 %s, but this wardyn pins %s: it was not used. Pass --runnerd <file> with the wardyn-runnerd of version %s, or remove that copy" // source, got, pinned, version
 	errSetupDownload      = "could not download wardyn-runnerd from %s: %v. Pass --runnerd <file>, or --artifact-base <url> for a mirror"
-	errSetupRunnerdFail   = "wardyn-runnerd setup did not finish (%v); its message is above. Run `wardyn runner setup` again once it is fixed: a computer that registered is not registered again, and a token that was not used expires within the hour"
-	errSetupClaimLeft     = "this computer is registered but not claimed: %v; run `wardyn runner setup` again to finish (an unclaimed runner lapses 24 hours after it registered)"
+	errSetupRunnerdFail   = "wardyn-runnerd setup did not finish (%v); its message is above. Run `wardyn runner setup` again once it is fixed: a computer that registered is not registered again"
+	errSetupClaimLeft     = "this computer is registered but not claimed: %v; run `wardyn runner setup` again to finish (an unclaimed runner lapses %d hours after it registered)" // types.RunnerUnclaimedTTL
 	errSetupNotConnected  = "the runner did not connect within %s"
 	errSetupDefaultNoPool = "--default needs --pool"
+	errSetupTokenLeft     = "; the token minted for this run expires %s if it was not used" // the mint answer's expires_at, local time
 	errSetupNoIdentity    = "it left no runner identity for this organisation"
 	errSetupBadIdentity   = "read %s: %w"
 	// Download failures, inside errSetupDownload.
