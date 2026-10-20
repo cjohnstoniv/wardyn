@@ -64,6 +64,7 @@
 # threatmodel/THREAT-MODEL.md 65893 = ours 65659 + theirs 65323 - base 65089 at the 0.10 W4c merge of FEAT-1MCP onto the train.
 # threatmodel/THREAT-MODEL.md 65525 adds 436 over 65089, measured: §4.6 Team drives: one folder a group shares, what bounds it and what it does not close (0.10 FEAT-2TEAM).
 # threatmodel/THREAT-MODEL.md 66329 = ours 65893 + theirs 65525 - base 65089 at the 0.10 W4c merge of FEAT-2TEAM onto the train.
-threatmodel/THREAT-MODEL.md=66329 share=20
+# threatmodel/THREAT-MODEL.md 66336 adds 7 over 66329 at the W4c doc pass (overseer ruling), measured: FEAT-1MCP item (r)'s raw-egress hosts say the agent can reach them too.
+threatmodel/THREAT-MODEL.md=66336 share=20
 # threatmodel/THREAT-MODEL.md 63171 adds 78 over 63093, measured: the console session under the role-stamp residual: renewal up to its cap, never moving the sign-in time, and the copied-cookie bound (0.9.3 console session lifetime).
 # threatmodel/THREAT-MODEL.md 63025 = 62948 + 77, measured: the laptop decision-sink crossing row and #77's sink and loss-row bullets.
