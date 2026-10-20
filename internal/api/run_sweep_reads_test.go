@@ -136,3 +136,22 @@ func TestReconcilePasses_AskForTheirOwnRunsNotTheTable(t *testing.T) {
 		t.Errorf("the passes listed the whole run table %d time(s), want 0", st.listCalls)
 	}
 }
+
+// A store that hands back its own backing slice keeps every entry: the filter builds a new slice instead of
+// compacting the store's.
+func TestListRunsWhere_DoesNotEditTheStoresSlice(t *testing.T) {
+	h := newHarness(t)
+	live := agedRun(types.RunRunning, RunSecretGrace)
+	done := agedRun(types.RunCompleted, RunSecretGrace)
+	other := agedRun(types.RunRunning, RunSecretGrace)
+	st := &sandboxOrphanStore{runs: []types.AgentRun{done, live, other}}
+	srv := New(baseTestConfig(h, st))
+
+	got, err := srv.liveRuns(context.Background())
+	if err != nil || len(got) != 2 || got[0].ID != live.ID || got[1].ID != other.ID {
+		t.Fatalf("liveRuns = %v, %v, want the two non-terminal runs in order", got, err)
+	}
+	if st.runs[0].ID != done.ID || st.runs[1].ID != live.ID || st.runs[2].ID != other.ID {
+		t.Errorf("the store's slice was edited in place: %v", []uuid.UUID{st.runs[0].ID, st.runs[1].ID, st.runs[2].ID})
+	}
+}
