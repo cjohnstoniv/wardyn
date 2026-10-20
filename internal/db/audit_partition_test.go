@@ -14,7 +14,7 @@ const (
 	auditReplayableFile = "0112_audit_chain_partitioned.sql"
 	auditRetentionFile  = "0123_audit_retention.sql"
 	auditDropActorFile  = "0146_audit_retention_drop_actor_type.sql"
-	auditChainHeadFile  = "0130_audit_chain_head_from_meta.sql"
+	auditChainHeadFile  = "0203_audit_chain_head_lazy.sql"
 )
 
 // TestChainTriggerReplaySetExcludesTheConversion pins the property the whole conversion rests on.
@@ -72,6 +72,17 @@ func TestChainFunctionBodyIsTheSameInBothFiles(t *testing.T) {
 	a, b := chainFunctionBody(t, auditConversionFile), chainFunctionBody(t, auditReplayableFile)
 	if a != b {
 		t.Errorf("audit_events_chain() differs between %s and %s", auditConversionFile, auditReplayableFile)
+	}
+}
+
+// TestChainFunctionReadsTheTableHeadOnlyWithoutARecordedHead: the table-wide head read opens every partition
+// under the global chain lock, so the live definition may run it only when no head has been recorded.
+func TestChainFunctionReadsTheTableHeadOnlyWithoutARecordedHead(t *testing.T) {
+	body := chainFunctionBody(t, auditChainHeadFile)
+	read := strings.Index(body, "FROM @ns@.audit_events")
+	guard := strings.Index(body, "IF m.hw_row_hash IS NOT NULL")
+	if read < 0 || guard < 0 || read < guard || !strings.Contains(body[guard:read], "ELSE") {
+		t.Errorf("%s reads audit_events outside the ELSE of the recorded-head check", auditChainHeadFile)
 	}
 }
 
