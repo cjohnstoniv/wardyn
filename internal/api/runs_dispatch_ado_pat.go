@@ -44,7 +44,7 @@ const (
 	// residentRejudgeEvery caps the expiry a relayed resolve (a self-hosted
 	// runner's proxy) is told, so the proxy re-resolves at least this often and
 	// relayedResidentADO judges the delivery policy, trust class, owner kind,
-	// posture and opt-in again. Inside its renew window runPATFor hands back the
+	// posture and opt-in again. Outside its renew window runPATFor hands back the
 	// same cached token, so a re-resolve mints nothing; a refusal drops the
 	// proxy's header at once and revokes the run's tokens.
 	residentRejudgeEvery = 15 * time.Minute
