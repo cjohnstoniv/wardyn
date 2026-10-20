@@ -2157,6 +2157,21 @@ jobs:
               make dco DCO_RANGE="-1 HEAD" DCO_ALLOW_GITHUB_MERGES=1
             fi
           fi
+      # A forward-port (release/X.Y -> main) must not delete content that exists only
+      # on main (scripts/forward-port-check.sh). Skipped on every other pull request.
+      - name: Forward-port keeps main's content
+        if: ${{ github.event_name == 'pull_request' && github.base_ref == 'main' && startsWith(github.head_ref, 'chore/forward-port-') }}
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          V="$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?' <<<"$HEAD_REF" | head -1)"
+          [ -n "$V" ] || { echo "no version in the branch name $HEAD_REF" >&2; exit 1; }
+          PREV="$(scripts/forward-port-check.sh --prev-tag "$V")"
+          [ -n "$PREV" ] || { echo "no release tag below v$V" >&2; exit 1; }
+          # Merge-base, not the base tip: main may have moved since the branch was cut.
+          scripts/forward-port-check.sh "$PREV" "$(git merge-base "$BASE_SHA" "$PR_HEAD")" "$PR_HEAD"
 
   # ── ci-ran: this workflow ran on the pull request ──────────────────────────
   # A pull request with a merge conflict gets no pull_request run at all, so its

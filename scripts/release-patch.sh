@@ -499,7 +499,8 @@ release_body() {  # prints the path of the release body file
 }
 
 print_forward_port() {
-  local rel
+  local rel prev
+  prev="$("$HERE/forward-port-check.sh" --prev-tag "$V")"
   rel="$(git log --format=%H --grep="^release: $V\$" -1 "$1")"
   cat <<EOF
 
@@ -508,6 +509,7 @@ forward-port (printed, never run):
   git checkout -b chore/forward-port-$V origin/main
   git cherry-pick -x --signoff ${rel:-<the "release: $V" commit>}
   # CHANGELOG: move the shipped entries out of [Unreleased] into the dated [$V] section
+  scripts/forward-port-check.sh ${prev:-<the previous release tag>} origin/main HEAD   # must pass: it fails when the port drops main-only lines
   git push origin chore/forward-port-$V   # then open a PR into main
 EOF
 }

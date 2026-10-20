@@ -700,6 +700,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-e2e-recording-step.sh
 	./scripts/test-fetch-gate-tools.sh
 	./scripts/test-fixture-dates.sh
+	./scripts/test-forward-port-check.sh
 	./scripts/test-gaps.sh --self-test
 	./scripts/test-gpl-source-offer.sh
 	./scripts/test-green-by-tree.sh
