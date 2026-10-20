@@ -183,7 +183,9 @@ func TestLocalMCPRulesRefusal(t *testing.T) {
 			t.Errorf("%s: refusal %+v, want refused=%v", tc.name, got, tc.refused)
 			continue
 		}
-		if got != nil && (got.body.Reason != reasonRequestFieldUnavailable || !strings.Contains(got.body.Error, `the MCP server "files", which runs in the sandbox`)) {
+		name := map[string]string{"codex-cli": "Codex CLI", "claude-code": "Claude Code"}[tc.harness]
+		want := name + " can't apply rules for files's tools, so this run would be refused. Turn files off for " + name + ", or remove its rules for " + name + "."
+		if got != nil && (got.body.Reason != reasonRequestFieldUnavailable || got.body.Error != want) {
 			t.Errorf("%s: %+v", tc.name, got.body)
 		}
 	}
@@ -203,7 +205,7 @@ func TestLocalMCPRulesRefusal_AtTheDoors(t *testing.T) {
 			"tools":      []map[string]any{{"id": "codex-cli", "kind": "harness"}},
 			"components": []types.ComponentRef{localInline("Files")}})
 		if w.Code != http.StatusUnprocessableEntity || errorReason(w) != reasonRequestFieldUnavailable ||
-			!strings.Contains(decodeErrorBody(t, w).Error, "Codex CLI can't apply the rule for mcp__files__write") {
+			decodeErrorBody(t, w).Error != "Codex CLI can't apply rules for files's tools, so this run would be refused. Turn files off for Codex CLI, or remove its rules for Codex CLI." {
 			t.Fatalf("%s = %d %s", door, w.Code, w.Body.String())
 		}
 	}

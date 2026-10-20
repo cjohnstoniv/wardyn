@@ -236,31 +236,34 @@ func localMCPRulesRefusal(req createRunRequest, spec types.RunPolicySpec, comps 
 					}
 				}
 			}
-			if tool := mcpServerRestricted(rules, keys[i]); tool != "" {
+			if mcpServerRestricted(rules, keys[i]) {
 				name := h
 				if d, ok := harnessByID(h); ok {
 					name = d.Display
 				}
-				return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable, fmt.Sprintf(
-					"In this run %s can't apply the rule for %s to the MCP server %q, which runs in the sandbox where Wardyn's proxy never sees its calls. Remove the rule, or turn the server off for %s.",
-					name, tool, keys[i], name))
+				return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable, localMCPRulesSentence(name, keys[i]))
 			}
 		}
 	}
 	return nil
 }
 
-// mcpServerRestricted is the first rule's tool that holds or blocks a tool of
-// the MCP server key ("*" for a default), "" when none does.
-func mcpServerRestricted(rules []types.ToolRule, key string) string {
+// localMCPRulesSentence is localMCPRulesRefusal's text, the F1MCP board's
+// refused state and Review blocker verbatim, for harness's display name and
+// the server's key.
+func localMCPRulesSentence(harness, server string) string {
+	return fmt.Sprintf("%s can't apply rules for %s's tools, so this run would be refused. Turn %s off for %s, or remove its rules for %s.",
+		harness, server, server, harness, harness)
+}
+
+// mcpServerRestricted reports whether a rule holds or blocks a tool of the
+// MCP server key, by its prefix or by the "*" default.
+func mcpServerRestricted(rules []types.ToolRule, key string) bool {
 	prefixes := proxy.MCPToolPrefixes(key)
-	for _, r := range rules {
-		if (r.Effect == types.ToolHold || r.Effect == types.ToolDeny) &&
-			(r.Tool == "*" || slices.ContainsFunc(prefixes, func(p string) bool { return strings.HasPrefix(r.Tool, p) })) {
-			return r.Tool
-		}
-	}
-	return ""
+	return slices.ContainsFunc(rules, func(r types.ToolRule) bool {
+		return (r.Effect == types.ToolHold || r.Effect == types.ToolDeny) &&
+			(r.Tool == "*" || slices.ContainsFunc(prefixes, func(p string) bool { return strings.HasPrefix(r.Tool, p) }))
+	})
 }
 
 // policyHoldsMCPServer reports whether rules explicitly hold a tool of the MCP
