@@ -46,9 +46,9 @@ func TestPlaceResidentSecrets_OffOrRemoteTouchesNothing(t *testing.T) {
 			wantEnv := maps.Clone(sandboxEnv)
 			var injections []runner.InjectionGrant
 			policy := types.RunPolicySpec{AllowedDomains: []string{"api.corp.test"}, EligibleGrants: []types.GrantSpec{env.Spec, file.Spec}}
-			got, mitm := s.placeResidentEnvSecrets(t.Context(), run, policy, dispatchParams{}, sandboxEnv, &injections, resident)
-			if !reflect.DeepEqual(got, want) || mitm != nil || injections != nil || !maps.Equal(sandboxEnv, wantEnv) {
-				t.Fatalf("env placer changed dispatch: values %+v mitm %v injections %+v env %v", got, mitm, injections, sandboxEnv)
+			got := s.placeResidentEnvSecrets(t.Context(), run, policy, dispatchParams{}, sandboxEnv, &injections, resident)
+			if !reflect.DeepEqual(got, want) || injections != nil || !maps.Equal(sandboxEnv, wantEnv) {
+				t.Fatalf("env placer changed dispatch: values %+v injections %+v env %v", got, injections, sandboxEnv)
 			}
 			files := []runner.ManagedFile{{Path: runner.ComponentSecretDir + "/res.key", AgentOwned: true, Content: []byte(placement.ResidentPlaceholder(file.ID))}}
 			wantFiles := slices.Clone(files)

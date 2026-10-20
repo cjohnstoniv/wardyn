@@ -36,7 +36,8 @@
 > [!NOTE]
 > A runner holds four classes as `runner_resident` in its OS keystore: `env_secret`, `file_secret`, `ssh_key` and `git_pat_helper`. Its proxy holds a fifth, `ado_minted_pat`, in memory only. Any other class set to `runner_resident` is still refused.
 >
-> With `WARDYN_RUNNER_SECRET_PLACEHOLDERS` on (off by default), a host-bound `env_secret` or `file_secret` is not held: the runner gets a placeholder, which the organisation fills (`via_org`).
+> With `WARDYN_RUNNER_SECRET_PLACEHOLDERS` on (off by default), a host-bound `env_secret` or `file_secret` is not held when it meets the placeholder limits (see [POLICIES.md](../POLICIES.md)); otherwise it is held as before. When it is not held, the runner gets a placeholder, which the organisation fills (`via_org`).
+>
 > A refusal is `runner_posture_unmet` when the run's confinement floor or the runner's posture misses the class's requirement, otherwise `placement_credential`. Whoever controls the laptop as root can read a value while the runner holds it, so erasure is best-effort and never promised.
 
 | Credential class | Modes |

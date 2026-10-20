@@ -80,6 +80,25 @@ func fillDispatch(t *testing.T, kind types.GrantKind, on bool) (types.Credential
 	return g, delivered, spec, rows, f
 }
 
+// residentReadData is the one secret.read row of the grant's runner-resident read.
+func residentReadData(t *testing.T, f *residentFix) map[string]any {
+	t.Helper()
+	var reads []map[string]any
+	for _, ev := range syncAuditRows(f.audit, "secret.read") {
+		var d map[string]any
+		if err := json.Unmarshal(ev.Data, &d); err != nil {
+			t.Fatal(err)
+		}
+		if d["purpose"] == "runner-resident" {
+			reads = append(reads, d)
+		}
+	}
+	if len(reads) != 1 {
+		t.Fatalf("%d runner-resident secret.read rows, want 1", len(reads))
+	}
+	return reads[0]
+}
+
 // placed is where the created spec carries the grant's value or placeholder.
 func placed(kind types.GrantKind, spec runner.SandboxSpec) string {
 	if kind == types.GrantEnvSecret {
@@ -119,8 +138,8 @@ func TestDispatch_RunnerSecretPlaceholderKeepsTheValueOffTheRunner(t *testing.T)
 				t.Fatalf("runner got %q, want a fill placeholder", got)
 			}
 			if len(pc.Injection) != 0 || !slices.Equal(pc.ViaOrgRoutes, []proxy.ViaOrgRoute{{GrantID: fill, Host: fillTestHost}}) ||
-				!slices.Contains(pc.MITMHosts, fillTestHost) || pc.MITMCAKeyPEM == "" {
-				t.Fatalf("runner proxy injection %+v routes %+v mitm %v, want only the via_org route, intercepted", pc.Injection, pc.ViaOrgRoutes, pc.MITMHosts)
+				!slices.Equal(pc.MITMHosts, []string{fillTestHost}) || pc.MITMCAKeyPEM == "" {
+				t.Fatalf("runner proxy injection %+v routes %+v mitm %v, want only the via_org route, its host intercepted once", pc.Injection, pc.ViaOrgRoutes, pc.MITMHosts)
 			}
 			i := slices.IndexFunc(rows, func(r types.CredentialGrant) bool { return r.ID == fill })
 			if i < 0 || rows[i].Delivery != types.GrantDeliveryViaOrg || rows[i].Spec.Kind != types.GrantAPIKey || !apiKeyScopeShared(rows[i].Spec.Scope) {
@@ -135,6 +154,9 @@ func TestDispatch_RunnerSecretPlaceholderKeepsTheValueOffTheRunner(t *testing.T)
 			}
 			if !audited {
 				t.Fatal("no run.secret_placeholder.resolve success row naming via_org")
+			}
+			if read := residentReadData(t, f); read["fill"] != string(types.GrantDeliveryViaOrg) || read["runner_id"] != nil || read["posture"] != nil {
+				t.Fatalf("secret.read %v, want fill via_org and no runner named", read)
 			}
 		})
 	}
@@ -156,6 +178,9 @@ func TestDispatch_RunnerSecretPlaceholderOffDeliversAsBefore(t *testing.T) {
 			}
 			if n := len(syncAuditRows(f.audit, "run.secret_placeholder.resolve")); n != 0 {
 				t.Fatalf("%d placeholder rows with the switch off", n)
+			}
+			if read := residentReadData(t, f); read["runner_id"] != f.rn.ID.String() || read["fill"] != nil {
+				t.Fatalf("secret.read %v, want the runner named as before", read)
 			}
 		})
 	}

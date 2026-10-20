@@ -495,8 +495,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// Last of the env writers' credential work, after every injection above is
 	// authored, so its one-credential-per-host check sees them all.
 	placeholderMITM := s.placeEnvSecrets(ctx, run, policy, p, grantRows, secretEnvKeys, sandboxEnv, &injections)
-	resident, residentMITM := s.placeResidentEnvSecrets(ctx, run, policy, p, sandboxEnv, &injections, resident)
-	placeholderMITM = append(placeholderMITM, residentMITM...)
+	resident = s.placeResidentEnvSecrets(ctx, run, policy, p, sandboxEnv, &injections, resident)
 	secretEnv := splitSecretEnv(sandboxEnv, dispatchSecretEnvKeys(secretEnvKeys, llm))
 
 	resources := resourceLimitsToRunner(policy.Resources)

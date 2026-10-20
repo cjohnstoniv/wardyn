@@ -87,7 +87,8 @@ func (s *Server) authorSecretPlaceholder(ctx context.Context, run types.AgentRun
 }
 
 // recordPlaceholder writes run.secret_placeholder.resolve for one grant with a
-// host; a runner_resident grant's row says delivery via_org.
+// host; a runner_resident grant's row says delivery via_org, or, when the
+// value is held, runner_resident and the runner that gets it as before.
 func (s *Server) recordPlaceholder(ctx context.Context, run types.AgentRun, kind types.GrantKind, secretName, host, why string, resident bool) {
 	data := map[string]any{"kind": kind, "secret_name": secretName, "host": host}
 	if resident {
@@ -96,6 +97,9 @@ func (s *Server) recordPlaceholder(ctx context.Context, run types.AgentRun, kind
 	outcome := "success"
 	if why != "" {
 		outcome, data["reason"] = "failure", why
+		if resident {
+			data["delivery"], data["runner_id"] = types.GrantDeliveryResident, run.RunnerID
+		}
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.secret_placeholder.resolve",
 		run.ID.String(), outcome, mustJSON(data)))
@@ -170,16 +174,16 @@ func (s *Server) placeFileSecrets(ctx context.Context, run types.AgentRun, polic
 // placeResidentEnvSecrets is WARDYN_RUNNER_SECRET_PLACEHOLDERS for env_secret:
 // each runner_resident value resolveEnvSecretValues read whose grant names a
 // host gets a fill placeholder in its variable instead, and leaves resident,
-// so the runner never receives it. Returns resident without those values and
-// the hosts to intercept; resident as it came, and nothing touched, with the
-// switch off or on a remote run.
+// so the runner never receives it. Returns resident without those values;
+// resident as it came, and nothing touched, with the switch off or on a remote
+// run. Its host joins MITMHosts in placement (stripViaOrg), as every via_org
+// route's does.
 func (s *Server) placeResidentEnvSecrets(ctx context.Context, run types.AgentRun, policy types.RunPolicySpec, p dispatchParams,
-	sandboxEnv map[string]string, injections *[]runner.InjectionGrant, resident []residentValue) ([]residentValue, []string) {
+	sandboxEnv map[string]string, injections *[]runner.InjectionGrant, resident []residentValue) []residentValue {
 	if !s.cfg.RunnerSecretPlaceholders || run.Placement != types.PlacementLocal {
-		return resident, nil
+		return resident
 	}
 	allowed := proxy.CompilePolicy(sidecarPolicy(policy, p)).AllowedExactHost
-	var mitm []string
 	kept := []residentValue{}
 	for _, v := range resident {
 		name, secretName, err := envSecretScopeFields(v.grant.Spec.Scope)
@@ -187,16 +191,15 @@ func (s *Server) placeResidentEnvSecrets(ctx context.Context, run types.AgentRun
 			kept = append(kept, v)
 			continue
 		}
-		ph, inj, h := s.fillResident(ctx, run, v, secretName, allowed, *injections)
+		ph, inj := s.fillResident(ctx, run, v, secretName, allowed, *injections)
 		if ph == "" {
 			kept = append(kept, v)
 			continue
 		}
 		sandboxEnv[name] = ph
 		*injections = append(*injections, inj)
-		mitm = append(mitm, h)
 	}
-	return kept, mitm
+	return kept
 }
 
 // placeResidentFileSecrets is placeResidentEnvSecrets for the runner_resident
@@ -216,14 +219,13 @@ func (s *Server) placeResidentFileSecrets(ctx context.Context, run types.AgentRu
 			kept = append(kept, v)
 			continue
 		}
-		ph, inj, h := s.fillResident(ctx, run, v, secretName, allowed, spec.ProxyConfig.Injection)
+		ph, inj := s.fillResident(ctx, run, v, secretName, allowed, spec.ProxyConfig.Injection)
 		if ph == "" {
 			kept = append(kept, v)
 			continue
 		}
 		files[i].Content = []byte(ph)
 		spec.ProxyConfig.Injection = append(spec.ProxyConfig.Injection, inj)
-		spec.ProxyConfig.MITMHosts = append(spec.ProxyConfig.MITMHosts, h)
 	}
 	return kept
 }
@@ -233,17 +235,17 @@ func (s *Server) placeResidentFileSecrets(ctx context.Context, run types.AgentRu
 // empty placeholder means the value is delivered runner_resident as before:
 // the grant names no host, or the audited reason.
 func (s *Server) fillResident(ctx context.Context, run types.AgentRun, v residentValue, secretName string,
-	allowed func(string) bool, taken []runner.InjectionGrant) (string, runner.InjectionGrant, string) {
+	allowed func(string) bool, taken []runner.InjectionGrant) (string, runner.InjectionGrant) {
 	host, err := secretScopeHost(v.grant.Spec.Scope)
 	if err != nil || host == "" {
-		return "", runner.InjectionGrant{}, ""
+		return "", runner.InjectionGrant{}
 	}
-	ph, inj, mitm, why := s.authorSecretPlaceholder(ctx, run, v.grant.Spec, host, secretName, string(v.value), allowed, taken, true)
+	ph, inj, _, why := s.authorSecretPlaceholder(ctx, run, v.grant.Spec, host, secretName, string(v.value), allowed, taken, true)
 	s.recordPlaceholder(ctx, run, v.grant.Spec.Kind, secretName, host, why, true)
 	if ph != "" {
 		clear(v.value)
 	}
-	return ph, inj, mitm
+	return ph, inj
 }
 
 // residentFillClass is the delivery class of the runner_resident env_secret or
