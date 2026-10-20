@@ -181,7 +181,8 @@
 # docs/sdk.md 19682 = ours 19644 + theirs 19581 - base 19543 at the 0.10 W2 merge of HRN onto the train.
 # docs/sdk.md 19701 adds 19 over 19682 (0.10 FEAT-1APP): the interactive application shape row (#1994).
 # docs/sdk.md 19731 adds 30 over 19701 (APP-FU #3391): the run_application_ui_apps_denied row.
-docs/sdk.md=19731 share=21
+# docs/sdk.md 19738 adds 7 over 19731 (APP-FU #3391 review): the policy-preview door and the allowed-apps cause on the run_application_ui_apps_denied row, measured.
+docs/sdk.md=19738 share=21
 # docs/sdk.md 18691 adds 28 over 18663, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
