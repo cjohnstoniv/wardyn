@@ -28,6 +28,7 @@ import { flowSteps, StepShell, useAnnounce } from "../step-shell";
 import { useLoaded } from "../shape/use-loaded";
 import { AddDialog, type AddDialogProps, type DialogOpen } from "./add-dialog";
 import { AttachCard } from "./attach-card";
+import { clearLocalFolder, ComputerFolderCard, setLocalFolder, useComputerFoldersAllowed } from "./computer-folder";
 import { fileItems, folderSources, legacyIdOf, removeItem, startIn, type FileItem, type ItemSources } from "./file-items";
 import { useDriveCatalogue } from "./file-sources";
 import { readMainDrive, repoRows, useFilesPreflight } from "./files-seams";
@@ -70,7 +71,8 @@ function inCardOrder(attachments: readonly RunAttachment[], items: readonly File
 
 /** Whether the person has chosen nothing for the step yet, the only time a default may be chosen for them. */
 export const nothingChosen = (intent: RunIntent): boolean =>
-  !intent.workspaces?.length && !intent.drive && !intent.drives?.length && !intent.start_folder && intent.no_repositories_or_drives === undefined;
+  !intent.workspaces?.length && !intent.drive && !intent.drives?.length && !intent.start_folder && intent.no_repositories_or_drives === undefined &&
+  !intent.local_folder;
 
 export function FilesStep({ go, createUserDrive }: NewRunScreenProps & Pick<AddDialogProps, "createUserDrive">) {
   const draft = useNewRunDraft();
@@ -91,6 +93,8 @@ export function FilesStep({ go, createUserDrive }: NewRunScreenProps & Pick<AddD
   const life = lifecycleOf(intent, view);
   const drives = useDriveCatalogue(pre?.runner_pool?.id ?? intent.runner_pool_id);
   const k8s = useK8sRunner();
+  const computerAllowed = useComputerFoldersAllowed();
+  const computer = intent.local_folder?.runner_id ? intent.local_folder : undefined;
   const operator = useOperator();
 
   const attachments = pre?.attachments ?? [];
@@ -174,8 +178,8 @@ export function FilesStep({ go, createUserDrive }: NewRunScreenProps & Pick<AddD
   const keptNote = life.kind === "deleted" ? NR_FILES.NO_EXTRA_DELETED : life.kind === "kept" ? NR_FILES.NO_EXTRA_KEPT(life.grace) : undefined;
   // No size is no number: the summary asks for one, and the map names the drive alone.
   const sizeText = size.words;
-  const settled = noExtra || (items.length > 0 && !!start);
-  const empty = !noExtra && items.length === 0;
+  const settled = noExtra || (items.length > 0 && !!start) || (!!computer && items.length === 0);
+  const empty = !noExtra && items.length === 0 && !computer;
 
   return (
     <StepShell
@@ -215,6 +219,17 @@ export function FilesStep({ go, createUserDrive }: NewRunScreenProps & Pick<AddD
             </Button>
           }
         >
+          {computer && (
+            <ComputerFolderCard
+              folder={computer}
+              onDirection={(direction) => edit((i) => (i.local_folder ? setLocalFolder(i, { ...i.local_folder, direction }) : i))}
+              onChange={() => setDialog({ mode: "add" })}
+              onRemove={() => {
+                edit(clearLocalFolder);
+                announce(NR_FILES.REMOVED(computer.name ?? ""));
+              }}
+            />
+          )}
           {items.length > 0 ? (
             <div className="grid">
               {items.map((item) => (
@@ -228,7 +243,7 @@ export function FilesStep({ go, createUserDrive }: NewRunScreenProps & Pick<AddD
                 />
               ))}
             </div>
-          ) : (
+          ) : !computer && (
             <div className="px-[15px] py-3">
               <label className={cn("flex items-start gap-2.5 rounded-[10px] border border-border bg-muted px-[15px] py-3.5", noExtra && "border-warning bg-warning-subtle")}>
                 <input
@@ -287,6 +302,7 @@ export function FilesStep({ go, createUserDrive }: NewRunScreenProps & Pick<AddD
         src={src}
         items={items}
         folderReason={k8s ? NR_FILES.FOLDER_REMOTE : undefined}
+        computerAllowed={computerAllowed}
         driveReason={drives.reason}
         operator={operator}
         onSave={onSave}

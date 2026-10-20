@@ -106,6 +106,9 @@ func runSetup(cmd *cobra.Command, h setupHost, o setupOptions) error {
 	if err := h.installBinary(cmd.Context(), plan.paths.installed, !plan.noService); err != nil {
 		return err
 	}
+	if err := h.seedCLIProfile(plan.paths, plan.org, out); err != nil {
+		return err
+	}
 	sayNoDiskCap(cmd.Context(), out)
 	if !plan.registered {
 		fmt.Fprintln(out, "Registering this computer. At a terminal it asks for the runner's limits (Enter takes each suggestion); otherwise it registers with the limits it suggests.")

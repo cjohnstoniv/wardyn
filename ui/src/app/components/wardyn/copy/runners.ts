@@ -188,6 +188,30 @@ export const RUN_RECORDING = {
   runner_declined: "Not recorded by the runner; the organization kept recordings when it started.",
 } as const;
 
+// The run's folder from the person's computer (M4, #2982, owner-approved 2026-10-19): its first sync and,
+// for Both ways, the pass that brings changes back when the run ends.
+export const RUN_COMPUTER_FOLDER = {
+  TITLE: "Folders from your computer",
+  SYNCED: "Synced",
+  WAITING: "Waiting to sync",
+  STOPPED: "Sync stopped",
+  ENDED: "Ended",
+  IN_SANDBOX: "In the sandbox",
+  CHANGES: "Changes",
+  BOTH: "Both ways",
+  COPY_IN: "Copy in only",
+  TO_SANDBOX: "To the sandbox",
+  BACK: "Back to you",
+  AT_START: (files: string, size: string) => `${files} files at start · ${size}`,
+  FILES: (files: string) => `${files} files`,
+  WAITING_BODY: "The run starts when this finishes. Nothing has run yet.",
+  NOTHING_RAN: "Nothing ran.",
+  BACK_AT: (time: string, files: string) => `Last changes synced back at ${time}. ${files} files came back to you.`,
+  DELETED: "The sandbox copy was deleted when the run ended.",
+  REFUSED: (n: string) => `${n} paths were not copied.`,
+  BACK_FAILED: (text: string) => `The changes could not come back: ${text}`,
+};
+
 export const RUN_SYNC = {
   LABEL: "Sync",
   NONE: "Nothing synced yet.",

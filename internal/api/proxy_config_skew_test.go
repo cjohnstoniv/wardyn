@@ -107,6 +107,10 @@ func TestPreviousProxyRefusesWhatItCannotHonour(t *testing.T) {
 	adoCaps.Policy.AzureDevOpsCapabilities = []adoscope.Capability{adoscope.CapCodeRead}
 	ghCaps := base
 	ghCaps.Policy.GitHubCapabilities = []ghscope.Capability{ghscope.CapCodeRead}
+	sigv4Off := base // WARDYN_AWS_SIGV4_AT_PROXY off sends no aws_sigv4 key
+	sigv4On := base
+	sigv4On.AWSSigV4 = &proxy.AWSSigV4Config{GrantID: uuid.New(), PortalHost: "portal.sso.us-east-1.amazonaws.com",
+		AccountID: "111122223333", RoleName: "Developer", Hosts: []string{"bedrock-runtime.us-east-1.amazonaws.com"}}
 	innerWalls := base
 	innerWalls.Policy.HarnessInnerWalls = &types.HarnessInnerWalls{Approvals: types.InnerApprovalsWardyn}
 	portRuleOn := base
@@ -129,6 +133,8 @@ func TestPreviousProxyRefusesWhatItCannotHonour(t *testing.T) {
 		{"a governed run's attribution", attributed, ""},
 		{"azure devops capabilities chosen by the policy", adoCaps, ""},
 		{"github capabilities chosen by the policy", ghCaps, ""},
+		{"aws sigv4 re-signing off", sigv4Off, ""},
+		{"aws sigv4 re-signing on", sigv4On, "aws_sigv4"},
 		// Only a run whose policy chooses inner walls carries the key, and the previous proxy refuses it.
 		{"harness inner walls chosen by the policy", innerWalls, "policy.harness_inner_walls"},
 		// wardynd sends the port rule's "off" as no key (cmd/wardynd egressPortRule).

@@ -109,12 +109,15 @@ H="$WORK/home-linux"
 mkdir -p "$H/.config/systemd/user" "$H/.config/wardyn/runner" "$H/.local/share/wardyn/bin"
 : >"$H/.config/systemd/user/wardyn-runnerd.service"; : >"$H/.config/wardyn/runnerd.env"
 : >"$H/.local/share/wardyn/bin/wardyn-runnerd"; : >"$H/.config/wardyn/runner/runner.json"
+: >"$H/.local/share/wardyn/bin/wardyn"; : >"$H/.config/wardyn/cli.json"
 run_install linux --uninstall
 [ "$RC" -eq 0 ] || fail "Linux uninstall failed (rc=$RC): $OUT"
 for gone in .config/systemd/user/wardyn-runnerd.service .config/wardyn/runnerd.env .local/share/wardyn/bin/wardyn-runnerd; do
   [ ! -e "$H/$gone" ] || fail "uninstall left $gone"
 done
 [ -e "$H/.config/wardyn/runner/runner.json" ] || fail "uninstall removed the runner identity"
+# The CLI and its profile are the person's, not the runner's: uninstall leaves both.
+[ -e "$H/.local/share/wardyn/bin/wardyn" ] && [ -e "$H/.config/wardyn/cli.json" ] || fail "uninstall removed the person's wardyn CLI or cli.json"
 grep -qF "Kept the runner identity in: $H/.config/wardyn/runner" <<<"$OUT" || fail "uninstall did not name the default identity directory: $OUT"
 
 # The identity setup kept under a custom XDG_CONFIG_HOME is the one the message names.
@@ -139,7 +142,9 @@ stub uname 'echo Darwin'
 M="$WORK/home-mac"
 mkdir -p "$M/Library/LaunchAgents" "$M/Library/Application Support/wardyn/bin"
 : >"$M/Library/LaunchAgents/com.wardyn.runnerd.plist"; : >"$M/Library/Application Support/wardyn/bin/wardyn-runnerd"
+: >"$M/Library/Application Support/wardyn/bin/wardyn"; : >"$M/Library/Application Support/wardyn/cli.json"
 run_install mac --uninstall
 [ "$RC" -eq 0 ] && [ ! -e "$M/Library/LaunchAgents/com.wardyn.runnerd.plist" ] && [ ! -e "$M/Library/Application Support/wardyn/bin/wardyn-runnerd" ] || fail "macOS uninstall left the agent or binary (rc=$RC): $OUT"
+[ -e "$M/Library/Application Support/wardyn/bin/wardyn" ] && [ -e "$M/Library/Application Support/wardyn/cli.json" ] || fail "macOS uninstall removed the person's wardyn CLI or cli.json"
 
 echo "test-runner-units: PASS"

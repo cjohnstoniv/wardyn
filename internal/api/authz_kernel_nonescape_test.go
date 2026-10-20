@@ -91,6 +91,9 @@ var kernelDoors = map[string][]string{
 	// may still use a row whose token they are removing (#1479).
 	"adoOwnPATRowState":              {"capWorkspaceProvider"},
 	"userVisibleOperatorSecretNames": {"capSecret"},
+	// GET/PUT/DELETE /me/scm/github/token(s): the GitHub own-token rows the
+	// caller may use, and the DELETE audit row_state (gh_own_pat.go).
+	"gitHubOwnTokenRows": {"capWorkspaceProvider"},
 	// #1267: GET /workspaces' and GET /workspaces/{id}'s per-row
 	// available_to_you, over the two values that apply to EVERY run type —
 	// the model-provider arm stays client-side, isAgent-gated (#1249).

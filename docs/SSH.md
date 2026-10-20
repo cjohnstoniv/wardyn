@@ -209,6 +209,22 @@ Host wardyn-<short-id>
 - A stopped or SSH-disabled run shows no card at all — there is nothing to
   connect to, and no "try anyway" affordance that would just fail.
 
+### Exec, forward and editor from the CLI
+
+- `wardyn run exec <run-id> -- <command> [args...]` runs one command over the gateway and exits with its status.
+  - Each word after `--` reaches the sandbox as one argument.
+  - For a pipe or a redirect, run a shell: `wardyn run exec <run-id> -- sh -c 'make test | tail'`.
+- `wardyn run forward <run-id> [<local-port>:]<sandbox-port>...` is `ssh -L` to the sandbox's loopback ([section 4](#4--l-port-forwarding)), bound to `127.0.0.1` here.
+- `wardyn run editor <run-id>` writes the run's `Host` block to `~/.wardyn/ssh_config`, asks before adding `Include ~/.wardyn/ssh_config` at the top of `~/.ssh/config`, then opens VS Code Remote-SSH.
+  - `--dir` picks the sandbox folder (default `/home/agent/work`).
+  - The setting in [VS Code Remote-SSH](#5-vs-code-remote-ssh) is still required.
+- All three need the gateway on and a key on your account.
+  - With the gateway off they stop with one line saying the operator has not turned SSH on.
+  - With no registered key they stop with one line naming `wardyn ssh-key ensure`. They never create a key.
+  - An advertised ProxyCommand runs only with `--advertised-proxy`, as for `wardyn run ssh`.
+  - `editor` writes that ProxyCommand into `~/.wardyn/ssh_config`, so VS Code and any `ssh wardyn-<short-id>` run it on your computer on every connection until you remove the block.
+- When `~/.wardyn/id_ed25519` (made by `wardyn ssh-key ensure`) exists, `wardyn run ssh`, `exec` and `forward` offer it with `-o IdentitiesOnly=yes` and `editor` writes it into the `Host` block; otherwise ssh offers what your agent holds. `--print` and `--config` never include it.
+
 ### From a cluster
 
 - Nothing above changes when wardynd runs in Kubernetes — the gateway is the
@@ -471,6 +487,17 @@ ssh -L 8080:127.0.0.1:3000 <run-id>@<advertise-host> -p <port>
   tunnel this gateway already provides, which needs nothing from the sandbox's
   egress policy and works identically on every deployment regardless of what
   that policy allows.
+
+### Editors over the gateway
+
+| Editor | What it needs from the gateway | Tested |
+|---|---|---|
+| VS Code Remote-SSH | Exec channels, an sftp transfer of the server it downloaded, and `-L` to the server's port | The gateway side, on one connection ([`sshgateway_remote_ssh_test.go`](../internal/api/sshgateway_remote_ssh_test.go)) |
+| JetBrains Gateway | Exec channels, a file transfer for its backend, and `-L` to the backend's port | Not yet tested |
+| Mutagen | Exec channels and a file transfer for its agent | Not yet tested |
+
+- A folder on your computer can also reach a remote sandbox with no editor and no `wardyn sync`: see
+  [hybrid-laptops.md](operations/hybrid-laptops.md#a-folder-on-your-computer-for-a-remote-sandbox).
 
 ## 6. Other tools over SSH (scripted access)
 
