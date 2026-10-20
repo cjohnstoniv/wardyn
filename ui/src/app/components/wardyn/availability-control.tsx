@@ -29,6 +29,7 @@ import { PendingChangeError } from "../../lib/api/core";
 import { permissions as api } from "../../lib/api/permissions";
 import { getErrorMessage } from "../../lib/format";
 import { AVAILABILITY } from "../../lib/availability-copy";
+import { COMPONENTS_ADMIN } from "./copy/components-admin";
 import { useDeferredBusy } from "../../lib/use-deferred-busy";
 import { SubmittedNote } from "../screens/governance/submitted-note";
 import { SUBJECT_LABEL } from "../screens/permissions";
@@ -222,6 +223,7 @@ export function AvailabilityDraft({
   ...family
 }: FamilyProps & { draft: AvailabilityDraftValue; onChange: (d: AvailabilityDraftValue) => void; disabled?: boolean }) {
   const typeName = useUserTypeNames();
+  const [choiceError, setChoiceError] = React.useState<string | null>(null);
   return (
     <AvailabilityFields
       {...family}
@@ -229,10 +231,21 @@ export function AvailabilityDraft({
       audiences={draft.audiences}
       typeName={typeName}
       busy={disabled ? "choice" : null}
-      onRestrictedChange={(restricted) => onChange({ ...draft, restricted })}
+      choiceError={choiceError}
+      // The server refuses "Only these" with nobody listed, and a creation form writes it after the
+      // resource exists, so a refused choice would leave the resource open to Everyone.
+      onRestrictedChange={(restricted) => {
+        if (restricted && draft.audiences.length === 0) {
+          setChoiceError(family.nobodyYet?.addFirst ?? COMPONENTS_ADMIN.ADD_FIRST);
+          return;
+        }
+        setChoiceError(null);
+        onChange({ ...draft, restricted });
+      }}
       onAdd={async (subject_type, subject) => {
         const listed = draft.audiences.some((a) => a.subject_type === subject_type && a.subject === subject);
         if (!listed) onChange({ ...draft, audiences: [...draft.audiences, { subject_type, subject }] });
+        setChoiceError(null);
         return true;
       }}
       onRemove={(i) => onChange({ ...draft, audiences: draft.audiences.filter((_, j) => j !== i) })}

@@ -377,6 +377,23 @@ describe("AvailabilityDraft + writeAvailability — a creation form (decision 4)
     expect(screen.getByRole("button", { name: AVAILABILITY.REMOVE_ARIA("Portfolio manager") })).toBeDisabled();
   });
 
+  it("refuses Only these with nobody listed, saying why, so the resource is never created open to Everyone (#2593)", async () => {
+    const onDraft = vi.fn();
+    render(<Harness onDraft={onDraft} />);
+
+    await userEvent.click(screen.getByRole("radio", { name: AVAILABILITY.ONLY }));
+    expect(screen.getByText(EMPTY_ONLY)).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: AVAILABILITY.ADMINS_ONLY })).toBeChecked();
+    expect(onDraft).not.toHaveBeenCalled();
+
+    await userEvent.type(screen.getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER), "portfolio-manager");
+    await userEvent.click(screen.getByRole("button", { name: AVAILABILITY.ADD_CTA }));
+    await screen.findByText("Portfolio manager");
+    expect(screen.queryByText(EMPTY_ONLY)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("radio", { name: AVAILABILITY.ONLY }));
+    expect(screen.getByRole("radio", { name: AVAILABILITY.ONLY })).toBeChecked();
+  });
+
   it("writes the list first, then Only these", async () => {
     const calls: string[] = [];
     upsertGrantMock.mockImplementation(async (g: { subject: string }) => calls.push(`grant ${g.subject}`));

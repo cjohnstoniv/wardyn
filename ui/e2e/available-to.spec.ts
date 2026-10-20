@@ -122,6 +122,17 @@ test.describe("Available to — base images (#923)", () => {
     expect((await availability(page, UNLISTED)).restricted).toBe(false);
   });
 
+  test("Add image refuses Only these with nobody listed before anything is created", async ({ page }) => {
+    await gotoImages(page);
+    await page.getByRole("button", { name: IMAGES.ADD_CTA, exact: true }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByRole("radio", { name: AVAILABILITY.ONLY }).click();
+    await expect(
+      dialog.getByText("Add at least one person, group or user type before choosing Only, or nobody could use this."),
+    ).toBeVisible();
+    await expect(dialog.getByRole("radio", { name: AVAILABILITY.ADMINS_ONLY })).toBeChecked();
+  });
+
   test("the image saved but its list was refused: the dialog stays open on it, admins-only", async ({ page }) => {
     await gotoImages(page);
     await page.getByRole("button", { name: IMAGES.ADD_CTA, exact: true }).click();
