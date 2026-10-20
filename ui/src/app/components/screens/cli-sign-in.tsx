@@ -36,11 +36,21 @@ type Phase =
   | { kind: "expired" }
   | { kind: "error"; message: string };
 
-/** Only the CLI's own loopback callback is somewhere this page moves the browser to. */
+/** Only the CLI's own loopback callback is somewhere this page moves the browser to: the literal address, an
+ *  explicit port, no userinfo. */
 export function isLoopbackCallback(raw: string): boolean {
   try {
     const u = new URL(raw);
-    return u.protocol === "http:" && u.hostname === "127.0.0.1" && u.pathname === "/callback";
+    // "" (no port, or the scheme's default) reads as 0; the URL parser itself throws above 65535.
+    const port = Number(u.port);
+    return (
+      u.protocol === "http:" &&
+      u.hostname === "127.0.0.1" &&
+      u.username === "" &&
+      u.password === "" &&
+      port >= 1 &&
+      u.pathname === "/callback"
+    );
   } catch {
     return false;
   }
@@ -98,7 +108,9 @@ export function CliSignInScreen() {
     <div className="mx-auto w-full max-w-[560px] px-4 py-8 sm:px-6">
       {phase.kind === "loading" && <RouteFallback />}
       {phase.kind === "error" && <ErrorState message={phase.message} onRetry={load} />}
-      {phase.kind === "ready" && <Request view={phase.view} who={who} busy={busy} refusal={refusal} onDecide={decide} />}
+      {phase.kind === "ready" && (
+        <Request view={phase.view} who={who} busy={busy} refusal={refusal} onDecide={decide} onExpired={() => setPhase({ kind: "expired" })} />
+      )}
       {phase.kind === "pasted" && <Pasted code={phase.code} lifeSeconds={phase.lifeSeconds} />}
       {phase.kind === "denied" && <Plain title={T.DENIED_TITLE} body={T.DENIED_BODY} />}
       {phase.kind === "used" && <Plain title={T.USED_TITLE} body={T.USED_BODY} />}
@@ -139,20 +151,32 @@ function Request({
   busy,
   refusal,
   onDecide,
+  onExpired,
 }: {
   view: CLISignInView;
   who: string;
   busy: boolean;
   refusal: string;
   onDecide: (view: CLISignInView, approve: boolean) => void;
+  onExpired: () => void;
 }) {
-  const lifeSeconds = Math.round((Date.parse(view.expires_at) - Date.parse(view.created_at)) / 1000);
+  // The time left, not the whole lifetime; at zero the page is the expired page.
+  const [now, setNow] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const left = Date.parse(view.expires_at) - now;
+  React.useEffect(() => {
+    if (left <= 0) onExpired();
+  }, [left, onExpired]);
+  const leftSeconds = Math.max(1, Math.ceil(left / 60_000)) * 60;
   return (
     <Card>
       <div className="space-y-1.5">
         <p className="label-eyebrow">{T.EYEBROW}</p>
         <h1 className="text-xl font-semibold text-foreground">{view.admin ? T.ADMIN_TITLE(view.access_ttl_seconds) : T.TITLE}</h1>
-        <p className="text-sm text-muted-foreground">{view.admin ? T.ADMIN_LEAD(view.access_ttl_seconds) : T.LEAD(who)}</p>
+        <p className="text-sm text-muted-foreground">{view.admin ? T.ADMIN_LEAD(view.access_ttl_seconds) : T.LEAD(who || "you")}</p>
       </div>
 
       {!view.address_match && (
@@ -171,7 +195,7 @@ function Request({
         <Field label={T.FROM} note={view.address_match ? undefined : T.NOT_THIS_BROWSER}>
           <span className="font-mono">{view.request_address}</span>
         </Field>
-        <Field label={T.REQUESTED} note={T.EXPIRES_IN(lifeSeconds)}>
+        <Field label={T.REQUESTED} note={T.EXPIRES_IN(leftSeconds)}>
           {stampOf(view.created_at)}
         </Field>
         <Field label={T.CODE} note={T.CODE_NOTE}>

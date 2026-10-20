@@ -12,14 +12,16 @@
 // shows and does not show; Deny; paste-back; the used, expired and refused pages.
 import type { Page } from "@playwright/test";
 import { test, expect, gotoConsole, navToRoute } from "./fixtures";
-import { SIGN_IN as T } from "../src/app/components/wardyn/copy/cli-sign-in";
+import { SIGN_IN as T, stampOf } from "../src/app/components/wardyn/copy/cli-sign-in";
 
 const ID = "5e1d9b0c-0000-4000-8000-000000000001";
 const PORT = 53124;
 const CALLBACK = `http://127.0.0.1:${PORT}/callback?id=${ID}&code=k-abc123`;
 const DENIED = `http://127.0.0.1:${PORT}/callback?id=${ID}&error=denied`;
 
+// A request made now, with its full 10 minutes ahead: the page shows the time left.
 function view(over: Record<string, unknown> = {}) {
+  const created = new Date();
   return {
     id: ID,
     machine: "mbp-dev",
@@ -30,8 +32,8 @@ function view(over: Record<string, unknown> = {}) {
     request_address: "203.0.113.24",
     approver_address: "203.0.113.24",
     address_match: true,
-    created_at: "2026-10-19T18:42:00Z",
-    expires_at: "2026-10-19T18:52:00Z",
+    created_at: created.toISOString(),
+    expires_at: new Date(created.getTime() + 600_000).toISOString(),
     session_ttl_seconds: 30 * 86400,
     session_idle_seconds: 7 * 86400,
     access_ttl_seconds: 3600,
@@ -73,7 +75,9 @@ const card = (page: Page) => page.getByRole("main").locator("section").first();
 
 test.describe("/cli/sign-in", () => {
   test("shows the computer, address, time, code and the operator's own lifetimes, and nothing about a mismatch", async ({ page }) => {
-    await stubSignIn(page, { get: { json: view() } });
+    const v = view();
+    const created = v.created_at;
+    await stubSignIn(page, { get: { json: v } });
     await openSignIn(page);
 
     await expect(page.getByRole("heading", { name: T.TITLE, level: 1 })).toBeVisible();
@@ -81,13 +85,25 @@ test.describe("/cli/sign-in", () => {
     await expect(c.getByText(/^A terminal asked to sign in as .+\. Approve only if you just ran wardyn login yourself\.$/)).toBeVisible();
     await expect(c.getByText("mbp-dev", { exact: true })).toBeVisible();
     await expect(c.getByText("203.0.113.24", { exact: true })).toBeVisible();
-    await expect(c.getByText("19 Oct 2026, 18:42 UTC", { exact: true })).toBeVisible();
+    await expect(c.getByText(stampOf(created), { exact: true })).toBeVisible();
     await expect(c.getByText("Expires in 10 minutes", { exact: true })).toBeVisible();
     await expect(c.getByTestId("cli-user-code")).toHaveText("KQ7M-2XJD");
     await expect(c.getByText(T.GRANT(3600, 30 * 86400, 7 * 86400), { exact: true })).toBeVisible();
     await expect(c.getByTestId("cli-address-mismatch")).toHaveCount(0);
     await expect(c.getByRole("button", { name: T.APPROVE })).toBeVisible();
     await expect(c.getByRole("button", { name: T.DENY })).toBeVisible();
+  });
+
+  test("shows the time left on the request, and the expired page once it is up", async ({ page }) => {
+    const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
+    await stubSignIn(page, { get: { json: view({ created_at: ago(8 * 60_000), expires_at: new Date(Date.now() + 120_000).toISOString() }) } });
+    await openSignIn(page);
+    await expect(card(page).getByText("Expires in 2 minutes", { exact: true })).toBeVisible();
+
+    await stubSignIn(page, { get: { json: view({ created_at: ago(11 * 60_000), expires_at: ago(60_000) }) } });
+    await page.reload();
+    await expect(page.getByRole("heading", { name: T.EXPIRED_TITLE, level: 1 })).toBeVisible();
+    await expect(page.getByRole("button", { name: T.APPROVE })).toHaveCount(0);
   });
 
   test("Approve is a fetch POST, and after its 200 the page moves the browser to the loopback URL", async ({ page }) => {

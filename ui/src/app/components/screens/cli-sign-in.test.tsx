@@ -40,8 +40,13 @@ const view = (over: Partial<CLISignInView> = {}): CLISignInView => ({
 let answers: Record<string, () => Response>;
 let calls: string[];
 let assign: ReturnType<typeof vi.fn>;
+let me: Record<string, unknown>;
 const realLocation = window.location;
 beforeEach(() => {
+  // 30 s into a request that lives 10 minutes (18:42:00 to 18:52:00).
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(Date.parse("2026-10-19T18:42:30Z"));
+  me = { principal: "sub-1", email: "you@example.com", role: "user", method: "sso" };
   calls = [];
   answers = { [`GET /api/v1/me/cli-sign-ins/${ID}`]: () => json(view()) };
   vi.stubGlobal(
@@ -49,7 +54,7 @@ beforeEach(() => {
     vi.fn(async (path: string, init?: RequestInit) => {
       const key = `${init?.method ?? "GET"} ${String(path).split("?")[0]}`;
       calls.push(key);
-      if (key === "GET /api/v1/me") return json({ principal: "sub-1", email: "you@example.com", role: "user", method: "sso" });
+      if (key === "GET /api/v1/me") return json(me);
       return (answers[key] ?? (() => json({ error: "unexpected " + key }, 500)))();
     }),
   );
@@ -57,6 +62,7 @@ beforeEach(() => {
   Object.defineProperty(window, "location", { value: { ...realLocation, assign }, configurable: true });
 });
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   Object.defineProperty(window, "location", { value: realLocation, configurable: true });
 });
@@ -119,6 +125,43 @@ describe("the request", () => {
   });
 });
 
+describe("the lead and the clock", () => {
+  it("says 'you' when the session carries no name, not an empty 'sign in as .'", async () => {
+    me = { role: "user", method: "sso" };
+    mount();
+    expect(await screen.findByText(T.LEAD("you"))).toBeVisible();
+    expect(screen.queryByText(/sign in as \./)).toBeNull();
+  });
+
+  it("shows the time left, not the whole lifetime: 8 minutes into 10 says 2 minutes", async () => {
+    vi.setSystemTime(Date.parse("2026-10-19T18:50:00Z"));
+    mount();
+    expect(await screen.findByText("Expires in 2 minutes")).toBeVisible();
+    expect(screen.queryByText("Expires in 10 minutes")).toBeNull();
+  });
+
+  it("rounds the last seconds up to a minute rather than saying 0", async () => {
+    vi.setSystemTime(Date.parse("2026-10-19T18:51:40Z"));
+    mount();
+    expect(await screen.findByText("Expires in 1 minute")).toBeVisible();
+  });
+
+  it("is the expired page once the time is up, and offers no Approve", async () => {
+    vi.setSystemTime(Date.parse("2026-10-19T18:52:00Z"));
+    mount();
+    expect(await screen.findByRole("heading", { name: T.EXPIRED_TITLE })).toBeVisible();
+    expect(screen.queryByRole("button", { name: T.APPROVE })).toBeNull();
+  });
+
+  it("turns into the expired page while it is open when the clock runs out", async () => {
+    vi.setSystemTime(Date.parse("2026-10-19T18:51:59Z"));
+    mount();
+    expect(await screen.findByText("Expires in 1 minute")).toBeVisible();
+    vi.setSystemTime(Date.parse("2026-10-19T18:52:01Z"));
+    expect(await screen.findByRole("heading", { name: T.EXPIRED_TITLE }, { timeout: 3000 })).toBeVisible();
+  });
+});
+
 describe("Approve", () => {
   it("is a fetch POST, then the page navigates the browser to the loopback URL it was given", async () => {
     answers[approvePath] = () => json({ code: "abc123", code_expires_in: 60, redirect_url: CALLBACK });
@@ -135,8 +178,25 @@ describe("Approve", () => {
     expect(await screen.findByText(T.NO_CALLBACK)).toBeVisible();
     expect(assign).not.toHaveBeenCalled();
     expect(isLoopbackCallback(CALLBACK)).toBe(true);
-    for (const bad of ["http://127.0.0.1.evil.example/callback", "https://127.0.0.1:1/callback", "http://127.0.0.1:1/other", "javascript:alert(1)", ""]) {
-      expect(isLoopbackCallback(bad)).toBe(false);
+    expect(isLoopbackCallback("http://127.0.0.1:1/callback?id=x&code=y")).toBe(true);
+    expect(isLoopbackCallback("http://127.0.0.1:65535/callback")).toBe(true);
+    const bad = [
+      "http://127.0.0.1.evil.example/callback",
+      "https://127.0.0.1:1/callback",
+      "http://127.0.0.1:1/other",
+      "javascript:alert(1)",
+      "",
+      "http://evil@127.0.0.1:53124/callback", // userinfo
+      "http://:pw@127.0.0.1:53124/callback", // password only
+      "http://127.0.0.1/callback", // no explicit port
+      "http://127.0.0.1:80/callback", // the default port parses as none
+      "http://127.0.0.1:0/callback", // port 0
+      "http://127.0.0.1:65536/callback", // out of range
+      "http://[::1]:53124/callback", // not the literal address
+      "http://localhost:53124/callback",
+    ];
+    for (const b of bad) {
+      expect(isLoopbackCallback(b)).toBe(false);
     }
   });
 
