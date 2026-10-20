@@ -341,7 +341,12 @@ func (a *approvalClient) ResolveWait(ctx context.Context, host string) resolveRe
 					// A sibling consumed the grant (clearing the whole entry) and a
 					// fresh raise may have taken the slot; write NOTHING. Return OUR OWN
 					// r.ApprovalID (never Nil, never st.approvalID) so evaluate's audit
-					// log names the approval this caller actually raised.
+					// log names the approval this caller actually raised. This caller's own poll
+					// said the approval ended undecided, so it reports that: a sibling's forget()
+					// below must not turn the N-1 others' answer into "still pending".
+					if newState == apExpired {
+						return resolveResult{State: apExpired, ApprovalID: r.ApprovalID}
+					}
 					return resolveResult{State: apPending, ApprovalID: r.ApprovalID}
 				}
 				if newState == apExpired {
