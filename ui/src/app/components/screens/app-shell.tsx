@@ -594,7 +594,9 @@ export function AppShell({
                 <AlertOctagon className="mt-0.5 size-4 shrink-0" />
                 <div className="min-w-0">
                   <p className="font-medium">{NO_BARRIER.BANNER_TITLE}</p>
-                  <p className="text-xs text-danger">{NO_BARRIER.BANNER_BODY}</p>
+                  <p className="text-xs text-danger">
+                    {canReachEnvironmentStep ? NO_BARRIER.BANNER_BODY : NO_BARRIER.BANNER_BODY_ASK}
+                  </p>
                 </div>
                 {canReachEnvironmentStep && (
                   <Link
