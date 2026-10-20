@@ -169,7 +169,7 @@ func run() error {
 	// sandbox get the SAME pemBundle forwarded at dispatch time (api.Config
 	// below); see trusted_ca.go. Refuse boot on error: an operator-typed trust
 	// boundary that fails to parse must not silently fall back to a narrower one.
-	trustedCAPEM, trustedCAPool, trustedCACount, err := loadTrustedCA(*f.trustedCAFile)
+	trustedCAPEM, trustedCAPool, trustedCACount, err := loadTrustedCA(*f.trustedCAFile, *f.refuseWritableCA)
 	if err != nil {
 		return err
 	}
@@ -426,6 +426,7 @@ func run() error {
 		TrustDomain:         *f.trustDomain,
 		DefaultPolicy:       knobs.defaultPolicy,
 		TrustedCAPEM:        trustedCAPEM,
+		EgressPortRule:      egressPortRule(*f.egressPortRule),
 		DemoVideoBaseURL:    knobs.demoVideoBaseURL,
 		RunnerTarget:        runnerTarget,
 		RunnerOrgURL:        *f.runnerOrgURL,
@@ -438,6 +439,8 @@ func run() error {
 		RecordingStore:      feats.recStore,
 		OIDC:                feats.authn,
 
+		// The runner stream's anonymous in-flight bound per client address.
+		RunnerStreamHandshakesPerAddress: *f.runnerPerAddr,
 		// WARDYN_GOVERN_ADMIN_RUNS_EXEMPT, already validated by parseGovernAdminRunsExempt.
 		GovernAdminRunsExempt: knobs.governAdminRunsExempt,
 
@@ -450,54 +453,61 @@ func run() error {
 		// (the read side Middleware checks), given here to internal/api so the
 		// admin revoke-sessions endpoint has the write side. nil exactly when
 		// OIDC is unconfigured — sessionsRevocable's own nil-safe gate on both.
-		SessionRevocations:       sessionRevocationsFor(feats.authn, pool),
-		OperatorEmails:           splitCSV(*f.oidcOperatorEmails),
-		AllowEmailMappings:       *f.oidcAllowEmailMappings,
-		UserMounts:               memberMounts,
-		UserDriveHostRoots:       driveHostRoots,
-		ImageBuilder:             feats.imgBuilder,
-		AgentImages:              agentImages,
-		AgentImageVariants:       agentImageVariants,
-		AWSSSOEndpointOverride:   awsSSOEndpointOverride,
-		AllowTestEndpoints:       *f.allowTestEndpoints,
-		AWSSSOProxyInject:        api.ResolveAWSSSOProxyInject(*f.awsSSOProxyInject),
-		AWSSSORefresh:            f.ssoRefresh.tuning(),
-		HarnessLoginCPUMillis:    *f.harnessLoginCPUMillis,
-		HarnessLoginMemoryMiB:    *f.harnessLoginMemoryMiB,
-		ProxyURL:                 *f.proxyURL,
-		Secrets:                  secrets,
-		KeyDomains:               keyDomains,
-		KeyDomainKeys:            keyDomainKeys,
-		PrincipalKeys:            principalKeysOn(*f.vault.principalKeys),
-		MaskRegistry:             maskReg,
-		MaskManifests:            maskManifests,
-		HA:                       *f.ha,
-		MaskSync:                 maskStore,
-		LiveBus:                  liveBus,
-		ADORunPATs:               adoRunPATs,
-		AuditUnsealer:            sealSrc.unsealer(),
-		AuditActorSubject:        sealSrc.actorSubject(),
-		SubjectKeys:              subjectKeysOf(secrets),
-		ExecOutputTailOff:        !*f.execOutputTail,
-		ExecOutputTailTTL:        *f.execOutputTailTTL,
-		RunOutputTailBytes:       *f.runOutputTailBytes,
-		RunOutputPersistOff:      !*f.runOutputPersist,
-		RunOutputRetention:       time.Duration(*f.runOutputRetention) * 24 * time.Hour,
-		PreflightRatePerMin:      *f.preflightRatePerMin,
-		PolicyPreviewRatePerMin:  *f.policyPreviewRatePerMin,
-		ADOEntra:                 adoEntraSourceFromFlags(st, f), // ado_entra_source.go
-		ADOEntraByRow:            adoEntraByRow(st, adoEntraLoginFromFlags(f)),
-		AzureFoundryEntra:        azureFoundryEntraByRow(st, adoEntraLoginFromFlags(f)), // ado_entra_source.go
-		AzureCLIEntra:            azureCLIEntraByRow(adoEntraLoginFromFlags(f)),
-		ADOLoginFacts:            adoLoginFactsFromFlags(f),
-		Components:               componentsInfo(f, runnerTarget, feats.recStore),
-		RecordingSelection:       *f.recordingSel,
-		ScanAIAdvisor:            feats.scanAdvisor,
-		RequireOperatorSetEgress: *f.requireOpSetEgress,
+		SessionRevocations:               sessionRevocationsFor(feats.authn, pool),
+		OperatorEmails:                   splitCSV(*f.oidcOperatorEmails),
+		AllowEmailMappings:               *f.oidcAllowEmailMappings,
+		CapabilityGrantsVerifiedEmail:    *f.capabilityGrantsVerifiedEmail,
+		GovernanceProfilePutExistingOnly: *f.governanceProfilePutExistingOnly,
+		EgressHostPortGrantsInert:        *f.egressHostPortGrantsInert,
+		UserMounts:                       memberMounts,
+		UserDriveHostRoots:               driveHostRoots,
+		ImageBuilder:                     feats.imgBuilder,
+		AgentImages:                      agentImages,
+		AgentImageVariants:               agentImageVariants,
+		AWSSSOEndpointOverride:           awsSSOEndpointOverride,
+		AllowTestEndpoints:               *f.allowTestEndpoints,
+		AWSSSOProxyInject:                api.ResolveAWSSSOProxyInject(*f.awsSSOProxyInject),
+		AWSSSORefresh:                    f.ssoRefresh.tuning(),
+		HarnessLoginCPUMillis:            *f.harnessLoginCPUMillis,
+		HarnessLoginMemoryMiB:            *f.harnessLoginMemoryMiB,
+		ProxyURL:                         *f.proxyURL,
+		Secrets:                          secrets,
+		KeyDomains:                       keyDomains,
+		KeyDomainKeys:                    keyDomainKeys,
+		PrincipalKeys:                    principalKeysOn(*f.vault.principalKeys),
+		MaskRegistry:                     maskReg,
+		MaskManifests:                    maskManifests,
+		HA:                               *f.ha,
+		MaskSync:                         maskStore,
+		LiveBus:                          liveBus,
+		ADORunPATs:                       adoRunPATs,
+		AuditUnsealer:                    sealSrc.unsealer(),
+		AuditActorSubject:                sealSrc.actorSubject(),
+		SubjectKeys:                      subjectKeysOf(secrets),
+		ExecOutputTailOff:                !*f.execOutputTail,
+		ExecOutputTailTTL:                *f.execOutputTailTTL,
+		RunOutputTailBytes:               *f.runOutputTailBytes,
+		RunOutputPersistOff:              !*f.runOutputPersist,
+		RunOutputRetention:               time.Duration(*f.runOutputRetention) * 24 * time.Hour,
+		PreflightRatePerMin:              *f.preflightRatePerMin,
+		PolicyPreviewRatePerMin:          *f.policyPreviewRatePerMin,
+		ADOEntra:                         adoEntraSourceFromFlags(st, f), // ado_entra_source.go
+		ADOEntraByRow:                    adoEntraByRow(st, adoEntraLoginFromFlags(f)),
+		AzureFoundryEntra:                azureFoundryEntraByRow(st, adoEntraLoginFromFlags(f)), // ado_entra_source.go
+		AzureCLIEntra:                    azureCLIEntraByRow(adoEntraLoginFromFlags(f)),
+		ADOLoginFacts:                    adoLoginFactsFromFlags(f),
+		Components:                       componentsInfo(f, runnerTarget, feats.recStore),
+		RecordingSelection:               *f.recordingSel,
+		ScanAIAdvisor:                    feats.scanAdvisor,
+		RequireOperatorSetEgress:         *f.requireOpSetEgress,
 		// "off" is the only value that disables it: a typo must not silently
 		// turn a security posture off, so anything else (including "false",
 		// "no", or a misspelling) leaves the broker ON.
-		DisableGitPATBroker: strings.EqualFold(strings.TrimSpace(*f.gitPATBroker), "off"),
+		DisableGitPATBroker:    strings.EqualFold(strings.TrimSpace(*f.gitPATBroker), "off"),
+		RefuseGitPATBrokerOff:  *f.gitPATBrokerOffRefused,
+		ScrubProxyResponses:    *f.proxyResponseScrub,
+		EnvSecretPlaceholders:  *f.envSecretPlaceholders,
+		FileSecretPlaceholders: *f.fileSecretPlaceholders,
 		// First-run setup readiness inputs (GET /api/v1/setup/status).
 		AgeKeyDurable:             secretsDurable(*f.ageKey, secrets),
 		SecretStoreExternal:       storesExternally(secrets),
@@ -509,6 +519,7 @@ func run() error {
 		PlatformKeySeparate:       platformKeySeparate(f, keyService(secrets) != ""),
 		LocalLoopback:             lm.loopback,
 		LocalTrustForwarder:       *f.localTrustFwd,
+		LocalTrustedPeers:         lm.trustedPeers,
 		OIDCRoleMapConfigured:     strings.TrimSpace(*f.oidcRoleMap) != "",
 		OIDCRedirectURL:           *f.oidcRedirectURL,
 		OIDCSecureCookies:         posture.secureCookies,
@@ -523,8 +534,13 @@ func run() error {
 		SSHHostKey:           feats.sshHostKey,
 		SSHRoleTTL:           *f.sshRoleTTL,
 		SSHMaxSessionsPerRun: *f.sshMaxSessionsPerRun,
+		SyncDeny:             api.SplitSyncDeny(*f.syncDeny),
+		LocalFolderSeedWait:  *f.localFolderSeedWait,
 		APITokenMaxTTL:       *f.apiTokenMaxTTL,
 		RoleStampTTL:         *f.roleStampTTL,
+		// The SSH gateway's established-connection ceiling and per-source handshake bound.
+		SSHMaxConnections:         *f.sshMaxConns,
+		SSHMaxHandshakesPerSource: *f.sshPerSource,
 		// How long a governance change held for a second human waits (the switch itself is read
 		// per request by internal/api).
 		GovernanceChangeTTL: *f.governanceChangeTTL,
@@ -566,8 +582,9 @@ func run() error {
 		return err
 	}
 
-	// Refuse a metrics bind failure before workers or optional gateways start.
-	if err := startMetricsListener(rootCtx, *f.metricsListen, srv.MetricsListenerHandler()); err != nil {
+	// Refuse a metrics or UI-sandbox gateway bind failure before workers or the other gateways start.
+	uiLn, err := bindOptionalListeners(rootCtx, f, srv)
+	if err != nil {
 		return err
 	}
 
@@ -581,7 +598,7 @@ func run() error {
 
 	// UI-sandbox gateway: a SECOND HTTP listener on its own origin (see
 	// startUISandboxGateway; a no-op when -ui-sandbox-listen is empty).
-	startUISandboxGateway(rootCtx, f, posture, srv)
+	startUISandboxGateway(rootCtx, f, posture, srv, uiLn)
 
 	// Serve until signal/error, then drain: HTTP first, audit sinks last, the
 	// org federation forwarder (if any) joined so it never outlives the

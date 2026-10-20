@@ -56,6 +56,8 @@ type createRunLaunch struct {
 	comps runComponents
 	// overridden: the run's person edited the New Run cards (policy_source.overrides_diff).
 	overridden bool
+	// provenance: which layer set each value of the run's policy (policy_source.knobs).
+	provenance knobProvenance
 	// pushSets are the run's push rules per SCM entry (pushRuleSetsFor).
 	pushSets []types.PushRuleSet
 	// harnessRules are the run's tool rules per included harness (applyHarnessToolRules).
@@ -77,7 +79,7 @@ func (f *runFold) launch(req createRunRequest, spec types.RunPolicySpec, ceiling
 	return createRunLaunch{
 		req: req, spec: spec, ceiling: ceilingForDispatch(ceiling, f.adoGrade, f.bedrockGrade), gw: gw,
 		wsRefs: f.wsRefs, driveMounts: f.driveMounts, memberDrives: memberDriveOwners(f.drives), ephemeralDirs: f.ephemeralDirs, startFolder: f.startFolder,
-		runToken: runToken, created: created, comps: f.comps, overridden: f.source.overridden(), pushSets: f.pushSets,
+		runToken: runToken, created: created, comps: f.comps, overridden: f.source.overridden(), provenance: f.source.knobs, pushSets: f.pushSets,
 		harnessRules: harnessRules, harnesses: f.harnesses, mainDrive: f.mainDrive.decision(),
 	}
 }
@@ -160,6 +162,7 @@ func (s *Server) finishCreateRunLaunch(ctx context.Context, l createRunLaunch) {
 			UserMounts:       s.userMountPosture(l.wsRefs),
 			Components:       l.comps.dispatchWith(l.gw.githubAPI),
 			PolicyOverridden: l.overridden,
+			Provenance:       l.provenance,
 			PushRuleSets:     l.pushSets,
 			HarnessToolRules: l.harnessRules,
 			Harnesses:        l.harnesses,

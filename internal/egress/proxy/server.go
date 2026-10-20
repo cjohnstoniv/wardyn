@@ -9,6 +9,7 @@ package proxy
 // proxy.go is the request path itself.
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -18,6 +19,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"time"
 
 	"github.com/google/uuid"
@@ -41,6 +43,8 @@ type Server struct {
 	renewStopped chan struct{}
 	// maskKey is a ViaOrgEngine's own procRegistry key, evicted at Shutdown; uuid.Nil for a sidecar.
 	maskKey uuid.UUID
+	// allowedPeers is Config.AllowedPeers.
+	allowedPeers []netip.Prefix
 }
 
 // NewServer wires a Proxy from a validated Config and dependencies. It mints
@@ -130,6 +134,35 @@ func controlPlaneClient(client *http.Client, cpTLS *tls.Config) *http.Client {
 		client = &c
 	}
 	return client
+}
+
+// upstreamProxyFor parses and validates the upstream/parent corp proxy
+// (optional) and registers any embedded credential in the mask registry so it
+// can never leak into a decision log or stdout. The credential is held
+// proxy-memory-only.
+func upstreamProxyFor(ctx context.Context, cfg *Config, maskKey uuid.UUID) (*upstreamProxy, error) {
+	up, err := parseUpstreamProxy(cfg.UpstreamProxyURL)
+	if err != nil {
+		return nil, err
+	}
+	if up != nil {
+		for _, v := range up.maskValues() {
+			procMaskFor(maskKey, v)
+		}
+		slog.InfoContext(ctx, "wardyn-proxy: chaining egress through upstream proxy (private-IP guard relaxed for this hop; control-plane bypasses it)",
+			slog.String("upstream_addr", up.addr))
+		// Say LOUDLY and EXHAUSTIVELY what is NOT chained: the deployment's
+		// log must name the bypass entries themselves, not just a count. Also
+		// state what it does NOT do, because "bypass" reads like "exempt" and
+		// isn't: a bypassed dial still runs the private-IP guard and needs
+		// its policy allow.
+		if noProxy := compileNoProxy(cfg.UpstreamProxyNoProxy); len(noProxy) > 0 {
+			slog.InfoContext(ctx, "wardyn-proxy: upstream proxy BYPASSED for declared destinations — dialed directly "+
+				"(still SSRF-guarded: a private address needs a site-config internal_hosts declaration; still policy-gated)",
+				slog.Any("bypass", noProxyStrings(noProxy)))
+		}
+	}
+	return up, nil
 }
 
 func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.Writer, hooks serverHooks) (*Server, error) {
@@ -232,30 +265,10 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		slog.InfoContext(ctx, "wardyn-proxy: TLS-MITM enabled (content inspection and/or subscription credential injection)")
 	}
 
-	// Upstream/parent corp proxy (optional). Parse+validate; register any
-	// embedded credential in the mask registry so it can never leak into a
-	// decision log or stdout. The credential is held proxy-memory-only.
-	up, err := parseUpstreamProxy(cfg.UpstreamProxyURL)
+	up, err := upstreamProxyFor(ctx, cfg, hooks.maskKey)
 	if err != nil {
 		_ = sink.close(context.Background())
 		return nil, fmt.Errorf("upstream proxy: %w", err)
-	}
-	if up != nil {
-		for _, v := range up.maskValues() {
-			procMaskFor(hooks.maskKey, v)
-		}
-		slog.InfoContext(ctx, "wardyn-proxy: chaining egress through upstream proxy (private-IP guard relaxed for this hop; control-plane bypasses it)",
-			slog.String("upstream_addr", up.addr))
-		// Say LOUDLY and EXHAUSTIVELY what is NOT chained: the deployment's
-		// log must name the bypass entries themselves, not just a count. Also
-		// state what it does NOT do, because "bypass" reads like "exempt" and
-		// isn't: a bypassed dial still runs the private-IP guard and needs
-		// its policy allow.
-		if noProxy := compileNoProxy(cfg.UpstreamProxyNoProxy); len(noProxy) > 0 {
-			slog.InfoContext(ctx, "wardyn-proxy: upstream proxy BYPASSED for declared destinations — dialed directly "+
-				"(still SSRF-guarded: a private address needs a site-config internal_hosts declaration; still policy-gated)",
-				slog.Any("bypass", noProxyStrings(noProxy)))
-		}
 	}
 
 	ap := newApprovalClient(cfg.ControlPlaneURL, ts, cfg.RunID, client)
@@ -295,7 +308,9 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		LLMUpstreams:         cfg.LLMUpstreams,
 		LLMChannelHosts:      cfg.LLMChannelHosts,
 		LLMUnavailableDetail: cfg.LLMUnavailableDetail,
+		LocalModels:          cfg.LocalModels,
 		Unattended:           cfg.Unattended,
+		ScrubResponses:       cfg.ScrubResponses,
 		Attribution:          cfg.Attribution,
 		LocalSubnets:         localSubnets,
 		ControlPlaneIPs:      cpIPs,
@@ -303,6 +318,7 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		ViaOrgRoutes:         cfg.ViaOrgRoutes,
 	})
 	p.residentMints = residentMintsByGrant(cfg.ResidentMints)
+	p.vm, p.portRule = cfg.VM, effectivePortRule(cfg.VM, cfg.PortRule)
 	p.pushSets, p.pushBase, p.harnessRules, p.harnessCreds, p.mcp = cfg.PushRuleSets, compilePushRules(cfg.PushRuleBase), cfg.HarnessToolRules, cfg.HarnessCredentials, newMCPBroker(cfg.MCPServers, cfg.MCPBindings)
 	if p.hardDeny, err = compileHardDeny(cfg.HardDeny); err != nil {
 		_ = sink.close(context.Background())
@@ -339,7 +355,7 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		WriteTimeout:      0,
 		IdleTimeout:       90 * time.Second,
 	}
-	out := &Server{proxy: p, http: srv, sink: sink}
+	out := &Server{proxy: p, http: srv, sink: sink, allowedPeers: cfg.AllowedPeers}
 
 	// Start the run-token renewer, which keeps this sidecar's short-TTL token
 	// fresh for the life of the run and, alongside it, the activity reporter
@@ -376,7 +392,16 @@ func startRunTokenRenewer(out *Server, p *Proxy, ts *tokenSource, cfg *Config, c
 
 // ListenAndServe starts serving and blocks until the server stops.
 func (s *Server) ListenAndServe() error {
-	if err := s.http.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	var err error
+	if len(s.allowedPeers) == 0 {
+		err = s.http.ListenAndServe()
+	} else {
+		var ln net.Listener
+		if ln, err = net.Listen("tcp", cmp.Or(s.http.Addr, ":http")); err == nil {
+			err = s.http.Serve(&peerListener{Listener: ln, allowed: s.allowedPeers})
+		}
+	}
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil

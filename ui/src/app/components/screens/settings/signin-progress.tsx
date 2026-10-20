@@ -32,6 +32,29 @@ export function deviceCodeOf(url: string): string {
   return /[?&]user_code=([^&#\s]+)/.exec(url)?.[1] ?? "";
 }
 
+// Which step the starting list is on. Any witness that the sandbox is up moves
+// it to "wait": a device code or verification link the sign-in read put in the
+// dialog (codeShown), a RUNNING read of the run, or the run's
+// run.interactive.start audit row. The device code is read on its own loop, so
+// the list follows it rather than only the run and audit reads, which can miss
+// for a whole wait (#3235). The pane latches each witness, so the list never
+// moves back. Otherwise the image pull (the run's status reason) is the only
+// step it can name.
+export function signInStepOf({
+  pulling,
+  running,
+  interactiveStarted,
+  codeShown,
+}: {
+  pulling: boolean;
+  running: boolean;
+  interactiveStarted: boolean;
+  codeShown: boolean;
+}): SignInStep {
+  if (codeShown || running || interactiveStarted) return "wait";
+  return pulling ? "download" : "start";
+}
+
 function marksFor(step: SignInStep): [Mark, Mark, Mark | null] {
   switch (step) {
     case "start":

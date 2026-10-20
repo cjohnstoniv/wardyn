@@ -358,6 +358,15 @@ test.describe("New Run, Review: what the summaries say the server will do", () =
     );
   });
 
+  test("the Tools and pushes row says the harness's inner walls the server resolved (#2822)", async ({ page }) => {
+    const walled = { ...CLAUDE_UNGATED, inner_walls: { sandbox_mode: "off", approvals: "wardyn" } };
+    await stub(page, { preflight: { ...CLEAR, access: { ...SCENARIO_ACCESS.member, harnesses: [walled] } } as never });
+    await openReviewWith(page, ENV);
+    await expect(page.locator("[data-policy-row=tools]")).toContainText(
+      NR_REVIEW.INNER_WALLS(NR_REVIEW.INNER_SANDBOX_OFF, NR_REVIEW.INNER_APPROVALS_WARDYN),
+    );
+  });
+
   test("a CPU cut and a main-drive cut keep the shared resources-capped line beside the narrowed notice (DR-0263)", async ({ page }) => {
     const line = "resources capped to operator maximum";
     const cut = { source: "governance", source_name: "Platform team", capped: true };
@@ -418,6 +427,9 @@ test.describe("New Run, Review: what the summaries say the server will do (defau
     await stub(page, { preflight: { ...CLEAR, access: { ...SCENARIO_ACCESS.member, harnesses: [accepting] } } as never });
     await openReviewWith(page, ENV);
     await expect(page.locator("[data-policy-row=tools]")).toContainText(NR_REVIEW.POLICY_ACCEPTS_EDITS);
+    // #2428: scoped to tools no rule names; named allow and deny rules still apply.
+    await expect(page.locator("[data-policy-row=tools]")).toContainText("Named rules still apply.");
+    await expect(page.locator("[data-policy-row=tools]")).not.toContainText("Every other tool asks first");
   });
 });
 

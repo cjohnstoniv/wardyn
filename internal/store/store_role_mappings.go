@@ -58,8 +58,7 @@ const roleMappingCols = `id, value, role, COALESCE(user_type, ''), migrated_from
 func (s PG) UpsertRoleMapping(ctx context.Context, m types.RoleMapping) (types.RoleMapping, error) {
 	var out types.RoleMapping
 	err := s.inTx(ctx, func(q Querier) error {
-		// The lock an approval of a held change to this value takes too.
-		if err := LockGovernanceTarget(ctx, q, "role_mapping", m.Value); err != nil {
+		if err := lockRoleMapping(ctx, q, m.Value); err != nil {
 			return err
 		}
 		var err error
@@ -67,6 +66,19 @@ func (s PG) UpsertRoleMapping(ctx context.Context, m types.RoleMapping) (types.R
 		return err
 	})
 	return out, err
+}
+
+// lockRoleMapping takes the locks an approval of a held role-map change takes, in its order: the
+// whole map's, then the row's (by value, when it names one). A direct write then never lands
+// inside an approval that is judging the map.
+func lockRoleMapping(ctx context.Context, q Querier, value string) error {
+	if err := LockGovernanceTarget(ctx, q, "role_mapping"); err != nil {
+		return err
+	}
+	if value == "" {
+		return nil
+	}
+	return LockGovernanceTarget(ctx, q, "role_mapping", value)
 }
 
 // UpsertRoleMappingQ is UpsertRoleMapping's statement on q (the doc above is its contract). A held
@@ -92,7 +104,19 @@ func UpsertRoleMappingQ(ctx context.Context, q Querier, m types.RoleMapping) (ty
 // matched — admin-only surface, so there is no principal to scope the delete
 // to and no existence oracle to worry about, exactly DeleteCapabilityGrant.
 func (s PG) DeleteRoleMapping(ctx context.Context, id uuid.UUID) error {
-	return DeleteRoleMappingQ(ctx, s.Pool, id)
+	return s.inTx(ctx, func(q Querier) error {
+		var value string
+		if err := q.QueryRow(ctx, `SELECT value FROM role_mappings WHERE id = $1`, id).Scan(&value); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return fmt.Errorf("store: read role mapping: %w", err)
+		}
+		if err := lockRoleMapping(ctx, q, value); err != nil {
+			return err
+		}
+		return DeleteRoleMappingQ(ctx, q, id)
+	})
 }
 
 // DeleteRoleMappingQ is DeleteRoleMapping's statement on q.

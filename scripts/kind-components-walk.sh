@@ -6,8 +6,8 @@
 # one delivering a stored secret as a header (the proxy injects it) and one
 # delivering a stored secret as a file. Inside the sandbox it asserts that the
 # header secret is in no process's environment or command line and in no file
-# the agent can read; that the file secret is 0440 root:fsGroup (the agent's
-# gid) and readable by the agent; and on the control plane that the attach and
+# the agent can read; that the file secret is 0400 and owned by the agent's
+# uid, readable by the agent once and then deleted; and on the control plane that the attach and
 # file-resolve audit rows exist and name no secret value. The docker half
 # (`-r--------`, owned by the agent uid) is the real-daemon driver test,
 # run here against the Wardyn test daemon.
@@ -68,7 +68,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if kind get clusters 2>/dev/null | grep -qx "${CLUSTER}"; then
+if kind get clusters 2>/dev/null | grep -x "${CLUSTER}" >/dev/null; then
   die "cluster ${CLUSTER} already exists and this script did not create it"
 fi
 
@@ -100,8 +100,13 @@ TASK='a='"${HDR_A}"'; b='"${HDR_B}"'; v="$a$b"; f='"${F}"'
 echo "C17 uid=$(id -u)"
 echo "C17 gid=$(id -g)"
 echo "C17 filestat=$(stat -L -c "%a %u %g" "$f")"
-echo "C17 filesha=$(sha256sum < "$f" | cut -c1-64)"
-echo "C17 filecontrol=$(printf "%s\n" "$(cat "$f")" | grep -rlF -f - /run 2>/dev/null | grep -c .)"
+fv="$(cat "$f")"
+echo "C17 filesha=$(printf "%s" "$fv" | sha256sum | cut -c1-64)"
+sleep 3
+echo "C17 filewiped=$([ -e "$f" ] && echo no || echo yes)"
+mkdir -p /tmp/c17 && printf "%s\n" "$fv" > /tmp/c17/control
+echo "C17 filecontrol=$(printf "%s\n" "$fv" | grep -rlF -f - /run /tmp 2>/dev/null | grep -c .)"
+rm -rf /tmp/c17
 echo "C17 hdr_environ=$(printf "%s\n" "$v" | grep -lF -f - /proc/[0-9]*/environ 2>/dev/null | grep -c .)"
 echo "C17 hdr_cmdline=$(printf "%s\n" "$v" | grep -lF -f - /proc/[0-9]*/cmdline 2>/dev/null | grep -c .)"
 echo "C17 hdr_files=$(printf "%s\n" "$v" | grep -rlF -f - /run /tmp /etc /home /workspace "$HOME" 2>/dev/null | grep -c .)"
@@ -143,11 +148,12 @@ grep '^C17 ' <<<"${OUTPUT}" | tee "${TMPDIR}/sandbox.txt"
 grep -q '^C17 done' "${TMPDIR}/sandbox.txt" || die "the sandbox check did not finish"
 val() { sed -n "s/^C17 $1=//p" "${TMPDIR}/sandbox.txt"; }
 
-step "file secret: 0440 root:fsGroup, readable by the agent"
-gid="$(val gid)"
-[[ "$(val filestat)" == "440 0 ${gid}" ]] || die "file stat '$(val filestat)', want '440 0 ${gid}' (root-owned, the agent's gid as fsGroup)"
+step "file secret: 0400, the agent's own, read once and then deleted"
+uid="$(val uid)" gid="$(val gid)"
+[[ "$(val filestat)" == "400 ${uid} ${gid}" ]] || die "file stat '$(val filestat)', want '400 ${uid} ${gid}' (owned by the agent's uid, no group read)"
+[[ "$(val filewiped)" == "yes" ]] || die "the file secret was still there after its first read"
 [[ "$(val filesha)" == "$(printf '%s' "${FILE_VALUE}" | sha256sum | cut -c1-64)" ]] || die "the agent read a different file content"
-[[ "$(val filecontrol)" -ge 1 ]] || die "the scanner did not find the file secret under /run, so its zero for the header secret proves nothing"
+[[ "$(val filecontrol)" -ge 1 ]] || die "the scanner did not find the control copy of the file secret, so its zero for the header secret proves nothing"
 
 step "header secret: in no environment, command line or readable file"
 for k in hdr_environ hdr_cmdline hdr_files; do

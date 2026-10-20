@@ -8,7 +8,7 @@
 // BEFORE that move (captured from the pre-change component, provider "AWS").
 import { describe, it, expect } from "vitest";
 import { render } from "@testing-library/react";
-import { SignInSteps, type SignInStep } from "./signin-progress";
+import { SignInSteps, signInStepOf, type SignInStep } from "./signin-progress";
 
 const BEFORE: Record<SignInStep, string> = {
   "start":
@@ -27,5 +27,24 @@ describe("SignInSteps markup is unchanged by the shared step list", () => {
   it.each(Object.keys(BEFORE) as SignInStep[])("step %s", (step) => {
     const { container } = render(<SignInSteps step={step} provider="AWS" />);
     expect(container.innerHTML).toBe(BEFORE[step]);
+  });
+});
+
+describe("signInStepOf follows every witness the dialog has", () => {
+  const none = { pulling: false, running: false, interactiveStarted: false, codeShown: false };
+  it.each([
+    [none, "start"],
+    [{ ...none, pulling: true }, "download"],
+    // Each witness alone moves the list to "wait" (#3235): a device code on screen with no audit row,
+    [{ ...none, codeShown: true }, "wait"],
+    // a RUNNING read of the run,
+    [{ ...none, running: true }, "wait"],
+    // and the run.interactive.start audit row.
+    [{ ...none, interactiveStarted: true }, "wait"],
+    // A witness outranks a pull reason the last state read still carried.
+    [{ ...none, pulling: true, codeShown: true }, "wait"],
+    [{ ...none, pulling: true, interactiveStarted: true }, "wait"],
+  ] as const)("%j -> %s", (facts, step) => {
+    expect(signInStepOf(facts)).toBe(step);
   });
 });

@@ -371,3 +371,30 @@ func TestWorkspaceOwner_OwnerActingOnOwnIsUnmarked(t *testing.T) {
 		}
 	}
 }
+
+// conflictOwnerStore refuses every owner change the way the per-owner name index does when the
+// operator already has a workspace of that name.
+type conflictOwnerStore struct{ *ownerStore }
+
+func (conflictOwnerStore) SetWorkspaceOwner(context.Context, uuid.UUID, string) (types.Workspace, error) {
+	return types.Workspace{}, store.ErrConflict
+}
+
+// TestWorkspaceReassign_TakenNameIs409: a reassignment onto a name the operator already uses is the
+// admin's to resolve (rename one of the two), not a server fault, and writes no reassign row.
+func TestWorkspaceReassign_TakenNameIs409(t *testing.T) {
+	st := newOwnerStore()
+	h := newHarness(t)
+	cfg := baseTestConfig(h, conflictOwnerStore{st})
+	cfg.OIDC = &oidc.Authenticator{}
+	srv := New(cfg)
+	id := st.put(types.Workspace{OwnedBy: ownerMemberSub})
+	admin := ssoSession(t, "sub-owner-admin", "admin@corp.example", oidc.RoleAdmin)
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/workspaces/"+id.String()+"/reassign", admin, "")
+	if w.Code != http.StatusConflict || decodeErrorBody(t, w).Reason != reasonWorkspaceNameTaken {
+		t.Fatalf("reassign onto a taken name = %d %s, want 409 %s", w.Code, w.Body, reasonWorkspaceNameTaken)
+	}
+	if n := len(auditsFor(h, "workspace.reassign")); n != 0 {
+		t.Errorf("workspace.reassign events = %d, want 0", n)
+	}
+}

@@ -19,10 +19,8 @@ export const USER_TYPES_NAV_TITLE = "User types";
 
 // The Credentials nav label (design F-1, canon NAV.CREDENTIALS) — kept here,
 // not in the screen's own copy module, for the SAME entry-chunk reason as the
-// two constants above. Unlike those two, the screen's own heading is a
-// DIFFERENT string ("Stored credentials", INVENTORY.TITLE in
-// wardyn/copy/credentials.ts) — the design draws the nav entry and the page
-// heading as two distinct strings, so this constant is nav-only.
+// two constants above. The screen's heading (INVENTORY.TITLE in
+// wardyn/copy/credentials.ts) is the same string.
 export const CREDENTIALS_NAV_TITLE = "Credentials";
 
 // The Runners nav label, kept here for the entry-chunk reason above (the sidebar is eager,

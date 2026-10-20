@@ -58,12 +58,12 @@ grep -q "arm64" <(run bash "$T/scripts/stage-agent-binary.sh" claude-code 9.9.9 
 echo "ok: log line names the arch"
 
 out="$(run bash "$T/scripts/stage-agent-binary.sh" claude-code 9.9.9 --arch riscv64)" && fail "unknown arch was accepted"
-echo "$out" | grep -q "unsupported arch riscv64" || fail "unknown arch gave no clear message: $out"
+echo "$out" | grep "unsupported arch riscv64" >/dev/null || fail "unknown arch gave no clear message: $out"
 echo "ok: unknown arch refused"
 run bash "$T/scripts/stage-agent-binary.sh" claude-code 9.9.9 --arch >/dev/null && fail "--arch with no value was accepted"
 echo "ok: --arch with no value refused"
 
 out="$(run WARDYN_CODEX_BIN_URL=https://example.invalid/codex bash "$T/scripts/stage-agent-binary.sh" codex-cli --arch arm64)" || fail "codex-cli with --arch: $out"
-echo "$out" | grep -q "arm64" || fail "codex-cli did not log the arch: $out"
+echo "$out" | grep "arm64" >/dev/null || fail "codex-cli did not log the arch: $out"
 echo "ok: codex-cli accepts --arch and logs it"
 echo "--- test-stage-agent-binary: PASS ---"

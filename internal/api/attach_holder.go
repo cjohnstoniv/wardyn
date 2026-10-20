@@ -137,6 +137,11 @@ type attachHolder struct {
 	ping       func(ctx context.Context) error
 	lastOutput atomic.Int64
 
+	// cast is this client's session recording once it is built (nil when the session is not
+	// recorded). A size change of the shared PTY, the writer's own or one fanned out to an
+	// observer, is recorded into it (recordResize).
+	cast atomic.Pointer[sessionTee]
+
 	// ready is this holder's attach state: attaching until its exec matches its
 	// role, ready after (attach_exec.go). A promotion sends it back to attaching
 	// while the observer's exec is replaced by a writer's.

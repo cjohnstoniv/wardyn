@@ -170,6 +170,9 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	if refusal.write(s, w, r) {
 		return req, noCeiling, "", "", false
 	}
+	if s.localFolderRefusal(&req).write(s, w, r) {
+		return req, noCeiling, "", "", false
+	}
 
 	// EVERY caller-supplied free-text field, in ONE loop: a rune cap and a
 	// control-character check (runs_create_fields.go). title/description have

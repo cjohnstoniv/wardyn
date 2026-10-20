@@ -95,6 +95,9 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 		// The policy as authored, recorded BEFORE the env-secret posture and the
 		// member clamp change it (policySourceRecord stamps it redacted).
 		source := newPolicySourceRecord(policyKindInline, nil, "", nil, !ceiling.Operator, spec)
+		// Every value starts as the run's own; each narrowing step below records
+		// the layer that changed one (run_policy_provenance.go).
+		source.knobs = startProvenance(ceiling.ownProvenance())
 		// The person's New Run edits, BEFORE the posture and the clamp below, so
 		// everything an edit adds is bounded like anything else they authored.
 		spec, edits, refusal := s.applyRunOverrides(ctx, r, spec, req)
@@ -105,8 +108,10 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 		// env_secret's admin-only posture, applied FIRST and unconditionally for
 		// a non-operator — it is a role check, not a ceiling check, so it must
 		// not sit behind the ceiling-scoped gate below (see
-		// userEnvSecretIsAdminOnly).
-		spec, envWarns := s.boundEnvSecretPosture(ctx, r, spec, dryRun)
+		// userEnvSecretIsAdminOnly). It is the deployment's rule
+		// (WARDYN_ALLOW_USER_ENV_SECRET), so what it drops is the deployment's.
+		var envWarns []string
+		source.knobs.step(deploymentProvenance, &spec, func() { spec, envWarns = s.boundEnvSecretPosture(ctx, r, spec, dryRun) })
 		clampWarnings = append(clampWarnings, envWarns...)
 		// Deliberately isOperator (three-tier doctrine, internal/auth/oidc's
 		// RoleSecurityAdmin), in lockstep with denyUserRequest: a security
@@ -122,7 +127,9 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 			// (applyRequiredSecretGrant, applyIntegrationRequirement) folded in
 			// by runs.go/preflight.go AFTER this function returns.
 			var warns []string
-			spec, warns, refusal = s.boundRunUserSpec(ctx, r, spec, ceiling, "invalid inline_policy: ", dryRun)
+			source.knobs.step(ceiling.provenance(), &spec, func() {
+				spec, warns, refusal = s.boundRunUserSpec(ctx, r, spec, ceiling, "invalid inline_policy: ", dryRun)
+			})
 			if refusal != nil {
 				return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
 			}
@@ -139,9 +146,12 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 		}
 		// The CPU and memory half for the inline arm, the same helper the stored arm
 		// calls below. The main drive is sized by stepMainDrive, for every door.
-		s.boundResources(ctx, r, &spec, ceiling)
-		clampWarnings = append(clampWarnings, s.boundUIApps(ctx, r, &spec, ceiling, dryRun)...)
-		clampWarnings = append(clampWarnings, boundBackgroundIdleStop(*req, &spec)...)
+		source.knobs.step(ceiling.provenance(), &spec, func() {
+			s.boundResources(ctx, r, &spec, ceiling)
+			clampWarnings = append(clampWarnings, s.boundUIApps(ctx, r, &spec, ceiling, dryRun)...)
+		})
+		// The Background experience the person chose drops the idle stop.
+		source.knobs.step(ceiling.ownProvenance(), &spec, func() { clampWarnings = append(clampWarnings, boundBackgroundIdleStop(*req, &spec)...) })
 		if refusal := noRepositoriesResolvedRefusal(*req, spec); refusal != nil {
 			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
 		}
@@ -176,6 +186,12 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 	// The starting policy, before the env-secret posture and the member clamp
 	// below change it: a stored row, or the caller's own ceiling.
 	source := newPolicySourceRecord(origin.kind, policyID, origin.name, origin.updatedAt, !ceiling.Operator, spec)
+	// With no policy chosen the spec IS the ceiling, so every value starts as
+	// the ceiling's; a chosen stored row starts as the run's own.
+	source.knobs = startProvenance(ceiling.ownProvenance())
+	if policyID == nil {
+		source.knobs = startProvenance(ceiling.provenance())
+	}
 	// A document's partial policy, laid onto the default (policyID is nil: the
 	// overlay never rides beside one) with its own keys bounded, before the
 	// person's card edits, which edit the policy the overlay made.
@@ -185,7 +201,8 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 	}
 	// The person's New Run edits, before the posture and the clamp (see the
 	// inline branch).
-	spec, edits, refusal := s.applyRunOverrides(ctx, r, spec, req)
+	var edits *overrideEdits
+	source.knobs.step(ceiling.ownProvenance(), &spec, func() { spec, edits, refusal = s.applyRunOverrides(ctx, r, spec, req) })
 	if refusal != nil {
 		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
 	}
@@ -199,7 +216,8 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 	// operator's raw secret value landed in their sandbox env at
 	// resolveEnvSecretGrants, contradicting three docs that state the control
 	// without qualification.
-	spec, envWarns := s.boundEnvSecretPosture(ctx, r, spec, dryRun)
+	var envWarns []string
+	source.knobs.step(deploymentProvenance, &spec, func() { spec, envWarns = s.boundEnvSecretPosture(ctx, r, spec, dryRun) })
 	storedWarns = append(storedWarns, envWarns...)
 	// The central escape: a stored policy row is admin-authored CONTENT,
 	// but ANY signed-in caller may put one on their own run (policy_id is
@@ -244,12 +262,14 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 	// only narrowed something.
 	if !s.runUngoverned(r.Context()) {
 		var warns []string
-		switch {
-		case policyID != nil && ceiling.Profile != nil:
-			spec, warns, refusal = s.boundRunUserSpec(ctx, r, spec, ceiling, "invalid policy: ", dryRun)
-		default:
-			spec, warns, refusal = s.boundOverrideAdds(ctx, r, spec, edits, ceiling, dryRun)
-		}
+		source.knobs.step(ceiling.provenance(), &spec, func() {
+			switch {
+			case policyID != nil && ceiling.Profile != nil:
+				spec, warns, refusal = s.boundRunUserSpec(ctx, r, spec, ceiling, "invalid policy: ", dryRun)
+			default:
+				spec, warns, refusal = s.boundOverrideAdds(ctx, r, spec, edits, ceiling, dryRun)
+			}
+		})
 		if refusal != nil {
 			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
 		}
@@ -261,9 +281,11 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 	// is then the profile's OWN ceiling, which an admin may well have written wider
 	// than the limit standing beside it. Both arms call the SAME helper
 	// (runs_dispatch_ceiling.go).
-	s.boundResources(ctx, r, &spec, ceiling)
-	storedWarns = append(storedWarns, s.boundUIApps(ctx, r, &spec, ceiling, dryRun)...)
-	storedWarns = append(storedWarns, boundBackgroundIdleStop(*req, &spec)...)
+	source.knobs.step(ceiling.provenance(), &spec, func() {
+		s.boundResources(ctx, r, &spec, ceiling)
+		storedWarns = append(storedWarns, s.boundUIApps(ctx, r, &spec, ceiling, dryRun)...)
+	})
+	source.knobs.step(ceiling.ownProvenance(), &spec, func() { storedWarns = append(storedWarns, boundBackgroundIdleStop(*req, &spec)...) })
 	if refusal := noRepositoriesResolvedRefusal(*req, spec); refusal != nil {
 		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
 	}

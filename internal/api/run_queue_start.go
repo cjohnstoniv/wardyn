@@ -402,6 +402,11 @@ func (s *Server) queueNarrowOnly(st *queuedStart) *queueEnd {
 // admission, mint the identity, write what the QUEUED row left empty, wire the grants and hand the run
 // to the launch tail create uses. After the mint it re-reads the state and revokes if a kill won.
 func (s *Server) queueLaunch(st *queuedStart, req createRunRequest, ceiling governanceCeiling) *queueEnd {
+	// Create's local_folder refusal again: the deployment may have lost what holds the agent for the
+	// folder (its SSH gateway, a store that keeps the seed) while the run waited.
+	if s.localFolderRefusal(&req).write(s, st.cw, st.r) {
+		return st.refusalEnd()
+	}
 	f := st.f
 	qs, _ := s.queueStore()
 	run := st.run
@@ -422,7 +427,7 @@ func (s *Server) queueLaunch(st *queuedStart, req createRunRequest, ceiling gove
 		return &queueEnd{hint: queueStartFailedHint}
 	}
 	started, ok, err := qs.StartQueuedRun(st.ctx, run.ID, store.QueueStart{
-		SPIFFEID: id.SPIFFEID, ConfinementClass: f.enforced, ModelProviderID: f.mpChoice.provider.ID, AutonomyLevel: f.autonomy.Level,
+		SPIFFEID: id.SPIFFEID, ConfinementClass: f.enforced, ModelProviderID: f.mpChoice.provider.ID, AutonomyLevel: f.autonomy.Level, InnerWalls: f.innerWalls,
 		EndsAt: anchor.EndsAt, WaitBudgetSec: anchor.WaitBudgetSec, RunLimits: anchor.RunLimits, GovernanceProfileID: anchor.GovernanceProfileID,
 		LifetimeCapAt: anchor.LifetimeCapAt, LifetimeCapSource: anchor.LifetimeCapSource,
 		Placement: placed.Placement, PlacementFilled: placed.PlacementFilled, RunnerID: placed.RunnerID,

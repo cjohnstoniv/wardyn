@@ -52,6 +52,7 @@ cat > "$STUB/docker" <<'STUBEOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$CALLS"
 env | grep -E '^WARDYN_(UP|PG|REGISTRY|SSH|UI_SANDBOX)_PORT=' >> "$STUB/ports.log" || true
+env | grep -E '^WARDYN_ADMIN_TOKEN=' >> "$STUB/token.log" || true
 case "$1" in
   ps) cat "$STUB/running" 2>/dev/null || true ;;
   context) exit 1 ;;
@@ -110,6 +111,17 @@ for v in WARDYN_UP_PORT WARDYN_PG_PORT WARDYN_REGISTRY_PORT WARDYN_SSH_PORT WARD
     if grep -qx "${v}=0" "$STUB/ports.log" 2>/dev/null; then ok "ci-run.sh binds ${v} ephemerally"
     else bad "ci-run.sh leaves ${v} at its fixed default - two concurrent jobs on one Docker socket collide on that host port"; fi
 done
+
+# 2d. the throwaway stack's bootstrap bearer is random per job unless the caller sets one.
+: > "$STUB/token.log"
+run_ci >/dev/null; run_ci >/dev/null
+env PATH="$STUB:$PATH" STUB="$STUB" CALLS="$CALLS" WARDYN_ADMIN_TOKEN=caller-chosen WARDYN_CI_PROJECT="wardyn-ci-selftest" \
+    WARDYN_CI_TASK="echo hi" WARDYN_CI_TASK_MODE=exec WARDYN_CI_SKIP_BUILD=1 DOCKER_HOST="unix:///nonexistent.sock" ./scripts/ci-run.sh >/dev/null 2>&1
+if grep -qx 'WARDYN_ADMIN_TOKEN=demo-admin-token' "$STUB/token.log"; then bad "ci-run.sh still defaults the bootstrap bearer to a published string"
+elif [ "$(grep -cxE 'WARDYN_ADMIN_TOKEN=[0-9a-f]{40}' "$STUB/token.log")" -ge 2 ] \
+    && [ "$(grep -xE 'WARDYN_ADMIN_TOKEN=[0-9a-f]{40}' "$STUB/token.log" | sort -u | wc -l)" -ge 2 ] \
+    && grep -qx 'WARDYN_ADMIN_TOKEN=caller-chosen' "$STUB/token.log"; then ok "the bootstrap bearer is random per job, and a caller's own is kept"
+else bad "the bootstrap bearer was not a fresh random value per job, or a caller's own was replaced: $(sort -u "$STUB/token.log" | tr '\n' ' ')"; fi
 
 # ── 3. the admin bearer is not on the host docker argv (F199) ────────────────
 # Behavioural: the REAL shim is extracted from the live script and called with a
@@ -233,7 +245,7 @@ launched() { grep -q -- '--wait' "$WCALLS"; }
 # refused NAME RC OUT PATTERN: a non-zero exit, the reason in OUT, no launch.
 refused() {
     local name="$1" rc="$2" out="$3" pat="$4"
-    if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qE -- "$pat" && ! launched; then
+    if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -E -- "$pat" >/dev/null && ! launched; then
         ok "$name"
     else
         bad "$name — rc=$rc, launched=$(launched && echo yes || echo no), wanted /$pat/. Got: $(printf '%s' "$out" | tail -3 | tr '\n' ' ')"
@@ -254,7 +266,7 @@ if grep -q -- '--wait.*--model-provider corp-bedrock\|--model-provider corp-bedr
 else
     bad "the launch does not pass --model-provider corp-bedrock: $(grep -- '--wait' "$WCALLS")"
 fi
-if grep -o 'ARGV=.*' "$WCALLS" | grep -qF 'wdn_ci-principal-token'; then bad "WARDYN_CI_TOKEN reached the CLI argv"; else ok "the CI token never reaches argv"; fi
+if grep -o 'ARGV=.*' "$WCALLS" | grep -F 'wdn_ci-principal-token' >/dev/null; then bad "WARDYN_CI_TOKEN reached the CLI argv"; else ok "the CI token never reaches argv"; fi
 if grep -q 'compose' "$CALLS"; then bad "remote mode touched docker compose: $(head -2 "$CALLS" | tr '\n' ' ')"; else ok "remote mode starts no stack"; fi
 
 # 4a'. (#2185) a --wait that times out (124) does not stop the run: ci-run.sh must kill it, and still exit 124.
@@ -283,7 +295,7 @@ else bad "remote mode killed a run that completed (rc=$rc)"; fi
 # 4b. expiring is usable (the server counts it), with a warning.
 status '{"provider_access":[{"provider":"corp-bedrock","state":"expiring"}]}'
 out="$(run_remote)"; rc=$?
-if [ "$rc" -eq 0 ] && launched && printf '%s' "$out" | grep -q 'expiring'; then ok "an expiring credential launches with a warning"; else bad "an expiring credential was refused or unwarned (rc=$rc): $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; fi
+if [ "$rc" -eq 0 ] && launched && printf '%s' "$out" | grep 'expiring' >/dev/null; then ok "an expiring credential launches with a warning"; else bad "an expiring credential was refused or unwarned (rc=$rc): $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; fi
 
 # 4c-4g: every refusal names the provider or the real cause, and launches nothing.
 status '{"provider_access":[{"provider":"corp-bedrock","state":"not_configured"}]}'
@@ -300,7 +312,7 @@ status '{"provider_access":[{"provider":"corp-bedrock","state":"not_applicable"}
 out="$(run_remote)"; refused "the admin token's not_applicable says a person's token is needed" $? "$out" "admin token"
 status '' 2
 out="$(run_remote)"; refused "a failed status call is reported as one, not as a missing grant" $? "$out" "setup status"
-if printf '%s' "$out" | grep -q 'not one this CI identity may use'; then bad "a failed status call was misreported as a missing grant"; fi
+if printf '%s' "$out" | grep 'not one this CI identity may use' >/dev/null; then bad "a failed status call was misreported as a missing grant"; fi
 status '' 0
 out="$(run_remote)"; refused "an empty status answer is reported as one, not as a missing grant" $? "$out" "setup status"
 
@@ -321,7 +333,7 @@ if grep -q 'secret set' "$WCALLS"; then bad "WARDYN_CI_SECRETS still reached 'wa
 : > "$CALLS"
 out="$(env PATH="$STUB:$PATH" STUB="$STUB" CALLS="$CALLS" WARDYN_CI_PROJECT=wardyn-ci-selftest WARDYN_CI_TASK="fix it" \
     WARDYN_CI_SKIP_BUILD=1 DOCKER_HOST="unix:///nonexistent.sock" ./scripts/ci-run.sh 2>&1)"; rc=$?
-if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'WARDYN_URL' && ! grep -q 'compose' "$CALLS"; then
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep 'WARDYN_URL' >/dev/null && ! grep -q 'compose' "$CALLS"; then
     ok "a harness run on the throwaway stack is refused before any stack starts"
 else
     bad "a harness run on the throwaway stack was not refused up front (rc=$rc): $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"

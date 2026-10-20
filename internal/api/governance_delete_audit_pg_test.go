@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -60,8 +62,8 @@ func TestPG_DirectDeletesRecordWhatTheyRemoved(t *testing.T) {
 	}
 
 	got := delAudit("/api/v1/governance/assignments/"+asg.ID.String(), "governance.assignment.delete")
-	if got["subject_type"] != "user" || got["subject"] != "alice@corp.example" || got["profile_id"] != loose.ID.String() {
-		t.Errorf("assignment delete data = %v, want the subject and profile it removed", got)
+	if got["subject_type"] != "user" || got["subject"] != "alice@corp.example" || got["profile_id"] != loose.ID.String() || got["priority"] != float64(2) {
+		t.Errorf("assignment delete data = %v, want the subject, profile and priority it removed", got)
 	}
 	got = delAudit("/api/v1/permissions/grants/"+grant.ID.String(), "capability.grant.delete")
 	if got["subject"] != "bob@corp.example" || got["capability"] != capAgent || got["value"] != govAgentVal || got["effect"] != "deny" {
@@ -71,4 +73,49 @@ func TestPG_DirectDeletesRecordWhatTheyRemoved(t *testing.T) {
 	if got["name"] != "loose" {
 		t.Errorf("profile delete data = %v, want the profile name", got)
 	}
+}
+
+// flipBeforeDelete is another admin's upsert landing on the grant's natural key just before
+// the direct delete runs: the row removed is then the flipped one.
+type flipBeforeDelete struct{ store.PG }
+
+func (f flipBeforeDelete) DeleteCapabilityGrant(ctx context.Context, id uuid.UUID) (types.CapabilityGrant, error) {
+	cur, err := store.GetCapabilityGrantQ(ctx, f.Pool, id, false)
+	if err != nil {
+		return types.CapabilityGrant{}, err
+	}
+	cur.Effect = types.CapabilityAllow
+	if _, err := f.UpsertCapabilityGrant(ctx, cur); err != nil {
+		return types.CapabilityGrant{}, err
+	}
+	return f.PG.DeleteCapabilityGrant(ctx, id)
+}
+
+// TestPG_DirectGrantDeleteAuditsTheRowItRemoved: a write between a read and the delete must not
+// leave the audit naming an effect the removed row no longer had.
+func TestPG_DirectGrantDeleteAuditsTheRowItRemoved(t *testing.T) {
+	ctx := context.Background()
+	pg := store.NewPG(throwawayPGPool(t))
+	h := newHarness(t)
+	srv := New(baseTestConfig(h, flipBeforeDelete{pg}))
+	grant, err := pg.UpsertCapabilityGrant(ctx, types.CapabilityGrant{
+		SubjectType: types.CapabilitySubjectUser, Subject: "carol@corp.example", Capability: capAgent, Value: govAgentVal,
+		Effect: types.CapabilityDeny, CreatedBy: "seed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := do(t, srv, http.MethodDelete, "/api/v1/permissions/grants/"+grant.ID.String(), adminToken, ""); w.Code != http.StatusNoContent {
+		t.Fatalf("DELETE: %d %s, want 204", w.Code, w.Body.String())
+	}
+	for _, ev := range h.audit.snapshot() {
+		if ev.Action == "capability.grant.delete" {
+			var data map[string]any
+			if err := json.Unmarshal(ev.Data, &data); err != nil || data["effect"] != "allow" {
+				t.Errorf("grant delete data = %s (%v), want the removed row's effect allow", ev.Data, err)
+			}
+			return
+		}
+	}
+	t.Fatal("no capability.grant.delete row")
 }

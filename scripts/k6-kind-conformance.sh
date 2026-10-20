@@ -29,7 +29,9 @@
 # socket for their node-level steps. K6_NODE_IMAGES overrides the node images; K6_CALICO_VERSION the
 # Calico pin. K6_ORG_RUN (development only) narrows the org suite's -test.run;
 # K6_KEEP=1 (development only) leaves the last cluster, its images and the work directory
-# up and prints how to remove them; K6_SKIP_INPROC=1 skips TestK6.
+# up and prints how to remove them; K6_SKIP_INPROC=1 skips TestK6. K6_SUITES (default "org inproc")
+# picks which suites run: the nightly runs each kubelet as two jobs, one per suite, so a job fits in 30
+# minutes. The cluster and organisation are stood up the same way whichever suites run.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -43,6 +45,11 @@ for tool in docker kind kubectl helm go openssl jq curl; do
 done
 
 NODE_IMAGES="${K6_NODE_IMAGES:-kindest/node:v1.31.4 kindest/node:v1.35.0}"
+SUITES="${K6_SUITES:-org inproc}"
+for s in $SUITES; do
+  case "$s" in org | inproc) ;; *) die "K6_SUITES names '$s', want org and/or inproc" ;; esac
+done
+want() { case " $SUITES " in *" $1 "*) return 0 ;; esac; return 1; }
 CALICO_VERSION="${K6_CALICO_VERSION:-v3.28.0}"
 CLUSTER="wardyn-k6-$$"
 TAG="k6-$$"
@@ -98,7 +105,7 @@ cleanup() {
   return "$rc"
 }
 
-kind get clusters 2>/dev/null | grep -qx "$CLUSTER" && die "a kind cluster named $CLUSTER already exists"
+kind get clusters 2>/dev/null | grep -x "$CLUSTER" >/dev/null && die "a kind cluster named $CLUSTER already exists"
 # Installed only after the guard, so a pre-existing cluster of this name is never deleted.
 trap cleanup EXIT
 
@@ -336,7 +343,7 @@ install_runnerd() {
   helm install "$release" deploy/helm/wardyn-runnerd -n "$own" -f "$WORK/values-$release-$VERSION.yaml" >/dev/null
   INSTALLED="$(kubectl -n "$own" get deploy -l "app.kubernetes.io/instance=$release" -o jsonpath='{.items[0].metadata.name}')"
   if kubectl -n "$own" rollout status "deployment/$INSTALLED" --timeout=300s >/dev/null &&
-     timeout 300 bash -c "until kubectl -n $own logs deployment/$INSTALLED -c runnerd 2>/dev/null | grep -q 'k8s runner ready to connect'; do sleep 3; done"; then
+     timeout 300 bash -c "until kubectl -n $own logs deployment/$INSTALLED -c runnerd 2>/dev/null | grep 'k8s runner ready to connect' >/dev/null; do sleep 3; done"; then
     return 0
   fi
   kubectl -n "$own" describe pods -l "app.kubernetes.io/instance=$release" | tail -40 || true
@@ -510,7 +517,7 @@ EOF
     fi
     if [ -n "${K6_KEEP_LOGS:-}" ]; then cp "$WORK/test-$1-$VERSION.log" "$K6_KEEP_LOGS/" || true; fi
   }
-  if [ "$hub" = PASS ]; then
+  if want org && [ "$hub" = PASS ]; then
     log "[$VERSION] org cases (TestK6Org, against the org and the live runnerd)"
     suite org "${K6_ORG_RUN:-^TestK6Org\$}"
   fi
@@ -529,7 +536,7 @@ metadata: {name: k6-runs}
 spec: {cidr: 10.250.0.0/28, blockSize: 28, ipipMode: Always, natOutgoing: true, nodeSelector: all()}
 POOL
   kubectl annotate namespace "$RUNS_NS" 'cni.projectcalico.org/ipv4pools=["k6-runs"]' >/dev/null
-  if [ "${K6_SKIP_INPROC:-}" != 1 ]; then
+  if want inproc && [ "${K6_SKIP_INPROC:-}" != 1 ]; then
     log "[$VERSION] in-process cases (TestK6, under runnerd's token)"
     suite inproc '^TestK6$'
   fi

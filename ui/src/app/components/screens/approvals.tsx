@@ -27,6 +27,7 @@ import { DENIED } from "../../lib/permissions-copy";
 import { LIST_LIMIT } from "../../lib/api/core";
 import { usePoll } from "../../lib/use-poll";
 import { getErrorMessage } from "../../lib/format";
+import { grantsWrite, scopeRepos } from "../../lib/grant-sentence";
 import { Button } from "../ui/button";
 import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
@@ -100,17 +101,6 @@ function ttlPhrase(scope: Scope): string {
 // hoisted so live-approvals.tsx's credential filter reads the SAME heuristic
 // (see copy.ts's H7 comment on the function itself for the ordering rules).
 
-// Does the github_token scope's permissions object grant any write/admin/push?
-function grantsWrite(scope: Scope): boolean {
-  const perms = scope.permissions;
-  if (perms && typeof perms === "object") {
-    return Object.values(perms as Record<string, unknown>).some(
-      (v) => typeof v === "string" && /write|admin|push|maintain/i.test(v),
-    );
-  }
-  return false;
-}
-
 // The optional amber capability chip — shown only when the scope demonstrably
 // grants write (never a reassuring green check, per honesty rule D2).
 export function capabilityLabel(kind: ApprovalKind, scope: Scope): string | undefined {
@@ -133,7 +123,7 @@ export function deriveTitle(kind: ApprovalKind, scope: Scope): string {
       if (ck === "git_pat") return host ? `Hand git a token for ${host}` : "Hand git an access token";
       if (ck === "ssh_key") return host ? `Write an SSH key for ${host}` : "Write a private SSH key to disk";
       if (ck === "github_token") {
-        const repos = Array.isArray(scope.repos) ? scope.repos.filter((r) => typeof r === "string") : [];
+        const repos = scopeRepos(scope);
         return repos.length ? `Mint a GitHub token for ${repos[0]}` : "Mint a GitHub token";
       }
       if (ck === "api_key") return host ? `Mint an API credential for ${host}` : "Mint an API credential";
@@ -237,7 +227,7 @@ export function deriveBanner(kind: ApprovalKind, scope: Scope, reauth?: ReauthAu
         };
       }
       if (ck === "github_token") {
-        const repos = Array.isArray(scope.repos) ? scope.repos.filter((r): r is string => typeof r === "string") : [];
+        const repos = scopeRepos(scope);
         const write = grantsWrite(scope);
         return {
           what: `The broker mints a short-lived GitHub token${repos.length ? ` scoped to ${repos.join(", ")}` : ""}${ttl}. The agent never sees your stored key.`,

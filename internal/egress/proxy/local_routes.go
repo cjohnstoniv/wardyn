@@ -101,6 +101,8 @@ func (p *Proxy) handleLocalRoute(w http.ResponseWriter, r *http.Request) {
 		p.handleBrokerScanResult(w, r)
 	case r.Method == http.MethodPut && strings.HasPrefix(path, routeSSOToken):
 		p.handleBrokerSSOToken(w, r)
+	case p.vm && r.Method == http.MethodPost && path == routeVMNetRefusals:
+		p.handleVMNetRefusal(w, r)
 	case strings.HasPrefix(path, llmAnthropicPrefix):
 		p.handleLLMAnthropic(w, r)
 	case strings.HasPrefix(path, llmOpenAIPrefix):
@@ -600,9 +602,12 @@ func approvalIDOn409(status int, body []byte) *uuid.UUID {
 // approvalIDAlways reads the approval id out of any response body.
 func approvalIDAlways(_ int, body []byte) *uuid.UUID { return extractApprovalID(body) }
 
-// relay streams an upstream response back to the client verbatim. The
-// streaming sibling of passThrough, which writes an already-captured body.
-func relay(w http.ResponseWriter, resp *http.Response) {
+// relay streams an upstream response back to the client verbatim, scrubbed
+// when Config.ScrubResponses is set. The streaming sibling of passThrough,
+// which writes an already-captured body.
+func (p *Proxy) relay(w http.ResponseWriter, resp *http.Response) {
+	w, done := p.scrubbed(w)
+	defer done()
 	dst := w.Header()
 	copyHeader(dst, resp.Header)
 	removeHopByHop(dst)

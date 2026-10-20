@@ -54,6 +54,12 @@ func RequestApproval(ctx context.Context, st Store, req types.ApprovalRequest) (
 	// Dedup: return any existing PENDING approval for the same run+kind+scope.
 	hash := scopeHash(req.RunID, req.Kind, req.RequestedScope)
 	if existing, found, err := findPendingDup(ctx, st, req, hash); err != nil || found {
+		if found {
+			// A raise that lands on a PENDING row is a held request re-entering the hold.
+			if rejoined, ok, rerr := Rejoin(ctx, st, existing.ID, existing.RunID, existing.Kind); rerr == nil && ok {
+				return rejoined, nil
+			}
+		}
 		return existing, err
 	}
 
@@ -87,6 +93,27 @@ func RequestApproval(ctx context.Context, st Store, req types.ApprovalRequest) (
 		return types.ApprovalRequest{}, fmt.Errorf("approval: create: %w", err)
 	}
 	return created, nil
+}
+
+// RejoinStamper is the optional store method behind Rejoin. A store without it
+// leaves every bounded hold measured from requested_at.
+type RejoinStamper interface {
+	StampApprovalRejoin(ctx context.Context, id, runID uuid.UUID, kind types.ApprovalKind, at time.Time) (types.ApprovalRequest, bool, error)
+}
+
+// Rejoin records that a held request re-entered the hold on approval id, which
+// must be a PENDING row of runID and kind, so Hold measures the bounded hold
+// from now. ok is false when there is no such row, or the store cannot stamp one.
+func Rejoin(ctx context.Context, st Store, id, runID uuid.UUID, kind types.ApprovalKind) (types.ApprovalRequest, bool, error) {
+	rs, can := st.(RejoinStamper)
+	if !can {
+		return types.ApprovalRequest{}, false, nil
+	}
+	ap, ok, err := rs.StampApprovalRejoin(ctx, id, runID, kind, time.Now().UTC())
+	if err != nil {
+		return types.ApprovalRequest{}, false, fmt.Errorf("approval: stamp rejoin: %w", err)
+	}
+	return ap, ok, nil
 }
 
 // findPendingDup returns the existing PENDING approval matching req's

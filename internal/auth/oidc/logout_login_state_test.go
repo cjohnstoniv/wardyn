@@ -8,6 +8,7 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -90,8 +91,8 @@ func TestSignOutEndsALoginInFlight(t *testing.T) {
 
 				env.buildIDToken(t, "sub-late", "late@example.com", nonce, time.Now().Add(time.Hour))
 				cb := b.serve(auth.CallbackHandler, http.MethodGet, base+"/auth/callback", "state="+state+"&code=testcode")
-				if cb.Code != http.StatusBadRequest {
-					t.Fatalf("callback after sign-out = %d %q, want 400 invalid state", cb.Code, cb.Body.String())
+				if loc := cb.Header().Get("Location"); cb.Code != http.StatusFound || !strings.Contains(loc, "auth_error=sign_in_expired") {
+					t.Fatalf("callback after sign-out = %d %q, want the sign_in_expired redirect", cb.Code, loc)
 				}
 				if v := b.cookie(base+"/", prefix+"wardyn_session"); v != "" {
 					t.Fatal("a callback after sign-out created a session")

@@ -90,8 +90,12 @@ func (s *Server) localCredentialIntents(r *http.Request, req createRunRequest, s
 // SecretEnv, so create refuses what dispatch would refuse after Launch.
 func (s *Server) localProviderIntent(r *http.Request, owner string, p types.ModelProvider) ([]placement.CredentialIntent, bool) {
 	part, field := providerKeyPart, "ProxyConfig.Injection[model_provider:"+p.ID+"]"
+	if providerTakesNoCredential(p) {
+		return nil, true // places no credential; its LLMUpstreams entry is what a local runner refuses
+	}
 	switch p.Kind {
-	case types.ModelProviderAnthropicAPIKey, types.ModelProviderOpenAIAPIKey, types.ModelProviderCustomEndpoint, types.ModelProviderBedrockBearer:
+	case types.ModelProviderAnthropicAPIKey, types.ModelProviderOpenAIAPIKey, types.ModelProviderCustomEndpoint, types.ModelProviderBedrockBearer,
+		types.ModelProviderLocalModel:
 	case types.ModelProviderAnthropicSubscription:
 		part = providerOAuthPart
 	case types.ModelProviderBedrockSSO:

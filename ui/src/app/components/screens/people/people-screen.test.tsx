@@ -127,6 +127,9 @@ describe("the people table", () => {
     listMock.mockResolvedValue({ people: [] });
     renderScreen();
     expect(await screen.findByText("Nobody has signed in yet. People appear here after their first sign-in, or when you add them.")).toBeInTheDocument();
+    // #3059: the screen's two empty states (the list and the role mappings) are the compact in-card look, never two stacked heroes.
+    expect(document.querySelectorAll('[data-size="page"]')).toHaveLength(0);
+    expect(document.querySelectorAll('[data-size="compact"]')).toHaveLength(2);
   });
 
   // #2902: the title never repeats the PEOPLE section label, and a filter that
@@ -149,6 +152,20 @@ describe("the people table", () => {
     await waitFor(() => expect(listMock).toHaveBeenLastCalledWith(expect.objectContaining({ q: "ana" })));
     await user.click(screen.getByRole("button", { name: "Deactivated" }));
     await waitFor(() => expect(listMock).toHaveBeenLastCalledWith(expect.objectContaining({ q: "ana", state: "deactivated" })));
+  });
+
+  it("keeps the same rows mounted while a re-read is in flight, so the opener a drawer returns focus to survives", async () => {
+    renderScreen();
+    const opener = await screen.findByRole("button", { name: "ana@example.com" });
+    let answer!: (page: { people: PersonSummary[] }) => void;
+    listMock.mockReturnValueOnce(new Promise((done) => { answer = done; }));
+    setField(screen.getByRole("textbox", { name: "Search people" }), "ana");
+    await waitFor(() => expect(listMock).toHaveBeenLastCalledWith(expect.objectContaining({ q: "ana" })));
+    expect(opener.isConnected).toBe(true);
+    expect(screen.getByRole("button", { name: "ana@example.com" })).toBe(opener);
+    answer({ people: [ROWS[0]] });
+    await waitFor(() => expect(screen.queryByText("new@example.com")).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "ana@example.com" })).toBe(opener);
   });
 
   it("pages: Load more appends the next page by cursor", async () => {

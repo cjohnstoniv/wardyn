@@ -16,8 +16,8 @@ function walkTsx(dir: string): string[] {
 
 describe("date-cell hovers", () => {
   // The relative date in a cell hovers as absoluteTime(), never the wire ISO string.
-  it("no title={x.created_at|updated_at|proposed_at} shows a raw ISO timestamp", () => {
-    const raw = /\btitle=\{[\w.?]+\.(?:created_at|updated_at|proposed_at)\}/;
+  it("no title={x.<timestamp>_at} shows a raw ISO timestamp", () => {
+    const raw = /\btitle=\{[\w.?]+\.\w+_at\}/;
     const offenders: string[] = [];
     for (const f of walkTsx("src/app")) {
       readFileSync(f, "utf8")

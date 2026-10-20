@@ -198,6 +198,44 @@ func TestRequestApproval_Dedup(t *testing.T) {
 	}
 }
 
+// rejoinStore is fakeStore with the optional rejoin stamp.
+type rejoinStore struct{ *fakeStore }
+
+func (r rejoinStore) StampApprovalRejoin(_ context.Context, id, runID uuid.UUID, kind types.ApprovalKind, at time.Time) (types.ApprovalRequest, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i, a := range r.records {
+		if a.ID == id && a.RunID == runID && a.Kind == kind && a.State == types.ApprovalPending {
+			r.records[i].LastRejoinedAt = &at
+			return r.records[i], true, nil
+		}
+	}
+	return types.ApprovalRequest{}, false, nil
+}
+
+// A raise that deduplicates onto a PENDING row is a held request re-entering
+// the hold: the row is stamped, so Hold measures the new hold from it.
+func TestRequestApproval_DedupStampsTheRejoin(t *testing.T) {
+	ctx := context.Background()
+	st := rejoinStore{&fakeStore{}}
+	runID := uuid.New()
+	scope := json.RawMessage(`{"host":"api.github.com","mode":"wait_for_review"}`)
+	first, err := approval.RequestApproval(ctx, st, newReq(runID, types.ApprovalEgressDomain, scope))
+	if err != nil || first.LastRejoinedAt != nil {
+		t.Fatalf("first raise: %+v, %v (a fresh row has no rejoin)", first, err)
+	}
+	second, err := approval.RequestApproval(ctx, st, newReq(runID, types.ApprovalEgressDomain, scope))
+	if err != nil {
+		t.Fatalf("second raise: %v", err)
+	}
+	if second.ID != first.ID || second.LastRejoinedAt == nil || second.LastRejoinedAt.Before(first.RequestedAt) {
+		t.Fatalf("dedup hit = %+v, want the same row stamped with a rejoin", second)
+	}
+	if _, ok, _ := approval.Rejoin(ctx, st, first.ID, uuid.New(), types.ApprovalEgressDomain); ok {
+		t.Fatal("a rejoin naming another run stamped the row")
+	}
+}
+
 func TestRequestApproval_DifferentScopes_BothCreated(t *testing.T) {
 	ctx := context.Background()
 	st := &fakeStore{}

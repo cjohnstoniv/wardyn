@@ -40,8 +40,12 @@ export const deliveryLabel = (delivery: string): string | undefined => DELIVERY[
  * provider before one is known. The other kinds carry no label on the wire, so
  * they show the row they are for and their delivery.
  */
-export const credentialLabel = (c: AccessCredential, harness: string | undefined, providers?: ReadonlyMap<string, string>): string | undefined =>
-  c.kind === "model_provider" ? (harness && providers?.get(harness)) || NR_TOOLS.PROVIDER_LABEL : c.label || undefined;
+export const credentialLabel = (c: AccessCredential, harness: string | undefined, providers?: ReadonlyMap<string, string>): string | undefined => {
+  if (c.kind !== "model_provider") return c.label || undefined;
+  const provider = (harness && providers?.get(harness)) || NR_TOOLS.PROVIDER_LABEL;
+  // The only model credential left in the sandbox as a file is the SSO access token (internal/api modelCredentials).
+  return c.delivery === "sandbox_file" ? `${provider} ${NR_TOOLS.SSO_TOKEN}` : provider;
+};
 
 /** "Anything else" for the clamped, effective spec, then whether the organisation's limits have been checked. */
 export function unlistedSentences(u: AccessUnlisted, answered: boolean): string[] {
@@ -124,6 +128,7 @@ export function Totals({ access, answered, names: harnessNames, providers, ado, 
                 <span className="min-w-0 [overflow-wrap:anywhere]">
                   {kind && <span>{kind} </span>}
                   {names.has(c.row) && <span className="text-sm text-muted-foreground">{NR_TOOLS.FOR_ROW(names.get(c.row) ?? "")}</span>}
+                  {c.after_end === "expires" && <span className="block text-sm text-muted-foreground">{NR_TOOLS.EXPIRES_OWN}</span>}
                 </span>
                 {delivery && <Chip className="whitespace-normal">{delivery}</Chip>}
                 {adoToken && c.kind === ADO_SIGN_IN && (

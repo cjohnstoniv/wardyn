@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"path"
 	"path/filepath"
@@ -110,6 +111,11 @@ type Builder struct {
 
 	// --- Build-sandbox hardening: these knobs bound the blast radius of untrusted repo-controlled build code and default to secure values. ---
 
+	// RegistryHTTP deletes each build's per-build tag from the cache registry once the build is
+	// done (deletePushedTag). Nil skips the delete: only New sets it, so a Builder made by a test
+	// seam never dials a registry.
+	RegistryHTTP *http.Client
+
 	// BuildNetwork is the network mode for the build container. Empty => defaultBuildNetwork ("none")
 	// or WARDYN_ENVBUILD_BUILD_NETWORK; opting in also gives the untrusted RUN steps that same network access.
 	BuildNetwork string
@@ -138,7 +144,9 @@ func New(envbuilderImage, cacheRepo string) (*Builder, error) {
 	if err != nil {
 		return nil, fmt.Errorf("envbuild: new docker client: %w", err)
 	}
-	return newWithClient(cli, envbuilderImage, cacheRepo), nil
+	b := newWithClient(cli, envbuilderImage, cacheRepo)
+	b.RegistryHTTP = &http.Client{Timeout: registryDeleteTimeout}
+	return b, nil
 }
 
 // newWithClient is the seam used by tests to inject a fake envbuilderDockerAPI.
@@ -193,6 +201,9 @@ func (b *Builder) runBuildAndFinalize(ctx context.Context, env []string, extraBi
 	if insecure {
 		env = append(env, "ENVBUILDER_INSECURE=true")
 	}
+	// Whatever the outcome, this build's tag is dead once Build returns: the output image is tagged
+	// locally and nothing pulls the registry copy again.
+	defer b.deletePushedTag(ctx, buildTag, insecure)
 
 	timeout := b.BuildTimeout
 	if timeout <= 0 {
@@ -318,6 +329,53 @@ func (b *Builder) untagPerBuildBase(ctx context.Context, baseRef string) {
 			slog.String("ref", baseRef), slog.String("error", err.Error()))
 	}
 }
+
+// deletePushedTag removes this build's per-build tag from the cache registry (Distribution's
+// DELETE /v2/<repo>/manifests/<tag>, which drops the tag and only the tag, so a sibling build that
+// pushed the identical image under its own tag keeps working). Without it every build leaves one
+// more tag in the registry for good. Best-effort: the registry is tried at CacheRepo's address
+// (the compose service name, reachable from a containerized wardynd) and at WARDYN_ENVBUILD_PUSHED_REF's
+// (the host-side address, reachable from a host-mode one); an external registry that needs
+// credentials refuses, and the tag stays. Deleting the tag frees no disk by itself: the registry
+// reclaims blobs only on garbage collection (docs/ENVBUILD.md "Cache registry").
+func (b *Builder) deletePushedTag(ctx context.Context, tag string, insecure bool) {
+	if b.RegistryHTTP == nil || tag == "" {
+		return
+	}
+	ctx = context.WithoutCancel(ctx)
+	scheme := "https"
+	if insecure {
+		scheme = "http"
+	}
+	tried := map[string]bool{}
+	for _, repoRef := range []string{b.CacheRepo, os.Getenv(envPushedRef)} {
+		repoRef = strings.TrimSpace(repoRef)
+		host, repo, ok := strings.Cut(repoRef, "/")
+		if !ok || tried[repoRef] {
+			continue
+		}
+		tried[repoRef] = true
+		req, err := http.NewRequestWithContext(ctx, http.MethodDelete, scheme+"://"+host+"/v2/"+repo+"/manifests/"+tag, nil)
+		if err != nil {
+			continue
+		}
+		resp, err := b.RegistryHTTP.Do(req)
+		if err != nil {
+			slog.Debug("envbuild: could not reach the cache registry to delete the per-build tag",
+				slog.String("repo", repoRef), slog.String("error", err.Error()))
+			continue
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode == http.StatusAccepted || resp.StatusCode == http.StatusNotFound {
+			return
+		}
+		slog.Debug("envbuild: the cache registry refused to delete the per-build tag (left in place)",
+			slog.String("repo", repoRef), slog.Int("status", resp.StatusCode))
+	}
+}
+
+// registryDeleteTimeout bounds each tag-delete request.
+const registryDeleteTimeout = 5 * time.Second
 
 // perBuildBaseUntagTimeout bounds the best-effort untag above: long enough for a daemon round-trip, short enough that a wedged daemon cannot hold a build.
 const perBuildBaseUntagTimeout = 30 * time.Second

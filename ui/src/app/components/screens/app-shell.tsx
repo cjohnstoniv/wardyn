@@ -468,7 +468,11 @@ export function AppShell({
   const location = useLocation();
   const navigate = useNavigate();
   const { access, view } = useShellView(meta);
-  useViewResync(access, meta.memberMode);
+  useViewResync(
+    access,
+    meta.memberMode,
+    meta.identityResolved ? { userTypeId: meta.userType?.id ?? "", noCredential: meta.memberModeNoCredential } : null,
+  );
   // #1328 review round 2, R2-1 — this banner is shell-wide (every screen, both
   // views), so its CTA renders only for a caller who can actually reach the
   // Environment step: an operator (meta.operator resolves NO_BARRIER.ADMIN_ROUTE

@@ -81,7 +81,8 @@ export const FIELD_HELP = {
   eligible_grants: {
     what: "The ceiling of credential scopes this run may request — eligibility, not issuance.",
     values:
-      "kind: github_token | cloud_sts | api_key | git_pat | ssh_key, each with its own scope, plus ttl_seconds (1h max) and requires_approval. " +
+      "kind: github_token | cloud_sts | api_key | git_pat | ssh_key | env_secret | file_secret, each with its own scope, plus ttl_seconds (1h max) and requires_approval. " +
+      "env_secret and file_secret place a stored secret in the sandbox for the whole run (environment variable or file): resident, never revoked, and admin-only for a policy author. " +
       "A git_pat scope also takes repos, access, api and forge. " +
       `${GIT_PAT_SCOPE.HONESTY_TOKEN} ${GIT_PAT_SCOPE.HONESTY_API} ${GIT_PAT_SCOPE.HONESTY_BROKER}`,
     doc: "eligible_grants--grantspec",
@@ -172,7 +173,7 @@ export const FIELD_HELP = {
     // shipped enforcement, and never mentioned require_review_paths/hold_seconds
     // at all. This is the mock's canon sentence, verbatim.
     values:
-      "deny_paths (refused) + require_review_paths (held for an admin's decision) — path patterns anchored at the repository root, ** crosses segments — plus max_inspect_pack_mib (0-64, default 32) and hold_seconds (0-600, default 120). Enforced on every brokered git lane. Unenforceable (a warning, not a refusal) when this run's only git grant is ssh_key.",
+      "deny_paths (refused) + require_review_paths (held for an admin's decision) — path patterns anchored at the repository root, ** crosses segments — plus max_inspect_pack_mib (0-64, default 32), max_file_size_mib (0-32, 0 = off; refuses a push that adds a larger file) and hold_seconds (0-600, default 120). Enforced on every brokered git lane. Unenforceable (a warning, not a refusal) when this run's only git grant is ssh_key.",
     doc: "push_rules--pushrulesspec",
     snippet: { deny_paths: [".github/workflows/**"] },
   },
@@ -189,5 +190,12 @@ export const FIELD_HELP = {
       "A list of grantable capabilities: code_read, code_write, workflows_write, pr, issues_read, issues_write, repo_admin, … Only within the provider's capability_ceiling. Changing files, branches or tags through the API is never granted — push with git. Omitted keeps the provider's default. Not enforced yet: no GitHub lane reads it.",
     doc: "top-level",
     snippet: ["code_read", "code_write", "pr"],
+  },
+  harness_inner_walls: {
+    what: "The harness's own walls inside Wardyn's: its sandbox, and where its approvals happen. Only adds walls: a choice looser than what the run launches with refuses the run.",
+    values:
+      "sandbox_mode: off (workspace-write and read-only are refused: the harness's sandbox cannot start inside Wardyn's). approvals: harness | wardyn | none. Omitted keeps what the harness and lane give.",
+    doc: "harness_inner_walls--harnessinnerwalls",
+    snippet: { approvals: "wardyn" },
   },
 } satisfies Record<keyof RunPolicySpec, FieldHelp>;

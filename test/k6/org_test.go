@@ -30,6 +30,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -58,7 +59,45 @@ type lapseRun struct {
 	id     string
 	marked time.Time
 	err    string
+	proxy  *proxyLog
 }
+
+// proxyLog is a proxy pod's log, followed from the moment its run is live. runnerd deletes the pod as
+// soon as the proxy lapses, so a read after the refusal can find only NotFound.
+type proxyLog struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (l *proxyLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *proxyLog) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
+}
+
+// followProxyLog follows the run's proxy container log until ctx ends, restarting the follow if it
+// drops while the pod is still there, and stops once the lapse line has been captured.
+func (o *orgEnv) followProxyLog(ctx context.Context, id string) *proxyLog {
+	l := &proxyLog{}
+	go func() {
+		for ctx.Err() == nil && !strings.Contains(l.String(), lapseLine) {
+			cmd := exec.CommandContext(ctx, "kubectl", "--kubeconfig", o.adminKC, "-n", o.runsNS, "logs", "-f", "wardyn-proxy-"+id, "-c", "wardyn-proxy")
+			cmd.Stdout, cmd.Stderr = l, l
+			_ = cmd.Run()
+			time.Sleep(2 * time.Second)
+		}
+	}()
+	return l
+}
+
+// lapseLine is what the proxy logs when the org refuses its renew for good.
+const lapseLine = "refused permanently, lapsing"
 
 // fencedProxy is fence-live-http2's run, fenced while its node's kubelet is stopped so its proxy lives on.
 type fencedProxy struct{ id, node, pid string }
@@ -710,6 +749,9 @@ func (o *orgEnv) lapseSetup(t *testing.T) {
 		// before its next renew could be refused.
 		id := o.liveUntil(t, parent, nil)
 		o.lapse.id = id
+		followCtx, stopFollow := context.WithCancel(context.Background())
+		parent.Cleanup(stopFollow)
+		o.lapse.proxy = o.followProxyLog(followCtx, id)
 		o.waitAudit(t, id, 2*time.Minute, "a successful renew", func(r auditRow) bool { return r.Action == "identity.renew" && r.Outcome == "success" })
 		// The control: the agent's allowed egress works before the fault, so its refusal after the
 		// lapse is the lapse's doing.
@@ -748,13 +790,9 @@ func caseOrgSelfLapse(t *testing.T, o *orgEnv) {
 	})
 	note(t, "renew refused at the org %s after the run was ended: %s", time.Since(o.lapse.marked).Round(time.Second), row.Data)
 	deadline := time.Now().Add(2 * time.Minute)
-	for {
-		out, _ := exec.Command("kubectl", "--kubeconfig", o.adminKC, "-n", o.runsNS, "logs", "wardyn-proxy-"+id, "-c", "wardyn-proxy").CombinedOutput()
-		if strings.Contains(string(out), "refused permanently, lapsing") {
-			break
-		}
+	for !strings.Contains(o.lapse.proxy.String(), lapseLine) {
 		if time.Now().After(deadline) {
-			t.Fatalf("proxy log shows no lapse 2 min after the refusal: %s", tail(string(out), 600))
+			t.Fatalf("proxy log shows no lapse 2 min after the refusal: %s", tail(o.lapse.proxy.String(), 600))
 		}
 		time.Sleep(2 * time.Second)
 	}

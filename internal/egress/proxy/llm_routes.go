@@ -140,8 +140,14 @@ func llm404Detail(configured string) string {
 // over the vetted IP. Shared by the /wardyn/llm/* local routes and the
 // TLS-MITM CONNECT interception (serveMITM).
 func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host string, port int, rest string, channel contentscan.Channel) {
+	// A local model server's gate runs before anything else (local_model.go);
+	// one with no auth configured is served with no credential at all.
+	lm := p.localModelAt(host, port)
+	if lm != nil && p.localModelRefused(w, r, host, port, rest, lm) {
+		return
+	}
 	hdr, ok, ierr := p.inject.resolveCtx(r.Context(), host)
-	if !ok {
+	if !ok && lm == nil {
 		p.emitLLMDecision(r, host, port, egress.Deny, ruleSourceLLM, nil)
 		extra := map[string]any{"wardyn": "no_llm_credential", "detail": llm404Detail(p.llmUnavailableDetail)}
 		if shape := p.shapeOf(r, host); shape != shapePlain {
@@ -201,11 +207,14 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host str
 	}
 	// A rule that pins its credential to a method-and-path set withholds it from every other request
 	// on this route too (the strip still runs: ownedHeader is hdr.name either way).
-	inject := &hdr
+	inject, owned := &hdr, hdr.name
 	if !p.inject.allowsInjection(host, r.Method, "/"+rest, r.URL.RawQuery) {
 		inject = nil
 	}
-	p.forwardInspectedLLM(w, r, host, port, rest, target, inject, hdr.name, ruleSourceLLM, false, bodyReader, scanSummary)
+	if !ok { // a local model with no auth: the sandbox's own credential headers are still stripped
+		inject, owned = nil, "Authorization"
+	}
+	p.forwardInspectedLLM(w, r, host, port, rest, target, inject, owned, ruleSourceLLM, false, bodyReader, scanSummary)
 }
 
 // llmRouteTarget resolves the brokered LLM route's dial target, choosing the
@@ -325,6 +334,12 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 				return
 			}
 			resp = again
+		}
+	}
+	if lm := p.localModelAt(host, port); lm != nil && ruleSource == ruleSourceLLM {
+		if err := filterLocalInventory(resp, rest, lm); err != nil {
+			p.refuseLocalModel(w, r, host, port, http.StatusBadGateway, reasonUpstreamError, err.Error())
+			return
 		}
 	}
 	p.relayUpstream(w, r, host, port, resp, ruleSource)
@@ -483,54 +498,45 @@ func (p *Proxy) inspectForwardBody(w http.ResponseWriter, r *http.Request, host 
 // to maxRetainedScanBytes. Always non-nil and safe to call more than once.
 func (p *Proxy) scanBufferedBody(w http.ResponseWriter, r *http.Request, host string, channel contentscan.Channel, readErrMsg string, emit func(egress.Decision, string, *egress.ScanSummary)) (io.Reader, *egress.ScanSummary, func(), bool) {
 	shape := p.shapeOf(r, host)
-	// Scan slot (maxConcurrentScans) bounds live heap against the sidecar's
-	// cgroup cap. Waited through the request ctx AND a wall-clock bound
-	// (scanQueueWait); fails CLOSED on either, since an uninspectable request
-	// must not be forwarded.
 	noRelease := func() {}
-	ctx, cancel := context.WithTimeout(r.Context(), scanQueueWait)
-	defer cancel()
-	select {
-	case scanSlots <- struct{}{}:
-		defer func() { <-scanSlots }()
-	case <-ctx.Done():
-		emit(egress.Deny, ruleSourceLLM, nil)
-		p.scanFault(w, shape, readErrMsg, ctx.Err(), http.StatusBadGateway)
-		return nil, nil, noRelease, true
-	}
-
-	buffered, rerr := io.ReadAll(io.LimitReader(r.Body, int64(maxLLMScanBody)+1))
+	// Read before the scan slot, charged to the engine's retained budget for
+	// the buffer's whole life (scanBudget.readBody), so a slow body holds only
+	// the bytes it has sent. A budget wait that expires fails CLOSED.
+	buffered, release, rerr := p.scan.readBody(r.Context(), r.Body, r.ContentLength, int64(maxLLMScanBody))
 	if rerr != nil {
 		emit(egress.Deny, ruleSourceLLM, nil)
-		p.scanFault(w, shape, readErrMsg, rerr, http.StatusBadRequest)
-		return nil, nil, noRelease, true
-	}
-	// Charge the buffer to the LIFETIME budget after the read/scan peak, still
-	// under the slot; expiry fails CLOSED like the slot wait.
-	charge := func() (func(), bool) {
-		release, ok := retainScanBuffer(ctx, len(buffered))
-		if !ok {
-			emit(egress.Deny, ruleSourceLLM, nil)
-			p.scanFault(w, shape, readErrMsg, ctx.Err(), http.StatusBadGateway)
-			return noRelease, false
+		status := http.StatusBadRequest
+		if errors.Is(rerr, errScanBusy) {
+			status = http.StatusBadGateway
 		}
-		return release, true
+		p.scanFault(w, shape, readErrMsg, rerr, status)
+		return nil, nil, noRelease, true
 	}
 	if len(buffered) > maxLLMScanBody {
 		if p.scanner.BlocksOnError() {
+			release()
 			emit(egress.Deny, ruleSourceLLMBlocked, p.skipSummary("block", "body_oversize", channel))
 			writeScanBlockedShaped(w, shape, 0, nil, "body_oversize")
-			return nil, nil, noRelease, true
-		}
-		release, ok := charge()
-		if !ok {
 			return nil, nil, noRelease, true
 		}
 		return io.MultiReader(bytes.NewReader(buffered), r.Body),
 			p.skipSummary("skip", "body_oversize", channel), release, false
 	}
+	// The scan slot (maxConcurrentScans) bounds extraction's live heap against
+	// the sidecar's cgroup cap. Waited through the request ctx AND a wall-clock
+	// bound (scanQueueWait); fails CLOSED on either, since an uninspectable
+	// request must not be forwarded.
+	free, err := p.scan.takeSlot(r.Context())
+	if err != nil {
+		release()
+		emit(egress.Deny, ruleSourceLLM, nil)
+		p.scanFault(w, shape, readErrMsg, err, http.StatusBadGateway)
+		return nil, nil, noRelease, true
+	}
 	res, _, serr := p.scanner.ScanRequest(channel, buffered)
+	free()
 	if p.scanner.ShouldBlock(res) {
+		release()
 		emit(egress.Deny, ruleSourceLLMBlocked, scanSummaryFrom(res, serr, p.scanner, "block", channel))
 		writeScanBlockedShaped(w, shape, len(res.Findings), categoriesOf(res.Findings), res.SkipReason)
 		return nil, nil, noRelease, true
@@ -538,10 +544,6 @@ func (p *Proxy) scanBufferedBody(w http.ResponseWriter, r *http.Request, host st
 	var sum *egress.ScanSummary
 	if len(res.Findings) > 0 || res.Skipped || serr != nil {
 		sum = scanSummaryFrom(res, serr, p.scanner, "", channel)
-	}
-	release, ok := charge()
-	if !ok {
-		return nil, nil, noRelease, true
 	}
 	return bytes.NewReader(buffered), sum, release, false
 }

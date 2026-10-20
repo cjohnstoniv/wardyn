@@ -97,7 +97,7 @@ test.describe("Settings and Your account fit 1280x744 collapsed (#1200 compact c
     await expect(page.getByRole("heading", { name: "Your SSH keys", level: 3 })).toBeVisible();
     // Settled (review M2): Your SSH keys fetches its own list separately
     // from the page's initial status load.
-    await waitForSettledSummaries(page, [/^Your SSH keys \d+ key/]);
+    await waitForSettledSummaries(page, [/^Your SSH keys (No keys|\d+ keys?)/]);
 
     for (const title of ["Your SSH keys"]) {
       const toggle = page.getByRole("button", { name: new RegExp(`^${title}( |$)`) });

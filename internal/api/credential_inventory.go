@@ -22,7 +22,7 @@ import (
 
 // credInventoryNoMeta is the inventory's 503 when the configured secret store
 // keeps no credential metadata at all (design packet F, canon): the admin
-// view's Stored credentials page shows this sentence verbatim in its empty
+// view's Credentials page shows this sentence verbatim in its empty
 // card, with no Retry — retrying changes nothing about which store is
 // configured.
 const credInventoryNoMeta = "This deployment's secret store keeps no credential metadata, so there is nothing to list."

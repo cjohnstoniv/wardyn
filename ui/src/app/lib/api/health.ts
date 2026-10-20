@@ -162,6 +162,8 @@ export interface PolicyRef {
   email?: string;
   request_url?: string;
   request_text?: string;
+  // On a refusal: the kind of layer that refused ("deployment" or "profile").
+  layer?: string;
 }
 
 // Result of a real throwaway-sandbox probe (test-proxy / test-redirect) —

@@ -54,7 +54,10 @@ fi
 [ -n "$CHROME" ] || { echo "no chrome/chromium found for mermaid render"; exit 1; }
 MMDC_ARGS=()
 if [ -n "$CHROME" ]; then
-  printf '{"executablePath": "%s", "args": ["--no-sandbox", "--disable-setuid-sandbox"]}\n' "$CHROME" > "$TMP/puppeteer.json"
+  # timeout: puppeteer's 30 s launch default is too short for the FIRST chrome start on a loaded hosted
+  # runner (run 39289289158: the first diagram timed out, the other twelve took about a second each).
+  # dumpio: chrome's own stderr goes to $TMP/err, which a failure prints, so a launch that still fails says why.
+  printf '{"executablePath": "%s", "args": ["--no-sandbox", "--disable-setuid-sandbox"], "timeout": 120000, "dumpio": true}\n' "$CHROME" > "$TMP/puppeteer.json"
   MMDC_ARGS+=(-p "$TMP/puppeteer.json")
 fi
 
@@ -160,7 +163,7 @@ KILLED	internal/types/types.go
 STOPPED	internal/types/types.go
 minted_jti	internal/broker/broker.go
 kernel.sensor.bypass	internal/api/runs_dispatch.go
-/api/v1/internal/groundtruth	internal/api/server.go
+/api/v1/internal/groundtruth	internal/api/internal_relay.go
 wardyn.run-id	cmd/wardyn-tetragon-ingest/main.go
 MANIFEST
 

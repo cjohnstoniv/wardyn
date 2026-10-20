@@ -37,6 +37,7 @@ printf '%s\n' "${WANT}" > "${dir}/want.txt"; printf '%s\n' "${IMAGES}" > "${dir}
 cat > "${bin}/cosign" <<'STUB'
 #!/usr/bin/env bash
 echo "cosign $*" >> "${LOG}"
+[ -z "${CHART_UNSIGNED:-}" ] || [[ "$*" != */charts/* ]] || { echo "no matching signatures" >&2; exit 1; }
 mode="" id="" re="" iss=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -87,7 +88,7 @@ STUB
 cat > "${bin}/helm" <<'STUB'
 #!/usr/bin/env bash
 echo "helm $*" >> "${LOG}"
-printf 'name: wardyn\nversion: %s\nappVersion: %s\n' "${VER}" "${VER}"
+printf 'name: wardyn\nversion: %s\nappVersion: %s\n' "${VER}" "${APP_VER:-${VER}}"
 STUB
 cat > "${bin}/curl" <<'STUB'
 #!/usr/bin/env bash
@@ -100,18 +101,21 @@ chmod +x "${bin}"/*
 run() {
   : > "${dir}/log"
   rc=0
-  out="$(PATH="${bin}:${PATH}" NO_PKG="${NO_PKG:-}" IMG_ERR="${IMG_ERR:-}" LOG="${dir}/log" DIR="${dir}" VER="$1" SIGNER_TAG="$2" SIGFORM="$3" "${VERIFY}" "$1" 2>&1)" || rc=$?
+  out="$(PATH="${bin}:${PATH}" NO_PKG="${NO_PKG:-}" CHART_UNSIGNED="${CHART_UNSIGNED:-}" APP_VER="${APP_VER:-}" IMG_ERR="${IMG_ERR:-}" LOG="${dir}/log" DIR="${dir}" VER="$1" SIGNER_TAG="$2" SIGFORM="$3" "${VERIFY}" "$1" 2>&1)" || rc=$?
 }
 
 for form in bundle sigpem; do
   # 1. the signer IS the requested tag: passes, exactly, for every image and the blob.
   run 0.8.3 v0.8.3 "${form}"
   [ "${rc}" = 0 ] || fail "V=0.8.3 signed by v0.8.3 (${form}) exited ${rc}, want 0: $(printf '%s' "${out}" | tail -5)"
-  printf '%s' "${out}" | grep -q '^fails=0$' || fail "V=0.8.3 signed by v0.8.3 (${form}) did not report fails=0"
+  printf '%s' "${out}" | grep '^fails=0$' >/dev/null || fail "V=0.8.3 signed by v0.8.3 (${form}) did not report fails=0"
   id='https://github.com/cjohnstoniv/wardyn/.github/workflows/release.yml@refs/tags/v0.8.3'
   nimg="$(wc -l < "${dir}/images.txt")"
   nverify="$(grep -c "^cosign verify .*--certificate-identity ${id} --certificate-oidc-issuer https://token.actions.githubusercontent.com\$" "${dir}/log" || true)"
-  [ "${nverify}" = "${nimg}" ] || fail "(${form}) ${nverify} of ${nimg} 'cosign verify' calls carried the exact identity + OIDC issuer: $(grep '^cosign' "${dir}/log" | head -3)"
+  # one per image, plus the Helm chart (docs/VERIFY.md section 4), by digest and under the same exact identity
+  [ "${nverify}" = "$((nimg + 1))" ] || fail "(${form}) ${nverify} of $((nimg + 1)) 'cosign verify' calls carried the exact identity + OIDC issuer: $(grep '^cosign' "${dir}/log" | head -3)"
+  grep -q "^cosign verify ghcr.io/cjohnstoniv/charts/wardyn@sha256:0*1 --certificate-identity ${id} --certificate-oidc-issuer https://token.actions.githubusercontent.com\$" "${dir}/log" \
+    || fail "(${form}) the Helm chart was not cosign-verified by digest with the exact identity: $(grep '/charts/' "${dir}/log" | head -3)"
   grep -q "^cosign verify-blob .*--certificate-identity ${id} --certificate-oidc-issuer https://token.actions.githubusercontent.com\$" "${dir}/log" \
     || fail "(${form}) verify-blob did not pin the exact identity + OIDC issuer: $(grep verify-blob "${dir}/log")"
   ! grep -q -- '-regexp' "${dir}/log" || fail "(${form}) a -regexp identity form still reaches cosign: $(grep -- -regexp "${dir}/log" | head -1)"
@@ -124,9 +128,10 @@ for form in bundle sigpem; do
   run 0.8.3 v0.7.0 "${form}"
   [ "${rc}" != 0 ] || fail "V=0.8.3 signed by v0.7.0 (${form}) exited 0: the requested tag plays no part in the identity check"
   nfail="$(printf '%s' "${out}" | grep -c '^FAIL .* cosign verify$' || true)"
-  [ "${nfail}" = "${nimg}" ] || fail "(${form}) ${nfail} of ${nimg} images were refused for the wrong signer tag"
-  printf '%s' "${out}" | grep -q '^FAIL verify-blob' || fail "(${form}) the checksum blob was accepted from the wrong signer tag"
-  printf '%s' "${out}" | grep -q '^fails=[1-9]' || fail "(${form}) fails was not > 0 for the wrong signer tag"
+  [ "${nfail}" = "$((nimg + 1))" ] || fail "(${form}) ${nfail} of $((nimg + 1)) images and charts were refused for the wrong signer tag"
+  printf '%s' "${out}" | grep '^FAIL helm chart cosign verify$' >/dev/null || fail "(${form}) the chart was accepted from the wrong signer tag"
+  printf '%s' "${out}" | grep '^FAIL verify-blob' >/dev/null || fail "(${form}) the checksum blob was accepted from the wrong signer tag"
+  printf '%s' "${out}" | grep '^fails=[1-9]' >/dev/null || fail "(${form}) fails was not > 0 for the wrong signer tag"
 done
 pass "verify-release binds the signer to the requested tag (images, bundle blob, sig+pem blob)"
 
@@ -146,9 +151,9 @@ run 0.9.3-rc.2 v0.9.3-rc.2 bundle
 run 0.9.3-rc.3 v0.9.3-rc.3 bundle
 [ "${rc}" = 0 ] || fail "V=0.9.3-rc.3 with the package exited ${rc}: $(printf '%s' "${out}" | tail -3)"
 NO_PKG=1 run 0.9.3-rc.3 v0.9.3-rc.3 bundle
-[ "${rc}" != 0 ] && printf '%s' "${out}" | grep -q 'FAIL missing asset: wardyn-runnerd.pkg' || fail "V=0.9.3-rc.3 without wardyn-runnerd.pkg was accepted"
+[ "${rc}" != 0 ] && printf '%s' "${out}" | grep 'FAIL missing asset: wardyn-runnerd.pkg' >/dev/null || fail "V=0.9.3-rc.3 without wardyn-runnerd.pkg was accepted"
 NO_PKG=1 run 0.9.3 v0.9.3 bundle
-[ "${rc}" != 0 ] && printf '%s' "${out}" | grep -q 'FAIL missing asset: wardyn-runnerd.pkg' || fail "V=0.9.3 without wardyn-runnerd.pkg was accepted"
+[ "${rc}" != 0 ] && printf '%s' "${out}" | grep 'FAIL missing asset: wardyn-runnerd.pkg' >/dev/null || fail "V=0.9.3 without wardyn-runnerd.pkg was accepted"
 run 0.9.2 v0.9.2 bundle
 [ "${rc}" = 0 ] || fail "V=0.9.2 (no package in that release) exited ${rc}: $(printf '%s' "${out}" | tail -3)"
 pass "wardyn-runnerd.pkg is required from 0.9.3 on"
@@ -158,9 +163,21 @@ pass "wardyn-licenses.tar.gz is required from 0.9.4 on, and not before"
 
 # 3c. a failed imagetools call says why, instead of only "no index digest".
 IMG_ERR='ERROR: docker: unknown command: docker buildx' run 0.8.3 v0.8.3 bundle
-[ "${rc}" != 0 ] && printf '%s' "${out}" | grep -q 'FAIL wardynd: no index digest' && printf '%s' "${out}" | grep -q 'unknown command: docker buildx' \
+[ "${rc}" != 0 ] && printf '%s' "${out}" | grep 'FAIL wardynd: no index digest' >/dev/null && printf '%s' "${out}" | grep 'unknown command: docker buildx' >/dev/null \
   || fail "a failed imagetools call did not surface its stderr: $(printf '%s' "${out}" | head -4)"
 pass "an imagetools failure reports its cause"
+
+# 3d. the chart is held to its own signature and to this release's appVersion (#2227).
+CHART_UNSIGNED=1 run 0.8.3 v0.8.3 bundle
+[ "${rc}" != 0 ] && printf '%s' "${out}" | grep '^FAIL helm chart cosign verify$' >/dev/null && ! printf '%s' "${out}" | grep '^FAIL .*wardynd' >/dev/null \
+  || fail "an unsigned chart (images signed) was not the one failure: rc=${rc} $(printf '%s' "${out}" | grep FAIL)"
+APP_VER=0.8.2 run 0.8.3 v0.8.3 bundle
+[ "${rc}" != 0 ] && printf '%s' "${out}" | grep "^FAIL helm chart appVersion '0.8.2' is not 0.8.3$" >/dev/null \
+  || fail "a chart whose appVersion is another release was accepted: rc=${rc}"
+run 0.8.3 v0.8.3 bundle
+grep -q '^helm show chart oci://ghcr.io/cjohnstoniv/charts/wardyn@sha256:0*1$' "${dir}/log" \
+  || fail "appVersion was not read from the cosign-verified digest: $(grep '^helm' "${dir}/log")"
+pass "the Helm chart's signature and appVersion are verified"
 
 # 4. a malformed V exits 2 BEFORE any network call, and never reaches a regexp.
 for bad in '0.8.3.*' '0.8' 'v0.8.3' '0.8.3 ' '0.8.3/../x' '0.8.3;id' '..*'; do

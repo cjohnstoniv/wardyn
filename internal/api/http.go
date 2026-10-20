@@ -332,11 +332,12 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 			// default). RemoteAddr is the accepted-connection peer and cannot be
 			// spoofed remotely. Sidecar callbacks use internalAuth (a separate
 			// middleware) and never reach here, so they are unaffected.
-			// LocalTrustForwarder relaxes this for the compose topology only, where the
-			// peer is always the docker gateway and LAN protection is the loopback
-			// PUBLISH (see the Config field doc). The Host gate below still applies.
-			if !s.cfg.LocalTrustForwarder && !isLoopbackRemoteAddr(r.RemoteAddr) {
-				writeErrorReason(w, http.StatusForbidden, reasonLocalModePeerNotLoopback, "local mode: request peer is not loopback (bind wardynd to 127.0.0.1, set WARDYN_LOCAL_TRUST_FORWARDER when behind a loopback-only publish, or configure auth)")
+			// LocalTrustForwarder relaxes this for the compose topology only, to the
+			// peers its published port's traffic arrives from (LocalTrustedPeers);
+			// LAN protection there is the loopback PUBLISH (see the Config field
+			// doc). The Host gate below still applies.
+			if !s.localPeerTrusted(r.RemoteAddr) {
+				writeErrorReason(w, http.StatusForbidden, reasonLocalModePeerNotLoopback, localPeerRefusal)
 				return
 			}
 			// DNS-rebinding defense: the no-auth local surface must answer
@@ -462,7 +463,7 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 			return
 		}
 		// A rejected session cookie answers itself — rejectedSessionAnswer, auth_status.go.
-		if reason, status, msg, ok := rejectedSessionAnswer(r); ok {
+		if reason, status, msg, ok := rejectedSessionAnswer(r, s.cfg.AdminToken == ""); ok {
 			s.auditRejectedSession(r, reason) // carries the ERROR log + authStoreErrorInc
 			writeErrorReason(w, status, reason, msg)
 			return

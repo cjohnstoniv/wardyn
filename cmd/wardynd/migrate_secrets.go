@@ -56,6 +56,9 @@ func maintenanceMode(f *bootFlags) (bool, error) {
 		}
 		return true, auditSplitLegacyMode(f)
 	}
+	if err := refuseCombinedStoreModes(f); err != nil {
+		return true, err
+	}
 	if p := strings.TrimSpace(*f.rotateAgeKey); p != "" {
 		return true, withBootTransport(f, func(f *bootFlags) error { return rotateAgeKeyMode(f, p) })
 	}
@@ -68,13 +71,34 @@ func maintenanceMode(f *bootFlags) (bool, error) {
 	return false, nil
 }
 
+// refuseCombinedStoreModes stops -rotate-age-key, -rewrap, -migrate-secrets and
+// -reconcile from running together: each arm below returns on its own, so the first
+// one in that order would win and the others be dropped without a word (a
+// "-migrate-secrets -reconcile" ran only the reconcile and exited 0). -to belongs
+// to -migrate-secrets alone.
+func refuseCombinedStoreModes(f *bootFlags) error {
+	n := 0
+	for _, on := range []bool{strings.TrimSpace(*f.rotateAgeKey) != "", *f.rewrap, *f.migrateSecrets, *f.reconcile} {
+		if on {
+			n++
+		}
+	}
+	if n > 1 {
+		return fmt.Errorf("refusing to run: -rotate-age-key, -rewrap, -migrate-secrets and -reconcile each run alone; run them one at a time")
+	}
+	if strings.TrimSpace(*f.migrateTo) != "" && !*f.migrateSecrets {
+		return fmt.Errorf("refusing to run: -to is the target of -migrate-secrets; run `wardynd -migrate-secrets -to=<target>`")
+	}
+	return nil
+}
+
 // withBootTransport runs a maintenance mode that opens the secret store
 // clients after installing the trusted CA and WARDYN_DAEMON_PROXY_URL on the
 // shared transport, as a serving boot does before it builds the same clients:
 // without it the AWS KMS client, which starts from that transport, would reach
 // KMS behind neither the proxy nor the corporate CA.
 func withBootTransport(f *bootFlags, mode func(*bootFlags) error) error {
-	_, pool, _, err := loadTrustedCA(*f.trustedCAFile)
+	_, pool, _, err := loadTrustedCA(*f.trustedCAFile, *f.refuseWritableCA)
 	if err != nil {
 		return err
 	}

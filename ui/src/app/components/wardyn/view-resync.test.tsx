@@ -57,4 +57,42 @@ describe("useViewResync (§2.4)", () => {
     act(() => void window.dispatchEvent(new Event("focus")));
     expect(whoami).not.toHaveBeenCalled();
   });
+
+  // #2618: a type or posture switched in another tab changes what a launch from this one is governed as.
+  describe("inside the User view, a switched user type or no-credential posture", () => {
+    const loaded = { userTypeId: "standard", noCredential: false };
+    function inView(me: Partial<Me>, posture: Parameters<typeof useViewResync>[2] = loaded) {
+      const assign = vi.fn();
+      vi.spyOn(window, "location", "get").mockReturnValue({ ...window.location, pathname: "/runs", assign });
+      const whoami = vi.spyOn(health, "whoami").mockResolvedValue({ user_view: true, user_type: { id: "standard", name: "Standard" }, ...me } as Me);
+      renderHook(() => useViewResync("session-admin", true, posture));
+      return { assign, whoami };
+    }
+
+    it("a different user type reloads this tab", async () => {
+      const { assign } = inView({ user_type: { id: "contractor", name: "Contractor" } });
+      act(() => void window.dispatchEvent(new Event("focus")));
+      await waitFor(() => expect(assign).toHaveBeenCalledWith("/runs"));
+    });
+
+    it("a switched no-credential posture reloads this tab", async () => {
+      const { assign } = inView({ user_view_no_credential: true });
+      act(() => void window.dispatchEvent(new Event("focus")));
+      await waitFor(() => expect(assign).toHaveBeenCalledWith("/runs"));
+    });
+
+    it("the same type and posture change nothing", async () => {
+      const same = inView({});
+      act(() => void window.dispatchEvent(new Event("focus")));
+      await waitFor(() => expect(same.whoami).toHaveBeenCalled());
+      expect(same.assign).not.toHaveBeenCalled();
+    });
+
+    it("a page whose /me had not answered when it loaded has nothing to compare, and changes nothing", async () => {
+      const unknown = inView({ user_type: { id: "contractor", name: "Contractor" } }, null);
+      act(() => void window.dispatchEvent(new Event("focus")));
+      await waitFor(() => expect(unknown.whoami).toHaveBeenCalled());
+      expect(unknown.assign).not.toHaveBeenCalled();
+    });
+  });
 });

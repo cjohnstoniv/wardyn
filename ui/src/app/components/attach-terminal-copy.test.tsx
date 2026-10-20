@@ -146,6 +146,17 @@ describe("AttachTerminal copy offer", () => {
     expect(screen.getByText(/Closes in 10s · Ctrl\+C copies/)).toBeInTheDocument();
   });
 
+  // Focus stays in the terminal, so without a live region a screen reader says nothing and the offer lapses unseen.
+  it("the offer is announced through a polite status region", async () => {
+    const { ws, grid } = await attach(false);
+    dragHello(grid);
+    await out(ws, tmuxCopy("hello"));
+    const live = screen.getByTestId("terminal-copy-offer-live");
+    expect(live).toHaveAttribute("role", "status");
+    expect(live).toHaveAttribute("aria-live", "polite");
+    expect(live.textContent).toBe("Copy selection. 5 characters. Ctrl+C copies.");
+  });
+
   it("Ctrl+C while the toast is focused is a Copy", async () => {
     const { ws, grid } = await attach(false);
     dragHello(grid);

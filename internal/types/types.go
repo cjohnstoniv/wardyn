@@ -176,9 +176,12 @@ type AgentRun struct {
 	RunnerPoolExecutor  string              `json:"remote_runner_id,omitempty"`
 	// Reserved is what the run holds on its runner while it holds a sandbox there (0174): the CPU and
 	// memory it was given and its main drive, written once at insert and summed as the runner's In use.
-	Reserved   RunnerAmounts `json:"-"`
-	SandboxRef string        `json:"sandbox_ref,omitempty"`
-	Image      string        `json:"image,omitempty"` // resolved sandbox image, kept for provenance; empty for legacy rows
+	Reserved RunnerAmounts `json:"-"`
+	// LocalFolder is the folder on the creator's computer that `wardyn sync` seeds before the agent
+	// starts (0195, run_local_folder.go): written with the row, read back only by dispatch's hold.
+	LocalFolder *RunLocalFolder `json:"-"`
+	SandboxRef  string          `json:"sandbox_ref,omitempty"`
+	Image       string          `json:"image,omitempty"` // resolved sandbox image, kept for provenance; empty for legacy rows
 	// Interactive marks a human-driven run: sandbox comes up RUNNING, no task exec'd, no completion watcher.
 	Interactive bool `json:"interactive"`
 	// Experience is the canonical run mode chosen at launch (0.9 New Run), frozen at create and never re-derived. Empty for a run from an older client or before 0.9;
@@ -200,6 +203,8 @@ type AgentRun struct {
 	StatusReason string `json:"status_reason,omitempty"` // reason token parsed out of StatusDetail, derived at read, never stored
 	// AutonomyLevel freezes the level resolved at create, not the profile/posture that produced it (that's on the audit row).
 	AutonomyLevel AutonomyLevel `json:"autonomy_level,omitempty"`
+	// InnerWalls freezes the harness's own walls the run launched with (#2822); nil for a run with no catalog harness, or one created before this field.
+	InnerWalls *HarnessInnerWalls `json:"inner_walls,omitempty"`
 	// AdmittedAt is when a queued run was promoted out of the queue; written by promotion only, so nil for a run that never waited.
 	AdmittedAt *time.Time `json:"admitted_at,omitempty"`
 	// Queue is a waiting run's place in its pool's queue, derived at read from the queue row and never stored on the run; absent once the run leaves QUEUED.
@@ -436,6 +441,9 @@ type ApprovalRequest struct {
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 	Held      bool       `json:"held,omitempty"` // Held/HeldUntil project approval.Hold(this, now) at response time, never stored; both zero on a DECIDED row
 	HeldUntil *time.Time `json:"held_until,omitempty"`
+	// LastRejoinedAt is when a held request last re-entered the hold on this PENDING row (nil until
+	// then); approval.Hold measures a bounded hold from it when it is later than RequestedAt. Not on the wire.
+	LastRejoinedAt *time.Time `json:"-"`
 	// EscalationTier is the highest notification tier whose due time has passed, and SLADueAt is the
 	// next tier's due time. Both are projected from approval_notifications at response time on PENDING
 	// rows only, never stored; tier 0 (the first notice) and "no later tier" leave them zero.
@@ -605,3 +613,12 @@ type PersonList struct {
 // of at most 64 MiB (128 GiB) and a replay or list render at 2048 reads. The
 // control plane refuses a higher part (413), and the proxy never forwards one.
 const RecordingMaxParts = 2048
+
+// RunLocalFolder is a run's folder on the person's computer, which reaches a remote sandbox only by
+// `wardyn sync`. Name is how the person's computer names it (its base name), for the messages that
+// refer to it; RemoteDir is where in the sandbox it lands. A run that has one does not start its
+// agent until the first sync of that folder into RemoteDir has completed.
+type RunLocalFolder struct {
+	Name      string `json:"name"`
+	RemoteDir string `json:"remote_dir,omitempty"`
+}

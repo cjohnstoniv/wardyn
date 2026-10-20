@@ -52,7 +52,7 @@ scripts/ci-run.sh
 | `WARDYN_SETUP_RUNNER_DISK_GB` | throwaway stack: GB of disk free for runs, where this host cannot see Docker's data root (Docker Desktop); the stack's runner takes no run without it there | measured on this host |
 | `WARDYN_SETUP_RUNNER_LIMITS` | throwaway stack: the runner's whole limit set as `wardyn runner set` flags, instead of half this host | unset |
 | `WARDYN_DOCKER_SOCK` | throwaway stack: which host Docker socket the job drives (two-daemon hosts: pick the daemon with the runtimes you need) | `/var/run/docker.sock` |
-| `WARDYN_ADMIN_TOKEN` | throwaway stack: its own bootstrap bearer, gone with the stack; never sent to `WARDYN_URL` | `demo-admin-token` |
+| `WARDYN_ADMIN_TOKEN` | throwaway stack: its own bootstrap bearer, gone with the stack; never sent to `WARDYN_URL` | a random value per job |
 
 > [!NOTE]
 > `WARDYN_CI_SECRETS` is gone: `ci-run.sh` refuses it rather than seed a credential into the operator's namespace for every run to share.
@@ -280,7 +280,8 @@ These scripts stay out of the per-PR [`ci.yml`](../.github/workflows/ci.yml) **b
 - **[`scripts/k6-kind-conformance.sh`](../scripts/k6-kind-conformance.sh)** — the Kubernetes runner's kind conformance:
   - per kubelet version (the 1.31 floor and the latest kind image) it creates a `wardyn-k6-<pid>` cluster on Calico, stands up a real organisation and enrols the `wardyn-runnerd` chart with it.
   - [`test/k6`](../test/k6) then runs under runnerd's own token; its bind/delete race cases gate the unbound-pod arm.
-  - It deletes its clusters and images on exit, and runs in `nightly.yml`'s `k6-kind-conformance` job; self-skips unless `WARDYN_TEST_K8S=1`.
+  - It deletes its clusters and images on exit, and runs in `nightly.yml`'s `k6-kind-conformance` job, one leg per kubelet and suite (`K6_SUITES`); self-skips unless `WARDYN_TEST_K8S=1`.
+- **[`scripts/kind-components-walk.sh`](../scripts/kind-components-walk.sh)** and **[`scripts/kind-run-output-walk.sh`](../scripts/kind-run-output-walk.sh)** each make and delete their own quickstart cluster, and run in `nightly.yml`'s `kind-acceptance-walks` job; self-skip unless `WARDYN_TEST_K8S=1`.
 - **[`scripts/runner-compat-walk.sh`](../scripts/runner-compat-walk.sh)** — runner and organisation version compatibility against the newest published 0.9.Z release:
   - this tree's `wardyn-runnerd` registers with the released organisation and completes one exec run. Below 0.9.3 that run must fail instead, with the error that says to upgrade the organisation first.
   - the released `wardyn-runnerd` serves a candidate runner's state directory and completes a run, then registers with this tree's organisation and completes one.
@@ -338,7 +339,6 @@ The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 **Where `build`'s time goes**, in one green run (35555137810, pre-#467): `make test-race` 537 s, `make cover-check` 395 s, `make lint` 120 s — two full passes over the same three tag sets (coverage, then race).
 
 - #467 merged them: `cover-check`'s three `test-report` suites now run under `-race -covermode=atomic` in one pass each, and the `build` job no longer runs `make test-race` or `make build-docker` as separate steps (`cover-check` already compiles and races those tag sets).
-- Re-measure `cover-check`'s new time once green runs accumulate on this workflow; it should land below the old 537+395=932 s combined, not above it.
 - `make lint` has since gained the console's ESLint ([`ui/eslint.config.js`](../ui/eslint.config.js)), so the `go (lint)` leg also sets up pnpm and node; that install and lint pass are not in the 120 s above.
 
 **Why `ui-e2e` runs as two shards.**
@@ -358,6 +358,7 @@ The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 | `go` (lint, unit, docker, k8s matrix) | – | pending | pending | 40 |
 | `build` | – | pending | pending | 10 |
 | `conformance-k8s` | 58 | 11.2 | 12.8 | 35 |
+| `vm-conformance` (not required) | – | pending | pending | 30 |
 | `ui-e2e` (1/2, 2/2 matrix) | 1 | 7.0 | 7.0 | 25 |
 | `test-pg-shard` (api-1, api-2, store, race) | – | pending | pending | 20 |
 | `test-pg` (aggregator) | – | pending | pending | 10 |
@@ -387,13 +388,19 @@ The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 | `main-red` | – | pending | pending | 10 |
 | `notify-flaky` | – | pending | pending | 10 |
 | `runner-units` | – | pending | pending | 15 |
+| `ci-ran` | – | pending | pending | 10 |
+| `train-suites` | – | pending | pending | 180 |
+| `train-gate` | – | pending | pending | 10 |
+| `go-modules` | – | pending | pending | 15 |
+| `go-gate-tools` | – | pending | pending | 15 |
+| `go-cache-prune` | – | pending | pending | 10 |
 | `multi-arch build (agent-claude-code)`, nightly | 60 | 3.5 | 3.8 | 45 |
 | `multi-arch build (wardynd)`, nightly | 60 | 3.1 | 3.5 | 45 |
 | `multi-arch build (agent-aws-sso)`, nightly | 60 | 2.9 | 4.0 | 45 |
 
 - `helm-install-test` now also runs the old `desktop-envelope` job's proof (#472).
 - Before the merge the two took 3.2 and 2.5 minutes at most, so 20 minutes clears twice their sum.
-- Fill in its row once the merged job has about ten green runs.
+- Fill in its row after about ten green runs.
 
 Re-measure (job name, runs, median and maximum over successful jobs):
 
@@ -413,10 +420,12 @@ gh run list -R cjohnstoniv/wardyn --workflow ci.yml --status completed --limit 6
 ### Nightly scope and release runs
 
 - The 07:00 nightly and a plain dispatch run every lane. A release candidate dispatches it with `-f scope=candidate`, which [`scripts/release-patch.sh`](../scripts/release-patch.sh) does right after pushing the branch and before opening the PR.
-- Nine jobs then skip through a job-level `if: inputs.scope != 'candidate'`: `e2e-live`, `ci-mode-dogfood-model-fake`, `test-e2e-concurrent`, `kind-survival-walk`, `k6-kind-conformance`, `hybrid-walk`, `kind-upgrade-walk`, `migration-merge-check` and `published-image-scan`.
+- Ten jobs then skip through a job-level `if: inputs.scope != 'candidate'`: `e2e-live`, `ci-mode-dogfood-model-fake`, `test-e2e-concurrent`, `kind-survival-walk`, `k6-kind-conformance`, `kind-acceptance-walks`, `hybrid-walk`, `kind-upgrade-walk`, `migration-merge-check` and `published-image-scan`.
 - That frees about 60 runner-minutes by median and 12 job slots (counted before `k6-kind-conformance`). What remains is `release.yml`'s `watched=` list plus the `multi-arch build` staging jobs.
 - [`scripts/test-repo-guards.sh`](../scripts/test-repo-guards.sh) guard 18 keeps the skip set in step with `notify-new-lanes`. A skipped job reports `skipped`, so that job stays quiet.
 - A dispatched nightly has one concurrency group per ref and scope, so a second dispatch cancels the first. A scheduled run has its own group and is never cancelled.
+- On a same-repo `train/*` or `prep/*` pull request, `train-suites` dispatches the nightly (`scope=candidate`, `publish=false`) on the head and waits; `train-gate` needs that run green. A call would fail on a fork's read-only token, so nothing uses `workflow_call`.
+- The nightly restores the `go-<suite>-` caches `ci.yml` saves and saves none. Only `publish` on (the default) stages and attests images.
 - `release.yml` has one group per ref and cancels nothing, so a dispatch and the tag push cannot publish at once.
 - `release.yml`'s `runner-pkg` job (macOS) builds `wardyn-runnerd.pkg` with [`scripts/build-runner-pkg.sh`](../scripts/build-runner-pkg.sh). Each signing step runs only when its `APPLE_DEVELOPER_ID_*` or `APPLE_NOTARY_*` secrets are set, and logs a skip line otherwise; [`scripts/test-runner-pkg.sh`](../scripts/test-runner-pkg.sh) covers the script on Linux.
 
@@ -590,6 +599,18 @@ Docker Hub rate-limited CI even after `docker/login-action`, so CI reads the Doc
 - Guard 17 in [`scripts/test-repo-guards.sh`](../scripts/test-repo-guards.sh) fails while a Docker Hub `FROM` pin is not listed.
 - [`mirror-selftest.yml`](../.github/workflows/mirror-selftest.yml) (dispatch only) checks the action on ubuntu-24.04 and ubuntu-26.04 with Docker Hub unreachable.
 - Not covered: pulls inside kind nodes, which skip dockerd (`postgres:16` is copied for a future `kind load`), and BuildKit container builders.
+
+### Go module cache for image builds
+
+`WARDYN_BUILD_GOMODCACHE` names a Go module cache directory. The e2e scripts pass its `cache/download` tree to the proxy and oracle builds as `--build-context gomodcache=<dir>`, so `go mod download` reads them. go.sum is checked against each module's recorded hash, as with any module cache. Unset, builds download.
+
+### Self-hosted canary
+
+- [`selfhosted-canary.yml`](../.github/workflows/selfhosted-canary.yml) (dispatch only) runs `make staticcheck` on a runner labelled `wardyn-ci`, before any `ci.yml` job moves to one.
+- Its `runs-on` picks that runner only for the owner's dispatch in this repository; any other dispatcher, or a fork's own run, gets `ubuntu-latest`.
+- Dispatch only: a job routed to a label no runner serves waits up to 24 hours, which would hold a pull request's checks.
+- On a self-hosted runner its first step fails unless the job is in gVisor, non-root with `no_new_privs` set and no working `sudo`, capped at `10 GiB`, with no Docker socket or bind mount.
+- `hosted: true` runs it on `ubuntu-latest` for comparison. It uses no secret and a `contents: read` token; required checks are unchanged.
 
 ## Driving an existing control plane instead
 

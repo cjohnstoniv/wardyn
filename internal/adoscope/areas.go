@@ -19,11 +19,12 @@ type readArea struct {
 var readAreas = map[string]readArea{
 	"git":    {CapCodeRead, "vso.code"},
 	"policy": {CapCodeRead, "vso.code"},
-	// Search is three documented resources on its own host, one per area;
+	// Search is four documented resources on its own host, one per area;
 	// any other search resource is an unclassified read.
 	"search/codesearchresults":     {CapCodeRead, "vso.code"},
 	"search/workitemsearchresults": {CapWorkRead, "vso.work"},
 	"search/wikisearchresults":     {CapWikiRead, "vso.wiki"},
+	"search/packagesearchresults":  {CapPackagingRead, "vso.packaging"},
 
 	"wit":  {CapWorkRead, "vso.work"},
 	"work": {CapWorkRead, "vso.work"},

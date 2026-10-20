@@ -198,6 +198,8 @@ var templateRequestRules = []TemplateFieldRule{
 		"The pool resolves from the person's own default, then the organisation's, when the template is used. A default that is unavailable or refused never falls through to another pool: the person chooses. A named pool narrows where the run may go and grants nothing, and the launcher's pool-use policy is checked at use."),
 	carriedField("ends_after_sec", partRunner, templateOmitBaseline, templateEmptyNever,
 		"The run takes the default end when the template is used, and that default can change. An end is a length of time from launch, checked again then, never a permission."),
+	excludedField("local_folder", templateExcludeLaunch,
+		"A folder on one person's computer is named at each launch; a template cannot know where it is."),
 	excludedField("max_wait_sec", templateExcludeLaunch,
 		"How long a run may wait for a slot in a full pool is chosen at each launch; the default wait suits a template's runs."),
 	carriedField("no_end", partRunner, templateOmitBaseline, templateEmptySame,
@@ -260,6 +262,8 @@ var templatePolicyRules = []TemplateFieldRule{
 	carriedField("tool_rules", partRules, templateOmitOptional, templateEmptySame,
 		"No tool rules are added.").
 		in(templateSectionHarness, "harness"),
+	carriedField("harness_inner_walls", partRules, templateOmitOptional, templateEmptySame,
+		"The harness's own walls are what its lane and autonomy level give."),
 	carriedField("git_push_any_branch", partRules, templateOmitBaseline, templateEmptyValue,
 		"Pushes stay inside the run's own branch namespace. False is a choice to keep that.").
 		in(templateSectionSCMEntry, "provider+org"),
@@ -292,6 +296,7 @@ var templateNestedCarried = map[string]string{
 	"DriveSelection":      "enabled read_only",
 	"GitPATOverride":      "host repos access api",
 	"GrantSpec":           "kind scope ttl_seconds requires_approval owner_only",
+	"HarnessInnerWalls":   "sandbox_mode approvals",
 	"IncludedTool":        "id kind model_provider component tool_rules default_effect",
 	"LLMInspectionSpec": "mode workspace_secret_names detect_secrets detect_secret_patterns detect_entropy detect_pii detector_sidecar_url " +
 		"classified_markers scan_attachments inspect_forward_egress max_scan_bytes on_scanner_error require_inspectable_llm intercept_tls block_min_severity",
@@ -318,6 +323,10 @@ var templateNestedCarried = map[string]string{
 var templateNestedExcluded = map[string]TemplateFieldRule{
 	"LLMInspectionSpec.workspace_secret_values": excludedField("workspace_secret_values", templateExcludeSecret,
 		"Secret values are runtime-only: the server resolves them, and a template names secrets instead."),
+	"RunLocalFolder.name": excludedField("name", templateExcludeLaunch,
+		"Part of local_folder, which is named at each launch."),
+	"RunLocalFolder.remote_dir": excludedField("remote_dir", templateExcludeLaunch,
+		"Part of local_folder, which is named at each launch."),
 }
 
 // templateRule finds a top-level rule by name.

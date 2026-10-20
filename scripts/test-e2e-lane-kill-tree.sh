@@ -45,7 +45,7 @@ fail() { echo "test-e2e-lane-kill-tree: FAIL: $*" >&2; exit 1; }
 # exercising stop_lanes itself.
 stop_lanes_body="$(extract_func stop_lanes)"
 [[ -n "${stop_lanes_body}" ]] || fail "stop_lanes() not found in ${RUN_E2E_SH}"
-echo "${stop_lanes_body}" | grep -q 'kill_tree' \
+echo "${stop_lanes_body}" | grep 'kill_tree' >/dev/null \
   || fail "stop_lanes() no longer calls kill_tree() in ${RUN_E2E_SH}"
 
 # make_tree DURATION: a 3-generation `sleep DURATION` tree (grandparent ->

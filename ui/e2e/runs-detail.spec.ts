@@ -615,6 +615,22 @@ test.describe("Run detail: the Sync rows of a live remote run", () => {
   });
 });
 
+// #2822: the harness's own walls the run launched with read under its Policy row.
+test.describe("Run detail: the inner walls a run launched with", () => {
+  test("read under the Policy row", async ({ page }) => {
+    const runId = sql("SELECT id FROM agent_runs ORDER BY created_at LIMIT 1");
+    await page.route(`**/api/v1/runs/${runId}`, async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const response = await route.fetch();
+      const json = await response.json();
+      await route.fulfill({ response, json: { ...json, inner_walls: { sandbox_mode: "off", approvals: "wardyn" } } });
+    });
+    await gotoConsole(page);
+    await page.goto(`/runs/${runId}`);
+    await expect(page.getByText(NR_REVIEW.INNER_WALLS(NR_REVIEW.INNER_SANDBOX_OFF, NR_REVIEW.INNER_APPROVALS_WARDYN))).toBeVisible();
+  });
+});
+
 // T19 (ADO lane): a run that names an Azure DevOps repository but was not
 // given the per-person credential carries a run.ado_lane.skip audit row, and
 // its Credentials panel shows that row's sentence under the Azure DevOps
@@ -627,21 +643,27 @@ test.describe("Run detail — the Azure DevOps decline", () => {
   test("a run the Azure DevOps lane declined says why in its Credentials panel", async ({ page }) => {
     await openRuns(page);
     await page.route("**/api/v1/audit*", async (route) => {
-      const res = await route.fetch();
-      const rows = (await res.json()) as Array<Record<string, unknown>>;
-      const runId = new URL(route.request().url()).searchParams.get("run_id") ?? "";
-      rows.push({
-        id: "e2e-ado-lane-skip",
-        time: new Date().toISOString(),
-        run_id: runId,
-        actor_type: "system",
-        actor: "wardynd",
-        action: "run.ado_lane.skip",
-        target: runId,
-        outcome: "denied",
-        data: { reason: "row_not_admitted", detail },
-      });
-      await route.fulfill({ response: res, json: rows });
+      // A poll still in flight when the page moves on is already handled: fulfilling it throws, and the throw
+      // is charged to the test. The next poll is spliced the same way, so this one is let go.
+      try {
+        const res = await route.fetch();
+        const rows = (await res.json()) as Array<Record<string, unknown>>;
+        const runId = new URL(route.request().url()).searchParams.get("run_id") ?? "";
+        rows.push({
+          id: "e2e-ado-lane-skip",
+          time: new Date().toISOString(),
+          run_id: runId,
+          actor_type: "system",
+          actor: "wardynd",
+          action: "run.ado_lane.skip",
+          target: runId,
+          outcome: "denied",
+          data: { reason: "row_not_admitted", detail },
+        });
+        await route.fulfill({ response: res, json: rows });
+      } catch {
+        // the request was abandoned
+      }
     });
 
     await page.getByText("e2e fixture 4").click();
@@ -674,5 +696,28 @@ test.describe("Run detail — the Credentials eligibility line", () => {
     await expect(page.getByRole("heading", { name: "e2e fixture 4", level: 1 })).toBeVisible();
     await expect(page.getByText(RUN_COCKPIT.credentialsEligibility)).toBeVisible();
     await expect(page.getByText(/never sees your real keys/)).toHaveCount(0);
+  });
+
+  // A grant reads as a sentence; the scope JSON sits behind Details.
+  test("reads a grant as a sentence and keeps the scope JSON behind Details", async ({ page }) => {
+    await page.route(/\/api\/v1\/runs\/[^/]+\/grants(\?|$)/, (route) =>
+      route.fulfill({
+        json: [
+          {
+            id: "g1",
+            run_id: "r1",
+            created_at: new Date().toISOString(),
+            spec: { kind: "github_token", scope: { repos: [], permissions: { contents: "read" } }, ttl_seconds: 600, requires_approval: false },
+          },
+        ],
+      }),
+    );
+    await openRuns(page);
+    await page.getByText("e2e fixture 4").click();
+    await expect(page.getByRole("heading", { name: "e2e fixture 4", level: 1 })).toBeVisible();
+    const grant = page.getByTestId("credential-grant").first();
+    await expect(grant).toContainText("GitHub token · read contents · no repositories listed");
+    await expect(grant.locator("details")).not.toHaveAttribute("open", "");
+    await page.unrouteAll({ behavior: "ignoreErrors" });
   });
 });

@@ -23,7 +23,7 @@ const groups = (group: ReviewGroupId, names: string): Record<string, ReviewGroup
 const policy = (names: string) => names.split(" ").map((n) => `inline_policy.${n}`).join(" ");
 
 const POLICY_REVIEW = "allowed_domains denied_domains allow_all_egress first_use_approval first_use_hold_seconds max_holds " +
-  "allowed_methods eligible_grants tool_rules git_push_any_branch push_rules azure_devops_capabilities github_capabilities";
+  "allowed_methods eligible_grants tool_rules harness_inner_walls git_push_any_branch push_rules azure_devops_capabilities github_capabilities";
 const POLICY_DOCUMENT = "auto_stop_after_sec ui_apps llm_inspection min_confinement_class workspace_mounts workspace_repos resources";
 
 /**
@@ -40,7 +40,7 @@ export const FIELD_HOME: Record<string, FieldHome> = {
   ...homes("document", "ends_after_sec no_end image allowed_image devcontainer_repo devcontainer_ref placement runner_id " +
     "policy_id preset preset_version agent task repo workspace_id interactive task_mode interactive_start seed_auto_tools " +
     "tool_approvals integration_id model_provider"),
-  ...homes("excluded", "title description mode_contract max_wait_sec policy_overlay"),
+  ...homes("excluded", "title description mode_contract max_wait_sec policy_overlay local_folder"),
   ...homes("review", policy(POLICY_REVIEW)),
   ...homes("document", policy(POLICY_DOCUMENT)),
 };
@@ -57,7 +57,7 @@ export const FIELD_HOME_OVERRIDES: Record<string, FieldHome> = {
 };
 
 export const REVIEW_GROUP_OF_FIELD: Record<string, ReviewGroupId> = {
-  ...groups("run", "shape experience workload interactive task_mode interactive_start agent task preset preset_version title description mode_contract max_wait_sec policy_overlay"),
+  ...groups("run", "shape experience workload interactive task_mode interactive_start agent task preset preset_version title description mode_contract max_wait_sec policy_overlay local_folder"),
   ...groups("where", "runner_pool_id confinement_class placement runner_id image allowed_image devcontainer_repo devcontainer_ref " +
     policy("min_confinement_class")),
   ...groups("work", "workspaces drive drives start_folder no_repositories_or_drives repo workspace_id " + policy("workspace_mounts workspace_repos")),

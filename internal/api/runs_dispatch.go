@@ -17,7 +17,6 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
-	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
 
 // dispatchParams carries the per-run inputs the create / workspace handlers
@@ -117,6 +116,10 @@ type dispatchParams struct {
 	// proxy's refusal then names the policy as changed for this run
 	// (policyref.Ref.Overridden).
 	PolicyOverridden bool
+	// Provenance is which layer set each value of the run's policy as create
+	// resolved it, recorded on run.policy.resolve. Nil for every lane with no
+	// create resolution (scans, record, verify, logins, probes).
+	Provenance knobProvenance
 	// PushRuleSets are the push content rules per SCM entry the run brings
 	// (pushRuleSetsFor), the product after the ceiling. When set, the proxy
 	// carries them INSTEAD of the policy's run-wide push_rules.
@@ -133,6 +136,11 @@ type dispatchParams struct {
 	// pool-queue doors) from the request the fold graded; a server-authored lane
 	// leaves it empty and resolves from WorkspaceRepos alone.
 	ADOLaneRepo string
+	// RedirectProbe is the stored egress redirect row the redirect Test probes,
+	// nil for every other run. Set only by handleTestSiteConfigRedirect: dispatch
+	// plans that one row's token as for a run that reaches its public host, so
+	// the probe presents the token proxy-side exactly as a run does.
+	RedirectProbe *types.EgressRedirect
 }
 
 // dispatchRun launches the sandbox via the runner and advances run state. On any
@@ -165,7 +173,8 @@ type dispatchParams struct {
 // ALLOWLIST so nothing above it can re-add a broker-managed host;
 // reassertCeilingDenies then runs after it (it only adds denies and only
 // removes credentials, so it cannot un-confine anything, and it has to sit
-// below every WIDENING phase — see its own ordering argument). The ProxyConfig
+// below every WIDENING phase — see its own ordering argument), and the final
+// seal after both meets the result with the outer layers. The ProxyConfig
 // snapshot then captures that final policy, and the run.policy.resolve audit
 // event discloses it. Keep new phases inside this sequence, in the right place
 // — a phase hoisted into a caller silently loses the ordering guarantee.
@@ -369,7 +378,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		// cannot keep reaching the public host the operator redirected away
 		// (GAP-EGRESS-4); deny beats allow-all in the proxy's evaluator.
 		policy.DeniedDomains = appendNetworkRedirectDenials(policy.DeniedDomains, siteCfg)
-		artifactPlan = s.planArtifactRedirect(ctx, run, siteCfg, preDomains, resolvedLaneHosts(adoRun, adoInject))
+		planCfg, planDomains := redirectPlanScope(siteCfg, preDomains, p.RedirectProbe)
+		artifactPlan = s.planArtifactRedirect(ctx, run, planCfg, planDomains, resolvedLaneHosts(adoRun, adoInject))
 		for k, v := range artifactPlan.env {
 			sandboxEnv[k] = v
 		}
@@ -402,7 +412,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	injections = ado.injections
 	// A narrowed git_pat grant this run could not enforce refuses the run here
 	// (runs_dispatch_pat_scope.go).
-	if !s.enforceablePATNarrowing(ctx, run, p, grantRows, siteCfg, adoRun, adoInject) {
+	if !s.enforceablePATNarrowing(ctx, run, p, grantRows, siteCfg, adoRun, adoInject, ceiling.adoStanding.operator) {
 		return
 	}
 	s.announceADODecline(ctx, run, adoDecision, sandboxEnv)
@@ -442,6 +452,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	s.recordRunSizing(ctx, run, resourceLimitsToRunner(policy.Resources), len(plan.azure.gates) > 0)
 	s.reassertCeilingDenies(ctx, run, &policy, &injections, ceiling, &p, sandboxEnv, &llm, &plan.bedrockMITMHosts, &p.Components.MITMHosts)
 	azureARM := plan.azureCLI.closeWithheld(&policy, injections) // the door, decided once; one the ceiling withheld takes its hosts with it
+	// The final seal, after every phase that adds a host and after the ceiling's
+	// re-assertion: nothing below may widen policy (run_policy_seal.go).
+	s.sealRunPolicy(ctx, run, &policy, p.Provenance)
 
 	// Host bind mounts (policy WorkspaceMounts + the host-mode Bedrock ~/.aws
 	// read-only mount) — operator-authored, never agent-chosen; see buildRunMounts.
@@ -479,6 +492,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "the run's tool-approval credential could not be made")
 		return
 	}
+	// Last of the env writers' credential work, after every injection above is
+	// authored, so its one-credential-per-host check sees them all.
+	placeholderMITM := s.placeEnvSecrets(ctx, run, policy, p, grantRows, secretEnvKeys, sandboxEnv, &injections)
 	secretEnv := splitSecretEnv(sandboxEnv, dispatchSecretEnvKeys(secretEnvKeys, llm))
 
 	resources := resourceLimitsToRunner(policy.Resources)
@@ -540,7 +556,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// TLS-MITM (beyond the built-in LLM hosts) so a registry token injects on
 			// the wire. Only hosts with a resolved token injection appear here — a
 			// tight per-host allowlist, never a blanket. See isMITMHost widening.
-			MITMHosts: slices.Concat(artifactPlan.mitmHosts, plan.bedrockMITMHosts, ado.mitmHosts, plan.azure.mitmHosts, p.Components.MITMHosts),
+			MITMHosts: slices.Concat(artifactPlan.mitmHosts, plan.bedrockMITMHosts, ado.mitmHosts, plan.azure.mitmHosts, p.Components.MITMHosts, placeholderMITM),
 			// MITM the BUILT-IN LLM hosts only when that's actually intended for this
 			// run — subscription OAuth injection or intercept_tls content inspection.
 			// The CA above may also be minted purely for artifact-token injection, so
@@ -589,6 +605,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// legacy path, the chosen model provider's own address on the provider
 			// path (see dispatchLLMPlan.llmUpstreams). Empty => the vendor host.
 			LLMUpstreams: plan.llmUpstreams,
+			// What each local_model upstream above may be asked for (#2957);
+			// nil, so no key is written, unless the run chose one.
+			LocalModels: plan.localModels,
 			// What the brokered-LLM 404 says when this run reaches that route
 			// with nothing behind it — compiled at dispatch because the sidecar
 			// knows only that no injection matched (see llmUnavailableDetail).
@@ -598,6 +617,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// policy has review paths, the one thing it changes: an older
 			// proxy refuses the key, and must not refuse every task run.
 			Unattended:         !p.Interactive && pushReviewRules(policy, p.PushRuleSets),
+			ScrubResponses:     s.cfg.ScrubProxyResponses,
 			PushRuleSets:       p.PushRuleSets,
 			PushRuleBase:       pushRuleBase(policy, p.PushRuleSets),
 			HarnessToolRules:   p.HarnessToolRules,
@@ -607,6 +627,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// the run has no profile and the site sets no policy_help, because an
 			// older proxy refuses the key.
 			Attribution: s.runAttribution(ctx, run, siteCfg, p.PolicyOverridden),
+			// WARDYN_EGRESS_PORT_RULE, "" when off: an older proxy refuses the key.
+			PortRule: s.cfg.EgressPortRule,
 		},
 		// Hard resource caps. A nil policy block (or a zero field) becomes the
 		// driver's conservative platform default, so EVERY sandbox is CPU/memory/
@@ -641,6 +663,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.policy.resolve",
 		run.ID.String(), "success", mustJSON(effectivePolicyDatum{
 			RunPolicySpec: auditablePolicy(policy), DiskMiBFilled: diskSoft, DiskMiBBasis: p.MainDrive.basis(), DiskMiBDefaultSource: p.MainDrive.defaultSource(),
+			Provenance: p.Provenance,
 		})))
 
 	// Held BEFORE CreateSandbox, not after: the row still carries the
@@ -658,6 +681,11 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// sync.OnceFunc + defer: the explicit calls below stop it at the earliest point, and the
 	// defer stops the heartbeat if CreateSandbox panics (ctx is WithoutCancel, so nothing else would).
 	stopCreateLease := sync.OnceFunc(s.holdRunWatcherLease(ctx, run.ID))
+	// A dispatch that returns with no sandbox created leaves no lease owner behind, which a
+	// member-drive delete would read as a create still in flight until the heartbeat aged out.
+	// Deferred first, so it runs after the create lease's ticker has stopped.
+	created := false
+	defer s.releaseUncreatedRunLease(ctx, run.ID, &created)
 	defer stopCreateLease()
 
 	// What the substrate says it is waiting on, while it is still waiting; the
@@ -704,6 +732,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": err.Error(), "reason": reason})))
 		return
 	}
+	created = true
 
 	// Drives attached — a no-op for the runs (most of them) that carry none.
 	// See auditDriveMount.
@@ -811,6 +840,10 @@ func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, 
 	// sandbox. The driver wraps the argv with wardyn-rec (recording) when
 	// configured. Exec failure: audit + stop the sandbox + mark FAILED.
 	if run.Task != "" {
+		// A local folder holds the agent until its first sync lands (run_local_folder.go).
+		if !s.holdForLocalFolder(ctx, run, ref) {
+			return
+		}
 		// BYOI: gate the task exec on a passing selftest (fail closed) — but
 		// refuse UP FRONT, before even attempting the selftest, on an
 		// exec-less (krun) substrate: see byoiExecLessRefused.
@@ -912,34 +945,6 @@ func auditablePolicy(policy types.RunPolicySpec) types.RunPolicySpec {
 	return out
 }
 
-// toolchainNeeds is dispatchParams.Toolchains' shape: which of the two
-// toolchain-fidelity env groups this run's workspace scans actually detected.
-type toolchainNeeds struct{ goTools, jvmTools bool }
-
-// runToolchainNeeds derives a run's toolchainNeeds from its resolved
-// workspaces: the union of every attached profile's detections
-// (workspacescan.ToolchainNeeds — the same signals the devcontainer emission
-// keys on). No workspaces at all, or ANY attached workspace lacking a
-// decodable profile (unattached/unscanned/malformed) → nil (UNKNOWN; dispatch
-// keeps the full set) — one unscanned workspace in an otherwise-scanned set
-// must dominate the same way an all-unscanned set does, or its undeclared
-// needs would silently ride on the scanned workspaces' narrower env. Only
-// once EVERY workspace decodes a profile does empty needs apply: a workspace
-// run's env then states what its requirements ground, nothing more.
-func runToolchainNeeds(wsRefs []types.Workspace) *toolchainNeeds {
-	profiles := make([]workspacescan.WorkspaceProfile, 0, len(wsRefs))
-	for _, ws := range wsRefs {
-		if p, ok := workspaceProfile(ws); ok {
-			profiles = append(profiles, p)
-		}
-	}
-	if len(wsRefs) == 0 || len(profiles) != len(wsRefs) {
-		return nil
-	}
-	goNeeded, jvmNeeded := workspacescan.ToolchainNeeds(profiles...)
-	return &toolchainNeeds{goTools: goNeeded, jvmTools: jvmNeeded}
-}
-
 // dispatchAdmitted refuses, before anything is claimed or written, a run no
 // lane may dispatch (a non-remote placement create bound to no runner) and a
 // ceiling nobody resolved.
@@ -972,4 +977,17 @@ func (s *Server) dispatchAdmitted(ctx context.Context, run types.AgentRun, ceili
 // The local placement parity test reads the same list, so a key added here needs a placement origin.
 func dispatchSecretEnvKeys(envSecretKeys []string, llm llmTransport) []string {
 	return slices.Concat(envSecretKeys, llm.secretEnvKeys, []string{codexMCPEnv})
+}
+
+// redirectPlanScope is what planArtifactRedirect plans over: the site config
+// and the run's pre-substitution egress, or, for the redirect Test, only the
+// probed row as for a run that names its public hosts. The probe's egress names
+// only the mirror, so the run-scoped gate (artifactRedirectApplies) would
+// otherwise withhold the row's token.
+func redirectPlanScope(sc types.SiteConfig, preDomains []string, probe *types.EgressRedirect) (types.SiteConfig, []string) {
+	if probe == nil {
+		return sc, preDomains
+	}
+	sc.EgressRedirects = []types.EgressRedirect{*probe}
+	return sc, redirectPublicHosts(*probe)
 }

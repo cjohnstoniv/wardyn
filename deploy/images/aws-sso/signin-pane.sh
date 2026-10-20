@@ -141,6 +141,9 @@ elif [[ -z "${WARDYN_AWS_SSO_LOGIN_COMMAND:-}" ]]; then
     print_failed
 elif bash -c "$WARDYN_AWS_SSO_LOGIN_COMMAND"; then
     printf '%s\n' "${WARDYN_AWS_SSO_SELFRUN_DONE:-}"
+    # The capture is stored and the sandbox is stopped seconds from now; the
+    # sign-in's scrollback goes first (the helper already wiped its caches).
+    tmux clear-history 2>/dev/null || true
 else
     print_failed
 fi

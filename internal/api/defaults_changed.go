@@ -89,7 +89,7 @@ var defaultChanges = []defaultChange{
 		Release: "0.9.1", Name: "aws_sso_config_env",
 		Changed: "With AWS SSO proxy-inject on (the default), WARDYN_AWS_SSO_CONFIG_B64 reaches the sandbox as a plain environment variable: " +
 			"it holds the start URL, region, account id and role name, no token, and docker inspect or a pod spec shows them.",
-		Old: "Only WARDYN_AWS_SSO_PROXY_INJECT=off makes it a secret again, and that also writes the AWS sign-in token into the sandbox; keeping the default is safer.",
+		Old: "No setting restores it: WARDYN_AWS_SSO_PROXY_INJECT=off, which made it a secret again by writing the AWS sign-in token into the sandbox, was removed in 0.10.0.",
 		Applies: func(e upgradeEstate) bool {
 			return e.AWSSSOProxyInject && hasEnabledProvider(e.Site, types.ModelProviderBedrockSSO)
 		},

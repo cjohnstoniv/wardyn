@@ -16,6 +16,23 @@ on:
         type: choice
         options: [full, candidate]
         default: full
+      publish:
+        description: "Stage the multi-arch images and attest them. Leave on for a release candidate; a hand run that must not touch the registry turns it off."
+        type: boolean
+        default: true
+  # Kept, but nothing calls it today: ci.yml's train-suites dispatches this workflow with
+  # scope=candidate and publish=false. The input is a string here (workflow_call has no choice
+  # type); a value other than candidate runs every lane.
+  workflow_call:
+    inputs:
+      scope:
+        description: "full = every lane; candidate = only the lanes a release is gated on"
+        type: string
+        default: full
+      publish:
+        description: "Stage and attest the multi-arch images. A called run builds them and pushes nothing, whatever event the caller ran on."
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -27,8 +44,15 @@ permissions:
 # running beside the run it replaces. Only a dispatched run is ever cancelled:
 # the event name is in the key, so a scheduled run shares a group with no
 # dispatch, is never cancelled by one, and never cancels one.
+# A run called from ci.yml sees the CALLER's github context: its event_name is the
+# caller's (pull_request or push) and github.workflow is the caller's name. So the
+# key starts with a literal (a key shared with the caller's own group cancels the
+# called run on start) and ends with the caller's run id, which gives each called
+# run a group of its own: it never cancels or queues behind a dispatched nightly
+# on the same ref, and ci.yml's own cancel-in-progress is what stops it when a
+# newer push supersedes the PR.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}-${{ inputs.scope || 'full' }}
+  group: nightly-${{ github.event_name }}-${{ github.ref }}-${{ inputs.scope || 'full' }}${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '' || format('-{0}', github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' }}
 
 # SCOPE. scope=candidate skips every job that release.yml's preflight-green does
@@ -61,6 +85,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - uses: ./.github/actions/nightly-go-cache
+        with:
+          suite: unit
       - name: Docker available
         run: docker --version
       # test/e2e/e2e.sh prints its per-check PASS/FAIL lines and its summary to
@@ -109,6 +136,15 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - uses: ./.github/actions/nightly-go-cache
+        with:
+          suite: unit
+      # The image builds below read Go modules from this job's cache (scripts/lib/image-build.sh),
+      # so a module fetch that fails fails HERE with its own error, not inside a docker build.
+      # Cold `go mod download` measured at 4 s (go-modules, run 39254228294); 3 min is the floor.
+      - name: Fill the Go module cache
+        timeout-minutes: 3
+        run: go mod download
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 9
@@ -128,6 +164,7 @@ jobs:
         shell: bash # pipefail — see the e2e-live job above
         run: |
           mkdir -p test/reports/e2e
+          export WARDYN_BUILD_GOMODCACHE="$(go env GOMODCACHE)"
           make test-e2e-live 2>&1 | tee test/reports/e2e/task-e2e.log
       - name: Upload e2e results
         if: always()
@@ -164,6 +201,15 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - uses: ./.github/actions/nightly-go-cache
+        with:
+          suite: conformance-docker
+      # The image builds below read Go modules from this job's cache (scripts/lib/image-build.sh),
+      # so a module fetch that fails fails HERE with its own error, not inside a docker build.
+      # Cold `go mod download` measured at 4 s (go-modules, run 39254228294); 3 min is the floor.
+      - name: Fill the Go module cache
+        timeout-minutes: 3
+        run: go mod download
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 9
@@ -189,7 +235,10 @@ jobs:
           boot="$(docker run --rm --runtime=runsc busybox:latest dmesg)"
           grep -q gVisor <<<"${boot}" || { echo "::error::--runtime=runsc did not boot gVisor: ${boot}"; exit 1; }
       - name: Build wardyn-proxy image (local only — the boot-egress sidecar)
-        run: docker build -f deploy/compose/Dockerfile.proxy -t wardyn/wardyn-proxy:local .
+        run: |
+          export WARDYN_BUILD_GOMODCACHE="$(go env GOMODCACHE)"
+          source scripts/lib/image-build.sh
+          wardyn_go_image_build -f deploy/compose/Dockerfile.proxy -t wardyn/wardyn-proxy:local .
       - name: Build agent-claude-code image (local only — the boot under measurement)
         run: docker build -f deploy/images/claude-code/Dockerfile -t wardyn/agent-claude-code:local .
       - name: Build conformance agent image (busybox + wardyn-rec — the recorded sandbox)
@@ -213,6 +262,7 @@ jobs:
         # removed here — nothing else on this runner is attached to it.
         run: |
           docker network rm wardyn-internal 2>/dev/null || true
+          export WARDYN_BUILD_GOMODCACHE="$(go env GOMODCACHE)"
           make test-e2e-live 2>&1 | tee test/reports/e2e/cc2-task-e2e.log
       - name: Upload CC2 results
         if: always()
@@ -244,6 +294,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - uses: ./.github/actions/nightly-go-cache
+        with:
+          suite: unit
       - name: Docker available
         run: docker --version
       # Same evidence problem as e2e-live above: run-e2e-ssh.sh writes no
@@ -366,6 +419,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - uses: ./.github/actions/nightly-go-cache
+        with:
+          suite: k8s
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
@@ -425,6 +481,15 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - uses: ./.github/actions/nightly-go-cache
+        with:
+          suite: docker
+      # The image builds below read Go modules from this job's cache (scripts/lib/image-build.sh),
+      # so a module fetch that fails fails HERE with its own error, not inside a docker build.
+      # Cold `go mod download` measured at 4 s (go-modules, run 39254228294); 3 min is the floor.
+      - name: Fill the Go module cache
+        timeout-minutes: 3
+        run: go mod download
       - name: Docker available
         run: docker --version
       # test/e2e/live's newHarness FATALs (not skips) once WARDYN_TEST_DOCKER=1
@@ -442,7 +507,10 @@ jobs:
       # first hosted nightly after 0.7.5 went red on a pull-denied for an image
       # that is published nowhere. Same two builds, same tags.
       - name: Build wardyn-proxy image (local only — the boot-egress sidecar)
-        run: docker build -f deploy/compose/Dockerfile.proxy -t wardyn/wardyn-proxy:local .
+        run: |
+          export WARDYN_BUILD_GOMODCACHE="$(go env GOMODCACHE)"
+          source scripts/lib/image-build.sh
+          wardyn_go_image_build -f deploy/compose/Dockerfile.proxy -t wardyn/wardyn-proxy:local .
       - name: Build agent-claude-code image (local only — the boot under measurement)
         run: docker build -f deploy/images/claude-code/Dockerfile -t wardyn/agent-claude-code:local .
       - name: Build conformance agent image (busybox + wardyn-rec — the recorded sandbox)
@@ -518,6 +586,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - uses: ./.github/actions/nightly-go-cache
+        with:
+          suite: docker
       - name: Docker available
         run: docker --version
       # The test's two subfake instances (control-plane + vendor) run inside
@@ -663,6 +734,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - uses: ./.github/actions/nightly-go-cache
+        with:
+          suite: unit
       - name: Docker available
         run: docker --version
       - name: Live UI-sandbox relay e2e (dedicated compose stack)
@@ -785,7 +859,7 @@ jobs:
             [registry."docker.io"]
               mirrors = ["mirror.gcr.io"]
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && inputs.publish
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -796,7 +870,7 @@ jobs:
         with:
           context: .
           file: ${{ matrix.dockerfile }}
-          push: ${{ github.event_name == 'workflow_dispatch' && matrix.stage == 'true' }}
+          push: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && matrix.stage == 'true' }}
           platforms: linux/amd64,linux/arm64
           provenance: false
           build-args: ${{ matrix.build-args }}
@@ -808,7 +882,7 @@ jobs:
       # line at build time (which also covers a scheduled run that pushes
       # nothing); this reads it back out of what was pushed. Gated on the exit code.
       - name: Assert the staged digest carries the pinned GOFIPS140 snapshot
-        if: github.event_name == 'workflow_dispatch' && matrix.stage == 'true' && contains(matrix.build-args, 'GOFIPS140=')
+        if: github.event_name == 'workflow_dispatch' && inputs.publish && matrix.stage == 'true' && contains(matrix.build-args, 'GOFIPS140=')
         env:
           BUILD_ARGS: ${{ matrix.build-args }}
           IMAGE_REF: ghcr.io/cjohnstoniv/staging/${{ matrix.name }}@${{ steps.build.outputs.digest }}
@@ -818,7 +892,7 @@ jobs:
           test -n "$pin"
           ./scripts/check-fips-image.sh "$IMAGE_REF" "$pin"
       - name: Attest the staged digest's build provenance
-        if: github.event_name == 'workflow_dispatch' && matrix.stage == 'true'
+        if: github.event_name == 'workflow_dispatch' && inputs.publish && matrix.stage == 'true'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/cjohnstoniv/staging/${{ matrix.name }}
@@ -832,7 +906,7 @@ jobs:
   buildx-smoke-ui-sandbox:
     name: multi-arch build (${{ matrix.name }})
     needs: buildx-smoke
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -1196,6 +1270,19 @@ jobs:
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24)@'
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: ./.github/actions/nightly-go-cache
+        with:
+          suite: docker
+      # The image builds below read Go modules from this job's cache (scripts/lib/image-build.sh),
+      # so a module fetch that fails fails HERE with its own error, not inside a docker build.
+      # Cold `go mod download` measured at 4 s (go-modules, run 39254228294); 3 min is the floor.
+      - name: Fill the Go module cache
+        timeout-minutes: 3
+        run: go mod download
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 9
@@ -1215,7 +1302,9 @@ jobs:
       - name: Build wardynd + wardyn-proxy (:quickstart, the tag the script defaults to)
         run: |
           docker build -f deploy/compose/Dockerfile.wardynd -t wardyn/wardynd:quickstart .
-          docker build -f deploy/compose/Dockerfile.proxy -t wardyn/wardyn-proxy:quickstart .
+          export WARDYN_BUILD_GOMODCACHE="$(go env GOMODCACHE)"
+          source scripts/lib/image-build.sh
+          wardyn_go_image_build -f deploy/compose/Dockerfile.proxy -t wardyn/wardyn-proxy:quickstart .
       - name: Compose SSO role walk (mprime + compose-sso)
         env:
           WARDYN_TEST_SSO_ROLES: "1"
@@ -1269,6 +1358,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - uses: ./.github/actions/nightly-go-cache
+        with:
+          suite: k8s
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
@@ -1327,10 +1419,20 @@ jobs:
   # deleted before it binds must never leave a proxy no one can stop. NEVER RUN BEFORE: NOTIFY_EXEMPT in
   # scripts/test-repo-guards.sh, out of notify-new-lanes' needs and release.yml's watched= until it
   # has gone green here, the same posture kind-survival-walk has.
+  # One job per kubelet and suite (four legs, each its own kind cluster), because the two kubelets
+  # one after the other with both suites took 61 minutes. The kubelet pins live here, not in the
+  # script's default, so a bump is made in both places. fail-fast is off: a red leg must not hide
+  # the other three.
   k6-kind-conformance:
     if: inputs.scope != 'candidate'
+    name: k6-kind-conformance (${{ matrix.kubelet }}, ${{ matrix.suite }})
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        kubelet: [v1.31.4, v1.35.0]
+        suite: [org, inproc]
     steps:
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
         run: |
@@ -1347,16 +1449,21 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - uses: ./.github/actions/nightly-go-cache
+        with:
+          suite: k8s
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
       - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
           install_only: "true"
-      - name: Kubernetes runner kind conformance (floor and latest kubelet)
+      - name: Kubernetes runner kind conformance (${{ matrix.kubelet }}, ${{ matrix.suite }} suite)
         env:
           WARDYN_TEST_K8S: "1"
           K6_KEEP_LOGS: ${{ github.workspace }}/test/reports/e2e
+          K6_NODE_IMAGES: kindest/node:${{ matrix.kubelet }}
+          K6_SUITES: ${{ matrix.suite }}
         shell: bash
         run: |
           set +e
@@ -1381,8 +1488,86 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: k6-kind-conformance-results
+          name: k6-kind-conformance-results-${{ matrix.kubelet }}-${{ matrix.suite }}
           path: test/reports/e2e/
+          if-no-files-found: error
+
+  # The acceptance walks that had no caller (#3110): kind-components-walk (a header secret absent from
+  # the sandbox's environment and files, a file secret 0440 root:fsGroup, the audit rows, and the docker
+  # half of the file-mode proof) and kind-run-output-walk in both modes (a run's output surviving a
+  # restart, recovered from the recording in pg mode, #1831). Each walk makes and deletes its OWN
+  # quickstart cluster, so the three legs share nothing and run apart. NEVER RUN BEFORE: NOTIFY_EXEMPT in
+  # scripts/test-repo-guards.sh, out of notify-new-lanes' needs and release.yml's watched= until each
+  # leg has gone green here, the same posture kind-survival-walk has.
+  kind-acceptance-walks:
+    if: inputs.scope != 'candidate'
+    name: kind-acceptance-walks (${{ matrix.walk }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {walk: kind-components-walk, script: kind-components-walk.sh, recording: off}
+          - {walk: kind-run-output-walk, script: kind-run-output-walk.sh, recording: off}
+          - {walk: kind-run-output-walk-recording, script: kind-run-output-walk.sh, recording: pg}
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim|debian:trixie-slim)@'
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: ./.github/actions/nightly-go-cache
+        with:
+          suite: unit
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          version: latest
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+        with:
+          install_only: "true"
+      - name: Build the agent images the quickstart cluster needs
+        run: make agent-images
+      - name: ${{ matrix.walk }}
+        env:
+          WARDYN_TEST_K8S: "1"
+          WARDYN_KIND_WALK_RECORDING: ${{ matrix.recording }}
+          WALK_SCRIPT: ${{ matrix.script }}
+        shell: bash
+        run: |
+          set +e
+          mkdir -p test/reports/e2e
+          "./scripts/$WALK_SCRIPT" 2>&1 | tee "test/reports/e2e/${{ matrix.walk }}.log"
+          echo "WALK_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+      - name: Assert the walk actually ran (not a self-skip) and passed
+        env:
+          WALK_NAME: ${{ matrix.walk }}
+          WALK_SCRIPT: ${{ matrix.script }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          log="test/reports/e2e/${WALK_NAME}.log"
+          if [ "${WALK_EXIT:-}" = "77" ]; then
+            echo "::error::$WALK_SCRIPT self-skipped (exit 77) — WARDYN_TEST_K8S did not reach the walk step"
+            exit 1
+          fi
+          if [ "${WALK_EXIT:-1}" != "0" ]; then
+            echo "::error::$WALK_SCRIPT exited ${WALK_EXIT:-<unset>} — see the uploaded log"
+            exit 1
+          fi
+          grep -q "^${WALK_SCRIPT%.sh}: PASS" "$log" || { echo "::error::the walk never reached its own closing PASS line"; exit 1; }
+      - name: Upload walk evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ${{ matrix.walk }}-results
+          path: test/reports/e2e/${{ matrix.walk }}.log
           if-no-files-found: error
 
   # T-41 (#701): scripts/hybrid-walk.sh — laptop compose <-> org kind. Same
@@ -1406,6 +1591,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - uses: ./.github/actions/nightly-go-cache
+        with:
+          suite: k8s
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
@@ -1547,6 +1735,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - uses: ./.github/actions/nightly-go-cache
+        with:
+          suite: unit
       - name: Runner/organisation version compatibility walk
         env:
           WARDYN_TEST_DOCKER: "1"
@@ -1600,6 +1791,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - uses: ./.github/actions/nightly-go-cache
+        with:
+          suite: unit
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
@@ -1645,6 +1839,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - uses: ./.github/actions/nightly-go-cache
+        with:
+          suite: k8s
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
@@ -1676,6 +1873,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - uses: ./.github/actions/nightly-go-cache
+        with:
+          suite: unit
       - name: Fuzz the session decoder
         run: go test -run '^$' -fuzz '^FuzzDecodeSession$' -fuzztime 5m ./internal/auth/oidc/
 
@@ -1865,6 +2065,18 @@ jobs:
           key: cache-trivy-${{ steps.cache-date.outputs.date }}
           restore-keys: |
             cache-trivy-
+      # Direct asset URL + literal sha256 (from trivy_0.70.0_checksums.txt): no
+      # release-API lookup, so a GitHub lookup failure cannot block the scan.
+      - name: Install trivy 0.70.0 (pinned, checksum-verified)
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/trivy-bin"
+          mkdir -p "$dir"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/trivy.tar.gz" \
+            https://github.com/aquasecurity/trivy/releases/download/v0.70.0/trivy_0.70.0_Linux-64bit.tar.gz
+          echo "8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9  $RUNNER_TEMP/trivy.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/trivy.tar.gz" -C "$dir" trivy
+          echo "$dir" >> "$GITHUB_PATH"
       - name: Trivy strict scan of the published image (CRITICAL, fixed or not)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -1875,6 +2087,7 @@ jobs:
           trivyignores: .trivyignore
           exit-code: '1'
           cache: false
+          skip-setup-trivy: true
 
   notify-published-image-scan:
     needs: [published-image-scan]

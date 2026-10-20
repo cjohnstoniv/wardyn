@@ -576,6 +576,8 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `NO_CREDENTIALS` | mock | No credentials. |
 | `FROM_ROW(name)` | mock | from {name} |
 | `FOR_ROW(name)` | mock | for {name} |
+| `SSO_TOKEN` | deviation (#2541, proposed wording awaiting approval) | sign-in token |
+| `EXPIRES_OWN` | deviation (#2541, proposed wording awaiting approval) | Expires on its own schedule, not when the run ends. |
 | `NET_ALLOWED` | mock | Allowed |
 | `NET_NEEDS_APPROVAL` | mock | Needs approval |
 | `NET_REQUESTED` | pending (W-35) | Requested |
@@ -763,9 +765,16 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `POLICY_FILES` | mock | Files and code |
 | `POLICY_TOOLS` | mock | Tools and pushes |
 | `POLICY_HOLD` | mock | Hold for approval |
-| `POLICY_ACCEPTS_EDITS` | deviation (lead 2026-10-17, proposed wording awaiting approval) | Claude Code accepts file edits without asking. Every other tool asks first. |
+| `POLICY_ACCEPTS_EDITS` | deviation (qualified for tools no rule names, #2428; proposed wording awaiting approval) | For tools without a named rule, Claude Code accepts file edits without asking and asks before other tools. Named rules still apply. |
 | `POLICY_AUTOMATIC` | mock | Run automatically |
 | `POLICY_TOOLS_OF(harness, effect)` | mock | {harness}: {effect} |
+| `INNER_WALLS(sandbox, approvals)` | deviation (approved 2026-10-19, overseer, #2822) | Harness walls: {sandbox}, {approvals} |
+| `INNER_SANDBOX_OFF` | deviation (approved 2026-10-19, overseer, #2822) | harness sandbox off |
+| `INNER_SANDBOX_OWN` | deviation (approved 2026-10-19, overseer, #2822) | the harness's own sandbox |
+| `INNER_SANDBOX_MODE(mode)` | deviation (approved 2026-10-19, overseer, #2822) | harness sandbox {mode} |
+| `INNER_APPROVALS_HARNESS` | deviation (approved 2026-10-19, overseer, #2822) | approvals in the harness |
+| `INNER_APPROVALS_WARDYN` | deviation (approved 2026-10-19, overseer, #2822) | approvals in Wardyn |
+| `INNER_APPROVALS_NONE` | deviation (approved 2026-10-19, overseer, #2822) | no approvals |
 | `RAW_TITLE(format)` | mock | {format} run document |
 | `RAW_BODY` | mock | Read-only resolved draft |
 | `COPY` | mock | Copy |
@@ -896,7 +905,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `PUBLISHED(name)` | deviation (lead wording 2026-10-17, FR-0120) | {name} published to your organization. |
 | `WHY_ORG` | deviation (lead wording 2026-10-17, FR-0120) | Published by your organization. Only organization admins can change it. |
 | `WHY_GROUP(scope)` | mock | Published to {scope}. Only its template managers can change it. |
-| `GROUPS_UNVERIFIED` | deviation (lead 2026-10-17, proposed wording awaiting approval) | Wardyn could not check which groups you belong to, so templates shared with a group may be missing. Sign in again to see them. |
+| `GROUPS_UNVERIFIED` | deviation (lead 2026-10-17, proposed wording awaiting approval) | Wardyn could not check which groups you belong to, so templates shared with a group may be missing. If you signed in with SSO, sign in again to see them. |
 | `EMPTY_TITLE` | mock | No templates yet |
 | `EMPTY_BODY` | mock | When you review a run, choose Save as template to start from the same setup next time. |
 | `NO_MATCH_TITLE` | mock | Nothing matches |

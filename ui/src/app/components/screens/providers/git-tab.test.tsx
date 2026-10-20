@@ -18,8 +18,9 @@ import { GitTab } from "./git-tab";
 import { ADO_PAT } from "../../../lib/ado-pat-copy";
 
 const setSecretMock = vi.fn();
+const deleteSecretMock = vi.fn();
 vi.mock("../../../lib/api/secrets", () => ({
-  secrets: { setSecret: (...a: unknown[]) => setSecretMock(...a), deleteSecret: vi.fn() },
+  secrets: { setSecret: (...a: unknown[]) => setSecretMock(...a), deleteSecret: (...a: unknown[]) => deleteSecretMock(...a) },
 }));
 
 // An Azure DevOps Services row as the console writes it: the entra lane, per
@@ -674,6 +675,40 @@ describe("GitTab", () => {
       expect(within(row).getByLabelText(PROVIDERS.FIELD_BASE_URLS)).toHaveValue(
         "https://github.com/acme\nhttps://git.corp.example/team",
       );
+    });
+  });
+
+  // Disconnect deletes a write-only value that cannot be shown or recovered: it asks first, like every other delete.
+  describe("Disconnect asks before it deletes the stored credential", () => {
+    const stored = () => (
+      <CredHarness
+        initial={[{ id: "gh", kind: "github", base_urls: ["https://github.com/acme"] }]}
+        present={["git-pat-github-com"]}
+        githubApp={false}
+      />
+    );
+
+    it("deletes nothing on the first click, and nothing after Cancel", async () => {
+      deleteSecretMock.mockReset().mockResolvedValue(undefined);
+      render(stored());
+      const row = screen.getByTestId("provider-row-github");
+      await userEvent.click(within(row).getByRole("button", { name: "Disconnect" }));
+      const dialog = await screen.findByRole("alertdialog");
+      expect(within(dialog).getByText(/git-pat-github-com/)).toBeInTheDocument();
+      expect(deleteSecretMock).not.toHaveBeenCalled();
+      await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+      expect(deleteSecretMock).not.toHaveBeenCalled();
+    });
+
+    it("deletes the secret once the confirm is pressed", async () => {
+      deleteSecretMock.mockReset().mockResolvedValue(undefined);
+      render(stored());
+      const row = screen.getByTestId("provider-row-github");
+      await userEvent.click(within(row).getByRole("button", { name: "Disconnect" }));
+      await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Delete credential" }));
+      await waitFor(() => expect(deleteSecretMock).toHaveBeenCalledWith("git-pat-github-com"));
+      expect(deleteSecretMock).toHaveBeenCalledTimes(1);
     });
   });
 

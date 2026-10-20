@@ -77,6 +77,10 @@ type Config struct {
 	// controller missing/not delegated). OFF by default — an untrusted
 	// sandbox must not run uncapped. Set only on a trusted host.
 	AllowUnenforceableCaps bool
+	// ProxySandboxPeersOnly (WARDYN_DOCKER_PROXY_SANDBOX_PEERS_ONLY, default off)
+	// has each run's proxy serve only callers on the run's own network, on
+	// create and on revive (proxy Config.AllowedPeers).
+	ProxySandboxPeersOnly bool
 	// UserDriveHostRoots is the deployment's WARDYN_USER_DRIVE_HOST_ROOTS
 	// ceiling over host_path USER DRIVES, parsed once at boot and handed to
 	// the substrate constructor, so the driver's bind-time re-check and the

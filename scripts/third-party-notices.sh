@@ -39,10 +39,17 @@ mode="${1:---check}"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 
 # ── Go: the production build is -tags docker,k8s ─────────────────────────────
-GOFLAGS=-tags=docker,k8s go run "github.com/google/go-licenses@${GO_LICENSES_VERSION}" \
-  report ./cmd/... > "$tmp/go.csv" 2>> "$tmp/go-licenses.err"
-GOFLAGS=-tags=docker,k8s go run "github.com/google/go-licenses@${GO_LICENSES_VERSION}" \
-  save ./cmd/... --save_path="$tmp/gotexts" --force >/dev/null 2>> "$tmp/go-licenses.err"
+go_licenses() {
+  GOFLAGS=-tags=docker,k8s go run "github.com/google/go-licenses@${GO_LICENSES_VERSION}" "$@" 2>> "$tmp/go-licenses.err"
+}
+# A tool failure is not drift: under `set -e` it would end the script before the
+# drift block prints go-licenses.err, leaving only make's "Error 1" (#3246).
+if ! { go_licenses report ./cmd/... > "$tmp/go.csv" &&
+       go_licenses save ./cmd/... --save_path="$tmp/gotexts" --force >/dev/null; }; then
+  echo "ERROR: go-licenses failed, so the notices were not checked (this is the tool failing, not drift). Its stderr:"
+  head -n 100 "$tmp/go-licenses.err"
+  exit 1
+fi
 
 # ── UI: prod dependencies only ───────────────────────────────────────────────
 (cd ui && pnpm licenses list --prod --json) > "$tmp/ui.json"

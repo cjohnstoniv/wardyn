@@ -162,6 +162,9 @@ func validatePolicySpecMode(spec types.RunPolicySpec, strict, resolveMounts bool
 	if err := validateToolRules(spec.ToolRules); err != nil {
 		return err
 	}
+	if err := validateHarnessInnerWalls(spec.HarnessInnerWalls); err != nil {
+		return err
+	}
 	if err := validateUIApps(spec.UIApps); err != nil {
 		return err
 	}
@@ -224,6 +227,9 @@ func specRefusalReason(err error, bucket string) string {
 	}
 	if errors.Is(err, errRepoURLUserinfo) {
 		return reasonRepoURLCredentials
+	}
+	if errors.Is(err, errHarnessSandboxUnavailable) {
+		return reasonHarnessSandboxUnavailable
 	}
 	return bucket
 }
@@ -589,6 +595,9 @@ func validateEligibleGrantMode(i int, g types.GrantSpec, strict bool) error {
 		// the lenient (recorded) decodes share, so every authored door refuses it.
 		if apiKeyScopeShared(g.Scope) {
 			return fmt.Errorf("eligible_grants[%d]: api_key scope sets shared: shared is set by Wardyn for an org component, never authored", i)
+		}
+		if rule.Placeholder != "" {
+			return fmt.Errorf("eligible_grants[%d]: api_key scope sets placeholder: Wardyn sets it for an env or file secret's host, never authored", i)
 		}
 		if !egress.ValidHeaderName(rule.Header) {
 			return fmt.Errorf("eligible_grants[%d]: api_key header %q is not a valid HTTP header name", i, rule.Header)

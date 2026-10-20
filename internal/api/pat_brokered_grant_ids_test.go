@@ -109,7 +109,8 @@ func TestDispatch_BrokerOffCarriesNoBrokeredPATGrantIDs(t *testing.T) {
 	run.Task = ""
 	srv.cfg.DisableGitPATBroker = true
 	st.grants = []types.CredentialGrant{patGrantRow(uuid.New(), run.ID, "gitlab.corp.io")}
-	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
+	// An operator's run: a member's is refused the broker-off lane.
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{Operator: true}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
 		GitPATGrants: map[string]string{"gitlab.corp.io": st.grants[0].ID.String()},
 	})
@@ -212,6 +213,7 @@ func TestReviveRun_PreUpgradeConfigGetsTheSetRecomputed(t *testing.T) {
 	t.Run("broker off", func(t *testing.T) {
 		f := newReviveFixture(t)
 		f.srv.cfg.DisableGitPATBroker = true
+		f.st.run.OperatorOwned = true // a member's run is refused the broker-off lane on revive
 		f.rs.credGrants = []types.CredentialGrant{patGrantRow(uuid.New(), f.run.ID, "pat.example")}
 		if code := f.revive(t); code != http.StatusOK {
 			t.Fatalf("revive: code %d, want 200", code)

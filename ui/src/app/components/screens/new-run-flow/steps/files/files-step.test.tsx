@@ -137,7 +137,7 @@ describe("the list and the Add dialog", () => {
     catalogue = NO_LEGACY;
     show();
     expect(screen.getByRole("heading", { level: 2, name: NR_FILES.ATTACH_TITLE })).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: NR_FILES.NO_EXTRA })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: NR_FILES.NO_EXTRA })).not.toBeChecked();
     await openAdd();
     expect(within(dialog()).getByRole("heading", { name: NR_FILES.DIALOG_TITLE })).toBeInTheDocument();
     for (const t of [NR_FILES.REPOSITORY_BADGE, NR_FILES.KIND_USER_DRIVE, NR_FILES.KIND_SHARED_DRIVE, NR_FILES.FOLDER_TITLE]) {
@@ -683,14 +683,31 @@ describe("choices and Continue", () => {
 
   it("'No extra files' writes the choice and says what is lost; adding something takes it back", async () => {
     show(BACKGROUND);
-    const radio = await screen.findByRole("radio", { name: NR_FILES.NO_EXTRA });
-    expect(radio).not.toBeChecked();
-    await userEvent.click(radio);
+    const box = await screen.findByRole("checkbox", { name: NR_FILES.NO_EXTRA });
+    expect(box).not.toBeChecked();
+    await userEvent.click(box);
     expect(drawn().no_repositories_or_drives).toBe(true);
-    expect(radio).toBeChecked();
+    expect(box).toBeChecked();
     expect(await screen.findByText(NR_FILES.NO_EXTRA_DELETED)).toBeInTheDocument();
     await add(NR_FILES.REPOSITORY_BADGE, "payments");
     expect(drawn().no_repositories_or_drives).toBeUndefined();
+  });
+
+  it("'No extra files' is one checkbox, not a group of one: role checkbox, no radio, and unchecking takes the choice back and holds Continue", async () => {
+    show();
+    await screen.findByText(NR_FILES.UP_TO("8 GiB"));
+    const box = screen.getByRole("checkbox", { name: NR_FILES.NO_EXTRA });
+    expect(screen.queryByRole("radio")).toBeNull();
+    expect(screen.queryByRole("radiogroup")).toBeNull();
+    expect(box).toHaveAttribute("name", "nr-files-choice");
+    await userEvent.click(box);
+    expect(box).toBeChecked();
+    await userEvent.click(box);
+    expect(box).not.toBeChecked();
+    expect(drawn().no_repositories_or_drives).toBeUndefined();
+    await userEvent.click(continueButton());
+    expect(go).not.toHaveBeenCalled();
+    expect(screen.getAllByText(NR_FILES.CHOOSE_FILES).length).toBeGreaterThanOrEqual(1);
   });
 
   it("holds Continue on Add until something is added or No extra files is chosen, with the empty error, then opens Tools and access", async () => {
@@ -701,7 +718,7 @@ describe("choices and Continue", () => {
     expect(go).not.toHaveBeenCalled();
     expect(screen.getAllByText(NR_FILES.CHOOSE_FILES).length).toBeGreaterThanOrEqual(1);
     await waitFor(() => expect(screen.getByTestId("nr-files-summary")).toHaveAttribute("data-tone", "error"), { timeout: 3000 });
-    await userEvent.click(screen.getByRole("radio", { name: NR_FILES.NO_EXTRA }));
+    await userEvent.click(screen.getByRole("checkbox", { name: NR_FILES.NO_EXTRA }));
     await userEvent.click(continueButton());
     expect(go).toHaveBeenCalledWith({ screen: "step", step: "tools" });
     expect(drawn().resources).toBeUndefined();
@@ -722,7 +739,7 @@ describe("choices and Continue", () => {
     show();
     await screen.findByText(NR_FILES.UP_TO("8 GiB"));
     expect(size()).toHaveValue(4);
-    await userEvent.click(screen.getByRole("radio", { name: NR_FILES.NO_EXTRA }));
+    await userEvent.click(screen.getByRole("checkbox", { name: NR_FILES.NO_EXTRA }));
     await userEvent.click(continueButton());
     expect(go).toHaveBeenCalled();
     expect(drawn().resources).toBeUndefined();

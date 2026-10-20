@@ -37,10 +37,10 @@ func (s PG) Ping(ctx context.Context) error {
 // AgentRun
 
 // createRunSQL is CreateRun's statement: one placeholder per runInsertCols
-// and runReservedCols column, in order (TestCreateRunBindsEveryInsertColumn).
+// runReservedCols and runInsertOnlyCols column, in order (TestCreateRunBindsEveryInsertColumn).
 var createRunSQL = `
-		INSERT INTO agent_runs (` + runInsertCols + `, ` + runReservedCols + `)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,` + runnerPoolFence + `,$44,$45,$46,$47,$48,$49,$50)
+		INSERT INTO agent_runs (` + runInsertCols + `, ` + runReservedCols + `, ` + runInsertOnlyCols + `)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,` + runnerPoolFence + `,$44,$45,$46,$47,$48,$49,$50,$51,$52)
 		RETURNING ` + runCols
 
 // runnerPoolFence is the value of the runner_pool_id column in createRunSQL: the pool read through its
@@ -234,6 +234,16 @@ func (s PG) createRunArgs(r types.AgentRun) ([]any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("store: marshal run limits: %w", err)
 	}
+	walls, err := innerWallsJSON(r.InnerWalls)
+	if err != nil {
+		return nil, err
+	}
+	var localFolder []byte
+	if r.LocalFolder != nil {
+		if localFolder, err = json.Marshal(r.LocalFolder); err != nil {
+			return nil, fmt.Errorf("store: marshal local folder: %w", err)
+		}
+	}
 	return []any{
 		r.ID, r.CreatedAt, r.UpdatedAt, r.CreatedBy, r.Agent, r.Repo, r.Task,
 		r.PolicyID, string(r.ConfinementClass), string(r.State),
@@ -242,8 +252,9 @@ func (s PG) createRunArgs(r types.AgentRun) ([]any, error) {
 		r.EndsAt, r.WaitBudgetSec, limitsJSON, r.GovernanceProfileID, r.ModelProviderID, r.UserType,
 		r.Preset, r.PresetVersion, r.OperatorOwned, r.CreatedVia, r.DiskMiB,
 		string(r.Placement), r.PlacementFilled, r.RunnerID, string(r.EvidenceSource), string(r.Experience),
-		r.LifetimeCapAt, string(r.LifetimeCapSource), r.RunnerPoolID, r.RunnerPoolRevision, string(r.RunnerPoolSelection), r.RunnerPoolExecutor, r.HumanAuthor,
+		r.LifetimeCapAt, string(r.LifetimeCapSource), r.RunnerPoolID, r.RunnerPoolRevision, string(r.RunnerPoolSelection), r.RunnerPoolExecutor, r.HumanAuthor, walls,
 		r.Reserved.CPUMillis, r.Reserved.MemoryMiB, r.Reserved.DiskMiB,
+		localFolder,
 	}, nil
 }
 
@@ -412,11 +423,15 @@ func (s PG) TouchRun(ctx context.Context, id uuid.UUID) error {
 // so a column appended to runInsertCols reaches both lists at once.
 const runInsertCols = `id, created_at, updated_at, created_by, agent, repo, task, policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids, autonomy_level, ` +
 	`ends_at, wait_budget_sec, run_limits, governance_profile_id, model_provider_id, user_type, preset, preset_version, operator_owned, created_via, disk_mib, placement, placement_filled, runner_id, ` +
-	`evidence_source, experience, lifetime_cap_at, lifetime_cap_source, runner_pool_id, runner_pool_revision, runner_pool_selection, runner_pool_executor, human_author`
+	`evidence_source, experience, lifetime_cap_at, lifetime_cap_source, runner_pool_id, runner_pool_revision, runner_pool_selection, runner_pool_executor, human_author, inner_walls`
 
 // runReservedCols are what a run holds on its runner (0174, types.AgentRun.Reserved): written at
 // insert and summed by runnerUsageSQL, never read back into a run.
 const runReservedCols = `reserved_cpu_millis, reserved_memory_mib, reserved_disk_mib`
+
+// runInsertOnlyCols are written at insert and read back only by their own reader: local_folder
+// (0195, types.AgentRun.LocalFolder) by RunLocalFolderSeed.
+const runInsertOnlyCols = `local_folder`
 
 const runCols = runInsertCols + `, failure_hint, status_detail, lost_at, lost_reason, containment_error, containment_error_at, ended_at, paused_at, paused_reason, active_at, end_tightened_at, admitted_at, not_recorded`
 
@@ -426,7 +441,7 @@ const runCols = runInsertCols + `, failure_hint, status_detail, lost_at, lost_re
 func scanRun(row pgx.Row) (types.AgentRun, error) {
 	var r types.AgentRun
 	var cc, state, autonomyLevel, lostReason, pausedReason, placement, evidenceSource, experience, capSource, poolSelection, notRecorded string
-	var limitsRaw []byte
+	var limitsRaw, wallsRaw []byte
 	var containmentErr *string
 	err := row.Scan(
 		&r.ID, &r.CreatedAt, &r.UpdatedAt, &r.CreatedBy, &r.Agent, &r.Repo, &r.Task,
@@ -436,7 +451,7 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 		&r.EndsAt, &r.WaitBudgetSec, &limitsRaw, &r.GovernanceProfileID, &r.ModelProviderID, &r.UserType,
 		&r.Preset, &r.PresetVersion, &r.OperatorOwned, &r.CreatedVia, &r.DiskMiB,
 		&placement, &r.PlacementFilled, &r.RunnerID, &evidenceSource, &experience, &r.LifetimeCapAt, &capSource,
-		&r.RunnerPoolID, &r.RunnerPoolRevision, &poolSelection, &r.RunnerPoolExecutor, &r.HumanAuthor,
+		&r.RunnerPoolID, &r.RunnerPoolRevision, &poolSelection, &r.RunnerPoolExecutor, &r.HumanAuthor, &wallsRaw,
 		&r.FailureHint, &r.StatusDetail, &r.LostAt, &lostReason, &containmentErr, &r.ContainmentErrorAt, &r.EndedAt,
 		&r.PausedAt, &pausedReason, &r.ActiveAt, &r.EndTightenedAt, &r.AdmittedAt, &notRecorded,
 	)
@@ -462,7 +477,25 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 	if err := json.Unmarshal(limitsRaw, &r.RunLimits); err != nil {
 		return types.AgentRun{}, fmt.Errorf("store: unmarshal run limits: %w", err)
 	}
+	if wallsRaw != nil {
+		r.InnerWalls = &types.HarnessInnerWalls{}
+		if err := json.Unmarshal(wallsRaw, r.InnerWalls); err != nil {
+			return types.AgentRun{}, fmt.Errorf("store: unmarshal run inner walls: %w", err)
+		}
+	}
 	return r, nil
+}
+
+// innerWallsJSON is the inner_walls column's value: NULL for a run with none.
+func innerWallsJSON(w *types.HarnessInnerWalls) ([]byte, error) {
+	if w == nil {
+		return nil, nil
+	}
+	raw, err := json.Marshal(w)
+	if err != nil {
+		return nil, fmt.Errorf("store: marshal run inner walls: %w", err)
+	}
+	return raw, nil
 }
 
 // RunPolicy
@@ -725,7 +758,7 @@ func (s PG) DecideApproval(ctx context.Context, id uuid.UUID, decision types.App
 // scanApproval's order. Same shape as agent_runs: the read list adds the
 // columns a raise does not set (see CreateApproval).
 const approvalInsertCols = `id, run_id, grant_id, kind, requested_scope, state, requested_at, decided_at, decided_by, minted_jti, reason`
-const approvalCols = approvalInsertCols + `, decision_scope, decision_expires_at, ` + approvalExpiresAtSQL
+const approvalCols = approvalInsertCols + `, decision_scope, decision_expires_at, ` + approvalExpiresAtSQL + `, last_rejoined_at`
 
 // approvalExpiresAtSQL computes a request's expiry from its run's CURRENT end
 // and wait: min(requested_at + wait_budget_sec, ends_at); NULL when the run has
@@ -745,6 +778,7 @@ func scanApproval(row pgx.Row) (types.ApprovalRequest, error) {
 	err := row.Scan(
 		&a.ID, &a.RunID, &a.GrantID, &kind, &scopeRaw, &state, &a.RequestedAt,
 		&a.DecidedAt, &a.DecidedBy, &a.MintedJTI, &a.Reason, &decisionScope, &a.DecisionExpiresAt, &a.ExpiresAt,
+		&a.LastRejoinedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.ApprovalRequest{}, ErrNotFound

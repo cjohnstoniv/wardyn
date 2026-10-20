@@ -67,7 +67,7 @@ export function useViewAccess(): ViewAccess {
 // a pre-split route; M-1b deleted them, so it now falls to the ordinary
 // catch-all like any other unmatched path.
 const TWIN = /^\/(runs(\/(?!new$)[^/]+)?|approvals|workspaces(\/[^/]+)?|secrets|templates)$/;
-const USER_ONLY = /^\/(runs\/new|account|setup)$/;
+const USER_ONLY = /^\/(runs\/new|account(\/.*)?|setup)$/;
 
 export type ViewVerdict =
   | { kind: "pass" }

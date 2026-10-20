@@ -69,7 +69,7 @@ const getSetupStatusMock = vi.fn();
 vi.mock("../../../lib/api/setup", () => ({ setup: { getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a) } }));
 // review-1 S1: the watch polls the run's audit trail as a hint; defaulted to
 // "no hint" so the 4 rewritten S-13 pins exercise its 30s STATUS fallback.
-const listAuditMock = vi.fn();
+const listAuditMock = vi.fn().mockResolvedValue([]);
 vi.mock("../../../lib/api/audit", () => ({ audit: { listAudit: (...a: unknown[]) => listAuditMock(...a) } }));
 
 // P5: the pane waits for the sandbox instead of assuming it.

@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { AgentRun, AuditEvent, RunDetail, CredentialGrant, EgressDecision } from "../../../../lib/types";
 
 const getFilesMock = vi.fn();
@@ -207,6 +207,59 @@ describe("CredentialsWidget", () => {
     ];
     render(<CredentialsWidget grants={grants} audit={audit} />);
     expect(await screen.findByText("brokered")).toBeInTheDocument();
+  });
+
+  // #3037: a grant reads as a sentence; the API's JSON is only behind Details.
+  it("reads a GitHub token grant as a sentence, with the JSON only under Details", async () => {
+    const grants: CredentialGrant[] = [
+      {
+        id: "g2",
+        scope: 'github_token {"repos":[],"permissions":{"contents":"read"}}',
+        audience: "github_token",
+        state: "active",
+        scopeData: { repos: [], permissions: { contents: "read" } },
+      },
+    ];
+    render(<CredentialsWidget grants={grants} audit={[]} />);
+    const row = await screen.findByTestId("credential-grant");
+    expect(within(row).getByText("GitHub token · read contents · no repositories listed")).toBeInTheDocument();
+    const details = row.querySelector("details")!;
+    expect(details).not.toHaveAttribute("open");
+    expect(within(details).getByText(RUN_COCKPIT.credentialDetails)).toBeInTheDocument();
+    expect(details.querySelector("pre")).toHaveTextContent('"contents": "read"');
+    // The visible line outside Details carries no braces.
+    expect(row.querySelector("span.truncate")).not.toHaveTextContent(/[{}]/);
+  });
+
+  // A GitHub CLI grant carries capabilities, not permissions; a writing capability shows the amber chip.
+  it("flags a GitHub CLI grant that may write", async () => {
+    const grants: CredentialGrant[] = [
+      {
+        id: "g3",
+        scope: "github_token",
+        audience: "github_token",
+        state: "active",
+        scopeData: { repos: ["acme/api"], api: true, capabilities: ["code_read", "pr"] },
+      },
+      {
+        id: "g4",
+        scope: "github_token",
+        audience: "github_token",
+        state: "active",
+        scopeData: { repos: ["acme/web"], api: true, capabilities: ["code_read"] },
+      },
+    ];
+    render(<CredentialsWidget grants={grants} audit={[]} />);
+    const rows = await screen.findAllByTestId("credential-grant");
+    expect(within(rows[0]).getByText("grants write")).toBeInTheDocument();
+    expect(within(rows[1]).queryByText("grants write")).not.toBeInTheDocument();
+  });
+
+  it("the lede says what the run may request and that the kind decides whether a credential enters the sandbox", async () => {
+    render(<CredentialsWidget grants={[]} audit={[]} />);
+    expect(await screen.findByText(RUN_COCKPIT.credentialsEligibility)).toBeInTheDocument();
+    expect(RUN_COCKPIT.credentialsEligibility).toMatch(/readable inside the sandbox/);
+    expect(RUN_COCKPIT.credentialsEligibility).not.toMatch(/never/i);
   });
 
   it("claims no delivery for an ssh_key grant, whose key the sandbox can read", async () => {
@@ -624,6 +677,16 @@ describe("IdentityWidget: Runs on and Evidence", () => {
     expect(screen.queryByText("Evidence")).not.toBeInTheDocument();
     expect(screen.queryByText(/your computer/)).not.toBeInTheDocument();
     expect(screen.queryByText(/is a computer its owner administers/)).not.toBeInTheDocument();
+  });
+
+  // #2822: the harness's own walls the run launched with sit under its policy row; a run with none
+  // recorded (no catalog harness, or created before the field) shows nothing there.
+  it("the policy row says the run's inner walls when the run recorded them", () => {
+    const view = renderAs({ ...base, inner_walls: { sandbox_mode: "off", approvals: "wardyn" } } as AgentRun, "me");
+    expect(screen.getByText("Harness walls: harness sandbox off, approvals in Wardyn")).toBeInTheDocument();
+    view.unmount();
+    renderAs(base, "me");
+    expect(screen.queryByText(/Harness walls/)).not.toBeInTheDocument();
   });
 
   it("a remote run the resolver placed says where, and that it was the only place", () => {

@@ -43,7 +43,7 @@ const (
 	// answer means "not covered", never a hang.
 	maskCheckTimeout = 5 * time.Second
 
-	maskStateSentence = "this server cannot prove this run's secrets are masked right now, so it refuses to relay or keep the run's output"
+	maskStateSentence = "This server cannot prove this run's secrets are masked right now, so it refuses to relay or keep the run's output"
 )
 
 // errMaskUncovered ends an upload whose run stopped being covered mid-stream.
