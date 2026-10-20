@@ -521,3 +521,20 @@ func TestMeetLiteralIPIsNotCoveredByAWildcard(t *testing.T) {
 		t.Errorf("allowed_domains = %v: a literal IP must never come out of a wildcard", got.Ceiling.AllowedDomains)
 	}
 }
+
+func TestOverlayDuplicateToolRule(t *testing.T) {
+	base := Authority{Ceiling: types.RunPolicySpec{ToolRules: []types.ToolRule{{Tool: "*", Effect: types.ToolAllow}}}}
+	dup := overlayOf(types.CeilingOverlay{ToolRules: &[]types.ToolRule{{Tool: "Bash", Effect: types.ToolDeny}, {Tool: "Bash", Effect: types.ToolAllow}}})
+	err := ValidateOverlay(base, dup)
+	var oe *OverlayError
+	if !errors.As(err, &oe) || oe.Reason != ReasonOverlayInvalid || oe.Field != "tool_rules" {
+		t.Fatalf("ValidateOverlay = %v, want a governance_overlay_invalid refusal on tool_rules", err)
+	}
+	got, warns, err := ApplyOverlay(base, dup)
+	if err != nil || len(warns) == 0 {
+		t.Fatalf("ApplyOverlay = %v, %v, want the stored overlay to keep resolving with a warning", warns, err)
+	}
+	if e := effectFor(toolEffects(got.Ceiling.ToolRules), "Bash"); e != types.ToolAllow {
+		t.Errorf("Bash = %v, want the last rule's effect", e)
+	}
+}

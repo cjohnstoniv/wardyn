@@ -158,10 +158,16 @@ func (m *meeter) validatePresence(ov Overlay) {
 		m.fail(ReasonOverlayInvalid, "llm_inspection.workspace_secret_values", "resolved secret values are never authored")
 	}
 	if c.ToolRules != nil {
+		seen := map[string]bool{}
 		for _, r := range *c.ToolRules {
 			if !types.ValidToolEffect(r.Effect) {
 				m.fail(ReasonOverlayInvalid, "tool_rules", "tool %q has unknown effect %q", r.Tool, r.Effect)
 			}
+			// A stored overlay keeps resolving (last wins, as the proxy reads it); only a write is sent back.
+			if seen[r.Tool] {
+				m.widen("tool_rules", "two rules for tool %q means one of them does nothing", r.Tool)
+			}
+			seen[r.Tool] = true
 		}
 	}
 	if w := c.HarnessInnerWalls; w != nil && !validInnerWalls(*w) {
