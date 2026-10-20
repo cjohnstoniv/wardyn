@@ -61,12 +61,13 @@ func dialHint(err error) string {
 		// work of its own to do.)
 		return "is wardynd running? (start it with `make setup`, the compose quick-start; point the CLI elsewhere with --url or WARDYN_URL)"
 	}
-	// Auth failure: we DID reach wardynd but it refused the bearer token. Name
-	// the two ways to supply one, so first contact against the compose stack
-	// (which boots with an admin token set) is recoverable without docs.
+	// Auth failure: we DID reach wardynd but it refused the credential. The
+	// hint follows the 401's reason (auth_hint.go): single sign-on with no
+	// admin token, a token the organisation does not know, or today's text,
+	// which names the compose stack's admin token for first contact.
 	var ae *sdk.APIError
 	if errors.As(err, &ae) && ae.Status == http.StatusUnauthorized {
-		return "authenticate with --token or WARDYN_ADMIN_TOKEN/WARDYN_TOKEN (the compose quick-start's token is in deploy/compose/README.md)"
+		return unauthorizedHint(ae)
 	}
 	return ""
 }
@@ -151,6 +152,17 @@ func warnPlaintextToken(w io.Writer, rawURL, token string) {
 		"use https://, or set WARDYN_CLI_ALLOW_PLAINTEXT=1 if TLS terminates in front of it\n", host)
 }
 
+// tokenSource names the variable the bearer came from when --token was not given.
+func tokenSource(adminEnv, token string) string {
+	switch {
+	case token == "":
+		return ""
+	case adminEnv != "":
+		return "WARDYN_ADMIN_TOKEN"
+	}
+	return "WARDYN_TOKEN"
+}
+
 func rootCmd() *cobra.Command {
 	var (
 		serverURL string
@@ -174,9 +186,12 @@ func rootCmd() *cobra.Command {
 			// never becomes cobra's printed `(default "...")`. Pre-run beats
 			// every RunE (and so every client() call), and an explicit --token
 			// has already been parsed into `token` by now, so it still wins.
+			from := "--token"
 			if token == "" {
 				token = cliutil.EnvOr("WARDYN_ADMIN_TOKEN", os.Getenv("WARDYN_TOKEN"))
+				from = tokenSource(os.Getenv("WARDYN_ADMIN_TOKEN"), token)
 			}
+			authHintFor.url, authHintFor.tokenFrom = serverURL, from
 			warnPlaintextToken(cmd.ErrOrStderr(), serverURL, token)
 		},
 	}

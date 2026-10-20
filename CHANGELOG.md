@@ -24,6 +24,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   before. One line on stderr names the path. `--via local|relay|auto` forces a path, and `--take-over` takes the
   terminal from whoever holds it. On Windows the runner lives in WSL2, so attach goes through the organisation.
 
+### Changed
+
+- The CLI's hint under a `401` follows the answer's reason. On a single-sign-on deployment with no admin token
+  (`sign_in_required`) it says to use a personal API token in `WARDYN_TOKEN`, not the compose stack's admin token. For
+  a token the organisation does not know (`admin_token_not_configured`) it names where the token came from.
+
 ## [0.9.5] — 2026-10-19
 
 A small fix release on top of 0.9.4 for the sign-in and setup paths: the AWS sign-in dialog shows its code and moves
