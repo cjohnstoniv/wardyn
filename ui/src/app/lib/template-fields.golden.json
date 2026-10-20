@@ -87,6 +87,10 @@
       "requires_approval",
       "owner_only"
     ],
+    "HarnessInnerWalls": [
+      "sandbox_mode",
+      "approvals"
+    ],
     "IncludedTool": [
       "id",
       "kind",
@@ -373,6 +377,14 @@
       "meaning": "No tool rules are added.",
       "section": "harness",
       "keyed_by": "harness"
+    },
+    {
+      "name": "harness_inner_walls",
+      "part": "access_rules",
+      "omitted": "unset_optional",
+      "empty": "same_as_omitted",
+      "meaning": "The harness's own walls are what its lane and autonomy level give.",
+      "section": "run_wide"
     },
     {
       "name": "git_push_any_branch",

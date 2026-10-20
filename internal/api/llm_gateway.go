@@ -14,10 +14,11 @@ import (
 
 // validateOneLLMGateway enforces the gateway URL's seven rules and returns its
 // normalized form (one trailing "/" trimmed; path prefix and port preserved
-// otherwise). allowPlainHTTP relaxes rule 1 alone, and only a model provider's
-// Bedrock base URL (validateProviderBedrock) ever passes it true (gated on
-// WARDYN_ALLOW_TEST_ENDPOINTS). Every other rule below applies identically in
-// both postures.
+// otherwise). allowPlainHTTP relaxes rule 1 alone. Two callers pass it true:
+// a model provider's Bedrock base URL (validateProviderBedrock, gated on
+// WARDYN_ALLOW_TEST_ENDPOINTS) and a local_model's base URL
+// (validateProviderAddress, which refuses http with auth off a private host).
+// Every other rule below applies identically in both postures.
 func validateOneLLMGateway(publicHost, raw string, allowPlainHTTP bool) (string, error) {
 	u, err := url.Parse(raw)
 	if err != nil {

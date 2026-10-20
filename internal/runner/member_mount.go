@@ -64,9 +64,13 @@ var memberDeniedSegments = map[string]bool{
 	".gnupg":           true,
 	".docker":          true, // registry auth (and config that can name a socket)
 	".kube":            true, // cluster credentials
-	".azure":           true, // Azure CLI tokens
 	".netrc":           true,
 	".git-credentials": true,
+	".codex":           true, // the Codex harness login
+	".azure":           true, // Azure CLI token cache
+	".gemini":          true, // another agent CLI's login
+	".npmrc":           true, // registry auth tokens
+	".pypirc":          true,
 }
 
 // memberDeniedPairs are two-segment denials — a bare ".config", ".git" or

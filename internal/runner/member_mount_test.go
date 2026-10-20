@@ -122,6 +122,7 @@ func TestMemberMount_DotfileDenyUnderWideRoot(t *testing.T) {
 	for _, rel := range []string{
 		".ssh", ".aws", ".azure", ".claude", ".wardyn", ".gnupg", ".docker", ".kube",
 		".netrc", ".git-credentials", ".config/gh", ".config/gcloud", ".git/config", "Library/Keychains",
+		".codex", ".gemini", ".npmrc", ".pypirc", ".azure/cache",
 		// Traversed, not just named: the credential dir is a PARENT of the source.
 		".ssh/keys/work", ".config/gh/hosts", ".config/gcloud/legacy_credentials",
 	} {

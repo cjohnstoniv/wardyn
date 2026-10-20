@@ -26,7 +26,7 @@ import (
 func TestModelProvidersGet(t *testing.T) {
 	srv, _ := newSiteConfigHarness(t, &fakeSiteConfigStore{})
 	w := do(t, srv, http.MethodGet, "/api/v1/model-providers", adminToken, "")
-	want := `{"entra_login_configured":false,"kinds_available":["anthropic_api_key","anthropic_subscription","bedrock_bearer","bedrock_sso","custom_endpoint","openai_api_key"]}`
+	want := `{"entra_login_configured":false,"kinds_available":["anthropic_api_key","anthropic_subscription","bedrock_bearer","bedrock_sso","custom_endpoint","local_model","openai_api_key"]}`
 	if w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != want || w.Header().Get("ETag") == "" {
 		t.Fatalf("GET = %d %q etag=%q, want 200 %s with an ETag", w.Code, w.Body.String(), w.Header().Get("ETag"), want)
 	}

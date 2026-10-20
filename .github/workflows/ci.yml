@@ -272,6 +272,14 @@ jobs:
           path: ~/go/pkg/mod
           key: gomod-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}
           restore-keys: gomod-${{ runner.os }}-
+      # The tools' own module downloads (go-gate-tools saves them), restored by prefix.
+      - name: Restore the gate tools' module downloads
+        if: matrix.suite == 'lint'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/pkg/mod/cache/download
+          key: gotools-${{ runner.os }}-restore-only
+          restore-keys: gotools-${{ runner.os }}-
       - name: Restore Go build cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -294,6 +302,12 @@ jobs:
           node-version: '22'
           cache: pnpm
           cache-dependency-path: ui/pnpm-lock.yaml
+      # golangci-lint and actionlint are `go run tool@version` in `make lint`. Fetched here so a
+      # stall fails fast under this name; the measured cold fetch is at most 9.3 s, so 3 min.
+      - name: Fetch lint tools
+        if: matrix.suite == 'lint'
+        timeout-minutes: 3
+        run: scripts/fetch-gate-tools.sh golangci-lint actionlint
       # ESLint needs no browser; PUPPETEER_SKIP_DOWNLOAD skips the mermaid-cli
       # chromium download.
       - name: make ${{ matrix.target }}
@@ -1474,6 +1488,40 @@ jobs:
             ~/.cache/golangci-lint
           key: go-envbuild-integration-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
 
+  # ── Desktop VM network relay conformance (not a required check) ────────
+  # Boots a QEMU guest behind wardyn-vmnet and the real wardyn-proxy, runs the
+  # negative egress probe inside it, then the same probe on QEMU's own user
+  # networking, which must go red (test/vmconformance). Hosted runners expose
+  # /dev/kvm once GitHub's documented udev rule is applied; QEMU falls back to
+  # TCG without it. Not a required check and not in `gates`.
+  vm-conformance:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: '/library/(golang:[0-9.]+-alpine|alpine:3\.24|debian:trixie-slim)@'
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Give the runner user /dev/kvm (GitHub's documented udev rule)
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm || true
+      - name: VM relay conformance
+        env:
+          WARDYN_TEST_VM: '1'
+        run: go test -tags vm -count=1 -timeout 25m -v ./test/vmconformance/
+
   # ── Postgres-backed invariant proofs (approval-mint + audit invariants) ───
   # Runs the WARDYN_TEST_PG-gated suite (store/db/secretstore/broker/api +
   # test/apie2e) against a real Postgres. This ran in NO per-PR workflow
@@ -1750,6 +1798,18 @@ jobs:
           key: cache-trivy-${{ steps.cache-date.outputs.date }}
           restore-keys: |
             cache-trivy-
+      # Direct asset URL + literal sha256 (from trivy_0.70.0_checksums.txt): no
+      # release-API lookup, so a GitHub lookup failure cannot block the scan.
+      - name: Install trivy 0.70.0 (pinned, checksum-verified)
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/trivy-bin"
+          mkdir -p "$dir"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/trivy.tar.gz" \
+            https://github.com/aquasecurity/trivy/releases/download/v0.70.0/trivy_0.70.0_Linux-64bit.tar.gz
+          echo "8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9  $RUNNER_TEMP/trivy.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/trivy.tar.gz" -C "$dir" trivy
+          echo "$dir" >> "$GITHUB_PATH"
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: wardyn/${{ env.TRIVY_IMAGE }}:trivy-scan
@@ -1759,6 +1819,7 @@ jobs:
           trivyignores: .trivyignore
           exit-code: '1'
           cache: false
+          skip-setup-trivy: true
       # Strict policy: any CRITICAL, fixed or not (see the job comment). Reuses the
       # trivy the step above installed and the DB it already pulled into
       # TRIVY_CACHE_DIR, so nothing is installed or downloaded twice.
@@ -1942,6 +2003,13 @@ jobs:
           path: ~/go/pkg/mod
           key: gomod-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}
           restore-keys: gomod-${{ runner.os }}-
+      # The tools' own module downloads (go-gate-tools saves them), restored by prefix.
+      - name: Restore the gate tools' module downloads
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/pkg/mod/cache/download
+          key: gotools-${{ runner.os }}-restore-only
+          restore-keys: gotools-${{ runner.os }}-
       - name: Restore Go build cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -1953,6 +2021,9 @@ jobs:
             go-notices-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
             go-notices-${{ runner.os }}-
       - run: go mod download
+      - name: Fetch gate tools
+        timeout-minutes: 4
+        run: scripts/fetch-gate-tools.sh notices
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 9
@@ -1997,6 +2068,14 @@ jobs:
           path: ~/go/pkg/mod
           key: gomod-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}
           restore-keys: gomod-${{ runner.os }}-
+      # The gate tools' own module downloads (go-gate-tools saves them): the exact key never
+      # exists, so the newest entry is restored by prefix. Fetch gate tools below fills any gap.
+      - name: Restore the gate tools' module downloads
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/pkg/mod/cache/download
+          key: gotools-${{ runner.os }}-restore-only
+          restore-keys: gotools-${{ runner.os }}-
       - name: Restore Go build cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -2008,6 +2087,12 @@ jobs:
           restore-keys: |
             go-gates-${{ matrix.gate }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
             go-gates-${{ matrix.gate }}-${{ runner.os }}-
+      # The gate's own `go run tool@version` dependencies, fetched here so a network
+      # stall fails fast under this name instead of eating the job timeout. The
+      # measured cold fetch of one tool is at most 67 s (licenses); 4 min is 3x, rounded up.
+      - name: Fetch gate tools
+        timeout-minutes: 4
+        run: scripts/fetch-gate-tools.sh ${{ matrix.gate }}
       - name: make ${{ matrix.gate }}
         run: make ${{ matrix.gate }}
       - name: Save Go build cache (push to main only)
@@ -2320,6 +2405,51 @@ jobs:
         id: saved
         if: steps.save.outcome == 'success'
         run: echo "key=gomod-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}" >> "$GITHUB_OUTPUT"
+
+  # ── the gate tools' module downloads ─────────────────────────────────────
+  # The `go run tool@version` gate tools (scripts/fetch-gate-tools.sh) fetched their
+  # own modules cold inside the make step: one gate stalled past its job timeout and
+  # another failed reading the checksum database. This job saves just their
+  # cache/download tree (about 250 MB compressed) as its own entry, so the shared
+  # module cache above stays as small as it was; only the jobs that run those tools
+  # restore it. The key hashes the tool pins, so a bump re-saves it. go-cache-prune
+  # never marks a `gotools-` entry as superseded, so it leaves these alone.
+  go-gate-tools:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Name the cache entry (the gate tool pins)
+        id: key
+        run: |
+          set -euo pipefail
+          sum="$(scripts/fetch-gate-tools.sh --list | sha256sum | cut -d' ' -f1)"
+          echo "key=gotools-${RUNNER_OS}-${sum}" >> "$GITHUB_OUTPUT"
+      - name: Is this entry saved already?
+        id: have
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/pkg/mod/cache/download
+          key: ${{ steps.key.outputs.key }}
+          lookup-only: true
+      # All seven tools in one step: the per-tool cold maxima sum to about 114 s
+      # (licenses 67, gitleaks 17, staticcheck 11, golangci-lint 9, govulncheck 5, addlicense 3,
+      # actionlint 1); 3x is 6 min.
+      - name: Fetch gate tools
+        if: steps.have.outputs.cache-hit != 'true'
+        timeout-minutes: 6
+        run: scripts/fetch-gate-tools.sh && du -sh ~/go/pkg/mod/cache/download
+      - name: Save the gate tools' downloads
+        if: steps.have.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/pkg/mod/cache/download
+          key: ${{ steps.key.outputs.key }}
 
   # ── one Go cache generation per job ───────────────────────────────────────
   # Each green push to main saves its Go caches under its run id. The
