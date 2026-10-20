@@ -250,6 +250,20 @@ describe("Drive editor, Team drive", () => {
     expect(upsertGrantMock).toHaveBeenCalledWith(expect.objectContaining({ members_can_write: false }));
   });
 
+  it("a cut grants page never turns a writable team drive read-only on save", async () => {
+    // 3 allocations, the page lists 1: the other two carry write bits the console cannot see.
+    await renderScreen(snapshot({ drives: [drive({ writable: true, grant_count: 3 })], grants: [grant({ members_can_write: true })] }));
+    await openEdit("platform-ref");
+    const toggle = screen.getByRole("switch", { name: DRIVES.FIELD_TEAM_WRITE });
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    expect(toggle).toBeDisabled();
+    expect(screen.getByText(DRIVES.TEAM_WRITE_UNKNOWN)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: DRIVES.SAVE_CTA }));
+    await waitFor(() => expect(updateDriveMock).toHaveBeenCalledTimes(1));
+    expect(updateDriveMock).toHaveBeenCalledWith("t1", expect.objectContaining({ team: true, writable: true }), false);
+    expect(upsertGrantMock).not.toHaveBeenCalled();
+  });
+
   it("removing a group chip unallocates it on save", async () => {
     await renderScreen(snapshot());
     await openEdit("platform-ref");

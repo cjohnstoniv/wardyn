@@ -40,7 +40,7 @@ const WRITABLE: MeDrive = {
   target: "/home/agent/shared/team-scratch", writable: true, team: true, shared_with: ["data-team", "qa"],
 };
 // The same group-allocated share without the team flag: today's row, no team words.
-const PLAIN: MeDrive = { ...base, id: "66666666-6666-4666-8666-666666666666", name: "Finance archive", section: "shared", backend: "host_path", target: "/home/agent/shared/finance-archive", writable: true };
+const PLAIN: MeDrive = { ...base, id: "66666666-6666-4666-8666-666666666666", name: "Finance archive", section: "shared", backend: "host_path", target: "/home/agent/shared/finance-archive", writable: true, team: false };
 const BACKGROUND: RunIntent = { shape: "application", experience: "background", workload: { kind: "command", command: "make" } };
 
 let catalogue: MeDriveCatalogue;

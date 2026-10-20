@@ -82,7 +82,8 @@ docs/operations/member-runs.md=1054 share=35
 # docs/operations/user-drives.md 4818 adds 14 over 4804 (0.9 release text for the fix sets merged at release); measured.
 # docs/operations/user-drives.md 4823 adds 5 over 4818 (0.9.3 RV5), measured: nested-root race has no database guard yet.
 # docs/operations/user-drives.md 4823 = 4818 + 5 (RV5), measured at the wave-A merge.
-docs/operations/user-drives.md=4823 share=35
+# docs/operations/user-drives.md 4877 adds 54 over 4823, measured: a person's reclaim refuses a team drive; a leaver's team-drive writes are kept (0.10 FEAT-2TEAM).
+docs/operations/user-drives.md=4877 share=35
 # docs/operations/capabilities.md 4169 = 4169 + 0 (RV5), measured at the wave-A merge.
 # docs/operations/capabilities.md 4205 adds 36: the withdrawn component grant line (0.9.3 FIN-B2).
 # docs/operations/capabilities.md 4383 = 4205 + 178, measured: a restricted value is closed whatever the switch says, the explain cross-reference and the exact self_host_runner grant.

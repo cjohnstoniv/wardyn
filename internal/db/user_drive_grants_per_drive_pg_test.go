@@ -69,6 +69,16 @@ func TestPG_UserDriveGrantsPerDriveUpgrade(t *testing.T) {
 		}
 		return out
 	}
+	// The store under test is today's and reads 0198's columns; a pre-0169
+	// schema gets them as 0198 adds them, so only 0169 moves under it.
+	for _, q := range []string{
+		`ALTER TABLE user_drives ADD COLUMN team BOOLEAN NOT NULL DEFAULT FALSE`,
+		`ALTER TABLE user_drive_grants ADD COLUMN members_can_write BOOLEAN NOT NULL DEFAULT FALSE`,
+	} {
+		if _, err := pool.Exec(ctx, q); err != nil {
+			t.Fatalf("add a column today's store reads: %v", err)
+		}
+	}
 	before := resolveAll()
 
 	if err := db.Migrate(ctx, pool); err != nil {

@@ -32,6 +32,7 @@ export function TeamDriveFields({
   onWrite,
   backend,
   disabled,
+  writeUnknown = false,
 }: {
   team: boolean;
   onTeam: (on: boolean) => void;
@@ -39,6 +40,8 @@ export function TeamDriveFields({
   onWrite: (on: boolean) => void;
   backend: string;
   disabled: boolean;
+  /** The grants page was cut, so the write setting of some allocations is not known here. */
+  writeUnknown?: boolean;
 }) {
   return (
     <div className="grid gap-4 border-t border-border pt-5 md:col-span-2">
@@ -48,8 +51,13 @@ export function TeamDriveFields({
       {team && (
         <div className="grid gap-4 md:pl-6">
           <Field label={DRIVES.FIELD_TEAM_WRITE} hint={DRIVES.TEAM_WRITE_HINT}>
-            <Switch checked={write} onChange={onWrite} disabled={disabled} label={DRIVES.FIELD_TEAM_WRITE} />
+            <Switch checked={write} onChange={onWrite} disabled={disabled || writeUnknown} label={DRIVES.FIELD_TEAM_WRITE} />
           </Field>
+          {writeUnknown && (
+            <Note tone="amber">
+              <span>{DRIVES.TEAM_WRITE_UNKNOWN}</span>
+            </Note>
+          )}
           {backend === "docker_volume" && (
             <Note tone="amber">
               <span>{DRIVES.TEAM_ONE_HOST}</span>
@@ -125,17 +133,18 @@ export function TeamGroups({
  * Makes a saved team drive's allocations match the editor: the groups removed
  * are unallocated, the groups added are allocated, and an existing allocation
  * whose write bit differs from the toggle is re-sent with its other fields kept.
+ * A null write leaves existing allocations' write bits alone (the grants page was cut).
  * Runs AFTER the drive is saved, so a drive that just became writable is
  * writable before any allocation says members can write.
  */
-export async function syncTeamGroups(driveId: string, groups: string[], write: boolean, grants: UserDriveGrant[]): Promise<void> {
+export async function syncTeamGroups(driveId: string, groups: string[], write: boolean | null, grants: UserDriveGrant[]): Promise<void> {
   const mine = grants.filter((g) => g.drive_id === driveId && g.subject_type === "group");
   for (const g of mine) {
     if (!groups.includes(g.subject)) await api.deleteGrant(g.id);
   }
   for (const subject of groups) {
     const had = mine.find((g) => g.subject === subject);
-    if (had && !!had.members_can_write === write) continue;
+    if (had && (write === null || !!had.members_can_write === write)) continue;
     await api.upsertGrant({
       subject_type: "group",
       subject,
@@ -145,7 +154,7 @@ export async function syncTeamGroups(driveId: string, groups: string[], write: b
       ...(had?.size_mib_override ? { size_mib_override: had.size_mib_override } : {}),
       ...(had?.writable_override != null ? { writable_override: had.writable_override } : {}),
       enabled: had?.enabled ?? true,
-      members_can_write: write,
+      members_can_write: write === true,
     });
   }
 }

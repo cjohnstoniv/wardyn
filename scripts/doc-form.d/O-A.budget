@@ -116,7 +116,9 @@
 # docs/OPERATIONS.md 57415 = ours 56767 + theirs 57392 - base 56744 at the 0.10 merge of main (W2) into HYBB.
 # docs/OPERATIONS.md 57478 = ours 56830 + theirs 57392 - base 56744 at the 0.10 merge of main (W2) into SEC-1c.
 # docs/OPERATIONS.md 57501 = ours 57415 + theirs 57478 - base 57392 at the 0.10 W3 merge of SEC-1c onto the train.
-docs/OPERATIONS.md=57501 share=35
+# docs/OPERATIONS.md 58062 adds 670 over 57392, measured: the 0198 migration line and the Team drives section, its before-you-upgrade line and the team-drive erasure notes (0.10 FEAT-2TEAM).
+# docs/OPERATIONS.md 58171, measured at the merge of the team-drive backend into FEAT-2TEAM-UI: ours 57501 plus the 0198 team-drives row and the backend section.
+docs/OPERATIONS.md=58171 share=35
 # docs/OPERATIONS.md 55848 adds 132 over 55716: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
 # docs/OPERATIONS.md 55840 adds 124 over 55716, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # docs/OPERATIONS.md 55867 adds 27 over 55840, measured: a run whose runner cannot be asked falls back to this deployment's runner, the older-runner exception, pooled runs, and the runner_offline gap reason.

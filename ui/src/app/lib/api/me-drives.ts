@@ -30,9 +30,9 @@ export interface MeDrive {
   unavailable_reason?: MeDriveUnavailableReason;
   /** The caller created it; only an owned drive takes DELETE /me/drives/{id}. */
   owned: boolean;
-  /** An admin's team drive: one folder the caller's groups share. Never set while the switch is off. */
-  team?: boolean;
-  /** The groups the caller holds that this team drive is allocated to. */
+  /** One folder shared by the groups it is allocated to; false while team drives are off. */
+  team: boolean;
+  /** On a team drive, the caller's own groups that carry its allocation. */
   shared_with?: string[];
 }
 

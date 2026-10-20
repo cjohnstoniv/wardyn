@@ -17,23 +17,29 @@ func TestDriveTargetFor(t *testing.T) {
 		name    string
 		backend types.DriveBackend
 		legacy  bool
+		team    bool
 		want    string
 	}{
-		{"Team Data", types.DriveBackendDockerVolume, true, DriveTarget},
-		{"Team Data", types.DriveBackendHostPath, true, DriveTarget},
-		{"Team Data", types.DriveBackendDockerVolume, false, DrivesRoot + "/team-data"},
-		{"Team Data", types.DriveBackendK8sPVC, false, DrivesRoot + "/team-data"},
-		{"Team Data", types.DriveBackendHostPath, false, SharedRoot + "/team-data"},
-		{"Team Data", types.DriveBackendK8sPVCStatic, false, SharedRoot + "/team-data"},
-		{"../..", types.DriveBackendHostPath, false, ""},
+		{"Team Data", types.DriveBackendDockerVolume, true, false, DriveTarget},
+		{"Team Data", types.DriveBackendHostPath, true, false, DriveTarget},
+		{"Team Data", types.DriveBackendDockerVolume, false, false, DrivesRoot + "/team-data"},
+		{"Team Data", types.DriveBackendK8sPVC, false, false, DrivesRoot + "/team-data"},
+		{"Team Data", types.DriveBackendHostPath, false, false, SharedRoot + "/team-data"},
+		{"Team Data", types.DriveBackendK8sPVCStatic, false, false, SharedRoot + "/team-data"},
+		{"../..", types.DriveBackendHostPath, false, false, ""},
+		// A team drive is the group's folder: shared/<slug> on every backend, never the legacy path.
+		{"Team Data", types.DriveBackendDockerVolume, false, true, SharedRoot + "/team-data"},
+		{"Team Data", types.DriveBackendDockerVolume, true, true, SharedRoot + "/team-data"},
+		{"Team Data", types.DriveBackendHostPath, true, true, SharedRoot + "/team-data"},
+		{"Team Data", types.DriveBackendK8sPVCStatic, false, true, SharedRoot + "/team-data"},
 	} {
-		d := types.ResolvedDrive{Drive: types.UserDrive{Name: c.name, Backend: c.backend}}
+		d := types.ResolvedDrive{Drive: types.UserDrive{Name: c.name, Backend: c.backend}, Team: c.team}
 		got := DriveTargetFor(d, c.legacy)
 		if got != c.want {
-			t.Errorf("DriveTargetFor(%q, %s, legacy=%v) = %q, want %q", c.name, c.backend, c.legacy, got, c.want)
+			t.Errorf("DriveTargetFor(%q, %s, legacy=%v, team=%v) = %q, want %q", c.name, c.backend, c.legacy, c.team, got, c.want)
 		}
 		if got != "" {
-			if err := ValidateDriveTarget(got, c.backend); err != nil {
+			if err := ValidateDriveTarget(&types.DriveMount{Target: got, Backend: c.backend, Team: c.team}); err != nil {
 				t.Errorf("ValidateDriveTarget refuses its own derivation %q: %v", got, err)
 			}
 			if err := ValidateAuthoredTarget(got); err == nil {
@@ -49,19 +55,24 @@ func TestValidateDriveTarget_RefusesWhatIsNotDerived(t *testing.T) {
 	for _, c := range []struct {
 		target  string
 		backend types.DriveBackend
+		team    bool
 	}{
-		{DrivesRoot, types.DriveBackendDockerVolume},
-		{DrivesRoot + "/", types.DriveBackendDockerVolume},
-		{DrivesRoot + "/a/b", types.DriveBackendDockerVolume},
-		{DrivesRoot + "/Team", types.DriveBackendDockerVolume},
-		{DrivesRoot + "/../.claude", types.DriveBackendDockerVolume},
-		{SharedRoot + "/team", types.DriveBackendDockerVolume},
-		{DrivesRoot + "/team", types.DriveBackendHostPath},
-		{"/home/agent", types.DriveBackendHostPath},
-		{"/work", types.DriveBackendK8sPVC},
+		// A team drive never lands on the person's own paths.
+		{DriveTarget, types.DriveBackendDockerVolume, true},
+		{DrivesRoot + "/team", types.DriveBackendDockerVolume, true},
+		{DriveTarget, types.DriveBackendHostPath, true},
+		{DrivesRoot, types.DriveBackendDockerVolume, false},
+		{DrivesRoot + "/", types.DriveBackendDockerVolume, false},
+		{DrivesRoot + "/a/b", types.DriveBackendDockerVolume, false},
+		{DrivesRoot + "/Team", types.DriveBackendDockerVolume, false},
+		{DrivesRoot + "/../.claude", types.DriveBackendDockerVolume, false},
+		{SharedRoot + "/team", types.DriveBackendDockerVolume, false},
+		{DrivesRoot + "/team", types.DriveBackendHostPath, false},
+		{"/home/agent", types.DriveBackendHostPath, false},
+		{"/work", types.DriveBackendK8sPVC, false},
 	} {
-		if err := ValidateDriveTarget(c.target, c.backend); err == nil {
-			t.Errorf("ValidateDriveTarget(%q, %s) = nil, want a refusal", c.target, c.backend)
+		if err := ValidateDriveTarget(&types.DriveMount{Target: c.target, Backend: c.backend, Team: c.team}); err == nil {
+			t.Errorf("ValidateDriveTarget(%q, %s, team=%v) = nil, want a refusal", c.target, c.backend, c.team)
 		}
 	}
 }

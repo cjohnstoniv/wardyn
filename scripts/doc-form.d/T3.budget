@@ -55,6 +55,7 @@
 # threatmodel/THREAT-MODEL.md 65158 adds 23 over 65135, measured: the derived AWS role credentials row names the re-signing switch and its old-path exception.
 # threatmodel/THREAT-MODEL.md 65198 adds 40 over 65158, measured: the derived AWS role credentials row says a re-signed lane's proxy holds and mask-registers them, and an old-path lane is as before.
 # threatmodel/THREAT-MODEL.md 65598 = ours 65489 + theirs 65198 - base 65089 at the 0.10 W3 merge of SEC-1c onto the train.
-threatmodel/THREAT-MODEL.md=65598
+# threatmodel/THREAT-MODEL.md 65525 adds 436 over 65089, measured: §4.6 Team drives: one folder a group shares, what bounds it and what it does not close (0.10 FEAT-2TEAM).
+threatmodel/THREAT-MODEL.md=66034
 # threatmodel/THREAT-MODEL.md 63171 adds 78 over 63093, measured: the console session under the role-stamp residual: renewal up to its cap, never moving the sign-in time, and the copied-cookie bound (0.9.3 console session lifetime).
 # threatmodel/THREAT-MODEL.md 63025 = 62948 + 77, measured: the laptop decision-sink crossing row and #77's sink and loss-row bullets.

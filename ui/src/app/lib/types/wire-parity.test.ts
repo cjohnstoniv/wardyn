@@ -486,11 +486,6 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(new Set(tsInterfaceTopKeys(ts, tsName))).toEqual(new Set(goTags));
   });
 
-  // Team drives (#1988). The two MeDrive keys the console reads to tell a team drive from any
-  // other group-allocated one and to name its groups. The backend lane has not added them yet;
-  // they are exempt from the set comparison only while pkg/client/me_drives.go lacks them.
-  const NEEDS_BACKEND_ME_DRIVE = ["team", "shared_with"];
-
   // The drive carrier and catalogue (pkg/client/runs_create.go, pkg/client/me_drives.go).
   it.each([
     ["runs_create.go", "DriveAttachment", "types/new-run-contract.ts", "DriveAttachment"],
@@ -500,24 +495,11 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     const goTags = goJSONTags(readFileSync(join(root, "pkg/client", goFile), "utf8"), goName);
     expect(goTags.length).toBeGreaterThanOrEqual(2);
     const ts = readFileSync(join(root, "ui/src/app/lib", tsFile), "utf8");
-    const expected = goName === "MeDrive" ? [...goTags, ...NEEDS_BACKEND_ME_DRIVE] : goTags;
-    expect(new Set(tsInterfaceTopKeys(ts, tsName))).toEqual(new Set(expected));
+    expect(new Set(tsInterfaceTopKeys(ts, tsName))).toEqual(new Set(goTags));
   });
 
   // Team drives (#1988): each key the console sends or reads is a json tag of the Go struct it
-  // mirrors, and the TS mirror names it. A key the Go base does not carry yet is listed in
-  // NEEDS_BACKEND_TEAM, which lets this pass until the backend lane lands. The first six are
-  // in that lane's uncommitted diff; the two MeDrive keys are in no lane yet.
-  const NEEDS_BACKEND_TEAM = [
-    "UserDrive.team",
-    "UserDriveGrant.members_can_write",
-    "UserDriveListItem.single_host",
-    "UserDriveProvider.team_drives",
-    "DriveRequest.team",
-    "DriveGrantRequest.members_can_write",
-    "MeDrive.team",
-    "MeDrive.shared_with",
-  ];
+  // mirrors, and the TS mirror names it.
   it.each([
     ["internal/types/user_drive.go", "UserDrive", "team", "api/drives.ts", "UserDrive"],
     ["internal/types/user_drive.go", "UserDriveGrant", "members_can_write", "api/drives.ts", "UserDriveGrant"],
@@ -529,7 +511,7 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     ["pkg/client/me_drives.go", "MeDrive", "shared_with", "api/me-drives.ts", "MeDrive"],
   ])("team drives: %s %s.%s is mirrored by %s %s", (goFile, goName, key, tsFile, tsName) => {
     const goTags = goJSONTags(readFileSync(join(root, goFile), "utf8"), goName);
-    expect(goTags.includes(key) || NEEDS_BACKEND_TEAM.includes(`${goName}.${key}`), `${goName} has no ${key} tag`).toBe(true);
+    expect(goTags, `${goName} has no ${key} tag`).toContain(key);
     const ts = readFileSync(join(root, "ui/src/app/lib", tsFile), "utf8");
     expect(tsInterfaceTopKeys(ts, tsName)).toContain(key);
   });

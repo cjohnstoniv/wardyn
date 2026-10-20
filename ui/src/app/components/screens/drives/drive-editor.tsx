@@ -49,6 +49,7 @@ import {
   type UserDriveGrant,
   type UserDriveInput,
   type UserDriveListItem,
+  teamGrantsKnown,
   teamWritable,
 } from "../../../lib/api/drives";
 import { DRIVES, PEOPLE } from "../../../lib/user-drives-copy";
@@ -148,7 +149,10 @@ export function DriveEditor({
   // an editor that cannot show it meets the server's refusal rather than
   // quietly turning the drive back into a folder per person.
   const [team, setTeam] = React.useState(!!drive?.team);
-  const [writable, setWritable] = React.useState(drive?.team ? teamWritable(drive, grants) : !!drive?.writable);
+  // A cut grants page leaves some allocations' write bits unseen: the toggle then
+  // keeps the drive's own bit and a save never re-sends an existing allocation.
+  const writeUnknown = !!drive?.team && !teamGrantsKnown(drive, grants);
+  const [writable, setWritable] = React.useState(drive?.team ? (writeUnknown ? !!drive.writable : teamWritable(drive, grants)) : !!drive?.writable);
   const [groups, setGroups] = React.useState(() =>
     drive?.team ? grants.filter((g) => g.drive_id === drive.id && g.subject_type === "group").map((g) => g.subject) : [],
   );
@@ -185,7 +189,7 @@ export function DriveEditor({
   // writable per person is not writable by a whole group until the admin says so.
   const pickTeam = (on: boolean) => {
     setTeam(on);
-    setWritable(on ? false : !!drive?.writable);
+    setWritable(on ? !!(writeUnknown && drive?.writable) : !!drive?.writable);
   };
 
   const save = async (confirmRehome = false) => {
@@ -207,7 +211,7 @@ export function DriveEditor({
         ? await api.updateDrive(savedId.current, input, confirmRehome)
         : await api.createDrive(input);
       savedId.current = saved.id;
-      if (teamUI) await syncTeamGroups(saved.id, groups, writable, grants);
+      if (teamUI) await syncTeamGroups(saved.id, groups, writeUnknown && team ? null : writable, grants);
       onSaved();
     } catch (e) {
       // A 409 on an edit (never on create — there is no prior row to re-home)
@@ -301,7 +305,7 @@ export function DriveEditor({
         )}
 
         {teamDrives && (
-          <TeamDriveFields team={team} onTeam={pickTeam} write={writable} onWrite={setWritable} backend={backend} disabled={disabled} />
+          <TeamDriveFields team={team} onTeam={pickTeam} write={writable} onWrite={setWritable} backend={backend} disabled={disabled} writeUnknown={writeUnknown && team} />
         )}
 
         {teamUI ? (

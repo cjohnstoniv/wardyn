@@ -212,7 +212,14 @@ export function teamWritable(d: UserDriveListItem, grants: UserDriveGrant[]): bo
   if (!d.writable) return false;
   const own = grants.filter((g) => g.drive_id === d.id);
   if (d.grant_count === 0) return true;
-  return own.length === d.grant_count && own.every((g) => !!g.members_can_write);
+  return teamGrantsKnown(d, grants) && own.every((g) => !!g.members_can_write);
+}
+
+// Whether the grants page lists every allocation the drive has. The page is cut
+// (at 1000 rows), and then the allocations it leaves out carry write bits the
+// console cannot see: an editor must not seed or send a write bit for them.
+export function teamGrantsKnown(d: UserDriveListItem, grants: UserDriveGrant[]): boolean {
+  return grants.filter((g) => g.drive_id === d.id).length === d.grant_count;
 }
 
 // DriveBackend.Kind() — managed (Wardyn allocates the object) vs share (it

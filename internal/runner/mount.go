@@ -63,31 +63,33 @@ const (
 // DriveTargetFor is the one in-sandbox path a drive mounts at, derived by the
 // server and never authored: DriveTarget for the legacy drive (the person's one
 // resolved drive), else DrivesRoot/<slug> for a managed drive and
-// SharedRoot/<slug> for a share. "" when the drive's name has no slug; the
-// caller refuses it rather than mounting it somewhere else.
+// SharedRoot/<slug> for a share. A team drive is never the person's own, so it
+// mounts at SharedRoot/<slug> whatever its backend, legacy or not. "" when the
+// drive's name has no slug; the caller refuses it rather than mounting it
+// somewhere else.
 func DriveTargetFor(d types.ResolvedDrive, legacy bool) string {
-	if legacy {
+	if legacy && !d.Team {
 		return DriveTarget
 	}
 	slug := types.DriveSlug(d.Drive.Name)
 	if slug == "" {
 		return ""
 	}
-	if d.Drive.Backend.Kind() == types.DriveKindManaged {
+	if d.Drive.Backend.Kind() == types.DriveKindManaged && !d.Team {
 		return DrivesRoot + "/" + slug
 	}
 	return SharedRoot + "/" + slug
 }
 
 // ValidateDriveTarget is a substrate's own check on a drive's target: one of
-// the paths DriveTargetFor derives for that backend, and nothing else. A target
+// the paths DriveTargetFor derives for that drive, and nothing else. A target
 // anywhere else would put a person's storage over another mount.
-func ValidateDriveTarget(target string, backend types.DriveBackend) error {
-	root := SharedRoot
-	if backend.Kind() == types.DriveKindManaged {
+func ValidateDriveTarget(drive *types.DriveMount) error {
+	target, root := drive.Target, SharedRoot
+	if drive.Backend.Kind() == types.DriveKindManaged && !drive.Team {
 		root = DrivesRoot
 	}
-	if target == DriveTarget {
+	if target == DriveTarget && !drive.Team {
 		return nil
 	}
 	if slug, ok := strings.CutPrefix(target, root+"/"); ok && slug != "" && types.DriveSlug(slug) == slug {

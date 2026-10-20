@@ -125,6 +125,28 @@ test.describe("Admin Drives: team drives", () => {
     expect(sent.grants[0]).toMatchObject({ subject_type: "group", subject: "platform-team", drive_id: REF.id, additional: true, members_can_write: true });
   });
 
+  test("a grants page cut short never turns a writable team drive read-only on save", async ({ page }) => {
+    const sent = await stubAdmin(page, { on: true });
+    // The server counts 1500 allocations and lists one: the rest carry write bits the page cannot show.
+    const CUT = { ...SCRATCH, grant_count: 1500 };
+    await page.route("**/api/v1/drives", (route: Route) =>
+      route.request().method() === "GET"
+        ? route.fulfill({ json: { drives: [CUT], grants: [GRANTS[1]], grant_total: 1500, host_roots_configured: true, runner_target: "docker", disabled: false } })
+        : route.fallback(),
+    );
+    await openDrives(page);
+    await driveRow(page, CUT.name).getByRole("button", { name: `${DRIVES.EDIT} ${CUT.name}` }).click();
+    const ed = editor(page);
+    const write = ed.getByRole("switch", { name: DRIVES.FIELD_TEAM_WRITE });
+    await expect(write).toHaveAttribute("aria-checked", "true");
+    await expect(write).toBeDisabled();
+    await expect(ed.getByText(DRIVES.TEAM_WRITE_UNKNOWN)).toBeVisible();
+    await ed.getByRole("button", { name: DRIVES.SAVE_CTA }).click();
+    await expect.poll(() => sent.puts.length).toBe(1);
+    expect(sent.puts[0].body).toMatchObject({ team: true, writable: true });
+    expect(sent.grants).toHaveLength(0);
+  });
+
   test("a new team drive is saved read-only with the group the admin allocated", async ({ page }) => {
     const sent = await stubAdmin(page, { on: true });
     await openDrives(page);
