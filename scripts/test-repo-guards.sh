@@ -649,6 +649,14 @@ else
         printf '%s' "$promote_copy" | grep -E -- "$pat" >/dev/null \
             || { bad "$REL: the promote job's loop no longer has a command matching '$pat' — a promoted image would lose its signature, SBOM attestation, or its per-image failure isolation"; stage_fail=1; }
     done
+    # The loop's verdict: after the FAILED summary the step must exit 1, or a failed image passes the job.
+    printf '%s' "$promote_copy" | grep -A1 -F 'echo "FAILED: ' | grep -E '^[[:space:]]*exit 1$' >/dev/null \
+        || { bad "$REL: the promote job's loop no longer runs \`exit 1\` right after its FAILED summary — a failed image would pass the job"; stage_fail=1; }
+    # One cosign initialize, before the parallel loop, so the shared TUF cache is set up once.
+    init_idx="$(yq -r '.jobs.promote.steps | to_entries[] | select(.value.run // "" | test("^cosign initialize")) | .key' "$REL" | head -1)"
+    loop_idx="$(yq -r '.jobs.promote.steps | to_entries[] | select(.value.name // "" | test("^Promote, sign and attest each image")) | .key' "$REL" | head -1)"
+    { [ -n "$init_idx" ] && [ -n "$loop_idx" ] && [ "$init_idx" -lt "$loop_idx" ]; } \
+        || { bad "$REL: the promote job must run \`cosign initialize\` in a step before the parallel loop (shared TUF cache)"; stage_fail=1; }
     if [ "$stage_fail" = 0 ]; then ok "nightly's staged rows and build steps match release.yml's publish set (names, dockerfiles, build-args, platforms, provenance, no cache), and no local-only image is staged"; fi
 fi
 
