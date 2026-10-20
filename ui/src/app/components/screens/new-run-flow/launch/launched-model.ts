@@ -9,7 +9,7 @@
 
 import { NR_LAUNCH } from "../../../wardyn/copy/new-run/launch";
 import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
-import { shortTime } from "../../../../lib/format";
+import { mediumDate, shortTime } from "../../../../lib/format";
 import { ordinal } from "../../../../lib/ordinal";
 import { RUN_WAIT, RUN_WAIT_REASON } from "../../../../lib/runner-pool-refusals";
 import type { AgentRun, RunQueue } from "../../../../lib/types/runs";
@@ -35,10 +35,13 @@ export function givesUp(deadlineAt: string, now: number): string {
   return hours >= 1 ? NR_LAUNCH.GIVES_UP_IN(hours === 1 ? NR_SHARED.HOUR_ONE : NR_SHARED.HOURS(hours)) : shortTime(deadlineAt);
 }
 
-/** Why the run waits, in the server's own sentence for that reason. Undefined until the pool is known. */
-export function waitingBody(reason: string, pool: { name: string; max?: number } | undefined): string | undefined {
-  // This sentence names no pool, so it needs none.
+/** Why the run waits, in the server's own sentence for that reason. Undefined until the pool is known.
+ *  startAt is a scheduled run's queue.start_at, when the wire carries it. */
+export function waitingBody(reason: string, pool: { name: string; max?: number } | undefined, startAt?: string): string | undefined {
+  // These sentences name no pool, so they need none.
   if (reason === RUN_WAIT_REASON.RECORDING_STORE_OFF) return RUN_WAIT.RECORDING_STORE_OFF();
+  if (reason === RUN_WAIT_REASON.SCHEDULED) return RUN_WAIT.SCHEDULED(startAt && `${mediumDate(startAt)}, ${shortTime(startAt)}`);
+  if (reason === RUN_WAIT_REASON.OWNER_SIGN_IN) return RUN_WAIT.OWNER_SIGN_IN();
   if (!pool) return undefined;
   if (reason === RUN_WAIT_REASON.NO_RUNNER_FREE) return RUN_WAIT.NO_RUNNER_FREE(pool.name);
   if (reason === RUN_WAIT_REASON.RUNNERS_AT_CAPACITY) return RUN_WAIT.RUNNERS_AT_CAPACITY(pool.name);

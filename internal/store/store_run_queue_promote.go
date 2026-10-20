@@ -619,6 +619,30 @@ func (s PG) SetPromotedStatusDetail(ctx context.Context, id uuid.UUID, detail st
 	return nil
 }
 
+// RequeuePromotedRun puts a promoted run whose start has not dispatched back in its pool's queue, with
+// the queue row it was promoted with (e: its owner, authority snapshot, launch, deadline and start time,
+// unchanged) and detail as its status_detail. Guarded: only a run still PENDING with admitted_at set and
+// no sandbox moves, so a kill or another end that moved it first keeps its outcome, and a kill after it
+// meets a QUEUED run. Its binding and size stay the promotion's; the next promotion sets them again.
+// false means the run had moved.
+func (s PG) RequeuePromotedRun(ctx context.Context, e RunQueueEntry, detail string) (bool, error) {
+	var moved int
+	if err := s.Pool.QueryRow(ctx, `
+		WITH moved AS (
+			UPDATE agent_runs SET state=$2, updated_at=now(), admitted_at=NULL, status_detail=$3
+			WHERE id=$1 AND state=$4 AND admitted_at IS NOT NULL AND sandbox_ref = '' RETURNING id),
+		back AS (
+			INSERT INTO run_queue (`+runQueueCols+`)
+			SELECT id, $5::uuid, $6::text, $7::timestamptz, $8::timestamptz, $9::jsonb, $10::jsonb, $11::jsonb, $12::timestamptz
+			FROM moved RETURNING run_id)
+		SELECT count(*) FROM back`,
+		e.RunID, string(types.RunQueued), detail, string(types.RunPending), e.PoolID, e.Owner, e.QueuedAt, e.DeadlineAt,
+		jsonOrEmpty(e.PolicyRef), jsonOrEmpty(e.Authority), jsonOrEmpty(e.Launch), e.StartAt).Scan(&moved); err != nil {
+		return false, fmt.Errorf("store: requeue promoted run: %w", err)
+	}
+	return moved > 0, nil
+}
+
 // SetQueueWait records why a waiting run keeps its place: its "queue: <token>" status_detail, written
 // only when it differs from what the run carries and only while the run is still QUEUED.
 func (s PG) SetQueueWait(ctx context.Context, id uuid.UUID, detail string) error {

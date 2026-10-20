@@ -15,4 +15,8 @@
 # docs/operations/runner-pools.md 2025 = 1980 + 45, measured: the per-replica terminal session cap
 # docs/operations/runner-pools.md 2017 = 1980 + 37, measured: the runner_pool_recording_store_off wait-reason row
 # docs/operations/runner-pools.md 2062 = 2025 + 37, measured: both sides after the final-train merge: the per-replica session cap and the recording-store wait row
-docs/operations/runner-pools.md=2062 share=35
+# docs/operations/runner-pools.md 2207 adds 145 over 2062 (0.10 FEAT-2SCHED): the Scheduled runs section.
+# docs/operations/runner-pools.md 2215 adds 8 over 2207 (0.10 FEAT-2SCHED): the sign-in wait ends queue_sign_in_timeout.
+# docs/operations/runner-pools.md 2281 adds 66 over 2215 (0.10 FEAT-2SCHED review r1 M1/M2/L3): the latest start, the daylight-saving sentence, the sign-in sentence and the switch at the start.
+# docs/operations/runner-pools.md 2298 adds 17 over 2281 (0.10 FEAT-2SCHED review r2 L1): a renewal the provider did not answer ends the run.
+docs/operations/runner-pools.md=2298 share=35

@@ -20,7 +20,8 @@ type PoolCounts struct {
 
 // RunnerPoolSlotCounts is every listed pool's PoolCounts in one grouped read, taken without any lock:
 // advisory, since a launch counts again under the pool row's lock. Used counts what countPoolSlotHolders
-// counts. A pool with neither is present with zeros.
+// counts. Waiting leaves out a scheduled run whose start time is still ahead: it is not in line yet.
+// A pool with neither is present with zeros.
 func (s PG) RunnerPoolSlotCounts(ctx context.Context, poolIDs []uuid.UUID) (map[uuid.UUID]PoolCounts, error) {
 	out := make(map[uuid.UUID]PoolCounts, len(poolIDs))
 	if len(poolIDs) == 0 {
@@ -29,7 +30,7 @@ func (s PG) RunnerPoolSlotCounts(ctx context.Context, poolIDs []uuid.UUID) (map[
 	rows, err := s.Pool.Query(ctx, `
 		SELECT p.id,
 			(SELECT count(*) FROM agent_runs r WHERE r.runner_pool_id = p.id AND r.state = ANY($2) AND `+HoldsSandboxSQL+`),
-			(SELECT count(*) FROM run_queue q WHERE q.pool_id = p.id)
+			(SELECT count(*) FROM run_queue q WHERE q.pool_id = p.id AND (q.start_at IS NULL OR q.start_at <= now()))
 		FROM unnest($1::uuid[]) AS p(id)`, poolIDs, slotHoldingStateNames())
 	if err != nil {
 		return nil, fmt.Errorf("store: runner pool slot counts: %w", err)
