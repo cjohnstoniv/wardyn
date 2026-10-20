@@ -173,11 +173,15 @@ var ErrIdentityNotRebindable = errors.New("store: identity has no object id and 
 
 // PrincipalInUseError is UnbindIdentity's refusal while the principal it would release still holds something
 // the leaver flow reaches only through the row's principal.
-type PrincipalInUseError struct{ APITokens, SSHKeys, ActiveRuns, Sponsored, PendingInvitations int }
+type PrincipalInUseError struct {
+	APITokens, SSHKeys, ActiveRuns, Sponsored, PendingInvitations int
+	// Runners are the person's claimed runners; RunnerTokens their unspent registration tokens.
+	Runners, RunnerTokens int
+}
 
 func (e *PrincipalInUseError) Error() string {
-	return fmt.Sprintf("store: the principal still holds %d API token(s), %d SSH key(s), %d active run(s), sponsors %d service identity(ies) and is the target of %d pending invitation(s)",
-		e.APITokens, e.SSHKeys, e.ActiveRuns, e.Sponsored, e.PendingInvitations)
+	return fmt.Sprintf("store: the principal still holds %d API token(s), %d SSH key(s), %d active run(s), %d runner(s), %d runner registration token(s), sponsors %d service identity(ies) and is the target of %d pending invitation(s)",
+		e.APITokens, e.SSHKeys, e.ActiveRuns, e.Runners, e.RunnerTokens, e.Sponsored, e.PendingInvitations)
 }
 
 // IdentityUnbinder is the optional store seam behind POST /admin/identities/{id}/unbind.
@@ -188,7 +192,7 @@ type IdentityUnbinder interface {
 	// row bound to: a row bound to another by the time it is locked is ErrIdentityRebound. Refused, with
 	// nothing written: a deactivated or purged row (ErrIdentityDeactivated), a row with no principal
 	// (ErrConflict), a row with no object id (ErrIdentityNotRebindable), a principal that still holds an API
-	// token, SSH key or non-terminal run, sponsors a non-retired service identity or is the target of a
+	// token, SSH key, claimed runner, unspent runner registration token or non-terminal run, sponsors a non-retired service identity or is the target of a
 	// pending invitation (*PrincipalInUseError), a missing row (ErrNotFound). Once the row is
 	// re-bound, deactivation and the kill sweep reach only the new principal, so the old one must hold
 	// nothing. The epoch, the deactivation columns and the SCIM linkage are untouched.
@@ -222,8 +226,11 @@ func (s PG) UnbindIdentity(ctx context.Context, id uuid.UUID, principal string) 
 			(SELECT count(*) FROM ssh_public_keys WHERE principal = $1),
 			(SELECT count(*) FROM agent_runs WHERE created_by = $1 AND state = ANY($2)),
 			(SELECT count(*) FROM service_identities WHERE sponsor = $1 AND retired_at IS NULL),
-			(SELECT count(*) FROM person_invitations WHERE target = $1 AND claimed_at IS NULL AND revoked_at IS NULL AND expires_at > now())`,
-		principal, nonTerminalStateNames()).Scan(&held.APITokens, &held.SSHKeys, &held.ActiveRuns, &held.Sponsored, &held.PendingInvitations); err != nil {
+			(SELECT count(*) FROM person_invitations WHERE target = $1 AND claimed_at IS NULL AND revoked_at IS NULL AND expires_at > now()),
+			(SELECT count(*) FROM runners WHERE owner = $1 AND owner_kind = 'person' AND state = 'claimed'),
+			(SELECT count(*) FROM runner_registration_tokens WHERE owner = $1 AND owner_kind = 'person' AND consumed_at IS NULL AND expires_at > now())`,
+		principal, nonTerminalStateNames()).Scan(&held.APITokens, &held.SSHKeys, &held.ActiveRuns, &held.Sponsored, &held.PendingInvitations,
+		&held.Runners, &held.RunnerTokens); err != nil {
 		return fmt.Errorf("store: count what the principal holds: %w", err)
 	}
 	if *held != (PrincipalInUseError{}) {

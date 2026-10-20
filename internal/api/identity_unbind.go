@@ -64,8 +64,8 @@ func (s *Server) handleUnbindIdentity(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.As(err, &inUse):
 		writeErrorReason(w, http.StatusConflict, reasonIdentityPrincipalInUse, fmt.Sprintf(
-			"the principal still holds %d API token(s), %d SSH key(s) and %d active run(s), sponsors %d service identity(ies) and is the target of %d pending invitation(s); revoke, end, retire or hand over each first, because after the unbind nothing sweeps them",
-			inUse.APITokens, inUse.SSHKeys, inUse.ActiveRuns, inUse.Sponsored, inUse.PendingInvitations))
+			"the principal still holds %d API token(s), %d SSH key(s), %d active run(s), %d claimed runner(s) and %d unspent runner registration token(s), sponsors %d service identity(ies) and is the target of %d pending invitation(s); revoke, end, retire or hand over each first, because after the unbind nothing sweeps them",
+			inUse.APITokens, inUse.SSHKeys, inUse.ActiveRuns, inUse.Runners, inUse.RunnerTokens, inUse.Sponsored, inUse.PendingInvitations))
 		return
 	case errors.Is(err, store.ErrConflict), errors.Is(err, store.ErrIdentityRebound):
 		writeErrorReason(w, http.StatusConflict, reasonIdentityNotBound, "the identity changed while it was being unbound; read it again")
@@ -78,7 +78,7 @@ func (s *Server) handleUnbindIdentity(w http.ResponseWriter, r *http.Request) {
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor, "identity.unbind", id.String(), "success",
 		mustJSON(map[string]any{
 			"principal": ident.Principal, "unbound_by": actor, "sessions_cut": 1,
-			"api_tokens": 0, "ssh_keys": 0, "active_runs": 0, // held when it committed: the store refuses otherwise
+			"api_tokens": 0, "ssh_keys": 0, "active_runs": 0, "runners": 0, "runner_tokens": 0, // held when it committed: the store refuses otherwise
 			"issuer": ident.Issuer, "tenant_id": ident.TenantID, "object_id": ident.ObjectID,
 		})))
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "unbound_principal": ident.Principal})

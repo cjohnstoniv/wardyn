@@ -99,5 +99,8 @@ func (p *Proxy) upstreamSchemeFor(host string, port int) (scheme string, default
 	if p.mitmPlaintextUpstream(host, port) {
 		return "http", 80
 	}
+	if lm := p.localModelAt(host, port); lm != nil && lm.plaintext {
+		return "http", 80
+	}
 	return "https", 443
 }
