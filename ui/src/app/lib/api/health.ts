@@ -442,9 +442,6 @@ export const health = {
     // validated at boot (https, no userinfo/query/fragment). Absent while unset and
     // on an older daemon. The card's Get the CLI lines fetch from it when present.
     cli_artifact_base?: string;
-    // wardyn login can sign in through the browser here (WARDYN_CLI_SIGN_IN on, with
-    // SSO). Absent on an older daemon, which reads the same as false.
-    cli_sign_in?: boolean;
   }> {
     try {
       // /healthz is un-prefixed (not under /api/v1), so it is the ONE call
