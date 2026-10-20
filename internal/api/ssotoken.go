@@ -338,6 +338,20 @@ const signInCaptureKillGrace = 5 * time.Second
 // cascade mid-flight instead of waiting the bounded time it asked for.
 const signInCaptureReadTimeout = 5 * time.Second
 
+// readSignInRunToEnd reads the captured sign-in run, once more when the first read failed fast with a store
+// error (a dropped pooled connection): without the run there is nothing to kill, and the run would sit to its idle
+// cap. A read that timed out is not retried, so the read phase stays inside signInCaptureReadTimeout and the
+// background shutdown budget holds.
+func (s *Server) readSignInRunToEnd(ctx context.Context, runID uuid.UUID) (types.AgentRun, error) {
+	readCtx, cancel := context.WithTimeout(ctx, signInCaptureReadTimeout)
+	defer cancel()
+	run, err := s.cfg.Store.GetRun(readCtx, runID)
+	if err != nil && readCtx.Err() == nil {
+		run, err = s.cfg.Store.GetRun(readCtx, runID)
+	}
+	return run, err
+}
+
 // killSignInRunAfterCapture is #151's server belt: a sign-in run whose capture
 // was just STORED ends on the server, so a closed console tab (or a pane mount
 // that never kills) no longer leaves the sandbox running to its idle cap. Only
@@ -375,9 +389,7 @@ func (s *Server) killSignInRunAfterCapture(ctx context.Context, runID uuid.UUID,
 		// now holds, as supersedeOneLoginRun does. Only a lost CAS repeats, so
 		// the extra reads are cheap; the cascade itself runs once.
 		for attempt := 0; attempt < supersedeCASAttempts; attempt++ {
-			readCtx, cancel := context.WithTimeout(detached, signInCaptureReadTimeout)
-			run, err := s.cfg.Store.GetRun(readCtx, runID)
-			cancel()
+			run, err := s.readSignInRunToEnd(detached, runID)
 			if err != nil {
 				slog.WarnContext(detached, "wardynd: could not read a captured sign-in run to end it",
 					slog.String("run_id", runID.String()), slog.Any("error", err))
