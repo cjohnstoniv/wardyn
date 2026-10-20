@@ -411,6 +411,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `KEEP_SUMMARY` | mock | the work folder is kept as a drive after the run |
 | `KEEP_STARTS_MAIN` | mock | the main drive |
 | `KEEP_LIMIT(n, limit)` | mock | You have {n} of {limit} drives. Delete one to keep this run's work folder. |
+| `KEEP_DISABLED` | deviation (lead wording 2026-10-20, #1991) | Your organisation doesn't let runs keep their work folder as a drive. Ask an admin. |
 | `KEEP_LIMIT_HINT` | mock | Or untick “Reuse it across runs” to launch without keeping it. |
 | `DRIVE_KEPT_FROM(run)` | mock | From run {run} · Kept until you delete it. |
 | `DRIVE_KEPT_FROM_UNTITLED` | deviation (lead wording 2026-10-20, #1991) | From an earlier run · Kept until you delete it. |

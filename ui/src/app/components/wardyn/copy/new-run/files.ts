@@ -181,6 +181,8 @@ export const NR_FILES = {
   KEEP_STARTS_MAIN: "the main drive",
   KEEP_LIMIT: (n: string | number, limit: string | number) =>
     `You have ${n} of ${limit} drives. Delete one to keep this run's work folder.`,
+  /** The server's own sentence (keepWorkFolderDisabledMsg), for a rerun that asks to keep while the keep switch is off. */
+  KEEP_DISABLED: "Your organisation doesn't let runs keep their work folder as a drive. Ask an admin.",
   KEEP_LIMIT_HINT: "Or untick “Reuse it across runs” to launch without keeping it.",
   DRIVE_KEPT_FROM: (run: string | number) => `From run ${run} · Kept until you delete it.`,
   /** Not on the boards: the run's title is gone or empty, so the line names no run. */

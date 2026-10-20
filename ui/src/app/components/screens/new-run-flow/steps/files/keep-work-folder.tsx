@@ -34,8 +34,8 @@ export function keepDoor(create: MemberDriveCreate | undefined, asked: boolean):
   if (!create?.keep_work_folder && !asked) return { kind: "today" };
   const reason = create?.reason === "limit_reached" ? NR_FILES.KEEP_LIMIT(create.count, create.limit)
     : create?.reason === "disabled" ? NR_FILES.CREATE_DISABLED
-      // The switch is off but the draft asks (a rerun carries it): say why the tick is locked.
-      : create && (createReasonText(create) ?? (create.keep_work_folder ? undefined : NR_FILES.CREATE_DISABLED));
+      // The draft asks (a rerun carries it) and nothing else names a reason: the keep switch is what is off.
+      : create && (createReasonText(create) ?? (create.keep_work_folder ? undefined : NR_FILES.KEEP_DISABLED));
   return { kind: "closed", reason: reason || undefined };
 }
 
