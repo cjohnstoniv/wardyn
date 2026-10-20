@@ -251,7 +251,7 @@ pass "C8h the split-role upgrade note grants all ${checked} tables created since
 # connection (migrator_sql: the app role never executes it) is not counted
 # against the app role.
 all_tables="$(cat "${MIGDIR}"/[0-9][0-9][0-9][0-9]_*.sql | grep -ioE 'CREATE TABLE (IF NOT EXISTS )?[a-z_]+' | awk '{print tolower($NF)}' | sort -u | tr '\n' ' ')"
-migrator_sql="internal/db/deployment_versions.go" # RecordDeploymentVersion, run by migrateRecordingVersion on the migrator DSN
+migrator_sql="internal/db/deployment_version_record.go" # RecordDeploymentVersion (a file of its own), run by migrateRecordingVersion on the migrator DSN
 verb_report="$(cd "${ROOT}" && printf '%s\n' "${split_note}" | tr '\n' ' ' | NEW_TABLES="${new_tables}" ALL_TABLES="${all_tables}" MIGRATOR_SQL="${migrator_sql}" perl -e '
   my $note = <STDIN>;
   my (%has, $verbs);
@@ -293,6 +293,17 @@ verb_report="$(cd "${ROOT}" && printf '%s\n' "${split_note}" | tr '\n' ' ' | NEW
   fail "the newest CHANGELOG \"Split-role installs\" bullet grants a table fewer verbs than non-test SQL uses on it: a split-role install that follows the note fails at that statement (C8h verbs). Move the table to a group that carries the verb"
 }
 pass "C8h the split-role upgrade note grants every verb the code uses on the tables it names"
+
+# The migrator unit is exempt from the check above as a whole file, so it may hold exactly
+# the one statement the migrator connection runs and nothing else: an application-role
+# statement added to it would never be counted. The detector is proven on a fixture first.
+migrator_unit_dml() { grep -ohiE 'INSERT[[:space:]]+INTO[[:space:]]+[a-z_]+|DELETE[[:space:]]+FROM[[:space:]]+[a-z_]+|UPDATE[[:space:]]+[a-z_]+[[:space:]]+SET' "$1" | tr -s '[:space:]' ' ' | sed 's/ $//' | sort -u; }
+printf 'INSERT INTO deployment_versions (a) VALUES (1)\nUPDATE sessions SET x = 1\n' > "${WORK}/migrator-unit-fixture.go"
+[ "$(migrator_unit_dml "${WORK}/migrator-unit-fixture.go")" != "INSERT INTO deployment_versions" ] \
+  || fail "the migrator-unit detector missed an added application-role statement (C8h)"
+[ "$(migrator_unit_dml "${ROOT}/${migrator_sql}")" = "INSERT INTO deployment_versions" ] \
+  || fail "${migrator_sql} is exempt from the application-role verb check and may hold only the RecordDeploymentVersion statement; it holds: $(migrator_unit_dml "${ROOT}/${migrator_sql}" | tr '\n' ';') (C8h)"
+pass "C8h the migrator-unit exemption covers only the RecordDeploymentVersion statement"
 
 # ── C9: every "helm install wardyn" recipe carries its render-time refusals ─
 #
