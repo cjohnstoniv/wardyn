@@ -259,8 +259,9 @@ type EraseReport struct {
 	CryptoErased int
 	// Fenced says the erase advanced the owner's erase generation first, so a
 	// write that began earlier is refused wherever it runs. False means the
-	// store keeps none (Generational) and the caller's locks alone held back a
-	// writer in this process.
+	// store keeps none (Generational) and only the caller's locks held back a
+	// writer: the sign-in locks reach every replica, the own-token write mutex
+	// only its own process.
 	Fenced bool
 }
 
