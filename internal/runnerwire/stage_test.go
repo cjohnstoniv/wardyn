@@ -236,3 +236,34 @@ func TestRunRecordsNoStageForItsOwnShutdown(t *testing.T) {
 		}
 	}
 }
+
+// A Canceled under a live context is a connection that failed, not the runner's shutdown (a peer that
+// fails cancels its own context): its stage is recorded.
+func TestRunRecordsTheStageOfACanceledAttemptUnderALiveContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	_, key, _ := ed25519.GenerateKey(rand.Reader)
+	got := make(chan Stage, 1)
+	client, err := NewClient(ClientConfig{OrgURL: "https://org.example", RunnerID: uuid.NewString(), PrivateKey: key, Hooks: idleHooks(),
+		LinkChanged: func(_ bool, reason string, stage Stage) {
+			if reason != "" {
+				select {
+				case got <- stage:
+				default:
+				}
+			}
+		},
+		Dial: func(context.Context) (Conn, error) { return nil, fmt.Errorf("dial: %w", context.Canceled) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = client.Run(ctx) }()
+	select {
+	case s := <-got:
+		if s != StageNetwork {
+			t.Errorf("stage = %q, want %q", s, StageNetwork)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a Canceled under a live context recorded no stage")
+	}
+}

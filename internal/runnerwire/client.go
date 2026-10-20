@@ -154,9 +154,9 @@ func (c *Client) Run(ctx context.Context) error {
 	for ctx.Err() == nil {
 		started := time.Now()
 		err := c.Connect(ctx)
-		// The runner's own shutdown is not a failure to connect: it leaves no stage to carry
-		// across the restart and report.
-		if err != nil && ctx.Err() == nil && !errors.Is(err, context.Canceled) {
+		// The runner's own shutdown (ctx done) is not a failure to connect: it leaves no stage to carry
+		// across the restart and report. A Canceled under a live ctx is a peer that failed, and counts.
+		if err != nil && ctx.Err() == nil {
 			c.setLink(false, err.Error(), StageOf(err))
 		}
 		if errors.Is(err, ErrRevoked) {

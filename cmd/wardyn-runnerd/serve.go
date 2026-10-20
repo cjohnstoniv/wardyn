@@ -25,8 +25,9 @@ type runnerRuntime struct {
 	hooks runnerwire.RunnerHooks
 	run   func(context.Context) error
 	close func() error
-	// refreshCaps reports the runner's state again over the session that is up, nil when none is (the
-	// next connect reports it); nil func when it has no state to report between connects.
+	// refreshCaps reports the runner's state again over the session that is up. With none up it returns
+	// an error (errOffline on Docker), so the caller keeps the report pending for the next session; nil
+	// func when it has no state to report between connects.
 	refreshCaps func(context.Context) error
 }
 
