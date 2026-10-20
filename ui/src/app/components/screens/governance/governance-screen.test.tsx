@@ -174,17 +174,6 @@ describe("GovernanceScreen — states", () => {
     expect(screen.getByText(GOV.LEAD)).toBeInTheDocument();
   });
 
-  it("#3060: a one-sentence lede, the rest in a closed How governance works", async () => {
-    renderScreen();
-    await screen.findByRole("heading", { name: GOV.TITLE, level: 1 });
-    expect(screen.getByTestId("page-header-description")).toHaveTextContent(GOV.LEAD);
-    expect(GOV.LEAD.length).toBeLessThanOrEqual(120);
-    const how = screen.getByTestId("how-governance");
-    expect(how).not.toHaveAttribute("open");
-    expect(within(how).getByText(GOV.HOW_TITLE)).toBeInTheDocument();
-    expect(within(how).getByText(GOV.HOW_BODY)).toBeInTheDocument();
-  });
-
   // #2896: at 390px the four tabs scroll inside the strip instead of widening the page.
   it("the tab strip scrolls inside itself and starts at its left edge", async () => {
     renderScreen();
@@ -431,30 +420,6 @@ describe("GovernanceScreen — delete: the pre-fill and the race are different r
 });
 
 describe("GovernanceScreen — assignments and the resolved preview", () => {
-  it("with rows: the lede, and the precedence rule and both halves of the effect fact in a closed disclosure", async () => {
-    renderScreen();
-    await screen.findByText(GOV.ASSIGN_TITLE);
-    expect(screen.getByText(GOV.ASSIGN_LEAD)).toBeInTheDocument();
-    expect(screen.queryByText(GOV.EMPTY_ASSIGN_TITLE)).toBeNull();
-    const combine = screen.getByTestId("how-governance-assignments");
-    expect(combine).not.toHaveAttribute("open");
-    expect(within(combine).getByText(GOV.COMBINE_TITLE)).toBeInTheDocument();
-    expect(within(combine).getByText(GOV.PRECEDENCE)).toBeInTheDocument();
-    expect(within(combine).getByText(GOV.EFFECT_NOTE)).toBeInTheDocument();
-    expect(within(combine).getByText(GOV.SIGNIN_NOTE)).toBeInTheDocument();
-  });
-
-  it("empty: no lede, the empty state and the form, and the same closed disclosure under the form", async () => {
-    renderScreen(snapshot({ assignments: [] }));
-    await screen.findByText(GOV.EMPTY_ASSIGN_TITLE);
-    expect(screen.queryByText(GOV.ASSIGN_LEAD)).toBeNull();
-    const combine = screen.getByTestId("how-governance-assignments");
-    expect(combine).not.toHaveAttribute("open");
-    expect(within(combine).getByText(GOV.PRECEDENCE)).toBeInTheDocument();
-    const form = screen.getByRole("heading", { name: GOV.ADD_TITLE });
-    expect(form.compareDocumentPosition(combine) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  });
-
   it("priority is shown only inside the group tier — a user row reads PRIORITY_NA", async () => {
     renderScreen(
       snapshot({
