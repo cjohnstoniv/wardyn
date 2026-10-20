@@ -191,9 +191,6 @@
 # docs/sdk.md 19743 = ours 19696 + theirs 19682 - base 19635 at the 0.10 merge of main (W2) into HYBB.
 # docs/sdk.md 20060 = ours 19999 + theirs 19743 - base 19682 at the 0.10 W3 merge of HYBB onto the train.
 docs/sdk.md=20060 share=21
-# docs/sdk.md=19378 adds 69, measured: the identity_deactivated sign-in answer on a deactivated session (#2762).
-# docs/sdk.md 19396 adds 18 (0.9.6 P096B), measured: the runner_posture_unmet detail names every unmet field.
-# docs/sdk.md 19422 adds 26 (0.9.6 P096B), measured: buildable_modes on GET /governance/credential-delivery.
 # docs/sdk.md 18691 adds 28 over 18663, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
