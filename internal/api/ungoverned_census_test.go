@@ -46,6 +46,7 @@ var ungovernedCallerCensus = map[string]struct {
 	"capabilities.go:newCapBatch":                              {1, "R: capability admission; the spec it admits meets the boundary at resolve"},
 	"components_builtin.go:builtinGitHubGrant":                 {1, "D: the built-in GitHub grant clamp; grants meet the boundary at resolve and dispatch"},
 	"compose_setup.go:setupBackendItem":                        {1, "authz-only: a setup row's detail"},
+	"compose_setup.go:setupMemberView":                         {1, "authz-only: a workspace's read tier on the setup page"},
 	"govern_admin.go:handleRecordGoverned":                     {1, "S: a Record Mode session; its policy is met with the boundary (boundaryRecordPolicy)"},
 	"govern_admin.go:markGovernanceExempt":                     {1, "authz-only: the governance_exempt audit marker"},
 	"govern_admin.go:presetLaunchOpenTo":                       {1, "R: preset visibility at launch; the preset's policy resolves through the boundary"},
