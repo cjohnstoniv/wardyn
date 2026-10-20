@@ -348,7 +348,7 @@ describe("order — the walked steps, not the whole contract", () => {
     expect(onSelect).toHaveBeenCalledWith("review");
   });
 
-  it("an optional step's 'Done with this one' is disabled, with the refusal as visible text — not a title", () => {
+  it("an optional step's 'Done with this one' and 'Back to required steps' are disabled, with the refusal as visible text — not a title", () => {
     const order: SetupStepId[] = ["environment", "corp_network", "integrations", "review"];
     renderLayout({
       current: "sealed-box",
@@ -359,9 +359,9 @@ describe("order — the walked steps, not the whole contract", () => {
     expect(done).toBeDisabled();
     expect(done).not.toHaveAttribute("title");
     expect(screen.getByText("Prove network access first.")).toBeInTheDocument();
-    // Back stays enabled — it is never gated by refuseNext, same as every
-    // other Back button in this shell.
-    expect(screen.getByRole("button", { name: /^back to required steps$/i })).toBeEnabled();
+    // "Back to required steps" makes the same move, so it is refused for the same reason (#2578):
+    // a live button that does nothing is a dead click.
+    expect(screen.getByRole("button", { name: /^back to required steps$/i })).toBeDisabled();
   });
 });
 

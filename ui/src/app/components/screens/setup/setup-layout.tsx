@@ -221,7 +221,7 @@ export function SetupLayout({
               a run is offered but optional). */}
           {isOptional ? (
             <footer className="mt-10 flex flex-wrap items-center justify-end gap-2 border-t pt-5">
-              <Button variant="outline" onClick={() => returnTo && onSelect(returnTo)}>
+              <Button variant="outline" onClick={() => returnTo && onSelect(returnTo)} disabled={!!returnRefusal}>
                 <ArrowLeft className="size-4" aria-hidden />
                 Back to required steps
               </Button>
