@@ -146,36 +146,70 @@ jobs:
           if [ "$images" = true ]; then notices=true; fi
           echo "code=$code backend=$backend ui=$ui images=$images notices=$notices"
           printf 'code=%s\nbackend=%s\nui=%s\nimages=%s\nnotices=%s\n' "$code" "$backend" "$ui" "$images" "$notices" >> "$GITHUB_OUTPUT"
-      # A run that runs everything records the tree it tested, so a release will
-      # accept this run by tree (#1461 R6, scripts/green-by-tree.sh). On a pull_request HEAD
-      # is GitHub's merge commit, so this is the tree actually tested — the run
-      # API's head_commit.tree_id is the PR head's tree, which differs whenever
-      # the base has moved. Every output must be 'true': a run that narrowed any
-      # job did not test everything.
-      - name: Record the tree this run tests (release evidence)
-        id: tree
-        if: >-
-          steps.classify.outputs.code == 'true' && steps.classify.outputs.backend == 'true' &&
-          steps.classify.outputs.ui == 'true' && steps.classify.outputs.images == 'true' &&
-          steps.classify.outputs.notices == 'true'
+
+  # ── image-scope: which of the nine trivy scans does this change need? ──────
+  # `changes` sets images=true for any non-test backend path, which is nearly
+  # every pull request, so all nine images were built and scanned each time.
+  # scripts/image-scope.sh answers per image instead: a changed path reaches an
+  # image when it is the Dockerfile, a path the Dockerfile copies, go.mod/go.sum,
+  # deploy/base-images.txt, .trivyignore, this workflow, or a non-test file of a
+  # Go package in `go list -deps` of the image's binaries (a new import changes
+  # that set, which a path list would miss). cmd/wardynd's image_scope guard
+  # tests plant every such input and fail when the script says "skip".
+  #
+  # Each trivy job still reports its required name: a job-level skip on an
+  # explicit 'false' is reported as skipped, as it is for `images` above. A push,
+  # a train/* pull request and a pull request into release/* scan every image
+  # (the same test as `changes`), as do the nightly and release preflight, which
+  # do not read this job. A missing output also scans: the jobs compare != 'false'.
+  #
+  # It also records the tree this run tested (release evidence, #1461 R6,
+  # scripts/green-by-tree.sh), which `changes` used to: a run that narrowed
+  # anything did not test everything, and the narrowing now includes a trivy
+  # scan, which only this job knows. `build` writes it, after this job.
+  #
+  # It has no `needs`, so it starts with the run like `diagrams`: a job that
+  # needs `changes` would queue behind the long jobs that became ready with it
+  # (see `changes`). Nothing here reads the classification.
+  image-scope:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      wardynd: ${{ steps.scope.outputs.wardynd }}
+      wardynd-fips: ${{ steps.scope.outputs.wardynd-fips }}
+      wardyn-proxy: ${{ steps.scope.outputs.wardyn-proxy }}
+      wardyn-runnerd: ${{ steps.scope.outputs.wardyn-runnerd }}
+      agent-base: ${{ steps.scope.outputs.agent-base }}
+      agent-codex-cli: ${{ steps.scope.outputs.agent-codex-cli }}
+      agent-aws-sso: ${{ steps.scope.outputs.agent-aws-sso }}
+      agent-vscode: ${{ steps.scope.outputs.agent-vscode }}
+      agent-novnc: ${{ steps.scope.outputs.agent-novnc }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # HEAD^1..HEAD is what this PR changes in the tree CI tests, as in `changes`.
+          fetch-depth: 2
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        if: github.event_name == 'pull_request' && !startsWith(github.head_ref, 'train/') && !startsWith(github.base_ref, 'release/')
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Decide which images to scan
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
         run: |
           set -euo pipefail
-          t="$(git rev-parse 'HEAD^{tree}')"; printf '%s\n' "$t" > tested-tree.txt; echo "tree=$t" >> "$GITHUB_OUTPUT"
-      - name: Upload the tested-tree marker
-        id: upload_tree
-        if: steps.tree.outcome == 'success'
-        # Evidence, not a gate: a storage-side error must not fail a REQUIRED job
-        # (#372). The step below says so loudly.
-        continue-on-error: true
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: ci-full-tree-${{ steps.tree.outputs.tree }}
-          path: tested-tree.txt
-          retention-days: 90
-          if-no-files-found: error
-      - name: Say so if ci-full-tree did not upload
-        if: always() && steps.upload_tree.outcome == 'failure'
-        run: echo "::warning title=Release evidence missing::ci-full-tree did not upload; this run's result stands on its tests, but a release cannot accept it by tree."
+          if [ "$EVENT" != pull_request ] || [[ "$HEAD_REF" == train/* ]] || [[ "$BASE_REF" == release/* ]]; then
+            echo "$EVENT${HEAD_REF:+ from $HEAD_REF}: scanning every image"
+            awk '/^ +TRIVY_IMAGE:/ {print $2 "=true"}' .github/workflows/ci.yml >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # An assignment, not `< <(git diff …)`: see `changes`.
+          changed="$(git diff --name-only --no-renames HEAD^1 HEAD)"
+          scripts/image-scope.sh <<< "$changed" >> "$GITHUB_OUTPUT"
 
   # ── Go: build, lint and the three tag-set suites, in parallel (#932) ──────
   # One leg per tag set, plus one for build + tidy + lint, each on its own
@@ -374,7 +408,7 @@ jobs:
   # union steps skip; any other value, including a missing one, requires the
   # union.
   build:
-    needs: [changes, go]
+    needs: [changes, go, image-scope]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -428,6 +462,47 @@ jobs:
       - name: Say so if go-test-reports-union did not upload
         if: always() && steps.upload_go_union_report.outcome == 'failure'
         run: echo "::warning title=Reports missing::go-test-reports-union did not upload; this job's result stands on its tests, but the reports are not attached to this run."
+      # A run that runs everything records the tree it tested, so a release will
+      # accept this run by tree (#1461 R6, scripts/green-by-tree.sh). It sits here, not in
+      # `changes`, because only `image-scope` knows whether a trivy scan was narrowed; the
+      # steps above must have passed, so the checkout ran (backend is 'true'). On a pull_request HEAD
+      # is GitHub's merge commit, so this is the tree actually tested — the run
+      # API's head_commit.tree_id is the PR head's tree, which differs whenever
+      # the base has moved. Every output must be 'true': a run that narrowed any
+      # job did not test everything.
+      - name: Record the tree this run tests (release evidence)
+        id: tree
+        if: >-
+          needs.changes.outputs.code == 'true' && needs.changes.outputs.backend == 'true' &&
+          needs.changes.outputs.ui == 'true' && needs.changes.outputs.images == 'true' &&
+          needs.changes.outputs.notices == 'true' &&
+          needs.image-scope.outputs.wardynd == 'true' &&
+          needs.image-scope.outputs.wardynd-fips == 'true' &&
+          needs.image-scope.outputs.wardyn-proxy == 'true' &&
+          needs.image-scope.outputs.wardyn-runnerd == 'true' &&
+          needs.image-scope.outputs.agent-base == 'true' &&
+          needs.image-scope.outputs.agent-codex-cli == 'true' &&
+          needs.image-scope.outputs.agent-aws-sso == 'true' &&
+          needs.image-scope.outputs.agent-vscode == 'true' &&
+          needs.image-scope.outputs.agent-novnc == 'true'
+        run: |
+          set -euo pipefail
+          t="$(git rev-parse 'HEAD^{tree}')"; printf '%s\n' "$t" > tested-tree.txt; echo "tree=$t" >> "$GITHUB_OUTPUT"
+      - name: Upload the tested-tree marker
+        id: upload_tree
+        if: steps.tree.outcome == 'success'
+        # Evidence, not a gate: a storage-side error must not fail a REQUIRED job
+        # (#372). The step below says so loudly.
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ci-full-tree-${{ steps.tree.outputs.tree }}
+          path: tested-tree.txt
+          retention-days: 90
+          if-no-files-found: error
+      - name: Say so if ci-full-tree did not upload
+        if: always() && steps.upload_tree.outcome == 'failure'
+        run: echo "::warning title=Release evidence missing::ci-full-tree did not upload; this run's result stands on its tests, but a release cannot accept it by tree."
 
   # ── docs: mermaid diagram gate ────────────────────────────────────────────
   # Validate every fenced mermaid diagram in the public docs (syntax + label-
@@ -1727,6 +1802,8 @@ jobs:
   # Go test files only) all eight report as skipped, which branch protection
   # accepts. Those inputs cannot change a scan: the images compile Go from this
   # tree and copy deploy/images/, and none carries the console's npm packages.
+  # On a pull request each job also skips on its own `image-scope` answer
+  # (scripts/image-scope.sh): an image whose inputs did not change is not rebuilt.
   # A skipped MATRIX would not do: GitHub reports it as one check with the
   # name unexpanded, and `trivy (wardynd)` would never report. The check names
   # are the ones branch protection requires; the steps are written once, on the
@@ -1741,8 +1818,8 @@ jobs:
   # rationale (distroless, no OS package surface) was true of two of them.
   trivy-wardynd:
     name: trivy (wardynd)
-    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
-    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
+    needs: [changes, diagrams, image-scope] # diagrams only for the start order: see `changes`
+    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' && needs.image-scope.outputs.wardynd != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
@@ -1845,8 +1922,8 @@ jobs:
   # Dockerfile's own GOFIPS140 check runs on every PR.
   trivy-wardynd-fips:
     name: trivy (wardynd-fips)
-    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
-    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
+    needs: [changes, diagrams, image-scope] # diagrams only for the start order: see `changes`
+    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' && needs.image-scope.outputs.wardynd-fips != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
@@ -1858,8 +1935,8 @@ jobs:
     steps: *trivy_steps
   trivy-wardyn-proxy:
     name: trivy (wardyn-proxy)
-    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
-    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
+    needs: [changes, diagrams, image-scope] # diagrams only for the start order: see `changes`
+    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' && needs.image-scope.outputs.wardyn-proxy != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
@@ -1871,8 +1948,8 @@ jobs:
     steps: *trivy_steps
   trivy-wardyn-runnerd:
     name: trivy (wardyn-runnerd)
-    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
-    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
+    needs: [changes, diagrams, image-scope] # diagrams only for the start order: see `changes`
+    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' && needs.image-scope.outputs.wardyn-runnerd != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
@@ -1884,8 +1961,8 @@ jobs:
     steps: *trivy_steps
   trivy-agent-base:
     name: trivy (agent-base)
-    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
-    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
+    needs: [changes, diagrams, image-scope] # diagrams only for the start order: see `changes`
+    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' && needs.image-scope.outputs.agent-base != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
@@ -1897,8 +1974,8 @@ jobs:
     steps: *trivy_steps
   trivy-agent-codex-cli:
     name: trivy (agent-codex-cli)
-    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
-    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
+    needs: [changes, diagrams, image-scope] # diagrams only for the start order: see `changes`
+    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' && needs.image-scope.outputs.agent-codex-cli != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
@@ -1910,8 +1987,8 @@ jobs:
     steps: *trivy_steps
   trivy-agent-aws-sso:
     name: trivy (agent-aws-sso)
-    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
-    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
+    needs: [changes, diagrams, image-scope] # diagrams only for the start order: see `changes`
+    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' && needs.image-scope.outputs.agent-aws-sso != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
@@ -1923,8 +2000,8 @@ jobs:
     steps: *trivy_steps
   trivy-agent-vscode:
     name: trivy (agent-vscode)
-    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
-    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
+    needs: [changes, diagrams, image-scope] # diagrams only for the start order: see `changes`
+    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' && needs.image-scope.outputs.agent-vscode != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
@@ -1936,8 +2013,8 @@ jobs:
     steps: *trivy_steps
   trivy-agent-novnc:
     name: trivy (agent-novnc)
-    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
-    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
+    needs: [changes, diagrams, image-scope] # diagrams only for the start order: see `changes`
+    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' && needs.image-scope.outputs.agent-novnc != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
@@ -2312,6 +2389,7 @@ jobs:
   main-red:
     needs:
       - changes
+      - image-scope
       - go
       - build
       - diagrams

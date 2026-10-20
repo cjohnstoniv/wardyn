@@ -381,6 +381,7 @@ The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 | `trivy-wardyn-runnerd` (check `trivy (wardyn-runnerd)`) | – | pending | pending | 40 |
 | `gates (govulncheck)` | 60 | 0.7 | 1.0 | 15 |
 | `diagrams` | 60 | 0.6 | 0.9 | 10 |
+| `image-scope` | – | pending | pending | 10 |
 | `compose` | 60 | 0.3 | 0.5 | 10 |
 | `gates (license-headers)` | 60 | 0.3 | 0.4 | 15 |
 | `helm` | 60 | 0.1 | 0.7 | 10 |
@@ -464,7 +465,7 @@ Three mechanisms (#932), on top of the per-job Go cache (#470) and the single ra
    | `code` | any ui or backend path | `ui-e2e`, `helm-install-test` |
    | `backend` | any backend path (Go, `deploy/**`, `scripts/**`, `.github/**`, …) | `go` (full suites or guard packages), `build` (union), `test-pg-shard`, `test-pg`, `conformance`, `conformance-k8s`, `envbuild-integration`, `helm`, `helm-install-test`'s kind half |
    | `ui` | `ui/**`, the `Makefile`, [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) | `ui` (whole vitest suite, or only the files that read outside `ui/`) |
-   | `images` | a `backend` path other than a Go `*_test.go` file | the nine `trivy (<image>)` jobs |
+   | `images` | a `backend` path other than a Go `*_test.go` file | the nine `trivy (<image>)` jobs (then narrowed per image by `image-scope`, below) |
    | `notices` | `images`, [`ui/package.json`](../ui/package.json), [`ui/pnpm-lock.yaml`](../ui/pnpm-lock.yaml), `THIRD-PARTY-NOTICES.md` | `notices` |
 
    - A path that matches no earlier rule counts as backend, so a new directory runs everything until someone classifies it.
@@ -518,11 +519,11 @@ Three mechanisms (#932), on top of the per-job Go cache (#470) and the single ra
     - GitHub does not expand a skipped matrix: it reports one check with the name unexpanded (`gates (${{ matrix.gate }})`, the same row [`scripts/green-by-tree.sh`](../scripts/green-by-tree.sh) documents for the nightly),
       - so `gates (gitleaks)` would never report and the pull request would wait on it forever.
     - This is why the nine image scans are separate jobs, not a matrix:
-      - their steps are written once and shared through a YAML anchor, and each job skips on `images == 'false'`.
+      - their steps are written once and shared through a YAML anchor, and each job skips on `images == 'false'` or on its own `image-scope` answer.
 
 So:
 
-- `test-pg` (the aggregator over its `test-pg-shard` matrix, which fails unless every shard passed), `conformance`, `conformance-k8s`, `helm` and `envbuild-integration` skip on `backend == 'false'`, `notices` on `notices == 'false'`, the nine `trivy (<image>)` jobs on `images == 'false'`.
+- `test-pg` (the aggregator over its `test-pg-shard` matrix, which fails unless every shard passed), `conformance`, `conformance-k8s`, `helm` and `envbuild-integration` skip on `backend == 'false'`, `notices` on `notices == 'false'`, the nine `trivy (<image>)` jobs on `images == 'false'` or on `image-scope`'s answer for their image.
 - `build` needs every `go` leg and runs with `if: !cancelled()`.
   - Its first step fails unless every leg passed, so the `build` context is green only when all four legs and the union floor are.
   - The union steps carry `if: needs.changes.outputs.backend != 'false'`, so only an explicit docs- or console-only classification skips them.
@@ -533,13 +534,31 @@ So:
   - `notify-flaky` skips when both `ui-e2e` shards said their flaky list was empty, and runs on any other answer, including none.
 - `compose`, `dco`, `diagrams` and `gates (…)` do not read the classification and run on every change.
   - (`helm` stays on `backend`, not on the chart's own paths: `make helm-lint` also renders [`examples/policies/demo.json`](../examples/policies/demo.json) and [`cmd/wardynd/testdata/values-0.7.yaml`](../cmd/wardynd/testdata/values-0.7.yaml).)
-- Only a run whose five outputs are all `true` uploads the `ci-full-tree-<tree>` marker that [`scripts/green-by-tree.sh`](../scripts/green-by-tree.sh) accepts as release evidence: a run that narrowed anything did not test everything, even where every check it reported is green.
+- Only a run whose five outputs and nine `image-scope` answers are all `true` uploads the `ci-full-tree-<tree>` marker that [`scripts/green-by-tree.sh`](../scripts/green-by-tree.sh) accepts as release evidence.
+  - A run that narrowed anything did not test everything, even where every check it reported is green.
+  - `build` writes the marker, because only after `image-scope` can it know whether a scan was narrowed.
+
+**Scanning an image only when its inputs change.**
+
+- `changes` sets `images` for nearly every pull request that touches Go, so all nine images were built and scanned each time.
+- `image-scope` runs [`scripts/image-scope.sh`](../scripts/image-scope.sh) on the changed paths and answers per image. The scan jobs' `TRIVY_IMAGE` and `TRIVY_DOCKERFILE` are its list.
+- A changed path reaches an image when it is:
+  - the image's Dockerfile, or that of a local base it builds `FROM` (`agent-vscode` and `agent-novnc` sit on `agent-base`);
+  - a path those Dockerfiles `COPY`, except `ui/`, which is a built bundle `trivy` does not read;
+  - a non-test file in the directory of a Go package in the `go list -deps` closure of a binary those Dockerfiles build, or a file such a package embeds;
+  - `go.mod`, `go.sum`, [`deploy/base-images.txt`](../deploy/base-images.txt), `.trivyignore`, `.dockerignore`, `ci.yml`, the `base-image-mirror` action, or the script.
+- The closure is read from the tree under test, so a new import of a package already in the module changes it, which a list of paths would miss.
+- A push, a `train/*` pull request, a pull request into `release/*` and a script failure scan every image.
+  - The nightly scans the published images on its own.
+  - A release accepts a CI run only through the full-tree marker.
+- The `agent-run --selftest` step stays in the `agent-aws-sso` and `agent-codex-cli` scans, so it runs whenever their Dockerfile or `agent-run` scripts change.
+- [`image_scope_guard_test.go`](../cmd/wardynd/image_scope_guard_test.go) plants every input it derives from the Dockerfiles and `go list`, and fails when the script says "skip".
 
 **Start order under the 20-job cap.**
 
 - The account runs 20 jobs at once and a change to Go asks for about 35, so some wait, and GitHub picks which among the jobs that became ready together.
 - The long jobs (`go`, `ui`, `ui-e2e`, `helm-install-test`, both conformance jobs, `envbuild-integration`, `test-pg-shard`) need only `changes`.
-- The short ones (`gates`, `notices`, the `trivy` scans) also need `diagrams`, a 45-second job that starts with the run,
+- The short ones (`gates`, `notices`, the `trivy` scans) also need `diagrams`, a 45-second job that starts with the run (the scans also need `image-scope`, which has no `needs` and so starts with it),
   - so they become ready about half a minute after the long jobs, which by then hold their runners, and share what is left.
 - Nothing reads `diagrams`' result: each of them runs on `!cancelled()`, whether it passed or failed.
 - The job they wait on has to start with the run: one that itself needs `changes` would send the short jobs through the queue a third time when the account is busy.
