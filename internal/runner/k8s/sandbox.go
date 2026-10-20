@@ -106,6 +106,14 @@ func proxyConfigStagedPath() string { return proxyConfigStagedMountDir + "/" + p
 // createPreflight is CreateSandbox's checks before it creates anything: the runtime class to run
 // under, and the class enforced.
 func (d *Driver) createPreflight(ctx context.Context, spec runner.SandboxSpec) (runtimeClassName, runtimeHandler string, enforced types.ConfinementClass, err error) {
+	enforced = spec.ConfinementClass
+	if spec.MachineKind.Normalize() != "" {
+		if err := d.refuseVMSpec(spec); err != nil {
+			return "", "", "", err
+		}
+		// A VM is the CC3 pod: its RuntimeClass boots a guest kernel, whatever class the run named.
+		enforced = types.CC3
+	}
 	if len(spec.Mounts) > 0 {
 		return "", "", "", fmt.Errorf("k8s: sandbox mounts are not supported (requested %d): %w", len(spec.Mounts), errMountsUnsupported)
 	}
@@ -121,11 +129,10 @@ func (d *Driver) createPreflight(ctx context.Context, spec runner.SandboxSpec) (
 	if n := len(mitmCAPEMEnv) + 1 + len(d.withRunnerTrustedCA(spec.Env)[mitmCAPEMEnv]); n >= maxEnvString {
 		return "", "", "", fmt.Errorf("k8s: %w: %d bytes with the organisation's staged CA and this runner's own bundle; trim one of them", errTrustedCATooBig, n)
 	}
-	runtimeClassName, runtimeHandler, err = d.resolveRuntimeClassName(ctx, spec.ConfinementClass)
+	runtimeClassName, runtimeHandler, err = d.resolveRuntimeClassName(ctx, enforced)
 	if err != nil {
 		return "", "", "", err
 	}
-	enforced = spec.ConfinementClass
 	if enforced == "" {
 		// Class-less floor for direct driver callers only (mirrors docker).
 		enforced = types.CC1
@@ -147,10 +154,6 @@ func (d *Driver) createPreflight(ctx context.Context, spec runner.SandboxSpec) (
 //
 //nolint:funlen // one linear ordered sequence, kept in one scope on purpose
 func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (runner.Sandbox, error) {
-	// A Linux VM sandbox runs only on a registered runner that offers it; never a Pod in its place.
-	if spec.MachineKind.Normalize() != "" {
-		return runner.Sandbox{}, fmt.Errorf("k8s: a %q sandbox runs only on a registered runner that offers it", spec.MachineKind)
-	}
 	ns := d.cfg.Namespace
 
 	// (1) Preflight: fail closed BEFORE creating anything.
@@ -465,7 +468,12 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if spec.ExecOutput != nil {
 		d.execOutputs.Store(agentPodName(spec.RunID), spec.ExecOutput)
 	}
-	return runner.Sandbox{Ref: agentPodName(spec.RunID), Driver: driverName, EnforcedClass: enforced}, nil
+	sb := runner.Sandbox{Ref: agentPodName(spec.RunID), Driver: driverName, EnforcedClass: enforced}
+	if spec.MachineKind.IsVM() {
+		m := vmMachine(runtimeHandler)
+		sb.Machine = &m
+	}
+	return sb, nil
 }
 
 // ownedByPod is the ownerReference list that makes a pod owned by owner, or nil when the API

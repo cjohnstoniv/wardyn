@@ -27,11 +27,15 @@ func TestReadK8sEnv(t *testing.T) {
 		"WARDYN_RUNNERD_HARD_DENY_CIDRS=10.96.0.0/12, 10.244.0.0/16",
 		"WARDYN_CONFINEMENT_MAP=CC2=runsc;CC3=kata-qemu",
 		"WARDYN_RUNNERD_ARCH=arm64",
+		"WARDYN_RUNNER_LINUX_VM=1",
 	))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if e.podIP.String() != "10.244.0.12" || e.relayPort != 8443 || e.sink != 9443 || e.clusterDomain != "cluster.local" ||
+	if off, err := readK8sEnv(k8sEnvFixture()); err != nil || off.linuxVM {
+		t.Fatalf("Linux VMs without the switch: on=%v err=%v, want off", off.linuxVM, err)
+	}
+	if e.podIP.String() != "10.244.0.12" || e.relayPort != 8443 || e.sink != 9443 || e.clusterDomain != "cluster.local" || !e.linuxVM ||
 		len(e.apiserverPeers) != 1 || len(e.hardDenyCIDRs) != 2 || e.podSelector["app.kubernetes.io/name"] != "wardyn-runnerd" || e.confinement["CC3"] != "kata-qemu" {
 		t.Fatalf("env %+v", e)
 	}
@@ -47,6 +51,7 @@ func TestReadK8sEnv(t *testing.T) {
 		{"empty arch", "WARDYN_RUNNERD_ARCH=", "WARDYN_RUNNERD_ARCH"},
 		{"unenforced netpol override", "WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1", "WARDYN_K8S_ALLOW_UNENFORCED_NETPOL is set"},
 		{"unenforced netpol override off", "WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=false", "WARDYN_K8S_ALLOW_UNENFORCED_NETPOL is set"},
+		{"Linux VM switch not 1", "WARDYN_RUNNER_LINUX_VM=true", "WARDYN_RUNNER_LINUX_VM"},
 		{"ambient deny override", "WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY=true", "WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY is set"},
 	} {
 		t.Run(bad.name, func(t *testing.T) {

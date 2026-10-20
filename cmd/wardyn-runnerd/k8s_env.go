@@ -37,6 +37,7 @@ var k8sEnvRead = []string{
 	"WARDYN_K8S_READ_NODES",
 	"WARDYN_K8S_IMAGE_PULL_SECRET",
 	"WARDYN_K8S_SANDBOX_PLACEMENT",
+	"WARDYN_RUNNER_LINUX_VM",
 }
 
 // k8sEnv is the parsed chart settings.
@@ -47,6 +48,7 @@ type k8sEnv struct {
 	apiserverPeers, hardDenyCIDRs     []string
 	podSelector                       map[string]string
 	confinement                       map[types.ConfinementClass]string
+	linuxVM                           bool // WARDYN_RUNNER_LINUX_VM=1: offer Linux VM sandboxes as CC3 pods
 }
 
 // readK8sEnv parses environ (os.Environ's form). Every value is checked: a malformed or missing
@@ -116,6 +118,12 @@ func readK8sEnv(environ []string) (k8sEnv, error) {
 	}
 	if e.confinement, err = parseConfinementMap(env["WARDYN_CONFINEMENT_MAP"]); err != nil {
 		errs = append(errs, err)
+	}
+	switch v := env["WARDYN_RUNNER_LINUX_VM"]; v {
+	case "", "1":
+		e.linuxVM = v == "1"
+	default:
+		errs = append(errs, fmt.Errorf("WARDYN_RUNNER_LINUX_VM: want 1 or unset, got %q", v))
 	}
 	if err := errors.Join(errs...); err != nil {
 		return k8sEnv{}, fmt.Errorf("runner k8s settings: %w", err)
