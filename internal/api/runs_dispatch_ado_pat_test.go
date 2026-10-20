@@ -888,7 +888,7 @@ func TestMintedPAT_APendingRevokeLeavesTheCascadeDone(t *testing.T) {
 	}
 }
 
-// The idle stop revokes a run's tokens once, in RevokeStoppedRun; the approval half of the
+// The idle and max-age stops revoke a run's tokens once, in RevokeStoppedRun; the approval half of the
 // cascade leaves them alone, so a failed revoke is not retried (and recorded) a second time.
 func TestMintedPAT_StopApprovalCascadeLeavesTheTokensToRevokeStoppedRun(t *testing.T) {
 	ctx := context.Background()
@@ -896,6 +896,7 @@ func TestMintedPAT_StopApprovalCascadeLeavesTheTokensToRevokeStoppedRun(t *testi
 	first := fx.ok(t, "dev.azure.com", nil)
 	fx.st.edit(fx.run.ID, func(r *types.AgentRun) { r.State = types.RunStopped })
 	fx.srv.CancelTerminalRunApprovals(ctx, fx.run.ID)
+	fx.srv.CancelMaxAgeStoppedRunApprovals(ctx, fx.run.ID)
 	if got := fx.pats.revokedIDs(); len(got) != 0 {
 		t.Fatalf("the approval cascade revoked %v, want none", got)
 	}

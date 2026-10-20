@@ -8,7 +8,7 @@ package api
 //
 //   - the end paths: revokeRunCascade (completion, failure, lease loss,
 //     reconcile, the probe reclaim, the sandbox sweeps), the kill
-//     (killTeardownTail), the idle stop (RevokeStoppedRun) and a
+//     (killTeardownTail), the idle and max-age stops (RevokeStoppedRun) and a
 //     kept run's end (revokeRunBroker);
 //   - pause (pauseRun), drift (resolveADOInjection), and the erase of a
 //     person's credentials (handleErasePersonCredentials);

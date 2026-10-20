@@ -698,3 +698,15 @@ func TestRunEvents_DelegatedLookupFailureEndsTheStream(t *testing.T) {
 		t.Fatal("stream outlived a delegated-token lookup that could not be answered")
 	}
 }
+
+// TestRunEvents_MaxAgeStopEmitsOnlyEnded: a WARDYN_RUN_MAX_AGE stop is not an idle stop, so a follower
+// of the feed sees ended{STOPPED} and no idle_stopped.
+func TestRunEvents_MaxAgeStopEmitsOnlyEnded(t *testing.T) {
+	srv, _, run := statusDetailDispatchFixture(t, &fakeRunner{})
+	dispatchOnce(srv, run)
+	srv.CancelMaxAgeStoppedRunApprovals(context.Background(), run.ID)
+	evs, _, ended := srv.runEvents.since(run.ID, 2)
+	if !ended || len(evs) != 1 || evs[0].Type != client.RunEventEnded || evs[0].State != types.RunStopped {
+		t.Fatalf("after ready: %+v (ended=%v), want ended{STOPPED} alone", evs, ended)
+	}
+}
