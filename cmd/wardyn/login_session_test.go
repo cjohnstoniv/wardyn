@@ -33,9 +33,10 @@ import (
 // cli_sessions.go ship: it checks the PKCE verifier, the device proof against its own URL, single-use codes,
 // secret rotation and reuse, and the per-device sign-out.
 type signInOrg struct {
-	t     *testing.T
-	srv   *httptest.Server
-	paste bool
+	t       *testing.T
+	srv     *httptest.Server
+	paste   bool
+	version string // /healthz.version
 	// issueLife and refreshLife are the access token lifetimes of the token call and of a refresh.
 	issueLife, refreshLife time.Duration
 	// refreshBarrier holds the first refresh up to this long for a second to arrive.
@@ -76,7 +77,7 @@ func newSignInOrg(t *testing.T) *signInOrg {
 		sessions: map[uuid.UUID]*fakeSession{}, tokens: map[string]fakeToken{}, inflight: make(chan struct{}, 8)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		writeFake(w, http.StatusOK, map[string]any{"status": "ok", "cli_sign_in": true, "cli_paste_sign_in": f.paste})
+		writeFake(w, http.StatusOK, map[string]any{"status": "ok", "cli_sign_in": true, "cli_paste_sign_in": f.paste, "version": f.version})
 	})
 	mux.HandleFunc("POST /api/v1/cli/sign-ins", f.create)
 	mux.HandleFunc("POST /api/v1/cli/sign-ins/{id}/token", f.token)
@@ -838,5 +839,62 @@ func TestLoginAdminStepUp(t *testing.T) {
 	out, _, err = runCLI(t, "", "whoami", "--url", f.srv.URL)
 	if err != nil || !strings.Contains(out, fakeEmail+" (admin; admin access ends in ") {
 		t.Errorf("whoami after the step-up: %q, %v", out, err)
+	}
+}
+
+// TestLoginVersionNotice: after a successful login or whoami, at most once a day per URL, one stderr line
+// says the organisation runs another release; never on stdout, and never from a development build.
+func TestLoginVersionNotice(t *testing.T) {
+	f := newSignInOrg(t)
+	cliEnv(t, nil)
+	openBrowser = func(approve string) error { go approveInBrowser(t, f, nil)(approve); return nil }
+	prev := cliVersion
+	t.Cleanup(func() { cliVersion = prev })
+	cliVersion = func() string { return "0.10.0" }
+	f.version = "0.10.2+abc1234"
+	want := fmt.Sprintf(copyNoticeServerNewer, "0.10.0", f.srv.URL, "0.10.2+abc1234") + "\n"
+
+	out, stderr, err := runCLI(t, "", "login", f.srv.URL)
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	if strings.Count(stderr, want) != 1 || strings.Contains(out, "this CLI is") {
+		t.Errorf("login: stderr %q stdout %q, want the notice once on stderr only", stderr, out)
+	}
+	out, stderr, err = runCLI(t, "", "whoami", "--url", f.srv.URL)
+	if err != nil || strings.Contains(stderr+out, "this CLI is") {
+		t.Errorf("whoami within the day printed the notice again: stderr %q, %v", stderr, err)
+	}
+	// A day later it checks, and says it, again.
+	path := filepath.Join(os.Getenv("XDG_CACHE_HOME"), "wardyn", noticeCacheFile)
+	checks := map[string]noticeCheck{}
+	raw, _ := os.ReadFile(path)
+	if err := json.Unmarshal(raw, &checks); err != nil || checks[f.srv.URL].Version == "" {
+		t.Fatalf("cache %s = %q, %v", path, raw, err)
+	}
+	checks[f.srv.URL] = noticeCheck{CheckedAt: time.Now().Add(-25 * time.Hour), Version: "0.10.2"}
+	raw, _ = json.Marshal(checks)
+	_ = os.WriteFile(path, raw, 0o644)
+	if _, stderr, err = runCLI(t, "", "whoami", "--url", f.srv.URL); err != nil || strings.Count(stderr, want) != 1 {
+		t.Errorf("whoami a day later: stderr %q, %v; want the notice", stderr, err)
+	}
+
+	t.Run("a development build never checks", func(t *testing.T) {
+		cliVersion = func() string { return "0.10.0+80852d67f-dirty" }
+		_ = os.Remove(path)
+		if _, stderr, err := runCLI(t, "", "whoami", "--url", f.srv.URL); err != nil || strings.Contains(stderr, "this CLI is") {
+			t.Errorf("a development build printed %q (%v)", stderr, err)
+		}
+	})
+	for _, tc := range []struct{ cli, server, want string }{
+		{"0.10.0", "0.10.0", ""},
+		{"0.10.0", "0.10.0+abc1234", ""},
+		{"0.10.0", "0.10.2", fmt.Sprintf(copyNoticeServerNewer, "0.10.0", "https://o", "0.10.2")},
+		{"0.10.2", "0.9.6", fmt.Sprintf(copyNoticeServerOlder, "0.10.2", "https://o", "0.9.6")},
+		{"0.10.0", "dev", fmt.Sprintf(copyNoticeServerNewer, "0.10.0", "https://o", "dev")},
+	} {
+		if got := noticeLine(tc.cli, "https://o", tc.server); got != tc.want {
+			t.Errorf("noticeLine(%q, %q) = %q, want %q", tc.cli, tc.server, got, tc.want)
+		}
 	}
 }

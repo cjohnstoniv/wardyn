@@ -81,23 +81,28 @@ any computer and asks for the code the page shows, where the organisation allows
 				return err
 			}
 			var h struct {
-				CLISignIn      bool `json:"cli_sign_in"`
-				CLIPasteSignIn bool `json:"cli_paste_sign_in"`
+				CLISignIn      bool   `json:"cli_sign_in"`
+				CLIPasteSignIn bool   `json:"cli_paste_sign_in"`
+				Version        string `json:"version"`
 			}
 			if err := cliCall(cmd.Context(), u, http.MethodGet, "/healthz", "", nil, &h); err != nil {
 				return fmt.Errorf(errUnreachable, u, err)
 			}
-			if !h.CLISignIn {
-				_, err = fmt.Fprintf(cmd.OutOrStdout(), "Saved %s. %s\nThe profile is %s; --url and WARDYN_URL still take precedence.\n",
-					u, noSignInLine, filepath.Join(dir, cliprofile.FileName))
-				return err
-			}
 			l := &login{origin: u, dir: dir, out: cmd.OutOrStdout(), errOut: cmd.ErrOrStderr(), in: cmd.InOrStdin(),
 				noBrowser: noBrowser, paste: h.CLIPasteSignIn}
-			if admin {
-				return l.stepUp(cmd.Context())
+			switch {
+			case !h.CLISignIn:
+				_, err = fmt.Fprintf(cmd.OutOrStdout(), "Saved %s. %s\nThe profile is %s; --url and WARDYN_URL still take precedence.\n",
+					u, noSignInLine, filepath.Join(dir, cliprofile.FileName))
+			case admin:
+				err = l.stepUp(cmd.Context())
+			default:
+				err = l.signIn(cmd.Context(), nil)
 			}
-			return l.signIn(cmd.Context(), nil)
+			if err == nil {
+				versionNotice(cmd.Context(), cmd.ErrOrStderr(), u, h.Version)
+			}
+			return err
 		},
 	}
 	cmd.Flags().BoolVar(&admin, "admin", false, "ask for admin access for 1 hour (approved again in the browser)")

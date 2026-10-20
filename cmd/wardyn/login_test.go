@@ -24,6 +24,7 @@ func isolateProfile(t *testing.T) string {
 	cfg := t.TempDir()
 	t.Setenv("HOME", cfg)
 	t.Setenv("XDG_CONFIG_HOME", cfg)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(cfg, "cache")) // the version notice's cache
 	t.Setenv("WARDYN_URL", "")
 	t.Setenv("WARDYN_CLI_ALLOW_PLAINTEXT", "")
 	t.Setenv("WARDYN_ADMIN_TOKEN", "")

@@ -57,6 +57,10 @@ const (
 	copyWhoToken   = "token from %s"                            // --token, WARDYN_ADMIN_TOKEN or WARDYN_TOKEN
 	errNotSignedIn = "not signed in to %s: run `wardyn login`"
 
+	// The version notice, on stderr (design 11.7; board ATT1-Terminal frame 5): this CLI, the URL, the server.
+	copyNoticeServerNewer = "this CLI is %s and %s runs %s: update with the line under Get the CLI"
+	copyNoticeServerOlder = "this CLI is %s and %s runs %s, an older release: if a command is refused, install the matching CLI with the line under Get the CLI"
+
 	// logout.
 	copyLoggedOut   = "Signed out of %s on this computer."
 	copyNotSignedIn = "Not signed in to %s."
