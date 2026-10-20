@@ -1,3 +1,4 @@
 # Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the measured prose words of the rewrite, so growth fails.
 # docs/operations/boundary.md 736: the boundary doc, with the sweep and later end changes holding every run to its maximum
-docs/operations/boundary.md=736 share=35
+# docs/operations/boundary.md 785 measured: the final seal meets late hosts with the boundary
+docs/operations/boundary.md=785 share=35
