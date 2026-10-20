@@ -27,6 +27,7 @@ import {
 import { NR_FILES } from "../src/app/components/wardyn/copy/new-run/files";
 import { NR_HARNESSES } from "../src/app/components/wardyn/copy/new-run/harnesses";
 import { VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
+import { RUN_NOT_FOUND } from "../src/app/components/wardyn/copy/refusal";
 import { DENIED } from "../src/app/lib/permissions-copy";
 
 test.describe("member console — real member navigation", () => {
@@ -134,7 +135,7 @@ test.describe("foreign/unknown run — standard not-found (absence, not refusal)
     // No denial-flavored copy — the product must never confirm the id was
     // ever real (no existence oracle).
     await expect(page.getByText(/denied|forbidden|no permission|not authorized/i)).toHaveCount(0);
-    await expect(page.getByRole("button", { name: /back to runs/i })).toBeVisible();
+    await expect(page.getByRole("button", { name: RUN_NOT_FOUND.CTA })).toBeVisible();
   });
 });
 

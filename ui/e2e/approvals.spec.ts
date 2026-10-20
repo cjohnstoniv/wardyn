@@ -110,7 +110,7 @@ function markerRe(marker: string): RegExp {
 // match it tolerantly, then wait for the screen to land by its page heading.
 async function gotoApprovals(page: Page): Promise<void> {
   await page.getByRole("link", { name: /^Approvals(\s+\d+)?$/ }).click();
-  await expect(page.getByRole("heading", { name: "Approvals" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Approvals", level: 1 })).toBeVisible();
 }
 
 // Seed the standing read-only fixtures the assertion specs rely on: two pending
@@ -150,7 +150,7 @@ test.describe("Approvals screen", () => {
   });
 
   test("renders the approvals page header and HITL copy", async ({ page }) => {
-    await expect(page.getByRole("heading", { name: "Approvals" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Approvals", level: 1 })).toBeVisible();
     // The page description says each card states exactly what approving grants.
     await expect(
       page.getByText(/Each card says exactly what approving grants/i),

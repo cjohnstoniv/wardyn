@@ -80,11 +80,14 @@ describe("OpenInUserView", () => {
 });
 
 describe("OpenInUserViewMenu (#3039)", () => {
+  const rowClick = vi.fn();
   const mountMenu = (access: ViewAccess) =>
     render(
       <ViewAccessProvider value={access}>
         <MemoryRouter initialEntries={["/admin/runs"]}>
-          <OpenInUserViewMenu runId="r 1" />
+          <div onClick={rowClick}>
+            <OpenInUserViewMenu runId="r 1" />
+          </div>
           <Routes>
             <Route path="*" element={<Where />} />
           </Routes>
@@ -100,6 +103,8 @@ describe("OpenInUserViewMenu (#3039)", () => {
     expect(item).toHaveTextContent("Opens this run in the user view.");
     await userEvent.click(item);
     expect(screen.getByTestId("where")).toHaveTextContent("/runs/r%201");
+    // The menu is portalled; its click must not reach the row, which would open the run in the Admin view instead.
+    expect(rowClick).not.toHaveBeenCalled();
   });
 
   it("the admin token has no User view, so no menu", () => {

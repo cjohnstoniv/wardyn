@@ -236,7 +236,8 @@ export function OpenInUserViewMenu({ runId }: { runId: string }) {
             <MoreHorizontal className="size-4" />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
+        {/* The menu is portalled, but React still bubbles its clicks to the row, which would open the run in this view. */}
+        <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
           <DropdownMenuItem disabled={busy} onSelect={(e) => go(e)} className="flex-col items-start gap-0.5">
             <span>{OPEN_IN_USER_VIEW}</span>
             <span className="text-meta text-muted-foreground">{CONSOLE_VIEW.OPEN_IN_USER_HINT}</span>

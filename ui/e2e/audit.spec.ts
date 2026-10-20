@@ -268,7 +268,7 @@ test("a run drill-in over the page cap shows the newest events and says the earl
   });
   await navToRoute(page, "/admin/audit?run_id=run_e2elong");
   await expect(page.getByText(/Showing the newest 1000 events for this run/)).toBeVisible();
-  await expect(verb(page, "host1999.example.com:443").or(verb(page, "run_e2elong")).first()).toBeVisible();
+  await expect(verb(page, "host1998.example.com:443")).toBeVisible();
   expect(asked.length).toBeGreaterThan(0);
   expect(asked.every((o) => o === "desc")).toBe(true);
 });

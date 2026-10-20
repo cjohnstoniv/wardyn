@@ -168,6 +168,8 @@ test.describe("New Run, Review: blockers and Check again", () => {
     const checks: Checks = { preflight: MISSING };
     await stub(page, checks);
     await openReview(page);
+    // Wait for the server's answer: an unchecked result also holds Launch, and its card carries its own Check again.
+    await expect(page.locator("#nr-blockers").getByRole("button", { name: SECRET_LABEL })).toBeVisible();
     await expect(launch(page)).toBeDisabled();
 
     checks.preflight = CLEAR;

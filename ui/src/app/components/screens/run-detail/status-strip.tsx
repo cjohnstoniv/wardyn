@@ -71,7 +71,7 @@ export function RunStatusStrip({ ctx }: { ctx: WidgetContext }) {
   const filesValue = facts && (facts.files === null ? RUN_COCKPIT.tileNotInspectable : facts.files === 0 ? RUN_COCKPIT.tileNoneYet : RUN_COCKPIT.tileFilesCount(facts.files));
   const sandboxValue = facts && (facts.sandbox ?? RUN_COCKPIT.tileNotAvailable);
   return (
-    <div role="group" aria-label={RUN_COCKPIT.tilesLabel} className="mb-2 grid shrink-0 grid-cols-2 gap-3 lg:grid-cols-4">
+    <div role="group" aria-label={RUN_COCKPIT.tilesLabel} className="grid shrink-0 grid-cols-2 gap-3 px-2.5 pt-2.5 lg:grid-cols-4">
       <Tile label={RUN_COCKPIT.tileEgress} value={egressValue} tone={ctx.heldCount > 0 ? "warning" : egressValue === RUN_COCKPIT.tileNoneYet ? "muted" : undefined} />
       <Tile label={RUN_COCKPIT.tileFiles} value={filesValue} tone={filesValue === RUN_COCKPIT.tileNoneYet || filesValue === RUN_COCKPIT.tileNotInspectable ? "muted" : undefined} />
       <Tile label={RUN_COCKPIT.tileSandbox} value={sandboxValue} tone={sandboxValue === RUN_COCKPIT.tileNotAvailable ? "muted" : undefined} />
