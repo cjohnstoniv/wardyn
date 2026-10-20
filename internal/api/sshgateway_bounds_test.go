@@ -132,6 +132,11 @@ func TestSSHGateway_DefaultCeilingRefusesTheNextEstablishedConnection(t *testing
 			t.Fatalf("session %d of %d: %v", i+1, DefaultSSHMaxConnections, err)
 		}
 		clients = append(clients, c)
+		// A keepalive answer means the server holds this session's slot, so the
+		// next dial cannot overtake it.
+		if !served(c) {
+			t.Fatalf("session %d of %d was not served", i+1, DefaultSSHMaxConnections)
+		}
 	}
 
 	if over, err := sshDial(t, h, runID.String(), priv); err == nil {
