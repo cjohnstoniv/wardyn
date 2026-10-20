@@ -214,6 +214,27 @@ export const DRIVES = {
   RECLAIM_RETAIN: "Keep their directory",
   RECLAIM_DELETE: "Delete their directory",
   RECLAIM_HINT: "Recorded here, carried out by you: removing an allocation below never deletes data. Preview prints the exact object to remove.",
+  // ---- team drives (#1988), behind storage.user_drive.team_drives ----
+  FIELD_TEAM: "Team drive",
+  TEAM_HINT: "One folder shared by everyone it is allocated to. Each person's runs see, and can run, what the others' runs wrote there.",
+  // Replaces FIELD_WRITABLE on a team drive: the editor shows one write toggle.
+  FIELD_TEAM_WRITE: "Members can write",
+  TEAM_WRITE_HINT:
+    "Off by default: members' runs can read the drive and never change it. On, any member's run can change what the others' runs read and run.",
+  BACKEND_K8S_PVC_STATIC_TEAM: "Share provisioned by your platform (one pre-created volume claim for the team)",
+  TEAM_EMPTY_READ_ONLY:
+    "Nobody can write to a read-only team drive on a Wardyn-managed volume, so it stays empty. Use a share your platform fills, or turn on Members can write.",
+  TEAM_ONE_HOST: "Works on one host only. A Docker volume lives on the host that made it, so runs on another host get a different, empty folder.",
+  TEAM_CLAIM_NOTE:
+    "Every member mounts the same claim, so it must allow many writers at once (ReadWriteMany). Ask your platform team if you're not sure.",
+  TEAM_NO_HOME: "Everyone gets the same folder, so a team drive has no directory per person.",
+  TEAM_SIZE_HINT: "One size for the whole team: members share it.",
+  TEAM_RECLAIM_KEPT: "Kept. A team drive belongs to its groups, so a leaver's cleanup skips it.",
+  TEAM_ALLOC_HINT: "A team drive is allocated to groups, never to one person or to everyone. Every mount is audited with who mounted it.",
+  TEAM_GROUP_PLACEHOLDER: "Choose a group",
+  TEAM_CHIP: "Team drive",
+  TEAM_ONE_HOST_CHIP: "One host only",
+  TEAM_RECLAIM_CELL: "Kept (team drive)",
   SAVE_CTA: "Save drive",
   SAVE_ERROR: "Couldn't save this drive.",
   // SAVE_REFUSED_TITLE heads every 400 the editor can meet, over the server's

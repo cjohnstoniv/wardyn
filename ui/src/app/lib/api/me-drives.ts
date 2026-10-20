@@ -30,6 +30,10 @@ export interface MeDrive {
   unavailable_reason?: MeDriveUnavailableReason;
   /** The caller created it; only an owned drive takes DELETE /me/drives/{id}. */
   owned: boolean;
+  /** An admin's team drive: one folder the caller's groups share. Never set while the switch is off. */
+  team?: boolean;
+  /** The groups the caller holds that this team drive is allocated to. */
+  shared_with?: string[];
 }
 
 /** GET /me/drives (pkg/client.MeDriveCatalogue). */

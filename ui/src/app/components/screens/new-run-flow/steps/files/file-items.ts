@@ -85,7 +85,11 @@ const SOURCE: Record<MeDrive["source"], string> = { personal: NR_FILES.SOURCE_PE
 
 /** The chips a drive is stored on: where it comes from, then its storage. */
 export const driveChips = (d: MeDrive): string[] => [SOURCE[d.source], BACKEND[d.backend]];
-export const driveKind = (d: MeDrive): FileKind => (d.section === "shared" ? "sharedDrive" : "userDrive");
+// A team drive is shared whatever its backend: a Docker volume is a managed (user) section for one person, and one folder for a group here.
+export const driveKind = (d: MeDrive): FileKind => (d.section === "shared" || d.team ? "sharedDrive" : "userDrive");
+/** "Shared with" for a team drive: the caller's groups it is allocated to; undefined for every other drive. */
+export const driveSharedWith = (d: MeDrive | undefined): string | undefined =>
+  d?.team && d.shared_with?.length ? NR_FILES.SHARED_WITH(d.shared_with.join(", ")) : undefined;
 export const legacyIdOf = (catalogue: MeDriveCatalogue | null): string | undefined => catalogue?.drives.find((d) => d.legacy)?.id;
 
 /** One card. Exactly one of repo (workspaceId + repo), folder (workspaceId) and drive (driveId) refs is set. */
@@ -99,6 +103,8 @@ export interface FileItem {
   readOnly: boolean;
   /** Read-only because the drive or folder itself is, not by this run's choice. */
   locked: boolean;
+  /** A team drive's groups, as the card says them. */
+  sharedWith?: string;
   /** The request may place it: a repository its workspace clones alone, or a workspace's one folder. */
   pathEditable: boolean;
   storedOn: string[];
@@ -162,7 +168,8 @@ export function fileItems(intent: RunIntent, src: ItemSources): FileItem[] {
   const legacy = drives.find((d) => d.legacy);
   if (intent.drive?.enabled) {
     out.push({
-      key: legacy ? `drive:${legacy.id}` : LEGACY_KEY, kind: "userDrive", name: legacy?.name ?? NR_FILES.KIND_USER_DRIVE,
+      key: legacy ? `drive:${legacy.id}` : LEGACY_KEY, kind: legacy ? driveKind(legacy) : "userDrive", name: legacy?.name ?? NR_FILES.KIND_USER_DRIVE,
+      sharedWith: driveSharedWith(legacy),
       path: legacy?.target ?? src.attachments.find((a) => a.kind === "drive" && !a.drive_id)?.target,
       readOnly: intent.drive.read_only === true || legacy?.writable === false, locked: legacy?.writable === false, pathEditable: false,
       storedOn: legacy ? driveChips(legacy) : [], starts: f?.attachment === START_FOLDER_DRIVE, canStart: true, driveId: legacy?.id,
@@ -173,6 +180,7 @@ export function fileItems(intent: RunIntent, src: ItemSources): FileItem[] {
     const served = src.attachments.find((x) => x.kind === "drive" && x.drive_id === a.drive_id);
     out.push({
       key: `drive:${a.drive_id}`, kind: d ? driveKind(d) : "userDrive", name: d?.name ?? served?.name ?? a.drive_id,
+      sharedWith: driveSharedWith(d),
       path: d?.target ?? served?.target, readOnly: a.read_only === true || d?.writable === false, locked: d?.writable === false,
       pathEditable: false, storedOn: d ? driveChips(d) : [], starts: f?.drive_id === a.drive_id, canStart: true, driveId: a.drive_id,
     });

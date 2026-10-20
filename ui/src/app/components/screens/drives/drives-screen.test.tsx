@@ -714,6 +714,7 @@ describe("Drives components render no copy of their own", () => {
     "drive-editor.tsx",
     "allocations.tsx",
     "display.tsx",
+    "team-drive.tsx",
   ]);
 });
 

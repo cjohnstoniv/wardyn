@@ -53,12 +53,17 @@ export interface UserDrive {
   created_at: string;
   updated_at: string;
   created_by?: string;
+  // types.UserDrive.Team (#1988): the groups it is allocated to share ONE folder.
+  // Meaningful only while storage.user_drive.team_drives is on.
+  team?: boolean;
 }
 
 // types.UserDriveListItem — the row plus the count the delete dialog pre-fills
 // from. The count is knowable ONLY here; the server's own 409 carries none.
 export interface UserDriveListItem extends UserDrive {
   grant_count: number;
+  // A team drive held in a Docker volume: runs on another host see a different folder.
+  single_host?: boolean;
 }
 
 // types.UserDriveGrant — one subject bound to one drive, unique per subject.
@@ -74,6 +79,8 @@ export interface UserDriveGrant {
   size_mib_override?: number;
   writable_override?: boolean | null;
   home_override?: string;
+  // A team drive's write bit: absent, the group's runs mount it read-only.
+  members_can_write?: boolean;
   enabled: boolean;
   created_at: string;
   created_by?: string;
@@ -132,6 +139,7 @@ export interface UserDriveInput {
   size_mib?: number;
   writable?: boolean;
   reclaim?: DriveReclaim;
+  team?: boolean;
 }
 
 // userDriveGrantRequest. `enabled`, `writable_override` and `home_override` are
@@ -146,7 +154,7 @@ export interface UserDriveInput {
 // silent over a pinned name is refused with a 409 that says so, rather than
 // re-homing anyone. Only a field the admin actually typed in states this key
 // (allocations.tsx's homeTouched).
-interface UserDriveGrantInput {
+export interface UserDriveGrantInput {
   subject_type: CapabilitySubjectType;
   subject: string;
   drive_id: string;
@@ -157,6 +165,7 @@ interface UserDriveGrantInput {
   writable_override?: boolean;
   home_override?: string;
   enabled?: boolean;
+  members_can_write?: boolean;
 }
 
 // userDrivePreviewResponse: which drive a principal carrying those claims would
@@ -192,6 +201,18 @@ export interface UserDrivePreview {
   // they belong on the "Who gets what" panel. A surface arrives through a mock
   // round, never through a type (CONSOLE-RULES §12).
   warning?: string;
+}
+
+// Whether a team drive's groups can WRITE it. The drive's own bit is not enough:
+// a team allocation mounts read-only unless the allocation carries
+// members_can_write too, so "writable" is claimed only when the drive and every
+// allocation say so. A page of allocations shorter than the count cannot prove
+// that, and then the answer is read-only: never imply a member can change it.
+export function teamWritable(d: UserDriveListItem, grants: UserDriveGrant[]): boolean {
+  if (!d.writable) return false;
+  const own = grants.filter((g) => g.drive_id === d.id);
+  if (d.grant_count === 0) return true;
+  return own.length === d.grant_count && own.every((g) => !!g.members_can_write);
 }
 
 // DriveBackend.Kind() — managed (Wardyn allocates the object) vs share (it

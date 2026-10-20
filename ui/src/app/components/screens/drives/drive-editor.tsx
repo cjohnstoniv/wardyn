@@ -46,8 +46,10 @@ import {
   type DriveBackend,
   type DriveReclaim,
   type HomeTemplate,
-  type UserDrive,
+  type UserDriveGrant,
   type UserDriveInput,
+  type UserDriveListItem,
+  teamWritable,
 } from "../../../lib/api/drives";
 import { DRIVES, PEOPLE } from "../../../lib/user-drives-copy";
 import {
@@ -67,6 +69,7 @@ import { Label } from "../../ui/label";
 import { Field, OptionCard, Switch } from "../../wardyn/form-primitives";
 import { useOperator } from "../../wardyn/operator-context";
 import { Note, withMono } from "./display";
+import { TeamDriveFields, TeamGroups, syncTeamGroups } from "./team-drive";
 
 // The three templates in admin-surface order (types.HomeTemplates). There is no
 // whole-email option: an address carries an "@", which no directory segment can
@@ -100,13 +103,19 @@ const RECLAIM_OPTIONS: { value: DriveReclaim; label: string }[] = [
 
 export function DriveEditor({
   drive,
+  grants = [],
+  teamDrives = false,
   runnerTarget,
   hostRootsConfigured,
   onCancel,
   onSaved,
 }: {
   /** The drive being edited, or null for a new one. */
-  drive: UserDrive | null;
+  drive: UserDriveListItem | null;
+  /** GET /drives's allocations: a team drive's groups and write bit are read from them. */
+  grants?: UserDriveGrant[];
+  /** storage.user_drive.team_drives: the Team drive switch is offered only while it is on. */
+  teamDrives?: boolean;
   /** GET /drives's runner_target — which two backends this deployment can mount. */
   runnerTarget: string;
   /** GET /drives's host_roots_configured — whether a host path may back a drive at all. */
@@ -135,7 +144,17 @@ export function DriveEditor({
   const [storageClass, setStorageClass] = React.useState(drive?.storage_class ?? "");
   const [home, setHome] = React.useState<HomeTemplate>(drive?.home_template ?? "hash");
   const [size, setSize] = React.useState(String(drive?.size_mib ?? 0));
-  const [writable, setWritable] = React.useState(!!drive?.writable);
+  // A team drive keeps its flag even while the switch is off, so a save through
+  // an editor that cannot show it meets the server's refusal rather than
+  // quietly turning the drive back into a folder per person.
+  const [team, setTeam] = React.useState(!!drive?.team);
+  const [writable, setWritable] = React.useState(drive?.team ? teamWritable(drive, grants) : !!drive?.writable);
+  const [groups, setGroups] = React.useState(() =>
+    drive?.team ? grants.filter((g) => g.drive_id === drive.id && g.subject_type === "group").map((g) => g.subject) : [],
+  );
+  // A drive this editor created: the next save updates it rather than creating it again.
+  const savedId = React.useRef(drive?.id);
+  const teamUI = teamDrives && team;
   const [reclaim, setReclaim] = React.useState<DriveReclaim>(drive?.reclaim ?? "retain");
   const [saving, setSaving] = React.useState(false);
   // `title` is set for a refusal the server composed; a transport failure has no
@@ -162,6 +181,13 @@ export function DriveEditor({
     if (homeTemplateDisabled(b, home)) setHome(b === "host_path" ? "sub" : "hash");
   };
 
+  // Ticking Team drive starts the one write toggle off: a drive that was
+  // writable per person is not writable by a whole group until the admin says so.
+  const pickTeam = (on: boolean) => {
+    setTeam(on);
+    setWritable(on ? false : !!drive?.writable);
+  };
+
   const save = async (confirmRehome = false) => {
     setSaving(true);
     setError(null);
@@ -173,17 +199,23 @@ export function DriveEditor({
       home_template: home,
       size_mib: Number(size) || 0,
       writable,
-      reclaim,
+      reclaim: team ? "retain" : reclaim,
+      ...(team ? { team: true } : {}),
     };
     try {
-      if (drive) await api.updateDrive(drive.id, input, confirmRehome);
-      else await api.createDrive(input);
+      const saved = savedId.current
+        ? await api.updateDrive(savedId.current, input, confirmRehome)
+        : await api.createDrive(input);
+      savedId.current = saved.id;
+      if (teamUI) await syncTeamGroups(saved.id, groups, writable, grants);
       onSaved();
     } catch (e) {
       // A 409 on an edit (never on create — there is no prior row to re-home)
       // is driveRehomeGuard's own confirm gate, not a "this is written wrong"
       // refusal: the confirm dialog owns it instead of SAVE_REFUSED_TITLE.
-      if (drive && e instanceof HttpError && e.status === 409) {
+      // Changing Team drive on an allocated drive is a 409 too, but nothing
+      // there can be confirmed: it renders as the refusal it is.
+      if (drive && e instanceof HttpError && e.status === 409 && !!drive.team === team) {
         setRehome(e.message);
         return;
       }
@@ -230,7 +262,7 @@ export function DriveEditor({
                   selected={backend === b}
                   disabled={disabled || off}
                   onClick={() => pickBackend(b)}
-                  title={BACKEND_LABEL[b]}
+                  title={teamUI && b === "k8s_pvc_static" ? DRIVES.BACKEND_K8S_PVC_STATIC_TEAM : BACKEND_LABEL[b]}
                   hint={off ? withMono(DRIVES.BACKEND_UNAVAILABLE_DOCKER_ROOTS) : undefined}
                 />
               );
@@ -268,37 +300,47 @@ export function DriveEditor({
           </Field>
         )}
 
-        <Field
-          label={DRIVES.FIELD_HOME}
-          hint={
-            <>
-              <span className="block">{DRIVES.HOME_HINT}</span>
-              {/* HOME_RULE renders under the field for every option: the rule is
-                  what a claim is measured against whichever template names it. */}
-              <span className="mt-1 block">{withMono(DRIVES.HOME_RULE)}</span>
-            </>
-          }
-        >
-          <div className="grid gap-2">
-            {HOME_OPTIONS.map((o) => (
-              <OptionCard
-                key={o.value}
-                selected={home === o.value}
-                disabled={disabled || homeDisabled(o.value)}
-                onClick={() => setHome(o.value)}
-                title={o.label}
-                hint={homeDisabled(o.value) ? homeUnavailable(backend) : o.hint}
-              />
-            ))}
-          </div>
-        </Field>
+        {teamDrives && (
+          <TeamDriveFields team={team} onTeam={pickTeam} write={writable} onWrite={setWritable} backend={backend} disabled={disabled} />
+        )}
+
+        {teamUI ? (
+          <Field label={DRIVES.FIELD_HOME}>
+            <p className="text-body text-muted-foreground">{DRIVES.TEAM_NO_HOME}</p>
+          </Field>
+        ) : (
+          <Field
+            label={DRIVES.FIELD_HOME}
+            hint={
+              <>
+                <span className="block">{DRIVES.HOME_HINT}</span>
+                {/* HOME_RULE renders under the field for every option: the rule is
+                    what a claim is measured against whichever template names it. */}
+                <span className="mt-1 block">{withMono(DRIVES.HOME_RULE)}</span>
+              </>
+            }
+          >
+            <div className="grid gap-2">
+              {HOME_OPTIONS.map((o) => (
+                <OptionCard
+                  key={o.value}
+                  selected={home === o.value}
+                  disabled={disabled || homeDisabled(o.value)}
+                  onClick={() => setHome(o.value)}
+                  title={o.label}
+                  hint={homeDisabled(o.value) ? homeUnavailable(backend) : o.hint}
+                />
+              ))}
+            </div>
+          </Field>
+        )}
 
         <Field
           label={DRIVES.FIELD_SIZE}
           htmlFor="drive-size"
           // Q7: a k8s_pvc claim cannot request zero, and there is no
           // required-marker glyph — the hint carries the word.
-          hint={backend === "k8s_pvc" ? DRIVES.SIZE_HINT_REQUIRED : DRIVES.SIZE_HINT}
+          hint={teamUI ? DRIVES.TEAM_SIZE_HINT : backend === "k8s_pvc" ? DRIVES.SIZE_HINT_REQUIRED : DRIVES.SIZE_HINT}
         >
           <Input
             id="drive-size"
@@ -311,32 +353,42 @@ export function DriveEditor({
           />
         </Field>
 
-        <Field label={DRIVES.FIELD_WRITABLE} hint={DRIVES.WRITABLE_HINT}>
-          <Switch
-            checked={writable}
-            onChange={setWritable}
-            disabled={disabled}
-            label={DRIVES.FIELD_WRITABLE}
-          />
-        </Field>
+        {!teamUI && (
+          <Field label={DRIVES.FIELD_WRITABLE} hint={DRIVES.WRITABLE_HINT}>
+            <Switch
+              checked={writable}
+              onChange={setWritable}
+              disabled={disabled}
+              label={DRIVES.FIELD_WRITABLE}
+            />
+          </Field>
+        )}
 
-        <Field label={DRIVES.FIELD_RECLAIM} hint={DRIVES.RECLAIM_HINT}>
-          <RadioGroup
-            value={reclaim}
-            onValueChange={(v) => setReclaim(v as DriveReclaim)}
-            disabled={disabled}
-            className="flex flex-col gap-1.5"
-          >
-            {RECLAIM_OPTIONS.map((o) => (
-              <span key={o.value} className="flex items-center gap-2">
-                <RadioGroupItem value={o.value} id={`drive-reclaim-${o.value}`} />
-                <Label htmlFor={`drive-reclaim-${o.value}`} className="cursor-pointer font-normal">
-                  {o.label}
-                </Label>
-              </span>
-            ))}
-          </RadioGroup>
-        </Field>
+        {teamUI ? (
+          <Field label={DRIVES.FIELD_RECLAIM}>
+            <p className="text-body text-muted-foreground">{DRIVES.TEAM_RECLAIM_KEPT}</p>
+          </Field>
+        ) : (
+          <Field label={DRIVES.FIELD_RECLAIM} hint={DRIVES.RECLAIM_HINT}>
+            <RadioGroup
+              value={reclaim}
+              onValueChange={(v) => setReclaim(v as DriveReclaim)}
+              disabled={disabled}
+              className="flex flex-col gap-1.5"
+            >
+              {RECLAIM_OPTIONS.map((o) => (
+                <span key={o.value} className="flex items-center gap-2">
+                  <RadioGroupItem value={o.value} id={`drive-reclaim-${o.value}`} />
+                  <Label htmlFor={`drive-reclaim-${o.value}`} className="cursor-pointer font-normal">
+                    {o.label}
+                  </Label>
+                </span>
+              ))}
+            </RadioGroup>
+          </Field>
+        )}
+
+        {teamUI && <TeamGroups groups={groups} onChange={setGroups} disabled={disabled} />}
       </div>
 
       {error && (

@@ -190,6 +190,10 @@ export const NR_FILES = {
   DIALOG_TITLE: "Add to this run",
   ADD_REPO_TITLE: "Add repository",
   ADD_USER_DRIVE_TITLE: "Add user drive",
+  /** A team drive's groups: "Shared with: platform-team". */
+  SHARED_WITH: (groups: string) => `Shared with: ${groups}`,
+  /** Under a writable team drive: what the others in the group will see. */
+  TEAM_OTHERS_SEE: "Others in this group see what your runs write here.",
   ADD_SHARED_DRIVE_TITLE: "Add shared drive",
   ADD_FOLDER_TITLE: "Add folder",
   STEPS_ARIA: "Steps",
