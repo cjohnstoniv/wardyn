@@ -578,6 +578,6 @@ describe("AdminSettingsScreen — the Host card's status tiles", () => {
     await openHost();
     const footer = within(screen.getByTestId("host-footer"));
     expect(footer.getByRole("button", { name: /corporate proxy & egress/i })).toBeInTheDocument();
-    expect(footer.getByRole("button", { name: /^re-check$/i })).toBeInTheDocument();
+    expect(footer.queryAllByRole("button", { name: /^re-check$/i })).toHaveLength(1);
   });
 });

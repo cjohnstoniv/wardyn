@@ -217,7 +217,7 @@ describe("the #214 no-barrier banner: present in both views, CTA gated on who ca
       "/admin/setup?step=environment",
     );
     expect(screen.getByText(NO_BARRIER.SETUP_COMMAND)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: NO_BARRIER.RECHECK })).toBeInTheDocument();
+    expect(screen.queryAllByRole("button", { name: NO_BARRIER.RECHECK })).toHaveLength(1);
     expect(screen.queryByRole("button", { name: "New run" })).toBeNull();
   });
 
