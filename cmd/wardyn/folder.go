@@ -44,7 +44,7 @@ var folderCopy = struct {
 const folderBringBackTimeout = 5 * time.Minute
 
 func folderCmd(client clientFn) *cobra.Command {
-	cmd := &cobra.Command{Use: "folder", Short: folderCopy.short}
+	cmd := subcommandGroup(&cobra.Command{Use: "folder", Short: folderCopy.short})
 	cmd.AddCommand(&cobra.Command{
 		Use:   folderCopy.bringBackUse,
 		Short: folderCopy.bringBackShort,
