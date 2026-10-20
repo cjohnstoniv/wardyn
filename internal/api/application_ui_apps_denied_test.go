@@ -76,3 +76,49 @@ func TestApplicationRunWithoutADeclaredAppIsNotRefusedForTheCeilingsApp(t *testi
 		})
 	}
 }
+
+// The ceiling's allowed-apps list strips a declared app before deny_ui_apps sees it, so the resolved policy has no
+// app left to deny and nothing used to refuse (#3391). The run is refused with its own sentence, whichever way the
+// profile limits UI apps; an app the list names is not refused.
+func TestApplicationRunRefusedWhenTheAllowedAppsLackItsApp(t *testing.T) {
+	const app = `"shape":"application","experience":"interactive",` + noRepos + `,"startup":{"kind":"command","command":"npm run dev"},` +
+		`"inline_policy":{"ui_apps":[{"name":"web","port":3000}]}`
+	const wantMsg = "The organisation's allowed apps list does not include the app this application declares, so it can't be created."
+	profile := func(deny bool, allowed ...types.UIApp) *types.GovernanceProfile {
+		p := limitsProfile("apps", types.GovernanceLimits{DenyUIApps: deny})
+		p.Ceiling.UIApps = allowed
+		return p
+	}
+	admin, web := types.UIApp{Name: "admin", Port: 8080}, types.UIApp{Name: "web", Port: 3000}
+
+	for _, door := range contractDoors {
+		t.Run(door.name, func(t *testing.T) {
+			for _, tc := range []struct {
+				name    string
+				profile *types.GovernanceProfile
+				refused bool
+			}{
+				{"deny_ui_apps and a list without the app", profile(true, admin), true},
+				{"a list without the app", profile(false, admin), true},
+				{"a list with the app", profile(false, web, admin), false},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					srv, _, _ := govEscapeFixture(t, assignedStore(tc.profile))
+					w := doSSO(t, srv, http.MethodPost, door.path, govSession(t, "sub-walled", []string{"eng"}, false), modeBody(app))
+					if !tc.refused {
+						if errorReason(w) == reasonRunApplicationUIAppsDenied {
+							t.Fatalf("%s refused an app the list names: %s", door.name, w.Body.String())
+						}
+						return
+					}
+					if w.Code != http.StatusUnprocessableEntity || errorReason(w) != reasonRunApplicationUIAppsDenied {
+						t.Fatalf("%s = %d %s, want 422 %s", door.name, w.Code, w.Body.String(), reasonRunApplicationUIAppsDenied)
+					}
+					if got := refusalBody(t, w); got != wantMsg {
+						t.Fatalf("sentence = %q, want %q", got, wantMsg)
+					}
+				})
+			}
+		})
+	}
+}

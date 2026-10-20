@@ -144,18 +144,29 @@ func (s *Server) uiAppsDenied(r *http.Request, spec types.RunPolicySpec, ceiling
 	return ceiling.Profile != nil && ceiling.Limits.DenyUIApps && len(spec.UIApps) > 0 && !s.runUngoverned(r.Context())
 }
 
-// applicationUIAppsDeniedMsg is the sentence of the refusal below.
-const applicationUIAppsDeniedMsg = "This profile does not allow UI apps, so an application can't declare one."
+// applicationUIAppsDeniedMsg and applicationUIAppsNotAllowedMsg are the two sentences of the refusal below, one
+// reason: a person has to tell a profile that denies every UI app from an allowed-apps list that lacks theirs.
+const (
+	applicationUIAppsDeniedMsg     = "This profile does not allow UI apps, so an application can't declare one."
+	applicationUIAppsNotAllowedMsg = "The organisation's allowed apps list does not include the app this application declares, so it can't be created."
+)
 
-// applicationUIAppsRefusal refuses a shape-application run whose declared app deny_ui_apps would strip: the run
-// is an application only through that app, so creating it anyway would make a run that is not what was asked for.
+// applicationUIAppsRefusal refuses a shape-application run that would be created without the app it declared:
+// the run is an application only through that app. It is either deny_ui_apps stripping the app, or the ceiling's
+// allowed-apps list having stripped it already (boundRunUserSpec), which leaves the resolved spec with none.
 // resolveRunPolicy calls it for create and for preflight alike, on the policy as resolved, before boundUIApps drops
 // anything. Other shapes keep the strip-and-warn behaviour. It keys on what the request declared
 // (applicationServer), never on the resolved spec alone: a background application that declares no app still
 // inherits the ceiling's, and denying that one strips nothing the person asked for.
 func (s *Server) applicationUIAppsRefusal(r *http.Request, req createRunRequest, spec types.RunPolicySpec, ceiling governanceCeiling) *runRefusal {
-	if req.Shape != client.RunShapeApplication || !applicationServer(req) || !s.uiAppsDenied(r, spec, ceiling) {
+	if req.Shape != client.RunShapeApplication || !applicationServer(req) {
 		return nil
 	}
-	return runError(http.StatusUnprocessableEntity, reasonRunApplicationUIAppsDenied, applicationUIAppsDeniedMsg)
+	switch {
+	case s.uiAppsDenied(r, spec, ceiling):
+		return runError(http.StatusUnprocessableEntity, reasonRunApplicationUIAppsDenied, applicationUIAppsDeniedMsg)
+	case len(spec.UIApps) == 0 && !s.runUngoverned(r.Context()):
+		return runError(http.StatusUnprocessableEntity, reasonRunApplicationUIAppsDenied, applicationUIAppsNotAllowedMsg)
+	}
+	return nil
 }
