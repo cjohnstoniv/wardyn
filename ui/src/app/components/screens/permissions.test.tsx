@@ -204,6 +204,27 @@ describe("PermissionsScreen — enforcement confirms", () => {
     expect(within(dialog).getByText(PERM.ENFORCE_ON_ZERO)).toBeInTheDocument();
   });
 
+  it("#2512: turning a widening kind on with nothing granted states no lockout — members were already refused", async () => {
+    getPermissionsMock.mockResolvedValue({ grants: [], enforcement: {} });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+
+    await screen.findByText(KIND.image.unenforced);
+    await user.click(screen.getByRole("switch", { name: `${PERM.ENFORCEMENT_TITLE} ${KIND.image.label}` }));
+
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).queryByText(PERM.ENFORCE_ON_ZERO)).toBeNull();
+    expect(within(dialog).getByRole("button", { name: PERM.ENFORCE_CONFIRM })).not.toHaveClass("bg-danger");
+  });
+
+  it("#2512: an enforced widening kind with nothing granted carries no 'refuses every request' note", async () => {
+    getPermissionsMock.mockResolvedValue({ grants: [], enforcement: { image: true } });
+    renderScreen();
+
+    await screen.findByText(KIND.image.enforced);
+    expect(screen.queryByText(PERM.ENFORCE_ON_ZERO)).toBeNull();
+  });
+
   it("turning a kind off says denies still apply, and offers Stop enforcing", async () => {
     getPermissionsMock.mockResolvedValue({ grants: [grant()], enforcement: { egress_host: true } });
     const user = userEvent.setup({ pointerEventsCheck: 0 });

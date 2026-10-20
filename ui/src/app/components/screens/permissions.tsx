@@ -531,8 +531,8 @@ function KindRow({
         {!enforced && grants.length > 0 && <Note>{PERM.ADVISORY}</Note>}
         {/* The one thing that bites with the switch off. */}
         {!enforced && hasDeny && <Note tone="red">{PERM.DENY_BEFORE_ENFORCE}</Note>}
-        {/* The dangerous cell: enforced with nothing granted. */}
-        {enforced && !hasAllow && <Note tone="red">{PERM.ENFORCE_ON_ZERO}</Note>}
+        {/* The dangerous cell: enforced with nothing granted. A widening kind was refused before the switch, so nothing changes there. */}
+        {enforced && !hasAllow && copy.direction === "narrows" && <Note tone="red">{PERM.ENFORCE_ON_ZERO}</Note>}
       </div>
       <Switch
         checked={enforced}
@@ -563,7 +563,7 @@ function ConfirmEnforcement({
   onConfirm: () => void;
 }) {
   const turningOn = !!state?.next;
-  const lockout = turningOn && !hasAllow;
+  const lockout = turningOn && !hasAllow && !!state && KIND[state.kind].direction === "narrows";
   return (
     <AlertDialog open={!!state} onOpenChange={(o) => !o && onCancel()}>
       <AlertDialogContent>
