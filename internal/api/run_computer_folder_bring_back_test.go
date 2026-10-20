@@ -306,10 +306,13 @@ func TestBringComputerFolderBack_APausedRunIsNotResumed(t *testing.T) {
 }
 
 // When the agent cannot be confirmed stopped, nothing is copied. The run has already ended, since
-// one compare-and-set from RUNNING decided it, so the answer records the failed pass.
+// one compare-and-set from RUNNING decided it: the pass is skipped and audited as failed, and the
+// shared teardown then stops the sandbox, discarding its changes.
 func TestBringComputerFolderBack_AStopThatFailsCopiesNothing(t *testing.T) {
 	s, cs, audit, run, sb, app := bringBackFixture(t)
 	sb.stopFails = true
+	var teardowns []int // agent stops seen at each sandbox stop
+	sb.stopped = func() { teardowns = append(teardowns, sb.stops) }
 	res := bringBack(t, s, bringBackOwnerSession(t), run)
 	if res.code != http.StatusOK {
 		t.Fatalf("bring-back = %d %s", res.code, res.body)
@@ -323,8 +326,22 @@ func TestBringComputerFolderBack_AStopThatFailsCopiesNothing(t *testing.T) {
 	if sb.stops != 1 || cs.State() != types.RunStopped {
 		t.Errorf("%d agent stops, state %s: want one stop and the run STOPPED", sb.stops, cs.State())
 	}
-	if ev := findAuditData(audit.snapshot(), run.ID, "run.folder.transfer", `"direction":"bring_back"`); ev == nil || ev.Outcome != "failure" {
-		t.Errorf("the failed pass is not audited as one: %+v", ev)
+	if sb.wrote {
+		t.Error("a pass ran after the stop failed")
+	}
+	if len(teardowns) != 1 || teardowns[0] != 1 {
+		t.Errorf("sandbox stops %v (agent stops seen at each): want the sandbox stopped once, after the failed stop", teardowns)
+	}
+	ev := findAuditData(audit.snapshot(), run.ID, "run.folder.transfer", `"direction":"bring_back"`)
+	if ev == nil || ev.Outcome != "failure" {
+		t.Fatalf("the failed pass is not audited as one: %+v", ev)
+	}
+	var data map[string]any
+	if _ = json.Unmarshal(ev.Data, &data); data["error"] != localFolderSeedError(bringBackAgentRunningMsg) {
+		t.Errorf("the failed pass's audit error = %v", data["error"])
+	}
+	if cs.status.Back == nil || cs.status.Back.Error != bringBackAgentRunningMsg {
+		t.Errorf("the folder's record = %+v, want the stop's error", cs.status.Back)
 	}
 }
 

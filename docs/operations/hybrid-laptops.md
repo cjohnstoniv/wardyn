@@ -267,6 +267,8 @@ What happens:
   back. Only you can do it.
 - A kill is containment: it ends the run without bringing the folder back. To keep the sandbox's changes, use Bring
   back (or `wardyn folder bring-back <run>`) before you end the run.
+- If the agent can't be stopped, the run still ends and the sandbox's changes are discarded. The folder on your computer is not touched.
+- A runner on a different Wardyn release can refuse a bring-back until it is upgraded.
 - The copy follows the `wardyn sync` rules: `.git` stays on your computer, `.gitignore` and `.wardynignore` apply,
   symlinks are refused, and `WARDYN_SYNC_DENY` applies to every pass.
 - The runner checks every path itself:

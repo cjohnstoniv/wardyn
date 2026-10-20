@@ -153,11 +153,11 @@ func (s *Server) bringBackRefusal(ctx context.Context, run types.AgentRun) (*typ
 // for the agent to end on SIGTERM, then retries SIGKILL for up to two more).
 const bringBackExecBound = 15 * time.Second
 
-// agentStoppable reports whether the sandbox's PID 1 is one of the idle main processes the Docker
-// substrate starts (internal/runner/docker: the task idle script, or agent-run --idle), so that ending every other process ends the agent and
-// leaves the sandbox up for the pass. Anywhere else (an exec-less sandbox whose main process is the
-// agent, a Kubernetes agent container, an older runner's idle script) the agent cannot be
-// stopped this way, and the bring-back is refused.
+// agentStoppable reports whether the sandbox's PID 1 is one of the idle main processes the Docker and
+// Kubernetes substrates start (the task idle script, or agent-run --idle), so that ending every other
+// process ends the agent and leaves the sandbox up for the pass. Anywhere else (an exec-less sandbox
+// whose main process is the agent, or a runner on another release whose idle script differs byte for
+// byte) the agent cannot be stopped this way, and the bring-back is refused.
 func (s *Server) agentStoppable(ctx context.Context, run types.AgentRun) bool {
 	out, code, err := s.sandboxExecOutput(ctx, run.SandboxRef, "cat", "/proc/1/cmdline")
 	if err != nil || code != 0 {
