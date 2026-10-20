@@ -12,13 +12,13 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 type Answer = "authed" | "unauthed" | "unreachable" | "forbidden";
-const probes = vi.hoisted(() => ({ results: [] as Answer[], calls: 0 }));
+const probes = vi.hoisted(() => ({ results: [] as Answer[], reasons: [] as string[], calls: 0 }));
 const next = () => {
   probes.calls++;
   const a = probes.results.shift() ?? "unreachable";
   return {
     probe: a === "forbidden" ? ("unreachable" as const) : a,
-    reason: "",
+    reason: probes.reasons.shift() ?? "",
     transient: a === "unreachable",
   };
 };
@@ -47,6 +47,7 @@ vi.mock("./lib/use-poll", async (importOriginal) => ({
 }));
 
 import App from "./App";
+import { SESSION_ENDED_REASON } from "./lib/api/core";
 
 const gate = () => screen.queryByRole("heading", { name: "Sign in" });
 
@@ -66,6 +67,7 @@ describe("a cold load that cannot reach the daemon", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     probes.results = [];
+    probes.reasons = [];
     probes.calls = 0;
   });
   afterEach(() => {
@@ -175,5 +177,23 @@ describe("a cold load that cannot reach the daemon", () => {
     expect(probes.calls).toBe(2);
     expect(gate()).toBeInTheDocument();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("a 401 on a retry that names an ended session shows the signed-out notice", async () => {
+    probes.results = ["unreachable", "unauthed"];
+    probes.reasons = ["", "expired_session"];
+    await mount();
+    expect(screen.queryByText(SESSION_ENDED_REASON)).not.toBeInTheDocument();
+    await tick(1000);
+    expect(gate()).toBeInTheDocument();
+    expect(screen.getByText(SESSION_ENDED_REASON)).toBeInTheDocument();
+  });
+
+  it("neg: a 401 on a retry with no reason and no stored token shows no notice", async () => {
+    probes.results = ["unreachable", "unauthed"];
+    await mount();
+    await tick(1000);
+    expect(gate()).toBeInTheDocument();
+    expect(screen.queryByText(SESSION_ENDED_REASON)).not.toBeInTheDocument();
   });
 });

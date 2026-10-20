@@ -486,6 +486,7 @@ export default function App() {
     let alive = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let attempt = 0;
+    const hadToken = getToken() !== null;
     const stop = () => {
       alive = false;
       clearTimeout(timer);
@@ -495,7 +496,7 @@ export default function App() {
         // The focus re-probe has one out: wait for it rather than stack a second.
         if (probingRef.current) return schedule();
         probingRef.current = true;
-        void probeAuthWithReason().then(({ probe, transient }) => {
+        void probeAuthWithReason().then(({ probe, reason, transient }) => {
           probingRef.current = false;
           if (!alive) return;
           if (probe === "unreachable" && transient) {
@@ -505,7 +506,9 @@ export default function App() {
           }
           stop();
           setColdUnreachable(false);
-          if (probe === "authed") setAuth("authed");
+          // The same notice the mount probe gives when the answer is a signed-out one.
+          if (probe === "unauthed" && (hadToken || isSessionEnded(reason))) setSignedOut(true);
+          setAuth(probe === "authed" ? "authed" : "unauthed");
         });
       }, COLD_PROBE_RETRY_MS[Math.min(attempt, COLD_PROBE_RETRY_MS.length - 1)]);
     };
