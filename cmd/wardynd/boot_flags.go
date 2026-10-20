@@ -161,6 +161,10 @@ type bootFlags struct {
 	// once at boot, control-plane-authored only. Mutually exclusive with
 	// daemonProxyURL (bootDaemonProxy refuses boot if both are set).
 	daemonProxySecretFile *string
+	// orgCAFingerprints is WARDYN_ORG_CA_FINGERPRINTS (see
+	// internal/api/org_ca_fingerprints.go): published on /healthz for
+	// `wardyn ca add` to be compared against. Empty (default) = none.
+	orgCAFingerprints *string
 	// demoVideoBaseURL is WARDYN_DEMO_VIDEO_BASE_URL (see
 	// internal/api/llm_gateway.go's ValidateDemoVideoBaseURL): an
 	// operator-run mirror re-pointing the Getting Started demo episodes for
@@ -497,6 +501,7 @@ func parseBootFlags() *bootFlags {
 		daemonProxyURL:         flagEnv("daemon-proxy-url", "WARDYN_DAEMON_PROXY_URL", "", "forward proxy (http:// or https://, no user:pass@) for wardynd's own outbound HTTP calls: OIDC discovery/JWKS, audit webhooks, GitHub App token minting, AWS SSO token renewal and Entra directory sync. Empty (default) leaves the default transport untouched"),
 		daemonNoProxy:          flagEnv("daemon-no-proxy", "WARDYN_DAEMON_NO_PROXY", "", "NO_PROXY-style bypass list for -daemon-proxy-url (host, .suffix, CIDR or *); ignored when the proxy URL is unset"),
 		daemonProxySecretFile:  flagEnv("daemon-proxy-secret-file", "WARDYN_DAEMON_PROXY_SECRET", "", "path to a file holding one forward-proxy URL that may embed user:pass@, the credentialed form of -daemon-proxy-url; refused if group- or world-writable, or if other-readable and owned by wardynd's own non-root uid (group-read, as a Kubernetes Secret mount gives, is accepted). Mutually exclusive with -daemon-proxy-url"),
+		orgCAFingerprints:      flagEnv("org-ca-fingerprints", "WARDYN_ORG_CA_FINGERPRINTS", "", "comma-separated sha256:<hex> fingerprints of the organisation's CA certificates, published on the anonymous /healthz as org_ca_fingerprints for people to compare with what 'wardyn ca add' prints. Empty (default) publishes none"),
 		demoVideoBaseURL:       flagEnv("demo-video-base-url", "WARDYN_DEMO_VIDEO_BASE_URL", "", "mirror base URL (https://) re-pointing the Getting Started demo episodes for an air-gapped deployment where github.com is unreachable. Empty (default) uses the two GitHub hosts"),
 		ageKey:                 flagEnv("age-key", "WARDYN_AGE_KEY", "", "age X25519 identity (AGE-SECRET-KEY-...) for the secret store; generated and logged if empty"),
 		platformKeyFile:        flagEnv("platform-key-file", "WARDYN_PLATFORM_KEY_FILE", "", "path to a second age identity that alone protects wardynd's signing, session and SSH host keys, and the key that seals every run's stored proxy config, when secrets are sealed locally. Empty (default): WARDYN_AGE_KEY protects both. Set on an existing install, run wardynd -rewrap -rewrap-adopt-boot-keys once; see docs/operations/secrets-and-keys.md"),

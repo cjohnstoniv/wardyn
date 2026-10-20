@@ -199,12 +199,12 @@ func runAttach(ctx context.Context, c *sdk.Client, runID string) error {
 	if c.Token != "" {
 		hdr = http.Header{"Authorization": []string{"Bearer " + c.Token}}
 	}
-	// A no-redirect client with no Timeout: the handshake must not follow a
-	// redirect (it would replay the bearer at Location), and the session itself
-	// outlives any whole-request deadline.
+	// orgClient with no Timeout: the handshake must not follow a redirect (it
+	// would replay the bearer at Location), the session itself outlives any
+	// whole-request deadline, and the organisation's anchors apply.
 	conn, resp, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
 		HTTPHeader: hdr,
-		HTTPClient: noRedirectClient,
+		HTTPClient: orgClient(c.BaseURL, 0),
 	})
 	if err != nil {
 		// A signal caught by the NotifyContext above (or any other caller

@@ -7,6 +7,8 @@
 package main
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +18,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/certbundle"
 	"github.com/cjohnstoniv/wardyn/internal/cliprofile"
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/version"
@@ -36,7 +39,9 @@ func (e *exitError) Unwrap() error { return e.err }
 func main() {
 	if err := rootCmd().Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "wardyn:", err)
-		if hint := dialHint(err); hint != "" {
+		if hint := caHint(err); hint != "" {
+			fmt.Fprintln(os.Stderr, "wardyn:", hint)
+		} else if hint := dialHint(err); hint != "" {
 			fmt.Fprintln(os.Stderr, "wardyn:", hint)
 		}
 		if hint := noOrgHint(err, urlFromDefault); hint != "" {
@@ -119,17 +124,32 @@ func resolveURL(cmd *cobra.Command, current string) (resolved string, fromDefaul
 // against a login page) and replays the body and bearer there.
 func noRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
-// noRedirectClient backs the raw requests when the SDK client carries no
-// HTTPClient of its own (the CLI always sets one). A client the caller did
-// supply is used as it is: its redirect policy is theirs.
-var noRedirectClient = &http.Client{CheckRedirect: noRedirect}
-
-// rawHTTPClient is the client for a request the SDK has no method for.
+// rawHTTPClient is the client for a request the SDK has no method for: the
+// SDK client's own (the CLI always sets one), else orgClient for its URL. A
+// client the caller did supply is used as it is: its redirect policy is theirs.
 func rawHTTPClient(c *sdk.Client) *http.Client {
 	if c.HTTPClient != nil {
 		return c.HTTPClient
 	}
-	return noRedirectClient
+	return orgClient(c.BaseURL, 0)
+}
+
+// caHint names the way out of a TLS failure the anchors can fix: the presented
+// root's subject and fingerprint with the `wardyn ca add` line, or the remove
+// line for a stored anchor file refused at use. "" for anything else.
+func caHint(err error) string {
+	var refused *anchorRefusedError
+	if errors.As(err, &refused) {
+		return fmt.Sprintf("remove the refused anchors with `wardyn ca remove %s`, then add the bundle again with `wardyn ca add`", refused.origin)
+	}
+	var cve *tls.CertificateVerificationError
+	var ua x509.UnknownAuthorityError
+	if !errors.As(err, &cve) || !errors.As(err, &ua) || len(cve.UnverifiedCertificates) == 0 {
+		return ""
+	}
+	root := cve.UnverifiedCertificates[len(cve.UnverifiedCertificates)-1]
+	return fmt.Sprintf("no trusted root signs the presented chain, which ends at %s (%s); "+
+		"if your organisation inspects TLS, add its CA with `wardyn ca add <file>`", root.Subject, certbundle.Fingerprint(root))
 }
 
 // exitCodeFor maps an error to a process exit code CI can branch on. A run
@@ -250,7 +270,7 @@ func rootCmd() *cobra.Command {
 	// server can't wedge a single request forever; the shared client reuses one
 	// connection pool across those polls.
 	client := func() *sdk.Client {
-		return &sdk.Client{BaseURL: serverURL, Token: token, HTTPClient: &http.Client{Timeout: 30 * time.Second, CheckRedirect: noRedirect}}
+		return &sdk.Client{BaseURL: serverURL, Token: token, HTTPClient: orgClient(serverURL, 30*time.Second)}
 	}
 
 	root.AddCommand(
@@ -280,6 +300,7 @@ func rootCmd() *cobra.Command {
 		deviceCmd(client),
 		runnerCmd(client),
 		supportBundleCmd(client),
+		caCmd(client),
 	)
 	return root
 }
