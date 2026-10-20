@@ -93,15 +93,18 @@ func (s *Server) applyIntegrationRequirement(ctx context.Context, present map[st
 	for _, capID := range integ.DisabledCapabilities {
 		disabledCap[capID] = true
 	}
-	var addedEgress, grantedHosts []string
+	var addedEgress, grantedHosts, unlistedHosts []string
 	if !disabledCap["egress_host"] {
 		addedEgress = unionAllowedDomains(spec, integ.Egress)
 	}
 	_, header, _, hasHeader := integ.HeaderSecret()
 	if !disabledCap["credential"] {
-		grantedHosts = applyIntegrationInjection(present, spec, integ, modelHosts)
+		grantedHosts, unlistedHosts = applyIntegrationInjection(present, spec, integ, modelHosts)
 		if hasHeader && len(modelHosts) > 0 {
 			events = append(events, requirementSkip(id, reason, map[string]any{"integration_id": id, "hosts": modelHosts}))
+		}
+		if len(unlistedHosts) > 0 {
+			events = append(events, requirementSkip(id, reasonRequirementHostNotAllowed, map[string]any{"integration_id": id, "hosts": unlistedHosts}))
 		}
 	}
 	if len(addedEgress) == 0 && len(grantedHosts) == 0 {
@@ -150,7 +153,7 @@ func (s *Server) applyIntegrationRequirement(ctx context.Context, present map[st
 // to whoever makes it: the fix is to add these hosts to that same tightly
 // scoped, injection-paired set.
 //
-// Three guards, each of which drops a host rather than failing the run:
+// Four guards, each of which drops a host rather than failing the run:
 //
 //   - the named secret must actually be stored. An injection grant with no
 //     resolvable secret fails the proxy CLOSED at startup, so an unstored one
@@ -161,10 +164,13 @@ func (s *Server) applyIntegrationRequirement(ctx context.Context, present map[st
 //     elsewhere), and that refusal is a hard startup failure. The write path
 //     already rejects this combination (validateIntegrationHosts); this covers a
 //     row stored before that guard, or a legacy-derived one.
+//   - the host must be an EXACT entry of the run's allowlist by now: the proxy
+//     refuses an injection rule for any other host at startup, and a row whose
+//     egress_host capability is off opens nothing. Skipped, and audited.
 //   - a host that already has an api_key grant is left alone — never
 //     double-grant a host, mirroring applyRequiredSecretGrant.
 //     Whichever caller proposed it first wins.
-func applyIntegrationInjection(present map[string]bool, spec *types.RunPolicySpec, integ types.Integration, skip []string) []string {
+func applyIntegrationInjection(present map[string]bool, spec *types.RunPolicySpec, integ types.Integration, skip []string) (granted, unlisted []string) {
 	// HeaderSecret is the row's proxy_header-delivered secret; an empty stored
 	// format is already materialized as "%s" (the raw secret IS the header
 	// value — the right default for a custom credential header like x-api-key
@@ -172,11 +178,14 @@ func applyIntegrationInjection(present map[string]bool, spec *types.RunPolicySpe
 	// "Bearer %s", which would be wrong for every one of those).
 	secretName, header, format, ok := integ.HeaderSecret()
 	if !ok || secretName == "" || !present[secretName] {
-		return nil
+		return nil, nil
 	}
-	var granted []string
 	for _, host := range integ.Egress {
 		if !bareExactHost(host) || slices.Contains(skip, host) {
+			continue
+		}
+		if !domainAllowedExact(spec.AllowedDomains, host) {
+			unlisted = append(unlisted, host)
 			continue
 		}
 		if _, exists := apiKeyGrantForHost(spec, host); exists {
@@ -190,5 +199,5 @@ func applyIntegrationInjection(present map[string]bool, spec *types.RunPolicySpe
 		})
 		granted = append(granted, host)
 	}
-	return granted
+	return granted, unlisted
 }

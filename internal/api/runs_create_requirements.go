@@ -261,6 +261,11 @@ const reasonRequirementModelHost = "model_host"
 // be read, so which hosts serve a model is unknown: every one is skipped.
 const reasonRequirementModelHostUnknown = "model_host_unknown"
 
+// reasonRequirementHostNotAllowed is the skip for an integration credential whose host is not an
+// exact entry of the run's allowlist (its egress_host capability is off and nothing else lists it):
+// the proxy refuses an injection rule for such a host at startup, which would fail every run.
+const reasonRequirementHostNotAllowed = "host_not_allowlisted"
+
 // requirementSkip is the audit entry for a requirement credential the fold
 // declined to grant, named by what it would have granted and why.
 func requirementSkip(target, reason string, data map[string]any) requirementAuditEntry {

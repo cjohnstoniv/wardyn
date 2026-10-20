@@ -234,6 +234,31 @@ func TestIntegrationFold_DegradesNeverBricks(t *testing.T) {
 		}
 	})
 
+	t.Run("egress_host off: a host no allowlist lists carries no credential", func(t *testing.T) {
+		integ := feedIntegration()
+		integ.DisabledCapabilities = []string{"egress_host"}
+		srv := runIntegrationSrv(t, []types.Integration{integ}, map[string][]byte{"artifactory-token": []byte("tok")})
+		spec := &types.RunPolicySpec{AllowedDomains: []string{"Nexus.corp.internal"}}
+		events, _ := srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code",
+			wsRequiring(uuid.New(), "integration:corp-artifactory", "required"), nil)
+		scopes := apiKeyScopes(t, spec)
+		if len(scopes) != 1 || scopes[0]["host"] != "nexus.corp.internal" {
+			t.Fatalf("scopes = %+v, want only the host the policy already lists (the proxy refuses a rule for any other)", scopes)
+		}
+		if slices.Contains(spec.AllowedDomains, "artifactory.corp.internal") {
+			t.Errorf("a switched-off egress_host still opened a host: %v", spec.AllowedDomains)
+		}
+		var skipped []string
+		for _, ev := range events {
+			if ev.action == "run.requirement.skip" && ev.data["reason"] == reasonRequirementHostNotAllowed {
+				skipped, _ = ev.data["hosts"].([]string)
+			}
+		}
+		if !slices.Equal(skipped, []string{"artifactory.corp.internal"}) {
+			t.Errorf("skipped hosts = %v, want the unlisted host named in an audited skip; events %+v", skipped, events)
+		}
+	})
+
 	t.Run("no hosts is a no-op", func(t *testing.T) {
 		integ := feedIntegration()
 		integ.Egress = nil
