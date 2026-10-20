@@ -11,6 +11,7 @@ import { dirname, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import golden from "./run-mode-refusals.golden.json";
 import { RUN_MODE_REASON, RUN_MODE_REFUSAL, RUN_MODE_REFUSAL_BY_KEY, startFolderSubpathOk } from "./run-mode-refusals";
+import { SCHEDULE_REASONS } from "./schedule-refusals";
 
 function repoRoot(): string {
   let dir = resolve(process.cwd());
@@ -38,7 +39,8 @@ describe("run-mode reasons", () => {
     const block = /The 0\.9 run-mode contract[\s\S]*?\n\t\/\/ validateWorkspaceSources/.exec(go)?.[0] ?? "";
     const goReasons = [...block.matchAll(/=\s*"([a-z_]+)"/g)].map((m) => m[1]);
     expect(goReasons.length).toBeGreaterThanOrEqual(5);
-    expect(new Set(Object.values(RUN_MODE_REASON))).toEqual(new Set(goReasons));
+    // The start-time reasons sit in this block of reasons.go; schedule-refusals.ts owns them.
+    expect(new Set([...Object.values(RUN_MODE_REASON), ...SCHEDULE_REASONS])).toEqual(new Set(goReasons));
   });
 });
 
