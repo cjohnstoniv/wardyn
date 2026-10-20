@@ -360,6 +360,9 @@ type dispatchLLMPlan struct {
 	// address (nil when requests go to the vendor host) — a gateway reaches
 	// only the runs that chose it.
 	llmUpstreams map[string]string
+	// localModels is ProxyConfig.LocalModels: each local_model upstream's model
+	// allowlist and request bounds, for the proxy's route gate.
+	localModels map[string]types.LocalModelSettings
 	// mitmLLM is whether the BUILT-IN LLM hosts should be intercepted —
 	// subscription injection or intercept_tls inspection, never a CA minted
 	// purely for artifact tokens. Computed here because every input to it is
@@ -494,7 +497,7 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 		azureCLI:             azureCLI,
 		awsSigV4:             awsSigV4,
 		mitmLLM:              subscription || mitmForInspect,
-		llmUnavailableDetail: prov.detail, llmUpstreams: prov.upstreams,
+		llmUnavailableDetail: prov.detail, llmUpstreams: prov.upstreams, localModels: prov.localModels,
 	}, true
 }
 

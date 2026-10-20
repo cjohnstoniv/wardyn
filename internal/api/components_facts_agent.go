@@ -36,14 +36,16 @@ func agentComponentFact(f componentFactInputs) (componentFact, bool) {
 		addHost(f.mpChoice.loginHost, "login")
 		kind := "key"
 		switch p.Kind {
-		case types.ModelProviderCustomEndpoint, types.ModelProviderAzureFoundry:
+		case types.ModelProviderCustomEndpoint, types.ModelProviderAzureFoundry, types.ModelProviderLocalModel:
 			kind = "token"
 		case types.ModelProviderAnthropicSubscription:
 			kind = "subscription"
 		case types.ModelProviderBedrockSSO:
 			kind = "aws"
 		}
-		a.Secrets = append(a.Secrets, client.AgentSecretFact{Kind: kind, Owner: "own", Residency: string(kindResidency(p.Kind))})
+		if !providerTakesNoCredential(p) {
+			a.Secrets = append(a.Secrets, client.AgentSecretFact{Kind: kind, Owner: "own", Residency: string(kindResidency(p.Kind))})
+		}
 		if f.credentialChecked {
 			out.Status = componentReady // the gate checked this own credential
 		}

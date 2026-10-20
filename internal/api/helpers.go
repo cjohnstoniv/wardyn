@@ -149,9 +149,9 @@ func unionDomains(dst *[]string, add []string) []string {
 }
 
 // unionAllowedDomains is unionDomains applied to spec.AllowedDomains — see
-// unionDomains for the dedupe rule. ~11 production call sites key on this
-// exact signature; extend behavior via unionDomains, never by changing this
-// one's shape.
+// unionDomains for the dedupe rule. The production call sites key on this
+// exact signature (run_policy_seal_census_test.go lists them); extend behavior
+// via unionDomains, never by changing this one's shape.
 func unionAllowedDomains(spec *types.RunPolicySpec, add []string) []string {
 	return unionDomains(&spec.AllowedDomains, add)
 }

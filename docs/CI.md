@@ -52,7 +52,7 @@ scripts/ci-run.sh
 | `WARDYN_SETUP_RUNNER_DISK_GB` | throwaway stack: GB of disk free for runs, where this host cannot see Docker's data root (Docker Desktop); the stack's runner takes no run without it there | measured on this host |
 | `WARDYN_SETUP_RUNNER_LIMITS` | throwaway stack: the runner's whole limit set as `wardyn runner set` flags, instead of half this host | unset |
 | `WARDYN_DOCKER_SOCK` | throwaway stack: which host Docker socket the job drives (two-daemon hosts: pick the daemon with the runtimes you need) | `/var/run/docker.sock` |
-| `WARDYN_ADMIN_TOKEN` | throwaway stack: its own bootstrap bearer, gone with the stack; never sent to `WARDYN_URL` | `demo-admin-token` |
+| `WARDYN_ADMIN_TOKEN` | throwaway stack: its own bootstrap bearer, gone with the stack; never sent to `WARDYN_URL` | a random value per job |
 
 > [!NOTE]
 > `WARDYN_CI_SECRETS` is gone: `ci-run.sh` refuses it rather than seed a credential into the operator's namespace for every run to share.
@@ -358,6 +358,7 @@ The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 | `go` (lint, unit, docker, k8s matrix) | – | pending | pending | 40 |
 | `build` | – | pending | pending | 10 |
 | `conformance-k8s` | 58 | 11.2 | 12.8 | 35 |
+| `vm-conformance` (not required) | – | pending | pending | 30 |
 | `ui-e2e` (1/2, 2/2 matrix) | 1 | 7.0 | 7.0 | 25 |
 | `test-pg-shard` (api-1, api-2, store, race) | – | pending | pending | 20 |
 | `test-pg` (aggregator) | – | pending | pending | 10 |
@@ -391,6 +392,7 @@ The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 | `train-suites` | – | pending | pending | 180 |
 | `train-gate` | – | pending | pending | 10 |
 | `go-modules` | – | pending | pending | 15 |
+| `go-gate-tools` | – | pending | pending | 15 |
 | `go-cache-prune` | – | pending | pending | 10 |
 | `multi-arch build (agent-claude-code)`, nightly | 60 | 3.5 | 3.8 | 45 |
 | `multi-arch build (wardynd)`, nightly | 60 | 3.1 | 3.5 | 45 |
@@ -597,6 +599,10 @@ Docker Hub rate-limited CI even after `docker/login-action`, so CI reads the Doc
 - Guard 17 in [`scripts/test-repo-guards.sh`](../scripts/test-repo-guards.sh) fails while a Docker Hub `FROM` pin is not listed.
 - [`mirror-selftest.yml`](../.github/workflows/mirror-selftest.yml) (dispatch only) checks the action on ubuntu-24.04 and ubuntu-26.04 with Docker Hub unreachable.
 - Not covered: pulls inside kind nodes, which skip dockerd (`postgres:16` is copied for a future `kind load`), and BuildKit container builders.
+
+### Go module cache for image builds
+
+`WARDYN_BUILD_GOMODCACHE` names a Go module cache directory. The e2e scripts pass its `cache/download` tree to the proxy and oracle builds as `--build-context gomodcache=<dir>`, so `go mod download` reads them. go.sum is checked against each module's recorded hash, as with any module cache. Unset, builds download.
 
 ### Self-hosted canary
 

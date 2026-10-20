@@ -12,6 +12,7 @@ package api
 import (
 	"cmp"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"regexp"
 	"slices"
@@ -56,6 +57,26 @@ const (
 	mp400EndpointOnly = "model_providers: %q: %s: path, auth_header and auth_format apply only to a custom_endpoint provider"
 	mp400Path         = "model_providers: %q: %s: path %q must start with a single / and carry no query, fragment, backslash, whitespace or .. segment"
 	mp400SignInImage  = "model_providers: %q: Claude subscriptions need the Claude Code sign-in image, which this install hasn't built yet. See Operations → Claude sign-in image."
+	// The local_model rules (#2957).
+	mp400LocalBaseURLNeed = "model_providers: %q: base_url is required for a local_model provider — the model server's address, such as http://host.docker.internal:11434"
+	mp400LocalPath        = "model_providers: %q: a local_model base_url is the server's root, scheme://host:port with no path — runs reach only the server's own inference routes"
+	mp400LocalLoopback    = "model_providers: %q: base_url %q names the proxy's own loopback, not the machine the model server runs on — use host.docker.internal on a laptop, or the node's address"
+	mp400LocalNeed        = "model_providers: %q: a local_model provider needs local.models — the exact model names its runs may use"
+	mp400LocalUnused      = "model_providers: %q: local applies only to a local_model provider"
+	mp400LocalCleartext   = "model_providers: %q: base_url %q would send the token unencrypted — use https:// to send a token off this machine (plain http with auth is for host.docker.internal, gateway.docker.internal or a 10/8, 172.16/12, 192.168/16 or 100.64/10 address)"
+	mp400LocalModels      = "model_providers: %q: local.models may list at most %d models"
+	mp400LocalModel       = "model_providers: %q: local.models: %q is not a model name a run may use — letters, digits and ._:@+[]- , no \"/\" (a registry or namespace) and no cloud tag"
+	mp400LocalModelDup    = "model_providers: %q: local.models lists %q twice"
+	mp400LocalBound       = "model_providers: %q: local.%s must be between 0 (the default, %d) and %d"
+	mp400LocalHarness     = "model_providers: %q: %s: model must be one of local.models — it is the model this agent asks for"
+)
+
+// maxLocalModels bounds a local_model provider's allowlist; maxLocalBound
+// bounds each of its request caps.
+const (
+	maxLocalModels    = 64
+	maxLocalBound     = 1 << 20
+	maxLocalKeepAlive = 24 * 60 * 60
 )
 
 // Name is the one free-text field on a record a member reads; bounded so a
@@ -99,7 +120,7 @@ func providerPublicHosts(k types.ModelProviderKind) []string {
 		return []string{"api.anthropic.com"}
 	case types.ModelProviderOpenAIAPIKey:
 		return []string{"api.openai.com"}
-	case types.ModelProviderCustomEndpoint:
+	case types.ModelProviderCustomEndpoint, types.ModelProviderLocalModel:
 		return []string{"api.anthropic.com", "api.openai.com"}
 	}
 	return nil
@@ -165,6 +186,16 @@ func normalizeModelProviders(p *types.ModelProviders) *types.ModelProviders {
 			}
 			mp.Auth.Header = cmp.Or(strings.TrimSpace(mp.Auth.Header), defaultEndpointAuthHeader)
 			mp.Auth.Format = cmp.Or(strings.TrimSpace(mp.Auth.Format), defaultEndpointAuthFormat)
+		}
+		// A local model server takes no token unless the admin says how to send one.
+		if mp.Kind == types.ModelProviderLocalModel && mp.Auth != nil {
+			mp.Auth.Header = cmp.Or(strings.TrimSpace(mp.Auth.Header), defaultEndpointAuthHeader)
+			mp.Auth.Format = cmp.Or(strings.TrimSpace(mp.Auth.Format), defaultEndpointAuthFormat)
+		}
+		if mp.Local != nil {
+			for j := range mp.Local.Models {
+				mp.Local.Models[j] = strings.TrimSpace(mp.Local.Models[j])
+			}
 		}
 		for j := range mp.Harnesses {
 			h := &mp.Harnesses[j]
@@ -238,7 +269,7 @@ func validateModelProviders(p *types.ModelProviders, env providerWriteEnv) ([]st
 			return nil, err
 		}
 		for _, check := range []func(types.ModelProvider) error{
-			validateProviderAddress, validateProviderAuth, validateProviderHarnesses,
+			validateProviderAddress, validateProviderAuth, validateProviderLocal, validateProviderHarnesses,
 		} {
 			if err := check(mp); err != nil {
 				return nil, err
@@ -297,21 +328,52 @@ func validateProviderAddress(mp types.ModelProvider) error {
 		return fmt.Errorf(mp400BaseURLBR, mp.ID)
 	case mp.Kind == types.ModelProviderCustomEndpoint && mp.BaseURL == "":
 		return fmt.Errorf(mp400BaseURLNeed, mp.ID)
+	case mp.Kind == types.ModelProviderLocalModel && mp.BaseURL == "":
+		return fmt.Errorf(mp400LocalBaseURLNeed, mp.ID)
 	case mp.BaseURL == "":
 		return nil
 	}
+	// A local model server speaks plain HTTP on the machine it runs on; the
+	// proxy dials it for its own route alone (proxy local_model.go).
+	local := mp.Kind == types.ModelProviderLocalModel
+	if local {
+		if u, err := url.Parse(mp.BaseURL); err == nil {
+			host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
+			if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+				return fmt.Errorf(mp400LocalLoopback, mp.ID, mp.BaseURL)
+			}
+			if u.Path != "" {
+				return fmt.Errorf(mp400LocalPath, mp.ID)
+			}
+			if mp.Auth != nil && u.Scheme == "http" && !localPlainHTTPHost(host) {
+				return fmt.Errorf(mp400LocalCleartext, mp.ID, mp.BaseURL)
+			}
+		}
+	}
 	for _, public := range providerPublicHosts(mp.Kind) {
-		if _, err := validateOneLLMGateway(public, mp.BaseURL, false); err != nil {
+		if _, err := validateOneLLMGateway(public, mp.BaseURL, local); err != nil {
 			return fmt.Errorf(mp400BaseURL, mp.ID, err)
 		}
 	}
 	return nil
 }
 
-// validateProviderAuth: the header scheme is a custom endpoint's alone, and its
-// two halves pass the same gates the boot gateway header/format knobs do.
+// localPlainHTTPHost reports whether a token may cross plain http to host: the
+// Docker host's own names, or a private IPv4 literal (RFC1918 or 100.64/10).
+// host is lower-cased with any trailing dot trimmed.
+func localPlainHTTPHost(host string) bool {
+	if host == "host.docker.internal" || host == "gateway.docker.internal" {
+		return true
+	}
+	ip, err := netip.ParseAddr(host)
+	return err == nil && ip.Is4() && (ip.IsPrivate() || netip.MustParsePrefix("100.64.0.0/10").Contains(ip))
+}
+
+// validateProviderAuth: the header scheme is a custom endpoint's or a local
+// model's alone, and its two halves pass the same gates the boot gateway
+// header/format knobs do.
 func validateProviderAuth(mp types.ModelProvider) error {
-	if mp.Kind != types.ModelProviderCustomEndpoint {
+	if mp.Kind != types.ModelProviderCustomEndpoint && mp.Kind != types.ModelProviderLocalModel {
 		if mp.Auth != nil {
 			return fmt.Errorf(mp400AuthUnused, mp.ID)
 		}
@@ -441,6 +503,8 @@ func validateProviderHarness(mp types.ModelProvider, h types.ProviderHarness) er
 		return fmt.Errorf(mp400ModelNeed, mp.ID, h.Harness)
 	case h.Model != "" && !modelIDPattern.MatchString(h.Model):
 		return fmt.Errorf(mp400Model, mp.ID, h.Harness, h.Model)
+	case mp.Kind == types.ModelProviderLocalModel && (mp.Local == nil || !slices.Contains(mp.Local.Models, h.Model)):
+		return fmt.Errorf(mp400LocalHarness, mp.ID, h.Harness)
 	}
 	if mp.Kind != types.ModelProviderCustomEndpoint {
 		if h.Path != "" || h.AuthHeader != "" || h.AuthFormat != "" {
@@ -452,6 +516,46 @@ func validateProviderHarness(mp types.ModelProvider, h types.ProviderHarness) er
 		return fmt.Errorf(mp400Path, mp.ID, h.Harness, h.Path)
 	}
 	return validateHeaderScheme(mp.ID, h.Harness, h.AuthHeader, h.AuthFormat)
+}
+
+// validateProviderLocal holds a local_model provider's allowlist to exact model
+// names a run may use (types.LocalModelNameRefused names the ones none may) and
+// its request caps to a sane range; local is a local_model provider's alone.
+func validateProviderLocal(mp types.ModelProvider) error {
+	l := mp.Local
+	if mp.Kind != types.ModelProviderLocalModel {
+		if l != nil {
+			return fmt.Errorf(mp400LocalUnused, mp.ID)
+		}
+		return nil
+	}
+	if l == nil || len(l.Models) == 0 {
+		return fmt.Errorf(mp400LocalNeed, mp.ID)
+	}
+	if len(l.Models) > maxLocalModels {
+		return fmt.Errorf(mp400LocalModels, mp.ID, maxLocalModels)
+	}
+	for i, m := range l.Models {
+		if !modelIDPattern.MatchString(m) || types.LocalModelNameRefused(m) {
+			return fmt.Errorf(mp400LocalModel, mp.ID, m)
+		}
+		if slices.Contains(l.Models[:i], m) {
+			return fmt.Errorf(mp400LocalModelDup, mp.ID, m)
+		}
+	}
+	for _, b := range []struct {
+		name     string
+		v, d, hi int
+	}{
+		{"max_context", l.MaxContext, types.DefaultLocalMaxContext, maxLocalBound},
+		{"max_output", l.MaxOutput, types.DefaultLocalMaxOutput, maxLocalBound},
+		{"keep_alive_seconds", l.KeepAliveSeconds, types.DefaultLocalKeepAliveSeconds, maxLocalKeepAlive},
+	} {
+		if b.v < 0 || b.v > b.hi {
+			return fmt.Errorf(mp400LocalBound, mp.ID, b.name, b.d, b.hi)
+		}
+	}
+	return nil
 }
 
 // validProviderPath: a Path extends BaseURL's path and may not change the host

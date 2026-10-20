@@ -294,7 +294,7 @@ func TestRunSignIn_Bounds(t *testing.T) {
 		}, false, http.StatusServiceUnavailable, `"reason":"run_sign_in_unreadable"`},
 		{"stderr only", func(b *boundSession) *runner.ExecSession {
 			// stdout: a process and an empty pane; the waiting read is on stderr
-			return &runner.ExecSession{Stdout: strings.NewReader(signInRead(true, "")), Stderr: io.MultiReader(strings.NewReader(waiting), &endless{b: 'e', closed: b.closed}),
+			return &runner.ExecSession{Stdout: strings.NewReader(signInRead(true, "")), Stderr: io.MultiReader(strings.NewReader(waiting), &endless{b: 'z', closed: b.closed}),
 				Wait: func() (int, error) { return 0, nil }, Close: b.close}
 		}, false, http.StatusOK, `"state":"not_waiting"`},
 		{"a blocked wait", func(b *boundSession) *runner.ExecSession {
@@ -314,6 +314,13 @@ func TestRunSignIn_Bounds(t *testing.T) {
 			logs := captureSlog(t)
 			b := &boundSession{closed: make(chan struct{})}
 			f := awsSignInFixture(t, func(runner.ExecSpec) (*runner.ExecSession, error) { return tc.sess(b), nil }, &captureProbeStore{})
+			// The run id is in the log line and is random hex: a sentinel made of hex
+			// digits would match it by chance, so pin an id that is all "e" and keep the
+			// sentinels outside the hex alphabet.
+			f.run.ID = uuid.MustParse("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee")
+			f.st.mu.Lock()
+			f.st.run.ID = f.run.ID
+			f.st.mu.Unlock()
 			f.srv.paneSnapshotTimeoutOverride = 300 * time.Millisecond
 			if tc.cancel {
 				f.srv.paneSnapshotTimeoutOverride = time.Minute
@@ -338,7 +345,7 @@ func TestRunSignIn_Bounds(t *testing.T) {
 			if !b.wasClosed() {
 				t.Error("the exec session was not closed")
 			}
-			for _, leak := range []string{"xxxx", "eeee", "user_code", "ABCD-EFGH"} {
+			for _, leak := range []string{"xxxx", "zzzz", "user_code", "ABCD-EFGH"} {
 				if strings.Contains(w.Body.String(), leak) || strings.Contains(logs.String(), leak) {
 					t.Errorf("pane text %q reached the answer or a log line", leak)
 				}

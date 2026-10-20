@@ -184,6 +184,14 @@ var gates = map[string]func(LocalPlan) *Refusal{
 		}
 		return nil
 	},
+	// A local model server is the organisation's or the laptop host's network,
+	// never sent with the run (#2957: the runner path is a later design).
+	"ProxyConfig.LocalModels": func(p LocalPlan) *Refusal {
+		if len(p.Spec.ProxyConfig.LocalModels) != 0 {
+			return refuse(ReasonPlacementCredential, "ProxyConfig.LocalModels", "credential variant has no permitted local rule")
+		}
+		return nil
+	},
 	// The Resource Manager token is redeemed and held on the organisation's side.
 	"ProxyConfig.AzureARM": func(p LocalPlan) *Refusal {
 		if p.Spec.ProxyConfig.AzureARM != nil {

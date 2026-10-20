@@ -79,6 +79,11 @@ listen
 llm_channel_hosts
 llm_unavailable_detail
 llm_upstreams
+local_models
+local_models.*.keep_alive_seconds
+local_models.*.max_context
+local_models.*.max_output
+local_models.*.models
 mcp_bindings
 mcp_bindings.harness
 mcp_bindings.servers
@@ -116,6 +121,9 @@ policy.first_use_approval
 policy.first_use_hold_seconds
 policy.git_push_any_branch
 policy.github_capabilities
+policy.harness_inner_walls
+policy.harness_inner_walls.approvals
+policy.harness_inner_walls.sandbox_mode
 policy.llm_inspection
 policy.llm_inspection.block_min_severity
 policy.llm_inspection.classified_markers
@@ -162,6 +170,7 @@ policy.workspace_repos
 policy.workspace_repos.ref
 policy.workspace_repos.repo
 policy.workspace_repos.target
+port_rule
 push_rule_base
 push_rule_base.deny_new_executables
 push_rule_base.deny_paths
@@ -199,3 +208,4 @@ upstream_proxy_url
 via_org_routes
 via_org_routes.grant_id
 via_org_routes.host
+vm

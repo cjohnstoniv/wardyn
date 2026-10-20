@@ -214,6 +214,11 @@ export function HarnessLoginPane({
   // The run's run.interactive.start audit row has landed: the sandbox is up, whatever the last state read said.
   const [interactiveStarted, setInteractiveStarted] = React.useState(false);
   const interactiveStartedRef = React.useRef(false);
+  // The other two witnesses the step list follows (signInStepOf): the sign-in read put a device code on
+  // screen, and a read of the run said RUNNING. Latched until the next launch, like the audit row.
+  const [codeShown, setCodeShown] = React.useState(false);
+  const onCodeShown = React.useCallback(() => setCodeShown(true), []);
+  const [running, setRunning] = React.useState(false);
   // When this launch began, as the run page's sign-in read wants it (its grace window counts from here).
   const [launchedAt, setLaunchedAt] = React.useState("");
   // Finding 7b: the CLI's own success line — a HINT (S-13's own reasoning), never trusted alone.
@@ -306,6 +311,8 @@ export function HarnessLoginPane({
     setPulling(false);
     interactiveStartedRef.current = false;
     setInteractiveStarted(false);
+    setCodeShown(false);
+    setRunning(false);
     setImageFailed(false);
     setTabOpened(false);
     try {
@@ -423,6 +430,7 @@ function startingSentenceOf(run: AgentRun | undefined): string {
     }
     if (!run) return;
     if (run.state === "RUNNING") {
+      setRunning(true);
       setEverAttached(true);
       setPhase("attached");
       return;
@@ -697,6 +705,7 @@ function startingSentenceOf(run: AgentRun | undefined): string {
     };
   }, [watchEligible, flow.capture, provider, modelProvider, runId]);
 
+  const startingStep = signInStepOf({ pulling, running, interactiveStarted, codeShown });
   return (
     <div className="space-y-3 rounded-lg border border-border bg-surface-2/40 p-3" data-testid="harness-login-pane">
       {/* State 7: the list stops at the step that failed, above its reason. */}
@@ -719,15 +728,15 @@ function startingSentenceOf(run: AgentRun | undefined): string {
           killed on arrival; after it, the id is killed directly. */}
       {(phase === "launching" || phase === "starting") && (
         <div className="space-y-2" data-testid="login-sandbox-starting">
-          <SignInSteps step={signInStepOf({ pulling, interactiveStarted })} provider={flow.providerName} />
+          <SignInSteps step={startingStep} provider={flow.providerName} />
           {/* A failing read outranks everything; a download says so plainly;
               otherwise only a slow start earns a line — the substrate's
               reason when it has one, the clock's hedged guess when not. */}
-          {(waitNote === "retrying" || pulling || interactiveStarted || waitNote === "slow") && (
+          {(waitNote === "retrying" || pulling || startingStep === "wait" || waitNote === "slow") && (
             <p role="status" className="text-xs leading-relaxed text-muted-foreground">
               {waitNote === "retrying"
                 ? LOGIN_SANDBOX_READ_RETRYING
-                : interactiveStarted
+                : startingStep === "wait"
                   ? SIGNIN_PROGRESS.WAIT_HINT(flow.providerName)
                   : pulling
                     ? SIGNIN_PROGRESS.DOWNLOAD_HINT
@@ -737,7 +746,7 @@ function startingSentenceOf(run: AgentRun | undefined): string {
           {/* The sandbox's own device code, as the run page shows it, from the moment the
               sign-in reports one — before the terminal is attached. Only the AWS sign-in
               has a device code to read (the route 409s the others). */}
-          {flow.capture === "helper" && runId && launchedAt && <RunSignInStrip runId={runId} createdAt={launchedAt} />}
+          {flow.capture === "helper" && runId && launchedAt && <RunSignInStrip runId={runId} createdAt={launchedAt} onWaiting={onCodeShown} />}
           <Button size="sm" variant="ghost" onClick={cancel}>
             {SIGNIN_PROGRESS.CANCEL}
           </Button>

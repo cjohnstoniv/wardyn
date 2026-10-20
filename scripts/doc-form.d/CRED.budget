@@ -11,4 +11,7 @@
 # docs/CREDENTIALS.md 4000 adds 19 (0.10.0 SEC-1 round 2), measured: the placeholder fills only the Authorization header, and the response-echo caveat.
 # docs/CREDENTIALS.md 4278 is 3962 + 4000 - 3684: both sides' additions over the merge base.
 # docs/CREDENTIALS.md 4321 adds 43 over 4278, measured: AWS re-signing covers the lanes the proxy re-signs, which hosts keep a lane on its old path, what the role may still obtain, and where a runner-served wipe failure is logged.
-docs/CREDENTIALS.md=4321 share=35
+# 0.10 MDL: docs/CREDENTIALS.md 3696 adds 12 over 3684, measured: #2957 local_model joins the token kinds row.
+# docs/CREDENTIALS.md 4012 = ours 4000 + theirs 3696 - base 3684 at the 0.10 W2 merge of MDL onto the train.
+# docs/CREDENTIALS.md 4333 = ours 4321 + theirs 3997 - base 4000 = 4318 at the 0.10 merge of main (W2) into SEC-1c; measured 4333.
+docs/CREDENTIALS.md=4333 share=35
