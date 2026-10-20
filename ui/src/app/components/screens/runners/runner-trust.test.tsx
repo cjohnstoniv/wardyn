@@ -7,12 +7,17 @@
 // not read from the copy module, so a drift in them fails this suite. The organization spelling is the
 // console's ("Organization"), per the owner's ruling.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { toast } from "sonner";
 
 const setTrustMock = vi.fn();
 vi.mock("../../../lib/api/runners", () => ({ runners: { setTrust: (...a: unknown[]) => setTrustMock(...a), revoke: vi.fn() } }));
+const listChangesMock = vi.fn();
+vi.mock("../../../lib/api/governance", async (orig) => ({
+  ...(await orig<typeof import("../../../lib/api/governance")>()),
+  governance: { listChanges: () => listChangesMock() },
+}));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 import { HttpError, PendingChangeError } from "../../../lib/api/core";
@@ -60,6 +65,7 @@ const trigger = () => screen.getByRole("combobox", { name: "Trust class" });
 
 beforeEach(() => {
   setTrustMock.mockReset();
+  listChangesMock.mockReset();
   onChanged.mockReset();
   vi.mocked(toast.success).mockReset();
 });
@@ -137,6 +143,31 @@ describe("Admin -> Runners trust class: a person's runner, a security admin", ()
     expect(screen.queryByRole("alert")).toBeNull();
     // Another save would meet the 409 for the proposal already waiting, so Save stays off until it resolves.
     expect(screen.getByRole("button", { name: "Change trust class" })).toBeDisabled();
+  });
+
+  it("a held proposal that is rejected or withdrawn frees Save again, and one still pending keeps it off", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      setTrustMock.mockRejectedValue(new PendingChangeError({ id: "chg-1" } as GovernanceChange));
+      listChangesMock.mockResolvedValue([{ id: "chg-1" }]);
+      open(runner());
+      await user.click(await screen.findByRole("combobox", { name: "Trust class" }));
+      await user.click(screen.getByRole("option", { name: "Managed device" }));
+      setField(screen.getByLabelText(/^Reason/), "Enrolled");
+      const save = () => screen.getByRole("button", { name: "Change trust class" });
+      await user.click(save());
+      await screen.findByText("Held for a second person.");
+      await act(() => vi.advanceTimersByTimeAsync(16_000));
+      expect(listChangesMock).toHaveBeenCalled();
+      expect(save()).toBeDisabled();
+      listChangesMock.mockResolvedValue([]);
+      await act(() => vi.advanceTimersByTimeAsync(16_000));
+      expect(save()).toBeEnabled();
+      expect(screen.queryByText("Held for a second person.")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("shows the server's own sentence when it refuses, and does not re-read", async () => {
