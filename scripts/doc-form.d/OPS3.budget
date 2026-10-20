@@ -100,7 +100,8 @@ docs/operations/custom-components.md=1269 share=35
 # docs/operations/api-tokens.md 5540 adds 11 over 5529 (0.9.3 FIN-E), measured: the unbind refusals for a sponsor or a pending invitation.
 # docs/operations/api-tokens.md 5582, measured at the FIN-E2 merge into the final train (both sides' sentences).
 # docs/operations/api-tokens.md=5582 adds 8 (0.10): unbind is refused while a runner or runner token is held.
-docs/operations/api-tokens.md=5590 share=35
+# 0.10 ATT-LOGIN-SRV: docs/operations/api-tokens.md 5948 adds 358 over 5590: the CLI sign-in section, measured.
+docs/operations/api-tokens.md=5948 share=35
 # G-1423 r1: docs/operations/denials.md 4709 adds 32 over 4677 for the audit-only delegation_scope source.
 # docs/operations/denials.md 4786 adds 77 (0.9 G-sec-rest): the exec relay rows (#1976) and the audit_retention_actor_reserved row.
 # D-108-114 merge: docs/operations/denials.md 4806 adds 20 over 4786 for the runs.placement cause of governance_profile.

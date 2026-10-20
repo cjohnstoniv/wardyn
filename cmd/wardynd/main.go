@@ -537,6 +537,7 @@ func run() error {
 		SyncDeny:             api.SplitSyncDeny(*f.syncDeny),
 		LocalFolderSeedWait:  *f.localFolderSeedWait,
 		APITokenMaxTTL:       *f.apiTokenMaxTTL,
+		CLISignIn:            f.cliSignIn.config(*f.oidcRedirectURL),
 		RoleStampTTL:         *f.roleStampTTL,
 		// The SSH gateway's established-connection ceiling and per-source handshake bound.
 		SSHMaxConnections:         *f.sshMaxConns,

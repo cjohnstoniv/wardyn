@@ -310,6 +310,11 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_LOCAL_FOLDER_SEED_WAIT` | duration | `10m` | how long a run holds its agent for its `local_folder`'s first sync (flag `-local-folder-seed-wait`). [Details](#wardyn_local_folder_seed_wait) |
 | `WARDYN_SSH_ROLE_TTL` | duration | `24h` | how stale a registered SSH key's admin-override stamp may be before `sshAuth` refuses the override (flag `-ssh-role-ttl`); since 0.8.5 it bounds only runs with no personal owner. [Details](#wardyn_ssh_role_ttl) |
 | `WARDYN_API_TOKEN_MAX_TTL` | duration | (unset: no cap) | longest lifetime a newly minted per-user API token may have (flag `-api-token-max-ttl`); with no cap set, an omitted TTL means the token never expires. [Details](#wardyn_api_token_max_ttl) |
+| `WARDYN_CLI_SIGN_IN` | bool | `false` | lets `wardyn login` sign a CLI in through the console (flag `-cli-sign-in`); needs SSO. [Details](#wardyn_cli_sign_in) |
+| `WARDYN_CLI_PASTE_SIGN_IN` | bool | `false` | lets `wardyn login --no-browser` sign in by pasting a code from the console, for a computer with no browser (flag `-cli-paste-sign-in`). [Details](#wardyn_cli_paste_sign_in) |
+| `WARDYN_CLI_FILE_STORE` | bool | `true` | lets a computer with no keychain keep its CLI sign-in in a file only its owner can read, capped at 7 days; `false` refuses those sign-ins (flag `-cli-file-store`). [Details](#wardyn_cli_file_store) |
+| `WARDYN_CLI_SESSION_TTL` | duration | (unset = 30 days) | how long a CLI sign-in lasts from approval, however often it renews; `1h` to `2160h` (90 days) (flag `-cli-session-ttl`). [Details](#wardyn_cli_session_ttl) |
+| `WARDYN_CLI_SESSION_IDLE` | duration | (unset = 7 days) | ends a CLI sign-in that has not renewed for this long; at most the TTL (flag `-cli-session-idle`). [Details](#wardyn_cli_session_idle) |
 | `WARDYN_ROLE_STAMP_TTL` | duration | (unset = off) | the oldest an API token's or console session's role stamp may be (flag `-role-stamp-ttl`); an older stamp sends the owner through sign-in again. Unset or `0` changes nothing. [Details](#wardyn_role_stamp_ttl) |
 | `WARDYN_OIDC_SESSION_TTL` | duration | (unset = the ID token's expiry) | how long a console SSO session lasts from sign-in (flag `-oidc-session-ttl`); unset or `0` ends it at the ID token's expiry, about an hour on Entra ID. Boot refuses a negative value or one above `24h`. [Details](#wardyn_oidc_session_ttl) |
 | `WARDYN_OIDC_SESSION_RENEW_CAP` | duration | (unset = off) | renews a console session on console activity, never past this long after sign-in (flag `-oidc-session-renew-cap`). Unset or `0` changes nothing. Boot refuses a negative value or one above `24h`. [Details](#wardyn_oidc_session_renew_cap) |
@@ -1640,6 +1645,39 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - With no cap set, an omitted TTL means the token never expires.
 - Applies to tokens minted after it is set and never shortens an existing one; `0` or unset means no cap.
 - An expired token is refused with the same `401` as a revoked one — see [OPERATIONS.md](OPERATIONS.md), "Per-user API tokens: stop sharing the admin token".
+
+### `WARDYN_CLI_SIGN_IN`
+
+- Turns on CLI sign-in (flag `-cli-sign-in`): `wardyn login` opens the console, the person approves the computer there, and the CLI gets a session.
+- Off by default. While off, every `/api/v1/cli/` and `/api/v1/me/cli-` route answers `404` and `/healthz` reports `cli_sign_in: false`.
+- Needs SSO: with no OIDC provider configured it stays off whatever this says.
+- Approving needs what minting an API token needs: a signed-in person in admin mode, the `api_token` feature.
+- The session secret is kept on the laptop, in the keychain or (see `WARDYN_CLI_FILE_STORE`) a file; what protects it and what it does not stop is in [THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md).
+- Every request the CLI makes uses a 1-hour access token, or `WARDYN_API_TOKEN_MAX_TTL` when that is shorter; each renewal re-checks revokes, sessions cuts, deactivation, the role stamp and the feature, and rotates the secret.
+- A revoke, Sign out everywhere, a console sign-out and a sign-out of that computer end it at once.
+
+### `WARDYN_CLI_PASTE_SIGN_IN`
+
+- Lets `wardyn login --no-browser` sign in on a computer with no browser (flag `-cli-paste-sign-in`): the person approves in a browser elsewhere and pastes a code back into the CLI.
+- Off by default, because a pasted code can be phished more easily than a loopback redirect; the code lasts 5 minutes and works once, and the request lasts 10 minutes.
+- Has no effect unless `WARDYN_CLI_SIGN_IN` is on.
+
+### `WARDYN_CLI_FILE_STORE`
+
+- Whether a computer with no keychain (most often a Linux server) may keep its CLI sign-in in a file only its owner can read (flag `-cli-file-store`).
+- On by default; such a sign-in lasts at most 7 days whatever `WARDYN_CLI_SESSION_TTL` says.
+- `false` refuses a sign-in from a CLI that reports the file store, `403` `cli_file_store_off`.
+
+### `WARDYN_CLI_SESSION_TTL`
+
+- How long a CLI sign-in lasts from approval, however often it renews (flag `-cli-session-ttl`).
+- Unset or `0` is 30 days. Boot refuses a value under `1h` or over `2160h` (90 days).
+- Applies to sign-ins approved after it is set.
+
+### `WARDYN_CLI_SESSION_IDLE`
+
+- Ends a CLI sign-in that has not renewed for this long (flag `-cli-session-idle`).
+- Unset or `0` is 7 days. Boot refuses a negative value or one longer than the TTL in effect.
 
 ### `WARDYN_ROLE_STAMP_TTL`
 

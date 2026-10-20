@@ -22,6 +22,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -207,7 +208,14 @@ func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 			fallback.ServeHTTP(w, r)
 			return
 		}
-		ctx := withHumanIdentity(r.Context(), t.Principal, t.Email, t.Role, t.UserType, t.Groups,
+		// A cli_access token publishes the role user whatever the person's role: the same downward-only
+		// clamp the user view applies (oidc contextWithPrincipal). Admin reach from the CLI is the 1-hour
+		// cli_admin step-up (wardyn login --admin).
+		role := t.Role
+		if t.Kind == types.APITokenKindCLIAccess {
+			role = oidc.RoleUser
+		}
+		ctx := withHumanIdentity(r.Context(), t.Principal, t.Email, role, t.UserType, t.Groups,
 			t.GroupsTruncated == nil || *t.GroupsTruncated)
 		next.ServeHTTP(w, r.WithContext(withAPITokenID(oidc.WithRevocationSeq(ctx, t.Principal, t.RevSeq), t.ID)))
 	})
@@ -493,7 +501,8 @@ func (s *Server) mintSessionLive(w http.ResponseWriter, r *http.Request, sub str
 
 // mintAuditDetail is the data of a token.create row; an invitation's claim adds the invitation id.
 func mintAuditDetail(created types.APIToken, clampedFrom time.Duration, invitation *uuid.UUID) map[string]any {
-	detail := map[string]any{"name": created.Name, "role": created.Role, "user_type": created.UserType}
+	detail := map[string]any{"name": created.Name, "role": created.Role, "user_type": created.UserType,
+		"kind": cmp.Or(created.Kind, types.APITokenKindAPI)}
 	if created.ExpiresAt != nil {
 		detail["expires_at"] = created.ExpiresAt
 	}

@@ -678,6 +678,8 @@ type Config struct {
 	// asks for no TTL gets this one; a mint that asks for more is clamped to it.
 	// It never touches a token already minted.
 	APITokenMaxTTL time.Duration
+	// CLISignIn is CLI sign-in (wardyn login, cli_sign_in.go); the zero value is off.
+	CLISignIn CLISignInConfig
 	// RoleStampTTL is WARDYN_ROLE_STAMP_TTL: the oldest an API token's role and
 	// group stamp (api_tokens.identity_stamped_at) may be before apiTokenAuth
 	// refuses it until its owner signs in again. Zero, the default, is off: no
@@ -906,6 +908,7 @@ type Server struct {
 	preflightLimiter     *principalLimiter
 	policyPreviewLimiter *principalLimiter
 	deviceRouteState     // the device routes' process state (server_devices.go)
+	cliSignInState       // CLI sign-in's rate limiters (cli_sign_in.go)
 	scimState            // the SCIM routes' rate limiters (scim_auth.go)
 	runLeaseState        // the run lease sweep's process state (run_lease_server.go)
 	// pause is the pause sweep's process-local state (run_pause.go).
