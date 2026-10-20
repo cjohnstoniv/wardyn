@@ -111,7 +111,8 @@
 # docs/OPERATIONS.md 56797 = ours 56777 + theirs 56764 - base 56744 at the 0.10 W2 merge of HRN onto the train.
 # docs/OPERATIONS.md 57339: measured after the main merge.
 # docs/OPERATIONS.md 57392 = ours 56797 + theirs 57339 - base 56744 at the 0.10 W2 merge of MDL onto the train.
-docs/OPERATIONS.md=57392 share=35
+# docs/OPERATIONS.md 57417 adds 25 over 57392 (0.10 FEAT-2SCHED): the 0198 run_queue start_at migration line.
+docs/OPERATIONS.md=57417 share=35
 # docs/OPERATIONS.md 55848 adds 132 over 55716: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
 # docs/OPERATIONS.md 55840 adds 124 over 55716, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # docs/OPERATIONS.md 55867 adds 27 over 55840, measured: a run whose runner cannot be asked falls back to this deployment's runner, the older-runner exception, pooled runs, and the runner_offline gap reason.

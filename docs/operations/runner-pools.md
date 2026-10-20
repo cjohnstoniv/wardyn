@@ -128,21 +128,14 @@ A launch waits, stored `QUEUED`, when its pool is running its Runs at once or wh
 
 ### Scheduled runs
 
-A run can be scheduled to start once, later, when the server sets [`WARDYN_SCHEDULED_RUNS`](../ENV.md#wardyn_scheduled_runs). Repeating schedules are not built.
+With [`WARDYN_SCHEDULED_RUNS`](../ENV.md#wardyn_scheduled_runs) set, a run can be scheduled to start once, later. Repeating schedules are not built.
 
-| Wait reason | When | The run says |
-|---|---|---|
-| `scheduled` | Its start time is still ahead. | "This run is scheduled to start at {time} ({zone})." |
-| `owner_sign_in` | It is due, and its owner's sign-in to its model provider has expired with nothing to renew it. | Nothing new: it starts once the owner signs in again, or ends `queue_timeout`. |
-
-- `start_at` and `start_time_zone` on `POST /api/v1/runs` (`wardyn run --start-at 2026-10-21T02:00 --time-zone Europe/London`) take a date and time in an IANA zone, or an RFC 3339 time.
-- The start must be in the future and at most 7 days ahead. Off, the request is refused `scheduled_runs_off`; a past time `start_at_past`, a later one `start_at_too_far`, a malformed one `start_at_invalid`.
-- The run waits `QUEUED` in its pool, holding no credential, and `queue.start_at` and `queue.time_zone` say when. Nothing judges or starts it before then.
-- At its time it joins its pool's line as if it had launched then, and starts like any waiting run. Its owner's access, profile, policy and doors are checked again first, so the reasons above end it too.
-- Its wait (`max_wait_sec`) counts from its start time, and it is held at most 7 days from the request.
-- Cancel it with `POST /api/v1/runs/{id}/kill` (`wardyn run kill`): whoever may kill the run may cancel it.
-- A group removed at the identity provider is seen only through a session cut (SCIM removes the person from the group), as for any waiting run.
-- Turning the switch off refuses new schedules; runs already scheduled still start at their time.
+- `start_at` and `start_time_zone` on `POST /api/v1/runs` (`wardyn run --start-at 2026-10-21T02:00 --time-zone Europe/London`): a date and time in an IANA zone, or an RFC 3339 time.
+- It must be in the future and at most 7 days ahead, else `start_at_past` or `start_at_too_far`; switched off, `scheduled_runs_off`.
+- The run waits `QUEUED` with the reason `scheduled` and its `queue.start_at`, holding no credential, until then.
+- At its time it joins its pool's line and starts like any waiting run, after the same checks. Its wait counts from then, held at most 7 days from the request.
+- If its owner's model sign-in has expired with nothing to renew it, it waits with the reason `owner_sign_in` until they sign in again.
+- Cancel it like any waiting run. Switching off refuses new schedules only.
 
 ## Your own pools
 

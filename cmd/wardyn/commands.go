@@ -321,39 +321,6 @@ func printPreflight(ctx context.Context, w io.Writer, c *sdk.Client, body sdk.Cr
 	return tw.Flush()
 }
 
-// applyQueueWait sets the request's max_wait_sec from --max-wait or, with --wait, from --timeout. A
-// --max-wait under a second is refused; a document's own max_wait_sec stands unless --max-wait is given.
-func applyQueueWait(body *sdk.CreateRunRequest, given bool, maxWait time.Duration, wait bool, timeout time.Duration) error {
-	if given && maxWait < time.Second {
-		return fmt.Errorf("--max-wait must be at least 1s, got %s", maxWait)
-	}
-	if sec := queueWaitSec(maxWait, wait, timeout); sec != nil && (given || body.MaxWaitSec == nil) {
-		body.MaxWaitSec = sec
-	}
-	return nil
-}
-
-// queueWaitSec is the max_wait_sec to send: --max-wait when given, else with --wait the --timeout minus
-// 60s for a --timeout of 2m or more (so never under 60s), and half of --timeout (at least 1s) for a
-// shorter one. The aim is for the server to end a run that waits too long (queue_timeout, exit 1)
-// before the CLI gives up on it (exit 124); it is only the limit asked of the server. nil sends
-// nothing and leaves the server's default.
-func queueWaitSec(maxWait time.Duration, wait bool, timeout time.Duration) *int {
-	d := maxWait
-	switch {
-	case d > 0:
-	case wait:
-		d = max(timeout-time.Minute, time.Minute)
-		if timeout > 0 && timeout < 2*time.Minute {
-			d = max(timeout/2, time.Second)
-		}
-	default:
-		return nil
-	}
-	sec := int(d / time.Second)
-	return &sec
-}
-
 // waitPollInterval is how often --wait polls the run state (var for tests).
 var waitPollInterval = 2 * time.Second
 

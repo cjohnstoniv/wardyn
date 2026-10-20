@@ -15,4 +15,5 @@
 # docs/operations/runner-pools.md 2025 = 1980 + 45, measured: the per-replica terminal session cap
 # docs/operations/runner-pools.md 2017 = 1980 + 37, measured: the runner_pool_recording_store_off wait-reason row
 # docs/operations/runner-pools.md 2062 = 2025 + 37, measured: both sides after the final-train merge: the per-replica session cap and the recording-store wait row
-docs/operations/runner-pools.md=2062 share=35
+# docs/operations/runner-pools.md 2207 adds 145 over 2062 (0.10 FEAT-2SCHED): the Scheduled runs section.
+docs/operations/runner-pools.md=2207 share=35
