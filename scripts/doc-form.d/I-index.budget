@@ -19,7 +19,9 @@ README.md=2339 share=35
 # docs/README.md 784 = 767 + 17, measured: the how-Wardyn-is-built index row
 # docs/README.md 793 adds 26 over 767 (0.9.3 K7): the organisation-runner-in-a-cluster row, measured.
 # docs/README.md 810 measured at the 0.9.3 forward-port: both index rows above.
-docs/README.md=810 share=35
+# docs/README.md 824 adds 14 over 810, measured (0.10 LAY-A): the org walls task row.
+# docs/README.md 827 measured (0.10 BOUNDARY): the org walls renamed the Wardyn boundary, with modes.
+docs/README.md=827 share=35
 # docs/TRY-IT.md 3209 adds 8: the demo/default difference names idle auto-stop.
 # docs/TRY-IT.md 3243 adds 34: the branch-confinement warning names what the token broker reads and when it confines.
 # docs/TRY-IT.md 3254 adds 11: the default policy's model access goes through a model provider, not an authored grant.

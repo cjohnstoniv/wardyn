@@ -385,6 +385,13 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 		writeErrorReason(w, http.StatusConflict, reasonCredentialReauthNotDecidable, credentialReauthNotDecidableBody)
 		return
 	}
+	// The Wardyn boundary bounds every decider's approve (boundary_meet.go), after the member gate so the
+	// refusal is never an existence oracle.
+	if approve && ap.Kind == types.ApprovalEgressDomain {
+		if run, haveRun, ok = s.boundaryAdmitApproval(w, r, ap, run, haveRun); !ok {
+			return
+		}
+	}
 
 	// Rule 4 — a scope must MEAN something on the kind it is written to, and the
 	// two kinds differ in what "something" is.

@@ -20,7 +20,9 @@ import (
 //
 //   - a late host addition appears, or one goes, that lateAddCensus does not
 //     list (a union helper call, an append to an allowlist, an allowlist
-//     assigned from a call, allow_all_egress set to anything but false or nil);
+//     assigned from a call, a variable or an append onto another list, a whole
+//     Policy replaced by a call's result, allow_all_egress set to anything but
+//     false or nil);
 //   - a sealed path (dispatchRun, reviveRunProxy) does not call the seal once,
 //     after its ceiling re-assertion, or after the seal adds a host itself or
 //     hands the sealed value to anything that can reach a late addition (the
@@ -38,6 +40,11 @@ import (
 // "file function" and how many it holds. A new one is only listed once it runs
 // before the seal on every path that dispatches or revives a run.
 var lateAddCensus = map[string]int{
+	"boundary.go validateBoundarySpec":                          1,
+	"inline_policy_bounds.go narrowUserInlinePolicy":            1,
+	"profile.go handleSynthesizeProfile":                        1,
+	"run_policy_resolution.go boundRunUserSpecDrops":            1,
+	"runs_dispatch_gitbroker.go confineGitBrokerEgress":         1,
 	"components_run.go expand":                                  1,
 	"integrations_run.go applyIntegrationRequirement":           1,
 	"policy_preview.go unionPreviewWorkspaceEgress":             1,
@@ -151,6 +158,17 @@ func lateAddsIn(fset *token.FileSet, name string, f *ast.File) []lateAdd {
 						!isQualified(call.Fun, "slices", "DeleteFunc") && !isQualified(call.Fun, "slices", "Clone") {
 						at(n, false)
 					}
+					// An allowlist taken from a variable, or appended onto another list.
+					if id, ok := n.Rhs[i].(*ast.Ident); ok && isField(lhs, "AllowedDomains") && id.Name != "nil" {
+						at(n, false)
+					}
+					if isField(lhs, "AllowedDomains") && isCall && isBare(call.Fun, "append") && len(call.Args) > 0 && !mentionsField(call.Args[0], "AllowedDomains") {
+						at(n, false)
+					}
+					// A whole policy replaced by what a call returns, but for the calls read to keep its hosts.
+					if isField(lhs, "Policy") && isCall && !keepsHosts(call) {
+						at(n, false)
+					}
 					if isField(lhs, "AllowAllEgress") && !isBare(n.Rhs[i], "false") && !isBare(n.Rhs[i], "nil") {
 						at(n, false)
 					}
@@ -160,6 +178,15 @@ func lateAddsIn(fset *token.FileSet, name string, f *ast.File) []lateAdd {
 		})
 	}
 	return out
+}
+
+// hostKeepingCalls are the methods a whole policy may be replaced by without being a site: each was
+// read and returns its policy's hosts unchanged (a copy, or the copy with its inspection corpus restored).
+var hostKeepingCalls = []string{"Clone", "restoredOn"}
+
+func keepsHosts(call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	return ok && slices.Contains(hostKeepingCalls, sel.Sel.Name)
 }
 
 // sealCensus is the guard over a parsed package: the late additions it found
@@ -438,6 +465,12 @@ func (s *Server) postSeal() { later(nil) }`, 0, 1},
 func f(p *types.RunPolicySpec) { p.AllowedDomains = append(p.AllowedDomains, "x") }`, 0, 1},
 		{"an allowlist from a call is a site, a filter is not", `
 func f(p *types.RunPolicySpec) { p.AllowedDomains = widen(p.AllowedDomains); p.AllowedDomains = slices.DeleteFunc(p.AllowedDomains, nil) }`, 0, 1},
+		{"an allowlist from a variable is a site, nil is not", `
+func f(p *types.RunPolicySpec, wide []string) { p.AllowedDomains = wide; p.AllowedDomains = nil }`, 0, 1},
+		{"an allowlist appended onto another list is a site", `
+func f(p *types.RunPolicySpec, wide []string) { p.AllowedDomains = append(wide, "x") }`, 0, 1},
+		{"a whole policy replaced by a call is a site", `
+func f(cfg *proxy.Config) { cfg.Policy = widen(cfg.Policy); cfg.Policy = cfg.Policy.Clone() }`, 0, 1},
 		{"allow_all_egress turned on is a site, off is not", `
 func f(p *types.RunPolicySpec) { p.AllowAllEgress = true; p.AllowAllEgress = false }`, 0, 1},
 		{"an unsealed proxy sink", `
@@ -486,5 +519,65 @@ func (s *Server) widenLate(p *types.RunPolicySpec) { p.AllowedDomains = append(p
 				t.Error("the guard reported nothing")
 			}
 		})
+	}
+}
+
+// dispatchRunCallers is every function that calls dispatchRun, as "file function", and how many
+// times. dispatchRun seals its run itself (sealedPaths), so each caller is sealed; a new caller is a
+// new way to dispatch a run, so it fails here until it is read and listed.
+var dispatchRunCallers = map[string]int{
+	"harnesscred_launch.go finishHarnessLoginLaunch": 1,
+	"runs_create_launch.go finishCreateRunLaunch":    1,
+	"site_config_probe.go runSiteConfigProbe":        1,
+	"workspace_run_launch.go dispatchAndSettle":      1,
+}
+
+// dispatchRunCallsIn counts the calls of dispatchRun in files by enclosing function.
+func dispatchRunCallsIn(files map[string]*ast.File) map[string]int {
+	out := map[string]int{}
+	for name, f := range files {
+		for _, d := range f.Decls {
+			fn, ok := d.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				if call, ok := n.(*ast.CallExpr); ok {
+					if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "dispatchRun" {
+						out[name+" "+fn.Name.Name]++
+					}
+				}
+				return true
+			})
+		}
+	}
+	return out
+}
+
+// TestEveryDispatchRunCallerIsSealed: every caller of dispatchRun is listed, and dispatchRun is a
+// sealed path, so every run they dispatch is sealed against its outer layers.
+func TestEveryDispatchRunCallerIsSealed(t *testing.T) {
+	_, files := parsePackageSources(t, ".")
+	if got := dispatchRunCallsIn(files); !maps.Equal(got, dispatchRunCallers) {
+		t.Errorf("dispatchRun callers = %v, want dispatchRunCallers %v", got, dispatchRunCallers)
+	}
+	if _, ok := sealedPaths["dispatchRun"]; !ok {
+		t.Error("dispatchRun is not a sealed path")
+	}
+}
+
+// TestDispatchRunCallerCensusFlagsAPlantedTwin: a second dispatch door, a twin of a listed caller,
+// is reported.
+func TestDispatchRunCallerCensusFlagsAPlantedTwin(t *testing.T) {
+	_, files := parsePackageSources(t, ".")
+	f, err := parser.ParseFile(token.NewFileSet(), "planted.go", `package api
+func (s *Server) finishCreateRunLaunchTwin() { s.dispatchRun(nil, nil, nil, nil) }`, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files["planted.go"] = f
+	got := dispatchRunCallsIn(files)
+	if maps.Equal(got, dispatchRunCallers) || got["planted.go finishCreateRunLaunchTwin"] != 1 {
+		t.Errorf("a planted dispatch door went unseen: %v", got)
 	}
 }

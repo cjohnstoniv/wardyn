@@ -155,6 +155,7 @@ Then set `WARDYN_GOVERNANCE_SECOND_HUMAN` (and, if `72h` is wrong for your appro
 | Key-domain assignment set, delete | always | security admin or super admin |
 | Service identity create, and a PATCH that changes the sponsor | always (the PATCH whole) | security admin or super admin |
 | Egress baseline (`PUT /governance/egress-baseline`) | always | security admin or super admin |
+| The Wardyn boundary (`PUT /governance/boundary`, see [boundary.md](boundary.md)) | always | security admin or super admin |
 | Credential delivery policy (`PUT /governance/credential-delivery`) | always | security admin or super admin |
 | Runner pool use policy set, delete | always | security admin or super admin |
 | Remote-hosted runner people policy set, delete | always | security admin or super admin |

@@ -203,7 +203,6 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// Marked before any gate runs, refuseAdminViewLaunch included: every audit row
 	// written under this request carries dry_run (audit.DryRunRecorder).
 	r = r.WithContext(audit.WithDryRun(r.Context()))
-	ctx := r.Context()
 	// First, before the decode and every gate: a limited call costs no work and
 	// writes no row.
 	if s.refusePreflightRate(w, r) {
@@ -212,6 +211,11 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	if s.refuseAdminViewLaunch(w, r) {
 		return
 	}
+	r, ok := s.admitBreakGlass(w, r)
+	if !ok {
+		return
+	}
+	ctx := r.Context()
 	var req createRunRequest
 	if !s.decodeRunRequest(w, r, &req) {
 		return

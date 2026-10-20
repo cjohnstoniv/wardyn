@@ -44,6 +44,8 @@ type recordedReq struct {
 	auth   string
 	ctype  string
 	body   []byte
+	// breakGlass is the X-Wardyn-Break-Glass-Reason header.
+	breakGlass string
 }
 
 // cmdServer is an httptest server that records every request it receives and
@@ -90,6 +92,7 @@ func newCmdServer(t *testing.T, respStatus int, respBody any, opts ...func(*cmdS
 		cs.reqs = append(cs.reqs, recordedReq{
 			method: r.Method, path: r.URL.Path, query: r.URL.RawQuery,
 			auth: r.Header.Get("Authorization"), ctype: r.Header.Get("Content-Type"), body: body,
+			breakGlass: r.Header.Get("X-Wardyn-Break-Glass-Reason"),
 		})
 		cs.mu.Unlock()
 		if cs.runLookup && r.Method == http.MethodGet && isRunLookupPath(r.URL.Path) {
@@ -232,6 +235,27 @@ func TestRunCmd_BuildsCreateRequest(t *testing.T) {
 	}
 	if body["policy_id"] != policyID.String() || body["confinement_class"] != "CC2" || body["interactive"] != true {
 		t.Errorf("run body policy/confinement/interactive wrong: %v", body)
+	}
+}
+
+// TestRunCmd_SendsTheBreakGlassReason: --break-glass-reason rides as the header the server reads, on
+// the launch and on its --dry-run preflight; without the flag no header is sent.
+func TestRunCmd_SendsTheBreakGlassReason(t *testing.T) {
+	for _, args := range [][]string{{}, {"--dry-run"}} {
+		srv := newCmdServer(t, http.StatusCreated, types.AgentRun{ID: uuid.New(), State: types.RunPending})
+		base := append([]string{"run", "--url", srv.URL, "--token", "tok", "--agent", "claude-code", "--task", "t"}, args...)
+		if err := execCmd(t, append(base, "--break-glass-reason", "prod outage")...); err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+		if got := srv.last(); got.breakGlass != "prod outage" {
+			t.Errorf("%v: %s %s header = %q, want the reason", args, got.method, got.path, got.breakGlass)
+		}
+		if err := execCmd(t, base...); err != nil {
+			t.Fatalf("%v without the flag: %v", args, err)
+		}
+		if got := srv.last(); got.breakGlass != "" {
+			t.Errorf("%v without the flag: header = %q, want none", args, got.breakGlass)
+		}
 	}
 }
 
