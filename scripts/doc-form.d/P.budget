@@ -44,8 +44,8 @@
 # docs/POLICIES.md 19446 adds 68 over 19378, measured: push_rules.deny_new_executables is enforced (three bullets and its row).
 # docs/POLICIES.md 19539 adds 93 over 19446, measured: deny_new_executables review round 2 (execute-bit modes, any counted base, symlinks and submodules).
 # docs/POLICIES.md 19558 adds 19 over 19539, measured: a merge whose carried parent held the path not executable is the exception.
-# docs/POLICIES.md 19554 is 4 under 19558, measured: the deny_new_executables row points at the push_rules section for the carried-parent exception.
-docs/POLICIES.md=19554 share=12
+# docs/POLICIES.md 19556 is 2 under 19558, measured: the deny_new_executables row points at the push_rules section for the carried-parent exception.
+docs/POLICIES.md=19556 share=12
 # 0.9.4 W1 merge +3: L8 and an earlier W1 lane both edited the README; the merged text measures 3 over the sum.
 examples/policies/README.md=1446 share=5
 # docs/POLICIES.md 18013 adds 40 over 17973, measured: a member's private-range workspace clone host.
