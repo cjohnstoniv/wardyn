@@ -297,10 +297,14 @@ pass "C8h the split-role upgrade note grants every verb the code uses on the tab
 # The migrator unit is exempt from the check above as a whole file, so it may hold exactly
 # the one statement the migrator connection runs and nothing else: an application-role
 # statement added to it would never be counted. The detector is proven on a fixture first.
-migrator_unit_dml() { grep -ohiE 'INSERT[[:space:]]+INTO[[:space:]]+[a-z_]+|DELETE[[:space:]]+FROM[[:space:]]+[a-z_]+|UPDATE[[:space:]]+[a-z_]+[[:space:]]+SET' "$1" | tr -s '[:space:]' ' ' | sed 's/ $//' | sort -u; }
+# Whitespace is collapsed first, so a statement written over several lines is still seen.
+migrator_unit_dml() { tr -s '[:space:]' ' ' < "$1" | grep -ohiE 'INSERT[[:space:]]+INTO[[:space:]]+[a-z_]+|DELETE[[:space:]]+FROM[[:space:]]+[a-z_]+|UPDATE[[:space:]]+[a-z_]+[[:space:]]+SET' | sort -u | tr '\n' ' ' | sed 's/ $//'; }
 printf 'INSERT INTO deployment_versions (a) VALUES (1)\nUPDATE sessions SET x = 1\n' > "${WORK}/migrator-unit-fixture.go"
 [ "$(migrator_unit_dml "${WORK}/migrator-unit-fixture.go")" != "INSERT INTO deployment_versions" ] \
   || fail "the migrator-unit detector missed an added application-role statement (C8h)"
+printf 'INSERT INTO deployment_versions (a) VALUES (1)\nq := `\n  DELETE\n  FROM leases`\n' > "${WORK}/migrator-unit-fixture-multiline.go"
+[ "$(migrator_unit_dml "${WORK}/migrator-unit-fixture-multiline.go")" != "INSERT INTO deployment_versions" ] \
+  || fail "the migrator-unit detector missed a statement written over several lines (C8h)"
 [ "$(migrator_unit_dml "${ROOT}/${migrator_sql}")" = "INSERT INTO deployment_versions" ] \
   || fail "${migrator_sql} is exempt from the application-role verb check and may hold only the RecordDeploymentVersion statement; it holds: $(migrator_unit_dml "${ROOT}/${migrator_sql}" | tr '\n' ';') (C8h)"
 pass "C8h the migrator-unit exemption covers only the RecordDeploymentVersion statement"
