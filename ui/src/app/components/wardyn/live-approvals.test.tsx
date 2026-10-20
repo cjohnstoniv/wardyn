@@ -753,4 +753,18 @@ describe("LiveApprovals — the PENDING read is scoped server-side", () => {
     expect(within(panel).getByText("unlisted.example")).toBeInTheDocument();
     expect(listApprovalsMock).toHaveBeenCalledWith("PENDING", "r1");
   });
+
+  // F2MULTI-4: the strip names the asking agent only on a run with two or more agents.
+  it("names the asking agent after the host on a run with several agents, and never on one with one", async () => {
+    listApprovalsMock.mockResolvedValue([pending({ requested_scope: { host: "registry.npmjs.org", harness: "claude-code" } })]);
+    const many = { created_by: "dana", state: "RUNNING" as const, agents: [{ agent: "claude-code" }, { agent: "codex-cli" }] };
+    const { unmount } = render(<LiveApprovals runId="r1" run={many} />);
+    const panel = await screen.findByTestId("live-approvals");
+    expect(within(panel).getByText("registry.npmjs.org")).toBeInTheDocument();
+    expect(within(panel).getByText("· Asked by Claude Code")).toBeInTheDocument();
+    unmount();
+    render(<LiveApprovals runId="r1" run={{ ...many, agents: [{ agent: "claude-code" }] }} />);
+    expect(await screen.findByText("registry.npmjs.org")).toBeInTheDocument();
+    expect(screen.queryByText(/Asked by/)).toBeNull();
+  });
 });

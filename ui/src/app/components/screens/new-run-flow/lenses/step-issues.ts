@@ -13,6 +13,7 @@ export type StepIssueCode =
   | "shape_required"
   | "harness_required"
   | "task_required"
+  | "agent_task_required"
   | "command_required"
   | "pool_required"
   | "main_drive_size_required"
@@ -37,6 +38,7 @@ export const ISSUE_FOCUS: Record<StepIssueCode, string> = {
   shape_required: "nr-workload",
   harness_required: "nr-harness",
   task_required: "nr-task",
+  agent_task_required: "nr-task",
   command_required: "nr-command",
   pool_required: "nr-pool",
   main_drive_size_required: "nr-main-drive-size",

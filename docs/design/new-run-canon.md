@@ -246,6 +246,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `LEDE_OPTIONAL` | mock | Harnesses are optional for this workload. Add one only when the sandbox should include an agent tool. |
 | `LEDE_INTERACTIVE` | mock | Add one or more harnesses. At most one can start with the run and receive an optional starting prompt. |
 | `LEDE_AUTONOMOUS` | deviation (DS-1 truthful copy) | An agent runs on its own, with no SSH or terminal. |
+| `LEDE_AUTONOMOUS_MULTI` | mock | Each agent works on its own task, side by side in one sandbox, with no SSH or terminal. |
 | `EMPTY_TITLE` | mock | No harnesses added |
 | `EMPTY_BODY` | mock | This workload can continue without one. |
 | `LOADING` | deviation (lead wording 2026-10-18, #2861) | Loading harnesses… |
@@ -267,6 +268,8 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `TASK_PLACEHOLDER` | mock | What should this agent accomplish? |
 | `TASK_HELP` | mock | This harness starts automatically when it has a task. |
 | `TASK_ERROR` | mock | An autonomous run needs at least one task to perform. |
+| `AGENT_TASK_ERROR` | mock | Give this agent a task, or remove it. |
+| `MULTI_NOTE` | mock | The agents share this sandbox, its files and your model sign-ins. Every agent's rules apply to all of them, so adding an agent can only narrow what the run may do. The run ends when every agent has finished; it fails if any agent fails. |
 | `HARNESS_REQUIRED` | deviation (lead wording 2026-10-17, FR-0099) | A run needs at least one harness. |
 | `ADD_HARNESS` | mock | Add a harness |
 | `ADD_ANOTHER` | mock | Add another harness |

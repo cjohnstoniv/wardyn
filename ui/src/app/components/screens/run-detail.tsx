@@ -389,6 +389,9 @@ function RunDetailPage({ id }: { id: string }) {
               live={!terminal}
               state={run.state}
               endedAt={run.ended_at}
+              agents={run.agents}
+              runAgent={run.agent}
+              runTask={run.task}
               onGoRecording={() => setTab("recording")}
             />
           </TabsContent>

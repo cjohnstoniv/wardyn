@@ -276,3 +276,11 @@ export function credentialKind(scope: Record<string, unknown>): CredentialKind {
   return "generic";
 }
 
+
+// F2MULTI-4: which agent raised an approval on a run with two or more agents. The card's line is
+// LINE_PRE + the agent's name (bold) + LINE_POST(n); the run page strip's is STRIP(agent).
+export const APPROVAL_ASKED = {
+  LINE_PRE: "Asked by ",
+  LINE_POST: (n: number) => `, one of ${n} agents in this run`,
+  STRIP: (agent: string) => `· Asked by ${agent}`,
+} as const;

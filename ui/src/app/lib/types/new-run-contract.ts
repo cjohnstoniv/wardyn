@@ -300,6 +300,8 @@ export interface IncludedTool {
   component?: ComponentRef;
   tool_rules?: ToolRule[];
   default_effect?: "allow" | "hold" | "deny";
+  /** This harness's own prompt in a background run with several agents; not on workload.agent. */
+  task?: string;
 }
 
 export type StartupKind = "none" | "harness" | "command";

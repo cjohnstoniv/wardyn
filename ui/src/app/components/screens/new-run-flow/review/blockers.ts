@@ -46,6 +46,7 @@ const ISSUE_TEXT: Record<StepIssueCode, string> = {
   shape_required: NR_SHAPE.SHAPE_REQUIRED,
   harness_required: NR_HARNESSES.HARNESS_REQUIRED,
   task_required: NR_HARNESSES.TASK_ERROR,
+  agent_task_required: NR_HARNESSES.AGENT_TASK_ERROR,
   command_required: NR_RUN.COMMAND_REQUIRED,
   pool_required: NR_RUN.POOL_HELP,
   main_drive_size_required: NR_FILES.SIZE_ERROR,

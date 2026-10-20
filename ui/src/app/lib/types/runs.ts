@@ -491,6 +491,15 @@ export interface RunDetail extends AgentRun {
   policy?: PolicyRef;
   // Wardyn-sync sessions open now (GET /runs/{id} only); see RunSync.
   sync?: RunSync;
+  // Every agent of a run with several agents (WARDYN_MULTI_AGENT_TASKS), in the
+  // order they were declared. Absent on a run with one agent.
+  agents?: RunAgent[];
+}
+
+/** One agent of a run with several agents: its harness id and the task it was given. */
+export interface RunAgent {
+  agent: string;
+  task?: string;
 }
 
 // GET /api/v1/runs/{id}/policy — the policy a run actually got (the run page's

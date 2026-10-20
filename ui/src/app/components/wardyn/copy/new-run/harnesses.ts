@@ -14,6 +14,7 @@ export const NR_HARNESSES = {
   LEDE_INTERACTIVE:
     "Add one or more harnesses. At most one can start with the run and receive an optional starting prompt.",
   LEDE_AUTONOMOUS: "An agent runs on its own, with no SSH or terminal.",
+  LEDE_AUTONOMOUS_MULTI: "Each agent works on its own task, side by side in one sandbox, with no SSH or terminal.",
   EMPTY_TITLE: "No harnesses added",
   EMPTY_BODY: "This workload can continue without one.",
   LOADING: "Loading harnesses…",
@@ -43,6 +44,9 @@ export const NR_HARNESSES = {
   /** Lead wording 2026-10-17 (FR-0099): the Review blocker for a run that needs a harness and has none. */
   HARNESS_REQUIRED: "A run needs at least one harness.",
   TASK_ERROR: "An autonomous run needs at least one task to perform.",
+  AGENT_TASK_ERROR: "Give this agent a task, or remove it.",
+  MULTI_NOTE:
+    "The agents share this sandbox, its files and your model sign-ins. Every agent's rules apply to all of them, so adding an agent can only narrow what the run may do. The run ends when every agent has finished; it fails if any agent fails.",
   ADD_HARNESS: "Add a harness",
   ADD_ANOTHER: "Add another harness",
   ADDED: "Harness added.",

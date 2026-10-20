@@ -330,6 +330,21 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(new Set(tsInterfaceTopKeys(outTs, "RunOutput"))).toEqual(new Set(goTags));
   });
 
+  // Several agents in one run (WARDYN_MULTI_AGENT_TASKS): each agent's state on the output read, and the switch on setup status.
+  it("runAgentState (GET /runs/{id}/output agents[]): full parity with the TS RunAgentState mirror", () => {
+    const goTags = goJSONTags(readFileSync(join(root, "internal/api/run_multi_agent.go"), "utf8"), "runAgentState");
+    expect(goTags.length).toBeGreaterThanOrEqual(3);
+    const outTs = readFileSync(join(root, "ui/src/app/lib/types/run-output.ts"), "utf8");
+    expect(new Set(tsInterfaceTopKeys(outTs, "RunAgentState"))).toEqual(new Set(goTags));
+  });
+
+  it("SetupFeatures (GET /setup/status features): full parity with the TS SetupStatus.features inline type", () => {
+    const goTags = goJSONTags(readFileSync(join(root, "internal/api/setup.go"), "utf8"), "SetupFeatures");
+    expect(goTags).toContain("multi_agent_tasks");
+    const setupTs = readFileSync(join(root, "ui/src/app/lib/types/setup.ts"), "utf8");
+    expect(new Set(tsInlineKeys(setupTs, "SetupStatus", "features"))).toEqual(new Set(goTags));
+  });
+
   // GET /runs/{id}/sign-in: RunSignIn mirrors runSignInResponse.
   it("runSignInResponse (GET /runs/{id}/sign-in): full parity with the TS RunSignIn mirror", () => {
     const goTags = goJSONTags(readFileSync(join(root, "internal/api/run_sign_in.go"), "utf8"), "runSignInResponse");
