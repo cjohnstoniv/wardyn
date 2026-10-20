@@ -878,7 +878,7 @@ What the check does and does not settle:
 ## `desktop` — `DesktopControls`
 
 - What may cross a desktop's edge, one rule per direction. Each is `allowed` or `blocked`; an omitted field keeps its default.
-- The clipboard rules are enforced at the UI gateway's relay, outside the sandbox: it drops a blocked RFB cut-text message and audits every one as `ui.clipboard` by direction, size and SHA-256, never by content.
+- The clipboard rules are enforced at the UI gateway's relay, outside the sandbox: it drops a blocked RFB cut-text message and audits every one as `ui.clipboard.transfer` by direction, size and SHA-256, never by content.
 - The file rules are enforced at the run's Files panel endpoints, which move files to and from `~/Transfers` in the desktop.
 - A member's run can only block more than its ceiling, the defaults included: to let members copy out, the ceiling has to allow it.
 - What it does not stop: what the desktop shows on screen, and what a UI app serves over HTTP.

@@ -258,7 +258,7 @@ func TestUIGateway_ClipboardDefaultsBlockCopyOutAndAuditBoth(t *testing.T) {
 		"paste_in": {"success", len(pasteSentinel), digest(pasteSentinel)},
 	}
 	if len(rows) != 2 {
-		t.Fatalf("ui.clipboard rows = %d, want 2", len(rows))
+		t.Fatalf("ui.clipboard.transfer rows = %d, want 2", len(rows))
 	}
 	for _, row := range rows {
 		var d struct {
@@ -269,7 +269,7 @@ func TestUIGateway_ClipboardDefaultsBlockCopyOutAndAuditBoth(t *testing.T) {
 		_ = json.Unmarshal(row.Data, &d)
 		w := want[d.Direction]
 		if row.Outcome != w.outcome || d.Bytes != w.bytes || d.SHA256 != w.sum || row.Target != d.Direction {
-			t.Errorf("ui.clipboard row %s/%s %s, want %+v", row.Outcome, row.Target, row.Data, w)
+			t.Errorf("ui.clipboard.transfer row %s/%s %s, want %+v", row.Outcome, row.Target, row.Data, w)
 		}
 	}
 	h.audit.mu.Lock()
@@ -291,7 +291,7 @@ func TestUIGateway_ClipboardFollowsTheRunsDesktopRules(t *testing.T) {
 		t.Fatalf("an opened copy out did not reach the browser: %q %v", next, err)
 	}
 	if rows := clipboardRows(t, h, 1); len(rows) != 1 || rows[0].Outcome != "success" {
-		t.Fatalf("ui.clipboard rows = %+v", rows)
+		t.Fatalf("ui.clipboard.transfer rows = %+v", rows)
 	}
 }
 
@@ -319,7 +319,7 @@ func TestUIGateway_ClipboardLeavesOtherAppsUnfiltered(t *testing.T) {
 		t.Fatalf("an editor socket was filtered: %q %v", next, err)
 	}
 	if rows := clipboardRows(t, h, 0); len(rows) != 0 {
-		t.Fatalf("an editor socket wrote ui.clipboard rows: %+v", rows)
+		t.Fatalf("an editor socket wrote ui.clipboard.transfer rows: %+v", rows)
 	}
 }
 
@@ -350,6 +350,6 @@ func TestUIGateway_ClipboardClosesADesktopThatIsNotRFB(t *testing.T) {
 		rows = h.audit.auditRows("ui.clipboard.transfer", "failure")
 	}
 	if len(rows) != 1 || !strings.Contains(string(rows[0].Data), `"reason":"not_rfb"`) || strings.Contains(string(rows[0].Data), "direction") {
-		t.Fatalf("ui.clipboard failure rows = %+v", rows)
+		t.Fatalf("ui.clipboard.transfer failure rows = %+v", rows)
 	}
 }

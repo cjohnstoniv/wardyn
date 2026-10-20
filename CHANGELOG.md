@@ -20,7 +20,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   every desktop session is refused and Close fails.
 - **Copying out of a desktop is now blocked by default.** The UI gateway's relay filters the clipboard of the
   `novnc` desktop app: paste into the desktop stays allowed, copy out of it is dropped and audited as
-  `ui.clipboard`. Until now both directions synced unfiltered. A `novnc` socket that does not speak RFB is closed.
+  `ui.clipboard.transfer`. Until now both directions synced unfiltered. A `novnc` socket that does not speak RFB is closed.
   Other apps are unchanged. To keep copy out, set `desktop.copy_out` to `allowed` on the policy, and on the ceiling of any
   member who should have it ([`desktop`](docs/POLICIES.md#desktop--desktopcontrols)).
 
