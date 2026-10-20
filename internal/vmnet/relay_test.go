@@ -71,7 +71,18 @@ func startFakeProxy(t *testing.T, allowed ...string) *fakeProxy {
 			}
 			c, brw, _ := w.(http.Hijacker).Hijack()
 			defer c.Close()
-			_, _ = io.WriteString(c, "HTTP/1.1 200 Connection Established\r\n\r\n"+f.banner)
+			_, _ = io.WriteString(c, "HTTP/1.1 200 Connection Established\r\n\r\n")
+			if f.banner != "" {
+				// A server that speaks first answers after the dial, and the run
+				// proxy's tunnel closes both legs once the client leg ends: a
+				// relay that half-closes a silent guest's leg loses the banner.
+				_ = c.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+				if _, err := brw.Peek(1); err == io.EOF {
+					f.tunnel <- nil
+					return
+				}
+				_, _ = io.WriteString(c, f.banner)
+			}
 			_ = c.SetReadDeadline(time.Now().Add(time.Second))
 			b, _ := io.ReadAll(brw)
 			f.tunnel <- b
@@ -212,8 +223,11 @@ func TestRelayTLSFlows(t *testing.T) {
 		if err != nil || line != "SSH-2.0-origin\r\n" {
 			t.Fatalf("banner %q, %v", line, err)
 		}
+		_, _ = io.WriteString(c, "SSH-2.0-guest\r\n")
 		_ = c.Close()
-		<-f.tunnel
+		if got := string(<-f.tunnel); got != "SSH-2.0-guest\r\n" {
+			t.Fatalf("the guest's reply reached the upstream as %q", got)
+		}
 	})
 }
 
