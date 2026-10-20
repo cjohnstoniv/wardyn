@@ -144,7 +144,7 @@ test.describe("Admin Drives: team drives", () => {
     const write = ed.getByRole("switch", { name: DRIVES.FIELD_TEAM_WRITE });
     await expect(write).toHaveAttribute("aria-checked", "true");
     await expect(write).toBeDisabled();
-    await expect(ed.getByText(DRIVES.TEAM_WRITE_UNKNOWN)).toBeVisible();
+    await expect(ed.getByText(DRIVES.TEAM_WRITE_UNKNOWN)).toContainText("A group you add here can't write.");
     // The group the cut page hid is typed in again, beside a genuinely new one.
     for (const name of ["hidden-team", "new-team"]) {
       await ed.getByRole("textbox", { name: PERM.SUBJECT_GROUP }).fill(name);

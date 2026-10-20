@@ -222,7 +222,7 @@ export const DRIVES = {
   TEAM_WRITE_HINT:
     "Off by default: members' runs can read the drive and never change it. On, any member's run can change what the others' runs read and run.",
   TEAM_WRITE_UNKNOWN:
-    "This drive has more allocations than this page lists, so its write setting cannot be changed here. Saving leaves every allocation's write setting as it is.",
+    "This drive has more allocations than this page lists, so its write setting cannot be changed here. Saving leaves every allocation's write setting as it is. A group you add here can't write.",
   BACKEND_K8S_PVC_STATIC_TEAM: "Share provisioned by your platform (one pre-created volume claim for the team)",
   TEAM_EMPTY_READ_ONLY:
     "Nobody can write to a read-only team drive on a Wardyn-managed volume, so it stays empty. Use a share your platform fills, or turn on Members can write.",

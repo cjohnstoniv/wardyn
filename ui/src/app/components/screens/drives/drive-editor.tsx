@@ -215,7 +215,8 @@ export function DriveEditor({
       // in that already holds one is told from a new group and its stored values are kept.
       let known = grants;
       if (writeUnknown && team && drive) {
-        known = await api.driveGrants(drive.id);
+        // By id: a page boundary that skipped one row and repeated another still adds up to the count.
+        known = [...new Map((await api.driveGrants(drive.id)).map((g) => [g.id, g])).values()];
         if (known.length !== drive.grant_count) throw new Error(DRIVES.SAVE_ERROR);
       }
       const saved = savedId.current

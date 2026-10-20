@@ -306,6 +306,8 @@ describe("Drive editor, Team drive", () => {
   it("a cut grants page still takes a genuinely new group, and leaves the hidden allocations as stored", async () => {
     await cut();
     await addGroup("new-team");
+    // The disabled toggle reads ON; the note beside it says what the added group gets.
+    expect(screen.getByText(DRIVES.TEAM_WRITE_UNKNOWN)).toHaveTextContent("A group you add here can't write.");
     await userEvent.click(screen.getByRole("button", { name: DRIVES.SAVE_CTA }));
     await waitFor(() => expect(upsertGrantMock).toHaveBeenCalledTimes(1));
     expect(upsertGrantMock).toHaveBeenCalledWith(
@@ -322,6 +324,18 @@ describe("Drive editor, Team drive", () => {
     await waitFor(() => expect(driveGrantsMock).toHaveBeenCalledWith("t1"));
     expect(upsertGrantMock).not.toHaveBeenCalled();
     expect(deleteGrantMock).not.toHaveBeenCalled();
+  });
+
+  it("a cut grants page read with a row repeated and one missing writes nothing", async () => {
+    const qa = grant({ id: "g8", subject: "qa" });
+    driveGrantsMock.mockResolvedValue([grant({ members_can_write: true }), qa, qa]);
+    await renderScreen(snapshot({ drives: [drive({ writable: true, grant_count: 3 })], grants: [grant({ members_can_write: true })] }));
+    await openEdit("platform-ref");
+    await addGroup("hidden-team");
+    await userEvent.click(screen.getByRole("button", { name: DRIVES.SAVE_CTA }));
+    await waitFor(() => expect(driveGrantsMock).toHaveBeenCalled());
+    expect(updateDriveMock).not.toHaveBeenCalled();
+    expect(upsertGrantMock).not.toHaveBeenCalled();
   });
 
   it("a cut grants page that cannot be read in full writes nothing", async () => {

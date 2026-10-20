@@ -670,7 +670,9 @@ confirming happens through the API.
 | `TEAM_RECLAIM_KEPT` | Kept. A team drive belongs to its groups, so a leaver's cleanup skips it. |
 | `TEAM_SIZE_HINT` | One size for the whole team: members share it. |
 | `TEAM_WRITE_HINT` | Off by default: members' runs can read the drive and never change it. On, any member's run can change what the others' runs read and run. |
-| `TEAM_WRITE_UNKNOWN` | This drive has more allocations than this page lists, so its write setting cannot be changed here. Saving leaves every allocation's write setting as it is. |
+| `TEAM_WRITE_UNKNOWN` | This drive has more allocations than this page lists, so its write setting cannot be changed here. Saving leaves every allocation's write setting as it is. A group you add here can't write. |
+
+`TEAM_WRITE_UNKNOWN` is a deviation: lead wording 2026-10-20, M1 fix.
 
 `TITLE` is **one string for four places** — the screen heading, the Workspaces header's outline
 button, the setup card's title and the Settings card's title — the way `GOVERNANCE.TITLE`
