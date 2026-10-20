@@ -832,7 +832,7 @@ fi
 # same file, as a GIT_CONFIG_KEY_n export or a `git config`.
 unsilenced_git() {  # $1 = file -> prints it when it runs git init/clone/commit without the setting
     grep -vE '^[[:space:]]*#' "$1" \
-        | grep -qE '(^|[;&|(][[:space:]]*)git[[:space:]]([^|;&]*[[:space:]])?(init|clone|commit)([[:space:]]|$)' || return 0
+        | grep -E '(^|[;&|(][[:space:]]*)git[[:space:]]([^|;&]*[[:space:]])?(init|clone|commit)([[:space:]]|$)' >/dev/null || return 0
     grep -q 'maintenance\.auto' "$1" && grep -q 'gc\.auto' "$1" || printf '%s\n' "$1"
 }
 planted="$(mktemp -d)"
