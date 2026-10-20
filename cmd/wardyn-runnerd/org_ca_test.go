@@ -355,6 +355,7 @@ func TestLoadOrgCARefusesAFileReachedThroughASymlinkToAWritableDirectory(t *test
 // the test to run as root.
 type anchorFileCase struct {
 	Name           string   `json:"name"`
+	FileType       string   `json:"file_type"`
 	FileMode       string   `json:"file_mode"`
 	FileOwner      string   `json:"file_owner"`
 	DirMode        string   `json:"dir_mode"`
@@ -424,7 +425,12 @@ func TestLoadOrgCAFileRule(t *testing.T) {
 					skippedFPs = append(skippedFPs, fp)
 				}
 			}
-			file := writeFile(t, filepath.Join(dir, "ca.pem"), strings.Join(pems, ""))
+			file := filepath.Join(dir, "ca.pem")
+			if c.FileType == "fifo" {
+				makeAnchorFIFO(t, file)
+			} else {
+				writeFile(t, file, strings.Join(pems, ""))
+			}
 			if err := os.Chmod(file, mode(c.FileMode, false)); err != nil {
 				t.Fatal(err)
 			}
@@ -467,7 +473,26 @@ func TestLoadOrgCAFileRule(t *testing.T) {
 				return uid("self"), true
 			}
 			var warnings []string
-			bundle, n, err := readOrgCA(path, os.Geteuid(), time.Now(), func(m string) { warnings = append(warnings, m) })
+			type result struct {
+				bundle string
+				n      int
+				err    error
+			}
+			done := make(chan result, 1)
+			go func() {
+				b, n, err := readOrgCA(path, os.Geteuid(), time.Now(), func(m string) { warnings = append(warnings, m) })
+				done <- result{b, n, err}
+			}()
+			var r result
+			select {
+			case r = <-done:
+			case <-time.After(2 * time.Second):
+				t.Fatal("readOrgCA did not return within 2s")
+			}
+			bundle, n, err := r.bundle, r.n, r.err
+			if c.FileType == "fifo" && (err == nil || !strings.Contains(err.Error(), "not a regular file")) {
+				t.Fatalf("err=%v; want a refusal saying not a regular file", err)
+			}
 			if c.Expect == "refuse" {
 				if err == nil {
 					t.Fatalf("loaded %d certificates; want a refusal", n)
