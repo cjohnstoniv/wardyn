@@ -3,9 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// M9's "Local models" card on a run's Overview: the models the run may use, and no
-// others, and the caps its proxy holds each request to. It shows only for a run on
-// a local_model provider, and the allowlist is the provider's record read now.
+// M9's "Local models" card on a run's Overview: the provider's models as they
+// are now, and the caps its proxy holds each request to. It shows only for a run on
+// a local_model provider, and the list is the provider's record read now, which may differ from
+// the list the run launched with (the provider record carries no updated_at to tell).
 // Only GET /model-providers carries that record, and it is admin-only, so a
 // member's run page has no card until the run read carries it.
 import * as React from "react";
@@ -62,6 +63,7 @@ export function LocalModelsCard({ run, audit }: { run: RunDetail; audit: AuditEv
         bodyClassName="scroll-thin max-h-72 space-y-3 overflow-y-auto px-3 py-2.5 text-body"
       >
         <p>{T.LEDE}</p>
+        <p className="text-muted-foreground">{T.RUN_KEEPS}</p>
         <ul className="space-y-1.5">
           {models.map((m) => {
             const who = asked(m);

@@ -65,6 +65,9 @@ describe("LocalModelsCard", () => {
     expect(await screen.findByRole("heading", { name: T.TITLE })).toBeInTheDocument();
     expect(screen.getByText("Laptop GPU")).toBeInTheDocument();
     expect(screen.getByText(T.LEDE)).toBeInTheDocument();
+    expect(T.LEDE).toMatch(/current models/);
+    expect(T.RUN_KEEPS).toMatch(/keeps the models it launched with/);
+    expect(screen.getByText(T.RUN_KEEPS)).toBeInTheDocument();
     expect(screen.getByText("qwen2.5-coder:7b")).toBeInTheDocument();
     expect(screen.getByText(T.ASKED_FOR(["Claude Code", "Codex CLI"]))).toBeInTheDocument();
     expect(screen.getByText("llama3.2:3b")).toBeInTheDocument();

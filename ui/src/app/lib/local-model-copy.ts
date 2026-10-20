@@ -49,7 +49,9 @@ function keepFor(seconds: number): string {
 
 export const LOCAL_MODEL_CARD = {
   TITLE: "Local models",
-  LEDE: "This run can use these models and no others.",
+  // The provider as it is now: the run's own list was fixed at dispatch and is not on the run record.
+  LEDE: "The provider's current models.",
+  RUN_KEEPS: "The run keeps the models it launched with.",
   // "Claude Code and Codex CLI ask for this" / "Claude Code asks for this".
   ASKED_FOR: (agents: string[]) => `${agents.join(" and ")} ${agents.length === 1 ? "asks" : "ask"} for this`,
   NOT_ASKED_FOR: "Allowed, not asked for",
