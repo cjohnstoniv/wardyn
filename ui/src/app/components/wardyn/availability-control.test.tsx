@@ -128,6 +128,33 @@ describe("AvailabilityControl — states.html", () => {
     expect(within(sub).getByText("Developer")).toBeInTheDocument();
   });
 
+  // #3065: hiding the audiences under Everyone never drops them; going back to Only these shows the same ones.
+  it("Everyone hides stored audiences without deleting them, and Only these brings them back", async () => {
+    getAvailabilityMock.mockResolvedValue(view(true, [DEV, DATA]));
+    putAvailabilityMock.mockImplementation((_k: string, _v: string, restricted: boolean) => Promise.resolve(view(restricted, [DEV, DATA])));
+    const user = userEvent.setup();
+    render(policyControl());
+    await screen.findByTestId("availability-audience");
+
+    await user.click(first());
+    await waitFor(() => expect(putAvailabilityMock).toHaveBeenLastCalledWith(KIND, ID, false));
+    await waitFor(() => expect(screen.queryByTestId("availability-audience")).toBeNull());
+
+    await user.click(only());
+    await waitFor(() => expect(putAvailabilityMock).toHaveBeenLastCalledWith(KIND, ID, true));
+    const sub = await screen.findByTestId("availability-audience");
+    expect(within(sub).getByText("Developer")).toBeInTheDocument();
+    expect(within(sub).getByText(/Data engineering/)).toBeInTheDocument();
+    expect(deleteGrantMock).not.toHaveBeenCalled();
+  });
+
+  it("a draft saved on Everyone still writes every audience it holds", async () => {
+    upsertGrantMock.mockResolvedValue({});
+    await writeAvailability(KIND, ID, { restricted: false, audiences: [{ subject_type: "group", subject: "Data engineering" }] } as AvailabilityDraftValue);
+    expect(upsertGrantMock).toHaveBeenCalledWith(expect.objectContaining({ subject_type: "group", subject: "Data engineering", effect: "allow" }));
+    expect(putAvailabilityMock).not.toHaveBeenCalled();
+  });
+
   // #2874: the placeholder is prose in the sans face and the input is wide enough to show it whole; typed ids stay mono.
   it("sets the adder's placeholder in sans inside a mono input that fits it", async () => {
     getAvailabilityMock.mockResolvedValue(view(true, [DEV]));
