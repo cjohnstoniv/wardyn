@@ -15,7 +15,10 @@ import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 
 export interface ToolDialogProps {
   title: string;
-  intro: string;
+  /** Under the title; absent when the dialog's body says it (the MCP dialog's local tab). */
+  intro?: string;
+  /** Under the title and intro, e.g. the MCP dialog's tabs. */
+  header?: React.ReactNode;
   /** The id of the field that takes focus first. */
   firstField: string;
   confirm: string;
@@ -28,13 +31,14 @@ export interface ToolDialogProps {
   children: React.ReactNode;
 }
 
-export function ToolDialog({ title, intro, firstField, confirm, busy, onConfirm, onClose, extra, children }: ToolDialogProps) {
+export function ToolDialog({ title, intro, header, firstField, confirm, busy, onConfirm, onClose, extra, children }: ToolDialogProps) {
   return (
     <Dialog open onOpenChange={(open) => !open && !busy && onClose()}>
-      <DialogContent onOpenAutoFocus={(e) => { e.preventDefault(); document.getElementById(firstField)?.focus(); }}>
+      <DialogContent {...(intro ? {} : { "aria-describedby": undefined })} onOpenAutoFocus={(e) => { e.preventDefault(); document.getElementById(firstField)?.focus(); }}>
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
-          <DialogDescription>{intro}</DialogDescription>
+          {intro && <DialogDescription>{intro}</DialogDescription>}
+          {header}
         </DialogHeader>
         <form className="flex flex-col gap-4" onSubmit={(e) => { e.preventDefault(); if (!busy) onConfirm(); }}>
           {children}

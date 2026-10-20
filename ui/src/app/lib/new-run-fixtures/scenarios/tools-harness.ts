@@ -7,7 +7,7 @@
 // them for each lane (internal/api toolPolicyFact), plus the model providers
 // and one MCP server row they sit beside.
 
-import type { AccessFacts, AccessRow, EffectOption, ToolPolicyFact } from "../../types/new-run-access";
+import type { AccessCredential, AccessFacts, AccessRow, EffectOption, ToolPolicyFact } from "../../types/new-run-access";
 import type { SetupModelProvider, SetupProviderAccess } from "../../types/setup";
 
 const EFFECTS = ["allow", "hold", "deny"] as const;
@@ -78,6 +78,16 @@ export const MCP_DOCS: AccessRow = {
   mcp: { server_key: "docs", transport: "streamable_http", harnesses: ["claude-code"] },
   source: { kind: "component", id: "mcp-docs", name: "Docs" },
 };
+
+/** One local MCP server (it runs in the sandbox) on the run's first inline component, on for Claude Code and Codex CLI. */
+export const MCP_LOCAL: AccessRow = {
+  id: "inline:0", kind: "mcp", from: "added", name: "docs-search", status: "ready", hosts: ["docs.example.com"], credentials: ["inline:0:secret:0"],
+  mcp: { server_key: "docs-search", transport: "stdio", harnesses: ["claude-code", "codex-cli"] },
+  source: { kind: "component", id: "inline:0", name: "docs-search" },
+};
+
+/** The secret MCP_LOCAL brings, placed in the sandbox as an environment variable; the access block never names it. */
+export const MCP_LOCAL_ENV: AccessCredential = { id: "inline:0:secret:0", row: "inline:0", kind: "secret", owner: "own", label: "Your secret", delivery: "sandbox_env", after_end: "stays" };
 
 export const withFacts = (base: AccessFacts, harnesses: ToolPolicyFact[], rows: AccessRow[] = []): AccessFacts => ({
   ...base, harnesses, rows: [...base.rows, ...rows],

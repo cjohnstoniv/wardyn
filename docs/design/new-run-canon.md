@@ -506,6 +506,28 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `DETAIL_NOTE` | mock | Note |
 | `DETAIL_NONE` | mock | None |
 | `DETAIL_MCP_BODY` | mock | Turn it on for a harness under Harness setup. |
+| `BRINGS_FOR(name)` | mock | What {name} brings |
+| `DETAIL_FILES` | mock | Files and drives |
+| `DETAIL_OTHER` | mock | Other |
+| `DETAIL_WHERE` | mock | Where it runs |
+| `MORE(n)` | mock | +{n} more |
+| `MCP_REMOTE` | mock | Remote (HTTPS) |
+| `GITHUB_APP` | mock | Wardyn GitHub App |
+| `GITHUB_REPOS(repos)` | mock | This run's repositories: {repos} |
+| `GITHUB_REPOS_LABEL` | mock | This run's repositories: |
+| `KUBE_CREDENTIAL(cluster)` | mock | {cluster} service account |
+| `KUBE_CREDENTIAL_NOTE` | mock | Acts as the service account your organisation set for this cluster, not as you. The cluster's audit log names that account. |
+| `KUBE_NAMESPACES(namespaces)` | mock | Namespaces: {namespaces} |
+| `KUBE_READ_ONLY` | mock | Read only |
+| `KUBE_READ_WRITE` | mock | Read and write |
+| `KUBE_NO_EXEC` | mock | No exec |
+| `KUBE_CLUSTER` | mock | Cluster |
+| `KUBE_NAMESPACES_LABEL` | mock | Namespaces |
+| `KUBE_ACCESS` | mock | Access |
+| `KUBE_EXEC` | mock | Exec |
+| `KUBE_READ_DETAIL` | mock | Read only: get, list and watch. |
+| `KUBE_WRITE_DETAIL` | mock | Read and write: also create, update, patch and delete. |
+| `KUBE_EXEC_DETAIL` | mock | Exec, attach and port-forward aren't allowed. |
 | `IMAGE_NO` | pending (W-34) | Not in this sandbox's image. The access still works if the tool is installed another way. |
 | `IMAGE_UNKNOWN` | pending (W-34) | Wardyn can't tell whether this sandbox's image has it. |
 | `NO_HARNESSES` | mock | No harnesses in this run. Add one on the Harnesses step if the sandbox should include an agent tool. |
@@ -524,6 +546,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `PROFILE_REQUIRES(profile)` | pending (W-30) | {profile} requires Ask first or stricter for tools with no rule. |
 | `CODEX_HOLD_TIP` | mock | Codex CLI can't pause a tool call for approval. |
 | `CODEX_NOTE` | pending (W-32) | Codex CLI can't pause a tool call for approval, and Wardyn can't block its own tools. Rules for its MCP tools are enforced by the proxy. |
+| `CODEX_NOTE_REMOTE` | mock | Codex CLI can't pause a tool call for approval, and Wardyn can't block its own tools. Rules for its remote MCP tools are enforced by the proxy. |
 | `RULES_LABEL` | mock | Tool rules |
 | `ROW_LOCKED` | deviation (lead wording 2026-10-17, FUG-L771) | Set by your organisation's policy |
 | `ADD_RULE` | mock | Add a tool rule |
@@ -588,6 +611,25 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `MCP_NO_TOKEN` | mock | No token |
 | `MCP_LOCAL_SOON` | mock | Servers that run inside the sandbox (a local command) are Coming soon. |
 | `MCP_ERR_URL` | mock | Enter the server URL. |
+| `MCP_CARD_BODY_LOCAL` | mock | Connect a remote MCP server by URL, or start one in a sandbox. A remote server's token stays with the proxy. |
+| `MCP_TAB_LOCAL` | mock | Runs in a sandbox |
+| `MCP_WHERE_RUN` | mock | This run's sandbox |
+| `MCP_WHERE_RUN_HINT` | mock | A server Wardyn starts as a command inside this run's sandbox. It runs with the agent's access: anything the agent can read or reach, the server can too, and the agent can use the server's secrets. |
+| `MCP_WHERE_OWN` | mock | Its own sandbox |
+| `MCP_WHERE_OWN_HINT` | mock | Runs the server in a sandbox of its own, apart from the agent, with its own access. |
+| `MCP_LOCAL_NAME_PLACEHOLDER` | mock | e.g. docs-search |
+| `MCP_COMMAND_HELP` | mock | The command and its arguments, started in the sandbox and spoken to over stdio. Pin the package version, for example @1.4.2. |
+| `MCP_ERR_COMMAND` | mock | Enter the command. |
+| `MCP_ERR_PIN` | mock | Pin the package version, for example @example/mcp-server@1.4.2. |
+| `MCP_ERR_PROGRAM(command)` | deviation (lead 2026-10-20: the server's own sentence, validateLocal) | "{command}" must be npx or the absolute path of a program in the image. |
+| `MCP_ERR_NPX_FLAG` | deviation (lead 2026-10-20: the server's own sentence, validateLocal) | npx takes only -y before the package here; name the package as its first argument. |
+| `MCP_HOSTS_PLACEHOLDER` | mock | e.g. api.example.com |
+| `MCP_HOSTS_HELP` | mock | The hosts the server reaches. Your organisation's ceiling still applies. |
+| `MCP_DELIVERY_NOTE` | mock | A request header is added by the proxy and never enters the sandbox. An environment variable or a file is placed in the sandbox. |
+| `MCP_HARNESS_RULES` | mock | Rules for this server's tools are applied by the harness, not by Wardyn's proxy. |
+| `MCP_RUNS_HERE` | mock | Runs in this run's sandbox |
+| `MCP_SANDBOX_READABLE` | mock | Any process in the sandbox can read it, the agent included. |
+| `MCP_REFUSED(harness, server)` | mock | {harness} can't apply rules for {server}'s tools, so this run would be refused. Turn {server} off for {harness}, or remove its rules for {harness}. |
 | `CC_INTRO` | mock | Bundle the hosts and secrets one tool needs, so you can reuse it. Saved components appear under Add tools and access next time. |
 | `CC_NAME` | mock | Name |
 | `CC_NAME_PLACEHOLDER` | mock | e.g. Billing service API |
@@ -799,6 +841,9 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `POLICY_ACCEPTS_EDITS` | deviation (qualified for tools no rule names, #2428; proposed wording awaiting approval) | For tools without a named rule, Claude Code accepts file edits without asking and asks before other tools. Named rules still apply. |
 | `POLICY_AUTOMATIC` | mock | Run automatically |
 | `POLICY_TOOLS_OF(harness, effect)` | mock | {harness}: {effect} |
+| `POLICY_IN_SANDBOX(secret, server)` | mock | In the sandbox: {secret} for {server} |
+| `POLICY_IN_SANDBOX_UNNAMED(server)` | deviation (lead wording, cleared by the overseer 2026-10-20, FEAT-1MCP-UI) | In the sandbox: a secret for {server} |
+| `POLICY_HARNESS_RULES(server)` | mock | {server}: rules applied by the harness |
 | `INNER_WALLS(sandbox, approvals)` | deviation (approved 2026-10-19, overseer, #2822) | Harness walls: {sandbox}, {approvals} |
 | `INNER_SANDBOX_OFF` | deviation (approved 2026-10-19, overseer, #2822) | harness sandbox off |
 | `INNER_SANDBOX_OWN` | deviation (approved 2026-10-19, overseer, #2822) | the harness's own sandbox |

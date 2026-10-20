@@ -25,6 +25,7 @@ import { useNewRunDispatch } from "../../new-run-route";
 import { useAnnounce } from "../step-shell";
 import { EffectChoice } from "./effect-choice";
 import { addToolRule, personalRules, removeToolRule, setDefaultEffect, mcpComponentIndex, setMcpHarnesses, type McpComponentRef } from "./harness-edits";
+import { localMcpRefused, useLocalMcpOn } from "./local-mcp";
 import { McpToggles } from "./mcp-toggles";
 import { defaultChoices, reasonText } from "./tool-facts";
 import { ToolRules } from "./tool-rules";
@@ -131,6 +132,7 @@ function HarnessCard({ fact, access, harnessSet, intent, answeredFor, name, answ
   const codex = fact.rule_tools === "mcp_only";
   const help = codex ? null : fact.lane === "attended" ? NR_TOOLS.DEFAULT_HELP_ATTENDED : door.operator ? NR_TOOLS.DEFAULT_HELP_OPERATOR : NR_TOOLS.DEFAULT_HELP_GATED;
   const servers = access.rows.filter((r) => r.kind === "mcp" && r.mcp);
+  const localMcp = useLocalMcpOn();
 
   const componentId = (server: AccessRow) => server.source.id ?? server.id;
   // The person's own choice for the server stands until the server's next answer; before one, the server's fact does.
@@ -157,11 +159,11 @@ function HarnessCard({ fact, access, harnessSet, intent, answeredFor, name, answ
               name={`nr-default-${fact.harness}`}
               labelledBy={labelId}
               value={selected as ToolEffect}
-              choices={defaultChoices(fact, name)}
+              choices={defaultChoices(fact, name, localMcp)}
               onChange={(effect) => { setPicked(effect); edit((i) => setDefaultEffect(i, fact.harness, effect)); }}
             />
             {help && <p className="text-sm text-muted-foreground">{help}</p>}
-            {codex && <p className="text-sm text-muted-foreground">{NR_TOOLS.CODEX_NOTE}</p>}
+            {codex && <p className="text-sm text-muted-foreground">{localMcp ? NR_TOOLS.CODEX_NOTE_REMOTE : NR_TOOLS.CODEX_NOTE}</p>}
           </div>
         )}
       </div>
@@ -172,11 +174,12 @@ function HarnessCard({ fact, access, harnessSet, intent, answeredFor, name, answ
           fact={fact}
           harnessName={name}
           personal={personalRules(intent, fact.harness)}
+          remoteMcp={localMcp}
           onAdd={(rule) => { edit((i) => addToolRule(i, fact.harness, rule)); announce(NR_TOOLS.RULE_ADDED); }}
           onRemove={(t) => edit((i) => removeToolRule(i, fact.harness, t))}
         />
       )}
-      <McpToggles fact={fact} harnessName={name} servers={servers} isOn={(s) => harnessesOf(s).includes(fact.harness)} onToggle={toggle} />
+      <McpToggles fact={fact} harnessName={name} servers={servers} isOn={(s) => harnessesOf(s).includes(fact.harness)} onToggle={toggle} refused={(s) => localMcpRefused(fact, intent, s)} />
     </section>
   );
 }

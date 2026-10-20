@@ -105,6 +105,13 @@ for (const { name, sections, ns } of SCREENS) {
   });
 }
 
+// One string, one constant: the MCP tab and field names reuse the originals, never a second copy of them.
+describe("new run copy: no twin constants in the tools module", () => {
+  it.each(["Remote (HTTPS)", "Where it runs", "Runs in this run's sandbox"])("%j is declared once", (text) => {
+    expect(Object.values(NR_TOOLS).filter((v) => v === text)).toHaveLength(1);
+  });
+});
+
 // "- `NR_TOOLS.KEY` shows only when ..." lines in the doc's Display rules name constants a screen must gate.
 describe("new run canon: display rules", () => {
   const named = [...readFileSync(DOC, "utf8").matchAll(/^- `(NR_[A-Z]+)\.([A-Z0-9_]+)` /gm)].map((m) => [m[1], m[2]]);

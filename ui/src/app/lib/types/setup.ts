@@ -285,7 +285,7 @@ export interface SetupProviderAccess {
 }
 
 export interface SetupStatus {
-  // Switch-gated features this deployment has on (Go SetupFeatures).
+  // Switch-gated features this deployment has on (Go SetupFeatures); absent = off.
   features?: { mcp_local_servers?: boolean };
   ready: boolean;
   // Server-computed "does SOME run's LLM access path exist": at least one
