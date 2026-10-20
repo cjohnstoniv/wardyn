@@ -97,7 +97,7 @@ describe("Add an MCP server", () => {
     const dialog = within(await screen.findByRole("dialog", { name: NR_TOOLS.MCP_CARD_TITLE }));
     expect(dialog.getByText(NR_TOOLS.MCP_LOCAL_SOON)).toBeTruthy();
     expect(dialog.queryByRole("button", { name: NR_TOOLS.MCP_TAB_LOCAL })).toBeNull();
-    expect(dialog.queryByText(NR_TOOLS.MCP_WHERE)).toBeNull();
+    expect(dialog.queryByText(NR_TOOLS.DETAIL_WHERE)).toBeNull();
   });
 
   it("with the switch on, the door card and the dialog offer a server that runs in a sandbox", async () => {
@@ -106,7 +106,7 @@ describe("Add an MCP server", () => {
     expect(doorBody()).toContain(NR_TOOLS.MCP_CARD_BODY_LOCAL);
     await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.MCP_CARD_BUTTON }));
     const dialog = within(await screen.findByRole("dialog", { name: NR_TOOLS.MCP_CARD_TITLE }));
-    expect(dialog.getByRole("button", { name: NR_TOOLS.MCP_TAB_REMOTE })).toBeTruthy();
+    expect(dialog.getByRole("button", { name: NR_TOOLS.MCP_REMOTE })).toBeTruthy();
     expect(dialog.getByText(NR_TOOLS.MCP_INTRO)).toBeTruthy();
     expect(dialog.queryByText(NR_TOOLS.MCP_LOCAL_SOON)).toBeNull();
   });
@@ -115,7 +115,7 @@ describe("Add an MCP server", () => {
     on();
     const dialog = await openMcp();
     await userEvent.click(dialog.getByRole("button", { name: NR_TOOLS.MCP_TAB_LOCAL }));
-    const where = within(dialog.getByRole("group", { name: NR_TOOLS.MCP_WHERE }));
+    const where = within(dialog.getByRole("group", { name: NR_TOOLS.DETAIL_WHERE }));
     const mine = where.getByRole("radio", { name: NR_TOOLS.MCP_WHERE_RUN }) as HTMLInputElement;
     expect(mine.checked).toBe(true);
     expect(mine).toHaveAccessibleDescription(NR_TOOLS.MCP_WHERE_RUN_HINT);
@@ -141,6 +141,13 @@ describe("Add an MCP server", () => {
     await userEvent.click(dialog.getByRole("button", { name: NR_TOOLS.ADD_TO_RUN }));
     expect(dialog.getByRole("alert")).toHaveTextContent(NR_TOOLS.MCP_ERR_PIN);
     expect(dialog.getByLabelText("Command")).toHaveAccessibleDescription(new RegExp(NR_TOOLS.MCP_ERR_PIN));
+    // What the server refuses and the pin check does not name: a relative program, and an npx flag.
+    setField(dialog.getByLabelText("Command"), "uvx foo");
+    await userEvent.click(dialog.getByRole("button", { name: NR_TOOLS.ADD_TO_RUN }));
+    expect(dialog.getByRole("alert")).toHaveTextContent(NR_TOOLS.MCP_ERR_PROGRAM("uvx"));
+    setField(dialog.getByLabelText("Command"), "npx --package x");
+    await userEvent.click(dialog.getByRole("button", { name: NR_TOOLS.ADD_TO_RUN }));
+    expect(dialog.getByRole("alert")).toHaveTextContent(NR_TOOLS.MCP_ERR_NPX_FLAG);
     expect(draft().components).toBeUndefined();
   });
 
@@ -212,12 +219,15 @@ describe("Add an MCP server", () => {
     expect(brings.getByText("docs.example.com")).toBeTruthy();
     expect(brings.getByText("DOCS_TOKEN")).toBeTruthy();
     expect(brings.getByText(NR_TOOLS.DELIVERY_ENV)).toBeTruthy();
-    expect(brings.getByText(`${NR_TOOLS.FROM_MCP} · ${NR_TOOLS.MCP_RUNS_HERE}`)).toBeTruthy();
+    expect(brings.getByText(NR_TOOLS.DETAIL_OTHER).nextElementSibling).toHaveTextContent(`${NR_TOOLS.FROM_MCP} · ${NR_TOOLS.MCP_RUNS_HERE}`);
     await userEvent.click(card.getByRole("button", { name: NR_TOOLS.DETAILS_FOR("docs-search") }));
     const details = within(await screen.findByRole("dialog"));
     expect(details.getByText(NR_TOOLS.MCP_SANDBOX_READABLE)).toBeTruthy();
     expect(details.getByText("npx -y @example/mcp-server@1.4.2")).toBeTruthy();
-    expect(details.getByText(`${NR_TOOLS.DETAIL_MCP_BODY} ${NR_TOOLS.MCP_HARNESS_RULES}`)).toBeTruthy();
+    // The Details dialog repeats "This run only" under the name, and the harness rules sit under the list, not in its cell.
+    expect(details.getByText(NR_TOOLS.SUB_RUN_ONLY)).toBeTruthy();
+    expect(details.getByText(NR_TOOLS.DETAIL_MCP_BODY).tagName).toBe("DD");
+    expect(details.getByText(NR_TOOLS.MCP_HARNESS_RULES).tagName).toBe("P");
     // A header the proxy adds never enters the sandbox: the card says nothing of the kind.
     cleanup();
     await openDialog(WITH_DOCS, { ...ACCESS, credentials: [{ ...MCP_LOCAL_ENV, delivery: "proxy" }] });
@@ -262,7 +272,7 @@ describe("Harness setup", () => {
     on();
     show();
     const claude = card("Claude Code");
-    expect(claude.getByText(NR_TOOLS.MCP_RUNS_IN_SANDBOX)).toBeTruthy();
+    expect(claude.getByText("Runs in this run's sandbox")).toBeTruthy();
     expect(claude.getByText(NR_TOOLS.MCP_HARNESS_RULES)).toBeTruthy();
     expect(claude.queryByRole("alert")).toBeNull();
     expect(card("Codex CLI").getByText(NR_TOOLS.MCP_HARNESS_RULES)).toBeTruthy();

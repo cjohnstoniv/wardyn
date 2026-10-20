@@ -20,7 +20,7 @@ import { Segmented } from "../../../../wardyn/segmented";
 import { envNameError, hostError } from "../../checks/custom-component-form-model";
 import { FILE_NAME } from "./add-secret-dialog";
 import { httpsParts, mcpLocalRef, mcpRef } from "./catalogue-edits";
-import { commandProblem, defaultName } from "./mcp-local-form";
+import { commandProblem, defaultName, splitCommand } from "./mcp-local-form";
 import { NamesFailed, SELECT_CLASS, ToolDialog, ToolField, type NamesFailure } from "./tool-dialog";
 
 type Tab = "remote" | "local";
@@ -60,7 +60,12 @@ export function AddMcpDialog({ names, namesFailure, localServers, residentAllowe
   const error = submitted && !host ? NR_TOOLS.MCP_ERR_URL : "";
 
   const problem = commandProblem(command);
-  const commandError = problem === "empty" ? NR_TOOLS.MCP_ERR_COMMAND : problem === "unpinned" ? NR_TOOLS.MCP_ERR_PIN : "";
+  const commandError =
+    problem === "empty" ? NR_TOOLS.MCP_ERR_COMMAND
+    : problem === "program" ? NR_TOOLS.MCP_ERR_PROGRAM(splitCommand(command).command)
+    : problem === "npx-flag" ? NR_TOOLS.MCP_ERR_NPX_FLAG
+    : problem === "unpinned" ? NR_TOOLS.MCP_ERR_PIN
+    : "";
   const hosts = hostsOf(hostText);
   const hostsError = hosts.map(hostError).find((e) => e) ?? "";
   const deliveryErrors: Record<Mode, string> = {
@@ -103,7 +108,7 @@ export function AddMcpDialog({ names, namesFailure, localServers, residentAllowe
         <Segmented<Tab>
           value={tab}
           onChange={(t) => { setTab(t); setSubmitted(false); }}
-          options={[{ value: "remote", label: NR_TOOLS.MCP_TAB_REMOTE }, { value: "local", label: NR_TOOLS.MCP_TAB_LOCAL }]}
+          options={[{ value: "remote", label: NR_TOOLS.MCP_REMOTE }, { value: "local", label: NR_TOOLS.MCP_TAB_LOCAL }]}
         />
       )}
       firstField={local ? field("where") : field("name")}
@@ -114,7 +119,7 @@ export function AddMcpDialog({ names, namesFailure, localServers, residentAllowe
       {local ? (
         <>
           <fieldset className="flex flex-col gap-2">
-            <legend className="mb-2 text-sm font-medium">{NR_TOOLS.MCP_WHERE}</legend>
+            <legend className="mb-2 text-sm font-medium">{NR_TOOLS.DETAIL_WHERE}</legend>
             <div className="flex flex-col gap-1.5 rounded-lg border border-primary bg-primary/10 px-3 py-2.5">
               <label className="flex items-center gap-2 text-sm font-medium">
                 <input id={field("where")} type="radio" name={field("where")} checked readOnly aria-describedby={field("where-hint")} />

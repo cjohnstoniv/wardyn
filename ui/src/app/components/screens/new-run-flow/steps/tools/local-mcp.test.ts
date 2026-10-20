@@ -39,6 +39,39 @@ describe("the command line", () => {
     expect(commandProblem(text)).toBe(problem);
   });
 
+  // The server's own cases, copied from TestComponentMCP_StdioLaunch (internal/types/component_mcp_test.go): the Go
+  // side is not on every tree this runs on, so its table is kept here. Change one, change the other.
+  // Not mirrored: a url, a missing launch, a control byte inside one argument and the argument-count cap, which the
+  // command line field cannot express or has no sentence for.
+  const SERVER_ACCEPTS = [
+    "npx -y @example/mcp-server@1.4.2 --root /work",
+    "npx mcp-server-x@0.1.0-rc.1",
+    "/usr/local/bin/mcp-files --read-only",
+    "/opt/mcp/server",
+  ];
+  const SERVER_REFUSES: [string, ReturnType<typeof commandProblem>][] = [
+    ["bin/server", "program"],
+    ["node server.js", "program"],
+    ["uvx foo", "program"],
+    ["/opt/../bin/sh", "program"],
+    ["/opt/mcp/", "program"],
+    ["npx -y @example/mcp-server", "unpinned"],
+    ["npx @example/mcp-server@latest", "unpinned"],
+    ["npx @example/mcp-server@^1.4.2", "unpinned"],
+    ["npx -y", "unpinned"],
+    ["npx --package=@example/mcp-server@1.4.2 mcp-server", "npx-flag"],
+    ["npx --package x", "npx-flag"],
+    ["/usr/bin/npx @example/mcp-server@1", "unpinned"],
+  ];
+
+  it.each(SERVER_ACCEPTS)("accepts what the server accepts: %s", (text) => {
+    expect(commandProblem(text)).toBeUndefined();
+  });
+
+  it.each(SERVER_REFUSES)("refuses what the server refuses: %s", (text, problem) => {
+    expect(commandProblem(text)).toBe(problem);
+  });
+
   it("names an unnamed server for its package or program", () => {
     expect(defaultName("npx -y @example/mcp-server@1.4.2")).toBe("mcp-server");
     expect(defaultName("/opt/tools/docs-mcp --stdio")).toBe("docs-mcp");

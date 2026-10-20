@@ -164,13 +164,16 @@ export function localMcpAccess(row: AccessRow, access: AccessFacts, intent: RunI
     files: [],
     other: NR_SHARED.JOIN(NR_TOOLS.FROM_MCP, NR_TOOLS.MCP_RUNS_HERE),
     otherDetail: (
-      <Facts
-        rows={[
-          [NR_TOOLS.DETAIL_WHERE, NR_TOOLS.MCP_RUNS_HERE],
-          ...(command ? [[NR_TOOLS.FROM_COMMAND, <span key="cmd" className="font-mono text-body">{command}</span>] as const] : []),
-          [NR_TOOLS.DETAIL_MCP, `${NR_TOOLS.DETAIL_MCP_BODY} ${NR_TOOLS.MCP_HARNESS_RULES}`],
-        ]}
-      />
+      <>
+        <Facts
+          rows={[
+            [NR_TOOLS.DETAIL_WHERE, NR_TOOLS.MCP_RUNS_HERE],
+            ...(command ? [[NR_TOOLS.FROM_COMMAND, <span key="cmd" className="font-mono text-body">{command}</span>] as const] : []),
+            [NR_TOOLS.DETAIL_MCP, NR_TOOLS.DETAIL_MCP_BODY],
+          ]}
+        />
+        <p className="text-sm text-muted-foreground">{NR_TOOLS.MCP_HARNESS_RULES}</p>
+      </>
     ),
   };
 }

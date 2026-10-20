@@ -612,9 +612,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `MCP_LOCAL_SOON` | mock | Servers that run inside the sandbox (a local command) are Coming soon. |
 | `MCP_ERR_URL` | mock | Enter the server URL. |
 | `MCP_CARD_BODY_LOCAL` | mock | Connect a remote MCP server by URL, or start one in a sandbox. A remote server's token stays with the proxy. |
-| `MCP_TAB_REMOTE` | mock | Remote (HTTPS) |
 | `MCP_TAB_LOCAL` | mock | Runs in a sandbox |
-| `MCP_WHERE` | mock | Where it runs |
 | `MCP_WHERE_RUN` | mock | This run's sandbox |
 | `MCP_WHERE_RUN_HINT` | mock | A server Wardyn starts as a command inside this run's sandbox. It runs with the agent's access: anything the agent can read or reach, the server can too, and the agent can use the server's secrets. |
 | `MCP_WHERE_OWN` | mock | Its own sandbox |
@@ -623,11 +621,12 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `MCP_COMMAND_HELP` | mock | The command and its arguments, started in the sandbox and spoken to over stdio. Pin the package version, for example @1.4.2. |
 | `MCP_ERR_COMMAND` | mock | Enter the command. |
 | `MCP_ERR_PIN` | mock | Pin the package version, for example @example/mcp-server@1.4.2. |
+| `MCP_ERR_PROGRAM(command)` | deviation (lead 2026-10-20: the server's own sentence, validateLocal) | "{command}" must be npx or the absolute path of a program in the image |
+| `MCP_ERR_NPX_FLAG` | deviation (lead 2026-10-20: the server's own sentence, validateLocal) | npx takes only -y before the package here; name the package as its first argument |
 | `MCP_HOSTS_PLACEHOLDER` | mock | e.g. api.example.com |
 | `MCP_HOSTS_HELP` | mock | The hosts the server reaches. Your organisation's ceiling still applies. |
 | `MCP_DELIVERY_NOTE` | mock | A request header is added by the proxy and never enters the sandbox. An environment variable or a file is placed in the sandbox. |
 | `MCP_HARNESS_RULES` | mock | Rules for this server's tools are applied by the harness, not by Wardyn's proxy. |
-| `MCP_RUNS_IN_SANDBOX` | mock | Runs in the sandbox |
 | `MCP_RUNS_HERE` | mock | Runs in this run's sandbox |
 | `MCP_SANDBOX_READABLE` | mock | Any process in the sandbox can read it, the agent included. |
 | `MCP_REFUSED(harness, server)` | mock | {harness} can't apply rules for {server}'s tools, so this run would be refused. Turn {server} off for {harness}, or remove its rules for {harness}. |

@@ -109,7 +109,7 @@ test.describe("New Run, step 5: an MCP server that runs in the sandbox", () => {
     const dialog = page.getByRole("dialog", { name: NR_TOOLS.MCP_CARD_TITLE });
     await expect(dialog.getByText(NR_TOOLS.MCP_INTRO)).toBeVisible();
     await press(page, NR_TOOLS.MCP_TAB_LOCAL);
-    const where = dialog.getByRole("group", { name: NR_TOOLS.MCP_WHERE });
+    const where = dialog.getByRole("group", { name: NR_TOOLS.DETAIL_WHERE });
     await expect(where.getByRole("radio", { name: NR_TOOLS.MCP_WHERE_RUN })).toBeChecked();
     await expect(where.getByText(NR_TOOLS.MCP_WHERE_RUN_HINT)).toBeVisible();
     await expect(where.getByRole("radio", { name: new RegExp(NR_TOOLS.MCP_WHERE_OWN) })).toBeDisabled();
@@ -124,6 +124,13 @@ test.describe("New Run, step 5: an MCP server that runs in the sandbox", () => {
     await dialog.getByLabel("Command").fill("npx -y @example/mcp-server");
     await dialog.getByRole("button", { name: NR_TOOLS.ADD_TO_RUN }).click();
     await expect(dialog.getByRole("alert")).toHaveText(NR_TOOLS.MCP_ERR_PIN);
+    // So are a program that is not npx or an absolute path, and an npx flag: the server refuses both.
+    await dialog.getByLabel("Command").fill("uvx foo");
+    await dialog.getByRole("button", { name: NR_TOOLS.ADD_TO_RUN }).click();
+    await expect(dialog.getByRole("alert")).toHaveText(NR_TOOLS.MCP_ERR_PROGRAM("uvx"));
+    await dialog.getByLabel("Command").fill("npx --package x");
+    await dialog.getByRole("button", { name: NR_TOOLS.ADD_TO_RUN }).click();
+    await expect(dialog.getByRole("alert")).toHaveText(NR_TOOLS.MCP_ERR_NPX_FLAG);
     await dialog.getByLabel("Command").fill(COMMAND);
     await dialog.getByLabel(NR_TOOLS.CC_HOSTS).fill("docs.example.com");
     await dialog.getByLabel(NR_TOOLS.SECRET_LABEL).selectOption("DOCS_TOKEN");
@@ -149,12 +156,14 @@ test.describe("New Run, step 5: an MCP server that runs in the sandbox", () => {
     await expect(details.getByText(NR_TOOLS.MCP_SANDBOX_READABLE)).toBeVisible();
     await expect(details.getByText(NR_TOOLS.MCP_RUNS_HERE).first()).toBeVisible();
     await expect(details.getByText("npx -y @example/mcp-server@1.4.2")).toBeVisible();
+    await expect(details.getByText(NR_TOOLS.SUB_RUN_ONLY)).toBeVisible();
+    await expect(details.getByText(NR_TOOLS.MCP_HARNESS_RULES)).toBeVisible();
     await details.getByRole("button", { name: NR_REVIEW.CLOSE, exact: true }).last().click();
     const totals = page.getByRole("region", { name: NR_TOOLS.TOTALS_ARIA });
     await expect(totals.getByText(NR_TOOLS.MCP_SANDBOX_READABLE)).toBeVisible();
     await expect(totals.getByText(NR_TOOLS.DELIVERY_ENV)).toBeVisible();
     const claude = card(page, "Claude Code");
-    await expect(claude.getByText(NR_TOOLS.MCP_RUNS_IN_SANDBOX)).toBeVisible();
+    await expect(claude.getByText(NR_TOOLS.MCP_RUNS_HERE)).toBeVisible();
     await expect(claude.getByText(NR_TOOLS.MCP_HARNESS_RULES)).toBeVisible();
 
     // Codex CLI cannot apply a rule on this server's tools: the run would be refused.

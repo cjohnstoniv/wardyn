@@ -197,9 +197,7 @@ export const NR_TOOLS = {
   MCP_ERR_URL: "Enter the server URL.",
   /** Switch on (features.mcp_local_servers): F1MCP-1r2. */
   MCP_CARD_BODY_LOCAL: "Connect a remote MCP server by URL, or start one in a sandbox. A remote server's token stays with the proxy.",
-  MCP_TAB_REMOTE: "Remote (HTTPS)",
   MCP_TAB_LOCAL: "Runs in a sandbox",
-  MCP_WHERE: "Where it runs",
   MCP_WHERE_RUN: "This run's sandbox",
   MCP_WHERE_RUN_HINT:
     "A server Wardyn starts as a command inside this run's sandbox. It runs with the agent's access: anything the agent can read or reach, the server can too, and the agent can use the server's secrets.",
@@ -209,11 +207,13 @@ export const NR_TOOLS = {
   MCP_COMMAND_HELP: "The command and its arguments, started in the sandbox and spoken to over stdio. Pin the package version, for example @1.4.2.",
   MCP_ERR_COMMAND: "Enter the command.",
   MCP_ERR_PIN: "Pin the package version, for example @example/mcp-server@1.4.2.",
+  /** The next two are the server's own sentences (internal/types validateLocal), minus the field path the error already sits on. */
+  MCP_ERR_PROGRAM: (command: string) => `${JSON.stringify(command)} must be npx or the absolute path of a program in the image`,
+  MCP_ERR_NPX_FLAG: "npx takes only -y before the package here; name the package as its first argument",
   MCP_HOSTS_PLACEHOLDER: "e.g. api.example.com",
   MCP_HOSTS_HELP: "The hosts the server reaches. Your organisation's ceiling still applies.",
   MCP_DELIVERY_NOTE: "A request header is added by the proxy and never enters the sandbox. An environment variable or a file is placed in the sandbox.",
   MCP_HARNESS_RULES: "Rules for this server's tools are applied by the harness, not by Wardyn's proxy.",
-  MCP_RUNS_IN_SANDBOX: "Runs in the sandbox",
   MCP_RUNS_HERE: "Runs in this run's sandbox",
   MCP_SANDBOX_READABLE: "Any process in the sandbox can read it, the agent included.",
   MCP_REFUSED: (harness: string | number, server: string | number) =>

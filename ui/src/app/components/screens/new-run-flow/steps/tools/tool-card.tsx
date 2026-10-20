@@ -125,7 +125,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 /** The whole breakdown, with the same four sections in the same order. */
-function DetailsDialog({ icon, title, org, body, access, onClose }: { icon: string; title: string; org?: boolean; body?: string; access: ToolAccess; onClose: () => void }) {
+function DetailsDialog({ icon, title, org, sub, body, access, onClose }: { icon: string; title: string; org?: boolean; sub?: string; body?: string; access: ToolAccess; onClose: () => void }) {
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent {...(body ? {} : { "aria-describedby": undefined })}>
@@ -134,7 +134,7 @@ function DetailsDialog({ icon, title, org, body, access, onClose }: { icon: stri
             <IconTile mark={icon} />
             <div className="min-w-0 text-left">
               <DialogTitle>{title}</DialogTitle>
-              {org && <p className="text-xs text-muted-foreground">{NR_TOOLS.FROM_ORG}</p>}
+              {(org || sub) && <p className="text-xs text-muted-foreground">{org ? NR_TOOLS.FROM_ORG : sub}</p>}
             </div>
           </div>
           {body && <DialogDescription>{body}</DialogDescription>}
@@ -206,7 +206,7 @@ export function ToolCard({ icon, title, org, sub, body, access, brings, look = "
   const details = access && !isNothing(access) ? (
     <>
       <Button type="button" variant="ghost" size="sm" aria-label={NR_TOOLS.DETAILS_FOR(title)} aria-haspopup="dialog" onClick={() => setOpen(true)}>{RUN_COCKPIT.credentialDetails}</Button>
-      {open && <DetailsDialog icon={icon} title={title} org={org} body={body} access={access} onClose={() => setOpen(false)} />}
+      {open && <DetailsDialog icon={icon} title={title} org={org} sub={sub} body={body} access={access} onClose={() => setOpen(false)} />}
     </>
   ) : undefined;
   return (

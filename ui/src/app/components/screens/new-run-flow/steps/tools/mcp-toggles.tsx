@@ -59,7 +59,7 @@ export function McpToggles({ fact, harnessName, servers, isOn, onToggle, refused
                     onCheckedChange={(v) => onToggle(s, v === true)}
                   />
                   <label htmlFor={id}>{s.name}</label>
-                  {local && <Chip>{NR_TOOLS.MCP_RUNS_IN_SANDBOX}</Chip>}
+                  {local && <Chip>{NR_TOOLS.MCP_RUNS_HERE}</Chip>}
                 </div>
                 {local && (on && refused?.(s) ? (
                   <p role="alert" className="flex items-start gap-1.5 pl-6 text-sm text-danger">
