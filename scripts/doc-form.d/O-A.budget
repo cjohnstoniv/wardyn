@@ -120,7 +120,9 @@
 # docs/OPERATIONS.md 56776 measured (0.10 BOUNDARY): the org walls renamed the Wardyn boundary, with modes.
 # docs/OPERATIONS.md 57424 = ours 56776 + theirs 57392 - base 56744 at the main merge into 0.10 BOUNDARY.
 # docs/OPERATIONS.md 57533 = ours 57501 + theirs 57424 - base 57392 at the 0.10 W4b merge of LAY-A onto the train.
-docs/OPERATIONS.md=57533 share=35
+# docs/OPERATIONS.md 57562 = ours 57533 + theirs 57421 - base 57392 at the 0.10 W4b merge of the CTL-B fix onto the train.
+docs/OPERATIONS.md=57562 share=35
+# docs/OPERATIONS.md 57421 adds 29 (0.10 CTL-B): the recording level and migration line (#2968).
 # docs/OPERATIONS.md 55848 adds 132 over 55716: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
 # docs/OPERATIONS.md 55840 adds 124 over 55716, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # docs/OPERATIONS.md 55867 adds 27 over 55840, measured: a run whose runner cannot be asked falls back to this deployment's runner, the older-runner exception, pooled runs, and the runner_offline gap reason.
