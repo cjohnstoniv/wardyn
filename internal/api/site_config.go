@@ -876,21 +876,8 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("ETag", computeETag(saved))
-	// Projected onto the response for the same reason GET projects it — and
-	// AFTER the ETag above, which must hash the stored document.
-	saved.EffectiveScmHosts = effectiveScmHosts(saved)
-	saved.WithheldScmHosts = withheldScmHosts(saved)
-	// git_pat_broker_enabled (#381 F4): the SAME after-ETag projection, so a
-	// `site-config set` (or the console's own PUT round trip) sees the live
-	// switch immediately rather than a dropped field until the next GET. A
-	// COPY, never a mutation through the pointer — `saved` came straight back
-	// from the store and may be the same object a concurrent reader holds.
-	if providersConfigured(saved) {
-		wp := *saved.WorkspaceProviders
-		on := !s.cfg.DisableGitPATBroker
-		wp.GitPatBrokerEnabled = &on
-		saved.WorkspaceProviders = &wp
-	}
+	// Projected onto the response AFTER the ETag above, which must hash the stored document.
+	saved = s.projectPutSiteConfig(saved)
 	// dangling_secret_refs surfaces the "reset+apply came back green but every
 	// credentialed path is dead" gap: this document round-trips secret NAMES
 	// only, so an apply after a secret-store wipe (or a hand-edited file) can
@@ -915,6 +902,25 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 // both signals are freshly-computed, PUT-time-only facts, never persisted, so
 // neither must ever round-trip through a `site-config get` capture back into a
 // later `site-config set` body.
+// projectPutSiteConfig projects the PUT response's read-only fields onto the
+// saved document, for the same reason GET projects them.
+func (s *Server) projectPutSiteConfig(saved types.SiteConfig) types.SiteConfig {
+	saved.EffectiveScmHosts = effectiveScmHosts(saved)
+	saved.WithheldScmHosts = withheldScmHosts(saved)
+	// git_pat_broker_enabled (#381 F4): the SAME after-ETag projection, so a
+	// `site-config set` (or the console's own PUT round trip) sees the live
+	// switch immediately rather than a dropped field until the next GET. A
+	// COPY, never a mutation through the pointer — `saved` came straight back
+	// from the store and may be the same object a concurrent reader holds.
+	if providersConfigured(saved) {
+		wp := *saved.WorkspaceProviders
+		on := !s.cfg.DisableGitPATBroker
+		wp.GitPatBrokerEnabled = &on
+		saved.WorkspaceProviders = &wp
+	}
+	return saved
+}
+
 type siteConfigPutResponse struct {
 	types.SiteConfig
 	DanglingSecretRefs []string `json:"dangling_secret_refs,omitempty"`
