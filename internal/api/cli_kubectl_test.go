@@ -115,6 +115,16 @@ func (f *kubeFixture) setRow(t *testing.T, def types.ComponentDefinition) {
 	}
 }
 
+// register stores token as the token route does, for the row as it stands.
+func (f *kubeFixture) register(t *testing.T, token string) {
+	t.Helper()
+	row, err := f.st.GetComponent(context.Background(), f.id, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.sec.m[kubectlTokenSecretName(f.id.String())] = mustJSON(newKubectlTokenRecord(*cliKubectlOf(row.Definition), token))
+}
+
 func (f *kubeFixture) dispatch(caCert string) ([]runner.InjectionGrant, kubectlCLIPlan, map[string]string, *types.RunPolicySpec, bool) {
 	env, policy := map[string]string{}, &types.RunPolicySpec{}
 	inj, plan, ok := f.srv.authorKubectlCLI(context.Background(), f.st.run,
@@ -207,8 +217,10 @@ func TestKubectlCLI_TokenRoute(t *testing.T) {
 	if w := f.putToken(f.id, `{"value":"`+kubeRegistered+`"}`); w.Code != http.StatusNoContent {
 		t.Fatalf("put = %d %s", w.Code, w.Body)
 	}
-	if got := string(f.sec.m[name]); got != kubeRegistered {
-		t.Fatalf("operator namespace holds %q under %s", got, name)
+	var rec kubectlTokenRecord
+	if err := json.Unmarshal(f.sec.m[name], &rec); err != nil || rec.Value != kubeRegistered || rec.Server != f.api.srv.URL ||
+		rec.CASHA256 == "" || rec.ServiceAccount != (types.CLIServiceAccount{Namespace: "wardyn", Name: "runs"}) {
+		t.Fatalf("operator namespace holds %q under %s", f.sec.m[name], name)
 	}
 	if rows := f.audit.find("secret.write"); len(rows) != 1 || rows[0].Target != name || rows[0].Outcome != "success" ||
 		strings.Contains(string(rows[0].Data), kubeRegistered) {
@@ -270,7 +282,7 @@ func TestKubectlCLI_ComponentGate(t *testing.T) {
 	if refused := f.srv.componentKubectlCLIAdmitted(r, adm, &att, 0); refused == nil || refused.reason != reasonComponentSecretMissing {
 		t.Fatalf("unregistered = %+v, want secret missing", refused)
 	}
-	f.sec.m[kubectlTokenSecretName(f.id.String())] = []byte(kubeRegistered)
+	f.register(t, kubeRegistered)
 	adm = &componentAdmission{credentials: true}
 	if refused := f.srv.componentKubectlCLIAdmitted(r, adm, &att, 0); refused != nil {
 		t.Fatalf("registered = %+v", refused)
@@ -291,7 +303,7 @@ func TestKubectlCLI_ComponentGate(t *testing.T) {
 // snapshot. The registered token is nowhere in what the sandbox gets.
 func TestKubectlCLI_DispatchStagesConfigNotToken(t *testing.T) {
 	f := newKubeFixture(t)
-	f.sec.m[kubectlTokenSecretName(f.id.String())] = []byte(kubeRegistered)
+	f.register(t, kubeRegistered)
 	inj, plan, env, policy, ok := f.dispatch("run-ca-cert")
 	if !ok || len(inj) != 1 {
 		t.Fatalf("dispatch ok=%v injections=%d", ok, len(inj))
@@ -368,7 +380,7 @@ func TestKubectlCLIPlanCloseWithheld(t *testing.T) {
 // API server, trusting the row's CA, and hands only the minted token on.
 func TestKubectlCLI_ResolveMintsShortLived(t *testing.T) {
 	f := newKubeFixture(t)
-	f.sec.m[kubectlTokenSecretName(f.id.String())] = []byte(kubeRegistered)
+	f.register(t, kubeRegistered)
 	inj, _, _, _, _ := f.dispatch("run-ca-cert")
 	w := f.resolve(inj[0].Rule, inj[0].GrantID, kubeOwner)
 	if w.Code != http.StatusOK {
@@ -435,7 +447,7 @@ func TestKubectlCLI_ResolveRefusals(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f := newKubeFixture(t)
-			f.sec.m[kubectlTokenSecretName(f.id.String())] = []byte(kubeRegistered)
+			f.register(t, kubeRegistered)
 			inj, _, _, _, _ := f.dispatch("run-ca-cert")
 			rule := inj[0].Rule
 			sub := c.mutate(t, f, &rule)
@@ -518,52 +530,78 @@ func TestKubectlCLI_AccessCredentialScope(t *testing.T) {
 	}
 }
 
-// A purge and a re-register for another cluster that land between the
-// resolve's row check and its token read wait for the read: the token sent to
-// the row's API server is the one registered for that server.
-func TestKubectlCLI_ResolveHoldsTheRowAgainstAPurge(t *testing.T) {
+// DR-0295: a resolve that passed the row check for cluster A pauses; the row is
+// re-pinned to cluster B, A's token purged and B's registered through the
+// route; the resolve resumes. Cluster A never receives B's token: the record
+// read names B, not the grant's A, and the resolve refuses.
+func TestKubectlCLI_RaceBearerBNeverReachesClusterA(t *testing.T) {
+	const bearerA = "bearer-of-cluster-A-registered-by-admin-0001"
+	const bearerB = "bearer-of-cluster-B-registered-by-admin-0002"
 	f := newKubeFixture(t)
-	f.sec.m[kubectlTokenSecretName(f.id.String())] = []byte(kubeRegistered)
-	inj, _, _, _, _ := f.dispatch("run-ca-cert")
-	other := newKubeAPIServer(t)
-	const otherToken = "registered-token-for-the-other-cluster"
-	moved := make(chan struct{})
+	f.register(t, bearerA)
+	inj, _, _, _, ok := f.dispatch("run-ca-cert")
+	if !ok || len(inj) != 1 {
+		t.Fatalf("dispatch: ok=%v inj=%d", ok, len(inj))
+	}
+	b := newKubeAPIServer(t)
 	t.Cleanup(func() { kubectlResolvePause = func() {} })
 	kubectlResolvePause = func() {
-		kubectlResolvePause = func() {}
-		go func() {
-			defer close(moved)
-			// The row's re-pin and purge, under the lock handlePutComponent holds, then the token route.
-			ctx, unlock, err := f.srv.lockCLIRow(context.Background(), f.id.String())
-			if err != nil {
-				t.Error(err)
-				return
-			}
-			f.setRow(t, kubectlRowDef(other.srv.URL, other.caPEM(), "team-a", "team-b"))
-			if err := f.srv.purgeCLISignIns(ctx, f.id.String()); err != nil {
-				t.Error(err)
-			}
-			unlock()
-			if w := f.putToken(f.id, `{"value":"`+otherToken+`"}`); w.Code != http.StatusNoContent {
-				t.Errorf("re-register = %d %s", w.Code, w.Body)
-			}
-		}()
-		select {
-		case <-moved:
-		case <-time.After(time.Second):
+		f.setRow(t, kubectlRowDef(b.srv.URL, b.caPEM(), "team-a", "team-b"))
+		if err := f.srv.purgeCLISignIns(t.Context(), f.id.String()); err != nil {
+			t.Fatalf("purge: %v", err)
+		}
+		if w := f.putToken(f.id, `{"value":"`+bearerB+`"}`); w.Code != http.StatusNoContent {
+			t.Fatalf("register B: %d %s", w.Code, w.Body)
 		}
 	}
 	w := f.resolve(inj[0].Rule, inj[0].GrantID, kubeOwner)
-	<-moved
-	f.api.mu.Lock()
-	seen := append([]string(nil), f.api.seen...)
-	f.api.mu.Unlock()
-	for _, s := range seen {
-		if strings.Contains(s, otherToken) {
-			t.Fatalf("the row's API server was sent the token registered for another cluster: %q", seen)
+	for _, k := range []*kubeAPIServer{f.api, b} {
+		k.mu.Lock()
+		seen := append([]string(nil), k.seen...)
+		k.mu.Unlock()
+		for _, s := range seen {
+			if strings.Contains(s, bearerB) || strings.Contains(s, bearerA) {
+				t.Errorf("a token reached an API server after the re-pin: %q", seen)
+			}
 		}
 	}
-	if w.Code != http.StatusOK || len(seen) != 1 || !strings.Contains(seen[0], "Bearer "+kubeRegistered) {
-		t.Errorf("resolve = %d %s; the API server saw %q", w.Code, w.Body, seen)
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), `"`+reasonScopeChanged+`"`) {
+		t.Errorf("resolve = %d %s, want the scope-changed refusal", w.Code, w.Body)
+	}
+}
+
+// A token whose record names another server, CA or account than the grant's
+// is never used, even with the row unchanged (a purge that did not run).
+func TestKubectlCLI_ResolveRefusesATokenPinnedElsewhere(t *testing.T) {
+	f := newKubeFixture(t)
+	inj, _, _, _, _ := f.dispatch("run-ca-cert")
+	name := kubectlTokenSecretName(f.id.String())
+	for label, rec := range map[string]kubectlTokenRecord{
+		"another server":  {Server: "https://other.example", Value: kubeRegistered},
+		"a bare token":    {},
+		"another account": {Value: kubeRegistered},
+	} {
+		if label == "a bare token" {
+			f.sec.m[name] = []byte(kubeRegistered)
+		} else {
+			row, _ := f.st.GetComponent(context.Background(), f.id, "")
+			good := newKubectlTokenRecord(*cliKubectlOf(row.Definition), kubeRegistered)
+			if rec.Server == "" {
+				rec.Server = good.Server
+			}
+			rec.CASHA256 = good.CASHA256
+			if label != "another account" {
+				rec.ServiceAccount = good.ServiceAccount
+			}
+			f.sec.m[name] = mustJSON(rec)
+		}
+		if w := f.resolve(inj[0].Rule, inj[0].GrantID, kubeOwner); w.Code != http.StatusForbidden {
+			t.Errorf("%s: resolve = %d %s", label, w.Code, w.Body)
+		}
+	}
+	f.api.mu.Lock()
+	defer f.api.mu.Unlock()
+	if len(f.api.seen) != 0 {
+		t.Errorf("the API server saw %q", f.api.seen)
 	}
 }

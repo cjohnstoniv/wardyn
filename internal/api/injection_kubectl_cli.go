@@ -15,7 +15,8 @@ package api
 //  4. the switch must still be on, the run must still carry the row, and the
 //     live row must still name the snapshot's cluster, CA, account, namespaces
 //     and access;
-//  5. read the registered token from the operator namespace (never a person's);
+//  5. read the registered token from the operator namespace (never a person's),
+//     and use it only if it was registered for the snapshot's server, CA and account;
 //  6. trade it at the cluster's TokenRequest API for a token of the same
 //     account that lives kubectlTokenLifetimeSec, trusting only the row's CA.
 //
@@ -98,17 +99,29 @@ func (s *Server) resolveKubectlCLIInjection(w http.ResponseWriter, r *http.Reque
 	if host, _, ok := k.HostPort(); !ok || !hostEqual(minted.Injection.Host, host) {
 		return fail(http.StatusForbidden, reasonHostNotEndpoint, kubectlResolveHostPin, map[string]any{"host": minted.Injection.Host})
 	}
-	drift, live, registered, readErr, err := s.kubectlResolveRow(ctx, claims.RunID, sn, name)
+	drift, live, err := s.kubectlCLIDrift(ctx, claims.RunID, sn)
 	switch {
-	case readErr != nil:
-		status, reason, _ := storeReadRefusal(name, readErr)
-		return fail(status, reason, kubectlResolveUnregistered, nil)
 	case err != nil:
 		return fail(http.StatusServiceUnavailable, reasonRunUnreadable, kubectlResolveUnreadable, nil)
 	case drift != "":
 		return fail(http.StatusForbidden, reasonScopeChanged, kubectlResolveChanged, map[string]any{"drift": drift})
 	}
-	token, expires, err := mintKubectlToken(ctx, *live, string(registered), s.cfg.Now())
+	kubectlResolvePause()
+	// The operator namespace only: a person's row of the same name is never read.
+	raw, err := s.cfg.Secrets.For("").Get(ctx, name)
+	if err != nil {
+		status, reason, _ := storeReadRefusal(name, err)
+		return fail(status, reason, kubectlResolveUnregistered, nil)
+	}
+	// The row may have moved and its token been re-registered since the check
+	// above: the token is used only if it was registered for the snapshot's
+	// server, CA and account.
+	var rec kubectlTokenRecord
+	if json.Unmarshal(raw, &rec) != nil || !rec.pinnedTo(sn) {
+		return fail(http.StatusForbidden, reasonScopeChanged, kubectlResolveChanged, map[string]any{"drift": "registered_token"})
+	}
+	registered := rec.Value
+	token, expires, err := mintKubectlToken(ctx, *live, registered, s.cfg.Now())
 	if err != nil {
 		return fail(http.StatusBadGateway, reasonSinkResolveFailed, kubectlResolveMintFailed, map[string]any{"error": err.Error()})
 	}
@@ -131,29 +144,6 @@ func (s *Server) resolveKubectlCLIInjection(w http.ResponseWriter, r *http.Reque
 
 // kubectlResolvePause is a test seam between the row check and the token read.
 var kubectlResolvePause = func() {}
-
-// kubectlResolveRow checks the live row against the snapshot and reads its
-// registered token under the lock the row's purge and the token route hold
-// (lockCLIRow), so the token read is the one registered for the row checked:
-// never one registered for a server, CA or account the row moved to between.
-// readErr is the token read's own failure, once the row has held.
-func (s *Server) kubectlResolveRow(ctx context.Context, runID uuid.UUID, sn kubectlGrantSnapshot, name string,
-) (drift string, live *types.CLIKubectl, registered []byte, readErr, err error) {
-	ctx, unlock, err := s.lockCLIRow(ctx, sn.ComponentID)
-	if err != nil {
-		return "", nil, nil, nil, err
-	}
-	defer unlock()
-	if drift, live, err = s.kubectlCLIDrift(ctx, runID, sn); err != nil || drift != "" {
-		return drift, nil, nil, nil, err
-	}
-	kubectlResolvePause()
-	// The operator namespace only: a person's row of the same name is never read.
-	if registered, readErr = s.cfg.Secrets.For("").Get(ctx, name); readErr != nil {
-		return "", nil, nil, readErr, nil
-	}
-	return "", live, registered, nil, nil
-}
 
 // kubectlMintTimeout bounds one TokenRequest round trip.
 const kubectlMintTimeout = 15 * time.Second

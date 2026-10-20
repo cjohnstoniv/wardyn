@@ -189,11 +189,12 @@ func (s *Server) handlePutKubectlToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := kubectlTokenSecretName(id.String())
+	record := mustJSON(newKubectlTokenRecord(*cliKubectlOf(row.Definition), body.Value))
 	if r, ok = s.beginRequestWrite(w, r, ""); !ok {
 		return
 	}
 	if err := s.putOwned(r.Context(), "", func(ctx context.Context) error {
-		return s.cfg.Secrets.For("").Put(ctx, name, []byte(body.Value))
+		return s.cfg.Secrets.For("").Put(ctx, name, record)
 	}); err != nil {
 		s.auditRowNotWritten(r.Context(), err, actorTypeFromRequest(r), principalFromRequest(r), "", name)
 		writeServerError(w, r, "store kubectl token", err)
@@ -232,6 +233,27 @@ func attachedKubectlCLI(a attachedComponent) *types.CLIKubectl {
 // it is, for which row, and the cluster, account, namespaces and access the
 // run's proxy was configured with. The sink re-derives each from the live row
 // and refuses on any difference.
+// kubectlTokenRecord is what the token route stores: the token with the
+// server, CA and account it was registered for. A resolve uses it only for a
+// grant whose snapshot names the same three, so a token registered for one
+// cluster never reaches another, whatever happened to the row in between.
+type kubectlTokenRecord struct {
+	Server         string                  `json:"server"`
+	CASHA256       string                  `json:"ca_sha256"`
+	ServiceAccount types.CLIServiceAccount `json:"service_account"`
+	Value          string                  `json:"value"`
+}
+
+func newKubectlTokenRecord(k types.CLIKubectl, value string) kubectlTokenRecord {
+	sn := kubectlSnapshotOf(k)
+	return kubectlTokenRecord{Server: sn.Server, CASHA256: sn.CASHA256, ServiceAccount: sn.ServiceAccount, Value: value}
+}
+
+// pinnedTo reports whether the record was registered for the snapshot's server, CA and account.
+func (rec kubectlTokenRecord) pinnedTo(sn kubectlGrantSnapshot) bool {
+	return rec.Value != "" && rec.Server == sn.Server && rec.CASHA256 == sn.CASHA256 && rec.ServiceAccount == sn.ServiceAccount
+}
+
 type kubectlGrantSnapshot struct {
 	Mechanism      string                  `json:"mechanism"`
 	ComponentID    string                  `json:"component_id"`

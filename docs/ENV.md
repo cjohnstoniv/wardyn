@@ -1330,7 +1330,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 - Opt in to the `kubectl` CLI component kind (`cli.kind: kubectl`). Off by default.
 - On, an admin writes an organisation row through `PUT /api/v1/components/{id}` naming the API server (`server`, https, no path), its CA bundle (`ca_pem`), one service account (`service_account.namespace`, `service_account.name`), 1 to 16 `namespaces` and `access` (`read` or `write`).
-- The admin then stores that account's token with `PUT /api/v1/components/{id}/kubectl-token` (`{"value": "<token>"}`). It is kept in the operator namespace under a name the secrets API refuses, and is never returned.
+- The admin then stores that account's token with `PUT /api/v1/components/{id}/kubectl-token` (`{"value": "<token>"}`). It is kept in the operator namespace under a name the secrets API refuses, with the server, CA and account it was registered for, and is never returned. A run uses it only if those are still the ones it launched with.
 - Editing the row's server, CA or service account deletes the stored token, and so does deleting the row.
 - The account needs `create` on `serviceaccounts/token` for itself (bind it with `resourceNames`). At each proxy refresh the control plane trades the stored token for a 10-minute one with the cluster's TokenRequest API, trusting only the row's CA bundle.
 - The sandbox gets a `~/.kube/config` with the run's own CA and an inert token. Neither the stored token nor a minted one enters the sandbox.
