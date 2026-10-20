@@ -156,7 +156,9 @@ func (r *k8sRelay) forward(c net.Conn) {
 		r.mu.Unlock()
 		_ = c.Close()
 	}()
-	relayCopy(r.ctx, peer, c)
+	if first, ok := readFirstByte(c, relayFirstByteWait); ok {
+		relayCopy(r.ctx, peer, c, first)
+	}
 }
 
 // Fence marks run fenced, refuses its recorded proxy IP from now on, and closes the run's open

@@ -3,11 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # test-preflight-mutations.sh — proves scripts/test-lane-preflight.sh goes red when lane-preflight.sh
-# --candidate stops catching one of the three kinds of defect it exists to find before hosted CI does:
+# --candidate stops catching one of the two kinds of defect it exists to find before hosted CI does:
 #   1. a whole-tree guard (a test that reads docs, ui/, .github or walks the source) broken by a change
 #      in another package;
-#   2. a Postgres-only failure in a changed package, or in internal/api when the store under it changed;
-#   3. a race in a changed Playwright spec that shows on one seed of three.
+#   2. a Postgres-only failure in a changed package, or in internal/api when the store under it changed.
+# (Playwright is left to hosted ui-e2e.)
 # Each mutant reopens one of them in a copy of lane-preflight.sh or lib/candidate-tests.py; the harness
 # must fail on every mutant and pass on the unmutated copy. Daemon-free, like the harness it drives.
 set -euo pipefail
@@ -65,11 +65,5 @@ mutant "2 a broken selector is read as no Postgres tests" lane-preflight.sh \
   "elif grep -q 'no PG tests found' \"\${sel_err}\"; then" 'elif true; then'
 mutant "2 the Postgres step runs no test" lane-preflight.sh \
   'go test -p 1 -count=1 -timeout 30m -run "${pg_re}" "${pg_pkgs[@]}"' 'true'
-
-# 3. Playwright races
-mutant "3 a changed spec runs once" lane-preflight.sh 'for pass in 1 2 3; do' 'for pass in 1; do'
-mutant "3 a red later pass is ignored" lane-preflight.sh \
-  'WARDYN_E2E_NO_UI_BUILD=1 scripts/run-ui-e2e.sh "${e2e_specs[@]}"' \
-  'WARDYN_E2E_NO_UI_BUILD=1 sh -c '"'"'scripts/run-ui-e2e.sh "$@" || true'"'"' sh "${e2e_specs[@]}"'
 
 log "preflight mutations: PASS (every mutant killed)"

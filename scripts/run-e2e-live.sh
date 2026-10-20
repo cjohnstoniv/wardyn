@@ -27,6 +27,8 @@ cd "$ROOT"
 source "${ROOT}/scripts/lib/common.sh"
 # shellcheck source=scripts/lib/runner-limits.sh
 source "${ROOT}/scripts/lib/runner-limits.sh"
+# shellcheck source=scripts/lib/image-build.sh
+source "${ROOT}/scripts/lib/image-build.sh"
 
 if [[ "${WARDYN_TEST_DOCKER:-}" != "1" ]]; then
   skip_lane "run-e2e-live: set WARDYN_TEST_DOCKER=1 to run the Docker-dependent live e2e (skipping)."
@@ -34,7 +36,7 @@ fi
 BASE="${WARDYN_E2E_BASE_URL:-http://localhost:8080}"
 export WARDYN_ADMIN_TOKEN="${WARDYN_ADMIN_TOKEN:-demo-admin-token}"
 STARTED_WARDYND=""
-WARDYND_LOG="$(mktemp /tmp/wardynd-e2e-live.XXXXXX.log)"
+WARDYND_LOG="$(mktemp "${TMPDIR:-/tmp}/wardynd-e2e-live.XXXXXX.log")"
 
 die() { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; teardown; exit 1; }
 
@@ -52,7 +54,7 @@ command -v docker >/dev/null 2>&1 || die "docker not found"
 log "building wardynd (-tags docker), wardyn, and the oracle agent image"
 go build -tags docker -o bin/wardynd ./cmd/wardynd || die "build wardynd failed"
 go build -o bin/wardyn ./cmd/wardyn || die "build wardyn failed"
-docker build -q -f deploy/images/oracle/Dockerfile -t wardyn/agent-oracle:local . >/dev/null || die "build oracle image failed"
+wardyn_go_image_build -f deploy/images/oracle/Dockerfile -t wardyn/agent-oracle:local . || die "build oracle image failed"
 # The proxy sidecar image + a built UI are only needed if we start wardynd.
 
 # ── ensure a wardynd is listening ────────────────────────────────────────────
@@ -68,7 +70,7 @@ else
   PROXY_IMAGE="${WARDYN_PROXY_IMAGE:-wardyn/wardyn-proxy:local}"
   if ! docker image inspect "${PROXY_IMAGE}" >/dev/null 2>&1; then
     log "building the proxy sidecar image (${PROXY_IMAGE} absent on this host)"
-    docker build -q -f deploy/compose/Dockerfile.proxy -t "${PROXY_IMAGE}" . >/dev/null || die "build proxy sidecar image failed"
+    wardyn_go_image_build -f deploy/compose/Dockerfile.proxy -t "${PROXY_IMAGE}" . || die "build proxy sidecar image failed"
   fi
   log "starting a host-mode wardynd (logs: ${WARDYND_LOG})"
   # Ensure compose Postgres is up (run-host.sh expects 127.0.0.1:5432).

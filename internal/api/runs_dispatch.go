@@ -172,7 +172,8 @@ type dispatchParams struct {
 // ALLOWLIST so nothing above it can re-add a broker-managed host;
 // reassertCeilingDenies then runs after it (it only adds denies and only
 // removes credentials, so it cannot un-confine anything, and it has to sit
-// below every WIDENING phase — see its own ordering argument). The ProxyConfig
+// below every WIDENING phase — see its own ordering argument), and the final
+// seal after both meets the result with the outer layers. The ProxyConfig
 // snapshot then captures that final policy, and the run.policy.resolve audit
 // event discloses it. Keep new phases inside this sequence, in the right place
 // — a phase hoisted into a caller silently loses the ordering guarantee.
@@ -450,6 +451,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	s.recordRunSizing(ctx, run, resourceLimitsToRunner(policy.Resources), len(plan.azure.gates) > 0)
 	s.reassertCeilingDenies(ctx, run, &policy, &injections, ceiling, &p, sandboxEnv, &llm, &plan.bedrockMITMHosts, &p.Components.MITMHosts)
 	azureARM := plan.azureCLI.closeWithheld(&policy, injections) // the door, decided once; one the ceiling withheld takes its hosts with it
+	// The final seal, after every phase that adds a host and after the ceiling's
+	// re-assertion: nothing below may widen policy (run_policy_seal.go).
+	s.sealRunPolicy(ctx, run, &policy, p.Provenance)
 
 	// Host bind mounts (policy WorkspaceMounts + the host-mode Bedrock ~/.aws
 	// read-only mount) — operator-authored, never agent-chosen; see buildRunMounts.
@@ -600,6 +604,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// legacy path, the chosen model provider's own address on the provider
 			// path (see dispatchLLMPlan.llmUpstreams). Empty => the vendor host.
 			LLMUpstreams: plan.llmUpstreams,
+			// What each local_model upstream above may be asked for (#2957);
+			// nil, so no key is written, unless the run chose one.
+			LocalModels: plan.localModels,
 			// What the brokered-LLM 404 says when this run reaches that route
 			// with nothing behind it — compiled at dispatch because the sidecar
 			// knows only that no injection matched (see llmUnavailableDetail).
@@ -619,6 +626,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// the run has no profile and the site sets no policy_help, because an
 			// older proxy refuses the key.
 			Attribution: s.runAttribution(ctx, run, siteCfg, p.PolicyOverridden),
+			// WARDYN_EGRESS_PORT_RULE, "" when off: an older proxy refuses the key.
+			PortRule: s.cfg.EgressPortRule,
 		},
 		// Hard resource caps. A nil policy block (or a zero field) becomes the
 		// driver's conservative platform default, so EVERY sandbox is CPU/memory/

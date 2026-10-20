@@ -202,3 +202,67 @@ func TestPG_IdentityGuard_RefusesAWriteQueuedBehindAnUnbind(t *testing.T) {
 		t.Fatalf("a guarded insert after the cutoff = %v, want it to pass", err)
 	}
 }
+
+// TestPG_UnbindIdentity_RefusesWhileItHoldsRunners: a claimed runner and an unspent registration token are
+// held through the principal the unbind would release, so each refuses it until it is revoked or spent.
+func TestPG_UnbindIdentity_RefusesWhileItHoldsRunners(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	now := time.Now().UTC()
+	row, err := st.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: "sub-rn", Issuer: "https://login.example/" + uuid.NewString() + "/v2.0",
+		TenantID: uuid.NewString(), ObjectID: uuid.NewString()}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rn := newRunner("sub-rn")
+	if _, err := st.CreateRunner(ctx, rn); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ClaimRunner(ctx, rn.ID, "sub-rn", rn.KeyFingerprint, now); err != nil {
+		t.Fatal(err)
+	}
+	_, tok := mintToken(t, st, "sub-rn", now, now.Add(time.Hour))
+
+	var inUse *store.PrincipalInUseError
+	if err := st.UnbindIdentity(ctx, row.ID, "sub-rn"); !errors.As(err, &inUse) || inUse.Runners != 1 || inUse.RunnerTokens != 1 {
+		t.Fatalf("unbind while the principal holds a runner and a token = %v, want *PrincipalInUseError with one of each", err)
+	}
+	if _, err := st.RevokeRunner(ctx, rn.ID, now, "admin", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.RevokeRunnerRegistrationToken(ctx, tok.ID, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UnbindIdentity(ctx, row.ID, "sub-rn"); err != nil {
+		t.Fatalf("unbind after the runner is revoked and the token spent: %v", err)
+	}
+}
+
+// TestPG_MintRunnerRegistrationToken_RefusesADeactivatedOwner: with an identity guard on the context the
+// mint is refused for a deactivated owner and goes through for a live one.
+func TestPG_MintRunnerRegistrationToken_RefusesADeactivatedOwner(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	now := time.Now().UTC()
+	row, err := st.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: "sub-mint", Issuer: "https://login.example/" + uuid.NewString() + "/v2.0"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mint := func(ctx context.Context) error {
+		_, err := st.MintRunnerRegistrationToken(ctx, "wdr_"+uuid.NewString(), types.RunnerRegistrationToken{
+			ID: uuid.New(), Owner: "sub-mint", MintedBy: "admin", OrgURLSHA256: "org", CreatedAt: now, ExpiresAt: now.Add(time.Hour)})
+		return err
+	}
+	guarded := store.WithIdentityGuard(ctx, store.IdentityGuard{Principal: "sub-mint", Epoch: -1})
+	if err := mint(guarded); err != nil {
+		t.Fatalf("mint for a live owner: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE principal_identities SET deactivated_at = now() WHERE id = $1`, row.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := mint(guarded); !errors.Is(err, store.ErrIdentityDeactivated) {
+		t.Fatalf("mint for a deactivated owner = %v, want ErrIdentityDeactivated", err)
+	}
+}
