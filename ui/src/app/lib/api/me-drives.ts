@@ -32,6 +32,8 @@ export interface MeDrive {
   owned: boolean;
   /** The run whose work folder this drive kept (keep_work_folder); absent on a drive made by hand. */
   kept_from_run?: string;
+  /** That run's title when the catalogue was read; absent when the run is gone or untitled. */
+  kept_from_run_title?: string;
 }
 
 /** GET /me/drives (pkg/client.MeDriveCatalogue). */

@@ -108,6 +108,9 @@ type MeDrive struct {
 	// KeptFromRun is the id of the run whose work folder this drive kept
 	// (CreateRunRequest.KeepWorkFolder); "" on a drive made by hand.
 	KeptFromRun string `json:"kept_from_run,omitempty"`
+	// KeptFromRunTitle is that run's title when the catalogue was read; "" when
+	// the run is gone or has no title.
+	KeptFromRunTitle string `json:"kept_from_run_title,omitempty"`
 }
 
 // MemberDriveCreateRequest is POST /api/v1/me/drives: a person creates their

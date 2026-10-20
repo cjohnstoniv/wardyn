@@ -277,6 +277,51 @@ func TestKeepWorkFolderMarksTheDriveWithItsRun(t *testing.T) {
 	}
 }
 
+// TestKeptDriveCatalogueNamesItsRun: the catalogue row of a kept drive carries
+// the run's id and its title as the catalogue is read; a run that is gone, or
+// one that is not the owner's, leaves the title out, and a drive made by hand
+// carries neither.
+func TestKeptDriveCatalogueNamesItsRun(t *testing.T) {
+	st := newMemberDriveStore()
+	st.site = keepSite(true, true, 5, 0)
+	srv, _ := memberDriveServer(st, catalogueRunner(), "docker")
+	ctx := personCtx(aliceSub)
+	mk := func(name string, run *types.AgentRun) {
+		d := types.UserDrive{Name: name, OwnerSubject: aliceSub, Backend: types.DriveBackendDockerVolume}
+		if run != nil {
+			d.KeptFromRun = &run.ID
+		}
+		if _, err := st.CreateMemberDrive(ctx, d, 5); err != nil {
+			t.Fatal(err)
+		}
+	}
+	live := types.AgentRun{ID: uuid.New(), CreatedBy: aliceSub, Title: "nightly-tests"}
+	gone := types.AgentRun{ID: uuid.New(), CreatedBy: aliceSub, Title: "never stored"}
+	foreign := types.AgentRun{ID: uuid.New(), CreatedBy: bobSub, Title: "bob's run"}
+	st.runs = map[uuid.UUID]types.AgentRun{live.ID: live, foreign.ID: foreign}
+	mk("kept live", &live)
+	mk("kept gone", &gone)
+	mk("kept foreign", &foreign)
+	mk("by hand", nil)
+
+	type kept struct{ run, title string }
+	got := map[string]kept{}
+	for _, d := range meDrivesOf(t, srv, ctx).Drives {
+		got[d.Name] = kept{d.KeptFromRun, d.KeptFromRunTitle}
+	}
+	want := map[string]kept{
+		"kept live":    {live.ID.String(), "nightly-tests"},
+		"kept gone":    {gone.ID.String(), ""},
+		"kept foreign": {foreign.ID.String(), ""},
+		"by hand":      {"", ""},
+	}
+	for name, w := range want {
+		if got[name] != w {
+			t.Errorf("%s: kept_from_run, kept_from_run_title = %+v, want %+v", name, got[name], w)
+		}
+	}
+}
+
 // TestKeepWorkFolderHoldsNoDeliveredSecret: a file secret delivered to a run
 // that keeps its work folder lands in runner.ComponentSecretDir, outside every
 // drive the run mounts, the kept one included; and no managed file may sit

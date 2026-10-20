@@ -285,6 +285,20 @@ func keptFromRunOf(d types.UserDrive) string {
 	return d.KeptFromRun.String()
 }
 
+// keptFromRunTitle is the title of the run a member drive was kept from, read
+// now so a renamed run shows its current title. "" when the drive was made by
+// hand, the run is gone or untitled, or the run is not its owner's.
+func (s *Server) keptFromRunTitle(ctx context.Context, d types.UserDrive) string {
+	if d.KeptFromRun == nil {
+		return ""
+	}
+	run, err := s.cfg.Store.GetRun(ctx, *d.KeptFromRun)
+	if err != nil || run.CreatedBy != d.OwnerSubject {
+		return ""
+	}
+	return run.Title
+}
+
 // auditMemberDriveCreate writes drive.member.create. count is the owner's
 // drives after the insert; a failed read leaves it out rather than guessing.
 func (s *Server) auditMemberDriveCreate(r *http.Request, ms store.MemberDriveStore, d types.UserDrive, limit int) {
