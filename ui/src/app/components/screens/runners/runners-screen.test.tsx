@@ -313,7 +313,7 @@ describe("Admin -> Runners list", () => {
     listMock.mockResolvedValue([]);
     renderScreen();
     expect(await screen.findByText("No runners yet")).toBeInTheDocument();
-    expect(screen.getByText(/People register a computer from Your account → My runner\./)).toBeInTheDocument();
+    expect(screen.getByText("People add a computer from Your account → My runner. To set up computers through device management, create a registration token under Managed install (MDM) above.")).toBeInTheDocument();
   });
 
   it("a failed read shows its own title and a Retry that reads again", async () => {

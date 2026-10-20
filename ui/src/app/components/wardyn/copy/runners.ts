@@ -64,7 +64,7 @@ export const RUNNERS = {
   TURN_OFF_BODY:
     "Every runner's connection closes and no new run can go to one. Runs already on a runner keep going under the policy they started with, as they would offline — after about an hour their network stops and they're marked lost.",
   EMPTY_TITLE: "No runners yet",
-  EMPTY_BODY: "People register a computer from Your account → My runner. You can also create a registration token for someone and deliver it to their computer.",
+  EMPTY_BODY: "People add a computer from Your account → My runner. To set up computers through device management, create a registration token under Managed install (MDM) above.",
   FETCH_FAILED_TITLE: "Couldn't load runners",
   FETCH_FAILED_BODY:
     "Something went wrong reaching the server. Runners already claimed keep running their owners' runs under your policy — this list just can't show them right now.",
