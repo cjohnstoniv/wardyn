@@ -19,7 +19,7 @@ const (
 	BoundaryHardLimits BoundaryMode = "hard_limits"
 )
 
-// Boundary is the Wardyn boundary (migration 0199): the outermost layer of every run's effective
+// Boundary is the Wardyn boundary (migration 0200): the outermost layer of every run's effective
 // policy. A deployment with no row is in no_limits, so every run resolves as it did before the
 // boundary existed.
 //

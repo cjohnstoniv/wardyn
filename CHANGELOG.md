@@ -23,7 +23,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `cli_sessions`.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
   `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE` on
-  `governance_boundary` (migration `0199_governance_boundary`). Without it the Wardyn boundary cannot be read or
+  `governance_boundary` (migration `0200_governance_boundary`). Without it the Wardyn boundary cannot be read or
   written. The same migration's `agent_runs.break_glass` column needs no grant.
 
 ### Added

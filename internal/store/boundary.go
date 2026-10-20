@@ -14,7 +14,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// BoundaryStore reads the Wardyn boundary (migration 0199). A side interface, as RunPATReader
+// BoundaryStore reads the Wardyn boundary (migration 0200). A side interface, as RunPATReader
 // is: a store that does not implement it has no boundary, so every run resolves as before.
 type BoundaryStore interface {
 	GetBoundary(ctx context.Context) (types.Boundary, error)
