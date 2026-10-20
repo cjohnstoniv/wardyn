@@ -219,10 +219,11 @@ func (s *Server) stepRequirements(f *runFold, rec *foldRecorder) bool {
 	// Review's checklist read the same map.
 	f.present = s.presentSecretNamesFor(ctx, s.secretOwnerFromRequest(f.r))
 	selections := resolveWorkspaceSelections(*f.req)
+	ahead := previewWorkspaceEgressHosts(f.wsRefs, f.ceiling.Spec.AllowedDomains)
 	// One workspace at a time, so each one's additions are its own.
 	for _, ws := range f.wsRefs {
 		before := f.spec.Clone()
-		bound := &egressBound{trusted: f.ceiling.Spec.AllowedDomains}
+		bound := &egressBound{trusted: f.ceiling.Spec.AllowedDomains, ahead: ahead}
 		events, refusal := s.applyWorkspaceRequirementsFor(ctx, f.present, &f.spec, f.req.Agent, []types.Workspace{ws}, f.seed.attached, selections, bound)
 		if refusal != nil {
 			return !runError(refusal.status, refusal.reason, refusal.Error()).write(s, f.w, f.r)

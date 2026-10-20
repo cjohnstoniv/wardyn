@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"net/http/httptest"
 	"slices"
 	"testing"
 
@@ -332,5 +333,52 @@ func TestIntegrationFold_MemberOwnKeySatisfiesRequirement(t *testing.T) {
 		if !slices.Contains(spec.AllowedDomains, h) {
 			t.Fatalf("the requirement's egress %q must still fold without a credential", h)
 		}
+	}
+}
+
+// TestIntegrationFold_PreviewAndCreateJudgeTheSameAllowlist: a workspace lists a host, the integration
+// targets it with egress_host off. Create folds the requirement before the workspace's egress is
+// unioned into the spec, the dry doors after; both must grant the credential, and neither may when no
+// workspace lists the host.
+func TestIntegrationFold_PreviewAndCreateJudgeTheSameAllowlist(t *testing.T) {
+	const host = "artifactory.corp.internal"
+	integ := feedIntegration()
+	integ.Egress = []string{host}
+	integ.DisabledCapabilities = []string{"egress_host"}
+	for _, tc := range []struct {
+		name     string
+		approved []string
+		want     []string
+	}{
+		{"a workspace lists the host", []string{host}, []string{host}},
+		{"no workspace lists the host", nil, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ws := types.Workspace{ID: uuid.New(), ApprovedEgress: tc.approved,
+				Requirements: map[string]types.WorkspaceRequirement{"integration:corp-artifactory": {Level: "required", Provenance: "operator_set"}}}
+			granted := func(steps ...func(*Server, *runFold, *foldRecorder) bool) []string {
+				srv := runIntegrationSrv(t, []types.Integration{integ}, map[string][]byte{"artifactory-token": []byte("tok")})
+				f := &runFold{
+					w: httptest.NewRecorder(), r: httptest.NewRequest("POST", "/api/v1/runs", nil),
+					req: &createRunRequest{Agent: "claude-code"}, wsRefs: []types.Workspace{ws},
+					seed: workspaceSeed{attached: []types.Workspace{ws}},
+				}
+				for _, step := range steps {
+					if !step(srv, f, &foldRecorder{}) {
+						t.Fatalf("a fold step refused: %v", f.w.(*httptest.ResponseRecorder).Body)
+					}
+				}
+				var hosts []string
+				for _, sc := range apiKeyScopes(t, &f.spec) {
+					hosts = append(hosts, sc["host"])
+				}
+				return hosts
+			}
+			create := granted((*Server).stepRequirements)
+			preview := granted((*Server).stepPreviewEgress, (*Server).stepRequirements)
+			if !slices.Equal(create, tc.want) || !slices.Equal(preview, tc.want) {
+				t.Errorf("create granted %v, preview granted %v, want both %v", create, preview, tc.want)
+			}
+		})
 	}
 }

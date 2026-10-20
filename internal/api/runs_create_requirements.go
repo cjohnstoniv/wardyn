@@ -212,7 +212,7 @@ func (s *Server) applyWorkspaceRequirementsFor(ctx context.Context, present map[
 					integrationRows = s.effectiveIntegrations(ctx, present)
 					integrationRowsLoaded = true
 				}
-				events = append(events, s.applyIntegrationRequirement(ctx, present, integrationRows, spec, name)...)
+				events = append(events, s.applyIntegrationRequirement(ctx, present, integrationRows, spec, name, bound.aheadHosts())...)
 			case "write":
 				narrow := sel.ReadOnly
 				if readOnlyPinned(attached, selections, name) {
