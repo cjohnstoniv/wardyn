@@ -160,14 +160,14 @@ Identity and organisation binding are checked before connecting. Private lifecyc
 
 `wardyn-runnerd setup` is the one command: it registers this computer, creates the proxy bridge, installs the binary and a per-user service, and starts it. It is idempotent, so running it again is safe: an existing identity is never registered again, and the service files are rewritten and restarted.
 
-The service is per user, not a root service: the runner identity sits in the person's own configuration directory, where `wardyn runner claim` looks for it. A managed fleet installs the macOS `.pkg` for the whole computer ([Installing with a macOS package and MDM](operations/hybrid-laptops.md#installing-with-a-macos-package-and-mdm)); each person still runs `setup` as themselves.
+The service is per user, not a root service: the runner identity sits in the person's own configuration directory, where `wardyn runner claim` looks for it. A managed fleet installs the macOS `.pkg` for the whole computer ([Installing with a macOS package and MDM](operations/hybrid-laptops.md#installing-with-a-macos-package-and-mdm)), where each person registers with `wardyn-runnerd register` instead of `setup`.
 
 Nothing here needs a compiler: every release publishes prebuilt `wardyn-runnerd` and `wardyn` binaries for macOS (Apple silicon and Intel) and Linux (`amd64` and `arm64`); on Windows the runner runs the Linux build inside WSL2.
 
 | System | Download |
 |---|---|
 | macOS | `wardyn-runnerd.pkg`: `wardyn-runnerd` and the `wardyn` CLI, both on `PATH` |
-| Linux, WSL2 | `wardyn-runnerd-linux-<arch>` (`amd64` or `arm64`) and `install.sh`, with the CLI's `wardyn-linux-<arch>` beside them |
+| Linux, WSL2 | `wardyn-runnerd-linux-<arch>` (`amd64` or `arm64`) and `wardyn-runner-units.tar.gz` (its `runner/install.sh`), with the CLI's `wardyn-linux-<arch>` beside them |
 
 On a computer that is not a runner, download `wardyn-<os>-<arch>` alone.
 
@@ -178,7 +178,7 @@ On a computer that is not a runner, download `wardyn-<os>-<arch>` alone.
 
 1. Download the install from the table above, and verify it against the signed `SHA256SUMS` as described in [Verify the release assets](VERIFY.md#5-verify-the-release-assets), running `sha256sum -c --ignore-missing SHA256SUMS` since you hold one file.
 2. Save the registration token in a private file. Mint it with `wardyn runner token`, or ask an administrator.
-3. Run `chmod +x` on the download (a release download has no exec bit), then the command above as yourself, not as root. `install.sh --binary <path>` does both.
+3. Run `chmod +x` on the download (a release download has no exec bit), then the command above as yourself, not as root. `runner/install.sh --binary <path>` does both.
 4. Without `--claim`, `setup` prints the key fingerprint and how to claim. With `--claim` and no `WARDYN_TOKEN`, it claims nothing and says so; the admin token cannot claim.
 
 - `--claim` uses your own personal API token from `WARDYN_TOKEN`. `--pool NAME` needs `--claim` and `--default` needs `--pool`; both are refused before the token is spent.
