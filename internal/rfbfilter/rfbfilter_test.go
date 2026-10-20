@@ -9,12 +9,14 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeBackend is the sandbox side: Read hands out what the test queued, in the
@@ -244,38 +246,87 @@ func TestVersion33VNCAuth(t *testing.T) {
 	}
 }
 
-// A socket whose server does not open with RFB is not the desktop: every byte
-// goes through as it came, a 0x03 included.
-func TestNonRFBSocketRelayedUnchanged(t *testing.T) {
-	h := newHarness(t, Rules{}, false)
-	for _, msg := range [][]byte{[]byte(`{"hello":1}`), cutText(3, "not a desktop")} {
-		wire := frames(msg, false, false)
-		h.fb.chunks = append(h.fb.chunks, wire)
-		got, err := io.ReadAll(h.c)
-		if err != nil || !bytes.Equal(got, wire) {
-			t.Fatalf("non-RFB server bytes altered: %x (err %v)", got, err)
-		}
-	}
-	h.fb.written = nil
-	wire := frames(cutText(6, "x"), true, false)
-	if _, err := h.c.Write(wire); err != nil || !bytes.Equal(h.fb.written, wire) {
-		t.Fatalf("non-RFB browser bytes altered: %x (err %v)", h.fb.written, err)
-	}
-	if len(h.events) != 0 {
-		t.Fatalf("a non-RFB socket produced clipboard events: %+v", h.events)
+// A desktop socket is RFB or it closes: a server whose first data frame is not an RFB
+// ProtocolVersion, even one that sends RFB after a short prefix, ends it before a byte reaches
+// the browser.
+func TestServerNotSpeakingRFBClosesTheSocket(t *testing.T) {
+	for name, first := range map[string][]byte{"json": []byte(`{"hello":1}`), "one-byte prefix": []byte("X")} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t, Rules{}, false)
+			h.fb.chunks = append(h.fb.chunks, frames(first, false, false),
+				frames([]byte("RFB 003.008\n"), false, false), frames(cutText(3, "SECRET-OUT"), false, false))
+			got, err := io.ReadAll(h.c)
+			if !errors.Is(err, ErrNotRFB) || len(got) != 0 || len(h.refused) != 1 {
+				t.Fatalf("a non-RFB desktop socket was relayed: %q (err %v, %d refusals)", got, err, len(h.refused))
+			}
+		})
 	}
 }
 
-// A browser that speaks first, and not even in WebSocket frames, is not on an RFB socket: its
-// bytes, and the server's answer, pass as they are.
-func TestClientFirstUnframedBytesRelayedUnchanged(t *testing.T) {
+// The server speaks first in RFB, so browser frames that arrive before it are held, then parsed
+// in order: they cannot switch the filter off, and a blocked copy out after them is still dropped.
+func TestBrowserFramesBeforeTheServerAreHeldThenFiltered(t *testing.T) {
 	h := newHarness(t, Rules{}, false)
-	if _, err := h.c.Write([]byte("ping\n")); err != nil || string(h.fb.written) != "ping\n" {
-		t.Fatalf("client-first bytes: %q (err %v)", h.fb.written, err)
+	if _, err := h.c.Write(frames([]byte("RFB 003.008\n"), true, false)); err != nil {
+		t.Fatal(err)
 	}
-	h.fb.chunks = append(h.fb.chunks, []byte("RFB 003.008\n"))
-	if got, err := io.ReadAll(h.c); err != nil || string(got) != "RFB 003.008\n" {
-		t.Fatalf("server bytes after a raw client: %q (err %v)", got, err)
+	if len(h.fb.written) != 0 {
+		t.Fatalf("the desktop got browser bytes before it spoke: %x", h.fb.written)
+	}
+	if got := h.server([]byte("RFB 003.008\n")); string(got) != "RFB 003.008\n" {
+		t.Fatalf("server version: %q", got)
+	}
+	if got := payloads(t, h.fb.written); string(got) != "RFB 003.008\n" {
+		t.Fatalf("the held browser version did not follow the server's: %q", got)
+	}
+	h.server([]byte{1, 1})
+	h.client([]byte{1})
+	h.server(be32(0))
+	h.client([]byte{1})
+	h.server(serverInit())
+	if got := h.server(cutText(3, "SECRET-OUT")); bytes.Contains(got, []byte("SECRET-OUT")) {
+		t.Fatalf("a blocked copy out reached the browser after a client-first frame: %q", got)
+	}
+	if len(h.events) != 1 || h.events[0].Allowed {
+		t.Fatalf("events = %+v", h.events)
+	}
+}
+
+// The hold is bounded by size and by time; past either the socket closes.
+func TestTheHoldIsBounded(t *testing.T) {
+	h := newHarness(t, Rules{}, false)
+	if _, err := h.c.Write(make([]byte, maxHeld+1)); err == nil || len(h.refused) != 1 {
+		t.Fatalf("the relay held %d bytes (err %v)", maxHeld+1, err)
+	}
+
+	defer func(d time.Duration) { holdFor = d }(holdFor)
+	holdFor = 10 * time.Millisecond
+	refused := make(chan error, 1)
+	c := Wrap(&fakeBackend{}, Rules{}, func(Event) {}, func(err error) { refused <- err })
+	if _, err := c.Write(frames([]byte("RFB 003.008\n"), true, false)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-refused:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a desktop that never spoke kept the browser's bytes held")
+	}
+}
+
+// The sink sees the relayed bytes after the filter: an allowed cut text, never a dropped one.
+func TestSinkGetsTheFilteredBytes(t *testing.T) {
+	for _, allowed := range []bool{false, true} {
+		h := newHarness(t, Rules{PasteIn: allowed, CopyOut: allowed}, false)
+		var seen []byte
+		h.c.SetSink(func(_ bool, b []byte) { seen = append(seen, payloads(t, b)...) })
+		h.handshake38()
+		h.server(cutText(3, "SENTINEL-OUT"))
+		h.client(cutText(6, "SENTINEL-IN"))
+		for _, s := range []string{"SENTINEL-OUT", "SENTINEL-IN"} {
+			if bytes.Contains(seen, []byte(s)) != allowed {
+				t.Fatalf("allowed=%v: the sink saw %s = %v", allowed, s, !allowed)
+			}
+		}
 	}
 }
 

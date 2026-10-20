@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -213,5 +214,39 @@ func TestDesktopFiles_RefusalsBeforeTheSandbox(t *testing.T) {
 	if w := doSSO(t, none.srv, http.MethodGet, none.path(""), none.ses["owner"], ""); w.Code != http.StatusConflict ||
 		!strings.Contains(w.Body.String(), reasonDesktopTransferUnavailable) {
 		t.Fatalf("a run with no desktop: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// sponsorFilesStore makes the env's run a service identity's, sponsored by sub-sponsor.
+type sponsorFilesStore struct {
+	*envelopeStore
+	store.ServiceIdentityStore // never called: only GetServiceIdentity is asked
+}
+
+func (s *sponsorFilesStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
+	run, err := s.envelopeStore.GetRun(ctx, id)
+	run.CreatedBy = types.ServicePrincipalPrefix + "ci-bot"
+	return run, err
+}
+
+func (s *sponsorFilesStore) GetServiceIdentity(context.Context, string) (types.ServiceIdentity, error) {
+	return types.ServiceIdentity{Name: "ci-bot", Sponsor: "sub-sponsor"}, nil
+}
+
+// A service identity's sponsor opens its terminal and apps, but moves no files: every Files
+// endpoint refuses the sponsor before the sandbox is reached.
+func TestDesktopFiles_SponsorIsRefusedOnEveryEndpoint(t *testing.T) {
+	e := newDesktopFilesEnv(t, &types.DesktopControls{Upload: types.TransferAllowed, Download: types.TransferAllowed})
+	e.srv.cfg.Store = &sponsorFilesStore{envelopeStore: e.srv.cfg.Store.(*envelopeStore)}
+	sponsor := ssoSession(t, "sub-sponsor", "sponsor@corp.example", oidc.RoleUser)
+	for _, c := range []struct{ method, name, body string }{
+		{http.MethodGet, "", ""}, {http.MethodPut, "in.txt", "x"}, {http.MethodGet, "agent-report.csv", ""},
+	} {
+		if w := doSSO(t, e.srv, c.method, e.path(c.name), sponsor, c.body); w.Code != http.StatusNotFound {
+			t.Errorf("the sponsor on %s %s: %d %s, want 404", c.method, e.path(c.name), w.Code, w.Body.String())
+		}
+	}
+	if e.folder.execs != 0 || len(e.transferRows("upload"))+len(e.transferRows("download")) != 0 {
+		t.Fatalf("a sponsor's request reached the sandbox (%d execs) or wrote transfer rows", e.folder.execs)
 	}
 }

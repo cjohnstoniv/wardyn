@@ -12,8 +12,11 @@
 // it cannot frame) ends the connection rather than relaying bytes it has not
 // read. The browser's SetEncodings is rewritten to the encodings it can frame.
 //
-// A socket whose server does not open with an RFB ProtocolVersion is relayed
-// unchanged: the filter keys on what the server speaks, not on an app's name.
+// The caller wraps a desktop's socket only, and that socket is RFB or it closes:
+// a server whose first data frame is not an RFB ProtocolVersion ends it with
+// ErrNotRFB. The server speaks first in RFB, so browser bytes that arrive before
+// that frame are held (up to maxHeld and holdFor) and parsed in order once it
+// has. Nothing is ever relayed unread.
 package rfbfilter
 
 import (
@@ -26,6 +29,7 @@ import (
 	"hash"
 	"io"
 	"sync"
+	"time"
 )
 
 // Direction is which way a clipboard transfer crosses the relay.
@@ -56,6 +60,20 @@ type Event struct {
 	Allowed   bool
 }
 
+// ErrNotRFB is the server's first data frame not opening with an RFB ProtocolVersion.
+var ErrNotRFB = errors.New("rfb relay: the desktop socket does not speak RFB")
+
+// Sink receives the relayed bytes after the filter, as WebSocket frames: toBrowser is the
+// server's side as the browser gets it, otherwise the browser's side as the server gets it.
+// A dropped cut text never reaches it. It is called from the relaying goroutine, outside the
+// filter's lock, so a slow sink slows that direction of the socket.
+type Sink func(toBrowser bool, frames []byte)
+
+// Browser bytes the relay holds until the server's first frame says the socket is RFB.
+const maxHeld = 64 << 10
+
+var holdFor = 5 * time.Second // a var so a test can shorten it
+
 // maxFrame bounds one WebSocket frame, which the relay buffers to re-frame.
 // websockify sends at most 64 KiB per frame; a larger one closes the socket.
 const maxFrame = 8 << 20
@@ -63,9 +81,8 @@ const maxFrame = 8 << 20
 type mode int
 
 const (
-	sniffing mode = iota // no data frame from the server yet
+	sniffing mode = iota // no data frame from the server yet: browser bytes are held
 	rfbMode
-	rawMode // the server did not open with RFB: relay unchanged
 )
 
 // Conn is the filtered backend connection. Read yields the server's frames for
@@ -75,7 +92,9 @@ type Conn struct {
 	backend io.ReadWriteCloser
 	audit   func(Event)
 	refused func(error)
+	sink    Sink
 	once    sync.Once
+	wmu     sync.Mutex // serialises writes to the backend, so held browser bytes go first
 
 	mu     sync.Mutex // mode and the RFB state both directions share
 	mode   mode
@@ -85,6 +104,8 @@ type Conn struct {
 	rbuf      [32 << 10]byte
 	rin, rout []byte // server bytes not yet a whole frame; bytes ready for the browser
 	win       []byte // browser bytes not yet a whole frame
+	held      []byte // browser bytes that arrived before the server's first frame
+	holdTimer *time.Timer
 }
 
 // Wrap filters backend under rules, reporting each cut text to audit, and the
@@ -100,6 +121,9 @@ func Wrap(backend io.ReadWriteCloser, rules Rules, audit func(Event), refused fu
 	return c
 }
 
+// SetSink sets the sink for the filtered bytes. Call it before the socket is relayed.
+func (c *Conn) SetSink(s Sink) { c.sink = s }
+
 // Read returns the server's bytes for the browser, filtered.
 func (c *Conn) Read(p []byte) (int, error) {
 	for len(c.rout) == 0 {
@@ -107,9 +131,16 @@ func (c *Conn) Read(p []byte) (int, error) {
 		if n > 0 {
 			out, ferr := c.filter(&c.rin, c.rbuf[:n], true)
 			if ferr != nil {
+				c.backend.Close()
 				return 0, ferr
 			}
 			c.rout = out
+			if c.sink != nil && len(out) > 0 {
+				c.sink(true, out)
+			}
+			if ferr = c.flushHeld(); ferr != nil {
+				return 0, ferr
+			}
 		}
 		if err != nil && len(c.rout) == 0 {
 			return 0, err
@@ -120,18 +151,89 @@ func (c *Conn) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-// Write takes the browser's bytes for the server and forwards them filtered.
+// Write takes the browser's bytes for the server and forwards them filtered. Before the
+// server's first frame it holds them instead.
 func (c *Conn) Write(p []byte) (int, error) {
-	out, err := c.filter(&c.win, p, false)
-	if err != nil {
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
+	c.mu.Lock()
+	if c.mode == sniffing {
+		if len(c.held)+len(p) > maxHeld {
+			c.mu.Unlock()
+			return 0, c.fail(fmt.Errorf("rfb relay: the browser sent over %d bytes before the desktop spoke", maxHeld))
+		}
+		if c.holdTimer == nil {
+			c.holdTimer = time.AfterFunc(holdFor, c.holdExpired)
+		}
+		c.held = append(c.held, p...)
+		c.mu.Unlock()
+		return len(p), nil
+	}
+	held := c.takeHeld()
+	c.mu.Unlock()
+	if err := c.forward(append(held, p...)); err != nil {
 		return 0, err
 	}
-	if len(out) > 0 {
-		if _, err := c.backend.Write(out); err != nil {
-			return 0, err
-		}
-	}
 	return len(p), nil
+}
+
+// flushHeld forwards the held browser bytes once the server's first frame has decided.
+func (c *Conn) flushHeld() error {
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
+	c.mu.Lock()
+	held := c.takeHeld()
+	c.mu.Unlock()
+	return c.forward(held)
+}
+
+// takeHeld hands over the held bytes. The caller holds mu, and the server has decided.
+func (c *Conn) takeHeld() []byte {
+	if c.mode == sniffing || len(c.held) == 0 {
+		return nil
+	}
+	if c.holdTimer != nil {
+		c.holdTimer.Stop()
+	}
+	held := c.held
+	c.held = nil
+	return held
+}
+
+// forward filters browser bytes and writes them to the backend. The caller holds wmu.
+func (c *Conn) forward(p []byte) error {
+	if len(p) == 0 {
+		return nil
+	}
+	out, err := c.filter(&c.win, p, false)
+	if err != nil {
+		c.backend.Close()
+		return err
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	if c.sink != nil {
+		c.sink(false, out)
+	}
+	_, err = c.backend.Write(out)
+	return err
+}
+
+func (c *Conn) holdExpired() {
+	c.mu.Lock()
+	waiting := c.mode == sniffing
+	c.mu.Unlock()
+	if waiting {
+		_ = c.fail(fmt.Errorf("rfb relay: the desktop did not speak within %s of the browser", holdFor))
+	}
+}
+
+// fail reports err (once) and closes the backend, which ends both directions.
+func (c *Conn) fail(err error) error {
+	c.once.Do(func() { c.refused(err) })
+	c.backend.Close()
+	return err
 }
 
 // Close closes the backend.
@@ -154,13 +256,8 @@ func (c *Conn) filter(pending *[]byte, in []byte, fromServer bool) ([]byte, erro
 func (c *Conn) filterLocked(pending *[]byte, in []byte, fromServer bool, events *[]Event) ([]byte, error) {
 	*pending = append(*pending, in...)
 	var out []byte
-	for c.mode != rawMode {
+	for {
 		f, n, err := readFrame(*pending)
-		if err != nil && c.mode == sniffing && !fromServer {
-			// The browser spoke first and not in frames: not an RFB socket, whose server speaks first.
-			c.mode = rawMode
-			break
-		}
 		if err != nil {
 			return nil, err
 		}
@@ -173,10 +270,8 @@ func (c *Conn) filterLocked(pending *[]byte, in []byte, fromServer bool, events 
 			continue
 		}
 		if c.mode == sniffing {
-			if !fromServer || !looksRFB(f.payload) {
-				c.mode = rawMode
-				out = appendFrame(out, f, f.payload)
-				break
+			if !looksRFB(f.payload) {
+				return nil, ErrNotRFB // only server bytes are filtered while sniffing: the browser's are held
 			}
 			c.mode = rfbMode
 		}
@@ -196,9 +291,6 @@ func (c *Conn) filterLocked(pending *[]byte, in []byte, fromServer bool, events 
 		}
 		out = appendFrame(out, f, filtered)
 	}
-	out = append(out, *pending...)
-	*pending = nil
-	return out, nil
 }
 
 func looksRFB(p []byte) bool {

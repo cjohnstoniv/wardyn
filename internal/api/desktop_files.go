@@ -26,8 +26,10 @@ import (
 )
 
 // The run's Files panel (#2967): files move between the console and one folder in the desktop,
-// ~/Transfers, over the same exec lane the terminal uses, under the run's desktop rules. Every
-// transfer, and every refused one, is audited by direction, size and hash: never its name or content.
+// ~/Transfers, over the same exec lane the terminal uses, under the run's desktop rules. A transfer
+// that succeeds, fails in the sandbox, or is denied by the desktop rules or the upload limit is
+// audited by direction, size and hash, never its name or content (docs/AUDIT-ACTIONS.md). A request
+// refused before that (a name that is not plain, no such file, a run it may not enter) writes no row.
 const (
 	desktopTransferFolder = "~/Transfers"
 	// maxDesktopUploadBytes bounds one upload. The body streams into the sandbox; the bound is a

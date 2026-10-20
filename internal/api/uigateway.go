@@ -521,6 +521,9 @@ func (s *Server) uiRewrite(pr *httputil.ProxyRequest) {
 	// its own CSRF/host checks expect — never the run id we dial by.
 	pr.Out.Host = "localhost:" + strconv.Itoa(sess.Port)
 	uiStripInbound(pr.Out, s.cfg.UICookiePolicy)
+	if uiDesktopApp(sess.App) {
+		pr.Out.Header.Del("Sec-WebSocket-Extensions") // compression would hide the RFB stream (uiFilterUpgrade)
+	}
 }
 
 // uiStripInbound is the sandbox-ward half of the header hygiene. Cookies are
@@ -533,7 +536,6 @@ func (s *Server) uiRewrite(pr *httputil.ProxyRequest) {
 func uiStripInbound(out *http.Request, policy UICookiePolicy) {
 	out.Header.Del("Authorization")
 	out.Header.Del("Proxy-Authorization")
-	out.Header.Del("Sec-WebSocket-Extensions") // compression would hide a desktop's RFB stream (uiFilterUpgrade)
 	// Filtered off the RAW header, never rebuilt from out.Cookies(): net/http's
 	// parser silently DROPS any cookie whose value is not RFC-6265-valid (a
 	// space, a comma, a quote), so re-serialising through it ate a sandbox

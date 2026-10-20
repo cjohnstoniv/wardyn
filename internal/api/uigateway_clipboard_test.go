@@ -15,9 +15,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/rfbfilter"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -135,18 +137,51 @@ type desktopSession struct {
 
 // openDesktop runs the browser's half: the upgrade (offering compression, as browsers do) and the
 // RFB handshake. It stops at the first normal-phase frame for the test to read.
-func openDesktop(t *testing.T, h *uiHarness) desktopSession {
+func openDesktop(t *testing.T, h *uiHarness, app string) desktopSession {
+	t.Helper()
+	ds := upgradeApp(t, h, app)
+	if ds.resp.StatusCode != http.StatusSwitchingProtocols {
+		return ds
+	}
+	for _, reply := range [][]byte{[]byte("RFB 003.008\n"), {1}, {1}} {
+		if _, err := readWSFrame(ds.br); err != nil {
+			t.Fatalf("handshake read: %v", err)
+		}
+		if _, err := ds.conn.Write(wsFrame(reply, true)); err != nil {
+			t.Fatalf("handshake write: %v", err)
+		}
+	}
+	if init, err := readWSFrame(ds.br); err != nil || !bytes.Equal(init, rfbServerInit()) {
+		t.Fatalf("ServerInit through the relay: %x %v", init, err)
+	}
+	return ds
+}
+
+// desktopHarness is the UI harness with the run declaring the noVNC desktop beside its editor.
+func desktopHarness(t *testing.T, backend http.Handler, desktop *types.DesktopControls) *uiHarness {
+	t.Helper()
+	h := newUIHarness(t, backend)
+	h.store.putEffectivePolicy(h.run.ID, types.RunPolicySpec{
+		MinConfinementClass: types.CC2,
+		UIApps:              []types.UIApp{{Name: "code", Port: uiTestPort, Path: "/ide"}, {Name: "novnc", Port: uiTestPort}},
+		Desktop:             desktop,
+	})
+	return h
+}
+
+// upgradeApp sends the browser's WebSocket upgrade for app (offering compression, as browsers do).
+func upgradeApp(t *testing.T, h *uiHarness, app string) desktopSession {
 	t.Helper()
 	gw := httptest.NewServer(h.gateway)
 	t.Cleanup(gw.Close)
-	cookie := h.openSession()
+	cookie := h.openAppSession(app)
 	conn, err := net.Dial("tcp", gw.Listener.Addr().String())
 	if err != nil {
 		t.Fatalf("dial gateway: %v", err)
 	}
 	t.Cleanup(func() { conn.Close() })
 	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
-	req, _ := http.NewRequest(http.MethodGet, gw.URL+uiRunPrefix+h.run.ID.String()+"/code/websockify", nil)
+	req, _ := http.NewRequest(http.MethodGet, gw.URL+uiRunPrefix+h.run.ID.String()+"/"+app+"/websockify", nil)
 	req.Header.Set("Connection", "Upgrade")
 	req.Header.Set("Upgrade", "websocket")
 	req.Header.Set("Sec-WebSocket-Extensions", "permessage-deflate; client_max_window_bits")
@@ -159,22 +194,7 @@ func openDesktop(t *testing.T, h *uiHarness) desktopSession {
 	if err != nil {
 		t.Fatalf("read upgrade response: %v", err)
 	}
-	ds := desktopSession{br: br, conn: conn, resp: resp}
-	if resp.StatusCode != http.StatusSwitchingProtocols {
-		return ds
-	}
-	for _, reply := range [][]byte{[]byte("RFB 003.008\n"), {1}, {1}} {
-		if _, err := readWSFrame(br); err != nil {
-			t.Fatalf("handshake read: %v", err)
-		}
-		if _, err := conn.Write(wsFrame(reply, true)); err != nil {
-			t.Fatalf("handshake write: %v", err)
-		}
-	}
-	if init, err := readWSFrame(br); err != nil || !bytes.Equal(init, rfbServerInit()) {
-		t.Fatalf("ServerInit through the relay: %x %v", init, err)
-	}
-	return ds
+	return desktopSession{br: br, conn: conn, resp: resp}
 }
 
 func clipboardRows(t *testing.T, h *uiHarness, n int) []types.AuditEvent {
@@ -196,8 +216,13 @@ func digest(s string) string { d := sha256.Sum256([]byte(s)); return hex.EncodeT
 // audited by direction, size and hash with neither text in any audit row.
 func TestUIGateway_ClipboardDefaultsBlockCopyOutAndAuditBoth(t *testing.T) {
 	offered, pasted := make(chan string, 1), make(chan []byte, 1)
-	h := newUIHarness(t, rfbDesktopBackend(t, offered, pasted, false))
-	ds := openDesktop(t, h)
+	h := desktopHarness(t, rfbDesktopBackend(t, offered, pasted, false), nil)
+	var sinkMu sync.Mutex
+	var sunk []byte
+	h.srv.uiDesktopSink = func(uiSession) rfbfilter.Sink {
+		return func(_ bool, b []byte) { sinkMu.Lock(); sunk = append(sunk, b...); sinkMu.Unlock() }
+	}
+	ds := openDesktop(t, h, "novnc")
 	if got := <-offered; got != "" {
 		t.Fatalf("the sandbox saw a WebSocket extension offer %q", got)
 	}
@@ -216,6 +241,13 @@ func TestUIGateway_ClipboardDefaultsBlockCopyOutAndAuditBoth(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("an allowed paste never reached the desktop")
 	}
+	sinkMu.Lock()
+	// The sink has the bytes as the browser got them: unmasked server frames carry the Bell, and
+	// a dropped copy out never reaches it.
+	if bytes.Contains(sunk, []byte(copySentinel)) || !bytes.Contains(sunk, wsFrame([]byte{2}, false)) {
+		t.Errorf("the post-filter sink saw the blocked copy out, or missed the Bell: %q", sunk)
+	}
+	sinkMu.Unlock()
 	rows := clipboardRows(t, h, 2)
 	want := map[string]struct {
 		outcome string
@@ -251,13 +283,9 @@ func TestUIGateway_ClipboardDefaultsBlockCopyOutAndAuditBoth(t *testing.T) {
 // The knob is what the relay reads: a run whose policy opens copy out gets the desktop's copy.
 func TestUIGateway_ClipboardFollowsTheRunsDesktopRules(t *testing.T) {
 	offered, pasted := make(chan string, 1), make(chan []byte, 1)
-	h := newUIHarness(t, rfbDesktopBackend(t, offered, pasted, false))
-	h.store.putEffectivePolicy(h.run.ID, types.RunPolicySpec{
-		MinConfinementClass: types.CC2,
-		UIApps:              []types.UIApp{{Name: "code", Port: uiTestPort, Path: "/ide"}},
-		Desktop:             &types.DesktopControls{CopyOut: types.TransferAllowed, PasteIn: types.TransferBlocked},
-	})
-	ds := openDesktop(t, h)
+	h := desktopHarness(t, rfbDesktopBackend(t, offered, pasted, false),
+		&types.DesktopControls{CopyOut: types.TransferAllowed, PasteIn: types.TransferBlocked})
+	ds := openDesktop(t, h, "novnc")
 	<-offered
 	if next, err := readWSFrame(ds.br); err != nil || !strings.Contains(string(next), copySentinel) {
 		t.Fatalf("an opened copy out did not reach the browser: %q %v", next, err)
@@ -270,10 +298,58 @@ func TestUIGateway_ClipboardFollowsTheRunsDesktopRules(t *testing.T) {
 // A sandbox that answers with an extension the relay never offered is refused before any byte flows.
 func TestUIGateway_ClipboardRefusesANegotiatedExtension(t *testing.T) {
 	offered, pasted := make(chan string, 1), make(chan []byte, 1)
-	h := newUIHarness(t, rfbDesktopBackend(t, offered, pasted, true))
-	ds := openDesktop(t, h)
+	h := desktopHarness(t, rfbDesktopBackend(t, offered, pasted, true), nil)
+	ds := upgradeApp(t, h, "novnc")
 	<-offered
 	if ds.resp.StatusCode != http.StatusBadGateway {
 		t.Fatalf("upgrade answered with an extension: %d, want 502", ds.resp.StatusCode)
+	}
+}
+
+// Only the desktop is filtered: an editor's socket on the same run relays as it came, the
+// extension offer and a 0x03 message included, under the defaults that block copy out.
+func TestUIGateway_ClipboardLeavesOtherAppsUnfiltered(t *testing.T) {
+	offered, pasted := make(chan string, 1), make(chan []byte, 1)
+	h := desktopHarness(t, rfbDesktopBackend(t, offered, pasted, false), nil)
+	ds := openDesktop(t, h, "code")
+	if got := <-offered; got == "" {
+		t.Fatal("the relay stripped an editor's extension offer")
+	}
+	if next, err := readWSFrame(ds.br); err != nil || !strings.Contains(string(next), copySentinel) {
+		t.Fatalf("an editor socket was filtered: %q %v", next, err)
+	}
+	if rows := clipboardRows(t, h, 0); len(rows) != 0 {
+		t.Fatalf("an editor socket wrote ui.clipboard rows: %+v", rows)
+	}
+}
+
+// A desktop whose server does not open with RFB is closed before a byte reaches the browser, and
+// the close is audited by reason only.
+func TestUIGateway_ClipboardClosesADesktopThatIsNotRFB(t *testing.T) {
+	h := desktopHarness(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = io.WriteString(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
+		_, _ = conn.Write(append(wsFrame([]byte("X"), false), wsFrame(rfbCut(3, copySentinel), false)...))
+		_, _ = io.Copy(io.Discard, conn)
+	}), nil)
+	ds := upgradeApp(t, h, "novnc")
+	if ds.resp.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("upgrade: %d", ds.resp.StatusCode)
+	}
+	if got, _ := io.ReadAll(ds.br); len(got) != 0 {
+		t.Fatalf("a non-RFB desktop reached the browser: %q", got)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	rows := h.audit.auditRows("ui.clipboard", "failure")
+	for len(rows) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+		rows = h.audit.auditRows("ui.clipboard", "failure")
+	}
+	if len(rows) != 1 || !strings.Contains(string(rows[0].Data), `"reason":"not_rfb"`) || strings.Contains(string(rows[0].Data), "direction") {
+		t.Fatalf("ui.clipboard failure rows = %+v", rows)
 	}
 }
