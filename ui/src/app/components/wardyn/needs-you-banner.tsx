@@ -82,7 +82,9 @@ export function NeedsYouBanner({
     return () => window.clearInterval(t);
   }, [apId]);
 
-  const recorded = !run.not_recorded;
+  // A runner that declined still has the console and SSH sessions recorded here; only an organisation
+  // that keeps no recordings means a takeover is not recorded (the server's takeoverRecorded).
+  const recorded = run.not_recorded !== "org_off";
 
   if (done) {
     return (

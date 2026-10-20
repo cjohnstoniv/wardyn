@@ -101,6 +101,14 @@ describe("NeedsYouBanner", () => {
     expect(off.getAttribute("title")).toBe("This run isn't being recorded.");
   });
 
+  it("a run whose runner declined to record still shows the takeover as recorded", () => {
+    mount([request({ state: "APPROVED", decided_at: new Date().toISOString(), takeover_holder: "dev-sub" })], {
+      ...run,
+      not_recorded: "runner_declined",
+    } as RunDetail);
+    expect(screen.queryByTestId("needs-you-recording")).not.toBeInTheDocument();
+  });
+
   it("someone else holding control is shown in use, with Take over", () => {
     mount([request({ state: "APPROVED", decided_at: new Date().toISOString(), takeover_holder: "priya" })]);
     const tile = screen.getByTestId("needs-you-in-use");
