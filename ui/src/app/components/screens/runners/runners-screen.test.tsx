@@ -841,6 +841,43 @@ describe("Admin -> Runners: Managed install (MDM)", () => {
     expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
+  it("Done and Close return focus to the person field", async () => {
+    mintMock.mockResolvedValue({ ...TOKEN, owner: "alice@example.com", token: "wdr_secret", org_url: ORG });
+    const user = userEvent.setup();
+    renderScreen();
+    const mdm = await open(user);
+    setField(mdm.getByRole("textbox"), "alice@example.com");
+    await user.click(mdm.getByRole("button", { name: "Create token" }));
+    await mdm.findByText("wdr_secret");
+    await user.click(mdm.getByRole("button", { name: "Copy token" }));
+    await user.click(mdm.getByRole("button", { name: "Done" }));
+    await waitFor(() => expect(mdm.getByRole("textbox")).toHaveFocus());
+    // ...and through the confirm, when nothing was copied.
+    setField(mdm.getByRole("textbox"), "bob@example.com");
+    await user.click(mdm.getByRole("button", { name: "Create token" }));
+    await mdm.findByText("wdr_secret");
+    await user.click(mdm.getByRole("button", { name: "Done" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(mdm.getByRole("textbox")).toHaveFocus());
+  });
+
+  it("a minted token that was not copied survives a switch to the Pools tab and back", async () => {
+    mintMock.mockResolvedValue({ ...TOKEN, owner: "alice@example.com", token: "wdr_secret", org_url: ORG });
+    const user = userEvent.setup();
+    renderScreen();
+    const mdm = await open(user);
+    setField(mdm.getByRole("textbox"), "alice@example.com");
+    await user.click(mdm.getByRole("button", { name: "Create token" }));
+    await mdm.findByText("wdr_secret");
+    const strip = screen.getByRole("navigation", { name: "Runners sections" });
+    await user.click(within(strip).getByRole("button", { name: "Pools" }));
+    expect(await screen.findByTestId("pools-tab")).toBeInTheDocument();
+    // Hidden, not gone: nothing of it is reachable on Pools.
+    expect(screen.queryByRole("heading", { name: "Add this computer" })).toBeNull();
+    await user.click(within(strip).getByRole("button", { name: "Runners" }));
+    expect(await screen.findByText("wdr_secret")).toBeInTheDocument();
+  });
+
   it("a refused mint shows the server's sentence and keeps the field", async () => {
     mintMock.mockRejectedValueOnce(new HttpError(422, "owner must name a person's principal", "runner_owner_invalid"));
     const user = userEvent.setup();

@@ -239,8 +239,9 @@ export function RunnersScreen() {
     <div className="mx-auto max-w-[1200px] px-6 py-6">
       <PageHeader title={RUNNERS.NAV} description={<span className="block max-w-[68ch]">{tab === "pools" ? POOLS.LEAD : RUNNERS.LEAD}</span>} actions={actions} />
       {tab === "runners" && <p className="-mt-2 mb-3 max-w-[80ch] text-body text-muted-foreground">{RUNNER_V6.TAB_PURPOSE}</p>}
-      {addComputer && tab === "runners" && (
-        <div className="mb-4">
+      {/* Kept mounted (hidden) on the Pools tab, so a minted token that was not copied survives a tab switch. */}
+      {addComputer && (
+        <div className="mb-4" hidden={tab !== "runners"}>
           <AddComputerBlock mdm={<MintTokenPanel onMinted={reload} />} />
         </div>
       )}

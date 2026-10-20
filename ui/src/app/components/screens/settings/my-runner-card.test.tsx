@@ -205,8 +205,10 @@ describe("My runner card", () => {
     expect(screen.queryByText("Register one, then put it in one of your pools. You can create a pool first.")).toBeNull();
     expect(screen.queryByRole("button", { name: "Register a runner" })).toBeNull();
     expect(screen.getByRole("heading", { name: "Add this computer" })).toBeInTheDocument();
+    // One level under the card's own h3 title: the block's title is an h4 and its steps are h5.
+    expect(screen.getByRole("heading", { name: "Add this computer", level: 4 })).toBeInTheDocument();
     const block = screen.getByRole("heading", { name: "Add this computer" }).closest("section") as HTMLElement;
-    expect(within(block).getAllByRole("heading", { level: 3 }).map((h) => h.textContent)).toEqual(["Install the CLI", "Sign in", "Set up the runner"]);
+    expect(within(block).getAllByRole("heading", { level: 5 }).map((h) => h.textContent)).toEqual(["Install the CLI", "Sign in", "Set up the runner"]);
     expect(await screen.findByText("curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.10.0/install-cli.sh | sh")).toBeInTheDocument();
     expect(screen.getByText("wardyn runner setup")).toBeInTheDocument();
     // A person's own block has no MDM section: that is the admin page's.
@@ -399,6 +401,28 @@ describe("My runner card: Add this computer and the 5 second poll", () => {
     const poolsHeading = await screen.findByText("My pools");
     expect(!!(poolsHeading.compareDocumentPosition(block) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
     expect(screen.queryByRole("button", { name: "Register a runner" })).toBeNull();
+  });
+
+  it("when the first runner appears the block remounts, and focus that was inside it returns to the card", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      listMineMock.mockResolvedValue([]);
+      const user = userEvent.setup({ advanceTimers: (ms) => vi.advanceTimersByTime(ms) });
+      renderCard();
+      await expand(user);
+      const copy = await screen.findByRole("button", { name: "Copy setup command" });
+      copy.focus();
+      expect(copy).toHaveFocus();
+      listMineMock.mockResolvedValue([CLAIMED]);
+      await act(async () => {
+        vi.advanceTimersByTime(5000);
+      });
+      await screen.findByText("laptop-7", { selector: "h4" });
+      const card = document.getElementById("my-runner") as HTMLElement;
+      await waitFor(() => expect(card).toHaveFocus());
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("with one claimed runner and the card open, a second computer registered through the block appears on the next tick", async () => {

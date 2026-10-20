@@ -98,6 +98,37 @@ describe("Add this computer: the three steps", () => {
   });
 });
 
+describe("Add this computer: heading levels and focus", () => {
+  it("by default the title is an h2 and the steps h3; with level 4 they are h4 and h5", async () => {
+    healthz({ version: "0.10.0", cli_sign_in: true });
+    const { unmount } = render(<AddComputerBlock />);
+    await screen.findByText(SH);
+    expect(screen.getByRole("heading", { name: "Add this computer", level: 2 })).toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { level: 3 })).toHaveLength(3);
+    unmount();
+    healthz({ version: "0.10.0", cli_sign_in: true });
+    render(<AddComputerBlock level={4} />);
+    await screen.findByText(SH);
+    expect(screen.getByRole("heading", { name: "Add this computer", level: 4 })).toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { level: 5 }).map((h) => h.textContent)).toEqual(["Install the CLI", "Sign in", "Set up the runner"]);
+  });
+
+  it("when Try again succeeds, the button goes and focus moves to the first step's title", async () => {
+    healthz(null);
+    const user = userEvent.setup();
+    render(<AddComputerBlock />);
+    const retry = await screen.findByRole("button", { name: "Try again" });
+    // A retry that fails again leaves the button, and focus, where they are.
+    await user.click(retry);
+    expect(await screen.findByRole("button", { name: "Try again" })).toHaveFocus();
+    healthz({ version: "0.10.0", cli_sign_in: true });
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    await screen.findByText(SH);
+    expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Install the CLI" })).toHaveFocus();
+  });
+});
+
 describe("Add this computer: no install line", () => {
   it("a /healthz that did not answer says so with Try again, which asks again", async () => {
     healthz(null);

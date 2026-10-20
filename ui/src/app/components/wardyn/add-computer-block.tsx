@@ -45,15 +45,15 @@ function useFacts(): [Facts, () => void] {
   return [facts, () => setAttempt((n) => n + 1)];
 }
 
-/** One line to copy: the code and a Copy button (44 px tall on a phone). */
+/** One line to copy: the code and a Copy button. On a phone the button is full width and 44 px tall under the code (MATT4-Phone). */
 function CmdRow({ text, label }: { text: string; label: string }) {
   return (
-    <div className="flex items-center gap-2 rounded-lg border border-border bg-background py-2 pl-3 pr-2">
-      <code className="min-w-0 flex-1 break-all font-mono text-xs leading-relaxed">{text}</code>
+    <div className="flex flex-col gap-2 rounded-lg border border-border bg-background p-2 sm:flex-row sm:items-center sm:py-2 sm:pl-3 sm:pr-2">
+      <code className="min-w-0 flex-1 break-all px-1 font-mono text-xs leading-relaxed sm:px-0">{text}</code>
       <CopyButton
         text={text}
         label={label}
-        className="h-11 shrink-0 gap-1.5 rounded-md border border-border px-3 text-xs text-foreground hover:bg-surface-2 sm:h-[26px]"
+        className="h-11 w-full shrink-0 justify-center gap-1.5 rounded-md border border-border px-3 text-xs text-foreground hover:bg-surface-2 sm:h-[26px] sm:w-auto"
       >
         {ADD_COMPUTER.COPY}
       </CopyButton>
@@ -74,14 +74,19 @@ function Disclosure({ summary, className, children }: { summary: React.ReactNode
   );
 }
 
-function Step({ n, title, children }: { n: number; title: string; children: React.ReactNode }) {
+type Level = 2 | 3 | 4 | 5 | 6;
+const H = ({ level, ...rest }: React.ComponentProps<"h2"> & { level: Level }) => React.createElement(`h${level}`, rest);
+
+function Step({ n, title, level, headingRef, children }: { n: number; title: string; level: Level; headingRef?: React.Ref<HTMLHeadingElement>; children: React.ReactNode }) {
   return (
     <li className="flex items-start gap-2.5">
       <span aria-hidden className="mt-px inline-grid size-5 shrink-0 place-items-center rounded-full bg-primary text-[11px] font-bold text-primary-foreground">
         {n}
       </span>
       <div className="min-w-0 flex-1 space-y-1.5">
-        <h3 className="text-[13px] font-semibold text-foreground">{title}</h3>
+        <H level={level} ref={headingRef} tabIndex={-1} className="text-[13px] font-semibold text-foreground outline-none">
+          {title}
+        </H>
         {children}
       </div>
     </li>
@@ -90,12 +95,12 @@ function Step({ n, title, children }: { n: number; title: string; children: Reac
 
 const NOTE = "text-meta leading-relaxed text-muted-foreground";
 
-function InstallStep({ facts, onRetry }: { facts: Facts; onRetry: () => void }) {
+function InstallStep({ facts, level, headingRef, onRetry }: { facts: Facts; level: Level; headingRef: React.Ref<HTMLHeadingElement>; onRetry: () => void }) {
   const lines = installLines(facts.version, facts.artifactBase);
   const windows = viewerIsWindows();
   // The shell line leads on every system: from Windows the runner lives in WSL2, so it is the only line there.
   return (
-    <Step n={1} title={ADD_COMPUTER.STEP_INSTALL}>
+    <Step n={1} title={ADD_COMPUTER.STEP_INSTALL} level={level} headingRef={headingRef}>
       {!facts.loaded ? null : lines ? (
         <>
           <p className={NOTE}>{ADD_COMPUTER.UNIX}</p>
@@ -118,7 +123,7 @@ function InstallStep({ facts, onRetry }: { facts: Facts; onRetry: () => void }) 
         </div>
       )}
       <p className="text-meta">
-        <a href={INSTALL_DOCS_URL} target="_blank" rel="noopener noreferrer" className="text-primary underline-offset-2 hover:underline">
+        <a href={INSTALL_DOCS_URL} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-11 items-center text-primary underline-offset-2 hover:underline sm:min-h-0">
           {ADD_COMPUTER.OTHER_WAYS}
         </a>
       </p>
@@ -126,27 +131,56 @@ function InstallStep({ facts, onRetry }: { facts: Facts; onRetry: () => void }) 
   );
 }
 
-export function AddComputerBlock({ mdm }: { /** The folded "Managed install (MDM)" content; absent where a person adds only their own computer. */ mdm?: React.ReactNode }) {
+/**
+ * `level` is the block title's heading level (steps are one deeper): 2 on the Admin page, 4 inside the My runner
+ * card, whose own title is an h3.
+ */
+export function AddComputerBlock({
+  mdm,
+  level = 2,
+}: {
+  /** The folded "Managed install (MDM)" content; absent where a person adds only their own computer. */
+  mdm?: React.ReactNode;
+  level?: 2 | 4;
+}) {
   const [facts, retry] = useFacts();
   const url = window.location.origin + appURL("");
   const windows = viewerIsWindows();
+  const step = (level + 1) as Level;
+  // Try again unmounts itself when /healthz finally answers, so focus moves to the first step's title.
+  const installTitle = React.useRef<HTMLHeadingElement | null>(null);
+  const retried = React.useRef(false);
+  React.useEffect(() => {
+    if (retried.current && facts.answered) {
+      retried.current = false;
+      installTitle.current?.focus();
+    }
+  }, [facts]);
   return (
     <section aria-labelledby="add-computer-title" data-add-computer className="space-y-3 rounded-xl border border-border bg-card px-4 py-4 sm:px-[18px]">
       <div className="space-y-1">
-        <h2 id="add-computer-title" className="text-sm font-semibold text-foreground">
+        <H level={level} id="add-computer-title" className="text-sm font-semibold text-foreground">
           {ADD_COMPUTER.TITLE}
-        </h2>
+        </H>
         <p className={NOTE}>{ADD_COMPUTER.LEAD}</p>
         {windows && <p className="text-body text-foreground">{ADD_COMPUTER.WSL2_NOTE}</p>}
       </div>
       <ol className="space-y-3">
-        <InstallStep facts={facts} onRetry={retry} />
-        <Step n={2} title={ADD_COMPUTER.STEP_SIGN_IN}>
+        <InstallStep
+          facts={facts}
+          level={step}
+          headingRef={installTitle}
+          onRetry={() => {
+            retried.current = true;
+            retry();
+          }}
+        />
+        <Step n={2} title={ADD_COMPUTER.STEP_SIGN_IN} level={step}>
           <CmdRow text={ADD_COMPUTER_COMMANDS.login(url)} label={ADD_COMPUTER.COPY_SIGN_IN} />
           {/* Silent until /healthz answers: nothing is promised about sign-in capability that was not read. */}
           {facts.answered && <p className={NOTE}>{facts.cliSignIn ? ADD_COMPUTER.SIGN_IN_NOTE : ADD_COMPUTER.NO_CLI_SIGN_IN}</p>}
         </Step>
-        <Step n={3} title={ADD_COMPUTER.STEP_SETUP}>
+        <Step n={3} title={ADD_COMPUTER.STEP_SETUP} level={step}>
           <CmdRow text={ADD_COMPUTER_COMMANDS.setup} label={ADD_COMPUTER.COPY_SETUP} />
           <p className={NOTE}>{ADD_COMPUTER.SETUP_NOTE}</p>
         </Step>

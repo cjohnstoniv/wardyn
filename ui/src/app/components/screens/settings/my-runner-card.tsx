@@ -205,6 +205,25 @@ function RevokedNotice({ r }: { r: RunnerView }) {
   );
 }
 
+/**
+ * Add this computer, one level under the card's own h3 title. It sits above My pools while there is no runner and
+ * below it once there is one, so it remounts when the first runner appears; `inBlock` tells the card whether focus
+ * was inside it, to put focus back on the card.
+ */
+function AddBlock({ inBlock }: { inBlock: React.MutableRefObject<boolean> }) {
+  return (
+    <div
+      onFocus={() => (inBlock.current = true)}
+      onBlur={(e) => {
+        // A blur from the block being removed (target no longer in the page) is not focus going elsewhere.
+        if ((e.target as Element).isConnected && !e.currentTarget.contains(e.relatedTarget)) inBlock.current = false;
+      }}
+    >
+      <AddComputerBlock level={4} />
+    </div>
+  );
+}
+
 export function MyRunnerCard({ onHidden }: { onHidden?: (reason: string) => void } = {}) {
   const me = usePrincipal();
   const location = useLocation();
@@ -217,6 +236,7 @@ export function MyRunnerCard({ onHidden }: { onHidden?: (reason: string) => void
   const [confirming, setConfirming] = React.useState(false);
   const [limitsFor, setLimitsFor] = React.useState<RunnerView | null>(null);
   const seq = React.useRef(0);
+  const inBlock = React.useRef(false);
   // Read through a ref: `read` is built once, and the parent may pass a new function each render.
   const hiddenRef = React.useRef(onHidden);
   hiddenRef.current = onHidden;
@@ -264,6 +284,16 @@ export function MyRunnerCard({ onHidden }: { onHidden?: (reason: string) => void
       document.removeEventListener("visibilitychange", tick);
     };
   }, [polling, read]);
+
+  // The first runner's arrival remounts the block (above My pools, then below): focus that was inside it is
+  // lost to the page, so it returns to the card.
+  const hasRunner = live.length > 0;
+  React.useEffect(() => {
+    if (hasRunner && inBlock.current && !sectionRef.current?.contains(document.activeElement)) {
+      inBlock.current = false;
+      sectionRef.current?.focus();
+    }
+  }, [hasRunner]);
 
   const available = status === "ready" || status === "error";
   const pools = useMyPools(status === "ready");
@@ -347,9 +377,9 @@ export function MyRunnerCard({ onHidden }: { onHidden?: (reason: string) => void
                   )}
                 </ul>
               )}
-              {live.length === 0 && <AddComputerBlock />}
+              {live.length === 0 && <AddBlock inBlock={inBlock} />}
               <MyPoolsSection pools={pools} runners={live} />
-              {live.length > 0 && <AddComputerBlock />}
+              {live.length > 0 && <AddBlock inBlock={inBlock} />}
             </>
           )}
         </div>

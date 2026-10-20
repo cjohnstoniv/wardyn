@@ -6,7 +6,8 @@
 // Admin -> Runners -> Add this computer -> "Managed install (MDM)" (M-ATT-4, formerly the "Create a registration
 // token" dialog, M-RN-1 RA3, super admin): two steps in one panel. Step 1 names the person; step 2 shows the token
 // once with the command a managed computer runs. An admin can mint but never claim, so nothing here offers a claim.
-// Leaving step 2 before either copy control was used asks once (RA3b). The command's --org is the URL the server
+// Leaving step 2 (Done) before either copy control was used asks once (RA3b); the page keeps this panel mounted across
+// the Runners and Pools tabs, so switching tabs cannot lose a token that was never copied. The command's --org is the URL the server
 // answered with, because wardyn-runnerd refuses an --org that does not hash to the server's; this page's own address
 // is only the fallback. The start command and the proxy image are not shown: `setup` installs the service.
 import * as React from "react";
@@ -53,9 +54,16 @@ export function MintTokenPanel({
   // A copy control was pressed. The token cannot be read again, so leaving without one asks first.
   const copied = React.useRef(false);
   const titleRef = React.useRef<HTMLHeadingElement | null>(null);
+  const root = React.useRef<HTMLDivElement | null>(null);
+  // Done and Close unmount the token screen with focus on it: focus goes back to the form's person field.
+  const refocus = React.useRef(false);
 
   React.useEffect(() => {
     if (token) titleRef.current?.focus();
+    else if (refocus.current) {
+      refocus.current = false;
+      root.current?.querySelector<HTMLElement>("#mint-runner-person")?.focus();
+    }
   }, [token]);
 
   const reset = () => {
@@ -64,6 +72,7 @@ export function MintTokenPanel({
     setToken(null);
     setAsking(false);
     copied.current = false;
+    refocus.current = true;
   };
   const requestDone = () => {
     if (token && !copied.current) setAsking(true);
@@ -88,7 +97,7 @@ export function MintTokenPanel({
   const owner = token?.owner ?? person.trim();
   const command = token ? managedCommand(token) : "";
   return (
-    <>
+    <div ref={root}>
       {token ? (
         <div className="space-y-4">
           <div
@@ -163,6 +172,6 @@ export function MintTokenPanel({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </>
+    </div>
   );
 }

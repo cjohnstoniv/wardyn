@@ -162,6 +162,12 @@ test.describe("Admin -> Runners: Add this computer", () => {
         const box = await block.getByRole("button", { name }).boundingBox();
         expect(box?.height).toBeGreaterThanOrEqual(44);
       }
+      // Each Copy button is full width under its code box, and "Other ways to install" is a 44 px row.
+      const wide = await block.getByRole("button", { name: "Copy sign-in command" }).boundingBox();
+      const code = await block.getByText(`wardyn login ${new URL(page.url()).origin}`, { exact: true }).boundingBox();
+      expect(wide && code && wide.y >= code.y + code.height - 1).toBe(true);
+      expect(wide?.width).toBeGreaterThan(250);
+      expect((await block.getByRole("link", { name: "Other ways to install" }).boundingBox())?.height).toBeGreaterThanOrEqual(44);
       for (const title of ["Another operating system", "Managed install (MDM)"]) {
         const box = await block.locator("summary", { hasText: title }).boundingBox();
         expect(box?.height).toBeGreaterThanOrEqual(44);
@@ -200,7 +206,7 @@ test.describe("Your account -> My runner: Add this computer", () => {
     await page.getByRole("button", { name: /^My runner/ }).click();
     const block = page.locator("[data-add-computer]");
     await expect(page.getByText("You haven't registered a runner.")).toBeVisible();
-    await expect(block.getByRole("heading", { level: 3 })).toHaveText(["Install the CLI", "Sign in", "Set up the runner"]);
+    await expect(block.getByRole("heading", { level: 5 })).toHaveText(["Install the CLI", "Sign in", "Set up the runner"]);
     await expect(block.getByText(SH, { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Register a runner" })).toHaveCount(0);
     await expect(block.getByText("Managed install (MDM)")).toHaveCount(0);
