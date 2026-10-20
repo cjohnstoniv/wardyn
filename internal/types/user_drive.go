@@ -624,8 +624,8 @@ func ShareBackendRejectsTemplate(backend DriveBackend, tmpl HomeTemplate) bool {
 // against drive d and the subject's current allocation prev (nil: none), or "". That tier
 // allocates a drive with its own posture or narrower. Only a super admin newly states a
 // home_override, which names where on the storage the files live and is compared only with other
-// typed names, never with a derived home, or widens writability: true, or dropping a read-only
-// override on a writable drive. An unchanged re-send on the same drive is not new, unless it
+// typed names, never with a derived home, or widens writability: true, dropping a read-only
+// override on a writable drive, or newly letting a team drive's members write. An unchanged re-send on the same drive is not new, unless it
 // enables a row that was disabled: a disabled row's home_override or writable exception is not in
 // force, so turning the row on with one puts it in force and is the super admin's to do.
 func DriveGrantWidens(d UserDrive, prev *UserDriveGrant, g UserDriveGrant) string {
@@ -637,6 +637,8 @@ func DriveGrantWidens(d UserDrive, prev *UserDriveGrant, g UserDriveGrant) strin
 	case g.WritableOverride != nil && *g.WritableOverride && !(held && prev.WritableOverride != nil && *prev.WritableOverride),
 		g.WritableOverride == nil && d.Writable && prev != nil && prev.WritableOverride != nil && !*prev.WritableOverride:
 		return "writable_override"
+	case g.MembersCanWrite && !(held && prev.MembersCanWrite):
+		return "members_can_write"
 	}
 	return ""
 }

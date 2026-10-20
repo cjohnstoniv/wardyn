@@ -4728,13 +4728,14 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 
 1. `POST /api/v1/drives` with `team: true` on a `host_path`, `k8s_pvc_static` or `docker_volume` drive. A `k8s_pvc` claim mounts in one pod at a time, so it is refused.
 2. Allocate it to groups with `POST /api/v1/drives/grants`, `subject_type: group`. Any other subject type, and `home_override`, are refused.
-3. An allocation is **read-only** unless it sets `members_can_write: true`, which needs a writable drive.
+3. An allocation is **read-only** unless it sets `members_can_write: true`, which needs a writable drive. Only a super admin may set it; the security-admin tier allocates read-only.
 
 **What a member's run sees.**
 
 - The folder mounts at `/home/agent/shared/<name-slug>`, read-only unless the allocation says `members_can_write`. A run asking to write a read-only one is refused.
 - Its home segment is `t-` plus 20 hex characters, derived from the drive id: `<host_root>/t-…` on `host_path` (create that directory; Wardyn never creates one on a share) and a claim or volume named `wardyn-drive-<drive-id-hex>-t-…`. `POST /api/v1/drives/preview` for any group member prints it.
 - People outside the allocated groups never get the mount.
+- `GET /api/v1/me/drives` marks the row `team: true` and lists in `shared_with` the caller's own groups that carry the allocation, never anyone else's.
 - Every run's mount writes `run.drive.mount` with `team: true` and `mounted_by`, the person whose run mounted it.
 
 **Security.** One person's agent reads, and with `members_can_write` may run, files another person's agent wrote there. Any secret an agent writes there is visible to the whole group. Keep allocations read-only unless the group needs a shared working area.

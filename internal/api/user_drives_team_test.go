@@ -9,12 +9,15 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // teamDrivesSite is a site config with storage.user_drive.team_drives on or off.
@@ -217,5 +220,52 @@ func TestTeamDriveAdminWrites(t *testing.T) {
 	var got userDrivesResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || len(got.Drives) != 1 || !got.Drives[0].SingleHost {
 		t.Fatalf("GET /drives = %s, want the team drive marked single_host", w.Body.String())
+	}
+}
+
+// teamCatalogueStore adds the allocation list /me/drives reads for shared_with.
+type teamCatalogueStore struct {
+	*multiDriveStore
+	grants []types.UserDriveGrant
+}
+
+func (s *teamCatalogueStore) ListUserDriveGrants(context.Context) ([]types.UserDriveGrant, error) {
+	return s.grants, nil
+}
+
+// TestMeDrivesTeamRow: GET /me/drives marks a team drive `team`, names only the
+// caller's own groups that carry its allocation in shared_with, reports the
+// folded write posture, and keeps a Docker volume in section "user". With the
+// switch off the row is today's.
+func TestMeDrivesTeamRow(t *testing.T) {
+	w := winnerOf("Team Data", types.DriveBackendDockerVolume, types.CapabilitySubjectGroup, "eng", true)
+	w.Drive.Team = true
+	other := uuid.New()
+	st := &teamCatalogueStore{multiDriveStore: &multiDriveStore{driveStore: &driveStore{}, winners: []store.UserDriveWinner{w}},
+		grants: []types.UserDriveGrant{
+			{SubjectType: types.CapabilitySubjectGroup, Subject: "eng", DriveID: w.Drive.ID},
+			{SubjectType: types.CapabilitySubjectGroup, Subject: "ops", DriveID: w.Drive.ID}, // a group the caller does not hold
+			{SubjectType: types.CapabilitySubjectGroup, Subject: "qa", DriveID: other},
+		}}
+	srv := New(Config{Store: st, Audit: &recRecorder{}, RunnerTarget: "docker"})
+	row := func() client.MeDrive {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		srv.handleListMeDrives(rec, httptest.NewRequest(http.MethodGet, "/api/v1/me/drives", nil).WithContext(driveMemberCtx([]string{"eng", "qa"}, false)))
+		var got client.MeDriveCatalogue
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || len(got.Drives) != 1 {
+			t.Fatalf("GET /me/drives = %d %s", rec.Code, rec.Body)
+		}
+		return got.Drives[0]
+	}
+	st.site = teamDrivesSite(true)
+	got := row()
+	if !got.Team || !slices.Equal(got.SharedWith, []string{"eng"}) || got.Writable || got.Legacy || got.Section != client.MeDriveSectionUser ||
+		got.Target != runner.SharedRoot+"/team-data" {
+		t.Fatalf("team row = %+v, want team, shared_with [eng], read-only, section user, under %s", got, runner.SharedRoot)
+	}
+	st.site = teamDrivesSite(false)
+	if got := row(); got.Team || got.SharedWith != nil || !got.Writable || !got.Legacy {
+		t.Fatalf("switch off: row = %+v, want today's per-person row", got)
 	}
 }

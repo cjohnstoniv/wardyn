@@ -145,6 +145,7 @@ func (s *Server) meDrives(ctx context.Context, poolID string) ([]client.MeDrive,
 		return []client.MeDrive{}, false, driveUnavailableReason(err)
 	}
 	pool, checked := s.catalogueDrivePool(ctx, poolID)
+	sharedWith := s.teamSharedWith(ctx, reach)
 	out := make([]client.MeDrive, 0, len(reach))
 	for _, d := range reach {
 		drive := d.winner.Drive
@@ -158,6 +159,10 @@ func (s *Server) meDrives(ctx context.Context, poolID string) ([]client.MeDrive,
 		}
 		if d.resolved != nil {
 			row.Writable, row.SizeMiB, row.Enforcement = d.resolved.Writable, d.resolved.SizeMiB, d.resolved.Enforcement
+			if row.Team = d.resolved.Team; row.Team {
+				// drive.enabled mounts a team drive under /home/agent/shared, never as the person's own.
+				row.SharedWith, row.Legacy = sharedWith[drive.ID], false
+			}
 		}
 		row.UnavailableReason = s.driveUnavailableHere(ctx, d, pool, checked, remoteDenied)
 		out = append(out, row)

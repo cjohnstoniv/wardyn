@@ -8,6 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
+
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -83,4 +86,32 @@ func (s *Server) driveTeamReclaimRefusal(ctx context.Context, d types.UserDrive)
 	}
 	return http.StatusUnprocessableEntity, "this is a team drive: its folder is the whole group's, not one person's storage, " +
 		"so a person's reclaim skips it; remove the folder on the substrate (docs/OPERATIONS.md) once the group no longer needs it"
+}
+
+// teamSharedWith maps each team drive in reach to the caller's own groups that
+// carry an allocation of it, sorted. Only groups the caller holds are named. A
+// display read: any failure answers nothing rather than an error.
+func (s *Server) teamSharedWith(ctx context.Context, reach []reachableDrive) map[uuid.UUID][]string {
+	if !slices.ContainsFunc(reach, func(d reachableDrive) bool { return d.resolved != nil && d.resolved.Team }) {
+		return nil
+	}
+	subj, err := s.callerSubjects(ctx)
+	if err != nil || subj.stale {
+		return nil
+	}
+	grants, err := s.cfg.Store.ListUserDriveGrants(ctx)
+	if err != nil {
+		return nil
+	}
+	out := map[uuid.UUID][]string{}
+	for _, g := range grants {
+		if g.SubjectType == types.CapabilitySubjectGroup && slices.Contains(subj.groups, g.Subject) &&
+			!slices.Contains(out[g.DriveID], g.Subject) {
+			out[g.DriveID] = append(out[g.DriveID], g.Subject)
+		}
+	}
+	for _, groups := range out {
+		slices.Sort(groups)
+	}
+	return out
 }

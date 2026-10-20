@@ -83,3 +83,24 @@ func TestValidateUserDriveTeamBackends(t *testing.T) {
 		t.Errorf("a team docker_volume drive is refused: %v", err)
 	}
 }
+
+// TestDriveGrantWidensMembersCanWrite: below a super admin, newly letting a team
+// drive's members write is a widening; restating a held bit is not.
+func TestDriveGrantWidensMembersCanWrite(t *testing.T) {
+	d := UserDrive{ID: uuid.New(), Team: true, Writable: true}
+	rw := UserDriveGrant{SubjectType: CapabilitySubjectGroup, Subject: "platform", DriveID: d.ID, Enabled: true, MembersCanWrite: true}
+	ro := rw
+	ro.MembersCanWrite = false
+	if got := DriveGrantWidens(d, nil, rw); got != "members_can_write" {
+		t.Errorf("new writable allocation: widens %q, want members_can_write", got)
+	}
+	if got := DriveGrantWidens(d, &ro, rw); got != "members_can_write" {
+		t.Errorf("read-only to writable: widens %q, want members_can_write", got)
+	}
+	if got := DriveGrantWidens(d, &rw, rw); got != "" {
+		t.Errorf("restating a held bit: widens %q, want nothing", got)
+	}
+	if got := DriveGrantWidens(d, nil, ro); got != "" {
+		t.Errorf("a read-only allocation: widens %q, want nothing", got)
+	}
+}

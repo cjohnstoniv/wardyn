@@ -5,6 +5,7 @@ package store_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -119,5 +120,36 @@ func TestPG_TeamDrive_CheckKeepsItAnAdminShare(t *testing.T) {
 	owned, err := st.ListMemberDrivesOf(ctx, "sub-"+uniq)
 	if err != nil || len(owned) != 0 {
 		t.Fatalf("ListMemberDrivesOf = %+v, %v; want none", owned, err)
+	}
+}
+
+// TestPG_TeamDrive_AdditionalReSendUpdatesMembersCanWrite: re-sending a group's
+// allocation of a drive with additional updates members_can_write in place, and
+// below a super admin newly setting it is refused as a widening.
+func TestPG_TeamDrive_AdditionalReSendUpdatesMembersCanWrite(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	uniq := uuid.NewString()[:8]
+	d := newUserDrive("team-" + uniq)
+	d.Team, d.Writable = true, true
+	team, err := st.UpsertUserDrive(ctx, d, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.DeleteUserDrive(ctx, team.ID) })
+	g := types.UserDriveGrant{SubjectType: types.CapabilitySubjectGroup, Subject: "grp-" + uniq, DriveID: team.ID, Enabled: true, CreatedBy: "admin@example.com"}
+	first := addUserDriveGrant(t, st, g)
+	var widens *store.UserDriveGrantWidensError
+	g.MembersCanWrite = true
+	if _, _, err := st.UpsertUserDriveGrantWithinTier(ctx, g, true, true); !errors.As(err, &widens) || widens.Field != "members_can_write" {
+		t.Fatalf("security-admin tier set members_can_write: err = %v, want a members_can_write widening", err)
+	}
+	again, err := st.AddUserDriveGrant(ctx, g, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.ID != first.ID || !again.MembersCanWrite {
+		t.Fatalf("re-send = %+v, want row %s updated to members_can_write", again, first.ID)
 	}
 }
