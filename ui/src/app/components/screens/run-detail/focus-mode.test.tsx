@@ -116,6 +116,24 @@ function renderCockpitInShell() {
 }
 
 describe("Focus mode — the shell gets out of the way", () => {
+  it("starts the overlay under the shell's banners, and drops the offset when focus ends", async () => {
+    const user = userEvent.setup();
+    const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ bottom: 44 } as DOMRect);
+    try {
+      renderCockpitInShell();
+      await screen.findByRole("heading", { name: "Egress" });
+      expect(document.documentElement.style.getPropertyValue("--shell-banner-h")).toBe("");
+      await user.click(screen.getByRole("button", { name: RUN_COCKPIT.enterFocus }));
+      expect(document.documentElement.style.getPropertyValue("--shell-banner-h")).toBe("44px");
+      const overlay = screen.getByRole("button", { name: RUN_COCKPIT.exitFocus }).closest(".fixed");
+      expect(overlay).toHaveClass("top-[var(--shell-banner-h,0px)]");
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(document.documentElement.style.getPropertyValue("--shell-banner-h")).toBe(""));
+    } finally {
+      rect.mockRestore();
+    }
+  });
+
   it("hides the shell's header and sidebar on entry, and Escape gives them back", async () => {
     const user = userEvent.setup();
     renderCockpitInShell();
