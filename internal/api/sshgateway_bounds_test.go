@@ -104,3 +104,65 @@ func TestSSHGateway_MaxConnectionsConfigurableAndCounted(t *testing.T) {
 		t.Fatalf("first session after the refusal: %v", err)
 	}
 }
+
+// With the default ceiling, DefaultSSHMaxConnections authenticated sessions are
+// served and the next is closed after its key was accepted; closing one session
+// frees its slot for a new connection.
+func TestSSHGateway_DefaultCeilingRefusesTheNextEstablishedConnection(t *testing.T) {
+	st := newSSHMemStore()
+	runID := uuid.New()
+	st.putRun(types.AgentRun{ID: runID, CreatedBy: "alice@example.com", State: types.RunRunning, SandboxRef: "sbx-1"})
+	priv, pub := mustSSHKeypair(t)
+	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(pub), Principal: "alice@example.com", PublicKey: string(ssh.MarshalAuthorizedKey(pub))})
+	h := newSSHTestHarness(t, st, &sshFakeRunner{})
+
+	served := func(c *ssh.Client) bool {
+		_, _, err := c.SendRequest("keepalive@openssh.com", true, nil)
+		return err == nil
+	}
+	var clients []*ssh.Client
+	defer func() {
+		for _, c := range clients {
+			_ = c.Close()
+		}
+	}()
+	for i := 0; i < DefaultSSHMaxConnections; i++ {
+		c, err := sshDial(t, h, runID.String(), priv)
+		if err != nil {
+			t.Fatalf("session %d of %d: %v", i+1, DefaultSSHMaxConnections, err)
+		}
+		clients = append(clients, c)
+	}
+
+	if over, err := sshDial(t, h, runID.String(), priv); err == nil {
+		ok := served(over)
+		_ = over.Close()
+		if ok {
+			t.Fatalf("session %d was served, want it closed", DefaultSSHMaxConnections+1)
+		}
+	}
+	h.srv.metrics.mu.Lock()
+	got := h.srv.metrics.sshRefused[sshBoundEstablished]
+	h.srv.metrics.mu.Unlock()
+	if got != 1 {
+		t.Fatalf("established refusals counted = %d, want 1", got)
+	}
+
+	_ = clients[0].Close()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		c, err := sshDial(t, h, runID.String(), priv)
+		if err == nil {
+			ok := served(c)
+			if ok {
+				clients = append(clients, c)
+				break
+			}
+			_ = c.Close()
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("a session closed at the ceiling never freed its slot")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}

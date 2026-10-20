@@ -308,6 +308,46 @@ func TestRotateAgeKeyMode_RefusesWhileTheRekeyLockIsHeld(t *testing.T) {
 	}
 }
 
+// TestRotateAgeKeyMode_RefusesAStagedKeyLeftAfterTheFirstCheck: a staged key
+// that appears after the first check passed (a racing run's) is caught by the
+// check under the rekey lock, which refuses before the file is overwritten or
+// the store is touched.
+func TestRotateAgeKeyMode_RefusesAStagedKeyLeftAfterTheFirstCheck(t *testing.T) {
+	dsn, pool := rotateDatabase(t)
+	oldID := newIdentity(t)
+	seedRotateStore(t, pool, oldID)
+	before := readEveryRow(t, pool, oldID)
+
+	keyPath := t.TempDir() + "/age.key"
+	if err := os.WriteFile(keyPath, []byte(oldID.String()+"\n"), 0o600); err != nil {
+		t.Fatalf("write the current key file: %v", err)
+	}
+	staged := keyPath + ".new"
+	stagedKey := newIdentity(t).String() + "\n"
+	prev := beforeLockedStagedKeyCheck
+	t.Cleanup(func() { beforeLockedStagedKeyCheck = prev })
+	beforeLockedStagedKeyCheck = func() {
+		if err := os.WriteFile(staged, []byte(stagedKey), 0o600); err != nil {
+			t.Errorf("plant the staged key: %v", err)
+		}
+	}
+
+	err := rotateAgeKeyMode(rekeyFlags(dsn, "pg", oldID.String()), keyPath)
+	if err == nil || !strings.Contains(err.Error(), "ONLY key") || !strings.Contains(err.Error(), staged) {
+		t.Fatalf("err = %v, want the staged-key refusal naming %s", err, staged)
+	}
+	if b, rerr := os.ReadFile(staged); rerr != nil || string(b) != stagedKey {
+		t.Errorf("the staged key was changed or removed: %q, %v", b, rerr)
+	}
+	if got, rerr := readAgeKeyFile(keyPath); rerr != nil || got != oldID.String() {
+		t.Errorf("key file changed by a refused rotation: %q, %v", got, rerr)
+	}
+	assertEveryRowReadsUnder(t, pool, before, oldID, newIdentity(t))
+	if rows := rekeyAuditRows(t, pool); len(rows) != 0 {
+		t.Errorf("a refused rotation wrote %d secret.rekey rows, want 0", len(rows))
+	}
+}
+
 // ageKeyFromFile resolves WARDYN_AGE_KEY through its WARDYN_AGE_KEY_FILE twin
 // the way boot does, from the one list of _FILE settings.
 func ageKeyFromFile(t *testing.T, f *bootFlags) {

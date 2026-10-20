@@ -40,14 +40,19 @@ func (f failingPointerStore) UnderivedPointers(context.Context) (int, string, er
 }
 func (failingPointerStore) ExternalName() string { return "vaultkv" }
 
-// A scan that cannot run is logged, not swallowed, and never stops the boot.
+// A scan that cannot run is logged at Warn (the default level shows it), not
+// swallowed, and never stops the boot.
 func TestWarnUnderivedPointersLogsAFailedScan(t *testing.T) {
 	var buf bytes.Buffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 	warnUnderivedPointers(context.Background(), failingPointerStore{err: errors.New("scan boom")})
-	if got := buf.String(); !strings.Contains(got, "scan boom") {
+	got := buf.String()
+	if !strings.Contains(got, "scan boom") {
 		t.Errorf("log = %q, want it to carry the scan error", got)
+	}
+	if !strings.Contains(got, "level=WARN") {
+		t.Errorf("log = %q, want the failed scan at Warn", got)
 	}
 }
