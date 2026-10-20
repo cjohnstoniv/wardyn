@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -85,6 +86,35 @@ const (
 	signinEndRunEnded = "run_ended"
 	signinEndFailed   = "failed"
 )
+
+// signinContinueTries is how many sweep passes retry the bare SIGCONT of a
+// begin whose pause-agent never ran before the run is killed
+// (desktop_signin_resume_failed). The passes made ride end_stage ("continue",
+// then "continue:1", "continue:2"), so the count survives a restart.
+const signinContinueTries = 3
+
+const signinStageContinue = "continue"
+
+func signinContinueStage(made int) string {
+	if made == 0 {
+		return signinStageContinue
+	}
+	return signinStageContinue + ":" + strconv.Itoa(made)
+}
+
+// signinContinueMade is how many sweep passes a "continue" stage has made;
+// false for any other stage.
+func signinContinueMade(stage string) (int, bool) {
+	if stage == signinStageContinue {
+		return 0, true
+	}
+	rest, ok := strings.CutPrefix(stage, signinStageContinue+":")
+	if !ok {
+		return 0, false
+	}
+	made, err := strconv.Atoi(rest)
+	return made, err == nil
+}
 
 // signinProxyAddr is the run proxy's sign-in listener as the sandbox names it.
 var signinProxyAddr = net.JoinHostPort("wardyn-proxy", fmt.Sprint(runner.SigninListenPort))
@@ -373,15 +403,55 @@ func (s *Server) rollbackDesktopSignin(ctx context.Context, run types.AgentRun, 
 
 // abandonDesktopSignin ends a sign-in whose pause-agent never ran: only pid 1
 // was stopped, so a bare SIGCONT resumes the agent. When even that fails, the
-// full rollback runs and the sweep retries it.
+// row is left at the "continue" stage, and the sweep retries only that
+// SIGCONT (continueDesktopSignin), never the helper.
 func (s *Server) abandonDesktopSignin(ctx context.Context, se runner.SigninExecer, run types.AgentRun, si types.DesktopSignin, principal string) {
 	ctx = context.WithoutCancel(ctx)
 	st, ok := s.desktopSigninStore()
-	if !ok || se.SignalMain(ctx, run.SandboxRef, "SIGCONT") != nil {
-		s.rollbackDesktopSignin(ctx, run, si, principal)
+	if !ok {
 		return
 	}
-	_ = s.closeDesktopSignin(ctx, st, run, si, signinEndFailed, types.ActorHuman, principal, true)
+	err := se.SignalMain(ctx, run.SandboxRef, "SIGCONT")
+	if err == nil {
+		_ = s.closeDesktopSignin(ctx, st, run, si, signinEndFailed, types.ActorHuman, principal, true)
+		return
+	}
+	slog.WarnContext(ctx, "wardynd: desktop sign-in did not end", "run_id", run.ID, "stage", signinStageContinue, "err", err)
+	if changed, rerr := st.RequestDesktopSigninEnd(ctx, si.ID, signinEndFailed, signinStageContinue); changed || rerr != nil {
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorHuman, principal, "desktop_signin.close", run.ID.String(), "failure",
+			mustJSON(map[string]any{"signin_id": si.ID, "reason": signinEndFailed, "stage": signinStageContinue, "agent_resumed": false})))
+	}
+}
+
+// continueDesktopSignin retries the bare SIGCONT of a sign-in abandonDesktopSignin
+// left at the "continue" stage: pid 1 is all that was stopped. A success
+// closes the row; after signinContinueTries failed passes the run is killed
+// (desktop_signin_resume_failed), so a sandbox is never left stopped and the
+// sweep never retries without end. Only the stage change is stored for a
+// failed pass: the stuck state was audited once, by the abandon.
+func (s *Server) continueDesktopSignin(ctx context.Context, st store.DesktopSigninStore, run types.AgentRun, si types.DesktopSignin,
+	made int, reason string, actorType types.ActorType, actor string) error {
+	if made < signinContinueTries {
+		var err error
+		if se, ok := s.cfg.Runner.(runner.SigninExecer); ok {
+			err = se.SignalMain(ctx, run.SandboxRef, "SIGCONT")
+		}
+		if err == nil {
+			return s.closeDesktopSignin(ctx, st, run, si, reason, actorType, actor, true)
+		}
+		made++
+		slog.WarnContext(ctx, "wardynd: desktop sign-in could not continue the agent", "run_id", run.ID, "tries", made, "err", err)
+		if made < signinContinueTries {
+			_, rerr := st.RequestDesktopSigninEnd(ctx, si.ID, reason, signinContinueStage(made))
+			return errors.Join(err, rerr)
+		}
+	}
+	if _, _, err := s.killRunCascade(ctx, run, actorType, actor,
+		map[string]any{"reason": reasonDesktopSigninResumeFailed, "signin_id": si.ID}); err != nil {
+		_, rerr := st.RequestDesktopSigninEnd(ctx, si.ID, reason, signinContinueStage(signinContinueTries))
+		return errors.Join(err, rerr)
+	}
+	return s.closeDesktopSignin(ctx, st, run, si, reason, actorType, actor, false)
 }
 
 type desktopSigninShareRequest struct {
@@ -541,6 +611,9 @@ func (s *Server) finishDesktopSignin(ctx context.Context, run types.AgentRun, si
 				mustJSON(map[string]any{"signin_id": si.ID, "reason": reason, "stage": stage, "agent_resumed": false})))
 		}
 		return err
+	}
+	if made, ok := signinContinueMade(si.EndStage); ok {
+		return s.continueDesktopSignin(ctx, st, run, si, made, reason, actorType, actor)
 	}
 	if _, err := s.signinExec(ctx, run.SandboxRef, true, nil, 4<<10, "stop"); err != nil {
 		if errors.Is(err, runner.ErrSandboxGone) {

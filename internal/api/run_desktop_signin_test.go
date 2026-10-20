@@ -120,6 +120,17 @@ func (s *signinTestStore) RequestDesktopSigninEnd(_ context.Context, id uuid.UUI
 	return true, nil
 }
 
+// UpdateRunStateIf is the kill's compare-and-set of the run's state.
+func (s *signinTestStore) UpdateRunStateIf(ctx context.Context, id uuid.UUID, from, to types.RunState) (bool, error) {
+	run, err := s.GetRun(ctx, id)
+	if err != nil || run.State != from {
+		return false, err
+	}
+	run.State = to
+	s.putRun(run)
+	return true, nil
+}
+
 func (s *signinTestStore) MarkDesktopSigninRun(_ context.Context, runID uuid.UUID, offReason string) error {
 	s.smu.Lock()
 	defer s.smu.Unlock()
@@ -226,6 +237,8 @@ type signinFakeRunner struct {
 	broken  map[string]error // by subcommand: the exec cannot be created or started
 	waitErr map[string]error // by subcommand: the exec started, then its stream broke
 	stdout  map[string]string
+	// contFail is how many of the next SIGCONTs fail.
+	contFail int
 }
 
 var _ runner.SigninExecer = (*signinFakeRunner)(nil)
@@ -280,6 +293,10 @@ func (f *signinFakeRunner) SignalMain(_ context.Context, _, signal string) error
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "signal:"+signal)
+	if signal == "SIGCONT" && f.contFail > 0 {
+		f.contFail--
+		return errors.New("transient signal failure")
+	}
 	return nil
 }
 
@@ -452,6 +469,80 @@ func TestDesktopSignin_MissingHelperContinuesPid1AndClosesTheRow(t *testing.T) {
 				t.Fatalf("close row = %+v, want success with agent_resumed true", ev)
 			}
 		})
+	}
+}
+
+// signinMissingHelper fails every wardyn-signin subcommand as a missing binary.
+func signinMissingHelper(rn *signinFakeRunner) {
+	for _, sub := range []string{"pause-agent", "stop", "resume-agent", "start"} {
+		rn.exit[sub] = 127
+	}
+}
+
+// TestDesktopSignin_FailedContinueRetriesOnlyTheSignal (#2972 L1): when the
+// bare SIGCONT of a begin whose pause-agent never ran fails, the sweep retries
+// that SIGCONT alone, never the helper's stop, and closes the row failed.
+func TestDesktopSignin_FailedContinueRetriesOnlyTheSignal(t *testing.T) {
+	f := newSigninFixture(t)
+	signinMissingHelper(f.rn)
+	f.rn.contFail = 1
+	if code, body := f.post(t, "/desktop-signin", ""); code != http.StatusBadGateway {
+		t.Fatalf("begin = %d %s, want 502", code, body)
+	}
+	if si := f.st.only(t); si.EndedAt != nil || si.EndStage != signinStageContinue {
+		t.Fatalf("row after begin = %+v, want open at stage %q", si, signinStageContinue)
+	}
+	for range 3 {
+		if err := f.srv.sweepDesktopSignins(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, want := f.rn.seen(), []string{"signal:SIGSTOP", "agent:pause-agent", "signal:SIGCONT", "signal:SIGCONT"}; !slices.Equal(got, want) {
+		t.Fatalf("calls = %v, want %v (the failed SIGCONT retried alone)", got, want)
+	}
+	if si := f.st.only(t); si.EndedAt == nil || si.EndReason != signinEndFailed {
+		t.Fatalf("row = %+v, want ended failed", si)
+	}
+	if ev := findAudit(f.h.audit.snapshot(), f.run.ID, "desktop_signin.close", "success"); ev == nil || !strings.Contains(string(ev.Data), `"agent_resumed":true`) {
+		t.Fatalf("close row = %+v, want success with agent_resumed true", ev)
+	}
+}
+
+// TestDesktopSignin_ContinueTriesRunOutAndKillTheRun (#2972 L1): a SIGCONT
+// that keeps failing is retried on signinContinueTries sweep passes, the count
+// stored on the row; then the run is killed with the named reason and the row
+// closes. Later passes find nothing to do.
+func TestDesktopSignin_ContinueTriesRunOutAndKillTheRun(t *testing.T) {
+	f := newSigninFixture(t)
+	signinMissingHelper(f.rn)
+	f.rn.contFail = 1000
+	if code, body := f.post(t, "/desktop-signin", ""); code != http.StatusBadGateway {
+		t.Fatalf("begin = %d %s, want 502", code, body)
+	}
+	for pass := 1; pass <= signinContinueTries+2; pass++ {
+		_ = f.srv.sweepDesktopSignins(context.Background())
+		if pass < signinContinueTries {
+			if si := f.st.only(t); si.EndedAt != nil || si.EndStage != signinContinueStage(pass) {
+				t.Fatalf("row after pass %d = %+v, want open at stage %q", pass, si, signinContinueStage(pass))
+			}
+		}
+	}
+	want := []string{"signal:SIGSTOP", "agent:pause-agent"}
+	for range 1 + signinContinueTries {
+		want = append(want, "signal:SIGCONT")
+	}
+	if got := f.rn.seen(); !slices.Equal(got, want) {
+		t.Fatalf("calls = %v, want %v (bounded retries, no helper stop)", got, want)
+	}
+	if si := f.st.only(t); si.EndedAt == nil || si.EndReason != signinEndFailed {
+		t.Fatalf("row = %+v, want ended failed", si)
+	}
+	run, err := f.st.GetRun(context.Background(), f.run.ID)
+	if err != nil || run.State != types.RunKilled {
+		t.Fatalf("run = %v %v, want KILLED", run.State, err)
+	}
+	if ev := findAuditData(f.h.audit.snapshot(), f.run.ID, "run.kill", `"reason":"`+reasonDesktopSigninResumeFailed+`"`); ev == nil {
+		t.Fatalf("run.kill row = %+v, want reason %s", ev, reasonDesktopSigninResumeFailed)
 	}
 }
 
