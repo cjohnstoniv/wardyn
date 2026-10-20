@@ -269,3 +269,22 @@ test("Your account: My pools says administrators can see the pools and the cap i
   await expect(page.getByText("Only you can change these. Administrators can see them.", { exact: true })).toBeVisible();
   await expect(page.getByText("You can have up to 10 pools, for example Laptop and Home server.")).toBeVisible();
 });
+
+// Board D2a: a runner that registered but never connected names the service and its log on My runner, with no
+// limits set. The e2e server keeps runners off, so the person's runner list is answered here.
+test("My runner: a runner that registered but never connected names the service and its log", async ({ page }) => {
+  const none = { runs: 0, cpu_millis: 0, memory_mib: 0, disk_mib: 0 };
+  const never = {
+    id: "r-dev", name: "mbp-dev", state: "claimed", online: false, key_fingerprint: "SHA256:3Jd1d8…k2Q9", key_fingerprint_abbreviated: true,
+    version: "0.9.6", created_at: aheadByHours(-1), claimed_at: aheadByHours(-0.5), kind: "self_hosted", pools: [],
+    usage: { online: false, in_use: none, available: none, disk_capped: true },
+  };
+  await page.route("**/api/v1/me/runners*", (route) => (route.request().method() === "GET" ? route.fulfill({ json: [never] }) : route.fallback()));
+  await gotoConsole(page, "user");
+  await navTo(page, "Your account");
+  await page.getByRole("button", { name: /^My runner/ }).click();
+  await expect(page.getByText("Never connected", { exact: true })).toBeVisible();
+  await expect(page.locator("[data-offline-note]")).toHaveText(
+    "This runner registered but has never connected to this server. On that computer, check that wardyn-runnerd runs as a service (wardyn-runnerd setup installs one) and read its log: ~/Library/Logs/wardyn/runnerd.log on macOS, journalctl --user -u wardyn-runnerd on Linux. Behind a proxy, the service needs its own HTTPS_PROXY.",
+  );
+});

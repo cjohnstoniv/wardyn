@@ -28,6 +28,19 @@ export const RES = {
   /** "8 CPUs · 16 GB memory · 500 GB disk" */
   AMOUNTS: (cpus: number, memGB: number, diskGB: number) => `${cpus} ${cpus === 1 ? "CPU" : "CPUs"} · ${memGB} GB memory · ${diskGB} GB disk`,
   OFFLINE_NOTE: "This runner is offline. Its capacity isn't counted as available until it reconnects.",
+  // Board D2a (owner-approved 2026-10-20): a runner that registered but never connected. Every odd entry is
+  // shown as code; joined, they are the board's sentence character for character.
+  NEVER_CONNECTED_NOTE: [
+    "This runner registered but has never connected to this server. On that computer, check that wardyn-runnerd runs as a service (",
+    "wardyn-runnerd setup",
+    " installs one) and read its log: ",
+    "~/Library/Logs/wardyn/runnerd.log",
+    " on macOS, ",
+    "journalctl --user -u wardyn-runnerd",
+    " on Linux. Behind a proxy, the service needs its own ",
+    "HTTPS_PROXY",
+    ".",
+  ],
   RESOURCES: "Resources",
   RUNS_AT_ONCE: (n: number) => `Runs at once: ${n}`,
   RUNNING_NOW: (active: number, max: number) => `Running now: ${active} of ${max}`,
