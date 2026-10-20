@@ -456,8 +456,8 @@ func TestMemberMode_RefusesTokenMint(t *testing.T) {
 			if w.Code != http.StatusConflict {
 				t.Fatalf("status = %d, want 409: %s", w.Code, w.Body.String())
 			}
-			if !strings.Contains(w.Body.String(), "Exit the user view") {
-				t.Errorf("body = %q, want the exit-member-mode refusal", w.Body.String())
+			if !strings.Contains(w.Body.String(), "'+NEW+'") {
+				t.Errorf("body = %q, want the refusal that says how to switch to Admin view", w.Body.String())
 			}
 		})
 	}

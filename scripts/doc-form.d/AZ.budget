@@ -8,4 +8,5 @@
 # docs/AZURE-DEVOPS.md 11262 adds 113 over 11149 (0.9.7 MINT-L backport), measured: the minted_pat laptop row and the bullets on where the per-run token is held, its re-judged fetch, outage and pins.
 # docs/AZURE-DEVOPS.md 11296 adds 34 over 11262 (0.9.7 MINT-L backport), measured: a person's own runner, the second person only under WARDYN_GOVERNANCE_SECOND_HUMAN, the 15-minute re-judge with its drift revoke, and the outage bound from the last fetch.
 # docs/AZURE-DEVOPS.md 11394 adds 98 over 11296 (0.9.7), measured: where the minted token is held, what the sandbox sees with runner_resident_sandbox off or on, and the posture fields that apply.
-docs/AZURE-DEVOPS.md=11394 share=35
+# docs/AZURE-DEVOPS.md 11404 adds 10 over 11394 (0.9.7), measured: runner_resident_sandbox has no effect in this version; a runner that reports no posture fails every posture requirement.
+docs/AZURE-DEVOPS.md=11404 share=35

@@ -383,12 +383,13 @@ export const ADO_ENTRA_EDITOR = {
   REST_TOGGLE_HINT:
     "Off restricts every run on this row to git only — clone and push. On allows the capabilities below through the same proxy gate.",
   // A token Wardyn creates can stay in a self-hosted runner's keystore for the run (row.entra.runner_resident),
-  // and optionally also go into the sandbox (runner_resident_sandbox, which needs the first). Off by default.
+  // and a second switch (runner_resident_sandbox, which needs the first) is stored and audited but has no effect in
+  // this version: no run reads it. Off by default.
   RUNNER_TOGGLE: "Allow tokens to be held on a person's own runner",
   RUNNER_TOGGLE_HINT:
-    "Off by default. Saved and audited, but this release does not hold Azure DevOps tokens on a runner yet, so a run that needs one there is refused.",
-  SANDBOX_TOGGLE: "Also put the token in the sandbox",
-  SANDBOX_TOGGLE_HINT: "Needs the switch above, and takes effect with it.",
+    "Off by default. Lets the runner's proxy hold a token Wardyn mints for a run, in its memory only, where the delivery policy also allows it. Saved and audited.",
+  SANDBOX_TOGGLE: "Also put the token in the sandbox (no effect in this version)",
+  SANDBOX_TOGGLE_HINT: "It has no effect in this version: the sandbox holds only a placeholder either way. Needs the switch above.",
   CEILING_TITLE: "What runs may ever do",
   CEILING_LEAD:
     "The ceiling. Unchecking one here removes it everywhere — from the default profile below, from a member's own saved policy, and from what a person can ever approve mid-run.",

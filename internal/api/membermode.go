@@ -48,7 +48,7 @@ const (
 	// and outlive the view that created it. The SSH-key door no longer refuses:
 	// a key registered in the view is stored capped instead (sshkeys.go,
 	// migration 0070).
-	userViewMintRefusal = "Exit the user view to mint a token."
+	userViewMintRefusal = "To mint a token, switch to Admin view: use the Console view switch beside the Wardyn logo, or at the top of the menu on a narrow screen."
 )
 
 // The S1 launch refusal (M-8): a run is a user act, so a browser session in

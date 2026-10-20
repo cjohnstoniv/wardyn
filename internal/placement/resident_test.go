@@ -59,7 +59,7 @@ func TestLocalEligibility_ResidentNeedsPolicyAndPosture(t *testing.T) {
 	// The detail names every unmet field and the requirement; a posture never judged says why, at launch
 	// and on a runner chosen at dispatch or revive that has not reported its posture.
 	const requires = " (requires mdm_managed, disk_encrypted, os_min darwin 15.1)"
-	const unreported = "posture: no reported posture to judge. At launch no runner is chosen yet, and a runner that has not reported its posture meets no requirement, so a delivery policy with require_posture refuses"
+	const unreported = "posture: no reported posture to judge. At launch no runner is chosen yet. A runner that reports no posture fails every posture requirement, so a delivery policy with require_posture refuses"
 	for _, tc := range []struct {
 		name    string
 		posture *types.RunnerPosture

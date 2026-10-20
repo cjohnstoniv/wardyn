@@ -16,13 +16,15 @@ A small release on top of 0.9.6. An Azure DevOps token that the organisation min
 
 - An Azure DevOps connection with `token_mode: minted_pat` can now run on a person's own runner. Before, the run was refused at create. It is off by default and needs all three: a delivery policy that sends `ado_minted_pat` as `runner_resident` to the runner's trust class (a security admin's change, held for a second person under `WARDYN_GOVERNANCE_SECOND_HUMAN`), the connection's `entra.runner_resident` opt-in, and a runner of that trust class owned by a person.
   - The token is held in the memory of the runner's proxy, on the person's own computer, for the run and at most `pat_max_hours`. It is not written to disk or the keystore. Root on that computer can read it.
-  - The sandbox holds only an inert placeholder; the proxy adds the token to requests on the way out, so a host that echoes request headers can return it. `entra.runner_resident_sandbox` is stored and audited, and no run reads it: on or off, the sandbox sees the same.
+  - The sandbox holds only an inert placeholder; the proxy adds the token to requests on the way out, so a host that echoes request headers can return it. `entra.runner_resident_sandbox` has no effect in this version: it is stored and audited, no run reads it, and on or off the sandbox sees the same.
   - The proxy fetches the token again at most 15 minutes apart, and each fetch is judged against the policy, the runner's owner, trust class and posture, and the opt-in. A delivery policy may add `require_posture` (`mdm_managed`, `disk_encrypted`, `os_min`) for the class; the class has none of its own. A refusal revokes the run's token at Azure DevOps. If the organisation is unreachable, the proxy stops injecting the token at most 30 minutes after its last fetch.
   - A `bearer` connection and a stored git token for an Azure DevOps host are still refused on a person's own runner.
 
 ### Changed
 
 - `PUT /governance/credential-delivery` refuses with `422` and `credential_delivery_invalid` a document that sets a class, or a trust class's override of it, to a mode the server cannot build for that class. The sentence names the class, the mode and the modes it can build. `GET` lists them as `buildable_modes`. A stored document is read back as before.
+- The refusal of an API-token mint in the user view now says how to switch to Admin view.
+- The Azure DevOps connection editor says what the runner switch does, and that the sandbox switch has no effect in this version. A runner that reports no posture fails every posture requirement, and the refusal says so.
 
 ### Before you upgrade
 
