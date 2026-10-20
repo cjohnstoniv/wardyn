@@ -5,7 +5,10 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
-import { AttachmentRow } from "./work-group";
+import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
+import { SCENARIO_PREFLIGHT } from "../../../../../lib/new-run-fixtures/scenarios/preflight";
+import { initialDraft } from "../../draft/run-intent";
+import { AttachmentRow, WorkGroup } from "./work-group";
 
 afterEach(cleanup);
 
@@ -32,5 +35,26 @@ describe("Review: a typed ref", () => {
   it("shows nothing new for a ref that was picked or is the default", () => {
     render(<AttachmentRow a={a} />);
     expect(screen.queryByTestId("attachment-ref-not-checked")).not.toBeInTheDocument();
+  });
+});
+
+// #1991: the Files group tells a kept work folder in place of the deleted main drive.
+describe("Review: the work group when the run keeps its work folder", () => {
+  const show = (keep: boolean) => {
+    const draft = initialDraft("alice");
+    draft.intent = { shape: "agent_task", experience: "background", no_repositories_or_drives: true, resources: { disk_mib: 4096 }, ...(keep ? { keep_work_folder: true } : {}) };
+    render(<WorkGroup draft={draft} pre={SCENARIO_PREFLIGHT.member} preview={null} docRows={[]} go={() => {}} dispatch={() => {}} />);
+  };
+
+  it("says the work folder is kept after the run, and starts in the main drive", () => {
+    show(true);
+    expect(screen.getByText(/the work folder is kept as a drive after the run$/)).toHaveTextContent(/^Main drive .+ · starts in the main drive · the work folder is kept as a drive after the run$/);
+    expect(screen.getByText(NR_FILES.KEEP_LIFE)).toBeInTheDocument();
+  });
+
+  it("says what it always said when the run keeps nothing", () => {
+    show(false);
+    expect(screen.queryByText(NR_FILES.KEEP_LIFE)).toBeNull();
+    expect(screen.getByText(NR_FILES.LIFE_DELETED)).toBeInTheDocument();
   });
 });

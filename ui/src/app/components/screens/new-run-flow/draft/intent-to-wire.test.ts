@@ -62,6 +62,12 @@ describe("intentToWire (U1)", () => {
     expect(sent[0].body.devcontainer_repo).toBe("org/app");
   });
 
+  it("sends keep_work_folder: a launch-time choice the registry excludes from templates, carried and never reported", () => {
+    const { body, unsupported } = intentToWire({ ...INTENT, keep_work_folder: true });
+    expect(body.keep_work_folder).toBe(true);
+    expect(unsupported).toEqual([]);
+  });
+
   it("sends the document's inline_policy as the policy overlay, never as a whole policy", () => {
     const { body } = intentToWire(INTENT);
     expect(body.policy_overlay).toEqual({ allowed_domains: [], auto_stop_after_sec: 0 });

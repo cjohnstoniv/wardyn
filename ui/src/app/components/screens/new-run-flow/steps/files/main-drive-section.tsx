@@ -12,7 +12,6 @@ import { Input } from "../../../../ui/input";
 import { Label } from "../../../../ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "../../../../ui/popover";
 import { Chip } from "../../../../wardyn/primitives";
-import { InfoTip } from "../../../../wardyn/info-tip";
 import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import type { LimitSource } from "../../../../../lib/types/runner-pools";
@@ -20,6 +19,7 @@ import { commitSize, mainDriveMiB, parseSize, setMainDrive, sizeField, type Size
 import type { RunIntent } from "../../draft/run-intent";
 import { useNewRunDispatch, useNewRunDraft } from "../../new-run-route";
 import type { MainDriveFacts, MainDriveView } from "./files-seams";
+import { keepDoor, KeepWorkFolder, type KeepDoor } from "./keep-work-folder";
 import { FilesGroup } from "./kind-visuals";
 import { sizeWords } from "./size-words";
 
@@ -52,8 +52,9 @@ export function lifecycleOf(intent: RunIntent, view: MainDriveView): Lifecycle {
   return { kind: "kept", grace: hoursText(keep.grace_sec), max: view.maxLifetimeSec ? hoursText(view.maxLifetimeSec) : undefined };
 }
 
-export const lifecycleText = (l: Lifecycle): string | undefined =>
-  l.kind === "deleted" ? NR_FILES.LIFE_DELETED
+/** `keepsWork`: the run keeps its work folder as a drive, so only the rest of the deleted main drive is deleted. */
+export const lifecycleText = (l: Lifecycle, keepsWork = false): string | undefined =>
+  l.kind === "deleted" ? (keepsWork ? NR_FILES.KEEP_LIFE : NR_FILES.LIFE_DELETED)
     : l.kind === "noEnd" ? NR_FILES.LIFE_NO_END
       : l.kind === "kept" ? (l.max ? NR_FILES.LIFE_KEPT(l.max, l.grace) : NR_FILES.LIFE_KEPT_UNLIMITED(l.grace))
         : undefined;
@@ -168,12 +169,12 @@ export function useMainDriveSize(view: MainDriveView) {
   };
 }
 
-export function MainDriveSection({ view, size }: { view: MainDriveView; size: ReturnType<typeof useMainDriveSize> }) {
+export function MainDriveSection({ view, size, keep = keepDoor(undefined, false) }: { view: MainDriveView; size: ReturnType<typeof useMainDriveSize>; keep?: KeepDoor }) {
   const draft = useNewRunDraft();
   const [touched, setTouched] = React.useState(false);
   const errorId = React.useId();
   const showError = size.missing && touched;
-  const life = lifecycleText(lifecycleOf(draft.intent, view));
+  const life = lifecycleText(lifecycleOf(draft.intent, view), draft.intent.keep_work_folder === true);
 
   return (
     <FilesGroup titleId="nr-main-title" title={NR_FILES.MAIN_TITLE} body={NR_FILES.MAIN_BODY} aside={<span className="text-meta font-semibold uppercase tracking-[0.08em] text-muted-foreground">{NR_SHARED.REQUIRED}</span>}>
@@ -214,15 +215,7 @@ export function MainDriveSection({ view, size }: { view: MainDriveView; size: Re
             <strong className="text-sm leading-[1.45] font-semibold">{life}</strong>
           </div>
         )}
-        {/* The rule row: checkbox, label and Coming soon in one wrapper, the tooltip beside it, on one line that wraps whole (#2860). */}
-        <div className="flex flex-wrap items-center gap-2 border-t border-border pt-[11px] text-sm">
-          <span className="flex flex-wrap items-center gap-2 opacity-60">
-            <input id="nr-reuse-drive" type="checkbox" disabled className="size-4" />
-            <label htmlFor="nr-reuse-drive" className="font-semibold">{NR_FILES.REUSE_LABEL}</label>
-            <Chip>{NR_SHARED.COMING_SOON}</Chip>
-          </span>
-          <InfoTip label={NR_FILES.REUSE_ARIA}>{NR_FILES.REUSE_TIP}</InfoTip>
-        </div>
+        <KeepWorkFolder door={keep} />
       </div>
     </FilesGroup>
   );

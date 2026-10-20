@@ -42,7 +42,7 @@ const ROW_KEYS: Record<PolicyRowId, string[]> = {
   barrier: ["confinement_class", "runner_pool_id"],
   network: ["overrides.hosts", "inline_policy.allowed_domains", "inline_policy.denied_domains", "inline_policy.allow_all_egress", "inline_policy.first_use_approval"],
   credentials: ["model_provider", "integration_id", "overrides.agent.add_secrets", "overrides.agent.remove_secrets", "overrides.git_pat", "overrides.azure_devops"],
-  files: ["workspaces", "drive", "start_folder", "no_repositories_or_drives", "resources.disk_mib"],
+  files: ["workspaces", "drive", "start_folder", "no_repositories_or_drives", "keep_work_folder", "resources.disk_mib"],
   tools: ["tool_approvals", "overrides.agent.tool_rules", "overrides.push_rules", "inline_policy.tool_rules", "inline_policy.push_rules"],
 };
 

@@ -36,6 +36,21 @@ describe("Review blockers", () => {
     expect(setup).toMatchObject({ text: "Add the deploy key.", to: { screen: "step", step: "tools" } });
   });
 
+  it("puts the keep-at-the-limit blocker among the local ones, links it to Files, and gives it its second line", () => {
+    const keepLimit = { text: NR_FILES.KEEP_LIMIT(3, 3), hint: NR_FILES.KEEP_LIMIT_HINT };
+    const [b] = buildBlockers({ ...NOTHING, keepLimit });
+    expect(b).toMatchObject({ kind: "local", text: "You have 3 of 3 drives. Delete one to keep this run's work folder.", hint: NR_FILES.KEEP_LIMIT_HINT, to: { screen: "step", step: "files" } });
+    expect(buildBlockers({ ...EVERYTHING, keepLimit }).map((x) => x.id)[1]).toBe("keep:limit");
+  });
+
+  it("drops the server's own limit refusal when the keep blocker already says it, and keeps any other refusal", () => {
+    const keepLimit = { text: NR_FILES.KEEP_LIMIT(3, 3), hint: NR_FILES.KEEP_LIMIT_HINT };
+    const limit = { text: "You have 3 of 3 drives. Delete one to create another.", reason: "member_drive_limit_reached" };
+    expect(buildBlockers({ ...NOTHING, keepLimit, refusal: limit }).map((x) => x.kind)).toEqual(["local"]);
+    expect(buildBlockers({ ...NOTHING, refusal: limit }).map((x) => x.kind)).toEqual(["refusal"]);
+    expect(buildBlockers({ ...NOTHING, keepLimit, refusal: { text: "x", reason: "runner_offline" } }).map((x) => x.kind)).toEqual(["local", "refusal"]);
+  });
+
   it("says a missing pool in the canon's words (FR-0099)", () => {
     expect(buildBlockers({ ...NOTHING, issues: [{ home: "run", code: "pool_required", focus: "nr-pool" }] })[0].text).toBe(NR_RUN.POOL_HELP);
   });

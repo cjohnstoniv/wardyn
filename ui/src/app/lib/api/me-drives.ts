@@ -62,6 +62,10 @@ export interface MemberDriveCreate {
   count: number;
   /** Drives per person; 0 when the switch is off. */
   limit: number;
+  /** Whether a run may keep its work folder as a drive (the keep_main_drive switch). */
+  keep_work_folder: boolean;
+  /** What binds a new drive's size here; "none" on Docker, whose volumes have no size cap. */
+  enforcement?: StorageEnforcement;
 }
 
 /** Reads the caller's drive catalogue, checked against runnerPoolId when given. */

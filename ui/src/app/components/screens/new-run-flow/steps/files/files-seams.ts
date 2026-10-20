@@ -10,6 +10,7 @@
 // replaces the placeholder here and nothing else changes.
 
 import * as React from "react";
+import type { MeDrive } from "../../../../../lib/api/me-drives";
 import { DENIED } from "../../../../../lib/permissions-copy";
 import type { PreflightResult } from "../../../../../lib/types/preflight";
 import type { LimitSource, RunnerPoolChoice, RunnerPoolRunType } from "../../../../../lib/types/runner-pools";
@@ -29,6 +30,12 @@ export interface MainDriveFacts {
   keep: { supported: boolean; grace_sec?: number };
   drive_mounts: boolean;
 }
+
+/**
+ * Seam: #1991. A drive a run kept its work folder in names that run (its title). The catalogue row does not
+ * carry it yet; absent, the drive is listed as any other.
+ */
+export type KeptMeDrive = MeDrive & { kept_from_run?: string };
 
 export type FilesPoolChoice = RunnerPoolChoice & { main_drive?: MainDriveFacts };
 

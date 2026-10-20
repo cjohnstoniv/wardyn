@@ -12,6 +12,7 @@ import { Button } from "../../../ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../../ui/dropdown-menu";
 import { Chip } from "../../../wardyn/primitives";
 import { Segmented } from "../../../wardyn/segmented";
+import { NR_FILES } from "../../../wardyn/copy/new-run/files";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { NR_SAVE } from "../../../wardyn/copy/new-run/save";
 import { NR_SHAPE } from "../../../wardyn/copy/new-run/shape";
@@ -23,6 +24,7 @@ import { launchGateOpen } from "../draft/launch-gate";
 import type { NewRunLocation } from "../draft/new-run-url";
 import { useDraftIdentity, useIntentChecks } from "../draft/use-intent-checks";
 import { useLocalIssues, useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../new-run-route";
+import { useDriveCatalogue } from "../steps/files/file-sources";
 import { templateSource } from "../steps/shape/shape-sources";
 import { StepShell, useAnnounce } from "../steps/step-shell";
 import { BLOCKERS_ID, BlockerList } from "./blocker-list";
@@ -88,8 +90,13 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
 
   const gate = (blockers: number) =>
     launchGateOpen({ blockers, preflight: checks.preflightRead, generation: checks.generation, now: Date.now() });
+  // The tick is on the draft: the catalogue says whether the person is at their drive limit.
+  const keepAsked = draft.intent.keep_work_folder === true;
+  const keepDrives = useDriveCatalogue(pre?.runner_pool?.id ?? draft.intent.runner_pool_id, keepAsked);
+  const create = keepDrives.catalogue?.create;
   const inputs = {
     issues,
+    keepLimit: keepAsked && create?.reason === "limit_reached" ? { text: NR_FILES.KEEP_LIMIT(create.count, create.limit), hint: NR_FILES.KEEP_LIMIT_HINT } : undefined,
     unsupported: wire.unsupported,
     templateNeeds: template.needs,
     templateUnread: template.unread,
