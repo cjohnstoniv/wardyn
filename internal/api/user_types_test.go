@@ -313,13 +313,13 @@ func TestDeleteUserTypeRefusedWhileNamed(t *testing.T) {
 		},
 		{
 			name: "a subject row", id: "contractor", refs: 1,
-			want: "It can't be removed yet: 1 permission, profile, drive or service identity row names it. Remove those rows.",
+			want: "It can't be removed yet: 1 permission, profile, drive, launch preset or service identity row names it. Remove those rows.",
 		},
 		{
 			name: "all of them", id: "contractor", roleMap: map[string]string{"ext-group": "contractor"},
 			defaultRole: "contractor", refs: 3,
 			want: "It can't be removed yet: your chart and your default role still map to it, and " +
-				"3 permission, profile, drive or service identity rows name it. Remap it in your chart, then remove those rows.",
+				"3 permission, profile, drive, launch preset or service identity rows name it. Remap it in your chart, then remove those rows.",
 		},
 		{
 			name: "one live API token", id: "contractor", tokens: 1,
@@ -336,7 +336,7 @@ func TestDeleteUserTypeRefusedWhileNamed(t *testing.T) {
 		},
 		{
 			name: "People mappings and a subject row", id: "contractor", mappings: []string{"contractor", "contractor"}, refs: 1,
-			want: "It can't be removed yet: 2 People mappings map to it, and 1 permission, profile, drive or service identity row names it. " +
+			want: "It can't be removed yet: 2 People mappings map to it, and 1 permission, profile, drive, launch preset or service identity row names it. " +
 				"Remap them on People, then remove those rows.",
 		},
 		{
