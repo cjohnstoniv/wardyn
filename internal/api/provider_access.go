@@ -150,7 +150,7 @@ func providerCredentialNoun(k types.ModelProviderKind) string {
 		return "Claude sign-in"
 	case types.ModelProviderAzureFoundry:
 		return "Azure sign-in" // pending F1649-P3
-	case types.ModelProviderCustomEndpoint:
+	case types.ModelProviderCustomEndpoint, types.ModelProviderLocalModel:
 		return "token"
 	default:
 		return "API key"
@@ -236,7 +236,7 @@ func (s *Server) providerAccessFor(ctx context.Context, p types.ModelProvider, o
 	default:
 		// Every other closed kind is a typed key or token: providerTypedKinds
 		// (model_provider_credentials.go) — anthropic_api_key, openai_api_key,
-		// bedrock_bearer, custom_endpoint — all stored under the one -key name
+		// bedrock_bearer, custom_endpoint, local_model — all stored under the one -key name
 		// and graded by presence alone. "No key probe" (the design's own
 		// words): dispatch is what finds out a stored key no longer works.
 		s.gradeProviderKey(ctx, &row, p, owner)
@@ -249,6 +249,10 @@ func (s *Server) providerAccessFor(ctx context.Context, p types.ModelProvider, o
 // -> not_configured. custom_endpoint says "token" throughout (5.4/5.6's own
 // copy), every other typed kind says "key".
 func (s *Server) gradeProviderKey(ctx context.Context, row *SetupProviderAccess, p types.ModelProvider, owner string) {
+	if providerTakesNoCredential(p) { // nothing to connect: the provider serves everyone it is granted to
+		row.State = modelAccessLive
+		return
+	}
 	raw, found, err := s.ownSecret(ctx, owner, providerSecretName(p.UID, providerKeyPart))
 	if err != nil {
 		unreadableProvider(row)
@@ -256,7 +260,7 @@ func (s *Server) gradeProviderKey(ctx context.Context, row *SetupProviderAccess,
 	}
 	live := found && len(raw) > 0
 	addAction := providerAccessAddKeyAction
-	if p.Kind == types.ModelProviderCustomEndpoint {
+	if p.Kind == types.ModelProviderCustomEndpoint || p.Kind == types.ModelProviderLocalModel {
 		addAction = providerAccessAddTokenAction
 	}
 	if live {

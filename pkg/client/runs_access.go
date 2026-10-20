@@ -114,6 +114,8 @@ type ToolPolicyFact struct {
 	RuleEffects []EffectOption   `json:"rule_effects"`
 	RuleTools   string           `json:"rule_tools"`
 	MCPServers  []string         `json:"mcp_servers"`
+	// InnerWalls is the harness's own walls this run launches it with (#2822); nil for an exec run.
+	InnerWalls *types.HarnessInnerWalls `json:"inner_walls,omitempty"`
 }
 
 // ToolDefaultFact is a harness's default for a tool no rule names.

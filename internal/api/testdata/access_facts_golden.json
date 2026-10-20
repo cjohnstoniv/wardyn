@@ -157,7 +157,11 @@
           }
         ],
         "rule_tools": "any",
-        "mcp_servers": []
+        "mcp_servers": [],
+        "inner_walls": {
+          "sandbox_mode": "off",
+          "approvals": "none"
+        }
       }
     ],
     "setup": [

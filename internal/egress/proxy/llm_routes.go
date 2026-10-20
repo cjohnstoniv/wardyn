@@ -140,8 +140,14 @@ func llm404Detail(configured string) string {
 // over the vetted IP. Shared by the /wardyn/llm/* local routes and the
 // TLS-MITM CONNECT interception (serveMITM).
 func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host string, port int, rest string, channel contentscan.Channel) {
+	// A local model server's gate runs before anything else (local_model.go);
+	// one with no auth configured is served with no credential at all.
+	lm := p.localModelAt(host, port)
+	if lm != nil && p.localModelRefused(w, r, host, port, rest, lm) {
+		return
+	}
 	hdr, ok, ierr := p.inject.resolveCtx(r.Context(), host)
-	if !ok {
+	if !ok && lm == nil {
 		p.emitLLMDecision(r, host, port, egress.Deny, ruleSourceLLM, nil)
 		extra := map[string]any{"wardyn": "no_llm_credential", "detail": llm404Detail(p.llmUnavailableDetail)}
 		if shape := p.shapeOf(r, host); shape != shapePlain {
@@ -201,11 +207,14 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host str
 	}
 	// A rule that pins its credential to a method-and-path set withholds it from every other request
 	// on this route too (the strip still runs: ownedHeader is hdr.name either way).
-	inject := &hdr
+	inject, owned := &hdr, hdr.name
 	if !p.inject.allowsInjection(host, r.Method, "/"+rest, r.URL.RawQuery) {
 		inject = nil
 	}
-	p.forwardInspectedLLM(w, r, host, port, rest, target, inject, hdr.name, ruleSourceLLM, false, bodyReader, scanSummary)
+	if !ok { // a local model with no auth: the sandbox's own credential headers are still stripped
+		inject, owned = nil, "Authorization"
+	}
+	p.forwardInspectedLLM(w, r, host, port, rest, target, inject, owned, ruleSourceLLM, false, bodyReader, scanSummary)
 }
 
 // llmRouteTarget resolves the brokered LLM route's dial target, choosing the
@@ -325,6 +334,12 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 				return
 			}
 			resp = again
+		}
+	}
+	if lm := p.localModelAt(host, port); lm != nil && ruleSource == ruleSourceLLM {
+		if err := filterLocalInventory(resp, rest, lm); err != nil {
+			p.refuseLocalModel(w, r, host, port, http.StatusBadGateway, reasonUpstreamError, err.Error())
+			return
 		}
 	}
 	p.relayUpstream(w, r, host, port, resp, ruleSource)

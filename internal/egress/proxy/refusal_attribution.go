@@ -25,7 +25,7 @@ const (
 // owner for one costs that owner a ticket that is not theirs.
 func policyDecidedReason(reason string) bool {
 	switch reason {
-	case "policy:denied", "policy:default-deny", "policy:method", "approval:denied":
+	case "policy:denied", "policy:default-deny", "policy:method", ruleSourcePort, "approval:denied":
 		return true
 	}
 	return false

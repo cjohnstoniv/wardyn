@@ -111,7 +111,6 @@ seed ui/e2e/flow.spec.ts "// spec"
 cat >"$WORK/scripts/run-ui-e2e.sh" <<SHIM
 #!/usr/bin/env bash
 printf 'e2e skip_build=%s %s\n' "\${WARDYN_E2E_SKIP_BUILD:-0}" "\$*" >>"$LOG"
-[ "\${E2E_FAIL_LATER:-}" = 1 ] && [ "\${WARDYN_E2E_SKIP_BUILD:-0}" = 1 ] && exit 1
 exit 0
 SHIM
 chmod +x "$WORK/scripts/run-ui-e2e.sh"
@@ -331,19 +330,13 @@ grep -q "GATE=$BIN/gate must be an executable you own" "$TMP/err" || die "the re
 assert "a refused gate runs nothing" test "$(calls | grep -c '^gate ')" -eq 0
 echo "ok  a gate others can write is refused"
 
-# Changed Playwright specs run three times; only the first builds.
+# A changed Playwright spec is left to hosted ui-e2e: the candidate preflight runs none.
 git -C "$WORK" checkout --quiet -- . && git -C "$WORK" clean --quiet -fd
 seed ui/e2e/flow.spec.ts "// spec edited"
 run_preflight BASE=origin/main GATE=none
-assert "a changed spec runs three passes" test "$(calls | grep -c '^e2e ')" -eq 3
-assert "only the first pass builds" test "$(calls | grep -c '^e2e skip_build=1 flow$')" -eq 2
-echo "ok  a changed Playwright spec runs three times, building once"
-# A race is a failure on a later seed: a red second pass fails the run, and the third never runs.
-run_preflight BASE=origin/main GATE=none E2E_FAIL_LATER=1
-[[ ${RC} -ne 0 ]] || die "a red second Playwright pass passed"
-grep -q 'FAILED at step: 6 playwright pass 2/3' "$TMP/err" || die "the red second pass was not named"
-assert "nothing ran after the red second pass" test "$(calls | grep -c '^e2e ')" -eq 2
-echo "ok  a red later Playwright pass fails the candidate run"
+[[ ${RC} -eq 0 ]] || die "a changed spec failed the candidate run"
+assert "a changed spec runs no Playwright pass" test "$(calls | grep -c '^e2e ')" -eq 0
+echo "ok  a changed Playwright spec is left to hosted ui-e2e"
 
 # Without --candidate none of it runs.
 ARGS=()

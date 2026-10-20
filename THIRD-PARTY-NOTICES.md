@@ -66,6 +66,7 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
 | `github.com/go-openapi/swag/yamlutils` | Apache-2.0 | https://github.com/go-openapi/swag/blob/yamlutils/v0.27.1/yamlutils/LICENSE |
 | `github.com/godbus/dbus/v5` | BSD-2-Clause | https://github.com/godbus/dbus/blob/v5.2.4/LICENSE |
 | `github.com/golang-jwt/jwt/v4` | MIT | https://github.com/golang-jwt/jwt/blob/v4.5.2/LICENSE |
+| `github.com/google/btree` | Apache-2.0 | https://github.com/google/btree/blob/v1.1.3/LICENSE |
 | `github.com/google/gnostic-models` | Apache-2.0 | https://github.com/google/gnostic-models/blob/v0.7.0/LICENSE |
 | `github.com/google/go-github/v88/github` | BSD-3-Clause | https://github.com/google/go-github/blob/v88.0.0/LICENSE |
 | `github.com/google/go-querystring/query` | BSD-3-Clause | https://github.com/google/go-querystring/blob/v1.2.0/LICENSE |
@@ -101,6 +102,7 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
 | `go.yaml.in/yaml/v2` | Apache-2.0 | https://github.com/yaml/go-yaml/blob/v2.4.4/LICENSE |
 | `go.yaml.in/yaml/v3` | MIT | https://github.com/yaml/go-yaml/blob/v3.0.5/LICENSE |
 | `golang.org/x/crypto` | BSD-3-Clause | https://cs.opensource.google/go/x/crypto/+/v0.58.0:LICENSE |
+| `golang.org/x/exp/constraints` | BSD-3-Clause | https://cs.opensource.google/go/x/exp/+/9a3e6036:LICENSE |
 | `golang.org/x/net` | BSD-3-Clause | https://cs.opensource.google/go/x/net/+/v0.61.0:LICENSE |
 | `golang.org/x/oauth2` | BSD-3-Clause | https://cs.opensource.google/go/x/oauth2/+/v0.37.0:LICENSE |
 | `golang.org/x/sync` | BSD-3-Clause | https://cs.opensource.google/go/x/sync/+/v0.24.0:LICENSE |
@@ -112,6 +114,7 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
 | `gopkg.in/evanphx/json-patch.v4` | BSD-3-Clause | https://github.com/evanphx/json-patch/blob/v4.13.0/LICENSE |
 | `gopkg.in/inf.v0` | BSD-3-Clause | https://github.com/go-inf/inf/blob/v0.9.1/LICENSE |
 | `gopkg.in/yaml.v3` | MIT | https://github.com/go-yaml/yaml/blob/v3.0.1/LICENSE |
+| `gvisor.dev/gvisor/pkg` | Apache-2.0 | https://github.com/google/gvisor/blob/9680d69bf798/LICENSE |
 | `k8s.io/api` | Apache-2.0 | https://github.com/kubernetes/api/blob/v0.37.1/LICENSE |
 | `k8s.io/apimachinery/pkg` | Apache-2.0 | https://github.com/kubernetes/apimachinery/blob/v0.37.1/LICENSE |
 | `k8s.io/apimachinery/third_party/forked/golang` | BSD-3-Clause | https://github.com/kubernetes/apimachinery/blob/v0.37.1/third_party/forked/golang/LICENSE |

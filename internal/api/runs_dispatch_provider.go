@@ -71,7 +71,15 @@ func stateDenial(id, state, remedy string) providerDenial {
 
 // providerKeyKind reports whether k is served by the key and endpoint arm.
 func providerKeyKind(k types.ModelProviderKind) bool {
-	return k == types.ModelProviderAnthropicAPIKey || k == types.ModelProviderOpenAIAPIKey || k == types.ModelProviderCustomEndpoint
+	return k == types.ModelProviderAnthropicAPIKey || k == types.ModelProviderOpenAIAPIKey || k == types.ModelProviderCustomEndpoint ||
+		k == types.ModelProviderLocalModel
+}
+
+// providerTakesNoCredential reports whether p serves a run with no credential
+// at all: a local model server the admin set no auth for. Nothing is read,
+// checked or injected for it.
+func providerTakesNoCredential(p types.ModelProvider) bool {
+	return p.Kind == types.ModelProviderLocalModel && p.Auth == nil
 }
 
 // providerLiveness is the one liveness check every door makes for a chosen
@@ -160,8 +168,8 @@ func providerKeyLaneFor(p types.ModelProvider, agent string) (providerKeyLane, b
 		header: conv.header, format: conv.format, model: h.Model,
 	}
 	base := p.BaseURL
-	if p.Kind == types.ModelProviderCustomEndpoint {
-		base += h.Path
+	if p.Kind == types.ModelProviderCustomEndpoint || p.Kind == types.ModelProviderLocalModel {
+		base += h.Path // always "" on a local model (validateProviderHarness)
 		var auth types.ProviderAuth
 		if p.Auth != nil {
 			auth = *p.Auth
@@ -188,6 +196,9 @@ func (s *Server) credentialPerson(subject string) bool {
 // refusal (mpcNoPerson) is not a credential one: no credential it could store
 // would serve the run.
 func (s *Server) providerCredentialRefusal(ctx context.Context, owner string, p types.ModelProvider) (providerDenial, error) {
+	if providerTakesNoCredential(p) {
+		return providerDenial{}, nil
+	}
 	if !s.credentialPerson(owner) {
 		return providerDenial{msg: mpcNoPerson}, nil
 	}
@@ -195,7 +206,7 @@ func (s *Server) providerCredentialRefusal(ctx context.Context, owner string, p 
 	if err != nil || found {
 		return providerDenial{}, err
 	}
-	if p.Kind == types.ModelProviderCustomEndpoint {
+	if p.Kind == types.ModelProviderCustomEndpoint || p.Kind == types.ModelProviderLocalModel {
 		return connectDenial(p.ID, mpRunNoToken), nil
 	}
 	return connectDenial(p.ID, mpRunNoKey), nil
@@ -204,7 +215,21 @@ func (s *Server) providerCredentialRefusal(ctx context.Context, owner string, p 
 // providerDispatch is what the provider path hands the rest of dispatch.
 type providerDispatch struct {
 	upstreams map[string]string // ProxyConfig.LLMUpstreams: {vendor host → BaseURL+Path}, nil for the vendor itself
-	detail    string            // the brokered-LLM 404's detail
+	// localModels is ProxyConfig.LocalModels: {local_model BaseURL → its allowlist and bounds}.
+	localModels map[string]types.LocalModelSettings
+	detail      string // the brokered-LLM 404's detail
+}
+
+// addLocalModel records a local_model lane's upstream, allowlist and bounds for
+// the proxy's route gate; any other lane adds nothing.
+func (d *providerDispatch) addLocalModel(l providerKeyLane) {
+	if l.provider.Kind != types.ModelProviderLocalModel || l.provider.Local == nil {
+		return
+	}
+	if d.localModels == nil {
+		d.localModels = map[string]types.LocalModelSettings{}
+	}
+	d.localModels[l.upstream] = l.provider.Local.LocalModelBounds()
 }
 
 // providerLane is what the chosen provider's arm resolved for one run before
@@ -329,8 +354,10 @@ func (s *Server) resolveProviderLane(ctx context.Context, run types.AgentRun, p 
 		if lane.chosen == nil || !providerKeyKind(lane.chosen.provider.Kind) {
 			continue
 		}
-		// Two harnesses sharing one key provider share its one grant.
-		if !sharesKeyGrant(pairs, lanes, i) {
+		// Two harnesses sharing one key provider share its one grant. A local
+		// model with no auth has none, so its host is not allowlisted either;
+		// the proxy refuses it on every lane but the brokered route regardless.
+		if !sharesKeyGrant(pairs, lanes, i) && !providerTakesNoCredential(lane.chosen.provider) {
 			grant, ok := s.authorProviderKeyInjection(ctx, lr, lane.key)
 			if !ok {
 				return nil, nil, injections, providerDispatch{}, false
@@ -338,6 +365,7 @@ func (s *Server) resolveProviderLane(ctx context.Context, run types.AgentRun, p 
 			injections = append(injections, grant)
 			unionAllowedDomains(policy, []string{lane.key.host})
 		}
+		prov.addLocalModel(lane.key)
 		if lane.key.upstream != "" {
 			if prov.upstreams == nil {
 				prov.upstreams = map[string]string{}
@@ -599,6 +627,13 @@ func (s *Server) applyProviderEnv(ctx context.Context, run types.AgentRun, lane 
 		sandboxEnv[envAnthropicAPIKey] = "wardyn-proxy-injected"
 		if model := lane.key.model; model != "" {
 			sandboxEnv[envAnthropicModel] = model
+			// Claude Code names a model per tier; on a local model every one is
+			// the allowlisted model, so no background call asks for another.
+			if lane.chosen != nil && lane.chosen.provider.Kind == types.ModelProviderLocalModel {
+				for _, k := range []string{envDefaultOpusModel, envDefaultSonnetModel, envDefaultHaikuModel} {
+					sandboxEnv[k] = model
+				}
+			}
 		}
 	case "codex-cli":
 		// codex 0.149.1 reads neither OPENAI_* variable: its base URL comes
@@ -610,6 +645,9 @@ func (s *Server) applyProviderEnv(ctx context.Context, run types.AgentRun, lane 
 		sandboxEnv[envCodexAPIKey] = "wardyn-proxy-injected"
 		sandboxEnv[envOpenAIBaseURL] = proxyURL + "/wardyn/llm/openai"
 		sandboxEnv[envOpenAIAPIKey] = "wardyn-proxy-injected"
+		if lane.chosen != nil && lane.chosen.provider.Kind == types.ModelProviderLocalModel {
+			sandboxEnv[envCodexModel] = lane.key.model
+		}
 	}
 	return llmTransport{provider: lane.chosen}
 }

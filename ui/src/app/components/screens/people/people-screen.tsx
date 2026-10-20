@@ -83,7 +83,9 @@ function PeopleTable({ onOpen, reloadKey }: { onOpen: (p: PersonSummary) => void
   const load = React.useCallback(
     (after?: string) => {
       const mine = ++seq.current;
-      if (!after) setStatus("loading");
+      // A re-read keeps the rows on screen: swapping them for the skeleton unmounts the row that opened the
+      // drawer, and closing the drawer then has nowhere to put focus back.
+      if (!after) setStatus((s) => (s === "ready" ? s : "loading"));
       peopleApi
         .list({ limit: PAGE_SIZE, cursor: after, q: q || undefined, state: filter === "all" ? undefined : filter })
         .then((page) => {
