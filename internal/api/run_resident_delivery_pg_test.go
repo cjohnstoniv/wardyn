@@ -36,7 +36,6 @@ type residentRunnerSide struct {
 	delivered []runnerwire.DeliverResidentArgs
 	erased    []uuid.UUID
 	deliver   func(runnerwire.DeliverResidentArgs) error
-	created   []json.RawMessage // each create_sandbox call's args, refused
 	eraseErr  error
 	erasedCh  chan uuid.UUID
 }
@@ -73,11 +72,6 @@ func (r *residentRunnerSide) handle(_ context.Context, _ uint32, method string, 
 			r.erasedCh <- a.RunID
 		}
 		return nil, err
-	}
-	if method == runnerwire.MethodCreateSandbox {
-		r.mu.Lock()
-		r.created = append(r.created, slices.Clone(args))
-		r.mu.Unlock()
 	}
 	return nil, runnerwire.Refuse("unexpected %s", method)
 }

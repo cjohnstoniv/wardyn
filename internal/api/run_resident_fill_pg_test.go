@@ -6,6 +6,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -18,7 +19,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
-	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -32,20 +32,15 @@ const (
 // fillDispatch dispatches, through a whole local dispatch, one runner_resident
 // env_secret or file_secret grant whose scope names fillTestHost, with
 // WARDYN_RUNNER_SECRET_PLACEHOLDERS as given. It returns the grant, what the
-// runner received (each deliver_resident and the one create_sandbox), and the
-// run's grant rows afterwards.
-func fillDispatch(t *testing.T, kind types.GrantKind, on bool) (types.CredentialGrant, []runnerwire.DeliverResidentArgs, json.RawMessage, []types.CredentialGrant, *residentFix) {
+// runner received (each deliver_resident, and the spec its create was handed,
+// which the runner's substrate sends as create_sandbox), and the run's grant
+// rows afterwards.
+func fillDispatch(t *testing.T, kind types.GrantKind, on bool) (types.CredentialGrant, []runnerwire.DeliverResidentArgs, runner.SandboxSpec, []types.CredentialGrant, *residentFix) {
 	t.Helper()
 	f := newResidentFix(t, nil, residentAllClassesPolicy)
 	f.srv.cfg.RunConfigKey = make([]byte, kek.DEKSize)
 	f.srv.cfg.RunnerSecretPlaceholders = on
-	// reportCaps advertises CC2 only; a run with no class asks for CC1, which
-	// the create needs to reach the runner.
-	caps, err := json.Marshal(runnerwire.Caps{Support: substrate.ClassSupport{Classes: []types.ConfinementClass{types.CC1, types.CC2}, ManagedFiles: true}, Version: "test", Resident: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.srv.runnerEndpoint(f.rn.ID).sub.HandleEvent(runnerwire.Event{Kind: runnerwire.EventCaps, Data: caps})
+	f.reportCaps(t, true)
 	ctx := t.Context()
 	if err := f.cfg.Secrets.(*memSecrets).Put(ctx, "op-secret", []byte(fillTestValue)); err != nil {
 		t.Fatal(err)
@@ -71,43 +66,31 @@ func fillDispatch(t *testing.T, kind types.GrantKind, on bool) (types.Credential
 		}
 	}
 	delivered, _ := f.side.calls()
-	f.side.mu.Lock()
-	created := slices.Clone(f.side.created)
-	f.side.mu.Unlock()
-	if len(created) != 1 {
-		var failed []string
-		f.audit.mu.Lock()
-		for _, ev := range f.audit.events {
-			if ev.Outcome == "failure" {
-				failed = append(failed, ev.Action+" "+string(ev.Data))
-			}
-		}
-		f.audit.mu.Unlock()
-		t.Fatalf("%d create_sandbox calls, want one; failures: %v", len(created), failed)
+	rn := f.cfg.Runner.(*fakeRunner)
+	rn.mu.Lock()
+	calls, spec := rn.createCalls, rn.lastSpec
+	rn.mu.Unlock()
+	if calls != 1 || spec.RunnerID != f.rn.ID.String() {
+		t.Fatalf("%d creates on runner %q, want one on the run's runner", calls, spec.RunnerID)
 	}
 	rows, err := f.st.ListGrantsByRun(ctx, run.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return g, delivered, created[0], rows, f
+	return g, delivered, spec, rows, f
 }
 
 // placed is where the created spec carries the grant's value or placeholder.
-func placed(t *testing.T, kind types.GrantKind, args json.RawMessage) (string, runner.ProxyConfig) {
-	t.Helper()
-	var a runnerwire.CreateSandboxArgs
-	if err := json.Unmarshal(args, &a); err != nil {
-		t.Fatal(err)
-	}
+func placed(kind types.GrantKind, spec runner.SandboxSpec) string {
 	if kind == types.GrantEnvSecret {
-		return a.Spec.SecretEnv["RES_TOKEN"], a.Spec.ProxyConfig
+		return spec.SecretEnv["RES_TOKEN"]
 	}
-	for _, mf := range a.Spec.ManagedFiles {
+	for _, mf := range spec.ManagedFiles {
 		if mf.Path == runner.ComponentSecretDir+"/res.key" {
-			return string(mf.Content), a.Spec.ProxyConfig
+			return string(mf.Content)
 		}
 	}
-	return "", a.Spec.ProxyConfig
+	return ""
 }
 
 // With WARDYN_RUNNER_SECRET_PLACEHOLDERS on, the runner never receives the
@@ -117,16 +100,20 @@ func placed(t *testing.T, kind types.GrantKind, args json.RawMessage) (string, r
 func TestDispatch_RunnerSecretPlaceholderKeepsTheValueOffTheRunner(t *testing.T) {
 	for _, kind := range []types.GrantKind{types.GrantEnvSecret, types.GrantFileSecret} {
 		t.Run(string(kind), func(t *testing.T) {
-			g, delivered, created, rows, f := fillDispatch(t, kind, true)
+			g, delivered, spec, rows, f := fillDispatch(t, kind, true)
 			for _, d := range delivered {
 				if d.GrantID == g.ID || d.Value == fillTestValue {
 					t.Fatalf("delivered %+v, want the value kept off the runner", d)
 				}
 			}
-			if bytes.Contains(created, []byte(fillTestValue)) {
-				t.Fatalf("create_sandbox carries the value: %s", created)
+			wire, err := json.Marshal(runnerwire.CreateSandboxArgs{Spec: spec})
+			if err != nil {
+				t.Fatal(err)
 			}
-			got, pc := placed(t, kind, created)
+			if bytes.Contains(wire, []byte(fillTestValue)) || slices.Contains(slices.Collect(maps.Values(spec.SecretEnv)), fillTestValue) {
+				t.Fatalf("the runner's create carries the value: %s", wire)
+			}
+			got, pc := placed(kind, spec), spec.ProxyConfig
 			fill, ok := placement.FillGrantID(got)
 			if !ok {
 				t.Fatalf("runner got %q, want a fill placeholder", got)
@@ -159,11 +146,11 @@ func TestDispatch_RunnerSecretPlaceholderKeepsTheValueOffTheRunner(t *testing.T)
 func TestDispatch_RunnerSecretPlaceholderOffDeliversAsBefore(t *testing.T) {
 	for _, kind := range []types.GrantKind{types.GrantEnvSecret, types.GrantFileSecret} {
 		t.Run(string(kind), func(t *testing.T) {
-			g, delivered, created, rows, f := fillDispatch(t, kind, false)
+			g, delivered, spec, rows, f := fillDispatch(t, kind, false)
 			if len(delivered) != 1 || delivered[0].GrantID != g.ID || delivered[0].Value != fillTestValue || !delivered[0].Sandbox {
 				t.Fatalf("delivered %+v, want the value for the sandbox", delivered)
 			}
-			got, pc := placed(t, kind, created)
+			got, pc := placed(kind, spec), spec.ProxyConfig
 			if got != placement.ResidentPlaceholder(g.ID) || len(pc.ViaOrgRoutes) != 0 || len(rows) != 1 {
 				t.Fatalf("runner got %q routes %+v grants %d, want the resident placeholder and nothing authored", got, pc.ViaOrgRoutes, len(rows))
 			}
