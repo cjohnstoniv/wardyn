@@ -41,7 +41,7 @@ fi
 
 # Matched on the REF, not the file: exempting a whole Dockerfile would silently
 # waive every OTHER FROM in it (full/ also pulls digest-pinned toolchain stages).
-# Matched on the REF, one per line. Both entries are locally BUILT images, so no
+# Matched on the REF, one per line. The first two entries are locally BUILT images, so no
 # upstream digest exists to pin them to — a digest would have to be recomputed on
 # every rebuild of the base, which is neither stable nor meaningful.
 #   wardyn/agent-claude-code:local  deploy/images/full/Dockerfile's base, and
@@ -54,8 +54,12 @@ fi
 #                                   base — neither a code-server layer nor an X
 #                                   stack needs a vendor CLI, so both default
 #                                   away from it deliberately (#140).
+#   scratch                         the empty image: nothing to pin. The `gomodcache`
+#                                   seed stage of deploy/compose/Dockerfile.proxy and
+#                                   deploy/images/oracle/Dockerfile.
 ALLOWLIST_REFS="wardyn/agent-claude-code:local
-wardyn/agent-base:local"
+wardyn/agent-base:local
+scratch"
 fail=0
 
 # ── Dockerfile FROMs ────────────────────────────────────────────────────────

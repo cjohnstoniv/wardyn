@@ -520,6 +520,7 @@ type QueueStart struct {
 	ConfinementClass    types.ConfinementClass
 	ModelProviderID     string
 	AutonomyLevel       types.AutonomyLevel
+	InnerWalls          *types.HarnessInnerWalls
 	EndsAt              *time.Time
 	WaitBudgetSec       int
 	RunLimits           types.RunLimits
@@ -581,17 +582,21 @@ func (s PG) StartQueuedRun(ctx context.Context, id uuid.UUID, st QueueStart) (ru
 }
 
 func startQueuedRun(ctx context.Context, q Querier, id uuid.UUID, st QueueStart, limits []byte) (types.AgentRun, bool, error) {
+	walls, err := innerWallsJSON(st.InnerWalls)
+	if err != nil {
+		return types.AgentRun{}, false, err
+	}
 	run, err := scanRun(q.QueryRow(ctx, `
 		UPDATE agent_runs SET spiffe_id=$2, confinement_class=$3, model_provider_id=$4, autonomy_level=$5, ends_at=$6,
 			wait_budget_sec=$7, run_limits=$8, governance_profile_id=$9, lifetime_cap_at=$10, lifetime_cap_source=$11,
 			placement=$12, placement_filled=$13, runner_id=$14, evidence_source=$15, runner_pool_executor=$16, updated_at=now(),
-			reserved_cpu_millis=$18, reserved_memory_mib=$19, reserved_disk_mib=$20
+			reserved_cpu_millis=$18, reserved_memory_mib=$19, reserved_disk_mib=$20, inner_walls=$21
 		WHERE id=$1 AND state=$17 AND admitted_at IS NOT NULL AND sandbox_ref = ''
 		RETURNING `+runCols,
 		id, st.SPIFFEID, string(st.ConfinementClass), st.ModelProviderID, string(st.AutonomyLevel), st.EndsAt,
 		st.WaitBudgetSec, limits, st.GovernanceProfileID, st.LifetimeCapAt, string(st.LifetimeCapSource),
 		string(st.Placement), st.PlacementFilled, st.RunnerID, string(st.EvidenceSource), st.RunnerPoolExecutor,
-		string(types.RunPending), st.Reserved.CPUMillis, st.Reserved.MemoryMiB, st.Reserved.DiskMiB))
+		string(types.RunPending), st.Reserved.CPUMillis, st.Reserved.MemoryMiB, st.Reserved.DiskMiB, walls))
 	if errors.Is(err, ErrNotFound) {
 		return types.AgentRun{}, false, nil
 	}
