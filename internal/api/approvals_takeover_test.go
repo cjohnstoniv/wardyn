@@ -230,10 +230,13 @@ func TestTakeover_Refusals(t *testing.T) {
 			t.Errorf("admin token %s: %d %s, want 409 %s", verb, w.Code, w.Body.String(), reasonTakeoverNotDecidable)
 		}
 	}
+	// A stranger's answer is the byte-identical 404 a missing approval gets: no oracle on the id.
 	stranger := ssoSession(t, "sub-stranger", "stranger@corp.example", oidc.RoleUser)
 	for _, verb := range []string{"/take-over", "/hand-back", "/decline"} {
-		if w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+verb, stranger, ""); w.Code != http.StatusNotFound {
-			t.Errorf("stranger %s: %d, want 404", verb, w.Code)
+		w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+verb, stranger, "")
+		missing := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+uuid.New().String()+verb, stranger, "")
+		if w.Code != http.StatusNotFound || missing.Code != http.StatusNotFound || w.Body.String() != missing.Body.String() {
+			t.Errorf("stranger %s: %d %q, want the missing approval's %d %q", verb, w.Code, w.Body.String(), missing.Code, missing.Body.String())
 		}
 	}
 	tool := f.seed(types.ApprovalToolCall, types.ApprovalPending, "")
@@ -256,9 +259,10 @@ func TestTakeover_Refusals(t *testing.T) {
 	}
 }
 
-// TestTakeover_KeystrokesNeverReachTheRecording: what the person types into the console terminal
-// while they drive is never written to the session recording; only what the terminal shows is.
-func TestTakeover_KeystrokesNeverReachTheRecording(t *testing.T) {
+// TestTakeover_InputIsNotTeedToTheAttachRecorder: what the person types into the console terminal
+// while they drive is not teed to the console's per-attach session recorder; only what the terminal
+// shows is. The boot seed's cast is wardyn-rec's (cmd/wardyn-rec TestRec_TypedInputIsNotRecorded).
+func TestTakeover_InputIsNotTeedToTheAttachRecorder(t *testing.T) {
 	srv, fr, _, run, ts, returned := attachSlotsTestServer(t)
 	dir := t.TempDir()
 	casts, err := recording.NewFSStore(dir)
@@ -303,7 +307,7 @@ func TestTakeover_KeystrokesNeverReachTheRecording(t *testing.T) {
 		t.Fatalf("no recording of the session was written (%d bytes)", cast.Len())
 	}
 	if strings.Contains(cast.String(), typed) {
-		t.Fatal("the person's keystrokes were written to the recording")
+		t.Fatal("the person's keystrokes were teed to the per-attach recording")
 	}
 }
 
