@@ -146,8 +146,13 @@ func (p *Proxy) patForge(host, rest string, g PATGrant) *forgeRepo {
 	}}
 }
 
-// unchanged returns the entries it could NOT show unchanged, and why.
-func (f *forgeRepo) unchanged(ctx context.Context, entries []gitpack.Change, res gitpack.Result) ([]gitpack.Change, string) {
+// forgeClear is what clears one entry against the root trees of the counted
+// bases: heldAtAny for a rule about paths and sizes, executableAtAny for
+// deny_new_executables.
+type forgeClear func(f *forgeRepo, ctx context.Context, roots []string, c gitpack.Change) (bool, error)
+
+// unchanged returns the entries clear could NOT clear, and why.
+func (f *forgeRepo) unchanged(ctx context.Context, entries []gitpack.Change, res gitpack.Result, clear forgeClear) ([]gitpack.Change, string) {
 	if f == nil {
 		return entries, whyNotGitHub
 	}
@@ -166,7 +171,7 @@ func (f *forgeRepo) unchanged(ctx context.Context, entries []gitpack.Change, res
 	}
 	var left []gitpack.Change
 	for i, c := range entries {
-		held, err := f.heldAtAny(ctx, roots, c)
+		held, err := clear(f, ctx, roots, c)
 		if err != nil {
 			return append(left, entries[i:]...), f.unread(whyUnread, err)
 		}
@@ -369,6 +374,25 @@ func (f *forgeRepo) heldAtAny(ctx context.Context, roots []string, c gitpack.Cha
 			continue
 		}
 		if c.Mode == gitpack.ModeUncarried && e.Type == "tree" || c.Mode == e.Mode {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// executableAtAny reports whether c is no new executable against any counted
+// base: a directory the pack doesn't carry exactly when it is unchanged there,
+// a file when the same path is an executable file there.
+func (f *forgeRepo) executableAtAny(ctx context.Context, roots []string, c gitpack.Change) (bool, error) {
+	if c.Mode == gitpack.ModeUncarried {
+		return f.heldAtAny(ctx, roots, c)
+	}
+	for _, root := range roots {
+		e, ok, err := f.entryAt(ctx, root, c.Path)
+		if err != nil {
+			return false, err
+		}
+		if ok && e.Mode == gitpack.ModeExecutable {
 			return true, nil
 		}
 	}

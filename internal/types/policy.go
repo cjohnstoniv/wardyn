@@ -264,10 +264,9 @@ type PushRulesSpec struct {
 	// HoldSeconds is how long a held push waits for that decision before it
 	// is refused. 0/absent means 120; bounded 0..600 by validatePolicySpec.
 	HoldSeconds int `json:"hold_seconds,omitempty"`
-	// DenyNewExecutables is reserved: the broker cannot yet tell a newly added executable from an
-	// edit to an existing one, so validation refuses it when true rather than store a rule nothing
-	// enforces, and IsSet does not count it, so a stored true never makes the broker inspect for
-	// a rule it cannot apply.
+	// DenyNewExecutables refuses a push that adds an executable file or makes an existing file
+	// executable; an edit to a file that was executable already passes. Where the pack does not
+	// show the base, the forge must (GitHub lanes only), or the push is refused. false/absent is off.
 	DenyNewExecutables bool `json:"deny_new_executables,omitempty"`
 	// MaxFileSizeMiB refuses a push that introduces a file larger than this many MiB, or one whose
 	// size the pack does not carry and the forge cannot show unchanged. 0/absent is off; bounded
@@ -281,7 +280,7 @@ type PushRulesSpec struct {
 // advertisement/enforcement) — one method so those readers can't drift.
 func (s *PushRulesSpec) IsSet() bool {
 	return s != nil && (len(s.DenyPaths) > 0 || len(s.RequireReviewPaths) > 0 || s.MaxInspectPackMiB > 0 ||
-		s.MaxFileSizeMiB > 0)
+		s.MaxFileSizeMiB > 0 || s.DenyNewExecutables)
 }
 
 // DenyPathSegments is the one reading of a push_rules.deny_paths entry, shared by write-time
