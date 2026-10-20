@@ -24,6 +24,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- A Linux VM sandbox gets the same folders a container on its runner would: a member's folder under the runner's roots is shared into the guest over virtiofs at the same path and mode, and a folder synced from another computer arrives through the guest agent. A runner without folder sharing refuses such a run at create (`placement_capability`).
 - `wardyn attach <run-id>` keeps the terminal on this computer when the run is on your own runner here and the
   organisation allows it (`WARDYN_ATTACH_LOCAL`, off by default); otherwise it goes through the organisation, as
   before. One line on stderr names the path. `--via local|relay|auto` forces a path, and `--take-over` takes the

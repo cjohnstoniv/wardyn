@@ -63,6 +63,7 @@
 # threatmodel/THREAT-MODEL.md 66532 = ours 65922 + theirs 65699 - base 65089 at the 0.10 W4a merge of ATT-LOGIN-SRV onto the train.
 # 0.10 W4a train: threatmodel/THREAT-MODEL.md tightened to 66530, measured at the train merge.
 # 0.10 HYB-C: threatmodel/THREAT-MODEL.md 66573 adds 43 over 66530, measured: the Linux VM's virtiofs shares are the container's binds (same folders, targets, mode, no other host path).
-threatmodel/THREAT-MODEL.md=66573
+# threatmodel/THREAT-MODEL.md 66596 adds 23 over 66573 (0.10 HYB-C review): VM state reaches the guest only as its disk; a guest write lands as the runner's user.
+threatmodel/THREAT-MODEL.md=66596
 # threatmodel/THREAT-MODEL.md 63171 adds 78 over 63093, measured: the console session under the role-stamp residual: renewal up to its cap, never moving the sign-in time, and the copied-cookie bound (0.9.3 console session lifetime).
 # threatmodel/THREAT-MODEL.md 63025 = 62948 + 77, measured: the laptop decision-sink crossing row and #77's sink and loss-row bullets.
