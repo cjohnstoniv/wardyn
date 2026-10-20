@@ -208,7 +208,8 @@
 # docs/AUDIT-ACTIONS.md 49319 = ours 49195 + theirs 49174 - base 49050 at the 0.10 W2 merge of VM-B onto the train.
 # docs/AUDIT-ACTIONS.md 49371 = ours 49319 + theirs 49102 - base 49050 at the 0.10 W2 merge of MDL onto the train.
 # docs/AUDIT-ACTIONS.md 49409 adds 38 over 49371, measured (OC-API1a #2144): the run.requirement.skip host_not_allowlisted reason on the existing row.
-docs/AUDIT-ACTIONS.md=49409 share=8
+# docs/AUDIT-ACTIONS.md 49417 adds 8 over 49409, measured (OC-API1a): the host_not_allowlisted reason also covers a host a deny list in force names.
+docs/AUDIT-ACTIONS.md=49417 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.
