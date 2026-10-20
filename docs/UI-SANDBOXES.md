@@ -95,6 +95,21 @@
 - It filters the clipboard, not the screen: a person can still read what the desktop shows, and a page the
   sandbox serves can still show text.
 
+## The desktop of a Linux VM run
+
+- A `linux_vm` run's desktop is QEMU's VNC display, reached through the run's runner. Nothing inside the guest serves it.
+- The viewer is Wardyn's own page (`desktop.html` from the console bundle) on the reserved app segment `__desktop`,
+  `/r/<run>/__desktop/`. No `ui_apps` name can take it: an app name starts with a letter or digit.
+- The desktop cookie lasts at most 1 hour, whatever `WARDYN_UI_SANDBOX_SESSION_TTL` allows. The shorter bound applies.
+- **Close** (`POST /r/<run>/__desktop/__close`) ends the session for every copy of the cookie: it clears the cookie,
+  cuts the open stream, and the gateway answers 403 to that cookie after.
+- Residual: the closed-session set lives in wardynd's memory. The cookie's signing key is stored, so after a restart
+  a Closed desktop's cookie works again until its 1-hour bound.
+- The relay filters cut text on this display by the run's `desktop` rules, with the same `ui.clipboard` rows as the
+  `novnc` app. No clipboard flows today: QEMU's VNC passes cut text only to a guest clipboard agent (`qemu-vdagent`),
+  and the VM has none. The rules take effect once one exists.
+- The filter is not a boundary against a run built to get data out: the run controls what its screen shows.
+
 ## Diagnosing a blocked request
 
 - A relayed editor is the place developers most often meet the egress policy, and

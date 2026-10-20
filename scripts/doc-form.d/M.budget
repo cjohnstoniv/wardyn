@@ -51,7 +51,8 @@ docs/SSH.md=6236 share=35
 # docs/UI-SANDBOXES.md 5882 adds 68 (0.10 CTL-A r2): the desktop is the novnc app, the hold, the not-RFB close (#2967).
 # docs/UI-SANDBOXES.md 5925 adds 43 (0.10 CTL-A r3): only the novnc app is filtered; pin ui_apps; SSH forwards are outside (#2967).
 # docs/UI-SANDBOXES.md 5953 adds 28 (0.10 CTL-A r3): the desktop page comes from the sandbox, not a boundary against a run built to get data out.
-docs/UI-SANDBOXES.md=5953 share=35
+# docs/UI-SANDBOXES.md 6155 adds 202 (0.10 DSK-A r2): the Linux VM desktop section (reserved __desktop segment, 1-hour cookie cap, Close, the restart residual, the clipboard filter on the VM relay and that no clipboard flows from QEMU today, not a boundary), measured.
+docs/UI-SANDBOXES.md=6155 share=35
 # docs/NEW-RUN.md 2905 measured (0.9 final docs pass): the New run guide.
 # docs/NEW-RUN.md 2914 adds 9 over 2905: 0.9 final docs pass 2, measured: the runner-limit wait reason and the runner pools links.
 # docs/NEW-RUN.md 2915 adds 1 over 2914: docs fix: run --file overlay; a policy's own * rule stays in force on a routed run, measured.
