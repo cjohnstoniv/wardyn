@@ -135,7 +135,8 @@ With [`WARDYN_SCHEDULED_RUNS`](../ENV.md#wardyn_scheduled_runs) set, a run can b
 - A wall-clock time in a daylight-saving gap or overlap resolves to one instant; the `201` shows that resolved time with its zone.
 - The run waits `QUEUED` with the reason `scheduled` and its `queue.start_at`, holding no credential, until then.
 - At its time it joins its pool's line and starts like any waiting run, after the same checks. Its wait counts from then, held at most 7 days from the request.
-- At the start, Wardyn renews your model sign-in if it can; if it can't, the run waits for you. A renewal the provider did not answer ends the run (`model_provider_unavailable`); a refused or expired sign-in waits. It waits with the reason `owner_sign_in` until you sign in again; still waiting at its deadline, it ends `queue_sign_in_timeout`.
+- At the start, Wardyn renews your model sign-in if it can; if it can't, the run waits for you, with the reason `owner_sign_in`, until you sign in again. Still waiting at its deadline, it ends `queue_sign_in_timeout`.
+- Two cases end the run at the start instead: a renewal the provider did not answer (`model_provider_unavailable`), and a stored sign-in Wardyn knows is spent (`model_credential`). For the second, sign in again and book a new run.
 - Cancel it like any waiting run. Switching scheduled runs off also binds runs already booked: at its time such a run ends `FAILED` `scheduled_runs_off`.
 
 ## Your own pools
