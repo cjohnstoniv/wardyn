@@ -161,7 +161,7 @@ func (l *login) signIn(ctx context.Context, base *storedSession) error {
 		return errors.New(errNoBrowserNoPaste)
 	}
 	if kind == types.CLIStoreFile && base == nil {
-		fmt.Fprintf(l.errOut, copyFileStore+"\n", fileStore{l.dir}.path())
+		fmt.Fprintf(l.errOut, copyFileStore+"\n", fileStore{l.dir}.path(), inWords(types.CLIFileStoreSessionCap))
 	}
 	verifier := randomB64(32)
 	sum := sha256.Sum256([]byte(verifier))

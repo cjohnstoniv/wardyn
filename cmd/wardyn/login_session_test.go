@@ -604,7 +604,8 @@ func TestSessionFileFallbackWithNoBus(t *testing.T) {
 		t.Fatalf("login: %v", err)
 	}
 	path := filepath.Join(dir, cliSessionFile)
-	if want := fmt.Sprintf(copyFileStore, path); !strings.Contains(stderr, want) {
+	// The cap in the line is the one the server enforces on a file-store session, in words.
+	if want := fmt.Sprintf(copyFileStore, path, inWords(types.CLIFileStoreSessionCap)); !strings.Contains(stderr, want) {
 		t.Errorf("stderr %q, want the file-store line %q", stderr, want)
 	}
 	_, si := f.onlySignIn(t)

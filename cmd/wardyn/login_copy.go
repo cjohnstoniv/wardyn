@@ -20,8 +20,8 @@ const (
 	copyAdminFirst    = "Admin access needs a CLI sign-in on this computer: signing in first."
 	copyAdminSignedIn = "Admin access to %s as %s until %s. It does not refresh." // host, person, local time
 
-	// The file store, on stderr at login.
-	copyFileStore = "wardyn: this computer has no keychain, so the sign-in is kept in %s, which only you can read, and lasts at most 7 days"
+	// The file store, on stderr at login: the path, and types.CLIFileStoreSessionCap in words.
+	copyFileStore = "wardyn: this computer has no keychain, so the sign-in is kept in %s, which only you can read, and lasts at most %s"
 
 	// The loopback page (boards MATT2-Approve, MATT2-States).
 	pageTitle       = "Wardyn CLI"
