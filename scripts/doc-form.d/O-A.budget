@@ -118,7 +118,7 @@
 # docs/OPERATIONS.md 57501 = ours 57415 + theirs 57478 - base 57392 at the 0.10 W3 merge of SEC-1c onto the train.
 # docs/OPERATIONS.md 57715 adds 323 (0.10 PERF-1): one documented line per migration 0199-0206 and their upgrade wording.
 # docs/OPERATIONS.md 57824 = ours 57501 + theirs 57715 - base 57392 at the 0.10 W4c merge of PERF-1 onto the train.
-# docs/OPERATIONS.md 56776 adds 32 (0.10 Linux VM): the 0196_run_machine_kind line in the migrator rationale.
+# docs/OPERATIONS.md 56776 adds 32 (0.10 Linux VM): the 0207_run_machine_kind line (VM-A 0196, renumbered at the W4c train) in the migrator rationale.
 # docs/OPERATIONS.md 57856 = ours 57824 + theirs 56776 - base 56744 at the 0.10 W4c merge of VM-A onto the train.
 docs/OPERATIONS.md=57856 share=35
 # docs/OPERATIONS.md 55848 adds 132 over 55716: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
