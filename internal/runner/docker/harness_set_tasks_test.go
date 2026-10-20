@@ -4,20 +4,28 @@
 package docker
 
 import (
+	"bytes"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // tasksLayout is setImageLayout with fake CLIs that take their time and exit
 // with a code the test picks: claude after CLAUDE_SLEEP seconds with
-// CLAUDE_EXIT, codex at once with CODEX_EXIT. Each records when it ran.
+// CLAUDE_EXIT, codex after CODEX_SLEEP with CODEX_EXIT. Each records when it ran,
+// and its pid in $HOME/pid.<cli>.
 func tasksLayout(t *testing.T) (set, home, binDir, tmuxLog string) {
 	t.Helper()
 	set, home, binDir, tmuxLog = setImageLayout(t)
 	fakes := map[string]string{
 		"claude": `#!/bin/sh
+echo $$ > "$HOME/pid.claude"
 sleep "${CLAUDE_SLEEP:-0}"
 echo "claude says done"
 printf 'claude %s\n' "$*" >> "$HOME/calls.log"
@@ -29,6 +37,8 @@ if [ "$1" = login ]; then
   cat > "${CODEX_HOME:-$HOME/.codex}/auth.json"
   exit 0
 fi
+echo $$ > "$HOME/pid.codex"
+sleep "${CODEX_SLEEP:-0}"
 echo "codex says done"
 printf 'codex %s\n' "$*" >> "$HOME/calls.log"
 exit "${CODEX_EXIT:-0}"
@@ -117,5 +127,73 @@ func TestHarnessSetImage_TasksRefuseAnUnknownAgent(t *testing.T) {
 	code, out := runSet(t, set, home, binDir, tmuxLog, "10s", []string{"--tasks", "gemini-cli", "x"}, "WARDYN_START_HARNESS=claude-code")
 	if code != 1 || !strings.Contains(out, "agent 'gemini-cli' is not one of this run's harnesses") {
 		t.Fatalf("exited %d, want 1 naming the agent\noutput:\n%s", code, out)
+	}
+}
+
+// TestHarnessSetImage_TasksTermStopsEveryAgent: TERM to the supervisor reaches every
+// agent's launcher and what it started, the supervisor names each agent's exit in a
+// last status line, and it exits non-zero without tripping set -u.
+func TestHarnessSetImage_TasksTermStopsEveryAgent(t *testing.T) {
+	set, home, binDir, tmuxLog := tasksLayout(t)
+	cmd := exec.Command("bash", append([]string{set}, bothTasks...)...)
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	cmd.Env = append(os.Environ(),
+		"HOME="+home, "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"), "TMUX_LOG="+tmuxLog,
+		"WARDYN_HARNESSES=claude-code codex-cli", "WARDYN_START_HARNESS=claude-code", "WARDYN_REPOS=", "WARDYN_REPO_URL=",
+		"WARDYN_MITM_CA_PEM=", "WARDYN_GITHUB_GRANT_ID=", "WARDYN_CLAUDE_MANAGED_B64=",
+		"WARDYN_CODEX_BASE_URL=http://proxy.invalid/wardyn/llm/openai/v1", "CODEX_API_KEY=wardyn-proxy-injected",
+		"CLAUDE_SLEEP=60", "CODEX_SLEEP=60")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
+	pidOf := func(cli string) int {
+		b, err := os.ReadFile(filepath.Join(home, "pid."+cli))
+		if err != nil {
+			return 0
+		}
+		n, _ := strconv.Atoi(strings.TrimSpace(string(b)))
+		return n
+	}
+	for deadline := time.Now().Add(20 * time.Second); pidOf("claude") == 0 || pidOf("codex") == 0; time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("both agents never started\noutput:\n%s", out.String())
+		}
+	}
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(15 * time.Second):
+		t.Fatalf("the supervisor did not exit after TERM\noutput:\n%s", out.String())
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() == 0 {
+		t.Errorf("supervisor exit = %v, want non-zero\noutput:\n%s", err, out.String())
+	}
+	if strings.Contains(out.String(), "unbound variable") {
+		t.Errorf("set -u tripped on teardown\noutput:\n%s", out.String())
+	}
+	if got := lastAgentsLine(out.String()); !strings.Contains(got, "claude-code=exited=") || !strings.Contains(got, "codex-cli=exited=") {
+		t.Errorf("last status line = %q, want every agent exited\noutput:\n%s", got, out.String())
+	}
+	for _, cli := range []string{"claude", "codex"} {
+		pid := pidOf(cli)
+		gone := false
+		for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+			if syscall.Kill(pid, 0) != nil {
+				gone = true
+				break
+			}
+		}
+		if !gone {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+			t.Errorf("fake %s (pid %d) outlived the supervisor\noutput:\n%s", cli, pid, out.String())
+		}
 	}
 }
