@@ -179,6 +179,7 @@
 # docs/sdk.md 19697 adds 18 over 19679 (0.10 MINT-L), measured: delivery_runner_resident names the Azure DevOps minted token it serves.
 # docs/sdk.md 19702 adds 5 over 19697 (0.10 MINT-L round 2), measured: the owner gate and the revoke on a refused relayed fetch.
 # docs/sdk.md 19885 adds 250 over 19635, measured (0.10.0 GHPAT): the GitHub own-token door and launch reasons.
+# 0.10: docs/sdk.md 19659 adds 24, measured: the attach_local_unavailable reason and its detail (ATT-SRV).
 # docs/sdk.md=19309 adds 6 (0.10): identity_principal_in_use names runners and runner tokens.
 # docs/sdk.md=19315 adds 3 (0.10): identity_deactivated names runner registration tokens.
 # docs/sdk.md 19644 = ours 19635 + theirs 19552 - base 19543 at the 0.10 W2 merge of SEC-2c onto the train.
@@ -190,7 +191,9 @@
 # 0.10 HYBB (#2982): docs/sdk.md 19696 adds 61, measured: the computer_folders_off, computer_runner_offline, computer_runner_no_folders and computer_folder_refused reason rows.
 # docs/sdk.md 19743 = ours 19696 + theirs 19682 - base 19635 at the 0.10 merge of main (W2) into HYBB.
 # docs/sdk.md 20060 = ours 19999 + theirs 19743 - base 19682 at the 0.10 W3 merge of HYBB onto the train.
-docs/sdk.md=20060 share=21
+# docs/sdk.md 19706 = ours 19659 + theirs 19682 - base 19635 at the ATT-SRV merge of main (W2 train).
+# docs/sdk.md 20084 = ours 20060 + theirs 19706 - base 19682 at the 0.10 W4a merge of ATT-SRV onto the train.
+docs/sdk.md=20084 share=21
 # docs/sdk.md 18691 adds 28 over 18663, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.

@@ -591,3 +591,9 @@ const (
 	reasonGitHubOwnTokenUndeliverable  = "github_own_token_undeliverable"   // create: the token could not stay out of the sandbox (PAT broker off, a run on a person's runner) or two rows claim the host
 	reasonGitHubOwnTokenResident       = "github_own_token_resident"        // mint: the PAT broker is off, so the token would be handed into the sandbox
 )
+
+// GET /runs/{id}/attach?transport=local (attach_local.go), after every check of the attach door has
+// passed: this run cannot be attached on its runner's own computer, and the CLI attaches through the
+// organisation instead. A transport's answer, not a refusal; errorBody.Detail says why. Declared here
+// because reasons_routes.go is at scripts/check-file-size.sh's limit.
+const reasonAttachLocalUnavailable = "attach_local_unavailable"

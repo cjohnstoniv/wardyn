@@ -148,6 +148,10 @@ type Config struct {
 	// ponytail: process-local. Under WARDYN_HA a replica that does not hold a runner's session
 	// answers offline for a runner attached to another; the upgrade is a shared presence read.
 	RunnerOnline func(id uuid.UUID) bool
+	// AttachLocal (WARDYN_ATTACH_LOCAL=on, off by default) allows a person's CLI on their own runner's
+	// computer to attach to their run there (transport=local, attach_local.go), and tells such runners
+	// so in AUTH_OK. Off, a transport=local attach answers 409 attach_local_unavailable (flag_off).
+	AttachLocal bool
 	// RunnersDisabled runs after runners are switched off (a true→false change), once the write and
 	// its audit row are done and the site-config lock is released. Nil defaults to
 	// Server.RunnersDisabled, which ends every runner session this process holds.
@@ -797,6 +801,10 @@ type Server struct {
 	// on a millisecond clock instead of the real 30s budget.
 	pingEvery     time.Duration
 	authorityTest attachAuthorityTimings // per-server test overrides, the same shape as pingEvery
+	// localAttachSubs replaces a runner's substrate for a local attach (localAttachSubFor), tests only.
+	localAttachSubs func(id uuid.UUID) localAttachSub
+	// localCovered replaces a local promotion's corpus proof (promotionCovered), tests only.
+	localCovered func(runID uuid.UUID) bool
 	// pauseLimit overrides attachWriteTimeout as the bound on an unresumed
 	// output pause for THIS server only (tests).
 	pauseLimit time.Duration

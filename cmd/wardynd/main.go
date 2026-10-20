@@ -507,6 +507,7 @@ func run() error {
 		DisableGitPATBroker:    strings.EqualFold(strings.TrimSpace(*f.gitPATBroker), "off"),
 		RefuseGitPATBrokerOff:  *f.gitPATBrokerOffRefused,
 		ScrubProxyResponses:    *f.proxyResponseScrub,
+		AttachLocal:            strings.EqualFold(strings.TrimSpace(*f.attachLocal), "on"),
 		EnvSecretPlaceholders:  *f.envSecretPlaceholders,
 		FileSecretPlaceholders: *f.fileSecretPlaceholders,
 		// First-run setup readiness inputs (GET /api/v1/setup/status).
