@@ -109,11 +109,11 @@ export function useMainDriveSize(view: MainDriveView) {
     if (!filled.current && typed === "" && nextText !== "") {
       filled.current = true;
       dispatch({ type: "guided", patch: { mainDriveText: nextText, mainDriveFill: nextText, mainDriveUnit: next?.unit } });
-    } else if (typed !== "" && typed === fill && nextText !== typed) {
+    } else if (typed !== "" && typed === fill && (nextText !== typed || (next !== undefined && next.unit !== unit))) {
       if (nextText === "") filled.current = false;
       dispatch({ type: "guided", patch: { mainDriveText: nextText, mainDriveFill: nextText === "" ? undefined : nextText, mainDriveUnit: next?.unit } });
     }
-  }, [typed, fill, committed, view.defaultMib, dispatch]);
+  }, [typed, fill, unit, committed, view.defaultMib, dispatch]);
 
   const commit = React.useCallback(() => {
     if (!edited.current) return;
