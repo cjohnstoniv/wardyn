@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"log/slog"
 	"mime"
 	"net/http"
 	"strconv"
@@ -107,7 +108,13 @@ func (s *Server) desktopRun(w http.ResponseWriter, r *http.Request) (types.Agent
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonUIGatewayNoRunner, "no runner configured; the desktop's files are unavailable")
 		return run, types.DesktopControls{}, false
 	}
-	if apps, err := s.effectiveUIApps(r.Context(), run.ID); err != nil || len(apps) == 0 {
+	apps, rules, err := s.runDesktopPolicy(r.Context(), run.ID)
+	if err != nil {
+		slog.WarnContext(r.Context(), "wardynd: desktop rules unreadable; the transfer is refused", "run_id", run.ID, "err", err)
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonDesktopRulesUnreadable, desktopRulesUnreadableMsg)
+		return run, types.DesktopControls{}, false
+	}
+	if len(apps) == 0 {
 		writeErrorReason(w, http.StatusConflict, reasonDesktopTransferUnavailable, "this run's policy declares no UI app, so it has no desktop to move files to")
 		return run, types.DesktopControls{}, false
 	}
@@ -116,7 +123,7 @@ func (s *Server) desktopRun(w http.ResponseWriter, r *http.Request) (types.Agent
 		writeErrorReason(w, http.StatusBadGateway, reasonDesktopTransferFailed, "run is paused and could not be resumed; try again")
 		return run, types.DesktopControls{}, false
 	}
-	return run, s.effectiveDesktop(r.Context(), run.ID), true
+	return run, rules, true
 }
 
 // desktopExec runs one in-sandbox half with stdin as its input, streaming its stdout to out.

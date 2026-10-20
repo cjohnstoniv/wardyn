@@ -30,20 +30,29 @@ func validateDesktopControls(d *types.DesktopControls) error {
 	return nil
 }
 
-// effectiveDesktop is the run's desktop rules from its run.policy.resolve envelope, the same
-// source the UI apps come from (effectiveUIApps). A run with no envelope, or a failed read, gets
-// the defaults, which keep copy out and download blocked.
-func (s *Server) effectiveDesktop(ctx context.Context, runID uuid.UUID) types.DesktopControls {
+// errNoPolicyEnvelope is a run with no run.policy.resolve envelope to read its desktop rules from.
+var errNoPolicyEnvelope = errors.New("the run has no recorded policy envelope")
+
+// desktopRulesUnreadableMsg is the refusal when runDesktopPolicy cannot answer.
+const desktopRulesUnreadableMsg = "this run's desktop rules could not be read. Try again."
+
+// runDesktopPolicy is one read of the run's run.policy.resolve envelope (effectiveUIApps' source):
+// its UI apps and its effective desktop rules, from the same snapshot. A failed read, or a run with
+// no envelope, is an error and never the defaults, which allow paste in and upload where the run's
+// rules may block them. The defaults are only for an envelope that has no desktop block.
+func (s *Server) runDesktopPolicy(ctx context.Context, runID uuid.UUID) ([]types.UIApp, types.DesktopControls, error) {
 	if s.cfg.Store == nil {
-		return (*types.DesktopControls)(nil).Effective()
+		return nil, types.DesktopControls{}, errNoPolicyEnvelope
 	}
 	events, err := s.cfg.Store.QueryAuditEvents(ctx, runID, effectivePolicyAuditScan)
 	if err != nil {
-		slog.WarnContext(ctx, "wardynd: desktop rules unreadable; using the defaults", "run_id", runID, "err", err)
-		return (*types.DesktopControls)(nil).Effective()
+		return nil, types.DesktopControls{}, err
 	}
-	envelope, _, _ := latestPolicyResolve(events)
-	return envelope.Desktop.Effective()
+	envelope, _, ok := latestPolicyResolve(events)
+	if !ok {
+		return nil, types.DesktopControls{}, errNoPolicyEnvelope
+	}
+	return envelope.UIApps, envelope.Desktop.Effective(), nil
 }
 
 // uiDesktopApp is whether app is the desktop the run's desktop rules govern: the noVNC image's
@@ -66,7 +75,11 @@ func (s *Server) uiFilterUpgrade(resp *http.Response, sess uiSession) error {
 		return nil // ReverseProxy refuses a 101 without a writable body itself
 	}
 	ctx := resp.Request.Context()
-	d := s.effectiveDesktop(ctx, sess.Run)
+	_, d, err := s.runDesktopPolicy(ctx, sess.Run)
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: desktop rules unreadable; the desktop socket is refused", "run_id", sess.Run, "err", err)
+		return uiFail(ctx, http.StatusServiceUnavailable, reasonDesktopRulesUnreadable, desktopRulesUnreadableMsg)
+	}
 	rules := rfbfilter.Rules{PasteIn: d.PasteIn == types.TransferAllowed, CopyOut: d.CopyOut == types.TransferAllowed}
 	filtered := rfbfilter.Wrap(body, rules, func(ev rfbfilter.Event) { s.auditUIClipboard(sess, ev) }, func(err error) {
 		slog.WarnContext(ctx, "wardynd: ui relay closed a desktop socket it could not follow", "run_id", sess.Run, "app", sess.App, "err", err)
