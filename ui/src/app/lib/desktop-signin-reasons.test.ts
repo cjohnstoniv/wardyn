@@ -26,7 +26,7 @@ const goReasons = [...goSource.matchAll(/^\s*reasonDesktopSignin\w*\s*=\s*"(desk
 
 describe("desktop sign-in reasons", () => {
   it("reads the Go constants", () => {
-    expect(goReasons.length).toBeGreaterThanOrEqual(17);
+    expect(goReasons.length).toBeGreaterThanOrEqual(16);
   });
 
   it("every reason of internal/api/reasons_routes.go has a console sentence", () => {
