@@ -916,7 +916,8 @@ minimum.") and `DELIVERY.OS_MIN_INVALID`, each marked pending in `governance-cop
 | `DELIVERY.LOCAL_DELIVERY.via_org` | Stays in your org |
 | `DELIVERY.LOCAL_DELIVERY.runner_resident` | Stored on your runner |
 | `DELIVERY.LOCAL_DELIVERY.refuse` | Not available on your runner |
-| `DELIVERY.PEOPLE_SEE(label)` | People see: {label} |
+| `DELIVERY.COL_CREDENTIAL` | Credential |
+| `DELIVERY.COL_PEOPLE_SEE` | People see |
 | `DELIVERY.POSTURE_TITLE` | Require on the runner |
 | `DELIVERY.POSTURE_MDM` | Managed by MDM |
 | `DELIVERY.POSTURE_DISK` | Disk encrypted |

@@ -46,3 +46,27 @@ test.describe("Runner credentials: a save someone else got in front of", () => {
     await expect(page.getByRole("alertdialog")).toHaveCount(0);
   });
 });
+
+test.describe("Runner credentials: one table", () => {
+  test("the options are columns, People see is quiet at the default and highlighted when it differs, a bound's reason sits in its cell", async ({ page }) => {
+    await asRealSecurityAdmin(page);
+    await gotoConsole(page, "admin");
+    await navTo(page, "Governance");
+    await page.getByRole("tab", { name: DELIVERY.TAB }).click();
+
+    const keys = page.getByRole("radiogroup", { name: DELIVERY.CLASS.api_key });
+    await expect(keys).toBeVisible();
+    for (const head of [DELIVERY.COL_CREDENTIAL, DELIVERY.MODE.via_org, DELIVERY.MODE.runner_resident, DELIVERY.MODE.refuse, DELIVERY.COL_PEOPLE_SEE]) {
+      await expect(page.getByText(head, { exact: true }).first()).toBeVisible();
+    }
+    await expect(keys.locator("[data-people-see]")).toHaveAttribute("data-people-see", "default");
+
+    await keys.getByRole("radio", { name: DELIVERY.MODE.runner_resident }).click();
+    await expect(keys.locator("[data-people-see]")).toHaveAttribute("data-people-see", "differs");
+    await expect(keys.locator("[data-people-see]")).toHaveText(DELIVERY.LOCAL_DELIVERY.runner_resident);
+
+    const env = page.getByRole("radiogroup", { name: DELIVERY.CLASS.env_secret });
+    await expect(env.getByRole("radio", { name: DELIVERY.MODE.via_org })).toBeDisabled();
+    await expect(env.getByText(DELIVERY.BOUND_NO_VIA_ORG)).toBeVisible();
+  });
+});

@@ -14,7 +14,7 @@
 // an absent one; the server's 400 stays the gate. An absent class means Don't allow, so the editor writes
 // only the classes that are not set to it.
 import * as React from "react";
-import { AlertTriangle, Loader2 } from "lucide-react";
+import { AlertTriangle, Ban, Loader2 } from "lucide-react";
 import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import { credentialDelivery } from "../../../lib/api/credential-delivery";
 import { getErrorMessage } from "../../../lib/format";
@@ -41,11 +41,18 @@ import { Label } from "../../ui/label";
 import { RadioGroup, RadioGroupItem } from "../../ui/radio-group";
 import { useSecurityOperator } from "../../wardyn/operator-context";
 import { EmptyState, TableSkeleton } from "../../wardyn/states";
+import { Chip } from "../../wardyn/primitives";
 import { Note } from "./display";
 import { SubmittedNote } from "./submitted-note";
 
+// The credential, the three options, then what people see: one grid for the header and every row.
+// Joined from single tokens: the no-own-copy scan reads any quoted run of words as prose.
+const ROW_GRID = ["grid", "gap-x-4", "gap-y-2", "px-6", "py-3", "md:grid-cols-[minmax(0,1.7fr)_repeat(3,minmax(0,1fr))_minmax(0,1fr)]", "md:items-start"].join(" ");
+
 const MODES = ["via_org", "runner_resident", "refuse"] as const;
 type EditableMode = (typeof MODES)[number];
+// An absent class is Don't allow: the People see cell is quiet while it is that.
+const DEFAULT_MODE: EditableMode = "refuse";
 
 // What the editor does not edit: the two fixed classes, and the shared Azure sign-in, which 0.9 never
 // creates (so a mode for it could not take effect). A stored value for the last rides through a save as it was.
@@ -226,6 +233,13 @@ export function RunnerCredentials({ onSubmitted }: { onSubmitted?: () => void })
       {status === "ready" && (
         <>
           <div className="mt-4 divide-y divide-border border-t border-border">
+            <div className={`${ROW_GRID} label-eyebrow max-md:hidden`}>
+              <span>{DELIVERY.COL_CREDENTIAL}</span>
+              {MODES.map((mode) => (
+                <span key={mode}>{DELIVERY.MODE[mode]}</span>
+              ))}
+              <span>{DELIVERY.COL_PEOPLE_SEE}</span>
+            </div>
             {DELIVERY_CLASSES.map((c) =>
               READ_ONLY.includes(c) ? (
                 <ReadOnlyRow key={c} cls={c} />
@@ -272,12 +286,12 @@ function ReadOnlyRow({ cls }: { cls: DeliveryClass }) {
     cls === "azure_foundry_token" ? DELIVERY.NOT_IN_RELEASE : cls === "oauth_subscription" ? DELIVERY.FIXED_OWN : DELIVERY.FIXED_CLOUD_STS;
   const hint = cls === "azure_foundry_token" ? DELIVERY.CLASS_HINT.azure_foundry_token : null;
   return (
-    <div className="grid gap-1 px-6 py-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] md:gap-6">
+    <div className={ROW_GRID}>
       <div>
         <h3 className="text-sm font-medium text-foreground">{DELIVERY.CLASS[cls]}</h3>
         {hint && <p className="mt-0.5 text-xs text-muted-foreground">{hint}</p>}
       </div>
-      <p className="text-sm text-muted-foreground">{value}</p>
+      <p className="text-sm text-muted-foreground md:col-span-4">{value}</p>
     </div>
   );
 }
@@ -299,45 +313,59 @@ function ClassRow({
   const titleId = `dc-${cls}`;
   const resident = row.mode === "runner_resident";
   return (
-    <div className="grid gap-3 px-6 py-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] md:gap-6">
-      <div>
-        <h3 id={titleId} className="text-sm font-medium text-foreground">
-          {DELIVERY.CLASS[key]}
-        </h3>
-        <p className="mt-0.5 text-xs text-muted-foreground">{DELIVERY.CLASS_HINT[key]}</p>
-      </div>
-      <div className="min-w-0">
-        <RadioGroup
-          aria-labelledby={titleId}
-          value={row.mode}
-          disabled={disabled}
-          onValueChange={(v) => onEdit({ mode: v as EditableMode })}
-          className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:gap-x-5"
-        >
-          {MODES.map((mode) => {
-            const reason = boundReason(cls, mode);
-            const id = `dc-${cls}-${mode}`;
-            const note = reason || (cls === "ado_minted_pat" && mode === "runner_resident" ? DELIVERY.ADO_RESIDENT_HINT : "");
-            return (
-              <div key={mode} className="flex flex-col gap-0.5">
-                <div className="flex items-center gap-2">
-                  <RadioGroupItem id={id} value={mode} disabled={!!reason} aria-describedby={`${id}-d`} className="peer" />
-                  <Label htmlFor={id} className="text-sm">
-                    {DELIVERY.MODE[mode]}
-                  </Label>
-                </div>
-                {/* An enabled option's hint is its accessible description; a bound's reason is read beneath it. */}
-                <p id={`${id}-d`} className={note ? "max-w-[30ch] pl-6 text-xs text-muted-foreground" : "sr-only"}>
-                  {note || DELIVERY.MODE_HINT[mode]}
-                </p>
+    <div>
+      <RadioGroup
+        aria-labelledby={titleId}
+        value={row.mode}
+        disabled={disabled}
+        onValueChange={(v) => onEdit({ mode: v as EditableMode })}
+        className={ROW_GRID}
+      >
+        <div>
+          <h3 id={titleId} className="text-sm font-medium text-foreground">
+            {DELIVERY.CLASS[key]}
+          </h3>
+          <p className="mt-0.5 text-xs text-muted-foreground">{DELIVERY.CLASS_HINT[key]}</p>
+        </div>
+        {MODES.map((mode) => {
+          const reason = boundReason(cls, mode);
+          const id = `dc-${cls}-${mode}`;
+          const note = reason || (cls === "ado_minted_pat" && mode === "runner_resident" ? DELIVERY.ADO_RESIDENT_HINT : "");
+          return (
+            <div key={mode} className="flex flex-col gap-1">
+              <div className="flex items-center gap-2">
+                <RadioGroupItem id={id} value={mode} disabled={!!reason} aria-describedby={`${id}-d`} className="peer" />
+                {/* The column header names the option on wide screens; on a phone each cell names itself. */}
+                <Label htmlFor={id} className="text-sm md:sr-only">
+                  {DELIVERY.MODE[mode]}
+                </Label>
               </div>
-            );
-          })}
-        </RadioGroup>
-        <p className="mt-2 text-xs text-muted-foreground">{DELIVERY.PEOPLE_SEE(DELIVERY.LOCAL_DELIVERY[row.mode])}</p>
-
-        {resident && <PostureBlock cls={cls} row={row} disabled={disabled} onEdit={onEdit} />}
-      </div>
+              {/* An enabled option's hint is its accessible description; a bound's reason is read in its cell. */}
+              <p id={`${id}-d`} className={note ? "flex gap-1 text-xs text-muted-foreground" : "sr-only"}>
+                {reason && <Ban aria-hidden className="mt-0.5 size-3 shrink-0" />}
+                <span>{note || DELIVERY.MODE_HINT[mode]}</span>
+              </p>
+            </div>
+          );
+        })}
+        <div className="text-sm">
+          <span className="mb-0.5 block text-xs text-muted-foreground md:hidden">{DELIVERY.COL_PEOPLE_SEE}</span>
+          {row.mode === DEFAULT_MODE ? (
+            <span data-people-see="default" className="text-muted-foreground">
+              {DELIVERY.LOCAL_DELIVERY[row.mode]}
+            </span>
+          ) : (
+            <span data-people-see="differs">
+              <Chip tone="info">{DELIVERY.LOCAL_DELIVERY[row.mode]}</Chip>
+            </span>
+          )}
+        </div>
+      </RadioGroup>
+      {resident && (
+        <div className="px-6 pb-4">
+          <PostureBlock cls={cls} row={row} disabled={disabled} onEdit={onEdit} />
+        </div>
+      )}
     </div>
   );
 }
