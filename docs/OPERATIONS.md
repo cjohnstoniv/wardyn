@@ -4000,7 +4000,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0205` (`0205_agent_runs_runner_ref_index`) adds the partial index `agent_runs_runner_ref_idx` on `agent_runs` over runner runs that still hold a sandbox ref, which the runner retirement producer reads; the build holds a lock on the table for its duration.
 - `0206` (`0206_recordings_size_tail`) adds `size_bytes`, `tail` and `stat_updated_at` to `recordings` (`0028`'s table): a cast's byte size and last 8 KiB, which the Recordings list reads instead of decompressing each stored recording; the migration reads every stored recording once to fill them, and holds an exclusive lock on `recordings` until it commits.
 - `0207` (`0207_run_machine_kind`) adds `machine_kind` and `vm_machine` to `agent_runs` (`0001`'s table): the kind of sandbox a run asked for (empty for a container) and the virtual machine a Linux VM run started on.
-- `0198` (`0198_approval_human_takeover`) admits the approval kind `human_takeover` ("Needs you") in `approvals.kind`'s CHECK and adds `approvals.takeover_holder` and `approvals.handed_back_at` (`0001`'s table): who has control of a run the agent asked a person to take over, and when they handed it back.
+- `0208` (`0208_approval_human_takeover`) admits the approval kind `human_takeover` ("Needs you") in `approvals.kind`'s CHECK and adds `approvals.takeover_holder` and `approvals.handed_back_at` (`0001`'s table): who has control of a run the agent asked a person to take over, and when they handed it back.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
