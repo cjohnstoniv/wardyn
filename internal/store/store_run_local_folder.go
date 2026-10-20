@@ -76,7 +76,7 @@ func (s PG) SetRunLocalFolderSeed(ctx context.Context, id uuid.UUID, errText str
 	return tag.RowsAffected() == 1, nil
 }
 
-// RunLocalFolderStatuses is the computer-folder pass record (0196), optional like RunLocalFolders.
+// RunLocalFolderStatuses is the computer-folder pass record (0198), optional like RunLocalFolders.
 type RunLocalFolderStatuses interface {
 	// RunLocalFolderStatus reads run id's record, zero while no pass has ended.
 	RunLocalFolderStatus(ctx context.Context, id uuid.UUID) (types.RunLocalFolderStatus, error)

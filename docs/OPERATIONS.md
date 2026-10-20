@@ -3986,7 +3986,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0195` (`0195_agent_runs_local_folder`) adds `local_folder`, `local_folder_seeded_at` and `local_folder_seed_error` to `agent_runs` (`0001`'s table): the folder a run holds its agent for, and that folder's first sync.
 - `0196` (`0196_deprovision_event_pin`) adds `audit_event_id` and `audit_event_at` to `deprovision_jobs` (`0127`'s table): the id and time of the audit event an owed row writes, pinned on its first drain and cleared when the row reopens.
 - `0197` (`0197_run_inner_walls`) adds `inner_walls` to `agent_runs` (`0001`'s table): the harness's own walls a run launched with, under its policy's `harness_inner_walls`.
-- `0196` (`0196_agent_runs_local_folder_status`) adds `local_folder_status` to `agent_runs` (`0001`'s table): the passes a person's folder-only runner made for a run's computer folder, in and back.
+- `0198` (`0198_agent_runs_local_folder_status`) adds `local_folder_status` to `agent_runs` (`0001`'s table): the passes a person's folder-only runner made for a run's computer folder, in and back.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.

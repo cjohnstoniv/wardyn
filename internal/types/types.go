@@ -638,7 +638,7 @@ const (
 )
 
 // RunLocalFolderStatus is what Wardyn knows of the passes a runner made for a run's computer folder
-// (0196): the first sync in, and the one that brought the sandbox's changes back. Both are nil until
+// (0198): the first sync in, and the one that brought the sandbox's changes back. Both are nil until
 // that pass ends.
 type RunLocalFolderStatus struct {
 	Seed *FolderPassRecord `json:"seed,omitempty"`
