@@ -137,7 +137,7 @@ func restrictedSecurityContext() *corev1.SecurityContext {
 // agent sandbox would 422 at pod create (RunAsNonRoot can't verify a named user).
 func agentSecurityContext() *corev1.SecurityContext {
 	sc := baseSecurityContext()
-	sc.RunAsUser = int64Ptr(1000)
+	sc.RunAsUser = int64Ptr(runner.AgentUID)
 	return sc
 }
 

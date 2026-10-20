@@ -56,7 +56,7 @@ const (
 
 	// driveFSGroup group-owns a freshly provisioned volume's root to gid 1000 (every agent image's
 	// uid), MANAGED claim only — applyDriveToPod explains why a SHARE must never carry it.
-	driveFSGroup int64 = 1000
+	driveFSGroup int64 = runner.AgentUID
 )
 
 // validateDriveMount is the driver's OWN contract over the mount it is handed, re-derived from

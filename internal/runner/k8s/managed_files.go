@@ -103,7 +103,7 @@ func managedFileVolumes(runID uuid.UUID, files []runner.ManagedFile) ([]corev1.V
 // agentFSGroup is the agent's gid by the image contract — every Wardyn agent
 // image runs as 1000, the value driveFSGroup also carries, so a pod with both
 // a managed drive and a delivered secret asks for one fsGroup, not two.
-const agentFSGroup int64 = 1000
+const agentFSGroup int64 = runner.AgentUID
 
 // agentSecretItemMode is what an AgentOwned file is projected at in its
 // Secret volume, which only the stage-secrets init container mounts. A Secret

@@ -60,6 +60,11 @@ const (
 	SharedRoot = "/home/agent/shared"
 )
 
+// AgentUID is the uid, and gid, every Wardyn agent image runs its agent as
+// (`USER agent`, the image contract). Every substrate reads it from here: the
+// uid its probes and agent run as, and the owner or group of a drive's folder.
+const AgentUID = 1000
+
 // DriveTargetFor is the one in-sandbox path a drive mounts at, derived by the
 // server and never authored: DriveTarget for the legacy drive (the person's one
 // resolved drive), else DrivesRoot/<slug> for a managed drive and
