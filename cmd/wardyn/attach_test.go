@@ -199,7 +199,7 @@ func TestRunAttach_NoTokenDialsAnyway(t *testing.T) {
 	// client-side. Port 0 on loopback refuses the connection, so we assert the
 	// failure is a dial error, not the old hard-refusal message.
 	c := &sdk.Client{BaseURL: "http://127.0.0.1:0"}
-	err := runAttach(context.Background(), c, "run-1")
+	err := runAttach(context.Background(), c, "run-1", attachOptions{})
 	if err == nil {
 		t.Fatal("expected a dial error against the bogus address, got nil")
 	}
@@ -230,7 +230,7 @@ func TestRunAttach_RejectedHandshakeReturnsAPIError(t *testing.T) {
 	defer srv.Close()
 
 	c := &sdk.Client{BaseURL: srv.URL, Token: "tok"}
-	err := runAttach(context.Background(), c, "run-1")
+	err := runAttach(context.Background(), c, "run-1", attachOptions{})
 	if err == nil {
 		t.Fatal("expected an error for a rejected handshake, got nil")
 	}
@@ -303,7 +303,7 @@ func TestRunAttach_CtxCancelRestoresTerminal(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- runAttach(ctx, &sdk.Client{BaseURL: srv.URL}, "run-1")
+		done <- runAttach(ctx, &sdk.Client{BaseURL: srv.URL}, "run-1", attachOptions{})
 	}()
 
 	// Let the dial complete and the pump goroutines start, then cancel — the
@@ -350,7 +350,7 @@ func TestRunAttach_CancelledCtxDuringDialIsCleanDetach(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := runAttach(ctx, &sdk.Client{BaseURL: srv.URL}, "run-1")
+	err := runAttach(ctx, &sdk.Client{BaseURL: srv.URL}, "run-1", attachOptions{})
 	// main.go only calls exitCodeFor when Execute() returns a non-nil error
 	// (see main(): the nil case exits 0 implicitly without consulting it) —
 	// exitCodeFor(nil) itself falls through every errors.As arm to the
@@ -381,7 +381,7 @@ func TestHelperAttachSignal(t *testing.T) {
 		return nil
 	}
 	url := os.Getenv("WARDYN_ATTACH_SIGNAL_URL")
-	if err := runAttach(context.Background(), &sdk.Client{BaseURL: url}, "run-1"); err != nil {
+	if err := runAttach(context.Background(), &sdk.Client{BaseURL: url}, "run-1", attachOptions{}); err != nil {
 		t.Fatalf("runAttach: %v", err)
 	}
 }
@@ -602,7 +602,7 @@ func TestAttachCmd_RefusesANonUUIDRunID(t *testing.T) {
 	}
 	for _, id := range hostile {
 		t.Run(id, func(t *testing.T) {
-			err := execCmd(t, "run", "attach", "--", id)
+			err := execCmd(t, "attach", "--", id)
 			if err == nil {
 				t.Fatalf("%q was accepted", id)
 			}
@@ -614,7 +614,7 @@ func TestAttachCmd_RefusesANonUUIDRunID(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// Wardyn 0.7.8 lane/v0.7.8-cli-attach: `wardyn run attach` mints a single-use
+// Wardyn 0.7.8 lane/v0.7.8-cli-attach: `wardyn attach` mints a single-use
 // attach ticket with whatever token is configured (POST
 // /runs/{id}/attach/ticket, owner-or-admin) and dials with it, instead of
 // dialing the WS route directly with a bearer that route's fallback lane
@@ -666,7 +666,7 @@ func TestRunAttach_MintsTicketThenDialsWithIt(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	err := runAttach(ctx, &sdk.Client{BaseURL: srv.URL, Token: memberToken}, "run-1")
+	err := runAttach(ctx, &sdk.Client{BaseURL: srv.URL, Token: memberToken}, "run-1", attachOptions{})
 	if err != nil {
 		t.Fatalf("runAttach = %v, want nil (mint then ticket dial should succeed for a member's own token)", err)
 	}
@@ -695,7 +695,7 @@ func TestRunAttach_DialFailureKeepsTheTicketOut(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	err := runAttach(ctx, &sdk.Client{BaseURL: srv.URL, Token: "member-own-token"}, "run-1")
+	err := runAttach(ctx, &sdk.Client{BaseURL: srv.URL, Token: "member-own-token"}, "run-1", attachOptions{})
 	if err == nil {
 		t.Fatal("runAttach = nil, want the dial failure")
 	}
@@ -737,7 +737,7 @@ func TestRunAttach_AdminTokenMintsAndDials(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := runAttach(ctx, &sdk.Client{BaseURL: srv.URL, Token: "admin-bearer-token"}, "run-1"); err != nil {
+	if err := runAttach(ctx, &sdk.Client{BaseURL: srv.URL, Token: "admin-bearer-token"}, "run-1", attachOptions{}); err != nil {
 		t.Fatalf("runAttach with an admin token = %v, want nil", err)
 	}
 }
@@ -761,7 +761,7 @@ func TestRunAttach_ForeignRunMintReturns404(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	err := runAttach(context.Background(), &sdk.Client{BaseURL: srv.URL, Token: "member-token"}, "run-1")
+	err := runAttach(context.Background(), &sdk.Client{BaseURL: srv.URL, Token: "member-token"}, "run-1", attachOptions{})
 	var ae *sdk.APIError
 	if !errors.As(err, &ae) {
 		t.Fatalf("err = %v (%T), want an *sdk.APIError", err, err)
@@ -809,7 +809,7 @@ func TestRunAttach_TicketIsReMintedEachAttach(t *testing.T) {
 
 	for i := range 2 {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		err := runAttach(ctx, &sdk.Client{BaseURL: srv.URL, Token: "member-token"}, "run-1")
+		err := runAttach(ctx, &sdk.Client{BaseURL: srv.URL, Token: "member-token"}, "run-1", attachOptions{})
 		cancel()
 		if err != nil {
 			t.Fatalf("attempt %d: runAttach = %v, want nil", i, err)
@@ -851,7 +851,7 @@ func TestRunAttach_FallsBackToBareDialWhenMintUnavailable(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := runAttach(ctx, &sdk.Client{BaseURL: srv.URL, Token: "admin-bearer-token"}, "run-1"); err != nil {
+	if err := runAttach(ctx, &sdk.Client{BaseURL: srv.URL, Token: "admin-bearer-token"}, "run-1", attachOptions{}); err != nil {
 		t.Fatalf("runAttach = %v, want nil (the legacy bearer dial must still work)", err)
 	}
 }
@@ -944,7 +944,7 @@ func redirectAttachIO(t *testing.T) (stdinW *os.File, stdout, stderr func() stri
 }
 
 // TestAttach_PipedStdinEOFKeepsShowingOutput pins #2317: `printf 'make test\n' |
-// wardyn run attach` sent its line, read EOF at once and detached before the
+// wardyn attach` sent its line, read EOF at once and detached before the
 // remote command's output arrived. After EOF the session now keeps showing
 // frames, and detaches (exit 0) once it has been quiet for attachDrainIdle.
 func TestAttach_PipedStdinEOFKeepsShowingOutput(t *testing.T) {
@@ -976,7 +976,7 @@ func TestAttach_PipedStdinEOFKeepsShowingOutput(t *testing.T) {
 
 	_, stdout, stderr := redirectAttachIO(t)
 	start := time.Now()
-	err := runAttach(context.Background(), &sdk.Client{BaseURL: srv.URL}, "run-1")
+	err := runAttach(context.Background(), &sdk.Client{BaseURL: srv.URL}, "run-1", attachOptions{})
 	stdoutGot, stderrGot := stdout(), stderr()
 
 	if err != nil {
@@ -1021,7 +1021,7 @@ func TestAttach_ReadOnlyDialPrintsNoticeAndDetachesCleanly(t *testing.T) {
 
 	_, stdout, stderr := redirectAttachIO(t)
 
-	attachErr := runAttach(context.Background(), &sdk.Client{BaseURL: srv.URL}, "run-1")
+	attachErr := runAttach(context.Background(), &sdk.Client{BaseURL: srv.URL}, "run-1", attachOptions{})
 	stdoutGot, stderrGot := stdout(), stderr()
 
 	if attachErr != nil {
@@ -1109,7 +1109,7 @@ func TestAttach_PromotionPrintsOneLineAndResendsResizeOnce(t *testing.T) {
 
 	_, stdout, stderr := redirectAttachIO(t)
 
-	attachErr := runAttach(context.Background(), &sdk.Client{BaseURL: srv.URL}, "run-1")
+	attachErr := runAttach(context.Background(), &sdk.Client{BaseURL: srv.URL}, "run-1", attachOptions{})
 	stdoutGot, stderrGot := stdout(), stderr()
 
 	if attachErr != nil {
@@ -1155,7 +1155,7 @@ func TestAttach_UnknownAttachModeFrameIsIgnored(t *testing.T) {
 
 	_, stdout, stderr := redirectAttachIO(t)
 
-	attachErr := runAttach(context.Background(), &sdk.Client{BaseURL: srv.URL}, "run-1")
+	attachErr := runAttach(context.Background(), &sdk.Client{BaseURL: srv.URL}, "run-1", attachOptions{})
 	stdoutGot, stderrGot := stdout(), stderr()
 
 	if attachErr != nil {
@@ -1164,8 +1164,8 @@ func TestAttach_UnknownAttachModeFrameIsIgnored(t *testing.T) {
 	if stdoutGot != "after-unknown" {
 		t.Errorf("stdout = %q, want exactly the PTY bytes around the unknown frame, nothing dropped or corrupted", stdoutGot)
 	}
-	if want := "detached\n"; stderrGot != want {
-		t.Errorf("stderr = %q, want only %q — no noise for the writer connect or the unrecognised frame", stderrGot, want)
+	if want := relayAttachLine(srv.URL) + "\ndetached\n"; stderrGot != want {
+		t.Errorf("stderr = %q, want only %q — the transport line, and no noise for the writer connect or the unrecognised frame", stderrGot, want)
 	}
 }
 
@@ -1190,7 +1190,7 @@ func TestAttach_TakeoverCloseIsNotACleanDetach(t *testing.T) {
 
 	_, stdout, stderr := redirectAttachIO(t)
 
-	attachErr := runAttach(context.Background(), &sdk.Client{BaseURL: srv.URL}, "run-1")
+	attachErr := runAttach(context.Background(), &sdk.Client{BaseURL: srv.URL}, "run-1", attachOptions{})
 	stdoutGot, stderrGot := stdout(), stderr()
 
 	if attachErr == nil {
@@ -1231,7 +1231,7 @@ func TestAttach_ShellExitIsCleanDetach(t *testing.T) {
 
 	_, stdout, stderr := redirectAttachIO(t)
 
-	attachErr := runAttach(context.Background(), &sdk.Client{BaseURL: srv.URL}, "run-1")
+	attachErr := runAttach(context.Background(), &sdk.Client{BaseURL: srv.URL}, "run-1", attachOptions{})
 	stdoutGot, stderrGot := stdout(), stderr()
 
 	if attachErr != nil {
@@ -1266,7 +1266,7 @@ func TestAttach_SeveredConnectionIsNotACleanDetach(t *testing.T) {
 
 	_, stdout, stderr := redirectAttachIO(t)
 
-	attachErr := runAttach(context.Background(), &sdk.Client{BaseURL: srv.URL}, "run-1")
+	attachErr := runAttach(context.Background(), &sdk.Client{BaseURL: srv.URL}, "run-1", attachOptions{})
 	stdoutGot, stderrGot := stdout(), stderr()
 
 	if attachErr == nil {
@@ -1297,7 +1297,7 @@ func TestRunAttach_MintRedirectIsDecisive(t *testing.T) {
 			w.WriteHeader(http.StatusNotFound)
 		}))
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		err := runAttach(ctx, &sdk.Client{BaseURL: srv.URL, Token: "admin-bearer-token"}, "run-1")
+		err := runAttach(ctx, &sdk.Client{BaseURL: srv.URL, Token: "admin-bearer-token"}, "run-1", attachOptions{})
 		cancel()
 		srv.Close()
 		var ae *sdk.APIError
@@ -1323,7 +1323,7 @@ func TestRunAttach_DialRedirectIsNotFollowed(t *testing.T) {
 	defer srv.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	err := runAttach(ctx, &sdk.Client{BaseURL: srv.URL, Token: "admin-bearer-token"}, "run-1")
+	err := runAttach(ctx, &sdk.Client{BaseURL: srv.URL, Token: "admin-bearer-token"}, "run-1", attachOptions{})
 	var ae *sdk.APIError
 	if !errors.As(err, &ae) || ae.Status != http.StatusFound {
 		t.Fatalf("err = %v, want *sdk.APIError 302", err)

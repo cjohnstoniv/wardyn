@@ -2490,38 +2490,55 @@ func TestNoArgsLeavesRejectAnExtraArg(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// #206: attach/ssh move under `run`, clean break (no top-level alias)
+// #206 and DESIGN-ATTACH 11.3: `ssh` lives under `run`; `attach` is top-level
 // --------------------------------------------------------------------------
 
-// TestTopLevelAttachAndSSHAreGone pins the clean break the owner ruled for on
-// issue #206 ("no alias commands"): the old bare `wardyn attach`/`wardyn ssh`
-// spellings must fail as an unknown command, not
-// silently keep working, or a script written against the old tree would pass
-// this suite for the wrong reason.
-func TestTopLevelAttachAndSSHAreGone(t *testing.T) {
-	for _, verb := range []string{"attach", "ssh"} {
-		t.Run(verb, func(t *testing.T) {
-			err := execCmd(t, verb, uuid.New().String())
-			if err == nil {
-				t.Fatalf("wardyn %s exited 0 — the old top-level command must be gone, not merely undocumented", verb)
-			}
-			if !strings.Contains(err.Error(), "unknown command") {
-				t.Errorf("error = %q, want an unknown-command refusal", err)
-			}
-		})
+// TestTopLevelSSHIsGone pins the clean break the owner ruled for on issue #206
+// ("no alias commands"): the old bare `wardyn ssh` spelling must fail as an
+// unknown command, not silently keep working, or a script written against the
+// old tree would pass this suite for the wrong reason. (`run attach`, the other
+// removed spelling, is in TestRemovedSpellingsAreUnknownCommands.)
+func TestTopLevelSSHIsGone(t *testing.T) {
+	err := execCmd(t, "ssh", uuid.New().String())
+	if err == nil {
+		t.Fatal("wardyn ssh exited 0 — the old top-level command must be gone, not merely undocumented")
+	}
+	if !strings.Contains(err.Error(), "unknown command") {
+		t.Errorf("error = %q, want an unknown-command refusal", err)
 	}
 }
 
-// TestRunAttachAndSSHAreReachable pins the other half: the same two leaves
-// now answer under `run`. Each is driven far enough past cobra's own routing
-// to prove the LEAF ran (its own client-side validation fired), not just that
-// a group with that name exists.
-func TestRunAttachAndSSHAreReachable(t *testing.T) {
-	if err := execCmd(t, "run", "attach", "not-a-uuid"); err == nil || !strings.Contains(err.Error(), "invalid run id") {
-		t.Errorf("run attach = %v, want attachCmd's own invalid-run-id refusal", err)
-	}
+// TestRunSSHIsReachable pins the other half: the leaf answers under `run`,
+// driven far enough past cobra's own routing to prove the LEAF ran (its own
+// client-side validation fired), not just that a group with that name exists.
+func TestRunSSHIsReachable(t *testing.T) {
 	if err := execCmd(t, "run", "ssh", "not-a-uuid"); err == nil || !strings.Contains(err.Error(), "invalid run id") {
 		t.Errorf("run ssh = %v, want sshCmd's own invalid-run-id refusal", err)
+	}
+}
+
+// TestTopLevelAttachReachesTheMint: `wardyn attach <id>` is the everyday verb
+// at the top (DESIGN-ATTACH 11.3), and its first call is the ticket mint, whose
+// refusal it shows as the server gave it.
+func TestTopLevelAttachReachesTheMint(t *testing.T) {
+	id := uuid.New().String()
+	var minted atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/v1/runs/"+id+"/attach/ticket" {
+			minted.Store(true)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"run not found","reason":"run_not_found"}`))
+	}))
+	defer srv.Close()
+	err := execCmd(t, "--url", srv.URL, "attach", id)
+	var ae *sdk.APIError
+	if !errors.As(err, &ae) || ae.Status != http.StatusNotFound || ae.Reason != "run_not_found" {
+		t.Fatalf("wardyn attach = %v, want the mint's 404 run_not_found", err)
+	}
+	if !minted.Load() {
+		t.Error("wardyn attach never reached POST /runs/{id}/attach/ticket")
 	}
 }
 

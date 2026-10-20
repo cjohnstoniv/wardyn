@@ -102,7 +102,7 @@ func normalizeConfinement(s string) string {
 // interactiveLine says what the new interactive sandbox does at start: it is idle
 // only when no startup was asked for or the startup is none.
 func interactiveLine(startup *sdk.RunStartup, id string) string {
-	attach := "attach with `wardyn run attach " + id + "`"
+	attach := "attach with `wardyn attach " + id + "`"
 	switch {
 	case startup == nil || startup.Kind == sdk.StartupNone:
 		return "  interactive: sandbox is idle; " + attach
@@ -272,7 +272,7 @@ func runCmd(client clientFn) *cobra.Command {
 	cmd.Flags().StringVar(&workspaceID, "workspace", "", "onboarded workspace id to launch against (optional; seeds its source, egress, image and bound model creds — composes with --policy/--policy-file)")
 	cmd.Flags().StringVar(&policyFile, "policy-file", "", "path to a JSON or YAML RunPolicySpec applied inline (optional; mutually exclusive with --policy, enforced server-side)")
 	cmd.Flags().StringVar(&confinement, "confinement", "", "confinement class (CC1|CC2|CC3, or fence|wall|vault; optional — unset defaults to the strongest class the runner advertises at or above the policy minimum, never the bare minimum itself)")
-	cmd.Flags().BoolVar(&interactive, "interactive", false, "interactive run: come up idle for 'wardyn run attach'; --task, if set, seeds the session's startup shell command at boot instead (empty --task stays idle, today's default); use a never-reap policy (auto_stop_after_sec <= 0)")
+	cmd.Flags().BoolVar(&interactive, "interactive", false, "interactive run: come up idle for 'wardyn attach'; --task, if set, seeds the session's startup shell command at boot instead (empty --task stays idle, today's default); use a never-reap policy (auto_stop_after_sec <= 0)")
 	cmd.Flags().StringVar(&image, "image", "", "user-supplied base image (Bring Your Own Image; requires the server's image builder, mutually exclusive with devcontainer builds — enforced server-side; wraps the image only — nothing runs until inside the run's confinement tier, unlike --devcontainer-repo, which builds unconfined on the host)")
 	cmd.Flags().StringVar(&devcontainerRepo, "devcontainer-repo", "", "git repo whose .devcontainer is built into the sandbox image (requires the server's image builder — WITHOUT it the run silently uses the convention image, so check 'wardyn run get <id>'; mutually exclusive with --image; builds/runs on the host, unconfined — trust the repo)")
 	cmd.Flags().StringVar(&devcontainerRef, "devcontainer-ref", "", "git ref (branch/tag/sha) to build for --devcontainer-repo")
@@ -290,7 +290,7 @@ func runCmd(client clientFn) *cobra.Command {
 
 	cmd.AddCommand(runListCmd(client), runGetCmd(client), runKillCmd(client),
 		runGrantsCmd(client), runRecordingCmd(client), runWaitReadyCmd(client), runPolicyCmd(client),
-		runLogsCmd(client), runOutputCmd(client), runSignInCmd(client), attachCmd(client), sshCmd(client))
+		runLogsCmd(client), runOutputCmd(client), runSignInCmd(client), sshCmd(client))
 	return cmd
 }
 

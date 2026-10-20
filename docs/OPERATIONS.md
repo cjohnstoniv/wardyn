@@ -2744,7 +2744,7 @@ The residuals an operator should plan for:
 - **The sandbox signs itself in.**
   - ONE chained command does the whole capture — `aws sso login --sso-session wardyn --no-browser --use-device-code && wardyn-aws-sso` — and both halves matter: `aws sso login` alone leaves the session in `~/.aws/sso/cache`, where it dies with the container, and `wardyn-aws-sso` is what uploads it through the brokered endpoint.
   - Since 0.7.5 the IMAGE runs that command, not the console: `agent-run --idle` creates a `wardyn` tmux session on `signin-pane.sh` BEFORE its own workspace prep, the pane prints *"wardyn: sign-in running — AWS sign-in sandbox. Finish the device-code step in your browser. Nothing else runs here."*, waits up to five minutes for prep, and runs the pair at most ONCE.
-  - Every attach path joins that one session — Wardyn's sign-in pane, `wardyn run attach`, an SSH attach, and **the Runs list** — because attaching is `tmux new-session -A -s wardyn`, attach-or-create.
+  - Every attach path joins that one session — Wardyn's sign-in pane, `wardyn attach`, an SSH attach, and **the Runs list** — because attaching is `tmux new-session -A -s wardyn`, attach-or-create.
   - So the path that used to hand out a bare prompt now shows the sign-in already in progress.
   - If prep never finishes it runs nothing and prints *"wardyn: workspace preparation did not finish — stop this run and start a new sign-in."*
   - If the session could not be started at all (no `tmux` in a derived image), an attach lands on a plain shell that prints *"AWS sign-in sandbox — nothing else runs here. The sign-in did not start on its own; run: `<the chained command>`"*.
@@ -2757,7 +2757,7 @@ The residuals an operator should plan for:
   - If it does NOT, and the person's SSO session reaches more than one account (or more than one role in the chosen account), the helper asks WHICH ONE.
   - It asks in the sign-in terminal.
   - It allows three tries.
-  - Anyone with a WRITABLE attach can answer — the console's sign-in pane, `wardyn run attach`, an SSH attach, or the Runs list when they hold the terminal.
+  - Anyone with a WRITABLE attach can answer — the console's sign-in pane, `wardyn attach`, an SSH attach, or the Runs list when they hold the terminal.
   - A read-only viewer cannot; the prompt itself has no deadline, so it waits until a writable attach answers or the sandbox's own 30-minute idle cap ends the run.
   - Pin the account and the role on the provider and the question never comes up.
   - While the sandbox waits on the answer, the sign-in panel's own copy already narrates the sign-in as done (`CAPTURE_HANDOFF`).

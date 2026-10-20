@@ -70,7 +70,7 @@ func (s *Server) attachPauseLimit() time.Duration {
 // frees the holder; it is bounded only by whatever the OS/proxy eventually
 // notices about the TCP connection, which can be effectively unbounded. A
 // dead holder on a quiet run therefore reads "held" forever to every other
-// attacher (browser, `wardyn run attach`, the SSH gateway) until the daemon
+// attacher (browser, `wardyn attach`, the SSH gateway) until the daemon
 // restarts.
 //
 // c.Ping requires a Read loop already running to observe the pong
