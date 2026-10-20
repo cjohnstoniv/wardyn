@@ -199,10 +199,10 @@ func (s *Server) desktopSigninStore() (store.DesktopSigninStore, bool) {
 
 // signinEntry is who may begin, share in and end a run's sign-in: a named
 // person who created the run. Not a super admin on someone else's run, not
-// the admin token, not a service identity. DSK-B's admitRunEntry replaces
-// this when it lands.
+// the admin token (it is ActorSystem, never a person), not a service
+// identity. DSK-B's admitRunEntry replaces this when it lands.
 var signinEntry = func(run types.AgentRun, actorType types.ActorType, principal string) bool {
-	return actorType == types.ActorHuman && principal != "" && principal != adminTokenPrincipal &&
+	return actorType == types.ActorHuman && principal != "" &&
 		!isServicePrincipal(principal) && run.CreatedBy == principal
 }
 
