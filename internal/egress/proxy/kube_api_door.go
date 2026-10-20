@@ -152,13 +152,19 @@ func (d *kubeAPIDoor) admit(method, raw string, h http.Header) error {
 	if !slices.Contains(d.namespaces, ns) {
 		return fmt.Errorf("the namespace %q is not one this run's kubectl may reach (%s)", ns, strings.Join(d.namespaces, ", "))
 	}
+	return d.admitInNamespace(method, segs[0] == "api", rest)
+}
+
+// admitInNamespace judges what follows /namespaces/<ns> in an admitted
+// namespace; core is the core API group (/api).
+func (d *kubeAPIDoor) admitInNamespace(method string, core bool, rest []string) error {
 	switch {
 	case len(rest) == 0 && method != http.MethodGet,
 		len(rest) == 1 && (rest[0] == "finalize" || rest[0] == "status"):
 		return errors.New("this run's kubectl cannot change or delete a namespace itself")
 	case len(rest) > 3:
 		return errors.New("the path is deeper than a Kubernetes resource and subresource")
-	case len(rest) >= 1 && segs[0] == "api" && rest[0] == "secrets":
+	case len(rest) >= 1 && core && rest[0] == "secrets":
 		return errors.New("Secrets are not readable or writable through this run's kubectl")
 	case len(rest) == 3 && slices.Contains(kubeSubresourcesRefused, rest[2]):
 		return fmt.Errorf("%s is not allowed for this run's kubectl", rest[2])
