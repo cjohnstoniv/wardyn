@@ -24,6 +24,7 @@ import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
 import { PageHeader } from "../../wardyn/page-header";
+import { PageContainer } from "../../wardyn/page-container";
 import { EmptyState, STATES, TableSkeleton } from "../../wardyn/states";
 import { MintTokenDialog } from "./mint-token-dialog";
 import { PoolsTab } from "./pools/pools-tab";
@@ -241,7 +242,7 @@ export function RunnersScreen() {
 
   const ready = status === "ready";
   return (
-    <div className="mx-auto max-w-[1200px] px-6 py-6">
+    <PageContainer width="list">
       <PageHeader title={RUNNERS.NAV} description={<span className="block max-w-[68ch]">{tab === "pools" ? POOLS.LEAD : RUNNERS.LEAD}</span>} actions={actions} />
       {tab === "runners" && <p className="-mt-2 mb-3 max-w-[80ch] text-body text-muted-foreground">{RUNNER_V6.TAB_PURPOSE}</p>}
       {ready && <Tabs tab={tab} onChange={(t) => go(t)} />}
@@ -257,7 +258,7 @@ export function RunnersScreen() {
       />
       <MintTokenDialog open={minting} onOpenChange={setMinting} onMinted={reload} />
       <RunnersSwitchDialog mode={switching} onOpenChange={(o) => !o && setSwitching(null)} onChanged={reload} />
-    </div>
+    </PageContainer>
   );
 }
 

@@ -278,7 +278,7 @@ export function SignIn({
               <div className="flex size-12 items-center justify-center rounded-full border border-primary/25 bg-primary/12">
                 <ShieldCheck className="size-6 text-primary" />
               </div>
-              <h1 className="text-xl font-semibold tracking-tight text-foreground">
+              <h1 className="text-page text-foreground">
                 Wardyn
               </h1>
               {/* No trust-domain / identity-provider chips here. Someone at a sign-in

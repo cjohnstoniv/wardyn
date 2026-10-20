@@ -43,6 +43,7 @@ import { ACCESS_STATE } from "../../../lib/people-access-copy";
 import { IMAGES } from "../../../lib/availability-copy";
 import { Button } from "../../ui/button";
 import { PageHeader } from "../../wardyn/page-header";
+import { PageContainer } from "../../wardyn/page-container";
 import { Chip, OperatorOnlyHint } from "../../wardyn/primitives";
 import { SavedElsewhereBanner } from "../../wardyn/saved-elsewhere-banner";
 import { useDiscardReload } from "../../wardyn/use-discard-reload";
@@ -240,7 +241,7 @@ export function ProvidersScreen() {
   }
 
   return (
-    <div className="mx-auto max-w-[900px] px-6 py-6">
+    <PageContainer width="form">
       <PageHeader
         title={PROVIDERS.TITLE}
         description={PROVIDERS.LEAD}
@@ -400,6 +401,6 @@ export function ProvidersScreen() {
           )}
         </section>
       )}
-    </div>
+    </PageContainer>
   );
 }

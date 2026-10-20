@@ -29,6 +29,8 @@ import { useConsoleMode } from "../../wardyn/console-view";
 import { NR_SAVE } from "../../wardyn/copy/new-run/save";
 import { NR_TEMPLATES as T } from "../../wardyn/copy/new-run/templates";
 import { Notice } from "../../wardyn/notice";
+import { PageContainer } from "../../wardyn/page-container";
+import { PageHeader } from "../../wardyn/page-header";
 import { Segmented } from "../../wardyn/segmented";
 import { EmptyState, ErrorState, TableSkeleton } from "../../wardyn/states";
 import { NEW_RUN_PATH } from "../new-run-flow/draft/new-run-url";
@@ -179,19 +181,16 @@ export function TemplatesScreen() {
     );
 
   return (
-    // The prototype's page column (proto wardyn-templates.html:56, 120): 1120 px, 24 px sides (16 px below 760 px),
-    // 32 px above and 96 px below.
-    <div className="mx-auto max-w-[1120px] space-y-5 px-6 pt-8 pb-24 max-[760px]:px-4 max-[760px]:pt-6">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div className="space-y-1">
-          <div className="label-eyebrow">{T.EYEBROW}</div>
-          <h1 className="text-[1.75rem] leading-tight font-bold text-foreground">{T.TITLE}</h1>
-          <p className="max-w-[66ch] text-sm text-muted-foreground">{T.LEDE}</p>
-        </div>
-        <Button asChild>
-          <Link to={NEW_RUN_PATH}>{T.NEW_FROM_SCRATCH}</Link>
-        </Button>
-      </div>
+    <PageContainer width="list" className="space-y-5 pb-24">
+      <PageHeader
+        title={T.TITLE}
+        description={T.LEDE}
+        actions={
+          <Button asChild>
+            <Link to={NEW_RUN_PATH}>{T.NEW_FROM_SCRATCH}</Link>
+          </Button>
+        }
+      />
 
       <div className="flex flex-wrap items-center gap-3">
         <div role="group" aria-label={T.SCOPE_FILTER_ARIA}>
@@ -278,6 +277,6 @@ export function TemplatesScreen() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </PageContainer>
   );
 }

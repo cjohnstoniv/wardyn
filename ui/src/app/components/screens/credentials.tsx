@@ -26,6 +26,7 @@ import { Field } from "../wardyn/form-primitives";
 import { Chip } from "../wardyn/primitives";
 import { EmptyState, ErrorState, TableSkeleton, loadFailStatus, type ScreenStatus } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
+import { PageContainer } from "../wardyn/page-container";
 import { SECURITY_ONLY_REASON } from "../wardyn/copy";
 import { MODEL_PROVIDERS } from "../../lib/model-providers-copy";
 import { INVENTORY, ERASE, ERASE_DATA, KEY_DOMAINS } from "../wardyn/copy/credentials";
@@ -163,7 +164,7 @@ export function CredentialsScreen() {
       : "local";
 
   return (
-    <div className="mx-auto max-w-[1200px] px-6 py-6">
+    <PageContainer width="list">
       <PageHeader
         title={INVENTORY.TITLE}
         description={INVENTORY.LEDE}
@@ -326,7 +327,7 @@ export function CredentialsScreen() {
         onOpenChange={(open) => !open && setEraseTarget(null)}
         onErased={load}
       />
-    </div>
+    </PageContainer>
   );
 }
 

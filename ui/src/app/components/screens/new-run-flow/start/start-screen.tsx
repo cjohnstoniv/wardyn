@@ -28,7 +28,7 @@ export function StartScreen({ go }: NewRunScreenProps) {
       {/* Make's StepHeader, as StepShell draws it for the steps (App.tsx:1093-1097). */}
       <header className="flex max-w-[680px] flex-col gap-2.5">
         <p className="mb-1 label-eyebrow label-eyebrow-primary">{NR_START.EYEBROW}</p>
-        <h1 ref={heading} tabIndex={-1} className="text-[clamp(28px,4vw,42px)] leading-[1.08] font-normal tracking-[-0.04em] outline-none">{NR_START.TITLE}</h1>
+        <h1 ref={heading} tabIndex={-1} className="text-display outline-none">{NR_START.TITLE}</h1>
         <p className="max-w-[620px] text-muted-foreground">{NR_START.LEDE}</p>
       </header>
       <div className="mt-[18px] grid gap-3.5 min-[761px]:grid-cols-3">

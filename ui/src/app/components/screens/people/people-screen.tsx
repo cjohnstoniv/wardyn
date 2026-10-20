@@ -23,6 +23,7 @@ import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../ui/table";
 import { PageHeader } from "../../wardyn/page-header";
+import { PageContainer } from "../../wardyn/page-container";
 import { Chip } from "../../wardyn/primitives";
 import { EmptyState, ErrorState, TableSkeleton, loadFailStatus, type ScreenStatus } from "../../wardyn/states";
 import { AccessPanel, type AccessLoadState } from "../setup/access-panel";
@@ -218,7 +219,7 @@ export function PeopleScreen() {
   };
 
   return (
-    <div className="mx-auto max-w-[1200px] px-6 py-6">
+    <PageContainer width="list">
       <PageHeader
         title={P.TITLE}
         description={P.LEAD}
@@ -259,6 +260,6 @@ export function PeopleScreen() {
         onChanged={refresh}
       />
       <AddPersonDialog open={adding} onOpenChange={setAdding} onAdded={refresh} />
-    </div>
+    </PageContainer>
   );
 }

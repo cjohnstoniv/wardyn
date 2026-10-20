@@ -39,6 +39,7 @@ import { health } from "../../../lib/api/health";
 import type { SetupStatus, SiteConfig } from "../../../lib/types";
 import { CC_ORDER } from "../../../lib/types";
 import { PageHeader } from "../../wardyn/page-header";
+import { PageContainer } from "../../wardyn/page-container";
 import { ErrorState, TableSkeleton } from "../../wardyn/states";
 import { Mono } from "../../wardyn/code-block";
 import { strongestAvailable } from "../../wardyn/default-confinement";
@@ -363,7 +364,7 @@ export function AdminSettingsScreen() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-[900px] px-6 pt-8 pb-4">
+    <PageContainer width="form" className="pb-4">
       <PageHeader
         title="Settings"
         description="This host, what runs your agents, and how Wardyn reaches your code."
@@ -418,6 +419,6 @@ export function AdminSettingsScreen() {
           <ScimCard />
         </div>
       )}
-    </div>
+    </PageContainer>
   );
 }

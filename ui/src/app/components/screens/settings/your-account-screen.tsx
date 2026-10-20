@@ -25,6 +25,7 @@ import * as React from "react";
 import { setup as setupApi } from "../../../lib/api/setup";
 import type { SetupStatus } from "../../../lib/types";
 import { PageHeader } from "../../wardyn/page-header";
+import { PageContainer } from "../../wardyn/page-container";
 import { YOUR_ACCOUNT } from "../../wardyn/copy/console-view";
 import { useShellSetupStatus } from "../../wardyn/model-access-context";
 import { ModelConnectionsCard } from "./model-connections-card";
@@ -55,7 +56,7 @@ export function YourAccountScreen() {
   React.useEffect(load, [load]);
 
   return (
-    <div className="mx-auto w-full max-w-[900px] px-6 py-8">
+    <PageContainer width="form" className="pb-8">
       <PageHeader title="Your account" description={YOUR_ACCOUNT.LEDE} />
       {state === "loading" && <TableSkeleton />}
       {state === "error" && <ErrorState onRetry={load} />}
@@ -82,6 +83,6 @@ export function YourAccountScreen() {
           <ServiceIdentitiesCard />
         </div>
       )}
-    </div>
+    </PageContainer>
   );
 }

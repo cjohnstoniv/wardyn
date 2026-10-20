@@ -53,6 +53,7 @@ import { Field, Switch } from "../wardyn/form-primitives";
 import { Mono } from "../wardyn/code-block";
 import { SubmittedNote } from "./governance/submitted-note";
 import { PageHeader } from "../wardyn/page-header";
+import { PageContainer } from "../wardyn/page-container";
 import { PreviewAsNewUser } from "../wardyn/user-preview";
 import { DefineOwnComponentsRow } from "./components/define-own-row";
 import { SelfHostRunnerRow } from "./self-host-runner-row";
@@ -290,7 +291,7 @@ export function PermissionsScreen() {
   const nothingEnforced = !!snap && CAPABILITY_KINDS.every((k) => !snap.enforcement[k]);
 
   return (
-    <div className="mx-auto max-w-[1120px] px-6 py-6">
+    <PageContainer width="list">
       <PageHeader title={PERM.TITLE} description={PERM.LEAD} actions={<PreviewAsNewUser />} />
 
       <div className="space-y-2">
@@ -492,7 +493,7 @@ export function PermissionsScreen() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </PageContainer>
   );
 }
 

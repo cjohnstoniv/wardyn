@@ -48,6 +48,7 @@ import { Mono } from "../wardyn/code-block";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { AuditDecision, ErasedFields, RuleSourceChip, toolRuleDecision } from "../wardyn/audit-decision";
 import { PageHeader } from "../wardyn/page-header";
+import { PageContainer } from "../wardyn/page-container";
 import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
 import { RETENTION } from "../wardyn/copy/audit-retention";
 import { AuditRetention } from "./audit-retention";
@@ -478,7 +479,7 @@ export function AuditScreen() {
   };
 
   return (
-    <div className="mx-auto max-w-[1400px] px-6 py-6">
+    <PageContainer width="list">
       <PageHeader
         title="Audit"
         description="Append-only. Every egress decision, credential broker, approval, and enforcement action — across every run."
@@ -649,7 +650,7 @@ export function AuditScreen() {
       </>
       )}
 
-    </div>
+    </PageContainer>
   );
 }
 

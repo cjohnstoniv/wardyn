@@ -647,7 +647,7 @@ export function SetupScreen({
   if (status.unreachable) {
     return (
       <div className="mx-auto w-full max-w-[1200px] px-6 py-8">
-        <h1 className="text-lg font-semibold text-foreground">
+        <h1 className="text-page text-foreground">
           Getting started
         </h1>
         <div className="mt-4 max-w-xl rounded-lg border border-border bg-muted/40 p-4">

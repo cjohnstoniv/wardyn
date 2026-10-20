@@ -32,6 +32,7 @@ import { Button } from "../ui/button";
 import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
+import { PageContainer } from "../wardyn/page-container";
 import { ReasonDialog } from "../wardyn/reason-dialog";
 import { REAUTH_ROW, REAUTH_TITLE, reauthRowHint, type ReauthAudience } from "../wardyn/model-access-copy";
 import { useOperator, useRole } from "../wardyn/operator-context";
@@ -468,7 +469,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   const anyToolCall = pendingItems.some((a) => a.kind === "tool_call") || decidedItems.some((a) => a.kind === "tool_call");
 
   return (
-    <div className="mx-auto max-w-[880px] px-6 py-6">
+    <PageContainer width="form">
       <PageHeader
         title="Approvals"
         description="Requests an agent raised that need a person's decision. Each card says exactly what approving grants."
@@ -587,6 +588,6 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
           being offered rather than inheriting the fail-safe-disabled default;
           a member/no-workspace decide still gets the server's honest 400/403. */}
       <ReasonDialog prompt={prompt} hasWorkspace onClose={() => setPrompt(null)} onSubmit={decide} />
-    </div>
+    </PageContainer>
   );
 }

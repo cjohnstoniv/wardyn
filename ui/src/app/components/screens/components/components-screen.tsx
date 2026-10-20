@@ -34,6 +34,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { AvailabilityControl } from "../../wardyn/availability-control";
 import { COMPONENTS_ADMIN as T } from "../../wardyn/copy/components-admin";
 import { PageHeader } from "../../wardyn/page-header";
+import { PageContainer } from "../../wardyn/page-container";
 import { Chip, OperatorOnlyHint } from "../../wardyn/primitives";
 import { EmptyState, ErrorState, TableSkeleton, loadFailStatus, type ScreenStatus } from "../../wardyn/states";
 import { ComponentEditor } from "./component-editor";
@@ -110,7 +111,7 @@ export function ComponentsScreen() {
   const empty = status === "ready" && rows.length === 0;
 
   return (
-    <div className="mx-auto max-w-[1120px] px-6 py-6">
+    <PageContainer width="form">
       <PageHeader
         title={T.TITLE}
         description={T.LEAD}
@@ -236,6 +237,6 @@ export function ComponentsScreen() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </PageContainer>
   );
 }

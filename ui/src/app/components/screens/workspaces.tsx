@@ -42,6 +42,7 @@ import { Chip } from "../wardyn/primitives";
 import { OPERATOR_ONLY_REASON } from "../wardyn/copy";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
+import { PageContainer } from "../wardyn/page-container";
 import { AddWorkspaceDialog } from "./add-workspace-dialog";
 import { llmCredLabel, llmCredTone } from "./workspace-llm-cred";
 import { DENIED, MEMBER_WORKSPACE } from "../../lib/permissions-copy";
@@ -176,7 +177,7 @@ export function WorkspacesScreen() {
       : "A repo or directory a run can attach. Runs can only attach what's listed here.";
 
   return (
-    <div className="mx-auto max-w-[1400px] px-6 py-6">
+    <PageContainer width="list">
       <PageHeader
         title="Workspaces"
         description={description}
@@ -390,6 +391,6 @@ export function WorkspacesScreen() {
           load();
         }}
       />
-    </div>
+    </PageContainer>
   );
 }
