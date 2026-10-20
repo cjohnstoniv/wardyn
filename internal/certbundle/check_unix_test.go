@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -25,6 +26,7 @@ import (
 // the runner's org CA check carries a byte-identical copy of.
 type anchorFileCase struct {
 	Name           string   `json:"name"`
+	FileType       string   `json:"file_type"`
 	FileMode       string   `json:"file_mode"`
 	FileOwner      string   `json:"file_owner"`
 	DirMode        string   `json:"dir_mode"`
@@ -54,6 +56,12 @@ type anchorFixture struct {
 }
 
 func newAnchorFixture(t *testing.T, pemBytes []byte, fileMode, dirMode os.FileMode, fileOwner, dirOwner string) anchorFixture {
+	return newAnchorFixtureOfType(t, "", pemBytes, fileMode, dirMode, fileOwner, dirOwner)
+}
+
+// newAnchorFixtureOfType is newAnchorFixture with the file's type: "" is a
+// regular file, "fifo" a named pipe.
+func newAnchorFixtureOfType(t *testing.T, fileType string, pemBytes []byte, fileMode, dirMode os.FileMode, fileOwner, dirOwner string) anchorFixture {
 	t.Helper()
 	base := t.TempDir()
 	f := anchorFixture{base: base, dir: filepath.Join(base, "store")}
@@ -61,8 +69,17 @@ func newAnchorFixture(t *testing.T, pemBytes []byte, fileMode, dirMode os.FileMo
 	if err := os.Mkdir(f.dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(f.path, pemBytes, 0o600); err != nil {
-		t.Fatal(err)
+	switch fileType {
+	case "":
+		if err := os.WriteFile(f.path, pemBytes, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	case "fifo":
+		if err := syscall.Mkfifo(f.path, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	default:
+		t.Fatalf("unknown file_type %q", fileType)
 	}
 	if err := os.Chmod(f.path, fileMode); err != nil {
 		t.Fatal(err)
@@ -172,12 +189,33 @@ func TestLoadFile_AnchorFileCases(t *testing.T) {
 			if tc.DirSticky {
 				dirMode |= os.ModeSticky
 			}
-			f := newAnchorFixture(t, Encode(bundle), octal(t, tc.FileMode), dirMode, tc.FileOwner, tc.DirOwner)
+			f := newAnchorFixtureOfType(t, tc.FileType, Encode(bundle), octal(t, tc.FileMode), dirMode, tc.FileOwner, tc.DirOwner)
 			use := f.path
 			if tc.ViaLinkDirMode != "" {
 				use = f.link(t, octal(t, tc.ViaLinkDirMode))
 			}
-			got, warnings, err := LoadFile(use, now)
+			// A FIFO with no writer would block a blocking open forever, so every
+			// load must return within 2 s.
+			type result struct {
+				certs    []*x509.Certificate
+				warnings []string
+				err      error
+			}
+			done := make(chan result, 1)
+			go func() {
+				c, w, err := LoadFile(use, now)
+				done <- result{c, w, err}
+			}()
+			var r result
+			select {
+			case r = <-done:
+			case <-time.After(2 * time.Second):
+				t.Fatal("LoadFile has not returned within 2 s")
+			}
+			got, warnings, err := r.certs, r.warnings, r.err
+			if tc.FileType == "fifo" && (err == nil || !strings.Contains(err.Error(), "not a regular file")) {
+				t.Fatalf("LoadFile on a FIFO: %v, want a refusal containing %q", err, "not a regular file")
+			}
 			switch tc.Expect {
 			case "load":
 				if err != nil {

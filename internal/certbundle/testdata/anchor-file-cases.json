@@ -212,5 +212,18 @@
     ],
     "expect": "load",
     "warnings": 0
+  },
+  {
+    "name": "fifo_refuses_without_blocking",
+    "file_type": "fifo",
+    "file_mode": "0600",
+    "file_owner": "self",
+    "dir_mode": "0700",
+    "dir_sticky": false,
+    "dir_owner": "self",
+    "via_link_dir_mode": "",
+    "certs": [],
+    "expect": "refuse",
+    "warnings": 0
   }
 ]
