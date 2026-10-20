@@ -276,6 +276,9 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		// Sync lists the wardyn-sync sessions open now (sync.open), from the
 		// gateway's live per-run sync budget; always present, empty when none.
 		Sync runSyncView `json:"sync"`
+		// Agents (#1987) is every agent of a background run with several, the run's own
+		// first, each with its own task; absent on every other run.
+		Agents []runDetailAgent `json:"agents,omitempty"`
 	}{
 		AgentRun: run, UIApps: apps, UserTypeName: s.runUserTypeName(r, run.UserType),
 		ModelProviderName: providerName, ModelProviderDeleted: providerDeleted,
@@ -284,6 +287,7 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		KeptUntil:      s.endedRunKeptUntil(run),
 		Policy:         s.runPolicyRef(r.Context(), run),
 		Sync:           s.runSyncOpenView(run.ID),
+		Agents:         s.runDetailAgents(r.Context(), run),
 	})
 }
 

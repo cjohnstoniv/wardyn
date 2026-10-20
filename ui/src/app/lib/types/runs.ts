@@ -491,6 +491,14 @@ export interface RunDetail extends AgentRun {
   policy?: PolicyRef;
   // Wardyn-sync sessions open now (GET /runs/{id} only); see RunSync.
   sync?: RunSync;
+  // Every agent of a background run with several, the run's own first; absent otherwise.
+  agents?: RunDetailAgent[];
+}
+
+// One agent of a run with several agents (runDetailAgent, internal/api/run_multi_agent.go).
+export interface RunDetailAgent {
+  agent: string;
+  task?: string;
 }
 
 // GET /api/v1/runs/{id}/policy — the policy a run actually got (the run page's

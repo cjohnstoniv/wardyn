@@ -505,6 +505,7 @@ func run() error {
 		// "no", or a misspelling) leaves the broker ON.
 		DisableGitPATBroker:    strings.EqualFold(strings.TrimSpace(*f.gitPATBroker), "off"),
 		RefuseGitPATBrokerOff:  *f.gitPATBrokerOffRefused,
+		MultiAgentTasks:        *f.multiAgentTasks,
 		ScrubProxyResponses:    *f.proxyResponseScrub,
 		EnvSecretPlaceholders:  *f.envSecretPlaceholders,
 		FileSecretPlaceholders: *f.fileSecretPlaceholders,

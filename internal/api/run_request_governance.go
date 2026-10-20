@@ -6,6 +6,7 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 )
@@ -156,7 +157,7 @@ func (s *Server) runGovernanceSupervision(r *http.Request, req createRunRequest,
 	// there would silently ship the unsupervised run the explicit-hold refusal
 	// exists to reject — the same contradiction, arriving through a
 	// field the caller never set.
-	if req.Agent == "codex-cli" && !requestIsInteractive(req) {
+	if !requestIsInteractive(req) && slices.Contains(taskAgents(req), codexHarness) {
 		return runDenied(authz.Deny(authz.ReasonGovernanceProfile, "runs.agent", fmt.Sprintf(
 			"codex-cli is not supported under your governance profile %q: its tool rules hold or deny, and codex-cli has no external tool-approval contract. Launch a different agent.", name)).WithPolicy(policy))
 	}

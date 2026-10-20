@@ -125,6 +125,9 @@ type SetupStatus struct {
 	// redactSetupStatusForUser does not zero it — a bare count carries no
 	// PEM content, host name, or other detail members are barred from.
 	TrustedCACerts int `json:"trusted_ca_certs,omitempty"`
+	// Features is the server's feature switches the console offers a step by. A
+	// switch, never a person's state, so the member redaction keeps it.
+	Features SetupFeatures `json:"features"`
 	// ModelProviders is the model providers THIS PRINCIPAL may use, in the
 	// member-safe shape (SetupModelProvider) — the same for every tier, so the
 	// member redaction has nothing to strip. `omitzero`, not `omitempty`:
@@ -230,6 +233,13 @@ type SetupPlatform struct {
 	// KVM: the host exposes /dev/kvm — lets the UI split Vault's "incompatible
 	// with this hardware" from a fixable "needs setup" (additive; old UIs ignore).
 	KVM bool `json:"kvm"`
+}
+
+// SetupFeatures holds SetupStatus.Features, one key per switch.
+type SetupFeatures struct {
+	// MultiAgentTasks is WARDYN_MULTI_AGENT_TASKS: a background agent task may give
+	// each agent its own task (#1987).
+	MultiAgentTasks bool `json:"multi_agent_tasks"`
 }
 
 // llmPathExists is LLMReady: at least one enabled model provider serves an
@@ -439,6 +449,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		// A count derived from the SAME PEM string TrustedCAPEM's doc comment
 		// describes — no second boot-time field to keep in sync. 0 when unset.
 		TrustedCACerts: strings.Count(s.cfg.TrustedCAPEM, "-----BEGIN CERTIFICATE-----"),
+		Features:       SetupFeatures{MultiAgentTasks: s.cfg.MultiAgentTasks},
 	}
 	resp.HarnessSets = visibleHarnessSets(s.cfg.AgentImages, resp.Harnesses)
 	// DELIBERATELY isOperator (three-tier doctrine, internal/auth/oidc's

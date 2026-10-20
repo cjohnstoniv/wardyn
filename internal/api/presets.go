@@ -351,6 +351,9 @@ func (s *Server) decodeRunRequest(w http.ResponseWriter, r *http.Request, req *c
 	if id, err := uuid.Parse(req.RunnerID); err == nil {
 		req.RunnerID = id.String()
 	}
+	if s.multiAgentTasksOffRefusal(*req).write(s, w, r) {
+		return false
+	}
 	// After the preset, which can bring its own request: a new client's carriers
 	// are refused or projected onto the legacy fields here, before any gate reads them.
 	return !applyRunMode(req).write(s, w, r)

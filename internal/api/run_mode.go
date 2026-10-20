@@ -180,6 +180,9 @@ func toolShapeRefusal(i int, t client.IncludedTool, before []client.IncludedTool
 		if t.ModelProvider != "" && !modelProviderIDPattern.MatchString(t.ModelProvider) {
 			return runModeInvalid("tools[%d].model_provider: %q is not a model provider id", i, t.ModelProvider)
 		}
+		if t.Task != "" && !runModeText(t.Task, true) {
+			return runModeInvalid("tools[%d].task: write what the agent should do, up to %d characters", i, maxRunTaskLen)
+		}
 		return toolRulesShapeRefusal(i, t)
 	case client.IncludedToolComponent:
 		switch {
@@ -187,6 +190,8 @@ func toolShapeRefusal(i int, t client.IncludedTool, before []client.IncludedTool
 			return runModeInvalid("tools[%d].component: name the component this tool is", i)
 		case t.ModelProvider != "" || len(t.ToolRules) > 0 || t.DefaultEffect != "":
 			return runModeInvalid("tools[%d]: only a harness has a model provider and tool rules", i)
+		case t.Task != "":
+			return runModeInvalid("tools[%d].task: only a harness runs a task", i)
 		}
 		if err := t.Component.Validate(proxy.ValidDomainEntry); err != nil {
 			return runModeInvalid("tools[%d].component: %v", i, err)
@@ -362,6 +367,9 @@ func runModeRunWideRules(req createRunRequest) (field, instead string) {
 func experienceConflictRefusal(req createRunRequest) *runRefusal {
 	w := req.Workload
 	pol, at := requestPolicyRules(req)
+	if i := slices.IndexFunc(req.Tools, hasOwnTask); i >= 0 && !isAgentTask(req) {
+		return runError(http.StatusUnprocessableEntity, reasonRunModeConflict, toolTaskOutsideAgentTaskMsg(i))
+	}
 	switch req.Experience {
 	case client.ExperienceBackground:
 		switch {
@@ -371,6 +379,8 @@ func experienceConflictRefusal(req createRunRequest) *runRefusal {
 			return runError(http.StatusUnprocessableEntity, reasonRunModeConflict, idleStopBackgroundMsg())
 		case pol != nil && len(pol.UIApps) > 0:
 			return runModeConflict(at+".ui_apps", "A background task has no web application gateway.")
+		case slices.ContainsFunc(req.Tools, hasOwnTask):
+			return multiAgentTaskConflict(req)
 		case w != nil && w.Kind == client.WorkloadAgentTask && slices.ContainsFunc(req.Tools, func(t client.IncludedTool) bool { return t.ID != w.Agent }):
 			return runModeConflict("tools", "A background agent task includes only the harness it runs, which is workload.agent.")
 		}
@@ -577,6 +587,9 @@ func projectRunMode(req *createRunRequest) {
 		req.Agent, req.Task = w.Agent, w.Task
 		if len(req.Tools) == 1 {
 			req.ModelProvider = req.Tools[0].ModelProvider
+		}
+		if i := slices.IndexFunc(req.Tools, func(t client.IncludedTool) bool { return t.ID == w.Agent }); i >= 0 && isMultiAgentTask(*req) {
+			req.ModelProvider = req.Tools[i].ModelProvider
 		}
 	case client.ExperienceInteractive:
 		req.Interactive = true

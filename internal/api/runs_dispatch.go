@@ -798,7 +798,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	s.metrics.sandboxLaunched(s.cfg.Now().Sub(run.CreatedAt))
 
 	// INTERACTIVE vs task exec vs BYOI selftest — see startAgentOrIdle.
-	s.startAgentOrIdle(ctx, run, sb.Ref, p.Image, p.Interactive, execution, auditAgentPolicy)
+	s.startAgentsOrIdle(ctx, run, p.Harnesses, sb.Ref, p.Image, p.Interactive, execution, auditAgentPolicy)
 }
 
 // startAgentOrIdle is dispatch's final phase, after the run is RUNNING.
@@ -822,6 +822,12 @@ const mainProcessExecID = runner.MainProcessExecID
 // exec-less runner that is the moment its container — and the managed files
 // delivered into it — first exists.
 func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, image string, interactive bool, execution runnerExecution, onAgentStarted func()) {
+	s.startAgentsOrIdle(ctx, run, nil, ref, image, interactive, execution, onAgentStarted)
+}
+
+// startAgentsOrIdle is startAgentOrIdle for a run whose harnesses may run tasks of their
+// own (several agents in one run): the task exec then starts every agent (agentTaskArgv).
+func (s *Server) startAgentsOrIdle(ctx context.Context, run types.AgentRun, harnesses []types.RunHarness, ref, image string, interactive bool, execution runnerExecution, onAgentStarted func()) {
 	byoi := strings.HasPrefix(image, "wardyn-byoi/")
 
 	if interactive {
@@ -858,7 +864,7 @@ func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, 
 				return
 			}
 		}
-		argv := []string{"/usr/local/bin/agent-run", run.Task}
+		argv := agentTaskArgv(run, harnesses)
 		execID, xerr := s.cfg.Runner.Exec(execution.bind(ctx), ref, argv)
 		if xerr == nil {
 			xerr = s.bindRunnerExecution(ctx, execution, execID)

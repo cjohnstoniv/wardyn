@@ -225,7 +225,7 @@ func (s *Server) readSharedOutput(w http.ResponseWriter, r *http.Request, id uui
 	case !ch.Found:
 		return false
 	}
-	writeJSON(w, http.StatusOK, runOutputResponse{
+	s.writeRunOutput(w, r, id, runOutputResponse{
 		Output: string(ch.Bytes), Truncated: ch.Truncated, Source: "stdout", MaskScope: s.liveMaskScope(false),
 	})
 	return true

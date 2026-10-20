@@ -578,6 +578,11 @@ type Config struct {
 	// the broker is off, a resident PAT on an operator's run too; a member's
 	// run is refused it either way (patNarrowingRefusal).
 	RefuseGitPATBrokerOff bool
+	// MultiAgentTasks (WARDYN_MULTI_AGENT_TASKS, off by default in 0.10.0) lets a
+	// background agent task run several agents side by side, each on its own
+	// tools[].task. Off, a request carrying one is refused multi_agent_tasks_off
+	// and every other request is unchanged.
+	MultiAgentTasks bool
 	// ScrubProxyResponses (WARDYN_PROXY_RESPONSE_SCRUB) stamps
 	// proxy.Config.ScrubResponses on every new dispatch.
 	ScrubProxyResponses bool

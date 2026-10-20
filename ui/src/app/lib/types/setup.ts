@@ -329,6 +329,11 @@ export interface SetupStatus {
    *  TRUSTED_CA_COUNT(n) (F22 — the data has shipped server-side since
    *  before this console read it). */
   trusted_ca_certs?: number;
+  /** The server's feature switches. Older daemons omit it; absent reads as off. */
+  features?: {
+    /** WARDYN_MULTI_AGENT_TASKS: a background agent task may give each agent its own task. */
+    multi_agent_tasks: boolean;
+  };
   checks: SetupCheck[];
   auth: {
     mode: "local" | "sso" | "token" | "disabled";

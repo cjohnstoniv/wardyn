@@ -33,7 +33,7 @@ func TestRunHarnesses_PersistedOrAborted(t *testing.T) {
 
 	rows := []types.RunHarness{
 		{Harness: "claude-code", ModelProviderID: "prov-a", Starts: true},
-		{Harness: "codex-cli", ModelProviderID: "prov-b"},
+		{Harness: "codex-cli", ModelProviderID: "prov-b", Task: "write the tests"},
 		{Harness: "opencode"},
 	}
 	if err := st.PutRunHarnesses(ctx, run.ID, rows); err != nil {

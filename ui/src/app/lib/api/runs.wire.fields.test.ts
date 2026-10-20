@@ -208,7 +208,7 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
     expect(omitted).toEqual([]);
   });
 
-  it("RunDetail adds exactly ui_apps, user_type_name, the model provider's name and deleted flag, the launching portal's name, the pool's name, the ended run's kept_until, the run's policy and its open sync sessions over AgentRun — " +
+  it("RunDetail adds exactly ui_apps, user_type_name, the model provider's name and deleted flag, the launching portal's name, the pool's name, the ended run's kept_until, the run's policy, its open sync sessions and its agents over AgentRun — " +
     "the fields only GET /runs/{id} sends (handleGetRun's anonymous wrapper struct, runs_policy.go)", () => {
     const runDetailOwnKeys = tsInterfaceKeys(runsTs, "RunDetail");
     expect(runDetailOwnKeys).toEqual([
@@ -221,7 +221,13 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
       "kept_until",
       "policy",
       "sync",
+      "agents",
     ]);
+  });
+
+  it("RunDetailAgent's keys are exactly runDetailAgent's json tags (GET /runs/{id} agents, run_multi_agent.go)", () => {
+    const multiGo = readFileSync(join(root, "internal/api/run_multi_agent.go"), "utf8");
+    expect(tsInterfaceKeys(runsTs, "RunDetailAgent").sort()).toEqual(goJSONTags(multiGo, "runDetailAgent").sort());
   });
 
   it("RunSync and RunSyncOpen's keys are exactly runSyncView's and runSyncOpen's json tags (GET /runs/{id} sync.open, sshgateway_sync.go)", () => {

@@ -331,6 +331,9 @@ type runOutputResponse struct {
 	CaptureGap bool       `json:"capture_gap"`           // the output could not be captured (no tail held, nothing to recover)
 	MaskScope  string     `json:"mask_scope,omitempty"`  // "run": masked against the run's complete manifest throughout; "globals_only": not
 	CapturedAt *time.Time `json:"captured_at,omitempty"` // when the final row was written; omitted while live
+	// Agents is each agent's state in a run with several agents, as the last status
+	// line in this output reads (runOutputAgents); absent otherwise.
+	Agents []runAgentState `json:"agents,omitempty"`
 }
 
 // handleRunOutput serves GET /api/v1/runs/{id}/output?tail=N — owner or admin,
@@ -415,7 +418,7 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 		if len(out) > limit {
 			out, truncated = out[len(out)-limit:], true
 		}
-		writeJSON(w, http.StatusOK, runOutputResponse{
+		s.writeRunOutput(w, r, id, runOutputResponse{
 			Output: string(out), Truncated: truncated, Complete: true, Source: row.Source, Incomplete: row.Incomplete,
 			CaptureGap: row.CaptureGap, MaskScope: row.MaskScope, CapturedAt: row.CapturedAt,
 		})
@@ -443,7 +446,7 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 				"this run's output has expired: it is kept for WARDYN_EXEC_OUTPUT_TAIL_TTL after the run's last output")
 			return
 		}
-		writeJSON(w, http.StatusOK, runOutputResponse{
+		s.writeRunOutput(w, r, id, runOutputResponse{
 			Output: string(v.out), Truncated: v.truncated, Complete: v.complete, Source: "stdout", Incomplete: v.incomplete,
 			MaskScope: s.liveMaskScope(v.uncovered),
 		})
