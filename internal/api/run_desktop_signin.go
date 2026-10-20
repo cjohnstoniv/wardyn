@@ -85,6 +85,16 @@ func (s *Server) desktopSigninsFor(ctx context.Context, run types.AgentRun, poli
 		s.signinTarget(ctx, run)
 }
 
+// desktopSigninDispatch is desktopSigninsFor and the sandbox image it
+// implies: the sign-in variant of image when sign-ins are on, image itself
+// otherwise.
+func (s *Server) desktopSigninDispatch(ctx context.Context, run types.AgentRun, policy types.RunPolicySpec, image string) (bool, string) {
+	if !s.desktopSigninsFor(ctx, run, policy) {
+		return false, image
+	}
+	return true, signinImageFor(image)
+}
+
 // signinTarget reports whether the run's sandbox lands on this deployment's
 // own substrate for its class, and that substrate implements
 // runner.SigninExecer (the in-process Docker driver). That substrate runs

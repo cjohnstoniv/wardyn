@@ -519,10 +519,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// and the proxy's signin_listen key, all or none. With the knob off, or on
 	// a runner that cannot run a sign-in, the run gets the default image and
 	// no key, which an older proxy would refuse.
-	signins := s.desktopSigninsFor(ctx, run, policy)
-	if signins {
-		p.Image = signinImageFor(p.Image)
-	}
+	signins, image := s.desktopSigninDispatch(ctx, run, policy, p.Image)
+	p.Image = image
 
 	spec := runner.SandboxSpec{
 		RunID:            run.ID,
