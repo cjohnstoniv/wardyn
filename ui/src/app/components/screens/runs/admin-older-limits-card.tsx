@@ -122,6 +122,7 @@ export function AdminOlderLimitsCard() {
           {results.map((r) => (
             <li key={r.run_id}>
               {r.run_id.slice(0, 8)}: {r.ok ? "Restarted" : r.error}
+              {r.ok && r.denied_added && r.denied_added.length > 0 && ` ${RL.revivePolicy(r.denied_added.length)}`}
             </li>
           ))}
         </ul>
