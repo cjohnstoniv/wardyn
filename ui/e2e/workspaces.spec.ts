@@ -12,6 +12,7 @@
 // anything this stage didn't build (no scan/build progress, no Sources tab).
 import { test, expect, ADMIN_TOKEN, gotoConsole, mockMemberRole } from "./fixtures";
 import type { Page } from "@playwright/test";
+import { aheadByHours } from "../src/app/lib/test-clock";
 
 function uniqueName(tag: string): string {
   return `ws-${tag}-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
@@ -289,8 +290,8 @@ test.describe("Workspaces — a new session named like a recorded one", () => {
           kind: "repo",
           source: "acme/rerecord",
           status: "scanned",
-          created_at: "2026-01-01T00:00:00Z",
-          updated_at: "2026-01-01T00:00:00Z",
+          created_at: aheadByHours(-24),
+          updated_at: aheadByHours(-24),
           requirements: {},
           record_results: {
             "build-test": { run_id: "run-rr1", label: "build & test", mode: "interactive", status: "recorded" },
