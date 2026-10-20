@@ -264,6 +264,37 @@ describe("Drive editor, Team drive", () => {
     expect(upsertGrantMock).not.toHaveBeenCalled();
   });
 
+  it("an unrelated edit of a drive whose allocations differ leaves every write bit as stored", async () => {
+    const mixed = [grant({ members_can_write: true }), grant({ id: "g2", subject: "qa", members_can_write: false })];
+    await renderScreen(snapshot({ drives: [drive({ writable: true, grant_count: 2 })], grants: mixed }));
+    await openEdit("platform-ref");
+    await userEvent.type(screen.getByLabelText(DRIVES.FIELD_SIZE), "0");
+    await userEvent.click(screen.getByRole("button", { name: DRIVES.SAVE_CTA }));
+    await waitFor(() => expect(updateDriveMock).toHaveBeenCalledTimes(1));
+    expect(updateDriveMock).toHaveBeenCalledWith("t1", expect.objectContaining({ team: true, writable: true }), false);
+    expect(upsertGrantMock).not.toHaveBeenCalled();
+  });
+
+  it("a group added beside the known ones is allocated with the defaults and the toggle's write setting", async () => {
+    // Every known allocation writes, so the toggle opens on and the new group follows it.
+    await renderScreen(snapshot({ drives: [drive({ writable: true })], grants: [grant({ members_can_write: true })] }));
+    await openEdit("platform-ref");
+    await userEvent.type(screen.getByRole("textbox", { name: PERM.SUBJECT_GROUP }), "data-team");
+    await userEvent.click(editor().getByRole("button", { name: DRIVES.ADD_CTA }));
+    await userEvent.click(screen.getByRole("button", { name: DRIVES.SAVE_CTA }));
+    await waitFor(() => expect(upsertGrantMock).toHaveBeenCalledTimes(1));
+    expect(upsertGrantMock).toHaveBeenCalledWith(
+      expect.objectContaining({ subject: "data-team", additional: true, priority: 0, enabled: true, members_can_write: true }),
+    );
+  });
+
+  it("a cut grants page does not take a group to add: it may already hold an allocation the page omits", async () => {
+    await renderScreen(snapshot({ drives: [drive({ writable: true, grant_count: 3 })], grants: [grant({ members_can_write: true })] }));
+    await openEdit("platform-ref");
+    await userEvent.type(screen.getByRole("textbox", { name: PERM.SUBJECT_GROUP }), "hidden-team");
+    expect(editor().getByRole("button", { name: DRIVES.ADD_CTA })).toBeDisabled();
+  });
+
   it("removing a group chip unallocates it on save", async () => {
     await renderScreen(snapshot());
     await openEdit("platform-ref");

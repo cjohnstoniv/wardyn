@@ -84,10 +84,13 @@ export function TeamGroups({
   groups,
   onChange,
   disabled,
+  addDisabled = false,
 }: {
   groups: string[];
   onChange: (next: string[]) => void;
   disabled: boolean;
+  /** The grants page was cut: a group typed here may already hold an allocation the page omits, and adding it would overwrite that one. */
+  addDisabled?: boolean;
 }) {
   const [pick, setPick] = React.useState("");
   const add = () => {
@@ -118,9 +121,9 @@ export function TeamGroups({
       )}
       <div className="flex max-w-[520px] gap-2">
         <div className="min-w-0 flex-1">
-          <DirectoryCombobox label={PERM.SUBJECT_GROUP} kind="group" value={pick} onChange={setPick} disabled={disabled} placeholder={DRIVES.TEAM_GROUP_PLACEHOLDER} />
+          <DirectoryCombobox label={PERM.SUBJECT_GROUP} kind="group" value={pick} onChange={setPick} disabled={disabled || addDisabled} placeholder={DRIVES.TEAM_GROUP_PLACEHOLDER} />
         </div>
-        <Button type="button" variant="outline" disabled={disabled || !pick.trim()} onClick={add}>
+        <Button type="button" variant="outline" disabled={disabled || addDisabled || !pick.trim()} onClick={add}>
           {DRIVES.ADD_CTA}
         </Button>
       </div>
@@ -133,11 +136,11 @@ export function TeamGroups({
  * Makes a saved team drive's allocations match the editor: the groups removed
  * are unallocated, the groups added are allocated, and an existing allocation
  * whose write bit differs from the toggle is re-sent with its other fields kept.
- * A null write leaves existing allocations' write bits alone (the grants page was cut).
+ * A null write leaves existing allocations' write bits alone; a group allocated now takes `fresh`.
  * Runs AFTER the drive is saved, so a drive that just became writable is
  * writable before any allocation says members can write.
  */
-export async function syncTeamGroups(driveId: string, groups: string[], write: boolean | null, grants: UserDriveGrant[]): Promise<void> {
+export async function syncTeamGroups(driveId: string, groups: string[], write: boolean | null, grants: UserDriveGrant[], fresh: boolean = write === true): Promise<void> {
   const mine = grants.filter((g) => g.drive_id === driveId && g.subject_type === "group");
   for (const g of mine) {
     if (!groups.includes(g.subject)) await api.deleteGrant(g.id);
@@ -154,7 +157,7 @@ export async function syncTeamGroups(driveId: string, groups: string[], write: b
       ...(had?.size_mib_override ? { size_mib_override: had.size_mib_override } : {}),
       ...(had?.writable_override != null ? { writable_override: had.writable_override } : {}),
       enabled: had?.enabled ?? true,
-      members_can_write: write === true,
+      members_can_write: had ? write === true : fresh,
     });
   }
 }

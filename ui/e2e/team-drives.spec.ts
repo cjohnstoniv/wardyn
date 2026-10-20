@@ -141,9 +141,30 @@ test.describe("Admin Drives: team drives", () => {
     await expect(write).toHaveAttribute("aria-checked", "true");
     await expect(write).toBeDisabled();
     await expect(ed.getByText(DRIVES.TEAM_WRITE_UNKNOWN)).toBeVisible();
+    // A group typed here may already hold an allocation the cut page omits; adding it would overwrite that one.
+    await expect(ed.getByRole("button", { name: DRIVES.ADD_CTA })).toBeDisabled();
     await ed.getByRole("button", { name: DRIVES.SAVE_CTA }).click();
     await expect.poll(() => sent.puts.length).toBe(1);
     expect(sent.puts[0].body).toMatchObject({ team: true, writable: true });
+    expect(sent.grants).toHaveLength(0);
+  });
+
+  test("an edit that leaves the write setting alone keeps each allocation's write bit as stored", async ({ page }) => {
+    const sent = await stubAdmin(page, { on: true });
+    // platform-team may write, qa may not: the two differ.
+    const MIXED = [GRANTS[1], { ...GRANTS[2], members_can_write: false }];
+    await page.route("**/api/v1/drives", (route: Route) =>
+      route.request().method() === "GET"
+        ? route.fulfill({ json: { drives: [SCRATCH], grants: MIXED, grant_total: 2, host_roots_configured: true, runner_target: "docker", disabled: false } })
+        : route.fallback(),
+    );
+    await openDrives(page);
+    await driveRow(page, SCRATCH.name).getByRole("button", { name: `${DRIVES.EDIT} ${SCRATCH.name}` }).click();
+    const ed = editor(page);
+    await ed.getByLabel(DRIVES.FIELD_SIZE).fill("61440");
+    await ed.getByRole("button", { name: DRIVES.SAVE_CTA }).click();
+    await expect.poll(() => sent.puts.length).toBe(1);
+    expect(sent.puts[0].body).toMatchObject({ team: true, writable: true, size_mib: 61440 });
     expect(sent.grants).toHaveLength(0);
   });
 

@@ -156,6 +156,9 @@ export function DriveEditor({
   const [groups, setGroups] = React.useState(() =>
     drive?.team ? grants.filter((g) => g.drive_id === drive.id && g.subject_type === "group").map((g) => g.subject) : [],
   );
+  // The operator changed a write setting. Until then a save keeps the drive's stored writability and
+  // every allocation's own write bit, so a mixed list is never collapsed to one value.
+  const [writeTouched, setWriteTouched] = React.useState(false);
   // A drive this editor created: the next save updates it rather than creating it again.
   const savedId = React.useRef(drive?.id);
   const teamUI = teamDrives && team;
@@ -189,6 +192,7 @@ export function DriveEditor({
   // writable per person is not writable by a whole group until the admin says so.
   const pickTeam = (on: boolean) => {
     setTeam(on);
+    setWriteTouched(!(on && drive?.team));
     setWritable(on ? !!(writeUnknown && drive?.writable) : !!drive?.writable);
   };
 
@@ -202,7 +206,7 @@ export function DriveEditor({
       storage_class: backend === "k8s_pvc" ? storageClass.trim() : "",
       home_template: home,
       size_mib: Number(size) || 0,
-      writable,
+      writable: team && drive?.team && !writeTouched ? !!drive.writable : writable,
       reclaim: team ? "retain" : reclaim,
       ...(team ? { team: true } : {}),
     };
@@ -211,7 +215,7 @@ export function DriveEditor({
         ? await api.updateDrive(savedId.current, input, confirmRehome)
         : await api.createDrive(input);
       savedId.current = saved.id;
-      if (teamUI) await syncTeamGroups(saved.id, groups, writeUnknown && team ? null : writable, grants);
+      if (teamUI) await syncTeamGroups(saved.id, groups, writeUnknown && team || (drive?.team && !writeTouched) ? null : writable, grants, writable);
       onSaved();
     } catch (e) {
       // A 409 on an edit (never on create — there is no prior row to re-home)
@@ -305,7 +309,7 @@ export function DriveEditor({
         )}
 
         {teamDrives && (
-          <TeamDriveFields team={team} onTeam={pickTeam} write={writable} onWrite={setWritable} backend={backend} disabled={disabled} writeUnknown={writeUnknown && team} />
+          <TeamDriveFields team={team} onTeam={pickTeam} write={writable} onWrite={(on) => { setWritable(on); setWriteTouched(true); }} backend={backend} disabled={disabled} writeUnknown={writeUnknown && team} />
         )}
 
         {teamUI ? (
@@ -392,7 +396,7 @@ export function DriveEditor({
           </Field>
         )}
 
-        {teamUI && <TeamGroups groups={groups} onChange={setGroups} disabled={disabled} />}
+        {teamUI && <TeamGroups groups={groups} onChange={setGroups} disabled={disabled} addDisabled={writeUnknown} />}
       </div>
 
       {error && (
