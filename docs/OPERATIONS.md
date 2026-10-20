@@ -3334,6 +3334,50 @@ Naming these is the point of the walk, not a caveat on it:
 - An `egress_redirects` row can never be pointed *at* the gateway or the public provider host to swap an artifact-registry token onto model traffic.
 - `planArtifactRedirect` refuses that redirect outright (audited `run.artifact.redirect`, `denied`) rather than handing the proxy two rules for one host, which `buildInjector` refuses at proxy start (a host carries one credential).
 
+### Local model server
+
+A `local_model` provider (#2957) is a model server you run on a laptop's host or an org GPU node: Ollama, a llama.cpp server, LM Studio or vLLM.
+Runs reach it only through the run proxy's brokered LLM route, which holds every request to the provider's model allowlist.
+No provider of this kind registered means today's behaviour, unchanged.
+
+| Field | What it says | Rule |
+|---|---|---|
+| `base_url` | The server's root, as the proxy sees it | `http://` or `https://`, no path, no credential, not `localhost` or a loopback literal |
+| `local.models` | The exact model names runs may use, tag included | 1 to 64; no `/` (a registry or namespace) and no `:cloud` or `-cloud` tag |
+| `local.max_context` | Cap on a request's `options.num_ctx` | 0 = 32768 |
+| `local.max_output` | Cap on `max_tokens`, `max_completion_tokens`, `max_output_tokens` and `options.num_predict` | 0 = 32768 |
+| `local.keep_alive_seconds` | Cap on `keep_alive`; a negative ("forever") value is capped too | 0 = 1800, at most 86400 |
+| `auth` | How each person's own token is sent, when the server wants one | Unset = no credential at all |
+| `harnesses[].model` | The model that agent asks for | Required; one of `local.models` |
+
+1. Bind the model server where the proxy can reach it but the network cannot: on a laptop, the Docker host (`http://host.docker.internal:11434` under Docker Desktop); on a node, its private address.
+2. Pull every model yourself on that machine. A run can never pull, push, create, copy or delete one.
+3. `GET /api/v1/model-providers`, add the row, and `PUT` the list back; a `PUT` replaces the whole list. The console form comes later. The row:
+   `{"id":"laptop-gpu","kind":"local_model","base_url":"http://host.docker.internal:11434","local":{"models":["qwen2.5-coder:7b"]},"harnesses":[{"harness":"claude-code","model":"qwen2.5-coder:7b"},{"harness":"codex-cli","model":"qwen2.5-coder:7b"}]}`
+4. Grant it to people as any other provider; with no `auth`, nobody has anything to connect.
+
+What a run may call on the server (every other method and path is refused `403 egress_denied` and audited `brokered:local-model`):
+
+| Method | Path | Note |
+|---|---|---|
+| `POST` | `/v1/chat/completions`, `/v1/completions`, `/v1/embeddings`, `/v1/responses`, `/v1/messages` | Body `model` must be on the allowlist |
+| `POST` | `/api/chat`, `/api/generate`, `/api/embed` | Same |
+| `GET` | `/v1/models`, `/api/tags` | The answer is filtered to the allowlist |
+| `GET` | `/v1/models/<name>` | Only an allowlisted name |
+
+- The model name is matched exactly. A body with a second spelling of `model`, no `model`, or one that is not a single JSON object is refused `400 request_not_inspected`.
+- A bound replaces only its own value's bytes. The prompt is never rewritten or reordered, so the server's prompt cache still matches.
+- The route sets no deadline on the server's first byte: a cold model load of 30 s or more is waited for.
+- The server's host is refused on every other lane (a plain `CONNECT` or forward request), whatever the policy allows.
+- The private-address guard is lifted for this route and this address alone: the registered host and port may answer on the Docker bridge's gateway address (the Docker host). The control plane, loopback and link-local stay refused.
+- With `auth` set, each person's own token rides as a custom endpoint's does, and the host joins the run's allowlist so the token can be attached. Over `http://` it crosses the network unencrypted, so a write with `auth` over `http://` is refused unless the host is `host.docker.internal`, `gateway.docker.internal` or a private IPv4 address (10/8, 172.16/12, 192.168/16, 100.64/10): use `https://` to send a token off this machine.
+- Claude Code gets the allowlisted model for every tier (`ANTHROPIC_MODEL` and the opus, sonnet and haiku defaults), so no background call names another.
+- A run placed on your own runner is refused (`ProxyConfig.LocalModels`): the runner path is a later release.
+
+> [!IMPORTANT]
+> **Upgrade note.** Move the proxy image pin with wardynd, image first, before you add a `local_model` provider.
+> wardynd writes `local_models` into the proxy's config for those runs only, and an older proxy refuses that key at startup.
+
 ### Upgrading from `artifact_overrides`
 
 - A site-config document saved before this shipped used `artifact_overrides: {"npm": {"base_url": "..."}, ...}`.
@@ -3940,6 +3984,8 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0192` (`0192_workspace_name_per_owner`) replaces `workspaces.name`'s deployment-wide uniqueness (`0008`'s table) with one per owner (`owned_by`, `name`); operator-owned workspaces stay unique among themselves.
 - `0193` (`0193_approval_last_rejoined_at`) adds `approvals.last_rejoined_at` (`0001`'s table), when a held push or egress request last re-entered the hold on a PENDING row; the console's held reading starts from it.
 - `0195` (`0195_agent_runs_local_folder`) adds `local_folder`, `local_folder_seeded_at` and `local_folder_seed_error` to `agent_runs` (`0001`'s table): the folder a run holds its agent for, and that folder's first sync.
+- `0196` (`0196_deprovision_event_pin`) adds `audit_event_id` and `audit_event_at` to `deprovision_jobs` (`0127`'s table): the id and time of the audit event an owed row writes, pinned on its first drain and cleared when the row reopens.
+- `0197` (`0197_run_inner_walls`) adds `inner_walls` to `agent_runs` (`0001`'s table): the harness's own walls a run launched with, under its policy's `harness_inner_walls`.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
