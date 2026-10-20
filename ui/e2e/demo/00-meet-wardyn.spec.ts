@@ -1004,7 +1004,7 @@ test("V00 act 4 — record a policy", async () => {
   await typeInTerminal(page, VILLAIN, card);
   await waitUnlessGone(
     card
-      .getByText("Sandbox is waiting — approve to let it through")
+      .getByText("Needs you · sandbox held — approve to let it through")
       .waitFor({ state: "visible", timeout: APPROVAL_APPEARS }),
     card.getByText(REPLAY_OVER),
     APPROVAL_APPEARS,

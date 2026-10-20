@@ -513,7 +513,7 @@ test("beats 0-5 — the wait-for-review hold, and the scope ladder", async () =>
   // caption and collect it after; the failure still surfaces at the await.
   // P11b shortened this stanza, which only widens the margin.
   const headerUp = waitUnlessGone(
-    expect(card.getByText("Sandbox is waiting — approve to let it through")).toBeVisible({
+    expect(card.getByText("Needs you · sandbox held — approve to let it through")).toBeVisible({
       timeout: APPROVAL_APPEARS,
     }),
     demoOver(card),

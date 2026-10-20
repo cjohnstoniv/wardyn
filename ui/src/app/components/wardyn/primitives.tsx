@@ -180,7 +180,7 @@ const runStateMeta: Record<
   PENDING: { tone: "neutral", label: "Pending" },
   STARTING: { tone: "info", label: "Starting", pulse: true },
   RUNNING: { tone: "success", label: "Running", pulse: true },
-  WAITING_FOR_CONFIRMATION: { tone: "warning", label: "Awaiting confirmation", pulse: true },
+  WAITING_FOR_CONFIRMATION: { tone: "warning", label: "Needs you", pulse: true },
   COMPLETED: { tone: "success", label: "Completed", Icon: Check },
   STOPPED: { tone: "neutral", label: "Stopped", Icon: Square },
   ARCHIVED: { tone: "neutral", label: "Archived", Icon: Archive },
@@ -403,10 +403,11 @@ const apprStateMeta: Record<string, Tone> = {
   // CANCELLED is neutral, not danger: the run ended, nobody refused anything.
   CANCELLED: "neutral",
 };
-// Every state's label is title-cased from the wire value; CANCELLED is the one
-// with an owner-facing copy key (copy.ts APPROVAL.STATE_CANCELLED), so the
-// wording lives in one place rather than being derived here.
+// Every state's label is title-cased from the wire value; PENDING and CANCELLED are the two
+// with an owner-facing copy key (copy.ts APPROVAL.STATE_*), so the wording lives in one place
+// rather than being derived here.
 const apprStateLabel: Record<string, string> = {
+  PENDING: APPROVAL.STATE_PENDING,
   CANCELLED: APPROVAL.STATE_CANCELLED,
 };
 export function ApprovalStateBadge({ state }: { state: ApprovalState }) {

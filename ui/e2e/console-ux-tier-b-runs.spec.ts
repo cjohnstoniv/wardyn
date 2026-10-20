@@ -142,7 +142,7 @@ test.describe("Tier B runs list at 390px", () => {
 
 test.describe("Tier B run header", () => {
   // #2916: with room to spare at desktop width, the pending-approval chip shows its whole sentence.
-  test("Run detail header: '1 waiting · sandbox held' is not cut off at 1440", async ({ page }) => {
+  test("Run detail header: 'Needs you · sandbox held' is not cut off at 1440", async ({ page }) => {
     await gotoConsole(page);
     await page.setViewportSize({ width: 1440, height: 900 });
     const id = await seedRun(page);

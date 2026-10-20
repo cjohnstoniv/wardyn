@@ -165,8 +165,8 @@ test.describe("Approvals screen", () => {
     // ("Credential"), not the raw wire token (ui-approvals-2, copy.ts's
     // APPROVAL_KIND_LABEL via WIRE_TO_COPY).
     await expect(page.getByText("Credential", { exact: true }).first()).toBeVisible();
-    // The PENDING state badge renders capitalized ("Pending").
-    await expect(page.getByText("Pending", { exact: true }).first()).toBeVisible();
+    // The PENDING state badge says what the person is being asked for (#3040).
+    await expect(page.getByText("Needs you", { exact: true }).first()).toBeVisible();
     // The egress pending card's derived title carries its unique scope domain.
     await expect(page.getByText(markerRe("ro-pending.example.com")).first()).toBeVisible();
 

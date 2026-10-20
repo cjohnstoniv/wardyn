@@ -590,7 +590,7 @@ wardyn run --agent claude-code --task 'Reply with the single word ok' \
 - **The ceiling does NOT clamp this demo — the request is genuinely HELD.**
   - [`internal/api/inline_policy.go`](../internal/api/inline_policy.go) applies `composer.Clamp` only when `!s.isOperator(...)`, and BOTH local mode and the admin token count as operator — so a demo run's `wait_for_review` survives verbatim.
   - Act 5's `example.com` is held open at the proxy and the on-camera approval completes that same in-flight request.
-  - Two consequences worth pinning: the UI renders "Sandbox is waiting" with a WAITING badge (narration must agree), and an approved hold logs **only `egress.allow`** — asserting `egress.hold` would fail a correct take.
+  - Two consequences worth pinning: the UI renders "Needs you · sandbox held" with a WAITING badge (narration must agree), and an approved hold logs **only `egress.allow`** — asserting `egress.hold` would fail a correct take.
   - `DEMO_TASK`'s retry instruction stays as belt-and-braces for a missed 30s window, not as the primary mechanic.
 - The old New Run screen (removed in 0.9) never loaded the workspace list.
   - `useWorkspaceList` does not fetch on mount (each caller does its own load — `setup-screen.tsx` does); New Run's only call was the Add-workspace dialog's `onCreated`.

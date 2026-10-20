@@ -30,17 +30,17 @@ const run = (over: Partial<AgentRun> = {}): AgentRun => ({
 });
 
 describe("rowPresentation — held approval (design.md §2.2 row 1)", () => {
-  it("by=you in the user view: Needs your approval, amber, Review, needsYou", () => {
+  it("by=you in the user view: Needs you, amber, Review, needsYou", () => {
     const r = run({ attention: { kind: "approval", by: "you", pending: 1 } });
     const p = rowPresentation(r, false);
-    expect(p).toMatchObject({ hue: "amber", word: "Needs your approval", action: "review", needsYou: true });
-    expect(p.subword).toBe("1 waiting · sandbox held");
+    expect(p).toMatchObject({ hue: "amber", word: "Needs you", action: "review", needsYou: true });
+    expect(p.subword).toBe("Needs you · sandbox held");
   });
 
-  it("by=you in the admin view: Needs a decision, still Review", () => {
+  it("by=you in the admin view: Needs you, still Review", () => {
     const r = run({ attention: { kind: "approval", by: "you", pending: 2 } });
     const p = rowPresentation(r, true);
-    expect(p).toMatchObject({ hue: "amber", word: "Needs a decision", action: "review", needsYou: true });
+    expect(p).toMatchObject({ hue: "amber", word: "Needs you", action: "review", needsYou: true });
   });
 
   it("by=admin (H-3): Waiting for an admin, amber, no action, NOT needs-you — in either view", () => {

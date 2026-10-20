@@ -43,6 +43,7 @@ export const APPROVAL_KIND_LABEL: Record<ApprovalKind, string> = {
 // key so the owner's wording lands in one place.
 // Frozen by #206 (matches workspace-providers-prompt.md §7.6 verbatim).
 export const APPROVAL = {
+  STATE_PENDING: "Needs you",
   STATE_CANCELLED: "Cancelled",
   // B4, console half: what a human reads WHERE the Approve/Deny pair used to
   // be once the run has ended, and on the decided row the cascade wrote. One

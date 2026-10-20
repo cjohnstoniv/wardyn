@@ -75,8 +75,8 @@ test.describe("Runs Admin view — sections, Everyone/Mine, saved views, Group b
     await expect(row).toBeVisible();
     await expect(row.getByText("Waiting for the owner's AWS sign-in")).toBeVisible();
     await expect(row.getByRole("button")).toHaveCount(0);
-    // Not "Needs a decision" — an admin cannot act on someone else's sign-in.
-    await expect(page.getByRole("heading", { name: "Needs a decision" })).toHaveCount(0);
+    // Not "Needs you" — an admin cannot act on someone else's sign-in.
+    await expect(page.getByRole("heading", { name: "Needs you" })).toHaveCount(0);
   });
 
   test("Mine narrows the list to the admin's own runs", async ({ page }) => {
