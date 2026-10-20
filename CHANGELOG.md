@@ -15,8 +15,9 @@ A small release on top of 0.9.6. An Azure DevOps token that the organisation min
 ### Added
 
 - An Azure DevOps connection with `token_mode: minted_pat` can now run on a person's own runner. Before, the run was refused at create. It is off by default and needs all three: a delivery policy that sends `ado_minted_pat` as `runner_resident` to the runner's trust class (a security admin's change, held for a second person under `WARDYN_GOVERNANCE_SECOND_HUMAN`), the connection's `entra.runner_resident` opt-in, and a runner of that trust class owned by a person.
-  - The token lives in the runner proxy's memory for the run, at most `pat_max_hours`. It is never on disk, in the keystore or in the environment, and it never enters the sandbox, which holds only an inert placeholder: `entra.runner_resident_sandbox` is stored and audited but changes no run. Root on the laptop can read the proxy's memory.
-  - The proxy fetches the token again at most 15 minutes apart, and each fetch is judged against the policy, the runner's owner, trust class and posture, and the opt-in. A refusal revokes the run's token at Azure DevOps. If the organisation is unreachable, the proxy stops injecting the token at most 30 minutes after its last fetch.
+  - The token is held in the memory of the runner's proxy, on the person's own computer, for the run and at most `pat_max_hours`. It is not written to disk or the keystore. Root on that computer can read it.
+  - The sandbox holds only an inert placeholder; the proxy adds the token to requests on the way out, so a host that echoes request headers can return it. `entra.runner_resident_sandbox` is stored and audited, and no run reads it: on or off, the sandbox sees the same.
+  - The proxy fetches the token again at most 15 minutes apart, and each fetch is judged against the policy, the runner's owner, trust class and posture, and the opt-in. A delivery policy may add `require_posture` (`mdm_managed`, `disk_encrypted`, `os_min`) for the class; the class has none of its own. A refusal revokes the run's token at Azure DevOps. If the organisation is unreachable, the proxy stops injecting the token at most 30 minutes after its last fetch.
   - A `bearer` connection and a stored git token for an Azure DevOps host are still refused on a person's own runner.
 
 ### Changed

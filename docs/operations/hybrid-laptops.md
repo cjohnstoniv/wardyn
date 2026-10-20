@@ -34,7 +34,7 @@
 ## Resident credentials and posture
 
 > [!NOTE]
-> A runner holds four classes as `runner_resident` in its OS keystore: `env_secret`, `file_secret`, `ssh_key` and `git_pat_helper`. Its proxy holds a fifth, `ado_minted_pat`, in memory only. Any other class set to `runner_resident` is still refused.
+> A runner holds four classes as `runner_resident` in its OS keystore: `env_secret`, `file_secret`, `ssh_key` and `git_pat_helper`. Its proxy holds a fifth, `ado_minted_pat`, in memory only, never in the sandbox. Any other class set to `runner_resident` is still refused.
 > A refusal is `runner_posture_unmet` when the run's confinement floor or the runner's posture misses the class's requirement, otherwise `placement_credential`. Whoever controls the laptop as root can read a value while the runner holds it, so erasure is best-effort and never promised.
 
 | Credential class | Modes |
