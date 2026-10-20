@@ -56,12 +56,16 @@ func ownerAttentionBy(r *http.Request, run types.AgentRun, adminView bool) types
 // unlike 6/7 a member CAN sometimes clear one of these.
 func (s *Server) heldCandidates(r *http.Request, run types.AgentRun, pending []types.ApprovalRequest, adminView bool) []attentionCandidate {
 	ownerBy := ownerAttentionBy(r, run, adminView)
-	var rule6, rule7, rule8 []attentionCandidate
+	var takeover, rule6, rule7, rule8 []attentionCandidate
 	for _, ap := range pending {
 		if !ap.Held {
 			continue
 		}
 		switch {
+		case ap.Kind == types.ApprovalHumanTakeover:
+			// The agent asked for a person by name of the act, so it leads; taking over is interactive
+			// entry, whose rule is the owner's (admitRunEntry), hence ownerBy.
+			takeover = append(takeover, attentionCandidate{types.AttentionTakeover, ownerBy})
 		case ap.Kind == types.ApprovalCredentialReauth && isADOReauth(ap):
 			rule6 = append(rule6, attentionCandidate{types.AttentionADOConsent, ownerBy})
 		case ap.Kind == types.ApprovalCredentialReauth:
@@ -74,7 +78,8 @@ func (s *Server) heldCandidates(r *http.Request, run types.AgentRun, pending []t
 			rule8 = append(rule8, attentionCandidate{types.AttentionApproval, by})
 		}
 	}
-	out := make([]attentionCandidate, 0, len(rule6)+len(rule7)+len(rule8))
+	out := make([]attentionCandidate, 0, len(takeover)+len(rule6)+len(rule7)+len(rule8))
+	out = append(out, takeover...)
 	out = append(out, rule6...)
 	out = append(out, rule7...)
 	return append(out, rule8...)

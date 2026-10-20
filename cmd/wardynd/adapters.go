@@ -179,6 +179,15 @@ func (s *approvalService) CountForRun(ctx context.Context, runID uuid.UUID) (int
 	return s.st.CountApprovalsForRun(ctx, runID)
 }
 
+// TakeOver and HandBack are the OPTIONAL human_takeover surface the api handler type-asserts
+// (approvals_takeover.go); the api layer writes their audit rows.
+func (s *approvalService) TakeOver(ctx context.Context, id uuid.UUID, holder string) (types.ApprovalRequest, string, error) {
+	return s.st.TakeOverApproval(ctx, id, holder)
+}
+func (s *approvalService) HandBack(ctx context.Context, id uuid.UUID, holder string, at time.Time) (types.ApprovalRequest, error) {
+	return s.st.HandBackApproval(ctx, id, holder, at)
+}
+
 // ListApprovalsPage is the OPTIONAL paged lister the api handler type-asserts
 // for (same pattern as store.Pager): the console polls four single-state lists
 // every 10s and decided approvals are never deleted, so the unpaged read grew

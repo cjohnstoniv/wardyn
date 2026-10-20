@@ -181,28 +181,7 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
     setAppError(null);
     setOpeningApp(app.name);
     try {
-      const ticket = await runsApi.attachTicket(run.id, "ui");
-      // #1241: the gateway refuses a ticket this browser did not bind first,
-      // so a ticket minted elsewhere cannot be pushed into this browser.
-      if (uiSandbox?.bind_url) {
-        await bindTicket(uiSandbox.bind_url.split("{run}").join(encodeURIComponent(run.id)), ticket);
-      }
-      // Host mode (WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE) still puts {run} in the
-      // HOST half of enter_post_url ("https://run-{run}.ui.example.com/
-      // __wardyn/enter", no query) — split/join replaces every occurrence
-      // (replaceAll is ES2021; this tsconfig's lib is ES2020).
-      if (uiSandbox?.enter_post_url) {
-        const action = uiSandbox.enter_post_url.split("{run}").join(encodeURIComponent(run.id));
-        submitEnterForm(action, { run: run.id, app: app.name, ticket });
-      } else if (uiSandbox?.enter_url_template) {
-        const url = Object.entries({ run: run.id, app: app.name, ticket }).reduce(
-          (tpl, [key, value]) => tpl.split(`{${key}}`).join(encodeURIComponent(value)),
-          uiSandbox.enter_url_template,
-        );
-        window.open(url, "_blank", "noopener");
-      } else {
-        throw new Error("This deployment's UI-sandbox gateway published no enter URL for the console to use.");
-      }
+      await enterUIApp(run.id, app.name, uiSandbox);
     } catch (err) {
       setAppError({ app: app.name, message: entryErrorMessage(err, (e) => (e instanceof Error ? e.message : String(e)), run) });
     } finally {
@@ -468,6 +447,37 @@ function monoTokens(text: string, ...tokens: string[]): (string | React.ReactEle
     );
   }
   return parts;
+}
+
+/** The UI-sandbox enter facts /healthz publishes (internal/api/healthz.go ui_sandbox). */
+export type UISandboxEnter = { enabled?: boolean; enter_url_template?: string; enter_post_url?: string; bind_url?: string } | null;
+
+// enterUIApp opens a declared UI app of the run in a new tab: a single-use ticket, bound to this
+// browser, handed to the gateway by POST. ConnectSSHCard's Open button and a "Needs you" desktop
+// takeover (needs-you-banner.tsx) both go through it.
+export async function enterUIApp(runId: string, app: string, uiSandbox: UISandboxEnter) {
+  const ticket = await runsApi.attachTicket(runId, "ui");
+  // #1241: the gateway refuses a ticket this browser did not bind first,
+  // so a ticket minted elsewhere cannot be pushed into this browser.
+  if (uiSandbox?.bind_url) {
+    await bindTicket(uiSandbox.bind_url.split("{run}").join(encodeURIComponent(runId)), ticket);
+  }
+  // Host mode (WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE) still puts {run} in the
+  // HOST half of enter_post_url ("https://run-{run}.ui.example.com/
+  // __wardyn/enter", no query) — split/join replaces every occurrence
+  // (replaceAll is ES2021; this tsconfig's lib is ES2020).
+  if (uiSandbox?.enter_post_url) {
+    const action = uiSandbox.enter_post_url.split("{run}").join(encodeURIComponent(runId));
+    submitEnterForm(action, { run: runId, app, ticket });
+  } else if (uiSandbox?.enter_url_template) {
+    const url = Object.entries({ run: runId, app, ticket }).reduce(
+      (tpl, [key, value]) => tpl.split(`{${key}}`).join(encodeURIComponent(value)),
+      uiSandbox.enter_url_template,
+    );
+    window.open(url, "_blank", "noopener");
+  } else {
+    throw new Error("This deployment's UI-sandbox gateway published no enter URL for the console to use.");
+  }
 }
 
 // bindTicket is the pre-enter step (#1241): one credentialed fetch to the

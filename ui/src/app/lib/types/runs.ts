@@ -363,7 +363,7 @@ export interface VMMachine {
 }
 
 export interface RunAttention {
-  kind: "approval" | "reauth" | "ado_consent" | "lost";
+  kind: "approval" | "reauth" | "ado_consent" | "lost" | "takeover";
   by: "you" | "owner" | "admin";
   pending: number;
 }

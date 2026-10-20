@@ -25,7 +25,7 @@ import { statusDetailSentence } from "../run-status-detail";
 import { ordinal } from "../../../lib/ordinal";
 
 export type RowHue = "blue" | "amber" | "red" | "grey";
-export type RowAction = "review" | "sign-in" | "revive" | null;
+export type RowAction = "review" | "sign-in" | "revive" | "take-over" | null;
 
 export interface RowPresentation {
   hue: RowHue;
@@ -82,6 +82,13 @@ export function rowPresentation(run: AgentRun, adminView: boolean): RowPresentat
             : RUNS_ROW_WORD.WAITING_FOR_ADMIN,
           subword: RUN_WAIT.waitingHeld(a.pending),
           action: you ? "review" : null,
+          needsYou: you,
+        };
+      case "takeover":
+        return {
+          hue: "amber",
+          word: you ? RUNS_ROW_WORD.NEEDS_TAKEOVER : RUNS_ROW_WORD.WAITING_FOR_TAKEOVER,
+          action: you ? "take-over" : null,
           needsYou: you,
         };
       case "reauth":

@@ -659,6 +659,7 @@ start.
 | `listing_unscoped_backend` | The store backend cannot scope this listing to the caller's own runs — the SAME missing capability on `GET /approvals`, `GET /runs` and `GET /runs/policy-history`. |
 | `approval_not_found` | The named approval does not exist, or the caller may not see it — `POST /approvals/{id}/{approve,deny}` and every other approval-lookup route, INCLUDING `GET /approvals/{id}/paths`: a foreign approval and a missing one answer byte-identically there, reason and body both, so the reason itself is not an existence oracle. |
 | `approval_run_ended` / `approval_already_decided` / `credential_reauth_not_decidable` / `decision_scope_invalid_for_kind` / `invalid_request_body` | `POST /approvals/{id}/{approve,deny}`'s pre-decision refusals: the run ended first, the approval was already decided, a credential-reauth approval takes a sign-in instead, `decision_scope` was sent on a kind that does not accept one, the body did not decode, or `reason` is over 512 characters. A body over 16 KiB is `413` `request_body_too_large`. |
+| `takeover_not_decidable` / `not_a_takeover_request` / `takeover_not_holder` | "Needs you" (`human_takeover`) requests: `POST /approvals/{id}/{approve,deny}` on one (it is answered with `take-over` or `decline`, for every tier); `take-over`, `hand-back` or `decline` on an approval of another kind; `hand-back` by someone who does not have control. |
 | `invalid_decision_scope` / `decision_scope_until_needs_expiry` / `decision_expiry_in_past` / `decision_expiry_too_far` / `decision_expiry_without_until` | The `decision_scope`/`decision_expires_at` shape rules (0-3) on a decide call. |
 | `decision_scope_always_unavailable` / `decision_always_no_workspace_link` / `decision_always_invalid_host` / `decision_always_workspace_gone` / `decision_always_host_builtin` / `decision_always_host_denied` | The operator-only `decision_scope=always` persistence chain (rules 5-7): no store to persist to, the run names no workspace, the host does not parse, the workspace is gone, or the host is built-in-routed or on the reject list. `decision_scope_always_unavailable` also covers the internal push-content raise route's own "no store" arm (the identical `s.cfg.Store == nil` cause, one route apart). |
 | `egress_second_human_local_mode` | `WARDYN_EGRESS_SECOND_HUMAN` (or `WARDYN_CAPABILITY_SECOND_HUMAN`) cannot be enforced in local mode (nobody is authenticated to prove a second human decided). |
@@ -1139,7 +1140,7 @@ curl -sN -H 'Authorization: Bearer demo-admin-token' \
 
 - `view=user`/`view=admin` on `GET /api/v1/runs` also projects `attention:
   {kind, by, pending}` onto each LIVE run (#1197) — what it is waiting on
-  (`approval`/`reauth`/`ado_consent`/`lost`) and who, in the caller's own view,
+  (`approval`/`reauth`/`ado_consent`/`lost`/`takeover`) and who, in the caller's own view,
   can clear it (`you`/`owner`/`admin`).
 - `status=needs` (requires `view=`) narrows
   the list to runs where `attention.by=="you"`.

@@ -274,6 +274,11 @@ func (s *Server) routes() chi.Router {
 			r.Get("/approvals/{id}/paths", s.handleGetPushPathList)
 			r.Post("/approvals/{id}/approve", s.handleApproveApproval)
 			r.Post("/approvals/{id}/deny", s.handleDenyApproval)
+			// "Needs you": a human_takeover request's three verbs, under the attach entry rule
+			// (approvals_takeover.go), never approve/deny.
+			r.Post("/approvals/{id}/take-over", s.handleTakeOverApproval)
+			r.Post("/approvals/{id}/hand-back", s.handleHandBackApproval)
+			r.Post("/approvals/{id}/decline", s.handleDeclineTakeover)
 
 			r.Get("/audit", s.handleQueryAudit)
 			// Uncapped NDJSON bulk export beside the capped, paginated read above —

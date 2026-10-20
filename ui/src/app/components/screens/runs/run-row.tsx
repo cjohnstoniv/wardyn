@@ -91,6 +91,8 @@ export function RunRow({ run }: { run: AgentRun }) {
       ? RUNS_ROW_ACTION.REVIEW
       : p.action === "sign-in"
         ? RUNS_ROW_ACTION.SIGN_IN
+        : p.action === "take-over"
+          ? RUNS_ROW_ACTION.TAKE_OVER
         : p.action === "revive"
           ? reviving
             ? REVIVING

@@ -322,6 +322,14 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 		return
 	}
 
+	// The same early refusal for a "Needs you" request: answered by taking over or declining
+	// (approvals_takeover.go), never decided here, so an Approve cannot mark it taken with nobody
+	// holding control.
+	if tkAP, terr := s.cfg.Approvals.Get(r.Context(), id); terr == nil &&
+		tkAP.Kind == types.ApprovalHumanTakeover && s.canSeeApproval(r, tkAP) {
+		writeErrorReason(w, http.StatusConflict, reasonTakeoverNotDecidable, takeoverNotDecidableBody)
+		return
+	}
 	ap, run, loaded, ok := s.authorizeUserDecision(w, r, id)
 	if !ok {
 		return
@@ -383,6 +391,10 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	// by a hand-rolled POST.
 	if ap.Kind == types.ApprovalCredentialReauth {
 		writeErrorReason(w, http.StatusConflict, reasonCredentialReauthNotDecidable, credentialReauthNotDecidableBody)
+		return
+	}
+	if ap.Kind == types.ApprovalHumanTakeover { // the belt to the early refusal above, for the same reason
+		writeErrorReason(w, http.StatusConflict, reasonTakeoverNotDecidable, takeoverNotDecidableBody)
 		return
 	}
 

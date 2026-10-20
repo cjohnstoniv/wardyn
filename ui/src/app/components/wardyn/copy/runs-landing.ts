@@ -119,6 +119,10 @@ export const RUNS_ROW_WORD = {
   NEEDS_APPROVAL: "Needs your approval",
   NEEDS_DECISION: "Needs a decision",
   WAITING_FOR_ADMIN: "Waiting for an admin",
+  /** #2963 (M8-Banner-A runs list): the agent asked a person to take over. */
+  NEEDS_TAKEOVER: "Needs you to take over",
+  /** Not on the boards: an admin's view of an owner's takeover request. */
+  WAITING_FOR_TAKEOVER: "Waiting for its owner to take over",
   WAITING_SIGN_IN: "Waiting for sign-in",
   SANDBOX_STOPPED: "Sandbox stopped",
   RUNNING: "Running",
@@ -133,4 +137,5 @@ export const RUNS_ROW_WORD = {
 export const RUNS_ROW_ACTION = {
   REVIEW: "Review",
   SIGN_IN: "Sign in",
+  TAKE_OVER: "Take over",
 } as const;

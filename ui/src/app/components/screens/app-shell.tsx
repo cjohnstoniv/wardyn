@@ -35,6 +35,7 @@ import {
   Users,
   UsersRound,
 } from "lucide-react";
+import { NeedsYouNotices } from "../wardyn/needs-you-notices";
 import { NO_BARRIER, SHELL } from "../wardyn/copy";
 import { lastCheckedLabel } from "../../lib/readiness";
 import { UnsavedGuardProvider, useGuardedNavClick } from "../../lib/use-unsaved-guard";
@@ -542,6 +543,8 @@ export function AppShell({
             <React.Suspense fallback={null}>
               <ReauthLayer onResumed={adoptIdentity} />
             </React.Suspense>
+            {/* #2963: a takeover request anywhere in the caller's runs raises a toast. */}
+            <NeedsYouNotices />
             {/* Hidden — not merely covered — in focus mode: the cockpit's overlay is
           painted over the shell anyway, but leaving the header mounted would
           keep a dozen focusable controls ahead of the terminal in tab order

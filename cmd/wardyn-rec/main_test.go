@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -463,5 +464,13 @@ func TestRecordToLogReportsASignalKilledAgentAs128PlusSignal(t *testing.T) {
 	}
 	if want := 128 + int(syscall.SIGTERM); code != want {
 		t.Fatalf("exit code = %d, want %d", code, want)
+	}
+}
+
+// TestBuildAsciinemaArgv_RecordsNoInput: the cast is output only. TestRec_TypedInputIsNotRecorded
+// (docker tag) proves it against the real asciinema in a tmux pane.
+func TestBuildAsciinemaArgv_RecordsNoInput(t *testing.T) {
+	if argv := buildAsciinemaArgv("/usr/bin/asciinema", "out.cast", []string{"true"}); slices.Contains(argv, "--stdin") {
+		t.Fatalf("argv %q records the terminal's input", argv)
 	}
 }
