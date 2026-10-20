@@ -1351,3 +1351,37 @@ func TestRawRequestsWithNilHTTPClientDoNotFollowRedirects(t *testing.T) {
 		t.Errorf("a raw request followed a redirect: %q", hits)
 	}
 }
+
+// TestAttachPollResizeSignalsOnlyOnChange pins the Windows resize source: it
+// stays quiet while the size holds, signals once when it changes, and stops.
+func TestAttachPollResizeSignalsOnlyOnChange(t *testing.T) {
+	var mu sync.Mutex
+	cols := 80
+	size := func() (int, int, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return cols, 24, nil
+	}
+	out := make(chan struct{}, 4)
+	stop := pollResize(context.Background(), time.Millisecond, size, out)
+	defer stop()
+
+	select {
+	case <-out:
+		t.Fatal("resize signalled with an unchanged size")
+	case <-time.After(30 * time.Millisecond):
+	}
+	mu.Lock()
+	cols = 120
+	mu.Unlock()
+	select {
+	case <-out:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no resize signal after the size changed")
+	}
+	select {
+	case <-out:
+		t.Fatal("resize signalled twice for one change")
+	case <-time.After(30 * time.Millisecond):
+	}
+}

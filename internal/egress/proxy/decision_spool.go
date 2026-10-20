@@ -18,10 +18,10 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/contentscan"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/filelock"
 	"github.com/cjohnstoniv/wardyn/internal/runneractivity"
 	"github.com/cjohnstoniv/wardyn/internal/runnerspool"
 	"github.com/google/uuid"
-	"golang.org/x/sys/unix"
 )
 
 type spoolTicketKey struct{}
@@ -48,7 +48,7 @@ func newLocalDecisionSink(dir string, id uuid.UUID, out io.Writer) (*decisionSin
 		spool.Close()
 		return nil, errors.New("unsafe proxy spool writer lock")
 	}
-	if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+	if err := filelock.TryLock(lock); err != nil {
 		lock.Close()
 		spool.Close()
 		return nil, errors.New("another proxy owns this run spool")
