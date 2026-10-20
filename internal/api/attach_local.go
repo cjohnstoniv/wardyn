@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"sync"
@@ -71,6 +72,16 @@ func (s *Server) promotionCovered(ctx context.Context, runID uuid.UUID) bool {
 		return s.localCovered(runID)
 	}
 	return s.maskCovered(ctx, runID)
+}
+
+// localGrantReason is the fixed code a failed grant is audited under. The runner's own text is never
+// written: a refusal may quote the nonce it was given, which is for the runner alone.
+func localGrantReason(err error) string {
+	var we *runnerwire.Error
+	if errors.As(err, &we) && we.Code.Valid() {
+		return string(we.Code)
+	}
+	return "local_attach_refused"
 }
 
 // localAttachTarget is the runner a local attach is granted on.
@@ -190,7 +201,7 @@ func (la *localAttach) run(castTee io.Writer) string {
 		return la.reason("attach cancelled")
 	}
 	if err != nil {
-		wa.audit("failure", map[string]any{"state": "attaching", "error": err.Error()})
+		wa.audit("failure", map[string]any{"state": "attaching", "error": localGrantReason(err)})
 		_ = wa.c.Close(attachLocalGrantFailedCode, attachLocalGrantFailedReason)
 		return attachLocalGrantFailedReason
 	}

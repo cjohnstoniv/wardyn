@@ -241,8 +241,8 @@ func (l *syncLog) Write(p []byte) (int, error) {
 func (l *syncLog) String() string { l.mu.Lock(); defer l.mu.Unlock(); return l.b.String() }
 
 // TestAttachLocalNonceNeverLoggedOrAudited: local_nonce is a bearer-like, single-use value for the
-// runner alone. A granted session, a refused grant and a request refused at admission, each carrying
-// it, leave it in no log line and no audit row (the server logs r.URL.Path, never the query).
+// runner alone. A granted session, grants refused with text that quotes it and a request refused at
+// admission, each carrying it, leave it in no log line and no audit row (the server logs r.URL.Path, never the query).
 func TestAttachLocalNonceNeverLoggedOrAudited(t *testing.T) {
 	const nonce = "NONCE-SENTINEL-7f3a9c"
 	logs := &syncLog{}
@@ -263,14 +263,19 @@ func TestAttachLocalNonceNeverLoggedOrAudited(t *testing.T) {
 	_ = c.Close(websocket.StatusNormalClosure, "")
 	granted.detach(t)
 
-	refused := newLocalRig(t, localRigOpts{})
-	refused.sub.grantErr = errors.New("unknown or expired nonce")
-	c2, _, err := refused.tryDial(t, refused.ticket(t, holderOwner, oidc.RoleUser), query)
-	if err != nil {
-		t.Fatal(err)
+	// A runner's refusal may quote the nonce it was given, as plain text or as a wire refusal.
+	var refusedRigs []*localRig
+	for _, grantErr := range []error{errors.New("unknown nonce " + nonce), runnerwire.Refuse("unknown nonce %s", nonce)} {
+		refused := newLocalRig(t, localRigOpts{})
+		refused.sub.grantErr = grantErr
+		c2, _, err := refused.tryDial(t, refused.ticket(t, holderOwner, oidc.RoleUser), query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _, _ = c2.Read(context.Background())
+		refused.detach(t)
+		refusedRigs = append(refusedRigs, refused)
 	}
-	_, _, _ = c2.Read(context.Background())
-	refused.detach(t)
 
 	denied := newLocalRig(t, localRigOpts{})
 	do(t, denied.srv, http.MethodGet, "/api/v1/runs/"+denied.run.ID.String()+"/attach?ticket=not-a-ticket"+query, "", "")
@@ -278,7 +283,7 @@ func TestAttachLocalNonceNeverLoggedOrAudited(t *testing.T) {
 	if strings.Contains(logs.String(), nonce) {
 		t.Errorf("the nonce is in a log line:\n%s", logs.String())
 	}
-	for _, rig := range []*localRig{granted, refused, denied} {
+	for _, rig := range append([]*localRig{granted, denied}, refusedRigs...) {
 		for _, ev := range rig.audit.snapshot() {
 			if b, _ := json.Marshal(ev); strings.Contains(string(b), nonce) {
 				t.Errorf("the nonce is in audit row %s: %s", ev.Action, b)
