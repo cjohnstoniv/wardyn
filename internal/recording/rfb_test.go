@@ -5,6 +5,7 @@ package recording
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"io"
@@ -55,17 +56,90 @@ func (c *clock) now() time.Time { c.t = c.t.Add(100 * time.Millisecond); return 
 
 const upgrade = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n"
 
-// serverStream is a sandbox side: a static file on a kept-alive connection, the upgrade, an RFB
-// ProtocolVersion, a framebuffer update split across a continuation, a ping, and a large frame.
+// rfbHello is the server's half of an RFB handshake: the version, the one security type None and its
+// result, and ServerInit for a 1024x768 desktop named "wd".
+func rfbHello() []byte {
+	b := append([]byte(rfbVersion8), 1, 1, 0, 0, 0, 0)
+	init := make([]byte, 24)
+	binary.BigEndian.PutUint16(init[0:], 1024)
+	binary.BigEndian.PutUint16(init[2:], 768)
+	init[4], init[5], init[7] = 32, 24, 1
+	binary.BigEndian.PutUint32(init[20:], 2)
+	return append(append(b, init...), "wd"...)
+}
+
+// rect is one FramebufferUpdate rectangle header.
+func rect(w, h uint16, enc int32) []byte {
+	b := make([]byte, 12)
+	binary.BigEndian.PutUint16(b[4:], w)
+	binary.BigEndian.PutUint16(b[6:], h)
+	binary.BigEndian.PutUint32(b[8:], uint32(enc))
+	return b
+}
+
+// fbu is a FramebufferUpdate of the given rectangles (header and data each).
+func fbu(n uint16, rects ...[]byte) []byte {
+	b := []byte{0, 0, byte(n >> 8), byte(n)}
+	for _, r := range rects {
+		b = append(b, r...)
+	}
+	return b
+}
+
+func rawRect(w, h uint16, fill byte) []byte {
+	return append(rect(w, h, 0), bytes.Repeat([]byte{fill}, int(w)*int(h)*rfbBPP)...)
+}
+
+// cutText is a ServerCutText; a negative n writes an extended clipboard message of -n bytes.
+func cutText(text string, n int32) []byte {
+	b := []byte{rfbCutText, 0, 0, 0, 0, 0, 0, 0}
+	binary.BigEndian.PutUint32(b[4:], uint32(n))
+	return append(b, text...)
+}
+
+var bell = []byte{2}
+
+func cat(parts ...[]byte) []byte { return bytes.Join(parts, nil) }
+
+// kept is the bytes a playback's frames carry, in order.
+func kept(t *testing.T, pb RFBPlayback) []byte {
+	t.Helper()
+	var out []byte
+	for _, f := range pb.Frames {
+		_, data, _ := strings.Cut(f[1:], "{")
+		b, err := base64.StdEncoding.DecodeString(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, b...)
+	}
+	return out
+}
+
+func playback(t *testing.T, r *RFBRecorder) RFBPlayback {
+	t.Helper()
+	doc, _ := r.Playback()
+	var pb RFBPlayback
+	if err := json.Unmarshal(doc, &pb); err != nil {
+		t.Fatal(err)
+	}
+	return pb
+}
+
+// serverStream is a sandbox side: a static file on a kept-alive connection, the upgrade, the RFB
+// handshake, a framebuffer update split across a continuation with a ping inside, a message with the
+// desktop's clipboard between two bells, and a large update.
 func serverStream() []byte {
+	update := fbu(1, rawRect(1, 1, 9))
 	var b bytes.Buffer
 	b.WriteString("HTTP/1.1 200 OK\r\nContent-Length: 11\r\n\r\nvnc.html...")
 	b.WriteString(upgrade)
-	b.Write(wsFrame(true, 2, []byte("RFB 003.008\n"), nil))
-	b.Write(wsFrame(false, 2, []byte{0, 0, 0, 1}, nil))
+	b.Write(wsFrame(true, 2, rfbHello(), nil))
+	b.Write(wsFrame(false, 2, update[:10], nil))
 	b.Write(wsFrame(true, 9, []byte("ping"), nil))
-	b.Write(wsFrame(true, 0, []byte{0, 0, 0, 0}, nil))
-	b.Write(wsFrame(true, 2, bytes.Repeat([]byte{7}, 300), nil))
+	b.Write(wsFrame(true, 0, update[10:], nil))
+	b.Write(wsFrame(true, 2, cat(bell, cutText("hunter2", 7), bell), nil))
+	b.Write(wsFrame(true, 2, fbu(1, rawRect(75, 1, 7)), nil))
 	return b.Bytes()
 }
 
@@ -82,13 +156,9 @@ func TestRFBRecorderReplayGolden(t *testing.T) {
 			_, _ = r.Write(s[:n])
 			s = s[n:]
 		}
-		doc, had := r.Playback()
-		if !had {
-			t.Fatal("no frames kept")
-		}
-		var pb RFBPlayback
-		if err := json.Unmarshal(doc, &pb); err != nil || len(pb.Frames) != 3 {
-			t.Fatalf("chunk %d: %d frames (%v): %s", chunk, len(pb.Frames), err, doc)
+		pb := playback(t, r)
+		if len(pb.Frames) != 4 || pb.ClipboardOmitted != 1 || pb.StoppedMS != 0 {
+			t.Fatalf("chunk %d: %d frames, %d clipboard omitted, stopped %d", chunk, len(pb.Frames), pb.ClipboardOmitted, pb.StoppedMS)
 		}
 		for i := range pb.Frames { // frame times depend on how often the clock is read
 			_, data, _ := strings.Cut(pb.Frames[i][1:], "{")
@@ -115,27 +185,85 @@ func TestRFBRecorderReplayGolden(t *testing.T) {
 	}
 }
 
+// TestRFBRecorderOmitsServerCutText: the desktop's clipboard (ServerCutText, plain and extended, one
+// split across two WebSocket messages) never reaches the stored playback, and every other byte does,
+// through an update with each encoding noVNC asks for, so the reader stays in step.
+func TestRFBRecorderOmitsServerCutText(t *testing.T) {
+	update := fbu(12,
+		append(rect(4, 4, 7), 0x80, 1, 2, 3),                                              // Tight fill
+		append(rect(4, 4, 7), append([]byte{0x90, 0xc8, 0x01}, make([]byte, 200)...)...),  // Tight JPEG, 2-byte length
+		append(rect(8, 2, 7), 0x40, 1, 1, 1, 2, 3, 4, 5, 6, 0xaa, 0x55),                   // Tight palette of 2, raw rows
+		append(rect(4, 4, 7), append([]byte{0x00, 5}, make([]byte, 5)...)...),             // Tight copy, zlib
+		append(rect(16, 16, 5), 2|8|16, 1, 2, 3, 4, 1, 9, 9, 9, 9, 0, 0x11),               // Hextile, one coloured subrect
+		append(rect(2, 2, 2), 0, 0, 0, 1, 1, 1, 1, 1, 2, 2, 2, 2, 0, 0, 0, 0, 0, 1, 0, 1), // RRE, one subrect
+		append(rect(2, 2, 16), 0, 0, 0, 3, 1, 2, 3),                                       // ZRLE
+		append(rect(2, 2, 1), 0, 0, 0, 0),                                                 // CopyRect
+		append(rect(2, 2, -239), append(make([]byte, 16), 0xc0, 0xc0)...),                 // Cursor
+		append(rect(0, 0, -308), append([]byte{1, 0, 0, 0}, make([]byte, 16)...)...),      // ExtendedDesktopSize
+		append(rect(0, 0, -307), 0, 0, 0, 1, 'x'),                                         // DesktopName
+		rect(0, 0, -224), // LastRect
+	)
+	cut := cutText("hunter2", 7)
+	r := NewRFBRecorder(time.Now)
+	_, _ = r.Write([]byte(upgrade))
+	for _, m := range [][]byte{rfbHello(), update, cat(bell, cut[:5]), cat(cut[5:], cutText("{\"secret\":1}", -12)), bell} {
+		_, _ = r.Write(wsFrame(true, 2, m, nil))
+	}
+	_, _ = r.Write(wsFrame(true, 1, []byte(base64.StdEncoding.EncodeToString(bell)), nil)) // the base64 subprotocol
+	pb := playback(t, r)
+	got := kept(t, pb)
+	if want := cat(rfbHello(), update, bell, bell, bell); !bytes.Equal(got, want) {
+		t.Fatalf("kept %d bytes, want %d (stopped at %d)", len(got), len(want), pb.StoppedMS)
+	}
+	if pb.ClipboardOmitted != 2 || r.ClipboardOmitted() != 2 || bytes.Contains(got, []byte("hunter2")) || bytes.Contains(got, []byte("secret")) {
+		t.Fatalf("clipboard omitted = %d, kept the clipboard: %v", pb.ClipboardOmitted, bytes.Contains(got, []byte("hunter2")))
+	}
+}
+
+// TestRFBRecorderStopsOnAStreamItCannotFollow: an unknown server message stops the recording there,
+// so nothing it could not place (a clipboard among it) is kept.
+func TestRFBRecorderStopsOnAStreamItCannotFollow(t *testing.T) {
+	r := NewRFBRecorder(time.Now)
+	_, _ = r.Write([]byte(upgrade))
+	_, _ = r.Write(wsFrame(true, 2, rfbHello(), nil))
+	_, _ = r.Write(wsFrame(true, 2, cat([]byte{99}, cutText("hunter2", 7)), nil))
+	_, _ = r.Write(wsFrame(true, 2, bell, nil))
+	pb := playback(t, r)
+	if pb.StoppedMS == 0 || !bytes.Equal(kept(t, pb), rfbHello()) {
+		t.Fatalf("stopped %d, kept %q", pb.StoppedMS, kept(t, pb))
+	}
+}
+
+// TestRFBRecorderFindsAnUpgradeAfterAChunkedBody: on a reused connection, an upgrade that follows a
+// body of unknown length is still recorded.
+func TestRFBRecorderFindsAnUpgradeAfterAChunkedBody(t *testing.T) {
+	r := NewRFBRecorder(time.Now)
+	_, _ = r.Write([]byte("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n"))
+	_, _ = r.Write([]byte(upgrade[:6]))
+	_, _ = r.Write([]byte(upgrade[6:]))
+	_, _ = r.Write(wsFrame(true, 2, rfbHello(), nil))
+	if pb := playback(t, r); !bytes.Equal(kept(t, pb), rfbHello()) {
+		t.Fatalf("the upgrade after a chunked body was not recorded: %d frames", len(pb.Frames))
+	}
+}
+
 // TestRFBRecorderPauseGap: while paused no frame is kept, and the gap names its start, end and reason.
 func TestRFBRecorderPauseGap(t *testing.T) {
 	c := &clock{t: time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)}
 	r := NewRFBRecorder(c.now)
 	_, _ = r.Write([]byte(upgrade))
-	_, _ = r.Write(wsFrame(true, 2, []byte("before"), nil))
+	_, _ = r.Write(wsFrame(true, 2, rfbHello(), nil))
 	if !r.Pause("you took over to sign in") || r.Pause("again") {
 		t.Fatal("Pause should report true once")
 	}
-	_, _ = r.Write(wsFrame(true, 2, []byte("secret screen"), nil))
+	_, _ = r.Write(wsFrame(true, 2, fbu(1, append(rect(3, 1, 0), "secretscreen"...)), nil))
 	if !r.Resume() || r.Resume() {
 		t.Fatal("Resume should report true once")
 	}
-	_, _ = r.Write(wsFrame(true, 2, []byte("after"), nil))
-	doc, _ := r.Playback()
-	var pb RFBPlayback
-	if err := json.Unmarshal(doc, &pb); err != nil {
-		t.Fatal(err)
-	}
-	if len(pb.Frames) != 2 || strings.Contains(string(doc), "c2VjcmV0IHNjcmVlbg") {
-		t.Fatalf("a paused frame was kept: %s", doc)
+	_, _ = r.Write(wsFrame(true, 2, bell, nil))
+	pb := playback(t, r)
+	if len(pb.Frames) != 2 || bytes.Contains(kept(t, pb), []byte("secretscreen")) {
+		t.Fatalf("a paused frame was kept: %+v", pb)
 	}
 	if len(pb.Gaps) != 1 || pb.Gaps[0].Reason != "you took over to sign in" || pb.Gaps[0].EndMS <= pb.Gaps[0].StartMS {
 		t.Fatalf("gap = %+v", pb.Gaps)
@@ -146,20 +274,19 @@ func TestRFBRecorderPauseGap(t *testing.T) {
 func TestRFBRecorderTruncates(t *testing.T) {
 	r := NewRFBRecorder(time.Now)
 	_, _ = r.Write([]byte(upgrade))
-	big := bytes.Repeat([]byte{1}, 1<<20)
+	_, _ = r.Write(wsFrame(true, 2, rfbHello(), nil))
+	big := fbu(1, rawRect(512, 512, 1))
 	for range MaxRFBBytes/len(big) + 2 {
 		_, _ = r.Write(wsFrame(true, 2, big, nil))
 	}
-	doc, _ := r.Playback()
-	var pb RFBPlayback
-	_ = json.Unmarshal(doc, &pb)
-	if !pb.Truncated || len(pb.Frames) == 0 || len(pb.Frames) > MaxRFBBytes/len(big) {
+	pb := playback(t, r)
+	if !pb.Truncated || len(pb.Frames) == 0 || len(pb.Frames) > MaxRFBBytes/len(big)+1 {
 		t.Fatalf("truncated=%v frames=%d", pb.Truncated, len(pb.Frames))
 	}
 }
 
 // TestReadSideConnNeverRecordsKeystrokes: the browser writes RFB KeyEvents (and a ClientCutText)
-// through the relayed connection; the playback holds only what the sandbox sent. A recorder fed the
+// through the relayed connection; the recorder is given only what the sandbox sent. A recorder fed the
 // written side as well fails this test.
 func TestReadSideConnNeverRecordsKeystrokes(t *testing.T) {
 	sandbox, relay := net.Pipe()
@@ -170,14 +297,15 @@ func TestReadSideConnNeverRecordsKeystrokes(t *testing.T) {
 	key := []byte{4, 1, 0, 0, 0, 0, 0, 0x61} // KeyEvent down 'a'
 	cut := append([]byte{6, 0, 0, 0, 0, 0, 0, 9}, []byte("hunter2!!")...)
 	mask := []byte{1, 2, 3, 4}
+	hello := wsFrame(true, 2, rfbHello(), nil)
 	go func() {
 		_, _ = sandbox.Write([]byte(upgrade))
-		_, _ = sandbox.Write(wsFrame(true, 2, []byte("RFB 003.008\n"), nil))
+		_, _ = sandbox.Write(hello)
 		_, _ = io.Copy(io.Discard, sandbox) // the sandbox reads what the browser typed
 	}()
 	buf := make([]byte, 4096)
 	got := 0
-	for got < len(upgrade)+14 {
+	for got < len(upgrade)+len(hello) {
 		n, err := conn.Read(buf)
 		if err != nil {
 			t.Fatal(err)
@@ -191,17 +319,11 @@ func TestReadSideConnNeverRecordsKeystrokes(t *testing.T) {
 	}
 	_ = conn.Close()
 	<-closed
-	doc, _ := r.Playback()
-	var pb RFBPlayback
-	if err := json.Unmarshal(doc, &pb); err != nil {
-		t.Fatal(err)
-	}
-	if len(pb.Frames) != 1 || strings.Contains(string(doc), "BAEAAAAAAGE") || strings.Contains(string(doc), "aHVudGVy") {
-		t.Fatalf("the browser's side reached the recording: %s", doc)
-	}
-	for _, f := range pb.Frames {
-		if strings.HasPrefix(f, "}") {
-			t.Fatalf("a client frame was recorded: %q", f)
-		}
+	pb := playback(t, r)
+	r.mu.Lock()
+	seen := r.seen
+	r.mu.Unlock()
+	if seen != int64(len(upgrade)+len(hello)) || len(pb.Frames) != 1 || bytes.Contains(kept(t, pb), []byte("hunter2")) {
+		t.Fatalf("the browser's side reached the recorder: it was given %d bytes, the sandbox sent %d", seen, len(upgrade)+len(hello))
 	}
 }

@@ -42,9 +42,10 @@ type desktopPause struct {
 
 // recordDesktopConn records conn's sandbox side when the run records screen_actions, the app is the
 // desktop and the organisation keeps recordings; any other connection is returned as it is. The
-// browser's side is never read (recording.ReadSideConn), so keystrokes are never recorded.
+// browser's side is never read (recording.ReadSideConn), so keystrokes are never recorded. A run its
+// runner declined to record is still recorded here: this relay is Wardyn's, as for a console session.
 func (s *Server) recordDesktopConn(run types.AgentRun, sess uiSession, conn net.Conn) net.Conn {
-	if sess.App != desktopApp || run.RecordingLevel != types.RecordingScreenActions || run.NotRecorded != "" ||
+	if sess.App != desktopApp || run.RecordingLevel != types.RecordingScreenActions || run.NotRecorded == types.NotRecordedPolicyOff ||
 		s.cfg.RecordingStore == nil || runIsUnrecordable(run) {
 		return conn
 	}
@@ -68,7 +69,8 @@ func (s *Server) saveDesktopRecording(ctx context.Context, run types.AgentRun, s
 	saveCtx, cancel := context.WithTimeout(ctx, sessionRecordingSaveWait)
 	err := s.cfg.RecordingStore.SaveCastNamed(saveCtx, run.ID.String(), session, bytes.NewReader(doc))
 	cancel()
-	outcome, data := "success", map[string]any{"session": session, "key": key, "bytes": len(doc), "format": "novnc-playback"}
+	outcome, data := "success", map[string]any{"session": session, "key": key, "bytes": len(doc), "format": "novnc-playback",
+		"clipboard_omitted": rec.ClipboardOmitted()}
 	if err != nil {
 		outcome, data["error"] = "failure", err.Error()
 	}

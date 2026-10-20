@@ -19,7 +19,9 @@ import (
 // server's messages, as noVNC's playback reads them ("{<ms>{<base64>", tests/playback.js), plus the
 // gaps a pause left. The browser-to-sandbox half carries the person's keys, pointer and clipboard and
 // is never read: ReadSideConn tees Read only, and RFBRecorder has no other input. So keystrokes are
-// never recorded, by construction rather than by filtering.
+// never recorded, by construction rather than by filtering. The sandbox's half carries the desktop's
+// clipboard too (ServerCutText, which can hold a password copied inside the desktop): rfbStream follows
+// the messages so the recording leaves those out, and counts them.
 
 // MaxRFBBytes bounds one desktop recording's RFB payload. Past it the recording keeps its head and
 // says it was truncated, like a console session's cast.
@@ -45,6 +47,11 @@ type RFBPlayback struct {
 	Frames    []string  `json:"frames"`
 	Gaps      []RFBGap  `json:"gaps,omitempty"`
 	Truncated bool      `json:"truncated,omitempty"`
+	// ClipboardOmitted counts the desktop's clipboard messages (ServerCutText) left out of the frames;
+	// the browser still received them.
+	ClipboardOmitted int `json:"clipboard_omitted,omitempty"`
+	// StoppedMS is when the stream stopped being one the recorder could follow; nothing after it is kept.
+	StoppedMS int64 `json:"stopped_ms,omitempty"`
 }
 
 type rfbState int
@@ -53,7 +60,7 @@ const (
 	rfbHeader rfbState = iota // reading an HTTP response header
 	rfbBody                   // skipping a sized HTTP body
 	rfbFrames                 // reading WebSocket frames after a 101
-	rfbPass                   // nothing more to read here (a body of unknown length)
+	rfbScan                   // a body of unknown length: looking for the next upgrade response
 )
 
 // RFBRecorder turns the sandbox side of a relayed noVNC connection into an RFBPlayback. Write never
@@ -77,6 +84,11 @@ type RFBRecorder struct {
 	maskAt  int
 	msg     []byte
 
+	stream  *rfbStream // the RFB stream after a 101
+	kept    []byte
+	stopped int64
+	seen    int64 // every byte Write was given
+
 	frames    []string
 	size      int
 	truncated bool
@@ -96,6 +108,7 @@ func (r *RFBRecorder) Write(p []byte) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	n := len(p)
+	r.seen += int64(n)
 	for len(p) > 0 {
 		switch r.state {
 		case rfbHeader:
@@ -110,20 +123,36 @@ func (r *RFBRecorder) Write(p []byte) (int, error) {
 		case rfbFrames:
 			p = r.readFrames(p)
 		default:
-			return n, nil
+			p = r.scan(p)
 		}
 	}
 	return n, nil
 }
 
+// upgradeStatus starts the response a recording waits for after a body it cannot measure.
+var upgradeStatus = []byte("HTTP/1.1 101")
+
+// scan looks for the next upgrade response after a body of unknown length (chunked, or a header past
+// maxHTTPHeader), so an upgrade on a reused connection is still recorded. A body that happens to hold
+// the same bytes starts a stream the RFB reader then refuses, which keeps nothing.
+func (r *RFBRecorder) scan(p []byte) []byte {
+	buf := append(r.hdr, p...)
+	if i := bytes.Index(buf, upgradeStatus); i >= 0 {
+		r.state, r.hdr = rfbHeader, nil
+		return buf[i:]
+	}
+	r.hdr = append([]byte(nil), buf[max(0, len(buf)-len(upgradeStatus)+1):]...)
+	return nil
+}
+
 // readHeader collects one HTTP response header. A 101 switches to frames; a sized body is skipped to
-// the next response on a kept-alive connection; anything else ends the reading.
+// the next response on a kept-alive connection; any other body is scanned for the next upgrade.
 func (r *RFBRecorder) readHeader(p []byte) []byte {
 	r.hdr = append(r.hdr, p...)
 	end := bytes.Index(r.hdr, []byte("\r\n\r\n"))
 	if end < 0 {
 		if len(r.hdr) > maxHTTPHeader {
-			r.state, r.hdr = rfbPass, nil
+			r.state, r.hdr = rfbScan, nil
 		}
 		return nil
 	}
@@ -132,10 +161,10 @@ func (r *RFBRecorder) readHeader(p []byte) []byte {
 	r.hdr = nil
 	status, fields, _ := strings.Cut(head, "\r\n")
 	if parts := strings.Fields(status); len(parts) >= 2 && parts[1] == "101" {
-		r.state = rfbFrames
+		r.state, r.stream = rfbFrames, newRFBStream()
 		return rest
 	}
-	r.state = rfbPass
+	r.state = rfbScan
 	for line := range strings.SplitSeq(fields, "\r\n") {
 		k, v, _ := strings.Cut(line, ":")
 		if strings.EqualFold(strings.TrimSpace(k), "Content-Length") {
@@ -144,7 +173,7 @@ func (r *RFBRecorder) readHeader(p []byte) []byte {
 			}
 		}
 		if strings.EqualFold(strings.TrimSpace(k), "Transfer-Encoding") {
-			r.state = rfbPass
+			r.state = rfbScan
 			break
 		}
 	}
@@ -231,21 +260,41 @@ func (r *RFBRecorder) frameHeader() bool {
 	return true
 }
 
-// endFrame closes a frame; a final data frame ends its message, which is kept unless paused.
+// endFrame closes a frame; a final data frame ends its message. The RFB reader keeps the message's
+// bytes except ServerCutText, and they are a frame unless paused.
 func (r *RFBRecorder) endFrame() {
 	r.inFrame = false
 	if r.ctl || !r.fin {
 		return
 	}
-	if len(r.msg) > 0 && !r.paused && !r.truncated {
-		data := base64.StdEncoding.EncodeToString(r.msg)
-		if r.opcode == 1 {
-			data = string(r.msg) // websockify's base64 subprotocol already sends base64 text
+	payload := r.msg
+	if r.opcode == 1 { // websockify's base64 subprotocol sends base64 text
+		dec, err := base64.StdEncoding.DecodeString(string(r.msg))
+		if err != nil {
+			r.stream.fail()
 		}
-		r.frames = append(r.frames, "{"+strconv.FormatInt(r.ms(), 10)+"{"+data)
-		r.size += len(r.msg)
+		payload = dec
+	}
+	r.kept = r.kept[:0]
+	r.stream.feed(payload, func(b []byte) { r.kept = append(r.kept, b...) })
+	if r.stream.failed && r.stopped == 0 {
+		r.stopped = max(r.ms(), 1)
+	}
+	if len(r.kept) > 0 && !r.paused && !r.truncated {
+		r.frames = append(r.frames, "{"+strconv.FormatInt(r.ms(), 10)+"{"+base64.StdEncoding.EncodeToString(r.kept))
+		r.size += len(r.kept)
 	}
 	r.msg, r.opcode = r.msg[:0], 0
+}
+
+// ClipboardOmitted is how many clipboard messages the recording left out so far.
+func (r *RFBRecorder) ClipboardOmitted() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.stream == nil {
+		return 0
+	}
+	return r.stream.cutTexts
 }
 
 // Pause stops keeping frames and opens a gap; it reports false when already paused.
@@ -277,7 +326,11 @@ func (r *RFBRecorder) Playback() (doc []byte, hadFrames bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	pb := RFBPlayback{Version: 1, Format: "novnc-playback", Encoding: "base64", StartedAt: r.start.UTC(),
-		Frames: append([]string{}, r.frames...), Gaps: append([]RFBGap(nil), r.gaps...), Truncated: r.truncated}
+		Frames: append([]string{}, r.frames...), Gaps: append([]RFBGap(nil), r.gaps...), Truncated: r.truncated,
+		StoppedMS: r.stopped}
+	if r.stream != nil {
+		pb.ClipboardOmitted = r.stream.cutTexts
+	}
 	if r.paused {
 		pb.Gaps[len(pb.Gaps)-1].EndMS = max(r.ms(), 1)
 	}
