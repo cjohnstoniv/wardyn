@@ -615,6 +615,22 @@ test.describe("Run detail: the Sync rows of a live remote run", () => {
   });
 });
 
+// #2822: the harness's own walls the run launched with read under its Policy row.
+test.describe("Run detail: the inner walls a run launched with", () => {
+  test("read under the Policy row", async ({ page }) => {
+    const runId = sql("SELECT id FROM agent_runs ORDER BY created_at LIMIT 1");
+    await page.route(`**/api/v1/runs/${runId}`, async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const response = await route.fetch();
+      const json = await response.json();
+      await route.fulfill({ response, json: { ...json, inner_walls: { sandbox_mode: "off", approvals: "wardyn" } } });
+    });
+    await gotoConsole(page);
+    await page.goto(`/runs/${runId}`);
+    await expect(page.getByText(NR_REVIEW.INNER_WALLS(NR_REVIEW.INNER_SANDBOX_OFF, NR_REVIEW.INNER_APPROVALS_WARDYN))).toBeVisible();
+  });
+});
+
 // T19 (ADO lane): a run that names an Azure DevOps repository but was not
 // given the per-person credential carries a run.ado_lane.skip audit row, and
 // its Credentials panel shows that row's sentence under the Azure DevOps

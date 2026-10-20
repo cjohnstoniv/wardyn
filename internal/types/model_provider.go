@@ -6,6 +6,7 @@ package types
 import (
 	"maps"
 	"slices"
+	"strings"
 )
 
 // ModelProviders is the org's model-provider CONFIGURATION: which credential kinds this deployment
@@ -56,6 +57,11 @@ const (
 	// ModelProviderAzureFoundry: each person's own Entra sign-in, captured for one Azure resource audience.
 	// Writable only while validateModelProviders' activation flag (azureFoundryGateReady) is true.
 	ModelProviderAzureFoundry ModelProviderKind = "azure_foundry"
+	// ModelProviderLocalModel: a model server the admin runs on a laptop host or an org node (Ollama,
+	// llama.cpp server, LM Studio, vLLM), reached only through the run proxy's brokered route, which
+	// holds each request to the provider's model allowlist (LocalModelSettings). It has no per-person
+	// credential unless Auth is set; then each person's own token is sent the way Auth says.
+	ModelProviderLocalModel ModelProviderKind = "local_model"
 )
 
 // The two inference routes an azure_foundry row serves. One row serves one route, and a route names the one
@@ -70,7 +76,7 @@ var ClosedModelProviderKinds = map[ModelProviderKind]bool{
 	ModelProviderAnthropicSubscription: true, ModelProviderBedrockSSO: true,
 	ModelProviderAnthropicAPIKey: true, ModelProviderOpenAIAPIKey: true,
 	ModelProviderBedrockBearer: true, ModelProviderCustomEndpoint: true,
-	ModelProviderAzureFoundry: true,
+	ModelProviderAzureFoundry: true, ModelProviderLocalModel: true,
 }
 
 // ClosedModelProviderKindList is ClosedModelProviderKinds in stable order, for a rejected write's error.
@@ -102,12 +108,13 @@ type ModelProvider struct {
 	// Disabled is negative-sense so the zero value is ENABLED. A disabled provider may remain an agent's
 	// default: that default becomes a refused sentinel, never a fall-through to another provider.
 	Disabled bool `json:"disabled,omitempty"`
-	// BaseURL: required for custom_endpoint, an optional gateway override for Anthropic/OpenAI, never set
-	// on Bedrock (its address is Bedrock.BaseURL).
-	BaseURL string           `json:"base_url,omitempty"`
-	Auth    *ProviderAuth    `json:"auth,omitempty"`    // how each person's token is sent; custom_endpoint only
-	Bedrock *BedrockSettings `json:"bedrock,omitempty"` // region, address and sign-in setup for a Bedrock kind
-	Azure   *AzureSettings   `json:"azure,omitempty"`   // endpoint and route for azure_foundry
+	// BaseURL: required for custom_endpoint and local_model, an optional gateway override for
+	// Anthropic/OpenAI, never set on Bedrock (its address is Bedrock.BaseURL).
+	BaseURL string              `json:"base_url,omitempty"`
+	Auth    *ProviderAuth       `json:"auth,omitempty"`    // how each person's token is sent; custom_endpoint, or local_model when its server wants one
+	Bedrock *BedrockSettings    `json:"bedrock,omitempty"` // region, address and sign-in setup for a Bedrock kind
+	Azure   *AzureSettings      `json:"azure,omitempty"`   // endpoint and route for azure_foundry
+	Local   *LocalModelSettings `json:"local,omitempty"`   // model allowlist and request bounds for local_model
 	// Harnesses are the harnesses this provider serves, with per-pairing settings.
 	Harnesses []ProviderHarness `json:"harnesses,omitempty"`
 }
@@ -137,6 +144,46 @@ type BedrockSettings struct {
 type AzureSettings struct {
 	Endpoint string `json:"endpoint,omitempty"`
 	Route    string `json:"route,omitempty"`
+}
+
+// LocalModelSettings is a local_model provider's model allowlist and the bounds its proxy route puts
+// on each request. A run on the provider reaches exactly these models; a zero bound is the default
+// (LocalModelBounds).
+type LocalModelSettings struct {
+	Models           []string `json:"models"`
+	MaxContext       int      `json:"max_context,omitempty"`        // cap on a request's options.num_ctx
+	MaxOutput        int      `json:"max_output,omitempty"`         // cap on max_tokens and its per-API spellings
+	KeepAliveSeconds int      `json:"keep_alive_seconds,omitempty"` // cap on keep_alive, so no run pins a model in memory
+}
+
+// The default bounds: generous enough for an agent's long context and replies, small enough that one
+// run cannot hold a model in memory indefinitely.
+const (
+	DefaultLocalMaxContext       = 32768
+	DefaultLocalMaxOutput        = 32768
+	DefaultLocalKeepAliveSeconds = 1800
+)
+
+// LocalModelBounds is s's bounds with each zero replaced by its default.
+func (s LocalModelSettings) LocalModelBounds() LocalModelSettings {
+	if s.MaxContext == 0 {
+		s.MaxContext = DefaultLocalMaxContext
+	}
+	if s.MaxOutput == 0 {
+		s.MaxOutput = DefaultLocalMaxOutput
+	}
+	if s.KeepAliveSeconds == 0 {
+		s.KeepAliveSeconds = DefaultLocalKeepAliveSeconds
+	}
+	return s
+}
+
+// LocalModelNameRefused reports whether a model name is one no local_model run may name, listed or
+// not: a name with a "/" (a registry host or namespace, which makes the model server fetch from a
+// registry) or a cloud model (a ":cloud" or "-cloud" tag, which the server forwards off the machine).
+func LocalModelNameRefused(name string) bool {
+	n := strings.ToLower(name)
+	return strings.Contains(n, "/") || strings.HasSuffix(n, ":cloud") || strings.HasSuffix(n, "-cloud")
 }
 
 // ProviderHarness is one harness a provider is enabled for, and the settings for that pairing.

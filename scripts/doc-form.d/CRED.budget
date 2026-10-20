@@ -6,4 +6,6 @@
 # 0.9.4 L8: docs/CREDENTIALS.md 3684 adds 135 over 3549: the tool-approval credential row and the SigV4 wording.
 # docs/CREDENTIALS.md 3981 adds 297 (0.10.0 SEC-1), measured: the credential-hardening rows: k8s 0400 and wipe-after-read, git_pat off for members, AWS SSO off removed, sign-in wipe, CLI cache on tmpfs, PT1H, and the placeholder and response-scrub switches.
 # docs/CREDENTIALS.md 4000 adds 19 (0.10.0 SEC-1 round 2), measured: the placeholder fills only the Authorization header, and the response-echo caveat.
-docs/CREDENTIALS.md=4000 share=35
+# 0.10 MDL: docs/CREDENTIALS.md 3696 adds 12 over 3684, measured: #2957 local_model joins the token kinds row.
+# docs/CREDENTIALS.md 4012 = ours 4000 + theirs 3696 - base 3684 at the 0.10 W2 merge of MDL onto the train.
+docs/CREDENTIALS.md=3997 share=35

@@ -113,6 +113,15 @@ func TestLocalEligibilityRefusesAGatewayRoute(t *testing.T) {
 	}
 }
 
+// A local model server is never sent with a run to a local runner (#2957).
+func TestLocalEligibilityRefusesALocalModelRoute(t *testing.T) {
+	p := LocalPlan{Spec: runner.SandboxSpec{ProxyConfig: runner.ProxyConfig{
+		LocalModels: map[string]types.LocalModelSettings{"http://host.docker.internal:11434": {Models: []string{"qwen2.5:3b"}}}}}}
+	if _, r := LocalEligibility(p); r == nil || r.Reason != ReasonPlacementCredential || r.Field != "ProxyConfig.LocalModels" {
+		t.Fatalf("refusal %v, want placement_credential on ProxyConfig.LocalModels", r)
+	}
+}
+
 func TestLocalEligibilityStripsOperatorConfigWithoutMutating(t *testing.T) {
 	li := &types.LLMInspectionSpec{Mode: "block", WorkspaceSecretNames: []string{"operator-key"}, WorkspaceSecretValues: []string{"private"}, DetectSecretPatterns: true}
 	p := LocalPlan{OrgConfigKeys: []string{"ORG_KEY"}, Spec: runner.SandboxSpec{Env: map[string]string{"ORG_KEY": "private", "OWN": "value"}, ProxyConfig: runner.ProxyConfig{Policy: types.RunPolicySpec{LLMInspection: li}, UpstreamProxyURL: "https://user:password@parent", TrustedCAPEM: "corporate", InternalHosts: []types.InternalHost{{HostSuffix: "corp"}}, MITMHosts: []string{"corp:443"}}}}

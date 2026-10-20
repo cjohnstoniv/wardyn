@@ -182,7 +182,8 @@ func localCapturedSecretName(sc types.SiteConfig, owner, sentinel string, raw js
 			switch p.Kind {
 			case types.ModelProviderAnthropicSubscription:
 				part = providerOAuthPart
-			case types.ModelProviderAnthropicAPIKey, types.ModelProviderOpenAIAPIKey, types.ModelProviderCustomEndpoint, types.ModelProviderBedrockBearer:
+			case types.ModelProviderAnthropicAPIKey, types.ModelProviderOpenAIAPIKey, types.ModelProviderCustomEndpoint, types.ModelProviderBedrockBearer,
+				types.ModelProviderLocalModel:
 				part = providerKeyPart
 			default:
 				return "", fmt.Errorf("unclassified provider capture kind")

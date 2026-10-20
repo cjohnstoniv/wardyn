@@ -205,6 +205,7 @@ func BuildProxyConfig(runID uuid.UUID, pc ProxyConfig, port int) ([]byte, error)
 		LLMUpstreams:         pc.LLMUpstreams,
 		LLMChannelHosts:      pc.LLMChannelHosts,
 		LLMUnavailableDetail: pc.LLMUnavailableDetail,
+		LocalModels:          pc.LocalModels,
 		Unattended:           pc.Unattended,
 		ScrubResponses:       pc.ScrubResponses,
 		Attribution:          pc.Attribution,
@@ -215,6 +216,8 @@ func BuildProxyConfig(runID uuid.UUID, pc ProxyConfig, port int) ([]byte, error)
 		HarnessCredentials:   pc.HarnessCredentials,
 		MCPServers:           pc.MCPServers,
 		MCPBindings:          pc.MCPBindings,
+		VM:                   pc.VM,
+		PortRule:             pc.PortRule,
 	}
 	return json.Marshal(cfg)
 }
