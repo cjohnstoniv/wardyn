@@ -568,7 +568,7 @@ So:
 | Never fires on | `ui-e2e`, `test-pg-shard`, the `go` test legs: their reds can be flakes |
 | Events | `pull_request` from this repository; push, `merge_group`, forks and Dependabot keep a full run |
 | Required checks | none renamed or added; `build` and `test-pg` still run on `!cancelled()` |
-| Pinned by | `cmd/wardynd/ci_stop_early_guard_test.go` |
+| Pinned by | [`cmd/wardynd/ci_stop_early_guard_test.go`](../cmd/wardynd/ci_stop_early_guard_test.go) |
 
 - A cancelled run cannot read green: the failed gate keeps `failure`, and every unfinished job ends `cancelled`, which branch protection rejects.
   - Read from 12 cancelled runs: `build` ended `cancelled` 12 times, `test-pg` 11 (once `failure`).
