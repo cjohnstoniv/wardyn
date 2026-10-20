@@ -8,9 +8,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -143,5 +148,51 @@ func TestOfflineSummaryNeverHoldsAProxyPassword(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, startupFailureFile)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("the startup failure file outlives its acknowledgement: %v", err)
+	}
+}
+
+// TestRunnerStagesAreDoctorStageNames ties types.RunnerStages to the stage names `wardyn-runnerd doctor`
+// emits: every stage an offline summary may name is the first argument of a doctor OKStage, FailStage
+// or SkipStage call in internal/doctor or in this command's doctor.
+func TestRunnerStagesAreDoctorStageNames(t *testing.T) {
+	files, err := filepath.Glob("../../internal/doctor/*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files = append(files, "doctor.go")
+	var names []string
+	fset := token.NewFileSet()
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, f, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok || len(call.Args) == 0 {
+				return true
+			}
+			fn := ""
+			switch f := call.Fun.(type) {
+			case *ast.Ident:
+				fn = f.Name
+			case *ast.SelectorExpr:
+				fn = f.Sel.Name
+			}
+			if lit, ok := call.Args[0].(*ast.BasicLit); ok && lit.Kind == token.STRING && slices.Contains([]string{"OKStage", "FailStage", "SkipStage"}, fn) {
+				if s, err := strconv.Unquote(lit.Value); err == nil {
+					names = append(names, s)
+				}
+			}
+			return true
+		})
+	}
+	for _, s := range types.RunnerStages {
+		if !slices.Contains(names, s) {
+			t.Errorf("types.RunnerStages names %q, which no doctor stage emits (doctor emits %v)", s, names)
+		}
 	}
 }

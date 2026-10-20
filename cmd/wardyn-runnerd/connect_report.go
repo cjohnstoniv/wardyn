@@ -165,6 +165,9 @@ type relayWatch struct {
 
 	mu     sync.Mutex
 	status types.RunnerRelayStatus
+	// unsent is set by every state change and cleared only once caps carrying that state went out, so
+	// a change made while the runner was offline still goes with a resumed session's caps.
+	unsent bool
 }
 
 // newRelayWatch starts reachable: serve's start found the relay with a probe container.
@@ -192,6 +195,7 @@ func (w *relayWatch) check(ctx context.Context) bool {
 		return false
 	}
 	w.status = types.RunnerRelayStatus{State: state, Since: w.now().UTC(), Reason: reason}
+	w.unsent = true
 	if err != nil {
 		slog.WarnContext(ctx, relayUnreachableWarning, "warning", "relay_unreachable", "error", reason)
 	} else {
@@ -205,6 +209,23 @@ func (w *relayWatch) current() *types.RunnerRelayStatus {
 	defer w.mu.Unlock()
 	s := w.status
 	return &s
+}
+
+// pending is the current status and whether the organisation has yet to receive it.
+func (w *relayWatch) pending() (*types.RunnerRelayStatus, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	s := w.status
+	return &s, w.unsent
+}
+
+// sent clears unsent once caps carrying s went out, unless the state changed again since.
+func (w *relayWatch) sent(s *types.RunnerRelayStatus) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if s != nil && *s == w.status {
+		w.unsent = false
+	}
 }
 
 // run checks every relayReprobeInterval until ctx ends, and calls changed after a check that changed
@@ -232,14 +253,15 @@ type connectReport struct {
 }
 
 // fill adds both parts to caps, re-probing the relay first when reprobe (every reconnect does). It says
-// whether the relay's state changed or a summary waits, so a resumed session knows to send caps again.
+// whether a relay state the organisation has not received or a summary waits, so a resumed session
+// knows to send caps again.
 func (r connectReport) fill(ctx context.Context, caps *runnerwire.Caps, reprobe bool) bool {
 	news := false
 	if r.relay != nil {
 		if reprobe {
-			news = r.relay.check(ctx)
+			r.relay.check(ctx)
 		}
-		caps.Relay = r.relay.current()
+		caps.Relay, news = r.relay.pending()
 	}
 	if r.log != nil {
 		caps.OfflineSummary = r.log.pending()
@@ -252,5 +274,8 @@ func (r connectReport) fill(ctx context.Context, caps *runnerwire.Caps, reprobe 
 func (r connectReport) sent(caps runnerwire.Caps) {
 	if r.log != nil {
 		r.log.sent(caps.OfflineSummary)
+	}
+	if r.relay != nil {
+		r.relay.sent(caps.Relay)
 	}
 }

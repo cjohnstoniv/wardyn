@@ -98,3 +98,75 @@ func TestEveryReconnectReprobesTheRelay(t *testing.T) {
 		t.Fatalf("an acknowledged summary is sent again: %+v", c.OfflineSummary)
 	}
 }
+
+// TestARelayChangeWhileOfflineGoesWithTheResumedSession: the interval check flips the relay's state
+// while the runner has no session, so nothing is sent then; the session that resumes finds no change on
+// its own re-probe, and still sends caps carrying the new state, once.
+func TestARelayChangeWhileOfflineGoesWithTheResumedSession(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	_, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var down atomic.Bool
+	watch := newRelayWatch(func(context.Context) error {
+		if down.Load() {
+			return errors.New("relay: nothing answers")
+		}
+		return nil
+	}, nil)
+	rt, err := runnerRuntimeWith(ctx, runneridentity.Identity{RunnerID: uuid.New(), PrivateKey: key}, t.TempDir(), runnertest.NewFake(),
+		func(id uuid.UUID) string { return "fake-" + id.String() }, newLocalRelay(ctx), unsized,
+		runtimeExtras{report: connectReport{relay: watch}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rt.close()
+
+	caps := make(chan runnerwire.Caps, 4)
+	a, b := runnerwire.Loopback()
+	org := runnerwire.NewPeer(a, runnerwire.PeerConfig{Org: true, OnEventChecked: func(ev runnerwire.Event) error {
+		var c runnerwire.Caps
+		if ev.Kind == runnerwire.EventCaps && runnerwire.Unmarshal(ev.Data, &c) == nil {
+			caps <- c
+		}
+		return nil
+	}})
+	run := runnerwire.NewPeer(b, runnerwire.PeerConfig{})
+	defer org.Close()
+	defer run.Close()
+	go org.Run(ctx) //nolint:errcheck // the test owns shutdown
+	go run.Run(ctx) //nolint:errcheck // the test owns shutdown
+	next := func(within time.Duration) (runnerwire.Caps, bool) {
+		select {
+		case c := <-caps:
+			return c, true
+		case <-time.After(within):
+			return runnerwire.Caps{}, false
+		}
+	}
+
+	if err := rt.hooks.Replay(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	if c, ok := next(5 * time.Second); !ok || c.Relay == nil || c.Relay.State != types.RelayReachable {
+		t.Fatalf("fresh session caps %+v (sent %v), want reachable", c.Relay, ok)
+	}
+
+	rt.hooks.StreamOffline(run)
+	down.Store(true)
+	if !watch.check(ctx) { // the interval check, with no session to send caps on
+		t.Fatal("the offline check saw no change")
+	}
+
+	rt.hooks.Online(run, true)
+	c, ok := next(5 * time.Second)
+	if !ok || c.Relay == nil || c.Relay.State != types.RelayUnreachable {
+		t.Fatalf("resumed session caps %+v (sent %v), want the unreachable state found while offline", c.Relay, ok)
+	}
+	rt.hooks.Online(run, true)
+	if c, ok := next(500 * time.Millisecond); ok {
+		t.Fatalf("a state already sent goes again on the next resume: %+v", c.Relay)
+	}
+}
