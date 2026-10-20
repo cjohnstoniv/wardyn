@@ -59,7 +59,7 @@ func cliSignIn(baseURL string) bool {
 	if err != nil {
 		return false
 	}
-	resp, err := noRedirectClient.Do(req)
+	resp, err := orgClient(baseURL, 0).Do(req)
 	if err != nil {
 		return false
 	}
