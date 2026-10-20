@@ -512,6 +512,14 @@ describe("Run step: mode, timing and command", () => {
       expect(screen.getByRole("button", { name: NR_RUN.PORT_ADD })).toHaveFocus();
     });
 
+    it("moves focus to the row above when the bottom row of several is removed", async () => {
+      show({ ...SERVER, inline_policy: { ui_apps: [{ name: "web", port: 3000, path: "/" }, { name: "api", port: 3001, path: "/" }] } });
+      await poolSelect();
+      await userEvent.click(within(rows()[1]).getByRole("button", { name: NR_RUN.APP_REMOVE_ARIA("api") }));
+      expect(rows()).toHaveLength(1);
+      expect(within(rows()[0]).getByRole("button", { name: NR_RUN.APP_REMOVE_ARIA("web") })).toHaveFocus();
+    });
+
     it("says a repeated name on the later row, a bad name and a bad path on their own rows", async () => {
       show({
         ...SERVER,

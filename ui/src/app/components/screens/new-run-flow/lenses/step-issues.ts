@@ -10,7 +10,8 @@ export type NewRunStep = "shape" | "run" | "harnesses" | "files" | "tools";
 export const NEW_RUN_STEPS: readonly NewRunStep[] = ["shape", "run", "harnesses", "files", "tools"];
 
 /** What is wrong with one field of a port row. */
-export type AppProblemCode = "app_name_invalid" | "app_name_duplicate" | "app_port_invalid" | "app_port_duplicate" | "app_path_invalid";
+export const APP_PROBLEM_CODES = ["app_name_invalid", "app_name_duplicate", "app_port_invalid", "app_port_duplicate", "app_path_invalid"] as const;
+export type AppProblemCode = (typeof APP_PROBLEM_CODES)[number];
 
 export type StepIssueCode =
   | AppProblemCode

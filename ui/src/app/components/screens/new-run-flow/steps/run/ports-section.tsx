@@ -29,10 +29,14 @@ export function PortsSection({ apps, edit, add, remove }: Props) {
   const problems = portProblems(apps);
   const full = apps.length >= MAX_APPS;
   const addRef = useRef<HTMLButtonElement>(null);
-  // The last row's Remove button leaves with its row; focus goes to the control that brings a row back.
+  const removeRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  // The bottom row's Remove button leaves with its row. Focus goes to the row above's Remove, or to Add when no row
+  // is left (a full list's Add is still disabled at this moment, so the row above is the only choice there).
   const removeRow = (i: number) => {
     remove(i);
-    if (apps.length === 1) addRef.current?.focus();
+    if (i !== apps.length - 1) return;
+    if (i > 0) removeRefs.current[i - 1]?.focus();
+    else addRef.current?.focus();
   };
   return (
     <fieldset className="m-0 flex min-w-0 flex-col gap-2 border-0 p-0">
@@ -62,7 +66,7 @@ export function PortsSection({ apps, edit, add, remove }: Props) {
                 onChange={(e) => edit(i, { port: Number(e.target.value.replace(/\D/g, "").slice(0, 6)) })}
               />
               <Input {...attrs("path")} aria-label={NR_RUN.APP_PATH_ARIA(who)} className="font-mono" value={app.path ?? ""} onChange={(e) => edit(i, { path: e.target.value })} />
-              <Button type="button" variant="ghost" size="sm" aria-label={NR_RUN.APP_REMOVE_ARIA(who)} onClick={() => removeRow(i)}>{NR_SHARED.REMOVE}</Button>
+              <Button ref={(el) => { removeRefs.current[i] = el; }} type="button" variant="ghost" size="sm" aria-label={NR_RUN.APP_REMOVE_ARIA(who)} onClick={() => removeRow(i)}>{NR_SHARED.REMOVE}</Button>
             </div>
             {FIELDS.map((f) => {
               const problem = problems[i][f];

@@ -21,7 +21,7 @@ import {
 } from "../draft/field-homes";
 import type { NewRunLocation } from "../draft/new-run-url";
 import type { RunIntent } from "../draft/run-intent";
-import type { AppProblemCode, StepIssue, StepIssueCode } from "../lenses/step-issues";
+import { APP_PROBLEM_CODES, type AppProblemCode, type StepIssue, type StepIssueCode } from "../lenses/step-issues";
 import { appIssueText } from "../steps/run/app-issue-text";
 
 export type BlockerKind = "local" | "gateway_off" | "unsupported" | "template_setup" | "template_unread" | "refusal" | "setup_item" | "stale";
@@ -56,7 +56,7 @@ const ISSUE_TEXT: Record<Exclude<StepIssueCode, AppProblemCode>, string> = {
   doc_invalid: NR_DOCUMENT.DOC_INVALID,
 };
 
-const isAppProblem = (code: StepIssueCode): code is AppProblemCode => code.startsWith("app_") && code !== "app_required";
+const isAppProblem = (code: StepIssueCode): code is AppProblemCode => (APP_PROBLEM_CODES as readonly StepIssueCode[]).includes(code);
 
 /** "inline_policy.model_provider" as "Model provider": the field named, not a sentence about it. */
 const fieldLabel = (field: string): string => {
