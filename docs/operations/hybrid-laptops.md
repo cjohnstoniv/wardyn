@@ -226,7 +226,7 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 ### Managed preferences
 
 - The profile's preference domain is `com.wardyn.runnerd`, which macOS writes to `/Library/Managed Preferences/com.wardyn.runnerd.plist`. A user-scoped profile lands in `/Library/Managed Preferences/<user>/com.wardyn.runnerd.plist` and wins over the device-wide file for that user.
-- `wardyn-runnerd serve` reads it as the default of a flag. A flag wins over the profile, and the profile wins over the environment variable `setup` writes. An empty key is unset.
+- `wardyn-runnerd serve` reads it as the default of a flag. A flag wins over the profile, and the profile wins over the environment variable `setup` writes, unless the profile sets `lock_security_settings` (below). An empty key is unset.
 
 | Key | Same as | Notes |
 |---|---|---|
@@ -239,6 +239,7 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 | `OrgCAFile` | `--org-ca-file` | a PEM file of extra roots for the runner's own connection to the organisation only; root-owned, not writable by group or others |
 | `RecordingStore` | `--recording-store` | `pg`, `fs` or `off` |
 | `DockerHost` | `DOCKER_HOST` | the engine's socket, when it is not the default |
+| `lock_security_settings` | none: profile only | a boolean, off by default. `true` makes the profile win over a flag for the five keys below it, and `serve` refuses a flag or environment variable that disagrees, naming this key |
 
 ## A folder on your computer for a remote sandbox
 

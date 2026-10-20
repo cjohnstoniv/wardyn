@@ -67,31 +67,38 @@ const (
 	sourceDefault = "default"
 )
 
-// runnerField names one setting everywhere it can come from. The zero flag, env or managed is "none".
+// lockSettingKey is the managed preference that makes the managed profile outrank a flag or environment
+// variable for the security settings (the fields marked locked). It has no flag, no environment variable and
+// no runnerd.json field: only the profile an administrator pushes can set it.
+const lockSettingKey = "lock_security_settings"
+
+// runnerField names one setting everywhere it can come from. The zero flag, env or managed is "none". locked
+// marks a security setting the managed profile pins when it sets lockSettingKey.
 type runnerField struct {
 	name    string
 	flag    string
 	env     []string
 	managed string
 	def     string
+	locked  bool
 	file    func(*runnerFile) *string
 }
 
 var runnerFields = []runnerField{
-	{name: "org_url", flag: "org", managed: "OrgURL", file: func(f *runnerFile) *string { return &f.OrgURL }},
+	{name: "org_url", flag: "org", managed: "OrgURL", locked: true, file: func(f *runnerFile) *string { return &f.OrgURL }},
 	{name: "state_dir", flag: "state-dir", file: func(f *runnerFile) *string { return &f.StateDir }},
 	{name: "docker_host", env: []string{"DOCKER_HOST"}, managed: "DockerHost", file: func(f *runnerFile) *string { return &f.DockerHost }},
-	{name: "proxy_image", flag: "proxy-image", env: []string{"WARDYN_PROXY_IMAGE"}, managed: "ProxyImage", file: func(f *runnerFile) *string { return &f.ProxyImage }},
+	{name: "proxy_image", flag: "proxy-image", env: []string{"WARDYN_PROXY_IMAGE"}, managed: "ProxyImage", locked: true, file: func(f *runnerFile) *string { return &f.ProxyImage }},
 	{name: "proxy_image_mirror", file: func(f *runnerFile) *string { return &f.ProxyImageMirror }},
 	{name: "relay_listen", flag: "relay-listen", env: []string{"WARDYN_RELAY_LISTEN"}, managed: "RelayListen", file: func(f *runnerFile) *string { return &f.RelayListen }},
 	{name: "relay_host_target", flag: "relay-host-target", env: []string{"WARDYN_RELAY_HOST_TARGET"}, managed: "RelayHostTarget", file: func(f *runnerFile) *string { return &f.RelayHostTarget }},
 	{name: "internal_network", flag: "internal-network", env: []string{"WARDYN_INTERNAL_NETWORK"}, managed: "InternalNetwork", def: "wardyn-internal", file: func(f *runnerFile) *string { return &f.InternalNetwork }},
-	{name: "trusted_ca_file", flag: "trusted-ca-file", env: []string{"WARDYN_TRUSTED_CA_FILE"}, managed: "TrustedCAFile", file: func(f *runnerFile) *string { return &f.TrustedCAFile }},
-	{name: "org_ca_file", flag: "org-ca-file", env: []string{"WARDYN_ORG_CA_FILE"}, managed: "OrgCAFile", file: func(f *runnerFile) *string { return &f.OrgCAFile }},
+	{name: "trusted_ca_file", flag: "trusted-ca-file", env: []string{"WARDYN_TRUSTED_CA_FILE"}, managed: "TrustedCAFile", locked: true, file: func(f *runnerFile) *string { return &f.TrustedCAFile }},
+	{name: "org_ca_file", flag: "org-ca-file", env: []string{"WARDYN_ORG_CA_FILE"}, managed: "OrgCAFile", locked: true, file: func(f *runnerFile) *string { return &f.OrgCAFile }},
 	{name: "upstream_proxy", flag: "upstream-proxy", env: []string{"WARDYN_UPSTREAM_PROXY"}, file: func(f *runnerFile) *string { return &f.UpstreamProxy }},
 	{name: "runner_proxy", env: []string{"HTTPS_PROXY", "https_proxy"}, file: func(f *runnerFile) *string { return &f.RunnerProxy }},
 	{name: "runner_no_proxy", env: []string{"NO_PROXY", "no_proxy"}, file: func(f *runnerFile) *string { return &f.RunnerNoProxy }},
-	{name: "recording_store", flag: "recording-store", env: []string{"WARDYN_RECORDING_STORE"}, managed: "RecordingStore", def: "pg", file: func(f *runnerFile) *string { return &f.RecordingStore }},
+	{name: "recording_store", flag: "recording-store", env: []string{"WARDYN_RECORDING_STORE"}, managed: "RecordingStore", def: "pg", locked: true, file: func(f *runnerFile) *string { return &f.RecordingStore }},
 }
 
 // resolvedField is one setting's effective value and where it came from, for serve and for any command
@@ -123,10 +130,62 @@ type runnerInputs struct {
 	managed  func(key string) string
 	file     runnerFile
 	filePath string
+	// locked is set by resolveRunnerConfig from the managed profile's lockSettingKey, never by a caller.
+	locked bool
 }
 
-// resolveRunnerConfig applies flag > managed preference > environment > file > default to every field.
+// securityLocked is whether the managed profile sets lockSettingKey. A value that is neither true nor false
+// reads as locked, with an error, so a typo in the profile never silently leaves the settings open.
+func securityLocked(managed func(string) string) (bool, error) {
+	if managed == nil {
+		return false, nil
+	}
+	switch v := strings.ToLower(managed(lockSettingKey)); v {
+	case "", "false", "0":
+		return false, nil
+	case "true", "1":
+		return true, nil
+	default:
+		return true, fmt.Errorf("managed preference %s must be true or false", lockSettingKey)
+	}
+}
+
+// checkSecurityLock refuses a flag or environment variable that disagrees with a managed security setting
+// while the profile sets lockSettingKey. A setting the profile leaves empty is not locked, and a value is
+// never repeated in the error.
+func checkSecurityLock(in runnerInputs) error {
+	if locked, err := securityLocked(in.managed); err != nil || !locked {
+		return err
+	}
+	for _, f := range runnerFields {
+		want := ""
+		if f.locked && f.managed != "" {
+			want = in.managed(f.managed)
+		}
+		if want == "" {
+			continue
+		}
+		refuse := func(how string) error {
+			return fmt.Errorf("%s disagrees with the managed preference %s, and the managed profile sets %s: remove it, or ask your administrator to change the profile", how, f.managed, lockSettingKey)
+		}
+		if f.flag != "" && in.flag != nil {
+			if v, ok := in.flag(f.flag); ok && strings.TrimSpace(v) != "" && strings.TrimSpace(v) != want {
+				return refuse("--" + f.flag)
+			}
+		}
+		for _, name := range f.env {
+			if v := strings.TrimSpace(in.getenv(name)); v != "" && v != want {
+				return refuse("environment variable " + name)
+			}
+		}
+	}
+	return nil
+}
+
+// resolveRunnerConfig applies flag > managed preference > environment > file > default to every field. While
+// the managed profile sets lockSettingKey, a security field's managed value outranks the flag too.
 func resolveRunnerConfig(in runnerInputs) runnerConfig {
+	in.locked, _ = securityLocked(in.managed)
 	out := make(runnerConfig, 0, len(runnerFields))
 	for _, f := range runnerFields {
 		out = append(out, f.resolve(in))
@@ -137,6 +196,11 @@ func resolveRunnerConfig(in runnerInputs) runnerConfig {
 func (f runnerField) resolve(in runnerInputs) resolvedField {
 	got := func(value, source string) resolvedField {
 		return resolvedField{Name: f.name, Value: value, Source: source}
+	}
+	if in.locked && f.locked && f.managed != "" {
+		if v := in.managed(f.managed); v != "" {
+			return got(v, sourceManaged+" "+f.managed+" (locked)")
+		}
 	}
 	if f.flag != "" && in.flag != nil {
 		if v, ok := in.flag(f.flag); ok && strings.TrimSpace(v) != "" {
@@ -317,7 +381,11 @@ func effectiveRunnerConfig(path string, flag func(string) (string, bool)) (runne
 	if err != nil {
 		return nil, err
 	}
-	return resolveRunnerConfig(runnerInputs{flag: flag, getenv: os.Getenv, managed: managedPref, file: file, filePath: path}), nil
+	in := runnerInputs{flag: flag, getenv: os.Getenv, managed: managedPref, file: file, filePath: path}
+	if err := checkSecurityLock(in); err != nil {
+		return nil, err
+	}
+	return resolveRunnerConfig(in), nil
 }
 
 func cmpOrDefaultPath(p string) (string, error) {
