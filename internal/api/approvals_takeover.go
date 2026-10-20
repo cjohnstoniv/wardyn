@@ -37,7 +37,7 @@ import (
 // approvalTakeover is the optional ApprovalService surface behind take over and hand back.
 type approvalTakeover interface {
 	TakeOver(ctx context.Context, id uuid.UUID, holder string) (types.ApprovalRequest, string, error)
-	HandBack(ctx context.Context, id uuid.UUID, at time.Time) (types.ApprovalRequest, error)
+	HandBack(ctx context.Context, id uuid.UUID, holder string, at time.Time) (types.ApprovalRequest, error)
 }
 
 // takeoverNotDecidableBody answers approve/deny on a human_takeover row, for every tier.
@@ -168,6 +168,8 @@ func writeTakeoverError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, store.ErrAlreadyDecided), errors.Is(err, approval.ErrAlreadyDecided):
 		writeErrorReason(w, http.StatusConflict, reasonApprovalAlreadyDecided, "this takeover request is no longer open")
+	case errors.Is(err, store.ErrTakeoverNotHolder):
+		writeErrorReason(w, http.StatusConflict, reasonTakeoverNotHolder, "you do not have control of this run")
 	case errors.Is(err, store.ErrNotFound):
 		writeErrorReason(w, http.StatusNotFound, reasonApprovalNotFound, "approval not found")
 	default:
@@ -231,7 +233,7 @@ func (s *Server) handleHandBackApproval(w http.ResponseWriter, r *http.Request) 
 		writeErrorReason(w, http.StatusNotFound, reasonApprovalNotFound, "approval not found")
 		return
 	}
-	got, err := tk.HandBack(r.Context(), ap.ID, s.cfg.Now().UTC())
+	got, err := tk.HandBack(r.Context(), ap.ID, principal, s.cfg.Now().UTC())
 	if err != nil {
 		writeTakeoverError(w, r, err)
 		return

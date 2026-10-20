@@ -50,7 +50,7 @@ func (a takeoverApprovals) TakeOver(_ context.Context, id uuid.UUID, holder stri
 	return ap, prev, nil
 }
 
-func (a takeoverApprovals) HandBack(_ context.Context, id uuid.UUID, at time.Time) (types.ApprovalRequest, error) {
+func (a takeoverApprovals) HandBack(_ context.Context, id uuid.UUID, holder string, at time.Time) (types.ApprovalRequest, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	ap, ok := a.byID[id]
@@ -59,6 +59,9 @@ func (a takeoverApprovals) HandBack(_ context.Context, id uuid.UUID, at time.Tim
 	}
 	if ap.Kind != types.ApprovalHumanTakeover || ap.State != types.ApprovalApproved || ap.HandedBackAt != nil {
 		return ap, store.ErrAlreadyDecided
+	}
+	if ap.TakeoverHolder != holder {
+		return ap, store.ErrTakeoverNotHolder
 	}
 	ap.HandedBackAt = &at
 	a.byID[id] = ap

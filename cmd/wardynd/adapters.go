@@ -184,8 +184,8 @@ func (s *approvalService) CountForRun(ctx context.Context, runID uuid.UUID) (int
 func (s *approvalService) TakeOver(ctx context.Context, id uuid.UUID, holder string) (types.ApprovalRequest, string, error) {
 	return s.st.TakeOverApproval(ctx, id, holder)
 }
-func (s *approvalService) HandBack(ctx context.Context, id uuid.UUID, at time.Time) (types.ApprovalRequest, error) {
-	return s.st.HandBackApproval(ctx, id, at)
+func (s *approvalService) HandBack(ctx context.Context, id uuid.UUID, holder string, at time.Time) (types.ApprovalRequest, error) {
+	return s.st.HandBackApproval(ctx, id, holder, at)
 }
 
 // ListApprovalsPage is the OPTIONAL paged lister the api handler type-asserts

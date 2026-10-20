@@ -19,7 +19,8 @@ import (
 
 // TestPG_TakeoverTakesHandsBackAndRefusesTheRest pins the human_takeover CAS (0198): the first
 // take over moves PENDING to APPROVED with a holder, a second person replaces the holder (and is
-// told whom), the holder taking over again is refused, hand back stamps once, and nothing moves a
+// told whom), the holder taking over again is refused, only the current holder hands back (the
+// replaced one is refused and leaves the row open), hand back stamps once, and nothing moves a
 // handed-back row or a row of another kind.
 func TestPG_TakeoverTakesHandsBackAndRefusesTheRest(t *testing.T) {
 	pool := runsPGPool(t)
@@ -39,7 +40,7 @@ func TestPG_TakeoverTakesHandsBackAndRefusesTheRest(t *testing.T) {
 	if err != nil || ap.TakeoverHolder != "" || ap.HandedBackAt != nil {
 		t.Fatalf("raise: %+v, %v", ap, err)
 	}
-	if _, err := pg.HandBackApproval(ctx, ap.ID, time.Now()); !errors.Is(err, store.ErrAlreadyDecided) {
+	if _, err := pg.HandBackApproval(ctx, ap.ID, "developer", time.Now()); !errors.Is(err, store.ErrAlreadyDecided) {
 		t.Fatalf("hand back on a PENDING row: %v, want ErrAlreadyDecided", err)
 	}
 	got, prev, err := pg.TakeOverApproval(ctx, ap.ID, "developer")
@@ -54,12 +55,19 @@ func TestPG_TakeoverTakesHandsBackAndRefusesTheRest(t *testing.T) {
 	if err != nil || prev != "developer" || got.TakeoverHolder != "priya" || got.DecidedBy != "developer" {
 		t.Fatalf("second person: %+v prev=%q %v; want priya holding, developer still the decider", got, prev, err)
 	}
+	// developer's hand back lands after priya took over: it must not close priya's takeover.
+	if _, err := pg.HandBackApproval(ctx, ap.ID, "developer", time.Now()); !errors.Is(err, store.ErrTakeoverNotHolder) {
+		t.Fatalf("hand back by the replaced holder: %v, want ErrTakeoverNotHolder", err)
+	}
+	if read, err := pg.GetApproval(ctx, ap.ID); err != nil || read.HandedBackAt != nil || read.TakeoverHolder != "priya" {
+		t.Fatalf("after the replaced holder's hand back: %+v, %v; want priya still holding", read, err)
+	}
 	at := time.Now().UTC().Truncate(time.Microsecond)
-	back, err := pg.HandBackApproval(ctx, ap.ID, at)
+	back, err := pg.HandBackApproval(ctx, ap.ID, "priya", at)
 	if err != nil || back.HandedBackAt == nil || !back.HandedBackAt.Equal(at) {
 		t.Fatalf("hand back: %+v, %v", back, err)
 	}
-	if _, err := pg.HandBackApproval(ctx, ap.ID, at); !errors.Is(err, store.ErrAlreadyDecided) {
+	if _, err := pg.HandBackApproval(ctx, ap.ID, "priya", at); !errors.Is(err, store.ErrAlreadyDecided) {
 		t.Fatalf("second hand back: %v, want ErrAlreadyDecided", err)
 	}
 	if _, _, err := pg.TakeOverApproval(ctx, ap.ID, "someone"); !errors.Is(err, store.ErrAlreadyDecided) {
@@ -79,5 +87,8 @@ func TestPG_TakeoverTakesHandsBackAndRefusesTheRest(t *testing.T) {
 	}
 	if _, _, err := pg.TakeOverApproval(ctx, uuid.New(), "developer"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("absent row: %v, want ErrNotFound", err)
+	}
+	if _, err := pg.HandBackApproval(ctx, uuid.New(), "developer", time.Now()); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("hand back an absent row: %v, want ErrNotFound", err)
 	}
 }

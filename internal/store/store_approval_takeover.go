@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -46,19 +47,35 @@ func (s PG) TakeOverApproval(ctx context.Context, id uuid.UUID, holder string) (
 	return ap, prev, err
 }
 
-// HandBackApproval records that the person holding a human_takeover approval handed control back at
-// `at`. Only an APPROVED row not yet handed back moves; any other is ErrAlreadyDecided, an absent one
-// ErrNotFound.
-func (s PG) HandBackApproval(ctx context.Context, id uuid.UUID, at time.Time) (types.ApprovalRequest, error) {
+// ErrTakeoverNotHolder is a hand back by someone who does not have control of an open takeover.
+var ErrTakeoverNotHolder = errors.New("store: takeover is held by someone else")
+
+// HandBackApproval records that holder, the person with control of a human_takeover approval, handed
+// it back at `at`. Only an APPROVED row not yet handed back, held by holder, moves: one held by
+// someone else is ErrTakeoverNotHolder, any other ErrAlreadyDecided, an absent one ErrNotFound. The
+// holder is in the UPDATE, so a take over by someone else that lands first leaves the row open.
+func (s PG) HandBackApproval(ctx context.Context, id uuid.UUID, holder string, at time.Time) (types.ApprovalRequest, error) {
 	const q = `
 		UPDATE approvals SET handed_back_at = $2
 		WHERE id = $1 AND kind = 'human_takeover' AND state = 'APPROVED' AND handed_back_at IS NULL
+			AND takeover_holder = $3
 		RETURNING ` + approvalCols
-	ap, err := scanApproval(s.Pool.QueryRow(ctx, q, id, at))
-	if errors.Is(err, ErrNotFound) {
-		return types.ApprovalRequest{}, s.decidedOrMissing(ctx, id)
+	ap, err := scanApproval(s.Pool.QueryRow(ctx, q, id, at, holder))
+	if !errors.Is(err, ErrNotFound) {
+		return ap, err
 	}
-	return ap, err
+	var open bool
+	err = s.Pool.QueryRow(ctx, `SELECT kind = 'human_takeover' AND state = 'APPROVED' AND handed_back_at IS NULL
+		FROM approvals WHERE id = $1`, id).Scan(&open)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return types.ApprovalRequest{}, ErrNotFound
+	case err != nil:
+		return types.ApprovalRequest{}, err
+	case open:
+		return types.ApprovalRequest{}, ErrTakeoverNotHolder
+	}
+	return types.ApprovalRequest{}, ErrAlreadyDecided
 }
 
 // decidedOrMissing tells a row that exists in the wrong state (ErrAlreadyDecided) from an absent one.
