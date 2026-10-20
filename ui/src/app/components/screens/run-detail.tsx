@@ -476,7 +476,7 @@ function AuditTab({
           <div className="divide-y divide-border">
             {events.map((e) => (
               // One line from sm up; below sm the target drops to a second line of its own (#2917).
-              <div key={e.id} data-testid="run-audit-row" className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 sm:flex-nowrap">
+              <div key={e.id} data-testid="run-audit-row" className={`flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 ${isAttributedRefusal(e) && !toolRuleDecision(e) ? "sm:flex-wrap" : "sm:flex-nowrap"}`}>
                 <span
                   data-testid="run-audit-time"
                   className="w-[84px] shrink-0 whitespace-nowrap font-mono text-meta text-muted-foreground"
@@ -511,10 +511,10 @@ function AuditTab({
                       </span>
                     )}
                     <RuleSourceChip event={e} />
-                    {isAttributedRefusal(e) && <PolicyRemedy policy={policy} className="shrink-0" />}
                     <ErasedFields event={e} className="shrink-0 text-xs" />
                   </span>
                 )}
+                {!toolRuleDecision(e) && isAttributedRefusal(e) && <PolicyRemedy policy={policy} className="basis-full" />}
               </div>
             ))}
           </div>

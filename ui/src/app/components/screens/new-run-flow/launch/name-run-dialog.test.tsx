@@ -261,7 +261,7 @@ describe("Name this run: a create the check did not foresee", () => {
   });
 
   it("a refusal that names its policy says who owns it and where to ask, under the sentence", async () => {
-    const policy = { source: "profile", name: "Contractors", owner: "Platform Security", request_url: "https://example.com/access" };
+    const policy = { source: "profile", layer: "profile", name: "Contractors", owner: "Platform Security", request_url: "https://example.com/access" };
     create.mockRejectedValueOnce(Object.assign(refusal(422, BREACH, "run_quota"), { policy }));
     open();
     const box = await dialog();
@@ -270,7 +270,10 @@ describe("Name this run: a create the check did not foresee", () => {
     await userEvent.click(launchButton());
     const alert = await within(box).findByRole("alert");
     expect(alert).toHaveTextContent(BREACH);
-    expect(within(alert).getByTestId("policy-remedy")).toHaveTextContent(POLICY_REMEDY.OWNER(policy.owner));
+    const card = within(alert).getByTestId("policy-remedy");
+    expect(card).toHaveTextContent("Set byContractors walls");
+    expect(card).toHaveTextContent("OwnerPlatform Security");
+    expect(card).not.toHaveTextContent("Can change");
     expect(within(alert).getByRole("link", { name: new RegExp(POLICY_REMEDY.LINK) })).toHaveAttribute("href", policy.request_url);
   });
 
