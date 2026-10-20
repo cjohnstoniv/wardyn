@@ -1398,7 +1398,7 @@ ADMIN pre-authorized** —
 #### Team drives (0.10) — one folder a group shares
 
 - **With team drives on, members of the allocated groups share one folder.**
-  - One person's agent can read, and if the allocation is writable run, what another person's agent wrote there. That is cross-person injection, by design.
+  - If the allocation is writable, what one person's agent writes there, another person's agent can read and run. That is cross-person injection, by design.
   - Any secret an agent writes there is visible to the whole group.
   - Nothing inspects or scans the folder's contents.
 - **What bounds it.**

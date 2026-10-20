@@ -4750,7 +4750,7 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 **What a member's run sees.**
 
 - The folder mounts at `/home/agent/shared/<name-slug>`, read-only unless the allocation says `members_can_write`. A run asking to write a read-only one is refused.
-- Its home segment is `t-` plus 20 hex characters, derived from the drive id: `<host_root>/t-…` on `host_path` (create that directory; Wardyn never creates one on a share) and a claim or volume named `wardyn-drive-<drive-id-hex>-<home>` with that home. `POST /api/v1/drives/preview` for any group member prints it.
+- Its home segment is `t-` plus 20 hex characters, derived from the drive id: `<host_root>/t-…` on `host_path` (create that directory; Wardyn never creates one on a share) and a claim or volume named `wardyn-drive-<drive-id-hex>-<home>` (`id` scheme; under `slug` the drive's name-slug stands in for the id, see `object_scheme`) with that home. `POST /api/v1/drives/preview` for any group member prints it.
 - People outside the allocated groups never get the mount.
 - `GET /api/v1/me/drives` marks the row `team: true` and lists in `shared_with` the caller's own groups that carry the allocation, never anyone else's.
 - Every run's mount writes `run.drive.mount` with `team: true` and `mounted_by`, the person whose run mounted it.
