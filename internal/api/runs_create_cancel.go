@@ -19,17 +19,20 @@ import (
 // A kill served by another replica reaches it over NOTIFY (cancelCreate, live_bus.go);
 // if that notice is lost, dispatch's STARTING to RUNNING compare still tears the
 // sandbox down. Zero value is ready.
-type inflightCreates struct{ m sync.Map } // uuid.UUID -> context.CancelFunc
+type inflightCreates struct{ m sync.Map } // uuid.UUID -> *context.CancelFunc
 
 // track registers the run BEFORE dispatch's PENDING->STARTING claim, so a kill
 // that wins the run at any point after the claim always finds it. The returned
 // context is for CreateSandbox alone: the rollback and compensation after it
-// must keep running on the uncancelled dispatch context.
+// must keep running on the uncancelled dispatch context. The returned func
+// removes only this registration: a later track of the same run (a queue start
+// of a run put back in its queue and promoted again) keeps its own.
 func (c *inflightCreates) track(ctx context.Context, runID uuid.UUID) (context.Context, func()) {
 	ctx, cancel := context.WithCancel(ctx)
-	c.m.Store(runID, cancel)
+	slot := &cancel
+	c.m.Store(runID, slot)
 	return ctx, func() {
-		c.m.Delete(runID)
+		c.m.CompareAndDelete(runID, slot)
 		cancel()
 	}
 }
@@ -37,7 +40,7 @@ func (c *inflightCreates) track(ctx context.Context, runID uuid.UUID) (context.C
 // cancel stops the run's in-flight create, if it has one. Idempotent.
 func (c *inflightCreates) cancel(runID uuid.UUID) {
 	if f, ok := c.m.Load(runID); ok {
-		f.(context.CancelFunc)()
+		(*f.(*context.CancelFunc))()
 	}
 }
 
