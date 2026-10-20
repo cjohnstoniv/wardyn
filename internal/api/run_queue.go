@@ -61,6 +61,7 @@ type queueStore interface {
 	StartQueuedRun(ctx context.Context, id uuid.UUID, st store.QueueStart) (types.AgentRun, bool, error)
 	SetQueueWait(ctx context.Context, id uuid.UUID, detail string) error
 	SetPromotedStatusDetail(ctx context.Context, id uuid.UUID, detail string) error
+	RequeuePromotedRun(ctx context.Context, e store.RunQueueEntry, detail string) (bool, error)
 	ExitQueuedRun(ctx context.Context, id uuid.UUID, to types.RunState, detail, hint string) (bool, error)
 }
 

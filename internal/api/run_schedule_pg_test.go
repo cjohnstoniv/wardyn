@@ -4,6 +4,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -215,4 +217,92 @@ func TestPG_ScheduledRunEndsAtItsStartOnceTheSwitchIsOff(t *testing.T) {
 	if i < 0 || listed[i].State != types.RunFailed || listed[i].StatusDetail != statusDetailQueuePrefix+reason || listed[i].Queue != nil {
 		t.Fatalf("the person's run list = %+v; want the booked run FAILED %s with no queue", listed, reason)
 	}
+}
+
+// signInRefusedAtTheStart books a scheduled run whose owner's AWS session has expired but can be renewed,
+// so promotion's status read admits it, and the renewal at the start is refused for good (invalid_grant).
+// It returns the booking once it is back in its queue row, which it returns as promoted.
+func (e *queueEnv) signInRefusedAtTheStart() (queuedLaunchAnswer, store.RunQueueEntry) {
+	e.t.Helper()
+	_, out := e.awsSSOSchedule()
+	expired := putAWSSSOBlob(e.t, e.srv, time.Now().Add(-time.Minute))
+	expired.RegistrationExpiresAt = time.Now().Add(90 * 24 * time.Hour)
+	storeSSOBlobFor(e.t, e.srv, e.personP, expired)
+	calls := fakeOIDC(e.t, func(w http.ResponseWriter, _ map[string]string, _ int) {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": "invalid_grant"})
+	})
+	e.due(out.ID)
+	booked, err := e.pg.GetRunQueueEntry(context.Background(), out.ID)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	e.sweep()
+	waiting := statusDetailQueuePrefix + string(runnerpool.WaitOwnerSignIn)
+	e.eventually("the refused start to return the booking to its queue", func() bool {
+		r := e.run(out.ID)
+		return calls.Load() >= 1 && (r.State != types.RunQueued || r.StatusDetail == waiting) && r.State != types.RunPending
+	})
+	if r := e.run(out.ID); r.State != types.RunQueued || r.StatusDetail != waiting || r.AdmittedAt != nil || r.SPIFFEID != "" {
+		e.t.Fatalf("a start whose renewal was refused = %s %q admitted %v; want QUEUED %s, unadmitted, nothing minted", r.State, r.StatusDetail, r.AdmittedAt, waiting)
+	}
+	back, err := e.pg.GetRunQueueEntry(context.Background(), out.ID)
+	if err != nil {
+		e.t.Fatalf("the booking has no queue row: %v", err)
+	}
+	if back.Owner != booked.Owner || back.PoolID != booked.PoolID || !back.QueuedAt.Equal(booked.QueuedAt) || !back.DeadlineAt.Equal(booked.DeadlineAt) ||
+		back.StartAt == nil || !back.StartAt.Equal(*booked.StartAt) || !bytes.Equal(back.Authority, booked.Authority) ||
+		!bytes.Equal(back.Launch, booked.Launch) || !bytes.Equal(back.PolicyRef, booked.PolicyRef) {
+		e.t.Fatalf("the booking came back as %+v; want the row it was promoted with, %+v", back, booked)
+	}
+	if rows := e.audits(out.ID, "run.queue.start"); len(rows) != 0 {
+		e.t.Errorf("a booking returned to its queue wrote run.queue.start rows %+v", rows)
+	}
+	e.sweep()
+	if r := e.run(out.ID); r.State != types.RunQueued || r.StatusDetail != waiting {
+		e.t.Fatalf("a sweep after the refusal moved the booking: %s %q", r.State, r.StatusDetail)
+	}
+	return out, back
+}
+
+// A due booking whose expired sign-in is refused at its first renewal waits for its owner instead of
+// failing, in the same queue row and deadline: a fresh sign-in starts it, a kill cancels it, and its
+// deadline ends it queue_sign_in_timeout, as any sign-in wait.
+func TestPG_ScheduledRunRefusedAtItsFirstRenewalWaitsForTheOwner(t *testing.T) {
+	t.Run("a fresh sign-in starts it", func(t *testing.T) {
+		e := newQueueEnv(t)
+		t.Setenv(envScheduledRuns, "1")
+		out, _ := e.signInRefusedAtTheStart()
+		fresh := putAWSSSOBlob(t, e.srv, time.Now().Add(3*time.Hour))
+		fresh.RefreshToken, fresh.RegistrationExpiresAt = "fresh-refresh-token-1234567890", time.Now().Add(90*24*time.Hour)
+		storeSSOBlobFor(t, e.srv, e.personP, fresh)
+		e.sweep()
+		e.waitStarted(out.ID)
+	})
+	t.Run("a kill cancels it", func(t *testing.T) {
+		e := newQueueEnv(t)
+		t.Setenv(envScheduledRuns, "1")
+		out, _ := e.signInRefusedAtTheStart()
+		if w := e.call(e.person, http.MethodPost, "/api/v1/runs/"+out.ID.String()+"/kill", ""); w.Code != http.StatusAccepted {
+			t.Fatalf("kill = %d %s", w.Code, w.Body)
+		}
+		if r := e.run(out.ID); r.State != types.RunKilled || e.queueRows(out.ID) != 0 {
+			t.Fatalf("a killed booking = %s with %d queue rows; want KILLED with none", r.State, e.queueRows(out.ID))
+		}
+	})
+	t.Run("its deadline ends it", func(t *testing.T) {
+		e := newQueueEnv(t)
+		t.Setenv(envScheduledRuns, "1")
+		out, _ := e.signInRefusedAtTheStart()
+		e.exec(`UPDATE run_queue SET deadline_at = now() - interval '1 second' WHERE run_id = $1`, out.ID)
+		e.sweep()
+		r := e.run(out.ID)
+		if r.State != types.RunFailed || r.StatusDetail != statusDetailQueuePrefix+string(types.RunEndQueueSignInTimeout) ||
+			r.FailureHint != types.RunEndQueueSignInTimeout.Sentence() || e.queueRows(out.ID) != 0 {
+			t.Fatalf("a booking past its deadline = %s %q %q", r.State, r.StatusDetail, r.FailureHint)
+		}
+		if rows := e.audits(out.ID, "run.queue.expire"); len(rows) != 1 || queueAuditData(t, rows[0])["reason"] != string(types.RunEndQueueSignInTimeout) {
+			t.Errorf("run.queue.expire rows = %+v; want one with reason %s", rows, types.RunEndQueueSignInTimeout)
+		}
+	})
 }
