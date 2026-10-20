@@ -108,7 +108,7 @@ func TestAttachLocalAcksOnlyWhatTheRecorderAccepted(t *testing.T) {
 	tee.mw.mu.Lock() // the recorder stops accepting once its queue is full
 	chunk := bytes.Repeat([]byte("x"), attachReadBuf)
 	go func() {
-		for i := 0; i < (maskPipeMax/attachReadBuf)+4; i++ {
+		for i := 0; i < 2*(maskPipeMax/attachReadBuf)+4; i++ { // more than the drain's first batch and the queue
 			if _, err := sess.pw.Write(chunk); err != nil {
 				return
 			}

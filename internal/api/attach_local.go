@@ -131,9 +131,35 @@ type localAttach struct {
 	ended   atomic.Bool   // an ender ran: no more mode pushes
 }
 
-func newLocalAttach(wa *webAttach, t localAttachTarget, nonce string) *localAttach {
+// localAttachRequested is localAttachTargetFor when the socket asks for transport=local, else nil
+// and ok.
+func (s *Server) localAttachRequested(w http.ResponseWriter, r *http.Request, run types.AgentRun) (*localAttachTarget, bool) {
+	if r.URL.Query().Get("transport") != attachTransportLocal {
+		return nil, true
+	}
+	t, ok := s.localAttachTargetFor(w, r, run)
+	return &t, ok
+}
+
+// newLocalAttach makes wa's holder a local one granted on t (nil for a relay socket, which gets nil).
+func newLocalAttach(wa *webAttach, t *localAttachTarget, nonce string) *localAttach {
+	if t == nil {
+		return nil
+	}
 	wa.fields = map[string]any{"transport": attachTransportLocal, "runner_id": t.runnerID.String()}
-	return &localAttach{wa: wa, target: t, nonce: nonce, kick: make(chan struct{}, 1), reasonC: make(chan string, 1)}
+	la := &localAttach{wa: wa, target: *t, nonce: nonce, kick: make(chan struct{}, 1), reasonC: make(chan string, 1)}
+	h := wa.holder
+	h.source, h.notify, h.displace, h.demoted = attachSourceLocal, la.notify, la.displace, la.kick
+	return la
+}
+
+// pump serves the socket until it ends and returns the close reason: the relay pump, or for a local
+// session (la set) its control half, the bytes being on the runner's computer.
+func (wa *webAttach) pump(la *localAttach, castTee io.Writer) string {
+	if la != nil {
+		return la.run(castTee)
+	}
+	return wa.s.attachPump(wa.pumpCtx, wa.c, wa.run.ID, wa.holder, castTee, wa.open)
 }
 
 // run grants the session on the runner and serves it until the socket ends; it returns the close

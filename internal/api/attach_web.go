@@ -65,6 +65,13 @@ func (wa *webAttach) audit(outcome string, data map[string]any) {
 		id.String(), outcome, mustJSON(withSponsorEntry(wa.run, data))))
 }
 
+// sendMode writes the attach-mode frame under modeMu (see webAttach).
+func (wa *webAttach) sendMode(ctx context.Context, readOnly bool) {
+	wa.modeMu.Lock()
+	_ = writeAttachMode(ctx, wa.c, readOnly, wa.s.attachHolderFor(wa.run.ID))
+	wa.modeMu.Unlock()
+}
+
 // with adds this socket's fields to a session row's data.
 func (wa *webAttach) with(data map[string]any) map[string]any {
 	for k, v := range wa.fields {

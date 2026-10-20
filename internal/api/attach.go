@@ -268,13 +268,9 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	}
 	// transport=local (attach_local.go) is checked only here, after every check above, thaw
 	// included, so a local attach is refused exactly where a relay one is (C1). Do not reorder.
-	var local *localAttachTarget
-	if r.URL.Query().Get("transport") == attachTransportLocal {
-		t, ok := s.localAttachTargetFor(w, r, run)
-		if !ok {
-			return
-		}
-		local = &t
+	local, ok := s.localAttachRequested(w, r, run)
+	if !ok {
+		return
 	}
 
 	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{
@@ -298,15 +294,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// the attach outcome and the detach are recorded. Daemon-lifetime BaseCtx
 	// (background fallback) carries them, with the portal a delegated ticket was
 	// minted through (#1142).
-	finishCtx := s.cfg.BaseCtx
-	if finishCtx == nil {
-		finishCtx = context.Background()
-	}
-	var via *types.DelegationVia
-	if v, ok := audit.DelegationFrom(ctx); ok {
-		via = &v
-		finishCtx = audit.WithDelegation(finishCtx, v)
-	}
+	finishCtx, via := s.attachFinishCtx(ctx)
 
 	// pumpCtx ends the whole connection: the pump, the exec being opened, the
 	// keepalive and the mask-fence watcher all hang off it.
@@ -349,11 +337,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	}
 	holder.lastOutput.Store(time.Now().UnixNano())
 	wa.holder = holder
-	var la *localAttach
-	if local != nil {
-		la = newLocalAttach(wa, *local, r.URL.Query().Get("local_nonce"))
-		holder.source, holder.notify, holder.displace, holder.demoted = attachSourceLocal, la.notify, la.displace, la.kick
-	}
+	la := newLocalAttach(wa, local, r.URL.Query().Get("local_nonce"))
 	readOnly, releaseHolder := s.registerAttachHolder(id, holder)
 	// Deferred as the crash backstop, NOT the release point (see the explicit
 	// call right after attachPump returns, below): a panicking pump would
@@ -392,9 +376,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// not pretending it succeeded.
 	// A local socket sends its first frame once the runner has taken the grant (localAttach.run).
 	if la == nil {
-		wa.modeMu.Lock()
-		_ = writeAttachMode(ctx, c, !holder.canWrite(), s.attachHolderFor(id))
-		wa.modeMu.Unlock()
+		wa.sendMode(ctx, !holder.canWrite())
 	}
 
 	// Provenance: record this interactive session as a replayable
@@ -430,13 +412,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// Bidirectional pump. closeReason is filled by whichever side ends first.
 	// castTee (may be nil when no RecordingStore is wired) receives a copy of the
 	// masked PTY output for the asciicast.
-	// A local session's bytes are on the runner's computer; this socket is its control half.
-	var closeReason string
-	if la != nil {
-		closeReason = la.run(castTee)
-	} else {
-		closeReason = s.attachPump(pumpCtx, c, id, holder, castTee, wa.open)
-	}
+	closeReason := wa.pump(la, castTee)
 	cancel()
 	closeReason = endedFromOutside(closeReason)
 	if wa.failed.Load() {
@@ -490,6 +466,19 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// Best-effort clean close; the deferred CloseNow is the fail-closed backstop.
 	// A failed attach was already closed with its own status (failAttach).
 	_ = c.Close(websocket.StatusNormalClosure, "")
+}
+
+// attachFinishCtx is the daemon-lifetime context an attach's closing audit rows are written on,
+// carrying the portal a delegated ticket was minted through, which it also returns (nil for none).
+func (s *Server) attachFinishCtx(ctx context.Context) (context.Context, *types.DelegationVia) {
+	finishCtx := s.cfg.BaseCtx
+	if finishCtx == nil {
+		finishCtx = context.Background()
+	}
+	if v, ok := audit.DelegationFrom(ctx); ok {
+		return audit.WithDelegation(finishCtx, v), &v
+	}
+	return finishCtx, nil
 }
 
 // attachKeepalive periodically bumps the run's updated_at so the idle reaper

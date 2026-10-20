@@ -340,12 +340,7 @@ func (h *Hub) start(ctx context.Context, conn runnerwire.Conn, row types.Runner,
 		}
 	}
 	ok := runnerwire.AuthOK{SessionID: s.id, Resumed: resumed, PingInterval: runnerwire.PingInterval, LastSeq: cfg.LastReceived}
-	if h.cfg.ProxyImage != nil {
-		ok.ProxyImage = h.cfg.ProxyImage(current)
-	}
-	if h.cfg.LocalAttach != nil {
-		ok.LocalAttach = h.cfg.LocalAttach(current)
-	}
+	h.orgChoices(&ok, current)
 	if err := runnerwire.WriteControl(ctx, conn, runnerwire.TypeAuthOK, ok); err != nil {
 		return nil, err
 	}
@@ -555,5 +550,15 @@ func (h *Hub) Close() {
 			s.connected = false
 		}
 		s.mu.Unlock()
+	}
+}
+
+// orgChoices fills the fields of AUTH_OK the organisation chooses for the claimed runner current.
+func (h *Hub) orgChoices(ok *runnerwire.AuthOK, current types.Runner) {
+	if h.cfg.ProxyImage != nil {
+		ok.ProxyImage = h.cfg.ProxyImage(current)
+	}
+	if h.cfg.LocalAttach != nil {
+		ok.LocalAttach = h.cfg.LocalAttach(current)
 	}
 }
