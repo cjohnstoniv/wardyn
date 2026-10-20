@@ -14,6 +14,7 @@ import (
 	"context"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -191,5 +192,51 @@ func TestPersonalDrive_StillSeededFromTheImage_RealDocker(t *testing.T) {
 	}
 	if code, out := l.run(l.image, "1000", ms, "touch "+drive.Target+"/w"); code != 0 {
 		t.Errorf("the agent could not write its own drive: exit %d (%s)", code, out)
+	}
+}
+
+// An image whose agent is not agentUID is refused a writable team drive, by
+// name, and the volume is left as Docker made it.
+func TestTeamDrive_AnotherAgentUIDIsRefused_RealDocker(t *testing.T) {
+	l := newDriveLive(t)
+	other := commitImage(l.ctx, t, l.d, driveLiveImageScript, "1001")
+	drive := l.drive(runner.SharedRoot+"/eng", true, false)
+	_, err := l.d.driveMount(l.ctx, drive, uuid.New(), other, false)
+	if err == nil || !strings.Contains(err.Error(), "this image runs the agent as uid 1001 (USER \"1001\")") {
+		t.Fatalf("driveMount = %v, want the uid refusal", err)
+	}
+	if got := l.volume(drive.ObjectName); got != "0:0:755" {
+		t.Errorf("team volume after the refusal = %q, want it empty and untouched (0:0:755)", got)
+	}
+}
+
+// Runs seeding one empty team volume at the same moment all succeed, and the
+// volume ends the agent's and empty, whatever order the daemon took them in.
+// The interleaving is the daemon's; the end state may not depend on it.
+func TestTeamDrive_ConcurrentSeedsAreIdempotent_RealDocker(t *testing.T) {
+	l := newDriveLive(t)
+	for round := range 3 {
+		drive := l.drive(runner.SharedRoot+"/eng", true, false)
+		start := make(chan struct{})
+		errs := make([]error, 4)
+		var wg sync.WaitGroup
+		for i := range errs {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				_, errs[i] = l.d.driveMount(l.ctx, drive, uuid.New(), l.image, false)
+			}()
+		}
+		close(start)
+		wg.Wait()
+		for i, err := range errs {
+			if err != nil {
+				t.Errorf("round %d, run %d: %v", round, i, err)
+			}
+		}
+		if got := l.volume(drive.ObjectName); got != "1000:1000:755" {
+			t.Errorf("round %d: team volume after concurrent seeds = %q, want it empty and the agent's (1000:1000:755)", round, got)
+		}
 	}
 }

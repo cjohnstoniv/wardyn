@@ -155,6 +155,9 @@ type fakeDocker struct {
 	// teamSeedVolume is what CopyFromContainer reports at teamDriveSeedTarget
 	// (nil: one empty directory, as a fresh volume reads).
 	teamSeedVolume []*tar.Header
+	// onCopyFrom, when set, runs at the start of every CopyFromContainer
+	// (outside the lock), so a test can hold concurrent readers at a barrier.
+	onCopyFrom func(id, path string)
 	// imageVolumes is each image's VOLUME declarations: merged into a created
 	// container's Config.Volumes and reported in its Mounts, as the daemon
 	// does when it backs each with an anonymous volume.
@@ -660,6 +663,12 @@ func (f *fakeDocker) ContainerStatPath(ctx context.Context, id string, opts clie
 }
 
 func (f *fakeDocker) CopyFromContainer(ctx context.Context, id string, opts client.CopyFromContainerOptions) (client.CopyFromContainerResult, error) {
+	f.mu.Lock()
+	hook := f.onCopyFrom
+	f.mu.Unlock()
+	if hook != nil {
+		hook(id, opts.SourcePath)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.containers[id] == nil {

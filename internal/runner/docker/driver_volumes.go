@@ -197,7 +197,8 @@ const driveSeedRemoveTimeout = 30 * time.Second
 // member's choice, and whatever it holds at runner.DriveTarget would reach
 // every member. A read-only allocation needs no seed at all. A writable one
 // mounts the volume with NoCopy at teamDriveSeedTarget in the same
-// never-started container and gives it to the agent with ownEmptyTeamVolume.
+// never-started container, refuses an image whose agent is not agentUID
+// (checkTeamDriveUser), and gives it to the agent with ownEmptyTeamVolume.
 func (d *Driver) seedDriveVolume(ctx context.Context, runID uuid.UUID, image string, drive *types.DriveMount) error {
 	if drive.Team && drive.ReadOnly {
 		return nil
@@ -231,6 +232,9 @@ func (d *Driver) seedDriveVolume(ctx context.Context, runID uuid.UUID, image str
 		},
 	})
 	if err == nil && drive.Team {
+		err = d.checkTeamDriveUser(ctx, name, drive)
+	}
+	if err == nil && drive.Team {
 		err = d.ownEmptyTeamVolume(ctx, name)
 	}
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), driveSeedRemoveTimeout)
@@ -247,12 +251,8 @@ func (d *Driver) seedDriveVolume(ctx context.Context, runID uuid.UUID, image str
 // teamDriveSeedTarget is where a writable team volume mounts in its seed
 // container: a path of Wardyn's own, so neither the copy (NoCopy) nor the
 // ownership (ownEmptyTeamVolume) depends on what the image has at
-// runner.DriveTarget. teamDriveOwner is the uid and gid every Wardyn agent
-// image runs its agent as (the image contract; Kubernetes runs it as 1000 too).
-const (
-	teamDriveSeedTarget = "/wardyn-drive-seed"
-	teamDriveOwner      = 1000
-)
+// runner.DriveTarget.
+const teamDriveSeedTarget = "/wardyn-drive-seed"
 
 // teamDriveVolumeOptions is the VolumeOptions for every mount of a team volume:
 // NoCopy, so Docker never copies an image directory into it. nil for any other
@@ -264,8 +264,35 @@ func teamDriveVolumeOptions(drive *types.DriveMount) *mount.VolumeOptions {
 	return &mount.VolumeOptions{NoCopy: true}
 }
 
+// checkTeamDriveUser refuses a writable team drive when the run's image runs
+// its agent as any uid but agentUID, the owner of every team drive's folder:
+// the run would start with a drive it cannot write. It reads the seed's USER
+// as the daemon merged it from the image, resolved like a managed file's
+// (managedFileUID), before any ownership change and whatever the volume holds.
+func (d *Driver) checkTeamDriveUser(ctx context.Context, seed string, drive *types.DriveMount) error {
+	insp, err := d.cli.ContainerInspect(ctx, seed, client.ContainerInspectOptions{})
+	if err != nil {
+		return fmt.Errorf("inspect the seed: %w", err)
+	}
+	var user string
+	if insp.Container.Config != nil {
+		user = insp.Container.Config.User
+	}
+	uid, err := d.managedFileUID(ctx, seed, user)
+	if err != nil {
+		return err
+	}
+	if uid != agentUID {
+		return fmt.Errorf("team drive %s is writable for this run, but this image runs the agent as uid %d (USER %q), "+
+			"and a team drive's folder belongs to uid %d, the user Wardyn images run the agent as. "+
+			"Use an image whose agent runs as uid %d, or ask an admin for a read-only allocation",
+			runner.DriveSubject(drive), uid, user, agentUID, agentUID)
+	}
+	return nil
+}
+
 // ownEmptyTeamVolume gives an EMPTY team volume's top directory to the agent
-// (teamDriveOwner, mode 0755), which a NoCopy mount leaves root-owned. It runs
+// (agentUID, mode 0755), which a NoCopy mount leaves root-owned. It runs
 // on the never-started seed container: the daemon reads the volume through the
 // archive API, and, only when the volume holds nothing, extracts one directory
 // entry for the mount point, whose owner and mode it applies to the volume's
@@ -301,7 +328,7 @@ func (d *Driver) ownEmptyTeamVolume(ctx context.Context, seed string) error {
 	tw := tar.NewWriter(&buf)
 	if err := tw.WriteHeader(&tar.Header{
 		Name: strings.TrimPrefix(teamDriveSeedTarget, "/") + "/", Typeflag: tar.TypeDir, Mode: 0o755,
-		Uid: teamDriveOwner, Gid: teamDriveOwner, ModTime: time.Now(),
+		Uid: agentUID, Gid: agentUID, ModTime: time.Now(),
 	}); err != nil {
 		return err
 	}

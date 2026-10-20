@@ -9,7 +9,11 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -137,6 +141,7 @@ func TestCreateSandbox_ReadOnlyTeamDriveCopiesNothing(t *testing.T) {
 // writable with NoCopy.
 func TestCreateSandbox_WritableTeamDriveCopiesNothing(t *testing.T) {
 	f := newFakeDocker()
+	f.imageUsers = map[string]string{"busybox:latest": "1000"}
 	drive := teamVolumeDrive(false)
 	run := testSpec().RunID
 	mounts, err := createWithDrives(t, f, run, drive)
@@ -174,6 +179,7 @@ func TestCreateSandbox_WritableTeamDriveCopiesNothing(t *testing.T) {
 // already holds anything gets no ownership change and no copy.
 func TestCreateSandbox_TeamDriveHoldingFilesIsLeftAlone(t *testing.T) {
 	f := newFakeDocker()
+	f.imageUsers = map[string]string{"busybox:latest": "1000"}
 	f.teamSeedVolume = []*tar.Header{
 		{Name: "wardyn-drive-seed/", Typeflag: tar.TypeDir, Mode: 0o750},
 		{Name: "wardyn-drive-seed/notes", Typeflag: tar.TypeReg, Mode: 0o644},
@@ -193,6 +199,7 @@ func TestCreateSandbox_TeamDriveHoldingFilesIsLeftAlone(t *testing.T) {
 // link at the seed path would leave the volume root-owned; the run is refused.
 func TestCreateSandbox_TeamDriveSeedPathNotADirectoryRefused(t *testing.T) {
 	f := newFakeDocker()
+	f.imageUsers = map[string]string{"busybox:latest": "1000"}
 	f.teamSeedVolume = []*tar.Header{{Name: "wardyn-drive-seed", Typeflag: tar.TypeSymlink, Linkname: "/etc"}}
 	if _, err := createWithDrives(t, f, testSpec().RunID, teamVolumeDrive(false)); err == nil || !strings.Contains(err.Error(), "not a directory") {
 		t.Fatalf("CreateSandbox = %v, want the seed refusal", err)
@@ -219,6 +226,146 @@ func TestCreateSandbox_PersonalDriveSeedUnchanged(t *testing.T) {
 	}
 	if m := findMount(mounts, drive.Target); m == nil || m.VolumeOptions != nil {
 		t.Errorf("personal mount = %+v, want the default copy", m)
+	}
+}
+
+// TestCreateSandbox_WritableTeamDriveRefusesAnotherAgentUID: an image whose
+// agent runs as any uid but agentUID is refused, by name, before any
+// ownership change, whether the volume is empty or holds files; a read-only
+// allocation of the same image is not, since it never writes.
+func TestCreateSandbox_WritableTeamDriveRefusesAnotherAgentUID(t *testing.T) {
+	for _, held := range []bool{false, true} {
+		f := newFakeDocker()
+		f.imageUsers = map[string]string{"busybox:latest": "1001"}
+		if held {
+			f.teamSeedVolume = []*tar.Header{
+				{Name: "wardyn-drive-seed/", Typeflag: tar.TypeDir, Mode: 0o755, Uid: 1000, Gid: 1000},
+				{Name: "wardyn-drive-seed/notes", Typeflag: tar.TypeReg, Mode: 0o644},
+			}
+		}
+		run := testSpec().RunID
+		drive := teamVolumeDrive(false)
+		drive.DriveName = "Eng share"
+		_, err := createWithDrives(t, f, run, drive)
+		const want = `docker: seed user drive volume "wardyn-drive-team-eng": team drive drive "Eng share", directory "alice" is writable for this run, ` +
+			`but this image runs the agent as uid 1001 (USER "1001"), and a team drive's folder belongs to uid 1000, the user Wardyn images run the agent as. ` +
+			`Use an image whose agent runs as uid 1000, or ask an admin for a read-only allocation`
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("held=%v: CreateSandbox = %v, want the refusal %q", held, err, want)
+		}
+		if c := seedCopies(f, run); len(c) != 0 {
+			t.Errorf("held=%v: seed copies = %+v, want no ownership change", held, c)
+		}
+	}
+	f := newFakeDocker()
+	f.imageUsers = map[string]string{"busybox:latest": "1001"}
+	if _, err := createWithDrives(t, f, testSpec().RunID, teamVolumeDrive(true)); err != nil {
+		t.Errorf("read-only team drive with USER 1001 = %v, want it mounted", err)
+	}
+}
+
+// TestCreateSandbox_WritableTeamDriveAcceptsTheAgentByName: USER agent, uid
+// agentUID in the image's /etc/passwd, is the agent.
+func TestCreateSandbox_WritableTeamDriveAcceptsTheAgentByName(t *testing.T) {
+	f := newFakeDocker()
+	f.imageUsers = map[string]string{"busybox:latest": "agent"}
+	f.passwd = "root:x:0:0::/root:/bin/sh\nagent:x:1000:1000::/home/agent:/bin/sh\n"
+	if _, err := createWithDrives(t, f, testSpec().RunID, teamVolumeDrive(false)); err != nil {
+		t.Fatalf("CreateSandbox = %v, want USER agent (uid 1000) accepted", err)
+	}
+}
+
+// TestCreateSandbox_ConcurrentTeamSeedsAreIdempotent: two runs seeding one
+// empty team volume at once, both held until each has read it empty, both
+// succeed, each through its own seed, and each sends the same one entry: the
+// directory as agentUID:agentUID 0755 and nothing in it.
+func TestCreateSandbox_ConcurrentTeamSeedsAreIdempotent(t *testing.T) {
+	f := newFakeDocker()
+	f.imageUsers = map[string]string{"busybox:latest": "1000"}
+	var arrived sync.WaitGroup
+	arrived.Add(2)
+	f.onCopyFrom = func(_, path string) {
+		if path == teamDriveSeedTarget {
+			arrived.Done()
+			arrived.Wait()
+		}
+	}
+	f.images["busybox:latest"] = true
+	d := newWithClient(f, Config{ProxyImage: "wardyn-proxy:dev"})
+	drive := teamVolumeDrive(false)
+	runs := []uuid.UUID{uuid.New(), uuid.New()}
+	errs := make([]error, len(runs))
+	var wg sync.WaitGroup
+	for i, run := range runs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			spec := testSpec()
+			spec.RunID = run
+			spec.Drives = []types.DriveMount{drive}
+			_, errs[i] = d.CreateSandbox(context.Background(), spec)
+		}()
+	}
+	wg.Wait()
+	for i, run := range runs {
+		if errs[i] != nil {
+			t.Errorf("run %d: %v", i, errs[i])
+			continue
+		}
+		copies := seedCopies(f, run)
+		if len(copies) != 1 {
+			t.Errorf("run %d: seed copies = %d, want its own one", i, len(copies))
+			continue
+		}
+		tr := tar.NewReader(bytes.NewReader(copies[0].archive))
+		hdr, err := tr.Next()
+		if err != nil || hdr.Name != "wardyn-drive-seed/" || hdr.Typeflag != tar.TypeDir || hdr.Uid != agentUID || hdr.Gid != agentUID || hdr.Mode != 0o755 {
+			t.Errorf("run %d: seed entry = %+v (%v), want the directory as %d:%d 0755", i, hdr, err, agentUID, agentUID)
+		}
+		if _, err := tr.Next(); err != io.EOF {
+			t.Errorf("run %d: seed archive holds more than the directory (%v)", i, err)
+		}
+	}
+}
+
+// TestAgentUIDIsTheOnlyUIDLiteral: the uid the probes run as and a team
+// drive's folder is owned by is written once, as agentUID. A const or var set
+// to 1000, "1000" or "1000:1000", or a User/Uid/Gid field given one of those
+// literals, anywhere else in the package's production files, is a second
+// copy that could drift from it.
+func TestAgentUIDIsTheOnlyUIDLiteral(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	isUID := func(e ast.Expr) bool {
+		lit, ok := e.(*ast.BasicLit)
+		return ok && (lit.Value == "1000" || lit.Value == `"1000"` || lit.Value == `"1000:1000"`)
+	}
+	fset := token.NewFileSet()
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			switch n := n.(type) {
+			case *ast.ValueSpec:
+				for i, v := range n.Values {
+					if isUID(v) && (i >= len(n.Names) || n.Names[i].Name != "agentUID") {
+						t.Errorf("%s: a uid literal outside agentUID", fset.Position(v.Pos()))
+					}
+				}
+			case *ast.KeyValueExpr:
+				if k, ok := n.Key.(*ast.Ident); ok && (k.Name == "User" || k.Name == "Uid" || k.Name == "Gid") && isUID(n.Value) {
+					t.Errorf("%s: %s set to a uid literal, not agentUID", fset.Position(n.Pos()), k.Name)
+				}
+			}
+			return true
+		})
 	}
 }
 
