@@ -684,6 +684,7 @@ func parseBootFlags() *bootFlags {
 	// exits 2 here, in every auth mode, rather than on the first request.
 	api.ValidateEnvToggles()
 	cliutil.EnvBool(types.EnvReserveEditors, false)
+	cliutil.EnvBool(types.EnvKubectlCLI, false)
 
 	// An empty -listen/WARDYN_LISTEN is not a bind — see normalizeListenAddr.
 	// Done HERE, once, so every listen classifier and the http.Server itself

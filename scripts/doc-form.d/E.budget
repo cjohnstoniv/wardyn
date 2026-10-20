@@ -102,6 +102,7 @@
 # docs/ENV.md 40438 = ours 40140 + theirs 40329 - base 40031 at the 0.10.0 SEC-2c merge of main.
 # docs/ENV.md 40525 = ours 40416 + theirs 40438 - base 40329 at the 0.10 W2 merge of SEC-2c onto the train.
 # docs/ENV.md 40671 = ours 40525 + theirs 40177 - base 40031 at the 0.10 W2 merge of VM-B onto the train.
-docs/ENV.md=40671 share=5
+# docs/ENV.md 41009 adds 338 over 40671, measured: the WARDYN_KUBECTL_CLI row and details section (#1990 kubectl, Option A) with its setup-status field, its name in the per-check list, and the WARDYN_KUBECTL_CONFIG_B64 sandbox row.
+docs/ENV.md=41009 share=5
 # docs/ENV.md 39047 adds 478 over 38569: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
 # docs/ENV.md 38607 adds 38 over 38569, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.

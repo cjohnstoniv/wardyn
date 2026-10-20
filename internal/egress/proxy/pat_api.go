@@ -191,6 +191,8 @@ type apiDoor struct {
 	// upstream is what the door's own errors call the far side; "" is "forge".
 	upstream   string
 	credential func(ctx context.Context) (header, value string, err error)
+	// rt, when set, is the door's own upstream (a cluster's CA bundle); nil is the egress transport.
+	rt http.RoundTripper
 }
 
 // forwardAPIDoor is the forward half the API doors share (servePATAPI,
@@ -273,7 +275,12 @@ func (p *Proxy) forwardAPIDoor(w http.ResponseWriter, r *http.Request, host stri
 	out.Host = hostport
 	out.Header.Del("Host")
 
-	resp, err := p.roundTripUpstream(out)
+	var resp *http.Response
+	if d.rt != nil {
+		resp, err = d.rt.RoundTrip(out)
+	} else {
+		resp, err = p.roundTripUpstream(out)
+	}
 	if err != nil {
 		p.failUpstream(w, err, &egress.DecisionLog{Request: p.reqOf(r, host, port)}, host, far+" api upstream error")
 		return

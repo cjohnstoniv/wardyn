@@ -75,6 +75,23 @@ export interface ComponentCLI {
   azure?: CLIAzure;
   aws?: CLIAWS;
   github?: CLIGitHub;
+  kubectl?: CLIKubectl;
+}
+
+/** One registered cluster (WARDYN_KUBECTL_CLI). Its service account's token is never part of the row. */
+export interface CLIKubectl {
+  // https://host[:port], no path.
+  server: string;
+  ca_pem?: string;
+  service_account: CLIServiceAccount;
+  // 1 to 16 namespace names.
+  namespaces: string[];
+  access: "read" | "write";
+}
+
+export interface CLIServiceAccount {
+  namespace: string;
+  name: string;
 }
 
 export interface CLIGitHub {
@@ -179,6 +196,9 @@ export interface CLIView {
   region?: string;
   // GitHub.
   capabilities?: string[];
+  // kubectl: the API server's host and the namespaces; `access` above.
+  cluster?: string;
+  namespaces?: string[];
 }
 
 /** The non-secret face of an MCP server row. */

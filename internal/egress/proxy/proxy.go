@@ -143,6 +143,8 @@ type Proxy struct {
 	ghAPIStopped atomic.Bool
 	// arm is the run's Azure CLI door (azure_arm_door.go). Nil == no door.
 	arm *azureARMDoor
+	// kube is the kubectl door (kube_api_door.go); nil without a kubectl row.
+	kube *kubeAPIDoor
 	// gitTokens caches minted installation tokens per grant so a single clone
 	// (info/refs + git-upload-pack) does not re-mint — mandatory for single-use
 	// approval-gated grants. Guarded by gitTokMu; each entry single-flights its
@@ -381,6 +383,7 @@ func newProxy(opts Options) *Proxy {
 		patAPI:               patAPI,
 		ghAPI:                newGitHubAPIDoor(opts.GitHubAPI, mitmHosts, mitmPorts),
 		arm:                  newAzureARMDoor(opts.AzureARM, mitmHosts, mitmPorts),
+		kube:                 newKubeAPIDoor(opts.KubeAPI, mitmHosts, mitmPorts),
 		gitTokens:            make(map[uuid.UUID]*gitTokEntry),
 		controlPlaneURL:      controlPlaneEndpoint(opts.ControlPlaneURL, ""),
 		runToken:             opts.RunToken,
@@ -468,6 +471,7 @@ func newProxy(opts Options) *Proxy {
 		return c, nil
 	})
 	p.offerHTTP2(egressDial, opts.TLSClientConfig)
+	p.kube.bindTransport(p.transport)
 	p.controlTransport = mkTransport(directDial)
 	if opts.ControlTLS == nil {
 		opts.ControlTLS, _ = hoptls.ClientConfig("")
@@ -860,7 +864,8 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	// Never a blind tunnel to an Azure DevOps grant host (refuseADOTunnel).
 	if p.refuseADOTunnel(w, r, host, port) || p.refuseAzureTunnel(w, r, host, port) || p.refusePATAPITunnel(w, r, host, port) ||
-		p.refuseGitHubAPITunnel(w, r, host, port) || p.refuseAzureARMTunnel(w, r, host, port) {
+		p.refuseGitHubAPITunnel(w, r, host, port) || p.refuseAzureARMTunnel(w, r, host, port) ||
+		p.refuseKubeAPITunnel(w, r, host, port) {
 		return
 	}
 

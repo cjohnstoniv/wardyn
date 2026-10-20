@@ -444,6 +444,7 @@ if [[ "${1:-}" == "--prepare-only" ]]; then
     materialize_managed_claude_config
     materialize_aws_sso_config
     materialize_azure_cli_config
+    materialize_kubectl_config
     exit 0
 fi
 
@@ -470,6 +471,7 @@ if [[ "${1:-}" == "--idle" || "${1:-}" == "--revive" ]]; then
     install_artifact_config
     materialize_aws_sso_config
     materialize_azure_cli_config
+    materialize_kubectl_config
     provision_git_helper_secret
     provision_ssh_grants
     trap wipe_ssh_grants EXIT
@@ -650,6 +652,7 @@ materialize_managed_claude_config
 install_artifact_config
 materialize_aws_sso_config
 materialize_azure_cli_config
+materialize_kubectl_config
 
 # Provision the git credential helper caller-auth secret BEFORE any git runs
 # (the clone below and the agent's own git both need it).  Called directly so the

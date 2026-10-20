@@ -239,7 +239,7 @@ func azureTenantSafe(tenant string) bool {
 func (c *Config) validateAzureARM() error {
 	g := c.AzureARM
 	for i, inj := range c.Injection {
-		if strings.HasPrefix(inj.SecretName, types.CLISecretPrefix) && (g == nil || patAPIHost(strings.TrimSpace(inj.Host)) != armscope.Host) {
+		if strings.HasPrefix(inj.SecretName, types.CLISecretPrefix) && !types.CLIKubectlTokenSecret(inj.SecretName) && (g == nil || patAPIHost(strings.TrimSpace(inj.Host)) != armscope.Host) {
 			return fmt.Errorf("config: injection[%d]: a CLI sign-in is injected only on %s behind azure_arm", i, armscope.Host)
 		}
 	}

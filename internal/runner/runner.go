@@ -174,6 +174,8 @@ type ProxyConfig struct {
 	GitHubAPI *proxy.GitHubAPIGrant
 	// AzureARM is the run's Azure CLI grant for the proxy's management.azure.com door; nil == off.
 	AzureARM *proxy.AzureARMGrant
+	// KubeAPI is the run's kubectl grant for the proxy's door on the row's API server; nil == off.
+	KubeAPI *proxy.KubeAPIGrant
 	// BrokeredPATGrantIDs is every git_pat grant id of the run while the PAT broker is on; the proxy refuses a raw mint of one.
 	BrokeredPATGrantIDs []uuid.UUID
 	// ResidentMints are the run's runner_resident ssh_key and git_pat grants, each Token its

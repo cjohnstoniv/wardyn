@@ -313,6 +313,18 @@ materialize_azure_cli_config() {
     materialize_home_records azure-cli "$WARDYN_AZURE_CLI_CONFIG_B64"
 }
 
+# ── kubectl config (a kubectl component) ─────────────────────────────────────
+# Materialize the ~/.kube/config the control plane generated for a run that
+# attached a kubectl component: the cluster's API server, the run's own CA and
+# an inert placeholder token. No cluster credential is in it: wardyn-proxy adds
+# a short-lived token to each request it lets through to the API server. No-op
+# when the var is unset (every other run), and harmless on an image without
+# kubectl.
+materialize_kubectl_config() {
+    [[ -n "${WARDYN_KUBECTL_CONFIG_B64:-}" ]] || return 0
+    materialize_home_records kubectl "$WARDYN_KUBECTL_CONFIG_B64"
+}
+
 # ── git credential helper caller-auth secret ─────────────────────────────────
 # Provision the per-run secret that gates wardyn-git-helper credential emission.
 # Only meaningful when the run can mint a git credential — i.e. it has a

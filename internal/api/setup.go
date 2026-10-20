@@ -77,6 +77,9 @@ type SetupStatus struct {
 	OnboardingComplete bool `json:"onboarding_complete"`
 	// Platform is the OS + WSL posture the environment-step copy keys off.
 	Platform SetupPlatform `json:"platform"`
+	// Features is which default-off features this deployment has switched on,
+	// so the console can leave out what is off. Kept for members: one bit each.
+	Features SetupFeatures `json:"features"`
 	// HostProxy is the host-side proxy detection (env/shell/git/tool-config/OS)
 	// the Host Proxy Getting-Started step renders. Read-only detection; it
 	// never configures anything (the upstream-proxy plumbing is separate).
@@ -230,6 +233,12 @@ type SetupPlatform struct {
 	// KVM: the host exposes /dev/kvm — lets the UI split Vault's "incompatible
 	// with this hardware" from a fixable "needs setup" (additive; old UIs ignore).
 	KVM bool `json:"kvm"`
+}
+
+// SetupFeatures is SetupStatus.Features.
+type SetupFeatures struct {
+	// KubectlCLI is WARDYN_KUBECTL_CLI: the kubectl component kind is on.
+	KubectlCLI bool `json:"kubectl_cli"`
 }
 
 // llmPathExists is LLMReady: at least one enabled model provider serves an
@@ -427,6 +436,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		HasRuns:            hasRuns,
 		OnboardingComplete: onboardingComplete,
 		Platform:           SetupPlatform{OS: plat.OS, WSL: plat.WSL, KVM: plat.KVM},
+		Features:           SetupFeatures{KubectlCLI: kubectlCLIOn()},
 		HostProxy:          hostProxy,
 		SCM:                scmPosture,
 		// The harness and model-provider lists hold only what this caller may use

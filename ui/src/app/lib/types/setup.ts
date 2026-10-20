@@ -382,6 +382,9 @@ export interface SetupStatus {
   tier?: "local-only" | "runner" | "org";
   has_runs: boolean;
   platform: { os: string; wsl: boolean; kvm?: boolean };
+  // Default-off features this deployment switched on (Go SetupFeatures). Optional
+  // for older daemons and fixtures; absent reads as every feature off.
+  features?: { kubectl_cli: boolean };
   // Masked host-proxy detection (see HostProxyDetection). Optional for the same
   // fixture-compat reason as `llm_ready` — READY_FALLBACK and older daemons omit it.
   host_proxy?: HostProxyDetection;

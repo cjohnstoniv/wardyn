@@ -344,6 +344,8 @@ type dispatchLLMPlan struct {
 	channelHosts map[string]string
 	// azureCLI is the Azure CLI row's share of the proxy config: its door's grant.
 	azureCLI azureCLIPlan
+	// kubectlCLI is the kubectl row's share: its door's grant.
+	kubectlCLI kubectlCLIPlan
 	// llmUnavailableDetail is the self-explaining detail the proxy's brokered-LLM
 	// 404 renders when this run reaches that route with no credential behind it
 	// (mpNoProviderDetail). Empty => the route's own generic detail.
@@ -455,6 +457,11 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	if injections, azureCLI, ok = s.authorAzureCLI(ctx, run, p.Components.AzureCLI, mitmCACertPEM, mitmCAKeyPEM, policy, sandboxEnv, injections); !ok {
 		return dispatchLLMPlan{}, false
 	}
+	// The kubectl row's grant, door and the server it opens. Same contract.
+	var kubectlCLI kubectlCLIPlan
+	if injections, kubectlCLI, ok = s.authorKubectlCLI(ctx, run, p.Components.KubectlCLI, mitmCACertPEM, mitmCAKeyPEM, policy, sandboxEnv, injections); !ok {
+		return dispatchLLMPlan{}, false
+	}
 
 	// Artifact-redirect token injections (authored in planArtifactRedirect, whose
 	// egress substitution already added each corp host to policy.AllowedDomains, so
@@ -484,6 +491,7 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 		azure:                azure,
 		channelHosts:         providerSubscriptionChannelHosts(llms, azure.channelHosts),
 		azureCLI:             azureCLI,
+		kubectlCLI:           kubectlCLI,
 		mitmLLM:              subscription || mitmForInspect,
 		llmUnavailableDetail: prov.detail, llmUpstreams: prov.upstreams, localModels: prov.localModels,
 	}, true

@@ -47,6 +47,9 @@ func reassertProxyCeiling(run types.AgentRun, cfg *proxy.Config, c ownerCeiling)
 	if rerr := azureCLIReviveRefusal(cfg, c.deny); rerr != nil {
 		return re, rerr
 	}
+	if rerr := kubectlCLIReviveRefusal(cfg, c.deny); rerr != nil {
+		return re, rerr
+	}
 	re.added = unionCeilingDenies(&cfg.Policy, c.deny)
 	if cfg.GitHubAPI != nil && githubDoorWithheld(c.deny) { // the sandbox holds only the inert token, so the door can go
 		cfg.GitHubAPI = nil

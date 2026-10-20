@@ -199,6 +199,13 @@ var gates = map[string]func(LocalPlan) *Refusal{
 		}
 		return nil
 	},
+	// The cluster token is minted and held on the organisation's side.
+	"ProxyConfig.KubeAPI": func(p LocalPlan) *Refusal {
+		if p.Spec.ProxyConfig.KubeAPI != nil {
+			return refuse(ReasonPlacementCredential, "ProxyConfig.KubeAPI", "kubectl's cluster token cannot be sent to a local runner")
+		}
+		return nil
+	},
 }
 
 // CredentialPaths enumerates every present value of a field the table classifies

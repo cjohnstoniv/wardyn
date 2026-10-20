@@ -101,6 +101,7 @@ const (
 	credKindSecret       = "secret"
 	credKindAWSRole      = "aws_role"
 	credKindAzureARM     = "azure_arm"
+	credKindKubeAPI      = "kube_api"
 	signInModelProvider  = "model_provider"
 	signInAWSCLI         = "aws_cli"
 	signInAzureCLI       = "azure_cli"
@@ -295,6 +296,8 @@ func credentialLabel(kind, owner string) string {
 		return "Your AWS sign-in"
 	case credKindAzureARM:
 		return "Your Azure sign-in"
+	case credKindKubeAPI:
+		return "Your organisation's cluster account"
 	case credKindGitPAT:
 		if shared {
 			return "A Git token your organisation provides"
@@ -629,6 +632,16 @@ func (b *accessBuilder) componentRow(fact componentFact) {
 		b.addHost(armscope.Host, viaInjected, row.ID)
 		b.addHost(proxy.AzureLoginHost, viaInjected, row.ID)
 		b.addCredential(client.AccessCredential{ID: row.ID + ":azure_arm", Kind: credKindAzureARM, Owner: credOwnerOwn,
+			Delivery: deliveryProxy, Renewed: true, AfterEnd: afterEndGone})
+	}
+	if cli != nil && cli.Kind == types.CLIKindKubectl && cli.Kubectl != nil {
+		// The API server, where the proxy adds a ten-minute token it has the
+		// cluster mint for the organisation's service account. Neither that token
+		// nor the registered one enters the sandbox.
+		if host, _, ok := cli.Kubectl.HostPort(); ok {
+			b.addHost(host, viaInjected, row.ID)
+		}
+		b.addCredential(client.AccessCredential{ID: row.ID + ":kube_api", Kind: credKindKubeAPI, Owner: credOwnerShared,
 			Delivery: deliveryProxy, Renewed: true, AfterEnd: afterEndGone})
 	}
 	for i, sec := range fact.Secrets {
