@@ -25,6 +25,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/approval"
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/livebus"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -87,6 +88,15 @@ func (s *Server) loadTakeover(w http.ResponseWriter, r *http.Request) (types.App
 	}
 	if err != nil {
 		writeServerError(w, r, "get approval", err)
+		return ap, types.AgentRun{}, false
+	}
+	// Someone who may not enter the run gets the 404 a missing request gets, not the run's own
+	// (no oracle on the approval id), audited as a foreign entry. admitRunEntry writes the rest.
+	if run, err := s.cfg.Store.GetRun(r.Context(), ap.RunID); err == nil &&
+		!mayEnterRun(run, principalFromRequest(r), s.isOperator(r.Context())) &&
+		!s.isOperator(r.Context()) && !s.sponsorsRun(r, run) {
+		s.refuse(w, r, authz.Deny(authz.ReasonAttachTicketForeignRun, run.ID.String(), "approval not found").
+			OnRun(run.ID).AsIf(authz.Reason(reasonApprovalNotFound)))
 		return ap, types.AgentRun{}, false
 	}
 	run, asSponsor, ok := s.admitRunEntry(w, r, ap.RunID, authorizedAt)
