@@ -13,6 +13,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
+	"log/slog"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -311,7 +312,7 @@ func TestSetupOnlyHintsAtSSLCertFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hint := "SSL_CERT_FILE is set (" + ssl + "); pass --trusted-ca-file " + ssl + " if runs must trust it (64 KiB at most)\n"
+	hint := "SSL_CERT_FILE is set (" + ssl + "); pass --trusted-ca-file " + ssl + " if runs must trust it (64 KiB at most), or --org-ca-file " + ssl + " to trust it for this runner's connection to the organisation only (the CLI's own anchors: wardyn ca add)\n"
 	if strings.Count(out, hint) != 1 {
 		t.Errorf("setup output lacks the one hint %q:\n%s", hint, out)
 	}
@@ -383,5 +384,132 @@ func TestServeIgnoresAmbientSSLCert(t *testing.T) {
 		if _, built, err := serve(bad); err == nil || built || !strings.Contains(err.Error(), bad) {
 			t.Errorf("%s, an invalid named file: err=%v built=%v; want a startup refusal naming it", tc.name, err, built)
 		}
+	}
+}
+
+// testCertPEM is a self-signed certificate named cn, valid from notBefore to notAfter, as PEM.
+func testCertPEM(t *testing.T, cn string, isCA bool, notBefore, notAfter time.Time) string {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tpl := &x509.Certificate{SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: cn}, NotBefore: notBefore, NotAfter: notAfter,
+		IsCA: isCA, BasicConstraintsValid: true}
+	der, err := x509.CreateCertificate(rand.Reader, tpl, tpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+}
+
+// #3309: a bundle with an expired CA, a certificate that is not a CA and a valid CA warns exactly
+// twice, naming each, and still loads as before.
+func TestTrustedCAWarnsExpiredAndNotCA(t *testing.T) {
+	now := time.Now()
+	bundle := testCertPEM(t, "old-root", true, now.Add(-48*time.Hour), now.Add(-24*time.Hour)) +
+		testCertPEM(t, "laptop-17", false, now.Add(-time.Hour), now.Add(time.Hour)) + testCAPEM(t, "corp")
+	file := writeFile(t, filepath.Join(t.TempDir(), "ca.pem"), bundle)
+	if _, n, err := loadTrustedCA(file); err != nil || n != 3 {
+		t.Fatalf("loadTrustedCA: n=%d err=%v; want all three certificates loaded as today", n, err)
+	}
+	certs, warnings := trustedCAFileCheck(file, now)
+	if len(certs) != 3 || len(warnings) != 2 {
+		t.Fatalf("certs=%d warnings=%q; want 3 certificates and exactly two warnings", len(certs), warnings)
+	}
+	want := []string{
+		"the trusted CA file " + file + ` holds a certificate for "old-root" that expired on ` + now.Add(-24*time.Hour).UTC().Format(time.DateOnly) + ". The runner still uses the file as it is.",
+		"the trusted CA file " + file + ` holds a certificate for "laptop-17" that is not marked as a certificate authority, so it cannot vouch for a server. The runner still uses the file as it is.`,
+	}
+	for i := range want {
+		if warnings[i] != want[i] {
+			t.Errorf("warning %d = %q\nwant %q", i, warnings[i], want[i])
+		}
+	}
+	notYet := writeFile(t, filepath.Join(t.TempDir(), "ca.pem"), testCertPEM(t, "new-root", true, now.Add(24*time.Hour), now.Add(48*time.Hour)))
+	if _, w := trustedCAFileCheck(notYet, now); len(w) != 1 || !strings.Contains(w[0], `"new-root" that is not valid until`) {
+		t.Errorf("a certificate not valid yet: %q", w)
+	}
+	if _, w := trustedCAFileCheck(writeFile(t, filepath.Join(t.TempDir(), "ca.pem"), testCAPEM(t, "corp")), now); len(w) != 0 {
+		t.Errorf("a current CA in a private file warned: %q", w)
+	}
+}
+
+// #3309: a file or a directory other accounts can write warns, by mode; a sticky directory does not.
+func TestTrustedCAWarnsLooseFileAndDirectory(t *testing.T) {
+	dir := t.TempDir()
+	file := writeFile(t, filepath.Join(dir, "ca.pem"), testCAPEM(t, "corp"))
+	if err := os.Chmod(file, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	_, w := trustedCAFileCheck(file, time.Now())
+	if len(w) != 1 || w[0] != "the trusted CA file "+file+" can be changed by other accounts (mode 0666): run chmod go-w on it. The runner still uses the file as it is." {
+		t.Fatalf("a 0666 file: %q", w)
+	}
+	if err := os.Chmod(file, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	_, w = trustedCAFileCheck(file, time.Now())
+	if len(w) != 1 || w[0] != "the directory "+dir+" holding the trusted CA file can be changed by other accounts (mode 0777): run chmod go-w on it. The runner still uses the file as it is." {
+		t.Fatalf("a 0777 directory: %q", w)
+	}
+	if err := os.Chmod(dir, 0o777|os.ModeSticky); err != nil {
+		t.Fatal(err)
+	}
+	if _, w = trustedCAFileCheck(file, time.Now()); len(w) != 0 {
+		t.Fatalf("a sticky directory warned: %q", w)
+	}
+}
+
+// #3309: a file owned by neither root nor the runner's own account warns, naming the owner.
+func TestTrustedCAOwnerWarning(t *testing.T) {
+	if w := caOwnerWarning("/etc/corp.pem", 1234, 1000); w != "the trusted CA file /etc/corp.pem belongs to another account (uid 1234), not to root or to the account this runner runs as." {
+		t.Errorf("another account's file: %q", w)
+	}
+	for _, uid := range []int{0, 1000} {
+		if w := caOwnerWarning("/etc/corp.pem", uid, 1000); w != "" {
+			t.Errorf("uid %d warned: %q", uid, w)
+		}
+	}
+}
+
+// #3309: serve logs each certificate and each warning at startup, and still trusts the file.
+func TestServeLogsTrustedCAWarningsAndStillLoads(t *testing.T) {
+	var buf strings.Builder
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	now := time.Now()
+	bundle := testCertPEM(t, "old-root", true, now.Add(-48*time.Hour), now.Add(-24*time.Hour))
+	opts := serveOptions{trustedCAFile: writeFile(t, filepath.Join(t.TempDir(), "ca.pem"), bundle)}
+	if err := trustedCAAtStartup(context.Background(), &opts, t.TempDir()); err != nil || opts.trustedCA != bundle {
+		t.Fatalf("trustedCAAtStartup: %v; want the expired bundle still trusted", err)
+	}
+	logs := buf.String()
+	if !strings.Contains(logs, `level=INFO msg="corporate CA certificate" subject="CN=old-root" issuer="CN=old-root" not_after=`) {
+		t.Errorf("no per-certificate line:\n%s", logs)
+	}
+	if !strings.Contains(logs, `level=WARN msg="the trusted CA file `) || !strings.Contains(logs, `that expired on`) {
+		t.Errorf("no expiry warning:\n%s", logs)
+	}
+}
+
+// #3309: setup prints the same warnings before it uses the registration token, and still writes the file.
+func TestSetupPrintsTrustedCAWarnings(t *testing.T) {
+	f := newSetupFixture(t, "linux")
+	ca := writeFile(t, filepath.Join(t.TempDir(), "ca.pem"), testCertPEM(t, "laptop-17", false, time.Now().Add(-time.Hour), time.Now().Add(time.Hour)))
+	out, err := f.run(setupOptions{tokenFile: f.tokenFile, trustedCAFile: ca})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "warning: the trusted CA file "+ca+` holds a certificate for "laptop-17" that is not marked as a certificate authority`) {
+		t.Errorf("setup printed no CA warning:\n%s", out)
+	}
+	if got := f.read(mustPaths(t, f).envFile); !strings.Contains(got, "WARDYN_TRUSTED_CA_FILE="+ca+"\n") {
+		t.Errorf("the warned file is not written into the service:\n%s", got)
 	}
 }

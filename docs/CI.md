@@ -106,7 +106,7 @@ plane request itself (auth/client/server/network), independent of what the run i
 | `1` | the invocation failed **locally**: a usage error, an unreadable `--policy-file`, and more; see [below](#exit-1) |
 | _task's own code_ | `run --wait`: the run ended `FAILED` — the exit is the task/agent's own real exit code (from the `run.complete` audit event), or `1` if that code is missing/unreadable (never `0` on `FAILED`) |
 | _ssh's own remote status_ | `wardyn run ssh` (once connected): ssh(1)'s own remote exit status; see [below](#sshs-own-remote-status) |
-| _clean detach = `0`_ | `wardyn run attach`: a clean detach is `0`; see [below](#clean-detach) |
+| _clean detach = `0`_ | `wardyn attach`: a clean detach is `0`; see [below](#clean-detach) |
 
 - `wardyn run get <id> --json` (or the `run.complete` audit event) always has the authoritative outcome — check it when the process's own exit status alone doesn't say why a run didn't complete.
 - That is also how a pipeline tells the two meanings of `1` apart:
@@ -141,7 +141,7 @@ plane request itself (auth/client/server/network), independent of what the run i
 
 #### Clean detach
 
-- `wardyn run attach`: a clean detach (TERM/HUP/INT, the remote side closing, or stdin EOF on a piped/non-tty session) is `0`, never re-labelled as a task result —
+- `wardyn attach`: a clean detach (TERM/HUP/INT, the remote side closing, or stdin EOF on a piped/non-tty session) is `0`, never re-labelled as a task result —
   - attach has no task exit code of its own to report.
 - **Not** Ctrl-C on the primary (tty) path: raw mode clears ISIG, so it is relayed to the remote PTY as input rather than detaching locally.
 - A FAILED attempt to open the session (rejected/unreachable) classifies with the same `2`-`5` as any other request.

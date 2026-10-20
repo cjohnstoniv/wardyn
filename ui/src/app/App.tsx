@@ -15,7 +15,7 @@ import { SignIn } from "./components/screens/sign-in";
 import { AppShell } from "./components/screens/app-shell";
 import { RunsScreen } from "./components/screens/runs";
 import { WardynMark } from "./components/wardyn/logo";
-import { getToken, isSessionEnded, listenForOtherTabs, onUnauthorized, probeAuth, probeAuthWithReason, safeReturnPath, SESSION_ENDED_REASON, setSignedOutHold, setToken } from "./lib/api/core";
+import { getToken, isSessionEnded, listenForOtherTabs, onUnauthorized, probeAuthWithReason, safeReturnPath, SESSION_ENDED_REASON, setSignedOutHold, setToken } from "./lib/api/core";
 import { listenForInput } from "./lib/api/session-activity";
 import { onRemoteAuthChange } from "./lib/api/auth-sync";
 import { health } from "./lib/api/health";
@@ -176,6 +176,13 @@ const AdminSettingsScreen = React.lazy(() =>
 const YourAccountScreen = React.lazy(() =>
   import("./components/screens/settings/your-account-screen").then((m) => ({
     default: m.YourAccountScreen,
+  })),
+);
+// /cli/sign-in: the approve page `wardyn login` opens (ATT-LOGIN-UI). Outside the setup gate, like /setup: a
+// person finishing a sign-in must reach it whatever the setup checks say.
+const CliSignInScreen = React.lazy(() =>
+  import("./components/screens/cli-sign-in").then((m) => ({
+    default: m.CliSignInScreen,
   })),
 );
 const WorkspacesScreen = React.lazy(() =>
@@ -376,6 +383,9 @@ const ATTENTION_POLL_MS = 5000;
 // A named module constant on purpose: a field report moves one number here.
 const MODEL_ACCESS_POLL_MS = 300_000;
 
+// Waits between re-probes of a cold load that could not reach the daemon; the last one repeats.
+const COLD_PROBE_RETRY_MS = [1000, 2000, 4000, 8000, 15000];
+
 export default function App() {
   const [auth, setAuth] = React.useState<AuthStatus>("checking");
   const [pendingApprovals, setPendingApprovals] = React.useState(0);
@@ -449,9 +459,12 @@ export default function App() {
   React.useEffect(() => {
     let active = true;
     const hadToken = getToken() !== null;
-    void probeAuthWithReason().then(({ probe, reason }) => {
+    void probeAuthWithReason().then(({ probe, reason, transient }) => {
       if (!active) return;
-      if (probe === "unreachable") setUnreachable(true);
+      if (probe === "unreachable") {
+        setUnreachable(true);
+        if (transient) setColdUnreachable(true);
+      }
       // A cold load whose session ended says so, as a rejected stored token does.
       if (probe === "unauthed" && (hadToken || isSessionEnded(reason))) setSignedOut(true);
       setAuth(probe === "authed" ? "authed" : "unauthed");
@@ -460,6 +473,54 @@ export default function App() {
       active = false;
     };
   }, []);
+
+  // A cold load whose probe hit a transient failure (a network error, a timeout, a 5xx or a 429) is not a
+  // signed-out person, but it parks on the sign-in gate, and nothing else asks again until a focus or
+  // another tab's event. So ask again on a backoff until it answers: "authed" enters the console as the
+  // mount probe would have. Any other answer is final and the gate stays, as it always has: a 401, and
+  // a 403 or another 4xx, which a retry cannot change. One probe at a time, shared with the re-probe below.
+  // Stops on any answer, on sign-in (auth leaves "unauthed"), on the person typing into the gate, and on
+  // unmount.
+  const [coldUnreachable, setColdUnreachable] = React.useState(false);
+  const probingRef = React.useRef(false);
+  React.useEffect(() => {
+    if (auth === "authed") setColdUnreachable(false);
+  }, [auth]);
+  React.useEffect(() => {
+    if (auth !== "unauthed" || !coldUnreachable) return;
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let attempt = 0;
+    const stop = () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+    const schedule = () => {
+      timer = setTimeout(() => {
+        // The focus re-probe has one out: wait for it rather than stack a second.
+        if (probingRef.current) return schedule();
+        probingRef.current = true;
+        void probeAuthWithReason().then(({ probe, transient }) => {
+          probingRef.current = false;
+          if (!alive) return;
+          if (probe === "unreachable" && transient) {
+            attempt++;
+            schedule();
+            return;
+          }
+          stop();
+          setColdUnreachable(false);
+          if (probe === "authed") setAuth("authed");
+        });
+      }, COLD_PROBE_RETRY_MS[Math.min(attempt, COLD_PROBE_RETRY_MS.length - 1)]);
+    };
+    document.addEventListener("input", stop, true);
+    schedule();
+    return () => {
+      stop();
+      document.removeEventListener("input", stop, true);
+    };
+  }, [auth, coldUnreachable]);
 
   // DR-0020: the other tabs of this browser signed out, signed in or switched mode. Every signed-in tab
   // re-asks /me (the shell's reauth layer); a tab on the sign-in screen asks here, and enters the
@@ -473,7 +534,12 @@ export default function App() {
     const reprobe = (fromOtherTab: boolean) => {
       if (signingOutRef.current) return;
       if (!fromOtherTab && signedOutHereRef.current) return;
-      void probeAuth().then((probe) => {
+      if (probingRef.current) return;
+      probingRef.current = true;
+      void probeAuthWithReason().then(({ probe, transient }) => {
+        probingRef.current = false;
+        // An answer that is final ends the cold-load retries; a transient failure leaves them running.
+        if (alive && !(probe === "unreachable" && transient)) setColdUnreachable(false);
         if (!alive || probe !== "authed" || authRef.current !== "unauthed") return;
         // Back in, by another tab's sign-in: a later sign-out here starts from a clean slate.
         signedOutHereRef.current = false;
@@ -756,6 +822,7 @@ export default function App() {
             path="/admin/setup"
             element={<SetupRoute onDone={() => navigate("/runs")} status={setupStatus} />}
           />
+          <Route path="/cli/sign-in" element={suspend(<CliSignInScreen />)} />
           <Route element={<RequireSetup status={setupStatus} />}>
             <Route
               path="/"

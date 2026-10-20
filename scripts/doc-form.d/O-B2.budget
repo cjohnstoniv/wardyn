@@ -120,8 +120,14 @@
 # docs/OPERATIONS.md 57424 = ours 56776 + theirs 57392 - base 56744 at the main merge into 0.10 BOUNDARY.
 # docs/OPERATIONS.md 57533 = ours 57501 + theirs 57424 - base 57392 at the 0.10 W4b merge of LAY-A onto the train.
 # docs/OPERATIONS.md 57562 = ours 57533 + theirs 57421 - base 57392 at the 0.10 W4b merge of the CTL-B fix onto the train.
-docs/OPERATIONS.md=57562
 # docs/OPERATIONS.md 57421 adds 29 (0.10 CTL-B): the recording level and migration line (#2968).
+# 0.10 ATT-LOGIN-SRV: docs/OPERATIONS.md 57460 adds 68 over 57392: the 0198 migrator rationale line and the CLI sign-in line, measured.
+# docs/OPERATIONS.md 57569 = ours 57501 + theirs 57460 - base 57392 at the 0.10 W4a merge of ATT-LOGIN-SRV onto the train.
+# 0.10 PRIV-1: docs/OPERATIONS.md 57515 adds 123 over 57392, measured: run_tasks and run_setups reach, the two tables that keep a name and why, and the credentials token-history counts.
+# docs/OPERATIONS.md 57692 = ours 57569 + theirs 57515 - base 57392 at the 0.10 W4a merge of PRIV-1 onto the train.
+# 0.10 W4a train: docs/OPERATIONS.md tightened to 57690, measured at the train merge.
+# docs/OPERATIONS.md 57751 = ours 57562 + theirs 57690 - base 57501 at the 0.10 merge of main (W4a) into the W4b train.
+docs/OPERATIONS.md=57751
 # docs/OPERATIONS.md 55840 adds 124 over 55716, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # docs/OPERATIONS.md 55867 adds 27 over 55840, measured: a run whose runner cannot be asked falls back to this deployment's runner, the older-runner exception, pooled runs, and the runner_offline gap reason.
 # docs/OPERATIONS.md 55891 adds 24 over 55867, measured: with several executors and no pool, the executor a run lands on, and once its sandbox exists the one that holds it, decides where its output comes from.

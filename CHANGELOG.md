@@ -14,6 +14,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on
   `aws_sso_refused_tokens` (migration `0194_aws_sso_refused_tokens`). Without it an AWS SSO session whose renewal
   AWS refused cannot be marked, read or cleared, so replicas do not share that mark.
+- **`wardyn run attach` is now `wardyn attach`.** The old spelling is an unknown command, with no alias. A script
+  that calls `wardyn run attach <run-id>` changes to `wardyn attach <run-id>`. `wardyn run ssh` is unchanged.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
+  `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE` on `cli_sessions` and
+  `SELECT, INSERT, UPDATE, DELETE` on `cli_sign_ins` (migration `0199_cli_sign_in`, which also adds `kind` and
+  `cli_session_id` to `api_tokens`). Without it every API token read fails, because a token's liveness now reads
+  `cli_sessions`.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
   `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE` on
   `governance_boundary` (migration `0199_governance_boundary`). Without it the Wardyn boundary cannot be read or
@@ -21,9 +28,72 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- `wardyn attach <run-id>` keeps the terminal on this computer when the run is on your own runner here and the
+  organisation allows it (`WARDYN_ATTACH_LOCAL`, off by default); otherwise it goes through the organisation, as
+  before. One line on stderr names the path. `--via local|relay|auto` forces a path, and `--take-over` takes the
+  terminal from whoever holds it. On Windows the runner lives in WSL2, so attach goes through the organisation.
+- CLI sign-in, server half (migration `0199_cli_sign_in`), off unless `WARDYN_CLI_SIGN_IN=true` and SSO is set up.
+  `wardyn login` asks for a sign-in, the person approves the computer in the console, and the CLI gets a session
+  secret, bound to an Ed25519 device key, that renews a 1-hour access token. The secret DOES live on the laptop, in
+  the keychain or a file only its owner can read; [THREAT-MODEL.md](threatmodel/THREAT-MODEL.md) says what protects
+  it and what it does not stop.
+  - Sessions last 30 days (`WARDYN_CLI_SESSION_TTL`, up to 90), end after 7 days idle (`WARDYN_CLI_SESSION_IDLE`),
+    and at most 7 days in a file (`WARDYN_CLI_FILE_STORE=false` refuses the file). Paste-back sign-in for a computer
+    with no browser is off unless `WARDYN_CLI_PASTE_SIGN_IN=true`.
+  - Every renewal rotates the secret and re-checks revokes, sessions cuts, deactivation, the role stamp and the
+    `api_token` feature. An old secret presented again ends the session. A revoke, Sign out everywhere, a console
+    sign-out and a per-computer sign-out end it at once, with its tokens.
+  - An admin's CLI acts as role `user`; `wardyn login --admin` gives a 1-hour admin token, never renewed.
+  - Routes: `POST /api/v1/cli/sign-ins`, `POST /api/v1/cli/sign-ins/{id}/token`, `POST /api/v1/cli/sessions/{id}/refresh`,
+    `GET /api/v1/me/cli-sign-ins/{id}` with `/approve` and `/deny`, `GET /api/v1/me/cli-sessions` and
+    `DELETE /api/v1/me/cli-sessions/{id}`. `/healthz` reports `cli_sign_in` and `cli_paste_sign_in`.
+  - Audit actions `cli.sign_in.request`, `cli.sign_in.approve`, `cli.sign_in.deny`, `cli.session.create`,
+    `cli.session.revoke`, `cli.session.refresh_refused` and `cli.session.reuse_detected`. `token.create` rows carry
+    `kind`; `session.revoke` rows carry `cli_sessions_ended`.
 - Recording is a level: a policy's `recording` is `off`, `terminal` or `screen_actions`, and
   `site_config.recording` sets the organisation's level and can lock it as a minimum. Nothing set records terminal
   sessions, as before. `WARDYN_RECORDING_STORE=off` still records nothing, and keystrokes are never recorded.
+
+### Changed
+
+- The CLI's hint under a `401` follows the answer's reason. On a single-sign-on deployment with no admin token
+  (`sign_in_required`) it says to use a personal API token in `WARDYN_TOKEN`, not the compose stack's admin token. For
+  a token the organisation does not know (`admin_token_not_configured`) it names where the token came from.
+
+## [0.9.6] — 2026-10-20
+
+A fix release on top of 0.9.5. A person's own Azure DevOps token now works on their own runner, credential and posture refusals say which policy or field refused, the credential delivery screen lists what each class can be delivered by, runners that cannot reach the server say why, and session recordings no longer store typed input. No migration and no new setting.
+
+### Security
+
+- Session recordings no longer store typed input. Recordings made by earlier versions may contain keystrokes typed into an attached terminal, including at prompts that hide what you type, such as passwords. Treat those recordings as sensitive: restrict who can read them, or delete them.
+
+### Fixed
+
+- An Azure DevOps connection using a person's own token (`own_pat`) now works on that person's own runner. Before, the run failed at dispatch. The token reaches the runner's proxy only; the sandbox holds a placeholder. Organisation-held Azure DevOps tokens (`minted_pat`, `bearer`) are still refused on a person's own runner.
+- The AWS sign-in dialog's step list moves to "Waiting for AWS" as soon as the dialog shows a device code. Before, it could stay on "Starting the sign-in sandbox" while the code and the waiting prompt were already on screen.
+- A brief server error while the console first loads no longer leaves a signed-in person on the sign-in screen.
+- A failed `run.output.finalize` audit row from the recording path now carries `step`, as every other finalize failure row does. No existing key changes.
+
+### Changed
+
+- A refusal of a credential on a person's own runner names the delivery policy that refused it, for example `(delivery policy: refuse)`. A runner of unknown trust class is told it gets organisation delivery only. The reason code and status are unchanged (`placement_credential`, 422).
+- `runner_posture_unmet` names every posture field that is not met, with the requirement. For a runner that has not reported its posture, it says that an unreported posture meets no requirement. The reason code and status are unchanged.
+
+- A runner that registered but has never connected to the server says so in the console, with where to find its log on each system.
+- `wardyn-runnerd` logs the proxy it reaches the server through, by host and port only, and a connection the proxy refuses is reported as a proxy refusal.
+- `wardyn-runnerd setup` warns when proxy variables are set in the shell but will not reach the service it installs. It prints the variable names only.
+- `wardyn-runnerd` warns about certificates in its trusted CA file that are expired or not a CA, and about a file that another user owns or others can write. The file loads as before.
+- On a single sign-on deployment, the CLI's answer to a 401 points at a personal API token.
+- `wardyn-runnerd` warns when its pinned proxy image is a different release than the runner, or the organisation names a different one, since runs may then fail to start.
+
+### Added
+
+- `GET /governance/credential-delivery` returns `buildable_modes` beside the policy: the delivery modes each credential class can use today. The stored policy and `PUT` are unchanged.
+
+### Before you upgrade
+
+- Scripts that match the old refusal text for a local credential refusal, or a single posture field before the colon, must match the new sentences. Reason codes are unchanged.
 
 ## [0.9.5] — 2026-10-19
 

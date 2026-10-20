@@ -680,6 +680,9 @@ export interface AttachModeMsg {
   type: "attach-mode";
   read_only: boolean;
   holder?: AttachHolder;
+  // "local" on a socket the CLI opened with transport=local (its terminal stays on the runner's own
+  // computer); absent on the console's relay socket.
+  transport?: "local";
 }
 
 // Who currently holds the run's shared tmux PTY (GET /runs/{id}/attach/holder).
