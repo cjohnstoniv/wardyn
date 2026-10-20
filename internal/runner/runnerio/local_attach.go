@@ -149,6 +149,7 @@ type localFrame struct {
 type localClient struct {
 	conn  net.Conn
 	ref   string            // the local sandbox ref the hello resolved
+	runID uuid.UUID         // the run the hello named, resolved again at the grant
 	in    chan localFrame   // frames the CLI sent after LocalHelloOK
 	gone  chan struct{}     // closed when the CLI stops sending
 	taken chan struct{}     // closed once local_attach claimed the nonce
@@ -256,6 +257,7 @@ func (s *Server) helloLocal(c *localClient) (string, string) {
 	if resolve != nil {
 		c.ref = resolve(hello.RunID)
 	}
+	c.runID = hello.RunID
 	if c.ref == "" || s.held(c.ref) != nil {
 		return "", LocalReasonNotHere
 	}
@@ -293,6 +295,13 @@ func (s *Server) localAttach(ctx context.Context, peer *runnerwire.Peer, id uint
 	if c.ref != ref { // the run named on the socket must be the run the org's ticket is for
 		c.close(LocalReasonUnavailable)
 		return nil, runnerwire.Refuse("attach_local_unavailable: the run on the local socket is not the run the organisation granted")
+	}
+	s.mu.Lock()
+	resolve := s.attachRef
+	s.mu.Unlock()
+	if resolve == nil || resolve(c.runID) != ref { // the run may have become one this runner refuses since the hello
+		c.close(LocalReasonNotHere)
+		return nil, runnerwire.Refuse(LocalReasonNotHere)
 	}
 	if err := s.held(ref); err != nil {
 		c.close(LocalReasonNotHere)

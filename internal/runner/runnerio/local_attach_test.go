@@ -581,6 +581,34 @@ func TestLocalAttachHelloRefusesARunNotHere(t *testing.T) {
 	}
 }
 
+// The run was refused (contained, say) after the hello: the grant re-asks the runner's run record
+// and refuses, attaching nothing.
+func TestLocalAttachGrantRefusesARunRefusedSinceHello(t *testing.T) {
+	r := localAttachRig(t)
+	id, ref := r.run(t)
+	cli := dialLocal(t, r.server)
+	nonce := cli.hello(t, id)
+	r.mu.Lock()
+	delete(r.runs, id) // what AttachRef answers for a contained run
+	r.mu.Unlock()
+	_, err := r.sub.LocalAttach(ctx5(t), ref, runner.LocalAttachRequest{Nonce: nonce})
+	if err == nil || !strings.Contains(err.Error(), LocalReasonNotHere) {
+		t.Fatalf("grant after the run was refused = %v, want %s", err, LocalReasonNotHere)
+	}
+	if f := cli.expect(t, LocalRefuse); !bytes.Contains(f.b, []byte(LocalReasonNotHere)) {
+		t.Fatalf("refuse = %s", f.b)
+	}
+	if local, _ := r.server.local(ref); r.fake.Called("attach", local) {
+		t.Fatalf("a refused grant attached %s", ref)
+	}
+	r.server.mu.Lock()
+	n := len(r.server.locals)
+	r.server.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("a refused grant left %d sessions", n)
+	}
+}
+
 func TestLocalAttachLinkLossEndsTheSession(t *testing.T) {
 	r := localAttachRig(t)
 	id, ref := r.run(t)
