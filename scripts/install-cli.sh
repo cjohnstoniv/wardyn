@@ -114,6 +114,7 @@ asset="wardyn-${os}-${arch}"
 rel="${base}/v${version}"
 
 have_cosign=""
+signed=""
 command -v cosign >/dev/null 2>&1 && have_cosign=1
 if [ -n "$require_sig" ] && [ -z "$have_cosign" ]; then
   die "--require-signature: cosign is not on PATH, so the signature cannot be checked. Install cosign (https://docs.sigstore.dev/cosign/installation/), or drop the flag and accept the checksum alone."
@@ -182,8 +183,13 @@ if [ -n "$have_cosign" ]; then
   fi
   if [ "$vrc" != 0 ]; then
     tail -n 5 "$work/cosign.out" >&2
-    die "cosign refused the signature on SHA256SUMS (identity ${identity}); nothing was installed"
+    last=$(tail -n 1 "$work/cosign.out")
+    if [ -n "$cafile" ]; then
+      die "cosign could not verify SHA256SUMS (identity ${identity}): a network or trust failure, or a bad signature; --ca-file is also given to cosign as SSL_CERT_FILE. cosign said: ${last}. Nothing was installed."
+    fi
+    die "cosign refused the signature on SHA256SUMS (identity ${identity}); cosign said: ${last}. Nothing was installed."
   fi
+  signed=1
   say "signature: verified with cosign against ${identity}"
   say "  a script piped from the same origin also names this identity, so for a piped run that line is what you check by hand"
 else
@@ -195,7 +201,11 @@ want=$(awk -v a="$asset" '{n=$2; sub(/^\.\//,"",n); if (n==a) print $1}' "$work/
 [ -n "$want" ] || die "SHA256SUMS lists no ${asset}; nothing was installed"
 got=$(sha256_hex "$stage")
 [ "$want" = "$got" ] || die "checksum mismatch for ${asset} (want ${want}, got ${got}); nothing was installed"
-say "checksum: matches SHA256SUMS from the same place: catches a broken download, not a tampered release"
+if [ -n "$signed" ]; then
+  say "checksum: matches the SHA256SUMS list that cosign verified as signed by the release"
+else
+  say "checksum: matches SHA256SUMS from the same place: catches a broken download, not a tampered release"
+fi
 
 chmod 0755 "$stage"
 mv -f "$stage" "${dir}/wardyn"

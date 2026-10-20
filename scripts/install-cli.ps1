@@ -93,19 +93,32 @@ try {
     }
 
     Say "installing wardyn $Version ($asset) from $rel"
+    $signed = $false
     Get-Asset 'SHA256SUMS' (Join-Path $work 'SHA256SUMS')
 
     if ($cosign) {
       Get-Asset 'SHA256SUMS.sig' (Join-Path $work 'SHA256SUMS.sig')
       Get-Asset 'SHA256SUMS.pem' (Join-Path $work 'SHA256SUMS.pem')
       $identity = "https://github.com/$Repo/.github/workflows/release.yml@refs/tags/v$Version"
-      $log = & cosign verify-blob (Join-Path $work 'SHA256SUMS') --signature (Join-Path $work 'SHA256SUMS.sig') `
+      # Windows PowerShell 5.1 turns a native command's stderr into a terminating
+      # error under 'Stop' (cosign prints "Verified OK" there), so the call runs
+      # under 'Continue' with stderr in a file, and only the exit code decides.
+      $errFile = Join-Path $work 'cosign.err'
+      $prevEap = $ErrorActionPreference
+      $ErrorActionPreference = 'Continue'
+      & cosign verify-blob (Join-Path $work 'SHA256SUMS') --signature (Join-Path $work 'SHA256SUMS.sig') `
         --certificate (Join-Path $work 'SHA256SUMS.pem') --certificate-identity $identity `
-        --certificate-oidc-issuer $Issuer 2>&1
-      if ($LASTEXITCODE -ne 0) {
-        $log | Select-Object -Last 5 | ForEach-Object { Write-Host $_ }
-        Stop-Install "cosign refused the signature on SHA256SUMS (identity $identity); nothing was installed"
+        --certificate-oidc-issuer $Issuer 2>$errFile | Out-Null
+      $vrc = $LASTEXITCODE
+      $ErrorActionPreference = $prevEap
+      if ($vrc -ne 0) {
+        $lines = @(Get-Content -ErrorAction SilentlyContinue $errFile)
+        $lines | Select-Object -Last 5 | ForEach-Object { Write-Host $_ }
+        $last = ''
+        if ($lines.Count -gt 0) { $last = $lines[-1] }
+        Stop-Install "cosign could not verify SHA256SUMS (identity $identity): a network or trust failure, or a bad signature. cosign said: $last. Nothing was installed."
       }
+      $signed = $true
       Say "signature: verified with cosign against $identity"
       Say '  a script piped from the same origin also names this identity, so for a piped run that line is what you check by hand'
     } else {
@@ -121,7 +134,8 @@ try {
     if (-not $want) { Stop-Install "SHA256SUMS lists no $asset; nothing was installed" }
     $got = (Get-FileHash -Algorithm SHA256 -Path $stage).Hash.ToLowerInvariant()
     if ($want -ne $got) { Stop-Install "checksum mismatch for $asset (want $want, got $got); nothing was installed" }
-    Say 'checksum: matches SHA256SUMS from the same place: catches a broken download, not a tampered release'
+    if ($signed) { Say 'checksum: matches the SHA256SUMS list that cosign verified as signed by the release' }
+    else { Say 'checksum: matches SHA256SUMS from the same place: catches a broken download, not a tampered release' }
 
     $target = Join-Path $dir 'wardyn.exe'
     if (Test-Path $target) {

@@ -141,13 +141,18 @@ grep -q -- "--certificate-identity https://github.com/cjohnstoniv/wardyn/.github
 grep -q -- '--certificate-oidc-issuer https://token.actions.githubusercontent.com' "$tmp/cosign.args" || fail "cosign was not given the issuer"
 grep -q "^SSL_CERT_FILE=$tmp/ca.pem\$" "$tmp/cosign.env" || fail "--ca-file did not reach the cosign child as SSL_CERT_FILE: $(cat "$tmp/cosign.env")"
 ! grep -q 'not checked' <<<"$out" || fail "cosign ran but the output still says not checked"
+grep -q 'matches the SHA256SUMS list that cosign verified' <<<"$out" || fail "cosign verified, but the checksum line does not say the list was signed: $out"
+! grep -q 'not a tampered release' <<<"$out" || fail "cosign verified, yet the checksum line still says it cannot catch a tampered release: $out"
 pass "cosign verifies the checksum file against the tag's identity; --ca-file reaches cosign alone"
 
 reset_home
 stub cosign 'echo "no matching signatures" >&2; exit 1'
 run "${GOOD[@]}"
 expect_refused "failing cosign"
-grep -q 'cosign refused' <<<"$out" || fail "failing cosign: the refusal does not name cosign: $out"
+grep -q 'cosign could not verify' <<<"$out" || fail "failing cosign with --ca-file: the refusal does not say cosign could not verify: $out"
+! grep -q 'refused the signature' <<<"$out" || fail "failing cosign with --ca-file calls a possible trust failure a refused signature: $out"
+grep -q 'cosign said: no matching signatures' <<<"$out" || fail "the refusal does not repeat cosign's own last line: $out"
+grep -q 'SSL_CERT_FILE' <<<"$out" || fail "the refusal does not mention that --ca-file reaches cosign: $out"
 expect_nothing_installed "failing cosign"
 pass "a cosign failure refuses and installs nothing"
 
@@ -297,6 +302,15 @@ if command -v pwsh >/dev/null 2>&1; then
   pwsh -NoProfile -Command "\$e = \$null; \$t = \$null; [void][System.Management.Automation.Language.Parser]::ParseFile('$PS1_SCRIPT', [ref]\$t, [ref]\$e); if (\$e.Count) { \$e | Out-String | Write-Host; exit 1 }" \
     || fail "install-cli.ps1 does not parse"
 fi
+# Windows PowerShell 5.1 makes a native command's stderr a terminating error under
+# $ErrorActionPreference='Stop', so cosign's "Verified OK" would fail every signed
+# install. The cosign call must not merge stderr (2>&1) and must run under 'Continue'.
+# pwsh is not on every box, so this is a text pin, not a run.
+! grep -nE 'cosign verify-blob.*2>&1|^[^#]*2>&1' "$PS1_SCRIPT" || fail "install-cli.ps1 merges stderr with 2>&1 near cosign (5.1 + Stop = terminating error)"
+awk '/ErrorActionPreference = .Continue./{c=NR} /& cosign verify-blob/{v=NR} /\$vrc = \$LASTEXITCODE/{l=NR} /ErrorActionPreference = \$prevEap/{r=NR} END{exit !(c && v && l && r && c<v && v<l && l<r)}' "$PS1_SCRIPT" \
+  || fail "install-cli.ps1: the cosign call is not wrapped Continue ... exit code read ... Stop restored"
+grep -qE '2>\$errFile' "$PS1_SCRIPT" || fail "install-cli.ps1: cosign's stderr does not go to a file"
+grep -qF 'matches the SHA256SUMS list that cosign verified' "$PS1_SCRIPT" || fail "install-cli.ps1 lost the signed-list checksum line"
 pass "install-cli.ps1 carries the same checks (parsed by pwsh when present)"
 
 echo "test-install-cli: PASS"
