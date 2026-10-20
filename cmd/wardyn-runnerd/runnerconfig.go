@@ -243,18 +243,20 @@ func checkRunnerFile(f runnerFile) error {
 	return nil
 }
 
-// refuseProxyCredential keeps a credential out of the file. The value is never repeated in the error. A URL
-// without "://" is read the way Go's proxy-from-environment reads it, as http://<value>, so a scheme-less
+// refuseProxyCredential keeps a credential out of the file. The value is never repeated in the error. A value
+// without a scheme is read the way Go's proxy-from-environment reads it, as http://<value>, so a scheme-less
 // "user:pass@host:port" is refused as the credential it is; scheme, when the field limits it, is checked
 // after that.
 func refuseProxyCredential(field, raw, envName string, schemes ...string) error {
 	if raw == "" {
 		return nil
 	}
-	if !strings.Contains(raw, "://") {
-		raw = "http://" + raw
-	}
+	// Go's proxy-from-environment parses the value and, when that fails or leaves no scheme or host, reads it
+	// again as http://<value>. Do the same, so a credential cannot hide as a "scheme".
 	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		u, err = url.Parse("http://" + raw)
+	}
 	if err != nil {
 		return fmt.Errorf("%s: not a URL (the value is not repeated here: it may hold a credential)", field)
 	}
@@ -263,7 +265,7 @@ func refuseProxyCredential(field, raw, envName string, schemes ...string) error 
 			"(a systemd drop-in EnvironmentFile on Linux; see docs/runner-registration.md#a-runner-behind-a-corporate-proxy)", field, envName)
 	}
 	if len(schemes) > 0 && !slices.Contains(schemes, strings.ToLower(u.Scheme)) {
-		return fmt.Errorf("%s: scheme %q is not one of %s", field, u.Scheme, strings.Join(schemes, ", "))
+		return fmt.Errorf("%s: the scheme is not one of %s", field, strings.Join(schemes, ", "))
 	}
 	return nil
 }

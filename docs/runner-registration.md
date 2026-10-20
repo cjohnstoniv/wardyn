@@ -240,7 +240,6 @@ Several settings keep a runner working behind a proxy that inspects TLS. Each ha
 | `proxy_image` and `proxy_image_mirror` (or `WARDYN_PROXY_IMAGE`, `_PINNED`) | A mirror of the proxy image | `setup --proxy-image` writes the pin; you write the mirror | `serve` refuses at startup when the image cannot be pulled; a pin has to be moved on each organisation upgrade |
 | `docker_host` (or `DOCKER_HOST`) | A non-default engine socket | `setup` | `serve` refuses at startup: the engine is not reachable |
 | `relay_listen` / `relay_host_target` (or `WARDYN_RELAY_LISTEN` / `_HOST_TARGET`) | The relay pair | `setup` pins what its probe proved | `serve` refuses at startup: the relay is unreachable |
-
 | `org_ca_file` (or `WARDYN_ORG_CA_FILE`) | A root for the runner's own connection to the organisation only | `setup --org-ca-file` | Certificate errors on that connection |
 
 `setup` carries `HTTPS_PROXY` and `NO_PROXY` (and their lowercase forms) from the shell it runs in, into `runner_proxy` and `runner_no_proxy` in `runnerd.json`.

@@ -332,7 +332,7 @@ func proxyForService(out io.Writer, paths setupPaths, existing runnerFile) ([]ca
 	}
 	// What an earlier setup carried is in runnerd.json (runner_proxy, runner_no_proxy), else in the service
 	// definition a setup before it wrote.
-	earlier, _, err := carryProxy(func(name string) string {
+	earlier, earlierStripped, err := carryProxy(func(name string) string {
 		switch name {
 		case "HTTPS_PROXY":
 			return cmp.Or(existing.RunnerProxy, paths.setting(name))
@@ -343,6 +343,9 @@ func proxyForService(out io.Writer, paths setupPaths, existing runnerFile) ([]ca
 	})
 	if err != nil {
 		return nil, fmt.Errorf("%w (kept from the earlier setup, %s)", err, paths.keptFrom(cmp.Or(existing.RunnerProxy, existing.RunnerNoProxy)))
+	}
+	if len(earlierStripped) > 0 {
+		fmt.Fprintln(out, earlierCredentialWarning(earlierStripped))
 	}
 	if len(carried) == 0 {
 		if len(earlier) > 0 {
@@ -362,7 +365,12 @@ func proxyForService(out io.Writer, paths setupPaths, existing runnerFile) ([]ca
 // may hold a credential. The runner's connection reads only the variables carryProxy carries.
 func proxyEnvNames(getenv func(string) string) []string {
 	var set []string
+	// HTTP_PROXY only matters when no HTTPS_PROXY is carried in its place: the usual laptop sets both.
+	httpsSet := getenv("HTTPS_PROXY") != "" || getenv("https_proxy") != ""
 	for _, k := range []string{"ALL_PROXY", "all_proxy", "HTTP_PROXY", "http_proxy"} {
+		if httpsSet && strings.HasPrefix(strings.ToUpper(k), "HTTP_") {
+			continue
+		}
 		if getenv(k) != "" {
 			set = append(set, k)
 		}
@@ -386,6 +394,14 @@ func shellProxyWarning(names []string) string {
 // password, naming the variables only: the service gets the address without them.
 func proxyCredentialWarning(stripped []string) string {
 	return strings.Join(stripped, ", ") + " in this shell contains a credential; the service gets it without the credential. " +
+		"For a proxy that needs a password, use a systemd drop-in on Linux (systemctl --user edit wardyn-runnerd): see " +
+		"docs/runner-registration.md#a-runner-behind-a-corporate-proxy. Never put a proxy credential in the LaunchAgent: every local account can read it."
+}
+
+// earlierCredentialWarning is proxyCredentialWarning for a value the earlier service definition held: runnerd.json
+// gets the address without the credential, and the definition's copy goes when setup rewrites it.
+func earlierCredentialWarning(stripped []string) string {
+	return strings.Join(stripped, ", ") + " in the earlier service definition contained a credential; runnerd.json gets it without the credential. " +
 		"For a proxy that needs a password, use a systemd drop-in on Linux (systemctl --user edit wardyn-runnerd): see " +
 		"docs/runner-registration.md#a-runner-behind-a-corporate-proxy. Never put a proxy credential in the LaunchAgent: every local account can read it."
 }

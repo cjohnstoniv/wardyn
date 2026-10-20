@@ -168,8 +168,17 @@ func TestRunnerProxyWithoutASchemeIsReadAsHTTP(t *testing.T) {
 		}
 	}
 	_, err := loadRunnerFile(writeConfig(t, `{"runner_proxy": "ftp://proxy.example:21"}`), true)
-	if err == nil || !strings.Contains(err.Error(), `"ftp"`) {
-		t.Errorf("runner_proxy ftp: %v; want a refusal naming the scheme", err)
+	if err == nil || !strings.Contains(err.Error(), "scheme") {
+		t.Errorf("runner_proxy ftp: %v; want a refusal naming the scheme rule", err)
+	}
+	// Values Go reads as http://<value> with a user name, whatever the text before the first colon looks like.
+	for _, v := range []string{"alice:a://b@proxy:3128", "alice:secret@proxy:3128/?u=http://x", "alice@proxy:3128", "alice:secret@proxy:3128/a://b"} {
+		for _, field := range []string{"runner_proxy", "upstream_proxy"} {
+			_, err := loadRunnerFile(writeConfig(t, `{"`+field+`": "`+v+`"}`), true)
+			if err == nil || strings.Contains(err.Error(), "alice") || strings.Contains(err.Error(), "secret") {
+				t.Errorf("%s %q: %v; want a refusal that does not echo the user name or password", field, v, err)
+			}
+		}
 	}
 }
 
@@ -334,6 +343,29 @@ func TestSetupMovesALegacyServiceDefinitionIntoRunnerFile(t *testing.T) {
 				t.Errorf("the LaunchAgent still carries the settings:\n%s", plist)
 			}
 		})
+	}
+}
+
+// A LaunchAgent from 0.9.6 can hold an HTTPS_PROXY with a credential. A rerun with no proxy in the shell
+// moves the address into runnerd.json without the credential, says so by name, and never repeats it.
+func TestSetupWarnsWhenAnEarlierLaunchAgentHeldAProxyCredential(t *testing.T) {
+	clearProxyEnv(t)
+	f := newSetupFixture(t, "darwin")
+	f.flagless = true
+	p := mustPaths(t, f)
+	if _, err := f.run(setupOptions{tokenFile: f.tokenFile}); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, p.plistFile, "<plist><dict><key>EnvironmentVariables</key><dict><key>HTTPS_PROXY</key>\n<string>http://olduser:oldpw-77@proxy.corp:3128</string></dict></dict></plist>")
+	out, err := f.run(setupOptions{})
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if !strings.Contains(out, "HTTPS_PROXY in the earlier service definition contained a credential") || strings.Contains(out, "oldpw-77") || strings.Contains(out, "olduser") {
+		t.Errorf("want the credential warning by name only:\n%s", out)
+	}
+	if got := f.settings(p); !strings.Contains(got, "HTTPS_PROXY=http://proxy.corp:3128\n") || strings.Contains(got+f.read(p.configFile()), "oldpw-77") {
+		t.Errorf("runnerd.json should hold the address without the credential:\n%s", got)
 	}
 }
 
