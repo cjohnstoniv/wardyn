@@ -196,4 +196,30 @@ describe("a cold load that cannot reach the daemon", () => {
     expect(gate()).toBeInTheDocument();
     expect(screen.queryByText(SESSION_ENDED_REASON)).not.toBeInTheDocument();
   });
+
+  it("a focus re-probe that wins the race and gets a 401 naming an ended session shows the notice, with no timer tick", async () => {
+    probes.results = ["unreachable", "unauthed"];
+    probes.reasons = ["", "expired_session"];
+    await mount();
+    expect(screen.queryByText(SESSION_ENDED_REASON)).not.toBeInTheDocument();
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await tick(0);
+    expect(probes.calls).toBe(2);
+    expect(gate()).toBeInTheDocument();
+    expect(screen.getByText(SESSION_ENDED_REASON)).toBeInTheDocument();
+  });
+
+  it("neg: a focus re-probe 401 with no reason and no stored token shows no notice", async () => {
+    probes.results = ["unreachable", "unauthed"];
+    await mount();
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await tick(0);
+    expect(probes.calls).toBe(2);
+    expect(gate()).toBeInTheDocument();
+    expect(screen.queryByText(SESSION_ENDED_REASON)).not.toBeInTheDocument();
+  });
 });
