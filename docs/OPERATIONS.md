@@ -3721,8 +3721,8 @@ docker compose -f deploy/compose/docker-compose.yaml up -d wardynd
 - Nothing
   else goes wrong — the image builds, the container starts, the mount succeeds.
 - So the only symptom is the agent failing to write to its own drive.
-- And wardynd cannot repair it (fixing that ownership would mean chowning volume state, which
-  the control plane must never do).
+- And wardynd cannot repair it (fixing that ownership would mean re-owning a person's volume, which
+  the control plane never does).
 - Rebuild with `make agent-images-core`, and
   re-pin anything listed in `WARDYN_AGENT_IMAGES` at the rebuilt tag; a **BYOI**
   image is yours to fix, one `mkdir` (see "User drives on Docker" and

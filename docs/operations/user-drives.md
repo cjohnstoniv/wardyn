@@ -246,7 +246,7 @@ WARDYN_USER_DRIVE_HOST_ROOT=/srv/wardyn-drives    # compose binds this one, RO, 
 - **Why every sandbox is uid 1000, and what that buys.**
 - Every agent image is `USER agent` (uid 1000), and every agent image pre-creates `/home/agent/drive` owned by agent
   - the ones built on a public base do it themselves, the ones built on a sibling image inherit it
-- So a fresh managed volume inherits that ownership by Docker's copy-up.
+- A person's fresh managed volume inherits that ownership by Docker's copy-up.
 - Isolation between people is the **bind of the subdirectory**, never the uid: a run sees its own home and has no path to the root or to anyone else's.
 - NFS `AUTH_SYS` trusts the client's uid, which is why the export above is Wardyn-dedicated and squashed rather than a corporate home tree.
 - Existing corporate home directories owned by per-user uids are supported read-only where uid 1000 can read them.

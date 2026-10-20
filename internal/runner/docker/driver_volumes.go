@@ -6,8 +6,13 @@
 package docker
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -28,10 +33,13 @@ import (
 // deny and no host-root ceiling to escape; host_path runs that deny matrix
 // instead (driver_mounts.go). Ownership is the image's job: a named volume
 // mounted over an image directory inherits its uid/gid via Docker's copy-up,
-// so every agent image pre-creates /home/agent/drive owned by agent. A volume
-// at a derived path the image has no directory for is seeded through that same
-// directory first (seedDriveVolume) — wardynd never chowns or runs a
-// privileged helper.
+// so every agent image pre-creates /home/agent/drive owned by agent. A
+// person's volume at a derived path the image has no directory for is seeded
+// through that same directory first (seedDriveVolume). A TEAM volume is shared
+// by a group, so nothing from a run's image is ever copied into it: its mounts
+// carry NoCopy, and a writable allocation gives an empty team volume's top
+// directory to the agent's uid through the daemon's archive API instead
+// (ownEmptyTeamVolume). wardynd runs no privileged helper.
 
 const (
 	// driveVolumeDriver: LOCAL, ALWAYS, never operator-configurable. SECURITY:
@@ -177,14 +185,27 @@ const driveSeedRemoveTimeout = 30 * time.Second
 // directory at a derived path, so a fresh volume there would start root-owned
 // and unwritable by the agent.
 //
-// So the volume is mounted once at runner.DriveTarget in a container that is
-// created and removed, never started, with no network: the copy happens at
-// create, nothing in the image runs, nothing is chowned, and a volume that
-// already holds data is left as it is (Docker copies into an empty volume
-// only). One run seeds its drives one at a time under its own name, so two
-// runs on one volume never collide; two copies into one empty volume write the
-// same directory.
+// So a person's volume is mounted once at runner.DriveTarget in a container
+// that is created and removed, never started, with no network: the copy
+// happens at create, nothing in the image runs, nothing is chowned, and a
+// volume that already holds data is left as it is (Docker copies into an empty
+// volume only). One run seeds its drives one at a time under its own name, so
+// two runs on one volume never collide; two copies into one empty volume write
+// the same directory.
+//
+// A team volume is never seeded from the image: the run's image is one
+// member's choice, and whatever it holds at runner.DriveTarget would reach
+// every member. A read-only allocation needs no seed at all. A writable one
+// mounts the volume with NoCopy at teamDriveSeedTarget in the same
+// never-started container and gives it to the agent with ownEmptyTeamVolume.
 func (d *Driver) seedDriveVolume(ctx context.Context, runID uuid.UUID, image string, drive *types.DriveMount) error {
+	if drive.Team && drive.ReadOnly {
+		return nil
+	}
+	seedMount := mount.Mount{Type: mount.TypeVolume, Source: drive.ObjectName, Target: runner.DriveTarget}
+	if drive.Team {
+		seedMount.Target, seedMount.VolumeOptions = teamDriveSeedTarget, teamDriveVolumeOptions(drive)
+	}
 	name := driveSeedName(runID)
 	remove := func(ctx context.Context) error {
 		if _, err := d.cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
@@ -206,9 +227,12 @@ func (d *Driver) seedDriveVolume(ctx context.Context, runID uuid.UUID, image str
 			Labels: d.labels(runID, componentDriveSeed, extra)},
 		HostConfig: &container.HostConfig{
 			NetworkMode: "none",
-			Mounts:      []mount.Mount{{Type: mount.TypeVolume, Source: drive.ObjectName, Target: runner.DriveTarget}},
+			Mounts:      []mount.Mount{seedMount},
 		},
 	})
+	if err == nil && drive.Team {
+		err = d.ownEmptyTeamVolume(ctx, name)
+	}
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), driveSeedRemoveTimeout)
 	defer cancel()
 	if rerr := remove(rctx); err == nil {
@@ -216,6 +240,77 @@ func (d *Driver) seedDriveVolume(ctx context.Context, runID uuid.UUID, image str
 	}
 	if err != nil {
 		return fmt.Errorf("docker: seed user drive volume %q: %w", drive.ObjectName, err)
+	}
+	return nil
+}
+
+// teamDriveSeedTarget is where a writable team volume mounts in its seed
+// container: a path of Wardyn's own, so neither the copy (NoCopy) nor the
+// ownership (ownEmptyTeamVolume) depends on what the image has at
+// runner.DriveTarget. teamDriveOwner is the uid and gid every Wardyn agent
+// image runs its agent as (the image contract; Kubernetes runs it as 1000 too).
+const (
+	teamDriveSeedTarget = "/wardyn-drive-seed"
+	teamDriveOwner      = 1000
+)
+
+// teamDriveVolumeOptions is the VolumeOptions for every mount of a team volume:
+// NoCopy, so Docker never copies an image directory into it. nil for any other
+// drive, which keeps Docker's default copy into an empty volume.
+func teamDriveVolumeOptions(drive *types.DriveMount) *mount.VolumeOptions {
+	if !drive.Team {
+		return nil
+	}
+	return &mount.VolumeOptions{NoCopy: true}
+}
+
+// ownEmptyTeamVolume gives an EMPTY team volume's top directory to the agent
+// (teamDriveOwner, mode 0755), which a NoCopy mount leaves root-owned. It runs
+// on the never-started seed container: the daemon reads the volume through the
+// archive API, and, only when the volume holds nothing, extracts one directory
+// entry for the mount point, whose owner and mode it applies to the volume's
+// existing top directory. Nothing in the image runs, nothing from it is copied,
+// and a volume that already holds anything is left as it is, as Docker's own
+// copy into an empty volume would. A seed path that is not a directory (an
+// image with a link there) is refused rather than left unwritable.
+func (d *Driver) ownEmptyTeamVolume(ctx context.Context, seed string) error {
+	res, err := d.cli.CopyFromContainer(ctx, seed, client.CopyFromContainerOptions{SourcePath: teamDriveSeedTarget})
+	if err != nil {
+		return fmt.Errorf("read the team volume: %w", err)
+	}
+	tr := tar.NewReader(res.Content)
+	top, err := tr.Next()
+	if err == nil && top.Typeflag != tar.TypeDir {
+		err = fmt.Errorf("%s is not a directory in this image", teamDriveSeedTarget)
+	}
+	if err == nil {
+		_, err = tr.Next()
+		if err == nil {
+			_ = res.Content.Close()
+			return nil // holds something: left as it is
+		}
+		if errors.Is(err, io.EOF) {
+			err = nil
+		}
+	}
+	_ = res.Content.Close()
+	if err != nil {
+		return fmt.Errorf("read the team volume: %w", err)
+	}
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	if err := tw.WriteHeader(&tar.Header{
+		Name: strings.TrimPrefix(teamDriveSeedTarget, "/") + "/", Typeflag: tar.TypeDir, Mode: 0o755,
+		Uid: teamDriveOwner, Gid: teamDriveOwner, ModTime: time.Now(),
+	}); err != nil {
+		return err
+	}
+	if err := tw.Close(); err != nil {
+		return err
+	}
+	// CopyUIDGID false: the header's owner is applied as written.
+	if _, err := d.cli.CopyToContainer(ctx, seed, client.CopyToContainerOptions{DestinationPath: "/", Content: &buf}); err != nil {
+		return fmt.Errorf("own the team volume: %w", err)
 	}
 	return nil
 }
