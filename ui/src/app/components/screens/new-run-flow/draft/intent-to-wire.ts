@@ -22,10 +22,12 @@ export interface WireResult {
   unsupported: string[];
 }
 
-// A row excluded at "launch" is one a template never carries but each launch names (machine_kind):
-// the draft is a launch, so it sends it. Save as template drops it (save-as-dialog.model.ts).
+// machine_kind is excluded at "launch": a template never carries it, but each launch names it, and the
+// draft is a launch, so it sends it. Save as template drops it (save-as-dialog.model.ts). The other
+// launch-excluded rows (local_folder, max_wait_sec, title, description) stay unsupported here.
+const LAUNCH_CARRIED = new Set(["machine_kind"]);
 const carried = (rows: readonly TemplateFieldRule[]) =>
-  new Set(rows.filter((r) => (!r.excluded || r.excluded === "launch") && !r.pending).map((r) => r.name));
+  new Set(rows.filter((r) => (!r.excluded || (r.excluded === "launch" && LAUNCH_CARRIED.has(r.name))) && !r.pending).map((r) => r.name));
 
 /**
  * A serializer over one registry. The overlay's row may be named either way

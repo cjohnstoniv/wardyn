@@ -22,5 +22,8 @@ export const NR_MACHINE = {
   CHANGES_NETWORK: "Network",
   CHANGES_NETWORK_BODY: "Same as a container. Every connection goes through the run's proxy.",
   CHANGES_CLIPBOARD: "Clipboard",
-  CHANGES_CLIPBOARD_BODY: "Paste in is allowed. Copy out is blocked.",
+  // Not the board's "Paste in is allowed. Copy out is blocked.": QEMU's VNC has no clipboard agent in the
+  // guest in this release, so nothing is copied either way (PR "Copy not on the boards").
+  CHANGES_CLIPBOARD_BODY:
+    "Copy and paste aren't available on VM desktops yet. When they are, the run's paste in and copy out rules apply. The desktop page comes from the sandbox, so these rules stop ordinary copy and paste; they are not a boundary against a run built to get data out.",
 } as const;
