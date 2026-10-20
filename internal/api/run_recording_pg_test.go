@@ -276,7 +276,7 @@ func TestPG_RecordingRequired_HoldsARunWithNoPool(t *testing.T) {
 			}
 			run := starting()
 			var spec runner.SandboxSpec
-			ok := e.srv.applyRunRecording(context.Background(), &run, &spec)
+			ok := e.srv.applyRunRecording(context.Background(), &run, &spec, types.RecordingChoice{})
 			got, err := e.pg.GetRun(context.Background(), run.ID)
 			if err != nil {
 				t.Fatal(err)

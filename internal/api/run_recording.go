@@ -24,8 +24,26 @@ import (
 // organisation's mode does not reach it. A run that would go unrecorded under a required setting
 // (the organisation's, or its pool's) fails here, recording_store_off or runner_recording_off, and
 // false is returned: placement refused it at create, so only a change since then reaches this.
-func (s *Server) applyRunRecording(ctx context.Context, run *types.AgentRun, spec *runner.SandboxSpec) bool {
+//
+// The level (types.RecordingChoice) is resolved here too and kept on the run. A run resolved to off is
+// asked not to record and marked policy_off, unless the organisation keeps no recordings at all, which
+// stays org_off whatever the level: WARDYN_RECORDING_STORE=off is the hard off.
+func (s *Server) applyRunRecording(ctx context.Context, run *types.AgentRun, spec *runner.SandboxSpec, choice types.RecordingChoice) bool {
 	orgOn := s.cfg.RecordingStore != nil
+	if run.RecordingLevel = choice.Resolve(); run.RecordingLevel == types.RecordingOff {
+		// Required (the organisation's or the pool's) is read only for a run that would go unrecorded.
+		if _, choice.Required = s.recordingRequired(ctx, *run); choice.Required {
+			run.RecordingLevel = choice.Resolve()
+		}
+	}
+	s.keepRunRecordingLevel(ctx, *run)
+	if orgOn && run.RecordingLevel == types.RecordingOff {
+		off := false
+		spec.Record = &off
+		run.NotRecorded = types.NotRecordedPolicyOff
+		s.keepRunNotRecorded(ctx, *run)
+		return true
+	}
 	spec.Record = &orgOn
 	// A target whose facts cannot be read now is not marked: only a known non-recording runner is.
 	records, known := s.targetRecords(ctx, *run)
@@ -40,6 +58,25 @@ func (s *Server) applyRunRecording(ctx context.Context, run *types.AgentRun, spe
 			run.ID.String(), "failure", mustJSON(map[string]any{"reason": reason})))
 		return false
 	}
+	s.keepRunNotRecorded(ctx, *run)
+	return true
+}
+
+// recordingChoice is what applyRunRecording resolves the run's level from: its policy's level (already
+// raised to its ceiling's), its ceiling, and the organisation's level. A member's run with no stored
+// policy runs their inline policy (or the ceiling itself). An organisation document that cannot be read
+// is taken as terminal, locked: the run is recorded at least as it was before levels.
+func recordingChoice(run types.AgentRun, policy types.RunPolicySpec, c dispatchCeiling, site types.SiteConfig, siteErr error) types.RecordingChoice {
+	org := site.Recording
+	if siteErr != nil {
+		org = &types.SiteRecording{Level: types.RecordingTerminal, Locked: true}
+	}
+	return types.RecordingChoice{Policy: policy.Recording, MemberAuthored: c.recordingBound && run.PolicyID == nil,
+		Ceiling: c.recording, Org: org}
+}
+
+// keepRunNotRecorded stores why the run is not recorded; best-effort, like the decision's audit.
+func (s *Server) keepRunNotRecorded(ctx context.Context, run types.AgentRun) {
 	st, ok := s.cfg.Store.(interface {
 		SetRunNotRecorded(context.Context, uuid.UUID, types.RunNotRecorded) error
 	})
@@ -48,7 +85,20 @@ func (s *Server) applyRunRecording(ctx context.Context, run *types.AgentRun, spe
 			slog.WarnContext(ctx, "wardynd: keep why a run is not recorded", slog.String("run_id", run.ID.String()), slog.Any("err", err))
 		}
 	}
-	return true
+}
+
+// keepRunRecordingLevel stores the run's level. Terminal is not written: the column's empty value
+// reads as terminal, so a run resolved the way every run was before levels writes nothing new.
+func (s *Server) keepRunRecordingLevel(ctx context.Context, run types.AgentRun) {
+	st, ok := s.cfg.Store.(interface {
+		SetRunRecordingLevel(context.Context, uuid.UUID, types.RecordingLevel) error
+	})
+	if !ok || run.RecordingLevel == types.RecordingTerminal {
+		return
+	}
+	if err := st.SetRunRecordingLevel(ctx, run.ID, run.RecordingLevel); err != nil {
+		slog.WarnContext(ctx, "wardynd: keep a run's recording level", slog.String("run_id", run.ID.String()), slog.Any("err", err))
+	}
 }
 
 // recordingRefusal is the reason and sentence for a run a required setting holds: the organisation
@@ -136,6 +186,12 @@ func (s *Server) refuseRecordingWithoutStore(w http.ResponseWriter, rec types.Re
 // self-hosted runner can be that old, and one whose facts cannot be read now is refused too: the mark
 // is cleared only on the runner's own word.
 func (s *Server) refuseDeclinedUpload(w http.ResponseWriter, run types.AgentRun) bool {
+	// A run whose level resolved to off asked its runner to record nothing: a cast can only come
+	// from the sandbox, and whatever the runner's age it is not kept.
+	if run.NotRecorded == types.NotRecordedPolicyOff {
+		writeErrorReason(w, http.StatusConflict, reasonRecordingOff, "this run's recording level is off")
+		return true
+	}
 	if run.NotRecorded != types.NotRecordedRunnerDeclined {
 		return false
 	}

@@ -433,14 +433,14 @@ const runReservedCols = `reserved_cpu_millis, reserved_memory_mib, reserved_disk
 // (0195, types.AgentRun.LocalFolder) by RunLocalFolderSeed.
 const runInsertOnlyCols = `local_folder`
 
-const runCols = runInsertCols + `, failure_hint, status_detail, lost_at, lost_reason, containment_error, containment_error_at, ended_at, paused_at, paused_reason, active_at, end_tightened_at, admitted_at, not_recorded`
+const runCols = runInsertCols + `, failure_hint, status_detail, lost_at, lost_reason, containment_error, containment_error_at, ended_at, paused_at, paused_reason, active_at, end_tightened_at, admitted_at, not_recorded, recording_level`
 
 // scanRun is the ONE reader for runCols. A new column is appended to
 // runInsertCols/runCols and to the end of this Scan — appending is the one edit
 // that can't silently transpose two same-typed columns past the compiler.
 func scanRun(row pgx.Row) (types.AgentRun, error) {
 	var r types.AgentRun
-	var cc, state, autonomyLevel, lostReason, pausedReason, placement, evidenceSource, experience, capSource, poolSelection, notRecorded string
+	var cc, state, autonomyLevel, lostReason, pausedReason, placement, evidenceSource, experience, capSource, poolSelection, notRecorded, recordingLevel string
 	var limitsRaw, wallsRaw []byte
 	var containmentErr *string
 	err := row.Scan(
@@ -453,7 +453,7 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 		&placement, &r.PlacementFilled, &r.RunnerID, &evidenceSource, &experience, &r.LifetimeCapAt, &capSource,
 		&r.RunnerPoolID, &r.RunnerPoolRevision, &poolSelection, &r.RunnerPoolExecutor, &r.HumanAuthor, &wallsRaw,
 		&r.FailureHint, &r.StatusDetail, &r.LostAt, &lostReason, &containmentErr, &r.ContainmentErrorAt, &r.EndedAt,
-		&r.PausedAt, &pausedReason, &r.ActiveAt, &r.EndTightenedAt, &r.AdmittedAt, &notRecorded,
+		&r.PausedAt, &pausedReason, &r.ActiveAt, &r.EndTightenedAt, &r.AdmittedAt, &notRecorded, &recordingLevel,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.AgentRun{}, ErrNotFound
@@ -471,6 +471,7 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 	r.Experience = types.RunExperience(experience)
 	r.LifetimeCapSource = types.LimitSource(capSource)
 	r.RunnerPoolSelection, r.NotRecorded = types.RunnerPoolSelection(poolSelection), types.RunNotRecorded(notRecorded)
+	r.RecordingLevel = types.RecordingLevel(recordingLevel)
 	if containmentErr != nil {
 		r.ContainmentError = *containmentErr
 	}

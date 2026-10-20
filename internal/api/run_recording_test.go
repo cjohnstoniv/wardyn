@@ -32,7 +32,7 @@ func TestApplyRunRecording_UnknownFactsAreNotADecline(t *testing.T) {
 	}{{"known not to record", declines, types.NotRecordedRunnerDeclined}, {"records", records, ""}, {"facts unknown", unknown, ""}} {
 		run := types.AgentRun{ID: uuid.New(), RunnerID: &tc.runner}
 		var spec runner.SandboxSpec
-		if !s.applyRunRecording(context.Background(), &run, &spec) {
+		if !s.applyRunRecording(context.Background(), &run, &spec, types.RecordingChoice{}) {
 			t.Fatalf("%s: dispatch refused with no required setting", tc.name)
 		}
 		if spec.Record == nil || !*spec.Record || run.NotRecorded != tc.want {

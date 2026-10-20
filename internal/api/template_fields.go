@@ -264,6 +264,8 @@ var templatePolicyRules = []TemplateFieldRule{
 		in(templateSectionHarness, "harness"),
 	carriedField("harness_inner_walls", partRules, templateOmitOptional, templateEmptySame,
 		"The harness's own walls are what its lane and autonomy level give."),
+	carriedField("recording", partRules, templateOmitOptional, templateEmptySame,
+		"The organisation's recording level applies. Keystrokes are never recorded."),
 	carriedField("git_push_any_branch", partRules, templateOmitBaseline, templateEmptyValue,
 		"Pushes stay inside the run's own branch namespace. False is a choice to keep that.").
 		in(templateSectionSCMEntry, "provider+org"),

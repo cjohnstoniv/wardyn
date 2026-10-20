@@ -330,5 +330,7 @@ func sidecarPolicy(policy types.RunPolicySpec, p dispatchParams) types.RunPolicy
 	if len(p.HarnessToolRules) > 0 {
 		policy.ToolRules = nil
 	}
+	// The proxy enforces nothing about recording, and a previous release's proxy refuses the key.
+	policy.Recording = ""
 	return policy
 }
