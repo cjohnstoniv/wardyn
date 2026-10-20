@@ -895,13 +895,6 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// siteConfigPutResponse is PUT /site-config's response body: the persisted
-// document plus the write's advisory signals — DanglingSecretRefs (see
-// danglingSiteConfigSecretRefs) and OnboardingCompletedAtIgnored. GET
-// /site-config deliberately returns the bare types.SiteConfig, not this type —
-// both signals are freshly-computed, PUT-time-only facts, never persisted, so
-// neither must ever round-trip through a `site-config get` capture back into a
-// later `site-config set` body.
 // projectPutSiteConfig projects the PUT response's read-only fields onto the
 // saved document, for the same reason GET projects them.
 func (s *Server) projectPutSiteConfig(saved types.SiteConfig) types.SiteConfig {
@@ -921,6 +914,13 @@ func (s *Server) projectPutSiteConfig(saved types.SiteConfig) types.SiteConfig {
 	return saved
 }
 
+// siteConfigPutResponse is PUT /site-config's response body: the persisted
+// document plus the write's advisory signals — DanglingSecretRefs (see
+// danglingSiteConfigSecretRefs) and OnboardingCompletedAtIgnored. GET
+// /site-config deliberately returns the bare types.SiteConfig, not this type —
+// both signals are freshly-computed, PUT-time-only facts, never persisted, so
+// neither must ever round-trip through a `site-config get` capture back into a
+// later `site-config set` body.
 type siteConfigPutResponse struct {
 	types.SiteConfig
 	DanglingSecretRefs []string `json:"dangling_secret_refs,omitempty"`
