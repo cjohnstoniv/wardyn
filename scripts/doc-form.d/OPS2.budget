@@ -66,7 +66,9 @@ docs/operations/console-branding.md=943 share=35
 # 0.10: docs/operations/hybrid-laptops.md 4717 adds 8, measured: the per-address handshake row and the charge-at-end bucket wording.
 # docs/operations/hybrid-laptops.md 4752 adds 35 over 4717 (0.10 MINT-L), measured: the runner proxy holds ado_minted_pat in memory only, behind the connection's opt-in.
 # docs/operations/hybrid-laptops.md 4767 adds 15 over 4752 (0.10 MINT-L round 2), measured: ado_minted_pat needs a person's own runner; fetches at most 15 minutes apart, a refused one revokes.
-docs/operations/hybrid-laptops.md=4767 share=35
+# docs/operations/hybrid-laptops.md 4756 adds 39 over 4717 (ATT-PKG), measured: the CLI in the package, its path, and the login step.
+# docs/operations/hybrid-laptops.md 4806 = ours 4767 + theirs 4756 - base 4717 at the 0.10 W3 merge of ATT-PKG onto the train.
+docs/operations/hybrid-laptops.md=4806 share=35
 # docs/operations/hybrid-laptops.md 4024 adds 2 over 4022, measured: the control-plane restart row says the next restart kills an agent kept only for containment.
 # docs/operations/hybrid-laptops.md 4195 = 3926 + 269, measured: the reset section and the recording default.
 # docs/operations/hybrid-laptops.md 4380 = 4195 + 185, measured: how audit decisions reach the organisation (the decision sink), less the removed state-directory check.

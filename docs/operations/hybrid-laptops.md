@@ -197,8 +197,8 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 
 ## Installing with a macOS package and MDM
 
-- Every release from 0.9.3 carries `wardyn-runnerd.pkg`, a universal (Apple silicon and Intel) installer for `wardyn-runnerd`, and a managed-preferences profile template, `deploy/runner/macos/wardyn-runnerd.mobileconfig` (also inside the package and `wardyn-runner-units.tar.gz`).
-- The package installs the binary and a LaunchAgent. It cannot register the laptop: that needs a person's single-use token ([Claiming a runner](#claiming-a-runner)).
+- Every release from 0.9.3 carries `wardyn-runnerd.pkg`, a universal (Apple silicon and Intel) installer for `wardyn-runnerd` (from 0.10.0 also the `wardyn` CLI), and a managed-preferences profile template, `deploy/runner/macos/wardyn-runnerd.mobileconfig` (also inside the package and `wardyn-runner-units.tar.gz`).
+- The package installs both binaries and a LaunchAgent. It is the recommended macOS install: nobody compiles the CLI ([Set up a runner](../runner-registration.md#set-up-a-runner) lists the downloads). It cannot register the laptop: that needs a person's single-use token ([Claiming a runner](#claiming-a-runner)).
 - **Until the release is signed, the package is unsigned.** Gatekeeper refuses a double-click.
   - On macOS 15 and later, open **System Settings**, then **Privacy & Security**, and choose **Open Anyway** (right-click, **Open** no longer works there).
   - Apple's native MDM app install needs a Developer ID Installer signature, so push the package from an MDM agent or script (a Jamf or Kandji policy, or `installer -pkg` run as root).
@@ -207,6 +207,7 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 | Installed path | What it is |
 |---|---|
 | `/usr/local/wardyn/bin/wardyn-runnerd` | the runner (linked to `/usr/local/bin/wardyn-runnerd`) |
+| `/usr/local/wardyn/bin/wardyn` | the CLI (linked to `/usr/local/bin/wardyn`) |
 | `/Library/LaunchAgents/com.wardyn.runnerd.managed.plist` | starts the runner at login, like the agent `setup` writes |
 | `/usr/local/wardyn/bin/runnerd-managed-start` | the agent's launcher: idle until the person is registered |
 | `/usr/local/wardyn/share/wardyn-runnerd.mobileconfig` | the profile template |
@@ -215,7 +216,7 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 2. Push `wardyn-runnerd.pkg` with the same MDM, as a policy or script that runs `installer -pkg wardyn-runnerd.pkg -target /` as root (see above).
 3. Deliver each person's registration token to a file only they can read ([Claiming a runner](#claiming-a-runner), step 2).
 4. As that person, run `wardyn-runnerd register --org <url> --token-file <file>`, then `launchctl kickstart gui/$(id -u)/com.wardyn.runnerd.managed` (or log out and in).
-5. The person claims the runner as usual.
+5. The person claims the runner as usual, then runs `wardyn login <url>` once (`setup` does that itself).
 
 - **Without MDM** install the package, then run `wardyn-runnerd setup --token-file <file>`, adding `--org <url>` when no profile is installed.
   - `setup` stops the managed agent, writes the agent `com.wardyn.runnerd` in the person's own `~/Library/LaunchAgents`, and the managed agent stays idle. `serve` also takes a lock in the runner state directory, so a second `serve` for one identity exits with a message.

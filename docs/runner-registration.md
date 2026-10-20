@@ -160,16 +160,25 @@ Identity and organisation binding are checked before connecting. Private lifecyc
 
 `wardyn-runnerd setup` is the one command: it registers this computer, creates the proxy bridge, installs the binary and a per-user service, and starts it. It is idempotent, so running it again is safe: an existing identity is never registered again, and the service files are rewritten and restarted.
 
-The service is per user, not a root service: the runner identity sits in the person's own configuration directory, where `wardyn runner claim` looks for it. A root-run install for managed fleets needs a signed `.pkg`, which 0.9 does not ship.
+The service is per user, not a root service: the runner identity sits in the person's own configuration directory, where `wardyn runner claim` looks for it. A managed fleet installs the macOS `.pkg` for the whole computer ([Installing with a macOS package and MDM](operations/hybrid-laptops.md#installing-with-a-macos-package-and-mdm)), where each person registers with `wardyn-runnerd register` instead of `setup`.
+
+Nothing here needs a compiler: every release publishes prebuilt `wardyn-runnerd` and `wardyn` binaries for macOS (Apple silicon and Intel) and Linux (`amd64` and `arm64`); on Windows the runner runs the Linux build inside WSL2.
+
+| System | Download |
+|---|---|
+| macOS | `wardyn-runnerd.pkg`: `wardyn-runnerd` and the `wardyn` CLI, both on `PATH` |
+| Linux, WSL2 | `wardyn-runnerd-linux-<arch>` (`amd64` or `arm64`) and `wardyn-runner-units.tar.gz` (its `runner/install.sh`), with the CLI's `wardyn-linux-<arch>` beside them |
+
+On a computer that is not a runner, download `wardyn-<os>-<arch>` alone.
 
 | Who | Run |
 |---|---|
 | The person | `WARDYN_TOKEN=<your personal API token> wardyn-runnerd setup --org https://wardyn.example.com --token-file ./registration-token --claim --pool Laptop --default` |
 | Device management (MDM) | Push the binary and run `wardyn-runnerd setup --org https://wardyn.example.com --token-file ./registration-token` without `--claim`. The person claims later in *Your account → My runner*, or with `wardyn runner claim --pool Laptop --default`. |
 
-1. Download `wardyn-runnerd-<os>-<arch>` from the release, and verify it against the signed `SHA256SUMS` as described in [Verify the release assets](VERIFY.md#5-verify-the-release-assets), running `sha256sum -c --ignore-missing SHA256SUMS` since you hold one file.
+1. Download the install from the table above, and verify it against the signed `SHA256SUMS` as described in [Verify the release assets](VERIFY.md#5-verify-the-release-assets), running `sha256sum -c --ignore-missing SHA256SUMS` since you hold one file.
 2. Save the registration token in a private file. Mint it with `wardyn runner token`, or ask an administrator.
-3. Run `chmod +x` on the download (a release download has no exec bit), then the command above as yourself, not as root. `install.sh --binary <path>` does both.
+3. Run `chmod +x` on the download (a release download has no exec bit), then the command above as yourself, not as root. `runner/install.sh --binary <path>` does both.
 4. Without `--claim`, `setup` prints the key fingerprint and how to claim. With `--claim` and no `WARDYN_TOKEN`, it claims nothing and says so; the admin token cannot claim.
 
 - `--claim` uses your own personal API token from `WARDYN_TOKEN`. `--pool NAME` needs `--claim` and `--default` needs `--pool`; both are refused before the token is spent.
@@ -177,6 +186,8 @@ The service is per user, not a root service: the runner identity sits in the per
 - It accepts `--name`, `--proxy-image`, `--relay-listen`, `--relay-host-target`, `--internal-network`, `--trusted-ca-file` and the limit flags of `register`. At a terminal it asks for each limit not given; with output sent to a file it asks nothing.
 - A release binary uses `ghcr.io/cjohnstoniv/wardyn-proxy:<version>` without pinning it, so replacing the binary moves the proxy too. A named image is pinned and kept by a rerun. Installs from before 0.9.3 pinned the release image: run setup once after replacing the binary. A development build without `--proxy-image` uses the organisation's answer and refuses when there is none.
 - Rolling a runner back to 0.9.2 after it ran anything under 0.9.3 needs its state directory cleared (0.9.3 records a captured-output flag for an ordinary run, which 0.9.2 refuses to read), so it registers and is claimed again; rolling back from a later release to 0.9.3 keeps its identity and run state, but let the runner reconnect until its audit spool is empty first: a spooled decision written by a later release may fail 0.9.3's integrity check.
+- `setup` installs no CLI: the `wardyn` CLI is yours, installed before the runner (the macOS `.pkg` links it into `/usr/local/bin`). `setup` points it at the organisation, in `cli.json` beside the runner's settings. The file holds the URL and nothing secret, and an existing URL is kept.
+- The CLI uses `--url`, else `WARDYN_URL`, else that file, else `http://localhost:8080`. On any other computer, run `wardyn login https://wardyn.example.com` once. A refused connection with none of the three set says so and names that command.
 - A claim that fails after the service started says "the runner is installed and running but not claimed into place" and names `wardyn runner claim --pool <name>` to finish.
 - `deploy/runner/install.sh` is a thin wrapper: it finds a binary (`--binary`, beside the script, or on `PATH`), runs a private executable copy and passes every other argument to `setup`. It ships in `wardyn-runner-units.tar.gz`.
 
@@ -187,4 +198,4 @@ The service is per user, not a root service: the runner identity sits in the per
 
 Both restart `serve` after a crash. On Linux the unit runs while you are logged in; run `loginctl enable-linger $USER` to keep it running after logout and from boot. Setup prints that command and never runs it. A `DOCKER_HOST` set when you run setup is carried into the service.
 
-`./install.sh --uninstall` stops the service and removes the unit or agent, the settings file and the installed binary. It keeps `runner.json` and `runner.key`. Revoke the runner itself in *My runner*.
+`./install.sh --uninstall` stops the service and removes the unit or agent, the settings file and the installed `wardyn-runnerd`. It keeps `runner.json` and `runner.key`, and it never removes the `wardyn` CLI or `cli.json`: they are yours, not the runner's. Revoke the runner itself in *My runner*.
