@@ -55,7 +55,9 @@ const killRunMock = vi.fn();
 const getGrantsMock = vi.fn();
 vi.mock("../../../lib/api/runs", () => ({
   runs: {
-    listRuns: (...a: unknown[]) => listRunsMock(...a),
+    // An admin's unfiltered read sees every person's runs (internal/api/runs_policy.go handleListRuns).
+    listRuns: () => Promise.resolve([{ id: "someone-elses" }]),
+    listRunsFiltered: async (...a: unknown[]) => ({ runs: await listRunsMock(...a), truncated: false, hiddenOlder: 0, hiddenKilled: 0 }),
     createRunWire: (...a: unknown[]) => createRunMock(...a),
     getRun: (...a: unknown[]) => getRunMock(...a),
     killRun: (...a: unknown[]) => killRunMock(...a),
@@ -257,6 +259,14 @@ describe("MemberGettingStarted", () => {
     expect(
       await screen.findByRole("link", { name: "New run" }),
     ).toBeInTheDocument();
+  });
+
+  it("#2513: reads only the caller's own runs, so other people's runs never mark 'Your first run' done", async () => {
+    listRunsMock.mockResolvedValue([]);
+    renderPage();
+
+    await screen.findByRole("link", { name: "New run" });
+    expect(listRunsMock).toHaveBeenCalledWith({ view: "user", limit: 1 });
   });
 
   it("a rejecting listRuns() leaves the section not-done", async () => {
