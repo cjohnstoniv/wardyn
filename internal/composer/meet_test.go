@@ -5,6 +5,7 @@ package composer
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -83,6 +84,27 @@ func TestMeetAllowedDomains(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The meet minimises an overlay's allowed_domains quadratically, so the overlay is count-capped
+// before it, at write and at resolve alike.
+func TestOverlayAllowedDomainsCountCap(t *testing.T) {
+	base := Authority{Ceiling: types.RunPolicySpec{AllowedDomains: []string{"*.corp.example"}}}
+	hosts := func(n int) []string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = fmt.Sprintf("*.h%d.corp.example", i)
+		}
+		return out
+	}
+	atCap, over := hosts(types.MaxAllowedDomainsPerSpec), hosts(types.MaxAllowedDomainsPerSpec+1)
+	if err := ValidateOverlay(base, overlayOf(types.CeilingOverlay{AllowedDomains: &atCap})); err != nil {
+		t.Fatalf("a list at the cap = %v, want accepted", err)
+	}
+	ov := overlayOf(types.CeilingOverlay{AllowedDomains: &over})
+	wantOverlayErr(t, ValidateOverlay(base, ov), ReasonOverlayInvalid, "allowed_domains")
+	_, _, err := ApplyOverlay(base, ov)
+	wantOverlayErr(t, err, ReasonOverlayInvalid, "allowed_domains")
 }
 
 // A base's allow-all never covers an entry, so an overlay naming a private

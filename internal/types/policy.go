@@ -118,6 +118,10 @@ func (m *FirstUseMode) UnmarshalJSON(b []byte) error {
 	}
 }
 
+// MaxAllowedDomainsPerSpec is the hostile-input ceiling on one allowed_domains list; the policy
+// validators and the composer's overlay check share it.
+const MaxAllowedDomainsPerSpec = 256
+
 type RunPolicySpec struct {
 	// AllowedDomains is the L2 egress allowlist (exact hosts or "*." wildcards).
 	AllowedDomains []string `json:"allowed_domains"`

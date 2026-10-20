@@ -293,7 +293,7 @@ const (
 // It is a REFUSAL, not a truncation. A silently truncated allowlist is a policy
 // that reads as permission and denies — the same class of lie validateToolRules
 // refuses a dead rule for.
-const maxAllowedDomainsPerSpec = 256
+const maxAllowedDomainsPerSpec = types.MaxAllowedDomainsPerSpec
 
 // validateAllowedDomainsCount is the count half of allowed_domains validation,
 // split out because it has to run at TWO points on the member path: here, inside
