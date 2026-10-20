@@ -3987,6 +3987,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0196` (`0196_deprovision_event_pin`) adds `audit_event_id` and `audit_event_at` to `deprovision_jobs` (`0127`'s table): the id and time of the audit event an owed row writes, pinned on its first drain and cleared when the row reopens.
 - `0197` (`0197_run_inner_walls`) adds `inner_walls` to `agent_runs` (`0001`'s table): the harness's own walls a run launched with, under its policy's `harness_inner_walls`.
 - `0198` (`0198_runner_pending_actions_run_index`) adds the index `runner_pending_actions_run_kind_queued` on `runner_pending_actions` (`0139`'s table), which a run's lease checks read its action history through; the build holds a lock on the table for its duration.
+- `0199` (`0199_approval_notifications_purge_index`) adds the partial index `approval_notifications_purge_idx` on `approval_notifications` (`0118`'s table) over its sent, cancelled and dead rows, which the outbox purge reads; the build holds a lock on the table for its duration.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
