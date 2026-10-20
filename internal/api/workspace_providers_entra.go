@@ -71,9 +71,11 @@ func validateProviderEntra(i int, row types.GitProvider) error {
 			return fmt.Errorf(providers400Source, i, string(src),
 				strings.Join(types.ClosedCredentialSourceList(), ", "))
 		}
-		// A Server row has no Entra sign-in: its person-owned lane is pat.
-		adoServerPAT := row.Kind == types.GitProviderAzureDevOps && slices.Contains(row.Lanes, types.GitLanePAT)
-		if src == types.CredentialSourcePerUser && !hasLane && !adoServerPAT {
+		// A Server row and a GitHub row have no Entra sign-in: their person-owned
+		// lane is pat (validateGitHubOwnTokenRow holds a GitHub one to its shape).
+		ownPAT := (row.Kind == types.GitProviderAzureDevOps || row.Kind == types.GitProviderGitHub) &&
+			slices.Contains(row.Lanes, types.GitLanePAT)
+		if src == types.CredentialSourcePerUser && !hasLane && !ownPAT {
 			return fmt.Errorf(providers400PerUser, i, string(types.GitLaneEntra))
 		}
 	}

@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -43,6 +44,9 @@ const (
 type awsCLIDispatch struct {
 	ComponentID string
 	AWS         types.CLIAWS
+	// Hosts are the row's own hosts, which the proxy re-signs on when it can
+	// (WARDYN_AWS_SIGV4_AT_PROXY).
+	Hosts []string
 }
 
 // awsCLI is the run's AWS CLI row, nil when it attached none. The gate admits
@@ -50,7 +54,7 @@ type awsCLIDispatch struct {
 func (c runComponents) awsCLI() *awsCLIDispatch {
 	for _, a := range c.attached {
 		if aws := attachedAWSCLI(a); aws != nil {
-			return &awsCLIDispatch{ComponentID: a.snapshot.ComponentID.String(), AWS: *aws}
+			return &awsCLIDispatch{ComponentID: a.snapshot.ComponentID.String(), AWS: *aws, Hosts: a.snapshot.Definition.Hosts}
 		}
 	}
 	return nil
@@ -122,15 +126,15 @@ func cliAWSPortalEgress(ssoRegion, endpointOverride string) []string {
 // FAILED and dispatch stops.
 func (s *Server) authorAWSCLI(ctx context.Context, run types.AgentRun, cli *awsCLIDispatch, policy *types.RunPolicySpec,
 	sandboxEnv map[string]string, injections []runner.InjectionGrant,
-) ([]runner.InjectionGrant, []string, bool) {
+) ([]runner.InjectionGrant, []string, *proxy.AWSSigV4Config, bool) {
 	if cli == nil {
-		return injections, nil, true
+		return injections, nil, nil, true
 	}
-	refuse := func(msg string) ([]runner.InjectionGrant, []string, bool) {
+	refuse := func(msg string) ([]runner.InjectionGrant, []string, *proxy.AWSSigV4Config, bool) {
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, msg)
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": msg, "component_id": cli.ComponentID})))
-		return injections, nil, false
+		return injections, nil, nil, false
 	}
 	switch {
 	case !s.cfg.AWSSSOProxyInject:
@@ -139,9 +143,16 @@ func (s *Server) authorAWSCLI(ctx context.Context, run types.AgentRun, cli *awsC
 		return refuse(cliAWSWithBedrockSSORefusal)
 	}
 	a := cli.AWS
-	profile := awsSSOBlob{StartURL: a.StartURL, Region: a.SSORegion, AccountID: a.AccountID, RoleName: a.RoleName}
-	s.stageAWSSSOFiles(sandboxEnv, cliAWSConfigFileContents(profile, a.Region), profile, true)
-	unionAllowedDomains(policy, cliAWSPortalEgress(a.SSORegion, s.cfg.AWSSSOEndpointOverride))
+	// Re-signing: the placeholder profile with the row's Region, and no token
+	// cache or portal route; otherwise the profile, the inert cache and the portal.
+	sigv4Hosts, sigv4 := s.awsSigV4Hosts(cli.Hosts)
+	if sigv4 {
+		stageAWSSigV4Files(sandboxEnv, a.Region)
+	} else {
+		profile := awsSSOBlob{StartURL: a.StartURL, Region: a.SSORegion, AccountID: a.AccountID, RoleName: a.RoleName}
+		s.stageAWSSSOFiles(sandboxEnv, cliAWSConfigFileContents(profile, a.Region), profile, true)
+		unionAllowedDomains(policy, cliAWSPortalEgress(a.SSORegion, s.cfg.AWSSSOEndpointOverride))
+	}
 	return s.authorAWSSSOGrant(ctx, run, awsSSOScopeSnapshot{
 		OwnerSubject:     runIdentitySubject(ctx, run.CreatedBy),
 		CredentialSource: string(types.CredentialSourcePerUser),
@@ -151,7 +162,7 @@ func (s *Server) authorAWSCLI(ctx context.Context, run types.AgentRun, cli *awsC
 		Region:           a.SSORegion,
 		ComponentID:      cli.ComponentID,
 		SSOStartURL:      a.StartURL,
-	}, injections)
+	}, injections, sigv4Hosts)
 }
 
 // runCarriesCLIComponent reports whether run still carries the org row id as an

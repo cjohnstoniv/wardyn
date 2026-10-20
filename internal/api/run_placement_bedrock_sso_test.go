@@ -54,7 +54,7 @@ func TestLocalBedrockSSODispatchAdmittedOnlyUnderProxyInject(t *testing.T) {
 		spec.SecretEnv = splitSecretEnv(env, llm.secretEnvKeys)
 		spec.Env = env
 		if llm.injectBedrockSSO {
-			injections, hosts, ok := f.srv.authorBedrockSSOInjection(ctx, run, llm, llm.providerAWSScope(), nil)
+			injections, hosts, _, ok := f.srv.authorBedrockSSOInjection(ctx, run, llm, llm.providerAWSScope(), nil)
 			if !ok || len(injections) != 1 {
 				t.Fatalf("captured-SSO grant not authored for a local run: ok=%v %+v", ok, injections)
 			}

@@ -69,6 +69,9 @@ type RunnerView struct {
 	Capacity     *RunnerCapacity    `json:"capacity,omitempty"`
 	Classes      []ConfinementClass `json:"classes,omitempty"`
 	AllowedRoots []string           `json:"allowed_roots,omitempty"`
+	// Folders says the runner shares folders on its computer with runs elsewhere (a folder-only
+	// runner, 0.10 on), read like Capacity.
+	Folders bool `json:"folders,omitempty"`
 	// Kind is always RunnerKindSelfHosted: the one shape both kinds' reads share.
 	Kind RunnerKind `json:"kind"`
 	// Limits is what the runner's owner declared, which only they change; nil when not all of them are

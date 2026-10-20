@@ -13,6 +13,11 @@
 #
 # Daemon-free, network-free: it runs the real gate against a throwaway repo.
 set -euo pipefail
+
+# Throwaway repos get no background git: a commit or fetch can leave detached
+# auto-maintenance writing under .git when the EXIT trap runs rm -rf (#3328).
+export GIT_CONFIG_COUNT=3 GIT_CONFIG_KEY_0=maintenance.auto GIT_CONFIG_VALUE_0=false GIT_CONFIG_KEY_1=gc.auto GIT_CONFIG_VALUE_1=0 GIT_CONFIG_KEY_2=gc.autoDetach GIT_CONFIG_VALUE_2=false
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 TMP="$(mktemp -d)"

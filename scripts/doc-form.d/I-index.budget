@@ -6,7 +6,8 @@
 # README.md 2253 adds 26: 17 (the lead bullet links docs/CREDENTIALS.md) and 9 (the architecture bullet says the proxy adds most credentials, with a link).
 # README.md 2281 = 2253 + 28, measured: the how-Wardyn-is-built paragraph
 # 0.9.4 L8: README.md 2329 adds 48 over 2281: honest credential posture lines and the token export before the first run.
-README.md=2329 share=35
+# README.md 2339 adds 10 over 2329 (ATT-PKG), measured: the CLI needs no toolchain, prebuilt binaries are release assets.
+README.md=2339 share=35
 # docs/README.md 597 adds 20: the index row for docs/CREDENTIALS.md.
 # 0.9 F-1519 (#1519): docs/README.md 720 adds 123 over 597 — eleven new index rows for the multi-user
 # split (the admin-only tier table, capabilities, the two-human gate, per-user API tokens, user drives

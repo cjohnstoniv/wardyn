@@ -157,7 +157,7 @@ func UserDriveHostRootCheck(roots []string) func(hostRoot string) error {
 		// .claude, .kube, .config/gh, …) — ValidateMountSource above denies whole
 		// system trees but says nothing about a credential dir inside an
 		// ordinary home.
-		if seg := deniedUserSegment(real); seg != "" {
+		if seg := DeniedUserSegment(real); seg != "" {
 			return fmt.Errorf("host_root %q resolves to %q, which is or traverses %q — a credential directory is never a drive's host root",
 				hostRoot, real, seg)
 		}

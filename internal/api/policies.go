@@ -48,7 +48,7 @@ func decodePolicyRequest(w http.ResponseWriter, r *http.Request, ado adoHostsLoa
 	// A read error leaves no hosts: admission refuses at launch, as for a run.
 	hosts, _ := ado.forAddresses(repos...)
 	canonicalizeWorkspaceRepos(req.Spec.WorkspaceRepos, hosts)
-	if err := validatePolicySpec(req.Spec); err != nil {
+	if err := validateAuthoredPolicySpec(req.Spec); err != nil {
 		return policyRequest{}, specRefusalReason(err, reasonPolicyRequestInvalid), "invalid policy spec: " + err.Error()
 	}
 	return req, "", ""

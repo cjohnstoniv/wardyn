@@ -153,6 +153,9 @@ type Config struct {
 	// management.azure.com door (azure_arm_door.go). Nil == off. Omitempty for the
 	// reason AzureGates is.
 	AzureARM *AzureARMGrant `json:"azure_arm,omitempty"`
+	// AWSSigV4 is the run's AWS SigV4 re-signing grant (aws_sigv4.go, WARDYN_AWS_SIGV4_AT_PROXY).
+	// Nil == off. Omitempty for the reason AzureGates is.
+	AWSSigV4 *AWSSigV4Config `json:"aws_sigv4,omitempty"`
 	// MITMLLM reports whether TLS-MITM of the BUILT-IN LLM hosts (Anthropic/OpenAI)
 	// is actually intended for this run — i.e. subscription credential injection OR
 	// intercept_tls content inspection. Dispatch also mints the per-run CA for
@@ -655,6 +658,9 @@ func (c *Config) validateTerminatedGates() error {
 		}
 	}
 	if err := c.validateAzureARM(); err != nil {
+		return err
+	}
+	if err := c.validateAWSSigV4(); err != nil {
 		return err
 	}
 	return c.validateAzureGates()

@@ -2805,6 +2805,10 @@ The residuals an operator should plan for:
 > With no pin, the ROLE is whatever the sign-in chose — and so is the account, unless the provider's model is a full ARN, which constrains the account only.
 > The pin is the fix; both halves of it.
 
+- **How long the role credentials a run holds live — set it on the permission set.**
+  - A `bedrock_sso` run and an AWS CLI component both get them from the portal's `GetRoleCredentials`, which takes no duration, so Wardyn cannot request a shorter session ([`internal/api/runs_dispatch_sso_inject.go#awsSSORoleCredentialsPath`](../internal/api/runs_dispatch_sso_inject.go)).
+  - Their lifetime is the IAM Identity Center permission set's session duration. `PT1H`, the shortest AWS allows, bounds what a sandbox holds to one hour.
+  - They stay valid at AWS after the run ends. Revoking the role's active sessions in IAM ends them early.
 - **What the control plane holds.**
   - One age-encrypted blob per person per provider, in that person's own secret namespace under the provider's name.
   - It holds the SSO access token, its refresh token, the client registration, and the account/role the session mints role credentials for.
@@ -3986,6 +3990,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0195` (`0195_agent_runs_local_folder`) adds `local_folder`, `local_folder_seeded_at` and `local_folder_seed_error` to `agent_runs` (`0001`'s table): the folder a run holds its agent for, and that folder's first sync.
 - `0196` (`0196_deprovision_event_pin`) adds `audit_event_id` and `audit_event_at` to `deprovision_jobs` (`0127`'s table): the id and time of the audit event an owed row writes, pinned on its first drain and cleared when the row reopens.
 - `0197` (`0197_run_inner_walls`) adds `inner_walls` to `agent_runs` (`0001`'s table): the harness's own walls a run launched with, under its policy's `harness_inner_walls`.
+- `0198` (`0198_agent_runs_local_folder_status`) adds `local_folder_status` to `agent_runs` (`0001`'s table): the passes a person's folder-only runner made for a run's computer folder, in and back.
 - `0199` (`0199_user_drives_kept_from_run`) adds `kept_from_run` to `user_drives` (`0054`'s table): the run a person's drive was kept from (`keep_work_folder`), NULL on every drive made by hand.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the

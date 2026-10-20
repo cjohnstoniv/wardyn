@@ -22,7 +22,7 @@ type Mode string
 const (
 	ModeOwn            Mode = "own"             // the person's own material, wherever it already lives
 	ModeViaOrg         Mode = "via_org"         // only in the org; used through the org's egress for the run's life
-	ModeRunnerResident Mode = "runner_resident" // in the runner's OS keystore, then the local proxy or sandbox
+	ModeRunnerResident Mode = "runner_resident" // in the runner's OS keystore, then the local proxy or sandbox; an Azure DevOps minted token only in the runner proxy's memory
 	ModeRefuse         Mode = "refuse"          // nowhere; the default for every org-held class
 )
 
@@ -82,6 +82,28 @@ func DeliveryClasses() []string {
 // AllowedModes is the set of modes a class may be delivered under; nil for an unknown class.
 func AllowedModes(class string) []Mode { return slices.Clone(classModes[class]) }
 
+// BuildableModes is the subset of AllowedModes(class) a local run can be
+// delivered under today: via_org only where a via_org-shaped table row names
+// the class, runner_resident only where its delivery is built (residentBuilt).
+// A stored policy may still name the other modes; they refuse at every door.
+func BuildableModes(class string) []Mode {
+	var out []Mode
+	for _, m := range classModes[class] {
+		switch m {
+		case ModeViaOrg:
+			if !slices.ContainsFunc(Table, func(e Entry) bool { return e.ViaOrg && e.Rule != RuleNotConfigured && e.Delivery == class }) {
+				continue
+			}
+		case ModeRunnerResident:
+			if !residentBuilt[class] {
+				continue
+			}
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
 // Writable reports whether a policy may configure the class.
 func Writable(class string) bool {
 	_, known := classModes[class]
@@ -97,26 +119,53 @@ type PostureRequirement struct {
 }
 
 // PostureUnmet names the first field of req that p does not meet; "" when p
-// meets it. A runner that never reported posture meets no requirement, and an
-// os_min names every OS a runner may run: an unlisted OS does not meet it.
+// meets it.
 func PostureUnmet(req *PostureRequirement, p *types.RunnerPosture) string {
-	switch {
-	case req == nil:
-		return ""
-	case p == nil:
-		return "posture"
-	case req.MDMManaged && !p.MDMManaged:
-		return "mdm_managed"
-	case req.DiskEncrypted && !p.DiskEncrypted:
-		return "disk_encrypted"
-	}
-	if len(req.OSMin) == 0 {
-		return ""
-	}
-	if min, ok := req.OSMin[p.OS]; !ok || !versionAtLeast(p.OSVersion, min) {
-		return "os_min"
+	if unmet := PostureUnmetAll(req, p); len(unmet) > 0 {
+		return unmet[0]
 	}
 	return ""
+}
+
+// PostureUnmetAll names every field of req that p does not meet, in a fixed
+// order; nil when p meets it. A runner that never reported posture meets no
+// requirement ("posture"), and an os_min names every OS a runner may run: an
+// unlisted OS does not meet it.
+func PostureUnmetAll(req *PostureRequirement, p *types.RunnerPosture) []string {
+	switch {
+	case req == nil:
+		return nil
+	case p == nil:
+		return []string{"posture"}
+	}
+	var out []string
+	if req.MDMManaged && !p.MDMManaged {
+		out = append(out, "mdm_managed")
+	}
+	if req.DiskEncrypted && !p.DiskEncrypted {
+		out = append(out, "disk_encrypted")
+	}
+	if len(req.OSMin) > 0 {
+		if min, ok := req.OSMin[p.OS]; !ok || !versionAtLeast(p.OSVersion, min) {
+			out = append(out, "os_min")
+		}
+	}
+	return out
+}
+
+// requires lists req's fields, as a refusal names the requirement.
+func (req *PostureRequirement) requires() string {
+	var out []string
+	if req.MDMManaged {
+		out = append(out, "mdm_managed")
+	}
+	if req.DiskEncrypted {
+		out = append(out, "disk_encrypted")
+	}
+	for _, name := range slices.Sorted(maps.Keys(req.OSMin)) {
+		out = append(out, "os_min "+name+" "+req.OSMin[name])
+	}
+	return strings.Join(out, ", ")
 }
 
 // versionAtLeast compares dot-separated numeric versions; a part that is not a

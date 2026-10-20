@@ -71,7 +71,8 @@ PATH="$TB:$PATH" sh "${SRC}/pkg-scripts/preinstall" || fail "preinstall failed (
 PATH="$TB:$PATH" sh "${SRC}/pkg-scripts/postinstall" || fail "postinstall failed when launchctl refused"
 grep -q 'launchctl bootout gui/501/com.wardyn.runnerd.managed' "$STUB_LOG" || fail "preinstall did not stop the agent"
 grep -q 'launchctl bootstrap gui/501 /Library/LaunchAgents/com.wardyn.runnerd.managed.plist' "$STUB_LOG" || fail "postinstall did not load the agent"
-grep -q 'ln -sf /usr/local/wardyn/bin/wardyn-runnerd /usr/local/bin/wardyn-runnerd' "$STUB_LOG" || fail "postinstall did not link the CLI"
+grep -q 'ln -sf /usr/local/wardyn/bin/wardyn-runnerd /usr/local/bin/wardyn-runnerd' "$STUB_LOG" || fail "postinstall did not link the runner"
+grep -q 'ln -sf /usr/local/wardyn/bin/wardyn /usr/local/bin/wardyn$' "$STUB_LOG" || fail "postinstall did not link the wardyn CLI onto PATH"
 
 # ---- the build script, against stub macOS tools ----------------------------------------------------
 T="${WORK}/tools"; mkdir -p "$T"
@@ -84,17 +85,17 @@ stub codesign 'echo "codesign $*" >>"$STUB_LOG"'
 stub security 'echo "security $1" >>"$STUB_LOG"'
 stub uuidgen 'echo 00000000-0000-0000-0000-000000000000'
 stub xcrun 'echo "xcrun $1 $2" >>"$STUB_LOG"'
-echo arm >"${WORK}/arm64"; echo amd >"${WORK}/amd64"
+echo arm >"${WORK}/arm64"; echo amd >"${WORK}/amd64"; echo cli-arm >"${WORK}/cli-arm64"; echo cli-amd >"${WORK}/cli-amd64"
 CERT="$(printf 'SECRETBLOB' | base64 -w0)"
 build() { # build <out> [VAR=value ...]
   local out="$1"; shift
   : >"$STUB_LOG"
-  env -i PATH="$T:$PATH" STUB_LOG="$STUB_LOG" HOME="$WORK" "$@" "$BUILD" --version 0.9.3-rc.1 --arm64 "${WORK}/arm64" --amd64 "${WORK}/amd64" --out "$out" >"${WORK}/build.out" 2>&1 || { cat "${WORK}/build.out" >&2; fail "build failed ($*)"; }
+  env -i PATH="$T:$PATH" STUB_LOG="$STUB_LOG" HOME="$WORK" "$@" "$BUILD" --version 0.9.3-rc.1 --arm64 "${WORK}/arm64" --amd64 "${WORK}/amd64" --cli-arm64 "${WORK}/cli-arm64" --cli-amd64 "${WORK}/cli-amd64" --out "$out" >"${WORK}/build.out" 2>&1 || { cat "${WORK}/build.out" >&2; fail "build failed ($*)"; }
 }
 
 build "${WORK}/unsigned.pkg"
 [ -s "${WORK}/unsigned.pkg" ] || fail "no package written"
-for p in ./Library/LaunchAgents/com.wardyn.runnerd.managed.plist ./usr/local/wardyn/bin/runnerd-managed-start ./usr/local/wardyn/bin/wardyn-runnerd ./usr/local/wardyn/share/wardyn-runnerd.mobileconfig; do
+for p in ./Library/LaunchAgents/com.wardyn.runnerd.managed.plist ./usr/local/wardyn/bin/runnerd-managed-start ./usr/local/wardyn/bin/wardyn-runnerd ./usr/local/wardyn/bin/wardyn ./usr/local/wardyn/share/wardyn-runnerd.mobileconfig; do
   grep -qx "payload $p" "$STUB_LOG" || fail "the payload lacks $p"
 done
 for p in LICENSE NOTICE THIRD-PARTY-NOTICES.md LICENSING.md; do
@@ -105,6 +106,7 @@ done
 grep -q -- '--version 0.9.3 ' "$STUB_LOG" || fail "pkgbuild was not given the numeric version"
 grep -q -- '--identifier com.wardyn.runnerd.pkg' "$STUB_LOG" && grep -q -- "--scripts ${SRC}/pkg-scripts" "$STUB_LOG" || fail "pkgbuild lost its identifier or scripts"
 grep -Eq '^(codesign|productsign|xcrun|security)' "$STUB_LOG" && fail "an unsigned build ran a signing tool"
+grep -q '^lipo.* ${WORK}/cli-arm64 ${WORK}/cli-amd64\|^lipo.*cli-arm64.*cli-amd64' "$STUB_LOG" || fail "the CLI was not made universal from its two builds"
 grep -q 'binary signing skipped' "${WORK}/build.out" && grep -q 'package signing skipped' "${WORK}/build.out" && grep -q 'notarization skipped' "${WORK}/build.out" || fail "a skipped step did not log"
 
 # Installer certificate only: the package is signed, the binary is not, so no notarization.
@@ -119,10 +121,18 @@ build "${WORK}/full.pkg" APPLE_DEVELOPER_ID_INSTALLER_P12_BASE64="$CERT" APPLE_D
   APPLE_DEVELOPER_ID_APPLICATION_P12_BASE64="$CERT" APPLE_DEVELOPER_ID_APPLICATION_P12_PASSWORD=pw-secret "APPLE_DEVELOPER_ID_APPLICATION_IDENTITY=Developer ID Application: Test (TEAM)" \
   APPLE_NOTARY_APPLE_ID=a@b APPLE_NOTARY_TEAM_ID=T APPLE_NOTARY_PASSWORD=np-secret
 order="$(grep -Eo '^(codesign|pkgbuild|productsign|xcrun [a-z]+)' "$STUB_LOG" | tr '\n' ' ')"
-[ "$order" = "codesign pkgbuild productsign xcrun notarytool xcrun stapler " ] || fail "signing steps ran out of order: $order"
+[ "$order" = "codesign codesign pkgbuild productsign xcrun notarytool xcrun stapler " ] || fail "signing steps ran out of order: $order"
 grep -q -- '--options runtime --timestamp' "$STUB_LOG" || fail "codesign lost the hardened runtime"
+for b in wardyn-runnerd wardyn; do
+  grep -q "^codesign .*/usr/local/wardyn/bin/${b}\$" "$STUB_LOG" || fail "codesign did not sign ${b}"
+done
 grep -q 'notarized and stapled' "${WORK}/build.out" || fail "no notarization line"
 if grep -rq 'pw-secret\|np-secret\|SECRETBLOB' "${WORK}/build.out"; then fail "the build log printed a secret"; fi
+
+# A build without the CLI is refused before any tool runs: the package always carries it.
+: >"$STUB_LOG"
+if env -i PATH="$T:$PATH" STUB_LOG="$STUB_LOG" "$BUILD" --version 0.9.3 --arm64 "${WORK}/arm64" --amd64 "${WORK}/amd64" --out "${WORK}/y.pkg" >/dev/null 2>&1; then fail "a package without the CLI was built"; fi
+[ ! -s "$STUB_LOG" ] || fail "a tool ran for a package without the CLI"
 
 # A bad version is refused before any tool runs.
 : >"$STUB_LOG"

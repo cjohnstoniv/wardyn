@@ -116,6 +116,13 @@ func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r 
 	// there — two rows of one kind on one host are a supported configuration, and
 	// whichever of them is listed first is not an answer.
 	specRepos := repoLocatorsOf(spec.WorkspaceRepos)
+	// A git_pat grant a GitHub own-token row decides reads the owner's own token
+	// (gh_own_pat_run.go), before any grant is written.
+	ownGrants, ok := s.ownGitHubTokenGrants(ctx, w, r, runID, spec.EligibleGrants, sc, specRepos, runPlacement)
+	if !ok {
+		return gw, false
+	}
+	spec.EligibleGrants = ownGrants
 	for i, g := range spec.EligibleGrants {
 		grantID := uuid.New()
 		// A stored git token for an Azure DevOps host is read from the run

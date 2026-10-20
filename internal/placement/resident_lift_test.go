@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -18,7 +19,8 @@ import (
 // The runner_resident lift, one class at a time (design 0.9 §7.4): a grant
 // record of a built class is admitted resident under a policy that delivers it
 // so, and its placeholder leaf is admitted while an inline value is not. A
-// class that is not built keeps the exact refusal, record and leaf alike.
+// class that is not built keeps the exact refusal, record and leaf alike. An
+// Azure DevOps minted token is admitted with its connection's opt-in.
 func TestResidentLift_PerClass(t *testing.T) {
 	kinds := map[string]types.GrantKind{ClassEnvSecret: types.GrantEnvSecret, ClassFileSecret: types.GrantFileSecret,
 		ClassSSHKey: types.GrantSSHKey, ClassGitPATHelper: types.GrantGitPAT, ClassAPIKey: types.GrantAPIKey}
@@ -78,4 +80,47 @@ func TestResidentLift_PerClass(t *testing.T) {
 			}
 		})
 	}
+	// ado_minted_pat (option L): no value is dispatched, so on an opted-in
+	// connection its intent and its injection rule are admitted as they are on
+	// a person's own runner. No opt-in, a refuse policy, a floor, a trust class
+	// the policy does not deliver it to, an unknown trust class, or an
+	// organization's runner of the same trust class each refuses.
+	t.Run(ClassADOMintedPAT, func(t *testing.T) {
+		const path = "ProxyConfig.Injection[0]"
+		resident := DeliveryPolicy{Classes: map[string]ClassPolicy{ClassADOMintedPAT: {Mode: ModeRunnerResident}}}
+		optedIn := CredentialOrigin{Class: ClassBrokered, Delivery: ClassADOMintedPAT, GrantKind: types.GrantAPIKey, ResidentOptIn: true}
+		spec := runner.SandboxSpec{ProxyConfig: runner.ProxyConfig{Injection: []runner.InjectionGrant{{GrantID: grant,
+			Rule: egress.InjectionRule{Host: "dev.azure.com", Header: "Authorization", SecretName: types.ADOEntraAccessTokenSecret, RequireTLS: true}}}}}
+		plan := func(o CredentialOrigin, pol DeliveryPolicy, trust types.RunnerTrustClass, floor types.ConfinementClass) LocalPlan {
+			return LocalPlan{Spec: spec, Origins: map[string]CredentialOrigin{path: o}, Delivery: pol, Trust: trust, ConfinementFloor: floor,
+				OwnerKind: types.RunnerOwnerPerson, CredentialIntents: []CredentialIntent{{Field: "ProxyConfig.ADOGrant[row-1]", Origin: o}}}
+		}
+		orgOwned := plan(optedIn, resident, types.RunnerTrustPersonal, "")
+		orgOwned.OwnerKind = types.RunnerOwnerOrg
+		unknownOwner := plan(optedIn, resident, types.RunnerTrustPersonal, "")
+		unknownOwner.OwnerKind = ""
+		if _, r := LocalEligibility(plan(optedIn, resident, types.RunnerTrustPersonal, "")); r != nil {
+			t.Fatalf("opted-in connection: %+v, want admitted", r)
+		}
+		noOptIn := optedIn
+		noOptIn.ResidentOptIn = false
+		managedOnly := DeliveryPolicy{Classes: map[string]ClassPolicy{ClassADOMintedPAT: {Mode: ModeRefuse}},
+			ByTrust: map[types.RunnerTrustClass]TrustPolicy{types.RunnerTrustManagedDevice: {Classes: map[string]ClassPolicy{ClassADOMintedPAT: {Mode: ModeRunnerResident}}}}}
+		for name, p := range map[string]LocalPlan{
+			"no opt-in":              plan(noOptIn, resident, types.RunnerTrustPersonal, ""),
+			"refuse policy":          plan(optedIn, DeliveryPolicy{Classes: map[string]ClassPolicy{ClassADOMintedPAT: {Mode: ModeRefuse}}}, types.RunnerTrustPersonal, ""),
+			"CC3 floor":              plan(optedIn, resident, types.RunnerTrustPersonal, types.CC3),
+			"personal, managed-only": plan(optedIn, managedOnly, types.RunnerTrustPersonal, ""),
+			"unknown trust class":    plan(optedIn, resident, "", ""),
+			"an organization's runner, same trust class": orgOwned,
+			"unknown owner kind":                         unknownOwner,
+		} {
+			if _, r := LocalEligibility(p); r == nil {
+				t.Errorf("%s: admitted, want refused", name)
+			}
+		}
+		if _, r := LocalEligibility(plan(optedIn, managedOnly, types.RunnerTrustManagedDevice, "")); r != nil {
+			t.Fatalf("managed_device, managed-only policy: %+v, want admitted", r)
+		}
+	})
 }

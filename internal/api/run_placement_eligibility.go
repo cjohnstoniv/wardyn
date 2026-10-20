@@ -86,7 +86,7 @@ func placementDeniedMsg(p types.Placement, profile string) string {
 // admits it is the run's. Dispatch classifies the actual spec again
 // (classifyLocalDispatch) for what late authoring adds. An unpooled local
 // request has no runner to go to and is refused.
-func (s *Server) localPlacementRefusal(r *http.Request, req createRunRequest, pooled bool, trusts []types.RunnerTrustClass,
+func (s *Server) localPlacementRefusal(r *http.Request, req createRunRequest, pooled bool, trusts []types.RunnerTrustClass, owners map[types.RunnerTrustClass]types.RunnerOwnerKind,
 	spec types.RunPolicySpec, ceiling governanceCeiling, comps runComponents,
 	drives []types.DriveMount, workspaces []types.Workspace, baseline composer.Baseline,
 ) (localJudgement, *runRefusal) {
@@ -103,12 +103,15 @@ func (s *Server) localPlacementRefusal(r *http.Request, req createRunRequest, po
 	if trusts == nil {
 		trusts = placement.TrustClassesByRank()
 	}
-	trust, ref := judgeAtTrust(p, trusts)
+	trust, ref := judgeAtTrust(p, trusts, owners)
 	if ref != nil {
 		return localJudgement{}, s.localEligibilityRefusal(r, ceiling, ref)
 	}
 	if pooled {
-		return localJudgement{policy: p.Delivery, trust: trust, floor: p.ConfinementFloor}, nil
+		org := p
+		org.Trust, org.OwnerKind = trust, types.RunnerOwnerOrg
+		_, orgRef := placement.LocalEligibility(org)
+		return localJudgement{policy: p.Delivery, trust: trust, floor: p.ConfinementFloor, personOwned: orgRef != nil}, nil
 	}
 	return localJudgement{}, runError(placement.ReasonPlacementUnavailable.Status(), string(placement.ReasonPlacementUnavailable), localUnpooledMsg)
 }
@@ -154,7 +157,7 @@ func (s *Server) localPlanFacts(ctx context.Context, p *placement.LocalPlan, bas
 	if !rn.TrustClass.Valid() {
 		return fmt.Errorf("runner %s has no known trust class", rn.ID)
 	}
-	p.Trust = rn.TrustClass
+	p.Trust, p.OwnerKind = rn.TrustClass, rn.OwnerKind
 	return nil
 }
 
@@ -362,6 +365,12 @@ func (s *Server) ownLocalGrantSpecs(r *http.Request, spec types.RunPolicySpec, j
 		origin, ref := s.localGrantOrigin(r.Context(), localRequestOwner(r), g)
 		if ref != nil {
 			return types.RunPolicySpec{}, nil, ref
+		}
+		// A ref bound to its owner's row (owner_only_refs) is never delivered
+		// from the organisation's namespace, which is where an org-held grant
+		// on this path is read from.
+		if len(g.OwnerOnlyRefs) > 0 && origin.Class != placement.ClassOwn {
+			return types.RunPolicySpec{}, nil, runError(placement.ReasonPlacementCredential.Status(), string(placement.ReasonPlacementCredential), fmt.Sprintf("eligible_grants[%d]: credential is not available in its owner's namespace", i))
 		}
 		if placement.ViaOrgGrant(origin, j.policy, j.trust) {
 			out[i] = localGrantDelivery{class: origin.Delivery, mode: placement.ModeViaOrg}

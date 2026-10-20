@@ -292,6 +292,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_EGRESS_PORT_RULE` | enum | `off` | container runs' egress port rule, `off`, `dry_run` or `on` (flag `-egress-port-rule`); the proxy turns it on for runs dispatched as a desktop VM. [Details](#wardyn_egress_port_rule) |
 | `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` | string (URL) | (unset) | **TEST ONLY.** Re-points **both** AWS IAM Identity Center services at this base URL (flag `-aws-sso-endpoint-override`; `ValidateAWSSSOEndpointOverride`, [`internal/api/awssso_endpoint.go`](../internal/api/awssso_endpoint.go)); **REFUSED unless `WARDYN_ALLOW_TEST_ENDPOINTS=true`**. [Details](#wardyn_aws_sso_endpoint_override) |
 | `WARDYN_AWS_SSO_PROXY_INJECT` | enum | `on` | a captured AWS SSO session is injected **proxy-side** (flag `-aws-sso-proxy-inject`). `off` was removed in 0.10.0 and refuses boot. On a private-endpoint estate whose corporate proxy is also TLS-intercepting, the MITM re-origination fails closed unless `WARDYN_TRUSTED_CA_FILE` is ALSO staged. [Details](#wardyn_aws_sso_proxy_inject) |
+| `WARDYN_AWS_SIGV4_AT_PROXY` | enum | `off` | `on`: an AWS sign-in lane's sandbox profile holds a placeholder key pair and the proxy re-signs each AWS request with role credentials the sandbox never holds (flag `-aws-sigv4-at-proxy`). New dispatches only. [Details](#wardyn_aws_sigv4_at_proxy) |
 | `WARDYN_AWS_SSO_REFRESH_SKEW` | duration | `10m` | how long before a captured AWS SSO session's access token expires Wardyn renews it, at dispatch and for a live run (flag `-aws-sso-refresh-skew`); `5m` to `30m`. [Details](#wardyn_aws_sso_refresh_skew) |
 | `WARDYN_AWS_SSO_REFRESH_SERVE_FLOOR` | duration | `2m` | the validity an AWS SSO access token must keep to be served while another renewal of it is in flight (flag `-aws-sso-refresh-serve-floor`); `30s` to `10m`, below the skew. [Details](#wardyn_aws_sso_refresh_serve_floor) |
 | `WARDYN_AWS_SSO_REFRESH_RETRY_DELAY` | duration | `400ms` | the pause before an AWS SSO renewal's one retry after a throttle or a network failure (flag `-aws-sso-refresh-retry-delay`); `100ms` to `10s`. [Details](#wardyn_aws_sso_refresh_retry_delay) |
@@ -308,6 +309,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_SYNC_DIRECTION` | enum | `unknown` | not daemon env: as `WARDYN_SYNC_DIR`; client-declared `push` or `pull`; see [SSH.md](SSH.md) |
 | `WARDYN_SYNC_DENY` | string | (unset) | comma-separated ignore patterns `wardyn sync` always leaves out (flag `-sync-deny`). [Details](#wardyn_sync_deny) |
 | `WARDYN_LOCAL_FOLDER_SEED_WAIT` | duration | `10m` | how long a run holds its agent for its `local_folder`'s first sync (flag `-local-folder-seed-wait`). [Details](#wardyn_local_folder_seed_wait) |
+| `WARDYN_COMPUTER_FOLDERS` | bool | `false` | let a run take a folder from its creator's own folder-only runner (flag `-computer-folders`). [Details](#wardyn_computer_folders) |
 | `WARDYN_SSH_ROLE_TTL` | duration | `24h` | how stale a registered SSH key's admin-override stamp may be before `sshAuth` refuses the override (flag `-ssh-role-ttl`); since 0.8.5 it bounds only runs with no personal owner. [Details](#wardyn_ssh_role_ttl) |
 | `WARDYN_API_TOKEN_MAX_TTL` | duration | (unset: no cap) | longest lifetime a newly minted per-user API token may have (flag `-api-token-max-ttl`); with no cap set, an omitted TTL means the token never expires. [Details](#wardyn_api_token_max_ttl) |
 | `WARDYN_ROLE_STAMP_TTL` | duration | (unset = off) | the oldest an API token's or console session's role stamp may be (flag `-role-stamp-ttl`); an older stamp sends the owner through sign-in again. Unset or `0` changes nothing. [Details](#wardyn_role_stamp_ttl) |
@@ -998,8 +1000,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - The absolute host directories a **member's own** `local_dir` workspace source may live under.
 - A member source is allowed only if its **canonicalized real path** (`filepath.EvalSymlinks`) is inside one of these
 - So a symlink *inside* a root pointing *out* of every root is refused
-- And never if it is or traverses a credential dotfile path (`.ssh`, `.aws`, `.claude`, `.wardyn`, `.gnupg`, `.docker`, `.kube`, `.config/gh`, `.netrc`, `.git-credentials`, `.git/config`), even when a root is too wide.
-- The same list covers `.codex`, `.azure`, `.gemini`, `.npmrc`, `.pypirc` and `.config/gcloud`.
+- And never if it is or traverses a credential dotfile path (`.ssh`, `.aws`, `.azure`, `.claude`, `.wardyn`, `.gnupg`, `.docker`, `.kube`, `.config/gh`, `.config/gcloud`, `.netrc`, `.git-credentials`, `.git/config`, `Library/Keychains`), even when a root is too wide.
+- The same list covers `.codex`, `.gemini`, `.npmrc` and `.pypirc`.
 - Checked at onboarding, again at run-create on the resolved spec, and a **third** time in the docker driver immediately before the bind.
 - Unset (the default) fails closed: a member can still onboard repos and use operator-owned workspaces.
 - Use a dedicated projects directory — **never `$HOME` or `/`**; boot WARNs about `/` and the daemon's `$HOME`, not a person's, but permits
@@ -1549,6 +1551,33 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - `off`, which wrote the token into the sandbox, was removed in 0.10.0: boot refuses `off`, `false` and `0` by name. Any other value takes the default.
 - The approval rows an earlier period created stay readable (migration `0064`).
 
+### `WARDYN_AWS_SIGV4_AT_PROXY`
+
+- Off by default (flag `-aws-sigv4-at-proxy`; `api.ResolveAWSSigV4AtProxy`). Off, both AWS sign-in lanes dispatch exactly what they did before it existed.
+- `on`: a `bedrock_sso` provider's lane, or an AWS CLI component's, gets a `~/.aws` profile whose `credential_process` prints a placeholder key pair. It has no SSO token cache and no route to the IAM Identity Center hosts.
+- The proxy terminates the lane's AWS hosts on port 443, checks each request and signs it again with role credentials it gets from the portal's `GetRoleCredentials` with the run's captured session. The session and the role's credentials never enter the sandbox of a lane the proxy re-signs.
+- It builds on the proxy-side session (`WARDYN_AWS_SSO_PROXY_INJECT`) and does nothing while `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` is set.
+- A lane is re-signed only when every one of its hosts is an exact AWS service host the proxy can sign for: `<service>.<region>.amazonaws.com`, a global `<service>.amazonaws.com`, or an S3 bucket host. Bedrock's runtime and control hosts qualify.
+- Not re-signed, so the whole lane keeps its old path and the role credentials stay in the sandbox. That is a wildcard host, a port other than 443, a dual-stack or PrivateLink host, S3 Control, GovCloud IAM, and hosts outside `amazonaws.com`.
+- On a re-signed host, the proxy refuses (`403`, reason in `X-Wardyn-Reason`, decision row `brokered:aws-sigv4:refused`) and never forwards:
+  - a request not signed with the placeholder key, or not signed at all (`aws_sigv4_not_placeholder`), and a presigned URL (`aws_sigv4_presigned`);
+  - SigV4a (`aws_sigv4_algorithm`), and a signature for another service or Region than the host's (`aws_sigv4_scope`);
+  - a chunk-signed upload (`aws_sigv4_signed_chunks`; for the AWS CLI set `payload_signing_enabled = false`) and an event-stream request body, such as Bedrock's bidirectional stream (`aws_sigv4_event_stream`);
+  - a payload hash it cannot read (`aws_sigv4_payload`), and a body over 16 MiB that carries no `x-amz-content-sha256` (`aws_sigv4_body_too_large`);
+  - on STS (every host of it, FIPS included) any action but `GetCallerIdentity`, since the others hand out credentials, and on IAM `CreateAccessKey`, `CreateLoginProfile`, `CreateServiceSpecificCredential`, `ResetServiceSpecificCredential`, `UpdateLoginProfile`, `CreateVirtualMFADevice`, `UploadSSHPublicKey` and `UploadSigningCertificate`, compared under any case (`aws_sigv4_action`);
+  - on either, a request whose one `Action` it cannot read from the query and a plain form body (`aws_sigv4_action`). That is an `X-Amz-Target` or `Smithy-Protocol` header, more than one `Content-Type`, a `Content-Encoding`, a chunked or streamed body, or a body that is not a form;
+  - on either, no `Action` or more than one, an `Action` that is not letters and digits starting with a letter, or a parameter name with a character outside letters, digits, `.`, `_` and `-` (`aws_sigv4_action`);
+  - a request when the role credentials cannot be got (`aws_sigv4_credentials`).
+- Unsigned payloads (`UNSIGNED-PAYLOAD`, `STREAMING-UNSIGNED-PAYLOAD-TRAILER`) and streamed responses, such as `InvokeModelWithResponseStream`, are re-signed and relayed.
+- A session that lapses mid-run is not held while its owner signs in again, as `WARDYN_AWS_SSO_PROXY_INJECT` holds a sandbox's `GetRoleCredentials`. The request is refused with `aws_sigv4_credentials`; retry once the owner has signed in.
+- The role credentials live as long as the permission set's session duration, and the proxy renews them five minutes before they expire.
+- A run that re-signs cannot be placed on a person's own runner (`placement_credential`).
+- New dispatches only: a running sandbox keeps the lane it was authored with.
+- What the role may create or read, the sandbox can obtain through the proxy; the role's own policy bounds that, not this switch.
+  - A token API the role may call (for example ECR or CodeArtifact GetAuthorizationToken) returns a usable credential into the sandbox.
+  - IAM `UpdateAssumeRolePolicy`, `CreateOpenIDConnectProvider`, `UpdateOpenIDConnectProvider` and `CreateSAMLProvider` can let an outside identity assume a role.
+- Known gap: the run's access facts still list the role credentials as resident when this switch is on (#3243).
+
 ### `WARDYN_AWS_SSO_REFRESH_SKEW`
 
 - How long before a captured AWS SSO session's access token expires Wardyn renews it, with the stored refresh token (flag `-aws-sso-refresh-skew`, default `10m`).
@@ -1625,6 +1654,12 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 ### `WARDYN_LOCAL_FOLDER_SEED_WAIT`
 
 - Never past the run's end; when it runs out the run fails and its agent never starts. See [SSH.md](SSH.md#hold-the-agent-for-a-local-folder).
+
+### `WARDYN_COMPUTER_FOLDERS`
+
+- Off by default. When off, New Run shows "Your computer" as blocked by your organisation, and `local_folder.runner_id` is refused with `computer_folders_off`.
+- When on, a person picks a folder through their own runner in folder-only mode (`wardyn-runnerd serve --substrate folders`). Wardyn copies it into the sandbox before the agent starts. See [hybrid-laptops.md](operations/hybrid-laptops.md#a-folder-on-your-computer-for-a-remote-sandbox).
+- It reaches no more than `wardyn sync` does today. The runner lists only folders under its roots, never sends a root whole, follows no symlink, refuses a credential folder, and leaves out every credential folder inside the chosen one, both ways ([the list](operations/hybrid-laptops.md#a-folder-on-your-computer-for-a-remote-sandbox)). `WARDYN_SYNC_DENY` applies to every pass.
 
 ### `WARDYN_SSH_ROLE_TTL`
 
