@@ -89,6 +89,7 @@ describe("template field registry", () => {
     expect(TEMPLATE_POLICY_FIELDS.filter((r) => r.excluded)).toEqual([]);
     expect(TEMPLATE_NESTED_EXCLUDED.map((e) => e.path)).toEqual([
       "GrantSpec.owner_only_refs",
+      "IncludedTool.task",
       "LLMInspectionSpec.workspace_secret_values",
       "RunLocalFolder.direction",
       "RunLocalFolder.name",

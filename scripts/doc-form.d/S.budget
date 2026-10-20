@@ -192,7 +192,8 @@
 # docs/sdk.md 20060 = ours 19999 + theirs 19743 - base 19682 at the 0.10 W3 merge of HYBB onto the train.
 # #1987: docs/sdk.md 20113 adds 431 over 19682, measured: the several-agents section (with its setup-status bit and run agents), the multi_agent_tasks_off reason row and the background-task line.
 # docs/sdk.md 20491 = ours 20113 + theirs 20060 - base 19682 at the 0.10 merge of main into FEAT-2MULTI.
-docs/sdk.md=20491 share=21
+# #1987 review: docs/sdk.md 20508 adds 17 over 20491, measured: the agent prefix and ?agent= are display only.
+docs/sdk.md=20508 share=21
 # docs/sdk.md 18691 adds 28 over 18663, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.

@@ -272,3 +272,25 @@ func TestMultiAgent_SetupStatusReportsTheSwitch(t *testing.T) {
 		}
 	}
 }
+
+// TestMultiAgent_InnerWallsHoldNamesTheAgent: the warning that puts a run on the hold lane
+// names the agent the policy holds, which on a run with several may not be workload.agent;
+// a single-agent run's warning names its agent as before.
+func TestMultiAgent_InnerWallsHoldNamesTheAgent(t *testing.T) {
+	spec := types.RunPolicySpec{HarnessInnerWalls: &types.HarnessInnerWalls{Approvals: types.InnerApprovalsWardyn}}
+	const tail = " approvals in Wardyn (harness_inner_walls.approvals: wardyn)"
+	for name, tc := range map[string]struct {
+		req  createRunRequest
+		want string
+	}{
+		"codex runs, claude holds": {multiAgentReq(t, "codex-cli", harnessTool("codex-cli", ""), harnessTool("claude-code", "write the tests")),
+			"tool_approvals was set to hold: the run's policy keeps claude-code's" + tail},
+		"a single claude run": {multiAgentReq(t, "claude-code"),
+			"tool_approvals was set to hold: the run's policy keeps claude-code's" + tail},
+	} {
+		req := tc.req
+		if got := applyInnerWallsHold(&req, spec); got != tc.want || req.ToolApprovals != "hold" {
+			t.Errorf("%s: warning %q (tool_approvals %q), want %q on hold", name, got, req.ToolApprovals, tc.want)
+		}
+	}
+}

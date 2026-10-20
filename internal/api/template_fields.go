@@ -321,6 +321,8 @@ var templateNestedCarried = map[string]string{
 }
 
 var templateNestedExcluded = map[string]TemplateFieldRule{
+	"IncludedTool.task": excludedField("task", templateExcludeLaunch,
+		"An agent's own task in a background run with several agents, given at each launch; templates do not keep it."),
 	"GrantSpec.owner_only_refs": excludedField("owner_only_refs", templateExcludeOrigin,
 		"Wardyn sets it at each launch; a template marks the grant owner_only."),
 	"LLMInspectionSpec.workspace_secret_values": excludedField("workspace_secret_values", templateExcludeSecret,

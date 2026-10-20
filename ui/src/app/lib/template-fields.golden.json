@@ -223,6 +223,11 @@
       "why": "Wardyn sets it at each launch; a template marks the grant owner_only."
     },
     {
+      "path": "IncludedTool.task",
+      "excluded": "launch",
+      "why": "An agent's own task in a background run with several agents, given at each launch; templates do not keep it."
+    },
+    {
       "path": "LLMInspectionSpec.workspace_secret_values",
       "excluded": "secret",
       "why": "Secret values are runtime-only: the server resolves them, and a template names secrets instead."
