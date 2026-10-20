@@ -244,7 +244,7 @@ func (h setupHost) relayStage(ctx context.Context, s doctorSettings, image, stat
 	// setup and serve create the proxy bridge; doctor only looks, so a missing one is its own finding.
 	switch ok, err := h.hasNetwork(ctx, network); {
 	case err != nil:
-		return doctor.FailStage("relay", fmt.Sprintf("could not look for the Docker network %s: %s", network, oneLine(err.Error())), "WARDYN_INTERNAL_NETWORK", "the engine answering as this user (see the engine stage)")
+		return doctor.FailStage("relay", fmt.Sprintf("could not look for the Docker network %s: %s", network, oneLine(err.Error())), "DOCKER_HOST", "the engine's socket if it is not the default (see the engine stage)")
 	case !ok:
 		return doctor.FailStage("relay", fmt.Sprintf("the Docker network %s that run proxies attach to does not exist on this engine", network), "WARDYN_INTERNAL_NETWORK",
 			"the name of an existing network, or run `wardyn-runnerd setup` or restart the runner service, which creates "+network)

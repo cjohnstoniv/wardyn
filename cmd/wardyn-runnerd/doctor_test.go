@@ -32,6 +32,7 @@ type doctorRig struct {
 	relayErr  error
 	relayRan  bool
 	noNet     bool
+	netErr    error
 	pulled    bool
 	orgPool   *x509.CertPool
 	org       string
@@ -58,7 +59,7 @@ func (r *doctorRig) run(o doctorOptions) doctor.Report {
 			return dockerEngine{desc: `"Ubuntu" (box)`, version: "27.1.0", native: true, gateway: netip.MustParseAddr("172.17.0.1")}, nil
 		},
 		image:      func(context.Context, string) (string, error) { return r.imageAt, r.imageErr },
-		hasNetwork: func(context.Context, string) (bool, error) { return !r.noNet, nil },
+		hasNetwork: func(context.Context, string) (bool, error) { return !r.noNet && r.netErr == nil, r.netErr },
 		relay: func(context.Context, string, string, dockerEngine, relayPair) (relayPair, error) {
 			r.relayRan = true
 			return relayPair{bind: netip.MustParseAddr("172.17.0.1"), target: hostGateway}, r.relayErr
@@ -128,6 +129,7 @@ func TestRunnerDoctorStagesNameTheirSetting(t *testing.T) {
 		}, doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"}, "relay", "WARDYN_RELAY_LISTEN", "refusing to listen on 192.0.2.9"},
 		{"organisation certificate no root signed", func(r *doctorRig) { r.orgPool = x509.NewCertPool() }, doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"}, "tls", "WARDYN_TRUSTED_CA_FILE", "no trusted root signed"},
 		{"proxy network missing", func(r *doctorRig) { r.noNet = true }, doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"}, "relay", "WARDYN_INTERNAL_NETWORK", "wardyn-internal that run proxies attach to does not exist"},
+		{"proxy network lookup fails", func(r *doctorRig) { r.netErr = errors.New("permission denied") }, doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"}, "relay", "DOCKER_HOST", "could not look for the Docker network wardyn-internal: permission denied"},
 		{"organisation URL not https", func(r *doctorRig) { r.env["WARDYN_RUNNER_ORG_URL"] = "http://wardyn.example.com" }, doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"}, "org-url", "WARDYN_RUNNER_ORG_URL", "https://"},
 		{"no organisation set", func(r *doctorRig) { delete(r.env, "WARDYN_RUNNER_ORG_URL") }, doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"}, "org-url", "WARDYN_RUNNER_ORG_URL", "no organisation"},
 		{"CA bundle unreadable", func(*doctorRig) {}, doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0", trustedCAFile: "/nonexistent/ca.pem"}, "trusted-ca", "WARDYN_TRUSTED_CA_FILE", "/nonexistent/ca.pem"},

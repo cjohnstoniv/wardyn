@@ -276,9 +276,10 @@ func TestDoctorSaysWhenTheInstalledRunnerSaysNothing(t *testing.T) {
 	home := doctorEnv(t)
 	srv := httptest.NewServer(http.HandlerFunc(doctorHandler))
 	t.Cleanup(srv.Close)
+	// No setting can fix a child that printed no JSON, so this FAIL deliberately names none.
 	installRunnerd(t, home, "not json", 1)
 	out, err := runDoctorCmd(t, "--url", srv.URL)
-	if err == nil || !strings.Contains(out, "FAIL  runner") || !strings.Contains(out, "set WARDYN_RUNNER_STATE_DIR to") {
+	if err == nil || !strings.Contains(out, "FAIL  runner") || !strings.Contains(out, "is older than this CLI or failed; re-run `wardyn-runnerd setup` with this release, or run `") || strings.Contains(out, "set  to") {
 		t.Errorf("err = %v, output:\n%s", err, out)
 	}
 }

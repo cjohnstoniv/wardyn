@@ -214,7 +214,7 @@ Both restart `serve` after a crash. On Linux the unit runs while you are logged 
 | `healthz` | `/healthz` answers as Wardyn, and the server version | `WARDYN_RUNNER_ORG_URL` |
 | `engine` | The engine answers at `DOCKER_HOST`, and its version | `DOCKER_HOST` |
 | `proxy-image` | The image is on the engine or in its registry; a pinned image of another release than the organisation's is a version-skew failure | `WARDYN_PROXY_IMAGE` |
-| `relay` | The relay address is allowed and a probe container reaches it, through `setup`'s own check | `WARDYN_RELAY_LISTEN` |
+| `relay` | The relay address is allowed and a probe container reaches it, through `setup`'s own check; the proxy network exists | `WARDYN_RELAY_LISTEN`, `WARDYN_INTERNAL_NETWORK` (missing network) |
 
 - Each setting is read as the service reads it: a flag, else the settings `setup` recorded, else this shell. The flags are `--org`, `--state-dir`, `--proxy-image`, `--relay-listen`, `--relay-host-target` and `--trusted-ca-file`. The organisation address alone takes the `OrgURL` managed preference (macOS, set by an MDM profile) after `--org` and before the recorded settings; the line shows which one it came from.
 - It writes nothing and changes no setting. It never creates the proxy bridge, never pulls an image and never connects to the organisation as the runner.

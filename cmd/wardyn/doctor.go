@@ -134,7 +134,7 @@ func runnerStages(ctx context.Context, serverVersion string) []doctor.Stage {
 	out, runErr := c.Output()
 	var report struct{ Stages []doctor.Stage }
 	if err := json.Unmarshal(out, &report); err != nil || len(report.Stages) == 0 {
-		return []doctor.Stage{doctor.FailStage("runner", fmt.Sprintf("the installed runner (%s) did not report its stages: %v", path, errors.Join(runErr, err)), "WARDYN_RUNNER_STATE_DIR", "the directory of the identity this computer's runner uses; run wardyn-runnerd doctor yourself to see why it printed no stages")}
+		return []doctor.Stage{doctor.FailStage("runner", fmt.Sprintf("the installed runner (%s) did not report its stages: %v", path, errors.Join(runErr, err)), "", fmt.Sprintf("the installed wardyn-runnerd at %[1]s is older than this CLI or failed; re-run `wardyn-runnerd setup` with this release, or run `%[1]s doctor` to see why", path))}
 	}
 	return report.Stages
 }
