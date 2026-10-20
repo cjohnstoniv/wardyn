@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -73,10 +74,24 @@ func TestTeamDriveAllocationIsReadOnlyByDefault(t *testing.T) {
 	if err != nil || ro.Writable {
 		t.Fatalf("default allocation: %+v, %v; want read-only", ro, err)
 	}
+	// The allocation's writable override does not stand in for members_can_write.
+	g.WritableOverride = new(bool)
+	*g.WritableOverride = true
+	if ro, err := newResolvedDrive(&d, &g, types.CapabilitySubjectGroup, []string{"sub-alice"}, on); err != nil || ro.Writable {
+		t.Fatalf("writable_override without members_can_write: %+v, %v; want read-only", ro, err)
+	}
+	g.WritableOverride = nil
 	g.MembersCanWrite = true
 	rw, err := newResolvedDrive(&d, &g, types.CapabilitySubjectGroup, []string{"sub-alice"}, on)
 	if err != nil || !rw.Writable {
 		t.Fatalf("members_can_write: %+v, %v; want writable", rw, err)
+	}
+	// The drive itself must be writable: an allocation's writable override does
+	// not open a read-only team drive to its members.
+	d.Writable, g.WritableOverride = false, new(bool)
+	*g.WritableOverride = true
+	if ro, err := newResolvedDrive(&d, &g, types.CapabilitySubjectGroup, []string{"sub-alice"}, on); err != nil || ro.Writable {
+		t.Fatalf("read-only drive, override + members_can_write: %+v, %v; want read-only", ro, err)
 	}
 }
 
@@ -120,6 +135,33 @@ func TestTeamDriveSwitchOffResolvesPerPerson(t *testing.T) {
 	}
 	if got := runner.DriveTargetFor(*alice, true); got != runner.DriveTarget {
 		t.Errorf("legacy target = %q, want %s", got, runner.DriveTarget)
+	}
+}
+
+// TestTeamDriveGuardStaysOnPerPersonDrives: the switch lifts the one-person
+// guard only for a drive marked team. With it on, a drive NOT marked team still
+// resolves one home per person, each carrying its own subject fingerprint (the
+// label the docker driver refuses a second person on), and a managed drive
+// whose template folds two people onto one object is still refused.
+func TestTeamDriveGuardStaysOnPerPersonDrives(t *testing.T) {
+	d, g := teamDrive()
+	d.Team = false
+	on := driveSizeCeiling{TeamDrives: true}
+	alice, err := newResolvedDrive(&d, &g, types.CapabilitySubjectGroup, []string{"sub-alice"}, on)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob, err := newResolvedDrive(&d, &g, types.CapabilitySubjectGroup, []string{"sub-bob"}, on)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if alice.Team || alice.ObjectName == bob.ObjectName ||
+		alice.SubjectHash != types.DriveSubjectHash("sub-alice") || bob.SubjectHash != types.DriveSubjectHash("sub-bob") {
+		t.Fatalf("alice %+v / bob %+v: a per-person drive must keep one home and one subject fingerprint per person", alice, bob)
+	}
+	d.HomeTemplate = types.HomeTemplateEmailLocal
+	if _, err := newResolvedDrive(&d, &g, types.CapabilitySubjectGroup, []string{"sub-alice"}, on); !errors.Is(err, errDriveUnmountable) {
+		t.Fatalf("a managed email_local drive resolved with team drives on (err %v); it folds two people onto one volume", err)
 	}
 }
 
@@ -167,7 +209,13 @@ func TestTeamDriveReclaimSkipsIt(t *testing.T) {
 	srv, st, audit := reclaimServer(t, d, nil, rn)
 	st.site = teamDrivesSite(true)
 	w := reclaimCall(t, srv, d.ID, `{"subject_type":"user","subject":"`+reclaimSubject+`"}`)
-	if w.Code != http.StatusUnprocessableEntity || len(rn.calls) != 0 || len(audit.events) != 0 {
+	var body struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	if w.Code != http.StatusUnprocessableEntity || len(rn.calls) != 0 || len(audit.events) != 0 ||
+		body.Error != "this is a team drive: its files belong to its groups and are not reclaimed per person; "+
+			"remove the folder on the substrate (docs/OPERATIONS.md) once the groups no longer need it" {
 		t.Fatalf("reclaim of a team drive = %d (%s), calls %d, rows %d; want 422 and nothing touched",
 			w.Code, w.Body.String(), len(rn.calls), len(audit.events))
 	}
@@ -267,5 +315,33 @@ func TestMeDrivesTeamRow(t *testing.T) {
 	st.site = teamDrivesSite(false)
 	if got := row(); got.Team || got.SharedWith != nil || !got.Writable || !got.Legacy {
 		t.Fatalf("switch off: row = %+v, want today's per-person row", got)
+	}
+}
+
+// TestTeamDriveSecurityAdminCannotSetMembersCanWrite: through the API, a
+// security admin who sets members_can_write on a team drive's allocation is
+// refused 403 and nothing is stored; the same tier's read-only allocation lands.
+func TestTeamDriveSecurityAdminCannotSetMembersCanWrite(t *testing.T) {
+	st := newDriveCRUDStore()
+	srv, _ := driveAdminServer(st, nil)
+	st.site = teamDrivesSite(true)
+	d, _ := teamDrive()
+	st.drives[d.ID] = d
+	sec := driveSecurityAdminCtx()
+	alloc := `{"subject_type":"group","subject":"platform","drive_id":"` + d.ID.String() + `"`
+	w := driveGrantAs(t, srv, sec, alloc+`,"members_can_write":true}`)
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "members_can_write") {
+		t.Fatalf("security admin members_can_write = %d (%s), want 403 naming members_can_write", w.Code, w.Body.String())
+	}
+	if len(st.grants) != 0 {
+		t.Fatalf("a refused allocation stored %+v", st.grants)
+	}
+	if w := driveGrantAs(t, srv, sec, alloc+`}`); w.Code != http.StatusCreated {
+		t.Fatalf("security admin read-only allocation = %d (%s), want 201", w.Code, w.Body.String())
+	}
+	for _, g := range st.grants {
+		if g.MembersCanWrite {
+			t.Fatalf("stored %+v, want read-only", g)
+		}
 	}
 }

@@ -1260,6 +1260,7 @@ erases one person's retained records by explicit scope, in one audited act
 - Erasure is reported complete (`200`, `outcome` success) only when every scope asked for finished.
 - An email address another identity also holds is never used to match, because it cannot prove whose a record is.
   A record found only by that address keeps it.
+- A team drive's files are kept by design: they belong to the drive's groups, so erasing or deprovisioning a person does not remove what their agents wrote to a team drive. See "Team drives".
 - No scope reaches runners, invitations or service identities; a [purge](#what-a-purge-removes) does, but a retired
   service identity keeps its last sponsor.
 
@@ -4706,6 +4707,7 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 - A SCIM purge **lists** the person's drives, by name, in `person.deprovision`, and `GET /scim/status` shows them. It deletes nothing.
 - Delete each with `DELETE /api/v1/drives/member/{id}`, or erase the person with the `member_drives` scope of `POST /api/v1/people/{principal}/erasure`.
 - The erasure deletes the same way a delete does and fails the scope, naming the drive, if one is in use. Retry once the run ends.
+- A team drive's files are kept by design: they belong to the drive's groups, so erasing or deprovisioning a person does not remove what their agents wrote to a team drive. See "Team drives".
 
 **Orphans.**
 
@@ -4733,10 +4735,12 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 **What a member's run sees.**
 
 - The folder mounts at `/home/agent/shared/<name-slug>`, read-only unless the allocation says `members_can_write`. A run asking to write a read-only one is refused.
-- Its home segment is `t-` plus 20 hex characters, derived from the drive id: `<host_root>/t-…` on `host_path` (create that directory; Wardyn never creates one on a share) and a claim or volume named `wardyn-drive-<drive-id-hex>-t-…`. `POST /api/v1/drives/preview` for any group member prints it.
+- Its home segment is `t-` plus 20 hex characters, derived from the drive id: `<host_root>/t-…` on `host_path` (create that directory; Wardyn never creates one on a share) and a claim or volume named `wardyn-drive-<drive-id-hex>-<home>` with that home. `POST /api/v1/drives/preview` for any group member prints it.
 - People outside the allocated groups never get the mount.
 - `GET /api/v1/me/drives` marks the row `team: true` and lists in `shared_with` the caller's own groups that carry the allocation, never anyone else's.
 - Every run's mount writes `run.drive.mount` with `team: true` and `mounted_by`, the person whose run mounted it.
+
+**Before you upgrade.** Turning on `storage.user_drive.team_drives` lets the members of the groups a team drive is allocated to share one folder. One person's agent can read, and if the allocation is writable run, what another person's agent wrote there, which is cross-person injection, and any secret an agent writes there is visible to the whole group. The switch is off by default; a team drive is admin-made and allocated to groups only, read-only unless a super admin sets `members_can_write` on a writable drive, and every mount's audit row names the person who mounted it.
 
 **Security.** One person's agent reads, and with `members_can_write` may run, files another person's agent wrote there. Any secret an agent writes there is visible to the whole group. Keep allocations read-only unless the group needs a shared working area.
 
@@ -4749,7 +4753,8 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 **Changing and removing.**
 
 - `team` cannot change while the drive is allocated (409). Remove the allocations first.
-- A person's reclaim (`POST /api/v1/drives/{id}/reclaim`, a leaver's cleanup) refuses a team drive (422): the folder is the group's. A person's erasure never touches one either. Remove the folder on the substrate, as for any drive, once the group no longer needs it.
+- A person's reclaim (`POST /api/v1/drives/{id}/reclaim`, a leaver's cleanup) refuses a team drive (422): a team drive's files belong to its groups and are not reclaimed per person. A person's erasure never touches one either. Remove the folder on the substrate, as for any drive, once the group no longer needs it.
+- A team drive's files are kept by design: they belong to the drive's groups, so erasing or deprovisioning a person does not remove what their agents wrote to a team drive.
 
 ### User drives on Kubernetes
 

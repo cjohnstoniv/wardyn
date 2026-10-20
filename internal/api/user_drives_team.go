@@ -69,10 +69,16 @@ func (s *Server) teamDriveGrantAllowed(w http.ResponseWriter, r *http.Request, g
 	return true
 }
 
+// driveTeamReclaimMsg is the 422 a person's reclaim of a team drive answers.
+const driveTeamReclaimMsg = "this is a team drive: its files belong to its groups and are not reclaimed per person; " +
+	"remove the folder on the substrate (docs/OPERATIONS.md) once the groups no longer need it"
+
 // driveTeamReclaimRefusal keeps a person's reclaim (the leaver's cleanup) off a
-// team drive while team drives are on: its folder is the whole group's, not one
-// person's storage. Off, the drive resolves per person and reclaims as one.
-// Empty msg is yes.
+// team drive while team drives are on: a team drive's files belong to its groups
+// and are not reclaimed per person. Reclaim derives the person's own object
+// (DriveHomeName), never the group folder (DriveTeamHome), so the refusal also
+// keeps it off a per-person object left from while the switch was off. Off, the
+// drive resolves per person and reclaims as one. Empty msg is yes.
 func (s *Server) driveTeamReclaimRefusal(ctx context.Context, d types.UserDrive) (code int, msg string) {
 	if !d.Team {
 		return 0, ""
@@ -84,8 +90,7 @@ func (s *Server) driveTeamReclaimRefusal(ctx context.Context, d types.UserDrive)
 	if !provider.TeamDrives {
 		return 0, ""
 	}
-	return http.StatusUnprocessableEntity, "this is a team drive: its folder is the whole group's, not one person's storage, " +
-		"so a person's reclaim skips it; remove the folder on the substrate (docs/OPERATIONS.md) once the group no longer needs it"
+	return http.StatusUnprocessableEntity, driveTeamReclaimMsg
 }
 
 // teamSharedWith maps each team drive in reach to the caller's own groups that

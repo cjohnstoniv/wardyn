@@ -509,8 +509,10 @@ func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
 	}
 	team := d.Team && ceiling.TeamDrives
 	if team {
-		// A team allocation is read-only unless the admin ticked "members can write".
-		writable = writable && g.MembersCanWrite
+		// A team allocation is read-only unless the admin ticked "members can write",
+		// and never writable on a drive that is itself read-only, whatever the
+		// allocation's writable override says.
+		writable = writable && g.MembersCanWrite && d.Writable
 	}
 	resolved := &types.ResolvedDrive{
 		Drive: *d, Grant: *g, Tier: tier,
