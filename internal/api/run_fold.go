@@ -71,6 +71,7 @@ type runFold struct {
 	modelCred          modelCredentialFacts
 	autonomy           types.AutonomyResolution
 	autonomyWarns      []string
+	innerWalls         *types.HarnessInnerWalls // stepToolPolicy: the started harness's walls, frozen on the run row
 	scmSite            types.SiteConfig
 	adoGrade           adoEntraGrade
 	bedrockGrade       bedrockCredGrade

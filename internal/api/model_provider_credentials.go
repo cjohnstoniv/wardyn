@@ -80,6 +80,7 @@ func cliSignInSecret(name string) bool { return strings.HasPrefix(name, cliSecre
 var providerTypedKinds = map[types.ModelProviderKind]bool{
 	types.ModelProviderAnthropicAPIKey: true, types.ModelProviderOpenAIAPIKey: true,
 	types.ModelProviderBedrockBearer: true, types.ModelProviderCustomEndpoint: true,
+	types.ModelProviderLocalModel: true, // when its server wants a token (auth set)
 }
 
 const (

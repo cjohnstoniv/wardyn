@@ -37,7 +37,7 @@
 #                            provider the run uses, checked before launch
 #   WARDYN_CI_KEEP           throwaway stack: 1 = leave it up           [unset]
 #   WARDYN_CI_SKIP_BUILD     throwaway stack: 1 = reuse local images    [unset]
-#   WARDYN_ADMIN_TOKEN       throwaway stack: its own bootstrap bearer; [demo-admin-token]
+#   WARDYN_ADMIN_TOKEN       throwaway stack: its own bootstrap bearer; [random per job]
 #                            never sent to WARDYN_URL
 #   WARDYN_SETUP_RUNNER_DISK_GB  throwaway stack: GB of disk free for runs, [measured here]
 #                            needed where this host cannot see Docker's disk (Docker Desktop)
@@ -126,7 +126,8 @@ else
   # ── a throwaway stack ───────────────────────────────────────────────────────
   [[ "${TASK_MODE:-harness}" == "exec" ]] || die "harness mode needs a model credential that belongs to a person, and a throwaway stack has none. Point WARDYN_URL at your control plane with WARDYN_CI_TOKEN and WARDYN_CI_MODEL_PROVIDER, or set WARDYN_CI_TASK_MODE=exec — see docs/CI.md."
   [[ -z "${WARDYN_CI_TOKEN:-}${MODEL_PROVIDER}" ]] || die "WARDYN_CI_TOKEN and WARDYN_CI_MODEL_PROVIDER apply only with WARDYN_URL (an existing control plane) — see docs/CI.md."
-  export WARDYN_ADMIN_TOKEN="${WARDYN_ADMIN_TOKEN:-demo-admin-token}"
+  # Unset, each job draws its own bearer, so a parallel job's stack cannot reuse it.
+  export WARDYN_ADMIN_TOKEN="${WARDYN_ADMIN_TOKEN:-$(od -An -N20 -tx1 /dev/urandom | tr -d ' \n')}"
   command -v docker >/dev/null 2>&1 || die "docker not found on PATH"
   docker compose version >/dev/null 2>&1 || die "docker compose v2 required"
 

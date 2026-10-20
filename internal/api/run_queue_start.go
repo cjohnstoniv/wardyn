@@ -427,7 +427,7 @@ func (s *Server) queueLaunch(st *queuedStart, req createRunRequest, ceiling gove
 		return &queueEnd{hint: queueStartFailedHint}
 	}
 	started, ok, err := qs.StartQueuedRun(st.ctx, run.ID, store.QueueStart{
-		SPIFFEID: id.SPIFFEID, ConfinementClass: f.enforced, ModelProviderID: f.mpChoice.provider.ID, AutonomyLevel: f.autonomy.Level,
+		SPIFFEID: id.SPIFFEID, ConfinementClass: f.enforced, ModelProviderID: f.mpChoice.provider.ID, AutonomyLevel: f.autonomy.Level, InnerWalls: f.innerWalls,
 		EndsAt: anchor.EndsAt, WaitBudgetSec: anchor.WaitBudgetSec, RunLimits: anchor.RunLimits, GovernanceProfileID: anchor.GovernanceProfileID,
 		LifetimeCapAt: anchor.LifetimeCapAt, LifetimeCapSource: anchor.LifetimeCapSource,
 		Placement: placed.Placement, PlacementFilled: placed.PlacementFilled, RunnerID: placed.RunnerID,

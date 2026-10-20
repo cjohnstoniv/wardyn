@@ -120,6 +120,7 @@ var harnessCatalog = []harnessDef{
 			"custom_endpoint": "",
 			// Which route this harness may use is the row's (validateProviderAzure), not the catalog's.
 			"azure_foundry": "",
+			"local_model":   "",
 		},
 	},
 	{
@@ -136,6 +137,7 @@ var harnessCatalog = []harnessDef{
 			"bedrock_bearer":         reasonXBedrockCodex,
 			"custom_endpoint":        "",
 			"azure_foundry":          "",
+			"local_model":            "",
 		},
 	},
 	{

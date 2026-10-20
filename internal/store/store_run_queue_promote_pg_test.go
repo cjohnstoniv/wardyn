@@ -501,8 +501,10 @@ func TestPG_QueueWritersGuardTheirState(t *testing.T) {
 	started, ok, err := pg.StartQueuedRun(ctx, queued.ID, store.QueueStart{
 		SPIFFEID: "spiffe://x/started", ConfinementClass: types.CC2, EndsAt: &ends, WaitBudgetSec: 600, RunLimits: types.RunLimits{MaxEndAheadSec: 3600},
 		Placement: types.PlacementRemote, EvidenceSource: types.RunEvidenceSubstrate,
+		InnerWalls: &types.HarnessInnerWalls{SandboxMode: types.InnerSandboxOff, Approvals: types.InnerApprovalsWardyn},
 	})
-	if err != nil || !ok || started.SPIFFEID != "spiffe://x/started" || started.EndsAt == nil || started.WaitBudgetSec != 600 || started.RunLimits.MaxEndAheadSec != 3600 {
+	if err != nil || !ok || started.SPIFFEID != "spiffe://x/started" || started.EndsAt == nil || started.WaitBudgetSec != 600 || started.RunLimits.MaxEndAheadSec != 3600 ||
+		started.InnerWalls == nil || started.InnerWalls.Approvals != types.InnerApprovalsWardyn {
 		t.Fatalf("the start's write = %+v ok=%v err=%v", started, ok, err)
 	}
 	if err := pg.SetPromotedStatusDetail(ctx, queued.ID, "queue: queue_policy_changed"); err != nil || runState(t, pg, queued.ID).StatusDetail != "queue: queue_policy_changed" {
