@@ -35,6 +35,9 @@ type reply struct {
 // maxLine bounds one protocol line: QEMU's answers here are small (query-machines is the largest).
 const maxLine = 1 << 20
 
+// maxGuestText caps guest-supplied text (QGA error replies) echoed into an error.
+const maxGuestText = 1024
+
 func readLine(r *bufio.Reader) ([]byte, error) {
 	var line []byte
 	for {
@@ -113,7 +116,7 @@ func (q *QMP) exec(cmd string, args, out any) error {
 
 func decodeReply(what string, rep reply, out any) error {
 	if rep.Error != nil {
-		return fmt.Errorf("qemu: %s: %s: %s", what, rep.Error.Class, rep.Error.Desc)
+		return fmt.Errorf("qemu: %s: %q: %q", what, rep.Error.Class[:min(len(rep.Error.Class), maxGuestText)], rep.Error.Desc[:min(len(rep.Error.Desc), maxGuestText)])
 	}
 	if out == nil {
 		return nil

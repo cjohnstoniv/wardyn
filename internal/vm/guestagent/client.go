@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"sync"
 )
@@ -63,6 +64,12 @@ func (c *Client) Close() {
 }
 
 const base = "http://guest"
+
+// maxGuestText caps guest-supplied text echoed into an error; the guest is not trusted with log space.
+const maxGuestText = 1024
+
+// execID is what a guest may name an exec: it is placed in request paths and logs.
+var execID = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
 
 // Ready asks the agent for its version: the first call after boot.
 func (c *Client) Ready(ctx context.Context) (Ready, error) {
@@ -134,9 +141,11 @@ func (c *Client) Start(ctx context.Context, er ExecRequest) (string, error) {
 	case err != nil:
 		return "", err
 	case typ == FrameError:
-		return "", fmt.Errorf("guestagent: start: %s", payload)
+		return "", fmt.Errorf("guestagent: start: %q", payload[:min(len(payload), maxGuestText)])
 	case typ != FrameStarted || len(payload) == 0:
 		return "", fmt.Errorf("guestagent: start answered frame 0x%02x", typ)
+	case !execID.Match(payload):
+		return "", fmt.Errorf("guestagent: start returned an exec id outside [A-Za-z0-9._-]{1,64}: %q", payload[:min(len(payload), 64)])
 	}
 	return string(payload), nil
 }
@@ -147,6 +156,8 @@ type Session struct {
 	Stdout io.Reader
 	Stderr io.Reader // empty for a TTY exec
 	cancel context.CancelFunc
+	outR   *io.PipeReader // closed by Close so a demux blocked writing to an absent reader returns
+	errR   *io.PipeReader
 	up     *io.PipeWriter
 	upMu   sync.Mutex
 	done   chan struct{}
@@ -171,7 +182,7 @@ func (c *Client) Exec(ctx context.Context, er ExecRequest) (*Session, error) {
 	s := &Session{cancel: cancel, up: upW, done: make(chan struct{})}
 	outR, outW := io.Pipe()
 	errR, errW := io.Pipe()
-	s.Stdout, s.Stderr = outR, errR
+	s.Stdout, s.Stderr, s.outR, s.errR = outR, errR, outR, errR
 	s.Stdin = stdinWriter{s}
 	// The spec frame is written while the request is in flight: the pipe has no buffer.
 	go func() {
@@ -217,7 +228,7 @@ func demux(r io.Reader, stdout, stderr *io.PipeWriter) (int, error) {
 		case FrameExit:
 			return readInt32(payload)
 		case FrameError:
-			return -1, fmt.Errorf("guestagent: exec: %s", payload)
+			return -1, fmt.Errorf("guestagent: exec: %q", payload[:min(len(payload), maxGuestText)])
 		default:
 			return -1, fmt.Errorf("guestagent: unexpected frame 0x%02x", typ)
 		}
@@ -252,10 +263,14 @@ func (s *Session) Wait() (int, error) {
 	return s.code, s.err
 }
 
-// Close ends the session; the guest kills the process when its stream is cancelled.
+// Close ends the session; the guest kills the process when its stream is cancelled. It does not wait
+// on anyone reading Stdout or Stderr: the output pipes are unbuffered, so demux can be parked writing
+// to a reader that is gone, and only closing the read ends frees it.
 func (s *Session) Close() error {
 	s.cancel()
 	_ = s.up.Close()
+	_ = s.outR.Close()
+	_ = s.errR.Close()
 	<-s.done
 	return nil
 }

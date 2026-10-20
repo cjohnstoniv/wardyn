@@ -230,3 +230,14 @@ func TestQGASyncSkipsStaleAnswers(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestDecodeReplyCapsAndQuotesGuestText(t *testing.T) {
+	var rep reply
+	if err := json.Unmarshal([]byte(`{"error": {"class": "GenericError", "desc": "`+strings.Repeat(`\u001b[31m\n`, 8192)+`"}}`), &rep); err != nil {
+		t.Fatal(err)
+	}
+	msg := decodeReply("QGA x", rep, nil).Error()
+	if len(msg) > 4*maxGuestText+100 || strings.ContainsAny(msg, "\x1b\n") || !strings.Contains(msg, `\x1b[31m\n`) {
+		t.Fatalf("error text is not capped and quoted (%d bytes): %.80q", len(msg), msg)
+	}
+}
