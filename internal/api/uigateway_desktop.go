@@ -324,6 +324,11 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 	defer cancel()
 	untrack := s.trackDesktop(sess, cancel)
 	defer untrack()
+	// A Close here between this request's decode and trackDesktop cancelled nothing of this stream.
+	if s.uiDesktopClosedHere(sess, s.cfg.Now()) {
+		_ = c.Close(desktopCloseSessionEnded, "this desktop session ended")
+		return
+	}
 
 	run, code, why := s.desktopRunCheck(ctx, sess)
 	if code != 0 {

@@ -142,4 +142,34 @@ test.describe("Run detail — Desktop", () => {
     await expect(card.getByTestId("desktop-refused-said")).toHaveText("invalid, expired, or already-used attach ticket");
     await other.close();
   });
+
+  test("a Close the gateway did not store keeps the desktop open, says so, and leaves Close to try again", async ({ page }) => {
+    const runId = runIdByTask(RUN_TASK);
+    await gotoConsole(page);
+    const health = JSON.parse((await consoleAPI(page, "GET", "/healthz")).text);
+    const viewer = new URL(`../r/${runId}/__desktop/`, health.ui_sandbox.enter_post_url as string);
+    const path = viewer.pathname.replace(/\/$/, "");
+    // The `none` runner has no VM to open a session on, so the gateway's own viewer page (its refusal, served
+    // without a session) is booted as an open desktop, its stream held open here and its Close answered 503.
+    const boot = { state: "open", expires: 4102444800, rfb: `${path}/__rfb`, close: `${path}/__close` };
+    await page.route(viewer.href, async (route) => {
+      const res = await route.fetch();
+      const body = (await res.text()).replace(/data-wardyn-desktop="[^"]*"/, `data-wardyn-desktop="${JSON.stringify(boot).replace(/"/g, "&quot;")}"`);
+      await route.fulfill({ response: res, status: 200, body });
+    });
+    await page.routeWebSocket(`**${path}/__rfb`, () => {});
+    let closes = 0;
+    await page.route(`**${path}/__close`, async (route) => {
+      closes += 1;
+      await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "could not close this desktop session; try again" }) });
+    });
+    await page.goto(viewer.href);
+    const close = page.getByRole("button", { name: DESKTOP.close });
+    await close.click();
+    await expect(page.getByRole("alert")).toHaveText("Close didn't go through, so this desktop is still open. Try again.");
+    expect(DESKTOP.closeFailed).toBe("Close didn't go through, so this desktop is still open. Try again.");
+    await expect(close).toBeEnabled();
+    expect(closes).toBe(1);
+    expect(page.isClosed()).toBe(false);
+  });
 });

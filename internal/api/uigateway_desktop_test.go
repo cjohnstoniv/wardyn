@@ -5,6 +5,8 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -23,6 +25,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -553,6 +556,108 @@ func TestDesktopClosedSetFailureRefuses(t *testing.T) {
 	}
 }
 
+// A Close is held until the cookie's own bound: a session closed in its first second is still refused
+// half an hour on, by a fresh process that knows of the Close only from the store.
+func TestDesktopCloseHoldsUntilTheCookieBound(t *testing.T) {
+	h, _ := newDesktopHarness(t)
+	closed := desktopCookie(t, h.enterDesktop(h.ticket(h.run.ID, h.owner, oidc.RoleUser)))
+	h.clock.advance(time.Second)
+	open := desktopCookie(t, h.enterDesktop(h.ticket(h.run.ID, h.owner, oidc.RoleUser)))
+	if rec := postDesktopClose(h.gateway, h, closed); rec.Code != http.StatusNoContent {
+		t.Fatalf("close = %d %s", rec.Code, rec.Body.String())
+	}
+	h.srv = New(h.srv.cfg)
+	h.gateway = h.srv.UIGatewayHandler()
+	h.clock.advance(30 * time.Minute)
+	if got := uiGet(h, desktopPath(h, uiDesktopRFB), closed); got.Code != http.StatusForbidden {
+		t.Fatalf("the closed cookie 30 min on = %d, want 403", got.Code)
+	}
+	if got := uiGet(h, desktopPath(h, uiDesktopRFB), open); got.Code != http.StatusUpgradeRequired {
+		t.Fatalf("the open cookie 30 min on = %d, want 426", got.Code)
+	}
+}
+
+// A store that keeps no Closed set cannot say a desktop is open, so every desktop cookie is refused
+// and a Close is not reported done.
+func TestDesktopStoreWithoutAClosedSetRefuses(t *testing.T) {
+	h, _ := newDesktopHarness(t)
+	c := desktopCookie(t, h.enterDesktop(h.ticket(h.run.ID, h.owner, oidc.RoleUser)))
+	if got := uiGet(h, desktopPath(h, uiDesktopRFB), c); got.Code != http.StatusUpgradeRequired {
+		t.Fatalf("with a Closed set = %d, want 426", got.Code)
+	}
+	if _, ok := any(h.store).(store.UIDesktopClosedStore); ok {
+		t.Fatal("the harness's plain store keeps a Closed set; this test needs one that does not")
+	}
+	h.srv.cfg.Store = h.store
+	h.srv = New(h.srv.cfg)
+	h.gateway = h.srv.UIGatewayHandler()
+	if got := uiGet(h, desktopPath(h, uiDesktopRFB), c); got.Code != http.StatusForbidden {
+		t.Fatalf("with no Closed set = %d, want 403", got.Code)
+	}
+	if rec := postDesktopClose(h.gateway, h, c); rec.Code == http.StatusNoContent {
+		t.Fatalf("close with no Closed set = %d, want it not reported done", rec.Code)
+	}
+}
+
+// The Closed set is keyed by the sha256 of the session's relay key, so the shared table holds no
+// principal text and no run ID.
+func TestDesktopClosedSetKeyIsADigest(t *testing.T) {
+	h, _ := newDesktopHarness(t)
+	fake := h.srv.cfg.Store.(*desktopClosedStore)
+	c := desktopCookie(t, h.enterDesktop(h.ticket(h.run.ID, h.owner, oidc.RoleUser)))
+	req := httptest.NewRequest(http.MethodGet, desktopPath(h, "/"), nil)
+	req.AddCookie(c)
+	sess, ok := h.srv.decodeUISession(req, h.srv.cfg.Now())
+	if !ok {
+		t.Fatal("the fresh desktop cookie does not decode")
+	}
+	if rec := postDesktopClose(h.gateway, h, c); rec.Code != http.StatusNoContent {
+		t.Fatalf("close = %d %s", rec.Code, rec.Body.String())
+	}
+	sum := sha256.Sum256([]byte(uiReassertKey(sess)))
+	want := hex.EncodeToString(sum[:])
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.closed) != 1 {
+		t.Fatalf("stored keys = %v, want one", fake.closed)
+	}
+	for key := range fake.closed {
+		if key != want || strings.Contains(key, h.owner) || strings.Contains(key, h.run.ID.String()) {
+			t.Fatalf("stored key = %q, want the sha256 hex %q of the relay key", key, want)
+		}
+	}
+}
+
+// A Close that lands after a stream's request read the Closed set but before the stream was tracked
+// (so the Close had nothing of it to cut) still ends that stream at once, before the runner is dialled.
+func TestDesktopStreamClosedBeforeItIsTrackedEndsAtOnce(t *testing.T) {
+	h, dr := newDesktopHarness(t)
+	fake := h.srv.cfg.Store.(*desktopClosedStore)
+	srv := httptest.NewServer(h.gateway)
+	t.Cleanup(srv.Close)
+	c := desktopCookie(t, h.enterDesktop(h.ticket(h.run.ID, h.owner, oidc.RoleUser)))
+	fake.mu.Lock()
+	fake.afterRead = func() {
+		if rec := postDesktopClose(h.gateway, h, c); rec.Code != http.StatusNoContent {
+			t.Errorf("close = %d %s", rec.Code, rec.Body.String())
+		}
+	}
+	fake.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	v := dialDesktop(t, ctx, h, srv.URL, c)
+	_, _, err := v.ws.Read(ctx)
+	var ce websocket.CloseError
+	if !errors.As(err, &ce) || ce.Code != desktopCloseSessionEnded {
+		t.Fatalf("the stream closed before it was tracked = %v, want close %d", err, desktopCloseSessionEnded)
+	}
+	select {
+	case ref := <-dr.dialled:
+		t.Fatalf("dialled %q after the Close", ref)
+	default:
+	}
+}
+
 // desktopClosedStore is the harness store with a shared Closed set, which every Server built on it
 // reads as replicas on one database do; fail makes its reads or its writes fail.
 type desktopClosedStore struct {
@@ -561,6 +666,8 @@ type desktopClosedStore struct {
 	closed   map[string]time.Time
 	readErr  error
 	writeErr error
+	// afterRead, when set, runs once after the next read has taken its answer: a Close landing just then.
+	afterRead func()
 }
 
 func (s *desktopClosedStore) fail(read, write error) {
@@ -581,11 +688,16 @@ func (s *desktopClosedStore) CloseUIDesktop(_ context.Context, key string, expir
 
 func (s *desktopClosedStore) UIDesktopClosed(_ context.Context, key string, now time.Time) (bool, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.readErr != nil {
-		return false, s.readErr
-	}
 	exp, ok := s.closed[key]
+	err, hook := s.readErr, s.afterRead
+	s.afterRead = nil
+	s.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	if err != nil {
+		return false, err
+	}
 	return ok && exp.After(now), nil
 }
 

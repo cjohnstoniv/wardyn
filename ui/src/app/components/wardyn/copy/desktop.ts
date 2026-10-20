@@ -18,6 +18,8 @@ export const DESKTOP = {
   fit: "Fit",
   actualSize: "Actual size",
   close: "Close",
+  // Not on the boards: the gateway did not store the Close (503), so the session is still valid.
+  closeFailed: "Close didn't go through, so this desktop is still open. Try again.",
   starting: "Starting the desktop",
   startingBody: "This tab connects on its own. You don't need to reload it.",
   phoneTitle: "Small screen: view only",

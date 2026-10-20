@@ -146,6 +146,27 @@ describe("DesktopViewer", () => {
     closeSpy.mockRestore();
   });
 
+  it("a Close the gateway did not store keeps the desktop open, says so, and can be tried again", async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 503 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const closeSpy = vi.spyOn(window, "close").mockImplementation(() => {});
+    const { sockets } = open();
+    sockets[0].serve(HANDSHAKE);
+    await act(async () => screen.getByRole("button", { name: DESKTOP.close }).click());
+    expect(screen.getByRole("alert")).toHaveTextContent("Close didn't go through, so this desktop is still open. Try again.");
+    expect(DESKTOP.closeFailed).toBe("Close didn't go through, so this desktop is still open. Try again.");
+    expect(sockets[0].closed).toBe(false);
+    expect(closeSpy).not.toHaveBeenCalled();
+    expect(screen.getByText(DESKTOP.connected)).toBeInTheDocument();
+
+    fetchMock.mockImplementation(async () => new Response(null, { status: 204 }));
+    await act(async () => screen.getByRole("button", { name: DESKTOP.close }).click());
+    expect(sockets[0].closed).toBe(true);
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("alert")).toBeNull();
+    closeSpy.mockRestore();
+  });
+
   it("opens view only on a small screen, and says so", () => {
     const { sockets } = open(true);
     sockets[0].serve(HANDSHAKE);

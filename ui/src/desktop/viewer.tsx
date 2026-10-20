@@ -58,6 +58,7 @@ function Desktop({ boot, connect, viewOnly }: { boot: Extract<Boot, { state: "op
   const closing = React.useRef(false);
   const [phase, setPhase] = React.useState<Phase>("starting");
   const [fit, setFit] = React.useState(true);
+  const [closeFailed, setCloseFailed] = React.useState(false);
   const pressed = React.useRef(new Map<string, number>()); // the keysym each held key went down with
 
   React.useEffect(() => {
@@ -111,11 +112,19 @@ function Desktop({ boot, connect, viewOnly }: { boot: Extract<Boot, { state: "op
     };
   }, [boot.rfb, connect]);
 
+  // The desktop stays open until the gateway answers 204: any other answer (503: the Close was not stored)
+  // leaves the session valid, so the person is told and can try again.
   const close = async () => {
     closing.current = true;
+    setCloseFailed(false);
+    const r = await fetch(boot.close, { method: "POST", credentials: "same-origin" }).catch(() => null);
+    if (r?.status !== 204) {
+      closing.current = false;
+      setCloseFailed(true);
+      return;
+    }
     socket.current?.close();
     setPhase("closed");
-    await fetch(boot.close, { method: "POST", credentials: "same-origin" }).catch(() => undefined);
     window.close();
   };
 
@@ -137,6 +146,9 @@ function Desktop({ boot, connect, viewOnly }: { boot: Extract<Boot, { state: "op
         </div>
         {!ended && <Button size="sm" variant="outline" onClick={() => void close()}>{DESKTOP.close}</Button>}
       </header>
+      {closeFailed && !ended && (
+        <p role="alert" className="border-b border-border px-4 py-2 text-xs">{DESKTOP.closeFailed}</p>
+      )}
       {viewOnly && (
         <p className="border-b border-border px-4 py-2 text-xs">
           <span className="font-medium">{DESKTOP.phoneTitle}</span> <span className="text-muted-foreground">{DESKTOP.phoneBody}</span>

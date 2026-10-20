@@ -12,8 +12,8 @@
 -- an hour out; past it the cookie is refused anyway, so a row is read only while expires_at > now
 -- and the reaper-tick prune deletes it after.
 --
--- ADDITIVE ONLY: a new table with no foreign keys. A downgrade stops reading it, and Close holds in
--- the closing process only, as before.
+-- ADDITIVE ONLY: a new table with no foreign keys. A release before this one has no desktop, so a
+-- downgrade leaves the table unread.
 CREATE TABLE IF NOT EXISTS ui_desktop_closed (
     key_digest TEXT PRIMARY KEY,
     expires_at TIMESTAMPTZ NOT NULL
