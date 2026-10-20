@@ -22,6 +22,7 @@
 package contentscan
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -367,6 +368,12 @@ func (e *Engine) capFindings(res *Result, vetted, displace int) (int, int) {
 // A malformed/unknown body is reported as Skipped{parse_error} plus the
 // error; the caller decides allow-vs-block via ShouldBlock (honoring fail-open).
 func (e *Engine) ScanRequest(channel Channel, body []byte) (res Result, out []byte, err error) {
+	return e.ScanRequestContext(context.Background(), channel, body)
+}
+
+// ScanRequestContext is ScanRequest with the request's context bounding every
+// sidecar call, so a caller that went away stops costing the sidecar.
+func (e *Engine) ScanRequestContext(ctx context.Context, channel Channel, body []byte) (res Result, out []byte, err error) {
 	if e == nil || e.mode == ModeOff {
 		return Result{Scanned: false}, body, nil
 	}
@@ -385,6 +392,9 @@ func (e *Engine) ScanRequest(channel Channel, body []byte) (res Result, out []by
 	// displace is that arm's cursor into the RETAINED head, carried across
 	// spans so each position is examined at most once.
 	displace := 0
+	// Once the sidecar fails (or its call cap is hit) it is not asked again for this request:
+	// one outage must not cost a timeout per remaining span.
+	sidecarCalls, sidecarDown := 0, false
 	scanSpan := func(s Span) {
 		if e.maxBytes > 0 && len(s.Text) > e.maxBytes {
 			res.Skipped = true
@@ -412,9 +422,20 @@ func (e *Engine) ScanRequest(channel Channel, body []byte) (res Result, out []by
 			// can tell "inspected clean" from "scanner never ran". !res.Skipped
 			// guards a later outage from clobbering an earlier skip reason.
 			if sc, ok := d.(*sidecarDetector); ok {
-				if serr := sc.scanReport(s, &res.Findings); serr != nil && !res.Skipped {
-					res.Skipped = true
-					res.SkipReason = "sidecar_error"
+				if sidecarDown {
+					continue
+				}
+				serr := errSidecarCallCap
+				if sidecarCalls < maxSidecarCallsPerRequest {
+					sidecarCalls++
+					serr = sc.scanReport(ctx, s, &res.Findings)
+				}
+				if serr != nil {
+					sidecarDown = true
+					if !res.Skipped {
+						res.Skipped = true
+						res.SkipReason = "sidecar_error"
+					}
 				}
 				continue
 			}
