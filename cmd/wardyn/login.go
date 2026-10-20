@@ -82,9 +82,8 @@ any computer and asks for the code the page shows, where the organisation allows
 				return err
 			}
 			var h struct {
-				CLISignIn      bool   `json:"cli_sign_in"`
-				CLIPasteSignIn bool   `json:"cli_paste_sign_in"`
-				Version        string `json:"version"`
+				types.CLISignInHealthz
+				Version string `json:"version"`
 			}
 			if err := cliCall(cmd.Context(), u, http.MethodGet, "/healthz", "", nil, &h); err != nil {
 				return fmt.Errorf(errUnreachable, u, err)
@@ -92,6 +91,10 @@ any computer and asks for the code the page shows, where the organisation allows
 			l := &login{origin: u, dir: dir, out: cmd.OutOrStdout(), errOut: cmd.ErrOrStderr(), in: cmd.InOrStdin(),
 				noBrowser: noBrowser, paste: h.CLIPasteSignIn}
 			switch {
+			case h.CLISignIn && h.CLISignInOrigin != "" && h.CLISignInOrigin != u:
+				// Proofs are signed over u, the URL dialled, never over the one the server names: it is
+				// only compared, so a look-alike cannot obtain a proof for the origin it advertises.
+				return fmt.Errorf(errOtherOrigin, h.CLISignInOrigin, u, h.CLISignInOrigin)
 			case !h.CLISignIn:
 				_, err = fmt.Fprintf(cmd.OutOrStdout(), "Saved %s. %s\nThe profile is %s; --url and WARDYN_URL still take precedence.\n",
 					u, noSignInLine, filepath.Join(dir, cliprofile.FileName))

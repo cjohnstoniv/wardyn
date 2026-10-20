@@ -44,6 +44,7 @@ const (
 	errNoCallbackPaste  = "the browser did not come back to the CLI within 5 minutes: run `wardyn login --no-browser`"
 	errNoCallback       = "the browser did not come back to the CLI within 5 minutes: sign in on a computer with a browser, or set WARDYN_TOKEN"
 	errNoPasteMode      = "your organisation has not turned on sign-in without a browser (WARDYN_CLI_PASTE_SIGN_IN): sign in on a computer with a browser, or set WARDYN_TOKEN"
+	errOtherOrigin      = "this organisation signs CLIs in at %s, not %s: run `wardyn login %s`" // its origin, the URL given, its origin
 	errNoCode           = "no code was pasted; nothing was saved"
 	errNoOrg            = "name your organisation: `wardyn login <url>`"
 	errUnreachable      = "saved %s, but could not reach it to sign in: %v"

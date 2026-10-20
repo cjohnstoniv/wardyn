@@ -4,6 +4,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
@@ -37,6 +38,9 @@ type signInOrg struct {
 	srv     *httptest.Server
 	paste   bool
 	version string // /healthz.version
+	// origin is /healthz.cli_sign_in_origin ("" sends none) and the origin proofs are checked over;
+	// "" checks them over the server's own URL.
+	origin string
 	// signOutFails makes DELETE /me/cli-sessions/{id} a 500; signOut401 a 401 with that reason.
 	signOutFails bool
 	signOut401   string
@@ -80,7 +84,7 @@ func newSignInOrg(t *testing.T) *signInOrg {
 		sessions: map[uuid.UUID]*fakeSession{}, tokens: map[string]fakeToken{}, inflight: make(chan struct{}, 8)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		writeFake(w, http.StatusOK, map[string]any{"status": "ok", "cli_sign_in": true, "cli_paste_sign_in": f.paste, "version": f.version})
+		writeFake(w, http.StatusOK, map[string]any{"status": "ok", "cli_sign_in": true, "cli_paste_sign_in": f.paste, "version": f.version, "cli_sign_in_origin": f.origin})
 	})
 	mux.HandleFunc("POST /api/v1/cli/sign-ins", f.create)
 	mux.HandleFunc("POST /api/v1/cli/sign-ins/{id}/token", f.token)
@@ -124,7 +128,7 @@ func (f *signInOrg) proofOK(pub ed25519.PublicKey, route string, id uuid.UUID, s
 	sig, err := base64.RawURLEncoding.DecodeString(p.Signature)
 	at := time.Unix(p.Time, 0)
 	return err == nil && time.Since(at).Abs() <= types.CLIProofSkew &&
-		ed25519.Verify(pub, types.CLIProofMessage(f.srv.URL, route, id, secret, p.Time), sig)
+		ed25519.Verify(pub, types.CLIProofMessage(cmp.Or(f.origin, f.srv.URL), route, id, secret, p.Time), sig)
 }
 
 func (f *signInOrg) create(w http.ResponseWriter, r *http.Request) {
@@ -1126,4 +1130,61 @@ func TestLoginLoopbackPageWaitsForTheStore(t *testing.T) {
 	if page := <-pages; !strings.Contains(page, pageFailed) || strings.Contains(page, pageSignedIn) {
 		t.Errorf("the browser's page = %q, want %q", page, pageFailed)
 	}
+}
+
+// TestLoginOriginIsTheOneDialled: the CLI signs proofs only over the URL it dials (normalised) and compares
+// /healthz.cli_sign_in_origin with it. Another spelling of the same origin is accepted; a different origin
+// is refused before any proof exists, with the URL to use named.
+func TestLoginOriginIsTheOneDialled(t *testing.T) {
+	t.Run("localhost is not 127.0.0.1", func(t *testing.T) {
+		f := newSignInOrg(t)
+		cliEnv(t, func(string) { t.Error("a refused login opened the browser") })
+		loopbackWait = time.Second // a login that is not refused waits for no browser
+		f.origin = f.srv.URL       // http://127.0.0.1:<port>
+		dialled := strings.Replace(f.srv.URL, "127.0.0.1", "localhost", 1)
+		_, _, err := runCLI(t, "", "login", dialled)
+		if want := fmt.Sprintf(errOtherOrigin, f.srv.URL, dialled, f.srv.URL); err == nil || err.Error() != want {
+			t.Fatalf("login %s: %v, want %q", dialled, err, want)
+		}
+		if len(f.signIns) != 0 {
+			t.Errorf("a refused login still asked for %d sign-ins", len(f.signIns))
+		}
+	})
+	t.Run("a host-case difference and a trailing slash are the same origin", func(t *testing.T) {
+		f := newSignInOrg(t)
+		cliEnv(t, nil)
+		openBrowser = func(approve string) error { go approveInBrowser(t, f, nil)(approve); return nil }
+		f.origin = strings.Replace(f.srv.URL, "127.0.0.1", "localhost", 1)
+		typed := strings.Replace(f.srv.URL, "127.0.0.1", "LocalHost", 1) + "/"
+		if _, _, err := runCLI(t, "", "login", typed); err != nil {
+			t.Fatalf("login %s against an organisation at %s: %v", typed, f.origin, err)
+		}
+		// The fake checked the token call's proof over its origin, which is the normalised URL dialled.
+		if storedItem(t, f.origin).AccessToken == "" {
+			t.Error("no sign-in stored under the normalised URL")
+		}
+	})
+	t.Run("an advertised origin is never signed over", func(t *testing.T) {
+		f := newSignInOrg(t)
+		cliEnv(t, func(string) { t.Error("a refused login opened the browser") })
+		loopbackWait = time.Second              // a login that is not refused waits for no browser
+		f.origin = "https://wardyn.example.com" // a look-alike naming the real organisation
+		_, _, err := runCLI(t, "", "login", f.srv.URL)
+		if want := fmt.Sprintf(errOtherOrigin, f.origin, f.srv.URL, f.origin); err == nil || err.Error() != want {
+			t.Fatalf("login: %v, want %q", err, want)
+		}
+		if len(f.signIns) != 0 {
+			t.Errorf("the look-alike got %d sign-in requests (and so could ask for a proof)", len(f.signIns))
+		}
+	})
+	t.Run("a proof signs the origin dialled", func(t *testing.T) {
+		key := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
+		id := uuid.New()
+		p := cliProof(key, "http://localhost:1", "/r", id, "k", time.Unix(100, 0))
+		sig, _ := base64.RawURLEncoding.DecodeString(p.Signature)
+		if !ed25519.Verify(key.Public().(ed25519.PublicKey), types.CLIProofMessage("http://localhost:1", "/r", id, "k", 100), sig) ||
+			ed25519.Verify(key.Public().(ed25519.PublicKey), types.CLIProofMessage("https://wardyn.example.com", "/r", id, "k", 100), sig) {
+			t.Error("the proof does not carry exactly the origin it was given")
+		}
+	})
 }
