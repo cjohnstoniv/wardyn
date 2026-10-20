@@ -115,9 +115,10 @@ func bringBackFixture(t *testing.T) (*Server, *computerFolderStore, *recRecorder
 		t.Fatal(cs.FailureHint())
 	}
 	cs.dispatchTestStore.mu.Lock()
-	cs.run.CreatedBy, cs.run.SandboxRef, cs.run.CreatedAt = bringBackOwner, "sbx", time.Now().Add(-time.Hour)
+	cs.run.CreatedBy, cs.run.SandboxRef = bringBackOwner, "sbx"
 	run = cs.run
 	cs.dispatchTestStore.mu.Unlock()
+	cs.runner.Owner = bringBackOwner
 	run.State = types.RunRunning
 	agent := &agentSandbox{folderSandboxRunner: sb, t: t, pid1: taskIdlePID1}
 	// SSO sessions are wired when the server is built, so build it again with them.

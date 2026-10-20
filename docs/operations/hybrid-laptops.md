@@ -280,7 +280,7 @@ What happens:
 - The runner opens no port and Wardyn never connects in: each pass rides the runner's own outbound session. The
   runner never reaches into a sandbox. Wardyn joins its stream to the sandbox's own `sftp-server`.
 
-Not yet: bringing changes back when you take over a live run, live sync while the run runs, and **Pause sync**.
+Not yet: live sync while the run runs, and **Pause sync**.
 For now this needs a single-replica deployment: Wardyn reaches the runner only from the replica it is connected to,
 so with several replicas a runner connected to another one reads as offline.
 
