@@ -666,7 +666,10 @@ func (s *Server) stripRevivedModelInjections(ctx context.Context, run types.Agen
 // that runs in the sandbox while WARDYN_MCP_LOCAL_SERVERS is off. Starting the agent again
 // admits the run anew, as a queued run's admission does, so it meets the switch the same way:
 // componentDefinitionProblem's reason and sentence, never a dropped server. A revive that
-// leaves the agent running leaves its server running too, until the run ends.
+// leaves the agent running leaves its server running too, until the run ends. An erased
+// row keeps only the harnesses its MCP server was turned on for, so the server it held may
+// be a local one: with the switch off it is refused too, in the org form, since the
+// person's definition is gone.
 func (s *Server) reviveLocalMCPRefusal(ctx context.Context, run types.AgentRun, rebooted bool, actorType types.ActorType, actor string) *reviveError {
 	if !rebooted {
 		return nil
@@ -677,10 +680,15 @@ func (s *Server) reviveLocalMCPRefusal(ctx context.Context, run types.AgentRun, 
 	}
 	for _, rc := range comps {
 		problem := mcpLocalOffProblem(rc.Definition)
-		if problem == "" {
+		erasedMCP := rc.Erased && len(rc.MCPHarnesses) > 0 && !envEnabled(envMCPLocalServers)
+		if problem == "" && !erasedMCP {
 			continue
 		}
-		ref := componentRefused(attachedComponent{snapshot: rc}, rc.Ordinal, reasonComponentDefinitionInvalid, problem, "has a definition that is not valid here.").refusal
+		snap := rc
+		if rc.Erased {
+			snap.SelfDefined = false
+		}
+		ref := componentRefused(attachedComponent{snapshot: snap}, rc.Ordinal, reasonComponentDefinitionInvalid, problem, "has a definition that is not valid here.").refusal
 		s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "denied",
 			mustJSON(map[string]any{"subject": run.CreatedBy, "reason": reasonComponentDefinitionInvalid})))
 		return reviveRefused(ref.status, ref.body.Reason, ref.body.Error)

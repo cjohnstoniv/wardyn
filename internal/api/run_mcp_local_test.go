@@ -348,3 +348,86 @@ func TestRevive_LocalMCPMeetsTheSwitchAsTheQueueDoes(t *testing.T) {
 		}
 	})
 }
+
+// TestRevive_ErasedMCPRowMeetsTheSwitch: an erased row keeps only the harnesses
+// its MCP server was turned on for, so with WARDYN_MCP_LOCAL_SERVERS off a
+// rebooted revive refuses it in the org form, without a field of the gone
+// definition, and the agent is not started. The tombstone of a remote server is
+// the same row, so it is refused too. An erased row with no MCP server, a live
+// local row, the switch on and a revive that leaves the agent running are
+// unchanged.
+func TestRevive_ErasedMCPRowMeetsTheSwitch(t *testing.T) {
+	def := *localInline("Files").Inline
+	def.Secrets = nil
+	erasedMCP := types.RunComponent{SelfDefined: true, Erased: true, MCPHarnesses: []string{"claude-code"}}
+	revive := func(f *reviveFixture) (int, errorBody) {
+		w := do(t, f.srv, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/revive", adminToken, "")
+		var body errorBody
+		_ = json.Unmarshal(w.Body.Bytes(), &body)
+		return w.Code, body
+	}
+
+	t.Run("erased local row, off", func(t *testing.T) {
+		t.Setenv(envMCPLocalServers, "")
+		f, sr := newRebootFixture(t)
+		f.withRunComponents(erasedMCP)
+		code, body := revive(f)
+		const want = "components[0]: this component has a definition that is not valid here. Ask your admin."
+		if code != http.StatusUnprocessableEntity || body.Reason != reasonComponentDefinitionInvalid || body.Error != want {
+			t.Fatalf("revive = %d %q %q; want 422 %q %q", code, body.Reason, body.Error, reasonComponentDefinitionInvalid, want)
+		}
+		if got := sr.starts(); len(got) != 0 {
+			t.Errorf("StartSandbox calls = %v; a refused revive started the agent", got)
+		}
+		f.assertReviveRefused(t, reasonComponentDefinitionInvalid)
+	})
+
+	t.Run("erased non-MCP row, off", func(t *testing.T) {
+		t.Setenv(envMCPLocalServers, "")
+		f, sr := newRebootFixture(t)
+		f.withRunComponents(reviveErasedRow)
+		if code, body := revive(f); code != http.StatusOK || !slices.Equal(sr.starts(), []int{1}) {
+			t.Fatalf("revive = %d %+v, starts %v; want 200 and the agent started", code, body, sr.starts())
+		}
+	})
+
+	t.Run("live local row, off", func(t *testing.T) {
+		t.Setenv(envMCPLocalServers, "")
+		f, sr := newRebootFixture(t)
+		f.withRunComponents(types.RunComponent{SelfDefined: true, Owner: "sub-owner", Name: "Files", Definition: def, MCPHarnesses: []string{"claude-code"}})
+		code, body := revive(f)
+		if code != http.StatusUnprocessableEntity || !strings.HasPrefix(body.Error, "components[0]: inline.mcp.transport: ") || len(sr.starts()) != 0 {
+			t.Fatalf("revive = %d %+v, starts %v; want 422 naming inline.mcp.transport, no start", code, body, sr.starts())
+		}
+		f.assertReviveRefused(t, reasonComponentDefinitionInvalid)
+	})
+
+	t.Run("erased remote row, off", func(t *testing.T) {
+		t.Setenv(envMCPLocalServers, "")
+		f, sr := newRebootFixture(t)
+		// Erasure clears the transport, so a remote server's row reads as erasedMCP does.
+		f.withRunComponents(types.RunComponent{SelfDefined: true, Erased: true, MCPHarnesses: []string{"codex-cli"}})
+		if code, body := revive(f); code != http.StatusUnprocessableEntity || len(sr.starts()) != 0 {
+			t.Fatalf("revive = %d %+v, starts %v; want 422, no start", code, body, sr.starts())
+		}
+		f.assertReviveRefused(t, reasonComponentDefinitionInvalid)
+	})
+
+	t.Run("erased local row, on", func(t *testing.T) {
+		t.Setenv(envMCPLocalServers, "1")
+		f, sr := newRebootFixture(t)
+		f.withRunComponents(erasedMCP)
+		if code, body := revive(f); code != http.StatusOK || !slices.Equal(sr.starts(), []int{1}) {
+			t.Fatalf("revive = %d %+v, starts %v; want 200 and the agent started", code, body, sr.starts())
+		}
+	})
+
+	t.Run("erased local row, off, agent still running", func(t *testing.T) {
+		t.Setenv(envMCPLocalServers, "")
+		f := newReviveFixture(t)
+		f.withRunComponents(erasedMCP)
+		if code, body := revive(f); code != http.StatusOK {
+			t.Fatalf("revive = %d %+v; want 200, the running agent keeps its server", code, body)
+		}
+	})
+}
