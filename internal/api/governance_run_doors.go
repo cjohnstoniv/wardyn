@@ -165,7 +165,7 @@ func (s *Server) applicationUIAppsRefusal(r *http.Request, req createRunRequest,
 	switch {
 	case s.uiAppsDenied(r, spec, ceiling):
 		return runError(http.StatusUnprocessableEntity, reasonRunApplicationUIAppsDenied, applicationUIAppsDeniedMsg)
-	case len(spec.UIApps) == 0 && !s.runUngoverned(r.Context()):
+	case len(spec.UIApps) == 0: // declared, and none left without deny_ui_apps: the ceiling's allowed list took it
 		return runError(http.StatusUnprocessableEntity, reasonRunApplicationUIAppsDenied, applicationUIAppsNotAllowedMsg)
 	}
 	return nil
