@@ -138,11 +138,22 @@ describe("RunRow — a waiting sign-in (M2)", () => {
 
   it("answers not_waiting: the row is the plain Running row", async () => {
     signInMock.mockResolvedValue({ state: "not_waiting" });
-    renderMine(signInRun({ created_at: new Date(Date.now() - 3_600_000).toISOString() }));
+    renderMine(signInRun());
     await flush();
     expect(signInMock).toHaveBeenCalledTimes(1);
     expect(screen.getByText(RUNS_ROW_WORD.RUNNING)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: RUNS_ROW_ACTION.SIGN_IN })).not.toBeInTheDocument();
+  });
+
+  it("a run that queued for minutes still gets its grace once it is RUNNING: not_waiting, then waiting", async () => {
+    signInMock
+      .mockResolvedValueOnce({ state: "not_waiting" })
+      .mockResolvedValue({ state: "waiting", verification_url: "https://device.sso.us-east-1.amazonaws.com/?user_code=ABCD-EFGH", user_code: "ABCD-EFGH" });
+    renderMine(signInRun({ created_at: new Date(Date.now() - 10 * 60_000).toISOString() }));
+    await flush();
+    expect(screen.queryByText(RUNS_ROW_WORD.WAITING_SIGN_IN)).not.toBeInTheDocument();
+    await act(() => vi.advanceTimersByTimeAsync(5000));
+    expect(screen.getByText(RUNS_ROW_WORD.WAITING_SIGN_IN)).toBeInTheDocument();
   });
 
   it("a failed read draws nothing on the row", async () => {

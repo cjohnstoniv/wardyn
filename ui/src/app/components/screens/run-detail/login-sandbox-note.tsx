@@ -70,7 +70,7 @@ export function LoginSandboxNote({ run }: { run: AgentRun }) {
     <>
       {mayReadSignIn(run, principal, operator) && (
         <React.Suspense fallback={null}>
-          <RunSignInStrip runId={run.id} createdAt={run.created_at} />
+          <RunSignInStrip runId={run.id} />
         </React.Suspense>
       )}
       <div

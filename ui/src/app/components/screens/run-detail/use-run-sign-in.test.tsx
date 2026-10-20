@@ -27,10 +27,9 @@ function identity({ children }: { children: ReactNode }) {
   return <OperatorProvider operator={false} operatorResolved={resolved} principal={principal}>{children}</OperatorProvider>;
 }
 function mount() {
-  const createdAt = new Date().toISOString();
   const samples: ReturnType<typeof useRunSignIn>[] = [];
   const hook = renderHook(({ runId, enabled }) => {
-    const read = useRunSignIn(runId, createdAt, enabled);
+    const read = useRunSignIn(runId, enabled);
     samples.push(read);
     return read;
   }, { initialProps: { runId: "run-1", enabled: true }, wrapper: identity });

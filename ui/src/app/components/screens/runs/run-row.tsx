@@ -164,7 +164,7 @@ export function RunRow({ run }: { run: AgentRun }) {
       </div>
       {eligible && (
         <React.Suspense fallback={null}>
-          <RowSignInProbe runId={run.id} createdAt={run.created_at} onChange={setWaitingSignIn} />
+          <RowSignInProbe runId={run.id} onChange={setWaitingSignIn} />
         </React.Suspense>
       )}
     </div>
