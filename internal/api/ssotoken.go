@@ -350,8 +350,9 @@ const signInCaptureReadTimeout = 5 * time.Second
 // ReconcileOnBoot still end it. The run is re-read after the grace: the
 // console's own killRun or the banner door may have ended it already, and a
 // terminal run is left alone (a re-kill would re-run the teardown and write a
-// second run.kill row). A lost CAS is not an error. Detached and panic-safe,
-// the same idiom as supersedeOneLoginRun.
+// second run.kill row). A lost CAS to a forward transition (the launch still
+// finishing) is retried. Detached and panic-safe, the same idiom as
+// supersedeOneLoginRun.
 func (s *Server) killSignInRunAfterCapture(ctx context.Context, runID uuid.UUID, owner string) {
 	detached := context.WithoutCancel(ctx)
 	grace := s.signInCaptureKillGrace
@@ -369,23 +370,34 @@ func (s *Server) killSignInRunAfterCapture(ctx context.Context, runID uuid.UUID,
 		case <-s.cfg.BaseCtx.Done():
 			return
 		}
-		readCtx, cancel := context.WithTimeout(detached, signInCaptureReadTimeout)
-		run, err := s.cfg.Store.GetRun(readCtx, runID)
-		cancel()
-		if err != nil {
-			slog.WarnContext(detached, "wardynd: could not read a captured sign-in run to end it",
-				slog.String("run_id", runID.String()), slog.Any("error", err))
-			return
+		// A lost CAS means the launch moved the run forward (STARTING->RUNNING)
+		// between our read and the write: re-read and kill from the state it
+		// now holds, as supersedeOneLoginRun does. Only a lost CAS repeats, so
+		// the extra reads are cheap; the cascade itself runs once.
+		for attempt := 0; attempt < supersedeCASAttempts; attempt++ {
+			readCtx, cancel := context.WithTimeout(detached, signInCaptureReadTimeout)
+			run, err := s.cfg.Store.GetRun(readCtx, runID)
+			cancel()
+			if err != nil {
+				slog.WarnContext(detached, "wardynd: could not read a captured sign-in run to end it",
+					slog.String("run_id", runID.String()), slog.Any("error", err))
+				return
+			}
+			if isTerminalRunState(run.State) {
+				return
+			}
+			applied, killData, kerr := s.killRunCascade(detached, run, types.ActorSystem, "wardynd",
+				map[string]any{"reason": signInCapturedReason, "captured_for": owner})
+			if kerr != nil || len(killData) > 0 {
+				slog.WarnContext(detached, "wardynd: captured sign-in sandbox was not fully torn down",
+					slog.String("run_id", runID.String()), slog.Any("error", kerr), slog.Any("errors", killData))
+			}
+			if applied || kerr != nil {
+				return
+			}
 		}
-		if isTerminalRunState(run.State) {
-			return
-		}
-		_, killData, kerr := s.killRunCascade(detached, run, types.ActorSystem, "wardynd",
-			map[string]any{"reason": signInCapturedReason, "captured_for": owner})
-		if kerr != nil || len(killData) > 0 {
-			slog.WarnContext(detached, "wardynd: captured sign-in sandbox was not fully torn down",
-				slog.String("run_id", runID.String()), slog.Any("error", kerr), slog.Any("errors", killData))
-		}
+		slog.WarnContext(detached, "wardynd: gave up ending a captured sign-in sandbox after repeated state changes",
+			slog.String("run_id", runID.String()), slog.Int("attempts", supersedeCASAttempts))
 	})
 }
 

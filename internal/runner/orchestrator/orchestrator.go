@@ -811,6 +811,20 @@ func (o *Orchestrator) Selftest(ctx context.Context, ref string) (int, error) {
 	return st.Selftest(ctx, ref)
 }
 
+// LocalAttach forwards a local attach to ref's substrate when it runs one of its own
+// (runner.LocalAttacher).
+func (o *Orchestrator) LocalAttach(ctx context.Context, ref string, req runner.LocalAttachRequest) (runner.LocalSession, error) {
+	s, err := o.subForRef(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	la, ok := s.(runner.LocalAttacher)
+	if !ok {
+		return nil, runner.ErrLocalAttachUnsupported
+	}
+	return la.LocalAttach(ctx, ref, req)
+}
+
 // StartSandbox forwards a kept agent's restart to ref's substrate when it can
 // start one again (runner.SandboxStarter). The route is kept.
 func (o *Orchestrator) StartSandbox(ctx context.Context, ref string) error {

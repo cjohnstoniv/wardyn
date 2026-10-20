@@ -146,7 +146,8 @@ func leqPosture(a, b types.RunPolicySpec) bool {
 		leqLLMInspection(a.LLMInspection, b.LLMInspection) &&
 		leqUIApps(a.UIApps, b.UIApps) &&
 		leqResources(a.Resources, b.Resources) &&
-		leqToolRules(a.ToolRules, b.ToolRules)
+		leqToolRules(a.ToolRules, b.ToolRules) &&
+		leqInnerWalls(a.HarnessInnerWalls, b.HarnessInnerWalls)
 }
 
 // leqMounts holds when every mount of a is a (source, target) mount of b, and
@@ -331,4 +332,18 @@ func leqRunLimits(a, b types.GovernanceLimits) bool {
 		(!a.UserChangesLimits || b.UserChangesLimits) &&
 		notLooser(cmp.Or(a.DefaultEndSec, a.MaxEndAheadSec), cmp.Or(b.DefaultEndSec, b.MaxEndAheadSec)) &&
 		notLooser(cmp.Or(a.DefaultWaitSec, a.MaxWaitSec), cmp.Or(b.DefaultWaitSec, b.MaxWaitSec))
+}
+
+// leqInnerWalls holds when every axis of harness_inner_walls b chooses, a chooses the same. A set axis
+// only narrows an unset one; two different choices are incomparable, since each asks for walls the
+// other's run lacks.
+func leqInnerWalls(a, b *types.HarnessInnerWalls) bool {
+	if b == nil {
+		return true
+	}
+	var x types.HarnessInnerWalls
+	if a != nil {
+		x = *a
+	}
+	return (b.SandboxMode == "" || x.SandboxMode == b.SandboxMode) && (b.Approvals == "" || x.Approvals == b.Approvals)
 }

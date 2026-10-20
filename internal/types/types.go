@@ -204,6 +204,8 @@ type AgentRun struct {
 	StatusReason string `json:"status_reason,omitempty"` // reason token parsed out of StatusDetail, derived at read, never stored
 	// AutonomyLevel freezes the level resolved at create, not the profile/posture that produced it (that's on the audit row).
 	AutonomyLevel AutonomyLevel `json:"autonomy_level,omitempty"`
+	// InnerWalls freezes the harness's own walls the run launched with (#2822); nil for a run with no catalog harness, or one created before this field.
+	InnerWalls *HarnessInnerWalls `json:"inner_walls,omitempty"`
 	// AdmittedAt is when a queued run was promoted out of the queue; written by promotion only, so nil for a run that never waited.
 	AdmittedAt *time.Time `json:"admitted_at,omitempty"`
 	// Queue is a waiting run's place in its pool's queue, derived at read from the queue row and never stored on the run; absent once the run leaves QUEUED.

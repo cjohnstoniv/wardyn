@@ -59,3 +59,20 @@ func TestPG_RunUserTypeRoundTrips(t *testing.T) {
 		t.Fatalf("untyped run read back user_type %q, want empty", got.UserType)
 	}
 }
+
+// TestPG_RunInnerWallsRoundTrip: the harness walls a run launched with read back as written, and a
+// run with none (no catalog harness, or a row from before the column) reads back nil.
+func TestPG_RunInnerWallsRoundTrip(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	walled := newRun(types.RunRunning)
+	walled.InnerWalls = &types.HarnessInnerWalls{Approvals: types.InnerApprovalsHarness}
+	persistRun(t, ctx, pool, walled)
+	got, err := store.NewPG(pool).GetRun(ctx, walled.ID)
+	if err != nil || got.InnerWalls == nil || *got.InnerWalls != *walled.InnerWalls {
+		t.Fatalf("GetRun inner walls = %+v, %v; want %+v", got.InnerWalls, err, walled.InnerWalls)
+	}
+	if got := persistRun(t, ctx, pool, newRun(types.RunRunning)); got.InnerWalls != nil {
+		t.Fatalf("a run with no walls read back %+v, want nil", got.InnerWalls)
+	}
+}

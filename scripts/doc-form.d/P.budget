@@ -36,7 +36,12 @@
 # docs/POLICIES.md 18784 = ours 18614 + theirs 18590 - base 18420 at the 0.10.0 SEC-1 merge of main; re-measured below if higher.
 # 0.10: docs/POLICIES.md 18847 adds 63 over 18784, measured: owner_only_refs, the per-secret owner_only of an ssh_key grant.
 # 0.10: docs/POLICIES.md 18870 adds 23 over 18847, measured: owner_only_refs is refused when authored and on a person's own runner unless every ref is theirs.
-docs/POLICIES.md=18870 share=12
+# #2822: docs/POLICIES.md 18911 adds 321 over 18590, measured at the main merge: the harness_inner_walls row and section.
+# docs/POLICIES.md 19105 = ours 18784 + theirs 18911 - base 18590 at the 0.10 W2 merge of HRN onto the train.
+# docs/POLICIES.md=18607 adds 187 (0.10.0 VM-B): the port-rule box and the relay residual (#3193).
+# docs/POLICIES.md 19292 = ours 19105 + theirs 18777 - base 18590 at the 0.10 W2 merge of VM-B onto the train.
+# docs/POLICIES.md 19378 = ours 18870 + theirs 19292 - base 18784 at the 0.10 merge of main (W2) into SEC-92.
+docs/POLICIES.md=19378 share=12
 # 0.9.4 W1 merge +3: L8 and an earlier W1 lane both edited the README; the merged text measures 3 over the sum.
 examples/policies/README.md=1446 share=5
 # docs/POLICIES.md 18013 adds 40 over 17973, measured: a member's private-range workspace clone host.

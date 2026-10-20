@@ -183,7 +183,11 @@ func (s *Server) mintRunnerToken(w http.ResponseWriter, r *http.Request, seed ty
 	} else if seed.OwnerKind == types.RunnerOwnerOrg {
 		seed.MintedByEmail = oidcEmailFromContext(r.Context()) // only the org claim's four-eyes check reads it
 	}
-	token, err := rs.MintRunnerRegistrationToken(r.Context(), raw, seed)
+	mintCtx := r.Context()
+	if seed.OwnerKind == types.RunnerOwnerPerson {
+		mintCtx = guardOwner(mintCtx, seed.Owner) // a deactivated owner is refused inside the insert
+	}
+	token, err := rs.MintRunnerRegistrationToken(mintCtx, raw, seed)
 	if err != nil {
 		writeServerError(w, r, "mint runner registration token", err)
 		return

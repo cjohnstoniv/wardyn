@@ -412,6 +412,10 @@ func (p *Peer) handleStream(f Frame) error {
 			p.returnCredit(int64(len(f.Payload)))
 			return nil
 		}
+		if s.kind == KindPTYTee && !p.cfg.Org { // the org never writes the tee
+			p.returnCredit(int64(len(f.Payload)))
+			return s.resetQueued(ResetRefused)
+		}
 		if err := s.deliver(f.Payload); errors.Is(err, ErrBadFrame) {
 			return err
 		} else if err != nil {
@@ -636,6 +640,11 @@ func (p *Peer) onOpen(f Frame) error {
 	if p.streams[f.Stream] != nil || p.parked[f.Stream] != nil {
 		p.mu.Unlock()
 		return fmt.Errorf("%w: stream %d already open", ErrBadFrame, f.Stream)
+	}
+	// A pty_tee stream exists only as a runner's reply to the org's local_attach call.
+	if o.Kind == KindPTYTee && (!p.cfg.Org || o.Call == 0 || p.calls[o.Call] == nil || p.calls[o.Call].method != MethodLocalAttach) {
+		p.mu.Unlock()
+		return p.answer(Frame{Type: TypeReset, Stream: f.Stream, Payload: EncodeReset(ResetRefused)})
 	}
 	// A missing call is a permanent refusal; capacity can clear while this
 	// authenticated connection remains live, so output may retry it.
