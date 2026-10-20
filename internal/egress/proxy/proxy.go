@@ -143,6 +143,8 @@ type Proxy struct {
 	ghAPIStopped atomic.Bool
 	// arm is the run's Azure CLI door (azure_arm_door.go). Nil == no door.
 	arm *azureARMDoor
+	// sigv4 is the run's AWS SigV4 re-signing door (aws_sigv4.go); nil when off.
+	sigv4 *awsSigV4Door
 	// gitTokens caches minted installation tokens per grant so a single clone
 	// (info/refs + git-upload-pack) does not re-mint — mandatory for single-use
 	// approval-gated grants. Guarded by gitTokMu; each entry single-flights its
@@ -297,6 +299,18 @@ type internalHostRule struct {
 // the hostname (TOCTOU / DNS-rebinding guard).
 type vettedIPKey struct{}
 
+// canonicalGitGrants canonicalises git-broker allowlist keys to lowercase "<org>/<repo>" so
+// lookups match regardless of the slug casing git sends (github owner/repo is case-insensitive).
+func canonicalGitGrants(in map[string]uuid.UUID) map[string]uuid.UUID {
+	gitGrants := make(map[string]uuid.UUID, len(in))
+	for k, id := range in {
+		if k = strings.ToLower(strings.TrimSpace(k)); k != "" && id != uuid.Nil {
+			gitGrants[k] = id
+		}
+	}
+	return gitGrants
+}
+
 //nolint:funlen // one linear wiring of each Options field into the Proxy; splitting it would scatter the wiring
 func newProxy(opts Options) *Proxy {
 	dial := opts.Dial
@@ -317,15 +331,7 @@ func newProxy(opts Options) *Proxy {
 		evaluator = builtinEvaluator{p: opts.Policy} // default: builtin RunPolicySpec verdict
 	}
 	mitmHosts, mitmPorts, mitmPlaintext := compileMITMHosts(opts.MITMHosts)
-	// Canonicalise git-broker allowlist keys to lowercase "<org>/<repo>" so lookups
-	// match regardless of the slug casing git sends (github owner/repo is
-	// case-insensitive).
-	gitGrants := make(map[string]uuid.UUID, len(opts.GitGrants))
-	for k, id := range opts.GitGrants {
-		if k = strings.ToLower(strings.TrimSpace(k)); k != "" && id != uuid.Nil {
-			gitGrants[k] = id
-		}
-	}
+	gitGrants := canonicalGitGrants(opts.GitGrants)
 	// Same canonicalisation as the repo keys above: a host is matched
 	// case-insensitively, so the map key is lowercased once here rather than at
 	// every lookup.
@@ -384,6 +390,7 @@ func newProxy(opts Options) *Proxy {
 		patAPI:               patAPI,
 		ghAPI:                newGitHubAPIDoor(opts.GitHubAPI, mitmHosts, mitmPorts),
 		arm:                  newAzureARMDoor(opts.AzureARM, mitmHosts, mitmPorts),
+		sigv4:                newAWSSigV4Door(opts.AWSSigV4, mitmHosts, mitmPorts),
 		gitTokens:            make(map[uuid.UUID]*gitTokEntry),
 		controlPlaneURL:      controlPlaneEndpoint(opts.ControlPlaneURL, ""),
 		runToken:             opts.RunToken,
@@ -868,7 +875,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	// Never a blind tunnel to an Azure DevOps grant host (refuseADOTunnel).
 	if p.refuseADOTunnel(w, r, host, port) || p.refuseAzureTunnel(w, r, host, port) || p.refusePATAPITunnel(w, r, host, port) ||
-		p.refuseGitHubAPITunnel(w, r, host, port) || p.refuseAzureARMTunnel(w, r, host, port) {
+		p.refuseGitHubAPITunnel(w, r, host, port) || p.refuseAzureARMTunnel(w, r, host, port) || p.refuseAWSSigV4Tunnel(w, r, host, port) {
 		return
 	}
 

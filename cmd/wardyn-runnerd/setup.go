@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/spf13/cobra"
@@ -104,6 +105,9 @@ func runSetup(cmd *cobra.Command, h setupHost, o setupOptions) error {
 		return err
 	}
 	if err := h.installBinary(cmd.Context(), plan.paths.installed, !plan.noService); err != nil {
+		return err
+	}
+	if err := h.seedCLIProfile(plan.paths, plan.org, out); err != nil {
 		return err
 	}
 	sayNoDiskCap(cmd.Context(), out)
@@ -266,6 +270,33 @@ func (h setupHost) checkSettings(plan setupPlan) error {
 	return nil
 }
 
+// proxyEnvNames are the proxy variables set in the environment, by name: a value may hold a credential.
+func proxyEnvNames(getenv func(string) string) []string {
+	var set []string
+	for _, k := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"} {
+		if getenv(k) != "" {
+			set = append(set, k)
+		}
+	}
+	return set
+}
+
+// shellProxyWarning says that the service setup installs starts without this shell's proxy variables, so
+// the runner's own connection to the organisation will not use that proxy. Setup rewrites the env file
+// and the LaunchAgent on every run, so it points at the places a rerun leaves alone.
+func shellProxyWarning(names []string, goos string, p setupPaths) string {
+	verb, where := "is", "a systemd drop-in that adds an EnvironmentFile (systemctl --user edit wardyn-runnerd), because setup rewrites "+p.envFile
+	if len(names) > 1 {
+		verb = "are"
+	}
+	if goos == "darwin" {
+		where = "the LaunchAgent's EnvironmentVariables (" + p.plistFile + "), which a later setup rewrites"
+	}
+	return strings.Join(names, ", ") + " " + verb + " set in this shell, but the service setup installs does not receive " +
+		"it, so the runner's own connection to the organisation will not use that proxy. Add it to " + where +
+		": see docs/runner-registration.md#a-runner-behind-a-corporate-proxy. Never put a proxy credential in the LaunchAgent: every local account can read it."
+}
+
 // preflight validates every input and checks Docker, so that a refusal comes before the single-use
 // token is spent or any file is written.
 func (h setupHost) preflight(cmd *cobra.Command, o setupOptions) (setupPlan, error) {
@@ -291,8 +322,15 @@ func (h setupHost) preflight(cmd *cobra.Command, o setupOptions) (setupPlan, err
 	if ssl := os.Getenv("SSL_CERT_FILE"); ssl != "" && cmp.Or(o.trustedCAFile, keptCA) == "" {
 		fmt.Fprintf(cmd.OutOrStdout(), "SSL_CERT_FILE is set (%s); pass --trusted-ca-file %s if runs must trust it (64 KiB at most)\n", ssl, ssl)
 	}
+	if names := proxyEnvNames(os.Getenv); len(names) > 0 && !o.noService {
+		fmt.Fprintln(cmd.OutOrStdout(), shellProxyWarning(names, h.goos, paths))
+	}
 	if o.trustedCAFile, err = checkedTrustedCAFile(o.trustedCAFile, keptCA, cmp.Or(paths.envFile, paths.plistFile)); err != nil {
 		return setupPlan{}, err
+	}
+	_, caWarnings := trustedCAFileCheck(o.trustedCAFile, time.Now())
+	for _, w := range caWarnings {
+		fmt.Fprintln(cmd.OutOrStdout(), "warning: "+w)
 	}
 	plan := setupPlan{setupOptions: o, paths: paths, dockerHost: h.dockerHost, want: want, flagged: o.proxyImage != ""}
 	if _, err := os.Stat(plan.paths.identity()); err == nil {

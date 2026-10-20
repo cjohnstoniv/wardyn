@@ -61,6 +61,10 @@ type LocalPlan struct {
 	// ConfinementFloor is the run's blast-radius floor
 	// (composer.RequiredConfinementFloor); "" when there is none.
 	ConfinementFloor types.ConfinementClass
+	// OwnerKind is the candidate runner's owner kind: an Azure DevOps minted
+	// token is runner_resident only on a person's own runner. "" (unknown)
+	// refuses it.
+	OwnerKind types.RunnerOwnerKind
 }
 
 // Refusal names the actual field that makes local execution ineligible.
@@ -207,7 +211,7 @@ func classifyCredential(entries entrySource, path string, origin CredentialOrigi
 				}
 				return residentValueRefusal(path, row.Delivery, st == StructGrantKind, leaf)
 			}
-			return refuse(ReasonPlacementCredential, path, fmt.Sprintf("%s credential is unavailable on a local runner of trust class %s (delivery %s has no implemented authority)", row.Delivery, trustName(p.Trust), mode))
+			return refuse(ReasonPlacementCredential, path, notDeliveredDetail(row.Delivery, p.Trust, mode))
 		default:
 			return refuse(ReasonPlacementCredential, path, "credential row has a rule this server does not implement")
 		}
@@ -215,10 +219,26 @@ func classifyCredential(entries entrySource, path string, origin CredentialOrigi
 	return refuse(ReasonPlacementCredential, path, "credential variant has no permitted local rule")
 }
 
+// notDeliveredDetail is the refusal of a class no admitted mode delivers to a
+// runner of trust: it names the class, the trust class and the delivery policy
+// that applied.
+func notDeliveredDetail(class string, trust types.RunnerTrustClass, mode Mode) string {
+	at := class + " credential is not delivered to a local runner of trust class " + trustName(trust)
+	switch {
+	case mode == ModeViaOrg: // a via_org-shaped row would have been admitted (viaOrgAdmits)
+		return at + ": via_org delivery of this credential is not built yet (delivery policy: via_org)"
+	case !trust.Valid():
+		return at + " (a runner of unknown trust class gets via_org delivery only)"
+	case mode == ModeRefuse || mode == "":
+		return at + " (delivery policy: refuse)"
+	}
+	return at + " (delivery policy: " + string(mode) + ")"
+}
+
 // ResidentAdmits is the runner_resident gate (OD-12, design §7.4, Q7) for a
 // credential of origin, whose delivery class is origin.Delivery: the class is
 // delivered runner_resident under p's policy and may be, an Azure DevOps
-// connection opted in, the run has no blast-radius floor (a runner-asserted
+// connection opted in on a person's own runner, the run has no blast-radius floor (a runner-asserted
 // class never satisfies one for a value the runner holds), and the runner's
 // posture meets the class's requirement. LocalEligibility applies it at create,
 // dispatch and revive; the org's delivery applies it again to each value,
@@ -232,12 +252,18 @@ func ResidentAdmits(origin CredentialOrigin, p LocalPlan, path string) *Refusal 
 	case cp.Mode != ModeRunnerResident:
 		return refuse(ReasonPlacementCredential, path, class+" credential is not delivered runner_resident under the current delivery policy")
 	case class == ClassADOMintedPAT && !origin.ResidentOptIn:
-		return refuse(ReasonPlacementCredential, path, "the Azure DevOps connection has not opted in to runner_resident")
+		return refuse(ReasonPlacementCredential, path, "the Azure DevOps connection has not opted in to runner_resident, or its token mode is not minted_pat")
+	case class == ClassADOMintedPAT && p.OwnerKind != types.RunnerOwnerPerson:
+		return refuse(ReasonPlacementCredential, path, "an Azure DevOps minted token is runner_resident only on a person's own runner")
 	case p.ConfinementFloor != "":
 		return refuse(ReasonRunnerPostureUnmet, path, "confinement_class: a runner-asserted class never meets the "+string(p.ConfinementFloor)+" floor for a runner_resident credential")
 	}
-	if field := PostureUnmet(cp.RequirePosture, p.Posture); field != "" {
-		return refuse(ReasonRunnerPostureUnmet, path, field+": the runner's reported posture does not meet "+class+"'s requirement")
+	switch unmet := PostureUnmetAll(cp.RequirePosture, p.Posture); {
+	case len(unmet) == 0:
+	case p.Posture == nil:
+		return refuse(ReasonRunnerPostureUnmet, path, "posture: no reported posture to judge. At launch no runner is chosen yet, and a runner that has not reported its posture meets no requirement, so a delivery policy with require_posture refuses (requires "+cp.RequirePosture.requires()+")")
+	default:
+		return refuse(ReasonRunnerPostureUnmet, path, strings.Join(unmet, ", ")+": the runner's reported posture does not meet "+class+"'s requirement (requires "+cp.RequirePosture.requires()+")")
 	}
 	return nil
 }
@@ -246,14 +272,18 @@ func ResidentAdmits(origin CredentialOrigin, p LocalPlan, path string) *Refusal 
 // channel but DeliverResident: the dispatched leaf must already be its
 // placeholder. A grant's eligibility record names a scope, never a value, and is
 // admitted for a class whose resident delivery is built (residentBuilt): the
-// org's deliver step authors that grant's placeholder at dispatch. A record, a
-// placeholder or an intent (Azure DevOps) of any other class stays refused, so
-// classifyCredential never admits an unbuilt class, whatever the caller (via_org
-// admission included) concludes from nil.
+// org's deliver step authors that grant's placeholder at dispatch. An Azure
+// DevOps minted token has no value to dispatch at all: its intent, grant and
+// injection rule are admitted as they are. A record, a placeholder or an intent
+// of any other class stays refused, so classifyCredential never admits an
+// unbuilt class, whatever the caller (via_org admission included) concludes
+// from nil.
 func residentValueRefusal(path, class string, record bool, leaf reflect.Value) *Refusal {
 	switch {
 	case !residentBuilt[class]:
 		return refuse(ReasonPlacementCredential, path, "runner_resident delivery of this credential is not built yet")
+	case class == ClassADOMintedPAT: // no value is dispatched: the runner's proxy fetches it per resolve, at most every 15 minutes
+		return nil
 	case record:
 		return nil
 	case !leaf.IsValid():

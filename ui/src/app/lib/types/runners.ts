@@ -74,6 +74,8 @@ export interface RunnerView {
   capacity?: RunnerCapacity;
   classes?: ConfinementClass[];
   allowed_roots?: string[];
+  /** The runner shares folders on its computer with runs elsewhere (`--substrate folders`, 0.10 on); read like `capacity`. */
+  folders?: boolean;
   kind: "self_hosted";
   /**
    * What the owner declared; only they change it (PUT /me/runners/{id}). null while not all of it is

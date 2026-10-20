@@ -10,6 +10,11 @@
 # --highlights refuses before anything is edited, that --expect-tip takes any
 # unique prefix, and that an X.Y.Z-rc.N target is accepted.
 set -u
+
+# Throwaway repos get no background git: a commit or fetch can leave detached
+# auto-maintenance writing under .git when the EXIT trap runs rm -rf (#3328).
+export GIT_CONFIG_COUNT=3 GIT_CONFIG_KEY_0=maintenance.auto GIT_CONFIG_VALUE_0=false GIT_CONFIG_KEY_1=gc.auto GIT_CONFIG_VALUE_1=0 GIT_CONFIG_KEY_2=gc.autoDetach GIT_CONFIG_VALUE_2=false
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT="$ROOT/scripts/release-commit.sh"
 [ -x "$SCRIPT" ] || { echo "FAIL: $SCRIPT is missing or not executable"; exit 1; }

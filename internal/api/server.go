@@ -376,6 +376,11 @@ type Config struct {
 	// downgrade. See runs_dispatch_sso_inject.go for the default and docs/ENV.md
 	// for the operator-facing contract.
 	AWSSSOProxyInject bool
+	// AWSSigV4AtProxy is WARDYN_AWS_SIGV4_AT_PROXY (ResolveAWSSigV4AtProxy, default off): when
+	// true, an AWS sign-in lane whose hosts the proxy can all re-sign dispatches a placeholder
+	// key pair and the proxy re-signs its requests with role credentials the sandbox never
+	// holds (runs_dispatch_aws_sigv4.go). Read at dispatch; a running sandbox keeps its lane.
+	AWSSigV4AtProxy bool
 	// AWSSSORefresh is the operator's tuning of the AWS SSO renewal; a zero
 	// field keeps its default (AWSSSORefreshTuning, awssso_refresh.go).
 	AWSSSORefresh AWSSSORefreshTuning
@@ -678,6 +683,9 @@ type Config struct {
 	// holds a run's agent for the first sync of its local folder, never past
 	// the run's own end (run_local_folder.go). Zero is DefaultLocalFolderSeedWait.
 	LocalFolderSeedWait time.Duration
+	// ComputerFolders is WARDYN_COMPUTER_FOLDERS: a run may take a folder from its creator's own
+	// folder-only runner, which Wardyn seeds itself (run_computer_folder.go). Off by default.
+	ComputerFolders bool
 	// APITokenMaxTTL is WARDYN_API_TOKEN_MAX_TTL: the longest lifetime a newly
 	// minted API token may have. Zero (the default) means no cap. A mint that
 	// asks for no TTL gets this one; a mint that asks for more is clamped to it.

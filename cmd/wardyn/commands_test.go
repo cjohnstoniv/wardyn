@@ -2494,12 +2494,13 @@ func TestNoArgsLeavesRejectAnExtraArg(t *testing.T) {
 // --------------------------------------------------------------------------
 
 // TestTopLevelAttachAndSSHAreGone pins the clean break the owner ruled for on
-// issue #206 ("no alias commands"): the old bare `wardyn attach`/`wardyn ssh`
-// spellings must fail as an unknown command, not
-// silently keep working, or a script written against the old tree would pass
-// this suite for the wrong reason.
+// issue #206 ("no alias commands"): the bare `wardyn attach`/`wardyn ssh`
+// spellings must fail as an unknown command, not silently keep working, or a
+// script written against the old tree would pass this suite for the wrong
+// reason. `exec`, `forward` and `editor` were never top-level; the test pins
+// that they are not (TestRunAttachAndSSHAreReachable pins them under `run`).
 func TestTopLevelAttachAndSSHAreGone(t *testing.T) {
-	for _, verb := range []string{"attach", "ssh"} {
+	for _, verb := range []string{"attach", "ssh", "exec", "forward", "editor"} {
 		t.Run(verb, func(t *testing.T) {
 			err := execCmd(t, verb, uuid.New().String())
 			if err == nil {
@@ -2522,6 +2523,16 @@ func TestRunAttachAndSSHAreReachable(t *testing.T) {
 	}
 	if err := execCmd(t, "run", "ssh", "not-a-uuid"); err == nil || !strings.Contains(err.Error(), "invalid run id") {
 		t.Errorf("run ssh = %v, want sshCmd's own invalid-run-id refusal", err)
+	}
+	// exec, forward and editor live under `run` only, with no top-level alias.
+	for _, args := range [][]string{
+		{"run", "exec", "not-a-uuid", "--", "true"},
+		{"run", "forward", "not-a-uuid", "3000"},
+		{"run", "editor", "not-a-uuid"},
+	} {
+		if err := execCmd(t, args...); err == nil || !strings.Contains(err.Error(), "invalid run id") {
+			t.Errorf("wardyn %s = %v, want the leaf's own invalid-run-id refusal", strings.Join(args, " "), err)
+		}
 	}
 }
 

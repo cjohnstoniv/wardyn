@@ -342,12 +342,18 @@ func (d *Driver) StopSandbox(ctx context.Context, ref string) error {
 // only the idle script (runner.AgentIdleScript), which exits and takes the exec'd recorder with it
 // unflushed; what a stop keeps of a recording is the parts wardyn-rec already uploaded on its interval.
 // Fails closed: a run id it cannot resolve is an error, never a success that left the proxy up.
+// The AWS credential caches are wiped first (wipeAWSCaches): the kept layer must not hold them.
+// A wipe that failed is answered, once the end itself has succeeded, as runner.ErrAWSCacheWipeFailed.
 func (d *Driver) EndSandbox(ctx context.Context, ref string) error {
+	wipeErr := d.wipeAWSCaches(ctx, ref)
 	timeout := int(stopTimeout.Seconds())
 	if _, err := d.cli.ContainerStop(ctx, ref, client.ContainerStopOptions{Timeout: &timeout}); err != nil && !isNotFound(err) {
 		return fmt.Errorf("docker: stop agent: %w", err)
 	}
-	return d.stopProxy(ctx, ref)
+	if err := d.stopProxy(ctx, ref); err != nil {
+		return err
+	}
+	return wipeErr
 }
 
 // StopProxy stops and removes the agent ref's proxy sidecar and nothing else (runner.ProxyStopper):

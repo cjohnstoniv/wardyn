@@ -107,7 +107,7 @@ func DialWebSocket(ctx context.Context, orgURL, runnerID string, client *http.Cl
 				err = fmt.Errorf("%w (reason %s)", err, body.Reason)
 			}
 		}
-		return nil, err
+		return nil, classifyProxyRefusal(err, address, hc.Transport)
 	}
 	return NewWebSocket(c), nil
 }

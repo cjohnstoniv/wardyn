@@ -255,11 +255,11 @@ func runAttach(ctx context.Context, c *sdk.Client, runID string) error {
 		}
 	}
 
-	// Wire SIGWINCH so window resizes are relayed to the remote PTY.
-	winchCh := make(chan os.Signal, 1)
+	// Relay window resizes to the remote PTY (SIGWINCH, or a size poll on Windows).
+	winchCh := make(chan struct{}, 1)
 	if oldState != nil {
-		signal.Notify(winchCh, syscall.SIGWINCH)
-		defer signal.Stop(winchCh)
+		stopWatch := watchResize(ctx, fd, winchCh)
+		defer stopWatch()
 	}
 
 	// Derive a child context so we can cancel both pump goroutines when either
@@ -334,7 +334,7 @@ func runAttach(ctx context.Context, c *sdk.Client, runID string) error {
 		}
 	}()
 
-	// Half 3: SIGWINCH -> resize control frames.
+	// Half 3: resize notifications -> resize control frames.
 	go func() {
 		for {
 			select {

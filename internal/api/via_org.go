@@ -348,7 +348,7 @@ func (s *Server) viaOrgEngineConfig(ctx context.Context, runID uuid.UUID) (*prox
 		return nil, scErr
 	}
 	cfg.GitGrants, cfg.ViaOrgRoutes = git, routes
-	cfg.PATGrants, cfg.BrokeredPATGrantIDs, cfg.ADOGrant, cfg.AzureGates, cfg.GitHubAPI, cfg.AzureARM = nil, nil, nil, nil, nil, nil
+	cfg.PATGrants, cfg.BrokeredPATGrantIDs, cfg.ADOGrant, cfg.AzureGates, cfg.GitHubAPI, cfg.AzureARM, cfg.AWSSigV4 = nil, nil, nil, nil, nil, nil, nil
 	cfg.ResidentMints = nil // the runner answers these; the organisation holds none of their values
 	cfg.MITMHosts, cfg.MITMLLM, cfg.MITMCACertPEM, cfg.MITMCAKeyPEM = slices.Compact(slices.Sorted(slices.Values(hosts))), false, "", ""
 	cfg.DecisionSpoolDir, cfg.LLMUpstreams, cfg.LocalModels = "", nil, nil

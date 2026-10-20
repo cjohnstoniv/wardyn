@@ -210,6 +210,7 @@ func (s *Server) narrowUserInlinePolicy(ctx context.Context, owner string, spec 
 
 	keptGrants := spec.EligibleGrants[:0:0]
 	for _, g := range spec.EligibleGrants {
+		g.OwnerOnlyRefs = nil // Wardyn's to decide, below
 		// filterUserGrants 422s an undecodable stored-secret scope — and, since
 		// the pairing switch closed, an unknown kind too — before this runs, and
 		// it is the only order that exists. The error is still HONORED here
@@ -231,6 +232,7 @@ func (s *Server) narrowUserInlinePolicy(ctx context.Context, owner string, spec 
 		// storedSecretPairingInCeiling) — gating only the key would leave the
 		// smaller half of the same door open.
 		refused := ""
+		var exempt []string
 		for _, ref := range []string{secretRef, knownHostsRef} {
 			if ref == "" {
 				continue
@@ -242,11 +244,11 @@ func (s *Server) narrowUserInlinePolicy(ctx context.Context, owner string, spec 
 			}
 			// A name the member OWNS is exempt from capSecret: that capability
 			// bounds access to OPERATOR material, and a member's own row widens
-			// nothing (6c). That holds only while the grant reads the own row
-			// alone, so an exempted grant is owner_only: a row deleted after
+			// nothing (6c). That holds only while the ref reads the own row
+			// alone, so an exempted ref is owner_only: a row deleted after
 			// launch never falls back to the operator's.
 			if !ok && owned {
-				g.OwnerOnly = true
+				exempt = append(exempt, ref)
 				continue
 			}
 			if !ok {
@@ -258,6 +260,16 @@ func (s *Server) narrowUserInlinePolicy(ctx context.Context, owner string, spec 
 			warns = append(warns, fmt.Sprintf("dropped %s grant referencing secret %q: not granted to you", g.Kind, refused))
 			drops = append(drops, capDrop{reason: authz.ReasonCapabilitySecret, detail: refused})
 			continue
+		}
+		// Per ref: a ref granted by capSecret keeps the owner-then-operator read
+		// it was granted under, so an ssh_key grant pairing the member's own key
+		// with an org known_hosts reads each from its own row.
+		switch {
+		case len(exempt) == 0:
+		case knownHostsRef == "" || len(exempt) == 2:
+			g.OwnerOnly = true
+		default:
+			g.OwnerOnlyRefs = exempt
 		}
 		keptGrants = append(keptGrants, g)
 	}

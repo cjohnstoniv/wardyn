@@ -7,8 +7,12 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -82,4 +86,132 @@ func TestPG_OwnRowAdmittedGrantNeverReadsTheOperatorRow(t *testing.T) {
 			t.Fatalf("injection = %d %s, want 424 not-found and never the operator's secret", w.Code, w.Body.String())
 		}
 	})
+}
+
+// TestPG_SSHKeyGrantDecidesEachRefOnItsOwn: with capSecret enforced, a member
+// who owns their ssh key and holds the org's grant for an operator known_hosts
+// file launches an ssh_key grant naming both. The key binds to the member's own
+// row, the known_hosts keeps the org grant's read, and the mint serves both.
+// Once the own key is deleted the mint refuses and never serves the operator's
+// key of the same name. A ref the member neither owns nor is granted (another
+// person's key, an org known_hosts with no grant) drops the grant at launch.
+func TestPG_SSHKeyGrantDecidesEachRefOnItsOwn(t *testing.T) {
+	e := newOwnerOnlyPG(t)
+	ctx := context.Background()
+	pg := store.NewPG(e.pool)
+	e.h.srv.cfg.DefaultPolicy = types.RunPolicySpec{
+		AllowedDomains:      []string{"github.com"},
+		MinConfinementClass: types.CC2,
+	}
+	// The ceiling pairs every ref below, so the capSecret check is what decides.
+	for _, refs := range [][2]string{{"dev-ssh", "corp-kh"}, {"bob-ssh", "corp-kh"}, {"dev-ssh", "corp-kh-ungranted"}, {"corp-kh", ""}} {
+		e.h.srv.cfg.DefaultPolicy.EligibleGrants = append(e.h.srv.cfg.DefaultPolicy.EligibleGrants, types.GrantSpec{Kind: types.GrantSSHKey,
+			Scope: mustJSON(map[string]any{"host": "github.com", "key_secret_ref": refs[0], "known_hosts_secret_ref": refs[1]})})
+	}
+	for name, v := range map[string]string{"dev-ssh": "operator-dev-ssh", "corp-kh": "operator-corp-kh", "corp-kh-ungranted": "operator-ungranted-kh"} {
+		if err := e.sec.Put(ctx, name, []byte(v)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := e.sec.For("bob").Put(ctx, "bob-ssh", []byte("bob-key")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.PutCapabilityEnforcement(ctx, map[string]bool{capSecret: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.UpsertCapabilityGrant(ctx, types.CapabilityGrant{ID: uuid.New(), SubjectType: types.CapabilitySubjectUser,
+		Subject: "alice", Capability: capSecret, Value: "corp-kh", Effect: types.CapabilityAllow, CreatedBy: "admin"}); err != nil {
+		t.Fatal(err)
+	}
+	member := ssoSession(t, "alice", "alice@corp.example", oidc.RoleUser)
+	if w := doSSO(t, e.h.srv, http.MethodPut, "/api/v1/secrets/dev-ssh", member, `{"value":"alice-key"}`); w.Code != http.StatusNoContent {
+		t.Fatalf("PUT own secret: %d %s", w.Code, w.Body.String())
+	}
+	// launchWith adds extra to the grant object; launch adds nothing.
+	launchWith := func(keyRef, khRef, extra string) (uuid.UUID, []types.CredentialGrant) {
+		t.Helper()
+		created := mustCreate(t, doSSO(t, e.h.srv, http.MethodPost, "/api/v1/runs", member,
+			`{"agent":"claude-code","task":"t","inline_policy":{"min_confinement_class":"CC2","allowed_domains":["github.com"],"eligible_grants":[`+
+				`{"kind":"ssh_key"`+extra+`,"scope":{"host":"github.com","key_secret_ref":"`+keyRef+`","known_hosts_secret_ref":"`+khRef+`"}}]}}`))
+		var run createRunResponse
+		if err := json.Unmarshal(created.Body.Bytes(), &run); err != nil {
+			t.Fatal(err)
+		}
+		grants, err := pg.ListGrantsByRun(ctx, run.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return run.ID, grants
+	}
+	launch := func(keyRef, khRef string) (uuid.UUID, []types.CredentialGrant) {
+		t.Helper()
+		return launchWith(keyRef, khRef, "")
+	}
+
+	// mint launches the mixed grant and mints it once (a mint is single-use);
+	// gone deletes the own key between the launch and the mint.
+	mint := func(gone bool) *httptest.ResponseRecorder {
+		t.Helper()
+		runID, grants := launch("dev-ssh", "corp-kh")
+		if len(grants) != 1 || grants[0].Spec.OwnerOnly || !slices.Equal(grants[0].Spec.OwnerOnlyRefs, []string{"dev-ssh"}) {
+			t.Fatalf("mixed grant = %+v, want one grant binding only the own key", grants)
+		}
+		if gone {
+			if w := doSSO(t, e.h.srv, http.MethodDelete, "/api/v1/secrets/dev-ssh", member, ""); w.Code != http.StatusNoContent {
+				t.Fatalf("DELETE own secret: %d %s", w.Code, w.Body.String())
+			}
+		}
+		return do(t, e.h.srv, http.MethodPost, "/api/v1/internal/credentials/mint", recordedRunToken(t, e.h, runID, "alice"),
+			`{"grant_id":"`+grants[0].ID.String()+`"}`)
+	}
+	if w := mint(false); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "alice-key") || !strings.Contains(w.Body.String(), "operator-corp-kh") {
+		t.Fatalf("mixed mint = %d %s, want the own key and the org known_hosts", w.Code, w.Body.String())
+	}
+	if w := mint(true); w.Code == http.StatusOK || strings.Contains(w.Body.String(), "operator-dev-ssh") {
+		t.Fatalf("mint after the own key is gone = %d %s, want a refusal and never the operator's key", w.Code, w.Body.String())
+	}
+	if w := doSSO(t, e.h.srv, http.MethodPut, "/api/v1/secrets/dev-ssh", member, `{"value":"alice-key"}`); w.Code != http.StatusNoContent {
+		t.Fatalf("PUT own secret: %d %s", w.Code, w.Body.String())
+	}
+	for name, refs := range map[string][2]string{
+		"another person's key":           {"bob-ssh", "corp-kh"},
+		"org known_hosts without grant": {"dev-ssh", "corp-kh-ungranted"},
+	} {
+		if _, grants := launch(refs[0], refs[1]); len(grants) != 0 {
+			t.Errorf("%s: grants = %+v, want the grant dropped", name, grants)
+		}
+	}
+	// A member's own owner_only_refs is never kept: the stored grant carries
+	// what Wardyn decided, the own key for the mixed grant and nothing for a
+	// grant whose one ref the capability grants.
+	if _, grants := launchWith("dev-ssh", "corp-kh", `,"owner_only_refs":["something-else"]`); len(grants) != 1 ||
+		!slices.Equal(grants[0].Spec.OwnerOnlyRefs, []string{"dev-ssh"}) {
+		t.Errorf("mixed grant with member-supplied refs = %+v, want only dev-ssh", grants)
+	}
+	if _, grants := launchWith("corp-kh", "", `,"owner_only_refs":["corp-kh"]`); len(grants) != 1 || grants[0].Spec.OwnerOnlyRefs != nil || grants[0].Spec.OwnerOnly {
+		t.Errorf("granted grant with member-supplied refs = %+v, want no owner_only binding", grants)
+	}
+}
+
+// TestPG_OwnerOnlyRefsIsNeverAuthored: a stored policy naming owner_only_refs
+// is refused at write with a message pointing at owner_only, while the run
+// path's validator accepts the field Wardyn itself sets at launch.
+func TestPG_OwnerOnlyRefsIsNeverAuthored(t *testing.T) {
+	e := newOwnerOnlyPG(t)
+	body := func(extra string) string {
+		return `{"name":"p-` + uuid.NewString()[:8] + `","spec":{"min_confinement_class":"CC2","allowed_domains":["github.com"],` +
+			`"eligible_grants":[{"kind":"ssh_key"` + extra + `,"scope":{"host":"github.com","key_secret_ref":"k","known_hosts_secret_ref":"kh"}}]}}`
+	}
+	if w := doSSO(t, e.h.srv, http.MethodPost, "/api/v1/policies", e.admin, body(`,"owner_only_refs":["k"]`)); w.Code != http.StatusBadRequest ||
+		!strings.Contains(w.Body.String(), "owner_only instead") {
+		t.Fatalf("policy with owner_only_refs = %d %s, want 400 naming owner_only", w.Code, w.Body.String())
+	}
+	if w := doSSO(t, e.h.srv, http.MethodPost, "/api/v1/policies", e.admin, body(`,"owner_only":true`)); w.Code != http.StatusCreated {
+		t.Fatalf("policy with owner_only = %d %s, want 201", w.Code, w.Body.String())
+	}
+	stamped := types.RunPolicySpec{MinConfinementClass: types.CC2, EligibleGrants: []types.GrantSpec{{Kind: types.GrantSSHKey, OwnerOnlyRefs: []string{"k"},
+		Scope: json.RawMessage(`{"host":"github.com","key_secret_ref":"k","known_hosts_secret_ref":"kh"}`)}}}
+	if err := validatePolicySpec(stamped); err != nil {
+		t.Errorf("run-path validation of a launch-stamped grant: %v", err)
+	}
 }

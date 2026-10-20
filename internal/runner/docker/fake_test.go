@@ -69,6 +69,13 @@ func (r fakePullResponse) Wait(context.Context) error {
 // container joined through NetworkConnect.
 const fakeJoinedNetIP = "172.30.0.9"
 
+// fakeExec records one ExecCreate.
+type fakeExec struct {
+	cmd     []string
+	user    string
+	running bool
+}
+
 // createdContainer records a ContainerCreate call for assertions.
 type createdContainer struct {
 	name string
@@ -204,6 +211,10 @@ type fakeDocker struct {
 	execGone string
 
 	lastExecCmd []string // argv of the most recent exec
+	// execLog records every exec created, in order, with whether its container was running then.
+	execLog []fakeExec
+	// execCreateErr, when set, is every ExecCreate's answer for a container that exists.
+	execCreateErr error
 	// lastExecOpts records the full ExecCreateOptions of the most recent exec
 	// (lastExecCmd predates this and stays as the narrow, common-case reader),
 	// so a test can also assert TTY/Env were passed through correctly.
@@ -957,9 +968,14 @@ func (f *fakeDocker) ContainerWait(ctx context.Context, id string, _ client.Cont
 func (f *fakeDocker) ExecCreate(ctx context.Context, id string, opts client.ExecCreateOptions) (client.ExecCreateResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if c := f.containers[id]; c == nil || c.removed {
+	c := f.containers[id]
+	if c == nil || c.removed {
 		return client.ExecCreateResult{}, fakeNotFound{msg: "no such container: " + id}
 	}
+	if f.execCreateErr != nil {
+		return client.ExecCreateResult{}, f.execCreateErr
+	}
+	f.execLog = append(f.execLog, fakeExec{cmd: opts.Cmd, user: opts.User, running: c.state != nil && c.state.Running})
 	execID := "exec-" + id
 	// stash last exec opts for assertion
 	f.lastExecCmd = opts.Cmd

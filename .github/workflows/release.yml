@@ -952,7 +952,7 @@ jobs:
           path: sbom-${{ matrix.name }}.cdx.json
           if-no-files-found: error
 
-  # Standalone CLI and runner binaries. The images and the chart cover the two install paths,
+  # Standalone CLI and runner binaries (Windows: the CLI only). The images and the chart cover the two install paths,
   # but neither gives you just `wardyn` — for CI, for an air-gapped host, or for
   # anyone who wants the client without the stack. Static (CGO_ENABLED=0) so they
   # run anywhere, and covered by the same signed SHA256SUMS as everything else.
@@ -971,6 +971,8 @@ jobs:
           - { goos: linux,  goarch: arm64 }
           - { goos: darwin, goarch: amd64 }
           - { goos: darwin, goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
+          - { goos: windows, goarch: arm64 }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # cache: false: release builds start from a clean Go cache.
@@ -987,6 +989,8 @@ jobs:
           set -euo pipefail
           out="wardyn-${GOOS}-${GOARCH}"
           runnerd="wardyn-runnerd-${GOOS}-${GOARCH}"
+          # Windows ships the CLI only (relay attach), as .exe; the runner stays unix.
+          if [ "$GOOS" = windows ]; then out="${out}.exe"; fi
           # -X stamps releaseBuild=true so this binary's version.String() reports
           # the bare release (no +<commit> suffix) — this job only runs from a
           # `v*` tag push or a manual dispatch, never from a plain commit build.
@@ -994,7 +998,9 @@ jobs:
           go build -trimpath -ldflags "$ldflags" -o "$out" ./cmd/wardyn
           # The runner needs the docker tag: without it the build is the stub
           # that refuses to serve.
-          go build -tags docker -trimpath -ldflags "$ldflags" -o "$runnerd" ./cmd/wardyn-runnerd
+          if [ "$GOOS" != windows ]; then
+            go build -tags docker -trimpath -ldflags "$ldflags" -o "$runnerd" ./cmd/wardyn-runnerd
+          fi
           # A cross-built binary that cannot report its own version is a binary
           # nobody can support. Only checkable natively.
           if [ "$GOOS" = linux ] && [ "$GOARCH" = amd64 ]; then
@@ -1002,14 +1008,21 @@ jobs:
             "./$runnerd" --version
           fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: matrix.goos != 'windows'
         with:
           name: cli-${{ matrix.goos }}-${{ matrix.goarch }}
           path: |
             wardyn-${{ matrix.goos }}-${{ matrix.goarch }}
             wardyn-runnerd-${{ matrix.goos }}-${{ matrix.goarch }}
           if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: matrix.goos == 'windows'
+        with:
+          name: cli-windows-${{ matrix.goarch }}
+          path: wardyn-windows-${{ matrix.goarch }}.exe
+          if-no-files-found: error
 
-  # The laptop runner's macOS installer, built from the two darwin wardyn-runnerd binaries above.
+  # The laptop runner's macOS installer, built from the darwin wardyn-runnerd and wardyn binaries above.
   # pkgbuild, productbuild, productsign and notarytool exist only on macOS, hence this runner.
   # Signing turns on by secret and each step is skipped with a log line when its secrets are unset
   # (scripts/build-runner-pkg.sh header): APPLE_DEVELOPER_ID_APPLICATION_* signs the binary,
@@ -1047,11 +1060,13 @@ jobs:
           version=$(sed -n 's/^const Version = "\(.*\)"$/\1/p' internal/version/version.go)
           scripts/build-runner-pkg.sh --version "$version" \
             --arm64 bin/wardyn-runnerd-darwin-arm64 --amd64 bin/wardyn-runnerd-darwin-amd64 \
+            --cli-arm64 bin/wardyn-darwin-arm64 --cli-amd64 bin/wardyn-darwin-amd64 \
             --out wardyn-runnerd.pkg
           # An unsigned package has no signature to check; a signed one must verify.
           pkgutil --check-signature wardyn-runnerd.pkg || true
           payload="$(pkgutil --payload-files wardyn-runnerd.pkg)"
           grep -q 'usr/local/wardyn/bin/wardyn-runnerd' <<<"$payload"
+          grep -Eq '(^|/)usr/local/wardyn/bin/wardyn$' <<<"$payload"
           grep -q 'usr/local/wardyn/share/doc/LICENSE' <<<"$payload"
           grep -q 'usr/local/wardyn/share/doc/THIRD-PARTY-NOTICES.md' <<<"$payload"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -1207,6 +1222,7 @@ jobs:
           have=$(gh release view "$TAG" --json assets -q '.assets[].name' | sort)
           for want in SHA256SUMS SHA256SUMS.sig SHA256SUMS.pem THIRD-PARTY-NOTICES.md LICENSE NOTICE \
                       install.sh wardyn-linux-amd64 wardyn-linux-arm64 wardyn-darwin-amd64 wardyn-darwin-arm64 \
+                      wardyn-windows-amd64.exe wardyn-windows-arm64.exe \
                       wardyn-runnerd-linux-amd64 wardyn-runnerd-linux-arm64 wardyn-runnerd-darwin-amd64 wardyn-runnerd-darwin-arm64 \
                       wardyn-runner-units.tar.gz wardyn-runnerd.pkg wardyn-licenses.tar.gz; do
             grep -qx "$want" <<<"$have" || { echo "MISSING RELEASE ASSET: $want"; exit 1; }

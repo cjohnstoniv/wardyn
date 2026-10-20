@@ -1,0 +1,8 @@
+These signing vectors are copied unchanged from the AWS SigV4 test suite in
+awslabs/aws-c-auth (tests/aws-signing-test-suite/v4), licensed under the
+Apache License, Version 2.0: https://github.com/awslabs/aws-c-auth
+
+Each directory holds one case: context.json (the credentials, region, service
+and time to sign with), request.txt (the request before signing) and
+header-signed-request.txt (the request with its published signature). The
+credentials are the suite's published example values, not a real account's.

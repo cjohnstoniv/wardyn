@@ -1,7 +1,7 @@
 // Copyright 2026 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Desktop sign-ins (migration 0198) against a real Postgres. Guarded by
+// Desktop sign-ins (migration 0199) against a real Postgres. Guarded by
 // WARDYN_TEST_PG; each test works in its own throwaway database.
 package store_test
 
