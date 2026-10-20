@@ -299,6 +299,7 @@ func testBootFlagsWithSecret(proxyURL, secretFile, noProxy, ssoOverride, oidcInt
 		daemonNoProxy:          &noProxy,
 		awsSSOEndpointOverride: &ssoOverride,
 		oidcInternalIss:        &oidcInternalIss,
+		refuseWritableCA:       new(bool),
 	}
 }
 

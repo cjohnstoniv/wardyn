@@ -36,6 +36,8 @@ vi.mock("../run-detail", () => ({
   ),
 }));
 
+const BOOT_MS = 8000;
+
 const provider = MODEL_PROVIDERS.bedrock;
 const run = makeRun({ state: "FAILED", created_by: "owner", failure_hint: "Credential unavailable" });
 const audit: AuditEvent[] = [{
@@ -81,7 +83,10 @@ it.each(["block", "app"])("%s opens the refused provider with one click across t
   window.history.pushState({}, "", "/runs/run-1");
   const user = userEvent.setup();
   render(surface === "block" ? <RefreshingBlock /> : <MemoryRouter initialEntries={["/runs/run-1"]}><App /></MemoryRouter>);
-  const button = await screen.findByRole("button", { name: MODEL_ACCESS_RUN_DOOR.SIGN_IN_ARIA });
+  // The app surface boots the whole shell and suspends on lazy chunks, and React holds a revealed Suspense
+  // boundary back by up to 300 ms, so this first wait is ~0.4 s idle and scales with CPU: on a loaded runner
+  // Testing Library's 1 s default ran out before the button existed. It waits for the boot, not a race.
+  const button = await screen.findByRole("button", { name: MODEL_ACCESS_RUN_DOOR.SIGN_IN_ARIA }, { timeout: BOOT_MS });
   expect(statusReads).toBe(surface === "app" ? 2 : 1);
   const clicked = vi.fn();
   button.addEventListener("click", clicked);
