@@ -705,7 +705,7 @@ func (p *Proxy) refuseNewExecutables(w http.ResponseWriter, r *http.Request, res
 	remedy := "clear the executable bit on these files (git update-index --chmod=-x), " +
 		"or ask an operator to set push_rules.deny_new_executables to false"
 	if why == whyNotGitHub {
-		remedy += " on this lane, or push through a GitHub lane"
+		remedy += ". Wardyn can't read this repository's history here, so it can't tell which files are new."
 	}
 	body := pathsBody("wardyn: this push is refused by the run's push content rules: new executable files",
 		paths, "new executable", why, remedy)
