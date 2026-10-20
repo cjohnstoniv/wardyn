@@ -22,8 +22,10 @@ type DesktopSignin struct {
 	BeganAt        time.Time       `json:"began_at"`
 	ExpiresAt      time.Time       `json:"expires_at"`
 	EndRequested   string          `json:"-"`
-	EndedAt        *time.Time      `json:"ended_at,omitempty"`
-	EndReason      string          `json:"end_reason,omitempty"`
+	// EndStage is the step an end that could not finish is stuck at.
+	EndStage  string     `json:"-"`
+	EndedAt   *time.Time `json:"ended_at,omitempty"`
+	EndReason string     `json:"end_reason,omitempty"`
 }
 
 // DesktopSigninShare is one site's login a person shared with the run's agent.

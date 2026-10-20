@@ -31,8 +31,10 @@ type DesktopSigninStore interface {
 	// DesktopSigninCredentialOpen reports whether hash is the credential of
 	// the run's open, unexpired sign-in.
 	DesktopSigninCredentialOpen(ctx context.Context, runID uuid.UUID, hash []byte, now time.Time) (bool, error)
-	// RequestDesktopSigninEnd marks an open sign-in for the sweep to end with reason.
-	RequestDesktopSigninEnd(ctx context.Context, id uuid.UUID, reason string) error
+	// RequestDesktopSigninEnd marks an open sign-in for the sweep to end with
+	// reason (the first reason stays) and records the stage the end is stuck
+	// at; true when that changed the row's state.
+	RequestDesktopSigninEnd(ctx context.Context, id uuid.UUID, reason, stage string) (bool, error)
 	// EndDesktopSignin closes an open sign-in; false when it was not open.
 	EndDesktopSignin(ctx context.Context, id uuid.UUID, reason string, at time.Time) (bool, error)
 	// RecordDesktopSigninShare inserts one share of an open sign-in.
@@ -45,18 +47,22 @@ type DesktopSigninStore interface {
 	RunHadDesktopSignin(ctx context.Context, runID uuid.UUID) (bool, error)
 	// RunsWithOpenDesktopSignin is the set of runs with an open sign-in.
 	RunsWithOpenDesktopSignin(ctx context.Context) (map[uuid.UUID]bool, error)
+	// MarkDesktopSigninRun records that dispatch gave the run sign-ins.
+	MarkDesktopSigninRun(ctx context.Context, runID uuid.UUID) error
+	// DesktopSigninRun reports whether dispatch gave the run sign-ins.
+	DesktopSigninRun(ctx context.Context, runID uuid.UUID) (bool, error)
 }
 
 var _ DesktopSigninStore = PG{}
 
 const desktopSigninCols = `id, run_id, holder, credential_hash, pause_record, began_at, expires_at,
-	COALESCE(end_requested, ''), ended_at, COALESCE(end_reason, '')`
+	COALESCE(end_requested, ''), COALESCE(end_stage, ''), ended_at, COALESCE(end_reason, '')`
 
 func scanDesktopSignin(row pgx.Row) (types.DesktopSignin, error) {
 	var s types.DesktopSignin
 	var rec []byte
 	err := row.Scan(&s.ID, &s.RunID, &s.Holder, &s.CredentialHash, &rec, &s.BeganAt, &s.ExpiresAt,
-		&s.EndRequested, &s.EndedAt, &s.EndReason)
+		&s.EndRequested, &s.EndStage, &s.EndedAt, &s.EndReason)
 	if len(rec) > 0 {
 		s.PauseRecord = rec
 	}
@@ -131,12 +137,13 @@ func (s PG) DesktopSigninCredentialOpen(ctx context.Context, runID uuid.UUID, ha
 }
 
 // RequestDesktopSigninEnd — see DesktopSigninStore.
-func (s PG) RequestDesktopSigninEnd(ctx context.Context, id uuid.UUID, reason string) error {
-	if _, err := s.Pool.Exec(ctx, `UPDATE desktop_signins SET end_requested = COALESCE(end_requested, $2)
-		WHERE id = $1 AND ended_at IS NULL`, id, reason); err != nil {
-		return fmt.Errorf("store: request desktop sign-in end: %w", err)
+func (s PG) RequestDesktopSigninEnd(ctx context.Context, id uuid.UUID, reason, stage string) (bool, error) {
+	tag, err := s.Pool.Exec(ctx, `UPDATE desktop_signins SET end_requested = COALESCE(end_requested, $2), end_stage = $3
+		WHERE id = $1 AND ended_at IS NULL AND (end_requested IS NULL OR end_stage IS DISTINCT FROM $3)`, id, reason, stage)
+	if err != nil {
+		return false, fmt.Errorf("store: request desktop sign-in end: %w", err)
 	}
-	return nil
+	return tag.RowsAffected() == 1, nil
 }
 
 // EndDesktopSignin — see DesktopSigninStore.
@@ -198,4 +205,21 @@ func (s PG) RunsWithOpenDesktopSignin(ctx context.Context) (map[uuid.UUID]bool, 
 		out[id] = true
 	}
 	return out, rows.Err()
+}
+
+// MarkDesktopSigninRun — see DesktopSigninStore.
+func (s PG) MarkDesktopSigninRun(ctx context.Context, runID uuid.UUID) error {
+	if _, err := s.Pool.Exec(ctx, `INSERT INTO desktop_signin_runs (run_id) VALUES ($1) ON CONFLICT DO NOTHING`, runID); err != nil {
+		return fmt.Errorf("store: mark desktop sign-in run: %w", err)
+	}
+	return nil
+}
+
+// DesktopSigninRun — see DesktopSigninStore.
+func (s PG) DesktopSigninRun(ctx context.Context, runID uuid.UUID) (bool, error) {
+	var on bool
+	if err := s.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM desktop_signin_runs WHERE run_id = $1)`, runID).Scan(&on); err != nil {
+		return false, fmt.Errorf("store: desktop sign-in run: %w", err)
+	}
+	return on, nil
 }

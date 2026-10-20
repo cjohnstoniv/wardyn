@@ -61,9 +61,14 @@ const (
 	signinExecTimeout = 60 * time.Second
 )
 
-// desktopSigninRunnerMsg answers a begin on a run whose runner cannot run a
-// sign-in; the run itself started normally, without the sign-in lane.
-const desktopSigninRunnerMsg = "this run's runner cannot run a desktop sign-in: sign-ins run on this deployment's own Docker runner only, and this run started without them"
+// desktopSigninRunnerMsg answers a begin on a run dispatched without sign-ins;
+// the run itself started normally, without the sign-in lane.
+const desktopSigninRunnerMsg = "this run started without desktop sign-ins: they run on this deployment's own Docker runner, in the sign-in desktop image (agent-novnc-signin), on a run started while WARDYN_DESKTOP_SIGNINS was on"
+
+// errSigninNotStarted wraps a helper exec that never ran: the exec could not
+// be created or started, or the binary was missing or not executable (exit
+// 126 or 127). It changed nothing in the sandbox.
+var errSigninNotStarted = errors.New("wardyn-signin did not start")
 
 // End reasons, in desktop_signins.end_reason and the desktop_signin.close row.
 const (
@@ -87,12 +92,20 @@ func (s *Server) desktopSigninsFor(ctx context.Context, run types.AgentRun, poli
 
 // desktopSigninDispatch is desktopSigninsFor and the sandbox image it
 // implies: the sign-in variant of image when sign-ins are on, image itself
-// otherwise.
+// otherwise. Sign-ins are on only when the run gets the sign-in image, which
+// carries the helper, and the store records that (MarkDesktopSigninRun), so a
+// begin never stops the agent of a run started without them.
 func (s *Server) desktopSigninDispatch(ctx context.Context, run types.AgentRun, policy types.RunPolicySpec, image string) (bool, string) {
-	if !s.desktopSigninsFor(ctx, run, policy) {
+	st, on := s.desktopSigninStore()
+	variant, ok := signinImageFor(image)
+	if !on || !ok || !s.desktopSigninsFor(ctx, run, policy) {
 		return false, image
 	}
-	return true, signinImageFor(image)
+	if err := st.MarkDesktopSigninRun(ctx, run.ID); err != nil {
+		slog.WarnContext(ctx, "wardynd: desktop sign-ins not recorded; the run starts without them", "run_id", run.ID, "err", err)
+		return false, image
+	}
+	return true, variant
 }
 
 // signinTarget reports whether the run's sandbox lands on this deployment's
@@ -121,25 +134,27 @@ const (
 )
 
 // signinImageFor is the sign-in variant of a desktop image ref: repository
-// agent-novnc becomes agent-novnc-signin at the same registry and tag. Any
-// other ref, and a digest-pinned one (a digest names one image), comes back
-// unchanged; a begin on such a run fails at the sign-in helper's exec.
-func signinImageFor(ref string) string {
-	if strings.Contains(ref, "@") {
-		return ref
-	}
-	dir, name := "", ref
-	if i := strings.LastIndex(ref, "/"); i >= 0 {
-		dir, name = ref[:i+1], ref[i+1:]
+// agent-novnc becomes agent-novnc-signin at the same registry and tag, and
+// an agent-novnc-signin ref is already it. ok is false for any other ref and
+// for a digest-pinned agent-novnc (a digest names one image), which come back
+// unchanged: such a run gets no sign-ins.
+func signinImageFor(ref string) (string, bool) {
+	named, _, pinned := strings.Cut(ref, "@")
+	dir, name := "", named
+	if i := strings.LastIndex(named, "/"); i >= 0 {
+		dir, name = named[:i+1], named[i+1:]
 	}
 	repo, tag, _ := strings.Cut(name, ":")
-	if repo != desktopImage {
-		return ref
+	switch {
+	case repo == desktopSigninImage:
+		return ref, true
+	case repo != desktopImage || pinned:
+		return ref, false
 	}
 	if tag != "" {
 		tag = ":" + tag
 	}
-	return dir + desktopSigninImage + tag
+	return dir + desktopSigninImage + tag, true
 }
 
 func (s *Server) desktopSigninStore() (store.DesktopSigninStore, bool) {
@@ -217,6 +232,15 @@ func (s *Server) handleBeginDesktopSignin(w http.ResponseWriter, r *http.Request
 		writeErrorReason(w, http.StatusConflict, reasonDesktopSigninRunnerUnsupported, desktopSigninRunnerMsg)
 		return
 	}
+	dispatched, err := st.DesktopSigninRun(ctx, run.ID)
+	if err != nil {
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonDesktopSigninUnavailable, "the run's sign-in could not be read")
+		return
+	}
+	if !dispatched {
+		writeErrorReason(w, http.StatusConflict, reasonDesktopSigninRunnerUnsupported, desktopSigninRunnerMsg)
+		return
+	}
 	if err := s.thawForExec(ctx, run, types.ActorHuman, principal, "desktop_signin"); err != nil {
 		writeErrorReason(w, http.StatusBadGateway, reasonDesktopSigninPauseFailed, "the run is paused and could not be resumed for the sign-in; try again")
 		return
@@ -266,10 +290,17 @@ func (s *Server) handleBeginDesktopSignin(w http.ResponseWriter, r *http.Request
 	}
 	pauseRec, err := s.signinExec(ctx, run.SandboxRef, false, nil, 1<<20, "pause-agent")
 	if err != nil {
-		// What pause-agent stopped is unknown when its exec broke, so the
-		// full rollback runs resume-agent and then continues pid 1; when that
-		// cannot finish, the row keeps its end request and the sweep retries.
-		s.rollbackDesktopSignin(ctx, run, si, principal)
+		if errors.Is(err, errSigninNotStarted) {
+			// pause-agent never ran, so pid 1 is the one process this begin
+			// stopped: continue it and close the row.
+			s.abandonDesktopSignin(ctx, se, run, si, principal)
+		} else {
+			// What pause-agent stopped is unknown when its exec broke, so the
+			// full rollback runs resume-agent and then continues pid 1; when
+			// that cannot finish, the row keeps its end request and the sweep
+			// retries.
+			s.rollbackDesktopSignin(ctx, run, si, principal)
+		}
 		fail(http.StatusBadGateway, reasonDesktopSigninPauseFailed, "the agent could not be proven stopped, so the sign-in did not start; Wardyn resumes the agent", "pause", err)
 		return
 	}
@@ -299,6 +330,19 @@ func (s *Server) handleBeginDesktopSignin(w http.ResponseWriter, r *http.Request
 // When the end itself cannot finish, the row is left for the sweep.
 func (s *Server) rollbackDesktopSignin(ctx context.Context, run types.AgentRun, si types.DesktopSignin, principal string) {
 	_ = s.finishDesktopSignin(context.WithoutCancel(ctx), run, si, signinEndFailed, types.ActorHuman, principal)
+}
+
+// abandonDesktopSignin ends a sign-in whose pause-agent never ran: only pid 1
+// was stopped, so a bare SIGCONT resumes the agent. When even that fails, the
+// full rollback runs and the sweep retries it.
+func (s *Server) abandonDesktopSignin(ctx context.Context, se runner.SigninExecer, run types.AgentRun, si types.DesktopSignin, principal string) {
+	ctx = context.WithoutCancel(ctx)
+	st, ok := s.desktopSigninStore()
+	if !ok || se.SignalMain(ctx, run.SandboxRef, "SIGCONT") != nil {
+		s.rollbackDesktopSignin(ctx, run, si, principal)
+		return
+	}
+	_ = s.closeDesktopSignin(ctx, st, run, si, signinEndFailed, types.ActorHuman, principal, true)
 }
 
 type desktopSigninShareRequest struct {
@@ -443,7 +487,9 @@ func (s *Server) handleEndDesktopSignin(w http.ResponseWriter, r *http.Request) 
 
 // finishDesktopSignin ends a sign-in in order: the person's processes are
 // killed and proven gone, then the agent is resumed, then the row closes.
-// Any failure marks the row for the sweep and leaves the agent stopped.
+// Any failure marks the row for the sweep and leaves the agent stopped; the
+// failure is audited when it changes the row's state (its reason or stuck
+// stage), not on every sweep pass that finds the same state.
 func (s *Server) finishDesktopSignin(ctx context.Context, run types.AgentRun, si types.DesktopSignin, reason string, actorType types.ActorType, actor string) error {
 	st, ok := s.desktopSigninStore()
 	if !ok {
@@ -451,9 +497,10 @@ func (s *Server) finishDesktopSignin(ctx context.Context, run types.AgentRun, si
 	}
 	failed := func(stage string, err error) error {
 		slog.WarnContext(ctx, "wardynd: desktop sign-in did not end", "run_id", run.ID, "stage", stage, "err", err)
-		_ = st.RequestDesktopSigninEnd(ctx, si.ID, reason)
-		s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "desktop_signin.close", run.ID.String(), "failure",
-			mustJSON(map[string]any{"signin_id": si.ID, "reason": reason, "stage": stage, "agent_resumed": false})))
+		if changed, rerr := st.RequestDesktopSigninEnd(ctx, si.ID, reason, stage); changed || rerr != nil {
+			s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "desktop_signin.close", run.ID.String(), "failure",
+				mustJSON(map[string]any{"signin_id": si.ID, "reason": reason, "stage": stage, "agent_resumed": false})))
+		}
 		return err
 	}
 	if _, err := s.signinExec(ctx, run.SandboxRef, true, nil, 4<<10, "stop"); err != nil {
@@ -513,7 +560,7 @@ func (s *Server) signinExec(ctx context.Context, ref string, asPerson bool, stdi
 		sess, err = s.cfg.Runner.ExecStream(ctx, ref, spec)
 	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", errSigninNotStarted, err)
 	}
 	if sess.Close != nil {
 		defer func() { _ = sess.Close() }()
@@ -541,6 +588,9 @@ func (s *Server) signinExec(ctx context.Context, ref string, asPerson bool, stdi
 	code, err := sess.Wait()
 	if err != nil {
 		return nil, err
+	}
+	if code == 126 || code == 127 {
+		return nil, fmt.Errorf("%w: wardyn-signin %s exited %d: %s", errSigninNotStarted, args[0], code, strings.TrimSpace(string(stderr)))
 	}
 	if code != 0 {
 		return nil, fmt.Errorf("wardyn-signin %s exited %d: %s", args[0], code, strings.TrimSpace(string(stderr)))

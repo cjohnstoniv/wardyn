@@ -71,8 +71,17 @@ func TestPG_DesktopSigninLifecycle(t *testing.T) {
 	if n, err := st.CountDesktopSigninShares(ctx, si.ID); err != nil || n != 1 {
 		t.Fatalf("shares = %d %v", n, err)
 	}
-	if err := st.RequestDesktopSigninEnd(ctx, si.ID, "done"); err != nil {
-		t.Fatal(err)
+	if changed, err := st.RequestDesktopSigninEnd(ctx, si.ID, "done", "stop"); err != nil || !changed {
+		t.Fatalf("first end request = %v %v, want a state change", changed, err)
+	}
+	if changed, _ := st.RequestDesktopSigninEnd(ctx, si.ID, "expired", "stop"); changed {
+		t.Fatal("the same stuck stage again reported a state change")
+	}
+	if changed, _ := st.RequestDesktopSigninEnd(ctx, si.ID, "expired", "resume"); !changed {
+		t.Fatal("a new stuck stage reported no state change")
+	}
+	if open, _ := st.OpenDesktopSignin(ctx, run.ID); open.EndRequested != "done" || open.EndStage != "resume" {
+		t.Fatalf("row = requested %q stage %q, want the first reason and the latest stage", open.EndRequested, open.EndStage)
 	}
 	if got, _ := st.DesktopSigninCredentialOpen(ctx, run.ID, sum[:], now); got {
 		t.Fatal("a sign-in with an end requested still admits its credential")
@@ -95,5 +104,16 @@ func TestPG_DesktopSigninLifecycle(t *testing.T) {
 	}
 	if err := st.BeginDesktopSignin(ctx, second); err != nil {
 		t.Fatalf("a new sign-in after the end = %v", err)
+	}
+	if on, err := st.DesktopSigninRun(ctx, run.ID); err != nil || on {
+		t.Fatalf("an unmarked run = %v %v, want no sign-ins", on, err)
+	}
+	for range 2 {
+		if err := st.MarkDesktopSigninRun(ctx, run.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if on, err := st.DesktopSigninRun(ctx, run.ID); err != nil || !on {
+		t.Fatalf("a marked run = %v %v, want sign-ins", on, err)
 	}
 }

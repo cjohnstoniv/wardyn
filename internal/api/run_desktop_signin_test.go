@@ -33,9 +33,11 @@ type signinTestStore struct {
 	*uiMemStore
 	smu     sync.Mutex
 	signins map[uuid.UUID]types.DesktopSignin
-	shares  []types.DesktopSigninShare
-	grants  []types.CredentialGrant
-	readErr error
+	// dispatched are the runs dispatch gave sign-ins (MarkDesktopSigninRun).
+	dispatched map[uuid.UUID]bool
+	shares     []types.DesktopSigninShare
+	grants     []types.CredentialGrant
+	readErr    error
 }
 
 var _ store.DesktopSigninStore = (*signinTestStore)(nil)
@@ -102,15 +104,35 @@ func (s *signinTestStore) DesktopSigninCredentialOpen(_ context.Context, runID u
 	return ok && si.EndRequested == "" && now.Before(si.ExpiresAt) && bytes.Equal(si.CredentialHash, hash), nil
 }
 
-func (s *signinTestStore) RequestDesktopSigninEnd(_ context.Context, id uuid.UUID, reason string) error {
+func (s *signinTestStore) RequestDesktopSigninEnd(_ context.Context, id uuid.UUID, reason, stage string) (bool, error) {
 	s.smu.Lock()
 	defer s.smu.Unlock()
-	si := s.signins[id]
+	si, ok := s.signins[id]
+	if !ok || si.EndedAt != nil || si.EndRequested != "" && si.EndStage == stage {
+		return false, nil
+	}
 	if si.EndRequested == "" {
 		si.EndRequested = reason
 	}
+	si.EndStage = stage
 	s.signins[id] = si
+	return true, nil
+}
+
+func (s *signinTestStore) MarkDesktopSigninRun(_ context.Context, runID uuid.UUID) error {
+	s.smu.Lock()
+	defer s.smu.Unlock()
+	if s.dispatched == nil {
+		s.dispatched = map[uuid.UUID]bool{}
+	}
+	s.dispatched[runID] = true
 	return nil
+}
+
+func (s *signinTestStore) DesktopSigninRun(_ context.Context, runID uuid.UUID) (bool, error) {
+	s.smu.Lock()
+	defer s.smu.Unlock()
+	return s.dispatched[runID], nil
 }
 
 func (s *signinTestStore) EndDesktopSignin(_ context.Context, id uuid.UUID, reason string, at time.Time) (bool, error) {
@@ -187,19 +209,20 @@ func (s *signinTestStore) only(t *testing.T) types.DesktopSignin {
 // "<agent|person>:<subcommand>" and "signal:<name>", with each exec's stdin.
 type signinFakeRunner struct {
 	*sshFakeRunner
-	mu     sync.Mutex
-	calls  []string
-	stdin  map[string][]byte
-	exit   map[string]int   // by subcommand; 0 when absent
-	broken map[string]error // by subcommand: the exec itself fails
-	stdout map[string]string
+	mu      sync.Mutex
+	calls   []string
+	stdin   map[string][]byte
+	exit    map[string]int   // by subcommand; 0 when absent
+	broken  map[string]error // by subcommand: the exec cannot be created or started
+	waitErr map[string]error // by subcommand: the exec started, then its stream broke
+	stdout  map[string]string
 }
 
 var _ runner.SigninExecer = (*signinFakeRunner)(nil)
 
 func newSigninFakeRunner() *signinFakeRunner {
 	return &signinFakeRunner{sshFakeRunner: &sshFakeRunner{}, stdin: map[string][]byte{}, exit: map[string]int{}, broken: map[string]error{},
-		stdout: map[string]string{"pause-agent": `{"already_stopped":[7]}`}}
+		waitErr: map[string]error{}, stdout: map[string]string{"pause-agent": `{"already_stopped":[7]}`}}
 }
 
 func (f *signinFakeRunner) exec(who string, spec runner.ExecSpec) (*runner.ExecSession, error) {
@@ -209,7 +232,7 @@ func (f *signinFakeRunner) exec(who string, spec runner.ExecSpec) (*runner.ExecS
 	sub := spec.Argv[1]
 	f.mu.Lock()
 	f.calls = append(f.calls, who+":"+sub)
-	code, out, broken := f.exit[sub], f.stdout[sub], f.broken[sub]
+	code, out, broken, waitErr := f.exit[sub], f.stdout[sub], f.broken[sub], f.waitErr[sub]
 	f.mu.Unlock()
 	if broken != nil {
 		return nil, broken
@@ -229,7 +252,7 @@ func (f *signinFakeRunner) exec(who string, spec runner.ExecSpec) (*runner.ExecS
 		close(done)
 	}()
 	return &runner.ExecSession{Stdin: inW, Stdout: outR, Stderr: errR,
-		Wait: func() (int, error) { <-done; return code, nil }}, nil
+		Wait: func() (int, error) { <-done; return code, waitErr }}, nil
 }
 
 func (f *signinFakeRunner) ExecStream(_ context.Context, _ string, spec runner.ExecSpec) (*runner.ExecSession, error) {
@@ -274,8 +297,8 @@ type signinFixture struct {
 func newSigninFixture(t *testing.T) *signinFixture {
 	t.Helper()
 	h := newHarness(t)
-	st := &signinTestStore{uiMemStore: newUIMemStore(), signins: map[uuid.UUID]types.DesktopSignin{}}
 	run := types.AgentRun{ID: uuid.New(), CreatedBy: signinOwner, State: types.RunRunning, SandboxRef: "sandbox-1"}
+	st := &signinTestStore{uiMemStore: newUIMemStore(), signins: map[uuid.UUID]types.DesktopSignin{}, dispatched: map[uuid.UUID]bool{run.ID: true}}
 	st.putRun(run)
 	st.putEffectivePolicy(run.ID, types.RunPolicySpec{UIApps: []types.UIApp{{Name: desktopUIApp, Port: 6080}}})
 	rn := newSigninFakeRunner()
@@ -351,13 +374,13 @@ func TestDesktopSignin_UnprovenPauseResumesAndNeverStarts(t *testing.T) {
 }
 
 // TestDesktopSignin_BrokenPauseExecRollsBackThroughResumeAgent: when the
-// pause-agent exec itself fails after pid 1 was stopped, the agent is resumed
-// through resume-agent, never by a bare SIGCONT on pid 1; when that resume
-// fails too, the row keeps its end request, pid 1 stays stopped, and the
-// sweep finishes the rollback.
+// pause-agent exec started and then broke after pid 1 was stopped, the agent
+// is resumed through resume-agent, never by a bare SIGCONT on pid 1; when
+// that resume fails too, the row keeps its end request, pid 1 stays stopped,
+// and the sweep finishes the rollback.
 func TestDesktopSignin_BrokenPauseExecRollsBackThroughResumeAgent(t *testing.T) {
 	f := newSigninFixture(t)
-	f.rn.broken["pause-agent"] = errors.New("exec stream reset")
+	f.rn.waitErr["pause-agent"] = errors.New("exec stream reset")
 	f.rn.exit["resume-agent"] = 1
 	if code, body := f.post(t, "/desktop-signin", ""); code != http.StatusBadGateway || !strings.Contains(body, reasonDesktopSigninPauseFailed) {
 		t.Fatalf("begin = %d %s, want 502 %s", code, body, reasonDesktopSigninPauseFailed)
@@ -377,6 +400,104 @@ func TestDesktopSignin_BrokenPauseExecRollsBackThroughResumeAgent(t *testing.T) 
 	}
 	if si := f.st.only(t); si.EndedAt == nil || si.EndReason != signinEndFailed {
 		t.Fatalf("row after the sweep = %+v, want ended failed", si)
+	}
+}
+
+// TestDesktopSignin_MissingHelperContinuesPid1AndClosesTheRow (#2972 H1b): on
+// an image without wardyn-signin the pause-agent exec never starts, so pid 1
+// is the one process the begin stopped. It is continued at once and the row
+// closes, so no sweep pass has anything left to retry.
+func TestDesktopSignin_MissingHelperContinuesPid1AndClosesTheRow(t *testing.T) {
+	missing := errors.New(`exec: "wardyn-signin": executable file not found in $PATH`)
+	for name, set := range map[string]func(*signinFakeRunner){
+		"exec create fails": func(rn *signinFakeRunner) {
+			for _, sub := range []string{"pause-agent", "stop", "resume-agent", "start"} {
+				rn.broken[sub] = missing
+			}
+		},
+		"exit 127": func(rn *signinFakeRunner) {
+			for _, sub := range []string{"pause-agent", "stop", "resume-agent", "start"} {
+				rn.exit[sub] = 127
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newSigninFixture(t)
+			set(f.rn)
+			if code, body := f.post(t, "/desktop-signin", ""); code != http.StatusBadGateway || !strings.Contains(body, reasonDesktopSigninPauseFailed) {
+				t.Fatalf("begin = %d %s, want 502 %s", code, body, reasonDesktopSigninPauseFailed)
+			}
+			for range 3 {
+				if err := f.srv.sweepDesktopSignins(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got, want := f.rn.seen(), []string{"signal:SIGSTOP", "agent:pause-agent", "signal:SIGCONT"}; !slices.Equal(got, want) {
+				t.Fatalf("calls = %v, want %v (pid 1 continued, nothing left for the sweep)", got, want)
+			}
+			if si := f.st.only(t); si.EndedAt == nil || si.EndReason != signinEndFailed {
+				t.Fatalf("row = %+v, want ended failed", si)
+			}
+			if ev := findAudit(f.h.audit.snapshot(), f.run.ID, "desktop_signin.close", "success"); ev == nil || !strings.Contains(string(ev.Data), `"agent_resumed":true`) {
+				t.Fatalf("close row = %+v, want success with agent_resumed true", ev)
+			}
+		})
+	}
+}
+
+// TestDesktopSignin_BeginRefusedOnARunDispatchedWithout (#2972 H1a): a run
+// dispatch did not give sign-ins (the knob was off then, or its image is not
+// the sign-in image) answers the named reason, and its agent is never stopped.
+func TestDesktopSignin_BeginRefusedOnARunDispatchedWithout(t *testing.T) {
+	f := newSigninFixture(t)
+	delete(f.st.dispatched, f.run.ID)
+	if code, body := f.post(t, "/desktop-signin", ""); code != http.StatusConflict || !strings.Contains(body, reasonDesktopSigninRunnerUnsupported) {
+		t.Fatalf("begin = %d %s, want 409 %s", code, body, reasonDesktopSigninRunnerUnsupported)
+	}
+	if got := f.rn.seen(); len(got) != 0 {
+		t.Fatalf("calls = %v, want none: the agent was touched", got)
+	}
+}
+
+// TestDesktopSignin_StuckEndIsAuditedOncePerState (#2972 H1c): an end the
+// sweep cannot finish writes one failure row per stuck state, not one per
+// pass; a new stuck stage is a new state and gets its own row.
+func TestDesktopSignin_StuckEndIsAuditedOncePerState(t *testing.T) {
+	f := newSigninFixture(t)
+	f.begin(t)
+	failures := func() int {
+		n := 0
+		for _, ev := range f.h.audit.snapshot() {
+			if ev.Action == "desktop_signin.close" && ev.Outcome == "failure" {
+				n++
+			}
+		}
+		return n
+	}
+	sweep := func(n int) {
+		for range n {
+			if err := f.srv.sweepDesktopSignins(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	f.rn.exit["stop"] = 1
+	if code, body := f.post(t, "/desktop-signin/end", ""); code != http.StatusBadGateway {
+		t.Fatalf("end = %d %s, want 502", code, body)
+	}
+	sweep(5)
+	if n := failures(); n != 1 {
+		t.Fatalf("failure rows after the end and 5 sweeps of one stuck state = %d, want 1", n)
+	}
+	f.rn.exit["stop"], f.rn.exit["resume-agent"] = 0, 1
+	sweep(5)
+	if n := failures(); n != 2 {
+		t.Fatalf("failure rows after the stage moved to resume = %d, want 2", n)
+	}
+	f.rn.exit["resume-agent"] = 0
+	sweep(1)
+	if si := f.st.only(t); si.EndedAt == nil || si.EndReason != signinEndDone {
+		t.Fatalf("row = %+v, want ended done once the resume works", si)
 	}
 }
 
@@ -523,6 +644,12 @@ func TestDesktopSignin_OffByDefault(t *testing.T) {
 	}
 }
 
+// signinDispatchStore is dispatch's store plus the sign-in store.
+type signinDispatchStore struct {
+	*dispatchTestStore
+	store.DesktopSigninStore
+}
+
 // signinCapableRunner is dispatch's fake runner plus runner.SigninExecer,
 // the in-process Docker driver's shape.
 type signinCapableRunner struct{ *fakeRunner }
@@ -535,34 +662,47 @@ func (signinCapableRunner) SignalMain(context.Context, string, string) error { r
 
 // TestDispatchDesktopSigninsFollowTheTarget: with the knob on and a desktop
 // policy, a run on a runner that can run a sign-in gets the sign-in image,
-// its store and the proxy's signin_listen key; on a runner that cannot (an
-// older or remote one, whose proxy may refuse the key) the run starts
-// normally with the default image and no key.
+// its store and the proxy's signin_listen key, and the store records it; on
+// a runner that cannot (an older or remote one, whose proxy may refuse the
+// key), or with a desktop image that has no sign-in variant, the run starts
+// normally with its own image, no key and no record (#2972 H1a).
 func TestDispatchDesktopSigninsFollowTheTarget(t *testing.T) {
 	desktop := types.RunPolicySpec{UIApps: []types.UIApp{{Name: desktopUIApp, Port: 6080}}}
-	for _, capable := range []bool{true, false} {
-		fr := &fakeRunner{}
-		var rn runner.Runner = fr
-		if capable {
-			rn = signinCapableRunner{fr}
-		}
-		srv, st, _, run := dispatchTeardownFixture(t, rn, types.RunPending)
-		srv.cfg.DesktopSignins = true
-		run.Task = ""
-		srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
-			RunToken: "run-token", Image: "ghcr.io/cjohnstoniv/agent-novnc:0.10.0", Interactive: true, Policy: desktop,
+	const novnc, variant = "ghcr.io/cjohnstoniv/agent-novnc:0.10.0", "ghcr.io/cjohnstoniv/agent-novnc-signin:0.10.0"
+	pinned := "ghcr.io/cjohnstoniv/agent-novnc@sha256:" + strings.Repeat("a", 64)
+	for _, tc := range []struct {
+		name        string
+		capable     bool
+		image, want string
+		signins     bool
+	}{
+		{"capable runner", true, novnc, variant, true},
+		{"runner without sign-ins", false, novnc, novnc, false},
+		{"digest-pinned desktop image", true, pinned, pinned, false},
+		{"custom desktop image", true, "corp.example/desktop:1", "corp.example/desktop:1", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fr := &fakeRunner{}
+			var rn runner.Runner = fr
+			if tc.capable {
+				rn = signinCapableRunner{fr}
+			}
+			srv, st, _, run := dispatchTeardownFixture(t, rn, types.RunPending)
+			signins := &signinTestStore{uiMemStore: newUIMemStore(), signins: map[uuid.UUID]types.DesktopSignin{}}
+			srv.cfg.Store = signinDispatchStore{dispatchTestStore: st, DesktopSigninStore: signins}
+			srv.cfg.DesktopSignins = true
+			run.Task = ""
+			srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
+				RunToken: "run-token", Image: tc.image, Interactive: true, Policy: desktop,
+			})
+			spec := fr.lastSpec
+			if spec.Image != tc.want || spec.DesktopSignins != tc.signins || spec.ProxyConfig.DesktopSignins != tc.signins || signins.dispatched[run.ID] != tc.signins {
+				t.Errorf("image %q store %v key %v recorded %v, want %q %v", spec.Image, spec.DesktopSignins, spec.ProxyConfig.DesktopSignins, signins.dispatched[run.ID], tc.want, tc.signins)
+			}
+			if fr.createCalls != 1 || st.state != types.RunRunning {
+				t.Errorf("creates %d state %s, want the run started", fr.createCalls, st.state)
+			}
 		})
-		spec := fr.lastSpec
-		wantImage := "ghcr.io/cjohnstoniv/agent-novnc:0.10.0"
-		if capable {
-			wantImage = "ghcr.io/cjohnstoniv/agent-novnc-signin:0.10.0"
-		}
-		if spec.Image != wantImage || spec.DesktopSignins != capable || spec.ProxyConfig.DesktopSignins != capable {
-			t.Errorf("capable=%v: image %q store %v key %v, want %q %v %v", capable, spec.Image, spec.DesktopSignins, spec.ProxyConfig.DesktopSignins, wantImage, capable, capable)
-		}
-		if fr.createCalls != 1 || st.state != types.RunRunning {
-			t.Errorf("capable=%v: creates %d state %s, want the run started", capable, fr.createCalls, st.state)
-		}
 	}
 }
 
@@ -589,17 +729,24 @@ func TestDesktopSignin_RunnerPlacedRunHasNoSignins(t *testing.T) {
 }
 
 func TestSigninImageFor(t *testing.T) {
-	for in, want := range map[string]string{
-		"ghcr.io/cjohnstoniv/agent-novnc:0.10.0": "ghcr.io/cjohnstoniv/agent-novnc-signin:0.10.0",
-		"wardyn/agent-novnc:local":               "wardyn/agent-novnc-signin:local",
-		"agent-novnc":                            "agent-novnc-signin",
-		"registry:5000/agent-novnc":              "registry:5000/agent-novnc-signin",
-		"ghcr.io/cjohnstoniv/agent-novnc@sha256:" + strings.Repeat("a", 64): "ghcr.io/cjohnstoniv/agent-novnc@sha256:" + strings.Repeat("a", 64),
-		"ghcr.io/cjohnstoniv/agent-vscode:0.10.0":                           "ghcr.io/cjohnstoniv/agent-vscode:0.10.0",
-		"corp.example/agent-novnc-custom:1":                                 "corp.example/agent-novnc-custom:1",
+	digest := "@sha256:" + strings.Repeat("a", 64)
+	for in, want := range map[string]struct {
+		ref string
+		ok  bool
+	}{
+		"ghcr.io/cjohnstoniv/agent-novnc:0.10.0":                  {"ghcr.io/cjohnstoniv/agent-novnc-signin:0.10.0", true},
+		"wardyn/agent-novnc:local":                                {"wardyn/agent-novnc-signin:local", true},
+		"agent-novnc":                                             {"agent-novnc-signin", true},
+		"registry:5000/agent-novnc":                               {"registry:5000/agent-novnc-signin", true},
+		"ghcr.io/cjohnstoniv/agent-novnc-signin:0.10.0":           {"ghcr.io/cjohnstoniv/agent-novnc-signin:0.10.0", true},
+		"ghcr.io/cjohnstoniv/agent-novnc-signin" + digest:         {"ghcr.io/cjohnstoniv/agent-novnc-signin" + digest, true},
+		"ghcr.io/cjohnstoniv/agent-novnc" + digest:                {"ghcr.io/cjohnstoniv/agent-novnc" + digest, false},
+		"ghcr.io/cjohnstoniv/agent-vscode:0.10.0":                 {"ghcr.io/cjohnstoniv/agent-vscode:0.10.0", false},
+		"corp.example/agent-novnc-custom:1":                       {"corp.example/agent-novnc-custom:1", false},
+		"wardyn-byoi/aec40fba-2a89-4200-a3eb-acf44eb7f035:latest": {"wardyn-byoi/aec40fba-2a89-4200-a3eb-acf44eb7f035:latest", false},
 	} {
-		if got := signinImageFor(in); got != want {
-			t.Errorf("signinImageFor(%q) = %q, want %q", in, got, want)
+		if got, ok := signinImageFor(in); got != want.ref || ok != want.ok {
+			t.Errorf("signinImageFor(%q) = %q %v, want %q %v", in, got, ok, want.ref, want.ok)
 		}
 	}
 }
