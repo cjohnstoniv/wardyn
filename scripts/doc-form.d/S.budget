@@ -181,7 +181,7 @@
 # docs/sdk.md 19682 = ours 19644 + theirs 19581 - base 19543 at the 0.10 W2 merge of HRN onto the train.
 # docs/sdk.md 19731 adds 49 over 19682 (0.10 FEAT-2SCHED): the scheduled-run refusal reasons row.
 # docs/sdk.md 19783 adds 52 over 19731 (0.10 FEAT-2SCHED): the Scheduled runs section (request fields, queue fields, features.scheduled_runs).
-# docs/sdk.md 19825 adds 42 over 19783 (0.10 FEAT-2SCHED Fable r1 M1/M2): the latest start a run's wait allows, and scheduled_runs_off at the start.
+# docs/sdk.md 19825 adds 42 over 19783 (0.10 FEAT-2SCHED review r1 M1/M2): the latest start a run's wait allows, and scheduled_runs_off at the start.
 docs/sdk.md=19825 share=21
 # docs/sdk.md 18691 adds 28 over 18663, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
