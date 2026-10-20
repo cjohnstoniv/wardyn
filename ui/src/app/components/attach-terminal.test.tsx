@@ -349,7 +349,8 @@ describe("AttachTerminal — role-aware attach", () => {
       </OperatorProvider>,
     );
     expect(await screen.findByText(RUN_OWNER_ONLY, { exact: false })).toBeInTheDocument();
-    expect(screen.getByTestId("policy-remedy")).toHaveTextContent("Owned by Platform Security · Request access");
+    expect(screen.getByTestId("policy-remedy")).toHaveTextContent("Platform Security");
+    expect(screen.getByTestId("policy-remedy")).toHaveTextContent("EnforcedBy Wardyn, before the terminal opens");
     unmount();
     render(
       <OperatorProvider operator={false} principal="alice@example.com">

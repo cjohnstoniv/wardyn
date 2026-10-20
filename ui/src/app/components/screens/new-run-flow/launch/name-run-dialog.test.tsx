@@ -270,7 +270,10 @@ describe("Name this run: a create the check did not foresee", () => {
     await userEvent.click(launchButton());
     const alert = await within(box).findByRole("alert");
     expect(alert).toHaveTextContent(BREACH);
-    expect(within(alert).getByTestId("policy-remedy")).toHaveTextContent(POLICY_REMEDY.OWNER(policy.owner));
+    const card = within(alert).getByTestId("policy-remedy");
+    expect(card).toHaveTextContent("Set byContractors walls");
+    expect(card).toHaveTextContent("OwnerPlatform Security");
+    expect(card).toHaveTextContent("Can changeNot from here. The owner can.");
     expect(within(alert).getByRole("link", { name: new RegExp(POLICY_REMEDY.LINK) })).toHaveAttribute("href", policy.request_url);
   });
 

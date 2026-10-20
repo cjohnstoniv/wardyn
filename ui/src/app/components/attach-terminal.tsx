@@ -43,6 +43,7 @@ import { runs } from "../lib/api/runs";
 import type { AttachHolder } from "../lib/types/runs";
 import type { PolicyRef } from "../lib/api/health";
 import { PolicyRemedy } from "./wardyn/policy-remedy";
+import { WHY_CARD } from "../lib/why-card-copy";
 import { getErrorMessage } from "../lib/format";
 import { Eye, Loader2, TriangleAlert, Maximize2, Minimize2, RotateCw } from "lucide-react";
 import { cn } from "./ui/utils";
@@ -553,9 +554,10 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
       {connState === "error" && (
         <div className="flex items-start gap-3 p-4 text-sm text-danger">
           <TriangleAlert className="mt-0.5 size-4 shrink-0" />
-          <p>
-            {errorMsg} <PolicyRemedy policy={policy} className="block" />
-          </p>
+          <div className="flex flex-col gap-2">
+            <p>{errorMsg}</p>
+            <PolicyRemedy policy={policy} enforced={WHY_CARD.ENFORCED_AT_ATTACH} canChange={WHY_CARD.CAN_CHANGE_NOT_HERE} copyable />
+          </div>
         </div>
       )}
 
