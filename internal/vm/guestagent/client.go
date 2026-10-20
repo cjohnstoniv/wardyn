@@ -69,7 +69,7 @@ const base = "http://guest"
 const maxGuestText = 1024
 
 // execID is what a guest may name an exec: it is placed in request paths and logs.
-var execID = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+var execID = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}$`)
 
 // Ready asks the agent for its version: the first call after boot.
 func (c *Client) Ready(ctx context.Context) (Ready, error) {
@@ -145,7 +145,7 @@ func (c *Client) Start(ctx context.Context, er ExecRequest) (string, error) {
 	case typ != FrameStarted || len(payload) == 0:
 		return "", fmt.Errorf("guestagent: start answered frame 0x%02x", typ)
 	case !execID.Match(payload):
-		return "", fmt.Errorf("guestagent: start returned an exec id outside [A-Za-z0-9._-]{1,64}: %q", payload[:min(len(payload), 64)])
+		return "", fmt.Errorf("guestagent: start returned an exec id outside [A-Za-z0-9_-][A-Za-z0-9._-]{0,63}: %q", payload[:min(len(payload), 64)])
 	}
 	return string(payload), nil
 }
@@ -309,7 +309,7 @@ func statusErr(res *http.Response) error {
 	msg, _ := io.ReadAll(io.LimitReader(res.Body, 1024))
 	res.Body.Close()
 	if res.StatusCode == http.StatusNotFound {
-		return fmt.Errorf("%w: %s", ErrNoExec, bytes.TrimSpace(msg))
+		return fmt.Errorf("%w: %q", ErrNoExec, bytes.TrimSpace(msg))
 	}
-	return fmt.Errorf("guestagent: %s: %s", res.Status, bytes.TrimSpace(msg))
+	return fmt.Errorf("guestagent: %s: %q", res.Status, bytes.TrimSpace(msg))
 }

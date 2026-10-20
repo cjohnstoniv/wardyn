@@ -18,13 +18,7 @@ import (
 // guestServer is an h2c guest whose /v1/exec handler is h; it reads the spec frame first, as the real agent does.
 func guestServer(t *testing.T, h func(w http.ResponseWriter, flush func())) *Client {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var protocols http.Protocols
-	protocols.SetUnencryptedHTTP2(true)
-	hs := &http.Server{Protocols: &protocols, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return rawGuest(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if _, _, err := ReadFrame(r.Body); err != nil {
 			return
 		}
@@ -32,7 +26,19 @@ func guestServer(t *testing.T, h func(w http.ResponseWriter, flush func())) *Cli
 		flush := w.(http.Flusher).Flush
 		flush()
 		h(w, flush)
-	})}
+	}))
+}
+
+// rawGuest is an h2c guest served by handler.
+func rawGuest(t *testing.T, handler http.Handler) *Client {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var protocols http.Protocols
+	protocols.SetUnencryptedHTTP2(true)
+	hs := &http.Server{Protocols: &protocols, Handler: handler}
 	go func() { _ = hs.Serve(l) }()
 	t.Cleanup(func() { _ = hs.Close() })
 	c := NewClient(func(context.Context) (net.Conn, error) { return net.Dial("tcp", l.Addr().String()) })
@@ -107,6 +113,16 @@ func TestGuestErrorTextIsCappedAndQuoted(t *testing.T) {
 	}
 	_, err = s.Wait()
 	check("Exec", err)
+
+	// The non-200 path: statusErr reads at most 1 KB of the body.
+	for _, code := range []int{http.StatusInternalServerError, http.StatusNotFound} {
+		bad := rawGuest(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(code)
+			_, _ = w.Write(huge)
+		}))
+		_, err = bad.Agent(ctx)
+		check("status "+http.StatusText(code), err)
+	}
 }
 
 func TestStartRefusesAnExecIDOutsideTheAllowedSet(t *testing.T) {
@@ -115,9 +131,13 @@ func TestStartRefusesAnExecIDOutsideTheAllowedSet(t *testing.T) {
 		ok bool
 	}{
 		{"e1", true},
+		{"_x", true},
 		{"a.b_c-9", true},
 		{strings.Repeat("a", 64), true},
 		{strings.Repeat("a", 65), false},
+		{".", false},
+		{"..", false},
+		{".hidden", false},
 		{"a/b", false},
 		{"a b", false},
 		{"a\nb", false},
