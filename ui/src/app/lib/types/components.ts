@@ -67,7 +67,7 @@ export interface ComponentMCP {
   transport: "http";
 }
 
-export type CLIKind = "azure" | "aws" | "github";
+export type CLIKind = "azure" | "aws" | "github" | "kubectl";
 
 /** The credential an org row gives a run's CLI; `kind` names the one arm that is set. */
 export interface ComponentCLI {

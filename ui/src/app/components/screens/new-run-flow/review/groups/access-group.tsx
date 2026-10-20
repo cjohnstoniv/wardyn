@@ -8,6 +8,7 @@ import { Chip } from "../../../../wardyn/primitives";
 import { NR_REVIEW } from "../../../../wardyn/copy/new-run/review";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { ReviewGroup } from "../review-group";
+import { AccessCredentials } from "./access-credentials";
 import { stepLocation, type GroupProps } from "./group-props";
 import { JumpButton } from "./jump-button";
 
@@ -31,6 +32,7 @@ export function AccessGroup({ pre, preview, docRows, go }: GroupProps) {
               {h.source.name && <Chip>{h.source.name}</Chip>}
             </div>
           ))}
+          <AccessCredentials access={access} />
           <JumpButton label={NR_REVIEW.EDIT_TOOLS_ACCESS} to={stepLocation("tools")} go={go} />
           <Button type="button" variant="ghost" className="w-fit" onClick={close}>{NR_REVIEW.DONE}</Button>
         </>

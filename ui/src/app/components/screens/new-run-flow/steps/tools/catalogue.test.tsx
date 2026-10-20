@@ -8,11 +8,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { setField } from "../../../../../../test/set-field";
-import { MY_COMPONENTS, ORG_BILLING, ORG_LINEAR, ORG_POSTGRES, SAVED_SECRETS } from "../../../../../lib/new-run-fixtures/scenarios/catalogue";
+import { MY_COMPONENTS, ORG_BILLING, ORG_GITHUB, ORG_KUBECTL, ORG_LINEAR, ORG_POSTGRES, SAVED_SECRETS } from "../../../../../lib/new-run-fixtures/scenarios/catalogue";
 import { SCENARIO_ACCESS } from "../../../../../lib/new-run-fixtures/scenarios/tools";
 import type { MyComponents } from "../../../../../lib/types/components";
 import type { AccessFacts, AccessRow } from "../../../../../lib/types/new-run-access";
 import { ADD_ACCESS, CUSTOM_COMPONENT as CC, MY_COMPONENTS as MY_COMPONENTS_COPY } from "../../../../wardyn/copy/components";
+import { ModelAccessProvider } from "../../../../wardyn/model-access-context";
+import type { SetupStatus } from "../../../../../lib/types/setup";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 import type { RunIntent } from "../../draft/run-intent";
@@ -21,7 +23,7 @@ import { AnnounceContext } from "../step-shell";
 import { CLI_CARD } from "./catalogue-pending";
 import { AddTools } from "./catalogue";
 
-const h = vi.hoisted(() => ({ mine: vi.fn(), names: vi.fn(), saveMine: vi.fn(), answered: true, announce: vi.fn() }));
+const h = vi.hoisted(() => ({ mine: vi.fn(), names: vi.fn(), saveMine: vi.fn(), answered: true, announce: vi.fn(), kubectl: false, repos: [] as string[] }));
 vi.mock("../../../../../lib/api/components", () => ({ components: { mine: h.mine, saveMine: h.saveMine } }));
 vi.mock("../../../../../lib/api/secrets", () => ({ secrets: { listSecrets: h.names } }));
 vi.mock("../../checks/custom-component-dialog", () => ({
@@ -47,7 +49,7 @@ function Seed({ intent, children }: { intent: RunIntent; children: React.ReactNo
 function Live({ access }: { access: AccessFacts | undefined }) {
   const { intent } = useNewRunDraft();
   const [answeredFor] = React.useState(intent.components);
-  return <AddTools access={access} answered={h.answered} intent={intent} answeredFor={answeredFor} />;
+  return <AddTools access={access} answered={h.answered} intent={intent} answeredFor={answeredFor} githubRepos={h.repos} />;
 }
 // Edits the draft's second component in place, as a later edit would, without a new answer.
 function Replace() {
@@ -61,9 +63,11 @@ function Draft() {
 }
 async function show(intent: RunIntent = {}, access: AccessFacts | undefined = BASE) {
   const view = render(
-    <AnnounceContext.Provider value={h.announce}>
-      <NewRunDraftProvider owner="alice"><Seed intent={intent}><Live access={access} /><Draft /><Replace /></Seed></NewRunDraftProvider>
-    </AnnounceContext.Provider>,
+    <ModelAccessProvider status={{ features: { kubectl_cli: h.kubectl } } as unknown as SetupStatus} onRefresh={() => {}}>
+      <AnnounceContext.Provider value={h.announce}>
+        <NewRunDraftProvider owner="alice"><Seed intent={intent}><Live access={access} /><Draft /><Replace /></Seed></NewRunDraftProvider>
+      </AnnounceContext.Provider>
+    </ModelAccessProvider>,
   );
   await screen.findByRole("heading", { name: NR_TOOLS.ADD_TITLE });
   await waitFor(() => expect(h.mine).toHaveBeenCalled());
@@ -75,6 +79,8 @@ const row = (over: Partial<AccessRow>): AccessRow => ({ id: "x", kind: "custom",
 
 beforeEach(() => {
   h.answered = true;
+  h.kubectl = false;
+  h.repos = [];
   h.mine.mockResolvedValue(COMPONENTS());
   h.names.mockResolvedValue(SAVED_SECRETS);
   h.saveMine.mockResolvedValue({ id: "saved-1" });
@@ -553,6 +559,169 @@ describe("Added to this run", () => {
       await remove("Stored");
       await remove("Gamma");
       expect(draft().components).toEqual([B]);
+    });
+  });
+});
+
+describe("what a tool card brings", () => {
+  const catalogue = (clis: Partial<Record<"kubectl" | "github", string[]>>) => {
+    const rows = [ORG_KUBECTL, ORG_GITHUB].filter((r) => clis[r.cli?.kind as "kubectl" | "github"]);
+    return COMPONENTS({
+      org: [...MY_COMPONENTS.org, ...rows],
+      clis: MY_COMPONENTS.clis.map((c) => (c.kind === "kubectl" || c.kind === "github") && clis[c.kind] ? { ...c, state: "available" as const, rows: clis[c.kind] ?? [] } : c),
+    });
+  };
+  const dd = (title: string) => [...(screen.getByRole("heading", { name: title }).closest("li") as HTMLElement).querySelectorAll("dl dd")].map((n) => n.textContent);
+  const dts = (title: string) => [...(screen.getByRole("heading", { name: title }).closest("li") as HTMLElement).querySelectorAll("dl dt")].map((n) => n.textContent);
+  const details = (title: string) => userEvent.click(card(title).getByRole("button", { name: NR_TOOLS.DETAILS_FOR(title) }));
+
+  describe("kubectl", () => {
+    beforeEach(() => { h.kubectl = true; h.mine.mockResolvedValue(catalogue({ kubectl: [ORG_KUBECTL.id] })); });
+
+    it("shows the cluster, its service account, no files, and the namespaces with read only and no exec", async () => {
+      await show();
+      await screen.findByRole("heading", { name: ORG_KUBECTL.name });
+      expect(dts(ORG_KUBECTL.name)).toEqual([NR_TOOLS.NETWORK_TITLE, NR_TOOLS.CREDENTIALS_TITLE, NR_TOOLS.DETAIL_FILES, NR_TOOLS.DETAIL_OTHER]);
+      expect(dd(ORG_KUBECTL.name)).toEqual([
+        "api.staging.example.com",
+        `${NR_TOOLS.KUBE_CREDENTIAL("staging")}${NR_TOOLS.DELIVERY_PROXY}`,
+        NR_TOOLS.DETAIL_NONE,
+        `${NR_TOOLS.KUBE_NAMESPACES("web, jobs")} · ${NR_TOOLS.KUBE_READ_ONLY} · ${NR_TOOLS.KUBE_NO_EXEC}`,
+      ]);
+    });
+
+    it("says read and write for a row that may change things", async () => {
+      const write = { ...ORG_KUBECTL, cli: { ...ORG_KUBECTL.cli!, access: "write", namespaces: ["sandbox"] } };
+      h.mine.mockResolvedValue({ ...catalogue({ kubectl: [ORG_KUBECTL.id] }), org: [write] });
+      await show();
+      await screen.findByRole("heading", { name: ORG_KUBECTL.name });
+      expect(dd(ORG_KUBECTL.name)[3]).toBe(`${NR_TOOLS.KUBE_NAMESPACES("sandbox")} · ${NR_TOOLS.KUBE_READ_WRITE} · ${NR_TOOLS.KUBE_NO_EXEC}`);
+    });
+
+    it("opens the whole breakdown from Details for the card, and Add and Remove still work", async () => {
+      await show();
+      await screen.findByRole("heading", { name: ORG_KUBECTL.name });
+      await details(ORG_KUBECTL.name);
+      const dialog = within(await screen.findByRole("dialog", { name: ORG_KUBECTL.name }));
+      // Once as the host the run may reach, once as the cluster's address.
+      expect(dialog.getAllByText("api.staging.example.com")).toHaveLength(2);
+      expect(dialog.getByText(NR_TOOLS.KUBE_CREDENTIAL_NOTE)).toBeTruthy();
+      expect(dialog.getByText(NR_TOOLS.KUBE_READ_DETAIL)).toBeTruthy();
+      expect(dialog.getByText(NR_TOOLS.KUBE_EXEC_DETAIL)).toBeTruthy();
+      expect(dialog.getByText("web, jobs")).toBeTruthy();
+      await userEvent.click(dialog.getAllByRole("button", { name: "Close" })[0]);
+      await userEvent.click(card(ORG_KUBECTL.name).getByRole("button", { name: `${NR_TOOLS.CARD_ADD} ${ORG_KUBECTL.name}` }));
+      expect(draft().components).toEqual([{ id: ORG_KUBECTL.id }]);
+      expect(card(ORG_KUBECTL.name).getByRole("button", { name: NR_TOOLS.DETAILS_FOR(ORG_KUBECTL.name) })).toBeTruthy();
+    });
+
+    it("gives each host in Details the server's verdict once the row is on the run, not a blanket Allowed", async () => {
+      const access: AccessFacts = {
+        ...BASE,
+        hosts: [...BASE.hosts, { host: "api.staging.example.com", via: "injected", rows: [ORG_KUBECTL.id], verdict: "not_allowed", reason: "clamped", source: { kind: "policy" } }],
+        rows: [...BASE.rows, row({ id: ORG_KUBECTL.id, kind: "cli", name: ORG_KUBECTL.name })],
+      };
+      await show({ components: [{ id: ORG_KUBECTL.id }] }, access);
+      await screen.findByRole("heading", { name: ORG_KUBECTL.name });
+      await details(ORG_KUBECTL.name);
+      const dialog = within(await screen.findByRole("dialog", { name: ORG_KUBECTL.name }));
+      expect(dialog.getByText(NR_TOOLS.NET_NOT_ALLOWED)).toBeTruthy();
+      expect(dialog.queryByText(NR_TOOLS.NET_ALLOWED)).toBeNull();
+    });
+
+    it("is Coming soon, with no breakdown, while the server's switch is off or silent", async () => {
+      h.kubectl = false;
+      await show();
+      await screen.findByRole("heading", { name: CLI_CARD.kubectl.name });
+      expect(card(CLI_CARD.kubectl.name).getByText(NR_SHARED.COMING_SOON)).toBeTruthy();
+      expect(document.querySelector(`dl[aria-label="${NR_TOOLS.BRINGS_FOR(CLI_CARD.kubectl.name)}"]`)).toBeNull();
+      expect(screen.queryByRole("heading", { name: ORG_KUBECTL.name })).toBeNull();
+    });
+
+    it("shows no breakdown while the card is not granted", async () => {
+      h.mine.mockResolvedValue(COMPONENTS({ clis: MY_COMPONENTS.clis.map((c) => (c.kind === "kubectl" ? { ...c, state: "not_granted" as const } : c)) }));
+      await show();
+      await screen.findByRole("heading", { name: CLI_CARD.kubectl.name });
+      expect(card(CLI_CARD.kubectl.name).queryByRole("button")).toBeNull();
+      expect(card(CLI_CARD.kubectl.name).getByText("Not turned on for you. Ask your admin.")).toBeTruthy();
+      for (const title of [CLI_CARD.kubectl.name, CLI_CARD.github.name]) expect(dts(title)).toEqual([]);
+    });
+  });
+
+  describe("GitHub CLI", () => {
+    beforeEach(() => { h.mine.mockResolvedValue(catalogue({ github: [ORG_GITHUB.id] })); });
+
+    it("acts on the run's GitHub repositories through the Wardyn GitHub App, reaching api.github.com", async () => {
+      h.repos = ["acme/web-app", "acme/api"];
+      await show();
+      await screen.findByRole("heading", { name: ORG_GITHUB.name });
+      expect(dd(ORG_GITHUB.name)).toEqual([
+        "api.github.com",
+        `${NR_TOOLS.GITHUB_APP}${NR_TOOLS.DELIVERY_PROXY}`,
+        NR_TOOLS.DETAIL_NONE,
+        NR_TOOLS.GITHUB_REPOS("acme/web-app, acme/api"),
+      ]);
+    });
+
+    it("ends a long repository list with how many more, and Details lists them all", async () => {
+      h.repos = ["acme/a", "acme/b", "acme/c"];
+      await show();
+      await screen.findByRole("heading", { name: ORG_GITHUB.name });
+      expect(dd(ORG_GITHUB.name)[3]).toBe(`${NR_TOOLS.GITHUB_REPOS("acme/a, acme/b")} ${NR_TOOLS.MORE(1)}`);
+      await details(ORG_GITHUB.name);
+      const dialog = within(await screen.findByRole("dialog", { name: ORG_GITHUB.name }));
+      for (const r of h.repos) expect(dialog.getByText(r)).toBeTruthy();
+      expect(dialog.getByText(NR_TOOLS.DELIVERY_GITHUB)).toBeTruthy();
+    });
+
+    it("brings nothing without a GitHub repository, and offers no Details", async () => {
+      await show();
+      await screen.findByRole("heading", { name: ORG_GITHUB.name });
+      expect(dd(ORG_GITHUB.name)).toEqual(Array(4).fill(NR_TOOLS.DETAIL_NONE));
+      expect(card(ORG_GITHUB.name).queryByRole("button", { name: NR_TOOLS.DETAILS_FOR(ORG_GITHUB.name) })).toBeNull();
+    });
+
+    it("brings nothing once the server says the run has no GitHub repository, beside its own sentence", async () => {
+      const access: AccessFacts = { ...BASE, rows: [...BASE.rows, row({ id: ORG_GITHUB.id, name: ORG_GITHUB.name, status: "unavailable", reason: "cli_no_github_repo" })] };
+      await show({ components: [{ id: ORG_GITHUB.id }] }, access);
+      await screen.findByRole("heading", { name: ORG_GITHUB.name });
+      expect(dd(ORG_GITHUB.name)).toEqual(Array(4).fill(NR_TOOLS.DETAIL_NONE));
+      expect(card(ORG_GITHUB.name).getByText("GitHub CLI works only with this run's GitHub repositories. Add one on the Files step.")).toBeTruthy();
+      expect(card(ORG_GITHUB.name).queryByRole("button", { name: NR_TOOLS.DETAILS_FOR(ORG_GITHUB.name) })).toBeNull();
+      expect(card(ORG_GITHUB.name).getByRole("button", { name: `${NR_TOOLS.CARD_REMOVE} ${ORG_GITHUB.name}` })).toBeTruthy();
+    });
+  });
+
+  describe("remote MCP server", () => {
+    it("shows its host, how its credential is delivered, and what kind of server it is", async () => {
+      const linear = { ...ORG_LINEAR, secrets: [{ delivery: { mode: "header" as const, host: "mcp.linear.app" } }] };
+      h.mine.mockResolvedValue({ ...COMPONENTS(), org: [linear] });
+      await show();
+      await screen.findByRole("heading", { name: "Linear" });
+      expect(dd("Linear")).toEqual(["mcp.linear.app", NR_TOOLS.DELIVERY_PROXY, NR_TOOLS.DETAIL_NONE, `${NR_TOOLS.FROM_MCP} · ${NR_TOOLS.MCP_REMOTE}`]);
+      await details("Linear");
+      const dialog = within(await screen.findByRole("dialog", { name: "Linear" }));
+      expect(dialog.getByText(NR_TOOLS.DETAIL_WHERE)).toBeTruthy();
+      expect(dialog.getByText("https://mcp.linear.app/mcp")).toBeTruthy();
+      expect(dialog.getByText(NR_TOOLS.DETAIL_MCP_BODY)).toBeTruthy();
+    });
+
+    it("shows no breakdown and no Details on a server that cannot be added", async () => {
+      const envMcp = { ...ORG_LINEAR, secrets: [{ delivery: { mode: "env" as const, var: "LINEAR_TOKEN" } }] };
+      h.mine.mockResolvedValue({ ...COMPONENTS({ resident_delivery_allowed: false }), org: [envMcp] });
+      await show();
+      expect(await card("Linear").findByText(CC.ERR.RESIDENT_OFF)).toBeTruthy();
+      expect(dts("Linear")).toEqual([]);
+      expect(card("Linear").queryByRole("button", { name: NR_TOOLS.DETAILS_FOR("Linear") })).toBeNull();
+    });
+
+    it("keeps its chips, with no breakdown, when it cannot be added", async () => {
+      h.mine.mockResolvedValue(COMPONENTS({ resident_delivery_allowed: false }));
+      await show();
+      await screen.findByRole("heading", { name: ORG_POSTGRES.name });
+      // An API row keeps today's chips; no card that cannot be added shows a breakdown.
+      expect(card(ORG_POSTGRES.name).getByText(NR_TOOLS.DELIVERY_ENV)).toBeTruthy();
+      expect(dts(ORG_POSTGRES.name)).toEqual([]);
     });
   });
 });

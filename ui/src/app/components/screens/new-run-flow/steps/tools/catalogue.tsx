@@ -15,13 +15,13 @@ import { Lock, Plus } from "lucide-react";
 import { components as api } from "../../../../../lib/api/components";
 import { secrets } from "../../../../../lib/api/secrets";
 import reasons from "../../../../../lib/access-reasons.golden.json";
-import type { CatalogueCLI, CatalogueCLIKind, ComponentDeliveryMode, ComponentRef, MyComponents, OrgComponentView } from "../../../../../lib/types/components";
+import type { CatalogueCLI, CatalogueCLIKind, ComponentRef, MyComponents, OrgComponentView } from "../../../../../lib/types/components";
 import type { AccessFacts, AccessRow } from "../../../../../lib/types/new-run-access";
 import { Button } from "../../../../ui/button";
-import { cn } from "../../../../ui/utils";
 import { ADD_ACCESS, CUSTOM_COMPONENT as CC } from "../../../../wardyn/copy/components";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
+import { useShellSetupStatus } from "../../../../wardyn/model-access-context";
 import { Chip } from "../../../../wardyn/primitives";
 import { Segmented } from "../../../../wardyn/segmented";
 import type { RunIntent } from "../../draft/run-intent";
@@ -34,6 +34,8 @@ import { AllowHostDialog } from "./allow-host-dialog";
 import { addHeaderSecret, attachComponent, detachComponent, removeAllowedHost, removeHeaderSecret } from "./catalogue-edits";
 import { addedMark, CARD_ICON, CLI_CARD } from "./catalogue-pending";
 import { IconTile } from "./icon-tile";
+import { githubAccess, kubectlAccess, kubectlSwitchOn, MODE_DELIVERY, mcpAccess, type RunFacts } from "./tool-access";
+import { NOTHING, ToolCard, type ToolAccess } from "./tool-card";
 import { CustomComponentDialog } from "./custom-component-dialog";
 
 type Category = "all" | "cli" | "mcp" | "api" | "secret";
@@ -45,9 +47,6 @@ const FROM_KIND: Record<string, string> = {
   custom: NR_TOOLS.FROM_CUSTOM, cli: NR_TOOLS.FROM_CLI, mcp: NR_TOOLS.FROM_MCP, api: NR_TOOLS.FROM_API, secret: NR_TOOLS.FROM_SECRET, host: NR_TOOLS.FROM_HOST,
 };
 
-const MODE_DELIVERY: Record<ComponentDeliveryMode, string> = {
-  header: NR_TOOLS.DELIVERY_PROXY, env: NR_TOOLS.DELIVERY_ENV, file: NR_TOOLS.DELIVERY_FILE,
-};
 // How a CLI row's own credential reaches the run, as the server's access facts
 // give it (internal/api/run_access_facts.go): the GitHub App token and the
 // person's Azure token by the proxy, AWS role credentials in the sandbox.
@@ -70,26 +69,6 @@ function useMyComponents(): { mine: MyComponents | null; failed?: string } {
     return () => { live = false; };
   }, []);
   return state;
-}
-
-type CardLook = "plain" | "added" | "off";
-
-/** A catalogue card: icon, name, where it comes from, what it is, what it brings, then its action. */
-function Card({ icon, title, org, body, brings, look = "plain", children }: { icon: string; title: string; org?: boolean; body?: string; brings?: React.ReactNode; look?: CardLook; children: React.ReactNode }) {
-  return (
-    <li className={cn("flex flex-col gap-2 rounded-lg border p-3", look === "added" ? "border-primary bg-primary/10" : "border-border bg-surface-2", look === "off" && "bg-muted/50 text-muted-foreground")}>
-      <div className="flex items-center gap-2.5">
-        <IconTile mark={icon} />
-        <div className="min-w-0">
-          <h3 className="font-medium">{title}</h3>
-          {org && <p className="text-xs text-muted-foreground">{NR_TOOLS.FROM_ORG}</p>}
-        </div>
-      </div>
-      {body && <p className="text-sm text-muted-foreground">{body}</p>}
-      {brings}
-      <div className="mt-0.5 flex flex-wrap items-center justify-between gap-2">{children}</div>
-    </li>
-  );
 }
 
 /** The hosts a card brings, then how its credential reaches the run. */
@@ -116,11 +95,14 @@ function Reason({ text, id }: { text: string; id?: string }) {
  * Add, or Remove once added. A row that cannot be added shows its reason in
  * place of Add; an added row keeps its reason beside Remove.
  */
-function RowAction({ name, attached, reason, status, onAdd, onRemove }: { name: string; attached: boolean; reason?: string; status?: React.ReactNode; onAdd: () => void; onRemove: () => void }) {
+function RowAction({ name, attached, reason, status, details, onAdd, onRemove }: { name: string; attached: boolean; reason?: string; status?: React.ReactNode; details?: React.ReactNode; onAdd: () => void; onRemove: () => void }) {
   if (attached) {
     return (
       <>
-        <div className="flex min-w-0 flex-col gap-1">{status}{reason && <Reason text={reason} />}</div>
+        <div className="flex min-w-0 flex-col gap-1">
+          {(status || details) && <div className="flex items-center gap-2">{status}{details}</div>}
+          {reason && <Reason text={reason} />}
+        </div>
         <Button type="button" variant="outline" size="sm" aria-label={`${NR_TOOLS.CARD_REMOVE} ${name}`} onClick={onRemove}>{NR_TOOLS.CARD_REMOVE}</Button>
       </>
     );
@@ -128,7 +110,7 @@ function RowAction({ name, attached, reason, status, onAdd, onRemove }: { name: 
   if (reason) return <Reason text={reason} />;
   return (
     <>
-      <span />
+      {details ?? <span />}
       <Button type="button" variant="outline" size="sm" aria-label={`${NR_TOOLS.CARD_ADD} ${name}`} onClick={onAdd}>{NR_TOOLS.CARD_ADD}</Button>
     </>
   );
@@ -138,10 +120,10 @@ function RowAction({ name, attached, reason, status, onAdd, onRemove }: { name: 
 function DoorCard({ icon, title, body, button, reason, onOpen }: { icon: string; title: string; body: string; button: string; reason?: string; onOpen: () => void }) {
   const reasonId = React.useId();
   return (
-    <Card icon={icon} title={title} body={body}>
+    <ToolCard icon={icon} title={title} body={body}>
       {reason ? <Reason text={reason} id={reasonId} /> : <span />}
       <Button type="button" variant="outline" size="sm" disabled={!!reason} aria-describedby={reason ? reasonId : undefined} onClick={onOpen}>{button}</Button>
-    </Card>
+    </ToolCard>
   );
 }
 
@@ -161,13 +143,17 @@ export interface AddToolsProps {
   intent: RunIntent;
   /** The draft's components that `access` answered; its "inline:<n>" rows point into this list. */
   answeredFor: RunIntent["components"];
+  /** The GitHub repositories the run's clones go through the App for: what the GitHub CLI can act on. */
+  githubRepos?: readonly string[];
 }
 
-export function AddTools({ access, answered, intent, answeredFor }: AddToolsProps) {
+export function AddTools({ access, answered, intent, answeredFor, githubRepos = [] }: AddToolsProps) {
   const headingId = React.useId();
   const dispatch = useNewRunDispatch();
   const announce = useAnnounce();
   const { mine, failed } = useMyComponents();
+  // Absent reads as off: the kubectl card stays Coming soon until the server says the kind is on.
+  const kubectlOn = kubectlSwitchOn(useShellSetupStatus().status);
   const [category, setCategory] = React.useState<Category>("all");
   const [door, setDoor] = React.useState<Door | null>(null);
   // A dialog that chains into another (the custom form into the full editor) unmounts the button that opened it, so
@@ -229,36 +215,49 @@ export function AddTools({ access, answered, intent, answeredFor }: AddToolsProp
   const noDefineId = React.useId();
   const failedId = React.useId();
 
-  const cliCards = (mine?.clis ?? []).flatMap((cli: CatalogueCLI) => {
+  const cliCards = (mine?.clis ?? []).flatMap((raw: CatalogueCLI) => {
+    const cli: CatalogueCLI = raw.kind === "kubectl" && !kubectlOn ? { kind: "kubectl", state: "coming_soon", rows: [] } : raw;
     const generic = CLI_CARD[cli.kind];
     if (cli.state !== "available") return [{ key: cli.kind, title: generic.name, cli, row: undefined as OrgComponentView | undefined }];
     return cli.rows.map((id) => ({ key: id, title: mine?.org.find((o) => o.id === id)?.name ?? generic.name, cli, row: mine?.org.find((o) => o.id === id) }));
   });
+
+  const runFacts: RunFacts = { access, answered };
+  // A card the person can still add shows what it brings; one that cannot shows nothing, and one already on a run
+  // the server has refused brings nothing to it.
+  const breakdown = (on: boolean, reason: string | undefined, brings: ToolAccess): ToolAccess | undefined =>
+    !reason ? brings : on ? NOTHING : undefined;
 
   const orgCard = (row: OrgComponentView) => {
     const residentRow = row.secrets.some((s) => s.delivery.mode !== "header");
     const fact = stateOf(row.id);
     const reason = residentRow && !residentAllowed ? CC.ERR.RESIDENT_OFF : answered ? sentence(fact?.reason) : undefined;
     const on = attached(row.id);
+    // A remote MCP server shows what it brings; an API row keeps its chips until its Other line has words.
+    const kind = row.category === "mcp" ? mcpAccess(row, on ? runFacts : undefined) : undefined;
     return (
-      <Card
+      <ToolCard
         key={row.id}
         icon={row.category === "mcp" ? CARD_ICON.mcp : CARD_ICON.api}
         title={row.name}
         org
         body={row.description || undefined}
-        brings={<Brings hosts={row.hosts} deliveries={row.secrets.map((s) => MODE_DELIVERY[s.delivery.mode])} />}
+        access={kind && breakdown(on, reason, kind)}
+        brings={!kind && <Brings hosts={row.hosts} deliveries={row.secrets.map((s) => MODE_DELIVERY[s.delivery.mode])} />}
         look={on ? "added" : reason ? "off" : "plain"}
       >
-        <RowAction
-          name={row.name}
-          attached={on}
-          reason={reason}
-          status={on && fact ? <Status status={fact.status} answered={answered} /> : undefined}
-          onAdd={() => { edit((i) => attachComponent(i, { id: row.id })); announce(NR_TOOLS.CARD_ADDED(row.name)); }}
-          onRemove={() => { edit((i) => detachComponent(i, row.id)); announce(NR_TOOLS.COMPONENT_REMOVED); }}
-        />
-      </Card>
+        {(details) => (
+          <RowAction
+            name={row.name}
+            attached={on}
+            reason={reason}
+            status={on && fact ? <Status status={fact.status} answered={answered} /> : undefined}
+            details={details}
+            onAdd={() => { edit((i) => attachComponent(i, { id: row.id })); announce(NR_TOOLS.CARD_ADDED(row.name)); }}
+            onRemove={() => { edit((i) => detachComponent(i, row.id)); announce(NR_TOOLS.COMPONENT_REMOVED); }}
+          />
+        )}
+      </ToolCard>
     );
   };
 
@@ -303,23 +302,27 @@ export function AddTools({ access, answered, intent, answeredFor }: AddToolsProp
           ]}
         />
       </div>
-      <ul className="grid gap-2.5 [grid-template-columns:repeat(auto-fill,minmax(250px,1fr))]">
+      <ul className="grid gap-2.5 [grid-template-columns:repeat(auto-fill,minmax(320px,1fr))]">
         {show("cli") && cliCards.map(({ key, title, cli, row }) => {
           const generic = CLI_CARD[cli.kind];
           const on = !!row && attached(row.id);
           const off = cli.state !== "available";
           const reason = cli.state === "not_granted" ? sentence("cli_not_granted") : answered ? sentence(row ? stateOf(row.id)?.reason : undefined) : undefined;
           const delivery = CLI_DELIVERY[cli.kind];
+          const facts = on ? runFacts : undefined;
+          // The kubectl and GitHub CLI cards show what they bring; the other CLIs keep their chips for now.
+          const kind = row && cli.kind === "kubectl" ? kubectlAccess(row, facts) : row && cli.kind === "github" ? githubAccess(row, githubRepos, facts) : undefined;
           return (
-            <Card
+            <ToolCard
               key={key}
               icon={generic.icon}
               title={title}
               body={row?.description || generic.body}
-              brings={row && <Brings hosts={row.hosts} deliveries={delivery ? [delivery] : []} />}
+              access={kind && breakdown(on, reason, kind)}
+              brings={row && !kind && <Brings hosts={row.hosts} deliveries={delivery ? [delivery] : []} />}
               look={on ? "added" : off || reason ? "off" : "plain"}
             >
-              {cli.state === "coming_soon" ? (
+              {(details) => cli.state === "coming_soon" ? (
                 <Chip>{NR_SHARED.COMING_SOON}</Chip>
               ) : (
                 <RowAction
@@ -327,11 +330,12 @@ export function AddTools({ access, answered, intent, answeredFor }: AddToolsProp
                   attached={on}
                   reason={reason}
                   status={on && row && stateOf(row.id) ? <Status status={stateOf(row.id)?.status ?? ""} answered={answered} /> : undefined}
+                  details={details}
                   onAdd={() => { if (row) edit((i) => attachComponent(i, { id: row.id })); announce(NR_TOOLS.CARD_ADDED(title)); }}
                   onRemove={() => { if (row) edit((i) => detachComponent(i, row.id)); announce(NR_TOOLS.COMPONENT_REMOVED); }}
                 />
               )}
-            </Card>
+            </ToolCard>
           );
         })}
         {show("mcp") && org("mcp").map(orgCard)}
