@@ -15,12 +15,16 @@ import { modelProviderKindFromAudit } from "../../../lib/api/audit";
 import { LOCAL_MODEL_CARD as T } from "../../../lib/local-model-copy";
 import { LOCAL_MODEL_DEFAULTS, type ModelProvider } from "../../../lib/types/site";
 import type { AuditEvent, RunDetail } from "../../../lib/types";
-import { useOperator } from "../../wardyn/operator-context";
+import { useOperator, useOperatorResolved } from "../../wardyn/operator-context";
 import { useShellSetupStatus } from "../../wardyn/model-access-context";
 import { WidgetCard } from "../../wardyn/primitives";
 
 export function LocalModelsCard({ run, audit }: { run: RunDetail; audit: AuditEvent[] }) {
-  const operator = useOperator();
+  // Resolved too: useOperator() reads true until /me answers (and when it fails), and the read below is
+  // operatorOnly, so a member would be refused (and audited) for it. The card fails closed.
+  const isOperator = useOperator();
+  const resolved = useOperatorResolved();
+  const operator = isOperator && resolved;
   const { status } = useShellSetupStatus();
   const id = run.model_provider_id;
   const local = operator && !!id && modelProviderKindFromAudit(audit) === "local_model";

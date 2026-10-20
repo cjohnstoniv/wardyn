@@ -283,6 +283,8 @@ export function refusedHarness(message: string | null): string | null {
   return message?.match(/: ([a-z0-9-]+): model must be one of local\.models/)?.[1] ?? null;
 }
 
-// Whether the refusal names this chip ('local.models: "x" is not a model name', 'lists "x" twice').
+// Whether the refusal names this chip, at the position the server quotes a model name: 'local.models:
+// "x" is not a model name' and 'local.models lists "x" twice' (mp400LocalModel, mp400LocalModelDup).
+// Not anywhere in the sentence: the provider id is quoted at its start and may equal a chip's name.
 export const refusedModel = (message: string | null, name: string): boolean =>
-  !!message && message.includes("local.models") && message.includes(`"${name}"`);
+  !!message && (message.includes(`local.models: "${name}" is not`) || message.includes(`local.models lists "${name}" twice`));

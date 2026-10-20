@@ -128,7 +128,9 @@ export function ModelProviderEditor({
 
   const stored = list.providers.providers ?? [];
   const title = editing ? editing.name || MODEL_PROVIDERS.KIND[editing.kind] : MODEL_PROVIDERS.ADD_CTA;
-  const keyKind = !isEndpoint(editing?.kind ?? draft?.kind ?? "custom_endpoint");
+  // A local model server's person adds a token (or nothing), never a key.
+  const kind = editing?.kind ?? draft?.kind ?? "custom_endpoint";
+  const keyKind = !(isEndpoint(kind) || isLocal(kind));
 
   const write = async (next: ModelProvider[]) => {
     const doc = { providers: next };
@@ -502,6 +504,7 @@ function ProviderFields({
               value={draft.models}
               onChange={(models) => set({ models })}
               isBad={(name) => refusedModel(refused, name)}
+              invalid={badField === "models"}
             />
           </Field>
           <fieldset className="space-y-2 border-t border-border pt-4">

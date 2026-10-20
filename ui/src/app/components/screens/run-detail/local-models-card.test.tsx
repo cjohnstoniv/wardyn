@@ -47,9 +47,9 @@ const created = (kind: string): AuditEvent[] => [
   { id: "a1", time: aheadByHours(-1), actor_type: "human", actor: "alice", action: "run.create", outcome: "success", data: { model_provider: { id: "laptop-gpu", kind } } },
 ];
 
-function renderCard(r: RunDetail, audit: AuditEvent[], operator = true) {
+function renderCard(r: RunDetail, audit: AuditEvent[], operator = true, operatorResolved = true) {
   return render(
-    <OperatorProvider operator={operator} principal="alice">
+    <OperatorProvider operator={operator} operatorResolved={operatorResolved} principal="alice">
       <LocalModelsCard run={r} audit={audit} />
     </OperatorProvider>,
   );
@@ -107,6 +107,12 @@ describe("LocalModelsCard", () => {
 
   it("is absent for a member, who cannot read the provider record", () => {
     renderCard(run(), created("local_model"), false);
+    expect(getMock).not.toHaveBeenCalled();
+    expect(screen.queryByText(T.TITLE)).toBeNull();
+  });
+
+  it("fails closed while /me has not answered: an unresolved identity reads operator, and the read is operatorOnly", () => {
+    renderCard(run(), created("local_model"), true, false);
     expect(getMock).not.toHaveBeenCalled();
     expect(screen.queryByText(T.TITLE)).toBeNull();
   });

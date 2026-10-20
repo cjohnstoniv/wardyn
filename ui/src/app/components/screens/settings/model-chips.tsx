@@ -23,12 +23,15 @@ export function ModelChips({
   value,
   onChange,
   isBad,
+  invalid,
 }: {
   id: string;
   value: string[];
   onChange: (next: string[]) => void;
   /** A chip the last refused save named. */
   isBad: (name: string) => boolean;
+  /** The refusal is about the list itself (empty, or over the most the API takes). */
+  invalid?: boolean;
 }) {
   const [text, setText] = React.useState("");
   const add = (names: string[]) => {
@@ -40,7 +43,10 @@ export function ModelChips({
   const commit = () => add(split(text));
 
   return (
-    <div className="space-y-2">
+    <div
+      data-invalid={invalid || undefined}
+      className={cn("space-y-2", invalid && "rounded-lg border border-danger p-2")}
+    >
       {value.length === 0 ? (
         <p className="text-body text-muted-foreground">{T.MODELS_NONE}</p>
       ) : (
@@ -70,6 +76,7 @@ export function ModelChips({
       <div className="flex items-center gap-2">
         <Input
           id={id}
+          aria-invalid={invalid || undefined}
           className="h-8 flex-1 font-mono"
           placeholder={T.MODELS_PLACEHOLDER}
           value={text}

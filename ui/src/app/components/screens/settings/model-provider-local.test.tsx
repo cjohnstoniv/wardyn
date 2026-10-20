@@ -17,6 +17,7 @@ import type { ModelProvider } from "../../../lib/types/site";
 import { setField } from "../../../../test/set-field";
 import { expandCard } from "../../../lib/test-dom";
 import { OperatorProvider } from "../../wardyn/operator-context";
+import { addressChanged, refusedModel } from "./model-provider-draft";
 import { ModelProviderEditor } from "./model-provider-editor";
 import { ModelProvidersList } from "./model-providers-list";
 
@@ -58,12 +59,12 @@ const NODE: ModelProvider = {
 const snapshot = (providers: ModelProvider[] = []): Snapshot => ({ providers: { providers }, etag: '"e1"', connected: {} });
 const putBody = () => putMock.mock.calls[0][0] as { providers: ModelProvider[] };
 
-function renderEditor(editing: ModelProvider | null = null) {
+function renderEditor(editing: ModelProvider | null = null, list: Snapshot = snapshot()) {
   const user = userEvent.setup();
   const onSaved = vi.fn();
   render(
     <OperatorProvider operator principal="alice">
-      <ModelProviderEditor list={snapshot()} editing={editing} harnesses={HARNESSES} onClose={vi.fn()} onSaved={onSaved} />
+      <ModelProviderEditor list={list} editing={editing} harnesses={HARNESSES} onClose={vi.fn()} onSaved={onSaved} />
     </OperatorProvider>,
   );
   return { user, onSaved };
@@ -222,6 +223,41 @@ describe("the local model server form", () => {
       },
     );
     expect(screen.getByText(L.MODELS_NONE)).toBeInTheDocument();
+    // The list itself is outlined (board M9-Add-A case 5), not a chip.
+    expect(screen.getByPlaceholderText(L.MODELS_PLACEHOLDER)).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByPlaceholderText(L.MODELS_PLACEHOLDER).closest("[data-invalid]")).not.toBeNull();
+    expect(screen.getByLabelText(E.BASE_URL)).not.toHaveAttribute("aria-invalid");
+  });
+
+  it("a provider whose id equals a chip's name does not outline that chip: only the model-quoted position counts", async () => {
+    await refusedWith(
+      `model_providers: "qwen2.5-coder:7b": local.models: "other" is not a model name a run may use — letters, digits and ._:@+[]- , no "/" (a registry or namespace) and no cloud tag`,
+    );
+    expect(screen.getByText("qwen2.5-coder:7b", { selector: "li" })).not.toHaveAttribute("data-bad");
+    expect(screen.getByText("qwen2.5-coder:7b", { selector: "li" })).toBeInTheDocument();
+  });
+
+  it("a repeated name's refusal marks that chip", () => {
+    expect(refusedModel(`model_providers: "p": local.models lists "a" twice`, "a")).toBe(true);
+    expect(refusedModel(`model_providers: "p": local.models lists "a" twice`, "p")).toBe(false);
+  });
+
+  it("turning the token off with people connected asks first, in token words", async () => {
+    const { user } = renderEditor(NODE, { ...snapshot([NODE]), connected: { "gpu-node": 2 } });
+    await user.click(screen.getByRole("switch", { name: L.TOKEN_SWITCH }));
+    await user.click(screen.getByRole("button", { name: E.SAVE }));
+    const ask = await screen.findByRole("alertdialog");
+    expect(within(ask).getByText(E.ADDRESS_TITLE("GPU node"))).toBeInTheDocument();
+    expect(within(ask).getByText(E.ADDRESS_BODY(2))).toBeInTheDocument();
+    expect(putMock).not.toHaveBeenCalled();
+  });
+
+  it("addressChanged: a local server's token on or off, or a changed header, is an address change; its model list is not", () => {
+    const off = { ...NODE, auth: undefined };
+    expect(addressChanged(NODE, off)).toBe(true);
+    expect(addressChanged(NODE, { ...NODE, auth: { header: "X-Token", format: "%s" } })).toBe(true);
+    expect(addressChanged(NODE, { ...NODE, local: { models: ["z"] } })).toBe(false);
+    expect(addressChanged(off, { ...off, local: { models: ["z"] } })).toBe(false);
   });
 
   it("a refused limit outlines that limit", async () => {
