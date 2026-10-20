@@ -98,7 +98,7 @@ func refuseCombinedStoreModes(f *bootFlags) error {
 // without it the AWS KMS client, which starts from that transport, would reach
 // KMS behind neither the proxy nor the corporate CA.
 func withBootTransport(f *bootFlags, mode func(*bootFlags) error) error {
-	_, pool, _, err := loadTrustedCA(*f.trustedCAFile)
+	_, pool, _, err := loadTrustedCA(*f.trustedCAFile, *f.refuseWritableCA)
 	if err != nil {
 		return err
 	}

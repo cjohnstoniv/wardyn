@@ -69,7 +69,12 @@ SITE_CONFIG="${MANAGED_DIR}/site-config.json"
 # ships them root-owned 0644; one another account can write is refused, the
 # same owner and write rule secret.env gets below (readable is fine for these).
 refuse_shared_write() { # FILE
-  local st perm
+  local st perm own
+  # A link is followed (below), and must itself be owned by this uid, as the file it names must be.
+  if [ -L "$1" ]; then
+    own="$(stat -c '%u' "$1" 2>/dev/null || stat -f '%u' "$1" 2>/dev/null || true)"
+    [ "${own}" = "$(id -u)" ] || die "wardyn-desktop.sh: $1 is a symlink owned by uid ${own:-unknown}, not by uid $(id -u). Ship the file from MDM as a regular file or a root-owned link, then re-run."
+  fi
   st="$(stat -L -c '%a %u' "$1" 2>/dev/null || stat -L -f '%OLp %u' "$1" 2>/dev/null || true)"
   [ -n "${st}" ] || die "wardyn-desktop.sh: cannot stat $1 — refusing to use a file whose mode and owner are unknown"
   perm=$(( 8#${st%% *} ))

@@ -202,6 +202,15 @@ type ProxyConfig struct {
 	ViaOrgRoutes         []proxy.ViaOrgRoute       // a runner's via_org destinations; set only by placement's local copy
 	MCPServers           []proxy.MCPServerConfig   // the run's MCP servers on the broker route; proxy.Config.MCPServers
 	MCPBindings          []proxy.MCPBinding        // SHA-256 of each harness's MCP token; proxy.Config.MCPBindings (never the token)
+	// VM marks a desktop VM run (machine_kind linux_vm): the proxy's only client
+	// is wardyn-vmnet, and the port rule is on (proxy.Config.VM).
+	VM bool
+	// PortRule is a container run's port rule, "" (off), "dry_run" or "on"
+	// (WARDYN_EGRESS_PORT_RULE; proxy.Config.PortRule).
+	PortRule string
+
+	// LocalModels: local_model upstream -> its allowlist and bounds (proxy.Config.LocalModels).
+	LocalModels map[string]types.LocalModelSettings
 }
 
 // InjectionGrant pairs an api_key grant with its proxy-side injection rule (never the secret value).
