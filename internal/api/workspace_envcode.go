@@ -165,9 +165,9 @@ var rootRealPath = func(dir *os.File) (string, error) {
 }
 
 // denyOpenedRoot refuses a root whose opened directory is a path no sandbox may be given, running the
-// mount deny-list on its real path. Where /proc/self/fd does not exist (a non-Linux daemon host) the
-// real path cannot be read: nothing is refused and the write proceeds on the path the earlier check
-// vetted, as before, so on a non-Linux host a path swapped between the check and the open is not
+// mount deny-list on its real path. Where /proc/self/fd is missing (a non-Linux host, or Linux
+// without /proc) the real path cannot be read: nothing is refused and the write proceeds on the path
+// the earlier check vetted, as before, so there a path swapped between the check and the open is not
 // re-checked (THREAT-MODEL residual #25).
 func denyOpenedRoot(root *os.Root) error {
 	dir, err := root.Open(".")

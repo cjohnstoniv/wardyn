@@ -13,7 +13,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
   `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on
   `aws_sso_refused_tokens` (migration `0194_aws_sso_refused_tokens`). Without it an AWS SSO session whose renewal
-  AWS refused cannot be marked, read or cleared, so replicas do not share that mark.
+  AWS refused cannot be marked, read or cleared, so replicas do not share that mark. Grant it also
+  `SELECT, INSERT, UPDATE` on `launch_preset_version_floor` (migration `0198_launch_preset_version_floor`).
+  Without it, creating or deleting a launch preset fails.
 
 ## [0.9.5] — 2026-10-19
 
