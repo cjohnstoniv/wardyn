@@ -94,6 +94,9 @@ type RFBRecorder struct {
 	truncated bool
 	gaps      []RFBGap
 	paused    bool
+	// tainted: the message being read holds bytes that arrived while paused (or the stream carries a
+	// field begun then), so it is not kept even if it ends after Resume. The parser still follows it.
+	tainted bool
 }
 
 // NewRFBRecorder starts a recording at now().
@@ -209,6 +212,7 @@ func (r *RFBRecorder) readFrames(p []byte) []byte {
 				}
 				r.msg = append(r.msg, b)
 			}
+			r.tainted = r.tainted || r.paused
 			if r.size+len(r.msg) > MaxRFBBytes {
 				r.truncated, r.msg = true, nil
 			}
@@ -280,11 +284,13 @@ func (r *RFBRecorder) endFrame() {
 	if r.stream.failed && r.stopped == 0 {
 		r.stopped = max(r.ms(), 1)
 	}
-	if len(r.kept) > 0 && !r.paused && !r.truncated {
+	if len(r.kept) > 0 && !r.paused && !r.tainted && !r.truncated {
 		r.frames = append(r.frames, "{"+strconv.FormatInt(r.ms(), 10)+"{"+base64.StdEncoding.EncodeToString(r.kept))
 		r.size += len(r.kept)
 	}
 	r.msg, r.opcode = r.msg[:0], 0
+	// A paused field the stream still carries keeps the next message tainted too.
+	r.tainted = r.tainted && len(r.stream.buf) > 0
 }
 
 // ClipboardOmitted is how many clipboard messages the recording left out so far.
@@ -317,6 +323,8 @@ func (r *RFBRecorder) Resume() bool {
 		return false
 	}
 	r.paused = false
+	// A message or RFB field already begun holds paused bytes: the message that ends it is not kept.
+	r.tainted = r.tainted || r.inFrame || len(r.msg) > 0 || (r.stream != nil && len(r.stream.buf) > 0)
 	r.gaps[len(r.gaps)-1].EndMS = max(r.ms(), 1)
 	return true
 }
