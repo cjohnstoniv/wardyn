@@ -178,7 +178,7 @@ func (p *Proxy) dialThroughUpstream(ctx context.Context, realHost string, realPo
 	}
 	if resp.StatusCode/100 != 2 {
 		_ = conn.Close()
-		return nil, fmt.Errorf("upstream proxy refused CONNECT: %s", resp.Status)
+		return nil, &upstreamConnectRefusedError{status: resp.Status}
 	}
 	// If the proxy pipelined bytes past the response headers (rare for CONNECT),
 	// replay them before the raw conn so the caller's first read (e.g. a TLS
@@ -192,6 +192,14 @@ func (p *Proxy) dialThroughUpstream(ctx context.Context, realHost string, realPo
 		return &prefixConn{Conn: conn, prefix: pre}, nil
 	}
 	return conn, nil
+}
+
+// upstreamConnectRefusedError is the corporate proxy's non-2xx answer to our CONNECT: a
+// peer outside Wardyn said no, which is what refusalOfDialError reads it as.
+type upstreamConnectRefusedError struct{ status string }
+
+func (e *upstreamConnectRefusedError) Error() string {
+	return "upstream proxy refused CONNECT: " + e.status
 }
 
 // prefixConn serves a few bytes already buffered off the wire before delegating
