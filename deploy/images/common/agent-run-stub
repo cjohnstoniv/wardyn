@@ -32,7 +32,7 @@ if [[ "${1:-}" == "--boot-seed" ]]; then
     boot_seed_rec_wrap
     echo "agent-run: boot seed — running the run's startup command in $workdir" >&2
     rc=0
-    "${WARDYN_REC_WRAP[@]}" bash -c "$WARDYN_INTERACTIVE_SEED" || rc=$?
+    "${WARDYN_REC_WRAP[@]}" bash -lc "$WARDYN_INTERACTIVE_SEED" || rc=$?
     echo "agent-run: the run's startup command exited $rc; it is not restarted" >&2
     exec bash
 fi
@@ -57,9 +57,13 @@ configure_git_broker_insteadof; configure_git_pat_broker_insteadof
 if [[ "${1:-}" == "--idle" ]]; then
     : "${HOME:=/home/agent}"; export HOME
     rm -f "$HOME/.wardyn/prep-done"  # a re-boot must not look prepared before it is
+    # booted_before also writes the first boot's marker. A revive replays a startup
+    # command only for an application run (WARDYN_APPLICATION_RUN), as the harness
+    # images do; any other seed already ran.
+    revived=0; booted_before && revived=1
     if [[ -n "${WARDYN_INTERACTIVE_SEED:-}" && "${WARDYN_INTERACTIVE_START:-}" == "agent" ]]; then
         echo "agent-run: WARNING: this image ships no coding agent, so the run's starting prompt is not started; attach gives a plain shell" >&2
-    elif [[ -n "${WARDYN_INTERACTIVE_SEED:-}" ]]; then
+    elif [[ -n "${WARDYN_INTERACTIVE_SEED:-}" ]] && { [[ $revived == 0 ]] || [[ "${WARDYN_APPLICATION_RUN:-}" == 1 ]]; }; then
         # A startup command needs no agent. The session is created BEFORE prep so
         # it wins the name an early attach would take (start_wardyn_session).
         start_wardyn_session "agent-run --boot-seed" \

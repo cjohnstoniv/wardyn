@@ -142,7 +142,7 @@ func TestAgentBaseIdle_ReviveStartsTheStartupCommandAgain(t *testing.T) {
 	home, binDir, tmuxLog := baseBootEnv(t)
 	seed := `WARDYN_INTERACTIVE_SEED={ test -e "$HOME/.wardyn/prep-done" && echo prepped || echo unprepped; } >> "$HOME/seed.log"`
 	for i := range 2 {
-		if code, out := baseRunIdle(t, home, binDir, tmuxLog, "3s", seed); code != 124 {
+		if code, out := baseRunIdle(t, home, binDir, tmuxLog, "3s", seed, "WARDYN_APPLICATION_RUN=1"); code != 124 {
 			t.Fatalf("boot %d exited %d, want 124\noutput: %s", i+1, code, out)
 		}
 		time.Sleep(1200 * time.Millisecond) // the pane's start, if any, lands here
@@ -152,5 +152,38 @@ func TestAgentBaseIdle_ReviveStartsTheStartupCommandAgain(t *testing.T) {
 	}
 	if n := ccCount(ccRead(t, tmuxLog), "new-session -d -s wardyn agent-run --boot-seed"); n != 2 {
 		t.Errorf("tmux got %d boot sessions over two boots, want 2\ntmux calls:\n%s", n, ccRead(t, tmuxLog))
+	}
+}
+
+// A shell run that is not an application (no WARDYN_APPLICATION_RUN) has already
+// run its startup command: a revive does not start it again, as on the harness images.
+func TestAgentBaseIdle_ReviveOfAShellRunDoesNotRestartTheCommand(t *testing.T) {
+	home, binDir, tmuxLog := baseBootEnv(t)
+	seed := `WARDYN_INTERACTIVE_SEED=echo ran >> "$HOME/seed.log"`
+	for i := range 2 {
+		if code, out := baseRunIdle(t, home, binDir, tmuxLog, "3s", seed); code != 124 {
+			t.Fatalf("boot %d exited %d, want 124\noutput: %s", i+1, code, out)
+		}
+		time.Sleep(1200 * time.Millisecond)
+	}
+	if got := ccRead(t, filepath.Join(home, "seed.log")); got != "ran\n" {
+		t.Errorf("after a boot and a revive the startup command's log is %q, want one start", got)
+	}
+	if n := ccCount(ccRead(t, tmuxLog), "new-session -d -s wardyn agent-run --boot-seed"); n != 1 {
+		t.Errorf("tmux got %d boot sessions over two boots, want 1\ntmux calls:\n%s", n, ccRead(t, tmuxLog))
+	}
+}
+
+// The stub runs the startup command in a login shell, as the claude-code and codex
+// images do, so one command sees the same environment on every image.
+func TestAgentBaseIdle_StartupCommandRunsInALoginShell(t *testing.T) {
+	home, binDir, tmuxLog := baseBootEnv(t)
+	seed := `WARDYN_INTERACTIVE_SEED=shopt -q login_shell && echo login >> "$HOME/seed.log" || echo plain >> "$HOME/seed.log"`
+	if code, out := baseRunIdle(t, home, binDir, tmuxLog, "4s", seed); code != 124 {
+		t.Fatalf("agent-run --idle exited %d, want 124\noutput: %s", code, out)
+	}
+	time.Sleep(1200 * time.Millisecond)
+	if got := ccRead(t, filepath.Join(home, "seed.log")); got != "login\n" {
+		t.Errorf("startup command saw %q, want it run by bash -l", got)
 	}
 }

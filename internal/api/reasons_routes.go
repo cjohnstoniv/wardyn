@@ -360,7 +360,7 @@ const (
 	reasonUIGatewayExecFailed                 = "ui_gateway_exec_failed"                  // starting the relay's own exec session failed
 	reasonUIGatewayLauncherExecFailed         = "ui_gateway_launcher_exec_failed"         // starting the in-sandbox launcher probe failed
 	reasonUIGatewayLauncherMissing            = "ui_gateway_launcher_missing"             // the image has no launcher script for this app
-	reasonUIGatewayLauncherNotListening       = "ui_gateway_launcher_not_listening"       // the launcher ran but nothing bound the app's port in time
+	reasonUIGatewayLauncherNotListening       = "ui_gateway_launcher_not_listening"       // the launcher ran but nothing bound the app's port in time, or an application run's startup command is not listening on the port
 	reasonUIGatewayLauncherProbeFailed        = "ui_gateway_launcher_probe_failed"        // the launcher probe exited with an unrecognized code
 	reasonUIGatewayConnectionClosed           = "ui_gateway_connection_closed"            // the sandbox closed the relay connection unexpectedly
 	reasonUIGatewayBindMissingTicket          = "ui_gateway_bind_missing_ticket"          // POST /__wardyn/bind's form carried no ticket
