@@ -104,3 +104,17 @@ func TestConnectLogCarriesTheHint(t *testing.T) {
 		t.Fatalf("warnings = %v, want the hint attribute", warns)
 	}
 }
+
+func TestOrgRouteNamesTheProxyHostAndPortOnly(t *testing.T) {
+	id := uuid.NewString()
+	proxy, _ := url.Parse("http://u:secret@proxy.example:3128")
+	if got := orgRoute("https://org.example", id, http.ProxyURL(proxy)); got != "via proxy proxy.example:3128 (HTTPS_PROXY)" {
+		t.Errorf("route = %q", got)
+	}
+	if got := orgRoute("https://org.example", id, func(*http.Request) (*url.URL, error) { return nil, nil }); got != "direct" {
+		t.Errorf("route = %q", got)
+	}
+	if got := orgRoute("not a url", id, http.ProxyURL(proxy)); got != "direct" {
+		t.Errorf("route = %q", got)
+	}
+}
