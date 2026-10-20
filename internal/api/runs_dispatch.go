@@ -51,7 +51,7 @@ type dispatchParams struct {
 	GitPATGrants     map[string]string       // {host: grant_id} for non-GitHub PAT hosts
 	SSHGrants        map[string]string       // {host: grant_id} for SSH clone hosts
 	Injections       []runner.InjectionGrant // proxy-side credential injections
-	Interactive      bool                    // idle box for `wardyn run attach` (no agent exec, no completion watcher)
+	Interactive      bool                    // idle box for `wardyn attach` (no agent exec, no completion watcher)
 	TaskMode         string                  // "exec" for the BYOA/CI plain-command lane; "" for the agent harness
 	InteractiveStart string                  // "agent" opens the attach shell in the image's agent CLI; "" / "shell" = a bare shell. Interactive runs only.
 	SeedAutoTools    bool                    // true lets an interactive run's boot seed use tools before attach (--dangerously-skip-permissions for that pre-attach span). Interactive + agent-started + non-empty seed only.
@@ -163,7 +163,7 @@ type dispatchParams struct {
 // start the completion watcher (there is no agent process to wait on — the
 // watcher would otherwise mark the idle run COMPLETED the moment Wait failed).
 // The sandbox comes up idle (the container holds open via the TERM-aware idle
-// loop, AgentIdleScript / `agent-run --idle`) so a human can `wardyn run attach
+// loop, AgentIdleScript / `agent-run --idle`) so a human can `wardyn attach
 // <id>` and drive it. A non-interactive run is
 // unchanged. Pair an interactive run with a never-reap policy (AutoStopAfterSec
 // < 0) or the idle reaper will stop the idle sandbox.
@@ -173,7 +173,8 @@ type dispatchParams struct {
 // ALLOWLIST so nothing above it can re-add a broker-managed host;
 // reassertCeilingDenies then runs after it (it only adds denies and only
 // removes credentials, so it cannot un-confine anything, and it has to sit
-// below every WIDENING phase — see its own ordering argument). The ProxyConfig
+// below every WIDENING phase — see its own ordering argument), and the final
+// seal after both meets the result with the outer layers. The ProxyConfig
 // snapshot then captures that final policy, and the run.policy.resolve audit
 // event discloses it. Keep new phases inside this sequence, in the right place
 // — a phase hoisted into a caller silently loses the ordering guarantee.
@@ -411,7 +412,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	injections = ado.injections
 	// A narrowed git_pat grant this run could not enforce refuses the run here
 	// (runs_dispatch_pat_scope.go).
-	if !s.enforceablePATNarrowing(ctx, run, p, grantRows, siteCfg, adoRun, adoInject) {
+	if !s.enforceablePATNarrowing(ctx, run, p, grantRows, siteCfg, adoRun, adoInject, ceiling.adoStanding.operator) {
 		return
 	}
 	s.announceADODecline(ctx, run, adoDecision, sandboxEnv)
@@ -451,6 +452,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	s.recordRunSizing(ctx, run, resourceLimitsToRunner(policy.Resources), len(plan.azure.gates) > 0)
 	s.reassertCeilingDenies(ctx, run, &policy, &injections, ceiling, &p, sandboxEnv, &llm, &plan.bedrockMITMHosts, &p.Components.MITMHosts)
 	azureARM := plan.azureCLI.closeWithheld(&policy, injections) // the door, decided once; one the ceiling withheld takes its hosts with it
+	// The final seal, after every phase that adds a host and after the ceiling's
+	// re-assertion: nothing below may widen policy (run_policy_seal.go).
+	s.sealRunPolicy(ctx, run, &policy, p.Provenance)
 
 	// Host bind mounts (policy WorkspaceMounts + the host-mode Bedrock ~/.aws
 	// read-only mount) — operator-authored, never agent-chosen; see buildRunMounts.
@@ -488,6 +492,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "the run's tool-approval credential could not be made")
 		return
 	}
+	// Last of the env writers' credential work, after every injection above is
+	// authored, so its one-credential-per-host check sees them all.
+	placeholderMITM := s.placeEnvSecrets(ctx, run, policy, p, grantRows, secretEnvKeys, sandboxEnv, &injections)
 	secretEnv := splitSecretEnv(sandboxEnv, dispatchSecretEnvKeys(secretEnvKeys, llm))
 
 	resources := resourceLimitsToRunner(policy.Resources)
@@ -530,7 +537,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		// these roots — see runner/member_mount.go.
 		UserMountRoots: p.UserMounts.Roots,
 		UserWritable:   p.UserMounts.Writable,
-		// Interactive runs come up idle for `wardyn run attach`; the driver prepares the
+		// Interactive runs come up idle for `wardyn attach`; the driver prepares the
 		// workspace (clones the repo into ~/work) on the idle process so the attach
 		// shell isn't empty. A non-interactive run's task exec does this itself.
 		Interactive: p.Interactive,
@@ -550,7 +557,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// TLS-MITM (beyond the built-in LLM hosts) so a registry token injects on
 			// the wire. Only hosts with a resolved token injection appear here — a
 			// tight per-host allowlist, never a blanket. See isMITMHost widening.
-			MITMHosts: slices.Concat(artifactPlan.mitmHosts, plan.bedrockMITMHosts, ado.mitmHosts, plan.azure.mitmHosts, p.Components.MITMHosts),
+			MITMHosts: slices.Concat(artifactPlan.mitmHosts, plan.bedrockMITMHosts, ado.mitmHosts, plan.azure.mitmHosts, p.Components.MITMHosts, placeholderMITM),
 			// MITM the BUILT-IN LLM hosts only when that's actually intended for this
 			// run — subscription OAuth injection or intercept_tls content inspection.
 			// The CA above may also be minted purely for artifact-token injection, so
@@ -580,6 +587,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// The Azure CLI door's grant (runs_dispatch_cli_azure.go): nil without
 			// the row, and nil when a later phase withheld its credential.
 			AzureARM: azureARM,
+			// The re-signed AWS lane's grant (runs_dispatch_aws_sigv4.go): nil while
+			// WARDYN_AWS_SIGV4_AT_PROXY is off and on every lane it does not re-sign.
+			AWSSigV4: plan.awsSigV4,
 			// The azure_foundry lane's route gate (provider_azure.go), and the hosts inspected as a model host without being a
 			// brokered upstream: that lane's endpoint and a Claude subscription's route-through host. Empty on every other run.
 			AzureGates:      plan.azure.gates,
@@ -599,6 +609,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// legacy path, the chosen model provider's own address on the provider
 			// path (see dispatchLLMPlan.llmUpstreams). Empty => the vendor host.
 			LLMUpstreams: plan.llmUpstreams,
+			// What each local_model upstream above may be asked for (#2957);
+			// nil, so no key is written, unless the run chose one.
+			LocalModels: plan.localModels,
 			// What the brokered-LLM 404 says when this run reaches that route
 			// with nothing behind it — compiled at dispatch because the sidecar
 			// knows only that no injection matched (see llmUnavailableDetail).
@@ -608,6 +621,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// policy has review paths, the one thing it changes: an older
 			// proxy refuses the key, and must not refuse every task run.
 			Unattended:         !p.Interactive && pushReviewRules(policy, p.PushRuleSets),
+			ScrubResponses:     s.cfg.ScrubProxyResponses,
 			PushRuleSets:       p.PushRuleSets,
 			PushRuleBase:       pushRuleBase(policy, p.PushRuleSets),
 			HarnessToolRules:   p.HarnessToolRules,
@@ -617,6 +631,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// the run has no profile and the site sets no policy_help, because an
 			// older proxy refuses the key.
 			Attribution: s.runAttribution(ctx, run, siteCfg, p.PolicyOverridden),
+			// WARDYN_EGRESS_PORT_RULE, "" when off: an older proxy refuses the key.
+			PortRule: s.cfg.EgressPortRule,
 		},
 		// Hard resource caps. A nil policy block (or a zero field) becomes the
 		// driver's conservative platform default, so EVERY sandbox is CPU/memory/
@@ -669,6 +685,11 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// sync.OnceFunc + defer: the explicit calls below stop it at the earliest point, and the
 	// defer stops the heartbeat if CreateSandbox panics (ctx is WithoutCancel, so nothing else would).
 	stopCreateLease := sync.OnceFunc(s.holdRunWatcherLease(ctx, run.ID))
+	// A dispatch that returns with no sandbox created leaves no lease owner behind, which a
+	// member-drive delete would read as a create still in flight until the heartbeat aged out.
+	// Deferred first, so it runs after the create lease's ticker has stopped.
+	created := false
+	defer s.releaseUncreatedRunLease(ctx, run.ID, &created)
 	defer stopCreateLease()
 
 	// What the substrate says it is waiting on, while it is still waiting; the
@@ -715,6 +736,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": err.Error(), "reason": reason})))
 		return
 	}
+	created = true
 
 	// Drives attached — a no-op for the runs (most of them) that carry none.
 	// See auditDriveMount.
@@ -787,7 +809,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 //
 // Interactive mode: skip the agent Exec AND the completion watcher. The
 // sandbox is RUNNING and idle (the container holds open), ready for a human to
-// `wardyn run attach`. There is no agent process, so there is nothing for the
+// `wardyn attach`. There is no agent process, so there is nothing for the
 // watcher to Wait on — starting it would have it observe an immediate Wait
 // failure (no tracked agent exec) and could prematurely terminate the run.
 // BYOI runtime preflight: a wrapped arbitrary base is guaranteed to carry the

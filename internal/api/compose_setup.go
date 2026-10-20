@@ -5,6 +5,8 @@ package api
 
 import (
 	"context"
+	"encoding/json"
+	"log/slog"
 	"maps"
 	"slices"
 	"strconv"
@@ -79,7 +81,7 @@ func (s *Server) deriveSetupItems(ctx context.Context, owner string, run compose
 	// applyWorkspaces (compose.go) now puts EVERY git repo, the primary included,
 	// into spec.WorkspaceRepos — so referencedWorkspaces alone resolves it; no
 	// separate run.Repo-keyed lookup needed here.
-	return s.deriveRunSetupItems(ctx, owner, run, spec, presentSecrets, llmAccess, s.referencedWorkspaces(ctx, spec))
+	return s.deriveRunSetupItems(ctx, owner, run, spec, presentSecrets, llmAccess, s.referencedWorkspaces(ctx, owner, spec))
 }
 
 // deriveRunSetupItems is deriveSetupItems over the workspaces a run attaches
@@ -96,16 +98,78 @@ func (s *Server) deriveRunSetupItems(ctx context.Context, owner string, run comp
 	if it, ok := s.setupLLMAccessItem(run.Agent, llmAccess, spec); ok {
 		items = append(items, it)
 	}
-	items = append(items, setupSecretItems(spec, presentSecrets)...)
+	// A member's rows never name an operator secret or judge one of theirs against the operator's
+	// store, and the workspace facts in them are the ones that member reads on the workspace itself.
+	own, read, egress := s.setupMemberView(ctx, owner, presentSecrets, workspaces)
+	items = append(items, setupSecretItemsFor(spec, presentSecrets, own)...)
 
-	items = append(items, setupWorkspaceItems(workspaces)...)
-	items = append(items, setupWorkspaceSecretItems(workspaces, presentSecrets)...)
+	items = append(items, setupWorkspaceItems(read)...)
+	judge := presentSecrets
+	if own != nil {
+		judge = own
+	}
+	items = append(items, setupWorkspaceSecretItems(read, judge)...)
 	items = append(items, s.setupWorkspaceIntegrationItems(ctx, owner, workspaces, presentSecrets)...)
-	items = append(items, setupRepoCredentialItems(spec, presentSecrets)...)
-	if it, ok := setupEgressWorkspaceItem(spec, workspaces); ok {
+	items = append(items, setupRepoCredentialItemsFor(spec, presentSecrets, own)...)
+	if it, ok := setupEgressWorkspaceItem(spec, egress); ok {
 		items = append(items, it)
 	}
 	return items
+}
+
+// setupMemberView is what a non-operator's checklist is built from: own, the names in their own
+// namespace (nil for an operator, whose rows read the operator's store), read, each workspace as
+// its read tier shows it (redactWorkspaceForRead), and egress, each workspace with its content's
+// suggested hosts dropped where that tier does not see them.
+func (s *Server) setupMemberView(ctx context.Context, owner string, present map[string]bool, workspaces []types.Workspace) (own map[string]bool, read, egress []types.Workspace) {
+	if owner == "" {
+		return nil, workspaces, workspaces
+	}
+	own = map[string]bool{}
+	if s.cfg.Secrets != nil {
+		// The request's one List of the owner's own rows (no operator fallback), shared with its
+		// ownership checks; a reserved name (a wardyn-provider- credential among them) is no row.
+		for n := range s.ownedSecretNames(ctx, owner) {
+			if !secretsAPIReserved(n) {
+				own[n] = true
+			}
+		}
+	}
+	for _, ws := range workspaces {
+		tier := workspaceReadFull
+		if ws.OwnedBy != owner {
+			tier = workspaceReadMember
+			if s.isSecurityOperator(ctx) {
+				tier = workspaceReadSecurity
+			}
+		}
+		read = append(read, redactWorkspaceForRead(ws, tier))
+		if tier == workspaceReadMember {
+			ws.Profile = withoutProfileKeys(ws.Profile, "suggested_egress")
+		}
+		egress = append(egress, ws)
+	}
+	return own, read, egress
+}
+
+// withoutProfileKeys is a scanned profile with keys deleted, decoded as redactProfileForRead does;
+// one that will not decode is withheld.
+func withoutProfileKeys(raw json.RawMessage, keys ...string) json.RawMessage {
+	if len(raw) == 0 {
+		return raw
+	}
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil
+	}
+	for _, k := range keys {
+		delete(doc, k)
+	}
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return nil
+	}
+	return out
 }
 
 // setupLLMAccessItem reshapes the ALREADY-COMPUTED runLLMAccess verdict
@@ -167,9 +231,35 @@ func (s *Server) setupLLMAccessItem(agent string, llmAccess *composeLLMAccess, s
 // DISTINCT secret name: an api_key grant and a git_pat grant can name the same
 // stored secret without duplicating the row.
 func setupSecretItems(spec types.RunPolicySpec, presentSecrets map[string]bool) []SetupItem {
+	return setupSecretItemsFor(spec, presentSecrets, nil)
+}
+
+// setupSecretItemsFor is setupSecretItems for a caller whose own secret names are own (nil for an
+// operator). A member reads a secret's name only when they hold it, or when the grant is
+// owner_only and so can only ever read their own; any other grant reads the operator's secret, and
+// its row is "Provided by your admin", keyed by what the grant presents it to, with the operator's
+// answer for its status.
+func setupSecretItemsFor(spec types.RunPolicySpec, presentSecrets, own map[string]bool) []SetupItem {
 	var items []SetupItem
 	seen := map[string]bool{}
-	add := func(name, requiredBy, residency string) {
+	var ownerOnly bool
+	add := func(name, key, requiredBy, residency string) {
+		if own != nil && name != "" && !own[name] {
+			if !ownerOnly {
+				it := providedSecretItem(key, requiredBy, residency, presentSecrets[name])
+				if !seen[it.ID] {
+					seen[it.ID] = true
+					items = append(items, it)
+				}
+				return
+			}
+			if seen[name] {
+				return
+			}
+			seen[name] = true
+			items = append(items, secretSetupItem(name, requiredBy, residency, false))
+			return
+		}
 		if name == "" || seen[name] {
 			return
 		}
@@ -177,6 +267,7 @@ func setupSecretItems(spec types.RunPolicySpec, presentSecrets map[string]bool) 
 		items = append(items, secretSetupItem(name, requiredBy, residency, presentSecrets[name]))
 	}
 	for _, g := range spec.EligibleGrants {
+		ownerOnly = g.OwnerOnly
 		switch g.Kind {
 		case types.GrantAPIKey:
 			rule, err := injectionRuleFromScope(g.Scope)
@@ -189,21 +280,21 @@ func setupSecretItems(spec types.RunPolicySpec, presentSecrets map[string]bool) 
 			}
 			// api_key: the value is resolved proxy-side (injection.go) and never
 			// reaches the sandbox.
-			add(rule.SecretName, "an api_key grant ("+rule.Host+")", "proxy_injected")
+			add(rule.SecretName, rule.Host, "an api_key grant ("+rule.Host+")", "proxy_injected")
 		case types.GrantGitPAT:
 			if sc, err := types.DecodeGitPATScope(g.Scope); err == nil {
 				// git_pat's residency belongs to the repo_credential row (the grant
 				// that actually gets minted/delivered) — this row only answers
 				// whether the secret exists, so it carries no residency of its own.
-				add(sc.SecretName, "a git_pat grant ("+sc.Host+")", "")
+				add(sc.SecretName, sc.Host, "a git_pat grant ("+sc.Host+")", "")
 			}
 		case types.GrantEnvSecret:
 			if name, secretName, err := envSecretScopeFields(g.Scope); err == nil {
-				add(secretName, "an env_secret grant ("+name+")", "resident_env")
+				add(secretName, "env:"+name, "an env_secret grant ("+name+")", "resident_env")
 			}
 		case types.GrantFileSecret:
 			if file, secretName, err := fileSecretScopeFields(g.Scope); err == nil {
-				add(secretName, "a file_secret grant ("+file+")", "resident_file")
+				add(secretName, "file:"+file, "a file_secret grant ("+file+")", "resident_file")
 			}
 		}
 	}
@@ -250,13 +341,18 @@ func overrideSecretItems(items []SetupItem, missing []client.SecretOverride) []S
 // run whose operator has not stored the secret before any row is derived, so
 // the status read from the caller's presence map is the operator's answer.
 func setupSharedSecretItem(host string, present bool) SetupItem {
+	return providedSecretItem(host, "an api_key grant ("+host+")", "proxy_injected", present)
+}
+
+// providedSecretItem is the nameless row for a secret the operator stores, keyed by key.
+func providedSecretItem(key, requiredBy, residency string, present bool) SetupItem {
 	status := "missing"
 	if present {
 		status = "satisfied"
 	}
 	return SetupItem{
-		Kind: "secret", ID: "secret:provided:" + host, Label: "Provided by your admin",
-		RequiredBy: "an api_key grant (" + host + ")", Status: status, Residency: "proxy_injected",
+		Kind: "secret", ID: "secret:provided:" + key, Label: "Provided by your admin",
+		RequiredBy: requiredBy, Status: status, Residency: residency,
 	}
 }
 
@@ -416,13 +512,17 @@ func setupWorkspaceSecretItems(workspaces []types.Workspace, presentSecrets map[
 	return items
 }
 
-// setupRepoCredentialItems covers the grants groundGitHubGrants/groundGitPATGrants
+// setupRepoCredentialItemsFor covers the grants groundGitHubGrants/groundGitPATGrants
 // left standing in the FINAL spec: a github_token is broker-minted at clone time
 // (nothing stored to check, so it is always "unverified" pre-launch); a git_pat's
 // readiness is exactly whether its secret is present. This intentionally
 // overlaps setupSecretItems' git_pat check — that row answers "is the secret
 // stored", this one answers "is THIS grant usable" (host-scoped).
-func setupRepoCredentialItems(spec types.RunPolicySpec, presentSecrets map[string]bool) []SetupItem {
+//
+// own is the caller's own secret names (nil for an operator): a git_pat secret a member does not
+// hold is judged against their own namespace when the grant is owner_only, and is otherwise the
+// operator's, offered with no name.
+func setupRepoCredentialItemsFor(spec types.RunPolicySpec, presentSecrets, own map[string]bool) []SetupItem {
 	var items []SetupItem
 	seenGH := false
 	for _, g := range spec.EligibleGrants {
@@ -459,9 +559,14 @@ func setupRepoCredentialItems(spec types.RunPolicySpec, presentSecrets map[strin
 			host, name := pat.Host, pat.SecretName
 			status := "missing"
 			var fix *SetupFix
-			if presentSecrets[name] {
+			switch {
+			case own != nil && !own[name] && !g.OwnerOnly:
+				if presentSecrets[name] {
+					status = "satisfied"
+				}
+			case presentSecrets[name] && (own == nil || own[name]):
 				status = "satisfied"
-			} else {
+			default:
 				fix = &SetupFix{Action: "add_secret", SecretName: name}
 			}
 			items = append(items, SetupItem{
@@ -578,17 +683,25 @@ func (s *Server) setupBackendItem(ctx context.Context, run composer.RunInput, sp
 		it.Fix = &SetupFix{Action: "none"}
 		return it, true
 	}
+	// The row is the caller's: a non-operator reads what redactSetupStatusForUser
+	// leaves them, so neither the probe's error nor the substrate name.
+	operator := s.isOperator(ctx)
 	caps, err := s.cfg.Runner.Capabilities(ctx)
 	if err != nil {
 		it.Status = "unverified"
-		it.Detail = "could not probe the runner's capabilities: " + err.Error()
+		it.Detail = "could not probe the runner's capabilities"
+		if operator {
+			it.Detail += ": " + err.Error()
+		} else {
+			slog.WarnContext(ctx, "wardynd: probing the runner's capabilities for a setup row failed", slog.Any("err", err))
+		}
 		return it, true
 	}
 	// Mirror of the launch gate (runs.go): the runner must advertise EXACTLY
 	// final, not merely something that outranks it.
 	if slices.Contains(caps.ConfinementClasses, final) {
 		it.Status = "satisfied"
-		if sub := caps.Resolved[final]; sub != "" {
+		if sub := caps.Resolved[final]; sub != "" && operator {
 			it.Detail = "enforced here as " + sub + "."
 		}
 		return it, true

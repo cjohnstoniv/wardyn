@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -104,7 +105,7 @@ type SandboxSpec struct {
 	// reason CHANGES. Called SYNCHRONOUSLY on CreateSandbox's own goroutine
 	// (must not block). Call NotifyWaiting, never the field.
 	OnWaiting func(detail string) `json:"-"`
-	// Interactive marks a run that comes up idle for `wardyn run attach`; a
+	// Interactive marks a run that comes up idle for `wardyn attach`; a
 	// driver prepares the workspace on the idle main process for it.
 	Interactive bool
 	// ExecOutput, non-nil, receives a copy of the agent exec's combined
@@ -177,6 +178,8 @@ type ProxyConfig struct {
 	GitHubAPI *proxy.GitHubAPIGrant
 	// AzureARM is the run's Azure CLI grant for the proxy's management.azure.com door; nil == off.
 	AzureARM *proxy.AzureARMGrant
+	// AWSSigV4 is the run's AWS SigV4 re-signing grant (WARDYN_AWS_SIGV4_AT_PROXY); nil == off.
+	AWSSigV4 *proxy.AWSSigV4Config
 	// BrokeredPATGrantIDs is every git_pat grant id of the run while the PAT broker is on; the proxy refuses a raw mint of one.
 	BrokeredPATGrantIDs []uuid.UUID
 	// ResidentMints are the run's runner_resident ssh_key and git_pat grants, each Token its
@@ -196,6 +199,7 @@ type ProxyConfig struct {
 	LLMChannelHosts      map[string]string         // model host -> vendor schema it is inspected as; never an LLMUpstreams entry (proxy.Config.LLMChannelHosts)
 	LLMUnavailableDetail string                    // reason for the brokered-LLM 404 when no credential backs it
 	Unattended           bool                      // a run nobody is driving: a held push is refused instead
+	ScrubResponses       bool                      // replace proxy-held credentials in relayed responses (proxy.Config.ScrubResponses)
 	Attribution          *policyref.Ref            // the policy named in a policy-decided refusal; nil when none
 	PushRuleSets         []types.PushRuleSet       // push content rules per SCM entry (provider+org); proxy.Config.PushRuleSets
 	PushRuleBase         *types.PushRulesSpec      // the run's push rules after the ceiling, for an entry with no set; proxy.Config.PushRuleBase
@@ -204,6 +208,15 @@ type ProxyConfig struct {
 	ViaOrgRoutes         []proxy.ViaOrgRoute       // a runner's via_org destinations; set only by placement's local copy
 	MCPServers           []proxy.MCPServerConfig   // the run's MCP servers on the broker route; proxy.Config.MCPServers
 	MCPBindings          []proxy.MCPBinding        // SHA-256 of each harness's MCP token; proxy.Config.MCPBindings (never the token)
+	// VM marks a desktop VM run (machine_kind linux_vm): the proxy's only client
+	// is wardyn-vmnet, and the port rule is on (proxy.Config.VM).
+	VM bool
+	// PortRule is a container run's port rule, "" (off), "dry_run" or "on"
+	// (WARDYN_EGRESS_PORT_RULE; proxy.Config.PortRule).
+	PortRule string
+
+	// LocalModels: local_model upstream -> its allowlist and bounds (proxy.Config.LocalModels).
+	LocalModels map[string]types.LocalModelSettings
 }
 
 // InjectionGrant pairs an api_key grant with its proxy-side injection rule (never the secret value).
@@ -407,6 +420,27 @@ type SandboxEnder interface {
 // whose substrate for ref cannot keep a stopped (or lost) sandbox.
 var ErrEndUnsupported = errors.New("runner: this substrate cannot keep an ended sandbox")
 
+// ErrAWSCacheWipeFailed is EndSandbox's answer when the sandbox was kept, its proxy stopped and
+// all, but the AWS credential caches could not be wiped first: the end itself succeeded, and the
+// kept layer may still hold them. A caller treats it as a successful end and records the reason.
+var ErrAWSCacheWipeFailed = errors.New("runner: the AWS credential caches could not be wiped before the sandbox was kept")
+
+// KeptDespiteAWSCacheWipe is a runner's own answer for an end it serves: an ErrAWSCacheWipeFailed
+// end succeeded, so it is logged here and answered as nil. The wire has no code for it, and an
+// error the control plane cannot read would leave the run's containment unresolved for good.
+func KeptDespiteAWSCacheWipe(ctx context.Context, ref string, err error) error {
+	if errors.Is(err, ErrAWSCacheWipeFailed) {
+		slog.WarnContext(ctx, "runner: kept an ended sandbox whose AWS credential caches could not be wiped",
+			slog.String("ref", ref), slog.Any("err", err))
+		return nil
+	}
+	return err
+}
+
+// AWSProfileRecordEnv is the sandbox env var carrying the ~/.aws files Wardyn stages for an AWS
+// sign-in lane; a sandbox that has it is one whose AWS caches a kept end wipes.
+const AWSProfileRecordEnv = "WARDYN_AWS_SSO_CONFIG_B64"
+
 // ProxyStopper is an OPTIONAL Runner capability: stop a sandbox's proxy
 // sidecar and leave its agent running (a run lost to a control-plane outage).
 // The stopped proxy is removed, not kept: the config lives in the run's
@@ -473,6 +507,39 @@ type Selftester interface {
 // ErrSelftestUnsupported is Selftester's answer from a router whose substrate
 // for ref has no selftest of its own.
 var ErrSelftestUnsupported = errors.New("runner: this substrate has no BYOI selftest of its own")
+
+// LocalAttacher is an OPTIONAL Runner capability: attach the person's CLI on the runner's own
+// computer to a run, with the terminal bytes on that computer and only a copy sent to the org for
+// recording. Nonce is the grant the CLI holds on the runner's local socket. A substrate that cannot
+// refuses with ErrLocalAttachUnsupported before anything is sent.
+type LocalAttacher interface {
+	LocalAttach(ctx context.Context, ref string, req LocalAttachRequest) (LocalSession, error)
+}
+
+// LocalAttachRequest is LocalAttacher's input. Tee says the org records the run: the runner then sends
+// every output chunk to the session's Read before it shows it, and the org acknowledges with AckTee.
+type LocalAttachRequest struct {
+	Nonce   string
+	Options AttachOptions
+	Tee     bool
+}
+
+// LocalSession is the org's end of a local attach: Read is the tee (the output the runner shows), and
+// Close ends the session, which makes the runner end the PTY. It writes nothing to the terminal.
+type LocalSession interface {
+	Read(p []byte) (int, error)
+	// SetObserver switches the session to observer or writer and returns once the runner has applied
+	// it. A change the runner does not acknowledge before ctx ends has closed the session.
+	SetObserver(ctx context.Context, observer bool, cols, rows uint16) error
+	// AckTee tells the runner the org has recorded the first offset bytes Read returned. Without a tee
+	// there is nothing to acknowledge and it errors.
+	AckTee(ctx context.Context, offset int64) error
+	Close() error
+}
+
+// ErrLocalAttachUnsupported is LocalAttacher's refusal from a substrate or runner that cannot attach
+// locally (an older runner, or a router whose substrate has no local attach of its own).
+var ErrLocalAttachUnsupported = errors.New("runner: this runner does not support local attach")
 
 // SandboxStarter is an OPTIONAL Runner capability: start a kept sandbox's
 // stopped agent again (revive after a reboot). Files survive; the main

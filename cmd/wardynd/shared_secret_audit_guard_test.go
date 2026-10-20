@@ -63,12 +63,14 @@ var declaredSecretNameWrites = map[string]declaredSecretNameWrite{
 	// env and file deliveries are the launching person's own secret.
 	"internal/api/runs_dispatch_secrets.go:Server.resolveEnvSecretValues": {1, "run.env_secret.resolve names the secret an env_secret grant resolved; an env_secret grant is never shared"},
 	"internal/api/runs_dispatch_files.go:Server.resolveFileSecretValues":  {1, "run.file_secret.resolve names the secret a file_secret grant resolved; a file_secret grant is never shared"},
+	"internal/api/runs_dispatch_placeholders.go:Server.recordPlaceholder": {1, "run.secret_placeholder.resolve names the secret of an env_secret or file_secret grant; neither is ever shared"},
 	// Not rows at all: broker.Minted.Metadata. The mint row is built from the
 	// grant's own scope (mintEvent), withSecretScope copies secret_scope alone
 	// out of this map, and the mint answer does not serialise it.
-	"internal/broker/broker_mint_kinds.go:Broker.mintAPIKey": {1, "Minted.Metadata of an api_key mint"},
-	"internal/broker/broker_mint_kinds.go:Broker.mintGitPAT": {1, "Minted.Metadata of a git_pat mint"},
-	"internal/broker/broker_mint_kinds.go:Broker.mintSSHKey": {1, "Minted.Metadata of an ssh_key mint"},
+	"internal/broker/broker_mint_kinds.go:Broker.mintAPIKey":         {1, "Minted.Metadata of an api_key mint"},
+	"internal/broker/broker_mint_kinds.go:Broker.mintGitPAT":         {1, "Minted.Metadata of a git_pat mint"},
+	"internal/broker/broker_mint_kinds.go:Broker.mintGitHubOwnToken": {1, "Minted.Metadata of a git_pat mint reading a person's own GitHub token; that sealed name is never a component's shared grant"},
+	"internal/broker/broker_mint_kinds.go:Broker.mintSSHKey":         {1, "Minted.Metadata of an ssh_key mint"},
 }
 
 // secretNameWrite is one write of a secret-naming key into a map.

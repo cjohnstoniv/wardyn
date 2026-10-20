@@ -48,6 +48,31 @@ const (
 	// method so a runner that predates VMs refuses it instead of reading it as create_sandbox and
 	// starting a container; every later verb on the VM's ref is the container one.
 	MethodCreateVM = "create_vm"
+	// MethodListFolders, MethodSyncFolder and MethodSyncFolderWait are a
+	// folder-only runner's (Caps.Folders): the folders under its roots, and one
+	// `wardyn sync` pass between one of them and a run's sandbox.
+	MethodListFolders    = "list_folders"
+	MethodSyncFolder     = "sync_folder"
+	MethodSyncFolderWait = "sync_folder_wait"
+	// The local attach calls are sent only to a runner that advertises Caps.LocalAttach.
+	// MethodLocalAttach opens a pty_tee stream and answers its id; MethodLocalAttachMode changes the
+	// session's writer/observer mode and is answered once the runner has applied it;
+	// MethodLocalAttachTeeAck acknowledges the tee bytes the org has handed to its recorder.
+	MethodLocalAttach       = "local_attach"
+	MethodLocalAttachMode   = "local_attach_mode"
+	MethodLocalAttachTeeAck = "local_attach_tee_ack"
+)
+
+// The tee window of a local attach session whose Tee is true. The runner shows at most
+// LocalAttachTeeWindowBytes of output ahead of the org's last acknowledgement, stops writing to the
+// CLI while that window is full, and ends the session when no acknowledgement covers the oldest
+// unacknowledged byte within LocalAttachTeeWindowTimeout of it being sent, so a stalled recorder
+// cannot let unrecorded output reach the screen. An idle session with nothing unacknowledged never
+// stalls. With Tee false there are no acknowledgements and no window. The timeout matches the api package's
+// attachLeaseCallTimeout, which this package cannot import.
+const (
+	LocalAttachTeeWindowBytes                 = 64 << 10
+	LocalAttachTeeWindowTimeout time.Duration = 2 * time.Second
 )
 
 // CreateSandboxArgs carries the spec minus OnWaiting and ExecOutput (both are
@@ -104,6 +129,83 @@ type AttachArgs struct {
 type StreamResult struct {
 	Stream uint32 `json:"stream"`
 }
+
+// ListFoldersArgs asks for the folders in Path, an absolute path under one of
+// the runner's roots; empty lists the roots themselves. Survey also asks what a
+// pass from Path would send, under the organisation's Deny patterns.
+type ListFoldersArgs struct {
+	Path   string   `json:"path,omitempty"`
+	Survey bool     `json:"survey,omitempty"`
+	Deny   []string `json:"deny,omitempty"`
+}
+
+// FolderList is list_folders' result. Only folder names, counts and sizes
+// cross, and the names Survey.LeftOut lists: never another file name.
+type FolderList struct {
+	Path    string        `json:"path"`
+	Folders []FolderEntry `json:"folders"`
+	Survey  *FolderSurvey `json:"survey,omitempty"`
+}
+
+// FolderEntry is one folder. More says the count stopped at its bound, so
+// Files and Bytes are at least what they say.
+type FolderEntry struct {
+	Name  string `json:"name"`
+	Path  string `json:"path"`
+	Files int    `json:"files"`
+	Bytes int64  `json:"bytes"`
+	More  bool   `json:"more,omitempty"`
+}
+
+// FolderSurvey is what a pass from a folder would send, after every rule:
+// LeftOut names the top-level paths the rules always leave out (.git and the
+// like), and Ignored counts what the ignore files leave out.
+type FolderSurvey struct {
+	Files   int      `json:"files"`
+	Bytes   int64    `json:"bytes"`
+	LeftOut []string `json:"left_out"`
+	Ignored int      `json:"ignored"`
+}
+
+// SyncFolderArgs starts one pass between Path on the runner and RemoteDir in
+// run RunID's sandbox. The runner opens a `folder` stream for the call and
+// speaks sftp over it as the client; the org joins that stream to the
+// sandbox's own sftp-server. Pull also brings the sandbox's changes back,
+// under the `wardyn sync --pull` rules; Deny is the organisation's patterns.
+type SyncFolderArgs struct {
+	RunID     uuid.UUID `json:"run_id"`
+	Path      string    `json:"path"`
+	RemoteDir string    `json:"remote_dir"`
+	Pull      bool      `json:"pull,omitempty"`
+	Deny      []string  `json:"deny,omitempty"`
+}
+
+// SyncFolderWaitArgs waits for the pass on Stream to end.
+type SyncFolderWaitArgs struct {
+	Stream uint32 `json:"stream"`
+}
+
+// FolderPass is one pass's outcome, as the runner counts it. Refused holds at
+// most MaxFolderRefusals paths. Error is set when the pass did not complete.
+type FolderPass struct {
+	Pushed    int             `json:"pushed"`
+	Pulled    int             `json:"pulled"`
+	Conflicts int             `json:"conflicts"`
+	Refused   []FolderRefusal `json:"refused"`
+	Ignored   int             `json:"ignored"`
+	BytesOut  int64           `json:"bytes_out"`
+	BytesIn   int64           `json:"bytes_in"`
+	Error     string          `json:"error,omitempty"`
+}
+
+// FolderRefusal is one path a pass refused and why.
+type FolderRefusal struct {
+	Path   string `json:"path"`
+	Reason string `json:"reason"`
+}
+
+// MaxFolderRefusals bounds FolderPass.Refused.
+const MaxFolderRefusals = 50
 
 type ResizeArgs struct {
 	Stream uint32 `json:"stream"`
@@ -220,4 +322,32 @@ type ExecutionResult struct {
 	Operation       string                       `json:"operation"`
 	ExecID          string                       `json:"exec_id"`
 	Attempted       bool                         `json:"attempted"`
+}
+
+// LocalAttachArgs asks the runner to attach the CLI that holds Nonce (granted on the runner's local
+// socket) to ref's sandbox. Tee says the org records the run: the runner then sends every output
+// chunk on the pty_tee stream before it shows it. With Tee false the stream carries no bytes and only
+// lets the org end the session.
+type LocalAttachArgs struct {
+	Ref     string               `json:"ref"`
+	Nonce   string               `json:"nonce"`
+	Options runner.AttachOptions `json:"options"`
+	Tee     bool                 `json:"tee,omitempty"`
+}
+
+// LocalAttachModeArgs sets the writer or observer mode of the session whose pty_tee stream is Stream.
+// Cols and Rows are the window size when the session becomes a writer.
+type LocalAttachModeArgs struct {
+	Stream   uint32 `json:"stream"`
+	Observer bool   `json:"observer"`
+	Cols     uint16 `json:"cols,omitempty"`
+	Rows     uint16 `json:"rows,omitempty"`
+}
+
+// LocalAttachTeeAckArgs acknowledges that the org has handed Offset bytes of the session's pty_tee
+// stream to its recorder. Cumulative; an offset at or below the last ack is a no-op; above the bytes
+// sent is refused.
+type LocalAttachTeeAckArgs struct {
+	Stream uint32 `json:"stream"`
+	Offset int64  `json:"offset"`
 }

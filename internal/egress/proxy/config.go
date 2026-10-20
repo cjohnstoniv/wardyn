@@ -153,6 +153,9 @@ type Config struct {
 	// management.azure.com door (azure_arm_door.go). Nil == off. Omitempty for the
 	// reason AzureGates is.
 	AzureARM *AzureARMGrant `json:"azure_arm,omitempty"`
+	// AWSSigV4 is the run's AWS SigV4 re-signing grant (aws_sigv4.go, WARDYN_AWS_SIGV4_AT_PROXY).
+	// Nil == off. Omitempty for the reason AzureGates is.
+	AWSSigV4 *AWSSigV4Config `json:"aws_sigv4,omitempty"`
 	// MITMLLM reports whether TLS-MITM of the BUILT-IN LLM hosts (Anthropic/OpenAI)
 	// is actually intended for this run — i.e. subscription credential injection OR
 	// intercept_tls content inspection. Dispatch also mints the per-run CA for
@@ -241,12 +244,35 @@ type Config struct {
 	// route's own generic detail, plus the below-policy clause either way
 	// (proxyLLMRequest).
 	LLMUnavailableDetail string `json:"llm_unavailable_detail,omitempty"`
+	// LocalModels maps a local_model provider's base URL (always also an
+	// LLMUpstreams value) to the model allowlist and request bounds the
+	// brokered route holds every request to it to (local_model.go).
+	// Control-plane-authored, same trust boundary as LLMUpstreams; omitempty
+	// because an older proxy refuses a key it does not know. Empty (the
+	// default) => no local model route, byte-identical to today.
+	LocalModels map[string]types.LocalModelSettings `json:"local_models,omitempty"`
 	// Unattended marks a run nobody is driving (a non-interactive task run).
 	// A push that touches a push_rules.require_review_paths entry is then
 	// refused outright rather than held for a decision nobody is waiting to
 	// make (push_hold.go). Control-plane-authored at dispatch; false (the
 	// default) holds.
 	Unattended bool `json:"unattended,omitempty"`
+	// ScrubResponses replaces every credential this proxy holds in the
+	// responses it relays from a destination on an intercepted or broker route
+	// (scrub.go), so an echo of a request header cannot hand the sandbox a
+	// value the proxy added. WARDYN_PROXY_RESPONSE_SCRUB at dispatch; false
+	// (the default) relays responses verbatim.
+	ScrubResponses bool `json:"scrub_responses,omitempty"`
+	// VM marks a run whose only client is wardyn-vmnet, the network relay of a
+	// desktop VM (vmnet_flows.go): the port rule is on whatever PortRule says,
+	// and vmnet's two-stage CONNECT and refusal reports are honoured. Set by the
+	// runner for a linux_vm run only; false (every container run) is today.
+	VM bool `json:"vm,omitempty"`
+	// PortRule is the container runs' port rule (port_rule.go): "" or "off"
+	// (today: a bare host is open on every port), "dry_run" (nothing refused,
+	// the allows the rule would refuse are marked) or "on". wardynd's
+	// WARDYN_EGRESS_PORT_RULE; any other value refuses to start.
+	PortRule string `json:"port_rule,omitempty"`
 	// Attribution names the policy that governs this run, for the refusals the
 	// policy decided (refusal_attribution.go). Control-plane-authored at dispatch
 	// for a run under a governance profile, or any run when the site sets
@@ -475,6 +501,9 @@ func (c *Config) applyDefaultsAndValidate() error {
 	if _, err := parseUpstreamProxy(c.UpstreamProxyURL); err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
+	if !ValidPortRule(c.PortRule) {
+		return fmt.Errorf("config: port_rule %q is not one of off, dry_run, on", c.PortRule)
+	}
 	// Parse-check each bypass entry, same "validate at load, build for real in
 	// NewServer" split as the upstream proxy URL above. compileNoProxy DROPS an
 	// unparseable entry rather than widening the list, so without this a typo'd
@@ -545,6 +574,9 @@ func (c *Config) applyDefaultsAndValidate() error {
 		if _, err := url.Parse(raw); err != nil {
 			return fmt.Errorf("config: llm_upstreams[%q]: %w", vendor, err)
 		}
+	}
+	if err := c.validateLocalModels(); err != nil {
+		return err
 	}
 	return c.validateChannelHosts()
 }
@@ -626,6 +658,9 @@ func (c *Config) validateTerminatedGates() error {
 		}
 	}
 	if err := c.validateAzureARM(); err != nil {
+		return err
+	}
+	if err := c.validateAWSSigV4(); err != nil {
 		return err
 	}
 	return c.validateAzureGates()

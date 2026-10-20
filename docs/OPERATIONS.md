@@ -1243,9 +1243,9 @@ erases one person's retained records by explicit scope, in one audited act
 | `mask_copies` | the masking manifests of the runs the person created, after their live attaches, SSH shells and relays are fenced |
 | `run_outputs` | the stored output of those runs (404 `run_output_erased` afterwards, on every replica and after a restart) |
 | `recordings` | their session recordings and `source: "recording"` output rows, with durable per-run fences against later writes; direct stdout and pane snapshots retain their independent `run_outputs` scope |
-| `run_tasks` | the task text of the runs the person created, and the launch intents of those runs |
+| `run_tasks` | the task text, title and description of the runs the person created, and the launch intents of those runs |
 | `components` | the components the person saved, the launch intents of their runs, and what each run's snapshot of one they defined says about it; the run keeps a content-free row, which is what a revived run is checked against. A finished run's resolved policy and grants keep the hosts and secret names the run used, as for any other policy, and so do its `run.env_secret.resolve`, `run.file_secret.resolve`, `secret.read` and `run.policy.resolve` rows |
-| `run_setups` | the person's own run templates and every revision of them, the launch intents of their runs, their group template-manager grants, and their name as the author of shared templates, revisions and grants, which stay without it |
+| `run_setups` | the person's own run templates and every revision of them, the launch intents of their runs, their group template-manager grants, and their name as the author of shared templates, revisions, grants and launch presets, which stay without it |
 | `runner_pools` | the person's own user pools, deleted as their own delete would, their name on every pool row of theirs, and their stored preferences (the pool they default to, their last view); their runners stay |
 | `member_drives` | the drives the person created for themselves, each deleted with its files as their own delete would; a drive a run still holds fails the scope, naming the drive |
 | `audit_personal_fields` | the person's audit-seal key, every generation: each sealed audit field of theirs reads `[erased]` everywhere it was copied, and the chain still verifies; the approvals they decided keep their state but lose the person's name and the reason they typed |
@@ -1262,6 +1262,15 @@ erases one person's retained records by explicit scope, in one audited act
   A record found only by that address keeps it.
 - No scope reaches runners, invitations or service identities; a [purge](#what-a-purge-removes) does, but a retired
   service identity keeps its last sponsor.
+- Two tables keep a person's name after every scope, on purpose:
+  - `aws_sso_spent_tokens.owner` names whose AWS sign-in a spent refresh-token fingerprint came from. It holds no
+    credential, and the reaper deletes each row 90 days after it was written.
+  - `ado_signin_ends.owner` counts the ends of a person's Azure DevOps sign-in, so a run token created on another
+    replica across one revokes itself. Deleting it would reset the count to 0 and let such a token stand, as
+    `secret_owner_generations` below would.
+- The `credentials` scope's detail counts the token history it deleted, `pats_deleted` and `delegated_deleted`, and
+  `live_left`, the Azure DevOps token rows still live because Azure DevOps has not confirmed them revoked. Run the
+  erasure again once they expire to delete them.
 
 - **A launch intent (a run's setup, kept for Run again) is erased with every launch whose run insert began before the erase.**
   - A run's insert takes a per-person Postgres lock first, shared and without waiting, and writes the intent in the same transaction.
@@ -1802,6 +1811,8 @@ Moved to [custom-components.md](operations/custom-components.md#custom-component
 ### Per-user API tokens: stop sharing the admin token
 
 Moved to [api-tokens.md](operations/api-tokens.md#per-user-api-tokens-stop-sharing-the-admin-token).
+
+CLI sign-in: `WARDYN_CLI_SIGN_IN` is off by default and needs SSO. On, `wardyn login` signs a CLI in through the console with a device-bound session that renews a 1-hour token ([api-tokens.md](operations/api-tokens.md#cli-sign-in-wardyn-login)); while it is off, the CLI keeps using `WARDYN_TOKEN`.
 
 ### Tokens for a person who never signs in
 
@@ -2744,7 +2755,7 @@ The residuals an operator should plan for:
 - **The sandbox signs itself in.**
   - ONE chained command does the whole capture — `aws sso login --sso-session wardyn --no-browser --use-device-code && wardyn-aws-sso` — and both halves matter: `aws sso login` alone leaves the session in `~/.aws/sso/cache`, where it dies with the container, and `wardyn-aws-sso` is what uploads it through the brokered endpoint.
   - Since 0.7.5 the IMAGE runs that command, not the console: `agent-run --idle` creates a `wardyn` tmux session on `signin-pane.sh` BEFORE its own workspace prep, the pane prints *"wardyn: sign-in running — AWS sign-in sandbox. Finish the device-code step in your browser. Nothing else runs here."*, waits up to five minutes for prep, and runs the pair at most ONCE.
-  - Every attach path joins that one session — Wardyn's sign-in pane, `wardyn run attach`, an SSH attach, and **the Runs list** — because attaching is `tmux new-session -A -s wardyn`, attach-or-create.
+  - Every attach path joins that one session — Wardyn's sign-in pane, `wardyn attach`, an SSH attach, and **the Runs list** — because attaching is `tmux new-session -A -s wardyn`, attach-or-create.
   - So the path that used to hand out a bare prompt now shows the sign-in already in progress.
   - If prep never finishes it runs nothing and prints *"wardyn: workspace preparation did not finish — stop this run and start a new sign-in."*
   - If the session could not be started at all (no `tmux` in a derived image), an attach lands on a plain shell that prints *"AWS sign-in sandbox — nothing else runs here. The sign-in did not start on its own; run: `<the chained command>`"*.
@@ -2757,7 +2768,7 @@ The residuals an operator should plan for:
   - If it does NOT, and the person's SSO session reaches more than one account (or more than one role in the chosen account), the helper asks WHICH ONE.
   - It asks in the sign-in terminal.
   - It allows three tries.
-  - Anyone with a WRITABLE attach can answer — the console's sign-in pane, `wardyn run attach`, an SSH attach, or the Runs list when they hold the terminal.
+  - Anyone with a WRITABLE attach can answer — the console's sign-in pane, `wardyn attach`, an SSH attach, or the Runs list when they hold the terminal.
   - A read-only viewer cannot; the prompt itself has no deadline, so it waits until a writable attach answers or the sandbox's own 30-minute idle cap ends the run.
   - Pin the account and the role on the provider and the question never comes up.
   - While the sandbox waits on the answer, the sign-in panel's own copy already narrates the sign-in as done (`CAPTURE_HANDOFF`).
@@ -2805,6 +2816,10 @@ The residuals an operator should plan for:
 > With no pin, the ROLE is whatever the sign-in chose — and so is the account, unless the provider's model is a full ARN, which constrains the account only.
 > The pin is the fix; both halves of it.
 
+- **How long the role credentials a run holds live — set it on the permission set.**
+  - A `bedrock_sso` run and an AWS CLI component both get them from the portal's `GetRoleCredentials`, which takes no duration, so Wardyn cannot request a shorter session ([`internal/api/runs_dispatch_sso_inject.go#awsSSORoleCredentialsPath`](../internal/api/runs_dispatch_sso_inject.go)).
+  - Their lifetime is the IAM Identity Center permission set's session duration. `PT1H`, the shortest AWS allows, bounds what a sandbox holds to one hour.
+  - They stay valid at AWS after the run ends. Revoking the role's active sessions in IAM ends them early.
 - **What the control plane holds.**
   - One age-encrypted blob per person per provider, in that person's own secret namespace under the provider's name.
   - It holds the SSO access token, its refresh token, the client registration, and the account/role the session mints role credentials for.
@@ -3333,6 +3348,50 @@ Naming these is the point of the walk, not a caveat on it:
 - Two invariants carry over unchanged: the `egress_redirects` lane above still points the AGENT'S OWN configuration (its `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL` env, or an equivalent harness setting) at a gateway independently of Wardyn's injection lane.
 - An `egress_redirects` row can never be pointed *at* the gateway or the public provider host to swap an artifact-registry token onto model traffic.
 - `planArtifactRedirect` refuses that redirect outright (audited `run.artifact.redirect`, `denied`) rather than handing the proxy two rules for one host, which `buildInjector` refuses at proxy start (a host carries one credential).
+
+### Local model server
+
+A `local_model` provider (#2957) is a model server you run on a laptop's host or an org GPU node: Ollama, a llama.cpp server, LM Studio or vLLM.
+Runs reach it only through the run proxy's brokered LLM route, which holds every request to the provider's model allowlist.
+No provider of this kind registered means today's behaviour, unchanged.
+
+| Field | What it says | Rule |
+|---|---|---|
+| `base_url` | The server's root, as the proxy sees it | `http://` or `https://`, no path, no credential, not `localhost` or a loopback literal |
+| `local.models` | The exact model names runs may use, tag included | 1 to 64; no `/` (a registry or namespace) and no `:cloud` or `-cloud` tag |
+| `local.max_context` | Cap on a request's `options.num_ctx` | 0 = 32768 |
+| `local.max_output` | Cap on `max_tokens`, `max_completion_tokens`, `max_output_tokens` and `options.num_predict` | 0 = 32768 |
+| `local.keep_alive_seconds` | Cap on `keep_alive`; a negative ("forever") value is capped too | 0 = 1800, at most 86400 |
+| `auth` | How each person's own token is sent, when the server wants one | Unset = no credential at all |
+| `harnesses[].model` | The model that agent asks for | Required; one of `local.models` |
+
+1. Bind the model server where the proxy can reach it but the network cannot: on a laptop, the Docker host (`http://host.docker.internal:11434` under Docker Desktop); on a node, its private address.
+2. Pull every model yourself on that machine. A run can never pull, push, create, copy or delete one.
+3. `GET /api/v1/model-providers`, add the row, and `PUT` the list back; a `PUT` replaces the whole list. The console form comes later. The row:
+   `{"id":"laptop-gpu","kind":"local_model","base_url":"http://host.docker.internal:11434","local":{"models":["qwen2.5-coder:7b"]},"harnesses":[{"harness":"claude-code","model":"qwen2.5-coder:7b"},{"harness":"codex-cli","model":"qwen2.5-coder:7b"}]}`
+4. Grant it to people as any other provider; with no `auth`, nobody has anything to connect.
+
+What a run may call on the server (every other method and path is refused `403 egress_denied` and audited `brokered:local-model`):
+
+| Method | Path | Note |
+|---|---|---|
+| `POST` | `/v1/chat/completions`, `/v1/completions`, `/v1/embeddings`, `/v1/responses`, `/v1/messages` | Body `model` must be on the allowlist |
+| `POST` | `/api/chat`, `/api/generate`, `/api/embed` | Same |
+| `GET` | `/v1/models`, `/api/tags` | The answer is filtered to the allowlist |
+| `GET` | `/v1/models/<name>` | Only an allowlisted name |
+
+- The model name is matched exactly. A body with a second spelling of `model`, no `model`, or one that is not a single JSON object is refused `400 request_not_inspected`.
+- A bound replaces only its own value's bytes. The prompt is never rewritten or reordered, so the server's prompt cache still matches.
+- The route sets no deadline on the server's first byte: a cold model load of 30 s or more is waited for.
+- The server's host is refused on every other lane (a plain `CONNECT` or forward request), whatever the policy allows.
+- The private-address guard is lifted for this route and this address alone: the registered host and port may answer on the Docker bridge's gateway address (the Docker host). The control plane, loopback and link-local stay refused.
+- With `auth` set, each person's own token rides as a custom endpoint's does, and the host joins the run's allowlist so the token can be attached. Over `http://` it crosses the network unencrypted, so a write with `auth` over `http://` is refused unless the host is `host.docker.internal`, `gateway.docker.internal` or a private IPv4 address (10/8, 172.16/12, 192.168/16, 100.64/10): use `https://` to send a token off this machine.
+- Claude Code gets the allowlisted model for every tier (`ANTHROPIC_MODEL` and the opus, sonnet and haiku defaults), so no background call names another.
+- A run placed on your own runner is refused (`ProxyConfig.LocalModels`): the runner path is a later release.
+
+> [!IMPORTANT]
+> **Upgrade note.** Move the proxy image pin with wardynd, image first, before you add a `local_model` provider.
+> wardynd writes `local_models` into the proxy's config for those runs only, and an older proxy refuses that key at startup.
 
 ### Upgrading from `artifact_overrides`
 
@@ -3940,6 +3999,10 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0192` (`0192_workspace_name_per_owner`) replaces `workspaces.name`'s deployment-wide uniqueness (`0008`'s table) with one per owner (`owned_by`, `name`); operator-owned workspaces stay unique among themselves.
 - `0193` (`0193_approval_last_rejoined_at`) adds `approvals.last_rejoined_at` (`0001`'s table), when a held push or egress request last re-entered the hold on a PENDING row; the console's held reading starts from it.
 - `0195` (`0195_agent_runs_local_folder`) adds `local_folder`, `local_folder_seeded_at` and `local_folder_seed_error` to `agent_runs` (`0001`'s table): the folder a run holds its agent for, and that folder's first sync.
+- `0196` (`0196_deprovision_event_pin`) adds `audit_event_id` and `audit_event_at` to `deprovision_jobs` (`0127`'s table): the id and time of the audit event an owed row writes, pinned on its first drain and cleared when the row reopens.
+- `0197` (`0197_run_inner_walls`) adds `inner_walls` to `agent_runs` (`0001`'s table): the harness's own walls a run launched with, under its policy's `harness_inner_walls`.
+- `0198` (`0198_agent_runs_local_folder_status`) adds `local_folder_status` to `agent_runs` (`0001`'s table): the passes a person's folder-only runner made for a run's computer folder, in and back.
+- `0199` (`0199_cli_sign_in`) adds `api_tokens.kind` and `api_tokens.cli_session_id` (`0045`'s table), which mark a CLI sign-in's access and admin tokens and tie them to their CLI session, and creates `cli_sessions` and `cli_sign_ins`.
 - `0196` (`0196_run_machine_kind`) adds `machine_kind` and `vm_machine` to `agent_runs` (`0001`'s table): the kind of sandbox a run asked for (empty for a container) and the virtual machine a Linux VM run started on.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the

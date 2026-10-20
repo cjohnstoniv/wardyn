@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -115,4 +116,60 @@ func TestPG_WorkspaceSourceIsHeldToACarrierTheCallerMayUse(t *testing.T) {
 			t.Errorf("C, granted only A's private workspace: %v, want refused, never on A's grant nor naming A's workspace", err)
 		}
 	})
+}
+
+// TestPG_WorkspaceMountIsJudgedByTheCarrierTheRunUses: a directory a member's own workspace and an
+// operator workspace both carry is judged by the carrier the run uses (the attached one), and the
+// member's own mount gate runs whichever carrier judged it. Here the member's roots no longer
+// admit the directory, and the operator's workspace, onboarded later, is the last carrier.
+func TestPG_WorkspaceMountIsJudgedByTheCarrierTheRunUses(t *testing.T) {
+	pool := throwawayPGPool(t)
+	pg := store.NewPG(pool)
+	h := newHarness(t)
+	h.srv.cfg.Store = pg
+	h.srv.cfg.OIDC = &oidc.Authenticator{}
+	h.srv.cfg.UserMounts = runner.UserMountPolicy{Roots: []string{t.TempDir()}}
+	ctx := context.Background()
+	dir := t.TempDir() // outside every member root
+
+	const subM, subN = "sub-mount-m", "sub-mount-n"
+	base := time.Now().UTC().Add(-time.Hour)
+	put := func(i int, owner string) types.Workspace {
+		t.Helper()
+		ws, err := pg.CreateWorkspace(ctx, types.Workspace{
+			ID: uuid.New(), Name: "ws-mount-" + owner, OwnedBy: owner, Status: types.WorkspaceScanned,
+			Sources:   []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: dir}},
+			CreatedAt: base.Add(time.Duration(i) * time.Minute), UpdatedAt: base,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ws
+	}
+	wsM := put(0, subM)
+	wsO := put(1, "")
+
+	admit := func(sub string, attach uuid.UUID) *httptest.ResponseRecorder {
+		t.Helper()
+		spec := types.RunPolicySpec{MinConfinementClass: types.CC2}
+		req := createRunRequest{Agent: "claude-code", WorkspaceID: &attach}
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(operatorCtx(sub, sub+"@corp.example", oidc.RoleUser))
+		w := httptest.NewRecorder()
+		if _, ok := h.srv.seedAndAdmitWorkspace(r.Context(), w, r, &spec, &req, true); ok {
+			w.Code = http.StatusOK
+		}
+		return w
+	}
+	refused := func(w *httptest.ResponseRecorder) bool {
+		return w.Code == http.StatusUnprocessableEntity && strings.Contains(w.Body.String(), reasonWorkspaceSourceMountNotAllowed)
+	}
+	if w := admit(subM, wsM.ID); !refused(w) {
+		t.Errorf("member attaching their own workspace: %d %s, want the member mount gate's refusal", w.Code, w.Body.String())
+	}
+	if w := admit(subM, wsO.ID); !refused(w) {
+		t.Errorf("member attaching the operator-owned carrier of their own directory: %d %s, want their own mount gate's refusal", w.Code, w.Body.String())
+	}
+	if w := admit(subN, wsO.ID); w.Code != http.StatusOK {
+		t.Errorf("another member attaching the operator-owned workspace: %d %s, want admitted (an operator mount)", w.Code, w.Body.String())
+	}
 }

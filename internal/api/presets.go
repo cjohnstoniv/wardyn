@@ -245,7 +245,7 @@ func (s *Server) validatePresetRequest(w http.ResponseWriter, r *http.Request, n
 		return false
 	}
 	if req.Request.InlinePolicy != nil {
-		if err := validatePolicySpec(*req.Request.InlinePolicy); err != nil {
+		if err := validateAuthoredPolicySpec(*req.Request.InlinePolicy); err != nil {
 			writeErrorReason(w, http.StatusBadRequest, specRefusalReason(err, reasonPresetRequestInvalid), "request: invalid inline_policy: "+err.Error())
 			return false
 		}

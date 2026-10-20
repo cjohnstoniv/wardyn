@@ -90,8 +90,12 @@ func (s *Server) localCredentialIntents(r *http.Request, req createRunRequest, s
 // SecretEnv, so create refuses what dispatch would refuse after Launch.
 func (s *Server) localProviderIntent(r *http.Request, owner string, p types.ModelProvider) ([]placement.CredentialIntent, bool) {
 	part, field := providerKeyPart, "ProxyConfig.Injection[model_provider:"+p.ID+"]"
+	if providerTakesNoCredential(p) {
+		return nil, true // places no credential; its LLMUpstreams entry is what a local runner refuses
+	}
 	switch p.Kind {
-	case types.ModelProviderAnthropicAPIKey, types.ModelProviderOpenAIAPIKey, types.ModelProviderCustomEndpoint, types.ModelProviderBedrockBearer:
+	case types.ModelProviderAnthropicAPIKey, types.ModelProviderOpenAIAPIKey, types.ModelProviderCustomEndpoint, types.ModelProviderBedrockBearer,
+		types.ModelProviderLocalModel:
 	case types.ModelProviderAnthropicSubscription:
 		part = providerOAuthPart
 	case types.ModelProviderBedrockSSO:
@@ -149,10 +153,11 @@ func (s *Server) localRedirectIntents(r *http.Request, spec types.RunPolicySpec,
 
 // localADOOrigin is the one origin of an Azure DevOps lane, at admission and at
 // dispatch: own only for the owner's own PAT proven in their namespace; every
-// other token mode is minted by the organisation.
+// other token mode is minted by the organisation. Only a minted_pat connection's
+// opt-in counts toward runner_resident: a bearer token keeps refusing.
 func (s *Server) localADOOrigin(ctx context.Context, owner string, a adoEntraRun) placement.CredentialOrigin {
 	if a.tokenMode != types.ADOTokenModeOwnPAT || owner == "" || a.owner != owner || !adoEntraValidRowID(a.rowID) {
-		return placement.CredentialOrigin{Class: placement.ClassBrokered, Delivery: placement.ClassADOMintedPAT, ResidentOptIn: a.residentOptIn && a.tokenMode != types.ADOTokenModeOwnPAT}
+		return placement.CredentialOrigin{Class: placement.ClassBrokered, Delivery: placement.ClassADOMintedPAT, ResidentOptIn: a.residentOptIn && a.tokenMode == types.ADOTokenModeMintedPAT}
 	}
 	own := s.ownsSecretMemoized(ctx, owner, adoOwnPATSecretName(a.rowID))
 	return placement.CredentialOrigin{Class: placement.ClassOwn, Stored: true, OwnNamespace: own, OwnerOnly: own}

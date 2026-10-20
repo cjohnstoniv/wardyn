@@ -137,7 +137,7 @@ func (r *pgTestRevocations) RevokeSub(ctx context.Context, sub string) error {
 		return errors.New("revocation store unavailable")
 	}
 	return store.ExecRevocationCut(ctx, r.pool, `INSERT INTO oidc_session_revocations (sub, revoked_at) VALUES ($1, clock_timestamp())
-		ON CONFLICT (sub) DO UPDATE SET revoked_at = EXCLUDED.revoked_at`, sub)
+		ON CONFLICT (sub) DO UPDATE SET revoked_at = EXCLUDED.revoked_at`, sub, types.CLISessionEndRevoked)
 }
 
 func (r *pgTestRevocations) CutSessions(ctx context.Context, sub string) error {
@@ -148,7 +148,7 @@ func (r *pgTestRevocations) CutSessions(ctx context.Context, sub string) error {
 		return errors.New("revocation store unavailable")
 	}
 	return store.ExecRevocationCut(ctx, r.pool, `INSERT INTO oidc_session_cuts (sub, cut_at) VALUES ($1, clock_timestamp())
-		ON CONFLICT (sub) DO UPDATE SET cut_at = EXCLUDED.cut_at`, sub)
+		ON CONFLICT (sub) DO UPDATE SET cut_at = EXCLUDED.cut_at`, sub, types.CLISessionEndSessionsCut)
 }
 
 func (r *pgTestRevocations) RevokeAll(ctx context.Context) error { return r.RevokeSub(ctx, "") }

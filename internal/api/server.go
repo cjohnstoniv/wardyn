@@ -148,6 +148,10 @@ type Config struct {
 	// ponytail: process-local. Under WARDYN_HA a replica that does not hold a runner's session
 	// answers offline for a runner attached to another; the upgrade is a shared presence read.
 	RunnerOnline func(id uuid.UUID) bool
+	// AttachLocal (WARDYN_ATTACH_LOCAL=on, off by default) allows a person's CLI on their own runner's
+	// computer to attach to their run there (transport=local, attach_local.go), and tells such runners
+	// so in AUTH_OK. Off, a transport=local attach answers 409 attach_local_unavailable (flag_off).
+	AttachLocal bool
 	// RunnersDisabled runs after runners are switched off (a true→false change), once the write and
 	// its audit row are done and the site-config lock is released. Nil defaults to
 	// Server.RunnersDisabled, which ends every runner session this process holds.
@@ -206,6 +210,10 @@ type Config struct {
 	// http.DefaultTransport at boot. Control-plane-authored only: never a
 	// SiteConfig field, never agent-reachable.
 	TrustedCAPEM string
+	// EgressPortRule is WARDYN_EGRESS_PORT_RULE for container runs: "" (off,
+	// the default: a bare allowlist host is open on every port), "dry_run" or
+	// "on" (80/443 plus host:port entries). Desktop VM runs always have it on.
+	EgressPortRule string
 	// RunnerTarget records which target a run is dispatched to ("docker"|"k8s"),
 	// or "none" for a headless control plane (-runner none: runs stay PENDING).
 	// Defaults to "docker".
@@ -277,6 +285,20 @@ type Config struct {
 	// UNAFFECTED either way (legacy, still boot-warned separately — see
 	// buildOptionalFeatures).
 	AllowEmailMappings bool
+	// CapabilityGrantsVerifiedEmail is WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL: a
+	// capability ALLOW row written for a person's email matches them only when
+	// sign-in vouches for the email (unverifiedEmailSubject). Default false keeps
+	// the match and logs it. Deny rows match the email either way.
+	CapabilityGrantsVerifiedEmail bool
+	// GovernanceProfilePutExistingOnly is WARDYN_GOVERNANCE_PROFILE_PUT_EXISTING_ONLY:
+	// PUT /governance/profiles/{id} replaces an existing profile only, and a
+	// new one is created through POST. Default false keeps create-at-id and logs it.
+	GovernanceProfilePutExistingOnly bool
+	// EgressHostPortGrantsInert is WARDYN_EGRESS_HOST_PORT_GRANTS_INERT: a stored
+	// egress_host ALLOW row whose value carries a ":port" (written before the
+	// write boundary stored the host alone) is inert, marked and never matched.
+	// Default false keeps matching it by host and logs it. Deny rows keep matching.
+	EgressHostPortGrantsInert bool
 	// UserMounts is the operator/MDM-set posture for MEMBER-authored local_dir
 	// binds (WARDYN_USER_WORKSPACE_ROOTS + _MAP + WARDYN_USER_WRITABLE_ROOTS
 	// + _DENY, parsed at boot by runner.ParseUserMountPolicy). The ZERO VALUE
@@ -353,6 +375,11 @@ type Config struct {
 	// downgrade. See runs_dispatch_sso_inject.go for the default and docs/ENV.md
 	// for the operator-facing contract.
 	AWSSSOProxyInject bool
+	// AWSSigV4AtProxy is WARDYN_AWS_SIGV4_AT_PROXY (ResolveAWSSigV4AtProxy, default off): when
+	// true, an AWS sign-in lane whose hosts the proxy can all re-sign dispatches a placeholder
+	// key pair and the proxy re-signs its requests with role credentials the sandbox never
+	// holds (runs_dispatch_aws_sigv4.go). Read at dispatch; a running sandbox keeps its lane.
+	AWSSigV4AtProxy bool
 	// AWSSSORefresh is the operator's tuning of the AWS SSO renewal; a zero
 	// field keeps its default (AWSSSORefreshTuning, awssso_refresh.go).
 	AWSSSORefresh AWSSSORefreshTuning
@@ -556,6 +583,20 @@ type Config struct {
 	// unexpectedly under that rewrite must not leave a fleet unable to clone.
 	// Reverting is a flag flip and a restart, not a redeploy.
 	DisableGitPATBroker bool
+	// RefuseGitPATBrokerOff (WARDYN_GIT_PAT_BROKER_OFF_REFUSED) refuses, while
+	// the broker is off, a resident PAT on an operator's run too; a member's
+	// run is refused it either way (patNarrowingRefusal).
+	RefuseGitPATBrokerOff bool
+	// ScrubProxyResponses (WARDYN_PROXY_RESPONSE_SCRUB) stamps
+	// proxy.Config.ScrubResponses on every new dispatch.
+	ScrubProxyResponses bool
+	// EnvSecretPlaceholders / FileSecretPlaceholders (WARDYN_ENV_SECRET_PLACEHOLDERS,
+	// WARDYN_FILE_SECRET_PLACEHOLDERS; off by default in 0.10.0): an env_secret
+	// or file_secret grant whose scope names a host gets a placeholder in the
+	// sandbox, which the run's proxy fills on requests to that host
+	// (runs_dispatch_placeholders.go). Off = the value in the sandbox, as before.
+	EnvSecretPlaceholders  bool
+	FileSecretPlaceholders bool
 	// OIDCRoleMapConfigured reports whether WARDYN_OIDC_ROLE_MAP is non-empty —
 	// the sso_rbac /setup/status check's gate. Only the presence, never the
 	// mapping itself: the API layer has no use for individual entries, only
@@ -641,11 +682,16 @@ type Config struct {
 	// holds a run's agent for the first sync of its local folder, never past
 	// the run's own end (run_local_folder.go). Zero is DefaultLocalFolderSeedWait.
 	LocalFolderSeedWait time.Duration
+	// ComputerFolders is WARDYN_COMPUTER_FOLDERS: a run may take a folder from its creator's own
+	// folder-only runner, which Wardyn seeds itself (run_computer_folder.go). Off by default.
+	ComputerFolders bool
 	// APITokenMaxTTL is WARDYN_API_TOKEN_MAX_TTL: the longest lifetime a newly
 	// minted API token may have. Zero (the default) means no cap. A mint that
 	// asks for no TTL gets this one; a mint that asks for more is clamped to it.
 	// It never touches a token already minted.
 	APITokenMaxTTL time.Duration
+	// CLISignIn is CLI sign-in (wardyn login, cli_sign_in.go); the zero value is off.
+	CLISignIn CLISignInConfig
 	// RoleStampTTL is WARDYN_ROLE_STAMP_TTL: the oldest an API token's role and
 	// group stamp (api_tokens.identity_stamped_at) may be before apiTokenAuth
 	// refuses it until its owner signs in again. Zero, the default, is off: no
@@ -707,6 +753,12 @@ type Config struct {
 	// boundary as TrustedCAPEM above — never a SiteConfig field,
 	// never agent-reachable.
 	DemoVideoBaseURL string
+	// OrgCAFingerprints is WARDYN_ORG_CA_FINGERPRINTS, parsed at boot by
+	// ParseOrgCAFingerprints: "sha256:<lowercase hex>" of each CA certificate
+	// the operator publishes for `wardyn ca add` to be compared against.
+	// /healthz publishes it as org_ca_fingerprints; nil (the default)
+	// publishes nothing.
+	OrgCAFingerprints []string
 }
 
 // Server is the control-plane HTTP server. It is safe for concurrent use.
@@ -757,6 +809,10 @@ type Server struct {
 	// on a millisecond clock instead of the real 30s budget.
 	pingEvery     time.Duration
 	authorityTest attachAuthorityTimings // per-server test overrides, the same shape as pingEvery
+	// localAttachSubs replaces a runner's substrate for a local attach (localAttachSubFor), tests only.
+	localAttachSubs func(id uuid.UUID) localAttachSub
+	// localCovered replaces a local promotion's corpus proof (promotionCovered), tests only.
+	localCovered func(runID uuid.UUID) bool
 	// pauseLimit overrides attachWriteTimeout as the bound on an unresumed
 	// output pause for THIS server only (tests).
 	pauseLimit time.Duration
@@ -874,6 +930,7 @@ type Server struct {
 	preflightLimiter     *principalLimiter
 	policyPreviewLimiter *principalLimiter
 	deviceRouteState     // the device routes' process state (server_devices.go)
+	cliSignInState       // CLI sign-in's rate limiters (cli_sign_in.go)
 	scimState            // the SCIM routes' rate limiters (scim_auth.go)
 	runLeaseState        // the run lease sweep's process state (run_lease_server.go)
 	// pause is the pause sweep's process-local state (run_pause.go).
@@ -938,55 +995,4 @@ type Server struct {
 	// real ~35s budget. Zero (the default) means "use backgroundShutdownBudget".
 	// See background.go; signInCaptureKillGrace is ssotoken.go's (tests set 0).
 	bgWaitBudget, signInCaptureKillGrace time.Duration
-}
-
-// New constructs a Server and builds its router. It does not start listening.
-func New(cfg Config) *Server {
-	if cfg.Now == nil {
-		cfg.Now = time.Now
-	}
-	if cfg.RunnerTarget == "" {
-		cfg.RunnerTarget = "docker"
-	}
-	if cfg.SSHRoleTTL <= 0 {
-		cfg.SSHRoleTTL = defaultSSHRoleTTL
-	}
-	if cfg.SSHMaxSessionsPerRun <= 0 {
-		cfg.SSHMaxSessionsPerRun = defaultSSHSessionsPerRun
-	}
-	if cfg.UISessionTTL <= 0 {
-		cfg.UISessionTTL = defaultUISessionTTL
-	}
-	if cfg.RunOutputTailBytes <= 0 {
-		cfg.RunOutputTailBytes = defaultRunOutputTailBytes
-	}
-	if cfg.ExecOutputTailTTL <= 0 {
-		cfg.ExecOutputTailTTL = defaultExecOutputTailTTL
-	}
-	if cfg.BaseCtx == nil {
-		cfg.BaseCtx = context.Background()
-	}
-	s := &Server{cfg: cfg, signInCaptureKillGrace: signInCaptureKillGrace,
-		branchLimiter:      principalLimiter{rate: branchListRatePerSec, burst: branchListBurst, max: branchListMaxPeople},
-		backchannelLimiter: principalLimiter{rate: backchannelLogoutRatePerSec, burst: backchannelLogoutBurst, max: 1},
-		deviceRouteState:   newDeviceRouteState(),
-	}
-	s.scimState = newSCIMState()
-	s.defaultRunnerHooks()
-	if cfg.PreflightRatePerMin > 0 {
-		s.preflightLimiter = &principalLimiter{rate: float64(cfg.PreflightRatePerMin) / 60, burst: preflightBurst, max: preflightLimiterMaxPeople}
-	}
-	if cfg.PolicyPreviewRatePerMin > 0 {
-		s.policyPreviewLimiter = &principalLimiter{rate: float64(cfg.PolicyPreviewRatePerMin) / 60, burst: policyPreviewBurst, max: preflightLimiterMaxPeople}
-	}
-	s.router = s.routes()
-	s.registerLiveBus()
-	// drain the durable audit-fallback spool back into the store once it
-	// recovers, so a PG outage no longer leaves spooled events permanently invisible
-	// to /audit and `wardyn audit`. Uses BaseCtx (daemon lifetime) so it survives
-	// individual requests and stops on shutdown. No-op unless both are wired.
-	if cfg.AuditSpool != nil && cfg.AuditDrainRecorder != nil {
-		go cfg.AuditSpool.StartDrain(cfg.BaseCtx, cfg.AuditDrainRecorder, auditSpoolDrainInterval, auditSpoolDrainBatch)
-	}
-	return s
 }

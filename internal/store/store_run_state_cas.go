@@ -37,7 +37,7 @@ func (s PG) UpdateRunStateIf(ctx context.Context, id uuid.UUID, fromState, toSta
 // a run only when still in fromState, updated_at has not advanced past notAfter
 // (the caller's snapshot), it has no lost/end mark, and it has no open hold-aware
 // request within its wait. Closes the reaper's idleness TOCTOU — an active
-// `wardyn run attach` TouchRun can bump updated_at between snapshot and UPDATE,
+// `wardyn attach` TouchRun can bump updated_at between snapshot and UPDATE,
 // so guarding on state alone could stop a now-active run; notAfter makes a
 // touched-since-snapshot run no-op instead. The hold-aware clause enforces "idle
 // stop never fires while a request is open within its wait" inside the same

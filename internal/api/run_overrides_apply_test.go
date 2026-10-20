@@ -225,7 +225,7 @@ func TestOverrides_DiffRecordsOnlyEditsThatTookEffect(t *testing.T) {
 	}
 	e := &overrideEdits{}
 	applyHostOverrides(&spec, client.AgentOverrides{AddHosts: []string{"A.example", "b.example"}, RemoveHosts: []string{"gone.example"}}, e)
-	if refusal := (&Server{}).applySecretOverrides(t.Context(), httptest.NewRequest(http.MethodPost, "/", nil), &spec, client.AgentOverrides{RemoveSecrets: []string{"absent"}}, e); refusal != nil {
+	if refusal := (&Server{}).applySecretOverrides(t.Context(), httptest.NewRequest(http.MethodPost, "/", nil), &spec, client.AgentOverrides{RemoveSecrets: []string{"absent"}}, e, false); refusal != nil {
 		t.Fatal(refusal.body)
 	}
 	applyToolRuleOverrides(&spec, []types.ToolRule{{Tool: "Bash", Effect: types.ToolHold}}, e)
@@ -283,7 +283,7 @@ func TestOverrides_ApplyNarrowsNeverWidens(t *testing.T) {
 		t.Errorf("a host with no git_pat grant = %+v", refusal)
 	}
 	// Removing a secret drops every grant that pairs it.
-	if refusal := (&Server{}).applySecretOverrides(t.Context(), httptest.NewRequest(http.MethodPost, "/", nil), &spec, client.AgentOverrides{RemoveSecrets: []string{"k1"}}, e); refusal != nil {
+	if refusal := (&Server{}).applySecretOverrides(t.Context(), httptest.NewRequest(http.MethodPost, "/", nil), &spec, client.AgentOverrides{RemoveSecrets: []string{"k1"}}, e, false); refusal != nil {
 		t.Fatal(refusal.body)
 	}
 	if slices.ContainsFunc(spec.EligibleGrants, func(g types.GrantSpec) bool { return g.Kind == types.GrantAPIKey }) {

@@ -45,7 +45,7 @@ func LoadPolicySpec(path string) (types.RunPolicySpec, error) {
 		return types.RunPolicySpec{}, fmt.Errorf("api: parse policy %s: %w", path, err)
 	}
 	clampStoredFileSize(&spec, "the policy file "+path)
-	if err := validatePolicySpec(spec); err != nil {
+	if err := validateAuthoredPolicySpec(spec); err != nil {
 		return types.RunPolicySpec{}, fmt.Errorf("api: invalid policy %s: %w", path, err)
 	}
 	return spec, nil
@@ -71,6 +71,22 @@ func clampStoredFileSize(spec *types.RunPolicySpec, source string) {
 // satisfy before any run can be scheduled against it.
 func validatePolicySpec(spec types.RunPolicySpec) error {
 	return validatePolicySpecMode(spec, true, true)
+}
+
+// validateAuthoredPolicySpec is validatePolicySpec for a door where a person
+// writes a policy (a stored policy, a ceiling, a profile, a preset, a policy
+// file). owner_only_refs is refused there: Wardyn sets it at launch, on a
+// spec the run path then validates with validatePolicySpec.
+func validateAuthoredPolicySpec(spec types.RunPolicySpec) error {
+	if err := validatePolicySpec(spec); err != nil {
+		return err
+	}
+	for i, g := range spec.EligibleGrants {
+		if g.OwnerOnlyRefs != nil {
+			return fmt.Errorf("eligible_grants[%d]: owner_only_refs is set by Wardyn at launch, never authored; mark the grant owner_only instead", i)
+		}
+	}
+	return nil
 }
 
 // validatePolicySpecUnresolved is validatePolicySpec for a surface that must read no file of this host: a mount
@@ -162,6 +178,9 @@ func validatePolicySpecMode(spec types.RunPolicySpec, strict, resolveMounts bool
 	if err := validateToolRules(spec.ToolRules); err != nil {
 		return err
 	}
+	if err := validateHarnessInnerWalls(spec.HarnessInnerWalls); err != nil {
+		return err
+	}
 	if err := validateUIApps(spec.UIApps); err != nil {
 		return err
 	}
@@ -224,6 +243,9 @@ func specRefusalReason(err error, bucket string) string {
 	}
 	if errors.Is(err, errRepoURLUserinfo) {
 		return reasonRepoURLCredentials
+	}
+	if errors.Is(err, errHarnessSandboxUnavailable) {
+		return reasonHarnessSandboxUnavailable
 	}
 	return bucket
 }
@@ -589,6 +611,9 @@ func validateEligibleGrantMode(i int, g types.GrantSpec, strict bool) error {
 		// the lenient (recorded) decodes share, so every authored door refuses it.
 		if apiKeyScopeShared(g.Scope) {
 			return fmt.Errorf("eligible_grants[%d]: api_key scope sets shared: shared is set by Wardyn for an org component, never authored", i)
+		}
+		if rule.Placeholder != "" {
+			return fmt.Errorf("eligible_grants[%d]: api_key scope sets placeholder: Wardyn sets it for an env or file secret's host, never authored", i)
 		}
 		if !egress.ValidHeaderName(rule.Header) {
 			return fmt.Errorf("eligible_grants[%d]: api_key header %q is not a valid HTTP header name", i, rule.Header)

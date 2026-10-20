@@ -26,10 +26,17 @@ type RunLoser interface {
 	// with the renewal's new token id and the id of the token it presented.
 	// false means the run is already kept (lost/ended), so the renew must be
 	// refused — a lost run's identity must never carry forward.
+	// ErrRunTokenLineage means prevJTI is not a token of the run's current
+	// lineage (one RetireRunTokenLineage cut off): nothing is recorded.
 	StampRunTokenRenewed(ctx context.Context, id uuid.UUID, jti, prevJTI string) (bool, error)
-	// RunTokenJTIs returns the non-empty ids StampRunTokenRenewed last recorded
-	// for id: the tokens a revive must revoke beside the one it replaces.
-	RunTokenJTIs(ctx context.Context, id uuid.UUID) ([]string, error)
+	// RetireRunTokenLineage makes fresh the only token a renewal of id may
+	// present from now on, and returns the ids the last renewal recorded (the
+	// tokens a revive must revoke beside the one it replaces). The read and the
+	// cut are one statement, so no renewal lands between them.
+	RetireRunTokenLineage(ctx context.Context, id uuid.UUID, fresh string) (jti, prev string, err error)
+	// RestoreRunTokenLineage puts back the lineage RetireRunTokenLineage cut,
+	// only while fresh still heads it alone.
+	RestoreRunTokenLineage(ctx context.Context, id uuid.UUID, fresh, jti, prev string) error
 	// ListLapsedTokenRuns returns every RUNNING, not-kept run whose token was
 	// last renewed more than life ago, by the database's clock.
 	ListLapsedTokenRuns(ctx context.Context, life time.Duration) ([]types.AgentRun, error)
@@ -45,33 +52,64 @@ type RunLoser interface {
 
 var _ RunLoser = PG{}
 
-// StampRunTokenRenewed — see RunLoser.
+// ErrRunTokenLineage is StampRunTokenRenewed's refusal of a token outside the run's current lineage.
+var ErrRunTokenLineage = errors.New("store: the presented token is not of the run's current token lineage")
+
+// StampRunTokenRenewed — see RunLoser. A run with no recorded renewal has no lineage yet; otherwise
+// the presented token must be the last one minted, or the one that renewal presented (a proxy keeps
+// it when the lease send behind a renewal fails).
 func (s PG) StampRunTokenRenewed(ctx context.Context, id uuid.UUID, jti, prevJTI string) (bool, error) {
-	tag, err := s.Pool.Exec(ctx, `
-		UPDATE agent_runs SET token_renewed_at = now(), token_jti = $2, token_prev_jti = $3
-		WHERE id=$1 AND lost_at IS NULL`, id, jti, prevJTI)
-	if err != nil {
+	var stamped, live bool
+	err := s.Pool.QueryRow(ctx, `
+		WITH stamped AS (
+			UPDATE agent_runs SET token_renewed_at = now(), token_jti = $2, token_prev_jti = $3
+			WHERE id=$1 AND lost_at IS NULL
+			  AND (COALESCE(token_jti, '') = '' OR $3 IN (token_jti, token_prev_jti))
+			RETURNING 1)
+		SELECT EXISTS (SELECT 1 FROM stamped), EXISTS (SELECT 1 FROM agent_runs WHERE id=$1 AND lost_at IS NULL)`,
+		id, jti, prevJTI).Scan(&stamped, &live)
+	switch {
+	case err != nil:
 		return false, fmt.Errorf("store: stamp run token renewed: %w", err)
+	case stamped:
+		return true, nil
+	case live:
+		return false, ErrRunTokenLineage
 	}
-	return tag.RowsAffected() > 0, nil
+	return false, nil
 }
 
-// RunTokenJTIs — see RunLoser. It reads only the two columns, so runCols and scanRun are untouched.
-func (s PG) RunTokenJTIs(ctx context.Context, id uuid.UUID) ([]string, error) {
-	var jti, prev *string
-	if err := s.Pool.QueryRow(ctx, `SELECT token_jti, token_prev_jti FROM agent_runs WHERE id=$1`, id).Scan(&jti, &prev); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("store: read run token ids: %w", err)
+// RetireRunTokenLineage — see RunLoser. It touches only the two columns, so runCols and scanRun are untouched.
+func (s PG) RetireRunTokenLineage(ctx context.Context, id uuid.UUID, fresh string) (jti, prev string, err error) {
+	var j, p *string
+	err = s.Pool.QueryRow(ctx, `
+		UPDATE agent_runs r SET token_jti = $2, token_prev_jti = NULL
+		FROM (SELECT id, token_jti, token_prev_jti FROM agent_runs WHERE id=$1 FOR UPDATE) old
+		WHERE r.id = old.id
+		RETURNING old.token_jti, old.token_prev_jti`, id, fresh).Scan(&j, &p)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", "", nil
 	}
-	var out []string
-	for _, j := range []*string{jti, prev} {
-		if j != nil && *j != "" {
-			out = append(out, *j)
-		}
+	if err != nil {
+		return "", "", fmt.Errorf("store: retire run token lineage: %w", err)
 	}
-	return out, nil
+	if j != nil {
+		jti = *j
+	}
+	if p != nil {
+		prev = *p
+	}
+	return jti, prev, nil
+}
+
+// RestoreRunTokenLineage — see RunLoser.
+func (s PG) RestoreRunTokenLineage(ctx context.Context, id uuid.UUID, fresh, jti, prev string) error {
+	if _, err := s.Pool.Exec(ctx, `
+		UPDATE agent_runs SET token_jti = NULLIF($3, ''), token_prev_jti = NULLIF($4, '')
+		WHERE id=$1 AND token_jti = $2 AND token_prev_jti IS NULL`, id, fresh, jti, prev); err != nil {
+		return fmt.Errorf("store: restore run token lineage: %w", err)
+	}
+	return nil
 }
 
 // ListLapsedTokenRuns — see RunLoser. Both sides use the database's clock, so

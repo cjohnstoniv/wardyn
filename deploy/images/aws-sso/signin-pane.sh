@@ -11,7 +11,7 @@
 # opened the SAME run from the Runs list got a bare prompt, typed the obvious
 # half, saw "Successfully logged into Start URL", and captured nothing. That is
 # the worst available failure shape, so the IMAGE runs the pair now and every
-# attach path (pane, Runs list, `wardyn run attach`, ssh) joins the one session that
+# attach path (pane, Runs list, `wardyn attach`, ssh) joins the one session that
 # is already running it (both drivers attach with `tmux new-session -A -s wardyn
 # bash` — attachShell in internal/runner/docker/session.go and its k8s sibling).
 #
@@ -141,6 +141,9 @@ elif [[ -z "${WARDYN_AWS_SSO_LOGIN_COMMAND:-}" ]]; then
     print_failed
 elif bash -c "$WARDYN_AWS_SSO_LOGIN_COMMAND"; then
     printf '%s\n' "${WARDYN_AWS_SSO_SELFRUN_DONE:-}"
+    # The capture is stored and the sandbox is stopped seconds from now; the
+    # sign-in's scrollback goes first (the helper already wiped its caches).
+    tmux clear-history 2>/dev/null || true
 else
     print_failed
 fi

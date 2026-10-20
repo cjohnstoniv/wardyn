@@ -99,6 +99,17 @@ func TestBuildAsciinemaArgv_PreventsShellInjection(t *testing.T) {
 	}
 }
 
+// TestBuildAsciinemaArgv_RecordsOutputOnly pins that the cast never captures
+// input: anyone attached to the agent's terminal types into the recorded pane.
+func TestBuildAsciinemaArgv_RecordsOutputOnly(t *testing.T) {
+	argv := buildAsciinemaArgv("/usr/bin/asciinema", filepath.Join(t.TempDir(), "out.cast"), []string{"true"})
+	for _, a := range argv {
+		if a == "--stdin" || a == "--capture-input" || a == "-I" || strings.HasPrefix(a, "--stdin=") {
+			t.Fatalf("asciinema argv %q records typed input (%q)", argv, a)
+		}
+	}
+}
+
 // The -c trailer must capture the AGENT's real exit code to the sidecar file so
 // runAsciinema can recover it (asciinema's own exit code masks a failed agent —
 // the fail-open hazard the BYOI selftest gate depends on avoiding).
@@ -303,8 +314,8 @@ func TestUploadCast_BoundedTimeout(t *testing.T) {
 // command and records a cast. STUB_MODE=kill leaves a cast and exits 3 without
 // running the command, as a killed recorder would.
 const stubAsciinema = `#!/bin/sh
-# rec --stdin -q -c <cmd> <cast>
-cmd=$5; cast=$6
+# rec -q -c <cmd> <cast>
+cmd=$4; cast=$5
 if [ -s "$cast" ]; then echo "asciinema: $cast exists" >&2; exit 1; fi
 if [ "$STUB_MODE" = kill ]; then echo hdr > "$cast"; exit 3; fi
 sh -c "$cmd"

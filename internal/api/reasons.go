@@ -202,10 +202,17 @@ const (
 	reasonLocalFolderInvalid                   = "local_folder_invalid"                     // local_folder's name or remote_dir is malformed
 	reasonLocalFolderUnsupported               = "local_folder_unsupported"                 // local_folder on a run or deployment that cannot hold the agent for it
 	reasonMachineKindUnknown                   = "machine_kind_unknown"                     // machine_kind is not "container" or "linux_vm"
+	reasonComputerFoldersOff                   = "computer_folders_off"                     // WARDYN_COMPUTER_FOLDERS is off: no folder from a personal computer
+	reasonComputerRunnerOffline                = "computer_runner_offline"                  // the runner holding the folder is not connected, or did not answer
+	reasonComputerRunnerNoFolders              = "computer_runner_no_folders"               // the runner does not share folders (older than 0.10, or not --substrate folders)
+	reasonComputerFolderRefused                = "computer_folder_refused"                  // the runner refused that path (outside its roots, a symlink, a credential folder)
 	reasonInteractiveStartUnknown              = "interactive_start_unknown"                // interactive_start is not "shell" or "agent"
 	reasonToolApprovalsUnknown                 = "tool_approvals_unknown"                   // tool_approvals is not "auto" or "hold"
 	reasonToolApprovalsHoldUnsupportedAgent    = "tool_approvals_hold_unsupported_agent"    // tool_approvals=hold on an agent with no external tool-approval contract (codex-cli)
 	reasonToolApprovalsHoldInteractiveConflict = "tool_approvals_hold_interactive_conflict" // tool_approvals=hold on an interactive run, whose tool use is already supervised in the attach pane
+	reasonHarnessInnerWallsLooser              = "harness_inner_walls_looser"               // the policy's harness_inner_walls is looser than the walls the run's harness launches with
+	reasonHarnessInnerWallsUnmet               = "harness_inner_walls_unmet"                // the run cannot launch with the policy's harness_inner_walls on its harness and lane
+	reasonHarnessSandboxUnavailable            = "harness_sandbox_unavailable"              // harness_inner_walls.sandbox names a harness sandbox mode, which cannot start inside Wardyn's sandbox
 	reasonIntegrationIDRetired                 = "integration_id_retired"                   // integration_id no longer chooses a model credential; a run's model provider does
 	reasonRunKillAlreadyTerminal               = "run_kill_already_terminal"                // the run is already in a terminal state other than killed
 	reasonRunKillStateChanged                  = "run_kill_state_changed"                   // the run moved to another state between the read and the write
@@ -346,8 +353,23 @@ const (
 	reasonAPITokenMemberModeMint     = "api_token_member_mode_mint"     // a member-mode session cannot mint a token that would outlive the view
 	reasonAPITokenNameInvalid        = "api_token_name_invalid"         // name exceeds the length cap or has a control character
 	reasonAPITokenTTLInvalid         = "api_token_ttl_invalid"          // ttl_seconds is negative or implausibly large
-	reasonAPITokenCapReached         = "api_token_cap_reached"          // the principal already holds the maximum number of live tokens
-	reasonSessionsRevokeParamInvalid = "sessions_revoke_param_invalid"  // the body must set exactly one of sub/all
+
+	// CLI sign-in (cli_sign_in.go, cli_sessions.go). cli_sign_in_invalid and cli_session_invalid are one
+	// answer each for every refusal of the token call and of a refresh, so neither is an oracle.
+	reasonCLISignInRateLimited       = "cli_sign_in_rate_limited"      // too many sign-in attempts or refreshes from this address or for this session
+	reasonCLISignInInvalidRequest    = "cli_sign_in_invalid_request"   // the sign-in request body is malformed
+	reasonCLIPasteSignInOff          = "cli_paste_sign_in_off"         // paste-back sign-in while WARDYN_CLI_PASTE_SIGN_IN is off
+	reasonCLIFileStoreOff            = "cli_file_store_off"            // a CLI that reports the file store while WARDYN_CLI_FILE_STORE is off
+	reasonCLISignInPendingCap        = "cli_sign_in_pending_cap"       // too many sign-ins are waiting for approval deployment-wide
+	reasonCLISignInNotFound          = "cli_sign_in_not_found"         // no such sign-in request
+	reasonCLISignInUsed              = "cli_sign_in_used"              // the sign-in link was already approved, denied or redeemed
+	reasonCLISignInExpired           = "cli_sign_in_expired"           // the sign-in link expired
+	reasonCLIAdminNeedsSession       = "cli_admin_needs_session"       // wardyn login --admin without a live CLI sign-in of the approver on that computer
+	reasonCLISignInInvalid           = "cli_sign_in_invalid"           // the token call's code, verifier, proof or request is not valid
+	reasonCLISessionInvalid          = "cli_session_invalid"           // the CLI session cannot refresh: unknown, ended, expired, idle, cut, reused or a bad proof
+	reasonCLISessionNotFound         = "cli_session_not_found"         // no such live CLI session of the caller
+	reasonAPITokenCapReached         = "api_token_cap_reached"         // the principal already holds the maximum number of live tokens
+	reasonSessionsRevokeParamInvalid = "sessions_revoke_param_invalid" // the body must set exactly one of sub/all
 
 	// /api/v1/invitations and /api/v1/me/invitations (#1508).
 	reasonInvitationTargetInvalid    = "invitation_target_invalid"     // the principal is not a subject, or is reserved, or is a service: principal
@@ -516,6 +538,7 @@ const (
 	reasonGitPATNarrowingSSHConflict     = "git_pat_narrowing_ssh_conflict"     // a same-forge ssh_key is a second push path the broker cannot see
 	reasonGitPATNarrowingUnsupportedHost = "git_pat_narrowing_unsupported_host" // the host is served by a lane that ignores the narrowing axes
 	reasonGitPATAPIForgeDisabled         = "git_pat_api_forge_disabled"         // api: true on a forge whose API door is off on this deployment
+	reasonGitPATBrokerOffResident        = "git_pat_broker_off_resident"        // the PAT broker is off, and a member's run (or any, under WARDYN_GIT_PAT_BROKER_OFF_REFUSED) may not hold the PAT
 )
 
 // Run templates (template_document.go, template_refusals.go): the refusals of
@@ -566,3 +589,27 @@ const reasonHostCapacityRefused = "host_capacity_refused"
 // PUT /workspaces/{id}/approved-egress naming a host on the workspace's denied list (handleSetApprovedEgress):
 // deny beats allow, so the approval would change nothing.
 const reasonWorkspaceApprovedEgressDenied = "workspace_approved_egress_denied"
+
+// A person's own GitHub token (gh_own_pat.go): the doors that set and remove it, and the run it is
+// used on (gh_own_pat_run.go).
+const (
+	reasonGitHubOwnPATNoSession        = "github_own_pat_no_session"        // the caller has no browser sign-in to store the token under
+	reasonGitHubOwnPATPreviewBlocked   = "github_own_pat_preview_blocked"   // refused in the user view: the token is stored under the caller's own identity
+	reasonGitHubOwnPATUnknownRow       = "github_own_pat_unknown_row"       // no own-token GitHub row the caller may use has this address
+	reasonGitHubOwnPATTokenInvalid     = "github_own_pat_token_invalid"     // not one fine-grained token (github_pat_…), or too long, or has spaces
+	reasonGitHubOwnPATExpiryInvalid    = "github_own_pat_expiry_invalid"    // expires_on is not a date after today
+	reasonGitHubOwnPATExpiryTooLong    = "github_own_pat_expiry_too_long"   // expires_on is past the 30-day limit
+	reasonGitHubOwnPATRejected         = "github_own_pat_rejected"          // GitHub did not accept the token
+	reasonGitHubOwnPATCheckUnavailable = "github_own_pat_check_unavailable" // GitHub could not be asked; nothing is known
+	reasonGitHubOwnPATAccountMismatch  = "github_own_pat_account_mismatch"  // another GitHub account than the one linked, and no relink
+	reasonGitHubOwnTokenRequired       = "github_own_token_required"        // create: the run's owner has no usable token of their own for the row
+	reasonGitHubOwnTokenExpired        = "github_own_token_expired"         // create: the owner's token has reached the expiry they entered
+	reasonGitHubOwnTokenUndeliverable  = "github_own_token_undeliverable"   // create: the token could not stay out of the sandbox (PAT broker off, a run on a person's runner) or two rows claim the host
+	reasonGitHubOwnTokenResident       = "github_own_token_resident"        // mint: the PAT broker is off, so the token would be handed into the sandbox
+)
+
+// GET /runs/{id}/attach?transport=local (attach_local.go), after every check of the attach door has
+// passed: this run cannot be attached on its runner's own computer, and the CLI attaches through the
+// organisation instead. A transport's answer, not a refusal; errorBody.Detail says why. Declared here
+// because reasons_routes.go is at scripts/check-file-size.sh's limit.
+const reasonAttachLocalUnavailable = "attach_local_unavailable"

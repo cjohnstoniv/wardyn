@@ -4,8 +4,10 @@
 package runner
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -65,8 +67,46 @@ func TestMemberMount_SymlinkEscape(t *testing.T) {
 	if err == nil {
 		t.Fatal("a symlink inside the root pointing outside every root was ALLOWED; the within-root test must run on the EvalSymlinks result, not the lexical path")
 	}
-	if !strings.Contains(err.Error(), "outside every member workspace root") {
-		t.Errorf("error = %v, want the outside-every-root refusal", err)
+	if !errors.Is(err, errMemberSourceRefused) || strings.Contains(err.Error(), outside) {
+		t.Errorf("error = %v, want the member refusal, without the path the link resolves to", err)
+	}
+}
+
+// TestMemberMount_RefusalsAreNoFilesystemOracle pins #2273: a member reads the same refusal whether a
+// path outside their roots exists or not, and whether a link inside them points at something that
+// exists or not, and never the place a link points to.
+func TestMemberMount_RefusalsAreNoFilesystemOracle(t *testing.T) {
+	root, _ := memberRoot(t)
+	base := filepath.Dir(root)
+	outside := filepath.Join(base, "elsewhere")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	present, missing := filepath.Join(root, "present"), filepath.Join(root, "missing")
+	if err := os.Symlink(outside, present); err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(base, "gone"), missing); err != nil {
+		t.Fatal(err)
+	}
+	p := UserMountPolicy{Roots: []string{root}}
+	refusal := func(src string) string {
+		t.Helper()
+		err := p.ValidateUserMount("alice", src, false)
+		if !errors.Is(err, errMemberSourceRefused) {
+			t.Fatalf("%s = %v, want the member refusal", src, err)
+		}
+		return strings.ReplaceAll(err.Error(), strconv.Quote(src), "SRC")
+	}
+	if a, b := refusal(outside), refusal(filepath.Join(base, "gone")); a != b {
+		t.Errorf("outside the roots, an existing and a missing path read differently:\n%s\n%s", a, b)
+	}
+	a, b := refusal(present), refusal(missing)
+	if a != b {
+		t.Errorf("inside the roots, a link to an existing and to a missing target read differently:\n%s\n%s", a, b)
+	}
+	if strings.Contains(a, outside) || strings.Contains(b, "gone") {
+		t.Errorf("a refusal names where a link points: %s / %s", a, b)
 	}
 }
 
@@ -120,10 +160,11 @@ func TestMemberMount_DotfileDenyUnderWideRoot(t *testing.T) {
 	p := UserMountPolicy{Roots: []string{home}}
 
 	for _, rel := range []string{
-		".ssh", ".aws", ".claude", ".wardyn", ".gnupg", ".docker", ".kube",
-		".netrc", ".git-credentials", ".config/gh", ".git/config",
+		".ssh", ".aws", ".azure", ".claude", ".wardyn", ".gnupg", ".docker", ".kube",
+		".netrc", ".git-credentials", ".config/gh", ".config/gcloud", ".git/config", "Library/Keychains",
+		".codex", ".gemini", ".npmrc", ".pypirc", ".azure/cache",
 		// Traversed, not just named: the credential dir is a PARENT of the source.
-		".ssh/keys/work", ".config/gh/hosts",
+		".ssh/keys/work", ".config/gh/hosts", ".config/gcloud/legacy_credentials",
 	} {
 		dir := filepath.Join(home, rel)
 		if err := os.MkdirAll(dir, 0o700); err != nil {

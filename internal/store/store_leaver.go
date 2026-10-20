@@ -72,6 +72,9 @@ type SuspendPlan struct {
 	// with it as its last error, so a later plan with every form runs step 1 again, and no purge is
 	// scheduled.
 	Partial string
+	// OwedAudit are refusal-audit ledger rows (JobStepRefusalAudit) written pending in the same transaction,
+	// reopened if they exist, so the cut never commits without the obligation to write its refusal row.
+	OwedAudit []JobKey
 }
 
 // SuspendResult is step 1's outcome. WasActive says the identity was active before it, so this
@@ -91,6 +94,10 @@ type DeprovisionJob struct {
 	Attempts   int
 	LastError  string
 	Detail     map[string]int
+	// EventID and EventAt are the id and time of the audit event this obligation writes, pinned by the
+	// first attempt (PinDeprovisionEvent) so every replay is the same event. Zero until pinned.
+	EventID uuid.UUID
+	EventAt time.Time
 }
 
 // JobKey names a ledger row within one identity and kind.
@@ -111,6 +118,9 @@ type LeaverStore interface {
 	FinishDeprovisionJob(ctx context.Context, identityID uuid.UUID, kind string, k JobKey, detail map[string]int) error
 	FailDeprovisionJob(ctx context.Context, identityID uuid.UUID, kind string, k JobKey, cause error) error
 	ReopenDeprovisionJob(ctx context.Context, identityID uuid.UUID, kind string, k JobKey) error
+	// PinDeprovisionEvent stores id and at on a row that has none and returns what the row holds, so two
+	// writers of one obligation agree on the event.
+	PinDeprovisionEvent(ctx context.Context, identityID uuid.UUID, kind string, k JobKey, id uuid.UUID, at time.Time) (uuid.UUID, time.Time, error)
 	MarkIdentityPurged(ctx context.Context, id uuid.UUID, requireDue bool) (bool, error)
 	PurgeDueIdentities(ctx context.Context, limit int) ([]DueIdentity, error)
 	PendingLeavers(ctx context.Context, idleFor time.Duration, limit int) ([]PendingLeaver, error)
@@ -305,6 +315,9 @@ const CutoffDetailBound = "principal_bound"
 // a ledger deletes it, so a resolution, a completion or a new reason never loses the row.
 const JobStepRefusalAudit = "refusal_audit/"
 
+// RefusalAuditOwedMsg is the last error of a ledger row that owes a refusal's audit row.
+const RefusalAuditOwedMsg = "the refusal's audit row is not yet written"
+
 // ErrIdentityRebound is a SuspendPlan made before a sign-in bound the identity row: its forms miss the
 // newly bound principal, so the caller reads the row again and makes a new plan.
 var ErrIdentityRebound = errors.New("store: the identity was bound since the suspension was planned")
@@ -402,6 +415,15 @@ func (s PG) SuspendIdentity(ctx context.Context, p SuspendPlan) (SuspendResult, 
 			return SuspendResult{}, fmt.Errorf("store: record pending suspension step: %w", err)
 		}
 	}
+	for _, k := range p.OwedAudit {
+		if _, err = tx.Exec(ctx, `
+			INSERT INTO deprovision_jobs (identity_id, kind, step, target, state, attempts, last_error) VALUES ($1, 'suspend', $2, $3, 'pending', 1, $4)
+			ON CONFLICT (identity_id, kind, step, target) DO UPDATE
+			   SET state = 'pending', attempts = deprovision_jobs.attempts + 1, last_error = EXCLUDED.last_error,
+			       audit_event_id = NULL, audit_event_at = NULL, updated_at = now()`, p.IdentityID, k.Step, k.Target, RefusalAuditOwedMsg); err != nil {
+			return SuspendResult{}, fmt.Errorf("store: record owed refusal row: %w", err)
+		}
+	}
 	// The cut goes last: the exclusive revocation-order lock it takes holds every sign-in and mint
 	// (ReadRevocationSeq's shared lock) until this commits, so it is taken after the other writes.
 	// Every row this transaction locks is taken before it, so no holder of the shared lock waits on them.
@@ -415,6 +437,9 @@ func (s PG) SuspendIdentity(ctx context.Context, p SuspendPlan) (SuspendResult, 
 			INSERT INTO oidc_session_revocations (sub, revoked_at) VALUES ($1, clock_timestamp())
 			ON CONFLICT (sub) DO UPDATE SET revoked_at = EXCLUDED.revoked_at`, sub); err != nil {
 			return SuspendResult{}, fmt.Errorf("store: session cutoff: %w", err)
+		}
+		if err = endCLISessionsOf(ctx, tx, sub, types.CLISessionEndRevoked); err != nil {
+			return SuspendResult{}, err
 		}
 	}
 	if err = tx.QueryRow(ctx, `SELECT authority_epoch FROM principal_identities WHERE id = $1`, p.IdentityID).Scan(&res.Epoch); err != nil {
@@ -448,13 +473,18 @@ func (s PG) EnsureDeprovisionJobs(ctx context.Context, identityID uuid.UUID, kin
 // ListDeprovisionJobs is the ledger of one identity and kind, oldest first.
 func (s PG) ListDeprovisionJobs(ctx context.Context, identityID uuid.UUID, kind string) ([]DeprovisionJob, error) {
 	return collect(ctx, s.Pool, "list", "deprovision jobs", `
-		SELECT identity_id, kind, step, target, state = 'done', attempts, last_error, detail
+		SELECT identity_id, kind, step, target, state = 'done', attempts, last_error, detail, audit_event_id, audit_event_at
 		  FROM deprovision_jobs WHERE identity_id = $1 AND kind = $2 ORDER BY created_at, step, target`,
 		[]any{identityID, kind}, func(r pgx.Row) (DeprovisionJob, error) {
 			var j DeprovisionJob
 			var raw []byte
-			if err := r.Scan(&j.IdentityID, &j.Kind, &j.Step, &j.Target, &j.Done, &j.Attempts, &j.LastError, &raw); err != nil {
+			var eventID *uuid.UUID
+			var eventAt *time.Time
+			if err := r.Scan(&j.IdentityID, &j.Kind, &j.Step, &j.Target, &j.Done, &j.Attempts, &j.LastError, &raw, &eventID, &eventAt); err != nil {
 				return DeprovisionJob{}, err
+			}
+			if eventID != nil && eventAt != nil {
+				j.EventID, j.EventAt = *eventID, *eventAt
 			}
 			_ = json.Unmarshal(raw, &j.Detail)
 			return j, nil
@@ -493,9 +523,22 @@ func (s PG) FailDeprovisionJob(ctx context.Context, identityID uuid.UUID, kind s
 // found live once more.
 func (s PG) ReopenDeprovisionJob(ctx context.Context, identityID uuid.UUID, kind string, k JobKey) error {
 	if _, err := s.Pool.Exec(ctx, `
-		UPDATE deprovision_jobs SET state = 'pending', updated_at = now()
+		UPDATE deprovision_jobs SET state = 'pending', audit_event_id = NULL, audit_event_at = NULL, updated_at = now()
 		 WHERE identity_id = $1 AND kind = $2 AND step = $3 AND target = $4`, identityID, kind, k.Step, k.Target); err != nil {
 		return fmt.Errorf("store: reopen deprovision job: %w", err)
 	}
 	return nil
+}
+
+// PinDeprovisionEvent — see LeaverStore. A reopened row is a new occurrence and holds no pin.
+func (s PG) PinDeprovisionEvent(ctx context.Context, identityID uuid.UUID, kind string, k JobKey, id uuid.UUID, at time.Time) (uuid.UUID, time.Time, error) {
+	var gotID uuid.UUID
+	var gotAt time.Time
+	if err := s.Pool.QueryRow(ctx, `
+		UPDATE deprovision_jobs SET audit_event_id = COALESCE(audit_event_id, $5), audit_event_at = COALESCE(audit_event_at, $6)
+		 WHERE identity_id = $1 AND kind = $2 AND step = $3 AND target = $4
+		RETURNING audit_event_id, audit_event_at`, identityID, kind, k.Step, k.Target, id, at).Scan(&gotID, &gotAt); err != nil {
+		return uuid.Nil, time.Time{}, fmt.Errorf("store: pin deprovision event: %w", err)
+	}
+	return gotID, gotAt, nil
 }

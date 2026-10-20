@@ -46,6 +46,11 @@ const controlPlaneCallTimeout = 130 * time.Second
 type Proxy struct {
 	runID  uuid.UUID
 	policy *Policy
+	// vm, portRule and vmFlows: the port rule and wardyn-vmnet's flow
+	// contract (port_rule.go, vmnet_flows.go).
+	vm       bool
+	portRule string
+	vmFlows  vmFlows
 	// evaluator decides the host allow/deny/unknown verdict + method (pluggable
 	// seam). Defaults to the builtin RunPolicySpec evaluator. The IP guard,
 	// approval FSM, IP vetting, and injection stay hardwired in evaluate().
@@ -110,6 +115,8 @@ type Proxy struct {
 	// maskKey files the secrets this proxy learns in procRegistry: uuid.Nil in a
 	// sidecar, a ViaOrgEngine's own key at the organisation (procMaskFor).
 	maskKey uuid.UUID
+	// scrubResponses is Options.ScrubResponses (scrub.go).
+	scrubResponses bool
 	// patGrants is the per-run git_pat broker allowlist: lowercased host -> the
 	// grant to mint from. Empty/nil == no host brokered (the route always 403s),
 	// which is also what a deployment with the lane switched off looks like.
@@ -136,6 +143,8 @@ type Proxy struct {
 	ghAPIStopped atomic.Bool
 	// arm is the run's Azure CLI door (azure_arm_door.go). Nil == no door.
 	arm *azureARMDoor
+	// sigv4 is the run's AWS SigV4 re-signing door (aws_sigv4.go); nil when off.
+	sigv4 *awsSigV4Door
 	// gitTokens caches minted installation tokens per grant so a single clone
 	// (info/refs + git-upload-pack) does not re-mint — mandatory for single-use
 	// approval-gated grants. Guarded by gitTokMu; each entry single-flights its
@@ -232,6 +241,9 @@ type Proxy struct {
 	// LLMUnavailableDetail). Empty == the generic route sentence; the
 	// below-policy clause is appended either way. See llm404Detail.
 	llmUnavailableDetail string
+	// localModels is each local_model upstream's route gate, keyed by
+	// localModelKey (local_model.go). Empty == no local model route.
+	localModels map[string]*localModel
 	// pushHolds is the held-push state (push_hold.go).
 	pushHolds pushHolds
 	// attribution is Options.Attribution: the policy named in a policy-decided
@@ -284,6 +296,19 @@ type internalHostRule struct {
 // the hostname (TOCTOU / DNS-rebinding guard).
 type vettedIPKey struct{}
 
+// canonicalGitGrants canonicalises git-broker allowlist keys to lowercase "<org>/<repo>" so
+// lookups match regardless of the slug casing git sends (github owner/repo is case-insensitive).
+func canonicalGitGrants(in map[string]uuid.UUID) map[string]uuid.UUID {
+	gitGrants := make(map[string]uuid.UUID, len(in))
+	for k, id := range in {
+		if k = strings.ToLower(strings.TrimSpace(k)); k != "" && id != uuid.Nil {
+			gitGrants[k] = id
+		}
+	}
+	return gitGrants
+}
+
+//nolint:funlen // one linear wiring of each Options field into the Proxy; splitting it would scatter the wiring
 func newProxy(opts Options) *Proxy {
 	dial := opts.Dial
 	if dial == nil {
@@ -303,15 +328,7 @@ func newProxy(opts Options) *Proxy {
 		evaluator = builtinEvaluator{p: opts.Policy} // default: builtin RunPolicySpec verdict
 	}
 	mitmHosts, mitmPorts, mitmPlaintext := compileMITMHosts(opts.MITMHosts)
-	// Canonicalise git-broker allowlist keys to lowercase "<org>/<repo>" so lookups
-	// match regardless of the slug casing git sends (github owner/repo is
-	// case-insensitive).
-	gitGrants := make(map[string]uuid.UUID, len(opts.GitGrants))
-	for k, id := range opts.GitGrants {
-		if k = strings.ToLower(strings.TrimSpace(k)); k != "" && id != uuid.Nil {
-			gitGrants[k] = id
-		}
-	}
+	gitGrants := canonicalGitGrants(opts.GitGrants)
 	// Same canonicalisation as the repo keys above: a host is matched
 	// case-insensitively, so the map key is lowercased once here rather than at
 	// every lookup.
@@ -370,6 +387,7 @@ func newProxy(opts Options) *Proxy {
 		patAPI:               patAPI,
 		ghAPI:                newGitHubAPIDoor(opts.GitHubAPI, mitmHosts, mitmPorts),
 		arm:                  newAzureARMDoor(opts.AzureARM, mitmHosts, mitmPorts),
+		sigv4:                newAWSSigV4Door(opts.AWSSigV4, mitmHosts, mitmPorts),
 		gitTokens:            make(map[uuid.UUID]*gitTokEntry),
 		controlPlaneURL:      controlPlaneEndpoint(opts.ControlPlaneURL, ""),
 		runToken:             opts.RunToken,
@@ -382,7 +400,9 @@ func newProxy(opts Options) *Proxy {
 		exclusionUnknown:     opts.ExclusionUnknown,
 		llmUpstreams:         llmUpstreams,
 		llmUnavailableDetail: opts.LLMUnavailableDetail,
+		localModels:          compileLocalModels(opts.LocalModels),
 		pushHolds:            pushHolds{unattended: opts.Unattended},
+		scrubResponses:       opts.ScrubResponses,
 		attribution:          opts.Attribution,
 		gatewayVendor:        gatewayVendor,
 		channelHosts:         compileChannelHosts(opts.LLMChannelHosts),
@@ -390,7 +410,6 @@ func newProxy(opts Options) *Proxy {
 		now:                  now,
 		viaOrgRoutes:         opts.ViaOrgRoutes,
 	}
-
 	// directDial dials the vetted IP carried on the request context and never
 	// re-resolves — the ORIGINAL behavior, and the ONLY behavior of the
 	// control-plane transport (which must never traverse the corp proxy).
@@ -585,6 +604,12 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 		log := decisionLog(req, egress.Deny, ruleSourceMCPDirect)
 		return egress.Deny, "", &log
 	}
+	// So is a local model server's: its gate is on the brokered LLM route.
+	if p.localModelHost(host) {
+		log := decisionLog(req, egress.Deny, ruleSourceLocalModel)
+		log.Cause = "a local model server is reached only on the brokered LLM route"
+		return egress.Deny, "", &log
+	}
 
 	// 1. Policy host verdict (deny beats allow, default-deny) — delegated to the
 	// pluggable Evaluator (default: builtin RunPolicySpec). An evaluator error
@@ -607,6 +632,18 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 	if verdict == egress.VerdictDeny {
 		log := decisionLog(req, egress.Deny, "policy:denied")
 		return egress.Deny, "", &log
+	}
+	// The port rule (port_rule.go) sits below policy:denied and above the method
+	// check and the approval raise: an approval is host-wide and never opens a
+	// port, so asking for one the rule refuses is a question the answer cannot
+	// change.
+	portDryRun := false
+	if p.portRuleRefuses(host, port) {
+		if p.portRule == PortRuleOn {
+			log := decisionLog(req, egress.Deny, ruleSourcePort)
+			return egress.Deny, "", &log
+		}
+		portDryRun = true
 	}
 
 	// 2. Method restriction (CONNECT counts as method "CONNECT"), applied BEFORE
@@ -712,6 +749,7 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 		if approvalID == uuid.Nil {
 			log.RuleSource = ruleSourceEgressRedirect
 		}
+		markPortDryRun(&log, portDryRun)
 		return egress.Allow, target, &log
 	}
 	target, ruleSource, terr := p.egressTarget(host, port)
@@ -743,6 +781,7 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 	if ruleSource != "" && approvalID == uuid.Nil {
 		log.RuleSource = ruleSource
 	}
+	markPortDryRun(&log, portDryRun)
 	return egress.Allow, target, &log
 }
 
@@ -771,7 +810,12 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		host, port = splitHostPort(r.RequestURI, 443)
 	}
 
-	decision, target, log := p.evaluate(r.Context(), host, port, http.MethodConnect, "")
+	// A desktop VM's relay asks before it completes the guest's handshake and
+	// tunnels after it has read the first flight (vmnet_flows.go): the tunnel
+	// stage resumes the decision the ask parked, so one flow is decided, held
+	// and dialled once.
+	flow, stage := p.vmnetStage(r)
+	decision, target, log := p.decideConnect(r.Context(), flow, stage, host, port)
 	// Deny/Pending are emitted now. The ALLOW decision is deferred until the
 	// tunnel is actually established (E3): emitting it before the dial would
 	// over-report an allow when the dial then fails.
@@ -790,6 +834,10 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		}
 		setEgressRefusalHeaders(w, egressRefusalPending, host)
 		writeApprovalPending(w, log)
+		return
+	}
+	if stage == vmnetStageAsk {
+		p.parkVMFlow(w, flow, host, port, target, log)
 		return
 	}
 
@@ -819,7 +867,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	// Never a blind tunnel to an Azure DevOps grant host (refuseADOTunnel).
 	if p.refuseADOTunnel(w, r, host, port) || p.refuseAzureTunnel(w, r, host, port) || p.refusePATAPITunnel(w, r, host, port) ||
-		p.refuseGitHubAPITunnel(w, r, host, port) || p.refuseAzureARMTunnel(w, r, host, port) {
+		p.refuseGitHubAPITunnel(w, r, host, port) || p.refuseAzureARMTunnel(w, r, host, port) || p.refuseAWSSigV4Tunnel(w, r, host, port) {
 		return
 	}
 

@@ -166,6 +166,10 @@ func (s *Stream) Read(b []byte) (int, error) {
 
 // Write sends b as DATA frames of at most MaxDataFrame bytes, waiting for credit.
 func (s *Stream) Write(b []byte) (int, error) {
+	if s.kind == KindPTYTee && s.p.cfg.Org { // the tee flows runner to org only
+		_ = s.Reset(ResetRefused)
+		return 0, io.ErrClosedPipe
+	}
 	s.mu.Lock()
 	err := s.reset
 	closed := s.localClosed

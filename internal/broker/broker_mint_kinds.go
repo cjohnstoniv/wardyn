@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
@@ -43,8 +44,8 @@ func ownerOf(caller *identity.Claims) string {
 // grantOwner is the namespace a grant's stored secret is read from: ownerOf,
 // except that an owner_only grant on a run the operator itself owns (the
 // signed Claims.OperatorOwned, never Sub) reads the operator's "", its own.
-func grantOwner(caller *identity.Claims, spec types.GrantSpec) string {
-	if spec.OwnerOnly && caller != nil && caller.OperatorOwned {
+func grantOwner(caller *identity.Claims, ownerOnly bool) string {
+	if ownerOnly && caller != nil && caller.OperatorOwned {
 		return ""
 	}
 	return ownerOf(caller)
@@ -107,6 +108,10 @@ func (b *Broker) mintGitPAT(ctx context.Context, caller *identity.Claims, spec t
 	if err != nil {
 		return Minted{}, fmt.Errorf("broker: decode git_pat scope: %w", err)
 	}
+	// Before the reserved-name check, which refuses this name to every other grant.
+	if types.IsGitHubOwnTokenSecret(sc.SecretName) {
+		return b.mintGitHubOwnToken(ctx, caller, spec, sc)
+	}
 	if reservedBrokerSecret(sc.SecretName) {
 		return Minted{}, fmt.Errorf("broker: git_pat secret name %q is reserved for platform internals", sc.SecretName)
 	}
@@ -115,7 +120,7 @@ func (b *Broker) mintGitPAT(ctx context.Context, caller *identity.Claims, spec t
 	}
 	// Own owner's row wins, falling back to the operator's unless owner_only.
 	gctx, row := secretstore.GrantRead(ctx, spec.OwnerOnly)
-	value, err := b.secrets.For(grantOwner(caller, spec)).Get(secretstore.WithPurpose(gctx, secretstore.PurposeBrokerMint), sc.SecretName)
+	value, err := b.secrets.For(grantOwner(caller, spec.OwnerOnly)).Get(secretstore.WithPurpose(gctx, secretstore.PurposeBrokerMint), sc.SecretName)
 	if err != nil {
 		return Minted{}, grantReadError("git_pat", sc.SecretName, spec.OwnerOnly, err)
 	}
@@ -125,6 +130,51 @@ func (b *Broker) mintGitPAT(ctx context.Context, caller *identity.Claims, spec t
 		ExpiresAt: time.Now().Add(ttlFor(spec)),
 		Token:     string(value),
 		Username:  GitPATUsername(sc.Host, sc.Username),
+		Metadata:  map[string]string{"secret_name": sc.SecretName, "host": sc.Host, "secret_scope": row.Scope()},
+	}, nil
+}
+
+// mintGitHubOwnToken resolves a person's own GitHub token (internal/api
+// gh_own_pat.go) for the run's proxy. Create writes this name onto a git_pat
+// grant only for a github.com host, owner_only and with the PAT broker on, and
+// no policy can name it (it is a reserved name), so the host and owner_only are
+// checked again here. The token is read from the run owner's own row only,
+// never the operator's, and stops at the expiry the person entered.
+func (b *Broker) mintGitHubOwnToken(ctx context.Context, caller *identity.Claims, spec types.GrantSpec, sc types.GitPATScope) (Minted, error) {
+	if !spec.OwnerOnly || caller == nil || caller.OperatorOwned || !strings.EqualFold(sc.Host, "github.com") {
+		return Minted{}, errors.New("broker: a person's own GitHub token is minted only for github.com, from the run owner's own row")
+	}
+	if b.secrets == nil {
+		return Minted{}, errors.New("broker: git_pat grant but no secret store configured (fail closed)")
+	}
+	gctx, row := secretstore.GrantRead(ctx, true)
+	raw, err := b.secrets.For(ownerOf(caller)).Get(secretstore.WithPurpose(gctx, secretstore.PurposeBrokerMint), sc.SecretName)
+	if err != nil {
+		return Minted{}, grantReadError("git_pat", sc.SecretName, true, err)
+	}
+	var tok types.GitHubOwnToken
+	// The decode error is not wrapped: a JSON syntax error can quote the value.
+	if json.Unmarshal(raw, &tok) != nil || !tok.Valid() {
+		return Minted{}, errors.New("broker: the stored GitHub token is not one Wardyn wrote")
+	}
+	now := time.Now()
+	if tok.Expired(now) {
+		return Minted{}, errors.New("broker: the run owner's GitHub token has reached the expiry they entered")
+	}
+	expires := now.Add(ttlFor(spec))
+	if tok.ExpiresOn.Before(expires) {
+		expires = tok.ExpiresOn
+	}
+	username := tok.Login // GitHub's documented user name for a token
+	if username == "" {
+		username = GitPATUsername(sc.Host, "")
+	}
+	return Minted{
+		Kind:      types.GrantGitPAT,
+		JTI:       newJTI(),
+		ExpiresAt: expires,
+		Token:     tok.Token,
+		Username:  username,
 		Metadata:  map[string]string{"secret_name": sc.SecretName, "host": sc.Host, "secret_scope": row.Scope()},
 	}, nil
 }
@@ -159,22 +209,28 @@ func (b *Broker) mintSSHKey(ctx context.Context, caller *identity.Claims, spec t
 		return Minted{}, errors.New("broker: ssh_key grant but no secret store configured (fail closed)")
 	}
 	// Same owner-then-operator-fallback rule as mintGitPAT, for both the key
-	// and its optional known_hosts material below.
-	owned := b.secrets.For(grantOwner(caller, spec))
-	gctx, row := secretstore.GrantRead(ctx, spec.OwnerOnly)
-	rctx := secretstore.WithPurpose(gctx, secretstore.PurposeBrokerMint)
-	key, err := owned.Get(rctx, sc.KeySecretRef)
-	if err != nil {
-		return Minted{}, grantReadError("ssh_key", sc.KeySecretRef, spec.OwnerOnly, err)
+	// and its optional known_hosts material below, decided per ref: each reads
+	// owner_only when the grant or its OwnerOnlyRefs says so.
+	read := func(kind, ref string) ([]byte, string, error) {
+		ownerOnly := spec.OwnerOnlyFor(ref)
+		gctx, row := secretstore.GrantRead(ctx, ownerOnly)
+		v, err := b.secrets.For(grantOwner(caller, ownerOnly)).Get(secretstore.WithPurpose(gctx, secretstore.PurposeBrokerMint), ref)
+		if err != nil {
+			return nil, "", grantReadError(kind, ref, ownerOnly, err)
+		}
+		return v, row.Scope(), nil
 	}
-	keyScope := row.Scope()
+	key, keyScope, err := read("ssh_key", sc.KeySecretRef)
+	if err != nil {
+		return Minted{}, err
+	}
 	// Optional operator-supplied known_hosts for a custom host the image-baked
 	// /etc/ssh/ssh_known_hosts does not cover; normally unset for github.com/ADO.
 	var knownHosts string
 	if sc.KnownHostsSecretRef != "" {
-		kh, kerr := owned.Get(rctx, sc.KnownHostsSecretRef)
+		kh, _, kerr := read("ssh_key known_hosts", sc.KnownHostsSecretRef)
 		if kerr != nil {
-			return Minted{}, grantReadError("ssh_key known_hosts", sc.KnownHostsSecretRef, spec.OwnerOnly, kerr)
+			return Minted{}, kerr
 		}
 		knownHosts = string(kh)
 	}

@@ -42,7 +42,7 @@ func defaultPortForScheme(scheme string) int {
 // here, before evaluation or injection, since this lane skips the REST gate (refuseADOPlain).
 func (p *Proxy) servePlain(w http.ResponseWriter, r *http.Request) {
 	if p.refuseADOPlain(w, r) || p.refuseAzurePlain(w, r) || p.refusePATAPIPlain(w, r) || p.refuseGitHubAPIPlain(w, r) ||
-		p.refuseAzureARMPlain(w, r) {
+		p.refuseAzureARMPlain(w, r) || p.refuseAWSSigV4Plain(w, r) {
 		return
 	}
 	p.handlePlain(w, r)
@@ -155,5 +155,5 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	relay(w, resp)
+	p.relay(w, resp)
 }

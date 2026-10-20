@@ -27,6 +27,9 @@ export interface GrantSpec {
   // Resolve the named stored secret from the run owner's own row only, never
   // the operator's (api_key / git_pat / ssh_key / env_secret).
   owner_only?: boolean;
+  // owner_only for the named stored secrets alone (an ssh_key grant whose key
+  // and known_hosts resolve from different rows).
+  owner_only_refs?: string[];
 }
 
 // A single operator/policy-controlled host bind mount. Mirrors the wire shape
@@ -307,6 +310,17 @@ export interface RunPolicySpec {
   // of the GitHub provider row's default_profile, within its capability_ceiling.
   // Omitted keeps the row's default. No GitHub lane reads it yet.
   github_capabilities?: string[];
+  // The harness's own walls inside Wardyn's (mirrors Go's RunPolicySpec.HarnessInnerWalls, #2822):
+  // a choice per axis that only adds walls; the create door refuses a run it would loosen.
+  harness_inner_walls?: HarnessInnerWalls;
+}
+
+// Mirrors Go's types.HarnessInnerWalls. On a policy each field is a choice; on a run or a Review
+// fact it is what the harness launches with, where an absent sandbox_mode is the harness's own
+// default, which Wardyn does not set.
+export interface HarnessInnerWalls {
+  sandbox_mode?: "off" | "workspace-write" | "read-only" | (string & {});
+  approvals?: "harness" | "wardyn" | "none" | (string & {});
 }
 
 export interface RunPolicy {

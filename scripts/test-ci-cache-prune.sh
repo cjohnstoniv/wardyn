@@ -38,6 +38,8 @@ listing="$(cat <<EOF
 {"id":9,"key":"go-unit-Linux-$h-1222","created_at":"2026-10-19T00:30:00Z"}
 {"id":10,"key":"gomod-Linux-$o","created_at":"2026-10-18T05:00:00Z"}
 {"id":11,"key":"gomod-Linux-$h","created_at":"2026-10-19T02:00:00Z"}
+{"id":12,"key":"gotools-Linux-$o","created_at":"2026-10-18T05:00:00Z"}
+{"id":13,"key":"gotools-Linux-$h","created_at":"2026-10-19T02:00:00Z"}
 EOF
 )"
 # Run 222 saved go-unit and go-test-pg-api-2. It deletes the older go-unit
@@ -50,6 +52,9 @@ got="$(printf '%s\n' "$listing" | jq -rs --arg r "-222" --arg mod "" "$prog" | c
 # Run 222 also saved the module cache: the older gomod entry goes too.
 got="$(printf '%s\n' "$listing" | jq -rs --arg r "-222" --arg mod "gomod-Linux-$h" "$prog" | cut -f1 | sort -n | paste -sd' ')"
 [ "$got" = "1 2 6 9 10" ] || fail "run 222 saving gomod would delete ids [$got], want [1 2 6 9 10]"
+
+# The gate tools' entries (gotools-, saved by go-gate-tools) are never marked as
+# superseded: ids 12 and 13 are in the listing and in neither result above.
 
 # A run that saved nothing deletes nothing.
 got="$(printf '%s\n' "$listing" | jq -rs --arg r "-999" --arg mod "" "$prog")"

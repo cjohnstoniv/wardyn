@@ -416,6 +416,9 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 	if err := refuseRemovedEnv(os.Environ()); err != nil {
 		return err
 	}
+	if err := refuseAWSSSOProxyInjectOff(f.awsSSOProxyInject); err != nil {
+		return err
+	}
 	if *f.preflightRatePerMin < 0 {
 		return fmt.Errorf("refusing to start: WARDYN_PREFLIGHT_RATE_PER_MIN is %d; want 0 (off) or a positive number", *f.preflightRatePerMin)
 	}
@@ -469,7 +472,7 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 	if err := f.ssoRefresh.validate(); err != nil {
 		return err
 	}
-	if err := f.sessionLife.validate(); err != nil {
+	if err := errors.Join(f.sessionLife.validate(), f.cliSignIn.validate()); err != nil {
 		return err
 	}
 	if *f.oidcIssuer != "" {
@@ -511,6 +514,16 @@ func refuseRemovedEnv(environ []string) error {
 		return nil
 	}
 	return fmt.Errorf("refusing to start: %s: removed in 0.9 and no longer read, so the setting would be silently lost — rename it before starting", strings.Join(left, ", "))
+}
+
+// refuseAWSSSOProxyInjectOff refuses the retired WARDYN_AWS_SSO_PROXY_INJECT=off, which wrote the AWS
+// sign-in token into the sandbox. A value the resolver reads as the default still boots.
+func refuseAWSSSOProxyInjectOff(raw *string) error {
+	if raw == nil || api.ResolveAWSSSOProxyInject(*raw) {
+		return nil
+	}
+	return fmt.Errorf("refusing to start: WARDYN_AWS_SSO_PROXY_INJECT=%s was removed in 0.10.0: the AWS sign-in token now always stays at the proxy "+
+		"and the sandbox holds a placeholder. Unset WARDYN_AWS_SSO_PROXY_INJECT (or set it to on) before starting", strings.TrimSpace(*raw))
 }
 
 // validateHAPosture is the boot half of high availability, the half that still

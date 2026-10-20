@@ -23,7 +23,7 @@ const groups = (group: ReviewGroupId, names: string): Record<string, ReviewGroup
 const policy = (names: string) => names.split(" ").map((n) => `inline_policy.${n}`).join(" ");
 
 const POLICY_REVIEW = "allowed_domains denied_domains allow_all_egress first_use_approval first_use_hold_seconds max_holds " +
-  "allowed_methods eligible_grants tool_rules git_push_any_branch push_rules azure_devops_capabilities github_capabilities";
+  "allowed_methods eligible_grants tool_rules harness_inner_walls git_push_any_branch push_rules azure_devops_capabilities github_capabilities";
 const POLICY_DOCUMENT = "auto_stop_after_sec ui_apps llm_inspection min_confinement_class workspace_mounts workspace_repos resources";
 
 /**

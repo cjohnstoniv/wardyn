@@ -352,7 +352,38 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `DRIVE_CREATED(name)` | mock | {name} created and added to this run. |
 | `COMPUTER_TITLE` | mock | Your computer |
 | `COMPUTER_BODY` | mock | Folders on your laptop, desktop or VDI. |
-| `COMPUTER_SOON` | mock | A sandbox can't use folders on your computer yet. |
+| `COMPUTER_BLOCKED` | mock | Your organisation doesn't allow folders from personal computers. |
+| `COMPUTER_NO_RUNNER` | mock | No runner on your computer yet. |
+| `COMPUTER_NO_RUNNER_BODY` | mock | A runner connects out to Wardyn and shares only the folders you pick. Nothing connects in to your computer. |
+| `COMPUTER_SET_UP` | mock | Set up a runner |
+| `COMPUTER_NOT_NOW` | mock | Not now |
+| `COMPUTER_OFFLINE` | mock | Runner offline |
+| `COMPUTER_LAST_SEEN(name, when)` | mock | {name} · last seen {when} |
+| `COMPUTER_OFFLINE_BODY(name)` | mock | Start the runner on {name}, then try again. A run that uses this folder can't start until it is back. |
+| `COMPUTER_LABEL` | mock | Computer |
+| `COMPUTER_OPEN(name)` | deviation (lead 2026-10-19: the folder browser's open control needs a name) | Open {name} |
+| `COMPUTER_COL_NAME` | mock | Name |
+| `COMPUTER_COL_FILES` | mock | Files |
+| `COMPUTER_COL_SIZE` | mock | Size |
+| `COMPUTER_WILL_SEE` | mock | The sandbox will see |
+| `COMPUTER_GITIGNORE` | mock | Leave out what .gitignore lists |
+| `COMPUTER_BROWSE_NOTE` | mock | Only folder names and sizes reach Wardyn while you browse. No file is sent until the run starts. |
+| `COMPUTER_NEXT` | mock | Next |
+| `COMPUTER_FROM` | mock | From |
+| `COMPUTER_ON(name)` | mock | on {name} |
+| `COMPUTER_ONLINE` | mock | Runner online |
+| `COMPUTER_CHANGES` | mock | Changes |
+| `COMPUTER_BOTH` | mock | Both ways |
+| `COMPUTER_COPY_IN` | mock | Copy in only |
+| `COMPUTER_BOTH_BODY` | deviation (owner ruling M4 2026-10-19: one side edits at a time) | Edits in the sandbox come back to your computer when the run ends. |
+| `COMPUTER_COPY_IN_BODY` | mock | A copy from your computer. Changes stay in the sandbox. |
+| `COMPUTER_SEES` | mock | The sandbox sees |
+| `COMPUTER_COUNT(files, size)` | mock | {files} files · {size} |
+| `COMPUTER_LEFT_OUT` | mock | Left out |
+| `COMPUTER_IGNORED(count)` | mock | {count} paths in .gitignore |
+| `COMPUTER_CHANGE` | mock | Change |
+| `COMPUTER_FIRST_SYNC` | mock | First sync |
+| `COMPUTER_FIRST_SYNC_BODY` | mock | Starts when you launch. The run waits until it finishes. |
 | `NO_EXTRA` | mock | No extra files — only the main drive |
 | `NO_EXTRA_DELETED` | mock | Only the main drive. Nothing from this run is kept. |
 | `NO_EXTRA_KEPT(grace)` | pending (W-12) | Only the main drive. It is deleted {grace} after the run's end time. |
@@ -768,6 +799,13 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `POLICY_ACCEPTS_EDITS` | deviation (qualified for tools no rule names, #2428; proposed wording awaiting approval) | For tools without a named rule, Claude Code accepts file edits without asking and asks before other tools. Named rules still apply. |
 | `POLICY_AUTOMATIC` | mock | Run automatically |
 | `POLICY_TOOLS_OF(harness, effect)` | mock | {harness}: {effect} |
+| `INNER_WALLS(sandbox, approvals)` | deviation (approved 2026-10-19, overseer, #2822) | Harness walls: {sandbox}, {approvals} |
+| `INNER_SANDBOX_OFF` | deviation (approved 2026-10-19, overseer, #2822) | harness sandbox off |
+| `INNER_SANDBOX_OWN` | deviation (approved 2026-10-19, overseer, #2822) | the harness's own sandbox |
+| `INNER_SANDBOX_MODE(mode)` | deviation (approved 2026-10-19, overseer, #2822) | harness sandbox {mode} |
+| `INNER_APPROVALS_HARNESS` | deviation (approved 2026-10-19, overseer, #2822) | approvals in the harness |
+| `INNER_APPROVALS_WARDYN` | deviation (approved 2026-10-19, overseer, #2822) | approvals in Wardyn |
+| `INNER_APPROVALS_NONE` | deviation (approved 2026-10-19, overseer, #2822) | no approvals |
 | `RAW_TITLE(format)` | mock | {format} run document |
 | `RAW_BODY` | mock | Read-only resolved draft |
 | `COPY` | mock | Copy |

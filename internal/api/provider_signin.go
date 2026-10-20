@@ -351,6 +351,9 @@ func (s *Server) handleProviderSignInCapture(w http.ResponseWriter, r *http.Requ
 			"credential_source": string(types.CredentialSourcePerUser), "model_provider": p.ID,
 		})))
 	w.WriteHeader(http.StatusNoContent)
+	// The sign-in sandbox still holds the token the person copied from it (its
+	// own credential file, the pane's scrollback): it goes with the sandbox.
+	s.killSignInRunAfterCapture(r.Context(), runID, owner)
 }
 
 // ownProviderSignInRun reports whether runID is a live Claude sign-in this

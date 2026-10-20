@@ -363,7 +363,7 @@ func (d *Dispatcher) dispatchRef(ctx context.Context, method, ref string, a refA
 	case runnerwire.MethodEnd:
 		d.selftests.Delete(ref)
 		if end, ok := sub.(runner.SandboxEnder); ok {
-			return nil, end.EndSandbox(ctx, ref)
+			return nil, runner.KeptDespiteAWSCacheWipe(ctx, ref, end.EndSandbox(ctx, ref))
 		}
 		return nil, runner.ErrEndUnsupported
 	case runnerwire.MethodStopProxy:

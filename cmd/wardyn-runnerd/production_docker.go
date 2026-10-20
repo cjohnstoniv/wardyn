@@ -41,8 +41,11 @@ import (
 )
 
 func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity, stateDir string, opts serveOptions) (runnerRuntime, error) {
-	if opts.substrate == "k8s" {
+	switch opts.substrate {
+	case "k8s":
 		return k8sRunnerHooks(ctx, identity, stateDir, opts)
+	case "folders":
+		return foldersRunnerHooks(ctx, identity, stateDir, opts)
 	}
 	if opts.proxyImage == "" {
 		return runnerRuntime{}, errors.New("runner serve requires --proxy-image or WARDYN_PROXY_IMAGE")

@@ -16,6 +16,12 @@ attribution.owner
 attribution.request_text
 attribution.request_url
 attribution.source
+aws_sigv4
+aws_sigv4.account_id
+aws_sigv4.grant_id
+aws_sigv4.hosts
+aws_sigv4.portal_host
+aws_sigv4.role_name
 azure_arm
 azure_arm.subscriptions
 azure_arm.tenant_id
@@ -62,6 +68,7 @@ injection.pin_query
 injection.pin_routes
 injection.pin_routes.method
 injection.pin_routes.path
+injection.placeholder
 injection.require_tls
 injection.secret_name
 internal_hosts
@@ -72,6 +79,11 @@ listen
 llm_channel_hosts
 llm_unavailable_detail
 llm_upstreams
+local_models
+local_models.*.keep_alive_seconds
+local_models.*.max_context
+local_models.*.max_output
+local_models.*.models
 mcp_bindings
 mcp_bindings.harness
 mcp_bindings.servers
@@ -102,6 +114,7 @@ policy.denied_domains
 policy.eligible_grants
 policy.eligible_grants.kind
 policy.eligible_grants.owner_only
+policy.eligible_grants.owner_only_refs
 policy.eligible_grants.requires_approval
 policy.eligible_grants.scope
 policy.eligible_grants.ttl_seconds
@@ -109,6 +122,9 @@ policy.first_use_approval
 policy.first_use_hold_seconds
 policy.git_push_any_branch
 policy.github_capabilities
+policy.harness_inner_walls
+policy.harness_inner_walls.approvals
+policy.harness_inner_walls.sandbox_mode
 policy.llm_inspection
 policy.llm_inspection.block_min_severity
 policy.llm_inspection.classified_markers
@@ -155,6 +171,7 @@ policy.workspace_repos
 policy.workspace_repos.ref
 policy.workspace_repos.repo
 policy.workspace_repos.target
+port_rule
 push_rule_base
 push_rule_base.deny_new_executables
 push_rule_base.deny_paths
@@ -183,6 +200,7 @@ resident_mints.token
 resident_mints.username
 run_id
 run_token
+scrub_responses
 self_lapse
 trusted_ca_pem
 unattended
@@ -191,3 +209,4 @@ upstream_proxy_url
 via_org_routes
 via_org_routes.grant_id
 via_org_routes.host
+vm

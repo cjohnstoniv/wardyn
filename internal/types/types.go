@@ -8,6 +8,7 @@ package types
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -209,6 +210,8 @@ type AgentRun struct {
 	StatusReason string `json:"status_reason,omitempty"` // reason token parsed out of StatusDetail, derived at read, never stored
 	// AutonomyLevel freezes the level resolved at create, not the profile/posture that produced it (that's on the audit row).
 	AutonomyLevel AutonomyLevel `json:"autonomy_level,omitempty"`
+	// InnerWalls freezes the harness's own walls the run launched with (#2822); nil for a run with no catalog harness, or one created before this field.
+	InnerWalls *HarnessInnerWalls `json:"inner_walls,omitempty"`
 	// AdmittedAt is when a queued run was promoted out of the queue; written by promotion only, so nil for a run that never waited.
 	AdmittedAt *time.Time `json:"admitted_at,omitempty"`
 	// Queue is a waiting run's place in its pool's queue, derived at read from the queue row and never stored on the run; absent once the run leaves QUEUED.
@@ -296,6 +299,17 @@ type GrantSpec struct {
 	// RequiresApproval forces a human approval to mint (vs auto-mint on policy).
 	RequiresApproval bool `json:"requires_approval"`
 	OwnerOnly        bool `json:"owner_only,omitempty"` // stored secret from the run owner's own row only, never the operator's
+	// OwnerOnlyRefs is owner_only for the named stored secrets alone: a grant
+	// with two refs (ssh_key's key and known_hosts) whose refs resolve from
+	// different rows. Set at launch for a ref admitted only because the run's
+	// owner holds a secret of that name.
+	OwnerOnlyRefs []string `json:"owner_only_refs,omitempty"`
+}
+
+// OwnerOnlyFor reports whether the grant reads the stored secret ref from the
+// run owner's own row only.
+func (g GrantSpec) OwnerOnlyFor(ref string) bool {
+	return g.OwnerOnly || slices.Contains(g.OwnerOnlyRefs, ref)
 }
 
 // CredentialGrant records what a run is ELIGIBLE for — not issuance: minting happens only via the
@@ -560,6 +574,12 @@ type APIToken struct {
 	// that existed their order once. 0 only for a token written by a replica that predates it, which a
 	// revocation cutoff orders on CreatedAt. Never on the wire.
 	RevSeq int64 `json:"-"`
+	// Kind is APITokenKindAPI for a personal token, or a CLI kind (cli_sign_in.go). Never on the wire:
+	// the name says which computer a CLI token belongs to.
+	Kind string `json:"-"`
+	// CLISessionID is the CLI session a CLI token belongs to; the token stops authenticating when the
+	// session ends. Nil on a personal token. Never on the wire.
+	CLISessionID *uuid.UUID `json:"-"`
 }
 
 // Person is an identity an admin created or confirmed before its first sign-in, keyed by the
@@ -618,11 +638,48 @@ type PersonList struct {
 // control plane refuses a higher part (413), and the proxy never forwards one.
 const RecordingMaxParts = 2048
 
-// RunLocalFolder is a run's folder on the person's computer, which reaches a remote sandbox only by
-// `wardyn sync`. Name is how the person's computer names it (its base name), for the messages that
+// RunLocalFolder is a run's folder on the person's computer, which reaches a remote sandbox by
+// `wardyn sync` or through their runner. Name is how that computer names it (its base name), for the messages that
 // refer to it; RemoteDir is where in the sandbox it lands. A run that has one does not start its
 // agent until the first sync of that folder into RemoteDir has completed.
+//
+// RunnerID, when set, names the person's own folder-only runner that holds the folder at Path, an
+// absolute path on that computer: Wardyn then seeds the folder through that runner itself, with no
+// `wardyn sync` (run_computer_folder.go). Direction is ComputerFolderBoth (the sandbox's changes come
+// back when the run ends) or ComputerFolderIn (a copy in only).
 type RunLocalFolder struct {
-	Name      string `json:"name"`
-	RemoteDir string `json:"remote_dir,omitempty"`
+	Name      string     `json:"name"`
+	RemoteDir string     `json:"remote_dir,omitempty"`
+	RunnerID  *uuid.UUID `json:"runner_id,omitempty"`
+	Path      string     `json:"path,omitempty"`
+	Direction string     `json:"direction,omitempty"`
+}
+
+// RunLocalFolder.Direction values.
+const (
+	ComputerFolderBoth = "both"
+	ComputerFolderIn   = "in"
+)
+
+// RunLocalFolderStatus is what Wardyn knows of the passes a runner made for a run's computer folder
+// (0198): the first sync in, and the one that brought the sandbox's changes back. Both are nil until
+// that pass ends.
+type RunLocalFolderStatus struct {
+	Seed *FolderPassRecord `json:"seed,omitempty"`
+	Back *FolderPassRecord `json:"back,omitempty"`
+}
+
+// FolderPassRecord is one pass as the runner counted it. Error is set when it did not complete.
+type FolderPassRecord struct {
+	At      time.Time       `json:"at"`
+	Files   int             `json:"files"`
+	Bytes   int64           `json:"bytes"`
+	Refused []FolderRefusal `json:"refused"`
+	Error   string          `json:"error,omitempty"`
+}
+
+// FolderRefusal is one path a pass refused and why.
+type FolderRefusal struct {
+	Path   string `json:"path"`
+	Reason string `json:"reason"`
 }

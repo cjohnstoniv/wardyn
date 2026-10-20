@@ -4,8 +4,10 @@
 package runner
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os/exec"
 	"slices"
 	"strings"
@@ -226,6 +228,34 @@ func TestBuildProxyConfig_Unattended(t *testing.T) {
 	}
 }
 
+// TestBuildProxyConfig_VMAndPortRule: the VM flag and the port rule reach
+// the sidecar's config, and a container run with the rule off names neither.
+func TestBuildProxyConfig_VMAndPortRule(t *testing.T) {
+	b, err := BuildProxyConfig(uuid.New(), ProxyConfig{VM: true, PortRule: "dry_run"}, ProxyListenPort)
+	if err != nil || !strings.Contains(string(b), `"vm":true`) || !strings.Contains(string(b), `"port_rule":"dry_run"`) {
+		t.Fatalf("BuildProxyConfig = %s, %v", b, err)
+	}
+	if b, _ = BuildProxyConfig(uuid.New(), ProxyConfig{}, ProxyListenPort); strings.Contains(string(b), `"vm"`) || strings.Contains(string(b), "port_rule") {
+		t.Fatalf("an off run's config names the keys: %s", b)
+	}
+}
+
+// TestBuildProxyConfig_LocalModels: a local_model run's allowlist reaches the
+// sidecar's config, and a run without one writes no key an older proxy refuses.
+func TestBuildProxyConfig_LocalModels(t *testing.T) {
+	const base = "http://host.docker.internal:11434"
+	b, err := BuildProxyConfig(uuid.New(), ProxyConfig{
+		LLMUpstreams: map[string]string{"api.anthropic.com": base},
+		LocalModels:  map[string]types.LocalModelSettings{base: {Models: []string{"qwen2.5:3b"}}},
+	}, ProxyListenPort)
+	if err != nil || !strings.Contains(string(b), `"local_models":{"`+base+`":{"models":["qwen2.5:3b"]}}`) {
+		t.Fatalf("BuildProxyConfig = %s %v, want the allowlist under local_models", b, err)
+	}
+	if b, _ = BuildProxyConfig(uuid.New(), ProxyConfig{}, ProxyListenPort); strings.Contains(string(b), "local_models") {
+		t.Fatalf("a run with no local model names the key: %s", b)
+	}
+}
+
 // TestBuildProxyConfig_Attribution: the attribution round-trips through the
 // sidecar's own strict decoder, and an absent one leaves no key behind.
 func TestBuildProxyConfig_Attribution(t *testing.T) {
@@ -311,5 +341,20 @@ func TestBuildProxyConfig_CarriesControlPlaneCA(t *testing.T) {
 	}
 	if cfg.ControlPlaneCAPEM != string(ca.CertPEM) {
 		t.Fatal("control_plane_ca_pem did not reach the sidecar verbatim")
+	}
+}
+
+// A runner answers an end whose AWS cache wipe failed as the successful end it was, since the
+// wire has no code for it; every other answer passes through.
+func TestKeptDespiteAWSCacheWipe(t *testing.T) {
+	ctx := context.Background()
+	if err := KeptDespiteAWSCacheWipe(ctx, "ref", fmt.Errorf("%w: container is paused", ErrAWSCacheWipeFailed)); err != nil {
+		t.Fatalf("a wipe failure answered %v, want nil", err)
+	}
+	if err := KeptDespiteAWSCacheWipe(ctx, "ref", ErrEndUnsupported); !errors.Is(err, ErrEndUnsupported) {
+		t.Fatalf("ErrEndUnsupported answered %v", err)
+	}
+	if err := KeptDespiteAWSCacheWipe(ctx, "ref", nil); err != nil {
+		t.Fatalf("nil answered %v", err)
 	}
 }

@@ -8,7 +8,7 @@ import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
 import { RUN, RUN_COCKPIT, RUN_SIGN_IN } from "../src/app/components/wardyn/copy";
 import { LOGIN_SANDBOX_NOTE } from "../src/app/components/screens/run-detail/login-sandbox-note";
 import { STATES } from "../src/app/components/wardyn/states";
-import { RUN_SYNC } from "../src/app/components/wardyn/copy/runners";
+import { RUN_COMPUTER_FOLDER, RUN_SYNC } from "../src/app/components/wardyn/copy/runners";
 import { ADO_PAT } from "../src/app/lib/ado-pat-copy";
 import type { Page } from "@playwright/test";
 
@@ -612,6 +612,60 @@ test.describe("Run detail: the Sync rows of a live remote run", () => {
     await page.waitForTimeout(500);
     await expect(page.getByText("/work/app")).toBeVisible();
     await expect(page.getByText(RUN_SYNC.NONE)).toHaveCount(0);
+  });
+});
+
+// M4 (#2982): a run's folder from the person's computer, as GET /runs/{id}'s computer_folder reports it,
+// spliced into the daemon's own answer: the first sync waiting, then synced, then a Both ways run's
+// changes back once it ended.
+test.describe("Run detail: Folders from your computer", () => {
+  test("shows the first sync waiting, synced, and the changes that came back once the run ended", async ({ page }) => {
+    const runId = sql("SELECT id FROM agent_runs ORDER BY created_at LIMIT 1");
+    const at = new Date().toISOString();
+    const folder = { name: "payments-service", runner: "laptop-7f2", remote_dir: "/home/agent/work", direction: "both" };
+    let view: Record<string, unknown> = { state: "RUNNING", computer_folder: { ...folder, state: "waiting" } };
+    await page.route(`**/api/v1/runs/${runId}`, async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const response = await route.fetch();
+      const json = await response.json();
+      await route.fulfill({ response, json: { ...json, placement: "remote", ...view } });
+    });
+
+    await gotoConsole(page);
+    await page.goto(`/runs/${runId}`);
+    await expect(page.getByTestId("run-computer-folder")).toHaveText(RUN_COMPUTER_FOLDER.TITLE);
+    await expect(page.getByText(RUN_COMPUTER_FOLDER.WAITING, { exact: true })).toBeVisible();
+    await expect(page.getByText(RUN_COMPUTER_FOLDER.WAITING_BODY)).toBeVisible();
+
+    view = { state: "RUNNING", computer_folder: { ...folder, state: "synced", seed: { at, files: 1284, bytes: 48234496, refused: [] } } };
+    await page.reload();
+    await expect(page.getByText(RUN_COMPUTER_FOLDER.SYNCED, { exact: true })).toBeVisible();
+    await expect(page.getByText(RUN_COMPUTER_FOLDER.AT_START("1,284", "46.0 MB"))).toBeVisible();
+
+    view = {
+      state: "COMPLETED",
+      computer_folder: { ...folder, state: "synced", seed: { at, files: 1284, bytes: 48234496, refused: [] }, back: { at, files: 3, bytes: 900, refused: [] } },
+    };
+    await page.reload();
+    await expect(page.getByText(RUN_COMPUTER_FOLDER.ENDED, { exact: true })).toBeVisible();
+    await expect(page.getByText(RUN_COMPUTER_FOLDER.FILES("3"), { exact: true })).toBeVisible();
+    await expect(page.getByText(RUN_COMPUTER_FOLDER.DELETED)).toBeVisible();
+  });
+});
+
+// #2822: the harness's own walls the run launched with read under its Policy row.
+test.describe("Run detail: the inner walls a run launched with", () => {
+  test("read under the Policy row", async ({ page }) => {
+    const runId = sql("SELECT id FROM agent_runs ORDER BY created_at LIMIT 1");
+    await page.route(`**/api/v1/runs/${runId}`, async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const response = await route.fetch();
+      const json = await response.json();
+      await route.fulfill({ response, json: { ...json, inner_walls: { sandbox_mode: "off", approvals: "wardyn" } } });
+    });
+    await gotoConsole(page);
+    await page.goto(`/runs/${runId}`);
+    await expect(page.getByText(NR_REVIEW.INNER_WALLS(NR_REVIEW.INNER_SANDBOX_OFF, NR_REVIEW.INNER_APPROVALS_WARDYN))).toBeVisible();
   });
 });
 

@@ -5,7 +5,9 @@ package runner
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"os"
 	"path/filepath"
@@ -66,14 +68,22 @@ var memberDeniedSegments = map[string]bool{
 	".kube":            true, // cluster credentials
 	".netrc":           true,
 	".git-credentials": true,
+	".codex":           true, // the Codex harness login
+	".azure":           true, // Azure CLI token cache
+	".gemini":          true, // another agent CLI's login
+	".npmrc":           true, // registry auth tokens
+	".pypirc":          true,
 }
 
-// memberDeniedPairs are two-segment denials — a bare ".config" or ".git" is an
-// ordinary directory a project legitimately contains, but these two children
-// hold credentials (gh's token) and remote/credential config.
+// memberDeniedPairs are two-segment denials — a bare ".config", ".git" or
+// "Library" is an ordinary directory a project legitimately contains, but these
+// children hold credentials (gh's token, gcloud's, the macOS keychains) and
+// remote/credential config.
 var memberDeniedPairs = [][2]string{
 	{".config", "gh"},
+	{".config", "gcloud"}, // gcloud's credential database
 	{".git", "config"},
+	{"Library", "Keychains"}, // macOS keychains
 }
 
 // UserMountPolicy is the operator/MDM-set posture for MEMBER-authored
@@ -185,28 +195,64 @@ func ValidateUserMountSource(src string, roots []string, writable *UserWritableC
 // validateUserSource runs the three additive checks and returns the resolved
 // real path, which the writable check then matches against so the two can
 // never disagree about WHICH path they are deciding about.
+//
+// Nothing about the filesystem reaches the caller: a source outside every root
+// is refused on its text before anything is read, and every refusal after a
+// read (a path that does not resolve, one that resolves out of every root, a
+// symlink onto the deny-list) is the one errMemberSourceRefused sentence, so
+// a member cannot learn whether a path exists or where a symlink points. The
+// resolved path and the error go to the operator's log.
 func validateUserSource(src string, roots []string) (string, error) {
-	// The operator deny-list first, unchanged and unweakened.
-	if err := ValidateMountSource(src); err != nil {
+	// The operator deny-list's string half first, unchanged and unweakened.
+	if err := ValidateMountSourceLexical(src); err != nil {
 		return "", err
 	}
 	if len(roots) == 0 {
 		return "", fmt.Errorf("mount source %q is refused: this deployment configures no member workspace roots (WARDYN_USER_WORKSPACE_ROOTS / _MAP), so a member may not mount a host directory", src)
+	}
+	refused := func(real string, cause error) (string, error) {
+		slog.Warn("runner: member mount source refused", slog.String("source", src), slog.String("resolved", real), slog.Any("err", cause))
+		return "", fmt.Errorf("%w: mount source %q must resolve on this host to a directory inside your member workspace roots (%s)", errMemberSourceRefused, src, strings.Join(roots, ", "))
+	}
+	if !withinAnyRootLexical(src, roots) {
+		return "", fmt.Errorf("%w: mount source %q is outside every member workspace root (%s)", errMemberSourceRefused, src, strings.Join(roots, ", "))
+	}
+	if err := denySourceSymlink(src); err != nil {
+		return refused("", err)
 	}
 	// Fail CLOSED on any resolve error, "does not exist" included: unlike the
 	// operator path, there is no lexical-only fallback here — an allowlist
 	// that can't be evaluated is not an allowlist.
 	real, err := filepath.EvalSymlinks(src)
 	if err != nil {
-		return "", fmt.Errorf("mount source %q could not be resolved (member mounts must resolve on this host): %w", src, err)
+		return refused("", err)
 	}
 	if !withinAnyRoot(real, roots) {
-		return "", fmt.Errorf("mount source %q resolves to %q, which is outside every member workspace root (%s)", src, real, strings.Join(roots, ", "))
+		return refused(real, errors.New("resolves outside every member workspace root"))
 	}
-	if seg := deniedUserSegment(real); seg != "" {
-		return "", fmt.Errorf("mount source %q resolves to %q, which is or traverses the credential path %q; denied", src, real, seg)
+	if seg := DeniedUserSegment(real); seg != "" {
+		return "", fmt.Errorf("mount source %q is or traverses the credential path %q; denied", src, seg)
 	}
 	return real, nil
+}
+
+// errMemberSourceRefused is the one refusal a member reads for a source that
+// is not inside their roots, whatever the filesystem said about it.
+var errMemberSourceRefused = errors.New("member mount source refused")
+
+// withinAnyRootLexical reports whether src, by its text alone, is one of roots
+// or nested under one, each root taken as configured or as it resolves, so a
+// source spelled through a symlinked root's real path still passes to the
+// resolved check.
+func withinAnyRootLexical(src string, roots []string) bool {
+	for _, root := range roots {
+		for _, r := range []string{filepath.Clean(root), resolveEntry(root)} {
+			if src == r || strings.HasPrefix(src, strings.TrimSuffix(r, string(filepath.Separator))+string(filepath.Separator)) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // resolveEntry is a configured path made comparable with an already-resolved one: cleaned, with
@@ -259,11 +305,11 @@ func denyPathUnder(real string, deny []string) string {
 	return ""
 }
 
-// deniedUserSegment returns the offending path element when real IS or
+// DeniedUserSegment returns the offending path element when real IS or
 // TRAVERSES a credential dotfile path, or "" when it is clean. Elements compare
 // case-folded: on a case-insensitive filesystem EvalSymlinks keeps the
 // spelling it was given, so ".SSH" there is ~/.ssh.
-func deniedUserSegment(real string) string {
+func DeniedUserSegment(real string) string {
 	parts := strings.Split(strings.TrimPrefix(filepath.ToSlash(real), "/"), "/")
 	for i, part := range parts {
 		for seg := range memberDeniedSegments {

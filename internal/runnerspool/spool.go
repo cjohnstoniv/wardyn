@@ -21,10 +21,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"golang.org/x/sys/unix"
 
 	"github.com/cjohnstoniv/wardyn/internal/ackcursor"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/filelock"
 	"github.com/cjohnstoniv/wardyn/internal/spoolowner"
 )
 
@@ -257,11 +257,11 @@ func (s *Spool) locked(ctx context.Context, fn func() error) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		err := unix.Flock(int(s.lock.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+		err := filelock.TryLock(s.lock)
 		if err == nil {
 			break
 		}
-		if !errors.Is(err, unix.EWOULDBLOCK) {
+		if !errors.Is(err, filelock.ErrLocked) {
 			return err
 		}
 		select {
@@ -270,7 +270,7 @@ func (s *Spool) locked(ctx context.Context, fn func() error) error {
 		case <-time.After(5 * time.Millisecond):
 		}
 	}
-	defer unix.Flock(int(s.lock.Fd()), unix.LOCK_UN) //nolint:errcheck // descriptor close also releases the lock
+	defer filelock.Unlock(s.lock) //nolint:errcheck // descriptor close also releases the lock
 	return fn()
 }
 

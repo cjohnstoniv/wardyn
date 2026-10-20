@@ -127,6 +127,7 @@ func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	scope, target := "sub", body.Sub
+	cliEnded := s.liveCLISessions(r.Context(), body.Sub)
 	actorCtx := withRequestActor(r)
 	var res personRevocation
 	var err error
@@ -156,7 +157,7 @@ func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request) {
 	}
 	refusal, keyReason := res.Refusal, res.KeyReason
 	tokens, keys := res.Tokens, res.Keys
-	data := map[string]any{"scope": scope, "tokens_revoked": tokens, "ssh_keys_deleted": keys}
+	data := map[string]any{"scope": scope, "tokens_revoked": tokens, "ssh_keys_deleted": keys, "cli_sessions_ended": cliEnded}
 	if !body.All {
 		data["sub"] = body.Sub
 	}
@@ -455,11 +456,14 @@ func (s *Server) listAPITokensByIdentityScan(ctx context.Context, principal stri
 //     local/token mode.
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.OIDC != nil {
-		// Clears the HttpOnly session cookie and, for a live session, cuts the person's browser sessions;
-		// the cut is audited like the session-only cut an admin makes (handleRevokeSessions).
+		// Clears the HttpOnly session cookie and, for a live session, cuts the person's browser sessions
+		// and with them their CLI sessions; the cut is audited like the session-only cut an admin makes
+		// (handleRevokeSessions).
+		cliEnded := s.liveCLISessions(r.Context(), oidcHumanFromContext(r.Context()))
 		sub, err := s.cfg.OIDC.SignOut(w, r)
 		if sub != "" {
-			outcome, data := "success", map[string]any{"scope": "sub", "sub": sub, "tokens_revoked": 0, "ssh_keys_deleted": 0, "sessions_only": true}
+			outcome, data := "success", map[string]any{"scope": "sub", "sub": sub, "tokens_revoked": 0, "ssh_keys_deleted": 0,
+				"sessions_only": true, "cli_sessions_ended": cliEnded}
 			if err != nil {
 				outcome, data["error"] = "failure", err.Error()
 			}

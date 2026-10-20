@@ -308,6 +308,7 @@ func (s *Server) routes() chi.Router {
 			// its own.
 			r.Get("/me/scm-access", s.handleGetSCMAccess) // #386, scmaccess.go: /me/ssh-keys' self-service shape
 			s.mountADOOwnPATRoutes(r)                     // ado_own_pat.go: the caller's own Azure DevOps token
+			s.mountGitHubOwnPATRoutes(r)                  // gh_own_pat.go: the caller's own GitHub token
 			r.Get("/me/ssh-keys", s.handleListSSHKeys)
 			r.Post("/me/ssh-keys", s.handleAddSSHKey)
 			r.Delete("/me/ssh-keys/{fingerprint}", s.handleDeleteSSHKey)
@@ -665,6 +666,7 @@ func (s *Server) routes() chi.Router {
 		// device routes, each in its own group — see mountDeviceRoutes.
 		s.mountDeviceRoutes(r)
 		s.mountRunnerRegistrationRoutes(r)
+		s.mountCLISignInRoutes(r) // wardyn login: anonymous request, token and refresh; the approve page and Signed-in CLIs
 		s.mountRunnerStreamRoutes(r)
 		s.mountDelegationRoutes(r) // a portal acting for a person (delegation*.go, #1142)
 		s.mountBrandingRoutes(r)   // console branding: anonymous reads, SUPER writes (branding.go)

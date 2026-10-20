@@ -163,7 +163,7 @@ func (a *certAuthority) leafFor(host string) (*tls.Certificate, error) {
 // isMITMHost reports whether host is an upstream the proxy will TLS-MITM.
 //
 // TRUST BOUNDARY (read before widening): TLS-MITM lets the proxy read plaintext and swap the
-// credential header. Permitted for exactly four reasons:
+// credential header. Permitted for exactly five reasons:
 //  1. built-in LLM hosts (Anthropic/OpenAI) — subscription-OAuth / content-inspection. Bedrock is
 //     excluded: its client-side SigV4 auth would be invalidated by terminate-and-reforward.
 //  2. operator-configured corp artifact hosts (p.mitmHosts, compiled at dispatch from site-config
@@ -178,6 +178,11 @@ func (a *certAuthority) leafFor(host string) (*tls.Certificate, error) {
 //     the component under a permission an admin can withdraw, and chose the host. Rides p.mitmHosts
 //     as "host:443" — the host's standard TLS port and no other — paired with the injection rule for
 //     the secret the component delivers there: the owner's own, or one the organisation provides.
+//  5. a host of the run's AWS SigV4 re-signing grant (aws_sigv4.go), authored at DISPATCH from the
+//     run's own captured AWS sign-in when WARDYN_AWS_SIGV4_AT_PROXY is on: an exact AWS service host
+//     on port 443, whose requests the proxy signs again with role credentials the sandbox never
+//     holds. Bedrock's data plane is terminated only here, where the proxy is the signer, so #1's
+//     reason does not apply.
 //
 // #2/#3's surface is bounded on every axis: admin-authored only (never sandbox/agent/request); exact
 // hostname, never wildcard/suffix; exact port when the entry names one (mitmPorts), so a non-443

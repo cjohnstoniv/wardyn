@@ -281,6 +281,12 @@ func (s *Server) demoteWriter(runID uuid.UUID, h *attachHolder) {
 	if h.lease != nil {
 		h.lease.drop()
 	}
+	if h.demoted != nil {
+		select {
+		case h.demoted <- struct{}{}:
+		default:
+		}
+	}
 	if ra := reg.attaches[runID]; ra != nil && ra.writer == h {
 		ra.writer = nil
 		ra.observers = append([]*attachHolder{h}, ra.observers...)

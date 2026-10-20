@@ -72,10 +72,17 @@ type grantView struct {
 // because the console does not render this field yet.
 func (s *Server) markInertGrants(r *http.Request, grants []types.CapabilityGrant) []grantView {
 	out := make([]grantView, len(grants))
-	var inert, retired []string
+	var inert, retired, portRows []string
 	for i, g := range grants {
 		out[i] = grantView{CapabilityGrant: g}
 		switch canonical, err := canonicalGrantValue(g.Capability, g.Value); {
+		case egressHostPortAllow(g):
+			if s.cfg.EgressHostPortGrantsInert {
+				out[i].Inert = true
+				inert = append(inert, g.Capability+"="+g.Value)
+			} else {
+				portRows = append(portRows, g.Value)
+			}
 		case !validCapabilityKind(g.Capability):
 			// A retired kind ("integration", 0.8): no door asks about it, and
 			// the write boundary refuses it, so re-saving is no remedy.
@@ -95,12 +102,24 @@ func (s *Server) markInertGrants(r *http.Request, grants []types.CapabilityGrant
 			"grants", len(grants), "inert", len(inert), "values", strings.Join(inert, ", "),
 			"remedy", "re-save each row through POST /api/v1/permissions/grants — the write boundary canonicalizes it into the form the resolver compares, or refuses it by name — then delete the old row through DELETE /api/v1/permissions/grants/{id}, which the re-save leaves in place")
 	}
+	if len(portRows) > 0 {
+		slog.WarnContext(r.Context(), "api: egress_host allow grants stored with a port match their host on every port; WARDYN_EGRESS_HOST_PORT_GRANTS_INERT would make them inert",
+			"grants", len(grants), "rows", len(portRows), "values", strings.Join(portRows, ", "),
+			"remedy", "re-save each row through POST /api/v1/permissions/grants, which stores the host alone, then delete the old row")
+	}
 	if len(retired) > 0 {
 		slog.WarnContext(r.Context(), "api: capability grants of a retired kind can never match anything",
 			"grants", len(grants), "retired", len(retired), "values", strings.Join(retired, ", "),
 			"remedy", "delete each row through DELETE /api/v1/permissions/grants/{id} — the kind is retired and nothing asks about it")
 	}
 	return out
+}
+
+// egressHostPortAllow reports whether g is a stored egress_host allow row whose value names a port.
+// The write boundary stores the host alone (canonicalGrantValue); an older row may still carry one.
+// A deny row is never this: an inert deny would widen.
+func egressHostPortAllow(g types.CapabilityGrant) bool {
+	return g.Capability == capEgressHost && g.Effect == types.CapabilityAllow && strings.Count(strings.TrimSpace(g.Value), ":") == 1
 }
 
 // handleGetPermissions returns every capability grant (admin audience — the
@@ -445,13 +464,8 @@ func (s *Server) handleDeleteCapabilityGrant(w http.ResponseWriter, r *http.Requ
 		s.holdGrantDelete(w, r, id)
 		return
 	}
-	data, err := s.readDeleteAudit(r.Context(), func(q store.Querier) (map[string]any, error) {
-		row, err := store.GetCapabilityGrantQ(r.Context(), q, id, false)
-		return grantAuditData(row), err
-	})
-	if err == nil {
-		err = s.cfg.Store.DeleteCapabilityGrant(r.Context(), id)
-	}
+	// The audit names the row the delete removed, not one read beside it.
+	removed, err := s.cfg.Store.DeleteCapabilityGrant(r.Context(), id)
 	if err != nil {
 		if notFoundIf(w, err, "capability grant", reasonCapabilityGrantNotFound) {
 			return
@@ -460,7 +474,7 @@ func (s *Server) handleDeleteCapabilityGrant(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"capability.grant.delete", id.String(), "success", mustJSON(data)))
+		"capability.grant.delete", id.String(), "success", mustJSON(grantAuditData(removed))))
 	if mode == govBypass {
 		s.recordGovernanceBypass(r, govKindGrant, id.String(), "success", nil)
 	}

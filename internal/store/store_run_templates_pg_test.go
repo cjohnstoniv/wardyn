@@ -265,14 +265,25 @@ func TestPG_RunTemplates_EraseRunSetups(t *testing.T) {
 	}
 	_, _ = st.PutTemplateGroupAdmin(ctx, types.TemplateGroupAdmin{Group: "eng", Person: "alice", GrantedBy: "root"})
 	_, _ = st.PutTemplateGroupAdmin(ctx, types.TemplateGroupAdmin{Group: "eng", Person: "bob", GrantedBy: "alice"})
+	for name, by := range map[string]string{"alices-preset": "Alice", "bobs-preset": "bob"} {
+		if _, _, err := st.PutLaunchPreset(ctx, types.LaunchPreset{Name: name, Request: json.RawMessage(`{}`), CreatedBy: by}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	got, err := st.EraseRunSetupsOf(ctx, "alice")
 	if err != nil {
 		t.Fatal(err)
 	}
 	// authorship: the shared row (created_by and updated_by: one row), its one
-	// revision, and the grant alice wrote for bob.
-	if got.Templates != 1 || got.Grants != 1 || got.AuthorshipCleared != 3 {
+	// revision, the grant alice wrote for bob, and the launch preset she wrote.
+	if got.Templates != 1 || got.Grants != 1 || got.AuthorshipCleared != 4 {
 		t.Fatalf("erased = %+v", got)
+	}
+	for name, want := range map[string]string{"alices-preset": "", "bobs-preset": "bob"} {
+		p, err := st.GetLaunchPreset(ctx, name)
+		if err != nil || p.CreatedBy != want || p.UpdatedBy != want {
+			t.Errorf("preset %s = created_by %q updated_by %q (%v), want %q", name, p.CreatedBy, p.UpdatedBy, err, want)
+		}
 	}
 	if _, err := st.GetTemplate(ctx, mine.ID); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("alice's template err = %v", err)

@@ -301,7 +301,8 @@ func TestRecordingOutput_PrivacyIncludesGapsErasureAndDisabledBackend(t *testing
 }
 
 // A recovered row is audited as a success that says it is incomplete; only a
-// gap is the failed capture.
+// gap is the failed capture. The gap row adds the failing step (#3236) beside
+// its fields, every one of them unchanged; the success row has no step.
 func TestRecordingOutput_AuditsRecoveryAsSuccessAndGapAsFailure(t *testing.T) {
 	f, rs := newRecordingOutputFixture(t)
 	f.srv.FinishRunOutput(t.Context(), f.run.ID)
@@ -310,7 +311,7 @@ func TestRecordingOutput_AuditsRecoveryAsSuccessAndGapAsFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := [][2]string{
-		{"failure", `{"capture_gap":true,"incomplete":true,"reason":"recording_missing","source":"recording"}`},
+		{"failure", `{"capture_gap":true,"incomplete":true,"reason":"recording_missing","source":"recording","step":"capture"}`},
 		{"success", `{"capture_gap":false,"incomplete":true,"reason":"","source":"recording"}`},
 	}
 	evs := f.audit.eventsFor(f.run.ID, "run.output.finalize")

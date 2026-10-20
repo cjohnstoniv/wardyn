@@ -22,6 +22,11 @@
 #
 # Daemon-free, network-free.
 set -euo pipefail
+
+# Throwaway repos get no background git: a commit or fetch can leave detached
+# auto-maintenance writing under .git when the EXIT trap runs rm -rf (#3328).
+export GIT_CONFIG_COUNT=3 GIT_CONFIG_KEY_0=maintenance.auto GIT_CONFIG_VALUE_0=false GIT_CONFIG_KEY_1=gc.auto GIT_CONFIG_VALUE_1=0 GIT_CONFIG_KEY_2=gc.autoDetach GIT_CONFIG_VALUE_2=false
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 TMP="$(mktemp -d)"
@@ -106,6 +111,10 @@ new_case() {
   git clone --quiet "$bare" "$work"
   git -C "$work" config user.email "test@example.com"
   git -C "$work" config user.name "test"
+  # token_fetch (the script under test) sets its own GIT_CONFIG_COUNT, which
+  # replaces the exported one, so the fetch needs the repo-local setting too.
+  git -C "$work" config maintenance.auto false
+  git -C "$work" config gc.auto 0
   mkdir -p "$work/scripts"
   cp "$ROOT/scripts/nightly-migration-merge-check.sh" "$work/scripts/"
 }

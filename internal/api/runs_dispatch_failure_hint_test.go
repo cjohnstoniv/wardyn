@@ -59,7 +59,7 @@ func TestDispatchGrantWriteFailure_HintCarriesNoDriverText(t *testing.T) {
 			}},
 		{"aws sso", "could not record the AWS SSO credential grant",
 			func(s *Server, run types.AgentRun) bool {
-				_, _, ok := s.authorBedrockSSOInjection(ctx, run, llmTransport{bedrock: ssoInjectAuth()},
+				_, _, _, ok := s.authorBedrockSSOInjection(ctx, run, llmTransport{bedrock: ssoInjectAuth()},
 					awsSSOScope{perUser: true, owner: "member@corp.example"}, nil)
 				return ok
 			}},

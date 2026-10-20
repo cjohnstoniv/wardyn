@@ -45,6 +45,10 @@ type (
 		// an upgraded organisation's image reaches the runner without a reinstall. Empty when the
 		// organisation names none; an older runner ignores the field.
 		ProxyImage string `json:"proxy_image,omitempty"`
+		// LocalAttach says the organisation allows a person's CLI on the runner's own computer to attach
+		// to a run over the runner's local socket. Absent (an older organisation) or false: the runner
+		// opens no socket; an older runner ignores the field.
+		LocalAttach bool `json:"local_attach,omitempty"`
 	}
 	// Reason is the payload of REVOKED and GOAWAY.
 	Reason struct {
@@ -125,6 +129,14 @@ type Caps struct {
 	// (it is no runner.SandboxEnder: Kubernetes deletes a stopped pod). Absent
 	// (a runner older than 0.9.4) reads as keeps, as before.
 	EndsUnkept bool `json:"ends_unkept,omitempty"`
+	// Folders says the runner serves list_folders and sync_folder: a folder-only
+	// runner (0.10 on). Absent (an older runner) reads as none, so a person sees
+	// "no runner on your computer" rather than a refused call.
+	Folders bool `json:"folders,omitempty"`
+	// LocalAttach says the runner serves MethodLocalAttach, MethodLocalAttachMode and
+	// MethodLocalAttachTeeAck. The org sends them only to a runner that says so; an older runner
+	// reads as absent and the org refuses a local attach before any call.
+	LocalAttach bool `json:"local_attach,omitempty"`
 	// LinuxVM says the runner starts Linux VM sandboxes (create_vm) and names the virtual machine it
 	// gives them. Present only when its operator turned VMs on and its start-up probe passed; an older
 	// runner never sends it, and the org asks no runner without it for a VM.
@@ -238,6 +250,12 @@ const (
 	KindExecStderr = "exec_stderr"
 	KindRelay      = "relay"
 	KindOutput     = "output"
+	// KindFolder is the sftp stream of one sync_folder pass.
+	KindFolder = "folder"
+	// KindPTYTee carries a local attach session's output from the runner to the org's recorder. It is
+	// opened only by the runner, only as the reply stream of a local_attach call, and carries bytes
+	// in that one direction: the org's writes are reset. The org ends the session by resetting it.
+	KindPTYTee = "pty_tee"
 )
 
 // Open is the OPEN payload.
@@ -253,7 +271,7 @@ type Open struct {
 // Validate refuses a kind outside the closed list.
 func (o Open) Validate() error {
 	switch o.Kind {
-	case KindPTY, KindExec, KindExecStderr, KindRelay, KindOutput:
+	case KindPTY, KindExec, KindExecStderr, KindRelay, KindOutput, KindFolder, KindPTYTee:
 		return nil
 	}
 	return fmt.Errorf("%w: unknown stream kind %q", ErrBadFrame, o.Kind)

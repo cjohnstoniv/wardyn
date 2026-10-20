@@ -93,6 +93,14 @@ type DecisionLog struct {
 	// always arrives as a NEW row: the audit chain is append-only and a
 	// recorded decision is never rewritten.
 	Repeat int `json:"repeat,omitempty"`
+	// Flow is wardyn-vmnet's id for the guest TCP flow a desktop VM's row is
+	// about, so the proxy's decision and the relay's own log line join. Empty
+	// on every container run's row.
+	Flow string `json:"flow,omitempty"`
+	// PortRule is "dry_run" on an allow the port rule would have refused had
+	// it been on (WARDYN_EGRESS_PORT_RULE=dry_run): the dry run's list of the
+	// non-web ports runs use. Empty on every other row.
+	PortRule string `json:"port_rule,omitempty"`
 }
 
 // ScanSummary is the CONTENT-FREE summary of one LLM content-inspection pass.
@@ -163,6 +171,12 @@ type InjectionRule struct {
 	// is not looked at). Unlike PinPath it admits methods other than GET.
 	// When PinPath is also set, a request must satisfy both.
 	PinRoutes []PinRoute `json:"pin_routes,omitempty"`
+	// Placeholder, when set, makes this a placeholder rule: the sandbox holds
+	// these bytes in place of the secret (an env or file secret's value) and
+	// the proxy swaps them for the secret wherever they appear in a request
+	// header to Host, instead of stripping and setting Header. Wardyn
+	// authors it at dispatch; empty = every other rule.
+	Placeholder string `json:"placeholder,omitempty"`
 }
 
 // PinRoute is one method-and-path pair an InjectionRule's PinRoutes admits.

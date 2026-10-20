@@ -244,6 +244,8 @@ var routeMatrix = map[string]classifiedRoute{
 	"PUT /api/v1/runners/settings":       {class: classAdmin},
 	"GET /api/v1/me/runners":             {class: classMember},
 	"GET /api/v1/me/runners/{id}":        {class: classMember},
+	// A folder-only runner's folders (run_computer_folder.go), the caller's own runner only.
+	"GET /api/v1/me/runners/{id}/folders": {class: classMember},
 	// The owner's change of their own runner's runs at once (runner_limits.go), scoped to the caller's
 	// own runners inside the handler.
 	"PUT /api/v1/me/runners/{id}": {class: classMember},
@@ -648,6 +650,10 @@ var routeMatrix = map[string]classifiedRoute{
 	// The caller's own Azure DevOps token (ado_own_pat.go): own namespace only.
 	"PUT /api/v1/me/scm/azure-devops/token":    {class: classMember},
 	"DELETE /api/v1/me/scm/azure-devops/token": {class: classMember},
+	// The caller's own GitHub token (gh_own_pat.go): own namespace only.
+	"GET /api/v1/me/scm/github/tokens":   {class: classMember},
+	"PUT /api/v1/me/scm/github/token":    {class: classMember},
+	"DELETE /api/v1/me/scm/github/token": {class: classMember},
 	// The per-user Azure DevOps sign-in (ado_entra.go): classMember, and for
 	// the same reason as /me/ssh-keys above — a member signs in FOR
 	// THEMSELVES. Both doors refuse a caller with no identity provider
@@ -1073,6 +1079,8 @@ func newAuthzMatrixServer(t *testing.T, shape ...func(*Config)) (*Server, *authz
 	cfg.RecordingStore = rs
 	cfg.SessionRevocations = fakeAuthzSessionRevocations{}
 	cfg.SCIM = matrixSCIMConfig()
+	// On, so a folder-only runner's folders answer on ownership rather than on the deployment's gate.
+	cfg.ComputerFolders = true
 	ast.siteCfg = authzMatrixSiteConfig()
 	for _, f := range shape {
 		f(&cfg)
@@ -2378,8 +2386,8 @@ func (s *authzStore) RevokeAPIToken(context.Context, uuid.UUID, string, time.Tim
 func (s *authzStore) UpsertCapabilityGrant(_ context.Context, g types.CapabilityGrant) (types.CapabilityGrant, error) {
 	return g, nil
 }
-func (s *authzStore) DeleteCapabilityGrant(context.Context, uuid.UUID) error {
-	return store.ErrNotFound
+func (s *authzStore) DeleteCapabilityGrant(context.Context, uuid.UUID) (types.CapabilityGrant, error) {
+	return types.CapabilityGrant{}, store.ErrNotFound
 }
 func (s *authzStore) ListCapabilityGrants(context.Context) ([]types.CapabilityGrant, error) {
 	return nil, nil
@@ -2481,8 +2489,8 @@ func (s *authzStore) ListGovernanceProfiles(context.Context) ([]types.Governance
 func (s *authzStore) UpsertGovernanceAssignment(_ context.Context, a types.GovernanceAssignment) (types.GovernanceAssignment, error) {
 	return a, nil
 }
-func (s *authzStore) DeleteGovernanceAssignment(context.Context, uuid.UUID) error {
-	return store.ErrNotFound
+func (s *authzStore) DeleteGovernanceAssignment(context.Context, uuid.UUID) (types.GovernanceAssignment, error) {
+	return types.GovernanceAssignment{}, store.ErrNotFound
 }
 func (s *authzStore) ListGovernanceAssignments(context.Context) ([]types.GovernanceAssignment, error) {
 	return nil, nil

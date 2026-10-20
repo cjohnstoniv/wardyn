@@ -7,9 +7,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -265,7 +267,7 @@ func (c *countingIdentity) RevokeRun(ctx context.Context, runID uuid.UUID) error
 // RevokeJTI forwards to the wrapped provider (O2): countingIdentity embeds
 // identity.Provider, whose four-method interface does not carry RevokeJTI, so
 // without this passthrough a revive under this fixture would silently skip
-// revoking the retiring token — the jtiRevoker assertion in run_revive.go
+// revoking the retiring token — the jtiRevoker assertion in run_revive_tokens.go
 // would just fail closed-but-quiet, not error.
 func (c *countingIdentity) RevokeJTI(ctx context.Context, jti string, runID uuid.UUID) error {
 	jr, ok := c.Provider.(jtiRevoker)
@@ -390,6 +392,36 @@ func TestRunLease_EndStopsAndKeepsTheRun(t *testing.T) {
 	}
 	if f.brk.count(f.run.ID) != 1 {
 		t.Errorf("second pass: broker revocations = %d, want still 1", f.brk.count(f.run.ID))
+	}
+}
+
+// A kept end whose AWS cache wipe failed is still a kept end, with its containment resolved, and
+// its run.ended row says the wipe failed and why. A re-assert that hits the same answer stays quiet.
+func TestRunLease_AFailedAWSCacheWipeIsRecordedOnTheEnd(t *testing.T) {
+	f := newLeaseFixture(t, -time.Minute)
+	f.rn.endErr = fmt.Errorf("%w: container is paused", runner.ErrAWSCacheWipeFailed)
+	f.sweep(t)
+
+	if got := f.st.State(); got != types.RunRunning || f.rn.stopCount() != 0 {
+		t.Fatalf("state %s, StopSandbox = %d; want the run kept: the end itself succeeded", got, f.rn.stopCount())
+	}
+	ended := f.audit.eventsFor(f.run.ID, "run.ended")
+	if len(ended) != 1 || ended[0].Outcome != "success" {
+		t.Fatalf("run.ended events = %+v, want one success", ended)
+	}
+	data := leaseAuditData(t, ended[0])
+	if data["aws_cache_wipe"] != "failed" || !strings.Contains(fmt.Sprint(data["aws_cache_wipe_reason"]), "container is paused") ||
+		data["kept"] != true || data["containment"] != nil || data["end_error"] != nil {
+		t.Fatalf("run.ended data = %v, want kept with aws_cache_wipe failed and its reason, containment resolved", data)
+	}
+	if msg := f.st.containmentError(); msg != "" {
+		t.Fatalf("containment error %q, want none", msg)
+	}
+
+	f.now = f.now.Add(time.Minute)
+	f.sweep(t)
+	if len(f.audit.eventsFor(f.run.ID, "run.ended")) != 1 || f.st.containmentError() != "" || f.st.State() != types.RunRunning {
+		t.Error("a re-assert answered the same wipe failure and changed the kept run")
 	}
 }
 

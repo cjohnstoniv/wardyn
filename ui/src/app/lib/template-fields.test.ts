@@ -42,7 +42,7 @@ describe("template field registry", () => {
       expect(new Set(rules.map((r) => r.name)).size).toBe(rules.length);
     }
     expect(TEMPLATE_REQUEST_FIELDS.length).toBeGreaterThanOrEqual(34);
-    expect(TEMPLATE_POLICY_FIELDS).toHaveLength(20);
+    expect(TEMPLATE_POLICY_FIELDS).toHaveLength(21);
   });
 
   it("every carried field names its part and omission meaning; every excluded one its reason", () => {
@@ -89,9 +89,13 @@ describe("template field registry", () => {
     expect(templateFieldRule("title")?.excluded).toBe("launch");
     expect(TEMPLATE_POLICY_FIELDS.filter((r) => r.excluded)).toEqual([]);
     expect(TEMPLATE_NESTED_EXCLUDED.map((e) => e.path)).toEqual([
+      "GrantSpec.owner_only_refs",
       "LLMInspectionSpec.workspace_secret_values",
+      "RunLocalFolder.direction",
       "RunLocalFolder.name",
+      "RunLocalFolder.path",
       "RunLocalFolder.remote_dir",
+      "RunLocalFolder.runner_id",
     ]);
     expect(TEMPLATE_NESTED_CARRIED.LLMInspectionSpec).not.toContain("workspace_secret_values");
   });

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -86,6 +87,13 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	}
 	if dl.Via != "" {
 		fields["via"] = dl.Via
+	}
+	// A desktop VM's relay flow id, and the port rule's dry-run mark.
+	if dl.Flow != "" {
+		fields["flow"] = dl.Flow
+	}
+	if dl.PortRule != "" {
+		fields["port_rule"] = dl.PortRule
 	}
 	// A Bedrock data-plane refusal the proxy relayed (bedrock_dataplane_fault.go).
 	if dl.UpstreamFault != "" {
@@ -514,7 +522,26 @@ func (s *Server) handleInternalGetApproval(w http.ResponseWriter, r *http.Reques
 	// person's new sign-in is the resolution (injection_ado_signin.go).
 	ap = s.reconcileADOReauthOnRead(r.Context(), ap)
 	ap = s.reconcileAzureReauthOnRead(r.Context(), ap)
-	writeJSON(w, http.StatusOK, ap)
+	writeJSON(w, http.StatusOK, sandboxApprovalView(ap))
+}
+
+// sandboxApproval is the approval as the sandbox reads it: only what the sidecar and
+// wardyn-toolgate consume. The stored row also names the deciding human and the note they typed,
+// which an untrusted process must not read.
+type sandboxApproval struct {
+	ID                uuid.UUID           `json:"id"`
+	Kind              types.ApprovalKind  `json:"kind"`
+	State             types.ApprovalState `json:"state"`
+	DecisionScope     types.ApprovalScope `json:"decision_scope,omitempty"`
+	DecisionExpiresAt *time.Time          `json:"decision_expires_at,omitempty"`
+	ExpiresAt         *time.Time          `json:"expires_at,omitempty"`
+	Held              bool                `json:"held,omitempty"`
+	HeldUntil         *time.Time          `json:"held_until,omitempty"`
+}
+
+func sandboxApprovalView(ap types.ApprovalRequest) sandboxApproval {
+	return sandboxApproval{ID: ap.ID, Kind: ap.Kind, State: ap.State, DecisionScope: ap.DecisionScope,
+		DecisionExpiresAt: ap.DecisionExpiresAt, ExpiresAt: ap.ExpiresAt, Held: ap.Held, HeldUntil: ap.HeldUntil}
 }
 
 // handleInternalExpireApproval lets wardyn-toolgate close its OWN tool_call
@@ -565,7 +592,7 @@ func (s *Server) handleInternalExpireApproval(w http.ResponseWriter, r *http.Req
 		writeServerError(w, r, "get approval", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, ap)
+	writeJSON(w, http.StatusOK, sandboxApprovalView(ap))
 }
 
 // mintRequest is the in-sandbox credential helper's mint body.

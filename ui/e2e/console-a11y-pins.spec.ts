@@ -51,6 +51,9 @@ test.describe("Console accessibility pins", () => {
   test("a destructive button's focus ring is the same full ring as Cancel's, not a faint red halo", async ({ page }) => {
     const person = await seedPerson(page.request);
     await openPersonDrawerByKeyboard(page, person.email);
+    // The ring eases in (transition-all) and a mid-flight shadow ("2.90663px") still contains "3px", so no poll on
+    // the string can tell eased from settled. This pin is about which ring, not how it animates: switch easing off.
+    await page.addStyleTag({ content: "*, *::before, *::after { transition: none !important; }" });
     await page.getByRole("dialog").getByRole("button", { name: "Sign out everywhere" }).click();
     const confirm = page.getByRole("alertdialog");
     const action = confirm.getByRole("button", { name: "Sign out everywhere" });
@@ -58,10 +61,10 @@ test.describe("Console accessibility pins", () => {
     await expect(confirm.getByRole("button", { name: "Cancel" })).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(action).toBeFocused();
-    // The ring eases in (transition-all), so read each one once settled at its full 3px. The destructive
-    // action's ring must be the very ring Cancel gets: the faint red halo was a different, translucent one.
+    // The destructive action's ring must be the very ring Cancel gets: the faint red halo was a different,
+    // translucent one. With easing off the focused button's shadow is already its final one, at a whole 3px.
     const ring = async (button: typeof action) => {
-      await expect.poll(() => button.evaluate((el) => getComputedStyle(el).boxShadow)).toContain("3px");
+      await expect.poll(() => button.evaluate((el) => getComputedStyle(el).boxShadow)).toMatch(/(^|[^\d.])3px/);
       return button.evaluate((el) => getComputedStyle(el).boxShadow);
     };
     const destructive = await ring(action);

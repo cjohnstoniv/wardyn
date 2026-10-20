@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -146,6 +147,41 @@ func TestCredentialDeliveryWrite_DirectSaveETagIsTheNextGETs(t *testing.T) {
 	got := e.call(e.alice, http.MethodGet, credentialDeliveryPath, "")
 	if got.Code != http.StatusOK || saved == "" || got.Header().Get("ETag") != saved {
 		t.Fatalf("PUT ETag %q, next GET %d ETag %q, want the same non-empty ETag", saved, got.Code, got.Header().Get("ETag"))
+	}
+}
+
+// GET lists the modes each class can be delivered under today beside the policy, never inside it, so a
+// client that sends GET's policy back is accepted by the strict PUT.
+func TestCredentialDeliveryGET_BuildableModesBesidePolicy(t *testing.T) {
+	e := newGovEnv(t)
+	const body = `{"classes":{"ado_minted_pat":{"mode":"runner_resident"},"api_key":{"mode":"via_org"}}}`
+	if put := e.admin(http.MethodPut, credentialDeliveryPath, body); put.Code != http.StatusOK {
+		t.Fatalf("direct PUT = %d %s, want 200", put.Code, put.Body)
+	}
+	got := e.call(e.alice, http.MethodGet, credentialDeliveryPath, "")
+	if got.Code != http.StatusOK {
+		t.Fatalf("GET = %d %s", got.Code, got.Body)
+	}
+	var resp struct {
+		Policy         json.RawMessage             `json:"policy"`
+		BuildableModes map[string][]placement.Mode `json:"buildable_modes"`
+	}
+	if err := json.Unmarshal(got.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.BuildableModes) != len(placement.DeliveryClasses()) {
+		t.Errorf("buildable_modes names %d classes, want every class (%d): %s", len(resp.BuildableModes), len(placement.DeliveryClasses()), got.Body)
+	}
+	for _, c := range placement.DeliveryClasses() {
+		if m, ok := resp.BuildableModes[c]; !ok || !slices.Equal(m, placement.BuildableModes(c)) {
+			t.Errorf("buildable_modes[%s] = %v, want %v", c, m, placement.BuildableModes(c))
+		}
+	}
+	if strings.Contains(string(resp.Policy), "buildable_modes") {
+		t.Errorf("buildable_modes is inside the policy: %s", resp.Policy)
+	}
+	if put := e.admin(http.MethodPut, credentialDeliveryPath, string(resp.Policy)); put.Code != http.StatusOK {
+		t.Errorf("PUT of GET's policy = %d %s, want 200", put.Code, put.Body)
 	}
 }
 
