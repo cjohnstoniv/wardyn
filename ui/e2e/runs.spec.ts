@@ -113,6 +113,19 @@ test.describe("Runs landing — the seeded 9-fixture backend", () => {
     }).toPass({ timeout: 15_000 });
   });
 
+  test("a search leaves the 'Your runs · N' total alone", async ({ page }) => {
+    await openRuns(page);
+    const total = page.getByText(/^Your runs · \d+\+?$/);
+    const before = await total.textContent();
+    const search = page.getByLabel("Search runs", { exact: true });
+
+    await expect(async () => {
+      await search.fill("zzz-no-such-run-zzz");
+      await expect(page.getByText("No runs match these filters.")).toBeVisible({ timeout: 3_000 });
+    }).toPass({ timeout: 15_000 });
+    await expect(total).toHaveText(before ?? "");
+  });
+
   test("a non-matching search shows the empty state, then recovers when cleared", async ({ page }) => {
     await openRuns(page);
     const search = page.getByLabel("Search runs", { exact: true });
