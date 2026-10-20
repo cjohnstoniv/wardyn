@@ -107,7 +107,7 @@ const (
 	bringBackNotRunningMsg   = "This run is no longer running, so its folder can't come back. Killing a run doesn't bring the folder back."
 	bringBackPausedMsg       = "This run is paused. Resume it, then bring the folder back."
 	bringBackUnstoppableMsg  = "Wardyn can't stop this run's agent by itself, so its folder can't come back early. It comes back when the run ends."
-	bringBackAgentRunningMsg = "the agent could not be stopped, so the folder did not come back"
+	bringBackAgentRunningMsg = "The agent could not be stopped, so the folder did not come back."
 )
 
 // bringBackRefusal is run's folder from the person's computer, or why it cannot be brought back now.
