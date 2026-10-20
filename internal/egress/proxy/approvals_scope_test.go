@@ -208,6 +208,28 @@ func TestStalePollerCannotResurrectConsumedEntry(t *testing.T) {
 	}
 }
 
+// onceControlPlane fakes a control plane that has decided apID as an approved
+// `once` grant. A POST raises a FRESH pending approval and a GET of any other id
+// is still pending, as the real control plane answers: a holder that arrives
+// after the grant was spent re-raises, and its new approval is undecided.
+func onceControlPlane(apID uuid.UUID, raised *atomic.Bool) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			raised.Store(true)
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(types.ApprovalRequest{ID: uuid.New(), State: types.ApprovalPending})
+			return
+		}
+		if !strings.HasSuffix(r.URL.Path, "/"+apID.String()) {
+			_ = json.NewEncoder(w).Encode(types.ApprovalRequest{State: types.ApprovalPending})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(types.ApprovalRequest{
+			ID: apID, State: types.ApprovalApproved, DecisionScope: types.ScopeOnce,
+		})
+	}))
+}
+
 // TestResolveWaitOnceReleasesExactlyOneHolder: each held connection runs its own
 // ticker and polls the same approval, so if every holder returned its own poll
 // result, up to maxHolds callers would consume a single `once`. The control plane
@@ -220,25 +242,7 @@ func TestResolveWaitOnceReleasesExactlyOneHolder(t *testing.T) {
 
 	apID := uuid.New()
 	var raised atomic.Bool
-	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost {
-			raised.Store(true)
-			w.WriteHeader(http.StatusCreated)
-			// A FRESH id per raise, mirroring the real control plane: a re-raise
-			// after a consume creates a NEW approval row, because the PENDING dedup
-			// index cannot match an already-decided one. Returning the same id here
-			// would let a scheduling-delayed holder re-raise, land back on the id it
-			// is still polling, and be granted a second time — a false failure that
-			// blames the code for the fake's unrealistic behavior.
-			_ = json.NewEncoder(w).Encode(types.ApprovalRequest{ID: uuid.New(), State: types.ApprovalPending})
-			return
-		}
-		// Every holder polls this and is told APPROVED — the cache, not the CP, is
-		// what must make the grant singular.
-		_ = json.NewEncoder(w).Encode(types.ApprovalRequest{
-			ID: apID, State: types.ApprovalApproved, DecisionScope: types.ScopeOnce,
-		})
-	}))
+	cp := onceControlPlane(apID, &raised)
 	defer cp.Close()
 
 	ap := newApprovalClient(cp.URL, newTokenSource("tok"), uuid.New(), cp.Client())
@@ -268,6 +272,32 @@ func TestResolveWaitOnceReleasesExactlyOneHolder(t *testing.T) {
 	}
 	if got := granted.Load(); got != 1 {
 		t.Fatalf("%d of %d holders got the `once` grant, want exactly 1", got, holders)
+	}
+}
+
+// TestResolveWaitOnceLateHolderIsNotGranted: a holder that arrives after the
+// grant was spent finds the entry cleared, so it raises a new approval; the
+// original approval's decision must not release it. Run in order, not by
+// goroutine race, so the late arrival is forced rather than left to scheduling.
+func TestResolveWaitOnceLateHolderIsNotGranted(t *testing.T) {
+	saved := holdPollInterval
+	holdPollInterval = 5 * time.Millisecond
+	defer func() { holdPollInterval = saved }()
+
+	apID := uuid.New()
+	var raised atomic.Bool
+	cp := onceControlPlane(apID, &raised)
+	defer cp.Close()
+
+	ap := newApprovalClient(cp.URL, newTokenSource("tok"), uuid.New(), cp.Client())
+	ap.configureHold(types.FirstUseWaitForReview, 200*time.Millisecond, 8)
+	seed(ap, "egress.test", hostApproval{state: apPending, approvalID: apID, lastPoll: time.Now()})
+
+	if got := ap.ResolveWait(context.Background(), "egress.test").State; got != apApproved {
+		t.Fatalf("first holder state = %v, want the `once` grant", got)
+	}
+	if got := ap.ResolveWait(context.Background(), "egress.test").State; got == apApproved {
+		t.Fatal("a holder arriving after the `once` grant was spent was granted it again")
 	}
 }
 

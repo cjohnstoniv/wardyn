@@ -42,6 +42,7 @@ func recoveryFlagsFor(runner, dsn, spool, recording string) *bootFlags {
 		recoveryVerify:      b(false),
 		recoveryRehearse:    b(false),
 		recoverySet:         s(""),
+		refuseWritableCA:    b(false),
 	}
 }
 

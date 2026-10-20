@@ -30,13 +30,20 @@ describe("SignInSteps markup is unchanged by the shared step list", () => {
   });
 });
 
-describe("signInStepOf follows the signals the audit rows come from", () => {
+describe("signInStepOf follows every witness the dialog has", () => {
+  const none = { pulling: false, running: false, interactiveStarted: false, codeShown: false };
   it.each([
-    [{ pulling: false, interactiveStarted: false }, "start"],
-    [{ pulling: true, interactiveStarted: false }, "download"],
-    [{ pulling: false, interactiveStarted: true }, "wait"],
-    // run.interactive.start outranks a pull reason the last state read still carried.
-    [{ pulling: true, interactiveStarted: true }, "wait"],
+    [none, "start"],
+    [{ ...none, pulling: true }, "download"],
+    // Each witness alone moves the list to "wait" (#3235): a device code on screen with no audit row,
+    [{ ...none, codeShown: true }, "wait"],
+    // a RUNNING read of the run,
+    [{ ...none, running: true }, "wait"],
+    // and the run.interactive.start audit row.
+    [{ ...none, interactiveStarted: true }, "wait"],
+    // A witness outranks a pull reason the last state read still carried.
+    [{ ...none, pulling: true, codeShown: true }, "wait"],
+    [{ ...none, pulling: true, interactiveStarted: true }, "wait"],
   ] as const)("%j -> %s", (facts, step) => {
     expect(signInStepOf(facts)).toBe(step);
   });

@@ -100,6 +100,7 @@ var (
 	_ runner.ProxyReviver    = (*Substrate)(nil)
 	_ runner.SandboxStarter  = (*Substrate)(nil)
 	_ runner.Selftester      = (*Substrate)(nil)
+	_ runner.LocalAttacher   = (*Substrate)(nil)
 	_ runner.SubstrateProber = (*Substrate)(nil)
 	_ runner.DriveProber     = (*Substrate)(nil)
 	_ runner.OutputRecoverer = (*Substrate)(nil)

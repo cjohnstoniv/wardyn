@@ -126,14 +126,15 @@ func (s *Server) recoverRecordingOutput(ctx context.Context, st store.RunOutputS
 
 // auditRecordingOutput is the recording path's run.output.finalize row. Output
 // that was recovered is a success, and its incomplete flag says it can never be
-// vouched whole; only a gap is a failed capture.
+// vouched whole; only a gap is a failed capture, and its row carries the failing
+// step as every other finalize row does (withFinalizeStep keeps this reason).
 func (s *Server) auditRecordingOutput(ctx context.Context, row store.RunOutput, reason string) {
 	outcome := "success"
 	if row.CaptureGap {
 		outcome = "failure"
 	}
 	s.recordAudit(ctx, s.auditEvent(&row.RunID, types.ActorSystem, "wardynd", "run.output.finalize", row.RunID.String(), outcome,
-		mustJSON(map[string]any{"source": row.Source, "incomplete": row.Incomplete, "capture_gap": row.CaptureGap, "reason": reason})))
+		mustJSON(withFinalizeStep(map[string]any{"source": row.Source, "incomplete": row.Incomplete, "capture_gap": row.CaptureGap, "reason": reason}))))
 }
 
 func recordingOutputGap(runID uuid.UUID) store.RunOutput {

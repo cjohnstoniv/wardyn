@@ -34,7 +34,11 @@
 # 0.10 API-3 round 2: docs/POLICIES.md 18597 adds 38 over 18559, measured: a now-denied path in a vouched commit, and a lightweight tag under git_push_any_branch.
 # 0.10 W1 train: docs/POLICIES.md tightened to 18590, measured at the train merge.
 # docs/POLICIES.md 18784 = ours 18614 + theirs 18590 - base 18420 at the 0.10.0 SEC-1 merge of main; re-measured below if higher.
-docs/POLICIES.md=18784 share=12
+# #2822: docs/POLICIES.md 18911 adds 321 over 18590, measured at the main merge: the harness_inner_walls row and section.
+# docs/POLICIES.md 19105 = ours 18784 + theirs 18911 - base 18590 at the 0.10 W2 merge of HRN onto the train.
+# docs/POLICIES.md=18607 adds 187 (0.10.0 VM-B): the port-rule box and the relay residual (#3193).
+# docs/POLICIES.md 19292 = ours 19105 + theirs 18777 - base 18590 at the 0.10 W2 merge of VM-B onto the train.
+docs/POLICIES.md=19292 share=12
 # 0.9.4 W1 merge +3: L8 and an earlier W1 lane both edited the README; the merged text measures 3 over the sum.
 examples/policies/README.md=1446 share=5
 # docs/POLICIES.md 18013 adds 40 over 17973, measured: a member's private-range workspace clone host.
