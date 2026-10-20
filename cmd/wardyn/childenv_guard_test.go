@@ -38,6 +38,7 @@ var funcDeclRe = regexp.MustCompile(`^func (?:\([^)]*\) )?(\w+)`)
 // returns is passed through redactSecrets before it reaches a bundle.
 var scrubbedEnvExceptions = map[string]string{
 	"supportbundle.go:gatherComposeConfig": "gatherComposeConfig resolves ${WARDYN_*} on purpose; its output is redacted by redactSecrets",
+	"runner_setup.go:runRunnerdSetup":      "wardyn-runnerd is this project's own runner and reads its WARDYN_* settings (WARDYN_ORG_CA_FILE among them); withoutCLICredentials drops WARDYN_TOKEN and WARDYN_ADMIN_TOKEN (TestRunnerSetupTokenGoesOnlyOverThePipe)",
 }
 
 func TestEveryHostExecChildGetsTheScrubbedEnv(t *testing.T) {

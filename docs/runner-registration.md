@@ -174,7 +174,8 @@ On a computer that is not a runner, download `wardyn-<os>-<arch>` alone.
 
 | Who | Run |
 |---|---|
-| The person | `WARDYN_TOKEN=<your personal API token> wardyn-runnerd setup --org https://wardyn.example.com --token-file ./registration-token --claim --pool Laptop --default` |
+| The person | `wardyn runner setup --pool Laptop --default`, after `wardyn login https://wardyn.example.com` ([`wardyn runner setup`](#wardyn-runner-setup)) |
+| The person, by hand | `WARDYN_TOKEN=<your personal API token> wardyn-runnerd setup --org https://wardyn.example.com --token-file ./registration-token --claim --pool Laptop --default` |
 | Device management (MDM) | Push the binary and run `wardyn-runnerd setup --org https://wardyn.example.com --token-file ./registration-token` without `--claim`. The person claims later in *Your account → My runner*, or with `wardyn runner claim --pool Laptop --default`. |
 
 1. Download the install from the table above, and verify it against the signed `SHA256SUMS` as described in [Verify the release assets](VERIFY.md#5-verify-the-release-assets), running `sha256sum -c --ignore-missing SHA256SUMS` since you hold one file.
@@ -200,6 +201,30 @@ On a computer that is not a runner, download `wardyn-<os>-<arch>` alone.
 Both restart `serve` after a crash. On Linux the unit runs while you are logged in; run `loginctl enable-linger $USER` to keep it running after logout and from boot. Setup prints that command and never runs it. A `DOCKER_HOST` set when you run setup is carried into the service.
 
 `./install.sh --uninstall` stops the service and removes the unit or agent, the settings file and the installed `wardyn-runnerd`. It keeps `runner.json` and `runner.key`, and it never removes the `wardyn` CLI or `cli.json`: they are yours, not the runner's. Revoke the runner itself in *My runner*.
+
+### `wardyn runner setup`
+
+1. Sign in once with `wardyn login https://wardyn.example.com`, or set `WARDYN_TOKEN`. With neither, the command signs you in through the browser itself.
+2. Run `wardyn runner setup --pool Laptop --default` as yourself, not as root. It takes `--name`, `--runnerd <file>` and `--artifact-base <url>` too.
+3. Run it again to upgrade: no new token is minted, and the runner keeps its identity.
+
+| Step | What it does |
+|---|---|
+| Runner binary | `--runnerd <file>`, else a `wardyn-runnerd` beside the CLI or on `PATH`, else a download. Each is checked against the SHA-256 this CLI pins, and refused on a mismatch |
+| Package runner | The macOS package's `/usr/local/wardyn/bin/wardyn-runnerd` needs no hash while it and its directory are root-owned and nobody else can write them |
+| Download | `<base>/v<version>/wardyn-runnerd-<os>-<arch>`. The base is `--artifact-base` (then saved in `cli.json`), the saved one, `/healthz.cli_artifact_base`, else the release |
+| Registration token | Minted only when this computer has no runner identity: single use, 1 hour, yours only. It reaches `wardyn-runnerd setup --token-file /dev/fd/3` over a pipe: never on disk, in an argument or in an environment variable |
+| Service | `wardyn-runnerd setup --org <url>`, with `--org-ca-file` when `wardyn ca` holds a root for the organisation. Your shell's environment goes along without `WARDYN_TOKEN` and `WARDYN_ADMIN_TOKEN` |
+| Claim and pool | The CLI claims the runner with your own credential, then applies `--pool` and `--default` |
+| Wait | Up to 60 s for *My runners* to show it connected. Otherwise it prints the runner's last error and, after an upgrade, the line that starts `wardyn-runnerd.previous` |
+
+- `WARDYN_ADMIN_TOKEN` is refused: it mints no token for a person.
+- An admin signed in with `wardyn login` gets the server's `self_host_runner` refusal, then a line naming `wardyn login --admin` (1 hour).
+- A computer that is already a runner for another organisation is refused, naming both.
+- On Windows it refuses: run it inside your WSL2 distribution.
+- A failed run leaves nothing to undo: run it again. An unused token expires within the hour; an unclaimed runner lapses after 24 hours.
+- To upgrade, run `wardyn runner setup` again or install the new package. Never copy over the binary.
+- Org runners keep the operator's `--token-file` path.
 
 ## A runner behind a corporate proxy
 

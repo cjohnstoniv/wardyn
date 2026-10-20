@@ -188,7 +188,7 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 2. An admin can mint one for a named person (`--owner`). It lasts 72 hours so MDM can deliver it, and needs no grant.
 3. On the laptop, `wardyn-runnerd setup --org <url> --token-file <file>` generates an Ed25519 key pair locally, installs the service and prints the key fingerprint.
 4. The org records an `unclaimed` runner. It is offered no run and relays nothing, and it expires after 24 hours.
-5. The owner, signed in as themselves, claims it in *Your account → My runner*, or on the laptop with `WARDYN_TOKEN=<own API token> wardyn runner claim --pool NAME --default`. `setup --claim` does both steps.
+5. The owner, signed in as themselves, claims it in *Your account → My runner*, or locally with `WARDYN_TOKEN=<own API token> wardyn runner claim --pool NAME --default`. `wardyn runner setup` does every step.
 6. The runner is now `claimed` and takes runs owned by its owner, once it is in one of the owner's pools (`placement_unavailable` otherwise).
 
 - An admin can mint a token for a person but can never complete the claim.
@@ -219,7 +219,7 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 4. As that person, run `wardyn-runnerd register --org <url> --token-file <file>`, then `launchctl kickstart gui/$(id -u)/com.wardyn.runnerd.managed` (or log out and in).
 5. The person claims the runner as usual, then runs `wardyn login <url>` once (`setup` does that itself).
 
-- **Without MDM** install the package, then run `wardyn-runnerd setup --token-file <file>`, adding `--org <url>` when no profile is installed.
+- **Without MDM** install the package, then run [`wardyn runner setup`](../runner-registration.md#wardyn-runner-setup), or `wardyn-runnerd setup --token-file <file>` (`--org <url>` without a profile).
   - `setup` stops the managed agent, writes the agent `com.wardyn.runnerd` in the person's own `~/Library/LaunchAgents`, and the managed agent stays idle. `serve` also takes a lock in the runner state directory, so a second `serve` for one identity exits with a message.
 - Logs go to `~/Library/Logs/wardyn/runnerd.log` either way.
 
