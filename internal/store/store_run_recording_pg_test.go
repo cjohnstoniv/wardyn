@@ -12,7 +12,7 @@ import (
 )
 
 // TestPG_RunRecordingLevelRoundTrips: a run resolved to off keeps its level and its policy_off mark
-// (0200 admits both), and a run that wrote neither reads as the legacy empty values.
+// (0201 admits both), and a run that wrote neither reads as the legacy empty values.
 func TestPG_RunRecordingLevelRoundTrips(t *testing.T) {
 	ctx := context.Background()
 	pg := store.NewPG(runsPGPool(t))
