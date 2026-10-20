@@ -84,6 +84,9 @@
 #      in the same RUN, so a build proxy URL never stays in the shipped layer.
 #  24. every scripts/*-walk.sh is run by a Makefile recipe or a workflow step (a comment does not count), or is named
 #      in HAND_RUN_WALKS with the reason it cannot run on a hosted runner.
+#  25. every scripts/test-*.sh that runs `git init`, `git clone` or `git commit` turns
+#      off git's auto-maintenance (maintenance.auto and gc.auto), or its EXIT trap
+#      can lose `rm -rf` to a detached git still writing under .git (#3328).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -819,6 +822,42 @@ if [ -n "$orphan_walks" ]; then
     bad "walk scripts that nothing runs:${orphan_walks} — wire each into the Makefile or a workflow (nightly.yml), or add it to HAND_RUN_WALKS with the reason"
 else
     ok "every scripts/*-walk.sh has a caller or a stated reason it has none"
+fi
+
+# ── 25. throwaway repos start no background git ─────────────────────────────
+# A shell test that commits in a temp repo and removes it in an EXIT trap races
+# git's detached `maintenance run --auto`: rm -rf fails "Directory not empty"
+# (#3328, hosted run 39343470618, test-kind-follow-main.sh). A command-position
+# `git ... init|clone|commit` needs maintenance.auto and gc.auto named in the
+# same file, as a GIT_CONFIG_KEY_n export or a `git config`.
+unsilenced_git() {  # $1 = file -> prints it when it runs git init/clone/commit without the setting
+    grep -vE '^[[:space:]]*#' "$1" \
+        | grep -qE '(^|[;&|(][[:space:]]*)git[[:space:]]([^|;&]*[[:space:]])?(init|clone|commit)([[:space:]]|$)' || return 0
+    grep -q 'maintenance\.auto' "$1" && grep -q 'gc\.auto' "$1" || printf '%s\n' "$1"
+}
+planted="$(mktemp -d)"
+printf 'git -C "$d" init -q\ngit -C "$d" commit -q -m x\n' >"$planted/bad.sh"
+printf 'export GIT_CONFIG_KEY_0=maintenance.auto GIT_CONFIG_KEY_1=gc.auto\ngit init -q\n' >"$planted/good.sh"
+printf '# git commit in a comment\necho "grep git clone x"\n' >"$planted/quiet.sh"
+selftest_fail=0
+[ -n "$(unsilenced_git "$planted/bad.sh")" ] \
+    || { bad "guard 25 self-test: a git init/commit with no maintenance setting was not caught"; selftest_fail=1; }
+[ -z "$(unsilenced_git "$planted/good.sh")" ] \
+    || { bad "guard 25 self-test: a script that sets maintenance.auto and gc.auto false-flagged"; selftest_fail=1; }
+[ -z "$(unsilenced_git "$planted/quiet.sh")" ] \
+    || { bad "guard 25 self-test: git named only in a comment or a string false-flagged"; selftest_fail=1; }
+rm -rf "$planted"
+if [ "$selftest_fail" = 0 ]; then ok "guard 25's detector catches an unsilenced git init/commit (self-test)"; fi
+loud=""
+for f in scripts/test-*.sh; do
+    [ "$f" = scripts/test-repo-guards.sh ] && continue
+    hit="$(unsilenced_git "$f")"
+    [ -z "$hit" ] || loud="$loud $hit"
+done
+if [ -n "$loud" ]; then
+    bad "shell tests that run git init/clone/commit without maintenance.auto and gc.auto off:${loud} — export GIT_CONFIG_COUNT/KEY/VALUE for maintenance.auto=false, gc.auto=0 and gc.autoDetach=false (see scripts/test-kind-follow-main.sh)"
+else
+    ok "every scripts/test-*.sh that runs git init/clone/commit turns auto-maintenance off"
 fi
 
 if [ "$fail" = 0 ]; then echo "--- test-repo-guards: PASS ---"; else echo "--- test-repo-guards: FAIL ---"; fi
