@@ -433,8 +433,9 @@ maybe_exec_task_mode "$task"
 #     --dangerously-skip-permissions (claude-code/agent-run). Codex's own
 #     sandbox cannot start under Wardyn's hardening (no user namespaces under
 #     the default seccomp profile), so without this every write fails. Wardyn
-#     IS the boundary: default-deny egress, proxy-injected credentials,
-#     confinement class and the audit trail govern the run (#2174).
+#     IS the boundary: default-deny egress, credentials kept out of the
+#     sandbox wherever Wardyn brokers them, confinement class and the audit
+#     trail govern the run (#2174).
 # The exit code from `codex` propagates to the caller.
 exec_argv=(codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox)
 if [[ -n "${WARDYN_CODEX_MODEL:-}" ]]; then exec_argv+=(-m "$WARDYN_CODEX_MODEL"); fi
