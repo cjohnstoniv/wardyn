@@ -25,6 +25,18 @@ const envScheduledRuns = "WARDYN_SCHEDULED_RUNS"
 // scheduleMaxAhead is the furthest a start may be scheduled: the queue's longest wait.
 const scheduleMaxAhead = queueMaxWaitSec * time.Second
 
+// scheduleLeadWaitSec is the wait a scheduled start must leave before the seven-day cap: the run's
+// default wait, 24 hours for a Background run and 1 hour for an Interactive one.
+func scheduleLeadWaitSec(interactive bool) int {
+	if interactive {
+		return queueInteractiveWaitSec
+	}
+	return queueBackgroundWaitSec
+}
+
+// scheduleShownLayout is how a start time is shown back to the person: in its zone, with the zone's name.
+const scheduleShownLayout = "2006-01-02 15:04 MST"
+
 // startAtLocalLayouts are the wall-clock forms start_at may take with no offset, read in its zone.
 var startAtLocalLayouts = []string{"2006-01-02T15:04:05", "2006-01-02T15:04"}
 
@@ -35,9 +47,10 @@ type runSchedule struct {
 }
 
 // parseRunSchedule validates a create's start_at and start_time_zone against now: nil, nil when the
-// request schedules nothing. Off, a malformed time or zone, a time already past or one more than seven
-// days ahead is refused, each with its own reason.
-func parseRunSchedule(start, zone string, enabled bool, now time.Time) (*runSchedule, *runRefusal) {
+// request schedules nothing. Off, a malformed time or zone, a time already past or one later than seven
+// days less the run's default wait (waitSec) is refused, each with its own reason. That latest start
+// leaves the run its wait before the seven-day cap (scheduledDeadline), so it is judged before it expires.
+func parseRunSchedule(start, zone string, enabled bool, now time.Time, waitSec int) (*runSchedule, *runRefusal) {
 	if start == "" && zone == "" {
 		return nil, nil
 	}
@@ -62,22 +75,24 @@ func parseRunSchedule(start, zone string, enabled bool, now time.Time) (*runSche
 	if err != nil {
 		return nil, invalid
 	}
-	shown := at.In(loc).Format("2006-01-02 15:04 MST")
+	shown := at.In(loc).Format(scheduleShownLayout)
+	latest := now.Add(scheduleMaxAhead - time.Duration(waitSec)*time.Second)
 	switch {
 	case !at.After(now):
 		return nil, runError(http.StatusUnprocessableEntity, reasonStartAtPast, fmt.Sprintf(startAtPastMsg, shown))
-	case at.After(now.Add(scheduleMaxAhead)):
-		return nil, runError(http.StatusUnprocessableEntity, reasonStartAtTooFar, fmt.Sprintf(startAtTooFarMsg, shown))
+	case at.After(latest):
+		return nil, runError(http.StatusUnprocessableEntity, reasonStartAtTooFar,
+			fmt.Sprintf(startAtTooFarMsg, shown, latest.In(loc).Format(scheduleShownLayout), waitSec/3600))
 	}
 	return &runSchedule{at: at.UTC(), zone: zone}, nil
 }
 
 const (
-	scheduledRunsOffMsg         = "Scheduled runs are off on this deployment. Start the run now, or ask an admin to turn scheduled runs on."
+	scheduledRunsOffMsg         = "Scheduled runs are off on this deployment (WARDYN_SCHEDULED_RUNS is not set). Start the run now, or ask an admin to turn scheduled runs on."
 	scheduledRunsUnavailableMsg = "This deployment places no runs on runners, so a run cannot be scheduled here."
 	startAtInvalidMsg           = "start_at needs a date and time (2026-10-21T02:00, or RFC 3339) and start_time_zone an IANA time zone (Europe/London)."
 	startAtPastMsg              = "The start time %s has already passed. Choose a time in the future."
-	startAtTooFarMsg            = "The start time %s is more than 7 days ahead. Choose a time within 7 days."
+	startAtTooFarMsg            = "The start time %s is too far ahead. The latest start is %s: 7 days from now, less this run's %d-hour wait. Choose an earlier time."
 )
 
 // scheduledDeadline is a scheduled run's deadline: its wait counted from its start, and never more than
@@ -96,7 +111,7 @@ func scheduledWaitMsg(sch *runSchedule) string {
 	if err != nil {
 		loc = time.UTC
 	}
-	return fmt.Sprintf("This run is scheduled to start at %s (%s).", sch.at.In(loc).Format("2006-01-02 15:04 MST"), sch.zone)
+	return fmt.Sprintf("This run is scheduled to start at %s (%s).", sch.at.In(loc).Format(scheduleShownLayout), sch.zone)
 }
 
 // queueOwnerSignIn is the wait of a due scheduled run whose owner's sign-in to its model provider has
@@ -104,7 +119,8 @@ func scheduledWaitMsg(sch *runSchedule) string {
 // so the run waits for them to sign in again instead of failing at the start. "" when nothing holds it
 // here; the start's own fold still judges the provider.
 func (s *Server) queueOwnerSignIn(ctx context.Context, e store.RunQueueEntry, launch queuedLaunch) runnerpool.WaitReason {
-	if e.StartAt == nil || launch.ProviderID == "" || s.cfg.Store == nil {
+	// Switched off, the run is not held for a sign-in: its start ends it scheduled_runs_off.
+	if e.StartAt == nil || launch.ProviderID == "" || s.cfg.Store == nil || !envEnabled(envScheduledRuns) {
 		return ""
 	}
 	var req createRunRequest

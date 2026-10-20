@@ -709,7 +709,9 @@ func (s *Server) stepDriveEligibility(f *runFold, rec *foldRecorder) bool {
 // floor it reads is the policy's and the components', and the plan it gates is the one that step judges.
 func (s *Server) stepPlacement(f *runFold, rec *foldRecorder) bool {
 	if !f.promoted {
-		sch, refusal := parseRunSchedule(f.req.StartAt, f.req.StartTimeZone, envEnabled(envScheduledRuns), s.cfg.Now())
+		// The run type the queue's wait is read from (queuedCreate.answer).
+		interactive := runTypeForEnd(f.req.Experience) == types.RunnerPoolRunInteractive || (f.req.Experience == "" && f.req.Interactive)
+		sch, refusal := parseRunSchedule(f.req.StartAt, f.req.StartTimeZone, envEnabled(envScheduledRuns), s.cfg.Now(), scheduleLeadWaitSec(interactive))
 		if refusal.write(s, f.w, f.r) {
 			return false
 		}

@@ -289,7 +289,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_HA` | bool | `false` | multi-replica mode (flag `-ha`): skip the single-instance lock so several wardynd replicas can serve one database; refused at boot unless the runner is the Kubernetes substrate. [Details](#wardyn_ha) |
 | `WARDYN_GOVERN_ADMIN_RUNS` | bool | (unset) | constrained-admin mode: govern every run an SSO admin or an admin-role personal API token launches, like a member's (flag `-govern-admin-runs`). **With OIDC unset the switch binds nobody**, and boot WARNs it (`warnGovernAdminRunsUnbound`, [`cmd/wardynd/boot_posture.go`](../cmd/wardynd/boot_posture.go)). [Details](#wardyn_govern_admin_runs) |
 | `WARDYN_GOVERN_ADMIN_RUNS_EXEMPT` | CSV | (unset) | the lanes left ungoverned under `WARDYN_GOVERN_ADMIN_RUNS`; the only value is `recording` (flag `-govern-admin-runs-exempt`). [Details](#wardyn_govern_admin_runs_exempt) |
-| `WARDYN_SCHEDULED_RUNS` | bool | (unset) | let a run be scheduled to start once, later (`start_at` on `POST /runs`, at most 7 days ahead); unset refuses `start_at` with `scheduled_runs_off`. Read per request. [Details](#wardyn_scheduled_runs) |
+| `WARDYN_SCHEDULED_RUNS` | bool | (unset) | let a run be scheduled to start once, later (`start_at` on `POST /runs`, within 7 days less the run's wait); unset refuses `start_at` with `scheduled_runs_off`. Read per request. [Details](#wardyn_scheduled_runs) |
 | `WARDYN_EGRESS_PORT_RULE` | enum | `off` | container runs' egress port rule, `off`, `dry_run` or `on` (flag `-egress-port-rule`); the proxy turns it on for runs dispatched as a desktop VM. [Details](#wardyn_egress_port_rule) |
 | `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` | string (URL) | (unset) | **TEST ONLY.** Re-points **both** AWS IAM Identity Center services at this base URL (flag `-aws-sso-endpoint-override`; `ValidateAWSSSOEndpointOverride`, [`internal/api/awssso_endpoint.go`](../internal/api/awssso_endpoint.go)); **REFUSED unless `WARDYN_ALLOW_TEST_ENDPOINTS=true`**. [Details](#wardyn_aws_sso_endpoint_override) |
 | `WARDYN_AWS_SSO_PROXY_INJECT` | enum | `on` | a captured AWS SSO session is injected **proxy-side** (flag `-aws-sso-proxy-inject`). `off` was removed in 0.10.0 and refuses boot. On a private-endpoint estate whose corporate proxy is also TLS-intercepting, the MITM re-origination fails closed unless `WARDYN_TRUSTED_CA_FILE` is ALSO staged. [Details](#wardyn_aws_sso_proxy_inject) |
@@ -1514,9 +1514,10 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 ### `WARDYN_SCHEDULED_RUNS`
 
-- Lets a run be scheduled to start once, later: `start_at` and `start_time_zone` on `POST /runs` (`wardyn run --start-at`), at most 7 days ahead ([Scheduled runs](operations/runner-pools.md#scheduled-runs)).
+- Lets a run be scheduled to start once, later: `start_at` and `start_time_zone` on `POST /runs` (`wardyn run --start-at`) ([Scheduled runs](operations/runner-pools.md#scheduled-runs)).
+- The start is at most 6 days ahead for a background task, 6 days 23 hours for an interactive one, so the run keeps its wait before the 7-day cap.
 - The run waits in its pool's queue and starts through the queue's own start, which checks its owner, profile, policy and doors again.
-- Unset (the default) refuses `start_at` with `422` `scheduled_runs_off`. Turning it off later refuses new schedules only: runs already scheduled still start.
+- Unset (the default) refuses `start_at` with `422` `scheduled_runs_off`. Turning it off later also ends each run already booked at its start time, `FAILED` `scheduled_runs_off`.
 - A deployment with no runner wired places no runs, so `start_at` is refused there with `scheduled_runs_unavailable`.
 - A value that is not a bool exits 2 at boot.
 

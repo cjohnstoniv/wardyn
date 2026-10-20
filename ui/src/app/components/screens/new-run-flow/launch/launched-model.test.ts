@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { shortTime } from "../../../../lib/format";
+import { mediumDate, shortTime } from "../../../../lib/format";
 import type { RunQueue } from "../../../../lib/types/runs";
 import { givesUp, ordinal, placeInLine, waitingBody, waitingSince } from "./launched-model";
 
@@ -52,5 +52,15 @@ describe("why it waits", () => {
     expect(waitingBody("runner_pool_recording_store_off", { name: "Laptops" })).toBe("Recording is required, and this organisation keeps no session recordings. This run starts when the organisation's recording store is on.");
     expect(waitingBody("runner_pool_at_capacity", undefined)).toBeUndefined();
     expect(waitingBody("runner_pool_at_capacity", { name: "CI jobs" })).toBeUndefined();
+  });
+
+  it("says a scheduled run is booked, with its start time when the wire carries it, never the at-capacity sentence", () => {
+    const startAt = "2026-10-21T01:00:00Z";
+    const pool = { name: "CI jobs", max: 40 };
+    expect(waitingBody("scheduled", pool, startAt)).toBe(`This run is scheduled and starts at ${mediumDate(startAt)}, ${shortTime(startAt)}.`);
+    expect(waitingBody("scheduled", undefined)).toBe("This run is scheduled and starts at its booked time.");
+    expect(waitingBody("owner_sign_in", pool)).toBe(
+      "This run is due, and your model sign-in has expired. At the start, Wardyn renews your model sign-in if it can; if it can't, the run waits for you. Sign in again to start it.",
+    );
   });
 });

@@ -183,6 +183,11 @@ func (st *queuedStart) bind(a queueAuthority) error {
 // the pool and the fold, then the mint and the launch. It returns the end for the first refusal, nil
 // when the run was handed to dispatch or was already taken by a kill.
 func (s *Server) runQueuedStart(st *queuedStart) *queueEnd {
+	// A run booked for later starts only while scheduled runs are on: switching them off binds the runs
+	// already booked, not only new requests.
+	if st.entry.StartAt != nil && !envEnabled(envScheduledRuns) {
+		return &queueEnd{token: string(types.RunEndScheduledRunsOff), hint: types.RunEndScheduledRunsOff.Sentence()}
+	}
 	if end := s.queueOwnerStanding(st); end != nil {
 		return end
 	}

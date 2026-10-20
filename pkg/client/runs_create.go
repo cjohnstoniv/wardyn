@@ -200,11 +200,13 @@ type CreateRunRequest struct {
 	// a 0 is sent and refused rather than read as absent.
 	MaxWaitSec *int `json:"max_wait_sec,omitempty"`
 	// StartAt schedules a one-time start: an RFC 3339 time ("2026-10-21T02:00:00Z"), or a wall-clock
-	// time with no offset ("2026-10-21T02:00") read in StartTimeZone. It must be in the future and at
-	// most 7 days ahead. The run waits as QUEUED with queue.reason "scheduled" and starts no earlier,
-	// re-checked as its owner at the start like any queued run; MaxWaitSec then counts from StartAt,
+	// time with no offset ("2026-10-21T02:00") read in StartTimeZone. It must be in the future and no
+	// later than 7 days less the run's default wait (24 hours Background, 1 hour Interactive). The run
+	// waits as QUEUED with queue.reason "scheduled" and starts no earlier, re-checked as its owner at
+	// the start like any queued run; MaxWaitSec then counts from StartAt,
 	// and nothing waits more than 7 days from the request. Refused with scheduled_runs_off unless the
-	// server sets WARDYN_SCHEDULED_RUNS.
+	// server sets WARDYN_SCHEDULED_RUNS; a booked run whose start comes with it off ends FAILED
+	// scheduled_runs_off.
 	StartAt string `json:"start_at,omitempty"`
 	// StartTimeZone is the IANA time zone StartAt is given in ("Europe/London"); required with StartAt.
 	StartTimeZone string `json:"start_time_zone,omitempty"`

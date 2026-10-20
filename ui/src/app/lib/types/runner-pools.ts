@@ -45,6 +45,7 @@ export type RunEndReason =
   | "end_reached"
   | "queue_timeout"
   | "queue_sign_in_timeout"
+  | "scheduled_runs_off"
   | "queue_profile_changed"
   | "queue_policy_changed"
   | "queue_portal_revoked"

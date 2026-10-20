@@ -173,7 +173,7 @@ const (
 	reasonScheduledRunsUnavailable = "scheduled_runs_unavailable" // start_at on a deployment that places no runs, so no queue can hold it
 	reasonStartAtInvalid           = "start_at_invalid"           // start_at or start_time_zone is malformed, or one is sent without the other
 	reasonStartAtPast              = "start_at_past"              // start_at is not in the future
-	reasonStartAtTooFar            = "start_at_too_far"           // start_at is more than 7 days ahead
+	reasonStartAtTooFar            = "start_at_too_far"           // start_at is later than 7 days less the run's wait
 	// The main drive (run_main_drive.go). The sentence is mainDriveUnenforceableMsg's, with a TypeScript twin.
 	reasonMainDriveUnenforceable = "main_drive_unenforceable" // the run's policy writes a disk size the runner it lands on cannot cap
 	// The run shape (run_shape.go): New Run's choice, checked against the carriers.

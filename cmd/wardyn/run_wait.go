@@ -19,7 +19,7 @@ type runScheduleFlags struct {
 }
 
 func (f *runScheduleFlags) register(cmd *cobra.Command) {
-	cmd.Flags().StringVar(&f.startAt, "start-at", "", "start the run later, once: a date and time such as 2026-10-21T02:00 read in --time-zone, or an RFC 3339 time, in the future and at most 7 days ahead. The run waits as QUEUED until then; cancel it with 'wardyn run kill'. Needs WARDYN_SCHEDULED_RUNS on the server. Not with --wait")
+	cmd.Flags().StringVar(&f.startAt, "start-at", "", "start the run later, once: a date and time such as 2026-10-21T02:00 read in --time-zone, or an RFC 3339 time, in the future and at most 6 days ahead (6 days 23 hours for an interactive environment), so the run keeps its wait before the 7-day cap. The run waits as QUEUED until then; cancel it with 'wardyn run kill'. Needs WARDYN_SCHEDULED_RUNS on the server. Not with --wait")
 	cmd.Flags().StringVar(&f.zone, "time-zone", "", "the IANA time zone --start-at is given in, such as Europe/London or UTC; required with --start-at")
 }
 

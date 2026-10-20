@@ -15,7 +15,7 @@ import { useWaitingPool } from "../new-run-flow/launch/use-launched-run";
 
 export function QueuedWait({ queue }: { queue: RunQueue }) {
   const pool = useWaitingPool(queue.pool_id);
-  const body = waitingBody(queue.reason, pool);
+  const body = waitingBody(queue.reason, pool, queue.start_at);
   const now = Date.now();
   const since = waitingSince(queue.queued_at, now);
   const gives = givesUp(queue.deadline_at, now);

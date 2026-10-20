@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"slices"
 	"strings"
@@ -170,5 +171,48 @@ func TestPG_ScheduledRunSignInWaitEndsAtTheDeadline(t *testing.T) {
 	rows := e.audits(out.ID, "run.queue.expire")
 	if len(rows) != 1 || queueAuditData(t, rows[0])["reason"] != string(types.RunEndQueueSignInTimeout) {
 		t.Errorf("run.queue.expire rows = %+v; want one with reason %s", rows, types.RunEndQueueSignInTimeout)
+	}
+}
+
+// A scheduled start is the queue's own start: every re-check of section 7 that ends a waiting run ends a
+// scheduled one at its time with the same reason, sentence and run.queue.start failure row.
+func TestPG_ScheduledStartRunsTheQueueStartsChecks(t *testing.T) {
+	for _, tc := range queueStartRechecks {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newQueueEnv(t)
+			t.Setenv(envScheduledRuns, "1")
+			pool := e.cappedPool("Night", 5)
+			out := e.queuedLaunch(e.person, pool, tc.extra+scheduleAt(time.Hour))
+			tc.change(e, pool, e.run(out.ID))
+			e.due(out.ID)
+			e.sweep()
+			e.ended(out.ID, tc)
+		})
+	}
+}
+
+// Switching scheduled runs off binds the runs already booked: at its time a booked run ends FAILED
+// scheduled_runs_off, with a sentence that names the switch and a run.queue.start failure row, and the
+// person's own run list shows it failed.
+func TestPG_ScheduledRunEndsAtItsStartOnceTheSwitchIsOff(t *testing.T) {
+	e := newQueueEnv(t)
+	t.Setenv(envScheduledRuns, "1")
+	pool := e.cappedPool("Night", 5)
+	out := e.queuedLaunch(e.person, pool, scheduleAt(time.Hour))
+	t.Setenv(envScheduledRuns, "")
+	e.due(out.ID)
+	e.sweep()
+	reason := string(types.RunEndScheduledRunsOff)
+	e.ended(out.ID, queueStartRecheck{reason: reason, sent: types.RunEndScheduledRunsOff.Sentence()})
+	if !strings.Contains(types.RunEndScheduledRunsOff.Sentence(), envScheduledRuns) {
+		t.Errorf("the end sentence %q does not name %s", types.RunEndScheduledRunsOff.Sentence(), envScheduledRuns)
+	}
+	var listed []types.AgentRun
+	if err := json.Unmarshal(e.call(e.person, http.MethodGet, "/api/v1/runs", "").Body.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(listed, func(r types.AgentRun) bool { return r.ID == out.ID })
+	if i < 0 || listed[i].State != types.RunFailed || listed[i].StatusDetail != statusDetailQueuePrefix+reason || listed[i].Queue != nil {
+		t.Fatalf("the person's run list = %+v; want the booked run FAILED %s with no queue", listed, reason)
 	}
 }
