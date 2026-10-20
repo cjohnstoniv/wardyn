@@ -340,16 +340,16 @@ func (f *localFixture) writePointer(t *testing.T) {
 	}
 }
 
-func (f *localFixture) attach(opts attachOptions) (err error, stdout, stderr string) {
+func (f *localFixture) attach(opts attachOptions) (stdout, stderr string, err error) {
 	err = runAttach(context.Background(), &sdk.Client{BaseURL: f.srv.URL}, f.org.runID, opts)
-	return err, f.stdout(), f.stderr()
+	return f.stdout(), f.stderr(), err
 }
 
 // TestAttachLocal_OnThisComputer: mint, GET the run, hello the runner's socket, dial transport=local with
 // its nonce; the screen and the keystrokes go over the socket, and the transport line names the runner.
 func TestAttachLocal_OnThisComputer(t *testing.T) {
 	f := newLocalFixture(t, grantLocal)
-	err, stdout, stderr := f.attach(attachOptions{})
+	stdout, stderr, err := f.attach(attachOptions{})
 	if err != nil {
 		t.Fatalf("attach = %v, want a clean detach", err)
 	}
@@ -420,7 +420,7 @@ func TestAttachLocal_FallbackTriggers(t *testing.T) {
 			if tc.setup != nil {
 				tc.setup(t, f)
 			}
-			err, stdout, stderr := f.attach(attachOptions{})
+			stdout, stderr, err := f.attach(attachOptions{})
 			if err != nil {
 				t.Fatalf("attach = %v, want the relay attach", err)
 			}
@@ -444,7 +444,7 @@ func TestAttachLocal_FallbackTriggers(t *testing.T) {
 // query; its first frame names no transport, and that same socket is the session, a relay attach.
 func TestAttachLocal_OldOrganisationRunsAsRelay(t *testing.T) {
 	f := newLocalFixture(t, serveRelay)
-	err, stdout, stderr := f.attach(attachOptions{})
+	stdout, stderr, err := f.attach(attachOptions{})
 	if err != nil {
 		t.Fatalf("attach = %v", err)
 	}
@@ -459,7 +459,7 @@ func TestAttachLocal_OldOrganisationRunsAsRelay(t *testing.T) {
 // TestAttachLocal_Second4409IsShown: the relay retry after a 4409 is the only one; a second 4409 is shown.
 func TestAttachLocal_Second4409IsShown(t *testing.T) {
 	f := newLocalFixture(t, close4409)
-	err, _, _ := f.attach(attachOptions{})
+	_, _, err := f.attach(attachOptions{})
 	if websocket.CloseStatus(err) != 4409 {
 		t.Fatalf("attach = %v, want the second 4409 shown", err)
 	}
@@ -495,7 +495,7 @@ func TestAttachLocal_ParityRowsShownVerbatim(t *testing.T) {
 		for _, via := range []string{viaAuto, viaRelay} {
 			t.Run(fmt.Sprintf("%s/%d/%s", via, row.status, row.reason), func(t *testing.T) {
 				f := newLocalFixture(t, refuseDial(row.status, row.reason, row.msg))
-				err, _, _ := f.attach(attachOptions{via: via})
+				_, _, err := f.attach(attachOptions{via: via})
 				var ae *sdk.APIError
 				if !errors.As(err, &ae) || ae.Status != row.status || ae.Reason != row.reason || !strings.Contains(err.Error(), row.msg) {
 					t.Fatalf("attach = %v, want %d %s with the server's sentence", err, row.status, row.reason)
@@ -528,7 +528,7 @@ func TestAttachLocal_OpenSessionClosesAreShown(t *testing.T) {
 				_ = c.Close(tc.code, tc.reason)
 			})
 			attachStdin = blockingReader{}
-			err, _, _ := f.attach(attachOptions{})
+			_, _, err := f.attach(attachOptions{})
 			if websocket.CloseStatus(err) != tc.code || !strings.Contains(err.Error(), tc.reason) {
 				t.Fatalf("attach = %v, want close %d %q", err, tc.code, tc.reason)
 			}
@@ -559,7 +559,7 @@ func TestAttachLocal_ShellExitIsCleanDetach(t *testing.T) {
 		_ = c.Close(websocket.StatusNormalClosure, "")
 	})
 	attachStdin = blockingReader{}
-	if err, _, stderr := f.attach(attachOptions{}); err != nil || !strings.Contains(stderr, "detached") {
+	if _, stderr, err := f.attach(attachOptions{}); err != nil || !strings.Contains(stderr, "detached") {
 		t.Fatalf("attach = %v (stderr %q), want a clean detach", err, stderr)
 	}
 }
@@ -570,7 +570,7 @@ func TestAttachLocal_ForeignRunFailsAtTheMint(t *testing.T) {
 	f := newLocalFixture(t, grantLocal, func(o *fakeOrg) {
 		o.mintRefusal = func(w http.ResponseWriter) { refuseDial(404, "run_not_found", "run not found")(nil, 0, w, nil) }
 	})
-	err, _, _ := f.attach(attachOptions{})
+	_, _, err := f.attach(attachOptions{})
 	var ae *sdk.APIError
 	if !errors.As(err, &ae) || ae.Status != 404 || ae.Reason != "run_not_found" {
 		t.Fatalf("attach = %v, want the mint's 404", err)
@@ -585,7 +585,7 @@ func TestAttachLocal_ForeignRunFailsAtTheMint(t *testing.T) {
 func TestAttachLocal_PresenceAtMostOncePerInterval(t *testing.T) {
 	f := newLocalFixture(t, grantLocal)
 	attachStdin = io.MultiReader(strings.NewReader("a"), strings.NewReader("b"), strings.NewReader("c"))
-	if err, _, _ := f.attach(attachOptions{}); err != nil {
+	if _, _, err := f.attach(attachOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := f.rd.typedString(); got != "abc" {
@@ -600,7 +600,7 @@ func TestAttachLocal_PresenceAtMostOncePerInterval(t *testing.T) {
 func TestAttachVia(t *testing.T) {
 	t.Run("relay skips the runner", func(t *testing.T) {
 		f := newLocalFixture(t, localOr(grantLocal))
-		if err, stdout, _ := f.attach(attachOptions{via: viaRelay}); err != nil || stdout != "relay screen\n" {
+		if stdout, _, err := f.attach(attachOptions{via: viaRelay}); err != nil || stdout != "relay screen\n" {
 			t.Fatalf("attach = %v, stdout %q; want the relay", err, stdout)
 		}
 		if f.rd.hellos.Load() != 0 || f.org.query(1).Get("transport") != "" {
@@ -637,7 +637,7 @@ func TestAttachVia(t *testing.T) {
 			if tc.setup != nil {
 				tc.setup(f)
 			}
-			err, _, _ := f.attach(attachOptions{via: viaLocal})
+			_, _, err := f.attach(attachOptions{via: viaLocal})
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("attach --via local = %v, want %q", err, tc.want)
 			}
@@ -653,7 +653,7 @@ func TestAttachVia(t *testing.T) {
 func TestAttachTakeOver(t *testing.T) {
 	t.Run("takes, then attaches", func(t *testing.T) {
 		f := newLocalFixture(t, grantLocal)
-		err, _, stderr := f.attach(attachOptions{takeOver: true})
+		_, stderr, err := f.attach(attachOptions{takeOver: true})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -670,7 +670,7 @@ func TestAttachTakeOver(t *testing.T) {
 				refuseDial(409, "attach_takeover_no_holder", "nobody is attached to this run; nothing to take over")(nil, 0, w, nil)
 			}
 		})
-		if err, _, _ := f.attach(attachOptions{takeOver: true}); err != nil || f.org.dials.Load() != 1 {
+		if _, _, err := f.attach(attachOptions{takeOver: true}); err != nil || f.org.dials.Load() != 1 {
 			t.Fatalf("attach = %v, dials %d; want the attach", err, f.org.dials.Load())
 		}
 	})
@@ -680,7 +680,7 @@ func TestAttachTakeOver(t *testing.T) {
 				refuseDial(403, "run_owner_only", "only the run's owner may take over its terminal")(nil, 0, w, nil)
 			}
 		})
-		err, _, _ := f.attach(attachOptions{takeOver: true})
+		_, _, err := f.attach(attachOptions{takeOver: true})
 		var ae *sdk.APIError
 		if !errors.As(err, &ae) || ae.Reason != "run_owner_only" || f.org.dials.Load() != 0 {
 			t.Fatalf("attach = %v, dials %d; want the 403 shown and no dial", err, f.org.dials.Load())
