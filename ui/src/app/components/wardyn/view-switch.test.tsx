@@ -182,6 +182,18 @@ describe("UserViewEyebrow (#912)", () => {
   });
 });
 
+describe("UserViewEyebrow — a failed switch (#2617)", () => {
+  it("says so inline and re-enables the trigger, like the other switch surfaces", async () => {
+    vi.spyOn(health, "setMemberMode").mockRejectedValue(new Error("boom"));
+    render(<UserViewEyebrow currentUserType={{ id: "pm", name: PM.name }} userTypes={[STANDARD, PM, DEV]} />);
+    const trigger = screen.getByRole("button", { name: CONSOLE_VIEW.EYEBROW_USER(PM.name) });
+    await userEvent.click(trigger);
+    await userEvent.click(await screen.findByRole("menuitem", { name: DEV.name }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(CONSOLE_VIEW.SWITCH_FAILED);
+    expect(trigger).toBeEnabled();
+  });
+});
+
 describe("UserViewDroppedNotice (#912)", () => {
   it("renders nothing without a drop", () => {
     const { container } = render(<UserViewDroppedNotice access="session-admin" dropped={null} userTypes={[]} />);

@@ -209,13 +209,19 @@ export function UserViewEyebrow({
   userTypes?: ViewUserType[];
 }) {
   const [busy, setBusy] = React.useState(false);
+  const [failed, setFailed] = React.useState(false);
   if (userTypes.length <= 1 || !currentUserType) return null;
   const choose = (id: string) => {
     if (id === currentUserType.id || busy) return;
     setBusy(true);
-    switchView("user", viewHome("user"), false, id).catch(() => setBusy(false));
+    setFailed(false);
+    switchView("user", viewHome("user"), false, id).catch(() => {
+      setBusy(false);
+      setFailed(true);
+    });
   };
   return (
+    <>
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
@@ -236,6 +242,12 @@ export function UserViewEyebrow({
         ))}
       </DropdownMenuContent>
     </DropdownMenu>
+    {failed && (
+      <span role="alert" className="mb-2 block px-2.5 text-xs text-danger">
+        {CONSOLE_VIEW.SWITCH_FAILED}
+      </span>
+    )}
+    </>
   );
 }
 
