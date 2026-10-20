@@ -381,6 +381,7 @@ func (la *localAttach) tee(sess runner.LocalSession, castTee io.Writer) {
 			// A mode push the runner did not acknowledge resets the tee itself; wait for that push
 			// to record its own reason before naming this one.
 			la.pushMu.Lock()
+			//lint:ignore SA2001 a barrier, not a critical section
 			la.pushMu.Unlock() //nolint:staticcheck // a barrier, not a critical section
 			// An ender that reset the tee closes the socket itself: cancelling here would tear the
 			// connection down before its close frame, and the CLI would read a bare drop.
