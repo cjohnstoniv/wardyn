@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/zalando/go-keyring"
 
 	"github.com/cjohnstoniv/wardyn/internal/cliprofile"
 	"github.com/cjohnstoniv/wardyn/internal/federation"
@@ -44,6 +45,9 @@ type setupRig struct {
 	mintBody          string
 	claimStatus       int
 	advertised        string
+	signIn            bool         // /healthz.cli_sign_in
+	fallback          http.Handler // the sign-in fake, for routes this rig does not answer
+	mintBearer        string
 	assets            map[string][]byte // download path -> bytes
 }
 
@@ -95,9 +99,10 @@ func (r *setupRig) serve(w http.ResponseWriter, req *http.Request) {
 	me := "/api/v1/me/runners/" + r.runnerID.String()
 	switch p := req.URL.Path; {
 	case p == "/healthz":
-		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "cli_artifact_base": r.advertised})
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "cli_artifact_base": r.advertised, "cli_sign_in": r.signIn})
 	case req.Method == http.MethodPost && p == "/api/v1/me/runners/tokens":
 		r.mints++
+		r.mintBearer = strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer ")
 		if r.mintStatus != 0 {
 			w.WriteHeader(r.mintStatus)
 			_, _ = w.Write([]byte(r.mintBody))
@@ -125,6 +130,10 @@ func (r *setupRig) serve(w http.ResponseWriter, req *http.Request) {
 		_, _ = w.Write(r.assets[p])
 	case p == "/release/v0.10.0/wardyn-runnerd-linux-amd64":
 		http.Redirect(w, req, "/objects/runnerd", http.StatusFound)
+	case r.fallback != nil:
+		r.mu.Unlock()
+		r.fallback.ServeHTTP(w, req)
+		r.mu.Lock()
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}
@@ -464,5 +473,45 @@ func TestRunnerSetupFailuresLeaveNoHalfClaimedRunner(t *testing.T) {
 	r2.claimStatus = http.StatusForbidden
 	if _, err := r2.run("--token", "wdn_personal", "--runnerd", bin2); err == nil || !strings.HasPrefix(err.Error(), "this computer is registered but not claimed:") {
 		t.Fatalf("claim refused: err = %v", err)
+	}
+}
+
+func TestRunnerSetupSignsInThroughTheBrowserWithNoCredential(t *testing.T) {
+	r := newSetupRig(t)
+	f := newSignInOrg(t)
+	keyring.MockInit()
+	prevReady, prevOpen, prevCan := keychainReady, openBrowser, canOpenBrowser
+	t.Cleanup(func() { keychainReady, openBrowser, canOpenBrowser = prevReady, prevOpen, prevCan })
+	keychainReady = func() error { return nil }
+	canOpenBrowser = func() bool { return true }
+	browser := approveInBrowser(t, f, nil)
+	openBrowser = func(approve string) error { go browser(approve); return nil }
+	// The fake answers on this rig's origin, the one the device proof is signed over.
+	r.signIn, r.fallback, f.srv.URL = true, f.srv.Config.Handler, r.srv.URL
+	bin, sum := r.fakeRunnerd(r.binDir, 0)
+	pinnedRunnerdSHA256 = sum
+	out, err := r.run("--runnerd", bin)
+	if err != nil {
+		t.Fatalf("setup: %v\n%s", err, out)
+	}
+	f.mu.Lock()
+	_, issued := f.tokens[r.mintBearer]
+	f.mu.Unlock()
+	if !issued {
+		t.Fatalf("the mint did not carry the browser sign-in's token (bearer %q)", r.mintBearer)
+	}
+	if strings.Contains(r.record("env"), r.mintBearer) || strings.Contains(r.record("argv"), r.mintBearer) {
+		t.Fatal("the CLI sign-in's token reached wardyn-runnerd")
+	}
+	if got, _ := cliprofile.Read(filepath.Join(r.home, ".config", "wardyn")); got != r.srv.URL {
+		t.Fatalf("profile URL = %q, want %q", got, r.srv.URL)
+	}
+
+	// With no sign-in on offer, the command names the token route instead.
+	r2 := newSetupRig(t)
+	bin2, sum2 := r2.fakeRunnerd(r2.binDir, 0)
+	pinnedRunnerdSHA256 = sum2
+	if _, err := r2.run("--runnerd", bin2); err == nil || err.Error() != fmt.Sprintf(errSetupNoCredential, noSignInLine) {
+		t.Fatalf("no sign-in on offer: err = %v", err)
 	}
 }
