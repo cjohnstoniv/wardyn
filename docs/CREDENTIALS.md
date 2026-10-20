@@ -66,6 +66,8 @@ Who may deliver one:
 - With that switch set, a member's own inline grant must still match a pairing in the member's ceiling ([`internal/api/inline_policy_secrets.go#Server.filterUserGrants`](../internal/api/inline_policy_secrets.go)).
 - **A component** delivers the launching person's own secret: its variable and file grants are `owner_only`, with no fallback to an operator secret of the same name ([`internal/api/components_run.go#componentGrant`](../internal/api/components_run.go)).
 - Defining a component of one's own is on by default. Where the `feature` capability is not enforced, everyone may until a deny row names `custom_component`; where it is enforced, a person needs an allow row ([`internal/api/capabilities.go#featureCustomComponent`](../internal/api/capabilities.go)).
+- An MCP server that runs in the sandbox ([`WARDYN_MCP_LOCAL_SERVERS`](ENV.md#wardyn_mcp_local_servers)) delivers its secrets like any component. Its variable and file secrets enter the sandbox, and a header secret for one of its hosts is added at the proxy.
+- A remote MCP server's header secret is added by the broker and never enters the sandbox.
 - An organisation can refuse variable and file delivery by every component with `components.deny_resident_delivery` ([`internal/types/site_config.go#ComponentSettings`](../internal/types/site_config.go)).
 
 What Wardyn does for a delivered value:

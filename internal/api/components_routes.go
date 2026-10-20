@@ -107,6 +107,9 @@ func saveRefusal(w http.ResponseWriter, reason, msg string) {
 // A reserved name is the run gate's own rule (componentSecretReserved), whatever
 // the delivery: a row the gate would refuse to attach is not saved.
 func (s *Server) componentSaveRefusal(ctx context.Context, c types.Component) (reason, msg string) {
+	if problem := mcpLocalOffProblem(c.Definition); problem != "" {
+		return reasonComponentDefinitionInvalid, "invalid component: definition." + problem
+	}
 	if err := c.Validate(proxy.ValidDomainEntry); err != nil {
 		return reasonComponentDefinitionInvalid, "invalid component: " + err.Error()
 	}

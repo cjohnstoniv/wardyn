@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"regexp"
 	"slices"
@@ -205,6 +206,61 @@ func inheritedMCPHoldRefusal(req createRunRequest, spec types.RunPolicySpec, com
 		}
 	}
 	return nil
+}
+
+// localMCPRulesRefusal refuses a run whose rules hold or block a tool of a
+// local MCP server turned on for a harness that cannot apply them: Codex CLI
+// in any mode (it cannot pause a call, and Wardyn cannot block a tool whose
+// calls never leave the sandbox), or any harness a command starts (off the
+// gated lane, with no managed settings). The broker never sees a local
+// server's calls, so the rule would otherwise be dropped silently. A rule
+// names the server's tools by its prefix, or every tool by "*"; the person's
+// own rules and default for that harness count with the policy's. An allow is
+// what happens anyway, so it stands.
+func localMCPRulesRefusal(req createRunRequest, spec types.RunPolicySpec, comps runComponents) *runRefusal {
+	keys := mcpServerKeys(comps.attached)
+	for i, a := range comps.attached {
+		if !a.snapshot.Definition.LocalMCP() {
+			continue
+		}
+		for _, h := range a.snapshot.MCPHarnesses {
+			if h != codexHarness && req.TaskMode != "exec" {
+				continue
+			}
+			rules := slices.Clone(spec.ToolRules)
+			for _, t := range req.Tools {
+				if t.ID == h && t.Kind == client.IncludedToolHarness {
+					rules = append(rules, t.ToolRules...)
+					if t.DefaultEffect != "" {
+						rules = append(rules, types.ToolRule{Tool: "*", Effect: t.DefaultEffect})
+					}
+				}
+			}
+			if tool := mcpServerRestricted(rules, keys[i]); tool != "" {
+				name := h
+				if d, ok := harnessByID(h); ok {
+					name = d.Display
+				}
+				return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable, fmt.Sprintf(
+					"In this run %s can't apply the rule for %s to the MCP server %q, which runs in the sandbox where Wardyn's proxy never sees its calls. Remove the rule, or turn the server off for %s.",
+					name, tool, keys[i], name))
+			}
+		}
+	}
+	return nil
+}
+
+// mcpServerRestricted is the first rule's tool that holds or blocks a tool of
+// the MCP server key ("*" for a default), "" when none does.
+func mcpServerRestricted(rules []types.ToolRule, key string) string {
+	prefixes := proxy.MCPToolPrefixes(key)
+	for _, r := range rules {
+		if (r.Effect == types.ToolHold || r.Effect == types.ToolDeny) &&
+			(r.Tool == "*" || slices.ContainsFunc(prefixes, func(p string) bool { return strings.HasPrefix(r.Tool, p) })) {
+			return r.Tool
+		}
+	}
+	return ""
 }
 
 // policyHoldsMCPServer reports whether rules explicitly hold a tool of the MCP

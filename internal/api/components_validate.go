@@ -36,6 +36,9 @@ func componentSecretReserved(name string) bool {
 // reserved-name rule needs this package's tables.
 func componentDefinitionProblem(c attachedComponent) string {
 	def := c.snapshot.Definition
+	if problem := mcpLocalOffProblem(def); problem != "" {
+		return problem
+	}
 	if err := def.Validate(proxy.ValidDomainEntry, c.snapshot.SelfDefined); err != nil {
 		return err.Error()
 	}

@@ -101,3 +101,34 @@ func TestCodexAgentRun_MCPServersRenderedOnceAfterTables(t *testing.T) {
 		t.Fatalf("config.toml:\n%s", first)
 	}
 }
+
+// TestCodexAgentRun_MCPStdioTablesAfterBrokerTables: a run's servers that run
+// in the sandbox arrive as dispatch's own [mcp_servers.<key>] tables and are
+// added after the broker tables, each replaced (not duplicated) on a second
+// start, alone or beside remote servers.
+func TestCodexAgentRun_MCPStdioTablesAfterBrokerTables(t *testing.T) {
+	const stdio = "[mcp_servers.files]\ncommand = \"npx\"\nargs = [\"-y\",\"@example/mcp-files@1.4.2\"]\nenv_vars = [\"HTTPS_PROXY\",\"PATH\"]\n"
+	for name, env := range map[string][]string{
+		"alone":       {"WARDYN_MCP_STDIO_TOML=" + stdio},
+		"with remote": {"WARDYN_MCP_STDIO_TOML=" + stdio, `WARDYN_MCP_SERVERS_JSON={"linear":"http://wardyn-proxy:3128/wardyn/mcp/Ab-_9/linear"}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			home, binDir, codexLog := cxFakeCodex(t)
+			cfgPath := filepath.Join(home, ".codex", "config.toml")
+			cxWrite(t, cfgPath, "model = \"x\"\n\n[mcp_servers.files]\ncommand = \"stale\"\n")
+			cxRunTask(t, home, binDir, codexLog, env...)
+			first := ccRead(t, cfgPath)
+			cxRunTask(t, home, binDir, codexLog, env...)
+			if got := ccRead(t, cfgPath); got != first {
+				t.Fatalf("a second start changed config.toml:\n%s\n---\n%s", first, got)
+			}
+			if !strings.HasSuffix(first, stdio) || strings.Contains(first, "stale") || strings.Count(first, "[mcp_servers.files]") != 1 ||
+				!strings.HasPrefix(first, "model = \"x\"\n") {
+				t.Fatalf("config.toml:\n%s", first)
+			}
+			if remote := len(env) > 1; remote != strings.Contains(first, "[mcp_servers.linear]\nurl = ") {
+				t.Fatalf("broker table present %v, want %v:\n%s", !remote, remote, first)
+			}
+		})
+	}
+}

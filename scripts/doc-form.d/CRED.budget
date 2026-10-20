@@ -8,4 +8,5 @@
 # docs/CREDENTIALS.md 4000 adds 19 (0.10.0 SEC-1 round 2), measured: the placeholder fills only the Authorization header, and the response-echo caveat.
 # 0.10 MDL: docs/CREDENTIALS.md 3696 adds 12 over 3684, measured: #2957 local_model joins the token kinds row.
 # docs/CREDENTIALS.md 4012 = ours 4000 + theirs 3696 - base 3684 at the 0.10 W2 merge of MDL onto the train.
-docs/CREDENTIALS.md=3997 share=35
+# docs/CREDENTIALS.md 4050 adds 53 over 3997 (0.10 FEAT-1MCP), measured: where a local MCP server's secrets are delivered, and a remote one's.
+docs/CREDENTIALS.md=4050 share=35
