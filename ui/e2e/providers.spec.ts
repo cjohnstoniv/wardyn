@@ -91,6 +91,13 @@ async function saveProviders(page: Page): Promise<void> {
   // and baseline. An edit made in that gap is overwritten by the commit, so wait
   // for the unsaved marker to clear: draft and baseline are then the response.
   await expect(page.getByTestId("unsaved-marker")).toHaveCount(0);
+  // The toast slides in (0.4s) at the bottom right, where Save sits once scrolled
+  // to, and stays 8s. A click on Save while it slides can press Save and release
+  // on the toast: Playwright checks only the press, calls the click done, and Save
+  // never fires. Close it and wait for it to unmount, so nothing covers Save and
+  // the next save's toast is its own.
+  await page.getByRole("listitem").filter({ hasText: PROVIDERS.SAVED_TOAST }).getByRole("button", { name: "Close toast" }).click();
+  await expect(page.getByText(PROVIDERS.SAVED_TOAST)).toHaveCount(0);
 }
 
 // Reset the document to a known-empty state before the authoring walk, so
@@ -686,8 +693,8 @@ test.describe("providers — how people connect to Azure DevOps (#1428)", () => 
     // Turning the runner choice off takes the sandbox choice with it.
     await runner.click();
     await expect(sandbox).toBeDisabled();
-    await page.getByRole("button", { name: PROVIDERS.SAVE_CTA }).click();
-    await expect.poll(() => (sent!.git[0].entra as Record<string, unknown>).runner_resident).toBeFalsy();
+    await saveProviders(page);
+    expect((sent!.git[0].entra as Record<string, unknown>).runner_resident).toBeFalsy();
     expect((sent!.git[0].entra as Record<string, unknown>).runner_resident_sandbox).toBeFalsy();
 
     // A person-owned token row has neither choice.
