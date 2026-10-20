@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -1203,5 +1204,64 @@ func TestSetupNoServiceRefusesWhileAServiceIsInstalled(t *testing.T) {
 				t.Error("the refusal came after the registration")
 			}
 		})
+	}
+}
+
+// The service setup installs does not get the shell's proxy variables, so setup says so, by name and
+// never by value: a proxy URL may hold a credential.
+func TestSetupWarnsServiceMissesShellProxy(t *testing.T) {
+	const secret = "http://u:secret@p:3128"
+	for _, goos := range []string{"linux", "darwin"} {
+		t.Run(goos, func(t *testing.T) {
+			f := newSetupFixture(t, goos)
+			t.Setenv("HTTPS_PROXY", secret)
+			t.Setenv("all_proxy", secret)
+			out, err := f.run(setupOptions{tokenFile: f.tokenFile})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(out, "HTTPS_PROXY, all_proxy are set in this shell, but the service setup installs does not receive it") ||
+				!strings.Contains(out, "docs/runner-registration.md#a-runner-behind-a-corporate-proxy") {
+				t.Errorf("no proxy warning:\n%s", out)
+			}
+			if strings.Contains(out, "secret") || strings.Contains(out, "p:3128") {
+				t.Errorf("the warning prints a proxy value:\n%s", out)
+			}
+		})
+	}
+	t.Run("no proxy variable", func(t *testing.T) {
+		f := newSetupFixture(t, "linux")
+		for _, k := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"} {
+			t.Setenv(k, "")
+		}
+		if out, err := f.run(setupOptions{tokenFile: f.tokenFile}); err != nil || strings.Contains(out, "does not receive it") {
+			t.Fatalf("a shell without a proxy was warned: %v\n%s", err, out)
+		}
+	})
+}
+
+// The service-proxy warning names the variables only: a value with a user name and password, and the
+// proxy's host and port, appear nowhere in setup's output or log.
+func TestSetupProxyWarningPrintsNamesOnly(t *testing.T) {
+	var logs strings.Builder
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	f := newSetupFixture(t, "linux")
+	for _, k := range []string{"https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"} {
+		t.Setenv(k, "")
+	}
+	t.Setenv("HTTPS_PROXY", "http://u:p@proxy:3128")
+	out, err := f.run(setupOptions{tokenFile: f.tokenFile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "HTTPS_PROXY is set in this shell, but the service setup installs does not receive it") {
+		t.Errorf("no warning naming HTTPS_PROXY:\n%s", out)
+	}
+	for _, leak := range []string{"u:p", "proxy:3128"} {
+		if strings.Contains(out, leak) || strings.Contains(logs.String(), leak) {
+			t.Errorf("setup printed or logged %q:\nout:\n%s\nlog:\n%s", leak, out, logs.String())
+		}
 	}
 }

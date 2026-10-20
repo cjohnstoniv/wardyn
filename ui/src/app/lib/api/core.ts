@@ -635,8 +635,10 @@ export async function probeAuth(): Promise<AuthProbe> {
   return (await probeAuthWithReason()).probe;
 }
 
-/** probeAuth plus the reason a 401 named ("" when it named none, or the probe was not a 401). */
-export async function probeAuthWithReason(): Promise<{ probe: AuthProbe; reason: string }> {
+/** probeAuth plus the reason a 401 named ("" when it named none, or the probe was not a 401), and whether an
+ *  "unreachable" is worth asking again: a network error, a timeout, a 5xx or a 429. A 403 or another 4xx is
+ *  "unreachable" too but final, so a caller that retries must read `transient`, not `probe`. */
+export async function probeAuthWithReason(): Promise<{ probe: AuthProbe; reason: string; transient: boolean }> {
   try {
     const res = await wfetch(withLimit("/runs", 1), { method: "GET" });
     // wfetch has already thrown HttpError(401) for a real rejection, so a
@@ -648,10 +650,10 @@ export async function probeAuthWithReason(): Promise<{ probe: AuthProbe; reason:
     // drainBody). This one fires on EVERY cold document load, so an unread
     // body here would leak on every route and in every role.
     await drainBody(res);
-    return { probe: verdict, reason: "" };
+    return { probe: verdict, reason: "", transient: !res.ok && (res.status >= 500 || res.status === 429) };
   } catch (e) {
-    if (e instanceof HttpError && e.status === 401) return { probe: "unauthed", reason: e.reason };
-    return { probe: "unreachable", reason: "" };
+    if (e instanceof HttpError && e.status === 401) return { probe: "unauthed", reason: e.reason, transient: false };
+    return { probe: "unreachable", reason: "", transient: true };
   }
 }
 
