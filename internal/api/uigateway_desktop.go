@@ -313,6 +313,14 @@ func (s *Server) serveDesktopViewer(w http.ResponseWriter, r *http.Request, runI
 // the person and the run as uiDial does, and ending at the session's bound, at Close, when the run
 // stops, or when the person may no longer enter it.
 func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess uiSession) {
+	// The run's desktop rules, read once before the socket opens: rules that cannot be read refuse the
+	// stream, never relay it under the defaults (runDesktopPolicy, as the novnc relay does).
+	_, rules, err := s.runDesktopPolicy(r.Context(), sess.Run)
+	if err != nil {
+		slog.WarnContext(r.Context(), "wardynd: desktop rules unreadable; the desktop stream is refused", "run_id", sess.Run, "err", err)
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonDesktopRulesUnreadable, desktopRulesUnreadableMsg)
+		return
+	}
 	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{"binary"}})
 	if err != nil {
 		return // Accept answered the request
@@ -366,7 +374,7 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 	}()
 
 	conn := websocket.NetConn(r.Context(), ws, websocket.MessageBinary)
-	filtered := s.desktopClipboardFilter(ctx, sess, &wsFramed{raw: display, wsUnframer: wsUnframer{w: display}})
+	filtered := s.desktopClipboardFilter(ctx, sess, rules, &wsFramed{raw: display, wsUnframer: wsUnframer{w: display}})
 	defer func() { _ = filtered.Close() }()
 	done := make(chan struct{}, 2)
 	go func() { _, _ = io.Copy(wsFramer{filtered}, conn); done <- struct{}{} }()
@@ -431,8 +439,7 @@ func (s *Server) desktopRunCheck(ctx context.Context, sess uiSession) (types.Age
 // copy_out and paste_in rules and the same ui.clipboard.transfer rows (direction, size and hash, never the
 // text). QEMU's VNC has no clipboard peer in the guest (no qemu-vdagent, internal/vm/qemu/args.go),
 // so no cut text flows today; the filter holds the rules for when one does.
-func (s *Server) desktopClipboardFilter(ctx context.Context, sess uiSession, display io.ReadWriteCloser) *rfbfilter.Conn {
-	d := s.effectiveDesktop(ctx, sess.Run)
+func (s *Server) desktopClipboardFilter(ctx context.Context, sess uiSession, d types.DesktopControls, display io.ReadWriteCloser) *rfbfilter.Conn {
 	rules := rfbfilter.Rules{PasteIn: d.PasteIn == types.TransferAllowed, CopyOut: d.CopyOut == types.TransferAllowed}
 	filtered := rfbfilter.Wrap(display, rules, func(ev rfbfilter.Event) { s.auditUIClipboard(sess, ev) }, func(err error) {
 		slog.WarnContext(ctx, "wardynd: desktop relay closed a VM display it could not follow", "run_id", sess.Run, "err", err)

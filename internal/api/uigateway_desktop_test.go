@@ -658,6 +658,72 @@ func TestDesktopStreamClosedBeforeItIsTrackedEndsAtOnce(t *testing.T) {
 	}
 }
 
+// The VM desktop's stream reads the run's desktop rules as the novnc relay does: a read that fails,
+// or a run with no envelope, refuses the stream with 503 before the runner is dialled, never relays it
+// under the defaults. Once the read answers again, the stream opens.
+func TestDesktopStreamRefusesWhenTheRulesCannotBeRead(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		readErr    error
+		noEnvelope bool
+	}{
+		{"the read fails", errors.New("audit store unavailable"), false},
+		{"the run has no envelope", nil, true},
+	} {
+		h, dr := newDesktopHarness(t)
+		st := &desktopRulesStore{desktopClosedStore: h.srv.cfg.Store.(*desktopClosedStore)}
+		h.srv.cfg.Store = st
+		srv := httptest.NewServer(h.gateway)
+		c2 := desktopCookie(t, h.enterDesktop(h.ticket(h.run.ID, h.owner, oidc.RoleUser)))
+		st.set(c.readErr, c.noEnvelope)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_, resp, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http")+desktopPath(h, uiDesktopRFB),
+			&websocket.DialOptions{HTTPHeader: http.Header{"Cookie": {c2.Name + "=" + c2.Value}}})
+		if err == nil || resp == nil || resp.StatusCode != http.StatusServiceUnavailable {
+			t.Fatalf("%s: dial = %v %v, want a 503 refusal", c.name, resp, err)
+		}
+		if body, _ := io.ReadAll(resp.Body); !strings.Contains(string(body), reasonDesktopRulesUnreadable) {
+			t.Fatalf("%s: refusal = %s, want %s", c.name, body, reasonDesktopRulesUnreadable)
+		}
+		select {
+		case ref := <-dr.dialled:
+			t.Fatalf("%s: dialled %q with the rules unreadable", c.name, ref)
+		default:
+		}
+		st.set(nil, false)
+		if got := uiGet(h, desktopPath(h, uiDesktopRFB), c2); got.Code != http.StatusUpgradeRequired {
+			t.Fatalf("%s, recovered: plain GET = %d, want 426", c.name, got.Code)
+		}
+		cancel()
+		srv.Close()
+	}
+}
+
+// desktopRulesStore is the desktop harness's store with the run.policy.resolve read broken on demand:
+// readErr fails it, noEnvelope answers a log with no envelope in it.
+type desktopRulesStore struct {
+	*desktopClosedStore
+	rulesMu    sync.Mutex
+	readErr    error
+	noEnvelope bool
+}
+
+func (s *desktopRulesStore) set(readErr error, noEnvelope bool) {
+	s.rulesMu.Lock()
+	defer s.rulesMu.Unlock()
+	s.readErr, s.noEnvelope = readErr, noEnvelope
+}
+
+func (s *desktopRulesStore) QueryAuditEvents(ctx context.Context, runID uuid.UUID, limit int) ([]types.AuditEvent, error) {
+	s.rulesMu.Lock()
+	readErr, none := s.readErr, s.noEnvelope
+	s.rulesMu.Unlock()
+	if readErr != nil || none {
+		return nil, readErr
+	}
+	return s.desktopClosedStore.QueryAuditEvents(ctx, runID, limit)
+}
+
 // desktopClosedStore is the harness store with a shared Closed set, which every Server built on it
 // reads as replicas on one database do; fail makes its reads or its writes fail.
 type desktopClosedStore struct {
