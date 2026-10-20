@@ -427,18 +427,26 @@ func (s *Server) cancelRunApprovals(ctx context.Context, runID uuid.UUID) error 
 // and stayed decidable (an `always` approve replayed into the workspace
 // allowlist for a sandbox that is gone). One helper, three callers; the reason
 // is still read back from the run row, so the reaper passes nothing it could
-// get wrong.
-//
-// It is also the reaper's one call into this package after it wins
-// RUNNING->STOPPED, so the idle stop reaches the run's event feed and revokes
-// the run's Azure DevOps personal access tokens here.
+// get wrong. It is also the reaper's one call into this package after it wins
+// RUNNING->STOPPED, so the idle stop reaches the run's event feed; the run's
+// credentials are revoked by RevokeStoppedRun, which the reaper calls next.
 func (s *Server) CancelTerminalRunApprovals(ctx context.Context, runID uuid.UUID) {
-	// The reaper's CAS does not go through casRunState, so the idle stop is counted and frees its slot here.
+	s.cancelStoppedRun(ctx, runID, func() { s.runEvents.idleStopped(runID) })
+}
+
+// CancelMaxAgeStoppedRunApprovals is CancelTerminalRunApprovals for a stop at
+// WARDYN_RUN_MAX_AGE: the same cascade, but the feed ends with ended{STOPPED}
+// alone, since the run was stopped for its age, not for being idle.
+func (s *Server) CancelMaxAgeStoppedRunApprovals(ctx context.Context, runID uuid.UUID) {
+	s.cancelStoppedRun(ctx, runID, func() { s.runEvents.moved(runID, types.RunRunning, types.RunStopped) })
+}
+
+func (s *Server) cancelStoppedRun(ctx context.Context, runID uuid.UUID, emit func()) {
+	// The reaper's CAS does not go through casRunState, so the stop is counted and frees its slot here.
 	s.metrics.runTerminal(types.RunStopped)
 	s.kickQueue()
-	s.runEvents.idleStopped(runID)
+	emit()
 	s.cancelRunApprovals(ctx, runID)
-	s.revokeRunPATs(ctx, runID, adoPATRevokeRunEnd)
 }
 
 // terminalCancelReason is the reason string stamped on a cancelled approval and

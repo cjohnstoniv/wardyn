@@ -606,6 +606,10 @@ func TestPatchRunEnds_RechecksOwnerStillResolves(t *testing.T) {
 		st.caps = []types.CapabilityGrant{grant(types.CapabilitySubjectAll, "", capPolicy, id.String(), types.CapabilityDeny)}
 	}
 	profileGone := func(_ *endWaitFixture, st *profileStore) { st.profiles = nil }
+	placementDenied := func(_ *endWaitFixture, st *profileStore) {
+		st.run.Placement = types.PlacementLocal
+		st.profiles[0].Limits.DenyPlacements = []types.Placement{types.PlacementLocal}
+	}
 	for _, tc := range []struct {
 		name    string
 		as      func(*testing.T) *http.Cookie
@@ -620,6 +624,9 @@ func TestPatchRunEnds_RechecksOwnerStillResolves(t *testing.T) {
 		{"no end, agent denied", ownerSessionAs, noEnd, agentDenied, http.StatusForbidden, "capability_agent"},
 		{"extend, model provider denied", ownerSessionAs, week, providerDenied, http.StatusForbidden, "capability_model_provider"},
 		{"extend, policy denied", ownerSessionAs, week, policyDenied, http.StatusForbidden, "capability_policy"},
+		{"extend, placement denied", ownerSessionAs, week, placementDenied, http.StatusForbidden, "placement_denied"},
+		{"no end, placement denied", ownerSessionAs, noEnd, placementDenied, http.StatusForbidden, "placement_denied"},
+		{"shorten, placement denied", ownerSessionAs, soon, placementDenied, http.StatusOK, ""},
 		{"extend, still granted", ownerSessionAs, week, func(*endWaitFixture, *profileStore) {}, http.StatusOK, ""},
 		{"shorten, agent denied", ownerSessionAs, soon, agentDenied, http.StatusOK, ""},
 		{"shorten, model provider denied", ownerSessionAs, soon, providerDenied, http.StatusOK, ""},

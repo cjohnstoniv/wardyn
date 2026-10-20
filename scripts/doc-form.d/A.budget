@@ -220,7 +220,9 @@
 # docs/AUDIT-ACTIONS.md 49904 = ours 49718 + theirs 49557 - base 49371 at the 0.10 W3 merge of SEC-1c onto the train.
 # docs/AUDIT-ACTIONS.md 49675 adds 304 over 49371 (0.10 DSK-B), measured: the takeover.request/begin/close and recording.pause/resume rows, the takeover refusal reasons and the approval.expire takeover case.
 # docs/AUDIT-ACTIONS.md 50208 = ours 49904 + theirs 49675 - base 49371 at the 0.10 W4c merge of DSK-B 12054370b onto the train.
-docs/AUDIT-ACTIONS.md=50208 share=8
+# docs/AUDIT-ACTIONS.md 50001 adds 97 over 49904, measured (0.10 OC-API1b): the approval:stale decision-log row (worded to the re-check code: measured from the last answered re-check), plus the run.end.set and user_type.delete wording edits from round one.
+# docs/AUDIT-ACTIONS.md 50305 = ours 50208 + theirs 50001 - base 49904 at the 0.10 W4c merge of OC-API1b onto the train.
+docs/AUDIT-ACTIONS.md=50305 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.

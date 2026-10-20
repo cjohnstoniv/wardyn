@@ -197,7 +197,9 @@
 # docs/sdk.md 20128 = ours 20087 + theirs 19723 - base 19682 at the 0.10 W4c merge of DSK-B 12054370b onto the train.
 # docs/sdk.md 19694 adds 12 over 19682 (OC-CLEAN2): the git_pat_broker_off_resident row says an admin under WARDYN_GOVERN_ADMIN_RUNS is still refused on revive.
 # docs/sdk.md 20140 = ours 20128 + theirs 19694 - base 19682 at the 0.10 W4c merge of OC-CLEAN2 onto the train.
-docs/sdk.md=20140 share=21
+# docs/sdk.md 20070 adds 10 over 20060, measured (0.10 OC-API1b): a max-age stop ends the event stream with ended alone.
+# docs/sdk.md 20150 = ours 20140 + theirs 20070 - base 20060 at the 0.10 W4c merge of OC-API1b onto the train.
+docs/sdk.md=20150 share=21
 # docs/sdk.md 18691 adds 28 over 18663, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.

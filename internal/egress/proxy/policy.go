@@ -33,6 +33,8 @@ import (
 	"strconv"
 	"strings"
 
+	"golang.org/x/net/http/httpguts"
+
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/egress/domainmatch"
 	"github.com/cjohnstoniv/wardyn/internal/ipguard"
@@ -228,6 +230,20 @@ func NewBuiltinEvaluator(spec types.RunPolicySpec) egress.Evaluator {
 // identically at compile time and at lookup so "host:443" collides correctly.
 func hostPortKey(host string, port int) string {
 	return host + ":" + strconv.Itoa(port)
+}
+
+// ValidMethodEntry reports whether m, as the policy compiler reads an allowed_methods entry (trimmed, then
+// upper-cased), is a method a request line can carry: an RFC 9110 token. A token that is no standard verb
+// is still legal (an extension method), so this checks syntax, never a list of verbs.
+func ValidMethodEntry(m string) error {
+	m = strings.TrimSpace(m)
+	if m == "" {
+		return fmt.Errorf("must not be blank")
+	}
+	if !httpguts.ValidHeaderFieldName(m) {
+		return fmt.Errorf("%q is not an HTTP method token, so no request can match it", m)
+	}
+	return nil
 }
 
 // ValidDomainEntry reports whether d is an allowlist/denylist entry the matcher

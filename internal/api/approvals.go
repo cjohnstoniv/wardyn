@@ -222,23 +222,12 @@ const approvalRunEndedBody = "the run ended before anyone decided this; the appr
 // into the workspace allowlist (approvals_reconcile.go) on behalf of a
 // sandbox that is gone, which is exactly the widening CANCELLED exists to
 // stop. So CAS-cancel it here and answer 409, rather than a question whose
-// asker no longer exists. It costs at most two reads, and only on the paths
-// that had not already loaded the rows (the member gate loads both; an
-// explicit scope loads the approval); the rows it loads are handed back so
-// the caller never reads them twice. ok=false means the response is written, and the last
-// return names why (not_found or run_ended) for the break-glass failure row.
+// asker no longer exists. decide has loaded the approval by here; the run is read
+// only when the member gate had not. false means the response is written.
 func (s *Server) refuseIfRunEnded(
-	w http.ResponseWriter, r *http.Request, id uuid.UUID,
-	ap types.ApprovalRequest, run types.AgentRun, haveAP, haveRun bool,
-) (types.ApprovalRequest, types.AgentRun, bool, bool, bool, string) {
-	if !haveAP {
-		var err error
-		if ap, err = s.cfg.Approvals.Get(r.Context(), id); err != nil {
-			writeErrorReason(w, http.StatusNotFound, reasonApprovalNotFound, "approval not found")
-			return ap, run, haveAP, haveRun, false, "not_found"
-		}
-		haveAP = true
-	}
+	w http.ResponseWriter, r *http.Request,
+	ap types.ApprovalRequest, run types.AgentRun, haveRun bool,
+) bool {
 	if !haveRun && ap.RunID != uuid.Nil && s.cfg.Store != nil {
 		if got, gerr := s.cfg.Store.GetRun(r.Context(), ap.RunID); gerr == nil {
 			run, haveRun = got, true
@@ -250,9 +239,9 @@ func (s *Server) refuseIfRunEnded(
 	if haveRun && isTerminalRunState(run.State) && (ap.State == "" || ap.State == types.ApprovalPending || ap.State == types.ApprovalCancelled) {
 		s.cancelRunApprovals(r.Context(), ap.RunID)
 		writeErrorReason(w, http.StatusConflict, reasonApprovalRunEnded, approvalRunEndedBody)
-		return ap, run, haveAP, haveRun, false, "run_ended"
+		return false
 	}
-	return ap, run, haveAP, haveRun, true, ""
+	return true
 }
 
 // recordBypassFailure writes the break-glass failure row when the admin token spent the four-eyes
@@ -457,13 +446,10 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	// Defence in depth: the run may have ENDED while this approval sat in
 	// the queue (refuseIfRunEnded). Placed with the other pre-Decide() rules, and
 	// for their reason: PENDING -> decided is one-way.
-	// The run row it loads is only consulted for the terminal check itself;
-	// nothing below reads it, so only the approval is taken back.
-	var refusal string
-	if ap, _, haveAP, _, ok, refusal = s.refuseIfRunEnded(w, r, id, ap, run, haveAP, haveRun); !ok {
+	if !s.refuseIfRunEnded(w, r, ap, run, haveRun) {
 		// The admin token got past the four-eyes gate above before this refusal, so the break-glass
 		// leaves its failure row here as it does when Decide fails (docs/ENV.md: every bypass writes one).
-		s.recordBypassFailure(r, id, ap, haveAP, bypassSwitch, refusal)
+		s.recordBypassFailure(r, id, ap, haveAP, bypassSwitch, "run_ended")
 		return
 	}
 

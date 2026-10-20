@@ -329,6 +329,13 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 				SecurityContext:          restrictedSecurityContext(),
 				Resources:                proxyResources(len(spec.ProxyConfig.AzureGates) > 0),
 				TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
+				// The proxy binds its listener only after its startup resolve has succeeded, so a
+				// connect to it is that proof: without a probe the container is Ready as soon as it
+				// runs, and waitPodIP can return before a failing resolve exits it.
+				ReadinessProbe: &corev1.Probe{
+					ProbeHandler:  corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(runner.ProxyListenPort)}},
+					PeriodSeconds: 1,
+				},
 			}},
 			Volumes: []corev1.Volume{
 				{

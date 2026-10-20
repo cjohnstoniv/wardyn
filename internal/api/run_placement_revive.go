@@ -112,17 +112,23 @@ func (s *Server) reviveCeilingAdmitting(ctx context.Context, run types.AgentRun,
 // revivePlacementDenied refuses a revive of a run whose placement the owner's profile now denies, with
 // the create doors' reason and sentence: a profile changed after create stops the run's next revive.
 func (s *Server) revivePlacementDenied(ctx context.Context, run types.AgentRun, c ownerCeiling, actorType types.ActorType, actor string) *reviveError {
-	p := run.Placement
-	if remotePlacement(p) {
-		p = types.PlacementRemote
-	}
-	// A managed-harness sign-in (a server-set task no request can name) is exempt, as at create.
-	if run.Task == harnessLoginTask || !slices.Contains(c.denyPlacements, p) {
+	p, denied := deniedRunPlacement(run, c.denyPlacements)
+	if !denied {
 		return nil
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "denied",
 		mustJSON(map[string]any{"subject": run.CreatedBy, "reason": placement.ReasonPlacementDenied})))
 	return reviveRefused(placement.ReasonPlacementDenied.Status(), string(placement.ReasonPlacementDenied), placementDeniedMsg(p, c.profile))
+}
+
+// deniedRunPlacement is the run's placement and whether deny (a profile's deny_placements) bars it. A
+// managed-harness sign-in (a server-set task no request can name) is exempt, as at create.
+func deniedRunPlacement(run types.AgentRun, deny []types.Placement) (types.Placement, bool) {
+	p := run.Placement
+	if remotePlacement(p) {
+		p = types.PlacementRemote
+	}
+	return p, run.Task != harnessLoginTask && slices.Contains(deny, p)
 }
 
 // ownerCeiling is the part of the owner's profile a revive re-asserts: its

@@ -19,13 +19,15 @@ import (
 const userTypeCols = `id, name, description, priority, built_in, created_at, updated_at, created_by`
 
 // userTypeRowRefs counts the rows naming user type $1 (capability grants,
-// governance assignments, drive grants, service identities not retired); shared
+// governance assignments, drive grants, launch presets offered to it, service
+// identities not retired); shared
 // by UserTypeReferences and DeleteUserType so the 409 count and the delete
 // predicate cannot disagree.
 const userTypeRowRefs = `(
 	(SELECT count(*) FROM capability_grants      WHERE subject_type = 'user_type' AND subject = $1) +
 	(SELECT count(*) FROM governance_assignments WHERE subject_type = 'user_type' AND subject = $1) +
 	(SELECT count(*) FROM user_drive_grants      WHERE subject_type = 'user_type' AND subject = $1) +
+	(SELECT count(*) FROM launch_presets         WHERE $1 = ANY(user_types)) +
 	(SELECT count(*) FROM service_identities     WHERE user_type = $1 AND retired_at IS NULL))`
 
 // userTypeRowRefsExist is userTypeRowRefs' boolean twin: CreateUserType uses
@@ -34,6 +36,7 @@ const userTypeRowRefsExist = `(
 	EXISTS (SELECT 1 FROM capability_grants      WHERE subject_type = 'user_type' AND subject = $1) OR
 	EXISTS (SELECT 1 FROM governance_assignments WHERE subject_type = 'user_type' AND subject = $1) OR
 	EXISTS (SELECT 1 FROM user_drive_grants      WHERE subject_type = 'user_type' AND subject = $1) OR
+	EXISTS (SELECT 1 FROM launch_presets         WHERE $1 = ANY(user_types)) OR
 	EXISTS (SELECT 1 FROM service_identities     WHERE user_type = $1 AND retired_at IS NULL))`
 
 // userTypeWriteLock serialises the writes that name or remove user type $1 without a foreign key:
@@ -67,9 +70,9 @@ func GetUserTypeQ(ctx context.Context, q Querier, id string, forUpdate bool) (ty
 	return scanUserType(q.QueryRow(ctx, `SELECT `+userTypeCols+` FROM user_types WHERE id = $1`+lockSuffix(forUpdate), id))
 }
 
-// ErrUserTypeIDReferenced is CreateUserType's refusal when a grant, assignment, drive grant or live service
-// identity still names the id (an orphan of a deleted type, or the live type's own references). It wraps
-// ErrConflict, so a caller that only tests for a conflict is unchanged.
+// ErrUserTypeIDReferenced is CreateUserType's refusal when a grant, assignment, drive grant,
+// launch preset or live service identity still names the id (an orphan of a deleted type, or
+// the live type's own references). It wraps ErrConflict, so a caller that only tests for a conflict is unchanged.
 var ErrUserTypeIDReferenced = fmt.Errorf("%w: a grant, assignment or service identity still names this user type id", ErrConflict)
 
 // CreateUserType inserts a custom type (built_in is never set here).

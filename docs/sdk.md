@@ -217,7 +217,7 @@ log or secret content:
 | `provisioning` | the sandbox is being created (PENDING -> STARTING) | |
 | `pulling` | the substrate reported an image pull (at most once) | |
 | `ready` | the sandbox is up (STARTING -> RUNNING) | |
-| `idle_stopped` | the idle reaper stopped the run | |
+| `idle_stopped` | the idle reaper stopped the run (a stop at `WARDYN_RUN_MAX_AGE` ends the stream with `ended` alone) | |
 | `failed` | the run failed | `reason`: `not_started`, `start_failed` or `run_failed` (the phase it failed in) |
 | `ended` | always last; the stream then closes | `state`: the terminal run state |
 

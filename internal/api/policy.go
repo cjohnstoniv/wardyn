@@ -795,12 +795,12 @@ func validateGrantLaneExclusivity(grants []types.GrantSpec) error {
 	return nil
 }
 
-// validateAllowedMethods refuses a blank entry: it reads as a method restriction
-// and names no method, so the list would be stored and enforce nothing.
+// validateAllowedMethods refuses an entry that is no HTTP method token (a blank one, or "GET /"): it
+// reads as a method restriction and names no method any request carries, so it would be stored and match nothing.
 func validateAllowedMethods(methods []string) error {
 	for i, m := range methods {
-		if strings.TrimSpace(m) == "" {
-			return fmt.Errorf("allowed_methods[%d]: must not be blank", i)
+		if err := proxy.ValidMethodEntry(m); err != nil {
+			return fmt.Errorf("allowed_methods[%d]: %w", i, err)
 		}
 	}
 	return nil
