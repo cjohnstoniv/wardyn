@@ -249,6 +249,22 @@ describe("Test probes — real states, never a fake pass, running disables+relab
     expect(screen.getByText("Not tested")).toBeInTheDocument();
   });
 
+  it("a failed re-test keeps the held verdict on the panel, so it agrees with the gate (#2575)", async () => {
+    testProxyMock.mockRejectedValueOnce(new Error("503 restarting"));
+    const onGateChange = vi.fn();
+    renderStep({
+      gate: { ...unsetGate(), proxyProbe: { state: "reached", detail: T.TEST_OK } },
+      onGateChange,
+    });
+    expect(screen.getByText("Reached · via proxy")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /^test again$/i }));
+
+    await screen.findByRole("button", { name: /^test again$/i });
+    expect(screen.getByText("Reached · via proxy")).toBeInTheDocument();
+    expect(screen.queryByText("Not tested")).not.toBeInTheDocument();
+    expect(onGateChange).not.toHaveBeenCalledWith(expect.objectContaining({ proxyProbe: undefined }));
+  });
+
   it("redirect row Test: disables + relabels to 'Testing…' while running — the mock left this always-on; both buttons must match", async () => {
     let resolve!: (v: { state: string; detail: string }) => void;
     testRedirectMock.mockReturnValue(new Promise((r) => (resolve = r)));

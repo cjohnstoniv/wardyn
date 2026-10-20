@@ -161,9 +161,10 @@ export function CorpNetworkStep({
         onGateChange({ probeRunning: false });
         return;
       }
-      // Anything else: report the request failure as itself and stay untested.
+      // Anything else: report the request failure as itself and keep what the gate still holds, so
+      // the panel and the gate agree.
       toast.error("Could not run the proxy test", { description: getErrorMessage(e) });
-      setTest({ kind: "idle" });
+      setTest(before);
       onGateChange({ probeRunning: false });
     }
   };
