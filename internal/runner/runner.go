@@ -105,7 +105,7 @@ type SandboxSpec struct {
 	// reason CHANGES. Called SYNCHRONOUSLY on CreateSandbox's own goroutine
 	// (must not block). Call NotifyWaiting, never the field.
 	OnWaiting func(detail string) `json:"-"`
-	// Interactive marks a run that comes up idle for `wardyn run attach`; a
+	// Interactive marks a run that comes up idle for `wardyn attach`; a
 	// driver prepares the workspace on the idle main process for it.
 	Interactive bool
 	// DesktopSignins mounts the person's sign-in store (SigninStorePath): a

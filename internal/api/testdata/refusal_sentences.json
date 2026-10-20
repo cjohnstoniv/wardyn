@@ -111,6 +111,11 @@
   },
   {
     "reason": "capKinds[capFeature].reason",
+    "target": "\"cli.sessions.refresh\"",
+    "sentence": "apiTokenFeatureRefusal"
+  },
+  {
+    "reason": "capKinds[capFeature].reason",
     "target": "\"me.runners.tokens\"",
     "sentence": "runnerSelfHostRefusal"
   },

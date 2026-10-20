@@ -73,6 +73,8 @@ var kernelDoors = map[string][]string{
 	// Minting a personal credential.
 	"handleAddSSHKey": {"capFeature"},
 	"mintGuards":      {"capFeature"}, // both mint doors: POST /me/tokens and an invitation claim
+	// A CLI session's refresh re-asks the api_token feature on every rotation.
+	"cliSessionCutsPass": {"capFeature"},
 	// Self-hosting: POST /me/runners/tokens asks the self_host_runner value.
 	"handleRunnerTokenSelf": {"capFeature"},
 	// A sponsor entering a service identity's run: service_attach, asked with the operator step off (F6).

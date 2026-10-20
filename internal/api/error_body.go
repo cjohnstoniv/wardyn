@@ -27,6 +27,9 @@ type errorBody struct {
 	// Field names the request field a 400 is ABOUT (a dotted path into the body, e.g. azure.endpoint),
 	// so the console can put the sentence under that field. Present only on a refusal that names one.
 	Field string `json:"field,omitempty"`
+	// Detail narrows a reason that covers several causes (attach_local_unavailable: flag_off,
+	// not_your_runner, runner_too_old, runner_offline). Present only on such a reason.
+	Detail string `json:"detail,omitempty"`
 	// Policy (deny-f2) names the policy whose ceiling refused the request and how
 	// to ask for a change. Present only on a ceiling refusal that carries one.
 	Policy *policyref.Ref `json:"policy,omitempty"`

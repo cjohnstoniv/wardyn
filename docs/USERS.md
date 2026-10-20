@@ -301,6 +301,7 @@ resolves your drive the same way, in a dry run too:
   endpoint's answer when it has nothing scoped to show you, not an error.
 - The action vocabulary is [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md).
 - If a run used an organisation component's shared secret, the audit rows and the grant list you read for your own run leave out that secret's name. Administrators and security administrators read the rows as recorded.
+- An admin may replay your runs' session recordings. Each replay writes a `recording.read` row to that run's audit, so you see it here.
 - If your laptop is one your organisation enrolled into a remote control plane,
   this same audit trail is also forwarded upward into the organisation's own table.
 - This is automatic, admin-configured, and nothing you do here changes it.

@@ -18,6 +18,8 @@
     InternalNetwork   flag internal-network     Docker bridge for proxy sidecars (default wardyn-internal)
     TrustedCAFile     flag trusted-ca-file      PEM bundle of extra roots; the file must exist on the Mac
                                              (deliver it with a separate MDM file payload)
+    OrgCAFile         flag org-ca-file          PEM file of extra roots for runnerd's own connection to the organisation only,
+                                             never a run's proxy or sandbox; root-owned, not writable by group or others
     RecordingStore    flag recording-store      pg, fs or off (default pg)
     DockerHost        DOCKER_HOST            the engine's socket, when it is not the default
 
@@ -51,6 +53,8 @@
       <key>InternalNetwork</key>
       <string></string>
       <key>TrustedCAFile</key>
+      <string></string>
+      <key>OrgCAFile</key>
       <string></string>
       <key>RecordingStore</key>
       <string></string>

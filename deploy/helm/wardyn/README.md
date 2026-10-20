@@ -806,7 +806,7 @@ extraObjects:
 - The `networkPolicy.ingress.from` peer list also applies to the console `http` rule, so the gateway namespace can reach the console port too; a `podSelector` for the gateway pods on that peer narrows it.
 - `-verify_hostname %h` is what checks the certificate names the host (`-servername` only sends SNI); add `-CAfile <path>` when the listener's certificate is not publicly trusted.
 - Port 443 is written out because `%p` is the advertised SSH port.
-- Host keys are unaffected, audit source IPs become the gateway's, and the browser terminal and `wardyn run attach` need none of this.
+- Host keys are unaffected, audit source IPs become the gateway's, and the browser terminal and `wardyn attach` need none of this.
 - The full recipe, with the reasons, is in [docs/SSH.md, "SSH on a 443-only estate"](../../../docs/SSH.md#ssh-on-a-443-only-estate).
 
 ## Scraping `/metrics` through the NetworkPolicy
