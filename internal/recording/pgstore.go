@@ -302,14 +302,16 @@ func (s *PGStore) SaveCast(ctx context.Context, runID string, r io.Reader) error
 	// Written in castWriteChunk pieces in one transaction: pgx copies a bytea parameter twice more
 	// while sending it, so a whole 64 MiB payload in one statement peaked at three copies of it,
 	// and a chunk's copies are a fraction. A reader still sees the old row or the whole new one.
+	tail := data[max(len(data)-castTailKept, 0):]
 	return s.runTx(ctx, runID, false, func(tx pgx.Tx) error {
 		first := data[:min(len(data), castWriteChunk)]
 		_, err := tx.Exec(ctx, `
-		INSERT INTO recordings (cast_key, payload)
-		VALUES ($1, $2)
+		INSERT INTO recordings (cast_key, payload, size_bytes, tail, stat_updated_at)
+		VALUES ($1, $2, $3, $4, now())
 		ON CONFLICT (cast_key) DO UPDATE
-			SET payload = EXCLUDED.payload, updated_at = now()`,
-			runID, first,
+			SET payload = EXCLUDED.payload, size_bytes = EXCLUDED.size_bytes, tail = EXCLUDED.tail,
+			    stat_updated_at = now(), updated_at = now()`,
+			runID, first, len(data), tail,
 		)
 		if err != nil {
 			return fmt.Errorf("recording: save cast %q: %w", runID, err)
@@ -345,9 +347,15 @@ func (s *PGStore) OpenCast(ctx context.Context, key string) (io.ReadCloser, erro
 	return io.NopCloser(bytes.NewReader(payload)), nil
 }
 
+// castTailKept is how many of a cast's last bytes SaveCast stores beside it, so StatAndTail reads a
+// tail up to this long without detoasting the payload; a longer tail is computed from the payload.
+const castTailKept = 8 << 10
+
 // StatAndTail reports the cast's byte size and its last tailBytes, computed and sliced
 // server-side so a caller wanting only a size and duration never pulls the whole payload
-// across the wire. tailBytes is clamped to size when the cast is smaller.
+// across the wire. tailBytes is clamped to size when the cast is smaller. A row whose stored
+// size and tail were not written with its current payload (stat_updated_at differs from updated_at:
+// a binary from before those columns saved it) is read from its payload.
 func (s *PGStore) StatAndTail(ctx context.Context, key string, tailBytes int64) (int64, []byte, error) {
 	if err := validKey(key); err != nil {
 		return 0, nil, err
@@ -356,10 +364,14 @@ func (s *PGStore) StatAndTail(ctx context.Context, key string, tailBytes int64) 
 	var tail []byte
 	err := s.runTx(ctx, key, false, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `
-		SELECT octet_length(payload),
-		       substring(payload from greatest(octet_length(payload) - $2::int + 1, 1)::int for $2::int)
-		FROM recordings WHERE cast_key = $1`,
-			key, tailBytes,
+		SELECT CASE WHEN fresh THEN size_bytes ELSE octet_length(payload) END,
+		       CASE WHEN fresh AND ($2::int <= $3::int OR size_bytes <= $3::int)
+		            THEN substring(tail from greatest(octet_length(tail) - $2::int + 1, 1)::int for $2::int)
+		            ELSE substring(payload from greatest(octet_length(payload) - $2::int + 1, 1)::int for $2::int)
+		       END
+		FROM (SELECT payload, size_bytes, tail, stat_updated_at = updated_at AS fresh
+		      FROM recordings WHERE cast_key = $1) r`,
+			key, tailBytes, castTailKept,
 		).Scan(&size, &tail)
 	})
 	if errors.Is(err, pgx.ErrNoRows) {

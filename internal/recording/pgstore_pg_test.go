@@ -207,6 +207,72 @@ func TestPGStore_ChunkedWriteRoundTrips(t *testing.T) {
 	}
 }
 
+// StatAndTail answers from the size and tail stored with the payload when they are current, and from the
+// payload when they are not (a row never backfilled, or saved by a binary that does not write them).
+func TestPGStore_StatAndTailUsesStoredStats(t *testing.T) {
+	pool := pgPool(t)
+	s := recording.NewPGStore(pool)
+	ctx := context.Background()
+
+	check := func(runID string, body []byte, tailBytes int64) {
+		t.Helper()
+		size, tail, err := s.StatAndTail(ctx, runID, tailBytes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := body[max(len(body)-int(tailBytes), 0):]
+		if size != int64(len(body)) || !bytes.Equal(tail, want) {
+			t.Errorf("%d bytes, tail %d: got (%d, %d bytes), want (%d, %d bytes)", len(body), tailBytes, size, len(tail), len(body), len(want))
+		}
+	}
+	for _, n := range []int{0, 1, 100, 8192, 8193, 20000} {
+		body := make([]byte, n)
+		for i := range body {
+			body[i] = byte(i * 13)
+		}
+		runID := "stats-" + uuid.NewString()
+		if err := s.SaveCast(ctx, runID, bytes.NewReader(body)); err != nil {
+			t.Fatal(err)
+		}
+		for _, tailBytes := range []int64{1, 6, 8192, 8193, 100000} {
+			check(runID, body, tailBytes)
+		}
+	}
+
+	runID := "stats-" + uuid.NewString()
+	if err := s.SaveCast(ctx, runID, strings.NewReader("0123456789")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE recordings SET size_bytes = 99, tail = 'stored' WHERE cast_key = $1`, runID); err != nil {
+		t.Fatal(err)
+	}
+	if size, tail, err := s.StatAndTail(ctx, runID, 4); err != nil || size != 99 || string(tail) != "ored" {
+		t.Fatalf("current stats: StatAndTail = (%d, %q, %v), want the stored (99, %q)", size, tail, err, "ored")
+	}
+	// A save by a binary from before the columns moves updated_at and leaves the stats behind.
+	if _, err := pool.Exec(ctx, `UPDATE recordings SET payload = '0123456789abcdef', updated_at = now() WHERE cast_key = $1`, runID); err != nil {
+		t.Fatal(err)
+	}
+	check(runID, []byte("0123456789abcdef"), 4)
+	// The migration's backfill makes the stored stats current again.
+	mig, err := os.ReadFile("../db/migrations/0205_recordings_size_tail.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE recordings SET stat_updated_at = NULL WHERE cast_key = $1`, runID); err != nil {
+		t.Fatal(err)
+	}
+	check(runID, []byte("0123456789abcdef"), 4)
+	if _, err := pool.Exec(ctx, string(mig)); err != nil {
+		t.Fatal(err)
+	}
+	var size int64
+	if err := pool.QueryRow(ctx, `SELECT size_bytes FROM recordings WHERE cast_key = $1`, runID).Scan(&size); err != nil || size != 16 {
+		t.Fatalf("backfilled size_bytes = %d, %v; want 16", size, err)
+	}
+	check(runID, []byte("0123456789abcdef"), 4)
+}
+
 // DeleteRun is what a person's erasure reaches recordings through: the run's
 // casts go on every replica, another run's stay, and a repeat is harmless.
 func TestPGStoreDeleteRun(t *testing.T) {
