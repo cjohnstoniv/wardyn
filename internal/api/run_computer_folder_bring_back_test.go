@@ -58,11 +58,16 @@ type agentSandbox struct {
 	stops     int
 	agentDown bool
 	wrote     bool
+	// onPID1 runs at the read of PID 1, the bring-back's last check before its compare-and-set.
+	onPID1 func()
 }
 
 func (r *agentSandbox) ExecStream(ctx context.Context, ref string, spec runner.ExecSpec) (*runner.ExecSession, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.onPID1 != nil && len(spec.Argv) == 2 && spec.Argv[1] == "/proc/1/cmdline" {
+		r.onPID1()
+	}
 	if sess, ok := agentExec(spec, r.pid1, func() (string, int) {
 		r.stops++
 		if r.stopFails {
@@ -341,6 +346,19 @@ func TestBringComputerFolderBack_SaysWhetherTheSandboxWasRemoved(t *testing.T) {
 
 // A kill (or any other end) and a bring-back both move the run from RUNNING: exactly one wins.
 func TestBringComputerFolderBack_HasOneWinnerAgainstAKill(t *testing.T) {
+	// The kill lands after every check the bring-back makes, just before its compare-and-set.
+	s, cs, _, run, sb, app := bringBackFixture(t)
+	sb.onPID1 = func() {
+		if ok, err := s.casRunState(context.Background(), run.ID, types.RunRunning, types.RunKilled); !ok || err != nil {
+			t.Errorf("the kill did not land: %v %v", ok, err)
+		}
+	}
+	if res := bringBack(t, s, bringBackOwnerSession(t), run); res.code != http.StatusConflict || res.reason() != reasonComputerFolderNotRunning {
+		t.Fatalf("bring-back after a kill = %d %s, want 409 %s", res.code, res.body, reasonComputerFolderNotRunning)
+	}
+	if b, _ := os.ReadFile(filepath.Join(app, "README.md")); cs.State() != types.RunKilled || sb.stops != 0 || string(b) != "hello" {
+		t.Fatalf("state %s, %d agent stops, README.md %q: the losing bring-back still acted", cs.State(), sb.stops, b)
+	}
 	for i := range 10 {
 		s, cs, _, run, _, _ := bringBackFixture(t)
 		start := make(chan struct{})
