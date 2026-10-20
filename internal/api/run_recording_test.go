@@ -10,8 +10,10 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -85,9 +87,29 @@ func TestRecordingRequired_AnUnreadableSettingIsRequired(t *testing.T) {
 		if tc.pooled {
 			run.RunnerPoolID = &poolID
 		}
-		pool, required := s.recordingRequired(context.Background(), run)
+		pool, required, readErr := s.recordingRequired(context.Background(), run)
 		if required != tc.want || pool != tc.wantPool {
 			t.Errorf("%s: recordingRequired = (%q, %v), want (%q, %v)", tc.name, pool, required, tc.wantPool, tc.want)
 		}
+		if wantRead := tc.fake.orgErr != nil || tc.fake.poolErr != nil && !errors.Is(tc.fake.poolErr, store.ErrNotFound); (readErr != nil) != wantRead {
+			t.Errorf("%s: readErr = %v, want an error exactly when a setting could not be read (%v)", tc.name, readErr, wantRead)
+		}
+	}
+}
+
+// TestRecordingHold_NamesAnUnreadableSetting: a run held because the setting could not be read says
+// so and keeps the reason the setting would have given; a run held by a known setting keeps its sentence.
+func TestRecordingHold_NamesAnUnreadableSetting(t *testing.T) {
+	boom := errors.New("connection reset")
+	reason, msg := recordingHold(false, "ci", boom)
+	if reason != placement.ReasonRunnerRecordingOff || msg != runnerpool.RecordingSettingUnreadableMsg() {
+		t.Errorf("unreadable: = (%s, %q), want runner_recording_off with the could-not-read sentence", reason, msg)
+	}
+	if reason, _ := recordingHold(true, "", boom); reason != placement.ReasonRecordingStoreOff {
+		t.Errorf("unreadable, store off: reason = %s, want recording_store_off", reason)
+	}
+	reason, msg = recordingHold(false, "ci", nil)
+	if reason != placement.ReasonRunnerRecordingOff || msg != runnerpool.RunnerRecordingOffMsg("ci") {
+		t.Errorf("known setting: = (%s, %q), want the pool's sentence", reason, msg)
 	}
 }
