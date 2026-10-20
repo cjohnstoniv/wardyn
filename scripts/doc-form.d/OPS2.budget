@@ -75,8 +75,8 @@ docs/operations/console-branding.md=943 share=35
 # 0.9.6 DIAG: docs/operations/hybrid-laptops.md 4721 adds 12 over 4709, measured: the pointer to a runner behind a corporate proxy.
 # docs/operations/hybrid-laptops.md 5246 = ours 5234 + theirs 4721 - base 4709 at the 0.9.6 forward-port.
 # docs/operations/hybrid-laptops.md 5254 measured at the 0.10 W4a merge of origin/main (0.9.6 forward-port): the larger side, theirs 5246, fails by 8 (ours 5242 has the ATT-SRV words).
-docs/operations/hybrid-laptops.md=5313 share=35
+docs/operations/hybrid-laptops.md=5309 share=35
 # docs/operations/hybrid-laptops.md 4024 adds 2 over 4022, measured: the control-plane restart row says the next restart kills an agent kept only for containment.
 # docs/operations/hybrid-laptops.md 4195 = 3926 + 269, measured: the reset section and the recording default.
 # docs/operations/hybrid-laptops.md 4380 = 4195 + 185, measured: how audit decisions reach the organisation (the decision sink), less the removed state-directory check.
-# docs/operations/hybrid-laptops.md 5313 adds 59 over 5254, measured (0.10 HYB-F): wardyn folder bring-back and the kill line.
+# docs/operations/hybrid-laptops.md 5309 adds 55 over 5254, measured (0.10 HYB-F): wardyn folder bring-back and the kill line.

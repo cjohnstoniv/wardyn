@@ -263,8 +263,8 @@ What happens:
 - One side edits at a time. The sandbox edits while the run is live. With **Both ways**, its changes come back when the
   run ends, before the sandbox is stopped. A file changed on both sides keeps your computer's copy, and nothing on
   your computer is deleted. With **Copy in only**, nothing comes back.
-- `wardyn folder bring-back <run>` ends a **Both ways** run early, its changes brought back first. Only you can do
-  it, and not while the agent is still working.
+- `wardyn folder bring-back <run>` ends a **Both ways** run early: the agent is stopped, then its changes come
+  back. Only you can do it.
 - A kill is containment: it ends the run without bringing the folder back. To keep the sandbox's changes, use Bring
   back (or `wardyn folder bring-back <run>`) before you end the run.
 - The copy follows the `wardyn sync` rules: `.git` stays on your computer, `.gitignore` and `.wardynignore` apply,

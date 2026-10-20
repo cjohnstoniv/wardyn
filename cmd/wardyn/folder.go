@@ -23,17 +23,19 @@ import (
 // folderCopy is every line `wardyn folder` prints, in one table.
 var folderCopy = struct {
 	short, bringBackUse, bringBackShort, bringBackLong string
-	progress, broughtBack, deleted, leftOut, notBack   string
+	progress, broughtBack, deleted, notDeleted         string
+	leftOut, notBack                                   string
 }{
 	short:          "A folder from your computer on a run",
 	bringBackUse:   "bring-back <run-id>",
 	bringBackShort: "End a run and bring its folder back to your computer first",
 	bringBackLong: "End a live run whose folder came from your computer (Both ways), bringing the sandbox's changes back first, " +
 		"under the wardyn sync --pull rules: a file changed on both sides keeps your computer's copy, and nothing on your computer is deleted. " +
-		"Only the run's own person can do it. It is refused while the agent is still working. A kill does not bring the folder back.",
+		"Only the run's own person can do it, and the agent is stopped first. A kill does not bring the folder back.",
 	progress:    "Bringing changes back…\n",
 	broughtBack: "Last changes synced back at %s. %d files came back to you.\n",
 	deleted:     "The sandbox copy was deleted when the run ended.\n",
+	notDeleted:  "The sandbox copy could not be deleted yet. Wardyn tries again when it restarts.\n",
 	leftOut:     "left out: %s (%s)\n",
 	notBack:     "the run is stopped, but its folder did not come back: %s",
 }
@@ -76,7 +78,8 @@ func folderCmd(client clientFn) *cobra.Command {
 				return sdk.NewAPIError(resp.StatusCode, body)
 			}
 			var out struct {
-				Back *struct {
+				SandboxRemoved bool `json:"sandbox_removed"`
+				Back           *struct {
 					At      time.Time `json:"at"`
 					Files   int       `json:"files"`
 					Bytes   int64     `json:"bytes"`
@@ -100,6 +103,11 @@ func folderCmd(client clientFn) *cobra.Command {
 				return fmt.Errorf(folderCopy.notBack, out.Back.Error)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), folderCopy.broughtBack, out.Back.At.Local().Format("15:04"), out.Back.Files)
+			// The folder came back either way; a teardown that failed is said, not hidden.
+			if !out.SandboxRemoved {
+				fmt.Fprint(cmd.ErrOrStderr(), folderCopy.notDeleted)
+				return nil
+			}
 			fmt.Fprint(cmd.OutOrStdout(), folderCopy.deleted)
 			return nil
 		},

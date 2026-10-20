@@ -20,6 +20,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -74,17 +75,14 @@ func TestPG_ComputerFolder_BrowseListAndRunPage(t *testing.T) {
 	}
 }
 
-// pgSampledRunner is fakeRunner with a quiet CPU reading for every sandbox.
-type pgSampledRunner struct{ *fakeRunner }
+// pgAgentRunner is fakeRunner whose sandboxes run the Docker task idle, with an agent that stops.
+type pgAgentRunner struct{ *fakeRunner }
 
-func (pgSampledRunner) BatchSample() bool { return true }
-
-func (pgSampledRunner) SampleCPU(_ context.Context, refs []string) (map[string]float64, error) {
-	out := map[string]float64{}
-	for _, ref := range refs {
-		out[ref] = 1
+func (r pgAgentRunner) ExecStream(ctx context.Context, ref string, spec runner.ExecSpec) (*runner.ExecSession, error) {
+	if sess, ok := agentExec(spec, taskIdlePID1, func() (string, int) { return agentStoppedMark + "\n", 0 }); ok {
+		return sess, nil
 	}
-	return out, nil
+	return r.fakeRunner.ExecStream(ctx, ref, spec)
 }
 
 // A kill and a bring-back race on Postgres: exactly one moves the run from RUNNING.
@@ -99,11 +97,11 @@ func TestPG_ComputerFolder_BringBackAndKillHaveOneWinner(t *testing.T) {
 	e.srv.runnerStreams.subs = map[uuid.UUID]runnerEndpoint{id: folderRunnerEndpoint(t, id, true, home)}
 	e.srv.cfg.RunnerOnline = func(r uuid.UUID) bool { return r == id }
 	e.srv.cfg.ComputerFolders = true
-	e.srv.cfg.Runner = pgSampledRunner{&fakeRunner{}}
+	e.srv.cfg.Runner = pgAgentRunner{&fakeRunner{}}
 
 	for i := range 10 {
 		run := e.boundRun(func(r *types.AgentRun) {
-			r.State, r.SandboxRef, r.CreatedAt = types.RunRunning, "sbx-"+r.ID.String(), time.Now().Add(-time.Hour)
+			r.State, r.SandboxRef = types.RunRunning, "sbx-"+r.ID.String()
 			r.LocalFolder = &types.RunLocalFolder{Name: "my-app", RemoteDir: "/home/agent/work", RunnerID: &id, Path: app, Direction: types.ComputerFolderBoth}
 		})
 		if ok, err := e.pg.SetRunLocalFolderSeed(ctx, run, ""); !ok || err != nil {

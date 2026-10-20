@@ -6,6 +6,8 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -17,35 +19,96 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// sampledFolderSandbox is folderSandboxRunner with a CPU reading: nil is no reading.
-type sampledFolderSandbox struct {
-	*folderSandboxRunner
-	mu  sync.Mutex
-	cpu *float64
+// agentExec answers the two execs a bring-back runs before its pass: the read of PID 1's command
+// line, and the stop. It is false for any other exec.
+func agentExec(spec runner.ExecSpec, pid1 string, stop func() (string, int)) (*runner.ExecSession, bool) {
+	var out string
+	code := 0
+	switch {
+	case len(spec.Argv) == 2 && spec.Argv[0] == "cat" && spec.Argv[1] == "/proc/1/cmdline":
+		out = pid1
+	case len(spec.Argv) == 3 && spec.Argv[0] == "sh" && spec.Argv[2] == agentStopScript:
+		out, code = stop()
+	default:
+		return nil, false
+	}
+	return &runner.ExecSession{
+		Stdin: nopWriteCloser{io.Discard}, Stdout: strings.NewReader(out), Stderr: strings.NewReader(""),
+		Wait: func() (int, error) { return code, nil }, Close: func() error { return nil },
+	}, true
 }
 
-func (r *sampledFolderSandbox) BatchSample() bool { return true }
+// taskIdlePID1 is /proc/1/cmdline in a Docker task run's sandbox.
+var taskIdlePID1 = "sh\x00-c\x00" + runner.AgentIdleScript + "\x00"
 
-func (r *sampledFolderSandbox) SampleCPU(_ context.Context, refs []string) (map[string]float64, error) {
+// agentSandbox is folderSandboxRunner with an agent in it. The agent writes late.txt when the
+// pass starts unless it was stopped first, as a writer asleep at the request would. stopFails
+// leaves a process the stop cannot end; stopErr fails the sandbox's teardown.
+type agentSandbox struct {
+	*folderSandboxRunner
+	t         *testing.T
+	mu        sync.Mutex
+	pid1      string
+	stopFails bool
+	stopErr   error
+	stops     int
+	agentDown bool
+	wrote     bool
+}
+
+func (r *agentSandbox) ExecStream(ctx context.Context, ref string, spec runner.ExecSpec) (*runner.ExecSession, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	out := map[string]float64{}
-	if r.cpu != nil {
-		for _, ref := range refs {
-			out[ref] = *r.cpu
+	if sess, ok := agentExec(spec, r.pid1, func() (string, int) {
+		r.stops++
+		if r.stopFails {
+			return "left: 42\n", 3
+		}
+		r.agentDown = true
+		return agentStoppedMark + "\n", 0
+	}); ok {
+		return sess, nil
+	}
+	if !r.agentDown && !r.wrote {
+		r.wrote = true
+		f, err := r.client(r.t).Create("/home/agent/work/late.txt")
+		if err != nil {
+			r.t.Error(err)
+		} else {
+			_, _ = f.Write([]byte("written after the request"))
+			_ = f.Close()
 		}
 	}
-	return out, nil
+	return r.folderSandboxRunner.ExecStream(ctx, ref, spec)
+}
+
+func (r *agentSandbox) StopSandbox(ctx context.Context, ref string) error {
+	if r.stopErr != nil {
+		return r.stopErr
+	}
+	return r.folderSandboxRunner.StopSandbox(ctx, ref)
+}
+
+// refStore is computerFolderStore keeping the sandbox ref the tail clears, so a test can tell a
+// confirmed teardown.
+type refStore struct{ *computerFolderStore }
+
+func (s refStore) SetSandboxRef(_ context.Context, _ uuid.UUID, ref string) error {
+	s.dispatchTestStore.mu.Lock()
+	defer s.dispatchTestStore.mu.Unlock()
+	s.run.SandboxRef = ref
+	return nil
 }
 
 const bringBackOwner = "sub-bring-back-owner"
 
-// bringBackFixture is a live "both ways" run whose folder seeded, quiet for an hour, its agent
-// idle, with the sandbox's README.md edited by the agent. It answers SSO sessions.
-func bringBackFixture(t *testing.T) (*Server, *computerFolderStore, *recRecorder, types.AgentRun, *sampledFolderSandbox, string) {
+// bringBackFixture is a live "both ways" run whose folder seeded, in a Docker task sandbox, with
+// the sandbox's README.md edited by the agent. It answers SSO sessions.
+func bringBackFixture(t *testing.T) (*Server, *computerFolderStore, *recRecorder, types.AgentRun, *agentSandbox, string) {
 	t.Helper()
 	s, cs, audit, run, sb, app := computerFolderFixture(t, types.ComputerFolderBoth)
 	if !s.holdForLocalFolder(context.Background(), run, "sbx") {
@@ -56,10 +119,10 @@ func bringBackFixture(t *testing.T) (*Server, *computerFolderStore, *recRecorder
 	run = cs.run
 	cs.dispatchTestStore.mu.Unlock()
 	run.State = types.RunRunning
-	sampled := &sampledFolderSandbox{folderSandboxRunner: sb, cpu: pct(1)}
+	agent := &agentSandbox{folderSandboxRunner: sb, t: t, pid1: taskIdlePID1}
 	// SSO sessions are wired when the server is built, so build it again with them.
 	cfg := s.cfg
-	cfg.Runner, cfg.OIDC = sampled, &oidc.Authenticator{}
+	cfg.Runner, cfg.Store, cfg.OIDC = agent, refStore{cs}, &oidc.Authenticator{}
 	subs := s.runnerStreams.subs
 	s = New(cfg)
 	s.runnerStreams.subs = subs
@@ -70,7 +133,7 @@ func bringBackFixture(t *testing.T) (*Server, *computerFolderStore, *recRecorder
 	_, _ = f.Write([]byte("edited by the agent"))
 	_ = f.Close()
 	_ = sb.client(t).Chtimes("/home/agent/work/README.md", time.Now(), time.Now().Add(time.Hour))
-	return s, cs, audit, run, sampled, app
+	return s, cs, audit, run, agent, app
 }
 
 func bringBack(t *testing.T, s *Server, cookie *http.Cookie, run types.AgentRun) *bringBackResult {
@@ -106,6 +169,9 @@ func TestBringComputerFolderBack_EndsTheRunAfterItsChangesComeBack(t *testing.T)
 	}
 	if !backBeforeStop {
 		t.Fatal("the sandbox was stopped before its changes came back")
+	}
+	if sb.stops != 1 || res.json["sandbox_removed"] != true {
+		t.Errorf("%d agent stops, sandbox_removed %v: want the agent stopped once and the sandbox gone", sb.stops, res.json["sandbox_removed"])
 	}
 	if cs.State() != types.RunStopped {
 		t.Errorf("state = %s, want STOPPED", cs.State())
@@ -151,26 +217,23 @@ func TestBringComputerFolderBack_OnlyTheRunsOwnPerson(t *testing.T) {
 
 func TestBringComputerFolderBack_Refusals(t *testing.T) {
 	for name, tc := range map[string]struct {
-		set    func(*Server, *computerFolderStore, *sampledFolderSandbox)
+		set    func(*Server, *computerFolderStore, *agentSandbox)
 		status int
 		reason string
 	}{
-		"switch off": {func(s *Server, _ *computerFolderStore, _ *sampledFolderSandbox) { s.cfg.ComputerFolders = false }, http.StatusForbidden, reasonComputerFoldersOff},
-		"killed":     {func(_ *Server, cs *computerFolderStore, _ *sampledFolderSandbox) { cs.state = types.RunKilled }, http.StatusConflict, reasonComputerFolderNotRunning},
-		"copy in only": {func(_ *Server, cs *computerFolderStore, _ *sampledFolderSandbox) {
+		"switch off": {func(s *Server, _ *computerFolderStore, _ *agentSandbox) { s.cfg.ComputerFolders = false }, http.StatusForbidden, reasonComputerFoldersOff},
+		"killed":     {func(_ *Server, cs *computerFolderStore, _ *agentSandbox) { cs.state = types.RunKilled }, http.StatusConflict, reasonComputerFolderNotRunning},
+		"copy in only": {func(_ *Server, cs *computerFolderStore, _ *agentSandbox) {
 			cs.folder.Direction = types.ComputerFolderIn
 		}, http.StatusConflict, reasonComputerFolderCopyInOnly},
-		"no computer folder": {func(_ *Server, cs *computerFolderStore, _ *sampledFolderSandbox) { cs.folder.RunnerID = nil }, http.StatusConflict, reasonComputerFolderNone},
-		"never synced":       {func(_ *Server, cs *computerFolderStore, _ *sampledFolderSandbox) { cs.seed.SeededAt = nil }, http.StatusConflict, reasonComputerFolderNotSynced},
-		"runner offline": {func(s *Server, _ *computerFolderStore, _ *sampledFolderSandbox) {
+		"no computer folder": {func(_ *Server, cs *computerFolderStore, _ *agentSandbox) { cs.folder.RunnerID = nil }, http.StatusConflict, reasonComputerFolderNone},
+		"never synced":       {func(_ *Server, cs *computerFolderStore, _ *agentSandbox) { cs.seed.SeededAt = nil }, http.StatusConflict, reasonComputerFolderNotSynced},
+		"runner offline": {func(s *Server, _ *computerFolderStore, _ *agentSandbox) {
 			s.cfg.RunnerOnline = func(uuid.UUID) bool { return false }
 		}, http.StatusConflict, reasonComputerRunnerOffline},
-		"a person typed a minute ago": {func(_ *Server, cs *computerFolderStore, _ *sampledFolderSandbox) {
-			at := time.Now().Add(-time.Minute)
-			cs.run.ActiveAt = &at
-		}, http.StatusConflict, reasonComputerFolderAgentActive},
-		"the agent's CPU is busy": {func(_ *Server, _ *computerFolderStore, sb *sampledFolderSandbox) { sb.cpu = pct(80) }, http.StatusConflict, reasonComputerFolderAgentActive},
-		"no CPU reading":          {func(_ *Server, _ *computerFolderStore, sb *sampledFolderSandbox) { sb.cpu = nil }, http.StatusConflict, reasonComputerFolderAgentActive},
+		"PID 1 is the agent": {func(_ *Server, _ *computerFolderStore, sb *agentSandbox) {
+			sb.pid1 = "claude\x00-p\x00fix the build\x00"
+		}, http.StatusConflict, reasonComputerFolderAgentUnstoppable},
 	} {
 		t.Run(name, func(t *testing.T) {
 			s, cs, audit, run, sb, app := bringBackFixture(t)
@@ -188,8 +251,8 @@ func TestBringComputerFolderBack_Refusals(t *testing.T) {
 			}[tc.reason]; want != "" && res.json["error"] != want {
 				t.Errorf("refusal = %q, want %q", res.json["error"], want)
 			}
-			if cs.State() != before || stops != 0 || cs.status.Back != nil {
-				t.Errorf("a refused bring-back changed the run: state %s, %d stops, back %+v", cs.State(), stops, cs.status.Back)
+			if cs.State() != before || stops != 0 || sb.stops != 0 || cs.status.Back != nil {
+				t.Errorf("a refused bring-back changed the run: state %s, %d sandbox stops, %d agent stops, back %+v", cs.State(), stops, sb.stops, cs.status.Back)
 			}
 			if b, _ := os.ReadFile(filepath.Join(app, "README.md")); string(b) != "hello" {
 				t.Errorf("a refused bring-back wrote onto the computer: %q", b)
@@ -198,6 +261,80 @@ func TestBringComputerFolderBack_Refusals(t *testing.T) {
 				t.Error("a refused bring-back is audited as done")
 			}
 		})
+	}
+}
+
+// A writer asleep when the person asks (sleep 300 && echo x > f) wakes during the pass unless the
+// agent is stopped first: what it writes after the request never comes back.
+func TestBringComputerFolderBack_AWriteAfterTheRequestDoesNotComeBack(t *testing.T) {
+	s, _, _, run, sb, app := bringBackFixture(t)
+	if res := bringBack(t, s, bringBackOwnerSession(t), run); res.code != http.StatusOK {
+		t.Fatalf("bring-back = %d %s", res.code, res.body)
+	}
+	if _, err := os.Stat(filepath.Join(app, "late.txt")); err == nil || sb.wrote {
+		t.Fatal("a write the agent made after the request came back")
+	}
+	if b, _ := os.ReadFile(filepath.Join(app, "README.md")); string(b) != "edited by the agent" {
+		t.Errorf("README.md = %q: the changes made before the request did not come back", b)
+	}
+}
+
+// A paused run is refused, not resumed: resuming it would wake its agent before it could be stopped.
+func TestBringComputerFolderBack_APausedRunIsNotResumed(t *testing.T) {
+	s, cs, _, run, sb, app := bringBackFixture(t)
+	at := time.Now().Add(-time.Hour)
+	cs.dispatchTestStore.mu.Lock()
+	cs.run.PausedAt = &at
+	cs.dispatchTestStore.mu.Unlock()
+	res := bringBack(t, s, bringBackOwnerSession(t), run)
+	if res.code != http.StatusConflict || res.reason() != reasonComputerFolderPaused || res.json["error"] != bringBackPausedMsg {
+		t.Fatalf("bring-back = %d %s, want 409 %s", res.code, res.body, reasonComputerFolderPaused)
+	}
+	got, _ := cs.GetRun(context.Background(), run.ID)
+	if got.State != types.RunRunning || got.PausedAt == nil || sb.stops != 0 || sb.wrote {
+		t.Errorf("state %s, paused %v, %d agent stops, agent wrote %v: want the run left paused and untouched", got.State, got.PausedAt != nil, sb.stops, sb.wrote)
+	}
+	if _, err := os.Stat(filepath.Join(app, "late.txt")); err == nil {
+		t.Error("a paused run's write came back")
+	}
+}
+
+// When the agent cannot be confirmed stopped, nothing is copied. The run has already ended, since
+// one compare-and-set from RUNNING decided it, so the answer records the failed pass.
+func TestBringComputerFolderBack_AStopThatFailsCopiesNothing(t *testing.T) {
+	s, cs, audit, run, sb, app := bringBackFixture(t)
+	sb.stopFails = true
+	res := bringBack(t, s, bringBackOwnerSession(t), run)
+	if res.code != http.StatusOK {
+		t.Fatalf("bring-back = %d %s", res.code, res.body)
+	}
+	if back, _ := res.json["back"].(map[string]any); back == nil || back["error"] != bringBackAgentRunningMsg {
+		t.Errorf("the answer's pass = %v, want the stop's error", res.json["back"])
+	}
+	if b, _ := os.ReadFile(filepath.Join(app, "README.md")); string(b) != "hello" {
+		t.Errorf("README.md = %q: a pass ran with the agent still running", b)
+	}
+	if sb.stops != 1 || cs.State() != types.RunStopped {
+		t.Errorf("%d agent stops, state %s: want one stop and the run STOPPED", sb.stops, cs.State())
+	}
+	if ev := findAuditData(audit.snapshot(), run.ID, "run.folder.transfer", `"direction":"bring_back"`); ev == nil || ev.Outcome != "failure" {
+		t.Errorf("the failed pass is not audited as one: %+v", ev)
+	}
+}
+
+// The folder can come back while the sandbox's teardown after it fails: the answer says which.
+func TestBringComputerFolderBack_SaysWhetherTheSandboxWasRemoved(t *testing.T) {
+	for _, stopErr := range []error{nil, errors.New("daemon unreachable")} {
+		s, _, _, run, sb, _ := bringBackFixture(t)
+		sb.stopErr = stopErr
+		res := bringBack(t, s, bringBackOwnerSession(t), run)
+		back, _ := res.json["back"].(map[string]any)
+		if res.code != http.StatusOK || back == nil || back["error"] != nil || back["files"] != float64(1) {
+			t.Fatalf("teardown error %v: bring-back = %d %s, want the folder back", stopErr, res.code, res.body)
+		}
+		if got := res.json["sandbox_removed"]; got != (stopErr == nil) {
+			t.Errorf("teardown error %v: sandbox_removed = %v", stopErr, got)
+		}
 	}
 }
 

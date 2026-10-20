@@ -204,6 +204,17 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 		return
 	}
 	run.SandboxRef = ref
+	if _, ok := bringBackBy(ctx); ok {
+		// The person ended the run to bring the folder back: nothing may write during the pass.
+		if err := s.stopAgentForPass(ctx, ref); err != nil {
+			slog.WarnContext(ctx, "wardynd: stop the agent before a bring-back", slog.String("run_id", runID.String()), slog.Any("err", err))
+			s.recordComputerFolderPass(ctx, runID, func(st *types.RunLocalFolderStatus) {
+				st.Back = folderPassRecord(s.cfg.Now(), runnerwire.FolderPass{}, bringBackAgentRunningMsg, true)
+			})
+			s.auditComputerFolderPass(ctx, runID, *folder, true, runnerwire.FolderPass{}, bringBackAgentRunningMsg)
+			return
+		}
+	}
 	res, errText := s.computerFolderPassWithin(ctx, computerFolderBackTimeout, run, *folder, true)
 	s.recordComputerFolderPass(ctx, runID, func(st *types.RunLocalFolderStatus) { st.Back = folderPassRecord(s.cfg.Now(), res, errText, true) })
 	s.auditComputerFolderPass(ctx, runID, *folder, true, res, errText)
