@@ -27,7 +27,9 @@ const goSource = (file: string) => readFileSync(join(root, file), "utf8");
 describe("scheduled-run refusals", () => {
   it("the reasons are the Go constants of internal/api/reasons.go", () => {
     const go = goSource("internal/api/reasons.go");
-    const goReasons = [...go.matchAll(/reason(?:ScheduledRuns\w+|StartAt\w+)\s+=\s*"([a-z_]+)"/g)].map((m) => m[1]);
+    const block = /One-time scheduled runs \(run_schedule\.go\)[\s\S]*?\n\n/.exec(go)?.[0] ?? "";
+    const goReasons = [...block.matchAll(/=\s*"([a-z_]+)"/g)].map((m) => m[1]);
+    expect(goReasons.length).toBe(5);
     expect(new Set(SCHEDULE_REASONS)).toEqual(new Set(goReasons));
   });
 
