@@ -424,7 +424,7 @@ that ceiling down; each run receives only the minimal subset its task needs.
 | Delivery policy by runner | A security operator's trust class picks the per-class delivery mode; `via_org` is never trust-gated | #90 |
 | Laptop proxy → runnerd (decisions) | TLS pinned to runnerd's key; a key per proxy; runnerd the spool's only writer, sharing no directory with the proxy | #77 |
 | Link down | No new run; cached policy and a bounded, fail-closed spool until the lapse | #77 |
-| CLI ↔ runnerd (local attach, `WARDYN_ATTACH_LOCAL`, off by default) [0.10] | The organisation admits it exactly as a relay attach (same ticket, same checks), then grants it only for the ticket's owner, on that owner's own person runner, over the runner's stream; it keeps the writer lease, the recording and the audit rows, and every ender resets `pty_tee` | #94 |
+| CLI ↔ runnerd (local attach, `WARDYN_ATTACH_LOCAL`, off by default) [0.10] | The organisation admits it exactly as a relay attach (same ticket, same checks), then grants it only for the ticket's owner, on that owner's own person runner, over the runner's stream; it keeps the writer lease, the recording and the audit rows, and every ender resets `pty_tee` | #95 |
 | A corporate root for the runner's own connection | `--org-ca-file` is trusted for that connection and registration only, never a sandbox mount or run proxy; a uid-and-mode hygiene rule for the trust store adds no reach | #70 |
 
 - B1–B11 are unchanged for a run placed `remote`.
@@ -2825,12 +2825,6 @@ hiding them would repeat the failure mode we are designed to avoid.
     - The proxy listens on all of its interfaces and also joins the shared `wardyn-internal` network to reach wardynd, whose members are Wardyn's own containers.
     - With `WARDYN_DOCKER_PROXY_SANDBOX_PEERS_ONLY` on, the driver writes the run's own network subnet into the proxy config (`allowed_peers`) and the proxy closes any connection from outside it before reading a byte. How the proxy is addressed does not change.
     - The switch is off by default in 0.10 until proven on Docker and Podman; with it off the proxy serves every caller as before.
-94. **A terminal attached on the runner's own computer is held by runnerd, and its recording is runnerd's copy [0.10; off by default].** ([`internal/api/attach_local.go`](../internal/api/attach_local.go).)
-    - With `WARDYN_ATTACH_LOCAL` on, a person's `wardyn run attach` on their own runner keeps the terminal bytes on that computer. The organisation admits it exactly as a relay attach and grants it only on that person's own person runner: never break-glass, a sponsor or an organisation's runner.
-    - Read-only enforcement moves to runnerd: it drops an observer's input and resizes. The organisation pushes every change of write authority, the lease fence included, and ends the session when runnerd does not acknowledge it in 2 s. Anyone sharing that tmux session is the same person or already on that host's Docker (#69).
-    - This departs from "recordings record the attach exactly as they do today" in one respect: the cast, masker, key, head cap and audit rows are the same, but the bytes recorded are runnerd's copy, not bytes the organisation forwarded. Both are `runner_asserted` (#73), and the developer already has unrecorded `docker exec` on that host (#69). Rows carry `transport` `local` and `runner_id`.
-    - The copy reaches the organisation at most 64 KiB or 2 s ahead of its acknowledgement, which is sent once the recorder accepts the bytes; so up to that much output can be shown before the organisation holds it. A stalled acknowledgement ends the session (`attach_tee_stalled`).
-
 94. **A folder-only runner trusts wardynd for every folder call, and its default root is the person's home [0.10, off by default].** ([`internal/runner/folders/folders.go`](../internal/runner/folders/folders.go), [`internal/api/run_computer_folder.go`](../internal/api/run_computer_folder.go).)
     - `wardyn-runnerd serve --substrate folders` answers every `list_folders` and `sync_folder` call that arrives on its own outbound session. It cannot tell which run or person a call is for, so it does not check either.
     - The only check that a run may use a folder is wardynd's: the runner must be claimed by the run's creator (`run.CreatedBy` equals the runner's owner), not an organisation runner, online and sharing folders. That check runs at browse, at create, and again before each pass (`folderRunner`). With `WARDYN_COMPUTER_FOLDERS` off, wardynd makes no folder call.
@@ -2843,6 +2837,12 @@ hiding them would repeat the failure mode we are designed to avoid.
       - A pull deletes nothing, writes no exec bit, stays under the chosen folder (`os.Root`), keeps the computer's copy of a file changed on both sides, and is bounded in bytes.
       - The runner opens no port.
     - **Residual:** a compromised wardynd, or a fault in its owner check, can list any folder under the roots and send its contents, credential folders aside, into a sandbox. With a pull, it can also write files into that folder, overwriting any file not changed on the computer since the last pass. Narrow the roots, or do not run the folder-only runner.
+
+95. **A terminal attached on the runner's own computer is held by runnerd, and its recording is runnerd's copy [0.10; off by default].** ([`internal/api/attach_local.go`](../internal/api/attach_local.go).)
+    - With `WARDYN_ATTACH_LOCAL` on, a person's `wardyn run attach` on their own runner keeps the terminal bytes on that computer. The organisation admits it exactly as a relay attach and grants it only on that person's own person runner: never break-glass, a sponsor or an organisation's runner.
+    - Read-only enforcement moves to runnerd: it drops an observer's input and resizes. The organisation pushes every change of write authority, the lease fence included, and ends the session when runnerd does not acknowledge it in 2 s. Anyone sharing that tmux session is the same person or already on that host's Docker (#69).
+    - This departs from "recordings record the attach exactly as they do today" in one respect: the cast, masker, key, head cap and audit rows are the same, but the bytes recorded are runnerd's copy, not bytes the organisation forwarded. Both are `runner_asserted` (#73), and the developer already has unrecorded `docker exec` on that host (#69). Rows carry `transport` `local` and `runner_id`.
+    - The copy reaches the organisation at most 64 KiB or 2 s ahead of its acknowledgement, which is sent once the recorder accepts the bytes; so up to that much output can be shown before the organisation holds it. A stalled acknowledgement ends the session (`attach_tee_stalled`).
 
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
 
