@@ -9,16 +9,19 @@ import (
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -88,10 +91,10 @@ func TestReadOrgCARefusesAnotherAccountsFile(t *testing.T) {
 	if !ok || owner == 0 {
 		t.Skip("needs a platform that names the owner, and a test that does not run as root")
 	}
-	if _, _, err := readOrgCA(path, owner+1, time.Now()); err == nil || !strings.Contains(err.Error(), "owned by another account") {
+	if _, _, err := readOrgCA(path, owner+1, time.Now(), func(string) {}); err == nil || !strings.Contains(err.Error(), "owned by another account") {
 		t.Errorf("a file owned by uid %d read as uid %d: %v; want a refusal", owner, owner+1, err)
 	}
-	if _, _, err := readOrgCA(path, owner, time.Now()); err != nil {
+	if _, _, err := readOrgCA(path, owner, time.Now(), func(string) {}); err != nil {
 		t.Errorf("a file owned by its reader: %v", err)
 	}
 }
@@ -344,5 +347,142 @@ func TestLoadOrgCARefusesAFileReachedThroughASymlinkToAWritableDirectory(t *test
 	}
 	if _, _, err := loadOrgCA(link); err == nil || !strings.Contains(err.Error(), "the directory "+shared) {
 		t.Errorf("err=%v; want a refusal naming the directory %s the file is really in", err, shared)
+	}
+}
+
+// anchorFileCase is one row of testdata/anchor-file-cases.json, the file rule shared with the other loader
+// of CA anchors: owners are named "self", "root" or "other" and set through the owner seam, so none needs
+// the test to run as root.
+type anchorFileCase struct {
+	Name           string   `json:"name"`
+	FileMode       string   `json:"file_mode"`
+	FileOwner      string   `json:"file_owner"`
+	DirMode        string   `json:"dir_mode"`
+	DirSticky      bool     `json:"dir_sticky"`
+	DirOwner       string   `json:"dir_owner"`
+	ViaLinkDirMode string   `json:"via_link_dir_mode"`
+	Certs          []string `json:"certs"`
+	Expect         string   `json:"expect"`
+	Warnings       int      `json:"warnings"`
+}
+
+func anchorCert(t *testing.T, kind string) (pemText string, fingerprint string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tpl := &x509.Certificate{SerialNumber: big.NewInt(time.Now().UnixNano()), Subject: pkix.Name{CommonName: kind}, NotBefore: time.Now().Add(-48 * time.Hour),
+		NotAfter: time.Now().Add(time.Hour), IsCA: kind != "not_ca", BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign}
+	switch kind {
+	case "expired":
+		tpl.NotAfter = time.Now().Add(-time.Hour)
+	case "not_yet_valid":
+		tpl.NotBefore = time.Now().Add(24 * time.Hour)
+		tpl.NotAfter = time.Now().Add(48 * time.Hour)
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tpl, tpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), fmt.Sprintf("%x", sha256.Sum256(der))
+}
+
+func TestLoadOrgCAFileRule(t *testing.T) {
+	raw, err := os.ReadFile("testdata/anchor-file-cases.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cases []anchorFileCase
+	if err := json.Unmarshal(raw, &cases); err != nil {
+		t.Fatal(err)
+	}
+	mode := func(s string, sticky bool) os.FileMode {
+		m, err := strconv.ParseUint(s, 8, 32)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if sticky {
+			return os.FileMode(m) | os.ModeSticky
+		}
+		return os.FileMode(m)
+	}
+	for _, c := range cases {
+		t.Run(c.Name, func(t *testing.T) {
+			root := t.TempDir()
+			dir := filepath.Join(root, "data")
+			if err := os.Mkdir(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			var pems, skippedFPs, usable []string
+			for _, kind := range c.Certs {
+				text, fp := anchorCert(t, kind)
+				pems = append(pems, text)
+				if kind == "valid" {
+					usable = append(usable, fp)
+				} else {
+					skippedFPs = append(skippedFPs, fp)
+				}
+			}
+			file := writeFile(t, filepath.Join(dir, "ca.pem"), strings.Join(pems, ""))
+			if err := os.Chmod(file, mode(c.FileMode, false)); err != nil {
+				t.Fatal(err)
+			}
+			path := file
+			if c.ViaLinkDirMode != "" {
+				linkDir := filepath.Join(root, "link")
+				if err := os.Mkdir(linkDir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				path = filepath.Join(linkDir, "ca.pem")
+				if err := os.Symlink(file, path); err != nil {
+					t.Skip(err)
+				}
+				if err := os.Chmod(linkDir, mode(c.ViaLinkDirMode, false)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Chmod(dir, mode(c.DirMode, c.DirSticky)); err != nil {
+				t.Fatal(err)
+			}
+			uid := func(who string) int {
+				switch who {
+				case "root":
+					return 0
+				case "other":
+					return os.Geteuid() + 1
+				}
+				return os.Geteuid()
+			}
+			fileInfo, dirInfo := mustStat(t, file), mustStat(t, dir)
+			prev := orgCAOwner
+			t.Cleanup(func() { orgCAOwner = prev })
+			orgCAOwner = func(st os.FileInfo) (int, bool) {
+				switch {
+				case os.SameFile(st, fileInfo):
+					return uid(c.FileOwner), true
+				case os.SameFile(st, dirInfo):
+					return uid(c.DirOwner), true
+				}
+				return uid("self"), true
+			}
+			var warnings []string
+			bundle, n, err := readOrgCA(path, os.Geteuid(), time.Now(), func(m string) { warnings = append(warnings, m) })
+			if c.Expect == "refuse" {
+				if err == nil {
+					t.Fatalf("loaded %d certificates; want a refusal", n)
+				}
+			} else if err != nil || n != len(usable) || bundle == "" {
+				t.Fatalf("n=%d err=%v; want %d certificates and no error", n, err, len(usable))
+			}
+			if len(warnings) != c.Warnings {
+				t.Fatalf("%d warnings %q; want %d", len(warnings), warnings, c.Warnings)
+			}
+			for i, w := range warnings {
+				if !strings.Contains(w, skippedFPs[i]) {
+					t.Errorf("warning %q does not name the skipped certificate's sha256 %s", w, skippedFPs[i])
+				}
+			}
+		})
 	}
 }
