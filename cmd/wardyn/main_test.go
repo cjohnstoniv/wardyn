@@ -4,10 +4,12 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -257,6 +259,36 @@ func TestAdminTokenFromEnvStillAuthenticates(t *testing.T) {
 			}
 			if got := srv.last().auth; got != tc.want {
 				t.Errorf("Authorization = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// #3308: the 401 hint follows the server's own reason. On a deployment that signs people in with single
+// sign-on and has no admin token, it never sends the person to an admin token or the compose quick-start;
+// every other 401 keeps the token hint.
+func TestDialHintOnSingleSignOn(t *testing.T) {
+	const remedy = "Set WARDYN_TOKEN to a personal API token: a Wardyn admin can invite you to create one, and you claim it under Your account in the console."
+	for _, tc := range []struct{ reason, want string }{
+		{"sign_in_required", "this organisation signs people in with single sign-on and has no admin token, so --token and WARDYN_ADMIN_TOKEN cannot work here. " + remedy},
+		{"admin_token_not_configured", "this organisation does not know the token sent (unknown, revoked or expired) and has no admin token, so --token and WARDYN_ADMIN_TOKEN cannot work here. " + remedy},
+		{"", "authenticate with --token or WARDYN_ADMIN_TOKEN/WARDYN_TOKEN (the compose quick-start's token is in deploy/compose/README.md)"},
+		{"invalid_bearer_token", "authenticate with --token or WARDYN_ADMIN_TOKEN/WARDYN_TOKEN (the compose quick-start's token is in deploy/compose/README.md)"},
+	} {
+		t.Run(cmp.Or(tc.reason, "no reason"), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = fmt.Fprintf(w, `{"error":"refused","reason":%q}`, tc.reason)
+			}))
+			defer srv.Close()
+			_, err := (&sdk.Client{BaseURL: srv.URL}).ListRuns(context.Background())
+			got := dialHint(err)
+			if got != tc.want {
+				t.Fatalf("dialHint = %q\nwant %q", got, tc.want)
+			}
+			if tc.reason != "" && tc.reason != "invalid_bearer_token" && (strings.Contains(got, "compose") || strings.Contains(got, "authenticate with")) {
+				t.Errorf("a single sign-on 401 points at the admin token or the compose quick-start: %q", got)
 			}
 		})
 	}
