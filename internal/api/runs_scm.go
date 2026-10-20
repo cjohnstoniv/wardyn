@@ -456,6 +456,9 @@ func injectionRuleFromScope(scope json.RawMessage) (egress.InjectionRule, error)
 		// secret's placeholder (authorSecretPlaceholder); carried to the rule.
 		// validateEligibleGrantMode refuses it in any authored policy.
 		Placeholder string `json:"placeholder"`
+		// SignedHosts is DECLARED as Snapshot is, and read from the grant by grantHosts: the hosts
+		// a re-signed AWS lane's session signs (authorAWSSSOGrant).
+		SignedHosts []string `json:"signed_hosts"`
 	}
 	dec := json.NewDecoder(bytes.NewReader(scope))
 	dec.DisallowUnknownFields()

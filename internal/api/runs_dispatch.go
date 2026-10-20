@@ -456,7 +456,11 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// the layers it sealed against, so a credential for a host the Wardyn boundary
 	// denies or does not allow is withheld as one the profile denies is (#3238).
 	layers := s.sealRunPolicy(ctx, run, &policy, p.Provenance)
+	signsBedrock := llm.bedrockReady && llm.bedrock.sigv4Hosts != nil
 	grantRows = s.reassertCeilingDenies(ctx, run, &policy, &injections, ceiling, layers, grantRows, &p, sandboxEnv, &llm, &plan.bedrockMITMHosts, &p.Components.MITMHosts)
+	if signsBedrock && !llm.bedrockReady { // the re-signer's grant is the withheld Bedrock lane's (named in dropped_broker_lanes)
+		plan.awsSigV4 = nil
+	}
 	azureARM := plan.azureCLI.closeWithheld(&policy, injections) // the door, decided once; one the ceiling withheld takes its hosts with it
 
 	// Host bind mounts (policy WorkspaceMounts + the host-mode Bedrock ~/.aws

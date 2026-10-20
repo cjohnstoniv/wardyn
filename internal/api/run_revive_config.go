@@ -15,6 +15,9 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+// awsSigV4Lane is how the revive's re-assertion names the AWS re-signer in dropped_broker_lanes.
+const awsSigV4Lane = "aws_sigv4"
+
 // reasserted is what reassertProxyCeiling changed.
 type reasserted struct {
 	added, droppedInjection, droppedLane []string
@@ -55,6 +58,10 @@ func reassertProxyCeiling(run types.AgentRun, cfg *proxy.Config, c ownerCeiling,
 		cfg.GitHubAPI = nil
 		closeGitHubDoor(&cfg.Policy)
 		re.droppedLane = append(re.droppedLane, githubDoorLane)
+	}
+	if cfg.AWSSigV4 != nil && w.withheldAny(cfg.AWSSigV4.Hosts) { // the sandbox holds only the placeholder pair, so the re-signer can go
+		cfg.AWSSigV4 = nil
+		re.droppedLane = append(re.droppedLane, awsSigV4Lane)
 	}
 	cfg.Injection = slices.DeleteFunc(cfg.Injection, func(in proxy.InjectionConfig) bool {
 		if w.withheld(in.Host) {
