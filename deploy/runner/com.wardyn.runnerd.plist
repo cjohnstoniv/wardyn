@@ -13,11 +13,10 @@
   looks for it, and the runner is bound to that one person. serve is handed that directory
   explicitly, as the Linux unit hands it, so neither depends on serve's own default.
 
-  The __WARDYN_*__, __DOCKER_HOST__, __RELAY_LISTEN__ and __RELAY_HOST_TARGET__ tokens
-  are placeholders — `wardyn-runnerd setup` (embedded from this file) renders it to
-  ~/Library/LaunchAgents with them replaced, and drops the WARDYN_PROXY_IMAGE (when it is
-  only this release's default), WARDYN_PROXY_IMAGE_PINNED (when no one named the image), DOCKER_HOST, WARDYN_RELAY_LISTEN, WARDYN_RELAY_HOST_TARGET and
-  WARDYN_TRUSTED_CA_FILE keys when they are empty. Committed as-is it is still valid, parseable plist XML — see
+  The __WARDYN_RUNNERD__, __WARDYN_CONFIG__ and __WARDYN_LOG__ tokens are placeholders —
+  `wardyn-runnerd setup` (embedded from this file) renders it to ~/Library/LaunchAgents with them
+  replaced. Every setting is in the settings file (runnerd.json, mode 0600); this plist is readable by every
+  local account, so it holds none. Committed as-is it is still valid, parseable plist XML — see
   scripts/test-runner-units.sh.
 -->
 <plist version="1.0">
@@ -28,28 +27,9 @@
   <array>
     <string>__WARDYN_RUNNERD__</string>
     <string>serve</string>
-    <string>--org</string>
-    <string>__WARDYN_ORG_URL__</string>
-    <string>--state-dir</string>
-    <string>__WARDYN_RUNNER_STATE_DIR__</string>
+    <string>--config</string>
+    <string>__WARDYN_CONFIG__</string>
   </array>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>WARDYN_PROXY_IMAGE</key>
-    <string>__WARDYN_PROXY_IMAGE__</string>
-    <key>WARDYN_PROXY_IMAGE_PINNED</key>
-    <string>__WARDYN_PROXY_IMAGE_PINNED__</string>
-    <key>WARDYN_INTERNAL_NETWORK</key>
-    <string>__WARDYN_INTERNAL_NETWORK__</string>
-    <key>DOCKER_HOST</key>
-    <string>__DOCKER_HOST__</string>
-    <key>WARDYN_RELAY_LISTEN</key>
-    <string>__RELAY_LISTEN__</string>
-    <key>WARDYN_RELAY_HOST_TARGET</key>
-    <string>__RELAY_HOST_TARGET__</string>
-    <key>WARDYN_TRUSTED_CA_FILE</key>
-    <string>__WARDYN_TRUSTED_CA_FILE__</string>
-  </dict>
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>

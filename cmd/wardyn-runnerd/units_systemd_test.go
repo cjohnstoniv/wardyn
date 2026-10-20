@@ -57,7 +57,7 @@ func TestRunnerdUserUnitStartsAndStops(t *testing.T) {
 		dataHome = filepath.Join(home, ".local", "share")
 	}
 	unitFile := filepath.Join(cfg, "systemd", "user", "wardyn-runnerd.service")
-	envFile := filepath.Join(home, ".config", "wardyn", "runnerd.env")
+	envFile := filepath.Join(cfg, "wardyn", runnerConfigName)
 	installed := filepath.Join(dataHome, "wardyn", "bin", "wardyn-runnerd")
 	stateDir, err := runneridentity.DefaultDir()
 	if err != nil {

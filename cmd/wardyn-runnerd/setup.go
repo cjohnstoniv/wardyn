@@ -82,6 +82,8 @@ func newSetupCommand() *cobra.Command {
 type setupPlan struct {
 	setupOptions
 	paths      setupPaths
+	existing   runnerFile
+	mirror     string
 	registered bool
 	want       relayPair
 	dockerHost string
@@ -148,6 +150,7 @@ func runSetup(cmd *cobra.Command, h setupHost, o setupOptions) error {
 // setup run again takes the registered path.
 func (h setupHost) settleImageAfterRegistering(cmd *cobra.Command, plan *setupPlan, answered string) error {
 	again := "\nThis computer is registered: " + h.imageHint(cmd.Context())
+	answered = mirrorProxyImage(plan.mirror, answered)
 	if answered != "" && plan.proxyImage != "" && (!safeSetting.MatchString(answered) || !types.SafeImageRef(answered)) {
 		// The image probed before the token works; an unusable answer does not unseat it.
 		fmt.Fprintf(cmd.OutOrStdout(), "The organisation named a proxy image setup cannot use (%q); keeping %s, which this engine reached.\n", answered, plan.proxyImage)
@@ -219,7 +222,7 @@ func checkedTrustedCAFile(given, kept, from string) (string, error) {
 		_, _, err = loadTrustedCA(abs)
 	}
 	if err != nil && given == "" {
-		return "", fmt.Errorf("%w: kept from the earlier setup (%s); pass --trusted-ca-file <new file> or remove WARDYN_TRUSTED_CA_FILE from it", err, from)
+		return "", fmt.Errorf("%w: kept from the earlier setup (%s); pass --trusted-ca-file <new file> or remove trusted_ca_file (WARDYN_TRUSTED_CA_FILE in a service file from before runnerd.json) from it", err, from)
 	}
 	return abs, err
 }
@@ -316,7 +319,11 @@ func (h setupHost) preflight(cmd *cobra.Command, o setupOptions) (setupPlan, err
 		return setupPlan{}, err
 	}
 	// A rerun keeps what an earlier setup was told explicitly.
-	keptImage, keptCA := paths.keptPins()
+	existing, err := loadRunnerFile(paths.configFile(), false)
+	if err != nil {
+		return setupPlan{}, fmt.Errorf("%w (nothing was changed and no token was spent)", err)
+	}
+	keptImage, keptCA := paths.keptPins(existing)
 	// serve never reads the ambient SSL_CERT_FILE, so setup only points at it, unless a CA is named
 	// or kept.
 	if ssl := os.Getenv("SSL_CERT_FILE"); ssl != "" && cmp.Or(o.trustedCAFile, keptCA) == "" {
@@ -325,33 +332,37 @@ func (h setupHost) preflight(cmd *cobra.Command, o setupOptions) (setupPlan, err
 	if names := proxyEnvNames(os.Getenv); len(names) > 0 && !o.noService {
 		fmt.Fprintln(cmd.OutOrStdout(), shellProxyWarning(names, h.goos, paths))
 	}
-	if o.trustedCAFile, err = checkedTrustedCAFile(o.trustedCAFile, keptCA, cmp.Or(paths.envFile, paths.plistFile)); err != nil {
+	keptFrom := cmp.Or(paths.envFile, paths.plistFile)
+	if existing.TrustedCAFile != "" {
+		keptFrom = paths.configFile()
+	}
+	if o.trustedCAFile, err = checkedTrustedCAFile(o.trustedCAFile, keptCA, keptFrom); err != nil {
 		return setupPlan{}, err
 	}
 	_, caWarnings := trustedCAFileCheck(o.trustedCAFile, time.Now())
 	for _, w := range caWarnings {
 		fmt.Fprintln(cmd.OutOrStdout(), "warning: "+w)
 	}
-	plan := setupPlan{setupOptions: o, paths: paths, dockerHost: h.dockerHost, want: want, flagged: o.proxyImage != ""}
+	plan := setupPlan{setupOptions: o, paths: paths, existing: existing, mirror: existing.ProxyImageMirror, dockerHost: h.dockerHost, want: want, flagged: o.proxyImage != ""}
 	if _, err := os.Stat(plan.paths.identity()); err == nil {
 		id, err := runneridentity.Load(plan.paths.stateDir, o.org)
 		if err != nil {
 			return setupPlan{}, fmt.Errorf("this computer is registered, but not for this organisation or not intact: %w", err)
 		}
 		plan.registered = true
-		if o.proxyImage == "" && keptImage != id.ProxyImage {
+		if o.proxyImage == "" && (keptImage != id.ProxyImage || existing.ProxyImage != "") {
 			// An earlier --proxy-image, unless it is the organisation's own answer, saved anyway.
 			o.proxyImage = keptImage
 			plan.setupOptions.proxyImage, plan.flagged = keptImage, keptImage != ""
 		}
 		// --proxy-image, else the image the organisation named at registration, else this binary's own.
 		plan.fromIdentity = o.proxyImage == "" && id.ProxyImage != ""
-		if plan.proxyImage = cmp.Or(o.proxyImage, id.ProxyImage, releaseProxyImage()); plan.proxyImage == "" {
+		if plan.proxyImage = cmp.Or(o.proxyImage, mirrorProxyImage(plan.mirror, cmp.Or(id.ProxyImage, releaseProxyImage()))); plan.proxyImage == "" {
 			return setupPlan{}, fmt.Errorf("this wardyn-runnerd is a development build (%s): pass --proxy-image <ref>", buildVersion())
 		}
 	} else {
 		// A first registration without the flag probes the release image, which the answer may replace.
-		plan.proxyImage = cmp.Or(o.proxyImage, releaseProxyImage())
+		plan.proxyImage = cmp.Or(o.proxyImage, mirrorProxyImage(plan.mirror, releaseProxyImage()))
 		if o.tokenFile == "" {
 			return setupPlan{}, errors.New("no runner identity yet: pass --token-file <file> holding the wdr_ token an administrator minted for you")
 		}

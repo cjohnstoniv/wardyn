@@ -48,17 +48,26 @@ func rootCommand() *cobra.Command {
 	cmd := &cobra.Command{Use: "wardyn-runnerd", Short: "Run a registered Wardyn runner", Version: version.String(), SilenceUsage: true, SilenceErrors: true,
 		// Every command that talks to Docker follows the engine the docker CLI would use (resolveDockerHost);
 		// the Docker SDK reads DOCKER_HOST alone.
-		PersistentPreRunE: func(*cobra.Command, []string) error {
-			home, _ := os.UserHomeDir()
-			host, err := resolveDockerHost(os.Getenv, home)
-			if err != nil {
-				return err
+		// serve decides its engine itself, after it has read its settings.
+		PersistentPreRunE: func(c *cobra.Command, _ []string) error {
+			if c.Name() == "serve" {
+				return nil
 			}
-			if host != "" && host != os.Getenv("DOCKER_HOST") {
-				return os.Setenv("DOCKER_HOST", host)
-			}
-			return nil
+			return followDockerContext()
 		}}
 	cmd.AddCommand(newRegisterCommand(), newSetupCommand(), newServeCommand(productionRunnerHooks))
 	return cmd
+}
+
+// followDockerContext points DOCKER_HOST at the engine the docker CLI would use, unless it is already set.
+func followDockerContext() error {
+	home, _ := os.UserHomeDir()
+	host, err := resolveDockerHost(os.Getenv, home)
+	if err != nil {
+		return err
+	}
+	if host != "" && host != os.Getenv("DOCKER_HOST") {
+		return os.Setenv("DOCKER_HOST", host)
+	}
+	return nil
 }

@@ -311,8 +311,15 @@ func TestSetupPutsTheUnitWhereTheUserManagerLooks(t *testing.T) {
 					t.Errorf("a unit was written to %s too, which the manager was not to load", dir)
 				}
 			}
-			if _, err := os.Stat(filepath.Join(f.host.home, ".config", "wardyn", "runnerd.env")); err != nil {
-				t.Errorf("the env file is not where the unit's EnvironmentFile looks: %v", err)
+			p, err := f.host.paths()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if unit, _ := os.ReadFile(filepath.Join(dirs[tc.want], serviceUnit)); !strings.Contains(string(unit), "serve --config "+systemdQuote(p.configFile())+"\n") {
+				t.Errorf("the unit does not name %s:\n%s", p.configFile(), unit)
+			}
+			if _, err := os.Stat(p.configFile()); err != nil {
+				t.Errorf("runnerd.json is not where the unit's --config names it: %v", err)
 			}
 		})
 	}
@@ -356,6 +363,15 @@ func TestSetupKeepsTheRecordedIdentityAndRefusesTwo(t *testing.T) {
 	stateDir("two identities, the service records XDG", xdgDir)
 	put(envFile, "WARDYN_RUNNER_STATE_DIR="+homeDir+"\n")
 	stateDir("two identities, the service records HOME", homeDir)
+	// runnerd.json is the service's record now, and outranks one an earlier setup left.
+	if err := os.Remove(envFile); err != nil {
+		t.Fatal(err)
+	}
+	cfgFile := filepath.Join(f.host.xdgConfig, "wardyn", runnerConfigName)
+	put(cfgFile, `{"state_dir": "`+xdgDir+`"}`)
+	stateDir("two identities, runnerd.json records XDG", xdgDir)
+	put(envFile, "WARDYN_RUNNER_STATE_DIR="+homeDir+"\n")
+	stateDir("runnerd.json outranks the older env file", xdgDir)
 }
 
 // A binary path with a space, a quote or a systemd specifier stays one ExecStart argument.
@@ -383,19 +399,19 @@ func TestSetupRegistersOnceAndRewritesTheServiceEachTime(t *testing.T) {
 	if f.count("POST /api/v1/runners/register") != 1 {
 		t.Fatalf("first run registered %d times", f.count("POST /api/v1/runners/register"))
 	}
-	env := f.read(p.envFile)
+	env := f.settings(p)
 	for _, want := range []string{"WARDYN_RUNNER_ORG_URL=" + f.org + "\n", "WARDYN_PROXY_IMAGE=ghcr.io/example/proxy:1\n", "WARDYN_INTERNAL_NETWORK=wardyn-internal\n", "WARDYN_RUNNER_STATE_DIR=" + p.stateDir + "\n"} {
 		if !strings.Contains(env, want) {
-			t.Errorf("env file lacks %q:\n%s", want, env)
+			t.Errorf("runnerd.json lacks %q:\n%s", want, env)
 		}
 	}
 	if strings.Contains(env, "WARDYN_RELAY_LISTEN") || strings.Contains(env, "DOCKER_HOST") {
-		t.Errorf("env file sets what was not asked for:\n%s", env)
+		t.Errorf("runnerd.json sets what was not asked for:\n%s", env)
 	}
-	if st, err := os.Stat(p.envFile); err != nil || st.Mode().Perm() != 0o600 {
-		t.Errorf("env file mode: %v %v", st, err)
+	if st, err := os.Stat(p.configFile()); err != nil || st.Mode().Perm() != 0o600 {
+		t.Errorf("runnerd.json mode: %v %v", st, err)
 	}
-	if unit := f.read(p.unitFile); !strings.Contains(unit, "\nExecStart=\""+p.installed+"\" serve --org ") || strings.Contains(unit, "__WARDYN_RUNNERD__ serve") {
+	if unit := f.read(p.unitFile); !strings.Contains(unit, "\nExecStart=\""+p.installed+"\" serve --config ") || strings.Contains(unit, "__WARDYN_RUNNERD__ serve") {
 		t.Errorf("unit not rendered:\n%s", unit)
 	}
 	if f.read(p.installed) != "binary" {
@@ -411,15 +427,15 @@ func TestSetupRegistersOnceAndRewritesTheServiceEachTime(t *testing.T) {
 	}
 
 	// Again, as device management would: no token, the identity is there.
-	before := f.read(p.envFile)
+	before := f.read(p.configFile())
 	if _, err := f.run(setupOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	if f.count("POST /api/v1/runners/register") != 1 {
 		t.Fatalf("an existing identity was registered again (%d)", f.count("POST /api/v1/runners/register"))
 	}
-	if f.read(p.envFile) != before {
-		t.Error("a second run changed the env file")
+	if f.read(p.configFile()) != before {
+		t.Error("a second run changed runnerd.json")
 	}
 	if len(f.networks) != 2 {
 		t.Errorf("the network was not ensured on the second run: %v", f.networks)
@@ -512,8 +528,8 @@ func TestSetupDevelopmentBuildNeedsAProxyImage(t *testing.T) {
 		t.Errorf("events = %v, want %v: no probe and no service", f.events, want)
 	}
 	p, _ := f.host.paths()
-	if _, err := os.Stat(p.envFile); err == nil {
-		t.Error("a refused setup wrote the env file")
+	if _, err := os.Stat(p.configFile()); err == nil {
+		t.Error("a refused setup wrote runnerd.json")
 	}
 
 	f.calls = nil
@@ -532,7 +548,7 @@ func TestSetupDevelopmentBuildNeedsAProxyImage(t *testing.T) {
 	}
 	gp, _ := g.host.paths()
 	// The derived release image is probed but not pinned (DR-0202): serve picks its own release image.
-	if env := g.read(gp.envFile); !slices.Contains(g.checks, "ghcr.io/cjohnstoniv/wardyn-proxy:0.9.1-rc.2 wardyn-internal") || strings.Contains(env, "WARDYN_PROXY_IMAGE") {
+	if env := g.settings(gp); !slices.Contains(g.checks, "ghcr.io/cjohnstoniv/wardyn-proxy:0.9.1-rc.2 wardyn-internal") || strings.Contains(env, "WARDYN_PROXY_IMAGE") {
 		t.Errorf("a release candidate did not default to its own image unpinned: probed %v\n%s", g.checks, env)
 	}
 }
@@ -554,8 +570,9 @@ func TestSetupProbesWhenItKnowsTheProxyImage(t *testing.T) {
 	if want := []string{release + " wardyn-internal", mirror + " wardyn-internal"}; !slices.Equal(f.checks, want) {
 		t.Errorf("probed %q, want the release image before the token and the organisation's after", f.checks)
 	}
-	if env := f.read(mustPaths(t, f).envFile); !strings.Contains(env, "WARDYN_PROXY_IMAGE="+mirror+"\n") {
-		t.Errorf("the env file lacks the organisation's image:\n%s", env)
+	// The organisation's answer is the identity's, and the file does not pin it: serve keeps following the organisation.
+	if env, id := f.settings(mustPaths(t, f)), f.read(mustPaths(t, f).identity()); strings.Contains(env, "WARDYN_PROXY_IMAGE") || !strings.Contains(id, mirror) {
+		t.Errorf("the organisation's image is pinned in runnerd.json or not saved in the identity:\n%s\n%s", env, id)
 	}
 
 	// Registered with that image saved: one probe, first, with the saved image, and no register.
@@ -591,7 +608,7 @@ func TestSetupProbesWhenItKnowsTheProxyImage(t *testing.T) {
 	if want := []string{"engine", "probe", "install", "register", "service"}; !slices.Equal(h.events, want) {
 		t.Errorf("a flagged registration did %v, want %v", h.events, want)
 	}
-	if env := h.read(mustPaths(t, h).envFile); !strings.Contains(env, "WARDYN_PROXY_IMAGE=ghcr.io/example/proxy:1\n") {
+	if env := h.settings(mustPaths(t, h)); !strings.Contains(env, "WARDYN_PROXY_IMAGE=ghcr.io/example/proxy:1\n") {
 		t.Errorf("the flag did not win over the answer:\n%s", env)
 	}
 }
@@ -627,8 +644,9 @@ func TestSetupGivesUpOnAnUnreachableReleaseImageOnly(t *testing.T) {
 	if !strings.Contains(out, "The release proxy image "+release+" is not reachable from this engine; the organisation's answer will be used.") {
 		t.Errorf("the give-up was not said:\n%s", out)
 	}
-	if env := f.read(mustPaths(t, f).envFile); !strings.Contains(env, "WARDYN_PROXY_IMAGE="+mirror+"\n") {
-		t.Errorf("the env file lacks the organisation's image:\n%s", env)
+	// The organisation's answer is the identity's, and the file does not pin it: serve keeps following the organisation.
+	if env, id := f.settings(mustPaths(t, f)), f.read(mustPaths(t, f).identity()); strings.Contains(env, "WARDYN_PROXY_IMAGE") || !strings.Contains(id, mirror) {
+		t.Errorf("the organisation's image is pinned in runnerd.json or not saved in the identity:\n%s\n%s", env, id)
 	}
 
 	// Nothing named by the organisation either: refused after registering, with no new token needed.
@@ -717,7 +735,7 @@ func TestSetupRefusesAnUnsafeAnsweredImage(t *testing.T) {
 		t.Fatalf("unsafe answered image with a probed release image: err=%v\n%s", err, out)
 	}
 	// The probed image is this binary's release image, which serve picks unpinned (DR-0202).
-	if env := f.read(mustPaths(t, f).envFile); strings.Contains(env, "WARDYN_PROXY_IMAGE") || strings.Contains(env, "ExecStart") {
+	if env := f.settings(mustPaths(t, f)); strings.Contains(env, "WARDYN_PROXY_IMAGE") || strings.Contains(env, "ExecStart") {
 		t.Errorf("the env file pins the derived release image or the answer:\n%s", env)
 	}
 
@@ -726,8 +744,8 @@ func TestSetupRefusesAnUnsafeAnsweredImage(t *testing.T) {
 	if _, err := g.run(setupOptions{tokenFile: g.tokenFile}); err == nil || !strings.Contains(err.Error(), "unsupported characters") || !strings.Contains(err.Error(), "no new token is needed") {
 		t.Fatalf("unsafe answered image with nothing probed: %v", err)
 	}
-	if _, serr := os.Stat(mustPaths(t, g).envFile); serr == nil {
-		t.Error("an unsafe image reached the env file")
+	if _, serr := os.Stat(mustPaths(t, g).configFile()); serr == nil {
+		t.Error("an unsafe image reached runnerd.json")
 	}
 }
 
@@ -770,14 +788,10 @@ func TestSetupWritesTheCheckedRelayPair(t *testing.T) {
 			t.Fatal(err)
 		}
 		p, _ := f.host.paths()
-		file, wants := p.envFile, []string{"WARDYN_RELAY_LISTEN=127.0.0.1\n", "WARDYN_RELAY_HOST_TARGET=192.168.5.2\n"}
-		if goos == "darwin" {
-			file, wants = p.plistFile, []string{"<key>WARDYN_RELAY_LISTEN</key>\n    <string>127.0.0.1</string>", "<key>WARDYN_RELAY_HOST_TARGET</key>\n    <string>192.168.5.2</string>"}
-		}
-		got := f.read(file)
-		for _, want := range wants {
+		got := f.settings(p)
+		for _, want := range []string{"WARDYN_RELAY_LISTEN=127.0.0.1\n", "WARDYN_RELAY_HOST_TARGET=192.168.5.2\n"} {
 			if !strings.Contains(got, want) {
-				t.Errorf("%s: %s lacks %q:\n%s", goos, file, want, got)
+				t.Errorf("%s: runnerd.json lacks %q:\n%s", goos, want, got)
 			}
 		}
 		if line := `Docker engine "Alpine Linux v3.21" (lima-rancher-desktop): the run relay listens on 127.0.0.1 and a run's proxy reaches it at 192.168.5.2`; !strings.Contains(out, line) {
@@ -790,8 +804,7 @@ func TestSetupWritesTheCheckedRelayPair(t *testing.T) {
 			t.Fatal(err)
 		}
 		dp, _ := d.host.paths()
-		dwant := map[string]string{"linux": "WARDYN_RELAY_HOST_TARGET=host-gateway\n", "darwin": "<key>WARDYN_RELAY_HOST_TARGET</key>\n    <string>host-gateway</string>"}[goos]
-		if got := d.read(map[string]string{"linux": dp.envFile, "darwin": dp.plistFile}[goos]); !strings.Contains(got, dwant) {
+		if got := d.settings(dp); !strings.Contains(got, "WARDYN_RELAY_HOST_TARGET=host-gateway\n") {
 			t.Errorf("%s: a VM-backed engine's host-gateway target was not pinned:\n%s", goos, got)
 		}
 
@@ -800,9 +813,9 @@ func TestSetupWritesTheCheckedRelayPair(t *testing.T) {
 			t.Fatal(err)
 		}
 		np, _ := n.host.paths()
-		got = n.read(map[string]string{"linux": np.envFile, "darwin": np.plistFile}[goos])
-		if strings.Contains(got, "WARDYN_RELAY_") || strings.Contains(got, "__") {
-			t.Errorf("%s: a native engine's relay was pinned, or a placeholder was left:\n%s", goos, got)
+		got = n.settings(np)
+		if strings.Contains(got, "WARDYN_RELAY_") {
+			t.Errorf("%s: a native engine's relay was pinned:\n%s", goos, got)
 		}
 	}
 }
@@ -830,12 +843,8 @@ func TestSetupWritesTheRelayHostTarget(t *testing.T) {
 			t.Fatal(err)
 		}
 		p, _ := f.host.paths()
-		file, want := p.envFile, "WARDYN_RELAY_HOST_TARGET=10.0.0.9\n"
-		if goos == "darwin" {
-			file, want = p.plistFile, "<key>WARDYN_RELAY_HOST_TARGET</key>\n    <string>10.0.0.9</string>"
-		}
-		if got := f.read(file); !strings.Contains(got, want) || strings.Contains(got, "WARDYN_RELAY_LISTEN") {
-			t.Errorf("%s: %s lacks %q or pins a native relay address:\n%s", goos, file, want, got)
+		if got := f.settings(p); !strings.Contains(got, "WARDYN_RELAY_HOST_TARGET=10.0.0.9\n") || strings.Contains(got, "WARDYN_RELAY_LISTEN") {
+			t.Errorf("%s: runnerd.json lacks the target or pins a native relay address:\n%s", goos, got)
 		}
 	}
 }
@@ -856,13 +865,16 @@ func TestSetupRendersTheLaunchAgent(t *testing.T) {
 	}
 	p, _ := f.host.paths()
 	plist := f.read(p.plistFile)
-	for _, want := range []string{"<string>" + p.installed + "</string>", "<string>" + f.org + "</string>", "<key>WARDYN_RELAY_LISTEN</key>\n    <string>127.0.0.1</string>", "<string>" + p.logFile + "</string>"} {
+	for _, want := range []string{"<string>" + p.installed + "</string>", "<string>--config</string>\n    <string>" + p.configFile() + "</string>", "<string>" + p.logFile + "</string>"} {
 		if !strings.Contains(plist, want) {
 			t.Errorf("plist lacks %q:\n%s", want, plist)
 		}
 	}
-	if strings.Contains(plist, "__") || strings.Contains(plist, "DOCKER_HOST") || strings.Contains(plist, "<!--") {
-		t.Errorf("plist keeps a placeholder, an empty DOCKER_HOST or the template comment:\n%s", plist)
+	if strings.Contains(plist, "__") || strings.Contains(plist, "EnvironmentVariables") || strings.Contains(plist, "<!--") {
+		t.Errorf("plist keeps a placeholder, an environment or the template comment:\n%s", plist)
+	}
+	if got := f.settings(p); !strings.Contains(got, "WARDYN_RELAY_LISTEN=127.0.0.1\n") || !strings.Contains(got, "WARDYN_RUNNER_ORG_URL="+f.org+"\n") {
+		t.Errorf("runnerd.json lacks the relay address or the organisation:\n%s", got)
 	}
 	if !contains(f.commands, "launchctl bootstrap gui/501 "+p.plistFile) {
 		t.Errorf("agent not bootstrapped: %v", f.commands)
@@ -1017,15 +1029,14 @@ func TestSetupNoServiceWritesTheEnvironmentAndInstallsNoUnit(t *testing.T) {
 			if f.count("POST /api/v1/runners/register") != 1 || f.read(p.installed) != "binary" {
 				t.Fatal("--no-service did not register or install the binary")
 			}
-			envFile := p.noServiceEnvFile()
-			env := f.read(envFile)
-			for _, want := range []string{"WARDYN_RUNNER_ORG_URL=" + f.org + "\n", "WARDYN_PROXY_IMAGE=ghcr.io/example/proxy:1\n", "WARDYN_PROXY_IMAGE_PINNED=1\n", "WARDYN_RUNNER_STATE_DIR=" + shellQuote(p.stateDir) + "\n"} {
+			env := f.settings(p)
+			for _, want := range []string{"WARDYN_RUNNER_ORG_URL=" + f.org + "\n", "WARDYN_PROXY_IMAGE=ghcr.io/example/proxy:1\n", "WARDYN_PROXY_IMAGE_PINNED=1\n", "WARDYN_RUNNER_STATE_DIR=" + p.stateDir + "\n"} {
 				if !strings.Contains(env, want) {
-					t.Errorf("env file lacks %q:\n%s", want, env)
+					t.Errorf("runnerd.json lacks %q:\n%s", want, env)
 				}
 			}
-			if st, err := os.Stat(envFile); err != nil || st.Mode().Perm() != 0o600 {
-				t.Errorf("env file mode: %v %v", st, err)
+			if st, err := os.Stat(p.configFile()); err != nil || st.Mode().Perm() != 0o600 {
+				t.Errorf("runnerd.json mode: %v %v", st, err)
 			}
 			for _, path := range []string{p.unitFile, p.plistFile} {
 				if path == "" {
@@ -1038,7 +1049,7 @@ func TestSetupNoServiceWritesTheEnvironmentAndInstallsNoUnit(t *testing.T) {
 			if len(f.commands) != 0 {
 				t.Errorf("--no-service ran %v", f.commands)
 			}
-			if want := "set -a; . " + shellQuote(envFile) + "; set +a; " + shellQuote(p.installed) + " serve --org " + shellQuote(f.org) + " --state-dir " + shellQuote(p.stateDir); !strings.Contains(out, want) {
+			if want := shellQuote(p.installed) + " serve --config " + shellQuote(p.configFile()); !strings.Contains(out, want) {
 				t.Errorf("the run command is not printed (want %q):\n%s", want, out)
 			}
 			if strings.Contains(out, "Started the wardyn-runnerd") {
@@ -1050,8 +1061,8 @@ func TestSetupNoServiceWritesTheEnvironmentAndInstallsNoUnit(t *testing.T) {
 			if _, err := f.run(setupOptions{noService: true}); err != nil {
 				t.Fatal(err)
 			}
-			if f.read(envFile) != env {
-				t.Error("a second --no-service run changed the environment file")
+			if f.settings(p) != env {
+				t.Error("a second --no-service run changed runnerd.json")
 			}
 		})
 	}
@@ -1069,20 +1080,17 @@ func TestSetupPinsTheEngineInTheService(t *testing.T) {
 		if host.dockerHost != tc.want {
 			t.Fatalf("DOCKER_HOST=%q: setup host engine = %q, want %q", tc.env, host.dockerHost, tc.want)
 		}
-		if env := (setupPlan{dockerHost: host.dockerHost}).serviceEnv(); !strings.Contains(env, "DOCKER_HOST="+tc.want+"\n") {
-			t.Errorf("service environment lacks DOCKER_HOST=%s:\n%s", tc.want, env)
-		}
-		if plist := renderLaunchAgent(setupPlan{dockerHost: host.dockerHost}); !strings.Contains(plist, "<string>"+tc.want+"</string>") {
-			t.Errorf("LaunchAgent lacks DOCKER_HOST %s:\n%s", tc.want, plist)
+		if got := (setupPlan{dockerHost: host.dockerHost}).runnerFile().DockerHost; got != tc.want {
+			t.Errorf("runnerd.json docker_host = %q, want %q", got, tc.want)
 		}
 	}
 }
 
 // On macOS every path holds "Application Support". The command --no-service prints, run through sh, must
-// reach the binary with the state directory as one argument and in its environment.
+// reach the binary with the config path as one argument.
 func TestSetupNoServicePrintsACommandAShellRunsWithASpaceInThePath(t *testing.T) {
 	f := newSetupFixture(t, "darwin")
-	stub := "#!/bin/sh\nprintf 'state=%s\\n' \"$WARDYN_RUNNER_STATE_DIR\"\nfor a; do printf 'arg=%s\\n' \"$a\"; done\n"
+	stub := "#!/bin/sh\nfor a; do printf 'arg=%s\\n' \"$a\"; done\n"
 	if err := os.WriteFile(f.host.exe, []byte(stub), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1096,7 +1104,7 @@ func TestSetupNoServicePrintsACommandAShellRunsWithASpaceInThePath(t *testing.T)
 	}
 	var command string
 	for _, l := range strings.Split(out, "\n") {
-		if strings.HasPrefix(l, "  set -a; ") {
+		if strings.Contains(l, " serve --config ") {
 			command = strings.TrimSpace(l)
 		}
 	}
@@ -1107,7 +1115,7 @@ func TestSetupNoServicePrintsACommandAShellRunsWithASpaceInThePath(t *testing.T)
 	if err != nil {
 		t.Fatalf("sh -c %q: %v\n%s", command, err, got)
 	}
-	for _, want := range []string{"state=" + p.stateDir + "\n", "arg=serve\n", "arg=--state-dir\narg=" + p.stateDir + "\n", "arg=--org\narg=" + f.org + "\n"} {
+	for _, want := range []string{"arg=serve\n", "arg=--config\narg=" + p.configFile() + "\n"} {
 		if !strings.Contains(string(got), want) {
 			t.Errorf("the printed command's run lacks %q:\n%s", want, got)
 		}
@@ -1115,8 +1123,8 @@ func TestSetupNoServicePrintsACommandAShellRunsWithASpaceInThePath(t *testing.T)
 }
 
 // Setup run plain after a --no-service run and then a service setup that pinned another image and CA file
-// keeps the service's pins, not the older environment file's.
-func TestSetupKeepsTheLaunchAgentsPinsOverAStaleNoServiceEnvironment(t *testing.T) {
+// keeps the service's pins, not the earlier run's.
+func TestSetupKeepsTheLatestPinsAfterANoServiceRun(t *testing.T) {
 	f := newSetupFixture(t, "darwin")
 	dir := t.TempDir()
 	caX := writeFile(t, filepath.Join(dir, "x.pem"), testCAPEM(t, "x"))
@@ -1125,7 +1133,7 @@ func TestSetupKeepsTheLaunchAgentsPinsOverAStaleNoServiceEnvironment(t *testing.
 	if _, err := f.run(setupOptions{tokenFile: f.tokenFile, noService: true, proxyImage: "ghcr.io/example/proxy:x", trustedCAFile: caX}); err != nil {
 		t.Fatal(err)
 	}
-	if env := f.read(p.noServiceEnvFile()); !strings.Contains(env, "proxy:x") {
+	if env := f.settings(p); !strings.Contains(env, "proxy:x") {
 		t.Fatalf("the --no-service run wrote no X pin:\n%s", env)
 	}
 	if _, err := f.run(setupOptions{proxyImage: "ghcr.io/example/proxy:z", trustedCAFile: caZ}); err != nil {
@@ -1135,39 +1143,45 @@ func TestSetupKeepsTheLaunchAgentsPinsOverAStaleNoServiceEnvironment(t *testing.
 	if _, err := f.run(setupOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	plist := f.read(p.plistFile)
-	for _, want := range []string{"proxy:z", caZ, "<key>WARDYN_PROXY_IMAGE_PINNED</key>"} {
-		if !strings.Contains(plist, want) {
-			t.Errorf("the plain setup dropped %q from the LaunchAgent:\n%s", want, plist)
+	env := f.settings(p)
+	for _, want := range []string{"proxy:z", caZ, "WARDYN_PROXY_IMAGE_PINNED=1"} {
+		if !strings.Contains(env, want) {
+			t.Errorf("the plain setup dropped %q from runnerd.json:\n%s", want, env)
 		}
 	}
-	if strings.Contains(plist, "proxy:x") || strings.Contains(plist, caX) {
-		t.Errorf("the plain setup took the stale environment file's pins:\n%s", plist)
+	if strings.Contains(env, "proxy:x") || strings.Contains(env, caX) {
+		t.Errorf("the plain setup took the earlier run's pins:\n%s", env)
 	}
 }
 
-// A macOS service setup removes the environment file an earlier --no-service wrote, so deleting the plist
-// later and running --no-service again does not read the old pins back.
+// A macOS service setup removes the environment file a --no-service run before runnerd.json wrote, so
+// deleting the plist later and running --no-service again does not read the old pins back.
 func TestSetupLaunchAgentRemovesTheStaleNoServiceEnvironment(t *testing.T) {
 	f := newSetupFixture(t, "darwin")
 	p, _ := f.host.paths()
-	if _, err := f.run(setupOptions{tokenFile: f.tokenFile, noService: true, proxyImage: "ghcr.io/example/proxy:x"}); err != nil {
+	if err := os.MkdirAll(filepath.Dir(p.noServiceEnvFile()), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.run(setupOptions{proxyImage: "ghcr.io/example/proxy:z"}); err != nil {
+	if err := os.WriteFile(p.noServiceEnvFile(), []byte("WARDYN_PROXY_IMAGE=ghcr.io/example/proxy:x\nWARDYN_PROXY_IMAGE_PINNED=1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.run(setupOptions{tokenFile: f.tokenFile, proxyImage: "ghcr.io/example/proxy:z"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(p.noServiceEnvFile()); !os.IsNotExist(err) {
-		t.Fatalf("the LaunchAgent setup left the --no-service environment file: %v", err)
+		t.Fatalf("the LaunchAgent setup left the old environment file: %v", err)
 	}
 	if err := os.Remove(p.plistFile); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(p.configFile()); err != nil {
 		t.Fatal(err)
 	}
 	f.flagless = true
 	if _, err := f.run(setupOptions{noService: true}); err != nil {
 		t.Fatal(err)
 	}
-	if env := f.read(p.noServiceEnvFile()); strings.Contains(env, "proxy:x") || strings.Contains(env, "proxy:z") {
+	if env := f.settings(p); strings.Contains(env, "proxy:x") || strings.Contains(env, "proxy:z") {
 		t.Errorf("--no-service after the plist went read old pins back:\n%s", env)
 	}
 }
@@ -1264,4 +1278,26 @@ func TestSetupProxyWarningPrintsNamesOnly(t *testing.T) {
 			t.Errorf("setup printed or logged %q:\nout:\n%s\nlog:\n%s", leak, out, logs.String())
 		}
 	}
+}
+
+// settings is what the service runs with, as the KEY=value lines a service environment held before
+// runnerd.json: the file's fields under their old variable names, so assertions about a setting read the same.
+func (f *setupFixture) settings(p setupPaths) string {
+	f.t.Helper()
+	file, err := loadRunnerFile(p.configFile(), false)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	var out strings.Builder
+	for _, kv := range [][2]string{{"WARDYN_RUNNER_ORG_URL", file.OrgURL}, {"WARDYN_RUNNER_STATE_DIR", file.StateDir}, {"WARDYN_INTERNAL_NETWORK", file.InternalNetwork},
+		{"DOCKER_HOST", file.DockerHost}, {"WARDYN_PROXY_IMAGE", file.ProxyImage}, {"WARDYN_RELAY_LISTEN", file.RelayListen},
+		{"WARDYN_RELAY_HOST_TARGET", file.RelayHostTarget}, {"WARDYN_TRUSTED_CA_FILE", file.TrustedCAFile}} {
+		if kv[1] != "" {
+			out.WriteString(kv[0] + "=" + kv[1] + "\n")
+		}
+	}
+	if file.ProxyImage != "" {
+		out.WriteString("WARDYN_PROXY_IMAGE_PINNED=1\n")
+	}
+	return out.String()
 }

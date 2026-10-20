@@ -87,6 +87,17 @@ type setupPaths struct {
 
 func (p setupPaths) identity() string { return filepath.Join(p.stateDir, "runner.json") }
 
+// configFile is runnerd.json, where every setting the service runs with lives; the service definition
+// names only this path and the binary.
+func (p setupPaths) configFile() string { return filepath.Join(p.cliProfile, runnerConfigName) }
+
+// keptStateDir is the identity directory the service's own record names: runnerd.json, else the
+// environment file or LaunchAgent a setup before it wrote.
+func (p setupPaths) keptStateDir() string {
+	f, _ := loadRunnerFile(p.configFile(), false)
+	return cmp.Or(f.StateDir, p.setting("WARDYN_RUNNER_STATE_DIR"))
+}
+
 // paths: the binary under the data directory; on Linux the env file under $HOME/.config, where the unit's
 // EnvironmentFile looks, and the unit where checkServiceManager finds the user manager looks. The identity
 // is the one the service's own record (the env file an earlier setup wrote) names; without one, the one of
@@ -102,7 +113,7 @@ func (h setupHost) paths() (setupPaths, error) {
 			envFile: filepath.Join(cfg, "wardyn", "runnerd.env"), unitFile: filepath.Join(cfg, "systemd", "user", serviceUnit),
 			cliProfile: filepath.Join(cmp.Or(h.xdgConfig, cfg), "wardyn")}
 		holds := func(dir string) bool { _, err := os.Stat(filepath.Join(dir, "runner.json")); return err == nil }
-		if dir := p.setting("WARDYN_RUNNER_STATE_DIR"); filepath.IsAbs(dir) && holds(dir) {
+		if dir := p.keptStateDir(); filepath.IsAbs(dir) && holds(dir) {
 			p.stateDir = dir
 			return p, nil
 		}
@@ -232,32 +243,33 @@ func shellUnquote(s string) string {
 	return s
 }
 
-// serviceEnv is the runner's environment as setup settled it, one KEY=value line each, in the form
-// systemd's EnvironmentFile reads (a Linux unit's values are all plain) and a shell can source (a value
-// with a space, such as a macOS state directory, is single-quoted).
-func (p setupPlan) serviceEnv() string {
-	line := func(k, v string) string { return k + "=" + shellQuote(v) + "\n" }
-	env := line("WARDYN_RUNNER_ORG_URL", p.org)
-	if image := p.pinnedImage(); image != "" {
-		env += line("WARDYN_PROXY_IMAGE", image)
+// runnerFile is runnerd.json as setup settled it: what setup owns, over what the file already held (the
+// mirror, the proxies and the recording store are edited by hand and kept). The image is written only when
+// someone named it: an image that follows the organisation or this release is derived again at every start,
+// so replacing the binary alone moves the proxy with it.
+func (p setupPlan) runnerFile() runnerFile {
+	f := p.existing
+	f.OrgURL, f.StateDir, f.InternalNetwork, f.DockerHost = p.org, p.paths.stateDir, p.network, p.dockerHost
+	f.ProxyImage = ""
+	if p.flagged {
+		f.ProxyImage = p.proxyImage
 	}
-	if p.pinMarker() != "" {
-		env += "WARDYN_PROXY_IMAGE_PINNED=1\n"
+	f.RelayListen, f.RelayHostTarget, f.TrustedCAFile = p.relayListen, p.relayHostTarget, p.trustedCAFile
+	return f
+}
+
+// dropLegacyEnv removes the environment file an earlier setup wrote for the service, or --no-service wrote:
+// its settings are in runnerd.json now, and a stale copy would bring an old pin back at the next rerun.
+func (p setupPaths) dropLegacyEnv() error {
+	if err := os.Remove(p.noServiceEnvFile()); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
 	}
-	env += line("WARDYN_INTERNAL_NETWORK", p.network) + line("WARDYN_RUNNER_STATE_DIR", p.paths.stateDir)
-	if p.trustedCAFile != "" {
-		env += line("WARDYN_TRUSTED_CA_FILE", p.trustedCAFile)
-	}
-	if p.relayListen != "" {
-		env += line("WARDYN_RELAY_LISTEN", p.relayListen)
-	}
-	if p.relayHostTarget != "" {
-		env += line("WARDYN_RELAY_HOST_TARGET", p.relayHostTarget)
-	}
-	if p.dockerHost != "" {
-		env += line("DOCKER_HOST", p.dockerHost)
-	}
-	return env
+	return nil
+}
+
+// renderSystemdUnit fills the embedded unit: the binary and the config path, and nothing else.
+func renderSystemdUnit(p setupPaths) string {
+	return strings.NewReplacer("__WARDYN_RUNNERD__", systemdQuote(p.installed), "__WARDYN_CONFIG__", systemdQuote(p.configFile())).Replace(runnerunits.SystemdUnit)
 }
 
 // startService writes the service definition and (re)starts it.
@@ -266,18 +278,17 @@ func (h setupHost) startService(ctx context.Context, plan setupPlan, out io.Writ
 		return h.startLaunchAgent(ctx, plan, out)
 	}
 	p := plan.paths
-	env := plan.serviceEnv()
-	unit := strings.ReplaceAll(runnerunits.SystemdUnit, "__WARDYN_RUNNERD__", systemdQuote(p.installed))
-	for _, f := range []struct {
-		path, text string
-		mode       os.FileMode
-	}{{p.envFile, env, 0o600}, {p.unitFile, unit, 0o644}} {
-		if err := os.MkdirAll(filepath.Dir(f.path), 0o755); err != nil {
-			return err
-		}
-		if err := writeAtomic(f.path, f.mode, func(w io.Writer) error { _, err := io.WriteString(w, f.text); return err }); err != nil {
-			return err
-		}
+	if err := writeRunnerFile(p.configFile(), plan.runnerFile()); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(p.unitFile), 0o755); err != nil {
+		return err
+	}
+	if err := writeAtomic(p.unitFile, 0o644, func(w io.Writer) error { _, err := io.WriteString(w, renderSystemdUnit(p)); return err }); err != nil {
+		return err
+	}
+	if err := p.dropLegacyEnv(); err != nil {
+		return err
 	}
 	for _, args := range [][]string{{"daemon-reload"}, {"enable", "--now", serviceUnit}} {
 		if b, err := h.run(ctx, "systemctl", append([]string{"--user"}, args...)...); err != nil {
@@ -305,24 +316,24 @@ func (p setupPaths) installedService() string {
 	return ""
 }
 
-// noServiceEnvFile is where --no-service writes the environment: the file a Linux service reads, and on
-// macOS, which has no such file, one beside the identity's directory.
+// noServiceEnvFile is the environment file a Linux service read before runnerd.json, and on macOS, which
+// had no such file, the one --no-service wrote beside the identity's directory.
 func (p setupPaths) noServiceEnvFile() string {
 	return cmp.Or(p.envFile, filepath.Join(filepath.Dir(p.stateDir), "runnerd.env"))
 }
 
-// writeRunConfig is --no-service: it writes the environment file and prints the command that runs the
-// runner in the foreground, and installs no unit, plist or login item.
+// writeRunConfig is --no-service: it writes runnerd.json and prints the command that runs the runner in
+// the foreground, and installs no unit, plist or login item.
 func (h setupHost) writeRunConfig(plan setupPlan, out io.Writer) error {
-	path := plan.paths.noServiceEnvFile()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	path := plan.paths.configFile()
+	if err := writeRunnerFile(path, plan.runnerFile()); err != nil {
 		return err
 	}
-	if err := writeAtomic(path, 0o600, func(w io.Writer) error { _, err := io.WriteString(w, plan.serviceEnv()); return err }); err != nil {
+	if err := plan.paths.dropLegacyEnv(); err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "Wrote %s. No service was installed. Run the runner yourself, from a shell that keeps it running:\n  set -a; . %s; set +a; %s serve --org %s --state-dir %s\n",
-		path, shellQuote(path), shellQuote(plan.paths.installed), shellQuote(plan.org), shellQuote(plan.paths.stateDir))
+	fmt.Fprintf(out, "Wrote %s. No service was installed. Run the runner yourself, from a shell that keeps it running:\n  %s serve --config %s\n",
+		path, shellQuote(plan.paths.installed), shellQuote(path))
 	return nil
 }
 
@@ -353,20 +364,23 @@ func (p setupPlan) pinMarker() string {
 	return ""
 }
 
-// keptPins reads the proxy image and CA file an earlier setup wrote into the service definition, so
-// setup run again without --proxy-image or --trusted-ca-file keeps them. An unmarked release image
-// of this project is what a setup before 0.9.3 derived, not a pin, and is dropped.
-func (p setupPaths) keptPins() (image, caFile string) {
-	image = p.setting("WARDYN_PROXY_IMAGE")
-	if tag, ok := strings.CutPrefix(image, releaseProxyRepo+":"); ok && releaseVersion.MatchString(tag) && p.setting("WARDYN_PROXY_IMAGE_PINNED") != "1" {
-		image = ""
+// keptPins reads the proxy image and CA file an earlier setup wrote, so setup run again without
+// --proxy-image or --trusted-ca-file keeps them: from runnerd.json, else from the service definition a
+// setup before it wrote. An unmarked release image of this project in that definition is what a setup
+// before 0.9.3 derived, not a pin, and is dropped.
+func (p setupPaths) keptPins(file runnerFile) (image, caFile string) {
+	if image = file.ProxyImage; image == "" {
+		image = p.setting("WARDYN_PROXY_IMAGE")
+		if tag, ok := strings.CutPrefix(image, releaseProxyRepo+":"); ok && releaseVersion.MatchString(tag) && p.setting("WARDYN_PROXY_IMAGE_PINNED") != "1" {
+			image = ""
+		}
 	}
-	return image, p.setting("WARDYN_TRUSTED_CA_FILE")
+	return image, cmp.Or(file.TrustedCAFile, p.setting("WARDYN_TRUSTED_CA_FILE"))
 }
 
-// setting is the value an earlier setup wrote for key into the service definition, "" when there is none.
-// The source is the one the service actually uses: a Linux unit's environment file, or on macOS the
-// LaunchAgent once one is installed. The environment file --no-service writes there is read only while no
+// setting is the value a setup before runnerd.json wrote for key into the service definition, "" when there
+// is none. The source is the one the service actually used: a Linux unit's environment file, or on macOS the
+// LaunchAgent once one is installed. The environment file --no-service wrote there is read only while no
 // LaunchAgent exists, so an older one never outranks a newer plist (or mixes with it).
 func (p setupPaths) setting(key string) string {
 	if p.plistFile != "" {
@@ -389,27 +403,13 @@ func (p setupPaths) setting(key string) string {
 // plistComment is the template's documentation, which is not written into the user's LaunchAgents.
 var plistComment = regexp.MustCompile(`(?s)<!--.*?-->\n`)
 
-// renderLaunchAgent fills the embedded plist, dropping the optional keys when there is no value rather
-// than setting them empty.
+// renderLaunchAgent fills the embedded plist. It carries the binary, the config path and the log path;
+// every setting is in runnerd.json, which only its owner can read, not in a plist every local account can.
 func renderLaunchAgent(plan setupPlan) string {
 	tpl := plistComment.ReplaceAllString(runnerunits.LaunchAgent, "")
-	for key, val := range map[string]string{"DOCKER_HOST": plan.dockerHost, "WARDYN_RELAY_LISTEN": plan.relayListen, "WARDYN_RELAY_HOST_TARGET": plan.relayHostTarget,
-		"WARDYN_PROXY_IMAGE": plan.pinnedImage(), "WARDYN_PROXY_IMAGE_PINNED": plan.pinMarker(), "WARDYN_TRUSTED_CA_FILE": plan.trustedCAFile} {
-		if val == "" {
-			tpl = regexp.MustCompile(`[ \t]*<key>`+key+`</key>\n[ \t]*<string>[^<]*</string>\n`).ReplaceAllString(tpl, "")
-		}
-	}
 	return strings.NewReplacer(
 		"__WARDYN_RUNNERD__", html.EscapeString(plan.paths.installed),
-		"__WARDYN_ORG_URL__", html.EscapeString(plan.org),
-		"__WARDYN_RUNNER_STATE_DIR__", html.EscapeString(plan.paths.stateDir),
-		"__WARDYN_PROXY_IMAGE__", html.EscapeString(plan.pinnedImage()),
-		"__WARDYN_TRUSTED_CA_FILE__", html.EscapeString(plan.trustedCAFile),
-		"__WARDYN_PROXY_IMAGE_PINNED__", plan.pinMarker(),
-		"__WARDYN_INTERNAL_NETWORK__", html.EscapeString(plan.network),
-		"__DOCKER_HOST__", html.EscapeString(plan.dockerHost),
-		"__RELAY_LISTEN__", html.EscapeString(plan.relayListen),
-		"__RELAY_HOST_TARGET__", html.EscapeString(plan.relayHostTarget),
+		"__WARDYN_CONFIG__", html.EscapeString(plan.paths.configFile()),
 		"__WARDYN_LOG__", html.EscapeString(plan.paths.logFile),
 	).Replace(tpl)
 }
@@ -421,12 +421,15 @@ func (h setupHost) startLaunchAgent(ctx context.Context, plan setupPlan, out io.
 			return err
 		}
 	}
+	if err := writeRunnerFile(p.configFile(), plan.runnerFile()); err != nil {
+		return err
+	}
 	if err := writeAtomic(p.plistFile, 0o644, func(w io.Writer) error { _, err := io.WriteString(w, renderLaunchAgent(plan)); return err }); err != nil {
 		return err
 	}
-	// The environment file an earlier --no-service wrote is stale once a LaunchAgent exists: delete the
+	// An environment file an earlier --no-service wrote is stale once a LaunchAgent exists: delete the
 	// plist later and a --no-service rerun would read its old pins back.
-	if err := os.Remove(p.noServiceEnvFile()); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	if err := p.dropLegacyEnv(); err != nil {
 		return err
 	}
 	domain := fmt.Sprintf("gui/%d", h.uid)
