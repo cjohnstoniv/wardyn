@@ -146,6 +146,9 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 		}
 		// The CPU and memory half for the inline arm, the same helper the stored arm
 		// calls below. The main drive is sized by stepMainDrive, for every door.
+		if refusal := s.applicationUIAppsRefusal(r, *req, spec, ceiling); refusal != nil {
+			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
+		}
 		source.knobs.step(ceiling.provenance(), &spec, func() {
 			s.boundResources(ctx, r, &spec, ceiling)
 			clampWarnings = append(clampWarnings, s.boundUIApps(ctx, r, &spec, ceiling, dryRun)...)
@@ -281,6 +284,9 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 	// is then the profile's OWN ceiling, which an admin may well have written wider
 	// than the limit standing beside it. Both arms call the SAME helper
 	// (runs_dispatch_ceiling.go).
+	if refusal := s.applicationUIAppsRefusal(r, *req, spec, ceiling); refusal != nil {
+		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
+	}
 	source.knobs.step(ceiling.provenance(), &spec, func() {
 		s.boundResources(ctx, r, &spec, ceiling)
 		storedWarns = append(storedWarns, s.boundUIApps(ctx, r, &spec, ceiling, dryRun)...)

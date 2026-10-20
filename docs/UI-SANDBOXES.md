@@ -231,8 +231,9 @@ export WARDYN_AGENT_IMAGES='{"vscode":"wardyn/agent-vscode:local"}'
 ```
 
 - It is an ordinary interactive run: the gates above, `deny_interactive` and `deny_ui_apps` all apply.
+- Under `deny_ui_apps` the run is refused at create (`422 run_application_ui_apps_denied`), as preflight says too.
 - The command starts once at boot and stops with the run; it is not restarted.
-- With no launcher, the gateway waits up to 20s for a seeded run's port before the 502 below.
+- With no launcher, the gateway waits up to 20s for the port of a run whose startup is a command, before the 502 below. A harness prompt seed gets the 502 at once.
 
 ## 3. Open an app
 

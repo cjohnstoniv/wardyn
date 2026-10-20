@@ -1283,7 +1283,7 @@ func TestUIGateway_SeedDecidesTheWait(t *testing.T) {
 			if rec := h.relay("/ide", h.openSession(), nil); rec.Code != http.StatusOK {
 				t.Fatalf("relay: %d %s", rec.Code, rec.Body.String())
 			}
-			if want := "if ! [ -x \"$b\" ]; then\n  i=0\n  while [ \"$i\" " + tc.want; !strings.Contains(script, want) {
+			if want := "if ! [ -x \"$b\" ]; then\n  [ \"${WARDYN_INTERACTIVE_START:-}\" = agent ] && exit 3\n  i=0\n  while [ \"$i\" " + tc.want; !strings.Contains(script, want) {
 				t.Fatalf("a missing launcher's wait should read %q:\n%s", want, script)
 			}
 		})

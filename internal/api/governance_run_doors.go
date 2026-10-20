@@ -13,6 +13,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // The governance limits that reach past create: deny_ui_apps strips ui_apps
@@ -122,7 +123,7 @@ func (s *Server) refuseUIAppsDenied(w http.ResponseWriter, r *http.Request, run 
 // arm's spec. It binds whoever the ceiling's limits bind: an assigned member or
 // security admin, never an operator. Audited as a drop unless dryRun.
 func (s *Server) boundUIApps(ctx context.Context, r *http.Request, spec *types.RunPolicySpec, ceiling governanceCeiling, dryRun bool) []string {
-	if ceiling.Profile == nil || !ceiling.Limits.DenyUIApps || len(spec.UIApps) == 0 || s.runUngoverned(r.Context()) {
+	if !s.uiAppsDenied(r, *spec, ceiling) {
 		return nil
 	}
 	dropped := make([]string, 0, len(spec.UIApps))
@@ -135,4 +136,24 @@ func (s *Server) boundUIApps(ctx context.Context, r *http.Request, spec *types.R
 	}
 	return []string{fmt.Sprintf("dropped %d ui_app(s) denied by governance profile %q: %s",
 		len(dropped), ceiling.Profile.Name, strings.Join(dropped, ","))}
+}
+
+// uiAppsDenied is the one predicate for deny_ui_apps binding this run's ui_apps: boundUIApps strips by it and an
+// application's create refusal reads it, so the two cannot disagree. It binds whoever the ceiling's limits bind.
+func (s *Server) uiAppsDenied(r *http.Request, spec types.RunPolicySpec, ceiling governanceCeiling) bool {
+	return ceiling.Profile != nil && ceiling.Limits.DenyUIApps && len(spec.UIApps) > 0 && !s.runUngoverned(r.Context())
+}
+
+// applicationUIAppsDeniedMsg is the sentence of the refusal below.
+const applicationUIAppsDeniedMsg = "This profile does not allow UI apps, so an application can't declare one."
+
+// applicationUIAppsRefusal refuses a shape-application run whose declared app deny_ui_apps would strip: the run
+// is an application only through that app, so creating it anyway would make a run that is not what was asked for.
+// resolveRunPolicy calls it for create and for preflight alike, on the policy as resolved, before boundUIApps drops
+// anything. Other shapes keep the strip-and-warn behaviour.
+func (s *Server) applicationUIAppsRefusal(r *http.Request, req createRunRequest, spec types.RunPolicySpec, ceiling governanceCeiling) *runRefusal {
+	if req.Shape != client.RunShapeApplication || !s.uiAppsDenied(r, spec, ceiling) {
+		return nil
+	}
+	return runError(http.StatusUnprocessableEntity, reasonRunApplicationUIAppsDenied, applicationUIAppsDeniedMsg)
 }
