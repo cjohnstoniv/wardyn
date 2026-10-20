@@ -512,19 +512,16 @@ func setupWorkspaceSecretItems(workspaces []types.Workspace, presentSecrets map[
 	return items
 }
 
-// setupRepoCredentialItems covers the grants groundGitHubGrants/groundGitPATGrants
+// setupRepoCredentialItemsFor covers the grants groundGitHubGrants/groundGitPATGrants
 // left standing in the FINAL spec: a github_token is broker-minted at clone time
 // (nothing stored to check, so it is always "unverified" pre-launch); a git_pat's
 // readiness is exactly whether its secret is present. This intentionally
 // overlaps setupSecretItems' git_pat check — that row answers "is the secret
 // stored", this one answers "is THIS grant usable" (host-scoped).
-func setupRepoCredentialItems(spec types.RunPolicySpec, presentSecrets map[string]bool) []SetupItem {
-	return setupRepoCredentialItemsFor(spec, presentSecrets, nil)
-}
-
-// setupRepoCredentialItemsFor is setupRepoCredentialItems for a caller whose own secret names are
-// own (nil for an operator): a git_pat secret a member does not hold is judged against their own
-// namespace when the grant is owner_only, and is otherwise the operator's, offered with no name.
+//
+// own is the caller's own secret names (nil for an operator): a git_pat secret a member does not
+// hold is judged against their own namespace when the grant is owner_only, and is otherwise the
+// operator's, offered with no name.
 func setupRepoCredentialItemsFor(spec types.RunPolicySpec, presentSecrets, own map[string]bool) []SetupItem {
 	var items []SetupItem
 	seenGH := false
