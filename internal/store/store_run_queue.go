@@ -45,6 +45,11 @@ type RunQueueEntry struct {
 	// queue row read back never carries them.
 	Components []types.RunComponent
 	Harnesses  []types.RunHarness
+	// KeptDrive is the member drive a keep_work_folder run keeps its work folder in, which
+	// CreateQueuedRun inserts in the same transaction under CreateMemberDrive's lock and count
+	// (KeptDriveLimit), so no promotion sees a waiting keep run without its drive. Write-only.
+	KeptDrive      *types.UserDrive
+	KeptDriveLimit int
 }
 
 const runQueueCols = `run_id, pool_id, owner, queued_at, deadline_at, policy_ref, authority, launch`
@@ -66,7 +71,7 @@ func jsonOrEmpty(raw json.RawMessage) json.RawMessage {
 }
 
 // CreateQueuedRun inserts r (state QUEUED, bound to a pool), its launch intent when it carries one,
-// its queue row and e's component and harness snapshots in one transaction that holds the pool row FOR NO KEY UPDATE, the lock promotion
+// its queue row, e's component and harness snapshots and its kept drive in one transaction that holds the pool row FOR NO KEY UPDATE, the lock promotion
 // takes first, so the owner's waiting count and the insert cannot interleave with a promotion.
 // maxPerOwner <= 0 is unlimited; otherwise an owner with that many runs already waiting for the pool
 // gets ErrRunQueueFull and nothing is written. The queue row's pool and owner are the run's own.
@@ -138,6 +143,11 @@ func (s PG) CreateQueuedRun(ctx context.Context, r types.AgentRun, e RunQueueEnt
 		created.ID, *r.RunnerPoolID, r.CreatedBy, e.QueuedAt, e.DeadlineAt,
 		jsonOrEmpty(e.PolicyRef), jsonOrEmpty(e.Authority), jsonOrEmpty(e.Launch)); err != nil {
 		return types.AgentRun{}, fmt.Errorf("store: insert run queue row: %w", err)
+	}
+	if e.KeptDrive != nil {
+		if _, err := insertMemberDrive(ctx, tx, *e.KeptDrive, e.KeptDriveLimit); err != nil {
+			return types.AgentRun{}, err
+		}
 	}
 	if len(e.Components) > 0 {
 		if err := insertRunComponents(ctx, tx, created.ID, e.Components); err != nil {

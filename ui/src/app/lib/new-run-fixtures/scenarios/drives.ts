@@ -29,7 +29,7 @@ export const DRIVE_SHARED = drive({
   id: "d-share", name: "Archive", section: "shared", source: "organisation", backend: "host_path", writable: true, target: "/home/agent/shared/archive",
 });
 
-export const CREATE_ALLOWED: MemberDriveCreate = { allowed: true, count: 1, limit: 3 };
+export const CREATE_ALLOWED: MemberDriveCreate = { allowed: true, count: 1, limit: 3, keep_work_folder: false };
 
 /** One closed door per reason, so every disabled line is drawn. */
 const REASONS: Record<MemberDriveCreateReason, true> = {

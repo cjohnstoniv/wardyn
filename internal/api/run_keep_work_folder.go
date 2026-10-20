@@ -120,9 +120,31 @@ func keptWorkFolderName(run types.AgentRun) string {
 	return strings.TrimSpace(title) + suffix
 }
 
+// keptDrive is the row keep_work_folder makes for run: the fold's row, owned by
+// the run's person, named after the run and marked with it.
+func keptDrive(r *http.Request, k *keptWorkFolder, run types.AgentRun) types.UserDrive {
+	d := k.row
+	d.ID, d.Name, d.OwnerSubject, d.CreatedBy = keptWorkFolderDriveID(run.ID), keptWorkFolderName(run), k.owner, principalFromRequest(r)
+	d.KeptFromRun = &run.ID
+	return d
+}
+
+// keptDriveRefusal is the answer to the store refusing drive d at its insert:
+// the count cap or the name, raced past the fold. nil for any other error.
+func keptDriveRefusal(err error, k *keptWorkFolder, d types.UserDrive) *runRefusal {
+	switch {
+	case errors.Is(err, store.ErrMemberDriveLimit):
+		return runError(http.StatusUnprocessableEntity, reasonMemberDriveLimitReached, keepWorkFolderLimitReachedMsg(k.limit, k.limit))
+	case errors.Is(err, store.ErrMemberDriveNameTaken):
+		return runError(http.StatusConflict, reasonMemberDriveNameTaken, memberDriveNameTakenMsg(d.Name))
+	}
+	return nil
+}
+
 // keepWorkFolder inserts the drive the fold admitted, owned by the run's
 // person and counted at their limit, once the run row exists. A run that asked
-// for nothing is a no-op.
+// for nothing is a no-op. A queued run's drive is inserted with its queue row
+// instead (queuedCreate.answer), so no promotion finds the run without it.
 func (s *Server) keepWorkFolder(r *http.Request, k *keptWorkFolder, run types.AgentRun) *runRefusal {
 	if k == nil {
 		return nil
@@ -131,29 +153,32 @@ func (s *Server) keepWorkFolder(r *http.Request, k *keptWorkFolder, run types.Ag
 	if !ok {
 		return runError(http.StatusUnprocessableEntity, reasonMemberDriveUnsupported, memberDriveUnsupportedMsg())
 	}
-	d := k.row
-	d.ID, d.Name, d.OwnerSubject, d.CreatedBy = keptWorkFolderDriveID(run.ID), keptWorkFolderName(run), k.owner, principalFromRequest(r)
-	d.KeptFromRun = &run.ID
+	d := keptDrive(r, k, run)
 	saved, err := ms.CreateMemberDrive(r.Context(), d, k.limit)
-	switch {
-	case errors.Is(err, store.ErrMemberDriveLimit):
-		return runError(http.StatusUnprocessableEntity, reasonMemberDriveLimitReached, keepWorkFolderLimitReachedMsg(k.limit, k.limit))
-	case errors.Is(err, store.ErrMemberDriveNameTaken):
-		return runError(http.StatusConflict, reasonMemberDriveNameTaken, memberDriveNameTakenMsg(d.Name))
-	case err != nil:
+	if err != nil {
+		if refusal := keptDriveRefusal(err, k, d); refusal != nil {
+			return refusal
+		}
 		return runServerError("keep the work folder", err)
 	}
+	s.auditKeptDrive(r, k, run, saved)
+	return nil
+}
+
+// auditKeptDrive is the drive.member.create row of a kept work folder.
+func (s *Server) auditKeptDrive(r *http.Request, k *keptWorkFolder, run types.AgentRun, saved types.UserDrive) {
 	data := map[string]any{
 		"backend": saved.Backend, "drive": saved.Name, "drive_id": saved.ID, "limit": k.limit,
 		"size_mib": saved.SizeMiB, "storage_class": saved.StorageClass,
 		"from_run": run.ID, "target": runner.ScratchWorkPath, "enforcement": types.EnforcementFor(saved.Backend),
 	}
-	if all, lerr := ms.ListMemberDrivesOf(r.Context(), k.owner); lerr == nil {
-		data["count"] = len(all)
+	if ms, ok := s.cfg.Store.(store.MemberDriveStore); ok {
+		if all, lerr := ms.ListMemberDrivesOf(r.Context(), k.owner); lerr == nil {
+			data["count"] = len(all)
+		}
 	}
 	s.recordAudit(r.Context(), s.auditEvent(&run.ID, actorTypeFromRequest(r), principalFromRequest(r),
 		"drive.member.create", saved.ID.String(), "success", mustJSON(data)))
-	return nil
 }
 
 // keptWorkFolderMount is the mount of the drive run keeps its work folder in,

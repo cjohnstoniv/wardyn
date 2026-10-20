@@ -7,11 +7,13 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -272,5 +274,50 @@ func TestKeepWorkFolderMarksTheDriveWithItsRun(t *testing.T) {
 	}
 	if marks[keptWorkFolderName(run)] != run.ID.String() || marks["by hand"] != "" || len(marks) != 2 {
 		t.Fatalf("kept_from_run by drive = %v, want the run id on the kept drive only", marks)
+	}
+}
+
+// TestKeepWorkFolderHoldsNoDeliveredSecret: a file secret delivered to a run
+// that keeps its work folder lands in runner.ComponentSecretDir, outside every
+// drive the run mounts, the kept one included; and no managed file may sit
+// inside the work folder at all.
+func TestKeepWorkFolderHoldsNoDeliveredSecret(t *testing.T) {
+	rn := &fakeRunner{}
+	srv, st, audit, run := dispatchTeardownFixture(t, rn, types.RunPending)
+	run.Task, run.CreatedBy = "", fileOwner
+	st.run = run
+	_, sec, _ := fileSecretServer(t)
+	srv.cfg.Secrets, srv.cfg.MaskRegistry = sec, secretmask.NewRegistry()
+	kept, err := memberDriveMount(types.UserDrive{ID: keptWorkFolderDriveID(run.ID), Name: "Run kept", Backend: types.DriveBackendDockerVolume, OwnerSubject: fileOwner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept.Target = runner.ScratchWorkPath
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
+		RunToken: "run-token", Image: "wardyn/claude-code:latest", Drives: []types.DriveMount{kept},
+		Policy: types.RunPolicySpec{EligibleGrants: []types.GrantSpec{fileSecretGrant("api-token", "deploy-token", true)}},
+	})
+	if rn.createCalls != 1 {
+		t.Fatalf("the sandbox was not created; events: %s", auditDump(audit.events, run.ID))
+	}
+	spec := rn.lastSpec
+	var keptThere, delivered bool
+	for _, d := range spec.Drives {
+		keptThere = keptThere || d.Target == runner.ScratchWorkPath
+	}
+	for _, f := range spec.ManagedFiles {
+		delivered = delivered || f.AgentOwned && string(f.Content) == fileOwnValue
+		for _, d := range spec.Drives {
+			if f.Path == d.Target || strings.HasPrefix(f.Path, strings.TrimSuffix(d.Target, "/")+"/") {
+				t.Errorf("managed file %s sits on the drive mounted at %s", f.Path, d.Target)
+			}
+		}
+	}
+	if !keptThere || !delivered {
+		t.Fatalf("spec drives %+v, file delivered %v; want the kept drive at %s and the file secret", spec.Drives, delivered, runner.ScratchWorkPath)
+	}
+	inside := runner.ManagedFile{Path: runner.ScratchWorkPath + "/api-token", Mode: runner.ComponentSecretFileMode, AgentOwned: true, Content: []byte("x")}
+	if err := runner.ValidateManagedFiles([]runner.ManagedFile{inside}); err == nil {
+		t.Errorf("a delivered secret at %s was admitted", inside.Path)
 	}
 }

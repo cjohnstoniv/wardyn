@@ -354,7 +354,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	if len(gw.delivery) > 0 {
 		createData["delivery"] = gw.delivery
 	}
-	stampDriveAudit(createData, f.drives)
+	stampDriveAudit(createData, f.drives, f.keep != nil, runID)
 	intent.stamp(createData, created.LaunchIntent != nil)
 	stampHarnessSet(createData, f.harnesses, f.image)
 	comps.stampRunCreate(createData)
