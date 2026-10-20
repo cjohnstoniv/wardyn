@@ -535,6 +535,20 @@ func TestWriteEnvAsCode_RefusesSymlinkEscape(t *testing.T) {
 	}
 }
 
+// TestWriteEnvAsCode_RefusesARootThatResolvesToADeniedPath: the workspace's stored source path was
+// vetted when it was written; one that is now a symlink into a denied host path is refused before
+// anything is opened or written there.
+func TestWriteEnvAsCode_RefusesARootThatResolvesToADeniedPath(t *testing.T) {
+	link := filepath.Join(t.TempDir(), "src")
+	if err := os.Symlink("/etc", link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	skipped, err := writeEnvAsCode(link, map[string]string{"AGENTS.md": "generated content"})
+	if err == nil || !strings.Contains(err.Error(), "denied host path") {
+		t.Fatalf("writeEnvAsCode through a link to /etc = (%v, %v), want a denied-path refusal", skipped, err)
+	}
+}
+
 // TestWriteEnvAsCode_WritesNestedFiles keeps the fix honest: the containment
 // guard must not break the normal emit (a nested .devcontainer/ path), and a
 // FRESH directory (nothing pre-existing) gets the full emit including the

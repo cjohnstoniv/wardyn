@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
@@ -151,6 +152,11 @@ func (s *Server) handleGetEnvAsCode(w http.ResponseWriter, r *http.Request) {
 // regenerate path for a file Wardyn wrote itself.
 func writeEnvAsCode(rootPath string, files map[string]string) ([]string, error) {
 	cleanRoot := filepath.Clean(rootPath)
+	// The stored path was vetted when the workspace was written; a symlink planted there since can
+	// point it at a path no sandbox may be given, and os.Root only holds writes inside what it opened.
+	if err := runner.ValidateMountSource(cleanRoot); err != nil {
+		return nil, err
+	}
 	root, err := os.OpenRoot(cleanRoot)
 	if err != nil {
 		return nil, err
