@@ -220,7 +220,7 @@
 # docs/AUDIT-ACTIONS.md 49904 = ours 49718 + theirs 49557 - base 49371 at the 0.10 W3 merge of SEC-1c onto the train.
 # 0.10 CTL-C (#2972): docs/AUDIT-ACTIONS.md 50167 adds 263 over 49904, measured: the desktop_signin.begin, .transfer and .close rows and the builtin:signin-via-org reason.
 # 0.10 CTL-C r3 (#2972 H1): docs/AUDIT-ACTIONS.md 50182 adds 15 over 50167, measured: a pause failure may be resumed by the sweep, and a stuck close writes one failure row per stage, not per pass.
-# 0.10 CTL-C r3 (#2972 M1): docs/AUDIT-ACTIONS.md 50238 adds 56 over 50182, measured: the desktop_signin.unavailable row.
+# 0.10 CTL-C r3 (#2972 M1): docs/AUDIT-ACTIONS.md 50238 adds 56 over 50182, measured: the desktop_signin.skip row.
 docs/AUDIT-ACTIONS.md=50238 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.

@@ -765,9 +765,9 @@ func TestDesktopSignin_MemberImageSwapNeedsAGrant(t *testing.T) {
 			if spec.Image != wantImage || spec.DesktopSignins != on || spec.ProxyConfig.DesktopSignins != on || signins.signedIn(run.ID) != on {
 				t.Fatalf("image %q store %v key %v recorded %v, want %q %v", spec.Image, spec.DesktopSignins, spec.ProxyConfig.DesktopSignins, signins.signedIn(run.ID), wantImage, on)
 			}
-			ev := findAudit(rec.snapshot(), run.ID, "desktop_signin.unavailable", "failure")
+			ev := findAudit(rec.snapshot(), run.ID, "desktop_signin.skip", "failure")
 			if tc.ungranted != (ev != nil) || ev != nil && !strings.Contains(string(ev.Data), `"reason":"image_not_granted"`) {
-				t.Fatalf("desktop_signin.unavailable row = %+v, want one naming image_not_granted iff the variant is ungranted", ev)
+				t.Fatalf("desktop_signin.skip row = %+v, want one naming image_not_granted iff the variant is ungranted", ev)
 			}
 			if !tc.ungranted {
 				return

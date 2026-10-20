@@ -120,7 +120,7 @@ func (s *Server) desktopSigninDispatch(ctx context.Context, run types.AgentRun, 
 		return false, image
 	}
 	if off != "" {
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "desktop_signin.unavailable", run.ID.String(), "failure",
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "desktop_signin.skip", run.ID.String(), "failure",
 			mustJSON(map[string]any{"reason": off, "image": image, "signin_image": variant})))
 		return false, image
 	}
