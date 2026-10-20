@@ -57,11 +57,15 @@ test.describe("Admin -> Runners: Add this computer", () => {
     await expect(block.getByText(SH, { exact: true })).toBeVisible();
     await expect(block.getByText(`wardyn login ${new URL(page.url()).origin}`, { exact: true })).toBeVisible();
     await expect(block.getByText("A browser tab opens. Approve the sign-in there once.")).toBeVisible();
-    // On desktop the button stays in the same row as its code, inside the row's border.
-    const row = block.locator("[data-cmd-box]", { hasText: "wardyn runner setup" }).locator("..");
-    const rowBox = await row.boundingBox();
-    const btn = await block.getByRole("button", { name: "Copy setup command" }).boundingBox();
-    expect(rowBox && btn && btn.y >= rowBox.y && btn.y + btn.height <= rowBox.y + rowBox.height).toBe(true);
+    // On desktop the Copy button sits beside its code box, in the same row (to the right, not below).
+    const setupBox = block.locator("[data-cmd-box]", { hasText: "wardyn runner setup" });
+    await expect
+      .poll(async () => {
+        const b = await setupBox.boundingBox();
+        const c = await block.getByRole("button", { name: "Copy setup command" }).boundingBox();
+        return !!b && !!c && c.x >= b.x + b.width && c.y < b.y + b.height;
+      })
+      .toBe(true);
     await expect(block.getByText("wardyn runner setup", { exact: true })).toBeVisible();
     await expect(block.getByText("It checks this computer, registers and claims the runner, starts it, and waits up to 60 seconds for it to connect. Run it again to upgrade.")).toBeVisible();
     // The header keeps Turn off runners and loses the token action.
@@ -168,10 +172,17 @@ test.describe("Admin -> Runners: Add this computer", () => {
         expect(box?.height).toBeGreaterThanOrEqual(44);
       }
       // Each Copy button is full width under its code box, and "Other ways to install" is a 44 px row.
-      const wide = await block.getByRole("button", { name: "Copy sign-in command" }).boundingBox();
+      const loginBox = block.locator("[data-cmd-box]", { hasText: "wardyn login" });
+      const signInCopy = block.getByRole("button", { name: "Copy sign-in command" });
       // The bordered box is the code's wrapper; the button is a row below it, not inside its border.
-      const box = await block.locator("[data-cmd-box]", { hasText: "wardyn login" }).boundingBox();
-      expect(wide && box && wide.y >= box.y + box.height).toBe(true);
+      await expect
+        .poll(async () => {
+          const b = await loginBox.boundingBox();
+          const c = await signInCopy.boundingBox();
+          return !!b && !!c && c.y >= b.y + b.height;
+        })
+        .toBe(true);
+      const wide = await signInCopy.boundingBox();
       expect(wide?.width).toBeGreaterThan(250);
       expect((await block.getByRole("link", { name: "Other ways to install" }).boundingBox())?.height).toBeGreaterThanOrEqual(44);
       for (const title of ["Another operating system", "Managed install (MDM)"]) {

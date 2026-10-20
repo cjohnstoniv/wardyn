@@ -7,8 +7,9 @@
 // drift in them fails this suite. Both /healthz forms (CLI sign-in on and off) are pinned: neither may show
 // `serve`, `--proxy-image`, `wdn_` or `WARDYN_TOKEN=`.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { health } from "../../lib/api/health";
 import { AddComputerBlock } from "./add-computer-block";
 
 const ORIGIN = window.location.origin;
@@ -178,9 +179,15 @@ describe("Add this computer: where focus goes after Try again", () => {
     render(<AddComputerBlock />);
     await screen.findByRole("button", { name: "Try again" });
     const release = deferredHealthz();
+    const spy = vi.spyOn(health, "health");
     await user.click(screen.getByRole("button", { name: "Try again" }));
-    release(null);
-    await waitFor(() => expect(screen.getByRole("button", { name: "Try again" })).toHaveFocus());
+    // The retry's read is settled, and its effects flushed, before focus is read.
+    await act(async () => {
+      release(null);
+      await spy.mock.results.at(-1)!.value;
+    });
+    spy.mockRestore();
+    expect(screen.getByRole("button", { name: "Try again" })).toHaveFocus();
     expect(screen.getByRole("heading", { name: "Install the CLI" })).not.toHaveFocus();
   });
 
@@ -190,12 +197,16 @@ describe("Add this computer: where focus goes after Try again", () => {
     const { unmount } = render(<AddComputerBlock />);
     await screen.findByRole("button", { name: "Try again" });
     const release = deferredHealthz();
+    const spy = vi.spyOn(health, "health");
     await user.click(screen.getByRole("button", { name: "Try again" }));
     unmount();
     const outside = document.body.appendChild(document.createElement("input"));
     outside.focus();
-    release({ version: "0.10.0", cli_sign_in: true });
-    await new Promise((r) => setTimeout(r, 20));
+    await act(async () => {
+      release({ version: "0.10.0", cli_sign_in: true });
+      await spy.mock.results.at(-1)!.value;
+    });
+    spy.mockRestore();
     expect(outside).toHaveFocus();
     outside.remove();
   });
