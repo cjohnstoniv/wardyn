@@ -118,7 +118,10 @@
 # docs/ENV.md 41677 = ours 41479 + theirs 40869 - base 40671 at the 0.10 W4c merge of ATT-INSTALL onto the train.
 # docs/ENV.md 40702 adds 31 over 40671 (0.10 DSK-B), measured: the "Needs you" takeover line.
 # docs/ENV.md 41708 = ours 41677 + theirs 40702 - base 40671 at the 0.10 W4c merge of DSK-B 12054370b onto the train.
-docs/ENV.md=41708 share=5
+# docs/ENV.md 40688 adds 17 over 40671 (OC-CLEAN2): the back-channel logout 429 bullet says a genuine logout is refused too while the bound lasts, and that sign-out and admin revocation still cut sessions.
+# docs/ENV.md 40700 adds 12 over 40688 (OC-CLEAN2): the profile PUT-existing-only Off bullet says only a direct create is logged at INFO; one held for a second person is not logged when applied.
+# docs/ENV.md 41737 = ours 41708 + theirs 40700 - base 40671 at the 0.10 W4c merge of OC-CLEAN2 onto the train.
+docs/ENV.md=41737 share=5
 # docs/ENV.md 39047 adds 478 over 38569: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
 # docs/ENV.md 38607 adds 38 over 38569, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # docs/ENV.md 40042 adds 422 over 39620, measured: the WARDYN_AWS_SIGV4_AT_PROXY row and section: which lanes and hosts are re-signed, the named refusals, and the no-hold, placement and new-dispatch notes.

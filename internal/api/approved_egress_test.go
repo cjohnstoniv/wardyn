@@ -299,6 +299,34 @@ func TestObservedEgress_MemberSeesOnlyOwnRuns(t *testing.T) {
 	}
 }
 
+// A wildcard deny covers the hosts under it exactly as the proxy reads it, so approving one of them is
+// refused too; a port-qualified deny blocks one port only and does not refuse the approval of the host.
+func TestSetApprovedEgress_WildcardDenyRefused(t *testing.T) {
+	h := newHarness(t)
+	wsID := uuid.New()
+	put := func(denied []string, domains string) (*approvedEgressStore, int, string) {
+		fake := &approvedEgressStore{ws: types.Workspace{ID: wsID, Name: "w", Status: types.WorkspaceScanned, DeniedEgress: denied}}
+		srv := New(baseTestConfig(h, fake))
+		w := do(t, srv, http.MethodPut, "/api/v1/workspaces/"+wsID.String()+"/approved-egress", adminToken, `{"domains":`+domains+`}`)
+		reason := ""
+		if w.Code != http.StatusOK {
+			reason = decodeErrorBody(t, w).Reason
+		}
+		return fake, w.Code, reason
+	}
+	fake, code, reason := put([]string{"*.blocked.example"}, `["ok.example","a.blocked.example"]`)
+	if code != http.StatusBadRequest || reason != reasonWorkspaceApprovedEgressDenied {
+		t.Fatalf("approving a host under a wildcard deny = %d %s, want 400 %s", code, reason, reasonWorkspaceApprovedEgressDenied)
+	}
+	if fake.updated != nil {
+		t.Errorf("a refused approval was written: %+v", fake.updated.ApprovedEgress)
+	}
+	// The apex is not under "*.blocked.example", and a port-qualified deny blocks one port.
+	if _, code, reason = put([]string{"*.blocked.example", "other.example:443"}, `["blocked.example","other.example"]`); code != http.StatusOK {
+		t.Fatalf("approving the apex and a port-qualified-deny host = %d %s, want 200", code, reason)
+	}
+}
+
 // An approval of a host the workspace denies would answer 200 and change nothing, since a deny beats an
 // allow at the proxy: it is refused, and the deny list is left as it is.
 func TestSetApprovedEgress_DeniedHostRefused(t *testing.T) {

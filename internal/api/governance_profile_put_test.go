@@ -4,7 +4,10 @@
 package api
 
 import (
+	"errors"
+	"log/slog"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -32,5 +35,37 @@ func TestGovernanceProfilePut_CreatesOnlyWithTheSwitchOff(t *testing.T) {
 		if w := do(t, srv, http.MethodPut, "/api/v1/governance/profiles/"+existing.ID.String(), adminToken, `{"name":"interns-2","ceiling":{"min_confinement_class":"CC2"}}`); w.Code != http.StatusOK || st.lastProfile.ID != existing.ID {
 			t.Errorf("switch %v: PUT to an existing id = %d %s, want 200", on, w.Code, w.Body.String())
 		}
+	}
+}
+
+// A PUT that creates a profile is logged once the write has stored it, not before: a write the store fails
+// created nothing, and an update to an existing id was never a create.
+func TestGovernanceProfilePut_CreateIsLoggedOnlyOnceStored(t *testing.T) {
+	const logLine = "a PUT created a governance profile"
+	existing := types.GovernanceProfile{ID: uuid.New(), Name: "interns"}
+	body := `{"name":"new","ceiling":{"min_confinement_class":"CC2"}}`
+	run := func(t *testing.T, id uuid.UUID, failStore bool) (int, string) {
+		t.Helper()
+		st := &govCrudStore{profiles: []types.GovernanceProfile{existing}}
+		if failStore {
+			st.upsertProfileErr = errors.New("store: down")
+		}
+		srv, _ := govCrudServer(t, st)
+		var logged lockedBuffer
+		prev := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+		t.Cleanup(func() { slog.SetDefault(prev) })
+		w := do(t, srv, http.MethodPut, "/api/v1/governance/profiles/"+id.String(), adminToken, body)
+		return w.Code, logged.String()
+	}
+
+	if code, logged := run(t, uuid.New(), false); code != http.StatusOK || strings.Count(logged, logLine) != 1 {
+		t.Errorf("a stored create: code %d, logged %d times, want 200 and once", code, strings.Count(logged, logLine))
+	}
+	if code, logged := run(t, uuid.New(), true); code == http.StatusOK || strings.Contains(logged, logLine) {
+		t.Errorf("a create the store failed: code %d, logged %v, want a failure and no log line", code, strings.Contains(logged, logLine))
+	}
+	if code, logged := run(t, existing.ID, false); code != http.StatusOK || strings.Contains(logged, logLine) {
+		t.Errorf("an update to an existing id: code %d, logged %v, want 200 and no log line", code, strings.Contains(logged, logLine))
 	}
 }

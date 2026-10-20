@@ -242,10 +242,12 @@ func (s *Server) writeGovernanceProfile(w http.ResponseWriter, r *http.Request, 
 	}
 	var effective *ResolvedProfile
 	var held *heldProfileWrite
+	putCreates := false
 	createdBy := principalFromRequest(r)
 	saved, err := s.cfg.Store.WriteGovernanceProfile(r.Context(), id,
 		func(all []types.GovernanceProfile, assignments []types.GovernanceAssignment) (types.GovernanceProfile, error) {
-			if refusal := s.profilePutCreateRefusal(r, id, status, all); refusal != nil {
+			putCreates = profilePutCreatesAtID(id, status, all)
+			if refusal := s.profilePutCreateRefusal(putCreates); refusal != nil {
 				return types.GovernanceProfile{}, refusal
 			}
 			p, res, err := s.buildGovernanceProfile(createdBy, id, req, all)
@@ -274,6 +276,12 @@ func (s *Server) writeGovernanceProfile(w http.ResponseWriter, r *http.Request, 
 		writeServerError(w, r, "write governance profile", err)
 		return
 	}
+	if putCreates {
+		// Only a PUT that created a profile is logged, and only now that the write stored it: a held, refused or
+		// failed write created nothing.
+		slog.InfoContext(r.Context(), "api: a PUT created a governance profile at the id it named; WARDYN_GOVERNANCE_PROFILE_PUT_EXISTING_ONLY would refuse it",
+			"profile_id", id.String())
+	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"governance.profile.write", saved.ID.String(), "success", mustJSON(profileWriteAuditData(saved, effective))))
 	if mode == govBypass {
@@ -290,20 +298,21 @@ func (s *Server) writeGovernanceProfile(w http.ResponseWriter, r *http.Request, 
 	writeJSON(w, status, governanceProfileResponse{Profile: newProfileView(saved, effective, nil), Warnings: warns})
 }
 
-// profilePutCreateRefusal answers a PUT (status 200) naming an id no profile in all holds. A run keeps
-// the id of the profile it was created under, so a profile created at a deleted one's id would
-// govern that profile's runs: with Config.GovernanceProfilePutExistingOnly the PUT is a 404 and a
-// new profile comes through POST, which mints its id. Off, the create goes through and is logged.
-func (s *Server) profilePutCreateRefusal(r *http.Request, id uuid.UUID, status int, all []types.GovernanceProfile) *profileWriteError {
-	if status != http.StatusOK || slices.ContainsFunc(all, func(p types.GovernanceProfile) bool { return p.ID == id }) {
-		return nil
-	}
-	if s.cfg.GovernanceProfilePutExistingOnly {
+// profilePutCreatesAtID reports a PUT (status 200) naming an id no profile in all holds: it would create a
+// profile at the id it named.
+func profilePutCreatesAtID(id uuid.UUID, status int, all []types.GovernanceProfile) bool {
+	return status == http.StatusOK && !slices.ContainsFunc(all, func(p types.GovernanceProfile) bool { return p.ID == id })
+}
+
+// profilePutCreateRefusal answers a PUT that would create at the id it named. A run keeps the id of the
+// profile it was created under, so a profile created at a deleted one's id would govern that profile's
+// runs: with Config.GovernanceProfilePutExistingOnly the PUT is a 404 and a new profile comes through POST,
+// which mints its id. Off, the create goes through and is logged once it has stored.
+func (s *Server) profilePutCreateRefusal(creates bool) *profileWriteError {
+	if creates && s.cfg.GovernanceProfilePutExistingOnly {
 		return &profileWriteError{status: http.StatusNotFound, reason: reasonGovernanceProfileNotFoundByID,
 			msg: "governance profile not found; create a profile with POST /api/v1/governance/profiles"}
 	}
-	slog.InfoContext(r.Context(), "api: a PUT created a governance profile at the id it named; WARDYN_GOVERNANCE_PROFILE_PUT_EXISTING_ONLY would refuse it",
-		"profile_id", id.String())
 	return nil
 }
 

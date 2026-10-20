@@ -1477,7 +1477,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 ### `WARDYN_GOVERNANCE_PROFILE_PUT_EXISTING_ONLY`
 
-- Off (the default): `PUT /api/v1/governance/profiles/{id}` naming an id no profile holds creates one there, logged at INFO as a create the switch would refuse.
+- Off (the default): `PUT /api/v1/governance/profiles/{id}` naming an id no profile holds creates one there. A direct write is logged at INFO as a create the switch would refuse; one held for a second person is not.
 - On: that PUT answers `404 governance_profile_not_found`; create a profile with `POST /api/v1/governance/profiles`, which mints the id (flag `-governance-profile-put-existing-only`).
 
 ### `WARDYN_EGRESS_HOST_PORT_GRANTS_INERT`
@@ -1753,7 +1753,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - A logout token the provider signed for this client ends that person's console sessions as their sign-out does; tokens, keys and runs keep working.
 - It needs the logout event as a JSON object, a `sub`, a `jti`, no `nonce` and an `iat` within five minutes.
 - Anything else, including a `sid` without a `sub`, gets `400`; a cut that cannot be written gets `503`.
-- Past five tokens that fail to verify, then one a second per process, a POST gets `429` before verification, so forged tokens cannot drive unbounded key fetches.
+- Past five tokens that fail to verify, then one a second per process, a POST gets `429` before verification, so forged tokens cannot drive unbounded key fetches. While it lasts, a provider's genuine logout gets `429` too; sign-out and admin revocation still cut sessions.
 - Each cut is a `session.revoke` row with `source` `idp_back_channel_logout`.
 - Front-channel logout, which Entra ID offers, is not supported, and a person set up by Entra object id before first sign-in is not reached by `sub`.
 

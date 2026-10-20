@@ -5,10 +5,12 @@ package api
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -87,6 +89,9 @@ func TestUploadSSOToken_KillsSignInRunAfterResponse(t *testing.T) {
 		srv.WaitBackground()
 		if got := st.stateNow(); got != types.RunKilled {
 			t.Fatalf("sign-in run state = %s after a stored capture, want KILLED", got)
+		}
+		if rows := audit.find("run.kill"); len(rows) != 1 {
+			t.Fatalf("run.kill rows = %d after a stored capture, want exactly 1", len(rows))
 		}
 		row := killRow(t, audit, runID.String())
 		data := killData(t, row)
@@ -302,4 +307,97 @@ func TestKillSignInRunAfterCapture_LostSwap(t *testing.T) {
 			t.Errorf("no give-up log; got:\n%s", logged.String())
 		}
 	})
+}
+
+// flakyGetRunStore fails its first GetRun with a plain store error, as a dropped pooled connection does, then
+// answers from the embedded store.
+type flakyGetRunStore struct {
+	*killableLoginRunStore
+	mu    sync.Mutex
+	calls int
+	fails int
+}
+
+func (s *flakyGetRunStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
+	s.mu.Lock()
+	s.calls++
+	fail := s.calls <= s.fails
+	s.mu.Unlock()
+	if fail {
+		return types.AgentRun{}, errors.New("store: connection reset")
+	}
+	return s.killableLoginRunStore.GetRun(ctx, id)
+}
+
+// TestKillSignInRunAfterCapture_TransientReadIsRetriedOnce pins the post-capture read: one fast store error is
+// retried and the run is killed, and two in a row are logged and left to the idle cap (no run.kill row).
+func TestKillSignInRunAfterCapture_TransientReadIsRetriedOnce(t *testing.T) {
+	newSrv := func(t *testing.T, fails int) (*Server, *memAudit, *killableLoginRunStore, uuid.UUID) {
+		t.Helper()
+		runID := uuid.New()
+		inner := &killableLoginRunStore{
+			ssoLoginRunStore: ssoLoginRunStore{run: types.AgentRun{
+				ID: runID, Task: harnessLoginTask, Agent: awsSSOAgent,
+				CreatedBy: "alice@example.com", UpdatedAt: time.Now().UTC(),
+			}},
+			state: types.RunRunning,
+		}
+		audit := &memAudit{}
+		cfg := baseTestConfig(newHarness(t), &flakyGetRunStore{killableLoginRunStore: inner, fails: fails})
+		cfg.Audit = audit
+		srv := New(cfg)
+		srv.signInCaptureKillGrace = 0
+		return srv, audit, inner, runID
+	}
+
+	t.Run("one store error is retried and the run is killed", func(t *testing.T) {
+		srv, audit, st, runID := newSrv(t, 1)
+		srv.killSignInRunAfterCapture(context.Background(), runID, "alice@example.com")
+		srv.WaitBackground()
+		if got := st.stateNow(); got != types.RunKilled {
+			t.Fatalf("sign-in run state = %s after one transient read error, want KILLED", got)
+		}
+		if rows := audit.find("run.kill"); len(rows) != 1 {
+			t.Errorf("run.kill rows = %d, want exactly 1", len(rows))
+		}
+	})
+
+	t.Run("two store errors in a row leave the run to its idle cap", func(t *testing.T) {
+		srv, audit, st, runID := newSrv(t, 2)
+		srv.killSignInRunAfterCapture(context.Background(), runID, "alice@example.com")
+		srv.WaitBackground()
+		if got := st.stateNow(); got != types.RunRunning {
+			t.Fatalf("sign-in run state = %s, want RUNNING when the read keeps failing", got)
+		}
+		if rows := audit.find("run.kill"); len(rows) != 0 {
+			t.Errorf("run.kill rows = %d, want none", len(rows))
+		}
+	})
+}
+
+// countingBlockedGetRunStore's GetRun counts its calls and waits for its context, as a wedged read does.
+type countingBlockedGetRunStore struct {
+	ssoLoginRunStore
+	calls atomic.Int32
+}
+
+func (s *countingBlockedGetRunStore) GetRun(ctx context.Context, _ uuid.UUID) (types.AgentRun, error) {
+	s.calls.Add(1)
+	<-ctx.Done()
+	return types.AgentRun{}, ctx.Err()
+}
+
+// A read that timed out is not retried: the retry is for a store error that came back fast, and a second wait
+// would push the read phase past signInCaptureReadTimeout and the background shutdown budget.
+func TestReadSignInRunToEnd_ATimedOutReadIsNotRetried(t *testing.T) {
+	st := &countingBlockedGetRunStore{}
+	srv := New(baseTestConfig(newHarness(t), st))
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := srv.readSignInRunToEnd(ctx, uuid.New()); err == nil {
+		t.Fatal("a read that timed out returned no error")
+	}
+	if got := st.calls.Load(); got != 1 {
+		t.Fatalf("GetRun was called %d times for a read that timed out, want 1", got)
+	}
 }
