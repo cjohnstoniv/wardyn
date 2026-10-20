@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -290,24 +291,33 @@ func (h setupHost) checkSettings(plan setupPlan) error {
 }
 
 // proxyForService settles the proxy variables the service carries: the shell's, else the ones an earlier setup
-// carried, and says which, by name.
+// carried. Only a proxy address in the shell replaces the earlier set; a shell that sets just NO_PROXY keeps the
+// earlier addresses and takes its own exclusion list.
 func proxyForService(out io.Writer, paths setupPaths) ([]carriedProxy, error) {
 	carried, stripped, err := carryProxy(os.Getenv)
 	if err != nil {
 		return nil, err
 	}
-	if len(carried) > 0 {
+	if slices.ContainsFunc(carried, func(c carriedProxy) bool { return !isNoProxyName(c.name) }) {
 		fmt.Fprintln(out, proxyCarryLine(carried, stripped))
 		return carried, nil
 	}
-	// The shell sets none, so a rerun keeps what an earlier setup carried, as it keeps the CA files.
-	if carried, _, err = carryProxy(paths.setting); err != nil {
+	earlier, _, err := carryProxy(paths.setting)
+	if err != nil {
 		return nil, fmt.Errorf("%w (kept from the earlier setup, %s)", err, cmp.Or(paths.envFile, paths.plistFile))
 	}
-	if len(carried) > 0 {
-		fmt.Fprintln(out, proxyKeptLine(carried))
+	if len(carried) == 0 {
+		if len(earlier) > 0 {
+			fmt.Fprintln(out, proxyKeptLine(earlier))
+		}
+		return earlier, nil
 	}
-	return carried, nil
+	fmt.Fprintln(out, proxyCarryLine(carried, stripped))
+	kept := slices.DeleteFunc(earlier, func(c carriedProxy) bool { return isNoProxyName(c.name) })
+	if len(kept) > 0 {
+		fmt.Fprintln(out, keptAddressesLine(kept))
+	}
+	return append(kept, carried...), nil
 }
 
 // preflight validates every input and checks Docker, so that a refusal comes before the single-use
@@ -402,4 +412,16 @@ func (h setupHost) preflight(cmd *cobra.Command, o setupOptions) (setupPlan, err
 	}
 	plan.useRelay(cmd.OutOrStdout(), pair)
 	return plan, nil
+}
+
+func isNoProxyName(name string) bool { return strings.HasSuffix(strings.ToUpper(name), "NO_PROXY") }
+
+// keptAddressesLine is the line setup prints when the shell sets only an exclusion list: the earlier proxy
+// addresses stay, named by variable only.
+func keptAddressesLine(carried []carriedProxy) string {
+	names := make([]string, len(carried))
+	for i, c := range carried {
+		names[i] = c.name
+	}
+	return "This shell sets no proxy address, so the runner service keeps " + strings.Join(names, ", ") + " from the earlier setup."
 }

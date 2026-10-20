@@ -1205,3 +1205,29 @@ func TestSetupNoServiceRefusesWhileAServiceIsInstalled(t *testing.T) {
 		})
 	}
 }
+
+// A shell that sets only NO_PROXY keeps the proxy addresses an earlier setup carried and takes its own
+// exclusion list; only an address in the shell replaces the earlier set.
+func TestSetupRerunWithOnlyNoProxyKeepsTheCarriedAddresses(t *testing.T) {
+	clearProxyEnv(t)
+	t.Setenv("HTTPS_PROXY", "http://proxy.corp:3128")
+	t.Setenv("NO_PROXY", "localhost")
+	f := newSetupFixture(t, "linux")
+	if out, err := f.run(setupOptions{tokenFile: f.tokenFile}); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	clearProxyEnv(t)
+	t.Setenv("NO_PROXY", ".corp")
+	f.flagless = true
+	out, err := f.run(setupOptions{})
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	env := f.read(mustPaths(t, f).envFile)
+	if !strings.Contains(env, "HTTPS_PROXY=http://proxy.corp:3128\n") || !strings.Contains(env, "NO_PROXY=.corp\n") || strings.Contains(env, "localhost") {
+		t.Errorf("want the kept address and the new exclusion list only:\n%s", env)
+	}
+	if !strings.Contains(out, "keeps HTTPS_PROXY from the earlier setup") {
+		t.Errorf("the rerun did not name the kept address:\n%s", out)
+	}
+}

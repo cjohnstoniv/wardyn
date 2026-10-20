@@ -75,7 +75,7 @@ func readStatus(t *testing.T, dir string) (runnerStatus, string) {
 // proxy credential inside an error is cut out.
 func TestStatusFileHoldsTheLinkStateAndNoSecret(t *testing.T) {
 	dir := t.TempDir()
-	now := time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC)
+	now := time.Now().UTC().Truncate(time.Second)
 	w := newStatusWriter(dir)
 	w.now = func() time.Time { return now }
 	if st, _ := readStatus(t, dir); st.State != "starting" || st.PID != os.Getpid() {

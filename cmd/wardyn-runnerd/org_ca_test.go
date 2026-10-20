@@ -329,3 +329,20 @@ func TestLoadOrgCARefusesAWritableDirectory(t *testing.T) {
 		}
 	}
 }
+
+// The directory that is checked is the file's real one: a symlink from a private directory to a file in a
+// directory others can write is refused.
+func TestLoadOrgCARefusesAFileReachedThroughASymlinkToAWritableDirectory(t *testing.T) {
+	private, shared := t.TempDir(), t.TempDir()
+	if err := os.Chmod(shared, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	real := writeFile(t, filepath.Join(shared, "ca.pem"), testCAPEM(t, "corp"))
+	link := filepath.Join(private, "ca.pem")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skip(err)
+	}
+	if _, _, err := loadOrgCA(link); err == nil || !strings.Contains(err.Error(), "the directory "+shared) {
+		t.Errorf("err=%v; want a refusal naming the directory %s the file is really in", err, shared)
+	}
+}

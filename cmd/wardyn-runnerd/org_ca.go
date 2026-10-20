@@ -49,7 +49,11 @@ func readOrgCA(path string, self int, now time.Time) (string, int, error) {
 	if st.Mode().Perm()&0o022 != 0 {
 		return "", 0, fmt.Errorf("mode %04o lets group or others write it, so another account could add a root this runner trusts: chmod go-w it", st.Mode().Perm())
 	}
-	if err := checkOrgCADir(filepath.Dir(path)); err != nil {
+	real := path
+	if r, err := filepath.EvalSymlinks(path); err == nil {
+		real = r
+	}
+	if err := checkOrgCADir(filepath.Dir(real)); err != nil {
 		return "", 0, err
 	}
 	if uid, ok := fileOwner(st); ok && uid != 0 && uid != self {
