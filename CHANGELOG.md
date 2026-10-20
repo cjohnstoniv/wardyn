@@ -14,6 +14,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on
   `aws_sso_refused_tokens` (migration `0194_aws_sso_refused_tokens`). Without it an AWS SSO session whose renewal
   AWS refused cannot be marked, read or cleared, so replicas do not share that mark.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
+  `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on
+  `ui_desktop_closed` (migration `0199_ui_desktop_closed`). Without it a desktop Close cannot be stored or read, so
+  every desktop session is refused and Close fails.
 - **Copying out of a desktop is now blocked by default.** The UI gateway's relay filters the clipboard of the
   `novnc` desktop app: paste into the desktop stays allowed, copy out of it is dropped and audited as
   `ui.clipboard`. Until now both directions synced unfiltered. A `novnc` socket that does not speak RFB is closed.

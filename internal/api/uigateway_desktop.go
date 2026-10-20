@@ -19,8 +19,11 @@
 package api
 
 import (
+	"cmp"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"html"
@@ -38,6 +41,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/rfbfilter"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -54,6 +58,10 @@ const (
 	uiDesktopClose   = "/__close"
 	uiDesktopAssets  = "/assets/"
 
+	// uiDesktopClosedRecheck is how often an open desktop stream re-reads the Closed set, so a Close
+	// on another replica ends it within this bound.
+	uiDesktopClosedRecheck = 15 * time.Second
+
 	uiTicketInvalidMsg = "invalid, expired, or already-used attach ticket"
 	uiNoSessionMsg     = "no valid UI session for this run — open the app again from its run page"
 	uiNoDesktopMsg     = "this run has no desktop: only a Linux desktop VM run has one"
@@ -68,8 +76,8 @@ const (
 	desktopCloseUnreachable   websocket.StatusCode = 4004
 )
 
-// uiDesktopSessions is the process-local state of desktop sessions, keyed by uiReassertKey: those
-// their person closed (until the cookie would have expired anyway) and the streams still open.
+// uiDesktopSessions is the process-local state of desktop sessions, keyed by uiReassertKey: a cache
+// of those known closed (until the cookie would have expired anyway) and the streams still open.
 type uiDesktopSessions struct {
 	mu     sync.Mutex
 	closed map[string]int64
@@ -84,7 +92,14 @@ func (s *Server) uiSessionTTLFor(sess uiSession) time.Duration {
 	return s.uiSessionTTL()
 }
 
-func (s *Server) uiDesktopClosed(sess uiSession, now time.Time) bool {
+// uiDesktopClosedKey is the Closed set's key for sess in the store: a digest, never principal text.
+func uiDesktopClosedKey(sess uiSession) string {
+	sum := sha256.Sum256([]byte(uiReassertKey(sess)))
+	return hex.EncodeToString(sum[:])
+}
+
+// uiDesktopClosedHere reports whether this process knows sess closed (its cache), dropping expired entries.
+func (s *Server) uiDesktopClosedHere(sess uiSession, now time.Time) bool {
 	d := &s.uiDesktop
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -97,20 +112,57 @@ func (s *Server) uiDesktopClosed(sess uiSession, now time.Time) bool {
 	return ok
 }
 
-// closeDesktop ends sess: its cookie is refused from now on, wherever it was copied, and every
-// stream it opened is cut.
-func (s *Server) closeDesktop(sess uiSession) {
+// uiDesktopClosed reports whether sess was closed on any replica. Only a closed answer is cached: an
+// open one is read from the store every time, and a store that cannot answer counts as closed.
+func (s *Server) uiDesktopClosed(ctx context.Context, sess uiSession, now time.Time) bool {
+	if s.uiDesktopClosedHere(sess, now) {
+		return true
+	}
+	st, ok := s.cfg.Store.(store.UIDesktopClosedStore)
+	if !ok {
+		slog.WarnContext(ctx, "wardynd: desktop session refused: this store keeps no Closed set", "run_id", sess.Run)
+		return true
+	}
+	closed, err := st.UIDesktopClosed(ctx, uiDesktopClosedKey(sess), now)
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: desktop session refused: the Closed set could not be read", "run_id", sess.Run, "err", err)
+		return true
+	}
+	if closed {
+		s.cacheDesktopClosed(sess)
+	}
+	return closed
+}
+
+func (s *Server) cacheDesktopClosed(sess uiSession) {
 	d := &s.uiDesktop
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.closed == nil {
 		d.closed = map[string]int64{}
 	}
-	key := uiReassertKey(sess)
-	d.closed[key] = sess.Expires
-	for _, cancel := range d.live[key] {
+	d.closed[uiReassertKey(sess)] = sess.Expires
+}
+
+// closeDesktop ends sess: its cookie is refused from now on on every replica, wherever it was
+// copied, and every stream it opened here is cut (one on another replica ends at its next
+// uiDesktopClosedRecheck). An error means nothing was closed: the Close was not stored.
+func (s *Server) closeDesktop(ctx context.Context, sess uiSession) error {
+	st, ok := s.cfg.Store.(store.UIDesktopClosedStore)
+	if !ok {
+		return errors.New("this store keeps no desktop Closed set")
+	}
+	if err := st.CloseUIDesktop(ctx, uiDesktopClosedKey(sess), time.Unix(sess.Expires, 0)); err != nil {
+		return err
+	}
+	s.cacheDesktopClosed(sess)
+	d := &s.uiDesktop
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, cancel := range d.live[uiReassertKey(sess)] {
 		cancel()
 	}
+	return nil
 }
 
 // trackDesktop registers an open stream of sess, cancelled by closeDesktop; the returned func forgets it.
@@ -152,7 +204,6 @@ func (s *Server) uiEnterDesktop(w http.ResponseWriter, r *http.Request, run type
 	}
 	sess := s.newUISession(run, ta, uiDesktopAppName, 0, min(s.uiSessionTTL(), uiDesktopSessionTTL))
 	sess.Desktop = true
-	sess.Boot = s.bootEpoch
 	s.startUISession(w, r, run, ta, sess, map[string]any{"app": uiDesktopAppName, "machine_kind": string(run.MachineKind)}, "/", redirectStatus)
 }
 
@@ -187,7 +238,11 @@ func (s *Server) handleDesktopRelay(w http.ResponseWriter, r *http.Request, runI
 	case rest == uiDesktopRFB:
 		s.serveDesktopRFB(w, r, sess)
 	case rest == uiDesktopClose && r.Method == http.MethodPost:
-		s.closeDesktop(sess)
+		if err := s.closeDesktop(r.Context(), sess); err != nil {
+			slog.WarnContext(r.Context(), "wardynd: desktop Close could not be stored", "run_id", runID, "err", err)
+			writeErrorReason(w, http.StatusServiceUnavailable, reasonStoreError, "could not close this desktop session; try again")
+			return
+		}
 		http.SetCookie(w, &http.Cookie{Name: uiCookieName, Value: "", Path: s.uiBasePath() + uiCookiePath(runID, uiDesktopAppName),
 			HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: s.cfg.OIDCSecureCookies, MaxAge: -1})
 		w.WriteHeader(http.StatusNoContent)
@@ -313,6 +368,8 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 	go func() { _, _ = io.Copy(&wsUnframer{w: conn}, filtered); done <- struct{}{} }()
 	tick := time.NewTicker(uiDesktopRecheck)
 	defer tick.Stop()
+	closedTick := time.NewTicker(cmp.Or(s.uiDesktopClosedEvery, uiDesktopClosedRecheck))
+	defer closedTick.Stop()
 	for {
 		select {
 		case <-done:
@@ -320,10 +377,16 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 			return
 		case <-ctx.Done():
 			// The bound, Close, or the browser leaving: only the first two are told.
-			if errors.Is(ctx.Err(), context.DeadlineExceeded) || s.uiDesktopClosed(sess, s.cfg.Now()) {
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) || s.uiDesktopClosedHere(sess, s.cfg.Now()) {
 				_ = c.Close(desktopCloseSessionEnded, "this desktop session ended")
 			}
 			return
+		case <-closedTick.C:
+			// A Close on another replica, or a Closed set that cannot be read, ends the stream.
+			if s.uiDesktopClosed(ctx, sess, s.cfg.Now()) {
+				_ = c.Close(desktopCloseSessionEnded, "this desktop session ended")
+				return
+			}
 		case <-tick.C:
 			if _, code, why := s.desktopRunCheck(ctx, sess); code != 0 {
 				_ = c.Close(code, why)

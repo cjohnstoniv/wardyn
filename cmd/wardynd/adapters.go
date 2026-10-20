@@ -587,6 +587,7 @@ func reapTickLock(pool *pgxpool.Pool) func(context.Context) (func(), bool) {
 		if ok {
 			pruneAWSSSOSpentTokens(ctx, pool)
 			pruneAWSSSORefusedTokens(ctx, pool)
+			pruneUIDesktopClosed(ctx, pool)
 		}
 		return release, ok
 	}
@@ -605,6 +606,20 @@ func pruneAWSSSOSpentTokens(ctx context.Context, pool *pgxpool.Pool) {
 	}
 	if n > 0 {
 		slog.InfoContext(ctx, "wardynd: pruned stale aws sso spent-token rows", slog.Int("deleted", n))
+	}
+}
+
+// pruneUIDesktopClosed deletes the desktop Closes whose cookies have expired: past that bound the
+// cookie is refused anyway. Called from reapTickLock, under the reap advisory lock. Best-effort, as
+// pruneAWSSSOSpentTokens: an expired row is never read, so a missed prune only costs its space.
+func pruneUIDesktopClosed(ctx context.Context, pool *pgxpool.Pool) {
+	n, err := store.NewPG(pool).PruneUIDesktopClosed(ctx, time.Now())
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: pruning desktop Closes failed", slog.Any("err", err))
+		return
+	}
+	if n > 0 {
+		slog.InfoContext(ctx, "wardynd: pruned expired desktop Close rows", slog.Int("deleted", n))
 	}
 }
 

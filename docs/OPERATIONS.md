@@ -5500,6 +5500,8 @@ What the switch needs, and refuses to render or boot without:
     ephemeral one at boot (`buildSecretStore`, `cmd/wardynd`), so a secret written by
     one replica cannot be decrypted by another. Set the same `WARDYN_AGE_KEY` (or a key
     service) on every replica; the chart refuses an ephemeral key with an external DSN.
+- **A desktop Close is shared through the database** (`ui_desktop_closed`): every replica refuses the closed cookie,
+  and a stream open on another replica ends within 15 s.
 
 ### Residual risks
 

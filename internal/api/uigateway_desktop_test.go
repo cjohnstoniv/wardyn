@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -151,6 +152,7 @@ func newDesktopHarness(t *testing.T) (*uiHarness, *desktopFakeRunner) {
 	h.srv.cfg.UIDir = dir
 	dr := &desktopFakeRunner{sshFakeRunner: h.runner, dialled: make(chan string, 8)}
 	h.srv.cfg.Runner = dr
+	h.srv.cfg.Store = &desktopClosedStore{uiMemStore: h.store, closed: map[string]time.Time{}}
 	return h, dr
 }
 
@@ -449,31 +451,160 @@ func TestDesktopStreamPlainGetTellsAGoneSessionFromAGoodOne(t *testing.T) {
 	}
 }
 
-// A restart is a new process with the same cookie key, an empty Closed set and a new boot epoch. A
-// desktop cookie from before it is refused after it, Closed or still open: Close stays closed.
-func TestDesktopSessionDoesNotOutliveARestart(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		closed bool
-	}{{"closed before the restart", true}, {"open at the restart", false}} {
-		t.Run(tc.name, func(t *testing.T) {
-			h, _ := newDesktopHarness(t)
-			c := desktopCookie(t, h.enterDesktop(h.ticket(h.run.ID, h.owner, oidc.RoleUser)))
-			want := http.StatusUpgradeRequired
-			if tc.closed {
-				req := httptest.NewRequest(http.MethodPost, desktopPath(h, uiDesktopClose), nil)
-				req.AddCookie(c)
-				h.gateway.ServeHTTP(httptest.NewRecorder(), req)
-				want = http.StatusForbidden
-			}
-			if got := uiGet(h, desktopPath(h, uiDesktopRFB), c); got.Code != want {
-				t.Fatalf("plain GET before the restart = %d, want %d", got.Code, want)
-			}
-			h.srv = New(h.srv.cfg)
-			h.gateway = h.srv.UIGatewayHandler()
-			if got := uiGet(h, desktopPath(h, uiDesktopRFB), c); got.Code != http.StatusForbidden {
-				t.Fatalf("plain GET after the restart = %d, want 403", got.Code)
-			}
-		})
+// A Close holds across a restart and on every replica: a new Server on the same store (and cookie
+// key) refuses the closed cookie, while an open one still works after the restart.
+func TestDesktopCloseHoldsAcrossARestartAndReplicas(t *testing.T) {
+	t.Run("restart", func(t *testing.T) {
+		h, _ := newDesktopHarness(t)
+		closed := desktopCookie(t, h.enterDesktop(h.ticket(h.run.ID, h.owner, oidc.RoleUser)))
+		h.clock.advance(time.Second) // a session's key carries its issue second: a later one is another session
+		open := desktopCookie(t, h.enterDesktop(h.ticket(h.run.ID, h.owner, oidc.RoleUser)))
+		if rec := postDesktopClose(h.gateway, h, closed); rec.Code != http.StatusNoContent {
+			t.Fatalf("close = %d %s", rec.Code, rec.Body.String())
+		}
+		h.srv = New(h.srv.cfg)
+		h.gateway = h.srv.UIGatewayHandler()
+		if got := uiGet(h, desktopPath(h, uiDesktopRFB), closed); got.Code != http.StatusForbidden {
+			t.Fatalf("the closed cookie after the restart = %d, want 403", got.Code)
+		}
+		if got := uiGet(h, desktopPath(h, uiDesktopRFB), open); got.Code != http.StatusUpgradeRequired {
+			t.Fatalf("the open cookie after the restart = %d, want 426", got.Code)
+		}
+	})
+	t.Run("replica", func(t *testing.T) {
+		h, _ := newDesktopHarness(t)
+		b := desktopReplica(h)
+		c := desktopCookie(t, h.enterDesktop(h.ticket(h.run.ID, h.owner, oidc.RoleUser)))
+		if got := uiGet(b, desktopPath(h, uiDesktopRFB), c); got.Code != http.StatusUpgradeRequired {
+			t.Fatalf("replica B before the Close = %d, want 426", got.Code)
+		}
+		if rec := postDesktopClose(h.gateway, h, c); rec.Code != http.StatusNoContent {
+			t.Fatalf("close on A = %d %s", rec.Code, rec.Body.String())
+		}
+		if got := uiGet(b, desktopPath(h, uiDesktopRFB), c); got.Code != http.StatusForbidden {
+			t.Fatalf("replica B after a Close on A = %d, want 403", got.Code)
+		}
+	})
+}
+
+// A stream open on replica B ends with the session-ended code within the re-check bound of a Close
+// on replica A.
+func TestDesktopStreamOnAnotherReplicaEndsAfterAClose(t *testing.T) {
+	h, dr := newDesktopHarness(t)
+	b := desktopReplica(h)
+	b.srv.uiDesktopClosedEvery = 50 * time.Millisecond
+	srvB := httptest.NewServer(b.gateway)
+	t.Cleanup(srvB.Close)
+	c := desktopCookie(t, h.enterDesktop(h.ticket(h.run.ID, h.owner, oidc.RoleUser)))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	v := dialDesktop(t, ctx, h, srvB.URL, c)
+	<-dr.dialled
+	v.handshake()
+	time.Sleep(200 * time.Millisecond) // several re-checks pass while the session is open
+
+	if rec := postDesktopClose(h.gateway, h, c); rec.Code != http.StatusNoContent {
+		t.Fatalf("close on A = %d %s", rec.Code, rec.Body.String())
 	}
+	closedAt := time.Now()
+	_, _, err := v.ws.Read(ctx)
+	var ce websocket.CloseError
+	if !errors.As(err, &ce) || ce.Code != desktopCloseSessionEnded {
+		t.Fatalf("B's stream after a Close on A = %v, want close %d", err, desktopCloseSessionEnded)
+	}
+	if took := time.Since(closedAt); took > 2*time.Second {
+		t.Fatalf("B's stream ended %v after the Close, want within the re-check bound", took)
+	}
+}
+
+// A Closed set that cannot be read refuses, never admits: a plain GET is refused as a closed session
+// is, and an open stream ends as one does. A Close that cannot be stored is not reported done.
+func TestDesktopClosedSetFailureRefuses(t *testing.T) {
+	h, dr := newDesktopHarness(t)
+	h.srv.uiDesktopClosedEvery = 50 * time.Millisecond
+	fake := h.srv.cfg.Store.(*desktopClosedStore)
+	srv := httptest.NewServer(h.gateway)
+	t.Cleanup(srv.Close)
+	c := desktopCookie(t, h.enterDesktop(h.ticket(h.run.ID, h.owner, oidc.RoleUser)))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	v := dialDesktop(t, ctx, h, srv.URL, c)
+	<-dr.dialled
+	v.handshake()
+
+	fake.fail(errors.New("database unreachable"), nil)
+	if got := uiGet(h, desktopPath(h, uiDesktopRFB), c); got.Code != http.StatusForbidden {
+		t.Fatalf("plain GET with the Closed set unreadable = %d, want 403", got.Code)
+	}
+	_, _, err := v.ws.Read(ctx)
+	var ce websocket.CloseError
+	if !errors.As(err, &ce) || ce.Code != desktopCloseSessionEnded {
+		t.Fatalf("the open stream with the Closed set unreadable = %v, want close %d", err, desktopCloseSessionEnded)
+	}
+
+	fake.fail(nil, errors.New("database unreachable"))
+	rec := postDesktopClose(h.gateway, h, c)
+	if rec.Code != http.StatusServiceUnavailable || len(setUICookies(rec)) != 0 {
+		t.Fatalf("close with the store refusing the write = %d (cookies %v), want 503 and the cookie kept", rec.Code, setUICookies(rec))
+	}
+	fake.fail(nil, nil)
+	if got := uiGet(h, desktopPath(h, uiDesktopRFB), c); got.Code != http.StatusUpgradeRequired {
+		t.Fatalf("plain GET after a Close that was not stored = %d, want 426 (still open)", got.Code)
+	}
+}
+
+// desktopClosedStore is the harness store with a shared Closed set, which every Server built on it
+// reads as replicas on one database do; fail makes its reads or its writes fail.
+type desktopClosedStore struct {
+	*uiMemStore
+	mu       sync.Mutex
+	closed   map[string]time.Time
+	readErr  error
+	writeErr error
+}
+
+func (s *desktopClosedStore) fail(read, write error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.readErr, s.writeErr = read, write
+}
+
+func (s *desktopClosedStore) CloseUIDesktop(_ context.Context, key string, expiresAt time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.writeErr != nil {
+		return s.writeErr
+	}
+	s.closed[key] = expiresAt
+	return nil
+}
+
+func (s *desktopClosedStore) UIDesktopClosed(_ context.Context, key string, now time.Time) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.readErr != nil {
+		return false, s.readErr
+	}
+	exp, ok := s.closed[key]
+	return ok && exp.After(now), nil
+}
+
+func (s *desktopClosedStore) PruneUIDesktopClosed(context.Context, time.Time) (int, error) {
+	return 0, nil
+}
+
+// desktopReplica is a second Server on h's config (its store and cookie key): another replica.
+func desktopReplica(h *uiHarness) *uiHarness {
+	b := *h
+	b.srv = New(h.srv.cfg)
+	b.gateway = b.srv.UIGatewayHandler()
+	return &b
+}
+
+func postDesktopClose(gw http.Handler, h *uiHarness, c *http.Cookie) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, desktopPath(h, uiDesktopClose), nil)
+	req.AddCookie(c)
+	rec := httptest.NewRecorder()
+	gw.ServeHTTP(rec, req)
+	return rec
 }

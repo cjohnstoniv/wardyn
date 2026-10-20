@@ -26,7 +26,7 @@ const ENC_COPYRECT = 1;
 const ENC_DESKTOPSIZE = -223;
 const SEC_NONE = 1;
 
-/** The largest framebuffer the viewer accepts, in ServerInit and DesktopSize: an 8K screen fits. */
+/** The largest framebuffer the viewer accepts, in ServerInit and DesktopSize: 4K Raw; 8K needs a compressed encoding. */
 export const MAX_DIM = 8192;
 /** The most bytes one Raw rectangle may hold (a 4096 by 4096 rectangle at 4 bytes a pixel). */
 export const MAX_RAW_BYTES = 64 << 20;
