@@ -5,6 +5,7 @@ package api
 
 import (
 	"encoding/json"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -64,16 +65,11 @@ func TestHandleWriteEnvAsCode(t *testing.T) {
 			t.Errorf("audit rows %v, want none for a failed write", got)
 		}
 	})
-	t.Run("a source directory that resolves to a denied path is refused, audited denied and writes nothing", func(t *testing.T) {
-		tmp := t.TempDir()
-		denied := filepath.Join(tmp, "docker.sock") // denied by basename; a temp dir, never a system path
-		if err := os.Mkdir(denied, 0o755); err != nil {
-			t.Fatal(err)
+	t.Run("a source swapped to a denied path after the check is refused, audited denied and writes nothing", func(t *testing.T) {
+		if _, err := os.Stat("/proc/self/fd"); err != nil {
+			t.Skip("needs Linux /proc/self/fd")
 		}
-		link := filepath.Join(tmp, "src")
-		if err := os.Symlink(denied, link); err != nil {
-			t.Skipf("symlinks unavailable: %v", err)
-		}
+		link, denied := swapRaceRoot(t)
 		h, srv, path := write(t, localDirWS(link))
 		if w := do(t, srv, http.MethodPost, path, adminToken, ""); w.Code != http.StatusUnprocessableEntity || reasonOf(t, w) != reasonWorkspaceRequestInvalid {
 			t.Errorf("= %d %s, want 422 %s", w.Code, w.Body.String(), reasonWorkspaceRequestInvalid)
@@ -83,6 +79,17 @@ func TestHandleWriteEnvAsCode(t *testing.T) {
 		}
 		if entries, _ := os.ReadDir(denied); len(entries) != 0 {
 			t.Errorf("%d file(s) written under the denied path", len(entries))
+		}
+	})
+	t.Run("without /proc/self/fd a source swapped after the check is not re-checked, as before", func(t *testing.T) {
+		link, denied := swapRaceRoot(t)
+		rootRealPath = func(*os.File) (string, error) { return "", &fs.PathError{Op: "readlink", Err: fs.ErrNotExist} }
+		_, srv, path := write(t, localDirWS(link))
+		if w := do(t, srv, http.MethodPost, path, adminToken, ""); w.Code != http.StatusOK {
+			t.Errorf("= %d %s, want 200: no new refusal where the real path cannot be read", w.Code, w.Body.String())
+		}
+		if entries, _ := os.ReadDir(denied); len(entries) == 0 {
+			t.Error("the documented residual no longer holds: nothing reached the swapped path")
 		}
 	})
 	t.Run("keeps an operator's own AGENTS.md, rewrites one it generated, and says so", func(t *testing.T) {
@@ -169,4 +176,35 @@ func TestHandleWriteEnvAsCode(t *testing.T) {
 			t.Errorf("workspace.envcode.write audit outcomes = %v, want [success]", outcomes)
 		}
 	})
+}
+
+// swapRaceRoot returns a link that passes the path check (it names a plain temp dir) and is
+// retargeted at a directory named docker.sock (denied by basename) in the window between that
+// check and the open, plus that directory. Both are temp dirs: no system path is ever written.
+// The seams it replaces are restored when the test ends.
+func swapRaceRoot(t *testing.T) (link, denied string) {
+	t.Helper()
+	tmp := t.TempDir()
+	benign := filepath.Join(tmp, "benign")
+	denied = filepath.Join(tmp, "docker.sock")
+	for _, d := range []string{benign, denied} {
+		if err := os.Mkdir(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link = filepath.Join(tmp, "src")
+	if err := os.Symlink(benign, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	oldChecked, oldReal := envRootChecked, rootRealPath
+	t.Cleanup(func() { envRootChecked, rootRealPath = oldChecked, oldReal })
+	envRootChecked = func(string) {
+		if err := os.Remove(link); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(denied, link); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return link, denied
 }

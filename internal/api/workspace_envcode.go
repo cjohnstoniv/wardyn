@@ -6,6 +6,7 @@ package api
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -153,20 +154,33 @@ func (s *Server) handleGetEnvAsCode(w http.ResponseWriter, r *http.Request) {
 // 422 and a denied audit row, not a 500.
 var errEnvRootDenied = errors.New("env-as-code root is a denied host path")
 
+// envRootChecked is a test seam: it runs between the path check and the open, the window a swap
+// would use.
+var envRootChecked = func(string) {}
+
+// rootRealPath names the directory dir holds open: /proc/self/fd/<fd>, so it is the real path
+// wherever the stored path points now. A test replaces it to run the no-/proc path on Linux.
+var rootRealPath = func(dir *os.File) (string, error) {
+	return os.Readlink("/proc/self/fd/" + strconv.Itoa(int(dir.Fd())))
+}
+
 // denyOpenedRoot refuses a root whose opened directory is a path no sandbox may be given, running the
-// mount deny-list on the directory the descriptor holds (the real path /proc/self/fd/<fd> names), so a
-// symlink swapped in after any earlier check cannot redirect the write. Linux only: where /proc is
-// missing (macOS, Windows) the real path cannot be read, and the write is refused (fail closed)
-// rather than admitted on the unchecked path.
+// mount deny-list on its real path. Where /proc/self/fd does not exist (a non-Linux daemon host) the
+// real path cannot be read: nothing is refused and the write proceeds on the path the earlier check
+// vetted, as before, so on a non-Linux host a path swapped between the check and the open is not
+// re-checked (THREAT-MODEL residual #25).
 func denyOpenedRoot(root *os.Root) error {
 	dir, err := root.Open(".")
 	if err != nil {
-		return fmt.Errorf("%w: cannot open the opened root: %v", errEnvRootDenied, err)
+		return err
 	}
 	defer dir.Close()
-	real, err := os.Readlink("/proc/self/fd/" + strconv.Itoa(int(dir.Fd())))
+	real, err := rootRealPath(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
 	if err != nil {
-		return fmt.Errorf("%w: cannot resolve the opened directory (needs Linux /proc): %v", errEnvRootDenied, err)
+		return fmt.Errorf("%w: cannot resolve the opened directory: %v", errEnvRootDenied, err)
 	}
 	if err := runner.ValidateMountSource(real); err != nil {
 		return fmt.Errorf("%w: %v", errEnvRootDenied, err)
@@ -188,9 +202,10 @@ func denyOpenedRoot(root *os.Root) error {
 // regenerate path for a file Wardyn wrote itself.
 func writeEnvAsCode(rootPath string, files map[string]string) ([]string, error) {
 	cleanRoot := filepath.Clean(rootPath)
-	if err := runner.ValidateMountSourceLexical(cleanRoot); err != nil {
+	if err := runner.ValidateMountSource(cleanRoot); err != nil {
 		return nil, fmt.Errorf("%w: %v", errEnvRootDenied, err)
 	}
+	envRootChecked(cleanRoot)
 	root, err := os.OpenRoot(cleanRoot)
 	if err != nil {
 		return nil, err
@@ -198,7 +213,8 @@ func writeEnvAsCode(rootPath string, files map[string]string) ([]string, error) 
 	defer root.Close()
 	// The stored path was vetted when the workspace was written; a symlink planted there since can
 	// point it at a path no sandbox may be given, and os.Root only holds writes inside what it opened.
-	// So the check runs on the directory actually opened, not on the path a moment before the open.
+	// On Linux the check below re-runs on the directory actually opened, so a path swapped after the
+	// check above cannot redirect the write.
 	if err := denyOpenedRoot(root); err != nil {
 		return nil, err
 	}

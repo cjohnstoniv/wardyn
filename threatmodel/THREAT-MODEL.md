@@ -1782,6 +1782,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     - Two things bound the blast radius: the roots are **operator/MDM-set**, so the widest a member can aim the race is *within the declared roots* — the target set cannot be enlarged, only raced within.
     - And the credential-dotfile deny-list matches the **post-`EvalSymlinks` real path**, so a won race landing on `~/.ssh` inside a too-wide root is still refused unless the attacker also defeats that list.
     - The tests pin the ORDERING this depends on; the race itself is not deterministically testable and no test claims to cover it.
+    - On a non-Linux daemon host, a path swapped between the check and the open is not re-checked.
 
 26. **A reckless member root is a boot WARNING, not a boot refusal.**
     - Setting `WARDYN_USER_WORKSPACE_ROOTS` (or a `_MAP` entry, or `WARDYN_USER_WRITABLE_ROOTS`) to `/` or the daemon's own `$HOME` leaves the dotfile deny-list as the ONLY thing between a member and the operator's credentials.
