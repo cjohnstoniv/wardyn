@@ -5,12 +5,14 @@ package api
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -37,6 +39,55 @@ func TestApplyRunRecording_UnknownFactsAreNotADecline(t *testing.T) {
 		}
 		if spec.Record == nil || !*spec.Record || run.NotRecorded != tc.want {
 			t.Fatalf("%s: record=%v not_recorded=%q, want true %q", tc.name, spec.Record, run.NotRecorded, tc.want)
+		}
+	}
+}
+
+// recordingReadFake answers the two recording-policy reads from fields, so a read can fail.
+type recordingReadFake struct {
+	store.Store
+	store.RunnerPoolStore
+	org     types.RunnerPoolDefaults
+	orgErr  error
+	pool    types.RunnerPool
+	poolErr error
+}
+
+func (f *recordingReadFake) GetRunnerPoolOrgDefaults(context.Context) (types.RunnerPoolDefaults, error) {
+	return f.org, f.orgErr
+}
+
+func (f *recordingReadFake) GetRunnerPool(context.Context, uuid.UUID) (types.RunnerPool, error) {
+	return f.pool, f.poolErr
+}
+
+// TestRecordingRequired_AnUnreadableSettingIsRequired: a run known not to record is held when the
+// organisation's or its pool's recording requirement cannot be read, never started unrecorded.
+func TestRecordingRequired_AnUnreadableSettingIsRequired(t *testing.T) {
+	boom := errors.New("connection reset")
+	poolID := uuid.New()
+	for _, tc := range []struct {
+		name     string
+		fake     recordingReadFake
+		pooled   bool
+		wantPool string
+		want     bool
+	}{
+		{"org read fails", recordingReadFake{orgErr: boom}, false, "", true},
+		{"org read fails, pooled run", recordingReadFake{orgErr: boom}, true, "", true},
+		{"pool read fails", recordingReadFake{poolErr: boom}, true, "", true},
+		{"pool is gone", recordingReadFake{poolErr: store.ErrNotFound}, true, "", false},
+		{"nothing required", recordingReadFake{pool: types.RunnerPool{Name: "ci"}}, true, "ci", false},
+		{"pool requires", recordingReadFake{pool: types.RunnerPool{Name: "ci", Recording: types.RecordingRequired}}, true, "ci", true},
+	} {
+		s := &Server{cfg: Config{Store: &tc.fake}}
+		run := types.AgentRun{ID: uuid.New()}
+		if tc.pooled {
+			run.RunnerPoolID = &poolID
+		}
+		pool, required := s.recordingRequired(context.Background(), run)
+		if required != tc.want || pool != tc.wantPool {
+			t.Errorf("%s: recordingRequired = (%q, %v), want (%q, %v)", tc.name, pool, required, tc.wantPool, tc.want)
 		}
 	}
 }
