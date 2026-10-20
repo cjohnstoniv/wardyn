@@ -43,6 +43,10 @@ const (
 	// Resolve forgets the host, this request is refused, and the next one raises a fresh approval that
 	// still needs a human yes. Only a request that saw the expiry gets this state.
 	apExpired
+	// apStale: an approved host that could not be re-checked against the control plane for
+	// maxApprovalStaleness. The grant is dropped, this request is refused, and the next one raises a
+	// fresh approval, so a control plane that never answers cannot keep a possibly revoked grant alive.
+	apStale
 )
 
 // approvalClient implements the first-use approval flow against the control
@@ -89,6 +93,9 @@ type hostApproval struct {
 	// holdStart is when the control plane last learned that a hold began on approvalID: the raise,
 	// or the last rejoin (see claimRejoin).
 	holdStart time.Time
+	// verifiedAt is when the control plane last confirmed the approved state (the poll that
+	// observed it), the clock maxApprovalStaleness runs against.
+	verifiedAt time.Time
 }
 
 // rejoinGap is how long after holdStart a further held request counts as re-entering the hold
@@ -149,6 +156,8 @@ func approvalPendingReason(st approvalState) string {
 		return ruleSourceApprovalRefused
 	case apExpired:
 		return ruleSourceApprovalExpired
+	case apStale:
+		return ruleSourceApprovalStale
 	}
 	return "approval:pending"
 }
@@ -166,6 +175,10 @@ const ruleSourceApprovalRefused = "approval:refused"
 // approval expired or was cancelled with nobody deciding it: not a human deny, and the next request asks again.
 const ruleSourceApprovalExpired = "approval:expired"
 
+// ruleSourceApprovalStale is the decision-log reason for a request refused because the host's approval
+// could not be re-checked for maxApprovalStaleness: the approval is dropped and the next request asks again.
+const ruleSourceApprovalStale = "approval:stale"
+
 // forget drops a host's entry back to never-seen, so the next Resolve raises a fresh approval.
 func (st *hostApproval) forget() {
 	*st = hostApproval{state: apNone}
@@ -181,6 +194,10 @@ var approvalCapWarnOnce sync.Once
 // flowing until proxy/run restart (fail-open staleness). Fresh approvals inside
 // the window are still served from cache with no per-request network call.
 const approvalTTL = 60 * time.Second
+
+// maxApprovalStaleness is how long an approved host is served without a successful re-check. A re-check
+// that times out leaves lastPoll alone, so the next request tries again; past this the grant is dropped.
+const maxApprovalStaleness = 2 * approvalTTL
 
 // approvalCallTimeout bounds the raise and the re-check Resolve runs on a request's own path, so a
 // stalled control plane delays that request by at most this and no more; the client's 130 s ceiling
@@ -300,7 +317,7 @@ func (a *approvalClient) ResolveWait(ctx context.Context, host string) resolveRe
 		}
 		r = a.Resolve(ctx, host)
 	}
-	if r.State == apApproved || r.State == apDenied || r.State == apCapped || r.State == apRefused || r.State == apExpired || r.ApprovalID == uuid.Nil {
+	if r.State == apApproved || r.State == apDenied || r.State == apCapped || r.State == apRefused || r.State == apExpired || r.State == apStale || r.ApprovalID == uuid.Nil {
 		return r
 	}
 	// Bound concurrent holds: over the cap, don't park another goroutine — fall
@@ -359,6 +376,7 @@ func (a *approvalClient) ResolveWait(ctx context.Context, host string) resolveRe
 				// it before this unlock.
 				st.state, st.scope, st.expiresAt = newState, polledScope, polledExpiry
 				st.lastPoll = time.Now()
+				st.verifiedAt = st.lastPoll
 				// (3) Consume if this was a `once` grant, expiring it if stale — an
 				// already-past expiresAt returns apNone, fail-closed via evaluate's default arm.
 				s, id, _ := consumeIfOnce(st)
@@ -439,6 +457,7 @@ func (a *approvalClient) Resolve(ctx context.Context, host string) resolveResult
 	// older than approvalTTL — the latter is how a later EXPIRE/REVOKE is
 	// observed instead of failing open forever. The pending clause requires a
 	// real id (else raise() may still be in flight).
+	prevPoll := st.lastPoll
 	needPoll := (cur == apPending && id != uuid.Nil && time.Since(st.lastPoll) >= pollInterval) ||
 		(cur == apApproved && time.Since(st.lastPoll) >= approvalTTL)
 	if needPoll {
@@ -523,6 +542,15 @@ func (a *approvalClient) Resolve(ctx context.Context, host string) resolveResult
 			// availability-over-strictness tradeoff above) — folding the two
 			// conditions would turn a transient error into a 403 for scope=run.
 			st.state, st.scope, st.expiresAt = newState, polledScope, polledExpiry
+			st.verifiedAt = time.Now()
+		} else if cur == apApproved {
+			// No answer: the grant is still served, but lastPoll goes back so the next request re-checks
+			// rather than trusting it for another approvalTTL, and past maxApprovalStaleness it is dropped.
+			st.lastPoll = prevPoll
+			if !st.verifiedAt.IsZero() && time.Since(st.verifiedAt) >= maxApprovalStaleness {
+				st.forget()
+				return resolveResult{State: apStale, ApprovalID: id}
+			}
 		}
 		// This branch is ITSELF a grant-serving site: without this call, a `once`
 		// grant observed here for the first time would be served AND left
