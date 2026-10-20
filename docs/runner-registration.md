@@ -214,7 +214,7 @@ Both restart `serve` after a crash. On Linux the unit runs while you are logged 
 | Package runner | The macOS package's `/usr/local/wardyn/bin/wardyn-runnerd` needs no hash while it and its directory are root-owned and nobody else can write them |
 | Download | `<base>/v<version>/wardyn-runnerd-<os>-<arch>`. The base is `--artifact-base` (then saved in `cli.json`), the saved one, `/healthz.cli_artifact_base`, else the release |
 | Registration token | Minted only when this computer has no runner identity: single use, 1 hour, yours only. It reaches `wardyn-runnerd setup --token-file /dev/fd/3` over a pipe: never on disk, in an argument or in an environment variable |
-| Service | `wardyn-runnerd setup --org <url>`, with `--org-ca-file` when `wardyn ca` holds a root for the organisation. Your shell's environment goes along without `WARDYN_TOKEN` and `WARDYN_ADMIN_TOKEN` |
+| Service | `wardyn-runnerd setup --org <url>`, with `--org-ca-file` when `wardyn ca` holds a root for the organisation. Your shell's environment goes along without `WARDYN_TOKEN`, `WARDYN_ADMIN_TOKEN` and `ANTHROPIC_API_KEY` |
 | Claim and pool | The CLI claims the runner with your own credential, then applies `--pool` and `--default` |
 | Wait | Up to 60 s for *My runners* to show it connected. Otherwise it prints the runner's last error and, after an upgrade, the line that starts `wardyn-runnerd.previous` |
 

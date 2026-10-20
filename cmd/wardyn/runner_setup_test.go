@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -214,6 +215,7 @@ func TestRunnerSetupTokenGoesOnlyOverThePipe(t *testing.T) {
 	pinnedRunnerdSHA256 = sum
 	t.Setenv("WARDYN_TOKEN", "wdn_env_personal")
 	t.Setenv("WARDYN_ADMIN_TOKEN", "wda_env_admin")
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-env")
 	out, err := r.run("--token", "wdn_flag_personal", "--runnerd", bin, "--name", "laptop")
 	if err != nil {
 		t.Fatalf("setup: %v\n%s", err, out)
@@ -230,7 +232,7 @@ func TestRunnerSetupTokenGoesOnlyOverThePipe(t *testing.T) {
 			t.Fatalf("the registration token is in argv, the environment or the output:\n%s", where)
 		}
 	}
-	for _, name := range []string{"WARDYN_TOKEN=", "WARDYN_ADMIN_TOKEN="} {
+	for _, name := range []string{"WARDYN_TOKEN=", "WARDYN_ADMIN_TOKEN=", "ANTHROPIC_API_KEY="} {
 		if strings.Contains(r.record("env"), name) {
 			t.Fatalf("runnerd's environment carries %s", name)
 		}
@@ -519,5 +521,78 @@ func TestRunnerSetupSignsInThroughTheBrowserWithNoCredential(t *testing.T) {
 	pinnedRunnerdSHA256 = sum2
 	if _, err := r2.run("--runnerd", bin2); err == nil || err.Error() != fmt.Sprintf(errSetupNoCredential, noSignInLine) {
 		t.Fatalf("no sign-in on offer: err = %v", err)
+	}
+}
+
+// A mirror that redirects the download to http:// is refused before the plain
+// origin is contacted, and nothing is minted or run.
+func TestRunnerSetupRefusesARedirectOffHTTPS(t *testing.T) {
+	r := newSetupRig(t)
+	_, sum := r.fakeRunnerd(r.binDir, 0)
+	pinnedRunnerdSHA256 = sum
+	var plainHits int32
+	plain := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { atomic.AddInt32(&plainHits, 1) }))
+	t.Cleanup(plain.Close)
+	r.fallback = http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		http.Redirect(w, req, plain.URL+"/runnerd", http.StatusFound)
+	})
+	_, err := r.run("--token", "wdn_personal", "--artifact-base", r.srv.URL+"/mirror")
+	want := fmt.Sprintf(errSetupRedirect, plain.URL+"/runnerd")
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("err = %v, want it to contain %q", err, want)
+	}
+	if atomic.LoadInt32(&plainHits) != 0 || r.mints != 0 || r.record("argv") != "" {
+		t.Fatalf("the http origin was contacted (%d), a token was minted (%d) or runnerd ran (%q)", plainHits, r.mints, r.record("argv"))
+	}
+}
+
+// The package's runner is not exempt when it, or its directory, is writable by group or others, even
+// root-owned: then it is hash-checked like any other copy, and refused.
+func TestRunnerSetupPackageRunnerdWritableByOthersIsHashChecked(t *testing.T) {
+	for _, tc := range []struct{ name, which string }{{"file", "file"}, {"directory", "dir"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newSetupRig(t)
+			cliDir := t.TempDir()
+			setupExecutable = func() (string, error) { return filepath.Join(cliDir, "wardyn"), nil }
+			bin, _ := r.fakeRunnerd(cliDir, 0)
+			pinnedRunnerdSHA256 = strings.Repeat("2", 64)
+			resolved, err := filepath.EvalSymlinks(bin)
+			if err != nil {
+				t.Fatal(err)
+			}
+			packageRunnerd = resolved
+			packageOwner = func(fs.FileInfo) int { return 0 }
+			target := map[string]string{"file": resolved, "dir": filepath.Dir(resolved)}[tc.which]
+			if err := os.Chmod(target, 0o775); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := r.run("--token", "wdn_personal"); err == nil || !strings.Contains(err.Error(), pinnedRunnerdSHA256) || r.record("argv") != "" {
+				t.Fatalf("a group-writable package %s ran unchecked: err = %v, argv %q", tc.which, err, r.record("argv"))
+			}
+		})
+	}
+}
+
+// A claim refused for an identity from before this setup names the state directory to move aside, as the
+// other-organisation refusal does, since running setup again would only refuse the same way.
+func TestRunnerSetupRefusedClaimOnARegisteredHostNamesTheStateDir(t *testing.T) {
+	r := newSetupRig(t)
+	bin, sum := r.fakeRunnerd(r.binDir, 0)
+	pinnedRunnerdSHA256 = sum
+	if err := os.MkdirAll(r.stateDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	id := fmt.Sprintf(`{"runner_id":%q,"key_fingerprint":"fp-1","org_url_sha256":%q}`, r.runnerID, federation.OrgURLSHA256(r.srv.URL))
+	if err := os.WriteFile(filepath.Join(r.stateDir(), "runner.json"), []byte(id), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.claimStatus = http.StatusForbidden
+	_, err := r.run("--token", "wdn_personal", "--runnerd", bin)
+	want := fmt.Sprintf(errSetupClaimRegistered, r.runnerID, "API error 403: this runner has already been claimed", r.stateDir())
+	if err == nil || err.Error() != want {
+		t.Fatalf("err = %q\nwant  %q", err, want)
+	}
+	if r.mints != 0 {
+		t.Fatal("a registered host minted a token")
 	}
 }

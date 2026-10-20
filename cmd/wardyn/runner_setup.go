@@ -168,7 +168,10 @@ func runRunnerSetup(cmd *cobra.Command, c *sdk.Client, f runnerSetupFlags) error
 	// Step 6: claim, then --pool and --default, with the CLI's own credential.
 	id := local.id.RunnerID
 	if v, err := c.GetMyRunner(ctx, id); err != nil || v.State != types.RunnerClaimed {
-		if _, err := c.ClaimRunner(ctx, id, local.id.Fingerprint); err != nil {
+		if _, err := c.ClaimRunner(ctx, id, local.id.Fingerprint); err != nil && registered {
+			// An identity from before this setup: a rerun would refuse the same way.
+			return fmt.Errorf(errSetupClaimRegistered, id, err, local.dir)
+		} else if err != nil {
 			return fmt.Errorf(errSetupClaimLeft, err, int(types.RunnerUnclaimedTTL.Hours()))
 		}
 		fmt.Fprintf(out, copySetupClaimed+"\n", id, local.id.Fingerprint)
@@ -257,11 +260,12 @@ func runRunnerdSetup(cmd *cobra.Command, bin, org, name, token string) error {
 }
 
 // withoutCLICredentials is env without WARDYN_TOKEN and WARDYN_ADMIN_TOKEN, so runnerd's own claim step
-// never sees a CLI credential.
+// never sees a CLI credential, and without ANTHROPIC_API_KEY, which cliutil.ScrubChildEnv also keeps from
+// every child.
 func withoutCLICredentials(env []string) []string {
 	kept := make([]string, 0, len(env))
 	for _, kv := range env {
-		if k, _, _ := strings.Cut(kv, "="); k != "WARDYN_TOKEN" && k != "WARDYN_ADMIN_TOKEN" {
+		if k, _, _ := strings.Cut(kv, "="); k != "WARDYN_TOKEN" && k != "WARDYN_ADMIN_TOKEN" && k != "ANTHROPIC_API_KEY" {
 			kept = append(kept, kv)
 		}
 	}
