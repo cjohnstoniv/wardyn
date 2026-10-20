@@ -22,13 +22,12 @@
 import * as React from "react";
 import { Info, Loader2, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
-import { HttpError, PendingChangeError } from "../../lib/api/core";
+import { HttpError, LIST_LIMIT, PendingChangeError } from "../../lib/api/core";
 import { permissions as api } from "../../lib/api/permissions";
 import { runs as runsApi } from "../../lib/api/runs";
 import { absoluteTime, getErrorMessage, relativeTime } from "../../lib/format";
 import { CAPABILITY_KINDS, KIND, PERM, PERM_EXTRA, type CapabilityKind } from "../../lib/permissions-copy";
 import type {
-  AgentRun,
   CapabilityEffect,
   CapabilityGrant,
   CapabilitySubjectType,
@@ -826,27 +825,28 @@ export function AddGrantForm({
 
 // How many members the enforcement confirm says are about to be bounded.
 //
-// ponytail: there is no member registry to count — Wardyn keeps no user table,
-// and OIDC identities exist only inside a session cookie. The console's one
-// durable record of who has used this deployment is the runs list, so this
-// counts DISTINCT run creators, minus the signed-in admin (exempt) and minus
-// the admin-token machine lane. Ceiling: it over-counts if another ADMIN has
-// launched a run (the safe direction — a louder warning), and it cannot see a
-// member who has never launched one. Upgrade path: a server-side principal
-// roster (or a count on GET /permissions), at which point this hook reads it
-// instead of deriving it.
-// `null` is UNKNOWN, not zero: listRuns() can be refused (403) or fail, and a
-// dialog that then reads "0 members are bounded" states the opposite of the
-// lockout risk it exists to communicate.
+// ponytail: this counts DISTINCT run creators on the newest page of the runs
+// list, minus the signed-in admin (exempt) and minus the admin-token machine
+// lane. It over-counts if another ADMIN has launched a run (the safe
+// direction) and cannot see a member who has never launched one. When the runs
+// page is truncated the count is not a count of anyone, so it is UNKNOWN.
+// Upgrade path: count GET /people (active, non-admin) instead.
+// `null` is UNKNOWN, not zero: listRuns() can be refused (403), fail or be
+// truncated, and a dialog that then reads "0 members are bounded" (or a short
+// count as fact) understates the lockout risk it exists to communicate.
 function useAffectedMemberCount(): number | null {
   const principal = usePrincipal();
   const [count, setCount] = React.useState<number | null>(null);
   React.useEffect(() => {
     let live = true;
     runsApi
-      .listRuns()
-      .then((rs: AgentRun[]) => {
+      .listRuns({ limit: LIST_LIMIT, offset: 0 })
+      .then(({ runs: rs, truncated }) => {
         if (!live) return;
+        if (truncated) {
+          setCount(null);
+          return;
+        }
         const people = new Set(
           rs
             .map((r) => r.created_by)

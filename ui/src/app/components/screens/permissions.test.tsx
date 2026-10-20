@@ -31,7 +31,7 @@ vi.mock("../../lib/api/permissions", () => ({
 }));
 
 const listRunsMock = vi.fn();
-vi.mock("../../lib/api/runs", () => ({ runs: { listRuns: () => listRunsMock() } }));
+vi.mock("../../lib/api/runs", () => ({ runs: { listRuns: (...a: unknown[]) => listRunsMock(...a) } }));
 
 // UT-7a: the add form's "User type" branch — a closed picker of the org's
 // types (UserTypeSubjectSelect), never free text.
@@ -78,7 +78,7 @@ beforeEach(() => {
   upsertGrantMock.mockReset();
   deleteGrantMock.mockReset();
   putEnforcementMock.mockReset();
-  listRunsMock.mockReset().mockResolvedValue([]);
+  listRunsMock.mockReset().mockResolvedValue({ runs: [], truncated: false });
   listUserTypesMock.mockReset().mockResolvedValue([]);
 });
 
@@ -161,12 +161,15 @@ describe("PermissionsScreen — enforcement confirms", () => {
     getPermissionsMock.mockResolvedValue({ grants: [grant()], enforcement: {} });
     // Two distinct human run creators, plus the admin-token machine lane which
     // must not be counted as a member.
-    listRunsMock.mockResolvedValue([
-      { created_by: "bob@corp.example" },
-      { created_by: "dana@corp.example" },
-      { created_by: "bob@corp.example" },
-      { created_by: "admin-token" },
-    ]);
+    listRunsMock.mockResolvedValue({
+      runs: [
+        { created_by: "bob@corp.example" },
+        { created_by: "dana@corp.example" },
+        { created_by: "bob@corp.example" },
+        { created_by: "admin-token" },
+      ],
+      truncated: false,
+    });
     putEnforcementMock.mockResolvedValue({ egress_host: true });
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderScreen();
@@ -272,6 +275,23 @@ describe("PermissionsScreen — an affected-member count that could not be read"
     // nobody", the opposite of the lockout risk the dialog exists to state.
     expect(within(dialog).queryByText(/\b0 members\b/)).toBeNull();
     expect(within(dialog).queryByText(PERM.ENFORCE_ON_BODY(0))).toBeNull();
+    expect(within(dialog).getByText(PERM.ENFORCE_ON_BODY_UNKNOWN)).toBeInTheDocument();
+  });
+
+  it("#2515: a truncated runs page names no count — the creators on it are not the members", async () => {
+    getPermissionsMock.mockResolvedValue({ grants: [grant()], enforcement: {} });
+    // Only the paged form carries X-Wardyn-Truncated; the bare form hands back the rows alone.
+    listRunsMock.mockImplementation((opts?: unknown) =>
+      Promise.resolve(opts ? { runs: [{ created_by: "bob@corp.example" }], truncated: true } : [{ created_by: "bob@corp.example" }]),
+    );
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+
+    await screen.findByText(KIND.egress_host.unenforced);
+    await user.click(screen.getByRole("switch", { name: `${PERM.ENFORCEMENT_TITLE} ${KIND.egress_host.label}` }));
+
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).queryByText(PERM.ENFORCE_ON_BODY(1))).toBeNull();
     expect(within(dialog).getByText(PERM.ENFORCE_ON_BODY_UNKNOWN)).toBeInTheDocument();
   });
 });
