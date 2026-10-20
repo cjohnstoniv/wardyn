@@ -57,11 +57,16 @@ const NONE = <span className="text-muted-foreground">{NR_TOOLS.DETAIL_NONE}</spa
 
 const SEP = NR_SHARED.JOIN("", "");
 
-/** The Other line, each "·"-separated part kept whole so the line only wraps between parts. */
+// A short fixed part ("Read only", "No exec") stays whole; a list or a long name may wrap, or a
+// phone-width card would overflow.
+const KEEP_WHOLE = 24;
+
+/** The Other line, each short "·"-separated part kept whole so the line only wraps between parts. */
 function Segments({ text }: { text: string }) {
   const parts = text.split(SEP);
   if (parts.length === 1) return <>{text}</>;
-  return <span>{parts.map((p, i) => <React.Fragment key={i}>{i > 0 && SEP}<span className="whitespace-nowrap">{p}</span></React.Fragment>)}</span>;
+  const whole = (p: string) => p.length <= KEEP_WHOLE && !p.includes(", ");
+  return <span>{parts.map((p, i) => <React.Fragment key={i}>{i > 0 && SEP}<span className={whole(p) ? "whitespace-nowrap" : "break-words"}>{p}</span></React.Fragment>)}</span>;
 }
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {

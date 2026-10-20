@@ -92,16 +92,21 @@ describe("tool card: Details", () => {
     expect(dialog.getByText("What it is")).toBeTruthy();
   });
 
-  it("keeps each part of the Other line whole, on the card and in Details, so it wraps only between parts", async () => {
-    const parts = [NR_TOOLS.KUBE_NAMESPACES("web, jobs"), NR_TOOLS.KUBE_READ_ONLY, NR_TOOLS.KUBE_NO_EXEC];
+  it("keeps each short part of the Other line whole, on the card and in Details, and lets a list wrap", async () => {
+    const namespaces = NR_TOOLS.KUBE_NAMESPACES("web, jobs, billing-reports, data-pipelines, staging-preview");
+    const parts = [namespaces, NR_TOOLS.KUBE_READ_ONLY, NR_TOOLS.KUBE_NO_EXEC];
     show({ ...ACCESS, other: parts.reduce((a, b) => NR_SHARED.JOIN(a, b)) });
     const nowrap = (root: Element) => [...root.querySelectorAll(".whitespace-nowrap")].map((n) => n.textContent);
+    const wraps = (root: Element) => [...root.querySelectorAll(".break-words")].map((n) => n.textContent);
     const other = [...breakdown().querySelectorAll("dd")][3];
-    expect(nowrap(other)).toEqual(parts);
+    expect(nowrap(other)).toEqual([NR_TOOLS.KUBE_READ_ONLY, NR_TOOLS.KUBE_NO_EXEC]);
+    expect(wraps(other)).toEqual([namespaces]);
     expect(other.textContent).toBe(parts.join(NR_SHARED.JOIN("", "")));
     await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.DETAILS_FOR("Sample") }));
     const dialog = await screen.findByRole("dialog", { name: "Sample" });
-    expect(nowrap(within(dialog).getByRole("heading", { name: NR_TOOLS.DETAIL_OTHER }).closest("section")!)).toEqual(parts);
+    const section = within(dialog).getByRole("heading", { name: NR_TOOLS.DETAIL_OTHER }).closest("section")!;
+    expect(nowrap(section)).toEqual([NR_TOOLS.KUBE_READ_ONLY, NR_TOOLS.KUBE_NO_EXEC]);
+    expect(wraps(section)).toEqual([namespaces]);
   });
 
   it("closes from Close", async () => {
