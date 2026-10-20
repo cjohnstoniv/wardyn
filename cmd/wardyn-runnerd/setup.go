@@ -359,6 +359,18 @@ func proxyCredentialWarning(stripped []string) string {
 		"docs/runner-registration.md#a-runner-behind-a-corporate-proxy. Never put a proxy credential in the LaunchAgent: every local account can read it."
 }
 
+// printShellNotes points at what this shell sets that the service setup installs does not take.
+func printShellNotes(out io.Writer, o setupOptions, keptCA, keptOrgCA string) {
+	// serve never reads the ambient SSL_CERT_FILE, so setup only points at it, unless a CA is named
+	// or kept.
+	if ssl := os.Getenv("SSL_CERT_FILE"); ssl != "" && cmp.Or(o.trustedCAFile, keptCA, o.orgCAFile, keptOrgCA) == "" {
+		fmt.Fprintf(out, "SSL_CERT_FILE is set (%s); pass --trusted-ca-file %s if runs must trust it (64 KiB at most), or --org-ca-file %s to trust it for this runner's connection to the organisation only (the CLI's own anchors: wardyn ca add)\n", ssl, ssl, ssl)
+	}
+	if names := proxyEnvNames(os.Getenv); len(names) > 0 && !o.noService {
+		fmt.Fprintln(out, shellProxyWarning(names))
+	}
+}
+
 // preflight validates every input and checks Docker, so that a refusal comes before the single-use
 // token is spent or any file is written.
 func (h setupHost) preflight(cmd *cobra.Command, o setupOptions) (setupPlan, error) {
@@ -379,14 +391,7 @@ func (h setupHost) preflight(cmd *cobra.Command, o setupOptions) (setupPlan, err
 	}
 	// A rerun keeps what an earlier setup was told explicitly.
 	keptImage, keptCA, keptOrgCA := paths.keptPins()
-	// serve never reads the ambient SSL_CERT_FILE, so setup only points at it, unless a CA is named
-	// or kept.
-	if ssl := os.Getenv("SSL_CERT_FILE"); ssl != "" && cmp.Or(o.trustedCAFile, keptCA, o.orgCAFile, keptOrgCA) == "" {
-		fmt.Fprintf(cmd.OutOrStdout(), "SSL_CERT_FILE is set (%s); pass --trusted-ca-file %s if runs must trust it (64 KiB at most), or --org-ca-file %s to trust it for this runner's connection to the organisation only (the CLI's own anchors: wardyn ca add)\n", ssl, ssl, ssl)
-	}
-	if names := proxyEnvNames(os.Getenv); len(names) > 0 && !o.noService {
-		fmt.Fprintln(cmd.OutOrStdout(), shellProxyWarning(names))
-	}
+	printShellNotes(cmd.OutOrStdout(), o, keptCA, keptOrgCA)
 	if o.trustedCAFile, err = checkedTrustedCAFile(o.trustedCAFile, keptCA, cmp.Or(paths.envFile, paths.plistFile)); err != nil {
 		return setupPlan{}, err
 	}
