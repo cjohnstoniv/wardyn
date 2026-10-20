@@ -458,7 +458,9 @@ export function PermissionsScreen() {
 
       <section className="mt-6 rounded-xl border border-border bg-card px-6 py-5">
         <h2 className="text-sm font-medium text-foreground">{PERM.SNAPSHOT_TITLE}</h2>
-        <p className="mt-1 max-w-[80ch] text-body text-muted-foreground">{PERM.SNAPSHOT_BODY}</p>
+        <p className="mt-1 max-w-[80ch] text-body text-muted-foreground">
+          {PERM.SNAPSHOT_BODY} {PERM.SNAPSHOT_EFFECT}
+        </p>
       </section>
 
       <ConfirmEnforcement

@@ -41,6 +41,7 @@ vi.mock("../../lib/api/user-types", () => ({
 }));
 
 import { CAPABILITY_KINDS, KIND, PERM, PERM_EXTRA } from "../../lib/permissions-copy";
+import { GROUPS_READ_AT_SIGNIN } from "../../lib/groups-copy";
 import type { CapabilityGrant } from "../../lib/types";
 import { PermissionsScreen } from "./permissions";
 import { OperatorProvider } from "../wardyn/operator-context";
@@ -573,7 +574,9 @@ describe("PermissionsScreen — the group-snapshot ceiling", () => {
   it("states that groups are read at sign-in and grants resolve per request", async () => {
     renderScreen();
     await screen.findByText(PERM.SNAPSHOT_TITLE);
-    expect(screen.getByText(PERM.SNAPSHOT_BODY)).toBeInTheDocument();
+    // #3060: the groups sentence is the shared one; the per-request half stays beside it.
+    expect(PERM.SNAPSHOT_BODY).toBe(GROUPS_READ_AT_SIGNIN);
+    expect(screen.getByText(`${PERM.SNAPSHOT_BODY} ${PERM.SNAPSHOT_EFFECT}`)).toBeInTheDocument();
   });
 });
 

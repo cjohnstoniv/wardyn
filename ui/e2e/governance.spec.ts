@@ -167,7 +167,7 @@ test.describe("governance — the security admin's authoring walk", () => {
 
     // The standing facts live in one closed disclosure under the form: precedence, and the
     // two-subject halves of "when does this take effect".
-    const combine = page.getByTestId("governance-assignments-combine");
+    const combine = page.getByTestId("how-governance-assignments");
     await expect(combine.getByText(GOV.COMBINE_TITLE)).toBeVisible();
     await expect(combine.getByText(GOV.PRECEDENCE)).toBeHidden();
     await combine.getByText(GOV.COMBINE_TITLE).click();

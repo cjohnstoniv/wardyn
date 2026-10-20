@@ -67,6 +67,8 @@ const rendered: Record<string, string> = {
   // ---- §7.2 ----
   TITLE: GOVERNANCE.TITLE,
   LEAD: GOVERNANCE.LEAD,
+  HOW_TITLE: GOVERNANCE.HOW_TITLE,
+  HOW_BODY: GOVERNANCE.HOW_BODY,
   PROFILES_TITLE: GOVERNANCE.PROFILES_TITLE,
   PROFILES_LEAD: GOVERNANCE.PROFILES_LEAD,
   COL_NAME: GOVERNANCE.COL_NAME,
@@ -218,8 +220,8 @@ const rendered: Record<string, string> = {
 const NUMERIC_TEMPLATE = ["RUBRIC.SET_NOTE(n, level)"];
 
 describe("governance-copy — §7.2-§7.13 parsed out of the prompt doc", () => {
-  it("finds all 147 frozen keys in the doc", () => {
-    expect(doc.size).toBe(147);
+  it("finds all 149 frozen keys in the doc", () => {
+    expect(doc.size).toBe(149);
   });
 
   it("covers every doc key, and freezes no key the doc doesn't", () => {

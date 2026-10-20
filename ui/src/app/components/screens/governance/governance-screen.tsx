@@ -56,6 +56,7 @@ import { Mono } from "../../wardyn/code-block";
 import { useSecurityOperator } from "../../wardyn/operator-context";
 import { PageHeader } from "../../wardyn/page-header";
 import { PageContainer } from "../../wardyn/page-container";
+import { HowItWorks } from "../../wardyn/how-it-works";
 import { SafetyMeter } from "../../wardyn/safety-meter";
 import { EmptyState, TableSkeleton, loadFailStatus, type ScreenStatus } from "../../wardyn/states";
 import { SECURITY_ONLY_REASON } from "../../wardyn/copy";
@@ -195,6 +196,9 @@ export function GovernanceScreen() {
   return (
     <PageContainer width="list">
       <PageHeader title={GOV.TITLE} description={GOV.LEAD} />
+      <HowItWorks id="governance" title={GOV.HOW_TITLE} className="-mt-2 mb-4">
+        <p>{GOV.HOW_BODY}</p>
+      </HowItWorks>
 
       {status !== "forbidden" && status !== "error" && (
         <Tabs

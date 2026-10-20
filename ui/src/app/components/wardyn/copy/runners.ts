@@ -17,6 +17,12 @@ import { RUNNER_OFFLINE_WORD, RUNNERS_NAV_TITLE, runnerLabel, runOnChip } from "
 
 export const RUNNERS = {
   NAV: RUNNERS_NAV_TITLE,
+  // The page's one-sentence lede (#3060), the same on both tabs; LEAD and the tabs' purposes move into
+  // How runners work, word for word.
+  PAGE_LEDE: "The computers and clusters that run sandboxes, and the pools that decide where runs go.",
+  HOW_TITLE: "How runners work",
+  HOW_RUNNERS_TAB: "Runners tab.",
+  HOW_POOLS_TAB: "Pools tab.",
   LEAD: "A runner is what runs sandboxes. A self-hosted runner is a computer someone registered; a remote-hosted runner is a Docker host or Kubernetes cluster this server is set up with. Each runs several runs at once, up to its Runs at once, under your policy and audit. What a runner reports about itself is labelled as reported.",
   SEARCH: "Search runners",
   FILTER_ACTIVE: "Active",

@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { GROUPS_READ_AT_SIGNIN } from "./groups-copy";
+
 // User drives copy canon (0.7, the admin's drive registry + the member's
 // per-run mount) — the frozen canonical-strings tables from
 // docs/design/user-drives-prompt.md §7.2-§7.8, transcribed verbatim. The
@@ -46,6 +48,7 @@
 //     of its own.
 //   ACCESS_STATE.FETCH_FAILED_RETRY — the Retry beside DRIVES's own
 //     FETCH_FAILED_TITLE / _BODY (§7.4).
+
 export { PERM } from "./permissions-copy";
 export { ACCESS_STATE, PEOPLE, PREVIEW } from "./people-access-copy";
 
@@ -242,11 +245,10 @@ export const DRIVES = {
   // changed: an ALLOCATION is a row the resolver re-reads every run, so it
   // binds at the next RUN; a person's GROUP MEMBERSHIP is read once at
   // sign-in, so a group's allocation reaches them at their next SIGN-IN — or,
-  // on an API token, its next mint. GOV.SIGNIN_NOTE is not reused: it ends on
-  // "keep their current ceiling", and what lags here is a mount (§7.3 prose).
+  // on an API token, its next mint. SIGNIN_NOTE is the one shared groups
+  // sentence (#3060); EFFECT_NOTE says what lags here, a mount.
   EFFECT_NOTE: "Takes effect on their next run. A run already dispatched keeps what it mounted.",
-  SIGNIN_NOTE:
-    "A change to someone's groups in your identity provider reaches Wardyn only when they next sign in, so a group's allocation reaches them then — or, for an API token, when it is re-minted.",
+  SIGNIN_NOTE: GROUPS_READ_AT_SIGNIN,
   ADD_TITLE: "Allocate a drive",
   ADD_CTA: "Allocate",
   FIELD_DRIVE: "Drive",

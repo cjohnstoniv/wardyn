@@ -24,7 +24,7 @@
 //
 // Every product string comes from the copy modules. This file adds none.
 import * as React from "react";
-import { ChevronRight, Loader2, Users } from "lucide-react";
+import { Loader2, Users } from "lucide-react";
 import { toast } from "sonner";
 import { PendingChangeError } from "../../../lib/api/core";
 import {
@@ -58,6 +58,7 @@ import { Textarea } from "../../ui/textarea";
 import { useUserTypeName } from "../../../lib/use-user-types";
 import { DirectoryCombobox } from "../../wardyn/directory-combobox";
 import { Field } from "../../wardyn/form-primitives";
+import { HowItWorks } from "../../wardyn/how-it-works";
 import { PreviewUserTypeField, usePreviewUserTypes } from "../../wardyn/preview-user-type-field";
 import { USER_TYPE_STANDARD } from "../../../lib/types/user-types";
 import { Chip } from "../../wardyn/primitives";
@@ -210,16 +211,12 @@ export function AssignmentsBlock({
           />
         )}
 
-        <details data-testid="governance-assignments-combine" className="group border-t border-border px-6 py-3">
-          <summary className="flex cursor-pointer select-none items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground">
-            <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" />
-            {GOV.COMBINE_TITLE}
-          </summary>
-          <p className="mt-2 max-w-[82ch] text-body text-muted-foreground">{GOV.PRECEDENCE}</p>
+        <HowItWorks id="governance-assignments" title={GOV.COMBINE_TITLE} className="border-t border-border px-6 py-3">
+          <p>{GOV.PRECEDENCE}</p>
           {/* Two halves of one fact — see this file's header. */}
-          <p className="mt-1 max-w-[82ch] text-body text-muted-foreground">{GOV.EFFECT_NOTE}</p>
-          <p className="mt-1 max-w-[82ch] text-body text-muted-foreground">{GOV.SIGNIN_NOTE}</p>
-        </details>
+          <p>{GOV.EFFECT_NOTE}</p>
+          <p>{GOV.SIGNIN_NOTE}</p>
+        </HowItWorks>
       </section>
 
       <ResolvedPreview snapshot={snapshot} />

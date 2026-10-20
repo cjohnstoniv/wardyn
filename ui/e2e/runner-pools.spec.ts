@@ -5,7 +5,7 @@
 
 import { randomBytes } from "node:crypto";
 import type { Page } from "@playwright/test";
-import { test, expect, asRealMember, consoleAPI, gotoConsole, navTo } from "./fixtures";
+import { test, expect, asRealMember, consoleAPI, gotoConsole, layoutSettled, navTo } from "./fixtures";
 import { POOLS, POOL_DRAWER, POOL_FORM, RUNNER_V6 } from "../src/app/components/wardyn/copy/runner-pools";
 import { MY_RUNNER, RUNNERS } from "../src/app/components/wardyn/copy/runners";
 import { entry, member, pool, remoteRunner } from "../src/app/components/screens/runners/pools/pool-test-fixtures";
@@ -21,8 +21,14 @@ test("Runners has one tab strip, and the tab is in the address", async ({ page }
   await page.goto("/admin/runners");
   const strip = page.getByRole("navigation", { name: RUNNER_V6.TABS_LABEL });
   await expect(strip.getByRole("button", { name: RUNNER_V6.TAB_RUNNERS })).toHaveAttribute("aria-current", "page");
-  await expect(page.getByText(RUNNERS.LEAD)).toBeVisible();
-  await expect(page.getByText(RUNNER_V6.TAB_PURPOSE)).toBeVisible();
+  // #3060: one sentence on both tabs, the rest closed under How runners work, and the tabs never move.
+  const lede = page.getByTestId("page-header-description");
+  await expect(lede).toHaveText(RUNNERS.PAGE_LEDE);
+  const how = page.getByTestId("how-runners");
+  await expect(how).not.toHaveAttribute("open");
+  await expect(page.getByText(RUNNERS.LEAD)).toBeHidden();
+  await layoutSettled(strip);
+  const stripY = (await strip.boundingBox())!.y;
   // No remote-hosted runner is set up, and people's runners are off.
   await expect(page.getByRole("heading", { name: RUNNERS.OFF_TITLE })).toBeVisible();
   await expect(page.getByRole("list", { name: RUNNER_V6.LIST_LABEL })).toHaveCount(0);
@@ -30,8 +36,12 @@ test("Runners has one tab strip, and the tab is in the address", async ({ page }
   await strip.getByRole("button", { name: RUNNER_V6.TAB_POOLS }).click();
   await expect(page).toHaveURL(/\/admin\/runners\?tab=pools$/);
   await expect(strip.getByRole("button", { name: RUNNER_V6.TAB_POOLS })).toHaveAttribute("aria-current", "page");
-  await expect(page.getByText(POOLS.LEAD)).toBeVisible();
-  await expect(page.getByText(RUNNER_V6.TAB_PURPOSE)).toHaveCount(0);
+  await expect(lede).toHaveText(RUNNERS.PAGE_LEDE);
+  await layoutSettled(strip);
+  expect((await strip.boundingBox())!.y).toBe(stripY);
+  await how.getByText(RUNNERS.HOW_TITLE).click();
+  await expect(how.getByText(RUNNER_V6.TAB_PURPOSE, { exact: false })).toBeVisible();
+  await expect(how.getByText(POOLS.LEAD, { exact: false })).toBeVisible();
 
   await strip.getByRole("button", { name: RUNNER_V6.TAB_RUNNERS }).click();
   await expect(page).toHaveURL(/\/admin\/runners$/);

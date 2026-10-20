@@ -496,7 +496,9 @@ time) and one must be able to change without the other.
 | Key | String |
 |---|---|
 | `TITLE` | Governance |
-| `LEAD` | Named ceilings, assigned to people and groups. A profile stands alone or narrows a base. An assigned profile replaces the deployment ceiling for its subjects; anyone with no assignment keeps the deployment ceiling. |
+| `LEAD` | Named ceilings, assigned to people and groups. |
+| `HOW_TITLE` | How governance works |
+| `HOW_BODY` | A profile stands alone or narrows a base. An assigned profile replaces the deployment ceiling for its subjects; anyone with no assignment keeps the deployment ceiling. |
 | `PROFILES_TITLE` | Profiles |
 | `PROFILES_LEAD` | A profile is one ceiling: the policy every run under it is bounded by, plus the launch modes its subjects may not use at all. |
 | `COL_NAME` | Name |
@@ -574,7 +576,7 @@ is what an operator can actually do.
 | `PRECEDENCE` | The most specific assignment wins: a person beats a group, a group beats a user type, and a user type beats everyone. Within a person, the sign-in subject beats the email. Between groups, the higher priority wins, then the profile name. |
 | `COMBINE_TITLE` | How assignments combine |
 | `EFFECT_NOTE` | Takes effect on their next run. A run already dispatched keeps the ceiling it started with. |
-| `SIGNIN_NOTE` | A change to someone's groups in your identity provider reaches Wardyn only when they next sign in, so they keep their current ceiling until then — or, for an API token, until it is re-minted. |
+| `SIGNIN_NOTE` | Groups are read when someone signs in. A change in your identity provider reaches Wardyn at their next sign-in, or when their API token is re-minted. |
 | `COL_PROFILE` | Profile |
 | `COL_PRIORITY` | Priority |
 | `PRIORITY_NA` | — |

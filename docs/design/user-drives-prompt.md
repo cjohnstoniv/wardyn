@@ -680,7 +680,7 @@ With the switch off nothing else on the screen changes.
 | `ALLOC_LEAD` | Who gets a drive. A person's own row beats their group's; a group's beats everyone's. A person can be given more than one drive. |
 | `PRECEDENCE` | The most specific allocation wins: a person beats a group, and a group beats everyone. Within a person, the sign-in subject beats the email. Between groups, the higher priority wins, then the drive name. |
 | `EFFECT_NOTE` | Takes effect on their next run. A run already dispatched keeps what it mounted. |
-| `SIGNIN_NOTE` | A change to someone's groups in your identity provider reaches Wardyn only when they next sign in, so a group's allocation reaches them then — or, for an API token, when it is re-minted. |
+| `SIGNIN_NOTE` | Groups are read when someone signs in. A change in your identity provider reaches Wardyn at their next sign-in, or when their API token is re-minted. |
 | `ADD_TITLE` | Allocate a drive |
 | `ADD_CTA` | Allocate |
 | `FIELD_DRIVE` | Drive |
@@ -730,8 +730,8 @@ console says so instead, where the field is authored.
 governance round's lesson carried over with the object changed: an **allocation** is a row the
 resolver re-reads every run, so it binds at the next *run*; a person's **group membership** is
 read once at sign-in, so a group's allocation reaches them at their next *sign-in* — or, on an
-API token, its next mint. `GOV.SIGNIN_NOTE` is not reused: it ends on "keep their current
-ceiling", and what lags here is a mount.
+API token, its next mint. `SIGNIN_NOTE` is the one groups sentence shared with Governance and
+Permissions (`groups-copy.ts`); `EFFECT_NOTE` says what lags here, a mount.
 
 **The allocations table renders one bounded PAGE, and says so.** `GET /drives` bounds the grants
 read at the list cap and ships `grant_total` — how many allocations EXIST — beside the page it
@@ -1107,8 +1107,8 @@ Departures from `DESIGN.md` §4.3's draft tables, each with the reason; the mode
    a workspace.
 8. **`DELETE_RESTRICT_BODY` reworded** — the draft said "never widens", governance vocabulary
    with no meaning for a drive; it now says what deleting the row does not do (delete data).
-9. **`SIGNIN_NOTE` and `EFFECT_NOTE` frozen rather than reused** — the governance strings end on
-   a ceiling; these end on a mount. **`PRECEDENCE` is duplicated deliberately**: it differs from
+9. **`EFFECT_NOTE` frozen rather than reused** — the governance string ends on a ceiling; this
+   one ends on a mount. `SIGNIN_NOTE` is the shared groups sentence. **`PRECEDENCE` is duplicated deliberately**: it differs from
    governance-prompt §7.3's only by "allocation"/"drive name", and the two must be edited
    together (a parameterised canon would touch the shipped module mid-hardening).
 10. **The card counts allocations, not people.** The draft's "2 drives · 14 people" cannot be

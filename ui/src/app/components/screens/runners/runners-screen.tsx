@@ -25,6 +25,7 @@ import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
 import { PageHeader } from "../../wardyn/page-header";
 import { PageContainer } from "../../wardyn/page-container";
+import { HowItWorks } from "../../wardyn/how-it-works";
 import { EmptyState, STATES, TableSkeleton } from "../../wardyn/states";
 import { MintTokenDialog } from "./mint-token-dialog";
 import { PoolsTab } from "./pools/pools-tab";
@@ -243,8 +244,16 @@ export function RunnersScreen() {
   const ready = status === "ready";
   return (
     <PageContainer width="list">
-      <PageHeader title={RUNNERS.NAV} description={<span className="block max-w-[68ch]">{tab === "pools" ? POOLS.LEAD : RUNNERS.LEAD}</span>} actions={actions} />
-      {tab === "runners" && <p className="-mt-2 mb-3 max-w-[80ch] text-body text-muted-foreground">{RUNNER_V6.TAB_PURPOSE}</p>}
+      <PageHeader title={RUNNERS.NAV} description={RUNNERS.PAGE_LEDE} actions={actions} />
+      <HowItWorks id="runners" title={RUNNERS.HOW_TITLE} className="-mt-2 mb-4">
+        <p>{RUNNERS.LEAD}</p>
+        <p>
+          <span className="font-medium text-foreground">{RUNNERS.HOW_RUNNERS_TAB}</span> {RUNNER_V6.TAB_PURPOSE}
+        </p>
+        <p>
+          <span className="font-medium text-foreground">{RUNNERS.HOW_POOLS_TAB}</span> {POOLS.LEAD}
+        </p>
+      </HowItWorks>
       {ready && <Tabs tab={tab} onChange={(t) => go(t)} />}
       {body}
       {ready && tab === "runners" && <UnusedTokens tokens={tokens} onChanged={reload} />}

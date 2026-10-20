@@ -43,7 +43,7 @@ const DESTINATIONS: { label: NavLabel; heading: string; blurb: RegExp }[] = [
   { label: "Approvals", heading: "Approvals", blurb: /Each card says exactly what approving grants/i },
   { label: "Policies", heading: "Policies", blurb: /egress allowlist/i },
   { label: "Governance", heading: "Governance", blurb: /Named ceilings, assigned to people and groups/i },
-  { label: "Permissions", heading: "Permissions", blurb: /Each capability is enforced on its own/i },
+  { label: "Permissions", heading: "Permissions", blurb: /A capability refuses nothing until you enforce it/i },
   { label: "Secrets", heading: "Secrets", blurb: /values go in and never come out/i },
   { label: "Workspaces", heading: "Workspaces", blurb: /a run can attach\. runs can only attach what's listed here/i },
   { label: "Audit", heading: "Audit", blurb: /Append-only/i },
