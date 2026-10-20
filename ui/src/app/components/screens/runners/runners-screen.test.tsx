@@ -314,6 +314,17 @@ describe("Admin -> Runners list", () => {
     renderScreen();
     expect(await screen.findByText("No runners yet")).toBeInTheDocument();
     expect(screen.getByText("People add a computer from Your account → My runner. To set up computers through device management, create a registration token under Managed install (MDM) above.")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Add this computer" })).toBeInTheDocument();
+    expect(screen.getByText("Managed install (MDM)")).toBeInTheDocument();
+  });
+
+  it("a security admin's empty page does not point at a Managed install section that is not there", async () => {
+    listMock.mockResolvedValue([]);
+    renderScreen({ operator: false });
+    expect(await screen.findByText("No runners yet")).toBeInTheDocument();
+    expect(screen.getByText("People add a computer from Your account → My runner.")).toBeInTheDocument();
+    expect(screen.queryByText(/Managed install \(MDM\)/)).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Add this computer" })).toBeNull();
   });
 
   it("a failed read shows its own title and a Retry that reads again", async () => {

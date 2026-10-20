@@ -218,7 +218,7 @@ export function RunnersScreen() {
         <EmptyState
           icon={Laptop}
           title={RUNNERS.EMPTY_TITLE}
-          description={RUNNERS.EMPTY_BODY}
+          description={addComputer ? `${RUNNERS.EMPTY_BODY} ${RUNNERS.EMPTY_BODY_MDM}` : RUNNERS.EMPTY_BODY}
         />
       </Framed>
     ) : (
