@@ -569,7 +569,7 @@ export interface RunPolicyView {
 // internal/policyref.Provenance: the layer that set one value of a run's policy
 // ("deployment", "profile" with the leaf's name, "member" or "operator"), the
 // contact to ask, and locked once a layer forbids lower layers to change it
-// (never set until walls or delegation can lock a knob).
+// (never set until a boundary or delegation can lock a knob).
 export interface PolicyProvenance {
   layer: string;
   name?: string;
