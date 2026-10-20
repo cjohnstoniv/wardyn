@@ -127,12 +127,16 @@ test.describe("Admin Drives: team drives", () => {
 
   test("a grants page cut short never turns a writable team drive read-only on save", async ({ page }) => {
     const sent = await stubAdmin(page, { on: true });
-    // The server counts 1500 allocations and lists one: the rest carry write bits the page cannot show.
-    const CUT = { ...SCRATCH, grant_count: 1500 };
+    // The server counts 3 allocations and lists one; the full read finds the other two, one of them custom.
+    const CUT = { ...SCRATCH, grant_count: 3 };
+    const HIDDEN = { ...GRANTS[2], id: "b9", subject: "hidden-team", priority: 7, enabled: false, members_can_write: true };
     await page.route("**/api/v1/drives", (route: Route) =>
       route.request().method() === "GET"
-        ? route.fulfill({ json: { drives: [CUT], grants: [GRANTS[1]], grant_total: 1500, host_roots_configured: true, runner_target: "docker", disabled: false } })
+        ? route.fulfill({ json: { drives: [CUT], grants: [GRANTS[1]], grant_total: 3, host_roots_configured: true, runner_target: "docker", disabled: false } })
         : route.fallback(),
+    );
+    await page.route(/\/api\/v1\/drives\?limit=1000/, (route) =>
+      route.fulfill({ json: { drives: [CUT], grants: [GRANTS[1], HIDDEN, GRANTS[2]], grant_total: 3, host_roots_configured: true, runner_target: "docker", disabled: false } }),
     );
     await openDrives(page);
     await driveRow(page, CUT.name).getByRole("button", { name: `${DRIVES.EDIT} ${CUT.name}` }).click();
@@ -141,12 +145,18 @@ test.describe("Admin Drives: team drives", () => {
     await expect(write).toHaveAttribute("aria-checked", "true");
     await expect(write).toBeDisabled();
     await expect(ed.getByText(DRIVES.TEAM_WRITE_UNKNOWN)).toBeVisible();
-    // A group typed here may already hold an allocation the cut page omits; adding it would overwrite that one.
-    await expect(ed.getByRole("button", { name: DRIVES.ADD_CTA })).toBeDisabled();
+    // The group the cut page hid is typed in again, beside a genuinely new one.
+    for (const name of ["hidden-team", "new-team"]) {
+      await ed.getByRole("textbox", { name: PERM.SUBJECT_GROUP }).fill(name);
+      await ed.getByRole("button", { name: DRIVES.ADD_CTA }).click();
+    }
     await ed.getByRole("button", { name: DRIVES.SAVE_CTA }).click();
     await expect.poll(() => sent.puts.length).toBe(1);
     expect(sent.puts[0].body).toMatchObject({ team: true, writable: true });
-    expect(sent.grants).toHaveLength(0);
+    // Only the new group is written; the hidden allocation's stored priority and pause are never re-sent.
+    await expect.poll(() => sent.grants.length).toBe(1);
+    expect(sent.grants[0]).toMatchObject({ subject: "new-team", priority: 0, additional: true, members_can_write: false });
+    expect(sent.deletes).toHaveLength(0);
   });
 
   test("an edit that leaves the write setting alone keeps each allocation's write bit as stored", async ({ page }) => {

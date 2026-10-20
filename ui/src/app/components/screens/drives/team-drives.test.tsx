@@ -20,6 +20,7 @@ const createDriveMock = vi.fn();
 const updateDriveMock = vi.fn();
 const upsertGrantMock = vi.fn();
 const deleteGrantMock = vi.fn();
+const driveGrantsMock = vi.fn();
 vi.mock("../../../lib/api/drives", async () => {
   const actual = await vi.importActual<typeof import("../../../lib/api/drives")>("../../../lib/api/drives");
   return {
@@ -30,6 +31,7 @@ vi.mock("../../../lib/api/drives", async () => {
       updateDrive: (...a: unknown[]) => updateDriveMock(...a),
       upsertGrant: (...a: unknown[]) => upsertGrantMock(...a),
       deleteGrant: (...a: unknown[]) => deleteGrantMock(...a),
+      driveGrants: (...a: unknown[]) => driveGrantsMock(...a),
       deleteDrive: vi.fn(),
       previewDrive: vi.fn().mockResolvedValue({}),
     },
@@ -101,7 +103,7 @@ const table = () => within(screen.getAllByRole("table")[0]);
 const openEdit = async (name: string) => userEvent.click(await screen.findByRole("button", { name: `${DRIVES.EDIT} ${name}` }));
 
 beforeEach(() => {
-  for (const m of [getDrivesMock, createDriveMock, updateDriveMock, upsertGrantMock, deleteGrantMock, getProvidersMock]) m.mockReset();
+  for (const m of [getDrivesMock, createDriveMock, updateDriveMock, upsertGrantMock, deleteGrantMock, driveGrantsMock, getProvidersMock]) m.mockReset();
   createDriveMock.mockImplementation(async (input: object) => ({ id: "new1", ...input }));
   updateDriveMock.mockImplementation(async (id: string, input: object) => ({ id, ...input }));
   upsertGrantMock.mockResolvedValue({ grant: grant(), replaced: false });
@@ -252,6 +254,7 @@ describe("Drive editor, Team drive", () => {
 
   it("a cut grants page never turns a writable team drive read-only on save", async () => {
     // 3 allocations, the page lists 1: the other two carry write bits the console cannot see.
+    driveGrantsMock.mockResolvedValue([grant({ members_can_write: true }), grant({ id: "g8", subject: "qa" }), grant({ id: "g9", subject: "ops" })]);
     await renderScreen(snapshot({ drives: [drive({ writable: true, grant_count: 3 })], grants: [grant({ members_can_write: true })] }));
     await openEdit("platform-ref");
     const toggle = screen.getByRole("switch", { name: DRIVES.FIELD_TEAM_WRITE });
@@ -288,11 +291,48 @@ describe("Drive editor, Team drive", () => {
     );
   });
 
-  it("a cut grants page does not take a group to add: it may already hold an allocation the page omits", async () => {
+  // 3 allocations exist and the page lists 1: the other two are read whole before anything is written.
+  const hidden = grant({ id: "g9", subject: "hidden-team", priority: 7, enabled: false, members_can_write: true });
+  const cut = async () => {
+    driveGrantsMock.mockResolvedValue([grant({ members_can_write: true }), hidden, grant({ id: "g8", subject: "qa", members_can_write: false })]);
     await renderScreen(snapshot({ drives: [drive({ writable: true, grant_count: 3 })], grants: [grant({ members_can_write: true })] }));
     await openEdit("platform-ref");
-    await userEvent.type(screen.getByRole("textbox", { name: PERM.SUBJECT_GROUP }), "hidden-team");
-    expect(editor().getByRole("button", { name: DRIVES.ADD_CTA })).toBeDisabled();
+  };
+  const addGroup = async (name: string) => {
+    await userEvent.type(screen.getByRole("textbox", { name: PERM.SUBJECT_GROUP }), name);
+    await userEvent.click(editor().getByRole("button", { name: DRIVES.ADD_CTA }));
+  };
+
+  it("a cut grants page still takes a genuinely new group, and leaves the hidden allocations as stored", async () => {
+    await cut();
+    await addGroup("new-team");
+    await userEvent.click(screen.getByRole("button", { name: DRIVES.SAVE_CTA }));
+    await waitFor(() => expect(upsertGrantMock).toHaveBeenCalledTimes(1));
+    expect(upsertGrantMock).toHaveBeenCalledWith(
+      expect.objectContaining({ subject: "new-team", additional: true, priority: 0, enabled: true, members_can_write: false }),
+    );
+    expect(deleteGrantMock).not.toHaveBeenCalled();
+  });
+
+  it("a cut grants page: a group whose allocation the page hid is not written again, so its stored values survive", async () => {
+    await cut();
+    await addGroup("hidden-team");
+    await userEvent.click(screen.getByRole("button", { name: DRIVES.SAVE_CTA }));
+    await waitFor(() => expect(updateDriveMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(driveGrantsMock).toHaveBeenCalledWith("t1"));
+    expect(upsertGrantMock).not.toHaveBeenCalled();
+    expect(deleteGrantMock).not.toHaveBeenCalled();
+  });
+
+  it("a cut grants page that cannot be read in full writes nothing", async () => {
+    driveGrantsMock.mockResolvedValue([grant({ members_can_write: true })]);
+    await renderScreen(snapshot({ drives: [drive({ writable: true, grant_count: 3 })], grants: [grant({ members_can_write: true })] }));
+    await openEdit("platform-ref");
+    await addGroup("new-team");
+    await userEvent.click(screen.getByRole("button", { name: DRIVES.SAVE_CTA }));
+    await waitFor(() => expect(driveGrantsMock).toHaveBeenCalled());
+    expect(updateDriveMock).not.toHaveBeenCalled();
+    expect(upsertGrantMock).not.toHaveBeenCalled();
   });
 
   it("removing a group chip unallocates it on save", async () => {

@@ -211,11 +211,18 @@ export function DriveEditor({
       ...(team ? { team: true } : {}),
     };
     try {
+      // A cut grants page hides some allocations: read them all before anything is written, so a group typed
+      // in that already holds one is told from a new group and its stored values are kept.
+      let known = grants;
+      if (writeUnknown && team && drive) {
+        known = await api.driveGrants(drive.id);
+        if (known.length !== drive.grant_count) throw new Error(DRIVES.SAVE_ERROR);
+      }
       const saved = savedId.current
         ? await api.updateDrive(savedId.current, input, confirmRehome)
         : await api.createDrive(input);
       savedId.current = saved.id;
-      if (teamUI) await syncTeamGroups(saved.id, groups, writeUnknown && team || (drive?.team && !writeTouched) ? null : writable, grants, writable);
+      if (teamUI) await syncTeamGroups(saved.id, groups, writeUnknown && team || (drive?.team && !writeTouched) ? null : writable, known, writeUnknown ? false : writable, grants);
       onSaved();
     } catch (e) {
       // A 409 on an edit (never on create — there is no prior row to re-home)
@@ -396,7 +403,7 @@ export function DriveEditor({
           </Field>
         )}
 
-        {teamUI && <TeamGroups groups={groups} onChange={setGroups} disabled={disabled} addDisabled={writeUnknown} />}
+        {teamUI && <TeamGroups groups={groups} onChange={setGroups} disabled={disabled}  />}
       </div>
 
       {error && (

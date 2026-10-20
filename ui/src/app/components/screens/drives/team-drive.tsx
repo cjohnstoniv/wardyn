@@ -84,13 +84,10 @@ export function TeamGroups({
   groups,
   onChange,
   disabled,
-  addDisabled = false,
 }: {
   groups: string[];
   onChange: (next: string[]) => void;
   disabled: boolean;
-  /** The grants page was cut: a group typed here may already hold an allocation the page omits, and adding it would overwrite that one. */
-  addDisabled?: boolean;
 }) {
   const [pick, setPick] = React.useState("");
   const add = () => {
@@ -121,9 +118,9 @@ export function TeamGroups({
       )}
       <div className="flex max-w-[520px] gap-2">
         <div className="min-w-0 flex-1">
-          <DirectoryCombobox label={PERM.SUBJECT_GROUP} kind="group" value={pick} onChange={setPick} disabled={disabled || addDisabled} placeholder={DRIVES.TEAM_GROUP_PLACEHOLDER} />
+          <DirectoryCombobox label={PERM.SUBJECT_GROUP} kind="group" value={pick} onChange={setPick} disabled={disabled} placeholder={DRIVES.TEAM_GROUP_PLACEHOLDER} />
         </div>
-        <Button type="button" variant="outline" disabled={disabled || addDisabled || !pick.trim()} onClick={add}>
+        <Button type="button" variant="outline" disabled={disabled || !pick.trim()} onClick={add}>
           {DRIVES.ADD_CTA}
         </Button>
       </div>
@@ -140,10 +137,11 @@ export function TeamGroups({
  * Runs AFTER the drive is saved, so a drive that just became writable is
  * writable before any allocation says members can write.
  */
-export async function syncTeamGroups(driveId: string, groups: string[], write: boolean | null, grants: UserDriveGrant[], fresh: boolean = write === true): Promise<void> {
+export async function syncTeamGroups(driveId: string, groups: string[], write: boolean | null, grants: UserDriveGrant[], fresh: boolean = write === true, shown: UserDriveGrant[] = grants): Promise<void> {
   const mine = grants.filter((g) => g.drive_id === driveId && g.subject_type === "group");
   for (const g of mine) {
-    if (!groups.includes(g.subject)) await api.deleteGrant(g.id);
+    // Only an allocation the editor listed can be taken off; one the cut page hid was never on screen.
+    if (!groups.includes(g.subject) && shown.some((s) => s.id === g.id)) await api.deleteGrant(g.id);
   }
   for (const subject of groups) {
     const had = mine.find((g) => g.subject === subject);

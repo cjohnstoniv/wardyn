@@ -654,6 +654,23 @@ confirming happens through the API.
 | `ENFORCEMENT_NONE` | Size shown, not enforced |
 | `ENFORCEMENT_EVICTION` | Size limited by eviction — over it, the run is stopped, not the write |
 | `HONESTY` | Wardyn never enforces a drive's size itself. On Kubernetes the size is the volume request and the storage class decides whether it binds — block disks do, network-share provisioners do not. On Docker a managed drive has no byte cap, the same gap `disk_mib` has. A share is bounded by its own quota. The size you see is the allocation, not a guarantee. |
+| `BACKEND_K8S_PVC_STATIC_TEAM` | Share provisioned by your platform (one pre-created volume claim for the team) |
+| `FIELD_TEAM` | Team drive |
+| `FIELD_TEAM_WRITE` | Members can write |
+| `TEAM_ALLOC_HINT` | A team drive is allocated to groups, never to one person or to everyone. Every mount is audited with who mounted it. |
+| `TEAM_CHIP` | Team drive |
+| `TEAM_CLAIM_NOTE` | Every member mounts the same claim, so it must allow many writers at once (ReadWriteMany). Ask your platform team if you're not sure. |
+| `TEAM_EMPTY_READ_ONLY` | Nobody can write to a read-only team drive on a Wardyn-managed volume, so it stays empty. Use a share your platform fills, or turn on Members can write. |
+| `TEAM_GROUP_PLACEHOLDER` | Choose a group |
+| `TEAM_HINT` | One folder shared by everyone it is allocated to. Each person's runs see, and can run, what the others' runs wrote there. |
+| `TEAM_NO_HOME` | Everyone gets the same folder, so a team drive has no directory per person. |
+| `TEAM_ONE_HOST` | Works on one host only. A Docker volume lives on the host that made it, so runs on another host get a different, empty folder. |
+| `TEAM_ONE_HOST_CHIP` | One host only |
+| `TEAM_RECLAIM_CELL` | Kept (team drive) |
+| `TEAM_RECLAIM_KEPT` | Kept. A team drive belongs to its groups, so a leaver's cleanup skips it. |
+| `TEAM_SIZE_HINT` | One size for the whole team: members share it. |
+| `TEAM_WRITE_HINT` | Off by default: members' runs can read the drive and never change it. On, any member's run can change what the others' runs read and run. |
+| `TEAM_WRITE_UNKNOWN` | This drive has more allocations than this page lists, so its write setting cannot be changed here. Saving leaves every allocation's write setting as it is. |
 
 `TITLE` is **one string for four places** — the screen heading, the Workspaces header's outline
 button, the setup card's title and the Settings card's title — the way `GOVERNANCE.TITLE`

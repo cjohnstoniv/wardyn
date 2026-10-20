@@ -329,6 +329,20 @@ export const drives = {
     if (!res.ok && res.status !== 404) throw new HttpError(res.status, await errText(res));
   },
 
+  // Every allocation of one drive, read whole: GET /drives pages its grants (limit/offset, 1000 a page,
+  // X-Wardyn-Truncated while more remain), so a drive with more allocations than one page reads them page by
+  // page. Used when the first page was cut, so a group typed in can be told from one already allocated.
+  async driveGrants(driveId: string): Promise<UserDriveGrant[]> {
+    const all: UserDriveGrant[] = [];
+    for (let offset = 0; ; ) {
+      const res = await wfetch(`/drives?limit=1000&offset=${offset}`, { method: "GET" });
+      const page = unwrapList<UserDriveGrant>((await asJson<Partial<UserDrivesSnapshot>>(res)).grants);
+      all.push(...page.filter((g) => g.drive_id === driveId));
+      offset += page.length;
+      if (page.length === 0 || res.headers.get("X-Wardyn-Truncated") !== "true") return all;
+    }
+  },
+
   // POST /api/v1/drives/grants -> the stored row, 201 for a genuinely new
   // allocation and 200 when an existing one was REPOINTED (the store returns
   // the existing row's id on conflict). The console renders ALLOC_REPLACED on

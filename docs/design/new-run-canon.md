@@ -328,6 +328,8 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `FAMILY_HOST_FOLDER` | deviation (DS-3 W5) | Host folder |
 | `FAMILY_CLUSTER_VOLUME` | deviation (DS-3 W5) | Cluster volume |
 | `ACCESS_EDIT` | mock | Can edit |
+| `SHARED_WITH(groups)` | mock | Shared with: {groups} |
+| `TEAM_OTHERS_SEE` | mock | Others in this group see what your runs write here. |
 | `ACCESS_READ` | mock | Read-only |
 | `ACCESS_ARIA(name)` | mock | Access for {name} |
 | `LOCKED_ARIA` | mock | Why this drive is read-only |
