@@ -66,3 +66,6 @@ func remoteWord(w string) string {
 	}
 	return shellQuote(w)
 }
+
+// shellQuote single-quotes s for a POSIX shell.
+func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
