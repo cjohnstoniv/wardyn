@@ -503,10 +503,24 @@ A `wardyn/v1` document with `kind: Run` is a draft of one run. Its `intent` hold
 
 ### Several harnesses in one run
 
-- `tools[]` may include more than one entry of kind `harness` with `interactive`, or with `workload.kind: command`. A background agent task includes only `workload.agent`.
+- `tools[]` may include more than one entry of kind `harness` with `interactive`, or with `workload.kind: command`. A background agent task includes only `workload.agent`, unless it runs several agents (below).
 - Each harness names its own `model_provider`, judged as its own choice. The primary harness is the `startup` harness, else the first listed; the run's `agent` and `model_provider` are the primary's.
 - The run starts from the image the operator declared for the set, under a `WARDYN_AGENT_IMAGES` key joining the sorted ids with `+`. Without one the request is `422` `harness_set_no_image`; a published install declares none ([build-images.md](operations/build-images.md#the-image-a-runs-harnesses-start-from)).
 - An AWS sign-in provider (`bedrock_sso`) serves only the primary harness. On any other it is `422` `request_field_unavailable`, with `tool` naming the harness.
+
+### Several agents in one background run
+
+0.10.0, behind `WARDYN_MULTI_AGENT_TASKS` (off by default), which `GET /setup/status` reports as `features.multi_agent_tasks`. Off, a request carrying `tools[].task` is `422` `multi_agent_tasks_off`; every other request is unchanged.
+
+- A background agent task includes `workload.agent` and one or more other harnesses. `workload.agent`'s prompt is `workload.task`; every other harness carries its own `tools[].task`. Anything else is `422` `run_mode_conflict`: `tools[].task` on `workload.agent`, a harness without one, `workload.agent` not in `tools[]`, or `tools[].task` outside a background agent task.
+- The agents share one sandbox: one policy, one proxy, the same files. They share the person's model sign-ins, as an interactive run with several harnesses does: one agent can reach another's provider host and be served that person's credential. Nothing crosses between people.
+- Every agent's rules are met, strictest wins: each tool any agent names gets the strictest effect any agent gives it, for every agent. An agent that cannot enforce the met rules is refused, with `tool` naming it, as its own run with those rules would be (Codex CLI cannot hold a call). When any agent's rules need Wardyn's approval lane, the whole run is on it.
+- Every agent meets the doors its own background run would: a governance profile that holds or denies refuses Codex CLI, and autonomy level L1 refuses an agent with no approval lane.
+- `GET /runs/{id}` adds `agents`: each agent with its own `task`, the run's agent first. It is absent on every other run.
+- The run ends when the last agent exits. It succeeds only if every agent exited 0, and fails if any agent failed.
+- `GET /runs/{id}/output` adds `agents`: each agent's `state`, `running` or `exited` with its `exit_code`, as the last status line in the kept output reads. It is absent when no status line is in that output. `?agent=<id>` returns that agent's lines alone. Every line an agent prints is prefixed with its id in the combined output.
+- A held tool call's approval names the agent that asked in `requested_scope.harness`; an egress approval names none, since the agents share one proxy route: the agent whose tool-approval credential the call carried, never one the request body names. The agents share one user in the sandbox, so one agent could present another's credential; every agent holds the same met rules, so that changes the name on the card and never the decision.
+- Needs a harnesses image from 0.10.0 or later: an older image's launcher has no `--tasks`.
 
 ## Model providers
 
@@ -687,6 +701,7 @@ start.
 | `user_drive_member_owned` | `409`: `PUT`/`DELETE /drives/{id}`, `POST /drives/grants` or `POST /drives/{id}/reclaim` named a person's own drive; a super admin deletes it with `DELETE /drives/member/{id}`. |
 | `run_mode_required` / `run_mode_invalid` / `start_folder_invalid` | `400`: a new client's mode (or a background task's workload) is unset, and is never inferred (`mode_contract: "0.9"` marks a request as a new client's even when it carries no other run-mode field); a run-mode carrier is malformed; a `start_folder` is malformed, names an attachment or a repository the run lacks, or leaves its mount. |
 | `run_mode_conflict` | `422`: run-mode carriers contradict each other, or an older field they replace (`agent`, `task`, `interactive`) rides beside them. The CLI's `--agent` / `--task` (and `--interactive`, `--task-mode`) with no run-mode flag are the deliberate exception: that request carries no `mode_contract` and stays the older-client shape. |
+| `multi_agent_tasks_off` | `422`: the request gives an agent its own `tools[].task` while `WARDYN_MULTI_AGENT_TASKS` is off. Launch one agent per run, or turn the switch on. |
 | `policy_overlay_invalid` / `policy_overlay_conflict` | `400`: an unusable `policy_overlay`, or one beside `policy_id` or `inline_policy` (see [Run documents](#run-documents)). |
 | `run_shape_conflict` | `422`: `shape` does not fit the run: it needs `experience`, and `application`, `environment` and `agent_task` each require the workload or tool shown under [Run documents](#run-documents). |
 | `run_background_only` | `409`: an interactive door of a background task (terminal, exec, SSH, web gateway, desktop). Logs, audit, status and the lifecycle controls (kill, revive, extend) stay. |

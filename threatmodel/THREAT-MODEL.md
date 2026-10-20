@@ -2707,7 +2707,8 @@ hiding them would repeat the failure mode we are designed to avoid.
     - Harnesses share the agent uid. A per-harness tool-approval credential stops only body claims and honest cross-attribution (B3). Per-harness uids are not planned: the gate is cooperative, so they would not stop a process that skips it.
     - Create and dispatch refuse two different providers that share an injection host, an AWS sign-in's portal host included, and a second Azure Foundry provider (`harness_providers_conflict`).
     - An AWS sign-in is admitted only on the primary harness. Elsewhere it is refused at create and at dispatch, never launched without a credential.
-    - The `run_harnesses` rows hold harness and provider ids only. Renew, revive and a queued start re-check each harness's agent and model-provider doors against them.
+    - The `run_harnesses` rows hold harness and provider ids, and in a background run with several agents (`WARDYN_MULTI_AGENT_TASKS`) each agent's own task, which person erasure blanks. Renew, revive and a queued start re-check each harness's agent and model-provider doors against them.
+    - Several agents in one background run share one sandbox, policy and proxy, with their rules met (strictest wins), and each meets the doors its own run would. One agent can be served another's model credential of the same person, as above. Per-agent state is read from the shared output, so an agent can forge it; the run's result is the supervisor's exit.
 
 81. **A run waiting for a pool slot holds no credential, and its owner's group membership is as of launch [0.9].**
     - Nothing is minted, renewed or delivered while a run is `QUEUED`, and the internal routes refuse that state.
