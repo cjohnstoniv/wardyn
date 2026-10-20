@@ -12,7 +12,7 @@ import (
 
 // TestTRYITDoc_NoStaleReplayTab pins that docs/TRY-IT.md does not send the
 // first-run user to a "Replay tab" — the run detail screen's tab is named
-// "Recording" (run-detail/use-run-detail.ts's Tab type union). Live viewing is `wardyn run attach
+// "Recording" (run-detail/use-run-detail.ts's Tab type union). Live viewing is `wardyn attach
 // <id>` / the run's attach terminal, not a replay surface (the recording only
 // shows the finished capture after the session ends). Anchor both halves so a
 // rename on either side breaks this loudly instead of the doc silently

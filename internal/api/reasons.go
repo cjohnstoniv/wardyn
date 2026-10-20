@@ -352,8 +352,23 @@ const (
 	reasonAPITokenMemberModeMint     = "api_token_member_mode_mint"     // a member-mode session cannot mint a token that would outlive the view
 	reasonAPITokenNameInvalid        = "api_token_name_invalid"         // name exceeds the length cap or has a control character
 	reasonAPITokenTTLInvalid         = "api_token_ttl_invalid"          // ttl_seconds is negative or implausibly large
-	reasonAPITokenCapReached         = "api_token_cap_reached"          // the principal already holds the maximum number of live tokens
-	reasonSessionsRevokeParamInvalid = "sessions_revoke_param_invalid"  // the body must set exactly one of sub/all
+
+	// CLI sign-in (cli_sign_in.go, cli_sessions.go). cli_sign_in_invalid and cli_session_invalid are one
+	// answer each for every refusal of the token call and of a refresh, so neither is an oracle.
+	reasonCLISignInRateLimited       = "cli_sign_in_rate_limited"      // too many sign-in attempts or refreshes from this address or for this session
+	reasonCLISignInInvalidRequest    = "cli_sign_in_invalid_request"   // the sign-in request body is malformed
+	reasonCLIPasteSignInOff          = "cli_paste_sign_in_off"         // paste-back sign-in while WARDYN_CLI_PASTE_SIGN_IN is off
+	reasonCLIFileStoreOff            = "cli_file_store_off"            // a CLI that reports the file store while WARDYN_CLI_FILE_STORE is off
+	reasonCLISignInPendingCap        = "cli_sign_in_pending_cap"       // too many sign-ins are waiting for approval deployment-wide
+	reasonCLISignInNotFound          = "cli_sign_in_not_found"         // no such sign-in request
+	reasonCLISignInUsed              = "cli_sign_in_used"              // the sign-in link was already approved, denied or redeemed
+	reasonCLISignInExpired           = "cli_sign_in_expired"           // the sign-in link expired
+	reasonCLIAdminNeedsSession       = "cli_admin_needs_session"       // wardyn login --admin without a live CLI sign-in of the approver on that computer
+	reasonCLISignInInvalid           = "cli_sign_in_invalid"           // the token call's code, verifier, proof or request is not valid
+	reasonCLISessionInvalid          = "cli_session_invalid"           // the CLI session cannot refresh: unknown, ended, expired, idle, cut, reused or a bad proof
+	reasonCLISessionNotFound         = "cli_session_not_found"         // no such live CLI session of the caller
+	reasonAPITokenCapReached         = "api_token_cap_reached"         // the principal already holds the maximum number of live tokens
+	reasonSessionsRevokeParamInvalid = "sessions_revoke_param_invalid" // the body must set exactly one of sub/all
 
 	// /api/v1/invitations and /api/v1/me/invitations (#1508).
 	reasonInvitationTargetInvalid    = "invitation_target_invalid"     // the principal is not a subject, or is reserved, or is a service: principal
@@ -591,3 +606,9 @@ const (
 	reasonGitHubOwnTokenUndeliverable  = "github_own_token_undeliverable"   // create: the token could not stay out of the sandbox (PAT broker off, a run on a person's runner) or two rows claim the host
 	reasonGitHubOwnTokenResident       = "github_own_token_resident"        // mint: the PAT broker is off, so the token would be handed into the sandbox
 )
+
+// GET /runs/{id}/attach?transport=local (attach_local.go), after every check of the attach door has
+// passed: this run cannot be attached on its runner's own computer, and the CLI attaches through the
+// organisation instead. A transport's answer, not a refusal; errorBody.Detail says why. Declared here
+// because reasons_routes.go is at scripts/check-file-size.sh's limit.
+const reasonAttachLocalUnavailable = "attach_local_unavailable"

@@ -491,7 +491,7 @@ describe("AttachTerminal — role-aware attach", () => {
   });
 
 // The tmux shared-window clamp. A second client attaching SMALLER (a
-// `wardyn run attach` from another terminal) makes tmux fill this client's extra
+// `wardyn attach` from another terminal) makes tmux fill this client's extra
 // area with `·`, and the filler OUTLIVES that client: the browser's own size
 // never changed, so a same-size resize frame is a no-op tmux ignores. Measured
 // against a live run: 0 dots, 1001 while attached, 1001 after it detached, 0

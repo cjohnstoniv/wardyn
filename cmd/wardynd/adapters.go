@@ -709,7 +709,7 @@ func (l lifecycleStopper) stop(ctx context.Context, runID uuid.UUID, transition 
 	// IDLE-GUARDED terminal transition FIRST (findings #1 + N3): move RUNNING->
 	// STOPPED ONLY, and ONLY when updated_at has not advanced past the reaper's
 	// snapshot (notAfter). This MUST precede the destructive StopSandbox: an active
-	// `wardyn run attach` TouchRun (which bumps updated_at, state stays RUNNING) between
+	// `wardyn attach` TouchRun (which bumps updated_at, state stays RUNNING) between
 	// the scan and here means the run is NOT idle — the guarded CAS then no-ops
 	// (applied=false) and we tear nothing down and revoke nothing, preserving the
 	// keepalive. If a concurrent kill/complete already moved the run terminal, or

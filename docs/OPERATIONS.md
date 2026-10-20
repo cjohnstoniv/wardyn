@@ -1243,9 +1243,9 @@ erases one person's retained records by explicit scope, in one audited act
 | `mask_copies` | the masking manifests of the runs the person created, after their live attaches, SSH shells and relays are fenced |
 | `run_outputs` | the stored output of those runs (404 `run_output_erased` afterwards, on every replica and after a restart) |
 | `recordings` | their session recordings and `source: "recording"` output rows, with durable per-run fences against later writes; direct stdout and pane snapshots retain their independent `run_outputs` scope |
-| `run_tasks` | the task text of the runs the person created, and the launch intents of those runs |
+| `run_tasks` | the task text, title and description of the runs the person created, and the launch intents of those runs |
 | `components` | the components the person saved, the launch intents of their runs, and what each run's snapshot of one they defined says about it; the run keeps a content-free row, which is what a revived run is checked against. A finished run's resolved policy and grants keep the hosts and secret names the run used, as for any other policy, and so do its `run.env_secret.resolve`, `run.file_secret.resolve`, `secret.read` and `run.policy.resolve` rows |
-| `run_setups` | the person's own run templates and every revision of them, the launch intents of their runs, their group template-manager grants, and their name as the author of shared templates, revisions and grants, which stay without it |
+| `run_setups` | the person's own run templates and every revision of them, the launch intents of their runs, their group template-manager grants, and their name as the author of shared templates, revisions, grants and launch presets, which stay without it |
 | `runner_pools` | the person's own user pools, deleted as their own delete would, their name on every pool row of theirs, and their stored preferences (the pool they default to, their last view); their runners stay |
 | `member_drives` | the drives the person created for themselves, each deleted with its files as their own delete would; a drive a run still holds fails the scope, naming the drive |
 | `audit_personal_fields` | the person's audit-seal key, every generation: each sealed audit field of theirs reads `[erased]` everywhere it was copied, and the chain still verifies; the approvals they decided keep their state but lose the person's name and the reason they typed |
@@ -1263,6 +1263,15 @@ erases one person's retained records by explicit scope, in one audited act
 - A team drive's files are kept by design: they belong to the drive's groups, so erasing or deprovisioning a person does not remove what their agents wrote to a team drive. See "Team drives".
 - No scope reaches runners, invitations or service identities; a [purge](#what-a-purge-removes) does, but a retired
   service identity keeps its last sponsor.
+- Two tables keep a person's name after every scope, on purpose:
+  - `aws_sso_spent_tokens.owner` names whose AWS sign-in a spent refresh-token fingerprint came from. It holds no
+    credential, and the reaper deletes each row 90 days after it was written.
+  - `ado_signin_ends.owner` counts the ends of a person's Azure DevOps sign-in, so a run token created on another
+    replica across one revokes itself. Deleting it would reset the count to 0 and let such a token stand, as
+    `secret_owner_generations` below would.
+- The `credentials` scope's detail counts the token history it deleted, `pats_deleted` and `delegated_deleted`, and
+  `live_left`, the Azure DevOps token rows still live because Azure DevOps has not confirmed them revoked. Run the
+  erasure again once they expire to delete them.
 
 - **A launch intent (a run's setup, kept for Run again) is erased with every launch whose run insert began before the erase.**
   - A run's insert takes a per-person Postgres lock first, shared and without waiting, and writes the intent in the same transaction.
@@ -1803,6 +1812,8 @@ Moved to [custom-components.md](operations/custom-components.md#custom-component
 ### Per-user API tokens: stop sharing the admin token
 
 Moved to [api-tokens.md](operations/api-tokens.md#per-user-api-tokens-stop-sharing-the-admin-token).
+
+CLI sign-in: `WARDYN_CLI_SIGN_IN` is off by default and needs SSO. On, `wardyn login` signs a CLI in through the console with a device-bound session that renews a 1-hour token ([api-tokens.md](operations/api-tokens.md#cli-sign-in-wardyn-login)); while it is off, the CLI keeps using `WARDYN_TOKEN`.
 
 ### Tokens for a person who never signs in
 
@@ -2745,7 +2756,7 @@ The residuals an operator should plan for:
 - **The sandbox signs itself in.**
   - ONE chained command does the whole capture — `aws sso login --sso-session wardyn --no-browser --use-device-code && wardyn-aws-sso` — and both halves matter: `aws sso login` alone leaves the session in `~/.aws/sso/cache`, where it dies with the container, and `wardyn-aws-sso` is what uploads it through the brokered endpoint.
   - Since 0.7.5 the IMAGE runs that command, not the console: `agent-run --idle` creates a `wardyn` tmux session on `signin-pane.sh` BEFORE its own workspace prep, the pane prints *"wardyn: sign-in running — AWS sign-in sandbox. Finish the device-code step in your browser. Nothing else runs here."*, waits up to five minutes for prep, and runs the pair at most ONCE.
-  - Every attach path joins that one session — Wardyn's sign-in pane, `wardyn run attach`, an SSH attach, and **the Runs list** — because attaching is `tmux new-session -A -s wardyn`, attach-or-create.
+  - Every attach path joins that one session — Wardyn's sign-in pane, `wardyn attach`, an SSH attach, and **the Runs list** — because attaching is `tmux new-session -A -s wardyn`, attach-or-create.
   - So the path that used to hand out a bare prompt now shows the sign-in already in progress.
   - If prep never finishes it runs nothing and prints *"wardyn: workspace preparation did not finish — stop this run and start a new sign-in."*
   - If the session could not be started at all (no `tmux` in a derived image), an attach lands on a plain shell that prints *"AWS sign-in sandbox — nothing else runs here. The sign-in did not start on its own; run: `<the chained command>`"*.
@@ -2758,7 +2769,7 @@ The residuals an operator should plan for:
   - If it does NOT, and the person's SSO session reaches more than one account (or more than one role in the chosen account), the helper asks WHICH ONE.
   - It asks in the sign-in terminal.
   - It allows three tries.
-  - Anyone with a WRITABLE attach can answer — the console's sign-in pane, `wardyn run attach`, an SSH attach, or the Runs list when they hold the terminal.
+  - Anyone with a WRITABLE attach can answer — the console's sign-in pane, `wardyn attach`, an SSH attach, or the Runs list when they hold the terminal.
   - A read-only viewer cannot; the prompt itself has no deadline, so it waits until a writable attach answers or the sandbox's own 30-minute idle cap ends the run.
   - Pin the account and the role on the provider and the question never comes up.
   - While the sandbox waits on the answer, the sign-in panel's own copy already narrates the sign-in as done (`CAPTURE_HANDOFF`).
@@ -3992,7 +4003,8 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0196` (`0196_deprovision_event_pin`) adds `audit_event_id` and `audit_event_at` to `deprovision_jobs` (`0127`'s table): the id and time of the audit event an owed row writes, pinned on its first drain and cleared when the row reopens.
 - `0197` (`0197_run_inner_walls`) adds `inner_walls` to `agent_runs` (`0001`'s table): the harness's own walls a run launched with, under its policy's `harness_inner_walls`.
 - `0198` (`0198_agent_runs_local_folder_status`) adds `local_folder_status` to `agent_runs` (`0001`'s table): the passes a person's folder-only runner made for a run's computer folder, in and back.
-- `0198` (`0198_user_drives_team`) adds `user_drives.team` (`0054`'s table), with a check keeping it off a person's own drive and off `k8s_pvc`, and `user_drive_grants.members_can_write` (`0054`'s table, false by default): a team drive and its allocations' write bit (`storage.user_drive.team_drives`). A write setting `team` on a `k8s_pvc` or member-owned row now fails.
+- `0199` (`0199_cli_sign_in`) adds `api_tokens.kind` and `api_tokens.cli_session_id` (`0045`'s table), which mark a CLI sign-in's access and admin tokens and tie them to their CLI session, and creates `cli_sessions` and `cli_sign_ins`.
+- `0200` (`0200_user_drives_team`) adds `user_drives.team` (`0054`'s table), with a check keeping it off a person's own drive and off `k8s_pvc`, and `user_drive_grants.members_can_write` (`0054`'s table, false by default): a team drive and its allocations' write bit (`storage.user_drive.team_drives`). A write setting `team` on a `k8s_pvc` or member-owned row now fails.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.

@@ -209,7 +209,7 @@ func TestRunFileLegacyInteractiveGetsTheWaitRefusalAndTheAttachHint(t *testing.T
 		t.Errorf("a refused combination created %d run(s)", n)
 	}
 	out, err := rig.run(t, "run", "--file", file)
-	if err != nil || !strings.Contains(out, "wardyn run attach") {
+	if err != nil || !strings.Contains(out, "wardyn attach") {
 		t.Errorf("out = %q, %v; want the attach hint", out, err)
 	}
 }

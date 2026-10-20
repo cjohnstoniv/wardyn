@@ -7,6 +7,8 @@
 package main
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +18,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/certbundle"
 	"github.com/cjohnstoniv/wardyn/internal/cliprofile"
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/version"
@@ -36,7 +39,9 @@ func (e *exitError) Unwrap() error { return e.err }
 func main() {
 	if err := rootCmd().Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "wardyn:", err)
-		if hint := dialHint(err); hint != "" {
+		if hint := caHint(err); hint != "" {
+			fmt.Fprintln(os.Stderr, "wardyn:", hint)
+		} else if hint := dialHint(err); hint != "" {
 			fmt.Fprintln(os.Stderr, "wardyn:", hint)
 		}
 		if hint := noOrgHint(err, urlFromDefault); hint != "" {
@@ -65,12 +70,13 @@ func dialHint(err error) string {
 		// work of its own to do.)
 		return "is wardynd running? (start it with `make setup`, the compose quick-start; point the CLI elsewhere with --url or WARDYN_URL)"
 	}
-	// Auth failure: we DID reach wardynd but it refused the bearer token. Name
-	// the two ways to supply one, so first contact against the compose stack
-	// (which boots with an admin token set) is recoverable without docs.
+	// Auth failure: we DID reach wardynd but it refused the credential. The
+	// hint follows the 401's reason (auth_hint.go): single sign-on with no
+	// admin token, a token the organisation does not know, or today's text,
+	// which names the compose stack's admin token for first contact.
 	var ae *sdk.APIError
 	if errors.As(err, &ae) && ae.Status == http.StatusUnauthorized {
-		return "authenticate with --token or WARDYN_ADMIN_TOKEN/WARDYN_TOKEN (the compose quick-start's token is in deploy/compose/README.md)"
+		return unauthorizedHint(ae)
 	}
 	return ""
 }
@@ -119,17 +125,32 @@ func resolveURL(cmd *cobra.Command, current string) (resolved string, fromDefaul
 // against a login page) and replays the body and bearer there.
 func noRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
-// noRedirectClient backs the raw requests when the SDK client carries no
-// HTTPClient of its own (the CLI always sets one). A client the caller did
-// supply is used as it is: its redirect policy is theirs.
-var noRedirectClient = &http.Client{CheckRedirect: noRedirect}
-
-// rawHTTPClient is the client for a request the SDK has no method for.
+// rawHTTPClient is the client for a request the SDK has no method for: the
+// SDK client's own (the CLI always sets one), else orgClient for its URL. A
+// client the caller did supply is used as it is: its redirect policy is theirs.
 func rawHTTPClient(c *sdk.Client) *http.Client {
 	if c.HTTPClient != nil {
 		return c.HTTPClient
 	}
-	return noRedirectClient
+	return orgClient(c.BaseURL, 0)
+}
+
+// caHint names the way out of a TLS failure the anchors can fix: the presented
+// root's subject and fingerprint with the `wardyn ca add` line, or the remove
+// line for a stored anchor file refused at use. "" for anything else.
+func caHint(err error) string {
+	var refused *anchorRefusedError
+	if errors.As(err, &refused) {
+		return fmt.Sprintf("remove the refused anchors with `wardyn ca remove %s`, then add the bundle again with `wardyn ca add`", refused.origin)
+	}
+	var cve *tls.CertificateVerificationError
+	var ua x509.UnknownAuthorityError
+	if !errors.As(err, &cve) || !errors.As(err, &ua) || len(cve.UnverifiedCertificates) == 0 {
+		return ""
+	}
+	root := cve.UnverifiedCertificates[len(cve.UnverifiedCertificates)-1]
+	return fmt.Sprintf("no trusted root signs the presented chain, which ends at %s (%s); "+
+		"if your organisation inspects TLS, add its CA with `wardyn ca add <file>`", root.Subject, certbundle.Fingerprint(root))
 }
 
 // exitCodeFor maps an error to a process exit code CI can branch on. A run
@@ -201,6 +222,17 @@ func plaintextHost(rawURL string) string {
 	return host
 }
 
+// tokenSource names the variable the bearer came from when --token was not given.
+func tokenSource(adminEnv, token string) string {
+	switch {
+	case token == "":
+		return ""
+	case adminEnv != "":
+		return "WARDYN_ADMIN_TOKEN"
+	}
+	return "WARDYN_TOKEN"
+}
+
 func rootCmd() *cobra.Command {
 	var (
 		serverURL string
@@ -224,10 +256,13 @@ func rootCmd() *cobra.Command {
 			// never becomes cobra's printed `(default "...")`. Pre-run beats
 			// every RunE (and so every client() call), and an explicit --token
 			// has already been parsed into `token` by now, so it still wins.
+			from := "--token"
 			if token == "" {
 				token = cliutil.EnvOr("WARDYN_ADMIN_TOKEN", os.Getenv("WARDYN_TOKEN"))
+				from = tokenSource(os.Getenv("WARDYN_ADMIN_TOKEN"), token)
 			}
 			serverURL, urlFromDefault = resolveURL(cmd, serverURL)
+			authHintFor.url, authHintFor.tokenFrom = serverURL, from
 			warnPlaintextToken(cmd.ErrOrStderr(), serverURL, token)
 		},
 	}
@@ -250,12 +285,13 @@ func rootCmd() *cobra.Command {
 	// server can't wedge a single request forever; the shared client reuses one
 	// connection pool across those polls.
 	client := func() *sdk.Client {
-		return &sdk.Client{BaseURL: serverURL, Token: token, HTTPClient: &http.Client{Timeout: 30 * time.Second, CheckRedirect: noRedirect}}
+		return &sdk.Client{BaseURL: serverURL, Token: token, HTTPClient: orgClient(serverURL, 30*time.Second)}
 	}
 
 	root.AddCommand(
 		loginCmd(),
 		runCmd(client),
+		attachCmd(client),
 		approvalCmd(client),
 		auditCmd(client),
 		policyCmd(client),
@@ -280,6 +316,7 @@ func rootCmd() *cobra.Command {
 		deviceCmd(client),
 		runnerCmd(client),
 		supportBundleCmd(client),
+		caCmd(client),
 	)
 	return root
 }
