@@ -423,3 +423,40 @@ func TestIsRedactedPlaceholder(t *testing.T) {
 		}
 	}
 }
+
+// A Run document is a launch, so each agent's own task (#3417) is kept and decoded into the
+// request. The same content as a RunTemplate is refused: a template never keeps a task.
+const multiTaskIntent = `{"experience":"background","workload":{"kind":"agent_task","agent":"claude-code","task":"fix the build"},` +
+	`"tools":[{"id":"claude-code","kind":"harness"},{"id":"codex-cli","kind":"harness","task":"review the diff"},` +
+	`{"id":"gemini-cli","kind":"harness","task":"write the notes"}],"no_repositories_or_drives":true}`
+
+func TestRunDocumentKeepsEachAgentsTask(t *testing.T) {
+	run := `{"api_version":"wardyn/v1","kind":"Run","intent":` + multiTaskIntent + `}`
+	res := validateTemplateImport([]byte(run), client.TemplateFormatJSON, client.RunDocumentKind)
+	if res.Document == nil || len(res.Diagnostics) != 0 {
+		t.Fatalf("a Run document with per-agent tasks: %+v", res.Diagnostics)
+	}
+	req, err := res.Document.Intent.Request()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, tool := range req.Tools {
+		got[tool.ID] = tool.Task
+	}
+	if got["codex-cli"] != "review the diff" || got["gemini-cli"] != "write the notes" || got["claude-code"] != "" {
+		t.Errorf("decoded tasks = %v", got)
+	}
+
+	tmpl := `{"api_version":"wardyn/v1","kind":"RunTemplate","coverage":"partial","intent":` + multiTaskIntent + `}`
+	diags := validateTemplateImport([]byte(tmpl), client.TemplateFormatJSON, "").Diagnostics
+	var paths []string
+	for _, d := range diags {
+		if d.Reason == reasonTemplateFieldExcluded {
+			paths = append(paths, d.Path)
+		}
+	}
+	if want := []string{"intent.tools[1].task", "intent.tools[2].task"}; !slices.Equal(paths, want) {
+		t.Errorf("a RunTemplate's excluded paths = %v, want %v (all diagnostics %v)", paths, want, diagReasons(diags))
+	}
+}

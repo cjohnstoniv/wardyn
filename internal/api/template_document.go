@@ -118,6 +118,7 @@ func decodeTemplateDocument(src []byte, format client.TemplateFormat) (client.Te
 		return doc, d.diags
 	}
 	kind := documentKind(top)
+	d.run = kind == client.RunDocumentKind
 	keys := templateDocumentKeys
 	if kind == client.RunDocumentKind {
 		keys = runDocumentKeys
