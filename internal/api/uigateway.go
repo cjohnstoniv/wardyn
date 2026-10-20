@@ -941,10 +941,10 @@ func (s *Server) uiEnsureApp(ctx context.Context, run types.AgentRun, sess uiSes
 		// An application run (WARDYN_APPLICATION_RUN, which the probe reads off
 		// the sandbox's own env) has no launcher to blame: its startup command
 		// is the app. The probe cannot tell a command that exited from one that
-		// has not started yet, so the sentence says both.
+		// has not started yet, so the sentence does not say which.
 		return uiFail(ctx, http.StatusBadGateway, reasonUIGatewayLauncherNotListening,
-			fmt.Sprintf("Nothing is listening on port %d: the app's startup command has either exited or not started yet, "+
-				"it is not restarted, and its output is in the run's terminal.", sess.Port))
+			fmt.Sprintf("Nothing is listening on port %d yet. If the app's startup command has exited, "+
+				"it isn't restarted; its output is in the run's terminal.", sess.Port))
 	case 4:
 		s.auditUISession(sess, "ui.start", sess.App, "failure",
 			map[string]any{"app": sess.App, "port": sess.Port, "reason": "did not listen in time"})

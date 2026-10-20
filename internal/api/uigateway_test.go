@@ -1196,8 +1196,8 @@ func TestUIGateway_ApplicationRunNotListeningIs502WithTheStartupCommandMessage(t
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode error body: %v", err)
 	}
-	want := "Nothing is listening on port 8080: the app's startup command has either exited or not started yet, " +
-		"it is not restarted, and its output is in the run's terminal."
+	want := "Nothing is listening on port 8080 yet. If the app's startup command has exited, " +
+		"it isn't restarted; its output is in the run's terminal."
 	if body.Error != want {
 		t.Fatalf("error body:\n got %q\nwant %q", body.Error, want)
 	}
