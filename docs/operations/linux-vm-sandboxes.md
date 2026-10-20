@@ -33,6 +33,8 @@
 | The VM's audit spool fills (50,000 decisions or 32 MiB) | The runner asks the guest to power down, keeps the stopped VM and removes the proxy. The runner's log names the run |
 
 - These rules apply only on a runner that offers Linux VM sandboxes. A container run keeps the hold-then-`503` for a full spool.
+- The full-spool stop covers Docker-hosted VMs on a person's runner. Kubernetes VMs are not covered.
+- Today the console shows a run stopped for a full spool as an exited agent, with no named reason.
 - The spool is self-reported by the runner, so it is as trustworthy as the computer. A resident credential stops at its own cap ([hybrid laptops](hybrid-laptops.md#offline-and-revocation)).
 - Not in this release: a window that says the organisation is unreachable.
 
