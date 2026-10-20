@@ -490,6 +490,19 @@ func TestValidatePolicySpecRefusesABlankAllowedMethod(t *testing.T) {
 	}
 }
 
+// An entry that is not an HTTP method token ("GET /") can never equal a request method, so it is
+// refused; an extension method is still a legal token.
+func TestValidatePolicySpecRefusesANonTokenAllowedMethod(t *testing.T) {
+	spec := types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedMethods: []string{"GET", "GET /"}}
+	if err := validatePolicySpec(spec); err == nil || !strings.Contains(err.Error(), "allowed_methods[1]") {
+		t.Errorf("err = %v, want one naming allowed_methods[1]", err)
+	}
+	spec.AllowedMethods = []string{"GET", "gte", "M-SEARCH"}
+	if err := validatePolicySpec(spec); err != nil {
+		t.Errorf("extension method tokens: %v", err)
+	}
+}
+
 // A policy name is a bounded handle: too long, or carrying a control character, is a 400 before any store read.
 func TestCreatePolicy_NameIsBounded(t *testing.T) {
 	spec := `"spec":{"min_confinement_class":"CC2","first_use_approval":"always_deny"}`
