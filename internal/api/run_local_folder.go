@@ -151,7 +151,8 @@ func (s *Server) holdForLocalFolder(ctx context.Context, run types.AgentRun, ref
 	if folder == nil {
 		return true
 	}
-	if caps, cerr := s.runCapabilities(ctx, run); cerr == nil && strings.HasPrefix(caps.Resolved[run.ConfinementClass], "oci/krun") {
+	// A VM's runtime is QEMU, not the class's container runtime: its guest agent serves the sync's exec.
+	if caps, cerr := s.runCapabilities(ctx, run); cerr == nil && !run.MachineKind.IsVM() && strings.HasPrefix(caps.Resolved[run.ConfinementClass], "oci/krun") {
 		s.failLocalFolderRun(ctx, run, ref, folder.Name, fmt.Sprintf(
 			"the local folder %q cannot be synced into this run's exec-less (krun) runtime, so the agent was not started", folder.Name))
 		return false

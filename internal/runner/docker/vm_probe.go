@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -81,7 +82,53 @@ func (d *Driver) ProbeVM(ctx context.Context, c VMConfig) (VMConfig, error) {
 		return c, err
 	}
 	c.MachineType, c.QEMUVersion = p.MachineType, p.QEMUVersion
+	if err := d.probeVirtiofsd(ctx, c); err != nil {
+		slog.WarnContext(ctx, "Linux VM sandboxes on this runner cannot share a folder: use a QEMU image built from deploy/runner/vm-qemu", "reason", err.Error())
+	} else {
+		c.Virtiofs = true
+	}
 	return c, c.validate()
+}
+
+// probeVirtiofsd runs the QEMU image's virtiofsd once (--version), as hardened as a share's
+// container, and returns why it did not exit 0. A runner whose image fails it still offers VMs, but
+// no VM run that carries a folder mount.
+func (d *Driver) probeVirtiofsd(ctx context.Context, c VMConfig) error {
+	info, err := d.cli.Info(ctx, client.InfoOptions{})
+	if err != nil {
+		return fmt.Errorf("docker: info: %w", err)
+	}
+	host := hardenedHostConfig("none", "", runner.Resources{MemoryMiB: 512, PidsLimit: vmPidsLimit}, info.Info)
+	host.ReadonlyRootfs = true
+	created, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Name: "wardyn-vmprobe-" + uuid.NewString()[:8],
+		Config: &container.Config{Image: c.QEMUImage, User: c.user(), Cmd: []string{qemu.VirtiofsdArgs(0, false)[0], "--version"}, // the binary every share runs
+			Labels: map[string]string{labelManaged: "true", labelComponent: "vmprobe"}},
+		HostConfig: host,
+	})
+	if err != nil {
+		return fmt.Errorf("docker: create the virtiofsd probe: %w", err)
+	}
+	defer func() {
+		_, _ = d.cli.ContainerRemove(context.Background(), created.ID, client.ContainerRemoveOptions{Force: true})
+	}()
+	if _, err := d.cli.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
+		return fmt.Errorf("docker: start the virtiofsd probe: %w", err)
+	}
+	wctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	wait := d.cli.ContainerWait(wctx, created.ID, client.ContainerWaitOptions{Condition: container.WaitConditionNotRunning})
+	select {
+	case r := <-wait.Result:
+		if r.StatusCode != 0 {
+			return fmt.Errorf("virtiofsd --version exited %d: %s", r.StatusCode, d.proxyExitLogTail(ctx, created.ID))
+		}
+		return nil
+	case err := <-wait.Error:
+		return fmt.Errorf("the virtiofsd probe: %w", err)
+	case <-wctx.Done():
+		return wctx.Err()
+	}
 }
 
 func statT(fi os.FileInfo) (*syscall.Stat_t, bool) {

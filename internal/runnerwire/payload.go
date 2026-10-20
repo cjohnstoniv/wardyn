@@ -144,11 +144,14 @@ type Caps struct {
 }
 
 // VMCaps is the machine a runner's Linux VM sandboxes get: the versioned machine type, the named CPU
-// model and the QEMU version its probe measured.
+// model and the QEMU version its probe measured. Virtiofs says its probe found virtiofsd, so a VM
+// can share a run's folder mounts; a runner without it (or older than the flag) takes no VM run that
+// carries one.
 type VMCaps struct {
 	MachineType string `json:"machine_type"`
 	CPUModel    string `json:"cpu_model"`
 	QEMUVersion string `json:"qemu_version"`
+	Virtiofs    bool   `json:"virtiofs,omitempty"`
 }
 
 // Waiting is the `waiting` event's data.

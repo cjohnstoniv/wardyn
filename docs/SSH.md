@@ -448,7 +448,7 @@ Rules, enforced by the CLI (the gateway only relays bytes) and not overridable:
 
 `wardyn run --task ... --local-folder ./project` creates the run, waits for its sandbox and syncs the folder in once. The agent starts only after that pass completes, within `WARDYN_LOCAL_FOLDER_SEED_WAIT` (10 minutes) and the run's end. A failed or missing pass fails the run with a reason naming the folder. `wardyn sync <run-id> ./project` can seed it within the wait. Audit: `run.seed.hold`, `run.seed`.
 
-Interactive runs, background-only runs, exec-less (krun) runtimes and deployments without an SSH gateway refuse `local_folder` (`local_folder_unsupported`).
+Interactive runs, background-only runs, exec-less (krun) runtimes and deployments without an SSH gateway refuse `local_folder` (`local_folder_unsupported`). A Linux VM sandbox is held and synced the same way, through its guest agent ([Linux VM sandboxes](operations/linux-vm-sandboxes.md#what-a-run-gets)).
 
 `rsync` works too, over `wardyn run ssh --config`'s `Host` block; add `--chmod=F644,D755` to pull. It applies none of the conflict, collision or size rules, so prefer `wardyn sync --pull`:
 

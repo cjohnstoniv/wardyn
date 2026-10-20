@@ -43,6 +43,11 @@ func enableLinuxVM(ctx context.Context, sub *docker.Driver, stateDir string, get
 		slog.WarnContext(ctx, "Linux VM sandboxes are off on this runner", "reason", err.Error())
 		return nil
 	}
-	slog.InfoContext(ctx, "Linux VM sandboxes are on", "machine_type", c.MachineType, "cpu_model", c.CPUModel, "qemu", c.QEMUVersion)
-	return &runnerwire.VMCaps{MachineType: c.MachineType, CPUModel: c.CPUModel, QEMUVersion: c.QEMUVersion}
+	slog.InfoContext(ctx, "Linux VM sandboxes are on", "machine_type", c.MachineType, "cpu_model", c.CPUModel, "qemu", c.QEMUVersion, "folder_shares", c.Virtiofs)
+	return vmCaps(c)
+}
+
+// vmCaps is what the runner's caps offer for the VMs the probe found it can start.
+func vmCaps(c docker.VMConfig) *runnerwire.VMCaps {
+	return &runnerwire.VMCaps{MachineType: c.MachineType, CPUModel: c.CPUModel, QEMUVersion: c.QEMUVersion, Virtiofs: c.Virtiofs}
 }

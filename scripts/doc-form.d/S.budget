@@ -198,7 +198,8 @@
 # 0.10 ATT-LOGIN-SRV: docs/sdk.md 19886 adds 204 over 19682: twelve CLI sign-in reasons, measured.
 # docs/sdk.md 20288 = ours 20084 + theirs 19886 - base 19682 at the 0.10 W4a merge of ATT-LOGIN-SRV onto the train.
 # docs/sdk.md 20315 = ours + theirs - base at the 0.10 HYB-C merge of main onto VM-A, measured.
-docs/sdk.md=20315 share=21
+# 0.10 HYB-C: docs/sdk.md 20343 adds 28 over 20315, measured: the placement_capability refusal of a linux_vm run with a folder on a runner that cannot share one.
+docs/sdk.md=20343 share=21
 # docs/sdk.md 18691 adds 28 over 18663, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.

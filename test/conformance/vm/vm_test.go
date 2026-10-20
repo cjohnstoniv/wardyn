@@ -142,7 +142,7 @@ func TestLinuxVMSandbox(t *testing.T) {
 	if err != nil {
 		t.Fatalf("probe: %v", err)
 	}
-	if !strings.HasPrefix(vc.MachineType, "pc-q35-") || vc.QEMUVersion == "" {
+	if !strings.HasPrefix(vc.MachineType, "pc-q35-") || vc.QEMUVersion == "" || !vc.Virtiofs {
 		t.Fatalf("probe found %+v", vc)
 	}
 	if err := d.EnableVM(&vc); err != nil {
@@ -156,13 +156,17 @@ func TestLinuxVMSandbox(t *testing.T) {
 	if err := os.Chmod(ws, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	rw := t.TempDir() // a writable folder: the guest's agent user is not the host owner
+	if err := os.Chmod(rw, 0o777); err != nil {
+		t.Fatal(err)
+	}
 	out := &lockedBuffer{}
 	spec := runner.SandboxSpec{
 		RunID: uuid.New(), Image: guestImage, MachineKind: types.MachineLinuxVM, ConfinementClass: types.CC1,
 		Env:         map[string]string{"WARDYN_CONFORMANCE": "vm"},
 		ProxyConfig: runner.ProxyConfig{RunToken: "tok", ControlPlaneURL: "http://127.0.0.1:8080"},
 		Resources:   runner.Resources{CPUMillis: 2000, MemoryMiB: 2048},
-		Mounts:      []runner.Mount{{Source: ws, Target: "/home/agent/work", ReadOnly: true}},
+		Mounts:      []runner.Mount{{Source: ws, Target: "/home/agent/work", ReadOnly: true}, {Source: rw, Target: "/home/agent/rw"}},
 		ExecOutput:  out,
 	}
 	cctx, cancel := context.WithTimeout(ctx, 10*time.Minute) // a first image conversion included
@@ -212,6 +216,18 @@ func TestLinuxVMSandbox(t *testing.T) {
 	}
 	if o := out.String(); !strings.Contains(o, "deb13") || !strings.Contains(o, "\n1000") || !strings.Contains(o, "vm") {
 		t.Fatalf("agent output %q: the guest's kernel, the agent user, the sandbox env, the shared folder", o)
+	}
+
+	// The folders keep their modes in the guest: the writable one takes a write the host sees, the
+	// read-only one refuses one. The image has the sftp-server a folder sync writes through.
+	if code, o := run(t, d, sb.Ref, "echo from-the-guest > /home/agent/rw/made && ! touch /home/agent/work/nope 2>/dev/null && test -x /usr/lib/openssh/sftp-server"); code != 0 {
+		t.Fatalf("folder modes in the guest = %d %q", code, o)
+	}
+	if b, err := os.ReadFile(filepath.Join(rw, "made")); err != nil || string(b) != "from-the-guest\n" {
+		t.Fatalf("the guest's write to the writable folder: %q %v", b, err)
+	}
+	if _, err := os.Stat(filepath.Join(ws, "nope")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the read-only folder took a write: %v", err)
 	}
 
 	// A terminal with a pty.

@@ -14,7 +14,8 @@
 | The disk | The run's image converted once to a read-only ext4 base, plus the run's own copy-on-write overlay |
 | The boot | Direct kernel boot of the image's own kernel and initrd, with `noresume` |
 | The agent | The Wardyn guest agent in the guest starts the harness and serves terminals, as `agent` (uid 1000) |
-| Shared folders | One unprivileged `virtiofsd` container per mount; read-only mounts are served read-only |
+| Shared folders | The folders a container on this runner would get (a member's folder under the runner's roots), at the same paths and read-only or writable alike, one unprivileged `virtiofsd` container each. Nothing else on the host is shared |
+| Synced folders | A folder synced from another computer lands in the guest as in a container: through the guest agent and the image's `sftp-server`, as `agent`. The agent waits for the first sync |
 | Confinement | The VM boundary, which the runner treats as the `CC3` family (hardware virtualisation). The run's recorded `confinement_class` stays the one it asked for |
 | Network | None until the network relay ships: QEMU's only link goes to a socket nothing answers. Then every connection the desktop makes goes through Wardyn's network relay, which hands allowed ones to the proxy and drops the rest |
 
@@ -60,13 +61,14 @@
 | this host's CPU cannot run the VM CPU model | Set `WARDYN_RUNNER_VM_CPU_MODEL` to a model the host supports, for example `Skylake-Client-v4` or `EPYC-v3` |
 | the Docker engine does not share this runner's filesystem | Use a local engine |
 | no QEMU image | Build the image (step 2) and set `WARDYN_RUNNER_VM_QEMU_IMAGE` |
+| cannot share a folder | The QEMU image's `virtiofsd` did not run. VMs stay on, but a VM run that carries a folder is refused. Use an image built from step 2 |
 
 ## The guest image contract
 
 - A run's image is an ordinary OCI image. The reference image is [`deploy/images/vm-linux`](../../deploy/images/vm-linux/Dockerfile) (Debian 13, no desktop).
 - It holds exactly one `/boot/vmlinuz-*` and one `/boot/initrd.img-*`, with virtio, ext4 and `qemu_fw_cfg` available. The root filesystem is `/dev/vda`.
 - It runs systemd, `qemu-guest-agent` (with `hwclock`, which sets the guest clock), and the Wardyn guest agent at `/usr/local/bin/wardyn-guest-agent` with its unit enabled.
-- It has the user `agent` (uid 1000, home `/home/agent`), as a container agent image does.
+- It has the user `agent` (uid 1000, home `/home/agent`), as a container agent image does, and `/usr/lib/openssh/sftp-server`, which a folder sync writes through.
 - It installs the run's CA from `/sys/firmware/qemu_fw_cfg/by_name/opt/org.wardyn/ca.pem/raw` on every boot, so a VM trusts its own run's CA and never another's.
 
 ## What the host can see

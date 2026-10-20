@@ -12,6 +12,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire/runnertest"
@@ -65,6 +66,47 @@ func TestCreateVMIsItsOwnMethodThatAnOlderRunnerRefuses(t *testing.T) {
 	// A container create on the same runner is today's create_sandbox, unchanged.
 	if _, spec := create(t, rig, nil); rig.Fake.Created[0].RunID != spec.RunID || rig.Fake.Created[0].MachineKind != "" {
 		t.Fatalf("container create = %+v", rig.Fake.Created)
+	}
+}
+
+// A runner that offers VMs but not folder shares into them (one from before the flag, or whose QEMU
+// image has no working virtiofsd) is sent no VM run that carries a folder; one without a folder is
+// still asked, by create_vm.
+func TestCreateVMWithAFolderNeedsTheRunnersVirtiofs(t *testing.T) {
+	for _, virtiofs := range []bool{false, true} {
+		rig := runnertest.NewRig(t, rid)
+		advertiseVM(t, rig, &runnerwire.VMCaps{MachineType: "pc-q35-10.0", CPUModel: "Haswell-v4", QEMUVersion: "10.0.13", Virtiofs: virtiofs})
+		spec := vmSpec()
+		spec.Mounts = []runner.Mount{{Source: "/home/me/project", Target: "/home/agent/work", MemberAuthored: true}}
+		_, err := rig.Sub.CreateSandbox(ctxT(t), spec)
+		refused := err != nil && strings.Contains(err.Error(), remote.VMNoFolderShare)
+		if refused == virtiofs {
+			t.Fatalf("virtiofs %v: VM create with a folder = %v", virtiofs, err)
+		}
+		if !virtiofs && (len(rig.Fake.Created) != 0 || len(rig.Fake.Calls) != 0) {
+			t.Fatalf("the refused VM reached the runner: created %d, calls %v", len(rig.Fake.Created), rig.Fake.Calls)
+		}
+	}
+}
+
+// advertiseVM sends caps that offer VMs as vm describes and waits until the substrate keeps them.
+func advertiseVM(t *testing.T, rig *runnertest.Rig, vm *runnerwire.VMCaps) {
+	t.Helper()
+	caps := runnerwire.Caps{Version: "0.10.0", Capacity: placement.Capacity{CPUMillisMax: 4000, MemoryMiBMax: 8192},
+		Support: mustClasses(t, rig), LinuxVM: vm}
+	data, err := runnerwire.Marshal(caps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rig.Server.Peer.Event(ctxT(t), runnerwire.Event{Kind: runnerwire.EventCaps, Data: data}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for c, _ := rig.Sub.Caps(); c.LinuxVM == nil || *c.LinuxVM != *vm; c, _ = rig.Sub.Caps() {
+		if time.Now().After(deadline) {
+			t.Fatal("the linux_vm caps never arrived")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 

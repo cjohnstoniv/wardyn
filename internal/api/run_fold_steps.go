@@ -327,7 +327,8 @@ func (s *Server) stepConfinement(f *runFold, rec *foldRecorder) bool {
 // runner_offline. The remote placement is the deployment's own executor and is
 // not asked.
 func (s *Server) stepPlacementCapability(f *runFold, rec *foldRecorder) bool {
-	return !s.placementCapabilityRefusal(f.r.Context(), *f.req, f.place, f.ceiling).write(s, f.w, f.r)
+	mounts := len(buildRunMounts(f.spec, s.userMountPosture(f.wsRefs))) // the folders the sandbox would get
+	return !s.placementCapabilityRefusal(f.r.Context(), *f.req, f.place, f.ceiling, mounts).write(s, f.w, f.r)
 }
 
 // stepModelProvider makes the model-provider choice and refuses one whose

@@ -273,6 +273,7 @@ What happens:
     `.kube`, `.config/gh`, `.config/gcloud`, `.netrc`, `.git-credentials`, `.git/config` and `Library/Keychains`.
     A project's own `.claude` or `.docker` folder is left out too.
   - Only folder names, file counts and sizes reach Wardyn while you browse. No file is sent until a run starts.
+- A Linux VM sandbox gets the folder the same way, into its guest as `agent`.
 - The runner opens no port and Wardyn never connects in: each pass rides the runner's own outbound session. The
   runner never reaches into a sandbox. Wardyn joins its stream to the sandbox's own `sftp-server`.
 

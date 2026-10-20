@@ -5,7 +5,7 @@
 # that wardyn-runnerd converts to an ext4 disk and boots under QEMU/KVM. No desktop. The image
 # contract it meets (docs/operations/linux-vm-sandboxes.md): one /boot/vmlinuz-* and /boot/initrd.img-*, root
 # on /dev/vda, systemd, qemu-guest-agent, the Wardyn guest agent with its unit, the CA install unit,
-# and the agent user (uid 1000, home /home/agent).
+# the agent user (uid 1000, home /home/agent), and /usr/lib/openssh/sftp-server for folder syncs.
 FROM --platform=$BUILDPLATFORM golang:1.27.2@sha256:5bc7f572bbaa98885a3a1fd9c0aa76b59e3e14e8628bfc316bbfd0c701e4818c AS builder
 WORKDIR /build
 ENV GOTOOLCHAIN=local
@@ -20,7 +20,7 @@ FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee
 # No console login (the serial console is the runner's log) and no network configuration here.
 RUN set -eu; export DEBIAN_FRONTEND=noninteractive; apt-get update; \
     apt-get install -y --no-install-recommends linux-image-amd64 initramfs-tools systemd systemd-sysv udev \
-      qemu-guest-agent util-linux-extra ca-certificates bash procps; \
+      qemu-guest-agent util-linux-extra ca-certificates bash procps openssh-sftp-server; \
     apt-get clean; rm -rf /var/lib/apt/lists/*; \
     printf 'qemu_fw_cfg\n' > /etc/modules-load.d/wardyn.conf; \
     systemctl mask getty@.service serial-getty@.service systemd-networkd-wait-online.service

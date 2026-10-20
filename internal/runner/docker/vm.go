@@ -68,6 +68,9 @@ type VMConfig struct {
 	KVMGID string
 	// BootTimeout bounds a VM's boot to its guest agent's first answer; zero is three minutes.
 	BootTimeout time.Duration
+	// Virtiofs is what the probe found: the QEMU image's virtiofsd runs, so a VM can share the
+	// run's mounts. Without it a VM run that carries a mount is refused before anything is created.
+	Virtiofs bool
 }
 
 // maxSocketPath is the longest unix socket path a connect accepts (sun_path is 108 bytes).
@@ -171,6 +174,9 @@ func (d *Driver) vmFor(ctx context.Context, ref string) *vmRun {
 	return v.(*vmRun)
 }
 
+// errVMNoFolderShare refuses a VM run that carries a folder mount on a runner whose probe found no virtiofsd.
+const errVMNoFolderShare = "docker: this runner cannot share a folder into a Linux VM sandbox: its QEMU image has no working virtiofsd"
+
 // errVMUnsupported answers the verbs a VM does not serve in this release.
 var errVMUnsupported = errors.New("docker: a Linux VM sandbox does not support this")
 
@@ -184,6 +190,9 @@ func (d *Driver) refuseVMSpec(spec runner.SandboxSpec) error {
 	}
 	if len(spec.Drives) > 0 {
 		return errors.New("docker: a Linux VM sandbox has no drives in this release")
+	}
+	if len(spec.Mounts) > 0 && !d.vmConfig().Virtiofs {
+		return errors.New(errVMNoFolderShare)
 	}
 	if spec.RecordWithin(d.cfg.Record) {
 		return errors.New("docker: a Linux VM sandbox is not recorded in this release; turn recording off for this run")
