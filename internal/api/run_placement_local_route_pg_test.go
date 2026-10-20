@@ -113,6 +113,32 @@ func TestPG_LocalRun_DispatchedToItsBoundRunner(t *testing.T) {
 	}
 }
 
+// #2972 C1: a run on the person's own runner is created (201) and dispatched with WARDYN_DESKTOP_SIGNINS off,
+// and on. Both sign-in fields are classified for local placement, and neither is set on such a run
+// (signinTarget refuses a run bound to a runner).
+func TestPG_LocalRun_CreatedWhateverTheDesktopSigninsKnob(t *testing.T) {
+	for _, on := range []bool{false, true} {
+		t.Run(fmt.Sprintf("desktop_signins=%v", on), func(t *testing.T) {
+			e := newPlacementEnv(t)
+			e.srv.cfg.DesktopSignins = on
+			e.runner.fakeRunner.capsClasses = []types.ConfinementClass{types.CC1}
+			laptops := e.createPool("Laptops", types.RunnerPoolUser)
+			awake := e.laptop(e.personP, 4000, 8192, types.CC1, types.CC2, types.CC3)
+			e.addToPool(e.person, laptops.ID, awake)
+			e.stream(awake, types.CC1, types.CC2, types.CC3)
+			e.personDefaults(e.person, fmt.Sprintf(`{"pool_id":%q}`, laptops.ID))
+
+			run := e.localCreate(runBody(`"confinement_class":"CC3"`))
+			if run.Placement != types.PlacementLocal || run.RunnerID == nil || *run.RunnerID != awake {
+				t.Fatalf("row = placement %q runner %v, want local on %s", run.Placement, run.RunnerID, awake)
+			}
+			if spec := e.dispatchedSpec(run.ID); spec.DesktopSignins || spec.ProxyConfig.DesktopSignins {
+				t.Fatalf("a run on a person's runner was dispatched with sign-ins: store %v listener %v", spec.DesktopSignins, spec.ProxyConfig.DesktopSignins)
+			}
+		})
+	}
+}
+
 // LE-3 and LE-10 (R2-0132): deny_placements holds the placement the pool decides. A member whose profile
 // denies remote launches on a self-hosted pool, however the pool was chosen; a remote pool, named or
 // defaulted, is the same 403 and authz.denied row as an explicit ask at every door.
