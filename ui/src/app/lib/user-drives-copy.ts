@@ -131,8 +131,6 @@ export const DRIVES = {
   DRIVES_OFF_BANNER:
     "User drives are turned off for this deployment under Workspace providers. Everything here is kept; nothing mounts until they are turned back on.",
   DRIVES_TITLE: "Drives",
-  DRIVES_LEAD:
-    "A drive is one place storage comes from: a share your platform already mounts, or a volume Wardyn creates per person.",
   COL_NAME: "Name",
   COL_BACKEND: "Backend",
   COL_SIZE: "Size",
@@ -164,7 +162,6 @@ export const DRIVES = {
   SIZE_MIB: (n: number) => `${n} MiB`,
   SIZE_GIB: (n: number) => `${n} GiB`,
   EMPTY_TITLE: "No drives yet",
-  EMPTY_BODY: "Runs keep nothing between them today. Register a drive to give people a directory that persists.",
   EDITOR_TITLE_NEW: "New drive",
   EDITOR_TITLE_EDIT: (name: string) => `Edit "${name}"`,
   FIELD_NAME: "Name",

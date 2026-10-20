@@ -203,7 +203,6 @@ export function DrivesScreen() {
             <div className="flex flex-wrap items-start justify-between gap-3 px-6 pt-5">
               <div>
                 <h2 className="text-sm font-medium text-foreground">{DRIVES.DRIVES_TITLE}</h2>
-                <p className="mt-1 max-w-[82ch] text-body text-muted-foreground">{DRIVES.DRIVES_LEAD}</p>
               </div>
               {/* With no drives the empty state carries this action instead, so
                   the screen never offers two New drive buttons. */}
@@ -222,7 +221,6 @@ export function DrivesScreen() {
                   size="compact"
                   icon={HardDrive}
                   title={DRIVES.EMPTY_TITLE}
-                  description={DRIVES.EMPTY_BODY}
                   action={
                     <Button
                       variant={newIsTeal ? "default" : "outline"}
