@@ -11,9 +11,6 @@ export const NR_START = {
   EYEBROW: "Launch a governed workload",
   TITLE: "New run",
   LEDE: "Choose how you want to shape this run. Every path creates the same draft and meets again at review.",
-  AI_TITLE: "AI composer",
-  AI_BODY: "Create policies, sandboxes and runs with an agent's help.",
-  AI_FOOT: "Describe what you need",
   GUIDED_TITLE: "Guided setup",
   GUIDED_BADGE: "Fastest",
   GUIDED_BODY: "Answer a few plain questions. Your organisation's defaults take care of the rest.",
@@ -24,4 +21,6 @@ export const NR_START = {
   DOC_YAML: "YAML",
   DOC_JSON: "JSON",
   TRUST_LINE: "Policy and availability are checked again when you launch.",
+  /** The one muted line for what is not built, on this screen only (#3045). No version number: it would be wrong the day it ships. */
+  ROADMAP: "On the roadmap: scheduled runs and multi-agent runs.",
 } as const;

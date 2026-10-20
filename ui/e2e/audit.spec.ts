@@ -152,15 +152,23 @@ test("search filters by action / actor / target text", async ({ page }) => {
   await expect(verb(page, "Stored a secret")).toBeVisible();
 });
 
+// #3036: the run.create sentence no longer prints the run's long id; the reference beside it names the run.
+test("a run.create row names the run once, by reference, not by its 36-character id", async ({ page }) => {
+  const row = page.locator("main div.flex.flex-wrap").filter({ hasText: "Created the run" }).filter({ has: page.getByTestId("run-ref") }).last();
+  await expect(row.getByText(/^Created the run$/)).toBeVisible();
+  await expect(row).not.toContainText(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/);
+  await expect(row.getByTestId("run-ref").getByRole("button").last()).toHaveAttribute("title", /^[0-9a-f-]{36}\s+Click to copy$/);
+});
+
 test("clicking a run drills into that run's trail, and 'Show all events' restores the window", async ({ page }) => {
   await expect(eventCount(page)).toBeVisible();
   const fullCount = await eventCount(page).innerText();
 
-  // Each event that belongs to a run renders a small monospace run-id chip
-  // (the ONLY font-mono <button> on the screen — no distinct accessible name to
-  // target, so key on that stable class). Clicking it re-queries the server for
-  // that run's authoritative trail.
-  await page.locator("main button.font-mono").first().click();
+  // Each event that belongs to a run renders a run reference (#3036): the run's title, then a short mono id that
+  // copies. The title is the way in; clicking it re-queries the server for that run's authoritative trail.
+  const ref = page.locator('main [data-testid="run-ref"]').first();
+  await expect(ref.getByRole("button").last()).toHaveText(/^[0-9a-f]{8}$/);
+  await ref.getByRole("button").first().click();
 
   // The DrillBanner appears (its "Show all events" clear action + "Open run"
   // link are unique to it) and the window narrows below the full trail.

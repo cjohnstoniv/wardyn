@@ -127,8 +127,9 @@ describe("Harnesses step: roster rows", () => {
 
   it("hints from the row's facts: approval hold, Codex, a roster agent without a hold, availability", async () => {
     show({ ...INTERACTIVE, tools: [harness("claude-code"), harness("codex-cli"), harness("none")] });
-    expect(await screen.findByText(NR_HARNESSES.AVAILABLE("Claude Code"))).toBeInTheDocument();
-    expect(screen.getByText(NR_HARNESSES.CODEX_HINT)).toBeInTheDocument();
+    expect(await screen.findByText(NR_HARNESSES.CODEX_HINT)).toBeInTheDocument();
+    // #3046: "available" is the default and is not drawn.
+    expect(screen.queryByText(NR_HARNESSES.AVAILABLE("Claude Code"))).toBeNull();
     expect(screen.getByText(NR_HARNESSES.CUSTOM_HINT("Your own tools"))).toBeInTheDocument();
   });
 
@@ -173,15 +174,24 @@ describe("Harnesses step: Interactive", () => {
 });
 
 describe("Harnesses step: Autonomous", () => {
-  it("holds one harness and one task, with Add another harness Coming soon", async () => {
+  it("holds one harness and one task, and draws no add control or Coming soon chip (#3045)", async () => {
     show({ ...AUTONOMOUS, tools: [harness("claude-code")], workload: { kind: "agent_task", agent: "claude-code", task: "" } });
     expect(await screen.findByText(NR_HARNESSES.LEDE_AUTONOMOUS)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: NR_HARNESSES.ADD_ANOTHER })).toBeDisabled();
-    expect(screen.getByText(NR_SHARED.COMING_SOON)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: NR_HARNESSES.ADD_ANOTHER })).toBeNull();
+    expect(screen.queryByText(NR_SHARED.COMING_SOON)).toBeNull();
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
     setField(screen.getByRole("textbox", { name: new RegExp(NR_HARNESSES.TASK_LABEL) }), "ship it");
     expect(intentNow().workload).toEqual({ kind: "agent_task", agent: "claude-code", task: "ship it" });
     expect(intentNow().startup).toBeUndefined();
+  });
+
+  it("the agent picker is the card's title and the lede says what to do (#3046)", async () => {
+    show({ ...AUTONOMOUS, tools: [harness("claude-code")], workload: { kind: "agent_task", agent: "claude-code", task: "" } });
+    const card = await screen.findByRole("region", { name: NR_HARNESSES.EYEBROW(1) });
+    expect(within(card).getByRole("combobox", { name: NR_HARNESSES.HARNESS_LABEL })).toBeInTheDocument();
+    expect(within(card).queryByText(NR_HARNESSES.EYEBROW(1))).toBeNull();
+    expect(within(card).queryByText(NR_HARNESSES.AVAILABLE("Claude Code"))).toBeNull();
+    expect(NR_HARNESSES.LEDE_AUTONOMOUS).toBe("Pick the agent and give it its task.");
   });
 
   it("a new Autonomous task gets the roster's first harness as Make's Harness 1, and the select swaps it", async () => {

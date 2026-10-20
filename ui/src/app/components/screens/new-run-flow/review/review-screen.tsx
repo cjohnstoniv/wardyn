@@ -169,7 +169,7 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
       }}
     >
       <Notices poolName={pool} slots={pre?.runner_pool_slots} applied={pre?.resources_applied} askedByYou={changedFromOrigin(draft, ["resources"])} warnings={pre?.warnings} diskCut={!!pre?.main_drive?.clamped_by && pre.main_drive.clamped_by !== "policy"} />
-      <BlockerList blockers={blockers} go={(loc: NewRunLocation) => go(loc)} />
+      <BlockerList blockers={blockers} go={(loc: NewRunLocation) => go(loc)} onCheckAgain={issues.length ? undefined : checkAgain} />
       {view === "pretty" ? (
         <div className="grid items-start gap-3.5 lg:grid-cols-[minmax(0,1.7fr)_minmax(280px,0.8fr)]">
           <section className="flex flex-col overflow-hidden rounded-xl border border-border bg-card">
@@ -178,7 +178,10 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
                 <h2 className="font-medium">{NR_REVIEW.SETUP_TITLE}</h2>
                 <p className="text-sm text-muted-foreground">{setupTitle(draft.intent)}</p>
               </div>
-              <Chip tone={blockers.length ? "danger" : "success"}>{blockers.length ? NR_REVIEW.BADGE_ATTENTION : NR_REVIEW.BADGE_COMPLETE}</Chip>
+              {/* A blocker that names a group is red; a stale result alone blames none, so it is amber (#3043). */}
+              <Chip tone={hard.length ? "danger" : blockers.length ? "warning" : "success"}>
+                {hard.length ? NR_REVIEW.BADGE_ATTENTION : blockers.length ? NR_REVIEW.BADGE_CHECK : NR_REVIEW.BADGE_COMPLETE}
+              </Chip>
             </header>
             <BlockedGroups.Provider value={groupsBlockedBy(hard)}>
               <RunGroup {...group} docRows={docRows.run} />

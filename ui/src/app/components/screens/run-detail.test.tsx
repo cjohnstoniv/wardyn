@@ -154,6 +154,49 @@ describe("RunDetailScreen — 'Run not found' names lack-of-access as a real rea
     expect(await screen.findByText("Run not found")).toBeInTheDocument();
     expect(screen.getByText(/don't have access/i)).toBeInTheDocument();
   });
+
+  // #3047: the server answers a missing run and someone else's run with the same 404, and the client reads
+  // both as "no run". The card must then be the same bytes, carrying nothing that names either case.
+  it("renders byte-identical refusals for a missing run and for another person's run", async () => {
+    getRunMock.mockResolvedValue(undefined);
+    const shown = async (id: string) => {
+      const { container, unmount } = render(
+        <MemoryRouter initialEntries={[`/runs/${id}`]}>
+          <Routes>
+            <Route path="/runs/:id" element={<RunDetailScreen />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+      await screen.findByText("Run not found");
+      const card = container.querySelector('[data-testid="refusal"]')!.outerHTML;
+      unmount();
+      return card;
+    };
+    const missing = await shown("00000000-0000-0000-0000-000000000000");
+    const foreign = await shown("11111111-2222-3333-4444-555555555555");
+    expect(foreign).toBe(missing);
+    expect(missing).not.toMatch(/0000|1111|2222|3333|4444|5555/);
+    expect(missing).toContain("Not found");
+    expect(missing).toContain("None found in Wardyn");
+    expect(missing).toContain("Check the link, or go back to your runs.");
+    expect(screen.queryByText("Back to Runs")).toBeNull();
+  });
+
+  it("offers one action, back to the user's runs", async () => {
+    getRunMock.mockResolvedValue(undefined);
+    render(
+      <MemoryRouter initialEntries={["/runs/run-1"]}>
+        <Routes>
+          <Route path="/runs/:id" element={<RunDetailScreen />} />
+          <Route path="/runs" element={<div>runs list</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await screen.findByText("Run not found");
+    expect(screen.getAllByRole("button")).toHaveLength(1);
+    await userEvent.click(screen.getByRole("button", { name: "Back to your runs" }));
+    expect(await screen.findByText("runs list")).toBeInTheDocument();
+  });
 });
 
 // The cockpit's own state machine — which pane the hero shows. The four

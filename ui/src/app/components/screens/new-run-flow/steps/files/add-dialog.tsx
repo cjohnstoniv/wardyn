@@ -359,15 +359,7 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, driveReas
           <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
             {s.kind === "repo" && <Link to="/workspaces" className={FILES_LINK}>{NR_FILES.ADD_REPOSITORY}</Link>}
             {s.kind === "userDrive" && createUserDrive?.({ choose: chooseById, reload: reloadDrives })}
-            {s.kind === "sharedDrive" && (
-              <>
-                <span className="inline-flex items-center gap-2">
-                  <button type="button" disabled className="font-semibold text-muted-foreground opacity-70 disabled:cursor-not-allowed">{NR_FILES.CREATE_SHARED_DRIVE}</button>
-                  <Chip>{NR_SHARED.COMING_SOON}</Chip>
-                </span>
-                {operator && <Link to="/admin/drives" className={FILES_LINK}>{NR_FILES.MANAGE_DRIVES}</Link>}
-              </>
-            )}
+            {s.kind === "sharedDrive" && operator && <Link to="/admin/drives" className={FILES_LINK}>{NR_FILES.MANAGE_DRIVES}</Link>}
           </div>
         </div>
       )}

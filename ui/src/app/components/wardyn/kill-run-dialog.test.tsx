@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { KillRunDialog } from "./kill-run-dialog";
 
@@ -17,14 +17,17 @@ describe("KillRunDialog", () => {
     const dialog = screen.getByRole("alertdialog", { name: 'Kill "e2e fixture 2"?' });
     expect(dialog).toHaveTextContent("1697570d");
     expect(dialog).not.toHaveTextContent(ID);
+    // #3036: the short id is the run reference's, so it copies the whole id.
+    expect(within(dialog).getByRole("button", { name: "1697570d" })).toHaveAttribute("title", `${ID}\nClick to copy`);
     expect(dialog).toHaveTextContent("The kill is recorded in the audit trail.");
     await userEvent.click(screen.getByRole("button", { name: "Kill run" }));
     expect(onConfirm).toHaveBeenCalledWith(ID);
   });
 
-  it("falls back to the id when the run has no title", () => {
+  it("falls back to the short id, never the long one, when the run has no title", () => {
     render(<KillRunDialog runId={ID} onOpenChange={() => {}} onConfirm={() => {}} />);
-    expect(screen.getByRole("alertdialog", { name: `Kill ${ID}?` })).toBeInTheDocument();
+    const dialog = screen.getByRole("alertdialog", { name: "Kill run 1697570d?" });
+    expect(dialog).not.toHaveTextContent(ID);
   });
 
   it("names a run by the first line of a long task, bounded", () => {

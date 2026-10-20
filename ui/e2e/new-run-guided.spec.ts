@@ -133,15 +133,17 @@ function expectCreateEqualsLastCheck(bodies: Bodies) {
 }
 
 test.describe("New Run, Start and Run: the shared pieces", () => {
-  test("the AI path is Coming soon in words, and is not announced as a disabled control (FR-0124)", async ({ page }) => {
+  test("Start has two real paths and one muted roadmap line, no hatched Coming soon card (#3045)", async ({ page }) => {
     await stubFlow(page);
     await gotoConsole(page);
     await navToRoute(page, "/runs/new");
-    const card = page.getByRole("article", { name: NR_START.AI_TITLE });
-    await expect(card).toContainText(NR_SHARED.COMING_SOON);
-    // aria-disabled is not allowed on the article role; the words carry it.
-    await expect(card).not.toHaveAttribute("aria-disabled", /.*/);
-    await expect(card.getByRole("button")).toHaveCount(0);
+    await expect(page.getByRole("article")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: new RegExp(`^${NR_START.GUIDED_TITLE}`) })).toBeVisible();
+    await expect(page.getByRole("region", { name: NR_START.DOC_TITLE })).toBeVisible();
+    await expect(page.getByText("AI composer")).toHaveCount(0);
+    await expect(page.getByText(NR_SHARED.COMING_SOON)).toHaveCount(0);
+    await expect(page.getByText(NR_START.ROADMAP, { exact: true })).toBeVisible();
+    await expect(page.getByText(NR_START.ROADMAP)).not.toContainText(/\d/);
   });
 
   test("a barrier's info tip opens on click and closes on Esc; a caveat is text, not only a hover title (FR-0119, FR-0123)", async ({ page }) => {
@@ -225,14 +227,17 @@ test.describe("New Run, Guided setup: each workload end to end", () => {
 
 test.describe("New Run, Guided setup: the Harnesses step (NR-11)", () => {
   // The last set is the lane's own: Claude Code with Codex CLI is carried by one declared image.
-  test("Autonomous holds one harness and one task; adding another is Coming soon", async ({ page }) => {
+  test("Autonomous holds one harness and one task, with no add control and no Coming soon (#3045)", async ({ page }) => {
     await stubFlow(page);
     await openGuided(page);
     await toHarnesses(page, "agent", "autonomous");
     await expect(page.getByText(NR_HARNESSES.LEDE_AUTONOMOUS)).toBeVisible();
-    const another = page.getByRole("button", { name: NR_HARNESSES.ADD_ANOTHER });
-    await expect(another).toBeDisabled();
-    await expect(page.getByText(NR_SHARED.COMING_SOON)).toBeVisible();
+    await expect(page.getByRole("button", { name: NR_HARNESSES.ADD_ANOTHER })).toHaveCount(0);
+    await expect(page.getByText(NR_SHARED.COMING_SOON)).toHaveCount(0);
+    // #3046: the picker is the card's title, so the old "Harness 1" eyebrow text is gone.
+    const card = page.getByRole("region", { name: NR_HARNESSES.EYEBROW(1) });
+    await expect(card.locator("#nr-harness-0")).toBeVisible();
+    await expect(card.getByText(NR_HARNESSES.EYEBROW(1), { exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: NR_SHARED.REMOVE })).toBeDisabled();
 
     // Continuing without the task focuses it and says why, in the canon line.

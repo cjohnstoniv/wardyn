@@ -24,6 +24,9 @@ export const CONSOLE_VIEW = {
   // failure block or reauth card on the admin's own run (whose door is User
   // view only) all reuse this one string.
   OPEN_IN_USER: "Open in user view",
+  // #3039: the Runs list row's ⋯ menu — its accessible name and the menu item's subtitle.
+  ROW_MENU: "Run actions",
+  OPEN_IN_USER_HINT: "Opens this run in the user view.",
 } as const;
 
 // The deleted-type notice (UT-13, #912; packet B, owner-approved): an admin's
@@ -82,9 +85,15 @@ export const USER_PREVIEW = {
 // A user on /admin/*. Nothing behind it is fetched; the server refuses every
 // admin read and write anyway, so this page is a courtesy.
 export const VIEW_REFUSAL = {
-  TITLE: "Admin view",
+  TITLE: "Blocked: Admin view",
+  CHIP: "Refused by role",
   BODY: "This page is part of the admin view, which is for Wardyn admins. You're signed in as a user.",
-  CTA: "Go to your runs",
+  // #3047: the card's Wall, Set by, Enforced and Can change values, in that order.
+  WALL: "Admin view",
+  SET_BY: "Wardyn admins",
+  ENFORCED: "By the server, on every admin page and request",
+  CAN_CHANGE: "Not from here. A Wardyn admin can give you admin access.",
+  CTA: "Back to your runs",
 } as const;
 
 // An admin in the user view opens /admin/*. Entering admin authority is

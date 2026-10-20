@@ -12,7 +12,6 @@ import { Input } from "../../../../ui/input";
 import { Label } from "../../../../ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "../../../../ui/popover";
 import { Chip } from "../../../../wardyn/primitives";
-import { InfoTip } from "../../../../wardyn/info-tip";
 import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import type { LimitSource } from "../../../../../lib/types/runner-pools";
@@ -176,7 +175,7 @@ export function MainDriveSection({ view, size }: { view: MainDriveView; size: Re
   const life = lifecycleText(lifecycleOf(draft.intent, view));
 
   return (
-    <FilesGroup titleId="nr-main-title" title={NR_FILES.MAIN_TITLE} body={NR_FILES.MAIN_BODY} aside={<span className="text-meta font-semibold uppercase tracking-[0.08em] text-muted-foreground">{NR_SHARED.REQUIRED}</span>}>
+    <FilesGroup titleId="nr-main-title" title={NR_FILES.MAIN_TITLE} body={NR_FILES.MAIN_BODY} marker={NR_SHARED.REQUIRED}>
       <div className="grid gap-3 px-[15px] py-3.5">
         <div className="grid grid-cols-[70px_125px_minmax(175px,1fr)_auto] items-center gap-2.5 text-sm max-[520px]:grid-cols-[1fr_auto]">
           <Label htmlFor={SIZE_INPUT_ID} className="font-medium text-muted-foreground max-[520px]:col-span-full">{NR_FILES.SIZE_LABEL}</Label>
@@ -214,15 +213,6 @@ export function MainDriveSection({ view, size }: { view: MainDriveView; size: Re
             <strong className="text-sm leading-[1.45] font-semibold">{life}</strong>
           </div>
         )}
-        {/* The rule row: checkbox, label and Coming soon in one wrapper, the tooltip beside it, on one line that wraps whole (#2860). */}
-        <div className="flex flex-wrap items-center gap-2 border-t border-border pt-[11px] text-sm">
-          <span className="flex flex-wrap items-center gap-2 opacity-60">
-            <input id="nr-reuse-drive" type="checkbox" disabled className="size-4" />
-            <label htmlFor="nr-reuse-drive" className="font-semibold">{NR_FILES.REUSE_LABEL}</label>
-            <Chip>{NR_SHARED.COMING_SOON}</Chip>
-          </span>
-          <InfoTip label={NR_FILES.REUSE_ARIA}>{NR_FILES.REUSE_TIP}</InfoTip>
-        </div>
       </div>
     </FilesGroup>
   );

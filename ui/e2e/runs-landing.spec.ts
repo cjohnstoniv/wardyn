@@ -183,7 +183,8 @@ test.describe("Runs landing — page states (design.md §6 L3 row)", () => {
     await expect(page.getByText("Lost sandbox")).toBeVisible();
     await expect(page.getByText("Sandbox stopped")).toBeVisible();
 
-    await expect(page.getByRole("heading", { name: "Running" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Active" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Running" })).toHaveCount(0);
     await expect(page.getByText("Needs an admin")).toBeVisible();
     await expect(page.getByText("Waiting for an admin")).toBeVisible();
     await expect(page.getByText("Live and running")).toBeVisible();

@@ -519,12 +519,8 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
           <div className="rounded-xl border border-border bg-card">
             <EmptyState
               icon={ShieldCheck}
-              title={role === "user" ? "Approvals raised by your runs appear here." : "You're all caught up"}
-              description={
-                role === "user"
-                  ? undefined
-                  : "New credential, egress, and tool-call requests appear here the moment an agent needs you."
-              }
+              title={APPROVALS.EMPTY_TITLE}
+              description={role === "user" ? APPROVALS.EMPTY_MEMBER : APPROVALS.EMPTY_ADMIN}
               action={
                 <Button variant="outline" size="sm" onClick={() => setFilterParam("decided")}>
                   See decided

@@ -11,6 +11,7 @@ import { SCENARIO_POOLS } from "../../../../../lib/new-run-fixtures/scenarios/po
 import { SCENARIO_PREFLIGHT } from "../../../../../lib/new-run-fixtures/scenarios/preflight";
 import type { DraftAction } from "../../draft/draft-reducer";
 import { initialDraft, type RunIntent } from "../../draft/run-intent";
+import { BlockedGroups } from "../review-group";
 import { WhereGroup } from "./where-group";
 
 vi.mock("../../steps/run/pool-source", async (orig) => ({
@@ -45,5 +46,27 @@ describe("Review: where it runs, Change", () => {
     await user.click(screen.getByRole("button", { name: NR_REVIEW.DONE }));
     expect(screen.queryByLabelText(NR_REVIEW.BARRIER_LABEL)).toBeNull();
     expect(screen.getByRole("button", { name: `${NR_REVIEW.CHANGE} ${NR_REVIEW.GROUP_WHERE}` })).toHaveAttribute("aria-expanded", "false");
+  });
+});
+
+// #3043: the pool-required blocker points at this row, so the row says there is none instead of vanishing.
+describe("Review: where it runs with no pool", () => {
+  const draft = { ...initialDraft("alice"), intent: AGENT };
+  const view = (blocked: boolean) =>
+    render(
+      <BlockedGroups.Provider value={new Set(blocked ? (["where"] as const) : [])}>
+        <WhereGroup draft={draft} pre={null} preview={null} docRows={[]} go={vi.fn()} dispatch={vi.fn()} />
+      </BlockedGroups.Provider>,
+    );
+
+  it("reads 'No pool chosen yet', muted, when a blocker points here and no pool is known", () => {
+    view(true);
+    expect(screen.getByText("No pool chosen yet").className).toContain("text-muted-foreground");
+    expect(screen.getByRole("button", { name: `${NR_REVIEW.CHANGE} ${NR_REVIEW.GROUP_WHERE}` })).toBeInTheDocument();
+  });
+
+  it("says nothing while no blocker points here (the read is still pending)", () => {
+    view(false);
+    expect(screen.queryByText("No pool chosen yet")).toBeNull();
   });
 });

@@ -13,7 +13,6 @@ import { SCENARIO_ACCESS } from "../../../../../lib/new-run-fixtures/scenarios/t
 import type { MyComponents } from "../../../../../lib/types/components";
 import type { AccessFacts, AccessRow } from "../../../../../lib/types/new-run-access";
 import { ADD_ACCESS, CUSTOM_COMPONENT as CC, MY_COMPONENTS as MY_COMPONENTS_COPY } from "../../../../wardyn/copy/components";
-import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 import type { RunIntent } from "../../draft/run-intent";
 import { NewRunDraftProvider, useNewRunDispatch, useNewRunDraft } from "../../new-run-route";
@@ -82,14 +81,13 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
 describe("catalogue", () => {
-  it("lists five CLI cards with their states, and only the org rows the person is granted", async () => {
+  it("lists the built CLI cards with their states, and only the org rows the person is granted", async () => {
     await show();
     expect(await screen.findByRole("heading", { name: "AWS ReadOnly-Dev" })).toBeTruthy();
     for (const kind of ["azure", "github"] as const) expect(card(CLI_CARD[kind].name).getByText("Not turned on for you. Ask your admin.")).toBeTruthy();
-    for (const kind of ["gcloud", "kubectl"] as const) {
-      expect(card(CLI_CARD[kind].name).getByText(NR_SHARED.COMING_SOON)).toBeTruthy();
-      expect(card(CLI_CARD[kind].name).queryByRole("button")).toBeNull();
-    }
+    // #3045: the unbuilt command lines leave the grid, with no Coming soon card.
+    for (const kind of ["gcloud", "kubectl"] as const) expect(screen.queryByRole("heading", { name: CLI_CARD[kind].name })).toBeNull();
+    expect(screen.queryByText("Coming soon")).toBeNull();
     expect(card(CLI_CARD.azure.name).queryByRole("button")).toBeNull();
     // The owner's wording (T9): gh reaches Actions and the REST API, not issue or pull request lists.
     expect(card(CLI_CARD.github.name).getByText(NR_TOOLS.CLI_GITHUB_BODY)).toBeTruthy();

@@ -105,6 +105,14 @@ test("real member cannot access another person's run", async ({ page }) => {
   await page.goto(`/runs/${foreignId}`);
   await expect(page.getByText("Run not found")).toBeVisible();
   await expect(page.getByText(/denied|forbidden|no permission|not authorized/i)).toHaveCount(0);
+  const foreignCard = await page.getByTestId("refusal").evaluate((el) => el.outerHTML);
+
+  // #3047: the same card, byte for byte, for a run that does not exist.
+  await page.goto(`/runs/${randomUUID()}`);
+  await expect(page.getByText("Run not found")).toBeVisible();
+  expect(await page.getByTestId("refusal").evaluate((el) => el.outerHTML)).toBe(foreignCard);
+  await expect(page.getByTestId("refusal").getByRole("button")).toHaveText("Back to your runs");
+  await expect(page.getByTestId("refusal")).not.toContainText(foreignId);
 });
 
 test.describe("foreign/unknown run — standard not-found (absence, not refusal)", () => {

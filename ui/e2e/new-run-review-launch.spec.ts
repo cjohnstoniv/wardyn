@@ -16,6 +16,7 @@ import { MODEL_ACCESS_BANNER } from "../src/app/components/wardyn/model-access-c
 import { NR_DOCUMENT } from "../src/app/components/wardyn/copy/new-run/document";
 import { NR_LAUNCH } from "../src/app/components/wardyn/copy/new-run/launch";
 import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
+import { NR_RUN } from "../src/app/components/wardyn/copy/new-run/run";
 import { NR_START } from "../src/app/components/wardyn/copy/new-run/start";
 import { NR_TOOLS } from "../src/app/components/wardyn/copy/new-run/tools";
 import { AGENTS } from "../src/app/lib/workspace-providers-copy";
@@ -108,9 +109,31 @@ test.describe("New Run, Review: blockers and Check again", () => {
     // The held button is described by the one blocker list.
     await expect(launch(page)).toHaveAttribute("aria-describedby", "nr-blockers");
 
+    // #3043: a blocker that names something is red: the chip says Needs attention and the card has no Check again.
+    await expect(page.getByText(NR_REVIEW.BADGE_ATTENTION, { exact: true })).toBeVisible();
+    await expect(page.getByText(NR_REVIEW.BADGE_CHECK, { exact: true })).toHaveCount(0);
+    await expect(page.locator("#nr-blockers").getByRole("button", { name: NR_REVIEW.CHECK_AGAIN })).toHaveCount(0);
+
     await page.locator("#nr-blockers").getByRole("button", { name: SECRET_LABEL }).click();
     await expect(page.getByRole("heading", { name: NR_TOOLS.TITLE })).toBeVisible();
     await expect(page).toHaveURL(/step=tools/);
+  });
+
+  // #3043: the pool-required refusal points at "Where it runs", which says there is no pool instead of going blank.
+  test("a pool-required refusal makes Where it runs read 'No pool chosen yet'", async ({ page }) => {
+    await stub(page, { preflight: { status: 422, body: { error: NR_RUN.POOL_HELP, reason: "runner_pool_required" } } });
+    await openReview(page);
+    await expect(page.locator("#nr-blockers").getByText(NR_RUN.POOL_HELP)).toBeVisible();
+    await expect(page.locator("[data-review-group=where]").getByText(NR_REVIEW.WHERE_NONE, { exact: true })).toBeVisible();
+    await expect(page.getByText(NR_REVIEW.BADGE_ATTENTION, { exact: true })).toBeVisible();
+  });
+
+  test("group titles are sentence-case headings, not a caps eyebrow (#3044)", async ({ page }) => {
+    await stub(page, { preflight: CLEAR });
+    await openReview(page);
+    const title = page.locator("[data-review-group=where]").getByRole("heading", { name: NR_REVIEW.GROUP_WHERE });
+    await expect(title).toBeVisible();
+    await expect(title).toHaveCSS("text-transform", "none");
   });
 
   test("a preflight refusal is a blocker in the server's own sentence", async ({ page }) => {

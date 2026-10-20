@@ -27,6 +27,7 @@ import {
 import { type ConsoleView } from "../../wardyn/console-view";
 import { VIEWER_APPROVAL_BLOCKS_NOTE } from "../../wardyn/copy";
 import { RunCanvas } from "./canvas";
+import { RunStatusStrip } from "./status-strip";
 import { RunFailureBlock } from "./failure-block";
 import { LoginSandboxNote } from "./login-sandbox-note";
 import { TerminalPane } from "./terminal-notice";
@@ -186,5 +187,12 @@ export function Cockpit({
     terminalPane,
   };
 
-  return <RunCanvas ctx={ctx} />;
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <RunStatusStrip ctx={ctx} />
+      <div className="min-h-0 flex-1">
+        <RunCanvas ctx={ctx} />
+      </div>
+    </div>
+  );
 }

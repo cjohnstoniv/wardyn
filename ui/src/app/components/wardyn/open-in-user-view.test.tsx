@@ -11,7 +11,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { health } from "../../lib/api/health";
-import { OpenInUserView, ViewAccessProvider, type ViewAccess } from "./console-view";
+import { OpenInUserView, OpenInUserViewMenu, ViewAccessProvider, type ViewAccess } from "./console-view";
 import { CONSOLE_VIEW, OPEN_IN_USER_VIEW } from "./copy/console-view";
 
 afterEach(() => {
@@ -76,5 +76,34 @@ describe("OpenInUserView", () => {
   it("the admin token has no User view, so it gets no link", () => {
     mount("admin-only");
     expect(screen.queryByRole("button", { name: OPEN_IN_USER_VIEW })).not.toBeInTheDocument();
+  });
+});
+
+describe("OpenInUserViewMenu (#3039)", () => {
+  const mountMenu = (access: ViewAccess) =>
+    render(
+      <ViewAccessProvider value={access}>
+        <MemoryRouter initialEntries={["/admin/runs"]}>
+          <OpenInUserViewMenu runId="r 1" />
+          <Routes>
+            <Route path="*" element={<Where />} />
+          </Routes>
+        </MemoryRouter>
+      </ViewAccessProvider>,
+    );
+
+  it("keeps the door behind a ⋯ button, names it with a subtitle, and opens that run's User view", async () => {
+    mountMenu("url");
+    expect(screen.queryByRole("button", { name: OPEN_IN_USER_VIEW })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: CONSOLE_VIEW.ROW_MENU }));
+    const item = await screen.findByRole("menuitem", { name: new RegExp(OPEN_IN_USER_VIEW) });
+    expect(item).toHaveTextContent("Opens this run in the user view.");
+    await userEvent.click(item);
+    expect(screen.getByTestId("where")).toHaveTextContent("/runs/r%201");
+  });
+
+  it("the admin token has no User view, so no menu", () => {
+    mountMenu("admin-only");
+    expect(screen.queryByRole("button", { name: CONSOLE_VIEW.ROW_MENU })).not.toBeInTheDocument();
   });
 });

@@ -18,6 +18,7 @@ import { Fingerprint } from "lucide-react";
 import type { AuditEvent, RunDetail } from "../../../../lib/types";
 import { absoluteTime } from "../../../../lib/format";
 import { CopyButton } from "../../../wardyn/copy-button";
+import { RunRef } from "../../../wardyn/run-ref";
 import { RUN_PLACEMENT, RUN_RECORDING, runnerLabel } from "../../../wardyn/copy/runners";
 import { usePrincipal } from "../../../wardyn/operator-context";
 import { WidgetCard } from "../../../wardyn/primitives";
@@ -85,8 +86,8 @@ export function IdentityWidget({
       )}
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-xs">
         <dt className="text-muted-foreground">Run</dt>
-        <dd className="min-w-0 truncate text-right font-mono text-foreground" title={run.id}>
-          {run.id}
+        <dd className="flex min-w-0 justify-end">
+          <RunRef runId={run.id} title={run.title?.trim() || run.task} />
         </dd>
 
         <dt className="text-muted-foreground">Identity</dt>

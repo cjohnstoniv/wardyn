@@ -383,15 +383,14 @@ describe("ApprovalsScreen — role-aware decide buttons", () => {
   });
 });
 
-// prompt-v2 point 5's exact empty-state string, member-only (admin keeps
-// "You're all caught up" — the two roles see a genuinely different list, so
-// the copy should say so rather than share admin's self-congratulatory tone).
+// #3047 (R6RUN): one noun-phrase title for both roles; the sentence under it is what differs, because the
+// two roles see a genuinely different list.
 describe("ApprovalsScreen — empty-state copy by role", () => {
   beforeEach(() => {
     mockPendingEmpty = true;
   });
 
-  it("member: \"Approvals raised by your runs appear here.\"", async () => {
+  it("member: \"No pending approvals\" over the member sentence", async () => {
     render(
       <RoleProvider role="user">
         <MemoryRouter>
@@ -399,17 +398,22 @@ describe("ApprovalsScreen — empty-state copy by role", () => {
         </MemoryRouter>
       </RoleProvider>,
     );
-    expect(await screen.findByText("Approvals raised by your runs appear here.")).toBeInTheDocument();
+    expect(await screen.findByText("No pending approvals")).toBeInTheDocument();
+    expect(screen.getByText("Requests from your runs appear here.")).toBeInTheDocument();
     expect(screen.queryByText("You're all caught up")).not.toBeInTheDocument();
   });
 
-  it("admin (and the fail-open default): unchanged", async () => {
+  it("admin (and the fail-open default): the same title over the existing body", async () => {
     render(
       <MemoryRouter>
         <ApprovalsScreen />
       </MemoryRouter>,
     );
-    expect(await screen.findByText("You're all caught up")).toBeInTheDocument();
+    expect(await screen.findByText("No pending approvals")).toBeInTheDocument();
+    expect(
+      screen.getByText("New credential, egress, and tool-call requests appear here the moment an agent needs you."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("You're all caught up")).not.toBeInTheDocument();
   });
 });
 
