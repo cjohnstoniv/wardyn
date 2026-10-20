@@ -43,9 +43,9 @@ func loadOrgCA(file string) (bundle string, n int, err error) {
 // orgCAOwner is fileOwner, a seam so a test can name a file's owner without being root.
 var orgCAOwner = fileOwner
 
-// readOrgCA opens the resolved path once and takes the type, owner and mode from that descriptor, so the
-// file checked is the file read. The directory holding the path as given and the one holding the resolved
-// file are both checked: a link in a directory others write can be re-pointed, whatever its target is.
+// readOrgCA checks the directory holding the path as given and the one holding the resolved file, both before
+// any open: a link in a directory others write can be re-pointed, whatever its target is. It then opens the
+// resolved path once and takes the type, owner and mode from that descriptor, so the file checked is the file read.
 func readOrgCA(path string, self int, now time.Time, warn func(string)) (string, int, error) {
 	if err := checkOrgCADir(filepath.Dir(path)); err != nil {
 		return "", 0, err
@@ -54,7 +54,10 @@ func readOrgCA(path string, self int, now time.Time, warn func(string)) (string,
 	if err != nil {
 		return "", 0, err
 	}
-	f, err := os.Open(real)
+	if err := checkOrgCADir(filepath.Dir(real)); err != nil {
+		return "", 0, err
+	}
+	f, err := openOrgCAFile(real)
 	if err != nil {
 		return "", 0, err
 	}
@@ -68,9 +71,6 @@ func readOrgCA(path string, self int, now time.Time, warn func(string)) (string,
 	}
 	if st.Mode().Perm()&0o022 != 0 {
 		return "", 0, fmt.Errorf("mode %04o lets group or others write it, so another account could add a root this runner trusts: chmod go-w it", st.Mode().Perm())
-	}
-	if err := checkOrgCADir(filepath.Dir(real)); err != nil {
-		return "", 0, err
 	}
 	if uid, ok := orgCAOwner(st); ok && uid != 0 && uid != self {
 		return "", 0, fmt.Errorf("owned by another account (uid %d): a root this runner trusts must be owned by you or by root", uid)

@@ -17,3 +17,9 @@ func fileOwner(st os.FileInfo) (int, bool) {
 	}
 	return 0, false
 }
+
+// openOrgCAFile opens the resolved path without following a final link and without blocking: a FIFO there
+// would otherwise hold the open forever, and the type check on the descriptor refuses it.
+func openOrgCAFile(path string) (*os.File, error) {
+	return os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+}

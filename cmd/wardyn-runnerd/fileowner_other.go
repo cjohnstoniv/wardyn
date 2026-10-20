@@ -8,3 +8,5 @@ package main
 import "os"
 
 func fileOwner(os.FileInfo) (int, bool) { return 0, false }
+
+func openOrgCAFile(path string) (*os.File, error) { return os.Open(path) }
