@@ -311,6 +311,18 @@ func (k peopleKeying) PrincipalFor(ctx context.Context, subj oidc.Subject) (stri
 	case !samePersonKey(p, subj):
 		return subj.Sub, false, nil
 	}
+	// Already attached: this sign-in's identity row is bound to the person, so
+	// nothing created later under the raw sub moves them off it (that would
+	// orphan everything the person owns), and subKnown is not read.
+	if ids, ok := k.s.cfg.Store.(store.PrincipalIdentityStore); ok {
+		row, err := ids.GetIdentityByObject(ctx, subj.Issuer, subj.TenantID, subj.ObjectID)
+		switch {
+		case err == nil && row.Principal == p.Principal:
+			return p.Principal, false, nil
+		case err != nil && !errors.Is(err, store.ErrNotFound):
+			return "", false, err
+		}
+	}
 	// Someone already known here by their pairwise sub keeps it: re-keying
 	// them would leave everything they own behind, with no way back.
 	known, err := k.subKnown(ctx, subj.Sub)
@@ -327,7 +339,7 @@ func (k peopleKeying) PrincipalFor(ctx context.Context, subj oidc.Subject) (stri
 // subKnown reports whether sub already names someone here: an identity a
 // prior sign-in bound to it, a person record, or an API token, SSH key, run,
 // workspace or stored secret they own. Read only when a sign-in matches an
-// object-id person, so an ordinary sign-in pays nothing.
+// object-id person not yet attached, so an ordinary sign-in pays nothing.
 func (k peopleKeying) subKnown(ctx context.Context, sub string) (bool, error) {
 	st := k.s.cfg.Store
 	// A bound identity never moves: a session under another principal would
