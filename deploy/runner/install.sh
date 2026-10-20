@@ -24,7 +24,7 @@ Usage: install.sh --org <url> [--binary <path>] [--token-file <file>] [setup fla
        install.sh --uninstall
 
   --binary <path>   wardyn-runnerd to install (default: beside this script, else on PATH)
-  --uninstall       stop and remove the service and the installed binary; keeps the runner identity
+  --uninstall       stop and remove the service, the installed binary and its .previous rollback copy; keeps the runner identity
 
 Everything else is passed to `wardyn-runnerd setup` (--org, --token-file, --proxy-image, --internal-network, --trusted-ca-file,
 --relay-listen, --relay-host-target, --claim, --pool, --default and the limit flags); run `wardyn-runnerd setup --help`.
@@ -67,7 +67,7 @@ uninstall() {
       ;;
     *) die "unsupported OS: $(uname -s)" ;;
   esac
-  rm -f "$data_dir/bin/wardyn-runnerd"
+  rm -f "$data_dir/bin/wardyn-runnerd" "$data_dir/bin/wardyn-runnerd.previous"
   echo "Removed the wardyn-runnerd service and binary."
   echo "Kept the runner identity in: $identity_dir"
   echo "To revoke this runner, run: wardyn runner revoke <runner id or name>   (or use My runner in the Wardyn console)."

@@ -109,9 +109,10 @@ H="$WORK/home-linux"
 mkdir -p "$H/.config/systemd/user" "$H/.config/wardyn/runner" "$H/.local/share/wardyn/bin"
 : >"$H/.config/systemd/user/wardyn-runnerd.service"; : >"$H/.config/wardyn/runnerd.env"
 : >"$H/.local/share/wardyn/bin/wardyn-runnerd"; : >"$H/.config/wardyn/runner/runner.json"
+: >"$H/.local/share/wardyn/bin/wardyn-runnerd.previous"
 run_install linux --uninstall
 [ "$RC" -eq 0 ] || fail "Linux uninstall failed (rc=$RC): $OUT"
-for gone in .config/systemd/user/wardyn-runnerd.service .config/wardyn/runnerd.env .local/share/wardyn/bin/wardyn-runnerd; do
+for gone in .config/systemd/user/wardyn-runnerd.service .config/wardyn/runnerd.env .local/share/wardyn/bin/wardyn-runnerd .local/share/wardyn/bin/wardyn-runnerd.previous; do
   [ ! -e "$H/$gone" ] || fail "uninstall left $gone"
 done
 [ -e "$H/.config/wardyn/runner/runner.json" ] || fail "uninstall removed the runner identity"
@@ -139,7 +140,8 @@ stub uname 'echo Darwin'
 M="$WORK/home-mac"
 mkdir -p "$M/Library/LaunchAgents" "$M/Library/Application Support/wardyn/bin"
 : >"$M/Library/LaunchAgents/com.wardyn.runnerd.plist"; : >"$M/Library/Application Support/wardyn/bin/wardyn-runnerd"
+: >"$M/Library/Application Support/wardyn/bin/wardyn-runnerd.previous"
 run_install mac --uninstall
-[ "$RC" -eq 0 ] && [ ! -e "$M/Library/LaunchAgents/com.wardyn.runnerd.plist" ] && [ ! -e "$M/Library/Application Support/wardyn/bin/wardyn-runnerd" ] || fail "macOS uninstall left the agent or binary (rc=$RC): $OUT"
+[ "$RC" -eq 0 ] && [ ! -e "$M/Library/LaunchAgents/com.wardyn.runnerd.plist" ] && [ ! -e "$M/Library/Application Support/wardyn/bin/wardyn-runnerd" ] && [ ! -e "$M/Library/Application Support/wardyn/bin/wardyn-runnerd.previous" ] || fail "macOS uninstall left the agent, binary or rollback copy (rc=$RC): $OUT"
 
 echo "test-runner-units: PASS"

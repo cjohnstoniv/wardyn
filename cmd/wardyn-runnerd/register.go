@@ -6,12 +6,14 @@ package main
 import (
 	"cmp"
 	"crypto/ed25519"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -27,7 +29,7 @@ import (
 )
 
 func newRegisterCommand() *cobra.Command {
-	var org, tokenFile, stateDir, name, sub, arch, trustedCAFile string
+	var org, tokenFile, stateDir, name, sub, arch, trustedCAFile, orgCAFile string
 	var ifUnregistered bool
 	var flags registerLimits
 	cmd := &cobra.Command{Use: "register", Short: "Register this host with its limits; its owner must then verify and claim it", Args: cobra.NoArgs}
@@ -58,7 +60,7 @@ func newRegisterCommand() *cobra.Command {
 				return nil
 			}
 		}
-		args := registerArgs{org: org, tokenFile: tokenFile, stateDir: stateDir, name: name, limits: &flags, noMeasure: sub == "k8s", arch: arch, trustedCAFile: trustedCAFile, reuseKey: ifUnregistered}
+		args := registerArgs{org: org, tokenFile: tokenFile, stateDir: stateDir, name: name, limits: &flags, noMeasure: sub == "k8s", arch: arch, trustedCAFile: trustedCAFile, orgCAFile: orgCAFile, reuseKey: ifUnregistered}
 		done, err := registerRunner(cmd, args)
 		// The chart's init container: a registration that could not reach the organisation is retried
 		// with the same key a bounded number of times, each failure logged, before the pod restarts
@@ -89,6 +91,7 @@ func newRegisterCommand() *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "runner name (defaults to the host name)")
 	cmd.Flags().StringVar(&sub, "substrate", "docker", "where this runner's runs execute: docker or k8s (k8s measures nothing: give every total as a flag)")
 	cmd.Flags().StringVar(&arch, "arch", os.Getenv(archEnv), "k8s, required: the sandbox node architecture this runner reports, amd64 or arm64")
+	cmd.Flags().StringVar(&orgCAFile, "org-ca-file", os.Getenv("WARDYN_ORG_CA_FILE"), "PEM file of extra roots the registration call trusts, as serve's flag of the same name: for the runner's own connection to the organisation only")
 	cmd.Flags().StringVar(&trustedCAFile, "trusted-ca-file", "", "PEM bundle of extra roots (e.g. a TLS-inspecting corporate proxy's CA) the registration call trusts, as serve's flag of the same name")
 	cmd.Flags().BoolVar(&ifUnregistered, "if-unregistered", false, "do nothing when this state directory already holds an identity for --org")
 	flags.register(cmd)
@@ -120,6 +123,11 @@ func readRegistrationToken(path string) (string, error) {
 // nothing about the token: the server may have spent it before it failed, so the person
 // is sent to My runners, not back to the token.
 func registrationFailure(err error) error {
+	var unknown x509.UnknownAuthorityError
+	if errors.As(err, &unknown) {
+		return fmt.Errorf("runner registration failed: %w. This computer does not trust the certificate that answered for the organisation (a proxy that inspects TLS, or a private CA, signed it): "+
+			"pass its root with --org-ca-file <file> (or WARDYN_ORG_CA_FILE); the runner trusts it for its own connection to the organisation only. The token was not used", err)
+	}
 	var refused *sdk.APIError
 	if errors.As(err, &refused) && (refused.Reason == string(placement.ReasonRunnerTokenInvalid) || refused.Status == http.StatusConflict) {
 		return fmt.Errorf("runner registration refused: %w. This token cannot be used again: obtain a fresh token and choose a new private state directory before retrying (the local key was preserved)", err)
@@ -171,6 +179,8 @@ type registerArgs struct {
 	arch string
 	// trustedCAFile is --trusted-ca-file: extra roots the registration call trusts beside the system's.
 	trustedCAFile string
+	// orgCAFile is --org-ca-file: roots for this call, as for the runner's own connection, and for nothing else.
+	orgCAFile string
 	// reuseKey (--if-unregistered) submits the key an earlier, incomplete registration left in the
 	// state directory instead of refusing on it.
 	reuseKey bool
@@ -210,7 +220,11 @@ func registerRunner(cmd *cobra.Command, a registerArgs) (registeredRunner, error
 	if err != nil {
 		return registeredRunner{}, err
 	}
-	orgClient, err := orgHTTPClient(bundle)
+	orgOnly, _, err := loadOrgCA(a.orgCAFile)
+	if err != nil {
+		return registeredRunner{}, err
+	}
+	orgClient, err := orgHTTPClient(bundle + orgOnly)
 	if err != nil {
 		return registeredRunner{}, err
 	}
@@ -259,6 +273,12 @@ func registerRunner(cmd *cobra.Command, a registerArgs) (registeredRunner, error
 	}
 	registered, err := client.RegisterRunner(cmd.Context(), sdk.RunnerRegisterRequest{Token: token, PublicKey: key.Public().(ed25519.PublicKey), Name: name, Limits: &limits, MachineName: machine, Arch: arch})
 	if err != nil {
+		var unknown x509.UnknownAuthorityError
+		if errors.As(err, &unknown) && !a.reuseKey {
+			// Nothing left this computer: the key made for this call goes, so the run with --org-ca-file is not
+			// refused for finding it.
+			_ = os.Remove(filepath.Join(stateDir, "runner.key"))
+		}
 		return registeredRunner{}, registrationFailure(err)
 	}
 	fingerprint := runnerwire.Fingerprint(key.Public().(ed25519.PublicKey))
