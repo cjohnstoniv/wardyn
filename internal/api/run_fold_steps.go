@@ -68,6 +68,8 @@ func (s *Server) stepPolicy(f *runFold, rec *foldRecorder) bool {
 // re-runs every admission check seeding can invalidate (seedAndAdmitWorkspace).
 // Only create gates on git_credential there (review finding F2); the preview
 // reads no credential at all. ephemeralDirs is create's (WARDYN_EPHEMERAL_DIRS).
+// Every door decides signinImageUngranted from the seeded image; it refuses
+// nothing, and only create's dispatch reads it.
 func (s *Server) stepSeedWorkspace(f *runFold, rec *foldRecorder) bool {
 	ctx := f.r.Context()
 	var seed workspaceSeed
@@ -75,12 +77,13 @@ func (s *Server) stepSeedWorkspace(f *runFold, rec *foldRecorder) bool {
 		var refusal *runRefusal
 		seed, refusal = s.seedAuthorizedWorkspace(ctx, f.r, &f.spec, f.req)
 		f.ephemeralDirs, f.seed = seed.ephemeralDirs, seed
+		f.signinImageUngranted = refusal == nil && s.signinVariantUngranted(ctx, *f.req, seed)
 		return !refusal.write(s, f.w, f.r)
 	}
 	var ok bool
 	seed, ok = s.seedAndAdmitWorkspace(ctx, f.w, f.r, &f.spec, f.req, f.mode == foldCreate)
 	f.ephemeralDirs, f.seed = seed.ephemeralDirs, seed
-	f.signinImageUngranted = ok && f.mode == foldCreate && s.signinVariantUngranted(ctx, *f.req, seed)
+	f.signinImageUngranted = ok && s.signinVariantUngranted(ctx, *f.req, seed)
 	return ok
 }
 

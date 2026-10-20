@@ -50,6 +50,9 @@ var kernelDoors = map[string][]string{
 	"seededImageRefusal":        {"capImage"},
 	"workspaceProvidersRefusal": {"capWorkspaceProvider"},
 	"chooseRunModelProvider":    {"capModelProvider"},
+	// A desktop run's sign-in variant of the person's own image (#2972 M1):
+	// decides the dispatched image, refuses nothing.
+	"signinVariantUngranted": {"capImage"},
 	// Every harness a run-mode request includes, beside the projected agent.
 	"harnessSetRefusalFor": {"capAgent"},
 	// A record session's model provider, chosen as a run's would be.
