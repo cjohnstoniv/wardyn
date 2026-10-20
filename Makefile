@@ -1,4 +1,4 @@
-.PHONY: doc-links test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build runnerd-image compose-up compose-down demo clean test-conformance-docker test-conformance-k8s test-kek-conformance test-kek-conformance-kind test-daemon-proxy-secret-kind build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-pg-api test-report-pg-store test-report-docker test-report-k8s cover-check cover-union release-check release-patch candidate-preflight ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-provider-seed test-e2e-ui screenshots record-demo setup stop-host reset reset-all doctor dev-pg agent-images-core test-race test-race-pg tidy-check agent-image-base agent-image-full agent-image-harnesses agent-image-claude-code-multiarch agent-image-vscode agent-image-novnc test-image-novnc-signin gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down kind-sso kind-sso-down compose-config dco npm-license npm-audit npm-audit-dev ci
+.PHONY: doc-links test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build runnerd-image compose-up compose-down demo clean test-conformance-docker test-conformance-k8s test-kek-conformance test-kek-conformance-kind test-daemon-proxy-secret-kind build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-pg-api test-report-pg-store test-report-docker test-report-k8s cover-check cover-union release-check release-patch candidate-preflight ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-provider-seed test-e2e-ui screenshots record-demo setup stop-host reset reset-all doctor dev-pg agent-images-core test-race test-race-pg tidy-check agent-image-base agent-image-full agent-image-harnesses agent-image-claude-code-multiarch agent-image-vscode agent-image-novnc agent-image-novnc-signin test-image-novnc-signin gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down kind-sso kind-sso-down compose-config dco npm-license npm-audit npm-audit-dev ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -174,7 +174,13 @@ agent-image-novnc: agent-image-base ## Build the noVNC UI-sandbox agent image
 	docker build $(DOCKER_BUILD_ARGS) -f deploy/images/novnc/Dockerfile -t wardyn/agent-novnc:local .
 	@echo "noVNC UI-sandbox image built: wardyn/agent-novnc:local"
 
-# Image gate for desktop sign-ins (#2972): needs a built wardyn/agent-novnc:local
+# The desktop sign-in variant (#2972): agent-novnc plus the person's browser.
+# wardynd runs it only with WARDYN_DESKTOP_SIGNINS=on (docs/UI-SANDBOXES.md).
+agent-image-novnc-signin: agent-image-novnc ## Build the desktop sign-in variant of the noVNC image
+	docker build $(DOCKER_BUILD_ARGS) -f deploy/images/novnc-signin/Dockerfile -t wardyn/agent-novnc-signin:local .
+	@echo "desktop sign-in image built: wardyn/agent-novnc-signin:local"
+
+# Image gate for desktop sign-ins (#2972): needs a built wardyn/agent-novnc-signin:local
 # (IMAGE= overrides) and a docker daemon (DOCKER_HOST, default the wardyn-docker one).
 test-image-novnc-signin: ## Image gate: a person's cookie reaches the agent only through a per-site share
 	./scripts/test-image-novnc-signin.sh

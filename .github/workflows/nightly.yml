@@ -765,7 +765,8 @@ jobs:
   # latency still catches before a tag.
   #
   # STAGING CONTRACT. A `workflow_dispatch` run pushes every row with
-  # `stage: "true"` (and buildx-smoke-ui-sandbox's two rows) to
+  # `stage: "true"` (and buildx-smoke-ui-sandbox's two rows and
+  # buildx-smoke-ui-sandbox-signin's one) to
   # ghcr.io/cjohnstoniv/staging/<image>:run-<run_id> and attests its build
   # provenance; those digests are what release.yml promotes to the release
   # tags. A scheduled run pushes nothing: no registry login, nothing attested,
@@ -922,9 +923,14 @@ jobs:
         include:
           - name: agent-vscode
             dockerfile: deploy/images/vscode/Dockerfile
+            base: agent-base
           - name: agent-novnc
             dockerfile: deploy/images/novnc/Dockerfile
-    steps:
+            base: agent-base
+    # Written once and reused by buildx-smoke-ui-sandbox-signin
+    # (`*ui_sandbox_stage_steps`); a row's `base` names the staged image it
+    # builds FROM.
+    steps: &ui_sandbox_stage_steps
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
         run: |
           command -v dockerd >/dev/null || exit 0
@@ -947,12 +953,14 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Resolve the staged agent-base digest
+      - name: Resolve the staged base image's digest
         id: base
+        env:
+          BASE_NAME: ${{ matrix.base }}
         run: |
           set -euo pipefail
-          digest="$(docker buildx imagetools inspect "ghcr.io/cjohnstoniv/staging/agent-base:run-${{ github.run_id }}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
-          ref="ghcr.io/cjohnstoniv/staging/agent-base@${digest}"
+          digest="$(docker buildx imagetools inspect "ghcr.io/cjohnstoniv/staging/${BASE_NAME}:run-${{ github.run_id }}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+          ref="ghcr.io/cjohnstoniv/staging/${BASE_NAME}@${digest}"
           printf '%s' "$ref" | grep -Eq '@sha256:[0-9a-f]{64}$' \
             || { echo "not a digest ref: $ref" >&2; exit 1; }
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
@@ -975,6 +983,31 @@ jobs:
           subject-name: ghcr.io/cjohnstoniv/staging/${{ matrix.name }}
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
+
+  # agent-novnc-signin (#2972) builds FROM the agent-novnc staged by
+  # buildx-smoke-ui-sandbox in this same run, by digest, as that job builds on
+  # agent-base: so its own job, after that one, with the same steps.
+  buildx-smoke-ui-sandbox-signin:
+    name: multi-arch build (${{ matrix.name }})
+    needs: buildx-smoke-ui-sandbox
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # attest-build-provenance's OIDC token
+      attestations: write
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: agent-novnc-signin
+            dockerfile: deploy/images/novnc-signin/Dockerfile
+            base: agent-novnc
+    steps: *ui_sandbox_stage_steps
 
   # ── Live Kubernetes AWS SSO walk (kind) ─────────────────────────────────────
   # scripts/kind-sso-walk.sh only ever ran by hand, so the "a member signs in
@@ -2124,7 +2157,7 @@ jobs:
           fi
 
   notify-new-lanes:
-    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, buildx-smoke-ui-sandbox, kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg, managed-settings-drift, runner-compat-walk]
+    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, buildx-smoke-ui-sandbox, buildx-smoke-ui-sandbox-signin, kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg, managed-settings-drift, runner-compat-walk]
     # main only: a workflow_dispatch on any other branch must not post to the main-health issue.
     if: failure() && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -2149,7 +2182,7 @@ jobs:
             gh issue comment "$existing" --body "Still failing (${failed:-no job reported failure}): $RUN_URL"
           else
             body=$(printf '%s\n' \
-              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke and buildx-smoke-ui-sandbox (multi-arch build), kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg, managed-settings-drift or runner-compat-walk." \
+              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, buildx-smoke-ui-sandbox and buildx-smoke-ui-sandbox-signin (multi-arch build), kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg, managed-settings-drift or runner-compat-walk." \
               "" \
               "None of them shares the pre-existing failures of the older e2e-live job (deliberately not watched here)." \
               "" \

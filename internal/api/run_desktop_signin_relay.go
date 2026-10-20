@@ -66,7 +66,7 @@ func (s *Server) desktopSigninDial(ctx context.Context, run types.AgentRun, sess
 	se, ok := s.cfg.Runner.(runner.SigninExecer)
 	if !ok {
 		release()
-		return nil, uiFail(ctx, http.StatusConflict, reasonDesktopSigninUnsupported, "this run's runner cannot run a desktop sign-in")
+		return nil, uiFail(ctx, http.StatusConflict, reasonDesktopSigninRunnerUnsupported, desktopSigninRunnerMsg)
 	}
 	execSess, err := se.ExecStreamAs(ctx, run.SandboxRef, runner.SigninPersonUser, runner.ExecSpec{
 		Argv: []string{"socat", "-", "UNIX-CONNECT:" + desktopSigninSocket},

@@ -454,7 +454,7 @@ if ! command -v yq >/dev/null 2>&1; then
     fi
 else
     preflight_fail=0
-    PUBLISH_JOBS="images binaries chart images-ui-sandbox release-assets promote"
+    PUBLISH_JOBS="images binaries chart images-ui-sandbox images-ui-sandbox-signin release-assets promote"
     reaches_preflight() {  # $1 = job name, $2 = space-separated jobs already visited (cycle guard)
         local job="$1" seen="$2" needs n
         case " $seen " in *" $job "*) return 1 ;; esac
@@ -503,7 +503,7 @@ else
             preflight_fail=1
         fi
     fi
-    if [ "$preflight_fail" = 0 ]; then ok "images/binaries/chart/images-ui-sandbox/release-assets/promote all depend on preflight-green (no silent-pass escape hatch), and its watched= list matches notify-new-lanes.needs"; fi
+    if [ "$preflight_fail" = 0 ]; then ok "images/binaries/chart/images-ui-sandbox/images-ui-sandbox-signin/release-assets/promote all depend on preflight-green (no silent-pass escape hatch), and its watched= list matches notify-new-lanes.needs"; fi
 fi
 
 # ── 14. demo/live specs keep up with the 0.8 audit action renames (#1020) ────
@@ -561,12 +561,13 @@ else
     [ -n "$published" ] || { bad "$REL: no '- name:' image entries found — guard 16 is pointing at nothing"; stage_fail=1; }
     rel_pairs="$(yq -r '.jobs[].strategy.matrix.include[]? | select(.dockerfile) | .name + " " + .dockerfile' "$REL" | sort -u)"
     staged_pairs="$( { yq -r '.jobs["buildx-smoke"].strategy.matrix.include[] | select(.stage == "true") | .name + " " + .dockerfile' "$NIGHTLY"
-                       yq -r '.jobs["buildx-smoke-ui-sandbox"].strategy.matrix.include[] | .name + " " + .dockerfile' "$NIGHTLY"; } | sort -u)"
+                       yq -r '.jobs["buildx-smoke-ui-sandbox"].strategy.matrix.include[] | .name + " " + .dockerfile' "$NIGHTLY"
+                       yq -r '.jobs["buildx-smoke-ui-sandbox-signin"].strategy.matrix.include[] | .name + " " + .dockerfile' "$NIGHTLY"; } | sort -u)"
     for n in $published; do
         want="$(printf '%s\n' "$rel_pairs" | grep -E "^$n " || true)"
         [ -n "$want" ] || { bad "$REL: published image '$n' has no matrix row with a dockerfile — guard 16 cannot compare it"; stage_fail=1; continue; }
         printf '%s\n' "$staged_pairs" | grep -xF "$want" >/dev/null \
-            || { bad "$NIGHTLY: published image '$n' has no staged row with release.yml's dockerfile ('$want') in buildx-smoke (stage: \"true\") or buildx-smoke-ui-sandbox — a release would have nothing to promote"; stage_fail=1; }
+            || { bad "$NIGHTLY: published image '$n' has no staged row with release.yml's dockerfile ('$want') in buildx-smoke (stage: \"true\"), buildx-smoke-ui-sandbox or buildx-smoke-ui-sandbox-signin — a release would have nothing to promote"; stage_fail=1; }
     done
     for n in $(printf '%s\n' "$staged_pairs" | awk '{print $1}'); do
         printf '%s\n' "$published" | grep -x "$n" >/dev/null \
@@ -584,7 +585,7 @@ else
     # cache-from, cache-to or any other key the other lacks.
     bps='.steps[] | select((.uses // "") | test("^docker/build-push-action@"))'
     with_norm="$bps | .with | del(.push) | del(.tags) | del(.labels) | .[\"build-args\"] |= (. // \"\" | sub(\"\\n+\$\"; \"\")) | sort_keys(.)"
-    for pair in "images buildx-smoke" "images-ui-sandbox buildx-smoke-ui-sandbox"; do
+    for pair in "images buildx-smoke" "images-ui-sandbox buildx-smoke-ui-sandbox" "images-ui-sandbox-signin buildx-smoke-ui-sandbox-signin"; do
         set -- $pair
         rel_job="$1"; ngt_job="$2"
         for jf in "$rel_job $REL" "$ngt_job $NIGHTLY"; do
@@ -602,25 +603,27 @@ else
     [ "$got_args" = "$want_args" ] \
         || { bad "$NIGHTLY: buildx-smoke's build step must take build-args from the matrix row ('$want_args'), not '$got_args' — a hardcoded value would stage wardynd without RELEASE_BUILD=true"; stage_fail=1; }
     want_base='BASE_IMAGE=${{ steps.base.outputs.ref }}'
-    got_base="$(yq -r ".jobs[\"buildx-smoke-ui-sandbox\"] | $bps | .with[\"build-args\"]" "$NIGHTLY")"
-    [ "$got_base" = "$want_base" ] \
-        || { bad "$NIGHTLY: buildx-smoke-ui-sandbox's build-args must be exactly '$want_base' (the staged agent-base digest), not '$got_base'"; stage_fail=1; }
-    base_run="$(yq -r '.jobs["buildx-smoke-ui-sandbox"].steps[] | select(.id == "base") | .run' "$NIGHTLY")"
-    printf '%s' "$base_run" | grep -F '@sha256:[0-9a-f]{64}$' >/dev/null \
-        || { bad "$NIGHTLY: buildx-smoke-ui-sandbox's base step no longer checks the ref is an @sha256 digest"; stage_fail=1; }
+    for ngt_job in buildx-smoke-ui-sandbox buildx-smoke-ui-sandbox-signin; do
+        got_base="$(yq -r ".jobs[\"$ngt_job\"] | $bps | .with[\"build-args\"]" "$NIGHTLY")"
+        [ "$got_base" = "$want_base" ] \
+            || { bad "$NIGHTLY: $ngt_job's build-args must be exactly '$want_base' (the staged base image's digest), not '$got_base'"; stage_fail=1; }
+        base_run="$(yq -r ".jobs[\"$ngt_job\"].steps[] | select(.id == \"base\") | .run" "$NIGHTLY")"
+        printf '%s' "$base_run" | grep -F '@sha256:[0-9a-f]{64}$' >/dev/null \
+            || { bad "$NIGHTLY: $ngt_job's base step no longer checks the ref is an @sha256 digest"; stage_fail=1; }
+    done
     # The promote job copies these digests, so its rows are the build jobs' rows
     # (name, dockerfile, float-latest) and preflight-green's staging step keeps
     # every part of the proof. Once R10 removes the build jobs, the promote rows
     # are the only source and the row comparison has nothing to compare.
     promote_rows='[.jobs.promote.strategy.matrix.include[] | {"name": .name, "dockerfile": .dockerfile, "float": (.["float-latest"] // "")}] | sort_by(.name)'
-    build_rows='[(.jobs.images.strategy.matrix.include[], .jobs["images-ui-sandbox"].strategy.matrix.include[]) | {"name": .name, "dockerfile": .dockerfile, "float": (.["float-latest"] // "")}] | sort_by(.name)'
+    build_rows='[(.jobs.images.strategy.matrix.include[], .jobs["images-ui-sandbox"].strategy.matrix.include[], .jobs["images-ui-sandbox-signin"].strategy.matrix.include[]) | {"name": .name, "dockerfile": .dockerfile, "float": (.["float-latest"] // "")}] | sort_by(.name)'
     promote_got="$(yq -o=json -I=0 "$promote_rows" "$REL")"
     [ "$(yq -r '.jobs.promote.strategy.matrix.include | length' "$REL")" -gt 0 ] \
         || { bad "$REL: the promote job has no matrix rows — guard 16 is pointing at nothing"; stage_fail=1; }
     if [ "$(yq -r '.jobs.images | type' "$REL")" != "!!null" ]; then
         build_got="$(yq -o=json -I=0 "$build_rows" "$REL")"
         [ "$promote_got" = "$build_got" ] \
-            || { bad "$REL: promote's matrix rows differ from images + images-ui-sandbox (name, dockerfile, float-latest) — promote: $promote_got vs build: $build_got. A release must publish the same set on either path."; stage_fail=1; }
+            || { bad "$REL: promote's matrix rows differ from images + images-ui-sandbox + images-ui-sandbox-signin (name, dockerfile, float-latest) — promote: $promote_got vs build: $build_got. A release must publish the same set on either path."; stage_fail=1; }
     fi
     # Whole-line comments are dropped first, so a marker named only in a comment
     # proves nothing; each pattern is anchored to the command it must be.

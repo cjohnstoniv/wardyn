@@ -7,9 +7,24 @@ import (
 	"context"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-var _ runner.SigninExecer = (*Orchestrator)(nil)
+var (
+	_ runner.SigninExecer   = (*Orchestrator)(nil)
+	_ runner.SigninTargeter = (*Orchestrator)(nil)
+)
+
+// SigninsFor reports whether the substrate a create of class routes to
+// (substrateFor, the same first match) implements runner.SigninExecer.
+func (o *Orchestrator) SigninsFor(ctx context.Context, class types.ConfinementClass) bool {
+	s, err := o.substrateFor(ctx, class)
+	if err != nil {
+		return false
+	}
+	_, ok := s.(runner.SigninExecer)
+	return ok
+}
 
 // ExecStreamAs forwards to ref's substrate when it implements
 // runner.SigninExecer; any other refuses with runner.ErrSigninUnsupported.

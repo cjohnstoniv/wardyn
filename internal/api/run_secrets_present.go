@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
 	"github.com/google/uuid"
 
@@ -19,10 +20,16 @@ import (
 // AWS session, so it counts as unreadable.
 const secretsPresentAuditScan = 2000
 
+// errTakeoverUnrecorded: nothing records a "Needs you" takeover yet.
+var errTakeoverUnrecorded = errors.New("takeovers are not recorded yet")
+
 // takeoverHappened reports whether a "Needs you" takeover was ever taken on
-// the run. The takeover holder lands with the Needs-you handoff; until then
-// no takeover exists to count.
-var takeoverHappened = func(context.Context, *Server, uuid.UUID) (bool, error) { return false, nil }
+// the run. SEAM for DSK-B (#2963): its takeover holder replaces this body.
+// Until then it cannot answer, so it errs and secretsPresent fails closed
+// (Unknown): a stub that answered false would let a snapshot through.
+var takeoverHappened = func(context.Context, *Server, uuid.UUID) (bool, error) {
+	return false, errTakeoverUnrecorded
+}
 
 // secretsPresent gathers the facts secretspresent.Evaluate reads for one run.
 // Callers in 0.10.0 are tests; a snapshot or fork calls it before it copies a

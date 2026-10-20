@@ -61,6 +61,10 @@ const (
 	signinExecTimeout = 60 * time.Second
 )
 
+// desktopSigninRunnerMsg answers a begin on a run whose runner cannot run a
+// sign-in; the run itself started normally, without the sign-in lane.
+const desktopSigninRunnerMsg = "this run's runner cannot run a desktop sign-in: sign-ins run on this deployment's own Docker runner only, and this run started without them"
+
 // End reasons, in desktop_signins.end_reason and the desktop_signin.close row.
 const (
 	signinEndDone     = "done"
@@ -72,10 +76,60 @@ const (
 // signinProxyAddr is the run proxy's sign-in listener as the sandbox names it.
 var signinProxyAddr = net.JoinHostPort("wardyn-proxy", fmt.Sprint(runner.SigninListenPort))
 
-// desktopSigninsFor reports whether a run with this policy gets the sign-in
-// store and lane: the knob is on and the policy declares the desktop.
-func (s *Server) desktopSigninsFor(policy types.RunPolicySpec) bool {
-	return s.cfg.DesktopSignins && slices.ContainsFunc(policy.UIApps, func(a types.UIApp) bool { return a.Name == desktopUIApp })
+// desktopSigninsFor reports whether a run gets the sign-in image, store and
+// lane: the knob is on, the policy declares the desktop, and the run's sandbox
+// lands where a sign-in can run (signinTarget). Dispatch reads it once, so
+// the image, the store and the proxy key never disagree.
+func (s *Server) desktopSigninsFor(ctx context.Context, run types.AgentRun, policy types.RunPolicySpec) bool {
+	return s.cfg.DesktopSignins && slices.ContainsFunc(policy.UIApps, func(a types.UIApp) bool { return a.Name == desktopUIApp }) &&
+		s.signinTarget(ctx, run)
+}
+
+// signinTarget reports whether the run's sandbox lands on this deployment's
+// own substrate for its class, and that substrate implements
+// runner.SigninExecer (the in-process Docker driver). That substrate runs
+// this deployment's proxy image, which knows signin_listen. A self-hosted
+// runner or a pool's executor runs a proxy of its own that may predate the
+// key and would refuse the run with it, so such a run starts without
+// sign-ins and a begin answers desktop_signin_runner_unsupported.
+func (s *Server) signinTarget(ctx context.Context, run types.AgentRun) bool {
+	if run.RunnerID != nil || run.RunnerPoolID != nil {
+		return false
+	}
+	if t, ok := s.cfg.Runner.(runner.SigninTargeter); ok {
+		return t.SigninsFor(ctx, run.ConfinementClass)
+	}
+	_, ok := s.cfg.Runner.(runner.SigninExecer)
+	return ok
+}
+
+// desktopImage and desktopSigninImage are the default desktop image's
+// repository name and its sign-in variant's (deploy/images/novnc-signin).
+const (
+	desktopImage       = "agent-novnc"
+	desktopSigninImage = "agent-novnc-signin"
+)
+
+// signinImageFor is the sign-in variant of a desktop image ref: repository
+// agent-novnc becomes agent-novnc-signin at the same registry and tag. Any
+// other ref, and a digest-pinned one (a digest names one image), comes back
+// unchanged; a begin on such a run fails at the sign-in helper's exec.
+func signinImageFor(ref string) string {
+	if strings.Contains(ref, "@") {
+		return ref
+	}
+	dir, name := "", ref
+	if i := strings.LastIndex(ref, "/"); i >= 0 {
+		dir, name = ref[:i+1], ref[i+1:]
+	}
+	repo, tag, _ := strings.Cut(name, ":")
+	if repo != desktopImage {
+		return ref
+	}
+	if tag != "" {
+		tag = ":" + tag
+	}
+	return dir + desktopSigninImage + tag
 }
 
 func (s *Server) desktopSigninStore() (store.DesktopSigninStore, bool) {
@@ -149,6 +203,10 @@ func (s *Server) handleBeginDesktopSignin(w http.ResponseWriter, r *http.Request
 		writeErrorReason(w, http.StatusConflict, reasonDesktopSigninNoDesktop, "this run has no desktop: its policy declares no \""+desktopUIApp+"\" app")
 		return
 	}
+	if !s.signinTarget(ctx, run) {
+		writeErrorReason(w, http.StatusConflict, reasonDesktopSigninRunnerUnsupported, desktopSigninRunnerMsg)
+		return
+	}
 	if err := s.thawForExec(ctx, run, types.ActorHuman, principal, "desktop_signin"); err != nil {
 		writeErrorReason(w, http.StatusBadGateway, reasonDesktopSigninPauseFailed, "the run is paused and could not be resumed for the sign-in; try again")
 		return
@@ -178,7 +236,7 @@ func (s *Server) handleBeginDesktopSignin(w http.ResponseWriter, r *http.Request
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorHuman, principal, "desktop_signin.begin", run.ID.String(), "failure",
 			mustJSON(map[string]any{"signin_id": si.ID, "stage": stage})))
 		if errors.Is(cause, runner.ErrSigninUnsupported) {
-			status, reason, msg = http.StatusConflict, reasonDesktopSigninUnsupported, "this run's runner cannot run a desktop sign-in (in-process Docker only)"
+			status, reason, msg = http.StatusConflict, reasonDesktopSigninRunnerUnsupported, desktopSigninRunnerMsg
 		}
 		writeErrorReason(w, status, reason, msg)
 	}
@@ -198,10 +256,11 @@ func (s *Server) handleBeginDesktopSignin(w http.ResponseWriter, r *http.Request
 	}
 	pauseRec, err := s.signinExec(ctx, run.SandboxRef, false, nil, 1<<20, "pause-agent")
 	if err != nil {
-		// pause-agent resumes whatever it stopped when its proof fails.
-		_ = se.SignalMain(context.WithoutCancel(ctx), run.SandboxRef, "SIGCONT")
-		_, _ = st.EndDesktopSignin(ctx, si.ID, signinEndFailed, s.cfg.Now())
-		fail(http.StatusBadGateway, reasonDesktopSigninPauseFailed, "the agent could not be proven stopped, so the sign-in did not start; the agent was resumed", "pause", err)
+		// What pause-agent stopped is unknown when its exec broke, so the
+		// full rollback runs resume-agent and then continues pid 1; when that
+		// cannot finish, the row keeps its end request and the sweep retries.
+		s.rollbackDesktopSignin(ctx, run, si, principal)
+		fail(http.StatusBadGateway, reasonDesktopSigninPauseFailed, "the agent could not be proven stopped, so the sign-in did not start; Wardyn resumes the agent", "pause", err)
 		return
 	}
 	if !json.Valid(pauseRec) {
@@ -331,10 +390,12 @@ func (s *Server) handleShareDesktopSignin(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, desktopSigninShareResponse{Site: site, Cookies: len(kept)})
 }
 
-// heldSignin is the run's open sign-in when principal holds it.
+// heldSignin is the run's open sign-in when principal holds it. A sign-in
+// whose end was asked for, or whose window passed, is not open: the sweep
+// ends it.
 func (s *Server) heldSignin(w http.ResponseWriter, ctx context.Context, st store.DesktopSigninStore, run types.AgentRun, principal string) (types.DesktopSignin, bool) {
 	si, err := st.OpenDesktopSignin(ctx, run.ID)
-	if errors.Is(err, store.ErrNotFound) || err == nil && si.EndRequested != "" {
+	if errors.Is(err, store.ErrNotFound) || err == nil && (si.EndRequested != "" || !s.cfg.Now().Before(si.ExpiresAt)) {
 		writeErrorReason(w, http.StatusConflict, reasonDesktopSigninNotOpen, "no sign-in is open on this run")
 		return types.DesktopSignin{}, false
 	}

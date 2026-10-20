@@ -2,16 +2,21 @@
 # Copyright 2026 The Wardyn Authors
 # SPDX-License-Identifier: Apache-2.0
 #
-# Image gate for desktop sign-ins (issue #2972): a cookie set in the person's
-# browser profile is invisible to the agent until the person shares that one
-# site, and a share carries that site's cookies and no other's.
+# Image gate for desktop sign-ins (issue #2972), run against the sign-in image
+# (deploy/images/novnc-signin): a cookie set in the person's browser profile is
+# invisible to the agent until the person shares that one site, and a share
+# carries that site's cookies and no other's.
 #
 # It runs the desktop image with the runner's hardening (no capabilities,
 # no-new-privileges, /tmp tmpfs, the person's store as a uid-1001 0700 tmpfs)
 # and no network, then drives it the way wardynd does, one docker exec per
 # step, each as the uid wardynd uses:
+#   0. the image carries no /usr/bin/Xwayland (deleted at build; the package
+#      stays as cage's hard Depends);
 #   1. pid 1 is stopped from outside and pause-agent stops and proves the rest;
-#   2. the person's display starts; its VNC and noVNC answer on store sockets;
+#   2. the person's display starts without Xwayland and opens no X socket
+#      (wlroots refuses an Xwayland server it cannot find); its VNC and noVNC
+#      answer on store sockets;
 #   3. a cookie for site.test and one for other.test are set in the person's browser;
 #   4. the agent cannot read the store, signal the person's processes, run the
 #      person's subcommands, or find either cookie in its own browser;
@@ -22,11 +27,11 @@
 #   7. stop leaves no person process, and resume-agent continues the agent.
 #
 # Usage: scripts/test-image-novnc-signin.sh   (exit 0 = PASS, non-zero = FAIL)
-#   IMAGE (default wardyn/agent-novnc:local), DOCKER_HOST (default the
+#   IMAGE (default wardyn/agent-novnc-signin:local), DOCKER_HOST (default the
 #   wardyn-docker daemon, unix:///run/wardyn-docker.sock).
 set -euo pipefail
 
-IMAGE="${IMAGE:-wardyn/agent-novnc:local}"
+IMAGE="${IMAGE:-wardyn/agent-novnc-signin:local}"
 export DOCKER_HOST="${DOCKER_HOST:-unix:///run/wardyn-docker.sock}"
 C="wardyn-signin-gate-$$"
 fail() { echo "test-image-novnc-signin: FAIL: $*" >&2; exit 1; }
@@ -67,6 +72,10 @@ PY
 root sh -c ': > /run/fakeproxy.log'
 docker exec -d -u 0 "$C" python3 /run/fakeproxy.py
 
+# 0. No X server binary in the image.
+root test ! -e /usr/bin/Xwayland || fail "/usr/bin/Xwayland is present in the image"
+pass "the image carries no /usr/bin/Xwayland"
+
 # 1. The agent's own process, then the pause.
 docker exec -d -u 1000:1000 "$C" sleep 1000
 for _ in $(seq 50); do agent_pid=$(agent pgrep -u agent -x sleep -n 2>/dev/null || true); [ -n "$agent_pid" ] && break; sleep 0.1; done
@@ -86,7 +95,9 @@ banner=$(person timeout 5 socat -T2 - UNIX-CONNECT:/run/wardyn/signin/vnc.sock <
 [ "${banner:0:7}" = "RFB 003" ] || fail "no RFB banner on the person's VNC socket"
 page=$(printf 'GET /vnc.html HTTP/1.0\r\n\r\n' | person timeout 5 socat - UNIX-CONNECT:/run/wardyn/signin/ws.sock || true)
 [[ "$page" == "HTTP/1.1 200 "* ]] || fail "noVNC is not served on the person's websocket socket"
-pass "the person's display answers on its store sockets (VNC and noVNC)"
+# The agent's own X display is not started here, so any X socket is cage's.
+root grep -aq X11-unix /proc/net/unix && fail "cage opened an X socket"
+pass "the person's display answers on its store sockets (VNC and noVNC) and opens no X socket"
 
 # 3. Two sites' cookies in the person's browser.
 person wardyn-signin cdp Storage.setCookies '{"cookies":[{"name":"sid","value":"PERSON-SITE-SECRET","domain":".site.test","path":"/","secure":true,"httpOnly":true},{"name":"oid","value":"PERSON-OTHER-SECRET","domain":"other.test","path":"/"}]}' >/dev/null ||

@@ -190,14 +190,15 @@ type signinFakeRunner struct {
 	mu     sync.Mutex
 	calls  []string
 	stdin  map[string][]byte
-	exit   map[string]int // by subcommand; 0 when absent
+	exit   map[string]int   // by subcommand; 0 when absent
+	broken map[string]error // by subcommand: the exec itself fails
 	stdout map[string]string
 }
 
 var _ runner.SigninExecer = (*signinFakeRunner)(nil)
 
 func newSigninFakeRunner() *signinFakeRunner {
-	return &signinFakeRunner{sshFakeRunner: &sshFakeRunner{}, stdin: map[string][]byte{}, exit: map[string]int{},
+	return &signinFakeRunner{sshFakeRunner: &sshFakeRunner{}, stdin: map[string][]byte{}, exit: map[string]int{}, broken: map[string]error{},
 		stdout: map[string]string{"pause-agent": `{"already_stopped":[7]}`}}
 }
 
@@ -208,8 +209,11 @@ func (f *signinFakeRunner) exec(who string, spec runner.ExecSpec) (*runner.ExecS
 	sub := spec.Argv[1]
 	f.mu.Lock()
 	f.calls = append(f.calls, who+":"+sub)
-	code, out := f.exit[sub], f.stdout[sub]
+	code, out, broken := f.exit[sub], f.stdout[sub], f.broken[sub]
 	f.mu.Unlock()
+	if broken != nil {
+		return nil, broken
+	}
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
 	errR, errW := io.Pipe()
@@ -338,11 +342,56 @@ func TestDesktopSignin_UnprovenPauseResumesAndNeverStarts(t *testing.T) {
 	if code, body := f.post(t, "/desktop-signin", ""); code != http.StatusBadGateway || !strings.Contains(body, reasonDesktopSigninPauseFailed) {
 		t.Fatalf("begin = %d %s, want 502 %s", code, body, reasonDesktopSigninPauseFailed)
 	}
-	if got, want := f.rn.seen(), []string{"signal:SIGSTOP", "agent:pause-agent", "signal:SIGCONT"}; !slices.Equal(got, want) {
+	if got, want := f.rn.seen(), []string{"signal:SIGSTOP", "agent:pause-agent", "person:stop", "agent:resume-agent", "signal:SIGCONT"}; !slices.Equal(got, want) {
 		t.Fatalf("calls = %v, want %v", got, want)
 	}
 	if si := f.st.only(t); si.EndedAt == nil || si.EndReason != signinEndFailed {
 		t.Fatalf("row = %+v, want ended failed", si)
+	}
+}
+
+// TestDesktopSignin_BrokenPauseExecRollsBackThroughResumeAgent: when the
+// pause-agent exec itself fails after pid 1 was stopped, the agent is resumed
+// through resume-agent, never by a bare SIGCONT on pid 1; when that resume
+// fails too, the row keeps its end request, pid 1 stays stopped, and the
+// sweep finishes the rollback.
+func TestDesktopSignin_BrokenPauseExecRollsBackThroughResumeAgent(t *testing.T) {
+	f := newSigninFixture(t)
+	f.rn.broken["pause-agent"] = errors.New("exec stream reset")
+	f.rn.exit["resume-agent"] = 1
+	if code, body := f.post(t, "/desktop-signin", ""); code != http.StatusBadGateway || !strings.Contains(body, reasonDesktopSigninPauseFailed) {
+		t.Fatalf("begin = %d %s, want 502 %s", code, body, reasonDesktopSigninPauseFailed)
+	}
+	if got, want := f.rn.seen(), []string{"signal:SIGSTOP", "agent:pause-agent", "person:stop", "agent:resume-agent"}; !slices.Equal(got, want) {
+		t.Fatalf("calls = %v, want %v (no SIGCONT before resume-agent succeeds)", got, want)
+	}
+	if si := f.st.only(t); si.EndedAt != nil || si.EndRequested != signinEndFailed {
+		t.Fatalf("row = %+v, want open with end_requested %q for the sweep", si, signinEndFailed)
+	}
+	f.rn.exit["resume-agent"] = 0
+	if err := f.srv.sweepDesktopSignins(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.rn.seen(); got[len(got)-1] != "signal:SIGCONT" {
+		t.Fatalf("calls after the sweep = %v, want the agent continued last", got)
+	}
+	if si := f.st.only(t); si.EndedAt == nil || si.EndReason != signinEndFailed {
+		t.Fatalf("row after the sweep = %+v, want ended failed", si)
+	}
+}
+
+// TestDesktopSignin_ExpiredWindowIsNotOpen: once the window passed, before
+// the sweep ends the row, a share is refused as not open and nothing runs.
+func TestDesktopSignin_ExpiredWindowIsNotOpen(t *testing.T) {
+	f := newSigninFixture(t)
+	f.begin(t)
+	before := len(f.rn.seen())
+	f.srv.cfg.Now = func() time.Time { return time.Now().Add(desktopSigninWindow + time.Minute) }
+	if code, body := f.post(t, "/desktop-signin/shares", `{"site":"site.test"}`); code != http.StatusConflict || !strings.Contains(body, reasonDesktopSigninNotOpen) {
+		t.Fatalf("share after the window = %d %s, want 409 %s", code, body, reasonDesktopSigninNotOpen)
+	}
+	if got := f.rn.seen(); len(got) != before {
+		t.Fatalf("calls = %v, want nothing run after the window", got[before:])
 	}
 }
 
@@ -448,12 +497,94 @@ func TestDesktopSignin_OffByDefault(t *testing.T) {
 		t.Fatalf("begin = %d %s, want 501", code, body)
 	}
 	desktop := types.RunPolicySpec{UIApps: []types.UIApp{{Name: desktopUIApp, Port: 6080}}}
-	if f.srv.desktopSigninsFor(desktop) {
+	ctx := context.Background()
+	if f.srv.desktopSigninsFor(ctx, f.run, desktop) {
 		t.Fatal("knob off: a desktop run got sign-ins")
 	}
 	f.srv.cfg.DesktopSignins = true
-	if !f.srv.desktopSigninsFor(desktop) || f.srv.desktopSigninsFor(types.RunPolicySpec{UIApps: []types.UIApp{{Name: "code", Port: 1}}}) {
+	if !f.srv.desktopSigninsFor(ctx, f.run, desktop) || f.srv.desktopSigninsFor(ctx, f.run, types.RunPolicySpec{UIApps: []types.UIApp{{Name: "code", Port: 1}}}) {
 		t.Fatal("knob on: sign-ins must follow the novnc app")
+	}
+}
+
+// signinCapableRunner is dispatch's fake runner plus runner.SigninExecer,
+// the in-process Docker driver's shape.
+type signinCapableRunner struct{ *fakeRunner }
+
+func (signinCapableRunner) ExecStreamAs(context.Context, string, string, runner.ExecSpec) (*runner.ExecSession, error) {
+	return nil, runner.ErrSigninUnsupported
+}
+
+func (signinCapableRunner) SignalMain(context.Context, string, string) error { return nil }
+
+// TestDispatchDesktopSigninsFollowTheTarget: with the knob on and a desktop
+// policy, a run on a runner that can run a sign-in gets the sign-in image,
+// its store and the proxy's signin_listen key; on a runner that cannot (an
+// older or remote one, whose proxy may refuse the key) the run starts
+// normally with the default image and no key.
+func TestDispatchDesktopSigninsFollowTheTarget(t *testing.T) {
+	desktop := types.RunPolicySpec{UIApps: []types.UIApp{{Name: desktopUIApp, Port: 6080}}}
+	for _, capable := range []bool{true, false} {
+		fr := &fakeRunner{}
+		var rn runner.Runner = fr
+		if capable {
+			rn = signinCapableRunner{fr}
+		}
+		srv, st, _, run := dispatchTeardownFixture(t, rn, types.RunPending)
+		srv.cfg.DesktopSignins = true
+		run.Task = ""
+		srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
+			RunToken: "run-token", Image: "ghcr.io/cjohnstoniv/agent-novnc:0.10.0", Interactive: true, Policy: desktop,
+		})
+		spec := fr.lastSpec
+		wantImage := "ghcr.io/cjohnstoniv/agent-novnc:0.10.0"
+		if capable {
+			wantImage = "ghcr.io/cjohnstoniv/agent-novnc-signin:0.10.0"
+		}
+		if spec.Image != wantImage || spec.DesktopSignins != capable || spec.ProxyConfig.DesktopSignins != capable {
+			t.Errorf("capable=%v: image %q store %v key %v, want %q %v %v", capable, spec.Image, spec.DesktopSignins, spec.ProxyConfig.DesktopSignins, wantImage, capable, capable)
+		}
+		if fr.createCalls != 1 || st.state != types.RunRunning {
+			t.Errorf("capable=%v: creates %d state %s, want the run started", capable, fr.createCalls, st.state)
+		}
+	}
+}
+
+// TestDesktopSignin_RunnerPlacedRunHasNoSignins: a run placed on a
+// self-hosted runner or a pool gets no sign-ins even on a capable substrate,
+// and a begin on it answers the named reason before anything runs.
+func TestDesktopSignin_RunnerPlacedRunHasNoSignins(t *testing.T) {
+	f := newSigninFixture(t)
+	desktop := types.RunPolicySpec{UIApps: []types.UIApp{{Name: desktopUIApp, Port: 6080}}}
+	id := uuid.New()
+	for _, run := range []types.AgentRun{{ID: f.run.ID, RunnerID: &id}, {ID: f.run.ID, RunnerPoolID: &id}} {
+		if f.srv.desktopSigninsFor(context.Background(), run, desktop) {
+			t.Fatalf("run %+v got sign-ins", run)
+		}
+	}
+	f.run.RunnerID = &id
+	f.st.putRun(f.run)
+	if code, body := f.post(t, "/desktop-signin", ""); code != http.StatusConflict || !strings.Contains(body, reasonDesktopSigninRunnerUnsupported) {
+		t.Fatalf("begin = %d %s, want 409 %s", code, body, reasonDesktopSigninRunnerUnsupported)
+	}
+	if got := f.rn.seen(); len(got) != 0 {
+		t.Fatalf("calls = %v, want none", got)
+	}
+}
+
+func TestSigninImageFor(t *testing.T) {
+	for in, want := range map[string]string{
+		"ghcr.io/cjohnstoniv/agent-novnc:0.10.0": "ghcr.io/cjohnstoniv/agent-novnc-signin:0.10.0",
+		"wardyn/agent-novnc:local":               "wardyn/agent-novnc-signin:local",
+		"agent-novnc":                            "agent-novnc-signin",
+		"registry:5000/agent-novnc":              "registry:5000/agent-novnc-signin",
+		"ghcr.io/cjohnstoniv/agent-novnc@sha256:" + strings.Repeat("a", 64): "ghcr.io/cjohnstoniv/agent-novnc@sha256:" + strings.Repeat("a", 64),
+		"ghcr.io/cjohnstoniv/agent-vscode:0.10.0":                           "ghcr.io/cjohnstoniv/agent-vscode:0.10.0",
+		"corp.example/agent-novnc-custom:1":                                 "corp.example/agent-novnc-custom:1",
+	} {
+		if got := signinImageFor(in); got != want {
+			t.Errorf("signinImageFor(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 
@@ -521,6 +652,9 @@ func TestSigninSite(t *testing.T) {
 func TestSecretsPresent_Gatherer(t *testing.T) {
 	f := newSigninFixture(t)
 	ctx := context.Background()
+	stub := takeoverHappened
+	takeoverHappened = func(context.Context, *Server, uuid.UUID) (bool, error) { return false, nil }
+	t.Cleanup(func() { takeoverHappened = stub })
 	if present, why := f.srv.secretsPresent(ctx, f.run.ID); present {
 		t.Fatalf("a plain run = %v", why)
 	}
@@ -550,5 +684,16 @@ func TestSecretsPresent_Gatherer(t *testing.T) {
 		if got := residentByAudit(types.AuditEvent{Action: tc.action, Outcome: "success", Data: json.RawMessage(tc.data)}); got != tc.want {
 			t.Errorf("%s %s = %v, want %v", tc.action, tc.data, got, tc.want)
 		}
+	}
+}
+
+// TestSecretsPresent_TakeoverStubFailsClosed: until DSK-B's takeover holder
+// lands, takeoverHappened cannot answer, so even a plain run is Unknown and
+// a snapshot is refused; the rule never reads the stub as "no takeover".
+func TestSecretsPresent_TakeoverStubFailsClosed(t *testing.T) {
+	f := newSigninFixture(t)
+	present, why := f.srv.secretsPresent(context.Background(), f.run.ID)
+	if !present || !slices.Equal(why, []secretspresent.Reason{secretspresent.Unknown}) {
+		t.Fatalf("a plain run with the takeover stub = %v %v, want present (refused) for [%s]", present, why, secretspresent.Unknown)
 	}
 }

@@ -23,17 +23,6 @@
 # IMAGE CONTRACT (deploy/images/README.md): inherited from agent-base. This
 # stage adds no ENTRYPOINT and keeps USER agent (uid 1000).
 ARG BASE_IMAGE=wardyn/agent-base:local
-
-# The desktop sign-in helper (cmd/wardyn-signin, issue #2972): standard
-# library only, so this stage needs go.mod and the one package, nothing else.
-FROM --platform=$BUILDPLATFORM golang:1.27.2@sha256:5bc7f572bbaa98885a3a1fd9c0aa76b59e3e14e8628bfc316bbfd0c701e4818c AS signin-builder
-ENV GOTOOLCHAIN=local
-WORKDIR /build
-COPY go.mod go.sum ./
-COPY cmd/wardyn-signin/ ./cmd/wardyn-signin/
-ARG TARGETARCH
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -trimpath -o /out/wardyn-signin ./cmd/wardyn-signin
-
 FROM ${BASE_IMAGE}
 
 # Published (release.yml's images-ui-sandbox job, #141). agent-base already
@@ -42,14 +31,13 @@ FROM ${BASE_IMAGE}
 # happens to contain, so a published stage restates them. The licences label
 # extends the inherited base expression with what THIS stage adds: x11vnc and
 # procps (GPL-2.0-only), openbox (GPL-2.0-or-later), websockify (LGPL-3.0),
-# noVNC (MPL-2.0), Xvfb/xterm (MIT/X11), and for desktop sign-ins Chromium
-# (BSD-3-Clause plus its bundled components' own), cage (MIT), wayvnc (ISC) and
-# fonts-liberation (OFL-1.1) — per-package copyright files are the source of each.
+# noVNC (MPL-2.0), Xvfb/xterm (MIT/X11) — per-package copyright files are the
+# source of each.
 COPY LICENSE NOTICE THIRD-PARTY-NOTICES.md LICENSING.md /usr/share/doc/wardyn/
 COPY licenses/texts/ /usr/share/doc/wardyn/licenses/
 LABEL org.opencontainers.image.title="agent-novnc" \
       org.opencontainers.image.description="Wardyn agent image: agent-base plus an X/noVNC desktop stack" \
-      org.opencontainers.image.licenses="Apache-2.0 AND GPL-3.0-or-later AND GPL-2.0-only AND GPL-2.0-or-later AND LGPL-3.0-or-later AND MPL-2.0 AND MIT AND BSD-3-Clause AND ISC AND OFL-1.1" \
+      org.opencontainers.image.licenses="Apache-2.0 AND GPL-3.0-or-later AND GPL-2.0-only AND GPL-2.0-or-later AND LGPL-3.0-or-later AND MPL-2.0 AND MIT" \
       org.opencontainers.image.source="https://github.com/cjohnstoniv/wardyn"
 
 USER root
@@ -71,12 +59,6 @@ USER root
 # a delta of ~565 MB, more than double the +~228 MiB the code-server layer costs.
 # An X stack is simply expensive, and python3-numpy (websockify's fast path)
 # plus the fonts openbox and xterm pull in are most of it.
-#
-# Desktop sign-ins (#2972) add Chromium, cage, wayvnc and wardyn-signin.
-# MEASURED 2026-10-20 on one agent-base (1.13 GB on disk): this image without
-# them is 1.67 GB, with them 2.59 GB, so +~920 MB (+~268 MB compressed). That
-# is past the ceiling below; whether they move to an image of their own is
-# open, and the ceiling is not raised here.
 #
 # CEILING: if a change pushes this past ~1.4 GB, drop xterm and then openbox
 # before raising it — a relayed app needs neither, they exist only so a first
@@ -120,37 +102,6 @@ RUN set -eu; \
 # /usr/local/bin/wardyn-ui-novnc, on demand, no arguments, no tty.
 COPY deploy/images/novnc/wardyn-ui-novnc /usr/local/bin/wardyn-ui-novnc
 RUN chmod +x /usr/local/bin/wardyn-ui-novnc
-
-# DESKTOP SIGN-INS (issue #2972; off unless the operator sets
-# WARDYN_DESKTOP_SIGNINS=on). The person signs in to websites in a browser of
-# their own: uid 1001 `person`, no home on disk, every file and socket in the
-# per-run store /run/wardyn/signin (a 0700 tmpfs the runner mounts for that
-# uid, gone with the container). The person's display is Wayland, not X: cage
-# (headless wlroots, pixman) + wayvnc + websockify on unix sockets in the
-# store, so the agent's X display, /tmp and loopback carry nothing of it. The
-# agent (uid 1000) keeps its own Chromium profile; a shared site's cookies
-# reach it only through `wardyn-signin import`. This is a uid boundary inside
-# one sandbox, not a sandbox boundary: a kernel privilege escalation crosses it.
-#
-# Chromium is the browser on both sides. Its sandbox cannot run under the
-# container's seccomp profile and no-new-privileges, so both run --no-sandbox
-# (cmd/wardyn-signin/serve.go#browserFlags).
-RUN set -eu; \
-	export DEBIAN_FRONTEND=noninteractive; \
-	apt-get update; \
-	apt-get install -y --no-install-recommends \
-		chromium \
-		cage \
-		wayvnc \
-		fonts-liberation; \
-	apt-get clean; \
-	rm -rf /var/lib/apt/lists/*; \
-	useradd --uid 1001 --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin person; \
-	mkdir -p /run/wardyn; \
-	chmod 0755 /run/wardyn; \
-	echo "installed the sign-in stack (chromium, cage, wayvnc) and the person user"
-COPY --from=signin-builder /out/wardyn-signin /usr/local/bin/wardyn-signin
-RUN chmod 0755 /usr/local/bin/wardyn-signin
 
 USER agent
 

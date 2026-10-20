@@ -515,6 +515,15 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// (the proxy refuses both together); the audited envelope below keeps it.
 	proxyPolicy := sidecarPolicy(policy, p)
 
+	// Desktop sign-ins (run_desktop_signin.go): the sign-in image, its store
+	// and the proxy's signin_listen key, all or none. With the knob off, or on
+	// a runner that cannot run a sign-in, the run gets the default image and
+	// no key, which an older proxy would refuse.
+	signins := s.desktopSigninsFor(ctx, run, policy)
+	if signins {
+		p.Image = signinImageFor(p.Image)
+	}
+
 	spec := runner.SandboxSpec{
 		RunID:            run.ID,
 		Image:            p.Image,
@@ -632,11 +641,11 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			Attribution: s.runAttribution(ctx, run, siteCfg, p.PolicyOverridden),
 			// WARDYN_EGRESS_PORT_RULE, "" when off: an older proxy refuses the key.
 			PortRule: s.cfg.EgressPortRule,
-			// The person's sign-in listener (run_desktop_signin.go); false, so no
-			// key is written, unless sign-ins are on and the run has a desktop.
-			DesktopSignins: s.desktopSigninsFor(policy),
+			// The person's sign-in listener; false, so no key is written,
+			// unless `signins` above.
+			DesktopSignins: signins,
 		},
-		DesktopSignins: s.desktopSigninsFor(policy),
+		DesktopSignins: signins,
 		// Hard resource caps. A nil policy block (or a zero field) becomes the
 		// driver's conservative platform default, so EVERY sandbox is CPU/memory/
 		// PID capped even when the policy sets nothing — a fleet of independent

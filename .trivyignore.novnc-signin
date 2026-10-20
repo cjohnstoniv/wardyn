@@ -1,0 +1,15 @@
+# trivy allowlist for ONE image: agent-novnc-signin (deploy/images/novnc-signin).
+#
+# ci.yml's `trivy (agent-novnc-signin)` job reads this file on top of
+# .trivyignore (TRIVY_IGNORES); no other scan reads it, so an id here silences
+# nothing in any other image. The RULES in .trivyignore apply: every id names
+# the package, why it does not reach us, and the date and who accepted it.
+
+# xwayland 2:24.1.6-1 (agent-novnc-signin only). xwayland present only as
+# cage's hard Depends; the /usr/bin/Xwayland binary is removed at build and
+# asserted absent by the image gate; no fixed version in Debian.
+# Accepted 2026-10-20 by the overseer for 0.10.0. Review date 2026-11-19: each
+# id carries trivy's exp: so it lapses then and the scan fails until someone
+# reviews it. Delete both when Debian 13 ships a fix.
+CVE-2026-34000 exp:2026-11-19
+CVE-2026-34002 exp:2026-11-19

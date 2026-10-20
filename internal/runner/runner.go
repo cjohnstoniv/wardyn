@@ -579,6 +579,15 @@ type SigninExecer interface {
 	SignalMain(ctx context.Context, ref, signal string) error
 }
 
+// SigninTargeter is a router's answer, before a create, to whether the
+// substrate it would route class to implements SigninExecer. Dispatch sends
+// the proxy's signin_listen key only to such a substrate: it runs this
+// deployment's own proxy image, which knows the key, where an older proxy
+// would refuse it and the run with it.
+type SigninTargeter interface {
+	SigninsFor(ctx context.Context, class types.ConfinementClass) bool
+}
+
 // ErrSigninUnsupported is SigninExecer's answer from a router whose substrate
 // for ref cannot run a desktop sign-in.
 var ErrSigninUnsupported = errors.New("runner: this substrate cannot run a desktop sign-in")

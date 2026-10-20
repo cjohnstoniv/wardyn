@@ -21,8 +21,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   in to websites inside the run's desktop while the agent is stopped, and share one site's login with the agent. The
   person's browser is a different uid in the same sandbox, not a sandbox of its own, and after a share the agent holds
   that site's cookies within its egress until the run ends: read [THREAT-MODEL §5.1a](threatmodel/THREAT-MODEL.md)
-  before turning it on. The desktop image (`agent-novnc`) grows by about 920 MB on disk for the person's browser
-  and display.
+  before turning it on. Turned on, every run whose policy declares the desktop uses a larger image of its own,
+  `agent-novnc-signin` (about 670 MB compressed, against `agent-novnc`'s 400 MB), whether or not a sign-in happens;
+  `agent-novnc` itself is unchanged, and with the setting off the sign-in image is never pulled. Self-hosted runners,
+  pools and Kubernetes get no sign-ins, and their runs start as before.
 
 ## [0.9.6] — 2026-10-20
 
