@@ -128,7 +128,19 @@ export const test = base.extend({
       (route) => route.fulfill({ json: SCENARIO_POOLS.member }),
     );
 
+    // The page's console and a renderer crash, with the time each came, for a failed attempt's report. A
+    // page that stopped answering leaves no snapshot or screenshot, so this is what shows it.
+    const started = Date.now();
+    const pageLog: string[] = [];
+    const logLine = (what: string) => pageLog.push(`+${Date.now() - started}ms ${what}`);
+    page.on("console", (msg) => logLine(`console.${msg.type()} ${msg.text()}`));
+    page.on("crash", () => logLine("PAGE CRASHED"));
+
     await use(page);
+
+    if (testInfo.status !== testInfo.expectedStatus) {
+      await testInfo.attach("page-console.txt", { body: pageLog.join("\n") || "(no console output, no crash)", contentType: "text/plain" });
+    }
 
     // A spec's route splice that round-trips through route.fetch() can still be running when the body
     // ends (the shell polls, so a read lands at any moment). Closing the context then disposes that
