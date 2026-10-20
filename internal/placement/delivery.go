@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -270,24 +271,37 @@ func validateClasses(classes map[string]ClassPolicy, prefix string) error {
 // ErrUnbuildablePolicy marks a delivery policy that sets a mode the engine cannot build for a class (a 422).
 var ErrUnbuildablePolicy = errors.New("placement: credential delivery policy sets a mode that is not built")
 
-// CheckBuildable refuses a policy that sets any class, in Classes or in any trust class's overrides, to a
-// mode outside BuildableModes(class). Validate stays the bounds check a stored document is judged on; this
-// is the write-time check only, so a stored document is never rewritten or refused by it.
-func (p DeliveryPolicy) CheckBuildable() error {
-	check := func(classes map[string]ClassPolicy, prefix string) error {
+// unbuildableError is the refusal CheckBuildable returns: its text is the sentence a person reads, without the
+// package sentinel, and errors.Is still finds ErrUnbuildablePolicy.
+type unbuildableError struct{ msg string }
+
+func (e unbuildableError) Error() string        { return e.msg }
+func (e unbuildableError) Is(target error) bool { return target == ErrUnbuildablePolicy }
+
+// CheckBuildable refuses a policy that sets a class, in Classes or in any trust class's overrides, to a mode
+// outside BuildableModes(class). A row that is the same in before, the stored document, is let through: a
+// document stored by an earlier version may hold a mode this one cannot build, and a client that sends it back
+// unchanged is not asking for it. Validate stays the bounds check a stored document is judged on; this is the
+// write-time check only, so a stored document is never rewritten or refused by it.
+func (p DeliveryPolicy) CheckBuildable(before DeliveryPolicy) error {
+	check := func(classes, was map[string]ClassPolicy, prefix string) error {
 		for _, class := range sortedKeys(classes) {
-			if m := classes[class]; !slices.Contains(BuildableModes(class), m.Mode) {
-				return fmt.Errorf("%w: class %q cannot be delivered as %q yet (the server can build: %s)",
-					ErrUnbuildablePolicy, prefix+class, m.Mode, joinModes(BuildableModes(class)))
+			m := classes[class]
+			if old, stored := was[class]; stored && reflect.DeepEqual(old, m) {
+				continue
+			}
+			if !slices.Contains(BuildableModes(class), m.Mode) {
+				return unbuildableError{fmt.Sprintf("class %q cannot be delivered as %q yet (the server can build: %s)",
+					prefix+class, m.Mode, joinModes(BuildableModes(class)))}
 			}
 		}
 		return nil
 	}
-	if err := check(p.Classes, ""); err != nil {
+	if err := check(p.Classes, before.Classes, ""); err != nil {
 		return err
 	}
 	for _, trust := range slices.Sorted(maps.Keys(p.ByTrust)) {
-		if err := check(p.ByTrust[trust].Classes, "by_trust."+string(trust)+"."); err != nil {
+		if err := check(p.ByTrust[trust].Classes, before.ByTrust[trust].Classes, "by_trust."+string(trust)+"."); err != nil {
 			return err
 		}
 	}

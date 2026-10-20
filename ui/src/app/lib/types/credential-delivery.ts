@@ -89,6 +89,8 @@ export interface DeliveryPolicy {
 /** Go: types.CredentialDeliveryPolicyDoc (GET /governance/credential-delivery). */
 export interface CredentialDeliveryPolicyDoc {
   policy: DeliveryPolicy;
+  /** Per class, the modes the server can build today (GET only). Absent on a server that does not send it. */
+  buildable_modes?: Partial<Record<DeliveryClass, DeliveryMode[]>>;
   updated_at: string;
   updated_by: string;
 }

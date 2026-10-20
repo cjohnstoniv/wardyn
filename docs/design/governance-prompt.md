@@ -950,6 +950,7 @@ minimum.") and `DELIVERY.OS_MIN_INVALID`, each marked pending in `governance-cop
 | `DELIVERY.FIXED_CLOUD_STS` | Never on a runner: needs attestation a laptop sandbox doesn't have. |
 | `DELIVERY.BOUND_NO_VIA_ORG` | Can't stay in the organisation: the run reads it inside the sandbox. |
 | `DELIVERY.BOUND_NO_RESIDENT_GITHUB` | Can't be stored on a runner: it would skip branch rules and push review. |
+| `DELIVERY.BOUND_NOT_BUILT` | Not available yet |
 | `DELIVERY.SAVE` | Save |
 | `DELIVERY.SAVED` | Saved. New runs use this; runs already going keep what they started with. |
 | `DELIVERY.REFUSED_TITLE` | This can't be saved as written |

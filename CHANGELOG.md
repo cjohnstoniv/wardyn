@@ -22,7 +22,8 @@ A small release on top of 0.9.6. An Azure DevOps token that the organisation min
 
 ### Changed
 
-- `PUT /governance/credential-delivery` refuses with `422` and `credential_delivery_invalid` a document that sets a class, or a trust class's override of it, to a mode the server cannot build for that class. The sentence names the class, the mode and the modes it can build. `GET` lists them as `buildable_modes`. A stored document is read back as before.
+- `PUT /governance/credential-delivery` refuses with `422` and `credential_delivery_invalid` a document that sets a class, or a trust class's override of it, to a mode the server cannot build for that class. The sentence names the class, the mode and the modes it can build. `GET` lists them as `buildable_modes`. A stored document is read back as before, and a save that leaves a stored row as it is is not refused for it.
+- The Runner credentials screen disables a delivery mode the server cannot build, labelled "Not available yet".
 - The refusal of an API-token mint in the user view now says how to switch to Admin view.
 - The Azure DevOps connection editor says what the runner switch does, and that the sandbox switch has no effect in this version. A runner that reports no posture fails every posture requirement, and the refusal says so.
 

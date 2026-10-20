@@ -98,6 +98,26 @@ describe("RunnerCredentials — the rows", () => {
     expect(option("env_secret", "via_org")).toHaveClass("peer");
   });
 
+  it("a mode the server cannot build is a disabled option labelled Not available yet, read from buildable_modes", async () => {
+    getMock.mockResolvedValue({
+      ...doc(),
+      buildable_modes: { ado_minted_pat: ["runner_resident", "refuse"], api_key: ["via_org", "refuse"] },
+    });
+    renderTab();
+    await screen.findByRole("radiogroup", { name: DELIVERY.CLASS.api_key });
+    const unbuilt = (cls: keyof typeof DELIVERY.CLASS, mode: keyof typeof DELIVERY.MODE) =>
+      within(group(cls)).getByRole("radio", { name: `${DELIVERY.MODE[mode]} — ${DELIVERY.BOUND_NOT_BUILT}` });
+    expect(unbuilt("ado_minted_pat", "via_org")).toBeDisabled();
+    expect(option("ado_minted_pat", "runner_resident")).toBeEnabled();
+    expect(option("ado_minted_pat", "refuse")).toBeEnabled();
+    expect(unbuilt("api_key", "runner_resident")).toBeDisabled();
+    expect(option("api_key", "via_org")).toBeEnabled();
+    // A class the GET lists no modes for is not restricted, and the table's own bound keeps its own reason.
+    expect(option("ssh_key", "runner_resident")).toBeEnabled();
+    expect(option("env_secret", "via_org")).toBeDisabled();
+    expect(screen.getAllByText(DELIVERY.BOUND_NO_VIA_ORG)).toHaveLength(5);
+  });
+
   it("an organisation's Azure DevOps tokens can be stored on a runner, with the connection note", async () => {
     const user = userEvent.setup();
     renderTab();
