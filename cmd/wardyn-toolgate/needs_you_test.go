@@ -122,6 +122,39 @@ func TestNeedsYouWithdrawsWhenNobodyTakesOver(t *testing.T) {
 	}
 }
 
+// TestNeedsYouStopsWhenTheWithdrawKeepsFailing: past the wait, a proxy that refuses every /expire
+// ends the command with exit 4 after maxWithdrawFailures tries, not one try every poll forever.
+func TestNeedsYouStopsWhenTheWithdrawKeepsFailing(t *testing.T) {
+	start := time.Now()
+	n := 0
+	clock := func() time.Time { n++; return start.Add(time.Duration(n) * time.Minute) }
+	f := &fakeTakeoverProxy{reads: []string{"PENDING"}}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/expire") {
+			f.mu.Lock()
+			f.expired++
+			stop := f.expired > 2*maxWithdrawFailures
+			if stop {
+				f.reads = []string{"EXPIRED"} // end an unbounded loop so the test fails rather than hangs
+			}
+			f.mu.Unlock()
+			if stop {
+				t.Error("still withdrawing after the bound")
+			}
+			http.Error(w, "upstream down", http.StatusBadGateway)
+			return
+		}
+		f.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+	var out strings.Builder
+	tw := &takeoverWait{base: srv.URL, client: srv.Client(), poll: time.Millisecond, wait: 5 * time.Minute,
+		now: clock, sleep: func(time.Duration) {}, out: &out}
+	if code := tw.run("x"); code != exitNobody || f.expired != maxWithdrawFailures {
+		t.Fatalf("exit = %d after %d withdrawals, want %d after %d (%s)", code, f.expired, exitNobody, maxWithdrawFailures, out.String())
+	}
+}
+
 // TestNeedsYouUsage: no reason is a usage error and raises nothing.
 func TestNeedsYouUsage(t *testing.T) {
 	var out strings.Builder

@@ -34,6 +34,10 @@ const (
 // defaultTakeoverWait is how long a request waits for someone to take over (the approved default).
 const defaultTakeoverWait = 30 * time.Minute
 
+// maxWithdrawFailures is how many failed withdrawals of an expired wait end the command anyway, so a
+// proxy that keeps refusing /expire is not asked every poll forever.
+const maxWithdrawFailures = 5
+
 // needsYou is the needs-you subcommand; it returns the exit status.
 func needsYou(args []string, errOut io.Writer) int {
 	fs := flag.NewFlagSet("wardyn needs-you", flag.ContinueOnError)
@@ -89,7 +93,7 @@ func (t *takeoverWait) run(reason string) int {
 	}
 	fmt.Fprintf(t.out, "Wardyn: asked a person to take over. Waiting up to %s for someone to take over.\n", t.wait)
 	giveUp := t.now().Add(t.wait)
-	told := false
+	told, withdrawFailures := false, 0
 	for {
 		switch {
 		case row.State == "APPROVED" && row.HandedBackAt != nil:
@@ -111,6 +115,10 @@ func (t *takeoverWait) run(reason string) int {
 			// A take over that won the race is honoured: the next read sees APPROVED.
 			if _, err := t.call(http.MethodPost, "/wardyn/v1/approvals/"+row.ID+"/expire", nil); err != nil {
 				fmt.Fprintf(t.out, "wardyn needs-you: withdraw request %s: %v\n", row.ID, err)
+				if withdrawFailures++; withdrawFailures >= maxWithdrawFailures {
+					fmt.Fprintln(t.out, "Wardyn: nobody took over, and the request could not be withdrawn. Carry on without a person.")
+					return exitNobody
+				}
 			}
 		}
 		t.sleep(t.poll)
