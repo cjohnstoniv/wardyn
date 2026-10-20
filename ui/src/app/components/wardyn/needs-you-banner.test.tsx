@@ -71,29 +71,34 @@ describe("NeedsYouBanner", () => {
     expect(cb.onChanged).toHaveBeenCalled();
   });
 
-  it("while you have control: the strip says recording is paused, and Hand back is one click to the confirmation", async () => {
+  it("while you have control: the strip claims no recording pause, and Hand back is one click to the confirmation", async () => {
     const decided = new Date(Date.now() - 302_000).toISOString();
     const handed = new Date(Date.parse(decided) + 302_000).toISOString();
     api.handBack.mockResolvedValue(request({ state: "APPROVED", decided_at: decided, handed_back_at: handed, takeover_holder: "dev-sub" }));
     const cb = mount([request({ state: "APPROVED", decided_at: decided, takeover_holder: "dev-sub" })]);
     const strip = screen.getByTestId("needs-you-control");
     expect(within(strip).getByText(NEEDS_YOU.strip.control("terminal"))).toBeInTheDocument();
-    expect(within(strip).getByTestId("needs-you-recording").textContent).toBe(NEEDS_YOU.strip.paused);
+    // A recorded run: no recorder pauses for a takeover yet, so the strip says nothing about recording.
+    expect(within(strip).queryByTestId("needs-you-recording")).toBeNull();
+    expect(strip.textContent).not.toMatch(/paus/i);
     await userEvent.click(within(strip).getByRole("button", { name: NEEDS_YOU.strip.handBack }));
     expect(api.handBack).toHaveBeenCalledWith("ap-1");
     const done = screen.getByTestId("needs-you-done");
     expect(within(done).getByText(NEEDS_YOU.done.title)).toBeInTheDocument();
-    expect(within(done).getByText("The 5 min 02 s you were in control is marked as a gap in the recording.")).toBeInTheDocument();
+    expect(within(done).getByText(NEEDS_YOU.done.working)).toBeInTheDocument();
+    expect(done.textContent).not.toMatch(/recording|gap/i);
     await userEvent.click(within(done).getByRole("button", { name: NEEDS_YOU.done.audit }));
     expect(cb.onGoAudit).toHaveBeenCalled();
   });
 
-  it("a run that is not recorded says Recording off, not paused", () => {
+  it("a run that is not recorded says Recording off, and nothing about pausing", () => {
     mount([request({ state: "APPROVED", decided_at: new Date().toISOString(), takeover_holder: "dev-sub" })], {
       ...run,
       not_recorded: "org_off",
     } as RunDetail);
-    expect(screen.getByTestId("needs-you-recording").textContent).toBe(NEEDS_YOU.strip.off);
+    const off = screen.getByTestId("needs-you-recording");
+    expect(off.textContent).toBe(NEEDS_YOU.strip.off);
+    expect(off.getAttribute("title")).toBe("This run isn't being recorded.");
   });
 
   it("someone else holding control is shown in use, with Take over", () => {

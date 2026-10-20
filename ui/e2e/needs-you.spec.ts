@@ -55,11 +55,14 @@ test.describe("Needs you (#2963)", () => {
 
       const strip = page.getByTestId("needs-you-control");
       await expect(strip.getByText(NEEDS_YOU.strip.control("terminal"))).toBeVisible();
-      await expect(strip.getByTestId("needs-you-recording")).toHaveText(new RegExp(`^(${NEEDS_YOU.strip.paused}|${NEEDS_YOU.strip.off})$`));
+      // Recording off on an unrecorded run; on a recorded one the strip claims nothing (no pause yet).
+      await expect(strip).not.toContainText(/paus/i);
       await strip.getByRole("button", { name: NEEDS_YOU.strip.handBack }).click();
 
       const done = page.getByTestId("needs-you-done");
       await expect(done.getByText(NEEDS_YOU.done.title)).toBeVisible();
+      await expect(done.getByText(NEEDS_YOU.done.working)).toBeVisible();
+      await expect(done).not.toContainText(/recording/i);
       await expect(page.getByTestId("needs-you-control")).toHaveCount(0);
 
       // Both ends are audited, in order, for this request.

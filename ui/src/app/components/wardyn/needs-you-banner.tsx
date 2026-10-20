@@ -18,7 +18,7 @@ import { Button } from "../ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { enterUIApp } from "../screens/run-detail-ssh";
 import { useOperator, useOperatorResolved, usePrincipal } from "./operator-context";
-import { NEEDS_YOU, askedAgo, heldClock, heldSpan, type TakeoverSurface } from "./copy/needs-you";
+import { NEEDS_YOU, askedAgo, heldClock, type TakeoverSurface } from "./copy/needs-you";
 import { toast } from "sonner";
 
 /** The run's open takeover request: the newest human_takeover still waiting or still held. */
@@ -72,7 +72,7 @@ export function NeedsYouBanner({
   const ap = activeTakeover(approvals);
   const apId = ap?.id;
   const [busy, setBusy] = React.useState<"take" | "back" | "decline" | null>(null);
-  const [done, setDone] = React.useState<{ at: Date; heldMs: number } | null>(null);
+  const [done, setDone] = React.useState(false);
   const [now, setNow] = React.useState(() => Date.now());
   const [snoozedUntil, setSnoozedUntil] = React.useState(0);
   React.useEffect(() => setSnoozedUntil(apId ? readSnooze(apId) : 0), [apId]);
@@ -82,25 +82,18 @@ export function NeedsYouBanner({
     return () => window.clearInterval(t);
   }, [apId]);
 
-  const recorded = run.not_recorded !== "org_off";
+  const recorded = !run.not_recorded;
 
   if (done) {
     return (
       <section data-testid="needs-you-done" className="mx-4 mt-3 rounded-lg border border-success/40 bg-success-subtle px-4 py-3 text-sm">
         <p className="font-semibold text-foreground">{NEEDS_YOU.done.title}</p>
-        {recorded ? (
-          <>
-            <p className="text-muted-foreground">{NEEDS_YOU.done.resumed(clockTime(done.at))}</p>
-            <p className="text-muted-foreground">{NEEDS_YOU.done.gap(heldSpan(done.heldMs))}</p>
-          </>
-        ) : (
-          <p className="text-muted-foreground">{NEEDS_YOU.done.working}</p>
-        )}
+        <p className="text-muted-foreground">{NEEDS_YOU.done.working}</p>
         <div className="mt-2 flex gap-2">
           <Button size="sm" variant="outline" onClick={onGoAudit}>
             {NEEDS_YOU.done.audit}
           </Button>
-          <Button size="sm" variant="ghost" onClick={() => setDone(null)}>
+          <Button size="sm" variant="ghost" onClick={() => setDone(false)}>
             {NEEDS_YOU.done.dismiss}
           </Button>
         </div>
@@ -133,9 +126,8 @@ export function NeedsYouBanner({
   const handBack = async () => {
     setBusy("back");
     try {
-      const got = await approvalsApi.handBack(ap.id);
-      const at = got.handed_back_at ? new Date(got.handed_back_at) : new Date();
-      setDone({ at, heldMs: at.getTime() - Date.parse(got.decided_at ?? ap.decided_at ?? at.toISOString()) });
+      await approvalsApi.handBack(ap.id);
+      setDone(true);
       onChanged();
     } catch (err) {
       toast.error(NEEDS_YOU.failed.handBack, { description: getErrorMessage(err) });
@@ -165,9 +157,8 @@ export function NeedsYouBanner({
     return (
       <section data-testid="needs-you-control" className="mx-4 mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-primary/40 bg-primary/10 px-4 py-2.5 text-sm">
         <span className="font-semibold text-foreground">{NEEDS_YOU.strip.control(surface)}</span>
-        {recorded ? (
-          <span data-testid="needs-you-recording" className="text-muted-foreground">{NEEDS_YOU.strip.paused}</span>
-        ) : (
+        {/* No recorder pauses for a takeover yet, so a recorded run's strip says nothing about it. */}
+        {!recorded && (
           <span data-testid="needs-you-recording" className="text-muted-foreground" title={NEEDS_YOU.strip.offDetail}>
             {NEEDS_YOU.strip.off}
           </span>

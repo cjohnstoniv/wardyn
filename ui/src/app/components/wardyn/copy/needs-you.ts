@@ -6,7 +6,8 @@
 // "Needs you" (#2963): the run's agent asks a person to take over its desktop or terminal.
 // Canon strings, byte-exact from the approved M8 boards (010/mocks-approved/r5-r6-attach-2026-10-20:
 // M8-Banner-A, M8-Takeover, M8-HandBack, M8-States). Strings marked "not on the boards" are listed
-// in the PR body.
+// in the PR body. Board strings that claimed recording pauses are trimmed or dropped: no recorder
+// pauses for a takeover yet, so the copy says nothing about pausing.
 export type TakeoverSurface = "desktop" | "terminal";
 
 /** "2 min ago" (M8-Banner-A). Under a minute reads "just now" (not on the boards). */
@@ -19,12 +20,6 @@ export function askedAgo(ms: number): string {
 export function heldClock(ms: number): string {
   const s = Math.max(0, Math.floor(ms / 1000));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
-}
-
-/** "5 min 02 s", the hand-back confirmation's length of the gap. */
-export function heldSpan(ms: number): string {
-  const s = Math.max(0, Math.floor(ms / 1000));
-  return `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, "0")} s`;
 }
 
 export const NEEDS_YOU = {
@@ -48,23 +43,22 @@ export const NEEDS_YOU = {
   card: {
     title: "Take over the desktop",
     asked: "What the agent asked:",
-    blast: "Taking over gives you control of the desktop. Screen recording pauses while you have control.",
+    // M8-Banner-A, trimmed: its "Screen recording pauses while you have control." is not true yet.
+    blast: "Taking over gives you control of the desktop.",
     requested: (ago: string) => `requested ${ago}`,
   },
   strip: {
     control: (surface: TakeoverSurface) => `You have control of the ${surface}`,
-    paused: "Recording paused",
     off: "Recording off",
-    // M8-States 10.
-    offDetail: "Nothing to pause. This run isn't being recorded.",
+    // M8-States 10, trimmed: its "Nothing to pause." implied a recorded run pauses.
+    offDetail: "This run isn't being recorded.",
     handBack: "Hand back",
     handingBack: "Handing back…",
   },
   done: {
     title: "You handed control back",
-    resumed: (time: string) => `The agent is working again. Screen recording resumed at ${time}.`,
-    gap: (span: string) => `The ${span} you were in control is marked as a gap in the recording.`,
-    // Not on the boards: the same confirmation on a run with no recording.
+    // M8-HandBack's first sentence; its recording sentences ("Screen recording resumed at …",
+    // "… marked as a gap in the recording.") are dropped as not true yet.
     working: "The agent is working again.",
     audit: "See the audit rows",
     dismiss: "Dismiss",
