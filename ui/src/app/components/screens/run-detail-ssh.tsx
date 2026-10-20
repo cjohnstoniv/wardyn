@@ -11,12 +11,13 @@
 // operator would otherwise see a live terminal in the browser with nothing
 // anywhere saying a real terminal could reach the same session.
 //
-// `wardyn run attach <run-id>` needs no gateway and no operator configuration: it
+// `wardyn attach <run-id>` needs no gateway and no operator configuration: it
 // dials the same WebSocket this page's terminal uses, lands in the SAME tmux
 // session, and works on every deployment. Verified against a live run — a file
 // written from one attach was read back by a second, and by the browser
-// terminal. So the CLI lane is always shown, and SSH is the second lane: rich
-// when enabled, one honest line about what turns it on when not.
+// terminal. So the CLI lane is always shown, then "Get the CLI" (get-the-cli.tsx);
+// SSH is a folded lane below them: rich when enabled, one honest line about what
+// turns it on when not (M-ATT-1).
 //
 // Shown to the run's OWNER or to an admin, matching the server rather than
 // merely hiding a control it would refuse — all three lanes are owner-or-admin
@@ -37,11 +38,13 @@ import { basePath } from "../../lib/base-path";
 import { proxyCommandIsSafe } from "../../lib/ssh-proxy-command";
 import { entryErrorMessage, mayEnterRunOrUnknown, sponsorOnlyEntry } from "../../lib/run-entry";
 import { CodeBlock, Mono } from "../wardyn/code-block";
-import { RUN_SSH, UI_APPS_LANE, UI_APPS_LAUNCHER_MISSING_PREFIX } from "../wardyn/copy";
+import { RUN_CLI, RUN_SSH, UI_APPS_LANE, UI_APPS_LAUNCHER_MISSING_PREFIX } from "../wardyn/copy";
 import { RUN_SYNC } from "../wardyn/copy/runners";
 import { useOperator, useOperatorResolved, usePrincipal } from "../wardyn/operator-context";
 import { WidgetCard } from "../wardyn/primitives";
 import { cn } from "../ui/utils";
+import { CliLane, GetTheCli } from "./run-detail/get-the-cli";
+import { orgCAFingerprints } from "../../lib/cli-install";
 
 // Exported for run-detail-ssh.test.tsx: standalone-testable without mounting
 // the whole screen's run/grants/egress/approvals/audit/recording fetch graph.
@@ -95,6 +98,13 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
   // the control-plane-unreachable banner. Same principle the sibling
   // listKeys().catch states: never assert a fact the fetch did not confirm.
   const [healthAnswered, setHealthAnswered] = React.useState(false);
+  // Get the CLI's inputs, from the same /healthz read: the deployment's release
+  // version, the operator's advertised mirror and the org CA fingerprints. `attempt`
+  // re-asks when the person taps Try again after a /healthz that never answered.
+  const [cliFacts, setCLIFacts] = React.useState<{ version?: string; artifactBase?: string; fingerprints: ReturnType<typeof orgCAFingerprints> }>({
+    fingerprints: [],
+  });
+  const [attempt, setAttempt] = React.useState(0);
   // Which declared app's ticket-mint/open is in flight, and the last failure
   // (scoped to one app — the other rows stay untouched per the mock's S5).
   const [openingApp, setOpeningApp] = React.useState<string | null>(null);
@@ -110,6 +120,11 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
       // Only a real answer licenses the OFF copy; a swallowed failure ({})
       // leaves both lanes as their heading alone.
       setHealthAnswered(h.status === "ok");
+      setCLIFacts({
+        version: h.version,
+        artifactBase: h.cli_artifact_base,
+        fingerprints: orgCAFingerprints((h as { org_ca_fingerprints?: unknown }).org_ca_fingerprints),
+      });
     });
     sshKeysApi
       .listKeys()
@@ -126,7 +141,7 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
     return () => {
       alive = false;
     };
-  }, [mayAttach, running]);
+  }, [mayAttach, running, attempt]);
 
   if (!mayAttach || !running) return null;
 
@@ -210,14 +225,11 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
     }
   }
 
-  // The console already knows the address it is served from, so the env line is
-  // this deployment's real URL rather than a placeholder the operator has to
-  // translate. Omitted when it matches the CLI's own default. The base path
-  // rides along: the API is served beneath it, and a bare origin would aim
-  // the CLI's bearer token at whatever else owns the host root.
-  const wardynURL = typeof window !== "undefined" ? window.location.origin + basePath() : "";
-  const cliEnv = wardynURL && wardynURL !== "http://localhost:8080" ? `WARDYN_URL=${wardynURL} ` : "";
-  const cliCommand = `${cliEnv}wardyn run attach ${run.id}`;
+  // The one address the CLI needs once: this console's own, base path included
+  // (the API is served beneath it, and a bare origin would aim the CLI's bearer
+  // token at whatever else owns the host root). It rides `wardyn login <url>`;
+  // the attach command itself carries no prefix.
+  const consoleURL = typeof window !== "undefined" ? window.location.origin + basePath() : "";
   const syncLane = sshOn && run.placement !== "local" && !!run.agent_exec_id;
 
   return (
@@ -240,22 +252,22 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
         detaching never ends the run.
       </p>
 
-      <p className="text-xs font-medium text-foreground">Wardyn CLI</p>
-      <p className="mt-0.5 mb-1.5 text-meta leading-relaxed text-muted-foreground">
-        Works on every deployment — no gateway to enable, no key to register. Mints a one-time ticket with{" "}
-        <Mono className="text-foreground">WARDYN_TOKEN</Mono> (your own token) or{" "}
-        <Mono className="text-foreground">WARDYN_ADMIN_TOKEN</Mono>, same as this page's own terminal. Ctrl-C or
-        closing the session detaches.
-      </p>
-      <CodeBlock text={cliCommand} copyLabel={RUN_SSH.COPY_CLI} />
-      <p className="mt-1.5 text-meta leading-relaxed text-muted-foreground">
-        Started with <Mono className="text-foreground">make setup</Mono>? The binary is at{" "}
-        <Mono className="text-foreground">./bin/wardyn</Mono> in the repo.
-      </p>
+      <CliLane runId={run.id} consoleURL={consoleURL} />
+      <GetTheCli
+        version={cliFacts.version}
+        artifactBase={cliFacts.artifactBase}
+        fingerprints={cliFacts.fingerprints}
+        healthAnswered={healthAnswered}
+        onRetry={() => setAttempt((n) => n + 1)}
+      />
 
       {!sponsorOnly && (
-      <div className="mt-4 border-t border-border pt-3">
-        <p className="text-xs font-medium text-foreground">SSH</p>
+      <details className="group mt-4 border-t border-border pt-3">
+        <summary className="flex cursor-pointer items-center gap-2">
+          <span className="flex-1 text-xs font-medium text-foreground">{RUN_CLI.SSH_TITLE}</span>
+          <span className="text-xs text-muted-foreground group-open:hidden">{RUN_CLI.SHOW}</span>
+          <span className="hidden text-xs text-muted-foreground group-open:inline">{RUN_CLI.HIDE}</span>
+        </summary>
         {healthAnswered && !sshOn && (
           <p className="mt-0.5 text-meta leading-relaxed text-muted-foreground">
             Off on this deployment. It gives you <Mono className="text-foreground">ssh</Mono>, scp and VS Code
@@ -264,8 +276,6 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
             <Mono className="text-foreground">WARDYN_SSH_ADVERTISE</Mono> where wardynd starts.
           </p>
         )}
-      </div>
-      )}
 
       {sshOn && !hasKeys && (
         <div className="mb-3 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2.5">
@@ -355,6 +365,8 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
           Manage SSH keys
         </Link>
       )}
+      </details>
+      )}
 
       {/* RS2 (M-RN-3): the Sync lane rides the SSH gateway's sftp channel, so it needs SSH on and a
           sandbox with exec; a local run's disk link is the bind through its runner. */}
@@ -364,7 +376,7 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
           <p className="mt-0.5 mb-1.5 text-meta leading-relaxed text-muted-foreground">
             {monoTokens(RUN_SYNC.LANE_BODY, "--pull", "wardyn sync")}
           </p>
-          <CodeBlock text={`${cliEnv}${RUN_SYNC.LANE_COMMAND(run.id)}`} copyLabel={RUN_SYNC.COPY} />
+          <CodeBlock text={RUN_SYNC.LANE_COMMAND(run.id)} copyLabel={RUN_SYNC.COPY} />
         </div>
       )}
 
