@@ -533,6 +533,14 @@ mkdir "${md}/real"; mv "${md}/wardyn.env" "${md}/real/wardyn.env"; ln -s real/wa
 f185_run "${md}" >/dev/null
 [ -e "${md}/PWNED" ] \
   || fail "a symlinked wardyn.env pointing at a root-owned 0644 file was refused — the check must follow the link"
+# ...but a link another account owns is refused by name: the link must be owned by the launcher's
+# uid, as the file it names must be. The launcher is run with an `id` that names a different uid than the link's owner.
+md="$(f185_fixture 0600)"
+mkdir "${md}/real"; mv "${md}/wardyn.env" "${md}/real/wardyn.env"; ln -s real/wardyn.env "${md}/wardyn.env"
+printf '#!/usr/bin/env bash\necho 4242\n' > "${F185_TMP}/bin/id"; chmod +x "${F185_TMP}/bin/id"
+out="$(f185_run "${md}")"; rm -f "${F185_TMP}/bin/id"
+grep -q 'wardyn.env is a symlink owned by uid' <<<"${out}" \
+  || fail "wardyn-desktop.sh did not refuse a symlinked wardyn.env that another account owns. Got: $(printf '%s' "${out}" | tail -1)"
 echo "test-desktop-profile: envelope file trust-boundary invariants PASS"
 
 # ── #1493: the published port the launcher probes is the one compose publishes ─

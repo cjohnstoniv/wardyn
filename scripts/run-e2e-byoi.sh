@@ -37,6 +37,8 @@ cd "$ROOT"
 source "${ROOT}/scripts/lib/common.sh"
 # shellcheck source=scripts/lib/runner-limits.sh
 source "${ROOT}/scripts/lib/runner-limits.sh"
+# shellcheck source=scripts/lib/image-build.sh
+source "${ROOT}/scripts/lib/image-build.sh"
 
 if [[ "${WARDYN_TEST_DOCKER:-}" != "1" ]]; then
   skip_lane "run-e2e-byoi: set WARDYN_TEST_DOCKER=1 to run the Docker-dependent BYOI e2e (skipping)."
@@ -79,7 +81,7 @@ docker pull -q node:20 >/dev/null || die "pull node:20"
 # A one-off harness base: node:20 + the claude CLI, arbitrary USER/HOME.
 HARNESS_TAG="wardyn-byoi-test/harness:latest"
 log "building a harness base (${HARNESS_TAG}) — node:20 + claude CLI"
-docker build -q -t "${HARNESS_TAG}" - >/dev/null <<'DOCKER' || die "build harness base"
+wardyn_docker_build -t "${HARNESS_TAG}" - <<'DOCKER' || die "build harness base"
 FROM node:20
 RUN npm install -g @anthropic-ai/claude-code >/dev/null 2>&1 || true
 USER node
@@ -88,7 +90,7 @@ DOCKER
 # A hostile base: an exfil ENTRYPOINT that the wrap must clear, running as root.
 HOSTILE_TAG="wardyn-byoi-test/hostile:latest"
 log "building a hostile base (${HOSTILE_TAG}) — ENTRYPOINT exfil, USER root"
-docker build -q -t "${HOSTILE_TAG}" - >/dev/null <<'DOCKER' || die "build hostile base"
+wardyn_docker_build -t "${HOSTILE_TAG}" - <<'DOCKER' || die "build hostile base"
 FROM ubuntu:24.04
 RUN apt-get update >/dev/null 2>&1 && apt-get install -y curl >/dev/null 2>&1
 USER root

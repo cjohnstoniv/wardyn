@@ -5,8 +5,10 @@
 
 // Number words for Review's limits: composed only from canon pieces.
 
+import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
 import { ENDS_NONE } from "../../../wardyn/copy/run-lifetime";
+import type { HarnessInnerWalls } from "../../../../lib/types/policy";
 import type { EffectiveRunLimits } from "../../../../lib/types/runner-pools";
 import type { RunIntent } from "../draft/run-intent";
 
@@ -39,3 +41,12 @@ export function resolvedLifetime(intent: Pick<RunIntent, "ends_after_sec" | "no_
 
 export const resolvedLifetimeText = (end: number | "none" | undefined): string | undefined =>
   end === "none" ? ENDS_NONE : end === undefined ? undefined : lifetimeText(end);
+
+/** A harness's own walls in the canon's words (#2822): an absent sandbox mode is the harness's own default. */
+export function innerWallsText(w: HarnessInnerWalls): string {
+  const sandbox = !w.sandbox_mode ? NR_REVIEW.INNER_SANDBOX_OWN
+    : w.sandbox_mode === "off" ? NR_REVIEW.INNER_SANDBOX_OFF : NR_REVIEW.INNER_SANDBOX_MODE(w.sandbox_mode);
+  const approvals = w.approvals === "harness" ? NR_REVIEW.INNER_APPROVALS_HARNESS
+    : w.approvals === "wardyn" ? NR_REVIEW.INNER_APPROVALS_WARDYN : NR_REVIEW.INNER_APPROVALS_NONE;
+  return NR_REVIEW.INNER_WALLS(sandbox, approvals);
+}

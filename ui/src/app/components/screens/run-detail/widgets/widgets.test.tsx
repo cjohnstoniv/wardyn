@@ -679,6 +679,16 @@ describe("IdentityWidget: Runs on and Evidence", () => {
     expect(screen.queryByText(/is a computer its owner administers/)).not.toBeInTheDocument();
   });
 
+  // #2822: the harness's own walls the run launched with sit under its policy row; a run with none
+  // recorded (no catalog harness, or created before the field) shows nothing there.
+  it("the policy row says the run's inner walls when the run recorded them", () => {
+    const view = renderAs({ ...base, inner_walls: { sandbox_mode: "off", approvals: "wardyn" } } as AgentRun, "me");
+    expect(screen.getByText("Harness walls: harness sandbox off, approvals in Wardyn")).toBeInTheDocument();
+    view.unmount();
+    renderAs(base, "me");
+    expect(screen.queryByText(/Harness walls/)).not.toBeInTheDocument();
+  });
+
   it("a remote run the resolver placed says where, and that it was the only place", () => {
     renderAs({ ...base, placement: "remote", placement_filled: true, runner_id: undefined, runner_name: undefined, evidence_source: "substrate" } as AgentRun, "me");
     expect(screen.getByText("Remote-hosted runner")).toBeInTheDocument();

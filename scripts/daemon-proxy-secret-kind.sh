@@ -31,6 +31,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=scripts/lib/common.sh
 source "$ROOT/scripts/lib/common.sh"
+# shellcheck source=scripts/lib/image-build.sh
+source "$ROOT/scripts/lib/image-build.sh"
 cd "$ROOT"
 
 CLUSTER="${CLUSTER:-daemon-proxy-secret-k8s}"
@@ -55,7 +57,7 @@ CREATED_CLUSTER="$CLUSTER"
 export KUBECONFIG="$WORK/kubeconfig"
 
 log "building $IMAGE_REPO:$IMAGE_TAG"
-docker build -f deploy/compose/Dockerfile.wardynd -t "$IMAGE_REPO:$IMAGE_TAG" . >/dev/null
+wardyn_docker_build -f deploy/compose/Dockerfile.wardynd -t "$IMAGE_REPO:$IMAGE_TAG" . || die "build $IMAGE_REPO:$IMAGE_TAG failed"
 kind load docker-image "$IMAGE_REPO:$IMAGE_TAG" --name "$CLUSTER" >/dev/null
 
 log "postgres ($NS)"

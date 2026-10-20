@@ -173,31 +173,45 @@ test.describe("Session expiry: answers are ordered by when their request started
   });
 });
 
-test.describe("Admin settings: a slow first read cannot overwrite the resolved one", () => {
-  test("the Host card keeps saying the proxy is in use after the first setup read lands late", async ({ page }) => {
-    // The first /setup/status answer waits for the second to be asked for (or four seconds, so a load that
-    // only asks once is never stuck), then lands after it.
-    let seen = 0;
-    let askedAgain!: () => void;
-    const second = new Promise<void>((resolve) => (askedAgain = resolve));
-    let firstLanded = false;
-    await page.route("**/api/v1/setup/status*", async (route) => {
-      seen += 1;
-      if (seen > 1) askedAgain();
-      if (seen !== 1) return route.fallback();
-      await Promise.race([second, new Promise((resolve) => setTimeout(resolve, 4000))]);
-      const response = await route.fetch();
-      await route.fulfill({ response });
-      firstLanded = true;
+test.describe("Admin settings: an older read cannot overwrite the newer one", () => {
+  test("the Host card keeps saying the proxy is in use after an older Re-check lands late", async ({ page }) => {
+    // The console holds every route behind its own first /setup/status, so the Settings screen is only ever
+    // mounted once that read has landed. Holding that read (as this pin once did) just delays the whole page and
+    // never reaches the screen's own reads. The race the screen guards is two of ITS loads in flight at once,
+    // which Re-check makes: the first Re-check's site-config answer is held and reads "no proxy", the second
+    // answers at once with the proxy, and the held one lands last.
+    let counting = false;
+    let reads = 0;
+    let secondAsked!: () => void;
+    const secondRead = new Promise<void>((resolve) => (secondAsked = resolve));
+    let releaseOlder!: () => void;
+    const olderHeld = new Promise<void>((resolve) => (releaseOlder = resolve));
+    let olderLanded = false;
+    const proxied = { upstream_proxy_url: "http://proxy.corp.example:3128" };
+    await page.route("**/api/v1/site-config", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      if (!counting) return route.fulfill({ json: proxied });
+      reads += 1;
+      if (reads === 2) secondAsked();
+      if (reads !== 1) return route.fulfill({ json: proxied });
+      await olderHeld;
+      await route.fulfill({ json: {} });
+      olderLanded = true;
     });
-    await page.route("**/api/v1/site-config", (route) =>
-      route.request().method() === "GET" ? route.fulfill({ json: { upstream_proxy_url: "http://proxy.corp.example:3128" } }) : route.fallback(),
-    );
     await page.goto("/admin/settings");
     await expect(page.getByRole("heading", { name: "Admin SSH keys" })).toBeVisible();
     await expandCard(page, "Host");
     await expect(page.getByTestId("host-tile-internet-pill")).toHaveText("Through the corporate proxy");
-    await expect.poll(() => firstLanded).toBe(true);
+    const recheck = page.getByRole("button", { name: "Re-check" });
+    counting = true;
+    await recheck.click();
+    await expect.poll(() => reads).toBe(1);
+    await recheck.click();
+    await secondRead;
+    await nextFrames(page);
+    await expect(page.getByTestId("host-tile-internet-pill")).toHaveText("Through the corporate proxy");
+    releaseOlder();
+    await expect.poll(() => olderLanded).toBe(true);
     await nextFrames(page);
     await expect(page.getByTestId("host-tile-internet-pill")).toHaveText("Through the corporate proxy");
   });

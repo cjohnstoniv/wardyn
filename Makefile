@@ -698,6 +698,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-e2e-live-base-url.sh
 	./scripts/test-e2e-quarantine.sh
 	./scripts/test-e2e-recording-step.sh
+	./scripts/test-fetch-gate-tools.sh
 	./scripts/test-fixture-dates.sh
 	./scripts/test-gaps.sh --self-test
 	./scripts/test-gpl-source-offer.sh
@@ -705,6 +706,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-helm-schema.sh
 	./scripts/test-helm-templates.sh
 	./scripts/test-image-pins.sh
+	./scripts/test-image-build-logs.sh
 	./scripts/test-install-sh-trust.sh
 	./scripts/test-install-sh.sh
 	./scripts/test-kind-follow-main.sh
@@ -726,6 +728,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-reset-host-gate.sh
 	./scripts/test-reset-network-ns.sh
 	./scripts/test-setup-launch.sh
+	./scripts/test-third-party-notices.sh
 	./scripts/test-up-seed-host-proxy.sh
 	./scripts/test-up-policy.sh
 	./scripts/test-up-probes.sh
@@ -1713,7 +1716,7 @@ ci: ## Daemon-free merge gate: every CI check that needs no daemon or service
 	@echo "  Postgres suite (test-pg), and the Playwright UI e2e (ui-e2e) —"
 	@echo "  confirm CI is green before merging."
 
-candidate-preflight: ## Release-candidate preflight: lint, whole-tree guards, changed-package + Postgres tests, vitest, changed e2e specs x3 (BASE=<ref>)
+candidate-preflight: ## Release-candidate preflight: lint, whole-tree guards, changed-package + Postgres tests, vitest (BASE=<ref>)
 	./scripts/lane-preflight.sh --candidate
 
 ui: ## Build the embedded web UI

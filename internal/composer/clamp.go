@@ -84,6 +84,7 @@ func clamp(proposed, ceiling types.RunPolicySpec, limits types.GovernanceLimits,
 	}
 
 	warns = clampOperatorSwitches(&out, ceiling, warns)
+	warns = clampInnerWalls(&out, ceiling, warns)
 
 	// Per-tool effects: a proposal may narrow the operator's rules, never widen.
 	warns = clampToolRules(&out, ceiling, warns)
@@ -343,6 +344,10 @@ func cloneProposal(s types.RunPolicySpec) types.RunPolicySpec {
 	}
 	out.AzureDevOpsCapabilities = slices.Clone(s.AzureDevOpsCapabilities)
 	out.GitHubCapabilities = slices.Clone(s.GitHubCapabilities)
+	if s.HarnessInnerWalls != nil {
+		w := *s.HarnessInnerWalls
+		out.HarnessInnerWalls = &w
+	}
 	if s.PushRules != nil {
 		pr := *s.PushRules
 		pr.DenyPaths = slices.Clone(s.PushRules.DenyPaths)
@@ -852,4 +857,34 @@ func clampToolRules(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns
 	}
 	out.ToolRules = kept
 	return warns
+}
+
+// clampInnerWalls holds a proposal to every axis of harness_inner_walls the ceiling chooses: the
+// ceiling's choice stands, and a proposal's different one is replaced and said. An axis the ceiling
+// leaves unset keeps the proposal's, which the create door refuses wherever it would loosen the run.
+func clampInnerWalls(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns []string) []string {
+	c := ceiling.HarnessInnerWalls
+	if c == nil {
+		return warns
+	}
+	var p types.HarnessInnerWalls
+	if out.HarnessInnerWalls != nil {
+		p = *out.HarnessInnerWalls
+	}
+	p.SandboxMode, warns = clampInnerWall("harness_inner_walls.sandbox_mode", p.SandboxMode, c.SandboxMode, warns)
+	p.Approvals, warns = clampInnerWall("harness_inner_walls.approvals", p.Approvals, c.Approvals, warns)
+	if p != (types.HarnessInnerWalls{}) {
+		out.HarnessInnerWalls = &p
+	}
+	return warns
+}
+
+func clampInnerWall(field, proposed, ceiling string, warns []string) (string, []string) {
+	if ceiling == "" || proposed == ceiling {
+		return proposed, warns
+	}
+	if proposed != "" {
+		warns = append(warns, fmt.Sprintf("%s set to %q: operator policy chooses it", field, ceiling))
+	}
+	return ceiling, warns
 }
