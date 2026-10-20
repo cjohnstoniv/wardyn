@@ -1053,9 +1053,9 @@ jobs:
   # anyone who wants the client without the stack. Static (CGO_ENABLED=0) so they
   # run anywhere, and covered by the same signed SHA256SUMS as everything else.
   #
-  # One job builds all four targets, two at a time: four jobs each queued for a
+  # One job builds all six targets, two at a time: six jobs each queued for a
   # runner slot for most of a minute's work. The job fails if any target fails,
-  # and names it. The four artifacts keep their names (cli-<os>-<arch>), which
+  # and names it. The six artifacts keep their names (cli-<os>-<arch>), which
   # runner-pkg and release-assets read.
   binaries:
     name: CLI binaries
