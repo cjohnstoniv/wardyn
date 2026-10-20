@@ -28,6 +28,7 @@ import (
 var siteConfigFieldsAfter066 = []string{
 	"upstream_proxy_no_proxy", "internal_hosts", "workspace_providers", "agent_providers",
 	"model_providers", "sign_in_help_text", "sign_in_help_url", "branding", "policy_help", "components",
+	"recording",
 }
 
 // omittedPostV066Fields reports which of siteConfigFieldsAfter066 raw (the
