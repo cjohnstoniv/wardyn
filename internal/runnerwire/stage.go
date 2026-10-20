@@ -120,15 +120,13 @@ func dialStage(err error) Stage {
 	return StageNetwork
 }
 
-// authStage classifies a handshake that ended without a session.
+// authStage classifies a handshake that ended without a session: auth for a key the organisation did
+// not accept, else as serveStage does, so a routine GOAWAY (resume_gap) is not a registration refusal.
 func authStage(err error) Stage {
-	switch {
-	case errors.Is(err, ErrAuth):
+	if errors.Is(err, ErrAuth) {
 		return StageAuth
-	case errors.Is(err, ErrGoaway), errors.Is(err, ErrRevoked):
-		return StageRegistration
 	}
-	return StageSession
+	return serveStage(err)
 }
 
 // registrationReasons are the GOAWAY reasons that mean the organisation will not admit this registration.

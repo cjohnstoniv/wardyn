@@ -4,6 +4,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"log/slog"
@@ -31,7 +32,9 @@ type relayWatch struct {
 	changed func(ctx context.Context, reachable bool, err error)
 	// send tells the organisation the current state; an error leaves it pending for the next check.
 	send func(ctx context.Context) error
-	lost bool
+	// bound bounds one check and one send; zero is relayRecheckBound.
+	bound time.Duration
+	lost  bool
 	// pending is a change not yet sent.
 	pending bool
 }
@@ -60,11 +63,12 @@ func watchRelay(run func(context.Context) error, w relayWatch, kick <-chan struc
 	}
 }
 
-func (w *relayWatch) once(ctx context.Context) {
-	ctx, cancel := context.WithTimeout(ctx, relayRecheckBound)
+func (w *relayWatch) once(live context.Context) {
+	bound := cmp.Or(w.bound, relayRecheckBound)
+	ctx, cancel := context.WithTimeout(live, bound)
 	defer cancel()
 	err := w.check(ctx)
-	if err != nil && errors.Is(ctx.Err(), context.Canceled) {
+	if err != nil && errors.Is(live.Err(), context.Canceled) {
 		return // shutting down is not a lost relay
 	}
 	if err != nil && !w.proves(err) {
@@ -73,7 +77,13 @@ func (w *relayWatch) once(ctx context.Context) {
 		w.lost, w.pending = lost, true
 		w.changed(ctx, !lost, err)
 	}
-	if w.pending && w.send(ctx) == nil {
+	if !w.pending {
+		return
+	}
+	// The report has its own budget: a probe that ran out its time must not take the report with it.
+	sendCtx, stop := context.WithTimeout(live, bound)
+	defer stop()
+	if w.send(sendCtx) == nil {
 		w.pending = false
 	}
 }

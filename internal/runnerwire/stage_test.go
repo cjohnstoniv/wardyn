@@ -104,7 +104,9 @@ func TestStageClassifiesByErrorType(t *testing.T) {
 		{"certificate", dialStage(fmt.Errorf("dial: %w", x509.UnknownAuthorityError{})), StageTLS},
 		{"anything else is the network", dialStage(errors.New("i/o timeout")), StageNetwork},
 		{"auth", authStage(fmt.Errorf("%w: proof", ErrAuth)), StageAuth},
-		{"goaway", authStage(fmt.Errorf("%w: lapsed", ErrGoaway)), StageRegistration},
+		{"goaway for a registration", authStage(goaway(reasonJSON(ReasonRegistrationLapsed))), StageRegistration},
+		{"resume gap is routine", authStage(goaway(reasonJSON("resume_gap"))), StageSession},
+		{"goaway text only", authStage(fmt.Errorf("%w: lapsed", ErrGoaway)), StageSession},
 		{"revoked", authStage(ErrRevoked), StageRegistration},
 		{"a failed handshake read", authStage(errors.New("EOF")), StageSession},
 		{"no stage recorded", StageOf(errors.New("plain")), StageSession},
@@ -199,6 +201,38 @@ func TestServeStageReadsTheGoawayReasonNotTheText(t *testing.T) {
 	} {
 		if got := serveStage(c.err); got != c.want {
 			t.Errorf("%s: stage = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+func reasonJSON(r string) []byte { b, _ := Marshal(Reason{Reason: r}); return b }
+
+// The runner's own shutdown is not a failure to connect: a dial that ends with the cancelled context
+// records no stage, so none is carried across the restart.
+func TestRunRecordsNoStageForItsOwnShutdown(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	_, key, _ := ed25519.GenerateKey(rand.Reader)
+	var stages []Stage
+	done := make(chan struct{})
+	client, err := NewClient(ClientConfig{OrgURL: "https://org.example", RunnerID: uuid.NewString(), PrivateKey: key, Hooks: idleHooks(),
+		LinkChanged: func(_ bool, _ string, stage Stage) { stages = append(stages, stage) },
+		Dial: func(ctx context.Context) (Conn, error) {
+			cancel()
+			return nil, ctx.Err()
+		}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { defer close(done); _ = client.Run(ctx) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return")
+	}
+	for _, s := range stages {
+		if s != "" {
+			t.Errorf("shutdown recorded stage %q", s)
 		}
 	}
 }

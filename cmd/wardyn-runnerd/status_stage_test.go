@@ -288,3 +288,49 @@ func TestWatchRelayRunsBesideTheLoop(t *testing.T) {
 		t.Errorf("loop = %v", err)
 	}
 }
+
+// A relay still unreachable stays the reported failure, ongoing and dated from its loss, whatever
+// connect failure comes after it.
+func TestRelayLossStaysOngoingBehindALaterSessionDrop(t *testing.T) {
+	w := newStatusWriter(t.TempDir())
+	lost := time.Date(2026, 10, 20, 8, 0, 0, 0, time.UTC)
+	w.now = func() time.Time { return lost }
+	w.relayChanged(false, "a container could not reach 172.17.0.1")
+	w.now = func() time.Time { return lost.Add(time.Minute) }
+	w.linkChanged(false, "read: connection reset", runnerwire.StageSession)
+	f := w.failure()
+	if f == nil || f.Stage != runnerwire.StageRelay || !f.Ongoing || !f.At.Equal(lost) {
+		t.Fatalf("relay still lost, reported %+v, want relay, ongoing, at %v", f, lost)
+	}
+	w.relayChanged(true, "")
+	if f := w.failure(); f == nil || f.Stage != runnerwire.StageSession || f.Ongoing {
+		t.Errorf("relay regained, reported %+v, want the session drop, over", f)
+	}
+}
+
+// A folders runner's caps carry its last failure.
+func TestFoldersCapsCarryTheLastFailure(t *testing.T) {
+	w := newStatusWriter(t.TempDir())
+	if c := foldersCaps("m", w); c.LastFailure != nil || !c.Folders {
+		t.Fatalf("fresh folders caps: %+v", c)
+	}
+	w.linkChanged(false, "x", runnerwire.StageTLS)
+	if c := foldersCaps("m", w); c.LastFailure == nil || c.LastFailure.Stage != runnerwire.StageTLS {
+		t.Errorf("folders caps hold %+v, want the tls failure", c.LastFailure)
+	}
+}
+
+// The report is sent with its own budget: a probe that ran out its time does not take it along.
+func TestRelayWatchSendsAfterTheProbeRanOutItsTime(t *testing.T) {
+	w := watchFor(func(ctx context.Context) error {
+		<-ctx.Done()
+		return fmt.Errorf("%w: %w", errRelayDown, ctx.Err())
+	})
+	w.bound = 20 * time.Millisecond
+	var sent, sendErr = 0, error(nil)
+	w.send = func(ctx context.Context) error { sent++; sendErr = ctx.Err(); return nil }
+	w.once(t.Context())
+	if sent != 1 || sendErr != nil || w.pending {
+		t.Errorf("sent=%d with context error %v, pending=%v; want one send on a live context", sent, sendErr, w.pending)
+	}
+}

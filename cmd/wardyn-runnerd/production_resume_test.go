@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -289,5 +290,41 @@ func TestCapsCarryTheLastFailureAndARefreshReportsTheRelay(t *testing.T) {
 	again := resumeAwait(t, f.ctx, caps)
 	if again.LastFailure == nil || again.LastFailure.Stage != runnerwire.StageRelay || !again.LastFailure.Ongoing {
 		t.Fatalf("refresh reported %+v", again.LastFailure)
+	}
+}
+
+// A relay change found with no session up stays pending, and goes out once a session is up: a resumed
+// session never replays caps itself, so the watch's own send is the only report.
+func TestRelayChangeFoundOfflineIsSentWhenASessionComesUp(t *testing.T) {
+	var failure atomic.Pointer[runnerwire.Failure]
+	caps := make(chan runnerwire.Caps, 4)
+	f := newResumeRuntimeFixtureWith(t, runtimeExtras{lastFailure: failure.Load}, func(ev runnerwire.Event) {
+		var c runnerwire.Caps
+		if ev.Kind == runnerwire.EventCaps && runnerwire.Unmarshal(ev.Data, &c) == nil {
+			caps <- c
+		}
+	})
+	w := relayWatch{
+		check:  func(context.Context) error { return errRelayDown },
+		proves: func(err error) bool { return errors.Is(err, errRelayDown) },
+		changed: func(context.Context, bool, error) {
+			failure.Store(&runnerwire.Failure{Stage: runnerwire.StageRelay, At: time.Now(), Ongoing: true})
+		},
+		send: f.runtime.refreshCaps,
+	}
+	w.once(f.ctx)
+	if !w.pending {
+		t.Fatal("a change found with no session up was dropped")
+	}
+	go func() { f.connected <- f.client.Connect(f.ctx) }()
+	peer := resumeAwait(t, f.ctx, f.peers)
+	defer peer.Close()
+	resumeAwait(t, f.ctx, caps) // the connect's own report
+	w.once(f.ctx)
+	if w.pending {
+		t.Fatal("the change is still pending with a session up")
+	}
+	if got := resumeAwait(t, f.ctx, caps); got.LastFailure == nil || got.LastFailure.Stage != runnerwire.StageRelay || !got.LastFailure.Ongoing {
+		t.Errorf("the session was told %+v, want the relay loss", got.LastFailure)
 	}
 }

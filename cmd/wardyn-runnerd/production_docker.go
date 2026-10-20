@@ -495,7 +495,9 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 	refresh := func(ctx context.Context) error {
 		peer := live.get()
 		if peer == nil {
-			return nil // offline: the next connect reports it
+			// Offline, or a session not yet online: the report stays pending and goes out when the
+			// session comes up, which a resumed one does not do by itself.
+			return errOffline
 		}
 		ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		defer cancel()
@@ -513,6 +515,9 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		return err
 	}}, nil
 }
+
+// errOffline is refreshCaps with no session up; the relay watch keeps its report pending.
+var errOffline = errors.New("no session is up")
 
 // livePeer is the session that is up, for a report outside a connect.
 type livePeer struct {

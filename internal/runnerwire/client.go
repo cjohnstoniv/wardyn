@@ -154,7 +154,9 @@ func (c *Client) Run(ctx context.Context) error {
 	for ctx.Err() == nil {
 		started := time.Now()
 		err := c.Connect(ctx)
-		if err != nil {
+		// The runner's own shutdown is not a failure to connect: it leaves no stage to carry
+		// across the restart and report.
+		if err != nil && ctx.Err() == nil && !errors.Is(err, context.Canceled) {
 			c.setLink(false, err.Error(), StageOf(err))
 		}
 		if errors.Is(err, ErrRevoked) {

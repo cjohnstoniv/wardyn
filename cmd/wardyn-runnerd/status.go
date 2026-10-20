@@ -70,6 +70,9 @@ type statusWriter struct {
 	now    func() time.Time
 	cur    runnerStatus
 	warned bool
+	// relayLostAt is when the run relay was lost, while Relay is unreachable. It is separate from
+	// StageAt, which a later connect failure overwrites.
+	relayLostAt time.Time
 }
 
 func newStatusWriter(stateDir string) *statusWriter {
@@ -159,6 +162,9 @@ func (w *statusWriter) relayChanged(reachable bool, reason string) {
 		w.cur.Relay = relayReachable
 	} else {
 		at := w.now()
+		if w.cur.Relay != relayUnreachable {
+			w.relayLostAt = at
+		}
 		w.cur.Relay = relayUnreachable
 		w.cur.LastError, w.cur.LastErrorAt = cleanStatusError(reason), &at
 		w.cur.Stage, w.cur.StageAt = runnerwire.StageRelay, &at
@@ -168,17 +174,21 @@ func (w *statusWriter) relayChanged(reachable bool, reason string) {
 }
 
 // failure is the last failure the caps event reports to the organisation, nil when there is none. The
-// relay is the one failure that can be going on now.
+// relay is the one failure that can be going on now: while it is unreachable that is what is reported,
+// whatever connect failure came after it.
 func (w *statusWriter) failure() *runnerwire.Failure {
 	if w == nil {
 		return nil
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.cur.Relay == relayUnreachable {
+		return &runnerwire.Failure{Stage: runnerwire.StageRelay, At: w.relayLostAt, Ongoing: true}
+	}
 	if !w.cur.Stage.Valid() || w.cur.StageAt == nil {
 		return nil
 	}
-	return &runnerwire.Failure{Stage: w.cur.Stage, At: *w.cur.StageAt, Ongoing: w.cur.Stage == runnerwire.StageRelay && w.cur.Relay == relayUnreachable}
+	return &runnerwire.Failure{Stage: w.cur.Stage, At: *w.cur.StageAt}
 }
 
 // stopped is written when serve returns.
