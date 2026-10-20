@@ -111,7 +111,7 @@
 # docs/OPERATIONS.md 56797 = ours 56777 + theirs 56764 - base 56744 at the 0.10 W2 merge of HRN onto the train.
 # docs/OPERATIONS.md 57339: measured after the main merge.
 # docs/OPERATIONS.md 57392 = ours 56797 + theirs 57339 - base 56744 at the 0.10 W2 merge of MDL onto the train.
-# docs/OPERATIONS.md 56775 = 56744 + 31 (0.10 LAY-A's 0196 migrator line), measured after merging main into 0.10 LAY-A.
+# docs/OPERATIONS.md 56775 = 56744 + 31 (0.10 LAY-A's 0198 migrator line), measured after merging main into 0.10 LAY-A.
 # docs/OPERATIONS.md 56776 measured (0.10 BOUNDARY): the org walls renamed the Wardyn boundary, with modes.
 # docs/OPERATIONS.md 57424 = ours 56776 + theirs 57392 - base 56744 at the main merge into 0.10 BOUNDARY.
 docs/OPERATIONS.md=57424 share=35
