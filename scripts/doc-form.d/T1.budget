@@ -73,7 +73,10 @@
 # threatmodel/THREAT-MODEL.md 65598 = ours 65489 + theirs 65198 - base 65089 at the 0.10 W3 merge of SEC-1c onto the train.
 # threatmodel/THREAT-MODEL.md 65150 adds 61 (0.10 PERF-1, #2282): the sidecar scans at most 64 spans per request under fail-open.
 # threatmodel/THREAT-MODEL.md 65659 = ours 65598 + theirs 65150 - base 65089 at the 0.10 W4c merge of PERF-1 onto the train.
-threatmodel/THREAT-MODEL.md=65659
+# threatmodel/THREAT-MODEL.md 65311 adds 222 over 65089 (0.10 FEAT-1MCP), measured: item (r), a local MCP server's access, secrets, egress, off switch and refusals.
+# threatmodel/THREAT-MODEL.md 65323 adds 12 over 65311 (0.10 FEAT-1MCP review): the npx pin binds only the npx form; an absolute program is trusted as the image is.
+# threatmodel/THREAT-MODEL.md 65893 = ours 65659 + theirs 65323 - base 65089 at the 0.10 W4c merge of FEAT-1MCP onto the train.
+threatmodel/THREAT-MODEL.md=65893
 # threatmodel/THREAT-MODEL.md 63171 adds 78 over 63093, measured: the console session under the role-stamp residual: renewal up to its cap, never moving the sign-in time, and the copied-cookie bound (0.9.3 console session lifetime).
 # threatmodel/THREAT-MODEL.md 63123 adds 30 over 63093: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
 # threatmodel/THREAT-MODEL.md 63025 = 62948 + 77, measured: the laptop decision-sink crossing row and #77's sink and loss-row bullets.
