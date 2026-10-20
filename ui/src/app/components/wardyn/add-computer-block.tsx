@@ -45,15 +45,20 @@ function useFacts(): [Facts, () => void] {
   return [facts, () => setAttempt((n) => n + 1)];
 }
 
-/** One line to copy: the code and a Copy button. On a phone the button is full width and 44 px tall under the code (MATT4-Phone). */
+/**
+ * One line to copy: the code and a Copy button. On a phone (MATT4-Phone) the code sits in its own bordered box and
+ * the button is a separate full-width 44 px row 8 px below it; from `sm` up the box's border wraps both, in one row.
+ */
 function CmdRow({ text, label }: { text: string; label: string }) {
   return (
-    <div className="flex flex-col gap-2 rounded-lg border border-border bg-background p-2 sm:flex-row sm:items-center sm:py-2 sm:pl-3 sm:pr-2">
-      <code className="min-w-0 flex-1 break-all px-1 font-mono text-xs leading-relaxed sm:px-0">{text}</code>
+    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-2 sm:rounded-lg sm:border sm:border-border sm:bg-background sm:py-2 sm:pl-3 sm:pr-2">
+      <div data-cmd-box className="min-w-0 flex-1 rounded-lg border border-border bg-background p-2 sm:rounded-none sm:border-0 sm:bg-transparent sm:p-0">
+        <code className="block break-all px-1 font-mono text-xs leading-relaxed sm:px-0">{text}</code>
+      </div>
       <CopyButton
         text={text}
         label={label}
-        className="h-11 w-full shrink-0 justify-center gap-1.5 rounded-md border border-border px-3 text-xs text-foreground hover:bg-surface-2 sm:h-[26px] sm:w-auto"
+        className="h-11 w-full shrink-0 justify-center gap-1.5 rounded-md border border-border px-3 text-sm text-foreground hover:bg-surface-2 sm:h-[26px] sm:w-auto sm:text-xs"
       >
         {ADD_COMPUTER.COPY}
       </CopyButton>
@@ -95,7 +100,7 @@ function Step({ n, title, level, headingRef, children }: { n: number; title: str
 
 const NOTE = "text-meta leading-relaxed text-muted-foreground";
 
-function InstallStep({ facts, level, headingRef, onRetry }: { facts: Facts; level: Level; headingRef: React.Ref<HTMLHeadingElement>; onRetry: () => void }) {
+function InstallStep({ facts, level, headingRef, onRetry }: { facts: Facts; level: Level; headingRef: React.Ref<HTMLHeadingElement>; onRetry: (button: HTMLElement) => void }) {
   const lines = installLines(facts.version, facts.artifactBase);
   const windows = viewerIsWindows();
   // The shell line leads on every system: from Windows the runner lives in WSL2, so it is the only line there.
@@ -116,7 +121,7 @@ function InstallStep({ facts, level, headingRef, onRetry }: { facts: Facts; leve
         <div className="flex flex-wrap items-center gap-2">
           <p className={NOTE}>{ADD_COMPUTER.NO_INSTALL_LINE}</p>
           {!facts.answered && (
-            <button type="button" onClick={onRetry} className="h-11 rounded-md border border-border px-2.5 text-xs text-foreground hover:bg-surface-2 sm:h-7">
+            <button type="button" onClick={(e) => onRetry(e.currentTarget)} className="h-11 rounded-md border border-border px-2.5 text-xs text-foreground hover:bg-surface-2 sm:h-7">
               {ADD_COMPUTER.TRY_AGAIN}
             </button>
           )}
@@ -147,14 +152,17 @@ export function AddComputerBlock({
   const url = window.location.origin + appURL("");
   const windows = viewerIsWindows();
   const step = (level + 1) as Level;
-  // Try again unmounts itself when /healthz finally answers, so focus moves to the first step's title.
+  // Try again unmounts itself when /healthz finally answers. Focus moves to the first step's title only if it was
+  // lost with the button (on the page, or still on the button); a person who moved on while the read was out keeps
+  // where they are.
   const installTitle = React.useRef<HTMLHeadingElement | null>(null);
-  const retried = React.useRef(false);
+  const retryButton = React.useRef<HTMLElement | null>(null);
   React.useEffect(() => {
-    if (retried.current && facts.answered) {
-      retried.current = false;
-      installTitle.current?.focus();
-    }
+    const button = retryButton.current;
+    if (!button || !facts.answered) return;
+    retryButton.current = null;
+    const active = document.activeElement;
+    if (!active || active === document.body || active === button) installTitle.current?.focus();
   }, [facts]);
   return (
     <section aria-labelledby="add-computer-title" data-add-computer className="space-y-3 rounded-xl border border-border bg-card px-4 py-4 sm:px-[18px]">
@@ -170,8 +178,8 @@ export function AddComputerBlock({
           facts={facts}
           level={step}
           headingRef={installTitle}
-          onRetry={() => {
-            retried.current = true;
+          onRetry={(button) => {
+            retryButton.current = button;
             retry();
           }}
         />

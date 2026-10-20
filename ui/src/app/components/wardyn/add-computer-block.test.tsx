@@ -7,7 +7,7 @@
 // drift in them fails this suite. Both /healthz forms (CLI sign-in on and off) are pinned: neither may show
 // `serve`, `--proxy-image`, `wdn_` or `WARDYN_TOKEN=`.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AddComputerBlock } from "./add-computer-block";
 
@@ -126,6 +126,78 @@ describe("Add this computer: heading levels and focus", () => {
     await screen.findByText(SH);
     expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Install the CLI" })).toHaveFocus();
+  });
+});
+
+describe("Add this computer: where focus goes after Try again", () => {
+  /** A /healthz whose answer the test releases: the retry is "in flight" until then. */
+  function deferredHealthz() {
+    let release: (body: Record<string, unknown> | null) => void = () => {};
+    const answer = new Promise<Record<string, unknown> | null>((r) => (release = r));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        const body = await answer;
+        return body === null ? new Response("no", { status: 503 }) : new Response(JSON.stringify({ status: "ok", ...body }), { status: 200 });
+      }),
+    );
+    return release;
+  }
+
+  it("success with focus still on Try again moves it to the first step's title", async () => {
+    healthz(null);
+    const user = userEvent.setup();
+    render(<AddComputerBlock mdm={<input aria-label="elsewhere" />} />);
+    await user.click(await screen.findByRole("button", { name: "Try again" }));
+    await screen.findByRole("button", { name: "Try again" });
+    const release = deferredHealthz();
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    expect(screen.getByRole("button", { name: "Try again" })).toHaveFocus();
+    release({ version: "0.10.0", cli_sign_in: true });
+    await screen.findByText(SH);
+    expect(screen.getByRole("heading", { name: "Install the CLI" })).toHaveFocus();
+  });
+
+  it("success after focus moved elsewhere leaves it there", async () => {
+    healthz(null);
+    const user = userEvent.setup();
+    render(<AddComputerBlock mdm={<input aria-label="elsewhere" />} />);
+    await screen.findByRole("button", { name: "Try again" });
+    const release = deferredHealthz();
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    const elsewhere = screen.getByLabelText("elsewhere");
+    elsewhere.focus();
+    release({ version: "0.10.0", cli_sign_in: true });
+    await screen.findByText(SH);
+    expect(elsewhere).toHaveFocus();
+  });
+
+  it("a repeated failure leaves focus on Try again", async () => {
+    healthz(null);
+    const user = userEvent.setup();
+    render(<AddComputerBlock />);
+    await screen.findByRole("button", { name: "Try again" });
+    const release = deferredHealthz();
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    release(null);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Try again" })).toHaveFocus());
+    expect(screen.getByRole("heading", { name: "Install the CLI" })).not.toHaveFocus();
+  });
+
+  it("unmounting mid-retry neither throws nor takes focus", async () => {
+    healthz(null);
+    const user = userEvent.setup();
+    const { unmount } = render(<AddComputerBlock />);
+    await screen.findByRole("button", { name: "Try again" });
+    const release = deferredHealthz();
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    unmount();
+    const outside = document.body.appendChild(document.createElement("input"));
+    outside.focus();
+    release({ version: "0.10.0", cli_sign_in: true });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(outside).toHaveFocus();
+    outside.remove();
   });
 });
 
