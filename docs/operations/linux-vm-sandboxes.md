@@ -26,7 +26,8 @@
 
 | Situation | Behaviour |
 |---|---|
-| The link is down when a VM would start, or its first lease has lapsed | Refused `runner_offline`, as for a container. No VM, intent or run row exists |
+| The link is down when a VM would start | Refused `runner_offline`, as for a container. No VM, intent or run row exists |
+| The VM's first lease has lapsed when it would start | Refused "runner create requires a live initial lease", as for a container. Nothing is created |
 | The link drops while a VM runs | The VM keeps running with its files. Its proxy keeps enforcing the policy it holds and spools decisions |
 | The run token goes unrenewed for 1h5m | The runner stops the VM's proxy. The guest keeps running with no network path |
 | A credential the proxy injects from an expiring grant | Dropped at its expiry plus 15 minutes if it cannot be renewed. A fixed one (an API key) is held until the proxy stops at 1h5m |

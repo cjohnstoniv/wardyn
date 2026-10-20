@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/containerd/errdefs"
@@ -562,6 +563,8 @@ type dockerSink struct {
 	bound  map[netip.Addr]uint16 // where it listens: address and port
 	lns    []net.Listener
 	url    string // decision_sink.url for new proxies; "" until use
+
+	fullBusy atomic.Bool // a full-spool pass is running (endFullSpoolVMsInBackground)
 }
 
 // newDockerSink starts the sink, listening at once where it listened before a restart when that
@@ -648,12 +651,30 @@ func (d *dockerSink) proxyURL() string {
 	return d.url
 }
 
+// fullSpoolBound bounds one full-spool pass: ending a VM waits for the guest's power down.
+const fullSpoolBound = 2 * time.Minute
+
+// endFullSpoolVMsInBackground runs the full-spool pass off the containment tick, one at a time. The tick
+// shares its 30 s safety context with CheckLapses, which runs after it, and ending one VM can take
+// that long: the pass gets a budget of its own and never delays a lapse.
+func (d *dockerSink) endFullSpoolVMsInBackground(ctx context.Context) {
+	if !d.fullBusy.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer d.fullBusy.Store(false)
+		pass, cancel := context.WithTimeout(context.WithoutCancel(ctx), fullSpoolBound)
+		defer cancel()
+		d.EndVMsWithFullSpools(pass)
+	}()
+}
+
 // extras are the sink's part of the runtime: Tick regrants credit after the organisation's acks and
 // retries loss rows, and at startup, before the containment pass, the driver's record store becomes
 // the manager's and every run's sink key is registered again.
 func (d *dockerSink) extras(sub *docker.Driver, ev *evidenceForwarder) runtimeExtras {
 	return runtimeExtras{
-		options: offline.Options{Tick: func(ctx context.Context) { d.Tick(ctx); d.EndVMsWithFullSpools(ctx) }},
+		options: offline.Options{Tick: func(ctx context.Context) { d.Tick(ctx); d.endFullSpoolVMsInBackground(ctx) }},
 		started: func(_ context.Context, m *offline.Manager) error {
 			ev.m = m
 			return sub.ReregisterSinks(m.SinkRunIDs())

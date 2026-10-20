@@ -18,7 +18,7 @@ import (
 )
 
 // No new Linux VM sandbox starts while the org is unreachable: a VM create is admitted like a
-// container's, so the link being down, or the initial lease having lapsed, refuses it before any
+// container's, so the link being down (runner_offline), or the initial lease having lapsed (a plain error), refuses it before any
 // intent is recorded (OFFLINE-VM rule a).
 func TestVMCreateIsRefusedWhileTheOrgIsUnreachable(t *testing.T) {
 	ctx := context.Background()
@@ -46,8 +46,9 @@ func TestVMCreateIsRefusedWhileTheOrgIsUnreachable(t *testing.T) {
 			t.Fatal(err)
 		}
 		*elapsed = identity.RunTokenLapseAfter
-		if err := m.BeforeCreate(ctx, vmSpec(id)); err == nil {
-			t.Fatal("a VM create on a lapsed initial lease was admitted")
+		// The plain error of every create on a lapsed lease (not a runner_offline refusal).
+		if err := m.BeforeCreate(ctx, vmSpec(id)); err == nil || err.Error() != "runner create requires a live initial lease" {
+			t.Fatalf("a VM create on a lapsed initial lease = %v, want the live-initial-lease error", err)
 		}
 		if _, ok := m.state.Runs[id]; ok {
 			t.Fatal("a refused VM create left an intent")

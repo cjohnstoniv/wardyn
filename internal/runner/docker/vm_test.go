@@ -925,3 +925,34 @@ func TestVMEndVMLeavesAContainerRunAlone(t *testing.T) {
 		t.Fatal("EndVM removed a container run's proxy")
 	}
 }
+
+// An engine that cannot say what a run is never reads as "not a VM": EndVM answers the error and
+// touches nothing, so the runner's next pass ends the VM once the engine answers.
+func TestVMEndVMFailsClosedWhenTheEngineCannotInspect(t *testing.T) {
+	r := newVMRig(t)
+	spec := vmSpec()
+	ctx := context.Background()
+	sb, err := r.d.CreateSandbox(ctx, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d2 := newTestDriver(r.f) // a restarted driver: it must inspect to find the VM
+	if err := d2.EnableVM(r.vc); err != nil {
+		t.Fatal(err)
+	}
+	r.f.mu.Lock()
+	r.f.inspectFailures = 1
+	r.f.mu.Unlock()
+	if isVM, err := d2.EndVM(ctx, spec.RunID); isVM || err == nil {
+		t.Fatalf("EndVM with the engine failing = %v, %v; want an error", isVM, err)
+	}
+	if c := r.container(t, sb.Ref); !c.state.Running {
+		t.Fatal("a failed inspect still stopped the VM")
+	}
+	if isVM, err := d2.EndVM(ctx, spec.RunID); !isVM || err != nil {
+		t.Fatalf("EndVM once the engine answers = %v, %v; want true, nil", isVM, err)
+	}
+	if c := r.container(t, sb.Ref); c.state.Running {
+		t.Fatal("the VM kept running after EndVM succeeded")
+	}
+}

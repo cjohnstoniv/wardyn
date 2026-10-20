@@ -81,7 +81,7 @@ var errAuditLost = errors.New("runner audit spool unavailable")
 // spoolRecordEnvelope is what a decision record holds beyond its request's own
 // strings: identifiers, times, the rule source, a cause sentence and a scan
 // summary without findings (a skip or bypass).
-const spoolRecordEnvelope = 64 << 10
+const spoolRecordEnvelope = runnerspool.MinRequestReservation
 
 // spoolAdmitTimeout bounds how long a request waits for its audit reservation before it is refused,
 // including the wait for room in a full spool.

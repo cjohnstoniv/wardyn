@@ -445,17 +445,19 @@ func (s *Spool) CanRecord(ctx context.Context) error {
 	})
 }
 
-// Full reports whether the spool has no room left for another decision: it holds MaxRecords less the
-// slot kept for the loss row, or fewer than one record envelope of bytes remain once LossReserveBytes
-// is kept. It is the point where nextGrant stops issuing credit, so a proxy admits nothing more. A
-// sealed spool is not full: its run is retired.
+// Full reports whether the spool can issue no usable credit: nextGrant would give a session no
+// record, or fewer bytes than the smallest request a proxy reserves (MinRequestReservation). It is
+// derived from nextGrant's own arithmetic (grantRoom), so the two cannot drift: a proxy admits
+// nothing from a spool Full reports, and holds each request until it answers a retryable 503. A sealed
+// spool is not full: its run is retired.
 func (s *Spool) Full(ctx context.Context) (full bool, err error) {
 	err = s.locked(ctx, func() error {
 		m, err := s.readManifest()
 		if err != nil || m.Sealed {
 			return err
 		}
-		full = int64(MaxRecords)-(m.Last-m.Ack.Seq)-1 <= 0 || int64(MaxBytes)-m.Bytes-LossReserveBytes-grantRecordEnvelope <= 0
+		records, bytes := grantRoom(m)
+		full = records < 1 || bytes < MinRequestReservation
 		return nil
 	})
 	return full, err
@@ -489,6 +491,9 @@ const (
 	GrantReservations = 16
 	GrantBytes        = GrantReservations * MaxRecordBytes
 	LossReserveBytes  = 4 << 10
+	// MinRequestReservation is the least a proxy reserves for one request (its record envelope); a
+	// grant with fewer bytes admits nothing.
+	MinRequestReservation = 64 << 10
 	// grantRecordEnvelope is what a spool row adds to a record body: the
 	// stream id, sequence and hash. A grant's byte credit leaves it per record.
 	grantRecordEnvelope = 512
@@ -538,14 +543,21 @@ func (m manifest) remoteSettled() bool {
 // nextGrant is the credit a live session may hold now; it never lowers an
 // outstanding ceiling (design Q5).
 func nextGrant(m manifest) Grant {
-	free := max(int64(MaxRecords)-(m.Last-m.Ack.Seq)-1, 0)
-	n := min(int64(GrantRecords), free)
-	bytes := max(min(int64(GrantBytes), int64(MaxBytes)-m.Bytes-LossReserveBytes-n*grantRecordEnvelope), 0)
+	n, bytes := grantRoom(m)
 	g := Grant{Gen: m.Gen, Base: m.Producer.Seq, Through: m.Producer.Seq + n, Bytes: bytes}
 	if old := m.Grant; old != nil && old.Through > g.Through {
 		g.Through = old.Through
 	}
 	return g
+}
+
+// grantRoom is the records and bytes of credit the spool has room for now: the last record slot and
+// LossReserveBytes stay free, and each granted record leaves its envelope.
+func grantRoom(m manifest) (records, bytes int64) {
+	free := max(int64(MaxRecords)-(m.Last-m.Ack.Seq)-1, 0)
+	records = min(int64(GrantRecords), free)
+	bytes = max(min(int64(GrantBytes), int64(MaxBytes)-m.Bytes-LossReserveBytes-records*grantRecordEnvelope), 0)
+	return records, bytes
 }
 
 // Session is an accepted sink session's durable start.

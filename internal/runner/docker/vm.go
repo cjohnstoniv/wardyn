@@ -148,30 +148,40 @@ func (d *Driver) newVMRun(runID uuid.UUID, dir string) *vmRun {
 // After a runner restart the VM is found again by its container's label. A ref found to be a
 // container is remembered as one until its teardown, so it is inspected once, not on every call.
 func (d *Driver) vmFor(ctx context.Context, ref string) *vmRun {
+	v, _ := d.vmLookup(ctx, ref)
+	return v
+}
+
+// vmLookup is vmFor with its failure: a container the engine could not inspect is an error, not "a
+// container". A ref the engine does not hold is nil, nil.
+func (d *Driver) vmLookup(ctx context.Context, ref string) (*vmRun, error) {
 	vc := d.vmConfig()
 	if vc == nil {
-		return nil
+		return nil, nil
 	}
 	if v, ok := d.vms.Load(ref); ok {
-		return v.(*vmRun)
+		return v.(*vmRun), nil
 	}
 	if _, ok := d.notVMs.Load(ref); ok {
-		return nil
+		return nil, nil
 	}
 	res, err := d.cli.ContainerInspect(ctx, ref, client.ContainerInspectOptions{})
+	if isNotFound(err) {
+		return nil, nil
+	}
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("docker: inspect %s: %w", ref, err)
 	}
 	if res.Container.Config == nil || res.Container.Config.Labels[labelMachineKind] != string(types.MachineLinuxVM) {
 		d.notVMs.Store(ref, struct{}{})
-		return nil
+		return nil, nil
 	}
 	id, err := parseRunID(res.Container.Config.Labels[labelRun])
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	v, _ := d.vms.LoadOrStore(ref, d.newVMRun(id, vc.runDir(id)))
-	return v.(*vmRun)
+	return v.(*vmRun), nil
 }
 
 // errVMNoFolderShare refuses a VM run that carries a folder mount on a runner whose probe found no virtiofsd.
@@ -726,12 +736,14 @@ func (d *Driver) vmLogTail(ref string) string {
 
 // EndVM ends the run's Linux VM as the lease end does (EndSandbox): the guest is asked to power down,
 // the QEMU container is stopped and kept, and the proxy is stopped and removed. It reports false and
-// touches nothing for a run that is not a VM, or when VMs are off. wardyn-runnerd calls it when a VM
+// touches nothing for a run that is not a VM, or when VMs are off. An engine that cannot say what the
+// run is answers an error. wardyn-runnerd calls it when a VM
 // run's audit spool is full.
 func (d *Driver) EndVM(ctx context.Context, runID uuid.UUID) (bool, error) {
 	ref := agentContainerName(runID)
-	if d.vmFor(ctx, ref) == nil {
-		return false, nil
+	v, err := d.vmLookup(ctx, ref)
+	if err != nil || v == nil {
+		return false, err // an engine that cannot say is an error the caller retries, never "not a VM"
 	}
 	return true, d.EndSandbox(ctx, ref)
 }
