@@ -4,10 +4,13 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -631,8 +634,11 @@ func (s PG) SetQueueWait(ctx context.Context, id uuid.UUID, detail string) error
 // id to its "queue: <token>" status_detail), unless the pool is at its cap by now. A full pool outranks
 // every other reason: a pass judges with no lock, so by the time it writes, a launch or a concurrent pass
 // may have filled the pool and written runner_pool_at_capacity, and a held reason written after it would
-// bring back a reason the pool's own cap has already replaced. Reading the pool under FOR SHARE keeps a
-// create (which takes the row FOR NO KEY UPDATE) from filling it between the count and the writes.
+// bring back a reason the pool's own cap has already replaced. Reading the pool under FOR SHARE keeps
+// the writers that fill a capped pool (promotion and revive, both FOR NO KEY UPDATE on the pool row) from
+// filling it between the count and the writes. Two passes on one pool hold FOR SHARE together, so the run
+// rows are written in id order, as every multi-row lock in this package is: two passes then queue on the
+// lowest id instead of each holding a row the other wants.
 func (s PG) SetHeldQueueWaits(ctx context.Context, poolID uuid.UUID, details map[uuid.UUID]string) error {
 	if len(details) == 0 {
 		return nil
@@ -652,7 +658,9 @@ func (s PG) SetHeldQueueWaits(ctx context.Context, poolID uuid.UUID, details map
 		if runnerpool.AtCapacity(pool, running) != nil {
 			return nil
 		}
-		for id, detail := range details {
+		ids := slices.SortedFunc(maps.Keys(details), func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) })
+		for _, id := range ids {
+			detail := details[id]
 			if _, err := q.Exec(ctx, `UPDATE agent_runs SET status_detail=$2 WHERE id=$1 AND state=$3 AND status_detail <> $2`,
 				id, detail, string(types.RunQueued)); err != nil {
 				return fmt.Errorf("store: set held queue wait: %w", err)
