@@ -4,6 +4,7 @@
 package proxy
 
 import (
+	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"net"
@@ -29,6 +30,8 @@ func refusalOfDialError(err error) *egress.Refusal {
 	}
 	var connectRefused *upstreamConnectRefusedError
 	var netErr net.Error
+	var opErr *net.OpError
+	var notTLS tls.RecordHeaderError
 	var unknownAuthority x509.UnknownAuthorityError
 	var hostname x509.HostnameError
 	var invalid x509.CertificateInvalidError
@@ -39,6 +42,10 @@ func refusalOfDialError(err error) *egress.Refusal {
 		return outside("connection_refused")
 	case errors.Is(err, syscall.ECONNRESET):
 		return outside("connection_reset")
+	case errors.As(err, &opErr) && opErr.Op == "remote error":
+		return outside("tls_alert")
+	case errors.As(err, &notTLS):
+		return outside("upstream_not_tls")
 	case errors.As(err, &netErr) && netErr.Timeout():
 		return unknown("timed_out")
 	case errors.As(err, &unknownAuthority), errors.As(err, &hostname), errors.As(err, &invalid),
@@ -49,7 +56,7 @@ func refusalOfDialError(err error) *egress.Refusal {
 }
 
 // stampRefusal classifies a deny the caller left unclassified. A deny the policy or a
-// guard decided is Wardyn's and carries the layer the run is attributed to; an unresolved
+// guard decided is Wardyn's, and only a policy-decided one carries the layer the run is attributed to; an unresolved
 // name is unknown; every other rule_source stays unclassified (egress.WardynRefusal says why).
 func (s *decisionSink) stampRefusal(log *egress.DecisionLog) {
 	if log.Decision != egress.Deny || log.Refusal != nil {
@@ -60,7 +67,9 @@ func (s *decisionSink) stampRefusal(log *egress.DecisionLog) {
 		return
 	}
 	if r := egress.WardynRefusal(log.RuleSource); r != nil {
-		r.Layer, r.LayerName = s.layer, s.layerName
+		if egress.PolicyDecided(r) {
+			r.Layer, r.LayerName = s.layer, s.layerName
+		}
 		log.Refusal = r
 	}
 }

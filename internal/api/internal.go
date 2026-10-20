@@ -95,7 +95,7 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	if dl.PortRule != "" {
 		fields["port_rule"] = dl.PortRule
 	}
-	// Whose refusal a deny was (egress.Refusal); absent on an unclassified row.
+	// Whose refusal a deny was ("refusal", egress.Refusal); absent on an unclassified row.
 	dl.Refusal.AuditFields(fields)
 	// A Bedrock data-plane refusal the proxy relayed (bedrock_dataplane_fault.go).
 	if dl.UpstreamFault != "" {

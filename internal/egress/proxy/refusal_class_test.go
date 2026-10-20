@@ -6,6 +6,7 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -87,6 +88,31 @@ func TestRefusal_WardynDenyNamesTheLayer(t *testing.T) {
 	}
 }
 
+// A guard refusal is Wardyn's but not the policy owner's to change, so it names no layer
+// even on an attributed run.
+func TestRefusal_GuardRefusalNamesNoLayer(t *testing.T) {
+	t.Run("private address through the proxy", func(t *testing.T) {
+		p, buf := attributedTestProxy(t, types.RunPolicySpec{AllowedDomains: []string{"169.254.169.254"}}, "127.0.0.1:1", teamA)
+		rec := httptest.NewRecorder()
+		p.ServeHTTP(rec, mustProxyReq(t, http.MethodGet, "http://169.254.169.254/latest/meta-data"))
+		r := refusalOf(t, buf, "builtin:private-ip")
+		wantRefusal(t, r, egress.RefusedByWardyn, "private_address")
+		if r.Layer != "" || r.LayerName != "" {
+			t.Errorf("layer %q name %q on a guard refusal, want none", r.Layer, r.LayerName)
+		}
+	})
+	t.Run("desktop VM relay", func(t *testing.T) {
+		buf := &bytes.Buffer{}
+		s := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8), layer: "profile", layerName: "Team A"}
+		s.emit(decisionLog(egress.Request{Host: "h.test"}, egress.Deny, "vmnet:udp"))
+		r := refusalOf(t, buf, "vmnet:udp")
+		wantRefusal(t, r, egress.RefusedByWardyn, "vmnet")
+		if r.Layer != "" || r.LayerName != "" {
+			t.Errorf("layer %q name %q on a guard refusal, want none", r.Layer, r.LayerName)
+		}
+	})
+}
+
 // A peer outside Wardyn that refuses an allowed host is "outside": a refused dial on both
 // lanes, and the corporate proxy answering the CONNECT with a status.
 func TestRefusal_AllowedHostRefusedOutside(t *testing.T) {
@@ -148,7 +174,7 @@ func TestRefusal_AllowedHostRefusedOutside(t *testing.T) {
 
 // A failure with no readable cause says so: unknown, not a guessed wall.
 func TestRefusal_AmbiguousFailureIsUnknown(t *testing.T) {
-	t.Run("not a TLS server", func(t *testing.T) {
+	t.Run("not a TLS server answers the hello", func(t *testing.T) {
 		ln, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
 			t.Fatal(err)
@@ -166,7 +192,8 @@ func TestRefusal_AmbiguousFailureIsUnknown(t *testing.T) {
 		}()
 		p, buf := attributedTestProxy(t, types.RunPolicySpec{AllowedDomains: []string{"allowed.test"}}, ln.Addr().String(), teamA)
 		p.ServeHTTP(httptest.NewRecorder(), mustProxyReq(t, http.MethodGet, "https://allowed.test/x"))
-		wantRefusal(t, refusalOf(t, buf, "builtin:dial-failed"), egress.RefusedByUnknown, "tls_failed")
+		// A server that answers the hello with something that is not TLS refused it: outside.
+		wantRefusal(t, refusalOf(t, buf, "builtin:dial-failed"), egress.RefusedByOutside, "upstream_not_tls")
 	})
 	t.Run("name did not resolve", func(t *testing.T) {
 		buf := &bytes.Buffer{}
@@ -189,6 +216,8 @@ func TestRefusal_AmbiguousFailureIsUnknown(t *testing.T) {
 			{"refused", &net.OpError{Op: "dial", Err: syscall.ECONNREFUSED}, egress.RefusedByOutside, "connection_refused"},
 			{"timeout", timeout, egress.RefusedByUnknown, "timed_out"},
 			{"unreachable", &net.OpError{Op: "dial", Err: syscall.EHOSTUNREACH}, egress.RefusedByUnknown, "dial_failed"},
+			{"peer tls alert", &net.OpError{Op: "remote error", Err: errors.New("tls: handshake failure")}, egress.RefusedByOutside, "tls_alert"},
+			{"peer answered non-TLS", tls.RecordHeaderError{Msg: "first record does not look like a TLS handshake"}, egress.RefusedByOutside, "upstream_not_tls"},
 			{"tls text", errors.New("tls: handshake failure"), egress.RefusedByUnknown, "tls_failed"},
 			{"eof", io.ErrUnexpectedEOF, egress.RefusedByUnknown, "dial_failed"},
 		} {
@@ -280,6 +309,9 @@ func TestRefusal_NoRequestContent(t *testing.T) {
 		{By: "someone", Reason: "denied"},
 		{By: "wardyn", Reason: "denied", Layer: "member"},
 		{By: "wardyn", Reason: "denied", LayerName: "a\nb"},
+		{By: "wardyn", Reason: "denied", LayerName: "Team\u202eA"},
+		{By: "outside", Reason: "connection_reset", Layer: "profile"},
+		{By: "unknown", Reason: "timed_out", LayerName: "Team A"},
 	} {
 		bad.AuditFields(fields)
 	}

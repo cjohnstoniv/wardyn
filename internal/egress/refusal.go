@@ -6,8 +6,9 @@ package egress
 import (
 	"regexp"
 	"strings"
-	"unicode"
 	"unicode/utf8"
+
+	"github.com/cjohnstoniv/wardyn/internal/policyref"
 )
 
 // Who refused: the three values of Refusal.By. "unknown" is a real answer, not a gap:
@@ -23,9 +24,11 @@ const (
 type Refusal struct {
 	By     string `json:"by"`
 	Reason string `json:"reason"`
-	// Layer and LayerName name the policy that refused (by=wardyn only): the layer kind
-	// ("profile" or "deployment") and the profile's name, the same two keys authz.denied
-	// rows carry. The contact stays on the run's own policy object.
+	// Layer and LayerName name the policy that refused: the layer kind ("profile" or
+	// "deployment") and the profile's name, the same two keys authz.denied rows carry.
+	// They ride a policy-decided refusal only (PolicyDecided); a guard refusal such as
+	// a private address names none, since the policy owner cannot change it. The
+	// contact stays on the run's own policy object.
 	Layer     string `json:"layer,omitempty"`
 	LayerName string `json:"layer_name,omitempty"`
 }
@@ -43,6 +46,16 @@ var wardynRefusalReasons = map[string]string{
 	"policy:tool-deny":    "tool_deny",
 	"approval:denied":     "approval_denied",
 	"builtin:private-ip":  "private_address",
+}
+
+// PolicyDecided reports whether r is a refusal the run's policy made, as opposed to
+// a built-in guard's: only a policy-decided refusal names a layer.
+func PolicyDecided(r *Refusal) bool {
+	switch r.Reason {
+	case "policy_denied", "default_deny", "method", "port", "require_tls", "tool_deny", "approval_denied":
+		return r.By == RefusedByWardyn
+	}
+	return false
 }
 
 // WardynRefusal is the Refusal for a deny the policy or a guard decided, or nil when
@@ -73,11 +86,14 @@ func (r *Refusal) valid() bool {
 	if !reasonRe.MatchString(r.Reason) {
 		return false
 	}
+	if r.By != RefusedByWardyn && (r.Layer != "" || r.LayerName != "") {
+		return false
+	}
 	if r.Layer != "" && r.Layer != "profile" && r.Layer != "deployment" {
 		return false
 	}
 	return len(r.LayerName) <= 128 && utf8.ValidString(r.LayerName) &&
-		strings.IndexFunc(r.LayerName, unicode.IsControl) < 0
+		strings.IndexFunc(r.LayerName, policyref.UnsafeRune) < 0
 }
 
 // AuditFields adds the refusal's keys to an egress audit row's data. A nil or malformed

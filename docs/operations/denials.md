@@ -51,8 +51,9 @@ read.
     refusal carries a `policy`. Exit codes are unchanged, and the Go SDK exposes it as
     `APIError.Policy`.
 - **An egress refusal says whose it was.**
-  - An `egress.deny` row the run proxy classified carries `by`, `refusal_reason` and, for a Wardyn refusal, `layer` and `layer_name` (the keys an `authz.denied` row carries). The Go SDK reads them with `client.EgressRefusalOf`.
+  - An `egress.deny` row the run proxy classified carries `by`, `refusal_reason` and, for a policy-decided refusal, `layer` and `layer_name` (the keys an `authz.denied` row carries). The Go SDK reads them with `client.EgressRefusalOf`.
   - `by` is `wardyn`: the run's policy or a guard refused the host. `refusal_reason` is `policy_denied`, `default_deny`, `method`, `port`, `require_tls`, `tool_deny`, `approval_denied`, `private_address` or `vmnet`.
+  - `layer` and `layer_name` ride a policy-decided refusal only; a guard refusal (`private_address`, `vmnet`) names none.
   - `by` is `outside`: the proxy allowed the host and a peer outside Wardyn ended it. `refusal_reason` is `upstream_proxy_refused` (the corporate proxy refused the CONNECT), `connection_refused`, `connection_reset`, `upstream_not_tls` or `tls_alert`.
   - `by` is `unknown`: it failed with no cause the proxy can read. `refusal_reason` is `timed_out`, `tls_failed`, `connection_closed`, `resolve_failed` or `dial_failed`.
   - The rows carry no request content. A relayed upstream HTTP status is not classified. A row with none of the keys was not classified (a brokered door, an evaluator error, a proxy older than 0.10).
