@@ -163,3 +163,54 @@ func TestOrgRouteNamesTheProxyHostAndPortOnly(t *testing.T) {
 		t.Errorf("route = %q", got)
 	}
 }
+
+// The lines that say what the runner could not reach name the proxy by host and port only: never its
+// user name and password, path or query, in the hint or in the logged error.
+func TestReachLinesNameProxyHostAndPortOnly(t *testing.T) {
+	leaks := []string{"u:p", "/path", "q=1"}
+	check := func(t *testing.T, what, got string) {
+		t.Helper()
+		for _, leak := range leaks {
+			if strings.Contains(got, leak) {
+				t.Errorf("%s %q carries %q", what, got, leak)
+			}
+		}
+	}
+	t.Run("closed proxy", func(t *testing.T) {
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		addr := l.Addr().String()
+		_ = l.Close()
+		proxy, _ := url.Parse("http://u:p@" + addr + "/path?q=1")
+		_, err = DialWebSocket(t.Context(), "https://org.example", uuid.NewString(), &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxy)}})
+		if err == nil {
+			t.Fatal("a dial through a closed proxy succeeded")
+		}
+		if hint := connectHint(err); hint != "the proxy "+addr+" named by HTTPS_PROXY did not accept the connection" {
+			t.Errorf("hint = %q", hint)
+		}
+		check(t, "error", err.Error())
+	})
+	t.Run("refusing proxy", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusProxyAuthRequired) }))
+		defer srv.Close()
+		addr := srv.Listener.Addr().String()
+		proxy, _ := url.Parse("http://u:p@" + addr + "/path?q=1")
+		_, err := DialWebSocket(t.Context(), "https://org.example", uuid.NewString(), &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxy)}})
+		if err == nil {
+			t.Fatal("a dial through a refusing proxy succeeded")
+		}
+		if hint := connectHint(err); hint != "the proxy at "+addr+" refused the connection (407: it wants proxy authentication)" {
+			t.Errorf("hint = %q", hint)
+		}
+		check(t, "error", err.Error())
+	})
+	t.Run("route", func(t *testing.T) {
+		proxy, _ := url.Parse("http://u:p@proxy.example:3128/path?q=1")
+		if got := orgRoute("https://org.example", uuid.NewString(), http.ProxyURL(proxy)); got != "via proxy proxy.example:3128 (HTTPS_PROXY)" {
+			t.Errorf("route = %q", got)
+		}
+	})
+}

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -1237,4 +1238,30 @@ func TestSetupWarnsServiceMissesShellProxy(t *testing.T) {
 			t.Fatalf("a shell without a proxy was warned: %v\n%s", err, out)
 		}
 	})
+}
+
+// The service-proxy warning names the variables only: a value with a user name and password, and the
+// proxy's host and port, appear nowhere in setup's output or log.
+func TestSetupProxyWarningPrintsNamesOnly(t *testing.T) {
+	var logs strings.Builder
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	f := newSetupFixture(t, "linux")
+	for _, k := range []string{"https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"} {
+		t.Setenv(k, "")
+	}
+	t.Setenv("HTTPS_PROXY", "http://u:p@proxy:3128")
+	out, err := f.run(setupOptions{tokenFile: f.tokenFile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "HTTPS_PROXY is set in this shell, but the service setup installs does not receive it") {
+		t.Errorf("no warning naming HTTPS_PROXY:\n%s", out)
+	}
+	for _, leak := range []string{"u:p", "proxy:3128"} {
+		if strings.Contains(out, leak) || strings.Contains(logs.String(), leak) {
+			t.Errorf("setup printed or logged %q:\nout:\n%s\nlog:\n%s", leak, out, logs.String())
+		}
+	}
 }
