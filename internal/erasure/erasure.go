@@ -41,7 +41,7 @@ const (
 	Components Scope = "components"
 	// RunSetups: the person's own run templates and their revisions, their
 	// group template-manager grants, and their name as the author of shared
-	// templates, revisions and grants, which stay without it.
+	// templates, revisions, grants and launch presets, which stay without it.
 	RunSetups Scope = "run_setups"
 	// MaskCopies: the masking manifests of the person's runs, after their live
 	// attaches and relays are fenced.
