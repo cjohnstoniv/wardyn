@@ -13,7 +13,37 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+// ConnectStage is the `wardyn-runnerd doctor` stage a failed connection or session belongs to, for the
+// offline summary: identity for a refused proof, proxy, dns and tls by the error's own type, tls for any
+// other dial failure (where doctor reports a connection that never opened), healthz for the rest (an
+// address that answered something other than the organisation's stream, a session that dropped).
+func ConnectStage(err error) string {
+	var verify *tls.CertificateVerificationError
+	var unknown x509.UnknownAuthorityError
+	var host x509.HostnameError
+	var invalid x509.CertificateInvalidError
+	var record tls.RecordHeaderError
+	var refused *proxyRefusedError
+	var dns *net.DNSError
+	var op *net.OpError
+	switch {
+	case errors.Is(err, ErrAuth) || errors.Is(err, ErrRevoked):
+		return types.RunnerStageIdentity
+	case errors.As(err, &refused), errors.As(err, &op) && op.Op == "proxyconnect":
+		return types.RunnerStageProxy
+	case errors.As(err, &verify), errors.As(err, &unknown), errors.As(err, &host), errors.As(err, &invalid), errors.As(err, &record):
+		return types.RunnerStageTLS
+	case errors.As(err, &dns):
+		return types.RunnerStageDNS
+	case errors.As(err, &op) && op.Op == "dial":
+		return types.RunnerStageTLS
+	}
+	return types.RunnerStageHealthz
+}
 
 // connectHint says what a failed dial most likely means and what to do, or "" when the error is not one
 // it recognises. It names hosts and certificate subjects only: a proxy URL may hold a credential, so it

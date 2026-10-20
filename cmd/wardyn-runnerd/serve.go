@@ -45,6 +45,8 @@ type serveOptions struct {
 	maxPodLifetime                               time.Duration
 	// folderRoots is --folder-root: the folders a --substrate folders runner shares (default: home).
 	folderRoots []string
+	// offline is what the next connect reports about why this runner could not connect or start.
+	offline *offlineLog
 }
 
 func (o serveOptions) recordingEnabled() (bool, error) {
@@ -123,10 +125,13 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 		if build == nil {
 			return errors.New("runner execution and durable offline handlers are unavailable")
 		}
+		opts.offline = newOfflineLog(stateDir, urlSecrets(opts.upstreamProxy))
 		runtime, err := build(cmd.Context(), identity, stateDir, opts)
 		if err != nil {
+			opts.offline.startFailed(err)
 			return err
 		}
+		runtime.hooks.ConnectFailed = opts.offline.connectFailed
 		if runtime.close != nil {
 			defer func() { retErr = errors.Join(retErr, runtime.close()) }()
 		}

@@ -46,6 +46,9 @@ type RunnerHooks struct {
 	ProxyImage func(string)
 	// StreamOffline releases per-connection PTY/exec resources, not sandboxes.
 	StreamOffline func(*Peer)
+	// ConnectFailed, when set, is told each error that ended a connection attempt or a session, except
+	// revocation and the run's own end.
+	ConnectFailed func(error)
 }
 
 // ClientConfig holds the registered identity and the shared HTTP transport.
@@ -147,6 +150,9 @@ func (c *Client) Run(ctx context.Context) error {
 		}
 		if errors.Is(err, ErrRevoked) {
 			return errors.Join(err, c.cfg.Hooks.Revoked(ctx))
+		}
+		if err != nil && ctx.Err() == nil && c.cfg.Hooks.ConnectFailed != nil {
+			c.cfg.Hooks.ConnectFailed(err)
 		}
 		if errors.Is(err, ErrGoaway) || errors.Is(err, ErrResumeGap) {
 			c.session, c.ready = "", false

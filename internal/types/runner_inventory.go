@@ -4,7 +4,10 @@
 package types
 
 import (
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -93,6 +96,79 @@ type RunnerView struct {
 	TrustSetAt *time.Time       `json:"trust_set_at,omitempty"`
 	// Pools are the owner's live Self-Hosted pools the runner is a member of, by name; [] for none.
 	Pools []RunnerPoolRef `json:"pools"`
+	// OfflineSummary is the runner's last report of why it could not reach the organisation, and
+	// RelayStatus its last report on its run relay; both runner_asserted, set on a one-runner read
+	// only, and absent until a runner that sends them has.
+	OfflineSummary *RunnerOfflineSummary `json:"offline_summary,omitempty"`
+	RelayStatus    *RunnerRelayStatus    `json:"relay_status,omitempty"`
+}
+
+// MaxRunnerReason bounds the reason of an offline summary or a relay status, in bytes, and
+// MaxRunnerOfflineSummaryBytes one encoded summary.
+const (
+	MaxRunnerReason              = 256
+	MaxRunnerOfflineSummaryBytes = 1024
+)
+
+// The stages an offline summary names: the `wardyn-runnerd doctor` stage names of the network stages a
+// connection fails at and of the engine stages that refuse serve's start.
+const (
+	RunnerStageDNS        = "dns"
+	RunnerStageProxy      = "proxy"
+	RunnerStageTLS        = "tls"
+	RunnerStageHealthz    = "healthz"
+	RunnerStageIdentity   = "identity"
+	RunnerStageEngine     = "engine"
+	RunnerStageProxyImage = "proxy-image"
+	RunnerStageRelay      = "relay"
+)
+
+// RunnerStages is the closed list of those names.
+var RunnerStages = []string{RunnerStageDNS, RunnerStageProxy, RunnerStageTLS, RunnerStageHealthz, RunnerStageIdentity,
+	RunnerStageEngine, RunnerStageProxyImage, RunnerStageRelay}
+
+// RunnerOfflineSummary is what a runner sends once it connects again after it could not: the first and
+// last failure since its last session, the stage that failed (a `wardyn-runnerd doctor` stage name) and
+// a short reason with any credential removed. ReportedAt is the organisation's receipt time.
+type RunnerOfflineSummary struct {
+	Stage          string    `json:"stage"`
+	Reason         string    `json:"reason"`
+	FirstFailureAt time.Time `json:"first_failure_at"`
+	LastFailureAt  time.Time `json:"last_failure_at"`
+	ReportedAt     time.Time `json:"reported_at,omitzero"`
+}
+
+// ClipRunnerReason is s on one line, printable, cut to MaxRunnerReason bytes at a character boundary. It
+// removes no credential: the caller scrubs first.
+func ClipRunnerReason(s string) string {
+	s = strings.Join(strings.Fields(strings.ToValidUTF8(s, "?")), " ")
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsPrint(r) {
+			return r
+		}
+		return '?'
+	}, s)
+	for len(s) > MaxRunnerReason {
+		_, size := utf8.DecodeLastRuneInString(s)
+		s = s[:len(s)-size]
+	}
+	return s
+}
+
+// Relay states a runner reports.
+const (
+	RelayReachable   = "reachable"
+	RelayUnreachable = "unreachable"
+)
+
+// RunnerRelayStatus is a Docker runner's last check of its run relay: State is RelayReachable or
+// RelayUnreachable, Since when it became so, Reason why it is unreachable ("" when reachable).
+// ReportedAt is the organisation's receipt time.
+type RunnerRelayStatus struct {
+	State      string    `json:"state"`
+	Since      time.Time `json:"since"`
+	Reason     string    `json:"reason,omitempty"`
+	ReportedAt time.Time `json:"reported_at,omitzero"`
 }
 
 // RunnerPoolRef names one pool a runner is a member of.

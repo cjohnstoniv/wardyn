@@ -76,6 +76,32 @@ func (r *localRelay) use(p relayPair) {
 	r.pair = p
 }
 
+func (r *localRelay) inUse() relayPair {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.pair
+}
+
+// answers dials every listener the relay holds, at its bind, and closes each connection before its first
+// byte, which forward drops without opening a stream. A relay no run has used yet holds none.
+func (r *localRelay) answers(ctx context.Context) error {
+	r.mu.Lock()
+	addrs := make([]string, 0, len(r.listeners))
+	for port := range r.listeners {
+		addrs = append(addrs, netip.AddrPortFrom(r.pair.bind, port).String())
+	}
+	r.mu.Unlock()
+	var d net.Dialer
+	for _, a := range addrs {
+		c, err := d.DialContext(ctx, "tcp", a)
+		if err != nil {
+			return fmt.Errorf("relay: nothing answers at %s: %w", a, err)
+		}
+		_ = c.Close()
+	}
+	return nil
+}
+
 // Ensure is the Docker driver's ControlPlaneRelay: the relay listens on its
 // bind at the port of u, the run's control-plane URL, and returns the target a
 // run's proxy reaches it at.

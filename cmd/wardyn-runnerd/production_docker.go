@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/containerd/errdefs"
@@ -65,7 +66,7 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 	defer cli.Close()
 	eng, err := readyEngine(ctx, cli, "docker engine not reachable (set DOCKER_HOST to the engine's socket if it is not the default)", opts.network, want)
 	if err != nil {
-		return runnerRuntime{}, err
+		return runnerRuntime{}, atStage(types.RunnerStageEngine, err)
 	}
 	relay := newLocalRelay(ctx)
 	// The decision sink before the runtime: its startup containment stops the runs' proxies, and one
@@ -82,8 +83,10 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 	if err != nil {
 		return runnerRuntime{}, errors.Join(err, sink.Close())
 	}
+	extras := sink.extras(sub, ev)
+	extras.report = connectReport{log: opts.offline, relay: newRelayWatch(relayReprobe(relay), opts.offline.secretsOrNil())}
 	// The runtime first: its startup containment pass stops lapsed runs even when the check below fails.
-	rt, err := localRunnerRuntime(ctx, identity, stateDir, sub, docker.SandboxRef, relay, dockerCapacity, sink.extras(sub, ev))
+	rt, err := localRunnerRuntime(ctx, identity, stateDir, sub, docker.SandboxRef, relay, dockerCapacity, extras)
 	if err != nil {
 		return runnerRuntime{}, errors.Join(err, sink.Close())
 	}
@@ -244,9 +247,28 @@ func chooseRelay(ctx context.Context, d *docker.Driver, image string, eng docker
 		err = d.EnsureProxyImage(ctx)
 	}
 	if err != nil {
-		return relayPair{}, fmt.Errorf("relay: the proxy image %s is not on this engine and could not be pulled (a registry that needs a login: docker pull it as this user first): %w", image, err)
+		return relayPair{}, atStage(types.RunnerStageProxyImage, fmt.Errorf("relay: the proxy image %s is not on this engine and could not be pulled (a registry that needs a login: docker pull it as this user first): %w", image, err))
 	}
-	return findRelay(ctx, d.ProbeRelay, eng, want)
+	pair, err := findRelay(ctx, d.ProbeRelay, eng, want)
+	return pair, atStage(types.RunnerStageRelay, err)
+}
+
+// relayReprobe is a serving runner's relay check (relayWatch): the engine answers and still admits the
+// bind in use (admittedEngine: the rule doctor's relay stage and serve's start apply), and every listener
+// the relay holds answers there. It starts no container: doctor's relay stage and serve's start run a
+// throwaway probe container, too costly to repeat every relayReprobeInterval.
+func relayReprobe(relay *localRelay) func(context.Context) error {
+	return func(ctx context.Context) error {
+		cli, err := client.New(client.FromEnv)
+		if err != nil {
+			return err
+		}
+		defer cli.Close()
+		if _, err := admittedEngine(ctx, cli, "docker engine not reachable", relay.inUse()); err != nil {
+			return err
+		}
+		return relay.answers(ctx)
+	}
 }
 
 // newLocalRelay is the relay for a Docker runtime; only the docker build has
@@ -341,6 +363,8 @@ type runtimeExtras struct {
 	started func(context.Context, *offline.Manager) error
 	// closeAlso runs when the runtime closes (the decision sink).
 	closeAlso func() error
+	// report is what caps carry beyond the substrate's own (offline summary, relay status).
+	report connectReport
 }
 
 func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, stateDir string, sub substrate.Substrate, ref func(uuid.UUID) string, relay *localRelay, capacity func(context.Context) placement.Capacity, extra runtimeExtras) (runnerRuntime, error) {
@@ -408,6 +432,35 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		// admission until required containment actually succeeds.
 		slog.WarnContext(ctx, "runner startup containment will retry", "error", err)
 	}
+	var online atomic.Pointer[runnerwire.Peer]
+	// sendCaps reports the runner's caps on peer; reprobe re-checks the relay first, and always sends
+	// even when nothing in the report is new (a fresh session's caps are required).
+	sendCaps := func(ctx context.Context, peer *runnerwire.Peer, reprobe, always bool) error {
+		_, keeps := sub.(runner.SandboxEnder)
+		support, err := sub.Classes(ctx)
+		if err != nil {
+			return err
+		}
+		// A host that cannot say its name reports none, and keeps the machine name it had.
+		machine, _ := os.Hostname()
+		arch := extra.arch
+		if arch == "" {
+			arch = engineArch(ctx)
+		}
+		caps := runnerwire.Caps{Support: support, Version: version.String(), MachineName: machine, Arch: arch, Capacity: capacity(ctx), BYOISelftest: dispatcher.Selftests(), Retire: true, Resident: dispatcher.Residents(), EndsUnkept: !keeps}
+		if !extra.report.fill(ctx, &caps, reprobe) && !always {
+			return nil
+		}
+		data, err := runnerwire.Marshal(caps)
+		if err != nil {
+			return err
+		}
+		if err := peer.EventAck(ctx, runnerwire.Event{Kind: runnerwire.EventCaps, Data: data}); err != nil {
+			return err
+		}
+		extra.report.sent(caps)
+		return nil
+	}
 	hooks := runnerwire.RunnerHooks{
 		Call: dispatcher.Call,
 		// The org never opens a stream toward a runner: a relay is the
@@ -421,22 +474,7 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		// erase runs (lock order: Resident, then Manager).
 		Revoked: func(ctx context.Context) error { return errors.Join(manager.Revoked(ctx), resident.EraseAll(ctx)) },
 		Replay: func(ctx context.Context, peer *runnerwire.Peer) error {
-			_, keeps := sub.(runner.SandboxEnder)
-			support, err := sub.Classes(ctx)
-			if err != nil {
-				return err
-			}
-			// A host that cannot say its name reports none, and keeps the machine name it had.
-			machine, _ := os.Hostname()
-			arch := extra.arch
-			if arch == "" {
-				arch = engineArch(ctx)
-			}
-			data, err := runnerwire.Marshal(runnerwire.Caps{Support: support, Version: version.String(), MachineName: machine, Arch: arch, Capacity: capacity(ctx), BYOISelftest: dispatcher.Selftests(), Retire: true, Resident: dispatcher.Residents(), EndsUnkept: !keeps})
-			if err != nil {
-				return err
-			}
-			if err := peer.EventAck(ctx, runnerwire.Event{Kind: runnerwire.EventCaps, Data: data}); err != nil {
+			if err := sendCaps(ctx, peer, true, true); err != nil {
 				return err
 			}
 			// Posture only gates runner_resident delivery; a refused report
@@ -448,20 +486,40 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 			}
 			return manager.Replay(ctx, peer)
 		},
-		Online: func(peer *runnerwire.Peer, _ bool) {
+		Online: func(peer *runnerwire.Peer, resumed bool) {
+			online.Store(peer)
 			manager.Online(peer)
 			streams.Online(peer)
 			relay.Online(peer)
+			if resumed {
+				// A resumed session sends no caps unless the relay check on this reconnect changed or a
+				// summary waits.
+				go func() {
+					if err := sendCaps(ctx, peer, true, false); err != nil {
+						slog.WarnContext(ctx, "runner caps after resume failed", "error", err)
+					}
+				}()
+			}
 			if reporter != nil {
 				go reporter.Watch(peer, postureInterval)
 			}
 		},
 		StreamOffline: func(peer *runnerwire.Peer) {
+			online.CompareAndSwap(peer, nil)
 			streams.Offline(peer)
 			relay.Offline(peer)
 		},
 	}
 	run := func(ctx context.Context) error {
+		if w := extra.report.relay; w != nil {
+			go w.run(ctx, func() {
+				if peer := online.Load(); peer != nil {
+					if err := sendCaps(ctx, peer, false, true); err != nil {
+						slog.WarnContext(ctx, "runner caps after a relay change failed", "error", err)
+					}
+				}
+			})
+		}
 		go func() {
 			if manager.IsRevoked() {
 				if err := resident.EraseAll(ctx); err != nil {
