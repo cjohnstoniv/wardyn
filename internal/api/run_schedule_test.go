@@ -4,9 +4,15 @@
 package api
 
 import (
+	"encoding/json"
+	"maps"
 	"net/http"
+	"os"
+	"slices"
 	"testing"
 	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 )
 
 // start_at is refused while the switch is off, malformed, past or more than seven days ahead, each with
@@ -62,5 +68,45 @@ func TestScheduledDeadline(t *testing.T) {
 	}
 	if got, want := scheduledDeadline(now, now.Add(scheduleMaxAhead), queueBackgroundWaitSec), now.Add(scheduleMaxAhead); !got.Equal(want) {
 		t.Errorf("seven days ahead = %s; want %s", got, want)
+	}
+}
+
+// GET /setup/status says whether scheduled runs are on, to a member too; /healthz, which is anonymous,
+// says nothing new.
+func TestSetupStatus_FeaturesScheduledRuns(t *testing.T) {
+	h := newHarness(t)
+	cfg := baseTestConfig(h, &integStore{govEscapeStore: newGovEscapeStore(&capStore{})})
+	cfg.Runner = &fakeRunner{}
+	cfg.Secrets = &memSecrets{m: map[string][]byte{}}
+	cfg.OIDC = &oidc.Authenticator{}
+	srv := New(cfg)
+	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
+	for _, on := range []bool{true, false} {
+		t.Setenv(envScheduledRuns, map[bool]string{true: "1", false: ""}[on])
+		for who, c := range map[string]*http.Cookie{"admin": ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin), "member": member} {
+			code, st := decodeSetupSSO(t, srv, c)
+			if code != http.StatusOK || st.Features.ScheduledRuns != on {
+				t.Errorf("%s with the switch %v: %d features %+v", who, on, code, st.Features)
+			}
+		}
+	}
+	if got := redactSetupStatusForUser(SetupStatus{Features: SetupFeatures{ScheduledRuns: true}}); !got.Features.ScheduledRuns {
+		t.Error("the member redaction dropped features")
+	}
+
+	t.Setenv(envScheduledRuns, "1")
+	want, err := os.ReadFile("testdata/healthz_no_org_golden.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := do(t, newHarness(t).srv, http.MethodGet, "/healthz", "", "").Body.Bytes()
+	if keys := func(b []byte) []string {
+		var m map[string]any
+		if err := json.Unmarshal(b, &m); err != nil {
+			t.Fatal(err)
+		}
+		return slices.Sorted(maps.Keys(m))
+	}; !slices.Equal(keys(got), keys(want)) {
+		t.Errorf("/healthz keys with the switch on = %v; want the golden's %v", keys(got), keys(want))
 	}
 }

@@ -325,6 +325,12 @@ From a shell, `wardyn run sign-in <run-id>` prints the same answer.
 - A super admin skips the profile's limits only; the pool and the deployment still bind.
 - `GET /runs?no_end=1` lists live runs with no end.
 
+## Scheduled runs
+
+- `start_at` and `start_time_zone` on `CreateRunRequest` start a run once, later: at most 7 days ahead, when the server sets `WARDYN_SCHEDULED_RUNS` ([Scheduled runs](operations/runner-pools.md#scheduled-runs)).
+- The run is `QUEUED` with `queue.reason` `scheduled`, `queue.start_at` and `queue.time_zone`; cancel it with `KillRun`.
+- `GET /setup/status` carries `features.scheduled_runs`, so a client offers scheduling only when it is on.
+
 ## Policy preview
 
 `POST /api/v1/runs/policy-preview` accepts the same `CreateRunRequest` JSON as create and preflight, with the same member authentication and cookie CSRF checks.

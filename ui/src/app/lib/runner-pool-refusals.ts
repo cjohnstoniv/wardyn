@@ -96,6 +96,7 @@ export const RUN_END_REASON_SENTENCE = {
   max_lifetime_reached: "This run reached its maximum lifetime and was ended.",
   end_reached: "This run reached its end time and was ended.",
   queue_timeout: "This run waited too long for a free slot and was not started.",
+  queue_sign_in_timeout: "This run waited for you to sign in to its model provider again, and was not started.",
   queue_profile_changed: "Your governance profile changed while this run waited. Start it again.",
   queue_policy_changed: "The policy this run used changed while it waited. Start it again to review it.",
   queue_portal_revoked: "The portal that launched this run was removed while it waited.",

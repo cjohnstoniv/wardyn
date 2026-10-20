@@ -134,7 +134,7 @@ With [`WARDYN_SCHEDULED_RUNS`](../ENV.md#wardyn_scheduled_runs) set, a run can b
 - It must be in the future and at most 7 days ahead, else `start_at_past` or `start_at_too_far`; switched off, `scheduled_runs_off`.
 - The run waits `QUEUED` with the reason `scheduled` and its `queue.start_at`, holding no credential, until then.
 - At its time it joins its pool's line and starts like any waiting run, after the same checks. Its wait counts from then, held at most 7 days from the request.
-- If its owner's model sign-in has expired with nothing to renew it, it waits with the reason `owner_sign_in` until they sign in again.
+- If its owner's model sign-in has expired with nothing to renew it, it waits with the reason `owner_sign_in` until they sign in again; still waiting at its deadline, it ends `queue_sign_in_timeout`.
 - Cancel it like any waiting run. Switching off refuses new schedules only.
 
 ## Your own pools

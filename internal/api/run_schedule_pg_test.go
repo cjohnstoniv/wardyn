@@ -147,3 +147,28 @@ func TestPG_ScheduledRunWaitsForTheOwnersSignIn(t *testing.T) {
 	e.sweep()
 	e.waitStarted(out.ID)
 }
+
+// A scheduled run still waiting for its owner's sign-in at its deadline ends saying so, not as a run
+// that waited for a slot.
+func TestPG_ScheduledRunSignInWaitEndsAtTheDeadline(t *testing.T) {
+	e := newQueueEnv(t)
+	t.Setenv(envScheduledRuns, "1")
+	_, out := e.awsSSOSchedule()
+	scope := chosenProvider{provider: awsSSOTestProvider(), owner: e.personP}.awsScope()
+	if err := e.srv.cfg.Secrets.For(scope.owner).Delete(context.Background(), scope.ssoSecret()); err != nil {
+		t.Fatal(err)
+	}
+	e.due(out.ID)
+	e.sweep()
+	e.exec(`UPDATE run_queue SET deadline_at = now() - interval '1 second' WHERE run_id = $1`, out.ID)
+	e.sweep()
+	r := e.run(out.ID)
+	if r.State != types.RunFailed || r.StatusDetail != statusDetailQueuePrefix+string(types.RunEndQueueSignInTimeout) ||
+		r.FailureHint != types.RunEndQueueSignInTimeout.Sentence() {
+		t.Fatalf("a run whose sign-in wait passed its deadline = %s %q %q", r.State, r.StatusDetail, r.FailureHint)
+	}
+	rows := e.audits(out.ID, "run.queue.expire")
+	if len(rows) != 1 || queueAuditData(t, rows[0])["reason"] != string(types.RunEndQueueSignInTimeout) {
+		t.Errorf("run.queue.expire rows = %+v; want one with reason %s", rows, types.RunEndQueueSignInTimeout)
+	}
+}

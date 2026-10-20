@@ -277,7 +277,8 @@ func (s *Server) SweepRunQueue(ctx context.Context) error {
 	)
 }
 
-// expireQueued ends each waiting run past its deadline: FAILED queue_timeout, with run.queue.expire.
+// expireQueued ends each waiting run past its deadline: FAILED queue_timeout, or queue_sign_in_timeout
+// for a scheduled run last held for its owner's sign-in, with run.queue.expire.
 func (s *Server) expireQueued(ctx context.Context) error {
 	qs, _ := s.queueStore()
 	now := s.cfg.Now().UTC()
@@ -288,7 +289,7 @@ func (s *Server) expireQueued(ctx context.Context) error {
 	}
 	var errs []error
 	for _, e := range expired {
-		reason := types.RunEndQueueTimeout
+		reason := s.queueExpiryReason(ctx, e)
 		applied, err := s.exitQueued(ctx, e.RunID, types.RunFailed, statusDetailQueuePrefix+string(reason), reason.Sentence())
 		if err != nil {
 			errs = append(errs, err)
@@ -300,9 +301,20 @@ func (s *Server) expireQueued(ctx context.Context) error {
 		waited := now.Sub(e.QueuedAt)
 		s.metrics.queueWait(queueOutcomeTimeout, waited)
 		s.recordAudit(ctx, s.auditEvent(&e.RunID, types.ActorSystem, "wardynd", "run.queue.expire", e.RunID.String(), "success",
-			mustJSON(map[string]any{"waited_sec": int(waited.Seconds()), "deadline_at": e.DeadlineAt, "pool_id": e.PoolID})))
+			mustJSON(map[string]any{"waited_sec": int(waited.Seconds()), "deadline_at": e.DeadlineAt, "pool_id": e.PoolID, "reason": reason})))
 	}
 	return errors.Join(errs...)
+}
+
+// queueExpiryReason is why a waiting run past its deadline ends: a scheduled run whose last wait was
+// its owner's sign-in says so, every other run waited too long for a slot.
+func (s *Server) queueExpiryReason(ctx context.Context, e store.RunQueueEntry) types.RunEndReason {
+	if e.StartAt != nil {
+		if run, err := s.cfg.Store.GetRun(ctx, e.RunID); err == nil && run.StatusDetail == statusDetailQueuePrefix+string(runnerpool.WaitOwnerSignIn) {
+			return types.RunEndQueueSignInTimeout
+		}
+	}
+	return types.RunEndQueueTimeout
 }
 
 // queueLeaseStale is how long a promoted run's start may go without touching its lease before the
