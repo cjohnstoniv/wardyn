@@ -21,7 +21,6 @@ import { NewRunDraftProvider, useNewRunDispatch, useNewRunDraft } from "../../ne
 import { AnnounceContext } from "../step-shell";
 import { FilesRoute } from "./files-route";
 import { keepDoor } from "./keep-work-folder";
-import type { KeptMeDrive } from "./files-seams";
 
 const wfetchMock = vi.fn();
 vi.mock("../../../../../lib/api/core", async (orig) => ({ ...(await orig<typeof import("../../../../../lib/api/core")>()), wfetch: (...a: unknown[]) => wfetchMock(...a) }));
@@ -35,7 +34,8 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 const ONLY_MAIN: RunIntent = { shape: "agent_task", experience: "background", no_repositories_or_drives: true };
 const OPEN: MemberDriveCreate = { ...CREATE_ALLOWED, keep_work_folder: true, enforcement: "none" };
 const LIMIT: MemberDriveCreate = { ...CREATE_DOORS.limit_reached, keep_work_folder: true };
-const KEPT: KeptMeDrive = { ...DRIVE_OWNED, id: "d-kept", name: "nightly-tests 1a2b3c4d", target: "/home/agent/drives/nightly-tests", enforcement: "none", kept_from_run: "nightly-tests" };
+const RUN_ID = "7c1d0f4e-2b8a-4e53-9a60-1f0e5d3c8b21";
+const KEPT: MeDrive = { ...DRIVE_OWNED, id: "d-kept", name: "nightly-tests 1a2b3c4d", target: "/home/agent/drives/nightly-tests", enforcement: "none", kept_from_run: RUN_ID, kept_from_run_title: "nightly-tests" };
 
 let create: MemberDriveCreate | undefined;
 let drives: MeDrive[];
@@ -198,6 +198,17 @@ describe("a kept work folder in the Choose step", () => {
     expect(option).toHaveTextContent("/home/agent/drives/nightly-tests");
     await userEvent.click(within(option).getByRole("button", { name: NR_FILES.DRIVE_SIZE_NOT_ENFORCED }));
     expect(await screen.findByText(NR_FILES.DRIVE_SIZE_NOT_ENFORCED_TIP)).toBeInTheDocument();
+  });
+
+  it("shows the run's title, never its id, and a short neutral line when the run is gone", async () => {
+    drives = [DRIVE_LEGACY, KEPT, { ...KEPT, id: "d-gone", name: "old-run 5e6f7a8b", kept_from_run_title: undefined }];
+    const dialog = await openChoose();
+    const kept = (await within(dialog).findByRole("radio", { name: /^nightly-tests 1a2b3c4d/ })).closest("label")!;
+    expect(kept).toHaveTextContent(NR_FILES.DRIVE_KEPT_FROM("nightly-tests"));
+    expect(kept).not.toHaveTextContent(RUN_ID);
+    const gone = (await within(dialog).findByRole("radio", { name: /^old-run 5e6f7a8b/ })).closest("label")!;
+    expect(gone).toHaveTextContent(NR_FILES.DRIVE_KEPT_FROM_UNTITLED);
+    expect(gone).not.toHaveTextContent(RUN_ID);
   });
 
   it("lists a drive that is not a kept folder as it always was", async () => {

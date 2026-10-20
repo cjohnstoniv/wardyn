@@ -413,6 +413,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `KEEP_LIMIT(n, limit)` | mock | You have {n} of {limit} drives. Delete one to keep this run's work folder. |
 | `KEEP_LIMIT_HINT` | mock | Or untick “Reuse it across runs” to launch without keeping it. |
 | `DRIVE_KEPT_FROM(run)` | mock | From run {run} · Kept until you delete it. |
+| `DRIVE_KEPT_FROM_UNTITLED` | deviation (lead wording 2026-10-20, #1991) | From an earlier run · Kept until you delete it. |
 | `DRIVE_SIZE_NOT_ENFORCED` | mock | Size not enforced |
 | `DRIVE_SIZE_NOT_ENFORCED_TIP` | mock | A Docker volume has no size cap. |
 | `ATTACH_TITLE` | deviation (owner-approved Files prototype 2026-10-13) | Repositories, drives and folders |

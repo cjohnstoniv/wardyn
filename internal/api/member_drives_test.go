@@ -38,6 +38,15 @@ type memberDriveStore struct {
 	starting map[string]bool
 	// begins counts tombstone writes (BeginMemberDriveDelete, either route).
 	begins int
+	// runs is what GetRun answers; a run not in it is gone.
+	runs map[uuid.UUID]types.AgentRun
+}
+
+func (s *memberDriveStore) GetRun(_ context.Context, id uuid.UUID) (types.AgentRun, error) {
+	if r, ok := s.runs[id]; ok {
+		return r, nil
+	}
+	return types.AgentRun{}, store.ErrNotFound
 }
 
 func newMemberDriveStore() *memberDriveStore {
@@ -76,7 +85,9 @@ func (s *memberDriveStore) CreateMemberDrive(_ context.Context, d types.UserDriv
 			return types.UserDrive{}, store.ErrMemberDriveNameTaken
 		}
 	}
-	d.ID = uuid.New()
+	if d.ID == uuid.Nil { // as the store keeps a caller's id
+		d.ID = uuid.New()
+	}
 	d.HomeTemplate, d.ObjectScheme, d.Writable, d.Reclaim = types.HomeTemplateHash, types.DriveObjectSchemeID, true, types.DriveReclaimDelete
 	s.drives[d.ID] = d
 	return d, nil

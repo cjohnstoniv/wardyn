@@ -274,8 +274,29 @@ func memberMeDrive(d types.UserDrive) client.MeDrive {
 	return client.MeDrive{
 		ID: d.ID.String(), Name: d.Name, Section: client.MeDriveSectionUser, Source: client.MeDriveSourcePersonal,
 		Backend: d.Backend, Target: runner.DriveTargetFor(types.ResolvedDrive{Drive: d}, false), Writable: true,
-		SizeMiB: d.SizeMiB, Enforcement: types.EnforcementFor(d.Backend), Owned: true,
+		SizeMiB: d.SizeMiB, Enforcement: types.EnforcementFor(d.Backend), Owned: true, KeptFromRun: keptFromRunOf(d),
 	}
+}
+
+func keptFromRunOf(d types.UserDrive) string {
+	if d.KeptFromRun == nil {
+		return ""
+	}
+	return d.KeptFromRun.String()
+}
+
+// keptFromRunTitle is the title of the run a member drive was kept from, read
+// now so a renamed run shows its current title. "" when the drive was made by
+// hand, the run is gone or untitled, or the run is not its owner's.
+func (s *Server) keptFromRunTitle(ctx context.Context, d types.UserDrive) string {
+	if d.KeptFromRun == nil {
+		return ""
+	}
+	run, err := s.cfg.Store.GetRun(ctx, *d.KeptFromRun)
+	if err != nil || run.CreatedBy != d.OwnerSubject {
+		return ""
+	}
+	return run.Title
 }
 
 // auditMemberDriveCreate writes drive.member.create. count is the owner's

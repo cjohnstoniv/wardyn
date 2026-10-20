@@ -156,6 +156,8 @@ func (s *Server) meDrives(ctx context.Context, poolID string) ([]client.MeDrive,
 			row.Writable, row.SizeMiB, row.Enforcement = d.resolved.Writable, d.resolved.SizeMiB, d.resolved.Enforcement
 		}
 		row.UnavailableReason = s.driveUnavailableHere(ctx, d, pool, checked, remoteDenied)
+		row.KeptFromRun = keptFromRunOf(drive)
+		row.KeptFromRunTitle = s.keptFromRunTitle(ctx, drive)
 		out = append(out, row)
 	}
 	return out, checked, ""

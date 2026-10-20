@@ -343,3 +343,83 @@ func TestGetMemberDrive(t *testing.T) {
 		}
 	}
 }
+
+// TestMemberDriveKeptFromRun: a drive kept from a run reads back with that
+// run on every member read and on the admin list; a drive made by hand reads
+// back with none.
+func TestMemberDriveKeptFromRun(t *testing.T) {
+	st := store.NewPG(runsPGPoolIsolated(t))
+	ctx := context.Background()
+	run := uuid.New()
+	kept := memberDrive("alice", "Kept")
+	kept.ID, kept.KeptFromRun = uuid.New(), &run
+	if d, err := st.CreateMemberDrive(ctx, kept, 5); err != nil || d.ID != kept.ID || d.KeptFromRun == nil || *d.KeptFromRun != run {
+		t.Fatalf("CreateMemberDrive(kept) = %+v, %v; want id %s from run %s", d, err, kept.ID, run)
+	}
+	hand, err := st.CreateMemberDrive(ctx, memberDrive("alice", "By hand"), 5)
+	if err != nil || hand.KeptFromRun != nil {
+		t.Fatalf("CreateMemberDrive(by hand) = %+v, %v; want no run", hand, err)
+	}
+	if got, err := st.GetMemberDriveOf(ctx, "alice", kept.ID); err != nil || got.KeptFromRun == nil || *got.KeptFromRun != run {
+		t.Fatalf("GetMemberDriveOf(kept) = %+v, %v; want from run %s", got, err, run)
+	}
+	mine, err := st.ListMemberDrivesOf(ctx, "alice")
+	if err != nil || len(mine) != 2 {
+		t.Fatalf("ListMemberDrivesOf = %+v, %v", mine, err)
+	}
+	for _, d := range mine {
+		if (d.ID == kept.ID) != (d.KeptFromRun != nil) {
+			t.Errorf("ListMemberDrivesOf: %s kept_from_run = %v", d.Name, d.KeptFromRun)
+		}
+	}
+	all, err := st.ListUserDrives(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range all {
+		if d.ID == kept.ID && (d.KeptFromRun == nil || *d.KeptFromRun != run) {
+			t.Errorf("ListUserDrives: kept drive kept_from_run = %v, want %s", d.KeptFromRun, run)
+		}
+	}
+}
+
+// TestCreateQueuedRunInsertsItsKeptDrive: a waiting run's kept drive commits
+// with the run and its queue row, and a drive the owner's count refuses leaves
+// neither behind.
+func TestCreateQueuedRunInsertsItsKeptDrive(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	pg := store.NewPG(pool)
+	ctx := context.Background()
+	p := cappedPool(t, pg, 1)
+	now := time.Now().UTC()
+	queue := func(limit int) (types.AgentRun, types.UserDrive, error) {
+		r := poolRun(p, types.RunQueued, "alice")
+		d := memberDrive("alice", "Kept "+r.ID.String()[:8])
+		d.ID, d.KeptFromRun = uuid.New(), &r.ID
+		created, err := pg.CreateQueuedRun(ctx, r, store.RunQueueEntry{QueuedAt: now, DeadlineAt: now.Add(time.Hour), KeptDrive: &d, KeptDriveLimit: limit}, 0)
+		if err == nil {
+			r = created
+		}
+		return r, d, err
+	}
+	r, d, err := queue(1)
+	if err != nil {
+		t.Fatalf("CreateQueuedRun with a kept drive: %v", err)
+	}
+	if got, err := pg.GetMemberDriveOf(ctx, "alice", d.ID); err != nil || got.KeptFromRun == nil || *got.KeptFromRun != r.ID {
+		t.Fatalf("the kept drive once the queued run committed = %+v, %v; want it, from run %s", got, err, r.ID)
+	}
+	refused, d, err := queue(1)
+	if !errors.Is(err, store.ErrMemberDriveLimit) {
+		t.Fatalf("CreateQueuedRun at the owner's drive limit = %v, want ErrMemberDriveLimit", err)
+	}
+	if _, err := pg.GetRun(ctx, refused.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("the refused run's row: %v, want ErrNotFound", err)
+	}
+	if n := queueRows(t, pool, refused.ID); n != 0 {
+		t.Errorf("the refused run left %d queue rows, want none", n)
+	}
+	if _, err := pg.GetMemberDriveOf(ctx, "alice", d.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("the refused run's drive: %v, want ErrNotFound", err)
+	}
+}

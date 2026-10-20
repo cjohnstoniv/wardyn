@@ -30,6 +30,10 @@ export interface MeDrive {
   unavailable_reason?: MeDriveUnavailableReason;
   /** The caller created it; only an owned drive takes DELETE /me/drives/{id}. */
   owned: boolean;
+  /** The run whose work folder this drive kept (keep_work_folder); absent on a drive made by hand. */
+  kept_from_run?: string;
+  /** That run's title when the catalogue was read; absent when the run is gone or untitled. */
+  kept_from_run_title?: string;
 }
 
 /** GET /me/drives (pkg/client.MeDriveCatalogue). */
@@ -62,9 +66,9 @@ export interface MemberDriveCreate {
   count: number;
   /** Drives per person; 0 when the switch is off. */
   limit: number;
-  /** Whether a run may keep its work folder as a drive (the keep_main_drive switch). */
+  /** The keep_main_drive switch, reported whether or not allowed. */
   keep_work_folder: boolean;
-  /** What binds a new drive's size here; "none" on Docker, whose volumes have no size cap. */
+  /** What binds a new drive's size here; "none" on Docker. */
   enforcement?: StorageEnforcement;
 }
 

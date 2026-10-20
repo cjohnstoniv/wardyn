@@ -116,7 +116,8 @@
 # docs/OPERATIONS.md 57415 = ours 56767 + theirs 57392 - base 56744 at the 0.10 merge of main (W2) into HYBB.
 # docs/OPERATIONS.md 57478 = ours 56830 + theirs 57392 - base 56744 at the 0.10 merge of main (W2) into SEC-1c.
 # docs/OPERATIONS.md 57501 = ours 57415 + theirs 57478 - base 57392 at the 0.10 W3 merge of SEC-1c onto the train.
-docs/OPERATIONS.md=57501
+# docs/OPERATIONS.md 57697 adds 196 over 57501, measured: #1991 keep_work_folder (round 1): migration 0199, the keep_main_drive row and the Keep a run's work folder block.
+docs/OPERATIONS.md=57697
 # docs/OPERATIONS.md 55840 adds 124 over 55716, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # docs/OPERATIONS.md 55867 adds 27 over 55840, measured: a run whose runner cannot be asked falls back to this deployment's runner, the older-runner exception, pooled runs, and the runner_offline gap reason.
 # docs/OPERATIONS.md 55891 adds 24 over 55867, measured: with several executors and no pool, the executor a run lands on, and once its sandbox exists the one that holds it, decides where its output comes from.

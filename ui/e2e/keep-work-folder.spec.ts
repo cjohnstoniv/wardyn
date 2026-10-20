@@ -19,7 +19,7 @@ const POOL = { id: "f2222222-2222-4222-8222-222222222222", name: "General", host
 const OPEN = { allowed: true, count: 1, limit: 3, keep_work_folder: true, enforcement: "none" };
 const KEPT_ROW = {
   id: "f4444444-4444-4444-8444-444444444444", name: "nightly-tests 1a2b3c4d", section: "user", source: "personal", backend: "docker_volume",
-  target: "/home/agent/drives/nightly-tests", writable: true, enforcement: "none", legacy: false, owned: true, kept_from_run: "nightly-tests",
+  target: "/home/agent/drives/nightly-tests", writable: true, enforcement: "none", legacy: false, owned: true, kept_from_run: "7c1d0f4e-2b8a-4e53-9a60-1f0e5d3c8b21", kept_from_run_title: "nightly-tests",
 };
 
 type Create = Record<string, unknown>;
@@ -164,6 +164,7 @@ test.describe("New Run: keep the work folder", () => {
     await dialog.getByRole("button", { name: new RegExp(`^${NR_FILES.KIND_USER_DRIVE}`) }).click();
     const option = dialog.getByRole("radiogroup").locator("label").filter({ hasText: KEPT_ROW.name });
     await expect(option).toContainText(NR_FILES.DRIVE_KEPT_FROM("nightly-tests"));
+    await expect(option).not.toContainText(KEPT_ROW.kept_from_run);
     await expect(option).toContainText(KEPT_ROW.target);
     await expect(option.getByText(NR_FILES.DRIVE_SIZE_NOT_ENFORCED)).toBeVisible();
     await option.getByRole("button", { name: NR_FILES.DRIVE_SIZE_NOT_ENFORCED }).click();

@@ -183,6 +183,8 @@ export const NR_FILES = {
     `You have ${n} of ${limit} drives. Delete one to keep this run's work folder.`,
   KEEP_LIMIT_HINT: "Or untick “Reuse it across runs” to launch without keeping it.",
   DRIVE_KEPT_FROM: (run: string | number) => `From run ${run} · Kept until you delete it.`,
+  /** Not on the boards: the run's title is gone or empty, so the line names no run. */
+  DRIVE_KEPT_FROM_UNTITLED: "From an earlier run · Kept until you delete it.",
   DRIVE_SIZE_NOT_ENFORCED: "Size not enforced",
   DRIVE_SIZE_NOT_ENFORCED_TIP: "A Docker volume has no size cap.",
   // Owner-approved Files prototype (2026-10-13): one list of cards, the Add / Edit dialog and the starting folder.
