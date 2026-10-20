@@ -105,6 +105,7 @@
 # 0.9.4 L8: docs/OPERATIONS.md 56344 adds 133 over 56211: the second-user role map and the internal_hosts ClusterIP rule.
 # 0.10 MDL: docs/OPERATIONS.md 57041 adds 425 over 56616, measured: #2957 the Local model server section (local_model provider, its http-with-auth rule).
 # 0.10 W1 train: docs/OPERATIONS.md 56744 = 56446 (main, measured) + 34 (API-4) + 153 (TEST-1) + 48 (API-2) + 39 (API-5) + 24 (HYB-A), each lane's measured growth; every lane fit under 56616 alone.
+# docs/OPERATIONS.md 56830 adds 86 over 56744: how long a run's AWS role credentials live and the PT1H lever, measured at the main merge.
 # 0.10 SEC-2c: docs/OPERATIONS.md 56777 adds 33 over 56744, measured: the 0196 deprovision-event-pin migration line.
 # #2822: docs/OPERATIONS.md 56764 adds 20 over 56744, measured: the 0196 inner_walls migration in the migrator rationale.
 # docs/OPERATIONS.md 56797 = ours 56777 + theirs 56764 - base 56744 at the 0.10 W2 merge of HRN onto the train.
@@ -112,7 +113,9 @@
 # docs/OPERATIONS.md 57392 = ours 56797 + theirs 57339 - base 56744 at the 0.10 W2 merge of MDL onto the train.
 # 0.10 HYBB (#2982): docs/OPERATIONS.md 56767 adds 23, measured: the 0198 migration line.
 # docs/OPERATIONS.md 57415 = ours 56767 + theirs 57392 - base 56744 at the 0.10 merge of main (W2) into HYBB.
-docs/OPERATIONS.md=57415
+# docs/OPERATIONS.md 57478 = ours 56830 + theirs 57392 - base 56744 at the 0.10 merge of main (W2) into SEC-1c.
+# docs/OPERATIONS.md 57501 = ours 57415 + theirs 57478 - base 57392 at the 0.10 W3 merge of SEC-1c onto the train.
+docs/OPERATIONS.md=57501
 # docs/OPERATIONS.md 55840 adds 124 over 55716, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # docs/OPERATIONS.md 55867 adds 27 over 55840, measured: a run whose runner cannot be asked falls back to this deployment's runner, the older-runner exception, pooled runs, and the runner_offline gap reason.
 # docs/OPERATIONS.md 55891 adds 24 over 55867, measured: with several executors and no pool, the executor a run lands on, and once its sandbox exists the one that holds it, decides where its output comes from.

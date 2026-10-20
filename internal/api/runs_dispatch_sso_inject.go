@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -179,7 +180,7 @@ func ssoPortalMITMEntry(ssoRegion, endpointOverride string) string {
 // onto whatever answered there.
 func (s *Server) authorBedrockSSOInjection(ctx context.Context, run types.AgentRun, t llmTransport,
 	sso awsSSOScope, injections []runner.InjectionGrant,
-) ([]runner.InjectionGrant, []string, bool) {
+) ([]runner.InjectionGrant, []string, *proxy.AWSSigV4Config, bool) {
 	// I3, authored at dispatch. Every field resolveAWSSSOInjection compares.
 	return s.authorAWSSSOGrant(ctx, run, awsSSOScopeSnapshot{
 		OwnerSubject:     sso.owner,
@@ -189,16 +190,20 @@ func (s *Server) authorBedrockSSOInjection(ctx context.Context, run types.AgentR
 		SSORoleName:      t.bedrock.ssoRoleName,
 		Region:           t.bedrock.ssoRegion,
 		ProviderUID:      sso.provider,
-	}, injections)
+	}, injections, t.bedrock.sigv4Hosts)
 }
 
 // authorAWSSSOGrant is the grant and the MITM entry both AWS sign-in lanes
 // share, a Bedrock provider's and an AWS CLI row's: sn is the dispatch-time
 // snapshot the sink re-derives and compares on every resolve, and its region,
 // account and role pin the portal host and the one request the session rides.
+//
+// With sigv4Hosts (a re-signed lane, runs_dispatch_aws_sigv4.go) the same grant
+// goes to the proxy's re-signer instead: no injection rule and no portal MITM
+// entry, so no request from the sandbox can carry the session.
 func (s *Server) authorAWSSSOGrant(ctx context.Context, run types.AgentRun, sn awsSSOScopeSnapshot,
-	injections []runner.InjectionGrant,
-) ([]runner.InjectionGrant, []string, bool) {
+	injections []runner.InjectionGrant, sigv4Hosts []string,
+) ([]runner.InjectionGrant, []string, *proxy.AWSSigV4Config, bool) {
 	portalHost := ssoPortalHost(sn.Region, s.cfg.AWSSSOEndpointOverride)
 	// The port the run actually reaches, not a hard-coded 443.
 	// ssoEgressHosts already honours the override's port, so an override on any
@@ -268,12 +273,16 @@ func (s *Server) authorAWSSSOGrant(ctx context.Context, run types.AgentRun, sn a
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "could not record the AWS SSO credential grant")
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": "aws sso inject grant: " + gerr.Error()})))
-		return injections, nil, false
+		return injections, nil, nil, false
+	}
+	if sigv4Hosts != nil {
+		return injections, nil, &proxy.AWSSigV4Config{GrantID: grantID, PortalHost: portalHost,
+			AccountID: sn.SSOAccountID, RoleName: sn.SSORoleName, Hosts: sigv4Hosts}, true
 	}
 	if rule, derr := injectionRuleFromScope(scope); derr == nil {
 		injections = append(injections, runner.InjectionGrant{GrantID: grantID, Rule: rule})
 	}
-	return injections, mitmHosts, true
+	return injections, mitmHosts, nil, true
 }
 
 // awsSSORoleCredentialsPath is the ONE portal path a Phase-B run's session is

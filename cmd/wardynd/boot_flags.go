@@ -288,7 +288,10 @@ type bootFlags struct {
 	// awsSSOProxyInject was the PHASE B kill switch; its `off` (the token written
 	// into the sandbox) is retired and refused by refuseAWSSSOProxyInjectOff. A
 	// STRING, not a bool flag, so an unrecognised value still takes the default.
-	awsSSOProxyInject  *string
+	awsSSOProxyInject *string
+	// awsSigV4AtProxy is AWS re-signing at the proxy, off by default
+	// (api.ResolveAWSSigV4AtProxy): only on, true or 1 turns it on.
+	awsSigV4AtProxy    *string
 	allowTestEndpoints *bool
 	// ssoRefresh is the AWS SSO renewal tuning, validated at boot.
 	ssoRefresh awsSSORefreshFlags
@@ -580,6 +583,7 @@ func parseBootFlags() *bootFlags {
 
 		awsSSOEndpointOverride: flagEnv("aws-sso-endpoint-override", "WARDYN_AWS_SSO_ENDPOINT_OVERRIDE", "", "TEST ONLY: re-point both AWS IAM Identity Center services (sso-oidc and the sso portal) at this base URL, so an AWS SSO walk can run with no real AWS tenant. Requires -allow-test-endpoints; warns at every boot. Empty (default) uses the real AWS endpoints"),
 		awsSSOProxyInject:      flagEnv("aws-sso-proxy-inject", "WARDYN_AWS_SSO_PROXY_INJECT", api.AWSSSOProxyInjectFlagDefault(), `"on": inject a captured AWS SSO session proxy-side, leaving only a placeholder in the sandbox. "off" was removed in 0.10.0 and refuses boot; an unrecognised value takes the default`),
+		awsSigV4AtProxy:        flagEnv("aws-sigv4-at-proxy", "WARDYN_AWS_SIGV4_AT_PROXY", api.AWSSigV4AtProxyFlagDefault, `"on" or "off": on, an AWS sign-in lane's sandbox holds a placeholder key pair and the proxy re-signs each AWS request with role credentials the sandbox never holds; a lane with a host the proxy cannot re-sign stays as it was. Applies to new dispatches only; anything but on is off`),
 		ssoRefresh:             registerAWSSSORefreshFlags(),
 		allowTestEndpoints:     flagBool("allow-test-endpoints", "WARDYN_ALLOW_TEST_ENDPOINTS", false, "acknowledge this is a TEST deployment; unlocks -aws-sso-endpoint-override and a model provider's unencrypted http:// bedrock.base_url, both refused otherwise. Never set on a deployment holding a real credential (default false)"),
 		// harnessLoginCPUMillis/harnessLoginMemoryMiB (#1100): see api.Config.HarnessLoginCPUMillis/HarnessLoginMemoryMiB.

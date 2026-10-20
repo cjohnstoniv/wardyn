@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
 // mavenProxyOpts builds the MAVEN_OPTS JVM proxy sysprops that route Maven
@@ -213,6 +214,9 @@ type bedrockAuth struct {
 	// running sandbox never changes lane under the operator's flip. False =
 	// unchanged, byte for byte.
 	ssoProxyInject bool
+	// sigv4Hosts are the hosts the proxy re-signs for this lane (WARDYN_AWS_SIGV4_AT_PROXY);
+	// nil when it does not, which is every lane while the switch is off.
+	sigv4Hosts []string
 	// maskErr is why the captured credential could not be registered for
 	// masking (SSO lane only); a run is never started with it.
 	maskErr error
@@ -352,8 +356,8 @@ const awsSSOPlaceholderCacheTTL = 30 * 24 * time.Hour
 // newline-delimited "<home-relative-path>\t<base64(content)>" records (see
 // encodeArtifactConfig, reused here as-is). agent-run-lib.sh materializes it
 // before claude/aws-sdk runs (materialize_aws_sso_config, in
-// deploy/images/common/agent-run-lib.sh).
-const awsSSOConfigEnvVar = "WARDYN_AWS_SSO_CONFIG_B64"
+// deploy/images/common/agent-run-lib.sh). A kept Docker end reads it to tell which runs to wipe.
+const awsSSOConfigEnvVar = runner.AWSProfileRecordEnv
 
 // awsSSOCacheFileName is the AWS CLI/SDK's cache-filename convention for an
 // sso-session-based profile: the SHA1 hex digest of the session name (a
@@ -569,14 +573,22 @@ func (s *Server) bedrockSSOAuth(ctx context.Context, runID uuid.UUID, blob awsSS
 		// and a run that is still going still holds them.
 		maskErr = s.maskDispatchValue(ctx, runID, awsSSOCacheSecrets(blob)...)
 	}
-	if maskErr == nil {
+	// Re-signing: the placeholder profile and no route to the sign-in hosts; the proxy alone
+	// redeems the session (runs_dispatch_aws_sigv4.go).
+	sigv4Hosts, sigv4 := s.awsSigV4Hosts(hosts)
+	switch {
+	case maskErr == nil && sigv4:
+		stageAWSSigV4Files(env, "")
+	case maskErr == nil:
 		s.stageAWSSSOFiles(env, awsSSOConfigFileContents(blob), blob, proxyInjected)
 	}
-	hosts = append(hosts, ssoEgressHosts(blob.Region, s.cfg.AWSSSOEndpointOverride)...)
+	if !sigv4 {
+		hosts = append(hosts, ssoEgressHosts(blob.Region, s.cfg.AWSSSOEndpointOverride)...)
+	}
 	// The POST-refresh blob's own pair: a refresh=true pass is the one allowed
 	// to redeem the rotating refresh token, and the identity the gate
 	// compares must be the one this run will actually present.
 	return bedrockAuth{env: env, egressHosts: hosts, ssoInject: true,
 		ssoAccountID: blob.AccountID, ssoRoleName: blob.RoleName,
-		ssoRegion: blob.Region, ssoProxyInject: proxyInjected, maskErr: maskErr}
+		ssoRegion: blob.Region, ssoProxyInject: proxyInjected, sigv4Hosts: sigv4Hosts, maskErr: maskErr}
 }

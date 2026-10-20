@@ -371,6 +371,11 @@ type Config struct {
 	// downgrade. See runs_dispatch_sso_inject.go for the default and docs/ENV.md
 	// for the operator-facing contract.
 	AWSSSOProxyInject bool
+	// AWSSigV4AtProxy is WARDYN_AWS_SIGV4_AT_PROXY (ResolveAWSSigV4AtProxy, default off): when
+	// true, an AWS sign-in lane whose hosts the proxy can all re-sign dispatches a placeholder
+	// key pair and the proxy re-signs its requests with role credentials the sandbox never
+	// holds (runs_dispatch_aws_sigv4.go). Read at dispatch; a running sandbox keeps its lane.
+	AWSSigV4AtProxy bool
 	// AWSSSORefresh is the operator's tuning of the AWS SSO renewal; a zero
 	// field keeps its default (AWSSSORefreshTuning, awssso_refresh.go).
 	AWSSSORefresh AWSSSORefreshTuning
