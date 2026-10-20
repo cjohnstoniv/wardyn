@@ -74,11 +74,13 @@ const (
 	maxForgeBody = 4 << 20
 
 	// The reasons a refusal gives for entries the forge could not clear.
-	whyChanged   = "a directory or file above is not what the same path held in the commit this push builds on"
-	whyNoBase    = "this push builds on no commit in the history of the default branch or of a branch it updates, so nothing vouches for what it does not carry"
-	whyNotGitHub = "this forge is not GitHub, so what the push does not carry cannot be compared with the commit it builds on"
-	whyUnread    = "the broker could not compare what this push does not carry with the commit it builds on: "
-	whyUnsettled = "the broker could not ask the forge which commits this push carries it already holds, so every one of them is read as new: "
+	whyChanged = "a directory or file above is not what the same path held in the commit this push builds on"
+	// whyNotExecutable is whyChanged for deny_new_executables, whose forge test is the mode alone.
+	whyNotExecutable = "was not an executable file at the same path in any commit this push builds on"
+	whyNoBase        = "this push builds on no commit in the history of the default branch or of a branch it updates, so nothing vouches for what it does not carry"
+	whyNotGitHub     = "this forge is not GitHub, so what the push does not carry cannot be compared with the commit it builds on"
+	whyUnread        = "the broker could not compare what this push does not carry with the commit it builds on: "
+	whyUnsettled     = "the broker could not ask the forge which commits this push carries it already holds, so every one of them is read as new: "
 
 	// The reasons a push that carries no object is refused (forgeRepo.held).
 	whyHeldNotGitHub = "this forge is not GitHub, so the broker cannot ask it whether it already holds these commits"
@@ -392,7 +394,7 @@ func (f *forgeRepo) executableAtAny(ctx context.Context, roots []string, c gitpa
 		if err != nil {
 			return false, err
 		}
-		if ok && e.Mode == gitpack.ModeExecutable {
+		if ok && gitpack.IsExecutable(e.Mode) {
 			return true, nil
 		}
 	}

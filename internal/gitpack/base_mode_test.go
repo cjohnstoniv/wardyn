@@ -41,6 +41,7 @@ func TestPackTree_BaseModeIsSetOnlyWhenTheParentTreeIsCarried(t *testing.T) {
 		treeLine{"100755", "keep.sh", k2},
 		treeLine{"100755", "new.sh", n},
 		treeLine{"40000", "newdir", added},
+		treeLine{"100775", "odd.sh", n},
 		treeLine{"40000", "sub", newSub}))
 
 	w := newWalker(idx)
@@ -52,6 +53,7 @@ func TestPackTree_BaseModeIsSetOnlyWhenTheParentTreeIsCarried(t *testing.T) {
 		`keep.sh 100755 "100755"`,
 		`new.sh 100755 "0"`,
 		`newdir/z.sh 100755 "0"`,
+		`odd.sh 100775 "0"`,
 		`sub/y.sh 100755 "0"`,
 	}, "\n")
 	if got := bases(w.out); got != want {
@@ -109,6 +111,20 @@ func TestPackTree_AnEntryTwoParentsReportIsOneChangeWithTheNewestBase(t *testing
 	}
 }
 
+// TestPackChange_IsExecutable follows git's checkout: a regular file with the
+// user-execute bit is checked out 0755 whatever else its mode spells.
+func TestPackChange_IsExecutable(t *testing.T) {
+	for mode, want := range map[string]bool{
+		"100755": true, "100775": true, "100744": true, "100700": true, "100711": true,
+		"100644": false, "100664": false, "100600": false, "120000": false, "160000": false,
+		"040000": false, "40000": false, "40755": false, ModeAbsent: false, "": false, "100x55": false,
+	} {
+		if got := IsExecutable(mode); got != want {
+			t.Errorf("IsExecutable(%q) = %v, want %v", mode, got, want)
+		}
+	}
+}
+
 func TestPackTree_NewerBase(t *testing.T) {
 	cases := []struct{ a, b, want string }{
 		{"", "", ""},
@@ -118,6 +134,8 @@ func TestPackTree_NewerBase(t *testing.T) {
 		{"100755", ModeAbsent, ModeAbsent},
 		{ModeAbsent, "100755", ModeAbsent},
 		{"", "100644", "100644"},
+		{"100775", ModeAbsent, ModeAbsent},
+		{"100775", "", ""},
 		{"100644", "", "100644"},
 	}
 	for _, c := range cases {

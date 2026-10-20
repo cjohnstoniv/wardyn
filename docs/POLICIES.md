@@ -1146,7 +1146,11 @@ So an entry a pattern matches is judged one of two ways:
   - The lane's REST door holds the same way — see **Every door, not only git's**.
 
 - `deny_new_executables` refuses a file executable in the pushed tree that the carried parent tree held not executable, or not at all (`gitpack.Change.BaseMode`).
-- Without that tree, the forge must show the path executable, or a directory unchanged, in the commit the push builds on; a lane whose forge cannot be read refuses nearly every push.
+  - Any regular-file mode with the user-execute bit counts, since git checks it out executable.
+- Without that tree, the forge must show the path executable, or a directory unchanged, in any commit the push builds on. That is any parent of a pushed commit already in the history of the default branch or of a branch the push updates.
+  - So a path executable in any such commit, a merge parent included, may stay executable or become executable again, and its content is not judged, as with an edit to an existing executable.
+  - A lane whose forge cannot be read refuses nearly every push.
+- A symlink or a submodule pointer is not an executable file; what a submodule brings in is not judged.
 - The Azure DevOps REST door refuses every content push while it is on: a REST push names no file modes.
 - `max_file_size_mib` decides with `gitpack.Change.Size()`, which returns `(bytes, known)`, so a bare comparison against a limit does not compile.
 - A size the pack does not carry (a submodule pointer, an unchanged file on a second push) is cleared against the forge or refused.
@@ -1177,7 +1181,7 @@ So an entry a pattern matches is judged one of two ways:
 | `max_inspect_pack_mib` | `int` | `0` | Caps how much of an incoming push the broker buffers before refusing it as too large. |
 | | | | `0`/absent means **32 MiB**, deliberately below the maximum an operator may author so that raising the ceiling — the stated remedy for a `413` — is available. Bounded at write time to **0..64**. |
 | `max_file_size_mib` | `int` | `0` | Refuses a push that introduces a file larger than this many MiB; `0`/absent is **off**, bounded to **0..32** at write time. A deny, like a `deny_paths` match. See [`max_file_size_mib`](#max_file_size_mib). |
-| `deny_new_executables` | `bool` | `false` | Refuses a push that adds an executable file or makes an existing file executable; an edit to a file that was executable already passes. A deny, like a `deny_paths` match. `false`/absent is **off**. |
+| `deny_new_executables` | `bool` | `false` | Refuses a push that adds an executable file or makes an existing file executable; a path executable in any commit the push builds on passes, whatever its content. A deny, like a `deny_paths` match. `false`/absent is **off**. |
 | `require_review_paths` | `[]string` | `[]` | Path patterns whose match **holds** a push for an admin's `push_content` decision instead of refusing it — see **Held for review** above. |
 | | | | Same pattern language and the same per-entry write-time checks as `deny_paths` (256 bytes, valid UTF-8, no control character, no leading or trailing whitespace, no empty/`.`/`..` segment), and likewise no count cap. A `deny_paths` match wins. |
 | `hold_seconds` | `int` | `0` | How long a held push waits for its decision before it is refused. `0`/absent means **120**. Bounded at write time to **0..600**, the proxy's own hold ceiling, which also clamps a stored value past it. |

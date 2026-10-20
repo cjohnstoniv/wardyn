@@ -17,14 +17,19 @@ import (
 // modeTree and modeFormat are git's S_ISDIR: git MASKS the format bits, so
 // "040000", "40001", "40644" and "47777" are all directories — matching the
 // string "40000" or the whole number would miss that.
-// ModeExecutable is an executable file's tree-entry mode, as git writes it.
-const ModeExecutable = "100755"
-
 const (
 	modeTree    = 0o040000
 	modeRegular = 0o100000
 	modeFormat  = 0o170000
 )
+
+// IsExecutable reports whether mode is a regular file git checks out
+// executable: like modeTree, git masks the format bits, and any user-execute
+// bit makes the checkout 0755, so "100775" and "100700" are executables too.
+func IsExecutable(mode string) bool {
+	m, err := strconv.ParseUint(mode, 8, 32)
+	return err == nil && m&modeFormat == modeRegular && m&0o100 != 0
+}
 
 // ModeUncarried is the Mode of a Change that stands for a directory whose tree
 // object the pack does not hold. No other Change carries a directory mode: a
@@ -509,6 +514,8 @@ func (w *walker) diff(prefix, oldOID, newOID string, depth int) error {
 // is every entry's BaseMode: ModeAbsent beneath a directory the carried parent
 // lacks, "" when no carried parent says. The memo stays keyed on the tree alone,
 // so a tree reached twice keeps the base of the walk that reached it first.
+// Neither base a walk carries is executable, so a skipped walk never lets an
+// executable pass from the pack alone: at worst it is left for the forge.
 func (w *walker) walk(prefix, oid string, depth int, base string) error {
 	key := prefix + "\x00" + oid
 	if w.walked[key] {
@@ -586,9 +593,9 @@ func newerBase(a, b string) string {
 	switch {
 	case a == b:
 		return a
-	case a != "" && a != ModeExecutable:
+	case a != "" && !IsExecutable(a):
 		return a
-	case b != "" && b != ModeExecutable:
+	case b != "" && !IsExecutable(b):
 		return b
 	}
 	return ""

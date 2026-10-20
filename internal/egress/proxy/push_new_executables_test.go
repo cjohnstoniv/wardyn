@@ -90,6 +90,20 @@ func TestPushRulesDenyNewExecutables(t *testing.T) {
 			}
 		})
 	}
+	// git checks out any regular mode with the user-execute bit as 0755, so a
+	// tree entry spelled 100775 is an executable like 100755.
+	t.Run("an added executable spelled 100775 is refused", func(t *testing.T) {
+		r := newExecRun(t, "", newExecSpec(true))
+		blob := gitIn(t, r.work, "#!/bin/sh\necho evil\n", "hash-object", "-w", "--stdin")
+		tree := gitIn(t, r.work, gitOut(t, r.work, "ls-tree", "HEAD")+"\n100775 blob "+blob+"\tevil.sh\n", "mktree")
+		commit := gitOut(t, r.work, "commit-tree", tree, "-p", "HEAD", "-m", "odd mode")
+		runGit(t, r.work, "reset", "-q", "--hard", commit)
+		out, err := r.push()
+		r.wantRefused(t, out, err, "evil.sh")
+		if want := "  evil.sh\n"; !strings.Contains(r.lastRefusal(), want) {
+			t.Errorf("refusal %q does not name evil.sh alone", r.lastRefusal())
+		}
+	})
 	// The second commit is diffed against the first, which the pack carries, so
 	// the refusal comes from the pack alone.
 	t.Run("an executable added in the second of two commits is refused", func(t *testing.T) {
@@ -134,6 +148,22 @@ func TestPushRulesDenyNewExecutablesRefusalText(t *testing.T) {
 			t.Errorf("refusal =\n%q\nwant\n%q", got, want)
 		}
 	})
+	t.Run("not executable in any base", func(t *testing.T) {
+		r := newExecRun(t, "", newExecSpec(true))
+		writeFiles(t, r.work, map[string]string{"new.sh": "#!/bin/sh\n"})
+		chmodX(t, r.work, "new.sh")
+		r.commit(t, "add")
+		if _, err := r.push(); err == nil {
+			t.Fatal("git push succeeded, want a refusal")
+		}
+		want := headline + "  new.sh\n" +
+			"was not an executable file at the same path in any commit this push builds on\n" +
+			"clear the executable bit on these files (git update-index --chmod=-x), " +
+			"or ask an operator to set push_rules.deny_new_executables to false\n"
+		if got := r.lastRefusal(); got != want {
+			t.Errorf("refusal =\n%q\nwant\n%q", got, want)
+		}
+	})
 	t.Run("not GitHub", func(t *testing.T) {
 		r := newExecRun(t, "gitlab.com", newExecSpec(true))
 		writeFiles(t, r.work, map[string]string{"tool.sh": "#!/bin/sh\necho edited\n"})
@@ -166,11 +196,17 @@ func TestPushRulesNewExecutablesClaim(t *testing.T) {
 		ch("link", "120000", gitpack.ModeAbsent),
 		ch("sub", "160000", gitpack.ModeAbsent),
 		ch("dir", gitpack.ModeUncarried, ""),
+		ch("odd-775.sh", "100775", gitpack.ModeAbsent),
+		ch("odd-744.sh", "100744", gitpack.ModeAbsent),
+		ch("odd-700.sh", "100700", "100644"),
+		ch("odd-711.sh", "100711", "100664"),
+		ch("group-only.txt", "100664", gitpack.ModeAbsent),
+		ch("edited-odd.sh", "100755", "100775"),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"added.sh", "chmod.sh", "was-a-dir.sh"}; !reflect.DeepEqual(hits, want) {
+	if want := []string{"added.sh", "chmod.sh", "was-a-dir.sh", "odd-775.sh", "odd-744.sh", "odd-700.sh", "odd-711.sh"}; !reflect.DeepEqual(hits, want) {
 		t.Errorf("hits = %v, want %v", hits, want)
 	}
 	var got []string

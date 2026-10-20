@@ -677,10 +677,10 @@ func newExecutables(changes []gitpack.Change) (hits []string, unknown []gitpack.
 		switch {
 		case c.Mode == gitpack.ModeUncarried:
 			unknown = append(unknown, c)
-		case c.Mode != gitpack.ModeExecutable:
+		case !gitpack.IsExecutable(c.Mode):
 		case c.BaseMode == "":
 			unknown = append(unknown, c)
-		case c.BaseMode != gitpack.ModeExecutable:
+		case !gitpack.IsExecutable(c.BaseMode):
 			hits = append(hits, c.Path)
 		}
 	}
@@ -704,6 +704,9 @@ func (p *Proxy) refuseNewExecutables(w http.ResponseWriter, r *http.Request, res
 	}
 	remedy := "clear the executable bit on these files (git update-index --chmod=-x), " +
 		"or ask an operator to set push_rules.deny_new_executables to false"
+	if why == whyChanged {
+		why = whyNotExecutable
+	}
 	if why == whyNotGitHub {
 		remedy += ". Wardyn can't read this repository's history here, so it can't tell which files are new."
 	}
