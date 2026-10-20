@@ -32,7 +32,7 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[bedrockTransportAudit](): strings.Fields("region model endpoint mode detail hosts"),
 	reflect.TypeFor[chosenProvider]():        strings.Fields("provider owner"),
 	reflect.TypeFor[componentConfig]():       strings.Fields("ordinal source selfDefined env"),
-	reflect.TypeFor[componentMCP]():          strings.Fields("Ordinal Key URL Host Harnesses Credentialed"),
+	reflect.TypeFor[componentMCP]():          strings.Fields("Ordinal Key URL Host Harnesses Credentialed Launch EnvNames"), // Launch/EnvNames: the person's own command and variable names; values are judged as componentConfig env
 	reflect.TypeFor[componentDispatch]():     strings.Fields("HeaderHosts MITMHosts Config GitHubAPI AWSCLI AzureCLI MCP"),
 	reflect.TypeFor[awsCLIDispatch]():        strings.Fields("ComponentID AWS"),
 	reflect.TypeFor[azureCLIDispatch]():      strings.Fields("ComponentID Azure"),
@@ -56,6 +56,7 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.AzureSettings]():       strings.Fields("Endpoint Route"),
 	reflect.TypeFor[types.BedrockSettings]():     strings.Fields("Region BaseURL SSOStartURL SSOAccountID SSORoleName"),
 	reflect.TypeFor[types.ComponentSettings]():   strings.Fields("RequireVaultForCredentials DenyResidentDelivery AutonomyCap"),
+	reflect.TypeFor[types.ComponentMCPLaunch]():  strings.Fields("Command Args"),
 	reflect.TypeFor[types.EgressRedirect]():      strings.Fields("From To TokenSecretRef TokenIntegrationRef Ecosystem GoChecksumDBOff"),
 	reflect.TypeFor[types.EphemeralProvider]():   strings.Fields("DefaultDiskMiB MaxDiskMiB"),
 	reflect.TypeFor[types.GitProvider]():         strings.Fields("ID Kind Disabled BaseURLs Lanes GitHubAppInstallURL CredentialSource Entra"),
