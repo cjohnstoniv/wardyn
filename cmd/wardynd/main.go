@@ -506,12 +506,13 @@ func run() error {
 		// "off" is the only value that disables it: a typo must not silently
 		// turn a security posture off, so anything else (including "false",
 		// "no", or a misspelling) leaves the broker ON.
-		DisableGitPATBroker:    strings.EqualFold(strings.TrimSpace(*f.gitPATBroker), "off"),
-		RefuseGitPATBrokerOff:  *f.gitPATBrokerOffRefused,
-		ScrubProxyResponses:    *f.proxyResponseScrub,
-		AttachLocal:            strings.EqualFold(strings.TrimSpace(*f.attachLocal), "on"),
-		EnvSecretPlaceholders:  *f.envSecretPlaceholders,
-		FileSecretPlaceholders: *f.fileSecretPlaceholders,
+		DisableGitPATBroker:      strings.EqualFold(strings.TrimSpace(*f.gitPATBroker), "off"),
+		RefuseGitPATBrokerOff:    *f.gitPATBrokerOffRefused,
+		ScrubProxyResponses:      *f.proxyResponseScrub,
+		AttachLocal:              strings.EqualFold(strings.TrimSpace(*f.attachLocal), "on"),
+		EnvSecretPlaceholders:    *f.envSecretPlaceholders,
+		FileSecretPlaceholders:   *f.fileSecretPlaceholders,
+		RunnerSecretPlaceholders: *f.runnerSecretPlaceholders,
 		// First-run setup readiness inputs (GET /api/v1/setup/status).
 		AgeKeyDurable:             secretsDurable(*f.ageKey, secrets),
 		SecretStoreExternal:       storesExternally(secrets),

@@ -225,7 +225,8 @@
 # docs/AUDIT-ACTIONS.md 50421 = ours 49978 + theirs 49814 - base 49371 at the 0.10 W4a merge of ATT-LOGIN-SRV onto the train.
 # docs/AUDIT-ACTIONS.md 49506 adds 135 over 49371, measured (0.10 PRIV-1): the recording.read row, the runner.trust.write and run.title.set sealed fields, and the person.erasure run_tasks, run_setups and credentials detail.
 # docs/AUDIT-ACTIONS.md 50556 = ours 50421 + theirs 49506 - base 49371 at the 0.10 W4a merge of PRIV-1 onto the train.
-docs/AUDIT-ACTIONS.md=50556 share=8
+# docs/AUDIT-ACTIONS.md 50569 adds 13 (0.10.0 SEC-1b), measured: the runner placeholder switch, WARDYN_RUNNER_SECRET_PLACEHOLDERS.
+docs/AUDIT-ACTIONS.md=50569 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.

@@ -30,7 +30,7 @@ func rulesOf(rows []Entry) ruleSet {
 	var r ruleSet
 	for _, e := range rows {
 		switch e.Rule {
-		case RuleDelivery, RuleViaOrgRefuse, RuleNotConfigured, RuleOwnerOnlyOwn:
+		case RuleDelivery, RuleViaOrgRefuse, RuleNotConfigured, RuleOwnerOnlyOwn, RuleResidentViaOrg:
 			r.credential = true
 		case RuleRefuse, RuleBound:
 			r.gated = true
@@ -97,15 +97,19 @@ func stripViaOrg(p LocalPlan, s *runner.SandboxSpec) {
 		return viaOrgPath(p, indexed("ProxyConfig.Policy.EligibleGrants", i))
 	})
 	var routes []proxy.ViaOrgRoute
+	routed := func(i int) bool {
+		path := indexed("ProxyConfig.Injection", i)
+		return viaOrgPath(p, path) || residentFillPath(p, path)
+	}
 	for i, in := range pc.Injection {
-		if viaOrgPath(p, indexed("ProxyConfig.Injection", i)) {
+		if routed(i) {
 			routes = append(routes, proxy.ViaOrgRoute{GrantID: in.GrantID, Host: in.Rule.Host})
 			if !slices.Contains(pc.MITMHosts, in.Rule.Host) {
 				pc.MITMHosts = append(slices.Clip(pc.MITMHosts), in.Rule.Host)
 			}
 		}
 	}
-	pc.Injection = deleteIndexed(pc.Injection, func(i int) bool { return viaOrgPath(p, indexed("ProxyConfig.Injection", i)) })
+	pc.Injection = deleteIndexed(pc.Injection, routed)
 	for repo, id := range pc.GitGrants {
 		if viaOrgPath(p, "ProxyConfig.GitGrants["+repo+"]") {
 			routes = append(routes, proxy.ViaOrgRoute{GrantID: id, Host: viaOrgGitHubHost})
@@ -119,6 +123,15 @@ func stripViaOrg(p LocalPlan, s *runner.SandboxSpec) {
 		return cmpString(a.GrantID.String()+" "+a.Host, b.GrantID.String()+" "+b.Host)
 	})
 	pc.ViaOrgRoutes = slices.Compact(routes)
+}
+
+// residentFillPath reports whether the admitted injection at path is a
+// runner_resident class's placeholder fill (RuleResidentViaOrg), which is
+// served via_org like a via_org grant.
+func residentFillPath(p LocalPlan, path string) bool {
+	o, ok := p.Origins[path]
+	rows := matchingRows(Entries(StructProxyConfig, "Injection"), o)
+	return ok && len(rows) > 0 && rows[0].Rule == RuleResidentViaOrg
 }
 
 // deleteIndexed is a copy of in without the elements drop names by index; in

@@ -327,3 +327,17 @@ func ResidentGrantID(v string) (uuid.UUID, bool) {
 	id, err := uuid.Parse(rest)
 	return id, err == nil
 }
+
+// FillPlaceholderPrefix starts an env or file secret placeholder a proxy fills
+// at egress; the rest is the id of the injection grant that fills it.
+const FillPlaceholderPrefix = "wardyn-placeholder:"
+
+// FillGrantID reads a fill placeholder back; false when v is not one.
+func FillGrantID(v string) (uuid.UUID, bool) {
+	rest, ok := strings.CutPrefix(v, FillPlaceholderPrefix)
+	if !ok {
+		return uuid.Nil, false
+	}
+	id, err := uuid.Parse(rest)
+	return id, err == nil
+}

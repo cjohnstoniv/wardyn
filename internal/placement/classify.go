@@ -39,13 +39,18 @@ const (
 	RuleExempt        Rule = "exempt"         // sent as dispatched
 	RuleOwnerOnlyOwn  Rule = "owner_only_own" // allowed, persisted OwnerOnly=true
 	RuleNotConfigured Rule = "not_configured" // refused, and not a configurable class
+	// RuleResidentViaOrg is a runner_resident class's placeholder fill
+	// (WARDYN_RUNNER_SECRET_PLACEHOLDERS): admitted only where its class is
+	// delivered runner_resident and ResidentAdmits it, then served via_org, so
+	// the value stays at the organisation.
+	RuleResidentViaOrg Rule = "resident_via_org"
 )
 
 // Rules and Classes are closed sets: a row naming anything else is refused by
 // TestTableRowsAreWellFormed, and at runtime an unknown rule is a gated rule
 // with no gate, which refuses; it is never an allow.
 var (
-	allRules   = []Rule{RuleAllow, RuleDelivery, RuleViaOrgRefuse, RuleRefuse, RuleBound, RuleNotSent, RuleStrip, RuleExempt, RuleOwnerOnlyOwn, RuleNotConfigured}
+	allRules   = []Rule{RuleAllow, RuleDelivery, RuleViaOrgRefuse, RuleRefuse, RuleBound, RuleNotSent, RuleStrip, RuleExempt, RuleOwnerOnlyOwn, RuleNotConfigured, RuleResidentViaOrg}
 	allClasses = []Class{ClassOwn, ClassOperator, ClassBrokered, ClassPlatform, ClassExempt, ClassComposite}
 )
 
@@ -117,6 +122,8 @@ var Table = []Entry{
 	{Struct: StructProxyConfig, Field: "MITMCAKeyPEM", Class: ClassPlatform, Rule: RuleAllow, Variant: "per run; gains MITM of one's own sandbox only"},
 	{Struct: StructProxyConfig, Field: "Injection", Variant: "stored api_key, own namespace", Class: ClassOwn, Rule: RuleOwnerOnlyOwn},
 	{Struct: StructProxyConfig, Field: "Injection", Variant: "operator namespace or shared component; via_org replaces it with a ViaOrgRoutes entry", Class: ClassOperator, Rule: RuleDelivery, Delivery: ClassAPIKey, Reason: ReasonPlacementCredential, ViaOrg: true},
+	{Struct: StructProxyConfig, Field: "Injection", Variant: "the placeholder fill of a runner_resident env_secret, WARDYN_RUNNER_SECRET_PLACEHOLDERS on: a ViaOrgRoutes entry replaces it", Class: ClassOperator, Rule: RuleResidentViaOrg, Delivery: ClassEnvSecret, Reason: ReasonPlacementCredential},
+	{Struct: StructProxyConfig, Field: "Injection", Variant: "the placeholder fill of a runner_resident file_secret, WARDYN_RUNNER_SECRET_PLACEHOLDERS on: a ViaOrgRoutes entry replaces it", Class: ClassOperator, Rule: RuleResidentViaOrg, Delivery: ClassFileSecret, Reason: ReasonPlacementCredential},
 	{Struct: StructProxyConfig, Field: "Injection", Variant: "the person's model-provider key or own Claude sign-in", Class: ClassOwn, Rule: RuleAllow},
 	{Struct: StructProxyConfig, Field: "Injection", Variant: "captured AWS SSO, credential_source per_user", Class: ClassOwn, Rule: RuleAllow},
 	{Struct: StructProxyConfig, Field: "Injection", Variant: "captured AWS SSO shared", Class: ClassBrokered, Rule: RuleDelivery, Delivery: ClassAWSSSOBearer, Reason: ReasonPlacementCredential},

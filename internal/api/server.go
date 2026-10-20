@@ -597,6 +597,13 @@ type Config struct {
 	// (runs_dispatch_placeholders.go). Off = the value in the sandbox, as before.
 	EnvSecretPlaceholders  bool
 	FileSecretPlaceholders bool
+	// RunnerSecretPlaceholders (WARDYN_RUNNER_SECRET_PLACEHOLDERS; off by
+	// default in 0.10.0): the same for a runner_resident env_secret or
+	// file_secret grant on a local run, with the value kept at the
+	// organisation: the runner gets the placeholder and a via_org route, and
+	// the organisation's egress fills it (placeResidentSecrets). Off = the
+	// value delivered runner_resident, as before.
+	RunnerSecretPlaceholders bool
 	// OIDCRoleMapConfigured reports whether WARDYN_OIDC_ROLE_MAP is non-empty —
 	// the sso_rbac /setup/status check's gate. Only the presence, never the
 	// mapping itself: the API layer has no use for individual entries, only

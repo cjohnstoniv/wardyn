@@ -20,4 +20,5 @@
 # docs/CREDENTIALS.md 4012 = ours 4000 + theirs 3696 - base 3684 at the 0.10 W2 merge of MDL onto the train.
 # docs/CREDENTIALS.md 4333 = ours 4321 + theirs 3997 - base 4000 = 4318 at the 0.10 merge of main (W2) into SEC-1c; measured 4333.
 # docs/CREDENTIALS.md 4451 = ours 4115 + theirs 4333 - base 3997 at the 0.10 W3 merge of SEC-1c onto the train.
-docs/CREDENTIALS.md=4451 share=35
+# docs/CREDENTIALS.md 4475 adds 24 (0.10.0 SEC-1b), measured: the runner placeholder switch, WARDYN_RUNNER_SECRET_PLACEHOLDERS.
+docs/CREDENTIALS.md=4475 share=35
