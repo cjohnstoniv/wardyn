@@ -21,14 +21,19 @@
 #     embeds. The closure is read from the tree under test, so a new import
 #     changes it, and it is taken for the tags and platforms the Dockerfiles
 #     build (none, and docker,k8s; linux and darwin, amd64 and arm64);
-#   - go.mod, go.sum, deploy/base-images.txt, .trivyignore, .dockerignore, ci.yml
-#     (the scan jobs live there), the mirror action, or this script.
+#   - go.mod, go.sum, go.work, go.work.sum, vendor/, deploy/base-images.txt,
+#     .trivyignore and the trivy config files (trivy reads trivy.yaml from the
+#     workspace), .dockerignore and a `<Dockerfile>.dockerignore` (BuildKit uses
+#     that one instead), ci.yml (the scan jobs live there), the mirror action,
+#     or this script.
 # ui/ is not an input, as before: the images carry the console's built bundle,
 # not its npm packages, and trivy reads packages.
 #
-# Anything this script cannot read or parse answers `true` for every image.
+# Anything this script cannot read or parse answers `true` for every image,
+# and so does a Dockerfile form it does not model (see `check_modelled`).
 set -euo pipefail
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$here/.."
 
 CI_YML=.github/workflows/ci.yml
 
@@ -36,7 +41,7 @@ if [ -z "${IMAGE_SCOPE_INNER:-}" ]; then
   changed="$(cat)"
   # Re-run as a child so a failure anywhere (set -e is off inside a function
   # called from `if`) falls back to scanning everything, loudly.
-  if out="$(IMAGE_SCOPE_INNER=1 bash "$0" <<<"$changed")" && [ -n "$out" ]; then
+  if out="$(IMAGE_SCOPE_INNER=1 bash "$here/image-scope.sh" <<<"$changed")" && [ -n "$out" ]; then
     printf '%s\n' "$out"
     exit 0
   fi
@@ -51,13 +56,35 @@ mapfile -t images < <(awk '/^ +TRIVY_IMAGE:/ {i=$2} /^ +TRIVY_DOCKERFILE:/ {prin
 declare -A dockerfile_of
 for pair in "${images[@]}"; do dockerfile_of[${pair%% *}]=${pair#* }; done
 
-always=(go.mod go.sum deploy/base-images.txt .trivyignore .dockerignore "$CI_YML" scripts/image-scope.sh)
+always=(go.mod go.sum go.work go.work.sum deploy/base-images.txt .trivyignore .trivyignore.yaml trivy.yaml trivy.yml
+  .dockerignore "$CI_YML" scripts/image-scope.sh)
+
+# Dockerfile forms whose inputs this script cannot list. Each makes the script
+# fail, and a failure scans every image.
+check_modelled() {
+  local code binds
+  code="$(grep -Ev '^[[:space:]]*#' "$1")"
+  if grep -Eq '^[[:space:]]*(COPY|ADD)[[:space:]]+\[' <<<"$code"; then
+    echo "$1: JSON-form COPY is not modelled" >&2; return 1
+  fi
+  if grep -Eq '^[[:space:]]*(COPY|ADD)[[:space:]].*\\[[:space:]]*$' <<<"$code"; then
+    echo "$1: a COPY or ADD continued over several lines is not modelled" >&2; return 1
+  fi
+  binds="$(grep -E -- '--mount=[^ ]*type=bind' <<<"$code" || true)"
+  if [ -n "$(grep -Ev 'from=' <<<"$binds" || true)" ]; then
+    echo "$1: RUN --mount=type=bind from the build context is not modelled" >&2; return 1
+  fi
+  if grep -Eq 'CGO_ENABLED(=|[[:space:]]+)1([^0-9]|$)' <<<"$code"; then
+    echo "$1: a cgo build is not modelled" >&2; return 1
+  fi
+  if grep -Eq '(^[[:space:]]*RUN[[:space:]]+(--[^[:space:]]+[[:space:]]+)*|[;&|][[:space:]]*|^[[:space:]]*(&&|\|\|)[[:space:]]*)(sh|bash|\.{1,2}/[^[:space:]]+|/[^[:space:]]+\.sh)([[:space:]]|$)' <<<"$code"; then
+    echo "$1: a RUN that runs a script is not modelled" >&2; return 1
+  fi
+}
 
 # The paths a Dockerfile COPYs or ADDs from the build context.
 copy_sources() {
-  if grep -Eq '^[[:space:]]*(COPY|ADD)[[:space:]]+\[' "$1"; then
-    echo "$1: JSON-form COPY is not parsed" >&2; return 1
-  fi
+  check_modelled "$1" || return 1
   awk '
     /^[[:space:]]*(COPY|ADD)[[:space:]]/ {
       from = ""; n = 0
@@ -115,7 +142,8 @@ for img in "${!dockerfile_of[@]}"; do
     mains+=("${m[@]}")
   done
 
-  mapfile -t mains < <(printf '%s\n' "${mains[@]}" | sort -u)
+  # grep . drops the empty line an image with no `go build` leaves behind.
+  mapfile -t mains < <(printf '%s\n' "${mains[@]}" | sort -u | grep . || true)
   declare -A dirs=() embeds=()
   if [ "${#mains[@]}" -gt 0 ]; then
     closure="$(go_closure "${mains[@]}")"
@@ -129,9 +157,12 @@ for img in "${!dockerfile_of[@]}"; do
   # The reason a changed path reaches this image, or nothing.
   reach() {
     local f=$1 a df s d
-    case "$f" in .github/actions/base-image-mirror/*) echo "$f (shared input)"; return 0 ;; esac
+    case "$f" in .github/actions/base-image-mirror/*|vendor/*) echo "$f (shared input)"; return 0 ;; esac
     for a in "${always[@]}"; do [ "$f" = "$a" ] && { echo "$f (shared input)"; return 0; }; done
-    for df in "${files[@]}"; do [ "$f" = "$df" ] && { echo "$f (Dockerfile)"; return 0; }; done
+    for df in "${files[@]}"; do
+      [ "$f" = "$df" ] || [ "$f" = "$df.dockerignore" ] || [ "$f" = "$(basename "$df").dockerignore" ] \
+        && { echo "$f (Dockerfile)"; return 0; }
+    done
     for s in "${copies[@]}"; do
       # shellcheck disable=SC2254 # $s is the pattern: a COPY source may be a glob
       case "$f" in $s|"$s"/*) echo "$f (COPY $s)"; return 0 ;; esac

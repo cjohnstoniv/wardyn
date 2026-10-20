@@ -546,11 +546,12 @@ So:
   - the image's Dockerfile, or that of a local base it builds `FROM` (`agent-vscode` and `agent-novnc` sit on `agent-base`);
   - a path those Dockerfiles `COPY`, except `ui/`, which is a built bundle `trivy` does not read;
   - a non-test file in the directory of a Go package in the `go list -deps` closure of a binary those Dockerfiles build, or a file such a package embeds;
-  - `go.mod`, `go.sum`, [`deploy/base-images.txt`](../deploy/base-images.txt), `.trivyignore`, `.dockerignore`, `ci.yml`, the `base-image-mirror` action, or the script.
+  - `go.mod`, `go.sum`, `go.work`, `go.work.sum`, `vendor/`, [`deploy/base-images.txt`](../deploy/base-images.txt), `.trivyignore`, the `trivy.yaml` config files, `.dockerignore` and a `<Dockerfile>.dockerignore`, `ci.yml`, the `base-image-mirror` action, or the script.
 - The closure is read from the tree under test, so a new import of a package already in the module changes it, which a list of paths would miss.
 - A push, a `train/*` pull request, a pull request into `release/*` and a script failure scan every image.
   - The nightly scans the published images on its own.
   - A release accepts a CI run only through the full-tree marker.
+- A Dockerfile form the script does not model scans every image: a multi-line `COPY`, a `RUN --mount=type=bind` without `from=`, `CGO_ENABLED=1`, or a `RUN` that runs a script.
 - The `agent-run --selftest` step stays in the `agent-aws-sso` and `agent-codex-cli` scans, so it runs whenever their Dockerfile or `agent-run` scripts change.
 - [`image_scope_guard_test.go`](../cmd/wardynd/image_scope_guard_test.go) plants every input it derives from the Dockerfiles and `go list`, and fails when the script says "skip".
 

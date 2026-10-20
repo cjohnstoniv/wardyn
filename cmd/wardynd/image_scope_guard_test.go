@@ -214,7 +214,8 @@ func runImageScope(t *testing.T, root string, env []string, files []string) scop
 func TestImageScopeScansWhatAnInputReaches(t *testing.T) {
 	root := repoRoot(t)
 	images := scannedImages(t, root)
-	shared := []string{"go.mod", "go.sum", "deploy/base-images.txt", ".trivyignore", ".dockerignore",
+	shared := []string{"go.mod", "go.sum", "go.work", "go.work.sum", "deploy/base-images.txt", ".trivyignore",
+		".trivyignore.yaml", "trivy.yaml", "trivy.yml", ".dockerignore", "vendor/modules.txt", "vendor/github.com/x/y/y.go",
 		".github/workflows/ci.yml", ".github/actions/base-image-mirror/action.yml", "scripts/image-scope.sh"}
 
 	type plant struct{ img, path, why string }
@@ -231,6 +232,8 @@ func TestImageScopeScansWhatAnInputReaches(t *testing.T) {
 		}
 		for _, df := range dockerfiles {
 			add(img.name, df, "its Dockerfile")
+			// BuildKit reads <Dockerfile>.dockerignore instead of the root .dockerignore.
+			add(img.name, df+".dockerignore", "its per-Dockerfile .dockerignore")
 		}
 		for _, c := range copies {
 			add(img.name, plantFor(root, c), "COPY "+c)
@@ -386,6 +389,100 @@ func TestCIScopesTheTrivyJobsOnPullRequests(t *testing.T) {
 	for _, img := range scannedImages(t, root) {
 		if want := "needs.image-scope.outputs." + img.name + " == 'true'"; !strings.Contains(build, want) {
 			t.Errorf("the ci-full-tree marker in build does not require %q: a narrowed scan would still count as a full run", want)
+		}
+	}
+}
+
+// TestImageScopePinnedSharedInputsScanEveryImage holds, in a list written by
+// hand and independent of the script and of the Dockerfile oracle above, the
+// files that change every image's build or scan without being a COPY source or
+// a Go package: the build context's ignore file, the module files, workspace and
+// vendor mode (`COPY . .` copies them and the build switches to them), and the
+// config trivy loads from the workspace. The derived oracle cannot see these.
+func TestImageScopePinnedSharedInputsScanEveryImage(t *testing.T) {
+	root := repoRoot(t)
+	pinned := []string{
+		".dockerignore", "go.mod", "go.sum", "go.work", "go.work.sum", "vendor/modules.txt",
+		"vendor/github.com/x/y/y.go", "trivy.yaml", "trivy.yml", ".trivyignore", ".trivyignore.yaml",
+		"deploy/base-images.txt", ".github/workflows/ci.yml",
+	}
+	rows := runImageScope(t, root, nil, pinned)
+	for _, img := range scannedImages(t, root) {
+		for _, p := range pinned {
+			if !rows[img.name][p] {
+				t.Errorf("%s changed: trivy (%s) would be SKIPPED, but every image's build or scan reads it", p, img.name)
+			}
+		}
+	}
+}
+
+// scratchScope runs the script, as ci.yml does and from its own directory by a
+// relative path, in a one-image tree built from the given Dockerfile. It
+// returns the image's answer and the script's stderr.
+func scratchScope(t *testing.T, dockerfile, changed string) (bool, string) {
+	t.Helper()
+	root := repoRoot(t)
+	dir := t.TempDir()
+	script, err := os.ReadFile(filepath.Join(root, "scripts", "image-scope.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ci := "jobs:\n  trivy-foo:\n    env:\n      TRIVY_IMAGE: foo\n      TRIVY_DOCKERFILE: deploy/foo/Dockerfile\n"
+	for path, body := range map[string]string{
+		"scripts/image-scope.sh":   string(script),
+		".github/workflows/ci.yml": ci,
+		"deploy/foo/Dockerfile":    dockerfile,
+	} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, path)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, path), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := exec.Command("bash", "./image-scope.sh")
+	cmd.Dir = filepath.Join(dir, "scripts")
+	cmd.Stdin = strings.NewReader(changed + "\n")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("image-scope.sh: %v\n%s", err, stderr.String())
+	}
+	switch strings.TrimSpace(string(out)) {
+	case "foo=true":
+		return true, stderr.String()
+	case "foo=false":
+		return false, stderr.String()
+	}
+	t.Fatalf("image-scope.sh printed %q", out)
+	return false, ""
+}
+
+// TestImageScopeFailsClosedOnDockerfileFormsItDoesNotModel pins the fallback:
+// a Dockerfile form the script cannot list the inputs of must scan the image
+// whatever changed, and the plain Dockerfile beside it must not. The plain
+// case also holds two other things: an image with no `go build` is answered
+// by its COPY sources alone, and the script works run by a relative path from
+// its own directory.
+func TestImageScopeFailsClosedOnDockerfileFormsItDoesNotModel(t *testing.T) {
+	const plain = "FROM scratch\nCOPY a /a\n"
+	if got, why := scratchScope(t, plain, "unrelated.txt"); got {
+		t.Fatalf("an unrelated change scans an image with no go build, or the script failed when run by a relative path:\n%s", why)
+	}
+	if got, why := scratchScope(t, plain, "a"); !got {
+		t.Fatalf("a changed COPY source does not scan the image:\n%s", why)
+	}
+	for name, extra := range map[string]string{
+		"JSON-form COPY":                 "COPY [\"b\", \"/b\"]\n",
+		"COPY continued over lines":      "COPY b \\\n  c /\n",
+		"bind mount of the context":      "RUN --mount=type=bind,source=gen,target=/gen true\n",
+		"cgo build":                      "ENV CGO_ENABLED=1\n",
+		"RUN of a script after COPY . .": "COPY . .\nRUN sh ./gen.sh\n",
+		"script run on a continued line": "COPY . .\nRUN go generate \\\n && ./gen.sh\n",
+	} {
+		if got, why := scratchScope(t, plain+extra, "unrelated.txt"); !got {
+			t.Errorf("%s: an unrelated change skips the scan, so the script modelled nothing of it:\n%s", name, why)
 		}
 	}
 }
