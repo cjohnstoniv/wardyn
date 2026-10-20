@@ -1399,6 +1399,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Turns on MCP servers that run inside the run's sandbox: a component's `mcp` block with `transport: stdio` and a `launch` command (`command` and `args`, no shell) instead of a `url`.
 - `command` is `npx` or the absolute path of a program in the image. A package `npx` fetches names one exact version, such as `@example/mcp-server@1.4.2`; a range, a tag or no version is refused. The pin applies to the `npx` form only; an absolute program is trusted as the image is.
 - An organisation's row or a person's own may define one. A person's row keeps every cap a self-defined component has.
+- An organisation's MCP servers that run in the sandbox are refused on a person's own runner (`placement_credential`); they run on a remote-hosted runner.
 - **Before you upgrade, know what turning it on means:**
   - A local server runs as the agent's user, with the agent's access: the run's network allowlist, its files, and every variable in its environment.
   - The harness, not Wardyn's proxy, applies the run's rules to the server's tools.

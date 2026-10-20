@@ -185,6 +185,9 @@ func (s *Server) localAdmittedPlan(r *http.Request, req createRunRequest,
 		TrustedOutput:              localTrustedOutputRequest(req),
 	}
 	for _, c := range comps.attached {
+		if !c.snapshot.SelfDefined && c.snapshot.Definition.LocalMCP() {
+			return placement.LocalPlan{}, runError(placement.ReasonPlacementCredential.Status(), string(placement.ReasonPlacementCredential), localMCPOrgServerMsg)
+		}
 		if c.snapshot.SelfDefined {
 			name := c.snapshot.Name
 			if name == "" {
@@ -219,6 +222,11 @@ func (s *Server) localAdmittedPlan(r *http.Request, req createRunRequest,
 // relay, which serves only a grant delivered own (refuseRelayedDelivery); via_org forwards requests
 // whose header the organisation injects, and the broker's tool rules would not run there.
 const localMCPSharedCredentialMsg = "components: an MCP server's credential that your organisation shares can't reach your own runner; use a secret of your own for it, or run this on a remote-hosted runner"
+
+// localMCPOrgServerMsg refuses a local run with an MCP server that runs in the sandbox from a row the
+// organisation defines: its launch command and args are the organisation's, which may hold what its
+// stripped config values would, and they reach the runner unjudged in the harness's MCP configuration.
+const localMCPOrgServerMsg = "components: your organisation's MCP servers that run in the sandbox can't run on your own runner; define one of your own, or run this on a remote-hosted runner"
 
 // mcpHeaderGrant reports whether g is the header credential of one of the run's MCP servers.
 func mcpHeaderGrant(g types.GrantSpec, mcpHosts []string) bool {

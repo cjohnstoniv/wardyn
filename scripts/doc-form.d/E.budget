@@ -106,6 +106,7 @@
 # docs/ENV.md 41208 adds 17 over 41191 (0.10 FEAT-1MCP review): the npx pin applies to the npx form only; an absolute program is trusted as the image is.
 # docs/ENV.md 41238 adds 30 over 41208 (0.10 FEAT-1MCP revive): the switch's refusal reaches a queued run's admission and a rebooted run's revive; a running run keeps its server.
 # docs/ENV.md 41261 adds 23 over 41238 (0.10 FEAT-1MCP erased rows): a rebooted run whose MCP components were erased is not revived with the switch off, remote ones too; measured.
-docs/ENV.md=41261 share=5
+# docs/ENV.md 41284 adds 23 over 41261 (0.10 FEAT-1MCP placement): an organisation's MCP servers that run in the sandbox are refused on a person's own runner; measured.
+docs/ENV.md=41284 share=5
 # docs/ENV.md 39047 adds 478 over 38569: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
 # docs/ENV.md 38607 adds 38 over 38569, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
