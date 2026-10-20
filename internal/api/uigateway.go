@@ -813,12 +813,12 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 	s.auditUISession(sess, "ui.open", fmt.Sprintf("127.0.0.1:%d", sess.Port), "success",
 		map[string]any{"app": sess.App, "port": sess.Port})
 	conn := newExecConn(execSess, run.SandboxRef+":"+strconv.Itoa(sess.Port))
-	return &uiConn{execConn: conn, closeFn: func() {
+	return s.recordDesktopConn(run, sess, &uiConn{execConn: conn, closeFn: func() {
 		stopKeepalive()
 		release()
 		s.auditUISession(sess, "ui.close", fmt.Sprintf("127.0.0.1:%d", sess.Port), "success",
 			map[string]any{"app": sess.App, "port": sess.Port, "duration_sec": int(s.cfg.Now().Sub(opened).Seconds())})
-	}}, nil
+	}}), nil
 }
 
 // uiConn is an execConn that releases its per-run slot and writes the ui.close
