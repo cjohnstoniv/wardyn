@@ -80,7 +80,7 @@ ALLOW_DIR="${ALLOW_DIR:-$(git rev-parse --show-toplevel)/scripts/forward-port-ch
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-git diff --no-renames --name-only -z "$BASE" "$HEAD_REF" >"$TMP/names" || die "git diff $BASE $HEAD_REF failed"
+git diff --no-ext-diff --no-textconv --no-renames --name-only -z "$BASE" "$HEAD_REF" >"$TMP/names" || die "git diff $BASE $HEAD_REF failed"
 
 # A port may not edit the check or widen its own exceptions: only V's allow file. Nor may it
 # carry a .gitattributes, which git reads from the checkout and which can mark files -diff.
@@ -100,7 +100,7 @@ bad=0; files=0; lines=0
 : >"$TMP/flagged"
 while IFS= read -r -d '' f; do
   files=$((files + 1))
-  git diff --no-renames --numstat "$BASE" "$HEAD_REF" -- "$f" >"$TMP/stat" || die "git diff of $f failed"
+  git diff --no-ext-diff --no-textconv --no-renames --numstat "$BASE" "$HEAD_REF" -- "$f" >"$TMP/stat" || die "git diff of $f failed"
   if grep -q $'^-\t-\t' "$TMP/stat"; then
     h="$(git rev-parse -q --verify "$HEAD_REF:$f" 2>/dev/null || true)"
     p="$(git rev-parse -q --verify "$PREV:$f" 2>/dev/null || true)"
@@ -113,7 +113,7 @@ while IFS= read -r -d '' f; do
   fi
   # Removed lines only: skip everything before the first hunk (the `--- a/f`
   # header), so a removed line that itself starts with `-` (a bullet) is kept.
-  git diff --no-renames -U0 "$BASE" "$HEAD_REF" -- "$f" >"$TMP/diff" || die "git diff of $f failed"
+  git diff --text --no-ext-diff --no-textconv --no-renames -U0 "$BASE" "$HEAD_REF" -- "$f" >"$TMP/diff" || die "git diff of $f failed"
   awk '/^@@/ { h = 1; next } h && /^-/ { print substr($0, 2) }' "$TMP/diff" >"$TMP/removed.all"
   grep -v '^[[:space:]]*$' "$TMP/removed.all" >"$TMP/removed" || [ $? = 1 ]
   [ -s "$TMP/removed" ] || continue
