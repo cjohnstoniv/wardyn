@@ -29,7 +29,10 @@ vi.mock("../../../lib/api/people", () => ({
     removeSSHKeys: (...a: unknown[]) => removeKeysMock(...a),
   },
 }));
-vi.mock("../../../lib/api/credentials", () => ({ credentials: { erase: (...a: unknown[]) => eraseMock(...a) } }));
+vi.mock("../../../lib/api/credentials", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../lib/api/credentials")>()),
+  credentials: { erase: (...a: unknown[]) => eraseMock(...a) },
+}));
 vi.mock("../../../lib/api/access", () => ({
   access: { getAccess: (...a: unknown[]) => getAccessMock(...a) },
   AccessCollisionError: class extends Error {},
@@ -290,16 +293,22 @@ describe("the person drawer", () => {
     expect(removeKeysMock).not.toHaveBeenCalled();
   });
 
-  it("erases a person's stored credentials after the confirm", async () => {
+  it("Erase opens the one erase dialog with the person fixed and Credentials only, and erases after the typed name", async () => {
+    eraseMock.mockResolvedValue({ count: 2 });
     const user = userEvent.setup();
     renderScreen({ operator: false });
     await user.click(await screen.findByRole("button", { name: "left@example.com" }));
     const drawer = await screen.findByRole("dialog");
     await user.click(within(drawer).getByRole("button", { name: "Erase" }));
-    const confirm = await screen.findByRole("alertdialog");
-    expect(within(confirm).getByText("Erase every credential left@example.com has stored? This can't be undone.")).toBeInTheDocument();
-    await user.click(within(confirm).getByRole("button", { name: "Erase" }));
+    const dialog = await screen.findByRole("dialog", { name: "Erase someone's data" });
+    expect(within(dialog).getByText("Erase every credential left@example.com has stored? This can't be undone.")).toBeInTheDocument();
+    expect(within(dialog).getByRole("checkbox", { name: /^Credentials/ })).toBeChecked();
+    const erase = within(dialog).getByRole("button", { name: "Erase data" });
+    expect(erase).toBeDisabled();
+    setField(within(dialog).getByLabelText("Type left@example.com to confirm"), "left@example.com");
+    await user.click(erase);
     await waitFor(() => expect(eraseMock).toHaveBeenCalledWith("sub-left"));
+    expect(await within(dialog).findByText("Erased 2 credentials for left@example.com.")).toBeInTheDocument();
   });
 });
 
