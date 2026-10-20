@@ -890,8 +890,15 @@ func (s *Server) uiEnsureApp(ctx context.Context, run types.AgentRun, sess uiSes
 	defer cancel()
 
 	launcher := uiLauncherPrefix + sess.App
+	// A run with a boot seed (an application's startup command, #1994) brings
+	// its own app up: with no launcher, wait for the port before calling it
+	// missing, so an app still starting is not reported as one never shipped.
+	seedPolls := 0
+	if interactiveBootSeed(run.Interactive, run.Task) != "" {
+		seedPolls = uiEnsureWaitSecs * 2
+	}
 	exec, err := s.cfg.Runner.ExecStream(ctx, run.SandboxRef, runner.ExecSpec{
-		Argv: []string{"sh", "-c", uiLauncherScript(launcher, sess.Port)},
+		Argv: []string{"sh", "-c", uiLauncherScript(launcher, sess.Port, seedPolls)},
 	})
 	if err != nil {
 		return uiFail(ctx, http.StatusBadGateway, reasonUIGatewayLauncherExecFailed, uiExecFailMsg(ctx, "start ui app launcher", err))
@@ -949,11 +956,23 @@ func (s *Server) uiEnsureApp(ctx context.Context, run types.AgentRun, sess uiSes
 // ponytail: no setsid/nohup. The exec has no TTY, so there is no SIGHUP to
 // survive; the launched process is reparented to the sandbox's PID 1 and dies
 // with the sandbox — which is exactly the lifetime a relayed app should have.
-func uiLauncherScript(launcher string, port int) string {
+//
+// seedPolls is how many half-second polls a missing launcher waits for the
+// port before exit 3: 0 answers at once; a seeded run's startup command may
+// still be opening it, and if it does the answer is exit 0, nothing started.
+func uiLauncherScript(launcher string, port, seedPolls int) string {
 	return fmt.Sprintf(`p=%d
 b='%s'
 socat -u /dev/null "TCP:127.0.0.1:$p" >/dev/null 2>&1 && exit 0
-[ -x "$b" ] || exit 3
+if ! [ -x "$b" ]; then
+  i=0
+  while [ "$i" -lt %d ]; do
+    sleep 0.5
+    socat -u /dev/null "TCP:127.0.0.1:$p" >/dev/null 2>&1 && exit 0
+    i=$((i+1))
+  done
+  exit 3
+fi
 "$b" >/dev/null 2>&1 </dev/null &
 i=0
 while [ "$i" -lt %d ]; do
@@ -962,7 +981,7 @@ while [ "$i" -lt %d ]; do
   i=$((i+1))
 done
 exit 4
-`, port, launcher, uiEnsureWaitSecs*2)
+`, port, launcher, seedPolls, uiEnsureWaitSecs*2)
 }
 
 func (s *Server) uiAppReady(key string) bool {
