@@ -47,10 +47,12 @@ type DesktopSigninStore interface {
 	RunHadDesktopSignin(ctx context.Context, runID uuid.UUID) (bool, error)
 	// RunsWithOpenDesktopSignin is the set of runs with an open sign-in.
 	RunsWithOpenDesktopSignin(ctx context.Context) (map[uuid.UUID]bool, error)
-	// MarkDesktopSigninRun records that dispatch gave the run sign-ins.
-	MarkDesktopSigninRun(ctx context.Context, runID uuid.UUID) error
-	// DesktopSigninRun reports whether dispatch gave the run sign-ins.
-	DesktopSigninRun(ctx context.Context, runID uuid.UUID) (bool, error)
+	// MarkDesktopSigninRun records dispatch's sign-in decision for a desktop
+	// run: offReason "" gave it sign-ins, any other value names why not.
+	MarkDesktopSigninRun(ctx context.Context, runID uuid.UUID, offReason string) error
+	// DesktopSigninRun is that decision; found is false for a run dispatch
+	// decided nothing for (no desktop, sign-ins off, or another runner).
+	DesktopSigninRun(ctx context.Context, runID uuid.UUID) (offReason string, found bool, err error)
 }
 
 var _ DesktopSigninStore = PG{}
@@ -208,18 +210,23 @@ func (s PG) RunsWithOpenDesktopSignin(ctx context.Context) (map[uuid.UUID]bool, 
 }
 
 // MarkDesktopSigninRun — see DesktopSigninStore.
-func (s PG) MarkDesktopSigninRun(ctx context.Context, runID uuid.UUID) error {
-	if _, err := s.Pool.Exec(ctx, `INSERT INTO desktop_signin_runs (run_id) VALUES ($1) ON CONFLICT DO NOTHING`, runID); err != nil {
+func (s PG) MarkDesktopSigninRun(ctx context.Context, runID uuid.UUID, offReason string) error {
+	if _, err := s.Pool.Exec(ctx, `INSERT INTO desktop_signin_runs (run_id, off_reason) VALUES ($1, $2)
+		ON CONFLICT (run_id) DO UPDATE SET off_reason = EXCLUDED.off_reason`, runID, offReason); err != nil {
 		return fmt.Errorf("store: mark desktop sign-in run: %w", err)
 	}
 	return nil
 }
 
 // DesktopSigninRun — see DesktopSigninStore.
-func (s PG) DesktopSigninRun(ctx context.Context, runID uuid.UUID) (bool, error) {
-	var on bool
-	if err := s.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM desktop_signin_runs WHERE run_id = $1)`, runID).Scan(&on); err != nil {
-		return false, fmt.Errorf("store: desktop sign-in run: %w", err)
+func (s PG) DesktopSigninRun(ctx context.Context, runID uuid.UUID) (string, bool, error) {
+	var reason string
+	err := s.Pool.QueryRow(ctx, `SELECT off_reason FROM desktop_signin_runs WHERE run_id = $1`, runID).Scan(&reason)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
 	}
-	return on, nil
+	if err != nil {
+		return "", false, fmt.Errorf("store: desktop sign-in run: %w", err)
+	}
+	return reason, true, nil
 }

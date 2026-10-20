@@ -65,6 +65,14 @@ const (
 // the run itself started normally, without the sign-in lane.
 const desktopSigninRunnerMsg = "this run started without desktop sign-ins: they run on this deployment's own Docker runner, in the sign-in desktop image (agent-novnc-signin), on a run started while WARDYN_DESKTOP_SIGNINS was on"
 
+// signinOffImageNotGranted is desktop_signin_runs.off_reason for a run whose
+// image its person chose, held to the exact ref by the image capability, and
+// whose sign-in variant no grant of theirs names (signinVariantUngranted).
+const signinOffImageNotGranted = "image_not_granted"
+
+// desktopSigninImageNotGrantedMsg answers a begin on such a run.
+const desktopSigninImageNotGrantedMsg = "Sign-ins need the sign-in desktop image, which your access doesn't include"
+
 // errSigninNotStarted wraps a helper exec that never ran: the exec could not
 // be created or started, or the binary was missing or not executable (exit
 // 126 or 127). It changed nothing in the sandbox.
@@ -94,18 +102,45 @@ func (s *Server) desktopSigninsFor(ctx context.Context, run types.AgentRun, poli
 // implies: the sign-in variant of image when sign-ins are on, image itself
 // otherwise. Sign-ins are on only when the run gets the sign-in image, which
 // carries the helper, and the store records that (MarkDesktopSigninRun), so a
-// begin never stops the agent of a run started without them.
-func (s *Server) desktopSigninDispatch(ctx context.Context, run types.AgentRun, policy types.RunPolicySpec, image string) (bool, string) {
+// begin never stops the agent of a run started without them. variantUngranted
+// (signinVariantUngranted) keeps a person's own image when the swap would run
+// one no grant of theirs names: the run gets no sign-ins, and says why.
+func (s *Server) desktopSigninDispatch(ctx context.Context, run types.AgentRun, policy types.RunPolicySpec, image string, variantUngranted bool) (bool, string) {
 	st, on := s.desktopSigninStore()
 	variant, ok := signinImageFor(image)
 	if !on || !ok || !s.desktopSigninsFor(ctx, run, policy) {
 		return false, image
 	}
-	if err := st.MarkDesktopSigninRun(ctx, run.ID); err != nil {
+	off := ""
+	if variantUngranted && variant != image {
+		off = signinOffImageNotGranted
+	}
+	if err := st.MarkDesktopSigninRun(ctx, run.ID, off); err != nil {
 		slog.WarnContext(ctx, "wardynd: desktop sign-ins not recorded; the run starts without them", "run_id", run.ID, "err", err)
 		return false, image
 	}
+	if off != "" {
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "desktop_signin.unavailable", run.ID.String(), "failure",
+			mustJSON(map[string]any{"reason": off, "image": image, "signin_image": variant})))
+		return false, image
+	}
 	return true, variant
+}
+
+// signinVariantUngranted reports whether the run's image is one its person
+// chose and the image capability held to the exact ref (their own --image, or
+// their own workspace's base image: runRequestGovernance, seededImageRefusal),
+// and the sign-in variant of that ref is not granted to them. An operator's
+// image (WARDYN_AGENT_IMAGES, an operator-owned workspace) is not held to a
+// grant, so its swap stays.
+func (s *Server) signinVariantUngranted(ctx context.Context, req createRunRequest, seed workspaceSeed) bool {
+	chosen := (req.Image != "" && !seed.imageOpen) || seed.imageOwner != ""
+	variant, ok := signinImageFor(req.Image)
+	if !chosen || !ok || variant == req.Image {
+		return false
+	}
+	granted, err := s.capGranted(ctx, capImage, variant)
+	return err != nil || !granted
 }
 
 // signinTarget reports whether the run's sandbox lands on this deployment's
@@ -232,12 +267,16 @@ func (s *Server) handleBeginDesktopSignin(w http.ResponseWriter, r *http.Request
 		writeErrorReason(w, http.StatusConflict, reasonDesktopSigninRunnerUnsupported, desktopSigninRunnerMsg)
 		return
 	}
-	dispatched, err := st.DesktopSigninRun(ctx, run.ID)
+	off, dispatched, err := st.DesktopSigninRun(ctx, run.ID)
 	if err != nil {
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonDesktopSigninUnavailable, "the run's sign-in could not be read")
 		return
 	}
-	if !dispatched {
+	if off == signinOffImageNotGranted {
+		writeErrorReason(w, http.StatusConflict, reasonDesktopSigninImageNotGranted, desktopSigninImageNotGrantedMsg)
+		return
+	}
+	if !dispatched || off != "" {
 		writeErrorReason(w, http.StatusConflict, reasonDesktopSigninRunnerUnsupported, desktopSigninRunnerMsg)
 		return
 	}

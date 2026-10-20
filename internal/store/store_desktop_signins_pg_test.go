@@ -105,15 +105,15 @@ func TestPG_DesktopSigninLifecycle(t *testing.T) {
 	if err := st.BeginDesktopSignin(ctx, second); err != nil {
 		t.Fatalf("a new sign-in after the end = %v", err)
 	}
-	if on, err := st.DesktopSigninRun(ctx, run.ID); err != nil || on {
-		t.Fatalf("an unmarked run = %v %v, want no sign-ins", on, err)
+	if _, found, err := st.DesktopSigninRun(ctx, run.ID); err != nil || found {
+		t.Fatalf("an unmarked run = %v %v, want no decision", found, err)
 	}
-	for range 2 {
-		if err := st.MarkDesktopSigninRun(ctx, run.ID); err != nil {
+	for _, off := range []string{"image_not_granted", ""} {
+		if err := st.MarkDesktopSigninRun(ctx, run.ID, off); err != nil {
 			t.Fatal(err)
 		}
-	}
-	if on, err := st.DesktopSigninRun(ctx, run.ID); err != nil || !on {
-		t.Fatalf("a marked run = %v %v, want sign-ins", on, err)
+		if got, found, err := st.DesktopSigninRun(ctx, run.ID); err != nil || !found || got != off {
+			t.Fatalf("a run marked %q = %q %v %v", off, got, found, err)
+		}
 	}
 }

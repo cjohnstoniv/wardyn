@@ -80,6 +80,7 @@ func (s *Server) stepSeedWorkspace(f *runFold, rec *foldRecorder) bool {
 	var ok bool
 	seed, ok = s.seedAndAdmitWorkspace(ctx, f.w, f.r, &f.spec, f.req, f.mode == foldCreate)
 	f.ephemeralDirs, f.seed = seed.ephemeralDirs, seed
+	f.signinImageUngranted = ok && f.mode == foldCreate && s.signinVariantUngranted(ctx, *f.req, seed)
 	return ok
 }
 

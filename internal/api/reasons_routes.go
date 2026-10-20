@@ -1004,7 +1004,8 @@ const (
 	reasonDesktopSigninsOff              = "desktop_signins_off"               // WARDYN_DESKTOP_SIGNINS is not on
 	reasonDesktopSigninNotRunning        = "desktop_signin_not_running"        // the run is not running in a sandbox
 	reasonDesktopSigninNoDesktop         = "desktop_signin_no_desktop"         // the run's policy declares no novnc app
-	reasonDesktopSigninRunnerUnsupported = "desktop_signin_runner_unsupported" // the run's runner is not this deployment's own Docker one, so the run started without sign-ins
+	reasonDesktopSigninRunnerUnsupported = "desktop_signin_runner_unsupported" // the run started without sign-ins: another runner, another desktop image, or sign-ins were off
+	reasonDesktopSigninImageNotGranted   = "desktop_signin_image_not_granted"  // the run's image was its person's choice, and its sign-in variant is not granted to them
 	reasonDesktopSigninOpen              = "desktop_signin_open"               // a sign-in is already open on the run
 	reasonDesktopSigninNotOpen           = "desktop_signin_not_open"           // no sign-in is open on the run
 	reasonDesktopSigninNotHolder         = "desktop_signin_not_holder"         // the open sign-in was begun by someone else

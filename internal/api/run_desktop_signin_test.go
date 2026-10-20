@@ -33,8 +33,9 @@ type signinTestStore struct {
 	*uiMemStore
 	smu     sync.Mutex
 	signins map[uuid.UUID]types.DesktopSignin
-	// dispatched are the runs dispatch gave sign-ins (MarkDesktopSigninRun).
-	dispatched map[uuid.UUID]bool
+	// dispatched is dispatch's decision per run (MarkDesktopSigninRun): ""
+	// gave it sign-ins, any other value is why not.
+	dispatched map[uuid.UUID]string
 	shares     []types.DesktopSigninShare
 	grants     []types.CredentialGrant
 	readErr    error
@@ -119,20 +120,29 @@ func (s *signinTestStore) RequestDesktopSigninEnd(_ context.Context, id uuid.UUI
 	return true, nil
 }
 
-func (s *signinTestStore) MarkDesktopSigninRun(_ context.Context, runID uuid.UUID) error {
+func (s *signinTestStore) MarkDesktopSigninRun(_ context.Context, runID uuid.UUID, offReason string) error {
 	s.smu.Lock()
 	defer s.smu.Unlock()
 	if s.dispatched == nil {
-		s.dispatched = map[uuid.UUID]bool{}
+		s.dispatched = map[uuid.UUID]string{}
 	}
-	s.dispatched[runID] = true
+	s.dispatched[runID] = offReason
 	return nil
 }
 
-func (s *signinTestStore) DesktopSigninRun(_ context.Context, runID uuid.UUID) (bool, error) {
+func (s *signinTestStore) DesktopSigninRun(_ context.Context, runID uuid.UUID) (string, bool, error) {
 	s.smu.Lock()
 	defer s.smu.Unlock()
-	return s.dispatched[runID], nil
+	off, found := s.dispatched[runID]
+	return off, found, nil
+}
+
+// signedIn reports whether dispatch gave the run sign-ins.
+func (s *signinTestStore) signedIn(runID uuid.UUID) bool {
+	s.smu.Lock()
+	defer s.smu.Unlock()
+	off, found := s.dispatched[runID]
+	return found && off == ""
 }
 
 func (s *signinTestStore) EndDesktopSignin(_ context.Context, id uuid.UUID, reason string, at time.Time) (bool, error) {
@@ -298,7 +308,7 @@ func newSigninFixture(t *testing.T) *signinFixture {
 	t.Helper()
 	h := newHarness(t)
 	run := types.AgentRun{ID: uuid.New(), CreatedBy: signinOwner, State: types.RunRunning, SandboxRef: "sandbox-1"}
-	st := &signinTestStore{uiMemStore: newUIMemStore(), signins: map[uuid.UUID]types.DesktopSignin{}, dispatched: map[uuid.UUID]bool{run.ID: true}}
+	st := &signinTestStore{uiMemStore: newUIMemStore(), signins: map[uuid.UUID]types.DesktopSignin{}, dispatched: map[uuid.UUID]string{run.ID: ""}}
 	st.putRun(run)
 	st.putEffectivePolicy(run.ID, types.RunPolicySpec{UIApps: []types.UIApp{{Name: desktopUIApp, Port: 6080}}})
 	rn := newSigninFakeRunner()
@@ -696,11 +706,81 @@ func TestDispatchDesktopSigninsFollowTheTarget(t *testing.T) {
 				RunToken: "run-token", Image: tc.image, Interactive: true, Policy: desktop,
 			})
 			spec := fr.lastSpec
-			if spec.Image != tc.want || spec.DesktopSignins != tc.signins || spec.ProxyConfig.DesktopSignins != tc.signins || signins.dispatched[run.ID] != tc.signins {
-				t.Errorf("image %q store %v key %v recorded %v, want %q %v", spec.Image, spec.DesktopSignins, spec.ProxyConfig.DesktopSignins, signins.dispatched[run.ID], tc.want, tc.signins)
+			if spec.Image != tc.want || spec.DesktopSignins != tc.signins || spec.ProxyConfig.DesktopSignins != tc.signins || signins.signedIn(run.ID) != tc.signins {
+				t.Errorf("image %q store %v key %v recorded %v, want %q %v", spec.Image, spec.DesktopSignins, spec.ProxyConfig.DesktopSignins, signins.signedIn(run.ID), tc.want, tc.signins)
 			}
 			if fr.createCalls != 1 || st.state != types.RunRunning {
 				t.Errorf("creates %d state %s, want the run started", fr.createCalls, st.state)
+			}
+		})
+	}
+}
+
+// TestDesktopSignin_MemberImageSwapNeedsAGrant (#2972 M1): a member's own
+// desktop image, held to its exact ref by the image capability, is swapped
+// for its sign-in variant only when a grant of theirs covers the variant.
+// Otherwise the run keeps the image the grant names and gets no sign-ins,
+// the audit row and the begin both say why, and the agent is never touched.
+// An operator's image (WARDYN_AGENT_IMAGES) is not held to a grant: it swaps.
+func TestDesktopSignin_MemberImageSwapNeedsAGrant(t *testing.T) {
+	const novnc, variant = "ghcr.io/acme/agent-novnc:1.0", "ghcr.io/acme/agent-novnc-signin:1.0"
+	allow := func(value string) types.CapabilityGrant {
+		return grant(types.CapabilitySubjectAll, "", capImage, value, types.CapabilityAllow)
+	}
+	desktop := types.RunPolicySpec{UIApps: []types.UIApp{{Name: desktopUIApp, Port: 6080}}}
+	for _, tc := range []struct {
+		name      string
+		grants    []types.CapabilityGrant
+		req       createRunRequest
+		seed      workspaceSeed
+		ungranted bool
+	}{
+		{"exact grant on the member's image only", []types.CapabilityGrant{allow(novnc)}, createRunRequest{Image: novnc}, workspaceSeed{}, true},
+		{"a grant names the variant too", []types.CapabilityGrant{allow(novnc), allow(variant)}, createRunRequest{Image: novnc}, workspaceSeed{}, false},
+		{"a wildcard grant covers the variant", []types.CapabilityGrant{allow(capWildcard)}, createRunRequest{Image: novnc}, workspaceSeed{}, false},
+		{"the member's own workspace image", []types.CapabilityGrant{allow(novnc)}, createRunRequest{Image: novnc}, workspaceSeed{imageOpen: true, imageOwner: capSub}, true},
+		{"an operator-owned workspace image", nil, createRunRequest{Image: novnc}, workspaceSeed{imageOpen: true}, false},
+		{"the operator's agent image", nil, createRunRequest{}, workspaceSeed{}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := &capStore{grants: tc.grants, enf: map[string]bool{capImage: true}}
+			if got := capServer(st).signinVariantUngranted(memberCtx(nil), tc.req, tc.seed); got != tc.ungranted {
+				t.Fatalf("signinVariantUngranted = %v, want %v", got, tc.ungranted)
+			}
+
+			fr := &fakeRunner{}
+			srv, dst, rec, run := dispatchTeardownFixture(t, signinCapableRunner{fr}, types.RunPending)
+			signins := &signinTestStore{uiMemStore: newUIMemStore(), signins: map[uuid.UUID]types.DesktopSignin{}}
+			srv.cfg.Store = signinDispatchStore{dispatchTestStore: dst, DesktopSigninStore: signins}
+			srv.cfg.DesktopSignins = true
+			run.Task = ""
+			srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
+				RunToken: "run-token", Image: novnc, Interactive: true, Policy: desktop, SigninImageUngranted: tc.ungranted,
+			})
+			wantImage, on := variant, true
+			if tc.ungranted {
+				wantImage, on = novnc, false
+			}
+			spec := fr.lastSpec
+			if spec.Image != wantImage || spec.DesktopSignins != on || spec.ProxyConfig.DesktopSignins != on || signins.signedIn(run.ID) != on {
+				t.Fatalf("image %q store %v key %v recorded %v, want %q %v", spec.Image, spec.DesktopSignins, spec.ProxyConfig.DesktopSignins, signins.signedIn(run.ID), wantImage, on)
+			}
+			ev := findAudit(rec.snapshot(), run.ID, "desktop_signin.unavailable", "failure")
+			if tc.ungranted != (ev != nil) || ev != nil && !strings.Contains(string(ev.Data), `"reason":"image_not_granted"`) {
+				t.Fatalf("desktop_signin.unavailable row = %+v, want one naming image_not_granted iff the variant is ungranted", ev)
+			}
+			if !tc.ungranted {
+				return
+			}
+			f := newSigninFixture(t)
+			f.st.dispatched[f.run.ID] = signinOffImageNotGranted
+			code, body := f.post(t, "/desktop-signin", "")
+			if code != http.StatusConflict || !strings.Contains(body, reasonDesktopSigninImageNotGranted) ||
+				!strings.Contains(body, "Sign-ins need the sign-in desktop image, which your access doesn't include") {
+				t.Fatalf("begin = %d %s, want 409 %s with the named reason", code, body, reasonDesktopSigninImageNotGranted)
+			}
+			if got := f.rn.seen(); len(got) != 0 {
+				t.Fatalf("calls = %v, want none", got)
 			}
 		})
 	}

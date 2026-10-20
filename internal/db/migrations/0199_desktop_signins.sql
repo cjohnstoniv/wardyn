@@ -9,9 +9,12 @@
 -- were already stopped), handed back at the resume. end_requested is set by
 -- an end the runner could not finish; the sweep retries it, and end_stage is
 -- the step it is stuck at, so one stuck state is audited once.
--- desktop_signin_runs is one row per run dispatched with sign-ins: the
--- sign-in image, its store and the proxy's sign-in listener. A begin on a run
--- with no row is refused before the agent is touched.
+-- desktop_signin_runs is one row per desktop run dispatch decided sign-ins
+-- for. off_reason '' is a run dispatched with them: the sign-in image, its
+-- store and the proxy's sign-in listener. 'image_not_granted' is a run whose
+-- image its person chose, whose sign-in variant no grant of theirs names, so
+-- it kept its own image and got no sign-ins. A begin on a run with no row, or
+-- with an off_reason, is refused before the agent is touched.
 --
 -- Split-role installs grant the app role SELECT, INSERT, UPDATE, DELETE on
 -- the three tables (CHANGELOG, Before you upgrade).
@@ -44,5 +47,6 @@ CREATE TABLE IF NOT EXISTS desktop_signin_shares (
 CREATE INDEX IF NOT EXISTS desktop_signin_shares_by_run ON desktop_signin_shares (run_id, shared_at);
 
 CREATE TABLE IF NOT EXISTS desktop_signin_runs (
-    run_id uuid PRIMARY KEY REFERENCES agent_runs(id) ON DELETE CASCADE
+    run_id     uuid PRIMARY KEY REFERENCES agent_runs(id) ON DELETE CASCADE,
+    off_reason text NOT NULL DEFAULT ''
 );

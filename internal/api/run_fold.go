@@ -57,6 +57,10 @@ type runFold struct {
 	// the primary leading); wsRefs adds every other one the spec references.
 	seed   workspaceSeed
 	wsRefs []types.Workspace
+	// signinImageUngranted: the person's own image keeps its desktop sign-ins
+	// off at dispatch (signinVariantUngranted), decided here with the caller's
+	// identity, which the detached launch does not hold.
+	signinImageUngranted bool
 	// attachments is the run's mount map and startFolder its one working
 	// directory (WARDYN_START_FOLDER), both from stepWorkspaces.
 	attachments        []client.RunAttachment

@@ -192,7 +192,8 @@
 # docs/sdk.md 20060 = ours 19999 + theirs 19743 - base 19682 at the 0.10 W3 merge of HYBB onto the train.
 # 0.10 CTL-C (#2972): docs/sdk.md 20334 adds 274 over 20060, measured: the four desktop sign-in routes and their reason rows.
 # 0.10 CTL-C r3 (#2972 H1): docs/sdk.md 20360 adds 26 over 20334, measured: desktop_signin_runner_unsupported names its other two causes (another desktop image, sign-ins off at start), and pause_failed says the agent stays stopped while Wardyn retries a resume that cannot finish.
-docs/sdk.md=20360 share=21
+# 0.10 CTL-C r3 (#2972 M1): docs/sdk.md 20398 adds 38 over 20360, measured: the desktop_signin_image_not_granted reason row.
+docs/sdk.md=20398 share=21
 # docs/sdk.md 18691 adds 28 over 18663, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.

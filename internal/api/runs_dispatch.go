@@ -141,6 +141,11 @@ type dispatchParams struct {
 	// plans that one row's token as for a run that reaches its public host, so
 	// the probe presents the token proxy-side exactly as a run does.
 	RedirectProbe *types.EgressRedirect
+	// SigninImageUngranted: Image is its person's own choice and its sign-in
+	// variant is not granted to them, so the run keeps Image and gets no
+	// desktop sign-ins (signinVariantUngranted). Set only by
+	// finishCreateRunLaunch, from the fold.
+	SigninImageUngranted bool
 }
 
 // dispatchRun launches the sandbox via the runner and advances run state. On any
@@ -519,7 +524,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// and the proxy's signin_listen key, all or none. With the knob off, or on
 	// a runner that cannot run a sign-in, the run gets the default image and
 	// no key, which an older proxy would refuse.
-	signins, image := s.desktopSigninDispatch(ctx, run, policy, p.Image)
+	signins, image := s.desktopSigninDispatch(ctx, run, policy, p.Image, p.SigninImageUngranted)
 	p.Image = image
 
 	spec := runner.SandboxSpec{
