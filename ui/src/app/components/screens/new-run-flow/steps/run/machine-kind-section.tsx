@@ -34,7 +34,7 @@ export function MachineKindSection({ kind, onChoose }: { kind: MachineKind; onCh
           <div role="group" aria-label={NR_MACHINE.OS_LABEL} className="flex flex-col gap-2">
             <span className="text-xs font-semibold" aria-hidden="true">{NR_MACHINE.OS_LABEL}</span>
             <Segmented size="compact" value="linux" onChange={() => undefined} options={[{ value: "linux", label: NR_MACHINE.OS_LINUX }]} />
-            <p className="text-xs leading-snug text-muted-foreground/80">{NR_MACHINE.OS_LATER}</p>
+            <p className="text-xs leading-snug text-muted-foreground">{NR_MACHINE.OS_LATER}</p>
           </div>
           <dl data-testid="nr-vm-barrier" className="grid grid-cols-[96px_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs">
             <dt className="text-muted-foreground">{NR_MACHINE.BARRIER_LABEL}</dt>

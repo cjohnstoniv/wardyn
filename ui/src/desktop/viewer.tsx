@@ -9,6 +9,7 @@
 import * as React from "react";
 import { Button } from "../app/components/ui/button";
 import { Chip } from "../app/components/wardyn/primitives";
+import { originWS } from "../app/lib/base-path";
 import { DESKTOP } from "../app/components/wardyn/copy/desktop";
 import { keysymOf } from "./keysym";
 import { RfbClient, type RfbDisplay } from "./rfb";
@@ -35,8 +36,7 @@ export interface DesktopSocket {
   close(): void;
 }
 
-const openSocket = (path: string): DesktopSocket =>
-  new WebSocket(`${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}${path}`, ["binary"]);
+const openSocket = (path: string): DesktopSocket => new WebSocket(originWS(path), ["binary"]);
 
 // The gateway's close codes (uigateway_desktop.go): an ended session or run is final; anything else retries,
 // except a socket the gateway refused before it opened (403: the session expired, was closed or was revoked).
