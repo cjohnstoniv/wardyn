@@ -49,6 +49,7 @@
 | **v0.9.3** | Organisation runners in Kubernetes, runner-resident credentials, laptop runners fit for a locked-down enterprise, and runner recovery after a control-plane restart. | **Shipped (pre-alpha)** — `v0.9.3`, 2026-10-17 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.9.4** | A stability and honesty release: runner and output-recovery fixes, hardening of credential erasure, stored secrets and member drives, a console polish pass, and corrected credential-claims text. | **Shipped (pre-alpha)** — `v0.9.4`, 2026-10-19 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.9.5** | A fix release: the sign-in dialog's code and steps, sign-in refusal reasons, setup status and teardown audit detail. | **Shipped (pre-alpha)** — `v0.9.5`, 2026-10-19 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.9.6** | A fix release: own Azure DevOps tokens on a person's own runner, clearer refusals, runner connection diagnostics, recordings without typed input. | **Shipped (pre-alpha)** — `v0.9.6`, 2026-10-20 (see [CHANGELOG.md](CHANGELOG.md)) |
 
 ## Shipped detail
 
