@@ -34,6 +34,7 @@ import { HttpError } from "../../lib/api/core";
 import type { DirectoryEntry, DirectorySearchKind } from "../../lib/api/directory";
 import { DIRECTORY } from "../../lib/governance-copy";
 import { PERM } from "../../lib/permissions-copy";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../ui/dialog";
 import { DirectoryCombobox } from "./directory-combobox";
 
 const ALICE: DirectoryEntry = {
@@ -243,5 +244,51 @@ describe("DirectoryCombobox — broken is not absent", () => {
     // value themselves, which is exactly what LOOKUP_FAILED tells them to do.
     expect(field()).toHaveValue("eng-team");
     expect(field()).toBeEnabled();
+  });
+});
+
+describe("DirectoryCombobox — dismissing the list (#2599)", () => {
+  function InDialog() {
+    const [value, setValue] = React.useState("");
+    return (
+      <Dialog open>
+        <DialogContent>
+          <DialogTitle>Mint</DialogTitle>
+          <DialogDescription>Mint a token</DialogDescription>
+          <DirectoryCombobox label={PERM.FIELD_WHO} value={value} onChange={setValue} kind="user" />
+          <button type="button">below</button>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+  const open = async () => {
+    searchMock.mockResolvedValue([ALICE]);
+    render(<InDialog />);
+    await userEvent.type(field(), "ali");
+    await screen.findByRole("button", { name: row(ALICE) });
+  };
+
+  it("Escape closes the list and leaves the dialog open; the next keystroke reopens it", async () => {
+    await open();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("button", { name: row(ALICE) })).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(field()).toHaveValue("ali");
+
+    await userEvent.type(field(), "c");
+    expect(await screen.findByRole("button", { name: row(ALICE) })).toBeInTheDocument();
+  });
+
+  it("moving focus out closes the list, and keeps the typed text", async () => {
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: "below" }));
+    expect(screen.queryByRole("button", { name: row(ALICE) })).not.toBeInTheDocument();
+    expect(field()).toHaveValue("ali");
+  });
+
+  it("a pointer press on a row does not close the list before the pick lands", async () => {
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: row(ALICE) }));
+    expect(field()).toHaveValue(ALICE.claim_value);
   });
 });

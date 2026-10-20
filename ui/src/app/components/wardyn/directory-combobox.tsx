@@ -86,6 +86,23 @@ export function DirectoryCombobox({
   // re-runs the search for the claim value just resolved and re-opens the list
   // under the admin's cursor.
   const picked = React.useRef<string | null>(null);
+  // The list was closed (Escape, blur, outside click) while its rows are still the answer; the next
+  // keystroke opens it again.
+  const [dismissed, setDismissed] = React.useState(false);
+  const listOpen = status.kind === "rows" && status.rows.length > 0 && !dismissed;
+
+  // Escape closes the list, not the dialog around the field. A Radix dialog listens for Escape on the
+  // document in the capture phase, so only a window capture listener runs before it.
+  React.useEffect(() => {
+    if (!listOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      setDismissed(true);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [listOpen]);
 
   const q = value.trim();
   React.useEffect(() => {
@@ -127,7 +144,12 @@ export function DirectoryCombobox({
   };
 
   return (
-    <div className="relative">
+    <div
+      className="relative"
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget)) setDismissed(true);
+      }}
+    >
       <Input
         id={id}
         aria-label={label}
@@ -137,6 +159,7 @@ export function DirectoryCombobox({
         // so the chip explaining it must go with it.
         onChange={(e) => {
           setPickedGroup(null);
+          setDismissed(false);
           onChange(e.target.value);
         }}
         disabled={disabled}
@@ -149,8 +172,12 @@ export function DirectoryCombobox({
           Tab reaches them natively, so the picker is keyboard-usable without a
           roving-focus implementation — and the input keeps the textbox role it
           has in absent mode, which is the same control. */}
-      {status.kind === "rows" && status.rows.length > 0 && (
-        <ul className="absolute inset-x-0 top-full z-20 mt-1 max-h-56 overflow-y-auto rounded-md border border-border bg-popover py-1 text-popover-foreground shadow-floating">
+      {listOpen && status.kind === "rows" && (
+        <ul
+          className="absolute inset-x-0 top-full z-20 mt-1 max-h-56 overflow-y-auto rounded-md border border-border bg-popover py-1 text-popover-foreground shadow-floating"
+          // A click on a row must not blur the input first and close the list under the pointer.
+          onMouseDown={(e) => e.preventDefault()}
+        >
           {status.rows.map((e) => (
             <li key={`${e.kind}:${e.claim_value}`}>
               <button
@@ -166,7 +193,7 @@ export function DirectoryCombobox({
       )}
 
       {status.kind === "searching" && <Hint>{DIRECTORY.SEARCHING}</Hint>}
-      {status.kind === "rows" && status.rows.length === 0 && <Hint>{DIRECTORY.NO_MATCHES}</Hint>}
+      {status.kind === "rows" && status.rows.length === 0 && !dismissed && <Hint>{DIRECTORY.NO_MATCHES}</Hint>}
       {status.kind === "failed" && <Hint>{DIRECTORY.LOOKUP_FAILED}</Hint>}
 
       {pickedGroup !== null && q === pickedGroup.claim && (
