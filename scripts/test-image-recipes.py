@@ -221,6 +221,18 @@ class ImageRecipes(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.root / "claude").read_bytes(), b"staged native")
 
+    @staticmethod
+    def not_elf_with_machine_byte(machine):
+        # Byte 18 reads as a machine type, but the file is not ELF: it is never refused.
+        return b"#!/bin/sh\n" + bytes(8) + bytes([machine, 0]) + b"\nexec launcher\n"
+
+    def test_claude_staged_machine_byte_without_elf_magic_installs(self):
+        staged = self.not_elf_with_machine_byte(0x3e)
+        (self.root / "claude-stage/claude-bin").write_bytes(staged)
+        result = self.run_recipe("claude-code", TARGETARCH="arm64")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.root / "claude").read_bytes(), staged)
+
     def run_codex(self, name, **overrides):
         text = (ROOT / f"deploy/images/{name}/Dockerfile").read_text()
         script = next(body for _, kind, body in instructions(text) if kind == "RUN" and "/codex-stage/codex-bin" in body)
@@ -241,7 +253,7 @@ class ImageRecipes(unittest.TestCase):
                     self.assertIn(f"builds for {target}", result.stderr)
                     self.assertIn(f"codex-cli --arch {target}", result.stderr)
                     self.assertFalse((self.root / "codex").exists())
-            for staged in [self.elf(0xb7), b"#!/bin/sh\nexec launcher\n"]:
+            for staged in [self.elf(0xb7), b"#!/bin/sh\nexec launcher\n", self.not_elf_with_machine_byte(0x3e)]:
                 with self.subTest(image=name, staged=staged[:4]):
                     (self.root / "codex").unlink(missing_ok=True)
                     (self.root / "codex-stage/codex-bin").write_bytes(staged)
