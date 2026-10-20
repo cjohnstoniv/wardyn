@@ -176,6 +176,14 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	if netpolVerdict != "" {
 		body["network_policy"] = netpolVerdict
 	}
+	// cli_artifact_base is WARDYN_CLI_ARTIFACT_BASE, the operator's internal
+	// mirror of the release assets. Absent (not "") while unset, so a deployment
+	// that names no mirror keeps its body byte-for-byte. This endpoint is
+	// anonymous: the mirror's host name is visible to anyone who reaches it
+	// (docs/ENV.md says so); the value holds no credential (boot refuses userinfo).
+	if s.cfg.CLIArtifactBase != "" {
+		body["cli_artifact_base"] = s.cfg.CLIArtifactBase
+	}
 	// org_federation is present ONLY on a hybrid laptop (WARDYN_ORG_URL set),
 	// so every other deployment's body is byte-for-byte what it was
 	// (TestHealthzOrgFederation_GoldenWhenOff). Two facts and no more: this

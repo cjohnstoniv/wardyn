@@ -14,7 +14,7 @@
 # lane fragments merged: +61: PRERELEASE and Latest in the publish step, the push-before-checks order of prepare, and wait/publish refusing an unchecked head.
 # RELEASING.md 6004 = ours 5943 + theirs 6001 - base 5940 at the 0.10 W2 merge of CI-D onto the train.
 # RELEASING.md 6005 = ours 6004 + theirs 5941 - base 5940 at the 0.10 W2 merge of FLAKE-D onto the train.
-RELEASING.md=6005 share=35 # +1 (0.10 FLAKE-D): the go-gate-tools job joins the job list. +17: the GPL offer regenerated in the release PR (#2192). +15: a resume after the release commit skips MERGE (0.9.4 L9, #2199). +1: the licence bundle among the release assets (0.9.4 L9, #2472). +31: the two Docker Hub Actions secrets, one line each. +7: the runner-units job and the runner release assets (#1968). +249: nightly scope=candidate, dispatch before the PR, and promote at the tag with its rehearsal.
+RELEASING.md=6016 share=35 # +11 (0.10.0 ATT-INSTALL, #3319): the CLI installers among the release assets. +1 (0.10 FLAKE-D): the go-gate-tools job joins the job list. +17: the GPL offer regenerated in the release PR (#2192). +15: a resume after the release commit skips MERGE (0.9.4 L9, #2199). +1: the licence bundle among the release assets (0.9.4 L9, #2472). +31: the two Docker Hub Actions secrets, one line each. +7: the runner-units job and the runner release assets (#1968). +249: nightly scope=candidate, dispatch before the PR, and promote at the tag with its rehearsal.
 # ROADMAP.md 5870 measured after merging G-chores-a.
 # ROADMAP.md 5988 adds 118 over 5870: 0.9 final docs pass, measured: the New Run line of the 0.9 scope and the 0.10 scope table.
 # ROADMAP.md 6133 adds 33 over 6100: the v0.9.3-rc.1 Shipped row the release commit adds.

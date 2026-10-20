@@ -284,3 +284,74 @@ func TestComposeDefault_EmptyAdminTokenBecomesDemoToken(t *testing.T) {
 		t.Fatalf("demo token + unspecified bind resolved to LocalMode=true; expected token mode")
 	}
 }
+
+// install-cli.sh and install-cli.ps1 are release assets that put a binary on a
+// person's PATH, so the lines that say what they did and did not check are
+// pinned as CODE (comments blanked, as above), not as prose. The behaviour half
+// is scripts/test-install-cli.sh, which runs the shell script for real.
+var installCLIGuards = []struct {
+	file string
+	need []string
+}{
+	{"scripts/install-cli.sh", []string{
+		`signature: not checked (cosign not found)`,
+		`catches a broken download, not a tampered release`,
+		`die "checksum mismatch`,
+		`die "refusing to run as root`,
+		`--require-signature`,
+		`cosign verify-blob`,
+		`--certificate-oidc-issuer`,
+		`mv -f "$stage"`,
+		`WARDYN_ARTIFACT_BASE`,
+	}},
+	{"scripts/install-cli.ps1", []string{
+		`signature: not checked (cosign not found)`,
+		`catches a broken download, not a tampered release`,
+		`checksum mismatch`,
+		`refusing to run elevated`,
+		`cosign verify-blob`,
+		`Move-Item`,
+		`WARDYN_ARTIFACT_BASE`,
+	}},
+}
+
+// installCLIComplaints is every way raw (one of the guarded files) fails the guard.
+func installCLIComplaints(raw string, need []string) []string {
+	code := installShCode(raw)
+	var out []string
+	for _, n := range need {
+		if !strings.Contains(code, n) {
+			out = append(out, "executable code no longer carries "+n)
+		}
+	}
+	for _, banned := range []string{"cli.json", "sudo "} {
+		if strings.Contains(code, banned) {
+			out = append(out, "executable code mentions "+banned)
+		}
+	}
+	return out
+}
+
+func TestInstallCLI_HonestyLinesAreCode(t *testing.T) {
+	for _, tc := range installCLIGuards {
+		b, err := os.ReadFile(filepath.Join(repoRoot(t), tc.file))
+		if err != nil {
+			t.Fatalf("read %s: %v", tc.file, err)
+		}
+		raw := string(b)
+		if c := installCLIComplaints(raw, tc.need); len(c) > 0 {
+			t.Errorf("%s: %v", tc.file, c)
+		}
+		// Counterfactual: turning the root refusal into a comment (prose kept)
+		// must trip the guard, or it is satisfied by comments.
+		root := tc.need[3]
+		line := regexp.MustCompile(`(?m)^.*` + regexp.QuoteMeta(root) + `.*$`)
+		if !line.MatchString(raw) {
+			t.Fatalf("%s: the counterfactual's line (%q) moved; the case is vacuous", tc.file, root)
+		}
+		commented := line.ReplaceAllStringFunc(raw, func(l string) string { return "# " + l })
+		if len(installCLIComplaints(commented, tc.need)) == 0 {
+			t.Errorf("%s: commenting out %q left the guard green", tc.file, root)
+		}
+	}
+}

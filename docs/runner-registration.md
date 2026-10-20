@@ -156,6 +156,35 @@ The console prints the same command from the token mint answer, with its `proxy_
 
 Identity and organisation binding are checked before connecting. Private lifecycle and output state survive reconnects. After restart, existing proxies are contained before new work is admitted. After a runner restarts, its runs stop reaching the network until each is revived. The first revive of such a run queues its recovery on the runner and asks you to revive it again once the runner has reconnected ([offline runner recovery](runner-offline.md)). Revocation stops reconnects while local containment continues until the daemon exits.
 
+## Install the CLI
+
+Install the CLI with the line under *Get the CLI* in the console. Managed Macs: the `.pkg`. Scripts and air-gapped hosts: the release files and [VERIFY.md](VERIFY.md#5-verify-the-release-assets).
+
+| Rank | Path | For | What checks it |
+|---|---|---|---|
+| 1 | `install-cli.sh` (macOS, Linux, WSL2) or `install-cli.ps1` (Windows), release assets | every person | A checksum from the same place, which catches a broken download and not a tampered release, and cosign when it is on `PATH`. [What it checks](VERIFY.md#what-install-cli-checks) |
+| 2 | `wardyn-runnerd.pkg` | managed Macs (MDM) | Apple's signature check at install |
+| 3 | The raw `wardyn-<os>-<arch>` with `SHA256SUMS` (and `.sig`, `.pem`) | CI and air-gapped hosts | You, by [VERIFY.md](VERIFY.md#5-verify-the-release-assets) |
+
+```sh
+curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v<version>/install-cli.sh | sh
+# Windows (PowerShell): irm https://github.com/cjohnstoniv/wardyn/releases/download/v<version>/install-cli.ps1 | iex
+```
+
+| Option | What it does |
+|---|---|
+| `--version <x.y.z>` | Installs that release instead of the script's own |
+| `--artifact-base <url>` or `WARDYN_ARTIFACT_BASE` | Fetches `<url>/v<version>/<asset>` from an internal mirror holding the release's asset names; `https://` only, and the flag wins over the variable. `irm \| iex` cannot pass an argument, so PowerShell reads the variable |
+| `--ca-file <pem>` | Trusts that CA file for these downloads only (curl `--cacert`, which replaces curl's default roots for them); not kept. PowerShell uses the Windows certificate store |
+| `--require-signature` | Refuses unless cosign verified `SHA256SUMS` |
+| `--org <url>` | Prints the exact `wardyn login <url>` line at the end |
+
+- The script installs only `wardyn`, for you and without sudo, into the first writable directory of `/usr/local/bin`, `~/.local/bin` and `~/bin` (Windows: `%LOCALAPPDATA%\Wardyn\bin`, added to your user `PATH`). It refuses root.
+- It writes a sibling file and renames it over the old one, so re-running it upgrades.
+- It never signs in and never writes a token or `cli.json`; it ends with `wardyn login <your organisation's URL>`.
+- The release asset `install.sh` is the platform installer, not this script. The runner wrapper ships only inside `wardyn-runner-units.tar.gz`, as `runner/install.sh`.
+- An operator whose computers cannot reach GitHub sets `WARDYN_CLI_ARTIFACT_BASE` on the server ([ENV.md](ENV.md#wardyn_cli_artifact_base)). The console's install line then uses that mirror, and `/healthz` shows its host name to anyone who reaches the console.
+
 ## Set up a runner
 
 `wardyn-runnerd setup` is the one command: it registers this computer, creates the proxy bridge, installs the binary and a per-user service, and starts it. It is idempotent, so running it again is safe: an existing identity is never registered again, and the service files are rewritten and restarted.
@@ -169,7 +198,7 @@ The service is per user, not a root service: the runner identity sits in the per
 
 1. Download `wardyn-runnerd-<os>-<arch>` from the release, and verify it against the signed `SHA256SUMS` as described in [Verify the release assets](VERIFY.md#5-verify-the-release-assets), running `sha256sum -c --ignore-missing SHA256SUMS` since you hold one file.
 2. Save the registration token in a private file. Mint it with `wardyn runner token`, or ask an administrator.
-3. Run `chmod +x` on the download (a release download has no exec bit), then the command above as yourself, not as root. `install.sh --binary <path>` does both.
+3. Run `chmod +x` on the download (a release download has no exec bit), then the command above as yourself, not as root. `runner/install.sh --binary <path>` does both.
 4. Without `--claim`, `setup` prints the key fingerprint and how to claim. With `--claim` and no `WARDYN_TOKEN`, it claims nothing and says so; the admin token cannot claim.
 
 - `--claim` uses your own personal API token from `WARDYN_TOKEN`. `--pool NAME` needs `--claim` and `--default` needs `--pool`; both are refused before the token is spent.

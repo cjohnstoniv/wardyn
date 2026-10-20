@@ -120,6 +120,7 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "${WARDYN_
 ## 5. Verify the release assets
 
 - Each release carries the per-image SBOMs, `THIRD-PARTY-NOTICES.md`, `LICENSE`, `NOTICE`, `install.sh`, the four `wardyn-<os>-<arch>` CLI binaries, the four `wardyn-runnerd-<os>-<arch>` runner binaries, `wardyn-runner-units.tar.gz`, and a signed `SHA256SUMS` — `release.yml`'s `release-assets` job fails the release unless every one of them landed.
+- The CLI installers `install-cli.sh` and `install-cli.ps1` are release assets too, under the same `SHA256SUMS`.
 - The macOS runner package `wardyn-runnerd.pkg` is a release asset too, covered by the same `SHA256SUMS`.
 - `wardyn-licenses.tar.gz` holds the licence texts for the binaries, under the same `SHA256SUMS`.
 - `gh release download` is a GitHub CLI command too, so it needs the same sign-in; the assets are also plain downloads at `https://github.com/cjohnstoniv/wardyn/releases/download/v${WARDYN_VERSION}/<asset>`.
@@ -166,6 +167,21 @@ cosign verify-blob \
 > None of that is hidden: it is published as an accepted risk ([`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md) §5, residual 32) rather than quietly verified.
 > `curl … | sh` is a decision to trust this project's release origin for one command.
 > Steps 1-5 are how you check afterwards that it deserved it, and every artifact the installer fetched is still on disk to check *against*.
+
+## What install-cli checks
+
+`install-cli.sh` and `install-cli.ps1` install the `wardyn` CLI only ([the ranked install paths](runner-registration.md#install-the-cli)). They check two things, and they say which ran:
+
+| Check | When | What it proves |
+|---|---|---|
+| SHA-256 of the binary against `SHA256SUMS` from the same base, matched on the exact file name | always; a mismatch refuses and installs nothing | The download is not broken. It does not catch a tampered release, because whoever controls that origin also serves a matching `SHA256SUMS` |
+| `cosign verify-blob` of `SHA256SUMS` with `SHA256SUMS.sig` and `SHA256SUMS.pem`, against the identity `https://github.com/cjohnstoniv/wardyn/.github/workflows/release.yml@refs/tags/v<version>` and issuer `https://token.actions.githubusercontent.com` | when `cosign` is on `PATH`; a failure refuses | The release workflow for that tag signed the checksums, wherever the bytes came from. The Sigstore trust root came with cosign, not from the origin |
+
+- Without cosign the script prints `signature: not checked (cosign not found)`; `--require-signature` (`-RequireSignature`) turns that into a refusal.
+- A script piped from the same origin also names the identity it checks, so for a piped run that identity line is what you check by hand.
+- A mirror (`--artifact-base`, or the server's `WARDYN_CLI_ARTIFACT_BASE`) is trusted as the console is, because it serves the script. Its checksum file catches corruption only; cosign still checks the release signature.
+- `--ca-file` goes to curl, and to cosign through `SSL_CERT_FILE` for that child alone. The script keeps no copy.
+- Nothing in the installed CLI checks its own signature yet: that needs the release to publish a Sigstore bundle (see [step 5](#5-verify-the-release-assets)).
 
 ## 7. If your scanner flags GO-2026-5932
 
