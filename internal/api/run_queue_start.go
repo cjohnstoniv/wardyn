@@ -225,7 +225,7 @@ func (s *Server) runQueuedStart(st *queuedStart) *queueEnd {
 	}
 	if !ok {
 		if f, ok = s.foldRunRequest(st.cw, st.r, foldCreate, &req, ceiling, reqCC); !ok {
-			return st.signInEnd(st.refusalEnd())
+			return s.signInEnd(st, st.refusalEnd())
 		}
 	}
 	st.f = f
@@ -286,8 +286,11 @@ func (s *Server) foldRaisedDefault(st *queuedStart, req createRunRequest, ceilin
 // renewal at the start needs them to sign in again, llmRefusalAuditReason), the owner_sign_in wait the
 // docs promise: the booking goes back to its queue, within its deadline, for them to sign in again. A
 // policy or any other refusal still ends it, and an unscheduled queued run fails as it always has.
-func (st *queuedStart) signInEnd(end *queueEnd) *queueEnd {
-	if st.entry.StartAt != nil && end.token == llmRefusalAuditReason {
+// It goes back only when the queue would hold it now (queueOwnerSignIn): a refusal the admit's status
+// read cannot see (a spent mark on a pair still stored) would promote it again at once, so that one ends
+// the run as before instead of looping.
+func (s *Server) signInEnd(st *queuedStart, end *queueEnd) *queueEnd {
+	if st.entry.StartAt != nil && end.token == llmRefusalAuditReason && s.queueOwnerSignIn(st.base, st.entry, st.launch) != "" {
 		end.wait = runnerpool.WaitOwnerSignIn
 	}
 	return end

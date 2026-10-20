@@ -306,3 +306,31 @@ func TestPG_ScheduledRunRefusedAtItsFirstRenewalWaitsForTheOwner(t *testing.T) {
 		}
 	})
 }
+
+// A sign-in refusal the queue cannot see before promotion (the refresh token marked spent, the pair still
+// stored) ends the booking model_credential as an unscheduled start would: put back, it would be promoted
+// again at once, round and round until its deadline.
+func TestPG_ScheduledRunRefusedOnASpentMarkTheQueueCannotSeeFailsOnce(t *testing.T) {
+	e := newQueueEnv(t)
+	t.Setenv(envScheduledRuns, "1")
+	_, out := e.awsSSOSchedule()
+	expired := putAWSSSOBlob(t, e.srv, time.Now().Add(-time.Minute))
+	expired.RegistrationExpiresAt = time.Now().Add(90 * 24 * time.Hour)
+	storeSSOBlobFor(t, e.srv, e.personP, expired)
+	e.srv.markAWSSSOTokenSpent(context.Background(), awsSSOTokenFingerprint(expired.RefreshToken), e.personP)
+	calls := renewedOIDC(t)
+	e.due(out.ID)
+	e.sweep()
+	got := e.waitFailed(out.ID)
+	if got.StatusDetail != statusDetailQueuePrefix+llmRefusalAuditReason {
+		t.Fatalf("a booking refused on a spent mark = %s %q; want FAILED %s", got.State, got.StatusDetail, llmRefusalAuditReason)
+	}
+	e.sweep()
+	time.Sleep(200 * time.Millisecond) // a requeue's kick would have promoted it again by now
+	if rows := e.audits(out.ID, "run.queue.start"); len(rows) != 1 || rows[0].Outcome != "failure" {
+		t.Errorf("run.queue.start rows = %+v; want one failure, no second start", rows)
+	}
+	if r := e.run(out.ID); r.State != types.RunFailed || e.queueRows(out.ID) != 0 || calls.Load() != 0 {
+		t.Errorf("after the end = %s, %d queue rows, %d renewals; want FAILED, none, none", r.State, e.queueRows(out.ID), calls.Load())
+	}
+}
