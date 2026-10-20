@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { Page } from "@playwright/test";
+import type { Page, WebSocketRoute } from "@playwright/test";
 import { test, expect, sql, consoleAPI, gotoConsole, navToRoute } from "./fixtures";
 import { NR_MACHINE } from "../src/app/components/wardyn/copy/new-run/machine";
 import { NR_SHAPE } from "../src/app/components/wardyn/copy/new-run/shape";
@@ -144,32 +144,54 @@ test.describe("Run detail — Desktop", () => {
   });
 
   test("a Close the gateway did not store keeps the desktop open, says so, and leaves Close to try again", async ({ page }) => {
-    const runId = runIdByTask(RUN_TASK);
-    await gotoConsole(page);
-    const health = JSON.parse((await consoleAPI(page, "GET", "/healthz")).text);
-    const viewer = new URL(`../r/${runId}/__desktop/`, health.ui_sandbox.enter_post_url as string);
-    const path = viewer.pathname.replace(/\/$/, "");
-    // The `none` runner has no VM to open a session on, so the gateway's own viewer page (its refusal, served
-    // without a session) is booted as an open desktop, its stream held open here and its Close answered 503.
-    const boot = { state: "open", expires: 4102444800, rfb: `${path}/__rfb`, close: `${path}/__close` };
-    await page.route(viewer.href, async (route) => {
-      const res = await route.fetch();
-      const body = (await res.text()).replace(/data-wardyn-desktop="[^"]*"/, `data-wardyn-desktop="${JSON.stringify(boot).replace(/"/g, "&quot;")}"`);
-      await route.fulfill({ response: res, status: 200, body });
-    });
-    await page.routeWebSocket(`**${path}/__rfb`, () => {});
-    let closes = 0;
-    await page.route(`**${path}/__close`, async (route) => {
-      closes += 1;
-      await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "could not close this desktop session; try again" }) });
-    });
-    await page.goto(viewer.href);
+    const v = await openViewerWithFailingClose(page);
     const close = page.getByRole("button", { name: DESKTOP.close });
     await close.click();
     await expect(page.getByRole("alert")).toHaveText("Close didn't go through, so this desktop is still open. Try again.");
     expect(DESKTOP.closeFailed).toBe("Close didn't go through, so this desktop is still open. Try again.");
     await expect(close).toBeEnabled();
-    expect(closes).toBe(1);
+    expect(v.closes()).toBe(1);
     expect(page.isClosed()).toBe(false);
   });
+
+  test("a stream that drops while a Close is in flight reconnects, and the failed Close still says so", async ({ page }) => {
+    const v = await openViewerWithFailingClose(page, (sockets) => sockets[0].close({ code: 4000, reason: "dropped" }));
+    const close = page.getByRole("button", { name: DESKTOP.close });
+    await close.click();
+    await expect(page.getByRole("alert")).toHaveText("Close didn't go through, so this desktop is still open. Try again.");
+    await expect(close).toBeEnabled();
+    await expect.poll(() => v.dials()).toBe(2);
+  });
 });
+
+/**
+ * The gateway's own viewer page booted as an open desktop: the `none` runner has no VM to open a session on,
+ * so the page (its refusal, served without a session) gets an open boot, its stream is held open here, and
+ * its Close is answered 503, after `beforeAnswer` when given.
+ */
+async function openViewerWithFailingClose(page: Page, beforeAnswer?: (sockets: WebSocketRoute[]) => Promise<void>) {
+  const runId = runIdByTask(RUN_TASK);
+  await gotoConsole(page);
+  const health = JSON.parse((await consoleAPI(page, "GET", "/healthz")).text);
+  const viewer = new URL(`../r/${runId}/__desktop/`, health.ui_sandbox.enter_post_url as string);
+  const path = viewer.pathname.replace(/\/$/, "");
+  const boot = { state: "open", expires: 4102444800, rfb: `${path}/__rfb`, close: `${path}/__close` };
+  await page.route(viewer.href, async (route) => {
+    const res = await route.fetch();
+    const body = (await res.text()).replace(/data-wardyn-desktop="[^"]*"/, `data-wardyn-desktop="${JSON.stringify(boot).replace(/"/g, "&quot;")}"`);
+    await route.fulfill({ response: res, status: 200, body });
+  });
+  const sockets: WebSocketRoute[] = [];
+  await page.routeWebSocket(`**${path}/__rfb`, (ws) => {
+    sockets.push(ws);
+  });
+  let closes = 0;
+  await page.route(`**${path}/__close`, async (route) => {
+    closes += 1;
+    await beforeAnswer?.(sockets);
+    await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "could not close this desktop session; try again" }) });
+  });
+  await page.goto(viewer.href);
+  await expect.poll(() => sockets.length).toBe(1);
+  return { closes: () => closes, dials: () => sockets.length };
+}
