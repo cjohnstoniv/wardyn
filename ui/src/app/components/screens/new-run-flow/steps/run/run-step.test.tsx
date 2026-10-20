@@ -444,6 +444,30 @@ describe("Run step: Schedule for later", () => {
     }
   });
 
+  it("shows no start when the switch is off, even for a draft that holds one", async () => {
+    function Holds() {
+      const dispatch = useNewRunDispatch();
+      React.useEffect(() => dispatch({ type: "schedule", schedule: { date: "2026-10-21", time: "02:00", zone: "UTC" } }), [dispatch]);
+      return null;
+    }
+    document.head.append(sheet);
+    render(
+      <MemoryRouter>
+        <ModelAccessProvider status={{} as SetupStatus} onRefresh={() => {}}>
+          <NewRunDraftProvider owner="alice">
+            <Seeded intent={AUTONOMOUS}>
+              <RunStep location={{ screen: "step", step: "run" }} go={vi.fn()} startFromScratch={() => {}} deps={{ load: async () => MEMBER }} />
+              <Holds />
+            </Seeded>
+          </NewRunDraftProvider>
+        </ModelAccessProvider>
+      </MemoryRouter>,
+    );
+    await poolSelect();
+    expect(screen.getByRole("radio", { name: NR_RUN.TIMING_NOW })).toBeChecked();
+    expect(screen.queryByLabelText(NR_RUN.START_DATE)).not.toBeInTheDocument();
+  });
+
   it("opens Date, Time and Time zone when on, losing its Coming soon, and asks for a date and time first", async () => {
     show(AUTONOMOUS, MEMBER, ON);
     await pick();
