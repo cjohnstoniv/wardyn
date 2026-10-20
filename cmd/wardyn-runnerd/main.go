@@ -59,6 +59,6 @@ func rootCommand() *cobra.Command {
 			}
 			return nil
 		}}
-	cmd.AddCommand(newRegisterCommand(), newSetupCommand(), newServeCommand(productionRunnerHooks))
+	cmd.AddCommand(newRegisterCommand(), newSetupCommand(), newDoctorCommand(), newServeCommand(productionRunnerHooks))
 	return cmd
 }
