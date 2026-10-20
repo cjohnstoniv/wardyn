@@ -656,7 +656,7 @@ resolve_workdir() {
 repo_scan_ok() {
     [[ -z "${WARDYN_REPOS:-}" && -z "${WARDYN_REPO_URL:-}" ]] && return 0
     [[ -d "$workdir" ]] || return 1
-    find "$workdir" -maxdepth 2 -mindepth 1 -type d -name ".git" 2>/dev/null | grep -q .
+    find "$workdir" -maxdepth 2 -mindepth 1 -type d -name ".git" 2>/dev/null | grep . >/dev/null
 }
 
 # maybe_exec_task_mode "<task>" — exec task mode (BYOA/CI lane): when the
