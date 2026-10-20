@@ -227,6 +227,24 @@ func checkedTrustedCAFile(given, kept, from string) (string, error) {
 	return abs, err
 }
 
+// checkedKeptCA checks the CA bundle setup will write (the flag, else the one kept) and prints what is wrong with
+// it short of refusing it. A refusal names where a kept path came from.
+func checkedKeptCA(out io.Writer, given, kept string, paths setupPaths, existing runnerFile) (string, error) {
+	from := cmp.Or(paths.envFile, paths.plistFile)
+	if existing.TrustedCAFile != "" {
+		from = paths.configFile()
+	}
+	path, err := checkedTrustedCAFile(given, kept, from)
+	if err != nil {
+		return "", err
+	}
+	_, warnings := trustedCAFileCheck(path, time.Now())
+	for _, w := range warnings {
+		fmt.Fprintln(out, "warning: "+w)
+	}
+	return path, nil
+}
+
 // checkServiceChoice checks the service setup will install, or with --no-service that none is installed
 // already for this runner.
 func (h setupHost) checkServiceChoice(ctx context.Context, noService bool, planPaths *setupPaths, paths setupPaths) error {
@@ -285,19 +303,21 @@ func proxyEnvNames(getenv func(string) string) []string {
 }
 
 // shellProxyWarning says that the service setup installs starts without this shell's proxy variables, so
-// the runner's own connection to the organisation will not use that proxy. Setup rewrites the env file
-// and the LaunchAgent on every run, so it points at the places a rerun leaves alone.
+// the runner's own connection to the organisation will not use that proxy, and where a proxy goes instead:
+// runner_proxy in runnerd.json, which setup keeps, or for a credential a systemd drop-in, which it leaves alone.
 func shellProxyWarning(names []string, goos string, p setupPaths) string {
-	verb, where := "is", "a systemd drop-in that adds an EnvironmentFile (systemctl --user edit wardyn-runnerd), because setup rewrites "+p.envFile
+	verb := "is"
 	if len(names) > 1 {
 		verb = "are"
 	}
+	credential := "a systemd drop-in that adds an EnvironmentFile (systemctl --user edit wardyn-runnerd)"
 	if goos == "darwin" {
-		where = "the LaunchAgent's EnvironmentVariables (" + p.plistFile + "), which a later setup rewrites"
+		credential = "a launcher of your own: the LaunchAgent is readable by every local account"
 	}
 	return strings.Join(names, ", ") + " " + verb + " set in this shell, but the service setup installs does not receive " +
-		"it, so the runner's own connection to the organisation will not use that proxy. Add it to " + where +
-		": see docs/runner-registration.md#a-runner-behind-a-corporate-proxy. Never put a proxy credential in the LaunchAgent: every local account can read it."
+		"it, so the runner's own connection to the organisation will not use that proxy. Set runner_proxy in " + p.configFile() +
+		" (a URL without a user name or password; setup keeps it), or for a proxy with a credential use " + credential +
+		": see docs/runner-registration.md#a-runner-behind-a-corporate-proxy. Never put a proxy credential in the LaunchAgent."
 }
 
 // preflight validates every input and checks Docker, so that a refusal comes before the single-use
@@ -332,16 +352,8 @@ func (h setupHost) preflight(cmd *cobra.Command, o setupOptions) (setupPlan, err
 	if names := proxyEnvNames(os.Getenv); len(names) > 0 && !o.noService {
 		fmt.Fprintln(cmd.OutOrStdout(), shellProxyWarning(names, h.goos, paths))
 	}
-	keptFrom := cmp.Or(paths.envFile, paths.plistFile)
-	if existing.TrustedCAFile != "" {
-		keptFrom = paths.configFile()
-	}
-	if o.trustedCAFile, err = checkedTrustedCAFile(o.trustedCAFile, keptCA, keptFrom); err != nil {
+	if o.trustedCAFile, err = checkedKeptCA(cmd.OutOrStdout(), o.trustedCAFile, keptCA, paths, existing); err != nil {
 		return setupPlan{}, err
-	}
-	_, caWarnings := trustedCAFileCheck(o.trustedCAFile, time.Now())
-	for _, w := range caWarnings {
-		fmt.Fprintln(cmd.OutOrStdout(), "warning: "+w)
 	}
 	plan := setupPlan{setupOptions: o, paths: paths, existing: existing, mirror: existing.ProxyImageMirror, dockerHost: h.dockerHost, want: want, flagged: o.proxyImage != ""}
 	if _, err := os.Stat(plan.paths.identity()); err == nil {
