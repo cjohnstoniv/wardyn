@@ -239,7 +239,11 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 | `OrgCAFile` | `--org-ca-file` | a PEM file of extra roots for the runner's own connection to the organisation only; root-owned, not writable by group or others |
 | `RecordingStore` | `--recording-store` | `pg`, `fs` or `off` |
 | `DockerHost` | `DOCKER_HOST` | the engine's socket, when it is not the default |
-| `lock_security_settings` | none: profile only | a boolean, off by default. `true` makes the profile win over a flag for the five keys below it, and `serve` refuses a flag or environment variable that disagrees, naming this key |
+| `lock_security_settings` | none: profile only | a boolean, off by default; `true` locks the five security keys, as the bullets below say |
+
+- With the lock on, `OrgURL`, `ProxyImage`, `TrustedCAFile`, `OrgCAFile` and `RecordingStore` in the profile win over a flag, and `serve` and `setup` refuse a flag or environment variable that disagrees, naming `lock_security_settings`.
+- A value other than true, false, 1 or 0, or a profile that cannot be read, refuses start. Only a macOS profile can set it: there is no flag, variable or file twin.
+- A key the profile leaves empty, and every other key, keeps the order above.
 
 ## A folder on your computer for a remote sandbox
 

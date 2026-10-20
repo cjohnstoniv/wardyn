@@ -130,17 +130,28 @@ type runnerInputs struct {
 	managed  func(key string) string
 	file     runnerFile
 	filePath string
+	// lockRead reads lockSettingKey and reports a profile that is there but unreadable; nil reads the key
+	// through managed.
+	lockRead func() (string, error)
 	// locked is set by resolveRunnerConfig from the managed profile's lockSettingKey, never by a caller.
 	locked bool
 }
 
-// securityLocked is whether the managed profile sets lockSettingKey. A value that is neither true nor false
-// reads as locked, with an error, so a typo in the profile never silently leaves the settings open.
-func securityLocked(managed func(string) string) (bool, error) {
-	if managed == nil {
-		return false, nil
+// securityLocked is whether the managed profile sets lockSettingKey. A value that is neither true nor false,
+// or a profile that cannot be read, reads as locked, with an error, so neither a typo nor a damaged profile
+// silently leaves the settings open.
+func securityLocked(in runnerInputs) (bool, error) {
+	var v string
+	switch {
+	case in.lockRead != nil:
+		var err error
+		if v, err = in.lockRead(); err != nil {
+			return true, fmt.Errorf("managed preference %s could not be read, so start is refused: %w", lockSettingKey, err)
+		}
+	case in.managed != nil:
+		v = in.managed(lockSettingKey)
 	}
-	switch v := strings.ToLower(managed(lockSettingKey)); v {
+	switch strings.ToLower(v) {
 	case "", "false", "0":
 		return false, nil
 	case "true", "1":
@@ -150,11 +161,14 @@ func securityLocked(managed func(string) string) (bool, error) {
 	}
 }
 
+// managedLockRead is lockRead for the real profile.
+func managedLockRead() (string, error) { return managedPrefErr(lockSettingKey) }
+
 // checkSecurityLock refuses a flag or environment variable that disagrees with a managed security setting
 // while the profile sets lockSettingKey. A setting the profile leaves empty is not locked, and a value is
 // never repeated in the error.
 func checkSecurityLock(in runnerInputs) error {
-	if locked, err := securityLocked(in.managed); err != nil || !locked {
+	if locked, err := securityLocked(in); err != nil || !locked {
 		return err
 	}
 	for _, f := range runnerFields {
@@ -185,7 +199,7 @@ func checkSecurityLock(in runnerInputs) error {
 // resolveRunnerConfig applies flag > managed preference > environment > file > default to every field. While
 // the managed profile sets lockSettingKey, a security field's managed value outranks the flag too.
 func resolveRunnerConfig(in runnerInputs) runnerConfig {
-	in.locked, _ = securityLocked(in.managed)
+	in.locked, _ = securityLocked(in)
 	out := make(runnerConfig, 0, len(runnerFields))
 	for _, f := range runnerFields {
 		out = append(out, f.resolve(in))
@@ -381,7 +395,7 @@ func effectiveRunnerConfig(path string, flag func(string) (string, bool)) (runne
 	if err != nil {
 		return nil, err
 	}
-	in := runnerInputs{flag: flag, getenv: os.Getenv, managed: managedPref, file: file, filePath: path}
+	in := runnerInputs{flag: flag, getenv: os.Getenv, managed: managedPref, lockRead: managedLockRead, file: file, filePath: path}
 	if err := checkSecurityLock(in); err != nil {
 		return nil, err
 	}

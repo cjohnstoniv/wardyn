@@ -124,8 +124,8 @@
 # 0.10 W4a train: docs/ENV.md tightened to 42189, measured at the train merge.
 
 # docs/ENV.md 42228 adds 39 over 42189 (0.10 RDIAG-C), measured at the merge of main: nine rows name their runnerd.json field, and the carried-proxy and CA bullets say where setup writes them.
-# docs/ENV.md 42235 adds 7 over 42228 (0.10 RUNNERD-LOCK), measured: four rows name the managed-settings lock key.
-docs/ENV.md=42235 share=5
+# docs/ENV.md 42271 adds 43 over 42228 (0.10 RUNNERD-LOCK), measured: four rows name the managed-settings lock key, and the WARDYN_PROXY_IMAGE section says where it is described.
+docs/ENV.md=42271 share=5
 # docs/ENV.md 39047 adds 478 over 38569: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
 # docs/ENV.md 38607 adds 38 over 38569, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # docs/ENV.md 40042 adds 422 over 39620, measured: the WARDYN_AWS_SIGV4_AT_PROXY row and section: which lanes and hosts are re-signed, the named refusals, and the no-hold, placement and new-dispatch notes.

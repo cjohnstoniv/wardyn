@@ -196,11 +196,15 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 // serveConfig resolves every setting for serve: the flags the command line gave, the managed preferences,
 // the environment, then runnerd.json. Read here, not when the command is built, so only serve pays for it.
 func serveConfig(cmd *cobra.Command, configPath string) (runnerConfig, error) {
-	flag := func(name string) (string, bool) {
+	return effectiveRunnerConfig(configPath, changedFlags(cmd))
+}
+
+// changedFlags reads a string flag the person gave on cmd's command line; a flag cmd lacks, or left alone, is not given.
+func changedFlags(cmd *cobra.Command) func(string) (string, bool) {
+	return func(name string) (string, bool) {
 		v, err := cmd.Flags().GetString(name)
 		return v, err == nil && cmd.Flags().Changed(name)
 	}
-	return effectiveRunnerConfig(configPath, flag)
 }
 
 // applyTo copies the effective settings into serve's own variables.

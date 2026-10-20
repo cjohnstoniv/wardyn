@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -177,7 +178,7 @@ func TestSecurityLockHasNoFlagEnvOrFileTwin(t *testing.T) {
 	if err := serveConfigErr(t, "--proxy-image", "other-img"); err != nil {
 		t.Errorf("an environment variable switched the lock on: %v", err)
 	}
-	if locked, _ := securityLocked(func(k string) string { return map[string]string{"WARDYN_LOCK_SECURITY_SETTINGS": "true"}[k] }); locked {
+	if locked, _ := securityLocked(runnerInputs{managed: func(k string) string { return map[string]string{"WARDYN_LOCK_SECURITY_SETTINGS": "true"}[k] }}); locked {
 		t.Error("the lock read something other than the managed key")
 	}
 	if _, err := loadRunnerFile(writeConfig(t, `{"lock_security_settings": true}`), true); err == nil {
@@ -186,6 +187,87 @@ func TestSecurityLockHasNoFlagEnvOrFileTwin(t *testing.T) {
 	for _, f := range runnerFields {
 		if f.name == lockSettingKey || f.managed == lockSettingKey {
 			t.Errorf("%s is a runnerd setting", f.name)
+		}
+	}
+}
+
+// A profile that is there but cannot be read must not read as one without the lock: start is refused, naming
+// the setting, whichever of the two profile files fails. Other keys keep reading a failed profile as unset.
+func TestSecurityLockUnreadableProfileRefusesStart(t *testing.T) {
+	withManagedPrefs(t, "darwin", withLock("false"))
+	prefsRoot = "/Managed Preferences"
+	for _, failing := range []string{"user", "device"} {
+		prefsExtract = func(file, key string) (string, error) {
+			if (failing == "device") == (filepath.Dir(file) == prefsRoot) {
+				return "", fmt.Errorf("permission denied")
+			}
+			return "", nil
+		}
+		if err := serveConfigErr(t); err == nil || !strings.Contains(err.Error(), lockSettingKey) {
+			t.Errorf("%s profile unreadable: %v; want a refusal naming %s", failing, err, lockSettingKey)
+		}
+	}
+	if got := managedPref("OrgURL"); got != "" {
+		t.Errorf("a failed read of OrgURL = %q, want unset", got)
+	}
+}
+
+// writePlutil is a stand-in for /usr/bin/plutil whose -extract and -lint each run the given shell command.
+func writePlutil(t *testing.T, extract, lint string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("needs /bin/sh")
+	}
+	old := plutilPath
+	t.Cleanup(func() { plutilPath = old })
+	plutilPath = filepath.Join(t.TempDir(), "plutil")
+	script := "#!/bin/sh\ncase \"$1\" in\n-extract) " + extract + " ;;\n-lint) " + lint + " ;;\nesac\n"
+	if err := os.WriteFile(plutilPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Only a missing file, or a readable plist without the key, is unset; every other failure is an error.
+func TestPlutilExtractFailsClosed(t *testing.T) {
+	plist := filepath.Join(t.TempDir(), "p.plist")
+	if err := os.WriteFile(plist, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writePlutil(t, "echo true", "exit 0")
+	if v, err := plutilExtract(plist, lockSettingKey); v != "true" || err != nil {
+		t.Errorf("a set key = %q, %v", v, err)
+	}
+	if v, err := plutilExtract(plist+".missing", lockSettingKey); v != "" || err != nil {
+		t.Errorf("a missing file = %q, %v; want unset", v, err)
+	}
+	if _, err := plutilExtract(filepath.Join(plist, "below-a-file"), lockSettingKey); err == nil {
+		t.Error("a stat error other than not-exist read as unset")
+	}
+	writePlutil(t, "exit 1", "exit 0")
+	if v, err := plutilExtract(plist, lockSettingKey); v != "" || err != nil {
+		t.Errorf("an absent key in a readable plist = %q, %v; want unset", v, err)
+	}
+	writePlutil(t, "exit 1", "exit 1")
+	if _, err := plutilExtract(plist, lockSettingKey); err == nil {
+		t.Error("a plist plutil cannot read read as unset")
+	}
+	plutilPath = filepath.Join(t.TempDir(), "no-such-plutil")
+	if _, err := plutilExtract(plist, lockSettingKey); err == nil {
+		t.Error("a plutil that could not run read as unset")
+	}
+}
+
+// With the lock on, setup refuses a disagreeing flag before it dials out, naming the setting.
+func TestSecurityLockSetupRefusesDisagreeingFlag(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", "")
+	withManagedPrefs(t, "darwin", withLock("true"))
+	for _, args := range [][]string{{"--org", "https://other.example"}, {"--org", "https://m.example", "--proxy-image", "other-img"}} {
+		c := newSetupCommand()
+		c.SetArgs(args)
+		c.SilenceUsage, c.SilenceErrors = true, true
+		if err := c.Execute(); err == nil || !strings.Contains(err.Error(), lockSettingKey) {
+			t.Errorf("setup %v: %v; want a refusal naming %s", args, err, lockSettingKey)
 		}
 	}
 }
