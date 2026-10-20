@@ -215,7 +215,16 @@ func (d *Driver) managedFileUID(ctx context.Context, containerID, user string) (
 		}
 		return uid, nil
 	}
-	return 0, fmt.Errorf("docker: managed files need an image whose USER is a non-root user; USER %q is neither a number nor a name in the image's /etc/passwd, so the uid it runs as cannot be checked", user)
+	return 0, userNotInPasswdError{user}
+}
+
+// userNotInPasswdError is managedFileUID's refusal of a USER name the image's
+// /etc/passwd does not have, typed so the team-drive check can say it its own
+// way (checkTeamDriveUser).
+type userNotInPasswdError struct{ user string }
+
+func (e userNotInPasswdError) Error() string {
+	return fmt.Sprintf("docker: managed files need an image whose USER is a non-root user; USER %q is neither a number nor a name in the image's /etc/passwd, so the uid it runs as cannot be checked", e.user)
 }
 
 // firstArchiveEntry returns the header of the first entry of the archive the

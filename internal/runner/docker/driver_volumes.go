@@ -279,6 +279,12 @@ func (d *Driver) checkTeamDriveUser(ctx context.Context, seed string, drive *typ
 		user = insp.Container.Config.User
 	}
 	uid, err := d.managedFileUID(ctx, seed, user)
+	if errors.As(err, new(userNotInPasswdError)) {
+		return fmt.Errorf("team drive %s is writable for this run, but this image's USER %q is not in its /etc/passwd, "+
+			"so its uid cannot be checked against the team drive's owner, uid %d. "+
+			"Use an image whose agent runs as uid %d, or ask an admin for a read-only allocation",
+			runner.DriveSubject(drive), user, runner.AgentUID, runner.AgentUID)
+	}
 	if err != nil {
 		return err
 	}

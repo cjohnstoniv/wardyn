@@ -282,6 +282,28 @@ func TestCreateSandbox_WritableTeamDriveAcceptsTheAgentByName(t *testing.T) {
 	}
 }
 
+// TestCreateSandbox_WritableTeamDriveRefusesAnUnknownUser: a USER name the
+// image's /etc/passwd lacks is refused, by name, with the team drive's own
+// sentence and no ownership change.
+func TestCreateSandbox_WritableTeamDriveRefusesAnUnknownUser(t *testing.T) {
+	f := newFakeDocker()
+	f.imageUsers = map[string]string{"busybox:latest": "ghost"}
+	f.passwd = "root:x:0:0::/root:/bin/sh\nagent:x:1000:1000::/home/agent:/bin/sh\n"
+	run := testSpec().RunID
+	drive := teamVolumeDrive(false)
+	drive.DriveName = "Eng share"
+	_, err := createWithDrives(t, f, run, drive)
+	const want = `docker: seed user drive volume "wardyn-drive-team-eng": team drive drive "Eng share", directory "alice" is writable for this run, ` +
+		`but this image's USER "ghost" is not in its /etc/passwd, so its uid cannot be checked against the team drive's owner, uid 1000. ` +
+		`Use an image whose agent runs as uid 1000, or ask an admin for a read-only allocation`
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("CreateSandbox = %v, want the refusal %q", err, want)
+	}
+	if c := seedCopies(f, run); len(c) != 0 {
+		t.Errorf("seed copies = %+v, want no ownership change", c)
+	}
+}
+
 // TestCreateSandbox_ConcurrentTeamSeedsAreIdempotent: four runs seeding one
 // empty team volume at once, all held until each has read it empty, all
 // succeed, each through its own seed, and each sends the same one entry: the
