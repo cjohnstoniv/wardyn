@@ -79,10 +79,8 @@ func Handler(store Store, authorize Authorizer) http.Handler {
 		// error part-way would end the body short of its tail after a 200, and a short cast is
 		// still a well-formed one; log it and abort the response so the client sees a failed transfer.
 		var readErr error
-		rctl := http.NewResponseController(w)
-		// With no server WriteTimeout nothing else resets the deadline, and a kept-alive connection would carry it into its next request.
-		defer func() { _ = rctl.SetWriteDeadline(time.Time{}) }()
-		_, _ = io.Copy(deadlineWriter{w: w, rc: rctl}, readerFunc(func(p []byte) (int, error) {
+		// The last write's deadline also covers the final flush; the server clears it before the next request.
+		_, _ = io.Copy(deadlineWriter{w: w, rc: http.NewResponseController(w)}, readerFunc(func(p []byte) (int, error) {
 			n, err := rc.Read(p)
 			if err != nil && !errors.Is(err, io.EOF) {
 				readErr = err

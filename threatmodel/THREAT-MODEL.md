@@ -2945,7 +2945,7 @@ exactly these terms.
   - an OPT-IN Shannon-entropy detector (`detect_entropy`; high-FP in code, pure-hex skipped, medium severity so `block_min_severity` can exclude it),
   - an OPT-IN regex/Luhn PII detector (`detect_pii`; ≈60-70% recall = high false-negative — visibility, NEVER a control),
   - and an OPT-IN out-of-process sidecar (`detector_sidecar_url`; e.g. Presidio/LLM-Guard — fail-open by default, fail-closed under `on_scanner_error=block`).
-    - The sidecar scans at most 64 spans per request. Under the default fail-open (`on_scanner_error=allow`), spans past the 64th are not sent to it, so a request built with more spans gets the rest past the sidecar. The in-process detectors still scan every span, and the skip is recorded as `sidecar_call_cap`. To have every span scanned or the request refused, set `on_scanner_error=block`.
+    - The sidecar scans at most 64 spans per request. Under the default fail-open (`on_scanner_error=pass`), spans past the 64th are not sent to it, so a request built with more spans gets the rest past the sidecar. The in-process detectors still scan every span, and the skip is recorded as `sidecar_call_cap`. To have every span scanned or the request refused, set `on_scanner_error=block`.
   - None is exhaustive; entropy and PII in particular are best-effort.
   - Detections stay content-free regardless of detector.
 - "Protects all LLM traffic" — Bedrock (SigV4) stays opaque, and any run without `intercept_tls` leaves subscription/OAuth tunnels uninspected (flagged blind).
