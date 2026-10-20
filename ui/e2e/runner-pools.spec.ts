@@ -42,9 +42,13 @@ test("the Pools tab says how an organization pool is made and that there are non
   await gotoConsole(page, "admin");
   await page.goto("/admin/runners?tab=pools");
   await expect(page.getByRole("heading", { name: POOLS.ORG_TITLE, exact: true })).toBeVisible();
-  await expect(page.getByText(POOLS.ORG_LEDE)).toBeVisible();
-  await expect(page.getByText(POOLS.ORG_CLI_COMMAND)).toBeVisible();
-  await expect(page.getByRole("group", { name: POOLS.ORG_EMPTY_TITLE })).toContainText(POOLS.ORG_EMPTY_BODY);
+  const empty = page.getByRole("group", { name: POOLS.ORG_EMPTY_TITLE });
+  await expect(empty).toContainText(POOLS.ORG_CLI);
+  await expect(empty.getByText(POOLS.ORG_CLI_COMMAND)).toBeVisible();
+  await expect(empty.getByRole("button", { name: POOLS.ORG_CLI_COPY })).toBeVisible();
+  await expect(empty).toContainText(POOLS.ORG_EMPTY_THEN);
+  await expect(page.getByText(POOLS.ORG_LEDE)).toHaveCount(0);
+  await expect(page.getByText(POOLS.ORG_CLI_EDIT)).toHaveCount(0);
   await expect(page.getByRole("heading", { name: POOLS.USER_TITLE, exact: true })).toBeVisible();
   await expect(page.getByRole("main").getByRole("link", { name: POOLS.GOVERNANCE_LINK })).toHaveAttribute("href", /\/admin\/governance$/);
   await expect(page.getByRole("group", { name: POOLS.USER_EMPTY_TITLE })).toContainText(POOLS.USER_EMPTY_BODY);

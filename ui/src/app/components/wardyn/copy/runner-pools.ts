@@ -156,7 +156,8 @@ export const POOLS = {
   ORG_DEFAULT_NOTE: "The default seeds each person's New Run when they choose an organization pool. It grants nobody a pool.",
   ORG_NO_DEFAULT: "No organization default. People choose an organization pool each time.",
   ORG_EMPTY_TITLE: "No organization pools yet",
-  ORG_EMPTY_BODY: "Create one on the command line, as above. It then appears here.",
+  ORG_EMPTY_THEN: "It then appears here.",
+  ORG_CLI_COPY: "Copy",
   USER_TITLE: "User pools",
   USER_LEDE:
     "Every person's own pools, read-only. Only the owner can change a pool or choose its runners. A person's pools go when their data is erased. There is no organization default for user pools: people choose their own.",

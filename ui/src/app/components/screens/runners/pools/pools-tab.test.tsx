@@ -78,6 +78,9 @@ describe("Pools tab", () => {
     expect(screen.getByRole("heading", { name: "Organization pools", level: 2 })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "User pools", level: 2 })).toBeInTheDocument();
     expect(screen.getByText("wardyn runner pool create --scope organization --runner <runner>")).toBeInTheDocument();
+    expect(screen.getByText(/^Pools your organization provides/)).toBeInTheDocument();
+    expect(screen.getByText(/You edit them here\.$/)).toBeInTheDocument();
+    expect(screen.queryByText("No organization pools yet")).toBeNull();
     expect(screen.getByRole("link", { name: "Governance" })).toHaveAttribute("href", "/admin/governance");
     const org = within(orgTable());
     expect(org.getAllByRole("row")).toHaveLength(4);
@@ -123,7 +126,15 @@ describe("Pools tab", () => {
     listMock.mockResolvedValue({ pools: [] });
     renderTab();
     expect(await screen.findByText("No organization pools yet")).toBeInTheDocument();
-    expect(screen.getByText("Create one on the command line, as above. It then appears here.")).toBeInTheDocument();
+    const empty = screen.getByRole("group", { name: "No organization pools yet" });
+    expect(empty).toHaveTextContent("Organization pools are created on the command line:");
+    expect(within(empty).getByText("wardyn runner pool create --scope organization --runner <runner>")).toBeInTheDocument();
+    expect(within(empty).getByRole("button", { name: "Copy" })).toBeInTheDocument();
+    expect(empty).toHaveTextContent("It then appears here.");
+    expect(empty).not.toHaveTextContent("as above");
+    expect(screen.getByRole("heading", { name: "Organization pools", level: 2 })).toBeInTheDocument();
+    expect(screen.queryByText(/^Pools your organization provides/)).toBeNull();
+    expect(screen.queryByText(/You edit them here/)).toBeNull();
     expect(screen.getByText("No user pools yet")).toBeInTheDocument();
     expect(screen.getByText("People create their own from Your account → My runner.")).toBeInTheDocument();
   });
