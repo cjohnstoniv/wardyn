@@ -430,15 +430,14 @@ func (s *Server) cancelRunApprovals(ctx context.Context, runID uuid.UUID) error 
 // get wrong.
 //
 // It is also the reaper's one call into this package after it wins
-// RUNNING->STOPPED, so the idle stop reaches the run's event feed and revokes
-// the run's Azure DevOps personal access tokens here.
+// RUNNING->STOPPED, so the idle stop reaches the run's event feed. The run's
+// credentials are revoked by RevokeStoppedRun, which the reaper calls next.
 func (s *Server) CancelTerminalRunApprovals(ctx context.Context, runID uuid.UUID) {
 	// The reaper's CAS does not go through casRunState, so the idle stop is counted and frees its slot here.
 	s.metrics.runTerminal(types.RunStopped)
 	s.kickQueue()
 	s.runEvents.idleStopped(runID)
 	s.cancelRunApprovals(ctx, runID)
-	s.revokeRunPATs(ctx, runID, adoPATRevokeRunEnd)
 }
 
 // terminalCancelReason is the reason string stamped on a cancelled approval and
