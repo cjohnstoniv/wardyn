@@ -7,6 +7,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -16,6 +17,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/certbundle"
@@ -233,10 +235,34 @@ func tokenSource(adminEnv, token string) string {
 	return "WARDYN_TOKEN"
 }
 
+// tokenFromLogin is authHintFor.tokenFrom when the bearer is this computer's stored CLI sign-in.
+const tokenFromLogin = "wardyn login"
+
+// sessionState is the stored CLI sign-in the running command uses, resolved at most once, and only when
+// --token, WARDYN_ADMIN_TOKEN and WARDYN_TOKEN all name none.
+type sessionState struct {
+	once sync.Once
+	s    storedSession
+	err  error
+}
+
+// resolve loads the stored sign-in for serverURL: the item is looked up by that URL alone, so it is only
+// ever sent to the organisation it was made for.
+func (st *sessionState) resolve(serverURL string) {
+	st.once.Do(func() {
+		origin, err := cliprofile.Normalize(serverURL)
+		if err != nil {
+			return
+		}
+		st.s, st.err = loadSession(context.Background(), origin)
+	})
+}
+
 func rootCmd() *cobra.Command {
 	var (
 		serverURL string
 		token     string
+		sess      = &sessionState{}
 	)
 	root := &cobra.Command{
 		Use:           "wardyn",
@@ -262,7 +288,7 @@ func rootCmd() *cobra.Command {
 				from = tokenSource(os.Getenv("WARDYN_ADMIN_TOKEN"), token)
 			}
 			serverURL, urlFromDefault = resolveURL(cmd, serverURL)
-			authHintFor.url, authHintFor.tokenFrom = serverURL, from
+			authHintFor.url, authHintFor.tokenFrom, authHintFor.session = serverURL, from, nil
 			warnPlaintextToken(cmd.ErrOrStderr(), serverURL, token)
 		},
 	}
@@ -284,12 +310,27 @@ func rootCmd() *cobra.Command {
 	// loop can call the API ~900 times over its default 30m deadline) so a hung
 	// server can't wedge a single request forever; the shared client reuses one
 	// connection pool across those polls.
+	//
+	// With no --token, WARDYN_ADMIN_TOKEN or WARDYN_TOKEN, the bearer is the stored CLI sign-in for
+	// serverURL (wardyn login), renewed when its access token is spent. A sign-in that cannot be used
+	// leaves the request without a bearer and puts the reason in the 401's hint.
 	client := func() *sdk.Client {
-		return &sdk.Client{BaseURL: serverURL, Token: token, HTTPClient: orgClient(serverURL, 30*time.Second)}
+		t := token
+		if t == "" {
+			sess.resolve(serverURL)
+			if t = sess.s.token; t != "" && authHintFor.tokenFrom != tokenFromLogin {
+				authHintFor.tokenFrom = tokenFromLogin
+				warnPlaintextToken(root.ErrOrStderr(), serverURL, t)
+			}
+			authHintFor.session = sess.err
+		}
+		return &sdk.Client{BaseURL: serverURL, Token: t, HTTPClient: orgClient(serverURL, 30*time.Second)}
 	}
 
 	root.AddCommand(
-		loginCmd(),
+		loginCmd(func() (string, bool) { return serverURL, urlFromDefault }),
+		whoamiCmd(client, sess),
+		logoutCmd(func() string { return serverURL }),
 		runCmd(client),
 		attachCmd(client),
 		approvalCmd(client),

@@ -4,7 +4,8 @@
 // Package cliprofile is the per-computer profile the wardyn CLI reads: the organisation's URL, so
 // `wardyn attach <id>` needs none on the command line, and optionally the base URL its release downloads
 // come from. It holds no secret (mode 0644) and is written by `wardyn login <url>` and by
-// `wardyn-runnerd setup`. Writing one field keeps the other.
+// `wardyn-runnerd setup`. It also names, per organisation URL, which store holds this computer's CLI sign-in
+// (`wardyn login`): only the store's kind, never the sign-in itself. Writing one field keeps the others.
 package cliprofile
 
 import (
@@ -24,6 +25,9 @@ const FileName = "cli.json"
 type profile struct {
 	URL          string `json:"url"`
 	ArtifactBase string `json:"artifact_base,omitempty"`
+	// Sessions maps an organisation URL, as Normalize writes it, to the store holding its CLI sign-in
+	// ("keychain" or "file").
+	Sessions map[string]string `json:"sessions,omitempty"`
 }
 
 // Dir is where the profile lives: the wardyn directory of the person's configuration directory.
@@ -80,6 +84,30 @@ func WriteArtifactBase(dir, base string) error {
 	}
 	p, _ := load(dir)
 	p.ArtifactBase = b
+	return store(dir, p)
+}
+
+// ReadSessionStore is the store holding the CLI sign-in for origin (a Normalize URL), or "" for none.
+func ReadSessionStore(dir, origin string) (string, error) {
+	p, err := load(dir)
+	return p.Sessions[origin], err
+}
+
+// WriteSessionStore records that kind holds origin's CLI sign-in, or with kind "" that none does, and
+// keeps every other field.
+func WriteSessionStore(dir, origin, kind string) error {
+	p, err := load(dir)
+	if err != nil {
+		return err
+	}
+	if kind == "" {
+		delete(p.Sessions, origin)
+	} else {
+		if p.Sessions == nil {
+			p.Sessions = map[string]string{}
+		}
+		p.Sessions[origin] = kind
+	}
 	return store(dir, p)
 }
 

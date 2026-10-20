@@ -27,14 +27,22 @@ const (
 	hintUnknownTokenCLI  = "; it takes precedence over `wardyn login`; unset it to use your sign-in"
 )
 
-// authHintFor is what the hint needs from the command that ran: the organisation's URL and where the
-// bearer came from (--token, WARDYN_ADMIN_TOKEN or WARDYN_TOKEN; "" for none). rootCmd sets it.
-var authHintFor struct{ url, tokenFrom string }
+// authHintFor is what the hint needs from the command that ran: the organisation's URL, where the
+// bearer came from (--token, WARDYN_ADMIN_TOKEN, WARDYN_TOKEN or tokenFromLogin; "" for none) and why a
+// stored CLI sign-in could not be used. rootCmd sets it.
+var authHintFor struct {
+	url, tokenFrom string
+	session        error
+}
 
 // unauthorizedHint is the line printed under a 401. /healthz is read, once and anonymously, only after
 // the two reasons whose remedy depends on whether this organisation has CLI sign-in.
 func unauthorizedHint(ae *sdk.APIError) string {
 	switch {
+	case authHintFor.session != nil:
+		return authHintFor.session.Error()
+	case authHintFor.tokenFrom == tokenFromLogin:
+		return hintStoredRefused
 	case ae.Reason == "sign_in_required":
 		if cliSignIn(authHintFor.url) {
 			return hintSignInCLI
