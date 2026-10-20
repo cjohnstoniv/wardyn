@@ -63,7 +63,7 @@ export function HarnessCard({ index, id, roster, mode, others, removable, starte
         <div className="flex flex-col gap-2">
           <select
             id={selectId}
-            aria-label={NR_HARNESSES.HARNESS_LABEL}
+            aria-label={NR_HARNESSES.EYEBROW(index + 1)}
             className={SELECT_CLASS}
             value={id}
             aria-describedby={shownHint ? `${selectId}-hint` : undefined}

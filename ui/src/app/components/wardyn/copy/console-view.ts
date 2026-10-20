@@ -57,7 +57,7 @@ export const YOUR_ACCOUNT = {
 // (app-shell.tsx's navItemsForView), so this only ever renders from a typed
 // or bookmarked URL. Same shape as VIEW_REFUSAL: a title, a body naming the
 // tier, one CTA back to the caller's own Runs. The title says what happened;
-// VIEW_REFUSAL's "Admin view" names the page the user is already on (#2881). Nothing behind the
+// VIEW_REFUSAL's title is "Blocked: Admin view" (#3047), so this title does not repeat the view name. Nothing behind the
 // page is fetched (AdminSettingsScreen checks this before its first read).
 export const SETTINGS_SUPER_ONLY = {
   TITLE: "Settings is for super admins",

@@ -59,7 +59,7 @@ afterEach(cleanup);
 describe("Harnesses step: roster rows", () => {
   it("lists the server's roster, including Your own tools enabled on a stock install, and no Custom harness", async () => {
     show({ ...INTERACTIVE, tools: [harness("claude-code")] });
-    const select = await screen.findByRole("combobox", { name: NR_HARNESSES.HARNESS_LABEL });
+    const select = await screen.findByRole("combobox", { name: NR_HARNESSES.EYEBROW(1) });
     await waitFor(() => expect(optionNames(select)).toEqual(["Claude Code", "Codex CLI", "Your own tools"]));
     expect(screen.queryByText(/custom harness/i)).not.toBeInTheDocument();
     expect(screen.getByRole("option", { name: "Your own tools" })).toBeEnabled();
@@ -188,7 +188,9 @@ describe("Harnesses step: Autonomous", () => {
   it("the agent picker is the card's title and the lede says what to do (#3046)", async () => {
     show({ ...AUTONOMOUS, tools: [harness("claude-code")], workload: { kind: "agent_task", agent: "claude-code", task: "" } });
     const card = await screen.findByRole("region", { name: NR_HARNESSES.EYEBROW(1) });
-    expect(within(card).getByRole("combobox", { name: NR_HARNESSES.HARNESS_LABEL })).toBeInTheDocument();
+    expect(within(card).getByRole("combobox", { name: NR_HARNESSES.EYEBROW(1) })).toBeInTheDocument();
+    // The select keeps the card's own name, "Harness 1" (R6-NewRun sheet), not a bare "Harness".
+    expect(within(card).getByRole("combobox")).toHaveAccessibleName(NR_HARNESSES.EYEBROW(1));
     expect(within(card).queryByText(NR_HARNESSES.EYEBROW(1))).toBeNull();
     expect(within(card).queryByText(NR_HARNESSES.AVAILABLE("Claude Code"))).toBeNull();
     expect(NR_HARNESSES.LEDE_AUTONOMOUS).toBe("Pick the agent and give it its task.");
@@ -199,7 +201,7 @@ describe("Harnesses step: Autonomous", () => {
     show(AUTONOMOUS);
     await waitFor(() => expect(intentNow().workload?.agent).toBe("claude-code"));
     expect(intentNow().startup).toBeUndefined();
-    await user.selectOptions(screen.getByRole("combobox", { name: NR_HARNESSES.HARNESS_LABEL }), "codex-cli");
+    await user.selectOptions(screen.getByRole("combobox", { name: NR_HARNESSES.EYEBROW(1) }), "codex-cli");
     expect(intentNow().tools?.map((t) => t.id)).toEqual(["codex-cli"]);
     expect(intentNow().workload?.agent).toBe("codex-cli");
   });

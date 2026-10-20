@@ -56,8 +56,8 @@ describe("RunStatusStrip (#3038)", () => {
     getFiles.mockResolvedValue({ vcs: "git", files: [{ path: "a" }, { path: "b" }] });
     getResources.mockResolvedValue({ cpu_percent: 12.4 });
     render(<RunStatusStrip ctx={ctx()} />);
-    expect(await tile("Files").findByText("2 changed")).toBeInTheDocument();
-    expect(tile("Sandbox").getByText("12% CPU")).toBeInTheDocument();
+    expect(await tile("Files").findByText("2")).toBeInTheDocument();
+    expect(tile("Sandbox").getByText("12%")).toBeInTheDocument();
   });
 
   it("Egress leads with what is held, Credentials counts grants and mints", async () => {

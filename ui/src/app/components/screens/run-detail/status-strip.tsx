@@ -25,7 +25,7 @@ function useEvidenceFacts(runId: string, live: boolean): Facts | undefined {
       sandbox:
         resources.status === "fulfilled"
           ? resources.value.cpu_percent !== undefined
-            ? `${Math.round(Math.max(0, Math.min(100, resources.value.cpu_percent)))}% CPU`
+            ? `${Math.round(Math.max(0, Math.min(100, resources.value.cpu_percent)))}%`
             : null
           : null,
     });
@@ -68,7 +68,7 @@ export function RunStatusStrip({ ctx }: { ctx: WidgetContext }) {
         : denied > 0
           ? RUN_COCKPIT.deny(denied)
           : RUN_COCKPIT.tileNoneYet;
-  const filesValue = facts && (facts.files === null ? RUN_COCKPIT.tileNotInspectable : facts.files === 0 ? RUN_COCKPIT.tileNoneYet : RUN_COCKPIT.tileFilesChanged(facts.files));
+  const filesValue = facts && (facts.files === null ? RUN_COCKPIT.tileNotInspectable : facts.files === 0 ? RUN_COCKPIT.tileNoneYet : RUN_COCKPIT.tileFilesCount(facts.files));
   const sandboxValue = facts && (facts.sandbox ?? RUN_COCKPIT.tileNotAvailable);
   return (
     <div role="group" aria-label={RUN_COCKPIT.tilesLabel} className="mb-2 grid shrink-0 grid-cols-2 gap-3 lg:grid-cols-4">
