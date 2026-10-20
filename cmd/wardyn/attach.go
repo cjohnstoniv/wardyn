@@ -42,34 +42,47 @@ var attachStdin io.Reader
 // output after the last frame before it detaches. A var so tests can shorten it.
 var attachDrainIdle = 2 * time.Second
 
-// attachCmd returns the cobra command for `wardyn run attach <run-id>`.
+// attachCmd returns the cobra command for `wardyn attach <run-id>`.
 //
-// It connects to the interactive attach WebSocket endpoint
-// (GET /api/v1/runs/{id}/attach) using the admin bearer token, puts the local
-// terminal into raw mode, and runs a bidirectional PTY relay:
+// It mints an attach ticket, then attaches on this computer when the run's
+// runner is here (attach_local.go) and through the organisation's attach
+// WebSocket (GET /api/v1/runs/{id}/attach) otherwise, puts the local terminal
+// into raw mode, and runs a bidirectional PTY relay:
 //
-//   - stdin  -> binary WebSocket frames  -> server PTY input
-//   - server PTY output -> binary frames -> stdout
-//   - SIGWINCH -> TEXT resize frame      -> server PTY resize
+//   - stdin  -> PTY input
+//   - PTY output -> stdout
+//   - SIGWINCH -> resize
 //
 // The terminal is always restored on exit (deferred, including signal / error
 // paths).
 func attachCmd(client clientFn) *cobra.Command {
-	return &cobra.Command{
+	var opts attachOptions
+	cmd := &cobra.Command{
 		Use:   "attach <run-id>",
 		Short: "Attach an interactive terminal to a running sandbox",
 		Long: `Attach an interactive PTY to a RUNNING Wardyn sandbox.
 
 Mints a single-use, 30s-TTL attach ticket with your configured token (the
 same door the console's own terminal uses: POST /runs/{id}/attach/ticket,
-owner-or-admin — a member may mint one for a run THEY created) and dials the
-WebSocket attach endpoint with it, so a member never needs the shared admin
-token to attach to their own run. When no ticket can be minted (e.g. an older
-control plane without the route), the CLI falls back to dialing directly with
-the configured token, exactly as before this ticket lane existed.
+owner-or-admin — a member may mint one for a run THEY created) and attaches
+with it, so a member never needs the shared admin token to attach to their own
+run. When no ticket can be minted (e.g. an older control plane without the
+route), the CLI falls back to dialing directly with the configured token.
+
+When the run is on your own runner on this computer, the terminal stays on this
+computer: the CLI talks to the runner's local socket, and the organisation
+still admits, records and can end the session. Otherwise the terminal goes
+through the organisation. One line on stderr says which path was taken.
+--via local fails instead of going through the organisation; --via relay
+always goes through it. On Windows the runner lives in WSL2, so auto goes
+through the organisation and --via local is refused.
+
+--take-over takes the terminal from whoever holds it (audited as
+session.takeover) before attaching.
+
 The local terminal is placed into raw mode for the duration of the session:
-Ctrl-C is relayed to the remote PTY as input, not used locally to detach.
-Send TERM/HUP/INT from another terminal (or let the remote side close the
+Ctrl-C goes to the sandbox, not used locally to detach. Close the window (or
+send TERM/HUP/INT from another terminal, or let the remote side close the
 session) to detach.
 With piped input (not a terminal), attach sends what it reads, then keeps
 showing output until the session closes or stays quiet for 2 seconds, and exits 0.
@@ -88,9 +101,14 @@ Authentication: your own token (WARDYN_TOKEN) or WARDYN_ADMIN_TOKEN (or --token)
 			if _, err := parseID("run", args[0]); err != nil {
 				return err
 			}
-			return runAttach(cmd.Context(), client(), args[0])
+			return runAttach(cmd.Context(), client(), args[0], opts)
 		},
 	}
+	cmd.Flags().StringVar(&opts.via, "via", viaAuto,
+		"auto: on this computer when the run's runner is here, else through the organisation; local: fail rather than go through the organisation; relay: always through the organisation")
+	cmd.Flags().BoolVar(&opts.takeOver, "take-over", false,
+		"take the terminal from whoever holds it (audited) before attaching")
+	return cmd
 }
 
 // dialError reports a failed attach dial against safeURL (the URL without the
@@ -110,12 +128,16 @@ func dialError(safeURL, ticket string, err error) error {
 // runAttach performs the attach flow:
 //  1. Mints a single-use attach ticket with the configured token (falls back
 //     to a bare dial on the configured token when minting is inconclusive).
-//  2. Builds the wss/ws URL from the configured base URL, ticket included.
-//  3. Dials the WebSocket.
-//  4. Switches stdin to raw mode (deferred restore).
-//  5. Sends an initial resize frame, wires SIGWINCH for subsequent resizes.
-//  6. Runs the bidirectional pump until disconnect/EOF/signal.
-func runAttach(ctx context.Context, c *sdk.Client, runID string) error {
+//  2. With --take-over, takes the terminal from its holder.
+//  3. Opens the session: on this computer when it can (openLocal), else, or
+//     when the organisation answers that it cannot, through the organisation.
+//  4. Prints the transport line and runs the pump (pumpAttach).
+func runAttach(ctx context.Context, c *sdk.Client, runID string, opts attachOptions) error {
+	// --via is settled before any call: on Windows, --via local is refused here.
+	tryLocal, mustLocal, err := planVia(opts.via, localAttachOS)
+	if err != nil {
+		return err
+	}
 	// TERM/HUP/INT are wired HERE, local to the attach session — never at a
 	// root ExecuteContext. Raw mode clears ISIG, so an operator's Ctrl-C
 	// doesn't raise SIGINT at all; but a supervisor's SIGTERM, a hung-up
@@ -153,34 +175,173 @@ func runAttach(ctx context.Context, c *sdk.Client, runID string) error {
 	// minting first is what lets a member attach at all without the shared
 	// admin token. The ticket is single-use with a 30s TTL (consumed by a
 	// DELETE-and-return on first redemption), so it is minted here, immediately
-	// before the one dial below, and NEVER cached or reused across calls.
+	// before the dial, and NEVER cached or reused across calls.
 	//
 	// A definitive server answer (any HTTP status, e.g. the 404 a foreign run
-	// now gets instead of the WS route's old blanket 403) is surfaced AS-IS —
-	// the server has already made the authoritative call for this run and this
-	// token, and silently retrying a different lane would only paper over it.
-	// Only a TRANSPORT-level failure (no HTTP response at all: an unreachable
-	// control plane, or an older one with no attach-ticket route to answer)
-	// falls back to dialing directly with the configured token, so an
-	// admin-token CI caller pointed at such a deployment is unaffected.
+	// gets) is surfaced AS-IS — the server has already made the authoritative
+	// call for this run and this token, and silently retrying a different
+	// lane would only paper over it. Only a TRANSPORT-level failure (no HTTP
+	// response at all: an unreachable control plane, or an older one with no
+	// attach-ticket route to answer) falls back to dialing directly with the
+	// configured token, so an admin-token CI caller pointed at such a
+	// deployment is unaffected.
 	//
-	// Skipped entirely once ctx is already Done: a caller cancellation that
-	// lands before the mint even starts can otherwise race the mint's own HTTP
-	// round trip (does it fail fast on the dead ctx, or does it slip through
-	// to a real response first?) — R-02 below needs that race not to matter,
-	// and "don't bother" is also just correct: nothing this mint could return
-	// is going anywhere once ctx is dead.
-	var ticket string
-	if ctx.Err() == nil {
-		var mintErr error
-		ticket, mintErr = mintAttachTicket(ctx, c, runID)
-		var apiErr *sdk.APIError
-		if mintErr != nil && errors.As(mintErr, &apiErr) {
-			return apiErr
+	// Skipped entirely once ctx is already Done: nothing this mint could
+	// return is going anywhere once ctx is dead (R-02 below).
+	ticket, err := mintIfLive(ctx, c, runID)
+	if err != nil {
+		return err
+	}
+	if opts.takeOver && ctx.Err() == nil {
+		if err := takeOverAttach(ctx, c, runID); err != nil {
+			return err
 		}
 	}
 
+	pipe, line, err := openAttach(ctx, c, runID, ticket, tryLocal, mustLocal)
+	if err != nil || pipe == nil {
+		return err // nil, nil: the caller cancelled during the dial, a clean detach
+	}
+	fmt.Fprintln(os.Stderr, line)
+	return pumpAttach(ctx, pipe)
+}
+
+// mintIfLive mints a ticket unless ctx is already done. A server's answer is
+// returned as an error; an inconclusive mint is "" (the bare dial).
+func mintIfLive(ctx context.Context, c *sdk.Client, runID string) (string, error) {
+	if ctx.Err() != nil {
+		return "", nil
+	}
+	ticket, err := mintAttachTicket(ctx, c, runID)
+	var apiErr *sdk.APIError
+	if err != nil && errors.As(err, &apiErr) {
+		return "", apiErr
+	}
+	return ticket, nil
+}
+
+// errLocalNotHere prefixes why --via local could not attach on this computer.
+const errLocalNotHere = "local attach is not available for this run: "
+
+// openAttach opens the session (design ATTACH §2.2, §3.5.3). It tries the
+// local transport when asked and falls back to the organisation only on a
+// transport's answer: no usable pointer file or socket, the socket refusing,
+// 409 attach_local_unavailable, a first frame without transport "local" (an
+// older organisation, whose socket then simply runs as a relay attach), or
+// close 4409 (once, with a new ticket). Every other answer, each refusal of
+// DESIGN-ATTACH 4.4 included, is returned as the server gave it and never
+// retried. mustLocal (--via local) turns every fallback into an error.
+// A nil pipe with a nil error is a cancellation during the dial.
+func openAttach(ctx context.Context, c *sdk.Client, runID, ticket string, tryLocal, mustLocal bool) (*attachPipe, string, error) {
+	if tryLocal && ctx.Err() == nil {
+		lc, why := (*localConn)(nil), "the organisation issued no attach ticket"
+		if ticket != "" {
+			lc, why = openLocal(ctx, c, runID)
+		}
+		if lc == nil && mustLocal {
+			return nil, "", errors.New(errLocalNotHere + why)
+		}
+		if lc != nil {
+			p, line, err, relay := tryLocalAttach(ctx, c, runID, ticket, lc, mustLocal)
+			if !relay {
+				return p, line, err
+			}
+			// A transport's answer: through the organisation, with a new
+			// ticket (the first was spent on the local try).
+			if ticket, err = mintIfLive(ctx, c, runID); err != nil {
+				return nil, "", err
+			}
+		}
+	}
+	ws, err := dialAttach(ctx, c, runID, ticket, "")
+	if ws == nil {
+		return nil, "", err
+	}
+	p := relayPipe(ws, nil)
+	return &p, relayAttachLine(c.BaseURL), nil
+}
+
+// tryLocalAttach dials the WebSocket for the local transport with lc's nonce
+// and reads its first frame. relay is true when the answer was a transport's
+// (409 attach_local_unavailable, close 4409) and the caller should go through
+// the organisation; lc is closed then.
+func tryLocalAttach(ctx context.Context, c *sdk.Client, runID, ticket string, lc *localConn, mustLocal bool) (p *attachPipe, line string, err error, relay bool) {
+	ws, err := dialAttach(ctx, c, runID, ticket, lc.nonce)
+	if ws == nil {
+		_ = lc.conn.Close()
+		return nil, "", err, err != nil && localUnavailable(err) && !mustLocal
+	}
+	typ, data, rerr := ws.Read(ctx)
+	switch {
+	case rerr == nil && isLocalModeFrame(typ, data):
+		lp := localPipe(ws, lc, data)
+		return &lp, localAttachLine(lc.runner), nil, false
+	case rerr == nil:
+		// An organisation older than the local transport ignored the query:
+		// this socket is an ordinary relay attach, and it works.
+		_ = lc.conn.Close()
+		if mustLocal {
+			_ = ws.Close(websocket.StatusNormalClosure, "")
+			return nil, "", errors.New(errLocalNotHere + "the organisation does not offer it"), false
+		}
+		rp := relayPipe(ws, &wsFrame{typ: typ, data: data})
+		return &rp, relayAttachLine(c.BaseURL), nil, false
+	}
+	_ = lc.conn.Close()
+	_ = ws.CloseNow()
+	if ctx.Err() != nil {
+		return nil, "", nil, false
+	}
+	if localGrantFailed(rerr) && !mustLocal {
+		return nil, "", nil, true
+	}
+	return nil, "", rerr, false
+}
+
+// takeOverAttach is --take-over: POST /runs/{id}/attach/takeover, the route
+// the console's Take over button uses. Nobody attached (409
+// attach_takeover_no_holder) leaves nothing to take; every other refusal is
+// the server's, shown as it is.
+func takeOverAttach(ctx context.Context, c *sdk.Client, runID string) error {
+	target := strings.TrimRight(c.BaseURL, "/") + "/api/v1/runs/" + runID + "/attach/takeover"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, nil)
+	if err != nil {
+		return err
+	}
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := rawHTTPClient(c).Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		apiErr := sdk.NewAPIError(resp.StatusCode, body)
+		if apiErr.Status == http.StatusConflict && apiErr.Reason == "attach_takeover_no_holder" {
+			return nil
+		}
+		return apiErr
+	}
+	var out struct {
+		PreviousHolder string `json:"previous_holder"`
+	}
+	if json.Unmarshal(body, &out) == nil && out.PreviousHolder != "" {
+		fmt.Fprintln(os.Stderr, "took the terminal from "+out.PreviousHolder)
+	}
+	return nil
+}
+
+// dialAttach dials the attach WebSocket, for the local transport when nonce is
+// set. A nil conn with a nil error is the caller's cancellation during the
+// handshake, a clean detach.
+func dialAttach(ctx context.Context, c *sdk.Client, runID, ticket, nonce string) (*websocket.Conn, error) {
 	wsURL := buildWSURL(c.BaseURL, runID, ticket)
+	if nonce != "" {
+		wsURL = withLocalTransport(wsURL, nonce)
+	}
 
 	// Dial the WebSocket with the bearer token in the HTTP Upgrade header, when
 	// one is configured (mirrors pkg/client.Client.do: local host-mode deployments
@@ -216,7 +377,7 @@ func runAttach(ctx context.Context, c *sdk.Client, runID string) error {
 		// avoid. A caller-initiated cancellation is a clean detach here too,
 		// the same as one that arrives after the connection is up.
 		if ctx.Err() != nil {
-			return nil
+			return nil, nil
 		}
 		// A rejected handshake (e.g. 401/403/404, never a network failure) leaves
 		// resp non-nil with the server's real status + {"error":...} body — surface
@@ -226,13 +387,18 @@ func runAttach(ctx context.Context, c *sdk.Client, runID string) error {
 		// bare exit 1.
 		if resp != nil {
 			body, _ := io.ReadAll(resp.Body)
-			return sdk.NewAPIError(resp.StatusCode, body)
+			return nil, sdk.NewAPIError(resp.StatusCode, body)
 		}
-		return dialError(buildWSURL(c.BaseURL, runID, ""), ticket, err)
+		return nil, dialError(buildWSURL(c.BaseURL, runID, ""), ticket, err)
 	}
-	// CloseNow is the fail-closed backstop; a normal exit path does a clean close.
-	defer conn.CloseNow()
+	return conn, nil
+}
 
+// pumpAttach runs an open session until it ends:
+//  1. Switches stdin to raw mode (deferred restore).
+//  2. Sends an initial resize, wires SIGWINCH for subsequent resizes.
+//  3. Runs the bidirectional pump until disconnect/EOF/signal.
+func pumpAttach(ctx context.Context, pipe *attachPipe) error {
 	// Put the terminal into raw mode. We operate on stdin's fd.
 	fd := int(os.Stdin.Fd())
 	oldState, err := makeRawFn(fd)
@@ -245,13 +411,13 @@ func runAttach(ctx context.Context, c *sdk.Client, runID string) error {
 		defer restoreTerminalFn(fd, oldState) //nolint:errcheck // best-effort restore
 	}
 
-	// Send an initial resize frame so the remote PTY matches our window from
-	// the start. Failure here is not fatal — the session will use the server's
+	// Send an initial resize so the remote PTY matches our window from the
+	// start. Failure here is not fatal — the session will use the server's
 	// default size and the user can resize later via SIGWINCH.
 	if oldState != nil {
 		cols, rows, szErr := term.GetSize(fd)
 		if szErr == nil {
-			_ = sendResize(ctx, conn, uint16(cols), uint16(rows))
+			_ = pipe.resize(ctx, uint16(cols), uint16(rows))
 		}
 	}
 
@@ -277,48 +443,42 @@ func runAttach(ctx context.Context, c *sdk.Client, runID string) error {
 	activity := make(chan struct{}, 1)
 	in := attachInput()
 
-	// attachMode tracks the read/write state this socket has been told about
-	// across attach-mode frames (see handleAttachModeFrame) — read only by
-	// Half 1 below, so it needs no lock.
+	// attachMode tracks the read/write state this session has been told about
+	// across attach-mode frames (see handleAttachModeFrame) — touched only by
+	// the output half's mode callback, so it needs no lock.
 	var attachMode attachModeState
 
-	// Half 1: server -> stdout (binary PTY output frames).
+	// outDone is Half 1's own result too, so an end Half 2 saw first can give
+	// way to the close reason Half 1 is about to read (settleAttachEnd).
+	outDone := make(chan error, 1)
+
+	// Half 1: session output -> stdout. stdout stays byte-identical PTY
+	// output, never control JSON.
 	go func() {
-		for {
-			typ, data, rerr := conn.Read(pumpCtx)
-			if rerr != nil {
-				errCh <- rerr
-				cancel()
-				return
-			}
-			if typ != websocket.MessageBinary {
-				// The only TEXT frame the server ever sends is attach-mode
-				// (attach_holder.go's attachModeMsg); handle it and move on.
-				// stdout gets none of this — it stays byte-identical PTY
-				// output, never control JSON.
-				if typ == websocket.MessageText {
-					handleAttachModeFrame(pumpCtx, conn, fd, oldState, data, &attachMode)
-				}
-				continue
-			}
+		err := pipe.output(pumpCtx, func(data []byte) error {
 			if _, werr := os.Stdout.Write(data); werr != nil {
-				errCh <- werr
-				cancel()
-				return
+				return werr
 			}
 			signalAttachActivity(activity)
-		}
+			return nil
+		}, func(data []byte) {
+			handleAttachModeFrame(pumpCtx, pipe.resize, fd, oldState, data, &attachMode)
+		})
+		outDone <- err
+		errCh <- err
+		cancel()
 	}()
 
-	// Half 2: stdin -> server (binary PTY input frames).
+	// Half 2: stdin -> session input. It does not cancel the session on an
+	// error: the session's own close may be what failed the write, and
+	// cancelling would abort Half 1's read of its reason.
 	go func() {
 		buf := make([]byte, 4096)
 		for {
 			n, rerr := in.Read(buf)
 			if n > 0 {
-				if werr := conn.Write(pumpCtx, websocket.MessageBinary, buf[:n]); werr != nil {
+				if werr := pipe.input(pumpCtx, buf[:n]); werr != nil {
 					errCh <- werr
-					cancel()
 					return
 				}
 			}
@@ -328,13 +488,12 @@ func runAttach(ctx context.Context, c *sdk.Client, runID string) error {
 					return
 				}
 				errCh <- rerr
-				cancel()
 				return
 			}
 		}
 	}()
 
-	// Half 3: resize notifications -> resize control frames.
+	// Half 3: resize notifications -> resize.
 	go func() {
 		for {
 			select {
@@ -344,18 +503,18 @@ func runAttach(ctx context.Context, c *sdk.Client, runID string) error {
 				cols, rows, szErr := term.GetSize(fd)
 				if szErr == nil {
 					// A resize send error is not fatal; the session continues.
-					_ = sendResize(pumpCtx, conn, uint16(cols), uint16(rows))
+					_ = pipe.resize(pumpCtx, uint16(cols), uint16(rows))
 				}
 			}
 		}
 	}()
 
 	// Block until a pump half ends (or, after stdin EOF, the output goes quiet).
-	firstErr := waitAttachEnd(errCh, stdinEOF, activity)
+	firstErr := settleAttachEnd(waitAttachEnd(errCh, stdinEOF, activity), outDone, attachCloseGrace)
 	cancel()
 
-	// Attempt a clean WebSocket close.
-	_ = conn.Close(websocket.StatusNormalClosure, "")
+	// Attempt a clean close.
+	pipe.close()
 
 	// Restore terminal before printing anything so the message appears correctly.
 	if oldState != nil {
@@ -420,7 +579,7 @@ type clientAttachModeFrame struct {
 // promotion line and re-sends this client's own window size (the promoted
 // socket never resized the shared PTY while it was only watching, so the
 // server still has the departed writer's geometry).
-func handleAttachModeFrame(ctx context.Context, conn *websocket.Conn, fd int, oldState *term.State, data []byte, state *attachModeState) {
+func handleAttachModeFrame(ctx context.Context, resize func(context.Context, uint16, uint16) error, fd int, oldState *term.State, data []byte, state *attachModeState) {
 	var msg clientAttachModeFrame
 	if err := json.Unmarshal(data, &msg); err != nil || msg.Type != "attach-mode" {
 		return
@@ -446,7 +605,7 @@ func handleAttachModeFrame(ctx context.Context, conn *websocket.Conn, fd int, ol
 		return // piped stdin: no real tty to size from.
 	}
 	if cols, rows, szErr := getSizeFn(fd); szErr == nil {
-		_ = sendResize(ctx, conn, uint16(cols), uint16(rows))
+		_ = resize(ctx, uint16(cols), uint16(rows))
 	}
 }
 
@@ -602,6 +761,33 @@ func isNormalClose(err error) bool {
 	// read.go/write.go), so context.Canceled is a real sentinel here, not just
 	// a string — errors.Is is exact, no substring guessing needed.
 	return errors.Is(err, context.Canceled)
+}
+
+// attachCloseGrace bounds how long an end without a close reason waits for the
+// output half's: longer than localEndGrace, which the local output half may
+// spend waiting for the organisation's close.
+var attachCloseGrace = 3 * time.Second
+
+// settleAttachEnd is the session's end as shown. When the first end carries
+// no WebSocket close (typically a keystroke's write failing because the
+// server just closed the session), it waits up to grace for the output half,
+// which reads the close, and prefers that close: the reason the server gave
+// (session ended, taken over, lease lost, 4409) is what the person sees, as
+// DESIGN-ATTACH 4.4 rows 18-19 require.
+func settleAttachEnd(first error, out <-chan error, grace time.Duration) error {
+	if first == nil || websocket.CloseStatus(first) != -1 {
+		return first
+	}
+	t := time.NewTimer(grace)
+	defer t.Stop()
+	select {
+	case err := <-out:
+		if websocket.CloseStatus(err) != -1 {
+			return err
+		}
+	case <-t.C:
+	}
+	return first
 }
 
 // waitAttachEnd blocks until a pump half reports its end and returns that error.

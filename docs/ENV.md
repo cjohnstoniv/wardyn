@@ -2225,7 +2225,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 ### `WARDYN_INTERACTIVE_SEED`
 
 - The run's optional boot seed — its `task`, exported verbatim for an interactive run only, and interpreted per `WARDYN_INTERACTIVE_START` (an initial prompt for `agent`, a startup command for `shell`).
-- Fires once at sandbox boot, in the same persistent session `wardyn run attach` joins.
+- Fires once at sandbox boot, in the same persistent session `wardyn attach` joins.
 - Excluded for the server-reserved Tasks (`workspace record`/`workspace verify`/harness login) — those are interactive runs too, but seeding them would boot the agent into their own control task.
 
 ### `WARDYN_SEED_AUTO_TOOLS`

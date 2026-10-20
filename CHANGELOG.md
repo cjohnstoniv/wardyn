@@ -14,6 +14,21 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on
   `aws_sso_refused_tokens` (migration `0194_aws_sso_refused_tokens`). Without it an AWS SSO session whose renewal
   AWS refused cannot be marked, read or cleared, so replicas do not share that mark.
+- **`wardyn run attach` is now `wardyn attach`.** The old spelling is an unknown command, with no alias. A script
+  that calls `wardyn run attach <run-id>` changes to `wardyn attach <run-id>`. `wardyn run ssh` is unchanged.
+
+### Added
+
+- `wardyn attach <run-id>` keeps the terminal on this computer when the run is on your own runner here and the
+  organisation allows it (`WARDYN_ATTACH_LOCAL`, off by default); otherwise it goes through the organisation, as
+  before. One line on stderr names the path. `--via local|relay|auto` forces a path, and `--take-over` takes the
+  terminal from whoever holds it. On Windows the runner lives in WSL2, so attach goes through the organisation.
+
+### Changed
+
+- The CLI's hint under a `401` follows the answer's reason. On a single-sign-on deployment with no admin token
+  (`sign_in_required`) it says to use a personal API token in `WARDYN_TOKEN`, not the compose stack's admin token. For
+  a token the organisation does not know (`admin_token_not_configured`) it names where the token came from.
 
 ## [0.9.5] — 2026-10-19
 
