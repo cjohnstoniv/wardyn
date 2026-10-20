@@ -179,7 +179,8 @@
 # docs/sdk.md 19644 = ours 19635 + theirs 19552 - base 19543 at the 0.10 W2 merge of SEC-2c onto the train.
 # #2822: docs/sdk.md 19581 adds 38 over 19543, measured at the main merge: the three harness_inner_walls reasons.
 # docs/sdk.md 19682 = ours 19644 + theirs 19581 - base 19543 at the 0.10 W2 merge of HRN onto the train.
-docs/sdk.md=19682 share=21
+# docs/sdk.md 19694 adds 12 over 19682 (OC-CLEAN2): the git_pat_broker_off_resident row says an admin under WARDYN_GOVERN_ADMIN_RUNS is still refused on revive.
+docs/sdk.md=19694 share=21
 # docs/sdk.md 18691 adds 28 over 18663, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
