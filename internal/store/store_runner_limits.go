@@ -316,15 +316,6 @@ func (s PG) ListRunnerPoolRunners(ctx context.Context, poolID uuid.UUID) ([]type
 		WHERE m.pool_id = $1 AND r.owner = p.owner ORDER BY r.created_at DESC, r.id`, []any{poolID}, scanRunner)
 }
 
-// SetRunnerArch records the CPU architecture a runner reported on connect, the latest kept; a revoked
-// runner keeps the one it had. The caller has checked it with types.ValidArch.
-func (s PG) SetRunnerArch(ctx context.Context, id uuid.UUID, arch string) error {
-	if _, err := s.Pool.Exec(ctx, `UPDATE runners SET arch = $2 WHERE id = $1 AND state <> 'revoked' AND arch <> $2`, id, arch); err != nil {
-		return fmt.Errorf("store: set runner arch: %w", err)
-	}
-	return nil
-}
-
 // UpdateRunnerLimits declares the limits of a runner its owner holds, unclaimed or claimed, and returns
 // the set it had (nil for none) and the row as it is now. Another person's runner, a revoked one and an
 // absent id are ErrNotFound alike. Lowering a limit ends no run: the runs over it keep running, and no

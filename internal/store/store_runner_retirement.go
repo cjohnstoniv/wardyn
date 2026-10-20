@@ -202,16 +202,6 @@ func (s PG) RunnerRetirementCandidates(ctx context.Context) ([]RunnerRetirementC
 	})
 }
 
-// SetRunnerRetireCapable records whether a runner's latest caps event said it
-// settles retire_run. Every caps event sets it, so a runner downgraded to an
-// older binary stops receiving retire_run once it reconnects.
-func (s PG) SetRunnerRetireCapable(ctx context.Context, id uuid.UUID, capable bool) error {
-	if _, err := s.Pool.Exec(ctx, `UPDATE runners SET retire_capable = $2 WHERE id = $1 AND retire_capable <> $2`, id, capable); err != nil {
-		return fmt.Errorf("store: set runner retire capability: %w", err)
-	}
-	return nil
-}
-
 // AdvanceRunnerRetirement takes one step of runID's retirement, in one
 // transaction under the runner → run → execution lock order, and says which:
 //   - no snapshot: open one from the live ref (state kill);
