@@ -281,6 +281,45 @@ func TestADOSignIn_AnotherPersonsCaptureResolvesNothing(t *testing.T) {
 	}
 }
 
+// byKindStore answers the by-kind pending read from the fake approvals.
+type byKindStore struct {
+	*adoSignInStore
+	approvals *fakeApprovals
+}
+
+func (s byKindStore) ListPendingApprovalsByKind(_ context.Context, kind types.ApprovalKind) ([]types.ApprovalRequest, error) {
+	s.approvals.mu.Lock()
+	defer s.approvals.mu.Unlock()
+	var out []types.ApprovalRequest
+	for _, ap := range s.approvals.byID {
+		if ap.State == types.ApprovalPending && ap.Kind == kind {
+			out = append(out, ap)
+		}
+	}
+	return out, nil
+}
+
+// A capture reads the pending credential_reauth rows through the store's by-kind read, not the
+// fleet-wide pending list: that list holds every tool_call and egress row a sandbox can leave pending.
+func TestADOSignIn_CaptureReadsOnlyPendingReauthRows(t *testing.T) {
+	f := newADOSignInFixture(t)
+	ctx := context.Background()
+	blob, _ := f.stored(t, f.subject)
+	f.fake.SetInvalidGrant(true)
+	f.at(time.Now().Add(time.Minute))
+	id := pendingID(t, f.resolveQ(t, ""), reauthPendingState)
+	blob.CapturedAt = time.Now().Add(time.Hour)
+	if err := f.srv.storeADOEntraBlob(ctx, f.subject, f.cfg.RowID, blob); err != nil {
+		t.Fatal(err)
+	}
+	f.srv.cfg.Store = byKindStore{adoSignInStore: f.st, approvals: f.approvals}
+	f.approvals.listErr = errors.New("the fleet-wide pending list was read")
+	f.srv.resolvePendingADOReauth(ctx, f.subject, f.cfg.RowID)
+	if st := f.row(id).State; st != types.ApprovalApproved {
+		t.Fatalf("the sign-in request is %s after the capture, want APPROVED", st)
+	}
+}
+
 // At the sidecar's boot there is no request to hold: the run fails with a hint
 // that says to sign in again, and the dead sign-in is deleted (CS-5) — so
 // /me/scm-access and the launch gate say it is not connected before the next
