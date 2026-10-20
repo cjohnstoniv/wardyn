@@ -821,47 +821,6 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 	}}, nil
 }
 
-// uiConn is an execConn that releases its per-run slot and writes the ui.close
-// audit exactly once, whichever of net/http's read or write loop closes first.
-type uiConn struct {
-	*execConn
-	once    sync.Once
-	closeFn func()
-}
-
-func (c *uiConn) Close() error {
-	c.once.Do(c.closeFn)
-	return c.execConn.Close()
-}
-
-// acquireUIConn takes one of the run's connection slots, returning a release
-// func and whether a slot was available. Process-local, like every other
-// in-memory bound here (the single-replica control plane is a documented
-// constraint, docs/OPERATIONS.md).
-func (s *Server) acquireUIConn(runID uuid.UUID) (func(), bool) {
-	s.uiConnsMu.Lock()
-	defer s.uiConnsMu.Unlock()
-	if s.uiConns == nil {
-		s.uiConns = map[uuid.UUID]int{}
-	}
-	if s.uiConns[runID] >= maxUIConnsPerRun {
-		return nil, false
-	}
-	s.uiConns[runID]++
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			s.uiConnsMu.Lock()
-			defer s.uiConnsMu.Unlock()
-			if s.uiConns[runID] <= 1 {
-				delete(s.uiConns, runID)
-				return
-			}
-			s.uiConns[runID]--
-		})
-	}, true
-}
-
 // on-demand launcher
 
 // uiEnsureApp makes sure the declared port is actually listening inside the
