@@ -8,6 +8,7 @@
 set -u
 mkdir -p /usr/local/bin
 ln -sf /usr/local/wardyn/bin/wardyn-runnerd /usr/local/bin/wardyn-runnerd
+ln -sf /usr/local/wardyn/bin/wardyn /usr/local/bin/wardyn
 uid=$(stat -f %u /dev/console 2>/dev/null || echo 0)
 if [ "$uid" != 0 ]; then
   launchctl bootstrap "gui/$uid" /Library/LaunchAgents/com.wardyn.runnerd.managed.plist >/dev/null 2>&1 || true

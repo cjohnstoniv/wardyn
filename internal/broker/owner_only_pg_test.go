@@ -75,3 +75,57 @@ func TestPG_MintSSHKey_OwnerOnlyNeverServesTheOperatorRow(t *testing.T) {
 		t.Fatalf("owner_only, operator-only known_hosts: (%q, %v), want a not-found refusal", m.KnownHosts, err)
 	}
 }
+
+// TestPG_MintSSHKey_OwnerOnlyRefsDecidePerRef: owner_only_refs binds only the
+// refs it names. With the owner's own key and only the operator's known_hosts,
+// a grant binding the key alone mints both; binding the known_hosts instead
+// refuses it; and the key it binds is never served from another row: not the
+// operator's of that name, not another person's.
+func TestPG_MintSSHKey_OwnerOnlyRefsDecidePerRef(t *testing.T) {
+	pool := pgPool(t)
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sec, err := secretspg.New(pool, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	key, kh := "ssh-key-"+uuid.NewString(), "known-hosts-"+uuid.NewString()
+	alice, bob := "alice-"+uuid.NewString(), "bob-"+uuid.NewString()
+	t.Cleanup(func() {
+		_, _ = sec.DeleteEverywhere(ctx, []string{key, kh})
+	})
+	if err := sec.Put(ctx, kh, []byte("operator-kh")); err != nil {
+		t.Fatal(err)
+	}
+	if err := sec.For(bob).Put(ctx, key, []byte("bob-key")); err != nil {
+		t.Fatal(err)
+	}
+	b := New(NewPgxStore(pool), sec, &fakeAudit{}, nil, nil)
+	caller := &identity.Claims{RunID: uuid.New(), Sub: alice}
+	keyOnly := sshKeySpec("github.com", key, "", kh)
+	keyOnly.OwnerOnlyRefs = []string{key}
+
+	if m, err := b.mintSSHKey(ctx, caller, keyOnly); !errors.Is(err, secretstore.ErrNotFound) || m.Token != "" {
+		t.Fatalf("bound key held only by another person: (%q, %v), want a not-found refusal", m.Token, err)
+	}
+	if err := sec.Put(ctx, key, []byte("operator-key")); err != nil {
+		t.Fatal(err)
+	}
+	if m, err := b.mintSSHKey(ctx, caller, keyOnly); !errors.Is(err, secretstore.ErrNotFound) || m.Token != "" {
+		t.Fatalf("bound key with only the operator's row: (%q, %v), want a not-found refusal and never the operator key", m.Token, err)
+	}
+	if err := sec.For(alice).Put(ctx, key, []byte("alice-key")); err != nil {
+		t.Fatal(err)
+	}
+	if m, err := b.mintSSHKey(ctx, caller, keyOnly); err != nil || m.Token != "alice-key" || m.KnownHosts != "operator-kh" || m.Metadata["secret_scope"] != "own" {
+		t.Fatalf("own key bound, operator known_hosts unbound: (%q, %q, %v, %v), want both", m.Token, m.KnownHosts, m.Metadata, err)
+	}
+	khOnly := sshKeySpec("github.com", key, "", kh)
+	khOnly.OwnerOnlyRefs = []string{kh}
+	if m, err := b.mintSSHKey(ctx, caller, khOnly); !errors.Is(err, secretstore.ErrNotFound) || m.KnownHosts != "" {
+		t.Fatalf("known_hosts bound with only the operator's row: (%q, %v), want a not-found refusal", m.KnownHosts, err)
+	}
+}

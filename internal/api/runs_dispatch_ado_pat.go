@@ -41,6 +41,13 @@ const (
 	// adoRunPATEndGrace is how far past the run's own end its token may live,
 	// and the shortest life a token is ever created with.
 	adoRunPATEndGrace = 15 * time.Minute
+	// residentRejudgeEvery caps the expiry a relayed resolve (a self-hosted
+	// runner's proxy) is told, so the proxy re-resolves at least this often and
+	// relayedResidentADO judges the delivery policy, trust class, owner kind,
+	// posture and opt-in again. Outside its renew window runPATFor hands back the
+	// same cached token, so a re-resolve mints nothing; a refusal drops the
+	// proxy's header at once and revokes the run's tokens.
+	residentRejudgeEvery = 15 * time.Minute
 
 	// Reasons beyond the contract's: a mint Azure DevOps' refusal of the
 	// current token forced, the revoke of that token, and the admin's erase
@@ -339,11 +346,17 @@ func (s *Server) resolveADORunPAT(w http.ResponseWriter, r *http.Request, claims
 	}
 	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 		"secret.read", types.ADOEntraAccessTokenSecret, "success", mustJSON(data)))
+	expires := pat.ValidTo
+	if next := s.cfg.Now().Add(residentRejudgeEvery); next.Before(expires) {
+		if _, relayed := relayRunner(r.Context()); relayed {
+			expires = next
+		}
+	}
 	// JTI is the token's own authorization id: the proxy names it back as
 	// stale_jti when Azure DevOps refuses the header it holds.
 	writeJSON(w, http.StatusOK, injectionResponse{
 		Host: minted.Injection.Host, Header: adoEntraInjectHeader, Value: adoRunPATValue(pat.Token),
-		JTI: pat.AuthorizationID, ExpiresAt: pat.ValidTo.UnixMilli(),
+		JTI: pat.AuthorizationID, ExpiresAt: expires.UnixMilli(),
 		Organisation: sn.Organisation, Capabilities: adoCapabilityStrings(responseCaps),
 	})
 	return true

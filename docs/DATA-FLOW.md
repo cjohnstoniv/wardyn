@@ -77,6 +77,9 @@ the code that makes it true; there is no separate "trust us" layer.
   wires an audit sink (above).
 - **Session recordings** (asciinema PTY capture) — Postgres, subject to the
   age-based retention knob (`WARDYN_RECORDING_RETENTION_DAYS`, [`docs/ENV.md`](ENV.md)). Never leaves the deployment.
+  A cast holds terminal output only, never typed input. Casts made before 0.9.6 may hold keystrokes typed into an
+  attached terminal, including at prompts that hide what you type, such as passwords: restrict who can read them, or
+  delete them.
 - **Kernel ground-truth stream** (optional eBPF/Tetragon) — lands in the same
   Postgres audit table (`internal/groundtruth`), same retention, same
   non-export-by-default posture.

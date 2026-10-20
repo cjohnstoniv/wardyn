@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -1201,6 +1202,130 @@ func TestSetupNoServiceRefusesWhileAServiceIsInstalled(t *testing.T) {
 			}
 			if f.count("POST /api/v1/runners/register") != registered {
 				t.Error("the refusal came after the registration")
+			}
+		})
+	}
+}
+
+// A shell that sets only NO_PROXY keeps the proxy addresses an earlier setup carried and takes its own
+// exclusion list; only an address in the shell replaces the earlier set.
+func TestSetupRerunWithOnlyNoProxyKeepsTheCarriedAddresses(t *testing.T) {
+	clearProxyEnv(t)
+	t.Setenv("HTTPS_PROXY", "http://proxy.corp:3128")
+	t.Setenv("NO_PROXY", "localhost")
+	f := newSetupFixture(t, "linux")
+	if out, err := f.run(setupOptions{tokenFile: f.tokenFile}); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	clearProxyEnv(t)
+	t.Setenv("NO_PROXY", ".corp")
+	f.flagless = true
+	out, err := f.run(setupOptions{})
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	env := f.read(mustPaths(t, f).envFile)
+	if !strings.Contains(env, "HTTPS_PROXY=http://proxy.corp:3128\n") || !strings.Contains(env, "NO_PROXY=.corp\n") || strings.Contains(env, "localhost") {
+		t.Errorf("want the kept address and the new exclusion list only:\n%s", env)
+	}
+	if !strings.Contains(out, "keeps HTTPS_PROXY from the earlier setup") {
+		t.Errorf("the rerun did not name the kept address:\n%s", out)
+	}
+}
+
+// The service setup installs does not get the shell's proxy variables, so setup says so, by name and
+// never by value: a proxy URL may hold a credential.
+func TestSetupWarnsServiceMissesShellProxy(t *testing.T) {
+	const secret = "http://u:secret@p:3128"
+	for _, goos := range []string{"linux", "darwin"} {
+		t.Run(goos, func(t *testing.T) {
+			f := newSetupFixture(t, goos)
+			t.Setenv("HTTPS_PROXY", secret)
+			t.Setenv("all_proxy", secret)
+			out, err := f.run(setupOptions{tokenFile: f.tokenFile})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(out, "all_proxy is set in this shell, but setup does not carry it into the service") ||
+				!strings.Contains(out, "docs/runner-registration.md#a-runner-behind-a-corporate-proxy") {
+				t.Errorf("no proxy warning:\n%s", out)
+			}
+			if strings.Contains(out, "secret") || strings.Contains(out, "p:3128") {
+				t.Errorf("the warning prints a proxy value:\n%s", out)
+			}
+		})
+	}
+	t.Run("no proxy variable", func(t *testing.T) {
+		f := newSetupFixture(t, "linux")
+		for _, k := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"} {
+			t.Setenv(k, "")
+		}
+		if out, err := f.run(setupOptions{tokenFile: f.tokenFile}); err != nil || strings.Contains(out, "does not carry it") {
+			t.Fatalf("a shell without a proxy was warned: %v\n%s", err, out)
+		}
+	})
+}
+
+// The service-proxy warning names the variables only: a value with a user name and password, and the
+// proxy's host and port, appear nowhere in setup's output or log.
+func TestSetupProxyWarningPrintsNamesOnly(t *testing.T) {
+	var logs strings.Builder
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	f := newSetupFixture(t, "linux")
+	for _, k := range []string{"https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"} {
+		t.Setenv(k, "")
+	}
+	t.Setenv("HTTPS_PROXY", "http://u:p@proxy:3128")
+	out, err := f.run(setupOptions{tokenFile: f.tokenFile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "HTTPS_PROXY in this shell contains a credential; the service gets it without the credential.") {
+		t.Errorf("no warning naming HTTPS_PROXY:\n%s", out)
+	}
+	for _, leak := range []string{"u:p", "proxy:3128"} {
+		if strings.Contains(out, leak) || strings.Contains(logs.String(), leak) {
+			t.Errorf("setup printed or logged %q:\nout:\n%s\nlog:\n%s", leak, out, logs.String())
+		}
+	}
+}
+
+// A proxy variable setup carries gets no warning: the service has it.
+func TestSetupWarnsNothingForACarriedProxy(t *testing.T) {
+	clearProxyEnv(t)
+	t.Setenv("HTTPS_PROXY", "http://proxy.corp:3128")
+	f := newSetupFixture(t, "linux")
+	out, err := f.run(setupOptions{tokenFile: f.tokenFile})
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if !strings.Contains(out, "now carries HTTPS_PROXY") || strings.Contains(out, "does not carry it") || strings.Contains(out, "contains a credential") {
+		t.Errorf("want the carry line and no proxy warning:\n%s", out)
+	}
+}
+
+// A carried proxy variable that held a credential still warns, by name, that the service gets it without
+// the credential, on both systems, and never repeats the credential.
+func TestSetupWarnsAboutACarriedProxyCredential(t *testing.T) {
+	const user, pw = "warn-user-31", "warn-pw-8812"
+	for _, goos := range []string{"linux", "darwin"} {
+		t.Run(goos, func(t *testing.T) {
+			clearProxyEnv(t)
+			logs := capturedLogs(t)
+			t.Setenv("HTTPS_PROXY", "http://"+user+":"+pw+"@proxy.corp:3128")
+			f := newSetupFixture(t, goos)
+			out, err := f.run(setupOptions{tokenFile: f.tokenFile})
+			if err != nil {
+				t.Fatalf("%v\n%s", err, out)
+			}
+			want := "HTTPS_PROXY in this shell contains a credential; the service gets it without the credential. For a proxy that needs a password, use a systemd drop-in on Linux (systemctl --user edit wardyn-runnerd): see docs/runner-registration.md#a-runner-behind-a-corporate-proxy. Never put a proxy credential in the LaunchAgent: every local account can read it."
+			if strings.Count(out, want) != 1 {
+				t.Errorf("want the credential warning once:\n%s", out)
+			}
+			if all := out + logs.String(); strings.Contains(all, user) || strings.Contains(all, pw) {
+				t.Errorf("setup repeated the proxy credential:\n%s", all)
 			}
 		})
 	}

@@ -1,7 +1,7 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package main
+package foldersync
 
 import (
 	"encoding/json"
@@ -70,12 +70,12 @@ func syncInvisible(name string) bool {
 	})
 }
 
-// syncRemoteDir validates --remote-dir the way the gateway does (an absolute,
+// RemoteDir validates --remote-dir the way the gateway does (an absolute,
 // cleaned path under /home/agent/, no ".." segment, no control character, no
 // '%'), so a bad value fails here with a plain message instead of as a refusal
 // the gateway only reports after the channel opens. Empty is the gateway's own
 // default.
-func syncRemoteDir(v string) (string, error) {
+func RemoteDir(v string) (string, error) {
 	if v == "" {
 		return syncDefaultRemote, nil
 	}
@@ -109,9 +109,9 @@ func syncEntryName(name string) error {
 	return nil
 }
 
-// syncShown is p as the report prints it: unchanged when every character is
+// Shown is p as the report prints it: unchanged when every character is
 // printable, quoted otherwise, so no name can write control codes to the terminal.
-func syncShown(p string) string {
+func Shown(p string) string {
 	if utf8.ValidString(p) && !strings.ContainsFunc(p, func(r rune) bool { return !unicode.IsGraphic(r) }) {
 		return p
 	}
@@ -170,29 +170,29 @@ func syncCheckLocal(root *os.Root, rel string) error {
 	return nil
 }
 
-// syncSide is what one side looked like the last time the file was synced.
-type syncSide struct {
+// Side is what one side looked like the last time the file was synced.
+type Side struct {
 	Size  int64 `json:"size"`
 	MTime int64 `json:"mtime_ns"`
 }
 
-// syncState is the per-run record of the last sync, kept outside the synced
+// State is the per-run record of the last sync, kept outside the synced
 // tree. Without an entry for a path nothing is known about its past, so a file
 // present on both sides is a conflict under --pull.
-type syncState struct {
-	Local  string                  `json:"local"`
-	Remote string                  `json:"remote"`
-	Files  map[string]syncFileSeen `json:"files"`
+type State struct {
+	Local  string              `json:"local"`
+	Remote string              `json:"remote"`
+	Files  map[string]FileSeen `json:"files"`
 	// GitSent is what --git last sent; --pull-commits brings back what came after it.
-	GitSent *syncGitSent `json:"git_sent,omitempty"`
+	GitSent *GitSent `json:"git_sent,omitempty"`
 }
 
-type syncFileSeen struct {
-	Local  syncSide `json:"local"`
-	Remote syncSide `json:"remote"`
+type FileSeen struct {
+	Local  Side `json:"local"`
+	Remote Side `json:"remote"`
 }
 
-func syncStatePath(runID string) (string, error) {
+func StatePath(runID string) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve ~: %w", err)
@@ -200,10 +200,10 @@ func syncStatePath(runID string) (string, error) {
 	return filepath.Join(home, ".local", "state", "wardyn", "sync", runID+".json"), nil
 }
 
-// loadSyncState reads the state for one run and one local/remote pairing; a
+// LoadState reads the state for one run and one local/remote pairing; a
 // missing file, or one for another pairing, is an empty state.
-func loadSyncState(file, local, remote string) (*syncState, error) {
-	st := &syncState{Local: local, Remote: remote, Files: map[string]syncFileSeen{}}
+func LoadState(file, local, remote string) (*State, error) {
+	st := &State{Local: local, Remote: remote, Files: map[string]FileSeen{}}
 	b, err := os.ReadFile(file)
 	if errors.Is(err, os.ErrNotExist) {
 		return st, nil
@@ -211,7 +211,7 @@ func loadSyncState(file, local, remote string) (*syncState, error) {
 	if err != nil {
 		return nil, err
 	}
-	var prev syncState
+	var prev State
 	if err := json.Unmarshal(b, &prev); err != nil {
 		return nil, fmt.Errorf("sync state %s is unreadable (delete it to start over): %w", file, err)
 	}
@@ -221,7 +221,7 @@ func loadSyncState(file, local, remote string) (*syncState, error) {
 	return st, nil
 }
 
-func (st *syncState) save(file string) error {
+func (st *State) Save(file string) error {
 	if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
 		return err
 	}
@@ -236,9 +236,9 @@ func (st *syncState) save(file string) error {
 	return os.Rename(tmp, file)
 }
 
-// syncStateOutside refuses a local root that contains the state file: the
+// StateOutside refuses a local root that contains the state file: the
 // record must never ride along in the synced tree.
-func syncStateOutside(root, stateFile string) error {
+func StateOutside(root, stateFile string) error {
 	rel, err := filepath.Rel(root, stateFile)
 	if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return fmt.Errorf("the sync state file %s is inside %s; pick a narrower directory", stateFile, root)

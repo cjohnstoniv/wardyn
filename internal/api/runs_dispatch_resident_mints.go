@@ -125,7 +125,7 @@ func grantMapNames(raw string, id uuid.UUID) bool {
 // mint and is not masked; a read that fails skips the grant, as the broker's
 // mint fails without it.
 func (s *Server) readResidentKnownHosts(ctx context.Context, run types.AgentRun, row types.CredentialGrant, name string) (string, bool) {
-	if s.cfg.Secrets == nil || run.RunnerID == nil {
+	if s.cfg.Secrets == nil || run.RunnerID == nil || (row.Spec.OwnerOnlyFor(name) && !run.OperatorOwned) {
 		return "", false
 	}
 	data := map[string]any{"purpose": string(secretstore.PurposeRunnerResident), "grant_id": row.ID, "runner_id": *run.RunnerID,

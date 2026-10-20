@@ -20,7 +20,7 @@ import (
 // exempts a newly added child: both the table and this closed schema must cover it.
 var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[proxy.Config](): strings.Fields("RunID ControlPlaneURL ControlPlaneCAPEM RunToken Policy Injection Listen DecisionBufferSize SelfLapse DecisionSink HardDeny MITMCACertPEM MITMCAKeyPEM MITMHosts GitGrants PATGrants " +
-		"BrokeredPATGrantIDs ResidentMints ADOGrant AzureGates GitHubAPI AzureARM MITMLLM UpstreamProxyURL UpstreamProxyNoProxy AllowedPeers " +
+		"BrokeredPATGrantIDs ResidentMints ADOGrant AzureGates GitHubAPI AzureARM AWSSigV4 MITMLLM UpstreamProxyURL UpstreamProxyNoProxy AllowedPeers " +
 		"TrustedCAPEM InternalHosts LLMUpstreams LLMChannelHosts LLMUnavailableDetail LocalModels Unattended ScrubResponses Attribution DecisionSpoolDir PushRuleSets PushRuleBase HarnessToolRules HarnessCredentials ViaOrgRoutes MCPServers MCPBindings " +
 		"VM PortRule"),
 	reflect.TypeFor[proxy.InjectionConfig]():      strings.Fields("InjectionRule GrantID"),
@@ -31,7 +31,7 @@ var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[proxy.MCPServerConfig]():      strings.Fields("Key URL GrantID Ordinal"),
 	reflect.TypeFor[proxy.MCPBinding]():           strings.Fields("Harness SHA256 Servers"),
 	reflect.TypeFor[types.LocalModelSettings]():   strings.Fields("Models MaxContext MaxOutput KeepAliveSeconds"),
-	reflect.TypeFor[LocalPlan]():                  strings.Fields("Spec Origins CredentialIntents OrgConfigKeys VerifiedLocalPaths UpstreamProxySecretRef TrustedOutput SelfDefinedComponents LocalSelfDefinedComponents Delivery Posture ConfinementFloor Trust"),
+	reflect.TypeFor[LocalPlan]():                  strings.Fields("Spec Origins CredentialIntents OrgConfigKeys VerifiedLocalPaths UpstreamProxySecretRef TrustedOutput SelfDefinedComponents LocalSelfDefinedComponents Delivery Posture ConfinementFloor Trust OwnerKind"),
 	reflect.TypeFor[CredentialOrigin]():           strings.Fields("Class Delivery GrantKind Stored OwnNamespace OwnerOnly ResidentOptIn"),
 	reflect.TypeFor[CredentialIntent]():           strings.Fields("Field Origin"),
 	reflect.TypeFor[DeliveryPolicy]():             strings.Fields("Classes ByTrust"),
@@ -46,6 +46,7 @@ var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[proxy.AzureGateConfig]():      strings.Fields("Host Route Models BodyCap"),
 	reflect.TypeFor[proxy.GitHubAPIGrant]():       strings.Fields("Capabilities Repos Grants"),
 	reflect.TypeFor[proxy.AzureARMGrant]():        strings.Fields("TenantID Subscriptions Write"),
+	reflect.TypeFor[proxy.AWSSigV4Config]():       strings.Fields("GrantID PortalHost AccountID RoleName Hosts"),
 	reflect.TypeFor[proxy.PATGrant]():             strings.Fields("GrantID Username Repos Access Forge API"),
 	reflect.TypeFor[runner.InjectionGrant]():      strings.Fields("GrantID Rule"),
 	reflect.TypeFor[runner.ManagedFile]():         strings.Fields("Path Mode AgentOwned WipeAfterRead Content"),
@@ -53,7 +54,7 @@ var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[runner.UserWritableCeiling](): strings.Fields("Roots Deny"),
 	reflect.TypeFor[runner.Resources]():           strings.Fields("CPUMillis MemoryMiB CPURequestMillis MemoryRequestMiB PidsLimit DiskMiB DiskMiBSoft LifetimeCap ProxyAzure"),
 	reflect.TypeFor[types.DriveMount]():           strings.Fields("DriveID Backend ObjectName HostRoot DriveName StorageClass HomeName SubjectHash Target ReadOnly SizeMiB Enforcement"),
-	reflect.TypeFor[types.GrantSpec]():            strings.Fields("Kind Scope TTLSeconds RequiresApproval OwnerOnly"),
+	reflect.TypeFor[types.GrantSpec]():            strings.Fields("Kind Scope TTLSeconds RequiresApproval OwnerOnly OwnerOnlyRefs"),
 	reflect.TypeFor[types.InternalHost]():         strings.Fields("HostSuffix CIDRs Baseline"),
 	reflect.TypeFor[types.LLMInspectionSpec]():    strings.Fields("Mode WorkspaceSecretNames WorkspaceSecretValues DetectSecrets DetectSecretPatterns DetectEntropy DetectPII DetectorSidecarURL ClassifiedMarkers ScanAttachments InspectForwardEgress MaxScanBytes OnScannerError RequireInspectableLLM InterceptTLS BlockMinSeverity"),
 	reflect.TypeFor[types.PushRulesSpec]():        strings.Fields("DenyPaths MaxInspectPackMiB RequireReviewPaths HoldSeconds DenyNewExecutables MaxFileSizeMiB"),

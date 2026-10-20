@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -257,6 +258,60 @@ func TestAdminTokenFromEnvStillAuthenticates(t *testing.T) {
 			}
 			if got := srv.last().auth; got != tc.want {
 				t.Errorf("Authorization = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// #3308: the 401 hint follows the server's own reason, and for admin_token_not_configured on whether
+// the CLI's client sent a token. On a deployment that signs people in with single sign-on and has no
+// admin token, it never sends the person to an admin token or the compose quick-start; every other 401
+// keeps the token hint. Each case runs the real command, so "sent" is the token the client used. The
+// test server answers /healthz 401 too, so the organisation offers no CLI sign-in (auth_hint.go).
+func TestDialHintOnSingleSignOn(t *testing.T) {
+	const generic = "authenticate with --token or WARDYN_ADMIN_TOKEN/WARDYN_TOKEN (the compose quick-start's token is in deploy/compose/README.md)"
+	t.Setenv("WARDYN_ADMIN_TOKEN", "")
+	t.Setenv("WARDYN_TOKEN", "")
+	for _, tc := range []struct {
+		name, reason, token, want string
+	}{
+		{"sign_in_required", "sign_in_required", "", "this organisation signs people in with single sign-on and has no admin token, so --token and WARDYN_ADMIN_TOKEN cannot work here. Set WARDYN_TOKEN to a personal API token: a Wardyn admin can invite you to create one, and you claim it under Your account in the console."},
+		{"admin_token_not_configured, no token sent", "admin_token_not_configured", "", generic},
+		{"admin_token_not_configured, token sent", "admin_token_not_configured", "t0k", "the token in --token is not one this organisation knows (unknown, revoked or expired)"},
+		{"no reason", "", "", generic},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotAuth string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotAuth = r.Header.Get("Authorization")
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = fmt.Fprintf(w, `{"error":"refused","reason":%q}`, tc.reason)
+			}))
+			defer srv.Close()
+			args := []string{"run", "list", "--url", srv.URL}
+			if tc.token != "" {
+				args = append(args, "--token", tc.token)
+			}
+			err := execCmd(t, args...)
+			if (gotAuth != "") != (tc.token != "") {
+				t.Fatalf("Authorization sent = %q, token %q", gotAuth, tc.token)
+			}
+			got := dialHint(err)
+			if got != tc.want {
+				t.Fatalf("dialHint = %q\nwant %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// #3308: every 401 that is not a single sign-on case keeps the generic token hint, byte for byte.
+func TestDialHint401GenericTextUnchanged(t *testing.T) {
+	const generic = "authenticate with --token or WARDYN_ADMIN_TOKEN/WARDYN_TOKEN (the compose quick-start's token is in deploy/compose/README.md)"
+	for _, reason := range []string{"missing_bearer_token", "invalid_admin_token"} {
+		t.Run(reason, func(t *testing.T) {
+			if got := dialHint(&sdk.APIError{Status: http.StatusUnauthorized, Reason: reason}); got != generic {
+				t.Fatalf("dialHint(401 %s) = %q\nwant %q", reason, got, generic)
 			}
 		})
 	}

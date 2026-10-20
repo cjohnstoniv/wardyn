@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"errors"
@@ -78,7 +79,12 @@ func runCommand(ctx context.Context, name string, args ...string) ([]byte, error
 }
 
 // setupPaths are where setup puts things.
-type setupPaths struct{ installed, stateDir, envFile, unitFile, plistFile, logFile string }
+type setupPaths struct {
+	installed, stateDir, envFile, unitFile, plistFile, logFile string
+	// cliProfile is the directory of the CLI profile the wardyn command reads: wherever os.UserConfigDir puts it
+	// for this person.
+	cliProfile string
+}
 
 func (p setupPaths) identity() string { return filepath.Join(p.stateDir, "runner.json") }
 
@@ -94,7 +100,8 @@ func (h setupHost) paths() (setupPaths, error) {
 		data := filepath.Join(cmp.Or(h.xdgData, filepath.Join(h.home, ".local", "share")), "wardyn")
 		cfg := filepath.Join(h.home, ".config")
 		p := setupPaths{installed: filepath.Join(data, "bin", "wardyn-runnerd"), stateDir: filepath.Join(cfg, "wardyn", "runner"),
-			envFile: filepath.Join(cfg, "wardyn", "runnerd.env"), unitFile: filepath.Join(cfg, "systemd", "user", serviceUnit)}
+			envFile: filepath.Join(cfg, "wardyn", "runnerd.env"), unitFile: filepath.Join(cfg, "systemd", "user", serviceUnit),
+			cliProfile: filepath.Join(cmp.Or(h.xdgConfig, cfg), "wardyn")}
 		holds := func(dir string) bool { _, err := os.Stat(filepath.Join(dir, "runner.json")); return err == nil }
 		if dir := p.setting("WARDYN_RUNNER_STATE_DIR"); filepath.IsAbs(dir) && holds(dir) {
 			p.stateDir = dir
@@ -115,7 +122,8 @@ func (h setupHost) paths() (setupPaths, error) {
 	case "darwin":
 		data := filepath.Join(h.home, "Library", "Application Support", "wardyn")
 		return setupPaths{installed: filepath.Join(data, "bin", "wardyn-runnerd"), stateDir: filepath.Join(data, "runner"),
-			plistFile: filepath.Join(h.home, "Library", "LaunchAgents", serviceLabel+".plist"), logFile: filepath.Join(h.home, "Library", "Logs", "wardyn", "runnerd.log")}, nil
+			plistFile: filepath.Join(h.home, "Library", "LaunchAgents", serviceLabel+".plist"), logFile: filepath.Join(h.home, "Library", "Logs", "wardyn", "runnerd.log"),
+			cliProfile: data}, nil
 	}
 	return setupPaths{}, fmt.Errorf("unsupported OS: %s", h.goos)
 }
@@ -178,10 +186,36 @@ func (h setupHost) installBinary(ctx context.Context, dst string, stopService bo
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
+	if err := keepPrevious(dst, h.exe); err != nil {
+		return fmt.Errorf("keep the previous %s: %w", dst, err)
+	}
 	if err := writeAtomic(dst, 0o755, func(w io.Writer) error { _, err := io.Copy(w, src); return err }); err != nil {
 		return fmt.Errorf("install %s: %w", dst, err)
 	}
 	return nil
+}
+
+// keepPrevious keeps the binary an upgrade is about to replace as dst+".previous", a hard link taken
+// before the rename (else a copy), so a refused start has a way back. One copy is kept: a second upgrade
+// replaces it, and a first install, or a binary identical to the installed one, leaves it alone.
+func keepPrevious(dst, newExe string) error {
+	old, err := os.ReadFile(dst)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if cur, err := os.ReadFile(newExe); err == nil && bytes.Equal(cur, old) {
+		return nil
+	}
+	prev := dst + ".previous"
+	tmp := prev + ".tmp"
+	_ = os.Remove(tmp)
+	if err := os.Link(dst, tmp); err != nil {
+		return writeAtomic(prev, 0o755, func(w io.Writer) error { _, err := w.Write(old); return err })
+	}
+	return os.Rename(tmp, prev)
 }
 
 // writeAtomic writes a sibling temporary file and renames it over path, so a reader never sees half of it.
@@ -240,6 +274,12 @@ func (p setupPlan) serviceEnv() string {
 	env += line("WARDYN_INTERNAL_NETWORK", p.network) + line("WARDYN_RUNNER_STATE_DIR", p.paths.stateDir)
 	if p.trustedCAFile != "" {
 		env += line("WARDYN_TRUSTED_CA_FILE", p.trustedCAFile)
+	}
+	if p.orgCAFile != "" {
+		env += line("WARDYN_ORG_CA_FILE", p.orgCAFile)
+	}
+	for _, c := range p.proxy {
+		env += line(c.name, c.value)
 	}
 	if p.relayListen != "" {
 		env += line("WARDYN_RELAY_LISTEN", p.relayListen)
@@ -346,15 +386,15 @@ func (p setupPlan) pinMarker() string {
 	return ""
 }
 
-// keptPins reads the proxy image and CA file an earlier setup wrote into the service definition, so
+// keptPins reads the proxy image and the CA files an earlier setup wrote into the service definition, so
 // setup run again without --proxy-image or --trusted-ca-file keeps them. An unmarked release image
 // of this project is what a setup before 0.9.3 derived, not a pin, and is dropped.
-func (p setupPaths) keptPins() (image, caFile string) {
+func (p setupPaths) keptPins() (image, caFile, orgCAFile string) {
 	image = p.setting("WARDYN_PROXY_IMAGE")
 	if tag, ok := strings.CutPrefix(image, releaseProxyRepo+":"); ok && releaseVersion.MatchString(tag) && p.setting("WARDYN_PROXY_IMAGE_PINNED") != "1" {
 		image = ""
 	}
-	return image, p.setting("WARDYN_TRUSTED_CA_FILE")
+	return image, p.setting("WARDYN_TRUSTED_CA_FILE"), p.setting("WARDYN_ORG_CA_FILE")
 }
 
 // setting is the value an earlier setup wrote for key into the service definition, "" when there is none.
@@ -379,6 +419,14 @@ func (p setupPaths) setting(key string) string {
 	return ""
 }
 
+// carryPlaceholders are the plist's slots for the proxy variables setup carries; a variable setup did not
+// carry loses its key.
+var carryPlaceholders = map[string]string{
+	"HTTPS_PROXY": "__CARRY_HTTPS_PROXY__", "https_proxy": "__CARRY_https_proxy__",
+	"HTTP_PROXY": "__CARRY_HTTP_PROXY__", "http_proxy": "__CARRY_http_proxy__",
+	"NO_PROXY": "__CARRY_NO_PROXY__", "no_proxy": "__CARRY_no_proxy__",
+}
+
 // plistComment is the template's documentation, which is not written into the user's LaunchAgents.
 var plistComment = regexp.MustCompile(`(?s)<!--.*?-->\n`)
 
@@ -386,25 +434,35 @@ var plistComment = regexp.MustCompile(`(?s)<!--.*?-->\n`)
 // than setting them empty.
 func renderLaunchAgent(plan setupPlan) string {
 	tpl := plistComment.ReplaceAllString(runnerunits.LaunchAgent, "")
-	for key, val := range map[string]string{"DOCKER_HOST": plan.dockerHost, "WARDYN_RELAY_LISTEN": plan.relayListen, "WARDYN_RELAY_HOST_TARGET": plan.relayHostTarget,
-		"WARDYN_PROXY_IMAGE": plan.pinnedImage(), "WARDYN_PROXY_IMAGE_PINNED": plan.pinMarker(), "WARDYN_TRUSTED_CA_FILE": plan.trustedCAFile} {
-		if val == "" {
-			tpl = regexp.MustCompile(`[ \t]*<key>`+key+`</key>\n[ \t]*<string>[^<]*</string>\n`).ReplaceAllString(tpl, "")
-		}
+	vals := map[string]string{"DOCKER_HOST": plan.dockerHost, "WARDYN_RELAY_LISTEN": plan.relayListen, "WARDYN_RELAY_HOST_TARGET": plan.relayHostTarget,
+		"WARDYN_PROXY_IMAGE": plan.pinnedImage(), "WARDYN_PROXY_IMAGE_PINNED": plan.pinMarker(), "WARDYN_TRUSTED_CA_FILE": plan.trustedCAFile, "WARDYN_ORG_CA_FILE": plan.orgCAFile}
+	for name := range carryPlaceholders {
+		vals[name] = ""
 	}
-	return strings.NewReplacer(
+	replace := []string{
 		"__WARDYN_RUNNERD__", html.EscapeString(plan.paths.installed),
 		"__WARDYN_ORG_URL__", html.EscapeString(plan.org),
 		"__WARDYN_RUNNER_STATE_DIR__", html.EscapeString(plan.paths.stateDir),
 		"__WARDYN_PROXY_IMAGE__", html.EscapeString(plan.pinnedImage()),
 		"__WARDYN_TRUSTED_CA_FILE__", html.EscapeString(plan.trustedCAFile),
+		"__WARDYN_ORG_CA_FILE__", html.EscapeString(plan.orgCAFile),
 		"__WARDYN_PROXY_IMAGE_PINNED__", plan.pinMarker(),
 		"__WARDYN_INTERNAL_NETWORK__", html.EscapeString(plan.network),
 		"__DOCKER_HOST__", html.EscapeString(plan.dockerHost),
 		"__RELAY_LISTEN__", html.EscapeString(plan.relayListen),
 		"__RELAY_HOST_TARGET__", html.EscapeString(plan.relayHostTarget),
 		"__WARDYN_LOG__", html.EscapeString(plan.paths.logFile),
-	).Replace(tpl)
+	}
+	for _, c := range plan.proxy {
+		vals[c.name] = c.value
+		replace = append(replace, carryPlaceholders[c.name], html.EscapeString(c.value))
+	}
+	for key, val := range vals {
+		if val == "" {
+			tpl = regexp.MustCompile(`[ \t]*<key>`+key+`</key>\n[ \t]*<string>[^<]*</string>\n`).ReplaceAllString(tpl, "")
+		}
+	}
+	return strings.NewReplacer(replace...).Replace(tpl)
 }
 
 func (h setupHost) startLaunchAgent(ctx context.Context, plan setupPlan, out io.Writer) error {

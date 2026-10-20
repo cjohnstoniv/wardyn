@@ -35,13 +35,21 @@ import (
 // (fails closed) rather than erroring — recording.Handler turns any false
 // return into the SAME 404 "recording not found" a truly-missing cast gets,
 // so this never needs to shape its own response.
+// auditRecordingRead is an operator's replay of a recording of a run someone else created.
+const auditRecordingRead = "recording.read"
+
 func (s *Server) recordingAuthorizer(r *http.Request, runIDPrefix string) bool {
 	id, err := uuid.Parse(runIDPrefix)
 	if err != nil {
 		return false
 	}
-	// An operator reads every recording (recordingReader) without a store read.
+	// An operator reads every recording (recordingReader). Replaying another person's session is
+	// audited, as attaching to it live is; an owner's own replay is not.
 	if s.isOperator(r.Context()) {
+		if run, err := s.cfg.Store.GetRun(r.Context(), id); err == nil && run.CreatedBy != principalFromRequest(r) {
+			actorType, actor := actorFromRequest(r)
+			s.recordAudit(r.Context(), s.auditEvent(&id, actorType, actor, auditRecordingRead, chi.URLParam(r, "runID"), "success", nil))
+		}
 		return true
 	}
 	run, err := s.cfg.Store.GetRun(r.Context(), id)
