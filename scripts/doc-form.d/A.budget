@@ -209,7 +209,10 @@
 # docs/AUDIT-ACTIONS.md 49319 = ours 49195 + theirs 49174 - base 49050 at the 0.10 W2 merge of VM-B onto the train.
 # docs/AUDIT-ACTIONS.md 49371 = ours 49319 + theirs 49102 - base 49050 at the 0.10 W2 merge of MDL onto the train.
 # docs/AUDIT-ACTIONS.md 49670 = ours 49486 + theirs 49371 - base 49187 at the 0.10 GHPAT merge of main onto the lane.
-docs/AUDIT-ACTIONS.md=49670 share=8
+# 0.10 HYBB (#2982): docs/AUDIT-ACTIONS.md 49235 adds 48, measured: the run.folder.transfer row, both directions.
+# docs/AUDIT-ACTIONS.md 49419 = ours 49235 + theirs 49371 - base 49187 at the 0.10 merge of main (W2) into HYBB.
+# docs/AUDIT-ACTIONS.md 49718 = ours 49670 + theirs 49419 - base 49371 at the 0.10 W3 merge of HYBB onto the train.
+docs/AUDIT-ACTIONS.md=49718 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.

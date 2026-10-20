@@ -49,6 +49,8 @@
 # 0.10 W1 train: threatmodel/THREAT-MODEL.md tightened to 64762, measured at the train merge.
 # threatmodel/THREAT-MODEL.md 65089 = ours 64868 + theirs 64762 - base 64541 at the 0.10.0 SEC-1 merge of main; re-measured below if higher.
 # threatmodel/THREAT-MODEL.md 65167 adds 6 over 65161 (0.10 MINT-L round 2), measured: #76 names a person's own runner, the 15-minute re-judge and the revoke on refusal.
-threatmodel/THREAT-MODEL.md=65167 share=20
+# 0.10 HYBB (#2982): threatmodel/THREAT-MODEL.md 65411 adds 322 over 65089, measured: residual #94 (the folder-only runner trusts wardynd) and the four new member-mount deny paths.
+# threatmodel/THREAT-MODEL.md 65489 = ours 65167 + theirs 65411 - base 65089 at the 0.10 W3 merge of HYBB onto the train.
+threatmodel/THREAT-MODEL.md=65489 share=20
 # threatmodel/THREAT-MODEL.md 63171 adds 78 over 63093, measured: the console session under the role-stamp residual: renewal up to its cap, never moving the sign-in time, and the copied-cookie bound (0.9.3 console session lifetime).
 # threatmodel/THREAT-MODEL.md 63025 = 62948 + 77, measured: the laptop decision-sink crossing row and #77's sink and loss-row bullets.

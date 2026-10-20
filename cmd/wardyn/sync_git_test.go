@@ -10,9 +10,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
+
+	"github.com/cjohnstoniv/wardyn/internal/foldersync"
 )
 
 func gitIn(t *testing.T, dir string, args ...string) string {
@@ -47,10 +48,10 @@ func TestSyncGateway_GitHistoryCrossesAsABundleOnly(t *testing.T) {
 	ctx := context.Background()
 	c := g.dial()
 	var out strings.Builder
-	if err := syncGitCheck(ctx, sy, root); err != nil {
+	if err := foldersync.GitCheck(ctx, sy, root); err != nil {
 		t.Fatal(err)
 	}
-	if err := sendGit(ctx, &out, sy, c, g.runID, root); err != nil {
+	if err := foldersync.SendGit(ctx, &out, sy, c, g.runID, root); err != nil {
 		t.Fatal(err)
 	}
 	if got := gitIn(t, box, "log", "--format=%s"); got != "first" {
@@ -69,7 +70,7 @@ func TestSyncGateway_GitHistoryCrossesAsABundleOnly(t *testing.T) {
 		t.Errorf("the laptop's git config crossed: %s", cfg)
 	}
 	out.Reset()
-	if err := sendGit(ctx, &out, sy, c, g.runID, root); err != nil || !strings.Contains(out.String(), "already") {
+	if err := foldersync.SendGit(ctx, &out, sy, c, g.runID, root); err != nil || !strings.Contains(out.String(), "already") {
 		t.Errorf("a second --git with nothing new: %v, %q", err, out.String())
 	}
 
@@ -77,7 +78,7 @@ func TestSyncGateway_GitHistoryCrossesAsABundleOnly(t *testing.T) {
 	putSyncFile(t, filepath.Join(box, "agent.go"), "package main\n", 0o644)
 	gitIn(t, box, "add", "agent.go")
 	gitIn(t, box, "commit", "-q", "-m", "agent work")
-	if err := pullCommits(ctx, &out, sy, c, g.runID, root); err != nil {
+	if err := foldersync.PullCommits(ctx, &out, sy, c, g.runID, root); err != nil {
 		t.Fatal(err)
 	}
 	branch := "wardyn/sync-" + g.runID[:8]
@@ -102,7 +103,7 @@ func TestSyncGitCheck_NeedsTheTopOfAWorkTree(t *testing.T) {
 	g := newSyncRig(t)
 	g.mkSandboxDir(syncRemote)
 	sy, _, root := g.syncer(syncRemote, false)
-	if err := syncGitCheck(context.Background(), sy, root); err == nil {
+	if err := foldersync.GitCheck(context.Background(), sy, root); err == nil {
 		t.Error("a directory outside any work tree was accepted")
 	}
 	gitIn(t, root, "init", "-q")
@@ -110,18 +111,11 @@ func TestSyncGitCheck_NeedsTheTopOfAWorkTree(t *testing.T) {
 	if err := os.Mkdir(sub, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := syncGitCheck(context.Background(), sy, sub); err == nil {
+	if err := foldersync.GitCheck(context.Background(), sy, sub); err == nil {
 		t.Error("a subdirectory of a work tree was accepted")
 	}
-	sy.o.remote = syncGitDir + "/x"
-	if err := syncGitCheck(context.Background(), sy, root); err == nil {
+	sy.Opts.Remote = "/home/agent/.wardyn-sync/x" // the bundles' own directory
+	if err := foldersync.GitCheck(context.Background(), sy, root); err == nil {
 		t.Error("a remote directory under the bundle directory was accepted")
-	}
-}
-
-func TestPullCommitsFetch_ChecksObjectsAndSkipsTagsAndSubmodules(t *testing.T) {
-	want := []string{"-c", "transfer.fsckObjects=true", "fetch", "-q", "--no-tags", "--no-recurse-submodules", "/tmp/b.bundle", "+HEAD:refs/heads/wardyn/sync-12345678"}
-	if got := pullCommitsFetch("/tmp/b.bundle", "wardyn/sync-12345678"); !slices.Equal(got, want) {
-		t.Errorf("fetch argv = %q, want %q", got, want)
 	}
 }

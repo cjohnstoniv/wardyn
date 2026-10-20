@@ -228,12 +228,27 @@
       "why": "Secret values are runtime-only: the server resolves them, and a template names secrets instead."
     },
     {
+      "path": "RunLocalFolder.direction",
+      "excluded": "launch",
+      "why": "Part of local_folder, which is named at each launch."
+    },
+    {
       "path": "RunLocalFolder.name",
       "excluded": "launch",
       "why": "Part of local_folder, which is named at each launch."
     },
     {
+      "path": "RunLocalFolder.path",
+      "excluded": "launch",
+      "why": "Part of local_folder, which is named at each launch."
+    },
+    {
       "path": "RunLocalFolder.remote_dir",
+      "excluded": "launch",
+      "why": "Part of local_folder, which is named at each launch."
+    },
+    {
+      "path": "RunLocalFolder.runner_id",
       "excluded": "launch",
       "why": "Part of local_folder, which is named at each launch."
     }

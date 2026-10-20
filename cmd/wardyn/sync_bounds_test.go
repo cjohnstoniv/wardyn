@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/foldersync"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -81,7 +82,7 @@ func TestDialSyncGateway_SilentProxyCommandTimesOut(t *testing.T) {
 
 // The gateway's stderr is read to the end so its channel drains, but only the first 64 KiB is kept.
 func TestCappedBuffer_KeepsAtMost64KiBAndDrains(t *testing.T) {
-	var b cappedBuffer
+	var b foldersync.CappedBuffer
 	n, err := io.Copy(&b, strings.NewReader(strings.Repeat("x", 200<<10)))
 	if err != nil || n != 200<<10 {
 		t.Fatalf("copy = %d, %v; want all 200 KiB consumed", n, err)

@@ -73,13 +73,15 @@ var memberDeniedSegments = map[string]bool{
 	".pypirc":          true,
 }
 
-// memberDeniedPairs are two-segment denials — a bare ".config" or ".git" is an
-// ordinary directory a project legitimately contains, but these two children
-// hold credentials (gh's token) and remote/credential config.
+// memberDeniedPairs are two-segment denials — a bare ".config", ".git" or
+// "Library" is an ordinary directory a project legitimately contains, but these
+// children hold credentials (gh's token, gcloud's, the macOS keychains) and
+// remote/credential config.
 var memberDeniedPairs = [][2]string{
 	{".config", "gh"},
-	{".config", "gcloud"},
+	{".config", "gcloud"}, // gcloud's credential database
 	{".git", "config"},
+	{"Library", "Keychains"}, // macOS keychains
 }
 
 // UserMountPolicy is the operator/MDM-set posture for MEMBER-authored
@@ -209,7 +211,7 @@ func validateUserSource(src string, roots []string) (string, error) {
 	if !withinAnyRoot(real, roots) {
 		return "", fmt.Errorf("mount source %q resolves to %q, which is outside every member workspace root (%s)", src, real, strings.Join(roots, ", "))
 	}
-	if seg := deniedUserSegment(real); seg != "" {
+	if seg := DeniedUserSegment(real); seg != "" {
 		return "", fmt.Errorf("mount source %q resolves to %q, which is or traverses the credential path %q; denied", src, real, seg)
 	}
 	return real, nil
@@ -265,11 +267,11 @@ func denyPathUnder(real string, deny []string) string {
 	return ""
 }
 
-// deniedUserSegment returns the offending path element when real IS or
+// DeniedUserSegment returns the offending path element when real IS or
 // TRAVERSES a credential dotfile path, or "" when it is clean. Elements compare
 // case-folded: on a case-insensitive filesystem EvalSymlinks keeps the
 // spelling it was given, so ".SSH" there is ~/.ssh.
-func deniedUserSegment(real string) string {
+func DeniedUserSegment(real string) string {
 	parts := strings.Split(strings.TrimPrefix(filepath.ToSlash(real), "/"), "/")
 	for i, part := range parts {
 		for seg := range memberDeniedSegments {

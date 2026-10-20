@@ -187,7 +187,10 @@
 # docs/sdk.md 19749 = ours 19702 + theirs 19682 - base 19635 at the 0.10 merge of main (W2) into MINT-L.
 # docs/sdk.md 19932 = ours 19885 + theirs 19682 - base 19635 at the 0.10 GHPAT merge of main onto the lane.
 # docs/sdk.md 19999 = ours 19749 + theirs 19932 - base 19682 at the 0.10 W3 merge of GHPAT onto the train.
-docs/sdk.md=19999 share=21
+# 0.10 HYBB (#2982): docs/sdk.md 19696 adds 61, measured: the computer_folders_off, computer_runner_offline, computer_runner_no_folders and computer_folder_refused reason rows.
+# docs/sdk.md 19743 = ours 19696 + theirs 19682 - base 19635 at the 0.10 merge of main (W2) into HYBB.
+# docs/sdk.md 20060 = ours 19999 + theirs 19743 - base 19682 at the 0.10 W3 merge of HYBB onto the train.
+docs/sdk.md=20060 share=21
 # docs/sdk.md 18691 adds 28 over 18663, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.

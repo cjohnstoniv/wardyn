@@ -626,11 +626,48 @@ type PersonList struct {
 // control plane refuses a higher part (413), and the proxy never forwards one.
 const RecordingMaxParts = 2048
 
-// RunLocalFolder is a run's folder on the person's computer, which reaches a remote sandbox only by
-// `wardyn sync`. Name is how the person's computer names it (its base name), for the messages that
+// RunLocalFolder is a run's folder on the person's computer, which reaches a remote sandbox by
+// `wardyn sync` or through their runner. Name is how that computer names it (its base name), for the messages that
 // refer to it; RemoteDir is where in the sandbox it lands. A run that has one does not start its
 // agent until the first sync of that folder into RemoteDir has completed.
+//
+// RunnerID, when set, names the person's own folder-only runner that holds the folder at Path, an
+// absolute path on that computer: Wardyn then seeds the folder through that runner itself, with no
+// `wardyn sync` (run_computer_folder.go). Direction is ComputerFolderBoth (the sandbox's changes come
+// back when the run ends) or ComputerFolderIn (a copy in only).
 type RunLocalFolder struct {
-	Name      string `json:"name"`
-	RemoteDir string `json:"remote_dir,omitempty"`
+	Name      string     `json:"name"`
+	RemoteDir string     `json:"remote_dir,omitempty"`
+	RunnerID  *uuid.UUID `json:"runner_id,omitempty"`
+	Path      string     `json:"path,omitempty"`
+	Direction string     `json:"direction,omitempty"`
+}
+
+// RunLocalFolder.Direction values.
+const (
+	ComputerFolderBoth = "both"
+	ComputerFolderIn   = "in"
+)
+
+// RunLocalFolderStatus is what Wardyn knows of the passes a runner made for a run's computer folder
+// (0198): the first sync in, and the one that brought the sandbox's changes back. Both are nil until
+// that pass ends.
+type RunLocalFolderStatus struct {
+	Seed *FolderPassRecord `json:"seed,omitempty"`
+	Back *FolderPassRecord `json:"back,omitempty"`
+}
+
+// FolderPassRecord is one pass as the runner counted it. Error is set when it did not complete.
+type FolderPassRecord struct {
+	At      time.Time       `json:"at"`
+	Files   int             `json:"files"`
+	Bytes   int64           `json:"bytes"`
+	Refused []FolderRefusal `json:"refused"`
+	Error   string          `json:"error,omitempty"`
+}
+
+// FolderRefusal is one path a pass refused and why.
+type FolderRefusal struct {
+	Path   string `json:"path"`
+	Reason string `json:"reason"`
 }

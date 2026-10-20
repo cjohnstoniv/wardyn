@@ -8,7 +8,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -21,6 +20,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/cjohnstoniv/wardyn/internal/foldersync"
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
@@ -130,7 +130,7 @@ func TestSyncGateway_PullSizeLimits(t *testing.T) {
 		box := g.mkSandboxDir(syncRemote)
 		big := filepath.Join(box, "big.bin")
 		putSyncFile(t, big, "", 0o644)
-		if err := os.Truncate(big, maxPullFile+1); err != nil {
+		if err := os.Truncate(big, foldersync.MaxPullFile+1); err != nil {
 			t.Fatal(err)
 		}
 		putSyncFile(t, filepath.Join(box, "small.txt"), "ok", 0o644)
@@ -149,7 +149,7 @@ func TestSyncGateway_PullSizeLimits(t *testing.T) {
 		putSyncFile(t, filepath.Join(box, "a.txt"), "123456", 0o644)
 		putSyncFile(t, filepath.Join(box, "b.txt"), "123456", 0o644)
 		sy, _, _ := g.syncer(syncRemote, true)
-		sy.o.maxPullBytes = 10
+		sy.Opts.MaxPullBytes = 10
 		rep := mustPass(t, sy)
 		if !slices.Equal(rep.Pulled, []string{"a.txt"}) || len(rep.Refused) != 1 || rep.Refused[0].Path != "b.txt" || rep.BytesIn != 6 {
 			t.Errorf("report = %+v", rep)
@@ -161,7 +161,7 @@ func TestSyncGateway_PullSizeLimits(t *testing.T) {
 		putSyncFile(t, filepath.Join(box, "liar.bin"), strings.Repeat("x", 100), 0o644)
 		g.rn.liar = map[string]int64{"liar.bin": 1}
 		sy, _, root := g.syncer(syncRemote, true)
-		sy.o.maxPullBytes = 50
+		sy.Opts.MaxPullBytes = 50
 		rep := mustPass(t, sy)
 		if _, err := os.Stat(filepath.Join(root, "liar.bin")); err == nil {
 			t.Error("a file larger than it listed was pulled past the budget")
@@ -235,47 +235,6 @@ func TestSyncGateway_OnePathProblemDoesNotAbortThePass(t *testing.T) {
 	})
 }
 
-func TestSyncAbortIsOnlyForAConnectionOrAnInterrupt(t *testing.T) {
-	ctx := context.Background()
-	if syncAbort(ctx, os.ErrPermission) || syncAbort(ctx, &os.PathError{Op: "open", Err: os.ErrExist}) {
-		t.Error("a per-path error aborts the pass")
-	}
-	if !syncAbort(ctx, errors.New("connection lost")) {
-		t.Error("an unknown error is not treated as the connection going away")
-	}
-	cancelled, cancel := context.WithCancel(ctx)
-	cancel()
-	if !syncAbort(cancelled, os.ErrPermission) {
-		t.Error("an interrupt does not abort")
-	}
-}
-
-func TestSyncFoldAndInvisibleNames(t *testing.T) {
-	if syncFold("cafe\u0301.txt") != syncFold("caf\u00e9.TXT") {
-		t.Error("NFD and NFC spellings with different case have different keys")
-	}
-	if syncFold("ǅ") != syncFold("ǆ") || syncFold("Straße") != syncFold("STRASSE") {
-		t.Error("full case folding is not applied")
-	}
-	for _, name := range []string{".g\u200cit", ".git\u200d", "a\u00adb", "x\ufe0f", "\u2060a", "a\u034fb"} {
-		if !syncInvisible(name) || syncEntryName(name) == nil {
-			t.Errorf("%q is not refused as invisible", name)
-		}
-	}
-	for _, name := range []string{"plain", "caf\u00e9", "日本語", ".git"} {
-		if syncInvisible(name) {
-			t.Errorf("%q is refused as invisible", name)
-		}
-	}
-	if !syncDenied(".GIT/config") || !syncDenied("a/.vscode/TASKS.json") {
-		t.Error("folded denylist match failed")
-	}
-	got := syncCollisions([]string{"dir/cafe\u0301.txt", "dir/caf\u00e9.txt", "other"})
-	if len(got) != 2 {
-		t.Errorf("NFD/NFC spellings are not a collision: %v", got)
-	}
-}
-
 func TestSyncGateway_AnotherSpellingOrInvisibleNameNeverReachesTheLaptop(t *testing.T) {
 	g := newSyncRig(t)
 	box := g.mkSandboxDir(syncRemote)
@@ -293,67 +252,6 @@ func TestSyncGateway_AnotherSpellingOrInvisibleNameNeverReachesTheLaptop(t *test
 	}
 	if !slices.Equal(rep.Pulled, []string{"ok.txt"}) {
 		t.Errorf("pulled = %v", rep.Pulled)
-	}
-}
-
-func TestSyncGateway_PullRefusesALocalFileTheWalkNeverListed(t *testing.T) {
-	g := newSyncRig(t)
-	box := g.mkSandboxDir(syncRemote)
-	sy, _, root := g.syncer(syncRemote, true)
-	putSyncFile(t, filepath.Join(root, "x.txt"), "local", 0o644)
-	putSyncFile(t, filepath.Join(box, "x.txt"), "remote", 0o644)
-	fi, err := sy.c.Stat(syncRemote + "/x.txt")
-	if err != nil {
-		t.Fatal(err)
-	}
-	rep := newSyncReport()
-	pulled := int64(0)
-	if err := sy.pull(context.Background(), "x.txt", fi, nil, rep, &pulled); err != nil {
-		t.Fatal(err)
-	}
-	if got := getSyncFile(t, filepath.Join(root, "x.txt")); got != "local" || len(rep.Pulled) != 0 || len(rep.Refused) != 1 {
-		t.Errorf("file = %q, report = %+v", got, rep)
-	}
-}
-
-func TestSyncGateway_PullDoesNotOverwriteAFileSavedAfterTheWalk(t *testing.T) {
-	g := newSyncRig(t)
-	box := g.mkSandboxDir(syncRemote)
-	sy, _, root := g.syncer(syncRemote, true)
-	putSyncFile(t, filepath.Join(root, "x.txt"), "saved after the walk", 0o644)
-	putSyncFile(t, filepath.Join(box, "x.txt"), "remote", 0o644)
-	fi, _ := sy.c.Stat(syncRemote + "/x.txt")
-	stale := &syncFile{side: syncSide{Size: 3, MTime: 1}, mode: 0o644}
-	rep := newSyncReport()
-	pulled := int64(0)
-	if err := sy.pull(context.Background(), "x.txt", fi, stale, rep, &pulled); err != nil {
-		t.Fatal(err)
-	}
-	if got := getSyncFile(t, filepath.Join(root, "x.txt")); got != "saved after the walk" || !slices.Equal(rep.Conflicts, []string{"x.txt"}) || len(rep.Pulled) != 0 {
-		t.Errorf("file = %q, report = %+v", got, rep)
-	}
-	if left, _ := os.ReadDir(root); len(left) != 1 {
-		t.Errorf("a temp file was left behind: %v", left)
-	}
-}
-
-func TestSyncGateway_LocalWritesStayInsideTheRoot(t *testing.T) {
-	g := newSyncRig(t)
-	g.mkSandboxDir(syncRemote)
-	sy, _, root := g.syncer(syncRemote, true)
-	outside := t.TempDir()
-	if err := os.Symlink(outside, filepath.Join(root, "swapped")); err != nil {
-		t.Fatal(err)
-	}
-	if _, f, err := sy.localTemp("swapped/x"); err == nil {
-		_ = f.Close()
-		t.Error("a temp file was created through a symlink that leaves the root")
-	}
-	if ents, _ := os.ReadDir(outside); len(ents) != 0 {
-		t.Errorf("something was written outside the root: %v", ents)
-	}
-	if err := sy.root.MkdirAll("swapped/deeper", 0o755); err == nil {
-		t.Error("a directory was created through a symlink that leaves the root")
 	}
 }
 

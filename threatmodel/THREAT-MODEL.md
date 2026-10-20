@@ -1077,9 +1077,9 @@ ADMIN pre-authorized** —
     resolve error — no lexical fallback) must sit inside an operator/MDM-set root
     (`WARDYN_USER_WORKSPACE_ROOTS`, or that principal's `_MAP` entry, which REPLACES the shared
     list).
-  - And it must neither BE nor TRAVERSE a credential dotfile path (`.ssh`, `.aws`, `.claude`,
-    `.wardyn`, `.gnupg`, `.docker`, `.kube`, `.config/gh`, `.netrc`, `.git-credentials`,
-    `.git/config`).
+  - And it must neither BE nor TRAVERSE a credential dotfile path (`.ssh`, `.aws`, `.azure`,
+    `.claude`, `.wardyn`, `.gnupg`, `.docker`, `.kube`, `.config/gh`, `.config/gcloud`, `.netrc`,
+    `.git-credentials`, `.git/config`, `Library/Keychains`).
 - Unset roots = **no member host mounts at all**.
 - Writability is a SECOND, narrower allowlist (`WARDYN_USER_WRITABLE_ROOTS` minus
   `WARDYN_USER_WRITABLE_DENY`, deny first and winning); both unset = every member mount
@@ -2571,7 +2571,7 @@ hiding them would repeat the failure mode we are designed to avoid.
 
 68. **Sync lets agent-authored content reach files the developer later executes [0.9].**
     - `wardyn sync` copies between a laptop directory and a remote run over the SSH gateway's dedicated `wardyn-sync` subsystem; a pull from the sandbox needs `--pull`, per run.
-    - The CLI applies the safety defaults on the laptop (`syncDenied`, [`cmd/wardyn/sync_rules.go`](../cmd/wardyn/sync_rules.go)): nothing is deleted, no symlinks either way, no exec bit on a pulled file, never `.git/`, `.envrc`, `.direnv/` or editor task and launch files, and the laptop wins a conflict ([design §9.3](../docs/design/0.9/PLAN.md#93-safety-defaults)).
+    - The CLI applies the safety defaults on the laptop (`syncDenied`, [`internal/foldersync/rules.go`](../internal/foldersync/rules.go)): nothing is deleted, no symlinks either way, no exec bit on a pulled file, never `.git/`, `.envrc`, `.direnv/` or editor task and launch files, and the laptop wins a conflict ([design §9.3](../docs/design/0.9/PLAN.md#93-safety-defaults)).
     - The gateway relays bytes it cannot parse, so those rules hold only through the CLI, and `WARDYN_SYNC_DIR` is a start point, not a boundary.
     - **Ordinary files remain.** A pulled `Makefile`, package script, test or source file runs when the developer builds, with their credentials and none of Wardyn's controls.
     - Transfers are recorded as byte counts (`ssh.sync.transfer`), never content, and SFTP is unmasked (§4.1).
@@ -2823,6 +2823,19 @@ hiding them would repeat the failure mode we are designed to avoid.
     - The proxy listens on all of its interfaces and also joins the shared `wardyn-internal` network to reach wardynd, whose members are Wardyn's own containers.
     - With `WARDYN_DOCKER_PROXY_SANDBOX_PEERS_ONLY` on, the driver writes the run's own network subnet into the proxy config (`allowed_peers`) and the proxy closes any connection from outside it before reading a byte. How the proxy is addressed does not change.
     - The switch is off by default in 0.10 until proven on Docker and Podman; with it off the proxy serves every caller as before.
+
+94. **A folder-only runner trusts wardynd for every folder call, and its default root is the person's home [0.10, off by default].** ([`internal/runner/folders/folders.go`](../internal/runner/folders/folders.go), [`internal/api/run_computer_folder.go`](../internal/api/run_computer_folder.go).)
+    - `wardyn-runnerd serve --substrate folders` answers every `list_folders` and `sync_folder` call that arrives on its own outbound session. It cannot tell which run or person a call is for, so it does not check either.
+    - The only check that a run may use a folder is wardynd's: the runner must be claimed by the run's creator (`run.CreatedBy` equals the runner's owner), not an organisation runner, online and sharing folders. That check runs at browse, at create, and again before each pass (`folderRunner`). With `WARDYN_COMPUTER_FOLDERS` off, wardynd makes no folder call.
+    - Its roots default to `$HOME` and narrow with `--folder-root`. A member mount has no roots until an operator sets them, and fails closed (`WARDYN_USER_WORKSPACE_ROOTS`).
+    - **What the runner enforces itself, whatever wardynd asks:**
+      - A path must be clean, absolute and under a root, and a root itself is never sent.
+      - It follows no symlink, refuses a path that is or goes through a credential folder (`runner.DeniedUserSegment`), and leaves every credential folder inside the chosen one out of each pass, both ways.
+      - Browsing returns folder names, file counts and sizes only.
+      - A pass is the `wardyn sync` engine under its rules: `.git` and the editor task files never cross, no symlinks, and `WARDYN_SYNC_DENY`.
+      - A pull deletes nothing, writes no exec bit, stays under the chosen folder (`os.Root`), keeps the computer's copy of a file changed on both sides, and is bounded in bytes.
+      - The runner opens no port.
+    - **Residual:** a compromised wardynd, or a fault in its owner check, can list any folder under the roots and send its contents, credential folders aside, into a sandbox. With a pull, it can also write files into that folder, overwriting any file not changed on the computer since the last pass. Narrow the roots, or do not run the folder-only runner.
 
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
 

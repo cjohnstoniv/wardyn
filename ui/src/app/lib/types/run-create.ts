@@ -58,6 +58,21 @@ export interface CreateRunInput {
   // it. Neither takes the default end (#1319).
   ends_after_sec?: number;
   no_end?: boolean;
+  /**
+   * A folder on the person's computer (pkg/client.CreateRunRequest.LocalFolder, types.RunLocalFolder). With
+   * `runner_id` it is held by their own folder-only runner, and Wardyn seeds it before the agent starts.
+   * Chosen at each launch: never in a template.
+   */
+  local_folder?: RunLocalFolderInput;
+}
+
+/** types.RunLocalFolder as a request names it. `direction`: "both" brings the sandbox's changes back when the run ends. */
+export interface RunLocalFolderInput {
+  name?: string;
+  remote_dir?: string;
+  runner_id?: string;
+  path?: string;
+  direction?: "both" | "in";
 }
 
 // POST /api/v1/runs response: the created run's fields PLUS an optional advisory

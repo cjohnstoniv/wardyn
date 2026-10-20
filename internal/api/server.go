@@ -673,6 +673,9 @@ type Config struct {
 	// holds a run's agent for the first sync of its local folder, never past
 	// the run's own end (run_local_folder.go). Zero is DefaultLocalFolderSeedWait.
 	LocalFolderSeedWait time.Duration
+	// ComputerFolders is WARDYN_COMPUTER_FOLDERS: a run may take a folder from its creator's own
+	// folder-only runner, which Wardyn seeds itself (run_computer_folder.go). Off by default.
+	ComputerFolders bool
 	// APITokenMaxTTL is WARDYN_API_TOKEN_MAX_TTL: the longest lifetime a newly
 	// minted API token may have. Zero (the default) means no cap. A mint that
 	// asks for no TTL gets this one; a mint that asks for more is clamped to it.
