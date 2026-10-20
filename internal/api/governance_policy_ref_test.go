@@ -133,7 +133,7 @@ func TestCeilingRefusalsNameThePolicy(t *testing.T) {
 			audit.mu.Lock()
 			defer audit.mu.Unlock()
 			sawTarget := false
-			for _, ev := range audit.events {
+			for _, ev := range audit.snapshot() {
 				if ev.Action != authz.AuditAction {
 					continue
 				}

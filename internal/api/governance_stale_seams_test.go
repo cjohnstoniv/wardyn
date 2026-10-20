@@ -192,7 +192,7 @@ func TestDrivePreviewWritesNoDenial(t *testing.T) {
 		t.Errorf("body = %s, want the stale-snapshot refusal", w.Body.String())
 	}
 
-	for _, ev := range audit.events {
+	for _, ev := range audit.snapshot() {
 		if ev.Action != "authz.denied" {
 			continue
 		}
