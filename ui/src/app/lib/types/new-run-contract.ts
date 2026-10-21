@@ -196,7 +196,7 @@ export interface ManagedSettingsFact {
   harness?: string;
   locked?: boolean;
   locked_by?: "unit" | "organisation";
-  profile?: string;
+  unit?: string;
 }
 
 export interface TelemetryFact {
