@@ -51,6 +51,7 @@ const (
 	keepObject  = "a Wardyn-named volume or claim; a host_path drive names <drive>/<home> or is refused first"
 	keepSandbox = "a directory inside the sandbox, not on the host"
 	keepValues  = "posture values (modes, ids, counts, booleans), never a path or a spec"
+	keepRule    = "an approval rule as its security-tier author wrote it: kinds, repo and preset predicates, and the egress hosts and tools it approves; it holds no policy's workspace_mounts"
 )
 
 // auditHostReviewed are the host-shaped fields served as recorded, per action. A host-shaped field on a
@@ -73,6 +74,8 @@ var auditHostReviewed = map[string]auditHostKeep{
 	"drive.reclaim":                      {[]string{"object"}, keepObject},
 	"egress.*":                           {[]string{"host"}, keepEgress},
 	"github_pat.own.resolve":             {[]string{"host"}, keepEgress},
+	"governance.approval_rule.delete":    {[]string{"spec"}, keepRule},
+	"governance.approval_rule.write":     {[]string{"spec"}, keepRule},
 	"governance.egress_baseline.write":   {[]string{"after", "before"}, "the baseline egress host sets, which the security tier writes"},
 	"governance.unit.write":              {[]string{"contact_request_url"}, "the contact link a profile shows its members"},
 	"harness.login.start":                {[]string{"sso_start_url"}, "the identity provider's sign-in start URL, an egress destination"},
