@@ -15,7 +15,6 @@ import type { AccessFacts, AccessRow } from "../../../../../lib/types/new-run-ac
 import { ADD_ACCESS, CUSTOM_COMPONENT as CC, MY_COMPONENTS as MY_COMPONENTS_COPY } from "../../../../wardyn/copy/components";
 import { ModelAccessProvider } from "../../../../wardyn/model-access-context";
 import type { SetupStatus } from "../../../../../lib/types/setup";
-import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 import type { RunIntent } from "../../draft/run-intent";
 import { NewRunDraftProvider, useNewRunDispatch, useNewRunDraft } from "../../new-run-route";
@@ -88,14 +87,13 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
 describe("catalogue", () => {
-  it("lists five CLI cards with their states, and only the org rows the person is granted", async () => {
+  it("lists the built CLI cards with their states, and only the org rows the person is granted", async () => {
     await show();
     expect(await screen.findByRole("heading", { name: "AWS ReadOnly-Dev" })).toBeTruthy();
     for (const kind of ["azure", "github"] as const) expect(card(CLI_CARD[kind].name).getByText("Not turned on for you. Ask your admin.")).toBeTruthy();
-    for (const kind of ["gcloud", "kubectl"] as const) {
-      expect(card(CLI_CARD[kind].name).getByText(NR_SHARED.COMING_SOON)).toBeTruthy();
-      expect(card(CLI_CARD[kind].name).queryByRole("button")).toBeNull();
-    }
+    // #3045: the unbuilt command lines leave the grid, with no Coming soon card.
+    for (const kind of ["gcloud", "kubectl"] as const) expect(screen.queryByRole("heading", { name: CLI_CARD[kind].name })).toBeNull();
+    expect(screen.queryByText("Coming soon")).toBeNull();
     expect(card(CLI_CARD.azure.name).queryByRole("button")).toBeNull();
     // The owner's wording (T9): gh reaches Actions and the REST API, not issue or pull request lists.
     expect(card(CLI_CARD.github.name).getByText(NR_TOOLS.CLI_GITHUB_BODY)).toBeTruthy();
@@ -638,11 +636,12 @@ describe("what a tool card brings", () => {
       expect(dialog.queryByText(NR_TOOLS.NET_ALLOWED)).toBeNull();
     });
 
-    it("is Coming soon, with no breakdown, while the server's switch is off or silent", async () => {
+    // #3045: a command line that is not built yet leaves the grid, so the switch off means no kubectl card at all.
+    it("leaves the grid, with no breakdown, while the server's switch is off or silent", async () => {
       h.kubectl = false;
       await show();
-      await screen.findByRole("heading", { name: CLI_CARD.kubectl.name });
-      expect(card(CLI_CARD.kubectl.name).getByText(NR_SHARED.COMING_SOON)).toBeTruthy();
+      await screen.findByRole("heading", { name: CLI_CARD.github.name });
+      expect(screen.queryByRole("heading", { name: CLI_CARD.kubectl.name })).toBeNull();
       expect(document.querySelector(`dl[aria-label="${NR_TOOLS.BRINGS_FOR(CLI_CARD.kubectl.name)}"]`)).toBeNull();
       expect(screen.queryByRole("heading", { name: ORG_KUBECTL.name })).toBeNull();
     });

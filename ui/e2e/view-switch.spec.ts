@@ -96,7 +96,7 @@ async function expectAdminChrome(page: Page) {
   await expect(segment(page, CONSOLE_VIEW.ADMIN)).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator("aside").getByText(CONSOLE_VIEW.EYEBROW_ADMIN, { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "New run" })).toHaveCount(0);
-  for (const label of ["Policies", "Permissions", "Audit", "Setup", "Settings"] as NavLabel[]) {
+  for (const label of ["Policies", "Permissions", "Audit", "Getting started", "Settings"] as NavLabel[]) {
     await expect(sidebarLink(page, label)).toBeVisible();
   }
   await expect(page).toHaveTitle(CONSOLE_VIEW.TITLE_ADMIN);
@@ -363,13 +363,13 @@ test.describe("who sees the switch", () => {
     await expect(page.getByRole("button", { name: "New run" })).toHaveCount(0);
   });
 
-  test("a security admin's Admin view: Drives joins; Secrets, Recordings, Setup and Settings do not", async ({ page, context }) => {
+  test("a security admin's Admin view: no Drives (a super admin's page); Secrets, Recordings, Getting started and Settings do not", async ({ page, context }) => {
     await ssoAdminSession(context, { role: "security_admin", operator: false, security_operator: true });
     await gotoConsole(page, "admin");
-    for (const label of ["Runs", "Approvals", "Workspaces", "Policies", "Governance", "Permissions", "Drives", "Audit"] as NavLabel[]) {
+    for (const label of ["Runs", "Approvals", "Workspaces", "Policies", "Governance", "Permissions", "Audit"] as NavLabel[]) {
       await expect(sidebarLink(page, label)).toBeVisible();
     }
-    for (const label of ["Secrets", "Recordings", "Setup", "Settings"] as NavLabel[]) {
+    for (const label of ["Drives", "Secrets", "Recordings", "Getting started", "Settings"] as NavLabel[]) {
       await expect(sidebarLink(page, label)).toHaveCount(0);
     }
   });
@@ -469,8 +469,7 @@ test.describe("#214 no-barrier CTA: the to-admin click keeps ?step=environment",
     await noBarrierProbe(context);
     await gotoConsole(page);
 
-    // Scoped with .first(): the banner and the top bar both carry this CTA.
-    await page.getByRole("link", { name: NO_BARRIER.CTA }).first().click();
+    await page.getByRole("link", { name: NO_BARRIER.CTA }).click();
     // The client-side navigation already lands the URL bar here — ViewGate
     // renders the interstitial INSTEAD of the Outlet, not a redirect away.
     await expect(page).toHaveURL(/\/admin\/setup\?step=environment$/);
@@ -482,8 +481,7 @@ test.describe("#214 no-barrier CTA: the to-admin click keeps ?step=environment",
   });
 
   // #1335 — a security admin in the User view is a session-user too, but
-  // /admin/setup is super-admin-only: the reason shows with no link at either
-  // site (shell banner, top bar), and nothing sends them to the member recap.
+  // /admin/setup is super-admin-only: the reason shows with no link, and nothing sends them to the member recap.
   test("a security admin in the User view reads the reason with no link", async ({ page, context }) => {
     const session = await ssoAdminSession(context, {}, "security_admin");
     session.userView = true;
@@ -493,7 +491,7 @@ test.describe("#214 no-barrier CTA: the to-admin click keeps ?step=environment",
     await expect(page.getByText(NO_BARRIER.BANNER_TITLE)).toBeVisible();
     await expect(page.getByRole("link", { name: NO_BARRIER.CTA })).toHaveCount(0);
     // #3050: no link and no command, but a next step: whom to ask.
-    await expect(page.getByText(NO_BARRIER.BANNER_BODY_ASK)).toBeVisible();
+    await expect(page.getByText(NO_BARRIER.BANNER_MEMBER)).toBeVisible();
   });
 
   // §2.4 re-sync, #2618: a user type switched in another tab is what a launch from this one is governed as, so

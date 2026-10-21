@@ -177,6 +177,8 @@ export function describeAction(e: AuditEvent): string {
 /** The row's whole sentence, target included, built only from real fields. */
 export function describeEvent(e: AuditEvent): string {
   e = shown(e);
+  // #3036: a target that is the row's own run id says nothing the run reference beside it doesn't.
+  if (e.target && e.target === e.run_id) e = { ...e, target: "" };
   const { head, join } = describe(e);
   if (!join) return head;
   const target = e.target || join.fallback;

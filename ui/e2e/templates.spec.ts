@@ -156,7 +156,7 @@ test.describe("Templates: filters and rows", () => {
     await stubCatalogue(page, { rows: CATALOGUE, publish: ME_ONLY });
     await openTemplates(page);
     await expect(names(page)).toHaveText(CATALOGUE.map((r) => r.name));
-    const teal = page.locator("main").locator('.bg-primary:not([role="switch"])');
+    const teal = page.locator("main").locator('.bg-primary:not([role="switch"]):not([aria-pressed])');
     await expect(teal).toHaveCount(1);
     await expect(teal).toHaveText(T.NEW_FROM_SCRATCH);
     const row = rowOf(page, NIGHTLY.name);

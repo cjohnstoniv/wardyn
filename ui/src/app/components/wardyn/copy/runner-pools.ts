@@ -117,7 +117,7 @@ export const RUNNER_V6 = {
   AVAILABLE_LISTED: "Only the people, groups and roles an admin listed can add it. Change the list with wardyn runner remote people.",
   AVAILABLE_ON: (name: string) => `${name} is now available to people's pools`,
   AVAILABLE_OFF: (name: string) => `${name} is no longer available to people's pools`,
-  MINT_ONE_PER_COMPUTER: "One runner per computer is enough: it runs several of their runs at the same time, up to its Runs at once.",
+  MINT_ONE_PER_COMPUTER: "One runner per computer is enough: it runs several of their runs at the same time, up to its \"Runs at once\" limit.",
 } as const;
 
 /**
@@ -185,7 +185,8 @@ export const POOLS = {
   ORG_DEFAULT_NOTE: "The default seeds each person's New Run when they choose an organization pool. It grants nobody a pool.",
   ORG_NO_DEFAULT: "No organization default. People choose an organization pool each time.",
   ORG_EMPTY_TITLE: "No organization pools yet",
-  ORG_EMPTY_BODY: "Create one on the command line, as above. It then appears here.",
+  ORG_EMPTY_THEN: "It then appears here.",
+  ORG_CLI_COPY: "Copy",
   USER_TITLE: "User pools",
   USER_LEDE:
     "Every person's own pools, read-only. Only the owner can change a pool or choose its runners. A person's pools go when their data is erased. There is no organization default for user pools: people choose their own.",
@@ -362,18 +363,19 @@ export const POOL_FORM = {
   NARROWER: "narrower than its runners, optional",
   RUNS_UNIT: "runs",
   MAX_RUNS_HINT_EDIT: (n: number) => `Its runners allow ${n} runs at once in total. A run launched past this waits for a free slot.`,
-  MAX_RUNS_HINT_NEW: "Its runners' Runs at once add up to the most it can run. A run launched past this waits for a free slot.",
+  MAX_RUNS_HINT_NEW: "Its runners' \"Runs at once\" limits add up to the most it can run. A run launched past this waits for a free slot.",
   CPU: "CPU (CPUs)",
   MEMORY: "Memory (GB)",
   DISK: "Disk (GB)",
   DEFAULT: "Default",
   MAX_PER_RUN: "Maximum per run",
-  RUNNERS_ALLOW: (amount: string) => `Its runners allow up to ${amount} per run. Leave empty to use that.`,
+  QUALIFIER: "Optional. Leave empty to follow its runners, and it can only narrow them.",
+  RUNNERS_ALLOW: (amount: string) => `Its runners allow up to ${amount} per run.`,
   /**
    * pending owner wording: the approved text also said "This is checked against them when you add
    * runners.", which nothing does (a pool limit wider than its runners is accepted and never takes effect).
    */
-  RUNNERS_NOT_CHOSEN: "Its runners aren't chosen yet. Leave empty to follow them.",
+  RUNNERS_NOT_CHOSEN: "Its runners aren't chosen yet.",
   LIFETIME: "Lifetime",
   IDLE: "Idle stop",
   MAXIMUM: "Maximum",

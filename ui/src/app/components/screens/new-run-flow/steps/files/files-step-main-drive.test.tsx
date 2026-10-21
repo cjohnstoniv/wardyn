@@ -115,26 +115,19 @@ describe("main drive", () => {
     show();
     expect(screen.getByRole("heading", { level: 2, name: NR_FILES.MAIN_TITLE })).toBeInTheDocument();
     expect(screen.getByText(NR_FILES.MAIN_BODY)).toBeInTheDocument();
-    expect(screen.getByText(NR_SHARED.REQUIRED)).toBeInTheDocument();
+    // #3044: Required is a muted marker word in the section head, not a pill and not caps.
+    const required = screen.getByText(NR_SHARED.REQUIRED);
+    expect(required).toHaveClass("text-muted-foreground");
+    expect(required.className).not.toContain("uppercase");
+    expect(screen.getByRole("heading", { level: 2, name: NR_FILES.MAIN_TITLE }).className).not.toContain("uppercase");
     expect(await screen.findByText(NR_FILES.UP_TO("8 GiB"))).toBeInTheDocument();
     expect(size()).toHaveValue(4);
     expect(size()).toHaveAttribute("step", "0.1");
     expect(screen.getByText(NR_FILES.ENFORCED)).toBeInTheDocument();
-    expect(screen.getByText(NR_FILES.REUSE_LABEL)).toBeInTheDocument();
-    expect(screen.getByLabelText(NR_FILES.REUSE_LABEL)).toBeDisabled();
-    expect(screen.getAllByText(NR_SHARED.COMING_SOON).length).toBeGreaterThanOrEqual(1);
-  });
-
-  // #2860: the reuse row was a 150px grid that stacked the checkbox, label and
-  // chip on three lines and floated the tooltip away. One wrapping flex row now.
-  it("keeps the reuse checkbox, label, chip and tooltip in one flex row", () => {
-    show();
-    const row = screen.getByLabelText(NR_FILES.REUSE_LABEL).parentElement!.parentElement!;
-    expect(row.className).toContain("flex");
-    expect(row.className).not.toContain("grid");
-    expect(within(row).getByText(NR_FILES.REUSE_LABEL)).toBeInTheDocument();
-    expect(within(row).getByText(NR_SHARED.COMING_SOON)).toBeInTheDocument();
-    expect(within(row).getByRole("button", { name: NR_FILES.REUSE_ARIA })).toBeInTheDocument();
+    // #3045: "Reuse it across runs" is not built, so it is not drawn: no disabled checkbox, no chip.
+    expect(screen.queryByText("Reuse it across runs")).toBeNull();
+    expect(document.getElementById("nr-reuse-drive")).toBeNull();
+    expect(screen.queryByText(NR_SHARED.COMING_SOON)).toBeNull();
   });
 
   it("clamps a size over the cap to the cap on blur and names the pool", async () => {
@@ -418,6 +411,18 @@ describe("a filled size follows the pool", () => {
     act(() => external.edit((i) => ({ ...i, runner_pool_id: "pool-b" })));
     await waitFor(() => expect(size()).toHaveValue(10));
     expect(drawn().resources).toBeUndefined();
+  });
+
+  it("another pool's default with the same digits in another unit switches the unit too", async () => {
+    checks.result = withDefault(32);
+    show();
+    await waitFor(() => expect(size()).toHaveValue(32));
+    expect(screen.getByText("MiB")).toBeInTheDocument();
+    checks.result = withDefault(32768);
+    act(() => external.edit((i) => ({ ...i, runner_pool_id: "pool-b" })));
+    await waitFor(() => expect(screen.getByText("GiB")).toBeInTheDocument());
+    expect(size()).toHaveValue(32);
+    expect(screen.queryByText("MiB")).toBeNull();
   });
 
   it("a pool with no size to offer clears a size the person never changed", async () => {

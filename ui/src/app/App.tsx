@@ -487,6 +487,15 @@ export default function App() {
   // unmount.
   const [coldUnreachable, setColdUnreachable] = React.useState(false);
   const probingRef = React.useRef(false);
+  // Each session probe from the sign-in screen takes the next number. Only the latest may change anything: an
+  // older probe was sent before whatever made the newer one, so its answer (a 401 included) is dropped (#3368).
+  const probeSeqRef = React.useRef(0);
+  const startProbe = React.useCallback(() => {
+    const mine = ++probeSeqRef.current;
+    probingRef.current = true;
+    const current = () => mine === probeSeqRef.current;
+    return { current, answer: probeAuthWithReason(() => !current()) };
+  }, []);
   React.useEffect(() => {
     if (auth === "authed") setColdUnreachable(false);
   }, [auth]);
@@ -504,8 +513,9 @@ export default function App() {
       timer = setTimeout(() => {
         // The focus re-probe has one out: wait for it rather than stack a second.
         if (probingRef.current) return schedule();
-        probingRef.current = true;
-        void probeAuthWithReason().then(({ probe, reason, transient }) => {
+        const { current, answer } = startProbe();
+        void answer.then(({ probe, reason, transient }) => {
+          if (!current()) return alive ? schedule() : undefined;
           probingRef.current = false;
           if (!alive) return;
           if (probe === "unreachable" && transient) {
@@ -527,7 +537,7 @@ export default function App() {
       stop();
       document.removeEventListener("input", stop, true);
     };
-  }, [auth, coldUnreachable]);
+  }, [auth, coldUnreachable, startProbe]);
 
   // DR-0020: the other tabs of this browser signed out, signed in or switched mode. Every signed-in tab
   // re-asks /me (the shell's reauth layer); a tab on the sign-in screen asks here, and enters the
@@ -541,10 +551,13 @@ export default function App() {
     const reprobe = (fromOtherTab: boolean) => {
       if (signingOutRef.current) return;
       if (!fromOtherTab && signedOutHereRef.current) return;
-      if (probingRef.current) return;
-      probingRef.current = true;
+      // Another tab's announcement always asks again: a probe already out was sent before that sign-in and
+      // would answer 401 (#3368). It takes over from that probe, whose answer is then dropped.
+      if (probingRef.current && !fromOtherTab) return;
       const hadToken = getToken() !== null;
-      void probeAuthWithReason().then(({ probe, reason, transient }) => {
+      const { current, answer } = startProbe();
+      void answer.then(({ probe, reason, transient }) => {
+        if (!current()) return;
         probingRef.current = false;
         // An answer that is final ends the cold-load retries; a transient failure leaves them running.
         if (alive && !(probe === "unreachable" && transient)) setColdUnreachable(false);
@@ -567,7 +580,7 @@ export default function App() {
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [auth]);
+  }, [auth, startProbe]);
 
   // Any HTTP 401. H1: it also fires for the cold mount probe (no session ever
   // established this tab), which is the gate's business, not the dialog's.
@@ -616,9 +629,10 @@ export default function App() {
   // RETURNED, like refreshHealth below: usePoll's in-flight guard is
   // promise-based, so a void return would let a slow /setup/status — the
   // expensive endpoint — stack a second read on top of the first every tick.
-  const refreshSetupStatus = React.useCallback(() => {
+  const refreshSetupStatus = React.useCallback((forceSweep?: boolean) => {
     return setupApi
-      .getSetupStatus()
+      // `=== true`: usePoll and the model-access door call this with no or foreign arguments.
+      .getSetupStatus(forceSweep === true ? { recheck: true } : undefined)
       .then((status) => {
         // authRef, not a closed-over `auth` (the same ref H1's 401 handler
         // reads): /setup/status is the expensive endpoint and can still be in
@@ -758,6 +772,7 @@ export default function App() {
               // (undefined -> false) while setupStatus hasn't landed yet,
               // never a guess painted off no data.
               noBarrier={setupStatus ? !deriveReadiness(setupStatus).barrierReady : false}
+              onRecheck={() => void refreshSetupStatus(true)}
               tier={setupStatus?.tier}
               onSignOut={async (sso) => {
                 // HIGH fix (sign-out): tell the server to clear the OIDC session

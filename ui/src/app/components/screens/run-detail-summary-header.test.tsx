@@ -21,17 +21,14 @@ import { waitingAdoConsent } from "../../lib/reauth-waiting-copy";
 import type { AgentRun, RunDetail, RunState } from "../../lib/types";
 import { TERMINAL_RUN_STATES } from "../../lib/types";
 import { RUN } from "../wardyn/copy";
+import { aheadByHours } from "../../lib/test-clock";
+import { RUN_HEADER } from "../wardyn/copy/run-header";
 import { RUN_FACTS } from "../wardyn/copy/door";
 import { ModelAccessProvider } from "../wardyn/model-access-context";
 import { MODEL_PROVIDERS, providerStatus } from "../../lib/test-fixtures";
 import type { SetupStatus } from "../../lib/types";
 import { AUTONOMY_META } from "../wardyn/autonomy-meta";
-import {
-  CHIP_SETTING_UP,
-  CHIP_WAITING_FOR_MACHINE,
-  PENDING_NO_DETAIL,
-  STARTING_CONTAINER_CREATING,
-} from "./run-status-detail";
+import { PENDING_NO_DETAIL, STARTING_CONTAINER_CREATING, STARTING_UNSCHEDULABLE } from "./run-status-detail";
 import { setField } from "../../../test/set-field";
 
 // SummaryHeader now renders a "Runs" breadcrumb <Link> (react-router-dom),
@@ -142,13 +139,22 @@ describe("SummaryHeader — command bar", () => {
     ).toBeInTheDocument();
   });
 
-  it("disables Kill on a terminal run", () => {
+  it("offers no Kill on a terminal run", () => {
     renderHeader(
       <OperatorProvider operator={true}>
         <SummaryHeader run={{ ...taskRun, state: "COMPLETED" }} terminal={true} onKill={() => {}} />
       </OperatorProvider>,
     );
-    expect(screen.getByRole("button", { name: /kill/i })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /kill/i })).toBeNull();
+  });
+
+  it("keeps Kill on a terminal run whose teardown the trail does not prove", () => {
+    renderHeader(
+      <OperatorProvider operator={true}>
+        <SummaryHeader run={{ ...taskRun, state: "KILLED" }} terminal={true} canKillAgain onKill={() => {}} />
+      </OperatorProvider>,
+    );
+    expect(screen.getByRole("button", { name: /kill/i })).toBeEnabled();
   });
 
   it("keeps Kill enabled on a live run", () => {
@@ -175,19 +181,30 @@ describe("SummaryHeader — command bar", () => {
         <SummaryHeader run={taskRun} terminal={false} pendingApprovalCount={0} onKill={() => {}} />
       </OperatorProvider>,
     );
-    expect(screen.queryByText(/waiting/i)).toBeNull();
+    expect(screen.queryByTestId("pending-approval-chip-text")).toBeNull();
   });
-});
 
-describe("SummaryHeader — the short run id", () => {
-  it("shows 8 characters and keeps the full id on the title", () => {
-    const id = "7f3c9a21-5b6d-4e8f-9a0b-1c2d3e4f5a6b";
+  it("drops the Review prompt from the chip when the viewer cannot decide", async () => {
+    const goApprovals = vi.fn();
     renderHeader(
-      <OperatorProvider operator={true}>
-        <SummaryHeader run={{ ...runningInteractive, id }} terminal={false} onKill={() => {}} />
+      <OperatorProvider operator={false}>
+        <SummaryHeader run={taskRun} terminal={false} pendingApprovalCount={1} viewerBlocked onGoApprovals={goApprovals} onKill={() => {}} />
       </OperatorProvider>,
     );
-    expect(screen.getByTitle(id).textContent).toBe("· 7f3c9a21");
+    expect(screen.queryByText(/Review/)).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "1 waiting" }));
+    expect(goApprovals).toHaveBeenCalledTimes(1);
+  });
+
+  it("makes the waiting chip a link to the Approvals tab when the page can open it", async () => {
+    const goApprovals = vi.fn();
+    renderHeader(
+      <OperatorProvider operator={true}>
+        <SummaryHeader run={taskRun} terminal={false} pendingApprovalCount={1} onGoApprovals={goApprovals} onKill={() => {}} />
+      </OperatorProvider>,
+    );
+    await userEvent.click(screen.getByRole("button", { name: /1 waiting · Review/ }));
+    expect(goApprovals).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -218,7 +235,7 @@ describe("SummaryHeader — failure_hint chip actually ellipsizes (review R-02)"
 
 // "Start a run like this one" on the header, for every terminal
 // run (a strict superset of the failure block's 3 endings). Tab order clone
-// -> kill: outline, never the bar's one danger slot.
+// -> kill: outline, never the header's one danger slot.
 describe("SummaryHeader — clone door", () => {
   // ticket: 0.7.3 F7
   // The component itself gates on the `terminal` PROP, never on
@@ -260,12 +277,13 @@ describe("SummaryHeader — clone door", () => {
     expect(screen.queryByRole("button", { name: RUN.CLONE_CTA })).toBeNull();
   });
 
-  it("clone is outline — Kill keeps the bar's one danger slot", () => {
+  it("clone is outline — Kill keeps the header's one danger slot", () => {
     renderHeader(
       <OperatorProvider operator={true}>
         <SummaryHeader
-          run={{ ...runningInteractive, state: "COMPLETED" }}
+          run={{ ...runningInteractive, state: "KILLED" }}
           terminal={true}
+          canKillAgain
           onKill={() => {}}
           onClone={() => {}}
         />
@@ -278,47 +296,67 @@ describe("SummaryHeader — clone door", () => {
   });
 });
 
-// WHO beside WHAT: the identity glyph and the state chip must sit adjacent,
-// or the same run reads as two different shapes on the board and in the
-// cockpit. One pair, one attention vocabulary, no seam.
-describe("SummaryHeader — the who + what glyph pair", () => {
-  const glyph = () => document.querySelector("[data-attention]")!;
-
-  it("puts the state glyph immediately after the agent badge, not across the bar", () => {
+// The run's state is said once, as the badge; the sentence beside it says what the run is doing.
+describe("SummaryHeader — state once, with a visible status sentence", () => {
+  it("shows no separate state glyph beside the title", () => {
     renderHeader(
       <OperatorProvider operator>
         <SummaryHeader run={runningInteractive} terminal={false} onKill={() => {}} />
       </OperatorProvider>,
     );
-    const g = glyph();
-    expect(g).toBeTruthy();
-    // Adjacent siblings inside one wrapper — the pair, never fused. "CC" is
-    // Claude Code's monogram (AgentBadge), so this asserts WHO then WHAT.
-    expect(g.previousElementSibling).toHaveTextContent("CC");
+    expect(document.querySelector("[data-attention]")).toBeNull();
+    expect(screen.getAllByText("Running", { exact: true })).toHaveLength(1);
   });
 
-  it("a RUNNING run with nothing pending reads as running", () => {
-    renderHeader(
-      <OperatorProvider operator>
-        <SummaryHeader run={runningInteractive} terminal={false} onKill={() => {}} />
-      </OperatorProvider>,
-    );
-    expect(glyph()).toHaveAttribute("data-attention", "active");
-  });
-
-  it("a HELD approval outranks a merely pending one — the same order attentionRank uses", () => {
+  it.each([
+    ["RUNNING", false, 0, RUN_HEADER.WORKING],
+    ["RUNNING", false, 2, RUN_HEADER.WAITING],
+    ["COMPLETED", true, 0, RUN_HEADER.FINISHED],
+    ["FAILED", true, 0, RUN_HEADER.FAILED],
+    ["KILLED", true, 1, RUN_HEADER.KILLED],
+  ])("a %s run (terminal %s, %i pending) says: %s", (state, terminal, pending, sentence) => {
     renderHeader(
       <OperatorProvider operator>
         <SummaryHeader
-          run={runningInteractive}
-          terminal={false}
-          pendingApprovalCount={4}
-          sandboxHeld
+          run={{ ...runningInteractive, state: state as RunState }}
+          terminal={terminal}
+          pendingApprovalCount={pending}
           onKill={() => {}}
         />
       </OperatorProvider>,
     );
-    expect(glyph()).toHaveAttribute("data-attention", "permission");
+    expect(screen.getByTestId("run-status-sentence")).toHaveTextContent(sentence);
+  });
+
+  it("a run that ended says how long it ran and when it ended", () => {
+    const created = aheadByHours(-2);
+    const updated = new Date(Date.parse(created) + 38 * 60_000).toISOString();
+    renderHeader(
+      <OperatorProvider operator>
+        <SummaryHeader
+          run={{
+            ...runningInteractive,
+            state: "COMPLETED",
+            created_at: created,
+            updated_at: updated,
+          }}
+          terminal
+          onKill={() => {}}
+        />
+      </OperatorProvider>,
+    );
+    expect(screen.getByText(/^Ran 38m 0s · ended /)).toBeInTheDocument();
+  });
+
+  it("puts Rename and Copy link in More on a phone-width header, and Kill on the title row", async () => {
+    renderHeader(
+      <OperatorProvider operator principal="me">
+        <SummaryHeader run={runningInteractive} terminal={false} onCopyLink={() => {}} onRename={() => {}} onKill={() => {}} />
+      </OperatorProvider>,
+    );
+    expect(screen.getByRole("button", { name: "Kill" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: RUN_HEADER.MORE }));
+    expect(await screen.findByRole("menuitem", { name: "Copy link to this run" })).toBeInTheDocument();
   });
 
   // "sandbox held" would send the person looking for an Approve
@@ -408,56 +446,10 @@ describe("SummaryHeader — the who + what glyph pair", () => {
     expect(waitingAdoConsent(1, false)).toBe("Waiting for the owner's Azure DevOps sign-in");
     expect(screen.queryByText(waitingAdoConsent(1))).not.toBeInTheDocument();
   });
-
-  it("a pending approval that is NOT holding the sandbox reads as monitoring, not as a demand", () => {
-    renderHeader(
-      <OperatorProvider operator>
-        <SummaryHeader
-          run={runningInteractive}
-          terminal={false}
-          pendingApprovalCount={1}
-          onKill={() => {}}
-        />
-      </OperatorProvider>,
-    );
-    expect(glyph()).toHaveAttribute("data-attention", "monitoring");
-  });
-
-  // The kill cascade leaves the run's PENDING approvals alive, so a run killed
-  // seconds after a wait_for_review raise still arrives here with sandboxHeld.
-  it("a KILLED run reads as needing review even while a hold is still parked on it", () => {
-    renderHeader(
-      <OperatorProvider operator>
-        <SummaryHeader
-          run={{ ...runningInteractive, state: "KILLED" }}
-          terminal
-          pendingApprovalCount={1}
-          sandboxHeld
-          onKill={() => {}}
-        />
-      </OperatorProvider>,
-    );
-    expect(glyph()).toHaveAttribute("data-attention", "interrupted");
-  });
-
-  it("a FAILED run reads as needing review, whatever is pending on it", () => {
-    renderHeader(
-      <OperatorProvider operator>
-        <SummaryHeader
-          run={{ ...runningInteractive, state: "FAILED" }}
-          terminal
-          pendingApprovalCount={2}
-          onKill={() => {}}
-        />
-      </OperatorProvider>,
-    );
-    expect(glyph()).toHaveAttribute("data-attention", "interrupted");
-  });
 });
 
-// A STARTING run says what it is waiting ON, in the header's own short
-// register — an identical "Starting" badge alone gives no way to tell a
-// first pull from a hang.
+// A STARTING run says what it is waiting ON — an identical "Starting" badge
+// alone gives no way to tell a first pull from a hang.
 describe("SummaryHeader — the startup reason (finding 6)", () => {
   const starting = (extra: Partial<AgentRun>): AgentRun => ({
     ...runningInteractive,
@@ -466,7 +458,7 @@ describe("SummaryHeader — the startup reason (finding 6)", () => {
     ...extra,
   });
 
-  it("carries the reason, in the SHORT register, with the sentence on the title", () => {
+  it("says what it is waiting on as a visible sentence, not a tooltip", () => {
     renderHeader(
       <OperatorProvider operator={true}>
         <SummaryHeader
@@ -476,19 +468,11 @@ describe("SummaryHeader — the startup reason (finding 6)", () => {
         />
       </OperatorProvider>,
     );
-    const chip = screen.getByText(CHIP_SETTING_UP);
-    expect(chip).toBeInTheDocument();
-    // The sentence is reachable, but never the chip's own text: at max-w-[160px]
-    // it would truncate to a restatement of the STARTING badge beside it.
-    expect(chip.closest("[title]")).toHaveAttribute("title", STARTING_CONTAINER_CREATING);
-    expect(screen.queryByText(STARTING_CONTAINER_CREATING)).toBeNull();
+    expect(screen.getByTestId("run-status-sentence")).toHaveTextContent(STARTING_CONTAINER_CREATING);
   });
 
-  // The same rule as the failure_hint chip applies here for the same
-  // reason: min-w-0 shrink lets it give up WIDTH, never existence. A `hidden …`
-  // waterfall step would hide the one sentence a waiting person is waiting for.
-  it("may never hide at any width", () => {
-    const { container } = renderHeader(
+  it("a reason that cannot be waited out is said in full too", () => {
+    renderHeader(
       <OperatorProvider operator={true}>
         <SummaryHeader
           run={starting({ status_detail: "pod: Unschedulable: no room", status_reason: "Unschedulable" })}
@@ -497,11 +481,7 @@ describe("SummaryHeader — the startup reason (finding 6)", () => {
         />
       </OperatorProvider>,
     );
-    const chip = screen.getByText(CHIP_WAITING_FOR_MACHINE).closest("[title]");
-    expect(chip).not.toBeNull();
-    expect(container.innerHTML).toContain(CHIP_WAITING_FOR_MACHINE);
-    expect(chip?.className ?? "").not.toMatch(/(^|\s)hidden(\s|$)/);
-    expect(chip?.className ?? "").toContain("shrink");
+    expect(screen.getByTestId("run-status-sentence")).toHaveTextContent(STARTING_UNSCHEDULABLE);
   });
 
   it("says NOTHING on a run that is no longer starting, even carrying a stale detail", () => {
@@ -519,7 +499,6 @@ describe("SummaryHeader — the startup reason (finding 6)", () => {
         />
       </OperatorProvider>,
     );
-    expect(screen.queryByText(CHIP_SETTING_UP)).toBeNull();
     expect(screen.queryByText(STARTING_CONTAINER_CREATING)).toBeNull();
   });
 });
@@ -573,7 +552,7 @@ describe("SummaryHeader — PENDING's own queued sentence (#125)", () => {
       </OperatorProvider>,
     );
     expect(screen.queryByText(PENDING_NO_DETAIL)).toBeNull();
-    expect(screen.getByText(CHIP_WAITING_FOR_MACHINE)).toBeInTheDocument();
+    expect(screen.getByText(STARTING_UNSCHEDULABLE)).toBeInTheDocument();
   });
 
   // review defect 3: PENDING_NO_DETAIL is a PENDING-only fact — STARTING's own

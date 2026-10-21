@@ -13,7 +13,8 @@ export const RUNS_SECTION = {
   NEEDS_ADMIN: "Needs you",
   // H-3, Admin view only: owners' sign-ins and lost runs — no admin can act.
   OWNER: "Waiting on the owner",
-  RUNNING: "Running",
+  // #3039: Starting and Queued rows sit here too, so the section is not named for one state.
+  RUNNING: "Active",
   ENDED_TODAY: "Ended today",
   EARLIER: "Earlier this week",
   EARLIER_MONTH: "Earlier this month",
@@ -116,8 +117,6 @@ export const RUNS_SAVE_VIEW_CANCEL = "Cancel";
 // runs-model.ts's rowPresentation — this table only carries what D2 adds or
 // changes.
 export const RUNS_ROW_WORD = {
-  /** The user-view row for a decision this viewer can make (the M8 board's wording). */
-  DECISIONS_NEED_YOU: (n: number) => (n === 1 ? "1 decision needs you" : `${n} decisions need you`),
   /** The Admin-view row word and the "N held" count beside it (the R6 board). */
   NEEDS_YOU: "Needs you",
   HELD: (n: number) => `${n} held`,

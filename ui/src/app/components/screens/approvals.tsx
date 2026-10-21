@@ -32,6 +32,7 @@ import { Button } from "../ui/button";
 import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
+import { PageContainer } from "../wardyn/page-container";
 import { ReasonDialog } from "../wardyn/reason-dialog";
 import { REAUTH_ROW, REAUTH_TITLE, reauthRowHint, type ReauthAudience } from "../wardyn/model-access-copy";
 import { useOperator, useRole } from "../wardyn/operator-context";
@@ -47,7 +48,7 @@ import {
   credentialKind,
   egressBlastRadius,
 } from "../wardyn/copy";
-import { PendingCard, DecidedRow } from "./approvals-cards";
+import { ApprovalCard, DecidedRow } from "./approvals-cards";
 
 type Filter = "PENDING" | "decided";
 type Scope = Record<string, unknown>;
@@ -139,7 +140,7 @@ export function deriveTitle(kind: ApprovalKind, scope: Scope): string {
     // painted a blast-radius banner over a row that grants nothing.
     case "credential_reauth":
       return REAUTH_TITLE;
-    // Only reached by DecidedRow — PendingCard's own push_content branch
+    // Only reached by DecidedRow — ApprovalCard's own push_content branch
     // returns before this function is ever called (it renders PUSH.CARD_TITLE
     // directly, which is PENDING-tense and would read wrong on a decided row).
     case "push_content": {
@@ -160,7 +161,7 @@ interface Banner {
 const NO_REAUTH_AUDIENCE: ReauthAudience = { canAct: false, shared: false, owner: "", provider: "", mine: false };
 
 // This is a PRE-decision preview, not a live readout of a scope in progress:
-// PendingCard calls it before any scope has been chosen (the picker lives
+// ApprovalCard calls it before any scope has been chosen (the picker lives
 // inside ReasonDialog, a separate component this one never sees into), so it
 // always previews what a plain Approve — today's, and the default's,
 // behavior — actually grants. There is deliberately no decisionScope
@@ -259,7 +260,7 @@ export function deriveBanner(kind: ApprovalKind, scope: Scope, reauth?: ReauthAu
       //
       // STAYS TRUE HERE: an Azure DevOps escalation never reaches this
       // branch — isAdoCapabilityRequest routes it to AdoCapabilityCard
-      // before deriveBanner is ever called (see PendingCard below), because
+      // before deriveBanner is ever called (see ApprovalCard below), because
       // for THAT one lane the claim above is false (ADO.
       // TOOL_CALL_NOTE, rendered once on this screen, says why). Every other
       // tool_call still lands here, and the sentence below is still honest
@@ -482,7 +483,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   const anyToolCall = pendingItems.some((a) => a.kind === "tool_call") || decidedItems.some((a) => a.kind === "tool_call");
 
   return (
-    <div className="mx-auto max-w-[880px] px-6 py-6">
+    <PageContainer width="form">
       <PageHeader
         title="Approvals"
         description="Requests an agent raised that need a person's decision. Each card says exactly what approving grants."
@@ -533,12 +534,8 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
           <div className="rounded-xl border border-border bg-card">
             <EmptyState
               icon={ShieldCheck}
-              title={role === "user" ? "Approvals raised by your runs appear here." : "You're all caught up"}
-              description={
-                role === "user"
-                  ? undefined
-                  : "New credential, egress, and tool-call requests appear here the moment an agent needs you."
-              }
+              title={APPROVALS.EMPTY_TITLE}
+              description={role === "user" ? APPROVALS.EMPTY_MEMBER : APPROVALS.EMPTY_ADMIN}
               action={
                 <Button variant="outline" size="sm" onClick={() => setFilterParam("decided")}>
                   See decided
@@ -549,7 +546,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
         ) : (
           <div className="space-y-3.5">
             {pendingItems.map((a) => (
-              <PendingCard
+              <ApprovalCard
                 key={a.id}
                 item={a}
                 caps={caps}
@@ -602,6 +599,6 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
           being offered rather than inheriting the fail-safe-disabled default;
           a member/no-workspace decide still gets the server's honest 400/403. */}
       <ReasonDialog prompt={prompt} hasWorkspace onClose={() => setPrompt(null)} onSubmit={decide} />
-    </div>
+    </PageContainer>
   );
 }

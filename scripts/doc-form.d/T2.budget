@@ -80,8 +80,12 @@
 # threatmodel/THREAT-MODEL.md 68002 adds 43 at the 0.10 W4c merge of SEC-2e bf1448a14 onto the train, measured: the lane head measured 66573 against its own 66530 budget.
 # threatmodel/THREAT-MODEL.md 68045 = ours 68002 + theirs 66573 - base 66530 at the 0.10 W4c merge of OFFLINE-VM a359ef27b onto the train.
 # threatmodel/THREAT-MODEL.md 68068 = ours 68045 + theirs 66596 - base 66573 at the 0.10 W4c merge of HYB-C f30a51f6e onto the train.
-threatmodel/THREAT-MODEL.md=68068
+# threatmodel/THREAT-MODEL.md 68302 = ours 68068 + theirs 66764 - base 66530 at the 0.10 W4c merge of origin/main 83367f614 (W4e) onto the train.
+threatmodel/THREAT-MODEL.md=68302
 # 0.10 HYB-C: threatmodel/THREAT-MODEL.md 66573 adds 43 over 66530, measured: the Linux VM's virtiofs shares are the container's binds (same folders, targets, mode, no other host path).
 # threatmodel/THREAT-MODEL.md 66596 adds 23 over 66573 (0.10 HYB-C review): VM state reaches the guest only as its disk; a guest write lands as the runner's user.
+# threatmodel/THREAT-MODEL.md 65311 adds 222 over 65089 (0.10 FEAT-1MCP), measured: item (r), a local MCP server's access, secrets, egress, off switch and refusals.
+# threatmodel/THREAT-MODEL.md 65323 adds 12 over 65311 (0.10 FEAT-1MCP review): the npx pin binds only the npx form; an absolute program is trusted as the image is.
+# threatmodel/THREAT-MODEL.md 66764 = ours 66530 + theirs 65323 - base 65089 at the 0.10 W4e merge of FEAT-1MCP onto the train.
 # threatmodel/THREAT-MODEL.md 63171 adds 78 over 63093, measured: the console session under the role-stamp residual: renewal up to its cap, never moving the sign-in time, and the copied-cookie bound (0.9.3 console session lifetime).
 # threatmodel/THREAT-MODEL.md 63025 = 62948 + 77, measured: the laptop decision-sink crossing row and #77's sink and loss-row bullets.

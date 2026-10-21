@@ -64,6 +64,8 @@ type FamilyProps = {
    *  drawn while that holds; `addFirst` answers a click on "Only these" with nobody listed
    *  without sending the PUT the server would refuse. */
   nobodyYet?: { note: string; addFirst: string };
+  /** Drawn under "Only these" while it is chosen with nobody listed and nothing saved yet. */
+  pendingNote?: string;
 };
 
 type AvailabilityControlProps = FamilyProps & { kind: string; value: string };
@@ -132,6 +134,9 @@ function Control({ kind, value, ...family }: AvailabilityControlProps) {
   // A write the server held for a second person (202), said where it was made.
   const [submitted, setSubmitted] = React.useState(false);
   const typeName = useUserTypeNames();
+  // "Only these" picked with nobody listed: held here, never sent, because the server refuses an
+  // empty Only list. The first Add writes the allow row, then restricts.
+  const [pendingOnly, setPendingOnly] = React.useState(false);
 
   const load = React.useCallback(async () => {
     try {
@@ -180,6 +185,7 @@ function Control({ kind, value, ...family }: AvailabilityControlProps) {
       <AvailabilityFields
         {...family}
         restricted={view.restricted}
+        pendingOnly={pendingOnly && !view.restricted}
         audiences={grants}
         typeName={typeName}
         busy={busy}
@@ -192,11 +198,25 @@ function Control({ kind, value, ...family }: AvailabilityControlProps) {
             setChoiceError(family.nobodyYet.addFirst);
             return;
           }
+          setChoiceError(null);
+          if (restricted && grants.length === 0 && !view.restricted) {
+            setPendingOnly(true);
+            return;
+          }
+          if (!restricted && pendingOnly && !view.restricted) {
+            setPendingOnly(false);
+            return;
+          }
           void run("choice", async () => setView(await api.putAvailability(kind, value, restricted)));
         }}
         onAdd={(subject_type, subject) =>
           run("add", async () => {
             await api.upsertGrant({ subject_type, subject, capability: kind, value, effect: "allow" });
+            if (pendingOnly && !view.restricted) {
+              setView(await api.putAvailability(kind, value, true));
+              setPendingOnly(false);
+              return;
+            }
             await load();
           })
         }
@@ -252,6 +272,7 @@ export async function writeAvailability(kind: string, value: string, draft: Avai
 
 function AvailabilityFields({
   restricted,
+  pendingOnly,
   audiences,
   typeName,
   busy,
@@ -264,8 +285,10 @@ function AvailabilityFields({
   note,
   adminsOnly,
   nobodyYet,
+  pendingNote,
 }: FamilyProps & {
   restricted: boolean;
+  pendingOnly?: boolean;
   audiences: Audience[];
   typeName: (id: string) => string;
   busy: "choice" | "add" | "remove" | null;
@@ -279,6 +302,7 @@ function AvailabilityFields({
   const [audience, setAudience] = React.useState("");
   const id = React.useId();
   const disabled = busy !== null;
+  const onlyChosen = restricted || !!pendingOnly;
   // The spinner is Add's alone, and only after ~200ms (CONSOLE-RULES §7); a
   // choice or a remove shows the disabled state only.
   const { showSpinner } = useDeferredBusy(busy === "add");
@@ -298,7 +322,7 @@ function AvailabilityFields({
     <Field label={AVAILABILITY.LABEL}>
       <RadioGroup
         aria-label={AVAILABILITY.LABEL}
-        value={restricted ? "only" : "first"}
+        value={onlyChosen ? "only" : "first"}
         onValueChange={(v) => onRestrictedChange(v === "only")}
         disabled={disabled}
         className="gap-2"
@@ -328,71 +352,81 @@ function AvailabilityFields({
       </RadioGroup>
       {adminsOnly && <p className="text-meta text-muted-foreground">{AVAILABILITY.IMAGE_HINT}</p>}
       {choiceError && <p className="text-xs leading-snug text-danger">{choiceError}</p>}
-      {nobodyYet && restricted && audiences.length === 0 && (
-        <p className="text-meta text-muted-foreground" data-testid="availability-nobody">
-          {nobodyYet.note}
-        </p>
-      )}
+      {onlyChosen && (
+        <div className="ml-6 space-y-2" data-testid="availability-audience">
+          {pendingOnly && audiences.length === 0 && (
+            <p className="text-meta text-muted-foreground" data-testid="availability-pending">
+              {pendingNote ?? (adminsOnly ? AVAILABILITY.PENDING_NOTE_IMAGE : AVAILABILITY.PENDING_NOTE)}
+            </p>
+          )}
+          {nobodyYet && restricted && audiences.length === 0 && (
+            <p className="text-meta text-muted-foreground" data-testid="availability-nobody">
+              {nobodyYet.note}
+            </p>
+          )}
 
-      {audiences.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2">
-          {audiences.map((a, i) => {
-            const text = chipText(a, typeName);
-            return (
-              <Chip key={`${a.subject_type}:${a.subject}`} tone="info">
-                <span className="flex items-center gap-1">
-                  {text}
-                  <button
-                    type="button"
-                    aria-label={AVAILABILITY.REMOVE_ARIA(text)}
-                    title={lastLocked ? lockedReason : undefined}
-                    disabled={disabled || lastLocked}
-                    onClick={() => onRemove(i)}
-                    className="ml-0.5 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    <X className="size-3" />
-                  </button>
-                </span>
-              </Chip>
-            );
-          })}
+          {audiences.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2">
+              {audiences.map((a, i) => {
+                const text = chipText(a, typeName);
+                return (
+                  <Chip key={`${a.subject_type}:${a.subject}`} tone="info">
+                    <span className="flex items-center gap-1">
+                      {text}
+                      <button
+                        type="button"
+                        aria-label={AVAILABILITY.REMOVE_ARIA(text)}
+                        title={lastLocked ? lockedReason : undefined}
+                        disabled={disabled || lastLocked}
+                        onClick={() => onRemove(i)}
+                        className="ml-0.5 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <X className="size-3" />
+                      </button>
+                    </span>
+                  </Chip>
+                );
+              })}
+            </div>
+          )}
+          {lastLocked && <p className="text-meta text-muted-foreground">{lockedReason}</p>}
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Segmented
+              value={audienceType}
+              onChange={setAudienceType}
+              disabled={disabled}
+              options={AUDIENCES.map((a) => ({ value: a.value, label: a.label }))}
+            />
+            <Input
+              aria-label={AUDIENCES.find((a) => a.value === audienceType)?.hint}
+              placeholder={AVAILABILITY.ADD_PLACEHOLDER}
+              value={audience}
+              onChange={(e) => setAudience(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  void add();
+                }
+              }}
+              disabled={disabled}
+              className="h-8 max-w-[280px] font-mono placeholder:font-sans"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={disabled || !audience.trim()}
+              onClick={() => void add()}
+            >
+              {showSpinner && <Loader2 className="size-3.5 animate-spin" />}
+              {AVAILABILITY.ADD_CTA}
+            </Button>
+          </div>
+          {listError && <p className="text-xs leading-snug text-danger">{listError}</p>}
+
         </div>
       )}
-      {lastLocked && <p className="text-meta text-muted-foreground">{lockedReason}</p>}
-
-      <div className="flex flex-wrap items-center gap-2">
-        <Segmented
-          value={audienceType}
-          onChange={setAudienceType}
-          disabled={disabled}
-          options={AUDIENCES.map((a) => ({ value: a.value, label: a.label }))}
-        />
-        <Input
-          aria-label={AUDIENCES.find((a) => a.value === audienceType)?.hint}
-          placeholder={AVAILABILITY.ADD_PLACEHOLDER}
-          value={audience}
-          onChange={(e) => setAudience(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              void add();
-            }
-          }}
-          disabled={disabled}
-          className="h-8 max-w-[280px] font-mono placeholder:font-sans"
-        />
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={disabled || !audience.trim()}
-          onClick={() => void add()}
-        >
-          {showSpinner && <Loader2 className="size-3.5 animate-spin" />}
-          {AVAILABILITY.ADD_CTA}
-        </Button>
-      </div>
-      {listError && <p className="text-xs leading-snug text-danger">{listError}</p>}
 
       {note && <p className="text-meta text-muted-foreground">{note}</p>}
     </Field>

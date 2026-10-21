@@ -154,7 +154,7 @@ describe("egressBlastRadius — per-scope blast-radius copy", () => {
     expect(b.blast).toMatch(/every future run of the workspace can reach evil\.example\.com/i);
   });
 
-  // Rendered-output coverage: PendingCard (approvals.tsx) calls deriveBanner
+  // Rendered-output coverage: ApprovalCard (approvals.tsx) calls deriveBanner
   // with the DEFAULT "run" scope (nothing has been chosen yet — the picker
   // lives inside ReasonDialog) — confirm the card no longer shows the false
   // unconditional claim, and shows the honest "run"-scope wording instead.

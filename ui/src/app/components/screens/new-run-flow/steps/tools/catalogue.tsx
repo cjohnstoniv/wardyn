@@ -19,7 +19,6 @@ import type { CatalogueCLI, CatalogueCLIKind, ComponentRef, MyComponents, OrgCom
 import type { AccessFacts, AccessRow } from "../../../../../lib/types/new-run-access";
 import { Button } from "../../../../ui/button";
 import { ADD_ACCESS, CUSTOM_COMPONENT as CC } from "../../../../wardyn/copy/components";
-import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 import { useShellSetupStatus } from "../../../../wardyn/model-access-context";
 import { Chip } from "../../../../wardyn/primitives";
@@ -217,8 +216,10 @@ export function AddTools({ access, answered, intent, answeredFor, githubRepos = 
   const noDefineId = React.useId();
   const failedId = React.useId();
 
-  const cliCards = (mine?.clis ?? []).flatMap((raw: CatalogueCLI) => {
-    const cli: CatalogueCLI = raw.kind === "kubectl" && !kubectlOn ? { kind: "kubectl", state: "coming_soon", rows: [] } : raw;
+  // #3045: a command line that is not built yet leaves the grid; there is no Coming soon card. kubectl with the
+  // Kubernetes access switch off is one of them.
+  const cliCards = (mine?.clis ?? []).flatMap((cli: CatalogueCLI) => {
+    if (cli.state === "coming_soon" || (cli.kind === "kubectl" && !kubectlOn)) return [];
     const generic = CLI_CARD[cli.kind];
     if (cli.state !== "available") return [{ key: cli.kind, title: generic.name, cli, row: undefined as OrgComponentView | undefined }];
     return cli.rows.map((id) => ({ key: id, title: mine?.org.find((o) => o.id === id)?.name ?? generic.name, cli, row: mine?.org.find((o) => o.id === id) }));
@@ -325,9 +326,7 @@ export function AddTools({ access, answered, intent, answeredFor, githubRepos = 
               brings={row && !kind && <Brings hosts={row.hosts} deliveries={delivery ? [delivery] : []} />}
               look={on ? "added" : off || reason ? "off" : "plain"}
             >
-              {(details) => cli.state === "coming_soon" ? (
-                <Chip>{NR_SHARED.COMING_SOON}</Chip>
-              ) : (
+              {(details) => (
                 <RowAction
                   name={title}
                   attached={on}

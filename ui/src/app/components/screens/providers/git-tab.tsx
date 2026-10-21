@@ -589,7 +589,7 @@ export function GitTab({
 
   return (
     <div className="space-y-4">
-      <p className="text-body text-muted-foreground">{PROVIDERS.GIT_LEAD}</p>
+      {git.length > 0 && <p className="text-body text-muted-foreground">{PROVIDERS.GIT_LEAD}</p>}
 
       {git.length === 0 ? (
         // True legacy open mode (mock state 2): the banner alone — no

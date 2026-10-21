@@ -47,6 +47,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `agent-novnc-signin` (about 670 MB compressed, against `agent-novnc`'s 400 MB), whether or not a sign-in happens;
   `agent-novnc` itself is unchanged, and with the setting off the sign-in image is never pulled. Self-hosted runners,
   pools and Kubernetes get no sign-ins, and their runs start as before.
+- **`WARDYN_MCP_LOCAL_SERVERS` is off by default.** Turning it on lets an organisation or a person define an MCP
+  server that runs inside the run's sandbox. That server runs with the agent's access, and the harness, not
+  Wardyn's proxy, applies the run's rules to its tools.
+- **With `WARDYN_MCP_LOCAL_SERVERS` off, a rebooted run whose MCP components were erased is no longer revived.**
+  Starting the agent again admits the run anew, and the erased row keeps only its harnesses, so it is refused in the
+  organisation form ("Ask your admin"). An erased remote server is refused too, which a 0.9 revive accepted. A run
+  that is still running keeps its server until it ends.
 
 ### Added
 

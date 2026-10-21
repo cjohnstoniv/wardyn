@@ -422,6 +422,12 @@ export const governance = {
     return unwrapList<GovernanceChange>(await asJson<GovernanceChange[] | null>(res));
   },
 
+  // GET /api/v1/governance/changes/{id} -> the change in whatever state it is now (pending, applied, rejected, expired).
+  async getChange(id: string): Promise<GovernanceChange> {
+    const res = await wfetch(`/governance/changes/${encodeURIComponent(id)}`, { method: "GET" });
+    return asJson<GovernanceChange>(res);
+  },
+
   // POST /api/v1/governance/changes/{id}/approve -> 200 the change, applied. The server judges who may
   // approve (another human, with the authority to make that write): a 403 or 409 reaches the caller as an
   // HttpError whose message is its own sentence.

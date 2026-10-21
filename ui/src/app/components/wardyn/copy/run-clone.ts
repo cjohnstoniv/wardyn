@@ -81,8 +81,10 @@ export const NO_BARRIER = {
   BANNER_TITLE: "No barrier can be built on this host — runs can't launch.",
   BANNER_BODY:
     "Wardyn confines every run. Until a container runtime answers, there is nothing to confine it with.",
-  // Whoever cannot open the Environment step is told whom to ask, with no command to run.
-  BANNER_BODY_ASK: "Ask a Wardyn admin to set one up.",
+  // The reader who cannot fix it: who can, and no dead-end control.
+  BANNER_MEMBER: "Ask a Wardyn admin to set one up.",
+  SETUP_COMMAND: "wardyn setup status",
+  RECHECK: "Re-check",
   FINISH_GATE_HEAD: "Setup can't finish without a barrier.",
   FINISH_GATE_REASON: "Wardyn confines every run.",
 } as const;

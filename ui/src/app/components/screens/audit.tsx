@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import type { AuditEvent, ActorType, AgentRun } from "../../lib/types";
 import { isNetworkFault, runHeadline } from "../../lib/types";
+import { RunRef } from "../wardyn/run-ref";
 import { AUDIT, describeEvent } from "./audit-copy";
 import { audit as api } from "../../lib/api/audit";
 import { LIST_LIMIT } from "../../lib/api/core";
@@ -48,6 +49,7 @@ import { Mono } from "../wardyn/code-block";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { AuditDecision, ErasedFields, RuleSourceChip, toolRuleDecision } from "../wardyn/audit-decision";
 import { PageHeader } from "../wardyn/page-header";
+import { PageContainer } from "../wardyn/page-container";
 import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
 import { RETENTION } from "../wardyn/copy/audit-retention";
 import { AuditRetention } from "./audit-retention";
@@ -203,6 +205,22 @@ export function AuditScreen() {
   const [actorFilter, setActorFilter] = React.useState<ActorType | "all">("all");
   const [groundTruth, setGroundTruth] = React.useState<{ state?: string; reason?: string }>();
 
+  // #3036: run titles for the rows' run references, read once from the runs list. A failed or partial read only
+  // leaves the id alone after "Run"; the rows never wait on it.
+  const [runTitles, setRunTitles] = React.useState<ReadonlyMap<string, string>>(new Map());
+  React.useEffect(() => {
+    let live = true;
+    void Promise.resolve()
+      .then(() => runsApi.listRuns())
+      .then((rs) => {
+        if (live) setRunTitles(new Map(rs.map((r) => [r.id, r.title?.trim() || r.task])));
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+
   // Drill-in run context (id + agent + task + repo + barrier), fetched via the
   // real GET /runs/{id} — never invented from the audit event fields, which
   // don't carry them.
@@ -355,7 +373,7 @@ export function AuditScreen() {
   };
 
   return (
-    <div className="mx-auto max-w-[1400px] px-6 py-6">
+    <PageContainer width="list">
       <PageHeader
         title="Audit"
         description="Append-only. Every egress decision, credential broker, approval, and enforcement action — across every run."
@@ -516,7 +534,7 @@ export function AuditScreen() {
               </div>
               <div className="divide-y divide-border">
                 {g.events.map((e) => (
-                  <EventRow key={e.id} event={e} onDrill={setRunFilter} />
+                  <EventRow key={e.id} event={e} runTitles={runTitles} onDrill={setRunFilter} />
                 ))}
               </div>
             </div>
@@ -526,7 +544,7 @@ export function AuditScreen() {
       </>
       )}
 
-    </div>
+    </PageContainer>
   );
 }
 
@@ -663,7 +681,15 @@ function GroundTruthChip({ value }: { value?: { state?: string; reason?: string 
   );
 }
 
-function EventRow({ event, onDrill }: { event: AuditEvent; onDrill: (runId: string) => void }) {
+function EventRow({
+  event,
+  runTitles,
+  onDrill,
+}: {
+  event: AuditEvent;
+  runTitles: ReadonlyMap<string, string>;
+  onDrill: (runId: string) => void;
+}) {
   const kind = eventKind(event);
   // A rule-decided call says who decided it instead of naming a host it never
   // dialled — the decision log for one of these carries the CONTROL PLANE as
@@ -697,13 +723,12 @@ function EventRow({ event, onDrill }: { event: AuditEvent; onDrill: (runId: stri
         </span>
       )}
       {event.run_id && (
-        <button
-          onClick={() => onDrill(event.run_id!)}
-          title={event.run_id}
-          className="order-3 inline-flex shrink-0 items-center gap-1 rounded-md border border-solid border-border bg-surface-2 px-1.5 py-0.5 sm:order-none font-mono text-meta text-muted-foreground hover:border-primary/40 hover:text-primary"
-        >
-          {event.run_id.replace("run_", "").slice(0, 8)}
-        </button>
+        <RunRef
+          runId={event.run_id}
+          title={runTitles.get(event.run_id)}
+          onOpen={() => onDrill(event.run_id!)}
+          className="order-3 max-w-[14rem] shrink-0 sm:order-none"
+        />
       )}
       <div data-testid="audit-outcome-cell" className="order-1 ml-auto w-[72px] shrink-0 sm:order-none sm:ml-0">
         <EventOutcome e={event} />

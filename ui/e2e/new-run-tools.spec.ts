@@ -22,6 +22,7 @@ import { BEDROCK_SSO_SWITCH_OFF, SCENARIO_ACCESS, SETUP_ITEMS } from "../src/app
 import { CLAUDE_ATTENDED, CLAUDE_UNGATED, CODEX, MCP_DOCS, withFacts } from "../src/app/lib/new-run-fixtures/scenarios/tools-harness";
 import { CUSTOM_COMPONENT, MY_COMPONENTS } from "../src/app/components/wardyn/copy/components";
 import { envNameError } from "../src/app/components/screens/new-run-flow/checks/custom-component-form-model";
+import { CLI_CARD } from "../src/app/components/screens/new-run-flow/steps/tools/catalogue-pending";
 import { MY_COMPONENTS as CATALOGUE, ORG_LINEAR } from "../src/app/lib/new-run-fixtures/scenarios/catalogue";
 
 const RUN_ID = "d4444444-4444-4444-8444-444444444444";
@@ -214,6 +215,18 @@ test.describe("New Run, step 5: one teal action", () => {
     await expect(add).toBeVisible();
     await expect(add).not.toHaveClass(/bg-primary/);
     await expect(page.getByRole("button", { name: NR_TOOLS.REVIEW_RUN, exact: true })).toHaveClass(/bg-primary/);
+  });
+});
+
+test.describe("New Run, step 5: options that are not built (#3045)", () => {
+  test("the catalogue draws no Coming soon card for a command line that is not built", async ({ page }) => {
+    await stub(page, false);
+    await page.route("**/api/v1/me/components", (route) => (route.request().method() === "GET" ? route.fulfill({ json: CATALOGUE }) : route.fallback()));
+    await openTools(page);
+    await expect(page.getByRole("heading", { name: ORG_LINEAR.name, exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: CLI_CARD.gcloud.name, exact: true })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: CLI_CARD.kubectl.name, exact: true })).toHaveCount(0);
+    await expect(page.getByText("Coming soon", { exact: true })).toHaveCount(0);
   });
 });
 

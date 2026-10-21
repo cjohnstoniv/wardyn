@@ -16,7 +16,7 @@ import * as React from "react";
 import { Link, useNavigate } from "react-router-dom";
 import type { AgentRun } from "../../../lib/types";
 import { formatDuration, relativeTime } from "../../../lib/format";
-import { OpenInUserView, runPath, useConsoleMode } from "../../wardyn/console-view";
+import { OpenInUserViewMenu, runPath, useConsoleMode } from "../../wardyn/console-view";
 import { ownerLabel } from "../../wardyn/copy/console-view";
 import { useOperator, usePrincipal } from "../../wardyn/operator-context";
 import { Button } from "../../ui/button";
@@ -147,7 +147,7 @@ export function RunRow({ run }: { run: AgentRun }) {
             cockpit — the Admin view has no personal doors of its own. Not
             the row's "action" (that stays Review/Sign-in only); a separate,
             always-available navigation affordance. */}
-        {adminView && own && <OpenInUserView runId={run.id} className="h-7 shrink-0" />}
+        {adminView && own && <OpenInUserViewMenu runId={run.id} />}
         {actionLabel && (
           <Button
             size="sm"
@@ -157,7 +157,8 @@ export function RunRow({ run }: { run: AgentRun }) {
             onClick={(e) => {
               e.stopPropagation();
               if (p.action === "revive") void revive(e);
-              else void navigate(href);
+              // Review lands on the decision, not on an Overview with nothing to decide.
+              else void navigate(p.action === "review" ? `${href}?tab=approvals` : href);
             }}
           >
             {actionLabel}

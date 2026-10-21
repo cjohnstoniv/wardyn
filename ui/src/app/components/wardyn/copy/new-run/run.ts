@@ -27,8 +27,6 @@ export const NR_RUN = {
   TIMING_LABEL: "When should it run?",
   TIMING_NOW: "Run now",
   TIMING_NOW_BODY: "Start as soon as you launch the run.",
-  TIMING_LATER: "Schedule for later",
-  TIMING_LATER_BODY: "Choose a future date and time for this run to start.",
   APP_LABEL: "What should run?",
   APP_AUTOMATION: "Automation / script",
   APP_AUTOMATION_BODY: "A command or job that runs on its own.",

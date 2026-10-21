@@ -43,14 +43,13 @@ async function gotoDirtyProviders(page: Page): Promise<void> {
   await expect(page).toHaveURL(/\/settings$/);
   const card = page.getByTestId("providers-card");
   await expect(card).toBeVisible();
-  await expandCard(page, "Workspace providers");
-  await card.getByText(PROVIDERS.CARD_OPEN).click();
+  await card.getByRole("link").click();
   await expect(page).toHaveURL(/\/providers$/);
   await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toBeVisible();
 
   // The Storage tab's own Default disk field — dirtying this needs no
   // dependency on which git rows the seeded backend happens to carry.
-  await page.getByRole("button", { name: PROVIDERS.STORAGE_TAB }).click();
+  await page.getByRole("tab", { name: PROVIDERS.STORAGE_TAB }).click();
   await page.getByLabel(PROVIDERS.FIELD_DEFAULT_DISK).fill("12345");
   await expect(page.getByTestId("unsaved-marker")).toBeVisible();
 }
@@ -98,7 +97,7 @@ test.describe("unsaved guard — Back/Forward against the real app (#460 review 
     await gotoDirtyProviders(page);
     await page.reload();
     await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toBeVisible();
-    await page.getByRole("button", { name: PROVIDERS.STORAGE_TAB }).click();
+    await page.getByRole("tab", { name: PROVIDERS.STORAGE_TAB }).click();
     await page.getByLabel(PROVIDERS.FIELD_DEFAULT_DISK).fill("54321");
     await expect(page.getByTestId("unsaved-marker")).toBeVisible();
 
