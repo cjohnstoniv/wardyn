@@ -187,7 +187,16 @@ func TestGovCovCanSeeGovernanceChange(t *testing.T) {
 		payload string
 		want    bool
 	}{
-		{"security admin sees a profile change", govCovHumanReq("GET", "/x", "s", "s@x", oidc.RoleSecurityAdmin), govKindProfile, "", true},
+		{"security admin sees a profile change", govCovHumanReq("GET", "/x", "s", "s@x", oidc.RoleSecurityAdmin), govKindProfile, `{"name":"p","ceiling":{}}`, true},
+		{"security admin sees a profile change that keeps a mount", govCovHumanReq("GET", "/x", "s", "s@x", oidc.RoleSecurityAdmin), govKindProfile,
+			`{"name":"p","ceiling":{"workspace_mounts":[{"source":"<redacted>","target":"/home/agent/a"}]},"overlay":{"workspace_mounts":[{"source":"<redacted>","target":"/home/agent/b"}]}}`, true},
+		{"security admin does not see a profile change that sets a host path", govCovHumanReq("GET", "/x", "s", "s@x", oidc.RoleSecurityAdmin), govKindProfile,
+			`{"name":"p","ceiling":{"workspace_mounts":[{"source":"/srv/a","target":"/home/agent/a"}]}}`, false},
+		{"security admin does not see an overlay that sets a host path", govCovHumanReq("GET", "/x", "s", "s@x", oidc.RoleSecurityAdmin), govKindProfile,
+			`{"name":"p","overlay":{"workspace_mounts":[{"source":"/srv/a","target":"/home/agent/a"}]}}`, false},
+		{"super admin sees a profile change that sets a host path", govCovHumanReq("GET", "/x", "s", "s@x", oidc.RoleAdmin), govKindProfile,
+			`{"name":"p","ceiling":{"workspace_mounts":[{"source":"/srv/a","target":"/home/agent/a"}]}}`, true},
+		{"an unreadable profile payload is shown only to a super admin", govCovHumanReq("GET", "/x", "s", "s@x", oidc.RoleSecurityAdmin), govKindProfile, `{`, false},
 		{"security admin does not see a role mapping", govCovHumanReq("GET", "/x", "s", "s@x", oidc.RoleSecurityAdmin), govKindRoleMapping, "", false},
 		{"super admin sees a role mapping", govCovHumanReq("GET", "/x", "s", "s@x", oidc.RoleAdmin), govKindRoleMapping, "", true},
 		{"security admin sees a pool use policy change", govCovHumanReq("GET", "/x", "s", "s@x", oidc.RoleSecurityAdmin), govKindRunnerPoolUsePolicy, `{"subjects":[{"subject_type":"user","subject":"a"}]}`, true},

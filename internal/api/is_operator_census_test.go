@@ -73,6 +73,11 @@ var isOperatorCensus = map[string]int{
 	// super admin's.
 	"user_drives_preview.go:handlePreviewUserDrive": 1,
 	"user_drives_tier.go:upsertUserDriveGrantAs":    1,
+	// A mount's host path is the super admin's: the spec read tier withholds it below
+	// that tier, and a profile write or its approval sets one only as a super admin.
+	"policies.go:specReadTierFor":                        1,
+	"governance_profile_write.go:writeGovernanceProfile": 1,
+	"governance_change_kinds.go:applyProfileChange":      1,
 	// The measured reason can carry a substrate's own error text, so only an operator reads it.
 	"runner_usage.go:remoteUsage": 1,
 	// Operators host their own runner without the self_host_runner grant (capabilities.md).

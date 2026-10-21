@@ -40,7 +40,8 @@ func govCovGrantDelete(s *Server, proposedBy, email string) types.GovernanceChan
 }
 
 func TestGovCovListChangesFiltersByKindAndValidatesState(t *testing.T) {
-	profile := types.GovernanceChange{ID: uuid.MustParse("aaaaaaaa-0000-0000-0000-0000000000a1"), TargetKind: govKindProfile}
+	profile := types.GovernanceChange{ID: uuid.MustParse("aaaaaaaa-0000-0000-0000-0000000000a1"), TargetKind: govKindProfile,
+		Payload: json.RawMessage(`{"name":"p","ceiling":{}}`)} // a held profile write names no host path
 	mapping := types.GovernanceChange{ID: uuid.MustParse("aaaaaaaa-0000-0000-0000-0000000000a2"), TargetKind: govKindRoleMapping}
 	newer := types.GovernanceChange{ID: uuid.MustParse("aaaaaaaa-0000-0000-0000-0000000000a3"), TargetKind: "from_a_newer_binary"}
 	st := &govCovStore{changes: []types.GovernanceChange{profile, mapping, newer}}
@@ -102,7 +103,8 @@ func TestGovCovListChangesStoreFailure(t *testing.T) {
 }
 
 func TestGovCovGetChange(t *testing.T) {
-	visible := types.GovernanceChange{ID: govCovChangeID, TargetKind: govKindProfile, Op: "create", TargetKey: "k", Diff: json.RawMessage(`{"changed":["name"]}`)}
+	visible := types.GovernanceChange{ID: govCovChangeID, TargetKind: govKindProfile, Op: "create", TargetKey: "k", Diff: json.RawMessage(`{"changed":["name"]}`),
+		Payload: json.RawMessage(`{"name":"p","ceiling":{}}`)}
 	hidden := types.GovernanceChange{ID: govCovChangeID, TargetKind: govKindRoleMapping}
 	alice := govCovSession(t, "sub-alice", "alice@corp.example", oidc.RoleSecurityAdmin)
 	path := govCovChangesPath + "/" + govCovChangeID.String()

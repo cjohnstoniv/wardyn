@@ -339,10 +339,12 @@ func TestRunPolicyView_SpecReuse(t *testing.T) {
 }
 
 // TestRunPolicyView_SharedComponentExportIsARecord pins the reuse boundary for a
-// run launched with an organisation component's shared header secret. The
-// security tier reads that grant as recorded, with `shared: true` in its scope,
-// and every authored door refuses `shared`: the export is a record of the run,
-// not a policy to run again. The component is selected again on the new run.
+// run launched with an organisation component's shared header secret. A super
+// admin reads that grant as recorded, with `shared: true` in its scope, and every
+// authored door refuses `shared`: the export is a record of the run, not a
+// policy to run again. The component is selected again on the new run. Read as
+// the super admin: the security tier's copy withholds the mount host path, so it
+// fails validation on that before it reaches the shared mark.
 func TestRunPolicyView_SharedComponentExportIsARecord(t *testing.T) {
 	srv, st := pvFixture(t, &capStore{})
 	run := st.seedRun(pvOwner, types.RunRunning)
@@ -353,12 +355,12 @@ func TestRunPolicyView_SharedComponentExportIsARecord(t *testing.T) {
 	})
 	st.rows(run.ID, pvResolve(spec, true))
 
-	w, resp := pvSecurity(t).get(t, srv, run.ID)
+	w, resp := pvReader{}.get(t, srv, run.ID)
 	if w.Code != http.StatusOK || resp.Spec == nil {
 		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
 	}
 	if n := len(resp.Spec.EligibleGrants); n != 2 || !apiKeyScopeShared(resp.Spec.EligibleGrants[1].Scope) {
-		t.Fatalf("the security tier's export lost the shared mark: %s", w.Body.String())
+		t.Fatalf("the super admin's export lost the shared mark: %s", w.Body.String())
 	}
 	const want = "shared is set by Wardyn for an org component, never authored"
 	for door, err := range map[string]error{
