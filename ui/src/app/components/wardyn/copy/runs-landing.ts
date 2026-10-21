@@ -90,13 +90,17 @@ export const RUNS_FILTERS = {
 } as const;
 
 // #3041, phone only: the search box keeps the row and everything else sits in
-// a bottom sheet. Strings are the approved R6 Run phone board's, except the
-// two aria names (the chips' remove button) and the singular "Show 1 run".
+// a bottom sheet. Strings are the approved R6 Run phone board's or derived from
+// it; docs/design/runs-filters-canon.md freezes them.
 export const RUNS_FILTERS_SHEET = {
   TITLE: "Filters",
   CLEAR: "Clear filters",
-  BUTTON: (n: number) => (n > 0 ? `Filters (${n})` : "Filters"),
-  SHOW: (n: number) => (n === 1 ? "Show 1 run" : `Show ${n} runs`),
+  BUTTON_COUNT: (n: number) => `Filters (${n})`,
+  // "Show N runs" is a plural pair: SHOW_ONE is the one form. SHOW_MORE is for a
+  // list cut at its limit, N+ as the page header reads it.
+  SHOW_ONE: "Show 1 run",
+  SHOW: (n: number) => `Show ${n} runs`,
+  SHOW_MORE: (n: number) => `Show ${n}+ runs`,
   CHIP_REMOVE_ARIA: (chip: string) => `Remove ${chip}`,
 } as const;
 

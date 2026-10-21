@@ -98,6 +98,21 @@ test.describe("Runs filter bar at 390px (#3041)", () => {
   });
 });
 
+test.describe("An open Filters sheet when the viewport grows (#3041)", () => {
+  test("closes at 640px and up, leaving the page clickable", async ({ page }) => {
+    await landOn(page, PHONE);
+    await page.getByRole("button", { name: "Filters", exact: true }).click();
+    await expect(page.getByRole("dialog", { name: "Filters" })).toBeVisible();
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    // The Filters button is hidden from 640px, so focus goes to the search box, not the body.
+    await expect(page.getByLabel("Search runs", { exact: true })).toBeFocused();
+    // No leftover overlay or modal lock: the inline Status select takes a click.
+    await page.getByRole("search").getByRole("combobox", { name: "Status" }).click();
+    await expect(page.getByRole("option", { name: "Status · Needs you" })).toBeVisible();
+  });
+});
+
 test.describe("Runs filter bar from the tablet breakpoint up (#3041)", () => {
   for (const size of [
     { width: 1440, height: 900 },

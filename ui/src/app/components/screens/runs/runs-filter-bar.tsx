@@ -60,6 +60,8 @@ type BarProps = ControlProps & {
   onSaveView: (name: string) => void;
   /** How many runs the list shows now: the sheet's "Show N runs". */
   runCount: number;
+  /** The list was cut at its limit: the count reads N+, as the page header does. */
+  runsTruncated?: boolean;
 };
 
 // Every control but the search box and the Save view button. The same elements
@@ -258,13 +260,36 @@ function ActiveFilterChips({ filters, adminView, onChange }: Pick<ControlProps, 
   );
 }
 
+function showRuns(n: number, more?: boolean): string {
+  if (more) return RUNS_FILTERS_SHEET.SHOW_MORE(n);
+  return n === 1 ? RUNS_FILTERS_SHEET.SHOW_ONE : RUNS_FILTERS_SHEET.SHOW(n);
+}
+
 // #3041: the phone's Filters (n) button and the bottom sheet it opens. The
 // sheet's controls apply as they change (the URL is the state); "Show N runs"
 // just closes it.
-function FiltersSheet({ runCount, onSaveView, ...p }: ControlProps & Pick<BarProps, "runCount" | "onSaveView">) {
+function FiltersSheet({
+  runCount,
+  runsTruncated,
+  onSaveView,
+  searchRef,
+  ...p
+}: ControlProps & Pick<BarProps, "runCount" | "runsTruncated" | "onSaveView"> & { searchRef: React.RefObject<HTMLInputElement | null> }) {
   const [saving, setSaving] = React.useState(false);
+  const [open, setOpen] = React.useState(false);
+  // The sheet is phone-only. Its overlay and focus trap are not, so an open
+  // sheet must close when the viewport grows to `sm` (a rotated phone, a
+  // resized window) or it would leave the page dimmed and locked.
+  React.useEffect(() => {
+    const mq = window.matchMedia?.("(min-width: 640px)"); // jsdom has no matchMedia
+    if (!mq) return;
+    const onChange = () => mq.matches && setOpen(false);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
   const { filters, adminView, onChange } = p;
   const c = buildControls(p, true);
+  const filterCount = activeRunsFilters(filters, adminView).length;
   const field = (label: string, control: React.ReactNode) => (
     <div className="flex min-w-0 flex-col gap-1.5">
       <span className="text-meta text-muted-foreground">{label}</span>
@@ -272,13 +297,30 @@ function FiltersSheet({ runCount, onSaveView, ...p }: ControlProps & Pick<BarPro
     </div>
   );
   return (
-    <Sheet onOpenChange={(open) => !open && setSaving(false)}>
+    <Sheet
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o);
+        if (!o) setSaving(false);
+      }}
+    >
       <SheetTrigger asChild>
         <Button type="button" variant="outline" className="shrink-0 sm:hidden">
-          {RUNS_FILTERS_SHEET.BUTTON(activeRunsFilters(filters, adminView).length)}
+          {filterCount > 0 ? RUNS_FILTERS_SHEET.BUTTON_COUNT(filterCount) : RUNS_FILTERS_SHEET.TITLE}
         </Button>
       </SheetTrigger>
-      <SheetContent side="bottom" aria-describedby={undefined} className="max-h-[90dvh] gap-3 rounded-t-2xl p-4 pt-3 sm:hidden">
+      <SheetContent
+        side="bottom"
+        aria-describedby={undefined}
+        // Closed by growing past `sm`, the Filters button is display:none and
+        // cannot take focus back: the search box, the one control left on
+        // every width, does. A close at phone width keeps Radix's own return
+        // to the button.
+        onCloseAutoFocus={(e) => {
+          if (!window.matchMedia?.("(min-width: 640px)").matches) return;
+          e.preventDefault();
+          searchRef.current?.focus();
+        }} className="max-h-[90dvh] gap-3 rounded-t-2xl p-4 pt-3 sm:hidden">
         <div className="mx-auto h-1 w-9 rounded-full bg-border-strong" aria-hidden />
         <SheetHeader className="p-0">
           <SheetTitle className="text-base">{RUNS_FILTERS_SHEET.TITLE}</SheetTitle>
@@ -305,7 +347,7 @@ function FiltersSheet({ runCount, onSaveView, ...p }: ControlProps & Pick<BarPro
           </Button>
           <SheetClose asChild>
             <Button type="button" size="lg" className="flex-1">
-              {RUNS_FILTERS_SHEET.SHOW(runCount)}
+              {showRuns(runCount, runsTruncated)}
             </Button>
           </SheetClose>
         </div>
@@ -314,7 +356,7 @@ function FiltersSheet({ runCount, onSaveView, ...p }: ControlProps & Pick<BarPro
   );
 }
 
-export function RunsFilterBar({ runCount, onSaveView, ...p }: BarProps) {
+export function RunsFilterBar({ runCount, runsTruncated, onSaveView, ...p }: BarProps) {
   const { filters, onChange } = p;
   const [saving, setSaving] = React.useState(false);
   // The box is typed into a local draft: the URL answers a keystroke a render
@@ -333,12 +375,14 @@ export function RunsFilterBar({ runCount, onSaveView, ...p }: BarProps) {
     setDraft(filters.q);
   }, [filters.q]);
   const c = buildControls(p, false);
+  const searchRef = React.useRef<HTMLInputElement>(null);
 
   return (
     <div className="mt-3.5 flex flex-wrap items-center gap-2" role="search">
       <div className="relative w-full max-w-xs max-sm:w-auto max-sm:min-w-0 max-sm:flex-1 max-sm:max-w-none">
         <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
         <Input
+          ref={searchRef}
           aria-label="Search runs"
           placeholder={RUNS_FILTERS.SEARCH_PLACEHOLDER}
           value={draft}
@@ -355,7 +399,7 @@ export function RunsFilterBar({ runCount, onSaveView, ...p }: BarProps) {
         />
       </div>
 
-      <FiltersSheet {...p} runCount={runCount} onSaveView={onSaveView} />
+      <FiltersSheet {...p} runCount={runCount} runsTruncated={runsTruncated} onSaveView={onSaveView} searchRef={searchRef} />
       <ActiveFilterChips filters={filters} adminView={p.adminView} onChange={onChange} />
 
       {/* `contents` keeps these as direct flex items of the bar, as before the

@@ -7,13 +7,13 @@
 // removable chips. jsdom loads no CSS, so the inline controls and the chips
 // are both in the DOM here; the 390 px layout itself is pinned by
 // ui/e2e/runs-filters-phone.spec.ts.
-import { describe, it, expect, vi } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, describe, it, expect, vi } from "vitest";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import { RunsFilterBar } from "./runs-filter-bar";
 import { DEFAULT_RUNS_FILTERS, type RunsFilterState } from "./runs-filters";
 
-function bar(over: Partial<RunsFilterState>, runCount = 9) {
+function bar(over: Partial<RunsFilterState>, runCount = 9, runsTruncated = false) {
   const onChange = vi.fn();
   render(
     <RunsFilterBar
@@ -23,6 +23,7 @@ function bar(over: Partial<RunsFilterState>, runCount = 9) {
       currentSearch=""
       savedViews={[]}
       runCount={runCount}
+      runsTruncated={runsTruncated}
       onChange={onChange}
       onSelectView={vi.fn()}
       onSaveView={vi.fn()}
@@ -61,5 +62,45 @@ describe("RunsFilterBar phone filters", () => {
     expect(onChange).toHaveBeenCalledWith({ ...DEFAULT_RUNS_FILTERS, q: "deploy" });
     fireEvent.click(sheet.getByRole("button", { name: "Show 9 runs" }));
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});
+
+describe("RunsFilterBar phone sheet across the sm breakpoint", () => {
+  afterEach(() => {
+    delete (window as { matchMedia?: unknown }).matchMedia;
+  });
+
+  it("an open sheet closes when the viewport grows to sm, so the page is not left dimmed and locked", async () => {
+    let listener: (() => void) | undefined;
+    const mq = {
+      matches: false,
+      addEventListener: (_: string, l: () => void) => (listener = l),
+      removeEventListener: () => (listener = undefined),
+    };
+    window.matchMedia = vi.fn(() => mq) as unknown as typeof window.matchMedia;
+    bar({ status: "needs" });
+    fireEvent.click(screen.getByRole("button", { name: "Filters (1)" }));
+    expect(screen.getByRole("dialog", { name: "Filters" })).toBeInTheDocument();
+    expect(window.matchMedia).toHaveBeenCalledWith("(min-width: 640px)");
+    // Still a phone: a change event that does not cross sm leaves it open.
+    act(() => listener?.());
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    mq.matches = true;
+    act(() => listener?.());
+    expect(screen.queryByRole("dialog")).toBeNull();
+    // The Filters button is hidden at sm and up, so focus goes to the search box, not the body.
+    await waitFor(() => expect(screen.getByLabelText("Search runs")).toHaveFocus());
+  });
+
+  it("Show N runs: one run reads the one form, and a list cut at its limit reads N+", () => {
+    bar({ status: "needs" }, 1);
+    fireEvent.click(screen.getByRole("button", { name: "Filters (1)" }));
+    expect(screen.getByRole("button", { name: "Show 1 run" })).toBeInTheDocument();
+  });
+
+  it("Show N runs reads N+ when the list is cut at its limit, as the page header does", () => {
+    bar({ status: "needs" }, 200, true);
+    fireEvent.click(screen.getByRole("button", { name: "Filters (1)" }));
+    expect(screen.getByRole("button", { name: "Show 200+ runs" })).toBeInTheDocument();
   });
 });

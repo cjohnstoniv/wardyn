@@ -268,6 +268,7 @@ export function RunsScreen() {
             currentSearch={searchParams.toString()}
             savedViews={savedViews}
             runCount={runsList.length}
+            runsTruncated={truncated}
             onChange={setFilters}
             onSelectView={(search) =>
               setSearchParams(applySavedViewOwner(search, adminView, filters.scope), { replace: true })
