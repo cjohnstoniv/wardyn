@@ -85,10 +85,16 @@ func (s *Server) handleGetCredentialDelivery(w http.ResponseWriter, r *http.Requ
 	}
 	// buildable_modes sits beside policy, never inside it: PUT decodes the policy strictly, and a client
 	// that sends GET's policy back must not carry it.
+	// unbuildable lists the stored rows PUT would refuse as new ones (same predicate), so an operator finds them
+	// here; absent when there are none. The stored document is only read.
 	resp := struct {
 		types.CredentialDeliveryPolicyDoc
 		BuildableModes map[string][]placement.Mode `json:"buildable_modes"`
-	}{doc, map[string][]placement.Mode{}}
+		Unbuildable    []placement.UnbuildableRow  `json:"unbuildable,omitempty"`
+	}{CredentialDeliveryPolicyDoc: doc, BuildableModes: map[string][]placement.Mode{}}
+	if p, err := deliveryPolicyOf(doc.Policy); err == nil {
+		resp.Unbuildable = p.Unbuildable()
+	}
 	for _, class := range placement.DeliveryClasses() {
 		resp.BuildableModes[class] = placement.BuildableModes(class)
 	}

@@ -12,6 +12,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 - A member's local folder mount is now refused when its path is, or sits inside, `.codex`, `.azure`, `.gemini`, `.npmrc`, `.pypirc` or `.config/gcloud` (any letter case), as it already was for `.ssh`, `.aws` and the other credential paths. A folder that only contains one of them is still allowed. To mount that work, use a folder outside those paths. The same list applies to an admin-made `host_path` drive, which is checked at every launch: an existing drive whose `host_root` is, or sits inside, one of those paths stops binding at launch until an admin moves its `host_root` out of that path.
 
+### Added
+
+- `GET /governance/credential-delivery` lists, as `unbuildable`, each stored row (a class, or a class under a trust class) whose mode the server cannot build for it, with the modes it can; the field is absent when there are none. The setup check `credential_delivery` warns and names each, for an operator. Nothing is changed: the document is read, and those rows refuse as before.
+
 ### Fixed
 
 - A request refused because its host resolved into private address space that `internal_hosts` can lift now names the remedy: `an operator may lift this guard for <host> with site_config.internal_hosts, scoped to <range>`, with the range block (such as `100.64.0.0/10`) and never the address. The brokered git lanes, a CONNECT, a plain HTTP request and the refusal's audit row all carry it, so a self-hosted runner whose corporate resolver answers a git provider host into CGNAT or RFC1918 no longer fails with no way forward. A new `private_ip_refusals` setup check lists such refusals from the last 7 days. Nothing is lifted by default and no reach changes.
