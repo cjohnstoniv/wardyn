@@ -165,7 +165,7 @@ func TestPGConcurrencyProofsRunUnderRace(t *testing.T) {
 	}
 	build := ciJobBlock(t, string(wf), "build")
 	for _, want := range []string{
-		"needs: [changes, go, go-lint]",
+		"needs: [changes, go, go-lint, image-scope]",
 		"LEGS: ${{ needs.go.result }}",
 		"LINT: ${{ needs.go-lint.result }}",
 		"        if: needs.changes.outputs.backend != 'false'\n        run: make cover-union\n",
