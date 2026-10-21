@@ -485,11 +485,8 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 			return types.AgentRun{}, fmt.Errorf("store: unmarshal run inner walls: %w", err)
 		}
 	}
-	r.MachineKind = types.MachineKind(machineKind)
-	if vmMachineRaw != nil {
-		if err := json.Unmarshal(vmMachineRaw, &r.VMMachine); err != nil {
-			return types.AgentRun{}, fmt.Errorf("store: unmarshal run vm machine: %w", err)
-		}
+	if err := scanRunMachine(&r, machineKind, vmMachineRaw); err != nil {
+		return types.AgentRun{}, err
 	}
 	return r, nil
 }
