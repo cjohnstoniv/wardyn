@@ -273,7 +273,8 @@
 # docs/AUDIT-ACTIONS.md 50790 adds 34 over 50756, measured (0.10 RENAME): the line saying rows written before the rename keep the old spellings.
 # docs/AUDIT-ACTIONS.md 51430 = ours 51396 + theirs 50790 - base 50756 at the 0.10 W4d merge of RENAME onto the train.
 # docs/AUDIT-ACTIONS.md=51430 adds 34 (0.10 TREE-MODEL): unit_membership_gone on run.revive and run.end.set, the arm key.
-docs/AUDIT-ACTIONS.md=51464 share=8
+# 0.10 TREE-API: docs/AUDIT-ACTIONS.md 51561 adds 97 over 51464: the governance.membership.promote row and the move and activates fields of the membership write and delete rows.
+docs/AUDIT-ACTIONS.md=51561 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.

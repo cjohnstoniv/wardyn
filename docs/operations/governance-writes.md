@@ -41,11 +41,20 @@ an operator follows to turn one on and run the queue.
   - A site config that lowers it below the deepest path that exists is refused `400` `site_config_invalid`, naming that path.
 - `GET /governance` gives units `kind` (`default` for Default), `mode` and `depth`, memberships `home` and `legacy` (pre-0.10.0: only a person's first by precedence is a context), and `max_depth`. `ApplyGovernance` and `PlanGovernance` match memberships by unit name and never write Default or `legacy`.
 - A revive or admin restart is refused `409` `unit_membership_gone` once the owner's membership of the run's unit is gone (audit `arm` `owner_session`: the owner's own revive, checked against their memberships). Anyone else's passes while that unit, or one above it, has a membership that could match the owner: their sub, an email, their user type, `all` or any group (`arm` `row_can_match`).
+- The Default unit is read-only: `PUT` and `DELETE /governance/units/{Default id}` answer `409` `governance_unit_default_readonly`. Its walls are `WARDYN_DEFAULT_POLICY`: change that and redeploy.
+- `PUT /governance/memberships/{id}` with `{"unit_id": "<uuid>"}` moves a membership, keeping its id, `priority`, `home` and `legacy`. Move and promote follow the second-human switch below.
+  - An unknown unit is `404` `governance_unit_not_found`; the Default unit is `422` `governance_membership_invalid` (delete the membership instead).
+  - A subject already a member of that unit is `409` `governance_membership_invalid`.
+  - Audit `governance.membership.write`, with `from_unit_id` beside `unit_id`.
+- `POST /governance/memberships/{id}/promote` makes a legacy membership a context (`legacy` false); one that already is one is `409` `governance_membership_invalid`. Audit `governance.membership.promote`.
+- Deleting a legacy membership can let a lower legacy membership become someone's context.
+  - The units that may become active are listed as `activates: [{unit_id, unit_name}]`: in the held change's diff with the second-human switch on, in the `governance.membership.delete` row with it off.
+  - The list is conservative, over legacy memberships only: a group membership counts as matching anyone.
 
 **Optional: four-eyes on governance writes.**
 
 - Set `WARDYN_GOVERNANCE_SECOND_HUMAN=1` and no single administrator can change a governance profile, an assignment, a capability grant, the enforcement map, a value's availability, a user type's priority, a role mapping or a key-domain assignment alone.
-- With it on, a human's write to `POST/PUT/DELETE /governance/units`, `POST/DELETE /governance/memberships`, `POST/DELETE /permissions/grants`, `PUT /permissions/enforcement`, `PUT /permissions/availability/{kind}/*`, `PUT /user-types/{id}` (when the priority changes), `POST/DELETE /access/mappings` or `PUT/DELETE /key-domains/assignments/{subject_type}/{subject}` is decoded and validated exactly as before and then stored as a pending change, answered `202` with `Location: /api/v1/governance/changes/{id}` and `{"pending_change": {id, target_kind, op, target_key, state, proposed_by, proposed_at, expires_at, diff}}`.
+- With it on, a human's write to `POST/PUT/DELETE /governance/units`, `POST/PUT/DELETE /governance/memberships` (with `POST /governance/memberships/{id}/promote`), `POST/DELETE /permissions/grants`, `PUT /permissions/enforcement`, `PUT /permissions/availability/{kind}/*`, `PUT /user-types/{id}` (when the priority changes), `POST/DELETE /access/mappings` or `PUT/DELETE /key-domains/assignments/{subject_type}/{subject}` is decoded and validated exactly as before and then stored as a pending change, answered `202` with `Location: /api/v1/governance/changes/{id}` and `{"pending_change": {id, target_kind, op, target_key, state, proposed_by, proposed_at, expires_at, diff}}`.
 - Nothing is applied.
 - `diff` is rendered by the server, never by a client:
   - the target's current row and the proposed one (every ceiling passes the same read-redaction as a read of it) plus the changed field paths;

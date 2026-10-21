@@ -1031,6 +1031,12 @@ applied until a different approver approves it. The SDK never reads that body as
   Its matching rules are `ApplyGovernance`'s. A plan is a snapshot: the server can change before an
   apply runs.
 - `GET /governance` returns every profile and every assignment; a composed profile's own `ceiling` holds only what it stores, so read the resolved one under `effective.ceiling`. Units carry `kind`, `mode` and `depth`, memberships `home` and `legacy`, and the document `max_depth` ([governance writes](operations/governance-writes.md)). `/governance/units` and `/governance/units/{id}` take writes only, so a `GET` on either answers `405`.
+  It also carries `boundary` (as `GET /governance/boundary` returns it) and, per unit except Default, `people`: the membership subjects in it or a unit below it.
+- `MoveGovernanceMembership(ctx, id, unitID)` (`PUT /governance/memberships/{id}`, `{"unit_id"}`) moves a membership; `PromoteGovernanceMembership(ctx, id)` (`POST /governance/memberships/{id}/promote`) makes a legacy one a context. Both follow the second-human switch: a held write returns the pending change ([governance writes](operations/governance-writes.md)).
+- `CheckGovernance(ctx, req)` (`POST /governance/check`) takes `RunIn` and returns the person's `contexts` (each with its `path`, leaf first), their `dormant` memberships and the `effective` walls (`ceiling`, `limits`, per-knob `provenance`) of the chosen or home context. `wardyn governance check --user <sub> [--run-in <unit>]` prints it.
+- `GovernanceDryRun(ctx, body)` (`POST /governance/dry-run`) takes a `target`: `boundary` (also a body with none), `unit` (a unit write body plus `id`) or `membership_move` (`{id, unit_id}`). A `unit` or `membership_move` report is `{target, people, live_runs}`; `wardyn governance dry-run -f <file>` prints it.
+- `CreateRunRequest.RunIn` (`run_in`, `wardyn run --run-in`) names one of the caller's units, by id or exact name, to run in. `GET /policies/default` lists the caller's own units (`contexts`), names the answered unit's path (`unit_path`) and takes `?run_in=`.
+- A refusal's `policy` carries `locked: true` when the knob it is about is locked by the layer that set it; no layer locks one yet.
 - `GovernanceApplyResult.Steps` lists the writes an apply issued, in order, each `applied`, `pending`
   or `failed`. On a failed write `ApplyGovernanceResult` returns the steps so far with the error.
 - `ApplyDrivesResult` is `ApplyDrives` with the same steps, as `DrivesApplyResult.Steps`; `ApplyDrives`
