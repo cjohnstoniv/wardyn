@@ -10,6 +10,7 @@
 // reads, and a security admin cannot read the model provider roster
 // (operatorOnly) — asking would only write an authz.denied row.
 import * as React from "react";
+import { components } from "../../../lib/api/components";
 import { modelProviders } from "../../../lib/api/model-providers";
 import { policies } from "../../../lib/api/policies";
 import { workspaces } from "../../../lib/api/workspaces";
@@ -30,7 +31,14 @@ const FIXED: Names = {
   agent: { "*": EXPLAIN.ALL_AGENTS },
   workspace_provider: { "*": EXPLAIN.ALL_GIT_PROVIDERS },
   model_provider: { "*": EXPLAIN.ALL_MODEL_PROVIDERS },
-  feature: { "*": EXPLAIN.SSH_AND_TOKENS, ssh_key: EXPLAIN.SSH_KEYS, api_token: EXPLAIN.API_TOKENS, service_attach: EXPLAIN.SERVICE_ATTACH },
+  feature: {
+    "*": EXPLAIN.SSH_AND_TOKENS,
+    ssh_key: EXPLAIN.SSH_KEYS,
+    api_token: EXPLAIN.API_TOKENS,
+    custom_component: EXPLAIN.CUSTOM_COMPONENTS,
+    self_host_runner: EXPLAIN.SELF_HOST_RUNNER,
+    service_attach: EXPLAIN.SERVICE_ATTACH,
+  },
   policy: { "*": EXPLAIN.ALL_POLICIES },
 };
 
@@ -53,6 +61,12 @@ export function useValueNames(): (kind: string, value: string) => string | null 
         .getModelProviders()
         .then((l) => byId(l.providers.providers ?? []))
         .then(add("model_provider"))
+        .catch(() => {});
+      // GET /components is operatorOnly too: a security admin keeps the id.
+      components
+        .list()
+        .then(byId)
+        .then(add("component"))
         .catch(() => {});
     }
     return () => {
