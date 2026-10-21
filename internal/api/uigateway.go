@@ -896,6 +896,14 @@ func (s *Server) uiEnsureApp(ctx context.Context, run types.AgentRun, sess uiSes
 		// missing-launcher error (docs/design/ui-sandboxes-prompt.md §7).
 		return uiFail(ctx, http.StatusBadGateway, reasonUIGatewayLauncherMissing,
 			"no UI launcher in this image: "+launcher+" not found")
+	case 6:
+		// An application run (WARDYN_APPLICATION_RUN, which the probe reads off
+		// the sandbox's own env) has no launcher to blame: its startup command
+		// is the app. The probe cannot tell a command that exited from one that
+		// has not started yet, so the sentence does not say which.
+		return uiFail(ctx, http.StatusBadGateway, reasonUIGatewayLauncherNotListening,
+			fmt.Sprintf("Nothing is listening on port %d yet. If the app's startup command has exited, "+
+				"it isn't restarted; its output is in the run's terminal.", sess.Port))
 	case 4:
 		s.auditUISession(sess, "ui.start", sess.App, "failure",
 			map[string]any{"app": sess.App, "port": sess.Port, "reason": "did not listen in time"})
@@ -919,6 +927,7 @@ func (s *Server) uiEnsureApp(ctx context.Context, run types.AgentRun, sess uiSes
 // seedPolls is how many half-second polls a missing launcher waits for the
 // port before exit 3: 0 answers at once; a seeded run's startup command may
 // still be opening it, and if it does the answer is exit 0, nothing started.
+// After the wait an application run (its env says so) answers 6, not 3.
 func uiLauncherScript(launcher string, port, seedPolls int) string {
 	return fmt.Sprintf(`p=%d
 b='%s'
@@ -930,6 +939,7 @@ if ! [ -x "$b" ]; then
     socat -u /dev/null "TCP:127.0.0.1:$p" >/dev/null 2>&1 && exit 0
     i=$((i+1))
   done
+  [ "${WARDYN_APPLICATION_RUN:-}" = 1 ] && exit 6
   exit 3
 fi
 "$b" >/dev/null 2>&1 </dev/null &

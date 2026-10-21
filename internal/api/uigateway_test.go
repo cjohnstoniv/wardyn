@@ -1175,6 +1175,65 @@ func TestUIGateway_MissingLauncherIs502WithTheFrozenMessage(t *testing.T) {
 	}
 }
 
+// TestUIGateway_ApplicationRunNotListeningIs502WithTheStartupCommandMessage: an
+// application run has no launcher to blame (#1994), so when the probe finds
+// nothing listening after its wait (exit 6) the 502 says what the gateway
+// knows: the startup command exited or has not started yet, is not restarted,
+// and its output is in the run's terminal. Byte for byte, like the frozen
+// missing-launcher string above, which a non-application run still gets.
+func TestUIGateway_ApplicationRunNotListeningIs502WithTheStartupCommandMessage(t *testing.T) {
+	h := newUIHarness(t, okBackend())
+	cookie := h.openSession()
+	h.launcher = 6 // no launcher, nothing listening, WARDYN_APPLICATION_RUN=1 in the sandbox
+
+	rec := h.relay("/ide", cookie, nil)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("got %d %s, want 502", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+	want := "Nothing is listening on port 8080 yet. If the app's startup command has exited, " +
+		"it isn't restarted; its output is in the run's terminal."
+	if body.Error != want {
+		t.Fatalf("error body:\n got %q\nwant %q", body.Error, want)
+	}
+}
+
+// TestUIGateway_ProbeNamesAnApplicationRun runs the probe under a real sh with a
+// socat that never connects: after the wait, a sandbox whose env says
+// WARDYN_APPLICATION_RUN=1 answers 6 and any other answers the missing-launcher 3.
+func TestUIGateway_ProbeNamesAnApplicationRun(t *testing.T) {
+	sh, err := osexec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh on this host")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "socat"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil { //nolint:gosec // test fixture
+		t.Fatal(err)
+	}
+	run := func(env ...string) int {
+		cmd := osexec.Command(sh, "-c", uiLauncherScript(filepath.Join(dir, "no-launcher"), 3000, 1))
+		cmd.Env = append(append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"), "WARDYN_APPLICATION_RUN="), env...)
+		var ee *osexec.ExitError
+		if err := cmd.Run(); errors.As(err, &ee) {
+			return ee.ExitCode()
+		} else if err != nil {
+			t.Fatalf("run probe: %v", err)
+		}
+		return 0
+	}
+	if got := run("WARDYN_APPLICATION_RUN=1"); got != 6 {
+		t.Fatalf("application run: probe exit %d, want 6", got)
+	}
+	if got := run(); got != 3 {
+		t.Fatalf("other run: probe exit %d, want 3 (the frozen missing-launcher answer)", got)
+	}
+}
+
 // TestUIGateway_LaunchIsAudited: exit 5 means the probe actually STARTED the
 // app (exit 0 means it was already listening), which is the only case that has
 // anything to record — ui.start names an app that was launched, never one that

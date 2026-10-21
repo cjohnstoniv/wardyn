@@ -418,6 +418,10 @@ start_boot_session() {
 # attach does not start a second claude, and removed again if tmux refused both.
 start_revive_session() {
     revive_markers
+    # An application run (WARDYN_APPLICATION_RUN, set by dispatch) is its startup
+    # command: start it again, the same boot session a first boot makes. Any other
+    # seed has already run and is never replayed.
+    if [[ "${WARDYN_APPLICATION_RUN:-}" == "1" ]]; then start_boot_session; return 0; fi
     [[ "${WARDYN_INTERACTIVE_START:-}" == "agent" ]] || return 0
     if ! command -v tmux >/dev/null 2>&1; then
         echo "agent-run: WARNING no tmux in this image; the conversation cannot continue on its own (attach still works)" >&2

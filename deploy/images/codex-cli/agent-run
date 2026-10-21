@@ -241,7 +241,12 @@ fi
 if [[ "${1:-}" == "--idle" || "${1:-}" == "--revive" ]]; then
     : "${HOME:=/home/agent}"; export HOME
     # BEFORE any prep — see start_boot_session for why; a revive never re-seeds.
-    if [[ "$1" == "--revive" ]]; then revive_markers; else start_boot_session; fi
+    # An application run (WARDYN_APPLICATION_RUN, set by dispatch) is its startup
+    # command, so a revive starts it again; any other seed is never replayed.
+    if [[ "$1" == "--revive" ]]; then
+        revive_markers
+        if [[ "${WARDYN_APPLICATION_RUN:-}" == "1" ]]; then start_boot_session; fi
+    else start_boot_session; fi
     install_mitm_ca
     prepare_claude_config_dir  # no-op unless CLAUDE_CONFIG_DIR is set (RO cred mount)
     install_artifact_config

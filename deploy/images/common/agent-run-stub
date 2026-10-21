@@ -6,7 +6,9 @@
 # agent-base ships no coding agent, so it cannot implement mode 1 (run a task
 # through an agent harness). It does implement mode 3 (--idle), which needs no
 # agent: agent-vscode and agent-novnc inherit this file, and both drivers run
-# `agent-run --idle` as an interactive run's main process. It also satisfies
+# `agent-run --idle` as an interactive run's main process. That includes a
+# startup command (an application server, #1994), which also needs no agent;
+# a starting prompt for an agent is only warned about. It also satisfies
 # exec task mode (WARDYN_TASK_MODE=exec, README.md §2): that lane runs the task as a plain
 # shell command, needs no coding agent, and is exactly what the setup
 # connectivity probe uses agent-base for — so honor it before falling through
@@ -16,6 +18,24 @@
 # far worse to debug than a sentence.
 set -euo pipefail
 source /usr/local/bin/agent-run-lib.sh
+# The boot pane --idle starts for a startup command (below): it runs inside the
+# `wardyn` session as the agent user, waits for --idle's prep rather than doing
+# any, and runs the command once. Not restarted when it exits; it ends with PID 1.
+if [[ "${1:-}" == "--boot-seed" ]]; then
+    : "${HOME:=/home/agent}"; export HOME
+    [[ -n "${WARDYN_INTERACTIVE_SEED:-}" ]] || exec bash
+    boot_seed_wait_for_prep
+    recover_git_helper_secret
+    workdir="$(cat "$HOME/.wardyn/workdir" 2>/dev/null || true)"
+    [[ -n "$workdir" && -d "$workdir" ]] || workdir="${HOME}/work"
+    cd "$workdir" || cd "$HOME"
+    boot_seed_rec_wrap
+    echo "agent-run: boot seed — running the run's startup command in $workdir" >&2
+    rc=0
+    "${WARDYN_REC_WRAP[@]}" bash -lc "$WARDYN_INTERACTIVE_SEED" || rc=$?
+    echo "agent-run: the run's startup command exited $rc; it is not restarted" >&2
+    exec bash
+fi
 # ponytail: an exec task does no workspace prep unless it was given a starting
 # folder (WARDYN_START_FOLDER, handled below); the setup connectivity probe has none
 # and its policy grants no clone or credential. --idle (below) does the full workspace
@@ -37,8 +57,17 @@ configure_git_broker_insteadof; configure_git_pat_broker_insteadof
 if [[ "${1:-}" == "--idle" ]]; then
     : "${HOME:=/home/agent}"; export HOME
     rm -f "$HOME/.wardyn/prep-done"  # a re-boot must not look prepared before it is
-    if [[ -n "${WARDYN_INTERACTIVE_SEED:-}" ]]; then
-        echo "agent-run: WARNING: this image ships no coding agent, so the run's task text is not started; attach gives a plain shell" >&2
+    # booted_before also writes the first boot's marker. A revive replays a startup
+    # command only for an application run (WARDYN_APPLICATION_RUN), as the harness
+    # images do; any other seed already ran.
+    revived=0; booted_before && revived=1
+    if [[ -n "${WARDYN_INTERACTIVE_SEED:-}" && "${WARDYN_INTERACTIVE_START:-}" == "agent" ]]; then
+        echo "agent-run: WARNING: this image ships no coding agent, so the run's starting prompt is not started; attach gives a plain shell" >&2
+    elif [[ -n "${WARDYN_INTERACTIVE_SEED:-}" ]] && { [[ $revived == 0 ]] || [[ "${WARDYN_APPLICATION_RUN:-}" == 1 ]]; }; then
+        # A startup command needs no agent. The session is created BEFORE prep so
+        # it wins the name an early attach would take (start_wardyn_session).
+        start_wardyn_session "agent-run --boot-seed" \
+            || echo "agent-run: WARNING could not create the boot tmux session; the startup command will not run (attach still works)" >&2
     fi
     install_artifact_config
     provision_git_helper_secret

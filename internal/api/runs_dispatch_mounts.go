@@ -333,6 +333,14 @@ func interactiveBootSeed(interactive bool, task string) string {
 	return task
 }
 
+// applicationRun is the interactive application (#1994) as dispatch resolves
+// it: a run whose boot seed is a startup command (not an agent's starting
+// prompt) and whose policy declares the app it serves. It is the predicate
+// applicationServer applies to a request, read off the resolved run.
+func applicationRun(p dispatchParams, seed string) bool {
+	return seed != "" && p.InteractiveStart != "agent" && len(p.Policy.UIApps) > 0
+}
+
 // applyDispatchModeEnv sets dispatchRun's run-mode discriminator env vars
 // (scan-only / exec task mode / interactive-start / boot-seed / tool-approval
 // posture) plus the non-secret grant-id maps (WARDYN_GITHUB_GRANT_ID /
@@ -388,6 +396,15 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, p di
 		sandboxEnv["WARDYN_INTERACTIVE_SEED"] = seed
 		if p.SeedAutoTools {
 			sandboxEnv["WARDYN_SEED_AUTO_TOOLS"] = "1"
+		}
+		// The interactive application (#1994): its startup command is the app, so
+		// the image starts it again on a revive, which it never does for any other
+		// seed. Decided here from the resolved run, never from the request's env: a
+		// user variable of this name is refused by every user-env writer below
+		// (component config and env_secret both reject the WARDYN_ prefix and
+		// never overwrite a set variable).
+		if applicationRun(p, seed) {
+			sandboxEnv["WARDYN_APPLICATION_RUN"] = "1"
 		}
 	}
 	// Tool-approval posture: "hold" routes an AUTONOMOUS run's own
