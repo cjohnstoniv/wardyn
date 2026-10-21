@@ -8,9 +8,11 @@ import (
 	"net/http"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -89,5 +91,60 @@ func TestKillRun_NonKilledTerminalStill409(t *testing.T) {
 		if got := rr.kills.Load(); got != 0 {
 			t.Errorf("kill of %s run touched the runner (%d KillSandbox calls); must not", st, got)
 		}
+	}
+}
+
+// slowKillRunner holds KillSandbox until its context ends, as a kubelet wait that uses the whole kill
+// deadline does.
+type slowKillRunner struct{ *fakeRunner }
+
+func (slowKillRunner) KillSandbox(ctx context.Context, _ string) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// windowIdentity records the live time left on the context RevokeRun ran on.
+type windowIdentity struct {
+	identity.Provider
+	left chan time.Duration
+}
+
+func (i windowIdentity) RevokeRun(ctx context.Context, _ uuid.UUID) error {
+	d, ok := ctx.Deadline()
+	if err := ctx.Err(); err != nil || !ok {
+		i.left <- 0
+		return err
+	}
+	i.left <- time.Until(d)
+	return nil
+}
+
+// TestKillTeardownTail_RevokesKeepTheirWholeWindowAfterASlowKill: when the sandbox kill uses the entire
+// kill deadline, the identity revoke still runs on a live context with its own killRevokeTimeout, not on
+// the exhausted shared one (#3182).
+func TestKillTeardownTail_RevokesKeepTheirWholeWindowAfterASlowKill(t *testing.T) {
+	h := newHarness(t)
+	runID := uuid.New()
+	st := &killRekillStore{run: types.AgentRun{ID: runID, State: types.RunKilled, SandboxRef: "sbx-1"}}
+	cfg := baseTestConfig(h, st)
+	cfg.Runner = slowKillRunner{&fakeRunner{}}
+	idp := windowIdentity{Provider: h.idp, left: make(chan time.Duration, 4)}
+	cfg.Identity = idp
+	srv := New(cfg)
+
+	kill, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	srv.killTeardownTail(kill, st.run, types.ActorSystem, "test", nil, true)
+
+	if kill.Err() == nil {
+		t.Fatal("the fake kill did not use the whole kill deadline")
+	}
+	select {
+	case left := <-idp.left:
+		if left < killRevokeTimeout-2*time.Second {
+			t.Errorf("identity revoke had %v left, want about %v after a kill that used the whole deadline", left, killRevokeTimeout)
+		}
+	default:
+		t.Fatal("the identity revoke did not run")
 	}
 }

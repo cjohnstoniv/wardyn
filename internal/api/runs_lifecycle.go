@@ -902,6 +902,10 @@ func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, kille
 			}
 		}
 	}
+	// The revokes below get their own window, opened after the teardown wait: a slow sandbox kill can
+	// use the whole kill deadline, and the revokes must not inherit what is left of it.
+	revokeCtx, revokeCancel := context.WithTimeout(context.WithoutCancel(ctx), killRevokeTimeout)
+	defer revokeCancel()
 	// (3) Identity revocation: deny every (current+future) token for the run. A
 	// bounded retry guards against a transient store error leaving the run's
 	// JWT-SVID valid (until its <=1h TTL) while the kill is reported as success.
@@ -909,24 +913,24 @@ func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, kille
 	// provider must not panic mid-cascade (after the KILLED CAS + KillSandbox but
 	// before the audit) — the revoke step is simply skipped.
 	if s.cfg.Identity != nil {
-		if rerr := retrying(ctx, func() error { return s.cfg.Identity.RevokeRun(ctx, id) }); rerr != nil {
+		if rerr := retrying(revokeCtx, func() error { return s.cfg.Identity.RevokeRun(revokeCtx, id) }); rerr != nil {
 			killData["identity_error"] = rerr.Error()
 		}
 	}
 	// (4) Broker credential revocation (best-effort; audits per minted jti).
 	if s.cfg.Broker != nil {
-		if berr := retrying(ctx, func() error { return s.cfg.Broker.RevokeRun(ctx, id) }); berr != nil {
+		if berr := retrying(revokeCtx, func() error { return s.cfg.Broker.RevokeRun(revokeCtx, id) }); berr != nil {
 			killData["broker_error"] = berr.Error()
 		}
 	}
 	// (5) The run's stored proxy config (#1176) has nothing left to rebuild.
-	if perr := s.dropRunProxyConfig(ctx, id); perr != nil {
+	if perr := s.dropRunProxyConfig(revokeCtx, id); perr != nil {
 		killData["proxy_config_error"] = perr.Error()
 	}
 	// (6) Its Azure DevOps personal access tokens (best-effort; the sweep retries),
 	// and the erase of any value its runner holds resident, as revokeRunCascade does.
-	s.revokeRunPATs(ctx, id, adoPATRevokeKill)
-	s.kickRunResidentErase(ctx, id)
+	s.revokeRunPATs(revokeCtx, id, adoPATRevokeKill)
+	s.kickRunResidentErase(revokeCtx, id)
 	// (7) Its output, on a tracked goroutine: the drain barrier and the write
 	// never delay the kill's answer, and the sandbox is already gone.
 	s.finishRunOutputDetached(ctx, id)
@@ -964,6 +968,10 @@ func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, kille
 // revocations are a handful of store/runner calls; 30s is the generous bound the
 // kill route has always applied, kept as one name now that two callers share it.
 const killCascadeTimeout = 30 * time.Second
+
+// killRevokeTimeout is the window the kill's identity, broker and token revokes get after the sandbox
+// teardown, whatever the teardown used of killCascadeTimeout: a slow kubelet wait must not squeeze them.
+const killRevokeTimeout = 15 * time.Second
 
 // handleSweepSandboxes is the operator-triggered counterpart to the boot pass
 // and to cmd/wardynd's periodic ticker (runTerminalSandboxSweeper, #710),
