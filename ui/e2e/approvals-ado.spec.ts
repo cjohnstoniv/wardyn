@@ -169,4 +169,34 @@ test.describe("Approvals — the Azure DevOps capability card", () => {
     await expect(card).toHaveCount(1);
     await expect(card.getByRole("heading", { name: "View work items", exact: true })).toBeVisible();
   });
+  // #2594: Deny is the destructive choice on every high-risk capability, not
+  // only the two policy ones; serviceendpoint_admin was never in that pair.
+  test("a high-risk capability shows Deny as the destructive choice and Approve unhighlighted", async ({ page }) => {
+    const runId = sql("SELECT id FROM agent_runs ORDER BY created_at LIMIT 1");
+    const rows = [
+      {
+        ...escalationRow(runId, {
+          capability: "serviceendpoint_admin",
+          cmd: "Create or change a service connection, including the cloud credential it holds (serviceendpoint_admin) in acme",
+        }),
+        id: "e2e-ado-highrisk-1",
+      },
+    ];
+    await page.route("**/api/v1/approvals*", async (route) => {
+      if (route.request().method() === "GET") {
+        await route.fulfill({ json: rows });
+        return;
+      }
+      await route.continue();
+    });
+
+    await gotoConsole(page);
+    await navTo(page, "Approvals");
+
+    const card = page.getByTestId("ado-capability-card");
+    await expect(card).toHaveCount(1);
+    await expect(card.getByRole("heading", { name: "Manage service connections", exact: true })).toBeVisible();
+    await expect(card.getByRole("button", { name: "Deny" })).toHaveClass(/\bbg-destructive\b/);
+    await expect(card.getByRole("button", { name: "Approve" })).not.toHaveClass(/\bbg-info\b/);
+  });
 });
