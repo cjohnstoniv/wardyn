@@ -825,6 +825,10 @@ func (s *Server) mountPermissionRoutes(securityOps chi.Router) {
 	securityOps.Get("/governance/boundary", s.handleGetBoundary)
 	securityOps.Put("/governance/boundary", s.handlePutBoundary)
 	securityOps.Post("/governance/dry-run", s.handleBoundaryDryRun)
+	securityOps.Get("/governance/approval-rules", s.handleListApprovalRules)
+	securityOps.Post("/governance/approval-rules/dry-run", s.handleApprovalRuleDryRun)
+	securityOps.Put("/governance/approval-rules/{name}", s.handlePutApprovalRule)
+	securityOps.Delete("/governance/approval-rules/{name}", s.handleDeleteApprovalRule)
 	securityOps.Get("/governance/credential-delivery", s.handleGetCredentialDelivery)
 	securityOps.Put("/governance/credential-delivery", s.handlePutCredentialDelivery)
 }
