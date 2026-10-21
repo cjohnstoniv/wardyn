@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -21,8 +22,9 @@ import (
 func noBuilderFixture(t *testing.T, ws types.Workspace) *Server {
 	t.Helper()
 	h := newHarness(t)
-	st := &seedImageStore{govEscapeStore: newGovEscapeStore(&capStore{enf: map[string]bool{capAgent: true}}), ws: ws}
-	st.workspaces = []types.Workspace{ws}
+	seed := &seedImageStore{govEscapeStore: newGovEscapeStore(&capStore{enf: map[string]bool{capAgent: true}}), ws: ws}
+	seed.workspaces = []types.Workspace{ws}
+	st := &runImageStore{seedImageStore: seed, images: make(chan string, 1)}
 	cfg := baseTestConfig(h, st)
 	cfg.Audit = &recRecorder{}
 	cfg.Broker = h.broker
@@ -31,6 +33,17 @@ func noBuilderFixture(t *testing.T, ws types.Workspace) *Server {
 	cfg.OIDC = &oidc.Authenticator{}
 	cfg.DefaultPolicy = govDeployment()
 	return New(cfg)
+}
+
+// runImageStore records the image a launch resolves for its run.
+type runImageStore struct {
+	*seedImageStore
+	images chan string
+}
+
+func (s *runImageStore) SetRunImage(_ context.Context, _ uuid.UUID, image string) error {
+	s.images <- image
+	return nil
 }
 
 // A member's command on an admin's workspace whose base image is byo, with no
@@ -47,7 +60,7 @@ func TestWorkspaceByoBaseImageNoBuilderNamesWorkingPath(t *testing.T) {
 			if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), reasonImageBuilderUnavailable) {
 				t.Fatalf("create = %d %s, want 400 %s", w.Code, w.Body.String(), reasonImageBuilderUnavailable)
 			}
-			for _, want := range []string{"example.test/tools:1", "recommended", "stock agent image", "needs no model provider"} {
+			for _, want := range []string{"example.test/tools:1", "recommended", "stock agent image", "convention image where a builder is wired", "needs no model provider"} {
 				if !strings.Contains(w.Body.String(), want) {
 					t.Errorf("body = %s, want it to name %q", w.Body.String(), want)
 				}
@@ -69,7 +82,15 @@ func TestRunModeCommandOnRecommendedWorkspaceUsesAgentBaseImage(t *testing.T) {
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create = %d, want 201: %s", w.Code, w.Body.String())
 	}
-	st := srv.cfg.Store.(*seedImageStore)
+	st := srv.cfg.Store.(*runImageStore)
+	select {
+	case got := <-st.images:
+		if want := agentImage("base", srv.cfg.AgentImages); got != want {
+			t.Errorf("run image = %q, want the agent base image %q", got, want)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the launch never resolved the run's image")
+	}
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	for _, r := range st.runs {

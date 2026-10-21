@@ -74,7 +74,8 @@ func (s *Server) workspaceProvidersRefusal(r *http.Request, target string, repos
 const workspaceBaseImageNoBuilderMsg = "The workspace's base image %s needs Wardyn's runner tools added by the image builder " +
 	"before a run can use it, and this control plane has no image builder wired, so no run was created. " +
 	"An admin wires the builder (Docker substrate only), or sets the workspace's base image to recommended. " +
-	"A command that needs no model then runs on the stock agent image and needs no model provider."
+	"A command that needs no model then runs on the stock agent image " +
+	"(or the workspace's convention image where a builder is wired) and needs no model provider."
 
 func (s *Server) seedAuthorizedWorkspace(ctx context.Context, r *http.Request, spec *types.RunPolicySpec, req *createRunRequest) (workspaceSeed, *runRefusal) {
 	// First, before a single source is folded: authorize EVERY selection against
