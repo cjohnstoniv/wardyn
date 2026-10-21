@@ -115,7 +115,7 @@ One mode places a Git credential inside the sandbox:
 - It applies to a lane only when the proxy can re-sign every one of its hosts: exact `<service>.<region>.amazonaws.com` hosts on port 443.
   - One host it cannot re-sign keeps the whole lane on its old path, with the role credentials in the sandbox ([`internal/api/runs_dispatch_aws_sigv4.go#Server.awsSigV4Hosts`](../internal/api/runs_dispatch_aws_sigv4.go)).
   - Such a host is a wildcard, a private endpoint such as `vpce`, a dual-stack host, a port other than 443, GovCloud IAM or a test endpoint.
-- What the proxy cannot re-sign it refuses with a named reason rather than send: presigned URLs, SigV4a, chunk-signed uploads and event-stream request bodies. It also refuses STS actions other than `GetCallerIdentity`, and the IAM actions that create credentials or a sign-in. [ENV.md](ENV.md#wardyn_aws_sigv4_at_proxy) lists them.
+- What the proxy cannot re-sign it refuses with a named reason rather than send: presigned URLs, SigV4a, chunk-signed uploads and event-stream request bodies. It also refuses STS actions other than `GetCallerIdentity`, and IAM actions other than reads (`Get`, `List`, `Simulate`, `Generate`). [ENV.md](ENV.md#wardyn_aws_sigv4_at_proxy) lists them.
 - What the role may create or read, the sandbox can obtain through the proxy; the role's own policy bounds that, not this switch.
   - A token API the role may call (for example ECR or CodeArtifact GetAuthorizationToken) returns a usable credential into the sandbox.
   - IAM `UpdateAssumeRolePolicy`, `CreateOpenIDConnectProvider`, `UpdateOpenIDConnectProvider` and `CreateSAMLProvider` can let an outside identity assume a role.

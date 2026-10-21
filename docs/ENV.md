@@ -1572,7 +1572,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
   - SigV4a (`aws_sigv4_algorithm`), and a signature for another service or Region than the host's (`aws_sigv4_scope`);
   - a chunk-signed upload (`aws_sigv4_signed_chunks`; for the AWS CLI set `payload_signing_enabled = false`) and an event-stream request body, such as Bedrock's bidirectional stream (`aws_sigv4_event_stream`);
   - a payload hash it cannot read (`aws_sigv4_payload`), and a body over 16 MiB that carries no `x-amz-content-sha256` (`aws_sigv4_body_too_large`);
-  - on STS (every host of it, FIPS included) any action but `GetCallerIdentity`, since the others hand out credentials, and on IAM `CreateAccessKey`, `CreateLoginProfile`, `CreateServiceSpecificCredential`, `ResetServiceSpecificCredential`, `UpdateLoginProfile`, `CreateVirtualMFADevice`, `UploadSSHPublicKey` and `UploadSigningCertificate`, compared under any case (`aws_sigv4_action`);
+  - on STS (every host of it, FIPS included) any action but `GetCallerIdentity`, since the others hand out credentials (`aws_sigv4_action`);
+  - on IAM any action but a read (`Get`, `List`, `Simulate`, `Generate`), compared exactly (`aws_sigv4_action`);
   - on either, a request whose one `Action` it cannot read from the query and a plain form body (`aws_sigv4_action`). That is an `X-Amz-Target` or `Smithy-Protocol` header, more than one `Content-Type`, a `Content-Encoding`, a chunked or streamed body, or a body that is not a form;
   - on either, no `Action` or more than one, an `Action` that is not letters and digits starting with a letter, or a parameter name with a character outside letters, digits, `.`, `_` and `-` (`aws_sigv4_action`);
   - a request when the role credentials cannot be got (`aws_sigv4_credentials`).
