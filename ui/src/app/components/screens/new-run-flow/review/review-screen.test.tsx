@@ -94,6 +94,8 @@ interface Open {
   templateRead?: () => Promise<Response>;
   /** GET /setup/status; Review reads the roster from it. Unset: the read fails, which stays silent. */
   status?: unknown;
+  /** GET /me/drives, read only for a draft that keeps its work folder. */
+  drives?: unknown;
 }
 function open(intent: RunIntent, o: Open = {}) {
   const loaders: SeedLoaders = {
@@ -102,6 +104,7 @@ function open(intent: RunIntent, o: Open = {}) {
   };
   wfetchMock.mockImplementation(async (path: string, init?: { method?: string }) => {
     if (path === "/setup/status" && o.status) return json(o.status);
+    if (path.startsWith("/me/drives")) return json(o.drives ?? { drives: [], pool_checked: true });
     if (path === "/templates" && init?.method === "POST") return json({ id: "t9", kind: "template" });
     if (path === "/templates") return json({ templates: [], publish: { org: false, groups: [], groups_unverified: false } });
     if (path.startsWith("/templates/")) return o.templateRead ? o.templateRead() : json({ document: { needs_setup: o.needs ?? [] } });
@@ -137,6 +140,34 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   wfetchMock.mockReset();
+});
+
+describe("Review: a draft that keeps its work folder at the drive limit (#1991)", () => {
+  const AT_LIMIT = { drives: [], pool_checked: true, create: { allowed: false, reason: "limit_reached", count: 3, limit: 3, keep_work_folder: true } };
+
+  it("holds Launch with the limit sentence, what else to do, and a way back to Files", async () => {
+    open({ ...AGENT, keep_work_folder: true }, { drives: AT_LIMIT });
+    await ready();
+    const link = await within(blockerList()).findByRole("button", { name: NR_FILES.KEEP_LIMIT(3, 3) });
+    expect(blockerList()).toHaveTextContent(NR_FILES.KEEP_LIMIT_HINT);
+    expect(launch()).toBeDisabled();
+    await userEvent.click(link);
+    expect(path()).toContain("step=files");
+  });
+
+  it("says nothing of it for a draft that does not keep the folder, and reads no drives for it", async () => {
+    open(AGENT, { drives: AT_LIMIT });
+    await ready();
+    expect(blockerList()).toBeEmptyDOMElement();
+    expect(wfetchMock.mock.calls.some(([p]) => String(p).startsWith("/me/drives"))).toBe(false);
+  });
+
+  it("says nothing of it while the person is under the limit", async () => {
+    open({ ...AGENT, keep_work_folder: true }, { drives: { ...AT_LIMIT, create: { allowed: true, count: 1, limit: 3, keep_work_folder: true } } });
+    await ready();
+    await waitFor(() => expect(wfetchMock.mock.calls.some(([p]) => String(p).startsWith("/me/drives"))).toBe(true));
+    expect(blockerList()).toBeEmptyDOMElement();
+  });
 });
 
 describe("Review Launch gate (U11)", () => {

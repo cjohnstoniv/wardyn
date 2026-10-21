@@ -310,6 +310,9 @@ type MemberDrivePolicy struct {
 	// UserDriveProvider.MaxSizeMiB. A Docker volume has no size limit, so it must be 0 there.
 	SizeMiB      int    `json:"size_mib,omitempty"`
 	StorageClass string `json:"storage_class,omitempty"` // k8s only; "" = the cluster default
+	// KeepMainDrive lets a run keep its work folder as its person's own drive
+	// (CreateRunRequest.KeepWorkFolder). Off by default; has no effect unless Enabled.
+	KeepMainDrive bool `json:"keep_main_drive,omitempty"`
 }
 
 // MaxMemberDrivesPerPerson is the ceiling on MemberDrivePolicy.MaxPerPerson.

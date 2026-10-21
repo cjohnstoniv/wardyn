@@ -725,6 +725,11 @@
       "why": "The time zone only means something beside a start time."
     },
     {
+      "name": "keep_work_folder",
+      "excluded": "launch",
+      "why": "Keeping the work folder makes a drive for the person launching, so it is chosen at each launch."
+    },
+    {
       "name": "no_end",
       "part": "runner",
       "omitted": "baseline",

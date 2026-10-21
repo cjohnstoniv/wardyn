@@ -415,6 +415,20 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `SUMMARY_KEPT(grace)` | pending (W-12) | the main drive is kept {grace} after its end time |
 | `SUMMARY_NO_END` | pending (W-12) | the main drive is kept until you end the run |
 | `SUMMARY_NO_EXTRA(size, life)` | mock | Main drive {size} · no extra files · {life}. |
+| `KEEP_WHAT` | mock | Keeps the work folder, /home/agent/work, as your own drive named after this run. Your home folder, harness settings and /tmp are not kept. |
+| `KEEP_WARNING` | mock | Anything an agent leaves in the folder comes back in the next run that uses it, including files you didn't ask for. Check it before you reuse it. |
+| `KEEP_COUNTS(n, limit)` | mock | Counts toward your drives. You have {n} of {limit} drives. Kept until you delete it. |
+| `KEEP_UNENFORCED` | mock | On this runner its size is not enforced. |
+| `KEEP_LIFE` | mock | The work folder is kept as a drive. The rest is deleted when the run ends. |
+| `KEEP_SUMMARY` | mock | the work folder is kept as a drive after the run |
+| `KEEP_STARTS_MAIN` | mock | the main drive |
+| `KEEP_LIMIT(n, limit)` | mock | You have {n} of {limit} drives. Delete one to keep this run's work folder. |
+| `KEEP_DISABLED` | deviation (lead wording 2026-10-20, #1991) | Your organisation doesn't let runs keep their work folder as a drive. Ask an admin. |
+| `KEEP_LIMIT_HINT` | mock | Or untick “Reuse it across runs” to launch without keeping it. |
+| `DRIVE_KEPT_FROM(run)` | mock | From run {run} · Kept until you delete it. |
+| `DRIVE_KEPT_FROM_UNTITLED` | deviation (lead wording 2026-10-20, #1991) | From an earlier run · Kept until you delete it. |
+| `DRIVE_SIZE_NOT_ENFORCED` | mock | Size not enforced |
+| `DRIVE_SIZE_NOT_ENFORCED_TIP` | mock | A Docker volume has no size cap. |
 | `ATTACH_TITLE` | deviation (owner-approved Files prototype 2026-10-13) | Repositories, drives and folders |
 | `ATTACH_BODY` | deviation (owner-approved Files prototype 2026-10-13) | Each one appears in the sandbox at its mount path. |
 | `ADD` | deviation (owner-approved Files prototype 2026-10-13) | + Add |

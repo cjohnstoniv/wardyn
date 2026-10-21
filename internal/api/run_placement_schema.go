@@ -65,7 +65,7 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.Integration]():         strings.Fields("ID Name Kind Disabled Secrets Egress Config Docs DisabledCapabilities CreatedAt UpdatedAt legacyTopology"),
 	reflect.TypeFor[types.IntegrationDelivery](): strings.Fields("Mode Header Format Path Var"),
 	reflect.TypeFor[types.IntegrationSecret]():   strings.Fields("Role SecretName Delivery"),
-	reflect.TypeFor[types.MemberDrivePolicy]():   strings.Fields("Enabled MaxPerPerson SizeMiB StorageClass"),
+	reflect.TypeFor[types.MemberDrivePolicy]():   strings.Fields("Enabled KeepMainDrive MaxPerPerson SizeMiB StorageClass"),
 	reflect.TypeFor[types.ModelProvider]():       strings.Fields("ID UID Name Kind Disabled BaseURL Auth Bedrock Azure Local Harnesses"),
 	reflect.TypeFor[types.LocalModelSettings]():  strings.Fields("Models MaxContext MaxOutput KeepAliveSeconds"),
 	reflect.TypeFor[types.ModelProviders]():      strings.Fields("Providers"),

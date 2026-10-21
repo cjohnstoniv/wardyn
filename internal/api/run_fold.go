@@ -53,6 +53,8 @@ type runFold struct {
 	// mounts at create and preflight; the preview resolves no mount.
 	drives      []runDrive
 	driveMounts []types.DriveMount
+	// keep is the drive keep_work_folder makes at create (stepDrive); nil when not asked.
+	keep *keptWorkFolder
 	// seed is what seeding the request's workspaces decided (attached first,
 	// the primary leading); wsRefs adds every other one the spec references.
 	seed   workspaceSeed
@@ -221,4 +223,9 @@ func (s *Server) foldRunRequest(w http.ResponseWriter, r *http.Request, mode fol
 	}
 	f.prov = rec.result()
 	return f, true
+}
+
+// mountsDrives reports whether a run mounts any drive, the kept work folder included.
+func mountsDrives(drives []runDrive, keep *keptWorkFolder) bool {
+	return len(drives) > 0 || keep != nil
 }

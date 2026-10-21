@@ -206,7 +206,10 @@
 # #1987 review: docs/sdk.md 20508 adds 17 over 20491, measured: the agent prefix and ?agent= are display only.
 # docs/sdk.md 20736 = ours 20508 + theirs 20288 - base 20060 at the 0.10 second merge of main into FEAT-2MULTI.
 # docs/sdk.md 20895 = ours 20447 + theirs 20736 - base 20288 at the 0.10 W4d merge of MULTI-DOC onto the train.
-docs/sdk.md=20895 share=21
+# docs/sdk.md 20195 adds 135 over 20060, measured: #1991 keep_work_folder (round 1): the keep_work_folder_disabled reason row and the keep_work_folder bullet.
+# docs/sdk.md 20211 adds 16 over 20195, measured: kept_from_run_title on the kept drive row (0.10 FEAT-2KEEP).
+# docs/sdk.md 21046 = ours 20895 + theirs 20211 - base 20060 at the 0.10 W4d merge of FEAT-2KEEP-UI onto the train.
+docs/sdk.md=21046 share=21
 # docs/sdk.md 18691 adds 28 over 18663, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.

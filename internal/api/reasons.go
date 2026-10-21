@@ -537,6 +537,7 @@ const (
 	reasonMemberDriveDeleteFailed      = "member_drive_delete_failed"      // the substrate failed; nothing was removed
 	reasonMemberDriveRateLimited       = "member_drive_rate_limited"       // too many creates and deletes in a minute
 	reasonUserDriveMemberOwned         = "user_drive_member_owned"         // an admin drive route named a person's drive
+	reasonKeepWorkFolderDisabled       = "keep_work_folder_disabled"       // member drives or the keep_main_drive switch is off
 )
 
 // git_pat narrowing (runs_dispatch_pat_scope.go): a run is refused when a

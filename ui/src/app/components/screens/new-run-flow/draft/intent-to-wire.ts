@@ -27,9 +27,10 @@ const carried = (rows: readonly TemplateFieldRule[]) => new Set(rows.filter((r) 
 
 /**
  * Fields chosen at each launch that the draft may still hold: sent, never saved (Save as skips their
- * `excluded` home). `local_folder` is the folder on the person's computer (M4, #2982).
+ * `excluded` home). `local_folder` is the folder on the person's computer (M4, #2982);
+ * `keep_work_folder` keeps the work folder as the person's drive (#1991).
  */
-const LAUNCH_CHOSEN = new Set(["local_folder"]);
+const LAUNCH_CHOSEN = new Set(["local_folder", "keep_work_folder"]);
 
 /**
  * A serializer over one registry. The overlay's row may be named either way

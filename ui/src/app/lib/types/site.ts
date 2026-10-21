@@ -446,6 +446,8 @@ export interface MemberDrivePolicy {
   max_per_person?: number;
   size_mib?: number;
   storage_class?: string;
+  // Lets a run keep its work folder as its person's drive. Absent = off; no effect unless enabled.
+  keep_main_drive?: boolean;
 }
 
 // One SiteConfig.internal_hosts entry — see that field's doc.

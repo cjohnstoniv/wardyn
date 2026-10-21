@@ -168,6 +168,27 @@ export const NR_FILES = {
   SUMMARY_NO_END: "the main drive is kept until you end the run",
   SUMMARY_NO_EXTRA: (size: string | number, life: string | number) =>
     `Main drive ${size} · no extra files · ${life}.`,
+  // Keep the work folder as a drive (F2KEEP-1..3, #1991).
+  KEEP_WHAT:
+    "Keeps the work folder, /home/agent/work, as your own drive named after this run. Your home folder, harness settings and /tmp are not kept.",
+  KEEP_WARNING:
+    "Anything an agent leaves in the folder comes back in the next run that uses it, including files you didn't ask for. Check it before you reuse it.",
+  KEEP_COUNTS: (n: string | number, limit: string | number) =>
+    `Counts toward your drives. You have ${n} of ${limit} drives. Kept until you delete it.`,
+  KEEP_UNENFORCED: "On this runner its size is not enforced.",
+  KEEP_LIFE: "The work folder is kept as a drive. The rest is deleted when the run ends.",
+  KEEP_SUMMARY: "the work folder is kept as a drive after the run",
+  KEEP_STARTS_MAIN: "the main drive",
+  KEEP_LIMIT: (n: string | number, limit: string | number) =>
+    `You have ${n} of ${limit} drives. Delete one to keep this run's work folder.`,
+  /** The server's own sentence (keepWorkFolderDisabledMsg), for a rerun that asks to keep while the keep switch is off. */
+  KEEP_DISABLED: "Your organisation doesn't let runs keep their work folder as a drive. Ask an admin.",
+  KEEP_LIMIT_HINT: "Or untick “Reuse it across runs” to launch without keeping it.",
+  DRIVE_KEPT_FROM: (run: string | number) => `From run ${run} · Kept until you delete it.`,
+  /** Not on the boards: the run's title is gone or empty, so the line names no run. */
+  DRIVE_KEPT_FROM_UNTITLED: "From an earlier run · Kept until you delete it.",
+  DRIVE_SIZE_NOT_ENFORCED: "Size not enforced",
+  DRIVE_SIZE_NOT_ENFORCED_TIP: "A Docker volume has no size cap.",
   // Owner-approved Files prototype (2026-10-13): one list of cards, the Add / Edit dialog and the starting folder.
   ATTACH_TITLE: "Repositories, drives and folders",
   ATTACH_BODY: "Each one appears in the sandbox at its mount path.",

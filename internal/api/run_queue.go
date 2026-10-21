@@ -168,6 +168,10 @@ func queueSHA256(b []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// queuedRunCommitted runs once a queued run and its queue row have committed, before the rest of its
+// answer. Tests set it to promote in that window.
+var queuedRunCommitted = func(context.Context, uuid.UUID) {}
+
 // queuedCreate is a create that waits: the door's facts, handed to answer in place of the mint.
 // answer is a method on this type, not on the Server, so the structural guard on the create/preflight
 // parity (preflight_launch_gate_parity_test.go) sees the handler's gates and not this branch.
@@ -203,7 +207,20 @@ func (q queuedCreate) answer(s *Server, w http.ResponseWriter, r *http.Request) 
 	// The snapshots revive, extend and the run.create row read commit with the queue row: a creator
 	// that dies after the commit leaves no promotable run without its authority.
 	entry.Components, entry.Harnesses = q.f.comps.snapshotRows(), q.f.harnesses
+	// The kept work folder's drive commits with the queue row too: a promotion never finds a waiting
+	// keep run without it, and a drive refused at the store's count leaves no run behind.
+	var kept types.UserDrive
+	if k := q.f.keep; k != nil {
+		kept = keptDrive(r, k, q.run)
+		entry.KeptDrive, entry.KeptDriveLimit = &kept, k.limit
+	}
 	created, err := s.createQueuedRun(ctx, q.run, entry)
+	if q.f.keep != nil {
+		if refusal := keptDriveRefusal(err, q.f.keep, kept); refusal != nil {
+			refusal.write(s, w, r)
+			return
+		}
+	}
 	switch {
 	case errors.Is(err, store.ErrRunQueueFull):
 		writePoolRefusal(w, runnerpool.Refusal{Reason: runnerpool.ReasonQueueFull, Name: pool.Name, Count: queueMaxPerOwner})
@@ -215,7 +232,11 @@ func (q queuedCreate) answer(s *Server, w http.ResponseWriter, r *http.Request) 
 		writeServerError(w, r, "create run", err)
 		return
 	}
+	queuedRunCommitted(ctx, created.ID)
 	s.recordPolicyApplyAudits(ctx, q.f.source)
+	if q.f.keep != nil {
+		s.auditKeptDrive(r, q.f.keep, created, kept)
+	}
 	if rows := entry.Components; len(rows) > 0 {
 		err := errors.New("api: the store cannot record run components")
 		if st, ok := s.cfg.Store.(store.ComponentStore); ok {
@@ -290,7 +311,7 @@ func (q queuedCreate) entry(s *Server, ctx context.Context, waitSec int) (store.
 		Request: q.original, ProviderID: q.f.mpChoice.provider.ID, MaxWaitSec: waitSec, ConfinementDefault: q.f.confinementDefault,
 		Repos: runRepos(types.AgentRun{Repo: q.req.Repo}, nil), LifetimeCapSec: q.f.end.capSec,
 		Resources: s.runFitSpec(q.f.spec, q.f.mainDrive).Resources, Unbound: q.f.place.unbound,
-		Barrier: q.f.enforced, Drives: len(q.f.drives) > 0, NoLocal: q.f.place.noLocal,
+		Barrier: q.f.enforced, Drives: mountsDrives(q.f.drives, q.f.keep), NoLocal: q.f.place.noLocal,
 	}
 	launch.Repos = append(launch.Repos, repoLocatorsOf(q.f.spec.WorkspaceRepos)...)
 	if q.f.ceiling.Profile != nil {
@@ -324,7 +345,7 @@ func (s *Server) auditQueuedCreate(ctx context.Context, q queuedCreate, created 
 	stampConfinementDefault(createData, q.reqCC, q.f.confinementDefault)
 	createData["end"] = q.f.end.audit(created)
 	q.intent.stamp(createData, created.LaunchIntent != nil)
-	stampDriveAudit(createData, q.f.drives)
+	stampDriveAudit(createData, q.f.drives, q.f.keep != nil, created.ID)
 	stampHarnessSet(createData, q.f.harnesses, q.f.image)
 	queue := map[string]any{
 		"pool_id": e.PoolID, "position": position, "max_wait_sec": waitSec, "deadline_at": e.DeadlineAt, "capped": !q.f.place.waitsForRoom,

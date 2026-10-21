@@ -11,9 +11,7 @@
 // server never gates a delete on it, and a person can always remove their own data.
 
 import * as React from "react";
-import { createMyDrive, deleteMyDrive, type MeDrive, type MemberDriveCreate, type MemberDriveCreateReason } from "../../../../../lib/api/me-drives";
-import { MEMBER } from "../../../../../lib/governance-copy";
-import { DRIVE_MEMBER } from "../../../../../lib/user-drives-copy";
+import { createMyDrive, deleteMyDrive, type MeDrive } from "../../../../../lib/api/me-drives";
 import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { detachDrive } from "../../lenses/files-lens";
@@ -23,24 +21,9 @@ import { FILES_LINK, type AddDialogProps } from "./add-dialog";
 import { CreateDriveCard } from "./create-drive-card";
 import { DeleteDriveConfirm } from "./delete-drive-confirm";
 import { legacyIdOf } from "./file-items";
-import { useDriveCatalogue } from "./file-sources";
+import { createReasonText, useDriveCatalogue } from "./file-sources";
 
 type ArmContext = Parameters<NonNullable<AddDialogProps["createUserDrive"]>>[0];
-
-/**
- * The sentence beside a closed door: the canon string for each reason of the server's closed set. `disabled` is the
- * switch being off, so the arm shows no create control for it. The two reasons with no CREATE_* string show the
- * step's existing sentence for the same cause.
- */
-const REASON_TEXT: Record<MemberDriveCreateReason, ((c: MemberDriveCreate) => string | undefined) | undefined> = {
-  disabled: undefined,
-  denied_by_profile: (c) => (c.denied_by_profile ? NR_FILES.CREATE_DENIED(c.denied_by_profile) : undefined),
-  limit_reached: (c) => NR_FILES.CREATE_LIMIT(c.count, c.limit),
-  unsupported: () => NR_FILES.CREATE_UNSUPPORTED,
-  delete_unavailable: () => NR_FILES.CREATE_NO_DELETE,
-  governance_unavailable: () => DRIVE_MEMBER.NR_GOVERNANCE_UNAVAILABLE,
-  groups_snapshot_stale: () => MEMBER.DENIED_STALE_GROUPS,
-};
 
 const CLOSED_LINK = "font-semibold text-muted-foreground opacity-70 disabled:cursor-not-allowed";
 
@@ -84,7 +67,7 @@ export function CreateUserDrive({ choose, reload }: ArmContext) {
   const offersCreate = !!door && door.reason !== "disabled";
   const own = (catalogue?.drives ?? []).filter((d) => d.owned);
   if (!offersCreate && own.length === 0) return null;
-  const reasonText = door && !door.allowed && door.reason ? REASON_TEXT[door.reason]?.(door) : undefined;
+  const reasonText = door && !door.allowed && door.reason ? createReasonText(door) : undefined;
   const refresh = () => {
     reload();
     reloadOwn();

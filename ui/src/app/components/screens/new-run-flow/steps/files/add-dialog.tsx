@@ -14,6 +14,7 @@ import { Button } from "../../../../ui/button";
 import { Dialog, DialogContent, DialogTitle } from "../../../../ui/dialog";
 import { Input } from "../../../../ui/input";
 import { cn } from "../../../../ui/utils";
+import { InfoTip } from "../../../../wardyn/info-tip";
 import { Chip } from "../../../../wardyn/primitives";
 import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
@@ -59,6 +60,8 @@ interface PickOption {
   defaultPath?: string;
   locked: boolean;
   reason?: string;
+  /** A kept work folder: the line naming its run, and whether its size is unenforced (a Docker volume). */
+  kept?: { line: string; unenforced: boolean };
   ref?: string;
   workspaceId?: string;
   repo?: string;
@@ -123,6 +126,7 @@ function optionsFor(kind: AttachKind, src: ItemSources): PickOption[] {
   return (src.catalogue?.drives ?? []).filter((d) => driveKind(d) === kind).map((d) => ({
     key: d.id, name: d.name, chips: [...driveChips(d), ...(d.writable ? [] : [NR_FILES.ACCESS_READ])], shownPath: d.target, defaultPath: d.target,
     locked: !d.writable, reason: driveReason(d),
+    kept: d.kept_from_run ? { line: d.kept_from_run_title ? NR_FILES.DRIVE_KEPT_FROM(d.kept_from_run_title) : NR_FILES.DRIVE_KEPT_FROM_UNTITLED, unenforced: d.enforcement === "none" } : undefined,
   }));
 }
 
@@ -370,7 +374,14 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, computerA
                       <span className="flex flex-wrap items-center gap-1.5">
                         <strong className="font-semibold">{o.name}</strong>
                         {o.chips.map((c) => <Chip key={c}>{c}</Chip>)}
+                        {o.kept?.unenforced && (
+                          <>
+                            <Chip tone="warning">{NR_FILES.DRIVE_SIZE_NOT_ENFORCED}</Chip>
+                            <InfoTip label={NR_FILES.DRIVE_SIZE_NOT_ENFORCED}>{NR_FILES.DRIVE_SIZE_NOT_ENFORCED_TIP}</InfoTip>
+                          </>
+                        )}
                       </span>
+                      {o.kept && <span className="text-xs text-muted-foreground">{o.kept.line}</span>}
                       {o.shownPath && <PathText path={o.shownPath} className="text-muted-foreground" />}
                       {reason && (
                         <span className="flex items-start gap-1.5 text-[13px]">

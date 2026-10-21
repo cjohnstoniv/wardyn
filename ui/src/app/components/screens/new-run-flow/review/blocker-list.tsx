@@ -32,6 +32,7 @@ export function BlockerList({ blockers, go }: { blockers: readonly Blocker[]; go
                 ) : (
                   <span>{b.text}</span>
                 )}
+                {b.hint && <p className="text-xs text-muted-foreground">{b.hint}</p>}
               </li>
             ))}
           </ul>

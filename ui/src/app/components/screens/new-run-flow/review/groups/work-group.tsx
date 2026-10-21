@@ -24,7 +24,7 @@ const ENFORCEMENT: Record<MainDriveEnforcement, string | undefined> = {
   filesystem: NR_FILES.ENFORCED, eviction: NR_FILES.ENFORCED_BY_STOP, none: NR_FILES.NOT_ENFORCED, unknown: undefined,
 };
 
-const FILE_PATHS = ["workspaces", "drive", "drives", "start_folder", "no_repositories_or_drives", "resources.disk_mib"];
+const FILE_PATHS = ["workspaces", "drive", "drives", "start_folder", "no_repositories_or_drives", "keep_work_folder", "resources.disk_mib"];
 
 export function AttachmentRow({ a, refNotChecked }: { a: RunAttachment; /** The ref was typed, not picked from a listed response (#2107). */ refNotChecked?: boolean }) {
   return (
@@ -68,9 +68,10 @@ export function WorkGroup({ draft, pre, preview, docRows, go }: GroupProps) {
       // As on the Files step: drives and folders are live storage, so their changes are kept.
       keptDrives: attachments.filter((a) => a.kind !== "repository").map((a) => a.name),
       life,
+      keepsWork: intent.keep_work_folder === true,
     })
     : attachments.map((a) => a.name).reduce<string | undefined>((all, n) => (all ? NR_SHARED.JOIN(all, n) : n), undefined);
-  const lifeText = lifecycleText(life);
+  const lifeText = lifecycleText(life, intent.keep_work_folder === true);
   return (
     <ReviewGroup
       id="work"

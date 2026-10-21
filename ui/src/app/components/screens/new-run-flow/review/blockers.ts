@@ -14,6 +14,7 @@ import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { NR_RUN } from "../../../wardyn/copy/new-run/run";
 import { NR_SHAPE } from "../../../wardyn/copy/new-run/shape";
 import { NR_TEMPLATES } from "../../../wardyn/copy/new-run/templates";
+import { DRIVE_REFUSAL_REASON } from "../../../../lib/drive-refusals";
 import type { SetupItem } from "../../../../lib/types/preflight";
 import type { TemplateSetupNeed } from "../../../../lib/types/templates";
 import {
@@ -33,6 +34,8 @@ export interface Blocker {
   to?: NewRunLocation;
   /** The one field it names, when it names one: only that field's Review group shows it. */
   field?: string;
+  /** A second line under the text: what else the person can do. */
+  hint?: string;
 }
 
 /** The screen a field's fix lives on. Review and excluded fields have none to link to. */
@@ -70,6 +73,8 @@ export function specifies(intent: RunIntent, field: string): boolean {
 
 export interface BlockerInput {
   issues: readonly StepIssue[];
+  /** The draft keeps its work folder as a drive and the person is at their drive limit (#1991). */
+  keepLimit?: { text: string; hint: string };
   unsupported: readonly string[];
   /** The refusal for harnesses no one declared image carries together (combinationReason), when the draft has them. */
   combination?: string;
@@ -89,6 +94,7 @@ export function buildBlockers(input: BlockerInput): Blocker[] {
     out.push({ id: `local:${i.code}`, kind: "local", text: ISSUE_TEXT[i.code], to: locationOfHome(i.home) });
   }
   if (input.combination) out.push({ id: "local:combination", kind: "local", text: input.combination, to: locationOfHome("harnesses") });
+  if (input.keepLimit) out.push({ id: "keep:limit", kind: "local", ...input.keepLimit, to: locationOfHome("files"), field: "keep_work_folder" });
   for (const path of input.unsupported) {
     out.push({ id: `unsupported:${path}`, kind: "unsupported", text: NR_REVIEW.BLOCKER_UNSUPPORTED(path), to: locationOfHome(homeOfPath(path) ?? "document"), field: path });
   }
@@ -96,7 +102,8 @@ export function buildBlockers(input: BlockerInput): Blocker[] {
     out.push({ id: `template:${need.field}`, kind: "template_setup", text: NR_TEMPLATES.NEEDS_SETUP(fieldLabel(need.field)), to: locationOfHome(homeOfPath(need.field)), field: need.field });
   }
   if (input.templateUnread) out.push({ id: "template:unread", kind: "template_unread", text: NR_REVIEW.BLOCKER_STALE });
-  if (input.refusal) {
+  // The server refuses the same fact in its own words; the keep blocker already says it.
+  if (input.refusal && !(input.keepLimit && input.refusal.reason === DRIVE_REFUSAL_REASON.MEMBER_LIMIT_REACHED)) {
     const field = (FIELD_OF_REASON as Record<string, string | undefined>)[input.refusal.reason];
     out.push({ id: "refusal", kind: "refusal", text: input.refusal.text, to: locationOfHome(homeOfReason(input.refusal.reason)), ...(field && { field }) });
   }

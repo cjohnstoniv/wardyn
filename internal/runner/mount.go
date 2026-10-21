@@ -80,14 +80,15 @@ func DriveTargetFor(d types.ResolvedDrive, legacy bool) string {
 }
 
 // ValidateDriveTarget is a substrate's own check on a drive's target: one of
-// the paths DriveTargetFor derives for that backend, and nothing else. A target
-// anywhere else would put a person's storage over another mount.
+// the paths DriveTargetFor derives for that backend, or ScratchWorkPath for a
+// managed drive (the kept work folder), and nothing else. A target anywhere
+// else would put a person's storage over another mount.
 func ValidateDriveTarget(target string, backend types.DriveBackend) error {
 	root := SharedRoot
 	if backend.Kind() == types.DriveKindManaged {
 		root = DrivesRoot
 	}
-	if target == DriveTarget {
+	if target == DriveTarget || target == ScratchWorkPath && root == DrivesRoot {
 		return nil
 	}
 	if slug, ok := strings.CutPrefix(target, root+"/"); ok && slug != "" && types.DriveSlug(slug) == slug {

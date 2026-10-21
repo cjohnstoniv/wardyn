@@ -269,11 +269,15 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     // lifetimes (pat_max_hours, pat_max_days) the console writes.
     ["ADOEntraConfig", "internal/types/workspace_provider.go", "ADOEntraConfig", "ui/src/app/lib/types/site.ts"],
     ["GitProvider", "internal/types/workspace_provider.go", "GitProvider", "ui/src/app/lib/types/site.ts"],
+    // #1991: the keep_main_drive switch the organisation turns on beside member_create.
+    ["MemberDrivePolicy", "internal/types/workspace_provider.go", "MemberDrivePolicy", "ui/src/app/lib/types/site.ts"],
     // #1428: the per-person token console's reads.
     ["adoOrgCheckResult", "internal/api/ado_pat_orgcheck.go", "ADOOrgCheck", "ui/src/app/lib/types/ado-pat.ts"],
     ["adoPATRefusal", "internal/api/ado_pat_refusal.go", "ADOPATRefusal", "ui/src/app/lib/types/ado-pat.ts"],
     ["adoRunToken", "internal/api/ado_pat_console.go", "ADORunToken", "ui/src/app/lib/types/ado-pat.ts"],
     ["ADOPATAccess", "internal/api/ado_pat_console.go", "ADOPATAccess", "ui/src/app/lib/types/ado-pat.ts"],
+    // #1991: the drive catalogue's create block, keep_work_folder and enforcement included.
+    ["MemberDriveCreate", "pkg/client/me_drives.go", "MemberDriveCreate", "ui/src/app/lib/api/me-drives.ts"],
   ])("%s: full parity with the TS mirror", (goName, goFile, tsName, tsFile) => {
     const goTags = goJSONTags(readFileSync(join(root, goFile), "utf8"), goName);
     expect(goTags.length).toBeGreaterThanOrEqual(2); // stale-regex guard (ADOPATAccess has two tags)
@@ -509,11 +513,21 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     ["runs_create.go", "DriveAttachment", "types/new-run-contract.ts", "DriveAttachment"],
     ["me_drives.go", "MeDrive", "api/me-drives.ts", "MeDrive"],
     ["me_drives.go", "MeDriveCatalogue", "api/me-drives.ts", "MeDriveCatalogue"],
+    // #1991: the create door now says whether a run may keep its work folder, and what binds a new drive's size.
+    ["me_drives.go", "MemberDriveCreate", "api/me-drives.ts", "MemberDriveCreate"],
   ])("pkg/client/%s %s: full parity with the TS %s mirror", (goFile, goName, tsFile, tsName) => {
     const goTags = goJSONTags(readFileSync(join(root, "pkg/client", goFile), "utf8"), goName);
     expect(goTags.length).toBeGreaterThanOrEqual(2);
     const ts = readFileSync(join(root, "ui/src/app/lib", tsFile), "utf8");
     expect(new Set(tsInterfaceTopKeys(ts, tsName))).toEqual(new Set(goTags));
+  });
+
+  // #1991: the request field that keeps the run's work folder as the caller's drive.
+  it("pkg/client CreateRunRequest carries keep_work_folder, and the TS request twin does too", () => {
+    const goTags = goJSONTags(readFileSync(join(root, "pkg/client/runs_create.go"), "utf8"), "CreateRunRequest");
+    expect(goTags).toContain("keep_work_folder");
+    const ts = readFileSync(join(root, "ui/src/app/lib/types/run-create.ts"), "utf8");
+    expect(tsInterfaceTopKeys(ts, "CreateRunInput")).toContain("keep_work_folder");
   });
 
   // The run-mode contract (pkg/client/runs_mode.go).

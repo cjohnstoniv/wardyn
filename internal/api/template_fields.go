@@ -206,6 +206,8 @@ var templateRequestRules = []TemplateFieldRule{
 		"When a run starts is chosen at each launch; a template's runs start when they are launched."),
 	excludedField("start_time_zone", templateExcludeLaunch,
 		"The time zone only means something beside a start time."),
+	excludedField("keep_work_folder", templateExcludeLaunch,
+		"Keeping the work folder makes a drive for the person launching, so it is chosen at each launch."),
 	carriedField("no_end", partRunner, templateOmitBaseline, templateEmptySame,
 		"The run takes the default end when the template is used. Asking for no end is checked again at launch against the pool, the deployment and the person's own limits, and is never a permission."),
 	// The run-mode carriers (run_mode.go): what a person is starting. A new client

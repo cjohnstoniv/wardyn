@@ -65,3 +65,27 @@ func TestValidateDriveTarget_RefusesWhatIsNotDerived(t *testing.T) {
 		}
 	}
 }
+
+// TestValidateDriveTarget_WorkFolderManagedOnly: a managed drive may mount at
+// the work folder (keep_work_folder); a share never may, nor anywhere above it.
+func TestValidateDriveTarget_WorkFolderManagedOnly(t *testing.T) {
+	for _, b := range []types.DriveBackend{types.DriveBackendDockerVolume, types.DriveBackendK8sPVC} {
+		if err := ValidateDriveTarget("/home/agent/work", b); err != nil {
+			t.Errorf("ValidateDriveTarget(/home/agent/work, %s) = %v, want nil", b, err)
+		}
+	}
+	for _, c := range []struct {
+		target  string
+		backend types.DriveBackend
+	}{
+		{"/home/agent/work", types.DriveBackendHostPath},
+		{"/home/agent/work", types.DriveBackendK8sPVCStatic},
+		{"/home/agent", types.DriveBackendDockerVolume},
+		{"/tmp", types.DriveBackendDockerVolume},
+		{"/home/agent/.claude", types.DriveBackendK8sPVC},
+	} {
+		if err := ValidateDriveTarget(c.target, c.backend); err == nil {
+			t.Errorf("ValidateDriveTarget(%q, %s) = nil, want a refusal", c.target, c.backend)
+		}
+	}
+}
