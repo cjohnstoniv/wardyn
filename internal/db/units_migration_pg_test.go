@@ -18,7 +18,7 @@ import (
 //
 // Guarded by WARDYN_TEST_PG: skipped cleanly when unset, must PASS when set.
 func TestUnitsMigration(t *testing.T) {
-	const floor = "0201"
+	const floor = "0207"
 	pool, _ := partialSchemaPool(t, floor)
 	ctx := context.Background()
 	base, unit, member, run, pooled := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
@@ -75,8 +75,8 @@ func TestUnitsMigration(t *testing.T) {
 	}
 	// Re-applied over the migrated schema (the newest migration is made pending again by another
 	// test), it changes nothing and does not fail.
-	if _, err := pool.Exec(ctx, readMigration(t, "0201_governance_units.sql")); err != nil {
-		t.Errorf("re-applying 0201: %v", err)
+	if _, err := pool.Exec(ctx, readMigration(t, "0207_governance_units.sql")); err != nil {
+		t.Errorf("re-applying 0207: %v", err)
 	}
 
 	var launch map[string]any

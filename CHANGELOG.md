@@ -53,7 +53,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - `WARDYN_GOVERNANCE_PROFILE_PUT_EXISTING_ONLY` is now `WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY`. wardynd refuses
   to start while the old name is set, and names the new one. A notify route keyed `profiles` is now `units`; the
   old key is refused when the config is read.
-- Migration `0201_governance_units` renames the governance tables and their columns, keeping every row, grant and
+- Migration `0207_governance_units` renames the governance tables and their columns, keeping every row, grant and
   foreign key, so a split-role install needs no grant change. A governance change proposed before the upgrade reads
   as stale once and is proposed again.
 
