@@ -48,11 +48,11 @@ describe("source parity — composed governance profile wire types", () => {
   const writeGo = readFileSync(join(root, "internal/api/governance_unit_write.go"), "utf8");
   const governanceTs = readFileSync(join(root, "ui/src/app/lib/api/governance.ts"), "utf8");
 
-  it("GovernanceUnit: every Go tag is mirrored, plus the view's own `effective`", () => {
+  it("GovernanceUnit: every Go tag is mirrored, plus the view's own `effective` and `people`", () => {
     const goTags = goJSONTags(typesGo, "GovernanceUnit");
     expect(goTags).toEqual(expect.arrayContaining(["parent_id", "overlay", "overlay_limits"]));
     const view = goJSONTags(writeGo, "governanceUnitView");
-    expect(view).toEqual(["effective"]);
+    expect(view).toEqual(["effective", "people"]);
     const tsKeys = tsInterfaceKeys(governanceTs, "GovernanceUnit");
     expect(new Set(tsKeys)).toEqual(new Set([...goTags, ...view]));
   });
