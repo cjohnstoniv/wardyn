@@ -652,6 +652,9 @@ func applyMembershipChange(s *Server, r *http.Request, q store.Querier, ch types
 	if err := validateGovernanceMembership(&a); err != nil {
 		return govApplied{}, writeRefusal(http.StatusBadRequest, reasonGovernanceMembershipInvalid, "invalid assignment: %v", err)
 	}
+	if err := defaultMembershipRefusal(a.UnitID, defaultTakesNoMembershipsMsg); err != nil {
+		return govApplied{}, err
+	}
 	if err := s.checkUserTypeSubject(ctx, q, a.SubjectType, a.Subject); err != nil {
 		return govApplied{}, err
 	}

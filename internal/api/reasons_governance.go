@@ -13,4 +13,6 @@ const (
 	reasonUnitMembershipGone    = "unit_membership_gone"     // a revive: the run's owner no longer holds a membership placing them in the run's unit
 	// reasonGovernanceUnitDefaultReadonly: a write to the Default unit, whose walls WARDYN_DEFAULT_POLICY sets.
 	reasonGovernanceUnitDefaultReadonly = "governance_unit_default_readonly"
+	// reasonGovernanceMembershipDefaultUnit: a membership added to, changed into or moved into the Default unit.
+	reasonGovernanceMembershipDefaultUnit = "governance_membership_default_unit"
 )

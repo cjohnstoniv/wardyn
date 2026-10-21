@@ -43,7 +43,8 @@ an operator follows to turn one on and run the queue.
 - A revive or admin restart is refused `409` `unit_membership_gone` once the owner's membership of the run's unit is gone (audit `arm` `owner_session`: the owner's own revive, checked against their memberships). Anyone else's passes while that unit, or one above it, has a membership that could match the owner: their sub, an email, their user type, `all` or any group (`arm` `row_can_match`).
 - The Default unit is read-only: `PUT` and `DELETE /governance/units/{Default id}` answer `409` `governance_unit_default_readonly`. Its walls are `WARDYN_DEFAULT_POLICY`: change that and redeploy.
 - `PUT /governance/memberships/{id}` with `{"unit_id": "<uuid>"}` moves a membership, keeping its id, `priority`, `home` and `legacy`. Move and promote follow the second-human switch below.
-  - An unknown unit is `404` `governance_unit_not_found`; the Default unit is `422` `governance_membership_invalid` (delete the membership instead).
+  - An unknown unit is `404` `governance_unit_not_found`.
+- The Default unit has no memberships. Adding one, or moving one into it, is `409` `governance_membership_default_unit`, before anything is held.
   - A subject already a member of that unit is `409` `governance_membership_invalid`.
   - Audit `governance.membership.write`, with `from_unit_id` beside `unit_id`.
 - `POST /governance/memberships/{id}/promote` makes a legacy membership a context (`legacy` false); one that already is one is `409` `governance_membership_invalid`. Audit `governance.membership.promote`.

@@ -125,6 +125,9 @@ func (s *Server) handleUpsertGovernanceMembership(w http.ResponseWriter, r *http
 		writeErrorReason(w, http.StatusBadRequest, reasonGovernanceMembershipInvalid, "invalid assignment: "+err.Error())
 		return
 	}
+	if writeMembershipTreeError(w, r, "", defaultMembershipRefusal(a.UnitID, defaultTakesNoMembershipsMsg)) {
+		return
+	}
 	if !s.userTypeSubjectExists(w, r, a.SubjectType, a.Subject) {
 		return
 	}
@@ -214,8 +217,10 @@ type membershipTreePayload struct {
 
 const (
 	defaultHasNoMembershipsMsg = "Default has no memberships; delete this membership instead"
-	membershipAlreadyMemberMsg = "the subject is already a member of that unit; delete this membership instead"
-	membershipAlreadyContext   = "this membership is already a context"
+	// defaultTakesNoMembershipsMsg answers a membership added to the Default unit.
+	defaultTakesNoMembershipsMsg = "Default has no memberships: a person no membership places already runs there"
+	membershipAlreadyMemberMsg   = "the subject is already a member of that unit; delete this membership instead"
+	membershipAlreadyContext     = "this membership is already a context"
 )
 
 // errGovernanceTxUnsupported is a store with no committed governance transaction (a test double).
@@ -266,6 +271,9 @@ func (s *Server) handleMoveGovernanceMembership(w http.ResponseWriter, r *http.R
 		writeErrorReason(w, http.StatusBadRequest, reasonGovernanceMembershipInvalid, "invalid assignment: unit_id: required")
 		return
 	}
+	if writeMembershipTreeError(w, r, "", defaultMembershipRefusal(req.UnitID, defaultHasNoMembershipsMsg)) {
+		return
+	}
 	if mode == govQueue {
 		s.holdMembershipMove(w, r, membershipTreePayload{ID: id, UnitID: req.UnitID})
 		return
@@ -294,6 +302,16 @@ func membershipMoveAuditData(from, moved types.GovernanceMembership) map[string]
 	return data
 }
 
+// defaultMembershipRefusal is the 409 for a membership in unitID when unitID is the Default unit, else
+// an untyped nil: Default is where a person no membership places runs, so a membership in it means
+// nothing. A create, a change, a move, a held proposal of one, its approval and a dry run all ask it.
+func defaultMembershipRefusal(unitID uuid.UUID, msg string) error {
+	if unitID != store.DefaultUnitID {
+		return nil
+	}
+	return writeRefusal(http.StatusConflict, reasonGovernanceMembershipDefaultUnit, "%s", msg)
+}
+
 // membershipNotFound is the refusal for a membership id no row holds.
 func membershipNotFound() *unitWriteError {
 	return writeRefusal(http.StatusNotFound, reasonGovernanceMembershipNotFound, "governance assignment not found")
@@ -303,8 +321,8 @@ func membershipNotFound() *unitWriteError {
 // returns the row before and after. The direct write, the held change's approval and the dry run all
 // call it. Refusals are *unitWriteError.
 func moveMembershipQ(ctx context.Context, q store.Querier, id, unitID uuid.UUID) (from, moved types.GovernanceMembership, err error) {
-	if unitID == store.DefaultUnitID {
-		return from, moved, writeRefusal(http.StatusUnprocessableEntity, reasonGovernanceMembershipInvalid, "%s", defaultHasNoMembershipsMsg)
+	if refusal := defaultMembershipRefusal(unitID, defaultHasNoMembershipsMsg); refusal != nil {
+		return from, moved, refusal
 	}
 	if from, err = lockedMembershipQ(ctx, q, id); err != nil {
 		return from, moved, err

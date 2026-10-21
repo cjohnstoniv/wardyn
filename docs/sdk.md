@@ -760,6 +760,7 @@ start.
 | `governance_unit_cycle` | `PUT/POST /governance/units` (409): the write would make a profile, through its base, its own base. |
 | `governance_unit_depth` | `PUT/POST /governance/units` (409): the write would put a unit, or one below it, deeper than `governance_max_depth` (16 when unset). |
 | `governance_unit_default_readonly` | `PUT` and `DELETE /governance/units/{id}` on the Default unit (409), and the approval of a change held against it: the Default unit's walls are `WARDYN_DEFAULT_POLICY`; change that and redeploy. |
+| `governance_membership_default_unit` | `POST /governance/memberships`, `PUT /governance/memberships/{id}` and a `membership_move` dry run (409), and the approval of a change held before: the Default unit has no memberships, since a person no membership places runs there. |
 | `unit_not_a_context` | `POST /runs`, preflight and the policy preview (403): the unit the run asked to run in is not one of the caller's units. |
 | `workspace_unit_not_yours` | `POST /runs`, preflight and the policy preview (403): an attached workspace's unit is on no path of the caller's units; `policy` names it. |
 | `unit_membership_gone` | Revive and admin restart (409): the run's owner no longer holds a membership placing them in the run's unit ([governance writes](operations/governance-writes.md)). |

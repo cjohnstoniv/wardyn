@@ -319,6 +319,38 @@ func TestMembershipMove(t *testing.T) {
 	}
 }
 
+// TestMembershipMoveOrAddIntoDefault: adding a membership to the Default unit, moving one into it and
+// a dry run of that move are 409 governance_membership_default_unit, with the switch off and on, and
+// nothing is held or moved.
+func TestMembershipMoveOrAddIntoDefault(t *testing.T) {
+	for _, on := range []bool{false, true} { // off first: newGovEnv sets the switch for the rest of the test
+		var e *govEnv
+		if on {
+			e = newGovEnv(t)
+		} else {
+			e = newGovEnvOn(t, throwawayPGPool(t))
+		}
+		a := e.seedProfile("md-a", "a.example")
+		m := treeMember(t, e, a, types.CapabilitySubjectUser, "sub-md", 1, false)
+		def := store.DefaultUnitID.String()
+		for what, w := range map[string]*httptest.ResponseRecorder{
+			"add":     e.call(e.alice, http.MethodPost, "/api/v1/governance/memberships", `{"subject_type":"user","subject":"sub-md2","unit_id":"`+def+`","priority":1}`),
+			"move":    e.call(e.alice, http.MethodPut, "/api/v1/governance/memberships/"+m.ID.String(), `{"unit_id":"`+def+`"}`),
+			"dry run": e.call(e.alice, http.MethodPost, "/api/v1/governance/dry-run", `{"target":"membership_move","id":"`+m.ID.String()+`","unit_id":"`+def+`"}`),
+		} {
+			if w.Code != http.StatusConflict || wireReason(t, w) != reasonGovernanceMembershipDefaultUnit {
+				t.Errorf("switch %v, %s into Default = %d %s, want 409 %s", on, what, w.Code, w.Body, reasonGovernanceMembershipDefaultUnit)
+			}
+		}
+		if n := e.pendingCount(); n != 0 {
+			t.Errorf("switch %v: %d changes held, want none", on, n)
+		}
+		if unit, _ := membershipRow(t, e, m.ID); unit != a.ID {
+			t.Errorf("switch %v: the membership is in %s, want md-a", on, unit)
+		}
+	}
+}
+
 // TestGovernanceCheckEqualsResolve: for every context the check lists, its effective walls equal the
 // ceiling a run resolves with run_in naming that unit, and with none, the home one.
 func TestGovernanceCheckEqualsResolve(t *testing.T) {
