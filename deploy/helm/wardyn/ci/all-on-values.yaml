@@ -273,7 +273,7 @@ metrics:
           matchLabels:
             app.kubernetes.io/name: prometheus
 
-# Raised above the 70s default; the render must carry the operator's value.
+# Raised above the 85s default; the render must carry the operator's value.
 terminationGracePeriodSeconds: 90
 
 nodeSelector:
