@@ -500,6 +500,13 @@ describe("Run step: Schedule for later", () => {
     }
   });
 
+  it("counts a zone changed on its own as touching the picker", async () => {
+    show(AUTONOMOUS, MEMBER, ON);
+    await pick();
+    await userEvent.selectOptions(screen.getByLabelText(NR_RUN.START_ZONE), "Asia/Tokyo");
+    expect(screen.getByRole("alert")).toHaveTextContent(NR_RUN.START_MISSING);
+  });
+
   it("ties the help to every field, and the error to none while there is no error", async () => {
     show(AUTONOMOUS, MEMBER, ON);
     await pick();
