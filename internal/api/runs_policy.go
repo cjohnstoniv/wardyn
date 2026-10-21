@@ -427,8 +427,8 @@ func (s *Server) effectiveUIApps(ctx context.Context, runID uuid.UUID) ([]types.
 }
 
 // latestPolicyResolve is the run's last decodable run.policy.resolve envelope
-// and when it was written — last wins, because a re-dispatch supersedes an
-// earlier one. ok=false when there is none, and every caller fails closed on it.
+// and when it was written. dispatchRun writes one per run, behind claimDispatch,
+// so last-wins only keeps the read defined if a second ever lands. ok=false when there is none, and every caller fails closed on it.
 func latestPolicyResolve(events []types.AuditEvent) (envelope effectivePolicyDatum, at time.Time, ok bool) {
 	for _, ev := range events {
 		if canonicalAction(ev.Action) != "run.policy.resolve" || len(ev.Data) == 0 {
