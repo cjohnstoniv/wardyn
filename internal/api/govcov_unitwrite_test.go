@@ -23,6 +23,12 @@ import (
 // govCovBuildErr runs the real build for a request body and returns what it refused with.
 func govCovBuildErr(t *testing.T, s *Server, all []types.GovernanceUnit, id uuid.UUID, body string) error {
 	t.Helper()
+	return govCovBuildErrAt(t, s, all, id, body, maxUnitDepthDefault)
+}
+
+// govCovBuildErrAt is govCovBuildErr under a configured maximum unit depth.
+func govCovBuildErrAt(t *testing.T, s *Server, all []types.GovernanceUnit, id uuid.UUID, body string, limit int) error {
+	t.Helper()
 	var req governanceUnitRequest
 	if err := json.Unmarshal([]byte(body), &req); err != nil {
 		t.Fatal(err)
@@ -34,7 +40,7 @@ func govCovBuildErr(t *testing.T, s *Server, all []types.GovernanceUnit, id uuid
 	if msg != "" {
 		t.Fatalf("fixture body refused before the build: %s", msg)
 	}
-	_, _, err := s.buildGovernanceUnit("alice", id, req, all, maxUnitDepthDefault)
+	_, _, err := s.buildGovernanceUnit("alice", id, req, all, limit)
 	return err
 }
 
@@ -197,10 +203,10 @@ func TestGovCovCheckGraphWrite(t *testing.T) {
 		}
 	})
 
-	t.Run("a chain past three profiles is a 409 depth", func(t *testing.T) {
+	t.Run("a chain past the configured maximum (3) is a 409 depth", func(t *testing.T) {
 		body := `{"name":"x","parent_id":"` + govCovBase.String() + `","overlay":{}}`
-		ref := govCovAsRefusal(t, govCovBuildErr(t, s, []types.GovernanceUnit{top, mid, leaf}, govCovPID, body))
-		if ref.status != http.StatusConflict || ref.reason != reasonGovernanceUnitDepth || !strings.Contains(ref.msg, "more than 3 profiles deep") {
+		ref := govCovAsRefusal(t, govCovBuildErrAt(t, s, []types.GovernanceUnit{top, mid, leaf}, govCovPID, body, 3))
+		if ref.status != http.StatusConflict || ref.reason != reasonGovernanceUnitDepth || !strings.Contains(ref.msg, "more than 3 units deep") {
 			t.Errorf("refusal = %+v", ref)
 		}
 	})

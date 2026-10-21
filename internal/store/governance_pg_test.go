@@ -177,7 +177,7 @@ func TestPG_GovernanceUnit_DeleteRestrictedWhileAssigned(t *testing.T) {
 }
 
 // TestPG_GovernanceMembership_NaturalKeyUpsert: the key is (unit_id, subject_type, subject)
-// (migration 0208). A subject joins a second unit as a second row; re-posting the same unit and
+// (unit-tree migration). A subject joins a second unit as a second row; re-posting the same unit and
 // subject UPDATES its one row (priority and home) and returns the EXISTING row's id, so the
 // console's DELETE target names a real row.
 func TestPG_GovernanceMembership_NaturalKeyUpsert(t *testing.T) {

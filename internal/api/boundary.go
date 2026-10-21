@@ -292,6 +292,9 @@ func (s *Server) boundaryDryRun(ctx context.Context, b types.Boundary) (boundary
 		if p.Err != nil || p.Resolved == nil {
 			continue // a profile that does not compose resolves to no ceiling at all
 		}
+		if p.Row.Kind == types.UnitKindDefault {
+			continue // its walls are the deployment default, reported above
+		}
 		changes, err := meet(p.Resolved.Ceiling, p.Resolved.Limits)
 		if err != nil {
 			return boundaryReport{}, err

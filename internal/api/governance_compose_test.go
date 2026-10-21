@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -43,7 +45,7 @@ func rawProfileReadsOutsideTheResolver(t *testing.T, dir string) []string {
 	var bad []string
 	for _, f := range files {
 		base := filepath.Base(f)
-		if strings.HasSuffix(base, "_test.go") || base == "governance_compose.go" {
+		if strings.HasSuffix(base, "_test.go") || base == "governance_compose.go" || base == "governance_context.go" {
 			continue
 		}
 		src, err := os.ReadFile(f)
@@ -61,7 +63,7 @@ func rawProfileReadsOutsideTheResolver(t *testing.T, dir string) []string {
 // raw row is the fail-open this design exists to prevent, and it passes every create-path test.
 func TestEveryProfileAuthorityReadGoesThroughTheResolver(t *testing.T) {
 	if bad := rawProfileReadsOutsideTheResolver(t, "."); len(bad) > 0 {
-		t.Errorf("these files read governance profiles without the resolver (governance_compose.go): %v", bad)
+		t.Errorf("these files read governance profiles without the resolver (governance_compose.go, governance_context.go): %v", bad)
 	}
 }
 
@@ -173,11 +175,16 @@ func TestResolverRefusesAChainThatIsNotACleanLine(t *testing.T) {
 	l3 := mk("l3", &l2)
 	orphan := mk("orphan", &root)
 	noOverlay := types.GovernanceUnit{ID: uuid.New(), Name: "bad", ParentID: &root.ID}
+	pastTheCap := []types.GovernanceUnit{root} // root first, reversed below to leaf first
+	for len(pastTheCap) <= store.MaxUnitDepthCap {
+		pastTheCap = append(pastTheCap, mk(fmt.Sprintf("p%d", len(pastTheCap)), &pastTheCap[len(pastTheCap)-1]))
+	}
+	slices.Reverse(pastTheCap)
 	for name, chain := range map[string][]types.GovernanceUnit{
 		"empty":                  nil,
 		"a loop":                 {a, b, a},
 		"a self loop":            {{ID: a.ID, Name: "a", ParentID: &a.ID, Overlay: &types.CeilingOverlay{}}},
-		"depth four":             {l3, l2, l1, root},
+		"past the stored cap":    pastTheCap,
 		"cut short by the bound": {l3, l2, l1},
 		"a missing base":         {orphan},
 		"a base but no overlay":  {noOverlay, root},
@@ -189,6 +196,9 @@ func TestResolverRefusesAChainThatIsNotACleanLine(t *testing.T) {
 	}
 	if _, err := srv.composeChain([]types.GovernanceUnit{l2, l1, root}); err != nil {
 		t.Errorf("a clean three-deep chain refused: %v", err)
+	}
+	if _, err := srv.composeChain([]types.GovernanceUnit{l3, l2, l1, root}); err != nil {
+		t.Errorf("a clean four-deep chain refused (the configured limit is the caller's): %v", err)
 	}
 }
 

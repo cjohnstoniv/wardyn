@@ -337,7 +337,7 @@ type GovernanceUnit struct {
 	// OverlayLimits narrows the base's limits. Only with an Overlay; nil is no narrowing.
 	OverlayLimits *LimitsOverlay `json:"overlay_limits,omitempty"`
 	// Kind is UnitKindUnit, or UnitKindDefault for the one Default unit, whose walls are the
-	// deployment default (migration 0208). Mode is UnitModeOwnWalls or UnitModePassThrough (its
+	// deployment default (unit-tree migration). Mode is UnitModeOwnWalls or UnitModePassThrough (its
 	// parent's walls exactly). Depth is the unit's place from the top, Default and every
 	// parent-less unit being 1; the store keeps it, and a write never sets it.
 	Kind  string `json:"kind,omitempty"`
@@ -345,7 +345,7 @@ type GovernanceUnit struct {
 	Depth int    `json:"depth,omitempty"`
 }
 
-// The unit kinds and modes (migration 0208).
+// The unit kinds and modes (unit-tree migration).
 const (
 	UnitKindUnit        = "unit"
 	UnitKindDefault     = "default"
@@ -375,7 +375,7 @@ type GovernanceMembership struct {
 	CreatedBy   string                `json:"created_by,omitempty"`
 	// Home marks the context a run uses when the person holds several and names none.
 	Home bool `json:"home,omitempty"`
-	// Legacy marks a membership that existed before the tree (migration 0208): per person only the
+	// Legacy marks a membership that existed before the tree (unit-tree migration): per person only the
 	// precedence winner among legacy rows is a context; the rest are dormant for that person.
 	Legacy bool `json:"legacy,omitempty"`
 }

@@ -48,6 +48,10 @@ func (s *govCrudStore) ListGovernanceUnits(context.Context) ([]types.GovernanceU
 	return s.profiles, s.listProfilesErr
 }
 
+func (s *govCrudStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return types.SiteConfig{}, nil
+}
+
 func (s *govCrudStore) ListGovernanceMemberships(context.Context) ([]types.GovernanceMembership, error) {
 	return s.assignments, s.listAssignmentsErr
 }

@@ -167,9 +167,8 @@ func contextRunRefusal(err error) *runRefusal {
 	}
 	var notYours *errWorkspaceUnitNotYours
 	if errors.As(err, &notYours) {
-		ref := policyref.Layered(policyref.Project(policyref.SourceUnit, notYours.name, notYours.contact))
 		return &runRefusal{status: http.StatusForbidden, body: errorBody{Error: fmt.Sprintf(workspaceUnitNotYoursFm, notYours.name),
-			Reason: reasonWorkspaceUnitNotYours, Policy: ref}}
+			Reason: reasonWorkspaceUnitNotYours, Policy: policyref.Layered(policyref.Project(policyref.SourceUnit, notYours.name, notYours.contact))}}
 	}
 	return nil
 }
@@ -274,6 +273,17 @@ func (s *Server) selectContext(ctx context.Context, q contextQuery, choice conte
 				return contextPick{}, "", err
 			}
 			if choiceErr = err; err == nil && sound {
+				if choice.RunIn == uuid.Nil && !pick.row.Membership.Home {
+					// The lone candidate: a hidden group home row would win the home step and move the
+					// run, so any group home row anywhere leaves the pick unsound (the stricter answer).
+					hidden, err := s.groupHomeExists(ctx)
+					if err != nil {
+						return contextPick{}, "", err
+					}
+					if hidden {
+						return pick, "", nil
+					}
+				}
 				return pick, types.CapabilitySubjectUser, nil
 			}
 			return pick, "", nil
@@ -282,6 +292,20 @@ func (s *Server) selectContext(ctx context.Context, q contextQuery, choice conte
 		return contextPick{}, err
 	}
 	return pick, choiceErr
+}
+
+// groupHomeExists is whether any group membership row, live or dormant, is a home row.
+func (s *Server) groupHomeExists(ctx context.Context) (bool, error) {
+	rows, err := s.cfg.Store.ListGovernanceMemberships(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, m := range rows {
+		if m.SubjectType == types.CapabilitySubjectGroup && m.Home {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // activeMemberships is the rows that are contexts (§4.1 step 2): every legacy=false row, plus the
@@ -408,6 +432,16 @@ func onPath(byID map[uuid.UUID]types.GovernanceUnit, id, ancestor uuid.UUID) boo
 // cannot be read is an error, never the default, so a depth check fails closed.
 func (s *Server) unitDepthLimit(ctx context.Context) (int, error) {
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
+	return depthLimitOf(sc, err)
+}
+
+// unitDepthLimitQ is unitDepthLimit read on q, for a caller inside a transaction.
+func unitDepthLimitQ(ctx context.Context, q store.Querier) (int, error) {
+	sc, err := store.GetSiteConfigQ(ctx, q)
+	return depthLimitOf(sc, err)
+}
+
+func depthLimitOf(sc types.SiteConfig, err error) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("api: read the maximum governance unit depth: %w", err)
 	}
@@ -441,11 +475,12 @@ func validGovernanceMaxDepth(n int) error {
 	return nil
 }
 
-// admitGovernanceMaxDepth carries governance_max_depth forward when the body does not name it, and
-// refuses a value below the deepest unit path that exists, naming that path. False when it answered.
-func (s *Server) admitGovernanceMaxDepth(w http.ResponseWriter, r *http.Request, cfg *types.SiteConfig, existing types.SiteConfig, present map[string]bool) bool {
-	if !present["governance_max_depth"] {
-		cfg.GovernanceMaxDepth = existing.GovernanceMaxDepth
+// admitGovernanceMaxDepth refuses a governance_max_depth below the deepest unit path that exists,
+// naming that path (a body that does not name it was carried forward, siteConfigFieldsAfter066).
+// False when it answered. An unchanged value needs no read: every unit write is already held to it.
+func (s *Server) admitGovernanceMaxDepth(w http.ResponseWriter, r *http.Request, cfg *types.SiteConfig, existing types.SiteConfig) bool {
+	if cfg.GovernanceMaxDepth == existing.GovernanceMaxDepth {
+		return true
 	}
 	limit := cfg.GovernanceMaxDepth
 	if limit == 0 {
@@ -469,9 +504,10 @@ func (s *Server) admitGovernanceMaxDepth(w http.ResponseWriter, r *http.Request,
 // membership placing them in p, the unit the run was launched in (B4): a membership of p or of a
 // unit above it. The owner's own session re-resolves their memberships in full. Anyone else knows
 // the owner only by the sub and the user type stamped on the run, so the check passes while a
-// membership row on p's path could still match the owner: a user row naming their sub (or an email,
-// which the run does not record), a row for their stamped type, an `all` row, or any group row
-// (a restart or revive of a group-keyed owner's run keeps today's reach). The refusal names the arm
+// membership row on p's path could still match the owner: a user row naming their sub, a row for
+// their stamped type, an `all` row, or any group row (a restart or revive of a group-keyed owner's
+// run keeps today's reach). An email-keyed user row never counts here: the run does not record the
+// owner's email, so such a row could only admit a guess. The refusal names the arm
 // taken (owner_session or row_can_match), which a revive audits.
 func (s *Server) ownerMembershipRefusal(ctx context.Context, run types.AgentRun, p *ResolvedUnit) (*ownerRefusal, error) {
 	if p == nil {
@@ -517,11 +553,12 @@ func (s *Server) ownerMembershipRefusal(ctx context.Context, run types.AgentRun,
 		msg: fmt.Sprintf("the run's owner is no longer a member of %q, the unit this run was launched in; start a new run", p.Name)}, nil
 }
 
-// membershipCanMatchOwner is whether row could match the run's owner, known only by the run row.
+// membershipCanMatchOwner is whether row could match the run's owner, known only by the run row. A
+// user row matches only the stamped sub: an email row never admits the owner here.
 func membershipCanMatchOwner(m types.GovernanceMembership, run types.AgentRun) bool {
 	switch m.SubjectType {
 	case types.CapabilitySubjectUser:
-		return m.Subject == strings.ToLower(run.CreatedBy) || strings.Contains(m.Subject, "@")
+		return m.Subject == types.CanonicalUserSubject(run.CreatedBy)
 	case types.CapabilitySubjectUserType:
 		return run.UserType != "" && m.Subject == run.UserType
 	default: // all, and a group the run does not record

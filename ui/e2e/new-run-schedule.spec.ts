@@ -130,13 +130,13 @@ async function pickStart(page: Page, date: string, time: string) {
 }
 
 test.describe("New Run: Schedule for later", () => {
-  test("with the switch off or absent, Schedule for later stays Coming soon and opens nothing", async ({ page }) => {
+  test("with the switch off or absent, there is no Schedule for later: Run now is said as a sentence", async ({ page }) => {
     for (const off of [false, undefined]) {
       await stub(page, off);
       await toRunStep(page);
-      const later = page.getByRole("radio", { name: NR_RUN.TIMING_LATER });
-      await expect(later).toBeDisabled();
-      await expect(page.getByText(NR_SHARED.COMING_SOON)).toBeVisible();
+      await expect(page.getByRole("radio", { name: NR_RUN.TIMING_LATER })).toHaveCount(0);
+      await expect(page.getByText(NR_RUN.TIMING_NOW, { exact: true })).toBeVisible();
+      await expect(page.getByText(NR_SHARED.COMING_SOON)).toHaveCount(0);
       await expect(page.getByLabel(NR_RUN.START_DATE, { exact: true })).toHaveCount(0);
       await page.unrouteAll({ behavior: "ignoreErrors" });
     }
