@@ -728,7 +728,10 @@ func (s *Server) stepDriveEligibility(f *runFold, rec *foldRecorder) bool {
 			return !driveDenied(authz.Deny(authz.ReasonDriveNotInPool, "runs.drive", msg), msg).write(s, f.w, f.r)
 		}
 	}
-	if f.mode == foldPreview || !slices.ContainsFunc(f.drives, func(d runDrive) bool { return d.resolved.Drive.AltRunnerID != nil }) {
+	if f.mode == foldPreview {
+		return true
+	}
+	if !slices.ContainsFunc(f.drives, func(d runDrive) bool { return d.resolved.Drive.AltRunnerID != nil }) {
 		return true
 	}
 	var ok bool

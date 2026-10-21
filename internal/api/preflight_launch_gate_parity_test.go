@@ -73,6 +73,7 @@ var preflightInlinedWrappers = map[string]string{
 	"denyUserWorkspaceProviders":  "workspace_providers.go",
 	"seedAndAdmitWorkspace":       "runs.go",
 	"seedRequestDrives":           "run_drives.go",
+	"driveMountsAt":               "run_drives.go",
 	"enforceRunModelProvider":     "run_model_provider.go",
 	"enforceChosenModelProvider":  "run_model_provider.go",
 	"authorizePreviewRequest":     "policy_preview.go",
