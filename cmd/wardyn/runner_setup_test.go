@@ -736,3 +736,56 @@ func TestRunnerSetupRenewsItsOwnSignIn(t *testing.T) {
 		t.Errorf("%d refreshes and claims %v, want one refresh and one claim", refreshes, r.called("POST /api/v1/me/runners/"))
 	}
 }
+
+// The claim goes out on the renewed access token of the session the command signed in, never on the first
+// token, the registration token or another session's: the same person, the same role, one session. The fake
+// revokes a token a refresh replaces, so what each request was sent on is read as it arrives.
+func TestRunnerSetupClaimBearerIsTheSignedInSession(t *testing.T) {
+	r, f, _ := signInRig(t)
+	advance := skewClock(t)
+	r.afterMint = func() { advance(intoMargin) }
+	type seen struct {
+		bearer string
+		tok    *fakeToken // nil when the fake knows no live session behind the bearer
+		sess   *fakeSession
+	}
+	var mint, claim *seen
+	r.authorize = func(req *http.Request) bool {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		tok, sess := f.owner(req)
+		s := &seen{strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer "), tok, sess}
+		switch {
+		case strings.HasSuffix(req.URL.Path, "/runners/tokens"):
+			mint = s
+		case strings.HasSuffix(req.URL.Path, "/claim"):
+			claim = s
+		}
+		return tok != nil
+	}
+	out, err := r.run("--runnerd", r.runnerdPath)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if mint == nil || mint.tok == nil || claim == nil {
+		t.Fatalf("mint %+v and claim %+v were not both sent by a signed-in session (err %v)\n%s", mint, claim, err, out)
+	}
+	if claim.bearer == mint.bearer {
+		t.Errorf("the claim went out on the access token the mint used, not a renewed one")
+	}
+	if claim.bearer == setupTestToken {
+		t.Errorf("the claim went out on the registration token")
+	}
+	if claim.tok == nil {
+		t.Fatalf("the claim's bearer belongs to no live sign-in session (err %v)", err)
+	}
+	if len(f.sessions) != 1 || claim.sess != f.sessions[mint.tok.session] || claim.tok.session != mint.tok.session {
+		t.Errorf("the claim's session %v is not the one the sign-in made, %v (of %d sessions)", claim.tok.session, mint.tok.session, len(f.sessions))
+	}
+	wantP, wantR := fakeIdentity(mint.tok)
+	if gotP, gotR := fakeIdentity(claim.tok); gotP != wantP || gotR != wantR || claim.tok.kind != mint.tok.kind {
+		t.Errorf("the claim acts as %s/%s (%s), the sign-in as %s/%s (%s)", gotP, gotR, claim.tok.kind, wantP, wantR, mint.tok.kind)
+	}
+	if err != nil {
+		t.Errorf("setup: %v\n%s", err, out)
+	}
+}

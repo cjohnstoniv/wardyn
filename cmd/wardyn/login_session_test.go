@@ -349,11 +349,17 @@ func (f *signInOrg) me(w http.ResponseWriter, r *http.Request) {
 		f.refuseBearer(w, r)
 		return
 	}
-	role := "user"
+	principal, role := fakeIdentity(tok)
+	writeFake(w, http.StatusOK, map[string]any{"principal": principal, "email": fakeEmail, "role": role})
+}
+
+// fakeIdentity is who a sign-in token acts as: the one person every fake session belongs to, with the role
+// its kind carries (the CLI admin token is the step-up, the CLI access token is a user).
+func fakeIdentity(tok *fakeToken) (principal, role string) {
 	if tok.kind == types.APITokenKindCLIAdmin {
-		role = "admin"
+		return "sub-1", "admin"
 	}
-	writeFake(w, http.StatusOK, map[string]any{"principal": "sub-1", "email": fakeEmail, "role": role})
+	return "sub-1", "user"
 }
 
 func (f *signInOrg) signOut(w http.ResponseWriter, r *http.Request) {
