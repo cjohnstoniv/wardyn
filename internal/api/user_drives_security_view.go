@@ -34,6 +34,11 @@ func securityAdminDrive(d types.UserDrive) types.UserDrive {
 
 // securityAdminGrant copies the fields of an allocation a security admin may read.
 func securityAdminGrant(g types.UserDriveGrant) types.UserDriveGrant {
+	var writable *bool
+	if g.WritableOverride != nil {
+		v := *g.WritableOverride
+		writable = &v
+	}
 	return types.UserDriveGrant{
 		ID:               g.ID,
 		SubjectType:      g.SubjectType,
@@ -41,7 +46,7 @@ func securityAdminGrant(g types.UserDriveGrant) types.UserDriveGrant {
 		DriveID:          g.DriveID,
 		Priority:         g.Priority,
 		SizeMiBOverride:  g.SizeMiBOverride,
-		WritableOverride: g.WritableOverride,
+		WritableOverride: writable,
 		HomeOverride:     g.HomeOverride,
 		Enabled:          g.Enabled,
 		CreatedAt:        g.CreatedAt,

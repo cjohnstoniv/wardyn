@@ -63,7 +63,7 @@ vi.mock("../../../lib/api/workspaces", () => ({
 vi.mock("../../../lib/api/policies", () => ({
   policies: { listPolicies: () => Promise.resolve([]), createPolicy: vi.fn() },
 }));
-// The Workspaces step's user-drives card summarises GET /drives (SUPER-only,
+// The Workspaces step's user-drives card summarises GET /drives (the card is SUPER-only,
 // and this suite runs on the operator-context's fail-open default).
 const getDrivesMock = vi.fn();
 vi.mock("../../../lib/api/drives", () => ({

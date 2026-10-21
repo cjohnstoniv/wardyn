@@ -627,8 +627,8 @@ func applyUserDriveEnv(sandboxEnv map[string]string, drives []types.DriveMount) 
 // is the whole claim: masking the Target while the payload still spelled
 // <host_root>/<home> moved the operator's filesystem layout one field over,
 // inside the same row GET /audit?run_id= hands the run's creator whole. So a
-// share's `object` is "<drive>/<home>" as well, and the operator reads the root
-// from GET /drives — operator-only, and it already shows it — rather than from a
+// share's `object` is "<drive>/<home>" as well, and a super admin reads the root
+// from GET /drives — which withholds it from a security admin — rather than from a
 // member-readable audit row. A MANAGED object is untouched on both fields: its
 // name is Wardyn's own and discloses nothing about the host. `drive` is the
 // per-person HOME SEGMENT — not the drive object's name, which is what the same
@@ -680,8 +680,8 @@ func (s *Server) auditDriveMount(ctx context.Context, runID uuid.UUID, drives []
 // share's target is "<drive>/<home>" — which drive, whose directory — and the
 // absolute path is on the row NOWHERE, `object` included (auditDriveMount calls
 // this for that field too): a payload the same reader can fetch is not a place
-// to keep it. The operator reads the root from GET /drives, which is
-// operator-only and already carries it.
+// to keep it. A super admin reads the root from GET /drives, which
+// withholds it from a security admin.
 //
 // A mount that carries no DriveName (an older control plane, a hand-written
 // -spec) falls back to the home alone rather than to the object: the fallback
