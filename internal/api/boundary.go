@@ -86,7 +86,7 @@ func validateBoundarySpec(sp types.BoundarySpec, limits types.BoundaryLimits) er
 	if err := validateAllowedDomainsCount(spec.AllowedDomains); err != nil {
 		return err
 	}
-	return validatePolicySpec(spec)
+	return validateAuthoredPolicySpec(spec)
 }
 
 // handleGetBoundary returns the boundary, with the ETag PUT's If-Match is judged against.
