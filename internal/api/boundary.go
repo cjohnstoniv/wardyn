@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -226,11 +227,26 @@ type boundaryReportAssign struct {
 	Changes     []boundaryChange `json:"changes"`
 }
 
-// handleBoundaryDryRun reports what the drafted boundary (the body's spec and limits, judged in
-// hard_limits whatever its mode) would narrow. It writes nothing.
+// handleBoundaryDryRun is POST /governance/dry-run. A body whose target is boundary, or that names
+// none, reports what the drafted boundary (the body's spec and limits, judged in hard_limits whatever
+// its mode) would narrow; any other target is governance_dry_run.go's. It writes nothing.
 func (s *Server) handleBoundaryDryRun(w http.ResponseWriter, r *http.Request) {
-	var body types.BoundaryWrite
-	if !decodeStrict(w, r, &body) {
+	raw, ok := readCappedBody(w, r, maxJSONBody, "request body")
+	if !ok {
+		return
+	}
+	var head dryRunTarget
+	_ = json.Unmarshal(raw, &head) // the strict decode of its target refuses a body that does not parse
+	if head.Target != "" && head.Target != dryRunTargetBoundary {
+		s.treeDryRun(w, r, head.Target, raw)
+		return
+	}
+	var body struct {
+		dryRunTarget
+		types.BoundaryWrite
+	}
+	if msg := strictJSON(raw, &body); msg != "" {
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, msg)
 		return
 	}
 	if err := validateBoundarySpec(body.Spec, body.Limits); err != nil {
@@ -242,7 +258,10 @@ func (s *Server) handleBoundaryDryRun(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "Wardyn boundary dry run", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, report)
+	writeJSON(w, http.StatusOK, struct {
+		Target string `json:"target"`
+		boundaryReport
+	}{dryRunTargetBoundary, report})
 }
 
 // boundaryDryRun meets the deployment default, each profile as it composes, each stored policy and so
