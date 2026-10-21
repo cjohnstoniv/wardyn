@@ -60,7 +60,7 @@ func TestLeaseRecoveryTickTakesBackALeaseThatLapsedUnclaimed(t *testing.T) {
 func TestLeaseRecoveryLiveTakesBackALeaseThatLapsedUnclaimed(t *testing.T) {
 	leases := newLeaseCovLeases()
 	srv, alice, _ := leaseRecoveryWriter(t, leases)
-	alice.h.lease.verified.Store(0)
+	alice.h.lease.verified.Store(nil)
 	leases.advance(attachLeaseTTL + time.Second)
 
 	if alice.h.lease.live() {
