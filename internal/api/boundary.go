@@ -60,6 +60,7 @@ func validateBoundary(b *types.BoundaryWrite) error {
 
 // boundaryHardLimitsGated refuses a write into hard_limits: the boundary cannot be switched on until
 // it bounds every brokered credential path a run is given (#3238).
+// Ungating it must update docs/sdk.md's line that nothing locks a knob yet.
 func boundaryHardLimitsGated(b types.BoundaryWrite) *unitWriteError {
 	if b.Mode != types.BoundaryHardLimits {
 		return nil

@@ -29,7 +29,7 @@ an operator follows to turn one on and run the queue.
 
 - Units form a tree under one Default unit, whose walls are the deployment default. A unit built on the deployment default is Default's child; a standalone unit is top-level.
 - A membership is keyed by unit, subject type and subject, so a person can be a member of several units.
-  - Re-posting `POST /governance/memberships` for the same unit and subject updates its `priority` and `home`; it never moves the subject to another unit (see move below).
+  - Re-posting `POST /governance/memberships` for the same unit and subject updates its `priority` and `home`; it never moves the subject to another unit.
   - `home: true` marks the unit a person runs in when a run names none.
   - A held membership change's `target_key` is `<unit_id>:<subject_type>:<subject>`. A membership change held before the upgrade reads as `stale` at approval: propose it again.
 - A unit with `mode` `pass_through` has its parent's walls exactly. It sends no `overlay` or `overlay_limits`, and it names its parent in `parent_id` (`400` `governance_unit_request_invalid` otherwise).
@@ -40,8 +40,8 @@ an operator follows to turn one on and run the queue.
 - A revive or admin restart is refused `409` `unit_membership_gone` once the owner's membership of the run's unit is gone (audit `arm` `owner_session`: the owner's own revive, checked against their memberships). Anyone else's passes while that unit, or one above it, has a membership that could match the owner: their sub, an email, their user type, `all` or any group (`arm` `row_can_match`).
 - The Default unit is read-only (`PUT` and `DELETE` are `409` `governance_unit_default_readonly`; its walls are `WARDYN_DEFAULT_POLICY`) and memberless: adding or moving a membership into it is `409` `governance_membership_default_unit`, before any hold.
 - `PUT /governance/memberships/{id}` `{"unit_id"}` moves a membership, keeping its id, `priority`, `home` and `legacy` (audit `governance.membership.write`, with `from_unit_id`). An unknown unit is `404` `governance_unit_not_found`; one the subject is in, `409` `governance_membership_invalid`.
-- `POST /governance/memberships/{id}/promote` makes a legacy membership a context (`409` `governance_membership_invalid` if it is one); audit `governance.membership.promote`. Move and promote follow the switch below, held as op `move` and `promote`.
-- Deleting a legacy membership can let a lower legacy one become someone's context. `activates: [{unit_id, unit_name}]` lists those units (over legacy memberships; a group one matches anyone) in the held change's diff, or with the switch off in the `governance.membership.delete` row.
+- `POST /governance/memberships/{id}/promote` makes a legacy membership a context (already one: `409` `governance_membership_invalid`); audit `governance.membership.promote`. Both follow the switch below, held as op `move` and `promote`.
+- Deleting a legacy membership can let a lower legacy one become someone's context. `activates: [{unit_id, unit_name}]` lists those units (a group one matches anyone) in the held change's diff, or with the switch off in the `governance.membership.delete` row.
 
 **Optional: four-eyes on governance writes.**
 
@@ -99,7 +99,8 @@ an operator follows to turn one on and run the queue.
     - A name or description edit alone applies directly.
   - *Role mapping* (`POST`/`DELETE /access/mappings`): the posture-flip acknowledgement is judged at proposal and carried in the payload with the before and after it acknowledged, and judged again when the change is applied.
     - If applying it would now do something else to unmatched people, the acknowledged effect is stale and the approval is `409` `governance_change_stale`.
-    - The lockout guard runs at apply against the **approver**'s claim snapshot, never the proposer's (who may have been demoted since; the second human guards against them).
+    - The lockout guard runs when the change is applied, against the claim snapshot of the **approver**;
+      - the proposer's own facts are not consulted (they may have been demoted since, and the second human is the safeguard against them).
     - The `admin-token` is exempt from the guard as it is on a direct write.
     - The tokens a demotion strands are revoked after the approval commits, as after a direct write.
   - *Service identity* (`POST /service-identities`, and a `PATCH /service-identities/{name}` that changes the sponsor): the target is the identity's name.
