@@ -449,6 +449,13 @@ func TestProviderSignInClaudeCapture(t *testing.T) {
 	t.Run("the sign-in sandbox goes with the capture", func(t *testing.T) {
 		srv, st, audit, _, runID := launch(t)
 		srv.signInCaptureKillGrace = 0
+		// The token is copied from a live sandbox (attach needs RUNNING), so let
+		// the detached launch finish first. Capturing mid-launch lets the kill
+		// read PENDING or STARTING and lose its CAS to the launch moving on.
+		srv.WaitBackground()
+		if got, err := st.GetRun(context.Background(), runID); err != nil || got.State != types.RunRunning {
+			t.Fatalf("sign-in run before the capture = %s (%v), want RUNNING", got.State, err)
+		}
 		if code, body := capture(t, srv, member, p.ID, runID, token); code != http.StatusNoContent {
 			t.Fatalf("capture = %d %s, want 204", code, body)
 		}
