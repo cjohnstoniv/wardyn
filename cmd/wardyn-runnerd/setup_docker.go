@@ -43,6 +43,25 @@ func inspectSetupEngine(ctx context.Context, want relayPair) (dockerEngine, erro
 	return admittedEngine(ctx, cli, setupEngineUnreachable, want)
 }
 
+// inspectSetupNetwork is whether the proxy bridge exists, for doctor, which never creates it.
+func inspectSetupNetwork(ctx context.Context, name string) (bool, error) {
+	cli, err := client.New(client.FromEnv)
+	if err != nil {
+		return false, err
+	}
+	defer cli.Close()
+	ctx, cancel := context.WithTimeout(ctx, engineCheckBound)
+	defer cancel()
+	switch _, err := cli.NetworkInspect(ctx, name, client.NetworkInspectOptions{}); {
+	case err == nil:
+		return true, nil
+	case errdefs.IsNotFound(err):
+		return false, nil
+	default:
+		return false, err
+	}
+}
+
 // resolveProxyImage is where the proxy image can be had from without pulling it: this engine ("local"), else
 // the registry, which the engine asks for the manifest.
 func resolveProxyImage(ctx context.Context, ref string) (string, error) {
