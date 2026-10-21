@@ -63,8 +63,8 @@ func TestRefusal_WardynDenyNamesTheLayer(t *testing.T) {
 		name, host, reason, layer, layerName string
 		ref                                  *policyref.Ref
 	}{
-		{"profile explicit deny", "bad.test", "policy_denied", "profile", "Team A", teamA},
-		{"profile default deny", "other.test", "default_deny", "profile", "Team A", teamA},
+		{"unit explicit deny", "bad.test", "policy_denied", "unit", "Team A", teamA},
+		{"unit default deny", "other.test", "default_deny", "unit", "Team A", teamA},
 		{"deployment", "bad.test", "policy_denied", "deployment", "", deploymentRef},
 		{"unattributed run", "bad.test", "policy_denied", "", "", nil},
 	} {
@@ -103,7 +103,7 @@ func TestRefusal_GuardRefusalNamesNoLayer(t *testing.T) {
 	})
 	t.Run("desktop VM relay", func(t *testing.T) {
 		buf := &bytes.Buffer{}
-		s := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8), layer: "profile", layerName: "Team A"}
+		s := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8), layer: "unit", layerName: "Team A"}
 		s.emit(decisionLog(egress.Request{Host: "h.test"}, egress.Deny, "vmnet:udp"))
 		r := refusalOf(t, buf, "vmnet:udp")
 		wantRefusal(t, r, egress.RefusedByWardyn, "vmnet")
@@ -293,7 +293,7 @@ func TestRefusal_TunnelEnded(t *testing.T) {
 // Rows the proxy does not classify carry no refusal at all; "absent" is not "unknown".
 func TestRefusal_UnclassifiedDenyCarriesNone(t *testing.T) {
 	buf := &bytes.Buffer{}
-	s := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8), layer: "profile", layerName: "Team A"}
+	s := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8), layer: "unit", layerName: "Team A"}
 	for _, rule := range []string{"policy:evaluator-error", "builtin:gateway-vet-failed", "brokered:ado:upstream-refused", "scan:blocked"} {
 		s.emit(decisionLog(egress.Request{Host: "h.test"}, egress.Deny, rule))
 	}
@@ -330,7 +330,7 @@ func TestRefusal_NoRequestContent(t *testing.T) {
 		{By: "wardyn", Reason: "denied", Layer: "member"},
 		{By: "wardyn", Reason: "denied", LayerName: "a\nb"},
 		{By: "wardyn", Reason: "denied", LayerName: "Team\u202eA"},
-		{By: "outside", Reason: "connection_reset", Layer: "profile"},
+		{By: "outside", Reason: "connection_reset", Layer: "unit"},
 		{By: "unknown", Reason: "timed_out", LayerName: "Team A"},
 	} {
 		bad.AuditFields(fields)
