@@ -254,6 +254,10 @@ Bind `disabled` the instant the action fires; reveal the spinner later.
 - **Canonical strings are the app's strings.** `copy.ts` and `cc-meta.ts` own the shared
   vocabulary so a chip and the sentence beside it cannot disagree. A copy change is
   called out as one — tests and demo narration read them.
+- **A waiting decision reads as the boards draw it.** On the Runs list, a row the viewer can clear says
+  "1 decision needs you" in the User view and "Needs you" with its "1 held" count in the Admin view; a row
+  only an admin can clear says "Waiting for an admin". "Needs you" is not a run state, so the run-state
+  badge and the approval badge keep their own words (`wardyn/copy/runs-landing.ts`).
 - **A bulk action names what it skipped.** Approving observed egress skips a model provider's own
   hosts; the toast reads "Approved 3 hosts. Skipped 1 model-provider host: <host>" (`EGRESS.PROMOTED_SKIPPED`
   in the copy module) instead of reporting success for the whole click.

@@ -10,7 +10,7 @@
 
 export const RUNS_SECTION = {
   NEEDS: "Needs you",
-  NEEDS_ADMIN: "Needs a decision",
+  NEEDS_ADMIN: "Needs you",
   // H-3, Admin view only: owners' sign-ins and lost runs — no admin can act.
   OWNER: "Waiting on the owner",
   RUNNING: "Running",
@@ -116,8 +116,11 @@ export const RUNS_SAVE_VIEW_CANCEL = "Cancel";
 // runs-model.ts's rowPresentation — this table only carries what D2 adds or
 // changes.
 export const RUNS_ROW_WORD = {
-  NEEDS_APPROVAL: "Needs your approval",
-  NEEDS_DECISION: "Needs a decision",
+  /** The user-view row for a decision this viewer can make (the M8 board's wording). */
+  DECISIONS_NEED_YOU: (n: number) => (n === 1 ? "1 decision needs you" : `${n} decisions need you`),
+  /** The Admin-view row word and the "N held" count beside it (the R6 board). */
+  NEEDS_YOU: "Needs you",
+  HELD: (n: number) => `${n} held`,
   WAITING_FOR_ADMIN: "Waiting for an admin",
   /** #2963 (M8-Banner-A runs list): the agent asked a person to take over. */
   NEEDS_TAKEOVER: "Needs you to take over",
