@@ -12,11 +12,12 @@
 // The bounds (which modes a class may take) are lib/types/credential-delivery.ts's CLASS_MODES, pinned to
 // the server's table by a wire test. A mode outside them is a DISABLED option with the bound's reason, never
 // an absent one; the server's 400 stays the gate. An absent class means Don't allow, so the editor writes
-// only the classes that are not set to it.
+// only the classes that are not set to it. A mode the GET's buildable_modes does not list for a class is disabled
+// the same way ("Not available yet"): the server refuses to store it, so it is not offered.
 import * as React from "react";
 import { AlertTriangle } from "lucide-react";
 import { HttpError, PendingChangeError } from "../../../lib/api/core";
-import { credentialDelivery } from "../../../lib/api/credential-delivery";
+import { credentialDelivery, type CredentialDeliverySnapshot } from "../../../lib/api/credential-delivery";
 import { getErrorMessage } from "../../../lib/format";
 import { DELIVERY } from "../../../lib/governance-copy";
 import { ACCESS_STATE } from "../../../lib/people-access-copy";
@@ -134,6 +135,8 @@ export function RunnerCredentials({ onSubmitted }: { onSubmitted?: () => void })
   const [status, setStatus] = React.useState<"loading" | "ready" | "error">("loading");
   const [stored, setStored] = React.useState<DeliveryPolicy>({ classes: {} });
   const [draft, setDraft] = React.useState<Draft>(() => draftFrom({ classes: {} }));
+  // GET's buildable_modes: the modes the server can build per class. Null on a server that does not send it.
+  const [buildable, setBuildable] = React.useState<CredentialDeliverySnapshot["buildable_modes"] | null>(null);
   const [runnersOn, setRunnersOn] = React.useState<boolean | null>(null);
   const [outcome, setOutcome] = React.useState<{ kind: "saved" | "submitted" } | { kind: "refused"; message: string } | null>(null);
   const [busy, setBusy] = React.useState(false);
@@ -152,6 +155,7 @@ export function RunnerCredentials({ onSubmitted }: { onSubmitted?: () => void })
     Promise.all([credentialDelivery.get(), credentialDelivery.runnersEnabled().catch(() => null)])
       .then(([doc, enabled]) => {
         setStored(doc.policy);
+        setBuildable(doc.buildable_modes ?? null);
         etagRef.current = doc.etag ?? null;
         setSubmittedJson(null);
         setDraft(draftFrom(doc.policy));
@@ -250,6 +254,7 @@ export function RunnerCredentials({ onSubmitted }: { onSubmitted?: () => void })
                   key={c}
                   cls={c}
                   row={draft[c]}
+                  buildable={buildable}
                   disabled={!securityOperator || busy}
                   onEdit={(patch) => edit(c, patch)}
                 />
@@ -308,11 +313,13 @@ type WritableClass = Exclude<DeliveryClass, "oauth_subscription" | "cloud_sts" |
 function ClassRow({
   cls,
   row,
+  buildable,
   disabled,
   onEdit,
 }: {
   cls: DeliveryClass;
   row: RowDraft;
+  buildable: CredentialDeliverySnapshot["buildable_modes"] | null;
   disabled: boolean;
   onEdit: (patch: Partial<RowDraft>) => void;
 }) {
@@ -335,7 +342,11 @@ function ClassRow({
           <p className="mt-0.5 text-xs text-muted-foreground">{DELIVERY.CLASS_HINT[key]}</p>
         </div>
         {MODES.map((mode) => {
-          const reason = boundReason(cls, mode);
+          const bound = boundReason(cls, mode);
+          const modes = buildable?.[cls];
+          // The GET's buildable_modes: the server refuses to store a mode it cannot build, so it is not offered.
+          const notBuilt = !bound && !!modes && !modes.includes(mode);
+          const reason = bound || (notBuilt ? DELIVERY.BOUND_NOT_BUILT : "");
           const id = `dc-${cls}-${mode}`;
           const note = reason || (cls === "ado_minted_pat" && mode === "runner_resident" ? DELIVERY.ADO_RESIDENT_HINT : "");
           return (
@@ -345,6 +356,7 @@ function ClassRow({
                 {/* The column header names the option on wide screens; on a phone each cell names itself. */}
                 <Label htmlFor={id} className="text-sm md:sr-only">
                   {DELIVERY.MODE[mode]}
+                  {notBuilt && ` — ${DELIVERY.BOUND_NOT_BUILT}`}
                 </Label>
               </div>
               {/* An enabled option's hint is its accessible description; a bound's reason is read in its cell. */}
