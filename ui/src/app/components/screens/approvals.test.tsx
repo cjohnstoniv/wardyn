@@ -482,8 +482,12 @@ describe("ApprovalsScreen — egress host not granted (member)", () => {
     expect(screen.getByText(DENIED.APPROVE_BODY("api.example.com"))).toBeInTheDocument();
   });
 
-  it("any other refusal leaves the buttons live", async () => {
-    approveMock.mockRejectedValueOnce(new HttpError(409, "already decided", "approval_not_pending"));
+  // A 403 with another reason (the Always scope is admin-only) must not read as the host being withheld.
+  it.each([
+    [409, "approval_not_pending"],
+    [403, "security_admin_surface"],
+  ])("a %i %s refusal leaves the buttons live", async (status, reason) => {
+    approveMock.mockRejectedValueOnce(new HttpError(status, "refused", reason));
     renderMember();
     await approveInDialog();
     expect(screen.getByRole("button", { name: /^approve$/i })).not.toBeDisabled();

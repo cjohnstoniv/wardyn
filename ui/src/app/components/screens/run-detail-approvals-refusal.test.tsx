@@ -114,8 +114,12 @@ describe("RunDetailScreen Approvals tab — a request the server refuses the vie
     expect(within(region).getByText(DENIED.APPROVE_BODY("registry.example.test"))).toBeInTheDocument();
   });
 
-  it("any other refusal leaves the buttons live", async () => {
-    approveMock.mockRejectedValueOnce(new HttpError(409, "already decided", "approval_not_pending"));
+  // A 403 with another reason (the Always scope is admin-only) must not read as the host being withheld.
+  it.each([
+    [409, "approval_not_pending"],
+    [403, "security_admin_surface"],
+  ])("a %i %s refusal leaves the buttons live", async (status, reason) => {
+    approveMock.mockRejectedValueOnce(new HttpError(status, "refused", reason));
     const region = await decideFromTab();
     expect(within(region).getByRole("button", { name: /^approve$/i })).not.toBeDisabled();
     expect(within(region).getByRole("button", { name: /^deny$/i })).not.toBeDisabled();
