@@ -4007,7 +4007,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0200` (`0200_run_queue_start_at`) adds `start_at` to `run_queue` (`0162`'s table): a scheduled run's start time, before which no promotion judges it; `NULL` for every other waiting run.
 - `0201` (`0201_run_harness_task`) adds `task` to `run_harnesses` (`0164`'s table): a harness's own task in a background run with several agents. Person erasure blanks it; a split-role install that turns `WARDYN_MULTI_AGENT_TASKS` on grants the app role `UPDATE` on `run_harnesses` for that.
 - `0202` (`0202_user_drives_kept_from_run`) adds `kept_from_run` to `user_drives` (`0054`'s table): the run a person's drive was kept from (`keep_work_folder`), NULL on every drive made by hand.
-- `0200` (`0200_user_drives_team`) adds `user_drives.team` (`0054`'s table), with a check keeping it off a person's own drive and off `k8s_pvc`, and `user_drive_grants.members_can_write` (`0054`'s table, false by default): a team drive and its allocations' write bit (`storage.user_drive.team_drives`). A write setting `team` on a `k8s_pvc` or member-owned row now fails.
+- `0203` (`0203_user_drives_team`) adds `user_drives.team` (`0054`'s table), with a check keeping it off a person's own drive and off `k8s_pvc`, and `user_drive_grants.members_can_write` (`0054`'s table, false by default): a team drive and its allocations' write bit (`storage.user_drive.team_drives`). A write setting `team` on a `k8s_pvc` or member-owned row now fails.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
