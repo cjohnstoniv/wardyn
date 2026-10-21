@@ -15,6 +15,8 @@ test.describe("Policies: the Wardyn boundary", () => {
     await asRealSecurityAdmin(page);
     await gotoConsole(page, "admin");
     await navTo(page, "Policies");
+    // The link sits in the page body, not the header, so the header keeps its one action (#2831).
+    await expect(page.getByTestId("page-header-actions").getByRole("link", { name: BOUNDARY.TITLE })).toHaveCount(0);
     await page.getByRole("link", { name: BOUNDARY.TITLE, exact: true }).click();
     await expect(page).toHaveURL(/\/admin\/policies\/boundary$/);
     await expect(page.getByRole("heading", { level: 1, name: BOUNDARY.TITLE })).toBeVisible();

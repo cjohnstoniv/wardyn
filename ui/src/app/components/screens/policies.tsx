@@ -133,17 +133,25 @@ export function PoliciesScreen() {
         actions={
           <>
             {!operator && <Chip tone="neutral">{OPERATOR_ONLY_REASON}</Chip>}
-            {securityOperator && routed && (
-              <Button variant="outline" asChild>
-                <Link to="/admin/policies/boundary">{BOUNDARY.TITLE}</Link>
-              </Button>
-            )}
             <Button onClick={() => setEditor({ mode: "create" })} disabled={!operator}>
               <Plus className="size-4" /> New policy
             </Button>
           </>
         }
       />
+
+      {/* In the body, not the header: the header keeps one action, so at 390 it stays on the title's row (#2831). */}
+      {securityOperator && routed && (
+        <p className="mb-4 text-sm">
+          <Link
+            to="/admin/policies/boundary"
+            className="inline-flex items-center gap-1 font-medium text-primary hover:underline"
+          >
+            {BOUNDARY.TITLE}
+            <ChevronRight className="size-3.5" aria-hidden />
+          </Link>
+        </p>
+      )}
 
       {/* GET /api/v1/policies/default now exposes the ceiling — a
           run created without a policy_id falls back to it, and it's the same
