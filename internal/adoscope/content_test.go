@@ -100,6 +100,23 @@ func TestClassifyContent(t *testing.T) {
 
 // TestParsePush reads a Git Pushes - Create body path by path, and refuses one
 // it cannot read whole.
+// TestClassifyContentQueryRoutesAreReadsOnlyAsAPost: a POST to a git query route reads and names no
+// repository; the same route under any other write method is not waved through as a read, so it still
+// names the repository its caller must then be checked against.
+func TestClassifyContentQueryRoutesAreReadsOnlyAsAPost(t *testing.T) {
+	const query = "/acme/proj/_apis/git/repositories/app/pullrequestquery"
+	got, err := ClassifyContent(contentReq(http.MethodPost, query, `{}`))
+	if err != nil || got != (ContentTarget{}) {
+		t.Fatalf("POST = %+v, %v, want the empty target", got, err)
+	}
+	for _, method := range []string{http.MethodPut, http.MethodPatch, http.MethodDelete} {
+		got, err := ClassifyContent(contentReq(method, query, `{}`))
+		if err != nil || got.RepoPath != "acme/proj/_git/app" {
+			t.Errorf("%s = %+v, %v, want RepoPath acme/proj/_git/app", method, got, err)
+		}
+	}
+}
+
 func TestParsePush(t *testing.T) {
 	body := `{"refUpdates":[{"name":"refs/heads/a","oldObjectId":"0"}],"commits":[{"changes":[` +
 		`{"changeType":"add","item":{"path":"/.github/workflows/x.yml"},"newContent":{"content":"x"}},` +
