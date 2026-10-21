@@ -147,6 +147,7 @@ ds-bundle/
 # #618's "What this type gets" frozen strings (user types packet A; the packet
 # stays local). user-types-copy.test.ts parses it.
 !/docs/design/user-types-canon.md
+# Scheduled runs: Runs list and run page frozen strings. scheduled-runs-copy.test.ts parses it.
 !/docs/design/scheduled-runs-canon.md
 # New Run's frozen-strings table (the owner-approved mock and prototypes stay local).
 # new-run-copy.test.ts parses it.
