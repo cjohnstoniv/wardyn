@@ -209,6 +209,8 @@ declare -A ALLOWLIST=(
   ["ui/src/app/components/screens/runs/runs-model.test.ts"]=1
   ["ui/src/app/components/screens/runs/scheduled-state.test.ts"]=3
   ["ui/src/app/lib/schedule.test.ts"]=32
+  # 0.10 W4f: SESS-M12's signedInUntil tests pass a fixed instant in as the clock (now) and compare only to it.
+  ["ui/src/app/lib/session-continuity-copy.test.ts"]=3 # injected clock only: signedInUntil(at, now), never compared to the wall clock
 )
 
 fail=0
