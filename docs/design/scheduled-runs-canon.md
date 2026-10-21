@@ -26,7 +26,7 @@ The boards reuse today's strings, so no row above repeats them: "Waiting for sig
 
 | Key | Source | Frozen string |
 |---|---|---|
-| `NR_REVIEW.TIMING_CHOOSE` | deviation (derived from board F2SCHED-1's logic, not its copy box; approved) | Autonomous · Choose a start time |
+| `NR_REVIEW.TIMING_CHOOSE` | deviation (derived from board F2SCHED-1's logic, not its copy box; approved 2026-10-20) | Autonomous · Choose a start time |
 
 ## 3. Display rules
 
