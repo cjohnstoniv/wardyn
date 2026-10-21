@@ -876,8 +876,10 @@ test.describe("auth / another tab signs in", () => {
     await expect(runsNav(other)).toBeVisible();
 
     await expect(runsNav(page)).toBeVisible({ timeout: 15_000 });
-    // Let the stale check go; it changes nothing.
+    // Let the stale check go; it changes nothing: no "session ended" dialog over the console.
     await (held as unknown as Route).fulfill({ status: 401, json: { error: "unauthorized" } });
+    await page.waitForTimeout(1_000);
+    await expect(page.getByRole("dialog")).toHaveCount(0);
     await expect(runsNav(page)).toBeVisible();
   });
 });

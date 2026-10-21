@@ -744,7 +744,15 @@ describe("App — the other tabs of this browser (DR-0020)", () => {
     daemon.dead = false;
     await fromAnotherTab("changed");
     expect(await screen.findByLabelText("Note")).toBeInTheDocument();
+    // The probe sent before the other tab signed in answers 401 late. It is nobody's to act on: no "session ended" dialog.
     answerStale(json(401, { error: "unauthorized" }));
+    for (let i = 0; i < 30; i++) {
+      await act(async () => {
+        await Promise.resolve();
+      });
+    }
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByLabelText("Note")).toBeInTheDocument();
   });
 
   // #2489: the tab that signed out deliberately is a signed-out tab like any other once it shows the gate.
