@@ -1,7 +1,7 @@
 // Copyright 2026 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Postgres-backed test for agent_runs.model_allowlists (migration 0202). Guarded by
+// Postgres-backed test for agent_runs.model_allowlists (migration 0208). Guarded by
 // WARDYN_TEST_PG; skipped cleanly when unset.
 package store_test
 

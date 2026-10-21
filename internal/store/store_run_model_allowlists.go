@@ -13,7 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// RunModelAllowlists is the record of the model allowlists a run's proxy was handed (0202),
+// RunModelAllowlists is the record of the model allowlists a run's proxy was handed (0208),
 // optional like RunLocalFolders: a test double that embeds store.Store would route these calls
 // to a nil interface, so the api layer type-asserts.
 type RunModelAllowlists interface {
