@@ -51,14 +51,14 @@ func TestServiceIdentity_SponsorSinceOnTheDatabaseClock(t *testing.T) {
 	e.h.srv.cfg.Store = store.PG{Pool: e.pool, Now: skew}
 	e.h.srv.cfg.Now = skew
 	e.mustCreate(t, svcName, svcSponsor)
-	first := e.mustMint(t, e.sponsor, svcName)
+	first := e.mustMintUnaged(t, e.sponsor, svcName)
 	if w := e.as(t, first.Token, http.MethodGet, "/api/v1/me", ""); w.Code != http.StatusOK {
 		t.Errorf("fresh service token, app clock 10s ahead of the database: %d (auth.fail %q), want 200", w.Code, e.lastAuthFail())
 	}
 	if w := doSSO(t, e.h.srv, http.MethodPatch, "/api/v1/service-identities/"+svcName, e.sec, `{"sponsor":"`+svcSponsor2+`"}`); w.Code != http.StatusOK {
 		t.Fatalf("sponsor change: %d %s", w.Code, w.Body.String())
 	}
-	second := e.mustMint(t, e.sponsor2, svcName)
+	second := e.mustMintUnaged(t, e.sponsor2, svcName)
 	if w := e.as(t, second.Token, http.MethodGet, "/api/v1/me", ""); w.Code != http.StatusOK {
 		t.Errorf("token minted right after a sponsor change, app clock 10s ahead: %d (auth.fail %q), want 200", w.Code, e.lastAuthFail())
 	}
@@ -191,6 +191,7 @@ func TestServiceIdentity_StreamEndsWhenTheServiceDoes(t *testing.T) {
 func TestServiceIdentity_TokenCapHoldsInTheStore(t *testing.T) {
 	e := newSvcEnv(t)
 	e.mustCreate(t, svcName, svcSponsor)
+	ageFreshSponsorships(t, e.pool) // the store mints below straight after the create; see svcEnv.mintReq
 	mint := func() error {
 		f := false
 		_, err := e.st.CreateServiceToken(context.Background(), svcName, svcSponsor, apiTokenMaxPerPrincipal, types.APIToken{
@@ -308,5 +309,34 @@ func TestServiceIdentity_StoreMintRefusesATokenBornDead(t *testing.T) {
 	}
 	if toks, err := e.st.ListAPITokensByPrincipal(context.Background(), svcPrin); err != nil || len(toks) != 0 {
 		t.Errorf("tokens after the refused mint = %+v (%v), want none", toks, err)
+	}
+}
+
+// TestServiceIdentity_AgeFreshSponsorshipsIsIdempotent: the fixtures age a fresh sponsorship before every mint,
+// so repeated mints must move sponsor_since back once (an hour), not once per mint, and must leave a
+// sponsor_since a test set in the future where it is.
+func TestServiceIdentity_AgeFreshSponsorshipsIsIdempotent(t *testing.T) {
+	e := newSvcEnv(t)
+	e.mustCreate(t, svcName, svcSponsor)
+	for range 3 {
+		e.mustMint(t, e.sponsor, svcName)
+	}
+	minutes := func(expr string) float64 {
+		t.Helper()
+		var m float64
+		if err := e.pool.QueryRow(context.Background(), `SELECT extract(epoch FROM `+expr+`) / 60 FROM service_identities WHERE name = $1`, svcName).Scan(&m); err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	if m := minutes("now() - sponsor_since"); m < 59 || m > 61 {
+		t.Errorf("sponsor_since is %.1f minutes old after three mints, want about 60", m)
+	}
+	if _, err := e.pool.Exec(context.Background(), `UPDATE service_identities SET sponsor_since = now() + interval '1 hour'`); err != nil {
+		t.Fatal(err)
+	}
+	ageFreshSponsorships(t, e.pool)
+	if m := minutes("sponsor_since - now()"); m < 59 || m > 61 {
+		t.Errorf("a future sponsor_since is %.1f minutes ahead after aging, want about 60", m)
 	}
 }
