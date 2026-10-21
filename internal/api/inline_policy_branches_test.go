@@ -248,3 +248,7 @@ func jsonErrorHasPrefix(t *testing.T, body, prefix string) bool {
 	}
 	return len(e.Error) >= len(prefix) && e.Error[:len(prefix)] == prefix
 }
+
+func (s *memberBoundStore) ListMembershipsFor(ctx context.Context, users, groups []string, userType string) ([]store.MembershipMatch, error) {
+	return membershipsFromResolve(s.ResolveGovernanceUnit(ctx, users, groups, userType))
+}

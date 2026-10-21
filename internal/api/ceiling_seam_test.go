@@ -172,3 +172,7 @@ func TestCeilingRefusalCarriesItsRemedy(t *testing.T) {
 			"the defect: a human told only \"groups_snapshot_stale\" opens a support ticket", got.Body.String())
 	}
 }
+
+func (s *flakyCeilingStore) ListMembershipsFor(ctx context.Context, users, groups []string, userType string) ([]store.MembershipMatch, error) {
+	return membershipsFromResolve(s.ResolveGovernanceUnit(ctx, users, groups, userType))
+}

@@ -459,3 +459,7 @@ func TestGovernanceCRUD_ProfileDeleteAuditNamesTheRowTheDeleteRemoved(t *testing
 		t.Fatalf("delete audit data = %q, want the name the delete returned", data)
 	}
 }
+
+func (s *composedUIAppsStore) ListMembershipsFor(ctx context.Context, users, groups []string, userType string) ([]store.MembershipMatch, error) {
+	return membershipsFromResolve(s.ResolveGovernanceUnit(ctx, users, groups, userType))
+}
