@@ -78,7 +78,7 @@ export function RunRow({ run }: { run: AgentRun }) {
   const operator = useOperator();
   const eligible = mayReadSignIn(run, principal, operator) && !run.attention && run.lost_reason !== "ended";
   const [waitingSignIn, setWaitingSignIn] = React.useState(false);
-  const p = eligible && waitingSignIn ? waitingSignInPresentation() : rowPresentation(run);
+  const p = eligible && waitingSignIn ? waitingSignInPresentation() : rowPresentation(run, adminView);
   const glyph = glyphKindFor(p.hue, p.word, run.state);
   const title = rowHeadline(run);
   const href = runPath(view, run.id);

@@ -285,8 +285,6 @@ export interface SetupProviderAccess {
 }
 
 export interface SetupStatus {
-  // Switch-gated features this deployment has on (Go SetupFeatures).
-  features?: { mcp_local_servers?: boolean };
   ready: boolean;
   // Server-computed "does SOME run's LLM access path exist": at least one
   // enabled model provider serves an agent (Go llmPathExists) — computed
@@ -341,6 +339,8 @@ export interface SetupStatus {
     kubectl_cli?: boolean;
     /** WARDYN_MULTI_AGENT_TASKS: a background agent task may give each agent its own task. */
     multi_agent_tasks?: boolean;
+    /** WARDYN_MCP_LOCAL_SERVERS: a component may define an MCP server that runs in the run's sandbox. Optional for fixtures. */
+    mcp_local_servers?: boolean;
   };
   checks: SetupCheck[];
   auth: {

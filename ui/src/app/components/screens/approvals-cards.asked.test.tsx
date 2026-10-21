@@ -11,7 +11,7 @@ import { makeApproval } from "../../../test/factories";
 import { SCENARIO_HARNESSES } from "../../lib/new-run-fixtures/scenarios/harnesses";
 import type { RunDetail, SetupStatus } from "../../lib/types";
 import { ModelAccessProvider } from "../wardyn/model-access-context";
-import { PendingCard } from "./approvals-cards";
+import { ApprovalCard } from "./approvals-cards";
 
 let mockAgents: { agent: string }[] | undefined;
 vi.mock("../../lib/api/runs", () => ({
@@ -30,12 +30,12 @@ const show = (it = item) =>
   render(
     <MemoryRouter>
       <ModelAccessProvider status={{ harnesses: SCENARIO_HARNESSES.full } as SetupStatus} onRefresh={() => {}}>
-        <PendingCard item={it} caps={null} onAct={() => {}} onAdoDecide={async () => {}} onPushDecide={async () => {}} />
+        <ApprovalCard item={it} caps={null} onAct={() => {}} onAdoDecide={async () => {}} onPushDecide={async () => {}} />
       </ModelAccessProvider>
     </MemoryRouter>,
   );
 
-describe("PendingCard: the asking agent", () => {
+describe("ApprovalCard: the asking agent", () => {
   it("names it, with the agent count, on a run with two agents", async () => {
     mockAgents = [{ agent: "claude-code" }, { agent: "codex-cli" }];
     show();

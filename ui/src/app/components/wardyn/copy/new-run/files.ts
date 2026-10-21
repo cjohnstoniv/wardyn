@@ -44,6 +44,9 @@ export const NR_FILES = {
   LIFE_KEPT_UNLIMITED: (grace: string | number) =>
     `Kept after its end time so you can extend and resume it. Deleted when you end the run, or ${grace} after its end time.`,
   LIFE_NO_END: "Kept until you end the run.",
+  REUSE_LABEL: "Reuse it across runs",
+  REUSE_ARIA: "About reusing this drive",
+  REUSE_TIP: "Save this disk when the run ends and start another run from it.",
   REPOS_TITLE: "Repositories",
   REPOS_BODY: "Copied onto the main drive. Changes leave only as commits you push.",
   REPOSITORY_BADGE: "Repository",
