@@ -63,6 +63,9 @@ func TestDriveOnRunner(t *testing.T) {
 	if msg := driveOnRunnerMsg(types.UserDrive{Name: "scratch"}, &mine); msg != `drive: "scratch" mounts only from the organisation's runners — choose an organisation pool, or launch without drive` {
 		t.Fatalf("no second place: %q", msg)
 	}
+	if msg := driveOnRunnerMsg(types.UserDrive{Name: "Mine", OwnerSubject: "carol"}, &mine); msg != driveNotInPoolMsg("Mine") {
+		t.Fatalf("a person's own drive: %q, want the pool's sentence", msg)
+	}
 	f := (&Server{}).driveBindFailureHere(t.Context(), types.ResolvedDrive{Drive: types.UserDrive{Name: "scratch"}}, drivePlace{runner: &mine})
 	if f == nil || f.body() != driveOrgRunnersOnlyMsg("scratch") {
 		t.Fatalf("driveBindFailureHere on a runner = %+v, want the org-runners-only refusal", f)

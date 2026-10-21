@@ -70,6 +70,10 @@ func (s *Server) driveSecondPlaceRefusal(ctx context.Context, d *types.UserDrive
 // named: the person asking may not own it.
 func driveOnRunnerMsg(d types.UserDrive, runner *uuid.UUID) string {
 	switch {
+	case d.OwnerSubject != "":
+		// A person's own drive never mounts on a pool of people's runners
+		// (memberDriveNeverOnPool): its sentence is the pool's, as before.
+		return driveNotInPoolMsg(d.Name)
 	case d.AltRunnerID == nil:
 		return driveOrgRunnersOnlyMsg(d.Name)
 	case runner == nil || *d.AltRunnerID != *runner:
