@@ -7,12 +7,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 import { unsavedSnapshot } from "../../../lib/unsaved-registry";
-import type { UserDrive } from "../../../lib/api/drives";
+import type { UserDriveListItem } from "../../../lib/api/drives";
 import { setField } from "../../../../test/set-field";
 import { aheadByHours } from "../../../lib/test-clock";
 import { DriveEditor } from "./drive-editor";
 
-const EXISTING: UserDrive = {
+const EXISTING: UserDriveListItem = {
   id: "d1",
   name: "Corporate homes",
   backend: "docker_volume",
@@ -20,9 +20,10 @@ const EXISTING: UserDrive = {
   reclaim: "retain",
   created_at: aheadByHours(-1),
   updated_at: aheadByHours(-1),
+  grant_count: 0,
 };
 
-function renderEditor(drive: UserDrive | null) {
+function renderEditor(drive: UserDriveListItem | null) {
   return render(<DriveEditor drive={drive} runnerTarget="docker" hostRootsConfigured={false} onCancel={vi.fn()} onSaved={vi.fn()} />);
 }
 const nameField = () => document.getElementById("drive-name")!;
