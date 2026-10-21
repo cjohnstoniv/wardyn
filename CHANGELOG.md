@@ -116,9 +116,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - A sign-in sandbox whose token is pasted before the sandbox is running now ends once the token is stored. Before, the
   launch could move the run on between the server's read of it and the kill, and the sandbox stayed up until its
   30-minute idle cap. That sandbox never held the pasted token.
-
-### Fixed
-
 - A run's recorded output is no longer lost after the organisation's server restarts when the runner hears of the
   restart only after the server has begun reading that output back. Before, a run writing a lot of output at that
   moment could lose the part not yet read back.
