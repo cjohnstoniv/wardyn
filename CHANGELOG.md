@@ -59,6 +59,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `io.katacontainers.`, `io.kubernetes.cri-o.`, `io.kubernetes.cri.`, `io.containerd.`, `dev.gvisor.` or `run.oci.`
   is refused, and the boot error names the key. Remove those annotations. To choose the runtime, pin the confinement
   class to a RuntimeClass (`k8s.runtimeClasses`, or `WARDYN_CONFINEMENT_MAP`).
+- **`WARDYN_LOCAL_TRUST_FORWARDER` now trusts only the peers in `WARDYN_LOCAL_TRUSTED_PEERS`, not any non-loopback
+  peer.** The compose stack ships it on. Unset, the trusted peers are the default route's gateway and `wardynd`'s own
+  non-loopback addresses, and `wardynd` refuses to start when it finds neither. An install whose published-port
+  traffic reaches `wardynd` from another address now gets a 403 from the local-mode peer check. Set
+  `WARDYN_LOCAL_TRUSTED_PEERS` to that address (IPs or CIDRs, comma-separated).
 
 ### Added
 
