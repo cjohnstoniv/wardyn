@@ -550,3 +550,12 @@ describe("RunFailureBlock: a run on a person's computer", () => {
     expect(screen.getByText("Files written to a mounted workspace are still on the host; scratch is gone.")).toBeInTheDocument();
   });
 });
+
+describe("RunFailureBlock: a run Wardyn killed for a desktop sign-in", () => {
+  it("says why in words, never the reason code", () => {
+    renderBlock("KILLED", [ev("run.kill", "success", { actor: "wardynd", data: { reason: "desktop_signin_resume_failed", signin_id: "s1" } })]);
+    const block = screen.getByTestId("run-failure-block");
+    expect(block).toHaveTextContent("couldn't resume the agent after a sign-in, so it ended the run");
+    expect(block).not.toHaveTextContent("desktop_signin_resume_failed");
+  });
+});
