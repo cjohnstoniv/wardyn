@@ -337,7 +337,7 @@ func (s *Server) admitBreakGlass(w http.ResponseWriter, r *http.Request) (*http.
 	reason := strings.TrimSpace(r.Header.Get(breakGlassReasonHeader))
 	if reason == "" || utf8.RuneCountInString(reason) > maxGovernanceRejectReasonLen || !controlCharFree(reason) {
 		writeErrorReason(w, http.StatusBadRequest, reasonBreakGlassReasonRequired,
-			"the Wardyn boundary is in hard_limits and governance profiles exist: an admin-token run lifts their walls, so it is a break-glass run and needs a reason in the "+breakGlassReasonHeader+
+			"the Wardyn boundary is in hard_limits and units with their own walls exist: an admin-token run lifts their walls, so it is a break-glass run and needs a reason in the "+breakGlassReasonHeader+
 				" header (at most 512 characters, no control characters)")
 		return r, false
 	}
@@ -345,16 +345,18 @@ func (s *Server) admitBreakGlass(w http.ResponseWriter, r *http.Request) (*http.
 }
 
 // breakGlassLifts reports whether an admin-token run would lift anything: the boundary is in
-// hard_limits and at least one governance profile exists, whose walls the admin token stands outside.
-// The deployment default does not count: the admin token never was held to it. With no profile there
-// is nothing to lift, so the run is an ordinary one, bound by the boundary, untagged.
+// hard_limits and at least one unit with its own walls exists, whose walls the admin token stands
+// outside. The Default unit (the deployment default) does not count: the admin token never was held
+// to it; nor does a pass-through unit, which adds nothing. With no such unit there is nothing to
+// lift, so the run is an ordinary one, bound by the boundary, untagged. Restrictions join this test
+// with the RESTRICT-PIN lane.
 func (s *Server) breakGlassLifts(ctx context.Context) (bool, error) {
 	b, err := s.governanceBoundary(ctx)
 	if err != nil || !b.HardLimits() {
 		return false, err
 	}
-	profiles, err := s.resolveAllUnits(ctx)
-	return len(profiles) > 0, err
+	units, err := s.cfg.Store.CountOwnWallsUnits(ctx)
+	return units > 0, err
 }
 
 // stampBreakGlass records a break-glass run on its run.create datum and writes its run.break_glass.open
