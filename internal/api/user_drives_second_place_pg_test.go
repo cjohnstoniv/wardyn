@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/google/uuid"
@@ -17,17 +19,24 @@ import (
 
 // secondPlaceSetup is her own pool holding her one laptop, online and allowing drives under /srv/dev/work
 // (stream), and the share "team-share" allocated to her as directory alice, its second place set by bind.
-func secondPlaceSetup(t *testing.T, e *placementEnv, bind func(d *types.UserDrive, laptop uuid.UUID)) (types.RunnerPool, uuid.UUID, types.UserDrive) {
+// The first place is a real share this deployment allows (root, with alice in it), so a refusal below is
+// about where the drive mounts from, never about the share itself.
+func secondPlaceSetup(t *testing.T, e *placementEnv, bind func(d *types.UserDrive, laptop uuid.UUID)) (types.RunnerPool, uuid.UUID, types.UserDrive, string) {
 	t.Helper()
 	ctx := context.Background()
 	e.srv.cfg.RunnerTarget = "docker"
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "alice"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	e.srv.cfg.UserDriveHostRoots = []string{root}
 	pool := e.createOwnPool(e.person, "Mine")
 	laptop := e.laptop(e.personP, 4000, 8192, types.CC1, types.CC2, types.CC3)
 	e.maxRuns(laptop, e.personP, types.RunnerMaxRunsCeiling)
 	e.addToPool(e.person, pool.ID, laptop)
 	e.stream(laptop, types.CC1, types.CC2, types.CC3)
 	d := driveFixture(func(d *types.UserDrive) {
-		d.Name, d.Backend, d.HostRoot, d.HomeTemplate, d.SizeMiB = "team-share", types.DriveBackendHostPath, "/srv/shares/team", types.HomeTemplateSub, 0
+		d.Name, d.Backend, d.HostRoot, d.HomeTemplate, d.SizeMiB = "team-share", types.DriveBackendHostPath, root, types.HomeTemplateSub, 0
 	})
 	bind(d, laptop)
 	drive, err := e.pg.UpsertUserDrive(ctx, *d, false)
@@ -37,7 +46,7 @@ func secondPlaceSetup(t *testing.T, e *placementEnv, bind func(d *types.UserDriv
 	if _, err := e.pg.UpsertUserDriveGrant(ctx, *grantFixture(drive.ID, func(g *types.UserDriveGrant) { g.Subject, g.HomeOverride = e.personP, "alice" }), true); err != nil {
 		t.Fatal(err)
 	}
-	return pool, laptop, drive
+	return pool, laptop, drive, root
 }
 
 // A share reaches her own runner only once its second place is bound to that runner (M10, U2 a): bound,
@@ -68,7 +77,7 @@ func TestPG_DriveSecondPlace_ReachesOnlyItsBoundRunner(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newPlacementEnv(t)
-			pool, laptop, drive := secondPlaceSetup(t, e, tc.bind(e))
+			pool, laptop, drive, _ := secondPlaceSetup(t, e, tc.bind(e))
 
 			cw := e.call(e.person, http.MethodGet, "/api/v1/me/drives?runner_pool_id="+pool.ID.String(), "")
 			var cat client.MeDriveCatalogue
@@ -123,23 +132,39 @@ func TestPG_DriveSecondPlace_ReachesOnlyItsBoundRunner(t *testing.T) {
 }
 
 // On the organisation's runners a bound share is the share it was: launched into an organisation pool, it
-// meets the first place's own checks and gets the same answer, byte for byte, as the same share unbound
-// (here this deployment allows no share root, so both are refused alike before anything runs).
-func TestPG_DriveSecondPlace_OrganisationRunnersAnswerAsUnbound(t *testing.T) {
-	answer := func(bind func(*types.UserDrive, uuid.UUID)) (int, string) {
-		e := newPlacementEnv(t)
-		_, _, drive := secondPlaceSetup(t, e, bind)
-		org := e.createPool("Org", types.RunnerPoolOrganization)
-		e.addExecutors(org.ID, "alpha")
-		e.setPeople("alpha", everyonePeople)
-		w := e.call(e.person, http.MethodPost, "/api/v1/runs", runBody(`"drives":[{"drive_id":"`+drive.ID.String()+`"}],"runner_pool_id":"`+org.ID.String()+`"`))
-		return w.Code, w.Body.String()
-	}
-	bc, bound := answer(func(d *types.UserDrive, laptop uuid.UUID) {
-		d.AltBackend, d.AltHostRoot, d.AltRunnerID = types.DriveBackendHostPath, "/srv/dev/work/team", &laptop
-	})
-	uc, unbound := answer(func(*types.UserDrive, uuid.UUID) {})
-	if bc != uc || bound != unbound || bc == http.StatusCreated {
-		t.Fatalf("organisation pool: bound = %d %s, unbound = %d %s; want the same refusal", bc, bound, uc, unbound)
+// is placed on those runners and mounts the first place, exactly as the same share with one place does.
+func TestPG_DriveSecondPlace_OrganisationRunnersMountTheFirstPlace(t *testing.T) {
+	for name, bind := range map[string]func(*types.UserDrive, uuid.UUID){
+		"bound to her laptop": func(d *types.UserDrive, laptop uuid.UUID) {
+			d.AltBackend, d.AltHostRoot, d.AltRunnerID = types.DriveBackendHostPath, "/srv/dev/work/team", &laptop
+		},
+		"unbound": func(*types.UserDrive, uuid.UUID) {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newPlacementEnv(t)
+			_, _, drive, root := secondPlaceSetup(t, e, bind)
+			org := e.createPool("Org", types.RunnerPoolOrganization)
+			e.addExecutors(org.ID, "alpha")
+			e.setPeople("alpha", everyonePeople)
+			w := e.call(e.person, http.MethodPost, "/api/v1/runs", runBody(`"drives":[{"drive_id":"`+drive.ID.String()+`"}],"runner_pool_id":"`+org.ID.String()+`"`))
+			var out struct {
+				ID uuid.UUID `json:"id"`
+			}
+			_ = json.Unmarshal(w.Body.Bytes(), &out)
+			if w.Code != http.StatusCreated {
+				t.Fatalf("launch on the organisation's runners = %d %s", w.Code, w.Body)
+			}
+			run, err := e.pg.GetRun(context.Background(), out.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if run.Placement != types.PlacementRemote || run.RunnerID != nil {
+				t.Fatalf("run placed %s on runner %v, want the organisation's runners", run.Placement, run.RunnerID)
+			}
+			spec := e.dispatchedSpec(out.ID)
+			if want := filepath.Join(root, "alice"); len(spec.Drives) != 1 || spec.Drives[0].ObjectName != want || spec.Drives[0].RunnerID != nil {
+				t.Fatalf("dispatched drives = %+v, want the first place %s", spec.Drives, want)
+			}
+		})
 	}
 }

@@ -181,10 +181,14 @@ func (s *Server) driveUnavailableHere(ctx context.Context, d reachableDrive, poo
 	switch {
 	case d.resolved != nil && d.resolved.Paused:
 		return client.MeDriveUnavailablePaused
-	case d.resolved == nil || d.target() == "" || s.driveBindFailureHere(ctx, *d.resolved, drivePlace{}) != nil:
+	case d.resolved == nil || d.target() == "":
 		return client.MeDriveUnavailableUnmountable
 	case checked && driveOnPoolRunner(pool, d.winner.Drive):
+		// A run in this pool goes to the bound runner (kindTargets) and mounts the
+		// second place, so the first place's checks do not decide it.
 		return ""
+	case s.driveBindFailureHere(ctx, *d.resolved, drivePlace{}) != nil:
+		return client.MeDriveUnavailableUnmountable
 	case remoteDenied:
 		return client.MeDriveUnavailablePlacementDenied
 	case checked && driveNotInPool(pool, d.winner.Drive) && d.winner.Drive.AltRunnerID != nil:
