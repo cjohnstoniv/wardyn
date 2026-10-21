@@ -10,9 +10,11 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -161,7 +163,15 @@ func TestPG_DriveSecondPlace_OrganisationRunnersMountTheFirstPlace(t *testing.T)
 			if run.Placement != types.PlacementRemote || run.RunnerID != nil {
 				t.Fatalf("run placed %s on runner %v, want the organisation's runners", run.Placement, run.RunnerID)
 			}
-			spec := e.dispatchedSpec(out.ID)
+			// An organisation runner's dispatch goes through CreateSandboxOn, which records the executor.
+			var spec runner.SandboxSpec
+			for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline) && spec.RunID != out.ID; time.Sleep(20 * time.Millisecond) {
+				e.runner.fakeRunner.mu.Lock()
+				if len(e.runner.onExecutor) > 0 {
+					spec = e.runner.fakeRunner.lastSpec
+				}
+				e.runner.fakeRunner.mu.Unlock()
+			}
 			if want := filepath.Join(root, "alice"); len(spec.Drives) != 1 || spec.Drives[0].ObjectName != want || spec.Drives[0].RunnerID != nil {
 				t.Fatalf("dispatched drives = %+v, want the first place %s", spec.Drives, want)
 			}
