@@ -164,6 +164,7 @@ vi.mock("../../lib/api/runs", () => ({
 import { ApprovalsScreen } from "./approvals";
 import { OperatorProvider, RoleProvider } from "../wardyn/operator-context";
 import { DENIED } from "../../lib/permissions-copy";
+import { HttpError } from "../../lib/api/core";
 import { APPROVAL, OPERATOR_ONLY_REASON, SECURITY_ONLY_REASON } from "../wardyn/copy";
 
 // Every describe below assumes a LIVE run unless it says otherwise (B4 gates
@@ -426,6 +427,7 @@ describe("ApprovalsScreen — egress host not granted (member)", () => {
   beforeEach(() => {
     mockPendingKind = "egress_domain";
     mockPendingEmpty = false;
+    toastError.mockClear();
     denyMock.mockReset();
     approveMock.mockReset();
     mockCaps = { grants: [], enforcement: {}, session_groups: [], groups_snapshot_stale: false, kinds_version: 1 };
@@ -457,6 +459,36 @@ describe("ApprovalsScreen — egress host not granted (member)", () => {
     expect(screen.getByText(DENIED.APPROVE_CHIP)).toBeInTheDocument();
     expect(screen.getByText(DENIED.APPROVE_BODY("api.example.com"))).toBeInTheDocument();
     expect(screen.getByText(DENIED.ALWAYS_STILL_ADMIN)).toBeInTheDocument();
+  });
+
+  // The caps read cannot see a grant an admin withheld, so the server's refusal is what closes the card.
+  async function approveInDialog() {
+    fireEvent.click(await screen.findByRole("button", { name: /^approve$/i }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: /^approve$/i }));
+    await waitFor(() => expect(approveMock).toHaveBeenCalled());
+    await waitFor(() => expect(toastError).toHaveBeenCalled());
+    fireEvent.click(within(dialog).getByRole("button", { name: /cancel/i }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  }
+
+  it("a capability_egress_host refusal turns the card's buttons off and says why", async () => {
+    approveMock.mockRejectedValueOnce(new HttpError(403, "you are not granted egress host api.example.com", "capability_egress_host"));
+    renderMember();
+    await approveInDialog();
+    expect(screen.getByRole("button", { name: /^approve$/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^deny$/i })).toBeDisabled();
+    expect(screen.getByText(DENIED.APPROVE_CHIP)).toBeInTheDocument();
+    expect(screen.getByText(DENIED.APPROVE_BODY("api.example.com"))).toBeInTheDocument();
+  });
+
+  it("any other refusal leaves the buttons live", async () => {
+    approveMock.mockRejectedValueOnce(new HttpError(409, "already decided", "approval_not_pending"));
+    renderMember();
+    await approveInDialog();
+    expect(screen.getByRole("button", { name: /^approve$/i })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: /^deny$/i })).not.toBeDisabled();
+    expect(screen.queryByText(DENIED.APPROVE_CHIP)).not.toBeInTheDocument();
   });
 
   it("enforced + granted by a *.suffix row: the decision is offered again", async () => {

@@ -49,6 +49,7 @@ export function ApprovalCard({
   onAct,
   onAdoDecide,
   onPushDecide,
+  refused = false,
 }: {
   item: ApprovalRequest;
   run?: RunDetail;
@@ -64,6 +65,9 @@ export function ApprovalCard({
   // #181 — the push_content card's own decide path; see decidePushDirect's
   // doc above for why it bypasses onAct/ReasonDialog too, minus the scope.
   onPushDecide: (id: string, approve: boolean) => Promise<void>;
+  // The server refused this viewer's decision with capability_egress_host: the caps read cannot see it
+  // (the run page passes none), so the refusal itself turns the buttons off.
+  refused?: boolean;
 }) {
   const scope = item.requested_scope ?? {};
   const KindIcon = KIND_ICON[item.kind] ?? ShieldCheck;
@@ -108,7 +112,7 @@ export function ApprovalCard({
   // early return happens BEFORE this capability leg, so a security admin is
   // never bounded by it.
   const host = item.kind === "egress_domain" ? str(scope, "host", "domain") : undefined;
-  const hostUngranted = !securityOperator && !!host && !capabilityAllowed(caps, "egress_host", host);
+  const hostUngranted = refused || (!securityOperator && !!host && !capabilityAllowed(caps, "egress_host", host));
   // B4 — the run this approval gates, from the context row below's OWN fetch.
   // A run that has ended cancels its PENDING approvals (types.ApprovalCancelled;
   // the finalizeRunTail / handleKillRun cascade), so Approve and Deny here
