@@ -32,6 +32,7 @@ azure_gates.host
 azure_gates.models
 azure_gates.route
 brokered_pat_grant_ids
+canonical_push_repos
 control_plane_ca_pem
 control_plane_url
 decision_buffer_size
