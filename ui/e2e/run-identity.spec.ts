@@ -8,6 +8,18 @@ import { test, expect, gotoConsole, navTo } from "./fixtures";
 test.describe.configure({ mode: "serial" });
 
 test.describe("Run detail — the Identity widget", () => {
+  // #3036: the Run row is a reference: the run's name, then a short id that copies the whole one.
+  test("the Run row shows a short copyable id, not the 36-character one", async ({ page }) => {
+    await gotoConsole(page);
+    await navTo(page, "Runs");
+    await page.getByText("e2e fixture 2").click();
+    const identity = page.locator("section", { has: page.getByRole("heading", { name: "Identity" }) });
+    const ref = identity.getByTestId("run-ref");
+    await expect(ref.getByRole("button")).toHaveText(/^[0-9a-f]{8}$/);
+    await expect(ref.getByRole("button")).toHaveAttribute("title", /^[0-9a-f-]{36}\s+Click to copy$/);
+    await expect(identity.getByText(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)).toHaveCount(0);
+  });
+
   test("at 1440x900 with a long task, no floating Focus/Edit button sits over an Identity row", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     // Settled host with a barrier, as the other cockpit specs splice it: the no-barrier shell banner would

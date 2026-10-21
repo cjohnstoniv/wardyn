@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"path"
 	"regexp"
 	"slices"
 	"strings"
@@ -83,8 +84,9 @@ type ComponentDefinition struct {
 	Config      map[string]string `json:"config,omitempty"`
 	// CLI marks an org row as a CLI credential card (azure, aws or github).
 	CLI *ComponentCLI `json:"cli,omitempty"`
-	// MCP makes the component a remote MCP server, which a run's harnesses
-	// reach only through the proxy's broker route (component_mcp.go).
+	// MCP makes the component an MCP server: a remote one, which a run's
+	// harnesses reach only through the proxy's broker route, or one its
+	// harness starts inside the sandbox (ComponentMCP).
 	MCP *ComponentMCP `json:"mcp,omitempty"`
 }
 
@@ -767,33 +769,78 @@ func (a *CLIAzure) validate() error {
 	return nil
 }
 
-// ComponentMCPTransportHTTP is the one MCP transport a component may use:
-// streamable HTTP.
-const ComponentMCPTransportHTTP = "http"
+// The MCP transports a component may use: streamable HTTP to a remote server,
+// or stdio to a server its harness starts inside the run's sandbox.
+const (
+	ComponentMCPTransportHTTP  = "http"
+	ComponentMCPTransportStdio = "stdio"
+)
 
 // Bounds on an MCP component and on what one reference turns it on for.
 const (
 	MaxComponentMCPURLBytes  = 2048
 	MaxComponentMCPHarnesses = 8
+	MaxComponentMCPArgs      = 32
+	MaxComponentMCPArgBytes  = 1024
 )
 
-// ComponentMCP is a remote MCP server. The run's harnesses never reach URL
-// itself: each is configured with the proxy's broker route, which adds the
-// server's header credential, applies the run's tool rules to its tools and is
-// the only network path to the server.
+// ComponentMCP is an MCP server. Transport decides which kind:
+//
+//   - http: a remote server. The run's harnesses never reach URL itself: each
+//     is configured with the proxy's broker route, which adds the server's
+//     header credential, applies the run's tool rules to its tools and is the
+//     only network path to the server.
+//   - stdio: a local server. Launch is the command its harness starts inside
+//     the run's sandbox, as the agent's user, with the agent's access; the
+//     harness, not the proxy, applies the run's rules to its tools. Its hosts
+//     join the run's allowlist and its secrets are delivered as any
+//     component's are.
+//
+// Launch and Transport are one seam: a later placement (the server in a
+// container of its own, bridged to the broker) adds a field beside them and
+// keeps both.
 type ComponentMCP struct {
-	// URL is the server's streamable HTTP address: https, no userinfo, its
-	// host one of the component's hosts.
-	URL       string `json:"url"`
-	Transport string `json:"transport"` // http
+	// URL is a remote server's streamable HTTP address: https, no userinfo,
+	// its host one of the component's hosts.
+	URL       string `json:"url,omitempty"`
+	Transport string `json:"transport"` // http | stdio
+	// Launch is a local server's command.
+	Launch *ComponentMCPLaunch `json:"launch,omitempty"`
+}
+
+// ComponentMCPLaunch is how a local MCP server starts: Command with Args, no
+// shell. Command is npx or an absolute path to a program in the image; a
+// package npx fetches is pinned to one exact version.
+type ComponentMCPLaunch struct {
+	Command string   `json:"command"`
+	Args    []string `json:"args,omitempty"`
+}
+
+// RemoteMCP reports whether the definition is a remote MCP server, which only
+// the broker reaches. A transport other than stdio counts as remote, as every
+// server did before local ones existed.
+func (d ComponentDefinition) RemoteMCP() bool {
+	return d.MCP != nil && d.MCP.Transport != ComponentMCPTransportStdio
+}
+
+// LocalMCP reports whether the definition is an MCP server its harness starts
+// inside the run's sandbox.
+func (d ComponentDefinition) LocalMCP() bool {
+	return d.MCP != nil && d.MCP.Transport == ComponentMCPTransportStdio
 }
 
 // harnessIDRE is a harness id as tools[].id names one.
 var harnessIDRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
 
-// validateMCP checks the mcp block. Its credential goes to the server and never
-// into the sandbox, so its only secret mode is a header to the server's own
-// host, over TLS.
+// npmPinnedRE is one npm package at one exact version: name@1.4.2 or
+// @scope/name@1.4.2-rc.1. A range, a tag such as latest, or no version at
+// all would let the package that runs change under the definition.
+var npmPinnedRE = regexp.MustCompile(`^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*@[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$`)
+
+// validateMCP checks the mcp block. A remote server's credential goes to the
+// server and never into the sandbox, so its only secret mode is a header to
+// the server's own host, over TLS. A local server's secrets follow every
+// component's rules.
 func (d ComponentDefinition) validateMCP() error {
 	m := d.MCP
 	if m == nil {
@@ -804,10 +851,15 @@ func (d ComponentDefinition) validateMCP() error {
 	}
 	switch m.Transport {
 	case ComponentMCPTransportHTTP:
+	case ComponentMCPTransportStdio:
+		return m.validateLocal()
 	case "sse":
 		return errors.New("mcp.transport: servers that use SSE are not supported yet; use the server's streamable HTTP address")
 	default:
-		return fmt.Errorf("mcp.transport: %q is not http", m.Transport)
+		return fmt.Errorf("mcp.transport: %q is not http or stdio", m.Transport)
+	}
+	if m.Launch != nil {
+		return errors.New("mcp.launch: a remote server is reached at its url; only a stdio server has a launch command")
 	}
 	host, err := MCPURLDestination(m.URL)
 	if err != nil {
@@ -828,6 +880,44 @@ func (d ComponentDefinition) validateMCP() error {
 		}
 	}
 	return nil
+}
+
+// validateLocal checks a stdio server: a launch command and no url.
+func (m ComponentMCP) validateLocal() error {
+	if m.URL != "" {
+		return errors.New("mcp.url: a stdio server runs in the sandbox from its launch command and has no url")
+	}
+	l := m.Launch
+	if l == nil {
+		return errors.New("mcp.launch: a stdio server needs the command that starts it")
+	}
+	c := l.Command
+	if len(c) > MaxComponentMCPArgBytes || !printable(c) || c != "npx" && (!path.IsAbs(c) || path.Clean(c) != c) {
+		return fmt.Errorf("mcp.launch.command: %q must be npx or the absolute path of a program in the image", c)
+	}
+	if len(l.Args) > MaxComponentMCPArgs {
+		return fmt.Errorf("mcp.launch.args: %d entries exceeds the %d-argument limit", len(l.Args), MaxComponentMCPArgs)
+	}
+	for i, a := range l.Args {
+		if len(a) > MaxComponentMCPArgBytes || !printable(a) {
+			return fmt.Errorf("mcp.launch.args[%d]: must be printable text of at most %d bytes", i, MaxComponentMCPArgBytes)
+		}
+	}
+	if path.Base(c) != "npx" {
+		return nil
+	}
+	for i, a := range l.Args {
+		switch {
+		case a == "-y" || a == "--yes":
+		case strings.HasPrefix(a, "-"):
+			return fmt.Errorf("mcp.launch.args[%d]: npx takes only -y before the package here; name the package as its first argument", i)
+		case !npmPinnedRE.MatchString(a):
+			return fmt.Errorf("mcp.launch.args[%d]: %q must pin one exact version, such as @example/mcp-server@1.4.2", i, a)
+		default:
+			return nil
+		}
+	}
+	return errors.New("mcp.launch.args: npx needs the package to run, pinned to one exact version, such as @example/mcp-server@1.4.2")
 }
 
 // MCPURLDestination checks an MCP server URL and returns its host and port as

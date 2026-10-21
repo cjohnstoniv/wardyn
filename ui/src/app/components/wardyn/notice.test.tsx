@@ -25,4 +25,11 @@ describe("Notice", () => {
     rerender(<Notice tone="info" live>Quiet</Notice>);
     expect(screen.getByRole("status")).toHaveTextContent("Quiet");
   });
+
+  it("puts its actions in a row under the words, and none when there are none", () => {
+    const { rerender } = render(<Notice tone="danger" actions={<button type="button">Re-check</button>}>Body</Notice>);
+    expect(screen.getByRole("button", { name: "Re-check" })).toBeVisible();
+    rerender(<Notice tone="danger" actions={false}>Body</Notice>);
+    expect(screen.queryByRole("button")).toBeNull();
+  });
 });

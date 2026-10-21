@@ -63,6 +63,7 @@ import { specToSource, type PolicySourceFormat } from "../wardyn/policy-document
 import { Mono } from "../wardyn/code-block";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
+import { PageContainer } from "../wardyn/page-container";
 import { CC_META } from "../wardyn/cc-meta";
 import { OPERATOR_ONLY_REASON, POLICY_UI_APPS, RESIDUAL_PREFIX } from "../wardyn/copy";
 import { POLICIES_PAGE, POLICY_DIALOG } from "../wardyn/copy/policy-dialog";
@@ -126,7 +127,7 @@ export function PoliciesScreen() {
 
 
   return (
-    <div className="mx-auto max-w-[1400px] px-6 py-6">
+    <PageContainer width="list">
       <PageHeader
         title="Policies"
         description="Policies set a run's barrier, egress allowlist, credential grants, and lifecycle. A run names a stored policy or carries its own."
@@ -372,7 +373,7 @@ export function PoliciesScreen() {
           load();
         }}
       />
-    </div>
+    </PageContainer>
   );
 }
 

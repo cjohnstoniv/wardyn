@@ -246,10 +246,9 @@ describe("GettingStarted (the view decides the page, not role)", () => {
     expect(screen.queryByText("Sandboxed. Governed. Self-hosted. Free.")).not.toBeInTheDocument();
   });
 
-  // The funnel is the Admin view's "Setup" sidebar entry; the account menu
-  // holds identity and Sign out only (top-bar.tsx), and "Getting started" in
-  // the sidebar is the User view's member page.
-  it('the "revisit anytime" note names the sidebar\'s Setup entry', () => {
+  // The funnel is the Admin view's "Getting started" sidebar entry; the account
+  // menu holds identity and Sign out only (top-bar.tsx).
+  it('the "revisit anytime" note names the sidebar\'s Getting started entry', () => {
     // ticket: X3-F11
     render(
       <MemoryRouter initialEntries={["/admin/setup"]}>
@@ -257,7 +256,7 @@ describe("GettingStarted (the view decides the page, not role)", () => {
       </MemoryRouter>,
     );
     expect(screen.getByText(/Barrier:/)).toBeInTheDocument();
-    expect(screen.getByText(/under “Setup” in the sidebar/)).toBeInTheDocument();
+    expect(screen.getByText(/under “Getting started” in the sidebar/)).toBeInTheDocument();
     expect(screen.queryByText(/account menu/i)).not.toBeInTheDocument();
   });
 });

@@ -41,13 +41,19 @@ describe("Start screen", () => {
     expect(screen.getByText(NR_START.TRUST_LINE)).toBeInTheDocument();
   });
 
-  it("holds the AI composer as Coming soon: says so in words, and nothing to press", async () => {
+  // #3045: an unbuilt path is not a card. The entry screen has the two real paths and one muted roadmap line.
+  it("offers only the two real paths, and names what is unbuilt in one muted line with no version", async () => {
     show();
-    const card = (await screen.findByText(NR_START.AI_TITLE)).closest("article");
-    // No aria-disabled: the article role does not allow it (FR-0124); the words and the missing button say it.
-    expect(card).not.toHaveAttribute("aria-disabled");
-    expect(card).toHaveTextContent(NR_SHARED.COMING_SOON);
-    expect(card?.querySelector("button")).toBeNull();
+    await screen.findByText(NR_START.GUIDED_TITLE);
+    expect(screen.queryByText("AI composer")).toBeNull();
+    expect(screen.queryByText(NR_SHARED.COMING_SOON)).toBeNull();
+    // Guided setup is a button, YAML / JSON a section; the hatched Coming soon article is gone.
+    expect(document.querySelectorAll("article")).toHaveLength(0);
+    expect(screen.getByRole("button", { name: new RegExp(`^${NR_START.GUIDED_TITLE}`) })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: NR_START.DOC_TITLE })).toBeInTheDocument();
+    const roadmap = screen.getByText("On the roadmap: scheduled runs and multi-agent runs.");
+    expect(roadmap).toHaveClass("text-muted-foreground");
+    expect(roadmap.textContent).not.toMatch(/\d/);
   });
 
   it("opens the Shape step from Start guided setup", async () => {

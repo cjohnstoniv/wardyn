@@ -120,10 +120,10 @@ const OVERWIDE_CEILING = {
 // CONSOLE-RULES §6 — exactly ONE `default`-variant (teal) button on the screen
 // at any moment. The default variant is `bg-primary` (ui/button.tsx:12), and
 // LimitRow's switch paints bg-primary too when checked (profile-editor.tsx:196)
-// — excluded, because a toggle is not an action. Scoped to <main>: the app
+// — excluded, as is a selected Segmented option (aria-pressed, #2832); a toggle is not an action. Scoped to <main>: the app
 // shell's own "New run" in the top bar is a default button on every screen and
 // is not this surface's.
-const tealActions = (page: Page) => page.locator("main").locator('button.bg-primary:not([role="switch"])');
+const tealActions = (page: Page) => page.locator("main").locator('button.bg-primary:not([role="switch"]):not([aria-pressed])');
 
 // The screen draws TWO tables, and a profile NAME is a cell in both — the
 // profiles list's Name column and the assignments list's Profile column. Every
@@ -163,12 +163,17 @@ test.describe("governance — the security admin's authoring walk", () => {
     // offering an add form that cannot succeed.
     await expect(page.getByText(GOV.EMPTY_ASSIGN_TITLE)).toBeVisible();
     await expect(page.getByText(GOV.EMPTY_ASSIGN_BODY)).toBeVisible();
+    await expect(page.getByText(GOV.ASSIGN_LEAD)).toHaveCount(0);
 
-    // The two standing facts the screen must always show: precedence, and the
+    // The standing facts live in one closed disclosure under the form: precedence, and the
     // two-subject halves of "when does this take effect".
-    await expect(page.getByText(GOV.PRECEDENCE)).toBeVisible();
-    await expect(page.getByText(GOV.EFFECT_NOTE)).toBeVisible();
-    await expect(page.getByText(GOV.SIGNIN_NOTE)).toBeVisible();
+    const combine = page.getByTestId("how-governance-assignments");
+    await expect(combine.getByText(GOV.COMBINE_TITLE)).toBeVisible();
+    await expect(combine.getByText(GOV.PRECEDENCE)).toBeHidden();
+    await combine.getByText(GOV.COMBINE_TITLE).click();
+    await expect(combine.getByText(GOV.PRECEDENCE)).toBeVisible();
+    await expect(combine.getByText(GOV.EFFECT_NOTE)).toBeVisible();
+    await expect(combine.getByText(GOV.SIGNIN_NOTE)).toBeVisible();
 
     // ONE teal, and on an empty install it is the empty state's own New
     // profile — never the add form's Assign, which has no profile to bind.

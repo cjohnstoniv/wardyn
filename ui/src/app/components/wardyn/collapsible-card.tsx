@@ -8,7 +8,8 @@
 // the 744px viewport with every card fully open; the fix approved there is
 // "compact cards": every card collapses to a one-line summary and expands on
 // click, none open by default. Collapsed-by-default is load-bearing, not a
-// preference — it is what keeps both pages under 744px regardless of which
+// preference — it is what keeps Your account under 744px (Admin Settings is
+// budgeted at 860px, settings-compact-viewport.spec.ts) regardless of which
 // of a card's own conditional branches renders (an admin with a k8s runner,
 // a member with no model block, etc.); a card that opened by default could
 // not make that guarantee across every shape its body takes.
@@ -25,8 +26,19 @@
 // force-open a card a deep link points at (ado-connection.tsx's `#azure-
 // devops` hash-focus effect).
 import * as React from "react";
-import { ChevronDown } from "lucide-react";
+import { Link } from "react-router-dom";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { cn } from "../ui/utils";
+
+/** A collapsed card's state at a glance: "danger" is a blocking state, "attention" needs setting up, "neutral" is a default or an off switch. */
+export type CardTone = "danger" | "attention" | "ok" | "neutral";
+
+const PILL: Record<CardTone, string> = {
+  danger: "bg-danger-subtle text-danger border-danger/25",
+  attention: "bg-warning-subtle text-warning border-warning/25",
+  ok: "bg-success-subtle text-success border-success/25",
+  neutral: "bg-muted text-muted-foreground border-border",
+};
 
 export interface CollapsibleCardProps
   extends Omit<React.HTMLAttributes<HTMLElement>, "title"> {
@@ -39,6 +51,11 @@ export interface CollapsibleCardProps
   defaultOpen?: boolean;
   onOpenChange?: (open: boolean) => void;
   testId?: string;
+  /** A right-aligned status pill, so a blocking state does not read like a default. */
+  status?: { tone: CardTone; label: string };
+  /** Makes the card a navigation row (a link with a right chevron) for a page that only links out;
+   *  the card then has no body. */
+  to?: string;
   /** Applied to the title element, for a caller that needs aria-labelledby
    *  on its own content (branding-card.tsx's preview column, for example). */
   headingId?: string;
@@ -46,7 +63,7 @@ export interface CollapsibleCardProps
 
 export const CollapsibleCard = React.forwardRef<HTMLElement, CollapsibleCardProps>(
   function CollapsibleCard(
-    { title, summary, open: openProp, defaultOpen = false, onOpenChange, testId, headingId, children, className, ...rest },
+    { title, summary, status, to, open: openProp, defaultOpen = false, onOpenChange, testId, headingId, children, className, ...rest },
     ref,
   ) {
     const [uncontrolledOpen, setUncontrolledOpen] = React.useState(defaultOpen);
@@ -58,6 +75,55 @@ export const CollapsibleCard = React.forwardRef<HTMLElement, CollapsibleCardProp
       if (openProp === undefined) setUncontrolledOpen(next);
       onOpenChange?.(next);
     };
+
+    const face = (
+      <>
+        <span className="min-w-0 flex-1">
+          {/* headingId goes here, not on the `<h3>` (review R2-M1): a
+              caller's own aria-labelledby (branding-card.tsx's region
+              name) must resolve to the title text alone, not the whole
+              heading — which no longer carries an id of its own. */}
+          <span id={headingId} className="block text-sm font-medium text-foreground">
+            {title}
+          </span>
+          {summary && (
+            <span
+              data-testid={testId ? `${testId}-summary` : undefined}
+              className={`block truncate text-body text-muted-foreground ${open && !to ? "mt-0.5 leading-snug" : "leading-tight"}`}
+            >
+              {summary}
+            </span>
+          )}
+        </span>
+        {status && (
+          <span
+            data-testid={testId ? `${testId}-status` : undefined}
+            className={cn(
+              "mt-0.5 inline-flex h-5 shrink-0 items-center rounded-full border px-2 text-xs font-medium",
+              PILL[status.tone],
+            )}
+          >
+            {status.label}
+          </span>
+        )}
+        {to ? (
+          <ChevronRight aria-hidden className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+        ) : (
+          <ChevronDown
+            aria-hidden
+            className={cn("mt-0.5 size-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-180")}
+          />
+        )}
+      </>
+    );
+    // px-4 either way (review L1): the body is p-4 — matching the horizontal inset keeps the title flush
+    // with the body text once expanded (CONSOLE-RULES §11 "one grid"). Only the vertical inset is trimmed,
+    // and only while collapsed: the collapsed cards must fit the settings-compact-viewport budget (#1200), while an expanded
+    // card keeps its roomier header.
+    const faceClass = cn(
+      "flex w-full items-start justify-between gap-3 rounded-xl px-4 text-left outline-none focus-visible:ring-[3px] focus-visible:ring-ring",
+      open && !to ? "py-3" : "py-2",
+    );
 
     return (
       <section
@@ -83,49 +149,18 @@ export const CollapsibleCard = React.forwardRef<HTMLElement, CollapsibleCardProp
             in the same row. The unit tests use `expandCard`'s prefix match
             instead of an exact heading name for this reason. */}
         <h3>
-          <button
-            type="button"
-            aria-expanded={open}
-            aria-controls={bodyId}
-            onClick={toggle}
-            // px-4 either way (review L1): the body is p-4 — matching the
-            // horizontal inset keeps the title flush with the body text once
-            // expanded (CONSOLE-RULES §11 "one grid"). Only the vertical
-            // inset is trimmed, and only while collapsed: eight collapsed
-            // cards must fit 744px (the #1200 budget), while an expanded
-            // card keeps its roomier header.
-            className={cn(
-              "flex w-full items-start justify-between gap-3 rounded-xl px-4 text-left outline-none focus-visible:ring-[3px] focus-visible:ring-ring",
-              open ? "py-3" : "py-2",
-            )}
-          >
-            <span className="min-w-0">
-              {/* headingId goes here, not on the `<h3>` (review R2-M1): a
-                  caller's own aria-labelledby (branding-card.tsx's region
-                  name) must resolve to the title text alone, not the whole
-                  heading — which no longer carries an id of its own. */}
-              <span id={headingId} className="block text-sm font-medium text-foreground">
-                {title}
-              </span>
-              {summary && (
-                <span
-                  data-testid={testId ? `${testId}-summary` : undefined}
-                  className={`block truncate text-body text-muted-foreground ${open ? "mt-0.5 leading-snug" : "leading-tight"}`}
-                >
-                  {summary}
-                </span>
-              )}
-            </span>
-            <ChevronDown
-              aria-hidden
-              className={cn(
-                "mt-0.5 size-4 shrink-0 text-muted-foreground transition-transform",
-                open && "rotate-180",
-              )}
-            />
-          </button>
+          {to ? (
+            // A card that only links elsewhere is a link, not an accordion with one sentence and a button.
+            <Link to={to} className={cn(faceClass, "hover:bg-muted/40")}>
+              {face}
+            </Link>
+          ) : (
+            <button type="button" aria-expanded={open} aria-controls={bodyId} onClick={toggle} className={faceClass}>
+              {face}
+            </button>
+          )}
         </h3>
-        {open && (
+        {open && !to && (
           <div id={bodyId} className="border-t border-border p-4 pt-3">
             {children}
           </div>

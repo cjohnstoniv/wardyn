@@ -150,6 +150,7 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     ["SetupSecrets", "secrets"],
     ["SetupAgeKey", "age_key"],
     ["SetupPlatform", "platform"],
+    ["SetupFeatures", "features"],
   ])("%s: full parity with SetupStatus.%s's inline TS type", (goName, member) => {
     const goTags = goJSONTags(setupGo, goName);
     expect(goTags.length).toBeGreaterThan(0);

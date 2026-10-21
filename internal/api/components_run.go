@@ -461,7 +461,7 @@ func (c *runComponents) expand(spec *types.RunPolicySpec) {
 		for _, sec := range def.Secrets {
 			spec.EligibleGrants = append(spec.EligibleGrants, componentGrant(sec))
 			switch {
-			case def.MCP != nil:
+			case def.RemoteMCP():
 				c.mcpHosts = append(c.mcpHosts, sec.Delivery.Host)
 			case sec.Delivery.Mode == types.ComponentDeliveryHeader:
 				c.mitmHosts = append(c.mitmHosts, sec.Delivery.Host)
