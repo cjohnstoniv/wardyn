@@ -1424,7 +1424,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - The refusal says "MCP servers that run in the sandbox are off on this deployment; an operator turns them on with WARDYN_MCP_LOCAL_SERVERS".
 - What dispatch writes for remote servers is unchanged either way.
 - Each harness the server is turned on for is configured to start it: Claude Code's MCP file gets a `stdio` entry, Codex CLI a table in `config.toml` ([`WARDYN_MCP_STDIO_TOML`](#wardyn_mcp_stdio_toml)).
-- `GET /setup/status` publishes it as `features.mcp_local_servers`, so the console offers local servers only where the API takes them.
+- `GET /setup/status` publishes it as `features.mcp_local_servers`, and only the API takes local servers.
 - A value that is not a bool exits 2 at boot.
 
 ### `WARDYN_ALLOW_USER_ENV_SECRET`

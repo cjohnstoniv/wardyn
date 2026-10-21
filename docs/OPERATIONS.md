@@ -3361,7 +3361,7 @@ No provider of this kind registered means today's behaviour, unchanged.
 
 1. Bind the model server where the proxy can reach it but the network cannot: on a laptop, the Docker host (`http://host.docker.internal:11434` under Docker Desktop); on a node, its private address.
 2. Pull every model yourself on that machine. A run can never pull, push, create, copy or delete one.
-3. `GET /api/v1/model-providers`, add the row, and `PUT` the list back; a `PUT` replaces the whole list. The console form comes later. The row:
+3. Add the row in Settings → Model providers (kind Local model server), or `GET /api/v1/model-providers`, add it and `PUT` the list back; a `PUT` replaces the whole list. The row:
    `{"id":"laptop-gpu","kind":"local_model","base_url":"http://host.docker.internal:11434","local":{"models":["qwen2.5-coder:7b"]},"harnesses":[{"harness":"claude-code","model":"qwen2.5-coder:7b"},{"harness":"codex-cli","model":"qwen2.5-coder:7b"}]}`
 4. Grant it to people as any other provider; with no `auth`, nobody has anything to connect.
 
