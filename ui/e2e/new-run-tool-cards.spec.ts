@@ -4,8 +4,8 @@
  */
 
 // New Run, step 5: every tool card says what it brings in the same four rows (Network, Credentials, Files and
-// drives, Other), and Details opens the whole of it. The kubectl card is Coming soon until the server's
-// `features.kubectl_cli` is on, and Review names a cluster's service account and what the run may do there.
+// drives, Other), and Details opens the whole of it. There is no kubectl card until the server's
+// `features.kubectl_cli` is on (#3045), and Review names a cluster's service account and what the run may do there.
 //
 // The preview is the real server's with its `access` block (and, for the GitHub CLI, its `components`) replaced; the
 // preflight, the catalogue and the setup status are stubbed from the same fixtures the unit tests use.
@@ -13,7 +13,6 @@ import type { Page } from "@playwright/test";
 import { test, expect, gotoConsole, navToRoute } from "./fixtures";
 import { NR_DOCUMENT } from "../src/app/components/wardyn/copy/new-run/document";
 import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
-import { NR_SHARED } from "../src/app/components/wardyn/copy/new-run/shared";
 import { NR_START } from "../src/app/components/wardyn/copy/new-run/start";
 import { NR_TOOLS } from "../src/app/components/wardyn/copy/new-run/tools";
 import { MY_COMPONENTS, ORG_GITHUB, ORG_KUBECTL, ORG_LINEAR } from "../src/app/lib/new-run-fixtures/scenarios/catalogue";
@@ -117,11 +116,10 @@ test.describe("New Run, step 5: what each tool card brings", () => {
     await expect(dialog.getByText(NR_TOOLS.DETAIL_MCP_BODY)).toBeVisible();
   });
 
-  test("with the switch off the kubectl card is Coming soon and brings nothing", async ({ page }) => {
+  test("with the switch off there is no kubectl card", async ({ page }) => {
     await openTools(page, false);
-    const kube = card(page, "kubectl");
-    await expect(kube.getByText(NR_SHARED.COMING_SOON)).toBeVisible();
-    await expect(kube.locator("dl")).toHaveCount(0);
+    await expect(card(page, ORG_GITHUB.name)).toBeVisible();
+    await expect(card(page, "kubectl")).toHaveCount(0);
     await expect(page.getByRole("heading", { name: ORG_KUBECTL.name })).toHaveCount(0);
   });
 
