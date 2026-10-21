@@ -103,8 +103,9 @@ export function FocusMode({ ctx, onExit }: { ctx: WidgetContext; onExit: () => v
 
   return createPortal(
     // z-40: above the cockpit's own toolbars (z-30) and the shell, but BELOW
-    // app-shell's unreachable-daemon banner (z-50), which must stay visible.
-    <div className="fixed inset-0 z-40 flex flex-col bg-background text-foreground">
+    // app-shell's unreachable-daemon banner (z-50), which must stay visible:
+    // the overlay starts under the banners (--shell-banner-h, set by app-shell).
+    <div className="fixed inset-x-0 bottom-0 top-[var(--shell-banner-h,0px)] z-40 flex flex-col bg-background text-foreground">
       <div className="relative min-h-0 flex-1">
         {/* Full-bleed: the padding only keeps the session clear of the HUD pill
             above it and the dock rail beside it. */}

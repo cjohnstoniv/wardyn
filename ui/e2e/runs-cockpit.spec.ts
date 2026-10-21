@@ -444,3 +444,49 @@ test.describe("a run refused for a model credential carries the sign-in, not dir
     await expect(page.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toHaveCount(0);
   });
 });
+
+// Last in the file on purpose: the file is serial, so a failure here skips nothing above it.
+// The shell's z-50 banners stay above focus mode's overlay (z-40); the overlay starts under them, so the
+// banner never covers Exit focus, and the offset goes away with the banner.
+test.describe("Focus mode — starts below the shell's banner", () => {
+  test("Exit focus stays clear of the unreachable banner, and the overlay returns to the top when it clears", async ({ page }) => {
+    const runId = sql("SELECT id FROM agent_runs ORDER BY created_at LIMIT 1");
+    sql(`UPDATE agent_runs SET state = 'RUNNING' WHERE id = '${runId}'`);
+    await page.route("**/readyz", (route) =>
+      route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ status: "unavailable" }) }),
+    );
+    // The seeded backend runs with `-runner none`, so the no-barrier banner shows once the plane is reachable
+    // again and the overlay would settle under it; splice a host with a barrier, as runs-detail.spec.ts does.
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.runner = { ...json.runner, driver: "docker", confinement_classes: ["CC1"] };
+      await route.fulfill({ response, json });
+    });
+
+    await page.goto(`/runs/${runId}`);
+    const banner = page.getByRole("status").filter({ hasText: /Control plane unreachable/ });
+    await expect(banner).toBeVisible({ timeout: 15_000 });
+    await page.getByRole("button", { name: RUN_COCKPIT.enterFocus }).click();
+    const exit = page.getByRole("button", { name: RUN_COCKPIT.exitFocus });
+    await expect(exit).toBeVisible();
+
+    const bannerBottom = async () => {
+      const box = await banner.boundingBox();
+      return box ? box.y + box.height : 0;
+    };
+    await expect.poll(async () => (await exit.boundingBox())?.y ?? -1).toBeGreaterThanOrEqual(await bannerBottom());
+    const clickable = await exit.evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+      return hit !== null && el.contains(hit);
+    });
+    expect(clickable).toBe(true);
+
+    await page.unroute("**/readyz");
+    await expect(banner).toHaveCount(0, { timeout: 15_000 });
+    await expect
+      .poll(() => exit.evaluate((el) => el.closest(".fixed")?.getBoundingClientRect().top ?? -1))
+      .toBe(0);
+  });
+});

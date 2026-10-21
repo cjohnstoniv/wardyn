@@ -413,6 +413,18 @@ describe("a filled size follows the pool", () => {
     expect(drawn().resources).toBeUndefined();
   });
 
+  it("another pool's default with the same digits in another unit switches the unit too", async () => {
+    checks.result = withDefault(32);
+    show();
+    await waitFor(() => expect(size()).toHaveValue(32));
+    expect(screen.getByText("MiB")).toBeInTheDocument();
+    checks.result = withDefault(32768);
+    act(() => external.edit((i) => ({ ...i, runner_pool_id: "pool-b" })));
+    await waitFor(() => expect(screen.getByText("GiB")).toBeInTheDocument());
+    expect(size()).toHaveValue(32);
+    expect(screen.queryByText("MiB")).toBeNull();
+  });
+
   it("a pool with no size to offer clears a size the person never changed", async () => {
     checks.result = withDefault(20480);
     show();

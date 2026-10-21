@@ -11,8 +11,10 @@
 import * as React from "react";
 import { toast } from "sonner";
 import { PendingChangeError } from "../../../lib/api/core";
+import { governance } from "../../../lib/api/governance";
 import { runners as runnersApi } from "../../../lib/api/runners";
 import { absoluteTime, getErrorMessage, relativeTime } from "../../../lib/format";
+import type { GovernanceChange } from "../../../lib/types";
 import type { RunnerTrustClass, RunnerView } from "../../../lib/types/runners";
 import { POOL_DRAWER, RUNNER_TRUST } from "../../wardyn/copy/runner-pools";
 import { Field } from "../../wardyn/form-primitives";
@@ -32,6 +34,8 @@ const TRUST_DESC: Record<RunnerTrustClass, string> = {
   managed_device: RUNNER_TRUST.MANAGED_DESC,
   org_cluster: RUNNER_TRUST.ORG_DESC,
 };
+// How often a held proposal is checked for still waiting; a rejected or withdrawn one frees Save.
+const HELD_RECHECK_MS = 15_000;
 const PERSON_CLASSES: RunnerTrustClass[] = ["personal", "managed_device"];
 
 function SetBy({ runner }: { runner: RunnerView }) {
@@ -48,20 +52,43 @@ function TrustEditor({ runner, onChanged }: { runner: RunnerView; onChanged: () 
   const [draft, setDraft] = React.useState<RunnerTrustClass>(runner.trust_class);
   const [reason, setReason] = React.useState("");
   const [busy, setBusy] = React.useState(false);
-  const [held, setHeld] = React.useState(false);
+  const [heldChange, setHeldChange] = React.useState<GovernanceChange | null>(null);
+  const held = heldChange !== null;
   const [error, setError] = React.useState("");
-  // A held proposal blocks another for the same runner (409), so Save waits: approval changes the class and remounts this.
+  // A held proposal blocks another for the same runner (409), so Save waits. One that is no longer pending is dropped by
+  // the recheck below, which also reloads the runner: an approval changed its class and remounts this editor.
+  const heldId = heldChange?.id;
+  const changedRef = React.useRef(onChanged);
+  changedRef.current = onChanged;
+  React.useEffect(() => {
+    if (!heldId) return;
+    let live = true;
+    const t = setInterval(() => {
+      governance
+        .getChange(heldId)
+        .then((change) => {
+          if (!live || change.state === "pending") return;
+          setHeldChange(null);
+          changedRef.current();
+        })
+        .catch(() => {});
+    }, HELD_RECHECK_MS);
+    return () => {
+      live = false;
+      clearInterval(t);
+    };
+  }, [heldId]);
   const id = `rn-trust-reason-${runner.id}`;
   const save = async () => {
     setBusy(true);
     setError("");
-    setHeld(false);
+    setHeldChange(null);
     try {
       await runnersApi.setTrust(runner.id, draft, reason.trim());
       toast.success(RUNNER_TRUST.DONE(runner.name, TRUST_LABEL[draft]));
       onChanged();
     } catch (e) {
-      if (e instanceof PendingChangeError) setHeld(true);
+      if (e instanceof PendingChangeError) setHeldChange(e.change);
       else setError(getErrorMessage(e));
     } finally {
       setBusy(false);

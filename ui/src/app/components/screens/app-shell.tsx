@@ -513,6 +513,25 @@ export function AppShell({
     [focus],
   );
 
+  // The z-50 banners stay above focus mode's overlay, so the overlay starts below them: their bottom edge,
+  // published as --shell-banner-h for as long as focus is on (focus-mode.tsx reads it).
+  const bannerStackRef = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    const el = bannerStackRef.current;
+    if (!focus || !el) return;
+    const root = document.documentElement;
+    const sync = () => root.style.setProperty("--shell-banner-h", `${Math.round(el.getBoundingClientRect().bottom)}px`);
+    sync();
+    const ro = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(sync);
+    ro?.observe(el);
+    window.addEventListener("resize", sync);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener("resize", sync);
+      root.style.removeProperty("--shell-banner-h");
+    };
+  }, [focus]);
+
   // Wraps EVERYTHING the shell renders (nav, main/Outlet, and the New Run
   // dialog mounted below) — not just the Outlet — so every screen AND every
   // dialog reachable from here (including the wizard's inline Add secret /
@@ -551,6 +570,9 @@ export function AppShell({
             >
               Skip to main content
             </a>
+            {/* Measured for focus mode, so it starts above the reauth layer: that layer's z-50 bar
+          must grow this box, or the overlay's offset goes stale when the bar comes and goes. */}
+            <div ref={bannerStackRef} className="shrink-0">
             {/* The lazy coordinator also reconciles auth changes while no dialog or watch is active. */}
             <React.Suspense fallback={null}>
               <ReauthLayer onResumed={adoptIdentity} />
@@ -645,6 +667,7 @@ export function AppShell({
             )}
             {/* While a renewal waits, its strip (the reauth layer's) stands here instead. */}
             <SessionRenewSlot />
+            </div>
             {/* LAST in the stack, and not hidden in focus mode: a dead control
           plane, an unknown identity and a dying session are each the better
           explanation of what you are looking at and are read first — but this
