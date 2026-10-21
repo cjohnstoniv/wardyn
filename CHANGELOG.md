@@ -63,8 +63,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   terminal from whoever holds it. On Windows the runner lives in WSL2, so attach goes through the organisation.
 - CLI sign-in, server half (migration `0199_cli_sign_in`), off unless `WARDYN_CLI_SIGN_IN=true` and SSO is set up.
   `wardyn login` asks for a sign-in, the person approves the computer in the console, and the CLI gets a session
-  secret, bound to an Ed25519 device key, that renews a 1-hour access token. The secret DOES live on the laptop, in
-  the keychain or a file only its owner can read; [THREAT-MODEL.md](threatmodel/THREAT-MODEL.md) says what protects
+  secret, bound to an Ed25519 device key, that renews an access token of at most an hour (shorter when
+  `WARDYN_API_TOKEN_MAX_TTL` is lower). The secret DOES live on the laptop, in the keychain or a file only its owner
+  can read; [THREAT-MODEL.md](threatmodel/THREAT-MODEL.md) says what protects
   it and what it does not stop.
   - Sessions last 30 days (`WARDYN_CLI_SESSION_TTL`, up to 90), end after 7 days idle (`WARDYN_CLI_SESSION_IDLE`),
     and at most 7 days in a file (`WARDYN_CLI_FILE_STORE=false` refuses the file). Paste-back sign-in for a computer
