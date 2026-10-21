@@ -344,7 +344,7 @@ func TestLocalPlacement_MCPOrgServerInSandboxRefused(t *testing.T) {
 	self := runComponents{attached: []attachedComponent{{snapshot: types.RunComponent{SelfDefined: true, Owner: "sub-owner", Name: "Files", Definition: def}}}}
 	allowSelf := governanceCeiling{Limits: types.GovernanceLimits{LocalSelfDefinedComponents: true}}
 	judge := func(req createRunRequest, ceiling governanceCeiling, comps runComponents) *runRefusal {
-		_, ref := f.srv.localPlacementRefusal(r, req, true, nil, types.RunPolicySpec{}, ceiling, comps, nil, nil, composer.Baseline{})
+		_, ref := f.srv.localPlacementRefusal(r, req, true, nil, nil, types.RunPolicySpec{}, ceiling, comps, nil, nil, composer.Baseline{})
 		return ref
 	}
 
