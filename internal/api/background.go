@@ -44,7 +44,8 @@ func (s *Server) GoBackground(fn func()) {
 // detach+bound, or finishHarnessLoginLaunch's dispatch). killSignInRunAfterCapture
 // (ssotoken.go) is the one exception with an inner bound of its OWN: its
 // post-grace run read (signInCaptureReadTimeout) plus the kill cascade it may
-// then run (killCascadeTimeout) — the sum this constant is built from, so that
+// then run (killCascadeTimeout, then killRevokeTimeout for its revokes, audit row and
+// reconciles) — the sum this constant is built from, so that
 // goroutine's own worst case is exactly what this budget covers, not a vague
 // margin for "small synchronous work".
 //
@@ -52,7 +53,7 @@ func (s *Server) GoBackground(fn func()) {
 // imageBuildTimeout (30 minutes). The budget still applies to it, so a shutdown
 // during a long build is abandoned with the WARN below, and the run it leaves
 // non-terminal is picked up by ReconcileOnBoot's passes (reconcile.go).
-const backgroundShutdownBudget = killCascadeTimeout + signInCaptureReadTimeout
+const backgroundShutdownBudget = killCascadeTimeout + killRevokeTimeout + signInCaptureReadTimeout
 
 // WaitBackground blocks until every goroutine started through goBackground has
 // returned, or until backgroundShutdownBudget elapses — whichever comes first.
@@ -83,6 +84,6 @@ func (s *Server) WaitBackground() {
 // runs before WaitBackground. The two budgets run back to back, so together
 // with the audit sinks' final flush they set the shortest grace period
 // wardynd needs before SIGKILL. deploy/helm's terminationGracePeriodSeconds
-// and deploy/compose's stop_grace_period are 70s for that reason, and
+// and deploy/compose's stop_grace_period are 85s for that reason, and
 // TestShutdownGraceCoversTheBudget fails if either falls below the sum.
 const HTTPShutdownTimeout = 15 * time.Second
