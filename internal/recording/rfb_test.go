@@ -270,6 +270,67 @@ func TestRFBRecorderPauseGap(t *testing.T) {
 	}
 }
 
+// pausedRecorder is a recorder past its hello, paused for a takeover.
+func pausedRecorder(t *testing.T) *RFBRecorder {
+	t.Helper()
+	c := &clock{t: time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)}
+	r := NewRFBRecorder(c.now)
+	_, _ = r.Write([]byte(upgrade))
+	_, _ = r.Write(wsFrame(true, 2, rfbHello(), nil))
+	if !r.Pause("takeover") {
+		t.Fatal("Pause")
+	}
+	return r
+}
+
+// TestRFBRecorderPauseMessageStraddlesResume: a message whose bytes arrive while paused but whose end
+// arrives after Resume is not kept; a message wholly after Resume is.
+func TestRFBRecorderPauseMessageStraddlesResume(t *testing.T) {
+	r := pausedRecorder(t)
+	frame := wsFrame(true, 2, fbu(1, append(rect(3, 1, 0), "secretscreen"...)), nil)
+	_, _ = r.Write(frame[:len(frame)-1])
+	if !r.Resume() {
+		t.Fatal("Resume")
+	}
+	_, _ = r.Write(frame[len(frame)-1:])
+	_, _ = r.Write(wsFrame(true, 2, fbu(1, append(rect(3, 1, 0), "afterresume!"...)), nil))
+	k := kept(t, playback(t, r))
+	if bytes.Contains(k, []byte("secretscreen")) {
+		t.Fatal("bytes received while paused are in the recording")
+	}
+	if !bytes.Contains(k, []byte("afterresume!")) {
+		t.Fatal("a frame wholly after Resume was not kept")
+	}
+}
+
+// TestRFBRecorderPauseFieldStraddlesResume: an RFB field begun in a paused message and finished after
+// Resume (here a rect header, over one message or two) is not kept, and the stream stays in step: the
+// next whole frame is kept.
+func TestRFBRecorderPauseFieldStraddlesResume(t *testing.T) {
+	hdr := []byte{0x12, 0x34, 0x56, 0x78, 0, 3, 0, 1, 0, 0, 0, 0} // x=0x1234 y=0x5678 w=3 h=1 raw
+	for name, after := range map[string][][]byte{
+		"one message":  {append(append([]byte{}, hdr[6:]...), "secretscreen"...)},
+		"two messages": {hdr[6:9], append(append([]byte{}, hdr[9:]...), "secretscreen"...)},
+	} {
+		r := pausedRecorder(t)
+		_, _ = r.Write(wsFrame(true, 2, append([]byte{0, 0, 0, 1}, hdr[:6]...), nil))
+		if !r.Resume() {
+			t.Fatal("Resume")
+		}
+		for _, m := range after {
+			_, _ = r.Write(wsFrame(true, 2, m, nil))
+		}
+		_, _ = r.Write(wsFrame(true, 2, fbu(1, append(rect(3, 1, 0), "afterresume!"...)), nil))
+		k := kept(t, playback(t, r))
+		if bytes.Contains(k, []byte{0x12, 0x34, 0x56, 0x78}) || bytes.Contains(k, []byte("secretscreen")) {
+			t.Errorf("%s: bytes received while paused are in the recording: %x", name, k)
+		}
+		if !bytes.Contains(k, []byte("afterresume!")) {
+			t.Errorf("%s: a frame wholly after Resume was not kept", name)
+		}
+	}
+}
+
 // TestRFBRecorderTruncates: past MaxRFBBytes the head is kept and the playback says it was cut.
 func TestRFBRecorderTruncates(t *testing.T) {
 	r := NewRFBRecorder(time.Now)

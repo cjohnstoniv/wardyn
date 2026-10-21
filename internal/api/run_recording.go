@@ -36,14 +36,19 @@ func (s *Server) applyRunRecording(ctx context.Context, run *types.AgentRun, spe
 			run.RecordingLevel = choice.Resolve()
 		}
 	}
-	s.keepRunRecordingLevel(ctx, *run)
 	if orgOn && run.RecordingLevel == types.RecordingOff {
 		off := false
 		spec.Record = &off
 		run.NotRecorded = types.NotRecordedPolicyOff
-		s.keepRunNotRecorded(ctx, *run)
+		// The off decision is stored or the run does not start: a run that went unrecorded with no
+		// mark on its row would be recorded by the next session that reads it.
+		if !s.keepRunRecordingOff(ctx, *run) {
+			s.failAndRevoke(ctx, run.ID, types.RunStarting, createRunInternalError)
+			return false
+		}
 		return true
 	}
+	s.keepRunRecordingLevel(ctx, *run)
 	spec.Record = &orgOn
 	// A target whose facts cannot be read now is not marked: only a known non-recording runner is.
 	records, known := s.targetRecords(ctx, *run)
@@ -85,6 +90,22 @@ func (s *Server) keepRunNotRecorded(ctx context.Context, run types.AgentRun) {
 			slog.WarnContext(ctx, "wardynd: keep why a run is not recorded", slog.String("run_id", run.ID.String()), slog.Any("err", err))
 		}
 	}
+}
+
+// keepRunRecordingOff stores an off decision, the level and policy_off in one write, and reports
+// whether it did.
+func (s *Server) keepRunRecordingOff(ctx context.Context, run types.AgentRun) bool {
+	st, ok := s.cfg.Store.(interface {
+		SetRunRecordingOff(context.Context, uuid.UUID) error
+	})
+	if !ok {
+		return true
+	}
+	if err := st.SetRunRecordingOff(ctx, run.ID); err != nil {
+		slog.ErrorContext(ctx, "wardynd: keep a run's recording off", slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		return false
+	}
+	return true
 }
 
 // keepRunRecordingLevel stores the run's level. Terminal is not written: the column's empty value
@@ -187,8 +208,9 @@ func (s *Server) refuseRecordingWithoutStore(w http.ResponseWriter, rec types.Re
 // is cleared only on the runner's own word.
 func (s *Server) refuseDeclinedUpload(w http.ResponseWriter, run types.AgentRun) bool {
 	// A run whose level resolved to off asked its runner to record nothing: a cast can only come
-	// from the sandbox, and whatever the runner's age it is not kept.
-	if run.NotRecorded == types.NotRecordedPolicyOff {
+	// from the sandbox, and whatever the runner's age it is not kept. The level is read as well as the
+	// mark, so a row whose mark is missing still refuses.
+	if run.NotRecorded == types.NotRecordedPolicyOff || run.RecordingLevel == types.RecordingOff {
 		writeErrorReason(w, http.StatusConflict, reasonRecordingOff, "this run's recording level is off")
 		return true
 	}
