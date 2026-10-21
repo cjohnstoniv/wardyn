@@ -720,6 +720,8 @@ type Server struct {
 	revokedEndRetry revokedEndRetry
 	// inventoryHoldAudit spaces one runner's runner.inventory.hold rows (runner_state.go).
 	inventoryHoldAudit inventoryHoldAudit
+	// privIPRefusals caches the private_ip_refusals row's audit read (setup_private_ip_refusals.go).
+	privIPRefusals privateIPRefusalCache
 	// capRowsScanned counts capability-grant rows compared inside capBatch (see
 	// capabilities.go). It is INSTRUMENTATION, read by nothing on any request
 	// path: the per-request cost of the capability seam is chosen partly by the

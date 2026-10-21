@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"regexp"
 	"strconv"
 	"strings"
@@ -61,9 +62,54 @@ var errHostUnresolved = errors.New("proxy: host did not resolve")
 type hostBlockedError struct {
 	kind blockKind
 	msg  string
+	// hint is internalHostsLiftHint for a refusal internal_hosts can lift,
+	// else "". Kept apart from msg: msg is redacted on its way to the
+	// sandbox, and that pass would blank the block the hint names.
+	hint string
 }
 
 func (e *hostBlockedError) Error() string { return e.msg }
+
+// internalHostsLiftHint is the ONE sentence every liftable private/reserved
+// refusal of a hostname carries — the sandbox's error text, the 403 detail and
+// the decision row's Cause (which the console shows beside the refusal). host
+// is the exact name refused, never a broader suffix; block is the liftable
+// range the address fell in, never the address itself.
+func internalHostsLiftHint(host string, block netip.Prefix) string {
+	return "an operator may lift this guard for " + host + " with site_config.internal_hosts, scoped to " + block.String()
+}
+
+// liftHint is the hint for a vet that refused host, or "" where no
+// internal_hosts entry could lift it: a never-liftable class, a literal IP
+// (whose way in is an exact allowed_domains entry), or an address
+// liftInternalHost refuses whatever is declared (this proxy's own subnet, the
+// control-plane host).
+func (p *Proxy) liftHint(host string, guard IPGuardResult) string {
+	name := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
+	if guard.kind != blockPrivate || guard.blocked == nil || net.ParseIP(name) != nil || p.onOwnSubnetOrControlPlane(guard.blocked) {
+		return ""
+	}
+	addr, ok := netip.AddrFromSlice(guard.blocked)
+	if !ok {
+		return ""
+	}
+	addr = addr.Unmap()
+	for _, block := range ipguard.Liftable {
+		if block.Contains(addr) {
+			return internalHostsLiftHint(name, block)
+		}
+	}
+	return ""
+}
+
+// liftHintOf is the hint err carries, "" for any other error.
+func liftHintOf(err error) string {
+	var hb *hostBlockedError
+	if errors.As(err, &hb) {
+		return hb.hint
+	}
+	return ""
+}
 
 // blockKindOf reports the guard class behind err, or blockNone when err is not a
 // range refusal (a resolver fault, a policy deny, anything else).
@@ -135,7 +181,7 @@ func (p *Proxy) egressTarget(host string, port int) (target, ruleSource string, 
 		// time only — a name that answers differently to the two resolvers
 		// is not bound at dial time, unlike the direct-dial path below.
 		if guard := p.vetHost(host); guard.Denied && !guard.Unresolved {
-			return "", "", &hostBlockedError{kind: guard.kind, msg: fmt.Sprintf("host %q denied: %s", host, guard.Reason)}
+			return "", "", &hostBlockedError{kind: guard.kind, msg: fmt.Sprintf("host %q denied: %s", host, guard.Reason), hint: p.liftHint(host, guard)}
 		} else if guard.Lifted {
 			ruleSource = ruleSourceInternalHost
 		}
@@ -149,7 +195,7 @@ func (p *Proxy) egressTarget(host string, port int) (target, ruleSource string, 
 		if guard.Unresolved {
 			return "", "", fmt.Errorf("host %q: %s: %w", host, guard.Reason, errHostUnresolved)
 		}
-		return "", "", &hostBlockedError{kind: guard.kind, msg: fmt.Sprintf("host %q denied: %s", host, guard.Reason)}
+		return "", "", &hostBlockedError{kind: guard.kind, msg: fmt.Sprintf("host %q denied: %s", host, guard.Reason), hint: p.liftHint(host, guard)}
 	}
 	if guard.Lifted {
 		ruleSource = ruleSourceInternalHost

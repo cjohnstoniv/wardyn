@@ -331,6 +331,8 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		// configuration. Never Blocking. Both need the site config; a failed read leaves them out.
 		if siteCfgOK {
 			checks = append(checks, s.upgradeChecks(ctx, siteCfg)...)
+			// private_ip_refusals: hosts a run's proxy refused for resolving into liftable private space. Never Blocking.
+			checks = append(checks, s.privateIPRefusalsRows(ctx, siteCfg)...)
 		}
 		// High availability rows: present only while WARDYN_HA is on, and read
 		// Postgres, so they share this operator-only gate.

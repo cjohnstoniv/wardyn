@@ -2611,7 +2611,7 @@ The residuals an operator should plan for:
 - A laptop's corporate resolver answers a private-endpoint name into CGNAT space; inside the VPC the SAME name resolves to the interface endpoint's own ENI address, in the VPC's RFC1918 range.
 - A `cidrs` list drawn from what the operator's own machine sees excludes the range the SANDBOX actually resolves into, and the resulting 403 is indistinguishable from never having declared the entry at all.
 - Tighten `cidrs` only once you have evidence of what the sandbox itself resolves, never from what your own machine resolves.
-- The 403 says the same thing to whoever hits it next:
+- A refusal that names the range the sandbox's proxy resolved says so (below); one that cannot says the same thing to whoever hits it next:
 
 > Leave `cidrs` empty unless you know the addresses the sandbox resolves. What
 > your own machine sees for a private endpoint is usually not what the
@@ -2630,6 +2630,7 @@ The residuals an operator should plan for:
 - A pod-range scope fits only a headless Service (its name resolves to pod IPs), and only where the pod CIDR is not on the sidecar's own interface subnet.
 - The lift applies wherever the proxy resolves a hostname for a direct dial — the sandbox's CONNECT/plain-HTTP path, the MITM path, and the `git_pat` PAT-broker lane (its forge host is grant-derived).
 - So a declared suffix covering a self-hosted forge lets the brokered PAT reach it.
+- The guard fires on a host the deployment configured as a brokered git provider, while the proxy holds its credential. Nothing lifts it automatically: an operator lifts it per `host_suffix` and CIDR, and the refusal, its audit row and the `private_ip_refusals` setup check name both — `an operator may lift this guard for <host> with site_config.internal_hosts, scoped to <range>`.
 - A lifted decision's audit `rule_source` reads `site-config:internal-host` instead of the default `policy:allowed`.
 - [Self-hosted runner](operations/hybrid-laptops.md) proxies get them too (0.9.2); a revive drops undeclared ones.
 
