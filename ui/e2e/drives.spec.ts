@@ -136,10 +136,10 @@ const SIZE = DRIVES.SIZE_GIB(10);
 // CONSOLE-RULES §6 — exactly ONE `default`-variant (teal) button on the screen
 // at any moment. The default variant is `bg-primary` (ui/button.tsx), and the
 // editor's Writable / the form's Enabled switches paint bg-primary too when
-// checked (form-primitives.tsx) — excluded, because a toggle is not an action.
+// checked (form-primitives.tsx), and a selected Segmented option does (aria-pressed, #2832) — excluded, because a toggle is not an action.
 // Scoped to <main>: the app shell's own "New run" in the top bar is a default
 // button on every screen and is not this surface's.
-const tealActions = (page: Page) => page.locator("main").locator('button.bg-primary:not([role="switch"])');
+const tealActions = (page: Page) => page.locator("main").locator('button.bg-primary:not([role="switch"]):not([aria-pressed])');
 
 // The screen draws TWO tables once there is anything in them — the drives
 // list's Name column and the allocations list's Drive column — and a drive

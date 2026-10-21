@@ -120,10 +120,10 @@ const OVERWIDE_CEILING = {
 // CONSOLE-RULES §6 — exactly ONE `default`-variant (teal) button on the screen
 // at any moment. The default variant is `bg-primary` (ui/button.tsx:12), and
 // LimitRow's switch paints bg-primary too when checked (profile-editor.tsx:196)
-// — excluded, because a toggle is not an action. Scoped to <main>: the app
+// — excluded, as is a selected Segmented option (aria-pressed, #2832); a toggle is not an action. Scoped to <main>: the app
 // shell's own "New run" in the top bar is a default button on every screen and
 // is not this surface's.
-const tealActions = (page: Page) => page.locator("main").locator('button.bg-primary:not([role="switch"])');
+const tealActions = (page: Page) => page.locator("main").locator('button.bg-primary:not([role="switch"]):not([aria-pressed])');
 
 // The screen draws TWO tables, and a profile NAME is a cell in both — the
 // profiles list's Name column and the assignments list's Profile column. Every
