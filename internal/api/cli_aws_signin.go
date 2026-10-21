@@ -205,7 +205,7 @@ func (s *Server) purgeCLISignIns(ctx context.Context, componentID string) error 
 		return nil
 	}
 	_, err := s.deleteCredentialsEverywhere(ctx, []string{
-		cliSecretName(componentID, providerSSOPart), cliSecretName(componentID, providerEntraPart),
+		cliSecretName(componentID, providerSSOPart), cliSecretName(componentID, providerEntraPart), kubectlTokenSecretName(componentID),
 	})
 	if err != nil {
 		return fmt.Errorf("purge cli sign-ins: %w", err)

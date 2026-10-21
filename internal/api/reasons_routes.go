@@ -55,6 +55,7 @@ const (
 	reasonReviveConfigRunMismatch           = "revive_config_run_mismatch"            // the stored proxy config names a different run than the one being revived
 	reasonReviveCeilingDeniesGitBroker      = "revive_ceiling_denies_git_broker"      // the owner's current governance profile now denies GitHub, which the run's git broker needs
 	reasonReviveCeilingDeniesAzureCLI       = "revive_ceiling_denies_azure_cli"       // the owner's current governance profile now denies Azure Resource Manager, which the run's Azure CLI door needs
+	reasonReviveCeilingDeniesKubectlCLI     = "revive_ceiling_denies_kubectl_cli"     // the owner's current governance profile now denies the API server the run's kubectl door needs
 	reasonReviveOwnerAuthorityUnreadable    = "revive_owner_authority_unreadable"     // the owner's launch-door or model-credential re-check, or the read of the run's git_pat grants for its brokered set, could not be completed
 	reasonReviveAdminRestartCountInvalid    = "revive_admin_restart_count_invalid"    // run_ids named none, or more than the bulk maximum
 	reasonReviveProxyWindowStoreUnavailable = "revive_proxy_window_store_unavailable" // this store cannot list run proxy releases

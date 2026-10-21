@@ -102,6 +102,10 @@ func (p *Proxy) serveAPIDoor(w http.ResponseWriter, r *http.Request, host string
 		p.serveAWSSigV4(w, r, host, port)
 		return true
 	}
+	if p.isKubeAPIHost(host) {
+		p.serveKubeAPI(w, r, host, port)
+		return true
+	}
 	if grant, ok := p.patAPI[patAPIHost(host)]; ok {
 		p.servePATAPI(w, r, host, port, grant)
 		return true

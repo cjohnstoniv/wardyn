@@ -4,7 +4,9 @@
 package api
 
 import (
+	"net"
 	"net/http"
+	"strconv"
 
 	"github.com/google/uuid"
 
@@ -45,22 +47,32 @@ func cliView(c *types.ComponentCLI) *client.CLIView {
 		v.AccountID, v.RoleName, v.Region = c.AWS.AccountID, c.AWS.RoleName, c.AWS.Region
 	case c.GitHub != nil:
 		v.Capabilities = append([]ghscope.Capability{}, c.GitHub.Capabilities...)
+	case c.Kubectl != nil:
+		if host, port, ok := c.Kubectl.HostPort(); ok {
+			v.Cluster, v.Server = host, "https://"+net.JoinHostPort(host, strconv.Itoa(port))
+		}
+		v.Namespaces, v.Access = append([]string{}, c.Kubectl.Namespaces...), c.Kubectl.Access
 	}
 	return v
 }
 
 // catalogueCLIs is the five CLI cards in their fixed order. It reads only the
 // rows the caller is granted, so it cannot say anything about an ungranted one.
+// The kubectl card is coming_soon while its switch is off, as before it was built.
 func catalogueCLIs(granted []client.OrgComponentView) []client.CatalogueCLI {
 	cards := []client.CatalogueCLI{
 		{Kind: types.CLIKindAzure}, {Kind: types.CLIKindGitHub}, {Kind: types.CLIKindAWS},
-		{Kind: "gcloud", State: client.CLIStateComingSoon}, {Kind: "kubectl", State: client.CLIStateComingSoon},
+		{Kind: "gcloud", State: client.CLIStateComingSoon}, {Kind: types.CLIKindKubectl},
+	}
+	if !kubectlCLIOn() {
+		cards[4].State = client.CLIStateComingSoon
 	}
 	for i := range cards {
 		cards[i].Rows = []uuid.UUID{}
-		if cards[i].State == "" {
-			cards[i].State = client.CLIStateNotGranted
+		if cards[i].State == client.CLIStateComingSoon {
+			continue
 		}
+		cards[i].State = client.CLIStateNotGranted
 		for _, row := range granted {
 			if row.CLI != nil && row.CLI.Kind == cards[i].Kind {
 				cards[i].State = client.CLIStateAvailable

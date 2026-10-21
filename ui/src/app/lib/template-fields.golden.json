@@ -24,11 +24,23 @@
     "CLIGitHub": [
       "capabilities"
     ],
+    "CLIKubectl": [
+      "server",
+      "ca_pem",
+      "service_account",
+      "namespaces",
+      "access"
+    ],
+    "CLIServiceAccount": [
+      "namespace",
+      "name"
+    ],
     "ComponentCLI": [
       "kind",
       "azure",
       "aws",
-      "github"
+      "github",
+      "kubectl"
     ],
     "ComponentDefinition": [
       "description",

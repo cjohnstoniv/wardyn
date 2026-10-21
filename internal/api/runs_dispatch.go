@@ -452,6 +452,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	s.recordRunSizing(ctx, run, resourceLimitsToRunner(policy.Resources), len(plan.azure.gates) > 0)
 	s.reassertCeilingDenies(ctx, run, &policy, &injections, ceiling, &p, sandboxEnv, &llm, &plan.bedrockMITMHosts, &p.Components.MITMHosts)
 	azureARM := plan.azureCLI.closeWithheld(&policy, injections) // the door, decided once; one the ceiling withheld takes its hosts with it
+	kubeAPI := plan.kubectlCLI.closeWithheld(&policy, injections)
 	// The final seal, after every phase that adds a host and after the ceiling's
 	// re-assertion: nothing below may widen policy (run_policy_seal.go).
 	s.sealRunPolicy(ctx, run, &policy, p.Provenance)
@@ -590,6 +591,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// The re-signed AWS lane's grant (runs_dispatch_aws_sigv4.go): nil while
 			// WARDYN_AWS_SIGV4_AT_PROXY is off and on every lane it does not re-sign.
 			AWSSigV4: plan.awsSigV4,
+			// The kubectl door's grant (cli_kubectl.go), on the same terms.
+			KubeAPI: kubeAPI,
 			// The azure_foundry lane's route gate (provider_azure.go), and the hosts inspected as a model host without being a
 			// brokered upstream: that lane's endpoint and a Claude subscription's route-through host. Empty on every other run.
 			AzureGates:      plan.azure.gates,

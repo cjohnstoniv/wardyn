@@ -139,6 +139,12 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	if s.resolveAzureARMInjection(w, r, claims, minted, grantID) {
 		return
 	}
+	// KUBECTL: the organisation's registered service-account token for the kubectl row the run
+	// carries, traded for a short-lived one and pinned to the dispatch-time snapshot — see
+	// resolveKubectlCLIInjection. Before the reserved-name check below for the reason above.
+	if s.resolveKubectlCLIInjection(w, r, claims, minted, grantID) {
+		return
+	}
 
 	// Defense-in-depth at the SINK: never resolve a sink-reserved secret (signing/
 	// session key or a resident AWS Bedrock SigV4 credential) into an injectable header

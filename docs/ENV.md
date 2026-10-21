@@ -29,7 +29,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Every boolean `wardynd` and the runner substrates read goes through that one parser (`1`/`true`/`yes`/`on`, `0`/`false`/`no`/`off`, anything else exits 2 at boot).
 - The exception is `WARDYN_ENVBUILD_REGISTRY_INSECURE`: it takes Go's `strconv.ParseBool` forms (`1`/`t`/`true`, `0`/`f`/`false`, no `yes` or `on`) and fails the build on anything else.
 - The six `internal/api` switches read per request (`WARDYN_EGRESS_SECOND_HUMAN`, `WARDYN_CAPABILITY_SECOND_HUMAN`, `WARDYN_GOVERNANCE_SECOND_HUMAN`, `WARDYN_ALLOW_USER_ENV_SECRET`, `WARDYN_ALLOW_AGENT_TELEMETRY`, `WARDYN_GIT_PAT_API_BITBUCKET_SERVER`) are also read once at boot so a bad value is refused there.
-- So is `WARDYN_COMPONENT_ENV_RESERVE_EDITORS`, read on every component check.
+- So are `WARDYN_COMPONENT_ENV_RESERVE_EDITORS` and `WARDYN_KUBECTL_CLI`, read on every component check.
 - Two `wardyn-proxy` parsers are kept on purpose.
 - `WARDYN_LLM_SCAN` is a kill switch that can only disable.
 - It also accepts `disable`/`disabled`/`none` and `enable`/`enabled`, and a garbage value exits 2.
@@ -281,6 +281,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_PRINT_GROUNDTRUTH_TOKEN` | bool | `false` | mint+print a host-sensor token and exit (flag `-print-groundtruth-token`) |
 | `WARDYN_AGENT_IMAGES` | string (JSON) | (unset) | agent-name → OCI image ref map (flag `-agent-images`). The `base` key is what the setup probe resolves (only `curl`). Refs should be multi-arch indexes; for one architecture per tag add `<key>@arm64` or `@amd64` beside the required plain key ([why](adoption/corp-image-authoring.md#multi-arch-images)) |
 | `WARDYN_ALLOW_AGENT_TELEMETRY` | bool | (unset) | re-enable the agent CLI's own telemetry inside sandboxes. Default-unset SUPPRESSES it. [Details](#wardyn_allow_agent_telemetry) |
+| `WARDYN_KUBECTL_CLI` | bool | off | Opt in to the kubectl component kind: a registered cluster's namespaces, reached through the proxy. Off, a kubectl row is refused as an unknown `cli.kind`. A garbage value exits 2 at boot. [Details](#wardyn_kubectl_cli) |
 | `WARDYN_COMPONENT_ENV_RESERVE_EDITORS` | bool | off | reserves `EDITOR`, `VISUAL`, `PAGER`, `GIT_EDITOR`, `GIT_PAGER` and `GIT_SEQUENCE_EDITOR`: no component may set them. A stored component that does is refused at its next save or attach |
 | `WARDYN_ALLOW_USER_ENV_SECRET` | bool | (unset) | let MEMBERS hold `env_secret` and `file_secret` grants. Default-unset DROPS a member's `env_secret` or `file_secret` grant even when the operator's ceiling lists the exact pairing (`dropAdminOnlyEnvSecretGrants`, `inline_policy_bounds.go`). [Details](#wardyn_allow_user_env_secret) |
 | `WARDYN_EGRESS_SECOND_HUMAN` | bool | (unset) | four-eyes on egress approvals: the human who DECIDES an `egress_domain` approval must not be the human who created the run (`requireSecondHuman`, `approvals_second_human.go`). **Local mode REFUSES it**, and the `admin-token` principal BYPASSES it. [Details](#wardyn_egress_second_human) |
@@ -1336,6 +1337,20 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
   - `WARDYN_GIT_PAT_BROKER_OFF_REFUSED=true` refuses operators' runs too: the staged retirement of `off` (flag `-git-pat-broker-off-refused`, default `false`).
 - An escape hatch for a forge that misbehaves under the rewrite, not a supported posture (flag `-git-pat-broker`).
 
+### `WARDYN_KUBECTL_CLI`
+
+- Opt in to the `kubectl` CLI component kind (`cli.kind: kubectl`). Off by default.
+- On, an admin writes an organisation row through `PUT /api/v1/components/{id}` naming the API server (`server`, https, no path), its CA bundle (`ca_pem`), one service account (`service_account.namespace`, `service_account.name`), 1 to 16 `namespaces` and `access` (`read` or `write`).
+- The admin then stores that account's token with `PUT /api/v1/components/{id}/kubectl-token` (`{"value": "<token>"}`). It is kept in the operator namespace under a name the secrets API refuses, with the server, CA and account it was registered for, and is never returned. A run uses it only if those are still the ones it launched with.
+- Editing the row's server, CA or service account deletes the stored token, and so does deleting the row.
+- The account needs `create` on `serviceaccounts/token` for itself (bind it with `resourceNames`). At each proxy refresh the control plane trades the stored token for a 10-minute one with the cluster's TokenRequest API, trusting only the row's CA bundle.
+- The sandbox gets a `~/.kube/config` with the run's own CA and an inert token. Neither the stored token nor a minted one enters the sandbox.
+- The proxy's door holds each request to the row's namespaces and access (`read` is `GET` only), allows discovery, and refuses cluster-wide resources, Secrets, token requests, `exec`, `attach`, `port-forward`, the API server proxy, ephemeral containers and impersonation.
+- A cluster on a private address also needs the admin's internal-hosts lift, as any private host does.
+- Off, a kubectl row is refused at save and at launch with the unknown-kind error, the New Run card stays `coming_soon`, the token route answers `404`, and a running run's next token refresh is refused.
+- `GET /api/v1/setup/status` reports it as `features.kubectl_cli`.
+- Only wardynd reads it; set it through the chart's `extraEnv`. A garbage value exits 2 at boot.
+
 ### `WARDYN_GIT_PAT_API_BITBUCKET_SERVER`
 
 - Opt in to the Bitbucket Server forge API door: whether a `git_pat` grant may set `api: true` with `forge: bitbucket_server`.
@@ -2239,6 +2254,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_CLAUDE_MANAGED_B64` 🔒 | base64 | (unset) | managed Claude credential blob |
 | `WARDYN_AWS_SSO_CONFIG_B64` | base64 | (unset) | captured AWS SSO session as a synthetic `~/.aws`, materialized by `agent-run`. With `WARDYN_AWS_SSO_PROXY_INJECT` on (the default) it is a placeholder in plain env with no token; secret (🔒) only when proxy-inject is off |
 | `WARDYN_AZURE_CLI_CONFIG_B64` | base64 | (unset) | an Azure CLI component's generated `~/.azure`, materialized by `agent-run`: the profile listing its subscriptions and a token cache whose access token is an inert placeholder. It carries no credential (`authorAzureCLI`, [`internal/api/runs_dispatch_cli_azure.go`](../internal/api/runs_dispatch_cli_azure.go)) |
+| `WARDYN_KUBECTL_CONFIG_B64` | base64 | (unset) | a kubectl component's generated `~/.kube/config`, materialized by `agent-run`: the API server, the run's own CA and an inert token. It carries no credential (`authorKubectlCLI`, [`internal/api/cli_kubectl.go`](../internal/api/cli_kubectl.go)) |
 | `WARDYN_AWS_SSO_ACCOUNT_ID` | string | (unset) | the AWS account a sign-in in the **container-login** sandbox may capture, seeded from the agent roster row's `sso_account_id`. Set together with the role below, or not at all. [Details](#wardyn_aws_sso_account_id) |
 | `WARDYN_AWS_SSO_ROLE_NAME` | string | (unset) | the IAM role the same sign-in may capture, seeded from the roster row's `sso_role_name` and verified in the pinned account. Set together with the account above. [Details](#wardyn_aws_sso_role_name) |
 

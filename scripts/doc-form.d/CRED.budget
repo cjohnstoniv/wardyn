@@ -21,4 +21,6 @@
 # docs/CREDENTIALS.md 4333 = ours 4321 + theirs 3997 - base 4000 = 4318 at the 0.10 merge of main (W2) into SEC-1c; measured 4333.
 # docs/CREDENTIALS.md 4451 = ours 4115 + theirs 4333 - base 3997 at the 0.10 W3 merge of SEC-1c onto the train.
 # docs/CREDENTIALS.md 4475 adds 24 (0.10.0 SEC-1b), measured: the runner placeholder switch, WARDYN_RUNNER_SECRET_PLACEHOLDERS.
-docs/CREDENTIALS.md=4475 share=35
+# docs/CREDENTIALS.md 4127 adds 130 over 3997, measured: the kubectl service-account token row and its mint line (#1990).
+# docs/CREDENTIALS.md 4605 = ours 4475 + theirs 4127 - base 3997 at the 0.10 W4d merge of FEAT-1KUBE onto the train.
+docs/CREDENTIALS.md=4605 share=35

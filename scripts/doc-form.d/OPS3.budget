@@ -57,7 +57,8 @@ docs/operations/who-gets-in.md=1938 share=35
 # K4 (0.9.3): docs/operations/admin-only-writes.md 3548 measured after merging K3-rest, +15 for organization runners in one pool on the /runner-pools writes row.
 # docs/operations/admin-only-writes.md 3645 = 3630 + 15 (K4), measured at the wave-B merge.
 # docs/operations/admin-only-writes.md 3698 adds 53, measured: the POST /runs/{id}/node-record row.
-docs/operations/admin-only-writes.md=3698 share=35
+# docs/operations/admin-only-writes.md 3709 adds 11 over 3698 (0.10 FEAT-1KUBE): the kubectl token write in the components row.
+docs/operations/admin-only-writes.md=3709 share=35
 # docs/operations/three-roles.md 4024 measured after G-090-cleanup slice F: docs rows that contradicted the code.
 # docs/operations/three-roles.md 4063 adds 39 over 4024: 0.9 final docs pass 3, measured: a profile maximum never cuts below an untouched run's size.
 # docs/operations/three-roles.md 4194 adds 21 over 4173, measured (0.9.3 ADO): GET /governance is the read; the profile routes answer 405 to GET.

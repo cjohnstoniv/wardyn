@@ -81,26 +81,31 @@ const (
 // How a credential reaches the run, whose it is and what is left of it once
 // the run ends.
 const (
-	deliveryProxy        = "proxy"
-	deliveryGitBroker    = "git_broker"
-	deliveryGitHelper    = "git_helper"
-	deliverySandboxEnv   = "sandbox_env"
-	deliverySandboxFile  = "sandbox_file"
-	deliveryShortLived   = "sandbox_short_lived"
-	credOwnerOwn         = "own"
-	credOwnerShared      = "shared"
-	credOwnerOrgApp      = "org_app"
-	afterEndGone         = "gone"
-	afterEndExpires      = "expires"
-	afterEndStays        = "stays"
-	credKindModel        = "model_provider"
-	credKindGitHubApp    = "github_app"
-	credKindADOSignIn    = "ado_signin"
-	credKindGitPAT       = "git_pat"
-	credKindSSHKey       = "ssh_key"
-	credKindSecret       = "secret"
-	credKindAWSRole      = "aws_role"
-	credKindAzureARM     = "azure_arm"
+	deliveryProxy       = "proxy"
+	deliveryGitBroker   = "git_broker"
+	deliveryGitHelper   = "git_helper"
+	deliverySandboxEnv  = "sandbox_env"
+	deliverySandboxFile = "sandbox_file"
+	deliveryShortLived  = "sandbox_short_lived"
+	credOwnerOwn        = "own"
+	credOwnerShared     = "shared"
+	credOwnerOrgApp     = "org_app"
+	afterEndGone        = "gone"
+	afterEndExpires     = "expires"
+	afterEndStays       = "stays"
+	credKindModel       = "model_provider"
+	credKindGitHubApp   = "github_app"
+	credKindADOSignIn   = "ado_signin"
+	credKindGitPAT      = "git_pat"
+	credKindSSHKey      = "ssh_key"
+	credKindSecret      = "secret"
+	credKindAWSRole     = "aws_role"
+	credKindAzureARM    = "azure_arm"
+	credKindKubeAPI     = "kube_api"
+
+	// A kube_api credential's access, from its row's read or write.
+	kubeAccessReadOnly   = "read_only"
+	kubeAccessReadWrite  = "read_write"
 	signInModelProvider  = "model_provider"
 	signInAWSCLI         = "aws_cli"
 	signInAzureCLI       = "azure_cli"
@@ -295,6 +300,8 @@ func credentialLabel(kind, owner string) string {
 		return "Your AWS sign-in"
 	case credKindAzureARM:
 		return "Your Azure sign-in"
+	case credKindKubeAPI:
+		return "Your organisation's cluster account"
 	case credKindGitPAT:
 		if shared {
 			return "A Git token your organisation provides"
@@ -630,6 +637,21 @@ func (b *accessBuilder) componentRow(fact componentFact) {
 		b.addHost(proxy.AzureLoginHost, viaInjected, row.ID)
 		b.addCredential(client.AccessCredential{ID: row.ID + ":azure_arm", Kind: credKindAzureARM, Owner: credOwnerOwn,
 			Delivery: deliveryProxy, Renewed: true, AfterEnd: afterEndGone})
+	}
+	if cli != nil && cli.Kind == types.CLIKindKubectl && cli.Kubectl != nil {
+		// The API server, where the proxy adds a ten-minute token it has the
+		// cluster mint for the organisation's service account. Neither that token
+		// nor the registered one enters the sandbox.
+		if host, _, ok := cli.Kubectl.HostPort(); ok {
+			b.addHost(host, viaInjected, row.ID)
+		}
+		access := kubeAccessReadOnly
+		if cli.Kubectl.Access == types.ComponentAccessWrite {
+			access = kubeAccessReadWrite
+		}
+		b.addCredential(client.AccessCredential{ID: row.ID + ":kube_api", Kind: credKindKubeAPI, Owner: credOwnerShared,
+			Delivery: deliveryProxy, Renewed: true, AfterEnd: afterEndGone,
+			Namespaces: append([]string{}, cli.Kubectl.Namespaces...), Access: access})
 	}
 	for i, sec := range fact.Secrets {
 		c := client.AccessCredential{ID: row.ID + ":secret:" + strconv.Itoa(i), Kind: credKindSecret, Owner: credOwnerOwn,

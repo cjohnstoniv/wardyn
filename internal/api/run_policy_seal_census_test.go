@@ -38,6 +38,7 @@ import (
 // "file function" and how many it holds. A new one is only listed once it runs
 // before the seal on every path that dispatches or revives a run.
 var lateAddCensus = map[string]int{
+	"cli_kubectl.go authorKubectlCLI":                           1,
 	"components_run.go expand":                                  1,
 	"integrations_run.go applyIntegrationRequirement":           1,
 	"policy_preview.go unionPreviewWorkspaceEgress":             1,

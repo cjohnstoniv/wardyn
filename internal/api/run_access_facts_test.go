@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -280,7 +281,7 @@ func TestAccessCredential_BedrockSSOFollowsInjectSwitch(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !slices.Equal(access.Credentials, tc.want) {
+		if !slices.EqualFunc(access.Credentials, tc.want, func(a, b client.AccessCredential) bool { return reflect.DeepEqual(a, b) }) {
 			t.Errorf("inject %v: credentials %+v, want %+v", tc.inject, access.Credentials, tc.want)
 		}
 	}
