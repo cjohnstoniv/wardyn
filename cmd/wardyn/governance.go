@@ -66,7 +66,8 @@ func governanceCmd(client clientFn) *cobra.Command {
 			"changes (it exits 0 and lists them); a second human then runs\n" +
 			"`wardyn governance changes approve <id>`.",
 	}
-	cmd.AddCommand(governanceGetCmd(client), governancePlanCmd(client), governanceSetCmd(client), governanceChangesCmd(client))
+	cmd.AddCommand(governanceGetCmd(client), governancePlanCmd(client), governanceSetCmd(client), governanceChangesCmd(client),
+		governanceCheckCmd(client), governanceDryRunCmd(client))
 	return subcommandGroup(cmd)
 }
 
@@ -304,4 +305,57 @@ func governanceChangesCmd(client clientFn) *cobra.Command {
 	reject.Flags().StringVar(&reason, "reason", "", "reason recorded with the rejection")
 	cmd.AddCommand(list, approve, reject)
 	return subcommandGroup(cmd)
+}
+
+// governanceCheckCmd prints which units a person may run in and the walls of one (POST
+// /governance/check).
+func governanceCheckCmd(client clientFn) *cobra.Command {
+	var user, runIn string
+	cmd := &cobra.Command{
+		Use:   "check",
+		Short: "Print the units a person may run in, their dormant memberships and the walls of one, as JSON",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			res, err := client().CheckGovernance(cmd.Context(), sdk.GovernanceCheckRequest{UserSubjects: []string{user}, RunIn: runIn})
+			if err != nil {
+				return err
+			}
+			return emitJSON(cmd.OutOrStdout(), res)
+		},
+	}
+	cmd.Flags().StringVar(&user, "user", "", "the person's sign-in subject or email")
+	cmd.Flags().StringVar(&runIn, "run-in", "", "one of the person's units, by name or id, to show the walls of (default: their home unit)")
+	_ = cmd.MarkFlagRequired("user")
+	return cmd
+}
+
+// governanceDryRunCmd prints what a drafted boundary, unit write or membership move would change
+// (POST /governance/dry-run).
+func governanceDryRunCmd(client clientFn) *cobra.Command {
+	var file string
+	cmd := &cobra.Command{
+		Use:   "dry-run",
+		Short: "Print what a drafted write would change, writing nothing: the file's target is boundary, unit or membership_move",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			var raw []byte
+			var err error
+			if file == "-" {
+				raw, err = io.ReadAll(cmd.InOrStdin())
+			} else {
+				raw, err = os.ReadFile(file)
+			}
+			if err != nil {
+				return fmt.Errorf("read dry-run body: %w", err)
+			}
+			report, err := client().GovernanceDryRun(cmd.Context(), raw)
+			if err != nil {
+				return err
+			}
+			return emitJSON(cmd.OutOrStdout(), report)
+		},
+	}
+	cmd.Flags().StringVarP(&file, "file", "f", "", "the JSON body to dry-run (- for stdin)")
+	_ = cmd.MarkFlagRequired("file")
+	return cmd
 }
