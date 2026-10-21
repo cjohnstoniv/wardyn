@@ -180,7 +180,7 @@ func TestPG_BrokerMintDoesNotForkTheChainAtRepeatableRead(t *testing.T) {
 	for {
 		var waiting int
 		if err := base.QueryRow(ctx,
-			`SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND objid = $1::bigint & 2147483647 AND NOT granted
+			`SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND classid::bigint = $1::bigint >> 32 AND objid = $1::bigint & 2147483647 AND NOT granted
 			AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`,
 			db.AuditChainLockKey).Scan(&waiting); err != nil {
 			t.Fatalf("poll pg_locks: %v", err)
