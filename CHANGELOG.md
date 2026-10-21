@@ -25,7 +25,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `cli_session_id` to `api_tokens`). Without it every API token read fails, because a token's liveness now reads
   `cli_sessions`.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) that turn on `WARDYN_MULTI_AGENT_TASKS`: grant the app role
-  `UPDATE` on `run_harnesses` (migration `0201_run_harness_task` adds `task`, which person erasure blanks). With the
+  `UPDATE` on `run_harnesses` (migration `0203_run_harness_task` adds `task`, which person erasure blanks). With the
   switch off, nothing needs the grant.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
   `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE` on
