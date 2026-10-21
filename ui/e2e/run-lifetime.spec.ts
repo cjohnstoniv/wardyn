@@ -111,6 +111,31 @@ test.describe("Run lifetime — the Change dialog's date", () => {
   });
 });
 
+// #2112: the server refuses No end on a run that has an end and a lifetime cap, so the dialog must not offer it.
+test.describe("Run lifetime — No end on a run with a lifetime cap", () => {
+  const openChange = async (page: Page, overlay: Record<string, unknown>) => {
+    await gotoConsole(page);
+    const id = await seedRun(page, "run-lifetime e2e no-end " + randomUUID().slice(0, 8));
+    await stubRunDetail(page, id, { ends_at: aheadByHours(8), ...overlay });
+    await navToRoute(page, `/runs/${id}`);
+    await page.getByTestId("run-ends-row").getByRole("button", { name: "Change…" }).click();
+    const dialog = page.getByRole("dialog", { name: "When this run ends" });
+    await expect(dialog).toBeVisible();
+    return dialog;
+  };
+
+  test("a run without a lifetime cap still offers No end", async ({ page }) => {
+    const dialog = await openChange(page, {});
+    await expect(dialog.getByRole("checkbox", { name: "No end" })).toBeVisible();
+  });
+
+  test("a run with a lifetime cap does not", async ({ page }) => {
+    const dialog = await openChange(page, { lifetime_cap_at: aheadByHours(24) });
+    await expect(dialog.locator('input[type="datetime-local"]')).toBeVisible();
+    await expect(dialog.getByRole("checkbox", { name: "No end" })).toHaveCount(0);
+  });
+});
+
 test.describe("Run lifetime — lost and revive", () => {
   // Overlay via a MUTABLE splice this test itself controls (not stubRunDetail's
   // cache-once helper), so Revive's success can be followed by a real redraw:

@@ -109,7 +109,7 @@ export function RunLifetimeBanner({
   // (run_end_wait.go), regardless of who is asking.
   const limits = run.run_limits;
   const mayChange = canAct && (operator || !!limits?.user_changes_limits);
-  const allowNoEnd = canAct && (operator || !!limits?.allow_no_end);
+  const allowNoEnd = canAct && !run.lifetime_cap_at && (operator || !!limits?.allow_no_end);
 
   const revive = async () => {
     setAction("revive");

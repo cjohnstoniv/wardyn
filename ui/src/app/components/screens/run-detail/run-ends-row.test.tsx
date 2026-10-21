@@ -117,6 +117,30 @@ describe("RunEndsRow — terminal, lost and queued runs render nothing here", ()
   });
 });
 
+// #2112: the server refuses No end on a run that has an end and a lifetime cap (run_end_wait.go planEnd), for an
+// operator too, so the dialog must not offer a choice that always fails.
+describe("RunEndsRow — No end on a run with a lifetime cap (#2112)", () => {
+  const openChange = async (run: RunDetail) => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderRow(run, () => {}, { operator: true });
+    await user.click(screen.getByRole("button", { name: "Change…" }));
+    await screen.findByRole("dialog", { name: "When this run ends" });
+  };
+  const endsAt = () => new Date(NOW + 8 * 3600_000).toISOString();
+
+  it("offers No end when the run has no lifetime cap", async () => {
+    await openChange(detail({ ends_at: endsAt(), run_limits: { allow_no_end: true } }));
+    expect(screen.getByRole("checkbox", { name: "No end" })).toBeInTheDocument();
+  });
+
+  it("hides No end when the run has a lifetime cap", async () => {
+    await openChange(
+      detail({ ends_at: endsAt(), lifetime_cap_at: new Date(NOW + 24 * 3600_000).toISOString(), run_limits: { allow_no_end: true } }),
+    );
+    expect(screen.queryByRole("checkbox", { name: "No end" })).not.toBeInTheDocument();
+  });
+});
+
 describe("RunEndsRow — Extend", () => {
   it("'1 more day' extends the run's END, not now — and refreshes on success", async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
