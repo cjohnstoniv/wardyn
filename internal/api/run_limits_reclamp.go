@@ -53,7 +53,7 @@ func (s *Server) reclampProfiledRuns(ctx context.Context, rc store.RunLimitsRecl
 	if err != nil || len(runs) == 0 {
 		return err
 	}
-	profiles, err := s.resolveAllProfiles(ctx)
+	profiles, err := s.resolveAllUnits(ctx)
 	if err != nil {
 		return err
 	}
@@ -64,7 +64,7 @@ func (s *Server) reclampProfiledRuns(ctx context.Context, rc store.RunLimitsRecl
 	for _, p := range profiles {
 		if p.Err != nil {
 			slog.WarnContext(ctx, "wardynd: a governance profile cannot be composed, so its runs' limits are not re-clamped",
-				slog.String("profile_id", p.Row.ID.String()), slog.Any("err", p.Err))
+				slog.String("unit_id", p.Row.ID.String()), slog.Any("err", p.Err))
 			continue
 		}
 		current[p.Row.ID] = p.Resolved.Limits.RunLimits
@@ -72,7 +72,7 @@ func (s *Server) reclampProfiledRuns(ctx context.Context, rc store.RunLimitsRecl
 	for _, run := range runs {
 		// A deleted profile has no current limits to tighten to; the run keeps
 		// the ones it captured, held to the boundary's maximum.
-		l, ok := current[*run.GovernanceProfileID]
+		l, ok := current[*run.UnitID]
 		if !ok {
 			if capSec == 0 {
 				continue
@@ -140,7 +140,7 @@ func (s *Server) reclampRun(ctx context.Context, rc store.RunLimitsReclamper, ru
 		}
 		data := map[string]any{
 			"reason": "limits_tightened", "from": run.EndsAt, "to": end, "max": limits.MaxEndAheadSec,
-			"profile_id": run.GovernanceProfileID,
+			"unit_id": run.UnitID,
 		}
 		if source != "" {
 			data["source"] = source
@@ -152,7 +152,7 @@ func (s *Server) reclampRun(ctx context.Context, rc store.RunLimitsReclamper, ru
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.wait_budget.set", run.ID.String(),
 			"success", mustJSON(map[string]any{
 				"reason": "limits_tightened", "from": run.WaitBudgetSec, "to": wait,
-				"max": waitCeilingSec(limits, s.cfg.ApprovalExpiryAfter), "profile_id": run.GovernanceProfileID,
+				"max": waitCeilingSec(limits, s.cfg.ApprovalExpiryAfter), "unit_id": run.UnitID,
 			})))
 	}
 }

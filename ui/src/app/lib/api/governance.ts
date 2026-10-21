@@ -198,11 +198,11 @@ export interface GovernanceEffective {
   error?: string;
 }
 
-// types.GovernanceProfile — one named, assignable ceiling. A composed profile (overlay set) stores
-// `ceiling: {}` and `limits: {}` and states its policy as base_profile_id (absent: the deployment
+// types.GovernanceUnit — one named, assignable ceiling. A composed profile (overlay set) stores
+// `ceiling: {}` and `limits: {}` and states its policy as parent_id (absent: the deployment
 // default) plus overlay and overlay_limits; `effective` is what binds. A write that omits
-// base_profile_id, overlay or overlay_limits keeps the stored value and null clears it.
-export interface GovernanceProfile {
+// parent_id, overlay or overlay_limits keeps the stored value and null clears it.
+export interface GovernanceUnit {
   id: string;
   name: string;
   ceiling: RunPolicySpec;
@@ -211,19 +211,19 @@ export interface GovernanceProfile {
   updated_at: string;
   created_by?: string;
   contact?: PolicyContact;
-  base_profile_id?: string;
+  parent_id?: string;
   overlay?: CeilingOverlay;
   overlay_limits?: LimitsOverlay;
-  // governanceProfileView.Effective: on GET /governance and the write responses.
+  // governanceUnitView.Effective: on GET /governance and the write responses.
   effective?: GovernanceEffective;
 }
 
-// types.GovernanceAssignment — one subject bound to one profile.
-export interface GovernanceAssignment {
+// types.GovernanceMembership — one subject bound to one profile.
+export interface GovernanceMembership {
   id: string;
   subject_type: CapabilitySubjectType;
   subject: string;
-  profile_id: string;
+  unit_id: string;
   priority: number;
   created_at: string;
   created_by?: string;
@@ -231,13 +231,13 @@ export interface GovernanceAssignment {
 
 // GET /governance's body: the whole picture in one read.
 export interface GovernanceSnapshot {
-  profiles: GovernanceProfile[];
-  assignments: GovernanceAssignment[];
+  profiles: GovernanceUnit[];
+  assignments: GovernanceMembership[];
 }
 
 // The POST/PUT body. id/created_at/updated_at/created_by are never sent — the
-// server assigns provenance (governanceProfileRequest).
-export interface GovernanceProfileInput {
+// server assigns provenance (governanceUnitRequest).
+export interface GovernanceUnitInput {
   name: string;
   ceiling: RunPolicySpec;
   limits: GovernanceLimits;
@@ -245,33 +245,33 @@ export interface GovernanceProfileInput {
   // omits `contact` keeps it, `null` or `{}` clears it).
   contact?: PolicyContact | null;
   // Composition (0.8.6): absent keeps the stored value on a PUT, null clears it.
-  base_profile_id?: string | null;
+  parent_id?: string | null;
   overlay?: CeilingOverlay | null;
   overlay_limits?: LimitsOverlay | null;
 }
 
-// governanceProfileResponse: the saved row plus the OMISSION warnings the
+// governanceUnitResponse: the saved row plus the OMISSION warnings the
 // server composed. `warnings` is `omitempty` on the wire, so it is coerced to
 // an array here and the screen never guards it.
 //
 // The console renders those strings VERBATIM, in response order — they are the
 // server's own prose, more specific than any frozen sentence could be
 // (governance-prompt.md §7.4).
-export interface GovernanceProfileWrite {
-  profile: GovernanceProfile;
+export interface GovernanceUnitWrite {
+  unit: GovernanceUnit;
   warnings: string[];
 }
 
-// The POST /governance/assignments body.
-export interface GovernanceAssignmentInput {
+// The POST /governance/memberships body.
+export interface GovernanceMembershipInput {
   subject_type: CapabilitySubjectType;
   subject: string;
-  profile_id: string;
+  unit_id: string;
   priority: number;
 }
 
-// The POST /governance/preview body — the two claim lists
-// ResolveGovernanceProfile itself takes, so the server has nothing to derive.
+// The POST /governance/check body — the two claim lists
+// ResolveGovernanceUnit itself takes, so the server has nothing to derive.
 //
 // The console's claims field is kind-LESS (one textarea, the People step's own
 // shape), so it sends every typed line in BOTH lists and the server offers each
@@ -315,11 +315,11 @@ export function previewClaims(claims: string, userType: string = USER_TYPE_STAND
 //
 // EVERY field is `omitempty` on the wire, so an empty object is the answer for
 // "no assignment matched" — the deployment ceiling. Same absent-key doctrine as
-// DefaultPolicy's governance_profile_name; the two present fields ship
-// together, so the screen tests `profile_name` and reads the tier beside it.
+// DefaultPolicy's unit_name; the two present fields ship
+// together, so the screen tests `unit_name` and reads the tier beside it.
 export interface GovernancePreview {
-  profile_id?: string;
-  profile_name?: string;
+  unit_id?: string;
+  unit_name?: string;
   matched_tier?: CapabilitySubjectType;
 }
 
@@ -343,38 +343,38 @@ export const governance = {
   // null, so both halves are coerced and every caller can map over them.
   async getGovernance(): Promise<GovernanceSnapshot> {
     const res = await wfetch("/governance", { method: "GET" });
-    const body = await asJson<Partial<GovernanceSnapshot>>(res);
+    const body = await asJson<{ units?: unknown; memberships?: unknown }>(res);
     return {
-      profiles: unwrapList<GovernanceProfile>(body.profiles),
-      assignments: unwrapList<GovernanceAssignment>(body.assignments),
+      profiles: unwrapList<GovernanceUnit>(body.units),
+      assignments: unwrapList<GovernanceMembership>(body.memberships),
     };
   },
 
-  // POST /api/v1/governance/profiles -> 201 {profile, warnings}. A 400 whose
+  // POST /api/v1/governance/units -> 201 {profile, warnings}. A 400 whose
   // message opens "invalid ceiling: eligible grant " is the monotone-⊆ bound
   // refusing a profile that would MINT credential eligibility; every 4xx
   // surfaces as an HttpError carrying the server's own message.
-  async createProfile(input: GovernanceProfileInput): Promise<GovernanceProfileWrite> {
-    return writeProfile(await wfetch("/governance/profiles", { method: "POST", asPerson: true, body: JSON.stringify(input) }));
+  async createProfile(input: GovernanceUnitInput): Promise<GovernanceUnitWrite> {
+    return writeProfile(await wfetch("/governance/units", { method: "POST", asPerson: true, body: JSON.stringify(input) }));
   },
 
-  // PUT /api/v1/governance/profiles/{id} -> 200 {profile, warnings}. Rename
+  // PUT /api/v1/governance/units/{id} -> 200 {profile, warnings}. Rename
   // included: ON DELETE RESTRICT makes delete-and-recreate impossible for an
   // assigned profile, so the update path has to carry the name.
-  async updateProfile(id: string, input: GovernanceProfileInput): Promise<GovernanceProfileWrite> {
+  async updateProfile(id: string, input: GovernanceUnitInput): Promise<GovernanceUnitWrite> {
     return writeProfile(
-      await wfetch(`/governance/profiles/${encodeURIComponent(id)}`, { method: "PUT", asPerson: true, body: JSON.stringify(input) }),
+      await wfetch(`/governance/units/${encodeURIComponent(id)}`, { method: "PUT", asPerson: true, body: JSON.stringify(input) }),
     );
   },
 
-  // DELETE /api/v1/governance/profiles/{id} -> 204.
+  // DELETE /api/v1/governance/units/{id} -> 204.
   //
   // The 409 MUST reach the caller: it is the ON DELETE RESTRICT refusal, and it
   // is authoritative for the race the console's own assignment count cannot see
   // (another admin assigning the profile a second ago). A 404 is tolerated as
   // "already gone" — the row is absent either way, which is what was asked for.
   async deleteProfile(id: string): Promise<void> {
-    const res = await wfetch(`/governance/profiles/${encodeURIComponent(id)}`, { method: "DELETE" });
+    const res = await wfetch(`/governance/units/${encodeURIComponent(id)}`, { method: "DELETE" });
     await throwIfPending(res);
     if (!res.ok && res.status !== 404) {
       const { message, reason } = await errEnvelope(res);
@@ -382,36 +382,36 @@ export const governance = {
     }
   },
 
-  // POST /api/v1/governance/assignments -> the stored row. Keyed on the natural
+  // POST /api/v1/governance/memberships -> the stored row. Keyed on the natural
   // (subject_type, subject): re-assigning a subject REPOINTS its single row
   // (200) rather than accumulating a second (201). The console reloads either
   // way, so the status is not surfaced.
-  async upsertAssignment(input: GovernanceAssignmentInput): Promise<GovernanceAssignment> {
-    const res = await wfetch("/governance/assignments", { method: "POST", asPerson: true, body: JSON.stringify(input) });
-    return asJson<GovernanceAssignment>(res);
+  async upsertAssignment(input: GovernanceMembershipInput): Promise<GovernanceMembership> {
+    const res = await wfetch("/governance/memberships", { method: "POST", asPerson: true, body: JSON.stringify(input) });
+    return asJson<GovernanceMembership>(res);
   },
 
-  // DELETE /api/v1/governance/assignments/{id} -> 204. This is the SUPPORTED
+  // DELETE /api/v1/governance/memberships/{id} -> 204. This is the SUPPORTED
   // way to widen a principal back to the deployment ceiling.
   async deleteAssignment(id: string): Promise<void> {
-    const res = await wfetch(`/governance/assignments/${encodeURIComponent(id)}`, { method: "DELETE" });
+    const res = await wfetch(`/governance/memberships/${encodeURIComponent(id)}`, { method: "DELETE" });
     await throwIfPending(res);
     if (!res.ok && res.status !== 404) {
       throw new HttpError(res.status, await errText(res));
     }
   },
 
-  // POST /api/v1/governance/preview -> 200, the resolved profile or {}.
+  // POST /api/v1/governance/check -> 200, the resolved profile or {}.
   //
   // The dry run runs THE resolver server-side —
-  // Store.ResolveGovernanceProfile, the same call the enforcement path makes on
+  // Store.ResolveGovernanceUnit, the same call the enforcement path makes on
   // every run. There is deliberately NO client-side precedence here: a second
   // implementation of the SQL ORDER BY precedence rule in TypeScript is a
   // second implementation of the answer. It saves nothing and enforces
   // nothing, but it must not be able to disagree with what actually binds a
   // member.
   async previewGovernance(input: GovernancePreviewInput): Promise<GovernancePreview> {
-    const res = await wfetch("/governance/preview", { method: "POST", body: JSON.stringify(input) });
+    const res = await wfetch("/governance/check", { method: "POST", body: JSON.stringify(input) });
     return asJson<GovernancePreview>(res);
   },
 
@@ -442,7 +442,7 @@ export const governance = {
   },
 };
 
-async function writeProfile(res: Response): Promise<GovernanceProfileWrite> {
-  const body = await asJson<GovernanceProfileWrite>(res);
-  return { profile: body.profile, warnings: unwrapList<string>(body.warnings) };
+async function writeProfile(res: Response): Promise<GovernanceUnitWrite> {
+  const body = await asJson<GovernanceUnitWrite>(res);
+  return { unit: body.unit, warnings: unwrapList<string>(body.warnings) };
 }

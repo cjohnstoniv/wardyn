@@ -422,7 +422,7 @@ describe("drives (GET /me/drives)", () => {
   });
 
   it("says why no drive can be attached when the catalogue refuses", async () => {
-    catalogue = { drives: [], denied_by_profile: "Contractors", pool_checked: false };
+    catalogue = { drives: [], denied_by_unit: "Contractors", pool_checked: false };
     show(BACKGROUND);
     await openAdd();
     await pickType(NR_FILES.KIND_USER_DRIVE);

@@ -40,7 +40,7 @@ export const driveReason = (d: MeDrive): string | undefined => (d.unavailable_re
  */
 const REASON_TEXT: Record<MemberDriveCreateReason, ((c: MemberDriveCreate) => string | undefined) | undefined> = {
   disabled: undefined,
-  denied_by_profile: (c) => (c.denied_by_profile ? NR_FILES.CREATE_DENIED(c.denied_by_profile) : undefined),
+  denied_by_unit: (c) => (c.denied_by_unit ? NR_FILES.CREATE_DENIED(c.denied_by_unit) : undefined),
   limit_reached: (c) => NR_FILES.CREATE_LIMIT(c.count, c.limit),
   unsupported: () => NR_FILES.CREATE_UNSUPPORTED,
   delete_unavailable: () => NR_FILES.CREATE_NO_DELETE,
@@ -74,8 +74,8 @@ export function useDriveCatalogue(poolId: string | undefined, enabled = true): D
   const c = state.catalogue;
   const reason = state.failed
     ? DRIVE_MEMBER.NR_UNAVAILABLE
-    : c?.denied_by_profile
-      ? DRIVE_MEMBER.NR_DENIED(c.denied_by_profile)
+    : c?.denied_by_unit
+      ? DRIVE_MEMBER.NR_DENIED(c.denied_by_unit)
       : c?.unavailable ? UNAVAILABLE_TEXT[c.unavailable] ?? DRIVE_MEMBER.NR_UNAVAILABLE : undefined;
   const reload = React.useCallback(() => setGeneration((g) => g + 1), []);
   return { catalogue: c, reason, reload };

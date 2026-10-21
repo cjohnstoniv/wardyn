@@ -1661,7 +1661,7 @@ at tier 0. With `routes` set, the first route that matches an approval chooses i
   {"kinds": ["push_content"],
    "tiers": [{"after": "0s",  "channels": ["sec-hook"]},
              {"after": "30m", "channels": ["sec-hook", "mail"], "notify": ["profile_contact"]}]},
-  {"profiles": ["<governance profile id>"],
+  {"units": ["<governance profile id>"],
    "tiers": [{"after": "0s", "channels": ["mail"], "notify": ["run_owner"]}]},
   {"tiers": [{"after": "0s", "channels": ["sec-hook"]}]}
 ]
@@ -3911,7 +3911,7 @@ image digests in `wardyn.env`, not a re-run of anything
     `approvals.kind` with `credential_reauth`).
   - `0063` adds the
     `agent_runs.status_detail` column, `0065` adds `agent_runs.autonomy_level`, `0072` adds the
-    run-limit columns (`ends_at`, `wait_budget_sec`, `run_limits`, `governance_profile_id`), `0073` the
+    run-limit columns (`ends_at`, `wait_budget_sec`, `run_limits`, `unit_id`), `0073` the
     lease columns (`lost_at`, `lost_reason`, `ending_soon_for`, `ending_soon_sec`).
   - And `0056`, `0057` and `0058` are three successive
     `CREATE OR REPLACE`s of the chain function `0047` created, each re-creating its
@@ -3933,7 +3933,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - So does `0075`, which re-adds the `approvals.kind`
   CHECK (`0001`'s table) with `push_content`, and `0076`, which adds `agent_runs.model_provider_id`.
 - 0.8's user types add three more: `0079` re-adds the subject-type CHECKs on
-  `capability_grants` (`0042`'s table), `governance_assignments` (`0052`'s) and
+  `capability_grants` (`0042`'s table), `governance_memberships` (`0052`'s) and
   `user_drive_grants` (`0054`'s), `0080` adds `agent_runs.user_type`, and `0082` adds
   `api_tokens.user_type` with its CHECK.
 - The long-holds runs add six more on `agent_runs`:
@@ -3952,12 +3952,12 @@ image digests in `wardyn.env`, not a re-run of anything
   `CREATE OR REPLACE` of `0047`'s chain function that the partitions need.
 - `0114` adds `api_tokens.expires_at` (`0045`'s table).
 - `0115` adds `api_tokens.identity_stamped_at` (`0045`'s table), backfilled to `created_at`.
-- `0116` adds `governance_profiles.contact` (`0052`'s table).
+- `0116` adds `governance_units.contact` (`0052`'s table).
 - `0117` (`0117_agent_runs_sizing`) adds the dispatch-time sizing columns on `agent_runs` (`runner_kind`, the agent CPU/memory
   request and limit columns, `proxy_cpu_millis` and `proxy_memory_mib`).
 - At dispatch, before the sandbox
   is created, each run records the values its driver applied, and a run that predates it reads all NULL.
-- `0125` adds `governance_profiles.base_profile_id`, `overlay` and `overlay_limits` with five CHECKs (`0052`'s table).
+- `0125` adds `governance_units.parent_id`, `overlay` and `overlay_limits` with five CHECKs (`0052`'s table).
 - `0127` (`0127_deprovision_jobs`) adds `people.deactivated_at` (`0090`'s table), beside its new `deprovision_jobs` table.
 - `0130` (`0130_audit_chain_head_from_meta`) is a later `CREATE OR REPLACE` of `0047`'s chain function, which
   links each new row to the recorded head.
@@ -4011,6 +4011,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0204` (`0204_user_drives_kept_from_run`) adds `kept_from_run` to `user_drives` (`0054`'s table): the run a person's drive was kept from (`keep_work_folder`), NULL on every drive made by hand.
 - `0205` (`0205_user_drives_team`) adds `user_drives.team` (`0054`'s table), with a check keeping it off a person's own drive and off `k8s_pvc`, and `user_drive_grants.members_can_write` (`0054`'s table, false by default): a team drive and its allocations' write bit (`storage.user_drive.team_drives`). A write setting `team` on a `k8s_pvc` or member-owned row now fails.
 - `0206` (`0206_runner_health`) adds `runner_health`, one row per runner (`0139`'s `runners`): the last offline summary a runner reported, when it was stored, and its last relay status, each runner-reported and capped.
+- `0201` (`0201_governance_units`) renames `governance_profiles` to `governance_units` (`base_profile_id` becomes `parent_id`), `governance_assignments` to `governance_memberships` (`profile_id` becomes `unit_id`) and `agent_runs.governance_profile_id` to `unit_id`, and rewrites the `profile_id` key of each queued run's launch and the kind and JSON keys of each `governance_changes` row. No other row is rewritten and a table rename keeps its grants, so a split-role install needs no grant change. A governance change proposed before the upgrade reads as stale once and is proposed again.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.

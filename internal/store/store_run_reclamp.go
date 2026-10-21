@@ -49,14 +49,14 @@ var _ UnprofiledLiveRunLister = PG{}
 // ListProfiledLiveRuns — see RunLimitsReclamper.
 func (s PG) ListProfiledLiveRuns(ctx context.Context) ([]types.AgentRun, error) {
 	q := `SELECT ` + runCols + ` FROM agent_runs
-		WHERE governance_profile_id IS NOT NULL AND (lost_at IS NULL OR lost_reason <> $2) AND state = ANY($1)`
+		WHERE unit_id IS NOT NULL AND (lost_at IS NULL OR lost_reason <> $2) AND state = ANY($1)`
 	return collect(ctx, s.Pool, "list", "profiled live runs", q, []any{slotHoldingStateNames(), string(types.LostEnded)}, scanRun)
 }
 
 // ListUnprofiledLiveRuns — see UnprofiledLiveRunLister.
 func (s PG) ListUnprofiledLiveRuns(ctx context.Context) ([]types.AgentRun, error) {
 	q := `SELECT ` + runCols + ` FROM agent_runs
-		WHERE governance_profile_id IS NULL AND (lost_at IS NULL OR lost_reason <> $2) AND state = ANY($1)`
+		WHERE unit_id IS NULL AND (lost_at IS NULL OR lost_reason <> $2) AND state = ANY($1)`
 	return collect(ctx, s.Pool, "list", "unprofiled live runs", q, []any{slotHoldingStateNames(), string(types.LostEnded)}, scanRun)
 }
 

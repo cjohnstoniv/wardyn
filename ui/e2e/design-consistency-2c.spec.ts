@@ -68,7 +68,7 @@ test.describe("Design consistency", () => {
   for (const c of [
     { name: "People", path: "/admin/people", api: /\/api\/v1\/people(\?|$)/, json: { people: [] }, title: "No people yet" },
     { name: "Permissions", path: "/admin/permissions", api: /\/api\/v1\/permissions(\?|$)/, json: { grants: [], enforcement: {} }, title: "No grants yet" },
-    { name: "Governance", path: "/admin/governance", api: /\/api\/v1\/governance(\?|$)/, json: { profiles: [], assignments: [] }, title: "No profiles yet" },
+    { name: "Governance", path: "/admin/governance", api: /\/api\/v1\/governance(\?|$)/, json: { units: [], memberships: [] }, title: "No profiles yet" },
   ]) {
     test(`${c.name}: the empty block is the compact one`, async ({ page }) => {
       await page.route(c.api, (route) => (route.request().method() === "GET" ? route.fulfill({ json: c.json }) : route.fallback()));

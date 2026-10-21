@@ -42,7 +42,7 @@ func memberDrivesDisabledMsg() string {
 	return "Your organisation doesn't let people create drives. Ask an admin."
 }
 
-func memberDrivesDeniedByProfileMsg(profile string) string {
+func memberDrivesDeniedByUnitMsg(profile string) string {
 	return fmt.Sprintf("Your governance profile %q doesn't let you create drives.", profile)
 }
 
@@ -206,14 +206,14 @@ func (s *Server) memberDriveCreateDoors(r *http.Request) (types.UserDrive, types
 // exempt, as from the mount door; never from the org switch. The decision is
 // the flags, never the name, so a blank-named denying profile still refuses.
 func (s *Server) memberDriveDoorRefusal(r *http.Request, ceiling governanceCeiling) *runRefusal {
-	if s.runUngoverned(r.Context()) || ceiling.Profile == nil ||
+	if s.runUngoverned(r.Context()) || ceiling.Unit == nil ||
 		!ceiling.Limits.DenyUserDrive && !ceiling.Limits.DenyMemberDrives {
 		return nil
 	}
-	msg := memberDrivesDeniedByProfileMsg(ceiling.Profile.Name)
-	d := authz.Deny(authz.ReasonGovernanceProfile, "drives.member.create", msg).WithPolicy(s.ceilingPolicy(r.Context(), ceiling))
+	msg := memberDrivesDeniedByUnitMsg(ceiling.Unit.Name)
+	d := authz.Deny(authz.ReasonGovernanceUnit, "drives.member.create", msg).WithPolicy(s.ceilingPolicy(r.Context(), ceiling))
 	return &runRefusal{status: http.StatusForbidden, decision: &d,
-		body: errorBody{Error: msg, Reason: reasonMemberDrivesDeniedByProfile}}
+		body: errorBody{Error: msg, Reason: reasonMemberDrivesDeniedByUnit}}
 }
 
 // memberDriveRow is the row create inserts: this deployment's own managed

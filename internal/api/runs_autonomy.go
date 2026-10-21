@@ -34,7 +34,7 @@ import (
 // say `auto` while the resolution said `hold`.
 //
 // Returns ok=false once it has written its own 403 (refuse, the
-// existing member-refusal shape carrying `governance_profile`, or
+// existing member-refusal shape carrying `governance_unit`, or
 // `component_autonomy` when the org's cap on runs with a self-defined component
 // alone bound the level), or its own 500 when the site config could not be
 // read. The warnings ride the 201.
@@ -78,7 +78,7 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 	// that still applies is the managed-settings one: a hold run gets its file
 	// at no level too (#358).
 	capLevel := componentAutonomyCap(comps)
-	rubric := ceiling.Profile != nil && ceiling.Limits.AutonomyRubric != nil
+	rubric := ceiling.Unit != nil && ceiling.Limits.AutonomyRubric != nil
 	if !rubric && capLevel == "" {
 		// adoEntraUngraded: nothing capped this run, so dispatch has no grade to
 		// be held to and resolves the lane exactly as it always did.

@@ -72,7 +72,7 @@ export interface ShellMeta {
   // launch, which is the direction of error this feature can afford (see
   // operator-context.tsx's UserDriveMeta for the whole argument).
   userDrive: MeUserDrive | null;
-  userDriveDeniedByProfile: string;
+  userDriveDeniedByUnit: string;
   // R4/F091 — the THIRD drive key: WHY /me could not answer, "" when it could.
   // The server always sends it on 0.7 and suppresses the allocation alongside
   // it; without it four distinguishable answers reach the member as the single
@@ -152,7 +152,7 @@ function identityFromMe(me: Me | null) {
     sessionExpiresAt: me ? (namedExpiry() ?? validExpiry(me.session_expires_at)) : null,
     memberLocalDirRoot: me?.member_local_dir_root ?? null,
     userDrive: me?.user_drive ?? null,
-    userDriveDeniedByProfile: me?.user_drive_denied_by_profile ?? "",
+    userDriveDeniedByUnit: me?.user_drive_denied_by_unit ?? "",
     userDriveUnavailable: me?.user_drive_unavailable ?? "",
     userType: me?.user_type ?? null,
     userViewPreselectType: me?.user_view_preselect_type ?? "",
@@ -190,7 +190,7 @@ export function useMeta(): [ShellMeta, () => void, (me: Me) => void] {
     sessionExpiresAt: null,
     memberLocalDirRoot: null,
     userDrive: null,
-    userDriveDeniedByProfile: "",
+    userDriveDeniedByUnit: "",
     userDriveUnavailable: "",
     userType: null,
     userViewPreselectType: "",

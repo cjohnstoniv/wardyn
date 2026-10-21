@@ -67,12 +67,12 @@ func (e *scimEnv) seedBystander(principal, email string) bystander {
 	}); err != nil {
 		e.t.Fatal(err)
 	}
-	prof, err := e.st.UpsertGovernanceProfile(ctx, types.GovernanceProfile{ID: uuid.New(), Name: "walled-" + principal, Ceiling: govProfileSpec()})
+	prof, err := e.st.UpsertGovernanceUnit(ctx, types.GovernanceUnit{ID: uuid.New(), Name: "walled-" + principal, Ceiling: govProfileSpec()})
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	if _, err := e.st.UpsertGovernanceAssignment(ctx, types.GovernanceAssignment{
-		ID: uuid.New(), SubjectType: types.CapabilitySubjectUser, Subject: principal, ProfileID: prof.ID,
+	if _, err := e.st.UpsertGovernanceMembership(ctx, types.GovernanceMembership{
+		ID: uuid.New(), SubjectType: types.CapabilitySubjectUser, Subject: principal, UnitID: prof.ID,
 	}); err != nil {
 		e.t.Fatal(err)
 	}

@@ -284,7 +284,7 @@ describe("health.whoami() — the user-drive pair", () => {
           enforcement: "request",
           home_name: "d-3f9a1c7e",
         },
-        user_drive_denied_by_profile: "",
+        user_drive_denied_by_unit: "",
       }),
     );
     const me = await health.whoami();
@@ -296,7 +296,7 @@ describe("health.whoami() — the user-drive pair", () => {
       enforcement: "request",
       home_name: "d-3f9a1c7e",
     });
-    expect(me?.user_drive_denied_by_profile).toBe("");
+    expect(me?.user_drive_denied_by_unit).toBe("");
   });
 
   it("reads a paused allocation as an allocation, not as nothing", async () => {
@@ -309,7 +309,7 @@ describe("health.whoami() — the user-drive pair", () => {
           enforcement: "none",
           paused: true,
         },
-        user_drive_denied_by_profile: "",
+        user_drive_denied_by_unit: "",
       }),
     );
     const me = await health.whoami();
@@ -319,17 +319,17 @@ describe("health.whoami() — the user-drive pair", () => {
   });
 
   it("carries a shut door with NO allocation — the state a folded field could not express", async () => {
-    answer(meBody({ user_drive: null, user_drive_denied_by_profile: "Greenfield contractors" }));
+    answer(meBody({ user_drive: null, user_drive_denied_by_unit: "Greenfield contractors" }));
     const me = await health.whoami();
     expect(me?.user_drive).toBeNull();
-    expect(me?.user_drive_denied_by_profile).toBe("Greenfield contractors");
+    expect(me?.user_drive_denied_by_unit).toBe("Greenfield contractors");
   });
 
   it("leaves both absent on a pre-0.7 daemon — undefined, not a guessed default", async () => {
     answer(meBody({}));
     const me = await health.whoami();
     expect(me?.user_drive).toBeUndefined();
-    expect(me?.user_drive_denied_by_profile).toBeUndefined();
+    expect(me?.user_drive_denied_by_unit).toBeUndefined();
   });
 });
 

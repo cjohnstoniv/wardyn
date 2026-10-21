@@ -48,8 +48,8 @@ func (s *Server) governanceChangeTTL() time.Duration {
 // The closed set of target kinds (the table is governanceChangeKinds). A later lane adds a kind here
 // and a row there, with no DDL: migration 0126 puts no CHECK on target_kind.
 const (
-	govKindProfile      = types.GovernanceTargetProfile
-	govKindAssignment   = types.GovernanceTargetAssignment
+	govKindUnit         = types.GovernanceTargetUnit
+	govKindMembership   = types.GovernanceTargetMembership
 	govKindGrant        = types.GovernanceTargetCapabilityGrant
 	govKindEnforcement  = types.GovernanceTargetCapabilityEnforcement
 	govKindAvailability = types.GovernanceTargetCapabilityAvailability
@@ -166,8 +166,8 @@ type govApplied struct {
 // mapping is written on the operatorOnly tier, so only a super admin approves it; every other kind is
 // written on securityOps.
 var governanceChangeKinds = map[string]govKind{
-	govKindProfile:             {approver: securityApprover, apply: applyProfileChange},
-	govKindAssignment:          {approver: securityApprover, apply: applyAssignmentChange},
+	govKindUnit:                {approver: securityApprover, apply: applyUnitChange},
+	govKindMembership:          {approver: securityApprover, apply: applyMembershipChange},
 	govKindGrant:               {approver: securityApprover, apply: applyGrantChange},
 	govKindEnforcement:         {approver: securityApprover, apply: applyEnforcementChange},
 	govKindAvailability:        {approver: securityApprover, apply: applyAvailabilityChange},

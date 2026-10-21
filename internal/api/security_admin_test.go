@@ -96,7 +96,7 @@ func TestRequireSecurityOperator(t *testing.T) {
 				reached = true
 				w.WriteHeader(http.StatusOK)
 			}))
-			r := httptest.NewRequest(http.MethodPost, "/api/v1/governance/profiles", nil)
+			r := httptest.NewRequest(http.MethodPost, "/api/v1/governance/units", nil)
 			r = r.WithContext(operatorCtx("sub-x", "x@corp.example", tc.role))
 			w := httptest.NewRecorder()
 			mw.ServeHTTP(w, r)

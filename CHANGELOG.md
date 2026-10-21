@@ -35,6 +35,27 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE` on
   `governance_boundary` (migration `0200_governance_boundary`). Without it the Wardyn boundary cannot be read or
   written. The same migration's `agent_runs.break_glass` column needs no grant.
+- **Governance profiles are now units, and assignments are now memberships.** The routes are
+  `/governance/units`, `/governance/memberships` and `/governance/check` (was `/governance/preview`), and the keys
+  are `units`, `memberships`, `unit_id` and `parent_id`. The old routes answer 404 or 405 and are not aliased; a
+  script or a `wardyn governance` document that names the old routes or keys changes to the new ones. A 0.9
+  governance document is refused, and the error names the new key. The audit actions are `governance.unit.*` and
+  `governance.membership.*`; rows written before the upgrade keep the old names, so a query over a span that
+  crosses the upgrade matches both.
+- The same rename reaches what a client reads outside the governance body. Reason codes become
+  `governance_unit_*`, `governance_membership_*`, `user_drive_denied_by_unit`, `member_drives_denied_by_unit`,
+  `unit_unreadable`, `unit_gone`, `governance_unit_not_found` and `governance_membership_not_found`. The enum value
+  `profile` becomes `unit` in a policy's `source`, `cause` and `layer`, in managed-settings `locked_by` and in a
+  change's `target_kind`. The fields are `unit_name` and `unit` in the policy envelope, `user_drive_denied_by_unit`
+  in `GET /me`, `denied_by_unit` in the drives catalogue, `unit_id` on a run, and `unit_name` in
+  `GET /policies/default`. The approval-webhook payload carries `unit {id, name}`. The wardynd flag is
+  `-governance-unit-put-existing-only`, and the task is `governance.units.walk`.
+- `WARDYN_GOVERNANCE_PROFILE_PUT_EXISTING_ONLY` is now `WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY`. wardynd refuses
+  to start while the old name is set, and names the new one. A notify route keyed `profiles` is now `units`; the
+  old key is refused when the config is read.
+- Migration `0201_governance_units` renames the governance tables and their columns, keeping every row, grant and
+  foreign key, so a split-role install needs no grant change. A governance change proposed before the upgrade reads
+  as stale once and is proposed again.
 
 ### Added
 

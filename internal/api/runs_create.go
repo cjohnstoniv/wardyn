@@ -509,7 +509,7 @@ func wiredLaneGrants(grants []types.GrantSpec, gw grantWiring) []types.GrantSpec
 // ceiling than the run was gated under would name a profile that is not the one
 // bounding the run.
 func warnCeilingDeniedWorkspaceEgress(ceiling governanceCeiling, wsRefs []types.Workspace) []string {
-	if len(wsRefs) == 0 || ceiling.Profile == nil || len(ceiling.Spec.DeniedDomains) == 0 {
+	if len(wsRefs) == 0 || ceiling.Unit == nil || len(ceiling.Spec.DeniedDomains) == 0 {
 		return nil
 	}
 	var warns []string
@@ -526,7 +526,7 @@ func warnCeilingDeniedWorkspaceEgress(ceiling governanceCeiling, wsRefs []types.
 			}
 			warns = append(warns, fmt.Sprintf(
 				"workspace host %q is denied by your governance profile %q — the run launches, but that host is refused at the proxy",
-				host, ceiling.Profile.Name))
+				host, ceiling.Unit.Name))
 		}
 	}
 	return warns

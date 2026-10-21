@@ -390,10 +390,10 @@ func operatorStepGovernance(ceiling governanceCeiling) stepRunGovernance {
 // itself so the handler keeps answering 500 for it — an outage must not read as
 // a policy decision.
 func (s *Server) stepRunCeilingLimits(ctx context.Context, actor string, gov stepRunGovernance) error {
-	if gov.ceiling.Profile == nil {
+	if gov.ceiling.Unit == nil {
 		return nil
 	}
-	name := gov.ceiling.Profile.Name
+	name := gov.ceiling.Unit.Name
 	ceiling := gov.ceiling
 	// gov.interactive, not requestIsInteractive: whether a step lane opens an
 	// attachable session is STRUCTURAL (a record session always does, a scan

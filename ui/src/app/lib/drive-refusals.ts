@@ -21,7 +21,7 @@ export const DRIVE_REFUSAL = {
   // Go's %q, which JSON.stringify matches for the names a drive can carry.
   MEMBER_REQUIRES_PERSON: () => "Sign in under your own account to create or delete a drive.",
   MEMBER_DISABLED: () => "Your organisation doesn't let people create drives. Ask an admin.",
-  MEMBER_DENIED_BY_PROFILE: (profile: string) =>
+  MEMBER_DENIED_BY_UNIT: (profile: string) =>
     `Your governance profile ${JSON.stringify(profile)} doesn't let you create drives.`,
   MEMBER_LIMIT_REACHED: (n: string, limit: string) => `You have ${n} of ${limit} drives. Delete one to create another.`,
   MEMBER_UNSUPPORTED: () => "This server can't create drives.",
@@ -48,7 +48,7 @@ export const DRIVE_REFUSAL_REASON = {
   SHARE_BESIDE_MANAGED: "drive_share_beside_managed",
   MEMBER_REQUIRES_PERSON: "member_drive_requires_person",
   MEMBER_DISABLED: "member_drives_disabled",
-  MEMBER_DENIED_BY_PROFILE: "member_drives_denied_by_profile",
+  MEMBER_DENIED_BY_UNIT: "member_drives_denied_by_unit",
   MEMBER_LIMIT_REACHED: "member_drive_limit_reached",
   MEMBER_UNSUPPORTED: "member_drive_unsupported",
   MEMBER_UNSIZED: "member_drive_unsupported",

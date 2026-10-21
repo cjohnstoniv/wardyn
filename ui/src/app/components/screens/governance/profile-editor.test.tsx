@@ -35,7 +35,7 @@ vi.mock("../../../lib/api/setup", () => ({
   setup: { getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a) },
 }));
 
-import type { GovernanceProfile } from "../../../lib/api/governance";
+import type { GovernanceUnit } from "../../../lib/api/governance";
 import { GOVERNANCE as GOV, RUBRIC, RUN_LIMITS as RL } from "../../../lib/governance-copy";
 import { baseStatus } from "../../../lib/test-fixtures";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
@@ -43,7 +43,7 @@ import { AUTONOMY_META } from "../../wardyn/autonomy-meta";
 import { ProfileEditor } from "./profile-editor";
 import { aheadByHours } from "../../../lib/test-clock";
 
-const GREENFIELD: GovernanceProfile = {
+const GREENFIELD: GovernanceUnit = {
   id: "p1",
   name: "Greenfield contractors",
   ceiling: { allowed_domains: ["api.anthropic.com"], first_use_approval: "deny_with_review", min_confinement_class: "CC2" },
@@ -52,7 +52,7 @@ const GREENFIELD: GovernanceProfile = {
   updated_at: aheadByHours(-1),
 };
 
-function renderEditor(profile: GovernanceProfile | null = GREENFIELD) {
+function renderEditor(profile: GovernanceUnit | null = GREENFIELD) {
   const onSaved = vi.fn();
   render(<ProfileEditor profile={profile} disabled={false} onCancel={vi.fn()} onSaved={onSaved} onSubmitted={vi.fn()} />);
   return { onSaved };
@@ -430,7 +430,7 @@ describe("ProfileEditor — the Access requests section", { timeout: 20_000 }, (
     updateProfileMock.mockResolvedValue({ profile: GREENFIELD, warnings: [] });
   });
 
-  const WITH_CONTACT: GovernanceProfile = {
+  const WITH_CONTACT: GovernanceUnit = {
     ...GREENFIELD,
     contact: { owner: "Platform Security", email: "access@example.com", request_url: "https://example.com/access", request_text: "Include the run id." },
   };

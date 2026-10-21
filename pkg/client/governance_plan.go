@@ -29,75 +29,75 @@ func (c *Client) PlanGovernance(ctx context.Context, doc GovernanceDocument, pru
 // into doc, in the order an apply would issue them.
 func planGovernance(current, doc GovernanceDocument, prune bool) (GovernancePlan, error) {
 	plan := GovernancePlan{Steps: make([]ApplyStep, 0)}
-	profileByName := make(map[string]GovernanceProfile, len(current.Profiles))
-	currentIDToName := make(map[uuid.UUID]string, len(current.Profiles))
-	for _, p := range current.Profiles {
+	profileByName := make(map[string]GovernanceUnit, len(current.Units))
+	currentIDToName := make(map[uuid.UUID]string, len(current.Units))
+	for _, p := range current.Units {
 		profileByName[p.Name] = p
 		currentIDToName[p.ID] = p.Name
 	}
-	assignmentByKey := make(map[string]GovernanceAssignment, len(current.Assignments))
-	for _, a := range current.Assignments {
-		assignmentByKey[governanceAssignmentKey(a.SubjectType, a.Subject)] = a
+	assignmentByKey := make(map[string]GovernanceMembership, len(current.Memberships))
+	for _, a := range current.Memberships {
+		assignmentByKey[governanceMembershipKey(a.SubjectType, a.Subject)] = a
 	}
-	fileIDToName := make(map[uuid.UUID]string, len(doc.Profiles))
-	for _, p := range doc.Profiles {
+	fileIDToName := make(map[uuid.UUID]string, len(doc.Units))
+	for _, p := range doc.Units {
 		if p.ID != uuid.Nil {
 			fileIDToName[p.ID] = p.Name
 		}
 	}
-	order, err := governanceWriteOrder(doc.Profiles, fileIDToName)
+	order, err := governanceWriteOrder(doc.Units, fileIDToName)
 	if err != nil {
 		return GovernancePlan{}, err
 	}
 
 	for _, i := range order {
-		p := doc.Profiles[i]
+		p := doc.Units[i]
 		existing, ok := profileByName[p.Name]
 		if !ok {
-			plan.Steps = append(plan.Steps, ApplyStep{Kind: "profile", Op: "create", Name: p.Name})
+			plan.Steps = append(plan.Steps, ApplyStep{Kind: "unit", Op: "create", Name: p.Name})
 			continue
 		}
 		q := p
-		if q.BaseProfileID != nil {
-			if baseName, ok := fileIDToName[*q.BaseProfileID]; ok {
+		if q.ParentID != nil {
+			if baseName, ok := fileIDToName[*q.ParentID]; ok {
 				// A base not on the server by name is created with a fresh id, which
 				// apply points this profile at; no id the server holds can equal it.
 				id := uuid.Nil
 				if base, ok := profileByName[baseName]; ok {
 					id = base.ID
 				}
-				q.BaseProfileID = &id
+				q.ParentID = &id
 			}
 		}
-		fields := governanceProfileChangedFields(existing, q)
+		fields := governanceUnitChangedFields(existing, q)
 		if len(fields) == 0 {
 			plan.Unchanged++
 			continue
 		}
 		id := existing.ID
-		plan.Steps = append(plan.Steps, ApplyStep{Kind: "profile", Op: "update", Name: p.Name, ID: &id, Fields: fields})
+		plan.Steps = append(plan.Steps, ApplyStep{Kind: "unit", Op: "update", Name: p.Name, ID: &id, Fields: fields})
 	}
 
-	for _, a := range doc.Assignments {
-		name := fileIDToName[a.ProfileID]
+	for _, a := range doc.Memberships {
+		name := fileIDToName[a.UnitID]
 		if name == "" {
-			name = currentIDToName[a.ProfileID]
+			name = currentIDToName[a.UnitID]
 		}
 		profile := name
 		if profile == "" {
-			profile = a.ProfileID.String()
+			profile = a.UnitID.String()
 		}
-		existing, ok := assignmentByKey[governanceAssignmentKey(a.SubjectType, a.Subject)]
+		existing, ok := assignmentByKey[governanceMembershipKey(a.SubjectType, a.Subject)]
 		if !ok {
-			plan.Steps = append(plan.Steps, ApplyStep{Kind: "assignment", Op: "create",
-				SubjectType: a.SubjectType, Subject: a.Subject, Profile: profile})
+			plan.Steps = append(plan.Steps, ApplyStep{Kind: "membership", Op: "create",
+				SubjectType: a.SubjectType, Subject: a.Subject, Unit: profile})
 			continue
 		}
-		sameProfile := (name != "" && currentIDToName[existing.ProfileID] == name) ||
-			(name == "" && existing.ProfileID == a.ProfileID)
+		sameUnit := (name != "" && currentIDToName[existing.UnitID] == name) ||
+			(name == "" && existing.UnitID == a.UnitID)
 		var fields []string
-		if !sameProfile {
-			fields = append(fields, "profile")
+		if !sameUnit {
+			fields = append(fields, "unit")
 		}
 		if existing.Priority != a.Priority {
 			fields = append(fields, "priority")
@@ -107,33 +107,33 @@ func planGovernance(current, doc GovernanceDocument, prune bool) (GovernancePlan
 			continue
 		}
 		id := existing.ID
-		plan.Steps = append(plan.Steps, ApplyStep{Kind: "assignment", Op: "update",
-			SubjectType: a.SubjectType, Subject: a.Subject, Profile: profile, ID: &id, Fields: fields})
+		plan.Steps = append(plan.Steps, ApplyStep{Kind: "membership", Op: "update",
+			SubjectType: a.SubjectType, Subject: a.Subject, Unit: profile, ID: &id, Fields: fields})
 	}
 
 	if prune {
-		keepAssignment := make(map[string]bool, len(doc.Assignments))
-		for _, a := range doc.Assignments {
-			keepAssignment[governanceAssignmentKey(a.SubjectType, a.Subject)] = true
+		keepAssignment := make(map[string]bool, len(doc.Memberships))
+		for _, a := range doc.Memberships {
+			keepAssignment[governanceMembershipKey(a.SubjectType, a.Subject)] = true
 		}
-		for _, a := range current.Assignments {
-			if keepAssignment[governanceAssignmentKey(a.SubjectType, a.Subject)] {
+		for _, a := range current.Memberships {
+			if keepAssignment[governanceMembershipKey(a.SubjectType, a.Subject)] {
 				continue
 			}
 			id := a.ID
-			plan.Steps = append(plan.Steps, ApplyStep{Kind: "assignment", Op: "delete",
-				SubjectType: a.SubjectType, Subject: a.Subject, Profile: currentIDToName[a.ProfileID], ID: &id})
+			plan.Steps = append(plan.Steps, ApplyStep{Kind: "membership", Op: "delete",
+				SubjectType: a.SubjectType, Subject: a.Subject, Unit: currentIDToName[a.UnitID], ID: &id})
 		}
-		keepProfile := make(map[string]bool, len(doc.Profiles))
-		for _, p := range doc.Profiles {
+		keepProfile := make(map[string]bool, len(doc.Units))
+		for _, p := range doc.Units {
 			keepProfile[p.Name] = true
 		}
-		for _, p := range governancePruneOrder(current.Profiles) {
+		for _, p := range governancePruneOrder(current.Units) {
 			if keepProfile[p.Name] {
 				continue
 			}
 			id := p.ID
-			plan.Steps = append(plan.Steps, ApplyStep{Kind: "profile", Op: "delete", Name: p.Name, ID: &id})
+			plan.Steps = append(plan.Steps, ApplyStep{Kind: "unit", Op: "delete", Name: p.Name, ID: &id})
 		}
 	}
 	plan.Destructive = slices.ContainsFunc(plan.Steps, func(s ApplyStep) bool { return s.Op == "delete" })

@@ -224,12 +224,12 @@ func (s *Server) boundaryEndPlan(w http.ResponseWriter, r *http.Request, run typ
 	case capSec == 0:
 		return run, exempt, true
 	case exempt:
-		run.RunLimits, run.GovernanceProfileID = types.RunLimits{UserChangesLimits: true, MaxEndAheadSec: capSec}, nil
+		run.RunLimits, run.UnitID = types.RunLimits{UserChangesLimits: true, MaxEndAheadSec: capSec}, nil
 	default:
 		// Any other caller is held to the limits the run captured, and to the boundary's maximum when
 		// that is tighter: a run created in no_limits captured no boundary limit.
 		if tighter := composer.TighterSec(run.RunLimits.MaxEndAheadSec, capSec); tighter != run.RunLimits.MaxEndAheadSec {
-			run.RunLimits.MaxEndAheadSec, run.GovernanceProfileID = tighter, nil
+			run.RunLimits.MaxEndAheadSec, run.UnitID = tighter, nil
 		}
 	}
 	return run, false, true

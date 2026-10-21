@@ -35,12 +35,12 @@ const CEILING = {
 };
 // What the server says a direct save of CEILING omits from the deployment default: the held change carries the same notes.
 let notes: string[] = [];
-const CHANGE_LABEL = `${CHANGES.KIND.governance_profile} · ${CHANGES.OP.update}`;
+const CHANGE_LABEL = `${CHANGES.KIND.governance_unit} · ${CHANGES.OP.update}`;
 
 test.describe("governance — a covered write waits for a second human", () => {
   test("the first security admin proposes a widening edit, and the profile is unchanged", async ({ page }) => {
     // Setup as the admin token: the break-glass, applied directly.
-    const created = await page.request.post("/api/v1/governance/profiles", {
+    const created = await page.request.post("/api/v1/governance/units", {
       headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
       data: { name: NAME, ceiling: CEILING, limits: { max_concurrent_runs: 3 } },
     });
@@ -68,7 +68,7 @@ test.describe("governance — a covered write waits for a second human", () => {
 
     const snapshot = await consoleAPI(page, "GET", "/api/v1/governance");
     expect(snapshot.status).toBe(200);
-    const stored = (JSON.parse(snapshot.text).profiles as { name: string; limits: { max_concurrent_runs?: number } }[]).find(
+    const stored = (JSON.parse(snapshot.text).units as { name: string; limits: { max_concurrent_runs?: number } }[]).find(
       (p) => p.name === NAME,
     );
     expect(stored?.limits.max_concurrent_runs).toBe(3);

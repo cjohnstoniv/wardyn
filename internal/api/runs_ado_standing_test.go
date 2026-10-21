@@ -33,7 +33,7 @@ func TestADOStandingAtTheDoors(t *testing.T) {
 		cookie := govSession(t, sub, []string{"eng"}, false)
 		switch who {
 		case "governed":
-			cs.govProfile = &types.GovernanceProfile{ID: uuid.New(), Name: "ado", Ceiling: types.RunPolicySpec{
+			cs.govProfile = &types.GovernanceUnit{ID: uuid.New(), Name: "ado", Ceiling: types.RunPolicySpec{
 				MinConfinementClass: types.CC2, AzureDevOpsCapabilities: []adoscope.Capability{adoscope.CapPR}}}
 			cs.govTier, cs.govHasGroupTier = types.CapabilitySubjectGroup, true
 		case "admin in the User view":

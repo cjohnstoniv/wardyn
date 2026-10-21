@@ -206,11 +206,11 @@ async function mockMemberDrive(page: Page, drive: MeUserDrive | null, deniedBy =
     json.operator = false;
     json.security_operator = false;
     json.user_drive = drive;
-    json.user_drive_denied_by_profile = deniedBy;
+    json.user_drive_denied_by_unit = deniedBy;
     await route.fulfill({ response, json });
   });
   // New Run's Files step reads the same allocation as a row of the person's drive catalogue.
-  await mockDriveCatalogue(page, deniedBy ? { drives: [], denied_by_profile: deniedBy } : { drives: drive ? [catalogueRow(drive)] : [] });
+  await mockDriveCatalogue(page, deniedBy ? { drives: [], denied_by_unit: deniedBy } : { drives: drive ? [catalogueRow(drive)] : [] });
 }
 
 // A catalogue id the real server has no drive for: an attach is then refused in the server's own words.
@@ -559,7 +559,7 @@ test.describe("drives — the door is a governance limit, not a drives control",
 
   test("the stored limit is the door: deny_user_drive on the profile itself", async ({ page }) => {
     const snap = await (await page.request.get("/api/v1/governance", { headers: auth })).json();
-    const profile = snap.profiles.find((p: { name: string }) => p.name === DOOR);
+    const profile = snap.units.find((p: { name: string }) => p.name === DOOR);
     expect(profile, `profile ${DOOR} missing — did the door test run?`).toBeTruthy();
     // The limits object is the whole statement: the drive door shut, and
     // neither launch mode touched by it.

@@ -195,7 +195,7 @@ export interface ManagedSettingsFact {
   /** Whose document this is: the started agent's, else the first harness of the set that brings one. */
   harness?: string;
   locked?: boolean;
-  locked_by?: "profile" | "organisation";
+  locked_by?: "unit" | "organisation";
   profile?: string;
 }
 

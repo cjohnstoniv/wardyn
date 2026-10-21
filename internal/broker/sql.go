@@ -124,7 +124,7 @@ func insertPendingApproval(ctx context.Context, tx Tx, id, runID, grantID uuid.U
 			return nil, fmt.Errorf("broker: lock the run's notification budget: %w", err)
 		}
 		// Same transaction as the insert: a concurrent profile change cannot route this approval by stale data.
-		if err := tx.QueryRow(ctx, notify.ProfileSQL, runID).Scan(&profileID); err != nil && !errors.Is(err, errNoRow) {
+		if err := tx.QueryRow(ctx, notify.UnitSQL, runID).Scan(&profileID); err != nil && !errors.Is(err, errNoRow) {
 			return nil, fmt.Errorf("broker: read run profile: %w", err)
 		}
 	}

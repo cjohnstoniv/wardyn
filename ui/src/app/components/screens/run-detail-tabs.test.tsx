@@ -648,7 +648,7 @@ describe("RunDetailScreen — the Policy tab", () => {
 // allow row never do.
 describe("RunDetailScreen — Audit tab Request access remedy", () => {
   const POLICY = {
-    source: "profile",
+    source: "unit",
     name: "Contractors",
     owner: "Platform Security",
     request_url: "https://example.com/access",

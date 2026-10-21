@@ -21,7 +21,7 @@ import * as React from "react";
 import { Loader2 } from "lucide-react";
 import { setup as setupApi } from "../../../lib/api/setup";
 import { HttpError, PendingChangeError } from "../../../lib/api/core";
-import { governance as api, isGrantBoundError, type AutonomyRubric, type GovernanceLimits, type GovernanceProfile, type GovernanceProfileInput } from "../../../lib/api/governance";
+import { governance as api, isGrantBoundError, type AutonomyRubric, type GovernanceLimits, type GovernanceUnit, type GovernanceUnitInput } from "../../../lib/api/governance";
 import { policies as policiesApi } from "../../../lib/api/policies";
 import { getErrorMessage } from "../../../lib/format";
 import { GOVERNANCE as GOV, MEMBER_DRIVE_DOOR, RUN_LIMITS as RL, RUN_LIMIT_UNITS, runLimitUnit } from "../../../lib/governance-copy";
@@ -87,9 +87,9 @@ export function ProfileEditor({
   onSubmitted,
 }: {
   /** The profile being edited, or null for a new one. */
-  profile: GovernanceProfile | null;
+  profile: GovernanceUnit | null;
   /** Every profile, for the base picker and an overlay's inherited values. */
-  profiles?: GovernanceProfile[];
+  profiles?: GovernanceUnit[];
   disabled: boolean;
   onCancel: () => void;
   /** Hands the write's OMISSION warnings up: the screen renders them after the
@@ -105,7 +105,7 @@ export function ProfileEditor({
   const [format, setFormat] = React.useState<PolicySourceFormat>("yaml");
   // Composition: the base picker's value, and the two overlays as key-present-or-absent bags.
   const [base, setBase] = React.useState<string>(
-    profile?.overlay ? (profile.base_profile_id ?? BASE_DEPLOYMENT) : BASE_NONE,
+    profile?.overlay ? (profile.parent_id ?? BASE_DEPLOYMENT) : BASE_NONE,
   );
   const [overlay, setOverlay] = React.useState<Record<string, unknown>>(() => ({ ...(profile?.overlay ?? {}) }));
   const [overlayLimits, setOverlayLimits] = React.useState<Record<string, unknown>>(() => ({
@@ -203,12 +203,12 @@ export function ProfileEditor({
       // limits. An empty limits overlay is sent as null: absent would keep a stored one. Leaving a
       // base sends null for the overlay, which clears the base and limits with it. A standalone
       // profile that was never composed sends none of the three, as before.
-      const input: GovernanceProfileInput = composed
+      const input: GovernanceUnitInput = composed
         ? {
             name: name.trim(),
             ceiling: {} as RunPolicySpec,
             limits: {},
-            base_profile_id: baseProfile?.id ?? null,
+            parent_id: baseProfile?.id ?? null,
             overlay: asOverlay(overlay),
             overlay_limits: Object.keys(overlayLimits).length > 0 ? overlayLimits : null,
             ...contactField,
@@ -217,7 +217,7 @@ export function ProfileEditor({
             name: name.trim(),
             ceiling: parsed?.ok ? parsed.spec : STARTER_SPEC,
             limits,
-            ...(profile?.overlay ? { base_profile_id: null, overlay: null, overlay_limits: null } : {}),
+            ...(profile?.overlay ? { parent_id: null, overlay: null, overlay_limits: null } : {}),
             ...contactField,
           };
       const res = profile ? await api.updateProfile(profile.id, input) : await api.createProfile(input);

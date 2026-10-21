@@ -211,7 +211,7 @@ coverage verdict pointing back into this document.
 7. **The delegation chain** (`sub=human`, `act=agent-run-SPIFFE-ID`) —
    attribution integrity; target of the IETF delegation-chain-splicing attack
    class (March 2026).
-8. **The authorization source itself — `role_mappings` and `governance_profiles`**
+8. **The authorization source itself — `role_mappings` and `governance_units`**
    (migrations `0051_role_mappings.sql`, `0052_governance_profiles.sql`,
    `0053_role_mappings_security_admin.sql`).
    - Ranked LAST by immediacy and near the top by consequence: since v0.7 the role a session
@@ -1193,7 +1193,7 @@ ADMIN pre-authorized** —
   - A governance profile can shut the door outright: `GovernanceLimits.DenyUserDrive`
     ([`internal/types/governance.go`](../internal/types/governance.go)) refuses the mount for every
     member under that profile as an audited `403` (`userDriveDoorRefusal` — `authz.denied`, reason
-    `governance_profile`, target `runs.drive`, no new `reason` enum value).
+    `governance_unit`, target `runs.drive`, no new `reason` enum value).
 - **Read-only is TOP-LEVEL on a runtime that does not declare `rro`.**
   - A bind's `ro` reaches SUBMOUNTS only where the runtime declares the OCI recursive read-only
     mount option, and the daemon refuses the create outright for one that does not.

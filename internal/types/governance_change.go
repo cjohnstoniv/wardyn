@@ -22,8 +22,8 @@ const (
 // The target kinds a governance change can hold (governance_changes.target_kind has no CHECK: the
 // closed set is the table in internal/api, and a later lane adds a kind with no DDL).
 const (
-	GovernanceTargetProfile    = "governance_profile"
-	GovernanceTargetAssignment = "governance_assignment"
+	GovernanceTargetUnit       = "governance_unit"
+	GovernanceTargetMembership = "governance_membership"
 
 	GovernanceTargetCapabilityGrant        = "capability_grant"
 	GovernanceTargetCapabilityEnforcement  = "capability_enforcement"

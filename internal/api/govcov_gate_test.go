@@ -171,7 +171,7 @@ func TestGovCovRecordGovernanceBypass(t *testing.T) {
 
 	h2 := newHarness(t)
 	s2 := New(baseTestConfig(h2, &govCovStore{}))
-	s2.recordGovernanceBypass(r, govKindProfile, "t", "success", nil)
+	s2.recordGovernanceBypass(r, govKindUnit, "t", "success", nil)
 	d := govCovAuditData(t, govCovAudits(h2, "governance.change.bypass")[0])
 	if d["reason"] != "admin_token_break_glass" {
 		t.Errorf("default reason = %v, want admin_token_break_glass", d["reason"])
@@ -187,7 +187,7 @@ func TestGovCovCanSeeGovernanceChange(t *testing.T) {
 		payload string
 		want    bool
 	}{
-		{"security admin sees a profile change", govCovHumanReq("GET", "/x", "s", "s@x", oidc.RoleSecurityAdmin), govKindProfile, "", true},
+		{"security admin sees a profile change", govCovHumanReq("GET", "/x", "s", "s@x", oidc.RoleSecurityAdmin), govKindUnit, "", true},
 		{"security admin does not see a role mapping", govCovHumanReq("GET", "/x", "s", "s@x", oidc.RoleSecurityAdmin), govKindRoleMapping, "", false},
 		{"super admin sees a role mapping", govCovHumanReq("GET", "/x", "s", "s@x", oidc.RoleAdmin), govKindRoleMapping, "", true},
 		{"security admin sees a pool use policy change", govCovHumanReq("GET", "/x", "s", "s@x", oidc.RoleSecurityAdmin), govKindRunnerPoolUsePolicy, `{"subjects":[{"subject_type":"user","subject":"a"}]}`, true},
@@ -277,9 +277,9 @@ func TestGovCovProposeRefusalCarriesTheHeldChange(t *testing.T) {
 		wantHeld    bool
 		wantMatches bool
 	}{
-		{"the held change is this proposal", types.GovernanceChange{ID: pendingID, TargetKind: govKindProfile, State: types.GovernanceChangePending, Op: "update", Payload: json.RawMessage(`{ "a": 1 }`)}, nil, true, true},
-		{"the held change has another payload", types.GovernanceChange{ID: pendingID, TargetKind: govKindProfile, State: types.GovernanceChangePending, Op: "update", Payload: json.RawMessage(`{"a":2}`)}, nil, true, false},
-		{"the held change is another op", types.GovernanceChange{ID: pendingID, TargetKind: govKindProfile, State: types.GovernanceChangePending, Op: "delete", Payload: json.RawMessage(`{"a":1}`)}, nil, true, false},
+		{"the held change is this proposal", types.GovernanceChange{ID: pendingID, TargetKind: govKindUnit, State: types.GovernanceChangePending, Op: "update", Payload: json.RawMessage(`{ "a": 1 }`)}, nil, true, true},
+		{"the held change has another payload", types.GovernanceChange{ID: pendingID, TargetKind: govKindUnit, State: types.GovernanceChangePending, Op: "update", Payload: json.RawMessage(`{"a":2}`)}, nil, true, false},
+		{"the held change is another op", types.GovernanceChange{ID: pendingID, TargetKind: govKindUnit, State: types.GovernanceChangePending, Op: "delete", Payload: json.RawMessage(`{"a":1}`)}, nil, true, false},
 		{"the held change is one the caller's role may not read", types.GovernanceChange{ID: pendingID, TargetKind: govKindRoleMapping, State: types.GovernanceChangePending, Op: "update", Payload: json.RawMessage(`{"a":1}`)}, nil, false, false},
 		{"the read fails", types.GovernanceChange{}, errors.New("pg: gone"), false, false},
 		{"it was decided meanwhile", types.GovernanceChange{ID: pendingID, State: types.GovernanceChangeApplied}, nil, false, false},
@@ -289,7 +289,7 @@ func TestGovCovProposeRefusalCarriesTheHeldChange(t *testing.T) {
 			s, _ := govCovServer(t, st)
 			w := httptest.NewRecorder()
 			s.proposeGovernanceChange(w, govCovHumanReq(http.MethodPost, "/x", "sub-a", "a@corp.example", oidc.RoleSecurityAdmin),
-				govProposal{kind: govKindProfile, op: "update", key: "k", payload: map[string]any{"a": 1}})
+				govProposal{kind: govKindUnit, op: "update", key: "k", payload: map[string]any{"a": 1}})
 			if w.Code != http.StatusConflict || errorReason(w) != reasonGovernanceChangePending {
 				t.Fatalf("answer = %d %q, want 409 %q", w.Code, errorReason(w), reasonGovernanceChangePending)
 			}
@@ -332,7 +332,7 @@ func TestGovCovProposeGovernanceChangeFailures(t *testing.T) {
 			s, h := govCovServer(t, st)
 			w := httptest.NewRecorder()
 			s.proposeGovernanceChange(w, govCovHumanReq(http.MethodPost, "/x", "sub-a", "a@corp.example", oidc.RoleSecurityAdmin),
-				govProposal{kind: govKindProfile, op: "create", key: "k", payload: c.payload})
+				govProposal{kind: govKindUnit, op: "create", key: "k", payload: c.payload})
 			if w.Code != c.wantCode || errorReason(w) != c.wantReason {
 				t.Fatalf("answer = %d %q (%s), want %d %q", w.Code, errorReason(w), w.Body.String(), c.wantCode, c.wantReason)
 			}

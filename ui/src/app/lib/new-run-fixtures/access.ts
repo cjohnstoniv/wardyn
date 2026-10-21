@@ -67,7 +67,7 @@ export const ACCESS_FIXTURES: FixtureBody[] = [
     route: "access/agent-locked-l2",
     note: "Managed settings, locked L2 (B-P2) by the person's profile.",
     preview: withComponents([], {
-      components: [agentComponent({}, { managed_settings: { path: "/etc/claude-code/managed-settings.json", document: '{\n  "allowManagedHooksOnly": true,\n  "allowManagedPermissionRulesOnly": true\n}\n', locked: true, locked_by: "profile", profile: "Contractors" } })],
+      components: [agentComponent({}, { managed_settings: { path: "/etc/claude-code/managed-settings.json", document: '{\n  "allowManagedHooksOnly": true,\n  "allowManagedPermissionRulesOnly": true\n}\n', locked: true, locked_by: "unit", profile: "Contractors" } })],
     }),
   },
   { route: "access/agent-no-doc", note: "Claude Code with no managed document at this autonomy level.", preview: withComponents([], { components: [agentComponent({}, { managed_settings: undefined })] }) },
