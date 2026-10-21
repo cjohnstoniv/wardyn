@@ -33,6 +33,8 @@ const dayAhead = (n: number) => new Date(Date.now() + n * DAY).toISOString().sli
 interface Stub {
   create: string[];
   preflight: string[];
+  /** The preflight answer's runner_pool_slots.max_wait_sec; undefined leaves the slots off. Default 86400. */
+  maxWaitSec?: number | null;
   /** What the create answers: the queued scheduled run, or a refusal. */
   refuse?: { status: number; json: object };
 }
@@ -68,7 +70,11 @@ async function stub(page: Page, scheduledRuns: boolean | undefined): Promise<Stu
   await page.route("**/api/v1/runner-pools*", (route) =>
     route.fulfill({ json: { pools, default: { pool_id: pools[0].id, selection: "organisation_default" } } }),
   );
-  await page.route("**/api/v1/runs/preflight", (route) => route.fulfill({ json: SCENARIO_PREFLIGHT.member }));
+  await page.route("**/api/v1/runs/preflight", (route) => {
+    const slots = SCENARIO_PREFLIGHT.member.runner_pool_slots;
+    const wait = seen.maxWaitSec === undefined ? slots?.max_wait_sec : (seen.maxWaitSec ?? undefined);
+    return route.fulfill({ json: { ...SCENARIO_PREFLIGHT.member, runner_pool_slots: wait === undefined ? undefined : { ...slots, max_wait_sec: wait } } });
+  });
   await page.route("**/api/v1/runs", (route) => {
     if (route.request().method() !== "POST") return route.fallback();
     return seen.refuse ? route.fulfill(seen.refuse) : route.fulfill({ status: 201, json: { id: RUN_ID, state: "QUEUED" } });
@@ -152,8 +158,9 @@ test.describe("New Run: Schedule for later", () => {
     await expect(page.getByText(NR_RUN.START_HELP)).toBeVisible();
     await pickStart(page, "2020-01-01", "02:00");
     await expect(page.getByRole("alert").filter({ hasText: NR_RUN.START_PAST })).toBeVisible();
+    // The run's wait is not known here, so there is no far check until the Launch dialog.
     await pickStart(page, dayAhead(9), "02:00");
-    await expect(page.getByRole("alert").filter({ hasText: NR_RUN.START_FAR })).toBeVisible();
+    await expect(page.getByRole("alert").filter({ hasText: /Choose a/ })).toHaveCount(0);
     await pickStart(page, dayAhead(2), "02:00");
     await expect(page.getByRole("alert").filter({ hasText: /Choose a/ })).toHaveCount(0);
     await expect(page.getByRole("status").filter({ hasText: /^Starts [A-Z][a-z]{2} \d{1,2} [A-Z][a-z]{2}, 02:00 \(UTC\)$/ })).toBeVisible();
@@ -184,8 +191,23 @@ test.describe("New Run: Schedule for later", () => {
     await expect(page.getByText(NR_LAUNCH.POSITION)).toHaveCount(0);
   });
 
+  test("the dialog holds a start past 7 days less the run's own wait, from the preflight answer", async ({ page }) => {
+    await stub(page, true);
+    await toRunStep(page);
+    const iso = new Date(Date.now() + 6.5 * DAY).toISOString();
+    await pickStart(page, iso.slice(0, 10), iso.slice(11, 16));
+    await toReview(page);
+    await page.getByRole("button", { name: NR_REVIEW.LAUNCH_RUN }).click();
+    const dialog = page.getByRole("dialog", { name: NR_LAUNCH.TITLE });
+    await dialog.getByLabel(NR_LAUNCH.TITLE_LABEL).fill("nightly");
+    await expect(dialog.getByText(NR_LAUNCH.CHECKED_JUST_NOW)).toBeVisible();
+    await expect(dialog.getByRole("alert").filter({ hasText: NR_RUN.START_FAR })).toBeVisible();
+    await expect(dialog.getByRole("button", { name: NR_LAUNCH.LAUNCH, exact: true })).toBeDisabled();
+  });
+
   test("a start the server refuses shows its sentence in the dialog, never its code", async ({ page }) => {
     const seen = await stub(page, true);
+    seen.maxWaitSec = null; // no wait in the answer: no client check, so the create carries the start to the server
     seen.refuse = {
       status: 422,
       json: { error: SCHEDULE_REFUSAL.TOO_FAR("Tue 27 Oct, 15:00 (UTC)", "Mon 26 Oct, 14:00 (UTC)", 24), reason: "start_at_too_far" },

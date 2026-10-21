@@ -52,7 +52,7 @@ describe("startProblem", () => {
     expect(startProblem(at("2026-10-26", "14:00", "UTC"), NOW, 86_400)).toBeNull();
     // An Interactive run's 3600 s leaves nearly the whole week.
     expect(startProblem(at("2026-10-26", "14:01", "UTC"), NOW, 3600)).toBeNull();
-    expect(startProblem(at("2026-10-27", "12:01", "UTC"), NOW, 3600)).toBe("far");
+    expect(startProblem(at("2026-10-27", "13:01", "UTC"), NOW, 3600)).toBe("far");
     // No answer yet: no far check at all, the create's start_at_too_far answers.
     expect(startProblem(at("2026-12-01", "14:00", "UTC"), NOW)).toBeNull();
     expect(startProblem(at("2026-12-01", "14:00", "UTC"), NOW, undefined)).toBeNull();
