@@ -33,7 +33,7 @@ func (s *Server) applyRunRecording(ctx context.Context, run *types.AgentRun, spe
 	orgOn := s.cfg.RecordingStore != nil
 	if run.RecordingLevel = choice.Resolve(); run.RecordingLevel == types.RecordingOff {
 		// Required (the organisation's or the pool's) is read only for a run that would go unrecorded.
-		if _, choice.Required = s.recordingRequired(ctx, *run); choice.Required {
+		if _, choice.Required, _ = s.recordingRequired(ctx, *run); choice.Required {
 			run.RecordingLevel = choice.Resolve()
 		}
 	}
