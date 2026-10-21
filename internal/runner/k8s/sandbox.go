@@ -106,6 +106,9 @@ func proxyConfigStagedPath() string { return proxyConfigStagedMountDir + "/" + p
 // createPreflight is CreateSandbox's checks before it creates anything: the runtime class to run
 // under, and the class enforced.
 func (d *Driver) createPreflight(ctx context.Context, spec runner.SandboxSpec) (runtimeClassName, runtimeHandler string, enforced types.ConfinementClass, err error) {
+	if spec.MachineKind.Normalize() != "" {
+		return "", "", "", fmt.Errorf("k8s: a %q sandbox runs only on a registered runner that offers it", spec.MachineKind)
+	}
 	if len(spec.Mounts) > 0 {
 		return "", "", "", fmt.Errorf("k8s: sandbox mounts are not supported (requested %d): %w", len(spec.Mounts), errMountsUnsupported)
 	}
@@ -148,9 +151,6 @@ func (d *Driver) createPreflight(ctx context.Context, spec runner.SandboxSpec) (
 //nolint:funlen // one linear ordered sequence, kept in one scope on purpose
 func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (runner.Sandbox, error) {
 	// A Linux VM sandbox runs only on a registered runner that offers it; never a Pod in its place.
-	if spec.MachineKind.Normalize() != "" {
-		return runner.Sandbox{}, fmt.Errorf("k8s: a %q sandbox runs only on a registered runner that offers it", spec.MachineKind)
-	}
 	ns := d.cfg.Namespace
 
 	// (1) Preflight: fail closed BEFORE creating anything.
