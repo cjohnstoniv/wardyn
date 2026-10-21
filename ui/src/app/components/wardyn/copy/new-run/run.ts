@@ -50,6 +50,16 @@ export const NR_RUN = {
   PORT_DUPLICATE: (port: string | number) => `Two apps can't share port ${port}.`,
   /** Lead wording 2026-10-20 (FEAT-1APP-UI): the Review blocker for a server with no port left. */
   PORT_REQUIRED: "An application needs at least one port to open.",
+  /** Lead wording, cleared by the overseer 2026-10-20 (APP-UI-2): a port row the server would refuse, said on the row and on Review. */
+  APP_NAME_DUPLICATE: (name: string) => `Two applications are named ${name}. Give each its own name.`,
+  APP_NAME_INVALID: "Use lower-case letters, numbers and dashes, up to 32 characters, starting and ending with a letter or number.",
+  APP_PATH_INVALID: 'Start the path with a single /, with no host and no "..".',
+  /** Accessible names for a port row's controls; a row with no name yet is called by its place, APP_ROW(n). */
+  APP_ROW: (n: number) => `row ${n}`,
+  APP_NAME_ARIA: (n: number) => `Name for row ${n}`,
+  APP_PORT_ARIA: (who: string) => `Port for ${who}`,
+  APP_PATH_ARIA: (who: string) => `Path for ${who}`,
+  APP_REMOVE_ARIA: (who: string) => `Remove ${who}`,
   APP_TERMINAL_NOTE: "The sandbox also has a terminal, as an Environment sandbox does.",
   COMMAND_LABEL: "Command",
   /** Lead wording 2026-10-17 (FR-0099): the Review blocker for a command run with no command. */

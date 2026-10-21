@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { RunIntent } from "../draft/run-intent";
-import { addApp, appIssues, appsOf, chooseAppKind, commandOf, editApp, isServer, MAX_APPS, removeApp, setApps, setCommand } from "./apps-lens";
+import { addApp, appIssues, appsOf, chooseAppKind, commandOf, editApp, isServer, MAX_APPS, portProblems, removeApp, setApps, setCommand } from "./apps-lens";
 import { stepIssues } from "./local-issues";
 import { chooseShape } from "./shape-lens";
 
@@ -92,6 +92,42 @@ describe("Application / server issues", () => {
   it("flags the later of two rows that share a port, naming the port", () => {
     expect(appIssues(apps(3000, 3000))).toEqual([{ home: "run", code: "app_port_duplicate", focus: "nr-app-port-1", port: 3000 }]);
     expect(appIssues(apps(8080, 3000, 3000))[0]).toMatchObject({ focus: "nr-app-port-2", port: 3000 });
+  });
+
+  const named = (...rows: { name: string; port: number; path?: string }[]): RunIntent => setApps(SERVER, rows);
+
+  it("flags the later of two rows that share a name, naming it, and focuses that row's name", () => {
+    expect(appIssues(named({ name: "web", port: 1 }, { name: "web", port: 2 }))).toEqual([{ home: "run", code: "app_name_duplicate", focus: "nr-app-name-1", name: "web" }]);
+    expect(appIssues(named({ name: "a", port: 1 }, { name: "b", port: 2 }, { name: "a", port: 3 }))[0]).toMatchObject({ focus: "nr-app-name-2", name: "a" });
+  });
+
+  it("flags a name the server refuses (the server's uiAppNameRE), and focuses that row's name", () => {
+    for (const name of ["", "Web", "my_app", "-web", "web-", "we b", "a".repeat(33), "../x"]) {
+      expect(appIssues(named({ name, port: 1 })), JSON.stringify(name)).toEqual([{ home: "run", code: "app_name_invalid", focus: "nr-app-name-0" }]);
+    }
+    for (const name of ["a", "7", "web", "my-app-2", "a-b", "a".repeat(32)]) expect(appIssues(named({ name, port: 1 })), name).toEqual([]);
+  });
+
+  it("flags a path the server refuses, and lets an empty one stand for /", () => {
+    for (const path of ["x", "api", "//host", "http://host/", "/a/../b", "/.."]) {
+      expect(appIssues(named({ name: "web", port: 1, path })), path).toEqual([{ home: "run", code: "app_path_invalid", focus: "nr-app-path-0" }]);
+    }
+    for (const path of ["", "/", "/api", "/?folder=/work", "/a.b/c"]) expect(appIssues(named({ name: "web", port: 1, path })), path).toEqual([]);
+    expect(appIssues(setApps(SERVER, [{ name: "web", port: 1 }]))).toEqual([]);
+  });
+
+  it("reports one problem at a time: the first bad row, its name, then port, then path", () => {
+    expect(appIssues(named({ name: "ok", port: 1 }, { name: "Bad", port: 0, path: "x" }))[0]).toMatchObject({ code: "app_name_invalid", focus: "nr-app-name-1" });
+    expect(appIssues(named({ name: "ok", port: 0, path: "x" }))[0]).toMatchObject({ code: "app_port_invalid", focus: "nr-app-port-0" });
+    expect(appIssues(named({ name: "ok", port: 1, path: "x" }, { name: "bad name", port: 2 }))[0]).toMatchObject({ code: "app_path_invalid", focus: "nr-app-path-0" });
+  });
+
+  it("lists every problem of every row by field", () => {
+    expect(portProblems([{ name: "web", port: 1, path: "/" }, { name: "web", port: 1, path: "x" }, { name: "", port: 0 }])).toEqual([
+      {},
+      { name: { code: "app_name_duplicate", name: "web" }, port: { code: "app_port_duplicate", port: 1 }, path: { code: "app_path_invalid" } },
+      { name: { code: "app_name_invalid" }, port: { code: "app_port_invalid" } },
+    ]);
   });
 
   it("needs at least one port, and the Run step reports it with the command", () => {

@@ -496,6 +496,19 @@ describe("Review: an application server (#1994)", () => {
     expect(blockerList()).toHaveTextContent(NR_RUN.PORT_INVALID);
     expect(launch()).toBeDisabled();
   });
+
+  it.each([
+    ["a repeated name", [{ name: "web", port: 3000 }, { name: "web", port: 3001 }], "Two applications are named web. Give each its own name."],
+    ["a name the server refuses", [{ name: "Web App", port: 3000 }], "Use lower-case letters, numbers and dashes, up to 32 characters, starting and ending with a letter or number."],
+    ["a path the server refuses", [{ name: "web", port: 3000, path: "//host" }], 'Start the path with a single /, with no host and no "..".'],
+  ])("blocks Launch on %s with the Run step's sentence", async (_what, ui_apps, text) => {
+    gatewayIs({ enabled: true });
+    open({ ...SERVER, inline_policy: { ui_apps } });
+    await ready();
+    await waitFor(() => expect(within(blockerList()).getAllByRole("listitem")).toHaveLength(1));
+    expect(within(blockerList()).getByRole("listitem")).toHaveTextContent(text);
+    expect(launch()).toBeDisabled();
+  });
 });
 
 describe("Review notices", () => {

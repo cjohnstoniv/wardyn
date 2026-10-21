@@ -102,7 +102,7 @@ test.describe("New Run: Application / server, the Run step", () => {
     await expect(page.getByText(NR_RUN.START_COMMAND_HELP)).toBeVisible();
     await expect(page.getByText(NR_RUN.PORTS_HELP)).toBeVisible();
     await expect(page.getByText(NR_RUN.APP_TERMINAL_NOTE)).toBeVisible();
-    await expect(row(page, 0).getByLabel(NR_RUN.PORT_COL_PORT)).toHaveValue("3000");
+    await expect(row(page, 0).getByLabel(NR_RUN.APP_PORT_ARIA("web"), { exact: true })).toHaveValue("3000");
     // Back to the script card: the ports and the terminal note go, the command's own words return.
     await page.getByRole("radio", { name: NR_RUN.APP_AUTOMATION }).click();
     await expect(page.getByText(NR_RUN.COMMAND_HELP)).toBeVisible();
@@ -116,24 +116,60 @@ test.describe("New Run: Application / server, the Run step", () => {
     await page.getByLabel(new RegExp(NR_RUN.START_COMMAND_LABEL)).fill("npm run dev");
     await page.getByRole("button", { name: NR_RUN.PORT_ADD }).click();
     await expect(row(page, 1).getByRole("alert")).toHaveText(NR_RUN.PORT_INVALID);
-    await row(page, 1).getByLabel(NR_RUN.PORT_COL_PORT).fill("3000");
+    await row(page, 1).getByLabel(NR_RUN.APP_PORT_ARIA("app2"), { exact: true }).fill("3000");
     await expect(row(page, 1).getByRole("alert")).toHaveText(NR_RUN.PORT_DUPLICATE(3000));
-    await row(page, 1).getByLabel(NR_RUN.PORT_COL_PORT).fill("70000");
+    await row(page, 1).getByLabel(NR_RUN.APP_PORT_ARIA("app2"), { exact: true }).fill("70000");
     await expect(row(page, 1).getByRole("alert")).toHaveText(NR_RUN.PORT_INVALID);
     await page.getByRole("button", { name: new RegExp(`^${NR_SHARED.CONTINUE_TO("")}`) }).click();
-    await expect(row(page, 1).getByLabel(NR_RUN.PORT_COL_PORT)).toBeFocused();
+    await expect(row(page, 1).getByLabel(NR_RUN.APP_PORT_ARIA("app2"), { exact: true })).toBeFocused();
     await expect(page.getByRole("heading", { name: NR_RUN.TITLE_APP_SERVER, level: 1 })).toBeVisible();
-    await row(page, 1).getByRole("button", { name: NR_SHARED.REMOVE }).click();
+    await row(page, 1).getByRole("button", { name: NR_RUN.APP_REMOVE_ARIA("app2"), exact: true }).click();
     await expect(page.locator("[data-app-row]")).toHaveCount(1);
-    await row(page, 0).getByRole("button", { name: NR_SHARED.REMOVE }).click();
-    await expect(page.getByText(NR_RUN.PORT_REQUIRED)).toBeVisible();
+    await row(page, 0).getByRole("button", { name: NR_RUN.APP_REMOVE_ARIA("web"), exact: true }).click();
+    await expect(page.locator("[data-app-row]")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: NR_RUN.PORT_ADD })).toBeFocused();
+    await expect(page.getByRole("alert").filter({ hasText: "An application needs at least one port to open." })).toHaveText("An application needs at least one port to open.");
     await page.getByRole("button", { name: NR_RUN.PORT_ADD }).click();
-    await row(page, 0).getByLabel(NR_RUN.PORT_COL_PORT).fill("3000");
+    await row(page, 0).getByLabel(NR_RUN.APP_PORT_ARIA("app1"), { exact: true }).fill("3000");
     for (let n = 0; n < 7; n++) await page.getByRole("button", { name: NR_RUN.PORT_ADD }).click();
     await expect(page.locator("[data-app-row]")).toHaveCount(8);
     await expect(page.getByRole("button", { name: NR_RUN.PORT_ADD })).toBeDisabled();
     await expect(page.getByText(NR_RUN.PORTS_FULL)).toBeVisible();
   });
+
+  test("catches a repeated or bad name and a bad path on its row, names each control, and focuses the field on Continue", async ({ page }) => {
+    await stubFlow(page);
+    await toServerCard(page);
+    await page.getByLabel(new RegExp(NR_RUN.START_COMMAND_LABEL)).fill("npm run dev");
+    await page.getByRole("button", { name: NR_RUN.PORT_ADD }).click();
+    const second = row(page, 1);
+    await expect(second.getByLabel("Name for row 2", { exact: true })).toHaveValue("app2");
+    await second.getByLabel("Port for app2", { exact: true }).fill("8080");
+    await expect(second.getByLabel("Path for app2", { exact: true })).toBeVisible();
+    await expect(second.getByRole("button", { name: "Remove app2", exact: true })).toBeVisible();
+
+    await second.getByLabel("Name for row 2", { exact: true }).fill("web");
+    await expect(second.getByRole("alert")).toHaveText("Two applications are named web. Give each its own name.");
+    await page.getByRole("button", { name: new RegExp(`^${NR_SHARED.CONTINUE_TO("")}`) }).click();
+    await expect(second.getByLabel("Name for row 2", { exact: true })).toBeFocused();
+
+    await second.getByLabel("Name for row 2", { exact: true }).fill("Bad_Name");
+    await expect(second.getByRole("alert")).toHaveText("Use lower-case letters, numbers and dashes, up to 32 characters, starting and ending with a letter or number.");
+    await second.getByLabel("Name for row 2", { exact: true }).fill("api");
+    await expect(second.getByRole("alert")).toHaveCount(0);
+
+    await second.getByLabel("Path for api", { exact: true }).fill("//host");
+    await expect(second.getByRole("alert")).toHaveText('Start the path with a single /, with no host and no "..".');
+    await page.getByRole("button", { name: new RegExp(`^${NR_SHARED.CONTINUE_TO("")}`) }).click();
+    await expect(second.getByLabel("Path for api", { exact: true })).toBeFocused();
+
+    // An unnamed row is called by its place.
+    await second.getByLabel("Name for row 2", { exact: true }).fill("");
+    await expect(second.getByLabel("Port for row 2", { exact: true })).toBeVisible();
+    await expect(second.getByLabel("Path for row 2", { exact: true })).toBeVisible();
+    await expect(second.getByRole("button", { name: "Remove row 2", exact: true })).toBeVisible();
+  });
+
 });
 
 test.describe("New Run: Application / server, Review and launch", () => {
@@ -142,9 +178,9 @@ test.describe("New Run: Application / server, Review and launch", () => {
     await toServerCard(page);
     await page.getByLabel(new RegExp(NR_RUN.START_COMMAND_LABEL)).fill("npm run dev");
     await page.getByRole("button", { name: NR_RUN.PORT_ADD }).click();
-    await row(page, 1).getByLabel(NR_RUN.PORT_COL_NAME).fill("api");
-    await row(page, 1).getByLabel(NR_RUN.PORT_COL_PORT).fill("8080");
-    await row(page, 1).getByLabel(NR_RUN.PORT_COL_PATH).fill("/api");
+    await row(page, 1).getByLabel(NR_RUN.APP_NAME_ARIA(2), { exact: true }).fill("api");
+    await row(page, 1).getByLabel(NR_RUN.APP_PORT_ARIA("api"), { exact: true }).fill("8080");
+    await row(page, 1).getByLabel(NR_RUN.APP_PATH_ARIA("api"), { exact: true }).fill("/api");
     await toReview(page);
 
     await expect(page.getByText(NR_REVIEW.SETUP_APPLICATION_SERVER, { exact: true })).toBeVisible();
