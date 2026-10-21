@@ -118,8 +118,7 @@ One mode places a Git credential inside the sandbox:
 - What the proxy cannot re-sign it refuses with a named reason rather than send: presigned URLs, SigV4a, chunk-signed uploads and event-stream request bodies. It also refuses STS actions other than `GetCallerIdentity`, and IAM actions other than reads (`Get`, `List`, `Simulate`, `Generate`). [ENV.md](ENV.md#wardyn_aws_sigv4_at_proxy) lists them.
 - What the role may create or read, the sandbox can obtain through the proxy; the role's own policy bounds that, not this switch.
   - A token API the role may call (for example ECR or CodeArtifact GetAuthorizationToken) returns a usable credential into the sandbox.
-  - IAM `UpdateAssumeRolePolicy`, `CreateOpenIDConnectProvider`, `UpdateOpenIDConnectProvider` and `CreateSAMLProvider` can let an outside identity assume a role.
-- Known gap: the run's access facts still list the role credentials as resident when this switch is on (#3243).
+  - On a re-signed host the proxy refuses every IAM write, so the sandbox cannot use the role to let an outside identity assume it.
 - An AWS CLI component's `aws` gets them the same way, for the account and permission set the component pins. It caches them under `~/.aws/cli/cache`, which is a link onto the sandbox's `/tmp` memory file system, so the cache ends with the sandbox ([`deploy/images/common/agent-run-lib.sh#link_aws_cli_cache_to_tmpfs`](../deploy/images/common/agent-run-lib.sh)).
 - Their lifetime is the IAM Identity Center permission set's session duration, set in AWS: `GetRoleCredentials` takes no duration, so Wardyn cannot shorten it. Set the permission set to `PT1H`, the shortest AWS allows, to bound them.
 - A Docker sandbox kept after its run ends, on a run Wardyn staged an AWS profile for, has `~/.aws/cli/cache` and `~/.aws/sso/cache` deleted just before it stops ([`internal/runner/docker/aws_cache_wipe.go#Driver.wipeAWSCaches`](../internal/runner/docker/aws_cache_wipe.go)).

@@ -321,6 +321,31 @@ func TestAccessCredential_AWSRoleFollowsReSigning(t *testing.T) {
 	compareOrUpdateGolden(t, "testdata/access_facts_aws_sigv4_golden.json", got)
 }
 
+// The portal route is opened only for a lane the proxy does not re-sign, so a re-signed AWS CLI row
+// lists no portal.sso host and a lane that keeps the sign-in lists it.
+func TestAccessCredential_AWSPortalHostFollowsReSigning(t *testing.T) {
+	id := uuid.MustParse("0b5c3a52-77e1-4c1e-9d0a-1d4f3c2b1a01")
+	comps := runComponents{attached: []attachedComponent{{source: componentSourceOrg, snapshot: types.RunComponent{ComponentID: &id, Name: "AWS CLI",
+		Definition: types.ComponentDefinition{Hosts: []string{"s3.us-east-1.amazonaws.com"}, CLI: &types.ComponentCLI{Kind: types.CLIKindAWS,
+			AWS: &types.CLIAWS{StartURL: "https://d-1234567890.awsapps.com/start", SSORegion: "us-east-1", AccountID: "123456789012", RoleName: "Dev", Region: "us-east-1"}}}}}}}
+	req := createRunRequest{Agent: "claude-code", Task: "t"}
+	for _, on := range []bool{false, true} {
+		srv := &Server{cfg: Config{AWSSSOProxyInject: true, AWSSigV4AtProxy: on}}
+		facts := componentFacts(componentFactInputs{req: &req, comps: comps}, nil)
+		access, err := srv.accessFor(httptest.NewRequest(http.MethodPost, preflightDoor, nil), accessInputs{req: &req, comps: comps, facts: facts})
+		if err != nil {
+			t.Fatal(err)
+		}
+		listed := false
+		for _, h := range access.Hosts {
+			listed = listed || h.Host == "portal.sso.us-east-1.amazonaws.com"
+		}
+		if listed == on {
+			t.Errorf("re-signing %v: portal.sso listed = %v, want %v", on, listed, !on)
+		}
+	}
+}
+
 // The unlisted line reads the effective spec: unset is always_deny, a
 // wait_for_review hold defaults to the proxy's window, allow-all is reported.
 func TestAccessUnlisted(t *testing.T) {

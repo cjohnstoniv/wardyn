@@ -630,11 +630,14 @@ func (b *accessBuilder) componentRow(fact componentFact) {
 		// The portal the proxy sets the person's session on, and the role
 		// credentials AWS issues into the sandbox there, renewed while the run
 		// lives and valid at AWS until they expire. A row the proxy re-signs
-		// keeps them at the proxy instead.
-		b.addHost(ssoPortalHost(cli.AWS.SSORegion, ""), viaInjected, row.ID)
+		// keeps them at the proxy and opens no portal route.
+		reSigned := b.in.reSigned(fact.Hosts) // the definition's hosts, as dispatch reads them
+		if !reSigned {
+			b.addHost(ssoPortalHost(cli.AWS.SSORegion, ""), viaInjected, row.ID)
+		}
 		role := client.AccessCredential{ID: row.ID + ":aws_role", Kind: credKindAWSRole, Owner: credOwnerOwn,
 			Delivery: deliveryShortLived, Renewed: true, AfterEnd: afterEndExpires}
-		if b.in.reSigned(fact.Hosts) { // the definition's hosts, as dispatch reads them
+		if reSigned {
 			role.Delivery, role.AfterEnd = deliveryProxy, afterEndGone
 		}
 		b.addCredential(role)
