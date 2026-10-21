@@ -59,6 +59,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - The CLI's hint under a `401` follows the answer's reason. On a single-sign-on deployment with no admin token
   (`sign_in_required`) it says to use a personal API token in `WARDYN_TOKEN`, not the compose stack's admin token. For
   a token the organisation does not know (`admin_token_not_configured`) it names where the token came from.
+- The security tier's audit read and export no longer show host detail: a drive's host root and storage class, a
+  source's path, a mount's host path and the like. Each such row carries `redacted_fields` and keeps its stored hashes,
+  so the chain still verifies across it, and a partition export's footer counts those rows (`redacted_rows`). A super
+  admin's read is unchanged, and so are the operator's sinks.
 
 ## [0.9.7] — 2026-10-20
 

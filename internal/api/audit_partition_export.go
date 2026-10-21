@@ -40,6 +40,10 @@ type partitionFooterLine struct {
 	Partition string `json:"partition"`
 	Rows      int64  `json:"row_count"`
 	Digest    string `json:"digest"`
+	// Redacted counts the rows served without their host detail (a reader below the super-admin tier): each
+	// still carries its stored hashes, so the digest and the chain verify across it, but its content cannot
+	// be re-hashed from this export.
+	Redacted int64 `json:"redacted_rows,omitempty"`
 }
 
 // partitionReadableLine is a row as the audit feed serves it (sealed fields opened), plus its position.
@@ -81,12 +85,14 @@ type partitionRawLine struct {
 // Only a security operator is served. Any other session gets the zero-line NDJSON export auditScope
 // gives a member, and the partition is never read, so the response says nothing about which partitions
 // exist. A partition export carries no other filter: the footer digest is always the whole partition.
-// A failure after the first byte aborts the transfer, as the feed export does.
+// A failure after the first byte aborts the transfer, as the feed export does. Below a super admin, both
+// forms serve each row without its host detail (hostViewOf), hashes kept, and the footer counts those rows.
 func (s *Server) exportAuditPartition(w http.ResponseWriter, r *http.Request) {
 	if !s.isSecurityOperator(r.Context()) {
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		return
 	}
+	superAdmin := s.isOperator(r.Context())
 	q := r.URL.Query()
 	for p := range q {
 		if slices.Contains(auditNarrowingParams, p) {
@@ -111,7 +117,18 @@ func (s *Server) exportAuditPartition(w http.ResponseWriter, r *http.Request) {
 	}
 
 	wrote := false // a byte has reached the response: the 200 is committed
-	var rowsSent int64
+	var rowsSent, redacted int64
+	// project is data as this reader is served it, counting each row served without its host detail.
+	project := func(action string, data []byte) ([]byte, bool) {
+		if superAdmin {
+			return nil, false
+		}
+		d, ok := hostViewOf(action, data)
+		if ok {
+			redacted++
+		}
+		return d, ok
+	}
 	var digest *store.PartitionDigest
 	var manifest store.PartitionManifest
 	send := func(v any) error {
@@ -144,6 +161,9 @@ func (s *Server) exportAuditPartition(w http.ResponseWriter, r *http.Request) {
 		}
 		for i := range pending {
 			pending[i].AuditEvent = evs[i]
+			if d, ok := project(evs[i].Action, evs[i].Data); ok {
+				pending[i].Data = d
+			}
 			if err := send(pending[i]); err != nil {
 				return err
 			}
@@ -161,7 +181,14 @@ func (s *Server) exportAuditPartition(w http.ResponseWriter, r *http.Request) {
 			digest.Add(row.FoldHash)
 			rowsSent++
 			if form == auditFormRaw {
-				if err := send(rawPartitionLine(row)); err != nil {
+				line := rawPartitionLine(row)
+				if row.Data != nil {
+					if d, ok := project(row.Action, []byte(*row.Data)); ok {
+						text := string(d)
+						line.Data = &text
+					}
+				}
+				if err := send(line); err != nil {
 					return err
 				}
 			} else if pending = append(pending, readablePartitionLine(row)); len(pending) == auditExportPageSize {
@@ -188,7 +215,7 @@ func (s *Server) exportAuditPartition(w http.ResponseWriter, r *http.Request) {
 		s.failAuditExport(w, r, "partition read", int(rowsSent), wrote,
 			errors.New("the partition's rows do not match its manifest"))
 	default:
-		if err := send(partitionFooterLine{Type: "footer", Partition: manifest.Partition, Rows: rowsSent, Digest: digest.Sum()}); err != nil {
+		if err := send(partitionFooterLine{Type: "footer", Partition: manifest.Partition, Rows: rowsSent, Digest: digest.Sum(), Redacted: redacted}); err != nil {
 			s.failAuditExport(w, r, "footer write", int(rowsSent), wrote, err)
 		}
 	}

@@ -179,11 +179,21 @@ func (s *Server) handleQueryAudit(w http.ResponseWriter, r *http.Request) {
 // source id (withoutNodeRecordSource). The caller it
 // exempts is the one auditScope hands the whole log — the same predicate, so
 // the two cannot drift: the security tier reads every operator row there is,
-// the rows that name the operator's secrets among them.
+// the rows that name the operator's secrets among them. Below a super admin
+// (isOperator) every reader, the security tier included, is also served each
+// row without its host detail (withoutHostDetail): the tier never reaches the host.
 func (s *Server) auditRowsFor(r *http.Request, scope *uuid.UUID) func([]types.AuditEvent, error) ([]types.AuditEvent, error) {
 	ctx := r.Context()
-	if s.isSecurityOperator(ctx) {
+	if s.isOperator(ctx) {
 		return func(evs []types.AuditEvent, err error) ([]types.AuditEvent, error) { return s.unsealed(ctx, evs, err) }
+	}
+	if s.isSecurityOperator(ctx) {
+		return func(evs []types.AuditEvent, err error) ([]types.AuditEvent, error) {
+			if evs, err = s.unsealed(ctx, evs, err); err != nil {
+				return nil, err
+			}
+			return withoutHostDetail(evs), nil
+		}
 	}
 	refs := &sharedRefs{}
 	if scope != nil {
@@ -196,7 +206,7 @@ func (s *Server) auditRowsFor(r *http.Request, scope *uuid.UUID) func([]types.Au
 		if evs, err = refs.events(evs); err != nil {
 			return nil, err
 		}
-		return withoutNodeRecordSource(evs), nil
+		return withoutHostDetail(withoutNodeRecordSource(evs)), nil
 	}
 }
 
