@@ -1215,7 +1215,7 @@ or use `action_prefix` (`--action-prefix`).
 - Everything
   else here is one method on the Go client above, or one `wardyn` CLI command.
 
-### Composed profile graphs
+### Unit trees
 
 `ApplyGovernance` reproduces a graph of composed profiles (`parent_id`, `overlay`,
 `overlay_limits`, `contact`) from `wardyn governance get` on one install to `wardyn governance set`

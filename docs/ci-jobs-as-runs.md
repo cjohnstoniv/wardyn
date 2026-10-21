@@ -78,7 +78,7 @@ services:
 
 - Skip this and the token grant if the job needs no secret; a plain build job uses none.
 
-## 2. Bound the CI principal with a governance profile
+## 2. Bound the CI principal with a unit
 
 - The profile is the principal's ceiling.
 - Whatever policy a job asks for is clamped to it, so a compromised launcher can request more and get less.

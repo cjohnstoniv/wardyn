@@ -508,7 +508,7 @@ What the check does and does not settle:
 
 
 - Empty or unrecognised normalises to `always_deny` at runtime (fail closed), but an unrecognised literal is rejected at write time.
-- `wait_for_review`'s one built-in user today is a workspace's confined record replay ([`docs/TRY-IT.md`](TRY-IT.md) "record a session, rerun it as a governed profile"): `launchRecordRun` sets it for exactly that session, never for a learning (open-egress) one.
+- `wait_for_review`'s one built-in user today is a workspace's confined record replay ([`docs/TRY-IT.md`](TRY-IT.md) "record a session, rerun it as a governed unit"): `launchRecordRun` sets it for exactly that session, never for a learning (open-egress) one.
 - Approving a hold there does more than release the parked connection.
 - The decision funnels through the same chokepoint every approval does (`decide`, [`internal/api/approvals.go`](../internal/api/approvals.go)),
   - which — only for an `egress_domain` approval raised during a `workspace record` run — writes a required `egress:<host>` row into that workspace's own requirements contract (`learnVerifyEgress`).

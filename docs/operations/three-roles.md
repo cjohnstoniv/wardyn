@@ -157,7 +157,7 @@ derives its role.
 - *Deleting and unassigning.*
   - Deleting a profile requires unassigning it first, and a base that still has profiles built on it is a `409` naming them (never a silent widening).
 - *Exporting a graph (CLI and SDK).*
-  - `wardyn governance get` exports a composed graph and `wardyn governance set` applies it to another install; the Go client's `ApplyGovernance` does the same ([`docs/sdk.md`](../sdk.md), "Composed profile graphs").
+  - `wardyn governance get` exports a composed graph and `wardyn governance set` applies it to another install; the Go client's `ApplyGovernance` does the same ([`docs/sdk.md`](../sdk.md), "Unit trees").
   - Profiles are written bases first, every graph reference (`parent_id`, an assignment's `unit_id`) is remapped through the target's names to ids, the read-only `effective` view is never written back, and prune deletes descendants before bases.
   - Under second-person approval (four-eyes) a write may return `202`: a child whose base is still pending, and an assignment whose profile is pending, are deferred and reported, not sent with a dangling id.
   - Apply again once the base is approved.
