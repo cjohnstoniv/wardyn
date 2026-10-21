@@ -44,7 +44,7 @@ func shutdownDrainFixture(t *testing.T) (srv *Server, rows *atomic.Int32) {
 		Resolver: publicResolver{},
 	})
 	req := egress.Request{Host: "internal.example", Port: 443, Time: time.Now()}
-	p.privateIPRefused(req, blockPrivate)
+	p.privateIPRefused(req, blockPrivate, "")
 	if !p.privateIPMemoHit(req.Host, req.Port) {
 		t.Fatal("the repeat did not hit the memo, so the flush has no row to emit")
 	}

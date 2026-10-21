@@ -1,0 +1,14 @@
+{
+  "control_plane_url": "http://127.0.0.1:9",
+  "listen": ":3128",
+  "llm_unavailable_detail": "no model provider serves this agent on this deployment — an admin adds one under Settings → Model providers",
+  "policy": {
+    "allowed_domains": [
+      "dev.azure.com"
+    ],
+    "first_use_approval": "",
+    "min_confinement_class": "CC1"
+  },
+  "run_id": "00000000-0000-4000-8000-000000000001",
+  "run_token": "run-token"
+}

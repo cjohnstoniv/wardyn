@@ -99,9 +99,10 @@
 | `policy:default-deny` | the host is simply not on the allowlist | ask the operator to add it |
 | `policy:denied` | it is on the **deny** list | it was refused on purpose; deny always wins |
 | `approval:denied` | a human reviewed this host and said no | stop retrying |
+| `approval:expired` | the approval expired undecided | retry |
 | `policy:method` | the host is allowed, the HTTP method is not | |
 | `builtin:private-ip` | the target resolved to a private address | the SSRF guard; not policy-tunable |
-| `builtin:resolve-failed` | the target's name could not be resolved | the proxy could not look the host up (resolver outage, no such name, no address); not policy-tunable — check the sandbox's DNS, not the allowlist |
+| `builtin:resolve-failed` | the target's name could not be resolved | the proxy could not look the host up; not policy-tunable — check the sandbox's DNS, not the allowlist |
 | `policy:evaluator-error` | the policy could not be evaluated | fail-closed; an operator problem, not yours |
 
 - Those are the same static strings the decision log records, so nothing is

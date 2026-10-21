@@ -40,9 +40,11 @@ import (
 // The two composed detail sentences, written out rather than re-joined from the
 // constants. See the file header for why.
 const (
+	// The hostname arm names the host and the block it resolved into
+	// (internalHostsLiftHint); the generic remedy with siteInternalHostsCIDRHint
+	// is what a refusal with no known range says (literalIPDenialDetail's hint "").
 	goldenLiftableDetail = "this host resolves into a private/reserved address range, which the built-in guard denies regardless of policy; " +
-		"declare it in site config under internal_hosts (host_suffix; leave cidrs empty unless you know the ranges the SANDBOX resolves into) to lift the guard for it. " +
-		"Leave `cidrs` empty unless you know the addresses the sandbox resolves. What your own machine sees for a private endpoint is usually not what the cluster sees. " +
+		"an operator may lift this guard for priv.internal.test with site_config.internal_hosts, scoped to 10.0.0.0/8. " +
 		"Site config is read at run start, so change it and start a new run — this one will keep being refused."
 
 	goldenLoopbackDetail = "this host's address is a loopback, link-local/metadata, multicast or unspecified address, " +
@@ -97,10 +99,9 @@ func driveDeny(t *testing.T, host, addr string) *httptest.ResponseRecorder {
 	return rec
 }
 
-// TestLiftableHostnameDenialBodyIsGolden is the variant that KEEPS today's text,
-// byte for byte: docs/OPERATIONS.md quotes siteInternalHostsCIDRHint verbatim and
-// a guard in cmd/wardynd holds the two together, so this one moving silently
-// would break the doc without breaking a test.
+// TestLiftableHostnameDenialBodyIsGolden pins the liftable hostname refusal byte
+// for byte: it names the host and the block it resolved into, and that wording
+// moving silently would break the doc without breaking a test.
 func TestLiftableHostnameDenialBodyIsGolden(t *testing.T) {
 	rec := driveDeny(t, "priv.internal.test", "10.9.8.7")
 	if got := denyBody(rec); got != "egress denied: "+goldenLiftableDetail {
@@ -177,7 +178,7 @@ func TestNeverLiftableClassesPrescribeNothing(t *testing.T) {
 func TestNeverLiftableLiteralArmPrescribesNothing(t *testing.T) {
 	pol := CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"127.0.0.1", "169.254.169.254"}})
 	for _, host := range []string{"127.0.0.1", "169.254.169.254", "::1", "64:ff9b::a9fe:a9fe"} {
-		got := literalIPDenialDetail(host, 443, pol, blockNone)
+		got := literalIPDenialDetail(host, 443, pol, blockNone, "")
 		if !strings.Contains(got, "never reachable from a sandbox") {
 			t.Errorf("%s: detail does not say the address is unreachable:\n\t%s", host, got)
 		}
@@ -188,7 +189,7 @@ func TestNeverLiftableLiteralArmPrescribesNothing(t *testing.T) {
 		}
 	}
 	// The liftable literal keeps its own (accurate) advice.
-	if got := literalIPDenialDetail("100.64.5.7", 443, pol, blockNone); !strings.Contains(got, "allowed_domains") {
+	if got := literalIPDenialDetail("100.64.5.7", 443, pol, blockNone, ""); !strings.Contains(got, "allowed_domains") {
 		t.Errorf("a CGNAT literal lost the remedy that does work:\n\t%s", got)
 	}
 }
