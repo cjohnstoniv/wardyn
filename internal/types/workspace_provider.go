@@ -216,8 +216,8 @@ type ADOEntraConfig struct {
 	RunnerResident bool `json:"runner_resident,omitempty"`
 	// RunnerResidentSandbox would also hand that token into the sandbox, where
 	// the agent could use it past the REST gate and capability holds. Requires
-	// RunnerResident. It is stored and listed only: no run reads it, so the
-	// token never enters the sandbox.
+	// RunnerResident. It is stored and listed only: no run reads it, so it has
+	// no effect in this version and the token is not put in the sandbox.
 	RunnerResidentSandbox bool `json:"runner_resident_sandbox,omitempty"`
 }
 
