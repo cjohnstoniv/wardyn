@@ -383,7 +383,7 @@ func TestCIScopesTheTrivyJobsOnPullRequests(t *testing.T) {
 		t.Error("image-scope has `needs`: it would queue behind the long jobs that became ready with it (see the start-order note in `changes`)")
 	}
 	build := ciJobBlock(t, string(wf), "build")
-	if !strings.Contains(build, "needs: [changes, go, image-scope]") {
+	if !strings.Contains(build, "needs: [changes, go, go-lint, image-scope]") {
 		t.Error("build no longer needs image-scope, so it cannot read the scan answers the ci-full-tree marker depends on")
 	}
 	for _, img := range scannedImages(t, root) {
