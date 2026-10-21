@@ -42,6 +42,9 @@ const (
 	gitHubOwnTokenLocalRefusal    = "Your own GitHub token can't be used on a run on your own runner yet. Run it on the organisation's runners."
 	gitHubOwnTokenTwoRows         = "This run's github.com repositories are on two GitHub rows that each take your own token, and one run can use one. Launch them separately."
 	gitHubOwnTokenMixedRefusal    = "github.com repositories in this run are admitted by both %s and %s (your own token); one run uses one GitHub credential. Pick repositories from one row."
+	// gitHubOwnTokenMixedMember is the mixed refusal held to the disclosure rule (workspace_admission.go):
+	// a launcher who is not an operator is told the shape, never a row id.
+	gitHubOwnTokenMixedMember     = "github.com repositories in this run are admitted by both a shared GitHub provider and your own token; one run uses one GitHub credential. Pick repositories from one of them."
 	gitHubOwnTokenResidentRefusal = "wardyn: this git_pat grant is a person's own GitHub token, and this deployment's git broker is off, so it would be handed into the sandbox. Nothing was minted."
 )
 
@@ -54,8 +57,9 @@ func (e *gitHubOwnTokenRefusal) Error() string { return e.body }
 // host, or ok=false when none does. More than one is a refusal: a run holds
 // one git_pat grant per host, so it can carry one person's token there. So is
 // an own-token row beside a shared one: the grant is rewritten whole, which
-// would swap the shared row's credential for the person's token.
-func gitHubOwnTokenDecider(sc types.SiteConfig, host string, repos []string) (types.GitProvider, bool, error) {
+// would swap the shared row's credential for the person's token. The refusal
+// names the rows only to an operator, as the lane veto does (recordLaneVeto).
+func (s *Server) gitHubOwnTokenDecider(ctx context.Context, sc types.SiteConfig, host string, repos []string) (types.GitProvider, bool, error) {
 	if !hostEqual(host, "github.com") {
 		return types.GitProvider{}, false, nil
 	}
@@ -75,8 +79,11 @@ func gitHubOwnTokenDecider(sc types.SiteConfig, host string, repos []string) (ty
 		return types.GitProvider{}, false, nil
 	case 1:
 		if len(shared) > 0 {
-			return types.GitProvider{}, false, &gitHubOwnTokenRefusal{reasonGitHubOwnTokenUndeliverable,
-				fmt.Sprintf(gitHubOwnTokenMixedRefusal, strings.Join(shared, ", "), own[0].ID)}
+			body := gitHubOwnTokenMixedMember
+			if s.runUngoverned(ctx) {
+				body = fmt.Sprintf(gitHubOwnTokenMixedRefusal, strings.Join(shared, ", "), own[0].ID)
+			}
+			return types.GitProvider{}, false, &gitHubOwnTokenRefusal{reasonGitHubOwnTokenUndeliverable, body}
 		}
 		return own[0], true, nil
 	}
@@ -126,7 +133,7 @@ func (s *Server) gitHubOwnTokenNeeds(ctx context.Context, subject string, needed
 			kept = append(kept, n)
 			continue
 		}
-		row, decided, err := gitHubOwnTokenDecider(sc, n.host, repoLocatorsOf(spec.WorkspaceRepos))
+		row, decided, err := s.gitHubOwnTokenDecider(ctx, sc, n.host, repoLocatorsOf(spec.WorkspaceRepos))
 		if err == nil && decided && credentials {
 			_, err = s.usableGitHubOwnToken(ctx, subject, row)
 		}
@@ -157,7 +164,7 @@ func (s *Server) ownGitHubTokenGrants(ctx context.Context, w http.ResponseWriter
 		if err != nil {
 			continue
 		}
-		row, decided, err := gitHubOwnTokenDecider(sc, pat.Host, specRepos)
+		row, decided, err := s.gitHubOwnTokenDecider(ctx, sc, pat.Host, specRepos)
 		var tok types.GitHubOwnToken
 		switch {
 		case err == nil && !decided:

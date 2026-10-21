@@ -329,6 +329,7 @@ var governSiteElsewhere = map[string]string{
 	"memberResources":         "row: runs_dispatch_ceiling.go boundResources",
 	"recordLaneVeto":          "row: workspace_admission.go laneVetoedBy",
 	"deniedPlacements":        "test: run_placement_capabilities_test.go",
+	"gitHubOwnTokenDecider":   "test: gh_own_pat_test.go",
 	"handleRecordGoverned":    "test: record_govern_admin_test.go",
 	"markGovernanceExempt":    "test: govern_admin_doors_test.go",
 	"meGovernanceContact":     "none: /me display read, no switch-on test",

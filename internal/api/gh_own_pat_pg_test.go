@@ -128,10 +128,11 @@ func TestPG_GitHubOwnToken_RunRefusesMoreThanOneDeciderRow(t *testing.T) {
 			t.Fatalf("body = %s, want the two-rows refusal", body)
 		}
 	})
-	t.Run("an own-token row beside a shared one: refused, naming both", func(t *testing.T) {
+	t.Run("an own-token row beside a shared one: refused, naming neither row to a member", func(t *testing.T) {
 		body := refusal(t, ghOwnTestRow(), shared)
-		if !strings.Contains(body, shared.ID) || !strings.Contains(body, ghOwnRowID) || strings.Contains(body, "github_pat_") {
-			t.Fatalf("body = %s, want both row names and no token", body)
+		if !strings.Contains(body, "a shared GitHub provider and your own token") || strings.Contains(body, shared.ID) ||
+			strings.Contains(body, ghOwnRowID) || strings.Contains(body, "github_pat_") {
+			t.Fatalf("body = %s, want the member form: no row id and no token", body)
 		}
 	})
 }

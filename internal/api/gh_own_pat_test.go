@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -363,5 +364,45 @@ func TestGitHubOwnTokenSecretName_IsSealed(t *testing.T) {
 	if !reservedSecret(name) || !sinkReservedSecret(name) || !types.IsGitHubOwnTokenSecret(name) {
 		t.Fatalf("%q: reserved %v, sink reserved %v, recognised %v — want all three", name,
 			reservedSecret(name), sinkReservedSecret(name), types.IsGitHubOwnTokenSecret(name))
+	}
+}
+
+// TestGitHubOwnTokenMixedRefusalNamesRowsToOperatorsOnly: the refusal for a run
+// mixing a shared GitHub row with an own-token row is held to the disclosure
+// rule the lane veto is (TestLaneDropWarningNamesTheRowForOperatorsOnly): an
+// operator is told which rows to edit, every other launcher the shape. An admin
+// under GovernAdminRuns is a member here, as at every runUngoverned site.
+func TestGitHubOwnTokenMixedRefusalNamesRowsToOperatorsOnly(t *testing.T) {
+	sc := providersConfig([]types.GitProvider{ghOwnTestRow(), {ID: "gh-shared", Kind: types.GitProviderGitHub,
+		BaseURLs: []string{"https://github.com/other"}, Lanes: []types.GitLane{types.GitLanePAT}}})
+	repos := []string{"https://github.com/acme/widgets", "https://github.com/other/tools"}
+	srv, _, _ := govEscapeFixture(t, &capStore{})
+	for _, tc := range []struct {
+		name     string
+		ctx      context.Context
+		govern   bool
+		operator bool
+	}{
+		{"operator", operatorContext(), false, true},
+		{"admin session", governAdminSessionCtx(), false, true},
+		{"admin session under GovernAdminRuns", governAdminSessionCtx(), true, false},
+		{"member", memberContext(), false, false},
+		{"the member whose own token the row takes", withOIDCRole(withOIDCHuman(context.Background(), "alice"), oidc.RoleUser), false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv.cfg.GovernAdminRuns = tc.govern
+			_, decided, err := srv.gitHubOwnTokenDecider(tc.ctx, sc, "github.com", repos)
+			var refusal *gitHubOwnTokenRefusal
+			if decided || !errors.As(err, &refusal) || refusal.reason != reasonGitHubOwnTokenUndeliverable {
+				t.Fatalf("decided=%v err=%v, want the mixed-rows refusal", decided, err)
+			}
+			named := strings.Contains(refusal.body, "gh-shared") || strings.Contains(refusal.body, ghOwnRowID)
+			if named != tc.operator {
+				t.Errorf("refusal %q: names a row id = %v, want %v", refusal.body, named, tc.operator)
+			}
+			if !tc.operator && refusal.body != gitHubOwnTokenMixedMember {
+				t.Errorf("refusal %q, want the member form", refusal.body)
+			}
+		})
 	}
 }
