@@ -311,3 +311,32 @@ func TestServiceIdentity_StoreMintRefusesATokenBornDead(t *testing.T) {
 		t.Errorf("tokens after the refused mint = %+v (%v), want none", toks, err)
 	}
 }
+
+// TestServiceIdentity_AgeFreshSponsorshipsIsIdempotent: the fixtures age a fresh sponsorship before every mint,
+// so repeated mints must move sponsor_since back once (an hour), not once per mint, and must leave a
+// sponsor_since a test set in the future where it is.
+func TestServiceIdentity_AgeFreshSponsorshipsIsIdempotent(t *testing.T) {
+	e := newSvcEnv(t)
+	e.mustCreate(t, svcName, svcSponsor)
+	for range 3 {
+		e.mustMint(t, e.sponsor, svcName)
+	}
+	minutes := func(expr string) float64 {
+		t.Helper()
+		var m float64
+		if err := e.pool.QueryRow(context.Background(), `SELECT extract(epoch FROM `+expr+`) / 60 FROM service_identities WHERE name = $1`, svcName).Scan(&m); err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	if m := minutes("now() - sponsor_since"); m < 59 || m > 61 {
+		t.Errorf("sponsor_since is %.1f minutes old after three mints, want about 60", m)
+	}
+	if _, err := e.pool.Exec(context.Background(), `UPDATE service_identities SET sponsor_since = now() + interval '1 hour'`); err != nil {
+		t.Fatal(err)
+	}
+	ageFreshSponsorships(t, e.pool)
+	if m := minutes("sponsor_since - now()"); m < 59 || m > 61 {
+		t.Errorf("a future sponsor_since is %.1f minutes ahead after aging, want about 60", m)
+	}
+}
