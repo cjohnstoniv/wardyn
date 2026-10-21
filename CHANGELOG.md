@@ -98,6 +98,54 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Recording is a level: a policy's `recording` is `off`, `terminal` or `screen_actions`, and
   `site_config.recording` sets the organisation's level and can lock it as a minimum. Nothing set records terminal
   sessions, as before. `WARDYN_RECORDING_STORE=off` still records nothing, and keystrokes are never recorded.
+- The Wardyn boundary is the outermost layer of every run's policy, with a dry run and break-glass. A security admin
+  reads and writes it at `GET`/`PUT /api/v1/governance/boundary` and previews a draft with
+  `POST /api/v1/governance/dry-run`, which writes nothing and lists what the boundary would narrow, knob by knob.
+  In this release only `no_limits` can be set, and it narrows nothing: a `PUT` that names `hard_limits` answers
+  `409 boundary_hard_limits_gated`. Break-glass (`wardyn run --break-glass-reason`) is asked for only in
+  `hard_limits`, so it asks for nothing yet.
+- Policy field `harness_inner_walls` (`sandbox_mode`, `approvals`) chooses the harness's own walls inside Wardyn's.
+  Omitted, each run keeps what its harness and lane give today. It only adds walls: a looser choice refuses the run
+  (`harness_inner_walls_looser`), and `sandbox_mode` takes `off` only (`workspace-write` and `read-only` answer
+  `harness_sandbox_unavailable`). A run whose policy sets it needs the proxy image from this release.
+- An `ssh_key` grant clones through the run's proxy, which holds the key and signs SSH sign-in requests only. The key
+  file is not placed in the sandbox, but any process there can have a sign-in signed until the agent closes (the
+  `claude-code` image closes it before the agent starts). There is no switch. A custom image that mints the key
+  itself now gets a 403; use `wardyn-git-helper ssh-exec`.
+- `WARDYN_AWS_SIGV4_AT_PROXY` is `off` by default. Set it to `on` and an AWS sign-in lane whose hosts the proxy can
+  all re-sign gets a placeholder key pair in the sandbox, and the proxy signs each AWS request with role credentials
+  the sandbox never holds. Other lanes keep their old path. New dispatches only.
+- `WARDYN_EGRESS_PORT_RULE` is `off` by default. `dry_run` refuses nothing and marks each allow the rule would refuse
+  with `port_rule: "dry_run"` on its `egress.allow` row. `on` limits a bare allowlisted host, a wildcard, allow-all
+  egress and a first-use approval to ports 80 and 443; another port needs an entry that names it
+  (`db.example.com:5432`). The refusal is a 403 with `rule_source` `policy:port`. A run dispatched as a desktop VM
+  always has it on. It needs the proxy image from this release.
+- `WARDYN_PROXY_RESPONSE_SCRUB` is `false` by default. Set it to `true` and each run's proxy replaces a credential it
+  added with `<secret-hidden>` when a response echoes it, in headers and body.
+- `WARDYN_DOCKER_PROXY_SANDBOX_PEERS_ONLY` is off by default. Set it to `true` and each run's proxy on the Docker
+  substrate serves only callers on the run's own network and closes others before reading a byte.
+- `WARDYN_ENV_SECRET_PLACEHOLDERS` and `WARDYN_FILE_SECRET_PLACEHOLDERS` are `false` by default. Set one to `true` and
+  an `env_secret` (or `file_secret`) grant whose scope names a `host` puts `wardyn-placeholder:<id>` in the variable
+  (or file), and the run's proxy fills the `Authorization` header to that host. Off, the value is placed in the
+  sandbox for the whole run, as before.
+- `WARDYN_GIT_PAT_BROKER_OFF_REFUSED` is `false` by default. Set it to `true` and, while `WARDYN_GIT_PAT_BROKER` is
+  `off`, an administrator's run that would hold a `git_pat` token in the sandbox is refused too. A member's run is
+  refused either way.
+- `WARDYN_EGRESS_HOST_PORT_GRANTS_INERT` is `false` by default. Off, listing grants warns on each stored `egress_host`
+  allow grant whose value carries a port. Set it to `true` and such a grant is inert: `GET /api/v1/permissions` marks
+  it and it grants nothing. Re-save each warned grant first.
+- `WARDYN_GOVERNANCE_PROFILE_PUT_EXISTING_ONLY` is `false` by default. Off, a `PUT /api/v1/governance/profiles/{id}`
+  that creates a profile is logged. Set it to `true` and that call answers `404 governance_profile_not_found`; create
+  with `POST /api/v1/governance/profiles`.
+- `WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL` is `false` by default. Off, each match of an allow grant on a caller's
+  email is logged at INFO. Set it to `true` and such a grant matches only when sign-in vouches for the email; deny
+  grants bind either way.
+- `WARDYN_COMPUTER_FOLDERS` is `false` by default. Set it to `true` and a run can take a folder from its creator's
+  own folder-only runner (`wardyn-runnerd serve --substrate folders`). Off, New Run shows "Your computer" as blocked
+  and `local_folder.runner_id` is refused with `computer_folders_off`.
+- `WARDYN_OIDC_BACKCHANNEL_LOGOUT` is `false` by default. Set it to `true` and `POST /auth/backchannel-logout` accepts
+  a logout token your identity provider signed and ends that person's console sessions. Off, the route does not
+  exist.
 
 ### Changed
 
