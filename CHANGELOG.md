@@ -134,6 +134,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   Each such row names what was withheld in `redacted_fields` and keeps its stored hashes, so the chain still links
   across it, and a partition export's footer counts those rows (`redacted_rows`). A super admin's read is unchanged,
   and so are the operator's sinks.
+- Runner settings are in one file, `runnerd.json` in the user config directory (mode 0600), and the service
+  definition carries only the binary and that file's path. Setup no longer writes a proxy image the organisation
+  named: that image, like the release image, is derived again at each start, so replacing the binary moves the proxy
+  with it. A `proxy_image` set in the file, by `--proxy-image` or by hand, is the pin. An earlier install keeps
+  working, and running setup again moves its settings into the file.
 
 ## [0.9.7] — 2026-10-20
 
