@@ -155,6 +155,36 @@ func TestNeedsYouStopsWhenTheWithdrawKeepsFailing(t *testing.T) {
 	}
 }
 
+// TestNeedsYouBackgroundRunReturnsAtOnce: a Background run's raise is refused (409
+// run_background_only), and the command prints the refusal and returns 1 after that one request:
+// no wait, no poll, nothing to withdraw.
+func TestNeedsYouBackgroundRunReturnsAtOnce(t *testing.T) {
+	const refusal = `{"error":"This run is a background task, so it has no terminal. Its logs, audit trail and status stay available.","reason":"run_background_only"}`
+	var mu sync.Mutex
+	requests, sleeps := 0, 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requests++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = io.WriteString(w, refusal+"\n")
+	}))
+	defer srv.Close()
+	var out strings.Builder
+	tw := &takeoverWait{base: srv.URL, client: srv.Client(), poll: time.Millisecond, wait: defaultTakeoverWait,
+		now: time.Now, sleep: func(time.Duration) { sleeps++ }, out: &out}
+	code := tw.run("x")
+	mu.Lock()
+	defer mu.Unlock()
+	if code != exitFailed || requests != 1 || sleeps != 0 {
+		t.Fatalf("exit = %d after %d requests and %d sleeps, want %d after 1 and 0 (%s)", code, requests, sleeps, exitFailed, out.String())
+	}
+	if want := "wardyn needs-you: the request was not raised: HTTP 409: " + refusal + "\n"; out.String() != want {
+		t.Fatalf("output = %q, want %q", out.String(), want)
+	}
+}
+
 // TestNeedsYouUsage: no reason is a usage error and raises nothing.
 func TestNeedsYouUsage(t *testing.T) {
 	var out strings.Builder

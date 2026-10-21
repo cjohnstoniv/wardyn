@@ -32,10 +32,17 @@ var isOperatorCensus = map[string]int{
 	"helpers.go:ownsWorkspaceOrAdmin":     1,
 	"helpers.go:ownsRunOrSuperAdmin":      1,
 	"helpers.go:workspaceReadTierFor":     1,
-	"attach_ticket.go:handleAttachTicket": 3, // reach, and the ticket's reach stamp
+	"attach_ticket.go:handleAttachTicket": 1, // the ticket's reach stamp; its reach is admitRunEntry's
 	"attach.go:refuseAttachEntry":         1,
 	"run_entry.go:getRunForEntry":         1,
 	"sshkeys.go:handleAddSSHKey":          1,
+	// The interactive entry rule an attach ticket and a takeover share: the owner rule's
+	// super-admin arm, and the super admin's 403 on a run that is not theirs.
+	"run_entry.go:admitRunEntry": 2,
+	// A takeover's entry: who may learn the request exists, and the deny_interactive door
+	// keyed on the role the ticket it leads to is stamped with (refuseAttachEntry's ticket
+	// lane); the governed-admin answer is adminDoorExempt's, as there.
+	"approvals_takeover.go:loadTakeover": 1,
 	// Reach: organisation templates are written with the effective role, so the
 	// User view publishes to the organisation as the member it is.
 	"template_list.go:templateCallerOf": 1,

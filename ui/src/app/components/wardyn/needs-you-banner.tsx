@@ -12,7 +12,7 @@ import { ChevronDown } from "lucide-react";
 import type { ApprovalRequest, RunDetail } from "../../lib/types";
 import { approvals as approvalsApi } from "../../lib/api/approvals";
 import { health as healthApi } from "../../lib/api/health";
-import { getErrorMessage } from "../../lib/format";
+import { getErrorMessage, shortTime } from "../../lib/format";
 import { mayEnterRunOrUnknown } from "../../lib/run-entry";
 import { Button } from "../ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
@@ -51,8 +51,6 @@ function writeSnooze(id: string, until: number) {
     // Snooze is a per-browser convenience; without storage it lasts until the page reloads.
   }
 }
-
-const clockTime = (d: Date) => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
 export function NeedsYouBanner({
   run,
@@ -206,7 +204,7 @@ export function NeedsYouBanner({
     return (
       <section data-testid="needs-you-in-use" className="mx-4 mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-warning/40 bg-warning-subtle px-4 py-2.5 text-sm">
         <div className="min-w-0 flex-1">
-          <p className="font-semibold text-foreground">{NEEDS_YOU.inUse.title(who, clockTime(new Date(ap.decided_at ?? ap.requested_at)))}</p>
+          <p className="font-semibold text-foreground">{NEEDS_YOU.inUse.title(who, shortTime(ap.decided_at ?? ap.requested_at))}</p>
           <p className="text-muted-foreground">{NEEDS_YOU.inUse.detail(who, surface)}</p>
         </div>
         {actions}
@@ -217,7 +215,7 @@ export function NeedsYouBanner({
   if (snoozedUntil > now) {
     return (
       <section data-testid="needs-you-snoozed" className="mx-4 mt-3 flex items-center gap-3 rounded-lg border border-warning/30 px-4 py-1.5 text-sm">
-        <span className="text-muted-foreground">{NEEDS_YOU.banner.snoozedUntil(clockTime(new Date(snoozedUntil)))}</span>
+        <span className="text-muted-foreground">{NEEDS_YOU.banner.snoozedUntil(shortTime(new Date(snoozedUntil).toISOString()))}</span>
         {mayEnter && (
           <Button size="sm" variant="outline" className="ml-auto" disabled={busy !== null} onClick={() => void takeOver()}>
             {NEEDS_YOU.banner.takeOver}

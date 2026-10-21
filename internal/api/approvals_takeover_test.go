@@ -138,11 +138,10 @@ func takeoverRows(t *testing.T, a *recRecorder) [][2]string {
 // with its canonical {reason} scope and audited as takeover.request; a scope with anything else is
 // refused before anything is stored.
 func TestTakeover_RaiseWritesTheRequestRow(t *testing.T) {
-	h := newHarness(t)
-	runID := uuid.New()
+	h, srv, runID := newTakeoverRaiseFixture(t, "")
 	tok := h.mintRunToken(t, runID)
 	for _, bad := range []string{`{"reason":"   "}`, `{"reason":"x","cmd":"rm -rf /"}`, `{"reason":"` + strings.Repeat("y", types.MaxTakeoverReason+40) + `"}`} {
-		w := do(t, h.srv, http.MethodPost, "/api/v1/internal/approvals", tok, `{"kind":"human_takeover","requested_scope":`+bad+`}`)
+		w := do(t, srv, http.MethodPost, "/api/v1/internal/approvals", tok, `{"kind":"human_takeover","requested_scope":`+bad+`}`)
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("scope %.40s: status = %d, want 400", bad, w.Code)
 		}
@@ -150,7 +149,7 @@ func TestTakeover_RaiseWritesTheRequestRow(t *testing.T) {
 	if len(h.approvals.requested) != 0 {
 		t.Fatal("a refused takeover scope was stored")
 	}
-	w := do(t, h.srv, http.MethodPost, "/api/v1/internal/approvals", tok,
+	w := do(t, srv, http.MethodPost, "/api/v1/internal/approvals", tok,
 		`{"kind":"human_takeover","requested_scope":{"reason":"  I can't finish the sign-in  "}}`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("raise: status = %d body=%s", w.Code, w.Body.String())
@@ -162,6 +161,40 @@ func TestTakeover_RaiseWritesTheRequestRow(t *testing.T) {
 	rows := takeoverRows(t, h.audit)
 	if len(rows) != 1 || !strings.HasPrefix(rows[0][0], "takeover.request/agent:") || rows[0][1] != "approval_id,reason" {
 		t.Fatalf("audit rows = %v, want one takeover.request by the agent with approval_id,reason", rows)
+	}
+}
+
+// newTakeoverRaiseFixture is a server whose store holds one running run of the given experience,
+// for the agent's raise through the internal route.
+func newTakeoverRaiseFixture(t *testing.T, experience types.RunExperience) (*harness, *Server, uuid.UUID) {
+	t.Helper()
+	h := newHarness(t)
+	ast := newAuthzStore()
+	cfg := baseTestConfig(h, ast)
+	cfg.Approvals = h.approvals
+	runID := uuid.New()
+	ast.runs[runID] = types.AgentRun{ID: runID, CreatedBy: takeoverOwnerSub, State: types.RunRunning, SandboxRef: "sbx-1",
+		Experience: experience}
+	return h, New(cfg), runID
+}
+
+// TestTakeover_BackgroundRunRaisesNothing: a Background run's agent asking for a person is refused at
+// the raise with the takeover verbs' own 409 (run_background_only, the sentence `wardyn needs-you`
+// prints), so no request is stored, no takeover.request row is written and no banner asks anyone.
+func TestTakeover_BackgroundRunRaisesNothing(t *testing.T) {
+	h, srv, runID := newTakeoverRaiseFixture(t, types.ExperienceBackground)
+	w := do(t, srv, http.MethodPost, "/api/v1/internal/approvals", h.mintRunToken(t, runID),
+		`{"kind":"human_takeover","requested_scope":{"reason":"I can't finish the sign-in"}}`)
+	var got struct{ Error, Reason string }
+	if w.Code != http.StatusConflict || json.Unmarshal(w.Body.Bytes(), &got) != nil ||
+		got.Reason != reasonRunBackgroundOnly || got.Error != runBackgroundOnlyMsg("terminal") {
+		t.Fatalf("raise on a background run: %d %s, want 409 %s", w.Code, w.Body.String(), reasonRunBackgroundOnly)
+	}
+	if len(h.approvals.requested) != 0 {
+		t.Fatalf("a background run's takeover request was stored: %+v", h.approvals.requested)
+	}
+	if rows := takeoverRows(t, h.audit); len(rows) != 0 {
+		t.Fatalf("audit rows = %v, want none", rows)
 	}
 }
 
@@ -256,6 +289,47 @@ func TestTakeover_Refusals(t *testing.T) {
 	}
 	if w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/take-over", f.owner, ""); w.Code != http.StatusConflict {
 		t.Fatalf("take over a declined request: %d, want 409", w.Code)
+	}
+}
+
+// TestTakeover_EntryShapes: the three verbs keep the attach ticket's entry shapes. A super admin on
+// a run that is not theirs gets the 403 naming why; a security admin, who also sees every run, gets
+// the missing approval's 404 like any stranger; and a Background run's owner gets 409
+// run_background_only, so a takeover never opens a door the run's shape closes.
+func TestTakeover_EntryShapes(t *testing.T) {
+	f := newTakeoverFixture(t, true)
+	id := f.seed(types.ApprovalHumanTakeover, types.ApprovalPending, "")
+	verbs := []string{"/take-over", "/hand-back", "/decline"}
+	admin := ssoSession(t, "sub-super-admin", "admin@corp.example", oidc.RoleAdmin)
+	security := ssoSession(t, "sub-security-admin", "security@corp.example", oidc.RoleSecurityAdmin)
+	for _, verb := range verbs {
+		if w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+verb, admin, ""); w.Code != http.StatusForbidden ||
+			reasonOf(t, w) != runOwnerOnlyReason {
+			t.Errorf("super admin %s: %d %s, want 403 %s", verb, w.Code, w.Body.String(), runOwnerOnlyReason)
+		}
+		w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+verb, security, "")
+		missing := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+uuid.New().String()+verb, security, "")
+		if w.Code != http.StatusNotFound || w.Body.String() != missing.Body.String() {
+			t.Errorf("security admin %s: %d %q, want the missing approval's %d %q", verb, w.Code, w.Body.String(), missing.Code, missing.Body.String())
+		}
+	}
+	ast := f.srv.cfg.Store.(*authzStore)
+	ast.mu.Lock()
+	run := ast.runs[f.run]
+	run.Experience = types.ExperienceBackground
+	ast.runs[f.run] = run
+	ast.mu.Unlock()
+	for _, verb := range verbs {
+		if w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+verb, f.owner, ""); w.Code != http.StatusConflict ||
+			reasonOf(t, w) != reasonRunBackgroundOnly {
+			t.Errorf("owner %s on a background run: %d %s, want 409 %s", verb, w.Code, w.Body.String(), reasonRunBackgroundOnly)
+		}
+	}
+	f.aap.mu.Lock()
+	got := f.aap.byID[id]
+	f.aap.mu.Unlock()
+	if got.State != types.ApprovalPending || got.TakeoverHolder != "" {
+		t.Fatalf("a refused verb changed the request: %+v", got)
 	}
 }
 

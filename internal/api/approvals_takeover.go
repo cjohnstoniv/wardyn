@@ -63,6 +63,19 @@ func takeoverScopeOf(raw json.RawMessage) (json.RawMessage, bool) {
 	return out, err == nil
 }
 
+// refuseBackgroundTakeoverRaise answers a raise from a Background run with the 409 the takeover verbs
+// give it (run_background_only): nobody can take over a run with no terminal or desktop, so no request
+// is stored and no banner asks for one, and `wardyn needs-you` prints the refusal and returns at once
+// rather than waiting for a person who cannot come. True when it has answered.
+func (s *Server) refuseBackgroundTakeoverRaise(w http.ResponseWriter, r *http.Request, runID uuid.UUID) bool {
+	run, err := s.cfg.Store.GetRun(r.Context(), runID)
+	if err != nil {
+		writeServerError(w, r, "load run for human_takeover", err)
+		return true
+	}
+	return s.refuseBackgroundOnly(w, r, run, "terminal")
+}
+
 // takeoverReason is a human_takeover row's reason ("" when the scope does not parse).
 func takeoverReason(ap types.ApprovalRequest) string {
 	var sc types.TakeoverScope
@@ -94,10 +107,12 @@ func (s *Server) loadTakeover(w http.ResponseWriter, r *http.Request) (types.App
 		return ap, types.AgentRun{}, false
 	}
 	// Someone who may not enter the run gets the 404 a missing request gets, not the run's own
-	// (no oracle on the approval id), audited as a foreign entry. admitRunEntry writes the rest.
+	// (no oracle on the approval id), audited as a foreign entry. admitRunEntry writes the rest: a
+	// super admin's 403 (they see every run), and a sponsor's refusal by capability. operator is the
+	// run-reach tier, asked once: the entry rule below asks it again, and its answer is the same.
+	operator := s.isOperator(r.Context())
 	if run, err := s.cfg.Store.GetRun(r.Context(), ap.RunID); err == nil &&
-		!mayEnterRun(run, principalFromRequest(r), s.isOperator(r.Context())) &&
-		!s.isOperator(r.Context()) && !s.sponsorsRun(r, run) {
+		!operator && !mayEnterRun(run, principalFromRequest(r), false) && !s.sponsorsRun(r, run) {
 		s.refuse(w, r, authz.Deny(authz.ReasonAttachTicketForeignRun, run.ID.String(), "approval not found").
 			OnRun(run.ID).AsIf(authz.Reason(reasonApprovalNotFound)))
 		return ap, types.AgentRun{}, false
@@ -112,7 +127,7 @@ func (s *Server) loadTakeover(w http.ResponseWriter, r *http.Request) (types.App
 	}
 	// The run profile's deny_interactive door, as on the attach WebSocket: a super admin's entry is
 	// exempt where the admin door is, a sponsor's never.
-	if (!s.isOperator(r.Context()) || asSponsor || !s.adminDoorExempt(run)) && s.refuseInteractiveAttach(w, r, run) {
+	if (!operator || asSponsor || !s.adminDoorExempt(run)) && s.refuseInteractiveAttach(w, r, run) {
 		return ap, run, false
 	}
 	return ap, run, true

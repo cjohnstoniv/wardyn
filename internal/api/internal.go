@@ -439,6 +439,9 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 			writeErrorReason(w, http.StatusBadRequest, reasonInternalApprovalRequestInvalid, "invalid approval request")
 			return
 		}
+		if s.refuseBackgroundTakeoverRaise(w, r, claims.RunID) {
+			return
+		}
 	}
 	if body.Kind == types.ApprovalPushContent {
 		var ok bool

@@ -60,7 +60,9 @@ type backgroundDoor struct {
 // gateway, so a direct API or CLI call needs no door of its own: denying here
 // denies there.
 var backgroundDoors = []backgroundDoor{
-	{Door: "terminal", Owner: "H4 (attach relay), H5", Symbols: []string{"handleAttachTicket", "handleAttachWS", "handleAttachTakeover"},
+	// admitRunEntry, not handleAttachTicket: the ticket mint and a "Needs you" takeover's three
+	// verbs (loadTakeover, under /approvals/{id}) enter only through it, and it asks the predicate.
+	{Door: "terminal", Owner: "H4 (attach relay), H5", Symbols: []string{"admitRunEntry", "handleAttachWS", "handleAttachTakeover"},
 		Routes: []string{"POST /runs/{id}/attach-ticket", "POST /runs/{id}/attach/ticket", "GET /runs/{id}/attach", "POST /runs/{id}/attach/takeover"}, Enforced: true},
 	{Door: "interactive exec", Owner: "C-mode-doors", Symbols: []string{"establishExec"}, Enforced: true},
 	// sshFreshRun, not the channel handlers: those take a run id and hold no run,

@@ -270,6 +270,30 @@ func writeDecideError(w http.ResponseWriter, r *http.Request, err error) {
 	}
 }
 
+// refuseUndecidableKind is decide's rule 3b: a credential_reauth row, or a "Needs you" request
+// (answered by taking over or declining, approvals_takeover.go, so an Approve cannot mark it taken
+// with nobody holding control), answers 409 to every tier that can see it. True when it has answered.
+func (s *Server) refuseUndecidableKind(w http.ResponseWriter, r *http.Request, id uuid.UUID) bool {
+	ap, err := s.cfg.Approvals.Get(r.Context(), id)
+	if err != nil {
+		return false
+	}
+	var reason, body string
+	switch ap.Kind {
+	case types.ApprovalCredentialReauth:
+		reason, body = reasonCredentialReauthNotDecidable, credentialReauthNotDecidableBody
+	case types.ApprovalHumanTakeover:
+		reason, body = reasonTakeoverNotDecidable, takeoverNotDecidableBody
+	default:
+		return false
+	}
+	if !s.canSeeApproval(r, ap) {
+		return false
+	}
+	writeErrorReason(w, http.StatusConflict, reason, body)
+	return true
+}
+
 func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	id, ok := parseIDParam(w, r, "id", "approval")
 	if !ok {
@@ -305,18 +329,7 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	//
 	// It costs one store read on a path that is about to do a write, and it is
 	// the same read the scope rules below need anyway.
-	if reauthAP, rerr := s.cfg.Approvals.Get(r.Context(), id); rerr == nil &&
-		reauthAP.Kind == types.ApprovalCredentialReauth && s.canSeeApproval(r, reauthAP) {
-		writeErrorReason(w, http.StatusConflict, reasonCredentialReauthNotDecidable, credentialReauthNotDecidableBody)
-		return
-	}
-
-	// The same early refusal for a "Needs you" request: answered by taking over or declining
-	// (approvals_takeover.go), never decided here, so an Approve cannot mark it taken with nobody
-	// holding control.
-	if tkAP, terr := s.cfg.Approvals.Get(r.Context(), id); terr == nil &&
-		tkAP.Kind == types.ApprovalHumanTakeover && s.canSeeApproval(r, tkAP) {
-		writeErrorReason(w, http.StatusConflict, reasonTakeoverNotDecidable, takeoverNotDecidableBody)
+	if s.refuseUndecidableKind(w, r, id) {
 		return
 	}
 	ap, run, loaded, ok := s.authorizeUserDecision(w, r, id)
