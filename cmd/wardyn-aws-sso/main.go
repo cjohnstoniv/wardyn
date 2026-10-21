@@ -53,6 +53,21 @@ import (
 // ssoCacheFile.isSSOToken for how the two are told apart.
 const ssoCacheSubdir = ".aws/sso/cache"
 
+// cliCacheSubdir is where the AWS CLI keeps role credentials it derived from
+// the session.
+const cliCacheSubdir = ".aws/cli/cache"
+
+// wipeCapturedCaches deletes the sandbox's copies of a session the control
+// plane now holds, before the sandbox is stopped. Best effort: the stop that
+// follows the capture removes the sandbox either way.
+func wipeCapturedCaches(home string) {
+	for _, d := range []string{ssoCacheSubdir, cliCacheSubdir} {
+		if err := os.RemoveAll(filepath.Join(home, d)); err != nil {
+			fmt.Fprintln(os.Stderr, "wardyn-aws-sso: wipe", d, "(non-fatal):", err)
+		}
+	}
+}
+
 // resolveTimeout bounds EACH SSO portal request (ssoPortalGET applies it per
 // call), so a slow or hanging portal can never hang the upload. It is per
 // request, never per pick: the chooser waits on a person for an unbounded time
@@ -132,6 +147,7 @@ func run() error {
 		printFailure(serverSentence(derr))
 		return nil
 	}
+	wipeCapturedCaches(home)
 	// Without the client registration it is redeemed with, a refresh token
 	// cannot renew anything: the control plane serves this session until it
 	// expires (awsSSOBlob.renewable), so say so before the pane closes.

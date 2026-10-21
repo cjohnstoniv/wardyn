@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/domainmatch"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -109,12 +110,14 @@ type Baseline struct {
 
 // Has reports whether host is a baseline host: built-in, declared, or under a
 // declared suffix. Wildcard allowlist entries never match: a pattern is wider
-// than any single host the operator vouched for.
+// than any single host the operator vouched for. The entry is read the way the
+// proxy reads it (domainmatch.Classify), so "github.com:443" and "github.com."
+// are judged by their host.
 func (b Baseline) Has(host string) bool {
-	host = strings.ToLower(strings.TrimSpace(host))
 	if strings.Contains(host, "*") {
 		return false
 	}
+	host, _, _ = domainmatch.Classify(host)
 	if safeBaselineDomains[host] || slices.Contains(b.Hosts, host) {
 		return true
 	}
