@@ -45,7 +45,7 @@ type Server struct {
 	execSlots     chan struct{}
 	outputs       map[uuid.UUID]*outputBuffer
 	holds         func(localRef string) bool
-	attachRef     func(uuid.UUID) string // a live run's local sandbox ref, for local attach
+	attachRef     func(uuid.UUID) string  // a live run's local sandbox ref, for local attach
 	nonces        map[string]*localClient // local attach grants waiting for the org
 	locals        map[streamKey]*localSession
 	times         localTimes

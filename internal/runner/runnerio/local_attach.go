@@ -148,13 +148,13 @@ type localFrame struct {
 // connection that asked.
 type localClient struct {
 	conn  net.Conn
-	ref   string            // the local sandbox ref the hello resolved
-	runID uuid.UUID         // the run the hello named, resolved again at the grant
-	in    chan localFrame   // frames the CLI sent after LocalHelloOK
-	gone  chan struct{}     // closed when the CLI stops sending
-	taken chan struct{}     // closed once local_attach claimed the nonce
-	quit  chan struct{}     // closed by close
-	wmu   sync.Mutex        // one frame on conn at a time
+	ref   string          // the local sandbox ref the hello resolved
+	runID uuid.UUID       // the run the hello named, resolved again at the grant
+	in    chan localFrame // frames the CLI sent after LocalHelloOK
+	gone  chan struct{}   // closed when the CLI stops sending
+	taken chan struct{}   // closed once local_attach claimed the nonce
+	quit  chan struct{}   // closed by close
+	wmu   sync.Mutex      // one frame on conn at a time
 	once  sync.Once
 	bound bool // guarded by wmu: LocalBound was sent, so the last frame is LocalEnd
 }
