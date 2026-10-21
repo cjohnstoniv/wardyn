@@ -88,17 +88,18 @@ type governanceEffective struct {
 	Error    string                 `json:"error,omitempty"`
 }
 
-// newProfileView pairs a stored profile with its resolution for an admin response. The effective
-// ceiling goes through the same redaction the stored one does.
-func newProfileView(row types.GovernanceProfile, res *ResolvedProfile, err error) governanceProfileView {
-	row.Ceiling = redactSpecForRead(row.Ceiling, true)
+// newProfileView pairs a stored profile with its resolution for an admin response read at tier. The
+// effective ceiling and the overlay go through the same redaction the stored ceiling does.
+func newProfileView(row types.GovernanceProfile, res *ResolvedProfile, err error, tier specReadTier) governanceProfileView {
+	row.Ceiling = redactSpecForRead(row.Ceiling, tier)
+	row.Overlay = redactOverlayForRead(row.Overlay, tier)
 	v := governanceProfileView{GovernanceProfile: row}
 	switch {
 	case err != nil:
 		v.Effective.Error = adminResolveError(err)
 	case res != nil:
 		v.Effective = governanceEffective{
-			Ceiling: redactSpecForRead(res.Ceiling, true), Limits: res.Limits, Warnings: res.AdminWarnings,
+			Ceiling: redactSpecForRead(res.Ceiling, tier), Limits: res.Limits, Warnings: res.AdminWarnings,
 		}
 	}
 	return v
@@ -158,7 +159,9 @@ func finishGovernanceProfileRequest(req governanceProfileRequest) (governancePro
 		return governanceProfileRequest{}, "name is invalid"
 	}
 	if !reflect.DeepEqual(req.Ceiling, types.RunPolicySpec{}) {
-		if err := validateAuthoredPolicySpec(req.Ceiling); err != nil {
+		// A kept mount's sentinel source is not a path: buildGovernanceProfile puts the stored one back
+		// and judges the result.
+		if err := validateAuthoredPolicySpec(withoutKeptMounts(req.Ceiling)); err != nil {
 			return governanceProfileRequest{}, "invalid ceiling: " + err.Error()
 		}
 	}
@@ -248,11 +251,11 @@ func (s *Server) writeGovernanceProfile(w http.ResponseWriter, r *http.Request, 
 			if refusal := s.profilePutCreateRefusal(r, id, status, all); refusal != nil {
 				return types.GovernanceProfile{}, refusal
 			}
-			p, res, err := s.buildGovernanceProfile(createdBy, id, req, all)
+			p, res, keep, err := s.buildGovernanceProfile(createdBy, s.isOperator(r.Context()), id, req, all)
 			effective = res
 			exemptCtx := withGovernanceAssignments(r.Context(), assignments)
 			if err == nil && mode == govQueue && !s.profileWriteExempt(exemptCtx, all, p, res) {
-				held = &heldProfileWrite{all: all, row: p, res: res}
+				held = &heldProfileWrite{all: all, row: p, res: res, keep: keep}
 				return p, errHoldForApproval
 			}
 			return p, err
@@ -262,7 +265,11 @@ func (s *Server) writeGovernanceProfile(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	var refusal *profileWriteError
+	var tier *mountTierRefusal
 	switch {
+	case errors.As(err, &tier):
+		s.refuse(w, r, tier.decision())
+		return
 	case errors.As(err, &refusal):
 		writeErrorReason(w, refusal.status, refusal.reason, refusal.msg)
 		return
@@ -287,7 +294,7 @@ func (s *Server) writeGovernanceProfile(w http.ResponseWriter, r *http.Request, 
 	if posture := s.rubricPostureAdvisory(r.Context(), effective); posture != "" {
 		warns = append(warns, posture)
 	}
-	writeJSON(w, status, governanceProfileResponse{Profile: newProfileView(saved, effective, nil), Warnings: warns})
+	writeJSON(w, status, governanceProfileResponse{Profile: newProfileView(saved, effective, nil, s.specReadTierFor(r.Context())), Warnings: warns})
 }
 
 // profilePutCreateRefusal answers a PUT (status 200) naming an id no profile in all holds. A run keeps
@@ -378,32 +385,56 @@ func composedFrom(all []types.GovernanceProfile, id uuid.UUID, comp compositionR
 // buildGovernanceProfile decides the row one write stores and what it resolves to, from every
 // profile as the write transaction reads them (all). Anything it returns as *profileWriteError is a
 // refusal the caller can fix; the row is stored only if it returns nil.
-func (s *Server) buildGovernanceProfile(createdBy string, id uuid.UUID, req governanceProfileRequest, all []types.GovernanceProfile) (types.GovernanceProfile, *ResolvedProfile, error) {
-	p := types.GovernanceProfile{
+//
+// super is whether the request being served is a super admin's (isOperator): the proposer's at a
+// direct or held write, the approver's when a held write is applied. It decides what the mount guard
+// (governance_mount_keep.go) admits, and keep is what that guard decided.
+func (s *Server) buildGovernanceProfile(createdBy string, super bool, id uuid.UUID, req governanceProfileRequest,
+	all []types.GovernanceProfile) (p types.GovernanceProfile, res *ResolvedProfile, keep mountKeep, err error) {
+	if !super {
+		defer func() { err = scrubMountSources(err, s.mountSourcesOf(all)) }()
+	}
+	p = types.GovernanceProfile{
 		ID: id, Name: req.Name, CreatedBy: createdBy, Contact: req.contact, ContactSet: req.contactSet,
 	}
 	// UNIQUE(name) is judged here too, so a held create or rename is refused at proposal
 	// and not left pending to fail at every approval.
 	if slices.ContainsFunc(all, func(x types.GovernanceProfile) bool { return x.ID != id && x.Name == req.Name }) {
-		return p, nil, writeRefusal(http.StatusConflict, reasonGovernanceProfileNameConflict, "a governance profile named %q already exists", req.Name)
+		return p, nil, keep, writeRefusal(http.StatusConflict, reasonGovernanceProfileNameConflict, "a governance profile named %q already exists", req.Name)
 	}
 	base, overlay, limits := composedFrom(all, id, req.comp)
 	switch {
 	case overlay == nil && base != nil:
-		return p, nil, writeRefusal(http.StatusBadRequest, reasonGovernanceOverlayInvalid, "base_profile_id: a base needs an overlay (send overlay: {} for the base unchanged)")
+		return p, nil, keep, writeRefusal(http.StatusBadRequest, reasonGovernanceOverlayInvalid, "base_profile_id: a base needs an overlay (send overlay: {} for the base unchanged)")
 	case overlay == nil && limits != nil:
-		return p, nil, writeRefusal(http.StatusBadRequest, reasonGovernanceOverlayInvalid, "overlay_limits: needs an overlay")
+		return p, nil, keep, writeRefusal(http.StatusBadRequest, reasonGovernanceOverlayInvalid, "overlay_limits: needs an overlay")
 	}
 	if overlay != nil {
 		if !reflect.DeepEqual(req.Ceiling, types.RunPolicySpec{}) || !reflect.DeepEqual(req.Limits, types.GovernanceLimits{}) {
-			return p, nil, writeRefusal(http.StatusBadRequest, reasonGovernanceOverlayInvalid,
+			return p, nil, keep, writeRefusal(http.StatusBadRequest, reasonGovernanceOverlayInvalid,
 				"a composed profile states its policy in overlay and overlay_limits: ceiling and limits must be empty")
+		}
+		// Only an overlay the request sent is judged: an absent one is the stored row's, unchanged.
+		if req.comp.overlaySet && overlay.WorkspaceMounts != nil {
+			out, held, sets, kerr := keepMounts("overlay.workspace_mounts", *overlay.WorkspaceMounts, s.storedOverlayMounts(all, id, base), super)
+			if kerr != nil {
+				return p, nil, keep, kerr
+			}
+			cp := *overlay
+			cp.WorkspaceMounts, overlay = &out, &cp
+			keep.overlay, keep.setsHostPath = &held, sets
 		}
 		p.BaseProfileID, p.Overlay, p.OverlayLimits = base, overlay, limits
 	} else {
+		out, held, sets, kerr := keepMounts("ceiling.workspace_mounts", req.Ceiling.WorkspaceMounts, s.storedCeilingMounts(all, id), super)
+		if kerr != nil {
+			return p, nil, keep, kerr
+		}
+		req.Ceiling.WorkspaceMounts = out
+		keep.ceiling, keep.setsHostPath = held, sets
 		// A standalone row's ceiling is judged in full here, an empty one included (decode skips it).
 		if err := validateAuthoredPolicySpec(req.Ceiling); err != nil {
-			return p, nil, writeRefusal(http.StatusBadRequest, specRefusalReason(err, reasonGovernanceProfileRequestInvalid), "invalid ceiling: %v", err)
+			return p, nil, keep, writeRefusal(http.StatusBadRequest, specRefusalReason(err, reasonGovernanceProfileRequestInvalid), "invalid ceiling: %v", err)
 		}
 		// The structural bound (governance_grantbound.go). A profile may narrow the
 		// deployment's credential eligibility; it may never mint eligibility the
@@ -411,11 +442,12 @@ func (s *Server) buildGovernanceProfile(createdBy string, id uuid.UUID, req gove
 		// time because Config.DefaultPolicy is env-borne and a redeploy that drops
 		// a pairing must not leave old profiles serving it.
 		if err := governanceGrantsWithinCeiling(req.Ceiling.EligibleGrants, s.cfg.DefaultPolicy.EligibleGrants); err != nil {
-			return p, nil, writeRefusal(http.StatusBadRequest, reasonGovernanceCeilingInvalid, "invalid ceiling: %v", err)
+			return p, nil, keep, writeRefusal(http.StatusBadRequest, reasonGovernanceCeilingInvalid, "invalid ceiling: %v", err)
 		}
 		p.Ceiling, p.Limits = req.Ceiling, req.Limits
 	}
-	return s.checkGraphWrite(p, all)
+	p, res, err = s.checkGraphWrite(p, all)
+	return p, res, keep, err
 }
 
 // checkGraphWrite refuses a row that would break the graph and resolves it: its base must exist, no

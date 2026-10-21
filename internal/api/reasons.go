@@ -315,6 +315,7 @@ const (
 	reasonGovernanceProfileCycle         = "governance_profile_cycle"         // the write would make a profile its own base
 	reasonGovernanceProfileDepth         = "governance_profile_depth"         // the write would put a profile more than three deep
 	reasonGovernanceOverlayUnsatisfiable = "governance_overlay_unsatisfiable" // nothing satisfies a profile and its base together
+	reasonGovernanceMountKeepUnknown     = "governance_mount_keep_unknown"    // a mount sent back with a withheld source names a target with no stored host path
 	// reasonGovernancePreviewClaimsInvalid is shared by GET /governance/preview
 	// and the user-drive naming preview (user_drives_preview.go): both feed the
 	// same normalizeGovernancePreviewClaims validator over user_subjects/groups.
