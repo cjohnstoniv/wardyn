@@ -95,7 +95,7 @@ test.describe("New Run: keep the work folder", () => {
     await continueNewRun(page, NR_TOOLS.TITLE);
     await continueNewRun(page, NR_REVIEW.TITLE);
     const work = page.locator("[data-review-group=work]");
-    await expect(work).toContainText(FILES_SUMMARY);
+    await expect(work).toContainText(NR_REVIEW.MAIN_DRIVE("10 GiB"));
     await expect(work).toContainText(NR_FILES.KEEP_LIFE);
 
     await work.getByRole("button", { name: new RegExp(`^${NR_REVIEW.CHANGE} `) }).click();

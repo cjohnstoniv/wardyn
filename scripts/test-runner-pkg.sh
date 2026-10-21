@@ -34,9 +34,9 @@ AGENT="${SRC}/com.wardyn.runnerd.managed.plist"
 grep -q 'com.wardyn.runnerd.managed' "${SRC}/pkg-scripts/postinstall" "${SRC}/pkg-scripts/preinstall" || fail "the pkg scripts do not name the agent"
 MC="${SRC}/wardyn-runnerd.mobileconfig"
 [ "$(plist_get "$MC" 'd["PayloadContent"][0]["PayloadType"]')" = "$(sed -n 's/^const prefsDomain = "\(.*\)"$/\1/p' "${REPO_ROOT}/cmd/wardyn-runnerd/managed_prefs.go")" ] || fail "the profile's payload type is not the domain runnerd reads"
-want_keys="$(grep -ho 'managedPref("[A-Za-z]*")\|{"[a-z-]*", "[A-Za-z]*"' "${REPO_ROOT}"/cmd/wardyn-runnerd/serve.go | sed 's/.*"\([A-Za-z]*\)".*/\1/' | sort -u | tr '\n' ' ')"
+want_keys="$(grep -ho 'managed: "[A-Za-z]*"' "${REPO_ROOT}"/cmd/wardyn-runnerd/runnerconfig.go | sed 's/.*"\([A-Za-z]*\)".*/\1/' | sort -u | tr '\n' ' ')"
 have_keys="$(plist_get "$MC" '" ".join(sorted(k for k in d["PayloadContent"][0] if not k.startswith("Payload")))')"
-[ "$want_keys" = "$have_keys " ] || fail "the profile's keys ($have_keys) are not the preferences serve.go reads ($want_keys)"
+[ "$want_keys" = "$have_keys " ] || fail "the profile's keys ($have_keys) are not the preferences runnerconfig.go reads ($want_keys)"
 
 # ---- the launcher ---------------------------------------------------------------------------------
 H="${WORK}/home"; mkdir -p "$H"

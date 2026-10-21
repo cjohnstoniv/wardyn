@@ -14,13 +14,13 @@ import (
 // `d-` hash home, and a valid home on every backend a team drive may use.
 func TestDriveTeamHome(t *testing.T) {
 	a, b := UserDrive{ID: uuid.New()}, UserDrive{ID: uuid.New()}
-	if DriveTeamHome(a) != DriveTeamHome(a) {
+	home := DriveTeamHome(a)
+	if DriveTeamHome(a) != home {
 		t.Fatal("DriveTeamHome is not deterministic")
 	}
-	if DriveTeamHome(a) == DriveTeamHome(b) {
+	if home == DriveTeamHome(b) {
 		t.Fatal("two team drives share one folder")
 	}
-	home := DriveTeamHome(a)
 	if !strings.HasPrefix(home, "t-") || len(home) != 2+driveHomeHashLen {
 		t.Fatalf("home = %q, want t- and %d hex", home, driveHomeHashLen)
 	}

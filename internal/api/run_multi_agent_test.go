@@ -177,8 +177,11 @@ func TestMultiAgent_SwitchOffRefusesAtEveryDoor(t *testing.T) {
 		t.Errorf("run_harnesses = %+v, want claude-code started on the run's task and codex-cli on its own", rows)
 	}
 	// GET /runs/{id} names every agent, the run's own first, each with its task.
-	srv.cfg.Store = auditlessStore{st}
-	get := doSSO(t, srv, http.MethodGet, "/api/v1/runs/"+id.String(), govSession(t, "sub-plain", []string{"eng"}, false), "")
+	// A second server over the same store reads it back: the run's completion watcher is still
+	// reading srv's config, so srv's store is not swapped under it.
+	cfg := srv.cfg
+	cfg.Store = auditlessStore{st}
+	get := doSSO(t, New(cfg), http.MethodGet, "/api/v1/runs/"+id.String(), govSession(t, "sub-plain", []string{"eng"}, false), "")
 	var detail struct {
 		Agents []runDetailAgent `json:"agents"`
 	}
