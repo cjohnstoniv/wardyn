@@ -271,6 +271,13 @@ type UserDrive struct {
 	// KeptFromRun is the run a member drive was kept from (keep_work_folder),
 	// written once on create; nil on a drive made by hand.
 	KeptFromRun *uuid.UUID `json:"-"`
+	// AltBackend, AltHostRoot and AltRunnerID are the drive's second place (#112):
+	// the same share as one person's own runner sees it. Runs on that runner mount
+	// the drive from AltHostRoot; runs on the organisation's runners mount it from
+	// the first place. All empty on a drive with one place (SecondPlace).
+	AltBackend  DriveBackend `json:"alt_backend,omitempty"`
+	AltHostRoot string       `json:"alt_host_root,omitempty"`
+	AltRunnerID *uuid.UUID   `json:"alt_runner_id,omitempty"`
 }
 
 // UserDriveGrant allocates one drive to one subject (migration 0054's
@@ -311,6 +318,10 @@ type UserDriveListItem struct {
 	// SingleHost is set on a team drive whose folder is a Docker volume: it
 	// lives on one Docker host, so runs on another host see a different folder.
 	SingleHost bool `json:"single_host,omitempty"`
+	// PlacementEligible: a share, which can be reached from more than one place
+	// (#113). MountsFrom is where the drive mounts from, printed as it is (M10).
+	PlacementEligible bool   `json:"placement_eligible"`
+	MountsFrom        string `json:"mounts_from,omitempty"`
 }
 
 // TeamSingleHost reports whether d is a team drive held on one Docker host.
@@ -387,6 +398,9 @@ type DriveMount struct {
 	// Team marks a team drive's shared folder, which mounts under SharedRoot
 	// whatever its backend.
 	Team bool `json:"team,omitempty"`
+	// RunnerID is set on a drive's second place: the one runner it is bound to,
+	// the only one a local plan verifies its path on (drivePathsOn).
+	RunnerID *uuid.UUID `json:"runner_id,omitempty"`
 }
 
 // UserDriveHostRootCheck is the signature of the deployment's ENV CEILING over
