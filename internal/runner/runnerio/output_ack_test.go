@@ -126,6 +126,15 @@ func bufferState(server *Server, id uuid.UUID) outputState {
 	return b.state
 }
 
+func bufferLossy(server *Server, id uuid.UUID) bool {
+	server.mu.Lock()
+	b := server.outputs[id]
+	server.mu.Unlock()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.lossy
+}
+
 // With the org's sink present and ACKs flowing, more than the runner's whole
 // buffer passes through without a byte lost or a gap reported.
 func TestOutputAckedCreatePathKeepsEveryByte(t *testing.T) {
@@ -212,6 +221,15 @@ func TestOutputRecoveryAfterOrgRestartAcknowledges(t *testing.T) {
 	case <-watch.refused:
 	case <-time.After(10 * time.Second):
 		t.Fatal("restarted org never refused the output OPEN")
+	}
+	// The org signals its refusal before the RESET reaches the runner. A runner that marks the
+	// output unacknowledged only after the recovery's first ACK leaves it lossy, and the write
+	// below then drops bytes the recovery has not read.
+	for deadline := time.Now().Add(10 * time.Second); !bufferLossy(server, id); {
+		if time.Now().After(deadline) {
+			t.Fatal("runner never marked the refused output unacknowledged")
+		}
+		time.Sleep(time.Millisecond)
 	}
 	capture := &outputCapture{done: make(chan struct{})}
 	recovered := make(chan error, 1)

@@ -105,3 +105,59 @@ func TestRunnerLimitsCheckWording(t *testing.T) {
 		t.Errorf("one runner: %q", c.Detail)
 	}
 }
+
+// The credential_delivery row names every stored delivery row the server cannot build and what it can build
+// for it, in an override as in the global rows; it is absent for a buildable document, never blocks, shows
+// only to an operator, and changes nothing.
+func TestSetupStatusCredentialDeliveryRow(t *testing.T) {
+	srv, f, _ := newRunnerRegistrationServer(t)
+	rowFor := func(cookie *http.Cookie) (SetupCheck, bool) {
+		t.Helper()
+		w := doSSO(t, srv, http.MethodGet, "/api/v1/setup/status", cookie, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET /setup/status = %d %s", w.Code, w.Body.String())
+		}
+		var st SetupStatus
+		if err := json.Unmarshal(w.Body.Bytes(), &st); err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range st.Checks {
+			if c.ID == "credential_delivery" {
+				return c, true
+			}
+		}
+		return SetupCheck{}, false
+	}
+	admin := ssoSession(t, "admin", "admin@corp.example", oidc.RoleAdmin)
+	member := ssoSession(t, "alice", "alice@corp.example", oidc.RoleUser)
+
+	f.deliveryPolicy = json.RawMessage(`{"classes":{"api_key":{"mode":"via_org"},"ado_minted_pat":{"mode":"runner_resident"}},"by_trust":{"personal":{"classes":{"env_secret":{"mode":"runner_resident"}}}}}`)
+	if c, ok := rowFor(admin); ok {
+		t.Fatalf("a fully buildable document shows the row: %+v", c)
+	}
+
+	const stored = `{"classes":{"api_key":{"mode":"via_org"},"git_pat_broker":{"mode":"runner_resident"}},"by_trust":{"personal":{"classes":{"bedrock_role_credentials":{"mode":"runner_resident"}}}}}`
+	f.deliveryPolicy = json.RawMessage(stored)
+	c, ok := rowFor(admin)
+	if !ok || c.Status != "warn" || c.Blocking {
+		t.Fatalf("operator row = %+v, %v; want a non-blocking warn", c, ok)
+	}
+	for _, want := range []string{
+		`2 stored credential delivery rows name a mode the server cannot build`,
+		`class "git_pat_broker" cannot be delivered as "runner_resident" yet (the server can build: refuse)`,
+		`class "by_trust.personal.bedrock_role_credentials" cannot be delivered as "runner_resident" yet (the server can build: refuse)`,
+	} {
+		if !strings.Contains(c.Detail, want) {
+			t.Errorf("detail lacks %q: %s", want, c.Detail)
+		}
+	}
+	if strings.Contains(c.Detail, "api_key") {
+		t.Errorf("a buildable row is named: %s", c.Detail)
+	}
+	if string(f.deliveryPolicy) != stored {
+		t.Errorf("the check rewrote the stored document: %s", f.deliveryPolicy)
+	}
+	if c, ok := rowFor(member); ok {
+		t.Errorf("a member sees the credential_delivery row: %+v", c)
+	}
+}

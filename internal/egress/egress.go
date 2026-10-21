@@ -68,7 +68,10 @@ type DecisionLog struct {
 	// policy:tool-allow/policy:tool-deny row carries the quoted tool name the
 	// run's tool_rules answered. A brokered:llm deny whose credential could
 	// not be refreshed carries that masked refusal. A brokered:recording deny
-	// carries the organisation's refusal reason token (recording_off). Empty
+	// carries the organisation's refusal reason token (recording_off). A
+	// private-address refusal that site_config.internal_hosts can lift
+	// (builtin:private-ip, or a brokered git lane's vet) carries the lift
+	// sentence naming the host and the range block, never the address. Empty
 	// on every other decision.
 	Cause string `json:"cause,omitempty"`
 	// Via names the CLASS of hop that carried the request, or that a refusal

@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -267,6 +268,9 @@ func (f upgradeStatusFake) GetSiteConfig(context.Context) (types.SiteConfig, err
 	return f.siteCfg, nil
 }
 func (f upgradeStatusFake) ListRuns(context.Context) ([]types.AgentRun, error) { return nil, nil }
+func (f upgradeStatusFake) GetCredentialDeliveryPolicy(context.Context) (types.CredentialDeliveryPolicyDoc, error) {
+	return types.CredentialDeliveryPolicyDoc{Policy: json.RawMessage(`{"classes":{}}`)}, nil
+}
 
 // Both rows reach an operator's GET /setup/status, which `wardyn setup status` and the console's setup
 // review print, and leave it when the configuration no longer calls for them.
