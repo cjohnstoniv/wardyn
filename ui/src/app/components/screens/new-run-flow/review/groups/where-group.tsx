@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import * as React from "react";
 import { Button } from "../../../../ui/button";
 import { Label } from "../../../../ui/label";
 import { NR_REVIEW } from "../../../../wardyn/copy/new-run/review";
@@ -14,7 +15,7 @@ import { barrierRows, poolChoices, selectedPoolId, usablePools } from "../../ste
 import { loadPools, usePools } from "../../steps/run/pool-source";
 import { BarrierChip } from "../barrier-chip";
 import { draftSource } from "../provenance";
-import { ReviewGroup } from "../review-group";
+import { BlockedGroups, ReviewGroup } from "../review-group";
 import { onlineRunners } from "../review-seams";
 import { SELECT_CLASS } from "../save-as-dialog";
 import type { GroupProps } from "./group-props";
@@ -68,6 +69,9 @@ function WhereEditor({ draft, dispatch, close }: Pick<GroupProps, "draft" | "dis
 
 export function WhereGroup({ draft, pre, docRows, dispatch }: GroupProps) {
   const pool = pre?.runner_pool;
+  // A blocker that points at this row while no pool is known (the pool-required refusal): the row says so (#3043).
+  const blocked = React.useContext(BlockedGroups).has("where");
+  const noPool = !pool && !draft.intent.runner_pool_id && blocked;
   const slots = pre?.runner_pool_slots;
   const online = onlineRunners(pre);
   const kind = pool ? POOL_KIND_LABEL[pool.scope] : undefined;
@@ -84,7 +88,7 @@ export function WhereGroup({ draft, pre, docRows, dispatch }: GroupProps) {
     <ReviewGroup
       id="where"
       label={NR_REVIEW.GROUP_WHERE}
-      value={pool && NR_REVIEW.WHERE_VALUE(pool.name)}
+      value={pool ? NR_REVIEW.WHERE_VALUE(pool.name) : noPool ? <span className="font-normal text-muted-foreground">{NR_REVIEW.WHERE_NONE}</span> : undefined}
       mark={cc && <BarrierChip cc={cc} />}
       detail={detail}
       provenance={provenance}

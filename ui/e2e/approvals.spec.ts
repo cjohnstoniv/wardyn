@@ -110,7 +110,7 @@ function markerRe(marker: string): RegExp {
 // match it tolerantly, then wait for the screen to land by its page heading.
 async function gotoApprovals(page: Page): Promise<void> {
   await page.getByRole("link", { name: /^Approvals(\s+\d+)?$/ }).click();
-  await expect(page.getByRole("heading", { name: "Approvals" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Approvals", level: 1 })).toBeVisible();
 }
 
 // Seed the standing read-only fixtures the assertion specs rely on: two pending
@@ -150,7 +150,7 @@ test.describe("Approvals screen", () => {
   });
 
   test("renders the approvals page header and HITL copy", async ({ page }) => {
-    await expect(page.getByRole("heading", { name: "Approvals" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Approvals", level: 1 })).toBeVisible();
     // The page description says each card states exactly what approving grants.
     await expect(
       page.getByText(/Each card says exactly what approving grants/i),
@@ -517,7 +517,9 @@ test.describe("Approvals — decision flows (mutating, self-seeded)", () => {
     await gotoConsole(page);
     await gotoApprovals(page);
 
-    await expect(page.getByText("You're all caught up")).toBeVisible();
+    // #3047: a noun-phrase title (no period, no congratulation) over the existing sentence.
+    await expect(page.getByRole("heading", { name: "No pending approvals" })).toBeVisible();
+    await expect(page.getByText("You're all caught up")).toHaveCount(0);
     await expect(
       page.getByText(/New credential, egress, and tool-call requests appear here the moment an agent needs you/i),
     ).toBeVisible();
@@ -681,8 +683,12 @@ test.describe("the egress widget's held chip and the Approvals tab badge count L
       // implementation would read "2" here (one row per decision recorded),
       // or would count the APPROVED row's own historical egress.hold audit
       // entry as still "held" forever. "N held" is this widget's own phrase
-      // (RUN_COCKPIT.held) and appears nowhere else on the Overview tab.
-      await expect(page.getByText(RUN_COCKPIT.held(1), { exact: true })).toBeVisible();
+      // (RUN_COCKPIT.held) and appears only in the Egress widget and the Egress status tile (#3038), which
+      // read the same live count.
+      await expect(page.getByText(RUN_COCKPIT.held(1), { exact: true })).toHaveCount(2);
+      await expect(
+        page.getByRole("group", { name: RUN_COCKPIT.tilesLabel }).getByText(RUN_COCKPIT.held(1), { exact: true }),
+      ).toBeVisible();
       await expect(page.getByText(RUN_COCKPIT.held(2), { exact: true })).toHaveCount(0);
 
       // The Approvals tab badge: pending.length, so also 1 — the decided row

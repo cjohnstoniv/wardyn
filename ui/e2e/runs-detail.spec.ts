@@ -60,6 +60,10 @@ test.describe("Run detail (/runs/:id)", () => {
     // must be visible without scrolling, while the run id / SPIFFE id stayed in
     // the Identity widget on the evidence rail. Same facts, two homes.
     await expect(page.getByRole("heading", { name: "Identity" })).toBeVisible();
+    // #3038: four status tiles above the canvas, in this order, each with a value.
+    const tiles = page.getByRole("group", { name: "Run status" }).getByTestId("status-tile");
+    await expect(tiles).toHaveCount(4);
+    await expect(tiles.locator("> span:first-child")).toHaveText(["Egress", "Files", "Sandbox", "Credentials"]);
     await expect(page.getByText("acme/widgets")).toBeVisible();
     await expect(page.getByText("Run", { exact: true })).toBeVisible();
 
@@ -75,7 +79,8 @@ test.describe("Run detail (/runs/:id)", () => {
     // waited: the property under test ("above the fold") tolerates a
     // fractional pixel; it would not tolerate a genuine multi-hundred-pixel
     // regression, which this still catches.
-    expect(Math.round(box!.y)).toBeLessThanOrEqual(300);
+    // #3038: the four status tiles sit above the hero (about 42px), so the bound moved from 300 to 345.
+    expect(Math.round(box!.y)).toBeLessThanOrEqual(345);
 
     // And the page itself does not scroll: the cockpit fills the viewport.
     const scrolls = await page.evaluate(() => {

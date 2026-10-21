@@ -15,6 +15,7 @@ import {
 import { NR_FILES } from "../src/app/components/wardyn/copy/new-run/files";
 import { NR_HARNESSES } from "../src/app/components/wardyn/copy/new-run/harnesses";
 import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
+import { NR_RUN } from "../src/app/components/wardyn/copy/new-run/run";
 import { NR_SHARED } from "../src/app/components/wardyn/copy/new-run/shared";
 import { NR_TOOLS } from "../src/app/components/wardyn/copy/new-run/tools";
 
@@ -256,8 +257,10 @@ test.describe("Tier B guided setup", () => {
     await startGuided(page);
     await chooseShape(page, "agent_task");
     await chooseRunMode(page, "autonomous");
-    await expect(page.getByRole("radio", { name: "Run now", exact: true })).toBeVisible();
-    await expect(page.getByRole("radio", { name: "Schedule for later", exact: true })).toBeVisible();
+    // #3045: timing is one sentence; scheduling is not built, so no radios.
+    await expect(page.getByText(NR_RUN.TIMING_NOW, { exact: true }).first()).toBeVisible();
+    await expect(page.getByText(NR_RUN.TIMING_NOW_BODY)).toBeVisible();
+    await expect(page.getByRole("radio", { name: /Schedule for later/ })).toHaveCount(0);
     await continueNewRun(page, NR_HARNESSES.TITLE);
     await firstHarness(page, "e2e task");
     await continueNewRun(page, NR_FILES.TITLE);

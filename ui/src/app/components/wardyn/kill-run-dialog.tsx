@@ -13,6 +13,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "../ui/alert-dialog";
+import { RUN_REF } from "./copy/run-ref";
+import { RunRef, shortRunId } from "./run-ref";
 
 // Shared kill-run confirm for the two places Kill is offered (the Runs board's
 // row menu and Run Detail's header): an enforcement stop deserves the same
@@ -44,11 +46,11 @@ export function KillRunDialog({
     <AlertDialog open={!!runId} onOpenChange={onOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle className="break-words">{name ? `Kill "${name}"?` : `Kill ${runId}?`}</AlertDialogTitle>
+          <AlertDialogTitle className="break-words">{name ? `Kill "${name}"?` : RUN_REF.killRun(shortRunId(runId ?? ""))}</AlertDialogTitle>
           <AlertDialogDescription>
             {name && runId && (
               <>
-                Run <span className="font-mono">{runId.slice(0, 8)}</span>.{" "}
+                <RunRef runId={runId} />.{" "}
               </>
             )}
             This terminates the agent run, tears down the sandbox, and revokes any brokered

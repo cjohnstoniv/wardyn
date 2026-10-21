@@ -213,6 +213,19 @@ export const RUN_COCKPIT = {
   // separator they already had.
   shortcutDock: "dock",
   shortcutExitFocus: "exit focus",
+  // #3038 (R6RUN, approved 2026-10-20): the Overview's four status tiles. The labels are the widgets' own names;
+  // "None yet", "Not inspectable" and "Not available" are the tile values when there is nothing to read.
+  // A real reading is the bare count (Files) or percent (Sandbox); the sheet shows no unit words.
+  tilesLabel: "Run status",
+  tileEgress: "Egress",
+  tileFiles: "Files",
+  tileSandbox: "Sandbox",
+  tileCredentials: "Credentials",
+  tileNoneYet: "None yet",
+  tileNotInspectable: "Not inspectable",
+  tileNotAvailable: "Not available",
+  tileFilesCount: (n: number) => `${n}`,
+  tileCredentialsValue: (eligible: number, minted: number) => `${eligible} eligible · ${minted} minted`,
 } as const;
 
 // #125 — the run page's own launch-advisory block. A launch that answers 2xx

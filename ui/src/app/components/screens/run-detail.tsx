@@ -53,6 +53,8 @@ import { PolicyRemedy } from "../wardyn/policy-remedy";
 import { newRunHref } from "./new-run-flow/draft/new-run-url";
 import { AUDIT } from "./audit-copy";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
+import { Refusal } from "../wardyn/refusal";
+import { REFUSAL, RUN_NOT_FOUND } from "../wardyn/copy/refusal";
 import { isHeld } from "../wardyn/live-approvals";
 import { ReasonDialog } from "../wardyn/reason-dialog";
 import { APPROVALS } from "../../lib/approvals-copy";
@@ -255,17 +257,22 @@ function RunDetailPage({ id }: { id: string }) {
           />
         </div>
       ) : !run ? (
-        <div className="m-6 rounded-xl border border-border bg-card">
-          <EmptyState
-            icon={ScrollText}
-            title="Run not found"
-            description="This run may have been archived or deleted, the link is stale, or you don't have access to it."
-            action={
-              <Button variant="outline" onClick={() => navigate("/runs")}>
-                Back to Runs
-              </Button>
-            }
-          />
+        <div className="flex justify-center p-6">
+          <Refusal
+            tone="absent"
+            ariaLabel={RUN_NOT_FOUND.TITLE}
+            title={RUN_NOT_FOUND.TITLE}
+            chip={RUN_NOT_FOUND.CHIP}
+            body={RUN_NOT_FOUND.BODY}
+            rows={[
+              { label: REFUSAL.WALL, value: RUN_NOT_FOUND.WALL, muted: true },
+              { label: REFUSAL.CAN_CHANGE, value: RUN_NOT_FOUND.CAN_CHANGE },
+            ]}
+          >
+            <Button size="sm" onClick={() => navigate("/runs")}>
+              {RUN_NOT_FOUND.CTA}
+            </Button>
+          </Refusal>
         </div>
       ) : (
         <Tabs

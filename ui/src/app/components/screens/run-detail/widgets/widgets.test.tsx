@@ -365,6 +365,20 @@ describe("IdentityWidget", () => {
     expect(screen.getByText("ticket 4412")).toBeInTheDocument();
   });
 
+  // #3036: the Run row is the reference — title, then the short id that copies the whole one.
+  it("shows the Run row as the title and a short, copyable id", () => {
+    const id = "3f9c1e2a-7b44-4d0e-9c1a-5e8b2d6f4a10";
+    render(<IdentityWidget run={{ ...run, id, title: "payments deps bump" }} onGoPolicy={() => {}} />);
+    expect(screen.getByText("payments deps bump")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "3f9c1e2a" })).toHaveAttribute("title", `${id}\nClick to copy`);
+    expect(screen.queryByText(id)).not.toBeInTheDocument();
+  });
+
+  it("names an untitled run by its task in the Run row", () => {
+    render(<IdentityWidget run={{ ...run, id: "3f9c1e2a-7b44-4d0e-9c1a-5e8b2d6f4a10" }} onGoPolicy={() => {}} />);
+    expect(screen.getAllByText("Fix the flaky auth tests")).toHaveLength(2);
+  });
+
   // An interactive run has no task at all and most runs have no description —
   // empty labelled rows would be worse than none.
   it("shows neither label when there is nothing to say", () => {

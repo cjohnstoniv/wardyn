@@ -4,7 +4,7 @@
  */
 
 import * as React from "react";
-import { Chip } from "../../../../wardyn/primitives";
+import { StepSection } from "../../../../wardyn/step-section";
 import { NR_SHAPE } from "../../../../wardyn/copy/new-run/shape";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { cn } from "../../../../ui/utils";
@@ -14,8 +14,8 @@ import type { GuidedFacts } from "../../draft/run-intent";
 import { AgainPicker } from "./again-picker";
 import { TemplatePicker } from "./template-picker";
 
-/** Make's bordered question block (snap-2125Z index.css:130, :530). */
-export const QUESTION_BLOCK = "rounded-[11px] border border-border bg-card p-5 max-[520px]:p-3.5";
+/** A titleless block drawn as a StepSection's card: the same radius, border and padding. */
+export const QUESTION_BLOCK = "rounded-xl border border-border bg-card p-4";
 
 const SOURCES = [
   ["scratch", NR_SHAPE.SOURCE_SCRATCH],
@@ -37,11 +37,7 @@ export function StartFrom({ startFrom, templateId, againRunId, onSource, onPickT
 }) {
   const labelId = React.useId();
   return (
-    <section className={QUESTION_BLOCK}>
-      <div className="mb-3 flex items-center justify-between text-xs font-semibold">
-        <span id={labelId}>{NR_SHAPE.START_FROM}</span>
-        <Chip>{NR_SHARED.OPTIONAL}</Chip>
-      </div>
+    <StepSection title={NR_SHAPE.START_FROM} titleId={labelId} titleAs="div" marker={NR_SHARED.OPTIONAL}>
       <div role="group" aria-labelledby={labelId} className="flex rounded-[9px] border border-border bg-muted p-[3px] max-[350px]:flex-col">
         {SOURCES.map(([value, label]) => (
           <button
@@ -60,6 +56,6 @@ export function StartFrom({ startFrom, templateId, againRunId, onSource, onPickT
       </div>
       {startFrom === "template" && <TemplatePicker selectedId={templateId} onPick={onPickTemplate} />}
       {startFrom === "again" && <AgainPicker selectedRunId={againRunId} onPick={onPickAgain} />}
-    </section>
+    </StepSection>
   );
 }

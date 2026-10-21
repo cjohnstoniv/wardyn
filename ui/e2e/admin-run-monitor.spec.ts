@@ -8,7 +8,7 @@ import type { Page } from "@playwright/test";
 import { test, expect, ADMIN_TOKEN, sql } from "./fixtures";
 import { RUN } from "../src/app/components/wardyn/copy";
 import { REAUTH_ROW } from "../src/app/components/wardyn/model-access-copy";
-import { OPEN_IN_USER_VIEW } from "../src/app/components/wardyn/copy/console-view";
+import { CONSOLE_VIEW, OPEN_IN_USER_VIEW } from "../src/app/components/wardyn/copy/console-view";
 
 // M-7 — the admin run monitor (admin-member-modes-design.md §4.6, §6; modes-b
 // §1: "Monitor, kill, decide. No New run and no relaunch. The admin's own run
@@ -71,12 +71,16 @@ test.describe("the admin run monitor (M-7)", () => {
       const mineRow = page.getByTestId("run-row").filter({ hasText: mineTask });
       const theirsRow = page.getByTestId("run-row").filter({ hasText: theirsTask });
       await expect(mineRow.getByText(`${ME} (you)`)).toBeVisible();
-      await expect(mineRow.getByRole("button", { name: OPEN_IN_USER_VIEW })).toBeVisible();
+      // #3039: the door lives in the row's ⋯ menu, on own rows only, and carries its subtitle.
+      await expect(mineRow.getByRole("button", { name: OPEN_IN_USER_VIEW })).toHaveCount(0);
+      await mineRow.getByRole("button", { name: CONSOLE_VIEW.ROW_MENU }).click();
+      await expect(page.getByRole("menuitem", { name: new RegExp(OPEN_IN_USER_VIEW) })).toContainText(CONSOLE_VIEW.OPEN_IN_USER_HINT);
+      await page.keyboard.press("Escape");
       // Not exact: the row's meta line is one dot-joined string (design.md
       // §1's row anatomy), not a separate span per field — same reason
       // mineRow's "(you)" check above isn't exact either.
       await expect(theirsRow.getByText(SOMEONE)).toBeVisible();
-      await expect(theirsRow.getByRole("button", { name: OPEN_IN_USER_VIEW })).toHaveCount(0);
+      await expect(theirsRow.getByRole("button", { name: CONSOLE_VIEW.ROW_MENU })).toHaveCount(0);
 
       // #1197 D2 removed the kebab menu (Kill/Clone/Open) from the Runs
       // landing page entirely — one inline action at most per row, and the
@@ -95,7 +99,8 @@ test.describe("the admin run monitor (M-7)", () => {
       // …and the switch link on the board lands on the owner's own cockpit,
       // where the relaunch is.
       await page.goto("/admin/runs");
-      await page.getByTestId("run-row").filter({ hasText: mineTask }).getByRole("button", { name: OPEN_IN_USER_VIEW }).click();
+      await page.getByTestId("run-row").filter({ hasText: mineTask }).getByRole("button", { name: CONSOLE_VIEW.ROW_MENU }).click();
+      await page.getByRole("menuitem", { name: new RegExp(OPEN_IN_USER_VIEW) }).click();
       await expect(page).toHaveURL(new RegExp(`/runs/${mine}$`));
       await expect(page.getByRole("button", { name: RUN.CLONE_CTA })).toBeVisible();
     } finally {

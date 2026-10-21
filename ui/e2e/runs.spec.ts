@@ -180,6 +180,9 @@ test.describe("Killing an active run", () => {
     const confirm = page.getByRole("alertdialog");
     await expect(confirm).toBeVisible();
     await expect(confirm.getByText(/Kill .+\?/)).toBeVisible();
+    // #3036: the question names the run by its title, and the short id beside it is the copyable reference.
+    await expect(confirm.getByText(`Kill "${victim!.task}"?`)).toBeVisible();
+    await expect(confirm.getByTestId("run-ref").getByRole("button")).toHaveText(/^[0-9a-f]{8}$/);
     await confirm.getByRole("button", { name: "Kill run" }).click();
 
     // Success on a graceful kill, or "Failed to kill" on a 409 from the `none`

@@ -13,7 +13,8 @@ export const RUNS_SECTION = {
   NEEDS_ADMIN: "Needs a decision",
   // H-3, Admin view only: owners' sign-ins and lost runs — no admin can act.
   OWNER: "Waiting on the owner",
-  RUNNING: "Running",
+  // #3039: Starting and Queued rows sit here too, so the section is not named for one state.
+  RUNNING: "Active",
   ENDED_TODAY: "Ended today",
   EARLIER: "Earlier this week",
   EARLIER_MONTH: "Earlier this month",

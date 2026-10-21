@@ -11,7 +11,6 @@ import * as React from "react";
 import { Button } from "../../../../ui/button";
 import { NR_HARNESSES } from "../../../../wardyn/copy/new-run/harnesses";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
-import { Chip } from "../../../../wardyn/primitives";
 import type { RunIntent } from "../../draft/run-intent";
 import { useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../../new-run-route";
 import { addHarness, clearStarter, removeHarness, setStartPrompt, setStarter, setTask, swapHarness } from "../../lenses/harness-lens";
@@ -52,7 +51,8 @@ export function HarnessesStep({ go, deps }: NewRunScreenProps & { deps?: { load:
     return why ? [{ row: h, why }] : [];
   });
   const addable = roster.harnesses.find((h) => !ids.includes(h.id) && !unavailableReason(h, taken, roster));
-  const comingSoon = mode === "autonomous" && ids.length > 0;
+  // #3045: an Autonomous run holds one harness, so once it has one there is no add control to draw.
+  const addHidden = mode === "autonomous" && ids.length > 0;
   // The Add button disables once nothing more can be added, so focus follows the new harness's select.
   const focusNew = React.useRef<number | null>(null);
   React.useEffect(() => {
@@ -112,13 +112,13 @@ export function HarnessesStep({ go, deps }: NewRunScreenProps & { deps?: { load:
       </div>
       {loaded.status === "loading" ? (
         <p role="status" className="text-sm text-muted-foreground">{NR_HARNESSES.LOADING}</p>
-      ) : (
+      ) : addHidden ? null : (
         <div className="flex items-center gap-3">
           <Button
             id={ADD_ID}
             type="button"
             variant="outline"
-            disabled={comingSoon || !addable}
+            disabled={!addable}
             aria-describedby={blocked.length ? UNAVAILABLE_ID : undefined}
             onClick={() => {
               if (!addable) return;
@@ -129,7 +129,6 @@ export function HarnessesStep({ go, deps }: NewRunScreenProps & { deps?: { load:
           >
             {ids.length ? NR_HARNESSES.ADD_ANOTHER : NR_HARNESSES.ADD_HARNESS}
           </Button>
-          {comingSoon && <Chip>{NR_SHARED.COMING_SOON}</Chip>}
         </div>
       )}
       {blocked.length > 0 && (

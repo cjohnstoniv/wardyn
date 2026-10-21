@@ -20,6 +20,7 @@ import { aheadByHours } from "../../lib/test-clock";
 
 const listAuditMock = vi.fn();
 const getRunMock = vi.fn();
+const listRunsMock = vi.fn();
 vi.mock("../../lib/api/audit", () => ({
   audit: {
     listAudit: (...a: unknown[]) => listAuditMock(...a),
@@ -28,6 +29,7 @@ vi.mock("../../lib/api/audit", () => ({
 vi.mock("../../lib/api/runs", () => ({
   runs: {
     getRun: (...a: unknown[]) => getRunMock(...a),
+    listRuns: (...a: unknown[]) => listRunsMock(...a),
   },
 }));
 const healthMock = vi.fn();
@@ -76,6 +78,8 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     listAuditMock.mockResolvedValue([]);
     getRunMock.mockReset();
     getRunMock.mockResolvedValue(undefined);
+    listRunsMock.mockReset();
+    listRunsMock.mockResolvedValue([]);
     healthMock.mockReset();
     healthMock.mockResolvedValue({});
   });
@@ -93,8 +97,9 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     renderScreen();
     await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith(undefined));
 
-    // The run drill-in chip shows the id without the run_ prefix.
-    const drill = await screen.findByRole("button", { name: /111/ });
+    // #3036: with no title known, the run reference's lead word is the drill-in and the id beside it copies.
+    expect(await screen.findAllByRole("button", { name: /^(111|222)$/ })).toHaveLength(2);
+    const drill = (await screen.findAllByRole("button", { name: "Run" }))[0];
     fireEvent.click(drill);
 
     await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith("run_111", { newest: true }));
@@ -107,7 +112,7 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     renderScreen();
     await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith(undefined));
 
-    fireEvent.click(await screen.findByRole("button", { name: /111/ }));
+    fireEvent.click((await screen.findAllByRole("button", { name: "Run" }))[0]);
 
     const link = await screen.findByRole("link", { name: /open run/i });
     expect(link).toHaveAttribute("href", "/runs/run_111");
@@ -127,7 +132,7 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     );
     await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith(undefined));
 
-    fireEvent.click(await screen.findByRole("button", { name: /111/ }));
+    fireEvent.click((await screen.findAllByRole("button", { name: "Run" }))[0]);
 
     const link = await screen.findByRole("link", { name: /open run/i });
     expect(link).toHaveAttribute("href", "/admin/runs/run_111");
@@ -143,7 +148,7 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     renderScreen();
     await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith(undefined));
 
-    fireEvent.click(await screen.findByRole("button", { name: /111/ }));
+    fireEvent.click((await screen.findAllByRole("button", { name: "Run" }))[0]);
 
     expect(await screen.findByText(/archived or deleted/i)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^retry$/i })).not.toBeInTheDocument();
@@ -174,7 +179,7 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     renderScreen();
     await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith(undefined));
 
-    fireEvent.click(await screen.findByRole("button", { name: /111/ }));
+    fireEvent.click((await screen.findAllByRole("button", { name: "Run" }))[0]);
 
     expect(await screen.findByText(/couldn't load this run/i)).toBeInTheDocument();
     expect(screen.queryByText(/archived or deleted/i)).not.toBeInTheDocument();
@@ -194,15 +199,40 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
       ev({ id: "w1", run_id: "run_3f2a91c0-aaaa-bbbb-cccc-1234567890ab", action: "run.create", target: "t" }),
     ]);
     renderScreen();
-    const chip = await screen.findByTitle("run_3f2a91c0-aaaa-bbbb-cccc-1234567890ab");
+    const chip = await screen.findByTitle(/^run_3f2a91c0-aaaa-bbbb-cccc-1234567890ab\s+Click to copy$/);
     expect(chip).toHaveTextContent(/^3f2a91c0$/);
-    const row = chip.parentElement!;
+    const ref = chip.closest('[data-testid="run-ref"]')!;
+    const row = ref.parentElement!;
     expect(row).toHaveClass("flex-wrap", "sm:flex-nowrap");
     expect(screen.getByText(/^Created the run/)).toHaveClass("sm:min-w-[10rem]");
     // Two lines on a phone: the outcome is lifted onto the first, the description and chip share the second.
-    expect(chip).toHaveClass("order-3", "sm:order-none");
-    expect(chip.parentElement!.querySelector(":scope > div.order-1")).not.toBeNull();
+    expect(ref).toHaveClass("order-3", "sm:order-none");
+    expect(ref.parentElement!.querySelector(":scope > div.order-1")).not.toBeNull();
     expect(screen.getByText(/^Created the run/).parentElement).toHaveClass("order-2", "sm:order-none");
+  });
+
+  // #3036: one reference replaces the id in the sentence and the chip; the title still drills into that run.
+  it("names a run.create by the run's title and short id, not its long id, and the title drills in", async () => {
+    const RID = "3f9c1e2a-7b44-4d0e-9c1a-5e8b2d6f4a10";
+    listRunsMock.mockResolvedValue([{ id: RID, title: "payments deps bump", task: "bump deps" }]);
+    listAuditMock.mockResolvedValueOnce([ev({ id: "r1", run_id: RID, action: "run.create", target: RID })]);
+    listAuditMock.mockResolvedValue([ev({ id: "r1", run_id: RID, action: "run.create", target: RID })]);
+    renderScreen();
+    const title = await screen.findByRole("button", { name: "payments deps bump" });
+    expect(screen.getByText(/^Created the run$/)).toBeInTheDocument();
+    expect(screen.queryByText(new RegExp(RID))).toBeNull();
+    expect(screen.getByRole("button", { name: "3f9c1e2a" })).toBeInTheDocument();
+    fireEvent.click(title);
+    await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith(RID, { newest: true }));
+  });
+
+  it("falls back to 'Run' and the short id when the run list has no title for it", async () => {
+    const RID = "3f9c1e2a-7b44-4d0e-9c1a-5e8b2d6f4a10";
+    listRunsMock.mockRejectedValue(new Error("nope"));
+    listAuditMock.mockResolvedValue([ev({ id: "r1", run_id: RID, action: "run.kill", target: RID })]);
+    renderScreen();
+    expect(await screen.findByRole("button", { name: "Run" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "3f9c1e2a" })).toBeInTheDocument();
   });
 
   // #2850: the toolbar counter drops to its own line whole instead of wrapping inside itself.
@@ -291,7 +321,7 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     renderScreen();
     await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith(undefined));
 
-    fireEvent.click(await screen.findByRole("button", { name: /111/ }));
+    fireEvent.click((await screen.findAllByRole("button", { name: "Run" }))[0]);
     await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith("run_111", { newest: true }));
 
     await waitFor(() => expect(screen.getByText(/truncated/i)).toBeInTheDocument());
@@ -307,7 +337,7 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     renderScreen();
     await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith(undefined));
 
-    fireEvent.click(await screen.findByRole("button", { name: /111/ }));
+    fireEvent.click((await screen.findAllByRole("button", { name: "Run" }))[0]);
     await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith("run_111", { newest: true }));
 
     await screen.findByText(/1 event/);
@@ -575,7 +605,7 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     // global window. Here it comes back with NO egress event at all, so the
     // Egress facet item disappears from the Select entirely.
     listAuditMock.mockResolvedValueOnce([ev({ id: "e3", run_id: "run_111", action: "run.create" })]);
-    await user.click(await screen.findByRole("button", { name: /111/ }));
+    await user.click((await screen.findAllByRole("button", { name: "Run" }))[0]);
     await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith("run_111", { newest: true }));
 
     // The facet must fall back to "all" — not strand the operator on a

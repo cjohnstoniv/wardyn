@@ -11,6 +11,7 @@ import { setField } from "../../../../../test/set-field";
 import { OperatorProvider } from "../../../wardyn/operator-context";
 import { NR_FILES } from "../../../wardyn/copy/new-run/files";
 import { ENDS_NONE } from "../../../wardyn/copy/run-lifetime";
+import { NR_RUN } from "../../../wardyn/copy/new-run/run";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { NR_SAVE } from "../../../wardyn/copy/new-run/save";
 import { NR_SHAPE } from "../../../wardyn/copy/new-run/shape";
@@ -211,7 +212,11 @@ describe("Review Launch gate (U11)", () => {
     const user = userEvent.setup();
     checks.current = answered(null);
     open(AGENT);
-    await user.click(await screen.findByRole("button", { name: NR_REVIEW.CHECK_AGAIN }));
+    // #3043: the stale result carries its own Check again inside the blocker card; the footer keeps one too.
+    await ready();
+    const inCard = within(blockerList()).getByRole("button", { name: NR_REVIEW.CHECK_AGAIN });
+    expect(screen.getAllByRole("button", { name: NR_REVIEW.CHECK_AGAIN })).toHaveLength(2);
+    await user.click(inCard);
     expect(preflight).toHaveBeenCalledTimes(1);
     expect(retry).toHaveBeenCalledTimes(1);
     checks.current = answered(SCENARIO_PREFLIGHT.member);
@@ -253,12 +258,49 @@ describe("Review blockers", () => {
     expect(group("where").getByText(NR_REVIEW.BADGE_ATTENTION)).toBeInTheDocument();
   });
 
+  // #3043: the pool-required refusal points at the Where row, which then says there is no pool.
+  it("makes Where it runs read 'No pool chosen yet' when the pool-required refusal points at it", async () => {
+    checks.current = answered({ ...SCENARIO_PREFLIGHT.member, runner_pool: undefined }, 1000, { preflightError: NR_RUN.POOL_HELP, preflightReason: "runner_pool_required" });
+    open({ ...AGENT, runner_pool_id: undefined });
+    await ready();
+    await waitFor(() => expect(within(blockerList()).getAllByRole("listitem")).toHaveLength(1));
+    expect(group("where").getByText(NR_REVIEW.WHERE_NONE)).toBeInTheDocument();
+  });
+
+  // #3044: Review is one card of flat rows whose titles are sentence-case text, not a caps eyebrow.
+  it("draws each group title as a sentence-case heading in one card", async () => {
+    open(AGENT);
+    await ready();
+    const title = screen.getByRole("heading", { name: NR_REVIEW.GROUP_WHERE });
+    expect(title).toHaveTextContent(NR_REVIEW.GROUP_WHERE);
+    expect(title.className).not.toContain("label-eyebrow");
+    expect(document.querySelectorAll("[data-review-group]").length).toBeGreaterThan(1);
+    expect(new Set(Array.from(document.querySelectorAll("[data-review-group]")).map((g) => g.parentElement)).size).toBe(1);
+  });
+
   it("says the setup changed, with Check again, when the only thing wrong is a stale result", async () => {
     checks.current = answered(SCENARIO_PREFLIGHT.member, PREFLIGHT_FRESH_MS + 1);
     open(AGENT);
     await ready();
     expect(blockerList()).toHaveTextContent(NR_REVIEW.BLOCKER_STALE);
     expect(blockerList()).toHaveTextContent(NR_REVIEW.BLOCKERS_ONE);
+    // #3043: nothing specific is to blame, so the chip and the card are amber, every group keeps its tick.
+    expect(screen.getByText("Check needed")).toBeInTheDocument();
+    expect(screen.queryByText(NR_REVIEW.BADGE_ATTENTION)).toBeNull();
+    expect(screen.getByText("Check needed").className).toContain("warning");
+    expect(blockerList().className).toContain("warning");
+    expect(document.querySelector("[data-review-group][data-blocked]")).toBeNull();
+  });
+
+  it("keeps the chip red and reads Needs attention when a blocker names a group", async () => {
+    checks.current = answered(SCENARIO_PREFLIGHT.member, 1000, { preflightError: "Not available on your runner.", preflightReason: "placement_credential" });
+    open(AGENT);
+    await ready();
+    await waitFor(() => expect(within(blockerList()).getAllByRole("listitem")).toHaveLength(1));
+    expect(screen.getByText(NR_REVIEW.BADGE_ATTENTION, { selector: "span.inline-flex" }).className).toContain("danger");
+    expect(screen.queryByText("Check needed")).toBeNull();
+    expect(within(blockerList()).queryByRole("button", { name: NR_REVIEW.CHECK_AGAIN })).toBeNull();
+    expect(blockerList().className).toContain("danger");
   });
 });
 
@@ -274,6 +316,9 @@ describe("Review groups", () => {
     expect(group("where").getByText(NR_REVIEW.WHERE_VALUE("General"))).toBeInTheDocument();
     expect(group("where").getByText(NR_REVIEW.WHERE_DETAIL("Organization pool", 6, 10))).toBeInTheDocument();
     expect(group("where").getByText(NR_REVIEW.PROV_ORG_DEFAULT)).toBeInTheDocument();
+    // #3043: provenance is a caption, not a link-coloured word that goes nowhere.
+    expect(group("where").getByText(NR_REVIEW.PROV_ORG_DEFAULT).className).toContain("text-muted-foreground");
+    expect(group("where").getByText(NR_REVIEW.PROV_ORG_DEFAULT).className).not.toContain("text-primary");
     expect(group("work").getByText(NR_REVIEW.WORK_NONE)).toBeInTheDocument();
     expect(group("tools").getByText(NR_REVIEW.HARNESS_STARTS)).toBeInTheDocument();
     expect(group("tools").getByText("Fix the build")).toBeInTheDocument();
@@ -563,6 +608,10 @@ describe("Review Files and Limits detail", () => {
     await ready();
     expect(group("work").getByText(NR_REVIEW.MAIN_DRIVE("20 GiB"))).toBeInTheDocument();
     expect(group("work").getByText(NR_FILES.NOT_ENFORCED)).toBeInTheDocument();
+    // #3043: the main drive is said once, by its sub-card; the Files step's summary sentence is not repeated above it.
+    expect(group("work").getAllByText(/Main drive/)).toHaveLength(1);
+    expect(group("work").queryByText(/the main drive is deleted when the run ends/i)).toBeNull();
+    expect(group("work").queryByText(/starts in/i)).toBeNull();
   });
 
   it("opens the limits editor on what was asked for, not the narrowed amount", async () => {

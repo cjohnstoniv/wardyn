@@ -27,6 +27,7 @@ import { VIEWER_APPROVAL_BLOCKS_NOTE } from "../../wardyn/copy";
 import { deriveTitle } from "../approvals";
 import { viewerBlockedOnDecision } from "./viewer-blocked";
 import { RunCanvas } from "./canvas";
+import { RunStatusStrip } from "./status-strip";
 import { RunFailureBlock } from "./failure-block";
 import { LoginSandboxNote } from "./login-sandbox-note";
 import { TerminalPane } from "./terminal-notice";
@@ -183,5 +184,12 @@ export function Cockpit({
     terminalPane,
   };
 
-  return <RunCanvas ctx={ctx} />;
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <RunStatusStrip ctx={ctx} />
+      <div className="flex min-h-0 flex-1 flex-col">
+        <RunCanvas ctx={ctx} />
+      </div>
+    </div>
+  );
 }

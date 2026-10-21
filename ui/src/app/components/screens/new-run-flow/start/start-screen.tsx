@@ -3,12 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The Start screen: three ways into one draft. It has no step shell and no
+// The Start screen: two ways into one draft. It has no step shell and no
 // Ctrl/Cmd+Enter; each path is its own control. Layout follows Make (App.tsx:1091-1160):
 // the whole Guided card is the button, chevron and code marks, a centred trust line with its check.
 
 import * as React from "react";
-import { Check, ChevronRight, Code, Sparkles } from "lucide-react";
+import { Check, ChevronRight, Code } from "lucide-react";
 import { Button } from "../../../ui/button";
 import { PathCard } from "../../../wardyn/path-card";
 import { NR_START } from "../../../wardyn/copy/new-run/start";
@@ -31,8 +31,7 @@ export function StartScreen({ go }: NewRunScreenProps) {
         <h1 ref={heading} tabIndex={-1} className="text-[clamp(28px,4vw,42px)] leading-[1.08] font-normal tracking-[-0.04em] outline-none">{NR_START.TITLE}</h1>
         <p className="max-w-[620px] text-muted-foreground">{NR_START.LEDE}</p>
       </header>
-      <div className="mt-[18px] grid gap-3.5 min-[761px]:grid-cols-3">
-        <PathCard comingSoon icon={<Sparkles className="size-5" />} title={NR_START.AI_TITLE} description={NR_START.AI_BODY} foot={NR_START.AI_FOOT} />
+      <div className="mt-[18px] grid gap-3.5 min-[761px]:grid-cols-2">
         <PathCard
           icon={<ChevronRight className="size-5" />}
           title={NR_START.GUIDED_TITLE}
@@ -58,6 +57,8 @@ export function StartScreen({ go }: NewRunScreenProps) {
         <Check aria-hidden="true" className="size-[15px] text-success" />
         {NR_START.TRUST_LINE}
       </p>
+      {/* #3045: what is not built is one quiet line, with no version in it. */}
+      <p className="text-center text-xs text-muted-foreground">{NR_START.ROADMAP}</p>
     </section>
   );
 }

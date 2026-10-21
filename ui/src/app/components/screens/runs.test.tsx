@@ -204,9 +204,12 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
     // none checked order.
     const headings = screen.getAllByRole("heading").map((h) => h.textContent);
     const needsIdx = headings.findIndex((t) => t?.includes("Needs you"));
-    const runningIdx = headings.findIndex((t) => t === "Running");
+    const runningIdx = headings.findIndex((t) => t === "Active");
     const endedIdx = headings.findIndex((t) => t?.includes("Ended today"));
     expect(needsIdx).toBeGreaterThanOrEqual(0);
+    // #3039: the section holds Starting and Queued rows too, so it is "Active", not "Running".
+    expect(headings).toContain("Active");
+    expect(headings).not.toContain("Running");
     expect(needsIdx).toBeLessThan(runningIdx);
     expect(runningIdx).toBeLessThan(endedIdx);
   });

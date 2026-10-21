@@ -101,6 +101,10 @@ async function wrapperBox(pane: Locator) {
 }
 
 test.describe("Run cockpit terminal focus", () => {
+  // #3038: the status strip takes about 60px above the canvas, so the default 720px pane can no longer show the
+  // whole terminal widget at once; a raw click on its bottom edge needs it fully in view.
+  test.use({ viewport: { width: 1280, height: 800 } });
+
   test("a click on the wrapper padding focuses the terminal", async ({ page }) => {
     const pane = await openTerminal(page);
     const box = await wrapperBox(pane);

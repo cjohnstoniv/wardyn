@@ -67,17 +67,17 @@ test.describe("Tier A at 390px", () => {
   });
 
   // #2849: an event row is at most two lines, fits the viewport, keeps a readable description and a short run chip.
-  test("Audit: rows fit the viewport in two lines, the description is readable and the run chip is short", async ({ page }) => {
+  test("Audit: rows fit the viewport in three lines at most, the description is readable and the run chip is short", async ({ page }) => {
     await gotoConsole(page, "admin");
     const id = await seedRun(page);
     await page.setViewportSize(PHONE);
     await navToRoute(page, "/admin/audit");
-    const chip = page.locator(`main button[title="${id}"]`).first();
+    const chip = page.locator(`main [data-testid="run-ref"] button[title^="${id}"]`).first(); // #3036: the short id inside the run reference
     await expect(chip).toBeVisible();
     const chipBox = await boxOf(chip);
     expect(chipBox.x + chipBox.width).toBeLessThanOrEqual(PHONE.width);
     expect((await chip.innerText()).length).toBeLessThanOrEqual(8);
-    const row = chip.locator("xpath=..");
+    const row = chip.locator("xpath=../..");
     const description = row.getByText(/^Created the run/).first();
     expect((await boxOf(description)).width).toBeGreaterThan(150);
     // Count the row's visual lines: its children's tops, grouped within 8px.
@@ -85,7 +85,8 @@ test.describe("Tier A at 390px", () => {
       const tops = [...el.children].map((c) => c.getBoundingClientRect().top).sort((a, b) => a - b);
       return tops.filter((t, i) => i === 0 || t - tops[i - 1] > 8).length;
     });
-    expect(lines).toBeLessThanOrEqual(2);
+    // #3036: the run reference (title, then the short id) no longer fits beside the description at 390px, so it takes a third line.
+    expect(lines).toBeLessThanOrEqual(3);
     expect(await scrollsSideways(page)).toBe(false);
   });
 

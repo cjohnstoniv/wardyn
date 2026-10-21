@@ -20,7 +20,6 @@ import type { AccessFacts, AccessRow } from "../../../../../lib/types/new-run-ac
 import { Button } from "../../../../ui/button";
 import { cn } from "../../../../ui/utils";
 import { ADD_ACCESS, CUSTOM_COMPONENT as CC } from "../../../../wardyn/copy/components";
-import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 import { Chip } from "../../../../wardyn/primitives";
 import { Segmented } from "../../../../wardyn/segmented";
@@ -229,7 +228,9 @@ export function AddTools({ access, answered, intent, answeredFor }: AddToolsProp
   const noDefineId = React.useId();
   const failedId = React.useId();
 
+  // #3045: a command line that is not built yet leaves the grid; there is no Coming soon card.
   const cliCards = (mine?.clis ?? []).flatMap((cli: CatalogueCLI) => {
+    if (cli.state === "coming_soon") return [];
     const generic = CLI_CARD[cli.kind];
     if (cli.state !== "available") return [{ key: cli.kind, title: generic.name, cli, row: undefined as OrgComponentView | undefined }];
     return cli.rows.map((id) => ({ key: id, title: mine?.org.find((o) => o.id === id)?.name ?? generic.name, cli, row: mine?.org.find((o) => o.id === id) }));
@@ -319,18 +320,14 @@ export function AddTools({ access, answered, intent, answeredFor }: AddToolsProp
               brings={row && <Brings hosts={row.hosts} deliveries={delivery ? [delivery] : []} />}
               look={on ? "added" : off || reason ? "off" : "plain"}
             >
-              {cli.state === "coming_soon" ? (
-                <Chip>{NR_SHARED.COMING_SOON}</Chip>
-              ) : (
-                <RowAction
-                  name={title}
-                  attached={on}
-                  reason={reason}
-                  status={on && row && stateOf(row.id) ? <Status status={stateOf(row.id)?.status ?? ""} answered={answered} /> : undefined}
-                  onAdd={() => { if (row) edit((i) => attachComponent(i, { id: row.id })); announce(NR_TOOLS.CARD_ADDED(title)); }}
-                  onRemove={() => { if (row) edit((i) => detachComponent(i, row.id)); announce(NR_TOOLS.COMPONENT_REMOVED); }}
-                />
-              )}
+              <RowAction
+                name={title}
+                attached={on}
+                reason={reason}
+                status={on && row && stateOf(row.id) ? <Status status={stateOf(row.id)?.status ?? ""} answered={answered} /> : undefined}
+                onAdd={() => { if (row) edit((i) => attachComponent(i, { id: row.id })); announce(NR_TOOLS.CARD_ADDED(title)); }}
+                onRemove={() => { if (row) edit((i) => detachComponent(i, row.id)); announce(NR_TOOLS.COMPONENT_REMOVED); }}
+              />
             </Card>
           );
         })}

@@ -50,7 +50,7 @@ export function ReviewGroup({ id, label, value, mark, detail, provenance, childr
         </span>
       )}
       <div className="flex min-w-0 flex-col gap-1">
-        <h3 className="label-eyebrow">{label}</h3>
+        <h3 className="text-sm font-semibold text-foreground">{label}</h3>
         {value !== undefined && <strong className="font-medium break-words text-foreground">{value}</strong>}
         {mark && <div className="my-1">{mark}</div>}
         {detail && <p className="text-sm text-muted-foreground">{detail}</p>}
@@ -62,7 +62,7 @@ export function ReviewGroup({ id, label, value, mark, detail, provenance, childr
             <Chip>{NR_REVIEW.DOC_ONLY_CHIP}</Chip>
           </div>
         ))}
-        {provenance && <small className="text-primary">{provenance}</small>}
+        {provenance && <small className="text-muted-foreground">{provenance}</small>}
       </div>
       {editor ? (
         <Button
