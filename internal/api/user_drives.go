@@ -718,18 +718,6 @@ func driveGrantConflictMsg(g types.UserDriveGrant, homeOverrideStated bool) stri
 		"carry one; pick a different name or remove the allocation that holds it", g.HomeOverride)
 }
 
-// pluralDriveSubjects counts a drive's allocations the way the console's
-// ALLOCATED_COUNT does — "1 subject" / "n subjects" — so the wire and the screen
-// count the same things in the same words. ALLOCATIONS, never people: a group
-// allocation is one row and Wardyn holds no directory read, so "14 people" would
-// be a claim rather than a count.
-func pluralDriveSubjects(n int) string {
-	if n == 1 {
-		return "1 subject"
-	}
-	return fmt.Sprintf("%d subjects", n)
-}
-
 // handleDeleteUserDrive removes a drive (204), or 409 when it is still
 // ALLOCATED.
 //
