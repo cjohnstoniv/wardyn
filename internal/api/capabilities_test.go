@@ -869,3 +869,13 @@ func (f noGovernanceStore) ListMembershipsFor(ctx context.Context, users, groups
 func (s *capStore) ListMembershipsFor(ctx context.Context, users, groups []string, userType string) ([]store.MembershipMatch, error) {
 	return membershipsFromResolve(s.ResolveGovernanceUnit(ctx, users, groups, userType))
 }
+
+// ListGovernanceMemberships is the fakes' table for the stale-snapshot home check: their rows from
+// membershipsFromResolve are never home rows, so there is no group home row to find.
+func (noGovernanceStore) ListGovernanceMemberships(context.Context) ([]types.GovernanceMembership, error) {
+	return nil, nil
+}
+
+func (s *capStore) ListGovernanceMemberships(context.Context) ([]types.GovernanceMembership, error) {
+	return nil, nil
+}

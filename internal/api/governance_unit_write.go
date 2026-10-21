@@ -23,6 +23,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -250,6 +251,14 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 		writeErrorReason(w, http.StatusBadRequest, reasonGovernanceOverlayInvalid, msg)
 		return
 	}
+	// The site-config lock: a PUT /site-config lowering governance_max_depth checks the deepest path
+	// and saves under it, so this write reads the limit and stores its path either wholly before or
+	// wholly after that change.
+	r, unlock, ok := s.lockDoor(w, r, db.SiteConfigLockClass)
+	if !ok {
+		return
+	}
+	defer unlock()
 	limit, err := s.unitDepthLimit(r.Context())
 	if err != nil {
 		writeServerError(w, r, "write governance profile", err)
