@@ -26,7 +26,7 @@ const (
 // owner for one costs that owner a ticket that is not theirs. It reads
 // egress.PolicyDecided, the one definition the audit row's layer shares, so the
 // two cannot drift; require-tls and tool-deny count because the profile decided
-// them, though those lanes write their own answer and never reach the headers.
+// them, though those lanes write their own answer and never reach the attribution headers.
 func policyDecidedReason(reason string) bool {
 	return egress.PolicyDecided(egress.WardynRefusal(reason))
 }
