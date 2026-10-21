@@ -144,6 +144,7 @@ policy.push_rules.hold_seconds
 policy.push_rules.max_file_size_mib
 policy.push_rules.max_inspect_pack_mib
 policy.push_rules.require_review_paths
+policy.recording
 policy.resources
 policy.resources.cpu_millis
 policy.resources.disk_mib
