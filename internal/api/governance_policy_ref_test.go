@@ -130,10 +130,8 @@ func TestCeilingRefusalsNameThePolicy(t *testing.T) {
 			if !strings.Contains(got.Error, `"`+name+`"`) {
 				t.Errorf("sentence %q lost the profile name it has always carried", got.Error)
 			}
-			audit.mu.Lock()
-			defer audit.mu.Unlock()
 			sawTarget := false
-			for _, ev := range audit.events {
+			for _, ev := range audit.snapshot() {
 				if ev.Action != authz.AuditAction {
 					continue
 				}

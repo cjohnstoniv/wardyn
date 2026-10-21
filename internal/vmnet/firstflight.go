@@ -55,6 +55,10 @@ type flight struct {
 func readFlight(c net.Conn) (flight, error) {
 	first := make([]byte, 1)
 	_ = c.SetReadDeadline(time.Now().Add(firstWait))
+	// Every return clears it: a deadline left behind (the silent guest's, which
+	// has already passed) fails the splice's first read of the guest, and the
+	// relay half-closes a tunnel the guest never ended.
+	defer func() { _ = c.SetReadDeadline(time.Time{}) }()
 	n, err := c.Read(first)
 	if n == 0 {
 		var ne net.Error
@@ -64,11 +68,9 @@ func readFlight(c net.Conn) (flight, error) {
 		return flight{}, err
 	}
 	if first[0] != 0x16 { // not a TLS handshake record
-		_ = c.SetReadDeadline(time.Time{})
 		return flight{kind: flightOther, bytes: first}, nil
 	}
 	_ = c.SetReadDeadline(time.Now().Add(helloBudget))
-	defer func() { _ = c.SetReadDeadline(time.Time{}) }()
 	rec := &recordingConn{Conn: c, pending: first}
 	var sni string
 	srv := tls.Server(rec, &tls.Config{GetConfigForClient: func(h *tls.ClientHelloInfo) (*tls.Config, error) {
