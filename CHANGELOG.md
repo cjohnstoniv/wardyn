@@ -35,7 +35,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **`WARDYN_AWS_SSO_PROXY_INJECT=off` now stops `wardynd` from starting.** That value used to write the AWS sign-in
   token into the sandbox. The token now stays at the proxy and the sandbox holds a placeholder. `off`, `false` and `0`
   are all refused, in the environment, in the `-aws-sso-proxy-inject` flag and in the Helm value `awsSSOProxyInject`.
-  Unset it, or set it to `on`, before you start.
+  Unset it, or set it to `on`, before you start. Behind a TLS-intercepting corporate proxy that breaks the sign-in
+  lane, point `WARDYN_TRUSTED_CA_FILE` at the proxy's CA instead.
 - **The Go client's `CreatePolicy` and `UpdatePolicy` now return `PolicySaved`, not `types.RunPolicy`.** `PolicySaved`
   holds the policy as its `RunPolicy` field and adds `Requirements`. Code that assigns the result to a
   `types.RunPolicy` changes to read `.RunPolicy`.
@@ -50,8 +51,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   still admits, records and audits the session. Left off, attach goes through the organisation as before.
 - **`WARDYN_CLI_SIGN_IN` is off by default, and `wardyn login` needs it plus SSO.** Set it to `true` on `wardynd` and
   `wardyn login` signs a CLI in through the console. The CLI keeps a session secret on the laptop, in the keychain or
-  a file only its owner can read, that renews a 1-hour access token. A computer with no browser signs in by pasting a
-  code only when `WARDYN_CLI_PASTE_SIGN_IN=true` is also set.
+  a file only its owner can read, that renews an access token of at most an hour (shorter when
+  `WARDYN_API_TOKEN_MAX_TTL` is lower). A computer with no browser signs in by pasting a code only when
+  `WARDYN_CLI_PASTE_SIGN_IN=true` is also set.
 
 ### Added
 

@@ -2280,7 +2280,7 @@ It is dropped there with an audited reason (`unloadable-upstream-url`, a
 
 ### Phase B: the SSO/Bedrock MITM lane and the upstream proxy
 
-- Phase B (`WARDYN_AWS_SSO_PROXY_INJECT=on`, the default — see [ENV.md](ENV.md) and "[Turning the lane off](#turning-the-lane-off)" below) terminates and re-originates `portal.sso.<region>.amazonaws.com` inside the `wardyn-proxy` sidecar to inject a captured AWS SSO session on the wire.
+- Phase B (`WARDYN_AWS_SSO_PROXY_INJECT=on`, the default — see [ENV.md](ENV.md); `off` was removed, see "[Removed in 0.10.0](#removed-in-0100)" below) terminates and re-originates `portal.sso.<region>.amazonaws.com` inside the `wardyn-proxy` sidecar to inject a captured AWS SSO session on the wire.
 - That re-origination is a forward dial like any other in this section, not a separate lane with its own rules: it is governed by `upstream_proxy_url`, `upstream_proxy_no_proxy` and `internal_hosts` exactly as above.
 - On a private-endpoint estate it needs the same configuration a VPC-endpoint Bedrock deployment does:
   - bypass plus lift where the sidecar can reach the endpoint itself;
@@ -3267,21 +3267,15 @@ Naming these is the point of the walk, not a caveat on it:
 - It also ends after three consecutive 404s, and at its budget.
 - It never ends later.
 
-### Turning the lane off
+### Removed in 0.10.0
 
-- `WARDYN_AWS_SSO_PROXY_INJECT=off` restores the pre-0.7.6 behaviour:
-  - the SSO access token is written into the sandbox's token cache;
-  - `portal.sso` is not TLS-MITM'd;
-  - no injection grant is authored;
-  - a lapsed session fails the run's model call as it used to.
-- It is also the sanctioned stopgap for the corporate-proxy interaction described in ["Phase B: the SSO/Bedrock MITM lane and the upstream proxy"](#phase-b-the-ssobedrock-mitm-lane-and-the-upstream-proxy) above.
-- It is reachable now as a named Helm value and a Compose env line, not only through the raw env passthrough.
-- It applies to **new dispatches only**.
-- The placeholder cache, the injection grant and the MITM entry are all authored at dispatch.
-- So a run that is already running keeps the lane it was authored with until it ends.
-- That includes a run that is currently HELD, which keeps holding to its budget and can still be resolved by a sign-in.
-- After flipping the switch, relaunch the runs that matter or wait them out; do not expect a running sandbox to change lane under you.
-- The default is `on` — set the environment variable to `off` to roll back; a run already dispatched under `on` is unaffected by a later flip either direction.
+- `WARDYN_AWS_SSO_PROXY_INJECT=off` is gone: `wardynd` refuses to start on `off`, `false` or `0`, whether it comes from the environment, the `-aws-sso-proxy-inject` flag or the Helm value `awsSSOProxyInject`.
+- The AWS sign-in token now always stays at the proxy, and the sandbox's token cache holds a placeholder.
+- `off` was the stopgap for a TLS-intercepting corporate proxy. Stage that proxy's CA instead:
+  1. Put the proxy's root CA in a PEM bundle.
+  2. Point `WARDYN_TRUSTED_CA_FILE` at it (see [ENV.md](ENV.md#wardyn_trusted_ca_file)).
+  3. Start new runs. The `wardyn-proxy` then trusts that CA when it re-originates the sign-in lane.
+- A proxy that cannot reach the AWS hosts is a routing problem, not a TLS one: use `upstream_proxy_no_proxy` and `internal_hosts` ("[Upstream proxy: the bypass list](#upstream-proxy-the-bypass-list-upstream_proxy_no_proxy)").
 
 > [!WARNING]
 > **A downgrade to 0.7.5 with `credential_reauth` rows present is UNSUPPORTED.**
