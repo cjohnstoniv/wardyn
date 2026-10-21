@@ -238,6 +238,15 @@ describe("MemberGettingStarted", () => {
     expect(screen.queryByText("Pick your barrier")).not.toBeInTheDocument();
   });
 
+  // #2845: the core group follows "Your path" (Shape C), so it cannot be called "Start here" on this page.
+  it("labels the core video group 'The basics', after 'Your path'", async () => {
+    renderPage();
+    const path = await screen.findByText("Your path");
+    const basics = await screen.findByText("The basics");
+    expect(screen.queryByText("Start here")).not.toBeInTheDocument();
+    expect(path.compareDocumentPosition(basics) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("never offers a member 'always' on an approval: the server refuses it for a non-admin (#2595)", async () => {
     renderPage();
     await screen.findByRole("heading", { name: "Approvals you can decide" });

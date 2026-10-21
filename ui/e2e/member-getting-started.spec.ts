@@ -98,13 +98,13 @@ test.describe("member Getting Started (real per-person token)", () => {
     await gotoConsole(page);
     await navToRoute(page, "/setup");
     // Group labels, in order: "Your path" (every member-audience episode —
-    // including 13, whose lesson is the member terminal) then "Start here".
-    const labels = page.locator(".label-eyebrow", { hasText: /Your path|Start here/ });
+    // including 13, whose lesson is the member terminal) then "The basics".
+    const labels = page.locator(".label-eyebrow", { hasText: /Your path|The basics/ });
     await expect(labels).toHaveCount(2);
     await expect(labels.nth(0)).toHaveText("Your path");
-    await expect(labels.nth(1)).toHaveText("Start here");
+    await expect(labels.nth(1)).toHaveText("The basics");
     await expect(page.getByText("Your terminal, our cluster")).toBeVisible();
-    // The flipped core episode is in the member's Start-here set.
+    // The flipped core episode is in the member's The-basics set.
     await expect(page.getByText("Your first policy")).toBeVisible();
   });
 

@@ -604,7 +604,7 @@ export function MemberGettingStarted() {
       )}
       {coreEpisodes.length > 0 && (
         <div className="mt-6">
-          <SectionLabel>{EP.GROUP_CORE}</SectionLabel>
+          <SectionLabel>{EP.MEMBER_CORE}</SectionLabel>
           <div className="mt-2">
             {coreEpisodes.map((e) => (
               <EpisodeRow key={e.id} episode={e} />
