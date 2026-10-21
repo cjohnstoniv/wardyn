@@ -175,6 +175,8 @@ func (s *Substrate) receiveOutput(id uuid.UUID, sink *outputSink, st *runnerwire
 		if ackErr != nil {
 			if st.Context().Err() == nil {
 				sink.finish(ackErr)
+			} else if reset := st.Err(); reset != nil {
+				ackErr = reset // the ACK failed because the stream ended: report why it did
 			}
 			_ = st.Close()
 			return ackErr

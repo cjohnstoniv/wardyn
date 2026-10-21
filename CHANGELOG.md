@@ -105,6 +105,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   (`sign_in_required`) it says to use a personal API token in `WARDYN_TOKEN`, not the compose stack's admin token. For
   a token the organisation does not know (`admin_token_not_configured`) it names where the token came from.
 
+### Fixed
+
+- A run's recorded output is no longer lost after the organisation's server restarts when the runner hears of the
+  restart only after the server has begun reading that output back. Before, a run writing a lot of output at that
+  moment could lose the part not yet read back.
+
 ## [0.9.7] — 2026-10-20
 
 A small release on top of 0.9.6. An Azure DevOps token that the organisation mints for a run can now be delivered to a person's own runner, off by default, and a credential delivery write that the server could not build is refused when it is made. No migration.
