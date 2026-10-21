@@ -10,7 +10,7 @@
 // The preview is the real server's, with its `access` block replaced by the
 // New Run scenario fixture; the preflight is stubbed from the same fixtures.
 import type { Page } from "@playwright/test";
-import { test, expect, gotoConsole, navToRoute } from "./fixtures";
+import { test, expect, consoleAPI, gotoConsole, navToRoute } from "./fixtures";
 import { NR_DOCUMENT } from "../src/app/components/wardyn/copy/new-run/document";
 import { NR_LAUNCH } from "../src/app/components/wardyn/copy/new-run/launch";
 import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
@@ -20,7 +20,8 @@ import { SCENARIO_HARNESSES, SCENARIO_HARNESS_SETS } from "../src/app/lib/new-ru
 import { SCENARIO_PREFLIGHT } from "../src/app/lib/new-run-fixtures/scenarios/preflight";
 import { BEDROCK_SSO_SWITCH_OFF, SCENARIO_ACCESS, SETUP_ITEMS } from "../src/app/lib/new-run-fixtures/scenarios/tools";
 import { CLAUDE_ATTENDED, CLAUDE_UNGATED, CODEX, MCP_DOCS, withFacts } from "../src/app/lib/new-run-fixtures/scenarios/tools-harness";
-import { MY_COMPONENTS } from "../src/app/components/wardyn/copy/components";
+import { CUSTOM_COMPONENT, MY_COMPONENTS } from "../src/app/components/wardyn/copy/components";
+import { envNameError } from "../src/app/components/screens/new-run-flow/checks/custom-component-form-model";
 import { MY_COMPONENTS as CATALOGUE, ORG_LINEAR } from "../src/app/lib/new-run-fixtures/scenarios/catalogue";
 
 const RUN_ID = "d4444444-4444-4444-8444-444444444444";
@@ -349,5 +350,57 @@ test.describe("New Run, step 5: the Add dialogs", () => {
     await page.keyboard.press("Escape");
     await expect(page.locator("#ccd-name")).toHaveCount(0);
     await expect(page.getByRole("button", { name: NR_TOOLS.CUSTOM_COMPONENT })).toBeFocused();
+  });
+
+  test("a reserved environment name is refused on the form and never sent; a permitted one saves (#3161)", async ({ page }) => {
+    const saves: string[] = [];
+    page.on("request", (req) => {
+      if (req.method() === "POST" && new URL(req.url()).pathname === "/api/v1/me/components") saves.push(req.postData() ?? "");
+    });
+    await stub(page, false);
+    await openTools(page);
+    await press(page, NR_TOOLS.CUSTOM_COMPONENT);
+    await page.getByRole("dialog", { name: NR_TOOLS.CUSTOM_COMPONENT }).getByLabel(NR_TOOLS.CC_SAVE).check();
+    await press(page, NR_TOOLS.CC_MORE_OPTIONS);
+    const editor = page.getByRole("dialog").filter({ has: page.locator("#ccd-name") });
+    await editor.locator("#ccd-name").fill(`E2E reserved name ${Date.now()}`);
+    await editor.locator("#ccd-hosts").fill("billing.acme.internal");
+    await editor.getByRole("button", { name: CUSTOM_COMPONENT.ADD_SETTING }).click();
+    const settingName = editor.locator('[id^="ccd-set-"][id$="-name"]');
+    await settingName.fill("SHELLOPTS");
+    await editor.getByRole("button", { name: CUSTOM_COMPONENT.SAVE, exact: true }).click();
+
+    await expect(editor.getByText(CUSTOM_COMPONENT.ERR.ENV_RESERVED("SHELLOPTS"), { exact: true })).toBeVisible();
+    await expect(settingName).toHaveAttribute("aria-invalid", "true");
+    expect(saves).toEqual([]);
+
+    await settingName.fill("E2E_PERMITTED");
+    const saved = page.waitForResponse((r) => r.request().method() === "POST" && new URL(r.url()).pathname === "/api/v1/me/components");
+    await editor.getByRole("button", { name: CUSTOM_COMPONENT.SAVE, exact: true }).click();
+    const response = await saved;
+    expect(response.status(), await response.text()).toBe(201);
+    expect(saves).toHaveLength(1);
+    await expect(editor).toHaveCount(0);
+    const { id } = (await response.json()) as { id: string };
+    await consoleAPI(page, "DELETE", `/api/v1/me/components/${id}`);
+  });
+
+  test("the server refuses every name the form refuses, and saves a name the form permits (#3161)", async ({ page }) => {
+    await gotoConsole(page);
+    const save = (name: string) =>
+      consoleAPI(page, "POST", "/api/v1/me/components", {
+        name: `E2E env name ${name} ${Date.now()}`,
+        definition: { hosts: ["billing.acme.internal"], config: { [name]: "x" } },
+      });
+    for (const name of ["SHELLOPTS", "PATH", "LD_PRELOAD", "GIT_CONFIG_COUNT", "CLAUDE_CODE_USE_BEDROCK", "WARDYN_ANYTHING"]) {
+      expect(envNameError(name), name).not.toBeNull();
+      const refused = await save(name);
+      expect(refused.status, `${name}: ${refused.text}`).toBe(422);
+      expect(JSON.parse(refused.text).reason, name).toBe("component_definition_invalid");
+    }
+    expect(envNameError("E2E_PERMITTED")).toBeNull();
+    const ok = await save("E2E_PERMITTED");
+    expect(ok.status, ok.text).toBe(201);
+    await consoleAPI(page, "DELETE", `/api/v1/me/components/${JSON.parse(ok.text).id}`);
   });
 });

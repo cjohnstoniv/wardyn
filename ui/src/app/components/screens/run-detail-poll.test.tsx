@@ -374,3 +374,35 @@ describe("RunDetailScreen — approvals match the run id case-insensitively", ()
     expect(await screen.findByRole("tab", { name: /Approvals\s*1/ })).toBeInTheDocument();
   });
 });
+
+// A trail of LIST_LIMIT or more rows: the oldest page cannot change, so only the first load reads it.
+describe("RunDetailScreen — a long trail's oldest page is read once per run", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const row = (n: number) => ({ id: `ev-${n}`, ts: new Date().toISOString(), actor: "me", action: "egress.allow", resource: "x", run_id: "run-1" });
+
+  it("polls the newest page again but not the oldest", async () => {
+    const oldest = Array.from({ length: 1000 }, (_, i) => row(i));
+    listAuditMock.mockReset();
+    listAuditMock.mockImplementation(async (_id: string, o?: { newest?: boolean; actionPrefix?: string }) => {
+      if (o?.actionPrefix) return [];
+      return o?.newest ? [row(5000)] : oldest;
+    });
+    renderRun({ ...RUN, state: "RUNNING" });
+    await screen.findAllByText(RUN.task);
+
+    const oldestReads = () => listAuditMock.mock.calls.filter(([, o]) => o === undefined).length;
+    const newestReads = () => listAuditMock.mock.calls.filter(([, o]) => o?.newest).length;
+    expect(oldestReads()).toBe(1);
+    const newestBefore = newestReads();
+
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect(newestReads()).toBeGreaterThan(newestBefore);
+    expect(oldestReads()).toBe(1);
+  });
+});
