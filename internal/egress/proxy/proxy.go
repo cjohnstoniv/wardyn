@@ -810,6 +810,14 @@ func (p *Proxy) allowLog(req egress.Request, approvalID uuid.UUID) egress.Decisi
 	return log
 }
 
+// refuseGrantHostTunnel answers a CONNECT to a host one of the doors guards with
+// a refusal, in the order the doors were added, and reports whether it did.
+func (p *Proxy) refuseGrantHostTunnel(w http.ResponseWriter, r *http.Request, host string, port int) bool {
+	return p.refuseADOTunnel(w, r, host, port) || p.refuseAzureTunnel(w, r, host, port) || p.refusePATAPITunnel(w, r, host, port) ||
+		p.refuseGitHubAPITunnel(w, r, host, port) || p.refuseAzureARMTunnel(w, r, host, port) || p.refuseAWSSigV4Tunnel(w, r, host, port) ||
+		p.refuseKubeAPITunnel(w, r, host, port)
+}
+
 // handleConnect establishes a raw TCP tunnel for CONNECT (TLS passthrough).
 // Credentials CANNOT be injected into a CONNECT tunnel: the proxy has
 // hostname-only visibility and never sees the encrypted request headers.
@@ -876,9 +884,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// Never a blind tunnel to an Azure DevOps grant host (refuseADOTunnel).
-	if p.refuseADOTunnel(w, r, host, port) || p.refuseAzureTunnel(w, r, host, port) || p.refusePATAPITunnel(w, r, host, port) ||
-		p.refuseGitHubAPITunnel(w, r, host, port) || p.refuseAzureARMTunnel(w, r, host, port) || p.refuseAWSSigV4Tunnel(w, r, host, port) ||
-		p.refuseKubeAPITunnel(w, r, host, port) {
+	if p.refuseGrantHostTunnel(w, r, host, port) {
 		return
 	}
 
