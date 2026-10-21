@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -37,19 +38,19 @@ const (
 // store.Store is embedded so any OTHER method the sink starts reading panics in
 // test rather than silently reading a zero value.
 //
-// GetRun is called from TWO places on this request path: refuseTerminalRun (the
-// /internal/* liveness middleware, internal_live_run.go) reads it once before
-// the handler runs at all, and the sink reads it again itself.
-// failRunFromCall lets a test make the SECOND read fail while the first
-// succeeds — the middleware already fails closed (503/403) on a first-read
-// error, so a run_unreadable case that failed on call 1 would never reach the
-// sink at all and would be proving the middleware, not this arm.
+// GetRun is read on this request path by the /internal liveness gate
+// (refuseTerminalRun, internal_live_run.go) before the handler runs at all, and
+// past it by the handler. failRunPastGate fails every read but the gate's, by
+// the caller's role rather than by call ordinal, so an extra read added on the
+// path cannot move the failure off the read a test means: the gate already fails
+// closed (503/403) on its own error, so a run_unreadable case that failed there
+// would be proving the gate, not the sink. pastGateReads counts the reads past it.
 type bearerGuardStore struct {
 	store.Store
 	mu              sync.Mutex
 	run             types.AgentRun
-	runCalls        int
-	failRunFromCall int // GetRun returns runErr starting at this 1-indexed call; 0 = never fail
+	pastGateReads   int
+	failRunPastGate bool
 	runErr          error
 	site            types.SiteConfig
 	siteErr         error
@@ -57,14 +58,31 @@ type bearerGuardStore struct {
 }
 
 func (s *bearerGuardStore) GetRun(context.Context, uuid.UUID) (types.AgentRun, error) {
+	if calledFrom("refuseTerminalRun") {
+		return s.run, nil
+	}
 	s.mu.Lock()
-	s.runCalls++
-	n := s.runCalls
+	s.pastGateReads++
 	s.mu.Unlock()
-	if s.failRunFromCall > 0 && n >= s.failRunFromCall {
+	if s.failRunPastGate {
 		return types.AgentRun{}, s.runErr
 	}
 	return s.run, nil
+}
+
+// calledFrom reports whether fn (a function or method name) is on the caller's stack.
+func calledFrom(fn string) bool {
+	pcs := make([]uintptr, 64)
+	frames := runtime.CallersFrames(pcs[:runtime.Callers(2, pcs)])
+	for {
+		f, more := frames.Next()
+		if strings.HasSuffix(f.Function, "."+fn) {
+			return true
+		}
+		if !more {
+			return false
+		}
+	}
 }
 
 func (s *bearerGuardStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {

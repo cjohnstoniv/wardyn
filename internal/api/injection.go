@@ -52,37 +52,43 @@ func withStoreRow(data map[string]any, row *secretstore.Row) map[string]any {
 }
 
 // mintInjectionGrant is handleInternalInjection's prelude, extracted for its
-// funlen ratchet: the run's claims, the grant id, and the broker's mint of an
-// api_key injection grant. ok=false means the refusal is already written.
-func (s *Server) mintInjectionGrant(w http.ResponseWriter, r *http.Request) (*identity.Claims, uuid.UUID, broker.Minted, bool) {
+// funlen ratchet: the run's claims, the grant id, the broker's mint of an
+// api_key injection grant and the run the withheld check read (nil when it read
+// none), which the sink judges with rather than reading again. ok=false means
+// the refusal is already written.
+func (s *Server) mintInjectionGrant(w http.ResponseWriter, r *http.Request) (*identity.Claims, uuid.UUID, broker.Minted, *types.AgentRun, bool) {
 	claims, err := claimsFromContext(r)
 	if err != nil {
 		writeErrorReason(w, http.StatusUnauthorized, reasonMissingRunClaims, "missing run claims")
-		return nil, uuid.Nil, broker.Minted{}, false
+		return nil, uuid.Nil, broker.Minted{}, nil, false
 	}
 	if s.cfg.Broker == nil {
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonBrokerNotConfigured, "broker not configured")
-		return nil, uuid.Nil, broker.Minted{}, false
+		return nil, uuid.Nil, broker.Minted{}, nil, false
 	}
 	grantID, ok := parseIDParam(w, r, "grantID", "grant")
-	if !ok || s.refuseRelayedDelivery(w, r, claims, grantID, true) || s.refuseWithheldGrant(w, r, claims, grantID, reasonSinkStoreUnavailable) {
-		return nil, uuid.Nil, broker.Minted{}, false
+	if !ok || s.refuseRelayedDelivery(w, r, claims, grantID, true) {
+		return nil, uuid.Nil, broker.Minted{}, nil, false
+	}
+	run, done := s.refuseWithheldGrant(w, r, claims, grantID, s.sinkWithheldUnread(w, r, claims, grantID))
+	if done {
+		return nil, uuid.Nil, broker.Minted{}, nil, false
 	}
 
 	// The broker enforces run ownership, kind dispatch, and audit (jti).
 	minted, err := s.cfg.Broker.MintForGrant(r.Context(), claims, grantID)
 	if err != nil {
 		s.writeMintError(w, r, err)
-		return nil, uuid.Nil, broker.Minted{}, false
+		return nil, uuid.Nil, broker.Minted{}, nil, false
 	}
 	if minted.Kind != types.GrantAPIKey || minted.Injection == nil {
 		// Only api_key grants resolve here: github/cloud credentials are
 		// minted via the regular mint endpoint and never resolved to raw
 		// platform secrets.
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonInjectionGrantNotAPIKey, "grant is not an api_key injection grant")
-		return nil, uuid.Nil, broker.Minted{}, false
+		return nil, uuid.Nil, broker.Minted{}, nil, false
 	}
-	return claims, grantID, minted, true
+	return claims, grantID, minted, run, true
 }
 
 // handleInternalInjection resolves an api_key grant to its injectable header
@@ -96,7 +102,7 @@ func (s *Server) mintInjectionGrant(w http.ResponseWriter, r *http.Request) (*id
 // brokered forward for it. Every resolve emits credential.mint (broker) and
 // secret.read audit events.
 func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request) {
-	claims, grantID, minted, ok := s.mintInjectionGrant(w, r)
+	claims, grantID, minted, run, ok := s.mintInjectionGrant(w, r)
 	if !ok {
 		return
 	}
@@ -176,7 +182,7 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	// the ROSTER decides) never take the owner-fallback read below: each
 	// resolves from the namespace dispatch recorded on its own grant, or not at
 	// all — see resolveProviderKeyInjection and resolveBedrockBearerInjection.
-	if s.resolveProviderKeyInjection(w, r, claims, minted, grantID) ||
+	if s.resolveProviderKeyInjection(w, r, claims, minted, grantID, run) ||
 		s.resolveBedrockBearerInjection(w, r, claims, minted, grantID) {
 		return
 	}
