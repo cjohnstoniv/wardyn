@@ -5,6 +5,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"slices"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -51,6 +53,9 @@ type governancePreviewRequest struct {
 	Groups       []string `json:"groups,omitempty"`
 	// UserType is the previewed person's type id; "" previews no type tier.
 	UserType string `json:"user_type,omitempty"`
+	// RunIn names one of the person's units (by id or exact name) to answer effective for, as POST
+	// /runs' run_in does; "" answers it for the home context.
+	RunIn string `json:"run_in,omitempty"`
 }
 
 // governancePreviewResponse names the profile that would bind a principal
@@ -108,18 +113,141 @@ func (s *Server) handleGovernanceCheck(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusBadRequest, reasonGovernancePreviewClaimsInvalid, msg)
 		return
 	}
-	pick, err := s.selectContext(r.Context(), contextQuery{users: users, groups: groups, userType: strings.TrimSpace(req.UserType)}, contextChoice{})
+	q := contextQuery{users: users, groups: groups, userType: strings.TrimSpace(req.UserType)}
+	pick, err := s.selectContext(r.Context(), q, contextChoice{})
 	if err != nil {
 		writeServerError(w, r, "resolve governance profile", err)
 		return
 	}
-	if pick.isDefault() || pick.row == nil {
-		writeJSON(w, http.StatusOK, governancePreviewResponse{})
+	var resp governanceCheckResponse
+	if !pick.isDefault() && pick.row != nil {
+		resp.governancePreviewResponse = governancePreviewResponse{
+			UnitID: pick.unit.ID, UnitName: pick.unit.Name, MatchedTier: pick.row.Membership.SubjectType,
+		}
+	}
+	if resp.Contexts, resp.Dormant, err = s.checkContexts(r.Context(), q, pick); err != nil {
+		writeServerError(w, r, "list governance contexts", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, governancePreviewResponse{
-		UnitID: pick.unit.ID, UnitName: pick.unit.Name, MatchedTier: pick.row.Membership.SubjectType,
-	})
+	runIn, err := s.runInFromRequest(r.Context(), createRunRequest{RunIn: req.RunIn})
+	if err == nil {
+		resp.Effective, err = s.checkEffective(r.Context(), q, contextChoice{RunIn: runIn})
+	}
+	if err != nil {
+		ceilingRunRefusal(err).write(s, w, r)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// governanceCheckResponse is POST /governance/check's body: the home context's fields above (empty
+// when it is the Default unit), every context of the person, their dormant memberships, and the
+// effective walls of the context asked for (run_in) or the home one.
+type governanceCheckResponse struct {
+	governancePreviewResponse
+	Contexts  []checkContext  `json:"contexts"`
+	Dormant   []checkDormant  `json:"dormant"`
+	Effective *checkEffective `json:"effective"`
+}
+
+// unitPathLink is one unit of a path.
+type unitPathLink struct {
+	ID   uuid.UUID `json:"id"`
+	Name string    `json:"name"`
+}
+
+// checkContext is one unit the person may run in. Home marks the one a run that names none runs in;
+// Path is the unit and those above it, leaf first.
+type checkContext struct {
+	UnitID   uuid.UUID      `json:"unit_id"`
+	UnitName string         `json:"unit_name"`
+	Home     bool           `json:"home"`
+	Legacy   bool           `json:"legacy"`
+	Path     []unitPathLink `json:"path"`
+}
+
+// checkDormant is a legacy membership another legacy membership outranks for this person: it places
+// them nowhere until promoted or until the one above it goes.
+type checkDormant struct {
+	MembershipID uuid.UUID `json:"membership_id"`
+	UnitID       uuid.UUID `json:"unit_id"`
+	UnitName     string    `json:"unit_name"`
+}
+
+// checkEffective is one context's resolved walls, after the Wardyn boundary, and which layer set each
+// knob.
+type checkEffective struct {
+	Ceiling    types.RunPolicySpec    `json:"ceiling"`
+	Limits     types.GovernanceLimits `json:"limits"`
+	Provenance knobProvenance         `json:"provenance"`
+}
+
+// checkContexts lists q's contexts and dormant memberships from the rows the selection reads
+// (activeMemberships): the Default unit alone when none places the person. home is the selection with
+// no choice.
+func (s *Server) checkContexts(ctx context.Context, q contextQuery, home contextPick) ([]checkContext, []checkDormant, error) {
+	ms, err := s.cfg.Store.ListMembershipsFor(ctx, q.users, q.groups, q.userType)
+	if err != nil {
+		return nil, nil, err
+	}
+	units, err := s.cfg.Store.ListGovernanceUnits(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	byID := unitsByID(units)
+	active := activeMemberships(ms)
+	contexts := []checkContext{}
+	add := func(id uuid.UUID, legacy bool) {
+		if !slices.ContainsFunc(contexts, func(c checkContext) bool { return c.UnitID == id }) {
+			contexts = append(contexts, checkContext{UnitID: id, UnitName: byID[id].Name, Home: id == home.unit.ID, Legacy: legacy, Path: unitPath(byID, id)})
+		}
+	}
+	for _, m := range active {
+		add(m.Unit.ID, m.Membership.Legacy)
+	}
+	if len(active) == 0 {
+		add(store.DefaultUnitID, false)
+	}
+	dormant := []checkDormant{}
+	for _, m := range ms {
+		if !slices.ContainsFunc(active, func(a store.MembershipMatch) bool { return a.Membership.ID == m.Membership.ID }) {
+			dormant = append(dormant, checkDormant{MembershipID: m.Membership.ID, UnitID: m.Unit.ID, UnitName: m.Unit.Name})
+		}
+	}
+	return contexts, dormant, nil
+}
+
+// unitPath is id and the units above it, leaf first, bounded as the stored depth is.
+func unitPath(byID map[uuid.UUID]types.GovernanceUnit, id uuid.UUID) []unitPathLink {
+	path := []unitPathLink{}
+	for cur := &id; cur != nil && len(path) <= store.MaxUnitDepthCap; {
+		row, ok := byID[*cur]
+		if !ok {
+			break
+		}
+		path = append(path, unitPathLink{ID: row.ID, Name: row.Name})
+		cur = row.ParentID
+	}
+	return path
+}
+
+// checkEffective resolves q's context under choice by the enforcement path's own steps: the context
+// ceiling (contextCeiling, the body of resolveContext) and then the boundary. Provenance records the
+// deployment, then the context's unit on each knob it changed, then the boundary.
+func (s *Server) checkEffective(ctx context.Context, q contextQuery, choice contextChoice) (*checkEffective, error) {
+	deployment := governanceCeiling{Spec: s.cfg.DefaultPolicy.Clone(), MemberDefault: s.memberDefaultFor(s.cfg.DefaultPolicy.Resources)}
+	c, err := s.contextCeiling(ctx, q, choice, deployment)
+	if err != nil {
+		return nil, err
+	}
+	prov := startProvenance(deploymentProvenance)
+	prov.setBy(c.provenance(), deployment.Spec, c.Spec)
+	bounded, err := s.boundaryCeiling(ctx, c)
+	if err != nil {
+		return nil, err
+	}
+	prov.setBy(boundaryProvenance, c.Spec, bounded.Spec)
+	return &checkEffective{Ceiling: redactSpecForRead(bounded.Spec, true), Limits: bounded.Limits, Provenance: prov}, nil
 }
 
 // normalizeGovernancePreviewClaims lowercases, trims and de-duplicates one
