@@ -47,6 +47,8 @@ vi.mock("../../../lib/api/workspaces", () => ({ workspaces: { listWorkspaces: ()
 vi.mock("../../../lib/api/policies", () => ({
   policies: { listPolicies: async () => [{ id: "pol-1", name: "Read-only research" }] },
 }));
+const listComponentsMock = vi.fn();
+vi.mock("../../../lib/api/components", () => ({ components: { list: () => listComponentsMock() } }));
 const getModelProvidersMock = vi.fn();
 vi.mock("../../../lib/api/model-providers", () => ({
   modelProviders: { getModelProviders: () => getModelProvidersMock() },
@@ -99,6 +101,7 @@ beforeEach(() => {
   upsertGrantMock.mockReset();
   toastErrorMock.mockReset();
   listWorkspacesMock.mockReset().mockResolvedValue([{ id: "ws-1", name: "Portfolio tools" }]);
+  listComponentsMock.mockReset().mockResolvedValue([]);
   getModelProvidersMock
     .mockReset()
     .mockResolvedValue({ providers: { providers: [{ id: "mp-1", name: "Desk gateway", kind: "anthropic_key" }] } });
@@ -314,6 +317,34 @@ describe("ExplainGrid — values by name", () => {
     expect(within(await row("workspace_provider", "ado-1")).getByText("Azure DevOps · example-org")).toBeInTheDocument();
     expect(within(await row("model_provider", "mp-1")).getByText("Corp gateway")).toBeInTheDocument();
     expect(getModelProvidersMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("ExplainGrid — components and the feature values (#2243)", () => {
+  it("names the component family's default row and the two newer feature values", async () => {
+    answer([
+      { kind: "component", value: "*", state: "everyone" },
+      { kind: "feature", value: "*", state: "everyone" },
+      { kind: "feature", value: "custom_component", state: "this_type" },
+      { kind: "feature", value: "self_host_runner", state: "blocked" },
+    ]);
+    renderGrid();
+    expect(within(await row("component", "*")).getByText(EXPLAIN.ALL_COMPONENTS)).toBeInTheDocument();
+    expect(within(await row("feature", "*")).getByText("SSH keys · API tokens · custom components")).toBeInTheDocument();
+    expect(within(await row("feature", "custom_component")).getByText(EXPLAIN.CUSTOM_COMPONENTS)).toBeInTheDocument();
+    expect(within(await row("feature", "self_host_runner")).getByText(EXPLAIN.SELF_HOST_RUNNER)).toBeInTheDocument();
+  });
+
+  it("names a component row for an operator, and a security admin never asks for the roster", async () => {
+    listComponentsMock.mockResolvedValue([{ id: "cmp-1", name: "Stripe sandbox" }]);
+    answer([{ kind: "component", value: "cmp-1", state: "this_type" }]);
+    renderGrid();
+    expect(await within(await row("component", "cmp-1")).findByText("Stripe sandbox")).toBeInTheDocument();
+    cleanup();
+    listComponentsMock.mockClear();
+    renderGrid(false);
+    expect(within(await row("component", "cmp-1")).getByText("cmp-1")).toBeInTheDocument();
+    expect(listComponentsMock).not.toHaveBeenCalled();
   });
 });
 

@@ -96,6 +96,10 @@ test.describe("User types — the list and what each type gets", () => {
     await expect(image.getByText(EXPLAIN.ONLY(DEVELOPER.name))).toBeVisible();
     // Not this type's row: nothing to remove.
     await expect(image.getByRole("button")).toHaveCount(0);
+
+    // #2243: the component family and the feature default name themselves, never a bare "*".
+    await expect(cell(page, "component", "*").getByText(EXPLAIN.ALL_COMPONENTS)).toBeVisible();
+    await expect(cell(page, "feature", "*").getByText(EXPLAIN.SSH_AND_TOKENS)).toBeVisible();
   });
 
   test("the listed type gets the image as its own, and Remove deletes that row", async ({ page, request }) => {
