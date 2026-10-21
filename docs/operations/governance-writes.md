@@ -30,18 +30,18 @@ an operator follows to turn one on and run the queue.
 
 **Units and memberships (0.10.0).**
 
-- Units form a tree under one Default unit, whose walls are the deployment default. A unit built on the deployment default is Default's child; a standalone unit is top-level.
-- A membership is keyed by unit, subject type and subject, so a person can be a member of several units.
-  - Re-posting `POST /governance/memberships` for the same unit and subject updates its `priority` and `home`. It no longer moves the subject to another unit: add the new membership, then delete the old one.
+- Units form a tree under one Default unit, whose walls are the deployment default: a unit built on the deployment default is its child; a standalone unit is top-level.
+- Memberships are keyed by unit, subject type and subject, so a person can belong to several units.
+  - Re-posting `POST /governance/memberships` for the same unit and subject updates its `priority` and `home`, and never moves the subject: add the new one, then delete the old.
   - `home: true` marks the unit a person runs in when a run names none.
-  - On a stale group list, a run that names no unit is refused `groups_snapshot_stale` while any group membership is a home, unless a user membership naming the person is their home.
-  - A held membership change's `target_key` is `<unit_id>:<subject_type>:<subject>`. A membership change held before the upgrade reads as `stale` at approval: propose it again.
-- A unit with `mode` `pass_through` has its parent's walls exactly. It sends no `overlay` or `overlay_limits`, and it names its parent in `parent_id` (`400` `governance_unit_request_invalid` otherwise).
-- A unit path is at most `governance_max_depth` units deep, counting Default or a top-level unit as 1. It is set in the site config: 16 when unset, at most 64.
-  - A unit write past it is refused `409` `governance_unit_depth`.
-  - A site config that lowers it below the deepest path that exists is refused `400` `site_config_invalid`, naming that path.
+  - With a stale group list, a run naming no unit is refused `groups_snapshot_stale` while any group home exists, unless the person's user membership is their home.
+  - A held membership change's `target_key` is `<unit_id>:<subject_type>:<subject>`; one held before the upgrade reads `stale` at approval: propose it again.
+- A unit with `mode` `pass_through` has its parent's walls exactly: it sends no `overlay` or `overlay_limits` and names its parent in `parent_id` (`400` `governance_unit_request_invalid` otherwise).
+- A unit path is at most `governance_max_depth` deep (site config: 16 when unset, at most 64), Default or a top-level unit counting as 1.
+  - A write past it: `409` `governance_unit_depth`.
+  - Lowering it below the deepest existing path: `400` `site_config_invalid`, naming that path.
 - `GET /governance` gives units `kind` (`default` for Default), `mode` and `depth`, memberships `home` and `legacy` (pre-0.10.0: only a person's first by precedence is a context), and `max_depth`. `ApplyGovernance` and `PlanGovernance` match memberships by unit name and never write Default or `legacy`.
-- A revive, an admin restart or a run-end extension (`run.end.set`) is refused `409` `unit_membership_gone` once the owner holds no membership of the run's unit or a unit above it (audit `arm` `owner_session`: the owner's own revive, checked against their memberships). Anyone else's passes while that unit, or one above it, has a membership that could match the owner: their sub, their user type, `all` or any group (`arm` `row_can_match`); an email row never counts.
+- A revive, admin restart or run-end extension (`run.end.set`) is refused `409` `unit_membership_gone` once the owner holds no membership of the run's unit or one above it. The owner's own checks their memberships (audit `arm` `owner_session`). Anyone else's passes while such a unit has a membership the owner could hold: their sub, user type, `all` or any group, never an email row (`arm` `row_can_match`).
 
 **Optional: four-eyes on governance writes.**
 
