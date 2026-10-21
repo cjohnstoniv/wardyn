@@ -55,19 +55,20 @@ export async function termText(screen: Locator, timeout = 1_000): Promise<string
 /** Type a readiness line until the shell echoes its output. A fresh attach can be admitted read-only
  *  for a moment while the previous socket is released, and keys typed then are dropped. The line has no
  *  quotes, so a drop that eats its head cannot leave the shared shell waiting at the `>` prompt for an
- *  open quote's close. No Ctrl+C: on a fresh attach it can end the shell before it is interactive. */
-export async function waitForShell(page: Page, screen: Locator): Promise<void> {
+ *  open quote's close. No Ctrl+C: on a fresh attach it can end the shell before it is interactive.
+ *  `tag` names the sentinel, so a later call is not satisfied by an earlier one still on the screen. */
+export async function waitForShell(page: Page, screen: Locator, tag = "ready"): Promise<void> {
   const read = async () => (await termText(screen).catch(() => "")) as string;
   await expect
     .poll(
       async () => {
-        if (!(await read()).includes("ready-sentinel")) {
+        if (!(await read()).includes(`${tag}-sentinel`)) {
           await screen.click();
-          await page.keyboard.type("printf %s-%s ready sentinel; echo");
+          await page.keyboard.type(`printf %s-%s ${tag} sentinel; echo`);
           await page.keyboard.press("Enter");
         }
         await page.waitForTimeout(500);
-        return (await read()).includes("ready-sentinel");
+        return (await read()).includes(`${tag}-sentinel`);
       },
       { timeout: 30_000 },
     )
