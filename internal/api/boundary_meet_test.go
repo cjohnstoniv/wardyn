@@ -50,3 +50,17 @@ func TestBoundaryMeetNarrowsAndKeepsUnnamedKnobs(t *testing.T) {
 		t.Errorf("inside policy: %+v changes %+v err %v", got, changes, err)
 	}
 }
+
+// TestBoundaryMeetCC1FloorIsNoOp: a floor at CC1, the fresh-install seed's, bounds nothing, so a
+// policy with no floor of its own meets it unchanged and nothing is reported narrowed.
+func TestBoundaryMeetCC1FloorIsNoOp(t *testing.T) {
+	cc := types.CC1
+	seeded := types.Boundary{Mode: types.BoundaryHardLimits, Spec: types.BoundarySpec{MinConfinementClass: &cc}}
+	got, _, changes, err := boundaryMeet(seeded, types.RunPolicySpec{}, types.GovernanceLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.MinConfinementClass != "" || len(changes) != 0 {
+		t.Errorf("min_confinement_class = %q, changes %+v: want the seed's CC1 floor left out of the meet", got.MinConfinementClass, changes)
+	}
+}

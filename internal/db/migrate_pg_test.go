@@ -99,6 +99,17 @@ func isConcurrentMigrateRace(err error) bool {
 // restored it.
 func pgPoolIsolated(t *testing.T) *pgxpool.Pool {
 	t.Helper()
+	pool := pgDatabaseIsolated(t)
+	if err := migrateTolerant(context.Background(), pool); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	return pool
+}
+
+// pgDatabaseIsolated is pgPoolIsolated before Migrate: a throwaway database with no schema at all,
+// as a fresh install's is.
+func pgDatabaseIsolated(t *testing.T) *pgxpool.Pool {
+	t.Helper()
 	dsn := os.Getenv("WARDYN_TEST_PG")
 	if dsn == "" {
 		t.Skip("WARDYN_TEST_PG not set; skipping Postgres-backed migration test")
@@ -135,9 +146,6 @@ func pgPoolIsolated(t *testing.T) *pgxpool.Pool {
 		t.Fatalf("connect to throwaway database %s: %v", name, err)
 	}
 	t.Cleanup(pool.Close)
-	if err := migrateTolerant(ctx, pool); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
 	return pool
 }
 

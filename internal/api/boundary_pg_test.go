@@ -122,7 +122,7 @@ func TestBoundaryProvenanceNamesTheBoundary(t *testing.T) {
 	}
 }
 
-// TestBoundaryNoLimitsIsByteIdentical: with no row, with the upgrade posture SetBoundaryNoLimits
+// TestBoundaryNoLimitsIsByteIdentical: with a fresh install's seeded row, with the upgrade posture SetBoundaryNoLimits
 // writes, and with a no_limits row that keeps a drafted spec, the corpus resolves to the golden
 // recorded on a tree without the boundary.
 func TestBoundaryNoLimitsIsByteIdentical(t *testing.T) {
@@ -282,7 +282,9 @@ func TestBoundaryBreakGlass(t *testing.T) {
 // TestBoundaryBoundEgressApprovals: in hard_limits no decider admits a host the boundary does not
 // allow, a host it allows is decided as before, and a break-glass run's approval is bound the same.
 func TestBoundaryBoundEgressApprovals(t *testing.T) {
-	e := newGovEnvOn(t, throwawayPGPool(t))
+	pool := throwawayPGPool(t)
+	testutil.SetBoundaryNoLimits(t, pool) // the walled run is created before the boundary is set
+	e := newGovEnvOn(t, pool)
 	e.seedProfile("team", "pypi.org") // so the admin token's reason makes a break-glass run
 	mkRun := func(breakGlass bool) uuid.UUID {
 		r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", strings.NewReader(`{"agent":"claude-code","task":"t"}`))
@@ -430,15 +432,15 @@ func TestBoundaryWriteNeedsMode(t *testing.T) {
 	}
 }
 
-// TestBoundaryHardLimitsWriteGated: no write puts the boundary in hard_limits until it bounds every
-// brokered credential path (#3238): the PUT answers 409 and the boundary stays as it was.
-func TestBoundaryHardLimitsWriteGated(t *testing.T) {
+// TestBoundaryHardLimitsWritable: a security admin's write puts the boundary in hard_limits, now
+// that it bounds every brokered credential path a run is given (#3238).
+func TestBoundaryHardLimitsWritable(t *testing.T) {
 	e := newGovEnvOn(t, throwawayPGPool(t))
 	w := e.call(e.alice, http.MethodPut, "/api/v1/governance/boundary", boundaryJSON(testBoundary(types.BoundaryHardLimits)))
-	if w.Code != http.StatusConflict || wireReason(t, w) != reasonBoundaryHardLimitsGated {
-		t.Fatalf("hard_limits write = %d %s, want 409 %s", w.Code, w.Body, reasonBoundaryHardLimitsGated)
+	if w.Code != http.StatusOK {
+		t.Fatalf("hard_limits write = %d %s, want 200", w.Code, w.Body)
 	}
-	if got, err := e.pg.GetBoundary(context.Background()); err != nil || got.HardLimits() || got.Spec.AllowedDomains != nil {
-		t.Errorf("boundary after a refused write = %+v (%v)", got, err)
+	if got, err := e.pg.GetBoundary(context.Background()); err != nil || !got.HardLimits() || got.Spec.AllowedDomains == nil {
+		t.Errorf("boundary after the write = %+v (%v), want hard_limits with its allowlist", got, err)
 	}
 }
