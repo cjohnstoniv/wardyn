@@ -134,8 +134,8 @@ docs/operations/api-tokens.md=5948 share=35
 # docs/operations/denials.md 5473 adds 146 over 5327, measured (0.10 WHY-EGRESS): the egress refusal bullet and its reason tokens.
 # docs/operations/denials.md 5488 adds 15 over 5473, measured (0.10 WHY-EGRESS): layer rides a policy-decided refusal only.
 # docs/operations/denials.md 5331 measured (0.10 BOUNDARY): the boundary provenance layer.
-# docs/operations/denials.md 5492 = ours 5488 + theirs 5331 - base 5327 at the 0.10 W4d merge of W4b-main onto the train.
-docs/operations/denials.md=5492 share=35
+# docs/operations/denials.md 5520 = ours 5492 + theirs 5359 - base 5331 at the W4g merge of PROXYCAP.
+docs/operations/denials.md=5520 share=35
 # Round 1: docs/operations/who-gets-in.md measured 1453 after the split banner and heading cleanup.
 # Round 1: docs/operations/admin-only-writes.md measured 2869 after the split banner and heading cleanup.
 # Round 1: docs/operations/three-roles.md measured 4012 after the split banner and heading cleanup.

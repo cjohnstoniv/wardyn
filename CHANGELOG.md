@@ -13,6 +13,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - New, off by default: `storage.user_drive.member_create.keep_main_drive` (#1991). Turned on, a run can keep its work
   folder as its person's own drive; whatever an agent leaves there, a planted script or a harness project file included,
   comes back in the next run that attaches it.
+- Upgrade wardyn-runnerd before you rely on a newer proxy feature: a run that sets one (`aws_sigv4`,
+  `scrub_responses`, `vm`, `port_rule` or `local_models`) is refused on a runner whose wardyn-runnerd is older.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
   `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on
   `aws_sso_refused_tokens` (migration `0194_aws_sso_refused_tokens`). Without it an AWS SSO session whose renewal
@@ -101,6 +103,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- A run that needs a proxy setting its runner cannot honour is refused before its sandbox starts, naming the setting
+  (reason `runner_proxy_setting_unsupported`).
 - The CLI's hint under a `401` follows the answer's reason. On a single-sign-on deployment with no admin token
   (`sign_in_required`) it says to use a personal API token in `WARDYN_TOKEN`, not the compose stack's admin token. For
   a token the organisation does not know (`admin_token_not_configured`) it names where the token came from.
