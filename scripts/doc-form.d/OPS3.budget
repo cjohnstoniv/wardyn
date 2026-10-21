@@ -129,7 +129,8 @@ docs/operations/api-tokens.md=5948 share=35
 # docs/operations/denials.md 5318 adds 14 (0.10 LAY-C r2): the authz.denied layer keys and the operator cap naming the deployment.
 # 0.10: docs/operations/denials.md 5200 adds 9, measured: user_view_preview names the security admin case.
 # docs/operations/denials.md 5331 measured (0.10 BOUNDARY): the boundary provenance layer.
-docs/operations/denials.md=5331 share=35
+# docs/operations/denials.md 5359 adds 28 (0.10 PROXYCAP): the runner_proxy_setting_unsupported run.create reason.
+docs/operations/denials.md=5359 share=35
 # Round 1: docs/operations/who-gets-in.md measured 1453 after the split banner and heading cleanup.
 # Round 1: docs/operations/admin-only-writes.md measured 2869 after the split banner and heading cleanup.
 # Round 1: docs/operations/three-roles.md measured 4012 after the split banner and heading cleanup.
