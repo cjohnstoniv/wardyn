@@ -177,12 +177,12 @@ func TestPG_ComposedProfileWrites(t *testing.T) {
 		if got := e.stored(child.ID); got.OverlayLimits != nil || got.Overlay == nil {
 			t.Errorf("after overlay_limits null: %+v, want limits cleared and the overlay kept", got)
 		}
-		// null parent_id re-bases on the deployment default.
+		// null parent_id re-bases on the deployment default: the Default unit (0.10.0).
 		if a := e.put(child.ID, `{"name":"keeper-renamed","parent_id":null,"overlay":{}}`); a.code != http.StatusOK {
 			t.Fatalf("PUT base null = %d %s", a.code, a.body)
 		}
-		if got := e.stored(child.ID); got.ParentID != nil || got.Overlay == nil {
-			t.Errorf("after base null: %+v, want the deployment as the base", got)
+		if got := e.stored(child.ID); got.ParentID == nil || *got.ParentID != store.DefaultUnitID || got.Overlay == nil {
+			t.Errorf("after base null: %+v, want the Default unit as the base", got)
 		}
 		// null overlay flattens it to a standalone profile carrying its own ceiling.
 		if a := e.put(child.ID, `{"name":"keeper-renamed","overlay":null,"ceiling":{"min_confinement_class":"CC2"}}`); a.code != http.StatusOK {
@@ -233,6 +233,10 @@ func TestPG_ComposedProfileWrites(t *testing.T) {
 	})
 
 	t.Run("a cycle and a depth overflow are refused", func(t *testing.T) {
+		if _, err := e.pg.PutSiteConfig(e.ctx, types.SiteConfig{GovernanceMaxDepth: 4}); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _, _ = e.pg.PutSiteConfig(e.ctx, types.SiteConfig{}) })
 		a := e.mustCreate(`{"name":"cyc-a","overlay":{}}`)
 		b := e.mustCreate(`{"name":"cyc-b","parent_id":"` + a.ID.String() + `","overlay":{}}`)
 		if r := e.put(a.ID, `{"name":"cyc-a","parent_id":"`+b.ID.String()+`","overlay":{}}`); r.code != http.StatusConflict || r.errb.Reason != reasonGovernanceUnitCycle {
@@ -241,14 +245,15 @@ func TestPG_ComposedProfileWrites(t *testing.T) {
 		if r := e.put(a.ID, `{"name":"cyc-a","parent_id":"`+a.ID.String()+`","overlay":{}}`); r.code != http.StatusConflict || r.errb.Reason != reasonGovernanceUnitCycle {
 			t.Errorf("a profile as its own base = %d %s, want 409 %s", r.code, r.body, reasonGovernanceUnitCycle)
 		}
-		// cyc-a <- cyc-b <- cyc-c is three deep; a fourth refuses.
+		// Default <- cyc-a <- cyc-b <- cyc-c is four deep, the configured maximum; a fifth refuses.
 		c := e.mustCreate(`{"name":"cyc-c","parent_id":"` + b.ID.String() + `","overlay":{}}`)
 		if r := e.post(`{"name":"cyc-d","parent_id":"` + c.ID.String() + `","overlay":{}}`); r.code != http.StatusConflict || r.errb.Reason != reasonGovernanceUnitDepth {
-			t.Errorf("a fourth level = %d %s, want 409 %s", r.code, r.body, reasonGovernanceUnitDepth)
+			t.Errorf("a fifth level = %d %s, want 409 %s", r.code, r.body, reasonGovernanceUnitDepth)
 		}
-		// Re-basing the ROOT under another profile pushes its descendants past three.
+		// Re-basing cyc-a under a unit two deep pushes its descendants past four.
 		top := e.mustCreate(`{"name":"cyc-top","ceiling":{"min_confinement_class":"CC2"}}`)
-		if r := e.put(a.ID, `{"name":"cyc-a","parent_id":"`+top.ID.String()+`","overlay":{}}`); r.code != http.StatusConflict || r.errb.Reason != reasonGovernanceUnitDepth {
+		mid := e.mustCreate(`{"name":"cyc-mid","parent_id":"` + top.ID.String() + `","overlay":{}}`)
+		if r := e.put(a.ID, `{"name":"cyc-a","parent_id":"`+mid.ID.String()+`","overlay":{}}`); r.code != http.StatusConflict || r.errb.Reason != reasonGovernanceUnitDepth {
 			t.Errorf("re-basing a root under cyc-top = %d %s, want 409 %s for its descendants", r.code, r.body, reasonGovernanceUnitDepth)
 		}
 	})
@@ -397,8 +402,8 @@ func TestPG_GovernanceListShowsEffective(t *testing.T) {
 	// A seeded loop, written below the handler.
 	loopA, loopB := uuid.New(), uuid.New()
 	for _, q := range []string{
-		`INSERT INTO governance_units (id, name, ceiling, limits, overlay) VALUES ('` + loopA.String() + `','loop-a','{}','{}','{}')`,
-		`INSERT INTO governance_units (id, name, ceiling, limits, overlay) VALUES ('` + loopB.String() + `','loop-b','{}','{}','{}')`,
+		`INSERT INTO governance_units (id, name, ceiling, limits, overlay, parent_id) VALUES ('` + loopA.String() + `','loop-a','{}','{}','{}','` + store.DefaultUnitID.String() + `')`,
+		`INSERT INTO governance_units (id, name, ceiling, limits, overlay, parent_id) VALUES ('` + loopB.String() + `','loop-b','{}','{}','{}','` + store.DefaultUnitID.String() + `')`,
 		`UPDATE governance_units SET parent_id = '` + loopB.String() + `' WHERE id = '` + loopA.String() + `'`,
 		`UPDATE governance_units SET parent_id = '` + loopA.String() + `' WHERE id = '` + loopB.String() + `'`,
 	} {

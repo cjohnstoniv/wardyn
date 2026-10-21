@@ -25,3 +25,14 @@ func membershipsFromResolve(p *types.GovernanceUnit, tier types.CapabilitySubjec
 		Unit:       *p,
 	}}, nil
 }
+
+// allRowsFor is a fake's membership table for units it serves by id (the shape before the policy
+// tree, where a run's unit was all a revive re-read): one `all` row per unit, so a revive or an
+// extension under any of them keeps today's reach.
+func allRowsFor(units []types.GovernanceUnit) []types.GovernanceMembership {
+	out := make([]types.GovernanceMembership, 0, len(units))
+	for _, u := range units {
+		out = append(out, types.GovernanceMembership{SubjectType: types.CapabilitySubjectAll, UnitID: u.ID, Legacy: true})
+	}
+	return out
+}
