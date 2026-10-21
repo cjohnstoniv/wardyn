@@ -300,7 +300,7 @@ export function MemberGettingStarted() {
 
   return (
     <div className="mx-auto w-full max-w-[880px] px-6 py-8">
-      <h1>{T.TITLE}</h1>
+      <h1 className="text-page">{T.TITLE}</h1>
       <p className="mt-2 text-muted-foreground">{T.SUBTITLE(userType?.name, userType?.description)}</p>
 
       <div className="mt-8 space-y-4">
@@ -604,7 +604,7 @@ export function MemberGettingStarted() {
       )}
       {coreEpisodes.length > 0 && (
         <div className="mt-6">
-          <SectionLabel>{EP.GROUP_CORE}</SectionLabel>
+          <SectionLabel>{EP.MEMBER_CORE}</SectionLabel>
           <div className="mt-2">
             {coreEpisodes.map((e) => (
               <EpisodeRow key={e.id} episode={e} />

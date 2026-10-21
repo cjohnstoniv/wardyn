@@ -133,7 +133,8 @@ function snapshot(over: Partial<GovernanceSnapshot> = {}): GovernanceSnapshot {
 function tealButtons(): HTMLElement[] {
   return screen
     .getAllByRole("button")
-    .filter((b) => b.className.split(/\s+/).includes("bg-primary"));
+    // A selected Segmented option is filled bg-primary too (#2832) and is a pressed toggle, not an action.
+    .filter((b) => !b.hasAttribute("aria-pressed") && b.className.split(/\s+/).includes("bg-primary"));
 }
 
 // Each test awaits its own first findBy*, so this only primes the fetch.
@@ -178,7 +179,7 @@ describe("GovernanceScreen — states", () => {
   it("the tab strip scrolls inside itself and starts at its left edge", async () => {
     renderScreen();
     await screen.findByRole("heading", { name: GOV.TITLE, level: 1 });
-    expect(await screen.findByRole("tablist")).toHaveClass("max-w-full", "justify-start", "overflow-x-auto");
+    expect(await screen.findByRole("tablist")).toHaveClass("justify-start", "overflow-x-auto", "border-b");
   });
 
   it("fetch_failed is distinct from empty, says enforcement is unaffected, and offers Retry", async () => {
@@ -420,14 +421,6 @@ describe("GovernanceScreen — delete: the pre-fill and the race are different r
 });
 
 describe("GovernanceScreen — assignments and the resolved preview", () => {
-  it("renders both halves of the effect fact, and the precedence rule", async () => {
-    renderScreen();
-    await screen.findByText(GOV.ASSIGN_TITLE);
-    expect(screen.getByText(GOV.PRECEDENCE)).toBeInTheDocument();
-    expect(screen.getByText(GOV.EFFECT_NOTE)).toBeInTheDocument();
-    expect(screen.getByText(GOV.SIGNIN_NOTE)).toBeInTheDocument();
-  });
-
   it("priority is shown only inside the group tier — a user row reads PRIORITY_NA", async () => {
     renderScreen(
       snapshot({

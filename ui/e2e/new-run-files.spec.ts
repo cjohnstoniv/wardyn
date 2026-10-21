@@ -174,6 +174,22 @@ async function toFiles(page: Page, workload: "environment" | "application" = "en
 }
 
 test.describe("New Run, Files: the main drive", () => {
+  // #3044, #3045: one section style with sentence-case titles, and no option that is not built.
+  test("section titles are sentence case, Required is muted text, and the main drive has no reuse row", async ({ page }) => {
+    await stub(page);
+    await toFiles(page);
+    for (const id of ["nr-main-title", "nr-attach-title"]) {
+      const title = page.locator(`#${id}`);
+      await expect(title).toBeVisible();
+      expect(await title.evaluate((el) => getComputedStyle(el).textTransform), `${id} text-transform`).toBe("none");
+    }
+    await expect(page.getByRole("heading", { name: NR_FILES.MAIN_TITLE })).toBeVisible();
+    await expect(page.getByText("Reuse it across runs")).toHaveCount(0);
+    await expect(page.getByText(NR_SHARED.COMING_SOON)).toHaveCount(0);
+    const required = page.locator("#nr-main-title").locator("xpath=ancestor::section[1]").getByText(NR_SHARED.REQUIRED, { exact: true });
+    expect(await required.evaluate((el) => getComputedStyle(el).textTransform)).toBe("none");
+  });
+
   const clamps: [string, (cap: string) => string][] = [
     ["pool", (cap) => NR_FILES.CLAMP_POOL(cap, POOL.name)],
     ["governance", (cap) => NR_FILES.CLAMP_ORG(cap)],

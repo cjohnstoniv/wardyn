@@ -9,6 +9,7 @@
 import type * as React from "react";
 import { cn } from "../../../../ui/utils";
 import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
+import { StepSection } from "../../../../wardyn/step-section";
 import type { FileKind } from "./file-items";
 
 const COLOUR: Record<FileKind, { kind: string; soft: string }> = {
@@ -117,25 +118,21 @@ export function PathText({ path, className }: { path: string; className?: string
   );
 }
 
-/** A section of the step: Make's bordered group with an uppercase heading row. */
-export function FilesGroup({ titleId, title, body, aside, children, className }: {
+/** A section of the step, drawn as the guided steps' one StepSection; `aside` is its marker or action. */
+export function FilesGroup({ titleId, title, body, aside, marker, children, className }: {
   titleId: string;
   title: string;
   body: string;
+  /** The section's one action button. */
   aside?: React.ReactNode;
+  /** Required or Optional. */
+  marker?: React.ReactNode;
   children?: React.ReactNode;
   className?: string;
 }) {
   return (
-    <section aria-labelledby={titleId} className={cn("rounded-[10px] border border-border bg-card", className)}>
-      <div className="flex min-h-[65px] items-center justify-between gap-3 border-b border-border px-[15px] py-[13px] max-[520px]:items-start">
-        <div>
-          <h2 id={titleId} className="mb-1 text-sm font-normal uppercase tracking-[0.06em]">{title}</h2>
-          <p className="text-sm leading-[1.4] text-muted-foreground">{body}</p>
-        </div>
-        {aside}
-      </div>
+    <StepSection titleId={titleId} title={title} description={body} marker={marker} action={aside} className={className} bodyClassName="p-0">
       {children}
-    </section>
+    </StepSection>
   );
 }

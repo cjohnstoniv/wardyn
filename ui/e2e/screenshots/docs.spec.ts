@@ -113,7 +113,7 @@ async function settle(page: Page): Promise<void> {
 }
 
 // The ONE GET /setup/status fixture both shots share: Fence Ready on a none-runner backend, so neither
-// photographs the red "No sandbox barrier on this host" alert. has_runs:true exercises the Launch step's
+// photographs the red no-barrier notice. has_runs:true exercises the Launch step's
 // "First run launched" line (far below the getting-started fold — /setup carries no gate any more).
 async function serveReadySetupStatus(page: Page): Promise<void> {
   await page.route("**/api/v1/setup/status*", (route) =>
@@ -188,8 +188,8 @@ test.describe("Docs screenshots", () => {
     // Wait for the re-staged cards to render (first + last of the set).
     await expect(page.getByText("Fix flaky webhook retry test")).toBeVisible();
     await expect(page.getByText("Refactor session cache eviction")).toBeVisible();
-    // The none-runner backend would otherwise photograph NoBarrierBanner above a healthy board.
-    await expect(page.getByText(/No sandbox barrier on this host/)).toHaveCount(0);
+    // The none-runner backend would otherwise photograph the no-barrier notice above a healthy board.
+    await expect(page.getByText(/No barrier can be built on this host/)).toHaveCount(0);
     // The sidebar Getting-started chip polls setup status — don't capture its
     // transient "Checking..." state.
     await expect(page.getByText(/Checking/)).toHaveCount(0, { timeout: 10_000 });

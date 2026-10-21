@@ -17,7 +17,7 @@ Every string the New Run flow shows lives once in this file and once in the lazy
 | Area | Rule |
 |---|---|
 | Steps | Shape, Run, Harnesses, Files, Tools and access, then Review. The eyebrow reads "Guided setup · N of 5". |
-| Start | Three paths meet at Review: AI composer (Coming soon), Guided setup, and the YAML or JSON run document. |
+| Start | Two paths meet at Review: Guided setup, and the YAML or JSON run document. One muted roadmap line names what is not built, with no version number. |
 | Template and Run again | Choosing one loads the saved setup and opens Review. Anything missing is a blocker that links to its step. |
 | Review | Blockers come first: local issues, unsupported document fields, template setup items, the server refusal, missing setup items, then a stale check. Launch stays shut until a check under 60 seconds old matches the draft. |
 | Name dialog | Opening it runs a fresh check. "Checked just now" shows only from that result; "Checking…" shows while it runs. A check that fails or is rate-limited leaves Launch available, since the create is the authority. |
@@ -66,9 +66,6 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `EYEBROW` | mock | Launch a governed workload |
 | `TITLE` | mock | New run |
 | `LEDE` | mock | Choose how you want to shape this run. Every path creates the same draft and meets again at review. |
-| `AI_TITLE` | mock | AI composer |
-| `AI_BODY` | mock | Create policies, sandboxes and runs with an agent's help. |
-| `AI_FOOT` | mock | Describe what you need |
 | `GUIDED_TITLE` | mock | Guided setup |
 | `GUIDED_BADGE` | mock | Fastest |
 | `GUIDED_BODY` | mock | Answer a few plain questions. Your organisation's defaults take care of the rest. |
@@ -79,6 +76,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `DOC_YAML` | mock | YAML |
 | `DOC_JSON` | mock | JSON |
 | `TRUST_LINE` | mock | Policy and availability are checked again when you launch. |
+| `ROADMAP` | mock | On the roadmap: scheduled runs and multi-agent runs. |
 
 ### 7.2 Shape
 
@@ -102,13 +100,13 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `AGAIN_LOADING` | deviation (lead wording 2026-10-17, FUG-L771) | Loading previous runs… |
 | `AGENT_TITLE` | mock | Agent task |
 | `AGENT_BODY` | mock | A one-time coding task, driven by you or running autonomously. |
-| `AGENT_SUB` | mock | Interactive · Autonomous · Repeat / schedule coming soon |
+| `AGENT_SUB` | mock | Interactive · Autonomous |
 | `ENV_TITLE` | mock | Environment sandbox |
 | `ENV_BODY` | mock | A reusable workspace for development, analysis or investigation. |
 | `ENV_SUB` | pending (A18) | Interactive · Your drive is attached when you have one |
 | `APP_TITLE` | mock | Application sandbox |
 | `APP_BODY` | mock | Run a sandboxed command, automation or script on its own. |
-| `APP_SUB` | mock | Automation / script · Application / server coming soon |
+| `APP_SUB` | mock | Automation / script |
 
 ### 7.3 Run
 
@@ -141,9 +139,6 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `APP_LABEL` | mock | What should run? |
 | `APP_AUTOMATION` | mock | Automation / script |
 | `APP_AUTOMATION_BODY` | mock | A command or job that runs on its own. |
-| `APP_AUTOMATION_META` | mock | Available now |
-| `APP_SERVER` | mock | Application / server |
-| `APP_SERVER_BODY` | mock | App servers and MCP servers. |
 | `COMMAND_LABEL` | mock | Command |
 | `COMMAND_HELP` | mock | Run verbatim in the sandbox. The run ends when the command exits. |
 | `COMMAND_REQUIRED` | deviation (lead wording 2026-10-17, FR-0099) | A command run needs a command to run. |
@@ -254,7 +249,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `TITLE` | mock | Choose the harnesses |
 | `LEDE_OPTIONAL` | mock | Harnesses are optional for this workload. Add one only when the sandbox should include an agent tool. |
 | `LEDE_INTERACTIVE` | mock | Add one or more harnesses. At most one can start with the run and receive an optional starting prompt. |
-| `LEDE_AUTONOMOUS` | deviation (DS-1 truthful copy) | An agent runs on its own, with no SSH or terminal. |
+| `LEDE_AUTONOMOUS` | mock | Pick the agent and give it its task. |
 | `LEDE_AUTONOMOUS_MULTI` | mock | Each agent works on its own task, side by side in one sandbox, with no SSH or terminal. |
 | `EMPTY_TITLE` | mock | No harnesses added |
 | `EMPTY_BODY` | mock | This workload can continue without one. |
@@ -315,9 +310,6 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `LIFE_KEPT(max, grace)` | deviation (DS-3 W2) | Kept after its end time so you can extend and resume it, up to its {max} maximum lifetime. Deleted when you end the run, or {grace} after its end time. |
 | `LIFE_KEPT_UNLIMITED(grace)` | pending (W-12) | Kept after its end time so you can extend and resume it. Deleted when you end the run, or {grace} after its end time. |
 | `LIFE_NO_END` | deviation (DS-3 W2) | Kept until you end the run. |
-| `REUSE_LABEL` | mock | Reuse it across runs |
-| `REUSE_ARIA` | mock | About reusing this drive |
-| `REUSE_TIP` | mock | Save this disk when the run ends and start another run from it. |
 | `REPOS_TITLE` | mock | Repositories |
 | `REPOS_BODY` | deviation (DS-3 W4) | Copied onto the main drive. Changes leave only as commits you push. |
 | `REPOSITORY_BADGE` | mock | Repository |
@@ -348,7 +340,6 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `LOCKED_TIP` | mock | Set by your admin |
 | `NOT_IN_POOL` | mock | Not available in this pool's runners. |
 | `CREATE_USER_DRIVE` | mock | + Create user drive |
-| `CREATE_SHARED_DRIVE` | mock | + Create shared drive |
 | `MANAGE_DRIVES` | mock | Manage drives → |
 | `CREATE_DISABLED` | pending (W-17) | Your organisation doesn't let people create drives. Ask an admin. |
 | `CREATE_DENIED(profile)` | pending (W-17) | Not allowed by {profile}. |
@@ -748,6 +739,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `SETUP_ENVIRONMENT` | mock | Interactive environment |
 | `BADGE_ATTENTION` | mock | Needs attention |
 | `BADGE_COMPLETE` | mock | Complete |
+| `BADGE_CHECK` | mock | Check needed |
 | `GROUP_RUN` | mock | Run and timing |
 | `GROUP_WHERE` | mock | Where it runs |
 | `GROUP_WORK` | mock | What it works on |
@@ -764,6 +756,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `TIMING_CHOOSE` | deviation (derived from board F2SCHED-1's logic, not its copy box; approved 2026-10-20) | Autonomous · Choose a start time |
 | `TIMING_CHECKED` | deviation (FEAT-2 board F2SCHED-1) | Checked again when it starts. |
 | `WHERE_VALUE(pool)` | mock | {pool} pool |
+| `WHERE_NONE` | mock | No pool chosen yet |
 | `WHERE_DETAIL(kind, used, max)` | deviation (pool words) | {kind} · {used} of {max} running |
 | `WHERE_ONLINE(n)` | pending (W-03) | {n} of your runners online |
 | `PROV_ADDED` | mock | Added by you |
@@ -924,7 +917,6 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 
 | Key | Source | Frozen string |
 |---|---|---|
-| `EYEBROW` | mock | Saved starting points |
 | `TITLE` | mock | Templates |
 | `LEDE` | mock | Start a new run from a saved setup. Using a template opens New run at review, where your organization's current policy and availability are checked again. A template never stores a run's title. |
 | `NEW_FROM_SCRATCH` | mock | New run from scratch |

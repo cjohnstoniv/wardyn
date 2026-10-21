@@ -285,6 +285,8 @@ export interface SetupProviderAccess {
 }
 
 export interface SetupStatus {
+  // Switch-gated features this deployment has on (Go SetupFeatures).
+  features?: { mcp_local_servers?: boolean };
   ready: boolean;
   // Server-computed "does SOME run's LLM access path exist": at least one
   // enabled model provider serves an agent (Go llmPathExists) — computed

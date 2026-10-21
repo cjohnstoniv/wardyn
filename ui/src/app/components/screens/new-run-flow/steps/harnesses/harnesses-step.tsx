@@ -12,7 +12,6 @@ import { Button } from "../../../../ui/button";
 import { NR_HARNESSES } from "../../../../wardyn/copy/new-run/harnesses";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { Notice } from "../../../../wardyn/notice";
-import { Chip } from "../../../../wardyn/primitives";
 import type { RunIntent } from "../../draft/run-intent";
 import { useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../../new-run-route";
 import { addHarness, agentTask, clearStarter, removeHarness, setAgentTask, setStartPrompt, setStarter, swapHarness } from "../../lenses/harness-lens";
@@ -55,7 +54,8 @@ export function HarnessesStep({ go, deps }: NewRunScreenProps & { deps?: { load:
     return why ? [{ row: h, why }] : [];
   });
   const addable = roster.harnesses.find((h) => !ids.includes(h.id) && !unavailableReason(h, taken, roster));
-  const comingSoon = mode === "autonomous" && ids.length > 0 && !multi;
+  // #3045: an Autonomous run holds one harness, so once it has one there is no add control to draw, unless the server lets several agents share it.
+  const addHidden = mode === "autonomous" && ids.length > 0 && !multi;
   // A card may pick any harness; the ones that no image carries together are refused on the cards, and Continue holds.
   const combos = multi && loaded.status === "ready" ? ids.map((id) => combinationReason(roster, ids, id)) : [];
   const comboIssues = ids.flatMap((_, index) => (combos[index] ? [{ focus: `nr-harness-${index}` }] : []));
@@ -120,13 +120,13 @@ export function HarnessesStep({ go, deps }: NewRunScreenProps & { deps?: { load:
       </div>
       {loaded.status === "loading" ? (
         <p role="status" className="text-sm text-muted-foreground">{NR_HARNESSES.LOADING}</p>
-      ) : (
+      ) : addHidden ? null : (
         <div className="flex items-center gap-3">
           <Button
             id={ADD_ID}
             type="button"
             variant="outline"
-            disabled={comingSoon || !addable}
+            disabled={!addable}
             aria-describedby={blocked.length ? UNAVAILABLE_ID : undefined}
             onClick={() => {
               if (!addable) return;
@@ -137,7 +137,6 @@ export function HarnessesStep({ go, deps }: NewRunScreenProps & { deps?: { load:
           >
             {ids.length ? NR_HARNESSES.ADD_ANOTHER : NR_HARNESSES.ADD_HARNESS}
           </Button>
-          {comingSoon && <Chip>{NR_SHARED.COMING_SOON}</Chip>}
         </div>
       )}
       {multi && ids.length > 1 && <Notice tone="info">{NR_HARNESSES.MULTI_NOTE}</Notice>}

@@ -25,6 +25,7 @@
 // needs its own frozen row (§7.7 has none), and an empty body is the
 // smaller change of the two.
 import * as React from "react";
+import { flushSync } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
@@ -43,6 +44,7 @@ import { ACCESS_STATE } from "../../../lib/people-access-copy";
 import { IMAGES } from "../../../lib/availability-copy";
 import { Button } from "../../ui/button";
 import { PageHeader } from "../../wardyn/page-header";
+import { PageContainer } from "../../wardyn/page-container";
 import { Chip, OperatorOnlyHint } from "../../wardyn/primitives";
 import { SavedElsewhereBanner } from "../../wardyn/saved-elsewhere-banner";
 import { useDiscardReload } from "../../wardyn/use-discard-reload";
@@ -50,7 +52,7 @@ import { EmptyState, TableSkeleton, loadFailStatus } from "../../wardyn/states";
 import { useOperator, useOperatorResolved } from "../../wardyn/operator-context";
 import { ViewNotice } from "../../wardyn/console-view";
 import { PROVIDERS_SUPER_ONLY } from "../../wardyn/copy/console-view";
-import { Segmented } from "../../wardyn/segmented";
+import { PageTabs } from "../../wardyn/page-tabs";
 import { AgentsTab } from "./agents-tab";
 import { gitRowInvalid } from "./display";
 import { GitTab } from "./git-tab";
@@ -153,17 +155,21 @@ export function ProvidersScreen() {
     try {
       // An Azure DevOps row is sent in the lane its addresses call for.
       const result = await api.putWorkspaceProviders({ ...next, git: next.git?.map((r) => reshapeADORow(r)) }, etag);
-      setDraft(result.providers);
-      // The PUT response is the new BASELINE too — a save with nothing left
-      // unsaved must not still read as dirty to the guard above or to a
-      // second "Copy my changes" the person never asked for.
-      setOriginal(result.providers);
-      // The PUT response is the new loaded snapshot: saving a removal down to
-      // zero rows puts the org in true legacy-open mode, and the banner's Add
-      // owns the affirmative again.
-      setLoadedEmpty((result.providers.git ?? []).length === 0);
-      setEtag(result.etag);
-      setNarrowed(result.sourcesNoLongerAdmitted > 0 ? result.sourcesNoLongerAdmitted : null);
+      // #3329: committed before the toast shows. Between the toast and a later commit an edit would be
+      // overwritten by this response, so the screen holds the saved document first.
+      flushSync(() => {
+        setDraft(result.providers);
+        // The PUT response is the new BASELINE too — a save with nothing left
+        // unsaved must not still read as dirty to the guard above or to a
+        // second "Copy my changes" the person never asked for.
+        setOriginal(result.providers);
+        // The PUT response is the new loaded snapshot: saving a removal down to
+        // zero rows puts the org in true legacy-open mode, and the banner's Add
+        // owns the affirmative again.
+        setLoadedEmpty((result.providers.git ?? []).length === 0);
+        setEtag(result.etag);
+        setNarrowed(result.sourcesNoLongerAdmitted > 0 ? result.sourcesNoLongerAdmitted : null);
+      });
       if (result.sourcesNoLongerAdmitted > 0) {
         toast.warning(PROVIDERS.SAVED_TOAST, { description: PROVIDERS.SAVED_NARROWED(result.sourcesNoLongerAdmitted) });
       } else {
@@ -240,7 +246,7 @@ export function ProvidersScreen() {
   }
 
   return (
-    <div className="mx-auto max-w-[900px] px-6 py-6">
+    <PageContainer width="form">
       <PageHeader
         title={PROVIDERS.TITLE}
         description={PROVIDERS.LEAD}
@@ -281,10 +287,10 @@ export function ProvidersScreen() {
         </section>
       ) : (
         <section className="mt-6 space-y-4 rounded-xl border border-border bg-card p-5">
-          <Segmented
+          <PageTabs
             value={tab}
-            onChange={handleTabChange}
-            options={[
+            onValueChange={handleTabChange}
+            tabs={[
               // #460 — Git and Storage share this screen's one draft/Save,
               // so both chip on the SAME dirty fact: an edit made on the
               // other tab is still visible from whichever one is open.
@@ -400,6 +406,6 @@ export function ProvidersScreen() {
           )}
         </section>
       )}
-    </div>
+    </PageContainer>
   );
 }

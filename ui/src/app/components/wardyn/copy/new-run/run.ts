@@ -40,9 +40,6 @@ export const NR_RUN = {
   APP_LABEL: "What should run?",
   APP_AUTOMATION: "Automation / script",
   APP_AUTOMATION_BODY: "A command or job that runs on its own.",
-  APP_AUTOMATION_META: "Available now",
-  APP_SERVER: "Application / server",
-  APP_SERVER_BODY: "App servers and MCP servers.",
   COMMAND_LABEL: "Command",
   /** Lead wording 2026-10-17 (FR-0099): the Review blocker for a command run with no command. */
   COMMAND_REQUIRED: "A command run needs a command to run.",

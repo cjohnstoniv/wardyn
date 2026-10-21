@@ -11,7 +11,7 @@
 import * as React from "react";
 import type { ComponentProps } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { SiteConfig } from "../../../lib/types";
@@ -292,35 +292,29 @@ describe("Gate reporting — proxy test and redirect tests report upward (no vis
   });
 });
 
-// One Test button per screen + the footer's fix-it actions. While the
-// orchestrator's gate (gateResult) is offering an action, the panel's own
-// button — and the custom block's — is suppressed: the gate row is the one
-// launch point. The actions the step registers are what that row dispatches.
-describe("One launch point — gateResult hides the panel button; registered actions drive the step", () => {
-  const offWithProbe = { on: false, head: "x", reason: "y", tone: "warning", action: { label: "Test connectivity", kind: "probe" } } as const;
-
-  it("hides the panel's Test button while the gate row carries the action, and shows it again once the gate is on", () => {
-    renderStep({ gateResult: offWithProbe });
-    expect(screen.queryByRole("button", { name: /^test connectivity$/i })).not.toBeInTheDocument();
-    // The hint/result column still renders — the block loses only the button.
-    expect(screen.getByText("Not tested")).toBeInTheDocument();
+// The Connectivity tile owns the probe button (#3066): the footer is Back and Next, so
+// the step no longer reads a gate to hide its own button. The actions the step
+// registers are what the footer's redirect links dispatch.
+describe("The Connectivity tile owns the Test button; registered actions drive the step", () => {
+  it("draws Test connectivity inside the tile with a Not tested pill, then Test again once there is a result", () => {
+    renderStep({});
+    const tile = screen.getByTestId("connectivity-tile");
+    expect(within(tile).getByRole("heading", { name: T.TILE_TITLE })).toBeInTheDocument();
+    expect(within(tile).getByText("Not tested")).toBeInTheDocument();
+    expect(within(tile).getByText(T.TILE_UNTESTED)).toBeInTheDocument();
+    expect(within(tile).getByRole("button", { name: /^test connectivity$/i })).toBeInTheDocument();
 
     cleanup();
-    renderStep({
-      gate: { ...unsetGate(), proxyProbe: { state: "reached", detail: "ok", via: "proxy" } },
-      gateResult: { on: true },
-    });
-    expect(screen.getByRole("button", { name: /^test again$/i })).toBeInTheDocument();
+    renderStep({ gate: { ...unsetGate(), proxyProbe: { state: "reached", detail: "ok", via: "proxy" } } });
+    const done = screen.getByTestId("connectivity-tile");
+    expect(within(done).getByText("Reached · via proxy")).toBeInTheDocument();
+    expect(within(done).getByRole("button", { name: /^test again$/i })).toBeInTheDocument();
   });
 
-  it("suppresses the custom block's own button too — Enter in the field fires the probe instead", async () => {
-    // Seeded straight into blocked: the custom block is visible, buttonless.
-    renderStep({
-      gate: { ...unsetGate(), proxyProbe: { state: "blocked", detail: T.TEST_BLOCKED } },
-      gateResult: offWithProbe,
-    });
+  it("keeps the custom block's own button, and Enter in the field fires the probe too", async () => {
+    renderStep({ gate: { ...unsetGate(), proxyProbe: { state: "blocked", detail: T.TEST_BLOCKED } } });
     expect(screen.getByText("No public endpoint will answer here?")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^test this url$/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^test this url$/i })).toBeDisabled();
 
     testProxyMock.mockResolvedValueOnce({ state: "reached", detail: T.TEST_OK_CUSTOM, custom: true });
     await userEvent.type(screen.getByPlaceholderText(/nexus\.corp\.internal/i), "https://intranet.example.com{Enter}");
@@ -339,7 +333,6 @@ describe("One launch point — gateResult hides the panel button; registered act
           { from: "https://pypi.org/simple", to: "https://artifactory.corp.internal/api/pypi/simple" },
         ],
       },
-      gateResult: offWithProbe,
       registerActions: (a) => {
         actions = a;
       },

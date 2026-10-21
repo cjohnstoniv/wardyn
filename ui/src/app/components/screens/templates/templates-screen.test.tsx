@@ -69,9 +69,12 @@ beforeEach(() => {
 describe("Templates screen: rows", () => {
   it("renders the header, the lede, the note and the one primary action from the canon", async () => {
     mount({ templates: [MINE], publish: MEMBER });
-    expect(await screen.findByRole("heading", { level: 1, name: T.TITLE })).toBeInTheDocument();
-    expect(screen.getByText(T.EYEBROW)).toBeInTheDocument();
-    expect(screen.getByText(T.LEDE)).toBeInTheDocument();
+    const title = await screen.findByRole("heading", { level: 1, name: T.TITLE });
+    // #3080: the page header is the shared PageHeader (page-title rung, no eyebrow), the action on its row.
+    expect(title).toHaveClass("text-page");
+    expect(screen.queryByText("Saved starting points")).toBeNull();
+    expect(screen.getByTestId("page-header-description")).toHaveTextContent(T.LEDE);
+    expect(screen.getByTestId("page-header-actions")).toContainElement(screen.getByRole("link", { name: T.NEW_FROM_SCRATCH }));
     expect(screen.getByText(T.NOTE)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: T.NEW_FROM_SCRATCH })).toHaveAttribute("href", "/runs/new");
     expect(screen.getByRole("region", { name: T.LIST_ARIA })).toBeInTheDocument();

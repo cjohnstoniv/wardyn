@@ -13,7 +13,7 @@ export const NR_HARNESSES = {
     "Harnesses are optional for this workload. Add one only when the sandbox should include an agent tool.",
   LEDE_INTERACTIVE:
     "Add one or more harnesses. At most one can start with the run and receive an optional starting prompt.",
-  LEDE_AUTONOMOUS: "An agent runs on its own, with no SSH or terminal.",
+  LEDE_AUTONOMOUS: "Pick the agent and give it its task.",
   LEDE_AUTONOMOUS_MULTI: "Each agent works on its own task, side by side in one sandbox, with no SSH or terminal.",
   EMPTY_TITLE: "No harnesses added",
   EMPTY_BODY: "This workload can continue without one.",

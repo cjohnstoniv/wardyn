@@ -110,11 +110,11 @@ export function useMainDriveSize(view: MainDriveView) {
     if (!filled.current && typed === "" && nextText !== "") {
       filled.current = true;
       dispatch({ type: "guided", patch: { mainDriveText: nextText, mainDriveFill: nextText, mainDriveUnit: next?.unit } });
-    } else if (typed !== "" && typed === fill && nextText !== typed) {
+    } else if (typed !== "" && typed === fill && (nextText !== typed || (next !== undefined && next.unit !== unit))) {
       if (nextText === "") filled.current = false;
       dispatch({ type: "guided", patch: { mainDriveText: nextText, mainDriveFill: nextText === "" ? undefined : nextText, mainDriveUnit: next?.unit } });
     }
-  }, [typed, fill, committed, view.defaultMib, dispatch]);
+  }, [typed, fill, unit, committed, view.defaultMib, dispatch]);
 
   const commit = React.useCallback(() => {
     if (!edited.current) return;
@@ -177,7 +177,7 @@ export function MainDriveSection({ view, size, keep = keepDoor(undefined, false)
   const life = lifecycleText(lifecycleOf(draft.intent, view), draft.intent.keep_work_folder === true);
 
   return (
-    <FilesGroup titleId="nr-main-title" title={NR_FILES.MAIN_TITLE} body={NR_FILES.MAIN_BODY} aside={<span className="text-meta font-semibold uppercase tracking-[0.08em] text-muted-foreground">{NR_SHARED.REQUIRED}</span>}>
+    <FilesGroup titleId="nr-main-title" title={NR_FILES.MAIN_TITLE} body={NR_FILES.MAIN_BODY} marker={NR_SHARED.REQUIRED}>
       <div className="grid gap-3 px-[15px] py-3.5">
         <div className="grid grid-cols-[70px_125px_minmax(175px,1fr)_auto] items-center gap-2.5 text-sm max-[520px]:grid-cols-[1fr_auto]">
           <Label htmlFor={SIZE_INPUT_ID} className="font-medium text-muted-foreground max-[520px]:col-span-full">{NR_FILES.SIZE_LABEL}</Label>

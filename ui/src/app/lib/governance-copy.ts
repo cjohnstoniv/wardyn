@@ -29,6 +29,7 @@
 
 import { PEOPLE } from "./people-access-copy";
 import { SIGNIN_HELP_LINK_LABEL } from "./sign-in-copy";
+import { GROUPS_READ_AT_SIGNIN } from "./groups-copy";
 import {
   AUTONOMY_LEVEL_ORDER,
   AUTONOMY_RUBRIC_ROW_KEYS,
@@ -103,7 +104,10 @@ export const GOVERNANCE = {
   // "Governance profiles" label. Lives in nav-copy.ts (see its own comment)
   // so app-shell's eager sidebar isn't the reason this whole table ships early.
   TITLE: GOVERNANCE_NAV_TITLE,
-  LEAD: "Named ceilings, assigned to people and groups. A profile stands alone or narrows a base. An assigned profile replaces the deployment ceiling for its subjects; anyone with no assignment keeps the deployment ceiling.",
+  LEAD: "Named ceilings, assigned to people and groups.",
+  HOW_TITLE: "How governance works",
+  HOW_BODY:
+    "A profile stands alone or narrows a base. An assigned profile replaces the deployment ceiling for its subjects; anyone with no assignment keeps the deployment ceiling.",
   PROFILES_TITLE: "Profiles",
   PROFILES_LEAD:
     "A profile is one ceiling: the policy every run under it is bounded by, plus the launch modes its subjects may not use at all.",
@@ -220,8 +224,8 @@ export const GOVERNANCE = {
   // PERM.SNAPSHOT_BODY reused: that string ends on the grants rule, which is
   // false here (what lags is a CEILING, and it lags a sign-in, not a request).
   EFFECT_NOTE: "Takes effect on their next run. A run already dispatched keeps the ceiling it started with.",
-  SIGNIN_NOTE:
-    "A change to someone's groups in your identity provider reaches Wardyn only when they next sign in, so they keep their current ceiling until then — or, for an API token, until it is re-minted.",
+  SIGNIN_NOTE: GROUPS_READ_AT_SIGNIN,
+  COMBINE_TITLE: "How assignments combine",
   COL_PROFILE: "Profile",
   COL_PRIORITY: "Priority",
   // The same em dash PEOPLE.ADDED_CHART_NA renders, kept as its OWN key
@@ -320,7 +324,8 @@ export const DELIVERY = {
     runner_resident: "Stored on your runner",
     refuse: "Not available on your runner",
   },
-  PEOPLE_SEE: (label: string) => `People see: ${label}`,
+  COL_CREDENTIAL: "Credential",
+  COL_PEOPLE_SEE: "People see",
   POSTURE_TITLE: "Require on the runner",
   POSTURE_MDM: "Managed by MDM",
   POSTURE_DISK: "Disk encrypted",

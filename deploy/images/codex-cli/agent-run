@@ -87,18 +87,27 @@ codex_set_toml_key() {
 # codex_set_mcp_servers FILE: one [mcp_servers.<key>] table with its url per
 # entry of WARDYN_MCP_SERVERS_JSON ({"<key>":"<url>",...}: server keys and the
 # proxy's broker URLs, as dispatch writes them, never a server's own address or
-# credential).  A table of the same key is replaced, so a revive leaves no
+# credential), then the tables of WARDYN_MCP_STDIO_TOML, which dispatch renders
+# for the run's servers that run in the sandbox (command, args and env_vars,
+# no credential).  A table of the same key is replaced, so a revive leaves no
 # duplicate; nothing else in FILE is touched.  The proxy, not this file, decides
-# which servers codex reaches: editing it reaches nothing more.
+# which remote servers codex reaches: editing it reaches nothing more.  A local
+# server runs as the agent's user, with the agent's access.
 codex_set_mcp_servers() {
-    local file="$1" json="${WARDYN_MCP_SERVERS_JSON:-}" tables="" keys="" tmp
+    local file="$1" json="${WARDYN_MCP_SERVERS_JSON:-}" stdio="${WARDYN_MCP_STDIO_TOML:-}" tables="" keys="" line tmp
     local re='"([a-z0-9-]+)":"(https?://[A-Za-z0-9._:/-]+)"'
-    [[ -n "$json" ]] || return 0
+    [[ -n "$json" || -n "$stdio" ]] || return 0
     while [[ $json =~ $re ]]; do
         keys+="${BASH_REMATCH[1]} "
         tables+="[mcp_servers.${BASH_REMATCH[1]}]"$'\n'"url = \"${BASH_REMATCH[2]}\""$'\n'
         json="${json#*"${BASH_REMATCH[0]}"}"
     done
+    while IFS= read -r line; do
+        if [[ $line =~ ^\[mcp_servers\.([a-z0-9-]+)\]$ ]]; then
+            keys+="${BASH_REMATCH[1]} "
+        fi
+    done <<< "$stdio"
+    tables+="$stdio"
     [[ -f "$file" ]] || : > "$file"
     tmp="$(mktemp "$file.XXXXXX")"
     CODEX_MCP_KEYS="$keys" awk '

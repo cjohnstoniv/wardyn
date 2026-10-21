@@ -31,7 +31,7 @@ vi.mock("../run-detail", () => ({
     <Cockpit
       run={run} audit={audit} view="user" terminal grants={[]} egress={[]} held={undefined}
       outcomeReady pending={[]} recording={null} recState="ready" recordingDisabled
-      onGoAudit={() => {}} onGoPolicy={() => {}} onGoRecording={() => {}}
+      onGoAudit={() => {}} onGoPolicy={() => {}} onGoRecording={() => {}} onGoApprovals={() => {}}
     />
   ),
 }));

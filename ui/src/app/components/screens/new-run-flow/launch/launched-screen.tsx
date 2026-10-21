@@ -102,7 +102,7 @@ function Launched({ runId, startAnother }: { runId: string; startAnother: () => 
         {waiting ? "…" : <Check className="size-[26px]" />}
       </span>}
       {badge ? <Chip tone={waiting ? "info" : "success"}>{badge}</Chip> : <RunStateBadge state={run.state} />}
-      <h1 ref={heading} tabIndex={-1} className="text-[30px] leading-[1.08] font-normal tracking-[-0.04em] outline-none">{runHeadline(run)}</h1>
+      <h1 ref={heading} tabIndex={-1} className="text-display outline-none">{runHeadline(run)}</h1>
       {body && <p className="text-muted-foreground">{body}</p>}
       {queue && scheduled === "scheduled" && (
         <div data-testid="launched-scheduled" className="flex flex-col gap-1">

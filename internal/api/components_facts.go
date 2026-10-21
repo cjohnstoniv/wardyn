@@ -177,7 +177,7 @@ func (a attachedComponent) fact(ordinal int, comps runComponents, baseline compo
 		f.Secrets = append(f.Secrets, componentSecretFact{Delivery: sec.Delivery.Mode, Shared: sec.Shared})
 		g := componentGrant(sec)
 		grants = append(grants, g)
-		if sec.Delivery.Mode == types.ComponentDeliveryHeader && !sec.Delivery.PlainHTTP && def.MCP == nil {
+		if sec.Delivery.Mode == types.ComponentDeliveryHeader && !sec.Delivery.PlainHTTP && !def.RemoteMCP() {
 			f.TLSIntercept = true
 		}
 		if !sec.Shared && slices.Contains(a.needsOwnSecrets, sec.SecretName) {

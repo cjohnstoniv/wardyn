@@ -51,4 +51,24 @@ describe("Segmented", () => {
     expect(screen.getByRole("button", { name: "Deny" })).toHaveClass("text-danger");
     expect(screen.queryByTestId("tab-dirty-chip-permit")).toBeNull();
   });
+
+  // #2832: the selected option carries the primary fill, not bg-muted (~1.1:1 against the card).
+  it("the selected option is filled with the primary token and the others are not", () => {
+    render(<Segmented value="git" options={OPTIONS} onChange={() => {}} />);
+    const git = screen.getByRole("button", { name: "Git" });
+    expect(git).toHaveClass("bg-primary", "text-primary-foreground");
+    expect(git).not.toHaveClass("bg-muted");
+    expect(screen.getByRole("button", { name: "Storage" })).not.toHaveClass("bg-primary");
+  });
+
+  // #2832: a dirty chip inside the selected (primary-filled) option sits on the solid card colour, not the 13% tint.
+  it("the dirty chip on the selected option is solid, and on an unselected one keeps the warning tint", () => {
+    render(<Segmented value="git" options={OPTIONS.map((o) => ({ ...o, dirty: true }))} onChange={() => {}} />);
+    const on = screen.getByTestId("tab-dirty-chip-git").firstElementChild!;
+    expect(on).toHaveClass("bg-card", "text-warning");
+    expect(on).not.toHaveClass("bg-warning-subtle");
+    const off = screen.getByTestId("tab-dirty-chip-storage").firstElementChild!;
+    expect(off).toHaveClass("bg-warning-subtle");
+    expect(off).not.toHaveClass("bg-card");
+  });
 });

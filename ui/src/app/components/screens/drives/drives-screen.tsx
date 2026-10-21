@@ -62,6 +62,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { Mono } from "../../wardyn/code-block";
 import { useOperator } from "../../wardyn/operator-context";
 import { PageHeader } from "../../wardyn/page-header";
+import { PageContainer } from "../../wardyn/page-container";
 import { Chip, OperatorOnlyHint } from "../../wardyn/primitives";
 import { EmptyState, TableSkeleton, loadFailStatus } from "../../wardyn/states";
 import { AllocationsBlock } from "./allocations";
@@ -178,7 +179,7 @@ export function DrivesScreen() {
   const [deleteHead, deleteBody] = question(toDelete ? DRIVES.DELETE_CONFIRM(toDelete.name) : "");
 
   return (
-    <div className="mx-auto max-w-[1120px] px-6 py-6">
+    <PageContainer width="list">
       <PageHeader title={DRIVES.TITLE} description={withMono(DRIVES.LEAD)} />
 
       {/* The ORG SWITCH (GET /drives's `disabled`, S2/0.7.2) — one notice
@@ -218,11 +219,10 @@ export function DrivesScreen() {
         </section>
       ) : (
         <>
-          <section className="mt-6 overflow-hidden rounded-xl border border-border bg-card">
+          <section className="mt-6 overflow-clip rounded-xl border border-border bg-card">
             <div className="flex flex-wrap items-start justify-between gap-3 px-6 pt-5">
               <div>
                 <h2 className="text-sm font-medium text-foreground">{DRIVES.DRIVES_TITLE}</h2>
-                <p className="mt-1 max-w-[82ch] text-body text-muted-foreground">{DRIVES.DRIVES_LEAD}</p>
               </div>
               {/* With no drives the empty state carries this action instead, so
                   the screen never offers two New drive buttons. */}
@@ -241,7 +241,6 @@ export function DrivesScreen() {
                   size="compact"
                   icon={HardDrive}
                   title={DRIVES.EMPTY_TITLE}
-                  description={DRIVES.EMPTY_BODY}
                   action={
                     <Button
                       variant={newIsTeal ? "default" : "outline"}
@@ -448,6 +447,6 @@ export function DrivesScreen() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </PageContainer>
   );
 }

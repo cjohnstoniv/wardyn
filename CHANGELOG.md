@@ -56,6 +56,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Migration `0207_governance_units` renames the governance tables and their columns, keeping every row, grant and
   foreign key, so a split-role install needs no grant change. A governance change proposed before the upgrade reads
   as stale once and is proposed again.
+- **`WARDYN_MCP_LOCAL_SERVERS` is off by default.** Turning it on lets an organisation or a person define an MCP
+  server that runs inside the run's sandbox. That server runs with the agent's access, and the harness, not
+  Wardyn's proxy, applies the run's rules to its tools.
+- **With `WARDYN_MCP_LOCAL_SERVERS` off, a rebooted run whose MCP components were erased is no longer revived.**
+  Starting the agent again admits the run anew, and the erased row keeps only its harnesses, so it is refused in the
+  organisation form ("Ask your admin"). An erased remote server is refused too, which a 0.9 revive accepted. A run
+  that is still running keeps its server until it ends.
 
 ### Added
 
