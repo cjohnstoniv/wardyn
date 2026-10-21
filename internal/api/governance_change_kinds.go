@@ -242,12 +242,18 @@ func (s *Server) resolveForDiff(all []types.GovernanceUnit, id uuid.UUID) *Resol
 
 // unitBaseState is the profile graph as a change to profile id depends on it: the row itself (nil
 // when absent) and the chain of bases above base. An approval that finds either changed refuses as
-// stale, so the profile the reviewer saw, and what it composes on, is what is written.
+// stale, so the profile the reviewer saw, and what it composes on, is what is written. With no base
+// (a fold into a standalone ceiling), the chain is the stored row's own: the fold keeps the mounts
+// that chain resolves to (storedCeilingMounts), so a change there makes the held fold stale too.
 func unitBaseState(all []types.GovernanceUnit, id uuid.UUID, base *uuid.UUID) any {
 	byID := unitsByID(all)
 	state := map[string]any{"self": nil}
-	if row, ok := byID[id]; ok {
+	row, ok := byID[id]
+	if ok {
 		state["self"] = row
+	}
+	if base == nil {
+		base = row.ParentID
 	}
 	bases := []types.GovernanceUnit{}
 	seen := map[uuid.UUID]bool{id: true}
