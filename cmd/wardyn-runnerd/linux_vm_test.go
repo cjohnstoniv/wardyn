@@ -106,9 +106,9 @@ func TestFullSpoolPassDoesNotHoldTheTick(t *testing.T) {
 // Close joins a running full-spool pass, so the runner never exits with a goroutine still ending a VM,
 // and gives up on a pass that outlives its own budget. No pass starts once Close has begun.
 func TestDockerSinkCloseJoinsTheFullSpoolPass(t *testing.T) {
-	prev := fullSpoolBound
-	fullSpoolBound = 300 * time.Millisecond
-	t.Cleanup(func() { fullSpoolBound = prev })
+	prev := closeJoinBound
+	closeJoinBound = 300 * time.Millisecond
+	t.Cleanup(func() { closeJoinBound = prev })
 	start := func(t *testing.T) (*dockerSink, *endCalls, func(context.Context)) {
 		h := newSinkHarness(t)
 		e := &endCalls{isVM: true, hold: make(chan struct{})}
@@ -125,14 +125,13 @@ func TestDockerSinkCloseJoinsTheFullSpoolPass(t *testing.T) {
 		return done
 	}
 	t.Run("waits for the pass", func(t *testing.T) {
-		d, e, tick := start(t)
+		d, e, _ := start(t)
 		done := closed(d)
 		select {
 		case <-done:
 			t.Fatal("Close returned while a full-spool pass was still ending a VM")
 		case <-time.After(100 * time.Millisecond):
 		}
-		tick(t.Context()) // after Close began: starts nothing
 		close(e.hold)
 		select {
 		case <-done:
@@ -145,13 +144,33 @@ func TestDockerSinkCloseJoinsTheFullSpoolPass(t *testing.T) {
 			t.Fatalf("the pass ended %d VMs, want 1", len(e.runs))
 		}
 	})
-	t.Run("gives up at the pass's budget", func(t *testing.T) {
+	t.Run("gives up at the join bound", func(t *testing.T) {
 		d, e, _ := start(t)
 		t.Cleanup(func() { close(e.hold) })
 		select {
 		case <-closed(d):
 		case <-time.After(5 * time.Second):
-			t.Fatal("Close waited past the pass's budget")
+			t.Fatal("Close waited past the join bound")
+		}
+	})
+	t.Run("no pass starts once Close has begun", func(t *testing.T) {
+		h := newSinkHarness(t)
+		e := &endCalls{isVM: true, fails: 100} // the run stays unhandled: a new pass would end it again
+		endVMsOnFullSpool(h.sink, &runnerwire.VMCaps{}, e.end)
+		h.fillSpool(false)
+		d := &dockerSink{spoolSink: h.sink}
+		tick := d.extras(nil, nil).options.Tick
+		tick(t.Context())
+		d.fullPasses.Wait() // the first pass has finished
+		// Close's first step, with the sink left open: Close would also drop the registered runs, and a
+		// pass started after it would find nothing to end, hiding the pass this asserts is absent.
+		d.joinFullPass()
+		tick(t.Context())
+		d.fullPasses.Wait()
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		if len(e.runs) != 1 {
+			t.Fatalf("%d end calls: a pass started after Close, want only the first", len(e.runs))
 		}
 	})
 }

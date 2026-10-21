@@ -84,3 +84,44 @@ func TestFullIsWhereTheProxyIsRefused(t *testing.T) {
 		})
 	}
 }
+
+// A refusal counted before a session was accepted is not one against the grant that session is given:
+// a proxy that reconnects carries its running refusal total, and the new grant starts a new count.
+// Full stays false for the tight grant until the proxy is refused against it.
+func TestFullCountsOnlyRefusalsAfterAccept(t *testing.T) {
+	ctx := context.Background()
+	s, _, _ := testSpool(t)
+	first, err := s.Accept(ctx, fullTestInstance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ProducerRefused(ctx, first.Gen, fullTestInstance, 3); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.locked(ctx, func() error { // 100 bytes of credit above the smallest request envelope
+		m, err := s.readManifest()
+		if err != nil {
+			return err
+		}
+		m.Last, m.Bytes = 10, MaxBytes-LossReserveBytes-GrantRecords*grantRecordEnvelope-(MinRequestReservation+100)
+		return s.writeManifest(m)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.Accept(ctx, fullTestInstance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Grant.Bytes != MinRequestReservation+100 {
+		t.Fatalf("grant bytes = %d, not the tight grant this pins", second.Grant.Bytes)
+	}
+	if full, err := s.Full(ctx); err != nil || full {
+		t.Fatalf("Full after Accept with 3 earlier refusals = %v, %v; want false", full, err)
+	}
+	if err := s.ProducerRefused(ctx, second.Gen, fullTestInstance, 4); err != nil {
+		t.Fatal(err)
+	}
+	if full, err := s.Full(ctx); err != nil || !full {
+		t.Fatalf("Full after a refusal against the new grant = %v, %v; want true", full, err)
+	}
+}
