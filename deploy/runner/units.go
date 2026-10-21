@@ -7,13 +7,14 @@ package runnerunits
 
 import _ "embed"
 
-// SystemdUnit is the systemd user unit; __WARDYN_RUNNERD__ is the installed binary's path.
+// SystemdUnit is the systemd user unit; __WARDYN_RUNNERD__ is the installed binary's path and
+// __WARDYN_CONFIG__ the settings file's.
 //
 //go:embed wardyn-runnerd.service
 var SystemdUnit string
 
-// LaunchAgent is the macOS LaunchAgent plist; its __WARDYN_*__ and __DOCKER_HOST__ tokens are replaced
-// at install.
+// LaunchAgent is the macOS LaunchAgent plist; its __WARDYN_*__ tokens (the binary, the config path and
+// the log) are replaced at install.
 //
 //go:embed com.wardyn.runnerd.plist
 var LaunchAgent string

@@ -148,13 +148,13 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 
 ### Running without a service
 
-- `wardyn-runnerd setup --no-service` registers, installs the binary and writes the environment file, then prints the command that runs the runner. It installs no systemd unit or LaunchAgent and runs no service command.
+- `wardyn-runnerd setup --no-service` registers, installs the binary and writes `runnerd.json`, then prints the command that runs the runner. It installs no systemd unit or LaunchAgent and runs no service command.
 - Use it where you run the runner yourself, or device management installs the unit.
 - It is refused while a systemd unit or LaunchAgent for this runner is installed: running both would be two processes with one identity, which the organisation refuses. Remove the service first (`systemctl --user disable --now wardyn-runnerd` or `launchctl bootout`, then delete its file), then run setup again.
-- The environment file is `~/.config/wardyn/runnerd.env` on Linux and `runnerd.env` beside the runner's state directory on macOS, mode `0600`.
+- The settings file is `runnerd.json` in `<user configuration directory>/wardyn`, mode `0600`: see [the runner's settings file](../runner-registration.md#the-runners-settings-file).
 
 1. Run `wardyn-runnerd setup --org https://wardyn.example --token-file <file> --no-service`.
-2. Run the printed command from a shell that stays open: `set -a; . '<env file>'; set +a; '<binary>' serve --org <url> --state-dir '<dir>'`. Setup prints it with the quoting your shell needs; on macOS the paths hold a space (`Application Support`), so copy the printed line rather than retyping it.
+2. Run the printed command from a shell that stays open: `'<binary>' serve --config '<path>'`. Setup prints it with the quoting your shell needs; on macOS the paths hold a space (`Application Support`), so copy the printed line rather than retyping it.
 3. Claim the runner as for a service: see below.
 
 ### How audit decisions reach the organisation
@@ -236,6 +236,7 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 | `RelayHostTarget` | `--relay-host-target` | left out, found by a probe container |
 | `InternalNetwork` | `--internal-network` | default `wardyn-internal` |
 | `TrustedCAFile` | `--trusted-ca-file` | a PEM bundle path; deliver the file with a separate MDM file payload ([A corporate CA](#a-corporate-ca-on-a-laptop-runner)) |
+| `OrgCAFile` | `--org-ca-file` | a PEM file of extra roots for the runner's own connection to the organisation only; root-owned, not writable by group or others |
 | `RecordingStore` | `--recording-store` | `pg`, `fs` or `off` |
 | `DockerHost` | `DOCKER_HOST` | the engine's socket, when it is not the default |
 

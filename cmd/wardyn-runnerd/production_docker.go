@@ -95,7 +95,7 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 	if err != nil {
 		return runnerRuntime{}, errors.Join(err, sink.Close())
 	}
-	rt.hooks.ProxyImage = followOrgProxyImage(opts.proxyImage, opts.proxyImagePinned, sub.SetProxyImage)
+	rt.hooks.ProxyImage = mirroredProxyImageHook(opts.proxyImageMirror, opts.proxyImagePinned, followOrgProxyImage(opts.proxyImage, opts.proxyImagePinned, sub.SetProxyImage))
 	pair, err := chooseRelay(ctx, sub, opts.proxyImage, eng, want)
 	if err != nil {
 		return runnerRuntime{}, errors.Join(err, rt.close())

@@ -79,7 +79,9 @@ docs/operations/console-branding.md=943 share=35
 # docs/operations/hybrid-laptops.md 5254 measured at the 0.10 W4a merge of origin/main (0.9.6 forward-port): the larger side, theirs 5246, fails by 8 (ours 5242 has the ATT-SRV words).
 # docs/operations/hybrid-laptops.md 5275 = ours 5267 + theirs 5254 - base 5246 at the 0.10 W4c merge of origin/main 3cea1aa73 (W4a) onto the train.
 # docs/operations/hybrid-laptops.md 5258, measured at the 0.10 W4c merge of origin/main 3cea1aa73 (W4a) onto the train (the sum above was 5275).
-docs/operations/hybrid-laptops.md=5258 share=35
+# docs/operations/hybrid-laptops.md 5265 adds 11 over 5254 (0.10 RDIAG-C), measured: the OrgCAFile row of the managed preferences table.
+# docs/operations/hybrid-laptops.md 5269 = ours 5258 + theirs 5265 - base 5254 at the 0.10 W4c merge of RDIAG-C 03841f528 onto the train.
+docs/operations/hybrid-laptops.md=5269 share=35
 # docs/operations/hybrid-laptops.md 4024 adds 2 over 4022, measured: the control-plane restart row says the next restart kills an agent kept only for containment.
 # docs/operations/hybrid-laptops.md 4195 = 3926 + 269, measured: the reset section and the recording default.
 # docs/operations/hybrid-laptops.md 4380 = 4195 + 185, measured: how audit decisions reach the organisation (the decision sink), less the removed state-directory check.

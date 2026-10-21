@@ -33,18 +33,16 @@ func withManagedPrefs(t *testing.T, goos string, prefs map[string]string) {
 
 func serveDefaults(t *testing.T, args ...string) (org string, opts serveOptions) {
 	t.Helper()
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	cmd := newServeCommand(nil)
 	if err := cmd.ParseFlags(args); err != nil {
 		t.Fatal(err)
 	}
-	// The flag defaults are the environment's; the command applies the profile over them when it runs.
-	org, _ = cmd.Flags().GetString("org")
-	opts.proxyImage, _ = cmd.Flags().GetString("proxy-image")
-	opts.relayListen, _ = cmd.Flags().GetString("relay-listen")
-	opts.network, _ = cmd.Flags().GetString("internal-network")
-	opts.trustedCAFile, _ = cmd.Flags().GetString("trusted-ca-file")
-	opts.recording, _ = cmd.Flags().GetString("recording-store")
-	applyManagedServe(cmd, &org, &opts)
+	cfg, err := serveConfig(cmd, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.applyTo(&org, new(string), &opts)
 	return org, opts
 }
 
@@ -165,15 +163,19 @@ func TestServeTakesTheSingleInstanceLock(t *testing.T) {
 func TestManagedProxyImageIsAPin(t *testing.T) {
 	image := releaseProxyRepo + ":1.2.3"
 	withManagedPrefs(t, "darwin", map[string]string{"ProxyImage": image})
-	cmd := newServeCommand(nil)
-	if err := cmd.ParseFlags(nil); err != nil {
-		t.Fatal(err)
+	given := func() bool {
+		t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+		cfg, err := effectiveRunnerConfig("", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return proxyImageGiven(cfg)
 	}
-	if !proxyImagePinned(image, "", proxyImageGiven(cmd), func(string) string { return "" }) {
+	if !proxyImagePinned(image, "", given(), func(string) string { return "" }) {
 		t.Error("a profile's release-tagged proxy image was not a pin")
 	}
 	withManagedPrefs(t, "darwin", map[string]string{})
-	if proxyImagePinned(image, "", proxyImageGiven(cmd), func(string) string { return "" }) {
+	if proxyImagePinned(image, "", given(), func(string) string { return "" }) {
 		t.Error("with no profile value and no flag, a release-tagged image was a pin")
 	}
 }

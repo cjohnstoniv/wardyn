@@ -272,12 +272,7 @@ func TestSetupWritesKeepsAndRegistersWithTheOrgCA(t *testing.T) {
 			f.org = tls.URL
 			ca := writeFile(t, filepath.Join(t.TempDir(), "org-ca.pem"), string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: tls.Certificate().Raw})))
 			p := mustPaths(t, f)
-			service := func() string {
-				if goos == "linux" {
-					return f.read(p.envFile)
-				}
-				return f.read(p.plistFile)
-			}
+			service := func() string { return f.settings(p) }
 			bad := writeFile(t, filepath.Join(t.TempDir(), "bad.pem"), "nothing")
 			if out, err := f.run(setupOptions{tokenFile: f.tokenFile, orgCAFile: bad}); err == nil || !strings.Contains(err.Error(), bad) || f.count("POST /api/v1/runners/register") != 0 {
 				t.Fatalf("a bad org CA file: err=%v out=%s registered=%d; want a refusal naming it before the token", err, out, f.count("POST /api/v1/runners/register"))
@@ -291,7 +286,7 @@ func TestSetupWritesKeepsAndRegistersWithTheOrgCA(t *testing.T) {
 			if f.count("POST /api/v1/runners/register") != 1 {
 				t.Fatal("setup did not register with the org CA")
 			}
-			if got := service(); !strings.Contains(got, ca) || strings.Contains(got, "WARDYN_TRUSTED_CA_FILE="+ca) || strings.Contains(got, "<key>WARDYN_TRUSTED_CA_FILE</key>") {
+			if got := service(); !strings.Contains(got, ca) || strings.Contains(got, "WARDYN_TRUSTED_CA_FILE=") {
 				t.Errorf("the service should name the org CA and not make it run trust:\n%s", got)
 			}
 			f.flagless = true
