@@ -266,8 +266,9 @@ export const DRIVES = {
   // Shown only while the second place is being added (overseer ruling).
   REACH_NOTE: "Binding a drive to a runner lets runs on that runner mount it.",
   // The server's save refusal (internal/api/user_drives_second_place.go), wire text.
+  // JSON.stringify for the server's %q, as drive-refusals.ts does.
   SECOND_PLACE_REFUSED: (name: string) =>
-    `user_drives: "${name}": the second place must also be a share, and somewhere the first is not`,
+    `user_drives: ${JSON.stringify(name)}: the second place must also be a share, and somewhere the first is not`,
   SAVE_CTA: "Save drive",
   SAVE_ERROR: "Couldn't save this drive.",
   // SAVE_REFUSED_TITLE heads every 400 the editor can meet, over the server's
