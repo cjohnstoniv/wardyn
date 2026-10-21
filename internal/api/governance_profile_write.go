@@ -416,6 +416,14 @@ func (s *Server) buildGovernanceProfile(createdBy string, super bool, id uuid.UU
 		}
 		// Only an overlay the request sent is judged: an absent one is the stored row's, unchanged.
 		if req.comp.overlaySet && overlay.WorkspaceMounts != nil {
+			// An empty host path is the author's 400 at every tier, judged before the keep step's tier
+			// refusal, as the ceiling's is at decode (finishGovernanceProfileRequest).
+			for i, m := range *overlay.WorkspaceMounts {
+				if m.Source == "" {
+					return p, nil, keep, writeRefusal(http.StatusBadRequest, reasonGovernanceOverlayInvalid,
+						"invalid overlay: workspace_mounts[%d]: mount source is empty", i)
+				}
+			}
 			out, held, sets, kerr := keepMounts("overlay.workspace_mounts", *overlay.WorkspaceMounts, s.storedOverlayMounts(all, id, base), super)
 			if kerr != nil {
 				return p, nil, keep, kerr

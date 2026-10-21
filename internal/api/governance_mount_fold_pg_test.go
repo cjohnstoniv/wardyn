@@ -3,14 +3,15 @@
 
 package api
 
-// A follow-up to the mount keep rules, against a real Postgres: a held fold is stale once the base chain
-// it kept its mounts from changes.
+// Two follow-ups to the mount keep rules, against a real Postgres: a held fold is stale once the base
+// chain it kept its mounts from changes, and an empty host path is a 400 on every write path and tier.
 //
 // Guarded by WARDYN_TEST_PG (throwawayPGPool): skipped cleanly when unset, must PASS when set.
 
 import (
 	"net/http"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
@@ -48,5 +49,38 @@ func TestPolMount_F1_HeldFoldIsStaleAfterABaseSourceChange(t *testing.T) {
 	}
 	if after := rowJSON(t, e.profile(child.ID)); after != before {
 		t.Errorf("STALE FOLD: the refused approval changed the row:\n%s\n%s", before, after)
+	}
+}
+
+// F2: a mount with an empty host path is the author's 400 "mount source is empty", for a security admin
+// and a super admin alike, on a ceiling and on an overlay, and nothing is written.
+func TestPolMount_F2_EmptySourceIs400AtEveryTier(t *testing.T) {
+	e := newMountEnv(t, false)
+	standalone := e.seedMountProfile("pm-f2", pinMounts())
+	base := e.seedMountProfile("pm-f2-base", pinMounts())
+	child := e.seedComposed("pm-f2-child", base, types.CeilingOverlay{})
+	empty := []types.WorkspaceMount{{Source: "", Target: pinTgtA}}
+	for _, tier := range []struct {
+		name string
+		c    *http.Cookie
+	}{{"security admin", e.alice}, {"super admin", e.super}} {
+		for _, path := range []struct {
+			name string
+			row  types.GovernanceProfile
+			body func(governanceProfileView) map[string]any
+		}{
+			{"ceiling", standalone, func(v governanceProfileView) map[string]any { return standaloneBody(v, empty) }},
+			{"overlay", child, func(v governanceProfileView) map[string]any { return overlayBody(v, &empty) }},
+		} {
+			before := rowJSON(t, e.profile(path.row.ID))
+			v, _ := e.view(tier.c, path.row.ID)
+			w := e.putProfile(tier.c, path.row.ID, path.body(v))
+			if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "mount source is empty") {
+				t.Errorf("%s, %s: an empty source = %d %s, want 400 mount source is empty", tier.name, path.name, w.Code, w.Body)
+			}
+			if after := rowJSON(t, e.profile(path.row.ID)); after != before {
+				t.Errorf("%s, %s: the refused write changed the row", tier.name, path.name)
+			}
+		}
 	}
 }
