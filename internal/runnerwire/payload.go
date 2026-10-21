@@ -137,6 +137,11 @@ type Caps struct {
 	// MethodLocalAttachTeeAck. The org sends them only to a runner that says so; an older runner
 	// reads as absent and the org refuses a local attach before any call.
 	LocalAttach bool `json:"local_attach,omitempty"`
+	// OfflineSummary is why the runner could not connect (or start) since its last session, sent once
+	// on the first connect after; Relay is a Docker runner's latest run relay check, sent again when it
+	// changes. Both 0.10 on; an older organisation ignores them, and an older runner sends neither.
+	OfflineSummary *types.RunnerOfflineSummary `json:"offline_summary,omitempty"`
+	Relay          *types.RunnerRelayStatus    `json:"relay,omitempty"`
 }
 
 // Waiting is the `waiting` event's data.

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/containerd/errdefs"
 	"github.com/moby/moby/client"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner/docker"
@@ -23,8 +24,45 @@ func readySetupEngine(ctx context.Context, network string, want relayPair) (dock
 		return dockerEngine{}, err
 	}
 	defer cli.Close()
-	return readyEngine(ctx, cli, "docker is not usable as this user: on Linux add yourself to the docker group; on macOS or Windows (WSL2) start "+
-		"Docker Desktop, Rancher Desktop or Colima, and set DOCKER_HOST to its socket if it is not the default", network, want)
+	return readyEngine(ctx, cli, setupEngineUnreachable, network, want)
+}
+
+const setupEngineUnreachable = "docker is not usable as this user: on Linux add yourself to the docker group; on macOS or Windows (WSL2) start " +
+	"Docker Desktop, Rancher Desktop or Colima, and set DOCKER_HOST to its socket if it is not the default"
+
+// inspectSetupEngine is readySetupEngine for doctor: the same look at the engine, without creating the
+// proxy bridge.
+func inspectSetupEngine(ctx context.Context, want relayPair) (dockerEngine, error) {
+	cli, err := client.New(client.FromEnv)
+	if err != nil {
+		return dockerEngine{}, err
+	}
+	defer cli.Close()
+	ctx, cancel := context.WithTimeout(ctx, engineCheckBound)
+	defer cancel()
+	return admittedEngine(ctx, cli, setupEngineUnreachable, want)
+}
+
+// resolveProxyImage is where the proxy image can be had from without pulling it: this engine ("local"), else
+// the registry, which the engine asks for the manifest.
+func resolveProxyImage(ctx context.Context, ref string) (string, error) {
+	cli, err := client.New(client.FromEnv)
+	if err != nil {
+		return "", err
+	}
+	defer cli.Close()
+	ctx, cancel := context.WithTimeout(ctx, engineCheckBound)
+	defer cancel()
+	switch _, err := cli.ImageInspect(ctx, ref); {
+	case err == nil:
+		return "local", nil
+	case !errdefs.IsNotFound(err):
+		return "", err
+	}
+	if _, err := cli.DistributionInspect(ctx, ref, client.DistributionInspectOptions{}); err != nil {
+		return "", err
+	}
+	return "registry", nil
 }
 
 // probeSetupRelay is serve's chooseRelay (pull the proxy image, then find the relay pair a probe

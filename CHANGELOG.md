@@ -16,7 +16,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
   `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on
   `aws_sso_refused_tokens` (migration `0194_aws_sso_refused_tokens`). Without it an AWS SSO session whose renewal
-  AWS refused cannot be marked, read or cleared, so replicas do not share that mark.
+  AWS refused cannot be marked, read or cleared, so replicas do not share that mark. Grant it `SELECT, INSERT, UPDATE`
+  on `runner_health` (migration `0199_runner_health`). Without `INSERT` or `UPDATE` a runner's offline summary and
+  relay status are not kept; without `SELECT` every one-runner read (`GET /api/v1/runners/{id}`,
+  `GET /api/v1/me/runners/{id}`) answers 500.
 - **`wardyn run attach` is now `wardyn attach`.** The old spelling is an unknown command, with no alias. A script
   that calls `wardyn run attach <run-id>` changes to `wardyn attach <run-id>`. `wardyn run ssh` is unchanged.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
@@ -60,6 +63,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Recording is a level: a policy's `recording` is `off`, `terminal` or `screen_actions`, and
   `site_config.recording` sets the organisation's level and can lock it as a minimum. Nothing set records terminal
   sessions, as before. `WARDYN_RECORDING_STORE=off` still records nothing, and keystrokes are never recorded.
+
+- A runner that could not connect, or could not start, reports why when it next connects: the first and last failure,
+  the stage and a redacted reason. The runner's read shows it as `offline_summary`, and each report writes a
+  `runner.offline_summary.record` audit row. A refusal at start is shown only once a later start connects.
+- A Docker runner checks its relay on every reconnect and every 5 minutes, logs `run relay unreachable` when the relay
+  stops answering, and reports it as `relay_status` on the runner's read.
 
 ### Changed
 

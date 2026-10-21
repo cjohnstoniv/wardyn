@@ -228,6 +228,45 @@ Both run `serve --config <path to runnerd.json>` and hold no setting themselves.
 
 An install from before the file keeps working: its environment file or LaunchAgent is still read, and the environment outranks the file. Run `setup` again to move those settings into `runnerd.json` and out of the LaunchAgent, which every local account can read.
 
+## Check a runner's connection
+
+`wardyn-runnerd doctor` runs read-only checks in order and prints one line per stage: `ok`, `FAIL` or `skip`. A failing stage names the setting to change. It exits 0 when no stage failed and 1 otherwise, and `--json` prints the same stages as data.
+
+| Stage | Checks | A failure names |
+|---|---|---|
+| `trusted-ca` | The CA bundle loads, as `setup` checks it, and warns of an expired or writable file | `WARDYN_TRUSTED_CA_FILE` |
+| `org-url` | The organisation address is HTTPS, as `setup` requires, and where it came from | `WARDYN_RUNNER_ORG_URL` |
+| `dns` | The name resolves; with a proxy, the proxy's name | `WARDYN_RUNNER_ORG_URL` or `HTTPS_PROXY` |
+| `proxy` | The route in effect, as Go resolves `HTTPS_PROXY` and `NO_PROXY` | `HTTPS_PROXY` |
+| `tls` | The handshake: the issuer presented and the trust store that verified it (`system` or `WARDYN_TRUSTED_CA_FILE`); a proxy's 407 or 403 | `WARDYN_TRUSTED_CA_FILE`, `HTTPS_PROXY` |
+| `healthz` | `/healthz` answers as Wardyn, and the server version | `WARDYN_RUNNER_ORG_URL` |
+| `engine` | The engine answers at `DOCKER_HOST`, and its version | `DOCKER_HOST` |
+| `proxy-image` | The image is on the engine or in its registry; a pinned image of another release than the organisation's is a version-skew failure | `WARDYN_PROXY_IMAGE` |
+| `relay` | The relay address is allowed and a probe container reaches it, through `setup`'s own check | `WARDYN_RELAY_LISTEN` |
+
+- Each setting is read as the service reads it: a flag, else the settings `setup` recorded, else this shell. The flags are `--org`, `--state-dir`, `--proxy-image`, `--relay-listen`, `--relay-host-target` and `--trusted-ca-file`.
+- It writes nothing and changes no setting. It never creates the proxy bridge, never pulls an image and never connects to the organisation as the runner.
+- The relay stage starts one throwaway container, removed afterwards, and only when the proxy image is already on the engine; otherwise it says `skip`.
+- Names are shown and values are not: no token, password or proxy credential appears in either format, and a proxy is shown as its host and port.
+- The proxy stage reads this shell's environment. An installed service does not inherit it, so the line says so ([a runner behind a corporate proxy](#a-runner-behind-a-corporate-proxy)).
+- `wardyn doctor` runs the same network stages for the CLI, adds who `/api/v1/me` says you are, and runs this command's engine, image and relay stages when a runner is installed on the computer.
+- Not checked yet: the service's own state and a proxy that strips the WebSocket upgrade. The runner's last error reaches the organisation once it connects ([what the organisation sees](#what-the-organisation-sees-when-a-runner-cannot-connect)). Read the log for those ([a runner that never connected](#a-runner-that-never-connected)).
+
+## What the organisation sees when a runner cannot connect
+
+A runner keeps why it could not connect, or could not start, and reports it the next time it connects. The runner's read (`GET /api/v1/me/runners/{id}` for its owner, `GET /api/v1/runners/{id}` for administrators) shows the last report.
+
+| Field | Holds |
+|---|---|
+| `offline_summary` | The first and last failure, the stage of the last one (a doctor stage name: `dns`, `proxy`, `tls`, `healthz`, `identity`, `engine`, `proxy-image` or `relay`) and a short reason |
+| `relay_status` | A Docker runner's last relay check: `reachable` or `unreachable`, since when, and why |
+
+- Both are runner-reported, and absent until a runner of this release reports them. An older runner sends neither, and an older server ignores both.
+- The reason never holds a credential: the runner removes the user and password of any URL and its own proxy password, and the server removes any URL's user information again. It is cut to 256 bytes.
+- A refusal at start (`engine`, `proxy-image`, `relay`) is kept in the state directory, so it reaches the organisation once a later start connects. A runner that never connects reports nothing.
+- One report per runner is kept, replaced by the next. The server stores at most one every 10 seconds per runner: a newer report inside that gap is dropped, and the runner does not send it again. Each stored report writes a `runner.offline_summary.record` audit row.
+- While serving, a Docker runner checks its relay again on every reconnect and every 5 minutes, without starting a container. The check covers three things: the engine answers, the bridge holds the relay's bind address, and each relay listener accepts a dial from the host side. It does not see a host firewall that drops traffic from containers to the host. On a VM-backed engine the bind is loopback, so the check proves only that the listener is alive. With no run since the runner started, it checks only the engine. A relay that stops answering logs `run relay unreachable` (`warning=relay_unreachable`) and reports `unreachable`; the warning clears when it answers again.
+
 ## A runner behind a corporate proxy
 
 Several settings keep a runner working behind a proxy that inspects TLS. Each has a field in `runnerd.json`; `setup` writes the ones marked `setup` in the table. A service started by systemd or launchd does not inherit the shell's exports, so a proxy variable set in a shell never reaches it.

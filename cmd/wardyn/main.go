@@ -317,6 +317,7 @@ func rootCmd() *cobra.Command {
 		runnerCmd(client),
 		supportBundleCmd(client),
 		caCmd(client),
+		doctorCmd(client),
 	)
 	return root
 }
