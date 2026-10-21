@@ -4,7 +4,7 @@
  */
 
 // Console design-consistency pins that need a real layout or a real backend row: one eyebrow look,
-// one duration voice, the quiet in-card empty state, and a run's Audit tab in sentences.
+// one duration voice, and the quiet in-card empty state.
 import { randomUUID } from "node:crypto";
 import type { Page } from "@playwright/test";
 import { test, expect, consoleAPI, expandCard, gotoConsole, navToRoute, openNewRun, sql } from "./fixtures";
