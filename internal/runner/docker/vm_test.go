@@ -956,3 +956,61 @@ func TestVMEndVMFailsClosedWhenTheEngineCannotInspect(t *testing.T) {
 		t.Fatal("the VM kept running after EndVM succeeded")
 	}
 }
+
+// An end cut short (the runner stopping, a cancelled pass) can leave the guest asked to power down, the
+// proxy running and the producer unsettled. The next EndVM finishes it: the proxy is removed, the
+// producer settled, the stopped VM kept, and an end of a VM already ended answers nothing wrong.
+func TestVMEndVMConvergesAfterAPartialEnd(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cut  func(t *testing.T, r *vmRig, d *Driver, runID uuid.UUID, agent string)
+	}{
+		{"the agent stop is cancelled", func(t *testing.T, r *vmRig, d *Driver, runID uuid.UUID, agent string) {
+			r.f.stopFailures = map[string]int{agent: 1}
+			if isVM, err := d.EndVM(context.Background(), runID); !isVM || err == nil {
+				t.Fatalf("EndVM with its agent stop cancelled = %v, %v; want true and an error", isVM, err)
+			}
+		}},
+		{"the agent stopped, the proxy not yet", func(t *testing.T, r *vmRig, _ *Driver, _ uuid.UUID, agent string) {
+			if _, err := r.f.ContainerStop(context.Background(), agent, client.ContainerStopOptions{}); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newVMRig(t)
+			rid, sink := uuid.NewString(), newFakeSink()
+			r.d.cfg.RunnerID, r.d.cfg.DecisionSink, r.d.cfg.Evidence = rid, sink, &memEvidence{m: map[uuid.UUID][]byte{}}
+			spec := vmSpec()
+			spec.Labels = map[string]string{runner.LabelRunnerID: rid}
+			ctx := context.Background()
+			sb, err := r.d.CreateSandbox(ctx, spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			settled := func() bool {
+				sink.mu.Lock()
+				defer sink.mu.Unlock()
+				return slices.Contains(sink.calls, "gone")
+			}
+			tc.cut(t, r, r.d, spec.RunID, sb.Ref)
+			if c := r.container(t, proxyContainerName(spec.RunID)); c.removed || settled() {
+				t.Fatalf("the partial end already removed the proxy (%v) or settled the producer (%v)", c.removed, settled())
+			}
+			for _, step := range []string{"finishing", "repeating"} {
+				if isVM, err := r.d.EndVM(ctx, spec.RunID); !isVM || err != nil {
+					t.Fatalf("EndVM %s = %v, %v; want true, nil", step, isVM, err)
+				}
+				if c := r.container(t, sb.Ref); c.removed || c.state.Running {
+					t.Fatalf("after %s: the VM removed %v, state %+v; want stopped and kept", step, c.removed, c.state)
+				}
+				if c := r.container(t, proxyContainerName(spec.RunID)); !c.removed {
+					t.Fatalf("after %s: the VM's proxy is still there", step)
+				}
+				if !settled() {
+					t.Fatalf("after %s: the producer was never settled (ProducerGone)", step)
+				}
+			}
+		})
+	}
+}

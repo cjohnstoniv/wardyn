@@ -583,7 +583,8 @@ func (s *spoolSink) EndVMsOnFullSpool(end func(ctx context.Context, runID uuid.U
 
 // EndVMsWithFullSpools ends the Linux VM of each run whose spool has no room left (Spool.Full). The
 // spool is capped, and a VM that keeps running past the cap would act with its decisions unrecorded.
-// Called from the containment tick; a run is acted on once, and an end that failed is tried again.
+// Called from the containment tick; a run is acted on once, and an end that failed is tried again. A run
+// whose end is under way is marked in its spool first (Spool.SetEndPending), so a restart finishes it.
 func (s *spoolSink) EndVMsWithFullSpools(ctx context.Context) {
 	s.mu.Lock()
 	end := s.endVM
@@ -598,22 +599,29 @@ func (s *spoolSink) EndVMsWithFullSpools(ctx context.Context) {
 		return
 	}
 	for _, r := range runs {
-		if full, err := r.spool.Full(ctx); err != nil || !full {
+		full, err := r.spool.Full(ctx)
+		if err != nil {
+			continue
+		}
+		pending := false
+		if !full {
+			// A pass a restart cut short: the proxy that reconnected reset Full, the VM is still to be ended.
+			if pending, err = r.spool.EndPending(ctx); err != nil || !pending {
+				continue
+			}
+		} else if err := r.spool.SetEndPending(ctx, true); err != nil {
+			// Not durable, so not started: the next pass tries again.
+			s.warnEnd(r, err)
 			continue
 		}
 		isVM, err := end(ctx, r.id)
 		if err != nil {
-			// Retried every tick: log the first failure, then once per endWarnEvery.
-			s.mu.Lock()
-			due := r.endWarned.IsZero() || time.Since(r.endWarned) >= endWarnEvery
-			if due {
-				r.endWarned = time.Now()
-			}
-			s.mu.Unlock()
-			if due {
-				slog.Warn("runnerd: ending a Linux VM whose audit spool is full will retry", slog.String("run_id", r.id.String()), slog.Any("err", err))
-			}
+			s.warnEnd(r, err)
 			continue
+		}
+		if err := r.spool.SetEndPending(ctx, false); err != nil {
+			// The VM is ended; a leftover marker only has the next start end it again.
+			s.warnEnd(r, err)
 		}
 		s.mu.Lock()
 		r.fullHandled = true
@@ -622,6 +630,27 @@ func (s *spoolSink) EndVMsWithFullSpools(ctx context.Context) {
 			slog.Warn("runnerd: a Linux VM's audit spool is full, so its VM was ended", slog.String("run_id", r.id.String()))
 		}
 	}
+}
+
+// warnEnd logs a failure to end a run's VM: the first, then at most one per endWarnEvery (it is retried
+// every tick).
+func (s *spoolSink) warnEnd(r *sinkRun, err error) {
+	s.mu.Lock()
+	due := r.endWarned.IsZero() || time.Since(r.endWarned) >= endWarnEvery
+	if due {
+		r.endWarned = time.Now()
+	}
+	s.mu.Unlock()
+	if due {
+		slog.Warn("runnerd: ending a Linux VM whose audit spool is full will retry", slog.String("run_id", r.id.String()), slog.Any("err", err))
+	}
+}
+
+// fullRuleOn reports whether the full-spool rule is on (the runner offers Linux VM sandboxes).
+func (s *spoolSink) fullRuleOn() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.endVM != nil
 }
 
 // Unregister forgets a settled or retired run.

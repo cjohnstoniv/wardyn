@@ -614,7 +614,9 @@ func (d *dockerSink) listen(ap netip.AddrPort) (uint16, error) {
 // Close closes the sink and every listener it opened, one whose Serve has not started included, so
 // its port is free once Close returns.
 func (d *dockerSink) Close() error {
-	d.joinFullPass()
+	if d.spoolSink.fullRuleOn() {
+		d.joinFullPass()
+	}
 	err := d.spoolSink.Close()
 	d.addrMu.Lock()
 	lns := d.lns
@@ -659,16 +661,23 @@ func (d *dockerSink) proxyURL() string {
 // fullSpoolBound bounds one full-spool pass: ending a VM waits for the guest's power down.
 var fullSpoolBound = 2 * time.Minute
 
-// closeJoinBound is how long Close waits for a running full-spool pass. It sits under the service
-// manager's stop timeout (systemd's 90 s default for the unit, launchd's 20 s ExitTimeOut), which
-// would otherwise kill the runner mid-pass. A pass cut short is not lost: the spool is still full, the
-// run is still unmarked, and the next start's pass ends the VM.
-var closeJoinBound = 10 * time.Second
+// closeJoinBound is how long Close waits for a running full-spool pass before cancelling it, and
+// cancelUnwindBound how long it then waits for the pass to return. Together they sit under the service
+// manager's stop timeout (systemd's 90 s default for the unit, launchd's 20 s ExitTimeOut), which would
+// otherwise kill the runner mid-pass. A pass cut short is not lost: its run's spool records that the
+// VM is being ended (Spool.SetEndPending), and the next start's pass finishes it.
+var (
+	closeJoinBound    = 10 * time.Second
+	cancelUnwindBound = 2 * time.Second
+)
 
 // endFullSpoolVMsInBackground runs the full-spool pass off the containment tick, one at a time. The tick
 // shares its 30 s safety context with CheckLapses, which runs after it, and ending one VM can take
 // that long: the pass gets a budget of its own and never delays a lapse.
 func (d *dockerSink) endFullSpoolVMsInBackground(ctx context.Context) {
+	if !d.spoolSink.fullRuleOn() {
+		return // the Linux VM switch is off: no pass, no goroutine
+	}
 	d.fullMu.Lock()
 	if d.fullClosed || !d.fullBusy.CompareAndSwap(false, true) {
 		d.fullMu.Unlock()
@@ -687,8 +696,9 @@ func (d *dockerSink) endFullSpoolVMsInBackground(ctx context.Context) {
 }
 
 // joinFullPass stops new full-spool passes and waits up to closeJoinBound for a running one, then
-// cancels it, so Close neither returns with a pass still running nor outlasts the service manager's
-// stop timeout.
+// cancels it and waits up to cancelUnwindBound for it to return, so spoolSink.Close does not race a
+// live pass. Only a pass that ignores its cancelled context for cancelUnwindBound outlives it. Close
+// calls it only when the full-spool rule is on.
 func (d *dockerSink) joinFullPass() {
 	d.fullMu.Lock()
 	d.fullClosed = true
@@ -697,12 +707,17 @@ func (d *dockerSink) joinFullPass() {
 	go func() { d.fullPasses.Wait(); close(done) }()
 	select {
 	case <-done:
+		return
 	case <-time.After(closeJoinBound):
-		d.fullMu.Lock()
-		if d.fullCancel != nil {
-			d.fullCancel()
-		}
-		d.fullMu.Unlock()
+	}
+	d.fullMu.Lock()
+	if d.fullCancel != nil {
+		d.fullCancel()
+	}
+	d.fullMu.Unlock()
+	select {
+	case <-done:
+	case <-time.After(cancelUnwindBound):
 	}
 }
 

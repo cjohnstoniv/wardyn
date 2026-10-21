@@ -99,6 +99,8 @@ type fakeDocker struct {
 
 	// inspectFailures is how many more ContainerInspect calls fail outright.
 	inspectFailures int
+	// stopFailures is how many more ContainerStop calls on a container fail with a cancelled context.
+	stopFailures map[string]int
 
 	info system.Info
 	// pingErr is what Ping answers; pingBlock makes it wait for ctx instead.
@@ -881,6 +883,10 @@ func (f *fakeDocker) ContainerLogs(ctx context.Context, id string, opts client.C
 func (f *fakeDocker) ContainerStop(ctx context.Context, id string, _ client.ContainerStopOptions) (client.ContainerStopResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.stopFailures[id] > 0 {
+		f.stopFailures[id]--
+		return client.ContainerStopResult{}, context.Canceled
+	}
 	c := f.containers[id]
 	if c == nil || c.removed {
 		return client.ContainerStopResult{}, fakeNotFound{msg: "no such container: " + id}

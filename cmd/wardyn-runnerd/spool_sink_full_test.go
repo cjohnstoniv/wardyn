@@ -236,3 +236,42 @@ func TestSpoolSinkEndsAVMOnceTheProxyIsRefused(t *testing.T) {
 		t.Fatalf("a spool the proxy was refused by ended %v, want the run once", e.runs)
 	}
 }
+
+// A pass a restart cut short is finished by the next start, whatever the spool says by then: the VM's
+// proxy reconnects, its Accept clears what made the spool full, and only the mark the pass left in the
+// spool says the VM is still to be ended.
+func TestSpoolSinkFinishesAnEndARestartCutShort(t *testing.T) {
+	ctx := t.Context()
+	h := newSinkHarness(t)
+	cut := &endCalls{isVM: true, fails: 1} // the pass is cancelled mid-end
+	h.sink.EndVMsOnFullSpool(cut.end)
+	h.fillSpool(false)
+	h.sink.EndVMsWithFullSpools(ctx)
+	if len(cut.runs) != 1 {
+		t.Fatalf("the cut-short pass made %d end calls, want 1", len(cut.runs))
+	}
+	// The restart: the run is registered again with a fresh in-memory state, and by then the spool
+	// has room (a reconnecting proxy's Accept regrants).
+	h.editManifest(func(m map[string]any) { m["last"] = 0 })
+	hash := h.sink.runs[h.id].keyHash
+	h.sink.Unregister(h.id)
+	if err := h.sink.Register(h.id, hash); err != nil {
+		t.Fatal(err)
+	}
+	if full, err := h.spool().Full(ctx); err != nil || full {
+		t.Fatalf("Full after the restart = %v, %v; the scenario needs a spool with room", full, err)
+	}
+	next := &endCalls{isVM: true}
+	h.sink.EndVMsOnFullSpool(next.end)
+	h.sink.EndVMsWithFullSpools(ctx)
+	if len(next.runs) != 1 || next.runs[0] != h.id {
+		t.Fatalf("after the restart the pass ended %v, want the run once", next.runs)
+	}
+	if pending, err := h.spool().EndPending(ctx); err != nil || pending {
+		t.Fatalf("the mark after the VM was ended = %v, %v; want cleared", pending, err)
+	}
+	h.sink.EndVMsWithFullSpools(ctx)
+	if len(next.runs) != 1 {
+		t.Fatalf("a finished end was run again: %v", next.runs)
+	}
+}

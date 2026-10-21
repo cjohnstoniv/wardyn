@@ -84,6 +84,10 @@ type manifest struct {
 	// RefusedAtGrant is Producer.Refused when the outstanding grant was issued: a refusal counted
 	// past it was made against this grant (Full).
 	RefusedAtGrant uint64 `json:"refused_at_grant,omitempty"`
+	// EndPending is set, durably, before the runner starts ending the run's VM for a full spool and
+	// cleared only once the VM is ended: a restart in between still finishes the end, whatever Full
+	// says by then (a reconnecting proxy's Accept resets it).
+	EndPending bool `json:"end_pending,omitempty"`
 }
 
 // Disposition is the one durable outcome of a producer sequence.
@@ -467,6 +471,32 @@ func (s *Spool) Full(ctx context.Context) (full bool, err error) {
 		return nil
 	})
 	return full, err
+}
+
+// SetEndPending records, durably, that the run's VM is being ended for a full spool (true) or has been
+// (false). A sealed spool takes neither.
+func (s *Spool) SetEndPending(ctx context.Context, pending bool) error {
+	return s.locked(ctx, func() error {
+		m, err := s.readManifest()
+		if err != nil || m.Sealed || m.EndPending == pending {
+			return err
+		}
+		m.EndPending = pending
+		return s.writeManifest(m)
+	})
+}
+
+// EndPending reports whether SetEndPending(true) was recorded and not cleared.
+func (s *Spool) EndPending(ctx context.Context) (pending bool, err error) {
+	err = s.locked(ctx, func() error {
+		m, err := s.readManifest()
+		if err != nil || m.Sealed {
+			return err
+		}
+		pending = m.EndPending
+		return nil
+	})
+	return pending, err
 }
 
 // Refuse durably counts one egress admission refused because capacity is full.

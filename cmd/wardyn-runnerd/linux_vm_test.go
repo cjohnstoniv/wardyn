@@ -7,8 +7,12 @@ package main
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner/docker"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
@@ -103,21 +107,45 @@ func TestFullSpoolPassDoesNotHoldTheTick(t *testing.T) {
 	}
 }
 
-// Close joins a running full-spool pass, so the runner never exits with a goroutine still ending a VM,
-// and gives up on a pass that outlives its own budget. No pass starts once Close has begun.
+// ctxEnds is an end that, like the real one, works until its context ends: it blocks until cancelled,
+// takes a moment to unwind, and records both. release lets a test that never cancels it finish.
+type ctxEnds struct {
+	mu               sync.Mutex
+	sawCancel, wound bool
+	release          chan struct{}
+}
+
+func (c *ctxEnds) end(ctx context.Context, _ uuid.UUID) (bool, error) {
+	select {
+	case <-ctx.Done():
+		c.mu.Lock()
+		c.sawCancel = true
+		c.mu.Unlock()
+		time.Sleep(100 * time.Millisecond) // the guest's power down being abandoned
+		c.mu.Lock()
+		c.wound = true
+		c.mu.Unlock()
+		return false, ctx.Err()
+	case <-c.release:
+		return false, errors.New("released")
+	}
+}
+
+// Close joins a running full-spool pass, then cancels one that outlives closeJoinBound and waits for
+// it to return, so the runner never exits, or closes the sink, with a goroutine still ending a VM. No
+// pass starts once Close has begun.
 func TestDockerSinkCloseJoinsTheFullSpoolPass(t *testing.T) {
-	prev := closeJoinBound
-	closeJoinBound = 300 * time.Millisecond
-	t.Cleanup(func() { closeJoinBound = prev })
-	start := func(t *testing.T) (*dockerSink, *endCalls, func(context.Context)) {
+	prevJoin, prevUnwind := closeJoinBound, cancelUnwindBound
+	closeJoinBound, cancelUnwindBound = 300*time.Millisecond, 2*time.Second
+	t.Cleanup(func() { closeJoinBound, cancelUnwindBound = prevJoin, prevUnwind })
+	start := func(t *testing.T, end func(context.Context, uuid.UUID) (bool, error)) (*dockerSink, func(context.Context)) {
 		h := newSinkHarness(t)
-		e := &endCalls{isVM: true, hold: make(chan struct{})}
-		endVMsOnFullSpool(h.sink, &runnerwire.VMCaps{}, e.end)
+		endVMsOnFullSpool(h.sink, &runnerwire.VMCaps{}, end)
 		h.fillSpool(false)
 		d := &dockerSink{spoolSink: h.sink}
 		tick := d.extras(nil, nil).options.Tick
 		tick(t.Context())
-		return d, e, tick
+		return d, tick
 	}
 	closed := func(d *dockerSink) chan struct{} {
 		done := make(chan struct{})
@@ -125,7 +153,8 @@ func TestDockerSinkCloseJoinsTheFullSpoolPass(t *testing.T) {
 		return done
 	}
 	t.Run("waits for the pass", func(t *testing.T) {
-		d, e, _ := start(t)
+		e := &endCalls{isVM: true, hold: make(chan struct{})}
+		d, _ := start(t, e.end)
 		done := closed(d)
 		select {
 		case <-done:
@@ -144,13 +173,22 @@ func TestDockerSinkCloseJoinsTheFullSpoolPass(t *testing.T) {
 			t.Fatalf("the pass ended %d VMs, want 1", len(e.runs))
 		}
 	})
-	t.Run("gives up at the join bound", func(t *testing.T) {
-		d, e, _ := start(t)
-		t.Cleanup(func() { close(e.hold) })
+	t.Run("cancels a pass that outlives the join bound and waits for it to unwind", func(t *testing.T) {
+		c := &ctxEnds{release: make(chan struct{})}
+		t.Cleanup(func() { close(c.release) })
+		d, _ := start(t, c.end)
 		select {
 		case <-closed(d):
-		case <-time.After(5 * time.Second):
-			t.Fatal("Close waited past the join bound")
+		case <-time.After(10 * time.Second):
+			t.Fatal("Close never returned")
+		}
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if !c.sawCancel {
+			t.Fatal("Close returned and the pass never saw its context cancelled")
+		}
+		if !c.wound {
+			t.Fatal("Close returned before the cancelled pass had returned")
 		}
 	})
 	t.Run("no pass starts once Close has begun", func(t *testing.T) {
@@ -173,4 +211,36 @@ func TestDockerSinkCloseJoinsTheFullSpoolPass(t *testing.T) {
 			t.Fatalf("%d end calls: a pass started after Close, want only the first", len(e.runs))
 		}
 	})
+}
+
+// Without the Linux VM switch the full-spool path does not exist: a tick starts no pass (no goroutine,
+// no budget), and Close neither joins nor cancels anything.
+func TestNoFullSpoolPathWithoutTheLinuxVMSwitch(t *testing.T) {
+	prev := closeJoinBound
+	closeJoinBound = time.Hour // a Close that entered the join would hang here
+	t.Cleanup(func() { closeJoinBound = prev })
+	h := newSinkHarness(t)
+	e := &endCalls{isVM: true}
+	endVMsOnFullSpool(h.sink, nil, e.end) // VMs off
+	h.fillSpool(false)
+	d := &dockerSink{spoolSink: h.sink}
+	d.extras(nil, nil).options.Tick(t.Context())
+	d.fullMu.Lock()
+	started := d.fullCancel != nil
+	d.fullMu.Unlock()
+	if started || d.fullBusy.Load() {
+		t.Fatal("a tick started a full-spool pass on a runner without Linux VM sandboxes")
+	}
+	done := make(chan struct{})
+	go func() { _ = d.Close(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close waited on a full-spool pass on a runner without Linux VM sandboxes")
+	}
+	d.fullMu.Lock()
+	defer d.fullMu.Unlock()
+	if d.fullClosed {
+		t.Fatal("Close entered the full-spool join on a runner without Linux VM sandboxes")
+	}
 }

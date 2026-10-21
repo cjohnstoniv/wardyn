@@ -125,3 +125,33 @@ func TestFullCountsOnlyRefusalsAfterAccept(t *testing.T) {
 		t.Fatalf("Full after a refusal against the new grant = %v, %v; want true", full, err)
 	}
 }
+
+// The mark that a VM is being ended for a full spool survives the spool being closed and opened again,
+// and a sealed spool carries none.
+func TestEndPendingIsDurable(t *testing.T) {
+	ctx := context.Background()
+	s, dir, id := testSpool(t)
+	if p, err := s.EndPending(ctx); err != nil || p {
+		t.Fatalf("a new spool is pending = %v, %v", p, err)
+	}
+	if err := s.SetEndPending(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(dir, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	if p, err := s.EndPending(ctx); err != nil || !p {
+		t.Fatalf("after a reopen pending = %v, %v; want true", p, err)
+	}
+	if err := s.SetEndPending(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := s.EndPending(ctx); err != nil || p {
+		t.Fatalf("after clearing pending = %v, %v; want false", p, err)
+	}
+}
