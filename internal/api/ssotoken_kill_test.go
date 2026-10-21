@@ -352,7 +352,11 @@ func TestKillSignInRunAfterCapture_LaunchMovesInsideTheWindow(t *testing.T) {
 	srv.signInCaptureKillGrace = 0
 
 	srv.killSignInRunAfterCapture(context.Background(), runID, "alice@example.com")
-	<-st.entered
+	select {
+	case <-st.entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the kill never attempted its first swap")
+	}
 	for _, step := range []struct{ from, to types.RunState }{{types.RunPending, types.RunStarting}, {types.RunStarting, types.RunRunning}} {
 		if ok, err := st.killableLoginRunStore.UpdateRunStateIf(context.Background(), runID, step.from, step.to); !ok || err != nil {
 			t.Fatalf("the launch could not move %s->%s inside the window: %v, %v", step.from, step.to, ok, err)

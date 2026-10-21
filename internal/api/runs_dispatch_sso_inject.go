@@ -313,7 +313,7 @@ func awsSSOPinQuery(accountID, roleName string) map[string]string {
 func scopeWithSignedHosts(scope []byte, hosts []string) []byte {
 	var m map[string]any
 	if err := json.Unmarshal(scope, &m); err != nil {
-		// Unreachable: the caller marshalled this scope a moment ago, so withholding signed_hosts here can't narrow a grant.
+		// Unreachable: the caller marshalled this scope a moment ago.
 		return scope
 	}
 	m["signed_hosts"] = hosts
