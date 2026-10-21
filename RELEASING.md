@@ -198,7 +198,7 @@ crash or a usage limit resumes with the same command:
    - `nightly.yml` is dispatched with `-f scope=candidate`, unless a dispatched nightly on the same tree is already queued, running or green.
    - Then the PR into `release/X.Y` titled `release: V` opens, so the nightly starts beside the PR's CI.
    - Last, the local checks: `lane-preflight.sh --candidate` (no Playwright: hosted `ui-e2e` is the e2e gate), `make dco DCO_RANGE="HEAD ^origin/main ^origin/release/X.Y"`, the version tests and [`scripts/test-claims-match-code.sh`](scripts/test-claims-match-code.sh).
-   - A pass is recorded per head commit, in the clone that ran `prepare` (the marker is in that clone's git directory), so `wait` and `publish` refuse the head in any other clone. After a failure, fix it and re-run; `wait` and `publish` refuse a head the checks have not passed on (`DRY_RUN=1` excepted).
+   - A pass is recorded per head, in the clone that ran `prepare`; another clone refuses it. After a failure, fix it and re-run; `wait` and `publish` refuse a head the checks have not passed on (`DRY_RUN=1` excepted).
    - After the merge and again after the release-commit step, duplicate CHANGELOG heading keys (including `Unreleased`, regardless of dates) stop prepare before checks, pushes, PRs or nightly dispatch.
    - This also applies when resuming an already released or pushed candidate.
    - Commit a repair preserving the notes and history, then rerun prepare; no reset, amend or force-push is needed.
