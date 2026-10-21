@@ -16,6 +16,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import App, { FirstRunLanding } from "./App";
 import { roleCanReach } from "./components/wardyn/reauth-layer";
 import { SESSION_ENDED_REASON } from "./lib/api/core";
+import { SESSION_ENDED } from "./lib/session-continuity-copy";
 import { RoleProvider, type Role } from "./components/wardyn/operator-context";
 import { baseStatus } from "./lib/test-fixtures";
 import type { SetupStatus } from "./lib/types";
@@ -187,7 +188,23 @@ describe("App — the sign-in screen's notice", () => {
     vi.stubGlobal("fetch", mockFetch({ probeReason: "expired_session" }).fetch);
     renderApp();
     await screen.findByText("Admin token", { exact: true });
-    expect(await screen.findByText(SESSION_ENDED_REASON)).toBeInTheDocument();
+    expect(await screen.findByText(SESSION_ENDED.EXPIRED)).toBeInTheDocument();
+    expect(screen.queryByText(SESSION_ENDED_REASON)).toBeNull();
+  });
+
+  // M12 (#1995): one sentence per reason the server sends, and a deactivated person is told so
+  // rather than shown the bare gate.
+  it.each([
+    ["expired_session", SESSION_ENDED.EXPIRED],
+    ["revoked_session", SESSION_ENDED.REVOKED],
+    ["role_stamp_stale", SESSION_ENDED.ROLE_STALE],
+    ["invalid_session", SESSION_ENDED.INVALID],
+    ["identity_deactivated", SESSION_ENDED.DEACTIVATED],
+  ])("a cold-mount 401 with reason %s names that reason", async (reason, sentence) => {
+    vi.stubGlobal("fetch", mockFetch({ probeReason: reason }).fetch);
+    renderApp();
+    await screen.findByText("Admin token", { exact: true });
+    expect(await screen.findByText(sentence)).toBeInTheDocument();
   });
 
   // #483: a stored token refused on load is a session this browser held — the

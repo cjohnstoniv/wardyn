@@ -7,6 +7,7 @@
 // gate. The sidebar/mobile-nav describes stay there; the TopBar-focused
 // describes and the drive-bits describe that only need renderMobileNav for a
 // supporting assertion live here.
+import type { ComponentProps } from "react";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -21,6 +22,7 @@ import { registerUnsaved } from "../../lib/unsaved-registry";
 import { UnsavedGuardProvider } from "../../lib/use-unsaved-guard";
 import { UNSAVED } from "../../lib/unsaved-copy";
 import { TIER } from "../wardyn/copy/tier";
+import { SESSION_MENU, signedInUntil } from "../../lib/session-continuity-copy";
 
 // below md the desktop aside is hidden, so this Sheet-based hamburger is
 // the ONLY navigation. These pins fail if the drawer stops opening, drops nav
@@ -77,7 +79,7 @@ function renderMobileNav(role: Role = "admin", memberMode = false) {
 // dirty (every existing assertion below is unaffected), and what the
 // account-menu guard test just past this function needs to see the real
 // confirm dialog instead of the context's no-provider fallback.
-function renderTopBar(role: Role, tier?: "local-only" | "runner" | "org") {
+function renderTopBar(role: Role, tier?: "local-only" | "runner" | "org", over: Partial<ComponentProps<typeof TopBar>["meta"]> = {}) {
   return render(
     <MemoryRouter>
       <UnsavedGuardProvider>
@@ -113,6 +115,7 @@ function renderTopBar(role: Role, tier?: "local-only" | "runner" | "org") {
               runner: "",
               networkPolicy: "",
               sso: false,
+              ...over,
             }}
             pendingApprovals={0}
             attentionCount={0}
@@ -236,7 +239,40 @@ describe("TopBar — the switch, New run and the slimmed avatar menu (M-2)", () 
     renderTopBar(role);
     await user.click(screen.getAllByRole("button").at(-1)!);
     const items = within(screen.getByRole("menu")).getAllByRole("menuitem");
-    expect(items.map((i) => i.textContent?.trim())).toEqual(["Sign out"]);
+    expect(items).toHaveLength(1);
+    expect(items[0].textContent).toContain("Sign out");
+  });
+
+  // M12 (#1995): the menu says until when this session lasts, and what Sign out ends.
+  describe("the session lines", () => {
+    const open = async () => {
+      const user = userEvent.setup();
+      await user.click(screen.getAllByRole("button").at(-1)!);
+      return within(screen.getByRole("menu"));
+    };
+
+    it("shows Signed in until, from /me, and what Sign out ends", async () => {
+      const at = new Date();
+      at.setHours(18, 40, 0, 0);
+      renderTopBar("user", undefined, { sessionExpiresAt: at });
+      const menu = await open();
+      expect(menu.getByTestId("signed-in-until")).toHaveTextContent(signedInUntil(at));
+      expect(menu.getByText(SESSION_MENU.SIGN_OUT_HINT)).toBeInTheDocument();
+    });
+
+    it("neg: no expiry from /me means no Signed in until line", async () => {
+      renderTopBar("user");
+      const menu = await open();
+      expect(menu.queryByTestId("signed-in-until")).toBeNull();
+      expect(menu.getByText(SESSION_MENU.SIGN_OUT_HINT)).toBeInTheDocument();
+    });
+
+    it("neg: local mode shows neither line", async () => {
+      renderTopBar("user", undefined, { method: "local", sessionExpiresAt: new Date(Date.now() + 3600_000) });
+      const menu = await open();
+      expect(menu.queryByTestId("signed-in-until")).toBeNull();
+      expect(menu.queryByText(SESSION_MENU.SIGN_OUT_HINT)).toBeNull();
+    });
   });
 
   it("an SSO admin in the Admin view: the switch, Admin view pressed, no New run", () => {

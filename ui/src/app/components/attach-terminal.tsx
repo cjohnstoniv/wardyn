@@ -44,6 +44,7 @@ import type { AttachHolder } from "../lib/types/runs";
 import type { PolicyRef } from "../lib/api/health";
 import { PolicyRemedy } from "./wardyn/policy-remedy";
 import { WHY_CARD } from "../lib/why-card-copy";
+import { TERMINAL_SESSION } from "../lib/session-continuity-copy";
 import { getErrorMessage } from "../lib/format";
 import { Eye, Loader2, TriangleAlert, Maximize2, Minimize2, RotateCw } from "lucide-react";
 import { cn } from "./ui/utils";
@@ -640,6 +641,13 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
           maxAttempts={MAX_RECONNECT_ATTEMPTS}
           onReconnect={() => manualReconnectRef.current()}
         />
+      )}
+
+      {/* M12: signed out mid-page, the dialog or the read-only bar is up and the terminal has no socket. */}
+      {signedOut && (
+        <p role="status" className="border-t border-border bg-card/60 px-3 py-2.5 text-xs text-muted-foreground">
+          {TERMINAL_SESSION.SIGNED_OUT_NOTE}
+        </p>
       )}
 
       {copyNotice && <CopyBlockedNotice onDismiss={() => setCopyNotice(null)} />}

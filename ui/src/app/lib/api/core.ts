@@ -625,7 +625,7 @@ export type AuthProbe = "authed" | "unauthed" | "unreachable";
 
 // The 401 reasons (internal/api/auth_status.go) that mean a session this browser held has ended; the
 // cold load says so (App.tsx) instead of showing a bare sign-in screen.
-const SESSION_ENDED_REASONS = new Set(["expired_session", "revoked_session", "role_stamp_stale", "invalid_session"]);
+const SESSION_ENDED_REASONS = new Set(["expired_session", "revoked_session", "role_stamp_stale", "invalid_session", "identity_deactivated"]);
 export const isSessionEnded = (reason: string): boolean => SESSION_ENDED_REASONS.has(reason);
 
 // Probe auth by hitting a protected endpoint. It needs only a yes/no on the
