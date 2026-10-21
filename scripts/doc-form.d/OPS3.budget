@@ -124,7 +124,9 @@ docs/operations/api-tokens.md=5948 share=35
 # docs/operations/denials.md 5304 adds 113 (0.10 LAY-C, #2951): the refusal `layer` and the run policy `provenance`.
 # docs/operations/denials.md 5318 adds 14 (0.10 LAY-C r2): the authz.denied layer keys and the operator cap naming the deployment.
 # 0.10: docs/operations/denials.md 5200 adds 9, measured: user_view_preview names the security admin case.
-docs/operations/denials.md=5327 share=35
+# docs/operations/denials.md 5473 adds 146 over 5327, measured (0.10 WHY-EGRESS): the egress refusal bullet and its reason tokens.
+# docs/operations/denials.md 5488 adds 15 over 5473, measured (0.10 WHY-EGRESS): layer rides a policy-decided refusal only.
+docs/operations/denials.md=5488 share=35
 # Round 1: docs/operations/who-gets-in.md measured 1453 after the split banner and heading cleanup.
 # Round 1: docs/operations/admin-only-writes.md measured 2869 after the split banner and heading cleanup.
 # Round 1: docs/operations/three-roles.md measured 4012 after the split banner and heading cleanup.

@@ -319,3 +319,23 @@ func TestPG_RunnerSpoolScanPairCommitsAtomically(t *testing.T) {
 		t.Fatalf("bypass fabricated egress: %d %d", bypass, allows)
 	}
 }
+
+// A spooled deny carries its refusal onto the audit row exactly as the live door writes it.
+func TestPG_RunnerSpoolDenyCarriesTheRefusal(t *testing.T) {
+	pool, st, rn, run, row := spoolPGFixture(t)
+	ctx := context.Background()
+	row.Decision.Decision = egress.Deny
+	row.Decision.RuleSource = "builtin:dial-failed"
+	row.Decision.Refusal = &egress.Refusal{By: egress.RefusedByOutside, Reason: "connection_reset"}
+	row = rehashSpoolRow(t, row)
+	if _, err := st.IngestRunnerDecision(ctx, rn.ID, row, prepareSpoolTest); err != nil {
+		t.Fatal(err)
+	}
+	var by, reason string
+	if err := pool.QueryRow(ctx, `SELECT data->>'by', data->>'refusal_reason' FROM audit_events WHERE run_id=$1 AND action='egress.deny'`, run.ID).Scan(&by, &reason); err != nil {
+		t.Fatal(err)
+	}
+	if by != "outside" || reason != "connection_reset" {
+		t.Fatalf("spooled deny data by=%q refusal_reason=%q", by, reason)
+	}
+}

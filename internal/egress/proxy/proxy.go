@@ -410,6 +410,12 @@ func newProxy(opts Options) *Proxy {
 		now:                  now,
 		viaOrgRoutes:         opts.ViaOrgRoutes,
 	}
+	if l := policyref.Layered(opts.Attribution); p.sink != nil && l != nil && l.Layer != "" {
+		p.sink.layer = l.Layer
+		if l.Layer == policyref.LayerProfile {
+			p.sink.layerName = l.Name
+		}
+	}
 	// directDial dials the vetted IP carried on the request context and never
 	// re-resolves — the ORIGINAL behavior, and the ONLY behavior of the
 	// control-plane transport (which must never traverse the corp proxy).
