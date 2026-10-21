@@ -22,13 +22,12 @@
 import * as React from "react";
 import { Info, Loader2, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
-import { HttpError, PendingChangeError } from "../../lib/api/core";
+import { HttpError, LIST_LIMIT, PendingChangeError } from "../../lib/api/core";
 import { permissions as api } from "../../lib/api/permissions";
 import { runs as runsApi } from "../../lib/api/runs";
 import { absoluteTime, getErrorMessage, relativeTime } from "../../lib/format";
 import { CAPABILITY_KINDS, KIND, PERM, PERM_EXTRA, type CapabilityKind } from "../../lib/permissions-copy";
 import type {
-  AgentRun,
   CapabilityEffect,
   CapabilityGrant,
   CapabilitySubjectType,
@@ -837,16 +836,19 @@ export function AddGrantForm({
 // instead of deriving it.
 // `null` is UNKNOWN, not zero: listRuns() can be refused (403) or fail, and a
 // dialog that then reads "0 members are bounded" states the opposite of the
-// lockout risk it exists to communicate.
+// lockout risk it exists to communicate. It is also unknown when the server
+// cut the runs page short (X-Wardyn-Truncated): the creators in the newest
+// page are then only some of the members, and a number would under-count them.
 function useAffectedMemberCount(): number | null {
   const principal = usePrincipal();
   const [count, setCount] = React.useState<number | null>(null);
   React.useEffect(() => {
     let live = true;
     runsApi
-      .listRuns()
-      .then((rs: AgentRun[]) => {
+      .listRuns({ limit: LIST_LIMIT, offset: 0 })
+      .then(({ runs: rs, truncated }) => {
         if (!live) return;
+        if (truncated) return setCount(null);
         const people = new Set(
           rs
             .map((r) => r.created_by)
