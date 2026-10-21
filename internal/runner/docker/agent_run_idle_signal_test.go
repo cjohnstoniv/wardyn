@@ -68,7 +68,7 @@ func TestAgentRunIdle_ExitsOnSignal(t *testing.T) {
 
 // runIdleAndSignal starts the real agent-run --idle script as its own process
 // group leader, waits for it to reach the hold-open point (prepDone written —
-// same signal ccRunIdle/runIdle/cxRunIdle wait for, until this boot's prep-done, in the
+// same signal ccRunIdle/runIdle/cxRunIdle wait for in the
 // sibling boot-ordering tests) and then for the idle loop's `sleep` child,
 // sends sig to the LEADER ONLY (matching docker stop / the kubelet), and
 // returns the exit code.
