@@ -196,7 +196,7 @@ func TestSecurityAdminCannotWidenDriveWritability(t *testing.T) {
 
 // TestSecurityAdminDrivePreviewOmitsTheHostPath: a host_path object name is a
 // path under the drive's host_root, which the security tier is not shown
-// (GET /drives stays super-only for that reason). The home name and every other
+// (GET /drives withholds host_root from it for that reason). The home name and every other
 // field stay; a super admin's answer and a Wardyn-named object are unchanged.
 func TestSecurityAdminDrivePreviewOmitsTheHostPath(t *testing.T) {
 	preview := func(t *testing.T, srv *Server, ctx context.Context) userDrivePreviewResponse {
@@ -418,5 +418,99 @@ func TestSecurityAdminReadsDrivesWithoutTheHost(t *testing.T) {
 	// The blanking copies: the stored row still names its host.
 	if st.drives[d.ID].HostRoot != "/srv/homes" {
 		t.Errorf("stored host_root = %q, want it untouched", st.drives[d.ID].HostRoot)
+	}
+}
+
+// driveReadStore is the authz matrix store with the two drive reads populated,
+// so GET /drives has rows to project.
+type driveReadStore struct {
+	*authzStore
+	drives []types.UserDriveListItem
+	grants []types.UserDriveGrant
+}
+
+func (s *driveReadStore) ListUserDrives(context.Context) ([]types.UserDriveListItem, error) {
+	return s.drives, nil
+}
+
+func (s *driveReadStore) ListUserDriveGrants(context.Context) ([]types.UserDriveGrant, error) {
+	return s.grants, nil
+}
+
+// TestGetDrivesTierThroughTheRouter pins GET /drives on the real router: a
+// security admin is admitted (200) and gets the allow-listed body, a super
+// admin gets the host fields, a member is refused (403) and an anonymous caller
+// is not admitted (401).
+func TestGetDrivesTierThroughTheRouter(t *testing.T) {
+	d := *driveFixture(func(d *types.UserDrive) {
+		d.Backend, d.HostRoot, d.StorageClass, d.CreatedBy = types.DriveBackendHostPath, "/srv/homes", "fast-ssd", "root@corp.example"
+	})
+	g := *grantFixture(d.ID, func(g *types.UserDriveGrant) { g.HomeOverride, g.CreatedBy = "pinned-home", "root@corp.example" })
+	srv, _, _, _ := newAuthzMatrixServer(t, func(c *Config) {
+		c.RunnerTarget = "docker"
+		c.Store = &driveReadStore{
+			authzStore: c.Store.(*authzStore),
+			drives:     []types.UserDriveListItem{{UserDrive: d, GrantCount: 1}},
+			grants:     []types.UserDriveGrant{g},
+		}
+	})
+	sec := ssoSession(t, secAdminSub, secAdminMail, oidc.RoleSecurityAdmin)
+	super := ssoSession(t, "sub-super-drives", "super-drives@corp.example", oidc.RoleAdmin)
+	member := ssoSession(t, "sub-member-drives", "member-drives@corp.example", oidc.RoleUser)
+
+	w := doSSO(t, srv, http.MethodGet, "/api/v1/drives", sec, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("security admin GET /drives = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	for _, leak := range []string{"host_root\"", "/srv/homes", "storage_class", "fast-ssd", `"runner_target":"docker"`} {
+		if strings.Contains(w.Body.String(), leak) {
+			t.Errorf("security admin body contains %q: %s", leak, w.Body.String())
+		}
+	}
+	var body struct {
+		Drives []types.UserDriveListItem `json:"drives"`
+		Grants []types.UserDriveGrant    `json:"grants"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Drives) != 1 || body.Drives[0].Name != d.Name || body.Drives[0].GrantCount != 1 || len(body.Grants) != 1 || body.Grants[0].Subject != g.Subject {
+		t.Errorf("security admin body = %s, want the drive and its allocation", w.Body.String())
+	}
+
+	if w := doSSO(t, srv, http.MethodGet, "/api/v1/drives", super, ""); w.Code != http.StatusOK ||
+		!strings.Contains(w.Body.String(), "/srv/homes") || !strings.Contains(w.Body.String(), `"runner_target":"docker"`) {
+		t.Errorf("super admin GET /drives = %d %s, want 200 with the host fields", w.Code, w.Body.String())
+	}
+	if w := doSSO(t, srv, http.MethodGet, "/api/v1/drives", member, ""); w.Code != http.StatusForbidden {
+		t.Errorf("member GET /drives = %d, want 403; body=%s", w.Code, w.Body.String())
+	}
+	if w := doSSO(t, srv, http.MethodGet, "/api/v1/drives", nil, ""); w.Code != http.StatusUnauthorized {
+		t.Errorf("anonymous GET /drives = %d, want 401; body=%s", w.Code, w.Body.String())
+	}
+}
+
+// TestSecurityAdminPreviewRefusalNamesNoHostPath: a preview a security admin
+// runs against a host_path drive whose person directory is missing is refused
+// with the member sentence, and no part of the refusal names the share's host
+// path.
+func TestSecurityAdminPreviewRefusalNamesNoHostPath(t *testing.T) {
+	d := driveFixture(func(d *types.UserDrive) {
+		d.Name, d.Backend, d.HomeTemplate = "Corp NAS", types.DriveBackendHostPath, types.HomeTemplateEmailLocal
+	})
+	st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
+	srv := drivePreviewShareServer(t, st) // no home directory exists on the share
+	body, _ := json.Marshal(governancePreviewRequest{UserSubjects: []string{"sub-abc", "alice@corp.example"}})
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/drives/preview", strings.NewReader(string(body))).WithContext(driveSecurityAdminCtx())
+	w := httptest.NewRecorder()
+	srv.handlePreviewUserDrive(w, r)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("preview of a missing home = %d, want 422; body=%s", w.Code, w.Body.String())
+	}
+	if d.HostRoot == "" {
+		t.Fatal("fixture has no host root to look for")
+	}
+	if strings.Contains(w.Body.String(), d.HostRoot) {
+		t.Errorf("refusal names the host path %q: %s", d.HostRoot, w.Body.String())
 	}
 }

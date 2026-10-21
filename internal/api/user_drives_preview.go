@@ -267,7 +267,7 @@ func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) 
 		homeSubject = ""
 	}
 	// A host_path object name is a path under the drive's host_root, which only
-	// a super admin is shown (GET /drives stays operatorOnly for that reason);
+	// a super admin is shown (GET /drives withholds it from a security admin for that reason);
 	// this route is also on the security tier, so it answers that tier without it.
 	objectName := resolved.ObjectName
 	if !types.DriveObjectNamedByWardyn(resolved.Drive.Backend) && !s.isOperator(r.Context()) {

@@ -82,17 +82,6 @@ func (s *Server) mountUserDriveRoutes(operatorOnly, securityOps chi.Router) {
 	securityOps.Post("/drives/preview", s.handlePreviewUserDrive)
 }
 
-// withholdDriveHostFields returns the drives with host_root and storage_class
-// blank, leaving the caller's slice untouched.
-func withholdDriveHostFields(in []types.UserDriveListItem) []types.UserDriveListItem {
-	out := make([]types.UserDriveListItem, len(in))
-	for i, d := range in {
-		d.HostRoot, d.StorageClass = "", ""
-		out[i] = d
-	}
-	return out
-}
-
 // GET /drives
 
 // userDrivesResponse is GET /drives's body: the whole Drives screen in ONE
@@ -152,7 +141,8 @@ type userDrivesResponse struct {
 }
 
 // handleGetUserDrives returns the whole drives picture: every drive, and a
-// BOUNDED page of the allocations. operatorOnly (routes.go).
+// BOUNDED page of the allocations. securityOps (routes.go), with host fields
+// withheld from a caller who is not a super admin.
 //
 // The two reads have different costs and only one needed fixing. ListUserDrives
 // is an index-only scan over user_drive_grants_drive_id_idx and stays whole —
@@ -195,12 +185,6 @@ func (s *Server) handleGetUserDrives(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	drives = adminDrivesOnly(drives)
-	// A security admin reads the list but never the host: "never the host" is the
-	// line between the two admin tiers, so the two fields that name it are blank
-	// for any caller who is not a super admin.
-	if !s.isOperator(r.Context()) {
-		drives = withholdDriveHostFields(drives)
-	}
 	total := 0
 	for _, d := range drives {
 		total += d.GrantCount
@@ -231,14 +215,21 @@ func (s *Server) handleGetUserDrives(w http.ResponseWriter, r *http.Request) {
 	if truncated {
 		w.Header().Set("X-Wardyn-Truncated", "true")
 	}
-	writeJSON(w, http.StatusOK, userDrivesResponse{
+	resp := userDrivesResponse{
 		Drives:              drives,
 		Grants:              grants,
 		HostRootsConfigured: s.userDriveHostRootsUsableWithin(r.Context()),
 		RunnerTarget:        s.cfg.RunnerTarget,
 		Disabled:            provider.Disabled,
 		GrantTotal:          total,
-	})
+	}
+	// "Never the host" is the line between the two admin tiers: anyone but a
+	// super admin gets the allow-listed projection, built by name into fresh
+	// values (user_drives_security_view.go).
+	if !s.isOperator(r.Context()) {
+		resp = securityAdminDrivesView(resp)
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // the org switch and the deployment's drive ceiling
