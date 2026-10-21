@@ -515,6 +515,11 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			Attribution: s.runAttribution(ctx, run, siteCfg, p.PolicyOverridden),
 			// WARDYN_EGRESS_PORT_RULE, "" when off: an older proxy refuses the key.
 			PortRule: s.cfg.EgressPortRule,
+			// A desktop VM run's proxy has wardyn-vmnet as its only client and
+			// keeps the port rule on whatever PortRule says (proxy.Config.VM).
+			// False, so no key is written, for a container run: an older proxy
+			// refuses the key, and a VM run reaches only a runner that offers VMs.
+			VM: run.MachineKind.IsVM(),
 			// The person's sign-in listener; false, so no key is written,
 			// unless `signins` above.
 			DesktopSignins: signins,
