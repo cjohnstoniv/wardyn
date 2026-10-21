@@ -313,6 +313,7 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		LocalModels:          cfg.LocalModels,
 		Unattended:           cfg.Unattended,
 		ScrubResponses:       cfg.ScrubResponses,
+		CanonicalPushRepos:   cfg.CanonicalPushRepos,
 		Attribution:          cfg.Attribution,
 		LocalSubnets:         localSubnets,
 		ControlPlaneIPs:      cpIPs,

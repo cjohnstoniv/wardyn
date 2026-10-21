@@ -313,7 +313,7 @@ const (
 
 	// PUT/POST /governance/{profiles,assignments} and the preview routes.
 	reasonGovernanceUnitRequestInvalid = "governance_unit_request_invalid" // the profile body did not decode
-	reasonGovernanceCeilingInvalid     = "governance_ceiling_invalid"      // the ceiling names a grant outside the deployment's own EligibleGrants
+	reasonGovernanceCeilingInvalid     = "governance_ceiling_invalid"      // the ceiling names a grant outside the deployment's own EligibleGrants, or one pairing twice
 	reasonGovernanceUnitNameConflict   = "governance_unit_name_conflict"   // a profile by that name already exists
 	reasonGovernanceUnitInUse          = "governance_unit_in_use"          // the profile is still assigned; delete its assignments first
 	reasonGovernanceMembershipInvalid  = "governance_membership_invalid"   // the assignment fails validation

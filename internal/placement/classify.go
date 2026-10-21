@@ -180,6 +180,7 @@ var Table = []Entry{
 	{Struct: StructProxyConfig, Field: "LLMUnavailableDetail", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "Unattended", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "ScrubResponses", Class: ClassExempt, Rule: RuleExempt},
+	{Struct: StructProxyConfig, Field: "CanonicalPushRepos", Class: ClassExempt, Rule: RuleExempt, Variant: "the operator's held-push key spelling; it names an approval, no credential"},
 	{Struct: StructProxyConfig, Field: "Attribution", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "VM", Class: ClassExempt, Rule: RuleExempt, Variant: "a desktop VM run's flag: it turns the port rule on and the relay's refusal route; no credential"},
 	{Struct: StructProxyConfig, Field: "PortRule", Class: ClassExempt, Rule: RuleExempt, Variant: "the operator's egress port rule; it only narrows egress, no credential"},

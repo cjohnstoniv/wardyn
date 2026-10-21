@@ -1140,6 +1140,7 @@ So an entry a pattern matches is judged one of two ways:
   - the first ten matched paths, sorted, and how many matched in all; the object ids the push sets its refs to, sorted;
   - each ref paired with the object id it is set to (`updates`, sorted by ref, all zeros for a delete); and a SHA-256 over **every** matched path, sorted and NUL-terminated.
   - The scope is the dedup key — two identical pushes are one request.
+  - With `WARDYN_PUSH_HOLD_CANONICAL_REPOS` on (off by default), a `git_pat` push to github.com names its repository lowercased and without `.git`, so `Owner/Repo.git` and `owner/repo` are one request; other forges keep the path git sent.
   - Commits are content addresses, so a retry git repacks carries the same commits in different bytes and is let through on the approval already given.
   - The key is the whole scope: the same commits pushed
     - to another repository or branch, or
