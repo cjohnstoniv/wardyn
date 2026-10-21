@@ -59,6 +59,18 @@ var (
 		"UserDrive.StorageClass":    true,
 		"UserDrive.OwnerSubject":    true,
 		"UserDrive.DeleteStartedAt": true,
+
+		// Fields added after the projection was written: securityAdminDrive copies none of them, so a
+		// security admin's read goes without them. Copying one is a decision, made in both places.
+		"UserDriveListItem.SingleHost":        true,
+		"UserDriveListItem.PlacementEligible": true,
+		"UserDriveListItem.MountsFrom":        true,
+		"UserDrive.Team":                      true,
+		"UserDrive.KeptFromRun":               true,
+		"UserDrive.AltBackend":                true,
+		"UserDrive.AltHostRoot":               true,
+		"UserDrive.AltRunnerID":               true,
+		"UserDriveGrant.MembersCanWrite":      true,
 	}
 )
 
