@@ -30,6 +30,10 @@ export interface MeDrive {
   unavailable_reason?: MeDriveUnavailableReason;
   /** The caller created it; only an owned drive takes DELETE /me/drives/{id}. */
   owned: boolean;
+  /** One folder shared by the groups it is allocated to; false while team drives are off. */
+  team: boolean;
+  /** On a team drive, the caller's own groups that carry its allocation. */
+  shared_with?: string[];
   /** The run whose work folder this drive kept (keep_work_folder); absent on a drive made by hand. */
   kept_from_run?: string;
   /** That run's title when the catalogue was read; absent when the run is gone or untitled. */

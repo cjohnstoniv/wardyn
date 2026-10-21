@@ -285,7 +285,7 @@ func enumCheckDefs(ctx context.Context, pool *pgxpool.Pool, table, column string
 		WHERE con.contype = 'c' AND rel.relname = $1 AND a.attname = $2
 		  AND n.nspname = ANY (current_schemas(false))
 		  -- A named cross-column pairing is not the column's enum.
-		  AND con.conname <> 'user_drives_member_managed'
+		  AND con.conname NOT IN ('user_drives_member_managed', 'user_drives_team_shape')
 		  AND NOT (con.conname = ANY ($3::text[]))`, table, column, cliPairingChecks)
 	if err != nil {
 		return nil, err

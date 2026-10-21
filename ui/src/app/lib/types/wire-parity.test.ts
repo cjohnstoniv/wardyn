@@ -530,6 +530,24 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(tsInterfaceTopKeys(ts, "CreateRunInput")).toContain("keep_work_folder");
   });
 
+  // Team drives (#1988): each key the console sends or reads is a json tag of the Go struct it
+  // mirrors, and the TS mirror names it.
+  it.each([
+    ["internal/types/user_drive.go", "UserDrive", "team", "api/drives.ts", "UserDrive"],
+    ["internal/types/user_drive.go", "UserDriveGrant", "members_can_write", "api/drives.ts", "UserDriveGrant"],
+    ["internal/types/user_drive.go", "UserDriveListItem", "single_host", "api/drives.ts", "UserDriveListItem"],
+    ["internal/types/workspace_provider.go", "UserDriveProvider", "team_drives", "types/site.ts", "UserDriveProvider"],
+    ["pkg/client/families.go", "DriveRequest", "team", "api/drives.ts", "UserDriveInput"],
+    ["pkg/client/families.go", "DriveGrantRequest", "members_can_write", "api/drives.ts", "UserDriveGrantInput"],
+    ["pkg/client/me_drives.go", "MeDrive", "team", "api/me-drives.ts", "MeDrive"],
+    ["pkg/client/me_drives.go", "MeDrive", "shared_with", "api/me-drives.ts", "MeDrive"],
+  ])("team drives: %s %s.%s is mirrored by %s %s", (goFile, goName, key, tsFile, tsName) => {
+    const goTags = goJSONTags(readFileSync(join(root, goFile), "utf8"), goName);
+    expect(goTags, `${goName} has no ${key} tag`).toContain(key);
+    const ts = readFileSync(join(root, "ui/src/app/lib", tsFile), "utf8");
+    expect(tsInterfaceTopKeys(ts, tsName)).toContain(key);
+  });
+
   // The run-mode contract (pkg/client/runs_mode.go).
   it.each([
     ["RunWorkload", "RunWorkload"],

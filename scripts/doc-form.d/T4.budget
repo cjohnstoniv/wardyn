@@ -57,6 +57,7 @@
 # threatmodel/THREAT-MODEL.md 65158 adds 23 over 65135, measured: the derived AWS role credentials row names the re-signing switch and its old-path exception.
 # threatmodel/THREAT-MODEL.md 65198 adds 40 over 65158, measured: the derived AWS role credentials row says a re-signed lane's proxy holds and mask-registers them, and an old-path lane is as before.
 # threatmodel/THREAT-MODEL.md 65598 = ours 65489 + theirs 65198 - base 65089 at the 0.10 W3 merge of SEC-1c onto the train.
+# threatmodel/THREAT-MODEL.md 65525 adds 436 over 65089, measured: §4.6 Team drives: one folder a group shares, what bounds it and what it does not close (0.10 FEAT-2TEAM).
 # 0.10: threatmodel/THREAT-MODEL.md 65376 adds 287, measured: the local attach crossing row and residual #94 (ATT-SRV).
 # threatmodel/THREAT-MODEL.md 65885 = ours 65598 + theirs 65376 - base 65089 at the 0.10 W4a merge of ATT-SRV onto the train.
 # threatmodel/THREAT-MODEL.md 65126 adds 37 over 65089 (0.10 ATT-SETUP-NET), measured: the org-only CA crossing row in B12.
@@ -74,6 +75,7 @@
 # threatmodel/THREAT-MODEL.md 65846 adds 55 over 65791, measured: the git broker-off exception and the harness-project-files bullet in §4.6 keep_work_folder (#1991 review round 2).
 # threatmodel/THREAT-MODEL.md 65860 adds 14 over 65846, measured (FEAT-2KEEP review): turning keep off stops new keeps only, an already-kept drive comes back until emptied or deleted.
 # threatmodel/THREAT-MODEL.md 67053 = ours 66791 + theirs 65860 - base 65598 at the 0.10 W4d merge of FEAT-2KEEP-UI onto the train.
-threatmodel/THREAT-MODEL.md=67053 share=20
+# threatmodel/THREAT-MODEL.md 67489 = ours 67053 + theirs 66966 - base 66530 at the 0.10 W4d merge of FEAT-2TEAM-UI onto the train.
+threatmodel/THREAT-MODEL.md=67489 share=20
 # threatmodel/THREAT-MODEL.md 63171 adds 78 over 63093, measured: the console session under the role-stamp residual: renewal up to its cap, never moving the sign-in time, and the copied-cookie bound (0.9.3 console session lifetime).
 # threatmodel/THREAT-MODEL.md 63025 = 62948 + 77, measured: the laptop decision-sink crossing row and #77's sink and loss-row bullets.

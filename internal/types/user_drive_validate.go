@@ -101,6 +101,33 @@ func ValidateUserDrive(d *UserDrive, runnerTarget string) error {
 	if !d.Reclaim.Valid() {
 		return fmt.Errorf("reclaim: invalid %q", d.Reclaim)
 	}
+	if d.Team && d.Backend == DriveBackendK8sPVC {
+		return fmt.Errorf("team: a %s claim mounts in one pod at a time, so a group cannot share it — use %s or %s",
+			DriveBackendK8sPVC, DriveBackendK8sPVCStatic, DriveBackendHostPath)
+	}
+	return nil
+}
+
+// ValidateTeamDriveGrant is the allocation rule a drive's team flag adds: a team
+// drive is allocated to groups only and never pins a directory, and
+// members_can_write belongs to a team drive's allocation alone. nil when g may
+// be stored for d.
+func ValidateTeamDriveGrant(d UserDrive, g UserDriveGrant) error {
+	if !d.Team {
+		if g.MembersCanWrite {
+			return fmt.Errorf("members_can_write: only a team drive's allocation carries it")
+		}
+		return nil
+	}
+	if g.SubjectType != CapabilitySubjectGroup {
+		return fmt.Errorf("subject_type: a team drive is allocated to groups only, not %q", g.SubjectType)
+	}
+	if strings.TrimSpace(g.HomeOverride) != "" {
+		return fmt.Errorf("home_override: a team drive has one folder for the whole group")
+	}
+	if g.MembersCanWrite && !d.Writable {
+		return fmt.Errorf("members_can_write: the drive is read-only, so an allocation cannot make it writable")
+	}
 	return nil
 }
 

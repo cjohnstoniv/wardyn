@@ -219,6 +219,8 @@
 # docs/AUDIT-ACTIONS.md 49718 = ours 49670 + theirs 49419 - base 49371 at the 0.10 W3 merge of HYBB onto the train.
 # docs/AUDIT-ACTIONS.md 49557 = ours 49373 + theirs 49371 - base 49187 at the 0.10 merge of main (W2) into SEC-1c.
 # docs/AUDIT-ACTIONS.md 49904 = ours 49718 + theirs 49557 - base 49371 at the 0.10 W3 merge of SEC-1c onto the train.
+# docs/AUDIT-ACTIONS.md 49394 adds 23 over 49371, measured: team drives: run.drive.mount mounted_by/team, drive.write team, drive.grant.write members_can_write (0.10 FEAT-2TEAM).
+# docs/AUDIT-ACTIONS.md 49927 = ours 49904 + theirs 49394 - base 49371 at the merge of the team-drive backend into FEAT-2TEAM-UI.
 # docs/AUDIT-ACTIONS.md 49445 = ours 49261 + theirs 49371 - base 49187 at the ATT-SRV merge of main (W2 train).
 # docs/AUDIT-ACTIONS.md 49978 = ours 49904 + theirs 49445 - base 49371 at the 0.10 W4a merge of ATT-SRV onto the train.
 # 0.10 ATT-LOGIN-SRV: docs/AUDIT-ACTIONS.md 49814 adds 443 over 49371: the seven cli.* rows and the token.create/session.revoke fields, measured.
@@ -241,7 +243,9 @@
 # docs/AUDIT-ACTIONS.md 50891 = ours 50852 + theirs 50595 - base 50556 at the 0.10 W4d merge of MULTI-DOC onto the train.
 # docs/AUDIT-ACTIONS.md 49973 adds 69 over 49904, measured: #1991 keep_work_folder: the drive.member.create kept-folder sentence (round 1) and run.create's keep_work_folder and kept_drive_id (round 2).
 # docs/AUDIT-ACTIONS.md 50960 = ours 50891 + theirs 49973 - base 49904 at the 0.10 W4d merge of FEAT-2KEEP-UI onto the train.
-docs/AUDIT-ACTIONS.md=50960 share=8
+# docs/AUDIT-ACTIONS.md 50579 = ours 49927 + theirs 50556 - base 49904 at the merge of main into FEAT-2TEAM-UI.
+# docs/AUDIT-ACTIONS.md 50983 = ours 50960 + theirs 50579 - base 50556 at the 0.10 W4d merge of FEAT-2TEAM-UI onto the train.
+docs/AUDIT-ACTIONS.md=50983 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.

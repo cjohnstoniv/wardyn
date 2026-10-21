@@ -72,7 +72,7 @@ func (s *Server) authorizeRequestDrives(r *http.Request, req createRunRequest, c
 		if resolved == nil {
 			return nil, refusal
 		}
-		return []runDrive{{resolved: *resolved, target: runner.DriveTarget, narrow: req.Drive.ReadOnly, legacy: true}}, nil
+		return []runDrive{{resolved: *resolved, target: runner.DriveTargetFor(*resolved, true), narrow: req.Drive.ReadOnly, legacy: true}}, nil
 	}
 	if refusal := s.driveDoorsRefusal(r, ceiling); refusal != nil {
 		return nil, refusal

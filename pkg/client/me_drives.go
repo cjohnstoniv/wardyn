@@ -105,6 +105,12 @@ type MeDrive struct {
 	// Owned is true for a drive the caller created (POST /me/drives). Only an
 	// owned drive takes DELETE /me/drives/{id}.
 	Owned bool `json:"owned"`
+	// Team is true for a team drive: one folder shared by the groups it is
+	// allocated to. Always false while storage.user_drive.team_drives is off.
+	Team bool `json:"team"`
+	// SharedWith names, on a team drive, the caller's own groups that carry its
+	// allocation. Never a group the caller does not hold.
+	SharedWith []string `json:"shared_with,omitempty"`
 	// KeptFromRun is the id of the run whose work folder this drive kept
 	// (CreateRunRequest.KeepWorkFolder); "" on a drive made by hand.
 	KeptFromRun string `json:"kept_from_run,omitempty"`

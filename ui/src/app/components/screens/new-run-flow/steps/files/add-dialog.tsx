@@ -21,7 +21,7 @@ import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import type { RunIntent } from "../../draft/run-intent";
 import { BranchPicker } from "./branch-picker";
 import { refTextKey } from "./typed-ref";
-import { driveChips, driveKind, fileItems, KIND_ORDER, pathError, saveChoice, choiceKey, type FileItem, type FileKind, type ItemChoice, type ItemSources } from "./file-items";
+import { driveChips, driveKind, driveSharedWith, fileItems, KIND_ORDER, pathError, saveChoice, choiceKey, type FileItem, type FileKind, type ItemChoice, type ItemSources } from "./file-items";
 import { driveReason } from "./file-sources";
 import { KIND_INFO, KIND_LABEL, KindTile, PathText } from "./kind-visuals";
 import { LockedAccess } from "./locked-access";
@@ -65,6 +65,9 @@ interface PickOption {
   ref?: string;
   workspaceId?: string;
   repo?: string;
+  /** A team drive's groups and whether the others in them see what this run writes. */
+  sharedWith?: string;
+  othersSee?: boolean;
 }
 
 export const DIALOG_PATH_ID = "nr-mount-path";
@@ -124,9 +127,12 @@ function optionsFor(kind: AttachKind, src: ItemSources): PickOption[] {
     return src.folders.map((f) => ({ key: f.key, name: f.name, chips: [NR_FILES.FAMILY_HOST_FOLDER, ...(f.writable ? [] : [NR_FILES.ACCESS_READ])], shownPath: f.hostPath, defaultPath: f.defaultPath, locked: !f.writable, reason: f.unavailable }));
   }
   return (src.catalogue?.drives ?? []).filter((d) => driveKind(d) === kind).map((d) => ({
-    key: d.id, name: d.name, chips: [...driveChips(d), ...(d.writable ? [] : [NR_FILES.ACCESS_READ])], shownPath: d.target, defaultPath: d.target,
-    locked: !d.writable, reason: driveReason(d),
+    key: d.id, name: d.name,
+    // A team drive says its access as a chip, either way; any other says only when it is read-only.
+    chips: d.team ? [NR_FILES.SOURCE_TEAM, d.writable ? NR_FILES.ACCESS_EDIT : NR_FILES.ACCESS_READ] : [...driveChips(d), ...(d.writable ? [] : [NR_FILES.ACCESS_READ])],
+    shownPath: d.target, defaultPath: d.target, locked: !d.writable, reason: driveReason(d),
     kept: d.kept_from_run ? { line: d.kept_from_run_title ? NR_FILES.DRIVE_KEPT_FROM(d.kept_from_run_title) : NR_FILES.DRIVE_KEPT_FROM_UNTITLED, unenforced: d.enforcement === "none" } : undefined,
+    sharedWith: driveSharedWith(d), othersSee: d.team === true && d.writable,
   }));
 }
 
@@ -383,6 +389,8 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, computerA
                       </span>
                       {o.kept && <span className="text-xs text-muted-foreground">{o.kept.line}</span>}
                       {o.shownPath && <PathText path={o.shownPath} className="text-muted-foreground" />}
+                      {o.sharedWith && <span className="text-xs">{o.sharedWith}</span>}
+                      {o.othersSee && <span className="text-xs text-warning">{NR_FILES.TEAM_OTHERS_SEE}</span>}
                       {reason && (
                         <span className="flex items-start gap-1.5 text-[13px]">
                           <Lock className="mt-0.5 size-3 flex-none" aria-hidden="true" />

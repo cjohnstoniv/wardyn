@@ -21,7 +21,7 @@ import (
 )
 
 const userDriveCols = `id, name, backend, host_root, storage_class, home_template, ` +
-	`size_mib, writable, reclaim, created_at, updated_at, created_by, object_scheme`
+	`size_mib, writable, reclaim, created_at, updated_at, created_by, object_scheme, team`
 
 // driveRowCols is userDriveCols plus the member-drive columns: every read that
 // can return a member drive scans these, so the owner always travels with it.
@@ -29,7 +29,7 @@ const userDriveCols = `id, name, backend, host_root, storage_class, home_templat
 const driveRowCols = userDriveCols + `, owner_subject, delete_started_at, kept_from_run`
 
 const userDriveGrantCols = `id, subject_type, subject, drive_id, priority, ` +
-	`size_mib_override, writable_override, home_override, enabled, created_at, created_by`
+	`size_mib_override, writable_override, home_override, enabled, created_at, created_by, members_can_write`
 
 // shareBackend's object name has no drive component (`<host_root>/<home>`),
 // so home_override uniqueness must widen to the host_root namespace for it.
@@ -61,8 +61,8 @@ var driveHomeNamespaceClashSQL = `SELECT ` + fmt.Sprintf(driveHomeNamespaceClash
 // refuses a member drive (owner_subject set): the admin write path never edits one.
 var userDriveUpsertSQL = `
 		INSERT INTO user_drives (id, name, backend, host_root, storage_class,
-			home_template, size_mib, writable, reclaim, created_by, name_slug, object_scheme)
-		SELECT $1::uuid,$2::text,$3::text,$4::text,$5::text,$6::text,$7::int,$8::boolean,$9::text,$10::text,$11::text,'id'::text
+			home_template, size_mib, writable, reclaim, created_by, name_slug, object_scheme, team)
+		SELECT $1::uuid,$2::text,$3::text,$4::text,$5::text,$6::text,$7::int,$8::boolean,$9::text,$10::text,$11::text,'id'::text,$13::boolean
 		WHERE (NOT $12::boolean OR NOT EXISTS (
 			SELECT 1 FROM user_drive_grants WHERE drive_id = $1::uuid
 		))
@@ -73,7 +73,7 @@ var userDriveUpsertSQL = `
 			    host_root = EXCLUDED.host_root, storage_class = EXCLUDED.storage_class,
 			    home_template = EXCLUDED.home_template, size_mib = EXCLUDED.size_mib,
 			    writable = EXCLUDED.writable, reclaim = EXCLUDED.reclaim,
-			    name_slug = EXCLUDED.name_slug, updated_at = now(),
+			    name_slug = EXCLUDED.name_slug, team = EXCLUDED.team, updated_at = now(),
 			    object_scheme = user_drives.object_scheme
 			WHERE user_drives.owner_subject = ''
 		RETURNING ` + userDriveCols
@@ -82,7 +82,7 @@ var userDriveUpsertSQL = `
 // column list and destinations cannot drift.
 func userDriveDest(d *types.UserDrive) []any {
 	return []any{&d.ID, &d.Name, &d.Backend, &d.HostRoot, &d.StorageClass, &d.HomeTemplate,
-		&d.SizeMiB, &d.Writable, &d.Reclaim, &d.CreatedAt, &d.UpdatedAt, &d.CreatedBy, &d.ObjectScheme}
+		&d.SizeMiB, &d.Writable, &d.Reclaim, &d.CreatedAt, &d.UpdatedAt, &d.CreatedBy, &d.ObjectScheme, &d.Team}
 }
 
 // driveRowDest is the scan target list for driveRowCols.
@@ -96,7 +96,7 @@ func driveRowDest(d *types.UserDrive) []any {
 func userDriveGrantDest(g *types.UserDriveGrant) []any {
 	return []any{&g.ID, &g.SubjectType, &g.Subject, &g.DriveID, &g.Priority,
 		&g.SizeMiBOverride, &g.WritableOverride, &g.HomeOverride, &g.Enabled,
-		&g.CreatedAt, &g.CreatedBy}
+		&g.CreatedAt, &g.CreatedBy, &g.MembersCanWrite}
 }
 
 // driveNameSlugIndex is the partial unique index migration 0061 puts on
@@ -188,7 +188,7 @@ func (s PG) upsertUserDriveOn(ctx context.Context, q driveQuerier, d types.UserD
 	out, err := scanUserDrive(q.QueryRow(ctx, userDriveUpsertSQL,
 		d.ID, d.Name, d.Backend, d.HostRoot, d.StorageClass,
 		d.HomeTemplate, d.SizeMiB, d.Writable, d.Reclaim, d.CreatedBy,
-		types.DriveSlug(d.Name), refuseIfAllocated))
+		types.DriveSlug(d.Name), refuseIfAllocated, d.Team))
 	if err != nil {
 		if conflict := userDriveUniqueConflict(err); conflict != nil {
 			return types.UserDrive{}, conflict
@@ -274,7 +274,7 @@ func (s PG) DeleteUserDrive(ctx context.Context, id uuid.UUID) error {
 // the admin handler filters them out.
 func (s PG) ListUserDrives(ctx context.Context) ([]types.UserDriveListItem, error) {
 	const q = `SELECT d.id, d.name, d.backend, d.host_root, d.storage_class, d.home_template,
-			d.size_mib, d.writable, d.reclaim, d.created_at, d.updated_at, d.created_by, d.object_scheme,
+			d.size_mib, d.writable, d.reclaim, d.created_at, d.updated_at, d.created_by, d.object_scheme, d.team,
 			d.owner_subject, d.delete_started_at, d.kept_from_run, COALESCE(c.n, 0)
 		FROM user_drives d
 		LEFT JOIN (SELECT drive_id, COUNT(*) AS n FROM user_drive_grants GROUP BY drive_id) c
@@ -512,8 +512,8 @@ func upsertUserDriveGrant(ctx context.Context, q rowQuerier, g types.UserDriveGr
 	}
 	const stmt = `
 		INSERT INTO user_drive_grants (id, subject_type, subject, drive_id, priority,
-			size_mib_override, writable_override, home_override, enabled, created_by)
-		SELECT $1::uuid,$2::text,$3::text,$4::uuid,$5::int,$6::int,$7::boolean,$8::text,$9::boolean,$10::text
+			size_mib_override, writable_override, home_override, enabled, created_by, members_can_write)
+		SELECT $1::uuid,$2::text,$3::text,$4::uuid,$5::int,$6::int,$7::boolean,$8::text,$9::boolean,$10::text,$13::boolean
 		WHERE $8::text = '' OR NOT EXISTS (
 			SELECT 1
 			FROM user_drive_grants og
@@ -529,13 +529,14 @@ func upsertUserDriveGrant(ctx context.Context, q rowQuerier, g types.UserDriveGr
 			SET priority = EXCLUDED.priority,
 			    size_mib_override = EXCLUDED.size_mib_override,
 			    writable_override = EXCLUDED.writable_override,
-			    home_override = EXCLUDED.home_override, enabled = EXCLUDED.enabled
+			    home_override = EXCLUDED.home_override, enabled = EXCLUDED.enabled,
+			    members_can_write = EXCLUDED.members_can_write
 			WHERE ($11::boolean OR user_drive_grants.home_override = '') AND NOT $12::boolean
 		RETURNING ` + userDriveGrantCols
 	out, err := scanUserDriveGrant(q.QueryRow(ctx, stmt,
 		g.ID, g.SubjectType, g.Subject, g.DriveID, g.Priority,
 		g.SizeMiBOverride, g.WritableOverride, g.HomeOverride, g.Enabled, g.CreatedBy,
-		homeOverrideStated, mustBeNew))
+		homeOverrideStated, mustBeNew, g.MembersCanWrite))
 	if err != nil {
 		// No row from a write that had to be new: a row for the subject and drive appeared after
 		// the judgement (a stated home_override was refused by the judgement before this).
@@ -623,10 +624,10 @@ func (s PG) ResolveUserDrive(ctx context.Context, userSubjects, groups []string,
 		groups = []string{}
 	}
 	q := `SELECT d.id, d.name, d.backend, d.host_root, d.storage_class, d.home_template,
-			d.size_mib, d.writable, d.reclaim, d.created_at, d.updated_at, d.created_by, d.object_scheme,
+			d.size_mib, d.writable, d.reclaim, d.created_at, d.updated_at, d.created_by, d.object_scheme, d.team,
 			g.id, g.subject_type, g.subject, g.drive_id, g.priority,
 			g.size_mib_override, g.writable_override, g.home_override, g.enabled,
-			g.created_at, g.created_by
+			g.created_at, g.created_by, g.members_can_write
 		FROM user_drive_grants g
 		JOIN user_drives d ON d.id = g.drive_id
 		WHERE ` + subjectMatch("g") + `

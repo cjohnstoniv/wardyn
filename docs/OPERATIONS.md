@@ -1260,6 +1260,7 @@ erases one person's retained records by explicit scope, in one audited act
 - Erasure is reported complete (`200`, `outcome` success) only when every scope asked for finished.
 - An email address another identity also holds is never used to match, because it cannot prove whose a record is.
   A record found only by that address keeps it.
+- A team drive's files are kept by design: they belong to the drive's groups, so erasing or deprovisioning a person does not remove what their agents wrote to a team drive. See "Team drives".
 - No scope reaches runners, invitations or service identities; a [purge](#what-a-purge-removes) does, but a retired
   service identity keeps its last sponsor.
 - Two tables keep a person's name after every scope, on purpose:
@@ -3725,7 +3726,7 @@ docker compose -f deploy/compose/docker-compose.yaml up -d wardynd
 - Every image
   under [`deploy/images`](../deploy/images) now pre-creates it owned by `agent` — the ones on a public
   base do it themselves, the ones on a sibling image inherit it.
-- So a fresh
+- A person's fresh
   managed volume takes that ownership through Docker's copy-up.
 - **No pre-0.7 image
   has the directory**: 0.6.6's base image created `/home/agent/work` and nothing
@@ -3735,8 +3736,8 @@ docker compose -f deploy/compose/docker-compose.yaml up -d wardynd
 - Nothing
   else goes wrong — the image builds, the container starts, the mount succeeds.
 - So the only symptom is the agent failing to write to its own drive.
-- And wardynd cannot repair it (fixing that ownership would mean chowning volume state, which
-  the control plane must never do).
+- And wardynd cannot repair it (fixing that ownership would mean re-owning a person's volume, which
+  the control plane never does).
 - Rebuild with `make agent-images-core`, and
   re-pin anything listed in `WARDYN_AGENT_IMAGES` at the rebuilt tag; a **BYOI**
   image is yours to fix, one `mkdir` (see "User drives on Docker" and
@@ -4006,6 +4007,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0200` (`0200_run_queue_start_at`) adds `start_at` to `run_queue` (`0162`'s table): a scheduled run's start time, before which no promotion judges it; `NULL` for every other waiting run.
 - `0201` (`0201_run_harness_task`) adds `task` to `run_harnesses` (`0164`'s table): a harness's own task in a background run with several agents. Person erasure blanks it; a split-role install that turns `WARDYN_MULTI_AGENT_TASKS` on grants the app role `UPDATE` on `run_harnesses` for that.
 - `0202` (`0202_user_drives_kept_from_run`) adds `kept_from_run` to `user_drives` (`0054`'s table): the run a person's drive was kept from (`keep_work_folder`), NULL on every drive made by hand.
+- `0200` (`0200_user_drives_team`) adds `user_drives.team` (`0054`'s table), with a check keeping it off a person's own drive and off `k8s_pvc`, and `user_drive_grants.members_can_write` (`0054`'s table, false by default): a team drive and its allocations' write bit (`storage.user_drive.team_drives`). A write setting `team` on a `k8s_pvc` or member-owned row now fails.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
@@ -4736,6 +4738,7 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 - A SCIM purge **lists** the person's drives, by name, in `person.deprovision`, and `GET /scim/status` shows them. It deletes nothing.
 - Delete each with `DELETE /api/v1/drives/member/{id}`, or erase the person with the `member_drives` scope of `POST /api/v1/people/{principal}/erasure`.
 - The erasure deletes the same way a delete does and fails the scope, naming the drive, if one is in use. Retry once the run ends.
+- A team drive's files are kept by design: they belong to the drive's groups, so erasing or deprovisioning a person does not remove what their agents wrote to a team drive. See "Team drives".
 
 **Orphans.**
 
@@ -4747,6 +4750,42 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 
 - Member drives live in `user_drives` rows with an owner. An older wardynd would list them in `GET /drives` and let a super admin edit or delete the row without the volume.
 - Migrations are forward-only; see "Upgrades".
+
+### Team drives
+
+- A **team drive** is an admin drive that gives the groups it is allocated to **one shared folder**, instead of one folder per person.
+- It is off by default. Turn it on with `storage.user_drive.team_drives: true` in the workspace providers (`PUT /api/v1/workspace-providers`).
+- With the switch off, `team: true` on a drive write answers 422, and a drive already marked team resolves per person, as every drive did before.
+
+**Make one** (super admin).
+
+1. `POST /api/v1/drives` with `team: true` on a `host_path`, `k8s_pvc_static` or `docker_volume` drive. A `k8s_pvc` claim mounts in one pod at a time, so it is refused.
+2. Allocate it to groups with `POST /api/v1/drives/grants`, `subject_type: group`. Any other subject type, and `home_override`, are refused.
+3. An allocation is **read-only** unless it sets `members_can_write: true`, which needs a writable drive. Only a super admin may set it; the security-admin tier allocates read-only.
+
+**What a member's run sees.**
+
+- The folder mounts at `/home/agent/shared/<name-slug>`, read-only unless the allocation says `members_can_write`. A run asking to write a read-only one is refused.
+- Its home segment is `t-` plus 20 hex characters, derived from the drive id: `<host_root>/t-…` on `host_path` (create that directory; Wardyn never creates one on a share) and a claim or volume named `wardyn-drive-<drive-id-hex>-<home>` with that home. `POST /api/v1/drives/preview` for any group member prints it.
+- People outside the allocated groups never get the mount.
+- `GET /api/v1/me/drives` marks the row `team: true` and lists in `shared_with` the caller's own groups that carry the allocation, never anyone else's.
+- Every run's mount writes `run.drive.mount` with `team: true` and `mounted_by`, the person whose run mounted it.
+
+**Before you upgrade.** Turning on `storage.user_drive.team_drives` lets the members of the groups a team drive is allocated to share one folder. One person's agent can read, and if the allocation is writable run, what another person's agent wrote there, which is cross-person injection, and any secret an agent writes there is visible to the whole group. The switch is off by default; a team drive is admin-made and allocated to groups only, read-only unless a super admin sets `members_can_write` on a writable drive, and every mount's audit row names the person who mounted it.
+
+**Security.** One person's agent reads, and with `members_can_write` may run, files another person's agent wrote there. Any secret an agent writes there is visible to the whole group. Keep allocations read-only unless the group needs a shared working area.
+
+**What differs by backend.**
+
+- `docker_volume`: the volume lives on **one Docker host**. Runs on another host see a different, empty folder. `GET /drives` marks such a drive `single_host: true`.
+- `host_path`: one folder on the operator's tree. It is shared across hosts only if the operator's mount is.
+- `k8s_pvc_static`: the claim you pre-create. It is shared across nodes only if its access mode is `ReadWriteMany`.
+
+**Changing and removing.**
+
+- `team` cannot change while the drive is allocated (409). Remove the allocations first.
+- A person's reclaim (`POST /api/v1/drives/{id}/reclaim`, a leaver's cleanup) refuses a team drive (422): a team drive's files belong to its groups and are not reclaimed per person. A person's erasure never touches one either. Remove the folder on the substrate, as for any drive, once the group no longer needs it.
+- A team drive's files are kept by design: they belong to the drive's groups, so erasing or deprovisioning a person does not remove what their agents wrote to a team drive.
 
 ### User drives on Kubernetes
 

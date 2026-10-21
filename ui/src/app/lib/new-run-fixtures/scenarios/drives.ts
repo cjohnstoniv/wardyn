@@ -15,7 +15,7 @@ export const LEGACY_USER_DRIVE_READ_ONLY: MeUserDrive = { ...LEGACY_USER_DRIVE, 
 
 const drive = (over: Partial<MeDrive> & Pick<MeDrive, "id" | "name">): MeDrive => ({
   section: "user", source: "personal", backend: "docker_volume", target: `/home/agent/drives/${over.id}`, writable: true,
-  enforcement: "none", legacy: false, owned: false, ...over,
+  enforcement: "none", legacy: false, owned: false, team: false, ...over,
 });
 
 /** The person's legacy drive: the one `/home/agent/drive` holds. */
