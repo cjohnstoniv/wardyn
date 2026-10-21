@@ -47,7 +47,7 @@ import { SidebarLowerLinks } from "./sidebar-settings-link";
 // from nav-copy.ts rather than the screen's own copy module so the eager
 // sidebar doesn't drag a whole screen-only canon table into the entry chunk
 // (#498) for one string.
-import { CREDENTIALS_NAV_TITLE, GOVERNANCE_NAV_TITLE, RUNNERS_NAV_TITLE, USER_TYPES_NAV_TITLE } from "../../lib/nav-copy";
+import { CREDENTIALS_NAV_TITLE, DRIVES_NAV_TITLE, GOVERNANCE_NAV_TITLE, RUNNERS_NAV_TITLE, USER_TYPES_NAV_TITLE } from "../../lib/nav-copy";
 import { cn } from "../ui/utils";
 import { Button } from "../ui/button";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "../ui/sheet";
@@ -164,7 +164,7 @@ const ADMIN_NAV: NavItem[] = [
   // User types (0.8, UT-7a) sits beside Permissions — the subject it and
   // Governance name. securityOps server-side, so both admin tiers see it.
   { to: "/admin/user-types", label: USER_TYPES_NAV_TITLE, icon: UsersRound },
-  { to: "/admin/drives", label: "Drives", icon: HardDrive, tier: "security" },
+  { to: "/admin/drives", label: DRIVES_NAV_TITLE, icon: HardDrive, tier: "security" },
   { to: "/admin/secrets", label: "Secrets", icon: Lock, tier: "super" },
   { to: "/admin/audit", label: "Audit", icon: ScrollText },
   { to: "/admin/recordings", label: "Recordings", icon: Play, tier: "super" },
@@ -175,11 +175,11 @@ const USER_NAV: NavItem[] = [
   { to: "/approvals", label: "Approvals", icon: ShieldCheck, badge: "approvals" },
   { to: "/workspaces", label: "Workspaces", icon: FolderOpen },
 ];
-// Under the divider (#217's slot): Setup and Settings in the Admin view, where
-// a security admin has neither; Getting started and Your account in the User
-// view.
+// Under the divider (#217's slot): Getting started and Settings in the Admin view,
+// where a security admin has neither; Getting started and Your account in the
+// User view. The page heading reads "Getting started" in both.
 const ADMIN_LOWER: NavItem[] = [
-  { to: "/admin/setup", label: "Setup", icon: Compass },
+  { to: "/admin/setup", label: "Getting started", icon: Compass },
   // Providers, Components and Drives are opened only from Settings' cards and have no entry of their own.
   { to: "/admin/settings", label: SETTINGS_NAV.SETTINGS, icon: Settings, also: ["/admin/providers", "/admin/components", "/admin/drives"] },
 ];

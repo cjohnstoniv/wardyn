@@ -79,8 +79,8 @@ export const RUNS_MEMBER_EMPTY = {
 // consumer.
 
 // The operator welcome's closing note (onboarding-screen.tsx). The setup funnel
-// is the Admin view's "Setup" entry in the sidebar's lower nav (app-shell.tsx);
-// "Getting started" there is the User view's member page, not the funnel.
+// is the Admin view's "Getting started" entry in the sidebar's lower nav (app-shell.tsx);
+// the User view's entry of the same name is the member page.
 export const WELCOME = {
-  NOTE: "A quick guided setup — the barrier is the only requirement; a model or agent is optional. You can revisit anytime under “Setup” in the sidebar.",
+  NOTE: "A quick guided setup — the barrier is the only requirement; a model or agent is optional. You can revisit anytime under “Getting started” in the sidebar.",
 } as const;

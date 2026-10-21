@@ -114,6 +114,8 @@ export { ACCESS_STATE, PEOPLE, PREVIEW } from "./people-access-copy";
 // belt-and-braces governance-copy.ts's MEMBER already uses for its own §7.7.
 // See DRIVE_MEMBER's own note.
 
+import { DRIVES_NAV_TITLE } from "./nav-copy";
+
 // §7.2-§7.5 — DRIVES, the admin screen.
 
 export const DRIVES = {
@@ -121,7 +123,7 @@ export const DRIVES = {
   // TITLE is ONE string for four places — the screen heading, the Workspaces
   // header's outline button, the setup card's title and the Settings card's
   // title — the way GOVERNANCE.TITLE serves nav and heading (§7.2 prose).
-  TITLE: "User drives",
+  TITLE: DRIVES_NAV_TITLE,
   LEAD: "Persistent storage a run can mount. An admin registers a drive and allocates it to people or groups; each person gets their own directory in it, and chooses per run whether to mount it. A person's first drive mounts at /home/agent/drive; any others mount beside it, under /home/agent/drives or /home/agent/shared.",
   // The org switch (the `disabled` field on GET /drives's snapshot): renders
   // ABOVE the table it still shows in full — everything here is kept, nothing

@@ -165,14 +165,14 @@ test.describe("navigation + shell", () => {
 
   // #217 — Settings sits last in the Admin view's rail, under a divider, with
   // Setup above it (M-2, packet M-A).
-  test("#217 — Settings is last in the sidebar, after Setup and Recordings, and opens the real screen", async ({ page }) => {
+  test("#217 — Settings is last in the sidebar, after Getting started and Recordings, and opens the real screen", async ({ page }) => {
     await gotoConsole(page, "admin");
     // Order is the contract: within the desktop rail, Settings is the LAST
-    // link, Setup above it, Recordings above that.
+    // link, Getting started above it, Recordings above that.
     const rail = page.locator("aside").getByRole("link");
     const names = await rail.allTextContents();
     expect(names[names.length - 1]).toMatch(/^Settings/);
-    expect(names[names.length - 2]).toMatch(/^Setup/);
+    expect(names[names.length - 2]).toMatch(/^Getting started/);
     expect(names[names.length - 3]).toMatch(/^Recordings/);
 
     await navTo(page, "Settings");
@@ -223,7 +223,7 @@ test.describe("navigation + shell", () => {
     await expect(page.getByRole("status").filter({ hasText: SHELL.UNKNOWN_BODY })).toBeVisible();
     // #217 — the sidebar Settings link is gated on the same expression as the
     // account menu's own entry, so it disappears here too.
-    for (const label of [...SIDEBAR_LABELS, ...USER_SIDEBAR_LABELS, "Setup", "Settings"] as NavLabel[]) {
+    for (const label of [...SIDEBAR_LABELS, ...USER_SIDEBAR_LABELS, "Settings"] as NavLabel[]) {
       await expect(sidebarLink(page, label)).toHaveCount(0);
     }
   });
