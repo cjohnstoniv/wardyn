@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -79,8 +80,10 @@ func TestForwarderServesOnlyThePersonsUID(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer f.ln.Close()
-	uid := 1001
-	f.peerUID = func(_, _ netip.AddrPort) (int, error) { return uid, nil }
+	// uid is read by the forwarder's connection goroutines: the race detector sees no order through TCP.
+	var uid atomic.Int64
+	uid.Store(1001)
+	f.peerUID = func(_, _ netip.AddrPort) (int, error) { return int(uid.Load()), nil }
 	go f.serve(1001)
 	addr := f.ln.Addr().String()
 
@@ -109,7 +112,7 @@ func TestForwarderServesOnlyThePersonsUID(t *testing.T) {
 		t.Fatalf("plain HTTP answered %q, want 405", resp)
 	}
 
-	uid = 1000
+	uid.Store(1000)
 	if resp := send("CONNECT site.test:443 HTTP/1.1\r\nHost: site.test:443\r\n\r\n"); resp != "" {
 		t.Fatalf("the agent's uid got %q, want the connection closed unanswered", resp)
 	}
