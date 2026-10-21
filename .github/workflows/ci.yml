@@ -2110,7 +2110,7 @@ jobs:
   #
   #   govulncheck / staticcheck / licenses — run ALL THREE tag sets, so the
   #     ACTUAL shipped builds (-tags docker: runner/docker + envbuild; -tags
-  #     k8s: the k8s confinement substrate) are covered, not just the tagless
+  #     docker,k8s: the k8s substrate and runnerd's k8s path) are covered, not just the tagless
   #     subset that a default build sees.
   #   gitleaks — scans this branch's own FULL git history (hence fetch-depth: 0,
   #     which the other gates simply ignore). `make gitleaks` runs the gitleaks
