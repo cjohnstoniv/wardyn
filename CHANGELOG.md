@@ -117,6 +117,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   launch could move the run on between the server's read of it and the kill, and the sandbox stayed up until its
   30-minute idle cap. That sandbox never held the pasted token.
 
+### Fixed
+
+- A run's recorded output is no longer lost after the organisation's server restarts when the runner hears of the
+  restart only after the server has begun reading that output back. Before, a run writing a lot of output at that
+  moment could lose the part not yet read back.
+
 ## [0.9.7] — 2026-10-20
 
 A small release on top of 0.9.6. An Azure DevOps token that the organisation mints for a run can now be delivered to a person's own runner, off by default, and a credential delivery write that the server could not build is refused when it is made. No migration.

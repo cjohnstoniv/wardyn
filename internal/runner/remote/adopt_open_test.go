@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 )
 
@@ -54,5 +55,71 @@ func TestHandleOpenDefersAnOpenAheadOfTheRecovery(t *testing.T) {
 		if st != nil {
 			_ = st.Close()
 		}
+	}
+}
+
+// offlineAckLink is a Link whose output ACK is in flight when the link drops: it waits for the
+// stream's end, then calls through the dead link.
+type offlineAckLink struct {
+	*Link
+	acking chan struct{}
+}
+
+func (l *offlineAckLink) Call(ctx context.Context, method string, args, result any, opts ...runnerwire.CallOption) error {
+	if method == runnerwire.MethodOutputAck {
+		close(l.acking)
+		<-ctx.Done()
+		return l.Link.Call(context.Background(), method, args, result, opts...)
+	}
+	return l.Link.Call(ctx, method, args, result, opts...)
+}
+
+// streamCatch accepts the runner's output OPEN and hands its stream to the test.
+type streamCatch chan *runnerwire.Stream
+
+func (c streamCatch) HandleEvent(runnerwire.Event) {}
+func (c streamCatch) HandleOpen(st *runnerwire.Stream, _ runnerwire.Open) error {
+	c <- st
+	return nil
+}
+
+// A link that drops under an output copy fails its ACK offline: the copy keeps that cause, which
+// marks a gap a later recovery replaces, rather than the stream's reconnect reset.
+func TestOutputAckOfflineOnALinkDropStaysOffline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	link := &offlineAckLink{Link: &Link{}, acking: make(chan struct{})}
+	s := New("r1", link, Options{})
+	streams := make(streamCatch, 1)
+	link.SetHandler(streams)
+	org, run := runnerwire.Loopback()
+	op := link.Attach(ctx, org)
+	rp := runnerwire.NewPeer(run, runnerwire.PeerConfig{})
+	go rp.Run(ctx)
+	t.Cleanup(func() { rp.Close(); op.Close() })
+	id := uuid.New()
+	rst, err := rp.Open(ctx, runnerwire.Open{Kind: runnerwire.KindOutput, Target: id.String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := <-streams
+	done := make(chan error, 1)
+	go func() { done <- s.receiveOutput(id, &outputSink{writer: &bytes.Buffer{}}, st, 0) }()
+	if _, err = rst.Write([]byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-link.acking:
+	case <-ctx.Done():
+		t.Fatal("the copy never ACKed")
+	}
+	op.Close()
+	err = <-done
+	var reset *runnerwire.ResetError
+	if !errors.As(st.Err(), &reset) || reset.Code != runnerwire.ResetReconnect {
+		t.Fatalf("stream ended with %v, want a reconnect reset", st.Err())
+	}
+	if !errors.Is(err, runner.ErrRunnerOffline) {
+		t.Fatalf("copy ended with %v, want runner.ErrRunnerOffline", err)
 	}
 }

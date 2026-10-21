@@ -55,6 +55,8 @@ type outputBuffer struct {
 	// OPEN, or no ACK came within outputAckWait. A full buffer then drops its
 	// oldest part instead of parking the agent. The next ACK clears it.
 	lossy bool
+	// acks counts the ACKs taken, so a refusal seen before the latest one marks nothing.
+	acks uint64
 	// drains counts copies begun and not ended; output completes when the
 	// last one ends, with the first error any of them ended with.
 	drains   int
@@ -356,6 +358,7 @@ func (b *outputBuffer) ack(offset int64) error {
 		return errOutputOffset
 	}
 	b.lossy = false
+	b.acks++
 	if offset <= b.state.Ack {
 		return nil
 	}
@@ -417,10 +420,14 @@ func (b *outputBuffer) read(ctx context.Context, offset int64, data []byte) (int
 	}
 }
 
-// unacknowledged marks the output as having no acker, waking a parked Write.
-func (b *outputBuffer) unacknowledged() {
+// unacknowledgedSince marks the output as having no acker, waking a parked Write, unless an ACK
+// came after acks was read: a recovery that ACKs before the refusal reaches the runner is an acker.
+func (b *outputBuffer) unacknowledgedSince(acks uint64) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.acks != acks {
+		return
+	}
 	b.lossy = true
 	b.notify()
 }
