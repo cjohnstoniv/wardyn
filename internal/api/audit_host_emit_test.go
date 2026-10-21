@@ -209,7 +209,7 @@ func TestAuditHostViewsMatchTheirEmits(t *testing.T) {
 	rows := auditDocFields(t, readAuditActionsDoc(t))
 	// drive.write's data has a builder, so its keys are also read from a real emit with every branch taken.
 	var real []string
-	for k := range driveWriteAuditData(types.UserDrive{Name: "n"}, driveRehome{confirmed: true}) {
+	for k := range driveWriteAuditData(types.UserDrive{Name: "n", Team: true}, driveRehome{confirmed: true}) {
 		real = append(real, k)
 	}
 	slices.Sort(real)

@@ -36,7 +36,7 @@ type auditHostView struct {
 var auditHostViews = map[string]auditHostView{
 	// host_root and storage_class: what GET /drives keeps super-only.
 	"drive.write": {allow: []string{"backend", "home_template", "name", "object_scheme", "reclaim", "rehomed",
-		"rehomed_fields", "rehomed_subjects", "size_mib", "writable"}},
+		"rehomed_fields", "rehomed_subjects", "size_mib", "team", "writable"}},
 	"drive.member.create": {allow: []string{"backend", "count", "drive", "drive_id", "limit", "size_mib"}},
 	// locator: a local_dir source's path, the reason GET /sources is super-only.
 	"source.write": {allow: []string{"kind", "ref", "writable"}},
