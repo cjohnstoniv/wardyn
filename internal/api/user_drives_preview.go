@@ -126,7 +126,7 @@ func drivePreviewWarning(tmpl types.HomeTemplate, users []string) string {
 //     is about a member: with drives off nobody was denied, so a 403 here would
 //     tell an admin a profile refused somebody it did not.
 //  1. THE DOOR, resolved for the PREVIEWED claims rather than for the admin
-//     doing the previewing (driveDoorShut over ResolveGovernanceUnit).
+//     doing the previewing (driveDoorShut over the context resolver).
 //     seedRequestDrives runs it after the switch and before the resolver, so a
 //     403 beats a 500 or an allocation-shaped 422; so does this.
 //  2. The unanswerable group tier. A request that carries no `groups` at all
@@ -336,8 +336,7 @@ func (s *Server) drivePreviewDoorIsOpen(w http.ResponseWriter, r *http.Request, 
 	if len(groups) == 0 {
 		ceiling, err = s.ceilingWithUnusableGroups(r.Context(), users, userType, deployment)
 	} else {
-		p, _, rerr := s.resolveAssignedUnit(r.Context(), users, groups, userType)
-		ceiling, err = s.ceilingFromUnit(r.Context(), p, rerr, deployment)
+		ceiling, err = s.contextCeiling(r.Context(), contextQuery{users: users, groups: groups, userType: userType}, contextChoice{}, deployment)
 	}
 	if err != nil {
 		writeCeilingError(w, r, err)

@@ -33,7 +33,7 @@ import (
 // (an unassigned or super-admin owner) or the profile has since been deleted, which leaves nothing
 // to bind — the run-limits reclamp reads a deleted profile the same way. An error is returned,
 // never read as "no profile": a base that cannot be read, a chain that loops or runs deeper than
-// three, and a composition nothing satisfies all close the door. ownerUnit (revive) refuses a
+// the maximum unit depth, and a composition nothing satisfies all close the door. ownerUnit (revive) refuses a
 // deleted profile instead, since a revive re-issues authority while a door only narrows a session;
 // the two are left apart on purpose.
 func (s *Server) runUnit(ctx context.Context, run types.AgentRun) (*ResolvedUnit, error) {

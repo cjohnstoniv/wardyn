@@ -510,3 +510,7 @@ func TestAssignmentPriorityMustFitTheColumn(t *testing.T) {
 		t.Errorf("priority MaxInt32: %v", err)
 	}
 }
+
+func (s *utResolveStore) ListMembershipsFor(ctx context.Context, users, groups []string, userType string) ([]store.MembershipMatch, error) {
+	return membershipsFromResolve(s.ResolveGovernanceUnit(ctx, users, groups, userType))
+}

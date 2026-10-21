@@ -177,6 +177,7 @@ func (s *Server) refuseCreatedRun(w http.ResponseWriter, r *http.Request, runID 
 func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	var asked []byte // the request as asked, for the launch intent (launch_intent.go)
 	r = withAskedRequest(r, &asked)
+	r = withContextChoiceSlot(r) // filled once the body is decoded (decodeAndValidateCreateRun)
 	if s.refuseAdminViewLaunch(w, r) {
 		return
 	}

@@ -22,6 +22,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -370,4 +371,8 @@ func TestFinishHarnessLoginLaunch_DenyRemoteMemberSignInDispatches(t *testing.T)
 	if rnr.createCalls != 1 {
 		t.Fatalf("CreateSandbox calls = %d, want the sign-in box created", rnr.createCalls)
 	}
+}
+
+func (s *ceilingBlipStore) ListMembershipsFor(ctx context.Context, users, groups []string, userType string) ([]store.MembershipMatch, error) {
+	return membershipsFromResolve(s.ResolveGovernanceUnit(ctx, users, groups, userType))
 }

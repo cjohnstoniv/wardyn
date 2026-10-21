@@ -861,3 +861,11 @@ func TestCapAllowStillHasToCoverTheWant(t *testing.T) {
 		t.Fatalf("capAllowed(a.example.com) = %v, %v; the exact allow must still hold", ok, err)
 	}
 }
+
+func (f noGovernanceStore) ListMembershipsFor(ctx context.Context, users, groups []string, userType string) ([]store.MembershipMatch, error) {
+	return membershipsFromResolve(f.ResolveGovernanceUnit(ctx, users, groups, userType))
+}
+
+func (s *capStore) ListMembershipsFor(ctx context.Context, users, groups []string, userType string) ([]store.MembershipMatch, error) {
+	return membershipsFromResolve(s.ResolveGovernanceUnit(ctx, users, groups, userType))
+}

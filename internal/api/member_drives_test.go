@@ -484,3 +484,7 @@ func TestMemberDriveRateLimited(t *testing.T) {
 		t.Fatalf("bob: %d %s", w.Code, w.Body.String())
 	}
 }
+
+func (s *memberDriveStore) ListMembershipsFor(ctx context.Context, users, groups []string, userType string) ([]store.MembershipMatch, error) {
+	return membershipsFromResolve(s.ResolveGovernanceUnit(ctx, users, groups, userType))
+}

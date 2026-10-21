@@ -262,3 +262,7 @@ func TestNeitherMemberSeesTheOtherProfile(t *testing.T) {
 		}
 	}
 }
+
+func (s *profileMatrixStore) ListMembershipsFor(ctx context.Context, users, groups []string, userType string) ([]store.MembershipMatch, error) {
+	return membershipsFromResolve(s.ResolveGovernanceUnit(ctx, users, groups, userType))
+}

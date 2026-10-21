@@ -45,6 +45,9 @@ func (s *Server) handlePolicyPreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	canonicalizeRunRepos(&req, s.adoHostsLoader(r.Context()))
+	if r, ok = s.stampContextChoice(w, r, req); !ok {
+		return
+	}
 	ceiling, reqCC, refusal := s.authorizePreviewRequest(r, req)
 	if refusal.write(s, w, r) {
 		return
