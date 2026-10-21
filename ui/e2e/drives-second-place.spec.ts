@@ -12,7 +12,8 @@ import type { Page, Route } from "@playwright/test";
 import { test, expect, gotoConsole, navToRoute } from "./fixtures";
 import { DRIVES, PEOPLE } from "../src/app/lib/user-drives-copy";
 
-const WHEN = "2026-10-20T00:00:00Z";
+// A display-only timestamp, an hour ago.
+const WHEN = new Date(Date.now() - 3_600_000).toISOString();
 const MBP = "c1111111-1111-4111-8111-111111111111";
 const SHARE = {
   id: "a1111111-1111-4111-8111-111111111111", name: "team-share", backend: "host_path", home_template: "email_local", host_root: "/srv/shares/team",
