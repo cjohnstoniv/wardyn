@@ -282,16 +282,20 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		// Agents (#1987) is every agent of a background run with several, the run's own
 		// first, each with its own task; absent on every other run.
 		Agents []runDetailAgent `json:"agents,omitempty"`
+		// ModelAllowlists (#3374) is the model allowlist each local model provider handed the run's proxy at
+		// its latest dispatch, {provider id: models}: what the run is held to, whatever the provider lists now.
+		ModelAllowlists map[string][]string `json:"model_allowlists,omitempty"`
 	}{
 		AgentRun: run, UIApps: apps, UserTypeName: s.runUserTypeName(r, run.UserType),
 		ModelProviderName: providerName, ModelProviderDeleted: providerDeleted,
-		CreatedViaName: s.runCreatedViaName(r.Context(), run),
-		RunnerPoolName: s.runPoolName(r.Context(), run),
-		KeptUntil:      s.endedRunKeptUntil(run),
-		Policy:         s.runPolicyRef(r.Context(), run),
-		Sync:           s.runSyncOpenView(run.ID),
-		ComputerFolder: s.computerFolderRunView(r.Context(), run.ID),
-		Agents:         s.runDetailAgents(r.Context(), run),
+		CreatedViaName:  s.runCreatedViaName(r.Context(), run),
+		RunnerPoolName:  s.runPoolName(r.Context(), run),
+		KeptUntil:       s.endedRunKeptUntil(run),
+		Policy:          s.runPolicyRef(r.Context(), run),
+		Sync:            s.runSyncOpenView(run.ID),
+		ComputerFolder:  s.computerFolderRunView(r.Context(), run.ID),
+		Agents:          s.runDetailAgents(r.Context(), run),
+		ModelAllowlists: s.runModelAllowlists(r.Context(), run.ID),
 	})
 }
 

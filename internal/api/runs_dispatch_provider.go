@@ -217,7 +217,9 @@ type providerDispatch struct {
 	upstreams map[string]string // ProxyConfig.LLMUpstreams: {vendor host → BaseURL+Path}, nil for the vendor itself
 	// localModels is ProxyConfig.LocalModels: {local_model BaseURL → its allowlist and bounds}.
 	localModels map[string]types.LocalModelSettings
-	detail      string // the brokered-LLM 404's detail
+	// localAllowlists is localModels' allowlists by provider id, for the run's own record (recordModelAllowlists).
+	localAllowlists map[string][]string
+	detail          string // the brokered-LLM 404's detail
 }
 
 // addLocalModel records a local_model lane's upstream, allowlist and bounds for
@@ -230,6 +232,10 @@ func (d *providerDispatch) addLocalModel(l providerKeyLane) {
 		d.localModels = map[string]types.LocalModelSettings{}
 	}
 	d.localModels[l.upstream] = l.provider.Local.LocalModelBounds()
+	if d.localAllowlists == nil {
+		d.localAllowlists = map[string][]string{}
+	}
+	d.localAllowlists[l.provider.ID] = slices.Clone(l.provider.Local.Models)
 }
 
 // providerLane is what the chosen provider's arm resolved for one run before
