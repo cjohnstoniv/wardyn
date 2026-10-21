@@ -29,6 +29,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -264,6 +265,16 @@ func (s *Server) decideGovernanceChange(w http.ResponseWriter, r *http.Request, 
 	if !bypass && !kind.approver.allowed(s, r) {
 		s.denyApprover(kind).write(w, r)
 		return
+	}
+	if approve && head.TargetKind == govKindUnit {
+		// The site-config lock before the decision transaction's graph lock, as writeGovernanceUnit
+		// takes them: applyUnitChange reads governance_max_depth, so a lowering cannot slip between.
+		var unlock func()
+		if r, unlock, ok = s.lockDoor(w, r, db.SiteConfigLockClass); !ok {
+			return
+		}
+		defer unlock()
+		ctx = r.Context()
 	}
 	actorType, principal := actorFromRequest(r)
 	email := oidcEmailFromContext(ctx)
