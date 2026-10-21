@@ -64,6 +64,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   non-loopback addresses, and `wardynd` refuses to start when it finds neither. An install whose published-port
   traffic reaches `wardynd` from another address now gets a 403 from the local-mode peer check. Set
   `WARDYN_LOCAL_TRUSTED_PEERS` to that address (IPs or CIDRs, comma-separated).
+- **With `WARDYN_GIT_PAT_BROKER=off`, a member's run that carries a `git_pat` grant is refused
+  (`git_pat_broker_off_resident`).** The broker is on by default. Off, the token would sit in the sandbox, so only an
+  administrator's run may hold it. An administrator's run is refused too when `WARDYN_GIT_PAT_BROKER_OFF_REFUSED` is
+  on (off by default). Azure DevOps hosts, GitHub-brokered forges and `runner_resident` grants are not affected. Turn
+  the broker back on for members.
 
 ### Added
 
