@@ -51,4 +51,13 @@ describe("Segmented", () => {
     expect(screen.getByRole("button", { name: "Deny" })).toHaveClass("text-danger");
     expect(screen.queryByTestId("tab-dirty-chip-permit")).toBeNull();
   });
+
+  // #2832: the selected option carries the primary fill, not bg-muted (~1.1:1 against the card).
+  it("the selected option is filled with the primary token and the others are not", () => {
+    render(<Segmented value="git" options={OPTIONS} onChange={() => {}} />);
+    const git = screen.getByRole("button", { name: "Git" });
+    expect(git).toHaveClass("bg-primary", "text-primary-foreground");
+    expect(git).not.toHaveClass("bg-muted");
+    expect(screen.getByRole("button", { name: "Storage" })).not.toHaveClass("bg-primary");
+  });
 });

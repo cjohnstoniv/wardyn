@@ -69,6 +69,7 @@ export function Segmented<T extends string>({
       </div>
     );
   }
+  // The selected fill is the primary token: bg-muted sat at ~1.1:1 on the card, so only the bolder label told the options apart (#2832).
   // max-w-full + overflow-x-auto: an over-wide set scrolls inside its card instead of being clipped (#2870).
   return (
     <div className="inline-flex w-fit max-w-full overflow-x-auto rounded-lg border border-border-strong">
@@ -84,7 +85,7 @@ export function Segmented<T extends string>({
             value === o.value
               ? o.value === "deny"
                 ? "bg-danger-subtle font-medium text-danger"
-                : "bg-muted font-medium text-foreground"
+                : "bg-primary font-medium text-primary-foreground"
               : "text-muted-foreground hover:text-foreground",
           )}
         >
