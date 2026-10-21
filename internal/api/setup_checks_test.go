@@ -762,11 +762,12 @@ var setupCheckNeverBlocks = map[string]bool{
 	"site_config": true, "site_config_seed": true, "internal_hosts": true, "tls_cookie_posture": true, "approval_notify": true,
 	"scm_provider": true, "host_proxy": true, "artifact_repo": true,
 	"permissions_posture": true, "llm_provider": true, "bedrock_provider": true, "audit_partitions": true,
-	"agent_image":        true,
-	"runner_limits":      true,
-	"runner_arch_images": true,
-	"recording":          true,
-	"github_ref_ruleset": true, "platform_wsl": true, "platform_macos": true, "self_host_runner_grant": true, "defaults_changed": true,
+	"agent_image":         true,
+	"runner_limits":       true,
+	"runner_arch_images":  true,
+	"private_ip_refusals": true,
+	"recording":           true,
+	"github_ref_ruleset":  true, "platform_wsl": true, "platform_macos": true, "self_host_runner_grant": true, "defaults_changed": true,
 	// providerAccessCheck's llm_provider:<provider id>, as its test names it.
 	"llm_provider:corp-gateway": true,
 }
