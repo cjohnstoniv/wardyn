@@ -22,6 +22,8 @@ test("Runners has one tab strip, and the tab is in the address", async ({ page }
   const strip = page.getByRole("navigation", { name: RUNNER_V6.TABS_LABEL });
   await expect(strip.getByRole("button", { name: RUNNER_V6.TAB_RUNNERS })).toHaveAttribute("aria-current", "page");
   await expect(page.getByText(RUNNERS.LEAD)).toBeVisible();
+  // #2895: the field name is quoted in prose, so it does not read as a typo.
+  await expect(page.getByText('up to its "Runs at once" limit')).toBeVisible();
   await expect(page.getByText(RUNNER_V6.TAB_PURPOSE)).toBeVisible();
   // No remote-hosted runner is set up, and people's runners are off.
   await expect(page.getByRole("heading", { name: RUNNERS.OFF_TITLE })).toBeVisible();

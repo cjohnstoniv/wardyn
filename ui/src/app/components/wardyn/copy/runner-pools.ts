@@ -97,7 +97,7 @@ export const RUNNER_V6 = {
   AVAILABLE_LISTED: "Only the people, groups and roles an admin listed can add it. Change the list with wardyn runner remote people.",
   AVAILABLE_ON: (name: string) => `${name} is now available to people's pools`,
   AVAILABLE_OFF: (name: string) => `${name} is no longer available to people's pools`,
-  MINT_ONE_PER_COMPUTER: "One runner per computer is enough: it runs several of their runs at the same time, up to its Runs at once.",
+  MINT_ONE_PER_COMPUTER: "One runner per computer is enough: it runs several of their runs at the same time, up to its \"Runs at once\" limit.",
   MINT_START_LEAD: "Then start it:",
   MINT_VM_DOCKER:
     "On Docker Desktop, Rancher Desktop (dockerd engine) or another VM-backed engine, wardyn-runnerd finds the relay address itself and checks it at startup; pass --total-disk <GB> to register, since the VM hides the disk.",
@@ -346,7 +346,7 @@ export const POOL_FORM = {
   NARROWER: "narrower than its runners, optional",
   RUNS_UNIT: "runs",
   MAX_RUNS_HINT_EDIT: (n: number) => `Its runners allow ${n} runs at once in total. A run launched past this waits for a free slot.`,
-  MAX_RUNS_HINT_NEW: "Its runners' Runs at once add up to the most it can run. A run launched past this waits for a free slot.",
+  MAX_RUNS_HINT_NEW: "Its runners' \"Runs at once\" limits add up to the most it can run. A run launched past this waits for a free slot.",
   CPU: "CPU (CPUs)",
   MEMORY: "Memory (GB)",
   DISK: "Disk (GB)",
@@ -394,7 +394,7 @@ export const POOL_FORM = {
 /** Your account -> My runner -> pools of a runner, and My pools (mock frames B1 to B16). */
 export const MY_POOLS = {
   NO_RUNNER_NEXT: "Register one, then put it in one of your pools. You can create a pool first.",
-  REGISTER_ONE_PER_COMPUTER: "One runner per computer is enough: it runs several of your runs at the same time, up to its Runs at once.",
+  REGISTER_ONE_PER_COMPUTER: "One runner per computer is enough: it runs several of your runs at the same time, up to its \"Runs at once\" limit.",
   REGISTER_ASKS_LIMITS:
     "It then asks for the runner's limits, prefilled with what this computer reports: total CPU, memory and disk across all its runs, the most one run may use, and how many runs at once. You can lower any of them, here later under Your account → My runner → Edit limits, or with wardyn runner set.",
   LIMITS_YOU_SET: "Limits you set",
