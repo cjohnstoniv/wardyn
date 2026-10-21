@@ -23,15 +23,30 @@ const chipClass =
 export function CopyOfferToast({
   offer,
   onDone,
+  onHold,
   copyRef,
 }: {
   offer: CopyOffer;
   onDone: () => void;
+  /** Called with true while the pointer or focus is on the card, false once neither is (WCAG 2.2.1). */
+  onHold: (held: boolean) => void;
   /** Filled with this card's Copy while it is mounted: the terminal's Cmd/Ctrl+C reaches it. */
   copyRef: React.MutableRefObject<(() => void) | null>;
 }) {
   const [error, setError] = React.useState("");
   const [left, setLeft] = React.useState(OFFER_TTL_MS / 1000);
+  // The card waits while the pointer or focus is on it; the countdown and the gate's timer start again after.
+  const [held, setHeld] = React.useState(false);
+  const on = React.useRef({ pointer: false, focus: false, held: false });
+  const touch = (part: "pointer" | "focus", value: boolean) => {
+    on.current[part] = value;
+    const now = on.current.pointer || on.current.focus;
+    if (now === on.current.held) return;
+    on.current.held = now;
+    setHeld(now);
+    onHold(now);
+    if (!now) setLeft(OFFER_TTL_MS / 1000);
+  };
   // A polite live region is announced only when its text changes after it is in the page, so it mounts empty
   // and is filled by the effect below. Focus stays in the terminal, so this is the only announcement.
   const [announce, setAnnounce] = React.useState("");
@@ -42,9 +57,10 @@ export function CopyOfferToast({
   // Focus stays in the terminal: a person who selects and then types must not
   // have those keystrokes swallowed by the card.
   React.useEffect(() => {
+    if (held) return;
     const t = setInterval(() => setLeft((s) => Math.max(0, s - 1)), 1000);
     return () => clearInterval(t);
-  }, []);
+  }, [held]);
 
   React.useEffect(() => {
     setAnnounce(`${TERMINAL_COPY.OFFER_TITLE}. ${TERMINAL_COPY.OFFER_SIZE(offer.chars)}. ${TERMINAL_COPY.OFFER_KEYS(mac)}.`);
@@ -74,6 +90,12 @@ export function CopyOfferToast({
       aria-label={TERMINAL_COPY.OFFER_TITLE}
       data-testid="terminal-copy-offer"
       tabIndex={-1}
+      onPointerEnter={() => touch("pointer", true)}
+      onPointerLeave={() => touch("pointer", false)}
+      onFocus={() => touch("focus", true)}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) touch("focus", false);
+      }}
       onKeyDown={(e) => {
         if (e.key === "Escape") {
           e.preventDefault();

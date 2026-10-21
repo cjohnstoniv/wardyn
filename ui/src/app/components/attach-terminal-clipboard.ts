@@ -74,6 +74,8 @@ export interface CopyGateOptions {
 export interface CopyGate {
   /** Drop a pending offer (the user acted on it, or dismissed it). */
   dismiss(): void;
+  /** Hold the pending offer while a person is reading or reaching it; letting go starts the full time again. */
+  hold(held: boolean): void;
   /** Connection or role changed: forget the gesture, the offer and the notice. */
   reset(): void;
   dispose(): void;
@@ -207,6 +209,11 @@ export function createCopyGate(opts: CopyGateOptions): CopyGate {
       onOffer(null);
     }
   };
+  const hold = (held: boolean) => {
+    if (!offer) return;
+    if (offerTimer) clearTimeout(offerTimer);
+    offerTimer = held ? null : setTimeout(dismiss, OFFER_TTL_MS);
+  };
   const drop = (why: string, withNotice: boolean) => {
     console.debug(`terminal clipboard: OSC 52 dropped: ${why}`);
     if (withNotice) onNotice(TERMINAL_COPY.BLOCKED);
@@ -302,6 +309,7 @@ export function createCopyGate(opts: CopyGateOptions): CopyGate {
   };
   return {
     dismiss,
+    hold,
     reset,
     dispose: () => {
       reset();
