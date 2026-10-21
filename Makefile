@@ -303,20 +303,21 @@ test-report-docker: ## -tags docker suite with reports (fakeDocker; no daemon ne
 	@echo "Running docker-tagged suite with reports (-race; fakeDocker; WARDYN_TEST_DOCKER=1 adds the real-daemon cases)..."
 	WARDYN_TEST_PG= ./scripts/test-report.sh docker -race -tags docker ./...
 
-# The whole tree under -tags k8s, so the k8s confinement substrate
-# (internal/runner/k8s) and the wardynd wiring that calls it — none of which
-# the tagless build can even compile — are actually tested and measured, under
+# The whole tree under -tags docker,k8s (the production image's tags), so the
+# k8s confinement substrate (internal/runner/k8s), the wardynd wiring that calls
+# it and wardyn-runnerd's `docker && k8s` files (production_k8s.go) — none of
+# which the tagless build can even compile — are actually tested and measured, under
 # -race (drive provisioning, the teardown wait-for-gone poll and the orphan
 # sweep all run concurrently against the apiserver). No cluster needed: the real-cluster case (test/conformance's TestConformanceK8s)
 # self-skips unless WARDYN_TEST_K8S=1, leaving the fake-clientset-backed unit
 # tests (internal/runner/k8s/*_test.go) to run anywhere.
-test-report-k8s: ## -tags k8s suite with reports (fake clientset; no cluster needed), under the race detector
-	@echo "Running k8s-tagged suite with reports (-race; fake clientset; WARDYN_TEST_K8S=1 + a kubeconfig adds the real-cluster conformance case)..."
-	WARDYN_TEST_PG= ./scripts/test-report.sh k8s -race -tags k8s ./...
+test-report-k8s: ## -tags docker,k8s suite with reports (fake clientset; no cluster needed), under the race detector
+	@echo "Running docker,k8s-tagged suite with reports (-race; fake clientset; WARDYN_TEST_K8S=1 + a kubeconfig adds the real-cluster conformance case)..."
+	WARDYN_TEST_PG= ./scripts/test-report.sh k8s -race -tags docker,k8s ./...
 
 # Coverage floor gate. Override with `make cover-check COVER_MIN=NN`.
 # Enforced over the UNION of all three shipped builds (tagless + -tags docker +
-# -tags k8s), not the tagless subset alone — measuring only the tagless build
+# -tags docker,k8s), not the tagless subset alone — measuring only the tagless build
 # reported a number for code that is not what ships. Pulling the excluded
 # packages in moved the honest total from 67.1% (tagless-only) to 66.1%
 # (docker union); the floor sits under that measurement with a margin for
