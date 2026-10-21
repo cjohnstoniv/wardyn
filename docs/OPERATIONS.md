@@ -2054,6 +2054,7 @@ A workspace is not one unit of configuration. Wardyn splits it into three:
    - "Recommended" is never a catalog kind — it is a per-workspace DERIVED build, excluded by a database CHECK constraint, not by convention.
    - None of the three is used as-is. The image builder wraps each with Wardyn's runner tools ([ENVBUILD.md](ENVBUILD.md)), because every run starts its work through `agent-run`.
    - With no image builder wired, a run on such a workspace is refused `image_builder_unavailable`. The wrapped image runs on the Docker substrate only; the Kubernetes substrate refuses it.
+   - A command that needs no model runs on a workspace whose base image is recommended: `wardyn run --experience background --command '<command>' --workspace <id>` starts from the stock agent image and evaluates no model provider.
    - `GET/POST /api/v1/base-images`, `DELETE /api/v1/base-images/{id}` — there is no `GET` by id (`handleGetBaseImage` went with its route).
 3. **Workspace** (tier 3) — an ordered list of attachments (library sources, or inline ephemeral scratch dirs) plus an optional catalog image.
    - Attachment order is load-bearing: `attachments[0]` is the primary, the same rule a single `sources[0]` carried before the split.

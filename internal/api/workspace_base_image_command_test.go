@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/google/uuid"
 )
 
 // noBuilderFixture is seedImageFixture with no image builder wired: the shape of a
@@ -51,5 +53,53 @@ func TestWorkspaceByoBaseImageNoBuilderNamesWorkingPath(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A member's background command that includes no harness, on a workspace with no
+// base image of its own, starts from the stock agent image: the image the same
+// command gets with no workspace attached. Before, it was refused "pass --image or
+// --agent", neither of which a run-mode command can carry.
+func TestRunModeCommandOnRecommendedWorkspaceUsesAgentBaseImage(t *testing.T) {
+	ws := baseImageWorkspace("", "")
+	ws.BaseImage = nil
+	srv := noBuilderFixture(t, ws)
+	body := fmt.Sprintf(`{"title":"t","experience":"background","workload":{"kind":"command","command":"echo hi"},"workspace_id":%q}`, ws.ID.String())
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", govSession(t, "sub-member", []string{"eng"}, false), body)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create = %d, want 201: %s", w.Code, w.Body.String())
+	}
+	st := srv.cfg.Store.(*seedImageStore)
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	for _, r := range st.runs {
+		if r.Agent != "" || r.ModelProviderID != "" {
+			t.Errorf("run agent=%q provider=%q, want neither: the command includes no harness", r.Agent, r.ModelProviderID)
+		}
+	}
+}
+
+// The no-model proof for a command that includes no harness: at dispatch it gets
+// no model provider's env, no key injection and no provider host on its egress,
+// even with a provider on the run whose credential nobody holds (evaluated, it
+// would be refused).
+func TestCommandWithoutHarnessGetsNoModelCredential(t *testing.T) {
+	s := noBuilderFixture(t, baseImageWorkspace("", "unused"))
+	rec := s.cfg.Audit.(*recRecorder)
+	sc := types.SiteConfig{ModelProviders: &types.ModelProviders{Providers: []types.ModelProvider{{
+		ID: "corp-gw", UID: "uid-gw", Kind: types.ModelProviderCustomEndpoint, BaseURL: "https://llm.corp.test",
+		Harnesses: []types.ProviderHarness{{Harness: "claude-code"}},
+	}}}}
+	for _, agent := range []string{"", "claude-code"} {
+		run := types.AgentRun{ID: uuid.New(), Agent: agent, Task: "echo hi", ModelProviderID: "corp-gw"}
+		policy := &types.RunPolicySpec{}
+		env := map[string]string{}
+		llms, _, grants, _, ok := s.resolveProviderLane(context.Background(), run, dispatchParams{TaskMode: "exec"}, policy, env, nil, "http://wardyn-proxy:3128", sc, true)
+		if !ok || len(llms) != 0 || len(grants) != 0 || len(env) != 0 || len(policy.AllowedDomains) != 0 {
+			t.Errorf("agent %q: ok=%v llms=%d grants=%v env=%v domains=%v, want ok and nothing model-shaped", agent, ok, len(llms), grants, env, policy.AllowedDomains)
+		}
+	}
+	if len(rec.events) != 0 {
+		t.Errorf("audit rows = %+v, want none: no provider was evaluated", rec.events)
 	}
 }

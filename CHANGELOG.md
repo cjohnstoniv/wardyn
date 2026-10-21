@@ -12,6 +12,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 - The docs no longer say a workspace's `byo` base image is used verbatim. `registry`, `custom` and `byo` base images are all wrapped with Wardyn's runner tools by the image builder before a run uses them, and the wrapped image runs on the Docker substrate only.
 - A run on a workspace whose base image needs the image builder, on a control plane with none, is still refused `image_builder_unavailable`. The refusal now names the image and what works instead: an admin wires the builder, or sets the workspace's base image to recommended so a command that needs no model runs on the stock agent image.
+- A background command that includes no harness, on a workspace with no base image of its own, now starts from the stock agent image, as it does with no workspace. It was refused `workspace_seed_no_base_image` with advice to pass `--image` or `--agent`, which a run-mode command cannot carry. It evaluates no model provider and gets no model credential.
 
 ## [0.9.7] — 2026-10-20
 
