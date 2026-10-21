@@ -320,6 +320,9 @@ func applyUnitChange(s *Server, r *http.Request, q store.Querier, ch types.Gover
 	if err != nil {
 		return govApplied{}, fmt.Errorf("governance change %s: target key %q is not a profile id", ch.ID, ch.TargetKey)
 	}
+	if refusal := defaultUnitWriteRefusal(id); refusal != nil {
+		return govApplied{}, refusal
+	}
 	if ch.Op == "delete" {
 		return applyUnitDelete(ctx, q, ch, id)
 	}
