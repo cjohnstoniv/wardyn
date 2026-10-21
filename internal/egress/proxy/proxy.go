@@ -415,7 +415,7 @@ func newProxy(opts Options) *Proxy {
 	}
 	if l := policyref.Layered(opts.Attribution); p.sink != nil && l != nil && l.Layer != "" {
 		p.sink.layer = l.Layer
-		if l.Layer == policyref.LayerProfile {
+		if l.Layer == policyref.LayerUnit {
 			p.sink.layerName = l.Name
 		}
 	}
