@@ -36,7 +36,7 @@ import type { Page } from "@playwright/test";
 // the old title-grouped board needed one. State is asserted via the row's own
 // status WORD (runs/runs-model.ts's rowPresentation), never CSS classes:
 //   PENDING "Pending", STARTING "Starting", RUNNING "Running",
-//   WAITING_FOR_CONFIRMATION "Needs your approval", COMPLETED "Completed",
+//   WAITING_FOR_CONFIRMATION "Awaiting confirmation", COMPLETED "Completed",
 //   STOPPED "Stopped", FAILED "Failed", KILLED "Killed", ARCHIVED "Archived".
 // Barriers, the agent monogram and the Run ID moved to the run page — none of
 // them render on this page anymore (design.md §4).
