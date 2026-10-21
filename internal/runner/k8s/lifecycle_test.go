@@ -418,8 +418,8 @@ func TestDriver_HasNoKeptEnd(t *testing.T) {
 // TestTeardownWaitBound pins how long teardown waits for the kubelet to confirm the pods gone. A
 // kill (grace 0, lifted to 1 s) used to wait 16 s, and a slow node's runtime took 16.4 s once, so
 // the kill reported a containment failure for a delete that completed (#3182). It now waits past
-// that, and still ends inside the 30 s kill cascade (internal/api killCascadeTimeout) with room
-// left for the revocations. A stop keeps its bounds.
+// that. In server mode that still ends inside the 30 s kill cascade (internal/api killCascadeTimeout);
+// runner mode waits pod after pod and was already over 30 s. A stop keeps its bounds.
 func TestTeardownWaitBound(t *testing.T) {
 	zero, ten := int64(0), int64(10)
 	for _, c := range []struct {

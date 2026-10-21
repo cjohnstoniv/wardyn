@@ -225,8 +225,10 @@ const (
 	teardownPollSlack     = 15 * time.Second
 	// killPollSlack is the beat a kill (grace 0, run at the 1 s floor) allows the kubelet to
 	// SIGKILL and report the pod gone. A busy node's runtime took longer than teardownPollSlack once,
-	// and the kill then reported a containment failure for a delete that completed. 1 s + 24 s stays
-	// inside the 30 s kill cascade, leaving 4 s for the revocations after it.
+	// and the kill then reported a containment failure for a delete that completed. In server mode 1 s +
+	// 24 s stays inside the 30 s kill cascade, leaving about 4 s for the revocations after it. Runner mode
+	// waits for the proxy pod, then the agent pod, then the pods again, one after another, so its worst
+	// case was already over 30 s and still is.
 	killPollSlack = 24 * time.Second
 )
 
