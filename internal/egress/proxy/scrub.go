@@ -48,8 +48,8 @@ func (s *scrubbedWriter) WriteHeader(code int) {
 
 func (s *scrubbedWriter) Write(b []byte) (int, error) { return s.mw.Write(b) }
 
-// Flush forwards what the masking writer has released; it holds back at most
-// the longest credential's length less one byte until the next write or done.
+// Flush forwards what the masking writer has released; it holds back only an
+// end of the stream that could begin a credential, until the next write or done.
 func (s *scrubbedWriter) Flush() {
 	if f, ok := s.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
