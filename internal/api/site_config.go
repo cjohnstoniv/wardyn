@@ -327,7 +327,7 @@ func validateSiteConfig(cfg types.SiteConfig) error {
 		return err
 	}
 	if err := cmp.Or(validateSignInHelp(cfg.SignInHelpText, cfg.SignInHelpURL), validatePolicyHelp(cfg.PolicyHelp), validateComponentSettings(cfg.Components),
-		validateSiteRecording(cfg.Recording)); err != nil {
+		validateSiteRecording(cfg.Recording), validGovernanceMaxDepth(cfg.GovernanceMaxDepth)); err != nil {
 		return err
 	}
 	// The workspace-provider block, when the body carries one: ONE validator for
@@ -765,6 +765,9 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	carryForwardUnnamedSiteConfigFields(&cfg, existing, present)
+	if !s.admitGovernanceMaxDepth(w, r, &cfg, existing, present) { // under the lock, after the carry-forward
+		return
+	}
 	// The egress baseline lowers grades, so it has a stricter writer than this door: the egress block
 	// and the set of baseline-marked internal hosts must come back as stored, whoever is asking.
 	carryForwardInternalHostMarks(&cfg, existing)
