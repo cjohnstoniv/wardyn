@@ -4,7 +4,9 @@
 package egress
 
 import (
+	"maps"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -49,14 +51,22 @@ var wardynRefusalReasons = map[string]string{
 }
 
 // PolicyDecided reports whether r is a refusal the run's policy made, as opposed to
-// a built-in guard's: only a policy-decided refusal names a layer.
+// a built-in guard's (nil is neither): only a policy-decided refusal names a layer, and
+// it is the one definition the proxy's attribution headers share.
 func PolicyDecided(r *Refusal) bool {
+	if r == nil {
+		return false
+	}
 	switch r.Reason {
 	case "policy_denied", "default_deny", "method", "port", "require_tls", "tool_deny", "approval_denied":
 		return r.By == RefusedByWardyn
 	}
 	return false
 }
+
+// WardynRuleSources lists the deny rule_sources WardynRefusal classifies by exact
+// name (the vmnet: family aside), so a test can hold a second definition to them.
+func WardynRuleSources() []string { return slices.Sorted(maps.Keys(wardynRefusalReasons)) }
 
 // WardynRefusal is the Refusal for a deny the policy or a guard decided, or nil when
 // ruleSource is not one (see wardynRefusalReasons). A desktop VM relay's refusal

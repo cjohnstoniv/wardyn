@@ -22,7 +22,7 @@ const (
 
 // EgressRefusal is the "whose refusal" part of an `egress.deny` audit event's data.
 // Reason is a closed token (docs/AUDIT-ACTIONS.md lists them); Layer and LayerName
-// ride only By == EgressRefusedByWardyn. It never carries request content.
+// ride only a policy-decided refusal (By == EgressRefusedByWardyn); a guard refusal names none. It never carries request content.
 type EgressRefusal struct {
 	By        string `json:"by"`
 	Reason    string `json:"refusal_reason"`

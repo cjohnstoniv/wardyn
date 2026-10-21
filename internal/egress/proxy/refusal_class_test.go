@@ -113,6 +113,26 @@ func TestRefusal_GuardRefusalNamesNoLayer(t *testing.T) {
 	})
 }
 
+// The attribution headers and the audit row's layer share one definition of "policy
+// decided": for every rule_source the refusal table names, the two agree.
+func TestRefusal_PolicyDecidedAgreesWithTheAttributionHeaders(t *testing.T) {
+	sources := append(egress.WardynRuleSources(), "vmnet:udp", "builtin:resolve-failed", "policy:evaluator-error", "builtin:dial-failed")
+	for _, rs := range sources {
+		want := egress.PolicyDecided(egress.WardynRefusal(rs))
+		if got := policyDecidedReason(rs); got != want {
+			t.Errorf("%s: policyDecidedReason = %v, egress.PolicyDecided = %v", rs, got, want)
+		}
+	}
+	for _, rs := range []string{"policy:require-tls", "policy:tool-deny", "policy:denied", "policy:port"} {
+		if !policyDecidedReason(rs) {
+			t.Errorf("%s is the profile's refusal and must be policy-decided", rs)
+		}
+	}
+	if policyDecidedReason("builtin:private-ip") {
+		t.Error("the private-address guard is not the policy owner's to fix")
+	}
+}
+
 // A peer outside Wardyn that refuses an allowed host is "outside": a refused dial on both
 // lanes, and the corporate proxy answering the CONNECT with a status.
 func TestRefusal_AllowedHostRefusedOutside(t *testing.T) {

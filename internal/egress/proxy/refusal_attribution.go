@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
 )
 
@@ -22,13 +23,12 @@ const (
 // policyDecidedReason reports whether a decision-log reason is a refusal the
 // run's policy made. Closed on purpose: a DNS or dial failure, the private-address
 // guard and an evaluator error are faults, and sending someone to the policy
-// owner for one costs that owner a ticket that is not theirs.
+// owner for one costs that owner a ticket that is not theirs. It reads
+// egress.PolicyDecided, the one definition the audit row's layer shares, so the
+// two cannot drift; require-tls and tool-deny count because the profile decided
+// them, though those lanes write their own answer and never reach the headers.
 func policyDecidedReason(reason string) bool {
-	switch reason {
-	case "policy:denied", "policy:default-deny", "policy:method", ruleSourcePort, "approval:denied":
-		return true
-	}
-	return false
+	return egress.PolicyDecided(egress.WardynRefusal(reason))
 }
 
 // reprojectAttribution re-runs policyref.Project over a decoded attribution, so
