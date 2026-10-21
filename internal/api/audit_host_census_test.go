@@ -74,7 +74,7 @@ var auditHostReviewed = map[string]auditHostKeep{
 	"egress.*":                           {[]string{"host"}, keepEgress},
 	"github_pat.own.resolve":             {[]string{"host"}, keepEgress},
 	"governance.egress_baseline.write":   {[]string{"after", "before"}, "the baseline egress host sets, which the security tier writes"},
-	"governance.profile.write":           {[]string{"contact_request_url"}, "the contact link a profile shows its members"},
+	"governance.unit.write":           {[]string{"contact_request_url"}, "the contact link a profile shows its members"},
 	"harness.login.start":                {[]string{"sso_start_url"}, "the identity provider's sign-in start URL, an egress destination"},
 	"llm.scan.*":                         {[]string{"host"}, keepEgress},
 	"model_provider.write":               {[]string{"base_url_changed"}, "a boolean"},
