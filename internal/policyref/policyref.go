@@ -88,6 +88,20 @@ type Ref struct {
 	// LayerUnit today). Layered stamps it on a refusal's policy; the
 	// proxy's attribution never carries it, because its wire predates the key.
 	Layer string `json:"layer,omitempty"`
+	// Locked says the knob a refusal is attributed to is locked by the layer that set it, so no
+	// lower layer could have allowed it (AttributedTo). False until per-knob locks are derived.
+	Locked bool `json:"locked,omitempty"`
+}
+
+// AttributedTo is a copy of ref for a refusal attributed to the one knob whose provenance record is
+// p: Locked is p's. Nil for nil.
+func AttributedTo(ref *Ref, p Provenance) *Ref {
+	if ref == nil {
+		return nil
+	}
+	cp := *ref
+	cp.Locked = p.Locked
+	return &cp
 }
 
 // Provenance is which layer set one value of a run's effective policy. Name is
