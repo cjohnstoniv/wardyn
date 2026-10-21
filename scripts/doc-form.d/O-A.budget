@@ -112,6 +112,9 @@
 # docs/OPERATIONS.md 56797 = ours 56777 + theirs 56764 - base 56744 at the 0.10 W2 merge of HRN onto the train.
 # docs/OPERATIONS.md 57339: measured after the main merge.
 # docs/OPERATIONS.md 57392 = ours 56797 + theirs 57339 - base 56744 at the 0.10 W2 merge of MDL onto the train.
+# docs/OPERATIONS.md 56775 = 56744 + 31 (0.10 LAY-A's 0198 migrator line), measured after merging main into 0.10 LAY-A.
+# docs/OPERATIONS.md 56776 measured (0.10 BOUNDARY): the org walls renamed the Wardyn boundary, with modes.
+# docs/OPERATIONS.md 57424 = ours 56776 + theirs 57392 - base 56744 at the main merge into 0.10 BOUNDARY.
 # 0.10 HYBB (#2982): docs/OPERATIONS.md 56767 adds 23, measured: the 0198 migration line.
 # docs/OPERATIONS.md 57415 = ours 56767 + theirs 57392 - base 56744 at the 0.10 merge of main (W2) into HYBB.
 # docs/OPERATIONS.md 57478 = ours 56830 + theirs 57392 - base 56744 at the 0.10 merge of main (W2) into SEC-1c.
@@ -141,6 +144,8 @@
 # docs/OPERATIONS.md 58620 = ours 57950 + theirs 58360 - base 57690 at the 0.10 W4d merge of FEAT-2TEAM-UI onto the train.
 # docs/OPERATIONS.md 57751 = ours 57562 + theirs 57690 - base 57501 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/OPERATIONS.md 58681 = ours 58620 + theirs 57751 - base 57690 at the 0.10 W4d merge of W4b-main onto the train.
+# docs/OPERATIONS.md 57722 = ours 57424 + theirs 57690 - base 57392 at the 0.10 LANES merge of main onto BOUNDARY.
+# docs/OPERATIONS.md 58681 = ours 58681 + theirs 57722 - lane's pre-LANES value 57722 (the lane stacked LAY-A, which main already carries) at the 0.10 W4d merge of LANES onto the train.
 docs/OPERATIONS.md=58681 share=35
 # docs/OPERATIONS.md 55848 adds 132 over 55716: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
 # docs/OPERATIONS.md 55840 adds 124 over 55716, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.

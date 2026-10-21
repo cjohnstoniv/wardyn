@@ -222,7 +222,10 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		return reviveResult{}, rerr
 	}
 	corpus := inspectionCorpusOf(cfg.Policy) // the organisation's, before a laptop copy drops it
-	re, rerr := reassertProxyCeiling(run, cfg, c)
+	// The final seal, as dispatch's (run_policy_seal.go), then the ceiling's re-assertion over the
+	// layers it read, so a credential the boundary withholds goes as one the profile denies does.
+	layers := s.sealRunPolicy(ctx, run, &cfg.Policy, nil)
+	re, rerr := reassertProxyCeiling(run, cfg, c, layers)
 	if rerr != nil {
 		if rerr.reason == reasonReviveCeilingDeniesGitBroker || rerr.reason == reasonReviveCeilingDeniesAzureCLI {
 			s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "denied",
@@ -230,7 +233,6 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		}
 		return reviveResult{}, rerr
 	}
-	s.sealRunPolicy(ctx, run, &cfg.Policy, nil) // the final seal, as dispatch's (run_policy_seal.go)
 	if rerr := s.reviveOwnerRecheck(ctx, run, cfg, actorType, actor); rerr != nil {
 		return reviveResult{}, rerr
 	}
