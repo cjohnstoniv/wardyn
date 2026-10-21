@@ -118,17 +118,7 @@ func (s *Server) exportAuditPartition(w http.ResponseWriter, r *http.Request) {
 
 	wrote := false // a byte has reached the response: the 200 is committed
 	var rowsSent, redacted int64
-	// project is data as this reader is served it, counting each row served without its host detail.
-	project := func(action string, data []byte) ([]byte, bool) {
-		if superAdmin {
-			return nil, false
-		}
-		d, ok := hostViewOf(action, data)
-		if ok {
-			redacted++
-		}
-		return d, ok
-	}
+	project := partitionProjector(superAdmin, &redacted)
 	var digest *store.PartitionDigest
 	var manifest store.PartitionManifest
 	send := func(v any) error {
@@ -181,14 +171,7 @@ func (s *Server) exportAuditPartition(w http.ResponseWriter, r *http.Request) {
 			digest.Add(row.FoldHash)
 			rowsSent++
 			if form == auditFormRaw {
-				line := rawPartitionLine(row)
-				if row.Data != nil {
-					if d, ok := project(row.Action, []byte(*row.Data)); ok {
-						text := string(d)
-						line.Data = &text
-					}
-				}
-				if err := send(line); err != nil {
+				if err := send(projectedRawLine(row, project)); err != nil {
 					return err
 				}
 			} else if pending = append(pending, readablePartitionLine(row)); len(pending) == auditExportPageSize {
@@ -219,6 +202,34 @@ func (s *Server) exportAuditPartition(w http.ResponseWriter, r *http.Request) {
 			s.failAuditExport(w, r, "footer write", int(rowsSent), wrote, err)
 		}
 	}
+}
+
+// partitionProjector is data as a partition export's reader is served it (hostViewOf below a super admin,
+// as stored otherwise), counting in redacted each row served without its host detail.
+func partitionProjector(superAdmin bool, redacted *int64) func(action string, data []byte) ([]byte, bool) {
+	return func(action string, data []byte) ([]byte, bool) {
+		if superAdmin {
+			return nil, false
+		}
+		d, ok := hostViewOf(action, data)
+		if ok {
+			*redacted++
+		}
+		return d, ok
+	}
+}
+
+// projectedRawLine is rawPartitionLine with its data as project serves it; the hashes stay the stored ones.
+func projectedRawLine(row store.AuditPartitionRow, project func(string, []byte) ([]byte, bool)) partitionRawLine {
+	l := rawPartitionLine(row)
+	if row.Data == nil {
+		return l
+	}
+	if d, ok := project(row.Action, []byte(*row.Data)); ok {
+		text := string(d)
+		l.Data = &text
+	}
+	return l
 }
 
 func rawPartitionLine(row store.AuditPartitionRow) partitionRawLine {
