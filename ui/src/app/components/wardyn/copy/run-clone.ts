@@ -82,7 +82,7 @@ export const NO_BARRIER = {
   BANNER_BODY:
     "Wardyn confines every run. Until a container runtime answers, there is nothing to confine it with.",
   // The reader who cannot fix it: who can, and no dead-end control.
-  BANNER_MEMBER: "Your admin needs to set up a barrier before runs can start.",
+  BANNER_MEMBER: "Ask a Wardyn admin to set one up.",
   SETUP_COMMAND: "wardyn setup status",
   RECHECK: "Re-check",
   FINISH_GATE_HEAD: "Setup can't finish without a barrier.",

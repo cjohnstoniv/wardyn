@@ -394,7 +394,7 @@ test.describe("#214 — no barrier: the shell banner and the top bar's route", (
     await asRealMember(page);
     await gotoConsole(page);
     await expect(page.getByText(NO_BARRIER.BANNER_TITLE)).toBeVisible();
-    await expect(page.getByText(NO_BARRIER.BANNER_MEMBER)).toBeVisible();
+    await expect(page.getByText("Ask a Wardyn admin to set one up.")).toBeVisible();
     await expect(page.getByText(NO_BARRIER.SETUP_COMMAND, { exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: NO_BARRIER.RECHECK })).toHaveCount(0);
     await expect(page.getByRole("link", { name: NO_BARRIER.CTA })).toHaveCount(0);

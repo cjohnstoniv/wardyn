@@ -203,7 +203,8 @@ describe("the #214 no-barrier banner: present in both views, CTA gated on who ca
       true,
     );
     expect(await screen.findByText(NO_BARRIER.BANNER_TITLE)).toBeInTheDocument();
-    expect(screen.getByText(NO_BARRIER.BANNER_MEMBER)).toBeInTheDocument();
+    // The round-5 body (#3050): a literal on purpose, so the sentence cannot drift with its constant.
+    expect(screen.getByText("Ask a Wardyn admin to set one up.")).toBeInTheDocument();
     expect(screen.queryByText(NO_BARRIER.BANNER_BODY)).toBeNull();
     expect(screen.queryByRole("link", { name: NO_BARRIER.CTA })).toBeNull();
     expect(screen.queryByRole("button", { name: NO_BARRIER.RECHECK })).toBeNull();
