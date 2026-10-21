@@ -667,7 +667,7 @@ Run detail and the header show `placement`, the runner's name, `placement_filled
 | — | `upstream_proxy_secret_ref` | not a class | The runner's own upstream config applies (OD-8) |
 
 - OD-12 bars `runner_resident` only for `github_token` and `cloud_sts`. The header-shaped classes keep it.
-- Owner ruling 2026-10-10: `ado_minted_pat` may be `runner_resident`, off by default. A super admin opts in per Azure DevOps connection (`entra.runner_resident`), and a second opt-in (`entra.runner_resident_sandbox`) also puts it in the sandbox.
+- Owner ruling 2026-10-10: `ado_minted_pat` may be `runner_resident`, off by default. A super admin opts in per Azure DevOps connection (`entra.runner_resident`), and a second opt-in (`entra.runner_resident_sandbox`) was meant to also put it in the sandbox. It has no effect in this version.
 - A resident value is static for the run, so a short-lived token stops working at its expiry. Re-delivery is a follow-on.
 - H7 rule: a class is eligible when its best allowed mode is available for this runner. Otherwise local placement is refused, naming the credential and the missing mode or posture.
 - #475 (per-person Azure DevOps), rewritten: the human creates runs at the org; ADO capture stays org-side; brokered ADO is `via_org` or `refuse`.
