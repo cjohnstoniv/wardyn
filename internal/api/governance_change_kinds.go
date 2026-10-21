@@ -81,9 +81,10 @@ func profileRequestFromPayload(raw json.RawMessage) (governanceProfileRequest, s
 // heldProfileWrite is what a profile build proved before it was abandoned: every profile as the
 // transaction read them, the row it would have stored and what that composes to.
 type heldProfileWrite struct {
-	all []types.GovernanceProfile
-	row types.GovernanceProfile
-	res *ResolvedProfile
+	all  []types.GovernanceProfile
+	row  types.GovernanceProfile
+	res  *ResolvedProfile
+	keep mountKeep
 }
 
 // profileWriteExempt reports whether a human's profile update applies without a second human. Only an
@@ -189,30 +190,40 @@ type profileDiffView struct {
 	Effective *governanceEffective `json:"effective,omitempty"`
 }
 
-func newProfileDiffView(row types.GovernanceProfile, res *ResolvedProfile) *profileDiffView {
+// tier is the lowest tier that may read the change (holdProfileWrite): a change that sets a host path
+// is decided by super admins only, so it is rendered whole; any other is rendered for a security admin.
+func newProfileDiffView(row types.GovernanceProfile, res *ResolvedProfile, tier specReadTier) *profileDiffView {
 	v := &profileDiffView{profileDiffStored: profileDiffStored{
-		Name: row.Name, Ceiling: redactSpecForRead(row.Ceiling, true), Limits: row.Limits,
+		Name: row.Name, Ceiling: redactSpecForRead(row.Ceiling, tier), Limits: row.Limits,
 		Contact: nonZeroContact(row.Contact), BaseProfileID: row.BaseProfileID,
-		Overlay: redactOverlayForRead(row.Overlay), OverlayLimits: row.OverlayLimits,
+		Overlay: redactOverlayForRead(row.Overlay, tier), OverlayLimits: row.OverlayLimits,
 	}}
 	if res != nil {
 		v.Effective = &governanceEffective{
-			Ceiling: redactSpecForRead(res.Ceiling, true), Limits: res.Limits, Warnings: res.AdminWarnings,
+			Ceiling: redactSpecForRead(res.Ceiling, tier), Limits: res.Limits, Warnings: res.AdminWarnings,
 		}
 	}
 	return v
 }
 
-// redactOverlayForRead is redactSpecForRead for an overlay's llm_inspection block: a raw secret value
-// is replaced by a count, on a copy.
-func redactOverlayForRead(o *types.CeilingOverlay) *types.CeilingOverlay {
-	if o == nil || o.LLMInspection == nil || len(o.LLMInspection.WorkspaceSecretValues) == 0 {
+// redactOverlayForRead is redactSpecForRead for an overlay, on a copy: a raw llm_inspection secret
+// value is replaced by a count, and below the super admin tier each workspace mount's host path is
+// withheld. Only the admin surfaces serve an overlay, so tier is never specReadMember here.
+func redactOverlayForRead(o *types.CeilingOverlay, tier specReadTier) *types.CeilingOverlay {
+	withhold := tier != specReadFull && o != nil && o.WorkspaceMounts != nil && len(*o.WorkspaceMounts) > 0
+	if !withhold && (o == nil || o.LLMInspection == nil || len(o.LLMInspection.WorkspaceSecretValues) == 0) {
 		return o
 	}
 	cp := *o
-	li := *o.LLMInspection
-	li.WorkspaceSecretValues = []string{fmt.Sprintf("<%d value(s) redacted>", len(li.WorkspaceSecretValues))}
-	cp.LLMInspection = &li
+	if withhold {
+		mounts := withholdMounts(*o.WorkspaceMounts)
+		cp.WorkspaceMounts = &mounts
+	}
+	if o.LLMInspection != nil && len(o.LLMInspection.WorkspaceSecretValues) > 0 {
+		li := *o.LLMInspection
+		li.WorkspaceSecretValues = []string{fmt.Sprintf("<%d value(s) redacted>", len(li.WorkspaceSecretValues))}
+		cp.LLMInspection = &li
+	}
 	return &cp
 }
 
@@ -258,15 +269,21 @@ func (s *Server) holdProfileWrite(w http.ResponseWriter, r *http.Request, id uui
 	cur, exists := profilesByID(h.all)[id]
 	row := h.row
 	op := "create"
+	// Rendered for the lowest tier that may read the change: whole only when it sets a host path,
+	// which only a super admin decides.
+	tier := specReadSecurity
+	if h.keep.setsHostPath {
+		tier = specReadFull
+	}
 	var before *profileDiffView
 	if exists {
 		op = "update"
-		before = newProfileDiffView(cur, s.resolveForDiff(h.all, id))
+		before = newProfileDiffView(cur, s.resolveForDiff(h.all, id), tier)
 		row.Contact = profileContactAfter(cur, h.row)
 	}
-	after := newProfileDiffView(row, h.res)
+	after := newProfileDiffView(row, h.res, tier)
 	p := govProposal{
-		kind: govKindProfile, op: op, key: id.String(), payload: profilePayloadOf(req),
+		kind: govKindProfile, op: op, key: id.String(), payload: heldProfilePayload(req, h.keep),
 		after: after, baseState: profileBaseState(h.all, id, h.row.BaseProfileID),
 	}
 	var beforeStored *profileDiffStored
@@ -305,7 +322,7 @@ func (s *Server) holdProfileDelete(w http.ResponseWriter, r *http.Request, id uu
 		return
 	}
 	cur := profilesByID(all)[id]
-	before := newProfileDiffView(cur, s.resolveForDiff(all, id))
+	before := newProfileDiffView(cur, s.resolveForDiff(all, id), specReadSecurity)
 	s.proposeGovernanceChange(w, r, govProposal{
 		kind: govKindProfile, op: "delete", key: id.String(), payload: map[string]any{"id": id},
 		before: before, changed: changedPaths(before.profileDiffStored, nil),
@@ -333,10 +350,16 @@ func applyProfileChange(s *Server, r *http.Request, q store.Querier, ch types.Go
 		if computeETag(profileBaseState(all, id, base)) != ch.BaseHash {
 			return types.GovernanceProfile{}, store.ErrGovernanceChangeStale
 		}
-		p, res, err := s.buildGovernanceProfile(ch.ProposedBy, id, req, all)
+		p, res, _, err := s.buildGovernanceProfile(ch.ProposedBy, s.isOperator(ctx), id, req, all)
 		effective = res
 		return p, err
 	})
+	var tier *mountTierRefusal
+	if errors.As(err, &tier) {
+		return govApplied{}, &govRefusal{why: "mount source tier", write: func(w http.ResponseWriter, r *http.Request) {
+			s.refuse(w, r, tier.decision())
+		}}
+	}
 	if errors.Is(err, store.ErrConflict) {
 		return govApplied{}, writeRefusal(http.StatusConflict, reasonGovernanceProfileNameConflict,
 			"a governance profile named %q already exists", req.Name)
@@ -431,7 +454,8 @@ type assignmentDiffView struct {
 }
 
 // newAssignmentDiffView renders a with the profile chain (leaf first) it points at. The profile's
-// ceiling and limits are its EFFECTIVE ones, and the ceiling passes read-redaction.
+// ceiling and limits are its EFFECTIVE ones, and the ceiling passes a security admin's read-redaction
+// (an assignment sets no host path, so a security admin may decide it).
 func (s *Server) newAssignmentDiffView(a types.GovernanceAssignment, chain []types.GovernanceProfile) *assignmentDiffView {
 	v := &assignmentDiffView{SubjectType: a.SubjectType, Subject: a.Subject, ProfileID: a.ProfileID, Priority: a.Priority}
 	if len(chain) == 0 {
@@ -440,9 +464,9 @@ func (s *Server) newAssignmentDiffView(a types.GovernanceAssignment, chain []typ
 	pv := &assignmentProfileView{ID: chain[0].ID, Name: chain[0].Name}
 	res, err := s.composeChain(chain)
 	if err != nil {
-		pv.Ceiling, pv.Limits, pv.Error = redactSpecForRead(chain[0].Ceiling, true), chain[0].Limits, adminResolveError(err)
+		pv.Ceiling, pv.Limits, pv.Error = redactSpecForRead(chain[0].Ceiling, specReadSecurity), chain[0].Limits, adminResolveError(err)
 	} else {
-		pv.Ceiling, pv.Limits = redactSpecForRead(res.Ceiling, true), res.Limits
+		pv.Ceiling, pv.Limits = redactSpecForRead(res.Ceiling, specReadSecurity), res.Limits
 	}
 	v.Profile = pv
 	return v

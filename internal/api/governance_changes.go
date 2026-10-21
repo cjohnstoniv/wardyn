@@ -76,7 +76,7 @@ func (s *Server) handleListGovernanceChanges(w http.ResponseWriter, r *http.Requ
 	out := make([]types.GovernanceChange, 0, len(all))
 	for _, ch := range all {
 		if s.canSeeGovernanceChange(r, ch) {
-			out = append(out, ch)
+			out = append(out, s.changeForRead(r, ch))
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -100,7 +100,7 @@ func (s *Server) handleGetGovernanceChange(w http.ResponseWriter, r *http.Reques
 		writeServerError(w, r, "read governance change", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, ch)
+	writeJSON(w, http.StatusOK, s.changeForRead(r, ch))
 }
 
 func (s *Server) handleApproveGovernanceChange(w http.ResponseWriter, r *http.Request) {
@@ -325,7 +325,7 @@ func (s *Server) decideGovernanceChange(w http.ResponseWriter, r *http.Request, 
 		}
 		s.recordAudit(ctx, s.auditEvent(nil, actorType, principal, "governance.change.reject", out.ID.String(), "success", mustJSON(data)))
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, s.changeForRead(r, out))
 }
 
 // answerFailedDecision writes the response for a decision that did not commit as asked, and the audit
