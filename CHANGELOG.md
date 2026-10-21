@@ -54,6 +54,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   a file only its owner can read, that renews an access token of at most an hour (shorter when
   `WARDYN_API_TOKEN_MAX_TTL` is lower). A computer with no browser signs in by pasting a code only when
   `WARDYN_CLI_PASTE_SIGN_IN=true` is also set.
+- **`wardynd` refuses to start when a Kubernetes sandbox annotation sits in a container runtime's namespace.** A
+  `podAnnotations` key in `WARDYN_K8S_SANDBOX_PLACEMENT` (`k8s.sandbox.podAnnotations` in the chart) that starts
+  `io.katacontainers.`, `io.kubernetes.cri-o.`, `io.kubernetes.cri.`, `io.containerd.`, `dev.gvisor.` or `run.oci.`
+  is refused, and the boot error names the key. Remove those annotations. To choose the runtime, pin the confinement
+  class to a RuntimeClass (`k8s.runtimeClasses`, or `WARDYN_CONFINEMENT_MAP`).
 
 ### Added
 
