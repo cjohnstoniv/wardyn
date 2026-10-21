@@ -12,6 +12,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"os"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
 )
@@ -130,6 +132,56 @@ func TestMigrateOnly_RefusesWhileTheSingleInstanceLockIsHeld(t *testing.T) {
 	requireExit(t, err, exitMigrateRefused, "single-instance lock is held by", "backend pid")
 	if n := appliedCount(t, dsn); n != 0 {
 		t.Fatalf("a refused -migrate-only still applied %d migration(s)", n)
+	}
+}
+
+// holdSingleInstanceKey takes the single-instance lock on its own session in the database dsn names and
+// returns that session's backend pid. The lock is released when the test ends.
+func holdSingleInstanceKey(t *testing.T, dsn string) int32 {
+	t.Helper()
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect holder: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close(ctx) })
+	var pid int32
+	if err := conn.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&pid); err != nil {
+		t.Fatalf("holder pid: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, db.SingleInstanceLockKey); err != nil {
+		t.Fatalf("hold the single-instance lock: %v", err)
+	}
+	return pid
+}
+
+// The single-instance lock is per database but pg_locks lists the whole server, and the refusal names a
+// backend pid an operator may stop: a holder in a second database on the same server is not this
+// database's holder.
+func TestSingleInstanceHolder_IgnoresAHolderInAnotherDatabase(t *testing.T) {
+	here, other := emptyDatabase(t), emptyDatabase(t)
+	ctx := context.Background()
+	holdSingleInstanceKey(t, other)
+	pool, err := db.Connect(ctx, here)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer pool.Close()
+	const none = "a session that could not be identified"
+	if got := singleInstanceHolder(ctx, pool); got != none {
+		t.Fatalf("singleInstanceHolder = %q, want %q: this database has no holder", got, none)
+	}
+}
+
+func TestMigrateOnly_RefusalNamesThisDatabasesHolderNotAnotherOnes(t *testing.T) {
+	here, other := emptyDatabase(t), emptyDatabase(t)
+	otherPID := holdSingleInstanceKey(t, other)
+	herePID := holdSingleInstanceKey(t, here)
+
+	err := migrateOnlyMode(migrateOnlyFlags(here))
+	requireExit(t, err, exitMigrateRefused, fmt.Sprintf("backend pid %d ", herePID))
+	if err != nil && strings.Contains(err.Error(), fmt.Sprintf("backend pid %d ", otherPID)) {
+		t.Fatalf("the refusal names pid %d, a session in another database: %v", otherPID, err)
 	}
 }
 
