@@ -94,7 +94,6 @@ import { NR_SHARED } from "../../src/app/components/wardyn/copy/new-run/shared";
 import { NR_START } from "../../src/app/components/wardyn/copy/new-run/start";
 import { NR_TOOLS } from "../../src/app/components/wardyn/copy/new-run/tools";
 import { AGENTS, PROVIDERS } from "../../src/app/lib/workspace-providers-copy";
-import { expandCard } from "../fixtures";
 import {
   ADMIN_EMAIL,
   LOGIN_DONE,
@@ -349,9 +348,8 @@ async function gotoAgentsTab(page: Page): Promise<void> {
     }
     await expect(page.getByTestId("providers-card")).toBeVisible({ timeout: 5_000 });
   }).toPass({ timeout: 90_000 });
-  // #1200: the Settings cards start collapsed; the "Open" link is in the body.
-  await expandCard(page, PROVIDERS.TITLE);
-  await page.getByTestId("providers-card").getByText(PROVIDERS.CARD_OPEN).click();
+  // Workspace providers is a link row on Settings, not a collapsed card.
+  await page.getByTestId("providers-card").getByRole("link").click();
   await expect(page).toHaveURL(/\/admin\/providers$/);
   await page.getByRole("tab", { name: AGENTS.AGENTS_TITLE }).click();
 }
