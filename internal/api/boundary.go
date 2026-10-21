@@ -328,12 +328,13 @@ func (s *Server) admitBreakGlass(w http.ResponseWriter, r *http.Request) (*http.
 }
 
 // breakGlassLifts reports whether an admin-token run would lift anything: the boundary is in
-// hard_limits and at least one governance profile exists, whose walls the admin token stands outside.
-// The deployment default does not count: the admin token never was held to it. With no profile there
-// is nothing to lift, so the run is an ordinary one, bound by the boundary, untagged.
+// hard_limits and bounds something, and at least one governance profile exists, whose walls the admin
+// token stands outside. The deployment default does not count: the admin token never was held to it.
+// With no profile there is nothing to lift, so the run is an ordinary one, bound by the boundary,
+// untagged. A boundary that bounds nothing (the fresh-install seed) asks no reason, as no_limits.
 func (s *Server) breakGlassLifts(ctx context.Context) (bool, error) {
 	b, err := s.governanceBoundary(ctx)
-	if err != nil || !b.HardLimits() {
+	if err != nil || !b.HardLimits() || boundaryBoundsNothing(b, boundaryOverlay(b)) {
 		return false, err
 	}
 	profiles, err := s.resolveAllProfiles(ctx)
