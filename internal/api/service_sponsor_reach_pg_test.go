@@ -87,6 +87,17 @@ func ageSponsorships(t *testing.T, pool *pgxpool.Pool) {
 	ageSponsorshipsBy(t, pool, time.Hour)
 }
 
+// ageFreshSponsorships is ageSponsorships for the rows written within the last hour and not in the future, so
+// calling it before every mint does not keep moving a sponsor_since that is already old (a sponsor change's
+// cutoff, say) and leaves one a test set in the future alone. Fixtures that mint right after a create use it.
+func ageFreshSponsorships(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	if _, err := pool.Exec(context.Background(), `UPDATE service_identities SET sponsor_since = sponsor_since - interval '1 hour'
+		WHERE sponsor_since > now() - interval '1 hour' AND sponsor_since <= now()`); err != nil {
+		t.Fatalf("age fresh sponsorships: %v", err)
+	}
+}
+
 // ageSponsorshipsBy is ageSponsorships by d, for a test whose own clock skew must stay larger than the age.
 func ageSponsorshipsBy(t *testing.T, pool *pgxpool.Pool, d time.Duration) {
 	t.Helper()
