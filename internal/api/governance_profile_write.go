@@ -413,6 +413,9 @@ func (s *Server) buildGovernanceProfile(createdBy string, id uuid.UUID, req gove
 		if err := governanceGrantsWithinCeiling(req.Ceiling.EligibleGrants, s.cfg.DefaultPolicy.EligibleGrants); err != nil {
 			return p, nil, writeRefusal(http.StatusBadRequest, reasonGovernanceCeilingInvalid, "invalid ceiling: %v", err)
 		}
+		if err := ceilingDuplicatePairing(req.Ceiling.EligibleGrants); err != nil {
+			return p, nil, writeRefusal(http.StatusBadRequest, reasonGovernanceCeilingInvalid, "invalid ceiling: %v", err)
+		}
 		p.Ceiling, p.Limits = req.Ceiling, req.Limits
 	}
 	return s.checkGraphWrite(p, all)
@@ -500,6 +503,9 @@ func (s *Server) checkOverlay(p types.GovernanceProfile, chain []types.Governanc
 			if err := governanceGrantWithinCeiling(g, base.Ceiling.EligibleGrants); err != nil {
 				return writeRefusal(http.StatusBadRequest, reasonGovernanceOverlayInvalid, "overlay.eligible_grants: %v", err)
 			}
+		}
+		if err := ceilingDuplicatePairing(*p.Overlay.EligibleGrants); err != nil {
+			return writeRefusal(http.StatusBadRequest, reasonGovernanceOverlayInvalid, "overlay.eligible_grants: %v", err)
 		}
 	}
 	ov := overlayOf(p)
