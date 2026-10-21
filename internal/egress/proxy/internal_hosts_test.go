@@ -347,6 +347,9 @@ func TestInternalHost_ClampRefusalNamesTheClamp(t *testing.T) {
 	if !guard.Denied || guard.kind != blockOwnNetwork {
 		t.Fatalf("guard = %+v, want a denial of kind blockOwnNetwork", guard)
 	}
+	if h := p.liftHint("registry.corp.internal", guard); h != "" {
+		t.Errorf("liftHint on a clamp refusal = %q, want none: internal_hosts cannot lift the clamp", h)
+	}
 	check(t, literalIPDenialDetail("registry.corp.internal", 443, p.policy, guard.kind, ""), "own network")
 	litKind, _ := p.privateIPBlockKind("10.40.0.5", 443)
 	check(t, literalIPDenialDetail("10.40.0.5", 443, p.policy, litKind, ""), "own network")

@@ -2063,7 +2063,7 @@ A workspace is not one unit of configuration. Wardyn splits it into three:
    - A source's own contract is authored by re-`POST`ing an existing identity to `POST /api/v1/sources` with a new requirements body, which APPLIES it (WSPIPE-8); the write-once `handleUpdateSource` that `PUT` used to reach is gone, not stubbed.
 2. **Base image** (tier 2) — a shared catalog row: registry, custom, or BYO.
    - "Recommended" is never a catalog kind — it is a per-workspace DERIVED build, excluded by a database CHECK constraint, not by convention.
-   - None is used as-is: the image builder wraps each with Wardyn's runner tools ([ENVBUILD.md](ENVBUILD.md)); with no builder wired the run is refused `image_builder_unavailable`, and Kubernetes refuses a wrapped image. `wardyn run --command` (no model) on a recommended-image workspace needs no builder.
+   - None runs as-is: the image builder wraps each with runner tools ([ENVBUILD.md](ENVBUILD.md)); without one the run is refused `image_builder_unavailable`; Kubernetes refuses a wrapped image. `wardyn run --experience background --command '<command>' --workspace <id>` (no model) on a recommended image needs no builder.
    - `GET/POST /api/v1/base-images`, `DELETE /api/v1/base-images/{id}` — there is no `GET` by id (`handleGetBaseImage` went with its route).
 3. **Workspace** (tier 3) — an ordered list of attachments (library sources, or inline ephemeral scratch dirs) plus an optional catalog image.
    - Attachment order is load-bearing: `attachments[0]` is the primary, the same rule a single `sources[0]` carried before the split.
