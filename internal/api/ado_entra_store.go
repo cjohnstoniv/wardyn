@@ -237,6 +237,20 @@ func adoEntraSecretName(rowID string) string {
 	return "wardyn-harness-" + adoEntraProviderPrefix + "-" + rowID + "-oauth"
 }
 
+// adoEntraRowIDFromSecretName is adoEntraSecretName's inverse: the row id a stored
+// name belongs to, or ok=false for a name that is not an Azure DevOps sign-in.
+func adoEntraRowIDFromSecretName(name string) (string, bool) {
+	id, ok := strings.CutPrefix(name, "wardyn-harness-"+adoEntraProviderPrefix+"-")
+	if !ok {
+		return "", false
+	}
+	id, ok = strings.CutSuffix(id, "-oauth")
+	if !ok || !adoEntraValidRowID(id) {
+		return "", false
+	}
+	return id, true
+}
+
 // adoEntraValidRowID reports whether rowID may be composed into a secret name.
 func adoEntraValidRowID(rowID string) bool {
 	if !adoEntraRowIDPattern.MatchString(rowID) {

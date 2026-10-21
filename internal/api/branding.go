@@ -279,17 +279,21 @@ func (s *Server) handlePutBranding(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A logo the site config delivers would be put back by its next apply, so a
-	// removal is refused rather than quietly undone (#1215). The console never
-	// offers it; this is the API's answer to a caller that tries.
-	if req.RemoveLogo {
+	// removal or a replacement is refused rather than quietly undone (#1215). The
+	// console never offers either; this is the API's answer to a caller that tries.
+	if req.RemoveLogo || req.Logo != nil {
 		cur, err := bs.GetBranding(r.Context())
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
 			writeServerError(w, r, "get branding", err)
 			return
 		}
 		if err == nil && cur.LogoFromFile && len(cur.Logo) > 0 {
+			field := "logo"
+			if req.RemoveLogo {
+				field = "remove_logo"
+			}
 			writeErrorReason(w, http.StatusBadRequest, brandReasonLogoFromFile,
-				"remove_logo: this logo comes from the site configuration's branding.logo_path; take that key out of the site configuration instead")
+				field+": this logo comes from the site configuration's branding.logo_path; change or take that key out of the site configuration instead")
 			return
 		}
 	}
