@@ -159,7 +159,9 @@ type accessInputs struct {
 }
 
 // reSigned is awsReSigned, false when unset.
-func (in accessInputs) reSigned(hosts []string) bool { return in.awsReSigned != nil && in.awsReSigned(hosts) }
+func (in accessInputs) reSigned(hosts []string) bool {
+	return in.awsReSigned != nil && in.awsReSigned(hosts)
+}
 
 // accessFor adds the reads accessFacts needs beyond the fold and builds the
 // block. Both dry doors call it, so the block is one projection however the
