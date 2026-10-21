@@ -251,6 +251,14 @@ func TestPlutilExtractFailsClosed(t *testing.T) {
 	if _, err := plutilExtract(plist, lockSettingKey); err == nil {
 		t.Error("a plist plutil cannot read read as unset")
 	}
+	writePlutil(t, "kill -9 $$", "exit 0")
+	if _, err := plutilExtract(plist, lockSettingKey); err == nil {
+		t.Error("an extract a signal ended read as unset")
+	}
+	writePlutil(t, "exit 2", "exit 0")
+	if _, err := plutilExtract(plist, lockSettingKey); err == nil {
+		t.Error("an extract that exited 2 read as unset")
+	}
 	plutilPath = filepath.Join(t.TempDir(), "no-such-plutil")
 	if _, err := plutilExtract(plist, lockSettingKey); err == nil {
 		t.Error("a plutil that could not run read as unset")

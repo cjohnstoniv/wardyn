@@ -70,11 +70,13 @@ func plutilExtract(file, key string) (string, error) {
 	}
 	out, err := exec.Command(plutilPath, "-extract", key, "raw", "-o", "-", "--", file).Output()
 	if err != nil {
+		// Only a plain exit 1 can mean an absent key: a plutil that could not run, or one a signal ended
+		// (ExitCode -1), proves nothing about the profile.
 		var exit *exec.ExitError
-		if !errors.As(err, &exit) {
+		if !errors.As(err, &exit) || exit.ExitCode() != 1 {
 			return "", fmt.Errorf("managed preferences %s: %w", file, err)
 		}
-		// plutil exits non-zero for an absent key as well as for a file it cannot parse: a plist that lints
+		// plutil exits 1 for an absent key as well as for a file it cannot parse: a plist that lints
 		// clean is the first.
 		if exec.Command(plutilPath, "-lint", "-s", "--", file).Run() == nil {
 			return "", nil
