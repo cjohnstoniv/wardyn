@@ -568,6 +568,28 @@ test.describe("outage vs. rejection", () => {
     await expect(page.getByText(/admin token was rejected/i)).toHaveCount(0);
   });
 
+  // The cold-load retry (App.tsx COLD_PROBE_RETRY_MS) meets a 401 that names an ended session: the gate
+  // says so, as it does when the mount probe gets that answer.
+  test("a cold 503 whose retry is a 401 naming an ended session shows the signed-out notice", async ({ page }) => {
+    let probes = 0;
+    await page.route("**/api/v1/runs?limit=1", (route) => {
+      probes++;
+      return probes === 1
+        ? route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "database unavailable" }) })
+        : route.fulfill({
+            status: 401,
+            contentType: "application/json",
+            body: JSON.stringify({ error: "unauthorized", reason: "expired_session" }),
+          });
+    });
+    await clearTokenInit(page);
+    await page.goto("/");
+
+    await expect(signInToken(page)).toBeVisible();
+    await expect(page.getByRole("status").filter({ hasText: SESSION_ENDED_REASON })).toBeVisible();
+    await expect(page.getByRole("alert")).toHaveCount(0);
+  });
+
   test("the gate keeps asking /healthz, so an SSO-only deployment is not left with no way in", async ({ page }) => {
     // /healthz is down until `healthy` flips. The one-shot mount fetch this
     // replaced read the outage as sso:false and never asked again.

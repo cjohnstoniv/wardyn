@@ -378,6 +378,10 @@ const ATTENTION_POLL_MS = 5000;
 // A named module constant on purpose: a field report moves one number here.
 const MODEL_ACCESS_POLL_MS = 300_000;
 
+// The one rule for the sign-in gate's "you were signed out" notice, shared by the mount probe, the cold-load
+// retry and the focus re-probe: a 401 after a stored token, or a 401 that names an ended session.
+const sessionEndedAnswer = (probe: string, reason: string, hadToken: boolean) =>
+  probe === "unauthed" && (hadToken || isSessionEnded(reason));
 // Waits between re-probes of a cold load that could not reach the daemon; the last one repeats.
 const COLD_PROBE_RETRY_MS = [1000, 2000, 4000, 8000, 15000];
 
@@ -461,7 +465,7 @@ export default function App() {
         if (transient) setColdUnreachable(true);
       }
       // A cold load whose session ended says so, as a rejected stored token does.
-      if (probe === "unauthed" && (hadToken || isSessionEnded(reason))) setSignedOut(true);
+      if (sessionEndedAnswer(probe, reason, hadToken)) setSignedOut(true);
       setAuth(probe === "authed" ? "authed" : "unauthed");
     });
     return () => {
@@ -486,6 +490,7 @@ export default function App() {
     let alive = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let attempt = 0;
+    const hadToken = getToken() !== null;
     const stop = () => {
       alive = false;
       clearTimeout(timer);
@@ -495,7 +500,7 @@ export default function App() {
         // The focus re-probe has one out: wait for it rather than stack a second.
         if (probingRef.current) return schedule();
         probingRef.current = true;
-        void probeAuthWithReason().then(({ probe, transient }) => {
+        void probeAuthWithReason().then(({ probe, reason, transient }) => {
           probingRef.current = false;
           if (!alive) return;
           if (probe === "unreachable" && transient) {
@@ -505,7 +510,9 @@ export default function App() {
           }
           stop();
           setColdUnreachable(false);
-          if (probe === "authed") setAuth("authed");
+          // The same notice the mount probe gives when the answer is a signed-out one.
+          if (sessionEndedAnswer(probe, reason, hadToken)) setSignedOut(true);
+          setAuth(probe === "authed" ? "authed" : "unauthed");
         });
       }, COLD_PROBE_RETRY_MS[Math.min(attempt, COLD_PROBE_RETRY_MS.length - 1)]);
     };
@@ -531,10 +538,12 @@ export default function App() {
       if (!fromOtherTab && signedOutHereRef.current) return;
       if (probingRef.current) return;
       probingRef.current = true;
-      void probeAuthWithReason().then(({ probe, transient }) => {
+      const hadToken = getToken() !== null;
+      void probeAuthWithReason().then(({ probe, reason, transient }) => {
         probingRef.current = false;
         // An answer that is final ends the cold-load retries; a transient failure leaves them running.
         if (alive && !(probe === "unreachable" && transient)) setColdUnreachable(false);
+        if (alive && sessionEndedAnswer(probe, reason, hadToken)) setSignedOut(true);
         if (!alive || probe !== "authed" || authRef.current !== "unauthed") return;
         // Back in, by another tab's sign-in: a later sign-out here starts from a clean slate.
         signedOutHereRef.current = false;
