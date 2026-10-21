@@ -65,11 +65,11 @@ const summary = (page: Page) => page.getByTestId("nr-files-summary");
 const FILES_SUMMARY = "Main drive 10 GiB · starts in the main drive · the work folder is kept as a drive after the run";
 
 test.describe("New Run: keep the work folder", () => {
-  test("with the switch off the row is today's: a disabled tick and Coming soon", async ({ page }) => {
+  test("with the switch off the row is not drawn: no tick and no Coming soon", async ({ page }) => {
     await stub(page, { allowed: true, count: 1, limit: 3, keep_work_folder: false });
     await toFiles(page);
-    await expect(tick(page)).toBeDisabled();
-    await expect(page.getByText(NR_SHARED.COMING_SOON).first()).toBeVisible();
+    await expect(tick(page)).toHaveCount(0);
+    await expect(page.getByText(NR_SHARED.COMING_SOON)).toHaveCount(0);
     await expect(page.getByTestId("nr-keep-work-folder")).toHaveCount(0);
     await expect(main(page).getByText(NR_FILES.LIFE_DELETED, { exact: true })).toBeVisible();
   });

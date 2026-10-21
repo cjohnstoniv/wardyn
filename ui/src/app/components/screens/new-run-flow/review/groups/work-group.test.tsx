@@ -46,9 +46,8 @@ describe("Review: the work group when the run keeps its work folder", () => {
     render(<WorkGroup draft={draft} pre={SCENARIO_PREFLIGHT.member} preview={null} docRows={[]} go={() => {}} dispatch={() => {}} />);
   };
 
-  it("says the work folder is kept after the run, and starts in the main drive", () => {
+  it("says in the main drive card that the work folder is kept after the run (#3043: the row itself no longer repeats it)", () => {
     show(true);
-    expect(screen.getByText(/the work folder is kept as a drive after the run$/)).toHaveTextContent(/^Main drive .+ · starts in the main drive · the work folder is kept as a drive after the run$/);
     expect(screen.getByText(NR_FILES.KEEP_LIFE)).toBeInTheDocument();
   });
 

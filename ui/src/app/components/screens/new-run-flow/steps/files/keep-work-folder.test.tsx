@@ -78,8 +78,8 @@ function show(intent: RunIntent = ONLY_MAIN) {
   );
 }
 const tick = () => screen.getByLabelText(NR_FILES.REUSE_LABEL) as HTMLInputElement;
-/** Waits for the catalogue's answer to reach the row (the tick leaves its Coming soon state). */
-const settled = () => waitFor(() => expect(screen.queryByText(NR_SHARED.COMING_SOON)).toBeNull());
+/** Waits for the catalogue's answer to reach the row (the tick appears once the switch is on). */
+const settled = () => waitFor(() => expect(screen.queryByLabelText(NR_FILES.REUSE_LABEL)).not.toBeNull());
 
 describe("keepDoor", () => {
   it("is today's row until the switch is on, or the draft already asks", () => {
@@ -107,12 +107,12 @@ describe("keepDoor", () => {
 });
 
 describe("the reuse row", () => {
-  it("with the switch off is today's disabled tick and Coming soon", async () => {
+  it("with the switch off is not drawn: no tick, no Coming soon", async () => {
     create = CREATE_ALLOWED;
     show();
     await waitFor(() => expect(wfetchMock.mock.calls.some(([path]) => String(path).startsWith("/me/drives"))).toBe(true));
-    expect(tick()).toBeDisabled();
-    expect(screen.getByText(NR_SHARED.COMING_SOON)).toBeInTheDocument();
+    expect(screen.queryByLabelText(NR_FILES.REUSE_LABEL)).toBeNull();
+    expect(screen.queryByText(NR_SHARED.COMING_SOON)).toBeNull();
     expect(screen.queryByTestId("nr-keep-work-folder")).toBeNull();
   });
 

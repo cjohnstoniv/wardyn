@@ -8,7 +8,6 @@ import { Input } from "../../../../ui/input";
 import { Label } from "../../../../ui/label";
 import { RadioCard, RadioCardGroup } from "../../../../wardyn/radio-card";
 import { NR_RUN } from "../../../../wardyn/copy/new-run/run";
-import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { useShellSetupStatus } from "../../../../wardyn/model-access-context";
 import { emptyStart, scheduleDaysAhead, scheduledRunsOn, startInstant, startProblem, todayDate, whenText, zoneOptions, type StartChoice, type StartProblem } from "../../../../../lib/schedule";
 import { QuestionBlock } from "./question-block";
@@ -20,7 +19,7 @@ const PROBLEM_TEXT = (): Record<StartProblem, string> => ({ missing: NR_RUN.STAR
 
 /**
  * When an Autonomous run starts: now, or at a date and time the person picks. Later is offered only while the
- * setup status carries features.scheduled_runs; otherwise it stays Coming soon and Run now is the only choice.
+ * setup status carries features.scheduled_runs; otherwise Run now is the one answer, said as a sentence.
  */
 export function TimingSection({ schedule, onSchedule }: { schedule: StartChoice | undefined; onSchedule: (next: StartChoice | undefined) => void }) {
   const labelId = React.useId();
@@ -42,6 +41,18 @@ export function TimingSection({ schedule, onSchedule }: { schedule: StartChoice 
   const errorId = `${labelId}-error`;
   const describedBy = told ? `${errorId} ${helpId}` : helpId;
 
+  // Switch off: no start time exists on the wire, so the one answer is a sentence, not a radio (#3045).
+  if (!on) {
+    return (
+      <QuestionBlock labelId={labelId} label={NR_RUN.TIMING_LABEL}>
+        <p aria-labelledby={labelId} className="text-sm">
+          <strong className="font-medium">{NR_RUN.TIMING_NOW}</strong>
+          <span className="text-muted-foreground"> · {NR_RUN.TIMING_NOW_BODY}</span>
+        </p>
+      </QuestionBlock>
+    );
+  }
+
   return (
     <QuestionBlock labelId={labelId} label={NR_RUN.TIMING_LABEL}>
       <RadioCardGroup
@@ -56,7 +67,6 @@ export function TimingSection({ schedule, onSchedule }: { schedule: StartChoice 
           value="later"
           title={NR_RUN.TIMING_LATER}
           description={NR_RUN.TIMING_LATER_BODY}
-          unavailable={on ? undefined : { reason: NR_SHARED.COMING_SOON }}
         />
       </RadioCardGroup>
       {later && (

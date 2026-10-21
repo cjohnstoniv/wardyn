@@ -310,6 +310,9 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `LIFE_KEPT(max, grace)` | deviation (DS-3 W2) | Kept after its end time so you can extend and resume it, up to its {max} maximum lifetime. Deleted when you end the run, or {grace} after its end time. |
 | `LIFE_KEPT_UNLIMITED(grace)` | pending (W-12) | Kept after its end time so you can extend and resume it. Deleted when you end the run, or {grace} after its end time. |
 | `LIFE_NO_END` | deviation (DS-3 W2) | Kept until you end the run. |
+| `REUSE_LABEL` | mock | Reuse it across runs |
+| `REUSE_ARIA` | mock | About reusing this drive |
+| `REUSE_TIP` | mock | Save this disk when the run ends and start another run from it. |
 | `REPOS_TITLE` | mock | Repositories |
 | `REPOS_BODY` | deviation (DS-3 W4) | Copied onto the main drive. Changes leave only as commits you push. |
 | `REPOSITORY_BADGE` | mock | Repository |

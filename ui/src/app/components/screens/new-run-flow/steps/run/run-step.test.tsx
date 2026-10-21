@@ -437,11 +437,12 @@ describe("Run step: Schedule for later", () => {
     await userEvent.click(screen.getByRole("radio", { name: NR_RUN.TIMING_LATER }));
   };
 
-  it("stays Coming soon, with no fields, when features.scheduled_runs is off or absent", async () => {
+  it("says Run now as a sentence, with no radio and no fields, when features.scheduled_runs is off or absent", async () => {
     for (const status of [null, { features: { scheduled_runs: false } } as SetupStatus, {} as SetupStatus]) {
       show(AUTONOMOUS, MEMBER, status);
       await poolSelect();
-      expect(screen.getByRole("radio", { name: NR_RUN.TIMING_LATER })).toBeDisabled();
+      expect(screen.queryByRole("radio", { name: NR_RUN.TIMING_LATER })).toBeNull();
+      expect(screen.getByText(NR_RUN.TIMING_NOW)).toBeInTheDocument();
       expect(screen.queryByLabelText(NR_RUN.START_DATE)).not.toBeInTheDocument();
       cleanup();
     }
@@ -467,7 +468,7 @@ describe("Run step: Schedule for later", () => {
       </MemoryRouter>,
     );
     await poolSelect();
-    expect(screen.getByRole("radio", { name: NR_RUN.TIMING_NOW })).toBeChecked();
+    expect(screen.getByText(NR_RUN.TIMING_NOW)).toBeInTheDocument();
     expect(screen.queryByLabelText(NR_RUN.START_DATE)).not.toBeInTheDocument();
   });
 

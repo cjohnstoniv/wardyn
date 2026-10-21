@@ -107,18 +107,18 @@ describe("Harnesses step: several agents", () => {
     const go = show(TWO);
     await screen.findByText(NR_HARNESSES.MULTI_NOTE);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    await user.selectOptions(screen.getAllByRole("combobox", { name: NR_HARNESSES.HARNESS_LABEL })[1], "gemini-cli");
+    await user.selectOptions(screen.getByRole("combobox", { name: NR_HARNESSES.EYEBROW(2) }), "gemini-cli");
     expect(await screen.findByText(NR_HARNESSES.NO_COMBINATION("Claude Code", "Gemini CLI"))).toBeInTheDocument();
     expect(screen.getByText(NR_HARNESSES.NO_COMBINATION("Gemini CLI", "Claude Code"))).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: CONTINUE }));
     expect(go).not.toHaveBeenCalled();
-    expect(screen.getAllByRole("combobox", { name: NR_HARNESSES.HARNESS_LABEL })[0]).toHaveFocus();
+    expect(screen.getByRole("combobox", { name: NR_HARNESSES.EYEBROW(1) })).toHaveFocus();
   });
 
-  it("switch off: today's step, one agent, Add another harness Coming soon", async () => {
+  it("switch off: today's step, one agent, no Add another harness and no Coming soon (#3045)", async () => {
     show(ONE, { ...ROSTER, multiAgent: false });
     expect(await screen.findByText(NR_HARNESSES.LEDE_AUTONOMOUS)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: NR_HARNESSES.ADD_ANOTHER })).toBeDisabled();
-    expect(screen.getByText(NR_SHARED.COMING_SOON)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: NR_HARNESSES.ADD_ANOTHER })).toBeNull();
+    expect(screen.queryByText(NR_SHARED.COMING_SOON)).toBeNull();
   });
 });

@@ -4,16 +4,13 @@
  */
 
 // "Reuse it across runs" (#1991): keeps the run's work folder, and only that, as the person's own drive.
-// The catalogue's create door says whether the organisation offers it. With the switch off the row is
-// today's: a disabled tick and Coming soon.
+// The catalogue's create door says whether the organisation offers it. With the switch off the row is not drawn.
 
 import * as React from "react";
 import { Lock, TriangleAlert } from "lucide-react";
 import type { MemberDriveCreate } from "../../../../../lib/api/me-drives";
 import { InfoTip } from "../../../../wardyn/info-tip";
-import { Chip } from "../../../../wardyn/primitives";
 import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
-import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { setKeepWorkFolder } from "../../lenses/files-lens";
 import { useNewRunDispatch, useNewRunDraft } from "../../new-run-route";
 import { createReasonText } from "./file-sources";
@@ -50,19 +47,8 @@ export function KeepWorkFolder({ door }: { door: KeepDoor }) {
   const reasonId = React.useId();
   const asked = draft.intent.keep_work_folder === true;
   const tip = <InfoTip label={NR_FILES.REUSE_ARIA}>{NR_FILES.REUSE_TIP}</InfoTip>;
-  // The rule row: checkbox, label and Coming soon in one wrapper, the tooltip beside it, on one line that wraps whole (#2860).
-  if (door.kind === "today") {
-    return (
-      <div className="flex flex-wrap items-center gap-2 border-t border-border pt-[11px] text-sm">
-        <span className="flex flex-wrap items-center gap-2 opacity-60">
-          <input id="nr-reuse-drive" type="checkbox" disabled className="size-4" />
-          <label htmlFor="nr-reuse-drive" className="font-semibold">{NR_FILES.REUSE_LABEL}</label>
-          <Chip>{NR_SHARED.COMING_SOON}</Chip>
-        </span>
-        {tip}
-      </div>
-    );
-  }
+  // Switch off: the control is not built, so it is not drawn: no disabled checkbox, no chip (#3045).
+  if (door.kind === "today") return null;
   const reason = door.kind === "closed" ? door.reason : undefined;
   return (
     <div className="flex flex-col gap-2.5 border-t border-border pt-[11px]">
