@@ -699,13 +699,12 @@ describe("SidebarNav — per view (M-2)", () => {
     expect(within(sheet).getByRole("link", { name: /^Runs/ })).toHaveAttribute("href", "/admin/runs");
   });
 
-  it("a security admin's Admin view: Credentials and User types join; Drives, Secrets, Recordings, Getting started and Settings do not", async () => {
+  it("a security admin's Admin view: Credentials, User types and User drives join; Secrets, Recordings, Getting started and Settings do not", async () => {
     const { labels } = await open("security_admin");
     expect(labels).toEqual([
-      "Runs", "Approvals", "Audit", "Workspaces", "Templates", "Runners", "People", "User types", "Permissions", "Policies",
+      "Runs", "Approvals", "Audit", "Workspaces", "Templates", "Runners", "User drives", "People", "User types", "Permissions", "Policies",
       "Governance", "Credentials",
     ]);
-    expect(labels).not.toContain("Drives");
   });
 
   it("Templates (0.9): the shared items keep one order in both views (#3056), both admin tiers", async () => {

@@ -583,8 +583,9 @@ test.describe("drives — the registry is SUPER's, and no super admin's nav list
     page,
   }) => {
     await gotoConsole(page, "admin");
-    // No Drives nav entry for any admin tier, in either view (§6): the two entry
-    // points below are the whole door (#2827; view-switch.spec.ts pins the security tier).
+    // No Drives nav entry for a super admin, in either view (§6): the two entry
+    // points below are the whole door. Only a security admin's Admin view
+    // lists it, for its grants and preview (packet M-A, view-switch.spec.ts).
     await expect(page.getByRole("link", { name: new RegExp(`^${DRIVES.TITLE}`) })).toHaveCount(0);
 
     await navTo(page, "Workspaces");
@@ -629,7 +630,7 @@ test.describe("drives — the registry is SUPER's, and no super admin's nav list
       await expect(page.getByTestId("user-drives-card")).toHaveCount(0);
 
       // Their own door is the sidebar item.
-      await sidebarLink(page, "Drives").click();
+      await sidebarLink(page, "User drives").click();
       await expect(page).toHaveURL(/\/admin\/drives$/);
       await expect(page.getByRole("heading", { name: DRIVES.TITLE, level: 1 })).toBeVisible();
       await expect(page.getByRole("cell", { name, exact: true })).toBeVisible();
