@@ -480,6 +480,7 @@ type ApprovalDecision struct {
 	Reason    string
 	Scope     ApprovalScope // meaningful only for an egress_domain approval; others leave the zero value
 	ExpiresAt *time.Time
+	Policy    *ApprovalPolicyMatch // the approval rule that decided, nil for a person or the admin token
 }
 
 // AuditEvent is one append-only audit record. Every credential mint/revoke, approval decision,

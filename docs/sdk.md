@@ -768,6 +768,11 @@ start.
 | `governance_change_state_invalid` | `GET /governance/changes?state=` (400): not one of `pending`, `applied`, `rejected`, `expired` or `stale`. |
 | `boundary_invalid` | `PUT /governance/boundary` and `POST /governance/dry-run` (400): the `PUT` names no `mode` or an unknown one, or the document sets `allow_all_egress` beside `allowed_domains`, a `max_end_ahead_sec` below 1, a bad `contact`, or a value a run policy would refuse; `501` on a store that keeps no boundary. |
 | `boundary_stale` | `PUT /governance/boundary` (412): `If-Match` names a boundary that has since changed. |
+| `approval_rule_invalid` | `PUT /governance/approval-rules/{name}` and `.../dry-run` (400): a kind other than `tool_call` or `egress_domain`, a glob tool, a wildcard or ported host, a scope other than `once` or `run`, no repo and no preset, or a body name not the path's. `501` on a store with no approval rules. |
+| `approval_rule_not_found` | `DELETE /governance/approval-rules/{name}` and `.../dry-run` (404): no rule has that name. |
+| `approval_rule_host` | `PUT /governance/approval-rules/{name}` (409): a `hard_limits` boundary does not allow one of `approve.hosts`. |
+| `approval_rule_changed` | An `approval.policy.skip` reason, never sent to a client: the rule changed after it matched. |
+| `approval_rule_not_applicable` | An `approval.policy.skip` reason, never sent to a client: no rule decides that approval. |
 | `boundary_host` | `POST /approvals/{id}/approve` (403): the Wardyn boundary is in `hard_limits` and denies the egress host, or does not allow it. |
 | `credential_withheld` | `POST /internal/credentials/mint`, `GET /internal/injection/{grantID}` (403): the run's governance profile or the Wardyn boundary now withholds the grant or a host it reaches. |
 | `credential_withheld_unread` | `POST /internal/credentials/mint` (503): the run, its grants, its profile or the Wardyn boundary could not be read to check the grant; retry. |

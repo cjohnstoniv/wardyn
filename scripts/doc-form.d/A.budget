@@ -274,7 +274,9 @@
 # docs/AUDIT-ACTIONS.md 51430 = ours 51396 + theirs 50790 - base 50756 at the 0.10 W4d merge of RENAME onto the train.
 # docs/AUDIT-ACTIONS.md 50804 measured: the governance.boundary.seed row
 # docs/AUDIT-ACTIONS.md 51478 = ours 51430 + theirs 50804 - base 50756 at the 0.10 W4f merge of G1B onto the train.
-docs/AUDIT-ACTIONS.md=51478 share=8
+# 0.10 SI-POLICY: docs/AUDIT-ACTIONS.md 51103 adds 276 over 50827: the approval-rule rows (approval.decide by a rule, would_approve, skip, the two governance writes), matched_rule and the would_approve grammar exception, measured.
+# docs/AUDIT-ACTIONS.md 51754 = ours 51478 + theirs 51103 - base 50827 at the 0.10 W4f merge of SI-POLICY onto the train.
+docs/AUDIT-ACTIONS.md=51754 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.

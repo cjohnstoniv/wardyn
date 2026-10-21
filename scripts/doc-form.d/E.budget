@@ -142,7 +142,9 @@
 # docs/ENV.md=43636 tightened from 43019 to the measured count at the 0.10 W4d merge; +18 (0.10 RENAME), measured: 43005 + 42207 - 42189
 # docs/ENV.md 42223 adds 34 over 42189 (0.10 RUL-API), measured: the WARDYN_PUSH_HOLD_CANONICAL_REPOS row (#2749).
 # docs/ENV.md 43670 = ours 43636 + theirs 42223 - base 42189 at the 0.10 W4f merge of RUL-API onto the train.
-docs/ENV.md=43670 share=5
+# 0.10 SI-POLICY: docs/ENV.md 42332 adds 143 over 42189: the WARDYN_APPROVAL_RULES row and section, measured.
+# docs/ENV.md 43813 = ours 43670 + theirs 42332 - base 42189 at the 0.10 W4f merge of SI-POLICY onto the train.
+docs/ENV.md=43813 share=5
 # docs/ENV.md 39047 adds 478 over 38569: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
 # docs/ENV.md 38607 adds 38 over 38569, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # docs/ENV.md 40042 adds 422 over 39620, measured: the WARDYN_AWS_SIGV4_AT_PROXY row and section: which lanes and hosts are re-signed, the named refusals, and the no-hold, placement and new-dispatch notes.

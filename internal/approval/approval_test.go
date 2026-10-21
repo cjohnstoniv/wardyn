@@ -1131,3 +1131,37 @@ func TestRequestApprovalAndCancelForRun_ReadOnlyTheRunsOwnPending(t *testing.T) 
 		t.Fatalf("rows read = %d, want 2 (run A's own only)", st.rowsRead)
 	}
 }
+
+// TestDecide_ApprovalRuleRidesTheDecideRow: an approval rule's decision carries the rule id, version, digest and what
+// matched in data.policy, and a person's decision carries no policy key at all.
+func TestDecide_ApprovalRuleRidesTheDecideRow(t *testing.T) {
+	ctx := context.Background()
+	st := &fakeStore{}
+	runID := uuid.New()
+	ruleID := uuid.New()
+	ap, _ := approval.RequestApproval(ctx, st, newReq(runID, types.ApprovalToolCall, json.RawMessage(`{"tool":"t"}`)))
+	pm := &types.ApprovalPolicyMatch{RuleID: ruleID, RuleName: "ci-review", RuleVersion: 3, RuleDigest: "d",
+		Matched: map[string]string{"repo": "org/repo", "tool": "t"}}
+	if _, err := approval.Decide(ctx, st, ap.ID, types.ActorSystem, types.ApprovalDecision{
+		State: types.ApprovalApproved, DecidedBy: "policy:" + ruleID.String(), Reason: "approval rule ci-review v3", Policy: pm,
+	}); err != nil {
+		t.Fatalf("decide: %v", err)
+	}
+	var data struct {
+		Policy *types.ApprovalPolicyMatch `json:"policy"`
+	}
+	if err := json.Unmarshal(st.audit[0].Data, &data); err != nil || data.Policy == nil {
+		t.Fatalf("approval.decide data %s carries no policy: %v", st.audit[0].Data, err)
+	}
+	if data.Policy.RuleID != ruleID || data.Policy.RuleVersion != 3 || data.Policy.Matched["tool"] != "t" {
+		t.Fatalf("data.policy = %+v", data.Policy)
+	}
+
+	other, _ := approval.RequestApproval(ctx, st, newReq(runID, types.ApprovalToolCall, json.RawMessage(`{"tool":"u"}`)))
+	if _, err := approval.Decide(ctx, st, other.ID, types.ActorHuman, types.ApprovalDecision{State: types.ApprovalApproved, DecidedBy: "alice"}); err != nil {
+		t.Fatalf("decide: %v", err)
+	}
+	if strings.Contains(string(st.audit[1].Data), `"policy"`) {
+		t.Fatalf("a person's decision carries a policy key: %s", st.audit[1].Data)
+	}
+}

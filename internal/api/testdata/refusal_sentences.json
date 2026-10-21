@@ -177,6 +177,11 @@
   {
     "reason": "capability_egress_host",
     "target": "id.String()",
+    "sentence": "\"the service identity that created this run is not granted egress host \" + host"
+  },
+  {
+    "reason": "capability_egress_host",
+    "target": "id.String()",
     "sentence": "\"you are not granted egress host \" + host + \" — an admin decides this one, or can grant it to you\""
   },
   {
@@ -463,6 +468,11 @@
     "reason": "second_human_required",
     "target": "id.String()",
     "sentence": "sw + \" is set: a second human must decide this — you created this run, so someone else approves or denies its egress\""
+  },
+  {
+    "reason": "second_human_required",
+    "target": "id.String()",
+    "sentence": "sw + \" is set: a second human must decide this, and an approval rule is never a second human\""
   },
   {
     "reason": "second_human_required",

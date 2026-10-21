@@ -6,9 +6,12 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"flag"
+	"fmt"
 	"log/slog"
 	"maps"
 	"net/url"
+	"os"
 	"slices"
 	"strings"
 
@@ -187,6 +190,10 @@ var envToggles = []string{envEgressSecondHuman, envCapabilitySecondHuman, envGov
 func ValidateEnvToggles() {
 	for _, name := range envToggles {
 		cliutil.EnvBool(name, false)
+	}
+	if err := validateApprovalRulesSwitch(); err != nil {
+		fmt.Fprintln(flag.CommandLine.Output(), err)
+		os.Exit(2)
 	}
 }
 

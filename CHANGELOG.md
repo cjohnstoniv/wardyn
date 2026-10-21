@@ -63,9 +63,24 @@ and does not yet follow semantic versioning (interfaces are not stable).
   Starting the agent again admits the run anew, and the erased row keeps only its harnesses, so it is refused in the
   organisation form ("Ask your admin"). An erased remote server is refused too, which a 0.9 revive accepted. A run
   that is still running keeps its server until it ends.
+- **Approval rules are off.** `WARDYN_APPROVAL_RULES` (new, default `off`) lets a security admin's
+  approval rule approve a held tool call or a first-use egress host on a service identity's runs. Nothing changes until a
+  deployment sets it. Set `dry_run` first: matching approvals then get an `approval.policy.would_approve` audit row and
+  stay pending. A rule never decides a credential, `credential_reauth` or `push_content` approval, and never counts as a
+  second human.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
+  `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on
+  `approval_rules` (migration `0202_approval_rules`). Without it approval rules cannot be listed, written or deleted,
+  and a raise with `WARDYN_APPROVAL_RULES` set writes an `approval.policy.skip` row instead of matching a rule.
 
 ### Added
 
+- Approval rules (migration `0202_approval_rules`, off unless `WARDYN_APPROVAL_RULES` is `dry_run` or `on`): a security
+  admin's rule approves a held `tool_call` or first-use `egress_domain` approval on a service identity's run, through the
+  same decide path and gates a person's approval meets, audited as `policy:<rule_id>` with the rule's version, digest and
+  what matched. `/governance/approval-rules` lists, writes, deletes and dry-runs rules; see
+  [approval-rules.md](docs/operations/approval-rules.md). A `policy:tool-allow` or `policy:tool-deny` egress row now names
+  the `tool_rules` key that answered in `matched_rule`.
 - `wardyn attach <run-id>` keeps the terminal on this computer when the run is on your own runner here and the
   organisation allows it (`WARDYN_ATTACH_LOCAL`, off by default); otherwise it goes through the organisation, as
   before. One line on stderr names the path. `--via local|relay|auto` forces a path, and `--take-over` takes the

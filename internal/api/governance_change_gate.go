@@ -182,6 +182,7 @@ var governanceChangeKinds = map[string]govKind{
 	govKindRunnerTrust:         {approver: securityApprover, apply: applyRunnerTrustChange},
 	govKindRunNodeRecord:       {approver: securityApprover, apply: applyRunNodeRecordChange},
 	govKindBoundary:            {approver: securityApprover, apply: applyBoundaryChange},
+	govKindApprovalRule:        {approver: securityApprover, apply: applyApprovalRuleChange},
 }
 
 // forChange is the kind as it decides one held change. A remote-hosted runner add to or removal from an

@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -26,17 +27,17 @@ import (
 // log; `hold`, and a run with no rules at all, return false so the caller
 // raises a human approval unchanged.
 func (p *Proxy) decideByToolRules(w http.ResponseWriter, r *http.Request, tool string) bool {
-	eff, ok := p.toolEffect(r, tool)
+	eff, matched, ok := p.toolEffect(r, tool)
 	if !ok {
 		return false
 	}
 	switch eff {
 	case types.ToolAllow:
-		p.emitToolDecision(r, egress.Allow, ruleSourceToolAllow, tool)
+		p.emitToolDecision(r, egress.Allow, ruleSourceToolAllow, tool, matched)
 		writeToolDecision(w, "APPROVED")
 		return true
 	case types.ToolDeny:
-		p.emitToolDecision(r, egress.Deny, ruleSourceToolDeny, tool)
+		p.emitToolDecision(r, egress.Deny, ruleSourceToolDeny, tool, matched)
 		writeToolDecision(w, "DENIED")
 		return true
 	}
@@ -46,14 +47,16 @@ func (p *Proxy) decideByToolRules(w http.ResponseWriter, r *http.Request, tool s
 
 // emitToolDecision is emitLocalDecision for a call tool_rules answered. No
 // approval row stands behind it, so the row's Cause names the tool, quoted
-// since the name is the sandbox's own text.
-func (p *Proxy) emitToolDecision(r *http.Request, decision egress.Decision, ruleSource, tool string) {
+// since the name is the sandbox's own text, and MatchedRule the rule key that
+// answered it.
+func (p *Proxy) emitToolDecision(r *http.Request, decision egress.Decision, ruleSource, tool, matched string) {
 	if p.sink == nil {
 		return
 	}
 	host, port, _ := hostPortFromURL(p.controlPlaneURL)
 	log := decisionLog(p.reqOf(r, host, port), decision, ruleSource)
 	log.Cause = "tool " + strconv.Quote(tool)
+	log.MatchedRule = matched
 	p.sink.emit(log)
 }
 
@@ -61,16 +64,38 @@ func (p *Proxy) emitToolDecision(r *http.Request, decision egress.Decision, rule
 // the harness is the one the caller's credential names (harnessOf) and only that
 // harness's rules apply: a harness with no entry has no rule and is held for a
 // human, never answered by another harness's rules. A call that names no harness
-// is decided by the strictest of all the sets (strictestToolEffect).
-func (p *Proxy) toolEffect(r *http.Request, tool string) (types.ToolEffect, bool) {
+// is decided by the strictest of all the sets (strictestToolEffect). matched is
+// the rule key that answered: the tool or "*", prefixed "<harness>:" under
+// per-harness rules.
+func (p *Proxy) toolEffect(r *http.Request, tool string) (eff types.ToolEffect, matched string, ok bool) {
 	if len(p.harnessRules) == 0 {
-		return p.policy.ToolEffectFor(tool)
+		eff, ok = p.policy.ToolEffectFor(tool)
+		if matched = "*"; ok {
+			if _, exact := p.policy.toolRules[tool]; exact {
+				matched = tool
+			}
+		}
+		return eff, matched, ok
 	}
 	harness := p.harnessOf(r)
 	if harness == "" {
 		return p.strictestToolEffect(tool)
 	}
-	return types.ToolEffectForHarness(p.harnessRules, harness, tool)
+	eff, ok = types.ToolEffectForHarness(p.harnessRules, harness, tool)
+	for _, set := range p.harnessRules {
+		if set.Harness == harness {
+			matched = harnessToolKey(set, tool)
+		}
+	}
+	return eff, matched, ok
+}
+
+// harnessToolKey is the key of set that answers tool: the tool itself, else the harness's default.
+func harnessToolKey(set types.HarnessToolRules, tool string) string {
+	if slices.ContainsFunc(set.Rules, func(r types.ToolRule) bool { return r.Tool == tool }) {
+		return set.Harness + ":" + tool
+	}
+	return set.Harness + ":*"
 }
 
 // strictestToolEffect is the answer for a call that names no harness (no
@@ -78,19 +103,19 @@ func (p *Proxy) toolEffect(r *http.Request, tool string) (types.ToolEffect, bool
 // set, so a deny any harness carries is a deny here and the call is never freer
 // than the run-wide regime made it. A set with no opinion on the tool counts as a
 // hold, which is what its own call would get.
-func (p *Proxy) strictestToolEffect(tool string) (types.ToolEffect, bool) {
+func (p *Proxy) strictestToolEffect(tool string) (types.ToolEffect, string, bool) {
 	rank := map[types.ToolEffect]int{types.ToolAllow: 0, types.ToolHold: 1, types.ToolDeny: 2}
-	strictest := types.ToolAllow
-	for _, set := range p.harnessRules {
+	strictest, matched := types.ToolAllow, ""
+	for i, set := range p.harnessRules {
 		eff, ok := types.ToolEffectForHarness(p.harnessRules, set.Harness, tool)
 		if !ok {
 			eff = types.ToolHold
 		}
-		if rank[eff] > rank[strictest] {
-			strictest = eff
+		if i == 0 || rank[eff] > rank[strictest] {
+			strictest, matched = eff, harnessToolKey(set, tool)
 		}
 	}
-	return strictest, len(p.harnessRules) > 0
+	return strictest, matched, len(p.harnessRules) > 0
 }
 
 // harnessOf names the harness that raised a call from the Bearer credential its

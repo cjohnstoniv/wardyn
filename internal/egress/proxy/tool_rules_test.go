@@ -237,3 +237,40 @@ func TestToolRuleDecisionRowNamesTheTool(t *testing.T) {
 		}
 	}
 }
+
+// TestToolRulesMatchedRuleNamesTheKey: a tool_rules answer's row names the key that answered it: the tool, the "*"
+// default, or the harness's own key under per-harness rules.
+func TestToolRulesMatchedRuleNamesTheKey(t *testing.T) {
+	row := func(t *testing.T, p *Proxy, buf *bytes.Buffer, tool, bearer string) egress.DecisionLog {
+		t.Helper()
+		req := mustLocalReq(t, http.MethodPost, routeApprovalsCreate, strings.NewReader(`{"kind":"tool_call","payload":{"tool":"`+tool+`","cmd":"x"}}`))
+		if bearer != "" {
+			req.Header.Set("Authorization", "Bearer "+bearer)
+		}
+		p.ServeHTTP(httptest.NewRecorder(), req)
+		return lastDecision(t, buf)
+	}
+	p, buf := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", "127.0.0.1:1", nil, nil)
+	p.policy = CompilePolicy(types.RunPolicySpec{ToolRules: []types.ToolRule{
+		{Tool: "Read", Effect: types.ToolAllow}, {Tool: "*", Effect: types.ToolDeny},
+	}})
+	if d := row(t, p, buf, "Read", ""); d.MatchedRule != "Read" {
+		t.Errorf("exact rule: matched_rule = %q, want Read", d.MatchedRule)
+	}
+	if d := row(t, p, buf, "Bash", ""); d.MatchedRule != "*" || d.RuleSource != ruleSourceToolDeny {
+		t.Errorf("default rule: matched_rule = %q (%s), want * on a deny", d.MatchedRule, d.RuleSource)
+	}
+	p.harnessRules = []types.HarnessToolRules{
+		{Harness: "claude-code", Default: types.ToolDeny, Rules: []types.ToolRule{{Tool: "Read", Effect: types.ToolAllow}}},
+	}
+	p.harnessCreds = []types.HarnessCredential{{Harness: "claude-code", SHA256: credDigest(claudeCred)}}
+	if d := row(t, p, buf, "Read", claudeCred); d.MatchedRule != "claude-code:Read" {
+		t.Errorf("harness rule: matched_rule = %q, want claude-code:Read", d.MatchedRule)
+	}
+	if d := row(t, p, buf, "Bash", claudeCred); d.MatchedRule != "claude-code:*" {
+		t.Errorf("harness default: matched_rule = %q, want claude-code:*", d.MatchedRule)
+	}
+	if d := row(t, p, buf, "Bash", ""); d.MatchedRule != "claude-code:*" {
+		t.Errorf("strictest set: matched_rule = %q, want claude-code:*", d.MatchedRule)
+	}
+}

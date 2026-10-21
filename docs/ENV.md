@@ -298,6 +298,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_GOVERN_ADMIN_RUNS_EXEMPT` | CSV | (unset) | the lanes left ungoverned under `WARDYN_GOVERN_ADMIN_RUNS`; the only value is `recording` (flag `-govern-admin-runs-exempt`). [Details](#wardyn_govern_admin_runs_exempt) |
 | `WARDYN_SCHEDULED_RUNS` | bool | (unset) | let a run be scheduled to start once, later (`start_at` on `POST /runs`, within 7 days less the run's wait); unset refuses `start_at` with `scheduled_runs_off`. Read per request. [Details](#wardyn_scheduled_runs) |
 | `WARDYN_EGRESS_PORT_RULE` | enum | `off` | container runs' egress port rule, `off`, `dry_run` or `on` (flag `-egress-port-rule`); the proxy turns it on for runs dispatched as a desktop VM. [Details](#wardyn_egress_port_rule) |
+| `WARDYN_APPROVAL_RULES` | enum | `off` | approval rules, `off`, `dry_run` or `on`: a security admin's rule may approve a held `tool_call` or first-use `egress_domain` approval on a service identity's run. [Details](#wardyn_approval_rules) |
 | `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` | string (URL) | (unset) | **TEST ONLY.** Re-points **both** AWS IAM Identity Center services at this base URL (flag `-aws-sso-endpoint-override`; `ValidateAWSSSOEndpointOverride`, [`internal/api/awssso_endpoint.go`](../internal/api/awssso_endpoint.go)); **REFUSED unless `WARDYN_ALLOW_TEST_ENDPOINTS=true`**. [Details](#wardyn_aws_sso_endpoint_override) |
 | `WARDYN_AWS_SSO_PROXY_INJECT` | enum | `on` | a captured AWS SSO session is injected **proxy-side** (flag `-aws-sso-proxy-inject`). `off` was removed in 0.10.0 and refuses boot. On a private-endpoint estate whose corporate proxy is also TLS-intercepting, the MITM re-origination fails closed unless `WARDYN_TRUSTED_CA_FILE` is ALSO staged. [Details](#wardyn_aws_sso_proxy_inject) |
 | `WARDYN_AWS_SIGV4_AT_PROXY` | enum | `off` | `on`: an AWS sign-in lane's sandbox profile holds a placeholder key pair and the proxy re-signs each AWS request with role credentials the sandbox never holds (flag `-aws-sigv4-at-proxy`). New dispatches only. [Details](#wardyn_aws_sigv4_at_proxy) |
@@ -1583,6 +1584,15 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - `dry_run`: nothing is refused; each allow the rule would refuse carries `port_rule: "dry_run"` on its `egress.allow` row.
 - The proxy turns the rule on for every run dispatched as a desktop VM, whatever this says.
 - Any other value exits 2 at boot. Not a secret, so it has no `_FILE` twin.
+
+### `WARDYN_APPROVAL_RULES`
+
+- Approval rules ([approval-rules.md](operations/approval-rules.md); `approvalRulesSwitch`, [`internal/api/approval_rules_approver.go`](../internal/api/approval_rules_approver.go)), read per request.
+- `off` (the default): the approval raise reads no rule. The `/governance/approval-rules` routes still work, so rules can be staged.
+- `dry_run`: every rule acts as `mode: dry_run`. A matching approval gets an `approval.policy.would_approve` row and stays pending.
+- `on`: a rule in `mode: enforce` approves a matching held `tool_call` or first-use `egress_domain` approval on a service identity's run; a `dry_run` rule writes would-approve rows.
+- A rule never decides a `credential`, `credential_reauth` or `push_content` approval or an Azure DevOps escalation, and is never a second human.
+- Env-only on purpose: a switch that widens reach needs deploy access. Any value other than `off`, `dry_run` or `on` exits 2 at boot.
 
 ### `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE`
 

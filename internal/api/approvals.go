@@ -248,11 +248,24 @@ func (s *Server) refuseIfRunEnded(
 	// row falls through to Decide, whose already_decided answer is the true one. (An empty state is a
 	// row no store writes; treated as open.)
 	if haveRun && isTerminalRunState(run.State) && (ap.State == "" || ap.State == types.ApprovalPending || ap.State == types.ApprovalCancelled) {
-		s.cancelRunApprovals(r.Context(), ap.RunID)
+		if d, isPolicy := policyDeciderFrom(r.Context()); !isPolicy || !d.report { // a rule's report-only dry run moves no row
+			s.cancelRunApprovals(r.Context(), ap.RunID)
+		}
 		writeErrorReason(w, http.StatusConflict, reasonApprovalRunEnded, approvalRunEndedBody)
 		return ap, run, haveAP, haveRun, false, "run_ended"
 	}
 	return ap, run, haveAP, haveRun, true, ""
+}
+
+// decisionScopeFitsKind refuses a decision_scope on a kind that takes none: only an egress_domain approval takes one,
+// and a credential approval takes "run" (a per-run lease). An Azure DevOps escalation has its own rule (adoDecisionRule).
+func decisionScopeFitsKind(w http.ResponseWriter, kind types.ApprovalKind, scope types.ApprovalScope) bool {
+	if scope == "" || kind == types.ApprovalEgressDomain || (kind == types.ApprovalCredential && scope == types.ScopeRun) {
+		return true
+	}
+	writeErrorReason(w, http.StatusBadRequest, reasonDecisionScopeInvalidForKind,
+		"decision_scope is only valid on an egress_domain approval (or \"run\" on a credential approval, for a per-run lease)")
+	return false
 }
 
 // recordBypassFailure writes the break-glass failure row when the admin token spent the four-eyes
@@ -416,12 +429,8 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	if scope, isADO, ok = s.adoDecisionRule(w, r, ap, scope, approve); !ok {
 		return
 	}
-	if !isADO && scope != "" && ap.Kind != types.ApprovalEgressDomain {
-		if !(ap.Kind == types.ApprovalCredential && scope == types.ScopeRun) {
-			writeErrorReason(w, http.StatusBadRequest, reasonDecisionScopeInvalidForKind,
-				"decision_scope is only valid on an egress_domain approval (or \"run\" on a credential approval, for a per-run lease)")
-			return
-		}
+	if !isADO && !decisionScopeFitsKind(w, ap.Kind, scope) {
+		return
 	}
 
 	// target is the workspace an `always` decision persists to — resolved by
@@ -462,6 +471,9 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 		return
 	}
 
+	if s.policyDryRunStop(w, r, ap, scope) { // an approval rule's dry run stops here, before the one-way line
+		return
+	}
 	decidedByType, decidedBy := actorFromRequest(r)
 
 	// approve -> State is the translation this line performs because
@@ -477,6 +489,7 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 		Reason:    body.Reason,
 		Scope:     scope,
 		ExpiresAt: body.ExpiresAt,
+		Policy:    policyMatchFrom(r.Context()),
 	})
 	if err != nil {
 		// The break-glass leaves a row even when the decision fails, because
@@ -632,6 +645,9 @@ func (s *Server) authorizeUserDecision(w http.ResponseWriter, r *http.Request, i
 		ap  types.ApprovalRequest
 		run types.AgentRun
 	)
+	if d, isPolicy := policyDeciderFrom(r.Context()); isPolicy { // an approval rule: approval_rules_approver.go
+		return s.authorizePolicyDecision(w, r, id, d)
+	}
 	if s.isSecurityOperator(r.Context()) { // security tier decides any kind on any run; LOCKSTEP pair, see http.go
 		return ap, run, false, true
 	}

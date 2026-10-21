@@ -42,7 +42,7 @@ user, same host](#second-user-same-host)". Deciding who can do what:
 - [Kubernetes: day-2](#kubernetes-day-2)
 - [High availability](#high-availability)
 - [Kubernetes: known gaps](operations/kubernetes-known-gaps.md#kubernetes-known-gaps)
-- Task pages under [`docs/operations/`](operations/): [Managed laptops: client-mode runners](operations/hybrid-laptops.md), [Runner pools](operations/runner-pools.md#runner-pools-where-a-run-goes), [Launch presets](operations/launch-presets.md#launch-presets), [Console branding](operations/console-branding.md#console-branding), [The Wardyn boundary](operations/boundary.md#the-wardyn-boundary-the-outermost-layer-of-every-run)
+- Task pages under [`docs/operations/`](operations/): [Managed laptops: client-mode runners](operations/hybrid-laptops.md), [Runner pools](operations/runner-pools.md#runner-pools-where-a-run-goes), [Launch presets](operations/launch-presets.md#launch-presets), [Console branding](operations/console-branding.md#console-branding), [The Wardyn boundary](operations/boundary.md#the-wardyn-boundary-the-outermost-layer-of-every-run), [Approval rules](operations/approval-rules.md#approval-rules-a-security-admins-rule-approves-a-service-identitys-held-call)
 
 </details>
 
@@ -4014,6 +4014,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0207` (`0207_governance_units`) renames `governance_profiles` to `governance_units` (`base_profile_id` becomes `parent_id`), `governance_assignments` to `governance_memberships` (`profile_id` becomes `unit_id`) and `agent_runs.governance_profile_id` to `unit_id`, and rewrites the `profile_id` key of each queued run's launch and the kind and JSON keys of each `governance_changes` row. No other row is rewritten and a table rename keeps its grants, so a split-role install needs no grant change. A governance change proposed before the upgrade reads as stale once and is proposed again.
 - `0208` (`0208_agent_runs_model_allowlists`) adds `model_allowlists` to `agent_runs` (`0001`'s table): the model allowlist each local model provider handed the run's proxy at its latest dispatch.
 - `0209` (`0209_governance_boundary_seed`) adds `governance_boundary.seeded_at` and the boundary's one row in `no_limits`, so an upgrade keeps its boundary as it was. Only a fresh install's first boot then moves that row to `hard_limits` with floor `CC1` and nothing listed, which reaches what `no_limits` does, and writes `governance.boundary.seed`.
+- `0202` (`0202_approval_rules`) creates `approval_rules`, the security tier's approval rules ([approval-rules.md](operations/approval-rules.md)); a split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on `approval_rules`.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
