@@ -136,13 +136,18 @@ func (s PG) queueRoom(ctx context.Context, pass PromotePass) (types.RunnerPool, 
 	return pool, room, nil
 }
 
-// setPoolQueueWait writes detail on every waiting run of poolID whose status_detail says otherwise.
+// setPoolQueueWait writes detail on every waiting run of poolID whose status_detail says otherwise. It
+// takes no pool lock, so it locks the run rows in id order before it writes them: a bulk update locks
+// in whatever order its plan visits the rows, and a writer that takes them in id order could then
+// hold a row this one wants while it waits for one this one holds.
 func (s PG) setPoolQueueWait(ctx context.Context, poolID uuid.UUID, detail string) error {
 	if detail == "" {
 		return nil
 	}
 	if _, err := s.Pool.Exec(ctx, `UPDATE agent_runs SET status_detail = $2
-		WHERE state = $3 AND status_detail <> $2 AND id IN (SELECT run_id FROM run_queue WHERE pool_id = $1)`,
+		WHERE id IN (SELECT id FROM agent_runs
+			WHERE state = $3 AND status_detail <> $2 AND id IN (SELECT run_id FROM run_queue WHERE pool_id = $1)
+			ORDER BY id FOR NO KEY UPDATE)`,
 		poolID, detail, string(types.RunQueued)); err != nil {
 		return fmt.Errorf("store: set pool queue wait: %w", err)
 	}
