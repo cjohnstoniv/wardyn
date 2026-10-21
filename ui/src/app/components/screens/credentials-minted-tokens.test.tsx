@@ -52,6 +52,14 @@ afterEach(() => vi.clearAllMocks());
 const user = userEvent.setup({ pointerEventsCheck: 0 });
 const rowOf = (email: string) => within(screen.getByText(email).closest("tr")!);
 
+// #2893: the section heading is the same eyebrow the Key domains card above it carries (SectionCard), not a one-off semibold h2.
+it("heads the section with the shared eyebrow style", async () => {
+  render(<AdminMintedTokens />);
+  const h = await screen.findByRole("heading", { name: MINTED.TITLE });
+  expect(h).toHaveClass("label-eyebrow");
+  expect(h).not.toHaveClass("font-semibold");
+});
+
 describe("the State column", () => {
   it("says where each live token stands, with what is true now and the identity it was linked to", async () => {
     render(<AdminMintedTokens />);

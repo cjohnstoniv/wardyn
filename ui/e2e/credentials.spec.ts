@@ -307,6 +307,8 @@ test.describe("Tokens an admin created for someone else (Admin view, #1477)", ()
     await openCredentials(page);
     const section = page.getByRole("region", { name: "Tokens an admin created for someone else" });
     await expect(section.getByText("No admin has created a token for someone else.")).toBeVisible();
+    // #2893: the heading is the eyebrow style the Key domains card carries, not a one-off semibold sentence.
+    await expect(section.getByRole("heading", { name: "Tokens an admin created for someone else" })).toHaveCSS("text-transform", "uppercase");
     await expect(
       section.getByText("No one can create a token that acts as another person. They sign in and create their own."),
     ).toBeVisible();

@@ -127,7 +127,7 @@ export function AdminMintedTokens() {
     <section className="mt-6 overflow-hidden rounded-xl border border-border bg-card" aria-labelledby="admin-minted-title">
       <div className="p-4">
         <div className="flex flex-wrap items-center gap-2">
-          <h2 id="admin-minted-title" className="text-sm font-semibold text-foreground">
+          <h2 id="admin-minted-title" className="label-eyebrow">
             {MINTED.TITLE}
           </h2>
           {working > 0 && <Chip tone="warning">{MINTED.CHIP(working)}</Chip>}
