@@ -586,7 +586,7 @@ start.
   - the
     closed set in [`internal/api/reasons.go`](../internal/api/reasons.go), `reasons_routes.go` and `reasons_revive.go` (a reason two
     routes share — the dispatch-time-snapshot family below, the hold-chain
-    terminal/exhausted pair — always means the same thing regardless of which one
+    terminal/exhausted pair — always means the same thing regardless of which
     sent it),
   - or [`internal/authz/registry.go`](../internal/authz/registry.go)'s own registry, which `s.refuse`
     writes directly for every Deny/Unprocessable/Conflict-effect authorization
