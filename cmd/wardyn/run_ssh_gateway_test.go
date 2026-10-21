@@ -532,6 +532,57 @@ func TestUpsertSSHHost_WritesThroughADanglingSymlink(t *testing.T) {
 	}
 }
 
+// A relative link resolves from the directory the link really sits in: ~/.ssh a link to real/ssh, with
+// config -> ../dotfiles/config, lands on real/dotfiles/config.
+func TestUpsertSSHHost_DanglingLinkInASymlinkedDirResolvesFromTheRealDirectory(t *testing.T) {
+	dir := t.TempDir()
+	for _, d := range []string{"real/ssh", "real/dotfiles", "home"} {
+		if err := os.MkdirAll(filepath.Join(dir, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(filepath.Join(dir, "real", "ssh"), filepath.Join(dir, "home", ".ssh")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("..", "dotfiles", "config"), filepath.Join(dir, "real", "ssh", "config")); err != nil {
+		t.Fatal(err)
+	}
+	if err := upsertSSHHost(filepath.Join(dir, "home", ".ssh", "config"), "Host wardyn-new\n  Port 1\n"); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Lstat(filepath.Join(dir, "real", "ssh", "config")); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("the link was replaced: %v, %v", fi, err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "real", "dotfiles", "config")); !strings.Contains(string(got), "Host wardyn-new") {
+		t.Errorf("real/dotfiles/config = %q, want the new host block", got)
+	}
+}
+
+// A chain whose last link dangles keeps every link: config -> mid -> real/ssh_config.
+func TestUpsertSSHHost_ChainEndingInADanglingLinkKeepsEveryLink(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "real"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("real", "ssh_config"), filepath.Join(dir, "mid")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("mid", filepath.Join(dir, "config")); err != nil {
+		t.Fatal(err)
+	}
+	if err := upsertSSHHost(filepath.Join(dir, "config"), "Host wardyn-new\n  Port 1\n"); err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range []string{"config", "mid"} {
+		if fi, err := os.Lstat(filepath.Join(dir, l)); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+			t.Errorf("%s was replaced: %v, %v", l, fi, err)
+		}
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "real", "ssh_config")); !strings.Contains(string(got), "Host wardyn-new") {
+		t.Errorf("real/ssh_config = %q, want the new host block", got)
+	}
+}
+
 func TestRunEditor_IncludeLineKeepsASymlinkedSSHConfigAndItsMode(t *testing.T) {
 	home := homeWithKey(t, true)
 	fakeCode(t)
