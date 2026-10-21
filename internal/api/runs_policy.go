@@ -816,6 +816,10 @@ func actorFromRequest(r *http.Request) (types.ActorType, string) {
 // actorFromContext is actorFromRequest's chain for a caller holding only a
 // context. localOverride is the validated dev-only header value, "" for none.
 func actorFromContext(ctx context.Context, localOverride string) (types.ActorType, string) {
+	// An approval rule decides as itself, never the admin-token fallback its human-less context would read as.
+	if d, ok := policyDeciderFrom(ctx); ok {
+		return types.ActorSystem, policyActor(d)
+	}
 	// A device request is the device, never the admin-token fallback at the
 	// bottom (which is what a context with no human would otherwise read as).
 	if d, ok := deviceFromContext(ctx); ok {

@@ -95,6 +95,9 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	if dl.PortRule != "" {
 		fields["port_rule"] = dl.PortRule
 	}
+	if dl.MatchedRule != "" {
+		fields["matched_rule"] = dl.MatchedRule // the tool_rules key behind a policy:tool-* row
+	}
 	// A Bedrock data-plane refusal the proxy relayed (bedrock_dataplane_fault.go).
 	if dl.UpstreamFault != "" {
 		fields["upstream_fault"] = dl.UpstreamFault
@@ -454,6 +457,7 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 	}
 
 	req := types.ApprovalRequest{
+		ID:             uuid.New(), // a fresh row keeps this id; a dedup or rejoin returns another, and no rule decides it
 		RunID:          claims.RunID,
 		Kind:           body.Kind,
 		RequestedScope: body.RequestedScope,
@@ -465,6 +469,9 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 	}
 	if body.PathList != nil && !s.recordPushPathList(w, r, claims, created, *body.PathList) {
 		return
+	}
+	if created.ID == req.ID {
+		s.runApprovalRules(created)
 	}
 	writeJSON(w, http.StatusCreated, created)
 }

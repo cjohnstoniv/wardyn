@@ -289,6 +289,13 @@ const (
 	reasonBoundaryHardLimitsGated  = "boundary_hard_limits_gated"  // a write into hard_limits before the boundary bounds every brokered credential path
 	reasonBreakGlassReasonRequired = "break_glass_reason_required" // an admin-token break-glass run without a usable reason
 
+	// /governance/approval-rules, and an approval rule's own refusals inside decide().
+	reasonApprovalRuleInvalid       = "approval_rule_invalid"        // the rule document names an unknown kind, a glob, a wildcard host, a scope other than once or run, or no repo or preset
+	reasonApprovalRuleNotFound      = "approval_rule_not_found"      // no approval rule has that name
+	reasonApprovalRuleChanged       = "approval_rule_changed"        // the rule was written after it matched, so it decides nothing
+	reasonApprovalRuleNotApplicable = "approval_rule_not_applicable" // an approval rule never decides this approval: the kind, an Azure DevOps escalation, a run no service identity created, or a match that no longer holds
+	reasonApprovalRuleHost          = "approval_rule_host"           // a rule's host is outside the Wardyn boundary in hard_limits
+
 	// PUT /governance/credential-delivery.
 	reasonCredentialDeliveryInvalid     = "credential_delivery_invalid"     // an unknown or fixed class, a mode outside the class's bounds, or require_posture without runner_resident
 	reasonCredentialDeliveryUnavailable = "credential_delivery_unavailable" // the store keeps no delivery policy (not the Postgres store)

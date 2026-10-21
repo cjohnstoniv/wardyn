@@ -101,6 +101,10 @@ type DecisionLog struct {
 	// it been on (WARDYN_EGRESS_PORT_RULE=dry_run): the dry run's list of the
 	// non-web ports runs use. Empty on every other row.
 	PortRule string `json:"port_rule,omitempty"`
+	// MatchedRule is the tool_rules key that answered a policy:tool-allow or
+	// policy:tool-deny row: the tool or "*", prefixed "<harness>:" under
+	// per-harness rules. Empty on every other row.
+	MatchedRule string `json:"matched_rule,omitempty"`
 }
 
 // ScanSummary is the CONTENT-FREE summary of one LLM content-inspection pass.
