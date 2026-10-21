@@ -9,6 +9,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"testing"
@@ -97,6 +98,19 @@ func TestPG_PersonErasure_ReachesApprovalsTokenHistoryAndTheAuditSubject(t *test
 	w := doSSO(t, a.srv, http.MethodPost, "/api/v1/people/"+alice+"/erasure", sec, erasureBody("audit_personal_fields", "credentials"))
 	if w.Code != http.StatusOK {
 		t.Fatalf("erasure = %d %s", w.Code, w.Body)
+	}
+	var answer struct {
+		Detail struct {
+			Credentials map[string]any `json:"credentials"`
+		} `json:"detail"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &answer); err != nil {
+		t.Fatal(err)
+	}
+	for k, want := range map[string]float64{"pats_deleted": 2, "delegated_deleted": 2, "live_left": 1} {
+		if got := answer.Detail.Credentials[k]; got != want {
+			t.Errorf("credentials detail %s = %v, want %v (%s)", k, got, want, w.Body)
+		}
 	}
 
 	var by, reason, state string

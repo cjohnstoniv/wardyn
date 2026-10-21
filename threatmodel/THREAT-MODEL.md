@@ -424,6 +424,8 @@ that ceiling down; each run receives only the minimal subset its task needs.
 | Delivery policy by runner | A security operator's trust class picks the per-class delivery mode; `via_org` is never trust-gated | #90 |
 | Laptop proxy → runnerd (decisions) | TLS pinned to runnerd's key; a key per proxy; runnerd the spool's only writer, sharing no directory with the proxy | #77 |
 | Link down | No new run; cached policy and a bounded, fail-closed spool until the lapse | #77 |
+| CLI ↔ runnerd (local attach, `WARDYN_ATTACH_LOCAL`, off by default) [0.10] | The organisation admits it exactly as a relay attach (same ticket, same checks), then grants it only for the ticket's owner, on that owner's own person runner, over the runner's stream; it keeps the writer lease, the recording and the audit rows, and every ender resets `pty_tee` | #95 |
+| A corporate root for the runner's own connection | `--org-ca-file` is trusted for that connection and registration only, never a sandbox mount or run proxy; a uid-and-mode hygiene rule for the trust store adds no reach | #70 |
 
 - B1–B11 are unchanged for a run placed `remote`.
 
@@ -2859,7 +2861,6 @@ hiding them would repeat the failure mode we are designed to avoid.
     - The proxy listens on all of its interfaces and also joins the shared `wardyn-internal` network to reach wardynd, whose members are Wardyn's own containers.
     - With `WARDYN_DOCKER_PROXY_SANDBOX_PEERS_ONLY` on, the driver writes the run's own network subnet into the proxy config (`allowed_peers`) and the proxy closes any connection from outside it before reading a byte. How the proxy is addressed does not change.
     - The switch is off by default in 0.10 until proven on Docker and Podman; with it off the proxy serves every caller as before.
-
 94. **A folder-only runner trusts wardynd for every folder call, and its default root is the person's home [0.10, off by default].** ([`internal/runner/folders/folders.go`](../internal/runner/folders/folders.go), [`internal/api/run_computer_folder.go`](../internal/api/run_computer_folder.go).)
     - `wardyn-runnerd serve --substrate folders` answers every `list_folders` and `sync_folder` call that arrives on its own outbound session. It cannot tell which run or person a call is for, so it does not check either.
     - The only check that a run may use a folder is wardynd's: the runner must be claimed by the run's creator (`run.CreatedBy` equals the runner's owner), not an organisation runner, online and sharing folders. That check runs at browse, at create, and again before each pass (`folderRunner`). With `WARDYN_COMPUTER_FOLDERS` off, wardynd makes no folder call.
@@ -2872,6 +2873,12 @@ hiding them would repeat the failure mode we are designed to avoid.
       - A pull deletes nothing, writes no exec bit, stays under the chosen folder (`os.Root`), keeps the computer's copy of a file changed on both sides, and is bounded in bytes.
       - The runner opens no port.
     - **Residual:** a compromised wardynd, or a fault in its owner check, can list any folder under the roots and send its contents, credential folders aside, into a sandbox. With a pull, it can also write files into that folder, overwriting any file not changed on the computer since the last pass. Narrow the roots, or do not run the folder-only runner.
+
+95. **A terminal attached on the runner's own computer is held by runnerd, and its recording is runnerd's copy [0.10; off by default].** ([`internal/api/attach_local.go`](../internal/api/attach_local.go).)
+    - With `WARDYN_ATTACH_LOCAL` on, a person's `wardyn attach` on their own runner keeps the terminal bytes on that computer. The organisation admits it exactly as a relay attach and grants it only on that person's own person runner: never break-glass, a sponsor or an organisation's runner.
+    - Read-only enforcement moves to runnerd: it drops an observer's input and resizes. The organisation pushes every change of write authority, the lease fence included, and ends the session when runnerd does not acknowledge it in 2 s. Anyone sharing that tmux session is the same person or already on that host's Docker (#69).
+    - This departs from "recordings record the attach exactly as they do today" in one respect: the cast, masker, key, head cap and audit rows are the same, but the bytes recorded are runnerd's copy, not bytes the organisation forwarded. Both are `runner_asserted` (#73), and the developer already has unrecorded `docker exec` on that host (#69). Rows carry `transport` `local` and `runner_id`.
+    - The copy reaches the organisation at most 64 KiB or 2 s ahead of its acknowledgement, which is sent once the recorder accepts the bytes; so up to that much output can be shown before the organisation holds it. A stalled acknowledgement ends the session (`attach_tee_stalled`).
 
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
 
@@ -3609,6 +3616,49 @@ the sandbox, is still loaded, and the agent runs as the uid that owns it.
 - The flag is on the hold lane only: the autonomous lane already runs every tool (`--dangerously-skip-permissions`), and the interactive lanes have no Wardyn gate in the path.
 - The approver there is the human in the pane.
 - codex-cli has no hold lane, so there is no gate for a repository config to pre-empt.
+
+### CLI sign-in: the session secret lives on the laptop (opt-in)
+
+`WARDYN_CLI_SIGN_IN` (off by default) lets `wardyn login` sign a CLI in through the console. The CLI then holds a
+session secret (`wdc_`), an Ed25519 device key and a 1-hour access token (`wdn_`, kind `cli_access`). The secret and the
+key DO live on the laptop: in the keychain (macOS Keychain, Windows Credential Manager, the Linux Secret Service), or,
+on a computer with no keychain, in a file only its owner can read. The server keeps only a SHA-256 of the secret.
+
+What protects it:
+- A copied secret alone cannot refresh. Every refresh and token call carries a signature by the device key over the
+  organisation origin, the route, the session id, the SHA-256 of the secret and the time (within 5 minutes), so a secret
+  taken from a log, a TLS-inspecting proxy or one file of a backup is refused, and a refused proof changes nothing.
+- Every refresh rotates the secret. A secret the session already rotated past, presented with a valid proof, ends the
+  session and every token it holds, with a `cli.session.reuse_detected` row.
+- Every refresh re-checks the cuts a browser session honours: a person revoke, a sessions cut (Sign out everywhere, a
+  console sign-out, an identity-provider back-channel logout), deactivation, the role stamp
+  (`WARDYN_ROLE_STAMP_TTL`) and the `api_token` feature. A revoke, Sign out everywhere, a console sign-out and a
+  per-computer sign-out also end the session and stop its access and admin tokens at once, in the same transaction as
+  the cut, so nothing waits for the hour.
+- A session lasts 30 days by default (`WARDYN_CLI_SESSION_TTL`, at most 90), ends after 7 days without a refresh
+  (`WARDYN_CLI_SESSION_IDLE`), and the file store is capped at 7 days. The access token lasts 1 hour, so a role or
+  feature change reaches a live CLI within the hour.
+- An admin's `cli_access` token acts as role `user`. Admin work needs `wardyn login --admin`: a fresh browser approval
+  that gives a 1-hour `cli_admin` token, never renewed, which ends with its session.
+- A CLI token cannot mint an API token or approve another sign-in: the mint guards refuse token callers.
+
+What it does not stop:
+- Code already running as the person (malware, a compromised tool) can read the keychain item through the same
+  system call the CLI uses, or read the file, and so holds both the secret and the key. It can refresh until the
+  person's next refresh trips reuse detection, or until a revoke. The keychain protects against copying, sync and
+  backups, not against code running as the person; the file does not protect against backups either. An organisation
+  that wants no file sets `WARDYN_CLI_FILE_STORE=false`.
+- The key is bound in software, not hardware (no Secure Enclave or TPM key).
+- The 1-hour access token is a plain bearer: whoever copies it uses it until it expires or the session ends.
+- The store the CLI reports (keychain or file) is self-asserted, so the 7-day cap and `WARDYN_CLI_FILE_STORE=false`
+  guard against accident, not against a modified CLI.
+- Nothing re-checks the identity provider during a CLI session. A person removed only at the identity provider keeps
+  CLI access until the first of the role-stamp TTL, an admin revoke, SCIM deactivation or the session's end, 30 days by
+  default; a browser session lasts at most 24 hours. Pair CLI sign-in with `WARDYN_ROLE_STAMP_TTL` (24 hours makes the
+  window match the browser's longest).
+- Paste-back sign-in (`WARDYN_CLI_PASTE_SIGN_IN`, off by default) can be phished more easily than the loopback
+  redirect. Its code works once and lasts 5 minutes, the request 10, and the approve page shows the computer name, the
+  code and whether the request came from the approver's own address; that address check is advisory.
 
 ### The unauthenticated metrics listener (opt-in)
 

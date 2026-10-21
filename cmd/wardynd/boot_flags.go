@@ -165,6 +165,10 @@ type bootFlags struct {
 	// internal/api/cli_artifact_base.go): the operator's internal mirror of the
 	// release assets, published on /healthz. Empty (default) = none.
 	cliArtifactBase *string
+	// orgCAFingerprints is WARDYN_ORG_CA_FINGERPRINTS (see
+	// internal/api/org_ca_fingerprints.go): published on /healthz for
+	// `wardyn ca add` to be compared against. Empty (default) = none.
+	orgCAFingerprints *string
 	// demoVideoBaseURL is WARDYN_DEMO_VIDEO_BASE_URL (see
 	// internal/api/llm_gateway.go's ValidateDemoVideoBaseURL): an
 	// operator-run mirror re-pointing the Getting Started demo episodes for
@@ -276,6 +280,9 @@ type bootFlags struct {
 	// proxyResponseScrub has every run's proxy replace a value it injected when a
 	// relayed response echoes it back (off by default in 0.10.0).
 	proxyResponseScrub *bool
+	// attachLocal lets a person's CLI attach to their run on their own runner's computer (off by
+	// default in 0.10.0; only "on" enables it).
+	attachLocal *string
 	// envSecretPlaceholders / fileSecretPlaceholders keep a host-bound env or
 	// file secret's value at the proxy (off by default in 0.10.0).
 	envSecretPlaceholders  *bool
@@ -405,6 +412,8 @@ type bootFlags struct {
 	oidcSessionTTL *time.Duration
 	// sessionLife is the console session-lifetime behaviours, each off by default.
 	sessionLife sessionLifeFlags
+	// cliSignIn is CLI sign-in (wardyn login), off by default.
+	cliSignIn cliSignInFlags
 	// governanceChangeTTL is how long a governance change held for a second human waits — see
 	// api.Config.GovernanceChangeTTL.
 	governanceChangeTTL *time.Duration
@@ -499,6 +508,7 @@ func parseBootFlags() *bootFlags {
 		daemonNoProxy:          flagEnv("daemon-no-proxy", "WARDYN_DAEMON_NO_PROXY", "", "NO_PROXY-style bypass list for -daemon-proxy-url (host, .suffix, CIDR or *); ignored when the proxy URL is unset"),
 		daemonProxySecretFile:  flagEnv("daemon-proxy-secret-file", "WARDYN_DAEMON_PROXY_SECRET", "", "path to a file holding one forward-proxy URL that may embed user:pass@, the credentialed form of -daemon-proxy-url; refused if group- or world-writable, or if other-readable and owned by wardynd's own non-root uid (group-read, as a Kubernetes Secret mount gives, is accepted). Mutually exclusive with -daemon-proxy-url"),
 		cliArtifactBase:        flagEnv("cli-artifact-base", "WARDYN_CLI_ARTIFACT_BASE", "", "internal mirror (https://) of the release assets, published on the anonymous /healthz as cli_artifact_base so the console's install line and 'wardyn runner setup' fetch from it: <base>/v<version>/<asset>. Empty (default) publishes none"),
+		orgCAFingerprints:      flagEnv("org-ca-fingerprints", "WARDYN_ORG_CA_FINGERPRINTS", "", "comma-separated sha256:<hex> fingerprints of the organisation's CA certificates, published on the anonymous /healthz as org_ca_fingerprints for people to compare with what 'wardyn ca add' prints. Empty (default) publishes none"),
 		demoVideoBaseURL:       flagEnv("demo-video-base-url", "WARDYN_DEMO_VIDEO_BASE_URL", "", "mirror base URL (https://) re-pointing the Getting Started demo episodes for an air-gapped deployment where github.com is unreachable. Empty (default) uses the two GitHub hosts"),
 		ageKey:                 flagEnv("age-key", "WARDYN_AGE_KEY", "", "age X25519 identity (AGE-SECRET-KEY-...) for the secret store; generated and logged if empty"),
 		platformKeyFile:        flagEnv("platform-key-file", "WARDYN_PLATFORM_KEY_FILE", "", "path to a second age identity that alone protects wardynd's signing, session and SSH host keys, and the key that seals every run's stored proxy config, when secrets are sealed locally. Empty (default): WARDYN_AGE_KEY protects both. Set on an existing install, run wardynd -rewrap -rewrap-adopt-boot-keys once; see docs/operations/secrets-and-keys.md"),
@@ -583,6 +593,7 @@ func parseBootFlags() *bootFlags {
 		gitPATBroker:           flagEnv("git-pat-broker", "WARDYN_GIT_PAT_BROKER", "on", `never-resident git_pat lane: "on" mints a non-GitHub forge's PAT proxy-side so it never enters the sandbox; "off" mints it into the sandbox process instead, for a forge that misbehaves under the broker's rewrite`),
 		envSecretPlaceholders:  flagBool("env-secret-placeholders", "WARDYN_ENV_SECRET_PLACEHOLDERS", false, "an env_secret grant whose scope names a host gets a placeholder in the sandbox, which the run's proxy replaces with the value on requests to that host (default false)"),
 		fileSecretPlaceholders: flagBool("file-secret-placeholders", "WARDYN_FILE_SECRET_PLACEHOLDERS", false, "a file_secret grant whose scope names a host gets a placeholder file in the sandbox, which the run's proxy replaces with the value on requests to that host (default false)"),
+		attachLocal:            flagEnv("attach-local", "WARDYN_ATTACH_LOCAL", "off", `"on": a person's CLI on their own runner's computer attaches to their run there, the terminal staying on that computer while the organisation keeps the admission, the writer lease, the recording and the audit; anything else keeps every attach on the relay`),
 		proxyResponseScrub:     flagBool("proxy-response-scrub", "WARDYN_PROXY_RESPONSE_SCRUB", false, "have each run's egress proxy replace a credential it added when an upstream response echoes it back to the sandbox (default false)"),
 		gitPATBrokerOffRefused: flagBool("git-pat-broker-off-refused", "WARDYN_GIT_PAT_BROKER_OFF_REFUSED", false, "while WARDYN_GIT_PAT_BROKER is off, refuse a run that would hold a resident PAT on operators' runs too; a member's run is refused it either way (default false)"),
 
@@ -677,6 +688,7 @@ func parseBootFlags() *bootFlags {
 		sshAdvertise:           flagEnv("ssh-advertise", "WARDYN_SSH_ADVERTISE", "", `externally-reachable host[:port] for the SSH gateway, shown in the run-detail Connect pane; advisory only. Empty (default) publishes no address, so "wardyn run ssh" refuses`),
 		oidcSessionTTL:         flagDuration("oidc-session-ttl", "WARDYN_OIDC_SESSION_TTL", 0, "how long a console session lasts from sign-in, instead of ending at the ID token's expiry (duration; 0 = the ID token's expiry; at most 24h)"),
 		sessionLife:            registerSessionLifeFlags(),
+		cliSignIn:              registerCLISignInFlags(),
 		sshProxyCommand:        flagEnv("ssh-proxy-command", "WARDYN_SSH_PROXY_COMMAND", "", `ssh ProxyCommand published on /healthz for people to reach the SSH gateway through a TLS-terminating listener on 443; the console and "wardyn run ssh" show it, the daemon never runs it. No control characters, newlines or single quotes; at most 512 bytes. Empty (default) publishes none`),
 		roleStampTTL:           flagDuration("role-stamp-ttl", "WARDYN_ROLE_STAMP_TTL", 0, "how old an API token's or console session's role stamp may be before its owner must sign in again (duration; 0 = off)"),
 		governanceChangeTTL:    flagDuration("governance-change-ttl", "WARDYN_GOVERNANCE_CHANGE_TTL", 72*time.Hour, "how long a governance change held for a second human (WARDYN_GOVERNANCE_SECOND_HUMAN) waits for approval before it expires (duration; must be positive)"),

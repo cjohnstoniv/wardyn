@@ -60,6 +60,9 @@ type ClientConfig struct {
 	HTTPClient       *http.Client
 	Dial             func(context.Context) (Conn, error)
 	Hooks            RunnerHooks
+	// LinkChanged, when set, is told each time a session comes up (reason "") or an attempt ends (reason
+	// is why, "" when it ended without one). It must not block.
+	LinkChanged func(up bool, reason string)
 }
 
 // Client owns one runner's reconnect loop. Run must not be called concurrently.
@@ -94,6 +97,14 @@ func (l *linkState) set(up bool, reason string) {
 	l.up = up
 	if reason != "" {
 		l.reason = reason
+	}
+}
+
+// setLink records the link state and tells ClientConfig.LinkChanged.
+func (c *Client) setLink(up bool, reason string) {
+	c.link.set(up, reason)
+	if c.cfg.LinkChanged != nil {
+		c.cfg.LinkChanged(up, reason)
 	}
 }
 
@@ -146,7 +157,7 @@ func (c *Client) Run(ctx context.Context) error {
 		started := time.Now()
 		err := c.Connect(ctx)
 		if err != nil {
-			c.link.set(false, err.Error())
+			c.setLink(false, err.Error())
 		}
 		if errors.Is(err, ErrRevoked) {
 			return errors.Join(err, c.cfg.Hooks.Revoked(ctx))
@@ -252,7 +263,7 @@ func (c *Client) serve(ctx context.Context, conn Conn, cfg PeerConfig, ok AuthOK
 	peer = NewPeer(conn, cfg)
 	c.peer = peer
 	defer func() {
-		c.link.set(false, "")
+		c.setLink(false, "")
 		peer.Close()
 		c.ended, c.ready = time.Now(), started && ready.Load()
 		if c.cfg.Hooks.StreamOffline != nil {
@@ -276,7 +287,7 @@ func (c *Client) serve(ctx context.Context, conn Conn, cfg PeerConfig, ok AuthOK
 		}
 	}
 	slog.InfoContext(ctx, "runner connected to the organisation", slog.Bool("resumed", ok.Resumed))
-	c.link.set(true, "")
+	c.setLink(true, "")
 	if c.cfg.Hooks.Online != nil {
 		c.cfg.Hooks.Online(peer, ok.Resumed)
 	}

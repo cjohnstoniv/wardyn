@@ -592,6 +592,12 @@ type APIToken struct {
 	// that existed their order once. 0 only for a token written by a replica that predates it, which a
 	// revocation cutoff orders on CreatedAt. Never on the wire.
 	RevSeq int64 `json:"-"`
+	// Kind is APITokenKindAPI for a personal token, or a CLI kind (cli_sign_in.go). Never on the wire:
+	// the name says which computer a CLI token belongs to.
+	Kind string `json:"-"`
+	// CLISessionID is the CLI session a CLI token belongs to; the token stops authenticating when the
+	// session ends. Nil on a personal token. Never on the wire.
+	CLISessionID *uuid.UUID `json:"-"`
 }
 
 // Person is an identity an admin created or confirmed before its first sign-in, keyed by the

@@ -61,10 +61,10 @@ func (s PG) insertAPIToken(ctx context.Context, qr queryRower, t types.APIToken,
 		return types.APIToken{}, err
 	}
 	const q = `
-		INSERT INTO api_tokens (id, principal, email, role, user_type, groups, groups_truncated, name, token_sha256, created_at, expires_at, minted_by, identity_stamped_at, rev_seq)
+		INSERT INTO api_tokens (id, principal, email, role, user_type, groups, groups_truncated, name, token_sha256, created_at, expires_at, minted_by, identity_stamped_at, rev_seq, kind, cli_session_id)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
 		        CASE WHEN $11::bigint IS NULL THEN NULL ELSE $10::timestamptz + $11::bigint * interval '1 microsecond' END,
-		        NULLIF($12, ''), now(), $13)
+		        NULLIF($12, ''), now(), $13, COALESCE(NULLIF($14, ''), 'api'), $15)
 		RETURNING ` + apiTokenCols
 	anchor, err := db.CaptureAppClock(ctx, qr, s.now)
 	if err != nil {
@@ -84,7 +84,7 @@ func (s PG) insertAPIToken(ctx context.Context, qr queryRower, t types.APIToken,
 		lifetime = &us
 	}
 	return scanAPIToken(qr.QueryRow(ctx, q,
-		t.ID, t.Principal, t.Email, t.Role, t.UserType, groups, t.GroupsTruncated, t.Name, hashToken(raw), createdAt, lifetime, t.MintedBy, t.RevSeq))
+		t.ID, t.Principal, t.Email, t.Role, t.UserType, groups, t.GroupsTruncated, t.Name, hashToken(raw), createdAt, lifetime, t.MintedBy, t.RevSeq, t.Kind, t.CLISessionID))
 }
 
 // GetAPITokenByRaw is the auth-time lookup: given a bearer string, resolve
@@ -240,6 +240,13 @@ func (s PG) RefreshAPITokenIdentity(ctx context.Context, principal, role, userTy
 	if err != nil {
 		return fmt.Errorf("store: refresh api token identity: %w", err)
 	}
+	// A live CLI session is re-stamped the same way: the access tokens a refresh mints carry its stamp,
+	// and WARDYN_ROLE_STAMP_TTL reads its identity_stamped_at at every refresh.
+	if _, err = s.Pool.Exec(ctx,
+		`UPDATE cli_sessions SET role = $1, user_type = $2, groups = $3, groups_truncated = $4, identity_stamped_at = now()
+		 WHERE principal = $5 AND ended_at IS NULL`, role, userType, g, truncated, principal); err != nil {
+		return fmt.Errorf("store: refresh cli session identity: %w", err)
+	}
 	return nil
 }
 
@@ -283,20 +290,22 @@ func marshalGroups(groups []string) (any, error) {
 }
 
 // apiTokenLive is the predicate for a token that can still authenticate: not
-// revoked, and either without an expiry or not yet at it, on the database's clock.
-const apiTokenLive = `revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())`
+// revoked, either without an expiry or not yet at it, on the database's clock, and, for a CLI token,
+// of a CLI session that has not ended: an end that left a token unrevoked still ends it.
+const apiTokenLive = `revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())
+	AND (cli_session_id IS NULL OR EXISTS (SELECT 1 FROM cli_sessions cs WHERE cs.id = cli_session_id AND cs.ended_at IS NULL))`
 
 // apiTokenCols is THE api_tokens READ column list, in scanAPIToken's order.
 // The INSERT list stays spelled out separately: it names token_sha256 (never
 // read back) and omits last_used_at/revoked_at (never inserted) — deriving
 // one list from the other would hide that difference.
-const apiTokenCols = `id, principal, email, role, user_type, groups, groups_truncated, name, created_at, last_used_at, revoked_at, expires_at, COALESCE(minted_by, ''), identity_stamped_at, rev_seq`
+const apiTokenCols = `id, principal, email, role, user_type, groups, groups_truncated, name, created_at, last_used_at, revoked_at, expires_at, COALESCE(minted_by, ''), identity_stamped_at, rev_seq, kind, cli_session_id`
 
 func scanAPIToken(row pgx.Row) (types.APIToken, error) {
 	var t types.APIToken
 	var groups []byte
 	err := row.Scan(&t.ID, &t.Principal, &t.Email, &t.Role, &t.UserType, &groups, &t.GroupsTruncated, &t.Name,
-		&t.CreatedAt, &t.LastUsedAt, &t.RevokedAt, &t.ExpiresAt, &t.MintedBy, &t.IdentityStampedAt, &t.RevSeq)
+		&t.CreatedAt, &t.LastUsedAt, &t.RevokedAt, &t.ExpiresAt, &t.MintedBy, &t.IdentityStampedAt, &t.RevSeq, &t.Kind, &t.CLISessionID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.APIToken{}, ErrNotFound
 	}

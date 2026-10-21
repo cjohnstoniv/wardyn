@@ -92,7 +92,7 @@ func TestDialHint_RefusedVsAPI(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected a transport error dialing 127.0.0.1:1, got nil")
 	}
-	if hint := dialHint(err, false); !strings.Contains(hint, "is wardynd running?") {
+	if hint := dialHint(err); !strings.Contains(hint, "is wardynd running?") {
 		t.Errorf("dialHint(refused) = %q, want it to carry the recovery hint", hint)
 	}
 	// `wardyn setup` is a subcommand group, so a bare invocation prints
@@ -101,36 +101,36 @@ func TestDialHint_RefusedVsAPI(t *testing.T) {
 	// (Every group has a help-only RunE so a mistyped subcommand exits
 	// non-zero; the bare invocation still succeeds, and
 	// TestBareGroupStillPrintsHelpAndSucceeds pins that.)
-	if hint := dialHint(err, false); strings.Contains(hint, "`wardyn setup`") {
+	if hint := dialHint(err); strings.Contains(hint, "`wardyn setup`") {
 		t.Errorf("dialHint(refused) = %q, must not point at `wardyn setup` (a dead end: it only prints help)", hint)
 	}
-	if hint := dialHint(err, false); !strings.Contains(hint, "make setup") {
+	if hint := dialHint(err); !strings.Contains(hint, "make setup") {
 		t.Errorf("dialHint(refused) = %q, want a working recovery command (make setup)", hint)
 	}
 	// A reached server returning a non-auth API error must not get a hint.
-	if hint := dialHint(&sdk.APIError{Status: 500}, false); hint != "" {
+	if hint := dialHint(&sdk.APIError{Status: 500}); hint != "" {
 		t.Errorf("dialHint(APIError 500) = %q, want empty (server was reached)", hint)
 	}
 	// A 401 gets the token hint (compose stack boots with a token set, so a
 	// tokenless first contact reaches the daemon and is refused).
-	if hint := dialHint(&sdk.APIError{Status: 401, Body: `{"error":"missing bearer token"}`}, false); !strings.Contains(hint, "WARDYN_ADMIN_TOKEN") {
+	if hint := dialHint(&sdk.APIError{Status: 401, Body: `{"error":"missing bearer token"}`}); !strings.Contains(hint, "WARDYN_ADMIN_TOKEN") {
 		t.Errorf("dialHint(APIError 401) = %q, want the --token/WARDYN_ADMIN_TOKEN hint", hint)
 	}
 	// No `wardyn setup` subcommand prints a token: the hint names only where the compose token is.
-	if hint := dialHint(&sdk.APIError{Status: 401}, false); strings.Contains(hint, "wardyn setup") || !strings.Contains(hint, "deploy/compose/README.md") {
+	if hint := dialHint(&sdk.APIError{Status: 401}); strings.Contains(hint, "wardyn setup") || !strings.Contains(hint, "deploy/compose/README.md") {
 		t.Errorf("dialHint(APIError 401) = %q, want deploy/compose/README.md and no `wardyn setup`", hint)
 	}
-	if hint := dialHint(fmt.Errorf("list: %w", &sdk.APIError{Status: 401}), false); !strings.Contains(hint, "WARDYN_ADMIN_TOKEN") {
+	if hint := dialHint(fmt.Errorf("list: %w", &sdk.APIError{Status: 401})); !strings.Contains(hint, "WARDYN_ADMIN_TOKEN") {
 		t.Errorf("dialHint(wrapped 401) = %q, want the token hint via errors.As", hint)
 	}
 	// PersistentPreRun resolves --token's default from
 	// WARDYN_ADMIN_TOKEN OR WARDYN_TOKEN (rootCmd below) — the 401 hint must
 	// name BOTH ways to supply one, not just the first.
-	if hint := dialHint(&sdk.APIError{Status: 401}, false); !strings.Contains(hint, "WARDYN_TOKEN") {
+	if hint := dialHint(&sdk.APIError{Status: 401}); !strings.Contains(hint, "WARDYN_TOKEN") {
 		t.Errorf("dialHint(APIError 401) = %q, want it to also name WARDYN_TOKEN (the fallback env var)", hint)
 	}
 	// Wrapped transport errors must still resolve through errors.As.
-	if hint := dialHint(fmt.Errorf("poll: %w", err), false); !strings.Contains(hint, "is wardynd running?") {
+	if hint := dialHint(fmt.Errorf("poll: %w", err)); !strings.Contains(hint, "is wardynd running?") {
 		t.Errorf("dialHint(wrapped refused) = %q, want the recovery hint", hint)
 	}
 }
@@ -266,18 +266,18 @@ func TestAdminTokenFromEnvStillAuthenticates(t *testing.T) {
 // #3308: the 401 hint follows the server's own reason, and for admin_token_not_configured on whether
 // the CLI's client sent a token. On a deployment that signs people in with single sign-on and has no
 // admin token, it never sends the person to an admin token or the compose quick-start; every other 401
-// keeps the token hint. Each case runs the real command, so "sent" is the token the client used.
+// keeps the token hint. Each case runs the real command, so "sent" is the token the client used. The
+// test server answers /healthz 401 too, so the organisation offers no CLI sign-in (auth_hint.go).
 func TestDialHintOnSingleSignOn(t *testing.T) {
-	const remedy = "Set WARDYN_TOKEN to a personal API token: sign in to the console and create one under Your account, or claim the invitation your Wardyn admin sent you there."
 	const generic = "authenticate with --token or WARDYN_ADMIN_TOKEN/WARDYN_TOKEN (the compose quick-start's token is in deploy/compose/README.md)"
 	t.Setenv("WARDYN_ADMIN_TOKEN", "")
 	t.Setenv("WARDYN_TOKEN", "")
 	for _, tc := range []struct {
 		name, reason, token, want string
 	}{
-		{"sign_in_required", "sign_in_required", "", "this organisation signs people in with single sign-on and has no admin token, so --token and WARDYN_ADMIN_TOKEN cannot work here. " + remedy},
+		{"sign_in_required", "sign_in_required", "", "this organisation signs people in with single sign-on and has no admin token, so --token and WARDYN_ADMIN_TOKEN cannot work here. Set WARDYN_TOKEN to a personal API token: a Wardyn admin can invite you to create one, and you claim it under Your account in the console."},
 		{"admin_token_not_configured, no token sent", "admin_token_not_configured", "", generic},
-		{"admin_token_not_configured, token sent", "admin_token_not_configured", "t0k", "this organisation does not recognise the token sent (unknown, revoked or expired) and has no admin token, so --token and WARDYN_ADMIN_TOKEN cannot work here. " + remedy},
+		{"admin_token_not_configured, token sent", "admin_token_not_configured", "t0k", "the token in --token is not one this organisation knows (unknown, revoked or expired)"},
 		{"no reason", "", "", generic},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -297,7 +297,7 @@ func TestDialHintOnSingleSignOn(t *testing.T) {
 			if (gotAuth != "") != (tc.token != "") {
 				t.Fatalf("Authorization sent = %q, token %q", gotAuth, tc.token)
 			}
-			got := dialHint(err, clientTokenSent)
+			got := dialHint(err)
 			if got != tc.want {
 				t.Fatalf("dialHint = %q\nwant %q", got, tc.want)
 			}
@@ -310,7 +310,7 @@ func TestDialHint401GenericTextUnchanged(t *testing.T) {
 	const generic = "authenticate with --token or WARDYN_ADMIN_TOKEN/WARDYN_TOKEN (the compose quick-start's token is in deploy/compose/README.md)"
 	for _, reason := range []string{"missing_bearer_token", "invalid_admin_token"} {
 		t.Run(reason, func(t *testing.T) {
-			if got := dialHint(&sdk.APIError{Status: http.StatusUnauthorized, Reason: reason}, false); got != generic {
+			if got := dialHint(&sdk.APIError{Status: http.StatusUnauthorized, Reason: reason}); got != generic {
 				t.Fatalf("dialHint(401 %s) = %q\nwant %q", reason, got, generic)
 			}
 		})

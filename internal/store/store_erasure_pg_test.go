@@ -41,17 +41,22 @@ func TestPG_PersonErasure_BlanksOnlyThatPersonsRunTasks(t *testing.T) {
 	ctx := context.Background()
 	a1, a2 := erasureRun(t, st, "alice", "secret one"), erasureRun(t, st, "alice", "secret two")
 	b1 := erasureRun(t, st, "bob", "bob's task")
+	titled := erasureRun(t, st, "alice", "")
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET title = 'Reconcile payroll for a named person', description = 'd' WHERE id = ANY($1)`,
+		[]uuid.UUID{a1, titled, b1}); err != nil {
+		t.Fatal(err)
+	}
 	var before time.Time
 	if err := pool.QueryRow(ctx, `SELECT updated_at FROM agent_runs WHERE id=$1`, a1).Scan(&before); err != nil {
 		t.Fatal(err)
 	}
 
 	ids, err := st.RunIDsCreatedBy(ctx, "alice")
-	if err != nil || len(ids) != 2 || !slices.Contains(ids, a1) || !slices.Contains(ids, a2) {
-		t.Fatalf("RunIDsCreatedBy(alice) = %v, %v, want her two runs", ids, err)
+	if err != nil || len(ids) != 3 || !slices.Contains(ids, a1) || !slices.Contains(ids, a2) || !slices.Contains(ids, titled) {
+		t.Fatalf("RunIDsCreatedBy(alice) = %v, %v, want her three runs", ids, err)
 	}
-	if n, err := st.BlankRunTasks(ctx, "alice"); err != nil || n != 2 {
-		t.Fatalf("BlankRunTasks = %d, %v, want 2", n, err)
+	if n, err := st.BlankRunTasks(ctx, "alice"); err != nil || n != 3 {
+		t.Fatalf("BlankRunTasks = %d, %v, want 3 (a run with only a title included)", n, err)
 	}
 	if n, err := st.BlankRunTasks(ctx, "alice"); err != nil || n != 0 {
 		t.Fatalf("a second BlankRunTasks = %d, %v, want nothing to change", n, err)
@@ -63,6 +68,13 @@ func TestPG_PersonErasure_BlanksOnlyThatPersonsRunTasks(t *testing.T) {
 	}
 	if err := pool.QueryRow(ctx, `SELECT task FROM agent_runs WHERE id=$1`, b1).Scan(&task); err != nil || task != "bob's task" {
 		t.Errorf("bob's task = %q (%v), want it untouched", task, err)
+	}
+	var title, desc string
+	for id, want := range map[uuid.UUID]string{a1: "", titled: "", b1: "Reconcile payroll for a named person"} {
+		if err := pool.QueryRow(ctx, `SELECT title, description FROM agent_runs WHERE id=$1`, id).Scan(&title, &desc); err != nil ||
+			title != want || (want == "") != (desc == "") {
+			t.Errorf("run %s: title %q description %q (%v), want title %q", id, title, desc, err, want)
+		}
 	}
 }
 
