@@ -9,11 +9,13 @@
 // sign-in in another tab the session behind it can be someone else's, and
 // keystrokes would reach their PTY. The terminal reconnects on resume.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
+import { TERMINAL_SESSION } from "../lib/session-continuity-copy";
 import type { ReactNode } from "react";
 
 // How many terminals were built and disposed: a lapse must keep the one on screen.
-const xt = vi.hoisted(() => ({ made: 0, disposed: 0 }));
+// M12: what the terminal was told to write, and whether anything wiped its scrollback.
+const xt = vi.hoisted(() => ({ made: 0, disposed: 0, written: [] as string[], wiped: 0 }));
 vi.mock("@xterm/xterm", () => {
   class Terminal {
     constructor() {
@@ -25,8 +27,18 @@ vi.mock("@xterm/xterm", () => {
     unicode = { activeVersion: "6" };
     loadAddon() {}
     open() {}
-    write() {}
-    writeln() {}
+    write(d: string) {
+      xt.written.push(String(d));
+    }
+    writeln(d: string) {
+      xt.written.push(String(d));
+    }
+    clear() {
+      xt.wiped += 1;
+    }
+    reset() {
+      xt.wiped += 1;
+    }
     focus() {}
     onData() {
       return { dispose() {} };
@@ -112,6 +124,8 @@ beforeEach(() => {
   FakeWebSocket.instances = [];
   xt.made = 0;
   xt.disposed = 0;
+  xt.written = [];
+  xt.wiped = 0;
   vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
   if (!("fonts" in document)) {
     Object.defineProperty(document, "fonts", { configurable: true, value: { ready: Promise.resolve(), load: () => Promise.resolve([]) } });
@@ -195,6 +209,37 @@ describe("AttachTerminal — signed out mid-page (#483)", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // M12 (#1995): the scrollback survives the dialog, the person is told while signed out, and the
+  // reconnect says so once in the terminal's own output.
+  it("keeps the scrollback through a sign-out and says it reconnected, once, when the socket reopens", () => {
+    const { rerender } = render(at("none", <AttachTerminal runId="run_1" />));
+    FakeWebSocket.instances[0].readyState = FakeWebSocket.OPEN;
+    FakeWebSocket.instances[0].onopen?.();
+    expect(xt.written.filter((w) => w.includes("Signed in again at"))).toHaveLength(0);
+    rerender(at("dialog", <AttachTerminal runId="run_1" />));
+    expect(screen.getByText(TERMINAL_SESSION.SIGNED_OUT_NOTE)).toBeInTheDocument();
+    rerender(at("none", <AttachTerminal runId="run_1" />));
+    expect(screen.queryByText(TERMINAL_SESSION.SIGNED_OUT_NOTE)).toBeNull();
+    // Not claimed until the new socket is open.
+    expect(xt.written.filter((w) => w.includes("Signed in again at"))).toHaveLength(0);
+    FakeWebSocket.instances[1].readyState = FakeWebSocket.OPEN;
+    FakeWebSocket.instances[1].onopen?.();
+    const resumed = xt.written.filter((w) => w.includes("Signed in again at"));
+    expect(resumed).toHaveLength(1);
+    expect(resumed[0]).toMatch(/── Signed in again at .+\. Reconnected; the output above is kept\. ──/);
+    expect(xt.made).toBe(1);
+    expect(xt.disposed).toBe(0);
+    expect(xt.wiped).toBe(0);
+  });
+
+  it("neg: a terminal first opened after a sign-out has nothing above it to claim kept", () => {
+    const { rerender } = render(at("dialog", <AttachTerminal runId="run_1" />));
+    rerender(at("none", <AttachTerminal runId="run_1" />));
+    FakeWebSocket.instances[0].readyState = FakeWebSocket.OPEN;
+    FakeWebSocket.instances[0].onopen?.();
+    expect(xt.written.filter((w) => w.includes("Signed in again at"))).toHaveLength(0);
   });
 
   it("keeps a live socket through a renewal from the expiry banner: nobody is signed out", () => {

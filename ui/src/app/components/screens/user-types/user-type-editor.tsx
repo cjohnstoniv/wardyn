@@ -17,6 +17,7 @@ import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import { userTypes as api } from "../../../lib/api/user-types";
 import type { GovernanceSnapshot } from "../../../lib/api/governance";
 import { getErrorMessage } from "../../../lib/format";
+import { useUnsavedGuard } from "../../../lib/use-unsaved-guard";
 import { GOVERNANCE as GOV } from "../../../lib/governance-copy";
 import { EXPLAIN, USER_TYPES as UT } from "../../../lib/user-types-copy";
 import type { UserType } from "../../../lib/types";
@@ -70,6 +71,11 @@ export function UserTypeEditor({
   const [id, setId] = React.useState("");
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+
+  // Leaving with edits that were not saved asks first; a save or a held change closes this editor.
+  const edited = JSON.stringify({ name, description, priority, id }, null, 2);
+  const initial = React.useRef(edited).current;
+  useUnsavedGuard("user-type-editor", edited !== initial, () => edited);
 
   const save = async () => {
     setSaving(true);

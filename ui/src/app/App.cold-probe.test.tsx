@@ -47,6 +47,7 @@ vi.mock("./lib/use-poll", async (importOriginal) => ({
 }));
 
 import App from "./App";
+import { SESSION_ENDED } from "./lib/session-continuity-copy";
 
 const gate = () => screen.queryByRole("heading", { name: "Sign in" });
 
@@ -175,5 +176,16 @@ describe("a cold load that cannot reach the daemon", () => {
     expect(probes.calls).toBe(2);
     expect(gate()).toBeInTheDocument();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // M12 (#1995): the reason a 401 names must reach the gate on every probe path, not only the mount probe.
+  it("a 401 on a retry names why the session ended", async () => {
+    const core = await import("./lib/api/core");
+    vi.mocked(core.probeAuthWithReason).mockImplementationOnce(async () => ({ probe: "unreachable", reason: "", transient: true }));
+    vi.mocked(core.probeAuthWithReason).mockImplementationOnce(async () => ({ probe: "unauthed", reason: "revoked_session", transient: false }));
+    await mount();
+    expect(screen.queryByText(SESSION_ENDED.REVOKED)).toBeNull();
+    await tick(1000);
+    expect(screen.getByText(SESSION_ENDED.REVOKED)).toBeInTheDocument();
   });
 });

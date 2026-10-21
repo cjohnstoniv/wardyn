@@ -52,6 +52,7 @@ import {
   teamWritable,
 } from "../../../lib/api/drives";
 import { DRIVES, PEOPLE } from "../../../lib/user-drives-copy";
+import { useUnsavedGuard } from "../../../lib/use-unsaved-guard";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -171,6 +172,11 @@ export function DriveEditor({
   // allocations. Its message is the confirm dialog's body verbatim — the
   // console contributes only the heading (REHOME_TITLE).
   const [rehome, setRehome] = React.useState<string | null>(null);
+
+  // Leaving with edits that were not saved asks first; a save unmounts this editor (onSaved).
+  const edited = JSON.stringify({ name, backend, hostRoot, storageClass, home, size, writable, reclaim }, null, 2);
+  const initial = React.useRef(edited).current;
+  useUnsavedGuard("drive-editor", edited !== initial, () => edited);
 
   // The rule runs both ways, and until 2026-09-03 only one way was gated here.
   // It is THREE cases, not a managed/share binary (#808): k8s_pvc_static is a
