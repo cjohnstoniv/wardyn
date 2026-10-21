@@ -170,7 +170,7 @@ if v.State == client.RunPolicyViewRecorded {
 | `state` | `recorded`, `not_yet` (the run has not reached sandbox setup) or `never` (it ended before that); `spec` and `recorded_at` are set for `recorded` only |
 | `source` | `kind` is `stored`, `inline`, `default`, `profile` or `unknown`; a saved policy carries `policy_id` and its `name` at launch, and `deleted` once it is gone; `preset` and `preset_version` when the run came from one |
 | `spec` | the policy the sandbox's proxy enforces, restart denies included; `llm_inspection` secret values are never present |
-| `redacted` | true when the reader is below the security admin tier and mount sources or secret names were hidden (`<redacted>`, or dropped); the spec then strict-decodes as a policy but does not validate |
+| `redacted` | true when the reader is below the super admin tier and mount sources were hidden (`<redacted>`), or below the security admin tier and secret names were dropped; the spec then strict-decodes as a policy but does not validate |
 | `changes` | never `null`; each item says why, where and what changed, and never shows a hidden value; the item fields are listed under the table |
 | `complete` | false for a run from before Wardyn recorded its starting policy: `changes` then lists only what the launch audit rows state |
 | `stored_policy_now` | for a saved-policy source: `same`, `changed`, `updated` (a run from before the record: edited since, possibly a rename only) or `deleted`, with the policy's current `name` |
@@ -182,8 +182,8 @@ The CLI is `wardyn run policy <run-id> [--json]`.
 
 The spec always strict-decodes as a policy. Whether it passes policy validation depends on the reader and the run.
 
-- At the security admin tier it passes, and `wardyn run --policy-file` runs it again as is.
-- Below that tier it holds `<redacted>` values and fewer secret names, so it is a starting point.
+- As a super admin it passes, and `wardyn run --policy-file` runs it again as is.
+- Below that tier it holds `<redacted>` mount sources (and, below the security admin tier, fewer secret names), so it is a starting point.
 - A run that used an organisation component's shared secret is a record for every reader. The grant carries `shared: true`, which every authored door refuses, so validation fails.
 - For such a run, start the new run with the component named in `CreateRunRequest.Components` ([Custom components](#custom-components)).
 - The CLI says so in a `#` comment line above the YAML, and in its help.
@@ -734,6 +734,7 @@ start.
 | `site_config_probe_request_invalid` / `site_config_probe_url_invalid` / `egress_redirect_from_required` / `egress_redirect_not_found` | `POST /site-config/probe-proxy` and the egress-redirect edit routes. |
 | `governance_profile_request_invalid` / `governance_ceiling_invalid` / `governance_profile_name_conflict` / `governance_profile_in_use` / `governance_assignment_invalid` / `governance_preview_claims_invalid` | `PUT/POST /governance/profiles` and `/governance/assignments`, and the preview routes — `governance_preview_claims_invalid` is shared with the user-drive naming preview (`user_drives_preview.go`), which feeds the same `normalizeGovernancePreviewClaims` validator. `governance_profile_in_use` is a `409` when a profile is still assigned or still the base of another profile (the body names those profiles). A composed profile read by an SDK that predates composition shows `ceiling: {}` and `limits: {}` and ignores `effective`; a `PUT` from it omits the composition fields, which are kept, so it cannot flatten the profile. |
 | `governance_overlay_invalid` | `PUT/POST /governance/profiles` (400): a composed profile's `overlay` or `overlay_limits` does not decode, names something its base does not permit (a domain outside the base, a method the base excludes, `allow_all_egress` on a base without it, a looser bound, a grant the base does not hold), would mean "everything" by being empty (`allowed_methods: []`), names a base that does not exist, or sits beside a non-empty `ceiling` or `limits` (a composed profile states its policy only in the overlay). |
+| `governance_mount_keep_unknown` | `PUT/POST /governance/profiles` (422): a mount was sent back with the withheld source `<redacted>` on a target that stores no host path to keep (a new mount, or one the profile no longer has). A new mount needs its host path, and only a super admin sets one. |
 | `governance_profile_cycle` | `PUT/POST /governance/profiles` (409): the write would make a profile, through its base, its own base. |
 | `governance_profile_depth` | `PUT/POST /governance/profiles` (409): the write would put a profile, or one built on it, more than three profiles deep. |
 | `governance_overlay_unsatisfiable` | `PUT/POST /governance/profiles` (409): a base change would leave a profile built on it with a policy nothing satisfies (the body names that profile). The SAME value as authz's own registered launch refusal ([`internal/authz/registry.go`](../internal/authz/registry.go), `403` on create, preflight and every live door), a literal in `reasons.go` for the same reason `groups_snapshot_stale` is. |
@@ -907,7 +908,7 @@ The rest reach the wire only through
 
 | Reason | Meaning |
 |---|---|
-| `admin_surface` / `security_admin_surface` | The tier gates every admin/security-admin-only route runs through (`isOperator`/`isSecurityOperator`): the caller's stamped role is below the route's own floor. Both answer the byte-identical sentence "requires admin role" — the reason is what tells the two tiers apart. |
+| `admin_surface` / `security_admin_surface` | The tier gates every admin/security-admin-only route runs through (`isOperator`/`isSecurityOperator`): the caller's stamped role is below the route's own floor. Both answer the byte-identical sentence "requires admin role" — the reason is what tells the two tiers apart. `admin_surface` also answers a governance profile write (`PUT/POST /governance/profiles`, and approving a held one) from below the super admin tier that sets a mount's host path or makes a kept mount writable; its target is `governance.profile.<field>` and its sentence names the field. |
 | `audit_export_partition_filter` | `GET /audit/export?partition=` carried another filter (`run_id`, `since`, `until`, `action`, `action_prefix`, `actor`, `target`, `actor_type`, `outcome` or `origin`): a partition export always covers the whole partition. Answered `400` and not audited. |
 | `audit_retention_not_oldest` | `POST /audit/retention/drop` named a partition that is not the oldest retained one. Answered `409` and audited (`authz.denied`, target `audit.retention`, `partition` in the row). |
 | `audit_retention_not_closed` | `POST /audit/retention/drop`: the oldest partition can still receive rows. Answered `409` and audited. |

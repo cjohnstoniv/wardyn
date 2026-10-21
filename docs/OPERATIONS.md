@@ -1863,8 +1863,9 @@ enforces, not a re-derivation:
 - Whoever can read the run (`GET /runs/{id}`): its creator or an admin.
 - Anyone else gets the run's own `404` and a `not_owner` audit row.
 - A portal's delegated token is refused `403` `delegation_scope`: the route is not on the delegation list.
-- Below the security admin tier the policy's mount sources read `<redacted>` and grant secret names are dropped (`redacted: true`), the same rule as reading a policy; `llm_inspection` secret values are never returned.
-- The result is a policy document you can reuse as is only from the security admin tier up; below it, fill in the hidden values first.
+- Below the super admin tier the policy's mount sources read `<redacted>`, and below the security admin tier grant secret names are dropped too (`redacted: true`), the same rule as reading a policy; `llm_inspection` secret values are never returned.
+- Tier reach: a mount's host path is the super admin's to read and to set, on every policy, preset and governance profile read; a security admin keeps or removes a mount but never sees or changes its host path.
+- The result is a policy document you can reuse as is only as a super admin; anyone else fills in the hidden values first.
 - A run that used an organisation component's shared secret is the exception for everyone: its grant carries `shared: true`, which no authored policy may set, so the document is a record of the run and validation refuses it. Select the component again on the new run.
 
 **What it does not cover:** hosts approved while the run was running (Approvals), credentials the run was handed (Credentials), folders added from a workspace or a drive, and Azure DevOps access that came from the connection's defaults.

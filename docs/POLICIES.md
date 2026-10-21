@@ -12,9 +12,9 @@
 - Launch adds workspace and source-control hosts, routes GitHub through the git-broker, applies the governance profile's walls and the org's disk size, and clamps a member's policy to their limits.
 - `GET /api/v1/runs/{id}/policy` and `wardyn run policy <run-id>` return the resolved policy, under `spec` as a `RunPolicySpec` document, where it started from, what changed and why, and whether a saved policy has since been edited (see [OPERATIONS.md](OPERATIONS.md#the-policy-a-run-got) and [sdk.md](sdk.md)).
 - The CLI prints YAML behind `#` comment lines, so `wardyn run policy <id> > p.yaml` is a policy file.
-- Reuse is scoped: the document always strict-decodes as a policy, and it passes `validatePolicySpec` for a security or super admin.
+- Reuse is scoped: the document always strict-decodes as a policy, and it passes `validatePolicySpec` for a super admin.
 - For them `wardyn run --policy-file p.yaml` runs it again as is, as long as the run's allowlist, with what launch added, still fits the per-policy domain cap.
-- For anyone else, mount sources read `<redacted>` and grant secret names are dropped: it is a starting point, with those values to fill in.
+- For anyone else, mount sources read `<redacted>` (and, below the security admin tier, grant secret names are dropped): it is a starting point, with those values to fill in.
 - A run that used an organisation component's shared secret is the exception for every reader, an admin included.
   - Its grant carries `shared: true`, which no authored policy may set, so validation refuses the document.
   - It is a record of the run, not a policy to reuse: select the component on the new run instead ([Custom components](#custom-components)).

@@ -10,6 +10,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Before you upgrade
 
+- **A security admin can no longer add or change a mount source on a governance profile, or see a mount's host path; a super admin can.**
+  A security admin reads every `workspace_mounts[].source` as `<redacted>`, on policies, presets, profiles, the
+  policy default and held changes. To keep a mount, send it back with that sentinel and its target, as
+  `wardyn governance get` and `set` do; an empty source is still refused `400`. Adding a mount, changing its host
+  path or making a kept mount writable is refused `403` `admin_surface`, and a sentinel on a target with no stored
+  host path is refused `422` `governance_mount_keep_unknown`. A pending profile change that sets a host path is
+  shown to and decided by super admins only. The risk assessment and the composed-profile warnings name a mount by
+  its target, for every reader.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
   `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on
   `aws_sso_refused_tokens` (migration `0194_aws_sso_refused_tokens`). Without it an AWS SSO session whose renewal
