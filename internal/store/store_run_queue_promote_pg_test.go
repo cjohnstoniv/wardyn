@@ -4,6 +4,7 @@
 package store_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -679,5 +680,76 @@ func TestPG_QueueEntriesOfRevokedRunnersAreQueuedOnly(t *testing.T) {
 	got, err := pg.QueueEntriesOfRevokedRunners(ctx, 10)
 	if err != nil || len(got) != 1 || got[0].RunID != waiting.ID {
 		t.Fatalf("entries = %+v, %v; want only the still-QUEUED run %s", got, err, waiting.ID)
+	}
+}
+
+// A pass that finds its pool full writes the queue wait of every waiting run with no pool lock, so it
+// must lock those run rows in id order: a writer that takes them in id order (a held-reason write after
+// a slot frees) then queues behind it instead of each holding a row the other wants (40P01).
+func TestPG_PoolQueueWaitLocksRunsInIDOrder(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool := runsPGPoolIsolated(t)
+	pg := store.NewPG(pool)
+	p := cappedPool(t, pg, 1)
+	if _, err := pg.CreateRun(ctx, poolRun(p, types.RunRunning, "alice")); err != nil {
+		t.Fatal(err)
+	}
+	// The higher id waits first, so it is first in storage and in queue order: a plan that visits the
+	// rows either way reaches hi before lo.
+	runs := []types.AgentRun{poolRun(p, types.RunQueued, "alice"), poolRun(p, types.RunQueued, "alice")}
+	if bytes.Compare(runs[0].ID[:], runs[1].ID[:]) < 0 {
+		runs[0], runs[1] = runs[1], runs[0]
+	}
+	hi, lo := runs[0].ID, runs[1].ID
+	for i, r := range runs {
+		at := time.Now().UTC().Add(time.Duration(i) * time.Second)
+		if _, err := pg.CreateQueuedRun(ctx, r, store.RunQueueEntry{QueuedAt: at, DeadlineAt: at.Add(time.Hour)}, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The id-order writer is on a pool of its own: this goroutine reads pool while it holds its transaction
+	// (WARDYN_TEST_POOL_GUARD).
+	holder, err := pgxpool.New(ctx, pool.Config().ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Close()
+	tx, err := holder.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `UPDATE agent_runs SET updated_at = now() WHERE id = $1`, lo); err != nil {
+		t.Fatal(err)
+	}
+	const detail = "queue: runner_pool_at_capacity"
+	done := make(chan error, 1)
+	go func() {
+		ps := pass(p)
+		ps.AtCapacityDetail = detail
+		_, _, err := pg.PromoteRunQueue(ctx, ps, admitAll)
+		done <- err
+	}()
+	for blocked := 0; blocked == 0; {
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity
+			WHERE wait_event_type = 'Lock' AND query LIKE 'UPDATE agent_runs SET status_detail%'`).Scan(&blocked); err != nil {
+			t.Fatalf("the full-pool pass never waited on the held run row: %v", err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE agent_runs SET updated_at = now() WHERE id = $1`, hi); err != nil {
+		t.Fatalf("the id-order writer was aborted taking the higher id: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("the full-pool pass failed: %v", err)
+	}
+	for _, id := range []uuid.UUID{lo, hi} {
+		if got := runState(t, pg, id).StatusDetail; got != detail {
+			t.Errorf("run %s status_detail = %q, want %q", id, got, detail)
+		}
 	}
 }

@@ -172,6 +172,25 @@ func TestPresetWriteRefusals(t *testing.T) {
 	}
 }
 
+// TestPresetWriteRefusesAnUnusableOverlay: a policy_overlay is walked at the
+// preset write with the launch's own check, so an excluded field is refused when
+// the admin saves it, not at every launch from the preset.
+func TestPresetWriteRefusesAnUnusableOverlay(t *testing.T) {
+	f := newMemPresetFixture(t)
+	req := client.CreateRunRequest{Agent: "claude-code", Repo: "acme/widgets",
+		PolicyOverlay: json.RawMessage(`{"eligible_grants":[{"kind":"api_key","owner_only_refs":["k"]}]}`)}
+	w := f.put(t, "p", client.PresetRequest{Request: req})
+	if w.Code != http.StatusBadRequest || reasonOf(t, w) != reasonPolicyOverlayInvalid {
+		t.Fatalf("= %d %s, want 400 %s", w.Code, w.Body.String(), reasonPolicyOverlayInvalid)
+	}
+	if !strings.Contains(w.Body.String(), "policy_overlay.eligible_grants[0].owner_only_refs") {
+		t.Errorf("body %s does not name the excluded field", w.Body.String())
+	}
+	if list, _ := f.store.ListLaunchPresets(context.Background()); len(list) != 0 {
+		t.Errorf("the refused write stored %d preset(s)", len(list))
+	}
+}
+
 // TestPresetsRefuseTheRunModeFields: a preset carries the older run fields, so a
 // new-style field is refused at write and at launch with request_field_unavailable,
 // never stored to fail at every launch nor silently dropped.
