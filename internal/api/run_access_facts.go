@@ -148,12 +148,18 @@ type accessInputs struct {
 	providerStored bool
 	// ssoProxyInject is WARDYN_AWS_SSO_PROXY_INJECT as dispatch reads it.
 	ssoProxyInject bool
+	// awsReSigned reports whether dispatch would re-sign an AWS lane with these hosts at the
+	// proxy (Server.awsSigV4Hosts, WARDYN_AWS_SIGV4_AT_PROXY); nil is never.
+	awsReSigned func(hosts []string) bool
 	// imageKey is the convention image the run starts from (accessImageKey).
 	imageKey string
 	// level is the autonomy level the fold resolved, which picks an
 	// interactive run's managed settings (attendedDefaultReasons).
 	level types.AutonomyLevel
 }
+
+// reSigned is awsReSigned, false when unset.
+func (in accessInputs) reSigned(hosts []string) bool { return in.awsReSigned != nil && in.awsReSigned(hosts) }
 
 // accessFor adds the reads accessFacts needs beyond the fold and builds the
 // block. Both dry doors call it, so the block is one projection however the
@@ -164,6 +170,7 @@ func (s *Server) accessFor(r *http.Request, in accessInputs) (*accessBlock, erro
 		return nil, err
 	}
 	in.providerStored, in.ssoProxyInject = s.accessProviderStored(r, in.mpChoice), s.cfg.AWSSSOProxyInject
+	in.awsReSigned = func(hosts []string) bool { _, ok := s.awsSigV4Hosts(hosts); return ok }
 	in.imageKey = accessImageKey(*in.req, s.cfg.AgentImages)
 	out := accessFacts(in)
 	return &out, nil
@@ -359,7 +366,7 @@ func (b *accessBuilder) harnessRow(fact componentFact) {
 	for _, h := range row.Hosts {
 		b.addHost(h, viaModelLane, row.ID)
 	}
-	for _, c := range modelCredentials(row.ID, in.mpChoice, in.ssoProxyInject) {
+	for _, c := range modelCredentials(row.ID, in.mpChoice, in.ssoProxyInject, in.reSigned(providerBedrockHosts(in.mpChoice.provider))) {
 		b.addCredential(c)
 	}
 	b.addSetup(setup...)
@@ -484,8 +491,10 @@ func (b *accessBuilder) toolRuleSource(r types.ToolRule) client.ProvenanceSource
 // there; with WARDYN_AWS_SSO_PROXY_INJECT off the session's access token is
 // in the sandbox too, as a file, and the role credentials last only as long
 // as it does (no refresh token is staged). Both expire at their own lifetime,
-// which AWS sets, not the run's end: lifetime_sec stays 0.
-func modelCredentials(rowID string, choice runProviderChoice, ssoProxyInject bool) []client.AccessCredential {
+// which AWS sets, not the run's end: lifetime_sec stays 0. A lane the proxy
+// re-signs (reSigned) holds a placeholder key pair: the proxy gets and renews
+// the role credentials, and nothing of them is left in the sandbox.
+func modelCredentials(rowID string, choice runProviderChoice, ssoProxyInject, reSigned bool) []client.AccessCredential {
 	if !choice.chosen {
 		return nil
 	}
@@ -494,6 +503,9 @@ func modelCredentials(rowID string, choice runProviderChoice, ssoProxyInject boo
 		return []client.AccessCredential{c}
 	}
 	c.Delivery, c.AfterEnd, c.Renewed = deliveryShortLived, afterEndExpires, ssoProxyInject
+	if reSigned {
+		c.Delivery, c.AfterEnd = deliveryProxy, afterEndGone
+	}
 	if ssoProxyInject {
 		return []client.AccessCredential{c}
 	}
@@ -617,10 +629,15 @@ func (b *accessBuilder) componentRow(fact componentFact) {
 	if cli != nil && cli.Kind == types.CLIKindAWS && cli.AWS != nil {
 		// The portal the proxy sets the person's session on, and the role
 		// credentials AWS issues into the sandbox there, renewed while the run
-		// lives and valid at AWS until they expire.
+		// lives and valid at AWS until they expire. A row the proxy re-signs
+		// keeps them at the proxy instead.
 		b.addHost(ssoPortalHost(cli.AWS.SSORegion, ""), viaInjected, row.ID)
-		b.addCredential(client.AccessCredential{ID: row.ID + ":aws_role", Kind: credKindAWSRole, Owner: credOwnerOwn,
-			Delivery: deliveryShortLived, Renewed: true, AfterEnd: afterEndExpires})
+		role := client.AccessCredential{ID: row.ID + ":aws_role", Kind: credKindAWSRole, Owner: credOwnerOwn,
+			Delivery: deliveryShortLived, Renewed: true, AfterEnd: afterEndExpires}
+		if b.in.reSigned(fact.Hosts) { // the definition's hosts, as dispatch reads them
+			role.Delivery, role.AfterEnd = deliveryProxy, afterEndGone
+		}
+		b.addCredential(role)
 	}
 	if cli != nil && cli.Kind == types.CLIKindAzure {
 		// The two hosts the proxy opens for the CLI: Resource Manager, where it

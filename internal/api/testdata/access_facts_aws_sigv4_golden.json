@@ -1,0 +1,64 @@
+{
+  "off": [
+    {
+      "id": "agent:claude-code:model",
+      "row": "agent:claude-code",
+      "kind": "model_provider",
+      "owner": "own",
+      "delivery": "sandbox_short_lived",
+      "renewed": true,
+      "after_end": "expires"
+    },
+    {
+      "id": "0b5c3a52-77e1-4c1e-9d0a-1d4f3c2b1a01:aws_role",
+      "row": "0b5c3a52-77e1-4c1e-9d0a-1d4f3c2b1a01",
+      "kind": "aws_role",
+      "owner": "own",
+      "label": "Your AWS sign-in",
+      "delivery": "sandbox_short_lived",
+      "renewed": true,
+      "after_end": "expires"
+    },
+    {
+      "id": "0b5c3a52-77e1-4c1e-9d0a-1d4f3c2b1a02:aws_role",
+      "row": "0b5c3a52-77e1-4c1e-9d0a-1d4f3c2b1a02",
+      "kind": "aws_role",
+      "owner": "own",
+      "label": "Your AWS sign-in",
+      "delivery": "sandbox_short_lived",
+      "renewed": true,
+      "after_end": "expires"
+    }
+  ],
+  "on": [
+    {
+      "id": "agent:claude-code:model",
+      "row": "agent:claude-code",
+      "kind": "model_provider",
+      "owner": "own",
+      "delivery": "proxy",
+      "renewed": true,
+      "after_end": "gone"
+    },
+    {
+      "id": "0b5c3a52-77e1-4c1e-9d0a-1d4f3c2b1a01:aws_role",
+      "row": "0b5c3a52-77e1-4c1e-9d0a-1d4f3c2b1a01",
+      "kind": "aws_role",
+      "owner": "own",
+      "label": "Your AWS sign-in",
+      "delivery": "proxy",
+      "renewed": true,
+      "after_end": "gone"
+    },
+    {
+      "id": "0b5c3a52-77e1-4c1e-9d0a-1d4f3c2b1a02:aws_role",
+      "row": "0b5c3a52-77e1-4c1e-9d0a-1d4f3c2b1a02",
+      "kind": "aws_role",
+      "owner": "own",
+      "label": "Your AWS sign-in",
+      "delivery": "sandbox_short_lived",
+      "renewed": true,
+      "after_end": "expires"
+    }
+  ]
+}

@@ -89,6 +89,12 @@ func providerBedrockRuntimeHost(p types.ModelProvider) string {
 	return bedrockDataPlaneHostFor(b.Region, b.BaseURL)
 }
 
+// providerBedrockHosts is the two hosts a Bedrock provider's lane reaches: its data plane and the
+// Region's control plane. Dispatch and the run's access facts both read them here.
+func providerBedrockHosts(p types.ModelProvider) []string {
+	return []string{providerBedrockRuntimeHost(p), bedrockControlHost(providerBedrockSettings(p).Region)}
+}
+
 // sameStartURL compares two AWS access-portal URLs the way a person reads
 // them: case and a trailing slash aside.
 func sameStartURL(a, b string) bool {
@@ -209,7 +215,7 @@ func (s *Server) providerBedrockTransport(ctx context.Context, run types.AgentRu
 	b := providerBedrockSettings(mp)
 	model := providerModel(mp, run.Agent)
 	env := bedrockBaseEnv(b.Region, model, b.BaseURL)
-	hosts := []string{providerBedrockRuntimeHost(mp), bedrockControlHost(b.Region)}
+	hosts := providerBedrockHosts(mp)
 	var auth bedrockAuth
 	if mp.Kind == types.ModelProviderBedrockBearer {
 		// A non-empty sentinel so claude-code uses bearer auth; the proxy
