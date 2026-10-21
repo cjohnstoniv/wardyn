@@ -8,6 +8,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Fixed
+
+- The docs no longer say a workspace's `byo` base image is used verbatim. `registry`, `custom` and `byo` base images are all wrapped with Wardyn's runner tools by the image builder before a run uses them, and the wrapped image runs on the Docker substrate only.
+
 ## [0.9.7] — 2026-10-20
 
 A small release on top of 0.9.6. An Azure DevOps token that the organisation mints for a run can now be delivered to a person's own runner, off by default, and a credential delivery write that the server could not build is refused when it is made. No migration.
