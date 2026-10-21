@@ -7,7 +7,9 @@ ARG GOPROXY=
 ENV GOPROXY=${GOPROXY}
 WORKDIR /src
 COPY go.mod go.sum ./
-RUN go mod download
+# Bounded retry of the module FETCH only (a proxy stream error is transient); go.sum still
+# verifies every module, and no build or test step is ever retried.
+RUN for i in 1 2 3; do go mod download && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done
 COPY . .
 RUN go build -o /out/origin ./test/vmconformance/origin && go build -o /out/vmprobe ./test/vmconformance/vmprobe
 
