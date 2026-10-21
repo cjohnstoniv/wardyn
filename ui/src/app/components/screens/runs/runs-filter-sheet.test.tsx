@@ -92,6 +92,30 @@ describe("RunsFilterBar phone sheet across the sm breakpoint", () => {
     await waitFor(() => expect(screen.getByLabelText("Search runs")).toHaveFocus());
   });
 
+  it("a Save view form left open when the sheet closes on sm is gone when it reopens at phone width", () => {
+    let listener: (() => void) | undefined;
+    const mq = {
+      matches: false,
+      addEventListener: (_: string, l: () => void) => (listener = l),
+      removeEventListener: () => (listener = undefined),
+    };
+    window.matchMedia = vi.fn(() => mq) as unknown as typeof window.matchMedia;
+    bar({ status: "needs" });
+    fireEvent.click(screen.getByRole("button", { name: "Filters (1)" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save view" }));
+    expect(within(screen.getByRole("dialog")).getByLabelText("Name this view")).toBeInTheDocument();
+    mq.matches = true;
+    act(() => listener?.());
+    expect(screen.queryByRole("dialog")).toBeNull();
+    // Back to phone width: the media query changes again, then the sheet is reopened.
+    mq.matches = false;
+    act(() => listener?.());
+    fireEvent.click(screen.getByRole("button", { name: "Filters (1)" }));
+    const sheet = within(screen.getByRole("dialog"));
+    expect(sheet.queryByLabelText("Name this view")).toBeNull();
+    expect(sheet.getByRole("button", { name: "Show 9 runs" })).toBeInTheDocument();
+  });
+
   it("Show N runs: one run reads the one form, and a list cut at its limit reads N+", () => {
     bar({ status: "needs" }, 1);
     fireEvent.click(screen.getByRole("button", { name: "Filters (1)" }));

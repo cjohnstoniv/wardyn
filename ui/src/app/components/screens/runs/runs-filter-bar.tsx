@@ -277,13 +277,19 @@ function FiltersSheet({
 }: ControlProps & Pick<BarProps, "runCount" | "runsTruncated" | "onSaveView"> & { searchRef: React.RefObject<HTMLInputElement | null> }) {
   const [saving, setSaving] = React.useState(false);
   const [open, setOpen] = React.useState(false);
+  // One way out for every close: a controlled `open` change does not fire
+  // onOpenChange, so the resize path below must clear the Save view form too.
+  const setSheetOpen = (o: boolean) => {
+    setOpen(o);
+    if (!o) setSaving(false);
+  };
   // The sheet is phone-only. Its overlay and focus trap are not, so an open
   // sheet must close when the viewport grows to `sm` (a rotated phone, a
   // resized window) or it would leave the page dimmed and locked.
   React.useEffect(() => {
     const mq = window.matchMedia?.("(min-width: 640px)"); // jsdom has no matchMedia
     if (!mq) return;
-    const onChange = () => mq.matches && setOpen(false);
+    const onChange = () => mq.matches && setSheetOpen(false);
     mq.addEventListener("change", onChange);
     return () => mq.removeEventListener("change", onChange);
   }, []);
@@ -297,13 +303,7 @@ function FiltersSheet({
     </div>
   );
   return (
-    <Sheet
-      open={open}
-      onOpenChange={(o) => {
-        setOpen(o);
-        if (!o) setSaving(false);
-      }}
-    >
+    <Sheet open={open} onOpenChange={setSheetOpen}>
       <SheetTrigger asChild>
         <Button type="button" variant="outline" className="shrink-0 sm:hidden">
           {filterCount > 0 ? RUNS_FILTERS_SHEET.BUTTON_COUNT(filterCount) : RUNS_FILTERS_SHEET.TITLE}
@@ -320,7 +320,9 @@ function FiltersSheet({
           if (!window.matchMedia?.("(min-width: 640px)").matches) return;
           e.preventDefault();
           searchRef.current?.focus();
-        }} className="max-h-[90dvh] gap-3 rounded-t-2xl p-4 pt-3 sm:hidden">
+        }}
+        className="max-h-[90dvh] gap-3 rounded-t-2xl p-4 pt-3 sm:hidden"
+      >
         <div className="mx-auto h-1 w-9 rounded-full bg-border-strong" aria-hidden />
         <SheetHeader className="p-0">
           <SheetTitle className="text-base">{RUNS_FILTERS_SHEET.TITLE}</SheetTitle>
