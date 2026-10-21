@@ -106,6 +106,9 @@ func (s *Server) reviveCeilingAdmitting(ctx context.Context, run types.AgentRun,
 	if rerr == nil {
 		rerr = s.revivePlacementDenied(ctx, run, c, actorType, actor)
 	}
+	if rerr == nil {
+		rerr = s.reviveBelowBoundaryFloor(ctx, run, actorType, actor)
+	}
 	return c, rerr
 }
 

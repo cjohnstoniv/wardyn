@@ -42,7 +42,7 @@ user, same host](#second-user-same-host)". Deciding who can do what:
 - [Kubernetes: day-2](#kubernetes-day-2)
 - [High availability](#high-availability)
 - [Kubernetes: known gaps](operations/kubernetes-known-gaps.md#kubernetes-known-gaps)
-- Task pages under [`docs/operations/`](operations/): [Managed laptops: client-mode runners](operations/hybrid-laptops.md), [Runner pools](operations/runner-pools.md#runner-pools-where-a-run-goes), [Launch presets](operations/launch-presets.md#launch-presets), [Console branding](operations/console-branding.md#console-branding)
+- Task pages under [`docs/operations/`](operations/): [Managed laptops: client-mode runners](operations/hybrid-laptops.md), [Runner pools](operations/runner-pools.md#runner-pools-where-a-run-goes), [Launch presets](operations/launch-presets.md#launch-presets), [Console branding](operations/console-branding.md#console-branding), [The Wardyn boundary](operations/boundary.md#the-wardyn-boundary-the-outermost-layer-of-every-run)
 
 </details>
 
@@ -4004,6 +4004,8 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0197` (`0197_run_inner_walls`) adds `inner_walls` to `agent_runs` (`0001`'s table): the harness's own walls a run launched with, under its policy's `harness_inner_walls`.
 - `0198` (`0198_agent_runs_local_folder_status`) adds `local_folder_status` to `agent_runs` (`0001`'s table): the passes a person's folder-only runner made for a run's computer folder, in and back.
 - `0199` (`0199_cli_sign_in`) adds `api_tokens.kind` and `api_tokens.cli_session_id` (`0045`'s table), which mark a CLI sign-in's access and admin tokens and tie them to their CLI session, and creates `cli_sessions` and `cli_sign_ins`.
+- `0200` (`0200_governance_boundary`) creates `governance_boundary` and adds `agent_runs.break_glass` (`0001`'s table), a constant-default boolean, so no row is rewritten; a split-role install grants the app role `SELECT, INSERT, UPDATE` on `governance_boundary`.
+- `0201` (`0201_run_recording_level`) adds `recording_level` to `agent_runs` (`0001`'s table) and replaces its `not_recorded` check (`0180`'s column) to admit `policy_off`: the level a run is recorded at, resolved once at dispatch.
 - `0200` (`0200_runner_pending_actions_run_index`) adds the index `runner_pending_actions_run_kind_queued` on `runner_pending_actions` (`0139`'s table), which a run's lease checks read its action history through; the build holds a lock on the table for its duration.
 - `0201` (`0201_approval_notifications_purge_index`) adds the partial index `approval_notifications_purge_idx` on `approval_notifications` (`0118`'s table) over its sent, cancelled and dead rows, which the outbox purge reads; the build holds a lock on the table for its duration.
 - `0202` (`0202_principal_identity_scim_lookup_indexes`) adds indexes on `principal_identities` (`0113`'s table) over `lower(scim_user_name)`, `lower(scim_external_id)`, `object_id` and `email_lower`, and on `principal_identity_aliases` over `value_lower`, which SCIM user lookups read; the builds hold a lock on each table for their duration.

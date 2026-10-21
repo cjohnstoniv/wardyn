@@ -64,6 +64,7 @@ var meetRules = map[string]meetRule{
 	"desktop.copy_out":                 {"blocked", "blocked on either side: blocked"},
 	"desktop.upload":                   {"allowed", "blocked on either side: blocked"},
 	"desktop.download":                 {"blocked", "blocked on either side: blocked"},
+	"recording":                        {"the organisation's level", "the higher level; a lower overlay is a widening"},
 	"push_rules.deny_paths":            {"none", "union"},
 	"push_rules.max_inspect_pack_mib":  {"32 MiB under an active rule", "smaller after normalising against the composed rule"},
 	"push_rules.require_review_paths":  {"none", "union"},

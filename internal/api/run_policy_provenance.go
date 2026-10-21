@@ -96,7 +96,7 @@ func canonicalKnobs(s types.RunPolicySpec) types.RunPolicySpec {
 
 // The records a resolution writes. None is locked: a lock is a layer forbidding
 // the layers below it to change a knob (lower_may_change false), and no layer
-// can lock one until org walls or per-knob delegation arrive. The name is the
+// can lock one until per-knob locks arrive. The name is the
 // leaf profile's, never a profile it is built from.
 var (
 	memberProvenance     = policyref.Provenance{Layer: policyref.LayerMember}

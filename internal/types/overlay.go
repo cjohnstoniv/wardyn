@@ -47,6 +47,7 @@ type CeilingOverlay struct {
 	GitHubCapabilities      *[]ghscope.Capability  `json:"github_capabilities,omitempty"`
 	HarnessInnerWalls       *HarnessInnerWalls     `json:"harness_inner_walls,omitempty"`
 	Desktop                 *DesktopControls       `json:"desktop,omitempty"`
+	Recording               *RecordingLevel        `json:"recording,omitempty"`
 }
 
 // ResourcesOverlay mirrors ResourceLimits with per-field presence.

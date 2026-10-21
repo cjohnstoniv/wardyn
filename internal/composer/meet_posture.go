@@ -77,6 +77,13 @@ func (m *meeter) meetPosture(o types.CeilingOverlay) {
 		d := c.Desktop.Meet(o.Desktop)
 		c.Desktop = &d
 	}
+	if o.Recording != nil {
+		// A level is a minimum: the overlay may record more than the base, and less is a widening.
+		if o.Recording.Rank() < c.Recording.Rank() {
+			m.widen("recording", "the base records at %q, and an overlay may only record more", c.Recording)
+		}
+		c.Recording = c.Recording.AtLeast(*o.Recording)
+	}
 	if o.GitHubCapabilities != nil {
 		if both, ok := m.meetCapabilities("github_capabilities", capStrings(c.GitHubCapabilities), capStrings(*o.GitHubCapabilities)); ok {
 			c.GitHubCapabilities = toCaps[ghscope.Capability](both)

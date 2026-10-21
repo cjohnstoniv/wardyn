@@ -223,6 +223,10 @@ type RunPolicySpec struct {
 	// Desktop sets the desktop's clipboard and file-transfer rules by direction (#2967). Nil is
 	// the defaults: paste in and upload allowed, copy out and download blocked.
 	Desktop *DesktopControls `json:"desktop,omitempty"`
+	// Recording is how much of a run under this policy is recorded (RecordingLevel); empty chooses
+	// nothing, and the organisation's level applies (types.RecordingChoice). A ceiling's level is a
+	// minimum: a policy under it may record more, never less.
+	Recording RecordingLevel `json:"recording,omitempty"`
 }
 
 // HarnessInnerWalls is a harness's own walls inside the sandbox. On a policy each field is a choice

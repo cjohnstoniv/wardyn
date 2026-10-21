@@ -51,7 +51,10 @@
 # docs/POLICIES.md 19558 adds 19 over 19539, measured: a merge whose carried parent held the path not executable is the exception.
 # docs/POLICIES.md 19556 is 2 under 19558, measured: the deny_new_executables row points at the push_rules section for the carried-parent exception.
 # docs/POLICIES.md 19846 = ours 19668 + theirs 19556 - base 19378 at the 0.10 W4c merge of STRAG-GATED 38f5e63a3 onto the train.
-docs/POLICIES.md=19846 share=12
+# docs/POLICIES.md 20065 = ours 19846 + theirs 19597 - base 19378 at the 0.10 W4c merge of origin/main ba16e8564 (W4b) onto the train.
+docs/POLICIES.md=20065 share=12
+# docs/POLICIES.md 19597 = ours 19378 + theirs 19511 - base 19292 at the 0.10 W4b merge of the CTL-B fix onto the train.
+# docs/POLICIES.md 19511 adds 219 (0.10 CTL-B): the recording knob (#2968).
 # 0.9.4 W1 merge +3: L8 and an earlier W1 lane both edited the README; the merged text measures 3 over the sum.
 examples/policies/README.md=1446 share=5
 # docs/POLICIES.md 18013 adds 40 over 17973, measured: a member's private-range workspace clone host.

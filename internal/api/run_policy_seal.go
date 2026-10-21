@@ -21,7 +21,10 @@ import (
 // fails on a new one, or on a widening that runs after the seal.
 
 // sealLayer is one outer limit on a run's egress, and the record a knob it
-// decides carries in the run's provenance.
+// decides carries in the run's provenance. spec is read as the layer's whole
+// egress: with AllowAllEgress false its AllowedDomains is the allowlist, so a nil
+// one allows nothing. A layer that only denies (names no allowlist) passes
+// AllowAllEgress true and its denies.
 type sealLayer struct {
 	rec  policyref.Provenance
 	spec types.RunPolicySpec
@@ -33,16 +36,44 @@ type sealDecision struct {
 	layer policyref.Provenance
 }
 
-// outerLayers is the ordered outer layers a run is sealed against: the
-// organisation walls, then the agent rules. Both are still to come, so a run is
-// sealed against none and the seal is the identity.
-func (s *Server) outerLayers(context.Context, types.AgentRun) []sealLayer {
-	return nil
+// outerLayers is the ordered outer layers a run is sealed against, outermost
+// first: the Wardyn boundary, then the owner's restrictions (still to come).
+// Unit walls are inner layers, applied at resolve, never here. In no_limits there
+// is no layer, so the seal is the identity. A boundary that cannot be read seals
+// the run to no egress at all: an unread boundary is never no boundary.
+func (s *Server) outerLayers(ctx context.Context, run types.AgentRun) []sealLayer {
+	b, err := s.governanceBoundary(ctx)
+	if err != nil {
+		slog.ErrorContext(ctx, "wardynd: read the Wardyn boundary at the seal; the run is sealed to no egress",
+			slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		return []sealLayer{{rec: boundaryProvenance, spec: types.RunPolicySpec{AllowedDomains: []string{}}}}
+	}
+	if !b.HardLimits() {
+		return nil
+	}
+	return []sealLayer{{rec: boundaryProvenance, spec: boundarySealSpec(b.Spec)}}
+}
+
+// boundarySealSpec is the boundary's egress as a seal layer, read as the resolve
+// meet reads it (types.BoundarySpec.Overlay): its allowlist when it names one and
+// does not also allow all egress, otherwise a deny-only layer (AllowAllEgress
+// true); its denies either way. allow_all_egress named false with no allowlist
+// turns open egress off at resolve; at the seal it bounds nothing beyond the denies.
+func boundarySealSpec(sp types.BoundarySpec) types.RunPolicySpec {
+	out := types.RunPolicySpec{AllowAllEgress: sp.AllowedDomains == nil || (sp.AllowAllEgress != nil && *sp.AllowAllEgress)}
+	if !out.AllowAllEgress {
+		out.AllowedDomains = slices.Clone(*sp.AllowedDomains)
+	}
+	if sp.DeniedDomains != nil {
+		out.DeniedDomains = slices.Clone(*sp.DeniedDomains)
+	}
+	return out
 }
 
 // sealRunPolicy seals policy against the run's outer layers and records which
 // layer decided each knob it narrowed: in prov when the path keeps a provenance
-// record (dispatch; nil on a revive), and in the log.
+// record (dispatch; nil on a revive), and in the log. Where several layers narrow
+// one knob, the last of them, the innermost, is the one recorded.
 func (s *Server) sealRunPolicy(ctx context.Context, run types.AgentRun, policy *types.RunPolicySpec, prov knobProvenance) {
 	for _, d := range sealPolicy(policy, s.outerLayers(ctx, run)) {
 		if prov != nil {

@@ -39,6 +39,10 @@ const rekeyActor = "wardyn/rotate-age-key"
 // timeout would then be un-rotatable.
 const rekeyConnectTimeout = 30 * time.Second
 
+// beforeLockedStagedKeyCheck runs just before the staged-key check under the
+// rekey lock; a test plants there the file a racing run would have left.
+var beforeLockedStagedKeyCheck = func() {}
+
 // rotateAgeKeyMode is wardynd's `-rotate-age-key <path>` MAINTENANCE MODE: mint
 // a new age identity, rewrap every stored secret's data key from the old
 // identity's local KEK to the new one's in one transaction, replace the key
@@ -151,6 +155,7 @@ func rotateAgeKeyMode(f *bootFlags, keyPath string) error {
 	// after the commit fails, this file is the recovery copy the error names.
 	// Checked again under the rekey lock: a run that raced the first check may
 	// have left one since.
+	beforeLockedStagedKeyCheck()
 	if err := refuseStagedKey(staged, keyPath); err != nil {
 		return err
 	}

@@ -317,6 +317,9 @@ export interface RunPolicySpec {
   // RunPolicySpec.Desktop, #2967). Omitted, or an omitted direction, is the default:
   // paste in and upload allowed, copy out and download blocked.
   desktop?: DesktopControls;
+  // How much of a run is recorded (mirrors Go's RunPolicySpec.Recording). Absent chooses nothing:
+  // the organisation's level applies. A ceiling's level is a minimum. Keystrokes are never recorded.
+  recording?: RecordingLevel;
 }
 
 export type TransferRule = "allowed" | "blocked";
@@ -328,6 +331,9 @@ export interface DesktopControls {
   upload?: TransferRule;
   download?: TransferRule;
 }
+
+/** Go: types.RecordingLevel. */
+export type RecordingLevel = "off" | "terminal" | "screen_actions";
 
 // Mirrors Go's types.HarnessInnerWalls. On a policy each field is a choice; on a run or a Review
 // fact it is what the harness launches with, where an absent sandbox_mode is the harness's own

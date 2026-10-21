@@ -1,15 +1,6 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package api wires Wardyn's control-plane REST surface (the wardynd binary).
-// It contains ZERO target-specific code (the parity rule): it talks to runners
-// only through the runner.Runner interface, and to identity/secrets/broker only
-// through their contract interfaces. Every security decision fails closed.
-//
-// Routes: see routes.go for the table. The authoritative, always-current
-// classification of every one of them — which role gate each sits behind — is
-// authz_test.go's chi.Walk-enumerated matrix, which cannot go stale because it
-// walks the router itself.
 package api
 
 import (
@@ -885,6 +876,10 @@ type Server struct {
 	// execOutputs holds each non-interactive run's output tail (run_output.go).
 	execOutputs    execOutputTails
 	uiGatewayState // the UI gateway's process state (server_uigateway.go)
+
+	// desktopRecs are the live desktop recordings and each run's pause (uigateway_record.go).
+	desktopRecs desktopRecordings
+
 	// attachIgnoredSeen holds the sub+person pairs whose sub_known person.attach row this process already
 	// wrote (people.go attachIgnored); ponytail: per process, so a restart or another replica writes it
 	// once more. A durable mark on the person row would need a migration.

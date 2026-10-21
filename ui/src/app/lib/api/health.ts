@@ -164,6 +164,8 @@ export interface PolicyRef {
   request_text?: string;
   // On a refusal: the kind of layer that refused ("deployment" or "profile").
   layer?: string;
+  // The person changed the policy for this run, inside their ceiling.
+  overridden?: boolean;
 }
 
 // Result of a real throwaway-sandbox probe (test-proxy / test-redirect) —

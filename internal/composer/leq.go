@@ -148,7 +148,8 @@ func leqPosture(a, b types.RunPolicySpec) bool {
 		leqResources(a.Resources, b.Resources) &&
 		leqToolRules(a.ToolRules, b.ToolRules) &&
 		leqInnerWalls(a.HarnessInnerWalls, b.HarnessInnerWalls) &&
-		leqDesktop(a.Desktop, b.Desktop)
+		leqDesktop(a.Desktop, b.Desktop) &&
+		a.Recording.Rank() >= b.Recording.Rank()
 }
 
 // leqDesktop holds when a allows no desktop direction b blocks, either side's defaults applied.
