@@ -19,8 +19,8 @@ import { DESKTOP_FILES as C } from "../src/app/components/wardyn/copy/desktop-fi
 // pinned by the Go tests in internal/api/desktop_files_test.go (TestDesktopFiles_DefaultsUploadAllowed
 // DownloadBlocked, _DownloadFollowsThePolicy, _RefusalsBeforeTheSandbox, _SponsorIsRefusedOnEvery
 // Endpoint, _OnlyWhoMayEnterTheDesktopReachesIt, _UnreadableRulesRefuseEveryTransfer,
-// _OneReadDecidesTheTransfer). No Go test pins the empty-SandboxRef refusal at desktop_files.go:101
-// (those envs always carry a ref). The panel's own states are also covered by desktop-files-panel.test.tsx.
+// _OneReadDecidesTheTransfer); the empty-SandboxRef refusal at desktop_files.go:101 is pinned on all three
+// endpoints by _NoSandboxRefRefusesEveryEndpoint. The panel's own states are also covered by desktop-files-panel.test.tsx.
 // ============================================================================
 
 const RUN_TASK = "e2e fixture 2";
