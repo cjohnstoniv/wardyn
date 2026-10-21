@@ -625,3 +625,58 @@ const (
 // organisation instead. A transport's answer, not a refusal; errorBody.Detail says why. Declared here
 // because reasons_routes.go is at scripts/check-file-size.sh's limit.
 const reasonAttachLocalUnavailable = "attach_local_unavailable"
+
+// The per-run read and action routes under /runs/{id} below moved here from reasons_routes.go,
+// which had reached scripts/check-file-size.sh's limit. Same closed set, same guards.
+
+// PATCH /runs/{id}/title (run_title.go).
+const (
+	reasonRunTitleStoreUnavailable = "run_title_store_unavailable" // this store cannot rename a run
+)
+
+// GET /runs/{id}/resources and GET /runs/{id}/files (run_resources.go,
+// run_files.go): the two widgets read the identical run-state facts, so they
+// share a reason per cause rather than each inventing its own synonym.
+const (
+	reasonRunInspectNoRunner              = "run_inspect_no_runner"               // this deployment configures no runner at all
+	reasonRunInspectTerminal              = "run_inspect_terminal"                // the run has finished; its sandbox is gone
+	reasonRunInspectNoSandbox             = "run_inspect_no_sandbox"              // the run never dispatched (or recorded no sandbox ref)
+	reasonRunInspectPaused                = "run_inspect_paused"                  // the run is paused
+	reasonRunInspectAgentStopped          = "run_inspect_agent_stopped"           // the run is kept with its agent stopped; there is no running sandbox to read
+	reasonRunInspectExecStreamUnsupported = "run_inspect_exec_stream_unsupported" // the runner does not support exec streaming
+	reasonRunResourcesReadFailed          = "run_resources_read_failed"           // the sandbox resource usage script failed
+	reasonRunFilesNoExecSession           = "run_files_no_exec_session"           // the runner returned no exec session
+)
+
+// GET /runs/{id}/output (run_output.go).
+const (
+	reasonRunOutputTailInvalid = "run_output_tail_invalid" // ?tail= is not a positive number of bytes
+	reasonRunOutputInteractive = "run_output_interactive"  // the run is interactive and has no pane snapshot to serve
+	reasonRunOutputOff         = "run_output_off"          // WARDYN_EXEC_OUTPUT_TAIL=off
+	reasonRunOutputNotKept     = "run_output_not_kept"     // no output is kept for the run (one never captured, or one still being captured)
+	reasonRunOutputExpired     = "run_output_expired"      // the tail outlived WARDYN_EXEC_OUTPUT_TAIL_TTL, or the run ended past WARDYN_RUN_OUTPUT_RETENTION_DAYS
+	reasonRunOutputErased      = "run_output_erased"       // the run's output was erased (404)
+	reasonRunOutputNotCaptured = "run_output_not_captured" // the runner cannot capture a run's output (Kubernetes under the recorder); the recording has it
+)
+
+// GET /runs/{id}/sign-in (run_sign_in.go).
+const (
+	reasonRunSignInNotAWS     = "run_sign_in_not_aws"    // the run is not an AWS sign-in run
+	reasonRunSignInUnreadable = "run_sign_in_unreadable" // the pane, or the capture's audit row, could not be read in time
+)
+
+// POST /runs/{id}/computer-folder/bring-back (run_computer_folder_bring_back.go).
+const (
+	reasonComputerFolderNone             = "computer_folder_none"              // the run has no folder from the person's computer
+	reasonComputerFolderCopyInOnly       = "computer_folder_copy_in_only"      // the folder is Copy in only: nothing comes back
+	reasonComputerFolderNotSynced        = "computer_folder_not_synced"        // the folder's first sync never landed
+	reasonComputerFolderNotRunning       = "computer_folder_not_running"       // the run is not RUNNING: a kill or another end got there first
+	reasonComputerFolderPaused           = "computer_folder_paused"            // the run is paused: resuming it for the pass would let its agent write
+	reasonComputerFolderAgentUnstoppable = "computer_folder_agent_unstoppable" // the sandbox's PID 1 is not Wardyn's idle main process, so the agent cannot be stopped first
+)
+
+// POST /runs/{id}/resume (run_pause.go).
+const (
+	reasonRunResumeNotRunning = "run_resume_not_running" // the run is not in a resumable state
+	reasonRunResumeFailed     = "run_resume_failed"      // thawForExec failed
+)
