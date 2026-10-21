@@ -78,8 +78,8 @@ func TestApprovalRuleWriteRefusals(t *testing.T) {
 			t.Errorf("%s: %d %s, want 400 %s", name, w.Code, w.Body, reasonApprovalRuleInvalid)
 		}
 	}
-	if _, err := e.pool.Exec(context.Background(), `INSERT INTO governance_boundary (singleton, mode, spec, limits)
-		VALUES (true, 'hard_limits', '{"allowed_domains":["other.example"]}', '{}')`); err != nil {
+	if _, err := e.pool.Exec(context.Background(), `UPDATE governance_boundary SET mode = 'hard_limits', spec = '{"allowed_domains":["other.example"]}', limits = '{}'
+		WHERE singleton`); err != nil {
 		t.Fatal(err)
 	}
 	if w := e.call(e.alice, http.MethodPut, path, approvalRuleBody); w.Code != http.StatusConflict || wireReason(t, w) != reasonApprovalRuleHost {
