@@ -6,6 +6,8 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"reflect"
 	"slices"
@@ -316,23 +318,25 @@ func TestPG_ConcurrentGraphWritesNeverMakeACycleOrADepthFourChain(t *testing.T) 
 		}
 		byID := unitsByID(all)
 		for _, id := range []uuid.UUID{a.ID, b.ID, c.ID, d.ID} {
-			if _, err := chainFromRows(byID, id); err != nil {
+			if _, err := chainFromRows(byID, id, store.MaxUnitDepthCap); err != nil {
 				t.Fatalf("round %d: after concurrent writes %s has no clean chain: %v", round, byID[id].Name, err)
 			}
 		}
 	}
 }
 
-// TestPG_ChainReadIsOneStatementBoundedAtThree: the store hands back at most three rows however deep a
-// seeded graph runs, and the resolver refuses what the bound cut short.
-func TestPG_ChainReadIsOneStatementBoundedAtThree(t *testing.T) {
+// TestPG_ChainReadIsOneStatementBoundedAtTheCap: the store hands back at most MaxUnitDepthCap rows
+// however deep a seeded graph runs, the resolver refuses what the bound cut short, and the
+// configured maximum (16 when unset) refuses a path past it.
+func TestPG_ChainReadIsOneStatementBoundedAtTheCap(t *testing.T) {
 	e := newComposedWriteEnv(t)
 	root := e.mustCreate(`{"name":"chain-root","ceiling":{"min_confinement_class":"CC2"}}`)
 	prev := root
-	var chain []types.GovernanceUnit
-	for _, name := range []string{"chain-1", "chain-2", "chain-3"} {
+	var chain []types.GovernanceUnit // chain[i] is depth i+2
+	for i := range store.MaxUnitDepthCap {
 		// Seeded below the handler's own depth check, as a direct write or a bug would leave it.
 		id := uuid.New()
+		name := fmt.Sprintf("chain-%d", i+1)
 		if _, err := e.pg.Pool.Exec(e.ctx, `INSERT INTO governance_units (id, name, ceiling, limits, parent_id, overlay) VALUES ($1,$2,'{}','{}',$3,'{}')`,
 			id, name, prev.ID); err != nil {
 			t.Fatal(err)
@@ -340,18 +344,19 @@ func TestPG_ChainReadIsOneStatementBoundedAtThree(t *testing.T) {
 		prev = types.GovernanceUnit{ID: id, Name: name}
 		chain = append(chain, prev)
 	}
-	got, err := e.pg.GetGovernanceUnitChain(e.ctx, chain[2].ID)
-	if err != nil || len(got) != 3 {
-		t.Fatalf("chain read = %d rows err %v, want 3 (bounded)", len(got), err)
+	deepest := chain[len(chain)-1]
+	got, err := e.pg.GetGovernanceUnitChain(e.ctx, deepest.ID)
+	if err != nil || len(got) != store.MaxUnitDepthCap {
+		t.Fatalf("chain read = %d rows err %v, want %d (bounded)", len(got), err, store.MaxUnitDepthCap)
 	}
 	if _, err := e.srv.composeChain(got); err == nil {
 		t.Error("the resolver composed a chain the bound cut short")
 	}
-	if _, err := e.srv.resolveUnitByID(e.ctx, chain[2].ID); err == nil {
-		t.Error("resolveUnitByID composed a depth-four chain")
+	if _, err := e.srv.resolveUnitByID(e.ctx, chain[15].ID); !errors.Is(err, errUnitDepth) {
+		t.Errorf("a 17-deep path under the default maximum: %v, want errUnitDepth", err)
 	}
-	if ok, err := e.srv.resolveUnitByID(e.ctx, chain[1].ID); err != nil || !ok.Composed {
-		t.Errorf("a three-deep chain: %v %v, want composed", ok, err)
+	if ok, err := e.srv.resolveUnitByID(e.ctx, chain[14].ID); err != nil || !ok.Composed {
+		t.Errorf("a 16-deep path: %v %v, want composed", ok, err)
 	}
 	if _, err := e.pg.GetGovernanceUnitChain(e.ctx, uuid.New()); err == nil {
 		t.Error("an unknown profile read as a chain")

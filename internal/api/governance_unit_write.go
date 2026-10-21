@@ -5,10 +5,11 @@
 // (a whole ceiling) or composed (a base plus an overlay that can only narrow it, migration 0125).
 // Every write decides its row inside one store transaction under the profile-graph lock
 // (store.WriteGovernanceUnit), from the graph as that transaction reads it, so concurrent writes
-// cannot together make a cycle or a chain deeper than three.
+// cannot together make a cycle or a path deeper than the maximum unit depth.
 package api
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -43,6 +44,9 @@ type governanceUnitRequest struct {
 	ParentID      json.RawMessage        `json:"parent_id"`
 	Overlay       json.RawMessage        `json:"overlay"`
 	OverlayLimits json.RawMessage        `json:"overlay_limits"`
+	// Mode is own_walls or pass_through (the parent's walls exactly). Absent keeps the stored mode
+	// on a PUT and is own_walls on a POST.
+	Mode string `json:"mode,omitempty"`
 
 	contact    *policyref.Contact
 	contactSet bool
@@ -175,8 +179,14 @@ func finishGovernanceUnitRequest(req governanceUnitRequest) (governanceUnitReque
 	if req.contact, req.contactSet, contactMsg = parseProfileContact(req.Contact); contactMsg != "" {
 		return governanceUnitRequest{}, contactMsg
 	}
+	if req.Mode != "" && req.Mode != types.UnitModeOwnWalls && req.Mode != types.UnitModePassThrough {
+		return governanceUnitRequest{}, fmt.Sprintf("mode: %q is not a unit mode — use own_walls or pass_through", req.Mode)
+	}
 	return req, ""
 }
+
+// passThroughTopLevelMsg refuses a pass-through unit with no parent of its own.
+const passThroughTopLevelMsg = "a top-level unit that adds no limits would pass everything through; give it a parent or its own walls"
 
 // parseComposition reads the three composition members. A message is the 400
 // governance_overlay_invalid; the overlay is decoded strictly, so an unknown key is refused rather
@@ -240,6 +250,11 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 		writeErrorReason(w, http.StatusBadRequest, reasonGovernanceOverlayInvalid, msg)
 		return
 	}
+	limit, err := s.unitDepthLimit(r.Context())
+	if err != nil {
+		writeServerError(w, r, "write governance profile", err)
+		return
+	}
 	var effective *ResolvedUnit
 	var held *heldUnitWrite
 	createdBy := principalFromRequest(r)
@@ -248,7 +263,7 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 			if refusal := s.unitPutCreateRefusal(r, id, status, all); refusal != nil {
 				return types.GovernanceUnit{}, refusal
 			}
-			p, res, err := s.buildGovernanceUnit(createdBy, id, req, all)
+			p, res, err := s.buildGovernanceUnit(createdBy, id, req, all, limit)
 			effective = res
 			exemptCtx := withGovernanceMemberships(r.Context(), assignments)
 			if err == nil && mode == govQueue && !s.unitWriteExempt(exemptCtx, all, p, res) {
@@ -378,9 +393,10 @@ func composedFrom(all []types.GovernanceUnit, id uuid.UUID, comp compositionRequ
 // buildGovernanceUnit decides the row one write stores and what it resolves to, from every
 // profile as the write transaction reads them (all). Anything it returns as *unitWriteError is a
 // refusal the caller can fix; the row is stored only if it returns nil.
-func (s *Server) buildGovernanceUnit(createdBy string, id uuid.UUID, req governanceUnitRequest, all []types.GovernanceUnit) (types.GovernanceUnit, *ResolvedUnit, error) {
+func (s *Server) buildGovernanceUnit(createdBy string, id uuid.UUID, req governanceUnitRequest, all []types.GovernanceUnit, limit int) (types.GovernanceUnit, *ResolvedUnit, error) {
 	p := types.GovernanceUnit{
 		ID: id, Name: req.Name, CreatedBy: createdBy, Contact: req.contact, ContactSet: req.contactSet,
+		Mode: cmp.Or(req.Mode, storedUnitMode(all, id)),
 	}
 	// UNIQUE(name) is judged here too, so a held create or rename is refused at proposal
 	// and not left pending to fail at every approval.
@@ -388,6 +404,17 @@ func (s *Server) buildGovernanceUnit(createdBy string, id uuid.UUID, req governa
 		return p, nil, writeRefusal(http.StatusConflict, reasonGovernanceUnitNameConflict, "a governance profile named %q already exists", req.Name)
 	}
 	base, overlay, limits := composedFrom(all, id, req.comp)
+	if p.Mode == types.UnitModePassThrough {
+		// Its parent's walls exactly: a parent of its own, and nothing it adds.
+		if base == nil {
+			return p, nil, writeRefusal(http.StatusBadRequest, reasonGovernanceUnitRequestInvalid, passThroughTopLevelMsg)
+		}
+		if (overlay != nil && !reflect.DeepEqual(*overlay, types.CeilingOverlay{})) || (limits != nil && !reflect.DeepEqual(*limits, types.LimitsOverlay{})) {
+			return p, nil, writeRefusal(http.StatusBadRequest, reasonGovernanceOverlayInvalid,
+				"a pass-through unit adds no limits of its own: send no overlay or overlay_limits, or make it own_walls")
+		}
+		overlay, limits = &types.CeilingOverlay{}, nil
+	}
 	switch {
 	case overlay == nil && base != nil:
 		return p, nil, writeRefusal(http.StatusBadRequest, reasonGovernanceOverlayInvalid, "parent_id: a base needs an overlay (send overlay: {} for the base unchanged)")
@@ -398,6 +425,10 @@ func (s *Server) buildGovernanceUnit(createdBy string, id uuid.UUID, req governa
 		if !reflect.DeepEqual(req.Ceiling, types.RunPolicySpec{}) || !reflect.DeepEqual(req.Limits, types.GovernanceLimits{}) {
 			return p, nil, writeRefusal(http.StatusBadRequest, reasonGovernanceOverlayInvalid,
 				"a composed profile states its policy in overlay and overlay_limits: ceiling and limits must be empty")
+		}
+		if base == nil && slices.ContainsFunc(all, func(x types.GovernanceUnit) bool { return x.ID == store.DefaultUnitID }) {
+			// Built on the deployment default with no base named: the Default unit is that base.
+			base = &store.DefaultUnitID
 		}
 		p.ParentID, p.Overlay, p.OverlayLimits = base, overlay, limits
 	} else {
@@ -415,13 +446,21 @@ func (s *Server) buildGovernanceUnit(createdBy string, id uuid.UUID, req governa
 		}
 		p.Ceiling, p.Limits = req.Ceiling, req.Limits
 	}
-	return s.checkGraphWrite(p, all)
+	return s.checkGraphWrite(p, all, limit)
+}
+
+// storedUnitMode is the mode of the stored row id, own_walls when there is none.
+func storedUnitMode(all []types.GovernanceUnit, id uuid.UUID) string {
+	if i := slices.IndexFunc(all, func(x types.GovernanceUnit) bool { return x.ID == id }); i >= 0 && all[i].Mode != "" {
+		return all[i].Mode
+	}
+	return types.UnitModeOwnWalls
 }
 
 // checkGraphWrite refuses a row that would break the graph and resolves it: its base must exist, no
-// chain through it may repeat or pass three profiles, an overlay may name nothing its base does not
+// path through it may repeat or be longer than limit, an overlay may name nothing its base does not
 // permit, and no descendant may be left with a policy nothing satisfies.
-func (s *Server) checkGraphWrite(p types.GovernanceUnit, all []types.GovernanceUnit) (types.GovernanceUnit, *ResolvedUnit, error) {
+func (s *Server) checkGraphWrite(p types.GovernanceUnit, all []types.GovernanceUnit, limit int) (types.GovernanceUnit, *ResolvedUnit, error) {
 	proposed := append(slices.DeleteFunc(slices.Clone(all), func(x types.GovernanceUnit) bool { return x.ID == p.ID }), p)
 	byID := unitsByID(proposed)
 	if p.ParentID != nil {
@@ -431,19 +470,19 @@ func (s *Server) checkGraphWrite(p types.GovernanceUnit, all []types.GovernanceU
 	}
 	descendants := descendantsOf(proposed, p.ID)
 	for _, row := range append([]types.GovernanceUnit{p}, descendants...) {
-		if _, err := chainFromRows(byID, row.ID); err != nil {
+		if _, err := chainFromRows(byID, row.ID, limit); err != nil {
 			switch {
 			case errors.Is(err, errUnitCycle):
 				return p, nil, writeRefusal(http.StatusConflict, reasonGovernanceUnitCycle,
 					"this change would make %q (through its base) its own base", row.Name)
 			case errors.Is(err, errUnitDepth):
 				return p, nil, writeRefusal(http.StatusConflict, reasonGovernanceUnitDepth,
-					"this change would put %q more than %d profiles deep", row.Name, maxUnitDepth)
+					"this change would put %q more than %d units deep, the maximum unit depth (governance_max_depth)", row.Name, limit)
 			}
 			return p, nil, err
 		}
 	}
-	chain, err := chainFromRows(byID, p.ID)
+	chain, err := chainFromRows(byID, p.ID, limit)
 	if err != nil {
 		return p, nil, err
 	}
@@ -457,7 +496,7 @@ func (s *Server) checkGraphWrite(p types.GovernanceUnit, all []types.GovernanceU
 		return p, nil, unsatisfiableWrite(err, p.Name)
 	}
 	for _, d := range descendants {
-		dchain, err := chainFromRows(byID, d.ID)
+		dchain, err := chainFromRows(byID, d.ID, limit)
 		if err == nil {
 			_, err = s.composeChain(dchain)
 		}
