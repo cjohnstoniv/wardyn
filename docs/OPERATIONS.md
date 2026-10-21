@@ -938,12 +938,9 @@ psql -Atc "SELECT 'db:     ' || audit_partition_digest('audit_events_p202610')"
 - Only a security operator may export a partition; anyone else gets an empty export, and `?partition=` with any other
   filter is refused (`audit_export_partition_filter`).
 - The readable form (`form=readable`, the default) gives the same rows in the audit feed's own event shape.
-- A `security_admin`'s export, either form, withholds each row's host detail
-  ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md#host-detail-below-the-super-admin-tier)).
-  - Such a row's `data` carries `redacted_fields`, and the footer's `redacted_rows` counts the rows.
-  - Its stored `row_hash` and `prev_hash` stay, so the fold and the chain links verify across it.
-  - Its content reads as redacted for your tier, not verifiable here: report it apart, neither failed nor verified.
-  - A super admin's export carries every row as stored, so each one re-hashes in full.
+- A `security_admin`'s export withholds host detail: such a row carries `redacted_fields` and stored hashes, so the
+  fold and links verify, and `redacted_rows` in the footer counts them. Report their content apart, as not verifiable
+  at that tier; a super admin's export re-hashes in full.
 
 - **Rows written before the upgrade** keep `NULL` hashes, are reported as `legacy`, and are never a failure.
   - There is no backfill, on purpose: hashes computed after the fact by the same process that could have altered the
@@ -1070,10 +1067,8 @@ lever today**. Concretely:
     an empty export; a run that is not theirs or does not exist still answers the same empty `200`.
   - Below the security tier both `GET /audit` and the export leave out the name of an organisation's `shared` component
     secret; `admin` and `security_admin` receive the rows as recorded ([Custom components](operations/custom-components.md#custom-components)).
-  - Below a super admin, `security_admin` included, both reads also withhold each row's host detail: a drive's host
-    root and storage class, a source's path and the like, named in the row's `redacted_fields`.
-    - `admin` reads every row as recorded ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md#host-detail-below-the-super-admin-tier)).
-    - The operator's sinks (webhook, syslog, SIEM, file) always receive the whole row.
+  - Below a super admin both reads also withhold host detail, such as a drive's host root, named in `redacted_fields`;
+    sinks keep the whole row ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md#host-detail-below-the-super-admin-tier)).
 
 - **This is asymmetric with session recordings**, which have the retention lever audit lacks:
   `WARDYN_RECORDING_RETENTION_DAYS` ([ENV.md](ENV.md#wardyn_recording_retention_days)) age-deletes stored PTY casts, defaulting to

@@ -951,19 +951,12 @@ These are emitted by background sweepers, not request handlers — `ActorType` i
 
 ## Host detail below the super-admin tier
 
-- Since 0.10, `GET /audit` and both exports serve every reader below a super admin, `security_admin` included, each row without its host detail.
-- A super admin (`admin`, or the admin token) reads every row as recorded.
-- The stored row, the chain and the operator's sinks (webhook, syslog, SIEM, file) are unchanged.
-- A projected row's `data` carries `redacted_fields`, the sorted names of what was withheld.
-  Its `row_hash` and `prev_hash` are the stored ones, so the chain links across it, but its content cannot be re-hashed from what was served.
-- What each action withholds:
-  - `drive.write`: `host_root` and `storage_class` (it serves only `backend`, `home_template`, `name`, `object_scheme`, `reclaim`, `rehomed`, `rehomed_fields`, `rehomed_subjects`, `size_mib` and `writable`).
-  - `drive.member.create`: `storage_class` (it serves only `backend`, `count`, `drive`, `drive_id`, `limit` and `size_mib`).
-  - `source.write`: `locator` (it serves only `kind`, `ref` and `writable`).
-  - `recovery.rehearse.begin` and `recovery.rehearse`: `target` (they serve only `set_id`, `manifest_head_seq`, `verdict` and `checks`).
-  - `site_config.write`: `branding_logo_path`.
-  - `run.policy.resolve`: each `workspace_mounts[].source`, which reads `<redacted>`; `redacted_fields` names `workspace_mounts.source`.
-- `TestAuditHostDetailCensus` ([`internal/api/audit_host_census_test.go`](../internal/api/audit_host_census_test.go)) fails on a row here with a host-shaped field that is neither in the list above nor on its reviewed list.
+- `GET /audit` and both exports serve a reader below a super admin, `security_admin` included, each row without its host detail.
+- A super admin reads rows as recorded; the stored row, the chain and the operator's sinks are unchanged.
+- A projected row's `data` names what was withheld in `redacted_fields` and keeps its stored hashes, so the chain links across it.
+- Withheld: `drive.write`'s `host_root` and `storage_class`, `drive.member.create`'s `storage_class`, `source.write`'s `locator`, the `recovery.rehearse` rows' `target`, `site_config.write`'s `branding_logo_path`, and `run.policy.resolve`'s `workspace_mounts[].source` (as `<redacted>`).
+- The first four serve an allow-list, so a field added later is withheld until listed.
+- `TestAuditHostDetailCensus` ([`internal/api/audit_host_census_test.go`](../internal/api/audit_host_census_test.go)) fails on a host-shaped field no projection or review covers.
 
 ## Notes on completeness
 
