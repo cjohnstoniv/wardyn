@@ -47,14 +47,16 @@ var auditHostViews = map[string]auditHostView{
 }
 
 // withoutHostDetail is evs as a reader below the super-admin tier is served them (auditHostViews). Only the
-// data changes; the stored row, the sinks and a super admin's read keep it whole.
+// data changes; the stored row, the sinks and a super admin's read keep it whole. It edits a copy, so a
+// slice the caller still holds is never projected in place.
 func withoutHostDetail(evs []types.AuditEvent) []types.AuditEvent {
-	for i, ev := range evs {
+	out := slices.Clone(evs)
+	for i, ev := range out {
 		if data, ok := hostViewOf(ev.Action, ev.Data); ok {
-			evs[i].Data = data
+			out[i].Data = data
 		}
 	}
-	return evs
+	return out
 }
 
 // hostViewOf is data as auditHostViews serves action's row, and whether anything was withheld. A row whose
