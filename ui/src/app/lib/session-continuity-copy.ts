@@ -12,7 +12,7 @@
 // The fallback sentence for a session that ended with no reason, or one this build does not know, is
 // SESSION_ENDED_REASON (lib/api/core.ts), kept as it was.
 import { SESSION_ENDED_REASON } from "./api/core";
-import { shortTime } from "./format";
+import { shortDate, shortTime } from "./format";
 
 /** The 401 reasons (internal/api/auth_status.go) that name why a session ended, each with the sentence the gate shows. */
 export const SESSION_ENDED = {
@@ -91,5 +91,5 @@ export function returnRunOf(path: string): string | null {
 export function signedInUntil(expiry: Date, now: Date = new Date()): string {
   const time = shortTime(expiry.toISOString());
   if (expiry.toDateString() === now.toDateString()) return SESSION_MENU.SIGNED_IN_UNTIL_TODAY(time);
-  return SESSION_MENU.SIGNED_IN_UNTIL_DAY(time, expiry.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }));
+  return SESSION_MENU.SIGNED_IN_UNTIL_DAY(time, shortDate(expiry.toISOString()));
 }
