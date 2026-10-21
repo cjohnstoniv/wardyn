@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -225,6 +226,16 @@ func TestLinuxVMSandbox(t *testing.T) {
 	}
 	if b, err := os.ReadFile(filepath.Join(rw, "made")); err != nil || string(b) != "from-the-guest\n" {
 		t.Fatalf("the guest's write to the writable folder: %q %v", b, err)
+	}
+	// virtiofsd maps the agent user onto the runner's: the write lands as the folder's own owner.
+	for _, p := range []string{rw, filepath.Join(rw, "made")} {
+		fi, err := os.Stat(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st, ok := fi.Sys().(*syscall.Stat_t); !ok || int(st.Uid) != os.Getuid() || int(st.Gid) != os.Getgid() {
+			t.Fatalf("%s is not owned by the runner's %d:%d: %+v", p, os.Getuid(), os.Getgid(), fi.Sys())
+		}
 	}
 	if _, err := os.Stat(filepath.Join(ws, "nope")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("the read-only folder took a write: %v", err)
