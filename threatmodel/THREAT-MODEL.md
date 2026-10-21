@@ -1097,6 +1097,7 @@ ADMIN pre-authorized** —
   operator-authored mount rides the same spec and lives outside every member root by
   construction.
 - An operator run carries no roots and takes exactly the pre-0.6 path.
+- A Linux VM sandbox (0.10) gets those same binds as virtiofs shares, from the same `agentMounts` call: same folders, targets and mode (a read-only one is read-only in its virtiofsd bind, in `--readonly` and in the guest mount), and no other host path.
 
 ### 4.5 The audit hash chain — what it is and is not
 

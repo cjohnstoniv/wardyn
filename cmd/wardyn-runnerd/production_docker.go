@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/containerd/errdefs"
@@ -89,6 +90,7 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 	extras := sink.extras(sub, ev)
 	extras.linuxVM = enableLinuxVM(ctx, sub, stateDir, os.Getenv)
 	extras.localAttach, extras.orgURL = local, opts.orgURL
+	endVMsOnFullSpool(sink.spoolSink, extras.linuxVM, sub.EndVM)
 	// The runtime first: its startup containment pass stops lapsed runs even when the check below fails.
 	extras.lastFailure = opts.status.failure
 	rt, err := localRunnerRuntime(ctx, identity, stateDir, sub, docker.SandboxRef, relay, dockerCapacity, extras)
@@ -660,6 +662,12 @@ type dockerSink struct {
 	bound  map[netip.Addr]uint16 // where it listens: address and port
 	lns    []net.Listener
 	url    string // decision_sink.url for new proxies; "" until use
+
+	fullBusy   atomic.Bool // a full-spool pass is running (endFullSpoolVMsInBackground)
+	fullMu     sync.Mutex  // guards fullClosed, fullCancel and the Add on fullPasses
+	fullClosed bool        // Close has begun: no new pass starts
+	fullPasses sync.WaitGroup
+	fullCancel context.CancelFunc // cancels the running pass; guarded by fullMu
 }
 
 // newDockerSink starts the sink, listening at once where it listened before a restart when that
@@ -705,6 +713,9 @@ func (d *dockerSink) listen(ap netip.AddrPort) (uint16, error) {
 // Close closes the sink and every listener it opened, one whose Serve has not started included, so
 // its port is free once Close returns.
 func (d *dockerSink) Close() error {
+	if d.spoolSink.fullRuleOn() {
+		d.joinFullPass()
+	}
 	err := d.spoolSink.Close()
 	d.addrMu.Lock()
 	lns := d.lns
@@ -746,12 +757,75 @@ func (d *dockerSink) proxyURL() string {
 	return d.url
 }
 
+// fullSpoolBound bounds one full-spool pass: ending a VM waits for the guest's power down.
+var fullSpoolBound = 2 * time.Minute
+
+// closeJoinBound is how long Close waits for a running full-spool pass before cancelling it, and
+// cancelUnwindBound how long it then waits for the pass to return. Together they sit under the service
+// manager's stop timeout (systemd's 90 s default for the unit, launchd's 20 s ExitTimeOut), which would
+// otherwise kill the runner mid-pass. A pass cut short is not lost: its run's spool records that the
+// VM is being ended (Spool.SetEndPending), and the next start's pass finishes it.
+var (
+	closeJoinBound    = 10 * time.Second
+	cancelUnwindBound = 2 * time.Second
+)
+
+// endFullSpoolVMsInBackground runs the full-spool pass off the containment tick, one at a time. The tick
+// shares its 30 s safety context with CheckLapses, which runs after it, and ending one VM can take
+// that long: the pass gets a budget of its own and never delays a lapse.
+func (d *dockerSink) endFullSpoolVMsInBackground(ctx context.Context) {
+	if !d.spoolSink.fullRuleOn() {
+		return // the Linux VM switch is off: no pass, no goroutine
+	}
+	d.fullMu.Lock()
+	if d.fullClosed || !d.fullBusy.CompareAndSwap(false, true) {
+		d.fullMu.Unlock()
+		return
+	}
+	pass, cancel := context.WithTimeout(context.WithoutCancel(ctx), fullSpoolBound)
+	d.fullCancel = cancel
+	d.fullPasses.Add(1)
+	d.fullMu.Unlock()
+	go func() {
+		defer d.fullPasses.Done()
+		defer d.fullBusy.Store(false)
+		defer cancel()
+		d.EndVMsWithFullSpools(pass)
+	}()
+}
+
+// joinFullPass stops new full-spool passes and waits up to closeJoinBound for a running one, then
+// cancels it and waits up to cancelUnwindBound for it to return, so spoolSink.Close does not race a
+// live pass. Only a pass that ignores its cancelled context for cancelUnwindBound outlives it. Close
+// calls it only when the full-spool rule is on.
+func (d *dockerSink) joinFullPass() {
+	d.fullMu.Lock()
+	d.fullClosed = true
+	d.fullMu.Unlock()
+	done := make(chan struct{})
+	go func() { d.fullPasses.Wait(); close(done) }()
+	select {
+	case <-done:
+		return
+	case <-time.After(closeJoinBound):
+	}
+	d.fullMu.Lock()
+	if d.fullCancel != nil {
+		d.fullCancel()
+	}
+	d.fullMu.Unlock()
+	select {
+	case <-done:
+	case <-time.After(cancelUnwindBound):
+	}
+}
+
 // extras are the sink's part of the runtime: Tick regrants credit after the organisation's acks and
 // retries loss rows, and at startup, before the containment pass, the driver's record store becomes
 // the manager's and every run's sink key is registered again.
 func (d *dockerSink) extras(sub *docker.Driver, ev *evidenceForwarder) runtimeExtras {
 	return runtimeExtras{
-		options: offline.Options{Tick: d.Tick},
+		options: offline.Options{Tick: func(ctx context.Context) { d.Tick(ctx); d.endFullSpoolVMsInBackground(ctx) }},
 		started: func(_ context.Context, m *offline.Manager) error {
 			ev.m = m
 			return sub.ReregisterSinks(m.SinkRunIDs())

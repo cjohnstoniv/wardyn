@@ -5,6 +5,7 @@ package runneragent
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -65,5 +66,31 @@ func TestDispatcherCreateMethodsStartOnlyTheirOwnKind(t *testing.T) {
 				t.Fatalf("a refused create reached the substrate (%d) or recorded an intent (%d)", len(fake.Created), intents)
 			}
 		})
+	}
+}
+
+// A VM create that arrives over a link that has dropped is refused, and nothing is recorded or
+// created: a Linux VM sandbox never starts while the org is unreachable (OFFLINE-VM rule a).
+func TestDispatcherRefusesACreateVMOnADroppedLink(t *testing.T) {
+	id := uuid.NewString()
+	fake := runnertest.NewFake()
+	intents := 0
+	d, err := newTestDispatcher(Config{RunnerID: id, Substrate: fake, LinuxVM: true,
+		BeforeCreate: func(context.Context, runner.SandboxSpec) error { intents++; return nil },
+		Created:      func(context.Context, runner.SandboxSpec, string) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, b := runnerwire.Loopback()
+	defer b.Close()
+	p := runnerwire.NewPeer(a, runnerwire.PeerConfig{})
+	p.Close()
+	data, _ := runnerwire.Marshal(runnerwire.CreateSandboxArgs{Spec: runner.SandboxSpec{RunID: uuid.New(), RunnerID: id, MachineKind: types.MachineLinuxVM}})
+	if _, err := d.Call(context.Background(), p, 2, runnerwire.MethodCreateVM, data); !errors.Is(err, runner.ErrRunnerOffline) {
+		t.Fatalf("create_vm on a dropped link = %v, want %v", err, runner.ErrRunnerOffline)
+	}
+	if len(fake.Created) != 0 || intents != 0 {
+		t.Fatalf("a refused create reached the substrate (%d) or recorded an intent (%d)", len(fake.Created), intents)
 	}
 }

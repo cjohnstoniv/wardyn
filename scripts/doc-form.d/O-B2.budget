@@ -105,6 +105,7 @@
 # 0.9.4 L8: docs/OPERATIONS.md 56344 adds 133 over 56211: the second-user role map and the internal_hosts ClusterIP rule.
 # 0.10 MDL: docs/OPERATIONS.md 57041 adds 425 over 56616, measured: #2957 the Local model server section (local_model provider, its http-with-auth rule).
 # 0.10 W1 train: docs/OPERATIONS.md 56744 = 56446 (main, measured) + 34 (API-4) + 153 (TEST-1) + 48 (API-2) + 39 (API-5) + 24 (HYB-A), each lane's measured growth; every lane fit under 56616 alone.
+# docs/OPERATIONS.md 56776 adds 32 (0.10 Linux VM): the 0196_run_machine_kind line in the migrator rationale.
 # docs/OPERATIONS.md 56830 adds 86 over 56744: how long a run's AWS role credentials live and the PT1H lever, measured at the main merge.
 # 0.10 SEC-2c: docs/OPERATIONS.md 56777 adds 33 over 56744, measured: the 0196 deprovision-event-pin migration line.
 # #2822: docs/OPERATIONS.md 56764 adds 20 over 56744, measured: the 0196 inner_walls migration in the migrator rationale.
@@ -144,8 +145,10 @@
 # 0.10 ATT-FU: docs/OPERATIONS.md 57729 adds 39 over 57690, measured: the 0215_runner_last_failure migration line.
 # docs/OPERATIONS.md 58850 = ours 58811 + theirs 57729 - base 57690 at the 0.10 W4c merge of ATT-FU a92997f94 onto the train.
 # docs/OPERATIONS.md 58911 = ours 58850 + theirs 57751 - base 57690 at the 0.10 W4c merge of origin/main ba16e8564 (W4b) onto the train.
+# docs/OPERATIONS.md 58911, measured at the 0.10 W4c merge of OFFLINE-VM a359ef27b onto the train (two merge bases, VM-A 47c283334 and main 3cea1aa73, so no single base to subtract).
 docs/OPERATIONS.md=58911
 # docs/OPERATIONS.md 57751 = ours 57562 + theirs 57690 - base 57501 at the 0.10 merge of main (W4a) into the W4b train.
+# docs/OPERATIONS.md 57722 = ours + theirs - base at the 0.10 HYB-C merge of main onto VM-A, measured.
 # docs/OPERATIONS.md 55840 adds 124 over 55716, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # docs/OPERATIONS.md 55867 adds 27 over 55840, measured: a run whose runner cannot be asked falls back to this deployment's runner, the older-runner exception, pooled runs, and the runner_offline gap reason.
 # docs/OPERATIONS.md 55891 adds 24 over 55867, measured: with several executors and no pool, the executor a run lands on, and once its sandbox exists the one that holds it, decides where its output comes from.

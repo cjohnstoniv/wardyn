@@ -185,7 +185,7 @@ func TestPlacementCapabilities_AnotherPersonsRunnerIsNotFound(t *testing.T) {
 			}
 			pausing := governanceCeiling{Limits: types.GovernanceLimits{RunLimits: types.RunLimits{PauseIdleAfterSec: 300}}}
 			req := createRunRequest{Placement: types.PlacementLocal, RunnerID: id.String()}
-			if ref := s.placementCapabilityRefusal(capsCtx, req, runPlacement{}, pausing); ref == nil || ref.status != http.StatusNotFound || ref.body.Reason != string(placement.ReasonRunnerNotFound) {
+			if ref := s.placementCapabilityRefusal(capsCtx, req, runPlacement{}, pausing, 0); ref == nil || ref.status != http.StatusNotFound || ref.body.Reason != string(placement.ReasonRunnerNotFound) {
 				t.Errorf("capability step = %+v, want 404 runner_not_found", ref)
 			}
 			w := httptest.NewRecorder()
@@ -296,20 +296,20 @@ func TestPlacementCapability_UnsupportedInterfaceRefused(t *testing.T) {
 	local := createRunRequest{Placement: types.PlacementLocal, RunnerID: id.String()}
 	pausing := governanceCeiling{Limits: types.GovernanceLimits{RunLimits: types.RunLimits{PauseIdleAfterSec: 300}}}
 
-	ref := s.placementCapabilityRefusal(capsCtx, local, runPlacement{}, pausing)
+	ref := s.placementCapabilityRefusal(capsCtx, local, runPlacement{}, pausing, 0)
 	if ref == nil || ref.body.Reason != string(placement.ReasonPlacementCapability) || ref.status != http.StatusUnprocessableEntity ||
 		!strings.Contains(ref.body.Error, "pause_idle_after_sec") {
 		t.Fatalf("refusal = %+v, want 422 placement_capability naming pause_idle_after_sec", ref)
 	}
-	if ref := s.placementCapabilityRefusal(capsCtx, local, runPlacement{}, governanceCeiling{}); ref != nil {
+	if ref := s.placementCapabilityRefusal(capsCtx, local, runPlacement{}, governanceCeiling{}, 0); ref != nil {
 		t.Errorf("no demand was made, yet: %+v", ref)
 	}
 	remoteReq := createRunRequest{Placement: types.PlacementRemote}
-	if ref := s.placementCapabilityRefusal(capsCtx, remoteReq, runPlacement{}, pausing); ref != nil {
+	if ref := s.placementCapabilityRefusal(capsCtx, remoteReq, runPlacement{}, pausing, 0); ref != nil {
 		t.Errorf("the deployment's own executor was asked: %+v", ref)
 	}
 	offline := createRunRequest{Placement: types.PlacementLocal, RunnerID: installRunner(t, s, false, laptopCaps(types.CC1)).String()}
-	if ref := s.placementCapabilityRefusal(capsCtx, offline, runPlacement{}, pausing); ref == nil || ref.body.Reason != string(placement.ReasonRunnerOffline) {
+	if ref := s.placementCapabilityRefusal(capsCtx, offline, runPlacement{}, pausing, 0); ref == nil || ref.body.Reason != string(placement.ReasonRunnerOffline) {
 		t.Errorf("an offline runner = %+v, want runner_offline", ref)
 	}
 }

@@ -280,6 +280,7 @@ What happens:
     `.kube`, `.config/gh`, `.config/gcloud`, `.netrc`, `.git-credentials`, `.git/config` and `Library/Keychains`.
     A project's own `.claude` or `.docker` folder is left out too.
   - Only folder names, file counts and sizes reach Wardyn while you browse. No file is sent until a run starts.
+- A Linux VM sandbox gets the folder the same way, into its guest as `agent`.
 - The runner opens no port and Wardyn never connects in: each pass rides the runner's own outbound session. The
   runner never reaches into a sandbox. Wardyn joins its stream to the sandbox's own `sftp-server`.
 
@@ -292,7 +293,9 @@ so with several replicas a runner connected to another one reads as offline.
 | Situation | Behaviour |
 | --- | --- |
 | Link down at run creation | Refused `runner_offline`; no run row exists |
-| Link drops mid-run | Nothing is torn down; the proxy enforces its cached policy and spools decisions. A full spool holds a request up to 10 s, then answers a retryable `503` naming the runner's link |
+| Link down at a Linux VM sandbox's creation | Refused `runner_offline`; the VM does not start |
+| Link drops mid-run | Nothing is torn down; the proxy enforces its cached policy and spools decisions. A full spool holds a request up to 5 s, then answers a retryable `503` naming the runner's link |
+| A Linux VM sandbox's audit spool fills | The runner ends the VM, powered down and kept. A container keeps the hold and `503` above |
 | Link down past the lapse (about 1h5m) | The runner stops the proxy itself and keeps the agent and files |
 | The runner process restarts | Its runs stop reaching the network until each is revived. This is fail-closed |
 | The control plane restarts, or answers `503` while it starts | The runner reconnects once the organisation answers; live runs keep running. A teardown of a run it keeps only for containment is refused, so it cannot hold the connection; the next restart kills that agent instead. Nothing needs resetting |

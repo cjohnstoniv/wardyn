@@ -24,6 +24,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/client"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -69,7 +70,7 @@ func newVMRig(t *testing.T) *vmRig {
 	r.f.exportTar = []byte("a tar")
 	r.d = newTestDriver(r.f)
 	r.vc = &VMConfig{StateDir: state, QEMUImage: "wardyn/vm-qemu:test", CPUModel: "Haswell-v4", MachineType: "pc-q35-10.0",
-		QEMUVersion: "10.0.13", UID: os.Getuid(), GID: os.Getgid(), KVMGID: "992", BootTimeout: 20 * time.Second}
+		QEMUVersion: "10.0.13", UID: os.Getuid(), GID: os.Getgid(), KVMGID: "992", BootTimeout: 20 * time.Second, Virtiofs: true}
 	if r.vc.UID == 0 {
 		r.vc.UID, r.vc.GID = 65532, 65532
 	}
@@ -411,6 +412,9 @@ func TestVMSpecRefusalsCreateNothing(t *testing.T) {
 		"record":       {rec: true, want: "not recorded"},
 		"agent start":  {mut: agentStart, want: "not the agent CLI"},
 		"tiny":         {mut: func(s *runner.SandboxSpec) { s.Resources.MemoryMiB = 512 }, want: "256 MiB"},
+		"folder, no virtiofs": {mut: func(s *runner.SandboxSpec) {
+			s.Mounts = []runner.Mount{{Source: "/home/me/project", Target: "/home/agent/work", MemberAuthored: true}}
+		}, want: "cannot share a folder"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newFakeDocker()
@@ -701,5 +705,312 @@ func TestVMSidecarRemovalContinuesPastAFailure(t *testing.T) {
 	}
 	if !r.container(t, vmfsName(spec.RunID, 1)).removed || !r.container(t, vmPrepName(spec.RunID, "overlay")).removed {
 		t.Fatal("a failed share removal stopped the rest")
+	}
+}
+
+// bindAt is one folder as a sandbox gets it: its host source and its mode.
+type bindAt struct {
+	source   string
+	readOnly bool
+}
+
+// A VM gets exactly the folders a container gets for the same spec: the same sources at the same
+// targets with the same read-only or read-write mode, each served by its own virtiofsd (read-only
+// both in its bind and in virtiofsd's own flag) and mounted by the guest agent with that mode. No
+// VM container binds any other host path than the runner's own VM state and those folders.
+func TestVMFolderSharesMatchTheContainerBinds(t *testing.T) {
+	root, project := memberSandboxRoot(t)
+	ref := filepath.Join(root, "ref")
+	if err := os.MkdirAll(ref, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mounts := []runner.Mount{
+		{Source: project, Target: "/home/agent/work", MemberAuthored: true},
+		{Source: ref, Target: "/workspace/ref", ReadOnly: true, MemberAuthored: true},
+	}
+
+	f := newFakeDocker()
+	f.images["busybox:latest"] = true
+	cspec := testSpec()
+	cspec.Mounts, cspec.UserMountRoots = mounts, []string{root}
+	csb, err := newTestDriver(f).CreateSandbox(context.Background(), cspec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	container := map[string]bindAt{}
+	for _, m := range f.containers[csb.Ref].host.Mounts {
+		if m.Type == mount.TypeBind {
+			container[m.Target] = bindAt{m.Source, m.ReadOnly}
+		}
+	}
+
+	r := newVMRig(t)
+	spec := vmSpec()
+	spec.Mounts, spec.UserMountRoots = mounts, []string{root}
+	if _, err := r.d.CreateSandbox(context.Background(), spec); err != nil {
+		t.Fatal(err)
+	}
+	vm := map[string]bindAt{}
+	for n, gm := range r.mounts {
+		fs := r.container(t, vmfsName(spec.RunID, n))
+		var share mount.Mount
+		for _, m := range fs.host.Mounts {
+			if m.Target == "/share" {
+				share = m
+			}
+		}
+		if gm.Tag != qemu.ShareTag(n) || share.ReadOnly != gm.ReadOnly || slices.Contains(fs.cfg.Cmd, "--readonly") != gm.ReadOnly {
+			t.Fatalf("share %d: guest %+v, bind %+v, virtiofsd %v: one mode everywhere", n, gm, share, fs.cfg.Cmd)
+		}
+		vm[gm.Target] = bindAt{share.Source, gm.ReadOnly}
+	}
+	if len(container) != len(mounts) || !maps.Equal(vm, container) {
+		t.Fatalf("the VM's folders %v differ from the container's binds %v", vm, container)
+	}
+
+	r.f.mu.Lock()
+	defer r.f.mu.Unlock()
+	for _, c := range r.f.containers {
+		if c.cfg.Labels[labelRun] != spec.RunID.String() || strings.HasPrefix(c.name, "wardyn-proxy-") {
+			continue
+		}
+		for _, m := range c.host.Mounts {
+			if m.Type == mount.TypeBind && !strings.HasPrefix(m.Source, r.vc.StateDir+"/") && m.Source != project && m.Source != ref {
+				t.Errorf("%s binds the host path %s, which is neither the VM's state nor the run's folders", c.name, m.Source)
+			}
+		}
+	}
+}
+
+// A folder the container path refuses (the host deny-list, a member folder outside its roots, a
+// member run whose roots are gone) is refused for a VM with the container path's own sentence,
+// before anything is created.
+func TestVMFolderRefusalsAreTheContainerPaths(t *testing.T) {
+	root, project := memberSandboxRoot(t)
+	outside := filepath.Join(filepath.Dir(root), "elsewhere")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct {
+		mounts []runner.Mount
+		roots  []string
+	}{
+		"deny-listed source": {mounts: []runner.Mount{{Source: "/var/run/docker.sock", Target: "/home/agent/work"}}},
+		"outside its roots":  {mounts: []runner.Mount{{Source: outside, Target: "/home/agent/work", MemberAuthored: true}}, roots: []string{root}},
+		"no roots left":      {mounts: []runner.Mount{{Source: project, Target: "/home/agent/work", MemberAuthored: true}}, roots: []string{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFakeDocker()
+			f.images["busybox:latest"] = true
+			cspec := testSpec()
+			cspec.Mounts, cspec.UserMountRoots = tc.mounts, tc.roots
+			_, cerr := newTestDriver(f).CreateSandbox(context.Background(), cspec)
+
+			r := newVMRig(t)
+			spec := vmSpec()
+			spec.Mounts, spec.UserMountRoots = tc.mounts, tc.roots
+			_, err := r.d.CreateSandbox(context.Background(), spec)
+			if cerr == nil || err == nil || err.Error() != cerr.Error() {
+				t.Fatalf("VM refusal %v, want the container path's %v", err, cerr)
+			}
+			if len(r.f.containers) != 0 || len(r.f.networks) != 0 {
+				t.Fatalf("a refused VM created %d containers, %d networks", len(r.f.containers), len(r.f.networks))
+			}
+		})
+	}
+}
+
+// The virtiofsd probe runs the QEMU image's virtiofsd as hardened as a share's container, and only
+// its clean exit lets the runner share folders into VMs.
+func TestVMProbeVirtiofsdNeedsItsCleanExit(t *testing.T) {
+	for _, code := range []int{0, 127} {
+		f := newFakeDocker()
+		f.images["q"] = true
+		var probe *createdContainer
+		f.onStart = func(c *createdContainer) {
+			probe = c
+			c.state = &container.State{Status: "exited", ExitCode: code}
+		}
+		err := newTestDriver(f).probeVirtiofsd(context.Background(), VMConfig{QEMUImage: "q", UID: 1000, GID: 1000})
+		if (err == nil) != (code == 0) {
+			t.Fatalf("virtiofsd exit %d: probe = %v", code, err)
+		}
+		if probe == nil || !slices.Equal(probe.cfg.Cmd, []string{qemu.VirtiofsdArgs(0, false)[0], "--version"}) || probe.cfg.User != "1000:1000" ||
+			string(probe.host.NetworkMode) != "none" || !probe.host.ReadonlyRootfs || !slices.Equal(probe.host.CapDrop, []string{"ALL"}) || len(probe.host.Mounts) != 0 {
+			t.Fatalf("the probe container %+v %+v: virtiofsd --version, unprivileged, no network, no mount", probe.cfg, probe.host)
+		}
+		if !probe.removed {
+			t.Fatal("the probe container was left behind")
+		}
+	}
+}
+
+// A lapsed lease stops a VM's proxy and nothing else: the guest keeps running with no network path
+// (OFFLINE-VM rule b), and the proxy's decisions are settled.
+func TestVMStopProxyLeavesTheGuestRunning(t *testing.T) {
+	r := newVMRig(t)
+	spec := vmSpec()
+	ctx := context.Background()
+	sb, err := r.d.CreateSandbox(ctx, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.d.StopProxy(ctx, sb.Ref); err != nil {
+		t.Fatal(err)
+	}
+	if c := r.container(t, proxyContainerName(spec.RunID)); !c.removed {
+		t.Fatal("StopProxy left the VM's proxy")
+	}
+	if c := r.container(t, sb.Ref); c.removed || c.state == nil || !c.state.Running {
+		t.Fatalf("StopProxy touched the VM: %+v", c.state)
+	}
+	r.mu.Lock()
+	powered := slices.Contains(r.qmp, "system_powerdown")
+	r.mu.Unlock()
+	if powered {
+		t.Fatal("StopProxy powered the guest down")
+	}
+}
+
+// EndVM, which the runner calls when a VM run's audit spool is full, ends a VM as the lease end
+// does: the guest is powered down, the QEMU container stopped but kept, the proxy removed. A container
+// run and an unknown run are left alone (OFFLINE-VM rule c).
+func TestVMEndVMEndsOnlyAVM(t *testing.T) {
+	r := newVMRig(t)
+	spec := vmSpec()
+	ctx := context.Background()
+	sb, err := r.d.CreateSandbox(ctx, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if isVM, err := r.d.EndVM(ctx, uuid.New()); isVM || err != nil {
+		t.Fatalf("EndVM of an unknown run = %v, %v; want false, nil", isVM, err)
+	}
+	if c := r.container(t, sb.Ref); !c.state.Running {
+		t.Fatal("EndVM of another run touched this VM")
+	}
+	if isVM, err := r.d.EndVM(ctx, spec.RunID); !isVM || err != nil {
+		t.Fatalf("EndVM = %v, %v; want true, nil", isVM, err)
+	}
+	r.mu.Lock()
+	powered := slices.Contains(r.qmp, "system_powerdown")
+	r.mu.Unlock()
+	if !powered {
+		t.Fatal("EndVM stopped the guest without asking it to power down")
+	}
+	if c := r.container(t, sb.Ref); c.removed || c.state.Running {
+		t.Fatalf("the VM after EndVM: removed %v, state %+v; want stopped and kept", c.removed, c.state)
+	}
+	if c := r.container(t, proxyContainerName(spec.RunID)); !c.removed {
+		t.Fatal("EndVM left the VM's proxy")
+	}
+}
+
+func TestVMEndVMLeavesAContainerRunAlone(t *testing.T) {
+	r := newVMRig(t)
+	r.f.images["busybox:latest"] = true
+	spec := testSpec()
+	spec.RunID = uuid.New()
+	sb, err := r.d.CreateSandbox(context.Background(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if isVM, err := r.d.EndVM(context.Background(), spec.RunID); isVM || err != nil {
+		t.Fatalf("EndVM of a container run = %v, %v; want false, nil", isVM, err)
+	}
+	if c := r.container(t, sb.Ref); c.removed || !c.state.Running {
+		t.Fatalf("EndVM touched a container run: %+v", c.state)
+	}
+	if c := r.container(t, proxyContainerName(spec.RunID)); c.removed {
+		t.Fatal("EndVM removed a container run's proxy")
+	}
+}
+
+// An engine that cannot say what a run is never reads as "not a VM": EndVM answers the error and
+// touches nothing, so the runner's next pass ends the VM once the engine answers.
+func TestVMEndVMFailsClosedWhenTheEngineCannotInspect(t *testing.T) {
+	r := newVMRig(t)
+	spec := vmSpec()
+	ctx := context.Background()
+	sb, err := r.d.CreateSandbox(ctx, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d2 := newTestDriver(r.f) // a restarted driver: it must inspect to find the VM
+	if err := d2.EnableVM(r.vc); err != nil {
+		t.Fatal(err)
+	}
+	r.f.mu.Lock()
+	r.f.inspectFailures = 1
+	r.f.mu.Unlock()
+	if isVM, err := d2.EndVM(ctx, spec.RunID); isVM || err == nil {
+		t.Fatalf("EndVM with the engine failing = %v, %v; want an error", isVM, err)
+	}
+	if c := r.container(t, sb.Ref); !c.state.Running {
+		t.Fatal("a failed inspect still stopped the VM")
+	}
+	if isVM, err := d2.EndVM(ctx, spec.RunID); !isVM || err != nil {
+		t.Fatalf("EndVM once the engine answers = %v, %v; want true, nil", isVM, err)
+	}
+	if c := r.container(t, sb.Ref); c.state.Running {
+		t.Fatal("the VM kept running after EndVM succeeded")
+	}
+}
+
+// An end cut short (the runner stopping, a cancelled pass) can leave the guest asked to power down, the
+// proxy running and the producer unsettled. The next EndVM finishes it: the proxy is removed, the
+// producer settled, the stopped VM kept, and an end of a VM already ended answers nothing wrong.
+func TestVMEndVMConvergesAfterAPartialEnd(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cut  func(t *testing.T, r *vmRig, d *Driver, runID uuid.UUID, agent string)
+	}{
+		{"the agent stop is cancelled", func(t *testing.T, r *vmRig, d *Driver, runID uuid.UUID, agent string) {
+			r.f.stopFailures = map[string]int{agent: 1}
+			if isVM, err := d.EndVM(context.Background(), runID); !isVM || err == nil {
+				t.Fatalf("EndVM with its agent stop cancelled = %v, %v; want true and an error", isVM, err)
+			}
+		}},
+		{"the agent stopped, the proxy not yet", func(t *testing.T, r *vmRig, _ *Driver, _ uuid.UUID, agent string) {
+			if _, err := r.f.ContainerStop(context.Background(), agent, client.ContainerStopOptions{}); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newVMRig(t)
+			rid, sink := uuid.NewString(), newFakeSink()
+			r.d.cfg.RunnerID, r.d.cfg.DecisionSink, r.d.cfg.Evidence = rid, sink, &memEvidence{m: map[uuid.UUID][]byte{}}
+			spec := vmSpec()
+			spec.Labels = map[string]string{runner.LabelRunnerID: rid}
+			ctx := context.Background()
+			sb, err := r.d.CreateSandbox(ctx, spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			settled := func() bool {
+				sink.mu.Lock()
+				defer sink.mu.Unlock()
+				return slices.Contains(sink.calls, "gone")
+			}
+			tc.cut(t, r, r.d, spec.RunID, sb.Ref)
+			if c := r.container(t, proxyContainerName(spec.RunID)); c.removed || settled() {
+				t.Fatalf("the partial end already removed the proxy (%v) or settled the producer (%v)", c.removed, settled())
+			}
+			for _, step := range []string{"finishing", "repeating"} {
+				if isVM, err := r.d.EndVM(ctx, spec.RunID); !isVM || err != nil {
+					t.Fatalf("EndVM %s = %v, %v; want true, nil", step, isVM, err)
+				}
+				if c := r.container(t, sb.Ref); c.removed || c.state.Running {
+					t.Fatalf("after %s: the VM removed %v, state %+v; want stopped and kept", step, c.removed, c.state)
+				}
+				if c := r.container(t, proxyContainerName(spec.RunID)); !c.removed {
+					t.Fatalf("after %s: the VM's proxy is still there", step)
+				}
+				if !settled() {
+					t.Fatalf("after %s: the producer was never settled (ProducerGone)", step)
+				}
+			}
+		})
 	}
 }

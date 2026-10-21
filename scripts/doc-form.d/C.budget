@@ -23,11 +23,13 @@
 # 0.10 CTL-C (#2972): docs/CI.md 8110 adds 8 over 8102, measured: the trivy-agent-novnc-signin row.
 # docs/CI.md 8142 = ours 8134 + theirs 8110 - base 8102 at the 0.10 W4c merge of CTL-C 6de42c110 onto the train.
 # docs/CI.md 8361 = ours 8142 + theirs 8321 - base 8102 at the 0.10 W4c merge of origin/main ba16e8564 (W4b) onto the train.
+# docs/CI.md 8361, measured at the 0.10 W4c merge of OFFLINE-VM a359ef27b onto the train (two merge bases, VM-A 47c283334 and main 3cea1aa73, so no single base to subtract).
 docs/CI.md=8361 share=35
 # docs/CI.md tightened to 8321, measured on the 0.10 W4b train (CI6-DROP removed the self-hosted canary section).
 # docs/ci-jobs-as-runs.md 2175 adds 84 over 2091 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
 # docs/ci-jobs-as-runs.md 2360 adds 185 over 2175 (G-090-cleanup slice F r1 fix: the CI recipe as a service identity): measured; the lead re-measures at merge.
-docs/ci-jobs-as-runs.md=2360 share=35
+# docs/ci-jobs-as-runs.md 2359, measured at the 0.10 W4c merge of OFFLINE-VM a359ef27b onto the train (two merge bases, VM-A 47c283334 and main 3cea1aa73, so no single base to subtract).
+docs/ci-jobs-as-runs.md=2359 share=35
 # .claude/skills/wardyn-ci/SKILL.md 704 adds 20 over 684 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
 # .claude/skills/wardyn-ci/SKILL.md 712 adds 8 over 704 (G-090-cleanup slice F r1 fix: the CI recipe as a service identity): measured; the lead re-measures at merge.
 .claude/skills/wardyn-ci/SKILL.md=712 share=35

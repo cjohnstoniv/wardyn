@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/runner/docker"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 )
@@ -43,7 +45,20 @@ func enableLinuxVM(ctx context.Context, sub *docker.Driver, stateDir string, get
 		slog.WarnContext(ctx, "Linux VM sandboxes are off on this runner", "reason", err.Error())
 		return nil
 	}
-	slog.InfoContext(ctx, "Linux VM sandboxes are on", "machine_type", c.MachineType, "cpu_model", c.CPUModel, "qemu", c.QEMUVersion)
-	// Desktop: the driver opens every VM's display (docker.Driver.DialDesktop).
-	return &runnerwire.VMCaps{MachineType: c.MachineType, CPUModel: c.CPUModel, QEMUVersion: c.QEMUVersion, Desktop: true}
+	slog.InfoContext(ctx, "Linux VM sandboxes are on", "machine_type", c.MachineType, "cpu_model", c.CPUModel, "qemu", c.QEMUVersion, "folder_shares", c.Virtiofs)
+	return vmCaps(c)
+}
+
+// vmCaps is what the runner's caps offer for the VMs the probe found it can start. Desktop: the driver
+// opens every VM's display (docker.Driver.DialDesktop).
+func vmCaps(c docker.VMConfig) *runnerwire.VMCaps {
+	return &runnerwire.VMCaps{MachineType: c.MachineType, CPUModel: c.CPUModel, QEMUVersion: c.QEMUVersion, Virtiofs: c.Virtiofs, Desktop: true}
+}
+
+// endVMsOnFullSpool puts the full-spool rule behind the Linux VM switch: only a runner that offers VM
+// sandboxes (caps non-nil) ends a VM whose run's audit spool is full. Container runs are untouched.
+func endVMsOnFullSpool(sink *spoolSink, caps *runnerwire.VMCaps, end func(context.Context, uuid.UUID) (bool, error)) {
+	if caps != nil {
+		sink.EndVMsOnFullSpool(end)
+	}
 }

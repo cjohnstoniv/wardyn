@@ -68,6 +68,9 @@ type VMConfig struct {
 	KVMGID string
 	// BootTimeout bounds a VM's boot to its guest agent's first answer; zero is three minutes.
 	BootTimeout time.Duration
+	// Virtiofs is what the probe found: the QEMU image's virtiofsd runs, so a VM can share the
+	// run's mounts. Without it a VM run that carries a mount is refused before anything is created.
+	Virtiofs bool
 }
 
 // maxSocketPath is the longest unix socket path a connect accepts (sun_path is 108 bytes).
@@ -145,31 +148,44 @@ func (d *Driver) newVMRun(runID uuid.UUID, dir string) *vmRun {
 // After a runner restart the VM is found again by its container's label. A ref found to be a
 // container is remembered as one until its teardown, so it is inspected once, not on every call.
 func (d *Driver) vmFor(ctx context.Context, ref string) *vmRun {
+	v, _ := d.vmLookup(ctx, ref)
+	return v
+}
+
+// vmLookup is vmFor with its failure: a container the engine could not inspect is an error, not "a
+// container". A ref the engine does not hold is nil, nil.
+func (d *Driver) vmLookup(ctx context.Context, ref string) (*vmRun, error) {
 	vc := d.vmConfig()
 	if vc == nil {
-		return nil
+		return nil, nil
 	}
 	if v, ok := d.vms.Load(ref); ok {
-		return v.(*vmRun)
+		return v.(*vmRun), nil
 	}
 	if _, ok := d.notVMs.Load(ref); ok {
-		return nil
+		return nil, nil
 	}
 	res, err := d.cli.ContainerInspect(ctx, ref, client.ContainerInspectOptions{})
+	if isNotFound(err) {
+		return nil, nil
+	}
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("docker: inspect %s: %w", ref, err)
 	}
 	if res.Container.Config == nil || res.Container.Config.Labels[labelMachineKind] != string(types.MachineLinuxVM) {
 		d.notVMs.Store(ref, struct{}{})
-		return nil
+		return nil, nil
 	}
 	id, err := parseRunID(res.Container.Config.Labels[labelRun])
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	v, _ := d.vms.LoadOrStore(ref, d.newVMRun(id, vc.runDir(id)))
-	return v.(*vmRun)
+	return v.(*vmRun), nil
 }
+
+// errVMNoFolderShare refuses a VM run that carries a folder mount on a runner whose probe found no virtiofsd.
+const errVMNoFolderShare = "docker: this runner cannot share a folder into a Linux VM sandbox: its QEMU image has no working virtiofsd"
 
 // errVMUnsupported answers the verbs a VM does not serve in this release.
 var errVMUnsupported = errors.New("docker: a Linux VM sandbox does not support this")
@@ -184,6 +200,9 @@ func (d *Driver) refuseVMSpec(spec runner.SandboxSpec) error {
 	}
 	if len(spec.Drives) > 0 {
 		return errors.New("docker: a Linux VM sandbox has no drives in this release")
+	}
+	if len(spec.Mounts) > 0 && !d.vmConfig().Virtiofs {
+		return errors.New(errVMNoFolderShare)
 	}
 	if spec.RecordWithin(d.cfg.Record) {
 		return errors.New("docker: a Linux VM sandbox is not recorded in this release; turn recording off for this run")
@@ -713,6 +732,20 @@ func (d *Driver) vmLogTail(ref string) string {
 		return ": " + t
 	}
 	return ""
+}
+
+// EndVM ends the run's Linux VM as the lease end does (EndSandbox): the guest is asked to power down,
+// the QEMU container is stopped and kept, and the proxy is stopped and removed. It reports false and
+// touches nothing for a run that is not a VM, or when VMs are off. An engine that cannot say what the
+// run is answers an error. wardyn-runnerd calls it when a VM
+// run's audit spool is full.
+func (d *Driver) EndVM(ctx context.Context, runID uuid.UUID) (bool, error) {
+	ref := agentContainerName(runID)
+	v, err := d.vmLookup(ctx, ref)
+	if err != nil || v == nil {
+		return false, err // an engine that cannot say is an error the caller retries, never "not a VM"
+	}
+	return true, d.EndSandbox(ctx, ref)
 }
 
 // teardownVM removes what a VM run adds to a container run's teardown: its sidecars and its run
