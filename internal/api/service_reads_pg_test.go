@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -146,10 +147,12 @@ func TestServiceReads(t *testing.T) {
 
 	// Workspaces: the launchable one first, so every newer row is one the service may not launch.
 	ephemeral := []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeEphemeral, Target: "/home/agent/work"}}
+	created := time.Now().UTC().Add(-time.Hour)
 	mkWS := func(name, owner string) uuid.UUID {
 		t.Helper()
+		created = created.Add(time.Minute) // the list is newest first
 		ws, err := e.st.CreateWorkspace(ctx, types.Workspace{ID: uuid.New(), Name: name, OwnedBy: owner,
-			Status: types.WorkspaceScanned, Sources: ephemeral})
+			Status: types.WorkspaceScanned, Sources: ephemeral, CreatedAt: created, UpdatedAt: created})
 		if err != nil {
 			t.Fatalf("create workspace %s: %v", name, err)
 		}
