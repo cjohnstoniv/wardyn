@@ -14,11 +14,12 @@ import { useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../..
 import type { RunIntent } from "../../draft/run-intent";
 import { stepIssues } from "../../lenses/local-issues";
 import { addApp, appsOf, chooseAppKind, commandOf, editApp, isServer, removeApp, setCommand } from "../../lenses/apps-lens";
-import { chooseBarrier, chooseMode, choosePool } from "../../lenses/run-lens";
+import { chooseBarrier, chooseMachineKind, chooseMode, choosePool } from "../../lenses/run-lens";
 import { modeOf, type RunMode } from "../../lenses/shape-lens";
 import { flowSteps, StepShell } from "../step-shell";
 import { BarrierSection } from "./barrier-section";
 import { CommandSection } from "./command-section";
+import { MachineKindSection } from "./machine-kind-section";
 import { ModeSection } from "./mode-section";
 import { ledeOf, selectedPoolId, usablePools } from "./pool-model";
 import { PoolSection } from "./pool-section";
@@ -49,6 +50,8 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
   const pools = usePools(deps?.load ?? loadPools, runType);
   const list = pools.status === "ready" ? pools.list : undefined;
   const chosen = list && usablePools(list).find((p) => p.id === selectedPoolId(intent, list));
+  // A VM is its own barrier: the container barriers give way to the VM's fixed line.
+  const vm = intent.machine_kind === "linux_vm";
 
   return (
     <StepShell
@@ -73,8 +76,9 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
         />
       )}
       <QuestionBlock label={NR_RUN.WHERE_LABEL}>
+        <MachineKindSection kind={vm ? "linux_vm" : "container"} onChoose={(kind) => edit((i) => chooseMachineKind(i, kind))} />
         <PoolSection state={pools} runType={runType} intent={intent} onChoose={(id) => edit((i) => choosePool(i, id))} />
-        <BarrierSection pool={chosen} chosen={intent.confinement_class} onChoose={(cc) => edit((i) => chooseBarrier(i, cc))} />
+        {!vm && <BarrierSection pool={chosen} chosen={intent.confinement_class} onChoose={(cc) => edit((i) => chooseBarrier(i, cc))} />}
       </QuestionBlock>
     </StepShell>
   );

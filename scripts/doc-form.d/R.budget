@@ -20,6 +20,8 @@
 # RELEASING.md 6017 = ours 6006 + theirs 6016 - base 6005 at the 0.10 W4c merge of ATT-INSTALL onto the train.
 # lane fragments merged: +79 (CI-FP), measured: the forward-port check step and its allow file.
 # RELEASING.md 6096 = ours 6017 + theirs 6084 - base 6005 at the 0.10 W4c merge of CI-FP onto the train.
+# RELEASING.md 6006 = ours 5941 + theirs 6005 - base 5940 at the 0.10 W2 merge of CTL-A onto DSK-A.
+# RELEASING.md 6096, measured, at the 0.10 W4c merge of DSK-A 46d21862b onto the train: two merge bases (CTL-A 99d68a80a and VM-C~1 4b06ac1e5), so no single base to subtract.
 RELEASING.md=6096 share=35 # +1 (0.10 FLAKE-D): the go-gate-tools job joins the job list. +17: the GPL offer regenerated in the release PR (#2192). +15: a resume after the release commit skips MERGE (0.9.4 L9, #2199). +1: the licence bundle among the release assets (0.9.4 L9, #2472). +31: the two Docker Hub Actions secrets, one line each. +7: the runner-units job and the runner release assets (#1968). +249: nightly scope=candidate, dispatch before the PR, and promote at the tag with its rehearsal.
 # ROADMAP.md 5870 measured after merging G-chores-a.
 # ROADMAP.md 5988 adds 118 over 5870: 0.9 final docs pass, measured: the New Run line of the 0.9 scope and the 0.10 scope table.

@@ -144,6 +144,8 @@
 # docs/ENV.md 43236 = ours 43160 + theirs 41284 - base 41208 at the 0.10 W4c merge of FEAT-1MCP b742a56b8 onto the train.
 # docs/ENV.md 40691 adds 20 over 40671 (0.10 FEAT-1APP DR-0312): the WARDYN_APPLICATION_RUN row.
 # docs/ENV.md 43256 = ours 43236 + theirs 40691 - base 40671 at the 0.10 W4c merge of FEAT-1APP 20b62c676 onto the train.
+# docs/ENV.md 40741 = ours 40101 + theirs 40671 - base 40031 at the 0.10 W2 merge of CTL-A onto DSK-A.
+# docs/ENV.md 43256, measured, at the 0.10 W4c merge of DSK-A 46d21862b onto the train: two merge bases (CTL-A 99d68a80a and VM-C~1 4b06ac1e5), so no single base to subtract.
 docs/ENV.md=43256 share=5
 # docs/ENV.md 39047 adds 478 over 38569: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
 # docs/ENV.md 38607 adds 38 over 38569, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.

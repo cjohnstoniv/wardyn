@@ -226,6 +226,8 @@ func (s *Server) Call(ctx context.Context, peer *runnerwire.Peer, id uint32, met
 	switch method {
 	case runnerwire.MethodAttach:
 		return s.attach(ctx, peer, id, args)
+	case runnerwire.MethodDialDesktop:
+		return s.dialDesktop(ctx, peer, id, args)
 	case runnerwire.MethodExecStream:
 		return s.execStream(ctx, peer, id, args)
 	case runnerwire.MethodResize:

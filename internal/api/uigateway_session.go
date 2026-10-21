@@ -127,6 +127,9 @@ type uiSession struct {
 	// Service is the service identity whose run the session entered as its sponsor (#1508), empty
 	// otherwise; every row the session writes names it with entry=sponsor.
 	Service string `json:"c,omitempty"`
+	// Desktop marks a session on a VM's desktop (App uiDesktopAppName, no Port): it lasts at most
+	// uiDesktopSessionTTL and ends when its person closes it (uigateway_desktop.go).
+	Desktop bool `json:"d,omitempty"`
 }
 
 // auditUISession writes one ui.* row for sess: its run, its principal, and the
@@ -157,6 +160,32 @@ func (s *Server) uiSessionTTL() time.Duration {
 		return s.cfg.UISessionTTL
 	}
 	return defaultUISessionTTL
+}
+
+// newUISession is the session a redeemed ticket opens on one app of run, for at most ttl.
+func (s *Server) newUISession(run types.AgentRun, ta ticketActor, app string, port int, ttl time.Duration) uiSession {
+	now := s.cfg.Now()
+	return uiSession{
+		Run: run.ID, App: app, Port: port,
+		Principal: ta.principal, Role: ta.role, Email: ta.email,
+		Expires: ta.sessionExpiry(now, ttl).Unix(), IssuedAt: now.Unix(), AuthorizedAt: ta.authorizedAt.Unix(), AuthorizedNs: int64(ta.authorizedAt.Nanosecond()), RevSeq: ta.revSeq, Via: ta.via, Service: sponsoredService(run),
+	}
+}
+
+// startUISession sets sess's cookie, audits the authorization and sends the browser to the app.
+func (s *Server) startUISession(w http.ResponseWriter, r *http.Request, run types.AgentRun, ta ticketActor, sess uiSession, data map[string]any, landing string, redirectStatus int) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     uiCookieName,
+		Value:    s.encodeUISession(sess),
+		Path:     s.uiBasePath() + uiCookiePath(run.ID, sess.App),
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   s.cfg.OIDCSecureCookies,
+		Expires:  time.Unix(sess.Expires, 0),
+	})
+	s.auditUI(&run.ID, types.ActorHuman, ta.principal, "ui.authorize", sess.App, "success",
+		ta.withVia(withSponsorEntry(run, data)))
+	http.Redirect(w, r, s.uiBasePath()+uiRelayPrefix(run.ID, sess.App)+landing, redirectStatus)
 }
 
 // uiCookiePath scopes the cookie to ONE app of ONE run. Cookies are not
@@ -240,14 +269,19 @@ func (s *Server) decodeUISession(r *http.Request, now time.Time) (uiSession, boo
 	if err := json.Unmarshal(payload, &sess); err != nil {
 		return uiSession{}, false
 	}
-	if sess.Run == uuid.Nil || sess.App == "" || sess.Port <= 0 || now.Unix() >= sess.Expires {
+	// A desktop session has no port and only the desktop has one without: neither can pass for the other.
+	if sess.Run == uuid.Nil || sess.App == "" || (sess.Port <= 0) != sess.Desktop || sess.Desktop != (sess.App == uiDesktopAppName) || now.Unix() >= sess.Expires {
 		return uiSession{}, false
 	}
 	// Issued-at, then the CONFIGURED TTL over it. Checking the TTL here and not
 	// only at mint is the whole point of the knob: shortening it has to bind
 	// the cookies already sitting in browsers, whose signed Expires was
 	// computed under the old, longer bound.
-	if sess.IssuedAt <= 0 || sess.AuthorizedAt <= 0 || now.Sub(time.Unix(sess.IssuedAt, 0)) >= s.uiSessionTTL() {
+	if sess.IssuedAt <= 0 || sess.AuthorizedAt <= 0 || now.Sub(time.Unix(sess.IssuedAt, 0)) >= s.uiSessionTTLFor(sess) {
+		return uiSession{}, false
+	}
+	// A Closed desktop is refused on every replica and after a restart: uiDesktopClosed reads the shared set.
+	if sess.Desktop && s.uiDesktopClosed(r.Context(), sess, now) {
 		return uiSession{}, false
 	}
 	return sess, true

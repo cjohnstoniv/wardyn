@@ -54,6 +54,9 @@ const (
 	MethodListFolders    = "list_folders"
 	MethodSyncFolder     = "sync_folder"
 	MethodSyncFolderWait = "sync_folder_wait"
+	// MethodDialDesktop opens a `desktop` stream to a VM sandbox's display (QEMU's RFB socket) on a
+	// runner whose caps carry LinuxVM.Desktop; an older runner never gets the call.
+	MethodDialDesktop = "dial_desktop"
 	// The local attach calls are sent only to a runner that advertises Caps.LocalAttach.
 	// MethodLocalAttach opens a pty_tee stream and answers its id; MethodLocalAttachMode changes the
 	// session's writer/observer mode and is answered once the runner has applied it;
@@ -123,6 +126,11 @@ type WaitResult struct {
 type AttachArgs struct {
 	Ref     string               `json:"ref"`
 	Options runner.AttachOptions `json:"options"`
+}
+
+// DialDesktopArgs names the VM sandbox whose display dial_desktop opens.
+type DialDesktopArgs struct {
+	Ref string `json:"ref"`
 }
 
 // StreamResult names the byte stream a call opened (the pty stream of Attach).

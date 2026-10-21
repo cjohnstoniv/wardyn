@@ -1,0 +1,15 @@
+<!doctype html>
+<!-- The desktop viewer (src/desktop/). The UI gateway serves it under a run's desktop path, rewriting "./"
+     to that path and writing data-wardyn-desktop (internal/api/uigateway_desktop.go). -->
+<html lang="en" class="dark" data-wardyn-desktop="">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>Desktop</title>
+  </head>
+  <body>
+    <div id="desktop-root"></div>
+    <script type="module" src="/src/desktop/main.tsx"></script>
+  </body>
+</html>

@@ -226,6 +226,18 @@ func TestLinuxVMSandbox(t *testing.T) {
 		t.Fatalf("terminal %q", term)
 	}
 
+	// The desktop: QEMU's display, reached by the runner outside the guest, greets as an RFB server.
+	desk, err := d.DialDesktop(ctx, sb.Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	greeting := make([]byte, 12)
+	_, err = io.ReadFull(desk, greeting)
+	_ = desk.Close()
+	if err != nil || !strings.HasPrefix(string(greeting), "RFB 003.") {
+		t.Fatalf("desktop greeting %q, %v", greeting, err)
+	}
+
 	// The network: QEMU's link reaches the stub, the guest's frames go nowhere, nothing resolves.
 	// The guest's boot-time frames went out before the stub listened, so a connection attempt to a
 	// link-local neighbour makes it send more (neighbour solicitations); none is answered.

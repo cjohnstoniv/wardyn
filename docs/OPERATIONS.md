@@ -5535,6 +5535,9 @@ What the switch needs, and refuses to render or boot without:
       and app role install grants the app role `SELECT, INSERT, DELETE` on
       `run_output_chunks`, `SELECT, INSERT, UPDATE, DELETE` on `run_attach_leases` and
       `ado_run_pat_state`, and `SELECT, INSERT, UPDATE` on `ado_signin_ends`.
+- **A desktop Close is shared through the database** (`ui_desktop_closed`): every replica refuses the closed cookie,
+  and a stream open on another replica ends within 15 s.
+  - While the database is unreachable, open desktops end and new opens are refused until it is back.
 
 ### What stays per replica
 

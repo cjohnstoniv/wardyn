@@ -1,0 +1,540 @@
+// Copyright 2026 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// The desktop of a Linux VM run (machine_kind linux_vm) on the UI gateway: the same ticket → bind →
+// enter → cookie hand-off as a UI app (uigateway.go), with three differences.
+//
+//   - Nothing inside the sandbox is reached. The display is QEMU's RFB server on a unix socket outside
+//     the guest, opened through the run's runner (runner.DesktopDialer), so the guest cannot tamper
+//     with it and no exec or socat runs in the sandbox.
+//   - The page is Wardyn's own viewer, desktop.html from the console bundle (WARDYN_UI_DIR), not
+//     sandbox-authored content. Its RFB bytes ride one WebSocket, /r/<run>/__desktop/__rfb.
+//   - The session is narrower than a UI app's: at most uiDesktopSessionTTL (1 h) instead of the relay's
+//     8 h default, and Close ends it for every copy of the cookie, not just the tab.
+//
+// The door obeys both limits an app or a terminal obeys: deny_ui_apps (refuseUIAppsDenied, already
+// checked by uiEnterCommon) and deny_interactive (refuseInteractiveAttach). A desktop is a person
+// driving the machine with a keyboard and a mouse, and it rides the UI gateway, so reading only one of
+// the two would let it reach a run that a policy had closed to the other.
+package api
+
+import (
+	"cmp"
+	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"html"
+	"io"
+	"log/slog"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/coder/websocket"
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/rfbfilter"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
+)
+
+const (
+	// uiDesktopAppName is the desktop's app segment. A declared ui_app can never be named it
+	// (uiAppNameRE starts with an alphanumeric), so the two never share a cookie or a path.
+	uiDesktopAppName = "__desktop"
+	// uiDesktopSessionTTL bounds one desktop session, whatever WARDYN_UI_SANDBOX_SESSION_TTL allows.
+	uiDesktopSessionTTL = time.Hour
+	// uiDesktopRecheck is how often an open desktop stream re-checks its person and its run.
+	uiDesktopRecheck = 30 * time.Second
+	uiDesktopViewer  = "desktop.html"
+	uiDesktopRFB     = "/__rfb"
+	uiDesktopClose   = "/__close"
+	uiDesktopAssets  = "/assets/"
+
+	// uiDesktopClosedRecheck is how often an open desktop stream re-reads the Closed set, so a Close
+	// on another replica ends it within this bound.
+	uiDesktopClosedRecheck = 15 * time.Second
+
+	uiTicketInvalidMsg = "invalid, expired, or already-used attach ticket"
+	uiNoSessionMsg     = "no valid UI session for this run — open the app again from its run page"
+	uiNoDesktopMsg     = "this run has no desktop: only a Linux desktop VM run has one"
+)
+
+// The desktop stream's close codes (RFC 6455 private range): the viewer tells an ended session or
+// run, which it must not retry, from a desktop that is not reachable yet, which it retries.
+const (
+	desktopCloseSessionEnded  websocket.StatusCode = 4001
+	desktopCloseRunEnded      websocket.StatusCode = 4002
+	desktopCloseNotAuthorized websocket.StatusCode = 4003
+	desktopCloseUnreachable   websocket.StatusCode = 4004
+)
+
+// uiDesktopSessions is the process-local state of desktop sessions, keyed by uiReassertKey: a cache
+// of those known closed (until the cookie would have expired anyway) and the streams still open.
+type uiDesktopSessions struct {
+	mu     sync.Mutex
+	closed map[string]int64
+	live   map[string]map[uint64]context.CancelFunc
+	next   uint64
+}
+
+func (s *Server) uiSessionTTLFor(sess uiSession) time.Duration {
+	if sess.Desktop {
+		return min(s.uiSessionTTL(), uiDesktopSessionTTL)
+	}
+	return s.uiSessionTTL()
+}
+
+// uiDesktopClosedKey is the Closed set's key for sess in the store: a digest, never principal text.
+func uiDesktopClosedKey(sess uiSession) string {
+	sum := sha256.Sum256([]byte(uiReassertKey(sess)))
+	return hex.EncodeToString(sum[:])
+}
+
+// uiDesktopClosedHere reports whether this process knows sess closed (its cache), dropping expired entries.
+func (s *Server) uiDesktopClosedHere(sess uiSession, now time.Time) bool {
+	d := &s.uiDesktop
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for k, exp := range d.closed {
+		if now.Unix() >= exp {
+			delete(d.closed, k)
+		}
+	}
+	_, ok := d.closed[uiReassertKey(sess)]
+	return ok
+}
+
+// uiDesktopClosed reports whether sess was closed on any replica. Only a closed answer is cached: an
+// open one is read from the store every time, and a store that cannot answer counts as closed.
+func (s *Server) uiDesktopClosed(ctx context.Context, sess uiSession, now time.Time) bool {
+	if s.uiDesktopClosedHere(sess, now) {
+		return true
+	}
+	st, ok := s.cfg.Store.(store.UIDesktopClosedStore)
+	if !ok {
+		slog.WarnContext(ctx, "wardynd: desktop session refused: this store keeps no Closed set", "run_id", sess.Run)
+		return true
+	}
+	closed, err := st.UIDesktopClosed(ctx, uiDesktopClosedKey(sess), now)
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: desktop session refused: the Closed set could not be read", "run_id", sess.Run, "err", err)
+		return true
+	}
+	if closed {
+		s.cacheDesktopClosed(sess)
+	}
+	return closed
+}
+
+func (s *Server) cacheDesktopClosed(sess uiSession) {
+	d := &s.uiDesktop
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.closed == nil {
+		d.closed = map[string]int64{}
+	}
+	d.closed[uiReassertKey(sess)] = sess.Expires
+}
+
+// closeDesktop ends sess: its cookie is refused from now on on every replica, wherever it was
+// copied, and every stream it opened here is cut (one on another replica ends at its next
+// uiDesktopClosedRecheck). An error means nothing was closed: the Close was not stored.
+func (s *Server) closeDesktop(ctx context.Context, sess uiSession) error {
+	st, ok := s.cfg.Store.(store.UIDesktopClosedStore)
+	if !ok {
+		return errors.New("this store keeps no desktop Closed set")
+	}
+	if err := st.CloseUIDesktop(ctx, uiDesktopClosedKey(sess), time.Unix(sess.Expires, 0)); err != nil {
+		return err
+	}
+	s.cacheDesktopClosed(sess)
+	d := &s.uiDesktop
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, cancel := range d.live[uiReassertKey(sess)] {
+		cancel()
+	}
+	return nil
+}
+
+// trackDesktop registers an open stream of sess, cancelled by closeDesktop; the returned func forgets it.
+func (s *Server) trackDesktop(sess uiSession, cancel context.CancelFunc) func() {
+	d := &s.uiDesktop
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.live == nil {
+		d.live = map[string]map[uint64]context.CancelFunc{}
+	}
+	key := uiReassertKey(sess)
+	if d.live[key] == nil {
+		d.live[key] = map[uint64]context.CancelFunc{}
+	}
+	d.next++
+	id := d.next
+	d.live[key][id] = cancel
+	return func() {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		delete(d.live[key], id)
+		if len(d.live[key]) == 0 {
+			delete(d.live, key)
+		}
+	}
+}
+
+// uiEnterDesktop is uiEnterCommon's arm for the desktop, past the checks every app shares (the
+// ticket, the person, background-only, deny_ui_apps, a RUNNING run that is not kept).
+func (s *Server) uiEnterDesktop(w http.ResponseWriter, r *http.Request, run types.AgentRun, ta ticketActor, superAdmin bool, redirectStatus int) {
+	if !run.MachineKind.IsVM() {
+		s.auditUI(&run.ID, types.ActorHuman, ta.principal, "ui.authorize", uiDesktopAppName, "denied",
+			ta.withVia(map[string]any{"reason": "the run is not a desktop VM"}))
+		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayAppNotDeclared, uiNoDesktopMsg)
+		return
+	}
+	if (!superAdmin || !s.adminDoorExempt(run)) && s.refuseInteractiveAttach(w, r.WithContext(withTicketActor(r.Context(), ta)), run) {
+		return
+	}
+	sess := s.newUISession(run, ta, uiDesktopAppName, 0, min(s.uiSessionTTL(), uiDesktopSessionTTL))
+	sess.Desktop = true
+	s.startUISession(w, r, run, ta, sess, map[string]any{"app": uiDesktopAppName, "machine_kind": string(run.MachineKind)}, "/", redirectStatus)
+}
+
+// handleDesktopRelay serves /r/<run>/__desktop/...: the viewer's own files (no session: they are the
+// console bundle's public assets), then, with a desktop session for this run, the viewer page, the
+// RFB stream and Close.
+func (s *Server) handleDesktopRelay(w http.ResponseWriter, r *http.Request, runID uuid.UUID) {
+	rest := strings.TrimPrefix(r.URL.Path, uiRelayPrefix(runID, uiDesktopAppName))
+	if strings.HasPrefix(rest, uiDesktopAssets) {
+		s.serveDesktopAsset(w, r, strings.TrimPrefix(rest, uiDesktopAssets))
+		return
+	}
+	sess, ok := s.decodeUISession(r, s.cfg.Now())
+	if !ok || sess.Run != runID || !sess.Desktop {
+		if rest == "/" && s.serveDesktopRefusal(w, r, runID, uiNoSessionMsg) {
+			return
+		}
+		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayNoSession, uiNoSessionMsg)
+		return
+	}
+	if de := s.uiReassertRelay(r.Context(), sess); de != nil {
+		writeErrorReason(w, de.status, de.reason, de.msg)
+		return
+	}
+	switch {
+	case rest == "/" && r.Method == http.MethodGet:
+		s.serveDesktopViewer(w, r, runID, map[string]any{
+			"state": "open", "expires": sess.Expires,
+			"rfb":   s.uiBasePath() + uiRelayPrefix(runID, uiDesktopAppName) + uiDesktopRFB,
+			"close": s.uiBasePath() + uiRelayPrefix(runID, uiDesktopAppName) + uiDesktopClose,
+		}, http.StatusOK)
+	case rest == uiDesktopRFB:
+		s.serveDesktopRFB(w, r, sess)
+	case rest == uiDesktopClose && r.Method == http.MethodPost:
+		if err := s.closeDesktop(r.Context(), sess); err != nil {
+			slog.WarnContext(r.Context(), "wardynd: desktop Close could not be stored", "run_id", runID, "err", err)
+			writeErrorReason(w, http.StatusServiceUnavailable, reasonStoreError, "could not close this desktop session; try again")
+			return
+		}
+		http.SetCookie(w, &http.Cookie{Name: uiCookieName, Value: "", Path: s.uiBasePath() + uiCookiePath(runID, uiDesktopAppName),
+			HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: s.cfg.OIDCSecureCookies, MaxAge: -1})
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		writeErrorReason(w, http.StatusNotFound, reasonUIGatewayNotFound, "not found on the Wardyn UI gateway (open an app from the run detail page)")
+	}
+}
+
+// serveDesktopAsset serves one file of the console bundle's assets/ directory, the viewer's script
+// and styles. http.Dir refuses a path that climbs out of it.
+func (s *Server) serveDesktopAsset(w http.ResponseWriter, r *http.Request, name string) {
+	if s.cfg.UIDir == "" || name == "" || strings.Contains(name, "/") {
+		http.NotFound(w, r)
+		return
+	}
+	f, err := http.Dir(filepath.Join(s.cfg.UIDir, "assets")).Open(name)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil || info.IsDir() {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	http.ServeContent(w, r, name, info.ModTime(), f)
+}
+
+// uiDesktopLinkRefused answers a desktop link opened a second time, or too late, with the viewer's
+// refusal page and the gateway's words; false (nothing written) for any other app, or with no viewer.
+func (s *Server) uiDesktopLinkRefused(w http.ResponseWriter, r *http.Request, runID uuid.UUID, app string) bool {
+	return app == uiDesktopAppName && s.serveDesktopRefusal(w, r, runID, uiTicketInvalidMsg)
+}
+
+// serveDesktopRefusal answers a desktop link that no longer opens anything with the viewer's refusal
+// page, carrying the gateway's words; false when there is no viewer to serve (no WARDYN_UI_DIR).
+func (s *Server) serveDesktopRefusal(w http.ResponseWriter, r *http.Request, runID uuid.UUID, said string) bool {
+	return s.serveDesktopViewer(w, r, runID, map[string]any{"state": "refused", "said": said}, http.StatusForbidden)
+}
+
+// serveDesktopViewer writes desktop.html with its assets rooted under the run's desktop path (the
+// bundle is built with a relative base, ui/vite.config.ts) and data-wardyn-desktop carrying what the
+// viewer needs. The page is Wardyn's own: a strict CSP, and no framing by any other page.
+func (s *Server) serveDesktopViewer(w http.ResponseWriter, r *http.Request, runID uuid.UUID, data map[string]any, status int) bool {
+	if s.cfg.UIDir == "" {
+		return false
+	}
+	raw, err := os.ReadFile(filepath.Join(s.cfg.UIDir, uiDesktopViewer))
+	if err != nil {
+		return false
+	}
+	attr, _ := json.Marshal(data)
+	root := s.uiBasePath() + uiRelayPrefix(runID, uiDesktopAppName) + "/"
+	page := strings.NewReplacer(`="./`, `="`+root, `data-wardyn-desktop=""`, `data-wardyn-desktop="`+html.EscapeString(string(attr))+`"`).Replace(string(raw))
+	h := w.Header()
+	h.Set("Content-Type", "text/html; charset=utf-8")
+	h.Set("Cache-Control", "no-store")
+	h.Set("Content-Security-Policy", "default-src 'self'; connect-src 'self'; img-src 'self' data: blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+	h.Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(status)
+	_, _ = io.WriteString(w, page)
+	return true
+}
+
+// serveDesktopRFB carries the VM's display between the viewer's WebSocket and the runner, re-checking
+// the person and the run as uiDial does, and ending at the session's bound, at Close, when the run
+// stops, or when the person may no longer enter it.
+func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess uiSession) {
+	// The run's desktop rules, read once before the socket opens: rules that cannot be read refuse the
+	// stream, never relay it under the defaults (runDesktopPolicy, as the novnc relay does).
+	_, rules, err := s.runDesktopPolicy(r.Context(), sess.Run)
+	if err != nil {
+		slog.WarnContext(r.Context(), "wardynd: desktop rules unreadable; the desktop stream is refused", "run_id", sess.Run, "err", err)
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonDesktopRulesUnreadable, desktopRulesUnreadableMsg)
+		return
+	}
+	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{"binary"}})
+	if err != nil {
+		return // Accept answered the request
+	}
+	c := desktopSocket{ws}
+	// ctx ends the stream at the bound and at Close; the socket itself lives on the request, so the
+	// stream can tell the viewer why before it goes.
+	ctx, cancel := context.WithDeadline(r.Context(), time.Unix(sess.Expires, 0))
+	defer cancel()
+	untrack := s.trackDesktop(sess, cancel)
+	defer untrack()
+	// A Close here between this request's decode and trackDesktop cancelled nothing of this stream.
+	if s.uiDesktopClosedHere(sess, s.cfg.Now()) {
+		_ = c.Close(desktopCloseSessionEnded, "this desktop session ended")
+		return
+	}
+
+	run, code, why := s.desktopRunCheck(ctx, sess)
+	if code != 0 {
+		_ = c.Close(code, why)
+		return
+	}
+	dd, ok := s.cfg.Runner.(runner.DesktopDialer)
+	if !ok {
+		_ = c.Close(desktopCloseUnreachable, "no runner configured; UI apps unavailable")
+		return
+	}
+	if err := s.thawForExec(ctx, run, types.ActorHuman, sess.Principal, "presence"); err != nil {
+		_ = c.Close(desktopCloseUnreachable, "run is paused and could not be resumed; try again")
+		return
+	}
+	release, ok := s.acquireUIConn(sess.Run)
+	if !ok {
+		_ = c.Close(desktopCloseUnreachable, uiConnCapMsg)
+		return
+	}
+	defer release()
+	display, err := dd.DialDesktop(ctx, run.SandboxRef)
+	if err != nil {
+		_ = c.Close(desktopCloseUnreachable, uiExecFailMsg(ctx, "open the desktop", err))
+		return
+	}
+	defer func() { _ = display.Close() }()
+
+	go s.attachKeepalive(ctx, sess.Run)
+	opened := s.cfg.Now()
+	s.auditUISession(sess, "ui.open", uiDesktopAppName, "success", map[string]any{"app": uiDesktopAppName})
+	defer func() {
+		s.auditUISession(sess, "ui.close", uiDesktopAppName, "success",
+			map[string]any{"app": uiDesktopAppName, "duration_sec": int(s.cfg.Now().Sub(opened).Seconds())})
+	}()
+
+	conn := websocket.NetConn(r.Context(), ws, websocket.MessageBinary)
+	filtered := s.desktopClipboardFilter(ctx, sess, rules, &wsFramed{raw: display, wsUnframer: wsUnframer{w: display}})
+	defer func() { _ = filtered.Close() }()
+	done := make(chan struct{}, 2)
+	go func() { _, _ = io.Copy(wsFramer{filtered}, conn); done <- struct{}{} }()
+	go func() { _, _ = io.Copy(&wsUnframer{w: conn}, filtered); done <- struct{}{} }()
+	tick := time.NewTicker(uiDesktopRecheck)
+	defer tick.Stop()
+	closedTick := time.NewTicker(cmp.Or(s.uiDesktopClosedEvery, uiDesktopClosedRecheck))
+	defer closedTick.Stop()
+	for {
+		select {
+		case <-done:
+			_ = c.Close(desktopCloseUnreachable, "the desktop closed the connection")
+			return
+		case <-ctx.Done():
+			// The bound, Close, or the browser leaving: only the first two are told.
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) || s.uiDesktopClosedHere(sess, s.cfg.Now()) {
+				_ = c.Close(desktopCloseSessionEnded, "this desktop session ended")
+			}
+			return
+		case <-closedTick.C:
+			// A Close on another replica, or a Closed set that cannot be read, ends the stream.
+			if s.uiDesktopClosed(ctx, sess, s.cfg.Now()) {
+				_ = c.Close(desktopCloseSessionEnded, "this desktop session ended")
+				return
+			}
+		case <-tick.C:
+			if _, code, why := s.desktopRunCheck(ctx, sess); code != 0 {
+				_ = c.Close(code, why)
+				return
+			}
+		}
+	}
+}
+
+// desktopSocket closes with words cut to what a close frame carries (123 bytes).
+type desktopSocket struct{ *websocket.Conn }
+
+func (d desktopSocket) Close(code websocket.StatusCode, why string) error {
+	if len(why) > 123 {
+		why = strings.ToValidUTF8(why[:123], "")
+	}
+	return d.Conn.Close(code, why)
+}
+
+// desktopRunCheck loads the session's run fresh and answers the close code and words that end its
+// stream, or 0 while it may go on.
+func (s *Server) desktopRunCheck(ctx context.Context, sess uiSession) (types.AgentRun, websocket.StatusCode, string) {
+	run, err := s.cfg.Store.GetRun(ctx, sess.Run)
+	if err != nil {
+		return run, desktopCloseUnreachable, "run not found"
+	}
+	if run.State != types.RunRunning || run.SandboxRef == "" || runIsKept(run) {
+		return run, desktopCloseRunEnded, "run has ended; cannot open a UI app"
+	}
+	if de := s.uiSessionStillAuthorized(ctx, sess, run); de != nil {
+		return run, desktopCloseNotAuthorized, de.msg
+	}
+	return run, 0, ""
+}
+
+// desktopClipboardFilter is uiFilterUpgrade's clipboard filter on a VM's display: the same desktop
+// copy_out and paste_in rules and the same ui.clipboard.transfer rows (direction, size and hash, never the
+// text). QEMU's VNC has no clipboard peer in the guest (no qemu-vdagent, internal/vm/qemu/args.go),
+// so no cut text flows today; the filter holds the rules for when one does.
+func (s *Server) desktopClipboardFilter(ctx context.Context, sess uiSession, d types.DesktopControls, display io.ReadWriteCloser) *rfbfilter.Conn {
+	rules := rfbfilter.Rules{PasteIn: d.PasteIn == types.TransferAllowed, CopyOut: d.CopyOut == types.TransferAllowed}
+	filtered := rfbfilter.Wrap(display, rules, func(ev rfbfilter.Event) { s.auditUIClipboard(sess, ev) }, func(err error) {
+		slog.WarnContext(ctx, "wardynd: desktop relay closed a VM display it could not follow", "run_id", sess.Run, "err", err)
+		if errors.Is(err, rfbfilter.ErrNotRFB) {
+			s.auditUISession(sess, "ui.clipboard.transfer", "", "failure", map[string]any{"app": sess.App, "reason": "not_rfb"})
+		}
+	})
+	if s.uiDesktopSink != nil {
+		filtered.SetSink(s.uiDesktopSink(sess))
+	}
+	return filtered
+}
+
+// rfbfilter follows RFB inside WebSocket frames, as websockify's socket carries it on the noVNC
+// path. Both hops of a VM's display are raw RFB, so each chunk goes into the filter as one unmasked
+// binary frame (wsFramed on the display's side, wsFramer on the viewer's) and comes out unframed.
+const wsFrameHeader = 10 // the longest unmasked header: 2 bytes and a 64-bit length
+
+func appendWSBinary(dst, p []byte) []byte {
+	switch n := len(p); {
+	case n < 126:
+		dst = append(dst, 0x82, byte(n))
+	case n <= 0xffff:
+		dst = binary.BigEndian.AppendUint16(append(dst, 0x82, 126), uint16(n))
+	default:
+		dst = binary.BigEndian.AppendUint64(append(dst, 0x82, 127), uint64(n))
+	}
+	return append(dst, p...)
+}
+
+// wsFramer frames what the viewer sends.
+type wsFramer struct{ w io.Writer }
+
+func (f wsFramer) Write(p []byte) (int, error) {
+	if _, err := f.w.Write(appendWSBinary(nil, p)); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+// wsUnframer writes the payloads of the filter's frames. They are the unmasked frames the framers
+// made, re-encoded by the filter, so no mask is ever set.
+type wsUnframer struct {
+	w       io.Writer
+	pending []byte
+}
+
+func (u *wsUnframer) Write(p []byte) (int, error) {
+	u.pending = append(u.pending, p...)
+	for {
+		b := u.pending
+		if len(b) < 2 {
+			return len(p), nil
+		}
+		size, off := uint64(b[1]&0x7f), 2
+		switch size {
+		case 126:
+			if len(b) < 4 {
+				return len(p), nil
+			}
+			size, off = uint64(binary.BigEndian.Uint16(b[2:])), 4
+		case 127:
+			if len(b) < 10 {
+				return len(p), nil
+			}
+			size, off = binary.BigEndian.Uint64(b[2:]), 10
+		}
+		if uint64(len(b)-off) < size {
+			return len(p), nil
+		}
+		end := off + int(size)
+		if end > off {
+			if _, err := u.w.Write(b[off:end]); err != nil {
+				return 0, err
+			}
+		}
+		u.pending = b[end:]
+	}
+}
+
+// wsFramed is the display as the filter's backend: reads come framed, writes go out unframed.
+type wsFramed struct {
+	raw io.ReadWriteCloser
+	wsUnframer
+}
+
+func (f *wsFramed) Read(p []byte) (int, error) {
+	if len(p) <= wsFrameHeader {
+		return 0, io.ErrShortBuffer
+	}
+	n, err := f.raw.Read(p[wsFrameHeader:])
+	if n == 0 {
+		return 0, err
+	}
+	return copy(p, appendWSBinary(nil, p[wsFrameHeader:wsFrameHeader+n])), err
+}
+
+func (f *wsFramed) Close() error { return f.raw.Close() }

@@ -10,7 +10,7 @@ import { addHarness, removeHarness, setStarter, setTask } from "./harness-lens";
 import { setCpu, setMemory } from "./limits-lens";
 import { firstInvalidStep, localIssues, stepIssues } from "./local-issues";
 import { setCommand } from "./apps-lens";
-import { chooseBarrier, chooseMode, choosePool } from "./run-lens";
+import { chooseBarrier, chooseMachineKind, chooseMode, choosePool } from "./run-lens";
 import { chooseShape, shapeCarriers } from "./shape-lens";
 import { addAllowedHost, setModelProvider } from "./tools-lens";
 
@@ -42,6 +42,8 @@ const EDITS: [string, (i: RunIntent) => RunIntent][] = [
   ["setCommand", (i) => setCommand(i, "make test")],
   ["choosePool", (i) => choosePool(i, "pool-2")],
   ["chooseBarrier", (i) => chooseBarrier(i, "CC3")],
+  ["chooseMachineKind linux_vm", (i) => chooseMachineKind(i, "linux_vm")],
+  ["chooseMachineKind container", (i) => chooseMachineKind(i, "container")],
   ["addHarness", (i) => addHarness(i, "gemini")],
   ["removeHarness", (i) => removeHarness(i, "codex-cli")],
   ["setStarter", (i) => setStarter(i, "claude-code")],
@@ -124,5 +126,13 @@ describe("local validators", () => {
     expect(stepIssues("files", { no_repositories_or_drives: true })).toEqual([]);
     expect(firstInvalidStep(START)).toBeUndefined();
     expect(localIssues(START, {}, { format: "yaml", text: "", diagnostics: [], validated: false }).map((i) => i.code)).toEqual(["doc_invalid"]);
+  });
+});
+
+describe("chooseMachineKind", () => {
+  it("a VM drops the container barrier; a container is the absent key", () => {
+    const vm = chooseMachineKind({ confinement_class: "CC2", runner_pool_id: "p" }, "linux_vm");
+    expect(vm).toEqual({ machine_kind: "linux_vm", runner_pool_id: "p" });
+    expect(chooseMachineKind(vm, "container")).toEqual({ runner_pool_id: "p" });
   });
 });

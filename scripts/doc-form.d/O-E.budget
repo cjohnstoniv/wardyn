@@ -131,7 +131,12 @@
 # docs/OPERATIONS.md 57692 = ours 57569 + theirs 57515 - base 57392 at the 0.10 W4a merge of PRIV-1 onto the train.
 # 0.10 W4a train: docs/OPERATIONS.md tightened to 57690, measured at the train merge.
 # docs/OPERATIONS.md 58768 = ours 58579 + theirs 57690 - base 57501 at the 0.10 W4c merge of origin/main 3cea1aa73 (W4a) onto the train.
-docs/OPERATIONS.md=58768
+# docs/OPERATIONS.md 56776 adds 32 (0.10 Linux VM): the 0198_run_machine_kind line (renumbered from 0196 at this merge) in the migrator rationale.
+# docs/OPERATIONS.md 57424 = ours 56776 + theirs 57392 - base 56744 at the 0.10 W2 merge of CTL-A onto DSK-A.
+# docs/OPERATIONS.md 57450 measured: +26 for DSK-A's desktop Close shared through the database (What stays per replica).
+# docs/OPERATIONS.md 57467 adds 17 (0.10 DSK-A r3), measured: the desktop Close bullet moves to What the replicas share, with open desktops ending and new opens refused while the database is unreachable.
+# docs/OPERATIONS.md 58811, measured, at the 0.10 W4c merge of DSK-A 46d21862b onto the train: two merge bases (CTL-A 99d68a80a and VM-C~1 4b06ac1e5), so no single base to subtract.
+docs/OPERATIONS.md=58811
 # docs/OPERATIONS.md 55840 adds 124 over 55716, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # docs/OPERATIONS.md 55867 adds 27 over 55840, measured: a run whose runner cannot be asked falls back to this deployment's runner, the older-runner exception, pooled runs, and the runner_offline gap reason.
 # docs/OPERATIONS.md 55891 adds 24 over 55867, measured: with several executors and no pool, the executor a run lands on, and once its sandbox exists the one that holds it, decides where its output comes from.

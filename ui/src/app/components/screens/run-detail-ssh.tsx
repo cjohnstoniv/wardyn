@@ -40,8 +40,9 @@ import { entryErrorMessage, mayEnterRunOrUnknown, sponsorOnlyEntry } from "../..
 import { CodeBlock, Mono } from "../wardyn/code-block";
 import { RUN_CLI, RUN_SSH, UI_APPS_LANE, UI_APPS_LAUNCHER_MISSING_PREFIX } from "../wardyn/copy";
 import { RUN_SYNC } from "../wardyn/copy/runners";
+import { DESKTOP } from "../wardyn/copy/desktop";
 import { useOperator, useOperatorResolved, usePrincipal } from "../wardyn/operator-context";
-import { WidgetCard } from "../wardyn/primitives";
+import { Chip, WidgetCard } from "../wardyn/primitives";
 import { DesktopFilesPanel } from "./run-detail/desktop-files-panel";
 import { cn } from "../ui/utils";
 import { CliLane, GetTheCli } from "./run-detail/get-the-cli";
@@ -223,6 +224,32 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
       grow
       bodyClassName="scroll-thin overflow-y-auto p-4"
     >
+      {/* Mock M6: a desktop VM's desktop comes first, in its own block. It is the gateway's ticket ->
+          bind -> enter hand-off for the built-in desktop app, never a declared ui_app. */}
+      {run.machine_kind === "linux_vm" && (
+        <section aria-label={DESKTOP.title} className="mb-4 rounded-[10px] border border-border p-3">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs font-medium text-foreground">{DESKTOP.title}</p>
+            {healthAnswered && <Chip tone={uiSandboxOn ? "success" : "neutral"}>{uiSandboxOn ? DESKTOP.ready : DESKTOP.statusOff}</Chip>}
+          </div>
+          <p className="mt-0.5 text-meta text-muted-foreground">{DESKTOP.kind}</p>
+          {healthAnswered && !uiSandboxOn && (
+            <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{monoTokens(DESKTOP.off, "WARDYN_UI_SANDBOX_LISTEN")}</p>
+          )}
+          {uiSandboxOn && (
+            <>
+              <Button size="sm" className="mt-2" disabled={openingApp === DESKTOP_APP.name} onClick={() => openApp(DESKTOP_APP)}>
+                {openingApp === DESKTOP_APP.name ? UI_APPS_LANE.ctaBusy : UI_APPS_LANE.cta("desktop")}
+              </Button>
+              {appError?.app === DESKTOP_APP.name && (
+                <p role="alert" className="mt-2 font-mono text-meta leading-relaxed text-muted-foreground">{appError.message}</p>
+              )}
+              <p className="mt-2 text-meta leading-relaxed text-muted-foreground sm:hidden">{DESKTOP.phoneBefore}</p>
+              <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{UI_APPS_LANE.newTab}</p>
+            </>
+          )}
+        </section>
+      )}
       {externalTool && (
         <p className="mb-2 text-meta leading-relaxed text-muted-foreground">
           Managed by an external tool — killing this run tears down that tool's workspace.
@@ -436,6 +463,10 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
     </WidgetCard>
   );
 }
+
+// DESKTOP_APP is the gateway's built-in desktop app (internal/api/uigateway_desktop.go uiDesktopApp):
+// no policy declares it and no declared app can share its name.
+const DESKTOP_APP: UIApp = { name: "__desktop", port: 0 };
 
 // monoTokens renders one frozen copy string with its env-var / policy-field /
 // file-path tokens in <Mono>, per the mock's visual rule §6 (and matching the
