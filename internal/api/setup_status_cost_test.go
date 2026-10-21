@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/setup"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -36,6 +38,30 @@ type setupStatusCostStore struct {
 	store.Pager
 	listRunsCalls int
 	pages         []store.Page
+	auditReads    int
+}
+
+// QueryAuditEventsFilteredPage is the private_ip_refusals row's read, counted so
+// TestSetupStatus_PrivateIPRefusalsReadIsCached can bound it.
+func (s *setupStatusCostStore) QueryAuditEventsFilteredPage(context.Context, *uuid.UUID, store.AuditFilter, store.Page) ([]types.AuditEvent, error) {
+	s.auditReads++
+	return nil, nil
+}
+
+// TestSetupStatus_PrivateIPRefusalsReadIsCached: the private_ip_refusals row
+// reads the audit table once per rule source per privateIPRefusalTTL, not once
+// per poll.
+func TestSetupStatus_PrivateIPRefusalsReadIsCached(t *testing.T) {
+	st := &setupStatusCostStore{}
+	srv := New(baseTestConfig(newHarness(t), st))
+	for range 3 {
+		if w := do(t, srv, http.MethodGet, "/api/v1/setup/status", adminToken, ""); w.Code != http.StatusOK {
+			t.Fatalf("setup/status: code = %d; body=%s", w.Code, w.Body.String())
+		}
+	}
+	if st.auditReads != len(privateIPRefusalSources) {
+		t.Fatalf("three polls made %d audit reads, want %d (one per rule source, then cached)", st.auditReads, len(privateIPRefusalSources))
+	}
 }
 
 func (s *setupStatusCostStore) ListRuns(context.Context) ([]types.AgentRun, error) {

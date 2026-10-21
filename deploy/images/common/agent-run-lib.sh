@@ -266,6 +266,19 @@ install_artifact_config() {
 materialize_aws_sso_config() {
     [[ -n "${WARDYN_AWS_SSO_CONFIG_B64:-}" ]] || return 0
     materialize_home_records aws-sso "$WARDYN_AWS_SSO_CONFIG_B64"
+    link_aws_cli_cache_to_tmpfs
+}
+
+# link_aws_cli_cache_to_tmpfs [root]: point ~/.aws/cli/cache, where the AWS CLI
+# keeps the role credentials it derives from the session, at a directory under
+# root (default /tmp, the sandbox's tmpfs), so they end when the sandbox stops
+# instead of outliving the run in a kept container. A real directory left there
+# by an earlier start is deleted, credentials and all.
+link_aws_cli_cache_to_tmpfs() {
+    local target="${1:-/tmp}/wardyn-aws-cli-cache" link="${HOME}/.aws/cli/cache"
+    mkdir -p "${HOME}/.aws/cli" && mkdir -p -m 0700 "$target" || return 0
+    [[ -L "$link" ]] || rm -rf "$link"
+    ln -sfn "$target" "$link"
 }
 
 # materialize_home_records <label> <records>: write each "<home-relative-path>\t<base64>"

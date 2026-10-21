@@ -515,7 +515,7 @@ func neverLiftableDetail(subject string, kind blockKind) string {
 // gets the four-sentence remedy verbatim; every other class gets
 // neverLiftableDetail. A LITERAL host needs no carried kind — it re-derives
 // and ignores the parameter.
-func literalIPDenialDetail(host string, port int, pol *Policy, kind blockKind) string {
+func literalIPDenialDetail(host string, port int, pol *Policy, kind blockKind, hint string) string {
 	h := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
 	if h == "" {
 		return ""
@@ -538,7 +538,14 @@ func literalIPDenialDetail(host string, port int, pol *Policy, kind blockKind) s
 		}
 		// The join site for the four sentences above: cause, remedy,
 		// hint, lifetime. Any wording change is an edit to this expression and
-		// the constant it names, nowhere else.
+		// the constant it names, nowhere else. A refusal that knows the host
+		// and the range it resolved into (hint, internalHostsLiftHint) names
+		// both instead of the generic remedy and its "leave cidrs empty"
+		// caution: the range is what the sandbox side resolved, the evidence
+		// that caution asks for.
+		if hint != "" {
+			return egressPrivateRangeCause + "; " + hint + ". " + egressDenialSuffix
+		}
 		return egressPrivateRangeCause + "; " + egressInternalHostsRemedy + ". " +
 			siteInternalHostsCIDRHint + " " + egressDenialSuffix
 	}
@@ -622,7 +629,8 @@ func (p *Proxy) denyEgress(w http.ResponseWriter, host string, port int, log *eg
 	switch reason {
 	case "builtin:private-ip":
 		w.Header().Set(egressHeaderRetry, egressRetryNever)
-		if d := literalIPDenialDetail(host, port, p.policy, p.privateIPBlockKind(host, port)); d != "" {
+		kind, hint := p.privateIPBlockKind(host, port)
+		if d := literalIPDenialDetail(host, port, p.policy, kind, hint); d != "" {
 			w.Header().Set(egressHeaderDetail, d)
 			detail = "egress denied: " + d
 		}
@@ -672,6 +680,9 @@ type IPGuardResult struct {
 	// the 403's detail must say so honestly. Zero (blockNone) on every
 	// non-range denial and on every admission.
 	kind blockKind
+	// blocked is the address that refused (nil on an admission), so
+	// egressTarget can name the liftable block it fell in — never the address.
+	blocked net.IP
 	// Lifted is true when an address isBlockedIP would otherwise deny was
 	// admitted only because the caller's lift predicate (vetHostLift) accepted
 	// it — an operator-declared internal host. Never true for VetHost.
@@ -759,7 +770,7 @@ func vetHostLift(host string, res resolver, lift func(net.IP) bool) IPGuardResul
 	for _, ip := range ips {
 		ok, lifted, why, kind := admit(ip)
 		if !ok {
-			return IPGuardResult{Denied: true, Reason: fmt.Sprintf("blocked address %s: %s", ip, why), kind: kind}
+			return IPGuardResult{Denied: true, Reason: fmt.Sprintf("blocked address %s: %s", ip, why), kind: kind, blocked: ip}
 		}
 		anyLifted = anyLifted || lifted
 	}

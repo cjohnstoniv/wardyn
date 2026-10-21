@@ -44,6 +44,10 @@ type privateIPStreak struct {
 	// kind is the guard class that refused this host:port, so writeEgressDeny
 	// can tell a liftable refusal from one that needs a fresh resolve.
 	kind blockKind
+	// hint is the refusal's internal_hosts lift hint ("" when none applies),
+	// so the 403 rebuilt from the memo and the streak's summary row both
+	// still name the remedy.
+	hint string
 }
 
 // record opens a streak for a fresh post-resolution refusal, returning the
@@ -53,7 +57,7 @@ type privateIPStreak struct {
 // streak before either records. The mutex only protects the map, not the
 // check-then-act across evaluate() — over-reporting a denial is the safe
 // direction for an audit trail.
-func (mo *privateIPMemo) record(req egress.Request, kind blockKind) *egress.DecisionLog {
+func (mo *privateIPMemo) record(req egress.Request, kind blockKind, hint string) *egress.DecisionLog {
 	mo.mu.Lock()
 	defer mo.mu.Unlock()
 	if mo.m == nil {
@@ -74,7 +78,7 @@ func (mo *privateIPMemo) record(req egress.Request, kind blockKind) *egress.Deci
 		evicted = closeStreak(mo.m[oldestKey])
 		delete(mo.m, oldestKey)
 	}
-	mo.m[key] = &privateIPStreak{req: req, last: req.Time, kind: kind}
+	mo.m[key] = &privateIPStreak{req: req, last: req.Time, kind: kind, hint: hint}
 	return evicted
 }
 
@@ -99,15 +103,16 @@ func (mo *privateIPMemo) memoed(host string, port int) bool {
 	return mo.m[hostPortKey(host, port)] != nil
 }
 
-// kindOf returns the guard class recorded for host:port, or blockNone when
-// never refused — the safe fallback used before the class was tracked at all.
-func (mo *privateIPMemo) kindOf(host string, port int) blockKind {
+// kindOf returns the guard class and lift hint recorded for host:port, or
+// blockNone and "" when never refused — the safe fallback used before the
+// class was tracked at all.
+func (mo *privateIPMemo) kindOf(host string, port int) (blockKind, string) {
 	mo.mu.Lock()
 	defer mo.mu.Unlock()
 	if s := mo.m[hostPortKey(host, port)]; s != nil {
-		return s.kind
+		return s.kind, s.hint
 	}
-	return blockNone
+	return blockNone, ""
 }
 
 // drain closes and removes every open streak, returning their summary rows.
@@ -134,13 +139,14 @@ func closeStreak(s *privateIPStreak) *egress.DecisionLog {
 	log := decisionLog(s.req, egress.Deny, "builtin:private-ip")
 	log.Request.Time = s.last
 	log.Repeat = s.repeats
+	log.Cause = s.hint
 	return &log
 }
 
 // privateIPRefused opens a memo streak for a refusal evaluate() has just
 // recorded, emitting the summary row of whatever it evicted to make room.
-func (p *Proxy) privateIPRefused(req egress.Request, kind blockKind) {
-	if evicted := p.privIP.record(req, kind); evicted != nil && p.sink != nil {
+func (p *Proxy) privateIPRefused(req egress.Request, kind blockKind, hint string) {
+	if evicted := p.privIP.record(req, kind, hint); evicted != nil && p.sink != nil {
 		p.sink.emit(*evicted)
 	}
 }
@@ -162,10 +168,11 @@ func (p *Proxy) privateIPMemoed(host string, port int) bool {
 // builtin:private-ip refusal; blockNone is the safe fallback for an unmemoed
 // refusal (e.g. step 0's literal guard, which resolves nothing). A literal in a
 // k8s runner's hard deny is re-derived here, as step 0 memoes nothing, so its
-// detail names the hard deny rather than a missing allowed_domains entry.
-func (p *Proxy) privateIPBlockKind(host string, port int) blockKind {
+// detail names the hard deny rather than a missing allowed_domains entry. The
+// second result is the memoed internal_hosts lift hint.
+func (p *Proxy) privateIPBlockKind(host string, port int) (blockKind, string) {
 	if ip := net.ParseIP(strings.TrimSuffix(strings.ToLower(host), ".")); ip != nil && p.hardDeny.ip(ip) {
-		return blockHardDeny
+		return blockHardDeny, ""
 	}
 	return p.privIP.kindOf(host, port)
 }

@@ -182,7 +182,9 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 	// in, and now that base_image has had its one chance to supply req.Image,
 	// still having neither is the caller's request, resolved. Never "attach a
 	// workspace" — one already is attached; what it lacks is a base image.
-	if req.TaskMode == "exec" && req.Agent == "" && req.Image == "" {
+	// A run-mode command has its image already: with no harness it starts from
+	// the agent base image (harnessSetImage), as it does with no workspace.
+	if req.TaskMode == "exec" && req.Agent == "" && req.Image == "" && !req.UsesRunMode() {
 		return workspaceSeed{}, seedErr(http.StatusBadRequest, reasonWorkspaceSeedNoBaseImage, fmt.Errorf(
 			"workspace %s has no base image to run a command in: pass --image or --agent", ids[0]))
 	}
