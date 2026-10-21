@@ -29,7 +29,7 @@ import (
 // that path handles spec data when it names one of specCensusRoots, calls a package function, a
 // (*Server) method or a store method whose declared results carry one, or reads a Server or Config
 // field that does. "Carries" follows struct fields, pointers, slices and maps through the declarations
-// of this package, internal/types, pkg/client and internal/store. A function off the response path (one
+// of this package, internal/types, pkg/client, internal/store and internal/composer. A function off the response path (one
 // that decides with a ceiling and answers a bool or a list of names) is not read, so a route that only
 // decides with a policy is not reported. The redaction is looked for on the route's data path: the
 // response path plus every function it calls whose declared results carry a root, transitively, so a
@@ -129,7 +129,7 @@ func newSpecCensus(t *testing.T, extra ...*ast.File) *specCensus {
 		c.takers[name] = true
 	}
 	var apiFiles, storeFiles []*ast.File
-	for name, dir := range map[string]string{"api": ".", "types": "../types", "client": "../../pkg/client", "store": "../store"} {
+	for name, dir := range map[string]string{"api": ".", "types": "../types", "client": "../../pkg/client", "store": "../store", "composer": "../composer"} {
 		p, files := parseCensusPkg(t, dir)
 		c.pkgs[name] = p
 		switch name {
@@ -426,8 +426,9 @@ func TestPolMount_CensusRouteReach(t *testing.T) {
 }
 
 // TestPolMount_CensusRouteReach_PlantedViolation is the census's twin: planted GET routes beside the real
-// ones. The three that answer a spec unredacted are reported by name (one is handleGetPolicy without its
-// redaction, so its refusal helpers are proved not to count as one); the redacted one and the one that
+// ones. The four that answer a spec unredacted are reported by name (one is handleGetPolicy without its
+// redaction, so its refusal helpers are proved not to count as one; one writes a composer.Authority's
+// ceiling); the redacted one and the one that
 // answers no spec are not, and neither is any real route.
 func TestPolMount_CensusRouteReach_PlantedViolation(t *testing.T) {
 	const planted = `package api
@@ -455,6 +456,9 @@ func (s *Server) handlePlantedGetPolicy(w http.ResponseWriter, r *http.Request) 
 	}
 	writeJSON(w, http.StatusOK, p)
 }
+func (s *Server) handlePlantedAuthority(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.deploymentAuthority().Ceiling)
+}
 func (s *Server) handlePlantedRedacted(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, redactSpecForRead(s.cfg.DefaultPolicy, s.specReadTierFor(r.Context())))
 }
@@ -467,12 +471,12 @@ func (s *Server) handlePlantedOther(w http.ResponseWriter, r *http.Request) {
 		t.Fatal(err)
 	}
 	routes := censusRoutes(t)
-	for path, h := range map[string]string{"default": "handlePlantedDefault", "stored": "handlePlantedStored", "get-policy": "handlePlantedGetPolicy",
+	for path, h := range map[string]string{"default": "handlePlantedDefault", "stored": "handlePlantedStored", "get-policy": "handlePlantedGetPolicy", "authority": "handlePlantedAuthority",
 		"redacted": "handlePlantedRedacted", "other": "handlePlantedOther"} {
 		routes["GET /api/v1/planted-"+path] = h
 	}
 	got := newSpecCensus(t, f).unredacted(routes)
-	if want := []string{"GET /api/v1/planted-default", "GET /api/v1/planted-get-policy", "GET /api/v1/planted-stored"}; !slices.Equal(got, want) {
+	if want := []string{"GET /api/v1/planted-authority", "GET /api/v1/planted-default", "GET /api/v1/planted-get-policy", "GET /api/v1/planted-stored"}; !slices.Equal(got, want) {
 		t.Errorf("the census reported %v, want exactly %v", got, want)
 	}
 }
