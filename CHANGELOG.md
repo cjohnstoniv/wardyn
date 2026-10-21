@@ -21,6 +21,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `SELECT, INSERT, UPDATE, DELETE` on `cli_sign_ins` (migration `0199_cli_sign_in`, which also adds `kind` and
   `cli_session_id` to `api_tokens`). Without it every API token read fails, because a token's liveness now reads
   `cli_sessions`.
+- **Governance profiles are now units, and assignments are now memberships.** The routes are
+  `/governance/units`, `/governance/memberships` and `/governance/check` (was `/governance/preview`), and the keys
+  are `units`, `memberships`, `unit_id` and `parent_id`. The old routes answer 404 or 405 and are not aliased; a
+  script or a `wardyn governance` document that names the old routes or keys changes to the new ones. A 0.9
+  governance document is refused, and the error names the new key. The audit actions are `governance.unit.*` and
+  `governance.membership.*`; rows written before the upgrade keep the old names, so a query over a span that
+  crosses the upgrade matches both.
+- `WARDYN_GOVERNANCE_PROFILE_PUT_EXISTING_ONLY` is now `WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY`. wardynd refuses
+  to start while the old name is set, and names the new one. A notify route keyed `profiles` is now `units`; the
+  old key is refused when the config is read.
+- Migration `0201_governance_units` renames the governance tables and their columns, keeping every row, grant and
+  foreign key, so a split-role install needs no grant change. A governance change proposed before the upgrade reads
+  as stale once and is proposed again.
 
 ### Added
 
