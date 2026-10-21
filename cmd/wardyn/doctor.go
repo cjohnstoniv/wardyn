@@ -42,7 +42,7 @@ nothing and changes no setting. It exits 0 when no stage failed and 1 otherwise;
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			c := client()
-			net := doctor.Network{OrgURL: c.BaseURL, Source: urlSource(cmd), OrgSetting: "WARDYN_URL", Identity: true, Token: c.Token, TokenSource: tokenSource(cmd),
+			net := doctor.Network{OrgURL: c.BaseURL, Source: urlSource(cmd), OrgSetting: "WARDYN_URL", Identity: true, Token: c.Token, TokenSource: doctorTokenSource(cmd),
 				ExtraCASource: "WARDYN_TRUSTED_CA_FILE", ExtraCA: trustedCAPool(os.Getenv("WARDYN_TRUSTED_CA_FILE"))}
 			report := doctor.Report{Stages: net.Run(cmd.Context())}
 			report.Stages = append(report.Stages, runnerStages(cmd.Context(), net.ServerVersion)...)
@@ -77,8 +77,8 @@ func urlSource(cmd *cobra.Command) string {
 	return "the CLI profile that wardyn login saved"
 }
 
-// tokenSource names the setting the token came from; the token itself is never read into any output.
-func tokenSource(cmd *cobra.Command) string {
+// doctorTokenSource names the setting the token came from; the token itself is never read into any output.
+func doctorTokenSource(cmd *cobra.Command) string {
 	switch {
 	case cmd.Flags().Changed("token"):
 		return "--token"
