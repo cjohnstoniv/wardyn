@@ -21,8 +21,8 @@ import { agentLabel } from "../../wardyn/primitives";
 type Names = Record<string, Record<string, string>>;
 
 // G-3: the `*` row on every kind names itself now, not just the three packet A
-// drew ("All org workspaces", "Images", the feature pair) — "All {family}" on
-// the other six.
+// drew ("All org workspaces", "Images", the feature trio) — "All {family}" on
+// the other seven.
 const FIXED: Names = {
   egress_host: { "*": EXPLAIN.ALL_EGRESS_HOSTS },
   secret: { "*": EXPLAIN.ALL_SECRETS },
@@ -39,6 +39,7 @@ const FIXED: Names = {
     self_host_runner: EXPLAIN.SELF_HOST_RUNNER,
     service_attach: EXPLAIN.SERVICE_ATTACH,
   },
+  component: { "*": EXPLAIN.ALL_COMPONENTS },
   policy: { "*": EXPLAIN.ALL_POLICIES },
 };
 

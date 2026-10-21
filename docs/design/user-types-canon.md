@@ -20,7 +20,7 @@ compares it with its namespace in both directions.
   Blocked is red (`danger`), and Everyone, Not available and Admins only are grey (`neutral`, and the
   row text is muted).
 - The default (`*`) row of every kind names itself: `ALL_WORKSPACES`, `ALL_IMAGES` and
-  `SSH_AND_TOKENS` for the three packet A drew, and `ALL_{family}` for the other six (G-3). A value
+  `SSH_AND_TOKENS` for the three packet A drew, and `ALL_{family}` for the other seven (G-3). A value
   shows by its name when a list the caller can read names it: a workspace, a stored policy, an agent
   the console knows, a model provider or a component (super admins only, since those rosters are
   `operatorOnly`, unless the row already carries a server `label`). A git provider row and a model provider row carry
@@ -74,9 +74,10 @@ compares it with its namespace in both directions.
 | `SSH_KEYS` | the `feature` value `ssh_key` | SSH keys |
 | `API_TOKENS` | the `feature` value `api_token` | API tokens |
 | `SERVICE_ATTACH` | the `feature` value `service_attach` | Entering a service's runs |
-| `SSH_AND_TOKENS` | the `feature` kind's `*` row | SSH keys · API tokens |
+| `SSH_AND_TOKENS` | the `feature` kind's `*` row | SSH keys · API tokens · custom components |
 | `CUSTOM_COMPONENTS` | the `feature` value `custom_component` | Custom components |
 | `SELF_HOST_RUNNER` | the `feature` value `self_host_runner` | Self-hosted runners |
+| `ALL_COMPONENTS` | the `component` kind's `*` row | All components |
 | `ALL_EGRESS_HOSTS` | the `egress_host` kind's `*` row | All egress hosts |
 | `ALL_SECRETS` | the `secret` kind's `*` row | All secrets |
 | `ALL_AGENTS` | the `agent` kind's `*` row | All agents |

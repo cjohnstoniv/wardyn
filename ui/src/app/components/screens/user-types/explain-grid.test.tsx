@@ -321,12 +321,16 @@ describe("ExplainGrid — values by name", () => {
 });
 
 describe("ExplainGrid — components and the feature values (#2243)", () => {
-  it("names the two newer feature values", async () => {
+  it("names the component family's default row and the two newer feature values", async () => {
     answer([
+      { kind: "component", value: "*", state: "everyone" },
+      { kind: "feature", value: "*", state: "everyone" },
       { kind: "feature", value: "custom_component", state: "this_type" },
       { kind: "feature", value: "self_host_runner", state: "blocked" },
     ]);
     renderGrid();
+    expect(within(await row("component", "*")).getByText(EXPLAIN.ALL_COMPONENTS)).toBeInTheDocument();
+    expect(within(await row("feature", "*")).getByText("SSH keys · API tokens · custom components")).toBeInTheDocument();
     expect(within(await row("feature", "custom_component")).getByText(EXPLAIN.CUSTOM_COMPONENTS)).toBeInTheDocument();
     expect(within(await row("feature", "self_host_runner")).getByText(EXPLAIN.SELF_HOST_RUNNER)).toBeInTheDocument();
   });

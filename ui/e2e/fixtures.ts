@@ -176,11 +176,10 @@ export type NavLabel =
   | "Audit"
   | "Recordings"
   // A security admin's Admin view only (packet M-A).
-  | "Drives"
-  // #217's slot, under a divider (app-shell.tsx#SidebarNav): Setup and
+  | "User drives"
+  // #217's slot, under a divider (app-shell.tsx#SidebarNav): Getting started and
   // Settings in the Admin view, Getting started and Your account in the User
   // view.
-  | "Setup"
   | "Settings"
   | "Getting started"
   | "Your account";

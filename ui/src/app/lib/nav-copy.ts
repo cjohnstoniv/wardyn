@@ -23,6 +23,10 @@ export const USER_TYPES_NAV_TITLE = "User types";
 // wardyn/copy/credentials.ts) is the same string.
 export const CREDENTIALS_NAV_TITLE = "Credentials";
 
+// The Drives nav label (a security admin's Admin view): the registry page's own title, so the highlighted
+// nav entry and the heading agree (#3057). user-drives-copy.ts's DRIVES.TITLE reads this constant.
+export const DRIVES_NAV_TITLE = "User drives";
+
 // The Runners nav label, kept here for the entry-chunk reason above (the sidebar is eager,
 // wardyn/copy/runners.ts is lazy). copy/runners.ts's RUNNERS.NAV reads this constant, so the nav
 // label and the page heading stay one string.
