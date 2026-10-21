@@ -2174,7 +2174,8 @@ jobs:
           restore-keys: |
             go-notices-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
             go-notices-${{ runner.os }}-
-      - run: go mod download
+      # Bounded retry of the module fetch only; go.sum verifies each module.
+      - run: for i in 1 2 3; do go mod download && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done
       - name: Fetch gate tools
         timeout-minutes: 4
         run: scripts/fetch-gate-tools.sh notices
@@ -2671,7 +2672,8 @@ jobs:
           lookup-only: true
       - name: Download the modules
         if: steps.have.outputs.cache-hit != 'true'
-        run: go mod download && du -sh ~/go/pkg/mod
+        # Bounded retry of the module fetch only; go.sum verifies each module.
+        run: for i in 1 2 3; do go mod download && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done && du -sh ~/go/pkg/mod
       - name: Save the module cache
         id: save
         if: steps.have.outputs.cache-hit != 'true'

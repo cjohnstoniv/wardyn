@@ -54,6 +54,8 @@ COPY go.mod go.sum ./
 # then fetches only what it lacks. go.sum is checked against each module's recorded
 # hash, as with any module cache, and `go mod verify` re-checks the cache when a seed
 # was used.
+# Bounded retry of the module FETCH only (a proxy stream error is transient); go.sum still
+# verifies every module, and no build or test step is ever retried.
 RUN --mount=type=bind,from=gomodcache,target=/gomodcache-seed \
     seed=; \
     if [ -n "$(ls -A /gomodcache-seed)" ]; then \
@@ -61,7 +63,7 @@ RUN --mount=type=bind,from=gomodcache,target=/gomodcache-seed \
         mkdir -p "$(go env GOMODCACHE)/cache/download" && \
         cp -a /gomodcache-seed/. "$(go env GOMODCACHE)/cache/download/"; \
     fi && \
-    go mod download && \
+    for i in 1 2 3; do go mod download && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done && \
     if [ -n "$seed" ]; then go mod verify; fi
 
 COPY . .
