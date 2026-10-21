@@ -620,6 +620,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// proxy refuses the key, and must not refuse every task run.
 			Unattended:         !p.Interactive && pushReviewRules(policy, p.PushRuleSets),
 			ScrubResponses:     s.cfg.ScrubProxyResponses,
+			CanonicalPushRepos: s.cfg.CanonicalPushRepos,
 			PushRuleSets:       p.PushRuleSets,
 			PushRuleBase:       pushRuleBase(policy, p.PushRuleSets),
 			HarnessToolRules:   p.HarnessToolRules,

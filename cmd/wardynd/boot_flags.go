@@ -276,6 +276,9 @@ type bootFlags struct {
 	// proxyResponseScrub has every run's proxy replace a value it injected when a
 	// relayed response echoes it back (off by default in 0.10.0).
 	proxyResponseScrub *bool
+	// pushHoldCanonicalRepos keys a held git_pat push to github.com on one
+	// spelling of its repository (off by default in 0.10.0).
+	pushHoldCanonicalRepos *bool
 	// attachLocal lets a person's CLI attach to their run on their own runner's computer (off by
 	// default in 0.10.0; only "on" enables it).
 	attachLocal *string
@@ -589,6 +592,7 @@ func parseBootFlags() *bootFlags {
 		envSecretPlaceholders:  flagBool("env-secret-placeholders", "WARDYN_ENV_SECRET_PLACEHOLDERS", false, "an env_secret grant whose scope names a host gets a placeholder in the sandbox, which the run's proxy replaces with the value on requests to that host (default false)"),
 		fileSecretPlaceholders: flagBool("file-secret-placeholders", "WARDYN_FILE_SECRET_PLACEHOLDERS", false, "a file_secret grant whose scope names a host gets a placeholder file in the sandbox, which the run's proxy replaces with the value on requests to that host (default false)"),
 		attachLocal:            flagEnv("attach-local", "WARDYN_ATTACH_LOCAL", "off", `"on": a person's CLI on their own runner's computer attaches to their run there, the terminal staying on that computer while the organisation keeps the admission, the writer lease, the recording and the audit; anything else keeps every attach on the relay`),
+		pushHoldCanonicalRepos: flagBool("push-hold-canonical-repos", "WARDYN_PUSH_HOLD_CANONICAL_REPOS", false, "have each run's egress proxy name a held git_pat push to github.com by its repository lowercased and without .git, so one admin decision covers every spelling; off names the path as git spelled it"),
 		proxyResponseScrub:     flagBool("proxy-response-scrub", "WARDYN_PROXY_RESPONSE_SCRUB", false, "have each run's egress proxy replace a credential it added when an upstream response echoes it back to the sandbox (default false)"),
 		gitPATBrokerOffRefused: flagBool("git-pat-broker-off-refused", "WARDYN_GIT_PAT_BROKER_OFF_REFUSED", false, "while WARDYN_GIT_PAT_BROKER is off, refuse a run that would hold a resident PAT on operators' runs too; a member's run is refused it either way (default false)"),
 

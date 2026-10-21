@@ -263,6 +263,12 @@ type Config struct {
 	// value the proxy added. WARDYN_PROXY_RESPONSE_SCRUB at dispatch; false
 	// (the default) relays responses verbatim.
 	ScrubResponses bool `json:"scrub_responses,omitempty"`
+	// CanonicalPushRepos names a held push over a git_pat grant to github.com
+	// by its repository lowercased and without ".git" (patPushTarget), the
+	// App lane's form, so one decision covers every spelling of it.
+	// WARDYN_PUSH_HOLD_CANONICAL_REPOS at dispatch; false (the default) names
+	// the path as git spelled it.
+	CanonicalPushRepos bool `json:"canonical_push_repos,omitempty"`
 	// VM marks a run whose only client is wardyn-vmnet, the network relay of a
 	// desktop VM (vmnet_flows.go): the port rule is on whatever PortRule says,
 	// and vmnet's two-stage CONNECT and refusal reports are honoured. Set by the

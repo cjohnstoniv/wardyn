@@ -581,6 +581,9 @@ type Config struct {
 	// ScrubProxyResponses (WARDYN_PROXY_RESPONSE_SCRUB) stamps
 	// proxy.Config.ScrubResponses on every new dispatch.
 	ScrubProxyResponses bool
+	// CanonicalPushRepos (WARDYN_PUSH_HOLD_CANONICAL_REPOS; off by default in
+	// 0.10.0) stamps proxy.Config.CanonicalPushRepos on every new dispatch.
+	CanonicalPushRepos bool
 	// EnvSecretPlaceholders / FileSecretPlaceholders (WARDYN_ENV_SECRET_PLACEHOLDERS,
 	// WARDYN_FILE_SECRET_PLACEHOLDERS; off by default in 0.10.0): an env_secret
 	// or file_secret grant whose scope names a host gets a placeholder in the

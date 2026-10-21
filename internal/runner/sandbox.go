@@ -209,6 +209,7 @@ func BuildProxyConfig(runID uuid.UUID, pc ProxyConfig, port int) ([]byte, error)
 		LocalModels:          pc.LocalModels,
 		Unattended:           pc.Unattended,
 		ScrubResponses:       pc.ScrubResponses,
+		CanonicalPushRepos:   pc.CanonicalPushRepos,
 		Attribution:          pc.Attribution,
 		PushRuleSets:         pc.PushRuleSets,
 		PushRuleBase:         pc.PushRuleBase,
