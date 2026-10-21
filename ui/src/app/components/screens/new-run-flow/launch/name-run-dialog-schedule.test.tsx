@@ -107,8 +107,7 @@ describe("Name this run: a start later", () => {
     expect(create).not.toHaveBeenCalled();
   });
 
-  it("holds Launch on a start past 7 days less the wait the preflight answered, in the board's sentence", async () => {
-    vi.spyOn(runs, "preflightRunWire").mockResolvedValue(withWait(86_400));
+  it("holds Launch on a start past 7 days less a background run's 24 hours, in the board's sentence", async () => {
     open(inDays(6.5));
     const box = await screen.findByRole("dialog", { name: NR_LAUNCH.TITLE });
     await named(box);
@@ -117,24 +116,13 @@ describe("Name this run: a start later", () => {
     expect(create).not.toHaveBeenCalled();
   });
 
-  it("reads the limit from that answer: a shorter wait leaves the same start open", async () => {
+  it("takes a start just inside that, whatever max_wait_sec the preflight answered: the server ignores it", async () => {
     vi.spyOn(runs, "preflightRunWire").mockResolvedValue(withWait(3600));
-    open(inDays(6.5));
+    open(inDays(5.9));
     const box = await screen.findByRole("dialog", { name: NR_LAUNCH.TITLE });
     await named(box);
     expect(within(box).queryByRole("alert")).not.toBeInTheDocument();
     expect(launchButton()).toBeEnabled();
-  });
-
-  it("checks no far limit when the answer carries no wait, and lets the server's sentence answer", async () => {
-    vi.spyOn(runs, "preflightRunWire").mockResolvedValue(withWait(undefined));
-    create.mockRejectedValue(new HttpError(422, SCHEDULE_REFUSAL.TOO_FAR("a", "b", 24), "start_at_too_far"));
-    open(inDays(6.5));
-    const box = await screen.findByRole("dialog", { name: NR_LAUNCH.TITLE });
-    await named(box);
-    expect(launchButton()).toBeEnabled();
-    await userEvent.click(launchButton());
-    expect(await within(box).findByText(SCHEDULE_REFUSAL.TOO_FAR("a", "b", 24), { selector: "#name-run-sentence" })).toBeInTheDocument();
   });
 
   it("starts now, with no line and no start in the body, when the switch is off or the run is Interactive", async () => {

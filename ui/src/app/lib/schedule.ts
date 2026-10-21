@@ -32,15 +32,18 @@ export function browserZone(): string {
   }
 }
 
-/** The zones the picker offers: the browser's first, then UTC, then every other zone the browser knows. */
-export function zoneOptions(current: string = browserZone()): string[] {
+/**
+ * The zones the picker offers: the browser's first, then UTC, then every other zone the browser knows. A picked
+ * zone the browser does not list is added last; the pick is the select's value and never moves the list.
+ */
+export function zoneOptions(picked?: string): string[] {
   let known: string[] = [];
   try {
     known = (Intl as unknown as { supportedValuesOf?: (key: string) => string[] }).supportedValuesOf?.("timeZone") ?? [];
   } catch {
     known = [];
   }
-  return [...new Set([current, "UTC", ...known])];
+  return [...new Set([browserZone(), "UTC", ...known, ...(picked ? [picked] : [])])];
 }
 
 /** The picker as the person finds it: nothing typed, in the browser's zone. */
@@ -73,15 +76,21 @@ export function startInstant(choice: StartChoice): number | null {
 export type StartProblem = "missing" | "past" | "far";
 
 /**
- * Why a start is not one the server will take, or null when it looks fine. The latest start is 7 days less the
- * run's own wait, which only the server's answer (the preflight's max_wait_sec) knows: with no `waitSec` there is
- * no "far" check, and the create's own start_at_too_far sentence answers.
+ * The wait a scheduled start must leave before the 7-day cap, as the server reads it (scheduleLeadWaitSec in
+ * internal/api/run_schedule.go): the run type's default wait, never the run's own max_wait_sec. schedule.test.ts
+ * keeps these two equal to the Go constants.
  */
-export function startProblem(choice: StartChoice, now: number, waitSec?: number): StartProblem | null {
+export const SCHEDULE_LEAD_WAIT_SEC = { background: 24 * 60 * 60, interactive: 60 * 60 } as const;
+
+/**
+ * Why a start is not one the server will take, or null when it looks fine. Only an Autonomous (background) run
+ * can be scheduled, so the latest start is 7 days less a background run's lead wait.
+ */
+export function startProblem(choice: StartChoice, now: number): StartProblem | null {
   const at = startInstant(choice);
   if (at === null) return "missing";
   if (at <= now) return "past";
-  if (waitSec !== undefined && at - now > SCHEDULE_MAX_AHEAD_MS - waitSec * 1000) return "far";
+  if (at - now > SCHEDULE_MAX_AHEAD_MS - SCHEDULE_LEAD_WAIT_SEC.background * 1000) return "far";
   return null;
 }
 
@@ -115,9 +124,14 @@ export function whenText(iso: string | number, zone: string): string {
   return `${p("weekday")} ${p("day")} ${p("month")}, ${p("hour")}:${p("minute")} (${zone})`;
 }
 
-/** Today's date in the browser's own zone, as the date field's earliest choice. */
-export function todayDate(now: number = Date.now()): string {
-  const d = new Date(now);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+/** Today's date in `zone`, as the date field's earliest choice. An unknown zone reads as the browser's own. */
+export function todayDate(zone?: string, now: number = Date.now()): string {
+  let parts: Intl.DateTimeFormatPart[];
+  try {
+    parts = new Intl.DateTimeFormat("en-GB", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(now));
+  } catch {
+    return todayDate(undefined, now);
+  }
+  const p = (type: string) => parts.find((x) => x.type === type)?.value ?? "";
+  return `${p("year")}-${p("month")}-${p("day")}`;
 }

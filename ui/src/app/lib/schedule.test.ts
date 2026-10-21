@@ -3,8 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { scheduledRunsOn, SCHEDULE_MAX_AHEAD_MS, startInstant, startProblem, startWire, whenText, zoneOptions } from "./schedule";
+import { browserZone, scheduledRunsOn, SCHEDULE_LEAD_WAIT_SEC, SCHEDULE_MAX_AHEAD_MS, startInstant, startProblem, startWire, todayDate, whenText, zoneOptions } from "./schedule";
 
 const at = (date: string, time: string, zone: string) => ({ date, time, zone });
 const NOW = Date.UTC(2026, 9, 20, 14, 0);
@@ -40,28 +42,53 @@ describe("startProblem", () => {
     expect(startProblem(at("", "", "UTC"), NOW)).toBe("missing");
     expect(startProblem(at("2026-10-20", "14:00", "UTC"), NOW)).toBe("past");
     expect(startProblem(at("2026-10-20", "13:59", "UTC"), NOW)).toBe("past");
-    expect(startProblem(at("2026-10-27", "14:01", "UTC"), NOW, 0)).toBe("far");
-    expect(startProblem(at("2026-10-27", "14:00", "UTC"), NOW, 0)).toBeNull();
     expect(startProblem(at("2026-10-21", "02:00", "UTC"), NOW)).toBeNull();
     expect(SCHEDULE_MAX_AHEAD_MS).toBe(7 * 24 * 3600_000);
   });
 
-  it("keeps the run's own wait out of the 7 days, as the server answered it, and never guesses one", () => {
-    // 86400 s of wait: the latest start is 6 days out, 2026-10-26 14:00 UTC.
-    expect(startProblem(at("2026-10-26", "14:01", "UTC"), NOW, 86_400)).toBe("far");
-    expect(startProblem(at("2026-10-26", "14:00", "UTC"), NOW, 86_400)).toBeNull();
-    // An Interactive run's 3600 s leaves nearly the whole week.
-    expect(startProblem(at("2026-10-26", "14:01", "UTC"), NOW, 3600)).toBeNull();
-    expect(startProblem(at("2026-10-27", "13:01", "UTC"), NOW, 3600)).toBe("far");
-    // No answer yet: no far check at all, the create's start_at_too_far answers.
-    expect(startProblem(at("2026-12-01", "14:00", "UTC"), NOW)).toBeNull();
-    expect(startProblem(at("2026-12-01", "14:00", "UTC"), NOW, undefined)).toBeNull();
+  it("leaves a background run's 24-hour lead wait out of the 7 days, as the server does", () => {
+    // 7 days less 24 h from 2026-10-20 14:00 UTC is 2026-10-26 14:00 UTC.
+    expect(startProblem(at("2026-10-26", "14:00", "UTC"), NOW)).toBeNull();
+    expect(startProblem(at("2026-10-26", "14:01", "UTC"), NOW)).toBe("far");
+    expect(startProblem(at("2026-10-27", "14:00", "UTC"), NOW)).toBe("far");
   });
 
   it("judges the start in its own zone", () => {
     // 14:30 London is 13:30 UTC: already past at 14:00 UTC.
     expect(startProblem(at("2026-10-20", "14:30", "Europe/London"), NOW)).toBe("past");
     expect(startProblem(at("2026-10-20", "14:30", "America/New_York"), NOW)).toBeNull();
+  });
+});
+
+describe("the lead wait is the server's", () => {
+  const root = (() => {
+    let dir = resolve(process.cwd());
+    for (let i = 0; i < 8; i++) {
+      if (existsSync(join(dir, "go.mod"))) return dir;
+      dir = dirname(dir);
+    }
+    throw new Error("go.mod not found");
+  })();
+  const go = (file: string) => readFileSync(join(root, file), "utf8");
+  /** A Go constant written as a product of integers ("24 * 60 * 60"). */
+  const seconds = (src: string, name: string): number => {
+    const expr = new RegExp(`\\b${name}\\s*=\\s*([0-9 *]+)`).exec(src)?.[1] ?? "";
+    return expr.split("*").reduce((n, f) => n * Number(f.trim()), 1);
+  };
+
+  it("is the default wait of each run type in run_queue.go, and the cap its longest wait", () => {
+    const queue = go("internal/api/run_queue.go");
+    expect(SCHEDULE_LEAD_WAIT_SEC.background).toBe(seconds(queue, "queueBackgroundWaitSec"));
+    expect(SCHEDULE_LEAD_WAIT_SEC.interactive).toBe(seconds(queue, "queueInteractiveWaitSec"));
+    expect(SCHEDULE_MAX_AHEAD_MS).toBe(seconds(queue, "queueMaxWaitSec") * 1000);
+  });
+
+  it("is what run_schedule.go leaves, by run type, and is the cap less that wait, not the run's own max_wait_sec", () => {
+    const sched = go("internal/api/run_schedule.go");
+    const fn = /func scheduleLeadWaitSec\(interactive bool\) int \{[\s\S]*?\n\}/.exec(sched)?.[0] ?? "";
+    expect(fn).toContain("if interactive {\n\t\treturn queueInteractiveWaitSec\n\t}\n\treturn queueBackgroundWaitSec");
+    expect(sched).toContain("latest := now.Add(scheduleMaxAhead - time.Duration(waitSec)*time.Second)");
+    expect(sched).toContain("scheduleMaxAhead = queueMaxWaitSec * time.Second");
   });
 });
 
@@ -80,9 +107,32 @@ describe("whenText", () => {
 });
 
 describe("zoneOptions", () => {
-  it("offers the browser's zone first, then UTC, each once", () => {
-    const zones = zoneOptions("Europe/London");
-    expect(zones.slice(0, 2)).toEqual(["Europe/London", "UTC"]);
-    expect(new Set(zones).size).toBe(zones.length);
+  it("offers the browser's zone first, then UTC, each once, whichever zone is picked", () => {
+    for (const picked of [undefined, "Europe/London", "Pacific/Kiritimati"]) {
+      const zones = zoneOptions(picked);
+      expect(zones[0]).toBe(browserZone());
+      if (browserZone() !== "UTC") expect(zones[1]).toBe("UTC");
+      expect(new Set(zones).size).toBe(zones.length);
+      if (picked) expect(zones).toContain(picked);
+    }
+  });
+
+  it("keeps a picked zone the browser does not list, last, without moving the rest", () => {
+    const base = zoneOptions();
+    expect(zoneOptions("Mars/Olympus")).toEqual([...base, "Mars/Olympus"]);
+  });
+});
+
+describe("todayDate", () => {
+  it("is the date in the zone asked for, not the browser's", () => {
+    const now = Date.UTC(2026, 9, 20, 23, 30);
+    expect(todayDate("UTC", now)).toBe("2026-10-20");
+    expect(todayDate("Pacific/Kiritimati", now)).toBe("2026-10-21");
+    expect(todayDate("Pacific/Pago_Pago", now)).toBe("2026-10-20");
+    expect(todayDate("America/Los_Angeles", Date.UTC(2026, 9, 20, 5, 0))).toBe("2026-10-19");
+  });
+
+  it("reads an unknown zone as the browser's", () => {
+    expect(todayDate("Mars/Olympus", Date.UTC(2026, 9, 20, 12, 0))).toBe(todayDate(undefined, Date.UTC(2026, 9, 20, 12, 0)));
   });
 });

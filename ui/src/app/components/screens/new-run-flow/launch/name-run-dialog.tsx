@@ -122,8 +122,7 @@ function NameRunForm({ onOpenChange, onCreated, pending }: Pick<NameRunDialogPro
   }, [adoBusy, check]);
   const { status } = useShellSetupStatus();
   // A start later: its line, or the reason it can't launch yet. Nothing here when the run starts now.
-  const pre = checks.preflightIsCurrent ? (checks.preflightResult as ReviewPreflight | null) : null;
-  const start = launchStart(draft, scheduledRunsOn(status), Date.now(), pre?.runner_pool_slots?.max_wait_sec);
+  const start = launchStart(draft, scheduledRunsOn(status), Date.now());
   const startAt = start && !start.problem ? startInstant(start.choice) : null;
   const ownRows = useOwnTokenRows(status);
   const adoAccess = status?.unreachable ? undefined : (status?.scm_access as SCMAccessPAT | undefined);
@@ -142,6 +141,7 @@ function NameRunForm({ onOpenChange, onCreated, pending }: Pick<NameRunDialogPro
   };
   const create = useLaunchRun(identity, onCreated, refused, pending);
 
+  const pre = checks.preflightIsCurrent ? (checks.preflightResult as ReviewPreflight | null) : null;
   const answered = pre !== null;
   const checking = checks.preflighting || (!answered && checks.preflightError === null && !checks.preflightNotChecked);
   const sentence = create.refusal ?? (checking ? null : checks.preflightError);

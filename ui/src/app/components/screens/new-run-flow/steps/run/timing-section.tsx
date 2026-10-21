@@ -30,8 +30,17 @@ export function TimingSection({ schedule, onSchedule }: { schedule: StartChoice 
   const problem = later ? startProblem(schedule, Date.now()) : null;
   const at = later && !problem ? startInstant(schedule) : null;
   const zones = React.useMemo(() => zoneOptions(schedule?.zone), [schedule?.zone]);
-  const set = (patch: Partial<StartChoice>) => schedule && onSchedule({ ...schedule, ...patch });
-  const invalid = problem !== null;
+  // A problem is told once the person has typed in the picker (or came back to values already typed), not at the
+  // moment it opens empty: an alert nobody caused is read out over what they are doing.
+  const [touched, setTouched] = React.useState(false);
+  const told = problem !== null && (touched || !!schedule?.date || !!schedule?.time);
+  const set = (patch: Partial<StartChoice>) => {
+    setTouched(true);
+    if (schedule) onSchedule({ ...schedule, ...patch });
+  };
+  const helpId = `${labelId}-help`;
+  const errorId = `${labelId}-error`;
+  const describedBy = told ? `${errorId} ${helpId}` : helpId;
 
   return (
     <QuestionBlock labelId={labelId} label={NR_RUN.TIMING_LABEL}>
@@ -55,22 +64,22 @@ export function TimingSection({ schedule, onSchedule }: { schedule: StartChoice 
           <div className="grid gap-3 sm:grid-cols-[1fr_140px_1.3fr]">
             <div className="flex flex-col gap-2">
               <Label htmlFor="nr-start-date">{NR_RUN.START_DATE}</Label>
-              <Input id="nr-start-date" type="date" min={todayDate()} value={schedule.date} aria-invalid={invalid} onChange={(e) => set({ date: e.target.value })} />
+              <Input id="nr-start-date" type="date" min={todayDate(schedule.zone)} value={schedule.date} aria-invalid={told} aria-describedby={describedBy} onChange={(e) => set({ date: e.target.value })} />
             </div>
             <div className="flex flex-col gap-2">
               <Label htmlFor="nr-start-time">{NR_RUN.START_TIME}</Label>
-              <Input id="nr-start-time" type="time" value={schedule.time} aria-invalid={invalid} onChange={(e) => set({ time: e.target.value })} />
+              <Input id="nr-start-time" type="time" value={schedule.time} aria-invalid={told} aria-describedby={describedBy} onChange={(e) => set({ time: e.target.value })} />
             </div>
             <div className="flex flex-col gap-2">
               <Label htmlFor="nr-start-zone">{NR_RUN.START_ZONE}</Label>
-              <select id="nr-start-zone" className={SELECT_CLASS} value={schedule.zone} onChange={(e) => set({ zone: e.target.value })}>
+              <select id="nr-start-zone" className={SELECT_CLASS} value={schedule.zone} aria-describedby={helpId} onChange={(e) => set({ zone: e.target.value })}>
                 {zones.map((z) => <option key={z} value={z}>{z}</option>)}
               </select>
             </div>
           </div>
-          {problem && <p role="alert" className="text-sm text-danger">{PROBLEM_TEXT[problem]}</p>}
+          {told && problem && <p id={errorId} role="alert" className="text-sm text-danger">{PROBLEM_TEXT[problem]}</p>}
           {at !== null && <p role="status" className="text-sm"><strong>{NR_RUN.STARTS(whenText(at, schedule.zone))}</strong></p>}
-          <p className="text-xs text-muted-foreground">{NR_RUN.START_HELP}</p>
+          <p id={helpId} className="text-xs text-muted-foreground">{NR_RUN.START_HELP}</p>
         </div>
       )}
     </QuestionBlock>

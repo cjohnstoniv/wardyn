@@ -398,12 +398,12 @@ describe("rowPresentation — a scheduled run", () => {
 
   it("says Waiting for sign-in once due, amber, with the Sign in action", () => {
     const p = rowPresentation(run({ state: "QUEUED" as RunState, queue: q("owner_sign_in") }), false);
-    expect(p).toMatchObject({ hue: "amber", word: "Waiting for sign-in", action: "sign-in", needsYou: false });
+    expect(p).toMatchObject({ hue: "amber", word: "Waiting for sign-in", action: "sign-in", needsYou: true });
     expect(glyphKindFor(p.hue, p.word, "QUEUED")).toBe("need");
   });
 
   it("offers the Admin view no button on either", () => {
     expect(rowPresentation(run({ state: "QUEUED" as RunState, queue: q("scheduled") }), true)).toMatchObject({ word: "Scheduled", action: null });
-    expect(rowPresentation(run({ state: "QUEUED" as RunState, queue: q("owner_sign_in") }), true)).toMatchObject({ word: "Waiting for sign-in", action: null });
+    expect(rowPresentation(run({ state: "QUEUED" as RunState, queue: q("owner_sign_in") }), true)).toMatchObject({ word: "Waiting for sign-in", action: null, needsYou: false });
   });
 });

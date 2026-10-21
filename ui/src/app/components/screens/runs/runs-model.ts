@@ -152,7 +152,7 @@ export function rowPresentation(run: AgentRun, adminView: boolean): RowPresentat
       // due it can wait for the owner's sign-in, which the owner answers from the run page. The Admin view acts on neither.
       const wait = scheduledWait(run);
       if (wait === "scheduled") return { hue: "blue", word: SCHEDULED_RUN.WORD, action: adminView ? null : "cancel", needsYou: false };
-      if (wait === "sign_in") return { hue: "amber", word: RUNS_ROW_WORD.WAITING_SIGN_IN, action: adminView ? null : "sign-in", needsYou: false };
+      if (wait === "sign_in") return { hue: "amber", word: RUNS_ROW_WORD.WAITING_SIGN_IN, action: adminView ? null : "sign-in", needsYou: !adminView };
       // Waiting for a slot in a capped pool: the same word the run page's badge says, and the place in line the
       // Launched screen tells the person.
       return {
