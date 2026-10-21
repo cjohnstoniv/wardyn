@@ -216,6 +216,10 @@ type RunPolicySpec struct {
 	// A choice only narrows: the create door refuses a run whose walls it cannot meet, a looser one
 	// included, so a policy never widens what Wardyn allows.
 	HarnessInnerWalls *HarnessInnerWalls `json:"harness_inner_walls,omitempty"`
+	// Recording is how much of a run under this policy is recorded (RecordingLevel); empty chooses
+	// nothing, and the organisation's level applies (types.RecordingChoice). A ceiling's level is a
+	// minimum: a policy under it may record more, never less.
+	Recording RecordingLevel `json:"recording,omitempty"`
 }
 
 // HarnessInnerWalls is a harness's own walls inside the sandbox. On a policy each field is a choice

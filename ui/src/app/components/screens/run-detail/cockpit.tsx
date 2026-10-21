@@ -29,6 +29,7 @@ import { viewerBlockedOnDecision } from "./viewer-blocked";
 import { RunCanvas } from "./canvas";
 import { RunStatusStrip } from "./status-strip";
 import { RunFailureBlock } from "./failure-block";
+import { LocalModelsCard } from "./local-models-card";
 import { LoginSandboxNote } from "./login-sandbox-note";
 import { TerminalPane } from "./terminal-notice";
 import type { WidgetContext } from "./widget-registry";
@@ -187,6 +188,7 @@ export function Cockpit({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <RunStatusStrip ctx={ctx} />
+      <LocalModelsCard run={run} audit={audit} />
       <div className="flex min-h-0 flex-1 flex-col">
         <RunCanvas ctx={ctx} />
       </div>

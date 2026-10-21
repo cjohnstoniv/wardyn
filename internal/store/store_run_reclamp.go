@@ -35,11 +35,29 @@ type RunLimitsReclamper interface {
 
 var _ RunLimitsReclamper = PG{}
 
+// UnprofiledLiveRunLister is the Wardyn boundary's pass of the sweep: the live runs that captured no
+// governance profile (an operator's, a super admin's, a break-glass or otherwise ungoverned run), which
+// no profile re-clamp reaches but the boundary's maximum end still binds. Optional like
+// RunLimitsReclamper; a store without it holds only profiled runs to the boundary.
+type UnprofiledLiveRunLister interface {
+	// ListUnprofiledLiveRuns is ListProfiledLiveRuns for the runs with no governance profile.
+	ListUnprofiledLiveRuns(ctx context.Context) ([]types.AgentRun, error)
+}
+
+var _ UnprofiledLiveRunLister = PG{}
+
 // ListProfiledLiveRuns — see RunLimitsReclamper.
 func (s PG) ListProfiledLiveRuns(ctx context.Context) ([]types.AgentRun, error) {
 	q := `SELECT ` + runCols + ` FROM agent_runs
 		WHERE governance_profile_id IS NOT NULL AND (lost_at IS NULL OR lost_reason <> $2) AND state = ANY($1)`
 	return collect(ctx, s.Pool, "list", "profiled live runs", q, []any{slotHoldingStateNames(), string(types.LostEnded)}, scanRun)
+}
+
+// ListUnprofiledLiveRuns — see UnprofiledLiveRunLister.
+func (s PG) ListUnprofiledLiveRuns(ctx context.Context) ([]types.AgentRun, error) {
+	q := `SELECT ` + runCols + ` FROM agent_runs
+		WHERE governance_profile_id IS NULL AND (lost_at IS NULL OR lost_reason <> $2) AND state = ANY($1)`
+	return collect(ctx, s.Pool, "list", "unprofiled live runs", q, []any{slotHoldingStateNames(), string(types.LostEnded)}, scanRun)
 }
 
 // ReclampRunLimits — see RunLimitsReclamper. The compare on the limits read is

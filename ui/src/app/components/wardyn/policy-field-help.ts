@@ -198,4 +198,11 @@ export const FIELD_HELP = {
     doc: "harness_inner_walls--harnessinnerwalls",
     snippet: { approvals: "wardyn" },
   },
+  recording: {
+    what: "How much of a run is recorded. A ceiling's level is a minimum: a policy under it may record more, never less. Keystrokes are never recorded.",
+    values:
+      "off | terminal | screen_actions (a desktop's screen and an action log). Omitted: the organisation's level, terminal unless it sets one.",
+    doc: "recording",
+    snippet: "terminal",
+  },
 } satisfies Record<keyof RunPolicySpec, FieldHelp>;

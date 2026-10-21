@@ -11,7 +11,7 @@ import type { AutonomyLevel, RunLimits } from "../api/governance";
 import type { PolicyRef } from "../api/health";
 import type { PolicyContact } from "./site";
 import type { Experience, RunOverrides } from "./new-run-contract";
-import type { HarnessInnerWalls, RunPolicySpec } from "./policy";
+import type { HarnessInnerWalls, RecordingLevel, RunPolicySpec } from "./policy";
 import type { RunnerPoolSelection } from "./runner-pools";
 
 // The backend emits dotted agent ids like "claude-code" / "codex-cli".
@@ -63,7 +63,7 @@ export type RunPlacement = "" | "local" | "remote";
 export type RunEvidenceSource = "" | "substrate" | "runner_asserted";
 
 /** Go: types.RunNotRecorded. */
-export type RunNotRecorded = "org_off" | "runner_declined";
+export type RunNotRecorded = "org_off" | "runner_declined" | "policy_off";
 
 export type RunState =
   // QUEUED: waiting for a slot in a capped runner pool; it holds no slot, identity or sandbox.
@@ -142,6 +142,9 @@ export interface AgentRun {
   // "org_off" (the organisation keeps none) or "runner_declined" (its runner does not record). Absent:
   // recorded, or a run from before 0.9.3.
   not_recorded?: RunNotRecorded;
+  // The level the run is recorded at (Go: AgentRun.RecordingLevel), resolved with not_recorded.
+  // Absent: terminal, or a run dispatched before levels.
+  recording_level?: RecordingLevel;
   // The runner pool the run was admitted into, and how it was chosen (Go:
   // AgentRun.RunnerPool*), written once at create. A pool is a label, never
   // admission: the run goes to the exact runner in runner_id (self-hosted) or
@@ -337,6 +340,8 @@ export interface AgentRun {
   // (admin token, local mode), not a person. A super admin may still open it
   // interactively; on a person's run only the owner may. Absent when false.
   operator_owned?: boolean;
+  // A run the admin token launched past the org walls while they were on (break-glass).
+  break_glass?: boolean;
   // internal/types/attention.go's RunAttention (#1197) — what this LIVE
   // run is waiting on and who (in the caller's own console view) can clear
   // it, projected only when the caller's GET /runs (or GET /me/attention)

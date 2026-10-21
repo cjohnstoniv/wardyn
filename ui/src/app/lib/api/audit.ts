@@ -204,6 +204,14 @@ export function createRequestFromAudit(events: AuditEvent[]): CreateRequestFromA
   };
 }
 
+// The kind of the model provider the run was launched under, off its run.create row's
+// model_provider snapshot (the run row freezes the id alone). Absent for a run under no provider.
+export function modelProviderKindFromAudit(events: AuditEvent[]): string | undefined {
+  const mp = (events.find((x) => x.action === "run.create")?.data as { model_provider?: { kind?: unknown } } | undefined)
+    ?.model_provider;
+  return typeof mp?.kind === "string" ? mp.kind : undefined;
+}
+
 // Which audit action is the ROOT cause of a FAILED run, in the order a run
 // hits them. Read as: the sandbox image, then the image's own selftest. Any
 // other failing action stays "unknown" on purpose — run.dispatch/failure alone

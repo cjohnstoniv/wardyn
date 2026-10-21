@@ -95,7 +95,7 @@ func warnUnderivedPointers(ctx context.Context, s secretstore.Store) {
 	n, ref, err := ps.UnderivedPointers(ctx)
 	if err != nil {
 		// A diagnostic only: the boot goes on, but a scan that cannot run leaves a trace.
-		slog.DebugContext(ctx, "wardynd: could not scan for secret pointer rows the external store does not derive", slog.Any("err", err))
+		slog.WarnContext(ctx, "wardynd: could not scan for secret pointer rows the external store does not derive", slog.Any("err", err))
 		return
 	}
 	if n == 0 {

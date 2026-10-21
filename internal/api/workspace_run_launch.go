@@ -623,7 +623,10 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	run.Interactive = true
 	run.ModelProviderID = mp.provider.ID
 	// The session's policy, built one function over (recordSessionPolicy).
-	policy := s.recordSessionPolicy(ws, cc, confined, ceiling.Spec.AllowedDomains)
+	policy, merr := boundaryRecordPolicy(ceiling, s.recordSessionPolicy(ws, cc, confined, ceiling.Spec.AllowedDomains))
+	if merr != nil {
+		return types.AgentRun{}, false, abort(merr)
+	}
 	run.AutoStopAfterSec = policy.AutoStopAfterSec // reaper reads the run row
 	cloneURLs, ephemeralDirs, werr := wireWorkspaceSource(&run, &policy, ws)
 	if werr != nil {

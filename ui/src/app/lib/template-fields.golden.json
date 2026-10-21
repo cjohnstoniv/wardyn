@@ -392,6 +392,14 @@
       "section": "run_wide"
     },
     {
+      "name": "recording",
+      "part": "access_rules",
+      "omitted": "unset_optional",
+      "empty": "same_as_omitted",
+      "meaning": "The organisation's recording level applies. Keystrokes are never recorded.",
+      "section": "run_wide"
+    },
+    {
       "name": "git_push_any_branch",
       "part": "access_rules",
       "omitted": "baseline",
