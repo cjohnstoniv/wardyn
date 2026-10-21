@@ -56,6 +56,10 @@ literal_dates() {
 }
 
 declare -A ALLOWLIST=(
+  ["internal/api/uigateway_record_test.go"]=1 # injected clock only: srv.cfg.Now starts here and steps a second per call, never compared to the wall clock
+  ["internal/recording/rfb_test.go"]=3 # injected clock only: the recorder's clock starts here and the test advances it, never compared to the wall clock
+  ["ui/e2e/recording-level.spec.ts"]=4 # passthrough only: stubbed audit rows and a recording's started_at, rendered as given, never compared to the clock
+  ["ui/src/app/components/screens/run-detail/recording-tab.level.test.tsx"]=3 # passthrough only: audit rows' time and a gap's start/end, never compared to the clock
   ["cmd/wardyn-aws-sso/main_test.go"]=2
   ["cmd/wardyn/commands_test.go"]=6
   ["cmd/wardyn/runner_limits_test.go"]=2 # display only: runner list prints LastSeenAt as given, never compared to the clock
