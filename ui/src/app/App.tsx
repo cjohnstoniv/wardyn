@@ -529,7 +529,9 @@ export default function App() {
     const reprobe = (fromOtherTab: boolean) => {
       if (signingOutRef.current) return;
       if (!fromOtherTab && signedOutHereRef.current) return;
-      if (probingRef.current) return;
+      // Another tab's announcement always asks again: a probe already out was sent before that sign-in and
+      // would answer 401 (#3368). Probes are idempotent, so two in flight are harmless.
+      if (probingRef.current && !fromOtherTab) return;
       probingRef.current = true;
       void probeAuthWithReason().then(({ probe, transient }) => {
         probingRef.current = false;

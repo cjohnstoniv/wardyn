@@ -94,12 +94,19 @@ let heldLogout: Promise<Response> | null = null;
 // Set to hold the shell's mount GET /me open (only the first one), so the
 // identity is still unresolved when the session lapses.
 let heldMe: Promise<Response> | null = null;
+// Set to hold the next session probe (GET /runs?limit=1) open.
+let heldProbe: Promise<Response> | null = null;
 const fetchMock = vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
   const u = String(url);
   calls.push(`${init?.method ?? "GET"} ${u}`);
   if (u.includes("/healthz")) return Promise.resolve(json(200, { status: "ok", sso: daemon.sso, token_login: true }));
   if (u.includes("/readyz")) return Promise.resolve(json(200, { status: "ok" }));
   if (heldLogout && u.includes("/auth/logout")) return heldLogout;
+  if (heldProbe && u.includes("/runs?limit=1")) {
+    const held = heldProbe;
+    heldProbe = null;
+    return held;
+  }
   if (heldMe && u.endsWith("/api/v1/me")) {
     const held = heldMe;
     heldMe = null;
@@ -125,6 +132,7 @@ beforeEach(() => {
   mockState.claim = true;
   heldLogout = null;
   heldMe = null;
+  heldProbe = null;
   calls.length = 0;
   sessionStorage.setItem("wardyn_admin_token", "good-token");
   vi.stubGlobal("fetch", fetchMock);
@@ -715,6 +723,28 @@ describe("App — the other tabs of this browser (DR-0020)", () => {
     daemon.dead = false;
     await fromAnotherTab("changed");
     expect(await screen.findByLabelText("Note")).toBeInTheDocument();
+  });
+
+  // #3368: a focus probe that is already in flight when another tab announces its sign-in was sent before that
+  // sign-in, so it answers 401. The announcement still has to start its own probe.
+  it("another tab's sign-in is heard while a focus probe is in flight", async () => {
+    sessionStorage.clear();
+    daemon.dead = true;
+    render(
+      <MemoryRouter initialEntries={["/runs"]}>
+        <App />
+      </MemoryRouter>,
+    );
+    await screen.findByText("Admin token", { exact: true });
+    let answerStale!: (r: Response) => void;
+    heldProbe = new Promise<Response>((resolve) => (answerStale = resolve));
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    daemon.dead = false;
+    await fromAnotherTab("changed");
+    expect(await screen.findByLabelText("Note")).toBeInTheDocument();
+    answerStale(json(401, { error: "unauthorized" }));
   });
 
   // #2489: the tab that signed out deliberately is a signed-out tab like any other once it shows the gate.
