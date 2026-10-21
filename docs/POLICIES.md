@@ -55,6 +55,7 @@
 | `workspace_repos` | `[]WorkspaceRepo` | `[]` | Additional git repos cloned into the run — the clone counterpart of `workspace_mounts`. |
 | `ui_apps` | `[]UIApp` | `[]` | In-sandbox loopback HTTP apps the UI gateway may relay to a browser. Operator-authored, never agent-chosen, and never a command string. |
 | `tool_rules` | `[]ToolRule` | `[]` | Per-tool effects for an autonomous run's tool calls: `allow`, `hold` or `deny`. A `hold` or `deny` rule routes a background Claude Code run through the tool gate. Operator-authored, evaluated proxy-side. |
+| `desktop` | `DesktopControls` | omitted = paste in and upload allowed, copy out and download blocked | The desktop's clipboard and file-transfer rules by direction. See [below](#desktop--desktopcontrols). |
 | `harness_inner_walls` | `HarnessInnerWalls` | omitted = what the harness and lane give | The harness's own walls inside Wardyn's: its `sandbox_mode` and where its `approvals` happen. Only adds walls; a looser choice refuses the run. See [below](#harness_inner_walls--harnessinnerwalls). |
 | `git_push_any_branch` | `bool` | `false` | Turns OFF branch-namespace confinement (default **ON**) for this run's brokered pushes on every brokered lane; operator-authored, never agent-settable. See [`git_push_any_branch`](#git_push_any_branch). |
 | `push_rules` | `PushRulesSpec` | omitted = **no content rules** | Content rules for this run's brokered git pushes — WHAT a push may touch, alongside `git_push_any_branch`'s WHERE. Enforced on every brokered git lane, and on the Azure DevOps REST door, before a push is forwarded: see ["`push_rules` — `PushRulesSpec`"](#push_rules--pushrulesspec) below. |
@@ -880,6 +881,26 @@ What the check does and does not settle:
 | `name` | `string` | — (required) | Lower-case slug (`[a-z0-9-]`, 1–32 chars, alphanumeric at both ends), unique within the policy. It reaches a filesystem path (`/usr/local/bin/wardyn-ui-<name>`) and a URL query, so the shape is enforced at write time rather than sanitised later. |
 | `port` | `int` | — (required) | The port the app listens on **inside** the sandbox, on `127.0.0.1`. Unique within the policy. The sandbox has no other reachable address, and the relay dials nothing else. |
 | `path` | `string` | `/` | Landing path after the gateway's ticket handoff. Must be an absolute same-origin path — a scheme, a host, a `//` prefix or a `..` is rejected, since that redirect would otherwise leave the UI origin. |
+
+## `desktop` — `DesktopControls`
+
+- What may cross a desktop's edge, one rule per direction. Each is `allowed` or `blocked`; an omitted field keeps its default.
+- The clipboard rules are enforced at the UI gateway's relay, outside the sandbox: it drops a blocked RFB cut-text message and audits every one as `ui.clipboard.transfer` by direction, size and SHA-256, never by content.
+- The file rules are enforced at the run's Files panel endpoints, which move files to and from `~/Transfers` in the desktop.
+- A member's run can only block more than its ceiling, the defaults included: to let members copy out, the ceiling has to allow it.
+- What it does not stop: what the desktop shows on screen, and what a UI app serves over HTTP.
+- The clipboard rules bind the relay of the app named `novnc` only. A member may declare the same desktop server
+  under another app name, so a ceiling that blocks copy out should also pin `ui_apps` to the desktop app. An SSH
+  port forward to the desktop's VNC port is outside the relay.
+- The desktop page comes from the sandbox, so these rules stop ordinary copy and paste; they are not a boundary against
+  a run built to get data out.
+
+| Field | Type | Default | What it does |
+|---|---|---|---|
+| `paste_in` | `string` | `allowed` | The browser's clipboard sent into the desktop (RFB `ClientCutText`). |
+| `copy_out` | `string` | `blocked` | The desktop's clipboard sent to the browser (RFB `ServerCutText`). |
+| `upload` | `string` | `allowed` | Files sent from the Files panel into `~/Transfers`. |
+| `download` | `string` | `blocked` | Files fetched from `~/Transfers` through the Files panel. |
 
 
 ## `tool_rules` — `[]ToolRule`

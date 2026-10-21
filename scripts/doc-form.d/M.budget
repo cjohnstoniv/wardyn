@@ -60,7 +60,12 @@ docs/SSH.md=6703 share=35
 # docs/UI-SANDBOXES.md 5810 = ours 5768 + theirs 5773 - base 5731 at the 0.10 W4c merge of FEAT-1APP 20b62c676 onto the train.
 # docs/UI-SANDBOXES.md 5760 adds 29 over 5731 (APP-FU #3391): the application server is refused at create under deny_ui_apps, and only a shell startup command waits for its port.
 # docs/UI-SANDBOXES.md 5839 = ours 5810 + theirs 5760 - base 5731 at the 0.10 W4c merge of APP-FU 857bd637f onto the train.
-docs/UI-SANDBOXES.md=5839 share=35
+# docs/UI-SANDBOXES.md 5814 adds 161 (0.10 CTL-A): the desktop clipboard section and the ui.clipboard row (#2967).
+# docs/UI-SANDBOXES.md 5882 adds 68 (0.10 CTL-A r2): the desktop is the novnc app, the hold, the not-RFB close (#2967).
+# docs/UI-SANDBOXES.md 5925 adds 43 (0.10 CTL-A r3): only the novnc app is filtered; pin ui_apps; SSH forwards are outside (#2967).
+# docs/UI-SANDBOXES.md 5953 adds 28 (0.10 CTL-A r3): the desktop page comes from the sandbox, not a boundary against a run built to get data out.
+# docs/UI-SANDBOXES.md 6139 = ours 5839 + theirs 5953 - base 5653 at the 0.10 W4c merge of CTL-A 99d68a80a onto the train.
+docs/UI-SANDBOXES.md=6139 share=35
 # docs/NEW-RUN.md 2905 measured (0.9 final docs pass): the New run guide.
 # docs/NEW-RUN.md 2914 adds 9 over 2905: 0.9 final docs pass 2, measured: the runner-limit wait reason and the runner pools links.
 # docs/NEW-RUN.md 2915 adds 1 over 2914: docs fix: run --file overlay; a policy's own * rule stays in force on a routed run, measured.

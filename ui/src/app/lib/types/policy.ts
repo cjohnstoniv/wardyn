@@ -313,6 +313,20 @@ export interface RunPolicySpec {
   // The harness's own walls inside Wardyn's (mirrors Go's RunPolicySpec.HarnessInnerWalls, #2822):
   // a choice per axis that only adds walls; the create door refuses a run it would loosen.
   harness_inner_walls?: HarnessInnerWalls;
+  // The desktop's clipboard and file-transfer rules by direction (mirrors Go's
+  // RunPolicySpec.Desktop, #2967). Omitted, or an omitted direction, is the default:
+  // paste in and upload allowed, copy out and download blocked.
+  desktop?: DesktopControls;
+}
+
+export type TransferRule = "allowed" | "blocked";
+
+// Mirrors Go's types.DesktopControls.
+export interface DesktopControls {
+  paste_in?: TransferRule;
+  copy_out?: TransferRule;
+  upload?: TransferRule;
+  download?: TransferRule;
 }
 
 // Mirrors Go's types.HarnessInnerWalls. On a policy each field is a choice; on a run or a Review

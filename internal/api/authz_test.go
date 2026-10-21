@@ -826,6 +826,10 @@ var routeMatrix = map[string]classifiedRoute{
 	// A waiting sign-in's device code: approving it binds the approver's
 	// cloud identity to the owner's stored session, so the owner only.
 	"GET /api/v1/runs/{id}/sign-in": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
+	// The run's Files panel moves files into and out of the owner's sandbox: entry, like a ticket.
+	"GET /api/v1/runs/{id}/desktop/files":        {class: classOwner, entity: entityRun, ownerTier: tierEntry},
+	"PUT /api/v1/runs/{id}/desktop/files/{name}": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
+	"GET /api/v1/runs/{id}/desktop/files/{name}": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
 	// Moving a run's end keeps a sandbox and its credentials alive: a write,
 	// so not the security tier's inspect-or-stop.
 	"PATCH /api/v1/runs/{id}": {class: classOwner, entity: entityRun, ownerTier: tierSuper},
@@ -1684,9 +1688,10 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// /workspaces/{id}/branches; 34 since 0.9 added GET
 		// /runs/{id}/launch-intent; 35 since 0.9.3 added GET
 		// /runs/{id}/containment; 38 since #2963 added POST
-		// /approvals/{id}/take-over, hand-back and decline.
-		if probed != 38 {
-			t.Errorf("probed %d classOwner routes, want 38 — a route that left classOwner takes its tier "+
+		// /approvals/{id}/take-over, hand-back and decline; 41 since 0.10
+		// added the three /runs/{id}/desktop/files routes.
+		if probed != 41 {
+			t.Errorf("probed %d classOwner routes, want 41 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})

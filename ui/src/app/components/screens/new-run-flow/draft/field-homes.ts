@@ -24,7 +24,7 @@ const policy = (names: string) => names.split(" ").map((n) => `inline_policy.${n
 
 const POLICY_REVIEW = "allowed_domains denied_domains allow_all_egress first_use_approval first_use_hold_seconds max_holds " +
   "allowed_methods eligible_grants tool_rules harness_inner_walls git_push_any_branch push_rules azure_devops_capabilities github_capabilities";
-const POLICY_DOCUMENT = "auto_stop_after_sec ui_apps llm_inspection min_confinement_class workspace_mounts workspace_repos resources";
+const POLICY_DOCUMENT = "auto_stop_after_sec ui_apps desktop llm_inspection min_confinement_class workspace_mounts workspace_repos resources";
 
 /**
  * Policy rows go to Review, never to Tools and access: that step writes only
@@ -61,7 +61,7 @@ export const REVIEW_GROUP_OF_FIELD: Record<string, ReviewGroupId> = {
   ...groups("where", "machine_kind runner_pool_id confinement_class placement runner_id image allowed_image devcontainer_repo devcontainer_ref " +
     policy("min_confinement_class")),
   ...groups("work", "workspaces drive drives start_folder no_repositories_or_drives repo workspace_id " + policy("workspace_mounts workspace_repos")),
-  ...groups("tools", "tools startup components model_provider integration_id seed_auto_tools tool_approvals"),
+  ...groups("tools", "tools startup components model_provider integration_id seed_auto_tools tool_approvals " + policy("desktop")),
   ...groups("access", "overrides policy_id inline_policy " + policy(`${POLICY_REVIEW} llm_inspection`)),
   ...groups("limits", "resources ends_after_sec no_end " + policy("resources auto_stop_after_sec")),
 };

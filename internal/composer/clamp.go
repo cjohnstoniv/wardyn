@@ -85,6 +85,7 @@ func clamp(proposed, ceiling types.RunPolicySpec, limits types.GovernanceLimits,
 
 	warns = clampOperatorSwitches(&out, ceiling, warns)
 	warns = clampInnerWalls(&out, ceiling, warns)
+	warns = clampDesktop(&out, ceiling, warns)
 
 	// Per-tool effects: a proposal may narrow the operator's rules, never widen.
 	warns = clampToolRules(&out, ceiling, warns)
@@ -347,6 +348,10 @@ func cloneProposal(s types.RunPolicySpec) types.RunPolicySpec {
 	if s.HarnessInnerWalls != nil {
 		w := *s.HarnessInnerWalls
 		out.HarnessInnerWalls = &w
+	}
+	if s.Desktop != nil {
+		d := *s.Desktop
+		out.Desktop = &d
 	}
 	if s.PushRules != nil {
 		pr := *s.PushRules
@@ -877,6 +882,17 @@ func clampInnerWalls(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warn
 		out.HarnessInnerWalls = &p
 	}
 	return warns
+}
+
+// clampDesktop blocks every desktop direction the ceiling blocks, its defaults included: a member may
+// block more, never open what the operator keeps shut. A proposal already within is left as written.
+func clampDesktop(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns []string) []string {
+	if leqDesktop(out.Desktop, ceiling.Desktop) {
+		return warns
+	}
+	m := out.Desktop.Meet(ceiling.Desktop)
+	out.Desktop = &m
+	return append(warns, "desktop narrowed: operator policy blocks a direction the proposal allowed")
 }
 
 func clampInnerWall(field, proposed, ceiling string, warns []string) (string, []string) {

@@ -33,6 +33,7 @@ var isOperatorCensus = map[string]int{
 	"helpers.go:ownsRunOrSuperAdmin":      1,
 	"helpers.go:workspaceReadTierFor":     1,
 	"attach_ticket.go:handleAttachTicket": 1, // the ticket's reach stamp; its reach is admitRunEntry's
+	"desktop_files.go:desktopRun":         1, // the entry rule (mayEnterRun) and the deny_ui_apps skip, as the ticket's
 	"attach.go:refuseAttachEntry":         1,
 	"run_entry.go:getRunForEntry":         1,
 	"sshkeys.go:handleAddSSHKey":          1,

@@ -34,6 +34,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/livebus"
 	"github.com/cjohnstoniv/wardyn/internal/maskmanifest"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
+	"github.com/cjohnstoniv/wardyn/internal/rfbfilter"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
@@ -889,8 +890,12 @@ type Server struct {
 	// ready to use.
 	uiConnsMu sync.Mutex
 	uiConns   map[uuid.UUID]int
-	uiReadyMu sync.Mutex
-	uiReady   map[string]time.Time
+	// uiDesktopSink, when set, gets each desktop socket's bytes AFTER the clipboard filter, in
+	// both directions (rfbfilter.Sink): the tee point for a recorder, so a dropped cut text is
+	// never recorded. Nil (the default) tees nothing. It returns nil to skip a session.
+	uiDesktopSink func(uiSession) rfbfilter.Sink
+	uiReadyMu     sync.Mutex
+	uiReady       map[string]time.Time
 	// uiReassert debounces the relay's REQUEST-path authorization re-check, one
 	// entry per minted session (uiReassertKey) — see uiReassertRelay.
 	uiReassertMu sync.Mutex

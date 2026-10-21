@@ -176,6 +176,10 @@ func (m *meeter) validatePresence(ov Overlay) {
 	if w := c.HarnessInnerWalls; w != nil && !validInnerWalls(*w) {
 		m.fail(ReasonOverlayInvalid, "harness_inner_walls", "sandbox_mode %q or approvals %q is not a value a policy may choose", w.SandboxMode, w.Approvals)
 	}
+	if d := c.Desktop; d != nil && !(types.ValidTransferRule(d.PasteIn) && types.ValidTransferRule(d.CopyOut) &&
+		types.ValidTransferRule(d.Upload) && types.ValidTransferRule(d.Download)) {
+		m.fail(ReasonOverlayInvalid, "desktop", "each direction is allowed or blocked")
+	}
 	m.validateNonNegative(ov)
 	if d := ov.Limits.DenyPlacements; d != nil {
 		for _, p := range *d {

@@ -21,6 +21,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `SELECT, INSERT, UPDATE, DELETE` on `cli_sign_ins` (migration `0199_cli_sign_in`, which also adds `kind` and
   `cli_session_id` to `api_tokens`). Without it every API token read fails, because a token's liveness now reads
   `cli_sessions`.
+- **Copying out of a desktop is now blocked by default.** The UI gateway's relay filters the clipboard of the
+  `novnc` desktop app: paste into the desktop stays allowed, copy out of it is dropped and audited as
+  `ui.clipboard.transfer`. Until now both directions synced unfiltered. A `novnc` socket that does not speak RFB is closed.
+  Other apps are unchanged. To keep copy out, set `desktop.copy_out` to `allowed` on the policy, and on the ceiling of any
+  member who should have it ([`desktop`](docs/POLICIES.md#desktop--desktopcontrols)).
 
 ### Added
 

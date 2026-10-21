@@ -213,7 +213,10 @@
 # docs/sdk.md 19731 adds 30 over 19701 (APP-FU #3391): the run_application_ui_apps_denied row.
 # docs/sdk.md 19738 adds 7 over 19731 (APP-FU #3391 review): the policy-preview door and the allowed-apps cause on the run_application_ui_apps_denied row, measured.
 # docs/sdk.md 20434 = ours 20397 + theirs 19738 - base 19701 at the 0.10 W4c merge of APP-FU 857bd637f onto the train.
-docs/sdk.md=20434 share=21
+# docs/sdk.md 19743 adds 61 (0.10 CTL-A): the desktop_transfer reasons (#2967).
+# docs/sdk.md 19772 adds 29 (0.10 CTL-A r3): desktop_rules_unreadable, the desktop's refusal when its rules cannot be read (#2967).
+# docs/sdk.md 20524 = ours 20434 + theirs 19772 - base 19682 at the 0.10 W4c merge of CTL-A 99d68a80a onto the train.
+docs/sdk.md=20524 share=21
 # docs/sdk.md 18691 adds 28 over 18663, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.

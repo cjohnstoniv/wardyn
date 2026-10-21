@@ -113,6 +113,8 @@ func TestPreviousProxyRefusesWhatItCannotHonour(t *testing.T) {
 		AccountID: "111122223333", RoleName: "Developer", Hosts: []string{"bedrock-runtime.us-east-1.amazonaws.com"}}
 	innerWalls := base
 	innerWalls.Policy.HarnessInnerWalls = &types.HarnessInnerWalls{Approvals: types.InnerApprovalsWardyn}
+	desktop := base
+	desktop.Policy.Desktop = &types.DesktopControls{CopyOut: types.TransferAllowed}
 	portRuleOn := base
 	portRuleOn.PortRule = proxy.PortRuleOn
 	portRuleDryRun := base
@@ -137,6 +139,8 @@ func TestPreviousProxyRefusesWhatItCannotHonour(t *testing.T) {
 		{"aws sigv4 re-signing on", sigv4On, "aws_sigv4"},
 		// Only a run whose policy chooses inner walls carries the key, and the previous proxy refuses it.
 		{"harness inner walls chosen by the policy", innerWalls, "policy.harness_inner_walls"},
+		// Likewise desktop rules: only a policy that sets one carries the key.
+		{"desktop rules chosen by the policy", desktop, "policy.desktop"},
 		// wardynd sends the port rule's "off" as no key (cmd/wardynd egressPortRule).
 		{"port rule off, sent as no key", base, ""},
 		{"port rule on", portRuleOn, "port_rule"},
