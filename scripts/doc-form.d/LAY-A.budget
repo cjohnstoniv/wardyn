@@ -7,4 +7,5 @@
 # docs/operations/boundary.md 1098 measured: the fresh-install seed
 # docs/operations/boundary.md 1054 measured: the redeem door names its audited unread refusals
 # docs/operations/boundary.md 1105 measured: merged with the redeem door lines
-docs/operations/boundary.md=1105 share=35
+# docs/operations/boundary.md 1121 measured: withheld_grants lists stored rows, broker lanes their own list
+docs/operations/boundary.md=1121 share=35

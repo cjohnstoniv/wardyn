@@ -26,6 +26,9 @@ func dispatchResidentSSOUnder(t *testing.T, b types.Boundary) (runner.SandboxSpe
 	t.Helper()
 	srv := providerRunFixture(t, types.SiteConfig{ModelProviders: providerBlock(awsSSOTestProvider())}, &capStore{}, nil)
 	srv.cfg.Secrets = &memSecrets{m: map[string][]byte{}, owned: map[string]map[string][]byte{}}
+	// The re-signer switch on: it needs the proxy-injected session (awsSigV4Hosts), so a resident
+	// session never has a re-signer to withdraw.
+	srv.cfg.AWSSigV4AtProxy = true
 	blob := createRenewalBlob()
 	blob.ExpiresAt = time.Now().Add(2 * time.Hour)
 	storeSSOBlobFor(t, srv, createRenewalOwner, blob)
@@ -76,6 +79,9 @@ func TestBoundaryResidentSSOGrant(t *testing.T) {
 			spec, row := dispatchResidentSSOUnder(t, tc.b)
 			if staged := spec.SecretEnv[awsSSOConfigEnvVar] != "" || spec.Env[awsSSOConfigEnvVar] != ""; staged == tc.withheld {
 				t.Fatalf("captured session staged = %v, want %v", staged, !tc.withheld)
+			}
+			if spec.ProxyConfig.AWSSigV4 != nil {
+				t.Errorf("aws_sigv4 = %+v: a resident session's run has a re-signer", *spec.ProxyConfig.AWSSigV4)
 			}
 			if !tc.withheld {
 				return
