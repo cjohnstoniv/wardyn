@@ -382,6 +382,16 @@ func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, s
 	return runnerRuntimeWith(ctx, identity, stateDir, sub, ref, relay, capacity, extra)
 }
 
+// runnerKeystore is the keystore the runner's resident credentials live in: the caller's, else this
+// runner's own.
+func runnerKeystore(ks runneragent.Keystore, runnerID string) runneragent.Keystore {
+	if ks.Set != nil {
+		return ks
+	}
+	store := keystore.For(runnerID)
+	return runneragent.Keystore{Set: store.Set, Get: store.Get, Delete: store.Delete, DeleteAll: store.DeleteAll, Precheck: store.Precheck}
+}
+
 func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, stateDir string, sub substrate.Substrate, ref func(uuid.UUID) string, relay runRelay, capacity func(context.Context) placement.Capacity, extra runtimeExtras) (_ runnerRuntime, retErr error) {
 	streams, err := runnerio.New(sub, identity.RunnerID.String(), stateDir)
 	if err != nil {
@@ -403,12 +413,7 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 			retErr = errors.Join(retErr, manager.Close())
 		}
 	}()
-	ks := extra.keystore
-	if ks.Set == nil {
-		store := keystore.For(identity.RunnerID.String())
-		ks = runneragent.Keystore{Set: store.Set, Get: store.Get, Delete: store.Delete, DeleteAll: store.DeleteAll, Precheck: store.Precheck}
-	}
-	resident, err := runneragent.NewResident(ks, stateDir, manager.AdmitResident, time.Now)
+	resident, err := runneragent.NewResident(runnerKeystore(extra.keystore, identity.RunnerID.String()), stateDir, manager.AdmitResident, time.Now)
 	if err != nil {
 		return runnerRuntime{}, err
 	}

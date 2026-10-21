@@ -475,12 +475,18 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if spec.ExecOutput != nil {
 		d.execOutputs.Store(agentPodName(spec.RunID), spec.ExecOutput)
 	}
+	return podSandbox(spec, enforced, runtimeHandler), nil
+}
+
+// podSandbox is CreateSandbox's answer for the pod it created: its ref, the class enforced and, for
+// a VM run, the machine its RuntimeClass boots.
+func podSandbox(spec runner.SandboxSpec, enforced types.ConfinementClass, runtimeHandler string) runner.Sandbox {
 	sb := runner.Sandbox{Ref: agentPodName(spec.RunID), Driver: driverName, EnforcedClass: enforced}
 	if spec.MachineKind.IsVM() {
 		m := vmMachine(runtimeHandler)
 		sb.Machine = &m
 	}
-	return sb, nil
+	return sb
 }
 
 // ownedByPod is the ownerReference list that makes a pod owned by owner, or nil when the API
