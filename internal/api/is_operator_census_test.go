@@ -73,6 +73,9 @@ var isOperatorCensus = map[string]int{
 	// super admin's.
 	"user_drives_preview.go:handlePreviewUserDrive": 1,
 	"user_drives_tier.go:upsertUserDriveGrantAs":    1,
+	// Audit rows: host detail stays the super admin's on the feed reads and the partition export.
+	"audit.go:auditRowsFor":                          1,
+	"audit_partition_export.go:exportAuditPartition": 1,
 	// The measured reason can carry a substrate's own error text, so only an operator reads it.
 	"runner_usage.go:remoteUsage": 1,
 	// Operators host their own runner without the self_host_runner grant (capabilities.md).
