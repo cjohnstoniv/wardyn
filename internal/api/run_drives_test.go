@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -250,7 +251,7 @@ func TestStepDriveEligibility_PersonsOwnRunner(t *testing.T) {
 			t.Fatalf("%s: step = %v, want %v (%s)", kind, got, want, w.Body)
 		}
 		if !want && (w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), string(authz.ReasonDriveNotInPool)) ||
-			!strings.Contains(w.Body.String(), driveOrgRunnersOnlyMsg("Team Data"))) {
+			!strings.Contains(w.Body.String(), strconv.Quote(driveOrgRunnersOnlyMsg("Team Data")))) {
 			t.Errorf("%s refusal = %d %s", kind, w.Code, w.Body)
 		}
 	}
