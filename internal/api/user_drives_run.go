@@ -79,6 +79,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -355,7 +357,12 @@ func (s *Server) driveMountFor(ctx context.Context, w http.ResponseWriter, d run
 	if !s.driveIsMountableHere(ctx, w, resolved, at) {
 		return nil, false
 	}
+	// On a person's own runner the mount carries the drive's stored binding, read before the swap, never the
+	// runner placement chose: the local plan's RuleBound gate (drivePathsOn) then holds the bound runner to the
+	// run's own, a second check beside driveBindFailureHere's.
+	var bound *uuid.UUID
 	if at.runner != nil {
+		bound = resolved.Drive.AltRunnerID
 		resolved = secondPlaceResolved(resolved)
 	}
 	if refusal := driveReadOnlyRefusal(d.narrow, resolved); refusal != nil {
@@ -400,7 +407,7 @@ func (s *Server) driveMountFor(ctx context.Context, w http.ResponseWriter, d run
 		SizeMiB:     resolved.SizeMiB,
 		Enforcement: resolved.Enforcement,
 		Team:        resolved.Team,
-		RunnerID:    at.runner,
+		RunnerID:    bound,
 	}, true
 }
 

@@ -136,9 +136,10 @@ func (s *Server) drivePathsOn(candidate uuid.UUID, drives []types.DriveMount) ma
 	return verifiedLocalPaths(candidate, roots, bound)
 }
 
-// boundMountRunner is the runner the first bound drive mount names, the
-// candidate a create-time local plan is judged on (kindTargets already holds a
-// run with bound drives to that runner); uuid.Nil when none is bound.
+// boundMountRunner is the runner the first bound drive mount names: the drive's
+// stored binding (driveMountFor), the candidate a create-time local plan is
+// judged on (kindTargets already holds a run with bound drives to that runner);
+// uuid.Nil when none is bound. Dispatch judges the run's own runner instead.
 func boundMountRunner(drives []types.DriveMount) uuid.UUID {
 	for _, d := range drives {
 		if d.RunnerID != nil {
