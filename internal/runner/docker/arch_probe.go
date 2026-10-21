@@ -8,6 +8,7 @@ package docker
 import (
 	"bytes"
 	"context"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,11 +23,13 @@ import (
 const (
 	componentArchProbe  = "arch-probe"
 	archProbeNamePrefix = "wardyn-arch-probe-"
-	archProbeUser       = "1000"
 	// archProbeSetup bounds create, start, log read and removal around the wait.
 	archProbeSetup = 15 * time.Second
 	archProbeClean = 10 * time.Second
 )
+
+// archProbeUser runs the probe as the agent (runner.AgentUID), never as root.
+var archProbeUser = strconv.Itoa(runner.AgentUID)
 
 // archProbeWait is how long the probe container may run before the image is taken to start fine.
 // A variable so a test need not wait it out.

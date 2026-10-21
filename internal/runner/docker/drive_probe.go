@@ -132,12 +132,13 @@ func (d *Driver) ProbeDrive(ctx context.Context, drive types.DriveMount) (runner
 	}
 }
 
-// driveProbeUser is the fixed uid:gid every wardyn agent image runs as,
-// never the daemon's root. driveProbeTarget is the throwaway probe
-// container's own bind target, internal to this file (never the reserved
-// runner.DriveTarget the real agent mounts at).
+// driveProbeUser is runner.AgentUID as uid:gid, never the daemon's root.
+var driveProbeUser = fmt.Sprintf("%d:%d", runner.AgentUID, runner.AgentUID)
+
+// driveProbeTarget is the throwaway probe container's own bind target,
+// internal to this file (never the reserved runner.DriveTarget the real agent
+// mounts at).
 const (
-	driveProbeUser       = "1000:1000"
 	driveProbeTarget     = "/wardyn-probe"
 	driveProbeNamePrefix = "wardyn-drive-probe-"
 	componentDriveProbe  = "drive-probe"
