@@ -36,6 +36,12 @@ describe("Review blockers", () => {
     expect(setup).toMatchObject({ text: "Add the deploy key.", to: { screen: "step", step: "tools" } });
   });
 
+  it("holds a harness combination no image carries, right after the local issues, linked to the Harnesses step", () => {
+    const out = buildBlockers({ ...NOTHING, combination: "No sandbox image here includes A and B together.", unsupported: ["legacy_field"] });
+    expect(out.map((b) => b.id)).toEqual(["local:combination", "unsupported:legacy_field"]);
+    expect(out[0]).toMatchObject({ kind: "local", text: "No sandbox image here includes A and B together.", to: { screen: "step", step: "harnesses" } });
+  });
+
   it("says a missing pool in the canon's words (FR-0099)", () => {
     expect(buildBlockers({ ...NOTHING, issues: [{ home: "run", code: "pool_required", focus: "nr-pool" }] })[0].text).toBe(NR_RUN.POOL_HELP);
   });

@@ -513,6 +513,7 @@ func run() error {
 		EnvSecretPlaceholders:    *f.envSecretPlaceholders,
 		FileSecretPlaceholders:   *f.fileSecretPlaceholders,
 		RunnerSecretPlaceholders: *f.runnerSecretPlaceholders,
+		MultiAgentTasks:          *f.multiAgentTasks,
 		// First-run setup readiness inputs (GET /api/v1/setup/status).
 		AgeKeyDurable:             secretsDurable(*f.ageKey, secrets),
 		SecretStoreExternal:       storesExternally(secrets),

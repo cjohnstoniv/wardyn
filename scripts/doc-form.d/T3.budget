@@ -64,6 +64,10 @@
 # 0.10 W4a train: threatmodel/THREAT-MODEL.md tightened to 66530, measured at the train merge.
 # threatmodel/THREAT-MODEL.md 65272 adds 183 over 65089 (0.10 FEAT-2SCHED review r1 M3): the scheduled-run bullets under item 81 (unattended start, renewal at the start, re-checks, the switch).
 # threatmodel/THREAT-MODEL.md 66713 = ours 66530 + theirs 65272 - base 65089 at the 0.10 W4d merge of FEAT-2SCHED-UI onto the train.
-threatmodel/THREAT-MODEL.md=66713
+# #1987: threatmodel/THREAT-MODEL.md 65167 adds 78 over 65089, measured: several agents in one background run, and run_harnesses holding a task.
+# threatmodel/THREAT-MODEL.md 65676 = ours 65167 + theirs 65598 - base 65089 at the 0.10 merge of main into FEAT-2MULTI.
+# threatmodel/THREAT-MODEL.md 66608 = ours 65676 + theirs 66530 - base 65598 at the 0.10 second merge of main into FEAT-2MULTI.
+# threatmodel/THREAT-MODEL.md 66791 = ours 66713 + theirs 66608 - base 66530 at the 0.10 W4d merge of MULTI-DOC onto the train.
+threatmodel/THREAT-MODEL.md=66791
 # threatmodel/THREAT-MODEL.md 63171 adds 78 over 63093, measured: the console session under the role-stamp residual: renewal up to its cap, never moving the sign-in time, and the copied-cookie bound (0.9.3 console session lifetime).
 # threatmodel/THREAT-MODEL.md 63025 = 62948 + 77, measured: the laptop decision-sink crossing row and #77's sink and loss-row bullets.

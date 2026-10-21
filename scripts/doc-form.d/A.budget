@@ -235,7 +235,11 @@
 # docs/AUDIT-ACTIONS.md 49385 adds 14 over 49371 (0.10 FEAT-2SCHED): run.queue.expire names queue_sign_in_timeout and its reason key.
 # docs/AUDIT-ACTIONS.md=49396 adds 11 (0.10 FEAT-2SCHED review r1 M2): scheduled_runs_off in the run.queue.start failure reasons.
 # docs/AUDIT-ACTIONS.md 50852 = ours 50827 + theirs 49396 - base 49371 at the 0.10 W4d merge of FEAT-2SCHED-UI onto the train.
-docs/AUDIT-ACTIONS.md=50852 share=8
+# #1987: docs/AUDIT-ACTIONS.md 49410 adds 39 over 49371, measured: harnesses[].task on run.create and the per-agent toolgate credential rows.
+# docs/AUDIT-ACTIONS.md 49943 = ours 49410 + theirs 49904 - base 49371 at the 0.10 merge of main into FEAT-2MULTI.
+# docs/AUDIT-ACTIONS.md 50595 = ours 49943 + theirs 50556 - base 49904 at the 0.10 second merge of main into FEAT-2MULTI.
+# docs/AUDIT-ACTIONS.md 50891 = ours 50852 + theirs 50595 - base 50556 at the 0.10 W4d merge of MULTI-DOC onto the train.
+docs/AUDIT-ACTIONS.md=50891 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.

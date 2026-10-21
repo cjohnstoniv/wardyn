@@ -204,10 +204,14 @@ func (s *Server) autonomyDerive(w http.ResponseWriter, r *http.Request, req *cre
 	// in-sandbox half at all, so the level is enforced at this door and at the
 	// proxy and by nothing inside the container. Skipped for an exec run, which
 	// has no agent process to say it about (and may legitimately name no agent).
-	if req.TaskMode != "exec" && !agentHasHoldLane(req.Agent) {
-		warnings = append(warnings, fmt.Sprintf(
-			"%s has no Wardyn tool-approval lane: autonomy level %s is enforced at launch and by the proxy, and nothing inside the sandbox gates this agent's tool calls",
-			autonomyAgentLabel(req.Agent), level))
+	// Every agent a run with several agents starts is told about, and held to the level, as its own run would be.
+	agents := taskAgents(*req)
+	for _, agent := range agents {
+		if req.TaskMode != "exec" && !agentHasHoldLane(agent) {
+			warnings = append(warnings, fmt.Sprintf(
+				"%s has no Wardyn tool-approval lane: autonomy level %s is enforced at launch and by the proxy, and nothing inside the sandbox gates this agent's tool calls",
+				autonomyAgentLabel(agent), level))
+		}
 	}
 	// Derivation is NON-INTERACTIVE ONLY, for the structural reason
 	// effectiveToolApprovals states: applyDispatchModeEnv writes
@@ -221,11 +225,11 @@ func (s *Server) autonomyDerive(w http.ResponseWriter, r *http.Request, req *cre
 	// no external tool-approval contract cannot honour it, so a derived hold
 	// there ships the unsupervised run the explicit-hold 400 already rejects —
 	// the same contradiction, arriving through a field the caller never set.
-	if !agentHasHoldLane(req.Agent) {
+	if i := slices.IndexFunc(agents, func(a string) bool { return !agentHasHoldLane(a) }); i >= 0 {
 		s.refuse(w, r, authz.Deny(src.reason, "runs.agent", fmt.Sprintf(
 			"%s is not supported under %s at this run's posture: it permits autonomy level %s (bound by %s), which routes an "+
 				"unattended run's tool calls to a Wardyn approval, and this agent has no external tool-approval contract. Launch a different agent, or launch interactively.",
-			autonomyAgentLabel(req.Agent), src.phrase, level, bound)).WithPolicy(src.policy))
+			autonomyAgentLabel(agents[i]), src.phrase, level, bound)).WithPolicy(src.policy))
 		return nil, false
 	}
 	if req.ToolApprovals == "hold" {

@@ -131,7 +131,11 @@
 # docs/ENV.md 40799 adds 128 over 40671 (0.10 FEAT-2SCHED): the WARDYN_SCHEDULED_RUNS row and details section, which the env-doc guard requires.
 # docs/ENV.md=40829 adds 30 (0.10 FEAT-2SCHED review r1 M1/M2): the latest start a run's wait allows, and the switch ending booked runs at their start.
 # docs/ENV.md 42832 = ours 42674 + theirs 40829 - base 40671 at the 0.10 W4d merge of FEAT-2SCHED-UI onto the train.
-docs/ENV.md=42832 share=5
+# #1987: docs/ENV.md 40737 adds 66 over 40671, measured: the WARDYN_MULTI_AGENT_TASKS and WARDYN_TASK_PREPPED rows.
+# docs/ENV.md 41475 = ours 40737 + theirs 41409 - base 40671 at the 0.10 merge of main into FEAT-2MULTI.
+# docs/ENV.md 42255 = ours 41475 + theirs 42189 - base 41409 at the 0.10 second merge of main into FEAT-2MULTI.
+# docs/ENV.md 42898 = ours 42832 + theirs 42255 - base 42189 at the 0.10 W4d merge of MULTI-DOC onto the train.
+docs/ENV.md=42898 share=5
 # docs/ENV.md 39047 adds 478 over 38569: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
 # docs/ENV.md 38607 adds 38 over 38569, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # docs/ENV.md 40042 adds 422 over 39620, measured: the WARDYN_AWS_SIGV4_AT_PROXY row and section: which lanes and hosts are re-signed, the named refusals, and the no-hold, placement and new-dispatch notes.

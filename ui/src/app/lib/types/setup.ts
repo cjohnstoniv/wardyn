@@ -337,6 +337,8 @@ export interface SetupStatus {
     scheduled_runs: boolean;
     /** WARDYN_KUBECTL_CLI: the kubectl component kind is on. Optional for fixtures. */
     kubectl_cli?: boolean;
+    /** WARDYN_MULTI_AGENT_TASKS: a background agent task may give each agent its own task. */
+    multi_agent_tasks?: boolean;
   };
   checks: SetupCheck[];
   auth: {

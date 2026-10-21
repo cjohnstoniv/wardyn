@@ -501,3 +501,26 @@ func TestPG_PersonErasure_PrincipalsNamedIgnoresASignInOfAnotherTenant(t *testin
 		t.Errorf("PrincipalsNamed(%q) = %v, %v, want the people row alone", entra, got, err)
 	}
 }
+
+// An agent's own task in a run with several agents is the person's text too: erasure
+// blanks it on that person's runs alone, beside the run's own task.
+func TestPG_PersonErasure_BlanksAgentTasks(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	a, b := erasureRun(t, st, "alice", "write the change"), erasureRun(t, st, "bob", "bob's change")
+	for _, id := range []uuid.UUID{a, b} {
+		if err := st.PutRunHarnesses(ctx, id, []types.RunHarness{{Harness: "claude-code", Starts: true}, {Harness: "codex-cli", Task: "write the tests"}}); err != nil {
+			t.Fatalf("put: %v", err)
+		}
+	}
+	if n, err := st.BlankRunTasks(ctx, "alice"); err != nil || n != 1 {
+		t.Fatalf("BlankRunTasks = %d, %v, want her one run", n, err)
+	}
+	for id, want := range map[uuid.UUID]string{a: "", b: "write the tests"} {
+		rows, err := st.ListRunHarnesses(ctx, id)
+		if err != nil || len(rows) != 2 || rows[1].Task != want {
+			t.Errorf("run %s rows %+v (%v), want codex-cli's task %q", id, rows, err, want)
+		}
+	}
+}

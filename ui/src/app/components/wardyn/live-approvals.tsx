@@ -58,6 +58,8 @@ import { Mono } from "./code-block";
 export { isHeld };
 import { Chip, SectionLabel } from "./primitives";
 import { useSecurityOperator, usePrincipal } from "./operator-context";
+import { APPROVAL_ASKED } from "./copy/approvals";
+import { useAgentName } from "./use-agent-name";
 import { attentionRank } from "./run-state-glyph";
 import {
   SECURITY_ONLY_REASON,
@@ -190,6 +192,14 @@ export function LiveApprovals({
   // The signed-in viewer's own subject — see the `run` prop's doc above for
   // why the ADO card needs both.
   const principal = usePrincipal();
+  // Only a tool or MCP call on a run with two or more agents says which one asked; plain network
+  // egress has no per-harness credential, so an egress row never names an agent.
+  const agentName = useAgentName();
+  const agentCount = run?.agents?.length ?? 0;
+  const asker = (a: ApprovalRequest): string | undefined => {
+    const harness = a.requested_scope?.harness;
+    return a.kind === "tool_call" && agentCount >= 2 && typeof harness === "string" && harness ? harness : undefined;
+  };
   const [pending, setPending] = React.useState<ApprovalRequest[]>([]);
   const [busy, setBusy] = React.useState<string | null>(null);
   // Which of the busy row's two actions is in flight (#458) — `busy` alone
@@ -540,9 +550,12 @@ export function LiveApprovals({
             ) : (
               <ShieldAlert className="size-3.5 shrink-0 text-warning" />
             )}
-            <Mono className="flex-1 text-foreground" title={label}>
-              {clip(label)}
-            </Mono>
+            <span className="flex min-w-0 flex-1 items-baseline gap-2">
+              <Mono className="text-foreground" title={label}>
+                {clip(label)}
+              </Mono>
+              {asker(a) && <span className="text-xs text-muted-foreground">{APPROVAL_ASKED.STRIP(agentName(asker(a)!))}</span>}
+            </span>
             {telemetry && (
               <Chip tone="neutral" className="h-5 shrink-0 px-1.5" title={TELEMETRY_TAG.title}>
                 {TELEMETRY_TAG.label}

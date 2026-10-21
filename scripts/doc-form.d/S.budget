@@ -201,7 +201,12 @@
 # docs/sdk.md 19783 adds 52 over 19731 (0.10 FEAT-2SCHED): the Scheduled runs section (request fields, queue fields, features.scheduled_runs).
 # docs/sdk.md 19825 adds 42 over 19783 (0.10 FEAT-2SCHED review r1 M1/M2): the latest start a run's wait allows, and scheduled_runs_off at the start.
 # docs/sdk.md 20447 = ours 20304 + theirs 19825 - base 19682 at the 0.10 W4d merge of FEAT-2SCHED-UI onto the train.
-docs/sdk.md=20447 share=21
+# #1987: docs/sdk.md 20113 adds 431 over 19682, measured: the several-agents section (with its setup-status bit and run agents), the multi_agent_tasks_off reason row and the background-task line.
+# docs/sdk.md 20491 = ours 20113 + theirs 20060 - base 19682 at the 0.10 merge of main into FEAT-2MULTI.
+# #1987 review: docs/sdk.md 20508 adds 17 over 20491, measured: the agent prefix and ?agent= are display only.
+# docs/sdk.md 20736 = ours 20508 + theirs 20288 - base 20060 at the 0.10 second merge of main into FEAT-2MULTI.
+# docs/sdk.md 20895 = ours 20447 + theirs 20736 - base 20288 at the 0.10 W4d merge of MULTI-DOC onto the train.
+docs/sdk.md=20895 share=21
 # docs/sdk.md 18691 adds 28 over 18663, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.

@@ -11,17 +11,18 @@ import * as React from "react";
 import { Button } from "../../../../ui/button";
 import { NR_HARNESSES } from "../../../../wardyn/copy/new-run/harnesses";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
+import { Notice } from "../../../../wardyn/notice";
 import { Chip } from "../../../../wardyn/primitives";
 import type { RunIntent } from "../../draft/run-intent";
 import { useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../../new-run-route";
-import { addHarness, clearStarter, removeHarness, setStartPrompt, setStarter, setTask, swapHarness } from "../../lenses/harness-lens";
+import { addHarness, agentTask, clearStarter, removeHarness, setAgentTask, setStartPrompt, setStarter, swapHarness } from "../../lenses/harness-lens";
 import { harnessIds } from "../../lenses/lens-keys";
 import { modeOf } from "../../lenses/shape-lens";
 import { stepIssues } from "../../lenses/local-issues";
 import { flowSteps, StepShell, useAnnounce } from "../step-shell";
 import { useLoaded } from "../shape/use-loaded";
 import { HarnessCard, type HarnessMode } from "./harness-card";
-import { loadRoster, unavailableReason, type Roster } from "./roster";
+import { combinationReason, loadRoster, unavailableReason, type Roster } from "./roster";
 
 const STEP_LABELS = {
   shape: NR_SHARED.STEP_SHAPE, run: NR_SHARED.STEP_RUN, harnesses: NR_SHARED.STEP_HARNESSES, files: NR_SHARED.STEP_FILES, tools: NR_SHARED.STEP_TOOLS,
@@ -44,6 +45,8 @@ export function HarnessesStep({ go, deps }: NewRunScreenProps & { deps?: { load:
   const { intent } = draft;
   const ids = harnessIds(intent);
   const mode: HarnessMode = intent.shape !== "agent_task" ? "optional" : intent.experience === "background" ? "autonomous" : "interactive";
+  // Several agents side by side only in an Autonomous run, and only where the server has the switch on.
+  const multi = mode === "autonomous" && roster.multiAgent === true;
   const edit = (apply: (i: RunIntent) => RunIntent) => dispatch({ type: "edit", apply });
 
   const taken = mode === "autonomous" ? [] : ids;
@@ -52,7 +55,10 @@ export function HarnessesStep({ go, deps }: NewRunScreenProps & { deps?: { load:
     return why ? [{ row: h, why }] : [];
   });
   const addable = roster.harnesses.find((h) => !ids.includes(h.id) && !unavailableReason(h, taken, roster));
-  const comingSoon = mode === "autonomous" && ids.length > 0;
+  const comingSoon = mode === "autonomous" && ids.length > 0 && !multi;
+  // A card may pick any harness; the ones that no image carries together are refused on the cards, and Continue holds.
+  const combos = multi && loaded.status === "ready" ? ids.map((id) => combinationReason(roster, ids, id)) : [];
+  const comboIssues = ids.flatMap((_, index) => (combos[index] ? [{ focus: `nr-harness-${index}` }] : []));
   // The Add button disables once nothing more can be added, so focus follows the new harness's select.
   const focusNew = React.useRef<number | null>(null);
   React.useEffect(() => {
@@ -73,11 +79,11 @@ export function HarnessesStep({ go, deps }: NewRunScreenProps & { deps?: { load:
     <StepShell
       eyebrow={NR_SHARED.EYEBROW(3)}
       title={NR_HARNESSES.TITLE}
-      lede={LEDES[mode]}
+      lede={multi ? NR_HARNESSES.LEDE_AUTONOMOUS_MULTI : LEDES[mode]}
       progress={{ label: NR_SHARED.PROGRESS_ARIA, steps: flowSteps(STEP_LABELS, "harnesses") }}
       back={{ label: NR_SHARED.BACK, onBack: () => go({ screen: "step", step: "run" }) }}
       primary={{ label: NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_FILES), onActivate: () => go({ screen: "step", step: "files" }) }}
-      issues={stepIssues("harnesses", intent)}
+      issues={[...comboIssues.slice(0, 1), ...stepIssues("harnesses", intent)]}
     >
       {loaded.status === "error" && <p role="alert" className="text-sm text-danger">{loaded.message}</p>}
       {ids.length === 0 && mode === "optional" && (
@@ -97,8 +103,10 @@ export function HarnessesStep({ go, deps }: NewRunScreenProps & { deps?: { load:
             mode={mode}
             others={ids.filter((other) => other !== id)}
             removable={!(intent.shape === "agent_task" && ids.length === 1)}
+            count={ids.length}
+            combination={combos[index]}
             started={intent.startup?.kind === "harness" && intent.startup.tool === id}
-            text={mode === "autonomous" ? intent.workload?.task ?? "" : intent.startup?.tool === id ? intent.startup.prompt ?? "" : ""}
+            text={mode === "autonomous" ? agentTask(intent, id) : intent.startup?.tool === id ? intent.startup.prompt ?? "" : ""}
             onSwap={(to) => edit((i) => swapHarness(i, id, to))}
             onRemove={() => {
               edit((i) => removeHarness(i, id));
@@ -106,7 +114,7 @@ export function HarnessesStep({ go, deps }: NewRunScreenProps & { deps?: { load:
               document.getElementById(ADD_ID)?.focus();
             }}
             onStart={(on) => edit((i) => (on ? setStarter(i, id) : clearStarter(i)))}
-            onText={(text) => edit((i) => (mode === "autonomous" ? setTask(i, text) : setStartPrompt(i, text)))}
+            onText={(text) => edit((i) => (mode === "autonomous" ? setAgentTask(i, id, text) : setStartPrompt(i, text)))}
           />
         ))}
       </div>
@@ -123,7 +131,7 @@ export function HarnessesStep({ go, deps }: NewRunScreenProps & { deps?: { load:
             onClick={() => {
               if (!addable) return;
               focusNew.current = ids.length;
-              edit((i) => addHarness(i, addable.id));
+              edit((i) => addHarness(i, addable.id, multi));
               announce(NR_HARNESSES.ADDED);
             }}
           >
@@ -132,6 +140,7 @@ export function HarnessesStep({ go, deps }: NewRunScreenProps & { deps?: { load:
           {comingSoon && <Chip>{NR_SHARED.COMING_SOON}</Chip>}
         </div>
       )}
+      {multi && ids.length > 1 && <Notice tone="info">{NR_HARNESSES.MULTI_NOTE}</Notice>}
       {blocked.length > 0 && (
         <ul id={UNAVAILABLE_ID} className="flex flex-col gap-1 text-sm">
           {blocked.map(({ row, why }) => (

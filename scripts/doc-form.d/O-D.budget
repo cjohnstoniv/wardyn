@@ -122,7 +122,11 @@
 # 0.10 W4a train: docs/OPERATIONS.md tightened to 57690, measured at the train merge.
 # docs/OPERATIONS.md 57417 adds 25 over 57392 (0.10 FEAT-2SCHED): the 0200 run_queue start_at migration line.
 # docs/OPERATIONS.md 57715 = ours 57690 + theirs 57417 - base 57392 at the 0.10 W4d merge of FEAT-2SCHED-UI onto the train.
-docs/OPERATIONS.md=57715
+# #1987: docs/OPERATIONS.md 57431 adds 39 over 57392, measured: the 0200 run_harness_task migration line.
+# docs/OPERATIONS.md 57540 = ours 57431 + theirs 57501 - base 57392 at the 0.10 merge of main into FEAT-2MULTI.
+# docs/OPERATIONS.md 57729 = ours 57540 + theirs 57690 - base 57501 at the 0.10 second merge of main into FEAT-2MULTI.
+# docs/OPERATIONS.md 57754 = ours 57715 + theirs 57729 - base 57690 at the 0.10 W4d merge of MULTI-DOC onto the train.
+docs/OPERATIONS.md=57754
 # docs/OPERATIONS.md 55840 adds 124 over 55716, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # docs/OPERATIONS.md 55867 adds 27 over 55840, measured: a run whose runner cannot be asked falls back to this deployment's runner, the older-runner exception, pooled runs, and the runner_offline gap reason.
 # docs/OPERATIONS.md 55891 adds 24 over 55867, measured: with several executors and no pool, the executor a run lands on, and once its sandbox exists the one that holds it, decides where its output comes from.

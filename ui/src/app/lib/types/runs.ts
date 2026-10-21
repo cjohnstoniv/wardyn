@@ -496,6 +496,14 @@ export interface RunDetail extends AgentRun {
   sync?: RunSync;
   // The run's folder from the person's computer and its passes (GET /runs/{id} only); see RunComputerFolder.
   computer_folder?: RunComputerFolder;
+  // Every agent of a background run with several, the run's own first; absent otherwise.
+  agents?: RunDetailAgent[];
+}
+
+// One agent of a run with several agents (runDetailAgent, internal/api/run_multi_agent.go).
+export interface RunDetailAgent {
+  agent: string;
+  task?: string;
 }
 
 // GET /runs/{id}'s computer_folder (internal/api/run_computer_folder.go computerFolderRunView): the run's

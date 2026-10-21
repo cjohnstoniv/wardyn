@@ -18,6 +18,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // liCreate launches body as cookie's person and returns the stored run and its
@@ -300,5 +301,29 @@ func TestLaunchIntent_KeepsAnEmptyMCPHarnessesList(t *testing.T) {
 	}
 	if _, ok := refs[1]["mcp_harnesses"]; ok {
 		t.Errorf("a reference with no list gained mcp_harnesses: %s", refs[1]["mcp_harnesses"])
+	}
+}
+
+// A kept launch intent is a Run document, so it keeps each agent's own task (#3417).
+func TestLaunchIntent_KeepsEachAgentsTask(t *testing.T) {
+	asked := mustJSON(createRunRequest{
+		Experience: client.ExperienceBackground,
+		Workload:   &client.RunWorkload{Kind: client.WorkloadAgentTask, Agent: "claude-code", Task: "fix the build"},
+		Tools: []client.IncludedTool{
+			{ID: "claude-code", Kind: client.IncludedToolHarness},
+			{ID: "codex-cli", Kind: client.IncludedToolHarness, Task: "review the diff"},
+		},
+		NoRepositoriesOrDrives: true,
+	})
+	li := launchIntentFor(asked)
+	if li.doc == nil {
+		t.Fatalf("no intent kept: %q %v", li.reason, li.refusals)
+	}
+	var tools []client.IncludedTool
+	if err := json.Unmarshal(liIntent(t, li.doc)["tools"], &tools); err != nil || len(tools) != 2 {
+		t.Fatalf("tools = %v (%v)", tools, err)
+	}
+	if tools[1].Task != "review the diff" {
+		t.Errorf("codex-cli task = %q, want it kept", tools[1].Task)
 	}
 }

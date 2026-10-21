@@ -157,12 +157,16 @@ type SetupFeatures struct {
 	ScheduledRuns bool `json:"scheduled_runs"`
 	// KubectlCLI is WARDYN_KUBECTL_CLI: the kubectl component kind is on.
 	KubectlCLI bool `json:"kubectl_cli"`
+	// MultiAgentTasks is WARDYN_MULTI_AGENT_TASKS: a background agent task may give
+	// each agent its own task (#1987).
+	MultiAgentTasks bool `json:"multi_agent_tasks"`
 }
 
-func setupFeatures() SetupFeatures {
+func setupFeatures(multiAgentTasks bool) SetupFeatures {
 	return SetupFeatures{
-		ScheduledRuns: envEnabled(envScheduledRuns),
-		KubectlCLI:    kubectlCLIOn(),
+		ScheduledRuns:   envEnabled(envScheduledRuns),
+		KubectlCLI:      kubectlCLIOn(),
+		MultiAgentTasks: multiAgentTasks,
 	}
 }
 
@@ -461,7 +465,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		// A count derived from the SAME PEM string TrustedCAPEM's doc comment
 		// describes — no second boot-time field to keep in sync. 0 when unset.
 		TrustedCACerts: strings.Count(s.cfg.TrustedCAPEM, "-----BEGIN CERTIFICATE-----"),
-		Features:       setupFeatures(),
+		Features:       setupFeatures(s.cfg.MultiAgentTasks),
 	}
 	resp.HarnessSets = visibleHarnessSets(s.cfg.AgentImages, resp.Harnesses)
 	// DELIBERATELY isOperator (three-tier doctrine, internal/auth/oidc's
