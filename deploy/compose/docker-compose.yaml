@@ -45,7 +45,7 @@ services:
   # admin API (see the `networks:` block at the bottom of this file). Still
   # not reachable off-host either way.
   registry:
-    image: registry:3@sha256:3725021071ec9383eb3d87ddbdff9ed602439b3f7c958c9c2fb941049ea6531d
+    image: registry:3@sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8
     container_name: ${WARDYN_NS:-wardyn}-registry
     # No raw sockets: local mode trusts the published port's source address on this network.
     cap_drop: [NET_RAW]
@@ -73,7 +73,7 @@ services:
   postgres:
     # Digest-pinned (tag kept for readability). postgres:17 is a FLOATING major,
     # so the digest freezes the exact image; bump both together on a version move.
-    image: postgres:17@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d
+    image: postgres:18@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
     container_name: ${WARDYN_NS:-wardyn}-postgres
     # No raw sockets: local mode trusts the published port's source address on this network.
     cap_drop: [NET_RAW]
@@ -103,7 +103,7 @@ services:
 
   dex:
     # Digest-pinned (tag kept for readability); bump both together on a version move.
-    image: ghcr.io/dexidp/dex:v2.40.0@sha256:3e35d5d0f7dbd33fbadc36a71ff58cf4097ab98d73d22f6cb9a6471a32e028af
+    image: ghcr.io/dexidp/dex:v2.46.0@sha256:933fcd3f523338c847b88ef84a7145fb2fcb7b9917f08418612afeaaa2001777
     container_name: ${WARDYN_NS:-wardyn}-dex
     # No raw sockets: local mode trusts the published port's source address on this network.
     cap_drop: [NET_RAW]
@@ -695,7 +695,7 @@ services:
   # ───────────────────────────────────────────────────────────────────────────
   tetragon:
     # Digest-pinned (tag kept for readability); bump both together on a version move.
-    image: quay.io/cilium/tetragon:v1.1.2@sha256:fca204b06c8bd5ade16cbe46f52429e11863dc2ce630cc8a2140b74eedbecde7
+    image: quay.io/cilium/tetragon:v1.7.1@sha256:afc9458ba4bc3f2795da3df6b03d88ce50e175ac3903027de8036e2046b84a02
     container_name: ${WARDYN_NS:-wardyn}-tetragon
     profiles: ["groundtruth"]
     # Host eBPF sensor: needs privileged + host PID/cgroup + kernel mounts.
