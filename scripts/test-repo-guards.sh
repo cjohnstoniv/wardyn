@@ -140,9 +140,9 @@ NIGHTLY=.github/workflows/nightly.yml
 NOTIFY_EXEMPT="e2e-live notify-new-lanes migration-merge-check test-e2e-concurrent kind-survival-walk hybrid-walk kind-upgrade-walk k6-kind-conformance kind-acceptance-walks ci-mode-dogfood-model-fake published-image-scan notify-published-image-scan"
 # A job waiting on the promotion rule above carries a date here, job=YYYY-MM-DD, at most 14 days out
 # (the e2e quarantine's rule, #3219). Past it this guard fails until the job joins notify-new-lanes.needs
-# and release.yml's watched=, or the date is renewed in a reviewed change. k6-kind-conformance and
-# kind-acceptance-walks were green on scheduled runs 39269815742 and 39423832908. Joining watched=
-# needs green-by-tree.sh to match a matrix job's "name (leg)" rows, which it does not yet.
+# and release.yml's watched=, which needs green-by-tree.sh to match a matrix job's "name (leg)" rows
+# (#3439), or the date is renewed in a reviewed change. k6-kind-conformance and kind-acceptance-walks
+# were green on scheduled runs 39269815742 and 39423832908.
 NOTIFY_EXEMPT_UNTIL="k6-kind-conformance=2026-11-04 kind-acceptance-walks=2026-11-04"
 # notify_exempt_until_problems "<job=date ...>" "<exempt jobs>" <today>: one line per bad entry.
 notify_exempt_until_problems() {
@@ -154,7 +154,7 @@ notify_exempt_until_problems() {
         if [[ ! "$until" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || [ "$(date -u -d "$until" +%F 2>/dev/null)" != "$until" ]; then
             echo "'$job' has the invalid date '$until', want YYYY-MM-DD"
         elif [[ "$until" < "$3" ]]; then
-            echo "'$job' was exempt until $until: put it in notify-new-lanes.needs and release.yml's watched=, or renew the date in a reviewed change"
+            echo "'$job' was exempt until $until: the way off is #3439 (green-by-tree.sh matching matrix legs, then notify-new-lanes.needs and release.yml's watched=); until it lands, renew the date in a reviewed change (at most 14 days out)"
         elif [[ "$until" > "$max" ]]; then
             echo "'$job' is exempt until $until, more than 14 days from $3 ($max) — an exemption is short"
         fi
@@ -181,7 +181,7 @@ fi
 # The detector must catch what it exists for: an expired date, a far one, a malformed one, a dated job that is not exempt.
 selftest_fail=0
 exempt_probe="$(notify_exempt_until_problems "a=2026-01-01 b=2026-03-01 c=soon d=2026-02-30 e=2026-01-20" "a b c d" 2026-01-10)"
-for want in "'a' was exempt until 2026-01-01" "'b' is exempt until 2026-03-01" "'c' has the invalid date" "'d' has the invalid date" "'e' has a date but is not in NOTIFY_EXEMPT"; do
+for want in "'a' was exempt until 2026-01-01" "#3439" "'b' is exempt until 2026-03-01" "'c' has the invalid date" "'d' has the invalid date" "'e' has a date but is not in NOTIFY_EXEMPT"; do
     grep -qF -- "$want" <<<"$exempt_probe" || { bad "guard 1 self-test: no problem reported for: $want"; selftest_fail=1; }
 done
 [ -z "$(notify_exempt_until_problems "a=2026-01-20" "a" 2026-01-10)" ] \
