@@ -80,7 +80,7 @@ docs/operations/console-branding.md=943 share=35
 # docs/operations/hybrid-laptops.md 5278 adds 24 (0.10.0 SEC-1b), measured: the runner placeholder switch, WARDYN_RUNNER_SECRET_PLACEHOLDERS.
 # docs/operations/hybrid-laptops.md 5297 adds 19 (0.10.0 SEC-1b review), measured: the placeholder limits, otherwise held as before.
 # docs/operations/hybrid-laptops.md 5412 = ours 5369 + theirs 5297 - base 5254 at the 0.10 W4d merge of SEC-1b onto the train.
-docs/operations/hybrid-laptops.md=5412 share=35
+docs/operations/hybrid-laptops.md=5410 share=35 # tightened from 5412 to the measured count at the 0.10 W4d merge
 # docs/operations/hybrid-laptops.md 4024 adds 2 over 4022, measured: the control-plane restart row says the next restart kills an agent kept only for containment.
 # docs/operations/hybrid-laptops.md 4195 = 3926 + 269, measured: the reset section and the recording default.
 # docs/operations/hybrid-laptops.md 4380 = 4195 + 185, measured: how audit decisions reach the organisation (the decision sink), less the removed state-directory check.
