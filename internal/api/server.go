@@ -777,13 +777,11 @@ type Server struct {
 	inventoryHoldAudit inventoryHoldAudit
 	// privIPRefusals caches the private_ip_refusals row's audit read (setup_private_ip_refusals.go).
 	privIPRefusals privateIPRefusalCache
-	// capRowsScanned counts capability-grant rows compared inside capBatch (see
-	// capabilities.go). It is INSTRUMENTATION, read by nothing on any request
-	// path: the per-request cost of the capability seam is chosen partly by the
-	// member's own request body (spec.AllowedDomains), so "how much work did one
-	// request buy" is a claim that has to be assertable rather than asserted —
-	// capability_batch_test.go's growth law reads it. One atomic add per row
-	// already being compared. Zero value is ready to use.
+	// capRowsScanned counts capability-grant rows compared inside capBatch (see capabilities.go). It is
+	// INSTRUMENTATION, read by nothing on any request path: the per-request cost of the capability seam is
+	// chosen partly by the member's own request body (spec.AllowedDomains), so "how much work did one request
+	// buy" is a claim that has to be assertable rather than asserted — capability_batch_test.go's growth law
+	// reads it. One atomic add per row already being compared. Zero value is ready to use.
 	capRowsScanned atomic.Int64
 	// siteConfigSeed is the boot-time WARDYN_SITE_CONFIG_SEED_FILE (nil when
 	// unset), kept for the /setup/status row (site_config_seed.go).
