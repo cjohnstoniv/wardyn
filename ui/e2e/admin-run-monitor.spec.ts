@@ -96,7 +96,7 @@ test.describe("the admin run monitor (M-7)", () => {
       // where the relaunch is.
       await page.goto("/admin/runs");
       await page.getByTestId("run-row").filter({ hasText: mineTask }).getByRole("button", { name: OPEN_IN_USER_VIEW }).click();
-      await expect(page).toHaveURL(new RegExp(`/runs/${mine}$`));
+      await expect(page).toHaveURL((u) => u.pathname === `/runs/${mine}`);
       await expect(page.getByRole("button", { name: RUN.CLONE_CTA })).toBeVisible();
     } finally {
       sql(`DELETE FROM agent_runs WHERE id IN ('${mine}','${theirs}')`);
@@ -121,7 +121,7 @@ test.describe("the admin run monitor (M-7)", () => {
       await expect(panel.getByRole("button", { name: REAUTH_ROW.ariaLabel })).toHaveCount(0);
 
       await panel.getByRole("button", { name: OPEN_IN_USER_VIEW }).click();
-      await expect(page).toHaveURL(new RegExp(`/runs/${id}$`));
+      await expect(page).toHaveURL((u) => u.pathname === `/runs/${id}`);
       await expect(page.getByTestId("live-approvals").getByRole("button", { name: REAUTH_ROW.ariaLabel })).toBeVisible();
     } finally {
       sql(`DELETE FROM agent_runs WHERE id = '${id}'`);

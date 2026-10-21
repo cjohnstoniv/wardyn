@@ -50,6 +50,16 @@ import {
 const MARGIN: [number, number] = [10, 10];
 const PADDING: [number, number] = [10, 10];
 
+// The pane the grid measures is already net of the status strip above it (about 60px), so its floor is the old
+// 520 less that strip: a 520 floor outgrew a 1280x720 window's pane and made the 12-row grid scroll (#3372).
+const STRIP_HEIGHT = 60;
+const PANE_FLOOR = 520 - STRIP_HEIGHT;
+
+/** One twelfth of the visible pane; the floor keeps the arithmetic sane before the first measurement (and under jsdom). */
+export function canvasRowHeight(paneHeight: number): number {
+  return Math.max(28, Math.round((Math.max(paneHeight, PANE_FLOOR) - 2 * PADDING[1] - (GRID_ROWS - 1) * MARGIN[1]) / GRID_ROWS));
+}
+
 // react-grid-layout's stylesheet glides every tile for 200ms on any size or
 // position change. That glide is for arranging; outside editing it slid a
 // tile's controls out from under a press that had already landed (the release
@@ -180,10 +190,7 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
   // arithmetic sane before the first measurement (and under jsdom).
   // Floored at 480: below that the right column scrolls sideways inside the pane (#2909). Stacking the tiles is 0.10.
   const gridWidth = Math.max(width, 480);
-  const rowHeight = Math.max(
-    28,
-    Math.round((Math.max(height, 520) - 2 * PADDING[1] - (GRID_ROWS - 1) * MARGIN[1]) / GRID_ROWS),
-  );
+  const rowHeight = canvasRowHeight(height);
   const colWidth = (gridWidth - 2 * PADDING[0] - (GRID_COLS - 1) * MARGIN[0]) / GRID_COLS;
   const sizeLabel = (w: number, h: number) =>
     `${Math.round(w * colWidth + (w - 1) * MARGIN[0])} × ${Math.round(h * rowHeight + (h - 1) * MARGIN[1])}`;

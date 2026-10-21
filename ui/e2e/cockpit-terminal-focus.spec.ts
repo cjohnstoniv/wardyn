@@ -101,6 +101,14 @@ async function wrapperBox(pane: Locator) {
 }
 
 test.describe("Run cockpit terminal focus", () => {
+  // #3372: on a 1280x720 window the canvas floor outgrew the pane (the status strip sits above it), so the grid scrolled.
+  test("the canvas grid fits the pane without scrolling", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await openTerminal(page);
+    const overflow = await page.getByTestId("run-canvas-scroll").evaluate((el) => el.scrollHeight - el.clientHeight);
+    expect(overflow).toBeLessThanOrEqual(1);
+  });
+
   test("a click on the wrapper padding focuses the terminal", async ({ page }) => {
     const pane = await openTerminal(page);
     const box = await wrapperBox(pane);
