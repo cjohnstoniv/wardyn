@@ -36,7 +36,7 @@ import (
 // tie-break, not a description.
 const maxGovernanceUnitNameLen = 128
 
-// mountGovernanceRoutes registers the /governance family — SEVEN routes, all on
+// mountGovernanceRoutes registers the /governance family — NINE routes, all on
 // the SECURITY tier.
 //
 // The parameter is still spelled `operatorOnly` because the six CRUD routes
@@ -50,13 +50,18 @@ const maxGovernanceUnitNameLen = 128
 // The seventh, POST /governance/check, was born on this tier: a READ that
 // answers "which profile would bind these claims" by running the resolver
 // itself, so the console never re-implements the precedence rule to show it.
+//
+// The membership move (PUT) and promotion (POST …/promote) are the policy tree's: they follow the
+// second-human switch as every assignment write does.
 func (s *Server) mountGovernanceRoutes(operatorOnly chi.Router) {
 	operatorOnly.Get("/governance", s.handleGetGovernance)
 	operatorOnly.Post("/governance/units", s.handleCreateGovernanceUnit)
 	operatorOnly.Put("/governance/units/{id}", s.handleUpdateGovernanceUnit)
 	operatorOnly.Delete("/governance/units/{id}", s.handleDeleteGovernanceUnit)
 	operatorOnly.Post("/governance/memberships", s.handleUpsertGovernanceMembership)
+	operatorOnly.Put("/governance/memberships/{id}", s.handleMoveGovernanceMembership)
 	operatorOnly.Delete("/governance/memberships/{id}", s.handleDeleteGovernanceMembership)
+	operatorOnly.Post("/governance/memberships/{id}/promote", s.handlePromoteGovernanceMembership)
 	operatorOnly.Post("/governance/check", s.handleGovernanceCheck)
 	s.mountGovernanceChangeRoutes(operatorOnly)
 }
