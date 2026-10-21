@@ -64,7 +64,7 @@ func TestPG_QueueWaitingServiceRunIsOrderedByItsTokensSequence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ageSponsorships(t, e.pg.Pool) // see svcEnv.mintReq
+	ageFreshSponsorships(t, e.pg.Pool) // see svcEnv.mintReq
 	w := e.call(e.person, http.MethodPost, "/api/v1/me/service-identities/"+si.Name+"/tokens", `{"name":"ci","ttl_seconds":3600}`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("mint the service token = %d %s", w.Code, w.Body)

@@ -114,13 +114,13 @@ func (e svcEnv) mustCreate(t *testing.T, name, sponsor string) types.ServiceIden
 	return si
 }
 
-// mintReq has as ask for a token. A sponsorship written moments ago is aged first (ageSponsorships): the store
+// mintReq has as ask for a token. A sponsorship written moments ago is aged first (ageFreshSponsorships): the store
 // refuses a token whose translated issue time is not after sponsor_since, and under load a create-then-mint
 // that close inverts the two, a flake that says nothing about the test. A test whose point is that ordering
 // calls mintReqUnaged.
 func (e svcEnv) mintReq(t *testing.T, as *http.Cookie, name, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	ageSponsorships(t, e.pool)
+	ageFreshSponsorships(t, e.pool)
 	return e.mintReqUnaged(t, as, name, body)
 }
 

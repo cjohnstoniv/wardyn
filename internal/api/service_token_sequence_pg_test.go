@@ -34,7 +34,7 @@ func (e *queueEnv) sponsoredService(rev *pgTestRevocations) (types.ServiceIdenti
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	ageSponsorships(e.t, e.pg.Pool) // see mintReq: a mint right after the create must not race sponsor_since
+	ageFreshSponsorships(e.t, e.pg.Pool) // see mintReq: a mint right after the create must not race sponsor_since
 	seq, err := rev.RevocationSeq(ctx)
 	if err != nil {
 		e.t.Fatal(err)

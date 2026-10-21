@@ -191,6 +191,7 @@ func TestServiceIdentity_StreamEndsWhenTheServiceDoes(t *testing.T) {
 func TestServiceIdentity_TokenCapHoldsInTheStore(t *testing.T) {
 	e := newSvcEnv(t)
 	e.mustCreate(t, svcName, svcSponsor)
+	ageFreshSponsorships(t, e.pool) // the store mints below straight after the create; see svcEnv.mintReq
 	mint := func() error {
 		f := false
 		_, err := e.st.CreateServiceToken(context.Background(), svcName, svcSponsor, apiTokenMaxPerPrincipal, types.APIToken{
