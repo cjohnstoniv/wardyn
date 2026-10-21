@@ -228,7 +228,10 @@ func (s *Server) validatePresetRequest(w http.ResponseWriter, r *http.Request, n
 			"request.%s is set per launch, so a preset cannot carry it", bad[0]))
 		return false
 	}
-	if presetRunModeRefusal(req.Request).write(s, w, r) || s.presetContractRefusal(req.Request).write(s, w, r) {
+	// The overlay is walked here as it is at launch, so a preset the launch would refuse every time
+	// is refused once, at the admin's write.
+	if presetRunModeRefusal(req.Request).write(s, w, r) || s.presetContractRefusal(req.Request).write(s, w, r) ||
+		policyOverlayRefusal(req.Request).write(s, w, r) {
 		return false
 	}
 	if paths := documentAvailabilityRefusal(req.Request); len(paths) > 0 {
