@@ -165,6 +165,24 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
 
   // #1429/#1428: an Azure DevOps row has no shared credential lane to tick; the
   // console authors the lane its addresses call for and the person-owned choice.
+  // #3329: the saved toast must not show before the screen has adopted the response, or an edit made the moment
+  // it appears is overwritten by that response.
+  test("an edit made the moment the saved toast shows is kept", async ({ page }) => {
+    await gotoProviders(page);
+    const box = page.getByTestId("provider-row-github").locator("textarea");
+    await box.fill("https://github.com/acme2");
+    await page.getByRole("button", { name: PROVIDERS.SAVE_CTA }).click();
+    await expect(page.getByText(PROVIDERS.SAVED_TOAST)).toBeVisible();
+    await box.fill("https://github.com/acme3");
+    await expect(page.getByTestId("unsaved-marker")).toBeVisible();
+    await expect(box).toHaveValue("https://github.com/acme3");
+    // Leave the document as the walk below expects it (one toast at a time: the helper counts on it).
+    await page.getByRole("listitem").filter({ hasText: PROVIDERS.SAVED_TOAST }).getByRole("button", { name: "Close toast" }).click();
+    await expect(page.getByText(PROVIDERS.SAVED_TOAST)).toHaveCount(0);
+    await box.fill("https://github.com/acme");
+    await saveProviders(page);
+  });
+
   test("Add provider authors a valid Azure DevOps row: no lanes to tick, the token choice, saved in the entra lane", async ({ page }) => {
     await gotoProviders(page);
     // The github row already exists (previous test) as a FULL row — it renders

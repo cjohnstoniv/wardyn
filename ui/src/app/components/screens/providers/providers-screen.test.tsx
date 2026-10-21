@@ -10,6 +10,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
+import { toast } from "sonner";
 import { HttpError } from "../../../lib/api/core";
 import { AGENTS, PROVIDERS, PROVIDERS_EXTRA } from "../../../lib/workspace-providers-copy";
 import { ACCESS_STATE } from "../../../lib/people-access-copy";
@@ -234,6 +235,28 @@ describe("ProvidersScreen", () => {
     await screen.findByTestId("provider-row-github");
     await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
     expect(putWorkspaceProvidersMock).toHaveBeenCalled();
+  });
+
+  // #3329: an edit made between the saved toast and the screen adopting the PUT response was overwritten by it.
+  // The response must already be the draft and baseline when the toast shows.
+  it("commits the saved document before the saved toast shows", async () => {
+    const acme = (url: string) => ({ git: [{ id: "github", kind: "github", base_urls: [url] }] });
+    getWorkspaceProvidersMock.mockResolvedValue({ providers: acme("https://github.com/acme"), etag: '"e3"' });
+    putWorkspaceProvidersMock.mockResolvedValue({ providers: acme("https://github.com/acme2"), etag: '"e4"', sourcesNoLongerAdmitted: 0 });
+    let dirtyAtToast: boolean | null = null;
+    vi.spyOn(toast, "success").mockImplementation(() => {
+      dirtyAtToast = screen.queryByTestId("unsaved-marker") !== null;
+      return 1;
+    });
+    renderScreen();
+    const row = await screen.findByTestId("provider-row-github");
+    const box = within(row).getByRole("textbox");
+    await userEvent.clear(box);
+    await userEvent.type(box, "https://github.com/acme2");
+    expect(await screen.findByTestId("unsaved-marker")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+    await waitFor(() => expect(dirtyAtToast).not.toBeNull());
+    expect(dirtyAtToast).toBe(false);
   });
 
   // V1 lens E finding 2 (HIGH): Save was withheld on the draft's emptiness, so

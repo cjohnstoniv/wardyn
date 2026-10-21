@@ -25,6 +25,7 @@
 // needs its own frozen row (§7.7 has none), and an empty body is the
 // smaller change of the two.
 import * as React from "react";
+import { flushSync } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
@@ -153,17 +154,21 @@ export function ProvidersScreen() {
     try {
       // An Azure DevOps row is sent in the lane its addresses call for.
       const result = await api.putWorkspaceProviders({ ...next, git: next.git?.map((r) => reshapeADORow(r)) }, etag);
-      setDraft(result.providers);
-      // The PUT response is the new BASELINE too — a save with nothing left
-      // unsaved must not still read as dirty to the guard above or to a
-      // second "Copy my changes" the person never asked for.
-      setOriginal(result.providers);
-      // The PUT response is the new loaded snapshot: saving a removal down to
-      // zero rows puts the org in true legacy-open mode, and the banner's Add
-      // owns the affirmative again.
-      setLoadedEmpty((result.providers.git ?? []).length === 0);
-      setEtag(result.etag);
-      setNarrowed(result.sourcesNoLongerAdmitted > 0 ? result.sourcesNoLongerAdmitted : null);
+      // #3329: committed before the toast shows. Between the toast and a later commit an edit would be
+      // overwritten by this response, so the screen holds the saved document first.
+      flushSync(() => {
+        setDraft(result.providers);
+        // The PUT response is the new BASELINE too — a save with nothing left
+        // unsaved must not still read as dirty to the guard above or to a
+        // second "Copy my changes" the person never asked for.
+        setOriginal(result.providers);
+        // The PUT response is the new loaded snapshot: saving a removal down to
+        // zero rows puts the org in true legacy-open mode, and the banner's Add
+        // owns the affirmative again.
+        setLoadedEmpty((result.providers.git ?? []).length === 0);
+        setEtag(result.etag);
+        setNarrowed(result.sourcesNoLongerAdmitted > 0 ? result.sourcesNoLongerAdmitted : null);
+      });
       if (result.sourcesNoLongerAdmitted > 0) {
         toast.warning(PROVIDERS.SAVED_TOAST, { description: PROVIDERS.SAVED_NARROWED(result.sourcesNoLongerAdmitted) });
       } else {
