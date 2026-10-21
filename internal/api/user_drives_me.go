@@ -39,6 +39,10 @@ type meUserDrive struct {
 	// Paused: allocated, disabled by an admin — the chip says so and the New Run
 	// card renders the paused line where the checkbox would be.
 	Paused bool `json:"paused,omitempty"`
+	// PlacementEligible: a share, which can be reached from more than one place
+	// (#113); MountsFrom is where it mounts from, printed as it is (M10).
+	PlacementEligible bool   `json:"placement_eligible"`
+	MountsFrom        string `json:"mounts_from,omitempty"`
 }
 
 // resolveMeUserDrive answers the /me.user_drive field, or nil.
@@ -121,7 +125,7 @@ func (s *Server) resolveMeUserDrive(r *http.Request) (*meUserDrive, string) {
 	// (the runner could not be asked) is not about the drive at all, so it takes
 	// `unavailable`, matching writeDriveError's own status mapping.
 	if !resolved.Paused {
-		if f := s.driveBindFailureHere(ctx, *resolved); f != nil {
+		if f := s.driveBindFailureHere(ctx, *resolved, drivePlace{}); f != nil {
 			if f.status == http.StatusServiceUnavailable {
 				return nil, driveUnavailableUnknown
 			}
@@ -136,6 +140,9 @@ func (s *Server) resolveMeUserDrive(r *http.Request) (*meUserDrive, string) {
 		Enforcement: resolved.Enforcement,
 		HomeName:    resolved.HomeName,
 		Paused:      resolved.Paused,
+		// The drive's own backend, never a placement or runner the caller is on.
+		PlacementEligible: types.PlacementEligible(resolved.Drive.Backend),
+		MountsFrom:        s.driveMountsFrom(ctx, resolved.Drive),
 	}, ""
 }
 

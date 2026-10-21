@@ -75,6 +75,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -232,8 +233,8 @@ func driveDeniedByProfileMsg(profile string) string {
 //  2. The share is not there (host_path only — see driveShareIsBindable).
 //
 // It writes its own 422 and returns false once it has.
-func (s *Server) driveIsMountableHere(ctx context.Context, w http.ResponseWriter, resolved types.ResolvedDrive) bool {
-	f := s.driveBindFailureHere(ctx, resolved)
+func (s *Server) driveIsMountableHere(ctx context.Context, w http.ResponseWriter, resolved types.ResolvedDrive, at drivePlace) bool {
+	f := s.driveBindFailureHere(ctx, resolved, at)
 	if f == nil {
 		return true
 	}
@@ -300,8 +301,19 @@ func (f *driveBindFailure) write(s *Server, w http.ResponseWriter) {
 }
 
 // driveBindFailureHere is driveIsMountableHere's DECISION, with no writer, no
-// metric and no log — nil means "this deployment would bind it".
-func (s *Server) driveBindFailureHere(ctx context.Context, resolved types.ResolvedDrive) *driveBindFailure {
+// metric and no log — nil means "this deployment would bind it". at is where the
+// run mounts it: on a person's own runner only a second place bound to that
+// runner binds, and that runner checks the path against its owner's roots
+// (drivePathsOn, then its own driver), so none of the organisation's checks
+// below apply there.
+func (s *Server) driveBindFailureHere(ctx context.Context, resolved types.ResolvedDrive, at drivePlace) *driveBindFailure {
+	if at.runner != nil {
+		if msg := driveOnRunnerMsg(resolved.Drive, at.runner); msg != "" {
+			return &driveBindFailure{status: http.StatusUnprocessableEntity, reason: driveRefusalBackendElsewhere,
+				member: strings.TrimPrefix(msg, "drive: "), attrs: []any{slog.String("drive", resolved.Drive.Name)}}
+		}
+		return nil
+	}
 	if s.cfg.Runner != nil {
 		caps, cerr := s.cfg.Runner.Capabilities(ctx)
 		if cerr != nil {
@@ -338,10 +350,13 @@ func (s *Server) driveBindFailureHere(ctx context.Context, resolved types.Resolv
 //	would find out when their work failed to persist. The narrow direction
 //	(read_only:true on a writable allocation) is always honoured — that is what
 //	NARROW-ONLY means, and it matches WorkspaceSelection.ReadOnly exactly.
-func (s *Server) driveMountFor(ctx context.Context, w http.ResponseWriter, d runDrive) (*types.DriveMount, bool) {
+func (s *Server) driveMountFor(ctx context.Context, w http.ResponseWriter, d runDrive, at drivePlace) (*types.DriveMount, bool) {
 	resolved := d.resolved
-	if !s.driveIsMountableHere(ctx, w, resolved) {
+	if !s.driveIsMountableHere(ctx, w, resolved, at) {
 		return nil, false
+	}
+	if at.runner != nil {
+		resolved = secondPlaceResolved(resolved)
 	}
 	if refusal := driveReadOnlyRefusal(d.narrow, resolved); refusal != nil {
 		refusal.drive.write(s, w)
@@ -385,6 +400,7 @@ func (s *Server) driveMountFor(ctx context.Context, w http.ResponseWriter, d run
 		SizeMiB:     resolved.SizeMiB,
 		Enforcement: resolved.Enforcement,
 		Team:        resolved.Team,
+		RunnerID:    at.runner,
 	}, true
 }
 

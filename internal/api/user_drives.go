@@ -186,6 +186,8 @@ func (s *Server) handleGetUserDrives(w http.ResponseWriter, r *http.Request) {
 	for i := range drives {
 		total += drives[i].GrantCount
 		drives[i].SingleHost = drives[i].TeamSingleHost()
+		drives[i].PlacementEligible = types.PlacementEligible(drives[i].Backend)
+		drives[i].MountsFrom = s.driveMountsFrom(r.Context(), drives[i].UserDrive)
 	}
 
 	var grants []types.UserDriveGrant
@@ -355,9 +357,15 @@ func (s *Server) decodeUserDriveRequest(w http.ResponseWriter, r *http.Request, 
 		Reclaim:      req.Reclaim,
 		Team:         req.Team,
 		CreatedBy:    principalFromRequest(r),
+		AltBackend:   req.AltBackend,
+		AltHostRoot:  req.AltHostRoot,
+		AltRunnerID:  req.AltRunnerID,
 	}
 	if err := types.ValidateUserDrive(&d, s.cfg.RunnerTarget); err != nil {
 		return types.UserDrive{}, http.StatusBadRequest, "", "invalid drive: " + err.Error()
+	}
+	if code, msg := s.driveSecondPlaceRefusal(r.Context(), &d); msg != "" {
+		return types.UserDrive{}, code, "", msg
 	}
 	// The org switch and the deployment ceiling, in the same arm as the env
 	// host_root ceiling below and for the same reason — both are facts about the

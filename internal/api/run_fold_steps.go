@@ -704,21 +704,36 @@ func (s *Server) stepLocalEligibility(f *runFold, rec *foldRecorder) bool {
 	return true
 }
 
-// stepDriveEligibility holds the run's drives to the kind of runner it got: no
-// drive mounts on a person's own runner, so a run stepPlacement left on one (its
-// pool has no remote-hosted runner for it, or the request asked for its own
-// runner) is refused, named, before anything is sized or minted. A person's own
-// drive is held off such a runner permanently (memberDriveNeverOnPool).
+// stepDriveEligibility holds the run's drives to the runner it got. On a person's
+// own runner a drive mounts only from a second place bound to that runner (M10);
+// any other drive, and a kept work folder, is refused there, named, before
+// anything is sized or minted. A person's own drive has no second place, so it
+// stays off such a runner (memberDriveNeverOnPool). A run with a second place
+// gets its mounts here, where its placement is known (seedRequestDrives left
+// them); every other run's were built with its drives.
 func (s *Server) stepDriveEligibility(f *runFold, rec *foldRecorder) bool {
-	if !mountsDrives(f.drives, f.keep) || !f.place.pooled || f.place.placement != types.PlacementLocal {
+	var at drivePlace
+	if mountsDrives(f.drives, f.keep) && f.place.pooled && f.place.placement == types.PlacementLocal {
+		at.runner = f.place.placedRunner()
+		msg := ""
+		for _, d := range f.drives {
+			if msg = driveOnRunnerMsg(d.resolved.Drive, at.runner); msg != "" {
+				break
+			}
+		}
+		if msg == "" && f.keep != nil {
+			msg = driveNotInPoolMsg("keep_work_folder")
+		}
+		if msg != "" {
+			return !driveDenied(authz.Deny(authz.ReasonDriveNotInPool, "runs.drive", msg), msg).write(s, f.w, f.r)
+		}
+	}
+	if f.mode == foldPreview || !slices.ContainsFunc(f.drives, func(d runDrive) bool { return d.resolved.Drive.AltRunnerID != nil }) {
 		return true
 	}
-	name := "keep_work_folder"
-	if len(f.drives) > 0 {
-		name = f.drives[0].resolved.Drive.Name
-	}
-	msg := driveNotInPoolMsg(name)
-	return !driveDenied(authz.Deny(authz.ReasonDriveNotInPool, "runs.drive", msg), msg).write(s, f.w, f.r)
+	var ok bool
+	f.driveMounts, ok = s.driveMountsAt(f.w, f.r, f.drives, at)
+	return ok
 }
 
 // stepPlacement runs after the components and before the local-eligibility step: the confinement
@@ -735,7 +750,8 @@ func (s *Server) stepPlacement(f *runFold, rec *foldRecorder) bool {
 	}
 	in := placementInput{req: f.req, floor: confinementFloorSpec(f.spec, f.comps), baseline: f.baseline, reqCC: f.reqCC, reqCCOK: true,
 		ceiling: f.ceiling, untouched: resourceBaseline(f.source, f.spec), ask: resourceAsk(f.req.Resources, sourceSize(f.source, f.ceiling)),
-		promoted: f.promoted, drives: mountsDrives(f.drives, f.keep), noLocal: promotedNoLocal(f.r.Context())}
+		promoted: f.promoted, drives: mountsDrives(f.drives, f.keep), driveRunner: drivesBoundRunner(f.drives, f.keep),
+		noLocal: promotedNoLocal(f.r.Context())}
 	if f.spec.Resources != nil {
 		in.policyDiskMiB = f.spec.Resources.DiskMiB
 	}

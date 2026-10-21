@@ -39,6 +39,8 @@ func TestDriveRefusalSentencesMatchGolden(t *testing.T) {
 		"TOO_MANY":             func(a []string) string { return driveTooManyMsg(atoi(a[0])) },
 		"NOT_FOUND":            func(a []string) string { return driveNotFoundMsg(a[0]) },
 		"NOT_IN_POOL":          func(a []string) string { return driveNotInPoolMsg(a[0]) },
+		"ORG_RUNNERS_ONLY":     func(a []string) string { return driveOrgRunnersOnlyMsg(a[0]) },
+		"BOUND_ELSEWHERE":      func(a []string) string { return driveBoundElsewhereMsg(a[0]) },
 		"TARGET_CONFLICT":      func(a []string) string { return driveTargetConflictMsg(a[0], a[1], a[2]) },
 		"SHARE_BESIDE_MANAGED": func(a []string) string { return driveShareBesideManagedMsg(a[0], a[1]) },
 
