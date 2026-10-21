@@ -87,6 +87,7 @@ var docTierRows = []struct{ route, token string }{
 	{"GET /api/v1/components", "the organisation's components"},
 	{"PUT /api/v1/components/{id}", "the organisation's components"},
 	{"DELETE /api/v1/components/{id}", "the organisation's components"},
+	{"PUT /api/v1/components/{id}/kubectl-token", "the organisation's components"},
 	{"POST /api/v1/access/mappings", "`/access` role-mapping routes"},
 	{"PUT /api/v1/workspaces/{id}/llm-cred", "`llm-cred`"},
 	{"PUT /api/v1/workspaces/{id}/requirements", "`requirements`"},
