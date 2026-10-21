@@ -254,9 +254,7 @@ func clampResources(out *types.RunPolicySpec, ceiling types.RunPolicySpec, limit
 // IsSet treats an all-zero-but-non-nil PushRulesSpec (push_rules: {} on the wire) as "no opinion"
 // like nil, so an empty ceiling doesn't get inherited wholesale and false-warn.
 func clampPushRules(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns []string) []string {
-	// deny_new_executables is not in IsSet (nothing enforces it yet) but a ceiling's true must
-	// still reach the merged spec, so a proposal can never switch it off.
-	if !ceiling.PushRules.IsSet() && (ceiling.PushRules == nil || !ceiling.PushRules.DenyNewExecutables) {
+	if !ceiling.PushRules.IsSet() {
 		return warns
 	}
 	if out.PushRules == nil {

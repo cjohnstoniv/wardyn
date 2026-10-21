@@ -493,9 +493,6 @@ func validatePushRules(pr *types.PushRulesSpec) error {
 	if pr.MaxFileSizeMiB < 0 {
 		return fmt.Errorf("push_rules.max_file_size_mib must be between 0 and %d, got %d", maxPushRulesFileSizeMiB, pr.MaxFileSizeMiB)
 	}
-	if pr.DenyNewExecutables {
-		return errors.New("push_rules.deny_new_executables is not supported yet")
-	}
 	return nil
 }
 

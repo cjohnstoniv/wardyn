@@ -1166,7 +1166,13 @@ So an entry a pattern matches is judged one of two ways:
   - There the card's `acts_as_kind` is `ado_entra` and its label is the person whose sign-in the push uses.
   - The lane's REST door holds the same way — see **Every door, not only git's**.
 
-- `deny_new_executables` is not supported yet (see its row below).
+- `deny_new_executables` refuses a file executable in the pushed tree that the carried parent tree held not executable, or not at all (`gitpack.Change.BaseMode`).
+  - Any regular-file mode with the user-execute bit counts, since git checks it out executable.
+- Without that tree, the forge must show the path executable, or a directory unchanged, in any commit the push builds on. That is any parent of a pushed commit already in the history of the default branch or of a branch the push updates.
+  - So a path executable in any such commit, a merge parent included, may stay executable or become executable again, and its content is not judged, as with an edit to an existing executable. The exception is a parent tree the push carries that held it not executable, which the first bullet refuses.
+  - A lane whose forge cannot be read refuses nearly every push.
+- A symlink or a submodule pointer is not an executable file; what a submodule brings in is not judged.
+- The Azure DevOps REST door refuses every content push while it is on: a REST push names no file modes.
 - `max_file_size_mib` decides with `gitpack.Change.Size()`, which returns `(bytes, known)`, so a bare comparison against a limit does not compile.
 - A size the pack does not carry (a submodule pointer, an unchanged file on a second push) is cleared against the forge or refused.
 - The forge can be read only on github.com:
@@ -1178,7 +1184,7 @@ So an entry a pattern matches is judged one of two ways:
 >
 > - A policy that sets `push_rules` while `ssh_key` is the run's **only** git-capable grant is legal (never a `422` at write time) but the rules cannot be enforced.
 > - The policy's risk grade (`composer.Grade`, shown by the Policies screen's safety meter and returned by preflight as `risk_assessment`) surfaces that as a **medium**-risk item so the operator is told rather than blocked.
-> - An all-zero `push_rules: {}` — nothing in `deny_paths` or `require_review_paths`, `max_inspect_pack_mib` and `max_file_size_mib` `0`/absent — reads as **absent** (a `hold_seconds` with no review path to hold for does not count), the same as `null`.
+> - An all-zero `push_rules: {}` — nothing in `deny_paths` or `require_review_paths`, `max_inspect_pack_mib` and `max_file_size_mib` `0`/absent, `deny_new_executables` `false` — reads as **absent** (a `hold_seconds` with no review path to hold for does not count), the same as `null`.
 > - It never survives an operator ceiling into a member's clamped spec, and never grades the warning above.
 
 **Clamped as a floor, not a bare merge.**
@@ -1196,7 +1202,7 @@ So an entry a pattern matches is judged one of two ways:
 | `max_inspect_pack_mib` | `int` | `0` | Caps how much of an incoming push the broker buffers before refusing it as too large. |
 | | | | `0`/absent means **32 MiB**, deliberately below the maximum an operator may author so that raising the ceiling — the stated remedy for a `413` — is available. Bounded at write time to **0..64**. |
 | `max_file_size_mib` | `int` | `0` | Refuses a push that introduces a file larger than this many MiB; `0`/absent is **off**, bounded to **0..32** at write time. A deny, like a `deny_paths` match. See [`max_file_size_mib`](#max_file_size_mib). |
-| `deny_new_executables` | `bool` | `false` | **Not supported yet:** a policy that sets it `true` is refused (`400`) at write time, because the broker cannot yet tell a newly added executable from an edit to an existing one. |
+| `deny_new_executables` | `bool` | `false` | Refuses a push that adds an executable file or makes a file executable. An edit to an executable passes unless a parent tree the push carries held it not executable; see [`push_rules`](#push_rules--pushrulesspec). `false`/absent is **off**. |
 | `require_review_paths` | `[]string` | `[]` | Path patterns whose match **holds** a push for an admin's `push_content` decision instead of refusing it — see **Held for review** above. |
 | | | | Same pattern language and the same per-entry write-time checks as `deny_paths` (256 bytes, valid UTF-8, no control character, no leading or trailing whitespace, no empty/`.`/`..` segment), and likewise no count cap. A `deny_paths` match wins. |
 | `hold_seconds` | `int` | `0` | How long a held push waits for its decision before it is refused. `0`/absent means **120**. Bounded at write time to **0..600**, the proxy's own hold ceiling, which also clamps a stored value past it. |

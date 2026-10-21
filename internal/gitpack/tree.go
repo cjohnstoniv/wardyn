@@ -23,10 +23,22 @@ const (
 	modeFormat  = 0o170000
 )
 
+// IsExecutable reports whether mode is a regular file git checks out
+// executable: like modeTree, git masks the format bits, and any user-execute
+// bit makes the checkout 0755, so "100775" and "100700" are executables too.
+func IsExecutable(mode string) bool {
+	m, err := strconv.ParseUint(mode, 8, 32)
+	return err == nil && m&modeFormat == modeRegular && m&0o100 != 0
+}
+
 // ModeUncarried is the Mode of a Change that stands for a directory whose tree
 // object the pack does not hold. No other Change carries a directory mode: a
 // directory the pack does carry is reported as the entries beneath it.
 const ModeUncarried = "40000"
+
+// ModeAbsent is the BaseMode of a Change whose path the carried parent tree
+// has no entry for: the push adds it.
+const ModeAbsent = "0"
 
 // Opaque reports whether a checkout may hold paths beneath c.Path that no
 // Change names (an uncarried directory, symlink, or submodule). A rule about
@@ -358,7 +370,7 @@ func (r Result) Settle(held func(commit string) (bool, error)) (Result, error) {
 // must see the executable one.
 type walker struct {
 	idx  *index
-	seen map[Change]bool
+	seen map[Change]int
 	// walked is every (prefix, tree) pair already expanded — trees are a DAG,
 	// and this memo bounds the width maxTreeDepth does not.
 	walked map[string]bool
@@ -380,7 +392,7 @@ type walker struct {
 }
 
 func newWalker(i *index) *walker {
-	return &walker{idx: i, seen: map[Change]bool{}, walked: map[string]bool{}, diffed: map[string]bool{},
+	return &walker{idx: i, seen: map[Change]int{}, walked: map[string]bool{}, diffed: map[string]bool{},
 		bases: map[string]bool{}}
 }
 
@@ -430,7 +442,7 @@ func (w *walker) introduced(c commitInfo) error {
 	if diffed {
 		return nil
 	}
-	return w.walk("", c.tree, 0)
+	return w.walk("", c.tree, 0, "")
 }
 
 // diff reports the entries the new tree adds or changes. Removals are not
@@ -463,7 +475,7 @@ func (w *walker) diff(prefix, oldOID, newOID string, depth int) error {
 		return err
 	}
 	if !ok {
-		return w.walkEntries(prefix, next, depth)
+		return w.walkEntries(prefix, next, depth, "")
 	}
 	if err := w.charge(len(prev) + len(next)); err != nil {
 		return err
@@ -478,13 +490,17 @@ func (w *walker) diff(prefix, oldOID, newOID string, depth int) error {
 			continue
 		}
 		path := prefix + e.name
+		base := ModeAbsent
+		if existed {
+			base = before.mode
+		}
 		switch {
 		case !e.isTree():
-			err = w.leaf(path, e)
+			err = w.leaf(path, e, base)
 		case existed && before.isTree():
 			err = w.diff(path+"/", before.oid, e.oid, depth+1)
 		default:
-			err = w.walk(path+"/", e.oid, depth+1)
+			err = w.walk(path+"/", e.oid, depth+1, ModeAbsent)
 		}
 		if err != nil {
 			return err
@@ -494,8 +510,13 @@ func (w *walker) diff(prefix, oldOID, newOID string, depth int) error {
 }
 
 // walk reports every entry under one tree. A subtree the pack does not carry is
-// reported as one opaque entry at its own path: see the package comment.
-func (w *walker) walk(prefix, oid string, depth int) error {
+// reported as one opaque entry at its own path: see the package comment. base
+// is every entry's BaseMode: ModeAbsent beneath a directory the carried parent
+// lacks, "" when no carried parent says. The memo stays keyed on the tree alone,
+// so a tree reached twice keeps the base of the walk that reached it first.
+// Neither base a walk carries is executable, so a skipped walk never lets an
+// executable pass from the pack alone: at worst it is left for the forge.
+func (w *walker) walk(prefix, oid string, depth int, base string) error {
 	key := prefix + "\x00" + oid
 	if w.walked[key] {
 		return nil
@@ -511,10 +532,10 @@ func (w *walker) walk(prefix, oid string, depth int) error {
 		return err
 	}
 	w.walked[key] = true
-	return w.walkEntries(prefix, entries, depth)
+	return w.walkEntries(prefix, entries, depth, base)
 }
 
-func (w *walker) walkEntries(prefix string, entries []treeEntry, depth int) error {
+func (w *walker) walkEntries(prefix string, entries []treeEntry, depth int, base string) error {
 	if depth > maxTreeDepth {
 		return ErrTooDeep
 	}
@@ -525,9 +546,9 @@ func (w *walker) walkEntries(prefix string, entries []treeEntry, depth int) erro
 		path := prefix + e.name
 		var err error
 		if e.isTree() {
-			err = w.walk(path+"/", e.oid, depth+1)
+			err = w.walk(path+"/", e.oid, depth+1, base)
 		} else {
-			err = w.leaf(path, e)
+			err = w.leaf(path, e, base)
 		}
 		if err != nil {
 			return err
@@ -536,8 +557,8 @@ func (w *walker) walkEntries(prefix string, entries []treeEntry, depth int) erro
 	return nil
 }
 
-func (w *walker) leaf(path string, e treeEntry) error {
-	return w.record(Change{Path: path, Mode: e.mode, size: w.idx.blobSize(e.oid), OID: e.oid})
+func (w *walker) leaf(path string, e treeEntry, base string) error {
+	return w.record(Change{Path: path, Mode: e.mode, size: w.idx.blobSize(e.oid), OID: e.oid, BaseMode: base})
 }
 
 // uncarried reports a directory whose tree object the pack does not hold, as
@@ -547,7 +568,10 @@ func (w *walker) uncarried(prefix, oid string) error {
 }
 
 func (w *walker) record(c Change) error {
-	if w.seen[c] {
+	key := c
+	key.BaseMode = ""
+	if i, ok := w.seen[key]; ok {
+		w.out[i].BaseMode = newerBase(w.out[i].BaseMode, c.BaseMode)
 		return nil
 	}
 	if len(w.out) >= maxChanges {
@@ -556,7 +580,23 @@ func (w *walker) record(c Change) error {
 	if err := w.keep(len(c.Path)); err != nil {
 		return err
 	}
-	w.seen[c] = true
+	w.seen[key] = len(w.out)
 	w.out = append(w.out, c)
 	return nil
+}
+
+// newerBase is the BaseMode one entry keeps when two parents report it: a
+// known base other than an executable mode wins (against that
+// parent the entry is new), then an unknown one, so a rule about new
+// executables errs towards refusing.
+func newerBase(a, b string) string {
+	switch {
+	case a == b:
+		return a
+	case a != "" && !IsExecutable(a):
+		return a
+	case b != "" && !IsExecutable(b):
+		return b
+	}
+	return ""
 }

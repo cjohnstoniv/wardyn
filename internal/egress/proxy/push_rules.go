@@ -57,6 +57,12 @@ package proxy
 // max_file_size_mib reads the same change set: a carried file over the limit is
 // refused from the pack alone; one whose size the pack doesn't carry is cleared
 // against the forge like a matched entry and refused when it can't be.
+//
+// deny_new_executables reads it too: a file executable in the pushed tree that
+// the carried parent tree held not executable, or not at all, is refused from
+// the pack alone. One with no carried base, and every directory the pack
+// doesn't carry, is cleared only when the forge shows the same path executable
+// (a directory: unchanged) in a commit the push builds on, and refused otherwise.
 
 import (
 	"bytes"
@@ -139,6 +145,9 @@ type pushRuleSet struct {
 	inspectMax int64
 	// maxFileBytes refuses a pushed file larger than this; 0 is off.
 	maxFileBytes int64
+	// denyNewExec refuses a push that adds an executable file or makes one
+	// executable.
+	denyNewExec bool
 }
 
 // compilePushRules builds the compiled form, or nil when the spec carries no
@@ -158,6 +167,7 @@ func compilePushRules(s *types.PushRulesSpec) *pushRuleSet {
 		rs.hold = min(time.Duration(s.HoldSeconds)*pushHoldSecond, maxHoldTimeout)
 	}
 	rs.maxFileBytes = int64(s.MaxFileSizeMiB) << 20
+	rs.denyNewExec = s.DenyNewExecutables
 	rs.deny = rs.compile(s.DenyPaths)
 	rs.review = rs.compile(s.RequireReviewPaths)
 	return rs
@@ -522,6 +532,9 @@ func (p *Proxy) inspectPush(w http.ResponseWriter, r *http.Request, rules *pushR
 	}, res, forge, subject, deny) {
 		return nil, pushReview{}, noRelease, false
 	}
+	if rules.denyNewExec && !p.refuseNewExecutables(w, r, res, forge, subject, deny) {
+		return nil, pushReview{}, noRelease, false
+	}
 	review := pushReview{cmds: res.Commands}
 	if review.paths, review.why, err = p.matchedPaths(r, rules.review, res, forge, subject); err != nil {
 		p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusUnsupportedMediaType,
@@ -544,7 +557,7 @@ func (p *Proxy) matchedPaths(r *http.Request, pats [][]string, res gitpack.Resul
 	}
 	paths, left, why, err := p.claimedEntries(r, func(cs []gitpack.Change) ([]string, []gitpack.Change, error) {
 		return match(pats, cs)
-	}, res, forge, subject)
+	}, (*forgeRepo).heldAtAny, res, forge, subject)
 	for _, c := range left {
 		paths = append(paths, shownPath(c))
 	}
@@ -556,10 +569,10 @@ func (p *Proxy) matchedPaths(r *http.Request, pats [][]string, res gitpack.Resul
 // it doesn't (unknown, for the forge to clear or not). History the pack
 // re-sends is cleared first (forgeRepo.settle); an entry the pack still
 // carries is claimed outright, and only then does the forge get to clear
-// entries the pack doesn't carry. left is what no one cleared, and why says
-// what the forge could not show.
+// entries the pack doesn't carry, each by clear. left is what no one cleared,
+// and why says what the forge could not show.
 func (p *Proxy) claimedEntries(r *http.Request, claim func([]gitpack.Change) ([]string, []gitpack.Change, error),
-	res gitpack.Result, forge *forgeRepo, subject slog.Attr) (hits []string, left []gitpack.Change, why string, err error) {
+	clear forgeClear, res gitpack.Result, forge *forgeRepo, subject slog.Attr) (hits []string, left []gitpack.Change, why string, err error) {
 	hits, unknown, err := claim(res.Changes)
 	if err != nil || len(hits) == 0 && len(unknown) == 0 {
 		return hits, nil, "", err
@@ -573,7 +586,7 @@ func (p *Proxy) claimedEntries(r *http.Request, claim func([]gitpack.Change) ([]
 		}
 		left = nil
 		if len(hits) == 0 && len(unknown) > 0 {
-			left, why = forge.unchanged(ctx, unknown, res)
+			left, why = forge.unchanged(ctx, unknown, res, clear)
 		}
 	}
 	if forge != nil && forge.reads > 0 {
@@ -615,7 +628,7 @@ func oversize(limit int64, changes []gitpack.Change) (hits []string, unknown []g
 func (p *Proxy) refuseLargeFiles(w http.ResponseWriter, r *http.Request,
 	claim func([]gitpack.Change) ([]string, []gitpack.Change, error), res gitpack.Result,
 	forge *forgeRepo, subject slog.Attr, deny func(ruleSource string)) bool {
-	over, left, why, err := p.claimedEntries(r, claim, res, forge, subject)
+	over, left, why, err := p.claimedEntries(r, claim, (*forgeRepo).heldAtAny, res, forge, subject)
 	if err != nil {
 		p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusUnsupportedMediaType,
 			"wardyn: cannot enforce push content rules on this push: "+err.Error())
@@ -650,6 +663,62 @@ func (p *Proxy) refuseLargeFiles(w http.ResponseWriter, r *http.Request,
 		slog.Int("denied_paths", len(over)+len(left)),
 		slog.Any("paths", sampleOf(append(over, uncarriedPaths(left)...))),
 		slog.String("reason", "max_file_size_mib"),
+		slog.String("forge", why))
+	p.denyAttributed(w, body, http.StatusForbidden)
+	return false
+}
+
+// newExecutables is deny_new_executables' claim: a file executable in the
+// pushed tree whose carried base held no executable there is a hit; one with
+// no carried base, and a directory the pack doesn't carry, is unknown, for the
+// forge to show it was there already. Symlinks and submodules run nothing.
+func newExecutables(changes []gitpack.Change) (hits []string, unknown []gitpack.Change, err error) {
+	for _, c := range changes {
+		switch {
+		case c.Mode == gitpack.ModeUncarried:
+			unknown = append(unknown, c)
+		case !gitpack.IsExecutable(c.Mode):
+		case c.BaseMode == "":
+			unknown = append(unknown, c)
+		case !gitpack.IsExecutable(c.BaseMode):
+			hits = append(hits, c.Path)
+		}
+	}
+	return hits, unknown, nil
+}
+
+// refuseNewExecutables applies deny_new_executables to one inspected push and
+// writes the refusal itself, as refuseLargeFiles does, returning false when it
+// refused.
+func (p *Proxy) refuseNewExecutables(w http.ResponseWriter, r *http.Request, res gitpack.Result,
+	forge *forgeRepo, subject slog.Attr, deny func(ruleSource string)) bool {
+	added, left, why, err := p.claimedEntries(r, newExecutables, (*forgeRepo).executableAtAny, res, forge, subject)
+	if err != nil {
+		p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusUnsupportedMediaType,
+			"wardyn: cannot enforce push content rules on this push: "+err.Error())
+		return false
+	}
+	paths := append(added, uncarriedPaths(left)...)
+	if len(paths) == 0 {
+		return true
+	}
+	remedy := "clear the executable bit on these files (git update-index --chmod=-x), " +
+		"or ask an operator to set push_rules.deny_new_executables to false"
+	if why == whyChanged {
+		why = whyNotExecutable
+	}
+	if why == whyNotGitHub {
+		remedy += ". Wardyn can't read this repository's history here, so it can't tell which files are new."
+	}
+	body := pathsBody("wardyn: this push is refused by the run's push content rules: new executable files",
+		paths, "new executable", why, remedy)
+	deny(ruleSourceGitRules)
+	slog.WarnContext(r.Context(), "wardyn-proxy: git push denied by content rules",
+		slog.String("run_id", p.runID.String()),
+		subject,
+		slog.Int("denied_paths", len(paths)),
+		slog.Any("paths", sampleOf(paths)),
+		slog.String("reason", "deny_new_executables"),
 		slog.String("forge", why))
 	p.denyAttributed(w, body, http.StatusForbidden)
 	return false

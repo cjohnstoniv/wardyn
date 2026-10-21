@@ -107,6 +107,11 @@ func (p *Proxy) governADOContent(w http.ResponseWriter, r *http.Request, host st
 		writeADORefusal(w, http.StatusForbidden, "GitPushRulesException", deniedPathsBody(denied, ""))
 		return false
 	}
+	if err == nil && rules.denyNewExec {
+		// A REST push names paths but no modes, and a rename keeps a file's mode at its new path.
+		return refuse(ruleSourceGitPackBlind, "Wardyn refused this Azure DevOps request: this run's push rules refuse new "+
+			"executable files, and a REST push does not say which files it leaves executable. Push the change with git instead.")
+	}
 	var review []string
 	if err == nil {
 		review, _, err = match(rules.review, changes)
