@@ -55,9 +55,10 @@ func (s *Server) runDesktopPolicy(ctx context.Context, runID uuid.UUID) ([]types
 	return envelope.UIApps, envelope.Desktop.Effective(), nil
 }
 
-// uiDesktopApp is whether app is the desktop the run's desktop rules govern: the noVNC image's
-// app, declared as "novnc" (docs/UI-SANDBOXES.md). Every other app's sockets relay unfiltered.
-func uiDesktopApp(app string) bool { return app == "novnc" }
+// uiDesktopApp is whether app is a desktop the run's desktop rules govern: the noVNC image's
+// app, declared as "novnc" (docs/UI-SANDBOXES.md), and the person's sign-in display inside it
+// (desktopSigninApp). Every other app's sockets relay unfiltered.
+func uiDesktopApp(app string) bool { return app == "novnc" || app == desktopSigninApp }
 
 // uiFilterUpgrade puts the clipboard filter on a desktop's relayed WebSocket. That socket is RFB
 // or it closes (rfbfilter): a desktop whose server does not speak RFB is closed and audited. A 101

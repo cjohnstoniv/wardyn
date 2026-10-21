@@ -70,7 +70,8 @@ docs/SSH.md=6703 share=35
 # docs/UI-SANDBOXES.md 6361, measured, at the 0.10 W4c merge of DSK-A 46d21862b onto the train: two merge bases (CTL-A 99d68a80a and VM-C~1 4b06ac1e5), so no single base to subtract.
 # 0.10 CTL-C (#2972): docs/UI-SANDBOXES.md 5914 adds 261 over 5653, measured: the desktop sign-ins section and its image.
 # docs/UI-SANDBOXES.md 6622 = ours 6361 + theirs 5914 - base 5653 at the 0.10 W4c merge of CTL-C 6de42c110 onto the train.
-docs/UI-SANDBOXES.md=6622 share=35
+# docs/UI-SANDBOXES.md 6627 adds 5 (0.10 W4c seam, CTL-A x CTL-C): the clipboard filter names the sign-in display, measured.
+docs/UI-SANDBOXES.md=6627 share=35
 # docs/NEW-RUN.md 2905 measured (0.9 final docs pass): the New run guide.
 # docs/NEW-RUN.md 2914 adds 9 over 2905: 0.9 final docs pass 2, measured: the runner-limit wait reason and the runner pools links.
 # docs/NEW-RUN.md 2915 adds 1 over 2914: docs fix: run --file overlay; a policy's own * rule stays in force on a routed run, measured.

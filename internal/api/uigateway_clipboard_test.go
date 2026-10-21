@@ -332,6 +332,24 @@ func TestUIGateway_ClipboardLeavesOtherAppsUnfiltered(t *testing.T) {
 	}
 }
 
+// The sign-in display is a noVNC desktop in the same sandbox, so its socket gets the same filter
+// as the run's own desktop; an editor's does not.
+func TestUIGateway_ClipboardWrapsTheSigninDisplay(t *testing.T) {
+	h := desktopHarness(t, http.NotFoundHandler(), nil)
+	for app, want := range map[string]bool{"novnc": true, desktopSigninApp: true, "code": false} {
+		backend, _ := net.Pipe()
+		t.Cleanup(func() { backend.Close() })
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		resp := &http.Response{StatusCode: http.StatusSwitchingProtocols, Header: http.Header{}, Body: backend, Request: req}
+		if err := h.srv.uiFilterUpgrade(resp, uiSession{Run: h.run.ID, App: app}); err != nil {
+			t.Fatalf("%s: uiFilterUpgrade: %v", app, err)
+		}
+		if _, filtered := resp.Body.(*rfbfilter.Conn); filtered != want {
+			t.Errorf("%s: socket filtered = %v, want %v", app, filtered, want)
+		}
+	}
+}
+
 // A desktop whose server does not open with RFB is closed before a byte reaches the browser, and
 // the close is audited by reason only.
 func TestUIGateway_ClipboardClosesADesktopThatIsNotRFB(t *testing.T) {
