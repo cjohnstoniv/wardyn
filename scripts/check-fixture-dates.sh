@@ -189,9 +189,6 @@ declare -A ALLOWLIST=(
   ["ui/src/app/components/screens/new-run-flow/steps/shape/seed-loaders.test.ts"]=1 # passthrough: a launch intent's created_at, never compared to the clock
   ["ui/src/app/components/screens/templates/rename-template-dialog.test.tsx"]=1 # display only: a template's updated_at
   ["ui/src/app/components/screens/templates/templates-screen.test.tsx"]=1 # display only: a template's updated_at
-  # 0.10 W4d: scheduled runs (SCHED), kept/team drives (KEEP, TEAM) and runner health (RDIAG-B) tests. Each date is a fixed
-  # instant passed in as the clock (NOW, now) or as stubbed row data the code under test only echoes or compares to that
-  # injected clock; none is compared to the wall clock.
   # 0.10 W4d: the scheduled-runs (SCHED), kept and team drive (KEEP, TEAM) and runner-health (RDIAG-B) tests. Each date is a fixed
   # instant passed in as the clock (NOW, now) or stubbed row data the code under test only echoes or compares to that
   # injected clock; none is compared to the wall clock.
