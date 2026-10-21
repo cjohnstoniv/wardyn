@@ -1,0 +1,222 @@
+// Copyright 2026 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package api
+
+import (
+	"bytes"
+	"encoding/json"
+	"maps"
+	"net/http"
+	"net/http/httptest"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/broker"
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
+	"github.com/cjohnstoniv/wardyn/internal/types"
+)
+
+const (
+	fillTestHost  = "api.corp.test"
+	fillTestValue = "resident-fill-value"
+)
+
+// fillDispatch dispatches, through a whole local dispatch, one runner_resident
+// env_secret or file_secret grant whose scope names fillTestHost, with
+// WARDYN_RUNNER_SECRET_PLACEHOLDERS as given. It returns the grant, what the
+// runner received (each deliver_resident, and the spec its create was handed,
+// which the runner's substrate sends as create_sandbox), and the run's grant
+// rows afterwards.
+func fillDispatch(t *testing.T, kind types.GrantKind, on bool) (types.CredentialGrant, []runnerwire.DeliverResidentArgs, runner.SandboxSpec, []types.CredentialGrant, *residentFix) {
+	t.Helper()
+	f := newResidentFix(t, nil, residentAllClassesPolicy)
+	f.srv.cfg.RunConfigKey = make([]byte, kek.DEKSize)
+	f.srv.cfg.RunnerSecretPlaceholders = on
+	f.reportCaps(t, true)
+	ctx := t.Context()
+	if err := f.cfg.Secrets.(*memSecrets).Put(ctx, "op-secret", []byte(fillTestValue)); err != nil {
+		t.Fatal(err)
+	}
+	run := f.startingRun(t, func(r *types.AgentRun) { r.State = types.RunPending })
+	scope := `{"name":"RES_TOKEN","secret_name":"op-secret","host":"` + fillTestHost + `"}`
+	if kind == types.GrantFileSecret {
+		scope = `{"file":"res.key","secret_name":"op-secret","host":"` + fillTestHost + `"}`
+	}
+	g, err := f.st.CreateGrant(ctx, types.CredentialGrant{ID: uuid.New(), RunID: run.ID, Delivery: types.GrantDeliveryResident,
+		Spec: types.GrantSpec{Kind: kind, Scope: json.RawMessage(scope)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := policyOf(g)
+	policy.AllowedDomains = []string{fillTestHost}
+	f.srv.dispatchRun(ctx, run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()),
+		dispatchParams{RunToken: "run-token", Image: "wardyn/claude-code:latest", Policy: policy})
+	f.srv.WaitBackground()
+	for _, ev := range syncAuditRows(f.audit, "run.dispatch") {
+		if ev.RunID != nil && *ev.RunID == run.ID && ev.Outcome == "failure" {
+			t.Fatalf("dispatch refused the run: %s", ev.Data)
+		}
+	}
+	delivered, _ := f.side.calls()
+	rn := f.cfg.Runner.(*fakeRunner)
+	rn.mu.Lock()
+	calls, spec := rn.createCalls, rn.lastSpec
+	rn.mu.Unlock()
+	if calls != 1 || spec.RunnerID != f.rn.ID.String() {
+		t.Fatalf("%d creates on runner %q, want one on the run's runner", calls, spec.RunnerID)
+	}
+	rows, err := f.st.ListGrantsByRun(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return g, delivered, spec, rows, f
+}
+
+// residentReadData is the one secret.read row of the grant's runner-resident read.
+func residentReadData(t *testing.T, f *residentFix) map[string]any {
+	t.Helper()
+	var reads []map[string]any
+	for _, ev := range syncAuditRows(f.audit, "secret.read") {
+		var d map[string]any
+		if err := json.Unmarshal(ev.Data, &d); err != nil {
+			t.Fatal(err)
+		}
+		if d["purpose"] == "runner-resident" {
+			reads = append(reads, d)
+		}
+	}
+	if len(reads) != 1 {
+		t.Fatalf("%d runner-resident secret.read rows, want 1", len(reads))
+	}
+	return reads[0]
+}
+
+// placed is where the created spec carries the grant's value or placeholder.
+func placed(kind types.GrantKind, spec runner.SandboxSpec) string {
+	if kind == types.GrantEnvSecret {
+		return spec.SecretEnv["RES_TOKEN"]
+	}
+	for _, mf := range spec.ManagedFiles {
+		if mf.Path == runner.ComponentSecretDir+"/res.key" {
+			return string(mf.Content)
+		}
+	}
+	return ""
+}
+
+// With WARDYN_RUNNER_SECRET_PLACEHOLDERS on, the runner never receives the
+// value: no deliver_resident carries it, and the create holds the fill
+// placeholder and a via_org route for the host, never the rule or the value.
+// The fill grant is recorded via_org, so the organisation's egress serves it.
+func TestDispatch_RunnerSecretPlaceholderKeepsTheValueOffTheRunner(t *testing.T) {
+	for _, kind := range []types.GrantKind{types.GrantEnvSecret, types.GrantFileSecret} {
+		t.Run(string(kind), func(t *testing.T) {
+			g, delivered, spec, rows, f := fillDispatch(t, kind, true)
+			for _, d := range delivered {
+				if d.GrantID == g.ID || d.Value == fillTestValue {
+					t.Fatalf("delivered %+v, want the value kept off the runner", d)
+				}
+			}
+			wire, err := json.Marshal(runnerwire.CreateSandboxArgs{Spec: spec})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bytes.Contains(wire, []byte(fillTestValue)) || slices.Contains(slices.Collect(maps.Values(spec.SecretEnv)), fillTestValue) {
+				t.Fatalf("the runner's create carries the value: %s", wire)
+			}
+			got, pc := placed(kind, spec), spec.ProxyConfig
+			fill, ok := placement.FillGrantID(got)
+			if !ok {
+				t.Fatalf("runner got %q, want a fill placeholder", got)
+			}
+			if len(pc.Injection) != 0 || !slices.Equal(pc.ViaOrgRoutes, []proxy.ViaOrgRoute{{GrantID: fill, Host: fillTestHost}}) ||
+				!slices.Equal(pc.MITMHosts, []string{fillTestHost}) || pc.MITMCAKeyPEM == "" {
+				t.Fatalf("runner proxy injection %+v routes %+v mitm %v, want only the via_org route, its host intercepted once", pc.Injection, pc.ViaOrgRoutes, pc.MITMHosts)
+			}
+			i := slices.IndexFunc(rows, func(r types.CredentialGrant) bool { return r.ID == fill })
+			if i < 0 || rows[i].Delivery != types.GrantDeliveryViaOrg || rows[i].Spec.Kind != types.GrantAPIKey || !apiKeyScopeShared(rows[i].Spec.Scope) {
+				t.Fatalf("fill grant %+v, want a shared api_key recorded via_org", rows)
+			}
+			if rule, err := injectionRuleFromScope(rows[i].Spec.Scope); err != nil || rule.Placeholder != got || rule.Host != fillTestHost || rule.SecretName != "op-secret" {
+				t.Fatalf("fill rule %+v (%v), want the placeholder, host and secret", rule, err)
+			}
+			audited := false
+			for _, ev := range syncAuditRows(f.audit, "run.secret_placeholder.resolve") {
+				audited = audited || (ev.Outcome == "success" && strings.Contains(string(ev.Data), `"delivery":"via_org"`))
+			}
+			if !audited {
+				t.Fatal("no run.secret_placeholder.resolve success row naming via_org")
+			}
+			if read := residentReadData(t, f); read["fill"] != string(types.GrantDeliveryViaOrg) || read["runner_id"] != nil || read["posture"] != nil {
+				t.Fatalf("secret.read %v, want fill via_org and no runner named", read)
+			}
+		})
+	}
+}
+
+// Off (the 0.10.0 default), the grant is delivered runner_resident exactly as
+// before: its value goes to the runner for the sandbox, the create holds its
+// resident placeholder, and no fill grant or via_org route is authored.
+func TestDispatch_RunnerSecretPlaceholderOffDeliversAsBefore(t *testing.T) {
+	for _, kind := range []types.GrantKind{types.GrantEnvSecret, types.GrantFileSecret} {
+		t.Run(string(kind), func(t *testing.T) {
+			g, delivered, spec, rows, f := fillDispatch(t, kind, false)
+			if len(delivered) != 1 || delivered[0].GrantID != g.ID || delivered[0].Value != fillTestValue || !delivered[0].Sandbox {
+				t.Fatalf("delivered %+v, want the value for the sandbox", delivered)
+			}
+			got, pc := placed(kind, spec), spec.ProxyConfig
+			if got != placement.ResidentPlaceholder(g.ID) || len(pc.ViaOrgRoutes) != 0 || len(rows) != 1 {
+				t.Fatalf("runner got %q routes %+v grants %d, want the resident placeholder and nothing authored", got, pc.ViaOrgRoutes, len(rows))
+			}
+			if n := len(syncAuditRows(f.audit, "run.secret_placeholder.resolve")); n != 0 {
+				t.Fatalf("%d placeholder rows with the switch off", n)
+			}
+			if read := residentReadData(t, f); read["runner_id"] != f.rn.ID.String() || read["fill"] != nil {
+				t.Fatalf("secret.read %v, want the runner named as before", read)
+			}
+		})
+	}
+}
+
+// The organisation's egress fills the placeholder: the runner's proxy forwards
+// the sandbox's own Authorization, which is the placeholder, and the upstream
+// sees the value, read by the organisation alone.
+func TestViaOrg_FillsARunnerResidentPlaceholder(t *testing.T) {
+	f := &viaOrgAPIFixture{bindingFixture: newBindingFixture(t), up: newViaOrgUpstream(t)}
+	f.online.Store(true)
+	viaOrgAPI(t, f.srv, f.up, &f.online)
+	grant := uuid.New()
+	ph := placement.FillPlaceholderPrefix + grant.String()
+	scope := mustJSON(map[string]any{"host": viaOrgAPIHost, "secret_name": "corp-secret", "format": "%s", "require_tls": true, "placeholder": ph, "shared": true})
+	if _, err := f.st.CreateGrant(t.Context(), types.CredentialGrant{ID: grant, RunID: f.run.ID, Delivery: types.GrantDeliveryViaOrg,
+		Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: scope}}); err != nil {
+		t.Fatal(err)
+	}
+	rule, err := injectionRuleFromScope(scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.srv.cfg.Broker = &fakeBroker{minted: broker.Minted{Kind: types.GrantAPIKey, JTI: "j", Injection: &rule}}
+	storeViaOrgConfig(t, f.srv, f.run.ID, []proxy.ViaOrgRoute{{GrantID: grant, Host: viaOrgAPIHost}})
+	req := httptest.NewRequest(http.MethodPost, proxy.ViaOrgPathPrefix+grant.String()+"/v1/x", strings.NewReader(`{"q":1}`))
+	req.Header.Set("Authorization", "Bearer "+runToken(t, f.srv, f.run.ID))
+	req.Header.Set(proxy.ViaOrgAuthorityHeader, viaOrgAPIHost)
+	req.Header.Set(proxy.ViaOrgAuthorizationHeader, ph)
+	req = req.WithContext(relayConnContext(req.Context(), relayedConn{runner: f.rn.ID}))
+	w := httptest.NewRecorder()
+	f.srv.relayRoutes(f.srv.InternalHandler()).ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("via_org = %d %s", w.Code, w.Body)
+	}
+	if _, auth, _ := f.up.seen(); len(auth) != 1 || auth[0] != viaOrgAPIValue {
+		t.Fatalf("upstream saw Authorization %q, want the filled value", auth)
+	}
+}

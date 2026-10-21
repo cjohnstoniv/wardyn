@@ -82,6 +82,7 @@ What Wardyn does for a delivered value:
   - The proxy replaces the placeholder with the value in the `Authorization` header of requests to that host ([`internal/api/runs_dispatch_placeholders.go#Server.authorSecretPlaceholder`](../internal/api/runs_dispatch_placeholders.go)).
   - A program that signs locally, or uses the value any other way, holds only the placeholder and fails.
   - Without `WARDYN_PROXY_RESPONSE_SCRUB`, a host that echoes the request header back returns the value to the sandbox.
+  - `WARDYN_RUNNER_SECRET_PLACEHOLDERS`, also off by default, does the same for a `runner_resident` grant: the runner gets the placeholder, and the organisation's egress fills it ([`internal/api/runs_dispatch_placeholders.go#Server.placeResidentEnvSecrets`](../internal/api/runs_dispatch_placeholders.go)).
 - It skips a grant it cannot honour, and leaves the variable or file absent; it does not set a blank ([`internal/api/runs_dispatch_files.go#Server.resolveFileSecretGrants`](../internal/api/runs_dispatch_files.go)).
 
 What it does not do:

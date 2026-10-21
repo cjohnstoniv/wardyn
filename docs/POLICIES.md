@@ -767,6 +767,9 @@ What the check does and does not settle:
   - the value goes into the sandbox as before when `host` is not an exact `allowed_domains` entry, already carries another credential, or the value spans lines (`run.secret_placeholder.resolve` says which);
   - only `Authorization` is filled: a placeholder in another header, inside Basic auth's base64, a URL or a body reaches `host` unchanged, and a plain-HTTP request to `host` is refused.
   - Without `WARDYN_PROXY_RESPONSE_SCRUB`, a host that echoes the request header back returns the value to the sandbox.
+- On a runner, `WARDYN_RUNNER_SECRET_PLACEHOLDERS` (off by default in 0.10.0) does the same for a `runner_resident` grant with a `host`:
+  - the runner gets the placeholder and a `via_org` route instead of the value, and the organisation's egress fills it, so requests to `host` leave from the organisation's network;
+  - the same limits apply, and a grant that misses them is delivered `runner_resident` as before.
 - Puts the stored secret's **value** into the sandbox environment under `name`, resolved at dispatch —
   - there is no mint, so `requires_approval` is **refused** rather than silently ignored, `ttl_seconds` means nothing, and the broker rejects the grant id outright if anything POSTs it at the mint route.
 - `name` must match `[A-Z_][A-Z0-9_]*` and may not start with `WARDYN_` (those configure the sandbox harness itself);
