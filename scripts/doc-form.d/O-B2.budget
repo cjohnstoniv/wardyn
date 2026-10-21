@@ -144,7 +144,7 @@
 # docs/OPERATIONS.md 57722 = ours 57424 + theirs 57690 - base 57392 at the 0.10 LANES merge of main onto BOUNDARY.
 # docs/OPERATIONS.md 58681 = ours 58681 + theirs 57722 - lane's pre-LANES value 57722 (the lane stacked LAY-A, which main already carries) at the 0.10 W4d merge of LANES onto the train.
 # docs/OPERATIONS.md 58711 = ours 58681 + theirs 57531 - base 57501 at the 0.10 W4d merge of RDIAG-B onto the train.
-# docs/OPERATIONS.md=58785 adds 63 (0.10 TREE-MODEL): the 0208 migration row.
+# docs/OPERATIONS.md=58785 adds 63 (0.10 TREE-MODEL): the unit-tree migration row.
 docs/OPERATIONS.md=58848
 # docs/OPERATIONS.md 55840 adds 124 over 55716, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # docs/OPERATIONS.md 55867 adds 27 over 55840, measured: a run whose runner cannot be asked falls back to this deployment's runner, the older-runner exception, pooled runs, and the runner_offline gap reason.

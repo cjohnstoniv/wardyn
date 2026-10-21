@@ -122,7 +122,7 @@ func TestGovCovApplyAssignmentChange(t *testing.T) {
 	userReq := governanceMembershipRequest{SubjectType: types.CapabilitySubjectUser, Subject: "u@corp.example", UnitID: govCovPID, Priority: 3}
 	r := govCovHumanReq(http.MethodPost, "/x", "sub-bob", "bob@corp.example", oidc.RoleSecurityAdmin)
 
-	t.Run("a key of another shape (held before 0208) is stale before any statement", func(t *testing.T) {
+	t.Run("a key of another shape (held before the unit tree) is stale before any statement", func(t *testing.T) {
 		s, _ := govCovServer(t, &govCovStore{})
 		q := &govCovQuerier{}
 		_, err := applyMembershipChange(s, r, q, types.GovernanceChange{ID: govCovChangeID, TargetKey: "user:u@corp.example"})

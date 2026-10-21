@@ -393,7 +393,7 @@ func membershipKey(unitID uuid.UUID, subjectType types.CapabilitySubjectType, su
 }
 
 // splitMembershipKey is membershipKey's inverse; false for a key of any other shape, including the
-// (subject_type, subject) keys held before migration 0208.
+// (subject_type, subject) keys held before the unit-tree migration.
 func splitMembershipKey(key string) (unitID uuid.UUID, subjectType, subject string, ok bool) {
 	unit, rest, ok := strings.Cut(key, ":")
 	if !ok {
@@ -595,7 +595,7 @@ func applyMembershipChange(s *Server, r *http.Request, q store.Querier, ch types
 	ctx := r.Context()
 	unitID, subjectType, subject, ok := splitMembershipKey(ch.TargetKey)
 	if !ok {
-		// A change held before migration 0208 keyed one assignment per subject; what its reviewer
+		// A change held before the unit-tree migration keyed one assignment per subject; what its reviewer
 		// saw no longer exists in that shape, so it is stale, as a changed base is.
 		return govApplied{}, store.ErrGovernanceChangeStale
 	}

@@ -1,7 +1,7 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Governance units and their memberships (migrations 0052, 0207, 0208).
+// Governance units and their memberships (migrations 0052, 0207 and governance_unit_tree).
 //
 // This file is DUMB on purpose: it round-trips rows and owns exactly one
 // piece of logic, ListMembershipsFor's ORDER BY, so precedence is a
@@ -31,11 +31,11 @@ const governanceUnitCols = `id, name, ceiling, limits, created_at, updated_at, c
 // governanceUnitColsP is governanceUnitCols qualified for a join or a recursive term.
 const governanceUnitColsP = `p.id, p.name, p.ceiling, p.limits, p.created_at, p.updated_at, p.created_by, p.contact, p.parent_id, p.overlay, p.overlay_limits, p.kind, p.mode, p.depth`
 
-// DefaultUnitID is the one Default unit's fixed id (migration 0208). Its walls are the deployment
+// DefaultUnitID is the one Default unit's fixed id (unit-tree migration). Its walls are the deployment
 // default, read at resolve; the row stores none.
 var DefaultUnitID = uuid.MustParse("00000000-0000-0000-0000-000000000001")
 
-// MaxUnitDepthCap is the deepest a unit path can be stored (the depth CHECK of migration 0208), and
+// MaxUnitDepthCap is the deepest a unit path can be stored (the depth CHECK of the unit-tree migration), and
 // the bound on the chain read: the configured limit (site_config.governance_max_depth) is never above it.
 const MaxUnitDepthCap = 64
 
@@ -122,7 +122,7 @@ func WriteGovernanceUnitQ(ctx context.Context, q Querier, id uuid.UUID, build Go
 		return types.GovernanceUnit{}, err
 	}
 	// A re-parent moves every descendant too, so the whole tree's depths are recomputed here,
-	// under the graph lock, by the same walk migration 0208 runs.
+	// under the graph lock, by the same walk the unit-tree migration runs.
 	if _, err := q.Exec(ctx, refreshUnitDepths); err != nil {
 		return types.GovernanceUnit{}, fmt.Errorf("store: refresh governance unit depths: %w", err)
 	}
@@ -363,7 +363,7 @@ func (s PG) ListGovernanceUnits(ctx context.Context) ([]types.GovernanceUnit, er
 }
 
 // UpsertGovernanceMembership adds one subject's membership of one unit, keyed on
-// the natural UNIQUE (unit_id, subject_type, subject) of migration 0208: a subject
+// the natural UNIQUE (unit_id, subject_type, subject) of the unit-tree migration: a subject
 // may be a member of several units, one row each, and re-posting the same unit and
 // subject updates that row's priority and home. A legacy row stays legacy.
 //
@@ -580,7 +580,7 @@ func (s PG) MaxUnitDepth(ctx context.Context) (int, []string, error) {
 
 // MaxUnitDepthQ returns the deepest unit path's depth and its unit names from the top down (Default
 // or a parent-less unit first); 1 and one name for a tree with no child. The walk is the one
-// migration 0208 and every write run, bounded at MaxUnitDepthCap.
+// the unit-tree migration and every write run, bounded at MaxUnitDepthCap.
 func MaxUnitDepthQ(ctx context.Context, q Querier) (int, []string, error) {
 	const stmt = `
 		WITH RECURSIVE tree AS (

@@ -241,7 +241,7 @@ func (s *Server) composeChain(chain []types.GovernanceUnit) (*ResolvedUnit, erro
 		base = s.deploymentAuthority()
 		next = root - 1
 	case chain[root].Composed():
-		// A composed row with no base: a store read before migration 0208 put it under Default.
+		// A composed row with no base: a store read before the unit-tree migration put it under Default.
 		base = s.deploymentAuthority()
 	default:
 		var warns []string

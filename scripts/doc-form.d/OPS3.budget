@@ -83,7 +83,9 @@ docs/operations/ownership-and-offboarding.md=2414 share=35
 # docs/operations/governance-writes.md 3170 adds 12 over 3158, measured (0.10 LAY-A): the org walls row in the covered-writes table.
 # docs/operations/governance-writes.md 3171 measured (0.10 BOUNDARY): the org walls renamed the Wardyn boundary, with modes.
 # docs/operations/governance-writes.md=3171 adds 307 (0.10 TREE-MODEL): the Units and memberships section.
-docs/operations/governance-writes.md=3478 share=35
+# docs/operations/governance-writes.md 3512 adds 34 over 3478, measured (0.10 TREE-MODEL): an email row never counts on revive, and a stale group list refuses a run with no user home while any group membership is a home.
+# docs/operations/governance-writes.md 3522 adds 10 over 3512, measured (0.10 TREE-MODEL): the run-end extension and a unit above in the revive bullet.
+docs/operations/governance-writes.md=3522 share=35
 # 0.9.4 L8: docs/operations/member-runs.md 1054 adds 10 over 1044: ssh_key delivery claims bounded.
 docs/operations/member-runs.md=1054 share=35
 # docs/operations/user-drives.md 4818 adds 14 over 4804 (0.9 release text for the fix sets merged at release); measured.

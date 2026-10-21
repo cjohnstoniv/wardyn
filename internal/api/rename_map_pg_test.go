@@ -191,7 +191,7 @@ func TestRenameMap(t *testing.T) {
 	_ = ctx
 }
 
-// treeFields are what the unit tree (migration 0208) added to the governance surface; this pin
+// treeFields are what the unit tree (unit-tree migration) added to the governance surface; this pin
 // covers the rename only, so they and the Default unit's row are left out of the comparison.
 var treeFields = []string{"kind", "mode", "depth", "home", "legacy", "max_depth"}
 
