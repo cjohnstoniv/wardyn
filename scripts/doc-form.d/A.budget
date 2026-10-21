@@ -268,7 +268,9 @@
 # docs/AUDIT-ACTIONS.md 51326 = ours 51254 + theirs 50756 - lane's pre-LANES value 50684 (the lane stacked LAY-A, which main already carries) at the 0.10 W4d merge of LANES onto the train.
 # docs/AUDIT-ACTIONS.md 49960 adds 56 over 49904, measured (0.10 RDIAG-B): the runner.offline_summary row.
 # docs/AUDIT-ACTIONS.md 51382 = ours 51326 + theirs 49960 - base 49904 at the 0.10 W4d merge of RDIAG-B onto the train.
-docs/AUDIT-ACTIONS.md=51382 share=8
+# docs/AUDIT-ACTIONS.md=50570 adds 14 (0.10 CLEANUP), measured: the run.revoke row says the reaper row has no failed_steps.
+# docs/AUDIT-ACTIONS.md 51396 = ours 51382 + theirs 50570 - base 50556 at the 0.10 W4d merge of CLEANUP onto the train.
+docs/AUDIT-ACTIONS.md=51396 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.

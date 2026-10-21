@@ -31,9 +31,12 @@ type localSub struct {
 	provedFor string
 	// hung, when set, receives once ProveRunnerSandbox starts, which then
 	// answers only when its context ends, as a hung engine inspect would.
-	hung   chan struct{}
-	status runner.Status
-	agent  runner.Status
+	hung chan struct{}
+	// lateStop makes StopProxy answer success only after its context ends: a stop that finished at the
+	// bound's edge.
+	lateStop bool
+	status   runner.Status
+	agent    runner.Status
 }
 
 func (s *localSub) Name() string { return "docker" }
@@ -48,7 +51,11 @@ func (s *localSub) ProveRunnerSandbox(ctx context.Context, _, runnerID string) e
 	s.provedFor = runnerID
 	return s.foreign
 }
-func (s *localSub) StopProxy(context.Context, string) error {
+func (s *localSub) StopProxy(ctx context.Context, _ string) error {
+	if s.lateStop {
+		<-ctx.Done()
+		return nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.stops++
