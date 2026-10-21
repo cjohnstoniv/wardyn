@@ -36,7 +36,9 @@ export function Segmented<T extends string>({
   /** New Run's view and format switches: a padded track with an inset pill per option (the Make design's compact control). */
   size?: "default" | "compact";
 }) {
-  const chip = (o: { value: T; dirty?: boolean }) =>
+  // On the selected default option the warning tint (13%) would show the primary fill through it, so the chip
+  // takes the solid card colour, and its warning text keeps >= 4.5:1 against that in both themes (#2832).
+  const chip = (o: { value: T; dirty?: boolean }, selected = false) =>
     o.dirty && (
       /* aria-hidden: the chip is a VISUAL echo of a fact already
           announced elsewhere (the PageHeader chip, the beside-Save
@@ -44,7 +46,9 @@ export function Segmented<T extends string>({
           would silently break every exact-string `getByRole(...,
           {name: o.label})` lookup the moment the tab it names is dirty. */
       <span aria-hidden="true" data-testid={`tab-dirty-chip-${o.value}`}>
-        <Chip tone="warning">{UNSAVED.DIRTY_CHIP}</Chip>
+        <Chip tone="warning" className={selected ? "border-transparent bg-card" : undefined}>
+          {UNSAVED.DIRTY_CHIP}
+        </Chip>
       </span>
     );
   if (size === "compact") {
@@ -90,7 +94,7 @@ export function Segmented<T extends string>({
           )}
         >
           {o.label}
-          {chip(o)}
+          {chip(o, value === o.value)}
         </button>
       ))}
     </div>

@@ -60,4 +60,15 @@ describe("Segmented", () => {
     expect(git).not.toHaveClass("bg-muted");
     expect(screen.getByRole("button", { name: "Storage" })).not.toHaveClass("bg-primary");
   });
+
+  // #2832: a dirty chip inside the selected (primary-filled) option sits on the solid card colour, not the 13% tint.
+  it("the dirty chip on the selected option is solid, and on an unselected one keeps the warning tint", () => {
+    render(<Segmented value="git" options={OPTIONS.map((o) => ({ ...o, dirty: true }))} onChange={() => {}} />);
+    const on = screen.getByTestId("tab-dirty-chip-git").firstElementChild!;
+    expect(on).toHaveClass("bg-card", "text-warning");
+    expect(on).not.toHaveClass("bg-warning-subtle");
+    const off = screen.getByTestId("tab-dirty-chip-storage").firstElementChild!;
+    expect(off).toHaveClass("bg-warning-subtle");
+    expect(off).not.toHaveClass("bg-card");
+  });
 });
