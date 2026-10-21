@@ -42,7 +42,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `types.RunPolicy` changes to read `.RunPolicy`.
 - **Workspace names are now unique per owner, not per install.** Two owners may use the same name (migration
   `0192_workspace_name_per_owner` drops the install-wide unique constraint `workspaces_name_key`). A script that looks
-  a workspace up by name alone can now match more than one.
+  a workspace up by name alone can now match more than one. Reassigning a workspace to the operator when the operator
+  already has one of that name is refused (409 `workspace_name_taken`). A SCIM purge renames such a workspace to
+  `name (id-prefix)` and audits `renamed_to`.
 - **The compose services drop `NET_RAW`, and the desktop tier no longer publishes ports 5432, 5010 and 8081 on the
   host.** Use `docker exec` or your own override. A custom image on those services that needs raw sockets adds
   `cap_add: [NET_RAW]`. Desktop packages need Docker Compose 2.24.4 or newer.
