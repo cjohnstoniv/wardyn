@@ -17,6 +17,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -38,6 +39,7 @@ type presetFixture struct {
 func newPresetFixture(t *testing.T) presetFixture {
 	t.Helper()
 	pool := throwawayPGPool(t)
+	testutil.SetBoundaryNoLimits(t, pool) // the walled profile's runs predate the boundary
 	pg := store.NewPG(pool)
 	ctx := context.Background()
 	profile, err := pg.UpsertGovernanceProfile(ctx, types.GovernanceProfile{

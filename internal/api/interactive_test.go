@@ -18,6 +18,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/identity/identitytest"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -149,6 +150,8 @@ func pgHarnessWithRunner(t *testing.T, r runner.Runner) (*Server, *pgxpool.Pool)
 		pool.Close()
 		t.Fatalf("migrate: %v", err)
 	}
+	// The DSN's database is shared and its first migration seeds the boundary; these tests predate it.
+	testutil.SetBoundaryNoLimits(t, pool)
 	t.Cleanup(pool.Close)
 	return pgHarnessOnPool(t, r, pool), pool
 }
