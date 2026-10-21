@@ -122,7 +122,7 @@ func validateApprovalRuleApprove(kinds []types.ApprovalKind, a types.ApprovalRul
 
 // approvalRuleBoundaryRefusal refuses a host the Wardyn boundary (read by boundary: the pool on a direct write, the
 // decision transaction on an approved one) does not allow while it is in hard_limits.
-func approvalRuleBoundaryRefusal(boundary func() (types.Boundary, error), w types.ApprovalRuleWrite) (*profileWriteError, error) {
+func approvalRuleBoundaryRefusal(boundary func() (types.Boundary, error), w types.ApprovalRuleWrite) (*unitWriteError, error) {
 	b, err := boundary()
 	if err != nil || !b.HardLimits() {
 		return nil, err
