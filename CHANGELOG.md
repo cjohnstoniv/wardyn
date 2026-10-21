@@ -72,6 +72,37 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - A run's sandbox is stopped when its computer folder's pass back runs long. Before, the pass could use up the time
   the teardown had, and the sandbox, its proxy and the audit of its stop waited for a later sweep (#3466).
 
+## [0.9.8] — 2026-10-21
+
+### Before you upgrade
+
+- A member's local folder mount is now refused when its path is, or sits inside, `.codex`, `.azure`, `.gemini`, `.npmrc`, `.pypirc` or `.config/gcloud` (any letter case), as it already was for `.ssh`, `.aws` and the other credential paths. A folder that only contains one of them is still allowed. To mount that work, use a folder outside those paths. The same list applies to an admin-made `host_path` drive, which is checked at every launch: an existing drive whose `host_root` is, or sits inside, one of those paths stops binding at launch until an admin moves its `host_root` out of that path.
+
+### Added
+
+- `GET /governance/credential-delivery` lists, as `unbuildable`, each stored row (a class, or a class under a trust class) whose mode the server cannot build for it, with the modes it can; the field is absent when there are none. The setup check `credential_delivery` warns and names each, for an operator. Nothing is changed: the document is read, and those rows refuse as before.
+
+### Fixed
+
+- A request refused because its host resolved into private address space that `internal_hosts` can lift now names the remedy: `an operator may lift this guard for <host> with site_config.internal_hosts, scoped to <range>`, with the range block (such as `100.64.0.0/10`) and never the address. The brokered git lanes, a CONNECT, a plain HTTP request and the refusal's audit row all carry it, so a self-hosted runner whose corporate resolver answers a git provider host into CGNAT or RFC1918 no longer fails with no way forward. A new `private_ip_refusals` setup check lists such refusals from the last 7 days. Nothing is lifted by default and no reach changes.
+- A queued run kill is no longer lost when 100 or more stale kills are waiting ahead of it. Before, it was never re-issued and the run kept running.
+- A full runner pool pass no longer fails with a Postgres deadlock when it updates the queue wait of waiting runs while another writer holds some of the same runs (part of #3369).
+- An egress approval that expires or is cancelled with nobody deciding it is no longer remembered as a "no" for the rest of the run. The request that sees it is refused as `approval:expired`, and the next request asks again.
+- The approval poll a sandbox makes no longer returns the approver's name or note (#2434).
+- The AWS CLI's derived role credentials are kept on the sandbox's temporary disk, so a kept Docker sandbox no longer holds them after the run ends.
+- A member's local folder mount that is refused now gets one sentence that does not say whether a host path exists or where a link points (#2273).
+- A sign-in sandbox no longer keeps the new credential until it is stopped: the AWS caches and the pane's history are cleared once the credential is stored, and the Claude paste sandbox is stopped when the capture is stored.
+- A runner no longer hangs at start when the container engine is stuck while it sets aside an earlier registration's runs.
+- An allowlist host written with a port or a trailing dot, such as `github.com:443`, is judged by its host, so it is no longer graded as open egress when the host is on the safe list.
+- Erasing a person now removes their name from launch presets they wrote and reports the token history it deleted (#3009).
+- The docs no longer say a workspace's `byo` base image is used verbatim. `registry`, `custom` and `byo` base images are all wrapped with Wardyn's runner tools by the image builder before a run uses them, and the wrapped image runs on the Docker substrate only.
+- A run on a workspace whose base image needs the image builder, on a control plane with none, is still refused `image_builder_unavailable`. The refusal now names the image and what works instead: an admin wires the builder, or sets the workspace's base image to recommended so a command that needs no model runs on the stock agent image (or the workspace's convention image where a builder is wired).
+- A background command that includes no harness, on a workspace with no base image of its own, now runs, from the stock agent image (or the workspace's convention image where a builder is wired). It was refused `workspace_seed_no_base_image` with advice to pass `--image` or `--agent`, which a run-mode command cannot carry. It evaluates no model provider and gets no model credential.
+
+### Security
+
+- The console's build tooling moves to vite 6.4.4, which carries the fixed launch-editor (GHSA-587h-7wmj-h5pm, GHSA-r825-w8mm-5pxw, GHSA-698v-4r3x-3vcv). Those flaws are in the development server's open-in-editor route; the built console Wardyn ships does not include it.
+
 ## [0.9.7] — 2026-10-20
 
 A small release on top of 0.9.6. An Azure DevOps token that the organisation mints for a run can now be delivered to a person's own runner, off by default, and a credential delivery write that the server could not build is refused when it is made. No migration.
