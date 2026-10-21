@@ -38,7 +38,16 @@ import (
 func (p *Proxy) httpError(w http.ResponseWriter, msg string, err error, code int) {
 	masked := truncateText(string(maskDecisionBytes([]byte(err.Error()))), maxLoggedErrBytes)
 	slog.Warn("proxy error returned to the sandbox", "msg", msg, "status", code, "err", masked)
-	http.Error(w, msg+": "+p.redactErr(err), code)
+	http.Error(w, msg+": "+p.redactErr(err)+hintSuffix(err), code)
+}
+
+// hintSuffix is "; " plus err's internal_hosts lift hint, or "". Appended
+// after redaction, which would blank the range the hint names.
+func hintSuffix(err error) string {
+	if h := liftHintOf(err); h != "" {
+		return "; " + h
+	}
+	return ""
 }
 
 // redactErr is err's text as the sandbox may see it: secret-masked, with no
@@ -220,7 +229,7 @@ const (
 // a dial-shaped refusal happened, since this text also lands in
 // egress.DecisionLog.Cause.
 func (p *Proxy) dialFailureCause(err error) string {
-	return p.redactErr(err)
+	return p.redactErr(err) + hintSuffix(err)
 }
 
 // viaHop classifies which hop CLASS a forward-egress dial to host attempted —

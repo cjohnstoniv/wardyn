@@ -86,7 +86,7 @@ func TestMemoedPrivateHostSpendsNoApproval(t *testing.T) {
 				if rec.Code != http.StatusForbidden {
 					t.Fatalf("retry %d: status = %d, want 403", i+2, rec.Code)
 				}
-				if body := rec.Body.String(); !strings.Contains(body, egressInternalHostsRemedy) {
+				if body := rec.Body.String(); !strings.Contains(body, "with site_config.internal_hosts, scoped to 10.0.0.0/8") {
 					t.Fatalf("retry %d: body = %q, want the byte-identical private-IP refusal", i+2, body)
 				}
 			}
