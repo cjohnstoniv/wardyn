@@ -133,7 +133,8 @@ function snapshot(over: Partial<GovernanceSnapshot> = {}): GovernanceSnapshot {
 function tealButtons(): HTMLElement[] {
   return screen
     .getAllByRole("button")
-    .filter((b) => b.className.split(/\s+/).includes("bg-primary"));
+    // A selected Segmented option is filled bg-primary too (#2832) and is a pressed toggle, not an action.
+    .filter((b) => !b.hasAttribute("aria-pressed") && b.className.split(/\s+/).includes("bg-primary"));
 }
 
 // Each test awaits its own first findBy*, so this only primes the fetch.

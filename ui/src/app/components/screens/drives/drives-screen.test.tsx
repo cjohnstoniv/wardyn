@@ -125,7 +125,8 @@ function snapshot(over: Partial<UserDrivesSnapshot> = {}): UserDrivesSnapshot {
 // and getAllByRole("button") correctly excludes it — it is a switch, not a
 // button; OptionCard's selected tint is bg-primary/10, a different class.
 function tealButtons(): HTMLElement[] {
-  return screen.getAllByRole("button").filter((b) => b.className.split(/\s+/).includes("bg-primary"));
+  // A selected Segmented option is filled bg-primary too (#2832) and is a pressed toggle, not an action.
+  return screen.getAllByRole("button").filter((b) => !b.hasAttribute("aria-pressed") && b.className.split(/\s+/).includes("bg-primary"));
 }
 
 function renderScreen(snap: UserDrivesSnapshot | null = snapshot()) {
