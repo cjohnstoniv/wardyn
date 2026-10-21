@@ -4,28 +4,32 @@
 //go:build docker && vm
 
 // Package vm is the Linux VM sandbox conformance suite: the real Docker driver boots the reference
-// guest image under QEMU/KVM in its unprivileged container. It builds nothing: set
-// WARDYN_TEST_VM_QEMU_IMAGE (deploy/runner/vm-qemu) and WARDYN_TEST_VM_GUEST_IMAGE
-// (deploy/images/vm-linux), on a host with /dev/kvm and a local Docker engine.
+// guest image under QEMU/KVM in its unprivileged container, behind its network relay and the real
+// wardyn-proxy. It builds nothing: set WARDYN_TEST_VM_QEMU_IMAGE (deploy/runner/vm-qemu),
+// WARDYN_TEST_VM_GUEST_IMAGE (deploy/images/vm-linux) and WARDYN_TEST_VM_PROXY_IMAGE
+// (deploy/compose/Dockerfile.proxy, which carries the relay), on a host with /dev/kvm and a local
+// Docker engine. The one allowed host is an origin on the proxy's network; nothing else is reachable.
 package vm
 
 import (
 	"bytes"
 	"cmp"
 	"context"
-	"encoding/binary"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
-	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 	dockerclient "github.com/moby/moby/client"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -51,43 +55,32 @@ func (l *lockedBuffer) String() string {
 	return l.b.String()
 }
 
-// netStub stands where the network relay will: it accepts QEMU's stream link, reads and counts
-// the guest's Ethernet frames (4-byte big-endian length, then the frame) and answers none.
-type netStub struct {
-	ln     net.Listener
-	frames atomic.Int64
-}
+// Hermetic addressing for the proxy's network: outside every range the proxy's private-address
+// guard refuses (as test/vmconformance's), so the origin is reachable only as an allowed name.
+const (
+	upSubnet = "11.231.2.0/24"
+	originIP = "11.231.2.10"
+)
 
-func startNetStub(t *testing.T, path string) *netStub {
+// decisions are the proxy's egress decision rows, from its log.
+func decisions(t *testing.T, cli *dockerclient.Client, runID uuid.UUID) []map[string]any {
 	t.Helper()
-	ln, err := net.Listen("unix", path)
+	logs, err := cli.ContainerLogs(context.Background(), "wardyn-proxy-"+runID.String(), dockerclient.ContainerLogsOptions{ShowStdout: true, ShowStderr: true})
 	if err != nil {
-		t.Fatalf("net stub: %v", err)
+		t.Fatalf("proxy logs: %v", err)
 	}
-	s := &netStub{ln: ln}
-	t.Cleanup(func() { _ = ln.Close() })
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				return
+	defer logs.Close()
+	b, _ := io.ReadAll(logs)
+	var out []map[string]any
+	for _, l := range strings.Split(string(b), "\n") {
+		if i := strings.IndexByte(l, '{'); i >= 0 {
+			var d map[string]any
+			if json.Unmarshal([]byte(l[i:]), &d) == nil && d["rule_source"] != nil {
+				out = append(out, d)
 			}
-			go func() {
-				defer conn.Close()
-				var hdr [4]byte
-				for {
-					if _, err := io.ReadFull(conn, hdr[:]); err != nil {
-						return
-					}
-					if _, err := io.CopyN(io.Discard, conn, int64(binary.BigEndian.Uint32(hdr[:]))); err != nil {
-						return
-					}
-					s.frames.Add(1)
-				}
-			}()
 		}
-	}()
-	return s
+	}
+	return out
 }
 
 func run(t *testing.T, d *docker.Driver, ref, script string) (int, string) {
@@ -112,9 +105,9 @@ func run(t *testing.T, d *docker.Driver, ref, script string) (int, string) {
 }
 
 func TestLinuxVMSandbox(t *testing.T) {
-	qemuImage, guestImage := os.Getenv("WARDYN_TEST_VM_QEMU_IMAGE"), os.Getenv("WARDYN_TEST_VM_GUEST_IMAGE")
-	if qemuImage == "" || guestImage == "" {
-		t.Skip("WARDYN_TEST_VM_QEMU_IMAGE and WARDYN_TEST_VM_GUEST_IMAGE not set")
+	qemuImage, guestImage, proxyImage := os.Getenv("WARDYN_TEST_VM_QEMU_IMAGE"), os.Getenv("WARDYN_TEST_VM_GUEST_IMAGE"), os.Getenv("WARDYN_TEST_VM_PROXY_IMAGE")
+	if qemuImage == "" || guestImage == "" || proxyImage == "" {
+		t.Skip("WARDYN_TEST_VM_QEMU_IMAGE, WARDYN_TEST_VM_GUEST_IMAGE and WARDYN_TEST_VM_PROXY_IMAGE not set")
 	}
 	ctx := context.Background()
 	cli, err := dockerclient.New(dockerclient.FromEnv)
@@ -122,12 +115,31 @@ func TestLinuxVMSandbox(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cli.Close()
-	if _, err := cli.NetworkCreate(ctx, "wardyn-internal", dockerclient.NetworkCreateOptions{Driver: "bridge"}); err == nil {
-		t.Cleanup(func() {
-			_, _ = cli.NetworkRemove(context.Background(), "wardyn-internal", dockerclient.NetworkRemoveOptions{})
-		})
+	// The proxy's own network, internal, with the origin on it: the allowed host, and the only one.
+	upNet := "wardyn-vmconf-up-" + uuid.NewString()[:8]
+	if _, err := cli.NetworkCreate(ctx, upNet, dockerclient.NetworkCreateOptions{Driver: "bridge", Internal: true,
+		IPAM: &network.IPAM{Config: []network.IPAMConfig{{Subnet: netip.MustParsePrefix(upSubnet)}}}}); err != nil {
+		t.Fatal(err)
 	}
-	d, err := docker.New(docker.Config{ProxyImage: "busybox:latest", ProxyCmd: []string{"sleep", "infinity"}})
+	t.Cleanup(func() { _, _ = cli.NetworkRemove(context.Background(), upNet, dockerclient.NetworkRemoveOptions{}) })
+	origin, err := cli.ContainerCreate(ctx, dockerclient.ContainerCreateOptions{
+		Name: upNet + "-origin",
+		Config: &container.Config{Image: "busybox:latest", Cmd: []string{"sh", "-c",
+			"mkdir -p /www && echo origin-ok > /www/index.html && exec httpd -f -p 80 -h /www"}},
+		HostConfig: &container.HostConfig{NetworkMode: container.NetworkMode(upNet)},
+		NetworkingConfig: &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{upNet: {
+			Aliases: []string{"origin.test"}, IPAMConfig: &network.EndpointIPAMConfig{IPv4Address: netip.MustParseAddr(originIP)}}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = cli.ContainerRemove(context.Background(), origin.ID, dockerclient.ContainerRemoveOptions{Force: true})
+	})
+	if _, err := cli.ContainerStart(ctx, origin.ID, dockerclient.ContainerStartOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	d, err := docker.New(docker.Config{ProxyImage: proxyImage, InternalNetwork: upNet})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,11 +175,12 @@ func TestLinuxVMSandbox(t *testing.T) {
 	out := &lockedBuffer{}
 	spec := runner.SandboxSpec{
 		RunID: uuid.New(), Image: guestImage, MachineKind: types.MachineLinuxVM, ConfinementClass: types.CC1,
-		Env:         map[string]string{"WARDYN_CONFORMANCE": "vm"},
-		ProxyConfig: runner.ProxyConfig{RunToken: "tok", ControlPlaneURL: "http://127.0.0.1:8080"},
-		Resources:   runner.Resources{CPUMillis: 2000, MemoryMiB: 2048},
-		Mounts:      []runner.Mount{{Source: ws, Target: "/home/agent/work", ReadOnly: true}, {Source: rw, Target: "/home/agent/rw"}},
-		ExecOutput:  out,
+		Env: map[string]string{"WARDYN_CONFORMANCE": "vm"},
+		ProxyConfig: runner.ProxyConfig{RunToken: "tok", ControlPlaneURL: "http://127.0.0.1:8080", Policy: types.RunPolicySpec{
+			AllowedDomains: []string{"origin.test"}, FirstUseApproval: types.FirstUseAlwaysDeny, MinConfinementClass: types.CC1}},
+		Resources:  runner.Resources{CPUMillis: 2000, MemoryMiB: 2048},
+		Mounts:     []runner.Mount{{Source: ws, Target: "/home/agent/work", ReadOnly: true}, {Source: rw, Target: "/home/agent/rw"}},
+		ExecOutput: out,
 	}
 	cctx, cancel := context.WithTimeout(ctx, 10*time.Minute) // a first image conversion included
 	defer cancel()
@@ -185,7 +198,19 @@ func TestLinuxVMSandbox(t *testing.T) {
 		t.Fatalf("sandbox %+v machine %+v", sb, sb.Machine)
 	}
 	dir := filepath.Join(state, "runs", spec.RunID.String())
-	stub := startNetStub(t, filepath.Join(dir, "net", qemu.NetSocket))
+
+	// The relay: from the proxy image, non-root, no capability, read-only, on the run's network only.
+	relay, err := cli.ContainerInspect(ctx, "wardyn-vmnet-"+spec.RunID.String(), dockerclient.ContainerInspectOptions{})
+	if err != nil {
+		t.Fatalf("the VM's network relay: %v", err)
+	}
+	rc, rh := relay.Container.Config, relay.Container.HostConfig
+	if rc.Image != proxyImage || rc.User == "" || rc.User == "0" || strings.HasPrefix(rc.User, "0:") || !rh.ReadonlyRootfs ||
+		len(rh.CapDrop) != 1 || rh.CapDrop[0] != "ALL" || len(rh.PortBindings) != 0 || len(relay.Container.NetworkSettings.Networks) != 1 ||
+		relay.Container.NetworkSettings.Networks["wardyn-int-"+spec.RunID.String()] == nil {
+		t.Fatalf("relay %s as %q, read-only %v, caps %v, ports %v, networks %v", rc.Image, rc.User, rh.ReadonlyRootfs, rh.CapDrop,
+			rh.PortBindings, relay.Container.NetworkSettings.Networks)
+	}
 
 	// The run directory's mode and owner are the control over QMP and the unauthenticated VNC socket.
 	for _, p := range []string{"", "ctl", "net", "fs", "disk", "fwcfg"} {
@@ -254,24 +279,65 @@ func TestLinuxVMSandbox(t *testing.T) {
 		t.Fatalf("desktop greeting %q, %v", greeting, err)
 	}
 
-	// The network: QEMU's link reaches the stub, the guest's frames go nowhere, nothing resolves.
-	// The guest's boot-time frames went out before the stub listened, so a connection attempt to a
-	// link-local neighbour makes it send more (neighbour solicitations); none is answered.
-	if code, o := run(t, d, sb.Ref, `for i in $(ls /sys/class/net); do if [ "$i" != lo ] && timeout 5 bash -c "</dev/tcp/fe80::1%$i/80"; then exit 0; fi; done; exit 7`); code != 7 {
-		t.Fatalf("a link-local connection from the guest = %d %q", code, o)
+	// The network: the guest reaches the allowed host through the relay and the proxy, and nothing
+	// else. Every name resolves (to the relay's synthetic range); what the policy does not allow
+	// fails at the proxy.
+	if code, o := run(t, d, sb.Ref, "getent ahosts origin.test | grep -q '^198\\.1[89]\\.' || exit 7"); code != 0 {
+		t.Fatalf("origin.test in the guest = %d %q, want a relay address", code, o)
 	}
-	for deadline := time.Now().Add(30 * time.Second); stub.frames.Load() == 0; time.Sleep(time.Second) {
-		if time.Now().After(deadline) {
-			t.Fatal("no guest frame reached net.sock")
+	if code, o := run(t, d, sb.Ref, `exec 3<>/dev/tcp/origin.test/80 && printf 'GET / HTTP/1.0\r\nHost: origin.test\r\n\r\n' >&3 && timeout 20 cat <&3`); code != 0 || !strings.Contains(o, "origin-ok") {
+		t.Fatalf("the allowed host from the guest = %d %q", code, o)
+	}
+	for name, script := range map[string]string{
+		"a bare host on port 22":    `timeout 15 bash -c '</dev/tcp/origin.test/22' && exit 0; exit 7`,
+		"a host not allowed":        `timeout 15 bash -c '</dev/tcp/example.com/443' && exit 0; exit 7`,
+		"the origin by its address": `timeout 15 bash -c '</dev/tcp/` + originIP + `/80' && exit 0; exit 7`,
+		"an outside address":        `timeout 15 bash -c '</dev/tcp/1.1.1.1/80' && exit 0; exit 7`,
+		// One A query for example.com to an outside resolver: no answer comes back.
+		"an outside resolver": `exec 3<>/dev/udp/8.8.8.8/53 && printf '\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x07example\x03com\x00\x00\x01\x00\x01' >&3 && timeout 5 head -c1 <&3 >/dev/null && exit 0; exit 7`,
+		"IPv6":                `for i in $(ls /sys/class/net); do if [ "$i" != lo ] && timeout 5 bash -c "</dev/tcp/fe80::1%$i/80"; then exit 0; fi; done; timeout 10 bash -c '</dev/tcp/2001:4860:4860::8888/443' && exit 0; exit 7`,
+	} {
+		if code, o := run(t, d, sb.Ref, script); code != 7 {
+			t.Errorf("%s from the guest = %d %q, want refused", name, code, o)
 		}
 	}
-	t.Logf("the net stub read %d guest frames and answered none", stub.frames.Load())
-	if code, o := run(t, d, sb.Ref, "getent ahosts example.com || exit 7; exit 0"); code != 7 {
-		t.Fatalf("name resolution in the guest = %d %q", code, o)
+	// The proxy's rows: the port rule refused port 22 (the run's proxy is marked vm, as nothing else
+	// turns that rule on here), the relay reported what only it sees, and every allow is the origin.
+	want := map[string]bool{"policy:port": false, "policy:denied": false, "vmnet:literal-ip": false, "vmnet:udp": false, "vmnet:dropped-frame": false}
+	var rows []map[string]any
+	for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(time.Second) {
+		rows = decisions(t, cli, spec.RunID)
+		for k := range want {
+			want[k] = false
+		}
+		for _, r := range rows {
+			if src, _ := r["rule_source"].(string); r["decision"] == "deny" {
+				if _, ok := want[src]; ok {
+					want[src] = true
+				}
+			}
+		}
+		if !strings.Contains(fmt.Sprint(want), "false") || time.Now().After(deadline) {
+			break
+		}
 	}
-	if code, o := run(t, d, sb.Ref, `timeout 10 bash -c '</dev/tcp/1.1.1.1/80' && exit 0; exit 7`); code != 7 {
-		t.Fatalf("a direct connection from the guest = %d %q", code, o)
+	for k, seen := range want {
+		if !seen {
+			t.Errorf("no %s deny row in the proxy's log", k)
+		}
 	}
+	for _, r := range rows {
+		host, _ := r["host"].(string)
+		src, _ := r["rule_source"].(string)
+		flow, _ := r["flow"].(string)
+		switch {
+		case r["decision"] == "allow" && host != "origin.test":
+			t.Errorf("allow row for %q: only the origin is allowed", host)
+		case r["decision"] == "deny" && !strings.HasPrefix(src, "vmnet:") && flow == "":
+			t.Errorf("deny row %v: not from a relay flow", r)
+		}
+	}
+
 	// The CA is not readable by the agent user (fw_cfg is root's), and the guest trusts no run CA here.
 	if code, _ := run(t, d, sb.Ref, "cat /sys/firmware/qemu_fw_cfg/by_name/opt/org.wardyn/run-id/raw"); code == 0 {
 		t.Fatal("the agent user read fw_cfg")

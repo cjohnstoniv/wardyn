@@ -1,0 +1,11 @@
+[Unit]
+Description=Resolve names through the network relay
+Before=wardyn-guest-agent.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'echo "nameserver 10.0.2.2" > /etc/resolv.conf'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
