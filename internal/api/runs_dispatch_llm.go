@@ -86,6 +86,17 @@ func (t llmTransport) providerSubscription() bool {
 	return t.provider != nil && t.provider.provider.Kind == types.ModelProviderAnthropicSubscription
 }
 
+// signsBedrock reports whether the proxy re-signs this run's Bedrock lane.
+func (t llmTransport) signsBedrock() bool { return t.bedrockReady && t.bedrock.sigv4Hosts != nil }
+
+// withdrawSigV4 drops the AWS re-signer once the ceiling's re-assertion withheld the Bedrock lane it
+// signed for: the re-signer's grant is that lane's (named in dropped_broker_lanes).
+func (p *dispatchLLMPlan) withdrawSigV4(signed bool, llm llmTransport) {
+	if signed && !llm.bedrockReady {
+		p.awsSigV4 = nil
+	}
+}
+
 // isModelRun reports whether a dispatch actually invokes the model. Two run
 // kinds make NO model call and so must receive NO LLM credential (least
 // privilege): a scan run (execs wardyn-scan — workspaceID/sourceID set,

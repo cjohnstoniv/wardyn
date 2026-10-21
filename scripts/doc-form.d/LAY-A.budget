@@ -3,4 +3,5 @@
 # docs/operations/boundary.md 785 measured: the final seal meets late hosts with the boundary
 # docs/operations/boundary.md 819 measured: the seal keeps an explicit allow-all false
 # docs/operations/boundary.md 1047 measured: credentials the boundary withholds at dispatch, revive and live
-docs/operations/boundary.md=1047 share=35
+# docs/operations/boundary.md 1054 measured: the redeem door names its audited unread refusals
+docs/operations/boundary.md=1054 share=35

@@ -212,7 +212,7 @@ func (s *Server) authorAWSSSOGrant(ctx context.Context, run types.AgentRun, sn a
 	// there too — a blind tunnel carrying a placeholder to a 401. That is the
 	// shape the plan's TLS-fake test needs.
 	mitmHosts := []string{ssoPortalMITMEntry(sn.Region, s.cfg.AWSSSOEndpointOverride)}
-	scope, _ := json.Marshal(map[string]any{
+	fields := map[string]any{
 		"host":        portalHost,
 		"header":      awsSSOInjectHeader,
 		"format":      "%s",
@@ -259,7 +259,12 @@ func (s *Server) authorAWSSSOGrant(ctx context.Context, run types.AgentRun, sn a
 		// row that pins account/role AND on one that does not.
 		"pin_path":  awsSSORoleCredentialsPath,
 		"pin_query": awsSSOPinQuery(sn.SSOAccountID, sn.SSORoleName),
-	})
+	}
+	// A re-signed lane's session signs these hosts too, so the live check withholds it with them (grantHosts).
+	if sigv4Hosts != nil {
+		fields["signed_hosts"] = sigv4Hosts
+	}
+	scope, _ := json.Marshal(fields)
 	grantID := uuid.New()
 	if _, gerr := s.createDispatchGrant(ctx, run, types.CredentialGrant{
 		ID: grantID, RunID: run.ID, CreatedAt: time.Now(),

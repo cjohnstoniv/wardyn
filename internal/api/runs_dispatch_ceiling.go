@@ -433,8 +433,9 @@ func (w withholding) credentialWithheld(g types.GrantSpec) bool {
 }
 
 // grantHosts is the hosts a grant's credential is delivered to: the git broker's re-origination set
-// for a GitHub installation token, the scope's host for a PAT, an SSH key or a header injection.
-// A grant with no host of its own (a cloud or a resident secret) has none.
+// for a GitHub installation token, the scope's host for a PAT, an SSH key or a header injection,
+// with the hosts a re-signed AWS session signs. A grant with no host of its own (a cloud or a
+// resident secret) has none.
 func grantHosts(g types.GrantSpec) []string {
 	switch g.Kind {
 	case types.GrantGitHubToken:
@@ -449,10 +450,11 @@ func grantHosts(g types.GrantSpec) []string {
 		}
 	case types.GrantAPIKey:
 		var sc struct {
-			Host string `json:"host"`
+			Host        string   `json:"host"`
+			SignedHosts []string `json:"signed_hosts"`
 		}
 		if json.Unmarshal(g.Scope, &sc) == nil && sc.Host != "" {
-			return []string{sc.Host}
+			return append([]string{sc.Host}, sc.SignedHosts...)
 		}
 	}
 	return nil
