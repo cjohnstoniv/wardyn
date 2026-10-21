@@ -307,9 +307,11 @@ func TestServiceIdentity_AllowListRouteWalk(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantAllowed := []string{
-		"DELETE /api/v1/model-providers/{id}/credential", "GET /api/v1/me", "GET /api/v1/runs", "GET /api/v1/runs/{id}",
-		"GET /api/v1/runs/{id}/events", "GET /api/v1/runs/{id}/output", "GET /api/v1/setup/status", "PATCH /api/v1/runs/{id}",
-		"POST /api/v1/runs", "POST /api/v1/runs/preflight", "POST /api/v1/runs/{id}/kill", "PUT /api/v1/model-providers/{id}/credential",
+		"DELETE /api/v1/model-providers/{id}/credential", "GET /api/v1/audit", "GET /api/v1/me", "GET /api/v1/presets",
+		"GET /api/v1/presets/{name}", "GET /api/v1/runs", "GET /api/v1/runs/{id}",
+		"GET /api/v1/runs/{id}/events", "GET /api/v1/runs/{id}/output", "GET /api/v1/setup/status", "GET /api/v1/workspaces",
+		"PATCH /api/v1/runs/{id}", "POST /api/v1/runs", "POST /api/v1/runs/preflight", "POST /api/v1/runs/{id}/kill",
+		"PUT /api/v1/model-providers/{id}/credential",
 	}
 	if got := slices.Sorted(maps.Keys(serviceAllowed)); !slices.Equal(got, wantAllowed) {
 		t.Errorf("the service allow-list = %v, want exactly %v", got, wantAllowed)
