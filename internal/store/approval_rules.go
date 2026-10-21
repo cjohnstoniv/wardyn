@@ -15,7 +15,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ApprovalRuleStore holds approval rules (migration 0202). A side interface, as BoundaryStore is: a store
+// ApprovalRuleStore holds approval rules (migration 0210). A side interface, as BoundaryStore is: a store
 // without it keeps no rules, so the approver has nothing to match.
 type ApprovalRuleStore interface {
 	ListApprovalRules(ctx context.Context) ([]types.ApprovalRule, error)

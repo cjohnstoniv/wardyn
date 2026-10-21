@@ -18,7 +18,7 @@ const (
 	ApprovalRuleEnforce ApprovalRuleMode = "enforce"
 )
 
-// ApprovalRule is a security admin's approval rule (migration 0202): on a service identity's run it approves a
+// ApprovalRule is a security admin's approval rule (migration 0210): on a service identity's run it approves a
 // matching tool_call or egress_domain approval through the same decide path a person's decision takes. Version
 // rises by one on every write, so an audit row can name the exact text it matched.
 type ApprovalRule struct {
