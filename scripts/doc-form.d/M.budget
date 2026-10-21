@@ -58,7 +58,9 @@ docs/SSH.md=6703 share=35
 # docs/UI-SANDBOXES.md 5768 = ours 5690 + theirs 5731 - base 5653 at the 0.10 W4c merge of FEAT-1APP onto the train.
 # docs/UI-SANDBOXES.md 5773 adds 42 over 5731 (0.10 FEAT-1APP DR-0312): the start-after-prep, revive and wait-from-open sentences.
 # docs/UI-SANDBOXES.md 5810 = ours 5768 + theirs 5773 - base 5731 at the 0.10 W4c merge of FEAT-1APP 20b62c676 onto the train.
-docs/UI-SANDBOXES.md=5810 share=35
+# docs/UI-SANDBOXES.md 5760 adds 29 over 5731 (APP-FU #3391): the application server is refused at create under deny_ui_apps, and only a shell startup command waits for its port.
+# docs/UI-SANDBOXES.md 5839 = ours 5810 + theirs 5760 - base 5731 at the 0.10 W4c merge of APP-FU 857bd637f onto the train.
+docs/UI-SANDBOXES.md=5839 share=35
 # docs/NEW-RUN.md 2905 measured (0.9 final docs pass): the New run guide.
 # docs/NEW-RUN.md 2914 adds 9 over 2905: 0.9 final docs pass 2, measured: the runner-limit wait reason and the runner pools links.
 # docs/NEW-RUN.md 2915 adds 1 over 2914: docs fix: run --file overlay; a policy's own * rule stays in force on a routed run, measured.

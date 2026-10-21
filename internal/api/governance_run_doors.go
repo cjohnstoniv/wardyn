@@ -13,6 +13,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // The governance limits that reach past create: deny_ui_apps strips ui_apps
@@ -122,7 +123,7 @@ func (s *Server) refuseUIAppsDenied(w http.ResponseWriter, r *http.Request, run 
 // arm's spec. It binds whoever the ceiling's limits bind: an assigned member or
 // security admin, never an operator. Audited as a drop unless dryRun.
 func (s *Server) boundUIApps(ctx context.Context, r *http.Request, spec *types.RunPolicySpec, ceiling governanceCeiling, dryRun bool) []string {
-	if ceiling.Profile == nil || !ceiling.Limits.DenyUIApps || len(spec.UIApps) == 0 || s.runUngoverned(r.Context()) {
+	if !s.uiAppsDenied(r, *spec, ceiling) {
 		return nil
 	}
 	dropped := make([]string, 0, len(spec.UIApps))
@@ -135,4 +136,37 @@ func (s *Server) boundUIApps(ctx context.Context, r *http.Request, spec *types.R
 	}
 	return []string{fmt.Sprintf("dropped %d ui_app(s) denied by governance profile %q: %s",
 		len(dropped), ceiling.Profile.Name, strings.Join(dropped, ","))}
+}
+
+// uiAppsDenied is the one predicate for deny_ui_apps binding this run's ui_apps: boundUIApps strips by it and an
+// application's create refusal reads it, so the two cannot disagree. It binds whoever the ceiling's limits bind.
+func (s *Server) uiAppsDenied(r *http.Request, spec types.RunPolicySpec, ceiling governanceCeiling) bool {
+	return ceiling.Profile != nil && ceiling.Limits.DenyUIApps && len(spec.UIApps) > 0 && !s.runUngoverned(r.Context())
+}
+
+// applicationUIAppsDeniedMsg and applicationUIAppsNotAllowedMsg are the two sentences of the refusal below, one
+// reason: a person has to tell a profile that denies every UI app from an allowed-apps list that lacks theirs.
+const (
+	applicationUIAppsDeniedMsg     = "This profile does not allow UI apps, so an application can't declare one."
+	applicationUIAppsNotAllowedMsg = "This profile's list of allowed apps does not include the app this application declares, so it can't be created."
+)
+
+// applicationUIAppsRefusal refuses a shape-application run that would be created without the app it declared:
+// the run is an application only through that app. It is either deny_ui_apps stripping the app, or the ceiling's
+// allowed-apps list having stripped it already (boundRunUserSpec), which leaves the resolved spec with none.
+// resolveRunPolicy calls it for create and for preflight alike, on the policy as resolved, before boundUIApps drops
+// anything. Other shapes keep the strip-and-warn behaviour. It keys on what the request declared
+// (applicationServer), never on the resolved spec alone: a background application that declares no app still
+// inherits the ceiling's, and denying that one strips nothing the person asked for.
+func (s *Server) applicationUIAppsRefusal(r *http.Request, req createRunRequest, spec types.RunPolicySpec, ceiling governanceCeiling) *runRefusal {
+	if req.Shape != client.RunShapeApplication || !applicationServer(req) {
+		return nil
+	}
+	switch {
+	case s.uiAppsDenied(r, spec, ceiling):
+		return runError(http.StatusUnprocessableEntity, reasonRunApplicationUIAppsDenied, applicationUIAppsDeniedMsg)
+	case len(spec.UIApps) == 0: // declared, and none left without deny_ui_apps: the ceiling's allowed list took it
+		return runError(http.StatusUnprocessableEntity, reasonRunApplicationUIAppsDenied, applicationUIAppsNotAllowedMsg)
+	}
+	return nil
 }

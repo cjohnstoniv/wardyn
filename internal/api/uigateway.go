@@ -927,12 +927,16 @@ func (s *Server) uiEnsureApp(ctx context.Context, run types.AgentRun, sess uiSes
 // seedPolls is how many half-second polls a missing launcher waits for the
 // port before exit 3: 0 answers at once; a seeded run's startup command may
 // still be opening it, and if it does the answer is exit 0, nothing started.
+// Only a shell startup command is waited for: a harness prompt seed (the
+// sandbox's WARDYN_INTERACTIVE_START is agent, set from the run's interactive_start,
+// which the run row does not keep) starts no server, so it answers at once.
 // After the wait an application run (its env says so) answers 6, not 3.
 func uiLauncherScript(launcher string, port, seedPolls int) string {
 	return fmt.Sprintf(`p=%d
 b='%s'
 socat -u /dev/null "TCP:127.0.0.1:$p" >/dev/null 2>&1 && exit 0
 if ! [ -x "$b" ]; then
+  [ "${WARDYN_INTERACTIVE_START:-}" = agent ] && exit 3
   i=0
   while [ "$i" -lt %d ]; do
     sleep 0.5

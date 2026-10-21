@@ -210,7 +210,10 @@
 # docs/sdk.md 20288 = ours 20084 + theirs 19886 - base 19682 at the 0.10 W4a merge of ATT-LOGIN-SRV onto the train.
 # docs/sdk.md 20775 = ours 20547 + theirs 20288 - base 20060 at the 0.10 W4c merge of origin/main 3cea1aa73 (W4a) onto the train.
 # docs/sdk.md 20397, measured at the 0.10 W4c merge of origin/main 3cea1aa73 (W4a) onto the train (the sum above was 20775).
-docs/sdk.md=20397 share=21
+# docs/sdk.md 19731 adds 30 over 19701 (APP-FU #3391): the run_application_ui_apps_denied row.
+# docs/sdk.md 19738 adds 7 over 19731 (APP-FU #3391 review): the policy-preview door and the allowed-apps cause on the run_application_ui_apps_denied row, measured.
+# docs/sdk.md 20434 = ours 20397 + theirs 19738 - base 19701 at the 0.10 W4c merge of APP-FU 857bd637f onto the train.
+docs/sdk.md=20434 share=21
 # docs/sdk.md 18691 adds 28 over 18663, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
