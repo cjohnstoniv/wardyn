@@ -436,10 +436,10 @@ exit "$rc"
 // open is KILLED (124) once this boot's prep has finished, or after 30 s if it
 // never writes prep-done. A fixed `timeout 3s` ended before a loaded machine had
 // run the prep, so the revive tests read the PREVIOUS boot's files (#3430).
-// prep-done is written last and --idle then makes its post-prep tmux call, so the
-// extra 300 ms lets that call land before the kill. prep-done only counts when
-// its mtime is no older than the start (to the second), so a file the last boot
-// left behind is not mistaken for this one's.
+// prep-done is written last; the 300 ms after it only lets the script's closing
+// stderr lines land. prep-done counts only when it is not the file the last boot
+// left behind: one that was there before the start must change (a new file or a
+// new mtime) before it is this boot's.
 func runIdleUntilPrep(t *testing.T, home, script string, env []string) (code int, out string) {
 	t.Helper()
 	cmd := exec.Command("bash", script, "--idle")
@@ -447,7 +447,8 @@ func runIdleUntilPrep(t *testing.T, home, script string, env []string) (code int
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	var buf bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &buf, &buf
-	started := time.Now().Truncate(time.Second)
+	prepDone := filepath.Join(home, ".wardyn", "prep-done")
+	before, beforeErr := os.Stat(prepDone)
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("starting agent-run --idle: %v", err)
 	}
@@ -466,7 +467,6 @@ func runIdleUntilPrep(t *testing.T, home, script string, env []string) (code int
 		}
 		return 0, buf.String()
 	}
-	prepDone := filepath.Join(home, ".wardyn", "prep-done")
 	deadline := time.After(30 * time.Second)
 	tick := time.NewTicker(50 * time.Millisecond)
 	defer tick.Stop()
@@ -478,7 +478,8 @@ func runIdleUntilPrep(t *testing.T, home, script string, env []string) (code int
 			killGroup()
 			return 124, buf.String()
 		case <-tick.C:
-			if fi, err := os.Stat(prepDone); err != nil || fi.ModTime().Before(started) {
+			fi, err := os.Stat(prepDone)
+			if err != nil || (beforeErr == nil && os.SameFile(before, fi) && fi.ModTime().Equal(before.ModTime())) {
 				continue
 			}
 			select {

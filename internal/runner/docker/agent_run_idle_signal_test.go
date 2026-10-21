@@ -68,7 +68,7 @@ func TestAgentRunIdle_ExitsOnSignal(t *testing.T) {
 
 // runIdleAndSignal starts the real agent-run --idle script as its own process
 // group leader, waits for it to reach the hold-open point (prepDone written —
-// same signal ccRunIdle/runIdle/cxRunIdle wait for, via `timeout`, in the
+// same signal ccRunIdle/runIdle/cxRunIdle wait for, until this boot's prep-done, in the
 // sibling boot-ordering tests) and then for the idle loop's `sleep` child,
 // sends sig to the LEADER ONLY (matching docker stop / the kubelet), and
 // returns the exit code.
@@ -159,7 +159,7 @@ func hasSleepChild(pid int) bool {
 
 // ccEnvIdleSignalSetup reuses the real-script plumbing (ccRunnableAgentRun or
 // cxRunnableAgentRun) over the claude-code fake tmux (ccIdleEnv) — the same env
-// ccRunIdle and cxRunIdle build, minus the `timeout` wrapper this test replaces
+// ccRunIdle and cxRunIdle build, minus the prep-done wait this test replaces
 // with a signal.
 func ccEnvIdleSignalSetup(runnable func(*testing.T) string) func(*testing.T) (string, []string, string) {
 	return func(t *testing.T) (script string, env []string, prepDone string) {
@@ -181,7 +181,7 @@ func ccEnvIdleSignalSetup(runnable func(*testing.T) string) func(*testing.T) (st
 
 // awsSSOIdleSignalSetup reuses awssso_agent_run_idle_test.go's real-script and
 // fake-tmux plumbing (runnableAgentRun, fakeTmuxBin, mitmNonce) — the same env
-// runIdle builds, minus the `timeout` wrapper.
+// runIdle builds, minus the prep-done wait.
 func awsSSOIdleSignalSetup(t *testing.T) (script string, env []string, prepDone string) {
 	home, binDir, tmuxLog := fakeTmuxBin(t)
 	nonce := mitmNonce(t)
