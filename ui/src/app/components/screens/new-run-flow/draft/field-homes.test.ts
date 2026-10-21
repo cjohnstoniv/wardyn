@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { SCHEDULE_REASONS } from "../../../../lib/schedule-refusals";
 import { describe, expect, it } from "vitest";
 import { NEW_RUN_REASON, PLACEMENT_REASONS, WORKSPACE_DOOR_REASONS } from "../../../../lib/new-run-refusals";
 import { RUN_MODE_REASON } from "../../../../lib/run-mode-refusals";
@@ -44,7 +45,7 @@ describe("field homes (U7)", () => {
   it("give every reason the console names a step, and send an unknown one to Review", () => {
     const known = [
       ...Object.values(NEW_RUN_REASON), ...PLACEMENT_REASONS, ...Object.values(RUN_MODE_REASON),
-      ...RUNNER_POOL_REASONS, ...Object.values(TEMPLATE_REASON), ...WORKSPACE_DOOR_REASONS,
+      ...RUNNER_POOL_REASONS, ...SCHEDULE_REASONS, ...Object.values(TEMPLATE_REASON), ...WORKSPACE_DOOR_REASONS,
     ];
     expect(sortedKeys(HOME_OF_REASON)).toEqual([...new Set(known)].sort());
     expect(homeOfReason("runner_pool_stale")).toBe("run");

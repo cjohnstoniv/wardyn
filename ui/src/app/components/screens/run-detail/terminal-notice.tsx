@@ -132,7 +132,7 @@ export function TerminalPane({
         title={run.interactive ? "Terminal" : "Output"}
         chip={run.interactive ? undefined : execMode ? RUN_COCKPIT.execNoHarness : RUN_COCKPIT.autonomous}
       >
-        <QueuedWait queue={run.queue} />
+        <QueuedWait queue={run.queue} run={run} />
       </PaneFrame>
     );
   }

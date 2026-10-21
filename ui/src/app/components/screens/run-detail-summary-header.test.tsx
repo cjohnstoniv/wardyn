@@ -11,7 +11,7 @@
 // below it (OverviewTab renders <AttachTerminal> whenever `attachable`).
 import type { ReactElement } from "react";
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { SummaryHeader } from "./run-detail-summary-header";
@@ -773,5 +773,33 @@ describe("SummaryHeader — Rename draft seeding and empty-submit", () => {
     setField(input, "A real new title");
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(onRename).toHaveBeenCalledWith("A real new title");
+  });
+});
+
+describe("SummaryHeader — a scheduled run's badge", () => {
+  const queued = (reason: string): AgentRun => ({
+    ...runningInteractive,
+    state: "QUEUED",
+    queue: { pool_id: "p", queued_at: "", deadline_at: "", position: 0, reason, start_at: "2026-10-21T02:00:00Z", time_zone: "UTC" },
+  });
+  const show = (run: AgentRun) =>
+    renderHeader(
+      <OperatorProvider operator={true}>
+        <SummaryHeader run={run} terminal={false} onKill={() => {}} />
+      </OperatorProvider>,
+    );
+
+  it("reads Scheduled while it waits for its time and Waiting for sign-in once due, never Queued", () => {
+    show(queued("scheduled"));
+    expect(screen.getByText("Scheduled")).toBeInTheDocument();
+    expect(screen.queryByText("Queued")).toBeNull();
+    cleanup();
+    show(queued("owner_sign_in"));
+    expect(screen.getByText("Waiting for sign-in")).toBeInTheDocument();
+  });
+
+  it("keeps Queued for a run that waits for a slot", () => {
+    show(queued("runner_pool_at_capacity"));
+    expect(screen.getByText("Queued")).toBeInTheDocument();
   });
 });

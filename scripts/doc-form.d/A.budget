@@ -232,7 +232,10 @@
 # docs/AUDIT-ACTIONS.md 50693 = ours 50626 + theirs 50623 - base 50556 at the 0.10 W4d merge of SEC-1b onto the train.
 # docs/AUDIT-ACTIONS.md 49505 adds 134 over 49371, measured: the kubectl door revive refusal beside the Azure CLI one, the two kubectl door rule_source rows, and the kubectl dispatch emit site on run.create (#1990).
 # docs/AUDIT-ACTIONS.md 50827 = ours 50693 + theirs 49505 - base 49371 at the 0.10 W4d merge of FEAT-1KUBE onto the train.
-docs/AUDIT-ACTIONS.md=50827 share=8
+# docs/AUDIT-ACTIONS.md 49385 adds 14 over 49371 (0.10 FEAT-2SCHED): run.queue.expire names queue_sign_in_timeout and its reason key.
+# docs/AUDIT-ACTIONS.md=49396 adds 11 (0.10 FEAT-2SCHED review r1 M2): scheduled_runs_off in the run.queue.start failure reasons.
+# docs/AUDIT-ACTIONS.md 50852 = ours 50827 + theirs 49396 - base 49371 at the 0.10 W4d merge of FEAT-2SCHED-UI onto the train.
+docs/AUDIT-ACTIONS.md=50852 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.

@@ -90,6 +90,9 @@ type runFold struct {
 	// capacity or deployment slot, and is refused for its size only when it can never fit; promotion
 	// applies the rest when a slot frees.
 	queued bool
+	// schedule is a scheduled launch's start (start_at), set by stepPlacement; such a run always waits.
+	// nil on the queue's start, which replays the request after its time.
+	schedule *runSchedule
 	// promoted says the fold is the queue's start replaying a promoted run: promotion has already
 	// admitted it against the host, the deployment cap and the fit, so those steps stand down.
 	promoted bool

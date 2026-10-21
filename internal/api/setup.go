@@ -149,6 +149,21 @@ type SetupStatus struct {
 	// pinned account and role appear (SetupProviderAccess's doc). Absent with
 	// no provider block.
 	ProviderAccess []SetupProviderAccess `json:"provider_access,omitempty"`
+	// Features are the switches the console reads to offer what they turn on. Kept for members:
+	// redactSetupStatusForUser leaves them alone, so a member's console never reads a switch as off.
+	Features SetupFeatures `json:"features"`
+}
+
+// SetupFeatures holds one boolean per switch, each its env toggle as read now.
+type SetupFeatures struct {
+	// ScheduledRuns is WARDYN_SCHEDULED_RUNS: a run may be scheduled to start later.
+	ScheduledRuns bool `json:"scheduled_runs"`
+}
+
+func setupFeatures() SetupFeatures {
+	return SetupFeatures{
+		ScheduledRuns: envEnabled(envScheduledRuns),
+	}
 }
 
 // SetupCheck is defined in setup_checks.go — setup.go is at its allowlisted
@@ -453,6 +468,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		// A count derived from the SAME PEM string TrustedCAPEM's doc comment
 		// describes — no second boot-time field to keep in sync. 0 when unset.
 		TrustedCACerts: strings.Count(s.cfg.TrustedCAPEM, "-----BEGIN CERTIFICATE-----"),
+		Features:       setupFeatures(),
 	}
 	resp.HarnessSets = visibleHarnessSets(s.cfg.AgentImages, resp.Harnesses)
 	// DELIBERATELY isOperator (three-tier doctrine, internal/auth/oidc's

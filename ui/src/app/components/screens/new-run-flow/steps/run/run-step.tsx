@@ -31,7 +31,8 @@ const STEP_LABELS = {
 const TITLES = { agent_task: NR_RUN.TITLE_AGENT, environment: NR_RUN.TITLE_ENV, application: NR_RUN.TITLE_APP } as const;
 
 export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadPools } }) {
-  const { intent } = useNewRunDraft();
+  const draft = useNewRunDraft();
+  const { intent } = draft;
   const dispatch = useNewRunDispatch();
   const edit = (apply: (i: RunIntent) => RunIntent) => dispatch({ type: "edit", apply });
   const agent = intent.shape === "agent_task";
@@ -59,7 +60,7 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
       issues={stepIssues("run", intent, { poolDefault: list ? !!list.default?.pool_id : undefined })}
     >
       {agent && <ModeSection mode={modeOf(intent) ?? fallback} onChange={(mode) => edit((i) => chooseMode(i, mode))} />}
-      {agent && modeOf(intent) === "autonomous" && <TimingSection />}
+      {agent && modeOf(intent) === "autonomous" && <TimingSection schedule={draft.schedule} onSchedule={(schedule) => dispatch({ type: "schedule", schedule })} />}
       {intent.shape === "application" && (
         <CommandSection command={intent.workload?.command ?? ""} onCommand={(command) => edit((i) => setCommand(i, command))} />
       )}

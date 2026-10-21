@@ -21,11 +21,13 @@ import { waitingAdoConsent, waitingReauth } from "../../../lib/reauth-waiting-co
 import { RUN_WAIT } from "../../wardyn/copy/run-wait";
 import { RUNS_ROW_WORD } from "../../wardyn/copy/runs-landing";
 import { endsWarningStage, endsWarningWord } from "../../wardyn/copy/run-lifetime";
+import { SCHEDULED_RUN } from "../../wardyn/copy/scheduled-runs";
 import { statusDetailSentence } from "../run-status-detail";
+import { scheduledWait } from "./scheduled-state";
 import { ordinal } from "../../../lib/ordinal";
 
 export type RowHue = "blue" | "amber" | "red" | "grey";
-export type RowAction = "review" | "sign-in" | "revive" | null;
+export type RowAction = "review" | "sign-in" | "revive" | "cancel" | null;
 
 export interface RowPresentation {
   hue: RowHue;
@@ -145,7 +147,12 @@ export function rowPresentation(run: AgentRun, adminView: boolean): RowPresentat
         action: null,
         needsYou: false,
       };
-    case "QUEUED":
+    case "QUEUED": {
+      // A scheduled run waits for its time, not for a slot: its own word, and the owner may cancel it from the row. Once
+      // due it can wait for the owner's sign-in, which the owner answers from the run page. The Admin view acts on neither.
+      const wait = scheduledWait(run);
+      if (wait === "scheduled") return { hue: "blue", word: SCHEDULED_RUN.WORD, action: adminView ? null : "cancel", needsYou: false };
+      if (wait === "sign_in") return { hue: "amber", word: RUNS_ROW_WORD.WAITING_SIGN_IN, action: adminView ? null : "sign-in", needsYou: !adminView };
       // Waiting for a slot in a capped pool: the same word the run page's badge says, and the place in line the
       // Launched screen tells the person.
       return {
@@ -155,6 +162,7 @@ export function rowPresentation(run: AgentRun, adminView: boolean): RowPresentat
         action: null,
         needsYou: false,
       };
+    }
     case "WAITING_FOR_CONFIRMATION":
       // Row 4 (run_attention.go) — "reserved, no producer today": a state
       // reaching here with no attention projected is not currently possible,

@@ -128,7 +128,10 @@
 # docs/ENV.md 42312 = ours 42271 + theirs 42230 - base 42189 at the 0.10 W4d merge of SEC-1b onto the train.
 # docs/ENV.md 41033 adds 362 over 40671, measured: the WARDYN_KUBECTL_CLI row and details section (#1990 kubectl, Option A) with its setup-status field and the pin its stored token keeps, its name in the per-check list, and the WARDYN_KUBECTL_CONFIG_B64 sandbox row.
 # docs/ENV.md 42674 = ours 42312 + theirs 41033 - base 40671 at the 0.10 W4d merge of FEAT-1KUBE onto the train.
-docs/ENV.md=42674 share=5
+# docs/ENV.md 40799 adds 128 over 40671 (0.10 FEAT-2SCHED): the WARDYN_SCHEDULED_RUNS row and details section, which the env-doc guard requires.
+# docs/ENV.md=40829 adds 30 (0.10 FEAT-2SCHED review r1 M1/M2): the latest start a run's wait allows, and the switch ending booked runs at their start.
+# docs/ENV.md 42832 = ours 42674 + theirs 40829 - base 40671 at the 0.10 W4d merge of FEAT-2SCHED-UI onto the train.
+docs/ENV.md=42832 share=5
 # docs/ENV.md 39047 adds 478 over 38569: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
 # docs/ENV.md 38607 adds 38 over 38569, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # docs/ENV.md 40042 adds 422 over 39620, measured: the WARDYN_AWS_SIGV4_AT_PROXY row and section: which lanes and hosts are re-signed, the named refusals, and the no-hold, placement and new-dispatch notes.

@@ -145,6 +145,7 @@ func runCmd(client clientFn) *cobra.Command {
 	var mode runModeFlags
 	var where runPlacementFlags
 	var ends runEndFlags
+	var sched runScheduleFlags
 	cmd := &cobra.Command{
 		Use:     "run",
 		Aliases: []string{"runs"},
@@ -211,6 +212,9 @@ func runCmd(client clientFn) *cobra.Command {
 			if err := applyQueueWait(&body, cmd.Flags().Changed("max-wait"), maxWait, wait, timeout); err != nil {
 				return err
 			}
+			if err := sched.apply(&body, wait); err != nil {
+				return err
+			}
 			if wait && body.Experience == sdk.ExperienceInteractive {
 				return fmt.Errorf("--wait and --experience interactive are mutually exclusive (an interactive run never finishes on its own)")
 			}
@@ -260,7 +264,7 @@ func runCmd(client clientFn) *cobra.Command {
 			return seedThenWait(cmd, client(), run.ID, localFolder, localFolderRemote, wait, timeout)
 		},
 	}
-	cmd.Flags().StringVar(&file, "file", "", "launch a kind: Run document (JSON or YAML, or '-' for stdin) instead of the flags below; only --title, --description, --wait, --timeout, --max-wait, --json and --dry-run go with it. A document's inline_policy is sent as an overlay on your default policy, not as a replacement")
+	cmd.Flags().StringVar(&file, "file", "", "launch a kind: Run document (JSON or YAML, or '-' for stdin) instead of the flags below; only --title, --description, --wait, --timeout, --max-wait, --start-at, --time-zone, --json and --dry-run go with it. A document's inline_policy is sent as an overlay on your default policy, not as a replacement")
 	cmd.Flags().StringVar(&repo, "repo", "", "repository (org/name; optional — omit for an ephemeral scratch run)")
 	cmd.Flags().StringVar(&agent, "agent", "", "agent name (e.g. claude-code)")
 	cmd.Flags().StringVar(&task, "task", "", "human task description")
@@ -286,6 +290,7 @@ func runCmd(client clientFn) *cobra.Command {
 	cmd.Flags().DurationVar(&maxWait, "max-wait", 0, "how long the run may wait for a free slot in a pool at its run limit (at least 1s; over 7 days is cut to 7). "+
 		"With --wait and no --max-wait the request carries --timeout minus 60s for a --timeout of 2m or more, and half of --timeout for a shorter one, so a run that waits too long should end queue_timeout (exit 1) before --timeout (exit 124); that is the limit asked of the server, not a guarantee")
 	cmd.Flags().DurationVar(&timeout, "timeout", 30*time.Minute, "give up waiting after this long (with --wait; exit 124). Bounds the requests too, and does not stop the run: it keeps running, and holds its sandbox and credentials until it ends (kill it with 'wardyn run kill'). Must be positive")
+	sched.register(cmd)
 	cmd.Flags().BoolVar(&createJSON, "json", false, "emit the created run (or the --dry-run checklist) as JSON (progress goes to stderr)")
 
 	cmd.AddCommand(runListCmd(client), runGetCmd(client), runKillCmd(client),
@@ -315,39 +320,6 @@ func printPreflight(ctx context.Context, w io.Writer, c *sdk.Client, body sdk.Cr
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", it.Status, orDash(it.Label), it.Kind, orDash(it.RequiredBy), orDash(it.Detail))
 	}
 	return tw.Flush()
-}
-
-// applyQueueWait sets the request's max_wait_sec from --max-wait or, with --wait, from --timeout. A
-// --max-wait under a second is refused; a document's own max_wait_sec stands unless --max-wait is given.
-func applyQueueWait(body *sdk.CreateRunRequest, given bool, maxWait time.Duration, wait bool, timeout time.Duration) error {
-	if given && maxWait < time.Second {
-		return fmt.Errorf("--max-wait must be at least 1s, got %s", maxWait)
-	}
-	if sec := queueWaitSec(maxWait, wait, timeout); sec != nil && (given || body.MaxWaitSec == nil) {
-		body.MaxWaitSec = sec
-	}
-	return nil
-}
-
-// queueWaitSec is the max_wait_sec to send: --max-wait when given, else with --wait the --timeout minus
-// 60s for a --timeout of 2m or more (so never under 60s), and half of --timeout (at least 1s) for a
-// shorter one. The aim is for the server to end a run that waits too long (queue_timeout, exit 1)
-// before the CLI gives up on it (exit 124); it is only the limit asked of the server. nil sends
-// nothing and leaves the server's default.
-func queueWaitSec(maxWait time.Duration, wait bool, timeout time.Duration) *int {
-	d := maxWait
-	switch {
-	case d > 0:
-	case wait:
-		d = max(timeout-time.Minute, time.Minute)
-		if timeout > 0 && timeout < 2*time.Minute {
-			d = max(timeout/2, time.Second)
-		}
-	default:
-		return nil
-	}
-	sec := int(d / time.Second)
-	return &sec
 }
 
 // waitPollInterval is how often --wait polls the run state (var for tests).

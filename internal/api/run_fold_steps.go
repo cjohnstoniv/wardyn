@@ -711,6 +711,15 @@ func (s *Server) stepDriveEligibility(f *runFold, rec *foldRecorder) bool {
 // stepPlacement runs after the components and before the local-eligibility step: the confinement
 // floor it reads is the policy's and the components', and the plan it gates is the one that step judges.
 func (s *Server) stepPlacement(f *runFold, rec *foldRecorder) bool {
+	if !f.promoted {
+		// The run type the queue's wait is read from (queuedCreate.answer).
+		interactive := runTypeForEnd(f.req.Experience) == types.RunnerPoolRunInteractive || (f.req.Experience == "" && f.req.Interactive)
+		sch, refusal := parseRunSchedule(f.req.StartAt, f.req.StartTimeZone, envEnabled(envScheduledRuns), s.cfg.Now(), scheduleLeadWaitSec(interactive))
+		if refusal.write(s, f.w, f.r) {
+			return false
+		}
+		f.schedule = sch
+	}
 	in := placementInput{req: f.req, floor: confinementFloorSpec(f.spec, f.comps), baseline: f.baseline, reqCC: f.reqCC, reqCCOK: true,
 		ceiling: f.ceiling, untouched: resourceBaseline(f.source, f.spec), ask: resourceAsk(f.req.Resources, sourceSize(f.source, f.ceiling)),
 		promoted: f.promoted, drives: len(f.drives) > 0, noLocal: promotedNoLocal(f.r.Context())}
@@ -728,10 +737,14 @@ func (s *Server) stepPlacement(f *runFold, rec *foldRecorder) bool {
 		return false
 	}
 	f.place = plan
+	// A scheduled run waits in its pool's queue for its time; with no pool there is no queue to hold it.
+	if f.schedule != nil && !plan.pooled {
+		return !runError(http.StatusUnprocessableEntity, reasonScheduledRunsUnavailable, scheduledRunsUnavailableMsg).write(s, f.w, f.r)
+	}
 	// A run bound for a capped pool waits for a slot instead of failing (the dry doors answer the same).
 	// The queue's own start replays the fold as promoted, and must not queue again.
 	if f.mode != foldPreview {
-		f.queued = plan.queues() && !f.promoted
+		f.queued = (plan.queues() || f.schedule != nil) && !f.promoted
 	}
 	// A launch that waits records the size it gets before any runner bounds it, so the queue sizes it for
 	// each runner that could take it (startSizeOn) instead of holding it to the runner it met first.

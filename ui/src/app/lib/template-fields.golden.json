@@ -710,6 +710,16 @@
       "why": "How long a run may wait for a slot in a full pool is chosen at each launch; the default wait suits a template's runs."
     },
     {
+      "name": "start_at",
+      "excluded": "launch",
+      "why": "When a run starts is chosen at each launch; a template's runs start when they are launched."
+    },
+    {
+      "name": "start_time_zone",
+      "excluded": "launch",
+      "why": "The time zone only means something beside a start time."
+    },
+    {
       "name": "no_end",
       "part": "runner",
       "omitted": "baseline",

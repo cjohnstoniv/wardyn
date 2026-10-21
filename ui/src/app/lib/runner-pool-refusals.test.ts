@@ -91,6 +91,16 @@ describe("runner pool refusal sentences", () => {
     expect(PLACEMENT_REASONS).toContain("runner_limits_unset");
   });
 
+  it("says a scheduled run and a due run waiting for its owner's sign-in as waits, in the server's tokens", () => {
+    const wait = readFileSync(join(root, "internal/runnerpool/wait.go"), "utf8");
+    for (const key of ["SCHEDULED", "OWNER_SIGN_IN"] as const) {
+      expect(RUNNER_POOL_REASONS as readonly string[]).not.toContain(RUN_WAIT_REASON[key]);
+      expect(wait, key).toContain(`WaitReason = "${RUN_WAIT_REASON[key]}"`);
+    }
+    expect(RUN_WAIT_REASON.SCHEDULED).toBe("scheduled");
+    expect(RUN_WAIT_REASON.OWNER_SIGN_IN).toBe("owner_sign_in");
+  });
+
   it("says a pool with no online runner of yours in the server's sentence", () => {
     const g = golden.find((x) => x.key === "NO_ONLINE_RUNNER")!;
     expect(POOL_OFFLINE.NO_ONLINE_RUNNER(g.args[0])).toBe(g.text);

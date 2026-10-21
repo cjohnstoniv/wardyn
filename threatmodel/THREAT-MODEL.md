@@ -2720,6 +2720,10 @@ hiding them would repeat the failure mode we are designed to avoid.
     - Residual: a group removed at the identity provider is not seen before the wait ends: `24h` for a background run, `1h` for an interactive one, at most `7d` when the launch asks.
     - The queue row holds the owner's snapshot and request, names and references with no secret value, and every exit deletes it. A person may hold `100` waiting runs per pool.
     - Slot counts and `queue.position` are aggregate counts over the pool. They name no run, owner or runner, and `queue` is visible only where the run is.
+    - A run can be booked to start once, later, with nobody present at its start (`WARDYN_SCHEDULED_RUNS`, off by default) [0.10]. The 7-day cap holds: it starts no later than 7 days after the request less its wait, and nothing holds it past 7 days from the request.
+    - Its start is the queue's start, so the queue's renewal-at-start rule applies (`docs/design/0.9/pool-queue.md` section 7, step 8): the person's stored model sign-in (an AWS SSO refresh token, a subscription OAuth token, an Azure credential) is read and may be renewed unattended. At the start, Wardyn renews your model sign-in if it can; if it can't, the run waits for you. An unattended wait of up to 7 days is the accepted Q8-B (`pool-queue.md` Q8).
+    - A change made in Wardyn after booking is checked at the start: which profile the person is on, through a group's assignment too (`queue_profile_changed`), the current profile's rules, and the run's policy (`queue_policy_changed`, `queuePolicyUnchanged`). A group removed only at the identity provider is not seen, as above.
+    - `WARDYN_SCHEDULED_RUNS` turned off now refuses booked runs at their start too: each ends `FAILED` `scheduled_runs_off`.
 
 82. **A run template is content, never authority, and its secret scan is not proof [0.9].**
     - Using a template re-resolves the launcher's own policy, credentials, components, pools and drives. A template holds references, never values, and its audience sees those names.

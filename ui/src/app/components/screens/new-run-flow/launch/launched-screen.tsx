@@ -23,6 +23,9 @@ import { useRequestIdentity } from "../../../wardyn/operator-context";
 import { useNewRunDispatch, useNewRunDraft, type LaunchedState, type NewRunScreenProps } from "../new-run-route";
 import { givesUp, placeInLine, waitingBody, waitingSince, type LaunchedRun } from "./launched-model";
 import { useLaunchedRun } from "./use-launched-run";
+import { SCHEDULED_RUN } from "../../../wardyn/copy/scheduled-runs";
+import { signInBody, startsLine } from "../../run-detail/scheduled-lines";
+import { scheduledWait } from "../../runs/scheduled-state";
 
 /** The create this person just made for this run, or none: another person's, or another run's, is never shown. */
 function createdFor(state: unknown, principal: string, runId: string): LaunchedRun | undefined {
@@ -72,7 +75,11 @@ function Launched({ runId, startAnother }: { runId: string; startAnother: () => 
   if (!loaded) return null;
 
   const queue = run.queue;
-  const body = waiting ? queue && waitingBody(queue.reason, pool) : starting ? NR_LAUNCH.STARTING_BODY : undefined;
+  // A scheduled run waits for its time, not for a place in line: it says when it starts and what is checked then.
+  const scheduled = queue && scheduledWait(run);
+  const body = scheduled
+    ? undefined
+    : waiting ? queue && waitingBody(queue.reason, pool) : starting ? NR_LAUNCH.STARTING_BODY : undefined;
   const kill = async (id: string) => {
     setKilling(null);
     setKillFailed("");
@@ -97,6 +104,13 @@ function Launched({ runId, startAnother }: { runId: string; startAnother: () => 
       {badge ? <Chip tone={waiting ? "info" : "success"}>{badge}</Chip> : <RunStateBadge state={run.state} />}
       <h1 ref={heading} tabIndex={-1} className="text-[30px] leading-[1.08] font-normal tracking-[-0.04em] outline-none">{runHeadline(run)}</h1>
       {body && <p className="text-muted-foreground">{body}</p>}
+      {queue && scheduled === "scheduled" && (
+        <div data-testid="launched-scheduled" className="flex flex-col gap-1">
+          {startsLine(queue) && <p>{startsLine(queue)}</p>}
+          <p className="text-muted-foreground">{SCHEDULED_RUN.PAGE_NOTE}</p>
+        </div>
+      )}
+      {queue && scheduled === "sign_in" && signInBody(queue) && <p className="text-muted-foreground">{signInBody(queue)}</p>}
       {starting && (
         <div role="progressbar" aria-label={NR_LAUNCH.BADGE_STARTING} className="my-4 h-[3px] w-[260px] overflow-hidden bg-muted">
           <div className="h-full w-full animate-pulse rounded-full bg-primary motion-reduce:animate-none" />
@@ -104,7 +118,7 @@ function Launched({ runId, startAnother }: { runId: string; startAnother: () => 
       )}
       {waiting && (
         <div className="my-4 grid w-full gap-3.5 rounded-lg border border-border bg-card p-4 text-left sm:grid-cols-3">
-          {queue && (
+          {queue && !scheduled && (
             <dl className="contents">
               <div>
                 <dt className="text-xs text-muted-foreground">{NR_LAUNCH.POSITION}</dt>

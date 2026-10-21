@@ -121,7 +121,9 @@
 # 0.10 PRIV-1: docs/OPERATIONS.md 57515 adds 123 over 57392, measured: run_tasks and run_setups reach, the two tables that keep a name and why, and the credentials token-history counts.
 # docs/OPERATIONS.md 57692 = ours 57569 + theirs 57515 - base 57392 at the 0.10 W4a merge of PRIV-1 onto the train.
 # 0.10 W4a train: docs/OPERATIONS.md tightened to 57690, measured at the train merge.
-docs/OPERATIONS.md=57690 share=35
+# docs/OPERATIONS.md 57417 adds 25 over 57392 (0.10 FEAT-2SCHED): the 0198 run_queue start_at migration line.
+# docs/OPERATIONS.md 57715 = ours 57690 + theirs 57417 - base 57392 at the 0.10 W4d merge of FEAT-2SCHED-UI onto the train.
+docs/OPERATIONS.md=57715 share=35
 # docs/OPERATIONS.md 55848 adds 132 over 55716: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
 # docs/OPERATIONS.md 55840 adds 124 over 55716, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # docs/OPERATIONS.md 55867 adds 27 over 55840, measured: a run whose runner cannot be asked falls back to this deployment's runner, the older-runner exception, pooled runs, and the runner_offline gap reason.

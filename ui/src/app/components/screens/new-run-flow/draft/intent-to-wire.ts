@@ -8,6 +8,7 @@
 // driven by the template field registry: no hand-built whitelist, no defaults,
 // no client-side class clamp. A field it cannot carry is reported, never dropped.
 
+import type { StartWire } from "../../../../lib/schedule";
 import { TEMPLATE_POLICY_FIELDS, TEMPLATE_REQUEST_FIELDS, type TemplateFieldRule } from "../../../../lib/template-fields";
 import type { RunIntent } from "./run-intent";
 
@@ -49,7 +50,8 @@ export function wireSerializer(requestRows: readonly TemplateFieldRule[], policy
     return out;
   }
 
-  return function serialize(intent: RunIntent, launch?: { title: string; description: string }): WireResult {
+  /** The Name dialog's fields, and a start later (StartWire), which the registry leaves to each launch. */
+  return function serialize(intent: RunIntent, launch?: { title: string; description: string; start?: StartWire }): WireResult {
     const unsupported: string[] = [];
     const body: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(intent)) {
@@ -67,6 +69,7 @@ export function wireSerializer(requestRows: readonly TemplateFieldRule[], policy
     if (launch) {
       body.title = launch.title;
       if (launch.description) body.description = launch.description;
+      if (launch.start) Object.assign(body, launch.start);
     }
     return { body: body as CreateRunWire, unsupported };
   };

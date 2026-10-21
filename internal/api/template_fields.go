@@ -202,6 +202,10 @@ var templateRequestRules = []TemplateFieldRule{
 		"A folder on one person's computer is named at each launch; a template cannot know where it is."),
 	excludedField("max_wait_sec", templateExcludeLaunch,
 		"How long a run may wait for a slot in a full pool is chosen at each launch; the default wait suits a template's runs."),
+	excludedField("start_at", templateExcludeLaunch,
+		"When a run starts is chosen at each launch; a template's runs start when they are launched."),
+	excludedField("start_time_zone", templateExcludeLaunch,
+		"The time zone only means something beside a start time."),
 	carriedField("no_end", partRunner, templateOmitBaseline, templateEmptySame,
 		"The run takes the default end when the template is used. Asking for no end is checked again at launch against the pool, the deployment and the person's own limits, and is never a permission."),
 	// The run-mode carriers (run_mode.go): what a person is starting. A new client

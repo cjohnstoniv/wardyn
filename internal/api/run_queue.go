@@ -61,6 +61,7 @@ type queueStore interface {
 	StartQueuedRun(ctx context.Context, id uuid.UUID, st store.QueueStart) (types.AgentRun, bool, error)
 	SetQueueWait(ctx context.Context, id uuid.UUID, detail string) error
 	SetPromotedStatusDetail(ctx context.Context, id uuid.UUID, detail string) error
+	RequeuePromotedRun(ctx context.Context, e store.RunQueueEntry, detail string) (bool, error)
 	ExitQueuedRun(ctx context.Context, id uuid.UUID, to types.RunState, detail, hint string) (bool, error)
 }
 
@@ -248,7 +249,10 @@ func (q queuedCreate) answer(s *Server, w http.ResponseWriter, r *http.Request) 
 	}
 	if created.State == types.RunQueued {
 		sentence := runnerpool.WaitAtCapacityMsg(pool.Name, capMax)
-		if q.f.place.waitsForRoom {
+		switch {
+		case q.f.schedule != nil:
+			sentence = scheduledWaitMsg(q.f.schedule)
+		case q.f.place.waitsForRoom:
 			sentence = runnerpool.WaitRunnersAtCapacityMsg(pool.Name)
 		}
 		warnings = append(warnings, sentence)
@@ -260,9 +264,12 @@ func (q queuedCreate) answer(s *Server, w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings, ResourcesApplied: &q.f.place.applied})
 }
 
-// waitReason is why the launch waits: the pool is at its own cap, or (a pool with none) every runner
-// that could take the run is at one of its limits.
+// waitReason is why the launch waits: it is scheduled for later, the pool is at its own cap, or (a pool
+// with none) every runner that could take the run is at one of its limits.
 func (q queuedCreate) waitReason() runnerpool.WaitReason {
+	if q.f.schedule != nil {
+		return runnerpool.WaitScheduled
+	}
 	if q.f.place.waitsForRoom {
 		return runnerpool.WaitRunnersAtCapacity
 	}
@@ -295,10 +302,15 @@ func (q queuedCreate) entry(s *Server, ctx context.Context, waitSec int) (store.
 		return store.RunQueueEntry{}, err
 	}
 	now := q.run.CreatedAt
-	return store.RunQueueEntry{
+	e := store.RunQueueEntry{
 		PoolID: *q.run.RunnerPoolID, Owner: q.run.CreatedBy, QueuedAt: now, DeadlineAt: now.Add(time.Duration(waitSec) * time.Second),
 		PolicyRef: ref, Authority: auth, Launch: raw,
-	}, nil
+	}
+	if sch := q.f.schedule; sch != nil {
+		at := sch.at
+		e.StartAt, e.DeadlineAt = &at, scheduledDeadline(now, at, waitSec)
+	}
+	return e, nil
 }
 
 // auditQueuedCreate is the run.create row of a launch that waits: the queue facts and no jti, since
@@ -314,10 +326,14 @@ func (s *Server) auditQueuedCreate(ctx context.Context, q queuedCreate, created 
 	q.intent.stamp(createData, created.LaunchIntent != nil)
 	stampDriveAudit(createData, q.f.drives)
 	stampHarnessSet(createData, q.f.harnesses, q.f.image)
-	createData["queue"] = map[string]any{
+	queue := map[string]any{
 		"pool_id": e.PoolID, "position": position, "max_wait_sec": waitSec, "deadline_at": e.DeadlineAt, "capped": !q.f.place.waitsForRoom,
 		"reason": string(q.waitReason()),
 	}
+	if sch := q.f.schedule; sch != nil {
+		queue["start_at"], queue["time_zone"] = sch.at, sch.zone
+	}
+	createData["queue"] = queue
 	q.f.comps.stampRunCreate(createData)
 	maps.Copy(createData, q.f.place.auditFields(created, s.runnerNameOf(ctx, created)))
 	s.markGovernanceExempt(ctx, createData)

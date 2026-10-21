@@ -329,6 +329,13 @@ export interface SetupStatus {
    *  TRUSTED_CA_COUNT(n) (F22 — the data has shipped server-side since
    *  before this console read it). */
   trusted_ca_certs?: number;
+  /** The switches that turn console features on (Go SetupFeatures), one
+   *  boolean each. Kept through redaction. Optional for fixture compatibility
+   *  with an older daemon; absent reads as every switch off. */
+  features?: {
+    /** WARDYN_SCHEDULED_RUNS: a run may be scheduled to start later. */
+    scheduled_runs: boolean;
+  };
   checks: SetupCheck[];
   auth: {
     mode: "local" | "sso" | "token" | "disabled";

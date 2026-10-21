@@ -14,6 +14,9 @@ import { RUNNER_POOL_REFUSAL } from "../../../../../lib/runner-pool-refusals";
 import type { RunnerPoolCatalogueEntry, RunnerPoolList } from "../../../../../lib/types/runner-pools";
 import { NR_RUN } from "../../../../wardyn/copy/new-run/run";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
+import { ModelAccessProvider } from "../../../../wardyn/model-access-context";
+import { browserZone, scheduleDaysAhead, todayDate, type StartChoice } from "../../../../../lib/schedule";
+import type { SetupStatus } from "../../../../../lib/types/setup";
 import type { RunIntent } from "../../draft/run-intent";
 import { poolScope } from "../../lenses/run-lens";
 import { NewRunDraftProvider, useNewRunDispatch, useNewRunDraft } from "../../new-run-route";
@@ -27,30 +30,36 @@ const WIDE = ".hidden{display:none}.md\\:block{display:block}.md\\:hidden{displa
 const sheet = document.createElement("style");
 sheet.textContent = WIDE;
 
-function Seeded({ intent, children }: { intent: RunIntent; children: React.ReactNode }) {
+function Seeded({ intent, schedule, children }: { intent: RunIntent; schedule?: StartChoice; children: React.ReactNode }) {
   const dispatch = useNewRunDispatch();
   const [ready, setReady] = React.useState(false);
   React.useEffect(() => {
     dispatch({ type: "edit", apply: () => intent });
+    if (schedule) dispatch({ type: "schedule", schedule });
     setReady(true);
-  }, [dispatch, intent]);
+  }, [dispatch, intent, schedule]);
   return ready ? children : null;
 }
 const Probe = () => <p data-testid="intent">{JSON.stringify(useNewRunDraft().intent)}</p>;
+const ScheduleProbe = () => <p data-testid="schedule">{JSON.stringify(useNewRunDraft().schedule ?? null)}</p>;
+const scheduleNow = () => JSON.parse(screen.getByTestId("schedule").textContent ?? "null");
 const intentNow = (): RunIntent => JSON.parse(screen.getByTestId("intent").textContent ?? "{}");
 
-function show(intent: RunIntent, list: RunnerPoolList = MEMBER) {
+function show(intent: RunIntent, list: RunnerPoolList = MEMBER, status: SetupStatus | null = null, schedule?: StartChoice) {
   document.head.append(sheet);
   const go = vi.fn();
   const load = vi.fn(async () => list);
   render(
     <MemoryRouter>
-      <NewRunDraftProvider owner="alice">
-        <Seeded intent={intent}>
-          <RunStep location={{ screen: "step", step: "run" }} go={go} startFromScratch={() => {}} deps={{ load }} />
-          <Probe />
-        </Seeded>
-      </NewRunDraftProvider>
+      <ModelAccessProvider status={status} onRefresh={() => {}}>
+        <NewRunDraftProvider owner="alice">
+          <Seeded intent={intent} schedule={schedule}>
+            <RunStep location={{ screen: "step", step: "run" }} go={go} startFromScratch={() => {}} deps={{ load }} />
+            <Probe />
+            <ScheduleProbe />
+          </Seeded>
+        </NewRunDraftProvider>
+      </ModelAccessProvider>
     </MemoryRouter>,
   );
   return { go, load };
@@ -416,5 +425,150 @@ describe("Run step: mode, timing and command", () => {
     await userEvent.click(screen.getByRole("button", { name: NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_HARNESSES) }));
     expect(screen.getByLabelText(new RegExp(NR_RUN.COMMAND_LABEL))).toHaveFocus();
     expect(go).not.toHaveBeenCalled();
+  });
+});
+
+describe("Run step: Schedule for later", () => {
+  const ON = { features: { scheduled_runs: true } } as SetupStatus;
+  const AUTONOMOUS: RunIntent = { shape: "agent_task", experience: "background", workload: { kind: "agent_task", task: "x" } };
+  const pick = async () => {
+    await poolSelect();
+    await userEvent.click(screen.getByRole("radio", { name: NR_RUN.TIMING_LATER }));
+  };
+
+  it("stays Coming soon, with no fields, when features.scheduled_runs is off or absent", async () => {
+    for (const status of [null, { features: { scheduled_runs: false } } as SetupStatus, {} as SetupStatus]) {
+      show(AUTONOMOUS, MEMBER, status);
+      await poolSelect();
+      expect(screen.getByRole("radio", { name: NR_RUN.TIMING_LATER })).toBeDisabled();
+      expect(screen.queryByLabelText(NR_RUN.START_DATE)).not.toBeInTheDocument();
+      cleanup();
+    }
+  });
+
+  it("shows no start when the switch is off, even for a draft that holds one", async () => {
+    function Holds() {
+      const dispatch = useNewRunDispatch();
+      React.useEffect(() => dispatch({ type: "schedule", schedule: { date: "2026-10-21", time: "02:00", zone: "UTC" } }), [dispatch]);
+      return null;
+    }
+    document.head.append(sheet);
+    render(
+      <MemoryRouter>
+        <ModelAccessProvider status={{} as SetupStatus} onRefresh={() => {}}>
+          <NewRunDraftProvider owner="alice">
+            <Seeded intent={AUTONOMOUS}>
+              <RunStep location={{ screen: "step", step: "run" }} go={vi.fn()} startFromScratch={() => {}} deps={{ load: async () => MEMBER }} />
+              <Holds />
+            </Seeded>
+          </NewRunDraftProvider>
+        </ModelAccessProvider>
+      </MemoryRouter>,
+    );
+    await poolSelect();
+    expect(screen.getByRole("radio", { name: NR_RUN.TIMING_NOW })).toBeChecked();
+    expect(screen.queryByLabelText(NR_RUN.START_DATE)).not.toBeInTheDocument();
+  });
+
+  it("opens Date, Time and Time zone when on, losing its Coming soon, and tells nothing until a field is touched", async () => {
+    show(AUTONOMOUS, MEMBER, ON);
+    await pick();
+    const later = screen.getByRole("radio", { name: NR_RUN.TIMING_LATER });
+    expect(later).toBeEnabled();
+    expect(later).toBeChecked();
+    expect(within(later.closest("label") as HTMLElement).queryByText(NR_SHARED.COMING_SOON)).not.toBeInTheDocument();
+    expect(screen.getByLabelText(NR_RUN.START_DATE)).toBeInTheDocument();
+    expect(screen.getByLabelText(NR_RUN.START_TIME)).toBeInTheDocument();
+    expect(screen.getByLabelText(NR_RUN.START_ZONE)).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    for (const label of [NR_RUN.START_DATE, NR_RUN.START_TIME]) expect(screen.getByLabelText(label)).not.toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByText(NR_RUN.START_HELP(scheduleDaysAhead()))).toBeInTheDocument();
+    expect(scheduleNow()).toMatchObject({ date: "", time: "" });
+  });
+
+  it("tells the missing date once a field is touched, as an alert tied to the date and time by aria-describedby", async () => {
+    show(AUTONOMOUS, MEMBER, ON);
+    await pick();
+    setField(screen.getByLabelText(NR_RUN.START_TIME), "02:00");
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent(NR_RUN.START_MISSING);
+    const help = screen.getByText(NR_RUN.START_HELP(scheduleDaysAhead()));
+    for (const label of [NR_RUN.START_DATE, NR_RUN.START_TIME]) {
+      const input = screen.getByLabelText(label);
+      expect(input).toHaveAttribute("aria-invalid", "true");
+      expect(input.getAttribute("aria-describedby")?.split(" ")).toEqual([alert.id, help.id]);
+    }
+  });
+
+  it("counts a zone changed on its own as touching the picker", async () => {
+    show(AUTONOMOUS, MEMBER, ON);
+    await pick();
+    await userEvent.selectOptions(screen.getByLabelText(NR_RUN.START_ZONE), "Asia/Tokyo");
+    expect(screen.getByRole("alert")).toHaveTextContent(NR_RUN.START_MISSING);
+  });
+
+  it("ties the help to every field, and the error to none while there is no error", async () => {
+    show(AUTONOMOUS, MEMBER, ON);
+    await pick();
+    const help = screen.getByText(NR_RUN.START_HELP(scheduleDaysAhead()));
+    expect(help.id).not.toBe("");
+    for (const label of [NR_RUN.START_DATE, NR_RUN.START_TIME, NR_RUN.START_ZONE]) {
+      expect(screen.getByLabelText(label).getAttribute("aria-describedby")).toBe(help.id);
+    }
+  });
+
+  it("comes back with values already typed telling their problem at once", async () => {
+    show(AUTONOMOUS, MEMBER, ON, { date: "2020-01-01", time: "02:00", zone: "UTC" });
+    await poolSelect();
+    expect(screen.getByRole("alert")).toHaveTextContent(NR_RUN.START_PAST);
+  });
+
+  it("sets the earliest date from the picked zone's today and keeps the browser's zone first in the list", async () => {
+    show(AUTONOMOUS, MEMBER, ON);
+    await pick();
+    const date = screen.getByLabelText(NR_RUN.START_DATE);
+    await userEvent.selectOptions(screen.getByLabelText(NR_RUN.START_ZONE), "Pacific/Kiritimati");
+    expect(date).toHaveAttribute("min", todayDate("Pacific/Kiritimati"));
+    const east = date.getAttribute("min");
+    await userEvent.selectOptions(screen.getByLabelText(NR_RUN.START_ZONE), "Pacific/Pago_Pago");
+    expect(date).toHaveAttribute("min", todayDate("Pacific/Pago_Pago"));
+    expect(date.getAttribute("min")).not.toBe(east);
+    const zone = screen.getByLabelText(NR_RUN.START_ZONE) as HTMLSelectElement;
+    expect(zone.value).toBe("Pacific/Pago_Pago");
+    expect(zone.options[0].value).toBe(browserZone());
+  });
+
+  it("starts the zone at the browser's, and says the start once it is a good one", async () => {
+    show(AUTONOMOUS, MEMBER, ON);
+    await pick();
+    await userEvent.selectOptions(screen.getByLabelText(NR_RUN.START_ZONE), "UTC");
+    const date = new Date(Date.now() + 2 * 86_400_000).toISOString().slice(0, 10);
+    setField(screen.getByLabelText(NR_RUN.START_DATE), date);
+    setField(screen.getByLabelText(NR_RUN.START_TIME), "02:00");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(/^Starts [A-Z][a-z]{2} \d{1,2} [A-Z][a-z]{2}, 02:00 \(UTC\)$/);
+    expect(scheduleNow()).toEqual({ date, time: "02:00", zone: "UTC" });
+  });
+
+  it("refuses a past time and a start past 7 days less a background run's 24 hours, in the board's sentences", async () => {
+    show(AUTONOMOUS, MEMBER, ON);
+    await pick();
+    await userEvent.selectOptions(screen.getByLabelText(NR_RUN.START_ZONE), "UTC");
+    setField(screen.getByLabelText(NR_RUN.START_DATE), "2020-01-01");
+    setField(screen.getByLabelText(NR_RUN.START_TIME), "02:00");
+    expect(screen.getByRole("alert")).toHaveTextContent(NR_RUN.START_PAST);
+    expect(screen.getByLabelText(NR_RUN.START_DATE)).toHaveAttribute("aria-invalid", "true");
+    setField(screen.getByLabelText(NR_RUN.START_DATE), new Date(Date.now() + 9 * 86_400_000).toISOString().slice(0, 10));
+    expect(screen.getByRole("alert")).toHaveTextContent(NR_RUN.START_FAR(scheduleDaysAhead()));
+    setField(screen.getByLabelText(NR_RUN.START_DATE), new Date(Date.now() + 5 * 86_400_000).toISOString().slice(0, 10));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("goes back to Run now, dropping the start", async () => {
+    show(AUTONOMOUS, MEMBER, ON);
+    await pick();
+    await userEvent.click(screen.getByRole("radio", { name: NR_RUN.TIMING_NOW }));
+    expect(scheduleNow()).toBeNull();
+    expect(screen.queryByLabelText(NR_RUN.START_DATE)).not.toBeInTheDocument();
   });
 });

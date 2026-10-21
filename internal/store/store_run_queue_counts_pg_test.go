@@ -48,6 +48,39 @@ func TestPG_RunnerPoolSlotCounts(t *testing.T) {
 	}
 }
 
+// A run booked for later is not waiting yet: RunnerPoolSlotCounts leaves it out until its start time,
+// so a pool with free slots is not said to make a launch wait for runs booked days ahead.
+func TestPG_RunnerPoolSlotCountsLeavesOutRunsBookedForLater(t *testing.T) {
+	ctx := context.Background()
+	pool := runsPGPoolIsolated(t)
+	pg := store.NewPG(pool)
+	p := queuePool(t, pg)
+	now := time.Now().UTC()
+	var ids []uuid.UUID
+	for i := range 3 {
+		r, err := enqueue(t, pg, p, "bob", now.Add(time.Duration(i)*time.Second), 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, r.ID)
+	}
+	for _, set := range []struct {
+		id    uuid.UUID
+		start string
+	}{{ids[1], "now() + interval '2 days'"}, {ids[2], "now() - interval '1 second'"}} {
+		if _, err := pool.Exec(ctx, `UPDATE run_queue SET start_at = `+set.start+` WHERE run_id = $1`, set.id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := pg.RunnerPoolSlotCounts(ctx, []uuid.UUID{p.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (store.PoolCounts{Waiting: 2}); got[p.ID] != want {
+		t.Errorf("pool counts = %+v, want %+v (the run booked two days ahead is not waiting yet; the due one is)", got[p.ID], want)
+	}
+}
+
 // RunQueueFacts ranks each waiting run in its own pool by (queued_at, run_id), in one read, and leaves
 // a run that is not waiting out.
 func TestPG_RunQueueFacts(t *testing.T) {

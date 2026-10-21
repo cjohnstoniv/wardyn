@@ -339,10 +339,14 @@ type RunEndReason string
 const (
 	// RunEndMaxLifetimeReached: the run reached its effective maximum lifetime and was KILLED.
 	RunEndMaxLifetimeReached RunEndReason = "max_lifetime_reached"
-	// The five ways the pool queue ends a run that waited (docs/design/0.9/pool-queue.md section 9).
-	// A run that waited too long, or whose profile, policy or portal changed under it, is FAILED; a
-	// run whose pool was removed is KILLED. identity_deactivated is the existing token, FAILED here.
+	// The ways the pool queue ends a run that waited (docs/design/0.9/pool-queue.md section 9).
+	// A run that waited too long (a scheduled run still waiting for its owner's model sign-in says so),
+	// or whose profile, policy or portal changed under it, or a scheduled run that reached its start with
+	// scheduled runs switched off, is FAILED; a run whose pool was removed is KILLED.
+	// identity_deactivated is the existing token, FAILED here.
 	RunEndQueueTimeout        RunEndReason = "queue_timeout"
+	RunEndQueueSignInTimeout  RunEndReason = "queue_sign_in_timeout"
+	RunEndScheduledRunsOff    RunEndReason = "scheduled_runs_off"
 	RunEndQueueProfileChanged RunEndReason = "queue_profile_changed"
 	RunEndQueuePolicyChanged  RunEndReason = "queue_policy_changed"
 	RunEndQueuePortalRevoked  RunEndReason = "queue_portal_revoked"
@@ -355,6 +359,8 @@ var runEndSentences = map[RunEndReason]string{
 	RunEndMaxLifetimeReached:  "This run reached its maximum lifetime and was ended.",
 	RunEndEndReached:          "This run reached its end time and was ended.",
 	RunEndQueueTimeout:        "This run waited too long for a free slot and was not started.",
+	RunEndQueueSignInTimeout:  "This run waited for you to sign in to its model provider again, and was not started.",
+	RunEndScheduledRunsOff:    "Scheduled runs were switched off (WARDYN_SCHEDULED_RUNS) before this run's start time, so it was not started.",
 	RunEndQueueProfileChanged: "Your governance profile changed while this run waited. Start it again.",
 	RunEndQueuePolicyChanged:  "The policy this run used changed while it waited. Start it again to review it.",
 	RunEndQueuePortalRevoked:  "The portal that launched this run was removed while it waited.",
