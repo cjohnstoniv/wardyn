@@ -837,6 +837,8 @@ var routeMatrix = map[string]classifiedRoute{
 	// A) — a rename is a display-field write with no security or
 	// incident-response warrant behind it. See run_title.go's doc comment.
 	"PATCH /api/v1/runs/{id}/title": {class: classOwner, entity: entityRun, ownerTier: tierOwnerOnly},
+	// Bringing a computer folder back writes onto the run's person's computer: no admin bypass.
+	"POST /api/v1/runs/{id}/computer-folder/bring-back": {class: classOwner, entity: entityRun, ownerTier: tierOwnerOnly},
 	// A run's launch intent holds its task text: its creator only, no admin bypass
 	// (launch_intent.go). seedRun gives every fixture run one, so the owner arm reads 200.
 	"GET /api/v1/runs/{id}/launch-intent":     {class: classOwner, entity: entityRun, ownerTier: tierOwnerOnly},
@@ -1696,9 +1698,10 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// /approvals/{id}/take-over, hand-back and decline; 41 since 0.10
 		// added the three /runs/{id}/desktop/files routes; 44 since 0.10
 		// (#2972) added POST /runs/{id}/desktop-signin, .../shares and .../end
-		// (tierEntry).
-		if probed != 44 {
-			t.Errorf("probed %d classOwner routes, want 44 — a route that left classOwner takes its tier "+
+		// (tierEntry); 45 since 0.10 added POST
+		// /runs/{id}/computer-folder/bring-back.
+		if probed != 45 {
+			t.Errorf("probed %d classOwner routes, want 45 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})

@@ -251,7 +251,8 @@
 # docs/AUDIT-ACTIONS.md 49443 adds 26 over 49417, measured (OC-API1a review): the workspace.envcode.write row names its denied outcome and reason field.
 # docs/AUDIT-ACTIONS.md 51573 = ours 51501 + theirs 49443 - base 49371 at the 0.10 W4c merge of OC-API1a 0f92145af onto the train.
 # docs/AUDIT-ACTIONS.md 51662 adds 109 at the 0.10 W4c merge of OC-CLEAN1 027671351 onto the train, measured: its run.revoke and run.output.finalize rows (the lane head measured 49480 against its own 49371 budget).
-docs/AUDIT-ACTIONS.md=51662 share=8
+# docs/AUDIT-ACTIONS.md 51721 = ours 51662 + theirs 50615 - base 50556 at the 0.10 W4c merge of HYB-F be73ad257 onto the train.
+docs/AUDIT-ACTIONS.md=51721 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.
@@ -283,3 +284,4 @@ docs/AUDIT-ACTIONS.md=51662 share=8
 # docs/AUDIT-ACTIONS.md 46428 adds 39 over 46389, measured (0.9.3 RV4a R1-0009): the approval:refused decision-log reason.
 # docs/AUDIT-ACTIONS.md 46394 adds 5 over 46389, measured (0.9.3 UIa, DR-0263): run.create resources_applied also carries pids_limit.
 # docs/AUDIT-ACTIONS.md 48975 adds 124 over 48851, measured (0.10 AWS re-signing): the brokered:aws-sigv4 and brokered:aws-sigv4:refused decision-log rows.
+# docs/AUDIT-ACTIONS.md 50615 adds 59 over 50556, measured (0.10 HYB-F): run.folder.finalize and the bring_back direction.

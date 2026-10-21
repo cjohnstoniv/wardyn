@@ -14,11 +14,13 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -70,5 +72,64 @@ func TestPG_ComputerFolder_BrowseListAndRunPage(t *testing.T) {
 	}
 	if body, _ := json.Marshal(detail); strings.Contains(string(body), app) {
 		t.Errorf("the run page shows the folder's path on the person's computer: %s", body)
+	}
+}
+
+// pgAgentRunner is fakeRunner whose sandboxes run the Docker task idle, with an agent that stops.
+type pgAgentRunner struct{ *fakeRunner }
+
+func (r pgAgentRunner) ExecStream(ctx context.Context, ref string, spec runner.ExecSpec) (*runner.ExecSession, error) {
+	if sess, ok := agentExec(spec, taskIdlePID1, func() (string, int) { return agentStoppedMark + "\n", 0 }); ok {
+		return sess, nil
+	}
+	return r.fakeRunner.ExecStream(ctx, ref, spec)
+}
+
+// A kill and a bring-back race on Postgres: exactly one moves the run from RUNNING.
+func TestPG_ComputerFolder_BringBackAndKillHaveOneWinner(t *testing.T) {
+	e := newPoolEnv(t, false)
+	ctx := context.Background()
+	if _, err := e.pg.PutSiteConfig(ctx, types.SiteConfig{Runners: &types.RunnerSettings{Enabled: true}}); err != nil {
+		t.Fatal(err)
+	}
+	home, app := laptopHome(t)
+	id := e.claimedRunner(e.personP)
+	e.srv.runnerStreams.subs = map[uuid.UUID]runnerEndpoint{id: folderRunnerEndpoint(t, id, true, home)}
+	e.srv.cfg.RunnerOnline = func(r uuid.UUID) bool { return r == id }
+	e.srv.cfg.ComputerFolders = true
+	e.srv.cfg.Runner = pgAgentRunner{&fakeRunner{}}
+
+	for i := range 10 {
+		run := e.boundRun(func(r *types.AgentRun) {
+			r.State, r.SandboxRef = types.RunRunning, "sbx-"+r.ID.String()
+			r.LocalFolder = &types.RunLocalFolder{Name: "my-app", RemoteDir: "/home/agent/work", RunnerID: &id, Path: app, Direction: types.ComputerFolderBoth}
+		})
+		if ok, err := e.pg.SetRunLocalFolderSeed(ctx, run, ""); !ok || err != nil {
+			t.Fatalf("seed: %v %v", ok, err)
+		}
+		var kill, back int
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		wg.Go(func() {
+			<-start
+			kill = e.call(e.person, http.MethodPost, "/api/v1/runs/"+run.String()+"/kill", "").Code
+		})
+		wg.Go(func() {
+			<-start
+			back = e.call(e.person, http.MethodPost, "/api/v1/runs/"+run.String()+"/computer-folder/bring-back", "").Code
+		})
+		close(start)
+		wg.Wait()
+		got, err := e.pg.GetRun(ctx, run)
+		if err != nil {
+			t.Fatal(err)
+		}
+		killWon, backWon := kill == http.StatusAccepted, back == http.StatusOK
+		if killWon == backWon {
+			t.Fatalf("round %d: kill %d, bring-back %d: want exactly one winner", i, kill, back)
+		}
+		if want := map[bool]types.RunState{true: types.RunKilled, false: types.RunStopped}[killWon]; got.State != want {
+			t.Fatalf("round %d: kill %d, bring-back %d, state %s, want %s", i, kill, back, got.State, want)
+		}
 	}
 }

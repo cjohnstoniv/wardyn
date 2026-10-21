@@ -183,7 +183,8 @@ func (s *Server) seedComputerFolder(ctx context.Context, run types.AgentRun, fol
 
 // bringComputerFolderBack is the pass that brings the sandbox's changes back to the person's
 // computer when a "both" run ends: after the revoke cascade, before the sandbox is stopped. A run
-// whose folder never seeded, or that has no such folder, is left alone.
+// whose folder never seeded, that has no such folder, or whose changes a pass already brought
+// back (a later end of the same run, such as its runner's exit) is left alone.
 func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, ref string) {
 	st, ok := s.cfg.Store.(store.RunLocalFolders)
 	if !ok || ref == "" {
@@ -193,11 +194,27 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 	if err != nil || folder == nil || folder.RunnerID == nil || folder.Direction != types.ComputerFolderBoth || seed.SeededAt == nil {
 		return
 	}
+	if ss, ok := s.cfg.Store.(store.RunLocalFolderStatuses); ok {
+		if rec, err := ss.RunLocalFolderStatus(ctx, runID); err == nil && rec.Back != nil && rec.Back.Error == "" {
+			return
+		}
+	}
 	run, err := s.cfg.Store.GetRun(ctx, runID)
 	if err != nil {
 		return
 	}
 	run.SandboxRef = ref
+	if _, ok := bringBackBy(ctx); ok {
+		// The person ended the run to bring the folder back: nothing may write during the pass.
+		if err := s.stopAgentForPass(ctx, ref); err != nil {
+			slog.WarnContext(ctx, "wardynd: stop the agent before a bring-back", slog.String("run_id", runID.String()), slog.Any("err", err))
+			s.recordComputerFolderPass(ctx, runID, func(st *types.RunLocalFolderStatus) {
+				st.Back = folderPassRecord(s.cfg.Now(), runnerwire.FolderPass{}, bringBackAgentRunningMsg, true)
+			})
+			s.auditComputerFolderPass(ctx, runID, *folder, true, runnerwire.FolderPass{}, bringBackAgentRunningMsg)
+			return
+		}
+	}
 	res, errText := s.computerFolderPassWithin(ctx, computerFolderBackTimeout, run, *folder, true)
 	s.recordComputerFolderPass(ctx, runID, func(st *types.RunLocalFolderStatus) { st.Back = folderPassRecord(s.cfg.Now(), res, errText, true) })
 	s.auditComputerFolderPass(ctx, runID, *folder, true, res, errText)
@@ -216,17 +233,22 @@ func (s *Server) computerFolderPassWithin(ctx context.Context, d time.Duration, 
 }
 
 // auditComputerFolderPass records one pass as run.folder.transfer: direction seed (the computer to
-// the sandbox, before the agent starts) or back (the sandbox to the computer, when the run ends).
+// the sandbox, before the agent starts), back (the sandbox to the computer, when the run ends) or
+// bring_back (the same pass, when the person ended the run to bring the folder back; they are its actor).
 func (s *Server) auditComputerFolderPass(ctx context.Context, runID uuid.UUID, folder types.RunLocalFolder, back bool, res runnerwire.FolderPass, errText string) {
 	data := map[string]any{"folder": folder.Name, "remote_dir": folder.RemoteDir, "direction": "seed", "files": res.Pushed, "bytes": res.BytesOut}
+	actorType, actor := types.ActorSystem, "wardynd"
 	if back {
 		data["direction"], data["files"], data["bytes"] = "back", res.Pulled, res.BytesIn
+		if by, ok := bringBackBy(ctx); ok {
+			data["direction"], actorType, actor = "bring_back", by.actorType, by.principal
+		}
 	}
 	outcome := "success"
 	if errText != "" {
 		outcome, data["error"] = "failure", localFolderSeedError(errText)
 	}
-	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.folder.transfer", runID.String(), outcome, mustJSON(data)))
+	s.recordAudit(ctx, s.auditEvent(&runID, actorType, actor, "run.folder.transfer", runID.String(), outcome, mustJSON(data)))
 }
 
 func folderPassRecord(now time.Time, res runnerwire.FolderPass, errText string, back bool) *types.FolderPassRecord {

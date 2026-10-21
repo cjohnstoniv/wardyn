@@ -264,6 +264,12 @@ What happens:
 - One side edits at a time. The sandbox edits while the run is live. With **Both ways**, its changes come back when the
   run ends, before the sandbox is stopped. A file changed on both sides keeps your computer's copy, and nothing on
   your computer is deleted. With **Copy in only**, nothing comes back.
+- `wardyn folder bring-back <run>` ends a **Both ways** run early: the agent is stopped, then its changes come
+  back. Only you can do it.
+- A kill is containment: it ends the run without bringing the folder back. To keep the sandbox's changes, use Bring
+  back (or `wardyn folder bring-back <run>`) before you end the run.
+- If the agent can't be stopped, the run still ends and the sandbox's changes are discarded. The folder on your computer is not touched.
+- A runner on a different Wardyn release can refuse a bring-back until it is upgraded.
 - The copy follows the `wardyn sync` rules: `.git` stays on your computer, `.gitignore` and `.wardynignore` apply,
   symlinks are refused, and `WARDYN_SYNC_DENY` applies to every pass.
 - The runner checks every path itself:
@@ -277,7 +283,7 @@ What happens:
 - The runner opens no port and Wardyn never connects in: each pass rides the runner's own outbound session. The
   runner never reaches into a sandbox. Wardyn joins its stream to the sandbox's own `sftp-server`.
 
-Not yet: bringing changes back when you take over a live run, live sync while the run runs, and **Pause sync**.
+Not yet: live sync while the run runs, and **Pause sync**.
 For now this needs a single-replica deployment: Wardyn reaches the runner only from the replica it is connected to,
 so with several replicas a runner connected to another one reads as offline.
 

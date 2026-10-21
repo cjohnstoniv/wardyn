@@ -229,7 +229,8 @@
 # docs/sdk.md 20905 = ours 20524 + theirs 20669 - base 20288 at the 0.10 W4c merge of CTL-C 6de42c110 onto the train.
 # docs/sdk.md 19704 adds 22 over 19682, measured (OC-API1a review): workspace_request_invalid also answers the env-as-code write on a denied local_dir source.
 # docs/sdk.md 20927 = ours 20905 + theirs 19704 - base 19682 at the 0.10 W4c merge of OC-API1a 0f92145af onto the train.
-docs/sdk.md=20927 share=21
+# docs/sdk.md 20979 = ours 20927 + theirs 20340 - base 20288 at the 0.10 W4c merge of HYB-F be73ad257 onto the train.
+docs/sdk.md=20979 share=21
 # docs/sdk.md 18691 adds 28 over 18663, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
@@ -262,3 +263,4 @@ docs/sdk.md=20927 share=21
 # Runner pools add 70 measured words for the five pool reasons the routes send: docs/sdk.md 12761.
 # docs/sdk.md 12817 adds 21 (0.9 F-1511-1510 r1): reserved_principal on the two erase routes.
 # R2-api-1: docs/sdk.md 13256 adds 38 over 13218 for the five local-placement refusal reasons the docs guard now derives.
+# docs/sdk.md 20340 adds 52 over 20288, measured (0.10 HYB-F): the six bring-back refusal reasons.

@@ -238,6 +238,16 @@ const (
 	reasonRunSignInUnreadable = "run_sign_in_unreadable" // the pane, or the capture's audit row, could not be read in time
 )
 
+// POST /runs/{id}/computer-folder/bring-back (run_computer_folder_bring_back.go).
+const (
+	reasonComputerFolderNone             = "computer_folder_none"              // the run has no folder from the person's computer
+	reasonComputerFolderCopyInOnly       = "computer_folder_copy_in_only"      // the folder is Copy in only: nothing comes back
+	reasonComputerFolderNotSynced        = "computer_folder_not_synced"        // the folder's first sync never landed
+	reasonComputerFolderNotRunning       = "computer_folder_not_running"       // the run is not RUNNING: a kill or another end got there first
+	reasonComputerFolderPaused           = "computer_folder_paused"            // the run is paused: resuming it for the pass would let its agent write
+	reasonComputerFolderAgentUnstoppable = "computer_folder_agent_unstoppable" // the sandbox's PID 1 is not Wardyn's idle main process, so the agent cannot be stopped first
+)
+
 // POST /runs/{id}/resume (run_pause.go).
 const (
 	reasonRunResumeNotRunning = "run_resume_not_running" // the run is not in a resumable state
