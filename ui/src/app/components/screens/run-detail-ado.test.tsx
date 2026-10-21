@@ -177,7 +177,7 @@ describe("RunDetailScreen — decided Azure DevOps rows on the Approvals tab", (
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     await user.click(await screen.findByRole("tab", { name: /approvals/i }));
 
-    await screen.findByText(/Decided by/);
+    await screen.findByText(/by dana@acme.example/);
     expect(screen.queryByTestId("ado-capability-card")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
     expect(screen.getByText(/Allowed for this run/)).toBeInTheDocument();
@@ -200,7 +200,7 @@ describe("RunDetailScreen — decided Azure DevOps rows on the Approvals tab", (
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     await user.click(await screen.findByRole("tab", { name: /approvals/i }));
 
-    await screen.findByText(/Decided by/);
+    await screen.findByText(/by dana@acme.example/);
     expect(screen.queryByTestId("ado-capability-card")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Deny" })).not.toBeInTheDocument();
   });
@@ -230,7 +230,7 @@ describe("RunDetailScreen — decided Azure DevOps rows on the Approvals tab", (
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     await user.click(await screen.findByRole("tab", { name: /approvals/i }));
 
-    await screen.findByText(/Decided by/);
+    await screen.findByText(/by dana@acme.example/);
     expect(screen.queryByTestId("ado-consent-card")).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: ADO.REQ_CONSENT_CTA })).not.toBeInTheDocument();
   });
@@ -252,7 +252,7 @@ describe("RunDetailScreen — decided Azure DevOps rows on the Approvals tab", (
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     await user.click(await screen.findByRole("tab", { name: /approvals/i }));
 
-    await screen.findByText(/Decided by/);
+    await screen.findByText(/by dana@acme.example/);
     expect(screen.queryByText(/nothing to allow/i)).not.toBeInTheDocument();
     expect(screen.getByText(/Allowed once/)).toBeInTheDocument();
   });

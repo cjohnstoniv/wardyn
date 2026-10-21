@@ -42,6 +42,7 @@ import { AllowedHostsCard } from "./allowed-hosts-card";
 import { DeniedHostsCard } from "./denied-hosts-card";
 import { RecordPane } from "./record-pane";
 import { isRecording, newEgressHosts, sessionKeyOf } from "./session-helpers";
+import { PageContainer } from "../../wardyn/page-container";
 
 const POLL_MS = 2500;
 
@@ -313,7 +314,7 @@ export function WorkspaceDetailScreen() {
   // ---------------- render ----------------
   if (status === "loading") {
     return (
-      <div className="mx-auto max-w-[1000px] px-6 py-5">
+      <PageContainer width="form">
         <div className="space-y-4">
           <div className="rounded-xl border border-border bg-card p-5">
             <div className="h-6 w-72 animate-pulse rounded bg-muted" />
@@ -323,21 +324,21 @@ export function WorkspaceDetailScreen() {
             <TableSkeleton rows={4} cols={2} />
           </div>
         </div>
-      </div>
+      </PageContainer>
     );
   }
   if (status === "error") {
     return (
-      <div className="mx-auto max-w-[1000px] px-6 py-5">
+      <PageContainer width="form">
         <div className="rounded-xl border border-border bg-card">
           <ErrorState onRetry={() => load(true)} />
         </div>
-      </div>
+      </PageContainer>
     );
   }
   if (!ws) {
     return (
-      <div className="mx-auto max-w-[1000px] px-6 py-5">
+      <PageContainer width="form">
         <div className="rounded-xl border border-border bg-card">
           <EmptyState
             icon={AlertTriangle}
@@ -350,7 +351,7 @@ export function WorkspaceDetailScreen() {
             }
           />
         </div>
-      </div>
+      </PageContainer>
     );
   }
 
@@ -372,7 +373,7 @@ export function WorkspaceDetailScreen() {
   const workspaceUnavailable = workspaceUnavailableToCaller(ws, caps, resolvedModelProviders(shellStatus), true);
 
   return (
-    <div className="mx-auto max-w-[1000px] px-6 py-5">
+    <PageContainer width="form">
       <div className="mb-4 flex items-center gap-2 text-sm">
         <Link to="/workspaces" className="text-muted-foreground hover:text-foreground hover:underline">
           Workspaces
@@ -387,7 +388,7 @@ export function WorkspaceDetailScreen() {
             <kindMeta.Icon className="size-4" />
           </span>
           <div className="min-w-0 flex-1">
-            <h1 className="text-lg font-semibold text-foreground">{ws.name}</h1>
+            <h1 className="text-page text-foreground">{ws.name}</h1>
             <div className="mt-1 flex flex-wrap items-center gap-1.5">
               <span className="font-mono text-xs text-muted-foreground">{detailSourceLine(ws)}</span>
               {ws.source && (
@@ -508,6 +509,6 @@ export function WorkspaceDetailScreen() {
           run?.(approved);
         }}
       />
-    </div>
+    </PageContainer>
   );
 }

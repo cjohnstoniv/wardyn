@@ -374,17 +374,17 @@ describe("Run step: barrier", () => {
 });
 
 describe("Run step: mode, timing and command", () => {
-  it("offers Interactive and Autonomous for an agent, and Schedule for later only as Coming soon", async () => {
+  // #3045: a question with one answer is a sentence, not a radio; the choice returns when scheduling ships.
+  it("offers Interactive and Autonomous for an agent, and Run now as one sentence, not a radio", async () => {
     show({ shape: "agent_task", experience: "background", workload: { kind: "agent_task", task: "x" } });
     await poolSelect();
     expect(screen.getByRole("radio", { name: NR_RUN.MODE_AUTONOMOUS })).toBeChecked();
-    expect(screen.getByRole("radio", { name: NR_RUN.TIMING_NOW })).toBeChecked();
-    const later = screen.getByRole("radio", { name: NR_RUN.TIMING_LATER });
-    // Sentence case like every other option in the flow (#2867).
-    expect(screen.getByRole("radio", { name: "Run now" })).toBe(screen.getByRole("radio", { name: NR_RUN.TIMING_NOW }));
-    expect(later).toHaveAccessibleName("Schedule for later");
-    expect(later).toBeDisabled();
-    expect(within(later.closest("label") as HTMLElement).getByText(NR_SHARED.COMING_SOON)).toBeInTheDocument();
+    expect(screen.getByText(NR_RUN.TIMING_LABEL)).toBeInTheDocument();
+    expect(screen.getByText(NR_RUN.TIMING_NOW)).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(NR_RUN.TIMING_NOW_BODY))).toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: NR_RUN.TIMING_NOW })).toBeNull();
+    expect(screen.queryByText("Schedule for later")).toBeNull();
+    expect(screen.queryByText(NR_SHARED.COMING_SOON)).toBeNull();
   });
 
   it("shows no timing for an Interactive run and no mode for an environment", async () => {
@@ -398,13 +398,14 @@ describe("Run step: mode, timing and command", () => {
     expect(screen.getByRole("heading", { name: NR_RUN.TITLE_ENV })).toBeInTheDocument();
   });
 
-  it("takes a command for an application, with Application / server Coming soon", async () => {
+  it("takes a command for an application, and names the one kind of thing it runs as a sentence", async () => {
     show({ shape: "application", experience: "background", workload: { kind: "command", command: "" } });
     await poolSelect();
     expect(screen.getByRole("heading", { name: NR_RUN.TITLE_APP })).toBeInTheDocument();
-    const server = screen.getByRole("radio", { name: NR_RUN.APP_SERVER });
-    expect(server).toBeDisabled();
-    expect(within(server.closest("label") as HTMLElement).getByText(NR_SHARED.COMING_SOON)).toBeInTheDocument();
+    expect(screen.getByText(NR_RUN.APP_AUTOMATION)).toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: NR_RUN.APP_AUTOMATION })).toBeNull();
+    expect(screen.queryByText("Application / server")).toBeNull();
+    expect(screen.queryByText(NR_SHARED.COMING_SOON)).toBeNull();
     setField(screen.getByLabelText(new RegExp(NR_RUN.COMMAND_LABEL)), "make test");
     expect(intentNow().workload).toEqual({ kind: "command", command: "make test" });
     expect(screen.getByText(NR_RUN.COMMAND_HELP)).toBeInTheDocument();

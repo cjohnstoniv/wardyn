@@ -206,7 +206,7 @@ describe("My runner card", () => {
     await expand(user);
     expect(
       screen.getByText(
-        "A computer you registered runs your own runs, several at once up to its Runs at once, under your organization's policy and audit. One runner per computer is enough. While it's offline it runs nothing new.",
+        "A computer you registered runs your own runs, several at once up to its \"Runs at once\" limit, under your organization's policy and audit. One runner per computer is enough. While it's offline it runs nothing new.",
       ),
     ).toBeInTheDocument();
     expect(screen.getByText("You haven't registered a runner.")).toBeInTheDocument();

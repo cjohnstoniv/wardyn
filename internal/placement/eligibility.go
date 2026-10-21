@@ -261,7 +261,7 @@ func ResidentAdmits(origin CredentialOrigin, p LocalPlan, path string) *Refusal 
 	switch unmet := PostureUnmetAll(cp.RequirePosture, p.Posture); {
 	case len(unmet) == 0:
 	case p.Posture == nil:
-		return refuse(ReasonRunnerPostureUnmet, path, "posture: no reported posture to judge. At launch no runner is chosen yet, and a runner that has not reported its posture meets no requirement, so a delivery policy with require_posture refuses (requires "+cp.RequirePosture.requires()+")")
+		return refuse(ReasonRunnerPostureUnmet, path, "posture: no reported posture to judge. At launch no runner is chosen yet. A runner that reports no posture fails every posture requirement, so a delivery policy with require_posture refuses (requires "+cp.RequirePosture.requires()+")")
 	default:
 		return refuse(ReasonRunnerPostureUnmet, path, strings.Join(unmet, ", ")+": the runner's reported posture does not meet "+class+"'s requirement (requires "+cp.RequirePosture.requires()+")")
 	}

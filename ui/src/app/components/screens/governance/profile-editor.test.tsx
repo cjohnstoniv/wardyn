@@ -58,6 +58,35 @@ function renderEditor(profile: GovernanceProfile | null = GREENFIELD) {
   return { onSaved };
 }
 
+describe("ProfileEditor — the pinned action bar and section anchors", () => {
+  beforeEach(() => {
+    getSetupStatusMock.mockReset();
+    getSetupStatusMock.mockResolvedValue(baseStatus());
+    gradePolicyMock.mockReset();
+    gradePolicyMock.mockResolvedValue({ overall_risk: "medium", risk_assessment: [] });
+  });
+
+  it("counts the sections that changed, and says nothing before an edit", async () => {
+    renderEditor();
+    expect(screen.getByTestId("form-actions-unsaved")).toBeEmptyDOMElement();
+
+    await userEvent.type(screen.getByLabelText(GOV.LIMIT_CONCURRENT_LABEL), "5");
+    expect(screen.getByTestId("form-actions-unsaved")).toHaveTextContent("1 unsaved change");
+
+    await userEvent.type(screen.getByLabelText(GOV.FIELD_NAME, { exact: false }), " two");
+    expect(screen.getByTestId("form-actions-unsaved")).toHaveTextContent("2 unsaved changes");
+  });
+
+  it("links to each section by an anchor that exists", () => {
+    renderEditor();
+    const nav = within(screen.getByTestId("section-anchors"));
+    for (const label of [GOV.CEILING_TITLE, GOV.LIMITS_TITLE, GOV.CONTACT_TITLE]) {
+      const href = nav.getByRole("link", { name: label }).getAttribute("href")!.slice(1);
+      expect(document.getElementById(href)).not.toBeNull();
+    }
+  });
+});
+
 describe("ProfileEditor — the three integer LimitNumberRows", () => {
   beforeEach(() => {
     getSetupStatusMock.mockReset();
@@ -437,7 +466,7 @@ describe("ProfileEditor — the Access requests section", { timeout: 20_000 }, (
 
   it("shows the stored contact under M3's labels", () => {
     renderEditor(WITH_CONTACT);
-    expect(screen.getByText(GOV.CONTACT_TITLE)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: GOV.CONTACT_TITLE })).toBeInTheDocument();
     expect(screen.getByText(GOV.CONTACT_LEAD)).toBeInTheDocument();
     expect(screen.getByLabelText(GOV.CONTACT_OWNER)).toHaveValue("Platform Security");
     expect(screen.getByLabelText(GOV.CONTACT_EMAIL)).toHaveValue("access@example.com");

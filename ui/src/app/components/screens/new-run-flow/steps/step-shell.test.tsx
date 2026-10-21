@@ -149,9 +149,12 @@ describe("StepShell", () => {
     expect(launch).toHaveFocus();
   });
 
-  it("gives a heading with an aside Make's 32 px and aligns the aside as asked", () => {
+  it("gives the heading the flow-title rung with or without an aside (#3080) and aligns the aside as asked", () => {
+    const { unmount } = render(<StepShell title="Run" primary={{ label: "Go", onActivate: vi.fn() }} />);
+    expect(screen.getByRole("heading", { level: 1 })).toHaveClass("text-display");
+    unmount();
     render(<StepShell title="Run document" headingAside={<span>Open</span>} headingAsideAlign="end" primary={{ label: "Go", onActivate: vi.fn() }} />);
-    expect(screen.getByRole("heading", { level: 1 })).toHaveClass("text-[32px]");
+    expect(screen.getByRole("heading", { level: 1 })).toHaveClass("text-display");
     expect(screen.getByText("Open").parentElement?.parentElement).toHaveClass("items-end");
   });
 });

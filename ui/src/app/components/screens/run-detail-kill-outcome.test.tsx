@@ -115,6 +115,8 @@ function renderRun() {
 }
 
 const killButton = () => screen.getByRole("button", { name: /^Kill/ });
+// An ended run with a confirmed teardown has no Kill at all (the approved header drops it).
+const noKillButton = () => screen.queryByRole("button", { name: /^Kill/ });
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -129,7 +131,7 @@ describe("RunDetailScreen — a KILLED run says only what the trail proves", () 
     renderRun();
     expect(await screen.findByText(/Wardyn stopped and removed the sandbox/)).toBeInTheDocument();
     expect(screen.getByTestId("run-failure-block")).toHaveAttribute("data-evidence", "confirmed");
-    expect(killButton()).toBeDisabled();
+    expect(noKillButton()).toBeNull();
   });
 
   it("success then failure is partial: teardown unconfirmed, and Kill is offered again", async () => {
@@ -228,7 +230,7 @@ describe("RunDetailScreen — a kill seen mid-teardown settles without a reload"
     await vi.advanceTimersByTimeAsync(4100);
     expect(await screen.findByText(/Wardyn stopped and removed the sandbox/)).toBeInTheDocument();
     expect(screen.queryByText(/audit trail has no kill record/)).not.toBeInTheDocument();
-    expect(killButton()).toBeDisabled();
+    expect(noKillButton()).toBeNull();
     // Confirmed: nothing more to wait for.
     const calls = getRunMock.mock.calls.length;
     await vi.advanceTimersByTimeAsync(20_000);
@@ -305,7 +307,7 @@ describe("RunDetailScreen — a failed ending read", () => {
     });
     renderRun();
     expect(await screen.findByText(/Wardyn stopped and removed the sandbox/)).toBeInTheDocument();
-    expect(killButton()).toBeDisabled();
+    expect(noKillButton()).toBeNull();
   });
 
   it("with no row anywhere: hidden and Kill on, then the next tick retries and recovers", async () => {
@@ -323,6 +325,6 @@ describe("RunDetailScreen — a failed ending read", () => {
     failing = false;
     await vi.advanceTimersByTimeAsync(4100);
     expect(await screen.findByText(/Wardyn stopped and removed the sandbox/)).toBeInTheDocument();
-    expect(killButton()).toBeDisabled();
+    expect(noKillButton()).toBeNull();
   });
 });

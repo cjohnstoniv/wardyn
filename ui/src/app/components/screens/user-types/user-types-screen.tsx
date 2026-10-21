@@ -34,6 +34,7 @@ import { Button } from "../../ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../ui/table";
 import { useSecurityOperator } from "../../wardyn/operator-context";
 import { PageHeader } from "../../wardyn/page-header";
+import { PageContainer } from "../../wardyn/page-container";
 import { Chip } from "../../wardyn/primitives";
 import { EmptyState, TableSkeleton, loadFailStatus, type ScreenStatus } from "../../wardyn/states";
 import { SECURITY_ONLY_REASON } from "../../wardyn/copy";
@@ -108,7 +109,7 @@ export function UserTypesScreen() {
   const [deleteHead, deleteBody] = question(toDelete ? UT.DELETE_CONFIRM(toDelete.name) : "");
 
   return (
-    <div className="mx-auto max-w-[1120px] px-6 py-6">
+    <PageContainer width="list">
       <PageHeader title={UT.TITLE} description={UT.LEAD} />
 
       {status === "forbidden" ? (
@@ -284,6 +285,6 @@ export function UserTypesScreen() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </PageContainer>
   );
 }

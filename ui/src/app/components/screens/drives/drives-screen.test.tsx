@@ -125,7 +125,8 @@ function snapshot(over: Partial<UserDrivesSnapshot> = {}): UserDrivesSnapshot {
 // and getAllByRole("button") correctly excludes it — it is a switch, not a
 // button; OptionCard's selected tint is bg-primary/10, a different class.
 function tealButtons(): HTMLElement[] {
-  return screen.getAllByRole("button").filter((b) => b.className.split(/\s+/).includes("bg-primary"));
+  // A selected Segmented option is filled bg-primary too (#2832) and is a pressed toggle, not an action.
+  return screen.getAllByRole("button").filter((b) => !b.hasAttribute("aria-pressed") && b.className.split(/\s+/).includes("bg-primary"));
 }
 
 function renderScreen(snap: UserDrivesSnapshot | null = snapshot()) {
@@ -161,7 +162,8 @@ describe("DrivesScreen — states", () => {
   it("no drives: the empty state carries New drive, and it is the ONE teal", async () => {
     renderScreen(snapshot({ drives: [], grants: [] }));
     expect(await screen.findByText(DRIVES.EMPTY_TITLE)).toBeInTheDocument();
-    expect(screen.getByText(DRIVES.EMPTY_BODY)).toBeInTheDocument();
+    expect(screen.queryByText(/Runs keep nothing between them/)).toBeNull();
+    expect(screen.queryByText(/A drive is one place storage comes from/)).toBeNull();
 
     const teal = tealButtons();
     expect(teal).toHaveLength(1);
@@ -181,6 +183,7 @@ describe("DrivesScreen — states", () => {
   it("populated: the kind chip over the wire backend, the size with its gloss, the mode and the count", async () => {
     renderScreen();
     await screen.findByText(HOMES.name);
+    expect(screen.queryByText(/A drive is one place storage comes from/)).toBeNull();
     // Scoped to the drives table: the allocation form below carries the same
     // mode words in its writable-override control, which is the point of the
     // mode vocabulary being one set rather than two.

@@ -14,6 +14,12 @@ import { shortTime } from "../../../lib/format";
 export const VIEWER_APPROVAL_BLOCKS_NOTE =
   "This run is blocked until an admin decides it — you can see the requested scope below, but deciding needs the admin role.";
 
+// The run page's Approvals tab: what needs a decision, apart from what is already decided.
+export const APPROVALS_TAB = {
+  WAITING: "Waiting on you",
+  HISTORY: "History",
+} as const;
+
 // Approval blast-radius banners (D1) — every approval kind gets two lines:
 // what you're approving, and the worst realistic outcome. The scope-specific
 // text is filled by the Approvals screen; these are the fixed labels + intents.

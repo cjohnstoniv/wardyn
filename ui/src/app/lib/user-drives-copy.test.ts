@@ -14,7 +14,7 @@ import { parseFrozenTables, renderFromNamespaces, splitKey } from "./copy-doc-pa
 
 // The mock round's whole value is that it stays CHECKABLE, so this suite does
 // not hand-retype a sample of the canon — it PARSES docs/design/
-// user-drives-prompt.md §7.2-§7.8 back out of the doc and compares all 150
+// user-drives-prompt.md §7.2-§7.8 back out of the doc and compares all 148
 // keys. A swapped hyphen, a dropped ellipsis, a reworded clause, a new doc
 // row or a deleted one all fail here rather than shipping.
 //
@@ -74,8 +74,8 @@ const EXCLUDED = [...PLURALISED, ...SIZE_HELPERS];
 const RENDERABLE = [...doc.keys()].filter((k) => !EXCLUDED.includes(k));
 
 describe("user-drives-copy — §7.2-§7.8 parsed out of the prompt doc", () => {
-  it("finds all 150 frozen keys in the doc", () => {
-    expect(doc.size).toBe(150);
+  it("finds all 148 frozen keys in the doc", () => {
+    expect(doc.size).toBe(148);
   });
 
   it("covers every doc key, and freezes no key the doc doesn't", () => {

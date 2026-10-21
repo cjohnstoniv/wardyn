@@ -81,10 +81,7 @@ export function UserDrivesCard({
 
   if (compact) {
     return (
-      <CollapsibleCard title={DRIVES.TITLE} summary={summary || undefined} testId="user-drives-card">
-        <p className="text-body leading-snug text-muted-foreground">{DRIVES.CARD_LEAD}</p>
-        {openButton}
-      </CollapsibleCard>
+      <CollapsibleCard title={DRIVES.TITLE} summary={summary || undefined} to="/admin/drives" testId="user-drives-card" />
     );
   }
   return (
