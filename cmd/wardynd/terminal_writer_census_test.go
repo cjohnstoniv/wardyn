@@ -84,6 +84,13 @@ var terminalWriterCensus = map[string]string{
 	// A runner's reported exit completes or fails the run; the exit tail runs
 	// finalizeRunEffects, which calls cancelRunApprovals.
 	"applyRunnerExit": "AcceptRunnerExit, then RetryRunnerExitTail -> finalizeRunEffects -> cancelRunApprovals",
+	// (7) A computer folder brought back while its run is live (#2982). The
+	// person ends a RUNNING run, whose agent may be parked on a PENDING
+	// approval, so it is not exempt. It CASes RUNNING->STOPPED, writes its own
+	// audit row naming the person, then runs finalizeRunEffects, the half of
+	// finalizeRunTail after the tail's system audit row, which calls
+	// cancelRunApprovals. Pinned on Postgres in internal/api.
+	"handleBringComputerFolderBack": "CASes, then finalizeRunEffects -> cancelRunApprovals",
 }
 
 // TestTerminalRunStateWriterCensus scans every non-test .go file in internal/api
