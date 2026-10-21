@@ -165,6 +165,17 @@ func TestARelayChangeWhileOfflineGoesWithTheResumedSession(t *testing.T) {
 	if !ok || c.Relay == nil || c.Relay.State != types.RelayUnreachable {
 		t.Fatalf("resumed session caps %+v (sent %v), want the unreachable state found while offline", c.Relay, ok)
 	}
+	// The org has those caps before the runner reads their ack and marks the state sent; resume
+	// again only after that, or the second resume still sees the state unsent.
+	for i := 0; ; i++ {
+		if _, unsent := watch.pending(); !unsent {
+			break
+		}
+		if i == 500 {
+			t.Fatal("the resumed session's caps were never acknowledged")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	rt.hooks.Online(run, true)
 	if c, ok := next(500 * time.Millisecond); ok {
 		t.Fatalf("a state already sent goes again on the next resume: %+v", c.Relay)

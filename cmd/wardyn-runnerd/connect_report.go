@@ -89,6 +89,8 @@ func newOfflineLog(stateDir string, secrets []string) *offlineLog {
 }
 
 // secretsOrNil is the values reasons are scrubbed of; a nil log has none.
+//
+//lint:ignore U1000 used by the docker build (production_docker.go)
 func (l *offlineLog) secretsOrNil() []string {
 	if l == nil {
 		return nil

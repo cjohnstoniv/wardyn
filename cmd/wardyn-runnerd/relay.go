@@ -76,6 +76,7 @@ func (r *localRelay) use(p relayPair) {
 	r.pair = p
 }
 
+//lint:ignore U1000 used by the docker build (production_docker.go)
 func (r *localRelay) inUse() relayPair {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -84,6 +85,8 @@ func (r *localRelay) inUse() relayPair {
 
 // answers dials every listener the relay holds, at its bind, and closes each connection before its first
 // byte, which forward drops without opening a stream. A relay no run has used yet holds none.
+//
+//lint:ignore U1000 used by the docker build (production_docker.go)
 func (r *localRelay) answers(ctx context.Context) error {
 	r.mu.Lock()
 	addrs := make([]string, 0, len(r.listeners))

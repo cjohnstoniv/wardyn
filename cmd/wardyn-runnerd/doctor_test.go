@@ -33,7 +33,6 @@ type doctorRig struct {
 	relayRan  bool
 	noNet     bool
 	netErr    error
-	pulled    bool
 	orgPool   *x509.CertPool
 	org       string
 }
