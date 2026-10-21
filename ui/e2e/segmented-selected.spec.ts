@@ -3,12 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// #2832: the selected option of a Segmented control is tellable at a glance in both themes, and a dirty chip on it
-// stays legible. Needs a real layout engine's computed colours; the classes are pinned in segmented.test.tsx.
+// #2832: the selected option of a Segmented control is tellable at a glance in both themes. Needs a real layout engine's
+// computed colours; the classes, including the dirty chip's solid card fill on the selected option, are pinned in segmented.test.tsx
+// (no screen sets a Segmented option dirty now that the providers sections are PageTabs, so no page reaches that chip).
 import type { Locator } from "@playwright/test";
-import { test, expect, expandCard, gotoConsole, navTo, navToRoute } from "./fixtures";
+import { test, expect, gotoConsole, navTo } from "./fixtures";
 import { PERM } from "../src/app/lib/permissions-copy";
-import { PROVIDERS } from "../src/app/lib/workspace-providers-copy";
 
 function channels(rgb: string): number[] {
   return rgb.match(/\d+(\.\d+)?/g)!.slice(0, 3).map(Number);
@@ -54,22 +54,6 @@ for (const theme of ["light", "dark"] as const) {
       await expect(unselected).toHaveAttribute("aria-pressed", "false");
       const fill = await selected.evaluate((el) => getComputedStyle(el).backgroundColor);
       expect(contrast(fill, await paintedBg(unselected))).toBeGreaterThanOrEqual(3);
-    });
-
-    test("a dirty chip on the selected option reads at 4.5:1 or better", async ({ page }) => {
-      await gotoConsole(page);
-      await navToRoute(page, "/admin/settings");
-      const card = page.getByTestId("providers-card");
-      await expect(card).toBeVisible();
-      await expandCard(page, "Workspace providers");
-      await card.getByText(PROVIDERS.CARD_OPEN).click();
-      // Adding a row makes the Git draft differ from what loaded, which puts the dirty chip on the selected Git tab.
-      await page.getByRole("button", { name: PROVIDERS.ADD_ROW_CTA }).first().click();
-      const chip = page.getByTestId("tab-dirty-chip-git").locator(":scope > span");
-      await expect(chip).toBeVisible();
-      await expect(page.getByTestId("tab-dirty-chip-git").locator("xpath=ancestor::button")).toHaveAttribute("aria-pressed", "true");
-      const [text, bg] = await Promise.all([chip.evaluate((el) => getComputedStyle(el).color), chip.evaluate((el) => getComputedStyle(el).backgroundColor)]);
-      expect(contrast(text, bg)).toBeGreaterThanOrEqual(4.5);
     });
   });
 }
