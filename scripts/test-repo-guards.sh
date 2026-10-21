@@ -115,7 +115,7 @@ ok()  { echo "ok: $*"; }
 # notify-new-lanes' needs: once it has gone green on a real nightly (same
 # posture PR #1245 used for daemon-proxy-secret-kind).
 # kind-acceptance-walks (#3110): kind-components-walk and kind-run-output-walk had no caller
-# until this job; none of its three legs has run on a hosted runner. Same promotion rule.
+# until this job. Same promotion rule; its date is below.
 # kind-survival-walk (#700), hybrid-walk (#701) and kind-upgrade-walk (#690)
 # are exempt for the SAME reason PR #1245 gave daemon-proxy-secret-kind: none
 # of the three has ever run on a real nightly yet, so watching them from day
@@ -138,6 +138,28 @@ ok()  { echo "ok: $*"; }
 # notify-new-lanes.needs, which guard 13 pins to it); it opens its own issue.
 NIGHTLY=.github/workflows/nightly.yml
 NOTIFY_EXEMPT="e2e-live notify-new-lanes migration-merge-check test-e2e-concurrent kind-survival-walk hybrid-walk kind-upgrade-walk k6-kind-conformance kind-acceptance-walks ci-mode-dogfood-model-fake published-image-scan notify-published-image-scan"
+# A job waiting on the promotion rule above carries a date here, job=YYYY-MM-DD, at most 14 days out
+# (the e2e quarantine's rule, #3219). Past it this guard fails until the job joins notify-new-lanes.needs
+# and release.yml's watched=, or the date is renewed in a reviewed change. k6-kind-conformance and
+# kind-acceptance-walks were green on scheduled runs 39269815742 and 39423832908. Joining watched=
+# needs green-by-tree.sh to match a matrix job's "name (leg)" rows, which it does not yet.
+NOTIFY_EXEMPT_UNTIL="k6-kind-conformance=2026-11-04 kind-acceptance-walks=2026-11-04"
+# notify_exempt_until_problems "<job=date ...>" "<exempt jobs>" <today>: one line per bad entry.
+notify_exempt_until_problems() {
+    local pair job until max
+    max="$(date -u -d "$3 + 14 days" +%F)" || return 1
+    for pair in $1; do
+        job="${pair%%=*}" until="${pair#*=}"
+        case " $2 " in *" $job "*) ;; *) echo "'$job' has a date but is not in NOTIFY_EXEMPT — drop the date"; continue ;; esac
+        if [[ ! "$until" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || [ "$(date -u -d "$until" +%F 2>/dev/null)" != "$until" ]; then
+            echo "'$job' has the invalid date '$until', want YYYY-MM-DD"
+        elif [[ "$until" < "$3" ]]; then
+            echo "'$job' was exempt until $until: put it in notify-new-lanes.needs and release.yml's watched=, or renew the date in a reviewed change"
+        elif [[ "$until" > "$max" ]]; then
+            echo "'$job' is exempt until $until, more than 14 days from $3 ($max) — an exemption is short"
+        fi
+    done
+}
 jobs="$(awk '/^jobs:/{j=1;next} j && /^  [a-z0-9-]+:$/{gsub(/[ :]/,"");print}' "$NIGHTLY" | tr '\n' ' ')"
 needs="$(awk '/^  notify-new-lanes:$/{n=1;next} n && /^    needs:/{print;exit}' "$NIGHTLY")"
 [ -n "$needs" ] || bad "$NIGHTLY: notify-new-lanes has no needs: line"
@@ -152,7 +174,19 @@ done
 for job in $NOTIFY_EXEMPT; do
     case " $jobs " in *" $job "*) ;; *) bad "$NIGHTLY: NOTIFY_EXEMPT names '$job', which is not a job any more — drop it" ;; esac
 done
-if [ "$fail" = 0 ]; then ok "nightly.yml notification covers every non-exempt lane"; fi
+problems="$(notify_exempt_until_problems "$NOTIFY_EXEMPT_UNTIL" "$NOTIFY_EXEMPT" "$(date -u +%F)")"
+if [ -n "$problems" ]; then
+    while IFS= read -r line; do bad "$NIGHTLY: $line"; done <<<"$problems"
+fi
+# The detector must catch what it exists for: an expired date, a far one, a malformed one, a dated job that is not exempt.
+selftest_fail=0
+exempt_probe="$(notify_exempt_until_problems "a=2026-01-01 b=2026-03-01 c=soon d=2026-02-30 e=2026-01-20" "a b c d" 2026-01-10)"
+for want in "'a' was exempt until 2026-01-01" "'b' is exempt until 2026-03-01" "'c' has the invalid date" "'d' has the invalid date" "'e' has a date but is not in NOTIFY_EXEMPT"; do
+    grep -qF -- "$want" <<<"$exempt_probe" || { bad "guard 1 self-test: no problem reported for: $want"; selftest_fail=1; }
+done
+[ -z "$(notify_exempt_until_problems "a=2026-01-20" "a" 2026-01-10)" ] \
+    || { bad "guard 1 self-test: a date 10 days out false-flagged"; selftest_fail=1; }
+if [ "$fail" = 0 ] && [ "$selftest_fail" = 0 ]; then ok "nightly.yml notification covers every non-exempt lane, and no exemption is past its date"; fi
 
 # ── 2. cosign pin parity ─────────────────────────────────────────────────────
 # Every `uses: sigstore/cosign-installer` must be followed by an explicit
