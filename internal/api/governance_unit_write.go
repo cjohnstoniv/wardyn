@@ -445,7 +445,7 @@ func (s *Server) buildGovernanceUnit(createdBy string, super bool, id uuid.UUID,
 			return p, nil, keep, writeRefusal(http.StatusBadRequest, reasonGovernanceCeilingInvalid, "invalid ceiling: %v", err)
 		}
 		if err := ceilingDuplicatePairing(req.Ceiling.EligibleGrants); err != nil {
-			return p, nil, writeRefusal(http.StatusBadRequest, reasonGovernanceCeilingInvalid, "invalid ceiling: %v", err)
+			return p, nil, keep, writeRefusal(http.StatusBadRequest, reasonGovernanceCeilingInvalid, "invalid ceiling: %v", err)
 		}
 		p.Ceiling, p.Limits = req.Ceiling, req.Limits
 	}
