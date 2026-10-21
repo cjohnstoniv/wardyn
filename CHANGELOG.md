@@ -17,7 +17,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on
   `aws_sso_refused_tokens` (migration `0194_aws_sso_refused_tokens`). Without it an AWS SSO session whose renewal
   AWS refused cannot be marked, read or cleared, so replicas do not share that mark. Grant it `SELECT, INSERT, UPDATE`
-  on `runner_health` (migration `0199_runner_health`). Without `INSERT` or `UPDATE` a runner's offline summary and
+  on `runner_health` (migration `0206_runner_health`). Without `INSERT` or `UPDATE` a runner's offline summary and
   relay status are not kept; without `SELECT` every one-runner read (`GET /api/v1/runners/{id}`,
   `GET /api/v1/me/runners/{id}`) answers 500.
 - **`wardyn run attach` is now `wardyn attach`.** The old spelling is an unknown command, with no alias. A script
