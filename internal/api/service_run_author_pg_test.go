@@ -27,7 +27,6 @@ func TestServiceRunAuthor_SecondHuman(t *testing.T) {
 		t.Run(sw, func(t *testing.T) {
 			e := newSvcEnv(t)
 			e.mustCreate(t, svcName, svcSponsor)
-			ageSponsorships(t, e.pool) // else a stall under load makes the mint's authority time precede sponsor_since
 			t.Setenv(sw, "1")
 			ap := types.ApprovalRequest{Kind: types.ApprovalEgressDomain}
 			if sw == envCapabilitySecondHuman {

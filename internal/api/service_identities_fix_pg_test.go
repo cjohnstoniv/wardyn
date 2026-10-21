@@ -51,14 +51,14 @@ func TestServiceIdentity_SponsorSinceOnTheDatabaseClock(t *testing.T) {
 	e.h.srv.cfg.Store = store.PG{Pool: e.pool, Now: skew}
 	e.h.srv.cfg.Now = skew
 	e.mustCreate(t, svcName, svcSponsor)
-	first := e.mustMint(t, e.sponsor, svcName)
+	first := e.mustMintUnaged(t, e.sponsor, svcName)
 	if w := e.as(t, first.Token, http.MethodGet, "/api/v1/me", ""); w.Code != http.StatusOK {
 		t.Errorf("fresh service token, app clock 10s ahead of the database: %d (auth.fail %q), want 200", w.Code, e.lastAuthFail())
 	}
 	if w := doSSO(t, e.h.srv, http.MethodPatch, "/api/v1/service-identities/"+svcName, e.sec, `{"sponsor":"`+svcSponsor2+`"}`); w.Code != http.StatusOK {
 		t.Fatalf("sponsor change: %d %s", w.Code, w.Body.String())
 	}
-	second := e.mustMint(t, e.sponsor2, svcName)
+	second := e.mustMintUnaged(t, e.sponsor2, svcName)
 	if w := e.as(t, second.Token, http.MethodGet, "/api/v1/me", ""); w.Code != http.StatusOK {
 		t.Errorf("token minted right after a sponsor change, app clock 10s ahead: %d (auth.fail %q), want 200", w.Code, e.lastAuthFail())
 	}
