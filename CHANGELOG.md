@@ -99,12 +99,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - A Docker runner checks its relay on every reconnect and every 5 minutes, logs `run relay unreachable` when the relay
   stops answering, and reports it as `relay_status` on the runner's read.
 
-### Fixed
-
-- A sign-in sandbox whose token is pasted before the sandbox is running now ends once the token is stored. Before, the
-  launch could move the run on between the server's read of it and the kill, and the sandbox stayed up until its
-  30-minute idle cap. That sandbox never held the pasted token.
-
 ### Changed
 
 - The CLI's hint under a `401` follows the answer's reason. On a single-sign-on deployment with no admin token
@@ -116,7 +110,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- Sign-in and probe runs under a boundary (#3446): a member whose profile denies every placement, under a hard-limits
+  boundary, can again run the sign-in and probe runs the placement rule always exempted (it answered 500).
 - The Approvals page cards and the run's Approvals tab now turn Approve and Deny off, and say why, once the server refuses a person with `capability_egress_host` (an admin withholds that host). Before, they kept live buttons and only showed an error after each click. The live approvals strip already did this.
+- A sign-in sandbox whose token is pasted before the sandbox is running now ends once the token is stored. Before, the
+  launch could move the run on between the server's read of it and the kill, and the sandbox stayed up until its
+  30-minute idle cap. That sandbox never held the pasted token.
 
 ## [0.9.7] — 2026-10-20
 
