@@ -63,6 +63,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   shows it under the runner as runner-reported. A running Docker runner also re-checks that its engine reaches the
   run relay, every five minutes and on each connect, and says so in its log, in `status.json` and in the console
   when it is lost or back.
+- A Docker runner now starts a network relay (`wardyn-vmnet`, built into the proxy image) for each Linux VM sandbox, on
+  the run's internal network, and marks that run's proxy config `vm`, which turns its port rule on. Kubernetes VM pods
+  are unchanged.
 - A Linux VM sandbox gets the same folders a container on its runner would: a member's folder under the runner's roots is shared into the guest over virtiofs at the same path and mode, and a folder synced from another computer arrives through the guest agent. A runner without folder sharing refuses such a run at create (`placement_capability`).
 - `wardyn attach <run-id>` keeps the terminal on this computer when the run is on your own runner here and the
   organisation allows it (`WARDYN_ATTACH_LOCAL`, off by default); otherwise it goes through the organisation, as

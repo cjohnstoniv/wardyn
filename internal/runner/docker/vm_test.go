@@ -117,6 +117,8 @@ func (r *vmRig) start(t *testing.T, c *createdContainer) {
 		}
 	case strings.HasSuffix(c.name, "-overlay"):
 		_ = os.WriteFile(filepath.Join(mountSource(c, qemu.DiskDir), qemu.Overlay), nil, 0o600)
+	case strings.HasPrefix(c.name, "wardyn-vmnet-"):
+		r.listen(t, filepath.Join(mountSource(c, qemu.NetDir), qemu.NetSocket))
 	case strings.HasPrefix(c.name, "wardyn-vmfs-"):
 		n := c.name[strings.LastIndex(c.name, "-")+1:]
 		r.listen(t, filepath.Join(mountSource(c, qemu.FSDir), n+".sock"))
@@ -589,7 +591,7 @@ func TestVMSweepRemovesOrphanedSidecarsAndRunDirs(t *testing.T) {
 	seen := map[*createdContainer]bool{}
 	for name, c := range r.f.containers {
 		comp := c.cfg.Labels[labelComponent]
-		if seen[c] || name != c.name || (comp != componentVMFS && comp != componentVMPrep) {
+		if seen[c] || name != c.name || (comp != componentVMFS && comp != componentVMPrep && comp != componentVMNet) {
 			continue
 		}
 		seen[c], c.removed, comps[comp] = true, false, true
@@ -602,8 +604,8 @@ func TestVMSweepRemovesOrphanedSidecarsAndRunDirs(t *testing.T) {
 	r.f.containers[sb.Ref].removed = true
 	r.f.listItems = items
 	r.f.mu.Unlock()
-	if !comps[componentVMFS] || !comps[componentVMPrep] {
-		t.Fatalf("createVM made sidecars of %v, want virtiofsd and prep", comps)
+	if !comps[componentVMFS] || !comps[componentVMPrep] || !comps[componentVMNet] {
+		t.Fatalf("createVM made sidecars of %v, want virtiofsd, prep and the network relay", comps)
 	}
 	dir := r.vc.runDir(spec.RunID)
 	if err := os.Chtimes(dir, past, past); err != nil {
@@ -903,6 +905,9 @@ func TestVMEndVMEndsOnlyAVM(t *testing.T) {
 	}
 	if c := r.container(t, proxyContainerName(spec.RunID)); !c.removed {
 		t.Fatal("EndVM left the VM's proxy")
+	}
+	if c := r.container(t, vmnetName(spec.RunID)); !c.removed {
+		t.Fatal("EndVM left the VM's network relay")
 	}
 }
 

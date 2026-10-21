@@ -48,6 +48,7 @@
 | `/dev/kvm` access | Its group is not `root`, or it is open to all (mode `0666`). The QEMU container gets that group, never root's |
 | Runner user | Any user. A runner that runs as root starts its VM containers as uid 65532 |
 | The QEMU image | Built from [`deploy/runner/vm-qemu`](../../deploy/runner/vm-qemu/Dockerfile) and named in `WARDYN_RUNNER_VM_QEMU_IMAGE` |
+| The proxy image | Also carries the network relay (`wardyn-vmnet`), so a `proxy_image` pin in `runnerd.json` pins the relay too |
 
 ## Turn it on
 

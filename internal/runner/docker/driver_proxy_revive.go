@@ -25,6 +25,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // proxyStartWatch/proxyStartWatchInterval bound how long startProxy waits to
@@ -76,11 +77,12 @@ type proxyPrep struct {
 	cfgJSON    []byte
 }
 
-// prepareProxy computes runID's proxyPrep from the control plane's cfgJSON. ReplaceProxy runs it before
+// prepareProxy computes runID's proxyPrep from the control plane's cfgJSON, marked vm for a desktop VM
+// (the driver starts its network relay, startVMNet, as the proxy's only client). ReplaceProxy runs it before
 // it removes the running proxy, so a refused relay, a failed subnet read or an unusable CA or upstream
 // proxy keeps that proxy rather than costing it. The decision sink's key is not part of it: Succeed
 // refuses while the old proxy's producer is unsettled, so startProxy takes it after the remove.
-func (d *Driver) prepareProxy(ctx context.Context, runID uuid.UUID, cfgJSON []byte) (proxyPrep, error) {
+func (d *Driver) prepareProxy(ctx context.Context, runID uuid.UUID, cfgJSON []byte, vm bool) (proxyPrep, error) {
 	hosts := []string{"host.docker.internal:host-gateway"}
 	if d.cfg.ControlPlaneRelay != nil {
 		name, target, err := d.relayHostsEntry(cfgJSON)
@@ -99,6 +101,13 @@ func (d *Driver) prepareProxy(ctx context.Context, runID uuid.UUID, cfgJSON []by
 	}
 	if cfgJSON, err = withUpstreamProxy(cfgJSON, d.cfg.UpstreamProxyURL); err != nil {
 		return proxyPrep{}, err
+	}
+	// The port rule on, and the relay's two-stage CONNECT and refusal reports honoured
+	// (proxy.Config.VM): set here, where the relay is known, never by the control plane.
+	if vm {
+		if cfgJSON, err = runner.WithProxyConfigKeys(cfgJSON, map[string]any{"vm": true}); err != nil {
+			return proxyPrep{}, err
+		}
 	}
 	if d.cfg.ProxySandboxPeersOnly {
 		subnets, err := d.runSubnets(ctx, runID)
@@ -470,7 +479,7 @@ func (d *Driver) ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) e
 		return err
 	}
 	// Not ErrProxyReplaceFailed either: nothing is removed yet, so the revive keeps the running proxy.
-	prep, err := d.prepareProxy(ctx, id, cfgJSON)
+	prep, err := d.prepareProxy(ctx, id, cfgJSON, agentLabels[labelMachineKind] == string(types.MachineLinuxVM))
 	if err != nil {
 		return fmt.Errorf("docker: replace proxy: %w", err)
 	}

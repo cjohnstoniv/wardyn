@@ -45,7 +45,13 @@ const envInteractiveStart = "WARDYN_INTERACTIVE_START"
 const (
 	componentVMFS   = "vmfs"   // a virtiofsd sidecar
 	componentVMPrep = "vmprep" // a one-shot prep container (image conversion, the overlay)
+	componentVMNet  = "vmnet"  // the guest's network relay (wardyn-vmnet)
 )
+
+// vmnetEntrypoint is the network relay's binary in the proxy image (deploy/compose/Dockerfile.proxy),
+// which carries it beside wardyn-proxy, so the image a runner pins or mirrors for its proxy is the
+// relay's too. Only startVMNet names it.
+const vmnetEntrypoint = "/usr/local/bin/wardyn-vmnet"
 
 // vmPidsLimit bounds a VM's containers: QEMU's threads are a few dozen.
 const vmPidsLimit = 1024
@@ -253,7 +259,7 @@ func (d *Driver) createVM(ctx context.Context, spec runner.SandboxSpec) (runner.
 		}
 		return runner.Sandbox{}, err
 	}
-	_, _, undoNet, err := d.runNetworkAndProxy(ctx, spec)
+	_, proxyIP, undoNet, err := d.runNetworkAndProxy(ctx, spec)
 	if err != nil {
 		return runner.Sandbox{}, err
 	}
@@ -291,6 +297,13 @@ func (d *Driver) createVM(ctx context.Context, spec runner.SandboxSpec) (runner.
 		if err := waitForSocket(ctx, filepath.Join(part("fs"), qemu.ShareSocket(n)), 30*time.Second); err != nil {
 			return fail(fmt.Errorf("docker: virtiofsd for mount %d: %w", n, err))
 		}
+	}
+	// The guest's only network: the relay, up before QEMU (which would reconnect to it anyway).
+	if err := d.startVMNet(ctx, spec, part("net"), proxyIP); err != nil {
+		return fail(err)
+	}
+	if err := waitForSocket(ctx, filepath.Join(part("net"), qemu.NetSocket), 30*time.Second); err != nil {
+		return fail(fmt.Errorf("docker: the VM's network relay: %w", err))
 	}
 
 	qc := qemu.Config{RunID: spec.RunID, MachineType: vc.MachineType, CPUModel: vc.CPUModel,
@@ -510,6 +523,8 @@ func vmfsName(runID uuid.UUID, n int) string {
 	return "wardyn-vmfs-" + runID.String() + "-" + strconv.Itoa(n)
 }
 
+func vmnetName(runID uuid.UUID) string { return "wardyn-vmnet-" + runID.String() }
+
 // runOneShot runs argv in a prep container from the QEMU image, hardened as a VM, and waits for it.
 func (d *Driver) runOneShot(ctx context.Context, runID uuid.UUID, what string, argv []string, mounts []mount.Mount) error {
 	vc := d.vmConfig()
@@ -573,10 +588,43 @@ func (d *Driver) startVirtiofsd(ctx context.Context, spec runner.SandboxSpec, n 
 	return nil
 }
 
+// startVMNet starts the guest's network relay (VM-B DESIGN 4): wardyn-vmnet from the proxy image, as
+// the VM containers' user (never root, VMConfig.validate), with no capability, a read-only root and
+// net/ as its only mount, on the run's internal network, which reaches the run's proxy and nothing
+// else. It serves net/net.sock, QEMU's -netdev stream, and hands each guest flow to the proxy, whose
+// config the driver marked vm (prepareProxy). Nothing the control plane sends picks its entrypoint
+// or arguments.
+func (d *Driver) startVMNet(ctx context.Context, spec runner.SandboxSpec, netDir, proxyIP string) error {
+	vc := d.vmConfig()
+	info, err := d.cli.Info(ctx, client.InfoOptions{})
+	if err != nil {
+		return fmt.Errorf("docker: info: %w", err)
+	}
+	host := hardenedHostConfig(internalNetName(spec.RunID), "", runner.Resources{MemoryMiB: 256, PidsLimit: vmPidsLimit}, info.Info)
+	host.ReadonlyRootfs = true
+	host.RestartPolicy = container.RestartPolicy{Name: container.RestartPolicyDisabled}
+	host.ExtraHosts = []string{"wardyn-proxy:" + proxyIP}
+	host.Mounts = []mount.Mount{{Type: mount.TypeBind, Source: netDir, Target: qemu.NetDir}}
+	created, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Name: vmnetName(spec.RunID),
+		Config: &container.Config{Image: d.proxyImage(), User: vc.user(), Entrypoint: []string{vmnetEntrypoint},
+			Cmd:    []string{"-listen", qemu.NetDir + "/" + qemu.NetSocket, "-proxy", "wardyn-proxy:" + strconv.Itoa(runner.ProxyListenPort)},
+			Labels: d.labels(spec.RunID, componentVMNet, spec.Labels)},
+		HostConfig: host,
+	})
+	if err != nil {
+		return fmt.Errorf("docker: create the VM's network relay: %w", err)
+	}
+	if _, err := d.cli.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
+		return fmt.Errorf("docker: start the VM's network relay: %w", err)
+	}
+	return nil
+}
+
 // maxVMShares bounds the virtiofsd names removeVMSidecars tries when removals keep failing.
 const maxVMShares = 64
 
-// removeVMSidecars removes a run's virtiofsd and prep containers. Their names are deterministic
+// removeVMSidecars removes a run's network relay, virtiofsd and prep containers. Their names are deterministic
 // and their count small, so no list is needed: the shares end at the first absent one. A failed
 // removal does not stop the others; every failure is returned.
 func (d *Driver) removeVMSidecars(ctx context.Context, runID uuid.UUID) error {
@@ -588,6 +636,7 @@ func (d *Driver) removeVMSidecars(ctx context.Context, runID uuid.UUID) error {
 		}
 		return err == nil || !isNotFound(err)
 	}
+	remove(vmnetName(runID))
 	for n := 0; n < maxVMShares && remove(vmfsName(runID, n)); n++ {
 	}
 	for _, what := range []string{"export", "image", "overlay"} {
@@ -765,7 +814,7 @@ func (d *Driver) teardownVM(ctx context.Context, agentRef string, runID uuid.UUI
 	}
 }
 
-// sweepVMOrphans removes the VM residue a teardown cannot reach: virtiofsd and prep containers,
+// sweepVMOrphans removes the VM residue a teardown cannot reach: network relay, virtiofsd and prep containers,
 // and run directories, older than cutoff, of a run that has no agent (QEMU) container and that
 // isOrphan says owns no sandbox. They are made before the QEMU container, so a create in flight has
 // residue and no QEMU container yet: isOrphan (a live run is never an orphan) is what keeps it, as
@@ -783,7 +832,7 @@ func (d *Driver) sweepVMOrphans(ctx context.Context, lister containerListerAPI, 
 	}
 	cleaned := map[uuid.UUID]bool{}
 	var errs []error
-	for _, comp := range []string{componentVMFS, componentVMPrep} {
+	for _, comp := range []string{componentVMNet, componentVMFS, componentVMPrep} {
 		res, err := lister.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: client.Filters{}.Add("label", labelComponent+"="+comp)})
 		if err != nil {
 			errs = append(errs, fmt.Errorf("docker: list VM sidecars for orphan sweep: %w", err))

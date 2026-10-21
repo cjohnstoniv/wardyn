@@ -270,8 +270,10 @@ type Config struct {
 	ScrubResponses bool `json:"scrub_responses,omitempty"`
 	// VM marks a run whose only client is wardyn-vmnet, the network relay of a
 	// desktop VM (vmnet_flows.go): the port rule is on whatever PortRule says,
-	// and vmnet's two-stage CONNECT and refusal reports are honoured. Set by the
-	// runner for a linux_vm run only; false (every container run) is today.
+	// and vmnet's two-stage CONNECT and refusal reports are honoured. Set only
+	// by the Docker runner that relays a linux_vm run's guest through
+	// wardyn-vmnet (runner/docker prepareProxy); never by the control plane,
+	// and never for a container run or a Kubernetes VM pod.
 	VM bool `json:"vm,omitempty"`
 	// PortRule is the container runs' port rule (port_rule.go): "" or "off"
 	// (today: a bare host is open on every port), "dry_run" (nothing refused,
