@@ -47,6 +47,8 @@ A revive whose git broker or Azure CLI the boundary no longer allows is refused 
 
 `spec.eligible_grants` binds every grant a run holds, the ones its launch adds included (model provider, workspace, integration and source-control credentials). A grant outside it is dropped at dispatch with its injection, its broker entry and its env or file secret. The run's `run.ceiling.reassert` row carries `boundary: true` and the `withheld_grants` ids, also for a run no profile applies to.
 
+A captured AWS SSO session held in the sandbox (`WARDYN_AWS_SSO_PROXY_INJECT` off) is judged as the `api_key` grant the proxy-injected session gets: its portal host, `x-amz-sso_bearer_token` and `aws-sso-access-token`. So a boundary admits or withholds it alike under either setting. A withheld session's Bedrock lane is dropped and listed in `dropped_broker_lanes`.
+
 The mint and redeem doors check the same rules live, before anything is minted: a grant the boundary or the run's profile now withholds is refused with `403 credential_withheld` and a `credential.mint` denied row. If the run, its grants, its profile or the boundary cannot be read, the answer is `503` (`credential_withheld_unread` at mint, `store_unavailable` at redeem); retry. The AWS SSO renewer skips a grant it withholds.
 
 ## Changing it

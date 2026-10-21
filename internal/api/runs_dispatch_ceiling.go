@@ -822,8 +822,14 @@ const bedrockCeilingLane = "bedrock"
 // doc). A run that asked for no model call, or that has another lane, still
 // launches; one that needed Bedrock meets the deny at the proxy with the
 // ordinary refusal, which is the same thing it already did for the bearer mode.
+//
+// A resident captured session is withheld by its grant as well (bedrockAuth.residentGrant): no
+// mint or redeem door sees it after dispatch, so this is the one place eligible grants meet it.
 func narrowCeilingBedrockLane(w withholding, llm *llmTransport, mitmHosts *[]string, injections *[]runner.InjectionGrant, sandboxEnv map[string]string) (lanes, droppedInjection []string) {
-	if llm == nil || !llm.bedrockReady || !w.withheldAny(llm.bedrock.egressHosts) {
+	if llm == nil || !llm.bedrockReady {
+		return nil, nil
+	}
+	if g := llm.bedrock.residentGrant; !w.withheldAny(llm.bedrock.egressHosts) && (g == nil || !w.grantWithheld(*g)) {
 		return nil, nil
 	}
 	laneHosts := llm.bedrock.egressHosts // read before the lane is reset below

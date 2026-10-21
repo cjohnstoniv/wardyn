@@ -290,6 +290,23 @@ func (s *Server) authorAWSSSOGrant(ctx context.Context, run types.AgentRun, sn a
 	return injections, mitmHosts, nil, true
 }
 
+// awsSSOResidentGrant is the grant a resident captured session (WARDYN_AWS_SSO_PROXY_INJECT off) is
+// judged by against the boundary's eligible grants (#3238): the pairing authorAWSSSOGrant gives the
+// proxy-injected lane (host, header, format, secret, require_tls), since it is the same session for
+// the same portal. So a boundary admits or withholds the captured session alike under either
+// setting. It is never stored: a row naming the session would join the SSO renewer's live set
+// (RenewAWSSSOCredentials), which redeems the refresh token the sandbox holds.
+func (s *Server) awsSSOResidentGrant(region string) *types.GrantSpec {
+	scope, _ := json.Marshal(map[string]any{
+		"host":        ssoPortalHost(region, s.cfg.AWSSSOEndpointOverride),
+		"header":      awsSSOInjectHeader,
+		"format":      "%s",
+		"secret_name": types.AWSSSOAccessTokenSecret,
+		"require_tls": s.cfg.AWSSSOEndpointOverride == "",
+	})
+	return &types.GrantSpec{Kind: types.GrantAPIKey, Scope: scope, TTLSeconds: awsSSOGrantTTLSeconds}
+}
+
 // awsSSORoleCredentialsPath is the ONE portal path a Phase-B run's session is
 // allowed on: the AWS SSO portal's GetRoleCredentials.
 const awsSSORoleCredentialsPath = "/federation/credentials"
