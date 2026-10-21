@@ -76,9 +76,10 @@ func unitIDOf(c governanceCeiling) uuid.UUID {
 	return c.Unit.ID
 }
 
-// upgradeCorpusDowngrade puts the schema back in its shape before migration 0208, so a corpus
-// written the old way meets the migration itself. Every step is guarded: on a tree without 0208
-// it changes nothing, so the same test records the golden there.
+// upgradeCorpusDowngrade puts the schema back in its shape before the unit-tree migration
+// (governance_unit_tree), so a corpus written the old way meets the migration itself. Every step is
+// guarded: on a tree without that migration it changes nothing, so the same test records the golden
+// there.
 const upgradeCorpusDowngrade = `
 ALTER TABLE governance_memberships DROP CONSTRAINT IF EXISTS governance_memberships_unit_subject_key;
 ALTER TABLE governance_memberships DROP COLUMN IF EXISTS home, DROP COLUMN IF EXISTS legacy;
@@ -118,10 +119,22 @@ INSERT INTO governance_memberships (id, subject_type, subject, unit_id, priority
  (gen_random_uuid(),'group','late','10000000-0000-0000-0000-000000000003',1,'seed');
 `
 
-// readMigration is one migration file's SQL; an error when the tree has no such migration.
-func readMigration(name string) (string, error) {
-	b, err := os.ReadFile(filepath.Join("..", "db", "migrations", name))
-	return string(b), err
+// readMigration is the SQL of the one migration file named NNNN_<slug>.sql, found by its slug so a
+// renumber leaves this test alone; os.ErrNotExist when the tree has no such migration.
+func readMigration(slug string) (string, error) {
+	names, err := filepath.Glob(filepath.Join("..", "db", "migrations", "*_"+slug+".sql"))
+	if err != nil {
+		return "", err
+	}
+	switch len(names) {
+	case 0:
+		return "", os.ErrNotExist
+	case 1:
+		b, err := os.ReadFile(names[0])
+		return string(b), err
+	default:
+		return "", fmt.Errorf("%d migrations named %s: %v", len(names), slug, names)
+	}
 }
 
 type upgradeCorpusResolved struct {
@@ -183,9 +196,13 @@ func TestUpgradeCorpusOneContextPerPerson(t *testing.T) {
 	if _, err := e.pool.Exec(ctx, upgradeCorpusSeed); err != nil {
 		t.Fatalf("seed the pre-tree corpus: %v", err)
 	}
-	if sql, err := readMigration("0208_governance_unit_tree.sql"); err == nil {
+	switch sql, err := readMigration("governance_unit_tree"); {
+	case errors.Is(err, os.ErrNotExist):
+	case err != nil:
+		t.Fatal(err)
+	default:
 		if _, err := e.pool.Exec(ctx, sql); err != nil {
-			t.Fatalf("migration 0208 over the corpus: %v", err)
+			t.Fatalf("the unit-tree migration over the corpus: %v", err)
 		}
 	}
 	compareOrUpdateGolden(t, "testdata/governance_upgrade_corpus_golden.json", upgradeCorpusResolve(t, e))
@@ -264,6 +281,37 @@ func TestUnitContextStaleGroups(t *testing.T) {
 	}
 	if c, err := e.srv.effectiveCeiling(withContextChoice(stale("sub-stale-typed", "stale-type"), contextChoice{RunIn: typed.ID})); err != nil || unitIDOf(c) != typed.ID {
 		t.Errorf("RunIn naming a matched non-legacy membership on a stale snapshot: %v %v, want stale-typed", unitIDOf(c), err)
+	}
+}
+
+// TestUnitContextStaleHiddenGroupHome: on a stale snapshot, a lone user-tier candidate that is not a
+// home row is refused once any group home row exists, since the hidden group row could win the home
+// step and move the run. A user-tier home row and a RunIn naming the user row still resolve.
+func TestUnitContextStaleHiddenGroupHome(t *testing.T) {
+	e := newGovEnvOn(t, throwawayPGPool(t))
+	mine := e.seedProfile("sh-user", "user.example")
+	theirs := e.seedProfile("sh-group", "group.example")
+	treeMember(t, e, mine, types.CapabilitySubjectUser, "sub-sh", 0, false)
+	treeMember(t, e, theirs, types.CapabilitySubjectGroup, "sh-eng", 0, false)
+	stale := func() context.Context {
+		return withOIDCGroupsTruncated(treeCtx("sub-sh", []string{"a"}, ""), true)
+	}
+	if c, err := e.srv.effectiveCeiling(stale()); err != nil || unitIDOf(c) != mine.ID {
+		t.Fatalf("no group home row, stale snapshot: %v %v, want sh-user", unitIDOf(c), err)
+	}
+	treeMember(t, e, theirs, types.CapabilitySubjectGroup, "sh-eng", 0, true)
+	if c, err := e.srv.effectiveCeiling(treeCtx("sub-sh", []string{"sh-eng"}, "")); err != nil || unitIDOf(c) != theirs.ID {
+		t.Errorf("the full snapshot with the group home row: %v %v, want sh-group", unitIDOf(c), err)
+	}
+	if c, err := e.srv.effectiveCeiling(stale()); !errors.Is(err, errGroupsSnapshotStale) {
+		t.Errorf("a group home row exists, stale snapshot: %v %v, want groups_snapshot_stale", unitIDOf(c), err)
+	}
+	if c, err := e.srv.effectiveCeiling(withContextChoice(stale(), contextChoice{RunIn: mine.ID})); err != nil || unitIDOf(c) != mine.ID {
+		t.Errorf("RunIn naming the user row, stale snapshot: %v %v, want sh-user", unitIDOf(c), err)
+	}
+	treeMember(t, e, mine, types.CapabilitySubjectUser, "sub-sh", 0, true)
+	if c, err := e.srv.effectiveCeiling(stale()); err != nil || unitIDOf(c) != mine.ID {
+		t.Errorf("a user-tier home row, stale snapshot: %v %v, want sh-user", unitIDOf(c), err)
 	}
 }
 
@@ -434,6 +482,45 @@ func TestReviveMembershipGone(t *testing.T) {
 	for name, c := range map[string]context.Context{"super-admin revive": superAdmin, "admin bulk restart": ctx} {
 		if _, ref := e.srv.ownerUnit(c, run); ref == nil || ref.reason != reasonUnitMembershipGone || ref.arm != "row_can_match" {
 			t.Errorf("%s with no membership left that could match: %+v, want %s (row_can_match)", name, ref, reasonUnitMembershipGone)
+		}
+	}
+	// Above and below: a membership on a unit above the captured one places the owner in it; one only
+	// on a unit below it does not, on either arm.
+	top := treeChild(t, e, `{"name":"rv-top","mode":"pass_through","parent_id":"`+store.DefaultUnitID.String()+`"}`)
+	mid := treeChild(t, e, `{"name":"rv-mid","mode":"pass_through","parent_id":"`+top.ID.String()+`"}`)
+	low := treeChild(t, e, `{"name":"rv-low","mode":"pass_through","parent_id":"`+mid.ID.String()+`"}`)
+	inMid := types.AgentRun{ID: uuid.New(), UnitID: &mid.ID, CreatedBy: "sub-rv-owner", UserType: types.UserTypeStandard}
+	arms := map[string]context.Context{"the owner's revive": treeCtx("sub-rv-owner", []string{"rv-eng"}, ""),
+		"super-admin revive": superAdmin, "admin bulk restart": ctx}
+	below := treeMember(t, e, low, types.CapabilitySubjectUser, "sub-rv-owner", 0, false)
+	for name, c := range arms {
+		if _, ref := e.srv.ownerUnit(c, inMid); ref == nil || ref.reason != reasonUnitMembershipGone {
+			t.Errorf("%s with a membership only below the run's unit: %+v, want %s", name, ref, reasonUnitMembershipGone)
+		}
+	}
+	if _, err := e.pg.DeleteGovernanceMembership(ctx, below.ID); err != nil {
+		t.Fatal(err)
+	}
+	treeMember(t, e, top, types.CapabilitySubjectUser, "sub-rv-owner", 0, false)
+	for name, c := range arms {
+		if _, ref := e.srv.ownerUnit(c, inMid); ref != nil {
+			t.Errorf("%s with a membership above the run's unit: %+v, want it to pass", name, ref)
+		}
+	}
+}
+
+// TestReviveEmailRowNeverAdmits: when anyone but the owner revives or restarts a run, an email-keyed
+// user row on the run's unit never counts as the owner's membership: with no other row that could
+// match, the revive is refused unit_membership_gone on the row_can_match arm.
+func TestReviveEmailRowNeverAdmits(t *testing.T) {
+	e := newGovEnvOn(t, throwawayPGPool(t))
+	u := e.seedProfile("rv-email", "pypi.org")
+	treeMember(t, e, u, types.CapabilitySubjectUser, "rv-owner@corp.example", 0, false)
+	run := types.AgentRun{ID: uuid.New(), UnitID: &u.ID, CreatedBy: "sub-rv-email-owner", UserType: types.UserTypeStandard}
+	superAdmin := operatorCtx("sub-rv-email-super", "rv-super@corp.example", oidc.RoleAdmin)
+	for name, c := range map[string]context.Context{"super-admin revive": superAdmin, "admin bulk restart": context.Background()} {
+		if _, ref := e.srv.ownerUnit(c, run); ref == nil || ref.reason != reasonUnitMembershipGone || ref.arm != "row_can_match" {
+			t.Errorf("%s with only an email row on the unit: %+v, want %s (row_can_match)", name, ref, reasonUnitMembershipGone)
 		}
 	}
 }
