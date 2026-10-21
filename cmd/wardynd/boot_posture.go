@@ -509,6 +509,9 @@ func flagValue(p *string) string {
 // ignored WARDYN_MEMBER_WRITABLE_DENY would silently widen the writable set, so every removed name is
 // refused rather than ignored.
 func refuseRemovedEnv(environ []string) error {
+	if err := refuseRenamedGovernanceEnv(environ); err != nil {
+		return err
+	}
 	left := cliutil.RemovedEnvLeftovers(environ)
 	if len(left) == 0 {
 		return nil

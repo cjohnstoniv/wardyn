@@ -149,6 +149,9 @@ func (k knobProvenance) withContacts(ref *policyref.Ref, help *policyref.Contact
 	}
 	out := make(knobProvenance, len(k))
 	for name, rec := range k {
+		if rec.Layer == legacyLayerProfile {
+			rec.Layer = policyref.LayerUnit
+		}
 		switch {
 		case rec.Layer == policyref.LayerUnit && leaf != nil && rec.Name == ref.Name:
 			rec.Contact = leaf

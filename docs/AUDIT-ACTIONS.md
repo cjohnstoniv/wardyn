@@ -8,6 +8,7 @@ Every row in the append-only audit log ([`internal/types/types.go`](../internal/
 - There is no enum or schema file for it — call sites are the source of truth.
 - So this page is the generated-by-hand vocabulary reference: every action literal live in the tree today, grep-curated from `internal/api`, `internal/broker`, `internal/lifecycle`, `internal/approval`, `internal/identity/embedded`, and `internal/groundtruth`, with its `Data` field names read from that call site.
 - To reproduce or extend this table: `grep -rn 'auditEvent(\|"[a-z_]\+\.[a-z_.]\+"' internal/api/*.go` (excluding `_test.go`) finds every call site; each site's `mustJSON(map[string]any{...})` or `Data:` literal is the field list.
+- Audit rows are immutable. Rows written before 0.10.0 keep `governance.profile.write`, `governance.profile.delete`, `governance.assignment.write` and `governance.assignment.delete`, and a `profile` key where 0.10.0 writes `unit`; a query over a span that crosses the upgrade matches both spellings.
 - **Citations here name a SYMBOL, not a line:** `path/file.go#Symbol` for a top-level func, `path/file.go#Type.Method` for a method, `path/doc.md#heading-slug` for a section of another document.
 
 CI enforces doc↔emit parity in both directions:

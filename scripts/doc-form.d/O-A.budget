@@ -125,7 +125,8 @@
 # docs/OPERATIONS.md 57692 = ours 57569 + theirs 57515 - base 57392 at the 0.10 W4a merge of PRIV-1 onto the train.
 # 0.10 W4a train: docs/OPERATIONS.md tightened to 57690, measured at the train merge.
 # docs/OPERATIONS.md 57722 = ours 57424 + theirs 57690 - base 57392 at the 0.10 LANES merge of main onto BOUNDARY.
-docs/OPERATIONS.md=57722 share=35
+# docs/OPERATIONS.md 57796 adds 74 over 57722, measured (0.10 RENAME): the 0201 migration runbook line.
+docs/OPERATIONS.md=57796 share=35
 # docs/OPERATIONS.md 55848 adds 132 over 55716: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
 # docs/OPERATIONS.md 55840 adds 124 over 55716, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # docs/OPERATIONS.md 55867 adds 27 over 55840, measured: a run whose runner cannot be asked falls back to this deployment's runner, the older-runner exception, pooled runs, and the runner_offline gap reason.

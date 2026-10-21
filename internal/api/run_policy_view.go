@@ -4,6 +4,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -398,7 +399,7 @@ func collectEvidence(events, revives []types.AuditEvent) auditEvidence {
 		case "run.egress.confine":
 			add(ev.confine, row.Hosts...)
 		case "run.ceiling.reassert":
-			ev.profile, ev.profileMaxDisk = row.Unit, row.MaxEphemeralMB
+			ev.profile, ev.profileMaxDisk = cmp.Or(row.Unit, legacyUnitName(e.Data)), row.MaxEphemeralMB
 			add(ev.profileDenied, row.DeniedAdded...)
 		case "run.revive":
 			for _, h := range row.DeniedAdded {

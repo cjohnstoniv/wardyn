@@ -5,6 +5,7 @@ package db
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -27,6 +28,8 @@ func TestMigration0162_RunsUnchangedAndQueueTablesAdded(t *testing.T) {
 	}
 	cols := pgScalar[[]string](t, pool, `SELECT array_agg(column_name::text ORDER BY column_name) FROM information_schema.columns
 		WHERE table_schema = current_schema() AND table_name = 'agent_runs'`)
+	// 0201 renames governance_profile_id to unit_id; it is not what 0162 may change either.
+	cols = slices.DeleteFunc(cols, func(c string) bool { return c == "governance_profile_id" })
 	snapshot := func() string {
 		t.Helper()
 		rows, err := pool.Query(ctx, `SELECT (SELECT jsonb_object_agg(k, v) FROM jsonb_each(to_jsonb(x)) AS e(k, v) WHERE k = ANY($1))::text

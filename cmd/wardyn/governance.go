@@ -105,7 +105,7 @@ func readGovernanceDocument(cmd *cobra.Command, args []string) (sdk.GovernanceDo
 	// error, not silently vanish from what ApplyGovernance then sends.
 	var doc sdk.GovernanceDocument
 	if err := decodeOneJSONStrict(bytes.NewReader(raw), &doc); err != nil {
-		return sdk.GovernanceDocument{}, fmt.Errorf("parse governance document JSON: %w", err)
+		return sdk.GovernanceDocument{}, fmt.Errorf("parse governance document JSON: %w%s", err, renamedKeyHint(err))
 	}
 	return doc, nil
 }

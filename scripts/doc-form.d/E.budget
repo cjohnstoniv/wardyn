@@ -122,7 +122,8 @@
 # 0.10 ATT-LOGIN-SRV: docs/ENV.md 41141 adds 470 over 40671: the five WARDYN_CLI_* settings, measured.
 # docs/ENV.md 42192 = ours 41722 + theirs 41141 - base 40671 at the 0.10 W4a merge of ATT-LOGIN-SRV onto the train.
 # 0.10 W4a train: docs/ENV.md tightened to 42189, measured at the train merge.
-docs/ENV.md=42189 share=5
+# docs/ENV.md 42207 adds 18 over 42189, measured (0.10 RENAME): the renamed PUT-existing-only switch and its refused old name.
+docs/ENV.md=42207 share=5
 # docs/ENV.md 39047 adds 478 over 38569: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
 # docs/ENV.md 38607 adds 38 over 38569, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # docs/ENV.md 40042 adds 422 over 39620, measured: the WARDYN_AWS_SIGV4_AT_PROXY row and section: which lanes and hosts are re-signed, the named refusals, and the no-hold, placement and new-dispatch notes.
