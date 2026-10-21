@@ -1,0 +1,22 @@
+{
+  "keys": {
+    "profiles": "units",
+    "assignments": "memberships",
+    "profile": "unit",
+    "profile_id": "unit_id",
+    "profile_name": "unit_name",
+    "base_profile_id": "parent_id"
+  },
+  "values": {
+    "governance.profile.write": "governance.unit.write",
+    "governance.profile.delete": "governance.unit.delete",
+    "governance.assignment.write": "governance.membership.write",
+    "governance.assignment.delete": "governance.membership.delete",
+    "governance_profile_in_use": "governance_unit_in_use",
+    "governance_profile_not_found": "governance_unit_not_found",
+    "governance_profile_request_invalid": "governance_unit_request_invalid",
+    "governance_assignment_invalid": "governance_membership_invalid",
+    "governance_assignment_not_found": "governance_membership_not_found",
+    "invalid assignment: profile_id: required": "invalid assignment: unit_id: required"
+  }
+}
