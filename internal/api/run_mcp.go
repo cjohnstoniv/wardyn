@@ -273,7 +273,8 @@ type mcpDispatch struct {
 // own configuration: Claude Code a managed file, Codex CLI the env its
 // agent-run writes into config.toml (env, set here into sandboxEnv). A local
 // server takes no token and no broker entry; it joins the same configuration
-// as the command its harness starts.
+// as the command its harness starts, and host withholding does not drop it:
+// only a remote server (m.Launch == nil && w.withheld(m.Host)) is skipped.
 func dispatchMCP(servers []componentMCP, w withholding, injections *[]runner.InjectionGrant, proxyURL string, interactive bool, env map[string]string) mcpDispatch {
 	var out mcpDispatch
 	on := map[string][]string{}
