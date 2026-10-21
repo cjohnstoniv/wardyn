@@ -248,7 +248,9 @@ func (s *Server) refuseIfRunEnded(
 	// row falls through to Decide, whose already_decided answer is the true one. (An empty state is a
 	// row no store writes; treated as open.)
 	if haveRun && isTerminalRunState(run.State) && (ap.State == "" || ap.State == types.ApprovalPending || ap.State == types.ApprovalCancelled) {
-		s.cancelRunApprovals(r.Context(), ap.RunID)
+		if d, isPolicy := policyDeciderFrom(r.Context()); !isPolicy || !d.report { // a rule's report-only dry run moves no row
+			s.cancelRunApprovals(r.Context(), ap.RunID)
+		}
 		writeErrorReason(w, http.StatusConflict, reasonApprovalRunEnded, approvalRunEndedBody)
 		return ap, run, haveAP, haveRun, false, "run_ended"
 	}

@@ -45,6 +45,19 @@ type ruleStore struct {
 	grants    []types.CapabilityGrant
 	enf       map[string]bool
 	boundary  types.Boundary
+	// endInDecide ends the run on decide()'s own read (a policy decider context): after a dry run's match.
+	endInDecide bool
+}
+
+func (s *ruleStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
+	if _, inDecide := policyDeciderFrom(ctx); inDecide && s.endInDecide {
+		s.authzStore.mu.Lock()
+		r := s.runs[id]
+		r.State = types.RunCompleted
+		s.runs[id] = r
+		s.authzStore.mu.Unlock()
+	}
+	return s.authzStore.GetRun(ctx, id)
 }
 
 func (s *ruleStore) ListApprovalRules(context.Context) ([]types.ApprovalRule, error) {

@@ -61,6 +61,30 @@ func TestApprovalRuleDraftDryRunWritesNothing(t *testing.T) {
 	}
 }
 
+// TestApprovalRuleDraftDryRunRunEndingInDecide: a run that ends after the draft dry run's match, on decide()'s own
+// read, answers run_ended, and the report-only decide cancels nothing: the row stays PENDING, no approval.cancel.
+func TestApprovalRuleDraftDryRunRunEndingInDecide(t *testing.T) {
+	t.Setenv(envApprovalRules, approvalRulesOn)
+	f := newRuleFix(t, func(f *ruleFix) { f.st.endInDecide = true })
+	ap, err := f.aps.Request(context.Background(), types.ApprovalRequest{ID: uuid.New(), RunID: f.run.ID, Kind: types.ApprovalToolCall, RequestedScope: json.RawMessage(ruleToolScope)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := len(f.h.audit.snapshot()) // recordAudit and the approval store's approval.cancel both land here
+	w := do(t, f.srv, http.MethodPost, "/api/v1/governance/approval-rules/dry-run", adminToken, approvalRuleBody)
+	var rep approvalRuleReport
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &rep) != nil {
+		t.Fatalf("dry run = %d %s", w.Code, w.Body)
+	}
+	if after := f.h.audit.snapshot(); len(after) != before {
+		t.Fatalf("the draft dry run wrote %d audit rows: %+v", len(after)-before, after[before:])
+	}
+	if len(rep.Pending) != 1 || rep.Pending[0].Outcome+"/"+rep.Pending[0].Reason != "skip/"+reasonApprovalRunEnded {
+		t.Fatalf("report = %+v; want the row skipped as %s", rep.Pending, reasonApprovalRunEnded)
+	}
+	f.pending(ap.ID)
+}
+
 // TestApprovalRuleListAnswersTheSwitch: the list route answers the rules and the switch as requests read it.
 func TestApprovalRuleListAnswersTheSwitch(t *testing.T) {
 	t.Setenv(envApprovalRules, approvalRulesDryRun)
