@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { GROUPS_READ_AT_SIGNIN } from "./groups-copy";
+
 // Permissioning copy canon — the frozen canonical-strings table from
 // docs/design/permissioning-prompt.md, transcribed verbatim. The admin
 // Permissions screen and the member why-denied surfaces read these instead
@@ -23,6 +25,7 @@
 // The closed set, in the order the admin screen renders them. Mirrors the Go
 // slice in internal/api/capabilities.go — a new kind is a Go constant plus a
 // row here, no DDL.
+
 export const CAPABILITY_KINDS = ["egress_host", "secret", "workspace", "image", "agent", "workspace_provider", "model_provider", "feature", "policy", "component"] as const;
 export type CapabilityKind = (typeof CAPABILITY_KINDS)[number];
 
@@ -184,7 +187,7 @@ export const SELF_HOST = {
 
 export const PERM = {
   TITLE: "Permissions",
-  LEAD: "Grant members and groups specific Wardyn capabilities. Each capability is enforced on its own — until you enforce one, nothing about it changes.",
+  LEAD: "Grant members and groups specific Wardyn capabilities. A capability refuses nothing until you enforce it.",
 
   // The doctrine sentence, on the screen because it is the single most common
   // misread of the feature ("I granted two hosts, why did the run still reach
@@ -282,8 +285,8 @@ export const PERM = {
 
   // ---- group snapshot honesty ----
   SNAPSHOT_TITLE: "Groups are read at sign-in",
-  SNAPSHOT_BODY:
-    "Group membership is recorded once, when a member signs in. A group added in your identity provider reaches Wardyn on their next sign-in. Grants themselves take effect on the next request.",
+  SNAPSHOT_BODY: GROUPS_READ_AT_SIGNIN,
+  SNAPSHOT_EFFECT: "Grants themselves take effect on the next request.",
 
   // A grant is a widened blast radius, not an achievement — this is the
   // one-liner the amber styling exists to carry.

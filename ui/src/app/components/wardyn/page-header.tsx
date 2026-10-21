@@ -28,7 +28,7 @@ export function PageHeader({
    *  keeps exactly one h1 and the outline stays honest. */
   as?: "h1" | "h3";
 }) {
-  const size = Heading === "h1" ? "text-[1.75rem] font-bold" : "text-sm font-medium";
+  const size = Heading === "h1" ? "text-page" : "text-sm font-medium leading-tight";
   // #2831 (owner option B): below sm the title and the action share one row, the action pinned right and the
   // title wrapping beside it, and the description drops under both at full width. The wrapper goes `contents`
   // so the title row, the description and the actions can be ordered as one flex-wrap row; from sm up it is the
@@ -37,7 +37,7 @@ export function PageHeader({
     <div className="mb-5 flex flex-wrap items-start justify-between gap-4 sm:flex-nowrap">
       <div className="contents sm:block sm:space-y-1">
         <div className="flex min-w-0 flex-1 items-center gap-2">
-          <Heading className={`${size} leading-tight text-foreground`}>{title}</Heading>
+          <Heading className={`${size} text-foreground`}>{title}</Heading>
           {titleBadge}
         </div>
         {description && (

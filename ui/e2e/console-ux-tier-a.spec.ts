@@ -93,8 +93,8 @@ test.describe("Tier A at 390px", () => {
   // #2870: the tab set never wraps a label and stays inside its card.
   test("Providers: the tab bar does not wrap or leave the card", async ({ page }) => {
     await phoneAt(page, "admin", "/admin/providers");
-    const git = page.getByRole("button", { name: /^Git providers/ });
-    const storage = page.getByRole("button", { name: /^Storage/ });
+    const git = page.getByRole("tab", { name: /^Git providers/ });
+    const storage = page.getByRole("tab", { name: /^Storage/ });
     await expect(git).toBeVisible();
     const [g, st] = [await boxOf(git), await boxOf(storage)];
     expect(g.height).toBeCloseTo(st.height, 0);

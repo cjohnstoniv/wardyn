@@ -24,6 +24,9 @@ import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
 import { PageHeader } from "../../wardyn/page-header";
+import { PageContainer } from "../../wardyn/page-container";
+import { PageTabs } from "../../wardyn/page-tabs";
+import { HowItWorks } from "../../wardyn/how-it-works";
 import { EmptyState, STATES, TableSkeleton } from "../../wardyn/states";
 import { MintTokenDialog } from "./mint-token-dialog";
 import { PoolsTab } from "./pools/pools-tab";
@@ -92,25 +95,6 @@ function FilterGroup({ filter, onChange }: { filter: Filter; onChange: (f: Filte
 }
 
 type Tab = "runners" | "pools";
-
-function Tabs({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
-  const item = (id: Tab, label: string) => (
-    <button
-      type="button"
-      aria-current={tab === id ? "page" : "false"}
-      onClick={() => onChange(id)}
-      className={`rounded-lg px-3 py-1 text-body font-medium ${tab === id ? "bg-background text-foreground ring-1 ring-border" : "text-muted-foreground hover:text-foreground"}`}
-    >
-      {label}
-    </button>
-  );
-  return (
-    <nav aria-label={RUNNER_V6.TABS_LABEL} className="mb-4 inline-flex max-w-full gap-0.5 rounded-xl border border-border bg-surface-2 p-0.5">
-      {item("runners", RUNNER_V6.TAB_RUNNERS)}
-      {item("pools", RUNNER_V6.TAB_POOLS)}
-    </nav>
-  );
-}
 
 export function RunnersScreen() {
   const superAdmin = useOperator();
@@ -241,10 +225,29 @@ export function RunnersScreen() {
 
   const ready = status === "ready";
   return (
-    <div className="mx-auto max-w-[1200px] px-6 py-6">
-      <PageHeader title={RUNNERS.NAV} description={<span className="block max-w-[68ch]">{tab === "pools" ? POOLS.LEAD : RUNNERS.LEAD}</span>} actions={actions} />
-      {tab === "runners" && <p className="-mt-2 mb-3 max-w-[80ch] text-body text-muted-foreground">{RUNNER_V6.TAB_PURPOSE}</p>}
-      {ready && <Tabs tab={tab} onChange={(t) => go(t)} />}
+    <PageContainer width="list">
+      <PageHeader title={RUNNERS.NAV} description={RUNNERS.PAGE_LEDE} actions={actions} />
+      <HowItWorks id="runners" title={RUNNERS.HOW_TITLE} className="-mt-2 mb-4">
+        <p>{RUNNERS.LEAD}</p>
+        <p>
+          <span className="font-medium text-foreground">{RUNNERS.HOW_RUNNERS_TAB}</span> {RUNNER_V6.TAB_PURPOSE}
+        </p>
+        <p>
+          <span className="font-medium text-foreground">{RUNNERS.HOW_POOLS_TAB}</span> {POOLS.LEAD}
+        </p>
+      </HowItWorks>
+      {ready && (
+        <PageTabs
+          className="mb-4"
+          label={RUNNER_V6.TABS_LABEL}
+          value={tab}
+          onValueChange={(t) => go(t)}
+          tabs={[
+            { value: "runners", label: RUNNER_V6.TAB_RUNNERS },
+            { value: "pools", label: RUNNER_V6.TAB_POOLS },
+          ]}
+        />
+      )}
       {body}
       {ready && tab === "runners" && <UnusedTokens tokens={tokens} onChanged={reload} />}
       <RunnerDrawer runner={selectedRunner} onClose={() => setSelected(null)} onChanged={reload} onOpenPool={openPool} />
@@ -257,7 +260,7 @@ export function RunnersScreen() {
       />
       <MintTokenDialog open={minting} onOpenChange={setMinting} onMinted={reload} />
       <RunnersSwitchDialog mode={switching} onOpenChange={(o) => !o && setSwitching(null)} onChanged={reload} />
-    </div>
+    </PageContainer>
   );
 }
 

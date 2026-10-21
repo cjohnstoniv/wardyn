@@ -16,7 +16,8 @@
 // /people/{principal}/credentials — CS-5/CS-6, already shipped; this spec pins
 // the console built on top of them.
 import { createHash, randomBytes } from "node:crypto";
-import type { APIRequestContext, Page } from "@playwright/test";
+import type { APIRequestContext, Locator, Page } from "@playwright/test";
+import { ERASE_DATA, INVENTORY } from "../src/app/components/wardyn/copy/credentials";
 import { test, expect, ADMIN_TOKEN, asRealMember, asRealSecurityAdmin, consoleAPI, gotoConsole, navTo, sql } from "./fixtures";
 
 const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
@@ -63,6 +64,22 @@ async function openCredentials(page: Page): Promise<void> {
   await gotoConsole(page, "admin");
   await navTo(page, "Credentials");
   await expect(page.getByRole("heading", { name: "Credentials", exact: true })).toBeVisible();
+}
+
+// The header's one More menu opens the one erase dialog with the search; a security admin is offered the data erase.
+async function openEraseFromMore(page: Page): Promise<Locator> {
+  await page.getByRole("button", { name: INVENTORY.MORE }).click();
+  await page.getByRole("menuitem", { name: INVENTORY.ERASE_MENU_DATA }).click();
+  const dialog = page.getByRole("dialog", { name: ERASE_DATA.BY_EMAIL_TITLE });
+  await expect(dialog).toBeVisible();
+  return dialog;
+}
+
+// Leaves only Credentials ticked, so the erase goes through the credentials route these tests hold or read.
+async function credentialsOnly(dialog: Locator): Promise<void> {
+  for (const box of await dialog.getByRole("checkbox").all()) {
+    if ((await box.getAttribute("id")) !== "erase-scope-credentials") await box.uncheck();
+  }
 }
 
 test.describe.configure({ mode: "serial" });
@@ -120,9 +137,12 @@ test.describe("Credentials (Admin view)", () => {
 
     await row.getByRole("button", { name: "Erase credentials" }).click();
     const dialog = page.getByRole("dialog");
-    await expect(dialog.getByText(`Erase every credential ${person.email} stored?`)).toBeVisible();
+    await expect(dialog.getByRole("heading", { name: ERASE_DATA.BY_EMAIL_TITLE })).toBeVisible();
+    await expect(dialog.getByText(`Erase every credential ${person.email} has stored?`)).toBeVisible();
+    await expect(dialog.getByRole("checkbox", { name: /^Credentials/ })).toBeChecked();
+    await expect(dialog.getByRole("checkbox", { name: /^Run tasks/ })).not.toBeChecked();
 
-    const confirmBtn = dialog.getByRole("button", { name: "Erase credentials" });
+    const confirmBtn = dialog.getByRole("button", { name: ERASE_DATA.CONFIRM });
     await expect(confirmBtn).toBeDisabled();
 
     // Case-insensitive typed-email confirm (design F-5).
@@ -237,19 +257,20 @@ test.describe("Credentials (Admin view)", () => {
     await openCredentials(page);
     await expect(page.getByRole("row").filter({ hasText: person.email })).toHaveCount(0);
 
-    await page.getByRole("button", { name: "Erase someone's credentials" }).click();
-    const dialog = page.getByRole("dialog");
+    const dialog = await openEraseFromMore(page);
     await dialog.getByLabel("Email or subject").fill(person.email);
-    await dialog.getByRole("button", { name: "Erase credentials" }).click();
+    await expect(dialog.getByText(ERASE_DATA.PICK_USE(person.email))).toBeVisible();
+    await credentialsOnly(dialog);
+    await dialog.getByRole("button", { name: ERASE_DATA.CONFIRM }).click();
     await expect(dialog.getByText(`Erased 1 credential for ${person.email}.`)).toBeVisible();
     await dialog.getByRole("button", { name: "Close" }).first().click();
 
     // An address nobody signs in as is refused with the server's own
     // sentence, and the dialog stays open to retry.
-    await page.getByRole("button", { name: "Erase someone's credentials" }).click();
-    const retryDialog = page.getByRole("dialog");
+    const retryDialog = await openEraseFromMore(page);
     await retryDialog.getByLabel("Email or subject").fill("nobody-at-all@e2e.wardyn.invalid");
-    await retryDialog.getByRole("button", { name: "Erase credentials" }).click();
+    await credentialsOnly(retryDialog);
+    await retryDialog.getByRole("button", { name: ERASE_DATA.CONFIRM }).click();
     await expect(retryDialog.getByText(/doesn't match anyone this deployment knows/i)).toBeVisible();
     await expect(retryDialog).toBeVisible();
   });
@@ -265,10 +286,10 @@ test.describe("Credentials (Admin view)", () => {
     await asRealSecurityAdmin(page);
     await openCredentials(page);
 
-    await page.getByRole("button", { name: "Erase someone's credentials" }).click();
-    const dialog = page.getByRole("dialog");
+    const dialog = await openEraseFromMore(page);
     await dialog.getByLabel("Email or subject").fill("held-erase@e2e.wardyn.invalid");
-    await dialog.getByRole("button", { name: "Erase credentials" }).click();
+    await credentialsOnly(dialog);
+    await dialog.getByRole("button", { name: ERASE_DATA.CONFIRM }).click();
 
     await page.keyboard.press("Escape");
     await expect(dialog).toBeVisible();

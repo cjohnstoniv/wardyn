@@ -121,6 +121,7 @@ test.describe("providers — legacy open mode, with no rows at all", () => {
     await expect(page.getByText(PROVIDERS.LEGACY_OPEN_TITLE)).toBeVisible();
     await expect(page.getByText(PROVIDERS.LEGACY_OPEN_BODY)).toBeVisible();
     await expect(page.getByText(PROVIDERS.LEGACY_OPEN_OTHER_HOSTS)).toBeVisible();
+    await expect(page.getByText(PROVIDERS.GIT_LEAD)).toHaveCount(0);
     // The screen's one Save is withheld while the legacy banner alone is the
     // affirmative (providers-screen.tsx) — Add provider is the state's own
     // one teal.
@@ -143,6 +144,8 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
 
     const row = page.getByTestId("provider-row-github");
     await expect(row).toBeVisible();
+    await expect(page.getByText(PROVIDERS.GIT_LEAD)).toBeVisible();
+    await expect(page.getByText(PROVIDERS.LEGACY_OPEN_TITLE)).toHaveCount(0);
     await row.locator("textarea").fill("https://github.com/acme");
     await saveProviders(page);
 
@@ -428,7 +431,7 @@ test.describe("providers — the door is SUPER's alone", () => {
     await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1, exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toHaveCount(0);
     await expect(page.getByTestId("provider-row-github")).toHaveCount(0);
-    await expect(page.getByRole("button", { name: PROVIDERS.GIT_TITLE })).toHaveCount(0);
+    await expect(page.getByRole("tab", { name: PROVIDERS.GIT_TITLE })).toHaveCount(0);
     expect(reads, "the refused page read the providers anyway").toEqual([]);
   });
 
@@ -466,7 +469,7 @@ test.describe("providers — the door is SUPER's alone", () => {
 test.describe("providers — the git provider row's Available to control (UT-7b)", () => {
   test.describe.configure({ mode: "serial" });
 
-  test("Everyone by default; turning Only on with nobody listed refuses, verbatim", async ({ page }) => {
+  test("Everyone by default; turning Only on with nobody listed is held as not saved yet", async ({ page }) => {
     await gotoProviders(page);
     const row = page.getByTestId("provider-row-github");
     await expect(row).toBeVisible();
@@ -474,16 +477,14 @@ test.describe("providers — the git provider row's Available to control (UT-7b)
     await expect(row.getByRole("radio", { name: AVAILABILITY.EVERYONE })).toBeChecked();
     await row.getByRole("radio", { name: AVAILABILITY.ONLY }).click();
 
-    // The server's own availabilityOnlyEmptyMsg (permissions_availability.go),
-    // rendered verbatim — never a console reword.
-    await expect(
-      row.getByText("Add at least one person, group or user type before choosing Only, or nobody could use this."),
-    ).toBeVisible();
-    // The failed PUT never flipped the segment — it still reads Everyone.
-    await expect(row.getByRole("radio", { name: AVAILABILITY.EVERYONE })).toBeChecked();
+    // Nothing is sent: the server refuses an empty Only list, so the choice waits for the first Add.
+    await expect(row.getByTestId("availability-pending")).toHaveText(AVAILABILITY.PENDING_NOTE);
+    await expect(row.getByPlaceholder(AVAILABILITY.ADD_PLACEHOLDER)).toBeVisible();
+    await row.getByRole("radio", { name: AVAILABILITY.EVERYONE }).click();
+    await expect(row.getByPlaceholder(AVAILABILITY.ADD_PLACEHOLDER)).toHaveCount(0);
   });
 
-  test("adding a user type lands the chip, turns Only on, and both survive a reload", async ({ page }) => {
+  test("the first Add under Only these lands the chip and turns Only on, and both survive a reload", async ({ page }) => {
     await gotoProviders(page);
     const row = page.getByTestId("provider-row-github");
     await expect(row).toBeVisible();
@@ -492,11 +493,10 @@ test.describe("providers — the git provider row's Available to control (UT-7b)
     // delete (UT-1) — is the only type id guaranteed to exist on a fresh e2e
     // backend: userTypeSubjectExists (permissions.go) refuses a grant naming
     // an id nobody created.
+    await row.getByRole("radio", { name: AVAILABILITY.ONLY }).click();
     await row.getByPlaceholder(AVAILABILITY.ADD_PLACEHOLDER).fill("standard");
     await row.getByRole("button", { name: AVAILABILITY.ADD_CTA }).click();
     await expect(row.getByText(/standard/i)).toBeVisible();
-
-    await row.getByRole("radio", { name: AVAILABILITY.ONLY }).click();
     await expect(row.getByRole("radio", { name: AVAILABILITY.ONLY })).toBeChecked();
 
     await page.reload();
@@ -519,12 +519,20 @@ test.describe("providers — the git provider row's Available to control (UT-7b)
       expect.objectContaining({ subject_type: "user_type", subject: "standard", capability: "workspace_provider", value: "github" }),
     ]);
 
-    // Clean up: back to Everyone, then remove the audience — this row's
-    // availability must not leak into a later run of this same suite.
+    // Back to Everyone: the audience stays stored but its picker and chips are out of sight (#3065).
     await reloaded.getByRole("radio", { name: AVAILABILITY.EVERYONE }).click();
     await expect(reloaded.getByRole("radio", { name: AVAILABILITY.EVERYONE })).toBeChecked();
-    await reloaded.getByRole("button", { name: /Remove.*standard/i }).click();
     await expect(reloaded.getByText(/standard/i)).toHaveCount(0);
+    const kept = await (
+      await page.request.get("/api/v1/permissions/availability/workspace_provider/github", { headers: auth })
+    ).json();
+    expect(kept.restricted).toBe(false);
+    expect(kept.allowed_by).toHaveLength(1);
+
+    // Clean up over the API, since the screen has no door to a hidden audience: this row's availability must
+    // not leak into a later run of this same suite.
+    const gone = await page.request.delete(`/api/v1/permissions/grants/${kept.allowed_by[0].id}`, { headers: auth });
+    expect(gone.ok()).toBe(true);
   });
 });
 

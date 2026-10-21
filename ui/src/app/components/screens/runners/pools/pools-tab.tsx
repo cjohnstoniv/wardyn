@@ -18,6 +18,7 @@ import type { RemoteRunnerView, RunnerKind, RunnerPool, RunnerPoolMemberView } f
 import type { RunnerView } from "../../../../lib/types/runners";
 import { POOLS, RUNNER_KIND } from "../../../wardyn/copy/runner-pools";
 import { useOperator } from "../../../wardyn/operator-context";
+import { CopyButton } from "../../../wardyn/copy-button";
 import { Chip } from "../../../wardyn/primitives";
 import { EmptyState, STATES } from "../../../wardyn/states";
 import { Button } from "../../../ui/button";
@@ -51,7 +52,7 @@ function Card({ title, body, action }: { title: string; body: string; action?: R
   );
 }
 
-function EmptyCard({ title, body }: { title: string; body: string }) {
+function EmptyCard({ title, body }: { title: string; body: React.ReactNode }) {
   return (
     <div role="group" aria-label={title} className="mb-4 rounded-xl border border-border bg-card">
       <EmptyState size="compact" icon={Server} title={title} description={body} />
@@ -260,15 +261,41 @@ export function PoolsTab({
 
   return (
     <div>
-      <SectionHead id="sec-org" title={POOLS.ORG_TITLE} lede={POOLS.ORG_LEDE} />
-      <Note>
-        {POOLS.ORG_CLI} <span className="font-mono">{POOLS.ORG_CLI_COMMAND}</span>. {POOLS.ORG_CLI_EDIT}
-      </Note>
-      {!superAdmin && <Note>{POOLS.ORG_SECURITY}</Note>}
       {org.length === 0 ? (
-        <EmptyCard title={POOLS.ORG_EMPTY_TITLE} body={POOLS.ORG_EMPTY_BODY} />
+        <>
+          <h2 id="sec-org" className="mb-2.5 mt-5">
+            {POOLS.ORG_TITLE}
+          </h2>
+          {!superAdmin && <Note>{POOLS.ORG_SECURITY}</Note>}
+          <EmptyCard
+            title={POOLS.ORG_EMPTY_TITLE}
+            body={
+              <>
+                {POOLS.ORG_CLI}
+                <span className="my-2 flex items-center justify-center gap-2">
+                  <span className="rounded-md border border-border bg-surface-2 px-2 py-1 font-mono text-xs break-all text-foreground">
+                    {POOLS.ORG_CLI_COMMAND}
+                  </span>
+                  <CopyButton
+                    text={POOLS.ORG_CLI_COMMAND}
+                    label={POOLS.ORG_CLI_COPY}
+                    className="gap-1 rounded-md border border-border px-2 py-1 text-xs text-foreground hover:bg-accent"
+                  >
+                    {POOLS.ORG_CLI_COPY}
+                  </CopyButton>
+                </span>
+                {POOLS.ORG_EMPTY_THEN}
+              </>
+            }
+          />
+        </>
       ) : (
         <>
+          <SectionHead id="sec-org" title={POOLS.ORG_TITLE} lede={POOLS.ORG_LEDE} />
+          <Note>
+            {POOLS.ORG_CLI} <span className="font-mono">{POOLS.ORG_CLI_COMMAND}</span>. {POOLS.ORG_CLI_EDIT}
+          </Note>
+          {!superAdmin && <Note>{POOLS.ORG_SECURITY}</Note>}
           {defaultsError && (
             <div role="alert" className="mb-3 rounded-lg border border-danger bg-danger-subtle p-3 text-body">
               {defaultsError}

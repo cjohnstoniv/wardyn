@@ -131,10 +131,10 @@ describe("the provider editor's Available to", () => {
     expect(within(d).getByText(AVAILABILITY.MODEL_PROVIDER_NOTE)).toBeInTheDocument();
     await userEvent.clear(within(d).getByLabelText(E.NAME));
     await userEvent.type(within(d).getByLabelText(E.NAME), "Bloomberg gateway");
+    await userEvent.click(within(d).getByRole("radio", { name: AVAILABILITY.ONLY }));
     await userEvent.type(within(d).getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER), "portfolio-manager");
     await userEvent.click(within(d).getByRole("button", { name: AVAILABILITY.ADD_CTA }));
     expect(await within(d).findByText("Portfolio manager")).toBeInTheDocument();
-    await userEvent.click(within(d).getByRole("radio", { name: AVAILABILITY.ONLY }));
     await userEvent.click(within(d).getByRole("button", { name: E.SAVE }));
 
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
@@ -153,9 +153,9 @@ describe("the provider editor's Available to", () => {
     const d = screen.getByRole("dialog");
     await userEvent.clear(within(d).getByLabelText(E.NAME));
     await userEvent.type(within(d).getByLabelText(E.NAME), "Bloomberg gateway");
+    await userEvent.click(within(d).getByRole("radio", { name: AVAILABILITY.ONLY }));
     await userEvent.type(within(d).getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER), "portfolio-mgr");
     await userEvent.click(within(d).getByRole("button", { name: AVAILABILITY.ADD_CTA }));
-    await userEvent.click(within(d).getByRole("radio", { name: AVAILABILITY.ONLY }));
     await userEvent.click(within(d).getByRole("button", { name: E.SAVE }));
 
     expect(await within(d).findByText(AVAILABILITY.CREATE_PARTIAL_TITLE)).toBeInTheDocument();

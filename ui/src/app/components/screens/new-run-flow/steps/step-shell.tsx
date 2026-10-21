@@ -8,8 +8,8 @@
 // and Ctrl/Cmd+Enter for that action. Strings come from the caller's copy module.
 // The page column (width and top padding) is the route's; see new-run-route.tsx.
 // Geometry follows Make (snapshot index.css): rail 50 px above the header, 32 px at
-// <=520 px (:124, :528); teal eyebrow (:91); h1 clamp(28px, 4vw, 42px) at regular
-// weight (:69), its own size so --text-display elsewhere stays put; footer rule as .sticky-actions (:383).
+// <=520 px (:124, :528); teal eyebrow (:91); the h1 is the flow-title rung --text-display (#3080);
+// footer rule as .sticky-actions (:383).
 
 import * as React from "react";
 import { modalLayerOpen } from "../../../../lib/modal-layer-open";
@@ -119,7 +119,7 @@ export function StepShell({ title, lede, eyebrow, progress, back, primary, issue
   const header = (
     <header className="flex max-w-[680px] flex-col gap-2.5">
       {eyebrow && <p className="mb-1 label-eyebrow label-eyebrow-primary">{eyebrow}</p>}
-      <h1 id={STEP_HEADING_ID} ref={heading} tabIndex={-1} className={cn(headingAside ? "text-[32px]" : "text-[clamp(28px,4vw,42px)]", "leading-[1.08] font-normal tracking-[-0.04em] outline-none")}>{title}</h1>
+      <h1 id={STEP_HEADING_ID} ref={heading} tabIndex={-1} className="text-display outline-none">{title}</h1>
       {lede && <p className="max-w-[620px] text-muted-foreground">{lede}</p>}
     </header>
   );

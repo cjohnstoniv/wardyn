@@ -14,6 +14,7 @@ import { MemoryRouter } from "react-router-dom";
 
 const listInventoryMock = vi.fn();
 const erasePersonMock = vi.fn();
+vi.mock("../../lib/api/people", () => ({ people: { list: () => Promise.resolve({ people: [] }) } }));
 vi.mock("../../lib/api/credentials", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../lib/api/credentials")>()),
   credentials: {
@@ -80,20 +81,22 @@ describe("Erase someone's data (M4)", () => {
 
   async function openDialog() {
     renderScreen();
-    await userEvent.click(await screen.findByRole("button", { name: "Erase someone's data" }));
+    await userEvent.click(await screen.findByRole("button", { name: INVENTORY.MORE }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Erase someone's data…" }));
     return screen.getByRole("dialog");
   }
 
-  it("is a security operator's second header button, beside the credentials-only erase", async () => {
+  it("is the security tier's item in the Credentials More menu", async () => {
     renderScreen();
-    expect(await screen.findByRole("button", { name: "Erase someone's data" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: INVENTORY.ERASE_BY_EMAIL })).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole("button", { name: INVENTORY.MORE }));
+    expect(await screen.findByRole("menuitem", { name: "Erase someone's data…" })).toBeInTheDocument();
   });
 
-  it("an admin who is not a security operator never gets the button", async () => {
+  it("an admin who is not a security operator gets the credentials item instead, never the data one", async () => {
     renderScreen({ operator: true, securityOperator: false });
-    await screen.findByRole("button", { name: INVENTORY.ERASE_BY_EMAIL });
-    expect(screen.queryByRole("button", { name: "Erase someone's data" })).toBeNull();
+    await userEvent.click(await screen.findByRole("button", { name: INVENTORY.MORE }));
+    expect(await screen.findByRole("menuitem", { name: "Erase someone's credentials…" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Erase someone's data…" })).toBeNull();
   });
 
   it("canon strings", () => {
@@ -132,7 +135,7 @@ describe("Erase someone's data (M4)", () => {
     expect(within(dialog).getByText("Backups keep a copy until they expire.")).toBeInTheDocument();
   });
 
-  it("Erase data waits for an address and at least one scope; there is no type-to-confirm", async () => {
+  it("Erase data waits for an address and at least one scope; a typed address has no type-to-confirm", async () => {
     const dialog = await openDialog();
     const confirm = within(dialog).getByRole("button", { name: "Erase data" });
     expect(confirm).toBeDisabled();

@@ -53,6 +53,7 @@ import { Field, Switch } from "../wardyn/form-primitives";
 import { Mono } from "../wardyn/code-block";
 import { SubmittedNote } from "./governance/submitted-note";
 import { PageHeader } from "../wardyn/page-header";
+import { PageContainer } from "../wardyn/page-container";
 import { PreviewAsNewUser } from "../wardyn/user-preview";
 import { DefineOwnComponentsRow } from "./components/define-own-row";
 import { SelfHostRunnerRow } from "./self-host-runner-row";
@@ -291,7 +292,7 @@ export function PermissionsScreen() {
   const nothingEnforced = !!snap && CAPABILITY_KINDS.every((k) => !snap.enforcement[k]);
 
   return (
-    <div className="mx-auto max-w-[1120px] px-6 py-6">
+    <PageContainer width="list">
       <PageHeader title={PERM.TITLE} description={PERM.LEAD} actions={<PreviewAsNewUser />} />
 
       {submitted && <SubmittedNote />}
@@ -467,7 +468,9 @@ export function PermissionsScreen() {
 
       <section className="mt-6 rounded-xl border border-border bg-card px-6 py-5">
         <h2 className="text-sm font-medium text-foreground">{PERM.SNAPSHOT_TITLE}</h2>
-        <p className="mt-1 max-w-[80ch] text-body text-muted-foreground">{PERM.SNAPSHOT_BODY}</p>
+        <p className="mt-1 max-w-[80ch] text-body text-muted-foreground">
+          {PERM.SNAPSHOT_BODY} {PERM.SNAPSHOT_EFFECT}
+        </p>
       </section>
 
       <ConfirmEnforcement
@@ -502,7 +505,7 @@ export function PermissionsScreen() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </PageContainer>
   );
 }
 

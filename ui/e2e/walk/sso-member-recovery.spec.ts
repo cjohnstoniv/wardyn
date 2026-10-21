@@ -353,7 +353,7 @@ async function gotoAgentsTab(page: Page): Promise<void> {
   await expandCard(page, PROVIDERS.TITLE);
   await page.getByTestId("providers-card").getByText(PROVIDERS.CARD_OPEN).click();
   await expect(page).toHaveURL(/\/admin\/providers$/);
-  await page.getByRole("button", { name: AGENTS.AGENTS_TITLE }).click();
+  await page.getByRole("tab", { name: AGENTS.AGENTS_TITLE }).click();
 }
 
 /** Puts this SSO admin's session in the named view with the console's own switch; the session cookie holds the

@@ -58,6 +58,7 @@ import { Textarea } from "../../ui/textarea";
 import { useUserTypeName } from "../../../lib/use-user-types";
 import { DirectoryCombobox } from "../../wardyn/directory-combobox";
 import { Field } from "../../wardyn/form-primitives";
+import { HowItWorks } from "../../wardyn/how-it-works";
 import { PreviewUserTypeField, usePreviewUserTypes } from "../../wardyn/preview-user-type-field";
 import { USER_TYPE_STANDARD } from "../../../lib/types/user-types";
 import { Chip } from "../../wardyn/primitives";
@@ -133,8 +134,7 @@ export function AssignmentsBlock({
       <section className="mt-6 overflow-hidden rounded-xl border border-border bg-card">
         <div className="px-6 pt-5">
           <h2 className="text-sm font-medium text-foreground">{GOV.ASSIGN_TITLE}</h2>
-          <p className="mt-1 text-body text-muted-foreground">{GOV.ASSIGN_LEAD}</p>
-          <Note>{GOV.PRECEDENCE}</Note>
+          {snapshot.assignments.length > 0 && <p className="mt-1 text-body text-muted-foreground">{GOV.ASSIGN_LEAD}</p>}
           {submitted && <SubmittedNote />}
         </div>
         <div className="mt-4">
@@ -210,6 +210,13 @@ export function AssignmentsBlock({
             onSubmitted={held}
           />
         )}
+
+        <HowItWorks id="governance-assignments" title={GOV.COMBINE_TITLE} className="border-t border-border px-6 py-3">
+          <p>{GOV.PRECEDENCE}</p>
+          {/* Two halves of one fact — see this file's header. */}
+          <p>{GOV.EFFECT_NOTE}</p>
+          <p>{GOV.SIGNIN_NOTE}</p>
+        </HowItWorks>
       </section>
 
       <ResolvedPreview snapshot={snapshot} />
@@ -291,9 +298,6 @@ function AddAssignmentForm({
   return (
     <div className="mt-4 border-t border-border px-6 py-5">
       <h3 className="text-sm font-medium text-foreground">{GOV.ADD_TITLE}</h3>
-      {/* Two halves of one fact — see this file's header. */}
-      <p className="mt-1 max-w-[82ch] text-body text-muted-foreground">{GOV.EFFECT_NOTE}</p>
-      <p className="mt-1 max-w-[82ch] text-body text-muted-foreground">{GOV.SIGNIN_NOTE}</p>
 
       <div className="mt-4 grid gap-4 md:grid-cols-2 lg:grid-cols-[auto_1fr_1fr]">
         <Field label={PERM.FIELD_WHO} hint={whoHint}>

@@ -29,6 +29,7 @@ import {
   AGENTS,
   PROVIDERS,
 } from "../src/app/lib/workspace-providers-copy";
+import { AVAILABILITY } from "../src/app/lib/availability-copy";
 import { RUN_DETAIL } from "../src/app/components/wardyn/copy/run-cockpit";
 import type { Page } from "@playwright/test";
 
@@ -58,7 +59,7 @@ async function gotoAgentsTab(page: Page): Promise<void> {
   await navToRoute(page, "/admin/settings");
   await page.getByTestId("providers-card").getByRole("link").click();
   await expect(page).toHaveURL(/\/admin\/providers$/);
-  await page.getByRole("button", { name: AGENTS.AGENTS_TITLE }).click();
+  await page.getByRole("tab", { name: AGENTS.AGENTS_TITLE }).click();
 }
 
 // An Autonomous agent task's Harnesses step with the harness it opens with: its picker is the roster as the
@@ -173,7 +174,7 @@ test.describe("agents — the admin authoring walk (real writes, real reload)", 
       // Tab selection is local React state (providers-screen.tsx's `tab`), not
       // URL-carried — a reload always re-lands on the Git tab.
       await page.reload();
-      await page.getByRole("button", { name: AGENTS.AGENTS_TITLE }).click();
+      await page.getByRole("tab", { name: AGENTS.AGENTS_TITLE }).click();
       await expect(
         page.getByTestId("agent-row-claude-code").getByRole("combobox", { name: `${AGENTS.FIELD_DEFAULT_PROVIDER} — Claude Code` }),
       ).toHaveText(AGENTS.DEFAULT_OPTION("Bedrock (prod)", "Amazon Bedrock"));
@@ -360,5 +361,24 @@ test.describe("agents — the roster-unknown and empty-roster states withhold Sa
     await expect(page.getByText(AGENTS.AGENTS_LEAD)).toBeVisible();
     await expect(page.getByTestId("agent-row-claude-code")).toHaveCount(0);
     await expect(page.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toHaveCount(0);
+  });
+});
+
+// #3065: the audience picker belongs to Only these, and choosing it with nobody listed is held on
+// screen. Nothing is written, so this block leaves the roster and the availability as it found them.
+test.describe("agents — Available to shows its picker only under Only these", () => {
+  test("Everyone hides the picker; Only these with nobody listed is pending, with no Enabled chip beside the switch", async ({ page }) => {
+    await gotoAgentsTab(page);
+    const row = page.getByTestId("agent-row-claude-code");
+    await expect(row.getByRole("radio", { name: AVAILABILITY.EVERYONE })).toBeChecked();
+    await expect(row.getByPlaceholder(AVAILABILITY.ADD_PLACEHOLDER)).toHaveCount(0);
+    await expect(row.getByText(PROVIDERS.FIELD_ENABLED, { exact: true })).toHaveCount(0);
+
+    await row.getByRole("radio", { name: AVAILABILITY.ONLY }).click();
+    await expect(row.getByTestId("availability-pending")).toHaveText(AVAILABILITY.PENDING_NOTE_AGENT);
+    await expect(row.getByPlaceholder(AVAILABILITY.ADD_PLACEHOLDER)).toBeVisible();
+
+    await row.getByRole("radio", { name: AVAILABILITY.EVERYONE }).click();
+    await expect(row.getByPlaceholder(AVAILABILITY.ADD_PLACEHOLDER)).toHaveCount(0);
   });
 });

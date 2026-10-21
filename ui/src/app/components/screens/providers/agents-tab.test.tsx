@@ -106,6 +106,14 @@ describe("AgentsTab", () => {
     expect(within(await screen.findByTestId("agent-row-claude-code")).getByText("claude-code")).toBeInTheDocument();
   });
 
+  // #3065: the switch already says on; a chip beside it repeated it.
+  it("an enabled row's switch is its only on-state; no Enabled chip repeats it", async () => {
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
+    const row = await screen.findByTestId("agent-row-claude-code");
+    expect(within(row).getByRole("switch", { name: `${PROVIDERS.FIELD_ENABLED} — ${HARNESSES[0].display}` })).toBeChecked();
+    expect(within(row).queryByText(PROVIDERS.FIELD_ENABLED)).toBeNull();
+  });
+
   it("renders one row per harness from the roster", async () => {
     render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     expect(await screen.findByTestId("agent-row-claude-code")).toBeInTheDocument();

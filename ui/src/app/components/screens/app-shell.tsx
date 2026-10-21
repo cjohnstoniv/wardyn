@@ -44,7 +44,14 @@ import { SidebarLowerLinks } from "./sidebar-settings-link";
 // from nav-copy.ts rather than the screen's own copy module so the eager
 // sidebar doesn't drag a whole screen-only canon table into the entry chunk
 // (#498) for one string.
-import { CREDENTIALS_NAV_TITLE, GOVERNANCE_NAV_TITLE, RUNNERS_NAV_TITLE, USER_TYPES_NAV_TITLE } from "../../lib/nav-copy";
+import {
+  ADMIN_NAV_GROUPS,
+  CREDENTIALS_NAV_TITLE,
+  GOVERNANCE_NAV_TITLE,
+  RUNNERS_NAV_TITLE,
+  USER_TYPES_NAV_TITLE,
+  type AdminNavGroup,
+} from "../../lib/nav-copy";
 import { cn } from "../ui/utils";
 import { Button } from "../ui/button";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "../ui/sheet";
@@ -121,9 +128,8 @@ function useSessionExpiry(expiresAt: Date | null): SessionExpiryState {
 // (internal/api/routes.go), and an admin in the User view is answered as a
 // user by the session clamp.
 //
-// Recordings sits after Audit because the two answer the same question, "what
-// happened". Governance sits between Policies and Permissions so the three read
-// as one narrowing sequence (mock Q1).
+// The Admin view groups its items under small headings (#3056): Activity, Build, Access, Limits, Keys.
+// Items both views share keep one relative order: Runs, Approvals, Workspaces, Templates.
 interface NavItem {
   to: string;
   label: string;
@@ -136,41 +142,38 @@ interface NavItem {
   tier?: "super" | "security";
   // Other paths that keep this item lit (see SidebarLowerLinks).
   also?: string[];
+  // The Admin view heading the item sits under.
+  group?: AdminNavGroup;
 }
 const ADMIN_NAV: NavItem[] = [
-  { to: "/admin/runs", label: "Runs", icon: Activity, badge: "attention" },
-  { to: "/admin/approvals", label: "Approvals", icon: ShieldCheck, badge: "approvals" },
-  // 0.8.6 (ppl-p2, M12 D1): right after Approvals, because leaver work is frequent and urgent. securityOps
-  // server-side, so both admin tiers see it.
-  { to: "/admin/people", label: PEOPLE_PAGE.NAV, icon: Contact },
-  // 0.9: people's own computers that run their runs. securityOps server-side, so both admin tiers see it;
-  // the page explains the off state, so the item is always there (RN-Q4).
-  { to: "/admin/runners", label: RUNNERS_NAV_TITLE, icon: Laptop },
-  { to: "/admin/workspaces", label: "Workspaces", icon: FolderOpen },
-  { to: "/admin/policies", label: "Policies", icon: UserCog },
+  { to: "/admin/runs", label: "Runs", icon: Activity, badge: "attention", group: "activity" },
+  { to: "/admin/approvals", label: "Approvals", icon: ShieldCheck, badge: "approvals", group: "activity" },
+  { to: "/admin/audit", label: "Audit", icon: ScrollText, group: "activity" },
+  { to: "/admin/recordings", label: "Recordings", icon: Play, tier: "super", group: "activity" },
+  { to: "/admin/workspaces", label: "Workspaces", icon: FolderOpen, group: "build" },
   // 0.9: saved starting points; org admins rename, delete and publish here. A member route server-side, so
   // both admin tiers see it. The label is literal like its neighbours: the screen's copy module is lazy-only.
-  { to: "/admin/templates", label: "Templates", icon: LayoutTemplate },
-  // GOVERNANCE_NAV_TITLE is one string for the nav and the screen's heading.
-  { to: "/admin/governance", label: GOVERNANCE_NAV_TITLE, icon: Scale },
-  { to: "/admin/permissions", label: "Permissions", icon: Users },
-  // Credentials (CS-8, design F-1) sits right after Permissions — both name
-  // who may act. securityOps server-side, so both admin tiers see it (a
-  // security admin has no Settings and no Secrets, so this page can't live
+  { to: "/admin/templates", label: "Templates", icon: LayoutTemplate, group: "build" },
+  // 0.9: people's own computers that run their runs. securityOps server-side, so both admin tiers see it;
+  // the page explains the off state, so the item is always there (RN-Q4).
+  { to: "/admin/runners", label: RUNNERS_NAV_TITLE, icon: Laptop, group: "build" },
+  // People (0.8.6 ppl-p2), User types (0.8, UT-7a) and Credentials (CS-8) are securityOps server-side, so
+  // both admin tiers see them (a security admin has no Settings and no Secrets, so Credentials can't live
   // in either).
-  { to: "/admin/credentials", label: CREDENTIALS_NAV_TITLE, icon: KeyRound },
-  // User types (0.8, UT-7a) sits beside Permissions — the subject it and
-  // Governance name. securityOps server-side, so both admin tiers see it.
-  { to: "/admin/user-types", label: USER_TYPES_NAV_TITLE, icon: UsersRound },
-  { to: "/admin/secrets", label: "Secrets", icon: Lock, tier: "super" },
-  { to: "/admin/audit", label: "Audit", icon: ScrollText },
-  { to: "/admin/recordings", label: "Recordings", icon: Play, tier: "super" },
+  { to: "/admin/people", label: PEOPLE_PAGE.NAV, icon: Contact, group: "access" },
+  { to: "/admin/user-types", label: USER_TYPES_NAV_TITLE, icon: UsersRound, group: "access" },
+  { to: "/admin/permissions", label: "Permissions", icon: Users, group: "access" },
+  { to: "/admin/policies", label: "Policies", icon: UserCog, group: "limits" },
+  // GOVERNANCE_NAV_TITLE is one string for the nav and the screen's heading.
+  { to: "/admin/governance", label: GOVERNANCE_NAV_TITLE, icon: Scale, group: "limits" },
+  { to: "/admin/credentials", label: CREDENTIALS_NAV_TITLE, icon: KeyRound, group: "keys" },
+  { to: "/admin/secrets", label: "Secrets", icon: Lock, tier: "super", group: "keys" },
 ];
 const USER_NAV: NavItem[] = [
   { to: "/runs", label: "Runs", icon: Activity, badge: "attention" },
-  { to: "/templates", label: "Templates", icon: LayoutTemplate },
   { to: "/approvals", label: "Approvals", icon: ShieldCheck, badge: "approvals" },
   { to: "/workspaces", label: "Workspaces", icon: FolderOpen },
+  { to: "/templates", label: "Templates", icon: LayoutTemplate },
 ];
 // Under the divider (#217's slot): Setup and Settings in the Admin view, where
 // a security admin has neither; Getting started and Your account in the User
@@ -322,7 +325,8 @@ function SidebarNav({
       )}
       {view === "user" && <UserViewEyebrow currentUserType={meta.userType} userTypes={meta.userViewTypes} />}
       <nav className="space-y-0.5">
-        {items.map((item) => {
+        {items.map((item, i) => {
+          const heading = view === "admin" && item.group && item.group !== items[i - 1]?.group ? item.group : null;
           const count =
             item.badge === "approvals"
               ? pendingApprovals
@@ -330,29 +334,38 @@ function SidebarNav({
                 ? attentionCount
                 : 0;
           return (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              onClick={guardedClick(item.to, onNavigate)}
-              className={({ isActive }) => navLinkClass(isActive)}
-            >
-              {({ isActive }) => (
-                <>
-                  {isActive && (
-                    <span className="absolute -left-3 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-r bg-sidebar-primary" />
-                  )}
-                  <item.icon
-                    className={cn("size-4", isActive && "text-foreground")}
-                  />
-                  <span className="flex-1 text-left">{item.label}</span>
-                  {count > 0 && (
-                    <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-warning-subtle px-1.5 text-meta font-semibold text-warning">
-                      {count}
-                    </span>
-                  )}
-                </>
+            <React.Fragment key={item.to}>
+              {heading && (
+                <div
+                  data-testid={`nav-group-${heading}`}
+                  className={cn("px-2.5 pb-1 text-xs font-medium text-muted-foreground", i > 0 && "pt-3")}
+                >
+                  {ADMIN_NAV_GROUPS[heading]}
+                </div>
               )}
-            </NavLink>
+              <NavLink
+                to={item.to}
+                onClick={guardedClick(item.to, onNavigate)}
+                className={({ isActive }) => navLinkClass(isActive)}
+              >
+                {({ isActive }) => (
+                  <>
+                    {isActive && (
+                      <span className="absolute -left-3 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-r bg-sidebar-primary" />
+                    )}
+                    <item.icon
+                      className={cn("size-4", isActive && "text-foreground")}
+                    />
+                    <span className="flex-1 text-left">{item.label}</span>
+                    {count > 0 && (
+                      <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-warning-subtle px-1.5 text-meta font-semibold text-warning">
+                        {count}
+                      </span>
+                    )}
+                  </>
+                )}
+              </NavLink>
+            </React.Fragment>
           );
         })}
         {/* #217 — last, under a divider: Settings (Admin view) or Your
@@ -682,7 +695,7 @@ export function AppShell({
             </div>
             <div className="flex min-h-0 flex-1">
               {!focus && (
-                <aside className="hidden w-[228px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar px-3 py-4 md:flex">
+                <aside className="hidden w-[228px] shrink-0 flex-col overflow-y-auto border-r border-sidebar-border bg-sidebar px-3 py-4 md:flex">
                   <SidebarNav
                     pendingApprovals={pendingApprovals}
                     attentionCount={attentionCount}

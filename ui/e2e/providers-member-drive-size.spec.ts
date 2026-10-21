@@ -20,7 +20,7 @@ async function openStorageTab(page: Page): Promise<void> {
   await expect(card).toBeVisible();
   await card.getByRole("link").click();
   await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toBeVisible();
-  await page.getByRole("button", { name: PROVIDERS.STORAGE_TAB }).click();
+  await page.getByRole("tab", { name: PROVIDERS.STORAGE_TAB }).click();
   await expect(page.getByLabel(MEMBER_DRIVES.FIELD_MAX)).toBeVisible();
 }
 

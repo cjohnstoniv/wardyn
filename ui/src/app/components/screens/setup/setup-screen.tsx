@@ -49,6 +49,7 @@ import {
   proxyDetected,
   type CorpStepActions,
 } from "./corp-network-step";
+import { T } from "../../../lib/integrations";
 import { IntegrationsStep } from "./integrations-step";
 import { ProvidersCard } from "./providers-card";
 import { providers as providersApi } from "../../../lib/api/providers";
@@ -647,7 +648,7 @@ export function SetupScreen({
   if (status.unreachable) {
     return (
       <div className="mx-auto w-full max-w-[1200px] px-6 py-8">
-        <h1 className="text-lg font-semibold text-foreground">
+        <h1 className="text-page text-foreground">
           Getting started
         </h1>
         <div className="mt-4 max-w-xl rounded-lg border border-border bg-muted/40 p-4">
@@ -774,16 +775,26 @@ export function SetupScreen({
   // already names where a pass will go; from Egress redirection it hands off
   // to Integrations as usual. Back mirrors it below.
   const corpOnProxyTab = stepId === "corp_network" && corpTab === "proxy";
+  // The probe is launched from the Connectivity tile, which says what it found, so a
+  // blocked probe rung keeps only its headline in the footer, as Next's visible
+  // reason. An open gate's standing note and the redirect rungs' sentence (it names
+  // the rows to fix) stay, with the redirect rungs' action.
+  const corpRedirectRung =
+    corpGateResult?.head === T.GATE_HEAD_EGRESS_FAILING || corpGateResult?.head === T.GATE_HEAD_EGRESS_UNTESTED;
+  const corpFooterAction =
+    corpGateResult?.action && corpGateResult.action.kind !== "probe" && corpGateResult.action.kind !== "probe_custom"
+      ? corpGateResult.action
+      : undefined;
   const nextGate = corpGateResult
     ? {
         blocked: !corpGateResult.on,
         head: corpGateResult.head,
-        reason: corpGateResult.reason,
+        reason: corpGateResult.on || corpRedirectRung ? corpGateResult.reason : undefined,
         tone: corpGateResult.tone,
-        action: corpGateResult.action
+        action: corpFooterAction
           ? {
-              label: corpGateResult.action.label,
-              onClick: () => dispatchCorpAction(corpGateResult.action!.kind),
+              label: corpFooterAction.label,
+              onClick: () => dispatchCorpAction(corpFooterAction.kind),
             }
           : undefined,
         nextLabel: corpOnProxyTab ? "Next: Egress redirection" : undefined,
@@ -880,7 +891,6 @@ export function SetupScreen({
             gate={corpGate}
             onGateChange={onCorpGateChange}
             onRecheck={forceRecheck}
-            gateResult={corpGateResult ?? undefined}
             secretNames={secretNames}
             registerActions={(a) => {
               corpActionsRef.current = a;

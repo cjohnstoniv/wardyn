@@ -41,6 +41,7 @@ import { Mono } from "../wardyn/code-block";
 import { Chip } from "../wardyn/primitives";
 import { EmptyState, ErrorState, TableSkeleton } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
+import { PageContainer } from "../wardyn/page-container";
 import { DeleteConfirmDialog } from "../wardyn/delete-confirm-dialog";
 import { CAPABILITY, OPERATOR_ONLY_REASON } from "../wardyn/copy";
 import { OWN_SECRETS } from "../wardyn/copy/components";
@@ -123,7 +124,7 @@ export function SecretsScreen() {
   const filtered = shown.filter((n) => !query || n.toLowerCase().includes(query.toLowerCase()));
 
   return (
-    <div className="mx-auto max-w-[1400px] px-6 py-6">
+    <PageContainer width="list">
       <PageHeader
         title="Secrets"
         // #381 F3: "Exception" only reads true when the broker is OFF (the
@@ -292,7 +293,7 @@ export function SecretsScreen() {
           load();
         }}
       />
-    </div>
+    </PageContainer>
   );
 }
 

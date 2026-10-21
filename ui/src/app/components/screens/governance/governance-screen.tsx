@@ -51,10 +51,12 @@ import {
 } from "../../ui/alert-dialog";
 import { Button } from "../../ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../ui/table";
-import { Tabs, TabsList, TabsTrigger } from "../../ui/tabs";
+import { PageTabs } from "../../wardyn/page-tabs";
 import { Mono } from "../../wardyn/code-block";
 import { useSecurityOperator } from "../../wardyn/operator-context";
 import { PageHeader } from "../../wardyn/page-header";
+import { PageContainer } from "../../wardyn/page-container";
+import { HowItWorks } from "../../wardyn/how-it-works";
 import { SafetyMeter } from "../../wardyn/safety-meter";
 import { EmptyState, TableSkeleton, loadFailStatus, type ScreenStatus } from "../../wardyn/states";
 import { SECURITY_ONLY_REASON } from "../../wardyn/copy";
@@ -192,25 +194,28 @@ export function GovernanceScreen() {
   const [deleteHead, deleteBody] = question(toDelete ? GOV.DELETE_CONFIRM(toDelete.name) : "");
 
   return (
-    <div className="mx-auto max-w-[1120px] px-6 py-6">
+    <PageContainer width="list">
       <PageHeader title={GOV.TITLE} description={GOV.LEAD} />
+      <HowItWorks id="governance" title={GOV.HOW_TITLE} className="-mt-2 mb-4">
+        <p>{GOV.HOW_BODY}</p>
+      </HowItWorks>
 
       {status !== "forbidden" && status !== "error" && (
-        <Tabs
+        <PageTabs
+          className="mt-6"
           value={tab}
           onValueChange={(v) => setSearchParams(v === "profiles" ? {} : { tab: v }, { replace: true })}
-          className="mt-6"
-        >
-          {/* Scrolls inside itself at phone width; justify-start so the first tab is never clipped (#2896). */}
-          <TabsList className="max-w-full justify-start overflow-x-auto">
-            <TabsTrigger value="profiles">{GOV.PROFILES_TITLE}</TabsTrigger>
-            {securityOperator && <TabsTrigger value="runner-credentials">{DELIVERY.TAB}</TabsTrigger>}
-            {securityOperator && <TabsTrigger value="egress-baseline">{BASELINE.TAB}</TabsTrigger>}
-            <TabsTrigger value="changes">
-              {changes.length > 0 ? CHANGES.TAB_COUNT(changes.length) : CHANGES.TAB}
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
+          tabs={[
+            { value: "profiles", label: GOV.PROFILES_TITLE },
+            ...(securityOperator
+              ? [
+                  { value: "runner-credentials", label: DELIVERY.TAB },
+                  { value: "egress-baseline", label: BASELINE.TAB },
+                ]
+              : []),
+            { value: "changes", label: changes.length > 0 ? CHANGES.TAB_COUNT(changes.length) : CHANGES.TAB },
+          ]}
+        />
       )}
 
       {status !== "forbidden" && status !== "error" && deliveryVisited && securityOperator && (
@@ -478,6 +483,6 @@ export function GovernanceScreen() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </PageContainer>
   );
 }

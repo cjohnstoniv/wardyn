@@ -885,7 +885,6 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 
 | Key | Source | Frozen string |
 |---|---|---|
-| `EYEBROW` | mock | Saved starting points |
 | `TITLE` | mock | Templates |
 | `LEDE` | mock | Start a new run from a saved setup. Using a template opens New run at review, where your organization's current policy and availability are checked again. A template never stores a run's title. |
 | `NEW_FROM_SCRATCH` | mock | New run from scratch |

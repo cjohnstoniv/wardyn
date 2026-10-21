@@ -65,6 +65,17 @@ describe("pool form layout", () => {
     expect(back.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(back).toHaveClass("-ml-3");
   });
+
+  // #3063: the qualifier is said once per fieldset, not under every resource field.
+  it("says the qualifier once per fieldset, with the not-chosen sentence appended while no runners are chosen", async () => {
+    renderAt("/account/pools/new", "mine");
+    await screen.findByRole("heading", { level: 1 });
+    const once = "Optional. Leave empty to follow its runners, and it can only narrow them. Its runners aren't chosen yet.";
+    expect(screen.getByTestId("f-bg-qualifier")).toHaveTextContent(once);
+    expect(screen.getByTestId("f-it-qualifier")).toHaveTextContent(once);
+    expect(screen.getAllByText(/aren't chosen yet/)).toHaveLength(2);
+    expect(screen.getAllByText(/narrower than its runners, optional/)).toHaveLength(1);
+  });
 });
 
 describe("new user pool", () => {
@@ -172,7 +183,8 @@ describe("edit", () => {
     renderAt("/admin/runners/pools/p-ci/edit", "admin");
     expect(await screen.findByRole("heading", { name: "Edit CI jobs", level: 1 })).toBeInTheDocument();
     expect(screen.getByText("Its runners allow 4 runs at once in total. A run launched past this waits for a free slot.")).toBeInTheDocument();
-    expect(screen.getAllByText("Its runners allow up to 4 CPUs per run. Leave empty to use that.")).toHaveLength(1);
+    expect(screen.getAllByText("Its runners allow up to 4 CPUs per run.")).toHaveLength(1);
+    expect(screen.getByTestId("f-bg-qualifier")).toHaveTextContent(/^Optional\. Leave empty to follow its runners, and it can only narrow them\.$/);
     expect(screen.getByText("Organization pools take remote-hosted runners and the organization's own runners.", { exact: false })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(updateMock).toHaveBeenCalledWith("p-ci", expect.objectContaining({ revision: 9, name: "CI jobs" })));

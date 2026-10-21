@@ -312,12 +312,12 @@ test.describe("drives — an empty registry says what it is, not what went wrong
     // element carrying all of it.
     await expect(page.getByText(DRIVES.LEAD)).toBeVisible();
     await expect(page.getByText(DRIVES.DRIVES_TITLE, { exact: true })).toBeVisible();
-    await expect(page.getByText(DRIVES.DRIVES_LEAD)).toBeVisible();
+    await expect(page.getByText(/A drive is one place storage comes from/)).toHaveCount(0);
 
     // Empty, not unconfigured: there is deliberately no "drives not configured"
     // state (§7.4), so a fresh install reads as a feature nobody has filled in.
     await expect(page.getByText(DRIVES.EMPTY_TITLE)).toBeVisible();
-    await expect(page.getByText(DRIVES.EMPTY_BODY)).toBeVisible();
+    await expect(page.getByText(/Runs keep nothing between them/)).toHaveCount(0);
     await expect(page.getByText(DRIVES.FETCH_FAILED_TITLE)).toHaveCount(0);
 
     // AND NOTHING ELSE. Mock state 1 is the header and this empty state: the

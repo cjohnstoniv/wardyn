@@ -28,6 +28,16 @@ export const CREDENTIALS_NAV_TITLE = "Credentials";
 // label and the page heading stay one string.
 export const RUNNERS_NAV_TITLE = "Runners";
 
+// The Admin view's sidebar group headings (#3056), eager for the same entry-chunk reason.
+export const ADMIN_NAV_GROUPS = {
+  activity: "Activity",
+  build: "Build",
+  access: "Access",
+  limits: "Limits",
+  keys: "Keys",
+} as const;
+export type AdminNavGroup = keyof typeof ADMIN_NAV_GROUPS;
+
 // The Runs board is in the entry chunk and names a local run's computer in each row's meta line (0.9,
 // M-RN-3 RS8), so the three small things that row needs live here, for the same entry-chunk reason, and the
 // lazy wardyn/copy/runners.ts reads them from here (RUN_PLACEMENT.CHIP, RUNNER.OFFLINE, runnerLabel).

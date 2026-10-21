@@ -200,6 +200,24 @@ describe("ProvidersScreen", () => {
 
   // #923 decision 1: Images is the fourth tab, after Agents; its one teal is
   // its own Add image, so Save providers is withheld while it is open.
+  // #3062: page sections are underline Tabs, so the arrow keys rove selection (Radix).
+  it("the sections are tabs: Git is selected, and ArrowRight moves selection and focus to Storage", async () => {
+    getWorkspaceProvidersMock.mockResolvedValue({
+      providers: { git: [{ id: "github", kind: "github", base_urls: ["https://github.com/acme"] }] },
+      etag: '"e2d"',
+    });
+    renderScreen();
+    await screen.findByTestId("provider-row-github");
+    const git = screen.getByRole("tab", { name: PROVIDERS.GIT_TITLE });
+    expect(screen.getByRole("tablist")).toBeInTheDocument();
+    expect(git).toHaveAttribute("aria-selected", "true");
+    git.focus();
+    await userEvent.keyboard("{ArrowRight}");
+    const storage = screen.getByRole("tab", { name: PROVIDERS.STORAGE_TAB });
+    await waitFor(() => expect(storage).toHaveAttribute("aria-selected", "true"));
+    expect(storage).toHaveFocus();
+  });
+
   it("the Images tab comes after Agents and carries its own one teal, Add image", async () => {
     getWorkspaceProvidersMock.mockResolvedValue({
       providers: { git: [{ id: "github", kind: "github", base_urls: ["https://github.com/acme"] }] },
@@ -208,7 +226,7 @@ describe("ProvidersScreen", () => {
     renderScreen();
     await screen.findByTestId("provider-row-github");
     const tabs = [PROVIDERS.GIT_TITLE, PROVIDERS.STORAGE_TAB, AGENTS.AGENTS_TITLE, IMAGES.TAB].map((name) =>
-      screen.getByRole("button", { name }),
+      screen.getByRole("tab", { name }),
     );
     for (let i = 1; i < tabs.length; i++) {
       expect(tabs[i - 1].compareDocumentPosition(tabs[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -357,7 +375,7 @@ describe("ProvidersScreen", () => {
     await screen.findByText(PROVIDERS.LEGACY_OPEN_TITLE);
     expect(screen.queryByTestId("tab-dirty-chip-agents")).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: AGENTS.AGENTS_TITLE }));
+    await userEvent.click(screen.getByRole("tab", { name: AGENTS.AGENTS_TITLE }));
     const row = await screen.findByTestId("agent-row-claude-code");
     await userEvent.click(within(row).getByRole("switch"));
 
@@ -377,12 +395,12 @@ describe("ProvidersScreen", () => {
     );
     renderScreen();
     await screen.findByText(PROVIDERS.LEGACY_OPEN_TITLE);
-    await userEvent.click(screen.getByRole("button", { name: AGENTS.AGENTS_TITLE }));
+    await userEvent.click(screen.getByRole("tab", { name: AGENTS.AGENTS_TITLE }));
     const row = await screen.findByTestId("agent-row-claude-code");
     await userEvent.click(within(row).getByRole("switch"));
     expect(await screen.findByTestId("tab-dirty-chip-agents")).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.GIT_TITLE }));
+    await userEvent.click(screen.getByRole("tab", { name: PROVIDERS.GIT_TITLE }));
     const dialog = await screen.findByRole("alertdialog");
     expect(within(dialog).getByText(UNSAVED.TITLE)).toBeInTheDocument();
     // Still on Agents — the switch never happened.
@@ -392,7 +410,7 @@ describe("ProvidersScreen", () => {
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     expect(screen.getByTestId("agent-row-claude-code")).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.GIT_TITLE }));
+    await userEvent.click(screen.getByRole("tab", { name: PROVIDERS.GIT_TITLE }));
     await userEvent.click(await screen.findByRole("button", { name: UNSAVED.DISCARD }));
     expect(screen.queryByTestId("agent-row-claude-code")).not.toBeInTheDocument();
     expect(screen.getByText(PROVIDERS.LEGACY_OPEN_TITLE)).toBeInTheDocument();
@@ -528,7 +546,7 @@ describe("ProvidersScreen", () => {
     // UNKNOWN, which the tab renders as the same dead end a failed GET does.
     renderScreen();
     await screen.findByText(PROVIDERS.LEGACY_OPEN_TITLE);
-    await userEvent.click(screen.getByRole("button", { name: AGENTS.AGENTS_TITLE }));
+    await userEvent.click(screen.getByRole("tab", { name: AGENTS.AGENTS_TITLE }));
     expect(await screen.findByText(PROVIDERS.FETCH_FAILED_TITLE)).toBeInTheDocument();
 
     const statusReads = getSetupStatusMock.mock.calls.length;
@@ -566,7 +584,7 @@ describe("ProvidersScreen", () => {
     expect(await screen.findByTestId("provider-row-github")).toBeInTheDocument();
 
     // Switch to Agents (its own GET/PUT resource) and Save there.
-    await userEvent.click(screen.getByRole("button", { name: AGENTS.AGENTS_TITLE }));
+    await userEvent.click(screen.getByRole("tab", { name: AGENTS.AGENTS_TITLE }));
     await screen.findByTestId("agent-row-claude-code");
     await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
     await waitFor(() => expect(putAgentProvidersMock).toHaveBeenCalled());
@@ -576,7 +594,7 @@ describe("ProvidersScreen", () => {
 
     // Back on Git: the unsaved row must still be there, never reset to the
     // server's last-loaded (empty) snapshot.
-    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.GIT_TITLE }));
+    await userEvent.click(screen.getByRole("tab", { name: PROVIDERS.GIT_TITLE }));
     expect(await screen.findByTestId("provider-row-github")).toBeInTheDocument();
     expect(screen.queryByText(PROVIDERS.LEGACY_OPEN_TITLE)).not.toBeInTheDocument();
   });
@@ -611,7 +629,7 @@ describe("ProvidersScreen", () => {
     renderScreen();
     await screen.findByText(PROVIDERS.LEGACY_OPEN_TITLE);
 
-    await userEvent.click(screen.getByRole("button", { name: AGENTS.AGENTS_TITLE }));
+    await userEvent.click(screen.getByRole("tab", { name: AGENTS.AGENTS_TITLE }));
     await screen.findByTestId("agent-row-claude-code");
     await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
     await waitFor(() => expect(putAgentProvidersMock).toHaveBeenCalled());

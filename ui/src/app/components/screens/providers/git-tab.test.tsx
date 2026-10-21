@@ -96,6 +96,15 @@ describe("GitTab", () => {
     expect(screen.getByText(PROVIDERS.LEGACY_OPEN_BODY)).toBeInTheDocument();
   });
 
+  it("says each thing once per state: no lede while empty, the lede and no empty state with rows", () => {
+    const { unmount } = render(<Harness initial={[]} />);
+    expect(screen.queryByText(PROVIDERS.GIT_LEAD)).not.toBeInTheDocument();
+    unmount();
+    render(<Harness initial={[{ id: "github", kind: "github", base_urls: ["https://github.com/acme"] }]} />);
+    expect(screen.getByText(PROVIDERS.GIT_LEAD)).toBeInTheDocument();
+    expect(screen.queryByText(PROVIDERS.LEGACY_OPEN_TITLE)).not.toBeInTheDocument();
+  });
+
   it("adding the first row clears the banner and renders both kind rows", async () => {
     render(<Harness initial={[]} />);
     await userEvent.click(screen.getByRole("button", { name: PROVIDERS.ADD_ROW_CTA }));

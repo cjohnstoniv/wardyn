@@ -8,7 +8,6 @@
 // entry chunk. new-run-copy.test.ts keeps this file and the doc equal in both directions.
 
 export const NR_TEMPLATES = {
-  EYEBROW: "Saved starting points",
   TITLE: "Templates",
   LEDE:
     "Start a new run from a saved setup. Using a template opens New run at review, where your organization's current policy and availability are checked again. A template never stores a run's title.",

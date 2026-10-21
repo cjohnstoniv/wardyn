@@ -241,8 +241,16 @@
      12px helper-text rung immediately above it. */
   --text-meta: 0.6875rem;
   --text-body: 0.8125rem;
-  /* StepHeader h1 only: the one fluid rung above the body scale (CONSOLE-RULES §3). */
+  /* The two title rungs above the body scale (CONSOLE-RULES §3): the page title (PageHeader and every page
+     with a sidebar item) and the fluid flow title (New run start and steps, Launched, Onboarding). */
+  --text-page: 1.75rem;
+  --text-page--line-height: 1.25;
+  --text-page--letter-spacing: -0.01em;
+  --text-page--font-weight: 600;
   --text-display: clamp(1.75rem, 1.25rem + 1.5vw, 2rem);
+  --text-display--line-height: 1.08;
+  --text-display--letter-spacing: -0.04em;
+  --text-display--font-weight: 400;
 
   --color-background: var(--background);
   --color-foreground: var(--foreground);

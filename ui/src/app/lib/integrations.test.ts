@@ -111,6 +111,9 @@ describe("integrations — T canon sentinel pins", () => {
     expect(T.GATE_UNTESTED).toBe(
       "One probe, and this step is done — everything after it assumes the network works. A minute now instead of a fake credential failure two steps later.",
     );
+    // The tile's one-line explanation is the first sentence of the gate's.
+    expect(T.GATE_UNTESTED.startsWith(T.TILE_UNTESTED)).toBe(true);
+    expect(T.TILE_TITLE).toBe("Connectivity");
     // The forced egress-tab visit — the mechanic that made the least-common
     // feature feel mandatory — no longer exists. Pinned deleted.
     expect("GATE_EGRESS_UNSEEN" in T).toBe(false);

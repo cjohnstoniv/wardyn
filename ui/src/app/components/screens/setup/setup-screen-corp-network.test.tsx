@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { SetupStatus } from "../../../lib/types";
@@ -178,7 +178,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
   // Corporate network with it, now that the step is the only place a proxy is
   // configured (see integrations-screen.tsx's "Open Corporate network").
   describe("Corporate network connectivity gate — wired through the real orchestrator", () => {
-    it("the footer's button IS the probe while unproven; one reached probe makes the step done — no tab detour", async () => {
+    it("the tile's button is the probe while unproven; one reached probe makes the step done — no tab detour", async () => {
       renderScreen(<SetupScreen onDone={() => {}} />);
       await screen.findByText("Fence");
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> people
@@ -186,24 +186,24 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
       await screen.findByRole("heading", { name: /^network$/i });
 
-      // Blocked gate with an action: there IS no Next button — the fix-it
-      // action stands in its place, under the state's own headline.
-      expect(screen.queryByRole("button", { name: /^next: review$/i })).not.toBeInTheDocument();
+      // Blocked gate: Next stays, disabled, with the state's own headline under
+      // it, and the one probe button lives inside the Connectivity tile.
+      expect(screen.getByRole("button", { name: /^next: egress redirection$/i })).toBeDisabled();
       expect(screen.getByText("Connectivity isn't proven yet")).toBeInTheDocument();
-      // …and exactly ONE launch point on the whole screen: the footer's (the
-      // panel's own button is suppressed while the gate row carries it).
+      const tile = screen.getByTestId("connectivity-tile");
       expect(screen.getAllByRole("button", { name: /^test connectivity$/i })).toHaveLength(1);
+      expect(within(tile).getByRole("button", { name: /^test connectivity$/i })).toBeInTheDocument();
 
       testProxyMock.mockResolvedValueOnce({ state: "reached", detail: "reached in 42ms", via: "proxy" });
-      await user.click(screen.getByRole("button", { name: /^test connectivity$/i }));
+      await user.click(within(tile).getByRole("button", { name: /^test connectivity$/i }));
       await screen.findByText("Reached · via proxy");
 
       // Zero redirects + reached = the gate is satisfied (nothing here must
       // be configured), and what the pass unlocks is the step's OTHER tab —
       // the forward walk passes through Egress redirection, not over it.
-      const toEgress = await screen.findByRole("button", { name: /^next: egress redirection$/i });
-      expect(toEgress).toBeEnabled();
-      // The panel's button is back — re-testing stays reachable.
+      const toEgress = screen.getByRole("button", { name: /^next: egress redirection$/i });
+      await waitFor(() => expect(toEgress).toBeEnabled());
+      // The tile's button now reads — re-testing stays reachable.
       expect(screen.getByRole("button", { name: /^test again$/i })).toBeInTheDocument();
 
       // One more click, not a demand: the quiet empty line, then the exit.
@@ -254,7 +254,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
 
       // Reached, but the configured redirect is untested — the gate holds
       // with its own head/sentence, and the footer's action is the fix.
-      expect(screen.queryByRole("button", { name: /^next: review$/i })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /^next: egress redirection$/i })).toBeDisabled();
       expect(screen.getByText("Redirects aren't proven yet")).toBeInTheDocument();
       // #497: the same reason also renders a second time, as the rail's own
       // visible refusal text on every step this gate still blocks (Workspaces,
