@@ -105,6 +105,22 @@ test.describe("Run cockpit terminal focus", () => {
   // whole terminal widget at once; a raw click on its bottom edge needs it fully in view.
   test.use({ viewport: { width: 1280, height: 800 } });
 
+  // #3372: the canvas floored its rows at 520px, so a pane shorter than that (but tall enough for twelve rows) made the
+  // terminal tile overflow it and scroll. The window is sized from the measured chrome so the pane lands at ~490px,
+  // under the old floor; the range is asserted, so this cannot pass without exercising the floor.
+  test("the terminal tile fits a pane shorter than the old 520px floor with no scroll", async ({ page }) => {
+    const scrollBox = page.getByTestId("run-canvas-scroll");
+    const paneHeight = () => scrollBox.evaluate((el) => el.clientHeight);
+    await page.setViewportSize({ width: 1280, height: 720 });
+    const pane = await openTerminal(page);
+    await page.setViewportSize({ width: 1280, height: 720 + 490 - (await paneHeight()) });
+    await expect.poll(paneHeight).toBeGreaterThanOrEqual(480);
+    expect(await paneHeight(), "the pane must be under the old 520px floor").toBeLessThan(500);
+    await layoutSettled(pane);
+    const [tile, box] = await Promise.all([pane.boundingBox(), scrollBox.boundingBox()]);
+    expect(tile!.y + tile!.height).toBeLessThanOrEqual(box!.y + box!.height);
+  });
+
   test("a click on the wrapper padding focuses the terminal", async ({ page }) => {
     const pane = await openTerminal(page);
     const box = await wrapperBox(pane);
