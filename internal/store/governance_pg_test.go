@@ -176,12 +176,10 @@ func TestPG_GovernanceUnit_DeleteRestrictedWhileAssigned(t *testing.T) {
 	}
 }
 
-// TestPG_GovernanceMembership_NaturalKeyUpsert: re-assigning a subject must
-// REPOINT its one row, not accumulate a second. Two rows for one subject would
-// make "which profile does Bob get" depend on the priority/name tie-breaks
-// instead of the admin's last write — resolvable, but not explainable. The
-// returned id must be the EXISTING row's, so the console's DELETE target names
-// a real row.
+// TestPG_GovernanceMembership_NaturalKeyUpsert: the key is (unit_id, subject_type, subject)
+// (migration 0208). A subject joins a second unit as a second row; re-posting the same unit and
+// subject UPDATES its one row (priority and home) and returns the EXISTING row's id, so the
+// console's DELETE target names a real row.
 func TestPG_GovernanceMembership_NaturalKeyUpsert(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()
@@ -198,6 +196,9 @@ func TestPG_GovernanceMembership_NaturalKeyUpsert(t *testing.T) {
 		Priority:    1,
 		CreatedBy:   "admin@example.com",
 	})
+	if a1.Legacy {
+		t.Errorf("a membership written after the upgrade is legacy")
+	}
 	a2, err := st.UpsertGovernanceMembership(ctx, types.GovernanceMembership{
 		SubjectType: types.CapabilitySubjectUser,
 		Subject:     subject,
@@ -205,13 +206,23 @@ func TestPG_GovernanceMembership_NaturalKeyUpsert(t *testing.T) {
 		Priority:    9,
 	})
 	if err != nil {
-		t.Fatalf("re-assign: %v", err)
+		t.Fatalf("join a second unit: %v", err)
 	}
-	if a2.ID != a1.ID {
-		t.Errorf("re-assign id = %s, want the existing row's %s", a2.ID, a1.ID)
+	if a2.ID == a1.ID || a2.UnitID != second.ID {
+		t.Errorf("join a second unit = %+v, want a new row on %s", a2, second.ID)
 	}
-	if a2.UnitID != second.ID || a2.Priority != 9 {
-		t.Errorf("re-assign = {profile:%s priority:%d}, want {%s 9}", a2.UnitID, a2.Priority, second.ID)
+	a3, err := st.UpsertGovernanceMembership(ctx, types.GovernanceMembership{
+		SubjectType: types.CapabilitySubjectUser,
+		Subject:     subject,
+		UnitID:      first.ID,
+		Priority:    7,
+		Home:        true,
+	})
+	if err != nil {
+		t.Fatalf("re-post the first unit: %v", err)
+	}
+	if a3.ID != a1.ID || a3.Priority != 7 || !a3.Home {
+		t.Errorf("re-post = {id:%s priority:%d home:%v}, want {%s 7 true}", a3.ID, a3.Priority, a3.Home, a1.ID)
 	}
 
 	all, err := st.ListGovernanceMemberships(ctx)
@@ -224,8 +235,8 @@ func TestPG_GovernanceMembership_NaturalKeyUpsert(t *testing.T) {
 			got++
 		}
 	}
-	if got != 1 {
-		t.Fatalf("list has %d rows for subject %q, want exactly 1", got, subject)
+	if got != 2 {
+		t.Fatalf("list has %d rows for subject %q, want one per unit (2)", got, subject)
 	}
 
 	// An unknown unit_id is the FK refusing the write. ErrNotFound so the

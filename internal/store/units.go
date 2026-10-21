@@ -1,15 +1,16 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Governance profiles and their subject assignments (migration 0052).
+// Governance units and their memberships (migrations 0052, 0207, 0208).
 //
 // This file is DUMB on purpose: it round-trips rows and owns exactly one
-// piece of logic, ResolveGovernanceUnit's ORDER BY, so precedence is a
-// property of the single indexed read, not a caller that could forget it.
+// piece of logic, ListMembershipsFor's ORDER BY, so precedence is a
+// property of the single read, not a caller that could forget it.
 // Every write is validated at the API boundary (internal/api/governance.go).
 package store
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -25,10 +26,18 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-const governanceUnitCols = `id, name, ceiling, limits, created_at, updated_at, created_by, contact, parent_id, overlay, overlay_limits`
+const governanceUnitCols = `id, name, ceiling, limits, created_at, updated_at, created_by, contact, parent_id, overlay, overlay_limits, kind, mode, depth`
 
 // governanceUnitColsP is governanceUnitCols qualified for a join or a recursive term.
-const governanceUnitColsP = `p.id, p.name, p.ceiling, p.limits, p.created_at, p.updated_at, p.created_by, p.contact, p.parent_id, p.overlay, p.overlay_limits`
+const governanceUnitColsP = `p.id, p.name, p.ceiling, p.limits, p.created_at, p.updated_at, p.created_by, p.contact, p.parent_id, p.overlay, p.overlay_limits, p.kind, p.mode, p.depth`
+
+// DefaultUnitID is the one Default unit's fixed id (migration 0208). Its walls are the deployment
+// default, read at resolve; the row stores none.
+var DefaultUnitID = uuid.MustParse("00000000-0000-0000-0000-000000000001")
+
+// MaxUnitDepthCap is the deepest a unit path can be stored (the depth CHECK of migration 0208), and
+// the bound on the chain read: the configured limit (site_config.governance_max_depth) is never above it.
+const MaxUnitDepthCap = 64
 
 // GovernanceUnitBuild produces the row a graph write stores, given every profile and every assignment
 // as the write transaction sees them under the graph lock. A refusal it returns aborts the write unchanged.
@@ -42,7 +51,7 @@ func (e *ErrProfileHasChildren) Error() string {
 	return "store: governance profile is the base of: " + strings.Join(e.Names, ", ")
 }
 
-const governanceMembershipCols = `id, subject_type, subject, unit_id, priority, created_at, created_by`
+const governanceMembershipCols = `id, subject_type, subject, unit_id, priority, created_at, created_by, home, legacy`
 
 // UpsertGovernanceUnit writes one profile exactly as given. It is WriteGovernanceUnit with
 // nothing to decide, so it takes the same graph lock and a write can never skip it.
@@ -60,7 +69,7 @@ func (s PG) UpsertGovernanceUnit(ctx context.Context, p types.GovernanceUnit) (t
 // The whole write is one transaction under a graph-wide advisory lock: build sees every profile as
 // that transaction reads them, decides the row (merging what a PUT left absent, refusing a cycle,
 // a depth overflow or an overlay its base does not permit) and the row is stored before the lock
-// is released, so two concurrent writes cannot together make a cycle or a depth-4 chain.
+// is released, so two concurrent writes cannot together make a cycle or a path past the maximum depth.
 //
 // contact follows GovernanceUnit.ContactSet: written (or cleared, when empty) only when it is
 // true, otherwise the stored value stays. A composed row (Overlay set) binds '{}' for ceiling and
@@ -108,8 +117,29 @@ func WriteGovernanceUnitQ(ctx context.Context, q Querier, id uuid.UUID, build Go
 		return types.GovernanceUnit{}, err
 	}
 	p.ID = id
-	return upsertGovernanceUnitTx(ctx, q, p)
+	out, err := upsertGovernanceUnitTx(ctx, q, p)
+	if err != nil {
+		return types.GovernanceUnit{}, err
+	}
+	// A re-parent moves every descendant too, so the whole tree's depths are recomputed here,
+	// under the graph lock, by the same walk migration 0208 runs.
+	if _, err := q.Exec(ctx, refreshUnitDepths); err != nil {
+		return types.GovernanceUnit{}, fmt.Errorf("store: refresh governance unit depths: %w", err)
+	}
+	if err := q.QueryRow(ctx, `SELECT depth FROM governance_units WHERE id = $1`, out.ID).Scan(&out.Depth); err != nil {
+		return types.GovernanceUnit{}, fmt.Errorf("store: read governance unit depth: %w", err)
+	}
+	return out, nil
 }
+
+// refreshUnitDepths sets each unit's depth from the top: Default and every parent-less unit are 1.
+const refreshUnitDepths = `
+	WITH RECURSIVE tree AS (
+		SELECT id, 1 AS d FROM governance_units WHERE parent_id IS NULL
+		UNION ALL
+		SELECT u.id, t.d + 1 FROM governance_units u JOIN tree t ON u.parent_id = t.id WHERE t.d < 64
+	)
+	UPDATE governance_units u SET depth = tree.d FROM tree WHERE u.id = tree.id AND u.depth <> tree.d`
 
 // LockGovernanceGraph takes the transaction-scoped lock every write to the governance profile graph
 // holds, so one write at a time sees and changes it. Every assignment write takes it too, so a profile
@@ -152,8 +182,8 @@ func upsertGovernanceUnitTx(ctx context.Context, tx Querier, p types.GovernanceU
 			return types.GovernanceUnit{}, err
 		}
 		const composed = `
-		INSERT INTO governance_units (id, name, ceiling, limits, created_by, contact, parent_id, overlay, overlay_limits)
-		VALUES ($1,$2,'{}'::jsonb,'{}'::jsonb,$3,$4,$5,$6,$7)
+		INSERT INTO governance_units (id, name, ceiling, limits, created_by, contact, parent_id, overlay, overlay_limits, mode)
+		VALUES ($1,$2,'{}'::jsonb,'{}'::jsonb,$3,$4,$5,$6,$7,$9)
 		ON CONFLICT (id) DO UPDATE
 			SET name = EXCLUDED.name,
 			    ceiling = '{}'::jsonb,
@@ -162,9 +192,11 @@ func upsertGovernanceUnitTx(ctx context.Context, tx Querier, p types.GovernanceU
 			    parent_id = EXCLUDED.parent_id,
 			    overlay = EXCLUDED.overlay,
 			    overlay_limits = EXCLUDED.overlay_limits,
+			    mode = EXCLUDED.mode,
 			    updated_at = now()
 		RETURNING ` + governanceUnitCols
-		q, args = composed, []any{p.ID, p.Name, p.CreatedBy, contactJSON, p.ParentID, overlayJSON, overlayLimitsJSON, p.ContactSet}
+		q, args = composed, []any{p.ID, p.Name, p.CreatedBy, contactJSON, p.ParentID, overlayJSON, overlayLimitsJSON, p.ContactSet,
+			cmp.Or(p.Mode, types.UnitModeOwnWalls)}
 	} else {
 		ceilingJSON, err := json.Marshal(p.Ceiling)
 		if err != nil {
@@ -184,7 +216,7 @@ func upsertGovernanceUnitTx(ctx context.Context, tx Querier, p types.GovernanceU
 			    ceiling = (governance_units.ceiling - $6::text[]) || EXCLUDED.ceiling,
 			    limits = (governance_units.limits - $7::text[]) || EXCLUDED.limits,
 			    contact = CASE WHEN $9::boolean THEN EXCLUDED.contact ELSE governance_units.contact END,
-			    parent_id = NULL, overlay = NULL, overlay_limits = NULL,
+			    parent_id = NULL, overlay = NULL, overlay_limits = NULL, mode = 'own_walls',
 			    updated_at = now()
 		RETURNING ` + governanceUnitCols
 		q, args = standalone, []any{p.ID, p.Name, ceilingJSON, limitsJSON, p.CreatedBy,
@@ -228,20 +260,20 @@ func (s PG) GetGovernanceUnit(ctx context.Context, id uuid.UUID) (types.Governan
 	return scanGovernanceUnit(s.Pool.QueryRow(ctx, q, id))
 }
 
-// GetGovernanceUnitChain reads one profile and its ancestors in ONE statement, leaf first,
-// bounded at depth 3 (the profile, its base, that base's base). ErrNotFound when the leaf is gone.
+// GetGovernanceUnitChain reads one unit and its ancestors in ONE statement, leaf first,
+// bounded at MaxUnitDepthCap rows. ErrNotFound when the leaf is gone.
 // It returns whatever the bound reached, cycle or overflow included: the caller refuses a chain
 // whose last row still names a base or whose ids repeat, and never composes a partial one.
 func (s PG) GetGovernanceUnitChain(ctx context.Context, id uuid.UUID) ([]types.GovernanceUnit, error) {
 	const q = `
 		WITH RECURSIVE chain AS (
-			SELECT ` + governanceUnitColsP + `, 1 AS depth FROM governance_units p WHERE p.id = $1
+			SELECT ` + governanceUnitColsP + `, 1 AS n FROM governance_units p WHERE p.id = $1
 			UNION ALL
-			SELECT ` + governanceUnitColsP + `, c.depth + 1
+			SELECT ` + governanceUnitColsP + `, c.n + 1
 			FROM governance_units p JOIN chain c ON p.id = c.parent_id
-			WHERE c.depth < 3
+			WHERE c.n < 64
 		)
-		SELECT ` + governanceUnitCols + ` FROM chain ORDER BY depth`
+		SELECT ` + governanceUnitCols + ` FROM chain ORDER BY n`
 	out, err := collect(ctx, s.Pool, "read", "governance profile chain", q, []any{id}, scanGovernanceUnit)
 	if err != nil {
 		return nil, err
@@ -330,11 +362,10 @@ func (s PG) ListGovernanceUnits(ctx context.Context) ([]types.GovernanceUnit, er
 	return collect(ctx, s.Pool, "list", "governance profiles", q, nil, scanGovernanceUnit)
 }
 
-// UpsertGovernanceMembership binds one subject to one profile, keyed on the
-// natural UNIQUE (subject_type, subject): re-assigning a subject REPOINTS its
-// single row rather than leaving a second one behind (two rows for one
-// subject would make "which profile does Bob get" a tie-break instead of the
-// admin's last write).
+// UpsertGovernanceMembership adds one subject's membership of one unit, keyed on
+// the natural UNIQUE (unit_id, subject_type, subject) of migration 0208: a subject
+// may be a member of several units, one row each, and re-posting the same unit and
+// subject updates that row's priority and home. A legacy row stays legacy.
 //
 // The returned row carries the EXISTING id on conflict, not a.ID, so the
 // caller gets the id the DELETE route needs.
@@ -380,13 +411,13 @@ func UpsertGovernanceMembershipQ(ctx context.Context, q Querier, a types.Governa
 		a.ID = uuid.New()
 	}
 	const stmt = `
-		INSERT INTO governance_memberships (id, subject_type, subject, unit_id, priority, created_by)
-		VALUES ($1,$2,$3,$4,$5,$6)
-		ON CONFLICT (subject_type, subject) DO UPDATE
-			SET unit_id = EXCLUDED.unit_id, priority = EXCLUDED.priority
+		INSERT INTO governance_memberships (id, subject_type, subject, unit_id, priority, created_by, home)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)
+		ON CONFLICT (unit_id, subject_type, subject) DO UPDATE
+			SET priority = EXCLUDED.priority, home = EXCLUDED.home
 		RETURNING ` + governanceMembershipCols
 	out, err := scanGovernanceMembership(q.QueryRow(ctx, stmt,
-		a.ID, a.SubjectType, a.Subject, a.UnitID, a.Priority, a.CreatedBy))
+		a.ID, a.SubjectType, a.Subject, a.UnitID, a.Priority, a.CreatedBy, a.Home))
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
@@ -436,10 +467,11 @@ func GetGovernanceMembershipQ(ctx context.Context, q Querier, id uuid.UUID, forU
 	return scanGovernanceMembership(q.QueryRow(ctx, stmt, id))
 }
 
-// GetGovernanceMembershipByKeyQ reads the assignment at one natural key on q, ErrNotFound when none.
-func GetGovernanceMembershipByKeyQ(ctx context.Context, q Querier, subjectType, subject string, forUpdate bool) (types.GovernanceMembership, error) {
-	stmt := `SELECT ` + governanceMembershipCols + ` FROM governance_memberships WHERE subject_type = $1 AND subject = $2` + lockSuffix(forUpdate)
-	return scanGovernanceMembership(q.QueryRow(ctx, stmt, subjectType, subject))
+// GetGovernanceMembershipByKeyQ reads the membership at one natural key (unit, subject type,
+// subject) on q, ErrNotFound when none.
+func GetGovernanceMembershipByKeyQ(ctx context.Context, q Querier, unitID uuid.UUID, subjectType, subject string, forUpdate bool) (types.GovernanceMembership, error) {
+	stmt := `SELECT ` + governanceMembershipCols + ` FROM governance_memberships WHERE unit_id = $1 AND subject_type = $2 AND subject = $3` + lockSuffix(forUpdate)
+	return scanGovernanceMembership(q.QueryRow(ctx, stmt, unitID, subjectType, subject))
 }
 
 // GetGovernanceUnitQ reads one profile row (raw, as GetGovernanceUnit does) on q.
@@ -469,15 +501,17 @@ func ListGovernanceMembershipsQ(ctx context.Context, q Querier) ([]types.Governa
 	return collect(ctx, q, "list", "governance assignments", stmt, nil, scanGovernanceMembership)
 }
 
-// ResolveGovernanceUnit returns THE ONE profile that applies to a caller, or
-// ErrNotFound when no assignment matches (which the caller reads as "fall
-// through to the deployment ceiling", the absent-row back-compat rule).
-//
-// The whole precedence rule is the ORDER BY, deliberately: one indexed read
-// on the UNIQUE(subject_type, subject) btree, so there's no second
-// implementation in Go to skip, mis-order, or forget. subjectMatch and
-// subjectPrecedence are the same fragments ResolveUserDrive splices, so the
-// ceiling and the drive can't disagree about "most specific".
+// MembershipMatch is one membership that matches a caller, beside the unit it names.
+type MembershipMatch struct {
+	Membership types.GovernanceMembership
+	Unit       types.GovernanceUnit
+}
+
+// ListMembershipsFor returns EVERY membership that matches a caller, each joined to its unit, in
+// precedence order (the ORDER BY is the whole rule: tier, then sub over email, then priority, then
+// unit name, then subject). No LIMIT: which of them are contexts is the resolver's (legacy rows past
+// the first are dormant). subjectMatch and subjectPrecedence are the same fragments ResolveUserDrive
+// splices, so the ceiling and the drive can't disagree about "most specific".
 //
 // SECURITY: users/groups are normalized from nil to empty for the same reason
 // ListCapabilityGrantsFor does: a nil Go slice binds as SQL NULL and
@@ -486,25 +520,85 @@ func ListGovernanceMembershipsQ(ctx context.Context, q Querier) ([]types.Governa
 // authorization boundary.
 //
 // userType is the caller's one type id; "" matches no row.
-func (s PG) ResolveGovernanceUnit(ctx context.Context, userSubjects, groups []string, userType string) (*types.GovernanceUnit, types.CapabilitySubjectType, error) {
+func (s PG) ListMembershipsFor(ctx context.Context, userSubjects, groups []string, userType string) ([]MembershipMatch, error) {
 	if userSubjects == nil {
 		userSubjects = []string{}
 	}
 	if groups == nil {
 		groups = []string{}
 	}
-	q := `SELECT ` + governanceUnitColsP + `, a.subject_type
-		FROM governance_memberships a
-		JOIN governance_units p ON p.id = a.unit_id
-		WHERE ` + subjectMatch("a") + `
-		ORDER BY ` + subjectPrecedence("a", "p") + `
-		LIMIT 1`
-	var tier string
-	p, err := scanGovernanceUnitInto(s.Pool.QueryRow(ctx, q, userSubjects, groups, userType), &tier)
+	q := `SELECT m.id, m.subject_type, m.subject, m.unit_id, m.priority, m.created_at, m.created_by, m.home, m.legacy, ` + governanceUnitColsP + `
+		FROM governance_memberships m
+		JOIN governance_units p ON p.id = m.unit_id
+		WHERE ` + subjectMatch("m") + `
+		ORDER BY ` + subjectPrecedence("m", "p")
+	rows, err := s.Pool.Query(ctx, q, userSubjects, groups, userType)
+	if err != nil {
+		return nil, fmt.Errorf("store: list governance memberships for a caller: %w", err)
+	}
+	out, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (MembershipMatch, error) {
+		var m MembershipMatch
+		a := &m.Membership
+		u, err := scanGovernanceUnitPrefixed(r, &a.ID, &a.SubjectType, &a.Subject, &a.UnitID, &a.Priority, &a.CreatedAt, &a.CreatedBy, &a.Home, &a.Legacy)
+		m.Unit = u
+		return m, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("store: iterate governance memberships for a caller: %w", err)
+	}
+	return out, nil
+}
+
+// ResolveGovernanceUnit is the first row ListMembershipsFor returns (ErrNotFound when none matches)
+// and the tier that matched it: the precedence winner over every membership, as the store's
+// precedence tests read it. The resolver itself (internal/api governance_context.go) reads the list.
+func (s PG) ResolveGovernanceUnit(ctx context.Context, userSubjects, groups []string, userType string) (*types.GovernanceUnit, types.CapabilitySubjectType, error) {
+	ms, err := s.ListMembershipsFor(ctx, userSubjects, groups, userType)
 	if err != nil {
 		return nil, "", err
 	}
-	return &p, types.CapabilitySubjectType(tier), nil
+	if len(ms) == 0 {
+		return nil, "", ErrNotFound
+	}
+	return &ms[0].Unit, ms[0].Membership.SubjectType, nil
+}
+
+// CountOwnWallsUnits counts the units with walls of their own (kind unit, mode own_walls): the units
+// an admin-token run stands outside. Default and a pass-through unit do not count.
+func (s PG) CountOwnWallsUnits(ctx context.Context) (int, error) {
+	var n int
+	if err := s.Pool.QueryRow(ctx, `SELECT count(*) FROM governance_units WHERE kind = 'unit' AND mode = 'own_walls'`).Scan(&n); err != nil {
+		return 0, fmt.Errorf("store: count governance units with their own walls: %w", err)
+	}
+	return n, nil
+}
+
+// MaxUnitDepth is MaxUnitDepthQ on the pool.
+func (s PG) MaxUnitDepth(ctx context.Context) (int, []string, error) {
+	return MaxUnitDepthQ(ctx, s.Pool)
+}
+
+// MaxUnitDepthQ returns the deepest unit path's depth and its unit names from the top down (Default
+// or a parent-less unit first); 1 and one name for a tree with no child. The walk is the one
+// migration 0208 and every write run, bounded at MaxUnitDepthCap.
+func MaxUnitDepthQ(ctx context.Context, q Querier) (int, []string, error) {
+	const stmt = `
+		WITH RECURSIVE tree AS (
+			SELECT id, 1 AS d, ARRAY[name] AS path FROM governance_units WHERE parent_id IS NULL
+			UNION ALL
+			SELECT u.id, t.d + 1, t.path || u.name FROM governance_units u JOIN tree t ON u.parent_id = t.id WHERE t.d < 64
+		)
+		SELECT d, path FROM tree ORDER BY d DESC, path LIMIT 1`
+	var d int
+	var path []string
+	err := q.QueryRow(ctx, stmt).Scan(&d, &path)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, nil, nil
+	}
+	if err != nil {
+		return 0, nil, fmt.Errorf("store: read the deepest governance unit path: %w", err)
+	}
+	return d, path, nil
 }
 
 // HasGroupTierMemberships reports whether ANY group-tier assignment exists:
@@ -514,20 +608,17 @@ func (s PG) HasGroupTierMemberships(ctx context.Context) (bool, error) {
 }
 
 func scanGovernanceUnit(row pgx.Row) (types.GovernanceUnit, error) {
-	return scanGovernanceUnitInto(row, nil)
+	return scanGovernanceUnitPrefixed(row)
 }
 
-// scanGovernanceUnitInto is scanGovernanceUnit plus the ONE extra
-// column the resolver selects (subject_type), taken as a parameter rather
-// than a second scan function so the ceiling/limits unmarshal never forks.
-func scanGovernanceUnitInto(row pgx.Row, tier *string) (types.GovernanceUnit, error) {
+// scanGovernanceUnitPrefixed is scanGovernanceUnit after the columns a join selects ahead of the
+// unit's (ListMembershipsFor's membership row), taken as destinations rather than a second scan
+// function so the ceiling/limits unmarshal never forks.
+func scanGovernanceUnitPrefixed(row pgx.Row, prefix ...any) (types.GovernanceUnit, error) {
 	var p types.GovernanceUnit
 	var ceilingRaw, limitsRaw, contactRaw, overlayRaw, overlayLimitsRaw []byte
-	dest := []any{&p.ID, &p.Name, &ceilingRaw, &limitsRaw,
-		&p.CreatedAt, &p.UpdatedAt, &p.CreatedBy, &contactRaw, &p.ParentID, &overlayRaw, &overlayLimitsRaw}
-	if tier != nil {
-		dest = append(dest, tier)
-	}
+	dest := append(prefix, &p.ID, &p.Name, &ceilingRaw, &limitsRaw,
+		&p.CreatedAt, &p.UpdatedAt, &p.CreatedBy, &contactRaw, &p.ParentID, &overlayRaw, &overlayLimitsRaw, &p.Kind, &p.Mode, &p.Depth)
 	err := row.Scan(dest...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.GovernanceUnit{}, ErrNotFound
@@ -571,7 +662,7 @@ func scanGovernanceUnitInto(row pgx.Row, tier *string) (types.GovernanceUnit, er
 func scanGovernanceMembership(row pgx.Row) (types.GovernanceMembership, error) {
 	var a types.GovernanceMembership
 	err := row.Scan(&a.ID, &a.SubjectType, &a.Subject, &a.UnitID,
-		&a.Priority, &a.CreatedAt, &a.CreatedBy)
+		&a.Priority, &a.CreatedAt, &a.CreatedBy, &a.Home, &a.Legacy)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.GovernanceMembership{}, ErrNotFound
 	}
