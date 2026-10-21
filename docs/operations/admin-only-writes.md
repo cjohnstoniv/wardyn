@@ -2,7 +2,6 @@
 
 # What admin-only still means
 
-The writes with the widest blast radius, and which role each one is gated on.
 The delegation boundary an admin reads before handing a tier to somebody else: one table,
 read by the route matrix in [`internal/api/authz_test.go`](../../internal/api/authz_test.go).
 
@@ -11,7 +10,7 @@ read by the route matrix in [`internal/api/authz_test.go`](../../internal/api/au
 - Since 0.7 a SECOND gate covers part of that surface: `requireSecurityOperator` — admin **or** `security_admin`
   - the tier that holds authority over the verdict and over the org's ceilings,
   - and never reaches into a run, onto credential material, or onto the host.
-- The two tiers overlap and deliberately do not nest: every gated route names exactly one of them, and [`internal/api/authz_test.go`](../../internal/api/authz_test.go)'s route matrix is the authoritative per-route classification (it fails on any route it cannot classify).
+- The two tiers overlap and deliberately do not nest: every gated route names exactly one of them, and [`internal/api/authz_test.go`](../../internal/api/authz_test.go)'s route matrix is the authoritative classification (it fails on a route it cannot classify).
 - Status icons in the tables throughout this document: 🟢 open/works · 🟡 partial or narrowed · ⛔ refused.
 
 | Surface | Gate |
@@ -81,7 +80,7 @@ read by the route matrix in [`internal/api/authz_test.go`](../../internal/api/au
 | a member's own onboarded-workspace base image | 🟢 never gated — operator-authored at onboarding, not the member's free-text choice |
 | the `/drives` routes that NAME A HOST PATH — creating, listing, updating, and removing the **user drive** itself (`GET`/`POST /drives`, `PUT`/`DELETE /drives/{id}`, `mountUserDriveRoutes`, [`internal/api/user_drives.go`](../../internal/api/user_drives.go)) | ⛔ admin only, deliberately NOT the security-admin tier: a drive names a host path (`host_root`) or a cluster storage class, and "never the host" is the line between the two admin tiers |
 | allocating a drive to people or groups, revoking that allocation, or previewing whose drive resolves — `POST /drives/grants`, `DELETE /drives/grants/{id}`, `POST /drives/preview` (0.8, issue #168) | ⛔ admin or `security_admin`: on `POST /drives/grants` a new or changed directory name (`home_override`) or writable exception, and turning on a disabled allocation that holds one, is a super admin's write, and the rest stays a security admin's — a security admin's authority over drives is the `DenyUserDrive` door on a governance profile, reached through `/governance` above |
-| `POST /drives/{id}/reclaim` — **destroys** one person's drive storage on the substrate ([`internal/api/user_drives_reclaim.go`](../../internal/api/user_drives_reclaim.go)) | ⛔ admin only, and the only irreversible row in this table. It is fenced four ways: super-admin here; a `409` while a run still holds the object or while the object under that name is not this drive's; a `drive.reclaim` audit row on every attempt that reaches the substrate, `409` refusals included; and on Kubernetes wardynd does not even hold the `delete` verb unless the chart's `drives.reclaim.enabled` is set. There is no console button — API and CLI only |
+| `POST /drives/{id}/reclaim` — **destroys** one person's drive storage on the substrate ([`internal/api/user_drives_reclaim.go`](../../internal/api/user_drives_reclaim.go)) | ⛔ admin only, and the only irreversible row in this table. It is fenced four ways: super-admin here; a `409` while a run still holds the object or while the object under that name is not this drive's; a `drive.reclaim` audit row on every attempt that reaches the substrate, `409` refusals included; and on Kubernetes wardynd does not even hold the `delete` verb unless the chart's `drives.reclaim.enabled` is set. No console button: API and CLI only |
 | the `/drives/member` routes — `GET /drives/member` lists the drives people created for themselves, `DELETE /drives/member/{id}` deletes one and its files ([`internal/api/member_drives_admin.go`](../../internal/api/member_drives_admin.go)) | ⛔ admin only. The delete destroys the person's files and is refused with a `409` while a run holds the drive; every attempt is a `drive.member.delete` audit row. A person deletes their own with `DELETE /me/drives/{id}` |
 | the user-drive **door** — `DenyUserDrive` on a governance profile ([`internal/types/governance.go`](../../internal/types/governance.go)) | 🟡 security admin too, through `/governance` — a limit on a profile, not a drive; it refuses the mount, it does not deallocate anything |
 | mounting YOUR OWN drive on a run (`drive.enabled`) | 🟢 the person, per run — read-only unless their allocation says otherwise, and the run flag may only narrow that, never widen it |
