@@ -197,7 +197,7 @@ func (k govKind) forChange(ch types.GovernanceChange) govKind {
 		if decodeHeldPayload(ch.Payload, &held) != nil || held.Executor != "" {
 			k.approver = operatorApprover
 		}
-	case govKindProfile:
+	case govKindUnit:
 		if profilePayloadSetsHostPath(ch.Payload) {
 			k.approver = operatorApprover
 		}

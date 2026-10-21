@@ -64,9 +64,9 @@ func newMountEnv(t *testing.T, fourEyes bool) *govEnv {
 	return e
 }
 
-func (e *govEnv) seedMountProfile(name string, mounts []types.WorkspaceMount) types.GovernanceProfile {
+func (e *govEnv) seedMountProfile(name string, mounts []types.WorkspaceMount) types.GovernanceUnit {
 	e.t.Helper()
-	p, err := e.pg.UpsertGovernanceProfile(context.Background(), types.GovernanceProfile{
+	p, err := e.pg.UpsertGovernanceUnit(context.Background(), types.GovernanceUnit{
 		Name: name, CreatedBy: "seed",
 		Ceiling: types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}, MinConfinementClass: types.CC2, WorkspaceMounts: mounts},
 	})
@@ -77,10 +77,10 @@ func (e *govEnv) seedMountProfile(name string, mounts []types.WorkspaceMount) ty
 }
 
 // seedComposed stores a profile composed on base with overlay.
-func (e *govEnv) seedComposed(name string, base types.GovernanceProfile, overlay types.CeilingOverlay) types.GovernanceProfile {
+func (e *govEnv) seedComposed(name string, base types.GovernanceUnit, overlay types.CeilingOverlay) types.GovernanceUnit {
 	e.t.Helper()
-	p, err := e.pg.UpsertGovernanceProfile(context.Background(), types.GovernanceProfile{
-		Name: name, CreatedBy: "seed", BaseProfileID: &base.ID, Overlay: &overlay,
+	p, err := e.pg.UpsertGovernanceUnit(context.Background(), types.GovernanceUnit{
+		Name: name, CreatedBy: "seed", ParentID: &base.ID, Overlay: &overlay,
 	})
 	if err != nil {
 		e.t.Fatalf("seed composed profile %q: %v", name, err)
@@ -89,14 +89,14 @@ func (e *govEnv) seedComposed(name string, base types.GovernanceProfile, overlay
 }
 
 // view is GET /governance's entry for id as c reads it, with the whole body.
-func (e *govEnv) view(c *http.Cookie, id uuid.UUID) (governanceProfileView, string) {
+func (e *govEnv) view(c *http.Cookie, id uuid.UUID) (governanceUnitView, string) {
 	e.t.Helper()
 	w := e.call(c, http.MethodGet, "/api/v1/governance", "")
 	if w.Code != http.StatusOK {
 		e.t.Fatalf("GET /governance = %d %s", w.Code, w.Body)
 	}
 	var body struct {
-		Profiles []governanceProfileView `json:"profiles"`
+		Profiles []governanceUnitView `json:"profiles"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		e.t.Fatal(err)
@@ -107,7 +107,7 @@ func (e *govEnv) view(c *http.Cookie, id uuid.UUID) (governanceProfileView, stri
 		}
 	}
 	e.t.Fatalf("GET /governance has no profile %s: %s", id, w.Body)
-	return governanceProfileView{}, ""
+	return governanceUnitView{}, ""
 }
 
 func (e *govEnv) putProfile(c *http.Cookie, id uuid.UUID, body map[string]any) *httptest.ResponseRecorder {
@@ -116,11 +116,11 @@ func (e *govEnv) putProfile(c *http.Cookie, id uuid.UUID, body map[string]any) *
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	return e.call(c, http.MethodPut, "/api/v1/governance/profiles/"+id.String(), string(raw))
+	return e.call(c, http.MethodPut, "/api/v1/governance/units/"+id.String(), string(raw))
 }
 
 // standaloneBody is the PUT a reader of v makes back with ceiling mounts set to mounts.
-func standaloneBody(v governanceProfileView, mounts []types.WorkspaceMount) map[string]any {
+func standaloneBody(v governanceUnitView, mounts []types.WorkspaceMount) map[string]any {
 	c := v.Ceiling
 	c.WorkspaceMounts = mounts
 	return map[string]any{"name": v.Name, "ceiling": c}
@@ -139,7 +139,7 @@ func withheld(target string, ro *bool) types.WorkspaceMount {
 	return types.WorkspaceMount{Source: mountSourceWithheld, Target: target, ReadOnly: ro}
 }
 
-func rowJSON(t *testing.T, p types.GovernanceProfile) string {
+func rowJSON(t *testing.T, p types.GovernanceUnit) string {
 	t.Helper()
 	p.UpdatedAt, p.CreatedAt = time.Time{}, time.Time{}
 	b, err := json.Marshal(p)
@@ -216,7 +216,7 @@ func TestPolMount_G3_AddIsSuperOnly(t *testing.T) {
 		t.Errorf("403 body = %s, want the super-admin sentence", w.Body)
 	}
 	rows := e.audits(authz.AuditAction)
-	if len(rows) != denied+1 || rows[len(rows)-1].Target != "governance.profile.ceiling.workspace_mounts[2].source" {
+	if len(rows) != denied+1 || rows[len(rows)-1].Target != "governance.unit.ceiling.workspace_mounts[2].source" {
 		t.Errorf("authz.denied rows = %+v, want one for ceiling.workspace_mounts[2].source", rows[denied:])
 	}
 	if after := rowJSON(t, e.profile(p.ID)); after != before {
@@ -341,13 +341,13 @@ func TestPolMount_G8_WritableIsSuperOnly(t *testing.T) {
 }
 
 // overlayBody is the PUT a reader of a composed view makes back with its overlay's mounts set.
-func overlayBody(v governanceProfileView, mounts *[]types.WorkspaceMount) map[string]any {
+func overlayBody(v governanceUnitView, mounts *[]types.WorkspaceMount) map[string]any {
 	ov := types.CeilingOverlay{}
 	if v.Overlay != nil {
 		ov = *v.Overlay
 	}
 	ov.WorkspaceMounts = mounts
-	return map[string]any{"name": v.Name, "base_profile_id": v.BaseProfileID, "overlay": ov}
+	return map[string]any{"name": v.Name, "parent_id": v.ParentID, "overlay": ov}
 }
 
 // G9: a stored overlay mount keeps its own host path after a super admin re-points the base's mount
@@ -479,10 +479,10 @@ func TestPolMount_R8_SecurityReaderGets404OnHostPathChange(t *testing.T) {
 func TestPolMount_R8_SecurityReaderSeesSentinelOnKeepOnlyChange(t *testing.T) {
 	e := newMountEnv(t, true)
 	p := e.seedMountProfile("pm-r8b", pinMounts())
-	before := newProfileDiffView(p, nil, specReadFull) // as a binary before this one rendered every diff
+	before := newUnitDiffView(p, nil, specReadFull) // as a binary before this one rendered every diff
 	held, _, err := e.pg.ProposeGovernanceChange(context.Background(), types.GovernanceChange{
-		TargetKind: govKindProfile, Op: "delete", TargetKey: p.ID.String(),
-		Payload: mustJSON(map[string]any{"id": p.ID}), Diff: renderGovernanceDiff(before, nil, changedPaths(before.profileDiffStored, nil), nil),
+		TargetKind: govKindUnit, Op: "delete", TargetKey: p.ID.String(),
+		Payload: mustJSON(map[string]any{"id": p.ID}), Diff: renderGovernanceDiff(before, nil, changedPaths(before.unitDiffStored, nil), nil),
 		BaseHash: "x", DeploymentHash: "x", ProposedBy: "sub-old", ProposedByEmail: "old@corp.example",
 	}, time.Hour)
 	if err != nil {
@@ -568,8 +568,8 @@ func TestPolMount_D1_DispatchGetsTheRealSourceAfterAKeep(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ceiling.Profile == nil || ceiling.Profile.ID != p.ID {
-		t.Fatalf("the member is not bound by %s: %+v", p.Name, ceiling.Profile)
+	if ceiling.Unit == nil || ceiling.Unit.ID != p.ID {
+		t.Fatalf("the member is not bound by %s: %+v", p.Name, ceiling.Unit)
 	}
 	if got := storedMount(t, ceiling.Spec.WorkspaceMounts, pinTgtA).Source; got != pinMountSrc {
 		t.Errorf("DISPATCH: effectiveCeiling mounts %s at %s, want the real %s", got, pinTgtA, pinMountSrc)
@@ -621,8 +621,8 @@ func TestPolMount_R7_GovernanceReadWithholdsMountSources(t *testing.T) {
 func TestPolMount_R9_AssignmentDiffWithholdsMountSources(t *testing.T) {
 	e := newMountEnv(t, true)
 	p := e.seedMountProfile("pm-r9", pinMounts())
-	body, _ := json.Marshal(map[string]any{"subject_type": "user", "subject": "sub-user", "profile_id": p.ID, "priority": 1})
-	ch := e.pending(e.call(e.alice, http.MethodPost, "/api/v1/governance/assignments", string(body)))
+	body, _ := json.Marshal(map[string]any{"subject_type": "user", "subject": "sub-user", "unit_id": p.ID, "priority": 1})
+	ch := e.pending(e.call(e.alice, http.MethodPost, "/api/v1/governance/memberships", string(body)))
 	if d := string(e.storedChange(ch.ID).Diff); strings.Contains(d, pinMountSrc) || !hasSentinel(d) {
 		t.Errorf("the assignment change's stored diff = %s, want sentinels and no host path", d)
 	}

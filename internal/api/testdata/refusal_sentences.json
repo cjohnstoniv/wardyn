@@ -6,7 +6,7 @@
   },
   {
     "reason": "admin_surface",
-    "target": "\"governance.profile.\" + e.field",
+    "target": "\"governance.unit.\" + e.field",
     "sentence": "e.sentence"
   },
   {

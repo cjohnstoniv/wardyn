@@ -152,10 +152,10 @@ func TestPolMount_CensusRoutes(t *testing.T) {
 	if w := e.admin(http.MethodPut, "/api/v1/presets/pm-census", string(preset)); w.Code != http.StatusCreated {
 		t.Fatalf("seed preset = %d %s", w.Code, w.Body)
 	}
-	diff := newProfileDiffView(base, nil, specReadFull) // a pending change as an older binary rendered it
+	diff := newUnitDiffView(base, nil, specReadFull) // a pending change as an older binary rendered it
 	held, _, err := e.pg.ProposeGovernanceChange(context.Background(), types.GovernanceChange{
-		TargetKind: govKindProfile, Op: "delete", TargetKey: base.ID.String(), Payload: mustJSON(map[string]any{"id": base.ID}),
-		Diff:     renderGovernanceDiff(diff, nil, changedPaths(diff.profileDiffStored, nil), nil),
+		TargetKind: govKindUnit, Op: "delete", TargetKey: base.ID.String(), Payload: mustJSON(map[string]any{"id": base.ID}),
+		Diff:     renderGovernanceDiff(diff, nil, changedPaths(diff.unitDiffStored, nil), nil),
 		BaseHash: "x", DeploymentHash: "x", ProposedBy: "sub-old", ProposedByEmail: "old@corp.example",
 	}, time.Hour)
 	if err != nil {

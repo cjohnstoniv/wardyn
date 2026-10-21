@@ -20,16 +20,16 @@ import (
 // tierTakers is each tier-taking function and the index of its tier argument.
 var tierTakers = map[string]int{
 	"redactSpecForRead": 1, "redactPolicyForRead": 1, "redactPoliciesForRead": 1, "redactPresetOverlay": 1,
-	"redactOverlayValue": 2, "redactOverlayForRead": 1, "newProfileView": 3, "newProfileDiffView": 2,
+	"redactOverlayValue": 2, "redactOverlayForRead": 1, "newUnitView": 3, "newUnitDiffView": 2,
 }
 
 // fixedTiers are the sites whose tier is a constant, file:func:constant, each with its reason.
 var fixedTiers = map[string]string{
 	"policy_preview_facts.go:policyPreviewFacts:specReadMember":         "the preview is shown to the run's author, whatever their tier",
-	"governance_change_kinds.go:newAssignmentDiffView:specReadSecurity": "an assignment sets no host path, so a security admin decides it",
-	"governance_change_kinds.go:holdProfileDelete:specReadSecurity":     "a delete sets no host path, so a security admin decides it",
-	"governance_change_kinds.go:holdProfileWrite:specReadSecurity":      "a change is rendered for the lowest tier that may decide it",
-	"governance_change_kinds.go:holdProfileWrite:specReadFull":          "a change that sets a host path is decided by super admins only",
+	"governance_change_kinds.go:newMembershipDiffView:specReadSecurity": "an assignment sets no host path, so a security admin decides it",
+	"governance_change_kinds.go:holdUnitDelete:specReadSecurity":        "a delete sets no host path, so a security admin decides it",
+	"governance_change_kinds.go:holdUnitWrite:specReadSecurity":         "a change is rendered for the lowest tier that may decide it",
+	"governance_change_kinds.go:holdUnitWrite:specReadFull":             "a change that sets a host path is decided by super admins only",
 	"run_policy_view.go:handleGetRunPolicy:specReadFull":                "the baseline Redacted compares the reader's view with",
 }
 
@@ -153,7 +153,7 @@ func (s *Server) chosen(r *http.Request, spec types.RunPolicySpec) {
 	if s.isSecurityOperator(r.Context()) {
 		tier = specReadFull
 	}
-	_ = newProfileView(types.GovernanceProfile{}, nil, nil, tier)
+	_ = newUnitView(types.GovernanceUnit{}, nil, nil, tier)
 }
 func (s *Server) mixed(r *http.Request, spec types.RunPolicySpec) {
 	tier := s.specReadTierFor(r.Context())
@@ -172,7 +172,7 @@ func param(spec types.RunPolicySpec, tier specReadTier) { _ = redactSpecForRead(
 		t.Fatal(err)
 	}
 	got := tierCensus([]apiSource{{"planted.go", f}})
-	want := []string{"planted.go:chosen: newProfileView", "planted.go:constant: redactSpecForRead", "planted.go:mixed: redactSpecForRead"}
+	want := []string{"planted.go:chosen: newUnitView", "planted.go:constant: redactSpecForRead", "planted.go:mixed: redactSpecForRead"}
 	if !slices.Equal(got, want) {
 		t.Errorf("the census reported %v, want %v", got, want)
 	}

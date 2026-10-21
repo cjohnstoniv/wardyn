@@ -23,7 +23,7 @@ import (
 // the host path stored at the same target, and lets only a super admin (isOperator, the tier that
 // writes the host) send a literal source or make a kept mount writable.
 //
-// It runs inside buildGovernanceProfile, so a direct write, a held write at proposal and its replay
+// It runs inside buildGovernanceUnit, so a direct write, a held write at proposal and its replay
 // at approval are judged by the same code, each with the tier of the request it serves.
 
 // mountKeep is what the guard decided for one write.
@@ -50,7 +50,7 @@ func (e *mountTierRefusal) Error() string {
 }
 
 func (e *mountTierRefusal) decision() authz.Decision {
-	return authz.Deny(authz.ReasonAdminSurface, "governance.profile."+e.field, e.sentence)
+	return authz.Deny(authz.ReasonAdminSurface, "governance.unit."+e.field, e.sentence)
 }
 
 // keepMounts is the guard over one list of mounts. keep is the stored mounts, earlier entries first
@@ -105,8 +105,8 @@ func keepMounts(field string, in, keep []types.WorkspaceMount, super bool) (out,
 // storedCeilingMounts is the keep-set of a standalone write to profile id: the stored row's ceiling
 // mounts, or, for a row composed now (the console folds one into a standalone ceiling), its effective
 // ceiling's. A create keeps nothing.
-func (s *Server) storedCeilingMounts(all []types.GovernanceProfile, id uuid.UUID) []types.WorkspaceMount {
-	cur, ok := profilesByID(all)[id]
+func (s *Server) storedCeilingMounts(all []types.GovernanceUnit, id uuid.UUID) []types.WorkspaceMount {
+	cur, ok := unitsByID(all)[id]
 	switch {
 	case !ok:
 		return nil
@@ -123,9 +123,9 @@ func (s *Server) storedCeilingMounts(all []types.GovernanceProfile, id uuid.UUID
 // mounts first, then the mounts the base resolves to (the deployment default's when there is no base).
 // Stored first, so a stored overlay mount is never paired with a host path a super admin has since
 // given the base at that target.
-func (s *Server) storedOverlayMounts(all []types.GovernanceProfile, id uuid.UUID, base *uuid.UUID) []types.WorkspaceMount {
+func (s *Server) storedOverlayMounts(all []types.GovernanceUnit, id uuid.UUID, base *uuid.UUID) []types.WorkspaceMount {
 	var keep []types.WorkspaceMount
-	byID := profilesByID(all)
+	byID := unitsByID(all)
 	if cur, ok := byID[id]; ok && cur.Overlay != nil && cur.Overlay.WorkspaceMounts != nil {
 		keep = append(keep, *cur.Overlay.WorkspaceMounts...)
 	}
@@ -141,7 +141,7 @@ func (s *Server) storedOverlayMounts(all []types.GovernanceProfile, id uuid.UUID
 // scrubMountSources replaces every host path in sources with mountSourceWithheld in a refusal's
 // message, so a caller below the super admin tier is not told a stored path by the refusal either.
 func scrubMountSources(err error, sources []string) error {
-	var refusal *profileWriteError
+	var refusal *unitWriteError
 	if !errors.As(err, &refusal) {
 		return err
 	}
@@ -151,12 +151,12 @@ func scrubMountSources(err error, sources []string) error {
 			msg = strings.ReplaceAll(msg, src, mountSourceWithheld)
 		}
 	}
-	return &profileWriteError{status: refusal.status, reason: refusal.reason, msg: msg}
+	return &unitWriteError{status: refusal.status, reason: refusal.reason, msg: msg}
 }
 
 // mountSourcesOf is every host path the profile graph and the deployment default name: what a
 // refusal to a caller below the super admin tier must not echo.
-func (s *Server) mountSourcesOf(all []types.GovernanceProfile) []string {
+func (s *Server) mountSourcesOf(all []types.GovernanceUnit) []string {
 	var out []string
 	add := func(ms []types.WorkspaceMount) {
 		for _, m := range ms {
@@ -175,8 +175,8 @@ func (s *Server) mountSourcesOf(all []types.GovernanceProfile) []string {
 
 // heldProfilePayload is the payload a held profile write stores: the request, with each mount in the
 // form keepMounts held it, so a payload names a host path only where the write sets one.
-func heldProfilePayload(req governanceProfileRequest, keep mountKeep) profileChangePayload {
-	p := profilePayloadOf(req)
+func heldProfilePayload(req governanceUnitRequest, keep mountKeep) unitChangePayload {
+	p := unitPayloadOf(req)
 	if keep.ceiling != nil {
 		p.Ceiling.WorkspaceMounts = keep.ceiling
 	}
