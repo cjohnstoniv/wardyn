@@ -6,6 +6,7 @@ package api
 import (
 	"encoding/json"
 	"slices"
+	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -16,20 +17,22 @@ import (
 // was served.
 const auditRedactedFieldsKey = "redacted_fields"
 
-// auditHostView is how one action's data is served below the super-admin tier: the host detail ("never the
-// host" is the line between the two admin tiers, routes.go) is withheld and everything else passes.
+// auditHostView is how one action's data is served below the super-admin tier: the host detail the
+// super-only reads hold back (routes.go: GET /drives, /sources, /site-config) is withheld and everything
+// else passes.
 type auditHostView struct {
 	// allow, when set, is every data key served; any other key, one added later included, is withheld.
 	allow []string
 	// withhold, when allow is nil, names the keys withheld from a document too wide to list (site config).
 	withhold []string
-	// mountSources blanks each workspace_mounts[].source of a policy snapshot, as redactSpecForUser does.
-	mountSources bool
+	// mounts are the paths, from the top of data, to each policy spec whose workspace_mounts[].source is
+	// blanked as redactSpecForUser does; an empty path is data itself.
+	mounts [][]string
 }
 
 // auditHostViews is every action whose data carries host detail, keyed by canonical name. An action not
 // here is served as recorded. TestAuditHostDetailCensus fails on a documented action with a host-shaped
-// field that is neither here nor in its reviewed list.
+// field that is neither withheld here nor reviewed.
 var auditHostViews = map[string]auditHostView{
 	// host_root and storage_class: what GET /drives keeps super-only.
 	"drive.write": {allow: []string{"backend", "home_template", "name", "object_scheme", "reclaim", "rehomed",
@@ -40,10 +43,19 @@ var auditHostViews = map[string]auditHostView{
 	// target: the scratch database's host:port/database.
 	"recovery.rehearse.begin": {allow: []string{"manifest_head_seq", "set_id"}},
 	"recovery.rehearse":       {allow: []string{"checks", "manifest_head_seq", "set_id", "verdict"}},
-	// branding_logo_path: the file on the host wardynd read the logo from.
-	"site_config.write": {withhold: []string{"branding_logo_path"}},
-	// the host path behind each workspace mount.
-	"run.policy.resolve": {mountSources: true},
+	// What GET /site-config keeps super-only: the logo's host file, the internal host suffixes, the upstream
+	// proxy and the egress redirects with their targets (go_checksum_db_off is the go redirects' targets).
+	"site_config.write": {withhold: []string{"branding_logo_path", "egress_redirects", "go_checksum_db_off",
+		"internal_hosts", "upstream_proxy_url"}},
+	// The redirect probe's target, an egress redirect's to half.
+	"site_config.redirect.test": {allow: []string{"elapsed_ms", "from_host", "state"}},
+	// The host path behind each workspace mount of a recorded policy spec.
+	"run.policy.resolve": {mounts: [][]string{{}}},
+	"policy.create":      {mounts: [][]string{{"after"}}},
+	"policy.update":      {mounts: [][]string{{"before", "spec"}, {"after", "spec"}}},
+	"policy.delete":      {mounts: [][]string{{"before"}}},
+	"preset.create":      {mounts: [][]string{{"request", "inline_policy"}, {"request", "policy_overlay"}}},
+	"preset.update":      {mounts: [][]string{{"request", "inline_policy"}, {"request", "policy_overlay"}}},
 }
 
 // withoutHostDetail is evs as a reader below the super-admin tier is served them (auditHostViews). Only the
@@ -77,8 +89,10 @@ func hostViewOf(action string, data []byte) (json.RawMessage, bool) {
 			redacted = append(redacted, k)
 		}
 	}
-	if view.mountSources && blankMountSources(m) {
-		redacted = append(redacted, "workspace_mounts.source")
+	for _, path := range view.mounts {
+		if blankMountsAt(m, path) {
+			redacted = append(redacted, strings.Join(append(slices.Clone(path), "workspace_mounts", "source"), "."))
+		}
 	}
 	if len(redacted) == 0 {
 		return nil, false
@@ -86,6 +100,20 @@ func hostViewOf(action string, data []byte) (json.RawMessage, bool) {
 	slices.Sort(redacted)
 	m[auditRedactedFieldsKey] = mustJSON(redacted)
 	return mustJSON(m), true
+}
+
+// blankMountsAt runs blankMountSources on the object path names inside m, re-encoding each level it
+// changed; a level that is absent or not an object changes nothing.
+func blankMountsAt(m map[string]json.RawMessage, path []string) bool {
+	if len(path) == 0 {
+		return blankMountSources(m)
+	}
+	var inner map[string]json.RawMessage
+	if json.Unmarshal(m[path[0]], &inner) != nil || inner == nil || !blankMountsAt(inner, path[1:]) {
+		return false
+	}
+	m[path[0]] = mustJSON(inner)
+	return true
 }
 
 // blankMountSources sets each workspace_mounts[].source in m to "<redacted>", reporting whether one was set.

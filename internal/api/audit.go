@@ -181,7 +181,7 @@ func (s *Server) handleQueryAudit(w http.ResponseWriter, r *http.Request) {
 // the two cannot drift: the security tier reads every operator row there is,
 // the rows that name the operator's secrets among them. Below a super admin
 // (isOperator) every reader, the security tier included, is also served each
-// row without its host detail (withoutHostDetail): the tier never reaches the host.
+// row of the actions auditHostViews names without the host detail the super-only reads hold back.
 func (s *Server) auditRowsFor(r *http.Request, scope *uuid.UUID) func([]types.AuditEvent, error) ([]types.AuditEvent, error) {
 	ctx := r.Context()
 	if s.isOperator(ctx) {
