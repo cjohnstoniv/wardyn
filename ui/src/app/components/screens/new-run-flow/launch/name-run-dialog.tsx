@@ -26,7 +26,7 @@ import { NR_RUN } from "../../../wardyn/copy/new-run/run";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
 import { AdoLaunchNote, AdoOwnTokenNote, adoLaunchNoteKind } from "../../../wardyn/ado-run-token-line";
-import { scheduledRunsOn, startInstant, startWire, whenText } from "../../../../lib/schedule";
+import { scheduleDaysAhead, scheduledRunsOn, startInstant, startWire, whenText } from "../../../../lib/schedule";
 import { useOwnTokenRows } from "../../../../lib/hooks/use-own-token-rows";
 import { useModelAccessDoor, useShellSetupStatus } from "../../../wardyn/model-access-context";
 import { PolicyRemedy } from "../../../wardyn/policy-remedy";
@@ -42,7 +42,7 @@ import type { ReviewPreflight } from "../review/review-seams";
 import { AdoLaunchDialog } from "./ado-launch-dialog";
 import { useLaunchRun, type PendingLaunch } from "./use-launch-run";
 
-const START_PROBLEM = { missing: NR_RUN.START_MISSING, past: NR_RUN.START_PAST, far: NR_RUN.START_FAR } as const;
+const startProblemText = (): Record<"missing" | "past" | "far", string> => ({ missing: NR_RUN.START_MISSING, past: NR_RUN.START_PAST, far: NR_RUN.START_FAR(scheduleDaysAhead()) });
 
 // Only the manual check runs here: nothing is asked again while the person types.
 const MANUAL_ONLY = { local: false, backendArm: false, modelArm: false };
@@ -194,7 +194,7 @@ function NameRunForm({ onOpenChange, onCreated, pending }: Pick<NameRunDialogPro
 
         {start && (
           <p id="name-run-start" role={start.problem ? "alert" : "status"} className={start.problem ? "text-sm text-danger" : "text-sm"}>
-            {start.problem ? START_PROBLEM[start.problem] : <strong>{NR_RUN.STARTS(whenText(startAt ?? 0, start.choice.zone))}</strong>}
+            {start.problem ? startProblemText()[start.problem] : <strong>{NR_RUN.STARTS(whenText(startAt ?? 0, start.choice.zone))}</strong>}
           </p>
         )}
 

@@ -10,13 +10,13 @@ import { RadioCard, RadioCardGroup } from "../../../../wardyn/radio-card";
 import { NR_RUN } from "../../../../wardyn/copy/new-run/run";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { useShellSetupStatus } from "../../../../wardyn/model-access-context";
-import { emptyStart, scheduledRunsOn, startInstant, startProblem, todayDate, whenText, zoneOptions, type StartChoice, type StartProblem } from "../../../../../lib/schedule";
+import { emptyStart, scheduleDaysAhead, scheduledRunsOn, startInstant, startProblem, todayDate, whenText, zoneOptions, type StartChoice, type StartProblem } from "../../../../../lib/schedule";
 import { QuestionBlock } from "./question-block";
 
 const SELECT_CLASS =
   "border-input bg-input-background dark:bg-input/30 focus-visible:border-ring focus-visible:ring-ring h-9 w-full rounded-md border px-3 text-base outline-none focus-visible:ring-[3px] md:text-sm";
 
-const PROBLEM_TEXT: Record<StartProblem, string> = { missing: NR_RUN.START_MISSING, past: NR_RUN.START_PAST, far: NR_RUN.START_FAR };
+const PROBLEM_TEXT = (): Record<StartProblem, string> => ({ missing: NR_RUN.START_MISSING, past: NR_RUN.START_PAST, far: NR_RUN.START_FAR(scheduleDaysAhead()) });
 
 /**
  * When an Autonomous run starts: now, or at a date and time the person picks. Later is offered only while the
@@ -77,9 +77,9 @@ export function TimingSection({ schedule, onSchedule }: { schedule: StartChoice 
               </select>
             </div>
           </div>
-          {told && problem && <p id={errorId} role="alert" className="text-sm text-danger">{PROBLEM_TEXT[problem]}</p>}
+          {told && problem && <p id={errorId} role="alert" className="text-sm text-danger">{PROBLEM_TEXT()[problem]}</p>}
           {at !== null && <p role="status" className="text-sm"><strong>{NR_RUN.STARTS(whenText(at, schedule.zone))}</strong></p>}
-          <p id={helpId} className="text-xs text-muted-foreground">{NR_RUN.START_HELP}</p>
+          <p id={helpId} className="text-xs text-muted-foreground">{NR_RUN.START_HELP(scheduleDaysAhead())}</p>
         </div>
       )}
     </QuestionBlock>

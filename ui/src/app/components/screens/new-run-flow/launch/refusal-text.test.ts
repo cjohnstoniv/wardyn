@@ -26,7 +26,7 @@ describe("refusalText", () => {
       }
     }
     expect(refusalText(refused("start_at_past", "start_at_past"))).toBe(NR_RUN.START_PAST);
-    expect(refusalText(refused("start_at_too_far", "start_at_too_far"))).toBe(NR_RUN.START_FAR);
+    expect(refusalText(refused("start_at_too_far", "start_at_too_far"))).toBe(NR_RUN.START_FAR(scheduleDaysAhead()));
     expect(refusalText(refused("", "scheduled_runs_off"))).toBe(SCHEDULE_REFUSAL.OFF());
   });
 

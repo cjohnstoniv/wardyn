@@ -82,6 +82,13 @@ export type StartProblem = "missing" | "past" | "far";
  */
 export const SCHEDULE_LEAD_WAIT_SEC = { background: 24 * 60 * 60, interactive: 60 * 60 } as const;
 
+/** Whole days ahead a start may be, given the wait it must leave before the 7-day cap. */
+export const daysAhead = (leadWaitSec: number): number => Math.floor((SCHEDULE_MAX_AHEAD_MS - leadWaitSec * 1000) / 86_400_000);
+
+/** The n in "Up to {n} days ahead": the whole days a run of this type may be scheduled ahead (Autonomous is a background run). */
+export const scheduleDaysAhead = (interactive = false): number =>
+  daysAhead(interactive ? SCHEDULE_LEAD_WAIT_SEC.interactive : SCHEDULE_LEAD_WAIT_SEC.background);
+
 /**
  * Why a start is not one the server will take, or null when it looks fine. Only an Autonomous (background) run
  * can be scheduled, so the latest start is 7 days less a background run's lead wait.

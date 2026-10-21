@@ -31,10 +31,11 @@ export const NR_RUN = {
   START_DATE: "Date",
   START_TIME: "Time",
   START_ZONE: "Time zone",
-  START_HELP: "Up to 7 days ahead. Policy and your access are checked again when it starts.",
+  // n is the whole days a start may be ahead (schedule.ts scheduleDaysAhead): 7 days less the run type's lead wait.
+  START_HELP: (n: number | string) => `Up to ${n} ${n === 1 ? "day" : "days"} ahead. Policy and your access are checked again when it starts.`,
   START_MISSING: "Choose a date and time.",
   START_PAST: "Choose a time in the future.",
-  START_FAR: "Choose a time up to 7 days ahead.",
+  START_FAR: (n: number | string) => `Choose a time up to ${n} ${n === 1 ? "day" : "days"} ahead.`,
   STARTS: (when: string | number) => `Starts ${when}`,
   APP_LABEL: "What should run?",
   APP_AUTOMATION: "Automation / script",

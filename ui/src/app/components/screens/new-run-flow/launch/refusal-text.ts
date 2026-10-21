@@ -5,6 +5,7 @@
 
 import { HttpError } from "../../../../lib/api/core";
 import { getErrorMessage } from "../../../../lib/format";
+import { scheduleDaysAhead } from "../../../../lib/schedule";
 import { isScheduleReason, SCHEDULE_REFUSAL, type ScheduleReason } from "../../../../lib/schedule-refusals";
 import { NR_RUN } from "../../../wardyn/copy/new-run/run";
 
@@ -14,7 +15,7 @@ const SCHEDULE_TEXT: Record<ScheduleReason, string> = {
   scheduled_runs_unavailable: SCHEDULE_REFUSAL.UNAVAILABLE(),
   start_at_invalid: SCHEDULE_REFUSAL.INVALID(),
   start_at_past: NR_RUN.START_PAST,
-  start_at_too_far: NR_RUN.START_FAR,
+  start_at_too_far: NR_RUN.START_FAR(scheduleDaysAhead()),
 };
 
 /**

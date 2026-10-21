@@ -43,7 +43,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 - `NR_TOOLS.PROVIDER_PROXY` shows only when the provider credential's delivery is `proxy`: key, token and subscription kinds. A provider whose delivery is `sandbox_short_lived` (Bedrock SSO, whose role credentials sit in the sandbox) shows `NR_TOOLS.DELIVERY_SHORT_LIVED` and `NR_TOOLS.DELIVERY_AWS` instead.
 - `NR_SHARED.CONTINUE_TO` writes the step name in lower case ("Continue to harnesses", "Continue to files": Make `App.tsx`:1928, 2144). Every Guided step's primary button, `NR_SHARED.CONTINUE` and the document's `NR_DOCUMENT.CONTINUE_REVIEW` end in an arrow shown to sight only (Make `App.tsx`:1293, 1928, 2144, 2577, 2695); `NR_REVIEW.LAUNCH_RUN` has none.
 - `NR_LAUNCH.CANCEL_RUN` opens the console's kill confirm before it cancels the waiting run; the confirm's own strings are the shared kill dialog's. Deviation (owner 2026-10-13: keep the Cancel-run confirm); Make cancels at once (`App.tsx`:3335-3343).
-- `NR_RUN.START_DATE`, `NR_RUN.START_TIME`, `NR_RUN.START_ZONE` and `NR_RUN.START_HELP` open under "Schedule for later" only when the setup status carries `features.scheduled_runs`; with it off or absent "Schedule for later" keeps its `NR_SHARED.COMING_SOON` and the Review and Name rows say nothing of a start. Only an Autonomous run can be scheduled. `{when}` reads "Wed 21 Oct, 02:00 (UTC)": the start in the zone it was given in, with that zone's name. The time zone starts at the browser's. No Repeat choice: that is 0.10.x (FEAT-2 board F2SCHED-1).
+- `NR_RUN.START_DATE`, `NR_RUN.START_TIME`, `NR_RUN.START_ZONE` and `NR_RUN.START_HELP(n)` open under "Schedule for later" only when the setup status carries `features.scheduled_runs`; with it off or absent "Schedule for later" keeps its `NR_SHARED.COMING_SOON` and the Review and Name rows say nothing of a start. Only an Autonomous run can be scheduled. `{when}` reads "Wed 21 Oct, 02:00 (UTC)": the start in the zone it was given in, with that zone's name. `{n}` is the whole days in 7 days less the run type's lead wait (6 for an Autonomous run), read as "1 day" when it is one. The time zone starts at the browser's. No Repeat choice: that is 0.10.x (FEAT-2 board F2SCHED-1).
 - `NR_TOOLS.EFFECT_ALLOW` is both the default option and a rule effect ("Run it" stays, per the tool-rule ruling): offered when the policy allows it, otherwise disabled with the server's reason.
 
 ## 4. Never shown
@@ -133,10 +133,10 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `START_DATE` | deviation (FEAT-2 board F2SCHED-1) | Date |
 | `START_TIME` | deviation (FEAT-2 board F2SCHED-1) | Time |
 | `START_ZONE` | deviation (FEAT-2 board F2SCHED-1) | Time zone |
-| `START_HELP` | deviation (FEAT-2 board F2SCHED-1) | Up to 7 days ahead. Policy and your access are checked again when it starts. |
+| `START_HELP(n)` | deviation (computed from the server's lead wait; overseer ruling 2026-10-21) | Up to {n} days ahead. Policy and your access are checked again when it starts. |
 | `START_MISSING` | deviation (FEAT-2 board F2SCHED-1) | Choose a date and time. |
 | `START_PAST` | deviation (FEAT-2 board F2SCHED-1) | Choose a time in the future. |
-| `START_FAR` | deviation (FEAT-2 board F2SCHED-1) | Choose a time up to 7 days ahead. |
+| `START_FAR(n)` | deviation (computed from the server's lead wait; overseer ruling 2026-10-21) | Choose a time up to {n} days ahead. |
 | `STARTS(when)` | deviation (FEAT-2 board F2SCHED-1) | Starts {when} |
 | `APP_LABEL` | mock | What should run? |
 | `APP_AUTOMATION` | mock | Automation / script |

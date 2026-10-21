@@ -24,6 +24,7 @@ import { SCHEDULED_RUN } from "../src/app/components/wardyn/copy/scheduled-runs"
 import { SCENARIO_HARNESSES, SCENARIO_HARNESS_SETS } from "../src/app/lib/new-run-fixtures/scenarios/harnesses";
 import { SCENARIO_POOLS } from "../src/app/lib/new-run-fixtures/scenarios/pools";
 import { SCENARIO_PREFLIGHT } from "../src/app/lib/new-run-fixtures/scenarios/preflight";
+import { scheduleDaysAhead } from "../src/app/lib/schedule";
 import { SCHEDULE_REFUSAL } from "../src/app/lib/schedule-refusals";
 
 const RUN_ID = "a1111111-1111-4111-8111-111111111111";
@@ -149,13 +150,13 @@ test.describe("New Run: Schedule for later", () => {
     await later.click();
     await expect(page.getByText(NR_SHARED.COMING_SOON)).toHaveCount(0);
     await expect(page.getByRole("alert").filter({ hasText: /Choose a/ })).toHaveCount(0);
-    await expect(page.getByText(NR_RUN.START_HELP)).toBeVisible();
+    await expect(page.getByText(NR_RUN.START_HELP(scheduleDaysAhead()))).toBeVisible();
     await page.getByLabel(NR_RUN.START_TIME, { exact: true }).fill("02:00");
     await expect(page.getByRole("alert").filter({ hasText: NR_RUN.START_MISSING })).toBeVisible();
     await pickStart(page, "2020-01-01", "02:00");
     await expect(page.getByRole("alert").filter({ hasText: NR_RUN.START_PAST })).toBeVisible();
     await pickStart(page, dayAhead(9), "02:00");
-    await expect(page.getByRole("alert").filter({ hasText: NR_RUN.START_FAR })).toBeVisible();
+    await expect(page.getByRole("alert").filter({ hasText: NR_RUN.START_FAR(scheduleDaysAhead()) })).toBeVisible();
     await pickStart(page, dayAhead(2), "02:00");
     await expect(page.getByRole("alert").filter({ hasText: /Choose a/ })).toHaveCount(0);
     await expect(page.getByRole("status").filter({ hasText: /^Starts [A-Z][a-z]{2} \d{1,2} [A-Z][a-z]{2}, 02:00 \(UTC\)$/ })).toBeVisible();
@@ -196,7 +197,7 @@ test.describe("New Run: Schedule for later", () => {
     const dialog = page.getByRole("dialog", { name: NR_LAUNCH.TITLE });
     await dialog.getByLabel(NR_LAUNCH.TITLE_LABEL).fill("nightly");
     await expect(dialog.getByText(NR_LAUNCH.CHECKED_JUST_NOW)).toBeVisible();
-    await expect(dialog.getByRole("alert").filter({ hasText: NR_RUN.START_FAR })).toBeVisible();
+    await expect(dialog.getByRole("alert").filter({ hasText: NR_RUN.START_FAR(scheduleDaysAhead()) })).toBeVisible();
     await expect(dialog.getByRole("button", { name: NR_LAUNCH.LAUNCH, exact: true })).toBeDisabled();
   });
 

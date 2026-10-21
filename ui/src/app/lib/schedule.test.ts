@@ -6,7 +6,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { browserZone, scheduledRunsOn, SCHEDULE_LEAD_WAIT_SEC, SCHEDULE_MAX_AHEAD_MS, startInstant, startProblem, startWire, todayDate, whenText, zoneOptions } from "./schedule";
+import { NR_RUN } from "../components/wardyn/copy/new-run/run";
+import { browserZone, daysAhead, scheduleDaysAhead, scheduledRunsOn, SCHEDULE_LEAD_WAIT_SEC, SCHEDULE_MAX_AHEAD_MS, startInstant, startProblem, startWire, todayDate, whenText, zoneOptions } from "./schedule";
 
 const at = (date: string, time: string, zone: string) => ({ date, time, zone });
 const NOW = Date.UTC(2026, 9, 20, 14, 0);
@@ -57,6 +58,29 @@ describe("startProblem", () => {
     // 14:30 London is 13:30 UTC: already past at 14:00 UTC.
     expect(startProblem(at("2026-10-20", "14:30", "Europe/London"), NOW)).toBe("past");
     expect(startProblem(at("2026-10-20", "14:30", "America/New_York"), NOW)).toBeNull();
+  });
+});
+
+describe("the days ahead a start may be", () => {
+  it("are the whole days in 7 days less the run type's lead wait", () => {
+    expect(daysAhead(0)).toBe(7);
+    expect(daysAhead(24 * 3600)).toBe(6);
+    expect(daysAhead(3600)).toBe(6);
+    expect(daysAhead(6 * 86_400)).toBe(1);
+    expect(daysAhead(6 * 86_400 + 1)).toBe(0);
+  });
+
+  it("come from the server's lead wait for each run type: Autonomous is a background run", () => {
+    expect(scheduleDaysAhead()).toBe(6);
+    expect(scheduleDaysAhead(false)).toBe(6);
+    expect(scheduleDaysAhead(true)).toBe(6);
+  });
+
+  it("read as '1 day' for one and 'N days' otherwise, in the help and the too-far sentence", () => {
+    expect(NR_RUN.START_HELP(6)).toBe("Up to 6 days ahead. Policy and your access are checked again when it starts.");
+    expect(NR_RUN.START_HELP(1)).toBe("Up to 1 day ahead. Policy and your access are checked again when it starts.");
+    expect(NR_RUN.START_FAR(6)).toBe("Choose a time up to 6 days ahead.");
+    expect(NR_RUN.START_FAR(1)).toBe("Choose a time up to 1 day ahead.");
   });
 });
 

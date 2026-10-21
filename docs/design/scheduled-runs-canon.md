@@ -26,11 +26,13 @@ The boards reuse today's strings, so no row above repeats them: "Waiting for sig
 
 | Key | Source | Frozen string |
 |---|---|---|
+| `NR_RUN.START_HELP(n)` | deviation (computed from the server's lead wait; overseer ruling 2026-10-21) | Up to {n} days ahead. Policy and your access are checked again when it starts. |
+| `NR_RUN.START_FAR(n)` | deviation (computed from the server's lead wait; overseer ruling 2026-10-21) | Choose a time up to {n} days ahead. |
 | `NR_REVIEW.TIMING_CHOOSE` | deviation (derived from board F2SCHED-1's logic, not its copy box; approved 2026-10-20) | Autonomous · Choose a start time |
 
 ## 3. Display rules
 
-- `TIMING_CHOOSE` shows in the Review row while the start is missing or not one the server will take. The "too far ahead" check uses the run's own wait from the preflight answer (`runner_pool_slots.max_wait_sec`): 7 days less that wait. Without that answer the console makes no such check and the create's `start_at_too_far` sentence answers.
+- `TIMING_CHOOSE` shows in the Review row while the start is missing or not one the server will take. The "too far ahead" check mirrors the server: a start later than 7 days less the run type's lead wait (24 hours for a background run) is too far; `schedule.test.ts` keeps the lead wait equal to the Go constants. `{n}` in `START_HELP` and `START_FAR` is the whole days in that span, "1 day" when it is one; the board draws a fixed 7.
 - The word "Scheduled" and the "starts {when}" part show on a run that waits (`QUEUED`) with queue reason `scheduled`. "Waiting for sign-in", "was due {when}" and the sign-in page show on queue reason `owner_sign_in`.
 - `SIGN_IN_TIMED_OUT` shows in the row's meta line of a `FAILED` run whose `status_reason` is `queue_sign_in_timeout`, joined with " · " as "started 14m ago" is. Today's "This run waited too long for a free slot and was not started." stays for `queue_timeout`.
 - A cancelled scheduled run ends as a cancelled queued run does today. There is no Schedules screen in 0.10.0.

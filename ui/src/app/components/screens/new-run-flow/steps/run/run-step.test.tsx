@@ -15,7 +15,7 @@ import type { RunnerPoolCatalogueEntry, RunnerPoolList } from "../../../../../li
 import { NR_RUN } from "../../../../wardyn/copy/new-run/run";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { ModelAccessProvider } from "../../../../wardyn/model-access-context";
-import { browserZone, todayDate, type StartChoice } from "../../../../../lib/schedule";
+import { browserZone, scheduleDaysAhead, todayDate, type StartChoice } from "../../../../../lib/schedule";
 import type { SetupStatus } from "../../../../../lib/types/setup";
 import type { RunIntent } from "../../draft/run-intent";
 import { poolScope } from "../../lenses/run-lens";
@@ -482,7 +482,7 @@ describe("Run step: Schedule for later", () => {
     expect(screen.getByLabelText(NR_RUN.START_ZONE)).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     for (const label of [NR_RUN.START_DATE, NR_RUN.START_TIME]) expect(screen.getByLabelText(label)).not.toHaveAttribute("aria-invalid", "true");
-    expect(screen.getByText(NR_RUN.START_HELP)).toBeInTheDocument();
+    expect(screen.getByText(NR_RUN.START_HELP(scheduleDaysAhead()))).toBeInTheDocument();
     expect(scheduleNow()).toMatchObject({ date: "", time: "" });
   });
 
@@ -492,7 +492,7 @@ describe("Run step: Schedule for later", () => {
     setField(screen.getByLabelText(NR_RUN.START_TIME), "02:00");
     const alert = screen.getByRole("alert");
     expect(alert).toHaveTextContent(NR_RUN.START_MISSING);
-    const help = screen.getByText(NR_RUN.START_HELP);
+    const help = screen.getByText(NR_RUN.START_HELP(scheduleDaysAhead()));
     for (const label of [NR_RUN.START_DATE, NR_RUN.START_TIME]) {
       const input = screen.getByLabelText(label);
       expect(input).toHaveAttribute("aria-invalid", "true");
@@ -510,7 +510,7 @@ describe("Run step: Schedule for later", () => {
   it("ties the help to every field, and the error to none while there is no error", async () => {
     show(AUTONOMOUS, MEMBER, ON);
     await pick();
-    const help = screen.getByText(NR_RUN.START_HELP);
+    const help = screen.getByText(NR_RUN.START_HELP(scheduleDaysAhead()));
     expect(help.id).not.toBe("");
     for (const label of [NR_RUN.START_DATE, NR_RUN.START_TIME, NR_RUN.START_ZONE]) {
       expect(screen.getByLabelText(label).getAttribute("aria-describedby")).toBe(help.id);
@@ -559,7 +559,7 @@ describe("Run step: Schedule for later", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(NR_RUN.START_PAST);
     expect(screen.getByLabelText(NR_RUN.START_DATE)).toHaveAttribute("aria-invalid", "true");
     setField(screen.getByLabelText(NR_RUN.START_DATE), new Date(Date.now() + 9 * 86_400_000).toISOString().slice(0, 10));
-    expect(screen.getByRole("alert")).toHaveTextContent(NR_RUN.START_FAR);
+    expect(screen.getByRole("alert")).toHaveTextContent(NR_RUN.START_FAR(scheduleDaysAhead()));
     setField(screen.getByLabelText(NR_RUN.START_DATE), new Date(Date.now() + 5 * 86_400_000).toISOString().slice(0, 10));
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });

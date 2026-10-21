@@ -14,7 +14,7 @@ import { MemoryRouter } from "react-router-dom";
 import { HttpError } from "../../../../lib/api/core";
 import { runs } from "../../../../lib/api/runs";
 import { SCENARIO_PREFLIGHT } from "../../../../lib/new-run-fixtures/scenarios/preflight";
-import { whenText, type StartChoice } from "../../../../lib/schedule";
+import { scheduleDaysAhead, whenText, type StartChoice } from "../../../../lib/schedule";
 import { SCHEDULE_REFUSAL } from "../../../../lib/schedule-refusals";
 import type { PreflightResult } from "../../../../lib/types/preflight";
 import { NR_LAUNCH } from "../../../wardyn/copy/new-run/launch";
@@ -111,7 +111,7 @@ describe("Name this run: a start later", () => {
     open(inDays(6.5));
     const box = await screen.findByRole("dialog", { name: NR_LAUNCH.TITLE });
     await named(box);
-    expect(within(box).getByRole("alert")).toHaveTextContent(NR_RUN.START_FAR);
+    expect(within(box).getByRole("alert")).toHaveTextContent(NR_RUN.START_FAR(scheduleDaysAhead()));
     expect(launchButton()).toBeDisabled();
     expect(create).not.toHaveBeenCalled();
   });
