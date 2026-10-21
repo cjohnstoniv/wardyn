@@ -17,7 +17,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestPG_TakeoverTakesHandsBackAndRefusesTheRest pins the human_takeover CAS (0208): the first
+// TestPG_TakeoverTakesHandsBackAndRefusesTheRest pins the human_takeover CAS (0209): the first
 // take over moves PENDING to APPROVED with a holder, a second person replaces the holder (and is
 // told whom), the holder taking over again is refused, only the current holder hands back (the
 // replaced one is refused and leaves the row open), hand back stamps once, and nothing moves a
