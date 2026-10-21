@@ -165,6 +165,7 @@ func (d *kubeAPIDoor) admitInNamespace(method string, core bool, rest []string) 
 	case len(rest) > 3:
 		return errors.New("the path is deeper than a Kubernetes resource and subresource")
 	case len(rest) >= 1 && core && rest[0] == "secrets":
+		//lint:ignore ST1005 the sentence opens with the Kubernetes kind, Secrets
 		return errors.New("Secrets are not readable or writable through this run's kubectl")
 	case len(rest) == 3 && slices.Contains(kubeSubresourcesRefused, rest[2]):
 		return fmt.Errorf("%s is not allowed for this run's kubectl", rest[2])
