@@ -835,7 +835,7 @@ func TestVMProbeVirtiofsdNeedsItsCleanExit(t *testing.T) {
 		if (err == nil) != (code == 0) {
 			t.Fatalf("virtiofsd exit %d: probe = %v", code, err)
 		}
-		if probe == nil || !slices.Equal(probe.cfg.Cmd, []string{qemu.VirtiofsdArgs(0, false)[0], "--version"}) || probe.cfg.User != "1000:1000" ||
+		if probe == nil || !slices.Equal(probe.cfg.Cmd, []string{qemu.VirtiofsdArgs(0, false, 1000, 1000)[0], "--version"}) || probe.cfg.User != "1000:1000" ||
 			string(probe.host.NetworkMode) != "none" || !probe.host.ReadonlyRootfs || !slices.Equal(probe.host.CapDrop, []string{"ALL"}) || len(probe.host.Mounts) != 0 {
 			t.Fatalf("the probe container %+v %+v: virtiofsd --version, unprivileged, no network, no mount", probe.cfg, probe.host)
 		}

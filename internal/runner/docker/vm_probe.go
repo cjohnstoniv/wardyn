@@ -102,7 +102,7 @@ func (d *Driver) probeVirtiofsd(ctx context.Context, c VMConfig) error {
 	host.ReadonlyRootfs = true
 	created, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name: "wardyn-vmprobe-" + uuid.NewString()[:8],
-		Config: &container.Config{Image: c.QEMUImage, User: c.user(), Cmd: []string{qemu.VirtiofsdArgs(0, false)[0], "--version"}, // the binary every share runs
+		Config: &container.Config{Image: c.QEMUImage, User: c.user(), Cmd: []string{qemu.VirtiofsdArgs(0, false, c.UID, c.GID)[0], "--version"}, // the binary every share runs
 			Labels: map[string]string{labelManaged: "true", labelComponent: "vmprobe"}},
 		HostConfig: host,
 	})
