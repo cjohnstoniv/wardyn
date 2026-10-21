@@ -35,6 +35,13 @@ const LIFETIME = { default: { value: 3600 }, cap: { value: 7200 } };
 const CLEAR = { ...SCENARIO_PREFLIGHT.member, limits: { lifetime_sec: LIFETIME } } as unknown as PreflightResult;
 const tomorrow = (): StartChoice => ({ date: new Date(Date.now() + 86_400_000).toISOString().slice(0, 10), time: "12:00", zone: "UTC" });
 const create = vi.fn();
+/** A start this many days from now, on its own UTC date and time. */
+const inDays = (days: number): StartChoice => {
+  const iso = new Date(Date.now() + days * 86_400_000).toISOString();
+  return { date: iso.slice(0, 10), time: iso.slice(11, 16), zone: "UTC" };
+};
+const withWait = (max_wait_sec: number | undefined) =>
+  ({ ...CLEAR, runner_pool_slots: max_wait_sec === undefined ? undefined : { used: 1, waiting: 0, verdict: "starts_now", max_wait_sec } }) as PreflightResult;
 
 function Seeded({ intent, schedule, children }: { intent: RunIntent; schedule?: StartChoice; children: React.ReactNode }) {
   const dispatch = useNewRunDispatch();
@@ -98,6 +105,36 @@ describe("Name this run: a start later", () => {
     expect(launchButton()).toBeDisabled();
     expect(launchButton()).toHaveAttribute("aria-describedby", "name-run-start");
     expect(create).not.toHaveBeenCalled();
+  });
+
+  it("holds Launch on a start past 7 days less the wait the preflight answered, in the board's sentence", async () => {
+    vi.spyOn(runs, "preflightRunWire").mockResolvedValue(withWait(86_400));
+    open(inDays(6.5));
+    const box = await screen.findByRole("dialog", { name: NR_LAUNCH.TITLE });
+    await named(box);
+    expect(within(box).getByRole("alert")).toHaveTextContent(NR_RUN.START_FAR);
+    expect(launchButton()).toBeDisabled();
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("reads the limit from that answer: a shorter wait leaves the same start open", async () => {
+    vi.spyOn(runs, "preflightRunWire").mockResolvedValue(withWait(3600));
+    open(inDays(6.5));
+    const box = await screen.findByRole("dialog", { name: NR_LAUNCH.TITLE });
+    await named(box);
+    expect(within(box).queryByRole("alert")).not.toBeInTheDocument();
+    expect(launchButton()).toBeEnabled();
+  });
+
+  it("checks no far limit when the answer carries no wait, and lets the server's sentence answer", async () => {
+    vi.spyOn(runs, "preflightRunWire").mockResolvedValue(withWait(undefined));
+    create.mockRejectedValue(new HttpError(422, SCHEDULE_REFUSAL.TOO_FAR("a", "b", 24), "start_at_too_far"));
+    open(inDays(6.5));
+    const box = await screen.findByRole("dialog", { name: NR_LAUNCH.TITLE });
+    await named(box);
+    expect(launchButton()).toBeEnabled();
+    await userEvent.click(launchButton());
+    expect(await within(box).findByText(SCHEDULE_REFUSAL.TOO_FAR("a", "b", 24), { selector: "#name-run-sentence" })).toBeInTheDocument();
   });
 
   it("starts now, with no line and no start in the body, when the switch is off or the run is Interactive", async () => {

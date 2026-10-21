@@ -17,6 +17,13 @@ describe("launchStart", () => {
     expect(launchStart({ intent: AUTONOMOUS, schedule: { ...schedule, date: "2026-10-19" } }, true, NOW)?.problem).toBe("past");
   });
 
+  it("calls a start too far ahead only once the run's wait is known", () => {
+    const week = { ...schedule, date: "2026-10-26", time: "20:00" };
+    expect(launchStart({ intent: AUTONOMOUS, schedule: week }, true, NOW)?.problem).toBeNull();
+    expect(launchStart({ intent: AUTONOMOUS, schedule: week }, true, NOW, 86_400)?.problem).toBe("far");
+    expect(launchStart({ intent: AUTONOMOUS, schedule: week }, true, NOW, 3600)?.problem).toBeNull();
+  });
+
   it("is nothing when the switch is off or absent, whatever the draft last held", () => {
     expect(launchStart({ intent: AUTONOMOUS, schedule }, false, NOW)).toBeUndefined();
   });

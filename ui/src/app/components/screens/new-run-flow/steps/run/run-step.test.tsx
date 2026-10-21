@@ -495,7 +495,7 @@ describe("Run step: Schedule for later", () => {
     expect(scheduleNow()).toEqual({ date, time: "02:00", zone: "UTC" });
   });
 
-  it("refuses a past time and one more than 7 days ahead, in the board's sentences", async () => {
+  it("refuses a past time in the board's sentence, and checks no far limit: the run's wait is not known here", async () => {
     show(AUTONOMOUS, MEMBER, ON);
     await pick();
     await userEvent.selectOptions(screen.getByLabelText(NR_RUN.START_ZONE), "UTC");
@@ -504,7 +504,7 @@ describe("Run step: Schedule for later", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(NR_RUN.START_PAST);
     expect(screen.getByLabelText(NR_RUN.START_DATE)).toHaveAttribute("aria-invalid", "true");
     setField(screen.getByLabelText(NR_RUN.START_DATE), new Date(Date.now() + 9 * 86_400_000).toISOString().slice(0, 10));
-    expect(screen.getByRole("alert")).toHaveTextContent(NR_RUN.START_FAR);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("goes back to Run now, dropping the start", async () => {

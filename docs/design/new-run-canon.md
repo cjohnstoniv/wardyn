@@ -712,7 +712,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `TIMING_INTERACTIVE` | mock | Interactive · Starts when launched |
 | `TIMING_NOW` | mock | Autonomous · Run now |
 | `TIMING_STARTS(when)` | deviation (FEAT-2 board F2SCHED-1) | Autonomous · Starts {when} |
-| `TIMING_CHOOSE` | deviation (FEAT-2 board F2SCHED-1) | Autonomous · Choose a start time |
+| `TIMING_CHOOSE` | deviation (derived from board F2SCHED-1's logic, not its copy box; approved 2026-10-20) | Autonomous · Choose a start time |
 | `TIMING_CHECKED` | deviation (FEAT-2 board F2SCHED-1) | Checked again when it starts. |
 | `WHERE_VALUE(pool)` | mock | {pool} pool |
 | `WHERE_DETAIL(kind, used, max)` | deviation (pool words) | {kind} · {used} of {max} running |

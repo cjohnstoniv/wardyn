@@ -15,9 +15,12 @@ export interface LaunchStart {
   problem: StartProblem | null;
 }
 
-/** The start the draft asks for, or undefined when it starts now. `on` is scheduledRunsOn(setup status). */
-export function launchStart(draft: Pick<NewRunDraft, "intent" | "schedule">, on: boolean, now: number): LaunchStart | undefined {
+/**
+ * The start the draft asks for, or undefined when it starts now. `on` is scheduledRunsOn(setup status);
+ * `waitSec` is the preflight's max_wait_sec for this run, absent until the server has answered.
+ */
+export function launchStart(draft: Pick<NewRunDraft, "intent" | "schedule">, on: boolean, now: number, waitSec?: number): LaunchStart | undefined {
   const { intent, schedule } = draft;
   if (!on || !schedule || intent.shape !== "agent_task" || intent.experience !== "background") return undefined;
-  return { choice: schedule, problem: startProblem(schedule, now) };
+  return { choice: schedule, problem: startProblem(schedule, now, waitSec) };
 }

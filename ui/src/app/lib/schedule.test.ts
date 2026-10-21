@@ -40,10 +40,22 @@ describe("startProblem", () => {
     expect(startProblem(at("", "", "UTC"), NOW)).toBe("missing");
     expect(startProblem(at("2026-10-20", "14:00", "UTC"), NOW)).toBe("past");
     expect(startProblem(at("2026-10-20", "13:59", "UTC"), NOW)).toBe("past");
-    expect(startProblem(at("2026-10-27", "14:01", "UTC"), NOW)).toBe("far");
-    expect(startProblem(at("2026-10-27", "14:00", "UTC"), NOW)).toBeNull();
+    expect(startProblem(at("2026-10-27", "14:01", "UTC"), NOW, 0)).toBe("far");
+    expect(startProblem(at("2026-10-27", "14:00", "UTC"), NOW, 0)).toBeNull();
     expect(startProblem(at("2026-10-21", "02:00", "UTC"), NOW)).toBeNull();
     expect(SCHEDULE_MAX_AHEAD_MS).toBe(7 * 24 * 3600_000);
+  });
+
+  it("keeps the run's own wait out of the 7 days, as the server answered it, and never guesses one", () => {
+    // 86400 s of wait: the latest start is 6 days out, 2026-10-26 14:00 UTC.
+    expect(startProblem(at("2026-10-26", "14:01", "UTC"), NOW, 86_400)).toBe("far");
+    expect(startProblem(at("2026-10-26", "14:00", "UTC"), NOW, 86_400)).toBeNull();
+    // An Interactive run's 3600 s leaves nearly the whole week.
+    expect(startProblem(at("2026-10-26", "14:01", "UTC"), NOW, 3600)).toBeNull();
+    expect(startProblem(at("2026-10-27", "12:01", "UTC"), NOW, 3600)).toBe("far");
+    // No answer yet: no far check at all, the create's start_at_too_far answers.
+    expect(startProblem(at("2026-12-01", "14:00", "UTC"), NOW)).toBeNull();
+    expect(startProblem(at("2026-12-01", "14:00", "UTC"), NOW, undefined)).toBeNull();
   });
 
   it("judges the start in its own zone", () => {

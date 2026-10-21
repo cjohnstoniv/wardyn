@@ -72,12 +72,16 @@ export function startInstant(choice: StartChoice): number | null {
 
 export type StartProblem = "missing" | "past" | "far";
 
-/** Why a start is not one the server will take, or null when it looks fine. */
-export function startProblem(choice: StartChoice, now: number): StartProblem | null {
+/**
+ * Why a start is not one the server will take, or null when it looks fine. The latest start is 7 days less the
+ * run's own wait, which only the server's answer (the preflight's max_wait_sec) knows: with no `waitSec` there is
+ * no "far" check, and the create's own start_at_too_far sentence answers.
+ */
+export function startProblem(choice: StartChoice, now: number, waitSec?: number): StartProblem | null {
   const at = startInstant(choice);
   if (at === null) return "missing";
   if (at <= now) return "past";
-  if (at - now > SCHEDULE_MAX_AHEAD_MS) return "far";
+  if (waitSec !== undefined && at - now > SCHEDULE_MAX_AHEAD_MS - waitSec * 1000) return "far";
   return null;
 }
 
