@@ -15,9 +15,10 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// Dispatch marks a desktop VM run's proxy config VM, so its proxy keeps the port rule on and
-// honours wardyn-vmnet's contract; a container run's config is unchanged and carries no vm key.
-func TestDispatch_ProxyConfigVMFollowsMachineKind(t *testing.T) {
+// Dispatch never marks a proxy config VM, for a desktop VM run either: only the runner that relays
+// the guest through wardyn-vmnet knows the proxy's one client is the relay, and a Kubernetes VM pod
+// has a container run's network. No vm key reaches the config dispatch builds.
+func TestDispatch_NeverSetsProxyConfigVM(t *testing.T) {
 	for _, kind := range []types.MachineKind{types.MachineLinuxVM, ""} {
 		fr := &fakeRunner{}
 		srv, st, _, run := dispatchTeardownFixture(t, fr, types.RunPending)
@@ -33,22 +34,21 @@ func TestDispatch_ProxyConfigVMFollowsMachineKind(t *testing.T) {
 		if calls != 1 {
 			t.Fatalf("machine_kind %q: CreateSandbox calls = %d (hint %q), want 1", kind, calls, st.FailureHint())
 		}
-		if pc.VM != kind.IsVM() {
-			t.Errorf("machine_kind %q: ProxyConfig.VM = %v, want %v", kind, pc.VM, kind.IsVM())
+		if pc.VM {
+			t.Errorf("machine_kind %q: dispatch set ProxyConfig.VM", kind)
 		}
 		raw, err := runner.BuildProxyConfig(run.ID, pc, runner.ProxyListenPort)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := strings.Contains(string(raw), `"vm":`); got != kind.IsVM() {
-			t.Errorf("machine_kind %q: proxy config carries the vm key = %v, want %v", kind, got, kind.IsVM())
+		if strings.Contains(string(raw), `"vm":`) {
+			t.Errorf("machine_kind %q: dispatch's proxy config carries the vm key", kind)
 		}
 	}
 }
 
-// Revive rebuilds a local run's spec from the proxy config dispatch stored: a VM run's proxy
-// comes back VM, a container run's does not.
-func TestRevive_StoredProxyConfigKeepsVM(t *testing.T) {
+// The proxy config dispatch stores, and the spec revive rebuilds from it, carry no VM either.
+func TestRevive_StoredProxyConfigNeverVM(t *testing.T) {
 	for _, kind := range []types.MachineKind{types.MachineLinuxVM, ""} {
 		srv, ls, _, run := localDispatchFixture(t, types.PlacementLocal)
 		runnerID := uuid.New()
@@ -66,15 +66,15 @@ func TestRevive_StoredProxyConfigKeepsVM(t *testing.T) {
 		if err != nil {
 			t.Fatalf("machine_kind %q: no stored proxy config (hint %q): %v", kind, ls.dispatchTestStore.FailureHint(), err)
 		}
+		if strings.Contains(string(raw), `"vm":`) {
+			t.Errorf("machine_kind %q: the stored proxy config carries the vm key", kind)
+		}
 		cfg, err := proxy.LoadConfigBytes(raw)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if cfg.VM != kind.IsVM() {
-			t.Errorf("machine_kind %q: stored proxy config VM = %v, want %v", kind, cfg.VM, kind.IsVM())
-		}
-		if got := localStoredSpec(*cfg).ProxyConfig.VM; got != kind.IsVM() {
-			t.Errorf("machine_kind %q: revived ProxyConfig.VM = %v, want %v", kind, got, kind.IsVM())
+		if localStoredSpec(*cfg).ProxyConfig.VM {
+			t.Errorf("machine_kind %q: the revived spec's ProxyConfig.VM is set", kind)
 		}
 	}
 }
