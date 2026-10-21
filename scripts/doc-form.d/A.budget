@@ -240,7 +240,13 @@
 # docs/AUDIT-ACTIONS.md 49479 adds 108 (0.10 CTL-A): ui.clipboard and the two desktop.file rows (#2967).
 # docs/AUDIT-ACTIONS.md 49498 adds 19 (0.10 CTL-A r2): the ui.clipboard not_rfb failure (#2967).
 # docs/AUDIT-ACTIONS.md 51118 = ours 50991 + theirs 49498 - base 49371 at the 0.10 W4c merge of CTL-A 99d68a80a onto the train.
-docs/AUDIT-ACTIONS.md=51118 share=8
+# 0.10 CTL-C (#2972): docs/AUDIT-ACTIONS.md 50167 adds 263 over 49904, measured: the desktop_signin.begin, .transfer and .close rows and the builtin:signin-via-org reason.
+# 0.10 CTL-C r3 (#2972 H1): docs/AUDIT-ACTIONS.md 50182 adds 15 over 50167, measured: a pause failure may be resumed by the sweep, and a stuck close writes one failure row per stage, not per pass.
+# 0.10 CTL-C r3 (#2972 M1): docs/AUDIT-ACTIONS.md 50238 adds 56 over 50182, measured: the desktop_signin.skip row.
+# 0.10 CTL-C r4 (#2972 L1): docs/AUDIT-ACTIONS.md 50287 adds 49 over 50238, measured: the continue stage and its run.kill reason.
+# docs/AUDIT-ACTIONS.md 50939 = ours 50287 + theirs 50556 - base 49904 at the 0.10 CTL-C r4 merge of main.
+# docs/AUDIT-ACTIONS.md 51501 = ours 51118 + theirs 50939 - base 50556 at the 0.10 W4c merge of CTL-C 6de42c110 onto the train.
+docs/AUDIT-ACTIONS.md=51501 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.

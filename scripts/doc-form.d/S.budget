@@ -221,7 +221,13 @@
 # docs/sdk.md 20524 = ours 20434 + theirs 19772 - base 19682 at the 0.10 W4c merge of CTL-A 99d68a80a onto the train.
 # docs/sdk.md 19799 = ours 19770 + theirs 19772 - base 19743 at the 0.10 W2 merge of CTL-A r3 onto DSK-A.
 # docs/sdk.md 20524, measured, at the 0.10 W4c merge of DSK-A 46d21862b onto the train: two merge bases (CTL-A 99d68a80a and VM-C~1 4b06ac1e5), so no single base to subtract.
-docs/sdk.md=20524 share=21
+# 0.10 CTL-C (#2972): docs/sdk.md 20334 adds 274 over 20060, measured: the four desktop sign-in routes and their reason rows.
+# 0.10 CTL-C r3 (#2972 H1): docs/sdk.md 20360 adds 26 over 20334, measured: desktop_signin_runner_unsupported names its other two causes (another desktop image, sign-ins off at start), and pause_failed says the agent stays stopped while Wardyn retries a resume that cannot finish.
+# 0.10 CTL-C r3 (#2972 M1): docs/sdk.md 20398 adds 38 over 20360, measured: the desktop_signin_image_not_granted reason row.
+# 0.10 CTL-C r4 (#2972 L1): docs/sdk.md 20441 adds 43 over 20398, measured: the desktop_signin_resume_failed reason row.
+# docs/sdk.md 20669 = ours 20441 + theirs 20288 - base 20060 at the 0.10 CTL-C r4 merge of main.
+# docs/sdk.md 20905 = ours 20524 + theirs 20669 - base 20288 at the 0.10 W4c merge of CTL-C 6de42c110 onto the train.
+docs/sdk.md=20905 share=21
 # docs/sdk.md 18691 adds 28 over 18663, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.

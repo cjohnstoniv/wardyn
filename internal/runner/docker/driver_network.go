@@ -133,6 +133,9 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// NetworkMode is the per-run internal network (NOT "none"): it is gatewayless, so it provides no
 	// default route. The endpoint carries the "agent" alias so the proxy can identify its segment.
 	agentHost := hardenedHostConfig(internalNetName(spec.RunID), runtimeName, spec.Resources, info)
+	if spec.DesktopSignins {
+		agentHost.Tmpfs[runner.SigninStorePath] = runner.SigninStoreTmpfs
+	}
 	// Pin the proxy's IP so the agent resolves "wardyn-proxy" without the embedded DNS (required
 	// under gVisor). The ONLY host entry the agent gets — NOT host.docker.internal, proxy-only.
 	agentHost.ExtraHosts = append(agentHost.ExtraHosts, "wardyn-proxy:"+proxyIP)

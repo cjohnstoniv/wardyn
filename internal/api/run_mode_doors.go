@@ -72,10 +72,13 @@ var backgroundDoors = []backgroundDoor{
 	// handleUIEnter only parses and delegates to uiEnterCommon, and handleUIBind
 	// sets a binding cookie without reading any run, so neither can ask honestly.
 	{Door: "web application gateway", Owner: "C-mode-doors", Symbols: []string{"uiEnterCommon", "uiSessionStillAuthorized"}, Enforced: true},
-	// The Files panel moves files in and out of the graphical desktop, so it is the desktop door.
-	// The desktop app itself is reached through the web application gateway, which refuses above.
-	{Door: "desktop", Owner: "CTL-A (desktop Files panel)", Symbols: []string{"desktopRun"},
-		Routes: []string{"GET /runs/{id}/desktop/files", "PUT /runs/{id}/desktop/files/{name}", "GET /runs/{id}/desktop/files/{name}"}, Enforced: true},
+	// The desktop's own display is the novnc app, behind the web application
+	// gateway above. Its routes here are the Files panel, which moves files in and
+	// out of the graphical desktop (desktopRun), and the person's sign-in inside it
+	// (#2972): signinRun is the one read every sign-in route makes before it acts.
+	{Door: "desktop", Owner: "CTL-A (desktop Files panel), CTL-C (desktop sign-ins)", Symbols: []string{"desktopRun", "signinRun"},
+		Routes: []string{"GET /runs/{id}/desktop/files", "PUT /runs/{id}/desktop/files/{name}", "GET /runs/{id}/desktop/files/{name}",
+			"POST /runs/{id}/desktop-signin", "POST /runs/{id}/desktop-signin/shares", "POST /runs/{id}/desktop-signin/end"}, Enforced: true},
 }
 
 // passiveRunRoutes are the /runs/{id} routes that are not interactive doors: they

@@ -67,7 +67,7 @@ func localStoredSpec(c proxy.Config) runner.SandboxSpec {
 		Unattended: c.Unattended, ScrubResponses: c.ScrubResponses, Attribution: c.Attribution,
 		PushRuleSets: c.PushRuleSets, PushRuleBase: c.PushRuleBase, HarnessToolRules: c.HarnessToolRules, HarnessCredentials: c.HarnessCredentials, ViaOrgRoutes: c.ViaOrgRoutes,
 		MCPServers: c.MCPServers, MCPBindings: c.MCPBindings,
-		VM: c.VM, PortRule: c.PortRule,
+		VM: c.VM, PortRule: c.PortRule, DesktopSignins: c.SigninListen != "",
 	}
 	for _, in := range c.Injection {
 		pc.Injection = append(pc.Injection, runner.InjectionGrant{GrantID: in.GrantID, Rule: in.InjectionRule})

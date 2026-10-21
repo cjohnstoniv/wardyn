@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/netip"
 	"net/url"
 	"os"
@@ -58,6 +59,10 @@ type Config struct {
 	Injection []InjectionConfig `json:"injection,omitempty"`
 	// Listen is the proxy listen address (default ":3128").
 	Listen string `json:"listen,omitempty"`
+	// SigninListen, when set, opens the person's desktop sign-in lane on this
+	// address (desktop_signin_lane.go): CONNECT tunnels only, admitted by an
+	// open sign-in's credential, never terminated. Empty = no lane.
+	SigninListen string `json:"signin_listen,omitempty"`
 	// AllowedPeers, when set, are the only source networks the proxy serves; a
 	// connection from any other address is closed before a byte is read. The
 	// Docker runner sets the run's own network here under
@@ -471,6 +476,17 @@ func ValidUpstreamProxyURL(raw string) error {
 	return err
 }
 
+// validateSigninListen: the sign-in lane, when set, is a host:port of its own.
+func (c *Config) validateSigninListen() error {
+	if c.SigninListen == "" {
+		return nil
+	}
+	if _, _, err := net.SplitHostPort(c.SigninListen); err != nil || c.SigninListen == c.Listen {
+		return fmt.Errorf("config: signin_listen must be a host:port other than listen")
+	}
+	return nil
+}
+
 func (c *Config) applyDefaultsAndValidate() error {
 	if c.Listen == "" {
 		c.Listen = defaultListen
@@ -486,6 +502,9 @@ func (c *Config) applyDefaultsAndValidate() error {
 	}
 	if c.RunToken == "" {
 		return fmt.Errorf("config: run_token is required")
+	}
+	if err := c.validateSigninListen(); err != nil {
+		return err
 	}
 	if err := hoptls.CheckURL(c.ControlPlaneURL); err != nil {
 		return fmt.Errorf("config: %w", err)

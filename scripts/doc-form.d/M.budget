@@ -68,7 +68,9 @@ docs/SSH.md=6703 share=35
 # docs/UI-SANDBOXES.md 6155 adds 202 (0.10 DSK-A r2): the Linux VM desktop section (reserved __desktop segment, 1-hour cookie cap, Close, the restart residual, the clipboard filter on the VM relay and that no clipboard flows from QEMU today, not a boundary), measured.
 # docs/UI-SANDBOXES.md 6175 adds 20 (0.10 DSK-A r3), measured: Close cuts a stream on the same replica at once and on another within 15 s, and the database-outage line.
 # docs/UI-SANDBOXES.md 6361, measured, at the 0.10 W4c merge of DSK-A 46d21862b onto the train: two merge bases (CTL-A 99d68a80a and VM-C~1 4b06ac1e5), so no single base to subtract.
-docs/UI-SANDBOXES.md=6361 share=35
+# 0.10 CTL-C (#2972): docs/UI-SANDBOXES.md 5914 adds 261 over 5653, measured: the desktop sign-ins section and its image.
+# docs/UI-SANDBOXES.md 6622 = ours 6361 + theirs 5914 - base 5653 at the 0.10 W4c merge of CTL-C 6de42c110 onto the train.
+docs/UI-SANDBOXES.md=6622 share=35
 # docs/NEW-RUN.md 2905 measured (0.9 final docs pass): the New run guide.
 # docs/NEW-RUN.md 2914 adds 9 over 2905: 0.9 final docs pass 2, measured: the runner-limit wait reason and the runner pools links.
 # docs/NEW-RUN.md 2915 adds 1 over 2914: docs fix: run --file overlay; a policy's own * rule stays in force on a routed run, measured.

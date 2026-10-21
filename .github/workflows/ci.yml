@@ -1739,10 +1739,10 @@ jobs:
   # D3. Covers a surface no existing gate does: `govulncheck` reads Go modules,
   # `make npm-audit` reads the UI's production dependencies — NEITHER sees the
   # Debian packages, the node runtime or the globally-installed agent CLI that
-  # the agent images actually ship. The scan targets are the nine images the
+  # the agent images actually ship. The scan targets are the ten images the
   # release publishes (the jobs below): wardynd, wardynd-fips, wardyn-proxy and
-  # wardyn-runnerd, plus the five agent images (agent-base, agent-codex-cli,
-  # agent-aws-sso, agent-vscode, agent-novnc). The four wardyn images are
+  # wardyn-runnerd, plus the six agent images (agent-base, agent-codex-cli,
+  # agent-aws-sso, agent-vscode, agent-novnc, agent-novnc-signin). The four wardyn images are
   # distroless-static, which carries
   # essentially no OS package surface; the agent images (trixie + node/python +
   # git/ssh/tmux/socat) are where the OS findings land.
@@ -1754,7 +1754,9 @@ jobs:
   # available is not something a rebuild can clear, so failing on it just
   # blocks every PR until Debian ships a patch. Accepted-with-a-reason CVEs go
   # in .trivyignore (trivy's own allowlist format — one id per line, each with
-  # a comment saying who accepted it and why).
+  # a comment saying who accepted it and why). A job whose TRIVY_IGNORES names
+  # more files reads them on top of .trivyignore, for that image alone
+  # (agent-novnc-signin: .trivyignore.novnc-signin).
   #
   # A SECOND, STRICT step follows (severity CRITICAL, NO --ignore-unfixed). It
   # exists because adopters mirror our images through scanners that count a
@@ -1770,13 +1772,13 @@ jobs:
   #
   # One job per image, not a matrix, so each can skip at the job level and
   # take no runner: on changes.outputs.images == 'false' (docs, console source,
-  # Go test files only) all eight report as skipped, which branch protection
+  # Go test files only) all ten report as skipped, which branch protection
   # accepts. Those inputs cannot change a scan: the images compile Go from this
   # tree and copy deploy/images/, and none carries the console's npm packages.
   # A skipped MATRIX would not do: GitHub reports it as one check with the
   # name unexpanded, and `trivy (wardynd)` would never report. The check names
   # are the ones branch protection requires; the steps are written once, on the
-  # first job, and the other seven reuse them (`*trivy_steps`). Each job's
+  # first job, and the other nine reuse them (`*trivy_steps`). Each job's
   # TRIVY_IMAGE is what scripts/check-image-pins.sh compares with the images
   # release.yml publishes.
   #
@@ -1805,13 +1807,17 @@ jobs:
           prime: ${{ env.TRIVY_PRIME }}
       - name: Build the image locally (scan target — never pushed)
         run: |
-          # agent-vscode/agent-novnc default FROM wardyn/agent-base:local (never
-          # a registry pull) — build that first when this job needs it. Every
-          # other job's Dockerfile stands alone.
+          # agent-vscode/agent-novnc default FROM wardyn/agent-base:local, and
+          # agent-novnc-signin FROM wardyn/agent-novnc:local (never a registry
+          # pull) — build those first when this job needs them. Every other
+          # job's Dockerfile stands alone.
           case "$TRIVY_IMAGE" in
-            agent-vscode|agent-novnc)
+            agent-vscode|agent-novnc|agent-novnc-signin)
               docker build -f deploy/images/base/Dockerfile -t wardyn/agent-base:local . ;;
           esac
+          if [ "$TRIVY_IMAGE" = agent-novnc-signin ]; then
+            docker build -f deploy/images/novnc/Dockerfile -t wardyn/agent-novnc:local .
+          fi
           # shellcheck disable=SC2086 # TRIVY_BUILD_ARGS is zero or more words
           docker build $TRIVY_BUILD_ARGS -f "$TRIVY_DOCKERFILE" -t "wardyn/$TRIVY_IMAGE:trivy-scan" .
       # The aws-sso image's --selftest, against the image that was actually
@@ -1830,6 +1836,15 @@ jobs:
         # would otherwise ship in an image CI built and never ran.
         if: env.TRIVY_IMAGE == 'agent-aws-sso' || env.TRIVY_IMAGE == 'agent-codex-cli'
         run: docker run --rm --entrypoint agent-run "wardyn/$TRIVY_IMAGE:trivy-scan" --selftest
+      # The sign-in image's own gate, against the image this job built: among
+      # other things it proves /usr/bin/Xwayland is absent, which is what the
+      # image's .trivyignore.novnc-signin entries rest on.
+      - name: Desktop sign-in image gate against the built image
+        if: env.TRIVY_IMAGE == 'agent-novnc-signin'
+        env:
+          DOCKER_HOST: unix:///var/run/docker.sock
+          IMAGE: wardyn/agent-novnc-signin:trivy-scan
+        run: ./scripts/test-image-novnc-signin.sh
       # trivy-action's built-in cache (on by default) restores AND saves the
       # vulnerability DB on every event, so each PR run wrote seven PR-scoped
       # entries (issue #470). It is off here; the DB is restored below and saved
@@ -1862,7 +1877,7 @@ jobs:
           format: table
           severity: CRITICAL
           ignore-unfixed: true
-          trivyignores: .trivyignore
+          trivyignores: ${{ env.TRIVY_IGNORES || '.trivyignore' }}
           exit-code: '1'
           cache: false
           skip-setup-trivy: true
@@ -1876,7 +1891,7 @@ jobs:
           format: table
           severity: CRITICAL
           ignore-unfixed: false
-          trivyignores: .trivyignore
+          trivyignores: ${{ env.TRIVY_IGNORES || '.trivyignore' }}
           exit-code: '1'
           cache: false
           skip-setup-trivy: true
@@ -1992,6 +2007,21 @@ jobs:
       TRIVY_DOCKERFILE: deploy/images/novnc/Dockerfile
       TRIVY_PRIME: '/library/(golang:[0-9.]+|node:[0-9]+-trixie-slim)@'
       TRIVY_BUILD_ARGS: ''
+    steps: *trivy_steps
+  trivy-agent-novnc-signin:
+    name: trivy (agent-novnc-signin)
+    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
+    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      TRIVY_IMAGE: agent-novnc-signin
+      TRIVY_DOCKERFILE: deploy/images/novnc-signin/Dockerfile
+      TRIVY_PRIME: '/library/(golang:[0-9.]+|node:[0-9]+-trixie-slim)@'
+      TRIVY_BUILD_ARGS: ''
+      # xwayland's two unfixed CRITICALs, accepted for this image only.
+      TRIVY_IGNORES: .trivyignore,.trivyignore.novnc-signin
     steps: *trivy_steps
 
   # ── supply-chain gates ────────────────────────────────────────────────────
@@ -2399,6 +2429,7 @@ jobs:
       - trivy-agent-aws-sso
       - trivy-agent-vscode
       - trivy-agent-novnc
+      - trivy-agent-novnc-signin
       - notices
       - gates
       - dco

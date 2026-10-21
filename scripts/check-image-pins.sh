@@ -41,7 +41,7 @@ fi
 
 # Matched on the REF, not the file: exempting a whole Dockerfile would silently
 # waive every OTHER FROM in it (full/ also pulls digest-pinned toolchain stages).
-# Matched on the REF, one per line. The first two entries are locally BUILT images, so no
+# Matched on the REF, one per line. The first three entries are locally BUILT images, so no
 # upstream digest exists to pin them to — a digest would have to be recomputed on
 # every rebuild of the base, which is neither stable nor meaningful.
 #   wardyn/agent-claude-code:local  deploy/images/full/Dockerfile's base, and
@@ -54,11 +54,16 @@ fi
 #                                   base — neither a code-server layer nor an X
 #                                   stack needs a vendor CLI, so both default
 #                                   away from it deliberately (#140).
+#   wardyn/agent-novnc:local        deploy/images/novnc-signin/Dockerfile's default
+#                                   base: the desktop sign-in variant is agent-novnc
+#                                   plus the person's browser (#2972); release.yml
+#                                   passes the agent-novnc ref of the same release.
 #   scratch                         the empty image: nothing to pin. The `gomodcache`
 #                                   seed stage of deploy/compose/Dockerfile.proxy and
 #                                   deploy/images/oracle/Dockerfile.
 ALLOWLIST_REFS="wardyn/agent-claude-code:local
 wardyn/agent-base:local
+wardyn/agent-novnc:local
 scratch"
 fail=0
 
@@ -294,25 +299,32 @@ fi
 # Dockerfile's own download line with the pinned version substituted.
 GPL_OFFER_SCRIPT=scripts/gpl-source-offer.sh
 NOVNC_DOCKERFILE=deploy/images/novnc/Dockerfile
+# agent-novnc-signin is built FROM agent-novnc, so it conveys the same
+# websockify and needs its own row, checked against the same pin, whenever
+# release.yml publishes it.
+websockify_images="agent-novnc $(printf '%s\n' "${published:-}" | grep -x agent-novnc-signin || true)"
 if [ -f "$GPL_OFFER_SCRIPT" ] && [ -f "$NOVNC_DOCKERFILE" ]; then
-  manual_row=$(grep -oE '"agent-novnc\|websockify\|[^"]+"' "$GPL_OFFER_SCRIPT" | head -1 | tr -d '"' || true)
-  IFS='|' read -r _ _ manual_ver _ manual_url <<<"$manual_row"
   dockerfile_ver=$(grep -oE '^ARG WEBSOCKIFY_VERSION=[0-9A-Za-z.+-]+' "$NOVNC_DOCKERFILE" | head -1 | sed -E 's/^ARG WEBSOCKIFY_VERSION=//' || true)
   url_template=$(grep -oE 'https://[^" ]*websockify[^" ]*\$\{WEBSOCKIFY_VERSION\}[^" ]*' "$NOVNC_DOCKERFILE" | head -1 || true)
   dockerfile_url=${url_template//'${WEBSOCKIFY_VERSION}'/$dockerfile_ver}
-  if [ -z "$manual_ver" ] || [ -z "$manual_url" ]; then
-    echo "FAIL: $GPL_OFFER_SCRIPT: no 'agent-novnc|websockify|...' entry found in MANUAL_ENTRIES — the GPL offer would silently drop websockify's row." >&2
-    fail=1
-  elif [ -z "$dockerfile_ver" ] || [ -z "$url_template" ]; then
-    echo "FAIL: $NOVNC_DOCKERFILE: no 'ARG WEBSOCKIFY_VERSION=' pin or websockify download URL found — cannot cross-check the GPL offer's hand-listed websockify row." >&2
-    fail=1
-  elif [ "$manual_ver" != "$dockerfile_ver" ]; then
-    echo "FAIL: $GPL_OFFER_SCRIPT's MANUAL_ENTRIES lists websockify $manual_ver but $NOVNC_DOCKERFILE pins WEBSOCKIFY_VERSION=$dockerfile_ver. Update MANUAL_ENTRIES to match." >&2
-    fail=1
-  elif [ "$manual_url" != "$dockerfile_url" ]; then
-    echo "FAIL: $GPL_OFFER_SCRIPT's MANUAL_ENTRIES names websockify source URL $manual_url but $NOVNC_DOCKERFILE downloads $dockerfile_url. Update MANUAL_ENTRIES to match." >&2
-    fail=1
-  fi
+  for img in $websockify_images; do
+    manual_row=$(grep -oE "\"$img\\|websockify\\|[^\"]+\"" "$GPL_OFFER_SCRIPT" | head -1 | tr -d '"' || true)
+    manual_ver='' manual_url=''
+    IFS='|' read -r _ _ manual_ver _ manual_url <<<"$manual_row"
+    if [ -z "$manual_ver" ] || [ -z "$manual_url" ]; then
+      echo "FAIL: $GPL_OFFER_SCRIPT: no '$img|websockify|...' entry found in MANUAL_ENTRIES — the GPL offer would silently drop websockify's row." >&2
+      fail=1
+    elif [ -z "$dockerfile_ver" ] || [ -z "$url_template" ]; then
+      echo "FAIL: $NOVNC_DOCKERFILE: no 'ARG WEBSOCKIFY_VERSION=' pin or websockify download URL found — cannot cross-check the GPL offer's hand-listed websockify row." >&2
+      fail=1
+    elif [ "$manual_ver" != "$dockerfile_ver" ]; then
+      echo "FAIL: $GPL_OFFER_SCRIPT's MANUAL_ENTRIES lists websockify $manual_ver for $img but $NOVNC_DOCKERFILE pins WEBSOCKIFY_VERSION=$dockerfile_ver. Update MANUAL_ENTRIES to match." >&2
+      fail=1
+    elif [ "$manual_url" != "$dockerfile_url" ]; then
+      echo "FAIL: $GPL_OFFER_SCRIPT's MANUAL_ENTRIES names websockify source URL $manual_url for $img but $NOVNC_DOCKERFILE downloads $dockerfile_url. Update MANUAL_ENTRIES to match." >&2
+      fail=1
+    fi
+  done
 fi
 
 # ── the `make setup` shell path pulls no floating third-party image ─────────

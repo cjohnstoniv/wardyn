@@ -68,6 +68,8 @@ type createRunLaunch struct {
 	// mainDrive is the main drive the fold decided (stepMainDrive); dispatch writes its size and
 	// treats it as soft unless the run's policy wrote it.
 	mainDrive *mainDriveDecision
+	// signinImageUngranted is the fold's (runFold.signinImageUngranted).
+	signinImageUngranted bool
 }
 
 // launch is what both doors hand finishCreateRunLaunch for a run the fold admitted: create, and the pool
@@ -81,6 +83,7 @@ func (f *runFold) launch(req createRunRequest, spec types.RunPolicySpec, ceiling
 		wsRefs: f.wsRefs, driveMounts: f.driveMounts, memberDrives: memberDriveOwners(f.drives), ephemeralDirs: f.ephemeralDirs, startFolder: f.startFolder,
 		runToken: runToken, created: created, comps: f.comps, overridden: f.source.overridden(), provenance: f.source.knobs, pushSets: f.pushSets,
 		harnessRules: harnessRules, harnesses: f.harnesses, mainDrive: f.mainDrive.decision(),
+		signinImageUngranted: f.signinImageUngranted,
 	}
 }
 
@@ -167,6 +170,8 @@ func (s *Server) finishCreateRunLaunch(ctx context.Context, l createRunLaunch) {
 			HarnessToolRules: l.harnessRules,
 			Harnesses:        l.harnesses,
 			MainDrive:        l.mainDrive,
+			// SigninImageUngranted keeps a person's own desktop image (desktopSigninDispatch).
+			SigninImageUngranted: l.signinImageUngranted,
 		})
 	}
 }

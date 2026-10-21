@@ -855,6 +855,10 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/runs/{id}/revive":             {class: classOwner, entity: entityRun, ownerTier: tierSuper},
 	"POST /api/v1/runs/{id}/profile":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	"POST /api/v1/runs/{id}/profile/synthesize": {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	// Desktop sign-ins (#2972): the run's creator only (run_desktop_signin.go).
+	"POST /api/v1/runs/{id}/desktop-signin":        {class: classOwner, entity: entityRun, ownerTier: tierEntry},
+	"POST /api/v1/runs/{id}/desktop-signin/shares": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
+	"POST /api/v1/runs/{id}/desktop-signin/end":    {class: classOwner, entity: entityRun, ownerTier: tierEntry},
 	// The run cockpit's live evidence reads. classOwner, same gate as GET
 	// /runs/{id} above: each names a run in its path and each exposes something
 	// about a LIVE sandbox — the workspace's diff, its resource usage, and who
@@ -910,6 +914,7 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/internal/approvals":                      {class: classInternal},
 	"POST /api/v1/internal/approvals/{id}/expire":          {class: classInternal},
 	"POST /api/v1/internal/credentials/mint":               {class: classInternal},
+	"POST /api/v1/internal/desktop-signin/check":           {class: classInternal},
 	"POST /api/v1/internal/decisions":                      {class: classInternal},
 	"POST /api/v1/internal/activity":                       {class: classInternal},
 	"POST /api/v1/internal/groundtruth":                    {class: classInternal},
@@ -1689,9 +1694,11 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// /runs/{id}/launch-intent; 35 since 0.9.3 added GET
 		// /runs/{id}/containment; 38 since #2963 added POST
 		// /approvals/{id}/take-over, hand-back and decline; 41 since 0.10
-		// added the three /runs/{id}/desktop/files routes.
-		if probed != 41 {
-			t.Errorf("probed %d classOwner routes, want 41 — a route that left classOwner takes its tier "+
+		// added the three /runs/{id}/desktop/files routes; 44 since 0.10
+		// (#2972) added POST /runs/{id}/desktop-signin, .../shares and .../end
+		// (tierEntry).
+		if probed != 44 {
+			t.Errorf("probed %d classOwner routes, want 44 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})

@@ -372,6 +372,7 @@ The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 | `trivy-wardynd-fips` (check `trivy (wardynd-fips)`) | 49 | 2.0 | 2.3 | 40 |
 | `trivy-agent-novnc` (check `trivy (agent-novnc)`) | 51 | 1.6 | 2.2 | 40 |
 | `trivy-agent-vscode` (check `trivy (agent-vscode)`) | 50 | 1.6 | 2.0 | 40 |
+| `trivy-agent-novnc-signin` (check `trivy (agent-novnc-signin)`) | – | pending | pending | 50 |
 | `notices` | 60 | 1.5 | 1.9 | 15 |
 | `gates (licenses)` | 60 | 1.4 | 2.0 | 15 |
 | `trivy-agent-codex-cli` (check `trivy (agent-codex-cli)`) | 51 | 1.4 | 1.7 | 40 |

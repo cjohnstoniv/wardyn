@@ -377,6 +377,7 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 		writeErrorReason(w, http.StatusInternalServerError, reasonUIGatewayPolicyLookupFailed, "run policy lookup failed")
 		return
 	}
+	apps = s.withDesktopSigninApp(r.Context(), run, ta.principal, apps)
 	declared, found := types.UIApp{}, false
 	for _, a := range apps {
 		if a.Name == app {
@@ -764,6 +765,9 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 	release, ok := s.acquireUIConn(sess.Run)
 	if !ok {
 		return nil, uiFail(ctx, http.StatusServiceUnavailable, reasonUIGatewayConnCapReached, uiConnCapMsg)
+	}
+	if sess.App == desktopSigninApp {
+		return s.desktopSigninDial(ctx, run, sess, release)
 	}
 	if err := s.uiEnsureApp(ctx, run, sess); err != nil {
 		release()

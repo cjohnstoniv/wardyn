@@ -998,3 +998,23 @@ const (
 const (
 	reasonLaunchIntentNotFound = "launch_intent_not_found" // the run kept no setup, or the caller may not see it
 )
+
+// Desktop sign-ins (run_desktop_signin.go).
+const (
+	reasonDesktopSigninsOff              = "desktop_signins_off"               // WARDYN_DESKTOP_SIGNINS is not on
+	reasonDesktopSigninNotRunning        = "desktop_signin_not_running"        // the run is not running in a sandbox
+	reasonDesktopSigninNoDesktop         = "desktop_signin_no_desktop"         // the run's policy declares no novnc app
+	reasonDesktopSigninRunnerUnsupported = "desktop_signin_runner_unsupported" // the run started without sign-ins: another runner, another desktop image, or sign-ins were off
+	reasonDesktopSigninImageNotGranted   = "desktop_signin_image_not_granted"  // the run's image was its person's choice, and its sign-in variant is not granted to them
+	reasonDesktopSigninOpen              = "desktop_signin_open"               // a sign-in is already open on the run
+	reasonDesktopSigninNotOpen           = "desktop_signin_not_open"           // no sign-in is open on the run
+	reasonDesktopSigninNotHolder         = "desktop_signin_not_holder"         // the open sign-in was begun by someone else
+	reasonDesktopSigninPauseFailed       = "desktop_signin_pause_failed"       // the agent could not be stopped and proven stopped
+	reasonDesktopSigninStartFailed       = "desktop_signin_start_failed"       // the person's display did not start
+	reasonDesktopSigninEndFailed         = "desktop_signin_end_failed"         // the display could not be proven closed; the agent stays stopped
+	reasonDesktopSigninSiteInvalid       = "desktop_signin_site_invalid"       // a share's site is not a registrable host name
+	reasonDesktopSigninShareFailed       = "desktop_signin_share_failed"       // a share's export or import failed; nothing was shared
+	reasonDesktopSigninUnavailable       = "desktop_signin_unavailable"        // the sign-in store could not be read or written
+	reasonDesktopSigninCredentialRefused = "desktop_signin_credential_refused" // the proxy's check: not an open sign-in's credential
+	reasonDesktopSigninResumeFailed      = "desktop_signin_resume_failed"      // run.kill: a failed begin's agent could not be continued, so the run was killed
+)

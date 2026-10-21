@@ -293,6 +293,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_GOVERN_ADMIN_RUNS` | bool | (unset) | constrained-admin mode: govern every run an SSO admin or an admin-role personal API token launches, like a member's (flag `-govern-admin-runs`). **With OIDC unset the switch binds nobody**, and boot WARNs it (`warnGovernAdminRunsUnbound`, [`cmd/wardynd/boot_posture.go`](../cmd/wardynd/boot_posture.go)). [Details](#wardyn_govern_admin_runs) |
 | `WARDYN_GOVERN_ADMIN_RUNS_EXEMPT` | CSV | (unset) | the lanes left ungoverned under `WARDYN_GOVERN_ADMIN_RUNS`; the only value is `recording` (flag `-govern-admin-runs-exempt`). [Details](#wardyn_govern_admin_runs_exempt) |
 | `WARDYN_EGRESS_PORT_RULE` | enum | `off` | container runs' egress port rule, `off`, `dry_run` or `on` (flag `-egress-port-rule`); the proxy turns it on for runs dispatched as a desktop VM. [Details](#wardyn_egress_port_rule) |
+| `WARDYN_DESKTOP_SIGNINS` | enum | `off` | `on` lets a run's creator sign in to websites in a browser of their own inside the run's desktop, with the agent stopped, and share one site's login with the agent (flag `-desktop-signins`). [Details](#wardyn_desktop_signins) |
 | `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` | string (URL) | (unset) | **TEST ONLY.** Re-points **both** AWS IAM Identity Center services at this base URL (flag `-aws-sso-endpoint-override`; `ValidateAWSSSOEndpointOverride`, [`internal/api/awssso_endpoint.go`](../internal/api/awssso_endpoint.go)); **REFUSED unless `WARDYN_ALLOW_TEST_ENDPOINTS=true`**. [Details](#wardyn_aws_sso_endpoint_override) |
 | `WARDYN_AWS_SSO_PROXY_INJECT` | enum | `on` | a captured AWS SSO session is injected **proxy-side** (flag `-aws-sso-proxy-inject`). `off` was removed in 0.10.0 and refuses boot. On a private-endpoint estate whose corporate proxy is also TLS-intercepting, the MITM re-origination fails closed unless `WARDYN_TRUSTED_CA_FILE` is ALSO staged. [Details](#wardyn_aws_sso_proxy_inject) |
 | `WARDYN_AWS_SIGV4_AT_PROXY` | enum | `off` | `on`: an AWS sign-in lane's sandbox profile holds a placeholder key pair and the proxy re-signs each AWS request with role credentials the sandbox never holds (flag `-aws-sigv4-at-proxy`). New dispatches only. [Details](#wardyn_aws_sigv4_at_proxy) |
@@ -1557,6 +1558,17 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - `dry_run`: nothing is refused; each allow the rule would refuse carries `port_rule: "dry_run"` on its `egress.allow` row.
 - The proxy turns the rule on for every run dispatched as a desktop VM, whatever this says.
 - Any other value exits 2 at boot. Not a secret, so it has no `_FILE` twin.
+
+### `WARDYN_DESKTOP_SIGNINS`
+
+- Desktop sign-ins (flag `-desktop-signins`; [`internal/api/run_desktop_signin.go`](../internal/api/run_desktop_signin.go)). `off` (the default) mounts no sign-in store and opens no sign-in lane on any run.
+- `on`: a run whose policy declares the `novnc` app, on this deployment's own Docker runner, gets a 256 MiB sign-in store that only the person's uid can open. Its proxy opens a second listener (port 3129) for the person's sign-in browser.
+- **The image.** With `on`, every such run uses the larger sign-in image `agent-novnc-signin` ([`deploy/images/novnc-signin/Dockerfile`](../deploy/images/novnc-signin/Dockerfile)), whether or not a sign-in happens. It is about 670 MB compressed, against `agent-novnc`'s 400 MB.
+- Dispatch swaps the `agent-novnc` repository for `agent-novnc-signin` at the same registry and tag. A digest-pinned or other desktop image is left as it is, and that run gets no sign-ins. With `off` the sign-in image is never pulled.
+- **Registries.** With `on`, the registry or mirror that serves `agent-novnc` must also carry `agent-novnc-signin` at the same tag, or desktop runs fail to pull.
+- **Runners.** A run on a self-hosted runner, a pool's executor or Kubernetes gets no sign-in store, no sign-in image and no `signin_listen` key (a runner's own proxy may predate the key and would refuse the run). Such a run starts normally, and a sign-in on it answers `desktop_signin_runner_unsupported`.
+- The person's sign-in browser runs as a different uid in the same sandbox, not in a sandbox of its own: [THREAT-MODEL §5.1a](../threatmodel/THREAT-MODEL.md) says what that does and does not protect. A login reaches the agent only when the person shares that site, and after a share the agent holds those cookies within its egress.
+- Takes effect for runs dispatched after the change. Any other value exits 2 at boot. Not a secret, so it has no `_FILE` twin.
 
 ### `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE`
 

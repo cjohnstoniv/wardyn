@@ -108,6 +108,10 @@ type SandboxSpec struct {
 	// Interactive marks a run that comes up idle for `wardyn attach`; a
 	// driver prepares the workspace on the idle main process for it.
 	Interactive bool
+	// DesktopSignins mounts the person's sign-in store (SigninStorePath): a
+	// tmpfs only the person's uid can open, gone with the container. Set only
+	// with WARDYN_DESKTOP_SIGNINS=on, on a run whose policy declares a desktop.
+	DesktopSignins bool `json:"desktop_signins,omitempty"`
 	// ExecOutput, non-nil, receives a copy of the agent exec's combined
 	// stdout/stderr (GET /runs/{id}/output). Its Write must never block or
 	// fail: the driver drains the exec through it. A writer that also
@@ -214,6 +218,9 @@ type ProxyConfig struct {
 	// PortRule is a container run's port rule, "" (off), "dry_run" or "on"
 	// (WARDYN_EGRESS_PORT_RULE; proxy.Config.PortRule).
 	PortRule string
+	// DesktopSignins opens the proxy's sign-in listener (SigninListenPort) for
+	// the person's sign-in browser; see SandboxSpec.DesktopSignins.
+	DesktopSignins bool `json:"desktop_signins,omitempty"`
 
 	// LocalModels: local_model upstream -> its allowlist and bounds (proxy.Config.LocalModels).
 	LocalModels map[string]types.LocalModelSettings
@@ -579,6 +586,43 @@ type Freezer interface {
 
 // ErrFreezeUnsupported is Freezer's answer from a router that cannot pause ref.
 var ErrFreezeUnsupported = errors.New("runner: this substrate cannot freeze a sandbox")
+
+// SigninExecer is an OPTIONAL Runner capability desktop sign-ins need (issue
+// #2972): an exec as a named uid, and a signal to the sandbox's main process
+// sent from outside its pid namespace (the only way pid 1 can be stopped).
+// Only the in-process Docker driver implements it. It is an interface, not an
+// ExecSpec field, because an older remote runner would drop an unknown field
+// and start the person's stack as the agent; a substrate without it refuses
+// sign-ins with ErrSigninUnsupported.
+type SigninExecer interface {
+	ExecStreamAs(ctx context.Context, ref, user string, spec ExecSpec) (*ExecSession, error)
+	SignalMain(ctx context.Context, ref, signal string) error
+}
+
+// SigninTargeter is a router's answer, before a create, to whether the
+// substrate it would route class to implements SigninExecer. Dispatch sends
+// the proxy's signin_listen key only to such a substrate: it runs this
+// deployment's own proxy image, which knows the key, where an older proxy
+// would refuse it and the run with it.
+type SigninTargeter interface {
+	SigninsFor(ctx context.Context, class types.ConfinementClass) bool
+}
+
+// ErrSigninUnsupported is SigninExecer's answer from a router whose substrate
+// for ref cannot run a desktop sign-in.
+var ErrSigninUnsupported = errors.New("runner: this substrate cannot run a desktop sign-in")
+
+// Desktop sign-in constants, shared by the driver, dispatch and the API.
+const (
+	// SigninStorePath is the person's store inside the sandbox.
+	SigninStorePath = "/run/wardyn/signin"
+	// SigninStoreTmpfs is its mount: 256 MiB, the person's uid, 0700.
+	SigninStoreTmpfs = "rw,nosuid,nodev,noexec,size=256m,uid=1001,gid=1001,mode=0700"
+	// SigninPersonUser is the person's uid:gid in the desktop image.
+	SigninPersonUser = "1001:1001"
+	// SigninListenPort is the proxy's sign-in listener.
+	SigninListenPort = 3129
+)
 
 // ActivitySampler is an OPTIONAL Runner capability: the CPU the agent of each
 // sandbox is using, read from the substrate, never by running anything inside

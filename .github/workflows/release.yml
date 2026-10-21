@@ -1,6 +1,6 @@
 name: Release images
 
-# Publishes the nine images a Wardyn release actually ships, cosign-signed
+# Publishes the ten images a Wardyn release actually ships, cosign-signed
 # (keyless), plus a signed-release SBOM — on every vX.Y.Z tag push
 # (RELEASING.md's tagging convention). This is the "release" half of image
 # publishing; .github/workflows/publish-image.yml remains the CONTINUOUS half
@@ -10,7 +10,7 @@ name: Release images
 # to push the identical wardynd:X.Y.Z ref, one signed one not — see that
 # file's header for the current split).
 #
-# ── the nine images, and why each ref is what it is (verified against the
+# ── the ten images, and why each ref is what it is (verified against the
 #    tree, not assumed) ──────────────────────────────────────────────────────
 #   ghcr.io/cjohnstoniv/wardynd
 #     deploy/helm/wardyn/values.yaml's `image.repository` default (line ~16)
@@ -52,6 +52,11 @@ name: Release images
 #     LICENSING.md's claim that no published image bundles the vendor CLI
 #     depends on that. See the images-ui-sandbox job below for why that
 #     dependency needs its own job rather than two more rows here.
+#   ghcr.io/cjohnstoniv/agent-novnc-signin
+#     agent-novnc plus desktop sign-ins (#2972): wardynd dispatches a desktop
+#     run on it only with WARDYN_DESKTOP_SIGNINS=on. It builds FROM the
+#     agent-novnc this run just pushed, so it has a job of its own after
+#     images-ui-sandbox (images-ui-sandbox-signin).
 #
 # ── cosign (keyless) ─────────────────────────────────────────────────────────
 # No key material anywhere: `id-token: write` lets the job mint a short-lived
@@ -681,9 +686,13 @@ jobs:
         include:
           - name: agent-vscode
             dockerfile: deploy/images/vscode/Dockerfile
+            base: agent-base
           - name: agent-novnc
             dockerfile: deploy/images/novnc/Dockerfile
-    steps:
+            base: agent-base
+    # Written once and reused by images-ui-sandbox-signin (`*ui_sandbox_steps`);
+    # a row's `base` names the image it builds FROM.
+    steps: &ui_sandbox_steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # binfmt_misc handlers — see the `images` job's identical step for why.
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
@@ -724,11 +733,12 @@ jobs:
         env:
           DRY_RUN: ${{ inputs.dry_run }}
           RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+          BASE_NAME: ${{ matrix.base }}
         run: |
           if [ "$DRY_RUN" = "true" ]; then
-            echo "ref=ghcr.io/cjohnstoniv/agent-base:latest" >> "$GITHUB_OUTPUT"
+            echo "ref=ghcr.io/cjohnstoniv/${BASE_NAME}:latest" >> "$GITHUB_OUTPUT"
           else
-            echo "ref=ghcr.io/cjohnstoniv/agent-base:${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+            echo "ref=ghcr.io/cjohnstoniv/${BASE_NAME}:${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
           fi
       - name: Build and push
         id: build
@@ -787,13 +797,41 @@ jobs:
           path: sbom-${{ matrix.name }}.cdx.json
           if-no-files-found: error
 
+  # The desktop sign-in variant (agent-novnc-signin, #2972). It builds FROM the
+  # agent-novnc that images-ui-sandbox pushed at the same release tag, and a
+  # matrix row cannot wait on a sibling row, so it is a job of its own after
+  # that one, with the same steps. A dry run pushes no agent-novnc to build on
+  # (and agent-novnc floats no :latest), so a dry run skips this job, as it
+  # skips release-assets.
+  images-ui-sandbox-signin:
+    name: build, push, sign (${{ matrix.name }})
+    needs: [preflight-green, images-ui-sandbox]
+    if: needs.preflight-green.outputs.path == 'build' && inputs.dry_run != true
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # cosign keyless signing (Fulcio/Rekor OIDC exchange)
+      attestations: write
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: agent-novnc-signin
+            dockerfile: deploy/images/novnc-signin/Dockerfile
+            base: agent-novnc
+    steps: *ui_sandbox_steps
+
   # The promote path: no build. preflight-green resolved and verified the digests
   # the candidate's nightly staged (see "build once, promote" in the header), and
   # this job copies each one to the release tags, then signs, scans and attests
   # that same digest under this workflow's own identity, so verify-release.sh and
   # docs/VERIFY.md see no difference from the build path.
   #
-  # One job for all nine images, not one job per image: each image needs only
+  # One job for all ten images, not one job per image: each image needs only
   # 0.6 to 1.5 minutes, and nine jobs queued for runner slots for up to 16 minutes
   # in the 0.9.5 cut. The per-image work is the function `promote_one` below, run
   # four at a time, each in its own bash process (errexit and pipefail on) with
@@ -815,14 +853,15 @@ jobs:
       DRY_RUN: ${{ inputs.dry_run == true }}
       REF_NAME: ${{ github.ref_name }}
       PARALLEL: "4"
-      # The same nine rows as `images` and `images-ui-sandbox`, as YAML text so
+      # The same ten rows as `images`, `images-ui-sandbox` and
+      # `images-ui-sandbox-signin`, as YAML text so
       # that the `- name:` and `dockerfile:` greps in verify-release.sh,
       # check-image-pins.sh and gpl-source-offer.sh still read them (guard 16
       # in test-repo-guards.sh parses them with yq). `dockerfile` is the recipe
       # nightly built; this job never builds it. The wardynd-fips digest was
       # checked for its GOFIPS140 snapshot in nightly's staging job, and
       # preflight-green proves that run built it. The Attest build provenance
-      # steps below name the same nine images, one step each (an action cannot
+      # steps below name the same ten images, one step each (an action cannot
       # run in a loop); guard 16 checks that those names match this list.
       IMAGES: |
         - name: wardynd
@@ -846,6 +885,8 @@ jobs:
           dockerfile: deploy/images/vscode/Dockerfile
         - name: agent-novnc
           dockerfile: deploy/images/novnc/Dockerfile
+        - name: agent-novnc-signin
+          dockerfile: deploy/images/novnc-signin/Dockerfile
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # An empty or malformed digest would make every later step fail on a ref
@@ -1040,6 +1081,13 @@ jobs:
         with:
           subject-name: ghcr.io/cjohnstoniv/agent-novnc
           subject-digest: ${{ fromJSON(needs.preflight-green.outputs.digests)['agent-novnc'] }}
+          push-to-registry: true
+      - name: Attest build provenance (agent-novnc-signin)
+        if: inputs.dry_run != true
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/cjohnstoniv/agent-novnc-signin
+          subject-digest: ${{ fromJSON(needs.preflight-green.outputs.digests)['agent-novnc-signin'] }}
           push-to-registry: true
       - name: Upload the SBOMs for the release-assets job
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -1301,7 +1349,7 @@ jobs:
     # !failure() lets this run when `images` or `promote` was skipped by the path
     # choice; any job that FAILED still stops it.
     if: ${{ !cancelled() && !failure() && inputs.dry_run != true }}
-    needs: [preflight-green, images, images-ui-sandbox, promote, chart, binaries, runner-pkg]
+    needs: [preflight-green, images, images-ui-sandbox, images-ui-sandbox-signin, promote, chart, binaries, runner-pkg]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -1355,7 +1403,7 @@ jobs:
           if [ "$RELEASE_PATH" = promote ]; then
             want=$(yq -r '.jobs.promote.env.IMAGES' ../.github/workflows/release.yml | yq 'length')
           else
-            want=$(yq '[.jobs.images.strategy.matrix.include[], .jobs["images-ui-sandbox"].strategy.matrix.include[]] | length' ../.github/workflows/release.yml)
+            want=$(yq '[.jobs.images.strategy.matrix.include[], .jobs["images-ui-sandbox"].strategy.matrix.include[], .jobs["images-ui-sandbox-signin"].strategy.matrix.include[]] | length' ../.github/workflows/release.yml)
           fi
           have=$(ls -1 sbom-*.cdx.json | wc -l)
           test "$have" -eq "$want" || { echo "expected $want image SBOMs, found $have"; ls -1; exit 1; }

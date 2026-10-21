@@ -192,6 +192,20 @@ var gates = map[string]func(LocalPlan) *Refusal{
 		}
 		return nil
 	},
+	// Desktop sign-ins run on the organisation's own Docker runner only
+	// (signinTarget), so dispatch never sets either field on a local run.
+	"SandboxSpec.DesktopSignins": func(p LocalPlan) *Refusal {
+		if p.Spec.DesktopSignins {
+			return refuse(ReasonPlacementCapability, "SandboxSpec.DesktopSignins", "desktop sign-ins run on the organisation's own runner only")
+		}
+		return nil
+	},
+	"ProxyConfig.DesktopSignins": func(p LocalPlan) *Refusal {
+		if p.Spec.ProxyConfig.DesktopSignins {
+			return refuse(ReasonPlacementCredential, "ProxyConfig.DesktopSignins", "the sign-in listener's credential is checked by the organisation's control plane")
+		}
+		return nil
+	},
 	// The Resource Manager token is redeemed and held on the organisation's side.
 	"ProxyConfig.AzureARM": func(p LocalPlan) *Refusal {
 		if p.Spec.ProxyConfig.AzureARM != nil {

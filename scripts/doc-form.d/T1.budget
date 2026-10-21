@@ -87,7 +87,10 @@
 # threatmodel/THREAT-MODEL.md 66532 = ours 65922 + theirs 65699 - base 65089 at the 0.10 W4a merge of ATT-LOGIN-SRV onto the train.
 # 0.10 W4a train: threatmodel/THREAT-MODEL.md tightened to 66530, measured at the train merge.
 # threatmodel/THREAT-MODEL.md 67268 = ours 66336 + theirs 66530 - base 65598 at the 0.10 W4c merge of origin/main 3cea1aa73 (W4a) onto the train.
-threatmodel/THREAT-MODEL.md=67268
+# 0.10 CTL-C (#2972): threatmodel/THREAT-MODEL.md 66253 adds 655 over 65598, measured: the desktop sign-ins block in 5.1a: the uid boundary, the lane, the share, the residuals and the sign-in image's missing Xwayland.
+# threatmodel/THREAT-MODEL.md 67185 = ours 66253 + theirs 66530 - base 65598 at the 0.10 CTL-C r4 merge of main.
+# threatmodel/THREAT-MODEL.md 67923 = ours 67268 + theirs 67185 - base 66530 at the 0.10 W4c merge of CTL-C 6de42c110 onto the train.
+threatmodel/THREAT-MODEL.md=67923
 # threatmodel/THREAT-MODEL.md 63171 adds 78 over 63093, measured: the console session under the role-stamp residual: renewal up to its cap, never moving the sign-in time, and the copied-cookie bound (0.9.3 console session lifetime).
 # threatmodel/THREAT-MODEL.md 63123 adds 30 over 63093: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
 # threatmodel/THREAT-MODEL.md 63025 = 62948 + 77, measured: the laptop decision-sink crossing row and #77's sink and loss-row bullets.

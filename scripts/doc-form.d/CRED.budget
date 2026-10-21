@@ -22,4 +22,6 @@
 # docs/CREDENTIALS.md 4451 = ours 4115 + theirs 4333 - base 3997 at the 0.10 W3 merge of SEC-1c onto the train.
 # docs/CREDENTIALS.md 4050 adds 53 over 3997 (0.10 FEAT-1MCP), measured: where a local MCP server's secrets are delivered, and a remote one's.
 # docs/CREDENTIALS.md 4504 = ours 4451 + theirs 4050 - base 3997 at the 0.10 W4c merge of FEAT-1MCP onto the train.
-docs/CREDENTIALS.md=4504 share=35
+# 0.10 CTL-C (#2972): docs/CREDENTIALS.md 4601 adds 150 over 4451, measured: the desktop sign-in row (a person's login, shared one site at a time).
+# docs/CREDENTIALS.md 4654 = ours 4504 + theirs 4601 - base 4451 at the 0.10 W4c merge of CTL-C 6de42c110 onto the train.
+docs/CREDENTIALS.md=4654 share=35

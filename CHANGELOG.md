@@ -30,6 +30,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `ui.clipboard.transfer`. Until now both directions synced unfiltered. A `novnc` socket that does not speak RFB is closed.
   Other apps are unchanged. To keep copy out, set `desktop.copy_out` to `allowed` on the policy, and on the ceiling of any
   member who should have it ([`desktop`](docs/POLICIES.md#desktop--desktopcontrols)).
+- Split-role installs as above: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `desktop_signins`,
+  `desktop_signin_shares` and `desktop_signin_runs` (migration `0200_desktop_signins`). Without it a desktop run starts
+  without sign-ins, a desktop sign-in cannot begin, and the sweep that ends one cannot read it.
+- **Desktop sign-ins are new and off** (`WARDYN_DESKTOP_SIGNINS`, default `off`). Turned on, a run's creator can sign
+  in to websites inside the run's desktop while the agent is stopped, and share one site's login with the agent. The
+  person's browser is a different uid in the same sandbox, not a sandbox of its own, and after a share the agent holds
+  that site's cookies within its egress until the run ends: read [THREAT-MODEL §5.1a](threatmodel/THREAT-MODEL.md)
+  before turning it on. Turned on, every run whose policy declares the desktop uses a larger image of its own,
+  `agent-novnc-signin` (about 670 MB compressed, against `agent-novnc`'s 400 MB), whether or not a sign-in happens;
+  `agent-novnc` itself is unchanged, and with the setting off the sign-in image is never pulled. Self-hosted runners,
+  pools and Kubernetes get no sign-ins, and their runs start as before.
 
 ### Added
 

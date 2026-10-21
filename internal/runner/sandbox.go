@@ -22,7 +22,8 @@ import (
 // re-derives (and risks drifting) the agent contract.
 
 // ProxyListenPort is the port wardyn-proxy listens on inside the per-run
-// internal network/namespace. The agent's ONLY reachable address.
+// internal network/namespace. The agent's ONLY egress (the sign-in listener on
+// SigninListenPort, when open, admits the person's sign-in browser alone).
 const ProxyListenPort = 3128
 
 // Conservative platform resource defaults, applied when a Resources field is
@@ -219,6 +220,9 @@ func BuildProxyConfig(runID uuid.UUID, pc ProxyConfig, port int) ([]byte, error)
 		MCPBindings:          pc.MCPBindings,
 		VM:                   pc.VM,
 		PortRule:             pc.PortRule,
+	}
+	if pc.DesktopSignins {
+		cfg.SigninListen = ":" + strconv.Itoa(SigninListenPort)
 	}
 	return json.Marshal(cfg)
 }

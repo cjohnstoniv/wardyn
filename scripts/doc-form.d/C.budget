@@ -20,7 +20,9 @@
 # docs/CI.md 8136 = ours 8102 + theirs 8069 - base 8035 at the 0.10 W4c merge of VM-A onto the train.
 # docs/CI.md 8136 = ours 8069 + theirs 8102 - base 8035 at the 0.10 W2 merge of CTL-A onto DSK-A.
 # docs/CI.md 8134, measured, at the 0.10 W4c merge of DSK-A 46d21862b onto the train: two merge bases (CTL-A 99d68a80a and VM-C~1 4b06ac1e5), so no single base to subtract.
-docs/CI.md=8134 share=35 # +56 (0.10 FLAKE-D): WARDYN_BUILD_GOMODCACHE, the image builds' module-cache seed; +4 (0.10): the bootstrap bearer default is a random value; +87 (0.10 CI-B): the kind-acceptance-walks row, the k6 legs, the workflow_call concurrency and cache bullet, measured; +4 (0.9.4): k6-kind-conformance joins the candidate-skip list; +32 (0.9.3 CI): the mirror action restarts dockerd once and keeps mirror.gcr.io behind it, replacing the per-job gcr step; +9 (0.9.3 A1): WARDYN_TRUSTED_CA_PATH for image-script tests; +16: the ci-parity-local.sh line; +5 before it: the runner-units job row (#1968).
+# 0.10 CTL-C (#2972): docs/CI.md 8110 adds 8 over 8102, measured: the trivy-agent-novnc-signin row.
+# docs/CI.md 8142 = ours 8134 + theirs 8110 - base 8102 at the 0.10 W4c merge of CTL-C 6de42c110 onto the train.
+docs/CI.md=8142 share=35
 # docs/ci-jobs-as-runs.md 2175 adds 84 over 2091 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
 # docs/ci-jobs-as-runs.md 2360 adds 185 over 2175 (G-090-cleanup slice F r1 fix: the CI recipe as a service identity): measured; the lead re-measures at merge.
 docs/ci-jobs-as-runs.md=2360 share=35

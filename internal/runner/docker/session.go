@@ -180,6 +180,11 @@ func (s execStdin) Close() error                { return s.resp.CloseWrite() }
 // stderr bytes. TTY: the PTY merges both onto Stdout, so Stderr yields io.EOF
 // immediately — present (never nil) so callers can read it uniformly.
 func (d *Driver) ExecStream(ctx context.Context, ref string, spec runner.ExecSpec) (*runner.ExecSession, error) {
+	return d.execStream(ctx, ref, "", spec)
+}
+
+// execStream is ExecStream as user ("" = the container's own user).
+func (d *Driver) execStream(ctx context.Context, ref, user string, spec runner.ExecSpec) (*runner.ExecSession, error) {
 	if len(spec.Argv) == 0 {
 		return nil, errors.New("docker: exec stream: empty argv")
 	}
@@ -188,6 +193,7 @@ func (d *Driver) ExecStream(ctx context.Context, ref string, spec runner.ExecSpe
 	}
 
 	execCfg := client.ExecCreateOptions{
+		User:         user,
 		TTY:          spec.TTY,
 		AttachStdin:  true,
 		AttachStdout: true,
