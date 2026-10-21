@@ -411,7 +411,11 @@ func (r *Reaper) emitMaxAgeStop(ctx context.Context, runID uuid.UUID, age time.D
 // silently-failed revoke (token live until its <=1h TTL, or sandbox routable)
 // stays visible instead of hiding behind run.autostop/success.
 func (r *Reaper) emitRevokeFailure(ctx context.Context, runID uuid.UUID, errs map[string]string) {
-	data, _ := json.Marshal(errs)
+	steps := make(map[string]any, len(errs))
+	for k, v := range errs {
+		steps[k] = v
+	}
+	data, _ := json.Marshal(WithFailedSteps(steps))
 	ev := types.AuditEvent{
 		ID:        uuid.New(),
 		Time:      r.now(),

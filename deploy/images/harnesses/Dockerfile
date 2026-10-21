@@ -45,7 +45,7 @@ RUN set -eu; \
     if [ "$CODEX_INSTALL" = "native" ]; then \
         [ -f /codex-stage/codex-bin ] || { echo "CODEX_INSTALL=native but deploy/images/codex-cli/codex-bin is not staged — stage it first (see deploy/images/README.md)" >&2; exit 1; }; \
         want="${TARGETARCH:-$(dpkg --print-architecture)}"; \
-        case "$(od -An -tx1 -j18 -N1 /codex-stage/codex-bin | tr -d ' ')" in 3e) have=amd64;; b7) have=arm64;; *) have=unknown;; esac; \
+        case "$(od -An -tx1 -N4 /codex-stage/codex-bin | tr -d ' ')$(od -An -tx1 -j18 -N1 /codex-stage/codex-bin | tr -d ' ')" in 7f454c463e) have=amd64;; 7f454c46b7) have=arm64;; *) have=unknown;; esac; \
         [ "$have" = unknown ] || [ "$have" = "$want" ] || { echo "staged codex-bin is $have but this image builds for $want; restage with: scripts/stage-agent-binary.sh codex-cli --arch $want" >&2; exit 1; }; \
         install -m 0755 /codex-stage/codex-bin /usr/local/bin/codex; \
         echo "installed host-staged native codex"; \

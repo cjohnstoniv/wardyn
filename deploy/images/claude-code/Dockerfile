@@ -214,7 +214,7 @@ RUN set -eu; \
     if [ "$CLAUDE_INSTALL" = "native" ]; then \
         if [ -f /claude-stage/claude-bin ]; then \
             want="${TARGETARCH:-$(dpkg --print-architecture)}"; \
-            case "$(od -An -tx1 -j18 -N1 /claude-stage/claude-bin | tr -d ' ')" in 3e) have=amd64;; b7) have=arm64;; *) have=unknown;; esac; \
+            case "$(od -An -tx1 -N4 /claude-stage/claude-bin | tr -d ' ')$(od -An -tx1 -j18 -N1 /claude-stage/claude-bin | tr -d ' ')" in 7f454c463e) have=amd64;; 7f454c46b7) have=arm64;; *) have=unknown;; esac; \
             [ "$have" = unknown ] || [ "$have" = "$want" ] || { echo "staged claude-bin is $have but this image builds for $want; restage with: scripts/stage-agent-binary.sh claude-code <version> --arch $want" >&2; exit 1; }; \
             install -m 0755 /claude-stage/claude-bin /usr/local/bin/claude; \
             echo "installed host-staged native claude"; \

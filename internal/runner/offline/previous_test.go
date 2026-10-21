@@ -4,6 +4,7 @@
 package offline
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -218,5 +219,28 @@ func TestReRegistrationSetAsideIsBoundedOnAHungEngine(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "offline", "state.json")); err != nil {
 		t.Fatalf("state moved while its proxies were not stopped: %v", err)
+	}
+}
+
+// lateStop answers the proxy stop successfully, but only once its bound has run out.
+type lateStop struct{ *localSub }
+
+func (lateStop) StopProxy(ctx context.Context, _ string) error {
+	<-ctx.Done()
+	return nil
+}
+
+// TestReRegistrationStopAnsweredAtTheBoundEdgeSucceeds stops a proxy whose success arrives with the
+// call's bound already spent: the stop worked, so the start neither fails (wrapping a nil error) nor
+// refuses to move the state.
+func TestReRegistrationStopAnsweredAtTheBoundEdgeSucceeds(t *testing.T) {
+	sub, dir, _, earlier, registered := earlierRegistration(t)
+	defer func(b time.Duration) { setAsideCallBound = b }(setAsideCallBound)
+	setAsideCallBound = 50 * time.Millisecond
+	if err := SetAsidePrevious(t.Context(), dir, registered, lateStop{sub}, uuid.UUID.String); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "previous", earlier.String(), "offline", "state.json")); err != nil {
+		t.Fatalf("the state was not set aside: %v", err)
 	}
 }

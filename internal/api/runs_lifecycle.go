@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/approval"
+	"github.com/cjohnstoniv/wardyn/internal/lifecycle"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -292,38 +293,12 @@ func (s *Server) teardownOrAudit(ctx context.Context, runID uuid.UUID, ref, acti
 func (s *Server) revokeRunCascade(ctx context.Context, runID uuid.UUID) error {
 	data := s.revokeRunSteps(ctx, runID)
 	if len(data) > 0 {
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.revoke", runID.String(), "failure", mustJSON(withFailedSteps(data))))
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.revoke", runID.String(), "failure", mustJSON(lifecycle.WithFailedSteps(data))))
 	}
 	if _, pending := data["pat_revoke_pending"]; len(data) == 0 || (pending && len(data) == 1) {
 		return ctx.Err()
 	}
 	return fmt.Errorf("run revoke incomplete: %v", data)
-}
-
-// failedStepNames names the cascade step behind each per-step failure key a run.revoke row carries.
-var failedStepNames = map[string]string{
-	"runner_error":           "sandbox_teardown",
-	"identity_error":         "identity_revoke",
-	"broker_error":           "broker_revoke",
-	"proxy_config_error":     "proxy_config_drop",
-	"pat_revoke_pending":     "pat_revoke",
-	"pat_revoke_check_error": "pat_revoke_check",
-	"approval_cancel_error":  "approval_cancel",
-}
-
-// withFailedSteps is data plus a failed_steps list, one {step, reason} per failure key in key order,
-// so a run.revoke row names each failing step and its reason without the reader knowing the key
-// vocabulary. A copy: the caller's map still decides the outcome. Additive; the keys stay.
-func withFailedSteps(data map[string]any) map[string]any {
-	out := maps.Clone(data)
-	steps := []map[string]string{}
-	for _, k := range slices.Sorted(maps.Keys(data)) {
-		if step, ok := failedStepNames[k]; ok {
-			steps = append(steps, map[string]string{"step": step, "reason": fmt.Sprint(data[k])})
-		}
-	}
-	out["failed_steps"] = steps
-	return out
 }
 
 // RevokeStoppedRun is revokeRunCascade for the idle reaper (cmd/wardynd's
@@ -404,7 +379,7 @@ func (s *Server) cancelRunApprovals(ctx context.Context, runID uuid.UUID) error 
 		slog.WarnContext(ctx, "wardynd: could not cancel a terminal run's pending approvals",
 			slog.String("run_id", runID.String()), slog.Any("err", err))
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.revoke",
-			runID.String(), "failure", mustJSON(withFailedSteps(map[string]any{"approval_cancel_error": err.Error()}))))
+			runID.String(), "failure", mustJSON(lifecycle.WithFailedSteps(map[string]any{"approval_cancel_error": err.Error()}))))
 		return err
 	}
 	n := 0
@@ -750,7 +725,7 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 
 	if len(killData) > 0 {
 		s.recordAudit(cascadeCtx, s.auditEvent(&id, types.ActorSystem, "wardynd", "run.revoke",
-			id.String(), "failure", mustJSON(withFailedSteps(killData))))
+			id.String(), "failure", mustJSON(lifecycle.WithFailedSteps(killData))))
 		writeJSON(w, http.StatusInternalServerError, map[string]any{
 			"id":     id,
 			"state":  types.RunKilled,

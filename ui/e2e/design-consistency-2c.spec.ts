@@ -4,7 +4,7 @@
  */
 
 // Console design-consistency pins that need a real layout or a real backend row: one eyebrow look,
-// one duration voice, the quiet in-card empty state, and a run's Audit tab in sentences.
+// one duration voice and the quiet in-card empty state.
 import { randomUUID } from "node:crypto";
 import type { Page } from "@playwright/test";
 import { test, expect, consoleAPI, expandCard, gotoConsole, navToRoute, openNewRun, sql } from "./fixtures";
@@ -74,8 +74,9 @@ test.describe("Design consistency", () => {
       await page.route(c.api, (route) => (route.request().method() === "GET" ? route.fulfill({ json: c.json }) : route.fallback()));
       await gotoConsole(page, "admin");
       await navToRoute(page, c.path);
-      await expect(page.getByRole("heading", { name: c.title, level: 4 })).toBeVisible();
-      const block = page.locator('[data-size="compact"]').first();
+      const heading = page.getByRole("heading", { name: c.title, level: 4 });
+      await expect(heading).toBeVisible();
+      const block = page.locator('[data-size="compact"]').filter({ has: heading });
       // The compact block is padded 32px top and bottom; the page-sized hero is 64px. Its height depends on the copy.
       expect(await block.evaluate((el) => getComputedStyle(el).paddingTop)).toBe("32px");
       await page.unrouteAll({ behavior: "ignoreErrors" });

@@ -82,8 +82,9 @@
 #      a repo-root `COPY . .` cannot layer one into a builder stage or its cache.
 #  23. an agent image that sets npm's proxy keys for an install deletes them again
 #      in the same RUN, so a build proxy URL never stays in the shipped layer.
-#  24. every scripts/*-walk.sh is run by a Makefile recipe or a workflow step (a comment does not count), or is named
-#      in HAND_RUN_WALKS with the reason it cannot run on a hosted runner.
+#  24. every scripts/*-walk.sh is run by a Makefile recipe or a workflow step
+#      (a comment, whole-line or trailing, does not count), or is named in
+#      HAND_RUN_WALKS with the reason it cannot run on a hosted runner.
 #  25. every scripts/test-*.sh that runs `git init`, `git clone` or `git commit` turns
 #      off git's auto-maintenance (maintenance.auto and gc.auto), or its EXIT trap
 #      can lose `rm -rf` to a detached git still writing under .git (#3328).
@@ -828,11 +829,18 @@ HAND_RUN_WALKS="runner-laptop-walk.sh survival-walk.sh"
 # runner-laptop-walk.sh: needs Docker Desktop and a second engine for the org.
 # survival-walk.sh: restarts the host's Docker daemon, so it needs a spare host
 # (its kind leg, kind-survival-walk.sh, is the nightly's).
-# A line that is only a comment names a script without running it. (No `grep -q` on the pipe: under
-# pipefail it can SIGPIPE git grep and turn a match into a failure.)
-walk_called() {
-    [ -n "$(git grep -hE "(^|[^A-Za-z0-9_-])$1" -- Makefile .github | grep -vE '^[[:space:]]*#' || true)" ]
+# Text after a `#` names a script without running it, whether the comment is the whole line or trails a
+# command. (No `grep -q` on the pipe: under pipefail it can SIGPIPE git grep and turn a match into a failure.)
+walk_runs() {
+    sed -E 's/(^|[[:space:]])#.*$//' | grep -E "(^|[^A-Za-z0-9_-])$1" || true
 }
+walk_called() {
+    [ -n "$(git grep -hE "(^|[^A-Za-z0-9_-])$1" -- Makefile .github | walk_runs "$1")" ]
+}
+if [ -n "$(printf '%s\n' '# a-walk.sh' '	make x  # a-walk.sh' 'run: make x # see a-walk.sh' | walk_runs a-walk.sh)" ] \
+    || [ -z "$(printf '%s\n' '	./scripts/a-walk.sh # note' 'run: scripts/a-walk.sh' | walk_runs a-walk.sh)" ]; then
+    bad "guard 24 self-test: a walk named only in a comment counted as run, or a run with a trailing comment did not"
+fi
 orphan_walks=""
 for f in scripts/*-walk.sh; do
     b="$(basename "$f")"

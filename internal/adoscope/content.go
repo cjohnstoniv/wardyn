@@ -62,7 +62,7 @@ func ClassifyContent(req Request) (ContentTarget, error) {
 	if err != nil {
 		return ContentTarget{}, err
 	}
-	if method == http.MethodOptions || slices.Contains(readMethods, method) || readWrite(r) {
+	if method == http.MethodOptions || slices.Contains(readMethods, method) || readWrite(method, r) {
 		return ContentTarget{}, nil
 	}
 	switch r.area {
