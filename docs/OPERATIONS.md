@@ -2063,7 +2063,7 @@ A workspace is not one unit of configuration. Wardyn splits it into three:
    - A source's own contract is authored by re-`POST`ing an existing identity to `POST /api/v1/sources` with a new requirements body, which APPLIES it (WSPIPE-8); the write-once `handleUpdateSource` that `PUT` used to reach is gone, not stubbed.
 2. **Base image** (tier 2) — a shared catalog row: registry, custom, or BYO.
    - "Recommended" is never a catalog kind — it is a per-workspace DERIVED build, excluded by a database CHECK constraint, not by convention.
-   - None of the three is used as-is: the image builder wraps each with Wardyn's runner tools ([ENVBUILD.md](ENVBUILD.md)), with no builder wired the run is refused `image_builder_unavailable`, and the Kubernetes substrate refuses a wrapped image. A command that needs no model (`wardyn run --command`) on a recommended-image workspace needs no builder.
+   - None is used as-is: the image builder wraps each with Wardyn's runner tools ([ENVBUILD.md](ENVBUILD.md)); with no builder wired the run is refused `image_builder_unavailable`, and Kubernetes refuses a wrapped image. `wardyn run --command` (no model) on a recommended-image workspace needs no builder.
    - `GET/POST /api/v1/base-images`, `DELETE /api/v1/base-images/{id}` — there is no `GET` by id (`handleGetBaseImage` went with its route).
 3. **Workspace** (tier 3) — an ordered list of attachments (library sources, or inline ephemeral scratch dirs) plus an optional catalog image.
    - Attachment order is load-bearing: `attachments[0]` is the primary, the same rule a single `sources[0]` carried before the split.
@@ -2602,12 +2602,12 @@ The residuals an operator should plan for:
 - That also made an in-cluster service name, `registry.corp.internal`, or any internal hostname on RFC1918/CGNAT space unreachable even when the allowlist named it.
 - `internal_hosts` is a list of `{host_suffix, cidrs}` entries on the same `SiteConfig` document.
 - Each declares a hostname (matched by label suffix — `host_suffix` itself, or any host ending in `.`+`host_suffix`) whose resolved/literal address is *lifted* out of the private-IP guard, scoped to `cidrs`.
-- When `cidrs` is empty, the scope is the full RFC1918 + `fc00::/7` + 100.64.0.0/10 liftable range, still bounded by `host_suffix` alone.
+- When `cidrs` is empty, the scope is the full RFC1918 + `fc00::/7` + 100.64.0.0/10 liftable range, bounded by `host_suffix` alone.
 
 > [!IMPORTANT]
 > **Leave `cidrs` empty — that is the default, and it is the right one.**
 
-- A laptop's corporate resolver answers a private-endpoint name into CGNAT space; inside the VPC the SAME name resolves to the interface endpoint's own ENI address, in the VPC's RFC1918 range.
+- A laptop's corporate resolver answers a private-endpoint name into CGNAT space; inside the VPC the SAME name resolves to the endpoint's ENI address, in the VPC's RFC1918 range.
 - A `cidrs` list drawn from the operator's own machine misses the range the SANDBOX resolves into, and the 403 looks like no entry was declared.
 - A refusal that names the range the sandbox's proxy resolved says so (below); one that cannot says the same thing to whoever hits it next:
 
@@ -2619,12 +2619,12 @@ The residuals an operator should plan for:
 - Every declared CIDR must still lie entirely inside the liftable set; `PUT /site-config` 400s one that doesn't (`0.0.0.0/0`, `169.254.0.0/16`, `127.0.0.0/8` are the obvious mistakes it catches).
 - This lifts ONE thing: the SSRF builtin.
 - The run's own policy allowlist (`allowed_domains`) still has to name the host separately.
-- Two more exclusions apply automatically: an address inside the subnet of one of the proxy's own network interfaces, and the resolved control-plane (`wardynd`) host — the sidecar shares its Docker network with Postgres/Dex/the registry container.
+- Two more exclusions apply automatically: an address on a subnet of the proxy's own interfaces, and the resolved control-plane (`wardynd`) host — the sidecar shares its Docker network with Postgres/Dex/the registry.
 - On Kubernetes the interface's subnet is whatever the CNI's mask makes it, often the pod CIDR, so a pod IP may be excluded. A ClusterIP is off that interface and is not, apart from the resolved `wardynd` address.
 - Here the operator has sandbox-side evidence.
-- Use a WORKLOAD-SPECIFIC suffix (one Service's own name, never the bare `svc.cluster.local`, which would reach every Service in the cluster).
+- Use a WORKLOAD-SPECIFIC suffix (one Service's own name, never the bare `svc.cluster.local`, which reaches every Service).
 - For a ClusterIP Service, set `cidrs` to that Service's ClusterIP as a `/32`, not the whole Service range.
-- ClusterIPs come from ONE cluster-wide range, so a Service-range CIDR lifts the whole cluster, control plane included.
+- ClusterIPs share ONE cluster-wide range, so a Service-range CIDR lifts the whole cluster, control plane included.
 - A pod-range scope fits only a headless Service (its name resolves to pod IPs), and only where the pod CIDR is not on the sidecar's own interface subnet.
 - The lift applies wherever the proxy resolves a hostname for a direct dial — the sandbox's CONNECT/plain-HTTP path, the MITM path, and the `git_pat` PAT-broker lane (its forge host is grant-derived).
 - So a declared suffix covering a self-hosted forge lets the brokered PAT reach it.
@@ -2636,13 +2636,13 @@ The residuals an operator should plan for:
 > **Not every `builtin:private-ip` refusal is liftable, and the 403 now says so.**
 
 - `internal_hosts` lifts exactly one class — RFC1918/ULA/CGNAT private space.
-- A host that resolves to a loopback address, to link-local space (including the `169.254.169.254` metadata address), to multicast or unspecified space, to a NAT64- or IPv4-compatible-embedded blocked address, or to any other reserved range is refused **unconditionally**.
-- No `internal_hosts` entry, no `allowed_domains` entry and no `egress_redirects` target reaches it, and a new run behaves identically.
-- The refusal's body names the class and prescribes nothing, because there is nothing in site config to change.
-- An agent resolving a name into that space is either misconfigured or probing the host's own metadata service.
+- A host resolving to loopback, link-local (including the `169.254.169.254` metadata address), multicast or unspecified space, a NAT64- or IPv4-compatible-embedded blocked address, or any other reserved range is refused **unconditionally**.
+- No `internal_hosts`, `allowed_domains` or `egress_redirects` entry reaches it, in this run or a new one.
+- The refusal's body names the class and prescribes nothing: there is nothing in site config to change.
+- An agent resolving a name into that space is misconfigured or probing the host's metadata service.
 - **The guard's memory of a refusal lasts one run.**
-  - Once a hostname and port have been refused `builtin:private-ip` for a run, that run keeps refusing it for the rest of its life even if the name later resolves to a public address.
-  - The remedy is the same one above (declare it under `internal_hosts`), and a fresh run re-resolves the name from scratch.
+  - Once a hostname and port are refused `builtin:private-ip`, the run keeps refusing them for its life even if the name later resolves to a public address.
+  - The remedy is the same (declare it under `internal_hosts`), and a fresh run re-resolves the name.
 
 ```json
 {
@@ -2652,7 +2652,7 @@ The residuals an operator should plan for:
 }
 ```
 
-- Add `cidrs` only for the Kubernetes in-cluster case above, once you know the addresses the SANDBOX resolves into — and scope the suffix to the one workload, never to the whole cluster:
+- Add `cidrs` only for the Kubernetes in-cluster case above, once you know what the SANDBOX resolves — and scope the suffix to one workload, never the whole cluster:
 
 ```json
 {
