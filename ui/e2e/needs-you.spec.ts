@@ -23,7 +23,7 @@ async function seedRequest(page: Page, task: string): Promise<{ run: string; ap:
   const run = sql(`SELECT id FROM agent_runs WHERE task = '${task}' ORDER BY created_at DESC LIMIT 1`);
   sql(`UPDATE agent_runs SET state = 'RUNNING', interactive = true WHERE id = '${run}'`);
   const ap = randomUUID();
-  const scope = JSON.stringify({ reason: REASON });
+  const scope = JSON.stringify({ reason: REASON }).replace(/'/g, "''");
   sql(
     `INSERT INTO approvals (id, run_id, kind, requested_scope, state, requested_at) VALUES
      ('${ap}','${run}','human_takeover','${scope}'::jsonb,'PENDING',now() - interval '2 minutes')`,
