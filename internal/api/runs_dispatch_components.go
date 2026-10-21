@@ -85,8 +85,9 @@ type componentConfig struct {
 // an organisation's component delivers over plain HTTP gets no interception
 // entry: there is no TLS to terminate, and the proxy sets it on the plain lane.
 //
-// An MCP server's header gets no interception entry either: the broker sets it
-// on the request it re-originates.
+// A remote MCP server's header gets no interception entry either: the broker
+// sets it on the request it re-originates. A local server's header is any
+// component's.
 func (c runComponents) dispatch() componentDispatch {
 	d := componentDispatch{AWSCLI: c.awsCLI(), AzureCLI: c.azureCLI()}
 	keys := mcpServerKeys(c.attached)
@@ -96,10 +97,14 @@ func (c runComponents) dispatch() componentDispatch {
 			row++
 		}
 		def := a.snapshot.Definition
-		if def.MCP != nil {
+		switch {
+		case def.RemoteMCP():
 			server, _ := types.MCPURLDestination(def.MCP.URL)
 			d.MCP = append(d.MCP, componentMCP{Ordinal: row, Key: keys[i], URL: def.MCP.URL, Host: server.Host,
 				Harnesses: a.snapshot.MCPHarnesses, Credentialed: len(def.Secrets) > 0})
+		case def.LocalMCP():
+			d.MCP = append(d.MCP, componentMCP{Ordinal: row, Key: keys[i], Harnesses: a.snapshot.MCPHarnesses,
+				Launch: def.MCP.Launch, EnvNames: componentEnvNames(def)})
 		}
 		for _, sec := range def.Secrets {
 			del := sec.Delivery
@@ -107,7 +112,7 @@ func (c runComponents) dispatch() componentDispatch {
 				continue
 			}
 			d.HeaderHosts = append(d.HeaderHosts, del.Host)
-			if !del.PlainHTTP && def.MCP == nil {
+			if !del.PlainHTTP && !def.RemoteMCP() {
 				d.MITMHosts = append(d.MITMHosts, net.JoinHostPort(del.Host, componentHeaderPort))
 			}
 		}
@@ -116,6 +121,18 @@ func (c runComponents) dispatch() componentDispatch {
 		}
 	}
 	return d
+}
+
+// componentEnvNames is the variables a component writes into the sandbox: its
+// env secrets' and its config's names.
+func componentEnvNames(def types.ComponentDefinition) []string {
+	var names []string
+	for _, sec := range def.Secrets {
+		if sec.Delivery.Mode == types.ComponentDeliveryEnv {
+			names = append(names, sec.Delivery.Var)
+		}
+	}
+	return append(names, slices.Sorted(maps.Keys(def.Config))...)
 }
 
 // applyComponentConfigEnv writes the components' plain config into the sandbox
