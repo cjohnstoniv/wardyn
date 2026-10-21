@@ -111,8 +111,8 @@ func TestClassifyContentQueryRoutesAreReadsOnlyAsAPost(t *testing.T) {
 	}
 	for _, method := range []string{http.MethodPut, http.MethodPatch, http.MethodDelete} {
 		got, err := ClassifyContent(contentReq(method, query, `{}`))
-		if err != nil || got.RepoPath != "acme/proj/_git/app" {
-			t.Errorf("%s = %+v, %v, want RepoPath acme/proj/_git/app", method, got, err)
+		if err != nil || got.RepoPath != "proj/_git/app" {
+			t.Errorf("%s = %+v, %v, want RepoPath proj/_git/app", method, got, err)
 		}
 	}
 }
