@@ -46,7 +46,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
-- A runner now tells the organisation why it could not connect (migration `0200_runner_last_failure`). On its next
+- A runner now tells the organisation why it could not connect (migration `0213_runner_last_failure`). On its next
   connect it reports the stage its last attempt stopped at (`dns`, `proxy`, `network`, `tls`, `upgrade`, `auth`,
   `registration`, `session`, `engine`, `image`, `relay` or `ca`) and when, never an error's text, and the console
   shows it under the runner as runner-reported. A running Docker runner also re-checks that its engine reaches the

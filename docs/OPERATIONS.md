@@ -4015,7 +4015,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0208` (`0208_run_machine_kind`) adds `machine_kind` and `vm_machine` to `agent_runs` (`0001`'s table): the kind of sandbox a run asked for (empty for a container) and the virtual machine a Linux VM run started on.
 - `0209` (`0209_approval_human_takeover`) admits the approval kind `human_takeover` ("Needs you") in `approvals.kind`'s CHECK and adds `approvals.takeover_holder` and `approvals.handed_back_at` (`0001`'s table): who has control of a run the agent asked a person to take over, and when they handed it back.
 - `0210` (`0210_user_drives_team`) adds `user_drives.team` (`0054`'s table), with a check keeping it off a person's own drive and off `k8s_pvc`, and `user_drive_grants.members_can_write` (`0054`'s table, false by default): a team drive and its allocations' write bit (`storage.user_drive.team_drives`). A write setting `team` on a `k8s_pvc` or member-owned row now fails.
-- `0200` (`0200_runner_last_failure`) adds `last_failure_stage`, `last_failure_at` and `last_failure_ongoing` to `runners`: the stage a runner last said its attempt to connect, start or reach its run relay stopped at, and when. A stage and a time only, never an error's text.
+- `0213` (`0213_runner_last_failure`) adds `last_failure_stage`, `last_failure_at` and `last_failure_ongoing` to `runners`: the stage a runner last said its attempt to connect, start or reach its run relay stopped at, and when. A stage and a time only, never an error's text.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
