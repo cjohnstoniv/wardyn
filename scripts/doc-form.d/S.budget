@@ -231,7 +231,8 @@
 # docs/sdk.md 21325 = ours 21224 + theirs 20524 - base 20423 at the 0.10 W4f merge of SI-POLICY onto the train.
 # docs/sdk.md 20521 adds 98 over 20423, measured (0.10 POL-MOUNT): the governance_mount_keep_unknown row, the governance case of admin_surface, and the mount-source tier in the run-policy rows.
 # docs/sdk.md 21423 = ours 21325 + theirs 20521 - base 20423 at the 0.10 W4f merge of POL-MOUNT onto the train.
-docs/sdk.md=21423 share=21
+# docs/sdk.md 21436 = ours 21423 + theirs 20436 - base 20423 at the 0.10 W4f merge of SI-DOCS onto the train.
+docs/sdk.md=21436 share=21
 # docs/sdk.md 18691 adds 28 over 18663, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.

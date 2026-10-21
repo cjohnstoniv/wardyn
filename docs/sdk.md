@@ -48,7 +48,7 @@ func main() {
 
     // 2. Submit a run. Answers as soon as the run row exists, so the result's
     //    client.AgentRun (embedded) reads state PENDING — the image build and
-    //    dispatch continue server-side; poll or GetRun for RUNNING/FAILED.
+    //    dispatch continue server-side; follow RunEvents (below) or GetRun for RUNNING/FAILED.
     //    Also carries any ADVISORY warnings — the run is live either way, so
     //    surface them.
     created, err := c.CreateRun(ctx, client.CreateRunRequest{
@@ -652,7 +652,7 @@ start.
 | `delivery_not_via_org` / `via_org_destination_refused` / `via_org_cap_exceeded` | `/internal/via-org/{grantID}/…` serves only this run's grant delivered `via_org`, to the grant's own destination, within 16 open streams and 8 GiB a run per server replica, reset on restart. |
 | `missing_scope_snapshot` | The grant names the credential sentinel but carries no dispatch-time snapshot (a hand-authored grant). Azure DevOps, AWS SSO; and every grant naming `bedrock-api-key`, which is no longer a model credential. |
 | `owner_not_caller` | The grant's snapshot owner is not the run token's own subject. Azure DevOps. |
-| `roster_unreadable` | The site configuration could not be read; nothing is resolved from a failed read. Azure DevOps, AWS SSO. |
+| `roster_unreadable` | The site configuration could not be read; nothing is resolved from a failed read. Azure DevOps, AWS SSO, and a service identity's `GET /workspaces` (`503`). |
 | `run_unreadable` | The run row itself could not be read. AWS SSO; also `POST /approvals/{id}/{approve,deny}`'s second-human gate (`WARDYN_EGRESS_SECOND_HUMAN`, `WARDYN_CAPABILITY_SECOND_HUMAN`). |
 | `scope_changed` | The live provider row has drifted from the run's dispatch-time snapshot. Azure DevOps, AWS SSO. |
 | `store_error` | The credential store operation failed. AWS SSO (a read); also the Azure DevOps sign-in callback's own captured-credential write (`ado_entra.go`) — the identical "a store errored" fact, not a second name for it. |
@@ -948,7 +948,7 @@ The rest reach the wire only through
 | `byoi_user` | A Bring-Your-Own-Identity principal reached a route BYOI does not extend to. |
 | `capability_egress_host` / `capability_feature` / `capability_secret` | The capability-grant gates outside the five launch-door kinds already covered above: an egress host, a feature flag, or a secret the caller's capability grants do not cover. A feature flag also gates the invitation claim and the sponsor's service-token mint (`api_token`) and, as the foreign-run `404`'s audit reason, a sponsor entering a service identity's run (`service_attach`). |
 | `delegation_scope` | A portal's delegated token asked for a route outside its own delegation allow-list (#1142). |
-| `service_scope` | A service identity's token asked for a route outside its fixed allow-list (#1508): run create, preflight, list, read, events, output, `PATCH` and kill, `GET /me`, `GET /setup/status` and its own model-provider credential. Everything else, audit reads included, answers `403`. |
+| `service_scope` | A service identity's token asked for a route outside its fixed allow-list (#1508): run create, preflight, list, read, events, output, `PATCH` and kill, `GET /audit?run_id=`, `GET /presets`, `GET /workspaces`, `GET /me`, `GET /setup/status` and its own model-provider credential. Everything else, `GET /audit/export` included, answers `403`. |
 | `event_stream_cap` | The caller already holds 32 open `GET /runs/{id}/events` streams, the most one principal may (#1407); close one and retry. Answered `422` and not audited, like `run_quota`. |
 | `component_autonomy` | The organisation's autonomy cap on runs that use the caller's own custom components closes the door, with or without a governance profile; the body's `policy` names the deployment. |
 | `placement_component_self_defined` | A run on your own runner carries a component you defined while your limits omit `local_self_defined_components` (default deny); `403`, target `runs.placement`. |
@@ -1146,8 +1146,8 @@ curl -s -X POST http://localhost:8080/api/v1/runs \
   -H 'Content-Type: application/json' \
   -d '{"agent":"claude-code","repo":"org/repo","title":"Refund flow","task":"fix the flaky test"}'
 
-# The outcome contract: poll until .state is terminal, then read the task's real
-# exit code off the run.complete audit event. `wardyn run --wait` wraps this.
+# The outcome contract: follow GET /runs/{id}/events (or poll GET /runs/{id}) until the run ends,
+# then read the task's real exit code off the run.complete audit event. `wardyn run --wait` polls.
 curl -s -H 'Authorization: Bearer demo-admin-token' \
   http://localhost:8080/api/v1/runs/<id>   # .state: COMPLETED | FAILED | ...
 
