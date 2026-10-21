@@ -378,7 +378,7 @@ func (p *Proxy) serveAWSSigV4(w http.ResponseWriter, r *http.Request, host strin
 			return
 		}
 		body = buf
-		r.Body, r.ContentLength = io.NopCloser(bytes.NewReader(body)), int64(len(body))
+		holdChargedBody(r, body)
 		r.Header.Del("Transfer-Encoding")
 	}
 	payload := plan.payload
