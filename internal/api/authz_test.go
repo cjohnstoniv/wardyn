@@ -554,12 +554,14 @@ var routeMatrix = map[string]classifiedRoute{
 	// The two profile writes probe with a COMPOSED body (an overlay on the deployment default): what
 	// the security tier admits is the composition members too, and a member is refused it by the
 	// tier before the body is read.
-	"POST /api/v1/governance/units":              {class: classSecurity, body: composedProfileProbeBody},
-	"PUT /api/v1/governance/units/{id}":          {class: classSecurity, body: composedProfileProbeBody},
-	"DELETE /api/v1/governance/units/{id}":       {class: classSecurity},
-	"POST /api/v1/governance/memberships":        {class: classSecurity},
-	"DELETE /api/v1/governance/memberships/{id}": {class: classSecurity},
-	"POST /api/v1/governance/check":              {class: classSecurity},
+	"POST /api/v1/governance/units":                    {class: classSecurity, body: composedProfileProbeBody},
+	"PUT /api/v1/governance/units/{id}":                {class: classSecurity, body: composedProfileProbeBody},
+	"DELETE /api/v1/governance/units/{id}":             {class: classSecurity},
+	"POST /api/v1/governance/memberships":              {class: classSecurity},
+	"DELETE /api/v1/governance/memberships/{id}":       {class: classSecurity},
+	"PUT /api/v1/governance/memberships/{id}":          {class: classSecurity},
+	"POST /api/v1/governance/memberships/{id}/promote": {class: classSecurity},
+	"POST /api/v1/governance/check":                    {class: classSecurity},
 	// The four-eyes routes (gov4-b1): the queue, one change, and the two decisions. All security tier
 	// at the door; which kinds of change a caller may see or decide is the approver table's, inside
 	// the handler (governance_changes_pg_test.go).
