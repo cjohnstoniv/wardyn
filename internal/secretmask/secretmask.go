@@ -760,9 +760,12 @@ func covered(hidden int, runs [][2]int) int {
 // asciicast frames).
 //
 // Invariant (the retention bound): after each Write it holds back exactly the
-// last min(len, maxSecretLen-1) bytes of the stream, as they arrived, and
-// forwards everything before them. A secret that begins in those bytes is seen
-// whole by a later Write or by Close; one that begins earlier is already whole.
+// longest end of the stream that is the start of a secret (cutPrefixLen, so at
+// most maxSecretLen-1 bytes), as it arrived, and forwards everything before it.
+// A secret that begins in those bytes is seen whole by a later Write or by
+// Close; one that begins earlier is already whole, since a secret that began
+// earlier and ran past the end would make a longer such end. Bytes that cannot
+// begin a secret are never held, so a streamed frame is not delayed by them.
 // A run of overlapping secrets that crosses into the held bytes is forwarded as
 // its placeholder at once, and hidden records how many held bytes it stands
 // for, so they are never forwarded and a secret overlapping them joins the run.
@@ -783,7 +786,7 @@ func NewMaskingWriter(dst io.Writer, m Masker) *MaskingWriter {
 }
 
 // Write masks p (with any retained tail prepended) and forwards the safe
-// prefix downstream, retaining a tail of at most (maxSecretLen-1) bytes.
+// prefix downstream, retaining only a tail that could begin a secret.
 //
 // Fail-CLOSED on masker panic: a recovered panic causes the placeholder (not
 // the raw input) to be written downstream, then returns the panic as an error
@@ -796,10 +799,7 @@ func (w *MaskingWriter) Write(p []byte) (n int, err error) {
 	buf := append(w.tail, p...) //nolint:gocritic // intentional re-use
 
 	// The retention bound is enforced here: the held bytes start at at.
-	at := len(buf)
-	if w.m.maxLen > 1 {
-		at = max(0, len(buf)-(w.m.maxLen-1))
-	}
+	at := len(buf) - w.m.cutPrefixLen(buf)
 	runs := w.m.runs(buf)
 	lo := covered(w.hidden, runs) // bytes before lo are already forwarded as a placeholder
 	end := at
