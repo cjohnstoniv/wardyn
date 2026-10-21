@@ -56,6 +56,7 @@ func TestRevive_StoredProxyConfigKeepsVM(t *testing.T) {
 		ls.dispatchTestStore.run, ls.dispatchTestStore.state = run, types.RunPending
 		// Keeps the stored row past the runner-lease failure (see dispatchInternalHostsRun).
 		srv.cfg.Store = siteConfigDispatchStore{localDispatchStore: ls, sc: &types.SiteConfig{}}
+		srv.cfg.ControlPlaneURL = "http://127.0.0.1:9" // LoadConfigBytes takes plain http only to loopback
 		ctx := context.Background()
 		srv.dispatchRun(ctx, run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 			RunToken: "run-token", Image: "wardyn/claude-code:latest", Interactive: true,
