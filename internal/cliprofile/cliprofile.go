@@ -4,7 +4,8 @@
 // Package cliprofile is the per-computer profile the wardyn CLI reads: the organisation's URL, so
 // `wardyn attach <id>` needs none on the command line, and optionally the base URL its release downloads
 // come from. It holds no secret (mode 0644) and is written by `wardyn login <url>` and by
-// `wardyn-runnerd setup`. Writing one field keeps the other.
+// `wardyn-runnerd setup`. It also names, per organisation URL, which store holds this computer's CLI sign-in
+// (`wardyn login`): only the store's kind, never the sign-in itself. Writing one field keeps the others.
 package cliprofile
 
 import (
@@ -16,6 +17,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // FileName is the profile's name inside Dir.
@@ -24,6 +27,9 @@ const FileName = "cli.json"
 type profile struct {
 	URL          string `json:"url"`
 	ArtifactBase string `json:"artifact_base,omitempty"`
+	// Sessions maps an organisation URL, as Normalize writes it, to the store holding its CLI sign-in
+	// ("keychain" or "file").
+	Sessions map[string]string `json:"sessions,omitempty"`
 }
 
 // Dir is where the profile lives: the wardyn directory of the person's configuration directory.
@@ -83,6 +89,30 @@ func WriteArtifactBase(dir, base string) error {
 	return store(dir, p)
 }
 
+// ReadSessionStore is the store holding the CLI sign-in for origin (a Normalize URL), or "" for none.
+func ReadSessionStore(dir, origin string) (string, error) {
+	p, err := load(dir)
+	return p.Sessions[origin], err
+}
+
+// WriteSessionStore records that kind holds origin's CLI sign-in, or with kind "" that none does, and
+// keeps every other field.
+func WriteSessionStore(dir, origin, kind string) error {
+	p, err := load(dir)
+	if err != nil {
+		return err
+	}
+	if kind == "" {
+		delete(p.Sessions, origin)
+	} else {
+		if p.Sessions == nil {
+			p.Sessions = map[string]string{}
+		}
+		p.Sessions[origin] = kind
+	}
+	return store(dir, p)
+}
+
 // store replaces dir's profile with p, through a sibling file renamed into place so a reader never sees
 // half of it.
 func store(dir string, p profile) error {
@@ -110,20 +140,20 @@ func store(dir string, p profile) error {
 	return nil
 }
 
-// Normalize is raw as an organisation URL: scheme, host and base path, with no trailing slash, query,
-// fragment or credentials. Whether the scheme is safe to send a token over is the caller's concern.
+// Normalize is raw as an organisation URL: scheme, host and base path in types.CLIOrigin form (lower-case
+// scheme and host, no default port, no trailing slash), with no query, fragment or credentials. Whether the scheme is safe to send a token over is the caller's concern.
 func Normalize(raw string) (string, error) {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {
 		return "", fmt.Errorf("not a URL: %w", err)
 	}
-	if (u.Scheme != "https" && u.Scheme != "http") || u.Hostname() == "" {
+	if scheme := strings.ToLower(u.Scheme); (scheme != "https" && scheme != "http") || u.Hostname() == "" {
 		return "", fmt.Errorf("%q is not an organisation URL: it starts https://<host> (or http://<host> for a loopback one)", raw)
 	}
 	if u.User != nil {
 		return "", errors.New("the organisation URL must not carry a user name or password")
 	}
-	return u.Scheme + "://" + u.Host + strings.TrimRight(u.EscapedPath(), "/"), nil
+	return types.CLIOrigin(u), nil
 }
 
 // NormalizeArtifactBase is raw as a release download base: Normalize's form, and https only, because the

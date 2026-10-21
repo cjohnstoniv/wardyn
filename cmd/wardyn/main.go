@@ -7,6 +7,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -16,6 +17,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/certbundle"
@@ -233,10 +235,55 @@ func tokenSource(adminEnv, token string) string {
 	return "WARDYN_TOKEN"
 }
 
+// tokenFromLogin is authHintFor.tokenFrom when the bearer is this computer's stored CLI sign-in.
+const tokenFromLogin = "wardyn login"
+
+// sessionState is the stored CLI sign-in the running command uses, resolved at most once, and only when
+// --token, WARDYN_ADMIN_TOKEN and WARDYN_TOKEN all name none.
+type sessionState struct {
+	once sync.Once
+	mu   sync.Mutex // guards s and err after resolve, for bearer
+	s    storedSession
+	err  error
+}
+
+// resolve loads the stored sign-in for serverURL: the item is looked up by that URL alone, so it is only
+// ever sent to the organisation it was made for.
+func (st *sessionState) resolve(serverURL string) {
+	st.once.Do(func() {
+		origin, err := cliprofile.Normalize(serverURL)
+		if err != nil {
+			return
+		}
+		st.s, st.err = loadSession(context.Background(), origin)
+	})
+}
+
+// bearer is the stored sign-in's bearer for the next request. The cached token is sent while it is outside
+// the renewal margin; inside it, loadSession reads the item again and renews it under the lock. An admin
+// step-up is never renewed: once it is spent, the ordinary access token is sent. A sign-in that has ended
+// stays ended, and one that is no longer stored sends no bearer. origin is the sign-in's organisation,
+// "" when none is stored.
+func (st *sessionState) bearer(ctx context.Context) (token, origin string) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.s.kind == "" {
+		return "", ""
+	}
+	if tok, kind := st.s.item.bearer(time.Now()); tok != "" {
+		st.s.token, st.s.tokenKind = tok, kind
+		return tok, st.s.origin
+	}
+	st.s, st.err = loadSession(ctx, st.s.origin)
+	authHintFor.session = st.err
+	return st.s.token, st.s.origin
+}
+
 func rootCmd() *cobra.Command {
 	var (
 		serverURL string
 		token     string
+		sess      = &sessionState{}
 	)
 	root := &cobra.Command{
 		Use:           "wardyn",
@@ -262,7 +309,7 @@ func rootCmd() *cobra.Command {
 				from = tokenSource(os.Getenv("WARDYN_ADMIN_TOKEN"), token)
 			}
 			serverURL, urlFromDefault = resolveURL(cmd, serverURL)
-			authHintFor.url, authHintFor.tokenFrom = serverURL, from
+			authHintFor.url, authHintFor.tokenFrom, authHintFor.session = serverURL, from, nil
 			warnPlaintextToken(cmd.ErrOrStderr(), serverURL, token)
 		},
 	}
@@ -284,13 +331,32 @@ func rootCmd() *cobra.Command {
 	// loop can call the API ~900 times over its default 30m deadline) so a hung
 	// server can't wedge a single request forever; the shared client reuses one
 	// connection pool across those polls.
+	//
+	// With no --token, WARDYN_ADMIN_TOKEN or WARDYN_TOKEN, the bearer is the stored CLI sign-in for
+	// serverURL (wardyn login), renewed when its access token is spent. A sign-in that cannot be used
+	// leaves the request without a bearer and puts the reason in the 401's hint.
 	client := func() *sdk.Client {
-		return &sdk.Client{BaseURL: serverURL, Token: token, HTTPClient: orgClient(serverURL, 30*time.Second)}
+		t, hc := token, orgClient(serverURL, 30*time.Second)
+		if t == "" {
+			sess.resolve(serverURL)
+			var origin string
+			if t, origin = sess.bearer(context.Background()); t != "" && authHintFor.tokenFrom != tokenFromLogin {
+				authHintFor.tokenFrom = tokenFromLogin
+				warnPlaintextToken(root.ErrOrStderr(), serverURL, t)
+			}
+			authHintFor.session = sess.err
+			if origin != "" {
+				hc.Transport = sessionTransport{base: orgTransport(hc), origin: origin, sess: sess}
+			}
+		}
+		return &sdk.Client{BaseURL: serverURL, Token: t, HTTPClient: hc}
 	}
 
 	root.AddCommand(
-		loginCmd(),
+		loginCmd(func() (string, bool) { return serverURL, urlFromDefault }),
 		versionCmd(),
+		whoamiCmd(client, sess),
+		logoutCmd(func() string { return serverURL }),
 		runCmd(client),
 		attachCmd(client),
 		approvalCmd(client),
