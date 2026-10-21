@@ -279,15 +279,19 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		// ComputerFolder is the run's folder from the person's computer, held by their runner, and
 		// its passes (run_computer_folder.go); absent on every other run.
 		ComputerFolder *computerFolderRunView `json:"computer_folder,omitempty"`
+		// ModelAllowlists (#3374) is the model allowlist each local model provider handed the run's proxy at
+		// its latest dispatch, {provider id: models}: what the run is held to, whatever the provider lists now.
+		ModelAllowlists map[string][]string `json:"model_allowlists,omitempty"`
 	}{
 		AgentRun: run, UIApps: apps, UserTypeName: s.runUserTypeName(r, run.UserType),
 		ModelProviderName: providerName, ModelProviderDeleted: providerDeleted,
-		CreatedViaName: s.runCreatedViaName(r.Context(), run),
-		RunnerPoolName: s.runPoolName(r.Context(), run),
-		KeptUntil:      s.endedRunKeptUntil(run),
-		Policy:         s.runPolicyRef(r.Context(), run),
-		Sync:           s.runSyncOpenView(run.ID),
-		ComputerFolder: s.computerFolderRunView(r.Context(), run.ID),
+		CreatedViaName:  s.runCreatedViaName(r.Context(), run),
+		RunnerPoolName:  s.runPoolName(r.Context(), run),
+		KeptUntil:       s.endedRunKeptUntil(run),
+		Policy:          s.runPolicyRef(r.Context(), run),
+		Sync:            s.runSyncOpenView(run.ID),
+		ComputerFolder:  s.computerFolderRunView(r.Context(), run.ID),
+		ModelAllowlists: s.runModelAllowlists(r.Context(), run.ID),
 	})
 }
 

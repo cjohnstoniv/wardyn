@@ -363,6 +363,8 @@ type dispatchLLMPlan struct {
 	// localModels is ProxyConfig.LocalModels: each local_model upstream's model
 	// allowlist and request bounds, for the proxy's route gate.
 	localModels map[string]types.LocalModelSettings
+	// localAllowlists is those allowlists by provider id, as recorded on the run (recordModelAllowlists).
+	localAllowlists map[string][]string
 	// mitmLLM is whether the BUILT-IN LLM hosts should be intercepted —
 	// subscription injection or intercept_tls inspection, never a CA minted
 	// purely for artifact tokens. Computed here because every input to it is
@@ -487,6 +489,7 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	// takes from showing a "success" injection row for a credential it was
 	// never handed (#518).
 	s.recordBedrockTransport(ctx, bedrockRun, llm)
+	s.recordModelAllowlists(ctx, run.ID, prov.localAllowlists)
 
 	return dispatchLLMPlan{
 		llm: llm, injections: injections,
@@ -497,7 +500,7 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 		azureCLI:             azureCLI,
 		awsSigV4:             awsSigV4,
 		mitmLLM:              subscription || mitmForInspect,
-		llmUnavailableDetail: prov.detail, llmUpstreams: prov.upstreams, localModels: prov.localModels,
+		llmUnavailableDetail: prov.detail, llmUpstreams: prov.upstreams, localModels: prov.localModels, localAllowlists: prov.localAllowlists,
 	}, true
 }
 

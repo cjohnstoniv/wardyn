@@ -483,6 +483,9 @@ export interface RunDetail extends AgentRun {
   model_provider_name?: string;
   model_provider_deleted?: boolean;
   created_via_name?: string;
+  // The model allowlist each local model provider handed the run's proxy at its latest dispatch, {provider id: models}
+  // (#3374): what the run is held to, whatever the provider lists now. Absent when the run holds none.
+  model_allowlists?: Record<string, string[]>;
   // The name of the pool the run was admitted into, as it reads now; a deleted pool is still named.
   runner_pool_name?: string;
   kept_until?: string;
