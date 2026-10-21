@@ -27,9 +27,9 @@ type specCaller struct {
 
 var validatePolicySpecCallers = map[string]map[string]specCaller{
 	"validatePolicySpec": {
-		"policy.go":                   {1, "validateAuthoredPolicySpec itself: the plain check, then the authored-only refusals"},
-		"run_policy_resolution.go":    {1, "the run path, after the inline policy is bounded"},
-		"run_policy_overlay.go":       {1, "the run path, after the overlay is bounded"},
+		"policy.go":                {1, "validateAuthoredPolicySpec itself: the plain check, then the authored-only refusals"},
+		"run_policy_resolution.go": {1, "the run path, after the inline policy is bounded"},
+		"run_policy_overlay.go":    {1, "the run path, after the overlay is bounded"},
 		"governance_unit_write.go": {1, "the profile base check: a base that already fails is not blamed on the overlay"},
 	},
 	"validatePolicySpecMode": {
