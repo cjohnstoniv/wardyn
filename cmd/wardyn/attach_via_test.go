@@ -92,6 +92,13 @@ func TestSettleAttachEndPrefersTheClose(t *testing.T) {
 	if got := settleAttachEnd(nil, nil, time.Minute); got != nil {
 		t.Errorf("settled on %v, want nil", got)
 	}
+	// A clean output end (the local pipe's close, no websocket) is the session's end: a keystroke that
+	// raced a clean shell exit shows as a detach, not as the write's broken pipe.
+	clean := make(chan error, 1)
+	clean <- nil
+	if got := settleAttachEnd(writeErr, clean, time.Minute); got != nil {
+		t.Errorf("settled on %v, want nil after a clean output end", got)
+	}
 	// An output end without a close leaves the first error.
 	out := make(chan error, 1)
 	out <- errors.New("read failed")

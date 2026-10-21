@@ -158,7 +158,7 @@ func (s PG) DeleteUserSubjectRows(ctx context.Context, id uuid.UUID, principals,
 		return UserSubjectRowsDeleted{}, fmt.Errorf("store: delete user grants: %w", err)
 	}
 	out.Grants = tag.RowsAffected()
-	tag, err = tx.Exec(ctx, `DELETE FROM governance_assignments WHERE subject_type = 'user' AND lower(subject) = ANY($1::text[])`, subjects)
+	tag, err = tx.Exec(ctx, `DELETE FROM governance_memberships WHERE subject_type = 'user' AND lower(subject) = ANY($1::text[])`, subjects)
 	if err != nil {
 		return UserSubjectRowsDeleted{}, fmt.Errorf("store: delete user assignments: %w", err)
 	}
@@ -172,7 +172,7 @@ func (s PG) DeleteUserSubjectRows(ctx context.Context, id uuid.UUID, principals,
 	if len(held) > 0 {
 		err = tx.QueryRow(ctx, `SELECT
 			(SELECT count(*) FROM capability_grants WHERE subject_type = 'user' AND lower(subject) = ANY($1::text[])) +
-			(SELECT count(*) FROM governance_assignments WHERE subject_type = 'user' AND lower(subject) = ANY($1::text[]))`, held).Scan(&out.Kept)
+			(SELECT count(*) FROM governance_memberships WHERE subject_type = 'user' AND lower(subject) = ANY($1::text[]))`, held).Scan(&out.Kept)
 		if err != nil {
 			return UserSubjectRowsDeleted{}, fmt.Errorf("store: count kept user rows: %w", err)
 		}

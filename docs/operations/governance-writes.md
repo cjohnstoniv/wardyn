@@ -31,7 +31,7 @@ an operator follows to turn one on and run the queue.
 **Optional: four-eyes on governance writes.**
 
 - Set `WARDYN_GOVERNANCE_SECOND_HUMAN=1` and no single administrator can change a governance profile, an assignment, a capability grant, the enforcement map, a value's availability, a user type's priority, a role mapping or a key-domain assignment alone.
-- With it on, a human's write to `POST/PUT/DELETE /governance/profiles`, `POST/DELETE /governance/assignments`, `POST/DELETE /permissions/grants`, `PUT /permissions/enforcement`, `PUT /permissions/availability/{kind}/*`, `PUT /user-types/{id}` (when the priority changes), `POST/DELETE /access/mappings` or `PUT/DELETE /key-domains/assignments/{subject_type}/{subject}` is decoded and validated exactly as before and then stored as a pending change, answered `202` with `Location: /api/v1/governance/changes/{id}` and `{"pending_change": {id, target_kind, op, target_key, state, proposed_by, proposed_at, expires_at, diff}}`.
+- With it on, a human's write to `POST/PUT/DELETE /governance/units`, `POST/DELETE /governance/memberships`, `POST/DELETE /permissions/grants`, `PUT /permissions/enforcement`, `PUT /permissions/availability/{kind}/*`, `PUT /user-types/{id}` (when the priority changes), `POST/DELETE /access/mappings` or `PUT/DELETE /key-domains/assignments/{subject_type}/{subject}` is decoded and validated exactly as before and then stored as a pending change, answered `202` with `Location: /api/v1/governance/changes/{id}` and `{"pending_change": {id, target_kind, op, target_key, state, proposed_by, proposed_at, expires_at, diff}}`.
 - Nothing is applied.
 - `diff` is rendered by the server, never by a client:
   - the target's current row and the proposed one (every ceiling passes the same read-redaction as a read of it) plus the changed field paths;
@@ -101,7 +101,7 @@ an operator follows to turn one on and run the queue.
   - Local mode authenticates nobody, so the proposer and approver are both client-supplied: with the switch on it answers every covered write and every approve or reject `503` (`governance_second_human_local_mode`).
 - **Audit.**
   - `governance.change.propose`, `.approve`, `.reject`, `.expire` and `.bypass` ([AUDIT-ACTIONS.md](../AUDIT-ACTIONS.md)).
-  - On approval the target's own row (`governance.profile.write`, `governance.assignment.write`, ...) is written too, its actor the approver, carrying `change_id` and `proposed_by`.
+  - On approval the target's own row (`governance.unit.write`, `governance.membership.write`, ...) is written too, its actor the approver, carrying `change_id` and `proposed_by`.
   - The proposer, the approver, their emails and a rejection's `reason` are personal fields:
     - the `audit_personal_fields` erasure scope clears them from the change rows,
     - and a pending change whose proposer is erased expires, so a change with no recorded proposer can never be approved.
@@ -213,7 +213,7 @@ wardyn governance set governance.json --prune    # the same apply, once the plan
 **5. Reading the audit.**
 
 - Filter `GET /audit` by `action_prefix=governance.change.`.
-- A normal change is a `governance.change.propose` row (actor the proposer, `Target` the change id) followed by a `governance.change.approve` row and, beside it, the target's own row (`governance.profile.write`, `capability.grant.create`, `access.role_mapping.write`, ...).
+- A normal change is a `governance.change.propose` row (actor the proposer, `Target` the change id) followed by a `governance.change.approve` row and, beside it, the target's own row (`governance.unit.write`, `capability.grant.create`, `access.role_mapping.write`, ...).
 - That row's actor is the approver and it carries `change_id` and `proposed_by`: two named humans for one change.
 - Also look for:
   - `governance.change.bypass`: the admin token wrote or approved. Alert on it.

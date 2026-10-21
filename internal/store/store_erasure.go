@@ -183,7 +183,21 @@ func (s PG) BlankRunTasks(ctx context.Context, createdBy string) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("store: blank a person's run tasks: %w", err)
 	}
-	return int(tag.RowsAffected()), nil
+	n := int(tag.RowsAffected())
+	// An agent's own task in a run with several agents. Read first, so an install that
+	// never ran one (a split-role app role without UPDATE on run_harnesses) never issues the UPDATE.
+	var held bool
+	if err := s.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM run_harnesses h JOIN agent_runs r ON r.id = h.run_id
+		WHERE r.created_by = $1 AND h.task <> '')`, createdBy).Scan(&held); err != nil {
+		return 0, fmt.Errorf("store: read a person's agent tasks: %w", err)
+	}
+	if held {
+		if _, err := s.Pool.Exec(ctx, `UPDATE run_harnesses h SET task = '' FROM agent_runs r
+			WHERE r.id = h.run_id AND r.created_by = $1 AND h.task <> ''`, createdBy); err != nil {
+			return 0, fmt.Errorf("store: blank a person's agent tasks: %w", err)
+		}
+	}
+	return n, nil
 }
 
 // PrincipalForName maps a name an event carries (a principal, an entra:<tenant>:<object> form, an

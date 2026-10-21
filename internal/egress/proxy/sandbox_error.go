@@ -291,5 +291,6 @@ func (p *Proxy) denyDialFailed(ruleSource string, req egress.Request, host strin
 	dl.Cause = p.causeSentence(err)
 	dl.Via = p.viaHop(host)
 	dl.Scan = scan
+	dl.Refusal = refusalOfDialError(err)
 	return dl
 }

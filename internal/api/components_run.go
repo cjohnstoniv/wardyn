@@ -101,6 +101,8 @@ type componentAdmission struct {
 	awsCLI bool
 	// azureCLI: an Azure CLI row was admitted already.
 	azureCLI bool
+	// kubectlCLI: a kubectl row was admitted already.
+	kubectlCLI bool
 	// githubCLI: a GitHub CLI row was admitted already, and its door's host is
 	// in bounds.credentialed.
 	githubCLI bool
@@ -291,6 +293,9 @@ func (s *Server) admitComponent(r *http.Request, adm *componentAdmission, i int,
 		return attachedComponent{}, refused
 	}
 	if refused := s.componentAzureCLIAdmitted(r, adm, &c, i); refused != nil {
+		return attachedComponent{}, refused
+	}
+	if refused := s.componentKubectlCLIAdmitted(r, adm, &c, i); refused != nil {
 		return attachedComponent{}, refused
 	}
 	if si := componentResidentSecret(def); si >= 0 && adm.settings.DenyResidentDelivery {

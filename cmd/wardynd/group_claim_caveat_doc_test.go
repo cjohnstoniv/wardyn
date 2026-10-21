@@ -119,7 +119,7 @@ func TestGroupClaimOverageWarningAndProcedure(t *testing.T) {
 		"get /governance",      // and every group-tier assignment
 		"get /me/capabilities", // verify with a real login, not by reading the IdP's UI
 		"session_groups",       // ...and read the snapshot that login's token produced
-		"post /governance/preview",
+		"post /governance/check",
 	} {
 		if !strings.Contains(proc, want) {
 			t.Errorf("docs/operations/capabilities.md's re-key procedure no longer names %q — this is the burden "+

@@ -20,7 +20,7 @@ export type PolicyPreviewPending =
   | "dispatch_egress";
 
 export interface PolicyPreviewSource {
-  kind: "default" | "profile" | "stored" | "inline";
+  kind: "default" | "unit" | "stored" | "inline";
   name?: string;
   policy_id?: string;
 }

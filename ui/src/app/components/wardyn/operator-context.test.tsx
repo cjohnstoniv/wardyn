@@ -84,7 +84,7 @@ describe("operator-context", () => {
     ["useSecurityOperator", useSecurityOperator, true],
     ["usePrincipal", usePrincipal, ""],
     ["useMemberLocalDirRoot", useMemberLocalDirRoot, null],
-    ["useUserDrive", useUserDrive, { drive: null, deniedByProfile: "", unavailable: "" }],
+    ["useUserDrive", useUserDrive, { drive: null, deniedByUnit: "", unavailable: "" }],
     ["useConfinementPosture", useConfinementPosture, ""],
   ] as const)("%s reads its default with no <OperatorProvider> above it", (_name, hook, want) => {
     const { result } = renderHook(() => hook());

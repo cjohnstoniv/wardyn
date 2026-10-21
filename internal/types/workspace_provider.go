@@ -299,6 +299,10 @@ type UserDriveProvider struct {
 	MaxSizeMiB int  `json:"max_size_mib,omitempty"` // largest drive allowed, refused at admin write boundary and clamped at resolve; 0 = no ceiling
 	// MemberCreate is the switch for people creating their own drives. nil = off.
 	MemberCreate *MemberDrivePolicy `json:"member_create,omitempty"`
+	// TeamDrives lets an admin mark a drive a team drive: one folder shared by
+	// the groups it is allocated to (#1988). false = off, and every drive
+	// resolves per person.
+	TeamDrives bool `json:"team_drives,omitempty"`
 }
 
 // MemberDrivePolicy turns member drive creation on for the organisation (off by
@@ -310,6 +314,9 @@ type MemberDrivePolicy struct {
 	// UserDriveProvider.MaxSizeMiB. A Docker volume has no size limit, so it must be 0 there.
 	SizeMiB      int    `json:"size_mib,omitempty"`
 	StorageClass string `json:"storage_class,omitempty"` // k8s only; "" = the cluster default
+	// KeepMainDrive lets a run keep its work folder as its person's own drive
+	// (CreateRunRequest.KeepWorkFolder). Off by default; has no effect unless Enabled.
+	KeepMainDrive bool `json:"keep_main_drive,omitempty"`
 }
 
 // MaxMemberDrivesPerPerson is the ceiling on MemberDrivePolicy.MaxPerPerson.

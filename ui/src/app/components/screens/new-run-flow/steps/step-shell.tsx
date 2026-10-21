@@ -48,7 +48,7 @@ interface StepShellBase {
   /** None: no primary button and no Ctrl/Cmd+Enter (Shape from scratch, where a choice moves on). */
   primary?: StepShellPrimary;
   /** Local issues: the primary action then focuses the first one's control instead of running. */
-  issues?: readonly StepIssue[];
+  issues?: readonly Pick<StepIssue, "focus">[];
   /** Beside the heading, at its right (Review's view toggle). The heading is then Make's 32 px. */
   headingAside?: React.ReactNode;
   /** Where the aside sits against the heading: Review centres it, the document editor sets it on the bottom line. */

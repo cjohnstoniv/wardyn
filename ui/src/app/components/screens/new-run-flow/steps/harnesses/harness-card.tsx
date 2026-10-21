@@ -15,6 +15,7 @@ import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { StepSection } from "../../../../wardyn/step-section";
 import { Switch } from "../../../../wardyn/form-primitives";
 import { Chip } from "../../../../wardyn/primitives";
+import { agentTaskId } from "../../lenses/lens-keys";
 import { harnessHint, unavailableReason, type Roster } from "./roster";
 
 export type HarnessMode = "optional" | "interactive" | "autonomous";
@@ -30,6 +31,10 @@ export interface HarnessCardProps {
   /** The other cards' harnesses: each is taken, and a combination is checked against them. */
   others: readonly string[];
   removable: boolean;
+  /** How many harnesses the run holds: with two or more, a missing task says to give this agent one or remove it. */
+  count: number;
+  /** Why these harnesses cannot share one image; the card says so under its select. */
+  combination?: string;
   started: boolean;
   /** The starting prompt (Interactive) or the task (Autonomous). */
   text: string;
@@ -39,10 +44,10 @@ export interface HarnessCardProps {
   onText: (text: string) => void;
 }
 
-export function HarnessCard({ index, id, roster, mode, others, removable, started, text, onSwap, onRemove, onStart, onText }: HarnessCardProps) {
+export function HarnessCard({ index, id, roster, mode, others, removable, count, combination, started, text, onSwap, onRemove, onStart, onText }: HarnessCardProps) {
   const [flagged, setFlagged] = React.useState(false);
   const selectId = `nr-harness-${index}`;
-  const textId = mode === "autonomous" && index === 0 ? "nr-task" : `nr-text-${index}`;
+  const textId = mode === "autonomous" ? agentTaskId(index) : `nr-text-${index}`;
   const known = roster.harnesses.some((h) => h.id === id);
   const name = roster.harnesses.find((h) => h.id === id)?.display ?? id;
   // An Autonomous run holds one harness, so the other cards never constrain this one's choice.
@@ -77,6 +82,7 @@ export function HarnessCard({ index, id, roster, mode, others, removable, starte
             ))}
           </select>
           {shownHint && <p id={`${selectId}-hint`} className="text-xs leading-snug font-normal text-muted-foreground">{shownHint}</p>}
+          {combination && <p role="alert" className="text-xs font-normal text-danger">{combination}</p>}
         </div>
       }
       action={<Button type="button" variant="ghost" disabled={!removable} onClick={onRemove}>{NR_SHARED.REMOVE}</Button>}
@@ -115,7 +121,7 @@ export function HarnessCard({ index, id, roster, mode, others, removable, starte
             onFocus={(e) => e.currentTarget.getAttribute("aria-invalid") === "true" && setFlagged(true)}
             onChange={(e) => onText(e.target.value)}
           />
-          {taskMissing && <p role="alert" className="text-xs text-danger">{NR_HARNESSES.TASK_ERROR}</p>}
+          {taskMissing && <p role="alert" className="text-xs text-danger">{count > 1 ? NR_HARNESSES.AGENT_TASK_ERROR : NR_HARNESSES.TASK_ERROR}</p>}
           <p id={`${textId}-hint`} className="text-xs leading-snug text-muted-foreground">{NR_HARNESSES.TASK_HELP}</p>
         </div>
       )}

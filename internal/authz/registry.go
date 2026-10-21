@@ -32,7 +32,7 @@ const (
 	ReasonCapabilityWorkspaceProvider    Reason = "capability_workspace_provider"
 	ReasonCapabilityModelProvider        Reason = "capability_model_provider"
 	ReasonCapabilityComponent            Reason = "capability_component"
-	ReasonGovernanceProfile              Reason = "governance_profile"
+	ReasonGovernanceUnit                 Reason = "governance_unit"
 	ReasonPlacementComponentSelfDefined  Reason = "placement_component_self_defined"
 	ReasonGovernanceOverlayUnsatisfiable Reason = "governance_overlay_unsatisfiable"
 	ReasonGrantPairingNotEligible        Reason = "grant_pairing_not_eligible"
@@ -118,7 +118,7 @@ const (
 	// carry a self-defined component (site config components.autonomy_cap)
 	// alone bound the run's level, and the request asks for more than it
 	// permits. A tie with a governance profile's rubric refuses as
-	// ReasonGovernanceProfile instead.
+	// ReasonGovernanceUnit instead.
 	ReasonComponentAutonomy Reason = "component_autonomy"
 )
 
@@ -155,7 +155,7 @@ var refusals = map[Reason]Refusal{
 	ReasonCapabilityModelProvider:        {Effect: EffectDeny, Audit: true},
 	ReasonCapabilityComponent:            {Effect: EffectDeny, Audit: true},
 	ReasonPlacementComponentSelfDefined:  {Effect: EffectDeny, Audit: true},
-	ReasonGovernanceProfile:              {Effect: EffectDeny, Audit: true},
+	ReasonGovernanceUnit:                 {Effect: EffectDeny, Audit: true},
 	ReasonGovernanceOverlayUnsatisfiable: {Effect: EffectDeny, Audit: true},
 	ReasonGrantPairingNotEligible:        {Effect: EffectDeny, Audit: true},
 	ReasonGroupsSnapshotStale:            {Effect: EffectDeny, Audit: true},

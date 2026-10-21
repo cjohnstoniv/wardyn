@@ -30,7 +30,7 @@ import { limitChips, limitsBoundNothing } from "../governance/limit-chips";
 import { ExplainGrid } from "./explain-grid";
 
 // The profile bound to this type, by governance's own priority rule (highest
-// wins) — the exact ordering ResolveGovernanceProfile applies, so a type with
+// wins) — the exact ordering ResolveGovernanceUnit applies, so a type with
 // two assignments (a bug elsewhere, not something this screen writes) is never
 // misreported by picking the wrong one.
 function boundProfile(snapshot: GovernanceSnapshot | null, typeID: string) {
@@ -39,7 +39,7 @@ function boundProfile(snapshot: GovernanceSnapshot | null, typeID: string) {
     .filter((a) => a.subject_type === "user_type" && a.subject === typeID)
     .sort((a, b) => b.priority - a.priority)[0];
   if (!assignment) return undefined;
-  return snapshot.profiles.find((p) => p.id === assignment.profile_id);
+  return snapshot.profiles.find((p) => p.id === assignment.unit_id);
 }
 
 export function UserTypeEditor({

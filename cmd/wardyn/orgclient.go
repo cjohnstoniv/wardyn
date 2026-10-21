@@ -31,6 +31,14 @@ func orgClient(origin string, timeout time.Duration) *http.Client {
 	return orgClientTrusting(origin, timeout, nil)
 }
 
+// orgTransport is the transport c, an orgClient, dials through, for a RoundTripper that wraps it.
+func orgTransport(c *http.Client) http.RoundTripper {
+	if c.Transport != nil {
+		return c.Transport
+	}
+	return http.DefaultTransport
+}
+
 // orgClientTrusting is orgClient with extra anchors beside the stored ones:
 // `wardyn ca add` reads /healthz through the anchors it is about to store.
 func orgClientTrusting(origin string, timeout time.Duration, extra []*x509.Certificate) *http.Client {

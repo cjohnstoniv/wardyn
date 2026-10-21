@@ -28,7 +28,7 @@ import (
 // make the two states that matter inexpressible: a member who is denied and has
 // no allocation would be indistinguishable from a member who simply has none,
 // which is exactly the pair the console has to tell apart. The door rides
-// beside it as /me.user_drive_denied_by_profile.
+// beside it as /me.user_drive_denied_by_unit.
 type meUserDrive struct {
 	Name        string                   `json:"name"`
 	Backend     types.DriveBackend       `json:"backend"`
@@ -69,7 +69,7 @@ func (s *Server) resolveMeUserDrive(r *http.Request) (*meUserDrive, string) {
 	// The ceiling the door check reads, for the clamp's per-principal half — the
 	// same MaxDriveSizeMiB the launch path applies, so the number on the card is
 	// the number a run gets. It costs no extra read: the per-request ceiling memo
-	// is installed by the auth middleware, so this and userDriveDeniedByProfile's
+	// is installed by the auth middleware, so this and userDriveDeniedByUnit's
 	// own resolve are one.
 	//
 	// Best-effort, and safely so: a ceiling that cannot be resolved makes the DOOR
@@ -139,9 +139,9 @@ func (s *Server) resolveMeUserDrive(r *http.Request) (*meUserDrive, string) {
 	}, ""
 }
 
-// userDriveDeniedByProfile names the profile whose DenyUserDrive door is shut
+// userDriveDeniedByUnit names the profile whose DenyUserDrive door is shut
 // for this caller, or "" when the door is open — the /me sibling field
-// user_drive_denied_by_profile.
+// user_drive_denied_by_unit.
 //
 // A string, not a bool, because the member-facing sentence quotes the profile
 // by name ("your governance profile %q does not allow…") and a bool would make
@@ -174,7 +174,7 @@ func (s *Server) resolveMeUserDrive(r *http.Request) (*meUserDrive, string) {
 // own reason — /me is a display read, and the ENFORCEMENT path answers the same
 // failure with a refusal. The operator short-circuit stays HERE too, ahead of
 // the resolve: a display read must not cost an operator a ceiling round-trip.
-func (s *Server) userDriveDeniedByProfile(r *http.Request) (name, unresolved string) {
+func (s *Server) userDriveDeniedByUnit(r *http.Request) (name, unresolved string) {
 	if s.runUngoverned(r.Context()) {
 		return "", ""
 	}
@@ -195,7 +195,7 @@ func (s *Server) userDriveDeniedByProfile(r *http.Request) (name, unresolved str
 	}
 	// The bool is the decision, and discarding it here was the same fail-open
 	// driveDoorShut's own bool was introduced to close, left standing at the
-	// sibling call site. governance_profiles.name is TEXT NOT NULL UNIQUE with
+	// sibling call site. governance_units.name is TEXT NOT NULL UNIQUE with
 	// no non-empty CHECK, so a profile with DenyUserDrive set and a blank name
 	// reports ("", true): the name key then shipped "" — which the documented
 	// contract reads as "no profile denies you" — beside a fully populated,

@@ -65,7 +65,22 @@ func (s PG) CreateMemberDrive(ctx context.Context, d types.UserDrive, limit int)
 		return types.UserDrive{}, fmt.Errorf("store: begin member drive create: %w", err)
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // best-effort on the failure path
+	out, err := insertMemberDrive(ctx, tx, d, limit)
+	if err != nil {
+		return types.UserDrive{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return types.UserDrive{}, fmt.Errorf("store: commit member drive create: %w", err)
+	}
+	return out, nil
+}
 
+// insertMemberDrive is CreateMemberDrive's lock, count and insert inside tx,
+// which CreateQueuedRun also runs for a run's kept work folder.
+func insertMemberDrive(ctx context.Context, tx pgx.Tx, d types.UserDrive, limit int) (types.UserDrive, error) {
+	if d.OwnerSubject == "" {
+		return types.UserDrive{}, errMemberDriveNoOwner
+	}
 	// A crc32 collision only serializes two people's creates.
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, $2)`,
 		db.MemberDriveLockClass, int32(crc32.ChecksumIEEE([]byte(d.OwnerSubject)))); err != nil {
@@ -83,10 +98,10 @@ func (s PG) CreateMemberDrive(ctx context.Context, d types.UserDrive, limit int)
 
 	out, err := scanDriveRow(tx.QueryRow(ctx, `
 		INSERT INTO user_drives (id, name, backend, host_root, storage_class, home_template, size_mib,
-			writable, reclaim, created_by, name_slug, object_scheme, owner_subject)
-		VALUES ($1, $2, $3, '', $4, 'hash', $5, true, 'delete', $6, $7, 'id', $8)
+			writable, reclaim, created_by, name_slug, object_scheme, owner_subject, kept_from_run)
+		VALUES ($1, $2, $3, '', $4, 'hash', $5, true, 'delete', $6, $7, 'id', $8, $9)
 		RETURNING `+driveRowCols,
-		d.ID, d.Name, d.Backend, d.StorageClass, d.SizeMiB, d.CreatedBy, types.DriveSlug(d.Name), d.OwnerSubject))
+		d.ID, d.Name, d.Backend, d.StorageClass, d.SizeMiB, d.CreatedBy, types.DriveSlug(d.Name), d.OwnerSubject, d.KeptFromRun))
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -96,9 +111,6 @@ func (s PG) CreateMemberDrive(ctx context.Context, d types.UserDrive, limit int)
 			return types.UserDrive{}, ErrConflict
 		}
 		return types.UserDrive{}, fmt.Errorf("store: create member drive: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return types.UserDrive{}, fmt.Errorf("store: commit member drive create: %w", err)
 	}
 	return out, nil
 }

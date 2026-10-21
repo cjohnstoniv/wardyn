@@ -6,6 +6,8 @@ package api
 import (
 	"context"
 	"log/slog"
+	"maps"
+	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
@@ -116,6 +118,20 @@ func (s *Server) finishCreateRunLaunch(ctx context.Context, l createRunLaunch) {
 		}
 	}()
 
+	drives, memberDrives := l.driveMounts, l.memberDrives
+	if l.req.KeepWorkFolder {
+		mount, id, owner, ok := s.keptWorkFolderMount(ctx, l.created)
+		if !ok {
+			return
+		}
+		drives = append(slices.Clone(drives), mount)
+		memberDrives = maps.Clone(memberDrives)
+		if memberDrives == nil {
+			memberDrives = map[uuid.UUID]string{}
+		}
+		memberDrives[id] = owner
+	}
+
 	// Resolve the sandbox image (BYOI wrap > devcontainer build > workspace
 	// profile > convention image) and persist it for provenance. A failed
 	// BYOI/devcontainer build has already marked the run FAILED.
@@ -153,8 +169,8 @@ func (s *Server) finishCreateRunLaunch(ctx context.Context, l createRunLaunch) {
 			// Carried rather than re-resolved for the reason the ceiling is:
 			// resolution keys on the caller's OIDC claims, which the run row does
 			// not hold. See user_drives_run.go's own note.
-			Drives:       l.driveMounts,
-			MemberDrives: l.memberDrives,
+			Drives:       drives,
+			MemberDrives: memberDrives,
 			// The zero posture unless this run attaches a MEMBER-OWNED workspace, in
 			// which case the driver re-checks that member's own binds against these
 			// roots immediately before ContainerCreate (userMountPosture,

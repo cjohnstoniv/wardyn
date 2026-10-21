@@ -55,8 +55,8 @@ func ephemeralSite(defaultMiB, maxMiB int) types.SiteConfig {
 // returns no limits for an unassigned principal).
 func assignedCeiling(maxEphemeralDiskMiB int) governanceCeiling {
 	return governanceCeiling{
-		Profile: &ResolvedProfile{Name: "sized"},
-		Limits:  types.GovernanceLimits{MaxEphemeralDiskMiB: maxEphemeralDiskMiB},
+		Unit:   &ResolvedUnit{Name: "sized"},
+		Limits: types.GovernanceLimits{MaxEphemeralDiskMiB: maxEphemeralDiskMiB},
 	}
 }
 
@@ -260,7 +260,7 @@ func TestDispatchEphemeralDisk_CeilingReassertCarriesTheClamp(t *testing.T) {
 
 	// A profile with no size limit: neither key appears.
 	_, events, runID = ephemeralDispatch(t, policy, types.SiteConfig{},
-		governanceCeiling{Profile: &ResolvedProfile{Name: "unsized"}})
+		governanceCeiling{Unit: &ResolvedUnit{Name: "unsized"}})
 	ev = findAudit(events, runID, "run.ceiling.reassert", "success")
 	if ev == nil {
 		t.Fatalf("no run.ceiling.reassert row for an assigned profile; events=%s", auditDump(events, runID))
@@ -290,9 +290,9 @@ func TestBoundMemberSpec_PreviewsTheGovernanceEphemeralLimit(t *testing.T) {
 	h, _ := newSecretsHarness(t)
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs/preflight", nil)
 	ceiling := governanceCeiling{
-		Spec:    types.RunPolicySpec{MinConfinementClass: types.CC2},
-		Profile: &ResolvedProfile{Name: "sized"},
-		Limits:  types.GovernanceLimits{MaxEphemeralDiskMiB: 2048},
+		Spec:   types.RunPolicySpec{MinConfinementClass: types.CC2},
+		Unit:   &ResolvedUnit{Name: "sized"},
+		Limits: types.GovernanceLimits{MaxEphemeralDiskMiB: 2048},
 	}
 	spec, warns, ok := h.srv.boundUserSpec(context.Background(), httptest.NewRecorder(), r,
 		types.RunPolicySpec{MinConfinementClass: types.CC2, Resources: &types.ResourceLimits{DiskMiB: 8192}},
@@ -325,7 +325,7 @@ func TestResolveRunPolicy_DefaultArmLeavesDiskToTheMainDriveStep(t *testing.T) {
 		Resources:           &types.ResourceLimits{DiskMiB: authored},
 	}
 	h := newHarness(t)
-	st := &memberBoundStore{profile: &types.GovernanceProfile{
+	st := &memberBoundStore{profile: &types.GovernanceUnit{
 		ID: uuid.New(), Name: "sized", Ceiling: profileCeiling,
 		Limits: types.GovernanceLimits{MaxEphemeralDiskMiB: limit},
 	}}

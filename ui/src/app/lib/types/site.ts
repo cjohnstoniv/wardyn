@@ -459,6 +459,9 @@ export interface UserDriveProvider {
   max_size_mib?: number;
   // The switch for people creating their own drives. Absent = off.
   member_create?: MemberDrivePolicy;
+  // Lets an admin mark a drive a team drive: one folder shared by the groups it
+  // is allocated to. Absent = off, and every drive resolves per person.
+  team_drives?: boolean;
 }
 
 // types.MemberDrivePolicy. `max_per_person` is 1..20 when enabled. `size_mib` is
@@ -469,6 +472,8 @@ export interface MemberDrivePolicy {
   max_per_person?: number;
   size_mib?: number;
   storage_class?: string;
+  // Lets a run keep its work folder as its person's drive. Absent = off; no effect unless enabled.
+  keep_main_drive?: boolean;
 }
 
 // One SiteConfig.internal_hosts entry — see that field's doc.

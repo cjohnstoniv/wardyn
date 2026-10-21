@@ -145,6 +145,8 @@ type Proxy struct {
 	arm *azureARMDoor
 	// sigv4 is the run's AWS SigV4 re-signing door (aws_sigv4.go); nil when off.
 	sigv4 *awsSigV4Door
+	// kube is the kubectl door (kube_api_door.go); nil without a kubectl row.
+	kube *kubeAPIDoor
 	// gitTokens caches minted installation tokens per grant so a single clone
 	// (info/refs + git-upload-pack) does not re-mint — mandatory for single-use
 	// approval-gated grants. Guarded by gitTokMu; each entry single-flights its
@@ -388,6 +390,7 @@ func newProxy(opts Options) *Proxy {
 		ghAPI:                newGitHubAPIDoor(opts.GitHubAPI, mitmHosts, mitmPorts),
 		arm:                  newAzureARMDoor(opts.AzureARM, mitmHosts, mitmPorts),
 		sigv4:                newAWSSigV4Door(opts.AWSSigV4, mitmHosts, mitmPorts),
+		kube:                 newKubeAPIDoor(opts.KubeAPI, mitmHosts, mitmPorts),
 		gitTokens:            make(map[uuid.UUID]*gitTokEntry),
 		controlPlaneURL:      controlPlaneEndpoint(opts.ControlPlaneURL, ""),
 		runToken:             opts.RunToken,
@@ -409,6 +412,12 @@ func newProxy(opts Options) *Proxy {
 		dial:                 dial,
 		now:                  now,
 		viaOrgRoutes:         opts.ViaOrgRoutes,
+	}
+	if l := policyref.Layered(opts.Attribution); p.sink != nil && l != nil && l.Layer != "" {
+		p.sink.layer = l.Layer
+		if l.Layer == policyref.LayerUnit {
+			p.sink.layerName = l.Name
+		}
 	}
 	// directDial dials the vetted IP carried on the request context and never
 	// re-resolves — the ORIGINAL behavior, and the ONLY behavior of the
@@ -475,6 +484,7 @@ func newProxy(opts Options) *Proxy {
 		return c, nil
 	})
 	p.offerHTTP2(egressDial, opts.TLSClientConfig)
+	p.kube.bindTransport(p.transport)
 	p.controlTransport = mkTransport(directDial)
 	if opts.ControlTLS == nil {
 		opts.ControlTLS, _ = hoptls.ClientConfig("")
@@ -801,6 +811,14 @@ func (p *Proxy) allowLog(req egress.Request, approvalID uuid.UUID) egress.Decisi
 	return log
 }
 
+// refuseGrantHostTunnel answers a CONNECT to a host one of the doors guards with
+// a refusal, in the order the doors were added, and reports whether it did.
+func (p *Proxy) refuseGrantHostTunnel(w http.ResponseWriter, r *http.Request, host string, port int) bool {
+	return p.refuseADOTunnel(w, r, host, port) || p.refuseAzureTunnel(w, r, host, port) || p.refusePATAPITunnel(w, r, host, port) ||
+		p.refuseGitHubAPITunnel(w, r, host, port) || p.refuseAzureARMTunnel(w, r, host, port) || p.refuseAWSSigV4Tunnel(w, r, host, port) ||
+		p.refuseKubeAPITunnel(w, r, host, port)
+}
+
 // handleConnect establishes a raw TCP tunnel for CONNECT (TLS passthrough).
 // Credentials CANNOT be injected into a CONNECT tunnel: the proxy has
 // hostname-only visibility and never sees the encrypted request headers.
@@ -867,8 +885,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// Never a blind tunnel to an Azure DevOps grant host (refuseADOTunnel).
-	if p.refuseADOTunnel(w, r, host, port) || p.refuseAzureTunnel(w, r, host, port) || p.refusePATAPITunnel(w, r, host, port) ||
-		p.refuseGitHubAPITunnel(w, r, host, port) || p.refuseAzureARMTunnel(w, r, host, port) || p.refuseAWSSigV4Tunnel(w, r, host, port) {
+	if p.refuseGrantHostTunnel(w, r, host, port) {
 		return
 	}
 

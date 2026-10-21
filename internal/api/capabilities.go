@@ -425,7 +425,7 @@ func (s *Server) capScan(ctx context.Context, kind, value string) (deny, allow b
 // kind could cover value. It is asked only when capabilitySubjects says the
 // caller's group snapshot is unanswerable, and it is what keeps that refusal
 // SCOPED — the same scoping ceilingWithUnusableGroups gets from
-// HasGroupTierAssignments (governance.go). A blanket refusal on every stale
+// HasGroupTierMemberships (governance.go). A blanket refusal on every stale
 // snapshot would deny every pre-0.6 cookie and every pre-0.7 API token on every
 // deployment, including the overwhelming majority that hold no group deny rows
 // at all, and "an upgrade with no configuration changes nothing" is the rule

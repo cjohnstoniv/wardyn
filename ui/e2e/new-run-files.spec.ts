@@ -126,7 +126,7 @@ async function stub(page: Page, opts: Opts = {}): Promise<Body[]> {
     return route.fulfill({ json: preflightFor(body, opts.capSource ?? "pool", opts.capMib, opts.policyMib) });
   });
   await page.route("**/api/v1/me/drives*", (route) =>
-    route.fulfill({ json: { drives: opts.drives ?? [], pool_checked: true, ...(opts.deniedBy ? { denied_by_profile: opts.deniedBy } : {}) } }),
+    route.fulfill({ json: { drives: opts.drives ?? [], pool_checked: true, ...(opts.deniedBy ? { denied_by_unit: opts.deniedBy } : {}) } }),
   );
   return sent;
 }

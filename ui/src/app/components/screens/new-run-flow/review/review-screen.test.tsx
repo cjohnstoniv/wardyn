@@ -4,11 +4,12 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { setField } from "../../../../../test/set-field";
 import { OperatorProvider } from "../../../wardyn/operator-context";
+import { NR_HARNESSES } from "../../../wardyn/copy/new-run/harnesses";
 import { NR_FILES } from "../../../wardyn/copy/new-run/files";
 import { ENDS_NONE } from "../../../wardyn/copy/run-lifetime";
 import { NR_RUN } from "../../../wardyn/copy/new-run/run";
@@ -66,6 +67,12 @@ const AGENT: RunIntent = {
   tools: [{ id: "claude-code", kind: "harness" }],
   startup: { kind: "harness", tool: "claude-code", prompt: "Fix the build" },
 };
+// Two agents in an Autonomous run: the first one's task is the workload's, the second one's its own.
+const TWO_AGENTS: RunIntent = {
+  ...AGENT, experience: "background",
+  workload: { kind: "agent_task", agent: "claude-code", task: "Fix the build" },
+  tools: [{ id: "claude-code", kind: "harness" }, { id: "codex-cli", kind: "harness", task: "Write the tests" }],
+};
 const APP: RunIntent = { shape: "application", experience: "background", workload: { kind: "command", command: "make test" }, no_repositories_or_drives: true };
 
 function Probe() {
@@ -86,6 +93,10 @@ interface Open {
   onLaunch?: () => void;
   /** The read of the template's document; a template origin only. */
   templateRead?: () => Promise<Response>;
+  /** GET /setup/status; Review reads the roster from it. Unset: the read fails, which stays silent. */
+  status?: unknown;
+  /** GET /me/drives, read only for a draft that keeps its work folder. */
+  drives?: unknown;
 }
 function open(intent: RunIntent, o: Open = {}) {
   const loaders: SeedLoaders = {
@@ -93,6 +104,8 @@ function open(intent: RunIntent, o: Open = {}) {
     again: async (): Promise<Seed> => ({ origin: { kind: "again", runId: RUN_ID, title: "Nightly" }, intent }),
   };
   wfetchMock.mockImplementation(async (path: string, init?: { method?: string }) => {
+    if (path === "/setup/status" && o.status) return json(o.status);
+    if (path.startsWith("/me/drives")) return json(o.drives ?? { drives: [], pool_checked: true });
     if (path === "/templates" && init?.method === "POST") return json({ id: "t9", kind: "template" });
     if (path === "/templates") return json({ templates: [], publish: { org: false, groups: [], groups_unverified: false } });
     if (path.startsWith("/templates/")) return o.templateRead ? o.templateRead() : json({ document: { needs_setup: o.needs ?? [] } });
@@ -128,6 +141,34 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   wfetchMock.mockReset();
+});
+
+describe("Review: a draft that keeps its work folder at the drive limit (#1991)", () => {
+  const AT_LIMIT = { drives: [], pool_checked: true, create: { allowed: false, reason: "limit_reached", count: 3, limit: 3, keep_work_folder: true } };
+
+  it("holds Launch with the limit sentence, what else to do, and a way back to Files", async () => {
+    open({ ...AGENT, keep_work_folder: true }, { drives: AT_LIMIT });
+    await ready();
+    const link = await within(blockerList()).findByRole("button", { name: NR_FILES.KEEP_LIMIT(3, 3) });
+    expect(blockerList()).toHaveTextContent(NR_FILES.KEEP_LIMIT_HINT);
+    expect(launch()).toBeDisabled();
+    await userEvent.click(link);
+    expect(path()).toContain("step=files");
+  });
+
+  it("says nothing of it for a draft that does not keep the folder, and reads no drives for it", async () => {
+    open(AGENT, { drives: AT_LIMIT });
+    await ready();
+    expect(blockerList()).toBeEmptyDOMElement();
+    expect(wfetchMock.mock.calls.some(([p]) => String(p).startsWith("/me/drives"))).toBe(false);
+  });
+
+  it("says nothing of it while the person is under the limit", async () => {
+    open({ ...AGENT, keep_work_folder: true }, { drives: { ...AT_LIMIT, create: { allowed: true, count: 1, limit: 3, keep_work_folder: true } } });
+    await ready();
+    await waitFor(() => expect(wfetchMock.mock.calls.some(([p]) => String(p).startsWith("/me/drives"))).toBe(true));
+    expect(blockerList()).toBeEmptyDOMElement();
+  });
 });
 
 describe("Review Launch gate (U11)", () => {
@@ -256,6 +297,29 @@ describe("Review blockers", () => {
     const blocked = Array.from(document.querySelectorAll("[data-review-group][data-blocked]")).map((g) => g.getAttribute("data-review-group"));
     expect(blocked).toEqual(["where"]);
     expect(group("where").getByText(NR_REVIEW.BADGE_ATTENTION)).toBeInTheDocument();
+  });
+
+  it("holds Launch for harnesses no one image carries together, and links to the Harnesses step", async () => {
+    const user = userEvent.setup();
+    const status = {
+      harnesses: [{ id: "claude-code", display: "Claude Code" }, { id: "codex-cli", display: "Codex CLI" }],
+      harness_sets: [["claude-code", "gemini-cli"]],
+    };
+    open(TWO_AGENTS, { status });
+    await ready();
+    const sentence = NR_HARNESSES.NO_COMBINATION("Claude Code", "Codex CLI");
+    await waitFor(() => expect(within(blockerList()).getByRole("button", { name: sentence })).toBeInTheDocument());
+    expect(launch()).toBeDisabled();
+    await user.click(within(blockerList()).getByRole("button", { name: sentence }));
+    await waitFor(() => expect(path()).toContain("step=harnesses"));
+  });
+
+  it("holds nothing when one declared image carries every harness", async () => {
+    open(TWO_AGENTS, { status: { harnesses: [], harness_sets: [["claude-code", "codex-cli"]] } });
+    await ready();
+    await waitFor(() => expect(wfetchMock).toHaveBeenCalledWith("/setup/status", expect.anything()));
+    await act(async () => {});
+    expect(launch()).toBeEnabled();
   });
 
   // #3043: the pool-required refusal points at the Where row, which then says there is no pool.

@@ -493,7 +493,7 @@ func TestValidatePolicySpecRefusesABlankAllowedMethod(t *testing.T) {
 // A policy name is a bounded handle: too long, or carrying a control character, is a 400 before any store read.
 func TestCreatePolicy_NameIsBounded(t *testing.T) {
 	spec := `"spec":{"min_confinement_class":"CC2","first_use_approval":"always_deny"}`
-	for name, nm := range map[string]string{"too long": strings.Repeat("a", maxGovernanceProfileNameLen+1), "control character": `a\u0007b`} {
+	for name, nm := range map[string]string{"too long": strings.Repeat("a", maxGovernanceUnitNameLen+1), "control character": `a\u0007b`} {
 		w := httptest.NewRecorder()
 		(&Server{}).handleCreatePolicy(w, httptest.NewRequest(http.MethodPost, "/api/v1/policies", strings.NewReader(`{"name":"`+nm+`",`+spec+`}`)))
 		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "name is invalid") {

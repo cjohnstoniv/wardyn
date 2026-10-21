@@ -348,7 +348,7 @@ func (s *Server) answerFailedDecision(w http.ResponseWriter, r *http.Request, he
 	}
 	var refusal *govRefusal
 	var notPending *store.ErrGovernanceChangeNotPending
-	var write *profileWriteError
+	var write *unitWriteError
 	switch {
 	case errors.As(err, &refusal):
 		refusal.write(w, r)

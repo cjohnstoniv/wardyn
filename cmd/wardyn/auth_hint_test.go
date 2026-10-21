@@ -45,7 +45,7 @@ func healthzServer(t *testing.T, cliSignIn string) (*httptest.Server, *atomic.In
 func TestUnauthorizedHint(t *testing.T) {
 	const (
 		signInCLI    = "run `wardyn login`"
-		signInBefore = "this organisation signs people in with single sign-on and has no admin token, so --token and WARDYN_ADMIN_TOKEN cannot work here. Set WARDYN_TOKEN to a personal API token: a Wardyn admin can invite you to create one, and you claim it under Your account in the console."
+		signInBefore = "this organisation signs people in with single sign-on and has no admin token. Set WARDYN_TOKEN to a personal API token (--token and WARDYN_ADMIN_TOKEN take one too; --token shows it in the process list): a Wardyn admin can invite you to create one, and you claim it under Your account in the console."
 		unknown      = "the token in WARDYN_TOKEN is not one this organisation knows (unknown, revoked or expired)"
 		unknownCLI   = "the token in WARDYN_TOKEN is not one this organisation knows (unknown, revoked or expired); it takes precedence over `wardyn login`; unset it to use your sign-in"
 		today        = "authenticate with --token or WARDYN_ADMIN_TOKEN/WARDYN_TOKEN (the compose quick-start's token is in deploy/compose/README.md)"

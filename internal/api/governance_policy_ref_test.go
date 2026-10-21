@@ -32,7 +32,7 @@ func policyContactFor(tag string) *policyref.Contact {
 }
 
 // taggedProfile is a limits profile that publishes policyContactFor(tag).
-func taggedProfile(name, tag string, limits types.GovernanceLimits) *types.GovernanceProfile {
+func taggedProfile(name, tag string, limits types.GovernanceLimits) *types.GovernanceUnit {
 	p := limitsProfile(name, limits)
 	p.Contact = policyContactFor(tag)
 	return p
@@ -41,7 +41,7 @@ func taggedProfile(name, tag string, limits types.GovernanceLimits) *types.Gover
 // profileRefFor is the Ref taggedProfile(name, tag) must be named by.
 func profileRefFor(name, tag string) policyref.Ref {
 	c := policyContactFor(tag)
-	return policyref.Ref{Source: policyref.SourceProfile, Name: name, Owner: c.Owner, Email: c.Email,
+	return policyref.Ref{Source: policyref.SourceUnit, Name: name, Owner: c.Owner, Email: c.Email,
 		RequestURL: c.RequestURL, RequestText: c.RequestText}
 }
 
@@ -91,7 +91,7 @@ func TestCeilingRefusalsNameThePolicy(t *testing.T) {
 
 	for _, tc := range []struct {
 		name       string
-		profile    *types.GovernanceProfile
+		profile    *types.GovernanceUnit
 		body       string
 		active     int
 		wantStatus int
@@ -99,19 +99,19 @@ func TestCeilingRefusalsNameThePolicy(t *testing.T) {
 		wantTarget string
 	}{
 		{"task_mode exec", taggedProfile(name, tag, types.GovernanceLimits{DenyTaskModeExec: true}),
-			`{"agent":"claude-code","task":"echo hi","task_mode":"exec"}`, 0, 403, "governance_profile", "runs.task_mode"},
+			`{"agent":"claude-code","task":"echo hi","task_mode":"exec"}`, 0, 403, "governance_unit", "runs.task_mode"},
 		{"shell boot seed", taggedProfile(name, tag, types.GovernanceLimits{DenyTaskModeExec: true}),
-			`{"agent":"claude-code","task":"t","interactive":true}`, 0, 403, "governance_profile", "runs.interactive_start"},
+			`{"agent":"claude-code","task":"t","interactive":true}`, 0, 403, "governance_unit", "runs.interactive_start"},
 		{"interactive", taggedProfile(name, tag, types.GovernanceLimits{DenyInteractive: true}),
-			`{"agent":"claude-code"}`, 0, 403, "governance_profile", "runs.interactive"},
+			`{"agent":"claude-code"}`, 0, 403, "governance_unit", "runs.interactive"},
 		{"run quota", taggedProfile(name, tag, types.GovernanceLimits{MaxConcurrentRuns: 2}),
 			`{"agent":"claude-code","task":"t"}`, 2, 422, "run_quota", ""}, // a 422 refusal is not audited
 		{"seed_auto_tools under hold rules", hold,
-			`{"agent":"claude-code","task":"t","interactive":true,"seed_auto_tools":true}`, 0, 403, "governance_profile", "runs.seed_auto_tools"},
+			`{"agent":"claude-code","task":"t","interactive":true,"seed_auto_tools":true}`, 0, 403, "governance_unit", "runs.seed_auto_tools"},
 		{"codex-cli under hold rules", hold,
-			`{"agent":"codex-cli","task":"t"}`, 0, 403, "governance_profile", "runs.agent"},
+			`{"agent":"codex-cli","task":"t"}`, 0, 403, "governance_unit", "runs.agent"},
 		{"autonomy ladder", ladder,
-			`{"agent":"claude-code","task":"t"}`, 0, 403, "governance_profile", "runs.interactive"},
+			`{"agent":"claude-code","task":"t"}`, 0, 403, "governance_unit", "runs.interactive"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, st, audit := govEscapeFixture(t, assignedStore(tc.profile))
@@ -141,7 +141,7 @@ func TestCeilingRefusalsNameThePolicy(t *testing.T) {
 					sawTarget = true
 					// The row names the layer that refused and the leaf, never its contact (#2951).
 					var datum map[string]any
-					if err := json.Unmarshal(ev.Data, &datum); err != nil || datum["layer"] != "profile" || datum["layer_name"] != name {
+					if err := json.Unmarshal(ev.Data, &datum); err != nil || datum["layer"] != "unit" || datum["layer_name"] != name {
 						t.Errorf("authz.denied row = %s, want layer profile and layer_name %q", ev.Data, name)
 					}
 				}
@@ -164,14 +164,14 @@ func TestCeilingRefusalsNameThePolicy(t *testing.T) {
 		if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
 			t.Fatal(err)
 		}
-		if got := string(raw["policy"]); got != `{"source":"profile","name":"walled","layer":"profile"}` {
+		if got := string(raw["policy"]); got != `{"source":"unit","name":"walled","layer":"unit"}` {
 			t.Errorf("policy = %s", got)
 		}
 	})
 
 	t.Run("an operator is never bound, so never refused with a policy", func(t *testing.T) {
 		srv, _, _ := govEscapeFixture(t, assignedStore(taggedProfile(name, tag, types.GovernanceLimits{DenyInteractive: true})))
-		if got := (governanceCeiling{Operator: true, Profile: &ResolvedProfile{Name: hold.Name}}).policyRef(); got != nil {
+		if got := (governanceCeiling{Operator: true, Unit: &ResolvedUnit{Name: hold.Name}}).policyRef(); got != nil {
 			t.Errorf("operator policyRef = %+v, want nil", got)
 		}
 		if got := srv.ceilingPolicy(context.Background(), governanceCeiling{Operator: true}); got != nil {
@@ -184,7 +184,7 @@ func TestCeilingRefusalsNameThePolicy(t *testing.T) {
 // ceiling it is handed rather than from POST /runs.
 func TestDriveDoorNamesThePolicy(t *testing.T) {
 	p := taggedProfile("contractors", "alpha", types.GovernanceLimits{DenyUserDrive: true})
-	ceiling := governanceCeiling{Profile: resolvedOf(p), Limits: p.Limits}
+	ceiling := governanceCeiling{Unit: resolvedOf(p), Limits: p.Limits}
 	srv, _ := driveRunServer(&driveStore{}, "docker")
 	_, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), ceiling, driveMemberCtx([]string{"eng"}, false))
 	if ok || w.Code != http.StatusForbidden {
@@ -194,7 +194,7 @@ func TestDriveDoorNamesThePolicy(t *testing.T) {
 	if want := profileRefFor("contractors", "alpha"); got.Policy == nil || *got.Policy != refusalRef(want) {
 		t.Errorf("policy = %+v, want %+v", got.Policy, want)
 	}
-	if want := driveDeniedByProfileMsg("contractors"); got.Error != want {
+	if want := driveDeniedByUnitMsg("contractors"); got.Error != want {
 		t.Errorf("sentence = %q, want %q", got.Error, want)
 	}
 }
@@ -205,8 +205,8 @@ func TestLiveRunDoorsNameTheRunsPolicy(t *testing.T) {
 	prof := taggedProfile("ci", "alpha", types.GovernanceLimits{DenyInteractive: true, DenyUIApps: true})
 	want := profileRefFor("ci", "alpha")
 	run := types.AgentRun{ID: uuid.New(), CreatedBy: "alice", State: types.RunRunning, SandboxRef: "sbx-1",
-		Task: "make test", GovernanceProfileID: &prof.ID}
-	st := &profileListStore{profiles: []types.GovernanceProfile{*prof}, authzStore: newAuthzStore()}
+		Task: "make test", UnitID: &prof.ID}
+	st := &profileListStore{profiles: []types.GovernanceUnit{*prof}, authzStore: newAuthzStore()}
 	st.authzStore.runs[run.ID] = run
 	cfg := baseTestConfig(newHarness(t), st)
 	cfg.OIDC = &oidc.Authenticator{}
@@ -250,8 +250,8 @@ func TestLiveRunDoorsNameTheRunsPolicy(t *testing.T) {
 	t.Run("a contactless leaf borrows site help at both doors", func(t *testing.T) {
 		leaf := limitsProfile("leased", types.GovernanceLimits{DenyInteractive: true, DenyUIApps: true})
 		lrun := types.AgentRun{ID: uuid.New(), CreatedBy: "alice", State: types.RunRunning, SandboxRef: "sbx-1",
-			Task: "make test", GovernanceProfileID: &leaf.ID}
-		lst := &profileListStore{profiles: []types.GovernanceProfile{*leaf}, authzStore: newAuthzStore()}
+			Task: "make test", UnitID: &leaf.ID}
+		lst := &profileListStore{profiles: []types.GovernanceUnit{*leaf}, authzStore: newAuthzStore()}
 		lst.authzStore.runs[lrun.ID] = lrun
 		lst.authzStore.siteCfg.PolicyHelp = &policyref.Contact{RequestURL: "https://site.example.com/help"}
 		lcfg := baseTestConfig(newHarness(t), lst)
@@ -304,8 +304,8 @@ func TestRecordAndProviderSignInNameThePolicy(t *testing.T) {
 	prof.Limits.DenyInteractive = true
 
 	t.Run("the error keeps its sentinel and its bytes", func(t *testing.T) {
-		inner := &ResolvedProfile{Name: "p"}
-		err := recordCeilingError{err: errRecordCeilingLimit, ref: profilePolicyRef(inner)}
+		inner := &ResolvedUnit{Name: "p"}
+		err := recordCeilingError{err: errRecordCeilingLimit, ref: unitPolicyRef(inner)}
 		if !strings.Contains(err.Error(), errRecordCeilingLimit.Error()) || err.Error() != errRecordCeilingLimit.Error() {
 			t.Errorf("Error() = %q, want the wrapped value's own text", err.Error())
 		}
@@ -427,14 +427,14 @@ func TestDeploymentArmReadsPolicyHelpOnlyForARefusal(t *testing.T) {
 // help leaves the bare profile ref.
 func TestContactlessLeafBorrowsSiteHelp(t *testing.T) {
 	help := &policyref.Contact{RequestURL: "https://site.example.com/help"}
-	run := func(p *types.GovernanceProfile, site types.SiteConfig) (*Server, types.AgentRun, map[string]*policyref.Ref) {
+	run := func(p *types.GovernanceUnit, site types.SiteConfig) (*Server, types.AgentRun, map[string]*policyref.Ref) {
 		srv, st := runLimitsFixture(t, assignedStore(p))
 		st.siteConfig = site
-		srv.cfg.Store = &attrStore{govEscapeStore: st, profiles: []types.GovernanceProfile{*p}}
-		r := types.AgentRun{GovernanceProfileID: &p.ID}
+		srv.cfg.Store = &attrStore{govEscapeStore: st, profiles: []types.GovernanceUnit{*p}}
+		r := types.AgentRun{UnitID: &p.ID}
 		ctx := context.Background()
 		return srv, r, map[string]*policyref.Ref{
-			"ceiling refusal": srv.ceilingPolicy(ctx, governanceCeiling{Profile: resolvedOf(p)}),
+			"ceiling refusal": srv.ceilingPolicy(ctx, governanceCeiling{Unit: resolvedOf(p)}),
 			"run detail":      srv.runPolicyRef(ctx, r),
 			"dispatch":        srv.runAttribution(ctx, r, site, false),
 		}
@@ -442,7 +442,7 @@ func TestContactlessLeafBorrowsSiteHelp(t *testing.T) {
 
 	t.Run("no contact borrows site help", func(t *testing.T) {
 		_, _, refs := run(limitsProfile("leased", types.GovernanceLimits{}), types.SiteConfig{PolicyHelp: help})
-		want := policyref.Ref{Source: policyref.SourceProfile, Name: "leased", RequestURL: help.RequestURL}
+		want := policyref.Ref{Source: policyref.SourceUnit, Name: "leased", RequestURL: help.RequestURL}
 		for door, ref := range refs {
 			if ref == nil || *ref != want {
 				t.Errorf("%s = %+v, want %+v", door, ref, want)
@@ -459,7 +459,7 @@ func TestContactlessLeafBorrowsSiteHelp(t *testing.T) {
 		}
 	})
 	t.Run("site without help leaves the bare profile ref", func(t *testing.T) {
-		want := policyref.Ref{Source: policyref.SourceProfile, Name: "leased"}
+		want := policyref.Ref{Source: policyref.SourceUnit, Name: "leased"}
 		_, _, refs := run(limitsProfile("leased", types.GovernanceLimits{}), types.SiteConfig{})
 		for door, ref := range refs {
 			if ref == nil || *ref != want {
@@ -468,8 +468,8 @@ func TestContactlessLeafBorrowsSiteHelp(t *testing.T) {
 		}
 	})
 	t.Run("/me adds no read and stays the bare profile ref", func(t *testing.T) {
-		got := governanceCeiling{Profile: resolvedOf(limitsProfile("leased", types.GovernanceLimits{}))}.policyRef()
-		if want := (policyref.Ref{Source: policyref.SourceProfile, Name: "leased"}); got == nil || *got != want {
+		got := governanceCeiling{Unit: resolvedOf(limitsProfile("leased", types.GovernanceLimits{}))}.policyRef()
+		if want := (policyref.Ref{Source: policyref.SourceUnit, Name: "leased"}); got == nil || *got != want {
 			t.Errorf("policyRef = %+v, want %+v", got, want)
 		}
 	})
@@ -481,7 +481,7 @@ func TestContactlessLeafBorrowsSiteHelp(t *testing.T) {
 // is not a ceiling refusal at all.
 func TestRefuseLeavesPolicyOffHiddenAndRewrittenDecisions(t *testing.T) {
 	srv := New(baseTestConfig(newHarness(t), nil))
-	ref := &policyref.Ref{Source: policyref.SourceProfile, Name: "alpha-profile", Owner: "Alpha Owner",
+	ref := &policyref.Ref{Source: policyref.SourceUnit, Name: "alpha-profile", Owner: "Alpha Owner",
 		Email: "alpha@alpha.example", RequestURL: "https://alpha.example/request"}
 	emit := func(d authz.Decision) (int, string) {
 		w := httptest.NewRecorder()
@@ -494,7 +494,7 @@ func TestRefuseLeavesPolicyOffHiddenAndRewrittenDecisions(t *testing.T) {
 	}{
 		{"a hidden decision", authz.Deny(authz.ReasonNotOwner, "run-1", "run not found")},
 		{"a decision with a WireReason", authz.Deny(authz.ReasonNotOwner, "run-1", "run not found").AsIf(authz.Reason(reasonRunNotFound))},
-		{"a non-hidden decision with a WireReason", authz.Deny(authz.ReasonGovernanceProfile, "runs.attach", "x").AsIf(authz.Reason(reasonRunNotFound))},
+		{"a non-hidden decision with a WireReason", authz.Deny(authz.ReasonGovernanceUnit, "runs.attach", "x").AsIf(authz.Reason(reasonRunNotFound))},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			wantCode, want := emit(tc.d)
@@ -508,8 +508,8 @@ func TestRefuseLeavesPolicyOffHiddenAndRewrittenDecisions(t *testing.T) {
 		})
 	}
 	t.Run("a ceiling decision does carry it", func(t *testing.T) {
-		_, got := emit(authz.Deny(authz.ReasonGovernanceProfile, "runs.attach", "x").WithPolicy(ref))
-		if !strings.Contains(got, `"policy":{"source":"profile","name":"alpha-profile"`) {
+		_, got := emit(authz.Deny(authz.ReasonGovernanceUnit, "runs.attach", "x").WithPolicy(ref))
+		if !strings.Contains(got, `"policy":{"source":"unit","name":"alpha-profile"`) {
 			t.Errorf("body = %s, want the policy", got)
 		}
 	})

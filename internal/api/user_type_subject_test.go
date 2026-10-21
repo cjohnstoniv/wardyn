@@ -224,9 +224,9 @@ type utResolveStore struct {
 	govType, driveType string
 }
 
-func (s *utResolveStore) ResolveGovernanceProfile(ctx context.Context, users, groups []string, userType string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+func (s *utResolveStore) ResolveGovernanceUnit(ctx context.Context, users, groups []string, userType string) (*types.GovernanceUnit, types.CapabilitySubjectType, error) {
 	s.govType = userType
-	return s.capStore.ResolveGovernanceProfile(ctx, users, groups, userType)
+	return s.capStore.ResolveGovernanceUnit(ctx, users, groups, userType)
 }
 
 func (s *utResolveStore) ResolveUserDrive(ctx context.Context, users, groups []string, userType string) (*types.UserDrive, *types.UserDriveGrant, types.CapabilitySubjectType, error) {
@@ -272,8 +272,8 @@ func TestStaleSnapshotDoesNotTrustATypeTierCeiling(t *testing.T) {
 		switch {
 		case hasGroupTier && !errors.Is(err, errGroupsSnapshotStale):
 			t.Errorf("group tier exists: err = %v, want errGroupsSnapshotStale", err)
-		case !hasGroupTier && (err != nil || ceiling.Profile == nil || ceiling.Profile.Name != "pm-profile"):
-			t.Errorf("no group tier: ceiling = %+v, %v; want the type's profile", ceiling.Profile, err)
+		case !hasGroupTier && (err != nil || ceiling.Unit == nil || ceiling.Unit.Name != "pm-profile"):
+			t.Errorf("no group tier: ceiling = %+v, %v; want the type's profile", ceiling.Unit, err)
 		}
 	}
 }
@@ -358,8 +358,8 @@ func TestValidatorsKeepAUserTypeSubjectVerbatim(t *testing.T) {
 	if err := validateCapabilityGrant(&g); err != nil || g.Subject != utPM {
 		t.Fatalf("grant = %q, %v", g.Subject, err)
 	}
-	a := types.GovernanceAssignment{SubjectType: types.CapabilitySubjectUserType, Subject: utPM, ProfileID: uuid.New()}
-	if err := validateGovernanceAssignment(&a); err != nil || a.Subject != utPM {
+	a := types.GovernanceMembership{SubjectType: types.CapabilitySubjectUserType, Subject: utPM, UnitID: uuid.New()}
+	if err := validateGovernanceMembership(&a); err != nil || a.Subject != utPM {
 		t.Fatalf("assignment = %q, %v", a.Subject, err)
 	}
 	d := types.UserDriveGrant{SubjectType: types.CapabilitySubjectUserType, Subject: utPM, DriveID: uuid.New()}
@@ -372,8 +372,8 @@ func TestValidatorsKeepAUserTypeSubjectVerbatim(t *testing.T) {
 		if err := validateCapabilityGrant(&g); err == nil {
 			t.Errorf("grant accepted malformed type id %q", bad)
 		}
-		a := types.GovernanceAssignment{SubjectType: types.CapabilitySubjectUserType, Subject: bad, ProfileID: uuid.New()}
-		if err := validateGovernanceAssignment(&a); err == nil {
+		a := types.GovernanceMembership{SubjectType: types.CapabilitySubjectUserType, Subject: bad, UnitID: uuid.New()}
+		if err := validateGovernanceMembership(&a); err == nil {
 			t.Errorf("assignment accepted malformed type id %q", bad)
 		}
 	}
@@ -406,10 +406,10 @@ func TestGrantWriteRefusesAUserTypeThatDoesNotExist(t *testing.T) {
 // capStore that knows utKnown.
 type utWriteStore struct {
 	*capStore
-	saved []types.GovernanceAssignment
+	saved []types.GovernanceMembership
 }
 
-func (s *utWriteStore) UpsertGovernanceAssignment(_ context.Context, a types.GovernanceAssignment) (types.GovernanceAssignment, error) {
+func (s *utWriteStore) UpsertGovernanceMembership(_ context.Context, a types.GovernanceMembership) (types.GovernanceMembership, error) {
 	s.saved = append(s.saved, a)
 	return a, nil
 }
@@ -418,8 +418,8 @@ func TestAssignmentWriteRefusesAUserTypeThatDoesNotExist(t *testing.T) {
 	st := &utWriteStore{capStore: &capStore{userTypes: utKnown}}
 	srv := New(Config{Store: st, Audit: &recRecorder{}, LocalMode: true})
 	post := func(subject string) int {
-		return driveCall(t, srv.handleUpsertGovernanceAssignment, http.MethodPost, "/api/v1/governance/assignments",
-			`{"subject_type":"user_type","subject":"`+subject+`","profile_id":"`+uuid.NewString()+`"}`, nil).Code
+		return driveCall(t, srv.handleUpsertGovernanceMembership, http.MethodPost, "/api/v1/governance/memberships",
+			`{"subject_type":"user_type","subject":"`+subject+`","unit_id":"`+uuid.NewString()+`"}`, nil).Code
 	}
 	if code := post("contractor"); code != http.StatusBadRequest || len(st.saved) != 0 {
 		t.Fatalf("missing type = %d (saved %d), want 400 and nothing saved", code, len(st.saved))
@@ -500,13 +500,13 @@ func TestUnknownUserTypeRefusalRecordsTheTypeID(t *testing.T) {
 // A priority past the table's INT column is a 400 at the door, not a 500 at the write.
 func TestAssignmentPriorityMustFitTheColumn(t *testing.T) {
 	for _, p := range []int{math.MaxInt32 + 1, math.MinInt32 - 1} {
-		a := types.GovernanceAssignment{SubjectType: types.CapabilitySubjectAll, ProfileID: uuid.New(), Priority: p}
-		if err := validateGovernanceAssignment(&a); err == nil {
+		a := types.GovernanceMembership{SubjectType: types.CapabilitySubjectAll, UnitID: uuid.New(), Priority: p}
+		if err := validateGovernanceMembership(&a); err == nil {
 			t.Errorf("priority %d accepted", p)
 		}
 	}
-	a := types.GovernanceAssignment{SubjectType: types.CapabilitySubjectAll, ProfileID: uuid.New(), Priority: math.MaxInt32}
-	if err := validateGovernanceAssignment(&a); err != nil {
+	a := types.GovernanceMembership{SubjectType: types.CapabilitySubjectAll, UnitID: uuid.New(), Priority: math.MaxInt32}
+	if err := validateGovernanceMembership(&a); err != nil {
 		t.Errorf("priority MaxInt32: %v", err)
 	}
 }

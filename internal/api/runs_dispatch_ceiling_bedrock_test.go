@@ -67,7 +67,7 @@ func TestCeilingReassert_WithholdsTheResidentBedrockLane(t *testing.T) {
 	var injections []runner.InjectionGrant
 	mitm := []string{"bedrock-runtime.us-east-1.amazonaws.com:443"}
 
-	srv.reassertCeilingDenies(context.Background(), run, policy, &injections, c, &p, sandboxEnv, &llm, &mitm, nil)
+	srv.reassertCeilingDenies(context.Background(), run, policy, &injections, c, nil, nil, &p, sandboxEnv, &llm, &mitm, nil)
 
 	for _, k := range written {
 		if _, still := sandboxEnv[k]; still {
@@ -104,7 +104,7 @@ func TestCeilingReassert_NoProfileLeavesBedrockAlone(t *testing.T) {
 	var injections []runner.InjectionGrant
 	p := dispatchParams{}
 	mitm := []string{"bedrock-runtime.us-east-1.amazonaws.com:443"}
-	srv.reassertCeilingDenies(context.Background(), run, policy, &injections, dispatchCeiling{resolved: true},
+	srv.reassertCeilingDenies(context.Background(), run, policy, &injections, dispatchCeiling{resolved: true}, nil, nil,
 		&p, sandboxEnv, &llm, &mitm, nil)
 
 	if len(sandboxEnv) != len(before) {
@@ -163,7 +163,7 @@ func TestNarrowCeilingBedrockLane_KeepsWhatIsNotTheLanesOwn(t *testing.T) {
 			bedrock: bedrockAuth{egressHosts: []string{runtimeHost, controlHost}}}
 		mitm := []string{runtimeHost + ":443", portal + ":443"}
 		injections := []runner.InjectionGrant{rule(portal)}
-		lanes, dropped := narrowCeilingBedrockLane(deny, &llm, &mitm, &injections, map[string]string{})
+		lanes, dropped := narrowCeilingBedrockLane(withholding{deny: deny.deny}, &llm, &mitm, &injections, map[string]string{})
 		if len(lanes) != 1 {
 			t.Fatalf("lanes = %v, want the bedrock lane withheld", lanes)
 		}
@@ -180,7 +180,7 @@ func TestNarrowCeilingBedrockLane_KeepsWhatIsNotTheLanesOwn(t *testing.T) {
 			bedrock: bedrockAuth{egressHosts: []string{runtimeHost, controlHost, portal}}}
 		mitm := []string{portal + ":443"}
 		injections := []runner.InjectionGrant{rule(portal)}
-		_, dropped := narrowCeilingBedrockLane(deny, &llm, &mitm, &injections, map[string]string{})
+		_, dropped := narrowCeilingBedrockLane(withholding{deny: deny.deny}, &llm, &mitm, &injections, map[string]string{})
 		if len(mitm) != 0 || len(injections) != 0 {
 			t.Errorf("MITM hosts = %v injections = %v, want the withheld SSO lane's rule and entry gone", mitm, injections)
 		}

@@ -263,9 +263,20 @@ func columnCheckValues(expr, column string) (map[string]bool, error) {
 // list was never seen, and approvals.decision_scope already carries one. A
 // counterfactual `OR decision_scope = 'ZZZSNEAK'` added to 0039 was admitted by
 // the live database and left this test green.
+// renamedTables maps a table to the name the migrations that created it used: 0201 renamed the
+// governance tables, and the CHECK still reads under the old name in 0052.
+var renamedTables = map[string]string{
+	"governance_memberships": "governance_assignments",
+	"governance_units":       "governance_profiles",
+}
+
 func effectiveCheckValues(t *testing.T, table, column string) map[string]bool {
 	t.Helper()
 	targetsRe := targetsTableRe(table)
+	oldRe := targetsRe
+	if old, ok := renamedTables[table]; ok {
+		oldRe = targetsTableRe(old)
+	}
 	inRe := checkInRe(column)
 	var allowed map[string]bool
 	for _, name := range readMigrationNames(t) {
@@ -276,7 +287,7 @@ func effectiveCheckValues(t *testing.T, table, column string) map[string]bool {
 		// Process statement-by-statement so the CHECK is attributed to its
 		// OWNING table, not merely a table that mentions the column name.
 		for _, stmt := range strings.Split(string(data), ";") {
-			if !targetsRe.MatchString(stmt) {
+			if !targetsRe.MatchString(stmt) && !oldRe.MatchString(stmt) {
 				continue
 			}
 			for _, expr := range checkExprs(stmt) {
@@ -496,7 +507,7 @@ func closedEnumChecks() []closedEnumCheck {
 		// there is NO governance_profiles.limits pin: that column carries no
 		// CHECK at all, on the same "closed Go enum validated at the write
 		// boundary" doctrine 0042's capability column follows.
-		{"governance_assignments", "subject_type", stringSet(
+		{"governance_memberships", "subject_type", stringSet(
 			string(types.CapabilitySubjectUser), string(types.CapabilitySubjectGroup),
 			string(types.CapabilitySubjectAll), string(types.CapabilitySubjectUserType),
 		)},

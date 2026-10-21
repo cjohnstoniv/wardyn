@@ -151,13 +151,13 @@ func (w *Worker) Tick(ctx context.Context) (int, error) {
 
 const factsSQL = `
 SELECT a.state, a.kind, a.requested_at, a.run_id, r.created_by, COALESCE(p.email, ''),
-       r.governance_profile_id, COALESCE(gp.name, ''), gp.contact,
+       r.unit_id, COALESCE(gp.name, ''), gp.contact,
        (SELECT min(n.due_at) FROM approval_notifications n
          WHERE n.approval_id = a.id AND n.tier > $2 AND n.due_at > now())
   FROM approvals a
   JOIN agent_runs r ON r.id = a.run_id
   LEFT JOIN people p ON p.principal = r.created_by
-  LEFT JOIN governance_profiles gp ON gp.id = r.governance_profile_id
+  LEFT JOIN governance_units gp ON gp.id = r.unit_id
  WHERE a.id = $1`
 
 // loadFacts also returns the leaf profile's stored contact, raw: it is read only to resolve a
@@ -167,7 +167,7 @@ func (w *Worker) loadFacts(ctx context.Context, approvalID uuid.UUID, tier int16
 	f := approvalFacts{ApprovalID: approvalID}
 	var contact []byte
 	err := w.pool.QueryRow(ctx, factsSQL, approvalID, tier).Scan(
-		&f.State, &f.Kind, &f.RequestedAt, &f.RunID, &f.Principal, &f.Email, &f.ProfileID, &f.ProfileName, &contact, &f.NextTierDueAt)
+		&f.State, &f.Kind, &f.RequestedAt, &f.RunID, &f.Principal, &f.Email, &f.UnitID, &f.UnitName, &contact, &f.NextTierDueAt)
 	return f, contact, err
 }
 
@@ -176,7 +176,7 @@ func (w *Worker) loadFacts(ctx context.Context, approvalID uuid.UUID, tier int16
 // used. A target with no address is skipped. profile_contact takes policyref.Project's Email, which
 // re-validates the stored contact and drops a field that no longer passes.
 func (w *Worker) recipients(c claimed, f approvalFacts, contact []byte) []recipient {
-	r := w.cfg.route(f.Kind, f.ProfileID)
+	r := w.cfg.route(f.Kind, f.UnitID)
 	if r == nil || int(c.tier) >= len(r.Tiers) || !slices.Contains(r.Tiers[c.tier].Channels, c.channel) {
 		return nil
 	}
@@ -189,7 +189,7 @@ func (w *Worker) recipients(c claimed, f approvalFacts, contact []byte) []recipi
 		case TargetProfileContact:
 			var ct policyref.Contact
 			if len(contact) > 0 && json.Unmarshal(contact, &ct) == nil {
-				if ref := policyref.Project(policyref.SourceProfile, f.ProfileName, &ct); ref != nil {
+				if ref := policyref.Project(policyref.SourceUnit, f.UnitName, &ct); ref != nil {
 					email = ref.Email
 				}
 			}

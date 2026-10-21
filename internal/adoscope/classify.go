@@ -100,7 +100,7 @@ func Classify(req Request) (Verdict, error) {
 	if method == http.MethodOptions {
 		return locationDiscovery(r), nil
 	}
-	if slices.Contains(readMethods, method) || readWrite(r) {
+	if slices.Contains(readMethods, method) || (method == http.MethodPost && readWrite(r)) {
 		if a, ok := readAreaOf(r); ok {
 			return Verdict{Capability: a.cap}, nil
 		}

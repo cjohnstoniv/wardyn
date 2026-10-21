@@ -28,8 +28,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Unset or empty (`docker run -e VAR` / compose `VAR=`) keeps the default quietly.
 - Every boolean `wardynd` and the runner substrates read goes through that one parser (`1`/`true`/`yes`/`on`, `0`/`false`/`no`/`off`, anything else exits 2 at boot).
 - The exception is `WARDYN_ENVBUILD_REGISTRY_INSECURE`: it takes Go's `strconv.ParseBool` forms (`1`/`t`/`true`, `0`/`f`/`false`, no `yes` or `on`) and fails the build on anything else.
-- The seven `internal/api` switches read per request (`WARDYN_EGRESS_SECOND_HUMAN`, `WARDYN_CAPABILITY_SECOND_HUMAN`, `WARDYN_GOVERNANCE_SECOND_HUMAN`, `WARDYN_ALLOW_USER_ENV_SECRET`, `WARDYN_ALLOW_AGENT_TELEMETRY`, `WARDYN_GIT_PAT_API_BITBUCKET_SERVER`, `WARDYN_MCP_LOCAL_SERVERS`) are also read once at boot so a bad value is refused there.
-- So is `WARDYN_COMPONENT_ENV_RESERVE_EDITORS`, read on every component check.
+- The eight `internal/api` switches read per request (`WARDYN_EGRESS_SECOND_HUMAN`, `WARDYN_CAPABILITY_SECOND_HUMAN`, `WARDYN_GOVERNANCE_SECOND_HUMAN`, `WARDYN_ALLOW_USER_ENV_SECRET`, `WARDYN_ALLOW_AGENT_TELEMETRY`, `WARDYN_GIT_PAT_API_BITBUCKET_SERVER`, `WARDYN_SCHEDULED_RUNS`, `WARDYN_MCP_LOCAL_SERVERS`) are also read once at boot so a bad value is refused there.
+- So are `WARDYN_COMPONENT_ENV_RESERVE_EDITORS` and `WARDYN_KUBECTL_CLI`, read on every component check.
 - Two `wardyn-proxy` parsers are kept on purpose.
 - `WARDYN_LLM_SCAN` is a kill switch that can only disable.
 - It also accepts `disable`/`disabled`/`none` and `enable`/`enabled`, and a garbage value exits 2.
@@ -131,7 +131,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_AZURE_KV_PREFIX` | string | `wardyn`; the chart sets the release namespace | the start of every secret name this install writes (flag `-azure-kv-prefix`): 1-63 lowercase letters, digits and inner `-`. Names are `<prefix>-<platform\|operator\|people>-<32 hex of a hash of the owner and name>-g<generation>`. Fixed once rows exist, like the `WARDYN_AZURE_KV_URL` spelling |
 | `WARDYN_AZURE_KV_MAX_VERSIONS` | int | `100` | versions a secret holds before the next write starts a new name and deletes the old one (flag `-azure-kv-max-versions`); 1-500. Key Vault cannot delete old versions, so every write disables the ones before it |
 | `WARDYN_AZURE_KV_PURGE` | string | `auto` | `auto` purges a removed secret right after its soft delete, when the vault allows it; `never` always leaves it soft-deleted (flag `-azure-kv-purge`). [Details](#wardyn_azure_kv_purge) |
-| `WARDYN_RECORDING_STORE` | string | `pg` | recording store seam — `pg`, `fs` or `off` (flag `-recording-store`). Recording is **on** with the default `pg`; **the off switch is `WARDYN_RECORDING_STORE=off`**. [Details](#wardyn_recording_store) |
+| `WARDYN_RECORDING_STORE` | string | `pg` | recording store seam — `pg`, `fs` or `off` (flag `-recording-store`). Recording is **on** with the default `pg`; **the off switch is `WARDYN_RECORDING_STORE=off`**. [Details](#wardyn_recording_store) (or `runnerd.json` field `recording_store`) (lock: `lock_security_settings`) |
 | `WARDYN_RECORDING_DIR` | string | `./data/recordings` | PTY recording directory; `fs` store only, **ignored by `pg`** (flag `-recording-dir`). An EMPTY value keeps the default (0.7, like every env var here) — it disables nothing; turn recording off with `WARDYN_RECORDING_STORE=off` |
 | `WARDYN_RECORDING_RETENTION_DAYS` | int | `0` | delete stored session recordings older than N days; `0` (the default) keeps them forever (flag `-recording-retention-days`). Nothing is deleted unless you set a window. [Details](#wardyn_recording_retention_days) |
 | `WARDYN_AUDIT_RETENTION_DAYS` | int | `0` | the audit log's retention window in days; `0` (the default) keeps it forever (flag `-audit-retention-days`). An **increase** applies at once; a **decrease** takes effect **30 days after the boot that first saw it**. [Details](#wardyn_audit_retention_days) |
@@ -147,10 +147,10 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_MAX_CONCURRENT_RUNS` | int | `0` | cap on non-terminal runs across the whole deployment: a create past it is refused 422 `run_quota` at every door that creates a run; `0` (the default) is unlimited (flag `-max-concurrent-runs`; chart `maxConcurrentRuns`). [Details](#wardyn_max_concurrent_runs) |
 | `WARDYN_HOST_MAX_LOAD1` | int | `0` | the same refusal while the 1-minute load average (`/proc/loadavg` field 1) is above this; same host-not-cgroup reading and fail-open rule as `WARDYN_HOST_MIN_MEM_AVAILABLE_MIB`. `0` (the default) disables it (flag `-host-max-load1`). A workspace image build is refused the same way. |
 | `WARDYN_RUNNER` | string | `none` | runner substrate: `none` or a registered confinement substrate (`docker` in `-tags docker` builds, `k8s` in `-tags k8s` builds — both may be registered in a `-tags docker,k8s` build; unknown/uncompiled names fail closed at boot) (flag `-runner`) |
-| `WARDYN_INTERNAL_NETWORK` | string | `wardyn-internal` | the docker network the runner attaches each run's proxy sidecar to; must match the compose control-plane network name (both derive from the compose namespace) or the sidecar lands on the wrong bridge |
-| `WARDYN_RELAY_LISTEN` | string | (unset: probed) | **`wardyn-runnerd serve` and `setup`** (flag `--relay-listen`): the run relay's address. Only loopback, the native Docker bridge's gateway or Rancher Desktop's `veth-rd-wsl` address (`admitRelayBind`); setup writes it on a VM-backed engine |
-| `WARDYN_RELAY_HOST_TARGET` | string | (unset: probed) | **`wardyn-runnerd serve` and `setup`** (flag `--relay-host-target`): what a run's proxy reaches the relay at, `host-gateway` or an IP (`parseRelayTarget`); setup writes it on a VM-backed engine |
-| `WARDYN_ORG_CA_FILE` | string (path) | (unset) | **`wardyn-runnerd serve`, `setup` and `register`** (flag `--org-ca-file`, profile key `OrgCAFile`): roots for the runner's own organisation connection only, never a sandbox or run proxy; refused when writable by others, expired or not a CA |
+| `WARDYN_INTERNAL_NETWORK` | string | `wardyn-internal` | the docker network the runner attaches each run's proxy sidecar to; must match the compose control-plane network name (both derive from the compose namespace) or the sidecar lands on the wrong bridge (or `runnerd.json` field `internal_network`) |
+| `WARDYN_RELAY_LISTEN` | string | (unset: probed) | **`wardyn-runnerd serve` and `setup`** (flag `--relay-listen`): the run relay's address. Only loopback, the native Docker bridge's gateway or Rancher Desktop's `veth-rd-wsl` address (`admitRelayBind`); setup writes it on a VM-backed engine (or `runnerd.json` field `relay_listen`) |
+| `WARDYN_RELAY_HOST_TARGET` | string | (unset: probed) | **`wardyn-runnerd serve` and `setup`** (flag `--relay-host-target`): what a run's proxy reaches the relay at, `host-gateway` or an IP (`parseRelayTarget`); setup writes it on a VM-backed engine (or `runnerd.json` field `relay_host_target`) |
+| `WARDYN_ORG_CA_FILE` | string (path) | (unset) | **`wardyn-runnerd serve`, `setup` and `register`** (flag `--org-ca-file`, profile key `OrgCAFile`): roots for the runner's own organisation connection only, never a sandbox or run proxy; refused when writable by others, expired or not a CA (or `runnerd.json` field `org_ca_file`). (lock: `lock_security_settings`) |
 | `WARDYN_RUNNERD_RELAY_PORT` | port | (required) | **`wardyn-runnerd serve --substrate k8s`**, set by the `wardyn-runnerd` chart: the container port the run relay listens on, on the pod IP; must differ from the sink port |
 | `WARDYN_RUNNERD_RELAY_SERVICE_PORT` | port | (required) | **`serve --substrate k8s`**, chart-set: the relay Service's port, which run proxies dial at its ClusterIP |
 | `WARDYN_RUNNERD_SINK_PORT` | port | (required) | **`serve --substrate k8s`**, chart-set: the decision sink's port, on the pod IP and on the relay Service; each proxy's `decision_sink.url` names it |
@@ -205,7 +205,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_USER_DESKTOP` | bool | `false` | **user desktop**: asserts that the human using this daemon is a **user**; boot is **refused** unless local mode is off and OIDC is configured (flag `-member-mode`). Set `WARDYN_ORG_URL` to enrol, see [Enrolling into an org control plane](DESKTOP.md#enrolling-into-an-org-control-plane). [Details](#wardyn_user_desktop) |
 | `WARDYN_ORG_URL` | string | (unset) | Desktop enrolment URL (`-org-url`); unset disables hybrid posture. Requires `WARDYN_USER_DESKTOP`; failed enrolment refuses boot. [Details](#wardyn_org_url) |
 | `WARDYN_RUNNER_ORG_URL` | string | (unset) | Public runner identity binding (`-runner-org-url`); invalid/unset refuses registration/streams. HTTPS or loopback HTTP; no userinfo/query/fragment. Never inferred from headers. |
-| `WARDYN_RUNNER_STATE_DIR` | path | (unset) | **`wardyn-runnerd setup`** writes it into the service's env file ([`setup_host.go`](../cmd/wardyn-runnerd/setup_host.go)), the private directory holding the runner's identity (`runner.json`). The Linux unit passes it, and the macOS LaunchAgent that directory, as `serve --state-dir`; `wardyn-runnerd` never reads the variable. |
+| `WARDYN_RUNNER_STATE_DIR` | path | (unset) | a service file from before `runnerd.json` held it ([`setup_host.go`](../cmd/wardyn-runnerd/setup_host.go) reads it back at a rerun), the private directory holding the runner's identity (`runner.json`). Now `setup` writes it as `state_dir` in `runnerd.json`; `wardyn-runnerd` never reads the variable. |
 | `WARDYN_RUNNER_STREAM_HANDSHAKES_PER_ADDRESS` | int | `32` | runner-stream handshakes in progress per client address, per replica (flag `-runner-stream-handshakes-per-address`); over it: `429` |
 | `WARDYN_TRUSTED_PROXIES` | string (CIDR list) | (unset) | Reverse proxies whose `X-Forwarded-For` names the client (`-trusted-proxies`), read right to left to the first unlisted address; a bad chain keeps the peer, kept in audit as `data.proxy_peer`. `/0` refuses boot. [Details](operations/hybrid-laptops.md#trusted-proxies) |
 | `WARDYN_ORG_ENROLMENT_TOKEN` 🔒 | string | (unset) | Secret enrolment token this device presents to `WARDYN_ORG_URL`. Setting it with `WARDYN_ORG_URL` unset is **refused** at boot; it is required on first boot (flag `-org-enrolment-token`). [Details](#wardyn_org_enrolment_token) |
@@ -255,9 +255,11 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_REQUIRE_OPERATOR_SET_EGRESS` | bool | `true` (**on since 0.7**) | Gate an `egress:<host>` workspace requirement the same way a `secret:<name>` one is gated: only `operator_set` provenance is auto-added at launch (flag `-require-operator-set-egress`). [Details](#wardyn_require_operator_set_egress) |
 | `WARDYN_GIT_PAT_BROKER` | string | `on` | Never-resident `git_pat` lane: `on` (default since 0.7) mints a non-GitHub forge's PAT proxy-side, so the credential never enters the sandbox; only the literal `off` disables it (flag `-git-pat-broker`). [Details](#wardyn_git_pat_broker) |
 | `WARDYN_GIT_PAT_BROKER_OFF_REFUSED` | bool | `false` | 0.10.0: while `WARDYN_GIT_PAT_BROKER` is `off`, refuse a PAT in the sandbox on operators' runs too; a member's run is refused it either way (flag `-git-pat-broker-off-refused`). [Details](#wardyn_git_pat_broker) |
+| `WARDYN_MULTI_AGENT_TASKS` | bool | `false` | 0.10.0: a background agent task may run several agents in one sandbox, each on its own `tools[].task`. Off, such a request is `422` `multi_agent_tasks_off`. Needs a 0.10.0 harnesses image ([sdk.md](sdk.md#several-agents-in-one-background-run); flag `-multi-agent-tasks`) |
 | `WARDYN_PROXY_RESPONSE_SCRUB` | bool | `false` | 0.10.0 switch: each run's proxy replaces a credential it added with `<secret-hidden>` when a response echoes it, in headers and body on intercepted and brokered routes (flag `-proxy-response-scrub`). On a stream, an event's last bytes can arrive with the next |
 | `WARDYN_ENV_SECRET_PLACEHOLDERS` | bool | `false` | 0.10.0 switch: an `env_secret` grant whose scope names a `host` gets a placeholder in its variable, which the run's proxy fills in the `Authorization` header to that host. [POLICIES.md](POLICIES.md#env_secret) has the limits (flag `-env-secret-placeholders`) |
 | `WARDYN_FILE_SECRET_PLACEHOLDERS` | bool | `false` | 0.10.0 switch: the same for a `file_secret` grant whose scope names a `host`: the file holds the placeholder (flag `-file-secret-placeholders`) |
+| `WARDYN_RUNNER_SECRET_PLACEHOLDERS` | bool | `false` | 0.10.0 switch: the same for a `runner_resident` `env_secret` or `file_secret` grant whose scope names a `host`: the runner gets the placeholder instead of the value, and the organisation's egress fills it (`via_org`). [POLICIES.md](POLICIES.md#env_secret) has the limits (flag `-runner-secret-placeholders`) |
 | `WARDYN_ATTACH_LOCAL` | string | `off` | 0.10.0 switch: `on` lets a run's owner attach on their own runner's computer (`transport=local`), still admitted, recorded and audited by the organisation. Anything else answers 409 `attach_local_unavailable`, and the CLI attaches through the relay (flag `-attach-local`) |
 | `WARDYN_GIT_PAT_API_BITBUCKET_SERVER` | bool | `false` (**off**) | Opt in to the Bitbucket Server forge API door; with it off, a policy or governance write that sets it answers `400`. A garbage value exits 2 at boot. [Details](#wardyn_git_pat_api_bitbucket_server) |
 | `WARDYN_GIT_PAT_BROKER_HOSTS` | string (space-separated) | (set by dispatch) | **Sandbox-side, set by wardynd, never by an operator.** The hosts `agent-run` must route through the git_pat broker. Host names only — it carries no grant id, so it cannot be used to mint anything |
@@ -270,8 +272,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_CONFINEMENT_MAP` | string | (unset) | per-class substrate/runtime pins, e.g. `CC2=runsc;CC3=kata-qemu` (flag `-confinement-map`) |
 | `WARDYN_CONTROL_PLANE_URL` | string | `https://wardynd:8443` | the URL every run's proxy sidecar dials to reach this daemon's **internal TLS listener**; `http://` is refused at boot unless the host is loopback (flag `-control-plane-url`). [Details](#wardyn_control_plane_url) |
 | `WARDYN_INTERNAL_LISTEN` | string | `:8443` | listen address of the proxy-facing TLS listener, served with a certificate from wardynd's own internal CA; never publish it outside the network your proxies share with wardynd (flag `-internal-listen`). [Details](#wardyn_internal_listen) |
-| `WARDYN_PROXY_IMAGE` | string | (unset) | OCI image for the wardyn-proxy sidecar (flag `-proxy-image`). **Bump it in lockstep with wardynd**: since 0.7 the sidecar decodes its config strictly (`LoadConfigBytes`, [`internal/egress/proxy/config.go`](../internal/egress/proxy/config.go)) and refuses to start on a key it cannot honour. [Details](#wardyn_proxy_image) |
-| `WARDYN_PROXY_IMAGE_PINNED` | `1` | (unset) | **`wardyn-runnerd`**: `setup` writes it beside `WARDYN_PROXY_IMAGE` when `--proxy-image` named it; `serve` then keeps that image. Unmarked, the registration image and this project's release images are not pins: they follow the organisation's answer at connect |
+| `WARDYN_PROXY_IMAGE` | string | (unset) | OCI image for the wardyn-proxy sidecar (flag `-proxy-image`). **Bump it in lockstep with wardynd**: since 0.7 the sidecar decodes its config strictly (`LoadConfigBytes`, [`internal/egress/proxy/config.go`](../internal/egress/proxy/config.go)) and refuses to start on a key it cannot honour. [Details](#wardyn_proxy_image) (or `runnerd.json` `proxy_image`) (lock: `lock_security_settings`) |
+| `WARDYN_PROXY_IMAGE_PINNED` | `1` | (unset) | **`wardyn-runnerd`**: `setup` writes it beside `WARDYN_PROXY_IMAGE` when `--proxy-image` named it; `serve` then keeps that image. Unmarked, the registration image and this project's release images are not pins: they follow the organisation's answer at connect (or `runnerd.json` `proxy_image`, a pin) |
 | `WARDYN_PROXY_IMAGE_AMD64` | string | (unset) | the proxy image a self-hosted runner that reports amd64 receives when it registers (flag `-proxy-image-amd64`); unset gives the runner `WARDYN_PROXY_IMAGE`. The organisation's own sandboxes always use `WARDYN_PROXY_IMAGE` |
 | `WARDYN_PROXY_IMAGE_ARM64` | string | (unset) | the proxy image a self-hosted runner that reports arm64 receives when it registers (flag `-proxy-image-arm64`); unset gives the runner `WARDYN_PROXY_IMAGE`. The organisation's own sandboxes always use `WARDYN_PROXY_IMAGE` |
 | `WARDYN_DRIVE_PROBE_IMAGE` | string | (unset = the pinned busybox-class default) | OCI image the docker runner's `host_path` user-drive **agent-readability probe** runs a container from; an operator who overrides this must make sure the image is reachable at boot (flag `-drive-probe-image`). [Details](#wardyn_drive_probe_image) |
@@ -280,6 +282,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_PRINT_GROUNDTRUTH_TOKEN` | bool | `false` | mint+print a host-sensor token and exit (flag `-print-groundtruth-token`) |
 | `WARDYN_AGENT_IMAGES` | string (JSON) | (unset) | agent-name → OCI image ref map (flag `-agent-images`). The `base` key is what the setup probe resolves (only `curl`). Refs should be multi-arch indexes; for one architecture per tag add `<key>@arm64` or `@amd64` beside the required plain key ([why](adoption/corp-image-authoring.md#multi-arch-images)) |
 | `WARDYN_ALLOW_AGENT_TELEMETRY` | bool | (unset) | re-enable the agent CLI's own telemetry inside sandboxes. Default-unset SUPPRESSES it. [Details](#wardyn_allow_agent_telemetry) |
+| `WARDYN_KUBECTL_CLI` | bool | off | Opt in to the kubectl component kind: a registered cluster's namespaces, reached through the proxy. Off, a kubectl row is refused as an unknown `cli.kind`. A garbage value exits 2 at boot. [Details](#wardyn_kubectl_cli) |
 | `WARDYN_COMPONENT_ENV_RESERVE_EDITORS` | bool | off | reserves `EDITOR`, `VISUAL`, `PAGER`, `GIT_EDITOR`, `GIT_PAGER` and `GIT_SEQUENCE_EDITOR`: no component may set them. A stored component that does is refused at its next save or attach |
 | `WARDYN_ALLOW_USER_ENV_SECRET` | bool | (unset) | let MEMBERS hold `env_secret` and `file_secret` grants. Default-unset DROPS a member's `env_secret` or `file_secret` grant even when the operator's ceiling lists the exact pairing (`dropAdminOnlyEnvSecretGrants`, `inline_policy_bounds.go`). [Details](#wardyn_allow_user_env_secret) |
 | `WARDYN_MCP_LOCAL_SERVERS` | bool | off | Sandboxed MCP servers (`transport: stdio`). **Each has the agent's access; the harness applies tool rules.** Off: saving one, a new run, a queued run's admission and a revive refuse it; a run already running keeps it until it ends. [Details](#wardyn_mcp_local_servers) |
@@ -287,11 +290,12 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_CAPABILITY_SECOND_HUMAN` | bool | (unset) | four-eyes on Azure DevOps capability escalations: the human who DECIDES one must not be the human who created the run. **Local mode REFUSES it**, and the `admin-token` principal BYPASSES it. [Details](#wardyn_capability_second_human) |
 | `WARDYN_GOVERNANCE_SECOND_HUMAN` | bool | (unset) | four-eyes on governance writes: a human's write to a governance profile, a capability grant, a key-domain assignment or `local_credential_delivery` is stored as a pending change. A second, distinct human must approve it. [Details](#wardyn_governance_second_human) |
 | `WARDYN_GOVERNANCE_CHANGE_TTL` | duration | `72h` | how long a governance change held for a second human waits for approval (flag `-governance-change-ttl`); past it the change reads as `expired` and cannot be approved. [Details](#wardyn_governance_change_ttl) |
-| `WARDYN_GOVERNANCE_PROFILE_PUT_EXISTING_ONLY` | bool | `false` | `PUT /governance/profiles/{id}` updates an existing profile only; an id no profile holds answers `404` (flag `-governance-profile-put-existing-only`). [Details](#wardyn_governance_profile_put_existing_only) |
+| `WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY` | bool | `false` | `PUT /governance/units/{id}` updates an existing profile only; an id no profile holds answers `404` (flag `-governance-unit-put-existing-only`). [Details](#wardyn_governance_unit_put_existing_only) |
 | `WARDYN_EGRESS_HOST_PORT_GRANTS_INERT` | bool | `false` | a stored `egress_host` allow grant whose value carries a port is inert: marked so and never matched (flag `-egress-host-port-grants-inert`). [Details](#wardyn_egress_host_port_grants_inert) |
 | `WARDYN_HA` | bool | `false` | multi-replica mode (flag `-ha`): skip the single-instance lock so several wardynd replicas can serve one database; refused at boot unless the runner is the Kubernetes substrate. [Details](#wardyn_ha) |
 | `WARDYN_GOVERN_ADMIN_RUNS` | bool | (unset) | constrained-admin mode: govern every run an SSO admin or an admin-role personal API token launches, like a member's (flag `-govern-admin-runs`). **With OIDC unset the switch binds nobody**, and boot WARNs it (`warnGovernAdminRunsUnbound`, [`cmd/wardynd/boot_posture.go`](../cmd/wardynd/boot_posture.go)). [Details](#wardyn_govern_admin_runs) |
 | `WARDYN_GOVERN_ADMIN_RUNS_EXEMPT` | CSV | (unset) | the lanes left ungoverned under `WARDYN_GOVERN_ADMIN_RUNS`; the only value is `recording` (flag `-govern-admin-runs-exempt`). [Details](#wardyn_govern_admin_runs_exempt) |
+| `WARDYN_SCHEDULED_RUNS` | bool | (unset) | let a run be scheduled to start once, later (`start_at` on `POST /runs`, within 7 days less the run's wait); unset refuses `start_at` with `scheduled_runs_off`. Read per request. [Details](#wardyn_scheduled_runs) |
 | `WARDYN_EGRESS_PORT_RULE` | enum | `off` | container runs' egress port rule, `off`, `dry_run` or `on` (flag `-egress-port-rule`); the proxy turns it on for runs dispatched as a desktop VM. [Details](#wardyn_egress_port_rule) |
 | `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` | string (URL) | (unset) | **TEST ONLY.** Re-points **both** AWS IAM Identity Center services at this base URL (flag `-aws-sso-endpoint-override`; `ValidateAWSSSOEndpointOverride`, [`internal/api/awssso_endpoint.go`](../internal/api/awssso_endpoint.go)); **REFUSED unless `WARDYN_ALLOW_TEST_ENDPOINTS=true`**. [Details](#wardyn_aws_sso_endpoint_override) |
 | `WARDYN_AWS_SSO_PROXY_INJECT` | enum | `on` | a captured AWS SSO session is injected **proxy-side** (flag `-aws-sso-proxy-inject`). `off` was removed in 0.10.0 and refuses boot. On a private-endpoint estate whose corporate proxy is also TLS-intercepting, the MITM re-origination fails closed unless `WARDYN_TRUSTED_CA_FILE` is ALSO staged. [Details](#wardyn_aws_sso_proxy_inject) |
@@ -334,9 +338,9 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_UI_SANDBOX_SESSION_TTL` | duration | `8h` | how long a UI-sandbox relay session stays usable (flag `-ui-sandbox-session-ttl`); shortening this binds the cookies already in browsers. [Details](#wardyn_ui_sandbox_session_ttl) |
 | `WARDYN_UI_SANDBOX_STRIP_COOKIES` | string | (unset) | inbound cookie policy for the UI-sandbox gateway (flag `-ui-sandbox-strip-cookies`): `allow:<names>` forwards only the listed cookies, `deny:<names>` strips them. Unset forwards every cookie except `wardyn_*`. [Details](#wardyn_ui_sandbox_strip_cookies) |
 | `WARDYN_METRICS_LISTEN` | string | (unset) | dedicated metrics listener address (flag `-metrics-listen`); empty means off. Set, it serves `GET /metrics` in plain HTTP with no credential, and boot refuses an address shared with another listener (`validateMetricsListenConfig`, [`cmd/wardynd/boot_metrics.go`](../cmd/wardynd/boot_metrics.go)). [Details](#wardyn_metrics_listen) |
-| `WARDYN_TRUSTED_CA_FILE` | string (path) | (unset) | path to a PEM bundle of additional trusted roots, additive to the system roots (flag `-trusted-ca-file`; `loadTrustedCA`, [`cmd/wardynd/trusted_ca.go`](../cmd/wardynd/trusted_ca.go)); a missing or unparseable file refuses boot; a group- or world-writable one warns. [Details](#wardyn_trusted_ca_file) |
+| `WARDYN_TRUSTED_CA_FILE` | string (path) | (unset) | path to a PEM bundle of additional trusted roots, additive to the system roots (flag `-trusted-ca-file`; `loadTrustedCA`, [`cmd/wardynd/trusted_ca.go`](../cmd/wardynd/trusted_ca.go)); a missing or unparseable file refuses boot; a group- or world-writable one warns. [Details](#wardyn_trusted_ca_file) (or `runnerd.json` field `trusted_ca_file`) (lock: `lock_security_settings`) |
 | `WARDYN_TRUSTED_CA_REFUSE_WRITABLE` | bool | `false` | refuse boot, instead of warning, when `WARDYN_TRUSTED_CA_FILE` is group- or world-writable (flag `-trusted-ca-refuse-writable`). [Details](#wardyn_trusted_ca_refuse_writable) |
-| `WARDYN_UPSTREAM_PROXY` | string (URL) | (unset) | **`wardyn-runnerd serve`** (flag `--upstream-proxy`): this runner's own corporate upstream proxy, `http://[user:pass@]host[:port]`, that every run's proxy chains its egress through. Checked at startup with the proxy's own rule; never sent to the organisation. [Details](#wardyn_upstream_proxy) |
+| `WARDYN_UPSTREAM_PROXY` | string (URL) | (unset) | **`wardyn-runnerd serve`** (flag `--upstream-proxy`): this runner's own corporate upstream proxy, `http://[user:pass@]host[:port]`, that every run's proxy chains its egress through. Checked at startup with the proxy's own rule; never sent to the organisation. [Details](#wardyn_upstream_proxy) (or `runnerd.json` field `upstream_proxy`) |
 | `WARDYN_DAEMON_PROXY_URL` | string (URL) | (unset = direct) | the forward proxy wardynd's own outbound HTTP calls traverse (flag `-daemon-proxy-url`; `installDaemonProxy`, [`cmd/wardynd/daemon_proxy.go`](../cmd/wardynd/daemon_proxy.go)); a malformed value refuses boot. [Details](#wardyn_daemon_proxy_url) |
 | `WARDYN_DAEMON_NO_PROXY` | string (CSV) | (unset) | destinations `WARDYN_DAEMON_PROXY_URL` must not be used for, in `NO_PROXY` spelling (flag `-daemon-no-proxy`; `x/net/http/httpproxy` semantics). Wardynd appends `KUBERNETES_SERVICE_HOST`, any `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` or `WARDYN_OIDC_INTERNAL_ISSUER` host, and the AWS link-local credential endpoints. Ignored when the proxy URL is unset |
 | `WARDYN_DAEMON_PROXY_SECRET` | string (path) | (unset) | path to a file holding one forward-proxy URL that MAY embed `user:pass@` (flag `-daemon-proxy-secret-file`; `installDaemonProxySecret`, [`cmd/wardynd/daemon_proxy.go`](../cmd/wardynd/daemon_proxy.go)); a group- or world-writable file refuses boot. [Details](#wardyn_daemon_proxy_secret) |
@@ -1336,6 +1340,20 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
   - `WARDYN_GIT_PAT_BROKER_OFF_REFUSED=true` refuses operators' runs too: the staged retirement of `off` (flag `-git-pat-broker-off-refused`, default `false`).
 - An escape hatch for a forge that misbehaves under the rewrite, not a supported posture (flag `-git-pat-broker`).
 
+### `WARDYN_KUBECTL_CLI`
+
+- Opt in to the `kubectl` CLI component kind (`cli.kind: kubectl`). Off by default.
+- On, an admin writes an organisation row through `PUT /api/v1/components/{id}` naming the API server (`server`, https, no path), its CA bundle (`ca_pem`), one service account (`service_account.namespace`, `service_account.name`), 1 to 16 `namespaces` and `access` (`read` or `write`).
+- The admin then stores that account's token with `PUT /api/v1/components/{id}/kubectl-token` (`{"value": "<token>"}`). It is kept in the operator namespace under a name the secrets API refuses, with the server, CA and account it was registered for, and is never returned. A run uses it only if those are still the ones it launched with.
+- Editing the row's server, CA or service account deletes the stored token, and so does deleting the row.
+- The account needs `create` on `serviceaccounts/token` for itself (bind it with `resourceNames`). At each proxy refresh the control plane trades the stored token for a 10-minute one with the cluster's TokenRequest API, trusting only the row's CA bundle.
+- The sandbox gets a `~/.kube/config` with the run's own CA and an inert token. Neither the stored token nor a minted one enters the sandbox.
+- The proxy's door holds each request to the row's namespaces and access (`read` is `GET` only), allows discovery, and refuses cluster-wide resources, Secrets, token requests, `exec`, `attach`, `port-forward`, the API server proxy, ephemeral containers and impersonation.
+- A cluster on a private address also needs the admin's internal-hosts lift, as any private host does.
+- Off, a kubectl row is refused at save and at launch with the unknown-kind error, the New Run card stays `coming_soon`, the token route answers `404`, and a running run's next token refresh is refused.
+- `GET /api/v1/setup/status` reports it as `features.kubectl_cli`.
+- Only wardynd reads it; set it through the chart's `extraEnv`. A garbage value exits 2 at boot.
+
 ### `WARDYN_GIT_PAT_API_BITBUCKET_SERVER`
 
 - Opt in to the Bitbucket Server forge API door: whether a `git_pat` grant may set `api: true` with `forge: bitbucket_server`.
@@ -1388,6 +1406,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - So a sidecar left at an older tag/digest meets config keys its binary does not know.
 - Since 0.7 that is a loud failure rather than a silent one: the sidecar decodes its config strictly (`LoadConfigBytes`, [`internal/egress/proxy/config.go`](../internal/egress/proxy/config.go)) and refuses to start on a key it cannot honour, naming the key.
 - Before 0.7 the same skew was accepted with no error and the unknown keys were discarded — a routing document half in force.
+- On a runner, a macOS managed profile that sets `lock_security_settings` (no flag, variable or file twin) makes its `ProxyImage` beat the flag and refuses a disagreeing one; the same key locks four more settings ([Managed preferences](operations/hybrid-laptops.md#managed-preferences)).
 
 ### `WARDYN_DRIVE_PROBE_IMAGE`
 
@@ -1490,7 +1509,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - **The `admin-token` principal BYPASSES it**, the break-glass, writing `governance.change.bypass`; **local mode REFUSES it** with a `503` `governance_second_human_local_mode`.
 - With it unset every covered route answers exactly as before.
 - Upgrade the CLI and any SDK callers before turning it on.
-- A client older than 0.8.6 decodes the `202` as an empty profile, its next assignment write is refused `profile_id: required` (or is itself held), and its prune deletes are each held rather than applied.
+- A client older than 0.8.6 decodes the `202` as an empty profile, its next assignment write is refused `unit_id: required` (or is itself held), and its prune deletes are each held rather than applied.
 - Turning it off leaves pending changes approvable and rejectable under the same rules, self-approval included.
 - The console lists the held changes on the Governance screen's Changes tab.
 - A value that is not a bool exits 2 at boot in every mode.
@@ -1503,10 +1522,11 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - A value that does not parse, or is not positive, exits 2 at boot.
 - Read only while `WARDYN_GOVERNANCE_SECOND_HUMAN` is on.
 
-### `WARDYN_GOVERNANCE_PROFILE_PUT_EXISTING_ONLY`
+### `WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY`
 
-- Off (the default): `PUT /api/v1/governance/profiles/{id}` naming an id no profile holds creates one there, logged at INFO as a create the switch would refuse.
-- On: that PUT answers `404 governance_profile_not_found`; create a profile with `POST /api/v1/governance/profiles`, which mints the id (flag `-governance-profile-put-existing-only`).
+- Off (the default): `PUT /api/v1/governance/units/{id}` naming an id no profile holds creates one there, logged at INFO as a create the switch would refuse.
+- On: that PUT answers `404 governance_unit_not_found`; create a profile with `POST /api/v1/governance/units`, which mints the id (flag `-governance-unit-put-existing-only`).
+- Renamed in 0.10.0 from `WARDYN_GOVERNANCE_PROFILE_PUT_EXISTING_ONLY`; wardynd refuses to boot while the old name is set, naming this one.
 
 ### `WARDYN_EGRESS_HOST_PORT_GRANTS_INERT`
 
@@ -1544,6 +1564,15 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Without it, a governed admin's record launch is refused `403` `recording_governed`.
 - Any other value exits 2 at boot; set without `WARDYN_GOVERN_ADMIN_RUNS` it does nothing and boot warns.
 - Not a secret, so it has no `_FILE` twin (flag `-govern-admin-runs-exempt`).
+
+### `WARDYN_SCHEDULED_RUNS`
+
+- Lets a run be scheduled to start once, later: `start_at` and `start_time_zone` on `POST /runs` (`wardyn run --start-at`) ([Scheduled runs](operations/runner-pools.md#scheduled-runs)).
+- The start is at most 6 days ahead for a background task, 6 days 23 hours for an interactive one, so the run keeps its wait before the 7-day cap.
+- The run waits in its pool's queue and starts through the queue's own start, which checks its owner, profile, policy and doors again.
+- Unset (the default) refuses `start_at` with `422` `scheduled_runs_off`. Turning it off later also ends each run already booked at its start time, `FAILED` `scheduled_runs_off`.
+- A deployment with no runner wired places no runs, so `start_at` is refused there with `scheduled_runs_unavailable`.
+- A value that is not a bool exits 2 at boot.
 
 ### `WARDYN_EGRESS_PORT_RULE`
 
@@ -1815,6 +1844,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - It needs the logout event as a JSON object, a `sub`, a `jti`, no `nonce` and an `iat` within five minutes.
 - Anything else, including a `sid` without a `sub`, gets `400`; a cut that cannot be written gets `503`.
 - Past five tokens that fail to verify, then one a second per process, a POST gets `429` before verification, so forged tokens cannot drive unbounded key fetches.
+  - While that lasts, the provider's genuine logout gets `429` too; sign-out and admin revocation still cut sessions.
 - Each cut is a `session.revoke` row with `source` `idp_back_channel_logout`.
 - Front-channel logout, which Entra ID offers, is not supported, and a person set up by Entra object id before first sign-in is not reached by `sub`.
 
@@ -1918,9 +1948,9 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Appended there while it and the organisation's staged CA fit 64 KiB; beyond, only the mounted file carries it (images from 0.9.3).
 - A CA trust variable the organisation staged for the run keeps its value on every runner substrate, Docker and Kubernetes alike; the runner sets only the ones left unset.
 - On `wardynd` boot warns over 64 KiB and refuses over 120 KiB: the sandbox gets it in one environment variable, which Linux caps at 128 KiB.
-- `setup --trusted-ca-file` writes it into the service definition; a rerun keeps it.
+- `setup --trusted-ca-file` writes it into `runnerd.json`; a rerun keeps it.
 - `setup --org-ca-file` is the org-only twin (`WARDYN_ORG_CA_FILE`): the organisation connection trusts both files, and only this one never reaches a run.
-- `setup` also copies the shell's `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` and their lowercase twins into the runner service only, without a user name or password, and keeps them on a rerun from a shell that sets none.
+- `setup` also copies the shell's `HTTPS_PROXY` and `NO_PROXY` (and lowercase twins) into `runnerd.json` (`runner_proxy`, `runner_no_proxy`), for the runner service only, without a user name or password, and keeps them on a rerun from a shell that sets none.
 
 ### `WARDYN_TRUSTED_CA_REFUSE_WRITABLE`
 
@@ -1936,7 +1966,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - It becomes every proxy's `upstream_proxy_url` (create and revive, on stdin) beside the runner's CA bundle ([`cmd/wardyn-runnerd/serve.go`](../cmd/wardyn-runnerd/serve.go)).
 - Traffic to the organisation (the run's control-plane relay) does not traverse it.
 - Prefer the variable to the flag when it holds a credential: a flag shows in the process list.
-- `setup` does not write it: add it to the service's environment, and again after a setup rerun, which rewrites that file.
+- `setup` does not write it: set `upstream_proxy` in `runnerd.json` (a rerun keeps it) or, for a credential, the variable in the service's environment.
 - On macOS do not put a credential in the LaunchAgent: its plist is mode `0644`. Use a URL without one, or `--no-service` with a `0600` environment file.
 
 ### `WARDYN_DAEMON_PROXY_URL`
@@ -2189,6 +2219,13 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_TOKEN` 🔒 | string | (unset) | fallback source for the CLI's admin bearer ([`cmd/wardyn/main.go`](../cmd/wardyn/main.go)) — read by the CLI and by `wardyn-runnerd setup --claim` (your own personal API token), never by `wardynd` |
 | `WARDYN_CLI_ALLOW_PLAINTEXT` | bool | `false` | silence the warning the CLI prints when the admin token would travel in cleartext (`http://` to a non-loopback wardynd). Advisory only — the call is never refused; set it when TLS terminates in front of the control plane |
 
+### `wardyn doctor`
+
+- Read-only checks of how the CLI reaches the organisation, one line per stage. They cover the URL (`--url`, `WARDYN_URL`, the profile) and its source, DNS and the proxy route (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`). They also cover the TLS issuer and trust store, `/healthz` and `/api/v1/me`.
+- It never prints a token or a proxy credential, writes nothing and exits 1 when a stage fails; `--json` gives the stages as data.
+- It reads `WARDYN_TRUSTED_CA_FILE` only to say whether that bundle would verify the server: the CLI trusts the system roots alone, and a runner trusts the bundle.
+- With a runner installed it appends that runner's stages ([details](runner-registration.md#check-a-runners-connection)).
+
 ### `WARDYN_URL`
 
 - Control plane URL the CLI dials, from OUTSIDE the daemon (flag `-url`).
@@ -2243,7 +2280,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_INTERACTIVE_SEED` | string | (unset) | the run's optional boot seed, its `task`, exported verbatim for an interactive run only; fires once at sandbox boot. [Details](#wardyn_interactive_seed) |
 | `WARDYN_SEED_AUTO_TOOLS` | bool | (unset) | `1` starts the boot seed above with `--dangerously-skip-permissions` (opt-in, for that pre-attach span only); unset/absent is supervised. [Details](#wardyn_seed_auto_tools) |
 | `WARDYN_HARNESSES` | string | (unset) | the harnesses a run launched with the harness set carries, space-separated in set order (`applyHarnessSetEnv`, [`internal/api/runs_dispatch_mounts.go`](../internal/api/runs_dispatch_mounts.go)). Unset for a run launched without the set |
-| `WARDYN_START_HARNESS` | string | (unset) | the one harness of `WARDYN_HARNESSES` that starts with the run; empty when none does. Set together with `WARDYN_HARNESSES` |
+| `WARDYN_START_HARNESS` | string | (unset) | the one harness of `WARDYN_HARNESSES` that starts with the run; empty when none does. Set together with `WARDYN_HARNESSES`. `agent-run --tasks` passes each agent its own `WARDYN_TASK_PREPPED` mark, touched once its prep is done |
 | `WARDYN_CODEX_BASE_URL` | string (URL) | (unset) | the base URL a `codex-cli` run's codex is pointed at: the brokered `<proxy>/wardyn/llm/openai` route plus the path the final upstream needs (`codexBaseURL`, [`internal/api/runs_dispatch_provider.go`](../internal/api/runs_dispatch_provider.go)). [Details](#wardyn_codex_base_url) |
 | `WARDYN_CODEX_MODEL` | string | (unset) | **Switched off in 0.8.6:** a provider write of the `azure_foundry` kind answers `400` "the azure_foundry kind is not available in this release", so no run sets this yet (`providerAzureLane.env`, [`internal/api/provider_azure.go`](../internal/api/provider_azure.go)). [Details](#wardyn_codex_model) |
 | `WARDYN_MCP_SERVERS_JSON` 🔒 | string (JSON) | (unset) | a `codex-cli` run's MCP servers as `{"<server key>":"<broker URL>"}`, set only when a server is on for Codex CLI; each URL carries Codex's own broker token, so it rides the secret env (`dispatchMCP`, [`internal/api/run_mcp.go`](../internal/api/run_mcp.go)). [Details](#wardyn_mcp_servers_json) |
@@ -2262,6 +2299,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_CLAUDE_MANAGED_B64` 🔒 | base64 | (unset) | managed Claude credential blob |
 | `WARDYN_AWS_SSO_CONFIG_B64` | base64 | (unset) | captured AWS SSO session as a synthetic `~/.aws`, materialized by `agent-run`. With `WARDYN_AWS_SSO_PROXY_INJECT` on (the default) it is a placeholder in plain env with no token; secret (🔒) only when proxy-inject is off |
 | `WARDYN_AZURE_CLI_CONFIG_B64` | base64 | (unset) | an Azure CLI component's generated `~/.azure`, materialized by `agent-run`: the profile listing its subscriptions and a token cache whose access token is an inert placeholder. It carries no credential (`authorAzureCLI`, [`internal/api/runs_dispatch_cli_azure.go`](../internal/api/runs_dispatch_cli_azure.go)) |
+| `WARDYN_KUBECTL_CONFIG_B64` | base64 | (unset) | a kubectl component's generated `~/.kube/config`, materialized by `agent-run`: the API server, the run's own CA and an inert token. It carries no credential (`authorKubectlCLI`, [`internal/api/cli_kubectl.go`](../internal/api/cli_kubectl.go)) |
 | `WARDYN_AWS_SSO_ACCOUNT_ID` | string | (unset) | the AWS account a sign-in in the **container-login** sandbox may capture, seeded from the agent roster row's `sso_account_id`. Set together with the role below, or not at all. [Details](#wardyn_aws_sso_account_id) |
 | `WARDYN_AWS_SSO_ROLE_NAME` | string | (unset) | the IAM role the same sign-in may capture, seeded from the roster row's `sso_role_name` and verified in the pinned account. Set together with the account above. [Details](#wardyn_aws_sso_role_name) |
 

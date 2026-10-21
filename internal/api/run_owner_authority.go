@@ -365,24 +365,24 @@ func (s *Server) capAllowedForSub(ctx context.Context, sub, userType, kind, valu
 	return !enforced && !restricted, nil
 }
 
-// ownerProfile is the run's captured profile, composed from its chain as it stands now, refusing
+// ownerUnit is the run's captured profile, composed from its chain as it stands now, refusing
 // when it no longer exists (its walls cannot be known), when it cannot be read (a base included:
 // never a partial chain) and when a composition nothing satisfies leaves it with no valid policy. A
 // run that captured none (an unassigned or super-admin owner) passes.
-func (s *Server) ownerProfile(ctx context.Context, run types.AgentRun) (*ResolvedProfile, *ownerRefusal) {
-	if run.GovernanceProfileID == nil {
+func (s *Server) ownerUnit(ctx context.Context, run types.AgentRun) (*ResolvedUnit, *ownerRefusal) {
+	if run.UnitID == nil {
 		return nil, nil
 	}
-	p, err := s.resolveProfileByID(ctx, *run.GovernanceProfileID)
+	p, err := s.resolveUnitByID(ctx, *run.UnitID)
 	if u, ok := isOverlayUnsatisfiable(err); ok {
 		return nil, &ownerRefusal{status: http.StatusForbidden, reason: reasonGovernanceOverlayUnsatisfiable, msg: u.Error()}
 	}
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, &ownerRefusal{status: http.StatusConflict, reason: reasonOwnerProfileGone,
+		return nil, &ownerRefusal{status: http.StatusConflict, reason: reasonOwnerUnitGone,
 			msg: "the governance profile this run was created under no longer exists; start a new run"}
 	}
 	if err != nil {
-		return nil, &ownerRefusal{status: http.StatusServiceUnavailable, reason: reasonOwnerProfileUnreadable,
+		return nil, &ownerRefusal{status: http.StatusServiceUnavailable, reason: reasonOwnerUnitUnreadable,
 			msg: loggedMsg(ctx, "resolve the owner's governance profile", err)}
 	}
 	return p, nil
@@ -676,7 +676,7 @@ func runRepos(run types.AgentRun, cfg *proxy.Config) []string {
 // (run_proxy_config.go); a run without one leaves the legacy repo field alone.
 func (s *Server) extendRefusal(r *http.Request, run types.AgentRun) *ownerRefusal {
 	ctx := r.Context()
-	if _, ref := s.ownerProfile(ctx, run); ref != nil {
+	if _, ref := s.ownerUnit(ctx, run); ref != nil {
 		return ref
 	}
 	var cfg *proxy.Config

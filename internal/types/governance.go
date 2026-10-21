@@ -300,12 +300,12 @@ type AutonomyResolution struct {
 	BoundBy []string        `json:"bound_by,omitempty"`
 }
 
-// GovernanceProfile is one named, assignable ceiling (the governance_profiles row of migrations 0052 and 0125).
+// GovernanceUnit is one named, assignable ceiling (the governance_units row of migrations 0052 and 0125).
 //
 // A STANDALONE profile (Overlay nil) is a full RunPolicySpec with replacement semantics: an
 // assigned profile IS the principal's ceiling; with no assignment a principal falls through to
 // Config.DefaultPolicy byte for byte. A COMPOSED profile (Overlay set) stores no raw Ceiling or
-// Limits, only a base (BaseProfileID, or the deployment default when nil) and an overlay that can
+// Limits, only a base (ParentID, or the deployment default when nil) and an overlay that can
 // only narrow it; the effective ceiling is composer.ApplyOverlay over the resolved base, computed
 // whenever authority is read (internal/api/governance_compose.go is the only reader). composer.Clamp
 // is NOT that meet (it drops workspace_mounts unconditionally, is order-dependent through
@@ -313,7 +313,7 @@ type AutonomyResolution struct {
 //
 // Name is the UNIQUE human handle: what an admin assigns by, what the console lists, and the
 // resolver's last ORDER BY tie-break.
-type GovernanceProfile struct {
+type GovernanceUnit struct {
 	ID        uuid.UUID        `json:"id"`
 	Name      string           `json:"name"`
 	Ceiling   RunPolicySpec    `json:"ceiling"`
@@ -328,9 +328,9 @@ type GovernanceProfile struct {
 	// ContactSet is a write instruction, never stored or serialized: true makes an
 	// upsert write Contact (nil clears it), false keeps the stored value.
 	ContactSet bool `json:"-"`
-	// BaseProfileID is the profile this one composes on; nil with a non-nil Overlay means the
+	// ParentID is the profile this one composes on; nil with a non-nil Overlay means the
 	// deployment default. Only a composed profile has one.
-	BaseProfileID *uuid.UUID `json:"base_profile_id,omitempty"`
+	ParentID *uuid.UUID `json:"parent_id,omitempty"`
 	// Overlay marks the profile composed. A non-nil pointer to an empty overlay is valid: it is the
 	// base unchanged.
 	Overlay *CeilingOverlay `json:"overlay,omitempty"`
@@ -339,9 +339,9 @@ type GovernanceProfile struct {
 }
 
 // Composed reports whether the profile is a base plus an overlay rather than a standalone ceiling.
-func (p GovernanceProfile) Composed() bool { return p.Overlay != nil }
+func (p GovernanceUnit) Composed() bool { return p.Overlay != nil }
 
-// GovernanceAssignment binds one profile to one subject (migration 0052's governance_assignments row).
+// GovernanceMembership binds one profile to one subject (migration 0052's governance_memberships row).
 //
 // SubjectType REUSES CapabilitySubjectType — the same vocabulary capability_grants is written
 // against; a second enum for the same thing is the dual-matcher drift this codebase warns
@@ -350,11 +350,11 @@ func (p GovernanceProfile) Composed() bool { return p.Overlay != nil }
 // Priority breaks ties WITHIN a tier (higher wins), the group tier's working lever since a
 // member is often in several groups. Never crosses tiers: a user-tier row beats every
 // group-tier row at any priority.
-type GovernanceAssignment struct {
+type GovernanceMembership struct {
 	ID          uuid.UUID             `json:"id"`
 	SubjectType CapabilitySubjectType `json:"subject_type"`
 	Subject     string                `json:"subject"`
-	ProfileID   uuid.UUID             `json:"profile_id"`
+	UnitID      uuid.UUID             `json:"unit_id"`
 	Priority    int                   `json:"priority"`
 	CreatedAt   time.Time             `json:"created_at"`
 	CreatedBy   string                `json:"created_by,omitempty"`

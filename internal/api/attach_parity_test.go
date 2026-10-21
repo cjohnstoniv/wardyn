@@ -29,7 +29,7 @@ import (
 // Rows 1, 2, 4 and 8 of 4.4 are the mint's (POST /attach/ticket), which knows nothing of the
 // transport; 16 and 17 are the caller's; 18 and 19 end open sessions (attach_local_test.go).
 func TestAttachParityTable(t *testing.T) {
-	profile := types.GovernanceProfile{ID: uuid.New(), Name: "ci", Limits: types.GovernanceLimits{DenyInteractive: true}}
+	profile := types.GovernanceUnit{ID: uuid.New(), Name: "ci", Limits: types.GovernanceLimits{DenyInteractive: true}}
 	deadMasks := func(t *testing.T) func(*Config) {
 		pool, err := pgxpool.New(context.Background(), "postgres://wardyn@127.0.0.1:1/wardyn?connect_timeout=1&sslmode=disable")
 		if err != nil {
@@ -75,9 +75,9 @@ func TestAttachParityTable(t *testing.T) {
 		{row: "10 ticket principal not the owner", principal: holderSecond, role: oidc.RoleUser,
 			status: http.StatusForbidden, reason: reasonAttachTicketNotYourRun},
 		{row: "11 deny_interactive", opts: func(*testing.T) localRigOpts {
-			return localRigOpts{run: func(r *types.AgentRun) { r.Task, r.GovernanceProfileID = "make test", &profile.ID }}
-		}, prepare: func(_ *testing.T, rig *localRig) { rig.st.profiles = []types.GovernanceProfile{profile} },
-			status: http.StatusForbidden, reason: string(authz.ReasonGovernanceProfile)},
+			return localRigOpts{run: func(r *types.AgentRun) { r.Task, r.UnitID = "make test", &profile.ID }}
+		}, prepare: func(_ *testing.T, rig *localRig) { rig.st.profiles = []types.GovernanceUnit{profile} },
+			status: http.StatusForbidden, reason: string(authz.ReasonGovernanceUnit)},
 		{row: "13 mask state unprovable", opts: func(t *testing.T) localRigOpts { return localRigOpts{cfg: deadMasks(t)} },
 			status: http.StatusServiceUnavailable, reason: string(authz.ReasonMaskStateUnavailable)},
 		{row: "14 thaw failed", opts: func(*testing.T) localRigOpts {

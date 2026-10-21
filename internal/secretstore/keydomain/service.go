@@ -21,7 +21,7 @@ import (
 )
 
 // The subject types of an assignment: the governance vocabulary
-// (migration 0052's governance_assignments).
+// (migration 0052's governance_memberships).
 const (
 	SubjectUser  = "user"
 	SubjectGroup = "group"

@@ -8,7 +8,7 @@
 
 import type { RunShape } from "../../../../lib/types/runs";
 import type { RunIntent } from "../draft/run-intent";
-import { harnessIds, withKeys } from "./lens-keys";
+import { dropAgentTasks, harnessIds, withKeys } from "./lens-keys";
 import { issue, type StepValidator } from "./step-issues";
 
 export type RunMode = "interactive" | "autonomous";
@@ -17,25 +17,28 @@ export const modeOf = (intent: RunIntent): RunMode | undefined =>
   intent.experience === "interactive" ? "interactive" : intent.experience === "background" ? "autonomous" : undefined;
 
 /** The carriers one shape and mode say. Undefined removes the key. */
-export function shapeCarriers(shape: RunShape, mode: RunMode | undefined, intent: RunIntent): Pick<RunIntent, "experience" | "workload" | "startup"> {
-  const harness = harnessIds(intent)[0];
+export function shapeCarriers(shape: RunShape, mode: RunMode | undefined, intent: RunIntent): Pick<RunIntent, "experience" | "workload" | "startup" | "tools"> {
+  const ids = harnessIds(intent);
+  const harness = ids[0];
+  // The run's task belongs to workload.agent, so it stays with that agent when it is still among the harnesses.
+  const taskAgent = ids.includes(intent.workload?.agent ?? "") ? intent.workload?.agent : harness;
   switch (shape) {
     case "environment":
-      return { experience: "interactive", workload: undefined, startup: undefined };
+      return { experience: "interactive", workload: undefined, startup: undefined, ...dropAgentTasks(intent) };
     case "application":
-      return { experience: "background", workload: { kind: "command", command: intent.workload?.command ?? "" }, startup: undefined };
+      return { experience: "background", workload: { kind: "command", command: intent.workload?.command ?? "" }, startup: undefined, ...dropAgentTasks(intent) };
     case "agent_task":
       if (mode === "autonomous") {
         return {
           experience: "background",
-          workload: { kind: "agent_task", ...(harness ? { agent: harness } : {}), task: intent.workload?.task ?? "" },
+          workload: { kind: "agent_task", ...(taskAgent ? { agent: taskAgent } : {}), task: intent.workload?.task ?? "" },
           startup: undefined,
         };
       }
       if (mode === "interactive") {
-        return { experience: "interactive", workload: undefined, startup: harness ? { kind: "harness", tool: harness } : undefined };
+        return { experience: "interactive", workload: undefined, startup: harness ? { kind: "harness", tool: harness } : undefined, ...dropAgentTasks(intent) };
       }
-      return { experience: undefined, workload: undefined, startup: undefined };
+      return { experience: undefined, workload: undefined, startup: undefined, ...dropAgentTasks(intent) };
   }
 }
 

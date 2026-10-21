@@ -26,7 +26,7 @@ func TestPendingApprovalErrorMessage(t *testing.T) {
 
 	full := (&client.PendingApprovalError{
 		Changes:      changes,
-		Deferred:     []client.GovernanceDeferredWrite{{Profile: "child", Base: "base"}},
+		Deferred:     []client.GovernanceDeferredWrite{{Unit: "child", Base: "base"}},
 		PruneSkipped: true,
 	}).Error()
 	for _, want := range []string{"2 governance change(s)", a.String() + ", " + b.String(), "1 dependent write(s) deferred", "prune skipped"} {

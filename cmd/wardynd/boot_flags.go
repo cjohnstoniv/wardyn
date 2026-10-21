@@ -238,9 +238,9 @@ type bootFlags struct {
 	// gated on (legacy, still boot-warned separately).
 	oidcAllowEmailMappings *bool
 	// Three default-off tightenings, each fed to the api.Config field of the same name.
-	capabilityGrantsVerifiedEmail    *bool
-	governanceProfilePutExistingOnly *bool
-	egressHostPortGrantsInert        *bool
+	capabilityGrantsVerifiedEmail *bool
+	governanceUnitPutExistingOnly *bool
+	egressHostPortGrantsInert     *bool
 
 	// Directory autocomplete (§I / PF-29), strictly OPT-IN. dirProvider empty is
 	// the whole feature off: no connector, no Graph reach, every "who" field
@@ -273,6 +273,9 @@ type bootFlags struct {
 	// gitPATBrokerOffRefused extends the member-run refusal of a resident PAT
 	// (broker off) to operators' runs: the staged retirement of `off`.
 	gitPATBrokerOffRefused *bool
+	// multiAgentTasks lets a background agent task run several agents side by side
+	// (off by default in 0.10.0).
+	multiAgentTasks *bool
 	// proxyResponseScrub has every run's proxy replace a value it injected when a
 	// relayed response echoes it back (off by default in 0.10.0).
 	proxyResponseScrub *bool
@@ -283,6 +286,9 @@ type bootFlags struct {
 	// file secret's value at the proxy (off by default in 0.10.0).
 	envSecretPlaceholders  *bool
 	fileSecretPlaceholders *bool
+	// runnerSecretPlaceholders keeps a runner_resident env or file secret's
+	// value at the organisation (off by default in 0.10.0).
+	runnerSecretPlaceholders *bool
 
 	// awsSSOEndpointOverride / allowTestEndpoints are the TEST hatch that makes
 	// "a member signs in on Kubernetes and their Bedrock run gets per-user
@@ -546,8 +552,8 @@ func parseBootFlags() *bootFlags {
 		oidcAllowEmailMappings:  flagBool("oidc-allow-email-mappings", "WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS", false, "allow an email-shaped value on a console People-step role mapping (POST /access/mappings); refused by default in favor of an App Role or group key (default false)"),
 		capabilityGrantsVerifiedEmail: flagBool("capability-grants-verified-email", "WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL", false,
 			"a capability allow grant written for a person's email matches them only when sign-in verifies the email (WARDYN_OIDC_EMAIL_DOMAINS or WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED) or WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS is on; deny grants match either way (default false: the match is kept and logged)"),
-		governanceProfilePutExistingOnly: flagBool("governance-profile-put-existing-only", "WARDYN_GOVERNANCE_PROFILE_PUT_EXISTING_ONLY", false,
-			"PUT /api/v1/governance/profiles/{id} replaces an existing profile only and answers 404 for an id no profile holds; create through POST (default false: a PUT creates at the id and is logged)"),
+		governanceUnitPutExistingOnly: flagBool("governance-unit-put-existing-only", "WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY", false,
+			"PUT /api/v1/governance/units/{id} replaces an existing profile only and answers 404 for an id no profile holds; create through POST (default false: a PUT creates at the id and is logged)"),
 		egressHostPortGrantsInert: flagBool("egress-host-port-grants-inert", "WARDYN_EGRESS_HOST_PORT_GRANTS_INERT", false,
 			"a stored egress_host allow grant whose value carries a :port is inert: marked on the Permissions read and never matched; deny grants keep matching (default false: matched by host and logged)"),
 
@@ -584,13 +590,15 @@ func parseBootFlags() *bootFlags {
 		// launch until an operator sets it. An operator who accepts the exfil
 		// risk inline_policy.go's filterUserGrants comment names, for the
 		// convenience of auto-adding what a scan finds, opts out here.
-		requireOpSetEgress:     flagBool("require-operator-set-egress", "WARDYN_REQUIRE_OPERATOR_SET_EGRESS", true, "require a workspace egress requirement's provenance to be operator_set before it is auto-added at launch; a scan_seeded egress host is skipped instead"),
-		gitPATBroker:           flagEnv("git-pat-broker", "WARDYN_GIT_PAT_BROKER", "on", `never-resident git_pat lane: "on" mints a non-GitHub forge's PAT proxy-side so it never enters the sandbox; "off" mints it into the sandbox process instead, for a forge that misbehaves under the broker's rewrite`),
-		envSecretPlaceholders:  flagBool("env-secret-placeholders", "WARDYN_ENV_SECRET_PLACEHOLDERS", false, "an env_secret grant whose scope names a host gets a placeholder in the sandbox, which the run's proxy replaces with the value on requests to that host (default false)"),
-		fileSecretPlaceholders: flagBool("file-secret-placeholders", "WARDYN_FILE_SECRET_PLACEHOLDERS", false, "a file_secret grant whose scope names a host gets a placeholder file in the sandbox, which the run's proxy replaces with the value on requests to that host (default false)"),
-		attachLocal:            flagEnv("attach-local", "WARDYN_ATTACH_LOCAL", "off", `"on": a person's CLI on their own runner's computer attaches to their run there, the terminal staying on that computer while the organisation keeps the admission, the writer lease, the recording and the audit; anything else keeps every attach on the relay`),
-		proxyResponseScrub:     flagBool("proxy-response-scrub", "WARDYN_PROXY_RESPONSE_SCRUB", false, "have each run's egress proxy replace a credential it added when an upstream response echoes it back to the sandbox (default false)"),
-		gitPATBrokerOffRefused: flagBool("git-pat-broker-off-refused", "WARDYN_GIT_PAT_BROKER_OFF_REFUSED", false, "while WARDYN_GIT_PAT_BROKER is off, refuse a run that would hold a resident PAT on operators' runs too; a member's run is refused it either way (default false)"),
+		requireOpSetEgress:       flagBool("require-operator-set-egress", "WARDYN_REQUIRE_OPERATOR_SET_EGRESS", true, "require a workspace egress requirement's provenance to be operator_set before it is auto-added at launch; a scan_seeded egress host is skipped instead"),
+		gitPATBroker:             flagEnv("git-pat-broker", "WARDYN_GIT_PAT_BROKER", "on", `never-resident git_pat lane: "on" mints a non-GitHub forge's PAT proxy-side so it never enters the sandbox; "off" mints it into the sandbox process instead, for a forge that misbehaves under the broker's rewrite`),
+		envSecretPlaceholders:    flagBool("env-secret-placeholders", "WARDYN_ENV_SECRET_PLACEHOLDERS", false, "an env_secret grant whose scope names a host gets a placeholder in the sandbox, which the run's proxy replaces with the value on requests to that host (default false)"),
+		fileSecretPlaceholders:   flagBool("file-secret-placeholders", "WARDYN_FILE_SECRET_PLACEHOLDERS", false, "a file_secret grant whose scope names a host gets a placeholder file in the sandbox, which the run's proxy replaces with the value on requests to that host (default false)"),
+		runnerSecretPlaceholders: flagBool("runner-secret-placeholders", "WARDYN_RUNNER_SECRET_PLACEHOLDERS", false, "a runner_resident env_secret or file_secret grant whose scope names a host gets a placeholder on the runner, which the organisation's egress replaces with the value on requests to that host (default false)"),
+		attachLocal:              flagEnv("attach-local", "WARDYN_ATTACH_LOCAL", "off", `"on": a person's CLI on their own runner's computer attaches to their run there, the terminal staying on that computer while the organisation keeps the admission, the writer lease, the recording and the audit; anything else keeps every attach on the relay`),
+		proxyResponseScrub:       flagBool("proxy-response-scrub", "WARDYN_PROXY_RESPONSE_SCRUB", false, "have each run's egress proxy replace a credential it added when an upstream response echoes it back to the sandbox (default false)"),
+		gitPATBrokerOffRefused:   flagBool("git-pat-broker-off-refused", "WARDYN_GIT_PAT_BROKER_OFF_REFUSED", false, "while WARDYN_GIT_PAT_BROKER is off, refuse a run that would hold a resident PAT on operators' runs too; a member's run is refused it either way (default false)"),
+		multiAgentTasks:          flagBool("multi-agent-tasks", "WARDYN_MULTI_AGENT_TASKS", false, "let a background agent task run several agents side by side in one sandbox, each on its own tools[].task: every agent's rules are met (strictest wins), the run ends when the last agent exits and fails if any failed; off refuses a request that gives an agent its own task"),
 
 		awsSSOEndpointOverride: flagEnv("aws-sso-endpoint-override", "WARDYN_AWS_SSO_ENDPOINT_OVERRIDE", "", "TEST ONLY: re-point both AWS IAM Identity Center services (sso-oidc and the sso portal) at this base URL, so an AWS SSO walk can run with no real AWS tenant. Requires -allow-test-endpoints; warns at every boot. Empty (default) uses the real AWS endpoints"),
 		awsSSOProxyInject:      flagEnv("aws-sso-proxy-inject", "WARDYN_AWS_SSO_PROXY_INJECT", api.AWSSSOProxyInjectFlagDefault(), `"on": inject a captured AWS SSO session proxy-side, leaving only a placeholder in the sandbox. "off" was removed in 0.10.0 and refuses boot; an unrecognised value takes the default`),
@@ -703,6 +711,7 @@ func parseBootFlags() *bootFlags {
 	// exits 2 here, in every auth mode, rather than on the first request.
 	api.ValidateEnvToggles()
 	cliutil.EnvBool(types.EnvReserveEditors, false)
+	cliutil.EnvBool(types.EnvKubectlCLI, false)
 
 	// An empty -listen/WARDYN_LISTEN is not a bind — see normalizeListenAddr.
 	// Done HERE, once, so every listen classifier and the http.Server itself

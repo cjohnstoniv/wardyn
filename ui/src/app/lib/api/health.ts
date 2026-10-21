@@ -18,7 +18,7 @@ import { appURL } from "../base-path";
 //
 // It carries NO DOOR FIELD, deliberately: the door is a property of the
 // caller's PROFILE, not of the allocation, and rides beside it as
-// Me.user_drive_denied_by_profile. Folding them would make the two states the
+// Me.user_drive_denied_by_unit. Folding them would make the two states the
 // member surfaces exist to tell apart — "denied AND unallocated" vs "simply
 // unallocated" — inexpressible.
 export interface MeUserDrive {
@@ -74,7 +74,7 @@ export interface Me {
   // open door. Non-empty is the whole bit — and it renders even when
   // user_drive is null, the state where "ask an admin for an allocation" is
   // the wrong advice.
-  user_drive_denied_by_profile?: string;
+  user_drive_denied_by_unit?: string;
   // The user view (0.7.4; renamed in 0.8 from member_mode/"view as member" —
   // docs/OPERATIONS.md's "Renamed in 0.8" appendix): this session is an ADMIN
   // who asked to be treated as a user. Every tier field above is already
@@ -162,7 +162,7 @@ export interface PolicyRef {
   email?: string;
   request_url?: string;
   request_text?: string;
-  // On a refusal: the kind of layer that refused ("deployment" or "profile").
+  // On a refusal: the kind of layer that refused ("deployment" or "unit").
   layer?: string;
   // The person changed the policy for this run, inside their ceiling.
   overridden?: boolean;
@@ -381,6 +381,12 @@ export const health = {
     // mirror — token_login already folds it into whether the token form
     // shows. Absent on an older daemon, which must read the same as `false`.
     sso_only?: boolean;
+    // CLI sign-in (internal/types CLISignInHealthz): whether wardyn login can sign in here, whether it can
+    // without a browser, and the origin device proofs are checked against. Wire mirror only; absent on an
+    // older daemon.
+    cli_sign_in?: boolean;
+    cli_paste_sign_in?: boolean;
+    cli_sign_in_origin?: string;
     // SSH gateway discovery (run-detail's "Connect via SSH" pane): absent /
     // undefined on a deployment with the gateway off (WARDYN_SSH_LISTEN
     // unset) or an older daemon — both must read as "no pane", never a
@@ -573,7 +579,7 @@ export const health = {
   // permissions, governance profiles). `operator` deliberately stays
   // super-admin-only — the two are NOT complementary now that role has three
   // values, so gate each control on the one that matches its route.
-  // `user_drive` / `user_drive_denied_by_profile` are the 0.7 member-drive
+  // `user_drive` / `user_drive_denied_by_unit` are the 0.7 member-drive
   // pair — see MeUserDrive above for why the door is a sibling field and not
   // a property of the allocation.
   async whoami(): Promise<Me | null> {
