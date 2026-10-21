@@ -463,9 +463,10 @@ const presetOverlayWithOperatorDetails = `{"allowed_domains":["a.example"],` +
 	`"llm_inspection":{"mode":"alert","workspace_secret_names":["corp-llm-key"]}}`
 
 // A stored policy_overlay is redacted on the two reads a member reaches exactly where inline_policy is: the
-// operator-only details (mount source paths, secret names) go, everything else stays. The author, an admin,
-// reads it whole, and a GET -> edit -> PUT round trip of theirs stores it unchanged.
-func TestPresetPolicyOverlayIsRedactedForMembersOnly(t *testing.T) {
+// operator-only details (mount source paths, secret names) go, everything else stays. A security admin
+// loses only the mount source paths. The author, a super admin, reads it whole, and a GET -> edit -> PUT
+// round trip of theirs stores it unchanged.
+func TestPresetPolicyOverlayIsRedactedBelowTheSuperAdmin(t *testing.T) {
 	f := newMemPresetFixture(t)
 	req := client.PresetRequest{Request: client.CreateRunRequest{
 		Agent: "claude-code", Repo: "acme/widgets", PolicyOverlay: json.RawMessage(presetOverlayWithOperatorDetails)}}
@@ -473,6 +474,7 @@ func TestPresetPolicyOverlayIsRedactedForMembersOnly(t *testing.T) {
 		t.Fatalf("create = %d: %s", w.Code, w.Body.String())
 	}
 	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
+	security := ssoSession(t, "sub-security", "security@corp.example", oidc.RoleSecurityAdmin)
 	admin := ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
 
 	read := func(cookie *http.Cookie, path string) string {
@@ -493,6 +495,16 @@ func TestPresetPolicyOverlayIsRedactedForMembersOnly(t *testing.T) {
 		for _, kept := range []string{"a.example", "git.corp.example"} {
 			if !strings.Contains(got, kept) {
 				t.Errorf("member GET %s lost %q, which is not operator-only: %s", path, kept, got)
+			}
+		}
+		// A mount's host path is the super admin's alone (specReadSecurity); the secret names stay.
+		sec := read(security, path)
+		if strings.Contains(sec, "/home/operator") || !strings.Contains(sec, `\u003credacted\u003e`) {
+			t.Errorf("security admin GET %s shows a mount host path, or no sentinel: %s", path, sec)
+		}
+		for _, kept := range []string{"corp-git-pat", "corp-llm-key", "/home/agent/.claude"} {
+			if !strings.Contains(sec, kept) {
+				t.Errorf("security admin GET %s lost %q: %s", path, kept, sec)
 			}
 		}
 		whole := read(admin, path)

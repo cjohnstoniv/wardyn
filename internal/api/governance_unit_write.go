@@ -88,17 +88,18 @@ type governanceEffective struct {
 	Error    string                 `json:"error,omitempty"`
 }
 
-// newUnitView pairs a stored profile with its resolution for an admin response. The effective
-// ceiling goes through the same redaction the stored one does.
-func newUnitView(row types.GovernanceUnit, res *ResolvedUnit, err error) governanceUnitView {
-	row.Ceiling = redactSpecForRead(row.Ceiling, true)
+// newUnitView pairs a stored profile with its resolution for an admin response read at tier. The
+// effective ceiling and the overlay go through the same redaction the stored ceiling does.
+func newUnitView(row types.GovernanceUnit, res *ResolvedUnit, err error, tier specReadTier) governanceUnitView {
+	row.Ceiling = redactSpecForRead(row.Ceiling, tier)
+	row.Overlay = redactOverlayForRead(row.Overlay, tier)
 	v := governanceUnitView{GovernanceUnit: row}
 	switch {
 	case err != nil:
 		v.Effective.Error = adminResolveError(err)
 	case res != nil:
 		v.Effective = governanceEffective{
-			Ceiling: redactSpecForRead(res.Ceiling, true), Limits: res.Limits, Warnings: res.AdminWarnings,
+			Ceiling: redactSpecForRead(res.Ceiling, tier), Limits: res.Limits, Warnings: res.AdminWarnings,
 		}
 	}
 	return v
@@ -158,7 +159,9 @@ func finishGovernanceUnitRequest(req governanceUnitRequest) (governanceUnitReque
 		return governanceUnitRequest{}, "name is invalid"
 	}
 	if !reflect.DeepEqual(req.Ceiling, types.RunPolicySpec{}) {
-		if err := validateAuthoredPolicySpec(req.Ceiling); err != nil {
+		// A kept mount's sentinel source is not a path: buildGovernanceUnit puts the stored one back
+		// and judges the result.
+		if err := validateAuthoredPolicySpec(withoutKeptMounts(req.Ceiling)); err != nil {
 			return governanceUnitRequest{}, "invalid ceiling: " + err.Error()
 		}
 	}
@@ -248,11 +251,11 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 			if refusal := s.unitPutCreateRefusal(r, id, status, all); refusal != nil {
 				return types.GovernanceUnit{}, refusal
 			}
-			p, res, err := s.buildGovernanceUnit(createdBy, id, req, all)
+			p, res, keep, err := s.buildGovernanceUnit(createdBy, s.isOperator(r.Context()), id, req, all)
 			effective = res
 			exemptCtx := withGovernanceMemberships(r.Context(), assignments)
 			if err == nil && mode == govQueue && !s.unitWriteExempt(exemptCtx, all, p, res) {
-				held = &heldUnitWrite{all: all, row: p, res: res}
+				held = &heldUnitWrite{all: all, row: p, res: res, keep: keep}
 				return p, errHoldForApproval
 			}
 			return p, err
@@ -262,7 +265,11 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 		return
 	}
 	var refusal *unitWriteError
+	var tier *mountTierRefusal
 	switch {
+	case errors.As(err, &tier):
+		s.refuse(w, r, tier.decision())
+		return
 	case errors.As(err, &refusal):
 		writeErrorReason(w, refusal.status, refusal.reason, refusal.msg)
 		return
@@ -287,7 +294,7 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 	if posture := s.rubricPostureAdvisory(r.Context(), effective); posture != "" {
 		warns = append(warns, posture)
 	}
-	writeJSON(w, status, governanceUnitResponse{Unit: newUnitView(saved, effective, nil), Warnings: warns})
+	writeJSON(w, status, governanceUnitResponse{Unit: newUnitView(saved, effective, nil, s.specReadTierFor(r.Context())), Warnings: warns})
 }
 
 // unitPutCreateRefusal answers a PUT (status 200) naming an id no profile in all holds. A run keeps
@@ -378,32 +385,56 @@ func composedFrom(all []types.GovernanceUnit, id uuid.UUID, comp compositionRequ
 // buildGovernanceUnit decides the row one write stores and what it resolves to, from every
 // profile as the write transaction reads them (all). Anything it returns as *unitWriteError is a
 // refusal the caller can fix; the row is stored only if it returns nil.
-func (s *Server) buildGovernanceUnit(createdBy string, id uuid.UUID, req governanceUnitRequest, all []types.GovernanceUnit) (types.GovernanceUnit, *ResolvedUnit, error) {
-	p := types.GovernanceUnit{
+//
+// super is whether the request being served is a super admin's (isOperator): the proposer's at a
+// direct or held write, the approver's when a held write is applied. It decides what the mount guard
+// (governance_mount_keep.go) admits, and keep is what that guard decided.
+func (s *Server) buildGovernanceUnit(createdBy string, super bool, id uuid.UUID, req governanceUnitRequest,
+	all []types.GovernanceUnit) (p types.GovernanceUnit, res *ResolvedUnit, keep mountKeep, err error) {
+	if !super {
+		defer func() { err = scrubMountSources(err, s.mountSourcesOf(all)) }()
+	}
+	p = types.GovernanceUnit{
 		ID: id, Name: req.Name, CreatedBy: createdBy, Contact: req.contact, ContactSet: req.contactSet,
 	}
 	// UNIQUE(name) is judged here too, so a held create or rename is refused at proposal
 	// and not left pending to fail at every approval.
 	if slices.ContainsFunc(all, func(x types.GovernanceUnit) bool { return x.ID != id && x.Name == req.Name }) {
-		return p, nil, writeRefusal(http.StatusConflict, reasonGovernanceUnitNameConflict, "a governance profile named %q already exists", req.Name)
+		return p, nil, keep, writeRefusal(http.StatusConflict, reasonGovernanceUnitNameConflict, "a governance profile named %q already exists", req.Name)
 	}
 	base, overlay, limits := composedFrom(all, id, req.comp)
 	switch {
 	case overlay == nil && base != nil:
-		return p, nil, writeRefusal(http.StatusBadRequest, reasonGovernanceOverlayInvalid, "parent_id: a base needs an overlay (send overlay: {} for the base unchanged)")
+		return p, nil, keep, writeRefusal(http.StatusBadRequest, reasonGovernanceOverlayInvalid, "parent_id: a base needs an overlay (send overlay: {} for the base unchanged)")
 	case overlay == nil && limits != nil:
-		return p, nil, writeRefusal(http.StatusBadRequest, reasonGovernanceOverlayInvalid, "overlay_limits: needs an overlay")
+		return p, nil, keep, writeRefusal(http.StatusBadRequest, reasonGovernanceOverlayInvalid, "overlay_limits: needs an overlay")
 	}
 	if overlay != nil {
 		if !reflect.DeepEqual(req.Ceiling, types.RunPolicySpec{}) || !reflect.DeepEqual(req.Limits, types.GovernanceLimits{}) {
-			return p, nil, writeRefusal(http.StatusBadRequest, reasonGovernanceOverlayInvalid,
+			return p, nil, keep, writeRefusal(http.StatusBadRequest, reasonGovernanceOverlayInvalid,
 				"a composed profile states its policy in overlay and overlay_limits: ceiling and limits must be empty")
+		}
+		// Only an overlay the request sent is judged: an absent one is the stored row's, unchanged.
+		if req.comp.overlaySet && overlay.WorkspaceMounts != nil {
+			out, held, sets, kerr := keepMounts("overlay.workspace_mounts", *overlay.WorkspaceMounts, s.storedOverlayMounts(all, id, base), super)
+			if kerr != nil {
+				return p, nil, keep, kerr
+			}
+			cp := *overlay
+			cp.WorkspaceMounts, overlay = &out, &cp
+			keep.overlay, keep.setsHostPath = &held, sets
 		}
 		p.ParentID, p.Overlay, p.OverlayLimits = base, overlay, limits
 	} else {
+		out, held, sets, kerr := keepMounts("ceiling.workspace_mounts", req.Ceiling.WorkspaceMounts, s.storedCeilingMounts(all, id), super)
+		if kerr != nil {
+			return p, nil, keep, kerr
+		}
+		req.Ceiling.WorkspaceMounts = out
+		keep.ceiling, keep.setsHostPath = held, sets
 		// A standalone row's ceiling is judged in full here, an empty one included (decode skips it).
 		if err := validateAuthoredPolicySpec(req.Ceiling); err != nil {
-			return p, nil, writeRefusal(http.StatusBadRequest, specRefusalReason(err, reasonGovernanceUnitRequestInvalid), "invalid ceiling: %v", err)
+			return p, nil, keep, writeRefusal(http.StatusBadRequest, specRefusalReason(err, reasonGovernanceUnitRequestInvalid), "invalid ceiling: %v", err)
 		}
 		// The structural bound (governance_grantbound.go). A profile may narrow the
 		// deployment's credential eligibility; it may never mint eligibility the
@@ -411,14 +442,15 @@ func (s *Server) buildGovernanceUnit(createdBy string, id uuid.UUID, req governa
 		// time because Config.DefaultPolicy is env-borne and a redeploy that drops
 		// a pairing must not leave old profiles serving it.
 		if err := governanceGrantsWithinCeiling(req.Ceiling.EligibleGrants, s.cfg.DefaultPolicy.EligibleGrants); err != nil {
-			return p, nil, writeRefusal(http.StatusBadRequest, reasonGovernanceCeilingInvalid, "invalid ceiling: %v", err)
+			return p, nil, keep, writeRefusal(http.StatusBadRequest, reasonGovernanceCeilingInvalid, "invalid ceiling: %v", err)
 		}
 		if err := ceilingDuplicatePairing(req.Ceiling.EligibleGrants); err != nil {
 			return p, nil, writeRefusal(http.StatusBadRequest, reasonGovernanceCeilingInvalid, "invalid ceiling: %v", err)
 		}
 		p.Ceiling, p.Limits = req.Ceiling, req.Limits
 	}
-	return s.checkGraphWrite(p, all)
+	p, res, err = s.checkGraphWrite(p, all)
+	return p, res, keep, err
 }
 
 // checkGraphWrite refuses a row that would break the graph and resolves it: its base must exist, no

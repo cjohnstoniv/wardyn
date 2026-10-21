@@ -27,9 +27,10 @@ type RunPolicyView struct {
 	RecordedAt *time.Time           `json:"recorded_at,omitempty"`
 	Source     RunPolicySource      `json:"source"`
 	Spec       *types.RunPolicySpec `json:"spec,omitempty"`
-	// Redacted is true when the reader is below the security admin tier and the
-	// policy holds mount sources or secret names, which read as "<redacted>" or
-	// are dropped. Such a spec is a starting point, not a policy that validates.
+	// Redacted is true when the reader was shown less than a super admin: mount
+	// sources read as "<redacted>" below the super admin tier, and secret names
+	// are dropped below the security admin tier. Such a spec is a starting
+	// point, not a policy that validates.
 	Redacted bool `json:"redacted"`
 	// Changes is never null.
 	Changes  []RunPolicyChange `json:"changes"`

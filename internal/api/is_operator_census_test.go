@@ -76,6 +76,11 @@ var isOperatorCensus = map[string]int{
 	// Audit rows: host detail stays the super admin's on the feed reads and the partition export.
 	"audit.go:auditRowsFor":                          1,
 	"audit_partition_export.go:exportAuditPartition": 1,
+	// A mount's host path is the super admin's: the spec read tier withholds it below
+	// that tier, and a profile write or its approval sets one only as a super admin.
+	"policies.go:specReadTierFor":                  1,
+	"governance_unit_write.go:writeGovernanceUnit": 1,
+	"governance_change_kinds.go:applyUnitChange":   1,
 	// The measured reason can carry a substrate's own error text, so only an operator reads it.
 	"runner_usage.go:remoteUsage": 1,
 	// Operators host their own runner without the self_host_runner grant (capabilities.md).

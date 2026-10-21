@@ -139,7 +139,7 @@ func TestBoundaryNoLimitsIsByteIdentical(t *testing.T) {
 // knobJSON is one top-level knob of spec as the dry run and provenance compare it.
 func knobJSON(t *testing.T, spec types.RunPolicySpec, knob string) string {
 	t.Helper()
-	v := reflect.ValueOf(canonicalKnobs(redactSpecForRead(spec, true)))
+	v := reflect.ValueOf(canonicalKnobs(redactSpecForRead(spec, specReadFull)))
 	i := slices.Index(policyKnobFields, knob)
 	if i < 0 {
 		t.Fatalf("no knob %q", knob)

@@ -71,7 +71,8 @@ docs/operations/admin-only-writes.md=3769 share=35
 # docs/operations/three-roles.md 4238 adds 20 over 4218, measured: where GET /governance keeps the resolved ceiling (0.9.3 ASK-6).
 # docs/operations/three-roles.md 4650 = 4630 + 20, measured after merging the ASK-6 rubric docs with the resolved-ceiling note.
 # docs/operations/three-roles.md 4682 adds 5 (0.10 API-2): a baseline mark covers that host only.
-docs/operations/three-roles.md=4682 share=35
+# docs/operations/three-roles.md 4720 adds 38 over 4682, measured (0.10 POL-MOUNT): mount host paths are the exception to the security tier's profile authoring.
+docs/operations/three-roles.md=4720 share=35
 # docs/operations/provider-policy.md 1362 adds 84 over 1278, measured (0.10.0 GHPAT): the GitHub per_user row that takes each person's own token.
 # docs/operations/provider-policy.md 1382 adds 20 over 1362, measured (0.10.0 GHPAT r2): a run cannot mix a shared and a personal-token GitHub row.
 docs/operations/provider-policy.md=1382 share=35
@@ -85,7 +86,9 @@ docs/operations/ownership-and-offboarding.md=2414 share=35
 # docs/operations/governance-writes.md 3170 adds 12 over 3158, measured (0.10 LAY-A): the org walls row in the covered-writes table.
 # docs/operations/governance-writes.md 3171 measured (0.10 BOUNDARY): the org walls renamed the Wardyn boundary, with modes.
 # 0.10 SI-POLICY: docs/operations/governance-writes.md 3192 adds 21 over 3171: the approval-rule row, measured.
-docs/operations/governance-writes.md=3192 share=35
+# docs/operations/governance-writes.md 3185 adds 14 over 3171, measured (0.10 POL-MOUNT): a profile change that sets a mount host path is super-approved.
+# docs/operations/governance-writes.md 3206 = ours 3192 + theirs 3185 - base 3171 at the 0.10 W4f merge of POL-MOUNT onto the train.
+docs/operations/governance-writes.md=3206 share=35
 # 0.9.4 L8: docs/operations/member-runs.md 1054 adds 10 over 1044: ssh_key delivery claims bounded.
 docs/operations/member-runs.md=1054 share=35
 # docs/operations/user-drives.md 4818 adds 14 over 4804 (0.9 release text for the fix sets merged at release); measured.

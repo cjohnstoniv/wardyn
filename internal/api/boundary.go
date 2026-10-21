@@ -229,14 +229,15 @@ func (s *Server) handleBoundaryDryRun(w http.ResponseWriter, r *http.Request) {
 }
 
 // boundaryDryRun meets the deployment default, each profile as it composes, each stored policy and so
-// each assignment with b. The values shown pass the read redaction a security admin's read does.
+// each assignment with b. The values shown pass the read redaction of the caller's tier.
 func (s *Server) boundaryDryRun(ctx context.Context, b types.Boundary) (boundaryReport, error) {
+	tier := s.specReadTierFor(ctx)
 	meet := func(spec types.RunPolicySpec, limits types.GovernanceLimits) ([]boundaryChange, error) {
 		after, afterLimits, _, err := boundaryMeet(b, spec, limits)
 		if err != nil {
 			return nil, err
 		}
-		return boundaryChanges(redactSpecForRead(spec, true), redactSpecForRead(after, true), limits, afterLimits), nil
+		return boundaryChanges(redactSpecForRead(spec, tier), redactSpecForRead(after, tier), limits, afterLimits), nil
 	}
 	report := boundaryReport{Units: []boundaryReportRow{}, StoredPolicies: []boundaryReportRow{}, Memberships: []boundaryReportAssign{}}
 	var err error
