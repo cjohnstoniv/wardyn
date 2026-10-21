@@ -402,6 +402,12 @@ func (s *Server) approvalRuleDryRun(ctx context.Context, rule types.ApprovalRule
 		if !ok {
 			continue
 		}
+		if isTerminalRunState(runs[ap.RunID].State) {
+			// decide() would cancel an ended run's approvals (refuseIfRunEnded), a write the report drop does not
+			// cover: answer its refusal here instead.
+			report.Pending = append(report.Pending, row(ap, m, "skip", reasonApprovalRunEnded))
+			continue
+		}
 		code, reason := s.policyDecide(ap.ID, &policyDecider{rule: rule, m: m, dryRun: true, report: true})
 		if code == http.StatusOK {
 			report.Pending = append(report.Pending, row(ap, m, "would_approve", ""))
