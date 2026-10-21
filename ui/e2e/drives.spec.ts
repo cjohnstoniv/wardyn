@@ -583,8 +583,9 @@ test.describe("drives — the registry is SUPER's, and no super admin's nav list
     page,
   }) => {
     await gotoConsole(page, "admin");
-    // No Drives nav entry for any admin tier, in either view (§6): the two entry
-    // points below are the whole door (#2827; view-switch.spec.ts pins the security tier).
+    // No Drives nav entry for a super admin, in either view (§6): the two entry
+    // points below are the whole door. Only a security admin's Admin view
+    // lists it, for its grants and preview (packet M-A, view-switch.spec.ts).
     await expect(page.getByRole("link", { name: new RegExp(`^${DRIVES.TITLE}`) })).toHaveCount(0);
 
     await navTo(page, "Workspaces");
@@ -608,23 +609,61 @@ test.describe("drives — the registry is SUPER's, and no super admin's nav list
     await expect(page).toHaveURL(/\/admin\/drives$/);
   });
 
-  test("a security admin is offered neither door, and every write on the screen is parked", async ({ page }) => {
-    await mockSecurityAdminRole(page);
+  // #2827 (b): the nav item is a security admin's own, and the page behind it is
+  // a read: the drives and allocations list, the preview, and no write control.
+  test("a security admin is offered neither door, but reads the Drives page with no write control", async ({ page }) => {
+    const name = `secadmin-read-${randomUUID().slice(0, 8)}`;
+    const res = await page.request.post("/api/v1/drives", {
+      headers: auth,
+      data: { name, backend: "docker_volume", home_template: "hash", reclaim: "retain" },
+    });
+    expect(res.status(), await res.text()).toBe(201);
+    const driveId = (await res.json()).id as string;
+    try {
+      await mockSecurityAdminRole(page);
+      await gotoConsole(page, "admin");
+
+      // The registry's two doors are the super admin's.
+      await navTo(page, "Workspaces");
+      await expect(page.getByRole("button", { name: DRIVES.TITLE, exact: true })).toHaveCount(0);
+      await navToRoute(page, "/admin/settings");
+      await expect(page.getByTestId("user-drives-card")).toHaveCount(0);
+
+      // Their own door is the sidebar item.
+      await sidebarLink(page, "User drives").click();
+      await expect(page).toHaveURL(/\/admin\/drives$/);
+      await expect(page.getByRole("heading", { name: DRIVES.TITLE, level: 1 })).toBeVisible();
+      await expect(page.getByRole("cell", { name, exact: true })).toBeVisible();
+      await expect(page.getByText(OPERATOR_ONLY_REASON)).toHaveCount(0);
+      await expect(page.getByText(DRIVES.FETCH_FAILED_TITLE)).toHaveCount(0);
+
+      // Read-only: none of the writes is on the page, disabled or otherwise.
+      await expect(page.getByRole("button", { name: DRIVES.NEW_CTA, exact: true })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: `${DRIVES.EDIT} ${name}` })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: `${DRIVES.DELETE} ${name}` })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: DRIVES.ADD_CTA, exact: true })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: new RegExp(`^${PERM.REMOVE} `) })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: DRIVES.PREVIEW_CTA, exact: true })).toBeVisible();
+    } finally {
+      await page.request.delete(`/api/v1/drives/${driveId}`, { headers: auth });
+    }
+  });
+
+  test("a member is offered neither door either", async ({ page }) => {
+    await mockMemberRole(page);
     await gotoConsole(page);
 
-    // Their authority over drives is the governance door above, not the
-    // registry — so they see no entry point at all.
     await navTo(page, "Workspaces");
     await expect(page.getByRole("button", { name: DRIVES.TITLE, exact: true })).toHaveCount(0);
-    await navToRoute(page, "/admin/settings");
-    await expect(page.getByTestId("user-drives-card")).toHaveCount(0);
+    // Governance is not theirs either — the door that could shut their drive
+    // is a screen they never see.
+    await expect(sidebarLink(page, "Governance")).toHaveCount(0);
 
-    // Reaching /drives directly: GET /drives is operatorOnly, so a real
-    // security admin's read answers 403 — and the screen renders that as the
-    // TIER refusal (PageHeader + OperatorOnlyHint), never as the transport
-    // sentence with a Retry that would 403 forever. The role splice above
-    // leaves the bearer the admin's, so the 403 is routed here to be the real
-    // server's shape, not a fixture's.
+    // Reaching /drives directly: the read answers 403 for a member, and the
+    // screen renders that as the TIER refusal (PageHeader + OperatorOnlyHint),
+    // never as the transport sentence with a Retry that would 403 forever. The
+    // role splice leaves the bearer the admin's, so the 403 is routed here to
+    // be the real server's shape, not a fixture's.
     await page.route("**/api/v1/drives", async (route) => {
       if (route.request().method() !== "GET") return route.fallback();
       await route.fulfill({
@@ -639,17 +678,6 @@ test.describe("drives — the registry is SUPER's, and no super admin's nav list
     await expect(page.getByRole("button", { name: DRIVES.NEW_CTA, exact: true })).toHaveCount(0);
     await expect(page.getByText(DRIVES.FETCH_FAILED_TITLE)).toHaveCount(0);
     await expect(tealActions(page)).toHaveCount(0);
-  });
-
-  test("a member is offered neither door either", async ({ page }) => {
-    await mockMemberRole(page);
-    await gotoConsole(page);
-
-    await navTo(page, "Workspaces");
-    await expect(page.getByRole("button", { name: DRIVES.TITLE, exact: true })).toHaveCount(0);
-    // Governance is not theirs either — the door that could shut their drive
-    // is a screen they never see.
-    await expect(sidebarLink(page, "Governance")).toHaveCount(0);
   });
 });
 

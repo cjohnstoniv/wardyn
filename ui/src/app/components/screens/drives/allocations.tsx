@@ -127,9 +127,11 @@ export function AllocationsBlock({
   onChanged: () => void;
 }) {
   // The tier gate off the context this block already sits inside, not drilled
-  // from the screen — the same read the sibling UserDrivesCard makes. Every
-  // write control below is disabled by it; the server is what refuses.
-  const disabled = !useOperator();
+  // from the screen — the same read the sibling UserDrivesCard makes. A
+  // security admin gets a read-only block: the Remove column and the add form
+  // are not rendered (the server's allocation routes are theirs, but this page
+  // is the read-only one); the preview below stays, it writes nothing.
+  const readOnly = !useOperator();
   const [toRemove, setToRemove] = React.useState<UserDriveGrant | null>(null);
   const [busy, setBusy] = React.useState(false);
   const driveName = (id: string) => drives.find((d) => d.id === id)?.name ?? id;
@@ -186,7 +188,7 @@ export function AllocationsBlock({
                   <TableHead>{GOV.COL_PRIORITY}</TableHead>
                   <TableHead>{DRIVES.COL_OVERRIDES}</TableHead>
                   <TableHead>{PERM.COL_ADDED}</TableHead>
-                  <TableHead className="w-[90px]" />
+                  {!readOnly && <TableHead className="w-[90px]" />}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -208,17 +210,18 @@ export function AllocationsBlock({
                     <TableCell className="whitespace-nowrap text-muted-foreground" title={absoluteTime(g.created_at)}>
                       {relativeTime(g.created_at)}
                     </TableCell>
-                    <TableCell>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={disabled}
-                        onClick={() => setToRemove(g)}
-                        aria-label={`${PERM.REMOVE} ${subjectText(g, typeName)}`}
-                      >
-                        {PERM.REMOVE}
-                      </Button>
-                    </TableCell>
+                    {!readOnly && (
+                      <TableCell>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setToRemove(g)}
+                          aria-label={`${PERM.REMOVE} ${subjectText(g, typeName)}`}
+                        >
+                          {PERM.REMOVE}
+                        </Button>
+                      </TableCell>
+                    )}
                   </TableRow>
                 ))}
               </TableBody>
@@ -226,7 +229,7 @@ export function AllocationsBlock({
           )}
         </div>
 
-        {collapsed ? (
+        {readOnly ? null : collapsed ? (
           <div
             data-testid="drives-add-allocation-collapsed"
             className="mt-4 flex items-center justify-between gap-3 border-t border-border bg-surface-2 px-6 py-4 opacity-60"

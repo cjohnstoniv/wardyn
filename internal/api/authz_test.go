@@ -583,9 +583,9 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/key-domains":                                         {class: classSecurity},
 	"PUT /api/v1/key-domains/assignments/{subject_type}/{subject}":    {class: classSecurity},
 	"DELETE /api/v1/key-domains/assignments/{subject_type}/{subject}": {class: classSecurity},
-	// User drives (migration 0054) — SPLIT (issue #168, 0.8). The four routes
-	// that NAME A HOST PATH (host_root) or a cluster storage class — creating,
-	// listing, updating, and removing the drive itself — stay classAdmin, and
+	// User drives (migration 0054) — SPLIT (issue #168, 0.8). The three routes
+	// that WRITE A HOST PATH (host_root) or a cluster storage class — creating,
+	// updating, and removing the drive itself — stay classAdmin, and
 	// the contrast with the seven /governance rows directly above is the tier
 	// line in one pair: "never the host" is precisely what separates SUPER
 	// from securityOps. The other three — granting an allocation, revoking
@@ -595,8 +595,9 @@ var routeMatrix = map[string]classifiedRoute{
 	// they reach through /governance. A member is refused on all seven and
 	// learns about their OWN drive from /me.user_drive instead — the same
 	// "your own answer, never the whole table" split the governance rows draw
-	// against /policies/default.
-	"GET /api/v1/drives":                {class: classAdmin},
+	// against /policies/default. The list is classSecurity too (0.10, #2827):
+	// read-only, host_root and storage_class withheld from a security admin.
+	"GET /api/v1/drives":                {class: classSecurity},
 	"POST /api/v1/drives":               {class: classAdmin},
 	"PUT /api/v1/drives/{id}":           {class: classAdmin},
 	"DELETE /api/v1/drives/{id}":        {class: classAdmin},
@@ -1819,8 +1820,9 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// 0.10 adds the Wardyn boundary read, write and dry run on the security tier (= 92 SEC).
 	// 0.10 FEAT-1KUBE adds PUT /components/{id}/kubectl-token beside the component writes (= 73 SUPER).
 	// 0.10 approval rules add their list, write, delete and dry run on the security tier (= 96 SEC).
-	if sec != 96 || super != 73 {
-		t.Errorf("tier split = %d security / %d admin, want 96 / 73 (the 4 approval-rule routes + the 3 Wardyn boundary routes + the node record + the 2 organization pool runner routes + the 4 organization runner routes + the SUPER list and delete of people's drives + the 2 /remote-runners reads and the people-policy pair + the 2 /governance/credential-delivery routes + the token move + the 5 service-identity routes + the 4 invitation routes + the runner revoke + the runners list, detail, token list and revoke and switch read + the 2 /governance/egress-baseline routes + the 3 /key-domains routes + §B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke + the fleet capacity read + GET /people + the audit retention read and drop + the person erasure + the 4 /governance/changes routes + GET /approval-notify/status + the SCIM status read, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes, MINUS #548's retired paste and disconnect, PLUS the identity unbind, runner registration token mint, the runners switch write, 0.9's 6 runner-pool writes and the 3 template-group-admins routes and the 3 /shared-secrets routes and the remote-hosted runner rename)", sec, super)
+	// 0.10 moves GET /drives to the security tier for a read-only Drives page (= 97 SEC, 72 SUPER).
+	if sec != 97 || super != 72 {
+		t.Errorf("tier split = %d security / %d admin, want 97 / 72 (the 4 approval-rule routes + the 3 Wardyn boundary routes + the node record + the 2 organization pool runner routes + the 4 organization runner routes + the SUPER list and delete of people's drives + the 2 /remote-runners reads and the people-policy pair + the 2 /governance/credential-delivery routes + the token move + the 5 service-identity routes + the 4 invitation routes + the runner revoke + the runners list, detail, token list and revoke and switch read + the 2 /governance/egress-baseline routes + the 3 /key-domains routes + §B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke + the fleet capacity read + GET /people + the audit retention read and drop + the person erasure + the 4 /governance/changes routes + GET /approval-notify/status + the SCIM status read, MINUS record, PLUS #168's 3 moved /drives routes and the moved GET /drives; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes and the moved GET /drives, MINUS #548's retired paste and disconnect, PLUS the identity unbind, runner registration token mint, the runners switch write, 0.9's 6 runner-pool writes and the 3 template-group-admins routes and the 3 /shared-secrets routes and the remote-hosted runner rename)", sec, super)
 	}
 }
 

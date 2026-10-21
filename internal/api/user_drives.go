@@ -27,11 +27,12 @@
 //     place that can tell "the client said false" from "the client said
 //     nothing" — see userDriveGrantRequest.Enabled.
 //
-// Four routes stay super-only: the ones that name a host path (host_root) or
-// a cluster storage class — creating, listing, updating, and removing the
-// drive itself. The other three — granting an allocation, revoking one, and
-// previewing whose drive resolves — moved to securityOps in 0.8 (issue #168):
-// none of the three names a host path. The tier argument for each route is
+// Three routes stay super-only: the ones that write a host path (host_root) or
+// a cluster storage class — creating, updating, and removing the drive itself.
+// The other three — granting an allocation, revoking one, and previewing whose
+// drive resolves — moved to securityOps in 0.8 (issue #168): none of the three
+// names a host path. The list is securityOps too (0.10, issue #2827), READ-ONLY,
+// with host_root and storage_class withheld from a security admin. The tier argument for each route is
 // written at the mountUserDriveRoutes call that decides it (routes.go).
 package api
 
@@ -52,9 +53,10 @@ import (
 )
 
 // mountUserDriveRoutes registers the /drives family — SEVEN routes split
-// across two admin tiers. Four name a HOST PATH (host_root) or a cluster
-// storage class and stay on operatorOnly (SUPER): creating, listing,
-// updating, and removing the drive itself. The other three — granting an
+// across two admin tiers. Three write a HOST PATH (host_root) or a cluster
+// storage class and stay on operatorOnly (SUPER): creating, updating, and
+// removing the drive itself. The list is on securityOps, with those two fields
+// withheld from a caller who is not a super admin. The other three — granting an
 // allocation, revoking one, and previewing whose drive resolves — sit on
 // securityOps: a security admin already reaches drives through the
 // DenyUserDrive door on a governance profile, and none of the three names a
@@ -71,7 +73,7 @@ import (
 // arrange for, and the every-conditional-route-mounted doctrine exists so it
 // never has to.
 func (s *Server) mountUserDriveRoutes(operatorOnly, securityOps chi.Router) {
-	operatorOnly.Get("/drives", s.handleGetUserDrives)
+	securityOps.Get("/drives", s.handleGetUserDrives)
 	operatorOnly.Post("/drives", s.handleCreateUserDrive)
 	operatorOnly.Put("/drives/{id}", s.handleUpdateUserDrive)
 	operatorOnly.Delete("/drives/{id}", s.handleDeleteUserDrive)
@@ -139,7 +141,8 @@ type userDrivesResponse struct {
 }
 
 // handleGetUserDrives returns the whole drives picture: every drive, and a
-// BOUNDED page of the allocations. operatorOnly (routes.go).
+// BOUNDED page of the allocations. securityOps (routes.go), with host fields
+// withheld from a caller who is not a super admin.
 //
 // The two reads have different costs and only one needed fixing. ListUserDrives
 // is an index-only scan over user_drive_grants_drive_id_idx and stays whole —
@@ -213,14 +216,21 @@ func (s *Server) handleGetUserDrives(w http.ResponseWriter, r *http.Request) {
 	if truncated {
 		w.Header().Set("X-Wardyn-Truncated", "true")
 	}
-	writeJSON(w, http.StatusOK, userDrivesResponse{
+	resp := userDrivesResponse{
 		Drives:              drives,
 		Grants:              grants,
 		HostRootsConfigured: s.userDriveHostRootsUsableWithin(r.Context()),
 		RunnerTarget:        s.cfg.RunnerTarget,
 		Disabled:            provider.Disabled,
 		GrantTotal:          total,
-	})
+	}
+	// "Never the host" is the line between the two admin tiers: anyone but a
+	// super admin gets the allow-listed projection, built by name into fresh
+	// values (user_drives_security_view.go).
+	if !s.isOperator(r.Context()) {
+		resp = securityAdminDrivesView(resp)
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // the org switch and the deployment's drive ceiling
