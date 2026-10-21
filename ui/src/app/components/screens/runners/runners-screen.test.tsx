@@ -385,7 +385,7 @@ describe("Admin -> Runners tiers", () => {
     // The block sits between the tab purpose and the tab strip.
     const block = screen.getByRole("heading", { name: "Add this computer" });
     const purpose = screen.getByText(/^This tab lists every runner:/);
-    const tabs = screen.getByRole("navigation", { name: "Runners sections" });
+    const tabs = screen.getByRole("tablist", { name: "Runners sections" });
     expect(purpose.compareDocumentPosition(block) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(block.compareDocumentPosition(tabs) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
@@ -924,12 +924,12 @@ describe("Admin -> Runners: Managed install (MDM)", () => {
     setField(mdm.getByRole("textbox"), "alice@example.com");
     await user.click(mdm.getByRole("button", { name: "Create token" }));
     await mdm.findByText("wdr_secret");
-    const strip = screen.getByRole("navigation", { name: "Runners sections" });
-    await user.click(within(strip).getByRole("button", { name: "Pools" }));
+    const strip = screen.getByRole("tablist", { name: "Runners sections" });
+    await user.click(within(strip).getByRole("tab", { name: "Pools" }));
     expect(await screen.findByTestId("pools-tab")).toBeInTheDocument();
     // Hidden, not gone: nothing of it is reachable on Pools.
     expect(screen.queryByRole("heading", { name: "Add this computer" })).toBeNull();
-    await user.click(within(strip).getByRole("button", { name: "Runners" }));
+    await user.click(within(strip).getByRole("tab", { name: "Runners" }));
     expect(await screen.findByText("wdr_secret")).toBeInTheDocument();
   });
 
