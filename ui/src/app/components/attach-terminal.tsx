@@ -600,6 +600,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
             key={copyOffer.id}
             offer={copyOffer}
             onDone={() => copyGateRef.current?.dismiss()}
+            onHold={(held) => copyGateRef.current?.hold(held)}
             copyRef={offerCopyRef}
           />
         ) : null}

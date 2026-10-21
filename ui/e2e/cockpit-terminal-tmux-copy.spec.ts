@@ -33,6 +33,8 @@ async function open(page: Page) {
   await waitForShell(page, screen);
   return { screen, read };
 }
+// The offer lives this long (attach-terminal-clipboard.ts OFFER_TTL_MS).
+const OFFER_TTL_MS = 10_000;
 const clipboard = (page: Page) => page.evaluate(() => navigator.clipboard.readText());
 
 test("a dragged line becomes an offer, and Copy writes exactly what was selected", async ({ page }) => {
@@ -56,6 +58,25 @@ test("a dragged line becomes an offer, and Copy writes exactly what was selected
   await offer.getByRole("button", { name: "Copy" }).click();
   expect(await clipboard(page)).toBe("alpha beta gamma");
   await expect(offer).toHaveCount(0);
+});
+
+// #2491 (WCAG 2.2.1): the offer used to vanish 10 seconds after it appeared, however long a person was reading it.
+test("an offer the pointer is over stays past its 10 seconds, and goes once the pointer leaves", async ({ page }) => {
+  const { screen, read } = await open(page);
+  await page.keyboard.type("printf 'alpha beta gamma\\n'");
+  await page.keyboard.press("Enter");
+  await expect.poll(async () => (await read()).split("\n").some((l) => l.trim() === "alpha beta gamma")).toBe(true);
+  await settledGrid(page, screen);
+  const row = await rowOf(screen, /^alpha beta gamma\s*$/);
+  await dragCells(page, screen, [0, row], [16, row]);
+  const offer = page.getByTestId("terminal-copy-offer");
+  await expect(offer).toBeVisible();
+
+  await offer.hover();
+  await page.waitForTimeout(OFFER_TTL_MS + 1_500);
+  await expect(offer).toBeVisible();
+  await page.mouse.move(2, 2);
+  await expect(offer).toHaveCount(0, { timeout: OFFER_TTL_MS + 5_000 });
 });
 
 test("a double-click copies the word and a triple-click the line", async ({ page }) => {

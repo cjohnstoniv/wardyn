@@ -157,6 +157,31 @@ describe("AttachTerminal copy offer", () => {
     expect(live.textContent).toBe("Copy selection. 5 characters. Ctrl+C copies.");
   });
 
+  // #2491 (WCAG 2.2.1): the card waits while the pointer is over it, and its countdown starts again afterwards.
+  it("an offer the pointer is over does not expire; leaving it gives the full time again", async () => {
+    // clearTimeout and clearInterval too: holding the offer clears its timer.
+    vi.useFakeTimers({ toFake: ["setTimeout", "setInterval", "clearTimeout", "clearInterval"], shouldAdvanceTime: true });
+    try {
+      const { ws, grid } = await attach(false);
+      dragHello(grid);
+      await out(ws, tmuxCopy("hello"));
+      const card = toast() as HTMLElement;
+      fireEvent.pointerEnter(card);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(OFFER_TTL_MS + 1000);
+      });
+      expect(toast()).not.toBeNull();
+      expect(screen.getByText(/Closes in 10s/)).toBeInTheDocument();
+      fireEvent.pointerLeave(card);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(OFFER_TTL_MS + 100);
+      });
+      expect(toast()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("Ctrl+C while the toast is focused is a Copy", async () => {
     const { ws, grid } = await attach(false);
     dragHello(grid);
