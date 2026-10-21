@@ -57,6 +57,7 @@ import { Refusal } from "../wardyn/refusal";
 import { REFUSAL, RUN_NOT_FOUND } from "../wardyn/copy/refusal";
 import { isHeld } from "../wardyn/live-approvals";
 import { ReasonDialog } from "../wardyn/reason-dialog";
+import { useRefusedApprovals } from "../../lib/hooks/use-refused-approvals";
 import { APPROVALS } from "../../lib/approvals-copy";
 import { usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
 import { useConsoleMode } from "../wardyn/console-view";
@@ -115,6 +116,7 @@ function RunDetailPage({ id }: { id: string }) {
   const [profileRunId, setProfileRunId] = React.useState<string | null>(null);
 
   const { copyAsync } = useCopyToClipboard(1400);
+  const { refused, noteRefusal } = useRefusedApprovals();
   const [decide, setDecide] = React.useState<{
     id: string;
     action: "approve" | "deny";
@@ -193,6 +195,7 @@ function RunDetailPage({ id }: { id: string }) {
       void load(false);
       return true;
     } catch (err) {
+      noteRefusal(decide.id, err);
       toast.error(decide.action === "approve" ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED, {
         description: getErrorMessage(err),
       });
@@ -369,6 +372,7 @@ function RunDetailPage({ id }: { id: string }) {
               onDecide={(approvalId, action, kind) => setDecide({ id: approvalId, action, kind })}
               onAdoDecide={decideAdoDirect}
               onPushDecide={decidePushDirect}
+              refused={refused}
             />
           </TabsContent>
 

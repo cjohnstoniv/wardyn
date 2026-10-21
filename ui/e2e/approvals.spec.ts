@@ -8,6 +8,8 @@ import type { Page } from "@playwright/test";
 import { test, expect, MEMBER_PRINCIPAL, asRealMember, asRealSecurityAdmin, consoleAPI, gotoConsole, sql } from "./fixtures";
 import { APPROVAL, RUN_COCKPIT, SECURITY_ONLY_REASON, UNTIL_PAST } from "../src/app/components/wardyn/copy";
 import { APPROVALS } from "../src/app/lib/approvals-copy";
+import { APPROVALS_TAB } from "../src/app/components/wardyn/copy/approvals";
+import { DENIED } from "../src/app/lib/permissions-copy";
 import { REAUTH_ROW, REAUTH_TITLE } from "../src/app/components/wardyn/model-access-copy";
 import { toDatetimeLocalValue } from "../src/app/lib/datetime-local";
 import { aheadByHours } from "../src/app/lib/test-clock";
@@ -890,6 +892,55 @@ test.describe("F-12 — LiveApprovals row gate mirrors canDecideApproval, not a 
       await expect(row.getByRole("button", { name: "Approve" })).toBeDisabled();
       await expect(row.getByRole("button", { name: "Deny" })).toBeDisabled();
       await expect(panel.getByText(SECURITY_ONLY_REASON, { exact: true })).toBeVisible();
+    } finally {
+      deleteApproval(id);
+    }
+  });
+
+  // #3438: the Approvals page card and the run's Approvals tab close on the same refusal the strip does.
+  async function refuseFromDialog(page: Page, scope: ReturnType<Page["locator"]>, marker: string, id: string): Promise<void> {
+    await page.route(`**/api/v1/approvals/${id}/approve`, (route) =>
+      route.fulfill({
+        status: 403,
+        json: { error: `you are not granted egress host ${marker} — an admin decides this one, or can grant it to you`, reason: "capability_egress_host" },
+      }),
+    );
+    await expect(scope.getByRole("button", { name: "Approve" })).toBeEnabled();
+    await expect(scope.getByText(DENIED.APPROVE_CHIP, { exact: true })).toHaveCount(0);
+    await scope.getByRole("button", { name: "Approve" }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByRole("button", { name: "Approve", exact: true }).click();
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(scope.getByRole("button", { name: "Approve" })).toBeDisabled();
+    await expect(scope.getByRole("button", { name: "Deny" })).toBeDisabled();
+    await expect(scope.getByText(DENIED.APPROVE_CHIP, { exact: true })).toBeVisible();
+  }
+
+  test("a capability_egress_host refusal turns the Approvals page card's buttons off and says why", async ({ page }) => {
+    clearPending();
+    const runId = await memberRunningRun(page);
+    const marker = uniqueMarker("3438-card");
+    const id = seedPending({ kind: "egress_domain", runId, scope: { host: marker, port: 443 } });
+    try {
+      await page.goto("/approvals");
+      await expect(page.getByRole("heading", { name: "Approvals", level: 1 })).toBeVisible();
+      const card = page.locator("div.rounded-xl").filter({ hasText: markerRe(marker) }).filter({ has: page.getByRole("button", { name: "Approve" }) }).last();
+      await refuseFromDialog(page, card, marker, id);
+    } finally {
+      deleteApproval(id);
+    }
+  });
+
+  test("a capability_egress_host refusal turns the run Approvals tab's buttons off and says why", async ({ page }) => {
+    clearPending();
+    const runId = await memberRunningRun(page);
+    const marker = uniqueMarker("3438-tab");
+    const id = seedPending({ kind: "egress_domain", runId, scope: { host: marker, port: 443 } });
+    try {
+      await page.goto(`/runs/${runId}`);
+      await page.getByRole("tab", { name: /^Approvals/ }).click();
+      await refuseFromDialog(page, page.getByRole("region", { name: APPROVALS_TAB.WAITING }), marker, id);
     } finally {
       deleteApproval(id);
     }

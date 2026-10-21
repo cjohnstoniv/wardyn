@@ -32,6 +32,7 @@ export function ApprovalsTab({
   onAdoDecide,
   onPushDecide,
   viewerBlocked = false,
+  refused,
 }: {
   approvals: ApprovalRequest[];
   // This page always has the run loaded by the time this tab can render
@@ -42,6 +43,8 @@ export function ApprovalsTab({
   onPushDecide: (id: string, approve: boolean) => Promise<void>;
   /** The pending decisions are ones this viewer cannot make (viewerBlockedOnDecision). */
   viewerBlocked?: boolean;
+  /** Requests the server refused this viewer with capability_egress_host. */
+  refused?: ReadonlySet<string>;
 }) {
   const adminView = useConsoleMode() === "admin";
   // A run that holds Azure DevOps tokens widens one when access is approved.
@@ -87,6 +90,7 @@ export function ApprovalsTab({
                 onAct={(action) => onDecide(a.id, action, a.kind)}
                 onAdoDecide={onAdoDecide}
                 onPushDecide={onPushDecide}
+                refused={refused?.has(a.id)}
               />
             ),
           )}
