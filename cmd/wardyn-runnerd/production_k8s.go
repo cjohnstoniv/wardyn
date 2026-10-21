@@ -153,15 +153,9 @@ func k8sRunnerHooks(ctx context.Context, identity runneridentity.Identity, state
 		m.ProvisionalDeadlines()
 		return nil
 	}
-	rt, err := runnerRuntimeWith(ctx, identity, stateDir, drv, k8s.SandboxRef, relay, unknownCapacity, runtimeExtras{
-		keystore:  runneragent.Keystore{Set: ks.Set, Get: ks.Get, Delete: ks.Delete, DeleteAll: ks.DeleteAll, Precheck: ks.Precheck},
-		noPosture: true,
-		arch:      opts.arch,
-		options:   offline.Options{ProxySelfLapses: true, Tick: sink.Tick},
-		started:   started,
-		closeAlso: sink.Close,
-		linuxVM:   linuxVM,
-	})
+	extras := k8sExtras(opts, ks, started, sink)
+	extras.linuxVM = linuxVM
+	rt, err := runnerRuntimeWith(ctx, identity, stateDir, drv, k8s.SandboxRef, relay, unknownCapacity, extras)
 	if err != nil {
 		return runnerRuntime{}, errors.Join(err, relay.Close(), sink.Close())
 	}
@@ -193,6 +187,19 @@ func enableK8sLinuxVM(ctx context.Context, drv *k8s.Driver) *runnerwire.VMCaps {
 	}
 	slog.InfoContext(ctx, "Linux VM sandboxes are on", "machine_type", m.MachineType)
 	return &runnerwire.VMCaps{MachineType: m.MachineType, CPUModel: m.CPUModel, QEMUVersion: m.QEMUVersion}
+}
+
+// k8sExtras is what the k8s runner adds to the shared runtime, including the last failure its caps event reports.
+func k8sExtras(opts serveOptions, ks *keystore.K8s, started func(context.Context, *offline.Manager) error, sink *spoolSink) runtimeExtras {
+	return runtimeExtras{
+		keystore:    runneragent.Keystore{Set: ks.Set, Get: ks.Get, Delete: ks.Delete, DeleteAll: ks.DeleteAll, Precheck: ks.Precheck},
+		noPosture:   true,
+		arch:        opts.arch,
+		options:     offline.Options{ProxySelfLapses: true, Tick: sink.Tick},
+		started:     started,
+		closeAlso:   sink.Close,
+		lastFailure: opts.status.failure,
+	}
 }
 
 // startDecisionSink serves the state directory's sink (stateDirSink) on the pod IP at the sink port.

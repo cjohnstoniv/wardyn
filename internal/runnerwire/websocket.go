@@ -95,6 +95,9 @@ func DialWebSocket(ctx context.Context, orgURL, runnerID string, client *http.Cl
 	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	c, resp, err := websocket.Dial(ctx, address, &websocket.DialOptions{HTTPClient: &hc, CompressionMode: websocket.CompressionDisabled})
 	if err != nil {
+		if resp != nil {
+			err = &upgradeError{err: err, status: resp.StatusCode}
+		}
 		if resp != nil && resp.Body != nil {
 			// The org's refusal names its reason code in the JSON body.
 			var body struct {

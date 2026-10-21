@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 )
 
 // An upgrade keeps the binary it replaces as wardyn-runnerd.previous: a first install leaves none, a rerun
@@ -81,7 +83,7 @@ func TestStatusFileHoldsTheLinkStateAndNoSecret(t *testing.T) {
 	if st, _ := readStatus(t, dir); st.State != "starting" || st.PID != os.Getpid() {
 		t.Errorf("at start: %+v", st)
 	}
-	w.linkChanged(false, `Get "https://org.example/stream": proxyconnect tcp: dial http://user:Pw-secret-31@proxy.corp:3128: connection refused`)
+	w.linkChanged(false, `Get "https://org.example/stream": proxyconnect tcp: dial http://user:Pw-secret-31@proxy.corp:3128: connection refused`, runnerwire.StageProxy)
 	st, raw := readStatus(t, dir)
 	if st.State != "offline" || st.LastErrorAt == nil || !st.LastErrorAt.Equal(now) || !strings.Contains(st.LastError, "connection refused") {
 		t.Errorf("after a failed attempt: %+v", st)
@@ -90,7 +92,7 @@ func TestStatusFileHoldsTheLinkStateAndNoSecret(t *testing.T) {
 		t.Errorf("status.json holds a proxy credential:\n%s", raw)
 	}
 	now = now.Add(time.Minute)
-	w.linkChanged(true, "")
+	w.linkChanged(true, "", "")
 	st, _ = readStatus(t, dir)
 	if st.State != "connected" || !st.Since.Equal(now) || st.LastError == "" {
 		t.Errorf("once connected the last error stays, with the state's own start: %+v", st)

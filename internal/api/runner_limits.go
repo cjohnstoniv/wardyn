@@ -55,6 +55,7 @@ func (s *Server) capsFromRunner(ctx context.Context, runnerID uuid.UUID, session
 		slog.WarnContext(ctx, "wardynd: runner reported an unknown architecture", slog.String("runner_id", runnerID.String()), slog.String("arch", strings.ToValidUTF8(r.Arch, "?")))
 		r.Arch = ""
 	}
+	r.Failure = s.reportedFailure(ctx, runnerID, caps.LastFailure)
 	if cs, ok := s.cfg.Store.(runnerCapsStore); ok {
 		if _, err := cs.RecordRunnerCaps(ctx, runnerID, session, r, s.cfg.Now()); err != nil {
 			slog.WarnContext(ctx, "wardynd: record runner caps", slog.String("runner_id", runnerID.String()), slog.Any("err", err))
@@ -63,6 +64,20 @@ func (s *Server) capsFromRunner(ctx context.Context, runnerID uuid.UUID, session
 	if rs, ok := s.cfg.Store.(store.RunnerStore); ok {
 		s.writeOwedRunnerConnect(ctx, rs, runnerID, session, r.Version)
 	}
+}
+
+// reportedFailure keeps the failure a runner's caps event reports when its stage is on runnerwire's
+// closed list and its time is not in the future by more than a clock's slack, else none (the row keeps
+// the one it holds). The stage is a label the runner asserts; no error text is read or stored.
+func (s *Server) reportedFailure(ctx context.Context, runnerID uuid.UUID, f *runnerwire.Failure) *types.RunnerFailure {
+	if f == nil {
+		return nil
+	}
+	if !f.Stage.Valid() || f.At.IsZero() || f.At.After(s.cfg.Now().Add(time.Hour)) {
+		slog.WarnContext(ctx, "wardynd: runner reported an unusable failure", slog.String("runner_id", runnerID.String()), slog.Int("stage_bytes", len(f.Stage)))
+		return nil
+	}
+	return &types.RunnerFailure{Stage: string(f.Stage), At: f.At.UTC(), Ongoing: f.Ongoing}
 }
 
 // handleUpdateMyRunner is PUT /api/v1/me/runners/{id}: a person declares their own runner's limits,

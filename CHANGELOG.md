@@ -44,6 +44,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- A runner now tells the organisation why it could not connect (migration `0200_runner_last_failure`). On its next
+  connect it reports the stage its last attempt stopped at (`dns`, `proxy`, `network`, `tls`, `upgrade`, `auth`,
+  `registration`, `session`, `engine`, `image`, `relay` or `ca`) and when, never an error's text, and the console
+  shows it under the runner as runner-reported. A running Docker runner also re-checks that its engine reaches the
+  run relay, every five minutes and on each connect, and says so in its log, in `status.json` and in the console
+  when it is lost or back.
 - `wardyn attach <run-id>` keeps the terminal on this computer when the run is on your own runner here and the
   organisation allows it (`WARDYN_ATTACH_LOCAL`, off by default); otherwise it goes through the organisation, as
   before. One line on stderr names the path. `--via local|relay|auto` forces a path, and `--take-over` takes the

@@ -99,6 +99,17 @@ type Runner struct {
 	// RegistrationTokenID is the token the runner redeemed, nil on a runner registered before 0181. The org
 	// claim reads its minter from it.
 	RegistrationTokenID *uuid.UUID `json:"-"`
+	// LastFailure is the stage the runner last said its attempt to connect, start or reach its run
+	// relay stopped at: runner_asserted, nil until it reports one.
+	LastFailure *RunnerFailure `json:"-"`
+}
+
+// RunnerFailure is a runner's last failed stage and when. Stage is a word from runnerwire.Stage's
+// closed list, never an error's text. Ongoing is true while the failure is going on (the run relay).
+type RunnerFailure struct {
+	Stage   string    `json:"stage"`
+	At      time.Time `json:"at"`
+	Ongoing bool      `json:"ongoing,omitempty"`
 }
 
 // OwnerHeld reports whether the row names its owner the way its kind requires: a person's runner a

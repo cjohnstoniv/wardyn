@@ -25,6 +25,10 @@ type runnerRuntime struct {
 	hooks runnerwire.RunnerHooks
 	run   func(context.Context) error
 	close func() error
+	// refreshCaps reports the runner's state again over the session that is up. With none up it returns
+	// an error (errOffline on Docker), so the caller keeps the report pending for the next session; nil
+	// func when it has no state to report between connects.
+	refreshCaps func(context.Context) error
 }
 
 type runnerHooksBuilder func(context.Context, runneridentity.Identity, string, serveOptions) (runnerRuntime, error)
@@ -37,6 +41,8 @@ type serveOptions struct {
 	// orgCAFile is --org-ca-file: extra roots for runnerd's own connection to the organisation only. It is
 	// read by serve and register, and never reaches a sandbox or a run's proxy.
 	orgCAFile string
+	// status is serve's status file; nil in a test that has none. Every method on it is nil-safe.
+	status *statusWriter
 	// proxyImagePinned is whether proxyImage was named on purpose (proxyImagePinned), so the
 	// organisation's answer at connect does not replace it.
 	proxyImagePinned bool
@@ -121,6 +127,11 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 			return err
 		}
 		defer unlock()
+		// The status file from the start, so a refusal below is on record for doctor and for the next connect.
+		status := newStatusWriter(stateDir)
+		defer status.stopped()
+		defer func() { status.startupFailed(retErr) }()
+		opts.status = status
 		// A pinned image (the flag, whose default is the environment) outranks everything. Otherwise
 		// the organisation's answer at each connect wins; until the first connect, the image it named
 		// at registration, else this binary's release image, else an unmarked image an earlier setup left.
@@ -131,12 +142,12 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 			warnPinnedProxyImageSkew(opts.proxyImage, buildVersion())
 		}
 		if err := trustedCAAtStartup(cmd.Context(), &opts, stateDir); err != nil {
-			return err
+			return atStage(runnerwire.StageCA, err)
 		}
 		// The org-only roots stay in this function: opts goes to the runtime that builds the sandboxes' trust.
 		orgCA, orgCAs, err := loadOrgCA(opts.orgCAFile)
 		if err != nil {
-			return err
+			return atStage(runnerwire.StageCA, err)
 		}
 		if orgCA != "" {
 			slog.InfoContext(cmd.Context(), "organisation-only CA trust configured", "file", opts.orgCAFile, "cert_count", orgCAs)
@@ -165,8 +176,6 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 		if err != nil {
 			return err
 		}
-		status := newStatusWriter(stateDir)
-		defer status.stopped()
 		client, err := runnerwire.NewClient(runnerwire.ClientConfig{OrgURL: org, RunnerID: identity.RunnerID.String(), PrivateKey: identity.PrivateKey, Hooks: runtime.hooks, HTTPClient: httpClient, LinkChanged: status.linkChanged})
 		if err != nil {
 			return err

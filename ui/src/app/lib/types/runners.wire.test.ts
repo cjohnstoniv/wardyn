@@ -45,6 +45,7 @@ describe("runners management wire", () => {
     ["internal/types/runner_inventory.go", "RunnerSettingsRequest", "RunnerSettingsRequest"],
     ["internal/types/runner_registration.go", "RunnerRegistrationToken", "RunnerRegistrationToken"],
     ["internal/types/runner.go", "RunnerPosture", "RunnerPosture"],
+    ["internal/types/runner.go", "RunnerFailure", "RunnerFailure"],
     ["internal/types/runner_inventory.go", "RunnerCapacity", "RunnerCapacity"],
     ["internal/types/runner_limits.go", "RunnerAmounts", "RunnerAmounts"],
     ["internal/types/runner_limits.go", "RunnerLimits", "RunnerLimits"],
@@ -78,6 +79,14 @@ describe("runners management wire", () => {
     if (!m) throw new Error(`type ${name} not found`);
     expect(go.length).toBeGreaterThanOrEqual(2);
     expect(new Set([...m[1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]))).toEqual(new Set(go));
+  });
+
+  it("RunnerFailureStage is the Go runnerwire.Stage list", () => {
+    const go = [...read("internal/runnerwire/stage.go").matchAll(/Stage\w+\s+Stage = "([a-z]+)"/g)].map((m) => m[1]);
+    const m = /export type RunnerFailureStage =([^;]+);/.exec(stripComments(ts));
+    if (!m) throw new Error("type RunnerFailureStage not found");
+    expect(go.length).toBeGreaterThanOrEqual(12);
+    expect(new Set([...m[1].matchAll(/"([a-z]+)"/g)].map((x) => x[1]))).toEqual(new Set(go));
   });
 
   it("RunnerManagementReason is the Go reason block", () => {

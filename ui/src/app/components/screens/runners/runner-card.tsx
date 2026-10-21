@@ -15,7 +15,7 @@ import { RES, RUNNER_KIND, RUNNER_V6 } from "../../wardyn/copy/runner-pools";
 import { RUNNER, RUNNERS } from "../../wardyn/copy/runners";
 import { Mono } from "../../wardyn/code-block";
 import { Chip } from "../../wardyn/primitives";
-import { OfflineNote, ResourceTable } from "./resource-table";
+import { FailureNote, OfflineNote, ResourceTable } from "./resource-table";
 import { runnerRes } from "./resources";
 import { RunnerChip, TrustChip } from "./runner-chip";
 import { timeLeft } from "./runner-display";
@@ -127,6 +127,7 @@ export function RunnerCard({ f, onOpen, onOpenPool }: { f: FleetRunner; onOpen: 
         <div className="min-w-0 px-3.5 pb-3 pt-2.5">
           {res ? <ResourceTable view={res} /> : <p className="text-body text-muted-foreground">{RES.LIMITS_NOT_SET}</p>}
           {!online && <OfflineNote neverConnected={self?.state === "claimed" && !self.last_seen_at} />}
+          <FailureNote failure={self?.last_failure} />
         </div>
       )}
     </li>

@@ -251,6 +251,27 @@ describe("Admin -> Runners list", () => {
     expect(within(desk).getByText("This runner is offline. Its capacity isn't counted as available until it reconnects.")).toBeInTheDocument();
   });
 
+  // ATT-FU (#3296, #3298): the runner's last failure is one note under the runner's own notice, the sentence for its
+  // closed stage and when; an ongoing failure (the run relay) is a warning, one the runner is past is information.
+  it("a runner's last failure shows as one note on its card and in its drawer, and a runner with none shows none", async () => {
+    const ago = new Date(Date.now() - 3 * 3600_000).toISOString();
+    listMock.mockResolvedValue([
+      runner({ id: "r-tls", name: "mbp-tls", online: true, last_failure: { stage: "tls", at: ago } }),
+      runner({ id: "r-relay", name: "mbp-relay", online: true, last_failure: { stage: "relay", at: ago, ongoing: true } }),
+      DESK,
+    ]);
+    const user = userEvent.setup();
+    renderScreen();
+    await screen.findByRole("button", { name: "mbp-tls" });
+    const noteOf = (name: string) => cardOf(name).querySelector("[data-failure-note]") as HTMLElement;
+    expect(noteOf("mbp-tls").textContent).toBe("Last problem the runner reported (3h ago): The runner did not trust this server's certificate.");
+    expect(noteOf("mbp-relay").textContent).toBe("The container engine could not reach the runner's run relay. Runs on this runner cannot start until that is fixed.");
+    expect(noteOf("desk-2")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "mbp-relay" }));
+    const drawer = await screen.findByRole("dialog");
+    expect(drawer.querySelector("[data-failure-note]")?.textContent).toContain("Runs on this runner cannot start until that is fixed.");
+  });
+
   it("a card names the kind, Machine, owner and pools, and shows Total, Per run, In use and Available", async () => {
     remoteListMock.mockResolvedValue([SHARED]);
     renderScreen();
