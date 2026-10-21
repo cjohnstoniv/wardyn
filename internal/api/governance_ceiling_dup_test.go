@@ -37,8 +37,8 @@ func TestProfileWriteRefusesDuplicateCeilingPairing(t *testing.T) {
 		}
 	})
 	t.Run("an overlay", func(t *testing.T) {
-		body := `{"name":"child","base_profile_id":"` + govCovBase.String() + `","overlay":{"eligible_grants":` + dup + `}}`
-		ref := govCovAsRefusal(t, govCovBuildErr(t, s, []types.GovernanceProfile{base}, govCovPID, body))
+		body := `{"name":"child","parent_id":"` + govCovBase.String() + `","overlay":{"eligible_grants":` + dup + `}}`
+		ref := govCovAsRefusal(t, govCovBuildErr(t, s, []types.GovernanceUnit{base}, govCovPID, body))
 		if ref.status != 400 || ref.reason != reasonGovernanceOverlayInvalid || !strings.Contains(ref.msg, wantMsg) {
 			t.Errorf("refusal = %+v", ref)
 		}
@@ -52,7 +52,7 @@ func TestProfileWriteRefusesDuplicateCeilingPairing(t *testing.T) {
 	t.Run("a stored row keeps resolving, owner_only forced as before", func(t *testing.T) {
 		stored := govCovStandalone(govCovTop, "stored", "pypi.org")
 		stored.Ceiling.EligibleGrants = []types.GrantSpec{vendor("vendor-key", true), vendor("vendor-key", false)}
-		res, err := s.composeChain([]types.GovernanceProfile{stored})
+		res, err := s.composeChain([]types.GovernanceUnit{stored})
 		if err != nil || len(res.Ceiling.EligibleGrants) != 2 {
 			t.Fatalf("resolve = %+v, %v", res, err)
 		}
