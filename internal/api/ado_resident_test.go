@@ -74,7 +74,7 @@ func TestADOResident_OptInIsPerConnection(t *testing.T) {
 	other := entraRow(func(r *types.GitProvider) {
 		r.ID, r.BaseURLs, r.Disabled, r.Entra.RunnerResident = "other", []string{"https://dev.azure.com/other"}, true, true
 	})
-	this := entraRow(nil)
+	this := entraRow(func(r *types.GitProvider) { r.Entra.TokenMode = types.ADOTokenModeMintedPAT })
 	sc := types.SiteConfig{WorkspaceProviders: &types.WorkspaceProviders{Git: []types.GitProvider{other, this}}}
 	admitted := func() *placement.Refusal {
 		t.Helper()
@@ -87,15 +87,16 @@ func TestADOResident_OptInIsPerConnection(t *testing.T) {
 			Delivery:          placement.DeliveryPolicy{Classes: map[string]placement.ClassPolicy{placement.ClassADOMintedPAT: {Mode: placement.ModeRunnerResident}}},
 			Posture:           &types.RunnerPosture{OS: "linux"},
 			Trust:             types.RunnerTrustPersonal,
+			OwnerKind:         types.RunnerOwnerPerson,
 		})
 		return r
 	}
 	if r := admitted(); r == nil || r.Reason != placement.ReasonPlacementCredential || !strings.Contains(r.Detail, "opted in") {
 		t.Fatalf("another connection's opt-in: %+v, want this run refused for its own opt-in", r)
 	}
-	// Opted in, the run passes the opt-in gate; the deliver step holds it after that.
+	// Opted in, the run is admitted (option L).
 	sc.WorkspaceProviders.Git[1].Entra.RunnerResident = true
-	if r := admitted(); r != nil && strings.Contains(r.Detail, "opted in") {
+	if r := admitted(); r != nil {
 		t.Fatalf("this connection opted in: %v", r)
 	}
 }

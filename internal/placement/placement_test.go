@@ -295,7 +295,7 @@ func TestBuildableModes(t *testing.T) {
 	resident := []Mode{ModeRunnerResident, ModeRefuse}
 	viaOrg := []Mode{ModeViaOrg, ModeRefuse}
 	want := map[string][]Mode{
-		ClassADOMintedPAT: refuse, ClassAPIKey: viaOrg, ClassAWSSSOBearer: refuse, ClassAzureFoundryToken: refuse,
+		ClassADOMintedPAT: resident, ClassAPIKey: viaOrg, ClassAWSSSOBearer: refuse, ClassAzureFoundryToken: refuse,
 		ClassBedrockBearer: refuse, ClassBedrockRoleCreds: refuse, ClassCloudSTS: refuse, ClassEnvSecret: resident,
 		ClassFileSecret: resident, ClassGitPATBroker: refuse, ClassGitPATHelper: resident, ClassGitHubToken: viaOrg,
 		ClassOAuthSubscription: {ModeOwn}, ClassSSHKey: resident,
@@ -329,4 +329,47 @@ func pathExists(t reflect.Type, path string) bool {
 		t = f.Type
 	}
 	return true
+}
+
+// A write-time check on the modes a policy sets: every class, and every trust class's override, must be
+// one the engine can build, unless the stored document already holds that very row. A mode outside
+// AllowedModes is Validate's refusal, not this one.
+func TestDeliveryPolicyCheckBuildable(t *testing.T) {
+	var none DeliveryPolicy
+	ok := DeliveryPolicy{
+		Classes: map[string]ClassPolicy{ClassADOMintedPAT: {Mode: ModeRunnerResident}, ClassAPIKey: {Mode: ModeViaOrg}, ClassBedrockBearer: {Mode: ModeRefuse}},
+		ByTrust: map[types.RunnerTrustClass]TrustPolicy{types.RunnerTrustPersonal: {Classes: map[string]ClassPolicy{ClassEnvSecret: {Mode: ModeRunnerResident}}}},
+	}
+	if err := ok.CheckBuildable(none); err != nil {
+		t.Errorf("buildable policy: %v", err)
+	}
+	for name, p := range map[string]DeliveryPolicy{
+		"class default": {Classes: map[string]ClassPolicy{ClassAPIKey: {Mode: ModeRunnerResident}}},
+		"trust override": {ByTrust: map[types.RunnerTrustClass]TrustPolicy{
+			types.RunnerTrustManagedDevice: {Classes: map[string]ClassPolicy{ClassBedrockRoleCreds: {Mode: ModeRunnerResident}}}}},
+	} {
+		err := p.CheckBuildable(none)
+		if !errors.Is(err, ErrUnbuildablePolicy) || strings.Contains(err.Error(), "placement:") {
+			t.Errorf("%s: %v, want ErrUnbuildablePolicy and a sentence without the package sentinel", name, err)
+		}
+	}
+
+	// A row the stored document already holds is let through; a changed row is judged.
+	stored := DeliveryPolicy{
+		Classes: map[string]ClassPolicy{ClassGitPATBroker: {Mode: ModeRunnerResident}},
+		ByTrust: map[types.RunnerTrustClass]TrustPolicy{types.RunnerTrustPersonal: {Classes: map[string]ClassPolicy{ClassBedrockRoleCreds: {Mode: ModeRunnerResident}}}},
+	}
+	same := DeliveryPolicy{Classes: map[string]ClassPolicy{ClassGitPATBroker: {Mode: ModeRunnerResident}, ClassAPIKey: {Mode: ModeViaOrg}}, ByTrust: stored.ByTrust}
+	if err := same.CheckBuildable(stored); err != nil {
+		t.Errorf("unchanged stored rows beside a buildable change: %v", err)
+	}
+	for name, p := range map[string]DeliveryPolicy{
+		"another unbuildable mode": {Classes: map[string]ClassPolicy{ClassGitPATBroker: {Mode: ModeViaOrg}}},
+		"posture added":            {Classes: map[string]ClassPolicy{ClassGitPATBroker: {Mode: ModeRunnerResident, RequirePosture: &PostureRequirement{MDMManaged: true}}}},
+		"new unbuildable override": {ByTrust: map[types.RunnerTrustClass]TrustPolicy{types.RunnerTrustManagedDevice: {Classes: map[string]ClassPolicy{ClassBedrockRoleCreds: {Mode: ModeRunnerResident}}}}},
+	} {
+		if err := p.CheckBuildable(stored); !errors.Is(err, ErrUnbuildablePolicy) {
+			t.Errorf("%s: %v, want ErrUnbuildablePolicy", name, err)
+		}
+	}
 }

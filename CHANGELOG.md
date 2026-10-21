@@ -8,6 +8,31 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+A small release on top of 0.9.6. An Azure DevOps token that the organisation mints for a run can now be delivered to a person's own runner, off by default, and a credential delivery write that the server could not build is refused when it is made. No migration.
+
+### Security
+
+- **Go 1.26.10.** The toolchain pin moves from go1.26.9, fixing a `crypto/x509` certificate verification advisory (GO-2026-6809). `make govulncheck` reports none.
+
+### Added
+
+- An Azure DevOps connection with `token_mode: minted_pat` can now run on a person's own runner. Before, the run was refused at create. It is off by default and needs all three: a delivery policy that sends `ado_minted_pat` as `runner_resident` to the runner's trust class (a security admin's change, held for a second person under `WARDYN_GOVERNANCE_SECOND_HUMAN`), the connection's `entra.runner_resident` opt-in, and a runner of that trust class owned by a person.
+  - The token is held in the memory of the runner's proxy, on the person's own computer, for the run and at most `pat_max_hours`. It is not written to disk or the keystore. Root on that computer can read it.
+  - The sandbox holds only an inert placeholder; the proxy adds the token to requests on the way out, so a host that echoes request headers can return it. `entra.runner_resident_sandbox` has no effect in this version: it is stored and audited, no run reads it, and on or off the sandbox sees the same.
+  - The proxy fetches the token again at most 15 minutes apart, and each fetch is judged against the policy, the runner's owner, trust class and posture, and the opt-in. A delivery policy may add `require_posture` (`mdm_managed`, `disk_encrypted`, `os_min`) for the class; the class has none of its own. A refusal revokes the run's token at Azure DevOps. If the organisation is unreachable, the proxy stops injecting the token at most 30 minutes after its last fetch.
+  - A `bearer` connection and a stored git token for an Azure DevOps host are still refused on a person's own runner.
+
+### Changed
+
+- `PUT /governance/credential-delivery` refuses with `422` and `credential_delivery_invalid` a document that sets a class, or a trust class's override of it, to a mode the server cannot build for that class. The sentence names the class, the mode and the modes it can build. `GET` lists them as `buildable_modes`. A stored document is read back as before, and a save that leaves a stored row as it is is not refused for it.
+- The Runner credentials screen disables a delivery mode the server cannot build, labelled "Not available yet".
+- The refusal of an API-token mint in the user view now says how to switch to Admin view.
+- The Azure DevOps connection editor says what the runner switch does, and that the sandbox switch has no effect in this version. A runner that reports no posture fails every posture requirement, and the refusal says so.
+
+### Before you upgrade
+
+- A credential-delivery write that sets a mode the server can't build is now refused (`credential_delivery_invalid`); a stored document is left as it is.
+
 ## [0.9.6] — 2026-10-20
 
 A fix release on top of 0.9.5. A person's own Azure DevOps token now works on their own runner, credential and posture refusals say which policy or field refused, the credential delivery screen lists what each class can be delivered by, runners that cannot reach the server say why, and session recordings no longer store typed input. No migration and no new setting.

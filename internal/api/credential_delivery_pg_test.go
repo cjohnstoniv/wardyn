@@ -223,3 +223,140 @@ func TestCredentialDeliveryWrite_DirectSaveStaleAgainstAConcurrentWrite(t *testi
 		t.Fatalf("direct PUT checked before a concurrent write = %d %s, want 412 %s", got.Code, got.Body, reasonCredentialDeliveryStale)
 	}
 }
+
+// A write that sets a class, or a trust class's override of it, to a mode the engine cannot build is
+// refused 422 credential_delivery_invalid, direct or held, and nothing is stored or held. A buildable mode
+// is accepted, ado_minted_pat runner_resident among them. A document stored before the check is still
+// read back by GET, and nothing rewrites it.
+func TestCredentialDeliveryWrite_UnbuildableModeRefused(t *testing.T) {
+	e := newGovEnv(t)
+	stored := func() string {
+		doc, err := e.pg.GetCredentialDeliveryPolicy(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(doc.Policy)
+	}
+	empty := stored()
+	for body, want := range map[string]string{
+		`{"classes":{"api_key":{"mode":"runner_resident"}}}`:                                                         `class "api_key" cannot be delivered as "runner_resident" yet (the server can build: via_org, refuse)`,
+		`{"classes":{"git_pat_broker":{"mode":"via_org"}}}`:                                                          `class "git_pat_broker" cannot be delivered as "via_org" yet (the server can build: refuse)`,
+		`{"classes":{},"by_trust":{"personal":{"classes":{"bedrock_role_credentials":{"mode":"runner_resident"}}}}}`: `class "by_trust.personal.bedrock_role_credentials" cannot be delivered as "runner_resident" yet (the server can build: refuse)`,
+	} {
+		for who, w := range map[string]*httptest.ResponseRecorder{
+			"direct": e.admin(http.MethodPut, credentialDeliveryPath, body),
+			"held":   e.call(e.alice, http.MethodPut, credentialDeliveryPath, body),
+		} {
+			if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), reasonCredentialDeliveryInvalid) ||
+				!strings.Contains(w.Body.String(), `"error":"`+strings.ReplaceAll(want, `"`, `\"`)+`"`) {
+				t.Errorf("%s PUT %s = %d %s, want 422 %s with the error exactly %s", who, body, w.Code, w.Body, reasonCredentialDeliveryInvalid, want)
+			}
+		}
+	}
+	if got := stored(); got != empty {
+		t.Errorf("a refused write stored %s, want %s", got, empty)
+	}
+	if n := e.pendingCount(); n != 0 {
+		t.Errorf("%d changes held for refused bodies", n)
+	}
+
+	const ok = `{"classes":{"ado_minted_pat":{"mode":"runner_resident"},"api_key":{"mode":"via_org"},"env_secret":{"mode":"refuse"}}}`
+	if w := e.admin(http.MethodPut, credentialDeliveryPath, ok); w.Code != http.StatusOK {
+		t.Fatalf("buildable PUT = %d %s, want 200", w.Code, w.Body)
+	}
+
+	// An unbuildable document already stored (written before this check) is read back and left alone.
+	const old = `{"classes":{"bedrock_role_credentials":{"mode":"runner_resident"}}}`
+	if _, err := e.pg.PutCredentialDeliveryPolicy(context.Background(), json.RawMessage(old), "seed", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	before := stored()
+	if w := e.call(e.alice, http.MethodGet, credentialDeliveryPath, ""); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "bedrock_role_credentials") {
+		t.Errorf("GET of a stored unbuildable document = %d %s, want 200 with it", w.Code, w.Body)
+	}
+	if got := stored(); got != before {
+		t.Errorf("GET rewrote the stored document: %s, want %s", got, before)
+	}
+}
+
+// A document stored before the write check, the one `ado_minted_pat` set to runner_resident that a 0.9.6
+// server accepted and could not build, is read back unchanged, and ado_minted_pat now lists runner_resident
+// among its buildable modes. TestPG_LocalRun_ADOMintedPATResidentAtCreate seeds the same document and
+// admits a run under it with the three gates on.
+func TestCredentialDeliveryGET_StoredADOResidentDocumentWorksAfterTheBackport(t *testing.T) {
+	e := newGovEnv(t)
+	const stored = `{"classes":{"ado_minted_pat":{"mode":"runner_resident"}}}`
+	if _, err := e.pg.PutCredentialDeliveryPolicy(context.Background(), json.RawMessage(stored), "seed", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	w := e.call(e.alice, http.MethodGet, credentialDeliveryPath, "")
+	var resp struct {
+		Policy         json.RawMessage             `json:"policy"`
+		BuildableModes map[string][]placement.Mode `json:"buildable_modes"`
+	}
+	uerr := json.Unmarshal(w.Body.Bytes(), &resp)
+	got, err := deliveryPolicyOf(resp.Policy)
+	if w.Code != http.StatusOK || uerr != nil || err != nil || len(got.Classes) != 1 ||
+		got.Classes[placement.ClassADOMintedPAT].Mode != placement.ModeRunnerResident {
+		t.Fatalf("GET = %d %s (%v), want the stored document %s", w.Code, w.Body, err, stored)
+	}
+	if !slices.Contains(resp.BuildableModes[placement.ClassADOMintedPAT], placement.ModeRunnerResident) {
+		t.Errorf("buildable_modes[ado_minted_pat] = %v, want runner_resident among them", resp.BuildableModes[placement.ClassADOMintedPAT])
+	}
+	if w := e.admin(http.MethodPut, credentialDeliveryPath, stored); w.Code != http.StatusOK {
+		t.Errorf("PUT of the same document = %d %s, want 200", w.Code, w.Body)
+	}
+}
+
+// A row the stored document already holds is not judged again: a console re-sends the whole document, and
+// one stored by 0.9.6 may hold a mode that cannot be built. A changed row is judged, in any mode it moves to.
+func TestCredentialDeliveryWrite_StoredUnbuildableRowIsLetThroughUnchanged(t *testing.T) {
+	e := newGovEnv(t)
+	const stored = `{"classes":{"git_pat_broker":{"mode":"runner_resident"}},"by_trust":{"personal":{"classes":{"bedrock_role_credentials":{"mode":"runner_resident"}}}}}`
+	if _, err := e.pg.PutCredentialDeliveryPolicy(context.Background(), json.RawMessage(stored), "seed", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	const sameAndChanged = `{"classes":{"git_pat_broker":{"mode":"runner_resident"},"api_key":{"mode":"via_org"}},"by_trust":{"personal":{"classes":{"bedrock_role_credentials":{"mode":"runner_resident"}}}}}`
+	if w := e.admin(http.MethodPut, credentialDeliveryPath, sameAndChanged); w.Code != http.StatusOK {
+		t.Fatalf("stored unbuildable rows unchanged beside a buildable change = %d %s, want 200", w.Code, w.Body)
+	}
+	const moved = `{"classes":{"git_pat_broker":{"mode":"via_org"},"api_key":{"mode":"via_org"}},"by_trust":{"personal":{"classes":{"bedrock_role_credentials":{"mode":"runner_resident"}}}}}`
+	for who, w := range map[string]*httptest.ResponseRecorder{
+		"direct": e.admin(http.MethodPut, credentialDeliveryPath, moved),
+		"held":   e.call(e.alice, http.MethodPut, credentialDeliveryPath, moved),
+	} {
+		if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), reasonCredentialDeliveryInvalid) || !strings.Contains(w.Body.String(), `class \"git_pat_broker\"`) {
+			t.Errorf("%s: stored unbuildable row moved to another unbuildable mode = %d %s, want 422", who, w.Code, w.Body)
+		}
+	}
+	if n := e.pendingCount(); n != 0 {
+		t.Errorf("%d changes held for refused bodies", n)
+	}
+}
+
+// An approval applies a held replacement through the same check: a change held before the check, or with its
+// payload moved since, is refused 422 and stays pending, and the stored document is left as it is.
+func TestCredentialDeliveryWrite_ApprovalOfAnUnbuildableHeldChangeIsRefused(t *testing.T) {
+	e := newGovEnv(t)
+	held := e.pending(e.call(e.alice, http.MethodPut, credentialDeliveryPath, `{"classes":{"api_key":{"mode":"via_org"}}}`))
+	const payload = `{"classes":{"git_pat_broker":{"mode":"runner_resident"}}}`
+	if _, err := e.pool.Exec(context.Background(), `UPDATE governance_changes SET payload = $1::jsonb WHERE id = $2`, payload, held.ID); err != nil {
+		t.Fatal(err)
+	}
+	before, err := e.pg.GetCredentialDeliveryPolicy(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := e.call(e.bob, http.MethodPost, approvePath(held.ID), "")
+	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), reasonCredentialDeliveryInvalid) ||
+		!strings.Contains(w.Body.String(), `"error":"class \"git_pat_broker\" cannot be delivered as \"runner_resident\" yet (the server can build: refuse)"`) {
+		t.Fatalf("approving an unbuildable held change = %d %s, want 422 %s", w.Code, w.Body, reasonCredentialDeliveryInvalid)
+	}
+	after, err := e.pg.GetCredentialDeliveryPolicy(context.Background())
+	if err != nil || string(after.Policy) != string(before.Policy) {
+		t.Errorf("stored policy after the refused approval = %s (%v), want %s", after.Policy, err, before.Policy)
+	}
+	if got := e.changeState(held.ID); got != string(types.GovernanceChangePending) {
+		t.Errorf("change state = %q, want it still pending", got)
+	}
+}

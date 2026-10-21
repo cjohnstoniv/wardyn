@@ -353,13 +353,22 @@ That has two consequences worth knowing before you hit them:
 | `token_mode` | What the run gets on a laptop | Why |
 |---|---|---|
 | `own_pat` | The person's own PAT, only when the Azure DevOps row is theirs and the PAT is stored in their own namespace; otherwise refused ([`internal/api/run_placement_intents.go#Server.localADOOrigin`](../internal/api/run_placement_intents.go)) | It is their credential |
-| `minted_pat`, `bearer` | Refused, opted in to `runner_resident` or not: `runner_posture_unmet` when the run's confinement floor or the runner's posture is not met, otherwise `placement_credential`; a runner holds no Azure DevOps token | The organisation mints or holds the token |
+| `minted_pat` | Off by default. The per-run token, `runner_resident`, on a person's own runner only, behind the delivery policy for the runner's trust class and the connection's opt-in. Otherwise `runner_posture_unmet` (floor or posture unmet) or `placement_credential` | The organisation mints it for the run |
+| `bearer` | Refused, opted in or not (`placement_credential`) | The organisation holds the token |
 
 - A super admin opts a connection in with `entra.runner_resident` on `PUT /workspace-providers`. It is off by default and audited on `workspace_provider.write`.
-- The opt-in and `entra.runner_resident_sandbox` (which requires it) are stored and audited, but they change no run yet: placement refuses the token at delivery, "runner_resident delivery of this credential is not built yet".
-- `runner_resident` delivery covers `env_secret`, `file_secret`, `ssh_key` and `git_pat_helper` only, so a run that needs an Azure DevOps token resident is still refused (`runner_posture_unmet` when the confinement floor or the runner's posture is not met, otherwise `placement_credential`).
-- A stored git token for an Azure DevOps host is never `runner_resident` either, even though `git_pat_helper` is (`placement_credential`).
-- `TestLocalEligibility_ADOResidentIsOffByDefault` in [`internal/placement/resident_test.go`](../internal/placement/resident_test.go) pins both: refused without the opt-in, and held at delivery with it.
+  - Under `WARDYN_GOVERNANCE_SECOND_HUMAN` a policy change waits for a second person.
+- **Where the token is.** The runner's proxy fetches it from the organisation over the runner's relay, as on the cluster, and renews it before expiry. It is held only in the memory of the runner's proxy, on the person's own computer, at most `pat_max_hours` (default 8): never on disk or in the keystore. Root on that computer can read it.
+  - The sandbox's environment holds only the inert placeholder (`AZURE_DEVOPS_EXT_PAT`); the proxy adds the token to requests on the way out. A host that echoes request headers can return it to the sandbox ([residuals](CREDENTIALS.md#residuals)).
+  - `entra.runner_resident_sandbox` (needs `runner_resident`) has no effect in this version. It is stored and audited, and no run reads it: off or on, the sandbox sees the same placeholder and the token is not put in it.
+  - Posture: the class has no requirement of its own. The `ado_minted_pat` row of the delivery policy, global or per `by_trust`, may carry `require_posture` with `mdm_managed`, `disk_encrypted` and `os_min` per OS. Every fetch judges it against the posture the runner reports. A runner that reports no posture fails every posture requirement. A run with a confinement floor is refused (`runner_posture_unmet`).
+- Write access is as on the cluster: read by default; `code_write` and pull requests through the capability approval.
+- **Each fetch is judged again** against the policy, the runner's owner, trust class and posture, and the opt-in. A refusal answers `delivery_runner_resident` and revokes the run's token at Azure DevOps (`drift`).
+  - The proxy fetches at most 15 minutes apart, so a withdrawn opt-in or a policy, trust or posture change cuts the run within 15 minutes. To cut it at once, end or pause it.
+  - Renewal, widening, pause and resume, and every revoke work as on the cluster.
+- If the organisation is unreachable, the proxy stops injecting the token at most 30 minutes after its last fetch, and a restarted proxy does not start.
+- A stored git token for an Azure DevOps host is never `runner_resident` (`placement_credential`).
+- Pinned by `TestLocalEligibility_ADOResidentIsOffByDefault` ([`internal/placement/resident_test.go`](../internal/placement/resident_test.go)) and `TestMintedPATLocal_` ([`internal/api/runs_dispatch_ado_pat_local_test.go`](../internal/api/runs_dispatch_ado_pat_local_test.go)).
 - The refusal is `classifyCredential` ([`internal/placement/eligibility.go`](../internal/placement/eligibility.go)).
 - Where each thing lives is in [Managed laptops: client-mode runners](operations/hybrid-laptops.md#where-each-thing-lives). The delivery rules are in [Credential delivery (OD-12)](design/0.9/PLAN.md#7-credential-delivery-od-12).
 

@@ -34,7 +34,7 @@
 ## Resident credentials and posture
 
 > [!NOTE]
-> A runner holds four classes as `runner_resident`: `env_secret`, `file_secret`, `ssh_key` and `git_pat_helper`. Any other class set to `runner_resident` is still refused.
+> A runner holds four classes as `runner_resident` in its OS keystore: `env_secret`, `file_secret`, `ssh_key` and `git_pat_helper`. Its proxy holds a fifth, `ado_minted_pat`, in memory only; it is not put in the sandbox. Others are refused as `runner_resident`.
 > A refusal is `runner_posture_unmet` when the run's confinement floor or the runner's posture misses the class's requirement, otherwise `placement_credential`. Whoever controls the laptop as root can read a value while the runner holds it, so erasure is best-effort and never promised.
 
 | Credential class | Modes |
@@ -66,6 +66,7 @@
 - A grant that requires approval is never `runner_resident`.
 - `git_pat_helper` applies only with `WARDYN_GIT_PAT_BROKER=off`. Turning the broker on refuses new runs, dispatches and revives that would need one.
 - A git token for an Azure DevOps host is never `runner_resident` (`placement_credential`).
+- `ado_minted_pat` also needs the connection's opt-in and a person's own runner. The runner's proxy fetches the per-run token from the organisation at most 15 minutes apart; a refused fetch revokes it ([Azure DevOps on a laptop runner](../AZURE-DEVOPS.md#on-a-laptop-runner-local-placement)).
 - A `require_posture` class is refused at launch until per-runner placement lands.
 - On Linux the Secret Service needs a login session bus (`DBUS_SESSION_BUS_ADDRESS`, or the user bus socket under `/run/user/<uid>`), so a system service with no login session has no keystore.
 - Posture is self-reported, and a run with a CC3 floor never takes a resident credential.

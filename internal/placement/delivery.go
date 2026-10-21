@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -22,7 +23,7 @@ type Mode string
 const (
 	ModeOwn            Mode = "own"             // the person's own material, wherever it already lives
 	ModeViaOrg         Mode = "via_org"         // only in the org; used through the org's egress for the run's life
-	ModeRunnerResident Mode = "runner_resident" // in the runner's OS keystore, then the local proxy or sandbox
+	ModeRunnerResident Mode = "runner_resident" // in the runner's OS keystore, then the local proxy or sandbox; an Azure DevOps minted token only in the runner proxy's memory
 	ModeRefuse         Mode = "refuse"          // nowhere; the default for every org-held class
 )
 
@@ -262,6 +263,46 @@ func validateClasses(classes map[string]ClassPolicy, prefix string) error {
 		}
 		if cp.RequirePosture != nil && cp.Mode != ModeRunnerResident {
 			return fmt.Errorf("%w: class %q has require_posture without mode %q", ErrInvalidPolicy, name, ModeRunnerResident)
+		}
+	}
+	return nil
+}
+
+// ErrUnbuildablePolicy marks a delivery policy that sets a mode the engine cannot build for a class (a 422).
+var ErrUnbuildablePolicy = errors.New("placement: credential delivery policy sets a mode that is not built")
+
+// unbuildableError is the refusal CheckBuildable returns: its text is the sentence a person reads, without the
+// package sentinel, and errors.Is still finds ErrUnbuildablePolicy.
+type unbuildableError struct{ msg string }
+
+func (e unbuildableError) Error() string        { return e.msg }
+func (e unbuildableError) Is(target error) bool { return target == ErrUnbuildablePolicy }
+
+// CheckBuildable refuses a policy that sets a class, in Classes or in any trust class's overrides, to a mode
+// outside BuildableModes(class). A row that is the same in before, the stored document, is let through: a
+// document stored by an earlier version may hold a mode this one cannot build, and a client that sends it back
+// unchanged is not asking for it. Validate stays the bounds check a stored document is judged on; this is the
+// write-time check only, so a stored document is never rewritten or refused by it.
+func (p DeliveryPolicy) CheckBuildable(before DeliveryPolicy) error {
+	check := func(classes, was map[string]ClassPolicy, prefix string) error {
+		for _, class := range sortedKeys(classes) {
+			m := classes[class]
+			if old, stored := was[class]; stored && reflect.DeepEqual(old, m) {
+				continue
+			}
+			if !slices.Contains(BuildableModes(class), m.Mode) {
+				return unbuildableError{fmt.Sprintf("class %q cannot be delivered as %q yet (the server can build: %s)",
+					prefix+class, m.Mode, joinModes(BuildableModes(class)))}
+			}
+		}
+		return nil
+	}
+	if err := check(p.Classes, before.Classes, ""); err != nil {
+		return err
+	}
+	for _, trust := range slices.Sorted(maps.Keys(p.ByTrust)) {
+		if err := check(p.ByTrust[trust].Classes, before.ByTrust[trust].Classes, "by_trust."+string(trust)+"."); err != nil {
+			return err
 		}
 	}
 	return nil

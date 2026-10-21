@@ -59,7 +59,7 @@ func TestLocalEligibility_ResidentNeedsPolicyAndPosture(t *testing.T) {
 	// The detail names every unmet field and the requirement; a posture never judged says why, at launch
 	// and on a runner chosen at dispatch or revive that has not reported its posture.
 	const requires = " (requires mdm_managed, disk_encrypted, os_min darwin 15.1)"
-	const unreported = "posture: no reported posture to judge. At launch no runner is chosen yet, and a runner that has not reported its posture meets no requirement, so a delivery policy with require_posture refuses"
+	const unreported = "posture: no reported posture to judge. At launch no runner is chosen yet. A runner that reports no posture fails every posture requirement, so a delivery policy with require_posture refuses"
 	for _, tc := range []struct {
 		name    string
 		posture *types.RunnerPosture
@@ -105,21 +105,28 @@ func adoResidentPlan(origin CredentialOrigin) LocalPlan {
 		Delivery:          DeliveryPolicy{Classes: map[string]ClassPolicy{ClassADOMintedPAT: {Mode: ModeRunnerResident}}},
 		Posture:           &types.RunnerPosture{OS: "linux"},
 		Trust:             types.RunnerTrustPersonal,
+		OwnerKind:         types.RunnerOwnerPerson,
 	}
 }
 
 // The 2026-10-10 ruling: an Azure DevOps minted token is resident only on a
-// connection an admin opted in, even when the class policy says resident. An
-// opted-in connection passes that gate and is then held at the deliver step,
-// which is not built: an intent has no dispatched value to replace.
+// connection an admin opted in, even when the class policy says resident; the
+// 2026-10-19 ruling (option L) admits an opted-in connection's token, which the
+// runner's proxy fetches per request and holds in memory only. Off by default:
+// with no policy row, or no opt-in, it refuses.
 func TestLocalEligibility_ADOResidentIsOffByDefault(t *testing.T) {
 	_, r := LocalEligibility(adoResidentPlan(CredentialOrigin{Class: ClassBrokered, Delivery: ClassADOMintedPAT}))
 	if r == nil || r.Reason != ReasonPlacementCredential || r.Field != adoPath || !strings.Contains(r.Detail, "opted in") {
 		t.Fatalf("no opt-in: %+v, want the opt-in refusal", r)
 	}
-	_, r = LocalEligibility(adoResidentPlan(CredentialOrigin{Class: ClassBrokered, Delivery: ClassADOMintedPAT, ResidentOptIn: true}))
-	if r == nil || r.Reason != ReasonPlacementCredential || !strings.Contains(r.Detail, "not built") {
-		t.Fatalf("opted-in connection: %+v, want past the opt-in and held at delivery", r)
+	optedIn := CredentialOrigin{Class: ClassBrokered, Delivery: ClassADOMintedPAT, ResidentOptIn: true}
+	if _, r = LocalEligibility(adoResidentPlan(optedIn)); r != nil {
+		t.Fatalf("opted-in connection: %+v, want admitted", r)
+	}
+	unset := adoResidentPlan(optedIn)
+	unset.Delivery = DeliveryPolicy{Classes: map[string]ClassPolicy{}}
+	if _, r = LocalEligibility(unset); r == nil || r.Reason != ReasonPlacementCredential || !strings.Contains(r.Detail, "delivery policy: refuse") {
+		t.Fatalf("opted-in connection, no policy row: %+v, want the default refusal", r)
 	}
 }
 
@@ -250,6 +257,7 @@ func TestResidentAdmits_Matrix(t *testing.T) {
 			p := residentPlan(ClassPolicy{}, tc.posture)
 			p.Delivery = DeliveryPolicy{Classes: map[string]ClassPolicy{tc.origin.Delivery: tc.cp}}
 			p.ConfinementFloor = tc.floor
+			p.OwnerKind = types.RunnerOwnerPerson
 			r := ResidentAdmits(tc.origin, p, "runner_resident."+tc.origin.Delivery)
 			switch {
 			case tc.reason == "" && r != nil:
