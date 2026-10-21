@@ -6,11 +6,11 @@ Every string the New Run flow shows lives once in this file and once in the lazy
 
 | Source | What it is |
 |---|---|
-| Approved mock | The owner-approved New Run mock: Start, the Guided steps, the run document editor, Review, Save as, Name and Launched. |
+| Approved mock | The approved New Run mock: Start, the Guided steps, the run document editor, Review, Save as, Name and Launched. |
 | Tools and access prototype | The approved step 5 prototype. |
 | Templates prototype | The approved Templates screen prototype. |
-| Deviation tables | The owner-approved changes to the mock's wording: the Files wording W1-W5, the placement wording package, the harness and scheduling copy, the run document format, the pool words (organization and user pools; self-hosted and remote-hosted runners). |
-| Pending wording | The recommended text for each new wording row, behind one constant until the owner answers. |
+| Deviation tables | The approved changes to the mock's wording: the Files wording W1-W5, the placement wording package, the harness and scheduling copy, the run document format, the pool words (organization and user pools; self-hosted and remote-hosted runners). |
+| Pending wording | The recommended text for each new wording row, behind one constant until it is decided. |
 
 ## 2. Behaviour summary
 
@@ -29,21 +29,21 @@ Every string the New Run flow shows lives once in this file and once in the lazy
 | Column | Meaning |
 |---|---|
 | Key | The constant's name in the screen's namespace. A key with arguments is a function; the test calls it with each argument written as `{name}`. |
-| Source | `mock` (approved mock or prototype, verbatim), `deviation` (owner-approved change, cites its table), `pending` (recommended text until the owner answers, cites its row), `server` (pointer only). |
+| Source | `mock` (approved mock or prototype, verbatim), `deviation` (approved change, cites its table), `pending` (recommended text until it is decided, cites its row), `server` (pointer only). |
 | Frozen string | The exact text. Backticks mark mono display and are not part of the string. |
 
 - A `server` row names the Go reason that owns the sentence. The console shows the server's sentence, so no constant exists for it.
-- Step lanes import these constants and never add strings. A missing string goes to the lead.
-- `REF_NOT_CHECKED` (W-14), `SHARED_DISCLOSURE` (W-25) and `MCP_ASKS` (W-44) are lane-composed: Part B gives no recommended text for them, so they need owner wording.
+- Step components import these constants and never add strings. A missing string is added here first.
+- `REF_NOT_CHECKED` (W-14), `SHARED_DISCLOSURE` (W-25) and `MCP_ASKS` (W-44) are composed by the step: no recommended text exists for them, so they need wording.
 
 ### Display rules
 
-Some constants show only under a condition. A step lane applies the rule; `new-run-copy.test.ts` checks that each constant named here exists.
+Some constants show only under a condition. A step component applies the rule; `new-run-copy.test.ts` checks that each constant named here exists.
 
 - `NR_TOOLS.PROVIDER_PROXY` shows only when the provider credential's delivery is `proxy`: key, token and subscription kinds. A provider whose delivery is `sandbox_short_lived` (Bedrock SSO, whose role credentials sit in the sandbox) shows `NR_TOOLS.DELIVERY_SHORT_LIVED` and `NR_TOOLS.DELIVERY_AWS` instead.
 - `NR_SHARED.CONTINUE_TO` writes the step name in lower case ("Continue to harnesses", "Continue to files": Make `App.tsx`:1928, 2144). Every Guided step's primary button, `NR_SHARED.CONTINUE` and the document's `NR_DOCUMENT.CONTINUE_REVIEW` end in an arrow shown to sight only (Make `App.tsx`:1293, 1928, 2144, 2577, 2695); `NR_REVIEW.LAUNCH_RUN` has none.
-- `NR_LAUNCH.CANCEL_RUN` opens the console's kill confirm before it cancels the waiting run; the confirm's own strings are the shared kill dialog's. Deviation (owner 2026-10-13: keep the Cancel-run confirm); Make cancels at once (`App.tsx`:3335-3343).
-- `NR_TOOLS.EFFECT_ALLOW` is both the default option and a rule effect ("Run it" stays, per the tool-rule ruling): offered when the policy allows it, otherwise disabled with the server's reason.
+- `NR_LAUNCH.CANCEL_RUN` opens the console's kill confirm before it cancels the waiting run; the confirm's own strings are the shared kill dialog's. Deviation (keep the Cancel-run confirm); Make cancels at once (`App.tsx`:3335-3343).
+- `NR_TOOLS.EFFECT_ALLOW` is both the default option and a rule effect ("Run it" stays, per the tool-rule decision): offered when the policy allows it, otherwise disabled with the server's reason.
 
 ## 4. Never shown
 
@@ -83,7 +83,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 |---|---|---|
 | `TITLE` | mock | What are you running? |
 | `LEDE` | mock | Pick the closest shape. You can adjust every detail before launch. |
-| `SHAPE_REQUIRED` | deviation (lead wording 2026-10-17, FR-0099) | Choose a shape for this run. |
+| `SHAPE_REQUIRED` | deviation (wording) | Choose a shape for this run. |
 | `START_FROM` | mock | Start from |
 | `SOURCE_SCRATCH` | mock | From scratch |
 | `SOURCE_TEMPLATE` | mock | Saved template |
@@ -95,8 +95,8 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `AGAIN_NOTE` | pending (W-01) | Settings are rechecked now. Short-lived credentials are issued fresh; standing approvals still apply. |
 | `EMPTY_TEMPLATES` | pending (W-23) | No saved templates yet. |
 | `EMPTY_AGAIN` | pending (W-23) | No previous runs to start again. |
-| `TEMPLATES_LOADING` | deviation (lead wording 2026-10-17, FUG-L771) | Loading saved templates… |
-| `AGAIN_LOADING` | deviation (lead wording 2026-10-17, FUG-L771) | Loading previous runs… |
+| `TEMPLATES_LOADING` | deviation (wording) | Loading saved templates… |
+| `AGAIN_LOADING` | deviation (wording) | Loading previous runs… |
 | `AGENT_TITLE` | mock | Agent task |
 | `AGENT_BODY` | mock | A one-time coding task, driven by you or running autonomously. |
 | `AGENT_SUB` | mock | Interactive · Autonomous |
@@ -130,7 +130,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `APP_AUTOMATION_BODY` | mock | A command or job that runs on its own. |
 | `COMMAND_LABEL` | mock | Command |
 | `COMMAND_HELP` | mock | Run verbatim in the sandbox. The run ends when the command exits. |
-| `COMMAND_REQUIRED` | deviation (lead wording 2026-10-17, FR-0099) | A command run needs a command to run. |
+| `COMMAND_REQUIRED` | deviation (wording) | A command run needs a command to run. |
 | `WHERE_LABEL` | mock | Where should it run? |
 | `POOL_LABEL` | mock | Pool |
 | `POOL_HELP` | deviation (DS-5 §8) | A pool is required. Pools you can use stay visible, with the reason when one can't take this run. |
@@ -241,7 +241,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `LEDE_AUTONOMOUS` | mock | Pick the agent and give it its task. |
 | `EMPTY_TITLE` | mock | No harnesses added |
 | `EMPTY_BODY` | mock | This workload can continue without one. |
-| `LOADING` | deviation (lead wording 2026-10-18, #2861) | Loading harnesses… |
+| `LOADING` | deviation (wording, #2861) | Loading harnesses… |
 | `EYEBROW(n)` | mock | Harness {n} |
 | `HARNESS_LABEL` | mock | Harness |
 | `AVAILABLE(name)` | mock | {name} is available in this environment. |
@@ -260,7 +260,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `TASK_PLACEHOLDER` | mock | What should this agent accomplish? |
 | `TASK_HELP` | mock | This harness starts automatically when it has a task. |
 | `TASK_ERROR` | mock | An autonomous run needs at least one task to perform. |
-| `HARNESS_REQUIRED` | deviation (lead wording 2026-10-17, FR-0099) | A run needs at least one harness. |
+| `HARNESS_REQUIRED` | deviation (wording) | A run needs at least one harness. |
 | `ADD_HARNESS` | mock | Add a harness |
 | `ADD_ANOTHER` | mock | Add another harness |
 | `ADDED` | mock | Harness added. |
@@ -279,7 +279,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `CLAMP_POOL(size, pool)` | mock | Clamped to {size} by the {pool} pool. |
 | `CLAMP_PROFILE(size, profile)` | pending (W-11) | Clamped to {size} by {profile}. |
 | `CLAMP_SERVER(size)` | pending (W-11) | Clamped to {size} by this server. |
-| `CLAMP_POLICY(size)` | deviation (approved 2026-10-17) | Clamped to {size} by this run's policy. |
+| `CLAMP_POLICY(size)` | deviation (approved) | Clamped to {size} by this run's policy. |
 | `CLAMP_ORG(size)` | pending (W-11) | Clamped to {size} by your organisation's limits. |
 | `SIZE_EXACT(mib)` | mock | Exactly {mib} MiB |
 | `SIZE_ERROR` | mock | Set a size for the main drive. |
@@ -350,7 +350,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `COMPUTER_LAST_SEEN(name, when)` | mock | {name} · last seen {when} |
 | `COMPUTER_OFFLINE_BODY(name)` | mock | Start the runner on {name}, then try again. A run that uses this folder can't start until it is back. |
 | `COMPUTER_LABEL` | mock | Computer |
-| `COMPUTER_OPEN(name)` | deviation (lead 2026-10-19: the folder browser's open control needs a name) | Open {name} |
+| `COMPUTER_OPEN(name)` | deviation (the folder browser's open control needs a name) | Open {name} |
 | `COMPUTER_COL_NAME` | mock | Name |
 | `COMPUTER_COL_FILES` | mock | Files |
 | `COMPUTER_COL_SIZE` | mock | Size |
@@ -364,7 +364,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `COMPUTER_CHANGES` | mock | Changes |
 | `COMPUTER_BOTH` | mock | Both ways |
 | `COMPUTER_COPY_IN` | mock | Copy in only |
-| `COMPUTER_BOTH_BODY` | deviation (owner ruling M4 2026-10-19: one side edits at a time) | Edits in the sandbox come back to your computer when the run ends. |
+| `COMPUTER_BOTH_BODY` | deviation (one side edits at a time) | Edits in the sandbox come back to your computer when the run ends. |
 | `COMPUTER_COPY_IN_BODY` | mock | A copy from your computer. Changes stay in the sandbox. |
 | `COMPUTER_SEES` | mock | The sandbox sees |
 | `COMPUTER_COUNT(files, size)` | mock | {files} files · {size} |
@@ -376,8 +376,8 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `NO_EXTRA` | mock | No extra files — only the main drive |
 | `NO_EXTRA_DELETED` | mock | Only the main drive. Nothing from this run is kept. |
 | `NO_EXTRA_KEPT(grace)` | pending (W-12) | Only the main drive. It is deleted {grace} after the run's end time. |
-| `CHOOSE_FILES` | deviation (owner-approved Files prototype 2026-10-13) | Add what it needs, or choose No extra files. |
-| `STARTS_HERE_REQUIRED` | deviation (lead wording 2026-10-17, FR-0099) | Choose the folder the run starts in. |
+| `CHOOSE_FILES` | deviation (Files prototype) | Add what it needs, or choose No extra files. |
+| `STARTS_HERE_REQUIRED` | deviation (wording) | Choose the folder the run starts in. |
 | `MOUNT_TITLE` | mock | Mount map |
 | `MOUNT_BODY` | mock | Read-only view of where files appear in the sandbox. |
 | `MOUNT_MAIN(size)` | mock | Main drive · {size} |
@@ -392,53 +392,53 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `SUMMARY_KEPT(grace)` | pending (W-12) | the main drive is kept {grace} after its end time |
 | `SUMMARY_NO_END` | pending (W-12) | the main drive is kept until you end the run |
 | `SUMMARY_NO_EXTRA(size, life)` | mock | Main drive {size} · no extra files · {life}. |
-| `ATTACH_TITLE` | deviation (owner-approved Files prototype 2026-10-13) | Repositories, drives and folders |
-| `ATTACH_BODY` | deviation (owner-approved Files prototype 2026-10-13) | Each one appears in the sandbox at its mount path. |
-| `ADD` | deviation (owner-approved Files prototype 2026-10-13) | + Add |
-| `ADD_ARIA` | deviation (owner-approved Files prototype 2026-10-13) | Add a repository, drive or folder |
-| `KIND_USER_DRIVE` | deviation (owner-approved Files prototype 2026-10-13) | User drive |
-| `KIND_SHARED_DRIVE` | deviation (owner-approved Files prototype 2026-10-13) | Shared drive |
-| `KIND_FOLDER` | deviation (owner-approved Files prototype 2026-10-13) | Folder |
-| `FOLDER_TITLE` | deviation (owner-approved Files prototype 2026-10-13) | Folder on this machine |
-| `FOLDER_BODY` | deviation (owner-approved Files prototype 2026-10-13) | A folder on the computer running Wardyn. |
-| `SHARED_SUB` | deviation (owner-approved Files prototype 2026-10-13) | Provided by your admin. You get your own folder on it. |
-| `FOLDER_REMOTE` | deviation (owner-approved Files prototype 2026-10-13) | Wardyn runs on a remote server, so it can't open folders on this machine. |
-| `EDIT` | deviation (owner-approved Files prototype 2026-10-13) | Edit |
-| `EDIT_NAMED(name)` | deviation (owner-approved Files prototype 2026-10-13) | Edit {name} |
-| `REMOVE_NAMED(name)` | deviation (owner-approved Files prototype 2026-10-13) | Remove {name} |
-| `STORED_ON` | deviation (owner-approved Files prototype 2026-10-13) | Stored on |
-| `ADDED(name)` | deviation (owner-approved Files prototype 2026-10-13) | {name} added. |
-| `UPDATED(name)` | deviation (owner-approved Files prototype 2026-10-13) | {name} updated. |
-| `REMOVED(name)` | deviation (owner-approved Files prototype 2026-10-13) | {name} removed. |
-| `DIALOG_TITLE` | deviation (owner-approved Files prototype 2026-10-13) | Add to this run |
-| `ADD_REPO_TITLE` | deviation (owner-approved Files prototype 2026-10-13) | Add repository |
-| `ADD_USER_DRIVE_TITLE` | deviation (owner-approved Files prototype 2026-10-13) | Add user drive |
-| `ADD_SHARED_DRIVE_TITLE` | deviation (owner-approved Files prototype 2026-10-13) | Add shared drive |
-| `ADD_FOLDER_TITLE` | deviation (owner-approved Files prototype 2026-10-13) | Add folder |
-| `STEPS_ARIA` | deviation (owner-approved Files prototype 2026-10-13) | Steps |
-| `STEP_TYPE` | deviation (owner-approved Files prototype 2026-10-13) | Type |
-| `STEP_CHOOSE` | deviation (owner-approved Files prototype 2026-10-13) | Choose |
-| `STEP_MOUNT` | deviation (owner-approved Files prototype 2026-10-13) | Mount path |
-| `ALREADY_ADDED` | deviation (owner-approved Files prototype 2026-10-13) | Already added to this run. |
-| `BRANCH_LABEL` | deviation (owner-approved Files prototype 2026-10-13) | Branch |
-| `MOUNT_HINT` | deviation (owner-approved Files prototype 2026-10-13) | Where it appears in the sandbox. |
-| `PATH_INVALID` | deviation (lead 2026-10-13: the server accepts /home/agent only) | Use a path inside /home/agent. |
-| `PATH_TAKEN(name, path)` | deviation (owner-approved Files prototype 2026-10-13) | {name} is already mounted at {path}. |
-| `ACCESS_LABEL` | deviation (owner-approved Files prototype 2026-10-13) | Access |
-| `SAVE` | deviation (owner-approved Files prototype 2026-10-13) | Save |
-| `ADD_CONFIRM` | deviation (owner-approved Files prototype 2026-10-13) | Add |
-| `START_TITLE` | deviation (owner-approved Files prototype 2026-10-13) | Starting folder |
-| `START_BODY` | deviation (owner-approved Files prototype 2026-10-13) | Where it starts. Choose from what you added above. |
-| `START_FOLDER_LABEL` | deviation (owner-approved Files prototype 2026-10-13) | Folder |
-| `START_OPTION(name, path)` | deviation (owner-approved Files prototype 2026-10-13) | {name} · {path} |
-| `START_MAIN` | deviation (owner-approved Files prototype 2026-10-13) | Main drive · /home/agent |
-| `SUBFOLDER_LABEL` | deviation (owner-approved Files prototype 2026-10-13) | Subfolder |
+| `ATTACH_TITLE` | deviation (Files prototype) | Repositories, drives and folders |
+| `ATTACH_BODY` | deviation (Files prototype) | Each one appears in the sandbox at its mount path. |
+| `ADD` | deviation (Files prototype) | + Add |
+| `ADD_ARIA` | deviation (Files prototype) | Add a repository, drive or folder |
+| `KIND_USER_DRIVE` | deviation (Files prototype) | User drive |
+| `KIND_SHARED_DRIVE` | deviation (Files prototype) | Shared drive |
+| `KIND_FOLDER` | deviation (Files prototype) | Folder |
+| `FOLDER_TITLE` | deviation (Files prototype) | Folder on this machine |
+| `FOLDER_BODY` | deviation (Files prototype) | A folder on the computer running Wardyn. |
+| `SHARED_SUB` | deviation (Files prototype) | Provided by your admin. You get your own folder on it. |
+| `FOLDER_REMOTE` | deviation (Files prototype) | Wardyn runs on a remote server, so it can't open folders on this machine. |
+| `EDIT` | deviation (Files prototype) | Edit |
+| `EDIT_NAMED(name)` | deviation (Files prototype) | Edit {name} |
+| `REMOVE_NAMED(name)` | deviation (Files prototype) | Remove {name} |
+| `STORED_ON` | deviation (Files prototype) | Stored on |
+| `ADDED(name)` | deviation (Files prototype) | {name} added. |
+| `UPDATED(name)` | deviation (Files prototype) | {name} updated. |
+| `REMOVED(name)` | deviation (Files prototype) | {name} removed. |
+| `DIALOG_TITLE` | deviation (Files prototype) | Add to this run |
+| `ADD_REPO_TITLE` | deviation (Files prototype) | Add repository |
+| `ADD_USER_DRIVE_TITLE` | deviation (Files prototype) | Add user drive |
+| `ADD_SHARED_DRIVE_TITLE` | deviation (Files prototype) | Add shared drive |
+| `ADD_FOLDER_TITLE` | deviation (Files prototype) | Add folder |
+| `STEPS_ARIA` | deviation (Files prototype) | Steps |
+| `STEP_TYPE` | deviation (Files prototype) | Type |
+| `STEP_CHOOSE` | deviation (Files prototype) | Choose |
+| `STEP_MOUNT` | deviation (Files prototype) | Mount path |
+| `ALREADY_ADDED` | deviation (Files prototype) | Already added to this run. |
+| `BRANCH_LABEL` | deviation (Files prototype) | Branch |
+| `MOUNT_HINT` | deviation (Files prototype) | Where it appears in the sandbox. |
+| `PATH_INVALID` | deviation (the server accepts /home/agent only) | Use a path inside /home/agent. |
+| `PATH_TAKEN(name, path)` | deviation (Files prototype) | {name} is already mounted at {path}. |
+| `ACCESS_LABEL` | deviation (Files prototype) | Access |
+| `SAVE` | deviation (Files prototype) | Save |
+| `ADD_CONFIRM` | deviation (Files prototype) | Add |
+| `START_TITLE` | deviation (Files prototype) | Starting folder |
+| `START_BODY` | deviation (Files prototype) | Where it starts. Choose from what you added above. |
+| `START_FOLDER_LABEL` | deviation (Files prototype) | Folder |
+| `START_OPTION(name, path)` | deviation (Files prototype) | {name} · {path} |
+| `START_MAIN` | deviation (Files prototype) | Main drive · /home/agent |
+| `SUBFOLDER_LABEL` | deviation (Files prototype) | Subfolder |
 | `FOLDERS_NONE` | pending (W-48) | No folders onboarded yet. Add one in Workspaces. |
 | `FOLDER_WITH_REPOS(workspace)` | pending (W-49) | This folder comes with {workspace}'s repositories. Remove them to remove it. |
-| `SUBFOLDER_PLACEHOLDER` | deviation (owner-approved Files prototype 2026-10-13) | e.g. src |
-| `SUBFOLDER_ERROR(name)` | deviation (owner-approved Files prototype 2026-10-13) | Use a folder inside {name}. |
-| `LIST_COMMA(a, b)` | deviation (owner-approved Files prototype 2026-10-13) | {a}, {b} |
-| `LIST_AND(a, b)` | deviation (owner-approved Files prototype 2026-10-13) | {a} and {b} |
+| `SUBFOLDER_PLACEHOLDER` | deviation (Files prototype) | e.g. src |
+| `SUBFOLDER_ERROR(name)` | deviation (Files prototype) | Use a folder inside {name}. |
+| `LIST_COMMA(a, b)` | deviation (Files prototype) | {a}, {b} |
+| `LIST_AND(a, b)` | deviation (Files prototype) | {a} and {b} |
 
 ### 7.6 Tools and access
 
@@ -514,7 +514,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `CODEX_HOLD_TIP` | mock | Codex CLI can't pause a tool call for approval. |
 | `CODEX_NOTE` | pending (W-32) | Codex CLI can't pause a tool call for approval, and Wardyn can't block its own tools. Rules for its MCP tools are enforced by the proxy. |
 | `RULES_LABEL` | mock | Tool rules |
-| `ROW_LOCKED` | deviation (lead wording 2026-10-17, FUG-L771) | Set by your organisation's policy |
+| `ROW_LOCKED` | deviation (wording) | Set by your organisation's policy |
 | `ADD_RULE` | mock | Add a tool rule |
 | `MCP_FOR_HARNESS` | mock | MCP servers for this harness |
 | `MCP_FOLLOWS` | mock | Calls to an MCP server follow this harness's tool rules, as `mcp__<server>__<tool>`. |
@@ -539,7 +539,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `MCP_CARD_TITLE` | mock | Add an MCP server |
 | `MCP_CARD_BODY` | mock | Connect a remote MCP server by URL. Its token stays with the proxy. |
 | `MCP_CARD_BUTTON` | mock | Add MCP server |
-| `CLI_GITHUB_BODY` | deviation (owner 2026-10-13, T9) | Actions and the REST API with gh; issue and pull request lists aren't supported yet. |
+| `CLI_GITHUB_BODY` | deviation (wording) | Actions and the REST API with gh; issue and pull request lists aren't supported yet. |
 | `CARD_ADDED(name)` | mock | {name} added. Its hosts and credential are included. |
 | `COMPONENT_ADDED` | mock | Added to this run. |
 | `COMPONENT_ADDED_NAMED(name)` | mock | {name} added to this run. |
@@ -552,7 +552,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `SECRET_INTRO` | pending (W-39) | Choose one of your saved secrets and how the run receives it. Prefer a request header: no copy is placed in the sandbox. |
 | `SECRET_LABEL` | mock | Secret |
 | `SECRET_HELP` | mock | Values are stored encrypted and never shown again. Add new secrets under Your account. |
-| `SECRET_NONE` | deviation (owner approved 2026-10-17, FR-0110) | You have no saved secrets yet. |
+| `SECRET_NONE` | deviation (approved) | You have no saved secrets yet. |
 | `DELIVERY_LABEL` | mock | Delivery |
 | `DELIVERY_HEADER_OPTION` | pending (W-39) | Request header |
 | `DELIVERY_ENV_OPTION` | pending (W-39) | Environment variable |
@@ -640,7 +640,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `TOKEN_LABEL` | mock | Token |
 | `TOKEN_CONFIRM` | mock | Save token |
 | `TOKEN_SAVED` | mock | Token saved. |
-| `NOT_CHECKED` | deviation (approved 2026-10-17) | Not checked yet — too many checks this minute. Check again in a moment. |
+| `NOT_CHECKED` | deviation (approved) | Not checked yet — too many checks this minute. Check again in a moment. |
 | `STICKY_ONE` | mock | 1 item still needs setup |
 | `STICKY_MANY(n)` | mock | {n} items still need setup |
 | `STICKY_DONE` | mock | Everything is set up |
@@ -672,10 +672,10 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `ANNOUNCE_VALID` | mock | Document valid. |
 | `JSON_INVALID` | mock | This JSON document isn't valid. Check the highlighted structure. |
 | `YAML_INVALID` | pending (W-19) | This YAML document isn't valid. Check the highlighted structure. |
-| `TOO_LARGE` | deviation (owner approved 2026-10-17, FR-0098) | This file is over 1 MiB, the most the editor reads. |
-| `FILE_UNREADABLE` | deviation (owner approved 2026-10-17, FR-0098) | The browser could not read this file. |
-| `DOC_INVALID` | deviation (lead wording 2026-10-17, FR-0099) | Fix the errors in the document. |
-| `NO_HARNESS` | deviation (lead wording 2026-10-17, FR-0098) | Choose a harness to load its example. |
+| `TOO_LARGE` | deviation (approved) | This file is over 1 MiB, the most the editor reads. |
+| `FILE_UNREADABLE` | deviation (approved) | The browser could not read this file. |
+| `DOC_INVALID` | deviation (wording) | Fix the errors in the document. |
+| `NO_HARNESS` | deviation (wording) | Choose a harness to load its example. |
 | `ERR_TITLE_EXCLUDED` | server | reason template_field_excluded, mapped by run-document-canon (it owns the sentence) |
 | `ERR_END_CONFLICT` | server | reason run_end_conflicting_fields, mapped by run-document-canon (it owns the sentence) |
 | `ERR_VERSION` | server | reason template_version_unsupported, mapped by run-document-canon (it owns the sentence) |
@@ -780,7 +780,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `POLICY_BARRIER` | mock | Barrier |
 | `POLICY_NETWORK` | mock | Network |
 | `POLICY_HOSTS(n)` | mock | {n} hosts allowed |
-| `POLICY_HOST_ONE` | deviation (lead 2026-10-13, the singular of POLICY_HOSTS) | 1 host allowed |
+| `POLICY_HOST_ONE` | deviation (the singular of POLICY_HOSTS) | 1 host allowed |
 | `POLICY_CREDENTIALS` | mock | Credentials |
 | `POLICY_NO_CREDENTIALS` | mock | No credentials requested |
 | `POLICY_HIDDEN` | mock | Selected model provider · Hidden |
@@ -790,13 +790,13 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `POLICY_ACCEPTS_EDITS` | deviation (qualified for tools no rule names, #2428; proposed wording awaiting approval) | For tools without a named rule, Claude Code accepts file edits without asking and asks before other tools. Named rules still apply. |
 | `POLICY_AUTOMATIC` | mock | Run automatically |
 | `POLICY_TOOLS_OF(harness, effect)` | mock | {harness}: {effect} |
-| `INNER_WALLS(sandbox, approvals)` | deviation (approved 2026-10-19, overseer, #2822) | Harness walls: {sandbox}, {approvals} |
-| `INNER_SANDBOX_OFF` | deviation (approved 2026-10-19, overseer, #2822) | harness sandbox off |
-| `INNER_SANDBOX_OWN` | deviation (approved 2026-10-19, overseer, #2822) | the harness's own sandbox |
-| `INNER_SANDBOX_MODE(mode)` | deviation (approved 2026-10-19, overseer, #2822) | harness sandbox {mode} |
-| `INNER_APPROVALS_HARNESS` | deviation (approved 2026-10-19, overseer, #2822) | approvals in the harness |
-| `INNER_APPROVALS_WARDYN` | deviation (approved 2026-10-19, overseer, #2822) | approvals in Wardyn |
-| `INNER_APPROVALS_NONE` | deviation (approved 2026-10-19, overseer, #2822) | no approvals |
+| `INNER_WALLS(sandbox, approvals)` | deviation (approved, #2822) | Harness walls: {sandbox}, {approvals} |
+| `INNER_SANDBOX_OFF` | deviation (approved, #2822) | harness sandbox off |
+| `INNER_SANDBOX_OWN` | deviation (approved, #2822) | the harness's own sandbox |
+| `INNER_SANDBOX_MODE(mode)` | deviation (approved, #2822) | harness sandbox {mode} |
+| `INNER_APPROVALS_HARNESS` | deviation (approved, #2822) | approvals in the harness |
+| `INNER_APPROVALS_WARDYN` | deviation (approved, #2822) | approvals in Wardyn |
+| `INNER_APPROVALS_NONE` | deviation (approved, #2822) | no approvals |
 | `RAW_TITLE(format)` | mock | {format} run document |
 | `RAW_BODY` | mock | Read-only resolved draft |
 | `COPY` | mock | Copy |
@@ -804,11 +804,11 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `EDIT_FORMAT(format)` | mock | Edit {format} |
 | `SAVE_TEMPLATE` | mock | Save as template |
 | `SAVE_POLICY` | mock | Save as policy |
-| `MORE` | deviation (approved 2026-10-18) | More |
-| `MORE_ARIA` | deviation (approved 2026-10-18) | More actions |
+| `MORE` | deviation (approved) | More |
+| `MORE_ARIA` | deviation (approved) | More actions |
 | `LAUNCH_RUN` | mock | Launch run |
-| `DROPPED_HOST_ONE(host)` | deviation (approved 2026-10-17) | This run can't reach {host}: your organisation doesn't allow it. Ask your admin to allow it. |
-| `DROPPED_HOSTS_MANY(hosts)` | deviation (approved 2026-10-17) | This run can't reach {hosts}: your organisation doesn't allow them. Ask your admin to allow them. |
+| `DROPPED_HOST_ONE(host)` | deviation (approved) | This run can't reach {host}: your organisation doesn't allow it. Ask your admin to allow it. |
+| `DROPPED_HOSTS_MANY(hosts)` | deviation (approved) | This run can't reach {hosts}: your organisation doesn't allow them. Ask your admin to allow them. |
 | `POOL_FULL` | server | wait reason at_capacity, runnerpool WaitAtCapacityMsg (Go owns the sentence) |
 | `OFFLINE_BLOCKER` | server | reason runner_offline (Go owns the sentence) |
 
@@ -839,8 +839,8 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `CANCEL_SAVE` | mock | Cancel |
 | `CONFIRM_TEMPLATE` | mock | Save template |
 | `CONFIRM_POLICY` | mock | Save policy |
-| `NOTHING_PICKED` | deviation (lead wording 2026-10-17, FUG-L771) | Choose at least one part to include. |
-| `OWN_DRIVES_LEFT_OUT` | deviation (DS-2, FUG-L771) | Your own drives are left out of shared templates. |
+| `NOTHING_PICKED` | deviation (wording) | Choose at least one part to include. |
+| `OWN_DRIVES_LEFT_OUT` | deviation (DS-2) | Your own drives are left out of shared templates. |
 | `SAVED(kind)` | mock | {kind} saved without changing the draft. |
 | `NAME_TAKEN` | server | reason template_name_taken (Go owns the sentence) |
 | `LIMIT_REACHED` | server | reason template_limit_reached (Go owns the sentence) |
@@ -921,12 +921,12 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `USE` | mock | Use |
 | `RENAME` | mock | Rename |
 | `DELETE` | mock | Delete |
-| `PUBLISH` | deviation (lead wording 2026-10-17, FR-0120) | Publish to organization |
-| `PUBLISH_TITLE(name)` | deviation (lead wording 2026-10-17, FR-0120) | Publish {name} to your organization? |
-| `PUBLISHED(name)` | deviation (lead wording 2026-10-17, FR-0120) | {name} published to your organization. |
-| `WHY_ORG` | deviation (lead wording 2026-10-17, FR-0120) | Published by your organization. Only organization admins can change it. |
+| `PUBLISH` | deviation (wording) | Publish to organization |
+| `PUBLISH_TITLE(name)` | deviation (wording) | Publish {name} to your organization? |
+| `PUBLISHED(name)` | deviation (wording) | {name} published to your organization. |
+| `WHY_ORG` | deviation (wording) | Published by your organization. Only organization admins can change it. |
 | `WHY_GROUP(scope)` | mock | Published to {scope}. Only its template managers can change it. |
-| `GROUPS_UNVERIFIED` | deviation (lead 2026-10-17, proposed wording awaiting approval) | Wardyn could not check which groups you belong to, so templates shared with a group may be missing. If you signed in with SSO, sign in again to see them. |
+| `GROUPS_UNVERIFIED` | deviation (proposed wording awaiting approval) | Wardyn could not check which groups you belong to, so templates shared with a group may be missing. If you signed in with SSO, sign in again to see them. |
 | `EMPTY_TITLE` | mock | No templates yet |
 | `EMPTY_BODY` | mock | When you review a run, choose Save as template to start from the same setup next time. |
 | `NO_MATCH_TITLE` | mock | Nothing matches |
