@@ -316,8 +316,8 @@ func TestProfileChainDoubleMatchesTheRecursiveStatement(t *testing.T) {
 	c2 := types.GovernanceUnit{ID: uuid.New(), Name: "c2", ParentID: &c1.ID, Overlay: &types.CeilingOverlay{}}
 	c3 := types.GovernanceUnit{ID: uuid.New(), Name: "c3", ParentID: &c2.ID, Overlay: &types.CeilingOverlay{}}
 	chain, err := unitChainOf([]types.GovernanceUnit{root, c1, c2, c3}, nil, c3.ID)
-	if err != nil || len(chain) != maxUnitDepth || chain[0].ID != c3.ID {
-		t.Fatalf("chain = %d rows err %v, want the leaf and two bases (bounded at 3)", len(chain), err)
+	if err != nil || len(chain) != 4 || chain[0].ID != c3.ID {
+		t.Fatalf("chain = %d rows err %v, want the leaf and its three bases", len(chain), err)
 	}
 	if _, err := unitChainOf(nil, nil, c3.ID); err == nil {
 		t.Error("an unknown leaf read as a chain")
