@@ -87,9 +87,8 @@ async function saveProviders(page: Page): Promise<void> {
   // refusal", not merely "no refusal has rendered yet".
   await expect(page.getByText(PROVIDERS.SAVE_ERROR)).toHaveCount(0);
   await expect(page.getByText(PROVIDERS.SAVE_REFUSED_TITLE)).toHaveCount(0);
-  // The toast shows before the screen commits the PUT response as its new draft
-  // and baseline. An edit made in that gap is overwritten by the commit, so wait
-  // for the unsaved marker to clear: draft and baseline are then the response.
+  // The screen commits the PUT response as its new draft and baseline before the
+  // toast shows (#3329), so the unsaved marker is already clear: this asserts it.
   await expect(page.getByTestId("unsaved-marker")).toHaveCount(0);
   // The toast slides in (0.4s) at the bottom right, where Save sits once scrolled
   // to, and stays 8s. A click on Save while it slides can press Save and release
@@ -163,8 +162,6 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     ]);
   });
 
-  // #1429/#1428: an Azure DevOps row has no shared credential lane to tick; the
-  // console authors the lane its addresses call for and the person-owned choice.
   // #3329: the saved toast must not show before the screen has adopted the response, or an edit made the moment
   // it appears is overwritten by that response.
   test("an edit made the moment the saved toast shows is kept", async ({ page }) => {
@@ -183,6 +180,8 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     await saveProviders(page);
   });
 
+  // #1429/#1428: an Azure DevOps row has no shared credential lane to tick; the
+  // console authors the lane its addresses call for and the person-owned choice.
   test("Add provider authors a valid Azure DevOps row: no lanes to tick, the token choice, saved in the entra lane", async ({ page }) => {
     await gotoProviders(page);
     // The github row already exists (previous test) as a FULL row — it renders

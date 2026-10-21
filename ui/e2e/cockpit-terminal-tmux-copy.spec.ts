@@ -62,6 +62,8 @@ test("a dragged line becomes an offer, and Copy writes exactly what was selected
 
 // #2491 (WCAG 2.2.1): the offer used to vanish 10 seconds after it appeared, however long a person was reading it.
 test("an offer the pointer is over stays past its 10 seconds, and goes once the pointer leaves", async ({ page }) => {
+  // Two real waits of about 10 s each (the offer's own time) on top of the tmux attach.
+  test.setTimeout(90_000);
   const { screen, read } = await open(page);
   await page.keyboard.type("printf 'alpha beta gamma\\n'");
   await page.keyboard.press("Enter");

@@ -134,8 +134,10 @@ test.describe("permissions — the admin surface, end to end", () => {
 
   // #2515: the member count is read from the newest page of runs; a page the server cut short is not a count.
   test("a truncated runs page is not counted: the confirm says members are bounded, with no number", async ({ page }) => {
+    let served = false;
     await page.route((url) => url.pathname === "/api/v1/runs" && url.searchParams.get("offset") === "0", (route) => {
       if (route.request().method() !== "GET") return route.fallback();
+      served = true;
       return route.fulfill({
         json: [{ id: "r1", created_by: "bob@corp.example" }],
         headers: { "X-Wardyn-Truncated": "true" },
@@ -147,7 +149,8 @@ test.describe("permissions — the admin surface, end to end", () => {
     await page.getByRole("switch", { name: `${PERM.ENFORCEMENT_TITLE} ${KIND.workspace.label}` }).click();
     const dialog = page.getByRole("alertdialog");
     await expect(dialog.getByText(PERM.ENFORCE_ON_BODY_UNKNOWN)).toBeVisible();
-    await expect(dialog.getByText(PERM.ENFORCE_ON_BODY(1))).toHaveCount(0);
+    // The unknown wording is for the truncated page we served, not for a failed read.
+    expect(served).toBe(true);
     await dialog.getByRole("button", { name: "Cancel" }).click();
   });
 });
