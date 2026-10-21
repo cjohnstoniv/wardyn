@@ -150,7 +150,7 @@ describe("Name this run: a start later", () => {
     const box = await screen.findByRole("dialog", { name: NR_LAUNCH.TITLE });
     await named(box);
     await userEvent.click(launchButton());
-    expect(await within(box).findByText(NR_RUN.START_PAST, { selector: "#name-run-sentence" })).toBeInTheDocument();
+    expect(await within(box).findByText(NR_RUN.START_PAST, { selector: "#name-run-sentence p" })).toBeInTheDocument();
     expect(within(box).queryByText("start_at_past")).not.toBeInTheDocument();
     create.mockRejectedValue(new HttpError(422, SCHEDULE_REFUSAL.UNAVAILABLE(), "scheduled_runs_unavailable"));
     await userEvent.click(launchButton());
