@@ -50,6 +50,9 @@ helm repo add hashicorp https://helm.releases.hashicorp.com --force-update >/dev
 helm install vault hashicorp/vault --version "$CHART_VERSION" --namespace vault --create-namespace \
   --set server.dev.enabled=true --set server.dev.devRootToken=root --set injector.enabled=false \
   --set server.image.tag="$VAULT_TAG" >/dev/null
+# The StatefulSet creates vault-0 a moment after helm returns, and `kubectl wait` on a pod
+# that does not exist yet fails at once: wait for it to exist first.
+for _ in $(seq 60); do kubectl -n vault get pod/vault-0 >/dev/null 2>&1 && break; sleep 1; done
 kubectl -n vault wait --for=condition=Ready pod/vault-0 --timeout=180s >/dev/null
 
 vx() { kubectl -n vault exec -i vault-0 -- env VAULT_TOKEN=root "$@"; }
