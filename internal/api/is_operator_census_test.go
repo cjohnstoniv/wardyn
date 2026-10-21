@@ -68,7 +68,11 @@ var isOperatorCensus = map[string]int{
 	"setup_integrations.go:handleListIntegrations": 1,
 	// A member's Checks are redacted, so a member poll never probes the image store.
 	"setup_claude_signin_image.go:claudeSignInImageRows": 1,
-	"me.go:handleMe": 3,
+	// Key custody and the KEK row: handleSetupStatus redacts every check for a non-operator, so
+	// their inputs are not read for one.
+	"setup_checks_kek.go:kekLocalRows":    1,
+	"setup_checks_keys.go:keyCustodyRows": 1,
+	"me.go:handleMe":                      3,
 	// A member's backend row names neither the probe error nor the substrate.
 	"compose_setup.go:setupBackendItem": 1,
 	// Compares stamped tiers: the switch must not change whether a demotion

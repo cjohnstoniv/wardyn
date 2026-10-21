@@ -206,6 +206,7 @@ var queryParamNotAnID = map[string]string{
 	"subject_type":   "Explain grid (security tier route): the grant subject kind asked about",
 	"subject":        "Explain grid (security tier route): the grant subject asked about, over the table that tier already reads whole",
 	"kinds":          "Explain grid (security tier route): capability kind names, a closed set",
+	"v":              "GET /branding/logo (anonymous): the logo's content digest, which only decides whether the answer is cached for good; it names no entity",
 }
 
 // queryParamDynamicReads names the parameters a function reads through a
