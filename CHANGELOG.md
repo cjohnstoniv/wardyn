@@ -8,6 +8,23 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Before you upgrade
+
+- A member's local folder mount is now refused when its path is, or sits inside, `.codex`, `.azure`, `.gemini`, `.npmrc`, `.pypirc` or `.config/gcloud` (any letter case), as it already was for `.ssh`, `.aws` and the other credential paths. A folder that only contains one of them is still allowed. To mount that work, use a folder outside those paths.
+
+### Fixed
+
+- A queued run kill is no longer lost when 100 or more stale kills are waiting ahead of it. Before, it was never re-issued and the run kept running.
+- A full runner pool pass no longer fails with a Postgres deadlock when it updates the queue wait of waiting runs while another writer holds some of the same runs (#3369).
+- An egress approval that expires or is cancelled with nobody deciding it is no longer remembered as a "no" for the rest of the run. The request that sees it is refused as `approval:expired`, and the next request asks again.
+- The approval poll a sandbox makes no longer returns the approver's name or note (#2434).
+- The AWS CLI's derived role credentials are kept on the sandbox's temporary disk, so a kept Docker sandbox no longer holds them after the run ends.
+- A member's local folder mount that is refused now gets one sentence that does not say whether a host path exists or where a link points (#2273).
+- A sign-in sandbox no longer keeps the new credential until it is stopped: the AWS caches and the pane's history are cleared once the credential is stored, and the Claude paste sandbox is stopped when the capture is stored.
+- A runner no longer hangs at start when the container engine is stuck while it sets aside an earlier registration's runs.
+- An allowlist host written with a port or a trailing dot, such as `github.com:443`, is judged by its host, so it is no longer graded as open egress when the host is on the safe list.
+- Erasing a person now removes their name from launch presets they wrote and reports the token history it deleted (#3009).
+
 ## [0.9.7] — 2026-10-20
 
 A small release on top of 0.9.6. An Azure DevOps token that the organisation mints for a run can now be delivered to a person's own runner, off by default, and a credential delivery write that the server could not build is refused when it is made. No migration.
