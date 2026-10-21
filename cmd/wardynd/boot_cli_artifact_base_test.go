@@ -43,6 +43,6 @@ func serveKnobFlags(t *testing.T, cliArtifactBase string) *bootFlags {
 	return &bootFlags{
 		policyPath: &policy, siteConfigSeedFile: &empty, demoVideoBaseURL: &empty,
 		trustedProxies: &empty, governAdminRunsExempt: &empty, governAdminRuns: &no,
-		cliArtifactBase: &cliArtifactBase,
+		cliArtifactBase: &cliArtifactBase, orgCAFingerprints: &empty,
 	}
 }
