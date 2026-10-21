@@ -96,12 +96,12 @@ func (e *govEnv) view(c *http.Cookie, id uuid.UUID) (governanceUnitView, string)
 		e.t.Fatalf("GET /governance = %d %s", w.Code, w.Body)
 	}
 	var body struct {
-		Profiles []governanceUnitView `json:"profiles"`
+		Units []governanceUnitView `json:"units"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		e.t.Fatal(err)
 	}
-	for _, p := range body.Profiles {
+	for _, p := range body.Units {
 		if p.ID == id {
 			return p, w.Body.String()
 		}
