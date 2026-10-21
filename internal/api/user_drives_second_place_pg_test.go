@@ -14,7 +14,10 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire/runnertest"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -218,4 +221,117 @@ func TestPG_DriveSecondPlace_MixedPoolKeepsTheBoundRunner(t *testing.T) {
 	if run.Placement != types.PlacementLocal || run.RunnerID == nil || *run.RunnerID != laptop {
 		t.Fatalf("run placed %s on runner %v executor %q, want her laptop %s", run.Placement, run.RunnerID, run.RunnerPoolExecutor, laptop)
 	}
+}
+
+// streamRoots is stream with the allowed roots the runner advertises (its owner's --drive-root), none for nil.
+func (e *placementEnv) streamRoots(id uuid.UUID, roots []string) {
+	e.t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	e.t.Cleanup(cancel)
+	fake := runnertest.NewFake()
+	fake.Support.Classes = []types.ConfinementClass{types.CC1, types.CC2, types.CC3}
+	ep := e.srv.runnerEndpoint(id)
+	org, run := runnerwire.Loopback()
+	ep.link.Attach(ctx, org)
+	served := runnertest.Serve(ctx, run, id.String(), fake)
+	if err := served.PublishCaps(ctx, placement.Capacity{CPUMillisMax: 4000, MemoryMiBMax: 8192}, roots, "test"); err != nil {
+		e.t.Fatal(err)
+	}
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		if _, ok := ep.sub.Caps(); ok {
+			return
+		}
+		if time.Now().After(deadline) {
+			e.t.Fatal("the runner's caps never arrived")
+		}
+	}
+}
+
+// The runner owner's --drive-root is their consent: a share bound to their runner mounts there only inside a
+// root the runner advertises. With no roots, or with the second place outside them, the launch is refused
+// placement_local_path at create and nothing runs; a run whose runner is not the drive's bound one is refused
+// the same way at dispatch's classification.
+func TestPG_DriveSecondPlace_OnlyInsideTheRunnersAllowedRoots(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		roots []string
+		path  string
+	}{
+		{"the runner allows no roots", nil, "/srv/dev/work/team"},
+		{"the second place is outside the allowed roots", []string{"/srv/dev/work"}, "/srv/other/team"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newPlacementEnv(t)
+			ctx := context.Background()
+			e.srv.cfg.RunnerTarget = "docker"
+			pool := e.createOwnPool(e.person, "Mine")
+			laptop := e.laptop(e.personP, 4000, 8192, types.CC1, types.CC2, types.CC3)
+			e.maxRuns(laptop, e.personP, types.RunnerMaxRunsCeiling)
+			e.addToPool(e.person, pool.ID, laptop)
+			e.streamRoots(laptop, tc.roots)
+			d := driveFixture(func(d *types.UserDrive) {
+				d.Name, d.Backend, d.HostRoot, d.HomeTemplate, d.SizeMiB = "team-share", types.DriveBackendHostPath, "/srv/shares/team", types.HomeTemplateSub, 0
+				d.AltBackend, d.AltHostRoot, d.AltRunnerID = types.DriveBackendHostPath, tc.path, &laptop
+			})
+			drive, err := e.pg.UpsertUserDrive(ctx, *d, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := e.pg.UpsertUserDriveGrant(ctx, *grantFixture(drive.ID, func(g *types.UserDriveGrant) { g.Subject, g.HomeOverride = e.personP, "alice" }), true); err != nil {
+				t.Fatal(err)
+			}
+			w := e.call(e.person, http.MethodPost, "/api/v1/runs", runBody(`"drives":[{"drive_id":"`+drive.ID.String()+`"}],"runner_pool_id":"`+pool.ID.String()+`"`))
+			var out struct {
+				Reason string `json:"reason"`
+			}
+			_ = json.Unmarshal(w.Body.Bytes(), &out)
+			if w.Code != http.StatusUnprocessableEntity || out.Reason != string(placement.ReasonPlacementLocalPath) {
+				t.Fatalf("launch = %d %q, want 422 %s: %.400s", w.Code, out.Reason, placement.ReasonPlacementLocalPath, w.Body.String())
+			}
+			if n := e.count(`SELECT count(*) FROM agent_runs WHERE created_by = $1`, e.personP); n != 0 {
+				t.Fatalf("a refused launch left %d run(s)", n)
+			}
+		})
+	}
+
+	t.Run("dispatch to a runner the drive is not bound to", func(t *testing.T) {
+		e := newPlacementEnv(t)
+		pool, laptop, drive, _ := secondPlaceSetup(t, e, func(d *types.UserDrive, laptop uuid.UUID) {
+			d.AltBackend, d.AltHostRoot, d.AltRunnerID = types.DriveBackendHostPath, "/srv/dev/work/team", &laptop
+		})
+		other := e.laptop(e.personP, 4000, 8192, types.CC1, types.CC2, types.CC3)
+		e.streamRoots(other, []string{"/srv/dev/work"})
+		w := e.call(e.person, http.MethodPost, "/api/v1/runs", runBody(`"drives":[{"drive_id":"`+drive.ID.String()+`"}],"runner_pool_id":"`+pool.ID.String()+`"`))
+		var out struct {
+			ID uuid.UUID `json:"id"`
+		}
+		_ = json.Unmarshal(w.Body.Bytes(), &out)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("launch = %d %s", w.Code, w.Body)
+		}
+		run, err := e.pg.GetRun(context.Background(), out.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		spec := e.dispatchedSpec(run.ID)
+		for _, tc := range []struct {
+			on   uuid.UUID
+			want bool
+		}{{laptop, true}, {other, false}} {
+			run.RunnerID = &tc.on
+			p, err := e.srv.localResolvedPlan(context.Background(), run, false, types.SiteConfig{}, spec, nil, llmTransport{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := p.VerifiedLocalPaths["SandboxSpec.Drives[0]"]; got != tc.want {
+				t.Fatalf("on %s the drive path verified = %v, want %v", tc.on, got, tc.want)
+			}
+			if tc.want {
+				continue
+			}
+			if _, ref := placement.LocalEligibility(p); ref == nil || ref.Reason != placement.ReasonPlacementLocalPath || ref.Field != "SandboxSpec.Drives[0]" {
+				t.Fatalf("dispatch to another runner: refusal %+v, want %s on SandboxSpec.Drives[0]", ref, placement.ReasonPlacementLocalPath)
+			}
+		}
+	})
 }
