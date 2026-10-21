@@ -148,3 +148,46 @@ func TestKillTeardownTail_RevokesKeepTheirWholeWindowAfterASlowKill(t *testing.T
 		t.Fatal("the identity revoke did not run")
 	}
 }
+
+// recordSettleStore serves a killed record run and, like a real store, refuses a read on a dead
+// context. It notes whether the record reconcile got as far as reading the workspace.
+type recordSettleStore struct {
+	killRekillStore
+	workspaceRead atomic.Bool
+}
+
+func (s *recordSettleStore) GetRun(ctx context.Context, _ uuid.UUID) (types.AgentRun, error) {
+	if err := ctx.Err(); err != nil {
+		return types.AgentRun{}, err
+	}
+	return s.run, nil
+}
+
+func (s *recordSettleStore) GetWorkspace(context.Context, uuid.UUID) (types.Workspace, error) {
+	s.workspaceRead.Store(true)
+	return types.Workspace{}, context.Canceled // stop the reconcile here: reaching this call is the pin
+}
+
+// TestKillTeardownTail_RecordReconcileStillReadsTheRunAfterASlowKill: when the sandbox kill uses the
+// whole kill deadline, the record reconcile (the capture of a recording) still reads the run on a live
+// context instead of skipping it (#3440).
+func TestKillTeardownTail_RecordReconcileStillReadsTheRunAfterASlowKill(t *testing.T) {
+	h := newHarness(t)
+	runID, wsID := uuid.New(), uuid.New()
+	st := &recordSettleStore{killRekillStore: killRekillStore{run: types.AgentRun{
+		ID: runID, State: types.RunKilled, SandboxRef: "sbx-1", WorkspaceID: &wsID, Task: "workspace record"}}}
+	cfg := baseTestConfig(h, st)
+	cfg.Runner = slowKillRunner{&fakeRunner{}}
+	srv := New(cfg)
+
+	kill, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	srv.killTeardownTail(kill, st.run, types.ActorSystem, "test", nil, true)
+
+	if kill.Err() == nil {
+		t.Fatal("the fake kill did not use the whole kill deadline")
+	}
+	if !st.workspaceRead.Load() {
+		t.Error("the record reconcile did not get past its run read after a slow kill, so the recording's capture is lost")
+	}
+}

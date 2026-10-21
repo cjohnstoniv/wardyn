@@ -952,14 +952,17 @@ func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, kille
 	if queued {
 		data["sandbox_stop"] = "queued"
 	}
-	s.recordAudit(ctx, s.auditEvent(&id, killerType, killer, "run.kill",
+	// On revokeCtx, not ctx: a slow kill leaves ctx expired, and the audit row and the reconciles below
+	// would then write and read nothing. It is detached and already bounded, and it shares the
+	// revokes' window so the tail's worst case stays killCascadeTimeout + killRevokeTimeout.
+	s.recordAudit(revokeCtx, s.auditEvent(&id, killerType, killer, "run.kill",
 		id.String(), outcome, mustJSON(data)))
 
 	// A killed workspace run still settles its workspace: verify/scan runs get
 	// the no-result reconcile; a record run's kill IS the normal "Done recording"
 	// for interactive mode (which has no completion watcher), so capture here.
-	s.reconcileWorkspaceRun(ctx, id)
-	s.reconcileRecordRun(ctx, id)
+	s.reconcileWorkspaceRun(revokeCtx, id)
+	s.reconcileRecordRun(revokeCtx, id)
 
 	return killData
 }
@@ -969,8 +972,9 @@ func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, kille
 // kill route has always applied, kept as one name now that two callers share it.
 const killCascadeTimeout = 30 * time.Second
 
-// killRevokeTimeout is the window the kill's identity, broker and token revokes get after the sandbox
-// teardown, whatever the teardown used of killCascadeTimeout: a slow kubelet wait must not squeeze them.
+// killRevokeTimeout is the window the kill's revokes, its run.kill audit row and its workspace
+// reconciles share after the sandbox teardown, whatever the teardown used of killCascadeTimeout: a slow
+// kubelet wait must not squeeze them. backgroundShutdownBudget counts it.
 const killRevokeTimeout = 15 * time.Second
 
 // handleSweepSandboxes is the operator-triggered counterpart to the boot pass
