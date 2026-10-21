@@ -8,6 +8,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Fixed
+
+- A request refused because its host resolved into private address space that `internal_hosts` can lift now names the remedy: `an operator may lift this guard for <host> with site_config.internal_hosts, scoped to <range>`, with the range block (such as `100.64.0.0/10`) and never the address. The brokered git lanes, a CONNECT, a plain HTTP request and the refusal's audit row all carry it, so a self-hosted runner whose corporate resolver answers a git provider host into CGNAT or RFC1918 no longer fails with no way forward. A new `private_ip_refusals` setup check lists such refusals from the last 7 days. Nothing is lifted by default and no reach changes.
+
 ## [0.9.7] — 2026-10-20
 
 A small release on top of 0.9.6. An Azure DevOps token that the organisation mints for a run can now be delivered to a person's own runner, off by default, and a credential delivery write that the server could not build is refused when it is made. No migration.
