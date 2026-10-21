@@ -14,7 +14,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   folder as its person's own drive; whatever an agent leaves there, a planted script or a harness project file included,
   comes back in the next run that attaches it.
 - Upgrade wardyn-runnerd before you rely on a newer proxy feature: a run that sets one (`aws_sigv4`,
-  `scrub_responses`, `vm`, `port_rule` or `local_models`) is refused on a runner whose wardyn-runnerd is older.
+  `scrub_responses`, `vm`, `port_rule`, `local_models` or `kube_api`) is refused on an older wardyn-runnerd.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
   `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on
   `aws_sso_refused_tokens` (migration `0194_aws_sso_refused_tokens`). Without it an AWS SSO session whose renewal

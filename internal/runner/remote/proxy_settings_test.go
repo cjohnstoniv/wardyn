@@ -30,6 +30,7 @@ var proxySettingCases = map[string]func(*runner.ProxyConfig){
 	runnerwire.ProxySettingLocalModels: func(pc *runner.ProxyConfig) {
 		pc.LocalModels = map[string]types.LocalModelSettings{"http://models.internal:11434": {}}
 	},
+	runnerwire.ProxySettingKubeAPI: func(pc *runner.ProxyConfig) { pc.KubeAPI = &proxy.KubeAPIGrant{} },
 }
 
 // oldCapsJSON is a 0.9.x runner's caps event as it sends it: no proxy_settings key.

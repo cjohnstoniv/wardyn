@@ -155,16 +155,17 @@ const (
 	ProxySettingVM             = "vm"
 	ProxySettingPortRule       = "port_rule"
 	ProxySettingLocalModels    = "local_models"
+	ProxySettingKubeAPI        = "kube_api"
 )
 
 // ProxySettings is every run proxy setting this build's runner carries through to its proxy, in the
 // order ProxySettingsSet tests them.
-var ProxySettings = []string{ProxySettingAWSSigV4, ProxySettingScrubResponses, ProxySettingVM, ProxySettingPortRule, ProxySettingLocalModels}
+var ProxySettings = []string{ProxySettingAWSSigV4, ProxySettingScrubResponses, ProxySettingVM, ProxySettingPortRule, ProxySettingLocalModels, ProxySettingKubeAPI}
 
 // ProxySettingsSet names each of ProxySettings that pc sets, in that order; none for an unset config.
 func ProxySettingsSet(pc runner.ProxyConfig) []string {
 	var out []string
-	for i, on := range []bool{pc.AWSSigV4 != nil, pc.ScrubResponses, pc.VM, pc.PortRule != "", len(pc.LocalModels) != 0} {
+	for i, on := range []bool{pc.AWSSigV4 != nil, pc.ScrubResponses, pc.VM, pc.PortRule != "", len(pc.LocalModels) != 0, pc.KubeAPI != nil} {
 		if on {
 			out = append(out, ProxySettings[i])
 		}
