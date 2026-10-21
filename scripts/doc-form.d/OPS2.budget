@@ -4,7 +4,8 @@
 docs/operations/integrations.md=2763 share=30
 # docs/operations/launch-presets.md 432 adds 42: the preset-version-restarts-on-recreate line (0.9.3 FIN-B2).
 docs/operations/launch-presets.md=432 share=35
-docs/operations/console-branding.md=943 share=35
+# docs/operations/console-branding.md 947 adds 4 at the 0.10 W4c merge of OC-BE1 9b75afa00 onto the train, measured: the lane head measured 947 against its own 943 budget.
+docs/operations/console-branding.md=947 share=35
 # docs/operations/hybrid-laptops.md 597 adds 48: the page now leads with the client-mode claim flow and offline table; legacy enrolment is condensed under it.
 # 622 adds 25: the Azure DevOps bullet below "Where each thing lives" (#475).
 # 635 adds 13: the one-line link to the runner service install (#1968).

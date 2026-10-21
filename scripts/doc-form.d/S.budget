@@ -230,7 +230,8 @@
 # docs/sdk.md 19704 adds 22 over 19682, measured (OC-API1a review): workspace_request_invalid also answers the env-as-code write on a denied local_dir source.
 # docs/sdk.md 20927 = ours 20905 + theirs 19704 - base 19682 at the 0.10 W4c merge of OC-API1a 0f92145af onto the train.
 # docs/sdk.md 20979 = ours 20927 + theirs 20340 - base 20288 at the 0.10 W4c merge of HYB-F be73ad257 onto the train.
-docs/sdk.md=20979 share=21
+# docs/sdk.md 20983 adds 4 at the 0.10 W4c merge of OC-BE1 9b75afa00 onto the train, measured: the lane head measured 19686 against its own 19682 budget.
+docs/sdk.md=20983 share=21
 # docs/sdk.md 18691 adds 28 over 18663, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
