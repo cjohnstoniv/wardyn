@@ -34,7 +34,8 @@ func TestApprovalRuleDraftDryRunWritesNothing(t *testing.T) {
 	seed := func(kind types.ApprovalKind, scope string) uuid.UUID { return seedOn(f.run.ID, kind, scope) }
 	tool, host := seed(types.ApprovalToolCall, ruleToolScope), seed(types.ApprovalEgressDomain, ruleEgressScope)
 	late := seedOn(ended.ID, types.ApprovalToolCall, ruleToolScope) // a row the run's end did not cancel
-	// The approval store's own writes (fsmStore.Record: approval.cancel) land in the same recorder as recordAudit's.
+	// The approval store's own writes (ruleApprovals.CancelForRun's approval.cancel, through fsmStore.Record) land
+	// in the same recorder as recordAudit's, so this count covers the store as well as the audit path.
 	before := len(f.h.audit.snapshot())
 	w := do(t, f.srv, http.MethodPost, "/api/v1/governance/approval-rules/dry-run", adminToken, approvalRuleBody)
 	if w.Code != http.StatusOK {

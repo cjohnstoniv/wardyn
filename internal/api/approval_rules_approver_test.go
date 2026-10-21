@@ -130,6 +130,12 @@ func (a *ruleApprovals) Decide(ctx context.Context, id uuid.UUID, t types.ActorT
 	return approval.Decide(ctx, fsmStore{a}, id, t, d)
 }
 
+// CancelForRun runs the real cascade, so its state change and its approval.cancel row (st.Record) reach the
+// fake store and the recorder a test counts.
+func (a *ruleApprovals) CancelForRun(ctx context.Context, runID uuid.UUID, reason string) (map[string]int, error) {
+	return approval.CancelForRun(ctx, fsmStore{a}, runID, reason)
+}
+
 type fsmStore struct{ a *ruleApprovals }
 
 func (f fsmStore) CreateApproval(_ context.Context, ap types.ApprovalRequest) (types.ApprovalRequest, error) {
