@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -81,6 +82,15 @@ func TestLaunchIntentListNewestOwnOnly(t *testing.T) {
 	older := f.liLaunch(t, f.member, `{"title":"older","agent":"claude-code","task":"one"}`)
 	newer := f.liLaunch(t, f.member, `{"title":"newer","agent":"claude-code","task":"two"}`)
 	theirs := f.liLaunch(t, other, `{"agent":"claude-code","task":"three"}`)
+	// The list orders by the intent's created_at, which is the app clock at launch. Two launches a few
+	// hundred milliseconds apart can read in either order when the host clock steps between them, so the
+	// test fixes the two times rather than trusting the clock.
+	base := time.Now().UTC().Add(-time.Hour)
+	for id, at := range map[uuid.UUID]time.Time{older: base, newer: base.Add(time.Minute)} {
+		if _, err := f.pg.Pool.Exec(context.Background(), `UPDATE run_launch_intents SET created_at = $2 WHERE run_id = $1`, id, at); err != nil {
+			t.Fatal(err)
+		}
+	}
 	list := func(c *http.Cookie, query string) (int, launchIntentList) {
 		w := doSSO(t, f.srv, http.MethodGet, "/api/v1/me/launch-intents"+query, c, "")
 		var out launchIntentList
