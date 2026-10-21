@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
+	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -24,14 +25,30 @@ import (
 // tied to the profile it launched under.
 
 // sweepRunLimits is one pass of the re-clamp over every live run that captured
-// a profile. Each write is a compare-and-set on the values read, so every
-// replica can run it on its own tick and each re-clamp lands, and is audited,
-// once. A failed read changes nothing and is retried next tick.
+// a profile, then of the Wardyn boundary's maximum end over every other live
+// run. Each write is a compare-and-set on the values read, so every replica can
+// run it on its own tick and each re-clamp lands, and is audited, once. A
+// failed read changes nothing and is retried next tick.
 func (s *Server) sweepRunLimits(ctx context.Context) error {
 	rc, ok := s.cfg.Store.(store.RunLimitsReclamper)
 	if !ok {
 		return nil
 	}
+	// The Wardyn boundary's run-limit maximum binds every live run, whatever its profile or none.
+	capSec, err := s.boundaryMaxEndSec(ctx)
+	if err != nil {
+		return err
+	}
+	now := s.cfg.Now()
+	if err := s.reclampProfiledRuns(ctx, rc, capSec, now); err != nil {
+		return err
+	}
+	return s.boundaryCapUnprofiledRuns(ctx, rc, capSec, now)
+}
+
+// reclampProfiledRuns takes each profile's current limits, held to the boundary's maximum capSec
+// (0 for none), into every live run that captured it.
+func (s *Server) reclampProfiledRuns(ctx context.Context, rc store.RunLimitsReclamper, capSec int, now time.Time) error {
 	runs, err := rc.ListProfiledLiveRuns(ctx)
 	if err != nil || len(runs) == 0 {
 		return err
@@ -52,20 +69,49 @@ func (s *Server) sweepRunLimits(ctx context.Context) error {
 		}
 		current[p.Row.ID] = p.Resolved.Limits.RunLimits
 	}
-	now := s.cfg.Now()
 	for _, run := range runs {
 		// A deleted profile has no current limits to tighten to; the run keeps
-		// the ones it captured.
-		if l, ok := current[*run.GovernanceProfileID]; ok {
-			s.reclampRun(ctx, rc, run, l, now)
+		// the ones it captured, held to the boundary's maximum.
+		l, ok := current[*run.GovernanceProfileID]
+		if !ok {
+			if capSec == 0 {
+				continue
+			}
+			l = run.RunLimits
 		}
+		if capSec > 0 {
+			l.MaxEndAheadSec, l.AllowNoEnd = composer.TighterSec(l.MaxEndAheadSec, capSec), false
+		}
+		s.reclampRun(ctx, rc, run, l, now, "")
+	}
+	return nil
+}
+
+// boundaryCapUnprofiledRuns holds every live run that captured no profile (an operator's, a super
+// admin's, a break-glass or otherwise ungoverned run) to the boundary's maximum capSec, as the
+// profiled pass does. With no maximum, in no_limits included, it reads nothing and changes nothing.
+func (s *Server) boundaryCapUnprofiledRuns(ctx context.Context, rc store.RunLimitsReclamper, capSec int, now time.Time) error {
+	ul, ok := rc.(store.UnprofiledLiveRunLister)
+	if capSec == 0 || !ok {
+		return nil
+	}
+	runs, err := ul.ListUnprofiledLiveRuns(ctx)
+	if err != nil {
+		return err
+	}
+	for _, run := range runs {
+		l := run.RunLimits
+		l.MaxEndAheadSec, l.AllowNoEnd = composer.TighterSec(l.MaxEndAheadSec, capSec), false
+		s.reclampRun(ctx, rc, run, l, now, policyref.LayerBoundary)
 	}
 	return nil
 }
 
 // reclampRun takes the profile's current limits into one run wherever they are
-// tighter than what it captured, and cuts its end and wait to them.
-func (s *Server) reclampRun(ctx context.Context, rc store.RunLimitsReclamper, run types.AgentRun, profile types.RunLimits, now time.Time) {
+// tighter than what it captured, and cuts its end and wait to them. A non-empty
+// source names what the limits came from on the audit rows: "boundary" for the
+// Wardyn boundary's cut of a run with no profile.
+func (s *Server) reclampRun(ctx context.Context, rc store.RunLimitsReclamper, run types.AgentRun, profile types.RunLimits, now time.Time, source string) {
 	limits := composer.TightenRunLimits(run.RunLimits, profile)
 	if limits == run.RunLimits {
 		return
@@ -92,11 +138,15 @@ func (s *Server) reclampRun(ctx context.Context, rc store.RunLimitsReclamper, ru
 		if run.Placement == types.PlacementLocal {
 			s.renewLeaseAfterEndChange(ctx, run.ID)
 		}
+		data := map[string]any{
+			"reason": "limits_tightened", "from": run.EndsAt, "to": end, "max": limits.MaxEndAheadSec,
+			"profile_id": run.GovernanceProfileID,
+		}
+		if source != "" {
+			data["source"] = source
+		}
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.end.set", run.ID.String(),
-			"success", mustJSON(map[string]any{
-				"reason": "limits_tightened", "from": run.EndsAt, "to": end, "max": limits.MaxEndAheadSec,
-				"profile_id": run.GovernanceProfileID,
-			})))
+			"success", mustJSON(data)))
 	}
 	if wait != run.WaitBudgetSec {
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.wait_budget.set", run.ID.String(),

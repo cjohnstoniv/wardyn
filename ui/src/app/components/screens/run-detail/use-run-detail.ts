@@ -131,8 +131,10 @@ export function useRunDetail(id: string) {
         // "session.recording" names the ACTION FAMILY, prefixing both the old
         // and new action names — not itself a legacy action name (Conductor ruling, #1062).
         auditApi.listAudit(id, { actionPrefix: "session.recording" }),
+        // A desktop's screen recordings and their pause gaps (#2968), on the same terms.
+        auditApi.listAudit(id, { actionPrefix: "desktop.recording" }),
       ])
-        .then(async ([r, g, runApprovals, a, recA]) => {
+        .then(async ([r, g, runApprovals, a, recA, deskA]) => {
           // A run answer for a different id than this page shows is dropped:
           // the page never renders, or acts on, a run it was not asked for.
           // Case-insensitive: a non-canonical UUID in the URL is still this run.
@@ -162,7 +164,8 @@ export function useRunDetail(id: string) {
           // predicate cannot leak another run's rows onto this page.
           if (runApprovals.status === "fulfilled")
             setApprovals(runApprovals.value.filter((x) => x.run_id.toLowerCase() === id.toLowerCase()));
-          if (recA.status === "fulfilled") setRecordingAudit(recA.value);
+          if (recA.status === "fulfilled")
+            setRecordingAudit(deskA.status === "fulfilled" ? [...recA.value, ...deskA.value] : recA.value);
           setStatus("ready");
           // R-5: run.complete/run.kill/run.autostop cannot exist for a run that
           // ISN'T terminal — fetching them every DETAIL_POLL_MS tick on a live

@@ -129,6 +129,10 @@ type SiteConfig struct {
 	// no autonomy cap, env-var and file delivery allowed, no CC3 floor for
 	// component credentials.
 	Components *ComponentSettings `json:"components,omitempty"`
+	// Recording is the organisation's recording level and whether it is a locked minimum. A POINTER
+	// for the same byte-identical-GET reason as the provider blocks; nil is today's behaviour: terminal
+	// sessions recorded, and a policy may choose another level.
+	Recording *SiteRecording `json:"recording,omitempty"`
 	// EffectiveScmHosts is READ-ONLY, SERVER-OWNED: ScmHosts minus hosts a
 	// provider row claims, union enabled providers' hosts. A real field
 	// (not a wrapper key) so a get|set round trip still decodes under

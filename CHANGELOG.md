@@ -27,6 +27,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) that turn on `WARDYN_MULTI_AGENT_TASKS`: grant the app role
   `UPDATE` on `run_harnesses` (migration `0201_run_harness_task` adds `task`, which person erasure blanks). With the
   switch off, nothing needs the grant.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
+  `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE` on
+  `governance_boundary` (migration `0200_governance_boundary`). Without it the Wardyn boundary cannot be read or
+  written. The same migration's `agent_runs.break_glass` column needs no grant.
 
 ### Added
 
@@ -53,6 +57,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
     `cli.session.revoke`, `cli.session.refresh_refused` and `cli.session.reuse_detected`. `token.create` rows carry
     `kind`; `session.revoke` rows carry `cli_sessions_ended`.
 - The runner's managed-settings lock. A macOS managed profile that sets `lock_security_settings` now outranks a flag for `OrgURL`, `ProxyImage`, `TrustedCAFile`, `OrgCAFile` and `RecordingStore`, and `wardyn-runnerd serve` refuses to start on a flag or environment variable that disagrees, naming the setting. It is off by default, so nothing changes until an administrator sets it.
+- Recording is a level: a policy's `recording` is `off`, `terminal` or `screen_actions`, and
+  `site_config.recording` sets the organisation's level and can lock it as a minimum. Nothing set records terminal
+  sessions, as before. `WARDYN_RECORDING_STORE=off` still records nothing, and keystrokes are never recorded.
 
 ### Changed
 

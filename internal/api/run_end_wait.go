@@ -124,8 +124,11 @@ func (s *Server) handleSetRunEndAndWait(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	exempt := s.runUngoverned(r.Context())
-	p := planRunEndWait(run, req, present, exempt, s.cfg.Now(), s.cfg.ApprovalExpiryAfter)
+	planned, exempt, ok := s.boundaryEndPlan(w, r, run)
+	if !ok {
+		return
+	}
+	p := planRunEndWait(planned, req, present, exempt, s.cfg.Now(), s.cfg.ApprovalExpiryAfter)
 	actorType, actor := actorFromRequest(r)
 	if p.status == http.StatusForbidden {
 		s.recordAudit(r.Context(), s.auditEvent(&run.ID, actorType, actor, p.refusedAction, run.ID.String(),
@@ -135,11 +138,7 @@ func (s *Server) handleSetRunEndAndWait(w http.ResponseWriter, r *http.Request) 
 		writeErrorReason(w, p.status, p.refusalReason, p.refusal)
 		return
 	}
-	// Only when the captured profile limit is what cut the end: a pool or
-	// deployment lifetime cap binds a new run the same way.
-	if !exempt && slices.Contains(p.resp.Capped, "ends_at") && p.resp.LatestEndSource == types.LimitSourceGovernance {
-		p.resp.EndsCapLoosened = s.endsCapLoosened(r.Context(), run)
-	}
+	p.resp.EndsCapLoosened = s.endsCapLoosenedFor(r.Context(), planned, exempt, p.resp)
 	if p.endChanged && (p.resp.EndsAt == nil || (run.EndsAt != nil && p.resp.EndsAt.After(*run.EndsAt))) {
 		if ref := s.extendRefusal(r, run); ref != nil {
 			s.recordAudit(r.Context(), s.auditEvent(&run.ID, actorType, actor, "run.end.set", run.ID.String(),
@@ -221,6 +220,13 @@ func endSetAudit(run types.AgentRun, resp runEndWaitResponse, exempt bool) map[s
 		data["source"] = resp.LatestEndSource
 	}
 	return data
+}
+
+// endsCapLoosenedFor is endsCapLoosened where it applies: only when the captured profile limit is
+// what cut the end, since a pool or deployment lifetime cap binds a new run the same way.
+func (s *Server) endsCapLoosenedFor(ctx context.Context, run types.AgentRun, exempt bool, resp runEndWaitResponse) bool {
+	return !exempt && slices.Contains(resp.Capped, "ends_at") && resp.LatestEndSource == types.LimitSourceGovernance &&
+		s.endsCapLoosened(ctx, run)
 }
 
 // endsCapLoosened reports whether the profile this run launched under now

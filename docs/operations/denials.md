@@ -41,10 +41,11 @@ read.
   - `GET /runs/{id}/policy` carries `provenance` (0.10): per top-level policy key, the layer
     that set its value at create.
     - `layer`: `deployment` or `profile` (a ceiling set or narrowed it), `member` (the run's own
-      policy or edits) or `operator` (no ceiling binds the run).
+      policy or edits), `operator` (no ceiling binds the run) or `boundary` (the
+      [Wardyn boundary](boundary.md) narrowed it).
     - `name`: the leaf profile, or `deployment`, never a base. `contact`: the leaf's, or the
-      site's `policy_help`, as of the read. `locked`: absent until org walls or delegation can
-      forbid lower layers to change a value.
+      site's `policy_help`, as of the read. `locked`: absent until per-knob locks can forbid
+      lower layers to change a value.
     - `run.policy.resolve` records the map without contacts. Hosts added at launch are listed in
       `changes`, not here.
   - `wardyn` prints one `governed by …, to request a change: …` line after the error when the

@@ -313,7 +313,13 @@ export interface RunPolicySpec {
   // The harness's own walls inside Wardyn's (mirrors Go's RunPolicySpec.HarnessInnerWalls, #2822):
   // a choice per axis that only adds walls; the create door refuses a run it would loosen.
   harness_inner_walls?: HarnessInnerWalls;
+  // How much of a run is recorded (mirrors Go's RunPolicySpec.Recording). Absent chooses nothing:
+  // the organisation's level applies. A ceiling's level is a minimum. Keystrokes are never recorded.
+  recording?: RecordingLevel;
 }
+
+/** Go: types.RecordingLevel. */
+export type RecordingLevel = "off" | "terminal" | "screen_actions";
 
 // Mirrors Go's types.HarnessInnerWalls. On a policy each field is a choice; on a run or a Review
 // fact it is what the harness launches with, where an absent sandbox_mode is the harness's own
