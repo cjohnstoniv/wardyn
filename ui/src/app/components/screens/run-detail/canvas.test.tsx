@@ -635,12 +635,15 @@ describe("RunCanvas — the fill rule stretches a widget's root card, not a widg
   });
 });
 
-// #3372: the pane is measured below the status strip, so a window whose pane is a little under the old 520 floor
-// must still get twelve rows that fit it (the rows round, so allow half a pixel each).
+// #3372: the canvas measures its own scroll box, so twelve rows plus their gaps and padding must never outgrow a
+// measured pane. Below 466px the 28px row minimum binds and the canvas scrolls instead; that is a tiny window.
 describe("canvasRowHeight", () => {
-  it.each([470, 490, 510])("twelve rows fit a %ipx pane", (pane) => {
-    const total = 12 * canvasRowHeight(pane) + 11 * 10 + 2 * 10;
-    expect(total).toBeLessThanOrEqual(pane + 6);
+  const grid = (rowHeight: number) => 12 * rowHeight + 11 * 10 + 2 * 10;
+  it("twelve rows never outgrow a measured pane, at every height from 470 to 900", () => {
+    for (let pane = 470; pane <= 900; pane++) expect(grid(canvasRowHeight(pane)), `pane ${pane}`).toBeLessThanOrEqual(pane);
+  });
+  it("sizes an unmeasured pane (height 0) as 520px tall", () => {
+    expect(canvasRowHeight(0)).toBe(canvasRowHeight(520));
   });
   it("is unchanged for a tall pane", () => {
     expect(canvasRowHeight(900)).toBe(64);
