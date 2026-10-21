@@ -84,6 +84,7 @@ describe("template field registry", () => {
       "policy_overlay",
       "preset",
       "preset_version",
+      "run_in",
       "start_at",
       "start_time_zone",
       "title",
