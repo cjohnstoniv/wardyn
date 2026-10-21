@@ -22,6 +22,8 @@ import type {
   RunPolicySpec,
 } from "../types";
 import type { PlacementValue } from "../types/new-run-contract";
+import type { PolicyProvenance } from "../types/runs";
+import type { Boundary, BoundaryChange } from "./boundary";
 import { USER_TYPE_STANDARD } from "../types/user-types";
 import { asJson, errEnvelope, errText, HttpError, throwIfPending, unwrapList, wfetch } from "./core";
 
@@ -221,6 +223,8 @@ export interface GovernanceUnit {
   depth?: number;
   // governanceUnitView.Effective: on GET /governance and the write responses.
   effective?: GovernanceEffective;
+  // On GET /governance: the membership subjects in this unit or below it; absent for Default.
+  people?: number;
 }
 
 // types.GovernanceMembership — one subject bound to one profile.
@@ -244,6 +248,8 @@ export interface GovernanceSnapshot {
   assignments: GovernanceMembership[];
   // The maximum unit depth in force (site_config.governance_max_depth, 16 when unset).
   max_depth?: number;
+  // The Wardyn boundary, as GET /governance/boundary returns it.
+  boundary?: Boundary;
 }
 
 // The POST/PUT body. id/created_at/updated_at/created_by are never sent — the
@@ -298,6 +304,8 @@ export interface GovernancePreviewInput {
   // The user type id both previews send: the picker's choice, Standard when there is no picker. An empty value means "no type tier" to the
   // server, which is not what a signed-in person's run is given.
   user_type: string;
+  // One of the person's units (id or exact name) to answer `effective` for; absent: the home one.
+  run_in?: string;
 }
 
 // One kind-LESS claims textarea onto the two typed wire lists both previews
@@ -335,6 +343,53 @@ export interface GovernancePreview {
   unit_id?: string;
   unit_name?: string;
   matched_tier?: CapabilitySubjectType;
+}
+
+// governanceCheckResponse (internal/api/governance_check.go): the preview's home fields plus every
+// context of the person (path leaf first), their dormant memberships, and the walls of the context
+// asked for (run_in) or the home one, with the layer that set each knob.
+export interface GovernanceUnitLink {
+  id: string;
+  name: string;
+}
+export interface GovernanceCheckContext {
+  unit_id: string;
+  unit_name: string;
+  home: boolean;
+  legacy: boolean;
+  path: GovernanceUnitLink[];
+}
+export interface GovernanceDormantMembership {
+  membership_id: string;
+  unit_id: string;
+  unit_name: string;
+}
+export interface GovernanceCheck extends GovernancePreview {
+  contexts: GovernanceCheckContext[];
+  dormant: GovernanceDormantMembership[];
+  effective: { ceiling: RunPolicySpec; limits: GovernanceLimits; provenance: Record<string, PolicyProvenance> } | null;
+}
+
+// POST /governance/dry-run with a unit or membership_move target (governance_dry_run.go). The
+// boundary target's body and report are boundary.ts's.
+export type TreeDryRunInput =
+  | ({ target: "unit"; id?: string } & GovernanceUnitInput)
+  | { target: "membership_move"; id: string; unit_id: string };
+export interface TreeDryRunPerson {
+  membership_id: string;
+  subject_type: CapabilitySubjectType;
+  subject: string;
+  from_unit_id: string;
+  from_unit_name: string;
+  unit_id: string;
+  unit_name: string;
+  changes: BoundaryChange[];
+  error?: string;
+}
+export interface TreeDryRunReport {
+  target: "unit" | "membership_move";
+  people: TreeDryRunPerson[];
+  live_runs: string[];
 }
 
 // The server composes a grant-bound refusal as "invalid ceiling: " + the
@@ -414,6 +469,34 @@ export const governance = {
     if (!res.ok && res.status !== 404) {
       throw new HttpError(res.status, await errText(res));
     }
+  },
+
+  // PUT /api/v1/governance/memberships/{id} -> the moved row, or PendingChangeError when held.
+  async moveAssignment(id: string, unitId: string): Promise<GovernanceMembership> {
+    const res = await wfetch(`/governance/memberships/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      asPerson: true,
+      body: JSON.stringify({ unit_id: unitId }),
+    });
+    return asJson<GovernanceMembership>(res);
+  },
+
+  // POST /api/v1/governance/memberships/{id}/promote -> the row as a context, or PendingChangeError when held.
+  async promoteAssignment(id: string): Promise<GovernanceMembership> {
+    const res = await wfetch(`/governance/memberships/${encodeURIComponent(id)}/promote`, { method: "POST", asPerson: true });
+    return asJson<GovernanceMembership>(res);
+  },
+
+  // POST /api/v1/governance/check -> the full check: the person's contexts and the walls of one.
+  async checkGovernance(input: GovernancePreviewInput): Promise<GovernanceCheck> {
+    const res = await wfetch("/governance/check", { method: "POST", body: JSON.stringify(input) });
+    return asJson<GovernanceCheck>(res);
+  },
+
+  // POST /api/v1/governance/dry-run with a unit or membership_move target. Writes nothing.
+  async dryRunTree(input: TreeDryRunInput): Promise<TreeDryRunReport> {
+    const res = await wfetch("/governance/dry-run", { method: "POST", asPerson: true, body: JSON.stringify(input) });
+    return asJson<TreeDryRunReport>(res);
   },
 
   // POST /api/v1/governance/check -> 200, the resolved profile or {}.

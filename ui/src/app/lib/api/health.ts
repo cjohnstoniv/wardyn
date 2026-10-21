@@ -166,6 +166,8 @@ export interface PolicyRef {
   layer?: string;
   // The person changed the policy for this run, inside their ceiling.
   overridden?: boolean;
+  // On a refusal: the knob it is about is locked by the layer that set it (absent until locks exist).
+  locked?: boolean;
 }
 
 // Result of a real throwaway-sandbox probe (test-proxy / test-redirect) —

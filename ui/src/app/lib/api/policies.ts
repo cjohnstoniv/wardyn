@@ -16,7 +16,19 @@ import { asJson, errText, HttpError, unwrapList, wfetch, withLimit } from "./cor
 // assignment — absent, never "". That is what lets the member surfaces follow
 // the absent-row doctrine: no profile ⇒ no chip, no line, no placeholder, and
 // today's screens byte for byte.
-export type DefaultPolicy = RunPolicySpec & { unit_name?: string };
+// contexts (the caller's own units; absent for a caller no ceiling binds) and unit_path (the
+// answered unit and those above it, leaf first, names only; absent for the Default unit) are the
+// policy tree's.
+export interface DefaultPolicyContext {
+  unit_id: string;
+  unit_name: string;
+  home: boolean;
+}
+export type DefaultPolicy = RunPolicySpec & {
+  unit_name?: string;
+  unit_path?: { id: string; name: string }[];
+  contexts?: DefaultPolicyContext[];
+};
 
 // One thing a saved policy needs before a run can use it: the same row a
 // component save answers (pkg/client's ComponentRequirement), a stored secret its
@@ -60,8 +72,10 @@ export const policies = {
   // without a policy_id gets, and the ceiling their inline policy is clamped
   // against. Routed through effectiveCeiling since 0.7, so for a
   // member under a governance profile this answers with THAT profile's spec.
-  async getDefaultPolicy(): Promise<DefaultPolicy> {
-    const res = await wfetch("/policies/default", { method: "GET" });
+  // runIn answers for another of the caller's units (?run_in=, an id or exact name).
+  async getDefaultPolicy(runIn?: string): Promise<DefaultPolicy> {
+    const q = runIn ? `?run_in=${encodeURIComponent(runIn)}` : "";
+    const res = await wfetch(`/policies/default${q}`, { method: "GET" });
     return asJson<DefaultPolicy>(res);
   },
 

@@ -15,7 +15,7 @@ export interface GovernanceChange {
   // runner_pool_use_policy, service_identity (and later kinds): kept a string so a kind this console
   // predates still lists, under its raw name.
   target_kind: string;
-  // create, update, delete, upsert, replace or set.
+  // create, update, delete, upsert, replace or set; a membership change may also be move or promote.
   op: string;
   target_key: string;
   state: GovernanceChangeState;
@@ -38,4 +38,6 @@ export interface GovernanceChangeDiff {
   changed: string[];
   // Advisory sentences the server wrote about the proposed change (a profile's omission warnings); absent when none.
   notes?: string[];
+  // A legacy membership delete: the units whose legacy memberships may become someone's context.
+  activates?: { unit_id: string; unit_name: string }[];
 }
