@@ -15,7 +15,7 @@ import (
 )
 
 // TestPG_DriveSecondPlace_RoundTripsAndStaysOffWithout: a share's second place
-// (0204) survives the write and every read the resolver and the admin list use,
+// (0211) survives the write and every read the resolver and the admin list use,
 // clears back to NULL, and a drive that never had one reads none.
 func TestPG_DriveSecondPlace_RoundTripsAndStaysOffWithout(t *testing.T) {
 	pool := runsPGPool(t)
@@ -85,7 +85,7 @@ func TestPG_DriveSecondPlace_RoundTripsAndStaysOffWithout(t *testing.T) {
 	}
 }
 
-// TestPG_DriveSecondPlace_CheckRefusesTheWrongShape: 0204's check keeps a second
+// TestPG_DriveSecondPlace_CheckRefusesTheWrongShape: 0211's check keeps a second
 // place off a managed volume, never managed itself, and never half-set.
 func TestPG_DriveSecondPlace_CheckRefusesTheWrongShape(t *testing.T) {
 	pool := runsPGPool(t)

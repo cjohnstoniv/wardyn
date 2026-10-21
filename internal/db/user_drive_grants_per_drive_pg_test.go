@@ -69,7 +69,7 @@ func TestPG_UserDriveGrantsPerDriveUpgrade(t *testing.T) {
 		}
 		return out
 	}
-	// The store under test is today's and reads 0205's and 0204's columns; a
+	// The store under test is today's and reads 0205's and 0211's columns; a
 	// pre-0169 schema gets them as those add them, so only 0169 moves under it.
 	for _, q := range []string{
 		`ALTER TABLE user_drives ADD COLUMN team BOOLEAN NOT NULL DEFAULT FALSE`,
