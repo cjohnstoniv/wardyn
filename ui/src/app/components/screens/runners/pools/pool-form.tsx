@@ -14,6 +14,7 @@ import { toast } from "sonner";
 import { HttpError } from "../../../../lib/api/core";
 import { runnerPools } from "../../../../lib/api/runner-pools";
 import { getErrorMessage } from "../../../../lib/format";
+import { useUnsavedGuard } from "../../../../lib/use-unsaved-guard";
 import type { RunnerPool, RunnerPoolMemberView } from "../../../../lib/types/runner-pools";
 import { POOL_DRAWER, POOL_FORM, POOLS } from "../../../wardyn/copy/runner-pools";
 import { Field } from "../../../wardyn/form-primitives";
@@ -111,6 +112,11 @@ export function PoolFormScreen({ scope }: { scope: "admin" | "mine" }) {
   const back = () => navigate(mine ? "/account#my-runner" : "/admin/runners?tab=pools");
   const set = (patch: Partial<FormValues>) => setValues((v) => ({ ...v, ...patch }));
   const patchRt = (k: "bg" | "it") => (patch: Partial<RtValues>) => setValues((v) => ({ ...v, [k]: { ...v[k], ...patch } }));
+
+  // Leaving with edits that were not saved asks first; a save navigates away. The loaded pool (and a Reload) is the
+  // baseline, so the async load that resets `values` is not an edit.
+  const edited = JSON.stringify(values, null, 2);
+  useUnsavedGuard("pool-form", edited !== JSON.stringify(fromPool(pool ?? undefined), null, 2), () => edited);
 
   const submit = async (ev: React.FormEvent) => {
     ev.preventDefault();
