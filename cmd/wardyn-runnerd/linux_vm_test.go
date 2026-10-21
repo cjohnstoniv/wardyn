@@ -102,3 +102,56 @@ func TestFullSpoolPassDoesNotHoldTheTick(t *testing.T) {
 		t.Fatalf("two ticks ended %d runs, want one pass", len(e.runs))
 	}
 }
+
+// Close joins a running full-spool pass, so the runner never exits with a goroutine still ending a VM,
+// and gives up on a pass that outlives its own budget. No pass starts once Close has begun.
+func TestDockerSinkCloseJoinsTheFullSpoolPass(t *testing.T) {
+	prev := fullSpoolBound
+	fullSpoolBound = 300 * time.Millisecond
+	t.Cleanup(func() { fullSpoolBound = prev })
+	start := func(t *testing.T) (*dockerSink, *endCalls, func(context.Context)) {
+		h := newSinkHarness(t)
+		e := &endCalls{isVM: true, hold: make(chan struct{})}
+		endVMsOnFullSpool(h.sink, &runnerwire.VMCaps{}, e.end)
+		h.fillSpool(false)
+		d := &dockerSink{spoolSink: h.sink}
+		tick := d.extras(nil, nil).options.Tick
+		tick(t.Context())
+		return d, e, tick
+	}
+	closed := func(d *dockerSink) chan struct{} {
+		done := make(chan struct{})
+		go func() { _ = d.Close(); close(done) }()
+		return done
+	}
+	t.Run("waits for the pass", func(t *testing.T) {
+		d, e, tick := start(t)
+		done := closed(d)
+		select {
+		case <-done:
+			t.Fatal("Close returned while a full-spool pass was still ending a VM")
+		case <-time.After(100 * time.Millisecond):
+		}
+		tick(t.Context()) // after Close began: starts nothing
+		close(e.hold)
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("Close did not return once the pass finished")
+		}
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		if len(e.runs) != 1 {
+			t.Fatalf("the pass ended %d VMs, want 1", len(e.runs))
+		}
+	})
+	t.Run("gives up at the pass's budget", func(t *testing.T) {
+		d, e, _ := start(t)
+		t.Cleanup(func() { close(e.hold) })
+		select {
+		case <-closed(d):
+		case <-time.After(5 * time.Second):
+			t.Fatal("Close waited past the pass's budget")
+		}
+	})
+}

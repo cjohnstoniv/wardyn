@@ -81,6 +81,9 @@ type manifest struct {
 	Grant       *Grant       `json:"grant,omitempty"`
 	Gen         uint64       `json:"gen,omitempty"`
 	PendingLoss *PendingLoss `json:"pending_loss,omitempty"`
+	// RefusedAtGrant is Producer.Refused when the outstanding grant was issued: a refusal counted
+	// past it was made against this grant (Full).
+	RefusedAtGrant uint64 `json:"refused_at_grant,omitempty"`
 }
 
 // Disposition is the one durable outcome of a producer sequence.
@@ -445,11 +448,13 @@ func (s *Spool) CanRecord(ctx context.Context) error {
 	})
 }
 
-// Full reports whether the spool can issue no usable credit: nextGrant would give a session no
-// record, or fewer bytes than the smallest request a proxy reserves (MinRequestReservation). It is
-// derived from nextGrant's own arithmetic (grantRoom), so the two cannot drift: a proxy admits
-// nothing from a spool Full reports, and holds each request until it answers a retryable 503. A sealed
-// spool is not full: its run is retired.
+// Full reports whether the spool is full for the proxy that writes it: the sink can grant no record,
+// or a request was refused against the outstanding grant (Producer.Refused moved since it was issued)
+// while the room left is below the largest record a request can reserve (MaxRecordBytes). A refusal
+// with more room than that is a burst a regrant clears. A real request reserves its record envelope
+// plus 12 bytes per byte of its target, so the proxy stalls tens or hundreds of bytes above
+// MinRequestReservation, and a scanned POST a megabyte above it: only a counted refusal says which.
+// A sealed spool is not full: its run is retired.
 func (s *Spool) Full(ctx context.Context) (full bool, err error) {
 	err = s.locked(ctx, func() error {
 		m, err := s.readManifest()
@@ -457,7 +462,8 @@ func (s *Spool) Full(ctx context.Context) (full bool, err error) {
 			return err
 		}
 		records, bytes := grantRoom(m)
-		full = records < 1 || bytes < MinRequestReservation
+		refusedHere := m.Producer != nil && m.Producer.Refused > m.RefusedAtGrant
+		full = records < 1 || (refusedHere && bytes < MaxRecordBytes)
 		return nil
 	})
 	return full, err
@@ -590,7 +596,7 @@ func (s *Spool) Accept(ctx context.Context, instance string) (out Session, err e
 			m.Producer = &Producer{Instance: instance}
 		}
 		g := nextGrant(m)
-		m.Grant = &g
+		m.Grant, m.RefusedAtGrant = &g, m.Producer.Refused
 		if err := s.writeManifest(m); err != nil {
 			return err
 		}
@@ -615,7 +621,7 @@ func (s *Spool) Regrant(ctx context.Context, gen uint64, instance string) (g Gra
 		if g == *m.Grant {
 			return nil
 		}
-		m.Grant, changed = &g, true
+		m.Grant, m.RefusedAtGrant, changed = &g, m.Producer.Refused, true
 		return s.writeManifest(m)
 	})
 	return

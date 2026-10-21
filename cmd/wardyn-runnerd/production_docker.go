@@ -564,7 +564,10 @@ type dockerSink struct {
 	lns    []net.Listener
 	url    string // decision_sink.url for new proxies; "" until use
 
-	fullBusy atomic.Bool // a full-spool pass is running (endFullSpoolVMsInBackground)
+	fullBusy   atomic.Bool // a full-spool pass is running (endFullSpoolVMsInBackground)
+	fullMu     sync.Mutex  // guards fullClosed and the Add on fullPasses
+	fullClosed bool        // Close has begun: no new pass starts
+	fullPasses sync.WaitGroup
 }
 
 // newDockerSink starts the sink, listening at once where it listened before a restart when that
@@ -610,6 +613,7 @@ func (d *dockerSink) listen(ap netip.AddrPort) (uint16, error) {
 // Close closes the sink and every listener it opened, one whose Serve has not started included, so
 // its port is free once Close returns.
 func (d *dockerSink) Close() error {
+	d.joinFullPass()
 	err := d.spoolSink.Close()
 	d.addrMu.Lock()
 	lns := d.lns
@@ -652,21 +656,40 @@ func (d *dockerSink) proxyURL() string {
 }
 
 // fullSpoolBound bounds one full-spool pass: ending a VM waits for the guest's power down.
-const fullSpoolBound = 2 * time.Minute
+var fullSpoolBound = 2 * time.Minute
 
 // endFullSpoolVMsInBackground runs the full-spool pass off the containment tick, one at a time. The tick
 // shares its 30 s safety context with CheckLapses, which runs after it, and ending one VM can take
 // that long: the pass gets a budget of its own and never delays a lapse.
 func (d *dockerSink) endFullSpoolVMsInBackground(ctx context.Context) {
-	if !d.fullBusy.CompareAndSwap(false, true) {
+	d.fullMu.Lock()
+	if d.fullClosed || !d.fullBusy.CompareAndSwap(false, true) {
+		d.fullMu.Unlock()
 		return
 	}
+	d.fullPasses.Add(1)
+	d.fullMu.Unlock()
 	go func() {
+		defer d.fullPasses.Done()
 		defer d.fullBusy.Store(false)
 		pass, cancel := context.WithTimeout(context.WithoutCancel(ctx), fullSpoolBound)
 		defer cancel()
 		d.EndVMsWithFullSpools(pass)
 	}()
+}
+
+// joinFullPass stops new full-spool passes and waits for a running one, for at most fullSpoolBound (the
+// pass's own budget), so Close never returns with a goroutine still ending a VM.
+func (d *dockerSink) joinFullPass() {
+	d.fullMu.Lock()
+	d.fullClosed = true
+	d.fullMu.Unlock()
+	done := make(chan struct{})
+	go func() { d.fullPasses.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(fullSpoolBound):
+	}
 }
 
 // extras are the sink's part of the runtime: Tick regrants credit after the organisation's acks and

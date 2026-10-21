@@ -86,6 +86,8 @@ type sinkRun struct {
 	drained *runnerspool.Drained
 	// fullHandled: the run's full spool was seen and acted on (EndVMsWithFullSpools); guarded by spoolSink.mu.
 	fullHandled bool
+	// endWarned is when a failed end of the run's VM was last logged; guarded by spoolSink.mu.
+	endWarned time.Time
 }
 
 type sinkSession struct {
@@ -567,6 +569,9 @@ func (s *spoolSink) Tick(ctx context.Context) {
 	}
 }
 
+// endWarnEvery spaces the log lines of a VM end that keeps failing.
+var endWarnEvery = time.Minute
+
 // EndVMsOnFullSpool turns on the full-spool rule for Linux VM sandboxes: end is asked to end a run's
 // VM and reports false for a run that is not one. Without it a full spool only stops the run's proxy
 // admitting (the proxy holds a request, then answers a retryable 503).
@@ -598,7 +603,16 @@ func (s *spoolSink) EndVMsWithFullSpools(ctx context.Context) {
 		}
 		isVM, err := end(ctx, r.id)
 		if err != nil {
-			slog.Warn("runnerd: ending a Linux VM whose audit spool is full will retry", slog.String("run_id", r.id.String()), slog.Any("err", err))
+			// Retried every tick: log the first failure, then once per endWarnEvery.
+			s.mu.Lock()
+			due := r.endWarned.IsZero() || time.Since(r.endWarned) >= endWarnEvery
+			if due {
+				r.endWarned = time.Now()
+			}
+			s.mu.Unlock()
+			if due {
+				slog.Warn("runnerd: ending a Linux VM whose audit spool is full will retry", slog.String("run_id", r.id.String()), slog.Any("err", err))
+			}
 			continue
 		}
 		s.mu.Lock()

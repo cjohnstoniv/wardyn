@@ -4,23 +4,40 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runnerspool"
 )
 
 // fillSpool makes the run's spool full by rows, or by bytes when byBytes: only its manifest is
-// changed, the way a long offline stretch would leave it. The byte case leaves 1 MiB and 1000 rows,
-// where the grant's per-record envelopes already hold back every byte of credit.
+// changed, the way a long offline stretch would leave it. By rows, no room is left for a record. By
+// bytes, a session leaves the credit 100 bytes above the smallest request's envelope and the proxy
+// is refused against it (the stall real requests hit; see tightenBytes and refuse).
 func (h *sinkHarness) fillSpool(byBytes bool) {
+	h.t.Helper()
+	if byBytes {
+		c, gen := h.tightenBytes()
+		h.refuse(c, gen)
+		return
+	}
+	h.editManifest(func(m map[string]any) { m["last"] = runnerspool.MaxRecords })
+}
+
+func (h *sinkHarness) editManifest(edit func(map[string]any)) {
 	h.t.Helper()
 	p := filepath.Join(h.dir, "spools", h.id.String(), "state.json")
 	b, err := os.ReadFile(p)
@@ -31,16 +48,44 @@ func (h *sinkHarness) fillSpool(byBytes bool) {
 	if err := json.Unmarshal(b, &m); err != nil {
 		h.t.Fatal(err)
 	}
-	if byBytes {
-		m["last"], m["bytes"] = 1000, runnerspool.MaxBytes-runnerspool.LossReserveBytes-(1<<20)
-	} else {
-		m["last"] = runnerspool.MaxRecords
-	}
+	edit(m)
 	if b, err = json.Marshal(m); err != nil {
 		h.t.Fatal(err)
 	}
 	if err := os.WriteFile(p, b, 0o600); err != nil {
 		h.t.Fatal(err)
+	}
+}
+
+// tightenBytes opens a proxy session, leaves the spool 100 bytes of credit above the smallest request
+// envelope and has the sink regrant: the proxy now holds a grant no real request fits.
+func (h *sinkHarness) tightenBytes() (*tls.Conn, uint64) {
+	h.t.Helper()
+	c := h.dial(h.key, inst)
+	acc := mustRead(h.t, c, proxy.FrameAccept)
+	mustRead(h.t, c, proxy.FrameGrant)
+	h.editManifest(func(m map[string]any) {
+		m["last"], m["bytes"] = 10, runnerspool.MaxBytes-runnerspool.LossReserveBytes-runnerspool.GrantRecords*512-(runnerspool.MinRequestReservation+100)
+	})
+	h.sink.Tick(h.t.Context())
+	mustRead(h.t, c, proxy.FrameGrant)
+	return c, acc.Gen
+}
+
+// refuse sends the proxy's refused frame and waits until the spool counts it.
+func (h *sinkHarness) refuse(c *tls.Conn, gen uint64) {
+	h.t.Helper()
+	if err := proxy.WriteSinkFrame(c, proxy.SinkFrame{T: proxy.FrameRefused, Gen: gen, Total: 1}); err != nil {
+		h.t.Fatal(err)
+	}
+	sp := h.spool()
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		if full, err := sp.Full(h.t.Context()); err == nil && full {
+			return
+		}
+		if time.Now().After(deadline) {
+			h.t.Fatal("the spool never counted the proxy's refusal")
+		}
 	}
 }
 
@@ -134,4 +179,60 @@ func TestSpoolSinkEndsAVMWhoseSpoolIsFull(t *testing.T) {
 		h.fillSpool(false)
 		h.sink.EndVMsWithFullSpools(ctx) // nothing set: must not panic or end anything
 	})
+}
+
+// A VM end that keeps failing (the engine cannot inspect it, or its label is malformed) is retried on
+// every tick but logged once, then once per interval, not once a second for the life of the run.
+func TestSpoolSinkLogsAFailingEndRarely(t *testing.T) {
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	prevEvery := endWarnEvery
+	endWarnEvery = time.Hour
+	t.Cleanup(func() { slog.SetDefault(prev); endWarnEvery = prevEvery })
+	warns := func() int { return strings.Count(logs.String(), "will retry") }
+
+	h := newSinkHarness(t)
+	e := &endCalls{isVM: true, fails: 100}
+	h.sink.EndVMsOnFullSpool(e.end)
+	h.fillSpool(false)
+	for range 5 {
+		h.sink.EndVMsWithFullSpools(t.Context())
+	}
+	e.mu.Lock()
+	calls := len(e.runs)
+	e.mu.Unlock()
+	if calls != 5 || warns() != 1 {
+		t.Fatalf("5 failing ticks made %d end calls and %d warnings, want 5 and 1:\n%s", calls, warns(), logs.String())
+	}
+	if !strings.Contains(logs.String(), h.id.String()) {
+		t.Fatalf("the warning does not name the run:\n%s", logs.String())
+	}
+	endWarnEvery = 20 * time.Millisecond
+	time.Sleep(40 * time.Millisecond)
+	h.sink.EndVMsWithFullSpools(t.Context())
+	if warns() != 2 {
+		t.Fatalf("after the interval the failure was logged %d times, want 2", warns())
+	}
+}
+
+// A VM whose spool stalls on a real request (credit left above the smallest envelope, the proxy
+// refused against it) is ended by the sink: the proxy's refused frame, not a constant, says the spool
+// is full. The proxy side of the same state is pinned in internal/egress/proxy against real
+// reservations.
+func TestSpoolSinkEndsAVMOnceTheProxyIsRefused(t *testing.T) {
+	ctx := t.Context()
+	h := newSinkHarness(t)
+	e := &endCalls{isVM: true}
+	h.sink.EndVMsOnFullSpool(e.end)
+	c, gen := h.tightenBytes()
+	h.sink.EndVMsWithFullSpools(ctx)
+	if len(e.runs) != 0 {
+		t.Fatalf("a tight spool nobody was refused by ended %v", e.runs)
+	}
+	h.refuse(c, gen)
+	h.sink.EndVMsWithFullSpools(ctx)
+	if len(e.runs) != 1 || e.runs[0] != h.id {
+		t.Fatalf("a spool the proxy was refused by ended %v, want the run once", e.runs)
+	}
 }

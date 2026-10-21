@@ -31,7 +31,7 @@
 | The link drops while a VM runs | The VM keeps running with its files. Its proxy keeps enforcing the policy it holds and spools decisions |
 | The run token goes unrenewed for 1h5m | The runner stops the VM's proxy. The guest keeps running with no network path |
 | A credential the proxy injects from an expiring grant | Dropped at its expiry plus 15 minutes if it cannot be renewed. A fixed one (an API key) is held until the proxy stops at 1h5m |
-| The VM's audit spool fills (50,000 decisions or 32 MiB) | The runner asks the guest to power down, keeps the stopped VM and removes the proxy. The runner's log names the run |
+| The VM's audit spool fills (50,000 decisions, or about 29 MiB once the proxy is refused) | The runner asks the guest to power down, keeps the stopped VM and removes the proxy. The runner's log names the run |
 
 - These rules apply only on a runner that offers Linux VM sandboxes. A container run keeps the hold-then-`503` for a full spool.
 - The full-spool stop covers Docker-hosted VMs on a person's runner. Kubernetes VMs are not covered.
