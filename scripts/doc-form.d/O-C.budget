@@ -138,8 +138,8 @@
 # docs/OPERATIONS.md 57697 adds 196 over 57501, measured: #1991 keep_work_folder (round 1): migration 0202, the keep_main_drive row and the Keep a run's work folder block.
 # docs/OPERATIONS.md 57950 = ours 57754 + theirs 57697 - base 57501 at the 0.10 W4d merge of FEAT-2KEEP-UI onto the train.
 # docs/OPERATIONS.md 58620 = ours 57950 + theirs 58360 - base 57690 at the 0.10 W4d merge of FEAT-2TEAM-UI onto the train.
-# M10 (#113, #112): docs/OPERATIONS.md 58725 adds 105 over 58620, measured: the 0204 user_drives_second_place migration line and its Before you upgrade note.
-docs/OPERATIONS.md=58725
+# M10 (#113, #112): docs/OPERATIONS.md 58699 adds 79 over 58620, measured: the 0204 user_drives_second_place migration line and its Before you upgrade note.
+docs/OPERATIONS.md=58699
 # docs/OPERATIONS.md 55840 adds 124 over 55716, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # docs/OPERATIONS.md 55867 adds 27 over 55840, measured: a run whose runner cannot be asked falls back to this deployment's runner, the older-runner exception, pooled runs, and the runner_offline gap reason.
 # docs/OPERATIONS.md 55891 adds 24 over 55867, measured: with several executors and no pool, the executor a run lands on, and once its sandbox exists the one that holds it, decides where its output comes from.
