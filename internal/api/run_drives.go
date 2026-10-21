@@ -153,15 +153,28 @@ func (s *Server) seedRequestDrives(w http.ResponseWriter, r *http.Request,
 	if refusal.write(s, w, r) {
 		return nil, nil, false
 	}
+	// A run with a drive that has a second place mounts its drives where placement
+	// puts it (stepDriveEligibility builds them then); every other run builds them
+	// here, as it always has.
+	if slices.ContainsFunc(drives, func(d runDrive) bool { return d.resolved.Drive.AltRunnerID != nil }) {
+		return drives, nil, true
+	}
+	mounts, ok := s.driveMountsAt(w, r, drives, drivePlace{})
+	return drives, mounts, ok
+}
+
+// driveMountsAt builds every drive's mount where the run mounts it, or writes
+// the first refusal.
+func (s *Server) driveMountsAt(w http.ResponseWriter, r *http.Request, drives []runDrive, at drivePlace) ([]types.DriveMount, bool) {
 	mounts := make([]types.DriveMount, 0, len(drives))
 	for _, d := range drives {
-		mount, ok := s.driveMountFor(r.Context(), w, d)
+		mount, ok := s.driveMountFor(r.Context(), w, d, at)
 		if !ok {
-			return nil, nil, false
+			return nil, false
 		}
 		mounts = append(mounts, *mount)
 	}
-	return drives, mounts, true
+	return mounts, true
 }
 
 // driveTargets are the run's drives as attachment targets, for the overlap tree,

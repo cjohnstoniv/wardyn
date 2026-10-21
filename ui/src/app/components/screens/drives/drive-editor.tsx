@@ -70,6 +70,7 @@ import { Label } from "../../ui/label";
 import { Field, OptionCard, Switch } from "../../wardyn/form-primitives";
 import { useOperator } from "../../wardyn/operator-context";
 import { Note, withMono } from "./display";
+import { PlacesLabel, SecondPlace, type SecondPlaceValue } from "./second-place";
 import { TeamDriveFields, TeamGroups, syncTeamGroups } from "./team-drive";
 
 // The three templates in admin-surface order (types.HomeTemplates). There is no
@@ -163,6 +164,11 @@ export function DriveEditor({
   const savedId = React.useRef(drive?.id);
   const teamUI = teamDrives && team;
   const [reclaim, setReclaim] = React.useState<DriveReclaim>(drive?.reclaim ?? "retain");
+  // M10: the drive's second place, a person's own runner. A save sends it only for a share.
+  const [secondPlace, setSecondPlace] = React.useState<SecondPlaceValue | null>(
+    drive?.alt_runner_id ? { runner: drive.alt_runner_id, path: drive.alt_host_root ?? "" } : null,
+  );
+  const share = backend === "host_path" || backend === "k8s_pvc_static";
   const [saving, setSaving] = React.useState(false);
   // `title` is set for a refusal the server composed; a transport failure has no
   // server text at all and renders SAVE_ERROR alone.
@@ -214,6 +220,9 @@ export function DriveEditor({
       writable: team && drive?.team && !writeTouched ? !!drive.writable : writable,
       reclaim: team ? "retain" : reclaim,
       ...(team ? { team: true } : {}),
+      ...(share && secondPlace
+        ? { alt_backend: "host_path" as const, alt_host_root: secondPlace.path.trim(), alt_runner_id: secondPlace.runner }
+        : {}),
     };
     try {
       // A cut grants page hides some allocations: read them all before anything is written, so a group typed
@@ -289,6 +298,7 @@ export function DriveEditor({
               );
             })}
           </div>
+          {!noBackend && <PlacesLabel backend={backend} />}
         </Field>
 
         {backend === "host_path" && (
@@ -319,6 +329,10 @@ export function DriveEditor({
               autoComplete="off"
             />
           </Field>
+        )}
+
+        {!noBackend && (
+          <SecondPlace backend={backend} value={secondPlace} onChange={setSecondPlace} adding={!drive?.alt_runner_id} disabled={disabled} />
         )}
 
         {teamDrives && (

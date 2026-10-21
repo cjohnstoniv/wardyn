@@ -63,6 +63,10 @@ type userDrivePreviewResponse struct {
 	// §7's frozen strings — those are the member's doors, and this is an
 	// admin's typo — so the console may render it verbatim without a new key.
 	Warning string `json:"warning,omitempty"`
+	// PlacementEligible and MountsFrom are the matched drive's, as GET /drives
+	// answers them (M10): read off the drive, never the admin's own context.
+	PlacementEligible bool   `json:"placement_eligible,omitempty"`
+	MountsFrom        string `json:"mounts_from,omitempty"`
 }
 
 // drivePreviewWarning is the one request-shape hint the preview offers: the
@@ -250,7 +254,7 @@ func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) 
 	// an admin checking why a member cannot mount a drive must read the sentence
 	// that member reads.
 	if !resolved.Paused {
-		if f := s.driveBindFailureHere(r.Context(), *resolved); f != nil {
+		if f := s.driveBindFailureHere(r.Context(), *resolved, drivePlace{}); f != nil {
 			// #656: the same reason the real enforcement door would send
 			// (refuseDrive) — this IS that door's verdict, just written by the
 			// admin preview instead of a launch, so the class is identical.
@@ -274,16 +278,18 @@ func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) 
 		objectName = ""
 	}
 	writeJSON(w, http.StatusOK, userDrivePreviewResponse{
-		DriveName:   resolved.Drive.Name,
-		MatchedTier: resolved.Tier,
-		HomeName:    resolved.HomeName,
-		ObjectName:  objectName,
-		SizeMiB:     resolved.SizeMiB,
-		Writable:    resolved.Writable,
-		Enforcement: resolved.Enforcement,
-		Paused:      resolved.Paused,
-		HomeSubject: homeSubject,
-		Warning:     drivePreviewWarning(resolved.Drive.HomeTemplate, users),
+		DriveName:         resolved.Drive.Name,
+		MatchedTier:       resolved.Tier,
+		HomeName:          resolved.HomeName,
+		ObjectName:        objectName,
+		SizeMiB:           resolved.SizeMiB,
+		Writable:          resolved.Writable,
+		Enforcement:       resolved.Enforcement,
+		Paused:            resolved.Paused,
+		HomeSubject:       homeSubject,
+		Warning:           drivePreviewWarning(resolved.Drive.HomeTemplate, users),
+		PlacementEligible: types.PlacementEligible(resolved.Drive.Backend),
+		MountsFrom:        s.driveMountsFrom(r.Context(), resolved.Drive),
 	})
 }
 

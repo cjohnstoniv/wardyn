@@ -115,3 +115,17 @@ func TestServeArchEnvRefusedOnDocker(t *testing.T) {
 		t.Fatalf("docker serve with %s = %v, want the k8s-only refusal", archEnv, err)
 	}
 }
+
+// TestDriveRootOnlyOnDocker: --drive-root binds drives through the docker driver,
+// so another substrate refuses it rather than ignoring it.
+func TestDriveRootOnlyOnDocker(t *testing.T) {
+	changed := func(name string) bool { return name == "drive-root" }
+	if err := checkSubstrateFlags("docker", changed); err != nil {
+		t.Fatalf("docker refused --drive-root: %v", err)
+	}
+	for _, sub := range []string{"k8s", "folders"} {
+		if err := checkSubstrateFlags(sub, changed); err == nil {
+			t.Errorf("--substrate %s took --drive-root", sub)
+		}
+	}
+}

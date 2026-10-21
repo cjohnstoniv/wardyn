@@ -61,6 +61,7 @@ func (s PG) ResolveUserDrives(ctx context.Context, userSubjects, groups []string
 		SELECT DISTINCT ON (g.drive_id)
 			d.id, d.name, d.backend, d.host_root, d.storage_class, d.home_template,
 			d.size_mib, d.writable, d.reclaim, d.created_at, d.updated_at, d.created_by, d.object_scheme, d.team,
+			COALESCE(d.alt_backend, ''), COALESCE(d.alt_host_root, ''), d.alt_runner_id,
 			g.id AS grant_id, g.subject_type, g.subject, g.drive_id, g.priority,
 			g.size_mib_override, g.writable_override, g.home_override, g.enabled,
 			g.created_at AS grant_created_at, g.created_by AS grant_created_by, g.members_can_write

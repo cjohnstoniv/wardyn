@@ -68,6 +68,10 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 	if err != nil {
 		return runnerRuntime{}, atStage(types.RunnerStageEngine, err)
 	}
+	driveRoots, err := parseDriveRoots(opts.driveRoots)
+	if err != nil {
+		return runnerRuntime{}, err
+	}
 	relay := newLocalRelay(ctx)
 	// The decision sink before the runtime: its startup containment stops the runs' proxies, and one
 	// still running delivers what it holds while it stops only if the sink already listens.
@@ -79,12 +83,13 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 	sub, err := docker.New(docker.Config{RunnerID: identity.RunnerID.String(), ProxyImage: opts.proxyImage, InternalNetwork: opts.network, Record: record,
 		ControlPlaneRelay: relay.Ensure, TrustedCAPEM: opts.trustedCA, TrustedCAFile: opts.trustedCAPath, UpstreamProxyURL: opts.upstreamProxy,
 		DecisionSink: sinkAdapter{s: sink.spoolSink, url: sink.proxyURL}, Evidence: ev,
-		ProxySandboxPeersOnly: cliutil.EnvBool(docker.EnvProxySandboxPeersOnly, false)})
+		ProxySandboxPeersOnly: cliutil.EnvBool(docker.EnvProxySandboxPeersOnly, false), UserDriveHostRoots: driveRoots})
 	if err != nil {
 		return runnerRuntime{}, errors.Join(err, sink.Close())
 	}
 	extras := sink.extras(sub, ev)
 	extras.report = connectReport{log: opts.offline, relay: newRelayWatch(relayReprobe(relay), opts.offline.secretsOrNil())}
+	extras.driveRoots = driveRoots
 	// The runtime first: its startup containment pass stops lapsed runs even when the check below fails.
 	rt, err := localRunnerRuntime(ctx, identity, stateDir, sub, docker.SandboxRef, relay, dockerCapacity, extras)
 	if err != nil {
@@ -365,6 +370,19 @@ type runtimeExtras struct {
 	closeAlso func() error
 	// report is what caps carry beyond the substrate's own (offline summary, relay status).
 	report connectReport
+	// driveRoots are --drive-root, advertised as the runner's allowed_roots.
+	driveRoots []string
+}
+
+// parseDriveRoots checks --drive-root: each an absolute, cleaned folder. The docker driver binds a drive
+// only strictly below one of them, after resolving symlinks (runner.UserDriveMountSourceCheck).
+func parseDriveRoots(raw []string) ([]string, error) {
+	for _, r := range raw {
+		if !filepath.IsAbs(r) || filepath.Clean(r) != r || r == "/" {
+			return nil, fmt.Errorf("--drive-root %q: give an absolute, cleaned folder below /", r)
+		}
+	}
+	return raw, nil
 }
 
 func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, stateDir string, sub substrate.Substrate, ref func(uuid.UUID) string, relay *localRelay, capacity func(context.Context) placement.Capacity, extra runtimeExtras) (runnerRuntime, error) {
@@ -447,7 +465,7 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		if arch == "" {
 			arch = engineArch(ctx)
 		}
-		caps := runnerwire.Caps{Support: support, Version: version.String(), MachineName: machine, Arch: arch, Capacity: capacity(ctx), BYOISelftest: dispatcher.Selftests(), Retire: true, Resident: dispatcher.Residents(), EndsUnkept: !keeps}
+		caps := runnerwire.Caps{Support: support, Version: version.String(), MachineName: machine, Arch: arch, Capacity: capacity(ctx), BYOISelftest: dispatcher.Selftests(), Retire: true, Resident: dispatcher.Residents(), EndsUnkept: !keeps, AllowedRoots: extra.driveRoots}
 		if !extra.report.fill(ctx, &caps, reprobe) && !always {
 			return nil
 		}

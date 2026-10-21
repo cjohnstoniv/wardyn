@@ -79,7 +79,7 @@ func (s *Server) keepWorkFolderGates(r *http.Request, spec types.RunPolicySpec, 
 	if refusal != nil {
 		return nil, refusal
 	}
-	if f := s.driveBindFailureHere(ctx, types.ResolvedDrive{Drive: row}); f != nil {
+	if f := s.driveBindFailureHere(ctx, types.ResolvedDrive{Drive: row}, drivePlace{}); f != nil {
 		return nil, &runRefusal{drive: f}
 	}
 	for _, m := range spec.WorkspaceMounts {

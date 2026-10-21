@@ -669,6 +669,13 @@ function PreviewResult({ answer: a }: { answer: UserDrivePreview }) {
         </dd>
         <dt>{DRIVES.PREVIEW_ENFORCEMENT_LABEL}</dt>
         <dd className="min-w-0">{enforcementGloss(a.enforcement)}</dd>
+        {/* The server's phrase, as it is (M10). */}
+        {a.mounts_from && (
+          <>
+            <dt>{DRIVES.COL_MOUNTS_FROM}</dt>
+            <dd className="min-w-0">{a.mounts_from}</dd>
+          </>
+        )}
       </dl>
     </Note>
   );

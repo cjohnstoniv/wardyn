@@ -160,7 +160,9 @@
 # docs/OPERATIONS.md 58976 = ours 58879 + theirs 57848 - base 57751 at the 0.10 W4f merge of AUD-REDACT onto the train.
 # docs/OPERATIONS.md 57794 adds 43 over 57751, measured (0.10 POL-MOUNT): the tier-reach sentence: a mount host path is the super admin's to read and set.
 # docs/OPERATIONS.md 59019 = ours 58976 + theirs 57794 - base 57751 at the 0.10 W4f merge of POL-MOUNT onto the train.
-docs/OPERATIONS.md=59019 share=35
+# M10 (#113, #112): docs/OPERATIONS.md 58699 adds 79 over 58620, measured: the 0204 user_drives_second_place migration line and its Before you upgrade note.
+# docs/OPERATIONS.md 59098 = ours 59019 + theirs 58699 - base 58620 at the 0.10 W4f merge of DRV-M10 onto the train.
+docs/OPERATIONS.md=59098 share=35
 # docs/OPERATIONS.md 55848 adds 132 over 55716: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
 # docs/OPERATIONS.md 55840 adds 124 over 55716, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # docs/OPERATIONS.md 55867 adds 27 over 55840, measured: a run whose runner cannot be asked falls back to this deployment's runner, the older-runner exception, pooled runs, and the runner_offline gap reason.

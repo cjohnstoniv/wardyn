@@ -56,6 +56,11 @@ export interface UserDrive {
   // types.UserDrive.Team (#1988): the groups it is allocated to share ONE folder.
   // Meaningful only while storage.user_drive.team_drives is on.
   team?: boolean;
+  // The drive's second place (M10, #112): the same share as one person's own
+  // runner sees it. All three are absent on a drive with one place.
+  alt_backend?: "host_path";
+  alt_host_root?: string;
+  alt_runner_id?: string;
 }
 
 // types.UserDriveListItem — the row plus the count the delete dialog pre-fills
@@ -64,6 +69,10 @@ export interface UserDriveListItem extends UserDrive {
   grant_count: number;
   // A team drive held in a Docker volume: runs on another host see a different folder.
   single_host?: boolean;
+  // A share, which can be reached from more than one place (#113).
+  placement_eligible?: boolean;
+  // Where it mounts from, printed as it is (the Mounts from column).
+  mounts_from?: string;
 }
 
 // types.UserDriveGrant — one subject bound to one drive, unique per subject.
@@ -140,6 +149,10 @@ export interface UserDriveInput {
   writable?: boolean;
   reclaim?: DriveReclaim;
   team?: boolean;
+  // A second place: all three or none.
+  alt_backend?: "host_path";
+  alt_host_root?: string;
+  alt_runner_id?: string;
 }
 
 // userDriveGrantRequest. `enabled`, `writable_override` and `home_override` are
@@ -201,6 +214,9 @@ export interface UserDrivePreview {
   // they belong on the "Who gets what" panel. A surface arrives through a mock
   // round, never through a type (CONSOLE-RULES §12).
   warning?: string;
+  // The matched drive's, as GET /drives answers them (M10).
+  placement_eligible?: boolean;
+  mounts_from?: string;
 }
 
 // Whether a team drive's groups can WRITE it. The drive's own bit is not enough:
