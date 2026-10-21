@@ -65,9 +65,12 @@ test.describe("Runner credentials: one table", () => {
     }
     await expect(keys.locator("[data-people-see]")).toHaveAttribute("data-people-see", "default");
 
-    await keys.getByRole("radio", { name: DELIVERY.MODE.runner_resident }).click();
+    // A header API key's runner_resident delivery is not built on the server yet, so it is offered disabled with its reason.
+    await expect(keys.getByRole("radio", { name: DELIVERY.MODE.runner_resident })).toBeDisabled();
+    await expect(page.locator("#dc-api_key-runner_resident-d").getByText(DELIVERY.BOUND_NOT_BUILT)).toBeVisible();
+    await keys.getByRole("radio", { name: DELIVERY.MODE.via_org }).click();
     await expect(keys.locator("[data-people-see]")).toHaveAttribute("data-people-see", "differs");
-    await expect(keys.locator("[data-people-see]")).toHaveText(DELIVERY.LOCAL_DELIVERY.runner_resident);
+    await expect(keys.locator("[data-people-see]")).toHaveText(DELIVERY.LOCAL_DELIVERY.via_org);
 
     const env = page.getByRole("radiogroup", { name: DELIVERY.CLASS.env_secret });
     await expect(env.getByRole("radio", { name: DELIVERY.MODE.via_org })).toBeDisabled();
