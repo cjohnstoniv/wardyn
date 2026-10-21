@@ -10,7 +10,7 @@ import { act, cleanup, render, screen, waitFor, within } from "@testing-library/
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { RemoteRunnerView, RunnerPool, RunnerPoolCatalogueEntry, RunnerPoolMemberView } from "../../../lib/types/runner-pools";
-import type { RunnerRegistrationToken, RunnerView } from "../../../lib/types/runners";
+import type { RunnerView } from "../../../lib/types/runners";
 
 const pools = {
   list: vi.fn(),
@@ -38,14 +38,12 @@ vi.mock("react-router-dom", async (orig) => ({ ...(await orig<typeof import("rea
 
 const listMineMock = vi.fn();
 const updateMineMock = vi.fn();
-const mintMineMock = vi.fn();
 const claimMock = vi.fn();
 const revokeMineMock = vi.fn();
 vi.mock("../../../lib/api/runners", () => ({
   RUNNERS_DISABLED: "runners_disabled",
   runners: {
     listMine: (...a: unknown[]) => listMineMock(...a),
-    mintMine: (...a: unknown[]) => mintMineMock(...a),
     claim: (...a: unknown[]) => claimMock(...a),
     revokeMine: (...a: unknown[]) => revokeMineMock(...a),
     updateMine: (...a: unknown[]) => updateMineMock(...a),
@@ -115,19 +113,6 @@ const WAITING = runner({
   allowed_roots: undefined,
   usage: usageWith(0),
 });
-const TOKEN: RunnerRegistrationToken = {
-  id: "t1",
-  owner: "alice",
-  owner_kind: "person",
-  minted_by_kind: "human",
-  break_glass: false,
-  minted_by: "alice",
-  token: "wdr_selfminted",
-  created_at: aheadByHours(0),
-  expires_at: aheadByHours(1),
-  org_url: "https://org.example.com",
-};
-
 function renderCard(hash = "", admin = false) {
   return render(
     <MemoryRouter initialEntries={[`/account${hash}`]}>
@@ -165,14 +150,21 @@ function withPools(defaultId?: string) {
   remoteMineMock.mockResolvedValue([SHARED]);
 }
 
+// Add this computer reads /healthz for its install line.
+const HEALTHZ = JSON.stringify({ status: "ok", version: "0.10.0", cli_sign_in: true });
+
 beforeEach(() => {
-  for (const m of [listMineMock, mintMineMock, claimMock, revokeMineMock, updateMineMock, remoteMineMock, navigateMock, ...Object.values(pools)]) m.mockReset();
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(HEALTHZ, { status: 200 })));
+  for (const m of [listMineMock, claimMock, revokeMineMock, updateMineMock, remoteMineMock, navigateMock, ...Object.values(pools)]) m.mockReset();
   listMineMock.mockResolvedValue([CLAIMED]);
   pools.list.mockResolvedValue({ pools: [] });
   pools.listMine.mockResolvedValue({ pools: [] });
   remoteMineMock.mockResolvedValue([]);
 });
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 describe("My runner card", () => {
   // A5: the packet's rule is "no row, no card": with runners off the section is not a card with an empty state.
@@ -199,7 +191,7 @@ describe("My runner card", () => {
     }
   });
 
-  it("with nothing registered, says so and offers Register a runner", async () => {
+  it("with nothing registered, says so and shows Add this computer in place of Register a runner", async () => {
     listMineMock.mockResolvedValue([]);
     const user = userEvent.setup();
     renderCard();
@@ -210,8 +202,17 @@ describe("My runner card", () => {
       ),
     ).toBeInTheDocument();
     expect(screen.getByText("You haven't registered a runner.")).toBeInTheDocument();
-    expect(screen.getByText("Register one, then put it in one of your pools. You can create a pool first.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Register a runner" })).toBeInTheDocument();
+    expect(screen.queryByText("Register one, then put it in one of your pools. You can create a pool first.")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Register a runner" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "Add this computer" })).toBeInTheDocument();
+    // One level under the card's own h3 title: the block's title is an h4 and its steps are h5.
+    expect(screen.getByRole("heading", { name: "Add this computer", level: 4 })).toBeInTheDocument();
+    const block = screen.getByRole("heading", { name: "Add this computer" }).closest("section") as HTMLElement;
+    expect(within(block).getAllByRole("heading", { level: 5 }).map((h) => h.textContent)).toEqual(["Install the CLI", "Sign in", "Set up the runner"]);
+    expect(await screen.findByText("curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.10.0/install-cli.sh | sh")).toBeInTheDocument();
+    expect(screen.getByText("wardyn runner setup")).toBeInTheDocument();
+    // A person's own block has no MDM section: that is the admin page's.
+    expect(screen.queryByText("Managed install (MDM)")).toBeNull();
     // My pools is there before any runner is: a pool can be created first.
     expect(await screen.findByText("You haven't created a pool yet.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Create a pool" })).toBeInTheDocument();
@@ -249,7 +250,8 @@ describe("My runner card: a claimed runner", () => {
     expect(screen.getByText("macOS 15.2 · Managed by MDM · Disk encrypted")).toBeInTheDocument();
     expect(screen.getAllByText(/^Reported by this runner/).length).toBeGreaterThanOrEqual(3);
     expect(screen.getByText(FULL)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /copy/i })).toBeNull();
+    // The runner's own row has no copy control (Add this computer's commands do, and sit outside the row).
+    expect(within(screen.getByText(FULL).closest("li") as HTMLElement).queryByRole("button", { name: /copy/i })).toBeNull();
     expect(screen.queryByText("Use a folder from laptop-7")).toBeNull();
   });
 
@@ -314,7 +316,8 @@ describe("My runner card: a claimed runner", () => {
     expect(await screen.findByText(/laptop-7 was revoked by security@example.com .* Register it again to use it\./)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Revoke" })).toBeNull();
     expect(screen.getByRole("button", { name: /^My runner\s*Not registered/ })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Register a runner" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Register a runner" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "Add this computer" })).toBeInTheDocument();
   });
 });
 
@@ -326,7 +329,7 @@ describe("My runner card: a waiting runner and the claim", () => {
     renderCard();
     await expand(user);
     expect(await screen.findByText(ABBREV)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /copy/i })).toBeNull();
+    expect(within(screen.getByText(ABBREV).closest("li") as HTMLElement).queryByRole("button", { name: /copy/i })).toBeNull();
     expect(screen.getByText("From a token you created.")).toBeInTheDocument();
     expect(screen.getByText(/Registered .* · claim it within 23 hours/)).toBeInTheDocument();
     cleanup();
@@ -389,67 +392,86 @@ describe("My runner card: a waiting runner and the claim", () => {
   });
 });
 
-describe("My runner card: registering and the 5 second poll", () => {
-  const register = async (user: ReturnType<typeof userEvent.setup>) => {
-    await expand(user);
-    await user.click(await screen.findByRole("button", { name: "Register a runner" }));
-    return screen.findByText("wdr_selfminted");
-  };
-
-  it("shows the token once with the command from the server's org_url; Done hides it for good", async () => {
-    listMineMock.mockResolvedValue([]);
-    mintMineMock.mockResolvedValue(TOKEN);
+describe("My runner card: Add this computer and the 5 second poll", () => {
+  it("a person who already has a runner can add another computer: the block follows My pools, and no token is made", async () => {
     const user = userEvent.setup();
     renderCard();
-    await register(user);
-    expect(screen.getByText("Shown once. It works once, for 1 hour.")).toBeInTheDocument();
-    expect(screen.getByText("wardyn-runnerd register --org https://org.example.com --token-file ~/wardyn-runner-token")).toBeInTheDocument();
-    expect(screen.getByText("Registration token")).toHaveFocus();
-    // With nothing registered yet the two sentences stay, above the token.
-    const follows = (a: HTMLElement, b: HTMLElement) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
-    expect(follows(screen.getByText("You haven't registered a runner."), screen.getByText("Registration token"))).toBe(true);
-    expect(follows(screen.getByText("Register one, then put it in one of your pools. You can create a pool first."), screen.getByText("Registration token"))).toBe(true);
-    expect(screen.getByRole("button", { name: "Copy token" })).toBeInTheDocument();
+    await expand(user);
+    const block = await screen.findByRole("heading", { name: "Add this computer" });
+    const poolsHeading = await screen.findByText("My pools");
+    expect(!!(poolsHeading.compareDocumentPosition(block) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
     expect(screen.queryByRole("button", { name: "Register a runner" })).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Done" }));
-    expect(screen.queryByText("wdr_selfminted")).toBeNull();
-    expect(screen.getByRole("button", { name: "Register a runner" })).toBeInTheDocument();
   });
 
-  it("a refused register shows the server's sentence under the button", async () => {
-    listMineMock.mockResolvedValue([]);
-    mintMineMock.mockRejectedValue(new HttpError(429, "too many tokens"));
-    const user = userEvent.setup();
-    renderCard();
-    await expand(user);
-    await user.click(await screen.findByRole("button", { name: "Register a runner" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("too many tokens");
-  });
-
-  it("polls every 5 s while a token shows, announces the runner that registered once, and hides the spent token", async () => {
+  it("when the first runner appears the block remounts, and focus that was inside it returns to the card", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     try {
       listMineMock.mockResolvedValue([]);
-      mintMineMock.mockResolvedValue(TOKEN);
       const user = userEvent.setup({ advanceTimers: (ms) => vi.advanceTimersByTime(ms) });
       renderCard();
-      await register(user);
-      const reads = listMineMock.mock.calls.length;
-      listMineMock.mockResolvedValue([WAITING]);
+      await expand(user);
+      const copy = await screen.findByRole("button", { name: "Copy setup command" });
+      copy.focus();
+      expect(copy).toHaveFocus();
+      listMineMock.mockResolvedValue([CLAIMED]);
       await act(async () => {
         vi.advanceTimersByTime(5000);
       });
-      await waitFor(() => expect(listMineMock.mock.calls.length).toBeGreaterThan(reads));
-      expect(await screen.findByText("mbp-ben registered. Claim it below.")).toBeInTheDocument();
-      expect(screen.queryByText("wdr_selfminted")).toBeNull();
+      await screen.findByText("laptop-7", { selector: "h4" });
+      const card = document.getElementById("my-runner") as HTMLElement;
+      await waitFor(() => expect(card).toHaveFocus());
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("does not poll with nothing waiting and no token", async () => {
+  it("with one claimed runner and the card open, a second computer registered through the block appears on the next tick", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     try {
+      listMineMock.mockResolvedValue([CLAIMED]);
+      const user = userEvent.setup({ advanceTimers: (ms) => vi.advanceTimersByTime(ms) });
+      renderCard();
+      await expand(user);
+      await screen.findByRole("heading", { name: "Add this computer" });
+      const reads = listMineMock.mock.calls.length;
+      listMineMock.mockResolvedValue([CLAIMED, runner({ id: "r-second", name: "desk-2" })]);
+      await act(async () => {
+        vi.advanceTimersByTime(5000);
+      });
+      await waitFor(() => expect(listMineMock.mock.calls.length).toBeGreaterThan(reads));
+      expect(await screen.findByText("desk-2", { selector: "h4" })).toBeInTheDocument();
+      // A poll is silent: no live region announces it.
+      expect(screen.queryByRole("status")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("polls every 5 s while open with nothing registered, and shows the runner that setup registered", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      listMineMock.mockResolvedValue([]);
+      const user = userEvent.setup({ advanceTimers: (ms) => vi.advanceTimersByTime(ms) });
+      renderCard();
+      await expand(user);
+      await screen.findByRole("heading", { name: "Add this computer" });
+      const reads = listMineMock.mock.calls.length;
+      listMineMock.mockResolvedValue([CLAIMED]);
+      await act(async () => {
+        vi.advanceTimersByTime(5000);
+      });
+      await waitFor(() => expect(listMineMock.mock.calls.length).toBeGreaterThan(reads));
+      expect(await screen.findByText("laptop-7", { selector: "h4" })).toBeInTheDocument();
+      expect(screen.queryByText("You haven't registered a runner.")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not poll while the card is closed", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      listMineMock.mockResolvedValue([CLAIMED]);
       renderCard();
       await screen.findByRole("button", { name: /^My runner/ });
       const reads = listMineMock.mock.calls.length;
@@ -462,16 +484,21 @@ describe("My runner card: registering and the 5 second poll", () => {
     }
   });
 
-  it("a token past its hour is replaced by the expiry sentence and Register returns", async () => {
-    listMineMock.mockResolvedValue([]);
-    mintMineMock.mockResolvedValue({ ...TOKEN, expires_at: aheadByHours(-0.01) });
-    const user = userEvent.setup();
-    renderCard();
-    await expand(user);
-    await user.click(await screen.findByRole("button", { name: "Register a runner" }));
-    expect(await screen.findByText("This token has expired. Register again for a new one.")).toBeInTheDocument();
-    expect(screen.queryByText("wdr_selfminted")).toBeNull();
-    expect(screen.getByRole("button", { name: "Register a runner" })).toBeInTheDocument();
+  it("polls while a runner waits to be claimed", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      listMineMock.mockResolvedValue([WAITING]);
+      renderCard();
+      // The read has landed (the summary names the waiting runner) before the interval is advanced.
+      await screen.findByRole("button", { name: /^My runner\s*1 waiting for you to claim/ });
+      const reads = listMineMock.mock.calls.length;
+      await act(async () => {
+        vi.advanceTimersByTime(5000);
+      });
+      await waitFor(() => expect(listMineMock.mock.calls.length).toBeGreaterThan(reads));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -669,30 +696,7 @@ describe("My pools", () => {
   });
 });
 
-describe("My runner card: the start command and the claim into a pool", () => {
-  const registerShown = async (user: ReturnType<typeof userEvent.setup>) => {
-    await expand(user);
-    await user.click(await screen.findByRole("button", { name: "Register a runner" }));
-    await screen.findByText("wdr_selfminted");
-  };
-  const VM_HINT = /^On Docker Desktop, .* --total-disk <GB> to register, since the VM hides the disk\.$/;
-
-  it("names the proxy image the server answered with in the serve command, and always says what VM-backed Docker needs", async () => {
-    listMineMock.mockResolvedValue([]);
-    mintMineMock.mockResolvedValue({ ...TOKEN, proxy_image: "ghcr.io/example/wardyn-proxy:0.9.1" });
-    const user = userEvent.setup();
-    renderCard();
-    await registerShown(user);
-    expect(screen.getByText("wardyn-runnerd serve --org https://org.example.com --proxy-image ghcr.io/example/wardyn-proxy:0.9.1")).toBeInTheDocument();
-    expect(screen.getByText(VM_HINT)).toBeInTheDocument();
-    cleanup();
-    mintMineMock.mockResolvedValue(TOKEN);
-    renderCard();
-    await registerShown(user);
-    expect(screen.getByText("wardyn-runnerd serve --org https://org.example.com")).toBeInTheDocument();
-    expect(screen.getByText(VM_HINT)).toBeInTheDocument();
-  });
-
+describe("My runner card: the claim into a pool", () => {
   const claimWithPool = async (user: ReturnType<typeof userEvent.setup>, pool: string, makeDefault: boolean, beforeClaim?: () => void) => {
     listMineMock.mockResolvedValue([WAITING]);
     claimMock.mockResolvedValue({ runner_id: "r-mbp", fingerprint: FULL, state: "claimed", org_url_sha256: "" });

@@ -25,8 +25,6 @@ export const RUNNERS = {
   COL_STATE: "State",
   WAITING_CLAIM: (owner: string) => `Waiting for ${owner} to claim it. Only they can.`,
   EXPIRES_IN: (left: string) => `expires in ${left}`,
-  MINT_CTA: "Create a registration token",
-  MINT_TITLE: "Registration token for a person",
   MINT_LEAD: "The token registers one computer for this person. Only they can claim it, from their own account — you can't claim it for them.",
   FIELD_PERSON: "Person",
   PERSON_HINT: "Their email or sign-in subject.",
@@ -66,7 +64,9 @@ export const RUNNERS = {
   TURN_OFF_BODY:
     "Every runner's connection closes and no new run can go to one. Runs already on a runner keep going under the policy they started with, as they would offline — after about an hour their network stops and they're marked lost.",
   EMPTY_TITLE: "No runners yet",
-  EMPTY_BODY: "People register a computer from Your account → My runner. You can also create a registration token for someone and deliver it to their computer.",
+  EMPTY_BODY: "People add a computer from Your account → My runner.",
+  // Appended only where the Managed install (MDM) section it names is on the page (a super admin, runners on).
+  EMPTY_BODY_MDM: "To set up computers through device management, create a registration token under Managed install (MDM) above.",
   FETCH_FAILED_TITLE: "Couldn't load runners",
   FETCH_FAILED_BODY:
     "Something went wrong reaching the server. Runners already claimed keep running their owners' runs under your policy — this list just can't show them right now.",
@@ -118,13 +118,6 @@ export const MY_RUNNER = {
   SUMMARY_ONE: (name: string, state: string) => `${name} · ${state}`,
   SUMMARY_MANY: (n: number, online: number) => `${n} runners · ${online} online`,
   SUMMARY_WAITING: (n: number) => `${n} waiting for you to claim`,
-  REGISTER: "Register a runner",
-  TOKEN_SHOWN_ONCE: "Shown once. It works once, for 1 hour.",
-  TOKEN_EXPIRES: (when: string) => `Expires ${when}.`,
-  STEP_SAVE_RUN: "On the computer you're registering, save it to a file only you can read, then run:",
-  STEP_CLAIM: "The runner prints its key fingerprint. Then claim it below, or run wardyn runner claim on that computer with your own API token in WARDYN_TOKEN. The admin token cannot claim.",
-  TOKEN_EXPIRED: "This token has expired. Register again for a new one.",
-  REGISTERED_NOW: (name: string) => `${name} registered. Claim it below.`,
   WAITING_LINE: (when: string, left: string) => `Registered ${when} · claim it within ${left}`,
   SOURCE_SELF: "From a token you created.",
   SOURCE_ADMIN: (who: string) => `From a token ${who} created for you.`,

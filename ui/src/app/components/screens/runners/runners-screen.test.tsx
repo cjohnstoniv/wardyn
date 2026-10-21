@@ -169,7 +169,11 @@ function renderScreen(opts: { operator?: boolean; at?: string } = {}) {
   );
 }
 
+// Add this computer reads /healthz for its install line; a bare release version and CLI sign-in on.
+const HEALTHZ = JSON.stringify({ status: "ok", version: "0.10.0", cli_sign_in: true });
+
 beforeEach(() => {
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(HEALTHZ, { status: 200 })));
   for (const m of [listMock, getMock, settingsMock, setEnabledMock, tokensMock, mintMock, revokeMock, revokeTokenMock, remoteListMock, remoteUpdateMock, setPeopleMock, clearPeopleMock]) m.mockReset();
   remoteListMock.mockResolvedValue([]);
   settingsMock.mockResolvedValue({ enabled: true });
@@ -177,7 +181,10 @@ beforeEach(() => {
   tokensMock.mockResolvedValue([TOKEN]);
   getMock.mockResolvedValue(LAPTOP);
 });
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 const cards = () => within(screen.getByRole("list", { name: "Runners" })).getAllByRole("listitem");
 const rowNames = () => cards().map((li) => li.getAttribute("aria-label"));
@@ -204,6 +211,17 @@ describe("Admin -> Runners list", () => {
     expect(chipOf("wait-1")).toHaveTextContent("Not claimed yet");
     await user.click(screen.getByRole("radio", { name: "All" }));
     expect(chipOf("ghost-1")).toHaveTextContent("Revoked");
+  });
+
+  it("an online claimed runner in its first minute says Registered just now in place of Last seen now (M-ATT-4)", async () => {
+    listMock.mockResolvedValue([runner({ id: "r-mbp-dev", name: "mbp-dev", created_at: new Date(Date.now() - 10_000).toISOString() }), LAPTOP]);
+    renderScreen();
+    await screen.findByRole("button", { name: "mbp-dev" });
+    expect(within(cardOf("mbp-dev")).getByText("Registered just now")).toBeInTheDocument();
+    expect(within(cardOf("mbp-dev")).queryByText("Last seen now")).toBeNull();
+    // An older runner keeps its last-seen line.
+    expect(within(cardOf("laptop-7")).getByText("Last seen now")).toBeInTheDocument();
+    expect(within(cardOf("laptop-7")).queryByText("Registered just now")).toBeNull();
   });
 
   it("an unclaimed card says who must claim it and when it expires; Last seen is real and Online reads now", async () => {
@@ -295,7 +313,18 @@ describe("Admin -> Runners list", () => {
     listMock.mockResolvedValue([]);
     renderScreen();
     expect(await screen.findByText("No runners yet")).toBeInTheDocument();
-    expect(screen.getByText(/People register a computer from Your account → My runner\./)).toBeInTheDocument();
+    expect(screen.getByText("People add a computer from Your account → My runner. To set up computers through device management, create a registration token under Managed install (MDM) above.")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Add this computer" })).toBeInTheDocument();
+    expect(screen.getByText("Managed install (MDM)")).toBeInTheDocument();
+  });
+
+  it("a security admin's empty page does not point at a Managed install section that is not there", async () => {
+    listMock.mockResolvedValue([]);
+    renderScreen({ operator: false });
+    expect(await screen.findByText("No runners yet")).toBeInTheDocument();
+    expect(screen.getByText("People add a computer from Your account → My runner.")).toBeInTheDocument();
+    expect(screen.queryByText(/Managed install \(MDM\)/)).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Add this computer" })).toBeNull();
   });
 
   it("a failed read shows its own title and a Retry that reads again", async () => {
@@ -326,11 +355,17 @@ describe("Admin -> Runners list", () => {
 });
 
 describe("Admin -> Runners tiers", () => {
-  it("a super admin sees Create a registration token (the page's one default) and Turn off runners (outline)", async () => {
+  it("a super admin sees Add this computer and Turn off runners (outline), and no Create a registration token action", async () => {
     renderScreen();
-    const create = await screen.findByRole("button", { name: "Create a registration token" });
-    expect(create.className).toMatch(/bg-primary/);
+    expect(await screen.findByRole("heading", { name: "Add this computer" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Turn off runners" }).className).not.toMatch(/bg-primary|bg-destructive/);
+    expect(screen.queryByRole("button", { name: "Create a registration token" })).toBeNull();
+    // The block sits between the tab purpose and the tab strip.
+    const block = screen.getByRole("heading", { name: "Add this computer" });
+    const purpose = screen.getByText(/^This tab lists every runner:/);
+    const tabs = screen.getByRole("navigation", { name: "Runners sections" });
+    expect(purpose.compareDocumentPosition(block) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(block.compareDocumentPosition(tabs) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("a security admin has no Create, Turn on or Turn off, but can revoke a runner and an unused token", async () => {
@@ -340,6 +375,7 @@ describe("Admin -> Runners tiers", () => {
     renderScreen({ operator: false });
     await screen.findByRole("button", { name: "laptop-7" });
     expect(screen.queryByRole("button", { name: /Create a registration token|Turn on runners|Turn off runners/ })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Add this computer" })).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "Revoke" }));
     const confirmToken = await screen.findByRole("alertdialog");
@@ -687,7 +723,7 @@ describe("Admin -> Runners tabs", () => {
     await user.click(within(strip).getByRole("button", { name: "Pools" }));
     expect(await screen.findByTestId("pools-tab")).toHaveTextContent("open:none");
     expect(screen.getByText("A pool is a named choice for where a run goes. Its limits come from its runners, and it can narrow them, never widen them.")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Create a registration token" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Add this computer" })).toBeNull();
     expect(screen.queryByText(/^This tab lists every runner:/)).toBeNull();
   });
 
@@ -725,94 +761,143 @@ describe("Admin -> Runners tabs", () => {
   });
 });
 
-describe("Admin -> Runners mint", () => {
+describe("Admin -> Runners: Managed install (MDM)", () => {
+  // The token form is folded under the block's MDM title; opening it is the way to a token.
   const open = async (user: ReturnType<typeof userEvent.setup>) => {
-    await user.click(await screen.findByRole("button", { name: "Create a registration token" }));
-    return screen.findByRole("dialog");
+    const fold = (await screen.findByText("Managed install (MDM)")).closest("details") as HTMLDetailsElement;
+    if (!fold.open) await user.click(screen.getByText("Managed install (MDM)"));
+    expect(fold.open).toBe(true);
+    return within(fold);
   };
 
-  it("names the person, shows the token once with --org from the server's answer, and offers no claim", async () => {
+  it("is folded until opened", async () => {
+    renderScreen();
+    const fold = (await screen.findByText("Managed install (MDM)")).closest("details") as HTMLDetailsElement;
+    expect(fold.open).toBe(false);
+  });
+
+  it("names the person, shows the token once with --org from the server's answer in the setup command, and offers no claim", async () => {
     mintMock.mockResolvedValue({ ...TOKEN, owner: "alice@example.com", token: "wdr_secret", org_url: ORG });
     const user = userEvent.setup();
     renderScreen();
-    const dialog = await open(user);
-    expect(within(dialog).getByText("Registration token for a person")).toBeInTheDocument();
-    const create = within(dialog).getByRole("button", { name: "Create token" });
+    const mdm = await open(user);
+    expect(mdm.getByText("The token registers one computer for this person. Only they can claim it, from their own account — you can't claim it for them.")).toBeInTheDocument();
+    const create = mdm.getByRole("button", { name: "Create token" });
     expect(create).toBeDisabled();
-    setField(within(dialog).getByRole("textbox"), "alice@example.com");
+    setField(mdm.getByRole("textbox"), "alice@example.com");
     await user.click(create);
     await waitFor(() => expect(mintMock).toHaveBeenCalledWith("alice@example.com"));
-    expect(await within(dialog).findByText("Registration token for alice@example.com")).toHaveFocus();
-    expect(within(dialog).getByText("wdr_secret")).toBeInTheDocument();
-    expect(within(dialog).getByText(`wardyn-runnerd register --org ${ORG} --token-file /path/to/token`)).toBeInTheDocument();
-    expect(within(dialog).getByText("Their computer then waits for alice@example.com to claim it in Your account → My runner.")).toBeInTheDocument();
-    expect(within(dialog).queryByRole("button", { name: /claim/i })).toBeNull();
+    expect(await mdm.findByText("Registration token for alice@example.com")).toHaveFocus();
+    expect(mdm.getByText("wdr_secret")).toBeInTheDocument();
+    expect(mdm.getByText(`wardyn-runnerd setup --org ${ORG} --token-file <file>`)).toBeInTheDocument();
+    expect(mdm.getByText("Their computer then waits for alice@example.com to claim it in Your account → My runner.")).toBeInTheDocument();
+    expect(mdm.queryByRole("button", { name: /claim/i })).toBeNull();
   });
 
-  it("carries the proxy image the answer names in the serve command (register takes none), and the VM-backed Docker note", async () => {
+  it("shows no start command, no proxy image and no register command, whatever the answer carries", async () => {
     mintMock.mockResolvedValue({ ...TOKEN, owner: "alice@example.com", token: "wdr_secret", org_url: ORG, proxy_image: "ghcr.io/example/wardyn-proxy:0.9.1" });
     const user = userEvent.setup();
-    renderScreen();
-    const dialog = await open(user);
-    setField(within(dialog).getByRole("textbox"), "alice@example.com");
-    await user.click(within(dialog).getByRole("button", { name: "Create token" }));
-    expect(await within(dialog).findByText(`wardyn-runnerd serve --org ${ORG} --proxy-image ghcr.io/example/wardyn-proxy:0.9.1`)).toBeInTheDocument();
-    expect(within(dialog).getByText(`wardyn-runnerd register --org ${ORG} --token-file /path/to/token`)).toBeInTheDocument();
-    expect(within(dialog).getByText(/finds the relay address itself and checks it at startup; pass --total-disk <GB> to register, since the VM hides the disk/)).toBeInTheDocument();
+    const { container } = renderScreen();
+    const mdm = await open(user);
+    setField(mdm.getByRole("textbox"), "alice@example.com");
+    await user.click(mdm.getByRole("button", { name: "Create token" }));
+    await mdm.findByText("wdr_secret");
+    const text = container.textContent ?? "";
+    expect(text).not.toMatch(/\bserve\b/);
+    expect(text).not.toContain("--proxy-image");
+    expect(text).not.toContain("wardyn-proxy");
+    expect(text).not.toContain("wardyn-runnerd register");
+    expect(text).not.toContain("VM-backed");
   });
 
   it("falls back to this page's address only when the answer carries no org_url", async () => {
     mintMock.mockResolvedValue({ ...TOKEN, owner: "alice@example.com", token: "wdr_secret" });
     const user = userEvent.setup();
     renderScreen();
-    const dialog = await open(user);
-    setField(within(dialog).getByRole("textbox"), "alice@example.com");
-    await user.click(within(dialog).getByRole("button", { name: "Create token" }));
-    expect(await within(dialog).findByText(`wardyn-runnerd register --org ${window.location.origin} --token-file /path/to/token`)).toBeInTheDocument();
+    const mdm = await open(user);
+    setField(mdm.getByRole("textbox"), "alice@example.com");
+    await user.click(mdm.getByRole("button", { name: "Create token" }));
+    expect(await mdm.findByText(`wardyn-runnerd setup --org ${window.location.origin} --token-file <file>`)).toBeInTheDocument();
   });
 
-  it("closing the token before copying it asks once; after a copy it closes quietly", async () => {
+  it("leaving the token before copying it asks once; after a copy it leaves quietly", async () => {
     mintMock.mockResolvedValue({ ...TOKEN, owner: "alice@example.com", token: "wdr_secret", org_url: ORG });
     const user = userEvent.setup();
     renderScreen();
-    let dialog = await open(user);
-    setField(within(dialog).getByRole("textbox"), "alice@example.com");
-    await user.click(within(dialog).getByRole("button", { name: "Create token" }));
-    await within(dialog).findByText("wdr_secret");
+    let mdm = await open(user);
+    setField(mdm.getByRole("textbox"), "alice@example.com");
+    await user.click(mdm.getByRole("button", { name: "Create token" }));
+    await mdm.findByText("wdr_secret");
 
-    await user.click(within(dialog).getByRole("button", { name: "Done" }));
+    await user.click(mdm.getByRole("button", { name: "Done" }));
     const ask = await screen.findByRole("alertdialog");
     expect(within(ask).getByText("Close without copying the token?")).toBeInTheDocument();
     expect(within(ask).getByText("You can't see this token again. If you need it, create another.")).toBeInTheDocument();
     await user.click(within(ask).getByRole("button", { name: "Keep it open" }));
     expect(screen.getByText("wdr_secret")).toBeInTheDocument();
 
-    await user.keyboard("{Escape}");
-    expect(await screen.findByText("Close without copying the token?")).toBeInTheDocument();
+    await user.click(mdm.getByRole("button", { name: "Done" }));
     await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Close" }));
     await waitFor(() => expect(screen.queryByText("wdr_secret")).toBeNull());
 
-    // A copy control used: closing is quiet.
+    // A copy control used: leaving is quiet.
     mintMock.mockResolvedValue({ ...TOKEN, owner: "bob@example.com", token: "wdr_second", org_url: ORG });
-    dialog = await open(user);
-    setField(within(dialog).getByRole("textbox"), "bob@example.com");
-    await user.click(within(dialog).getByRole("button", { name: "Create token" }));
-    await within(dialog).findByText("wdr_second");
-    await user.click(within(dialog).getByRole("button", { name: "Copy token" }));
-    await user.click(within(dialog).getByRole("button", { name: "Done" }));
+    mdm = await open(user);
+    setField(mdm.getByRole("textbox"), "bob@example.com");
+    await user.click(mdm.getByRole("button", { name: "Create token" }));
+    await mdm.findByText("wdr_second");
+    await user.click(mdm.getByRole("button", { name: "Copy token" }));
+    await user.click(mdm.getByRole("button", { name: "Done" }));
     await waitFor(() => expect(screen.queryByText("wdr_second")).toBeNull());
     expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("Done and Close return focus to the person field", async () => {
+    mintMock.mockResolvedValue({ ...TOKEN, owner: "alice@example.com", token: "wdr_secret", org_url: ORG });
+    const user = userEvent.setup();
+    renderScreen();
+    const mdm = await open(user);
+    setField(mdm.getByRole("textbox"), "alice@example.com");
+    await user.click(mdm.getByRole("button", { name: "Create token" }));
+    await mdm.findByText("wdr_secret");
+    await user.click(mdm.getByRole("button", { name: "Copy token" }));
+    await user.click(mdm.getByRole("button", { name: "Done" }));
+    await waitFor(() => expect(mdm.getByRole("textbox")).toHaveFocus());
+    // ...and through the confirm, when nothing was copied.
+    setField(mdm.getByRole("textbox"), "bob@example.com");
+    await user.click(mdm.getByRole("button", { name: "Create token" }));
+    await mdm.findByText("wdr_secret");
+    await user.click(mdm.getByRole("button", { name: "Done" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(mdm.getByRole("textbox")).toHaveFocus());
+  });
+
+  it("a minted token that was not copied survives a switch to the Pools tab and back", async () => {
+    mintMock.mockResolvedValue({ ...TOKEN, owner: "alice@example.com", token: "wdr_secret", org_url: ORG });
+    const user = userEvent.setup();
+    renderScreen();
+    const mdm = await open(user);
+    setField(mdm.getByRole("textbox"), "alice@example.com");
+    await user.click(mdm.getByRole("button", { name: "Create token" }));
+    await mdm.findByText("wdr_secret");
+    const strip = screen.getByRole("navigation", { name: "Runners sections" });
+    await user.click(within(strip).getByRole("button", { name: "Pools" }));
+    expect(await screen.findByTestId("pools-tab")).toBeInTheDocument();
+    // Hidden, not gone: nothing of it is reachable on Pools.
+    expect(screen.queryByRole("heading", { name: "Add this computer" })).toBeNull();
+    await user.click(within(strip).getByRole("button", { name: "Runners" }));
+    expect(await screen.findByText("wdr_secret")).toBeInTheDocument();
   });
 
   it("a refused mint shows the server's sentence and keeps the field", async () => {
     mintMock.mockRejectedValueOnce(new HttpError(422, "owner must name a person's principal", "runner_owner_invalid"));
     const user = userEvent.setup();
     renderScreen();
-    const dialog = await open(user);
-    setField(within(dialog).getByRole("textbox"), "nobody");
-    await user.click(within(dialog).getByRole("button", { name: "Create token" }));
-    expect(await within(dialog).findByRole("alert")).toHaveTextContent("owner must name a person's principal");
-    expect(within(dialog).getByRole("textbox")).toHaveValue("nobody");
+    const mdm = await open(user);
+    setField(mdm.getByRole("textbox"), "nobody");
+    await user.click(mdm.getByRole("button", { name: "Create token" }));
+    expect(await mdm.findByRole("alert")).toHaveTextContent("owner must name a person's principal");
+    expect(mdm.getByRole("textbox")).toHaveValue("nobody");
   });
 });
 

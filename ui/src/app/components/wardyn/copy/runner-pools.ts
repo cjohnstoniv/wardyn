@@ -68,6 +68,8 @@ export const RUNNER_V6 = {
   LAST_SEEN: (when: string) => `Last seen ${when}`,
   /** What Last seen reads while the runner is online. */
   LAST_SEEN_NOW: "now",
+  // M-ATT-4: the line a runner shows in its first minute, in place of "Last seen now".
+  REGISTERED_JUST_NOW: "Registered just now",
   MACHINE: "Machine",
   OWNER: "Owner",
   POOLS: "Pools",
@@ -98,10 +100,6 @@ export const RUNNER_V6 = {
   AVAILABLE_ON: (name: string) => `${name} is now available to people's pools`,
   AVAILABLE_OFF: (name: string) => `${name} is no longer available to people's pools`,
   MINT_ONE_PER_COMPUTER: "One runner per computer is enough: it runs several of their runs at the same time, up to its Runs at once.",
-  MINT_START_LEAD: "Then start it:",
-  MINT_VM_DOCKER:
-    "On Docker Desktop, Rancher Desktop (dockerd engine) or another VM-backed engine, wardyn-runnerd finds the relay address itself and checks it at startup; pass --total-disk <GB> to register, since the VM hides the disk.",
-  MINT_ASKS_LIMITS: "It then asks for the runner's limits on that computer, prefilled with what it reports. Its owner can change them later in Your account → My runner.",
 } as const;
 
 /**
@@ -393,10 +391,6 @@ export const POOL_FORM = {
 
 /** Your account -> My runner -> pools of a runner, and My pools (mock frames B1 to B16). */
 export const MY_POOLS = {
-  NO_RUNNER_NEXT: "Register one, then put it in one of your pools. You can create a pool first.",
-  REGISTER_ONE_PER_COMPUTER: "One runner per computer is enough: it runs several of your runs at the same time, up to its Runs at once.",
-  REGISTER_ASKS_LIMITS:
-    "It then asks for the runner's limits, prefilled with what this computer reports: total CPU, memory and disk across all its runs, the most one run may use, and how many runs at once. You can lower any of them, here later under Your account → My runner → Edit limits, or with wardyn runner set.",
   LIMITS_YOU_SET: "Limits you set",
   LIMITS_TO_SET_UP: "Limits to set up",
   REQUIRED: "Required",
