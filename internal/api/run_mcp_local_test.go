@@ -112,7 +112,7 @@ func TestDispatchMCP_LocalServerInHarnessConfig(t *testing.T) {
 	}
 	var injections []runner.InjectionGrant
 	env := map[string]string{"HTTPS_PROXY": "http://wardyn-proxy:3128", "PATH": "/usr/bin"}
-	out := dispatchMCP(servers, &injections, "http://wardyn-proxy:3128", false, env)
+	out := dispatchMCP(servers, withholding{}, &injections, "http://wardyn-proxy:3128", false, env)
 	if len(out.servers) != 1 || out.servers[0].Key != "linear" || len(out.bindings) != 2 ||
 		!slices.Equal(out.bindings[0].Servers, []string{"linear"}) || !slices.Equal(out.bindings[1].Servers, []string{"linear"}) {
 		t.Fatalf("servers %+v bindings %+v: a local server is never at the broker", out.servers, out.bindings)
@@ -137,7 +137,7 @@ func TestDispatchMCP_LocalServerInHarnessConfig(t *testing.T) {
 	}
 	// Only a local server: no token is minted, and Codex gets no broker env.
 	env = map[string]string{}
-	if out := dispatchMCP(servers[:1], &injections, "http://wardyn-proxy:3128", true, env); len(out.bindings) != 0 || len(out.servers) != 0 ||
+	if out := dispatchMCP(servers[:1], withholding{}, &injections, "http://wardyn-proxy:3128", true, env); len(out.bindings) != 0 || len(out.servers) != 0 ||
 		env[codexMCPEnv] != "" || env[codexMCPLocalEnv] == "" || len(out.files) != 1 || out.files[0].Path != claudeMCPInteractivePath {
 		t.Fatalf("local only: %+v env %v", out, env)
 	}
@@ -270,7 +270,7 @@ func TestDispatchMCP_RemoteOnlyGolden(t *testing.T) {
 			{Ordinal: 2, Key: "public", URL: "https://mcp.public.test/mcp", Host: "mcp.public.test", Harnesses: []string{"claude-code"}},
 		}
 		env := map[string]string{"HTTPS_PROXY": "http://wardyn-proxy:3128"}
-		out := dispatchMCP(servers, &injections, "http://wardyn-proxy:3128/", interactive, env)
+		out := dispatchMCP(servers, withholding{}, &injections, "http://wardyn-proxy:3128/", interactive, env)
 		files := map[string]string{}
 		for _, f := range out.files {
 			files[f.Path] = string(f.Content)

@@ -729,6 +729,10 @@ func TestPG_CLISignIn_HealthzNeedsSSO(t *testing.T) {
 					t.Errorf("/healthz %s with the switches on = %s, want %s", c.name, body, want)
 				}
 			}
+			// The proof origin is published only where CLI sign-in works, for the CLI to compare.
+			if got := strings.Contains(body, `"cli_sign_in_origin":"`+cliTestOrigin+`"`); got != c.want {
+				t.Errorf("/healthz %s publishes cli_sign_in_origin = %v, want %v (%s)", c.name, got, c.want, body)
+			}
 			code := e.req(http.MethodPost, "/api/v1/cli/sign-ins", "", nil, "", "", e.client().createBody(nil)).Code
 			if (code == http.StatusCreated) != c.want {
 				t.Errorf("POST /cli/sign-ins %s = %d, want created %v", c.name, code, c.want)

@@ -35,8 +35,8 @@ import (
 // holdProfile is an assigned profile whose tool_rules demand supervision, with
 // NO limits set — the limits and the derivation are independent mechanisms and a
 // fixture that carried both could not tell which one refused.
-func holdProfile(name string) *types.GovernanceProfile {
-	p := &types.GovernanceProfile{ID: uuid.New(), Name: name, Ceiling: govProfileSpec()}
+func holdProfile(name string) *types.GovernanceUnit {
+	p := &types.GovernanceUnit{ID: uuid.New(), Name: name, Ceiling: govProfileSpec()}
 	p.Ceiling.ToolRules = []types.ToolRule{
 		{Tool: "Read", Effect: types.ToolAllow},
 		{Tool: "Bash", Effect: types.ToolHold},
@@ -46,13 +46,13 @@ func holdProfile(name string) *types.GovernanceProfile {
 
 // limitsProfile is an assigned profile that carries limits and NO tool rules —
 // the mirror fixture.
-func limitsProfile(name string, limits types.GovernanceLimits) *types.GovernanceProfile {
-	return &types.GovernanceProfile{
+func limitsProfile(name string, limits types.GovernanceLimits) *types.GovernanceUnit {
+	return &types.GovernanceUnit{
 		ID: uuid.New(), Name: name, Ceiling: govProfileSpec(), Limits: limits,
 	}
 }
 
-func assignedStore(p *types.GovernanceProfile) *capStore {
+func assignedStore(p *types.GovernanceUnit) *capStore {
 	return &capStore{govProfile: p, govTier: types.CapabilitySubjectGroup, govHasGroupTier: true}
 }
 
@@ -83,14 +83,14 @@ func refusalBody(t *testing.T, w *httptest.ResponseRecorder) string {
 // that changed no configuration. Absent row, absent behaviour change.
 func TestEffectiveToolApprovals(t *testing.T) {
 	assigned := governanceCeiling{
-		Spec:    holdProfile("walled").Ceiling,
-		Profile: resolvedOf(holdProfile("walled")),
+		Spec: holdProfile("walled").Ceiling,
+		Unit: resolvedOf(holdProfile("walled")),
 	}
 	// The same rules, reached through Config.DefaultPolicy with no profile bound.
 	unassigned := governanceCeiling{Spec: holdProfile("walled").Ceiling}
 	allowOnly := governanceCeiling{
-		Spec:    types.RunPolicySpec{ToolRules: []types.ToolRule{{Tool: "*", Effect: types.ToolAllow}}},
-		Profile: resolvedOf(holdProfile("yolo")),
+		Spec: types.RunPolicySpec{ToolRules: []types.ToolRule{{Tool: "*", Effect: types.ToolAllow}}},
+		Unit: resolvedOf(holdProfile("yolo")),
 	}
 
 	for _, tc := range []struct {
@@ -204,8 +204,8 @@ func TestGovernanceToolApprovalsOnCreate(t *testing.T) {
 		if got := refusalBody(t, w); got != want {
 			t.Errorf("body  = %s\nwant §7.7 BYTE-EXACT: %s", got, want)
 		}
-		if r := auditReasons(t, srv, "authz.denied"); !slices.Contains(r, "governance_profile") {
-			t.Errorf("authz.denied reasons = %v, want a governance_profile row", r)
+		if r := auditReasons(t, srv, "authz.denied"); !slices.Contains(r, "governance_unit") {
+			t.Errorf("authz.denied reasons = %v, want a governance_unit row", r)
 		}
 		// And an INTERACTIVE codex run is untouched: no hold is derived there, so
 		// there is no contradiction to refuse (PF-27's own rationale).
@@ -497,7 +497,7 @@ func TestCreatePathWiresCeilingToDispatch(t *testing.T) {
 				continue
 			}
 			var d struct {
-				Profile string `json:"profile"`
+				Profile string `json:"unit"`
 			}
 			if err := json.Unmarshal(ev.Data, &d); err != nil {
 				t.Fatalf("unmarshal run.ceiling.reassert data: %v", err)

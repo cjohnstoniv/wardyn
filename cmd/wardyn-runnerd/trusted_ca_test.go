@@ -174,26 +174,23 @@ func TestServeTrustedCAAtStartup(t *testing.T) {
 }
 
 // setup --trusted-ca-file checks the file before the token is spent, writes its absolute path into
-// the env file or LaunchAgent, and a rerun without the flag keeps it.
+// runnerd.json, and a rerun without the flag keeps it.
 func TestSetupWritesAndKeepsTheTrustedCA(t *testing.T) {
 	for _, goos := range []string{"linux", "darwin"} {
 		f := newSetupFixture(t, goos)
 		ca := writeFile(t, filepath.Join(t.TempDir(), "corp-ca.pem"), testCAPEM(t, "corp"))
 		p := mustPaths(t, f)
-		file, want := p.envFile, "WARDYN_TRUSTED_CA_FILE="+ca+"\n"
-		if goos == "darwin" {
-			file, want = p.plistFile, "<key>WARDYN_TRUSTED_CA_FILE</key>\n    <string>"+ca+"</string>"
-		}
+		want := "WARDYN_TRUSTED_CA_FILE=" + ca + "\n"
 		if _, err := f.run(setupOptions{tokenFile: f.tokenFile, trustedCAFile: ca}); err != nil {
 			t.Fatal(err)
 		}
-		if got := f.read(file); !strings.Contains(got, want) {
-			t.Errorf("%s: service definition lacks %q:\n%s", goos, want, got)
+		if got := f.settings(p); !strings.Contains(got, want) {
+			t.Errorf("%s: runnerd.json lacks %q:\n%s", goos, want, got)
 		}
 		if _, err := f.run(setupOptions{}); err != nil {
 			t.Fatal(err)
 		}
-		if got := f.read(file); !strings.Contains(got, want) {
+		if got := f.settings(p); !strings.Contains(got, want) {
 			t.Errorf("%s: a rerun without --trusted-ca-file dropped it:\n%s", goos, got)
 		}
 
@@ -202,8 +199,8 @@ func TestSetupWritesAndKeepsTheTrustedCA(t *testing.T) {
 		if _, err := g.run(setupOptions{tokenFile: g.tokenFile}); err != nil {
 			t.Fatal(err)
 		}
-		if got := g.read(map[string]string{"linux": mustPaths(t, g).envFile, "darwin": mustPaths(t, g).plistFile}[goos]); strings.Contains(got, "WARDYN_TRUSTED_CA_FILE") || strings.Contains(got, "__WARDYN") {
-			t.Errorf("%s: no CA asked for, yet the service definition names one:\n%s", goos, got)
+		if got := g.settings(mustPaths(t, g)); strings.Contains(got, "WARDYN_TRUSTED_CA_FILE") {
+			t.Errorf("%s: no CA asked for, yet runnerd.json names one:\n%s", goos, got)
 		}
 	}
 	f := newSetupFixture(t, "linux")
@@ -220,11 +217,11 @@ func TestSetupPinsOnlyANamedProxyImage(t *testing.T) {
 	const release = "ghcr.io/cjohnstoniv/wardyn-proxy:0.9.3"
 	setupBuild(t, "0.9.3")
 	f := newSetupFixture(t, "linux")
-	env := mustPaths(t, f).envFile
+	p := mustPaths(t, f)
 	if _, err := f.run(setupOptions{tokenFile: f.tokenFile, proxyImage: release}); err != nil {
 		t.Fatal(err)
 	}
-	if got := f.read(env); !strings.Contains(got, "WARDYN_PROXY_IMAGE="+release+"\n") {
+	if got := f.settings(p); !strings.Contains(got, "WARDYN_PROXY_IMAGE="+release+"\n") {
 		t.Errorf("a named image equal to the release image was not pinned:\n%s", got)
 	}
 	const custom = "mirror.example.com/wardyn-proxy:0.9.1"
@@ -235,16 +232,18 @@ func TestSetupPinsOnlyANamedProxyImage(t *testing.T) {
 	if _, err := f.run(setupOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	if got := f.read(env); !strings.Contains(got, "WARDYN_PROXY_IMAGE="+custom+"\n") {
+	if got := f.settings(p); !strings.Contains(got, "WARDYN_PROXY_IMAGE="+custom+"\n") {
 		t.Errorf("a rerun dropped the named image:\n%s", got)
 	}
-	// A setup before 0.9.3 wrote its derived release image with no marker.
-	legacy := strings.Replace(strings.Replace(f.read(env), custom, "ghcr.io/cjohnstoniv/wardyn-proxy:0.9.2", 1), "WARDYN_PROXY_IMAGE_PINNED=1\n", "", 1)
-	writeFile(t, env, legacy)
+	// A setup before 0.9.3 wrote its derived release image into the service's environment file, with no marker.
+	if err := os.Remove(p.configFile()); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, p.envFile, "WARDYN_PROXY_IMAGE=ghcr.io/cjohnstoniv/wardyn-proxy:0.9.2\n")
 	if _, err := f.run(setupOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	if got := f.read(env); strings.Contains(got, "WARDYN_PROXY_IMAGE") {
+	if got := f.settings(p); strings.Contains(got, "WARDYN_PROXY_IMAGE") {
 		t.Errorf("a rerun kept an older setup's derived release pin:\n%s", got)
 	}
 }
@@ -257,10 +256,7 @@ func TestSetupKeepsANamedReleaseImage(t *testing.T) {
 	for _, goos := range []string{"linux", "darwin"} {
 		f := newSetupFixture(t, goos)
 		p := mustPaths(t, f)
-		file, wants := p.envFile, []string{"WARDYN_PROXY_IMAGE=" + release + "\n", "WARDYN_PROXY_IMAGE_PINNED=1\n"}
-		if goos == "darwin" {
-			file, wants = p.plistFile, []string{"<key>WARDYN_PROXY_IMAGE</key>\n    <string>" + release + "</string>", "<key>WARDYN_PROXY_IMAGE_PINNED</key>\n    <string>1</string>"}
-		}
+		wants := []string{"WARDYN_PROXY_IMAGE=" + release + "\n", "WARDYN_PROXY_IMAGE_PINNED=1\n"}
 		if _, err := f.run(setupOptions{tokenFile: f.tokenFile, proxyImage: release}); err != nil {
 			t.Fatal(err)
 		}
@@ -268,7 +264,7 @@ func TestSetupKeepsANamedReleaseImage(t *testing.T) {
 		if _, err := f.run(setupOptions{}); err != nil {
 			t.Fatal(err)
 		}
-		got := f.read(file)
+		got := f.settings(p)
 		for _, want := range wants {
 			if !strings.Contains(got, want) {
 				t.Errorf("%s: a flagless rerun dropped the named release image (%q):\n%s", goos, want, got)
@@ -280,7 +276,7 @@ func TestSetupKeepsANamedReleaseImage(t *testing.T) {
 		if _, err := g.run(setupOptions{tokenFile: g.tokenFile}); err != nil {
 			t.Fatal(err)
 		}
-		if got := g.read(map[string]string{"linux": mustPaths(t, g).envFile, "darwin": mustPaths(t, g).plistFile}[goos]); strings.Contains(got, "PINNED") {
+		if got := g.settings(mustPaths(t, g)); strings.Contains(got, "PINNED") {
 			t.Errorf("%s: a derived image was marked pinned:\n%s", goos, got)
 		}
 	}
@@ -297,7 +293,7 @@ func TestSetupNamesAKeptTrustedCA(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := f.run(setupOptions{})
-	if err == nil || !strings.Contains(err.Error(), "kept from the earlier setup ("+mustPaths(t, f).envFile+")") || !strings.Contains(err.Error(), "remove WARDYN_TRUSTED_CA_FILE") {
+	if err == nil || !strings.Contains(err.Error(), "kept from the earlier setup ("+mustPaths(t, f).configFile()+")") || !strings.Contains(err.Error(), "remove trusted_ca_file") {
 		t.Fatalf("a rerun with a moved kept CA: %v", err)
 	}
 }
@@ -316,7 +312,7 @@ func TestSetupOnlyHintsAtSSLCertFile(t *testing.T) {
 	if strings.Count(out, hint) != 1 {
 		t.Errorf("setup output lacks the one hint %q:\n%s", hint, out)
 	}
-	if got := f.read(mustPaths(t, f).envFile); strings.Contains(got, "WARDYN_TRUSTED_CA_FILE") {
+	if got := f.settings(mustPaths(t, f)); strings.Contains(got, "WARDYN_TRUSTED_CA_FILE") {
 		t.Errorf("setup adopted the ambient SSL_CERT_FILE:\n%s", got)
 	}
 	g := newSetupFixture(t, "linux")
@@ -509,7 +505,7 @@ func TestSetupPrintsTrustedCAWarnings(t *testing.T) {
 	if !strings.Contains(out, "warning: the trusted CA file "+ca+` holds a certificate for "laptop-17" that is not marked as a certificate authority`) {
 		t.Errorf("setup printed no CA warning:\n%s", out)
 	}
-	if got := f.read(mustPaths(t, f).envFile); !strings.Contains(got, "WARDYN_TRUSTED_CA_FILE="+ca+"\n") {
+	if got := f.settings(mustPaths(t, f)); !strings.Contains(got, "WARDYN_TRUSTED_CA_FILE="+ca+"\n") {
 		t.Errorf("the warned file is not written into the service:\n%s", got)
 	}
 }

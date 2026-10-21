@@ -16,22 +16,22 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// attrStore serves the run's profile to runProfile, which the shared fake store
+// attrStore serves the run's profile to runUnit, which the shared fake store
 // answers with none.
 type attrStore struct {
 	*govEscapeStore
-	profiles []types.GovernanceProfile
+	profiles []types.GovernanceUnit
 }
 
-func (s *attrStore) ListGovernanceProfiles(context.Context) ([]types.GovernanceProfile, error) {
+func (s *attrStore) ListGovernanceUnits(context.Context) ([]types.GovernanceUnit, error) {
 	return s.profiles, nil
 }
 
-// GetGovernanceProfileChain is the run's profile alone: each one here is standalone.
-func (s *attrStore) GetGovernanceProfileChain(_ context.Context, id uuid.UUID) ([]types.GovernanceProfile, error) {
+// GetGovernanceUnitChain is the run's profile alone: each one here is standalone.
+func (s *attrStore) GetGovernanceUnitChain(_ context.Context, id uuid.UUID) ([]types.GovernanceUnit, error) {
 	for _, p := range s.profiles {
 		if p.ID == id {
-			return []types.GovernanceProfile{p}, nil
+			return []types.GovernanceUnit{p}, nil
 		}
 	}
 	return nil, store.ErrNotFound
@@ -45,21 +45,21 @@ func TestDispatchWritesTheRunsAttribution(t *testing.T) {
 	contact := &policyref.Contact{Owner: "Platform security", Email: "sec@example.com", RequestURL: "https://help.example.com/access"}
 	for _, tc := range []struct {
 		name    string
-		profile *types.GovernanceProfile
+		profile *types.GovernanceUnit
 		contact *policyref.Contact
 		site    types.SiteConfig
 		want    string // "" = no attribution key at all
 	}{
 		{"profile with no contact", limitsProfile("leased", types.GovernanceLimits{}), nil, types.SiteConfig{},
-			`"attribution":{"source":"profile","name":"leased"}`},
+			`"attribution":{"source":"unit","name":"leased"}`},
 		{"profile with a contact", limitsProfile("leased", types.GovernanceLimits{}), contact, types.SiteConfig{},
-			`"attribution":{"source":"profile","name":"leased","owner":"Platform security","email":"sec@example.com","request_url":"https://help.example.com/access"}`},
+			`"attribution":{"source":"unit","name":"leased","owner":"Platform security","email":"sec@example.com","request_url":"https://help.example.com/access"}`},
 		{"a contactless profile keeps its name and borrows policy_help", limitsProfile("leased", types.GovernanceLimits{}), nil,
 			types.SiteConfig{PolicyHelp: &policyref.Contact{RequestURL: "https://site.example.com/help"}},
-			`"attribution":{"source":"profile","name":"leased","request_url":"https://site.example.com/help"}`},
+			`"attribution":{"source":"unit","name":"leased","request_url":"https://site.example.com/help"}`},
 		{"a profile's own contact wins over policy_help", limitsProfile("leased", types.GovernanceLimits{}), contact,
 			types.SiteConfig{PolicyHelp: &policyref.Contact{RequestURL: "https://site.example.com/help"}},
-			`"attribution":{"source":"profile","name":"leased","owner":"Platform security","email":"sec@example.com","request_url":"https://help.example.com/access"}`},
+			`"attribution":{"source":"unit","name":"leased","owner":"Platform security","email":"sec@example.com","request_url":"https://help.example.com/access"}`},
 		{"no profile, policy_help set", nil, nil, types.SiteConfig{PolicyHelp: &policyref.Contact{RequestURL: "https://site.example.com/help"}},
 			`"attribution":{"source":"deployment","request_url":"https://site.example.com/help"}`},
 		{"no profile, no policy_help", nil, nil, types.SiteConfig{}, ""},
@@ -73,7 +73,7 @@ func TestDispatchWritesTheRunsAttribution(t *testing.T) {
 			srv, st := runLimitsFixture(t, cs)
 			st.siteConfig = tc.site
 			if tc.profile != nil {
-				srv.cfg.Store = &attrStore{govEscapeStore: st, profiles: []types.GovernanceProfile{*tc.profile}}
+				srv.cfg.Store = &attrStore{govEscapeStore: st, profiles: []types.GovernanceUnit{*tc.profile}}
 			}
 			fr := srv.cfg.Runner.(*fakeRunner)
 			createdRun(t, srv, st, govSession(t, govMemberSub, []string{"eng"}, false))

@@ -85,7 +85,7 @@ func TestBoundaryQueuedBreakGlassStartsAsTagged(t *testing.T) {
 	e := newQueueEnv(t)
 	pool := e.cappedPool("Shared", 1)
 	occupant := e.occupy(pool)
-	if _, err := e.pg.UpsertGovernanceProfile(context.Background(), types.GovernanceProfile{
+	if _, err := e.pg.UpsertGovernanceUnit(context.Background(), types.GovernanceUnit{
 		Name: "team", CreatedBy: "seed", Ceiling: govTestPolicy,
 	}); err != nil {
 		t.Fatal(err)
@@ -122,7 +122,7 @@ func TestBoundaryQueuedBreakGlassStartsAsTagged(t *testing.T) {
 func TestBoundaryCapAnEarlierRunsEnd(t *testing.T) {
 	e := newPlacementEnv(t)
 	pool := e.lifetimePool("Week", `{"default_sec":3600,"max_sec":604800}`)
-	profile, err := e.pg.UpsertGovernanceProfile(context.Background(), types.GovernanceProfile{
+	profile, err := e.pg.UpsertGovernanceUnit(context.Background(), types.GovernanceUnit{
 		Name: "a day", CreatedBy: "seed", Ceiling: govTestPolicy,
 		Limits: types.GovernanceLimits{RunLimits: types.RunLimits{MaxEndAheadSec: 86400, AllowNoEnd: true, UserChangesLimits: true}},
 	})
@@ -312,8 +312,8 @@ func TestBoundarySweepCapsEveryUnprofiledLiveRun(t *testing.T) {
 	}
 	for _, row := range rows {
 		var data map[string]any
-		if err := json.Unmarshal(row.Data, &data); err != nil || data["reason"] != "limits_tightened" || data["source"] != "boundary" || data["profile_id"] != nil {
-			t.Errorf("run.end.set data = %s (%v), want limits_tightened, source boundary, no profile_id", row.Data, err)
+		if err := json.Unmarshal(row.Data, &data); err != nil || data["reason"] != "limits_tightened" || data["source"] != "boundary" || data["unit_id"] != nil {
+			t.Errorf("run.end.set data = %s (%v), want limits_tightened, source boundary, no unit_id", row.Data, err)
 		}
 	}
 }

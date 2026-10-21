@@ -253,7 +253,7 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 	})
 
 	// RS-12: name each composed profile a narrowed base has left unresolvable, once.
-	leaderGo(rootCtx, leader, "governance.profiles.walk", srv.WarnUnresolvableProfiles)
+	leaderGo(rootCtx, leader, "governance.units.walk", srv.WarnUnresolvableUnits)
 
 	// #1513: acknowledged SIEM delivery, off unless the webhook sink asks for it.
 	// f.auditSinks is nil only in the boot tests that build a bare bootFlags.

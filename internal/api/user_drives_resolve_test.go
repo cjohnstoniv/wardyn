@@ -35,7 +35,7 @@ import (
 // what every case that is not about a match starts from.
 type driveStore struct {
 	// noGovernanceStore rather than a bare store.Store: /me resolves the
-	// caller's CEILING beside their drive (the denied_by_profile field), so a
+	// caller's CEILING beside their drive (the denied_by_unit field), so a
 	// double that answered only the drive reads would panic on the governance
 	// ones. Its own two drive methods below shadow noGovernanceStore's at depth
 	// 0, so there is no ambiguity and no second answer.
@@ -75,12 +75,12 @@ type driveStore struct {
 	// profile is the governance profile the DOOR resolves for these claims —
 	// nil (noGovernanceStore's ErrNotFound) is a deployment that has authored
 	// none, which is every case that is not about the door.
-	profile *types.GovernanceProfile
-	// hasGroupTierAssignments is the GOVERNANCE half of "the group tier could
+	profile *types.GovernanceUnit
+	// hasGroupTierMemberships is the GOVERNANCE half of "the group tier could
 	// have been hiding something", shadowing noGovernanceStore's false. It is
 	// what makes the launch path's ceilingWithUnusableGroups refuse, and the
 	// preview's door has to reach the same answer for the same claims.
-	hasGroupTierAssignments bool
+	hasGroupTierMemberships bool
 	// sawUsers / sawGroups are the arguments the LAST ResolveUserDrive call was
 	// made with — see the method for why a double that discards them is a
 	// double that hides a whole class of defect.
@@ -104,7 +104,7 @@ type driveStore struct {
 	site types.SiteConfig
 }
 
-// GetSiteConfig shadows noGovernanceStore's for the reason ResolveGovernanceProfile
+// GetSiteConfig shadows noGovernanceStore's for the reason ResolveGovernanceUnit
 // does: the resolver folds the DEPLOYMENT's drive ceiling with the principal's,
 // and a double that could only answer "no providers" could not exercise the fold.
 // GetUserDrive answers the grant write's member-drive guard: the one drive,
@@ -120,16 +120,16 @@ func (s *driveStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	return s.site, nil
 }
 
-func (s *driveStore) HasGroupTierAssignments(context.Context) (bool, error) {
-	return s.hasGroupTierAssignments, nil
+func (s *driveStore) HasGroupTierMemberships(context.Context) (bool, error) {
+	return s.hasGroupTierMemberships, nil
 }
 
-// ResolveGovernanceProfile shadows noGovernanceStore's so a case can shut the
+// ResolveGovernanceUnit shadows noGovernanceStore's so a case can shut the
 // DRIVE DOOR for the claims under test. The preview resolves the ceiling for
 // the previewed principal, not for the admin asking, so this is the only way to
 // state "this person's profile forbids a drive".
-func (s *driveStore) ResolveGovernanceProfile(_ context.Context, users, groups []string, userType string) (
-	*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+func (s *driveStore) ResolveGovernanceUnit(_ context.Context, users, groups []string, userType string) (
+	*types.GovernanceUnit, types.CapabilitySubjectType, error) {
 	s.sawGovUsers = append(s.sawGovUsers, users)
 	s.sawGovGroups = append(s.sawGovGroups, groups)
 	s.sawGovUserType = userType
@@ -1307,7 +1307,7 @@ func TestPreviewUserDriveAnswersTheSameRefusalAsLaunch(t *testing.T) {
 		d := driveFixture(nil)
 		st := &driveStore{
 			drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser,
-			profile: &types.GovernanceProfile{
+			profile: &types.GovernanceUnit{
 				ID: uuid.New(), Name: "contractors",
 				Limits: types.GovernanceLimits{DenyUserDrive: true},
 			},
@@ -1329,7 +1329,7 @@ func TestPreviewUserDriveAnswersTheSameRefusalAsLaunch(t *testing.T) {
 		d := driveFixture(nil)
 		st := &driveStore{
 			drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser,
-			profile: &types.GovernanceProfile{ID: uuid.New(), Name: "engineering"},
+			profile: &types.GovernanceUnit{ID: uuid.New(), Name: "engineering"},
 		}
 		w := previewDriveHTTP(t, driveServer(st), []string{"sub-abc"}, []string{"eng"})
 		if w.Code != http.StatusOK {
@@ -1639,7 +1639,7 @@ func TestPreviewDoorTakesTheUnusableGroupTier(t *testing.T) {
 			// The deployment HAS group-tier governance assignments, so an
 			// unevaluable group tier could have been hiding the row that walls
 			// this principal — which is exactly what the launch refuses on.
-			hasGroupTierAssignments: true,
+			hasGroupTierMemberships: true,
 		}
 	}
 
@@ -1670,7 +1670,7 @@ func TestPreviewDoorTakesTheUnusableGroupTier(t *testing.T) {
 	// ...and a deployment that has authored no group-tier assignment has
 	// nothing an unknown group could have been hiding, so it previews too.
 	st := newStore()
-	st.hasGroupTierAssignments = false
+	st.hasGroupTierMemberships = false
 	if w := previewDriveHTTP(t, driveServer(st), []string{"sub-drive-bob"}, nil); w.Code != http.StatusOK {
 		t.Errorf("preview with no groups on a deployment with no group-tier assignments = %d, want 200: %s",
 			w.Code, w.Body.String())

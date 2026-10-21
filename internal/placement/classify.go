@@ -39,13 +39,18 @@ const (
 	RuleExempt        Rule = "exempt"         // sent as dispatched
 	RuleOwnerOnlyOwn  Rule = "owner_only_own" // allowed, persisted OwnerOnly=true
 	RuleNotConfigured Rule = "not_configured" // refused, and not a configurable class
+	// RuleResidentViaOrg is a runner_resident class's placeholder fill
+	// (WARDYN_RUNNER_SECRET_PLACEHOLDERS): admitted only where its class is
+	// delivered runner_resident and ResidentAdmits it, then served via_org, so
+	// the value stays at the organisation.
+	RuleResidentViaOrg Rule = "resident_via_org"
 )
 
 // Rules and Classes are closed sets: a row naming anything else is refused by
 // TestTableRowsAreWellFormed, and at runtime an unknown rule is a gated rule
 // with no gate, which refuses; it is never an allow.
 var (
-	allRules   = []Rule{RuleAllow, RuleDelivery, RuleViaOrgRefuse, RuleRefuse, RuleBound, RuleNotSent, RuleStrip, RuleExempt, RuleOwnerOnlyOwn, RuleNotConfigured}
+	allRules   = []Rule{RuleAllow, RuleDelivery, RuleViaOrgRefuse, RuleRefuse, RuleBound, RuleNotSent, RuleStrip, RuleExempt, RuleOwnerOnlyOwn, RuleNotConfigured, RuleResidentViaOrg}
 	allClasses = []Class{ClassOwn, ClassOperator, ClassBrokered, ClassPlatform, ClassExempt, ClassComposite}
 )
 
@@ -117,6 +122,8 @@ var Table = []Entry{
 	{Struct: StructProxyConfig, Field: "MITMCAKeyPEM", Class: ClassPlatform, Rule: RuleAllow, Variant: "per run; gains MITM of one's own sandbox only"},
 	{Struct: StructProxyConfig, Field: "Injection", Variant: "stored api_key, own namespace", Class: ClassOwn, Rule: RuleOwnerOnlyOwn},
 	{Struct: StructProxyConfig, Field: "Injection", Variant: "operator namespace or shared component; via_org replaces it with a ViaOrgRoutes entry", Class: ClassOperator, Rule: RuleDelivery, Delivery: ClassAPIKey, Reason: ReasonPlacementCredential, ViaOrg: true},
+	{Struct: StructProxyConfig, Field: "Injection", Variant: "the placeholder fill of a runner_resident env_secret, WARDYN_RUNNER_SECRET_PLACEHOLDERS on: a ViaOrgRoutes entry replaces it", Class: ClassOperator, Rule: RuleResidentViaOrg, Delivery: ClassEnvSecret, Reason: ReasonPlacementCredential},
+	{Struct: StructProxyConfig, Field: "Injection", Variant: "the placeholder fill of a runner_resident file_secret, WARDYN_RUNNER_SECRET_PLACEHOLDERS on: a ViaOrgRoutes entry replaces it", Class: ClassOperator, Rule: RuleResidentViaOrg, Delivery: ClassFileSecret, Reason: ReasonPlacementCredential},
 	{Struct: StructProxyConfig, Field: "Injection", Variant: "the person's model-provider key or own Claude sign-in", Class: ClassOwn, Rule: RuleAllow},
 	{Struct: StructProxyConfig, Field: "Injection", Variant: "captured AWS SSO, credential_source per_user", Class: ClassOwn, Rule: RuleAllow},
 	{Struct: StructProxyConfig, Field: "Injection", Variant: "captured AWS SSO shared", Class: ClassBrokered, Rule: RuleDelivery, Delivery: ClassAWSSSOBearer, Reason: ReasonPlacementCredential},
@@ -135,6 +142,7 @@ var Table = []Entry{
 	{Struct: StructProxyConfig, Field: "GitHubAPI", Variant: "the organisation's GitHub App installation token, for the GitHub CLI", Class: ClassBrokered, Rule: RuleRefuse, Reason: ReasonPlacementCredential},
 	{Struct: StructProxyConfig, Field: "AzureARM", Variant: "the Azure CLI's Resource Manager token, redeemed by the organisation from the person's Entra sign-in", Class: ClassBrokered, Rule: RuleRefuse, Reason: ReasonPlacementCredential},
 	{Struct: StructProxyConfig, Field: "AWSSigV4", Variant: "AWS role credentials the proxy redeems from the person's AWS sign-in to re-sign requests", Class: ClassBrokered, Rule: RuleRefuse, Reason: ReasonPlacementCredential},
+	{Struct: StructProxyConfig, Field: "KubeAPI", Variant: "the kubectl door's grant, whose cluster token the organisation mints from its registered service-account token", Class: ClassBrokered, Rule: RuleRefuse, Reason: ReasonPlacementCredential},
 	{Struct: StructProxyConfig, Field: "UpstreamProxyURL", Class: ClassOperator, Rule: RuleNotSent, Variant: "the runner's own upstream-proxy config applies"},
 	{Struct: StructProxyConfig, Field: "TrustedCAPEM", Class: ClassOperator, Rule: RuleNotSent, Variant: "the proxy copy only: the runner's own --trusted-ca-file bundle replaces it, destinations needing the org's roots take via_org, and the org's roots still reach the sandbox env, where the runner appends its own"},
 	{Struct: StructProxyConfig, Field: "InternalHosts", Class: ClassOperator, Rule: RuleAllow, Variant: "the org's internal_hosts lift only the private-IP guard for declared suffixes; the egress allowlist still decides"},

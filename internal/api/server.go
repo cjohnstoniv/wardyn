@@ -281,10 +281,10 @@ type Config struct {
 	// sign-in vouches for the email (unverifiedEmailSubject). Default false keeps
 	// the match and logs it. Deny rows match the email either way.
 	CapabilityGrantsVerifiedEmail bool
-	// GovernanceProfilePutExistingOnly is WARDYN_GOVERNANCE_PROFILE_PUT_EXISTING_ONLY:
-	// PUT /governance/profiles/{id} replaces an existing profile only, and a
+	// GovernanceUnitPutExistingOnly is WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY:
+	// PUT /governance/units/{id} replaces an existing profile only, and a
 	// new one is created through POST. Default false keeps create-at-id and logs it.
-	GovernanceProfilePutExistingOnly bool
+	GovernanceUnitPutExistingOnly bool
 	// EgressHostPortGrantsInert is WARDYN_EGRESS_HOST_PORT_GRANTS_INERT: a stored
 	// egress_host ALLOW row whose value carries a ":port" (written before the
 	// write boundary stored the host alone) is inert, marked and never matched.
@@ -578,6 +578,9 @@ type Config struct {
 	// the broker is off, a resident PAT on an operator's run too; a member's
 	// run is refused it either way (patNarrowingRefusal).
 	RefuseGitPATBrokerOff bool
+	// MultiAgentTasks (WARDYN_MULTI_AGENT_TASKS, off by default in 0.10.0): a background task
+	// may run several agents, each on its tools[].task. Off, that is refused multi_agent_tasks_off.
+	MultiAgentTasks bool
 	// ScrubProxyResponses (WARDYN_PROXY_RESPONSE_SCRUB) stamps
 	// proxy.Config.ScrubResponses on every new dispatch.
 	ScrubProxyResponses bool
@@ -588,6 +591,10 @@ type Config struct {
 	// (runs_dispatch_placeholders.go). Off = the value in the sandbox, as before.
 	EnvSecretPlaceholders  bool
 	FileSecretPlaceholders bool
+	// RunnerSecretPlaceholders (WARDYN_RUNNER_SECRET_PLACEHOLDERS; off by default in 0.10.0): a
+	// local run's runner_resident env_secret or file_secret grant keeps its value at the organisation;
+	// the runner gets a placeholder and a via_org route, filled by its egress (placeResidentSecrets).
+	RunnerSecretPlaceholders bool
 	// OIDCRoleMapConfigured reports whether WARDYN_OIDC_ROLE_MAP is non-empty —
 	// the sso_rbac /setup/status check's gate. Only the presence, never the
 	// mapping itself: the API layer has no use for individual entries, only

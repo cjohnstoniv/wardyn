@@ -19,7 +19,7 @@ import (
 )
 
 var (
-	teamA = &policyref.Ref{Source: policyref.SourceProfile, Name: "Team A", Owner: "Pat Owner",
+	teamA = &policyref.Ref{Source: policyref.SourceUnit, Name: "Team A", Owner: "Pat Owner",
 		Email: "pat@example.com", RequestURL: "https://help.example.com/access"}
 	deploymentRef = &policyref.Ref{Source: policyref.SourceDeployment, RequestURL: "https://help.example.com/access"}
 )
@@ -47,7 +47,7 @@ func TestWriteEgressDenyAttributesOnlyPolicyDecisions(t *testing.T) {
 			if rec.Code != http.StatusForbidden || denyText(rec) != golden {
 				t.Errorf("code %d body %q, want 403 and %q", rec.Code, denyText(rec), golden)
 			}
-			if got := rec.Header().Get("X-Wardyn-Policy"); got != `profile; name="Team%20A"` {
+			if got := rec.Header().Get("X-Wardyn-Policy"); got != `unit; name="Team%20A"` {
 				t.Errorf("X-Wardyn-Policy = %q", got)
 			}
 			if got := rec.Header().Get("X-Wardyn-Policy-Request"); got != "https://help.example.com/access" {
@@ -101,7 +101,7 @@ func TestEgressDenyThroughTheProxyIsAttributed(t *testing.T) {
 	} {
 		rec := httptest.NewRecorder()
 		p.ServeHTTP(rec, req)
-		if rec.Header().Get("X-Wardyn-Policy") != `profile; name="Team%20A"` ||
+		if rec.Header().Get("X-Wardyn-Policy") != `unit; name="Team%20A"` ||
 			!strings.Contains(denyText(rec), `governed by the profile "Team A"`) {
 			t.Errorf("%s: not attributed: %q %v", name, denyText(rec), rec.Header())
 		}
@@ -116,20 +116,20 @@ func TestAttributionRendering(t *testing.T) {
 		wantReq    string
 		wantLine   string
 	}{
-		{"non-ASCII name travels percent-encoded", &policyref.Ref{Source: policyref.SourceProfile, Name: "Équipe ☂", RequestURL: "https://h.example.com/x"},
-			"profile; name=\"%C3%89quipe%20%E2%98%82\"", "https://h.example.com/x", `This run is governed by the profile "Équipe ☂". To request a change: https://h.example.com/x`},
+		{"non-ASCII name travels percent-encoded", &policyref.Ref{Source: policyref.SourceUnit, Name: "Équipe ☂", RequestURL: "https://h.example.com/x"},
+			"unit; name=\"%C3%89quipe%20%E2%98%82\"", "https://h.example.com/x", `This run is governed by the profile "Équipe ☂". To request a change: https://h.example.com/x`},
 		{"deployment default", deploymentRef, "deployment", "https://help.example.com/access",
 			"This run is governed by this deployment's policy. To request a change: https://help.example.com/access"},
-		{"mailto from the email", &policyref.Ref{Source: policyref.SourceProfile, Name: "T", Email: "pat@example.com"},
-			`profile; name="T"`, "mailto:pat@example.com", `This run is governed by the profile "T". To request a change: mailto:pat@example.com`},
+		{"mailto from the email", &policyref.Ref{Source: policyref.SourceUnit, Name: "T", Email: "pat@example.com"},
+			`unit; name="T"`, "mailto:pat@example.com", `This run is governed by the profile "T". To request a change: mailto:pat@example.com`},
 		{"request text when there is no route", &policyref.Ref{Source: policyref.SourceDeployment, RequestText: "ask the platform desk"},
 			"deployment", "", "This run is governed by this deployment's policy. To request a change: ask the platform desk"},
 		{"a changed policy no profile names is the deployment's, not its default", &policyref.Ref{Source: policyref.SourceDeployment, Overridden: true},
 			"deployment; overridden", "", "This run is governed by this deployment's policy, as changed for this run."},
-		{"a policy the person changed says so", &policyref.Ref{Source: policyref.SourceProfile, Name: "T", Overridden: true},
-			`profile; name="T"; overridden`, "", `This run is governed by the profile "T", as changed for this run.`},
-		{"nothing to say about a route", &policyref.Ref{Source: policyref.SourceProfile, Name: "T"},
-			`profile; name="T"`, "", `This run is governed by the profile "T".`},
+		{"a policy the person changed says so", &policyref.Ref{Source: policyref.SourceUnit, Name: "T", Overridden: true},
+			`unit; name="T"; overridden`, "", `This run is governed by the profile "T", as changed for this run.`},
+		{"nothing to say about a route", &policyref.Ref{Source: policyref.SourceUnit, Name: "T"},
+			`unit; name="T"`, "", `This run is governed by the profile "T".`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := httptest.NewRecorder()
@@ -165,7 +165,7 @@ func assertAttributed(t *testing.T, rec *httptest.ResponseRecorder, wantStatus i
 	if rec.Code != wantStatus {
 		t.Fatalf("status = %d, want %d; body %q", rec.Code, wantStatus, denyText(rec))
 	}
-	if rec.Header().Get("X-Wardyn-Policy") != `profile; name="Team%20A"` || rec.Header().Get("X-Wardyn-Policy-Request") != "https://help.example.com/access" {
+	if rec.Header().Get("X-Wardyn-Policy") != `unit; name="Team%20A"` || rec.Header().Get("X-Wardyn-Policy-Request") != "https://help.example.com/access" {
 		t.Errorf("headers = %v", rec.Header())
 	}
 	if !strings.Contains(denyText(rec), `This run is governed by the profile \"Team A\". To request a change: https://help.example.com/access`) &&
@@ -279,7 +279,7 @@ func TestADORefusalsAreAttributed(t *testing.T) {
 	if after.Message != before.Message+` This run is governed by the profile "Team A". To request a change: https://help.example.com/access` {
 		t.Errorf("message = %q", after.Message)
 	}
-	if rec.Header().Get("X-Wardyn-Policy") != `profile; name="Team%20A"` || rec.Header().Get("X-Wardyn-Policy-Request") == "" {
+	if rec.Header().Get("X-Wardyn-Policy") != `unit; name="Team%20A"` || rec.Header().Get("X-Wardyn-Policy-Request") == "" {
 		t.Errorf("headers = %v", rec.Header())
 	}
 	if plain.Header().Get("X-Wardyn-Policy") != "" {
@@ -304,7 +304,7 @@ func TestADOGitRefusalIsAttributed(t *testing.T) {
 		` This run is governed by the profile "Team A". To request a change: https://help.example.com/access`+"\n" {
 		t.Errorf("body = %q (unattributed %q)", got.Body.String(), plain.Body.String())
 	}
-	if got.Header().Get("X-Wardyn-Policy") != `profile; name="Team%20A"` || plain.Header().Get("X-Wardyn-Policy") != "" {
+	if got.Header().Get("X-Wardyn-Policy") != `unit; name="Team%20A"` || plain.Header().Get("X-Wardyn-Policy") != "" {
 		t.Errorf("headers = %v / %v", got.Header(), plain.Header())
 	}
 }
@@ -313,7 +313,7 @@ func TestADOGitRefusalIsAttributed(t *testing.T) {
 func TestConfigAttributionIsReprojected(t *testing.T) {
 	base := `{"run_id":"` + uuid.NewString() + `","control_plane_url":"http://127.0.0.1:1","run_token":"t","policy":{},` +
 		`"attribution":`
-	cfg, err := LoadConfigBytes([]byte(base + `{"source":"profile","name":"Team A","request_url":"javascript:alert(1)"}}`))
+	cfg, err := LoadConfigBytes([]byte(base + `{"source":"unit","name":"Team A","request_url":"javascript:alert(1)"}}`))
 	if err != nil {
 		t.Fatalf("a bad request_url stopped the sidecar: %v", err)
 	}
@@ -336,7 +336,7 @@ func TestConfigAttributionIsReprojected(t *testing.T) {
 	if err != nil || cfg.Attribution != nil {
 		t.Errorf("an unknown source: %+v, %v; want it dropped and the sidecar started", cfg.Attribution, err)
 	}
-	if _, err = LoadConfigBytes([]byte(base + `{"source":"profile","bogus":1}}`)); err == nil {
+	if _, err = LoadConfigBytes([]byte(base + `{"source":"unit","bogus":1}}`)); err == nil {
 		t.Error("an unknown attribution key was accepted; the decode must stay strict")
 	}
 }

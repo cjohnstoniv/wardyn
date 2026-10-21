@@ -53,6 +53,9 @@ export const NR_REVIEW = {
   TIMING_APPLICATION: "Background automation · Runs when launched",
   TIMING_INTERACTIVE: "Interactive · Starts when launched",
   TIMING_NOW: "Autonomous · Run now",
+  TIMING_STARTS: (when: string | number) => `Autonomous · Starts ${when}`,
+  TIMING_CHOOSE: "Autonomous · Choose a start time",
+  TIMING_CHECKED: "Checked again when it starts.",
   WHERE_VALUE: (pool: string | number) => `${pool} pool`,
   /** The Where row when no pool is chosen: the pool-required blocker points at it (#3043). */
   WHERE_NONE: "No pool chosen yet",

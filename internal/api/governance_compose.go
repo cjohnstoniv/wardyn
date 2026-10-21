@@ -7,7 +7,7 @@
 // took the stored row as authority would read it as empty (every limit unset) and fail OPEN;
 // the resolver below composes from the deployment down, and a source guard
 // (governance_compose_census_test.go) fails any other file in this package that calls the store's
-// raw profile reads. types.GovernanceProfile is the stored row and ResolvedProfile is what
+// raw profile reads. types.GovernanceUnit is the stored row and ResolvedUnit is what
 // every reader takes, so a reader left on the row stops compiling.
 //
 // A chain that cannot be read or composed returns an error and never a partial chain: every caller
@@ -31,25 +31,25 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// maxProfileDepth is the longest chain: the profile, its base, that base's base. The deployment
+// maxUnitDepth is the longest chain: the profile, its base, that base's base. The deployment
 // default under the root is not counted.
-const maxProfileDepth = 3
+const maxUnitDepth = 3
 
 var (
-	errProfileCycle = errors.New("api: a governance profile chain repeats a profile")
-	errProfileDepth = errors.New("api: a governance profile chain is deeper than 3 profiles")
+	errUnitCycle = errors.New("api: a governance profile chain repeats a profile")
+	errUnitDepth = errors.New("api: a governance profile chain is deeper than 3 profiles")
 )
 
-// ResolvedProfile is one profile as authority: the leaf's identity and contact beside the EFFECTIVE
+// ResolvedUnit is one profile as authority: the leaf's identity and contact beside the EFFECTIVE
 // content composed from its chain. It carries nothing a member may not see except through
 // AdminWarnings, which names bases and is never put on a member surface.
-type ResolvedProfile struct {
+type ResolvedUnit struct {
 	ID       uuid.UUID
 	Name     string
 	Contact  *policyref.Contact // the leaf's own: never inherited from a base
 	Composed bool
 	// Chain is the leaf first, then each base: admin surfaces only.
-	Chain   []profileLink
+	Chain   []unitLink
 	Ceiling types.RunPolicySpec
 	Limits  types.GovernanceLimits
 	// AuthoredResources is the CPU, memory and PIDs limit the chain's own rows set, before Ceiling inherits the
@@ -63,8 +63,8 @@ type ResolvedProfile struct {
 	AdminWarnings []string
 }
 
-// profileLink names one profile of a chain.
-type profileLink struct {
+// unitLink names one profile of a chain.
+type unitLink struct {
 	ID   uuid.UUID
 	Name string
 }
@@ -87,12 +87,12 @@ func isOverlayUnsatisfiable(err error) (*overlayUnsatisfiableError, bool) {
 	return u, errors.As(err, &u)
 }
 
-// resolveProfileByID is the resolver for a run's captured profile: the leaf and its ancestors in
+// resolveUnitByID is the resolver for a run's captured profile: the leaf and its ancestors in
 // ONE statement, composed from the deployment down. store.ErrNotFound when the leaf is gone, which
 // each caller reads its own way (a door has nothing to bind; revive refuses); any other error is a
 // failed read and the caller fails closed.
-func (s *Server) resolveProfileByID(ctx context.Context, id uuid.UUID) (*ResolvedProfile, error) {
-	chain, err := s.cfg.Store.GetGovernanceProfileChain(ctx, id)
+func (s *Server) resolveUnitByID(ctx context.Context, id uuid.UUID) (*ResolvedUnit, error) {
+	chain, err := s.cfg.Store.GetGovernanceUnitChain(ctx, id)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, err
@@ -102,21 +102,21 @@ func (s *Server) resolveProfileByID(ctx context.Context, id uuid.UUID) (*Resolve
 	return s.composeChain(chain)
 }
 
-// resolveAssignedProfile is the resolver for a caller's assignment: the store's precedence read,
+// resolveAssignedUnit is the resolver for a caller's assignment: the store's precedence read,
 // then the chain of the profile it names when that profile is composed. store.ErrNotFound means no
 // assignment matched (the deployment ceiling). A composition nothing satisfies comes back as an
-// *overlayUnsatisfiableError, audited by ceilingFromProfile, the one place every ceiling passes.
-func (s *Server) resolveAssignedProfile(ctx context.Context, users, groups []string, userType string) (*ResolvedProfile, types.CapabilitySubjectType, error) {
-	row, tier, err := s.cfg.Store.ResolveGovernanceProfile(ctx, users, groups, userType)
+// *overlayUnsatisfiableError, audited by ceilingFromUnit, the one place every ceiling passes.
+func (s *Server) resolveAssignedUnit(ctx context.Context, users, groups []string, userType string) (*ResolvedUnit, types.CapabilitySubjectType, error) {
+	row, tier, err := s.cfg.Store.ResolveGovernanceUnit(ctx, users, groups, userType)
 	if err != nil {
 		return nil, "", err
 	}
 	if row == nil {
 		return nil, "", store.ErrNotFound
 	}
-	chain := []types.GovernanceProfile{*row}
+	chain := []types.GovernanceUnit{*row}
 	if row.Composed() {
-		if chain, err = s.cfg.Store.GetGovernanceProfileChain(ctx, row.ID); err != nil {
+		if chain, err = s.cfg.Store.GetGovernanceUnitChain(ctx, row.ID); err != nil {
 			// Never ErrNotFound here: an assigned profile cannot be deleted, and reading "gone" as
 			// "no assignment" would hand back the deployment ceiling.
 			return nil, "", fmt.Errorf("api: read the governance profile chain: %v", err)
@@ -129,10 +129,10 @@ func (s *Server) resolveAssignedProfile(ctx context.Context, users, groups []str
 	return p, tier, nil
 }
 
-// assignedProfileIdentity answers which profile binds the claims, for the admin preview: identity
+// assignedUnitIdentity answers which profile binds the claims, for the admin preview: identity
 // and tier only, never authority, so it composes nothing.
-func (s *Server) assignedProfileIdentity(ctx context.Context, users, groups []string, userType string) (id uuid.UUID, name string, tier types.CapabilitySubjectType, err error) {
-	row, tier, err := s.cfg.Store.ResolveGovernanceProfile(ctx, users, groups, userType)
+func (s *Server) assignedUnitIdentity(ctx context.Context, users, groups []string, userType string) (id uuid.UUID, name string, tier types.CapabilitySubjectType, err error) {
+	row, tier, err := s.cfg.Store.ResolveGovernanceUnit(ctx, users, groups, userType)
 	if err != nil {
 		return uuid.Nil, "", "", err
 	}
@@ -142,29 +142,29 @@ func (s *Server) assignedProfileIdentity(ctx context.Context, users, groups []st
 	return row.ID, row.Name, tier, nil
 }
 
-// profileLeafName is the name of the profile id names and nothing else: no chain is composed and no
+// unitLeafName is the name of the profile id names and nothing else: no chain is composed and no
 // base is returned, so it is safe for a member surface. store.ErrNotFound when the profile is gone.
-func (s *Server) profileLeafName(ctx context.Context, id uuid.UUID) (string, error) {
-	chain, err := s.cfg.Store.GetGovernanceProfileChain(ctx, id)
+func (s *Server) unitLeafName(ctx context.Context, id uuid.UUID) (string, error) {
+	chain, err := s.cfg.Store.GetGovernanceUnitChain(ctx, id)
 	if err != nil {
 		return "", err
 	}
 	return chain[0].Name, nil
 }
 
-// profileResolution is one profile of the whole list with what composing it gave. Err is why it
+// unitResolution is one profile of the whole list with what composing it gave. Err is why it
 // has no effective content (a cycle, a depth overflow, an unsatisfiable overlay), shown to admins
 // rather than failing the list.
-type profileResolution struct {
-	Row      types.GovernanceProfile
-	Resolved *ResolvedProfile
+type unitResolution struct {
+	Row      types.GovernanceUnit
+	Resolved *ResolvedUnit
 	Err      error
 }
 
-// resolveAllProfiles composes every profile from ONE list read, for the readers that show the
+// resolveAllUnits composes every profile from ONE list read, for the readers that show the
 // whole list.
-func (s *Server) resolveAllProfiles(ctx context.Context) ([]profileResolution, error) {
-	rows, err := s.cfg.Store.ListGovernanceProfiles(ctx)
+func (s *Server) resolveAllUnits(ctx context.Context) ([]unitResolution, error) {
+	rows, err := s.cfg.Store.ListGovernanceUnits(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -172,11 +172,11 @@ func (s *Server) resolveAllProfiles(ctx context.Context) ([]profileResolution, e
 }
 
 // composeAll composes each row of an already-read list independently.
-func (s *Server) composeAll(rows []types.GovernanceProfile) []profileResolution {
-	byID := profilesByID(rows)
-	out := make([]profileResolution, len(rows))
+func (s *Server) composeAll(rows []types.GovernanceUnit) []unitResolution {
+	byID := unitsByID(rows)
+	out := make([]unitResolution, len(rows))
 	for i, row := range rows {
-		out[i] = profileResolution{Row: row}
+		out[i] = unitResolution{Row: row}
 		chain, err := chainFromRows(byID, row.ID)
 		if err == nil {
 			out[i].Resolved, err = s.composeChain(chain)
@@ -186,8 +186,8 @@ func (s *Server) composeAll(rows []types.GovernanceProfile) []profileResolution 
 	return out
 }
 
-func profilesByID(rows []types.GovernanceProfile) map[uuid.UUID]types.GovernanceProfile {
-	byID := make(map[uuid.UUID]types.GovernanceProfile, len(rows))
+func unitsByID(rows []types.GovernanceUnit) map[uuid.UUID]types.GovernanceUnit {
+	byID := make(map[uuid.UUID]types.GovernanceUnit, len(rows))
 	for _, r := range rows {
 		byID[r.ID] = r
 	}
@@ -195,72 +195,72 @@ func profilesByID(rows []types.GovernanceProfile) map[uuid.UUID]types.Governance
 }
 
 // chainFromRows walks id's bases through an in-memory list, leaf first, refusing a repeat
-// (errProfileCycle), a chain past maxProfileDepth (errProfileDepth) and a base the list lacks.
-func chainFromRows(byID map[uuid.UUID]types.GovernanceProfile, id uuid.UUID) ([]types.GovernanceProfile, error) {
-	var chain []types.GovernanceProfile
+// (errUnitCycle), a chain past maxUnitDepth (errUnitDepth) and a base the list lacks.
+func chainFromRows(byID map[uuid.UUID]types.GovernanceUnit, id uuid.UUID) ([]types.GovernanceUnit, error) {
+	var chain []types.GovernanceUnit
 	for cur := &id; cur != nil; {
 		row, ok := byID[*cur]
 		if !ok {
 			return nil, fmt.Errorf("api: governance profile %s names a base that does not exist", id)
 		}
-		if slices.ContainsFunc(chain, func(r types.GovernanceProfile) bool { return r.ID == row.ID }) {
-			return nil, errProfileCycle
+		if slices.ContainsFunc(chain, func(r types.GovernanceUnit) bool { return r.ID == row.ID }) {
+			return nil, errUnitCycle
 		}
-		if len(chain) == maxProfileDepth {
-			return nil, errProfileDepth
+		if len(chain) == maxUnitDepth {
+			return nil, errUnitDepth
 		}
 		chain = append(chain, row)
-		cur = row.BaseProfileID
+		cur = row.ParentID
 	}
 	return chain, nil
 }
 
-// checkProfileChain refuses a chain that is not a clean line to a root: an id that repeats, a link
+// checkUnitChain refuses a chain that is not a clean line to a root: an id that repeats, a link
 // that does not point at the next row, a standalone row with a base above it, or a last row that
 // still names a base (the bound cut the chain short, or the base is missing).
-func checkProfileChain(chain []types.GovernanceProfile) error {
+func checkUnitChain(chain []types.GovernanceUnit) error {
 	seen := make(map[uuid.UUID]bool, len(chain))
 	for i, r := range chain {
 		if seen[r.ID] {
-			return errProfileCycle
+			return errUnitCycle
 		}
 		seen[r.ID] = true
-		if r.BaseProfileID != nil && !r.Composed() {
+		if r.ParentID != nil && !r.Composed() {
 			return fmt.Errorf("api: governance profile %s has a base but no overlay", r.ID)
 		}
-		if i+1 < len(chain) && (r.BaseProfileID == nil || *r.BaseProfileID != chain[i+1].ID) {
+		if i+1 < len(chain) && (r.ParentID == nil || *r.ParentID != chain[i+1].ID) {
 			return fmt.Errorf("api: governance profile chain is not contiguous at %s", r.ID)
 		}
 	}
 	last := chain[len(chain)-1]
-	if last.BaseProfileID != nil {
+	if last.ParentID != nil {
 		switch {
-		case seen[*last.BaseProfileID]:
-			return errProfileCycle
-		case len(chain) >= maxProfileDepth:
-			return errProfileDepth
+		case seen[*last.ParentID]:
+			return errUnitCycle
+		case len(chain) >= maxUnitDepth:
+			return errUnitDepth
 		}
 		// The base was not read: only reachable from a store that returned a short chain.
 		return fmt.Errorf("api: governance profile %s names a base that was not read", last.ID)
 	}
-	if len(chain) > maxProfileDepth {
-		return errProfileDepth
+	if len(chain) > maxUnitDepth {
+		return errUnitDepth
 	}
 	return nil
 }
 
 // composeChain composes a chain (leaf first) from the deployment down.
-func (s *Server) composeChain(chain []types.GovernanceProfile) (*ResolvedProfile, error) {
+func (s *Server) composeChain(chain []types.GovernanceUnit) (*ResolvedUnit, error) {
 	if len(chain) == 0 {
 		return nil, errors.New("api: an empty governance profile chain")
 	}
-	if err := checkProfileChain(chain); err != nil {
+	if err := checkUnitChain(chain); err != nil {
 		return nil, err
 	}
 	leaf := chain[0]
-	out := &ResolvedProfile{ID: leaf.ID, Name: leaf.Name, Contact: leaf.Contact, Composed: leaf.Composed()}
+	out := &ResolvedUnit{ID: leaf.ID, Name: leaf.Name, Contact: leaf.Contact, Composed: leaf.Composed()}
 	for _, r := range chain {
-		out.Chain = append(out.Chain, profileLink{ID: r.ID, Name: r.Name})
+		out.Chain = append(out.Chain, unitLink{ID: r.ID, Name: r.Name})
 	}
 	root := len(chain) - 1
 	var base composer.Authority
@@ -303,7 +303,7 @@ func (s *Server) deploymentAuthority() composer.Authority {
 // standaloneAuthority is a standalone row's authority exactly as the resolver has always read it:
 // a size it omits inherited from the deployment, its grants re-intersected against the deployment's
 // (a redeploy may have dropped one), and a dropped push-rules warning.
-func (s *Server) standaloneAuthority(p types.GovernanceProfile) (composer.Authority, []string) {
+func (s *Server) standaloneAuthority(p types.GovernanceUnit) (composer.Authority, []string) {
 	spec := p.Ceiling.Clone()
 	spec.Resources = s.inheritDeploymentResources(spec.Resources)
 	kept, warns := reintersectGovernanceGrants(spec.EligibleGrants, s.cfg.DefaultPolicy.EligibleGrants, p.Name)
@@ -313,7 +313,7 @@ func (s *Server) standaloneAuthority(p types.GovernanceProfile) (composer.Author
 }
 
 // overlayOf is a composed row's overlay as the composer takes it.
-func overlayOf(p types.GovernanceProfile) composer.Overlay {
+func overlayOf(p types.GovernanceUnit) composer.Overlay {
 	ov := composer.Overlay{}
 	if p.Overlay != nil {
 		ov.Ceiling = *p.Overlay
@@ -327,7 +327,7 @@ func overlayOf(p types.GovernanceProfile) composer.Overlay {
 // applyStep narrows base by one composed row's overlay: the meet, then the row's own grants
 // re-intersected against that resolved base. leaf says the row is the profile being resolved, whose
 // warnings are the only ones a member sees.
-func (s *Server) applyStep(out *ResolvedProfile, base composer.Authority, row types.GovernanceProfile, leaf bool) (composer.Authority, error) {
+func (s *Server) applyStep(out *ResolvedUnit, base composer.Authority, row types.GovernanceUnit, leaf bool) (composer.Authority, error) {
 	res, warns, err := composer.ApplyOverlay(base, overlayOf(row))
 	if err == nil {
 		if msg := governanceLimitsRefusal(res.Limits); msg != "" {

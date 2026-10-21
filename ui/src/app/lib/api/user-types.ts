@@ -37,7 +37,7 @@ export const userTypes = {
   },
 
   // DELETE /api/v1/user-types/{id} -> 204. The five-source delete guard
-  // (role_mappings, capability_grants, governance_assignments,
+  // (role_mappings, capability_grants, governance_memberships,
   // user_drive_grants, agent_runs) answers 409 with the count; that message
   // reaches the caller verbatim. A 404 is tolerated as "already gone".
   async deleteUserType(id: string): Promise<void> {

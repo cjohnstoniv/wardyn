@@ -44,8 +44,8 @@ func runGovernancePlan(t *testing.T, url string, doc sdk.GovernanceDocument, pru
 func TestGovernancePlan_PrintsPlanAndSendsNoWrites(t *testing.T) {
 	srv, seen := countingServer(t)
 	doc := sdk.GovernanceDocument{
-		Profiles:    []sdk.GovernanceProfile{{Name: "fresh"}},
-		Assignments: []sdk.GovernanceAssignment{{SubjectType: sdk.CapabilitySubjectUser, Subject: "alice", ProfileID: uuid.New()}},
+		Units:       []sdk.GovernanceUnit{{Name: "fresh"}},
+		Memberships: []sdk.GovernanceMembership{{SubjectType: sdk.CapabilitySubjectUser, Subject: "alice", UnitID: uuid.New()}},
 	}
 	stdout, stderr, err := runGovernancePlan(t, srv.URL, doc, false)
 	if err != nil {
@@ -72,11 +72,11 @@ func TestGovernancePlan_PrintsPlanAndSendsNoWrites(t *testing.T) {
 
 func TestGovernancePlan_PruneListsEveryDeleteAndWritesNothing(t *testing.T) {
 	fake := newFakeGovernanceServer()
-	stale := sdk.GovernanceProfile{ID: uuid.New(), Name: "stale"}
+	stale := sdk.GovernanceUnit{ID: uuid.New(), Name: "stale"}
 	fake.profiles[stale.ID] = stale
 	asgID := uuid.New()
-	fake.assignments[asgID] = sdk.GovernanceAssignment{ID: asgID, SubjectType: sdk.CapabilitySubjectUser,
-		Subject: "alice", ProfileID: stale.ID}
+	fake.assignments[asgID] = sdk.GovernanceMembership{ID: asgID, SubjectType: sdk.CapabilitySubjectUser,
+		Subject: "alice", UnitID: stale.ID}
 	srv := httptest.NewServer(fake.handler())
 	t.Cleanup(srv.Close)
 

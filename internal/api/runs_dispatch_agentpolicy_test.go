@@ -400,8 +400,8 @@ func TestAgentPolicyDispatchLockedL2(t *testing.T) {
 	}
 	profile := func(locks bool) governanceCeiling {
 		return governanceCeiling{
-			Profile: &ResolvedProfile{Name: "locked"},
-			Limits:  types.GovernanceLimits{AutonomyRubric: &types.AutonomyRubric{EgressOpen: types.AutonomyL2, AgentGuardrailLocks: locks}},
+			Unit:   &ResolvedUnit{Name: "locked"},
+			Limits: types.GovernanceLimits{AutonomyRubric: &types.AutonomyRubric{EgressOpen: types.AutonomyL2, AgentGuardrailLocks: locks}},
 		}
 	}
 	for name, c := range map[string]struct {

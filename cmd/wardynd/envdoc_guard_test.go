@@ -132,6 +132,9 @@ var envDocShellOnly = map[string]bool{
 	// sibling, and a mapping only: what enables the gateway is
 	// WARDYN_UI_SANDBOX_LISTEN, which Go does read.
 	"WARDYN_UI_SANDBOX_PORT": true,
+	// The harnesses image hands each agent of a background run with several its own
+	// prep mark (deploy/images/common/agent-run-set); set and read by shell only.
+	"WARDYN_TASK_PREPPED": true,
 	// The store-mode and Transit compose overlays' host directory holding the
 	// Vault token (deploy/compose/docker-compose.{vault,transit}.yaml); Go reads
 	// the mounted file.
@@ -257,7 +260,7 @@ var wardynVarLit = regexp.MustCompile(`WARDYN_[A-Z0-9_]+`)
 // A third form, WARDYN_X= on a non-comment line, is an assignment emitted
 // inside a format string (cmd/wardyn-runnerd/setup_host.go writes
 // WARDYN_RUNNER_STATE_DIR into the unit's env file that way). The runner's
-// deploy templates (deploy/runner/*.service, *.plist, *.env.example) are
+// deploy templates (deploy/runner/*.service, *.plist) are
 // scanned for every WARDYN_ name they carry, since they exist to set them.
 func readVars(t *testing.T, root string) map[string]bool { return scanVars(t, root, false) }
 
@@ -322,11 +325,7 @@ func scanVars(t *testing.T, root string, readersOnly bool) map[string]bool {
 			t.Fatalf("walk %s: %v", sub, err)
 		}
 	}
-	globs := []string{"*.service", "*.plist", "*.env.example"}
-	if readersOnly {
-		globs = globs[:2] // an env example only writes; the unit and plist read through ${WARDYN_...}
-	}
-	for _, glob := range globs {
+	for _, glob := range []string{"*.service", "*.plist"} {
 		files, err := filepath.Glob(filepath.Join(root, "deploy", "runner", glob))
 		if err != nil || len(files) == 0 {
 			t.Fatalf("deploy/runner/%s matched no file (err %v) — the runner's templates moved", glob, err)

@@ -35,23 +35,32 @@ func reservedToolgateCredentialFile(file string) bool {
 // then holds no credential and its calls are decided as a call from no harness
 // is, the strictest of all the sets. Never a refusal; the
 // run.toolgate_credential.write row records delivered false with the reason.
-func (s *Server) stampHarnessCredential(ctx context.Context, run types.AgentRun, sets []types.HarnessToolRules, drives []types.DriveMount) ([]types.HarnessCredential, []runner.ManagedFile, error) {
-	digests, cred, err := mintHarnessCredentials(sets, run.Agent)
-	if err != nil || cred == "" {
+func (s *Server) stampHarnessCredential(ctx context.Context, run types.AgentRun, sets []types.HarnessToolRules, drives []types.DriveMount, agents []string) ([]types.HarnessCredential, []runner.ManagedFile, error) {
+	digests, creds, err := mintHarnessCredentials(sets, agents)
+	if err != nil || len(creds) == 0 {
 		return digests, nil, err
 	}
-	file := runner.ManagedFile{
-		Path: runner.ComponentSecretDir + "/" + toolgateCredentialFilePrefix + run.Agent,
-		Mode: runner.ComponentSecretFileMode, AgentOwned: true, Content: []byte(cred),
+	var files []runner.ManagedFile
+	var named []string
+	for _, agent := range agents {
+		if cred, ok := creds[agent]; ok {
+			named = append(named, agent)
+			files = append(files, runner.ManagedFile{
+				Path: runner.ComponentSecretDir + "/" + toolgateCredentialFilePrefix + agent,
+				Mode: runner.ComponentSecretFileMode, AgentOwned: true, Content: []byte(cred),
+			})
+		}
 	}
 	if reason := s.toolgateCredentialWithheld(ctx, run, drives); reason != "" {
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.toolgate_credential.write",
-			run.ID.String(), "success", mustJSON(map[string]any{
-				"agent": run.Agent, "path": file.Path, "delivered": false, "reason": reason,
-			})))
+		for i, file := range files {
+			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.toolgate_credential.write",
+				run.ID.String(), "success", mustJSON(map[string]any{
+					"agent": named[i], "path": file.Path, "delivered": false, "reason": reason,
+				})))
+		}
 		return digests, nil, nil
 	}
-	return digests, []runner.ManagedFile{file}, nil
+	return digests, files, nil
 }
 
 // toolgateCredentialWithheld is why the started harness's credential file

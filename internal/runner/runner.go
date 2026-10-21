@@ -177,6 +177,8 @@ type ProxyConfig struct {
 	AzureARM *proxy.AzureARMGrant
 	// AWSSigV4 is the run's AWS SigV4 re-signing grant (WARDYN_AWS_SIGV4_AT_PROXY); nil == off.
 	AWSSigV4 *proxy.AWSSigV4Config
+	// KubeAPI is the run's kubectl grant for the proxy's door on the row's API server; nil == off.
+	KubeAPI *proxy.KubeAPIGrant
 	// BrokeredPATGrantIDs is every git_pat grant id of the run while the PAT broker is on; the proxy refuses a raw mint of one.
 	BrokeredPATGrantIDs []uuid.UUID
 	// ResidentMints are the run's runner_resident ssh_key and git_pat grants, each Token its

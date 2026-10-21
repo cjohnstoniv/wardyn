@@ -44,6 +44,10 @@ type decisionSink struct {
 	ch      chan egress.DecisionLog
 	dropped atomic.Uint64
 
+	// layer and layerName are the policy layer a Wardyn refusal names (Proxy attribution);
+	// set once before the proxy serves.
+	layer, layerName string
+
 	wg     sync.WaitGroup
 	mu     sync.Mutex
 	closed bool
@@ -73,6 +77,7 @@ func newDecisionSink(controlPlaneURL string, token *tokenSource, bufferSize int,
 // record is dropped and the drop counter is incremented. The record is
 // always mirrored to stdout synchronously (cheap, non-blocking enough).
 func (s *decisionSink) emit(log egress.DecisionLog) {
+	s.stampRefusal(&log)
 	s.mirror(log)
 	if s.remote != nil {
 		s.remote.emit(log)

@@ -14,6 +14,7 @@ import { runHeadline } from "../../lib/types";
 import { formatDuration, shortTime } from "../../lib/format";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { scheduledBadgeWord } from "./runs/scheduled-state";
 import { AutonomyChip, Chip, ConfinementChip, RunStateBadge } from "../wardyn/primitives";
 import { RUN, RUN_COCKPIT } from "../wardyn/copy";
 import { waitingAdoConsent, waitingReauth } from "../../lib/reauth-waiting-copy";
@@ -253,7 +254,7 @@ export function SummaryHeader({
       </div>
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm">
-        <RunStateBadge state={run.state} />
+        <RunStateBadge state={run.state} word={scheduledBadgeWord(run)} />
         {sentence && (
           <span data-testid="run-status-sentence" className="min-w-0 text-foreground [overflow-wrap:anywhere]">
             {sentence}

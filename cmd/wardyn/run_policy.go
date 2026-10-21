@@ -167,9 +167,9 @@ func runPolicySourceLine(s sdk.RunPolicySource) string {
 		return "Started from a policy written for this run."
 	case s.Kind == "default":
 		return "Started from your organization's default policy."
-	case s.Kind == "profile" && s.Name != "":
-		return fmt.Sprintf("Started from the %s governance profile.", s.Name)
-	case s.Kind == "profile":
+	case s.Kind == "unit" && s.Name != "":
+		return fmt.Sprintf("Started from the %s governance unit.", s.Name)
+	case s.Kind == "unit":
 		// A profile since deleted: the console says the same (policy-tab.tsx).
 		return "Started from your organization's default policy."
 	}
@@ -197,8 +197,8 @@ func runPolicyChangeLabel(ch sdk.RunPolicyChange, person string) string {
 		return "Added so the agent can reach its model"
 	case "mirror":
 		return "Switched to your organization's package mirror"
-	case "profile":
-		return fmt.Sprintf("Limited by the %s governance profile", ch.Profile)
+	case "unit":
+		return fmt.Sprintf("Limited by the %s governance unit", ch.Unit)
 	case "restart":
 		if ch.At != nil {
 			return "Blocked when the run was restarted on " + ch.At.Format("Jan 2, 2006")

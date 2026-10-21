@@ -169,6 +169,15 @@ func TestClassifyPostsThatAreReads(t *testing.T) {
 	})
 }
 
+// The query doors read only as a POST: the same route under any other write method is a write, so a
+// read-only grant cannot edit through a query path.
+func TestClassifyQueryRouteOnANonPostIsAWrite(t *testing.T) {
+	runCases(t, []caseT{
+		{name: "a PUT to the work-item query route", req: adoReq(http.MethodPut, "/acme/proj/_apis/wit/wiql", ""), want: CapWorkWrite},
+		{name: "a PATCH to the work-item batch route", req: adoReq(http.MethodPatch, "/acme/_apis/wit/workitemsbatch", ""), want: CapWorkWrite},
+	})
+}
+
 // HAZARD 3 — the work-item batch door. It forwards each operation's URI
 // internally, so CapWorkWrite is honest only if every operation in it is a
 // work-item write.

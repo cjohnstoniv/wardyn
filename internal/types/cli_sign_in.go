@@ -6,7 +6,10 @@ package types
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"net"
+	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -164,6 +167,33 @@ func CLIProofMessage(origin, route string, id uuid.UUID, secret string, at int64
 	sum := sha256.Sum256([]byte(secret))
 	return []byte("wardyn-cli-proof/v1\n" + origin + "\n" + route + "\n" + id.String() + "\n" +
 		hex.EncodeToString(sum[:]) + "\n" + strconv.FormatInt(at, 10))
+}
+
+// CLIOrigin is u as the origin a device proof signs: scheme, host and base path, with the scheme and host
+// lower-cased, the default port (443 for https, 80 for http) dropped and no trailing slash. The CLI signs
+// over the URL it dials in this form, and the server keeps its own origin in it, so the same organisation
+// written two ways (an explicit :443, a capital letter in the host) is one origin.
+func CLIOrigin(u *url.URL) string {
+	scheme, host, port := strings.ToLower(u.Scheme), strings.ToLower(u.Hostname()), u.Port()
+	if (scheme == "https" && port == "443") || (scheme == "http" && port == "80") {
+		port = ""
+	}
+	if port != "" {
+		host = net.JoinHostPort(host, port)
+	} else if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	return scheme + "://" + host + strings.TrimRight(u.EscapedPath(), "/")
+}
+
+// CLISignInHealthz is what /healthz says about CLI sign-in. CLISignInOrigin is the origin the server
+// checks device proofs against (CLIOrigin form). The CLI only compares it with the URL it dials and
+// refuses on a difference; it never signs over it, so a look-alike server cannot obtain a proof for the
+// origin it advertises.
+type CLISignInHealthz struct {
+	CLISignIn       bool   `json:"cli_sign_in"`
+	CLIPasteSignIn  bool   `json:"cli_paste_sign_in"`
+	CLISignInOrigin string `json:"cli_sign_in_origin,omitempty"`
 }
 
 // CLISignInTokenRequest is the anonymous POST /api/v1/cli/sign-ins/{id}/token body.

@@ -98,3 +98,19 @@ describe("homeTemplateDisabled — the one predicate the editor and the server s
     expect(homeTemplateDisabled("host_path", "email_local")).toBe(false);
   });
 });
+
+// A drive's allocations read whole: GET /drives pages its grants, so the read follows X-Wardyn-Truncated page by
+// page (offset advancing by the rows received) and keeps only the one drive's rows.
+describe("drives.driveGrants() — every page of the grants, one drive's rows", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  it("pages until the server stops saying more remain", async () => {
+    const row = (id: string, drive_id: string) => ({ id, drive_id, subject_type: "group", subject: id });
+    const page = (grants: unknown[], truncated: boolean) =>
+      new Response(JSON.stringify({ grants }), { status: 200, headers: { "Content-Type": "application/json", ...(truncated ? { "X-Wardyn-Truncated": "true" } : {}) } });
+    const fetchMock = vi.fn().mockResolvedValueOnce(page([row("a", "d1"), row("b", "d2")], true)).mockResolvedValueOnce(page([row("c", "d1")], false));
+    vi.stubGlobal("fetch", fetchMock);
+    const got = await drives.driveGrants("d1");
+    expect(got.map((g) => g.id)).toEqual(["a", "c"]);
+    expect(fetchMock.mock.calls.map((c) => String(c[0]))).toEqual([expect.stringContaining("offset=0"), expect.stringContaining("offset=2")]);
+  });
+});

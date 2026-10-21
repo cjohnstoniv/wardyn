@@ -189,6 +189,23 @@ declare -A ALLOWLIST=(
   ["ui/src/app/components/screens/new-run-flow/steps/shape/seed-loaders.test.ts"]=1 # passthrough: a launch intent's created_at, never compared to the clock
   ["ui/src/app/components/screens/templates/rename-template-dialog.test.tsx"]=1 # display only: a template's updated_at
   ["ui/src/app/components/screens/templates/templates-screen.test.tsx"]=1 # display only: a template's updated_at
+  # 0.10 W4d: the scheduled-runs (SCHED), kept and team drive (KEEP, TEAM) and runner-health (RDIAG-B) tests. Each date is a fixed
+  # instant passed in as the clock (NOW, now) or stubbed row data the code under test only echoes or compares to that
+  # injected clock; none is compared to the wall clock.
+  ["internal/api/run_schedule_test.go"]=19
+  ["internal/store/store_runner_health_pg_test.go"]=1
+  ["ui/e2e/runs-scheduled.spec.ts"]=3
+  ["ui/e2e/team-drives.spec.ts"]=1
+  ["ui/src/app/components/screens/new-run-flow/draft/draft-reducer.test.ts"]=1
+  ["ui/src/app/components/screens/new-run-flow/draft/intent-to-wire.test.ts"]=2
+  ["ui/src/app/components/screens/new-run-flow/draft/launch-start.test.ts"]=4
+  ["ui/src/app/components/screens/new-run-flow/launch/refusal-text.test.ts"]=2
+  ["ui/src/app/components/screens/new-run-flow/steps/run/run-step.test.tsx"]=1
+  ["ui/src/app/components/screens/run-detail-summary-header.test.tsx"]=1
+  ["ui/src/app/components/screens/runs/run-row.test.tsx"]=1
+  ["ui/src/app/components/screens/runs/runs-model.test.ts"]=1
+  ["ui/src/app/components/screens/runs/scheduled-state.test.ts"]=3
+  ["ui/src/app/lib/schedule.test.ts"]=32
 )
 
 fail=0

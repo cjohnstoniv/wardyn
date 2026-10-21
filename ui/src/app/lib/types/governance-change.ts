@@ -10,7 +10,7 @@ export type GovernanceChangeState = "pending" | "applied" | "rejected" | "expire
 
 export interface GovernanceChange {
   id: string;
-  // governance_profile, governance_assignment, capability_grant, capability_enforcement,
+  // governance_unit, governance_membership, capability_grant, capability_enforcement,
   // capability_availability, user_type_priority, role_mapping, key_domain_assignment, egress_baseline,
   // runner_pool_use_policy, service_identity (and later kinds): kept a string so a kind this console
   // predates still lists, under its raw name.

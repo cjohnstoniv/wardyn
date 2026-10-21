@@ -101,6 +101,9 @@ type DecisionLog struct {
 	// it been on (WARDYN_EGRESS_PORT_RULE=dry_run): the dry run's list of the
 	// non-web ports runs use. Empty on every other row.
 	PortRule string `json:"port_rule,omitempty"`
+	// Refusal, on a deny row, says whose refusal it was: Wardyn's, a peer outside it, or
+	// unknown. Nil on every allow and on every deny the proxy does not classify.
+	Refusal *Refusal `json:"refusal,omitempty"`
 }
 
 // ScanSummary is the CONTENT-FREE summary of one LLM content-inspection pass.

@@ -113,6 +113,34 @@ func TestRunFileSendsInlinePolicyAsOverlay(t *testing.T) {
 	}
 }
 
+// TestRunFileSendsEachAgentsTask: a document that gives each agent its own task is sent
+// with those tasks (#3417); the server's door keeps them for kind Run.
+func TestRunFileSendsEachAgentsTask(t *testing.T) {
+	rig := runFileRig(t)
+	src := `api_version: wardyn/v1
+kind: Run
+intent:
+  experience: background
+  workload: {kind: agent_task, agent: claude-code, task: fix the build}
+  tools:
+    - {id: claude-code, kind: harness}
+    - {id: codex-cli, kind: harness, task: review the diff}
+  no_repositories_or_drives: true
+`
+	if _, err := rig.run(t, "run", "--file", writeTemplateFile(t, "run.yaml", src)); err != nil {
+		t.Fatal(err)
+	}
+	var body struct {
+		Tools []sdk.IncludedTool `json:"tools"`
+	}
+	if err := json.Unmarshal([]byte(rig.sent(runsPath)[0]), &body); err != nil || len(body.Tools) != 2 {
+		t.Fatalf("tools = %+v (%v)", body.Tools, err)
+	}
+	if body.Tools[1].Task != "review the diff" {
+		t.Errorf("codex-cli task = %q", body.Tools[1].Task)
+	}
+}
+
 // TestRunFileCarriesWhatTheFlagsMayNot: the placement a document names is not
 // overwritten by the placement flags' empty defaults, and a document with no
 // inline_policy sends no overlay.

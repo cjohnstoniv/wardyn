@@ -200,7 +200,7 @@ func policyProvSource(rec policySourceRecord) provSource {
 		src.ID = rec.PolicyID.String()
 	}
 	if src.Name == "" {
-		src.Name = map[string]string{policyKindInline: "custom", policyKindDefault: "default", policyKindProfile: "default"}[rec.Kind]
+		src.Name = map[string]string{policyKindInline: "custom", policyKindDefault: "default", policyKindUnit: "default"}[rec.Kind]
 	}
 	return src
 }

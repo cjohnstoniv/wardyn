@@ -170,7 +170,7 @@ func callsNamed(fn *ast.FuncDecl, name string) bool {
 // in it is worse than no denial at all: silence is at least honest about who was
 // refused.
 func TestDrivePreviewWritesNoDenial(t *testing.T) {
-	st := &driveStore{hasGroupTier: true, userTierOnly: true, hasGroupTierAssignments: true}
+	st := &driveStore{hasGroupTier: true, userTierOnly: true, hasGroupTierMemberships: true}
 	audit := &recRecorder{}
 	srv := New(Config{Store: st, Audit: audit, RunnerTarget: "docker"})
 

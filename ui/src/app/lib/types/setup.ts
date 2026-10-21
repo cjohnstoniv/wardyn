@@ -285,8 +285,6 @@ export interface SetupProviderAccess {
 }
 
 export interface SetupStatus {
-  // Switch-gated features this deployment has on (Go SetupFeatures).
-  features?: { mcp_local_servers?: boolean };
   ready: boolean;
   // Server-computed "does SOME run's LLM access path exist": at least one
   // enabled model provider serves an agent (Go llmPathExists) — computed
@@ -331,6 +329,19 @@ export interface SetupStatus {
    *  TRUSTED_CA_COUNT(n) (F22 — the data has shipped server-side since
    *  before this console read it). */
   trusted_ca_certs?: number;
+  /** The switches that turn console features on (Go SetupFeatures), one
+   *  boolean each. Kept through redaction. Optional for fixture compatibility
+   *  with an older daemon; absent reads as every switch off. */
+  features?: {
+    /** WARDYN_SCHEDULED_RUNS: a run may be scheduled to start later. */
+    scheduled_runs: boolean;
+    /** WARDYN_KUBECTL_CLI: the kubectl component kind is on. Optional for fixtures. */
+    kubectl_cli?: boolean;
+    /** WARDYN_MULTI_AGENT_TASKS: a background agent task may give each agent its own task. */
+    multi_agent_tasks?: boolean;
+    /** WARDYN_MCP_LOCAL_SERVERS: a component may define an MCP server that runs in the run's sandbox. Optional for fixtures. */
+    mcp_local_servers?: boolean;
+  };
   checks: SetupCheck[];
   auth: {
     mode: "local" | "sso" | "token" | "disabled";

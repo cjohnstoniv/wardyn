@@ -1,0 +1,407 @@
+{
+  "audit": [
+    {
+      "action": "governance.profile.write",
+      "data": {
+        "allow_all_egress": false,
+        "base_profile_id": null,
+        "contact_fields": [],
+        "contact_request_url": "",
+        "limits": {
+          "max_concurrent_runs": 3
+        },
+        "min_confinement_class": "CC2",
+        "name": "alpha",
+        "overlay_fields": []
+      }
+    },
+    {
+      "action": "governance.profile.write",
+      "data": {
+        "allow_all_egress": false,
+        "base_profile_id": "\u003calpha\u003e",
+        "contact_fields": [],
+        "contact_request_url": "",
+        "limits": {
+          "max_concurrent_runs": 3
+        },
+        "min_confinement_class": "CC2",
+        "name": "beta",
+        "overlay_fields": [
+          "denied_domains"
+        ]
+      }
+    },
+    {
+      "action": "governance.assignment.write",
+      "data": {
+        "priority": 2,
+        "profile_id": "\u003cbeta\u003e",
+        "subject": "alice@corp.example",
+        "subject_type": "user"
+      }
+    },
+    {
+      "action": "governance.profile.write",
+      "data": {
+        "allow_all_egress": false,
+        "base_profile_id": "\u003calpha\u003e",
+        "contact_fields": [],
+        "contact_request_url": "",
+        "limits": {
+          "max_concurrent_runs": 3
+        },
+        "min_confinement_class": "CC2",
+        "name": "beta",
+        "overlay_fields": [
+          "denied_domains"
+        ]
+      }
+    },
+    {
+      "action": "governance.assignment.delete",
+      "data": {
+        "priority": 2,
+        "profile_id": "\u003cbeta\u003e",
+        "subject": "alice@corp.example",
+        "subject_type": "user"
+      }
+    },
+    {
+      "action": "governance.profile.delete",
+      "data": {
+        "name": "beta"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "body": {
+        "profile": {
+          "ceiling": {
+            "allowed_domains": [
+              "pypi.org"
+            ],
+            "first_use_approval": "",
+            "min_confinement_class": "CC2"
+          },
+          "created_at": "\u003ctime\u003e",
+          "created_by": "admin-token",
+          "effective": {
+            "ceiling": {
+              "allowed_domains": [
+                "pypi.org"
+              ],
+              "first_use_approval": "",
+              "min_confinement_class": "CC2",
+              "resources": {
+                "cpu_millis": 2000,
+                "memory_mib": 4096,
+                "pids_limit": 512
+              }
+            },
+            "limits": {
+              "max_concurrent_runs": 3
+            }
+          },
+          "id": "\u003calpha\u003e",
+          "limits": {
+            "max_concurrent_runs": 3
+          },
+          "name": "alpha",
+          "updated_at": "\u003ctime\u003e"
+        },
+        "warnings": [
+          "this profile sets no sandbox size — runs under it get the deployment's 2000m CPU and 4096 MiB memory"
+        ]
+      },
+      "status": 201,
+      "step": "create standalone"
+    },
+    {
+      "body": {
+        "error": "invalid ceiling: min_confinement_class is required",
+        "reason": "governance_profile_request_invalid"
+      },
+      "status": 400,
+      "step": "duplicate name"
+    },
+    {
+      "body": {
+        "profile": {
+          "base_profile_id": "\u003calpha\u003e",
+          "ceiling": {
+            "allowed_domains": null,
+            "first_use_approval": "",
+            "min_confinement_class": ""
+          },
+          "created_at": "\u003ctime\u003e",
+          "created_by": "admin-token",
+          "effective": {
+            "ceiling": {
+              "allowed_domains": [
+                "pypi.org"
+              ],
+              "denied_domains": [
+                "blocked.example"
+              ],
+              "first_use_approval": "",
+              "min_confinement_class": "CC2",
+              "resources": {
+                "cpu_millis": 2000,
+                "memory_mib": 4096,
+                "pids_limit": 512
+              }
+            },
+            "limits": {
+              "max_concurrent_runs": 3
+            }
+          },
+          "id": "\u003cbeta\u003e",
+          "limits": {},
+          "name": "beta",
+          "overlay": {
+            "denied_domains": [
+              "blocked.example"
+            ]
+          },
+          "updated_at": "\u003ctime\u003e"
+        }
+      },
+      "status": 201,
+      "step": "create composed"
+    },
+    {
+      "body": {
+        "error": "name is required",
+        "reason": "governance_profile_request_invalid"
+      },
+      "status": 400,
+      "step": "unit without a name"
+    },
+    {
+      "body": {
+        "created_at": "\u003ctime\u003e",
+        "created_by": "admin-token",
+        "id": "\u003cmembership\u003e",
+        "priority": 2,
+        "profile_id": "\u003cbeta\u003e",
+        "subject": "alice@corp.example",
+        "subject_type": "user"
+      },
+      "status": 201,
+      "step": "membership"
+    },
+    {
+      "body": {
+        "error": "governance profile not found",
+        "reason": "governance_profile_not_found"
+      },
+      "status": 404,
+      "step": "membership of no unit"
+    },
+    {
+      "body": {
+        "error": "invalid assignment: profile_id: required",
+        "reason": "governance_assignment_invalid"
+      },
+      "status": 400,
+      "step": "membership without a unit"
+    },
+    {
+      "body": {
+        "assignments": [
+          {
+            "created_at": "\u003ctime\u003e",
+            "created_by": "admin-token",
+            "id": "\u003cmembership\u003e",
+            "priority": 2,
+            "profile_id": "\u003cbeta\u003e",
+            "subject": "alice@corp.example",
+            "subject_type": "user"
+          }
+        ],
+        "profiles": [
+          {
+            "ceiling": {
+              "allowed_domains": [
+                "pypi.org"
+              ],
+              "first_use_approval": "",
+              "min_confinement_class": "CC2"
+            },
+            "created_at": "\u003ctime\u003e",
+            "created_by": "admin-token",
+            "effective": {
+              "ceiling": {
+                "allowed_domains": [
+                  "pypi.org"
+                ],
+                "first_use_approval": "",
+                "min_confinement_class": "CC2",
+                "resources": {
+                  "cpu_millis": 2000,
+                  "memory_mib": 4096,
+                  "pids_limit": 512
+                }
+              },
+              "limits": {
+                "max_concurrent_runs": 3
+              }
+            },
+            "id": "\u003calpha\u003e",
+            "limits": {
+              "max_concurrent_runs": 3
+            },
+            "name": "alpha",
+            "updated_at": "\u003ctime\u003e"
+          },
+          {
+            "base_profile_id": "\u003calpha\u003e",
+            "ceiling": {
+              "allowed_domains": null,
+              "first_use_approval": "",
+              "min_confinement_class": ""
+            },
+            "created_at": "\u003ctime\u003e",
+            "created_by": "admin-token",
+            "effective": {
+              "ceiling": {
+                "allowed_domains": [
+                  "pypi.org"
+                ],
+                "denied_domains": [
+                  "blocked.example"
+                ],
+                "first_use_approval": "",
+                "min_confinement_class": "CC2",
+                "resources": {
+                  "cpu_millis": 2000,
+                  "memory_mib": 4096,
+                  "pids_limit": 512
+                }
+              },
+              "limits": {
+                "max_concurrent_runs": 3
+              }
+            },
+            "id": "\u003cbeta\u003e",
+            "limits": {},
+            "name": "beta",
+            "overlay": {
+              "denied_domains": [
+                "blocked.example"
+              ]
+            },
+            "updated_at": "\u003ctime\u003e"
+          }
+        ]
+      },
+      "status": 200,
+      "step": "read"
+    },
+    {
+      "body": {
+        "matched_tier": "user",
+        "profile_id": "\u003cbeta\u003e",
+        "profile_name": "beta"
+      },
+      "status": 200,
+      "step": "check"
+    },
+    {
+      "body": {},
+      "status": 200,
+      "step": "check nobody"
+    },
+    {
+      "body": {
+        "profile": {
+          "base_profile_id": "\u003calpha\u003e",
+          "ceiling": {
+            "allowed_domains": null,
+            "first_use_approval": "",
+            "min_confinement_class": ""
+          },
+          "created_at": "\u003ctime\u003e",
+          "created_by": "admin-token",
+          "effective": {
+            "ceiling": {
+              "allowed_domains": [
+                "pypi.org"
+              ],
+              "denied_domains": [
+                "blocked.example",
+                "other.example"
+              ],
+              "first_use_approval": "",
+              "min_confinement_class": "CC2",
+              "resources": {
+                "cpu_millis": 2000,
+                "memory_mib": 4096,
+                "pids_limit": 512
+              }
+            },
+            "limits": {
+              "max_concurrent_runs": 3
+            }
+          },
+          "id": "\u003cbeta\u003e",
+          "limits": {},
+          "name": "beta",
+          "overlay": {
+            "denied_domains": [
+              "blocked.example",
+              "other.example"
+            ]
+          },
+          "updated_at": "\u003ctime\u003e"
+        }
+      },
+      "status": 200,
+      "step": "update"
+    },
+    {
+      "body": {
+        "error": "invalid ceiling: min_confinement_class is required",
+        "reason": "governance_profile_request_invalid"
+      },
+      "status": 400,
+      "step": "update unknown"
+    },
+    {
+      "body": {
+        "error": "this governance profile is the base of beta — delete or re-base them first (deleting it would silently widen them back to the deployment ceiling)",
+        "reason": "governance_profile_in_use"
+      },
+      "status": 409,
+      "step": "delete with a child"
+    },
+    {
+      "body": {
+        "error": "this governance profile is still assigned — delete its assignments first (deleting it while assigned would silently widen everyone it bounds back to the deployment ceiling)",
+        "reason": "governance_profile_in_use"
+      },
+      "status": 409,
+      "step": "delete in use"
+    },
+    {
+      "body": null,
+      "status": 204,
+      "step": "delete membership"
+    },
+    {
+      "body": {
+        "error": "governance assignment not found",
+        "reason": "governance_assignment_not_found"
+      },
+      "status": 404,
+      "step": "delete membership again"
+    },
+    {
+      "body": null,
+      "status": 204,
+      "step": "delete"
+    }
+  ]
+}

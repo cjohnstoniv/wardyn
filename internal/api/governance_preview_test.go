@@ -1,11 +1,11 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// POST /governance/preview — the console's resolved-profile dry run.
+// POST /governance/check — the console's resolved-profile dry run.
 //
 // The contract under test is not "the preview ranks correctly". It is that the
 // preview HAS NO RANKING OF ITS OWN: every case below asserts the endpoint's
-// answer against a DIRECT Store.ResolveGovernanceProfile call on the same
+// answer against a DIRECT Store.ResolveGovernanceUnit call on the same
 // fixtures and the same claim lists — the identical call the enforcement path
 // (effectiveCeiling) takes — so the two cannot disagree without this file going
 // red. The console's first cut answered this question client-side, with a
@@ -69,8 +69,8 @@ func seedPreviewFixture(t *testing.T, st store.PG) previewFixture {
 	ctx := context.Background()
 	sfx := uuid.NewString()[:8]
 
-	profile := func(name string) types.GovernanceProfile {
-		p, err := st.UpsertGovernanceProfile(ctx, types.GovernanceProfile{
+	profile := func(name string) types.GovernanceUnit {
+		p, err := st.UpsertGovernanceUnit(ctx, types.GovernanceUnit{
 			Name:      name,
 			Ceiling:   types.RunPolicySpec{AllowedDomains: []string{"pypi.org"}, MinConfinementClass: types.CC2},
 			CreatedBy: "preview-test",
@@ -78,19 +78,19 @@ func seedPreviewFixture(t *testing.T, st store.PG) previewFixture {
 		if err != nil {
 			t.Fatalf("seed profile %q: %v", name, err)
 		}
-		t.Cleanup(func() { _ = st.DeleteGovernanceProfile(ctx, p.ID) })
+		t.Cleanup(func() { _ = st.DeleteGovernanceUnit(ctx, p.ID) })
 		return p
 	}
-	assign := func(kind types.CapabilitySubjectType, subject string, p types.GovernanceProfile, priority int) {
+	assign := func(kind types.CapabilitySubjectType, subject string, p types.GovernanceUnit, priority int) {
 		t.Helper()
-		a, err := st.UpsertGovernanceAssignment(ctx, types.GovernanceAssignment{
-			SubjectType: kind, Subject: subject, ProfileID: p.ID,
+		a, err := st.UpsertGovernanceMembership(ctx, types.GovernanceMembership{
+			SubjectType: kind, Subject: subject, UnitID: p.ID,
 			Priority: priority, CreatedBy: "preview-test",
 		})
 		if err != nil {
 			t.Fatalf("seed assignment %s/%q: %v", kind, subject, err)
 		}
-		t.Cleanup(func() { _, _ = st.DeleteGovernanceAssignment(ctx, a.ID) })
+		t.Cleanup(func() { _, _ = st.DeleteGovernanceMembership(ctx, a.ID) })
 	}
 
 	pSub := profile("aaa-sub-" + sfx)
@@ -129,7 +129,7 @@ func previewViaHTTP(t *testing.T, srv *Server, users, groups []string) governanc
 	if err != nil {
 		t.Fatalf("marshal preview request: %v", err)
 	}
-	w := do(t, srv, http.MethodPost, "/api/v1/governance/preview", adminToken, string(body))
+	w := do(t, srv, http.MethodPost, "/api/v1/governance/check", adminToken, string(body))
 	if w.Code != http.StatusOK {
 		t.Fatalf("preview %v/%v: code = %d, want 200; body=%s", users, groups, w.Code, w.Body.String())
 	}
@@ -145,14 +145,14 @@ func previewViaHTTP(t *testing.T, srv *Server, users, groups []string) governanc
 // which is exactly what the endpoint ships as an empty object.
 func resolveDirect(t *testing.T, pool *pgxpool.Pool, users, groups []string) governancePreviewResponse {
 	t.Helper()
-	p, tier, err := store.NewPG(pool).ResolveGovernanceProfile(context.Background(), users, groups, "")
+	p, tier, err := store.NewPG(pool).ResolveGovernanceUnit(context.Background(), users, groups, "")
 	if errors.Is(err, store.ErrNotFound) {
 		return governancePreviewResponse{}
 	}
 	if err != nil {
 		t.Fatalf("direct resolve %v/%v: %v", users, groups, err)
 	}
-	return governancePreviewResponse{ProfileID: p.ID, ProfileName: p.Name, MatchedTier: tier}
+	return governancePreviewResponse{UnitID: p.ID, UnitName: p.Name, MatchedTier: tier}
 }
 
 // TestGovernancePreview_AgreesWithTheResolver walks every rank of the ORDER BY
@@ -208,13 +208,13 @@ func TestGovernancePreview_AgreesWithTheResolver(t *testing.T) {
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := previewViaHTTP(t, srv, tc.users, tc.groups)
-			if got.ProfileName != tc.want || got.MatchedTier != tc.wantTier {
-				t.Errorf("preview = %q/%s, want %q/%s", got.ProfileName, got.MatchedTier, tc.want, tc.wantTier)
+			if got.UnitName != tc.want || got.MatchedTier != tc.wantTier {
+				t.Errorf("preview = %q/%s, want %q/%s", got.UnitName, got.MatchedTier, tc.want, tc.wantTier)
 			}
 			// THE assertion this file exists for: the endpoint and the
 			// enforcement path's own call, on identical inputs, agree in full.
 			if want := resolveDirect(t, pool, tc.users, tc.groups); got != want {
-				t.Errorf("preview = %+v, direct ResolveGovernanceProfile = %+v — the preview has grown a second matcher", got, want)
+				t.Errorf("preview = %+v, direct ResolveGovernanceUnit = %+v — the preview has grown a second matcher", got, want)
 			}
 		})
 	}
@@ -222,7 +222,7 @@ func TestGovernancePreview_AgreesWithTheResolver(t *testing.T) {
 
 // TestGovernancePreview_FoldsClaimsLikeTheEnforcementPath pins the one
 // transformation the handler does perform. Assignments are stored lowercased
-// (validateGovernanceAssignment) and BOTH enforcement-path inputs arrive
+// (validateGovernanceMembership) and BOTH enforcement-path inputs arrive
 // already folded — capabilitySubjects lowercases the sub and the email,
 // sessionGroups lowercases every group — so a preview that passed a typed
 // `HI-…` through raw would answer "no assignment matches" for a claim the real
@@ -235,15 +235,15 @@ func TestGovernancePreview_FoldsClaimsLikeTheEnforcementPath(t *testing.T) {
 	if want := resolveDirect(t, pool, nil, []string{f.hi}); got != want {
 		t.Errorf("preview of an unfolded claim = %+v, want the folded answer %+v", got, want)
 	}
-	if got.ProfileName != f.groupHi {
-		t.Errorf("preview = %q, want %q — the fixture stopped exercising the fold", got.ProfileName, f.groupHi)
+	if got.UnitName != f.groupHi {
+		t.Errorf("preview = %q, want %q — the fixture stopped exercising the fold", got.UnitName, f.groupHi)
 	}
 }
 
 // TestGovernancePreview_NoMatchIsTheDeploymentCeiling pins the empty object.
-// An absent profile_name is how the console reads "no assignment matches these
+// An absent unit_name is how the console reads "no assignment matches these
 // claims", the same additive/absent shape defaultPolicyResponse's
-// governance_profile_name uses — "" would be a value the console then has to
+// unit_name uses — "" would be a value the console then has to
 // special-case.
 //
 // Seeds NOTHING on purpose, so there is no everyone-row for the claims to fall
@@ -270,7 +270,7 @@ func TestGovernancePreview_NoMatchIsTheDeploymentCeiling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	w := do(t, srv, http.MethodPost, "/api/v1/governance/preview", adminToken, string(body))
+	w := do(t, srv, http.MethodPost, "/api/v1/governance/check", adminToken, string(body))
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
@@ -279,7 +279,7 @@ func TestGovernancePreview_NoMatchIsTheDeploymentCeiling(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 	if len(keys) != 0 {
-		t.Errorf("body = %s, want {} exactly (no profile_id, no zero uuid)", w.Body.String())
+		t.Errorf("body = %s, want {} exactly (no unit_id, no zero uuid)", w.Body.String())
 	}
 }
 
@@ -296,7 +296,7 @@ func TestGovernancePreview_RefusesAnOversizedClaimList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	w := do(t, srv, http.MethodPost, "/api/v1/governance/preview", adminToken, string(body))
+	w := do(t, srv, http.MethodPost, "/api/v1/governance/check", adminToken, string(body))
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("oversized claim list: code = %d, want 400; body=%s", w.Code, w.Body.String())
 	}
@@ -310,11 +310,11 @@ func TestGovernancePreview_RefusesAnOversizedClaimList(t *testing.T) {
 func TestGovernancePreview_IsSecurityTierOnly(t *testing.T) {
 	srv, _, _, _ := newAuthzMatrixServer(t)
 	member := ssoSession(t, "sub-preview-member", "member-preview@corp.example", oidc.RoleUser)
-	if w := doSSO(t, srv, http.MethodPost, "/api/v1/governance/preview", member, `{}`); w.Code != http.StatusForbidden {
+	if w := doSSO(t, srv, http.MethodPost, "/api/v1/governance/check", member, `{}`); w.Code != http.StatusForbidden {
 		t.Errorf("member on the preview: code = %d, want 403; body=%s", w.Code, w.Body.String())
 	}
 	sec := ssoSession(t, secAdminSub, secAdminMail, oidc.RoleSecurityAdmin)
-	if w := doSSO(t, srv, http.MethodPost, "/api/v1/governance/preview", sec, `{}`); w.Code != http.StatusOK {
+	if w := doSSO(t, srv, http.MethodPost, "/api/v1/governance/check", sec, `{}`); w.Code != http.StatusOK {
 		t.Errorf("security_admin on the preview: code = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
 }
@@ -326,7 +326,7 @@ func TestGovernancePreview_StandardTypeAssignmentNeedsTheType(t *testing.T) {
 	srv, pool := pgHarness(t)
 	st := store.NewPG(pool)
 	ctx := context.Background()
-	p, err := st.UpsertGovernanceProfile(ctx, types.GovernanceProfile{
+	p, err := st.UpsertGovernanceUnit(ctx, types.GovernanceUnit{
 		Name:      "std-type-" + uuid.NewString()[:8],
 		Ceiling:   types.RunPolicySpec{AllowedDomains: []string{"pypi.org"}, MinConfinementClass: types.CC2},
 		CreatedBy: "preview-test",
@@ -334,19 +334,19 @@ func TestGovernancePreview_StandardTypeAssignmentNeedsTheType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed profile: %v", err)
 	}
-	t.Cleanup(func() { _ = st.DeleteGovernanceProfile(ctx, p.ID) })
-	a, err := st.UpsertGovernanceAssignment(ctx, types.GovernanceAssignment{
-		SubjectType: types.CapabilitySubjectUserType, Subject: types.UserTypeStandard, ProfileID: p.ID, CreatedBy: "preview-test",
+	t.Cleanup(func() { _ = st.DeleteGovernanceUnit(ctx, p.ID) })
+	a, err := st.UpsertGovernanceMembership(ctx, types.GovernanceMembership{
+		SubjectType: types.CapabilitySubjectUserType, Subject: types.UserTypeStandard, UnitID: p.ID, CreatedBy: "preview-test",
 	})
 	if err != nil {
 		t.Fatalf("seed assignment: %v", err)
 	}
-	t.Cleanup(func() { _, _ = st.DeleteGovernanceAssignment(ctx, a.ID) })
+	t.Cleanup(func() { _, _ = st.DeleteGovernanceMembership(ctx, a.ID) })
 
 	preview := func(userType string) governancePreviewResponse {
 		t.Helper()
 		body, _ := json.Marshal(governancePreviewRequest{UserSubjects: []string{"nobody-" + p.Name}, Groups: []string{"nobody-" + p.Name}, UserType: userType})
-		w := do(t, srv, http.MethodPost, "/api/v1/governance/preview", adminToken, string(body))
+		w := do(t, srv, http.MethodPost, "/api/v1/governance/check", adminToken, string(body))
 		if w.Code != http.StatusOK {
 			t.Fatalf("preview type %q: code = %d; body=%s", userType, w.Code, w.Body.String())
 		}
@@ -356,10 +356,10 @@ func TestGovernancePreview_StandardTypeAssignmentNeedsTheType(t *testing.T) {
 		}
 		return got
 	}
-	if got := preview(types.UserTypeStandard); got.ProfileID != p.ID || got.MatchedTier != types.CapabilitySubjectUserType {
+	if got := preview(types.UserTypeStandard); got.UnitID != p.ID || got.MatchedTier != types.CapabilitySubjectUserType {
 		t.Errorf("preview with the standard type = %+v, want the profile assigned to it via the user_type tier", got)
 	}
-	if got := preview(""); got.ProfileID == p.ID {
+	if got := preview(""); got.UnitID == p.ID {
 		t.Errorf("preview with no type = %+v, want the type tier not consulted", got)
 	}
 }

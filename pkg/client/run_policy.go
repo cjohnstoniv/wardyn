@@ -83,9 +83,9 @@ type RunPolicyChange struct {
 	Added   []string `json:"added,omitempty"`
 	Removed []string `json:"removed,omitempty"`
 	// Detail is the launch-time narrowing sentences, verbatim (Cause "limits" only).
-	Detail  []string   `json:"detail,omitempty"`
-	Profile string     `json:"profile,omitempty"`
-	At      *time.Time `json:"at,omitempty"` // when the run was restarted (Cause "restart")
+	Detail []string   `json:"detail,omitempty"`
+	Unit   string     `json:"unit,omitempty"`
+	At     *time.Time `json:"at,omitempty"` // when the run was restarted (Cause "restart")
 }
 
 // StoredPolicyNow compares the saved policy a run started from with what it

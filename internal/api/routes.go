@@ -602,7 +602,7 @@ func (s *Server) routes() chi.Router {
 			// short-circuit keys on isOperator, so a security admin's own runs
 			// stay bound by whichever profile (or DefaultPolicy) applies to
 			// them. They author the ceiling; they do not stand outside it.
-			// The seventh is POST /governance/preview, the dry run: it takes
+			// The seventh is POST /governance/check, the dry run: it takes
 			// claims and answers with the profile THE RESOLVER picks, so the
 			// console never re-implements the precedence rule in order to show
 			// it.

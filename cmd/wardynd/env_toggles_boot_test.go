@@ -31,6 +31,7 @@ func TestParseBootFlagsRefusesGarbageEnvToggle(t *testing.T) {
 		"WARDYN_GOVERNANCE_SECOND_HUMAN",
 		"WARDYN_ALLOW_USER_ENV_SECRET",
 		"WARDYN_ALLOW_AGENT_TELEMETRY",
+		"WARDYN_SCHEDULED_RUNS",
 	} {
 		t.Run(name, func(t *testing.T) {
 			cmd := exec.Command(os.Args[0], "-test.run=^TestParseBootFlagsRefusesGarbageEnvToggle$", "-test.timeout=60s")

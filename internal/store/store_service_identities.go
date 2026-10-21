@@ -104,7 +104,7 @@ var servicePrincipalProbes = [][3]string{
 	{"workspaces", "owned_by", "true"},
 	{"secrets", "owned_by", "true"},
 	{"capability_grants", "subject", "subject_type = 'user'"},
-	{"governance_assignments", "subject", "subject_type = 'user'"},
+	{"governance_memberships", "subject", "subject_type = 'user'"},
 }
 
 // sponsorBound locks the sponsor's identity row FOR SHARE, so the unbind that would release it waits for

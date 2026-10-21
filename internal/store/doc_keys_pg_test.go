@@ -69,18 +69,18 @@ func TestGovernanceLimitsRoundTripPreservesUnknownKeys(t *testing.T) {
 	ctx := context.Background()
 	st := store.NewPG(pool)
 
-	p := seedGovernanceProfile(t, st, "test-skew-"+uuid.NewString())
+	p := seedGovernanceUnit(t, st, "test-skew-"+uuid.NewString())
 	if _, err := pool.Exec(ctx,
-		`UPDATE governance_profiles SET limits = limits || '{"limit_from_a_newer_wardynd": 3600}'::jsonb WHERE id = $1`, p.ID); err != nil {
+		`UPDATE governance_units SET limits = limits || '{"limit_from_a_newer_wardynd": 3600}'::jsonb WHERE id = $1`, p.ID); err != nil {
 		t.Fatalf("seed a newer binary's limit: %v", err)
 	}
 
 	p.Limits = types.GovernanceLimits{DenyTaskModeExec: true} // drops the declared DenyInteractive
-	if _, err := st.UpsertGovernanceProfile(ctx, p); err != nil {
+	if _, err := st.UpsertGovernanceUnit(ctx, p); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 
-	got := storedDoc(t, pool.QueryRow(ctx, `SELECT limits FROM governance_profiles WHERE id = $1`, p.ID).Scan)
+	got := storedDoc(t, pool.QueryRow(ctx, `SELECT limits FROM governance_units WHERE id = $1`, p.ID).Scan)
 	if !jsonEq(got["limit_from_a_newer_wardynd"], `3600`) {
 		t.Errorf("limits after an older binary's edit = %s, want limit_from_a_newer_wardynd kept — dropping it removes the limit", got)
 	}
@@ -103,18 +103,18 @@ func TestGovernanceCeilingRoundTripPreservesUnknownKeys(t *testing.T) {
 	ctx := context.Background()
 	st := store.NewPG(pool)
 
-	p := seedGovernanceProfile(t, st, "test-skew-ceiling-"+uuid.NewString())
+	p := seedGovernanceUnit(t, st, "test-skew-ceiling-"+uuid.NewString())
 	if _, err := pool.Exec(ctx,
-		`UPDATE governance_profiles SET ceiling = ceiling || '{"ceiling_from_a_newer_wardynd": "bedrock_sso"}'::jsonb WHERE id = $1`, p.ID); err != nil {
+		`UPDATE governance_units SET ceiling = ceiling || '{"ceiling_from_a_newer_wardynd": "bedrock_sso"}'::jsonb WHERE id = $1`, p.ID); err != nil {
 		t.Fatalf("seed a newer binary's ceiling field: %v", err)
 	}
 
 	p.Ceiling.AllowAllEgress = true // a declared field this edit sets
-	if _, err := st.UpsertGovernanceProfile(ctx, p); err != nil {
+	if _, err := st.UpsertGovernanceUnit(ctx, p); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 
-	got := storedDoc(t, pool.QueryRow(ctx, `SELECT ceiling FROM governance_profiles WHERE id = $1`, p.ID).Scan)
+	got := storedDoc(t, pool.QueryRow(ctx, `SELECT ceiling FROM governance_units WHERE id = $1`, p.ID).Scan)
 	if !jsonEq(got["ceiling_from_a_newer_wardynd"], `"bedrock_sso"`) {
 		t.Errorf("ceiling after an older binary's edit = %s, want ceiling_from_a_newer_wardynd kept", got)
 	}
@@ -123,10 +123,10 @@ func TestGovernanceCeilingRoundTripPreservesUnknownKeys(t *testing.T) {
 	}
 
 	p.Ceiling.AllowAllEgress = false // a declared field this edit clears back to its omitempty zero
-	if _, err := st.UpsertGovernanceProfile(ctx, p); err != nil {
+	if _, err := st.UpsertGovernanceUnit(ctx, p); err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	got = storedDoc(t, pool.QueryRow(ctx, `SELECT ceiling FROM governance_profiles WHERE id = $1`, p.ID).Scan)
+	got = storedDoc(t, pool.QueryRow(ctx, `SELECT ceiling FROM governance_units WHERE id = $1`, p.ID).Scan)
 	if v, ok := got["allow_all_egress"]; ok {
 		t.Errorf("allow_all_egress = %s, want it cleared — a key this binary declares must still clear", v)
 	}

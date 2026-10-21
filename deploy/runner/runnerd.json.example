@@ -1,0 +1,15 @@
+{
+  "org_url": "https://wardyn.example",
+  "state_dir": "/home/me/.config/wardyn/runner",
+  "internal_network": "wardyn-internal",
+  "docker_host": "unix:///run/user/1000/docker.sock",
+  "proxy_image_mirror": "registry.example/mirror/wardyn-proxy",
+  "relay_listen": "127.0.0.1",
+  "relay_host_target": "host-gateway",
+  "trusted_ca_file": "/home/me/.config/wardyn/corp-ca.pem",
+  "org_ca_file": "/home/me/.config/wardyn/org-ca.pem",
+  "upstream_proxy": "http://proxy.example:3128",
+  "runner_proxy": "http://proxy.example:3128",
+  "runner_no_proxy": "localhost,.corp",
+  "recording_store": "pg"
+}

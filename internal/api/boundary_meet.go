@@ -43,6 +43,11 @@ type boundaryChange struct {
 // It reports each knob it changed. A meet nothing satisfies is impossible over the knobs the
 // boundary holds (types.BoundarySpec); an error is still returned, never a wider policy.
 func boundaryMeet(b types.Boundary, spec types.RunPolicySpec, limits types.GovernanceLimits) (types.RunPolicySpec, types.GovernanceLimits, []boundaryChange, error) {
+	// The boundary holds no deny_placements, so the base's list goes around the meet: the overlay check
+	// re-judges it, and a profile that denies every placement (a row the write door refuses) would answer 500
+	// here instead of the placement_denied it gives without a boundary (#3446).
+	denied := limits.DenyPlacements
+	limits.DenyPlacements = nil
 	base := composer.Authority{Ceiling: spec.Clone(), Limits: limits}
 	if base.Ceiling.AllowAllEgress && b.Spec.AllowedDomains != nil && (b.Spec.AllowAllEgress == nil || !*b.Spec.AllowAllEgress) {
 		base.Ceiling.AllowedDomains = slices.Clone(*b.Spec.AllowedDomains)
@@ -60,6 +65,7 @@ func boundaryMeet(b types.Boundary, spec types.RunPolicySpec, limits types.Gover
 		}
 		out.Ceiling.EligibleGrants = kept
 	}
+	limits.DenyPlacements, out.Limits.DenyPlacements = denied, denied
 	return out.Ceiling, out.Limits, boundaryChanges(spec, out.Ceiling, limits, out.Limits), nil
 }
 
@@ -224,12 +230,12 @@ func (s *Server) boundaryEndPlan(w http.ResponseWriter, r *http.Request, run typ
 	case capSec == 0:
 		return run, exempt, true
 	case exempt:
-		run.RunLimits, run.GovernanceProfileID = types.RunLimits{UserChangesLimits: true, MaxEndAheadSec: capSec}, nil
+		run.RunLimits, run.UnitID = types.RunLimits{UserChangesLimits: true, MaxEndAheadSec: capSec}, nil
 	default:
 		// Any other caller is held to the limits the run captured, and to the boundary's maximum when
 		// that is tighter: a run created in no_limits captured no boundary limit.
 		if tighter := composer.TighterSec(run.RunLimits.MaxEndAheadSec, capSec); tighter != run.RunLimits.MaxEndAheadSec {
-			run.RunLimits.MaxEndAheadSec, run.GovernanceProfileID = tighter, nil
+			run.RunLimits.MaxEndAheadSec, run.UnitID = tighter, nil
 		}
 	}
 	return run, false, true
