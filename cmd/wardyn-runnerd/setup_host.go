@@ -389,27 +389,6 @@ func systemdQuote(s string) string {
 	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`, "%", "%%", "$", "$$").Replace(s) + `"`
 }
 
-// pinnedImage is the proxy image the service definition names, or "" when setup only derived this
-// binary's release image: serve then picks its own release image, so replacing the binary alone
-// moves the proxy with it. An image the person or the organisation named is always written, even
-// when it equals the release image.
-func (p setupPlan) pinnedImage() string {
-	if !p.flagged && !p.fromIdentity && p.proxyImage == releaseProxyImage() {
-		return ""
-	}
-	return p.proxyImage
-}
-
-// pinMarker is "1" when the image was named with --proxy-image (now or to an earlier setup). setup
-// writes it as WARDYN_PROXY_IMAGE_PINNED beside the image, so a rerun can tell a pin from a derived
-// default by provenance rather than by the image's name (DR-0202). serve ignores it.
-func (p setupPlan) pinMarker() string {
-	if p.flagged && p.pinnedImage() != "" {
-		return "1"
-	}
-	return ""
-}
-
 // keptPins reads the proxy image and the CA files an earlier setup wrote, so setup run again without
 // --proxy-image, --trusted-ca-file or --org-ca-file keeps them: from runnerd.json, else from the service
 // definition a setup before it wrote. An unmarked release image of this project in that definition is what a

@@ -28,7 +28,7 @@ type runnerRuntime struct {
 	// refreshCaps reports the runner's state again over the session that is up. With none up it returns
 	// an error (errOffline on Docker), so the caller keeps the report pending for the next session; nil
 	// func when it has no state to report between connects.
-	refreshCaps func(context.Context) error
+	refreshCaps func(context.Context) error //lint:ignore U1000 set and read by the docker build (production_docker.go)
 }
 
 type runnerHooksBuilder func(context.Context, runneridentity.Identity, string, serveOptions) (runnerRuntime, error)

@@ -15,7 +15,7 @@ import (
 // run relay. A relay found at startup can stop being reachable (a firewall rule, a changed Docker
 // network); a run started then would fail inside its proxy.
 const (
-	relayRecheckEvery = 5 * time.Minute
+	relayRecheckEvery = 5 * time.Minute //lint:ignore U1000 used by the docker build (production_docker.go)
 	// relayRecheckBound bounds one re-check.
 	relayRecheckBound = 2 * time.Minute
 )
@@ -89,6 +89,8 @@ func (w *relayWatch) once(live context.Context) {
 }
 
 // logRelayChange is relayWatch.report's log half: one named line per change.
+//
+//lint:ignore U1000 used by the docker build (production_docker.go)
 func logRelayChange(ctx context.Context, reachable bool, err error, pair relayPair) {
 	if reachable {
 		slog.InfoContext(ctx, "run relay reachable again", "listen", pair.bind, "target", pair.target)

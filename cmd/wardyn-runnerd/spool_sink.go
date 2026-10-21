@@ -647,6 +647,8 @@ func (s *spoolSink) warnEnd(r *sinkRun, err error) {
 }
 
 // fullRuleOn reports whether the full-spool rule is on (the runner offers Linux VM sandboxes).
+//
+//lint:ignore U1000 used by the docker build (production_docker.go)
 func (s *spoolSink) fullRuleOn() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
