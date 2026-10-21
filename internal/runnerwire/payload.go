@@ -137,6 +137,34 @@ type Caps struct {
 	// MethodLocalAttachTeeAck. The org sends them only to a runner that says so; an older runner
 	// reads as absent and the org refuses a local attach before any call.
 	LocalAttach bool `json:"local_attach,omitempty"`
+	// ProxySettings names the run proxy settings (ProxySetting*) the runner carries through to its
+	// proxy (0.10 on). An older runner rebuilds the proxy config without them, so the org refuses a
+	// create that sets one the runner does not name; absent reads as none.
+	ProxySettings []string `json:"proxy_settings,omitempty"`
+}
+
+// The run proxy settings a runner names in Caps.ProxySettings, each its proxy.Config key.
+const (
+	ProxySettingAWSSigV4       = "aws_sigv4"
+	ProxySettingScrubResponses = "scrub_responses"
+	ProxySettingVM             = "vm"
+	ProxySettingPortRule       = "port_rule"
+	ProxySettingLocalModels    = "local_models"
+)
+
+// ProxySettings is every run proxy setting this build's runner carries through to its proxy, in the
+// order ProxySettingsSet tests them.
+var ProxySettings = []string{ProxySettingAWSSigV4, ProxySettingScrubResponses, ProxySettingVM, ProxySettingPortRule, ProxySettingLocalModels}
+
+// ProxySettingsSet names each of ProxySettings that pc sets, in that order; none for an unset config.
+func ProxySettingsSet(pc runner.ProxyConfig) []string {
+	var out []string
+	for i, on := range []bool{pc.AWSSigV4 != nil, pc.ScrubResponses, pc.VM, pc.PortRule != "", len(pc.LocalModels) != 0} {
+		if on {
+			out = append(out, ProxySettings[i])
+		}
+	}
+	return out
 }
 
 // Waiting is the `waiting` event's data.

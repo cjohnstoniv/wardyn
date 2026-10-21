@@ -584,6 +584,10 @@ const (
 	reasonNodeRecordHumanOnly   = "node_record_human_only"  // the admin token, an API token, or local mode, which cannot show who the people were
 )
 
+// A run refused at create because it sets a run proxy setting its runner's wardyn-runnerd does not
+// carry (sandboxCreateFailure, remote.ProxySettingError): the run.create failure row's reason.
+const reasonRunnerProxySetting = "runner_proxy_setting_unsupported"
+
 // A request with no session and no bearer on a deployment with single sign-on and no admin token
 // (sessionRejectionResponse): the caller has to sign in.
 const reasonSignInRequired = "sign_in_required"
