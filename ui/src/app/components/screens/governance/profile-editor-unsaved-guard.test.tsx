@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, waitFor } from "@testing-library/react";
 import { unsavedSnapshot } from "../../../lib/unsaved-registry";
-import type { GovernanceProfile } from "../../../lib/api/governance";
+import type { GovernanceUnit } from "../../../lib/api/governance";
 import type { SetupModelProvider } from "../../../lib/types";
 import { baseStatus } from "../../../lib/test-fixtures";
 import { setField } from "../../../../test/set-field";
@@ -26,7 +26,7 @@ vi.mock("../../../lib/api/setup", () => ({
   setup: { getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a) },
 }));
 
-const GREENFIELD: GovernanceProfile = {
+const GREENFIELD: GovernanceUnit = {
   id: "p1",
   name: "Greenfield contractors",
   ceiling: { allowed_domains: ["api.anthropic.com"], first_use_approval: "deny_with_review", min_confinement_class: "CC2" },
@@ -35,7 +35,7 @@ const GREENFIELD: GovernanceProfile = {
   updated_at: aheadByHours(-1),
 };
 
-function renderEditor(profile: GovernanceProfile | null) {
+function renderEditor(profile: GovernanceUnit | null) {
   return render(<ProfileEditor profile={profile} disabled={false} onCancel={vi.fn()} onSaved={vi.fn()} onSubmitted={vi.fn()} />);
 }
 const nameField = () => document.getElementById("governance-profile-name")!;
