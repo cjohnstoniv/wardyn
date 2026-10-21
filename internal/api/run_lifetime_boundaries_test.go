@@ -138,7 +138,8 @@ func TestPatchRunLimitsUsesCapturedBounds(t *testing.T) {
 
 // TestRunLimits_MaxAgeCapsTheDefaultEnd (N2): on the path that decides no end of
 // its own, a profile's default end past the deployment's maximum age is the cap:
-// the run never shows an end it will not reach. An end before the cap is kept.
+// the run never shows an end it will not reach, and a run with no profile end ends at the cap.
+// An end before the cap is kept.
 func TestRunLimits_MaxAgeCapsTheDefaultEnd(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	s := &Server{}
@@ -150,6 +151,7 @@ func TestRunLimits_MaxAgeCapsTheDefaultEnd(t *testing.T) {
 	}{
 		{"default end past the cap", 30 * 86400, 14 * 24 * time.Hour},
 		{"default end before the cap", 86400, 24 * time.Hour},
+		{"no profile end", 0, 14 * 24 * time.Hour},
 	} {
 		run := &types.AgentRun{CreatedAt: now}
 		s.captureRunLimits(run, governanceCeiling{Limits: types.GovernanceLimits{RunLimits: types.RunLimits{DefaultEndSec: tc.sec}}}, nil)

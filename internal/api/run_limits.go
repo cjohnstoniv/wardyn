@@ -88,6 +88,10 @@ func (s *Server) captureRunLimits(run *types.AgentRun, ceiling governanceCeiling
 	}
 	// A run never shows an end it will not reach: a profile's default end past
 	// the cap is the cap (the record path above; a create already cut its ask).
+	// A record-path run whose profile names no end ends at the cap too, not "No end".
+	if end == nil && run.EndsAt == nil && run.LifetimeCapAt != nil {
+		run.EndsAt = run.LifetimeCapAt
+	}
 	if run.EndsAt != nil && run.LifetimeCapAt != nil && run.EndsAt.After(*run.LifetimeCapAt) {
 		run.EndsAt = run.LifetimeCapAt
 	}

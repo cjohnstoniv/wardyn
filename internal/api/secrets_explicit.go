@@ -108,13 +108,30 @@ func (s *Server) handleDeleteSharedSecret(w http.ResponseWriter, r *http.Request
 // handleListMySecrets and handleListSharedSecrets return {"names": [...]}: the caller's own
 // namespace, or the shared one. Names only, reserved platform keys excluded, as GET /secrets.
 func (s *Server) handleListMySecrets(w http.ResponseWriter, r *http.Request) {
+	if refuseListOwnerParam(w, r) {
+		return
+	}
 	if owner, ok := s.personalSecretOwner(w, r); ok {
 		s.listNamespace(w, r, owner)
 	}
 }
 
 func (s *Server) handleListSharedSecrets(w http.ResponseWriter, r *http.Request) {
+	if refuseListOwnerParam(w, r) {
+		return
+	}
 	s.listNamespace(w, r, "")
+}
+
+// refuseListOwnerParam answers ?owner= on an explicit list route as the write routes do: the route
+// names its namespace itself, so a filter that would not apply is refused, not ignored. Reading
+// is not audited.
+func refuseListOwnerParam(w http.ResponseWriter, r *http.Request) bool {
+	if !r.URL.Query().Has("owner") {
+		return false
+	}
+	writeErrorReason(w, http.StatusForbidden, reasonSecretOwnerParamRefused, secretExplicitOwnerRefusal)
+	return true
 }
 
 func (s *Server) listNamespace(w http.ResponseWriter, r *http.Request, owner string) {

@@ -292,10 +292,14 @@ func (s PG) RunHasPendingRunnerAction(ctx context.Context, runID uuid.UUID) (boo
 
 // LastRunnerTeardown reports the runner's latest answer to a queued end or kill
 // of runID at ref: its kind and outcome, or answered false when it has answered none.
+// An answer older than a successful recover_containment (queue_seq, the delivery
+// order) stopped an execution that recovery has since reopened, so it is not current.
 func (s PG) LastRunnerTeardown(ctx context.Context, runID uuid.UUID, ref string) (kind types.RunnerActionKind, outcome string, answered bool, err error) {
-	err = s.Pool.QueryRow(ctx, `SELECT kind, outcome FROM runner_pending_actions
-		WHERE run_id = $1 AND ref = $2 AND kind IN ('end', 'kill') AND applied_at IS NOT NULL
-		ORDER BY applied_at DESC, id DESC LIMIT 1`, runID, ref).Scan(&kind, &outcome)
+	err = s.Pool.QueryRow(ctx, `SELECT t.kind, t.outcome FROM runner_pending_actions t
+		WHERE t.run_id = $1 AND t.ref = $2 AND t.kind IN ('end', 'kill') AND t.applied_at IS NOT NULL
+		AND NOT EXISTS (SELECT 1 FROM runner_pending_actions r WHERE r.run_id = t.run_id AND r.kind = 'recover_containment'
+			AND r.outcome = 'success' AND r.queue_seq > t.queue_seq)
+		ORDER BY t.applied_at DESC, t.id DESC LIMIT 1`, runID, ref).Scan(&kind, &outcome)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", "", false, nil
 	}

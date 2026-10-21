@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 
@@ -33,8 +34,8 @@ func (s *Server) applyRunRecording(ctx context.Context, run *types.AgentRun, spe
 	if run.NotRecorded == "" {
 		return true
 	}
-	if pool, required := s.recordingRequired(ctx, *run); required {
-		reason, msg := recordingRefusal(run.NotRecorded == types.NotRecordedOrgOff, pool)
+	if pool, required, readErr := s.recordingRequired(ctx, *run); required {
+		reason, msg := recordingHold(run.NotRecorded == types.NotRecordedOrgOff, pool, readErr)
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, msg)
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"reason": reason})))
@@ -63,24 +64,44 @@ func recordingRefusal(storeOff bool, pool string) (placement.Reason, string) {
 	return placement.ReasonRunnerRecordingOff, runnerpool.RunnerRecordingOffMsg(pool)
 }
 
+// recordingHold is recordingRefusal for a run held at dispatch: the reason stays the one the
+// setting would have given, and a hold that came from a setting that could not be read says so.
+func recordingHold(storeOff bool, pool string, readErr error) (placement.Reason, string) {
+	reason, msg := recordingRefusal(storeOff, pool)
+	if readErr != nil {
+		msg = runnerpool.RecordingSettingUnreadableMsg()
+	}
+	return reason, msg
+}
+
 // recordingRequired reports whether the organisation or the run's pool requires recording, with the
-// pool's name ("" for a run with no pool) for the refusal. A setting that cannot be read is not
-// required here: placement already held the run to it at create.
-func (s *Server) recordingRequired(ctx context.Context, run types.AgentRun) (string, bool) {
+// pool's name ("" for a run with no pool) for the refusal. It is asked only for a run known not to
+// record, so a setting that cannot be read is required: the run fails closed rather than start
+// unrecorded under a requirement it could not rule out, and readErr says that was the cause. A pool
+// that no longer exists requires nothing.
+func (s *Server) recordingRequired(ctx context.Context, run types.AgentRun) (pool string, required bool, readErr error) {
 	ps, ok := s.cfg.Store.(store.RunnerPoolStore)
 	if !ok {
-		return "", false
+		return "", false, nil
 	}
 	org, err := ps.GetRunnerPoolOrgDefaults(ctx)
-	required := err == nil && org.Recording == types.RecordingRequired
-	if run.RunnerPoolID == nil {
-		return "", required
-	}
-	pool, err := ps.GetRunnerPool(ctx, *run.RunnerPoolID)
 	if err != nil {
-		return "", required
+		slog.WarnContext(ctx, "wardynd: read the organisation's recording requirement; holding the run", slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		return "", true, err
 	}
-	return pool.Name, required || pool.Recording == types.RecordingRequired
+	required = org.Recording == types.RecordingRequired
+	if run.RunnerPoolID == nil {
+		return "", required, nil
+	}
+	rp, err := ps.GetRunnerPool(ctx, *run.RunnerPoolID)
+	if errors.Is(err, store.ErrNotFound) {
+		return "", required, nil
+	}
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: read the run's pool recording requirement; holding the run", slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		return "", true, err
+	}
+	return rp.Name, required || rp.Recording == types.RecordingRequired, nil
 }
 
 // unpooledRecordingRefusal holds a run with no pool to the organisation's required setting at create:

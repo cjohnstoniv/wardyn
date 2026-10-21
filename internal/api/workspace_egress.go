@@ -362,9 +362,31 @@ func boundCloneHosts(hosts []string, ws types.Workspace, trusted []string) (kept
 
 // egressBound is the ceiling allowlist a run's workspace requirement rows are held to; nil holds none.
 // dropped collects one warning per host admits held back, for the caller to show or log.
+// ahead is the hosts the run's workspaces add to its allowlist after the requirement fold (create's
+// unionRunEgress); the fold's credential check counts them as listed, as the dry doors, which union
+// them first, already do. denied is the deny lists in force that create unions after the fold too (the
+// ceiling's and the workspaces' DeniedEgress); the credential check refuses a host any of them names.
 type egressBound struct {
 	trusted []string
 	dropped []string
+	ahead   []string
+	denied  []string
+}
+
+// aheadHosts is b.ahead; nil-safe.
+func (b *egressBound) aheadHosts() []string {
+	if b == nil {
+		return nil
+	}
+	return b.ahead
+}
+
+// deniedHosts is b.denied; nil-safe.
+func (b *egressBound) deniedHosts() []string {
+	if b == nil {
+		return nil
+	}
+	return b.denied
 }
 
 // admits reports whether a requirement row's egress host may widen the run. An operator_set row always

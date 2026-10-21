@@ -843,3 +843,43 @@ func TestPG_RunnerActions_RunReadsUseTheRunIndex(t *testing.T) {
 		}
 	}
 }
+
+// A teardown the runner applied before a successful recovery stopped an execution the recovery reopened,
+// so it is no proof of a later stop; one applied after the recovery is.
+func TestPG_RunnerActions_LastTeardownIgnoresOneBeforeARecovery(t *testing.T) {
+	f := newActionFixture(t)
+	ctx := t.Context()
+	run := f.run(t)
+	gen := f.issue(t, run)
+	observed := time.Now().Add(-time.Minute)
+	end := f.mustQueue(t, f.action(run, types.RunnerActionEnd, gen))
+	if _, _, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, run.ID, end.ID, types.RunnerActionSuccess, "", observed, prepareSpoolTest); err != nil {
+		t.Fatal(err)
+	}
+	last := func() (types.RunnerActionKind, bool) {
+		t.Helper()
+		kind, outcome, answered, err := f.st.LastRunnerTeardown(ctx, run.ID, run.SandboxRef)
+		if err != nil || (answered && outcome != types.RunnerActionSuccess) {
+			t.Fatalf("last teardown = %q %q %v", kind, outcome, err)
+		}
+		return kind, answered
+	}
+	if kind, ok := last(); !ok || kind != types.RunnerActionEnd {
+		t.Fatalf("before any recovery: %q answered=%v, want the end", kind, ok)
+	}
+	if _, err := f.pool.Exec(ctx, `INSERT INTO runner_pending_actions (id, runner_id, run_id, kind, ref, binding_version, owner, execution_generation, proof, applied_at, outcome, observed_at)
+		VALUES ($1,$2,$3,'recover_containment',$4,1,$5,$6,'{}'::jsonb,now(),'success',now())`,
+		uuid.New(), f.rn.ID, run.ID, run.SandboxRef, f.rn.Owner, gen); err != nil {
+		t.Fatal(err)
+	}
+	if kind, ok := last(); ok {
+		t.Fatalf("after a recovery: the earlier %q still answers", kind)
+	}
+	kill := f.mustQueue(t, f.action(run, types.RunnerActionKill, gen))
+	if _, _, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, run.ID, kill.ID, types.RunnerActionSuccess, "", observed, prepareSpoolTest); err != nil {
+		t.Fatal(err)
+	}
+	if kind, ok := last(); !ok || kind != types.RunnerActionKill {
+		t.Fatalf("after the recovery: %q answered=%v, want the later kill", kind, ok)
+	}
+}

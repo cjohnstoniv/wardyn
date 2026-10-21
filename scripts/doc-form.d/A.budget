@@ -246,7 +246,11 @@
 # 0.10 CTL-C r4 (#2972 L1): docs/AUDIT-ACTIONS.md 50287 adds 49 over 50238, measured: the continue stage and its run.kill reason.
 # docs/AUDIT-ACTIONS.md 50939 = ours 50287 + theirs 50556 - base 49904 at the 0.10 CTL-C r4 merge of main.
 # docs/AUDIT-ACTIONS.md 51501 = ours 51118 + theirs 50939 - base 50556 at the 0.10 W4c merge of CTL-C 6de42c110 onto the train.
-docs/AUDIT-ACTIONS.md=51501 share=8
+# docs/AUDIT-ACTIONS.md 49409 adds 38 over 49371, measured (OC-API1a #2144): the run.requirement.skip host_not_allowlisted reason on the existing row.
+# docs/AUDIT-ACTIONS.md 49417 adds 8 over 49409, measured (OC-API1a): the host_not_allowlisted reason also covers a host a deny list in force names.
+# docs/AUDIT-ACTIONS.md 49443 adds 26 over 49417, measured (OC-API1a review): the workspace.envcode.write row names its denied outcome and reason field.
+# docs/AUDIT-ACTIONS.md 51573 = ours 51501 + theirs 49443 - base 49371 at the 0.10 W4c merge of OC-API1a 0f92145af onto the train.
+docs/AUDIT-ACTIONS.md=51573 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.

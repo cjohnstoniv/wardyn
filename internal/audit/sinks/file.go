@@ -5,6 +5,7 @@ package sinks
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -50,6 +51,9 @@ type FileSink struct {
 
 // NewFileSink opens (or creates) the log file at cfg.Path.
 func NewFileSink(cfg FileConfig) (*FileSink, error) {
+	if cfg.MaxBytes < 0 || cfg.Keep < 0 {
+		return nil, errors.New("sinks.file: max_bytes and keep must not be negative")
+	}
 	cfg = cfg.withDefaults()
 	if cfg.Path == "" {
 		return nil, fmt.Errorf("sinks.file: path is required")

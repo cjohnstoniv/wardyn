@@ -152,6 +152,13 @@ func unionPreviewWorkspaceEgress(spec *types.RunPolicySpec, workspaces []types.W
 	}
 }
 
+// previewWorkspaceEgressHosts is what unionPreviewWorkspaceEgress adds to an empty allowlist.
+func previewWorkspaceEgressHosts(workspaces []types.Workspace, trusted []string) []string {
+	var scratch types.RunPolicySpec
+	unionPreviewWorkspaceEgress(&scratch, workspaces, trusted)
+	return scratch.AllowedDomains
+}
+
 func previewPending(req createRunRequest, choice runProviderChoice) []policyPreviewPending {
 	pending := []policyPreviewPending{previewCredential, previewAutonomy, previewToolApprovals, previewConfinement, previewEgress}
 	if !req.Interactive && strings.TrimSpace(req.Task) == "" {

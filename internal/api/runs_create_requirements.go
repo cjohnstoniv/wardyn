@@ -212,7 +212,7 @@ func (s *Server) applyWorkspaceRequirementsFor(ctx context.Context, present map[
 					integrationRows = s.effectiveIntegrations(ctx, present)
 					integrationRowsLoaded = true
 				}
-				events = append(events, s.applyIntegrationRequirement(ctx, present, integrationRows, spec, name)...)
+				events = append(events, s.applyIntegrationRequirement(ctx, present, integrationRows, spec, name, bound.aheadHosts(), bound.deniedHosts())...)
 			case "write":
 				narrow := sel.ReadOnly
 				if readOnlyPinned(attached, selections, name) {
@@ -260,6 +260,13 @@ const reasonRequirementModelHost = "model_host"
 // reasonRequirementModelHostUnknown is the skip when the site config could not
 // be read, so which hosts serve a model is unknown: every one is skipped.
 const reasonRequirementModelHostUnknown = "model_host_unknown"
+
+// skipHostNotAllowlisted is the skip for an integration credential whose host is not an exact entry
+// of the run's allowlist, or that a deny list in force names (its egress_host capability is off and
+// nothing else lists it): the proxy refuses an injection rule for such a host at startup, which would
+// fail every run. An audit data.reason only (docs/AUDIT-ACTIONS.md), never an errorBody reason, run
+// event or SDK value, so it never reaches the wire and is not reason-named.
+const skipHostNotAllowlisted = "host_not_allowlisted"
 
 // requirementSkip is the audit entry for a requirement credential the fold
 // declined to grant, named by what it would have granted and why.

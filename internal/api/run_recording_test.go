@@ -5,12 +5,16 @@ package api
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -38,5 +42,74 @@ func TestApplyRunRecording_UnknownFactsAreNotADecline(t *testing.T) {
 		if spec.Record == nil || !*spec.Record || run.NotRecorded != tc.want {
 			t.Fatalf("%s: record=%v not_recorded=%q, want true %q", tc.name, spec.Record, run.NotRecorded, tc.want)
 		}
+	}
+}
+
+// recordingReadFake answers the two recording-policy reads from fields, so a read can fail.
+type recordingReadFake struct {
+	store.Store
+	store.RunnerPoolStore
+	org     types.RunnerPoolDefaults
+	orgErr  error
+	pool    types.RunnerPool
+	poolErr error
+}
+
+func (f *recordingReadFake) GetRunnerPoolOrgDefaults(context.Context) (types.RunnerPoolDefaults, error) {
+	return f.org, f.orgErr
+}
+
+func (f *recordingReadFake) GetRunnerPool(context.Context, uuid.UUID) (types.RunnerPool, error) {
+	return f.pool, f.poolErr
+}
+
+// TestRecordingRequired_AnUnreadableSettingIsRequired: a run known not to record is held when the
+// organisation's or its pool's recording requirement cannot be read, never started unrecorded.
+func TestRecordingRequired_AnUnreadableSettingIsRequired(t *testing.T) {
+	boom := errors.New("connection reset")
+	poolID := uuid.New()
+	for _, tc := range []struct {
+		name     string
+		fake     recordingReadFake
+		pooled   bool
+		wantPool string
+		want     bool
+	}{
+		{"org read fails", recordingReadFake{orgErr: boom}, false, "", true},
+		{"org read fails, pooled run", recordingReadFake{orgErr: boom}, true, "", true},
+		{"pool read fails", recordingReadFake{poolErr: boom}, true, "", true},
+		{"pool is gone", recordingReadFake{poolErr: store.ErrNotFound}, true, "", false},
+		{"nothing required", recordingReadFake{pool: types.RunnerPool{Name: "ci"}}, true, "ci", false},
+		{"pool requires", recordingReadFake{pool: types.RunnerPool{Name: "ci", Recording: types.RecordingRequired}}, true, "ci", true},
+	} {
+		s := &Server{cfg: Config{Store: &tc.fake}}
+		run := types.AgentRun{ID: uuid.New()}
+		if tc.pooled {
+			run.RunnerPoolID = &poolID
+		}
+		pool, required, readErr := s.recordingRequired(context.Background(), run)
+		if required != tc.want || pool != tc.wantPool {
+			t.Errorf("%s: recordingRequired = (%q, %v), want (%q, %v)", tc.name, pool, required, tc.wantPool, tc.want)
+		}
+		if wantRead := tc.fake.orgErr != nil || tc.fake.poolErr != nil && !errors.Is(tc.fake.poolErr, store.ErrNotFound); (readErr != nil) != wantRead {
+			t.Errorf("%s: readErr = %v, want an error exactly when a setting could not be read (%v)", tc.name, readErr, wantRead)
+		}
+	}
+}
+
+// TestRecordingHold_NamesAnUnreadableSetting: a run held because the setting could not be read says
+// so and keeps the reason the setting would have given; a run held by a known setting keeps its sentence.
+func TestRecordingHold_NamesAnUnreadableSetting(t *testing.T) {
+	boom := errors.New("connection reset")
+	reason, msg := recordingHold(false, "ci", boom)
+	if reason != placement.ReasonRunnerRecordingOff || msg != runnerpool.RecordingSettingUnreadableMsg() {
+		t.Errorf("unreadable: = (%s, %q), want runner_recording_off with the could-not-read sentence", reason, msg)
+	}
+	if reason, _ := recordingHold(true, "", boom); reason != placement.ReasonRecordingStoreOff {
+		t.Errorf("unreadable, store off: reason = %s, want recording_store_off", reason)
+	}
+	reason, msg = recordingHold(false, "ci", nil)
+	if reason != placement.ReasonRunnerRecordingOff || msg != runnerpool.RunnerRecordingOffMsg("ci") {
+		t.Errorf("known setting: = (%s, %q), want the pool's sentence", reason, msg)
 	}
 }

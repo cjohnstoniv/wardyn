@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"net/http/httptest"
 	"slices"
 	"testing"
 
@@ -234,6 +235,31 @@ func TestIntegrationFold_DegradesNeverBricks(t *testing.T) {
 		}
 	})
 
+	t.Run("egress_host off: a host no allowlist lists carries no credential", func(t *testing.T) {
+		integ := feedIntegration()
+		integ.DisabledCapabilities = []string{"egress_host"}
+		srv := runIntegrationSrv(t, []types.Integration{integ}, map[string][]byte{"artifactory-token": []byte("tok")})
+		spec := &types.RunPolicySpec{AllowedDomains: []string{"Nexus.corp.internal"}}
+		events, _ := srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code",
+			wsRequiring(uuid.New(), "integration:corp-artifactory", "required"), nil)
+		scopes := apiKeyScopes(t, spec)
+		if len(scopes) != 1 || scopes[0]["host"] != "nexus.corp.internal" {
+			t.Fatalf("scopes = %+v, want only the host the policy already lists (the proxy refuses a rule for any other)", scopes)
+		}
+		if slices.Contains(spec.AllowedDomains, "artifactory.corp.internal") {
+			t.Errorf("a switched-off egress_host still opened a host: %v", spec.AllowedDomains)
+		}
+		var skipped []string
+		for _, ev := range events {
+			if ev.action == "run.requirement.skip" && ev.data["reason"] == skipHostNotAllowlisted {
+				skipped, _ = ev.data["hosts"].([]string)
+			}
+		}
+		if !slices.Equal(skipped, []string{"artifactory.corp.internal"}) {
+			t.Errorf("skipped hosts = %v, want the unlisted host named in an audited skip; events %+v", skipped, events)
+		}
+	})
+
 	t.Run("no hosts is a no-op", func(t *testing.T) {
 		integ := feedIntegration()
 		integ.Egress = nil
@@ -307,5 +333,60 @@ func TestIntegrationFold_MemberOwnKeySatisfiesRequirement(t *testing.T) {
 		if !slices.Contains(spec.AllowedDomains, h) {
 			t.Fatalf("the requirement's egress %q must still fold without a credential", h)
 		}
+	}
+}
+
+// TestIntegrationFold_PreviewAndCreateJudgeTheSameAllowlist: a workspace lists a host, the integration
+// targets it with egress_host off. Create folds the requirement before the workspace's egress is
+// unioned into the spec, the dry doors after; both must grant the credential, and neither may when no
+// workspace lists the host or when a deny list in force (the workspace's DeniedEgress, the ceiling's
+// denied domains, a wildcard or trailing-dot spelling of either) names it.
+func TestIntegrationFold_PreviewAndCreateJudgeTheSameAllowlist(t *testing.T) {
+	const host = "artifactory.corp.internal"
+	integ := feedIntegration()
+	integ.Egress = []string{host}
+	integ.DisabledCapabilities = []string{"egress_host"}
+	for _, tc := range []struct {
+		name     string
+		approved []string
+		wsDenied []string
+		ceilDeny []string
+		want     []string
+	}{
+		{"a workspace lists the host", []string{host}, nil, nil, []string{host}},
+		{"no workspace lists the host", nil, nil, nil, nil},
+		{"the workspace denies the host", []string{host}, []string{host}, nil, nil},
+		{"the workspace denies the host by wildcard", []string{host}, []string{"*.corp.internal"}, nil, nil},
+		{"the ceiling denies the host", []string{host}, nil, []string{host}, nil},
+		{"the ceiling denies the host by a trailing-dot spelling", []string{host}, nil, []string{"Artifactory.corp.internal."}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ws := types.Workspace{ID: uuid.New(), ApprovedEgress: tc.approved, DeniedEgress: tc.wsDenied,
+				Requirements: map[string]types.WorkspaceRequirement{"integration:corp-artifactory": {Level: "required", Provenance: "operator_set"}}}
+			granted := func(steps ...func(*Server, *runFold, *foldRecorder) bool) []string {
+				srv := runIntegrationSrv(t, []types.Integration{integ}, map[string][]byte{"artifactory-token": []byte("tok")})
+				f := &runFold{
+					w: httptest.NewRecorder(), r: httptest.NewRequest("POST", "/api/v1/runs", nil),
+					req: &createRunRequest{Agent: "claude-code"}, wsRefs: []types.Workspace{ws},
+					seed: workspaceSeed{attached: []types.Workspace{ws}},
+				}
+				f.ceiling.Spec.DeniedDomains = tc.ceilDeny
+				for _, step := range steps {
+					if !step(srv, f, &foldRecorder{}) {
+						t.Fatalf("a fold step refused: %v", f.w.(*httptest.ResponseRecorder).Body)
+					}
+				}
+				var hosts []string
+				for _, sc := range apiKeyScopes(t, &f.spec) {
+					hosts = append(hosts, sc["host"])
+				}
+				return hosts
+			}
+			create := granted((*Server).stepRequirements)
+			preview := granted((*Server).stepPreviewEgress, (*Server).stepRequirements)
+			if !slices.Equal(create, tc.want) || !slices.Equal(preview, tc.want) {
+				t.Errorf("create granted %v, preview granted %v, want both %v", create, preview, tc.want)
+			}
+		})
 	}
 }
