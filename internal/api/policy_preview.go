@@ -36,6 +36,10 @@ func (s *Server) handlePolicyPreview(w http.ResponseWriter, r *http.Request) {
 	if s.refuseAdminViewLaunch(w, r) {
 		return
 	}
+	r, ok := s.admitBreakGlass(w, r)
+	if !ok {
+		return
+	}
 	var req createRunRequest
 	if !s.decodeRunRequest(w, r, &req) {
 		return

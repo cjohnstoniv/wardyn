@@ -338,5 +338,7 @@ func sidecarPolicy(policy types.RunPolicySpec, p dispatchParams) types.RunPolicy
 			policy.EligibleGrants[i].OwnerOnlyRefs = nil
 		}
 	}
+	// The proxy enforces nothing about recording, and a previous release's proxy refuses the key.
+	policy.Recording = ""
 	return policy
 }

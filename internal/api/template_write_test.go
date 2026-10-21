@@ -39,7 +39,7 @@ func saveBodyWith(scope, group, name, kind, intent string) string {
 // exactly these.
 func TestTemplatePolicyKeysArePinned(t *testing.T) {
 	want := []string{"allow_all_egress", "allowed_domains", "allowed_methods", "denied_domains", "eligible_grants",
-		"first_use_approval", "first_use_hold_seconds", "harness_inner_walls", "llm_inspection", "max_holds"}
+		"first_use_approval", "first_use_hold_seconds", "harness_inner_walls", "llm_inspection", "max_holds", "recording"}
 	got := templatePolicyKeys()
 	slices.Sort(got)
 	if !slices.Equal(got, want) {

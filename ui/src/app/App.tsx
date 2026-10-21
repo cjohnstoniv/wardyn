@@ -80,6 +80,11 @@ const PoliciesScreen = React.lazy(() =>
     default: m.PoliciesScreen,
   })),
 );
+const BoundaryScreen = React.lazy(() =>
+  import("./components/screens/boundary/boundary-screen").then((m) => ({
+    default: m.BoundaryScreen,
+  })),
+);
 const GovernanceScreen = React.lazy(() =>
   import("./components/screens/governance/governance-screen").then((m) => ({
     default: m.GovernanceScreen,
@@ -838,6 +843,7 @@ export default function App() {
             <Route path="/admin/workspaces" element={suspend(<WorkspacesScreen />)} />
             <Route path="/admin/workspaces/:id" element={suspend(<WorkspaceDetailScreen />)} />
             <Route path="/admin/policies" element={suspend(<PoliciesScreen />)} />
+            <Route path="/admin/policies/boundary" element={suspend(<BoundaryScreen />)} />
             <Route path="/admin/templates" element={suspend(<TemplatesScreen />)} />
             <Route path="/admin/governance" element={suspend(<GovernanceScreen />)} />
             <Route path="/admin/permissions" element={suspend(<PermissionsScreen />)} />

@@ -44,6 +44,11 @@ vi.mock("./components/screens/templates/templates-screen", () => ({
   TemplatesScreen: () => <div>templates screen stub</div>,
 }));
 
+// 0.10 — Policies -> Wardyn boundary has its own path under /admin/policies.
+vi.mock("./components/screens/boundary/boundary-screen", () => ({
+  BoundaryScreen: () => <div>boundary screen stub</div>,
+}));
+
 function renderLanding(role: Role, roleResolved: boolean, status: SetupStatus | null) {
   return render(
     <MemoryRouter initialEntries={["/"]}>
@@ -421,6 +426,15 @@ describe("App — the settings-split route table", () => {
     renderApp("/account");
     expect(await screen.findByText("your account screen stub")).toBeInTheDocument();
     expect(screen.queryByText("admin settings screen stub")).toBeNull();
+  });
+});
+
+describe("App — the Wardyn boundary route", () => {
+  it("mounts BoundaryScreen at /admin/policies/boundary", async () => {
+    const { fetch } = mockFetch({});
+    vi.stubGlobal("fetch", fetch);
+    renderApp("/admin/policies/boundary");
+    expect(await screen.findByText("boundary screen stub")).toBeInTheDocument();
   });
 });
 

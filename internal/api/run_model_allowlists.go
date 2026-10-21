@@ -15,9 +15,9 @@ import (
 // recordModelAllowlists keeps, on the run, the model allowlist each local model provider handed its
 // proxy at this dispatch (#3374). The proxy holds the run to that list while the provider's own list
 // can change afterwards, and GET /model-providers is the admin's, so the run page reads this record.
-// Every dispatch and revive writes it, an empty one included, so a run that no longer serves a local
-// model carries none. A store without the surface, or a write that fails, only costs the run page its
-// list: dispatch goes on.
+// Every dispatch writes it, an empty one included, so a run that no longer serves a local
+// model carries none; a revive replays the dispatch's list. A store without the surface, or a
+// write that fails, only costs the run page its list: dispatch goes on.
 func (s *Server) recordModelAllowlists(ctx context.Context, runID uuid.UUID, lists map[string][]string) {
 	st, ok := s.cfg.Store.(store.RunModelAllowlists)
 	if !ok {

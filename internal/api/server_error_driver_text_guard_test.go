@@ -94,7 +94,7 @@ var serverErrorDriverTextAllowlist = map[string]string{
 	// deliberately operator-useful (ImagePullBackOff, a missing secret, a
 	// runtime's own refusal) and is not store/driver text;
 	// TestGetRun_TerminalStartupReasonSurvivesFailed pins that shape.
-	"runs_dispatch.go:Server.startAgentOrIdle:failAndRevoke": "runner Exec text, operator-useful by design (#445)",
+	"runs_dispatch_start.go:Server.startAgentOrIdle:failAndRevoke": "runner Exec text, operator-useful by design (#445)",
 	// adoscope.ScopesFor's only error is a fixed sentence naming the refused
 	// capability ("adoscope: %q is not a grantable capability ..."), never
 	// store/driver text.

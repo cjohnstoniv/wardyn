@@ -58,6 +58,10 @@ import (
 //     exemption would have been, without a door that can be claimed by mistake.
 type dispatchCeiling struct {
 	localSelfDefinedComponents bool
+	// recording is the ceiling's recording level and recordingBound whether a ceiling binds the run
+	// at all (a member's): applyRunRecording's types.RecordingChoice.
+	recording      types.RecordingLevel
+	recordingBound bool
 	// resolved records that this value came from a constructor. Never set it by
 	// hand; the zero value must stay the "nobody decided" state.
 	resolved bool
@@ -134,7 +138,8 @@ type dispatchCeiling struct {
 func ceilingForDispatch(c governanceCeiling, ado adoEntraGrade, bedrock bedrockCredGrade) dispatchCeiling {
 	standing := adoStandingFor(c)
 	if c.Profile == nil {
-		return dispatchCeiling{resolved: true, adoEntra: ado, bedrock: bedrock, adoStanding: standing}
+		return dispatchCeiling{resolved: true, adoEntra: ado, bedrock: bedrock, adoStanding: standing,
+			recording: c.Spec.Recording, recordingBound: !c.Operator}
 	}
 	return dispatchCeiling{
 		resolved: true, deny: c.Spec.DeniedDomains, profile: c.Profile.Name, denyPlacements: c.Limits.DenyPlacements,
@@ -142,6 +147,7 @@ func ceilingForDispatch(c governanceCeiling, ado adoEntraGrade, bedrock bedrockC
 		maxEphemeralDiskMiB:        c.Limits.MaxEphemeralDiskMiB, maxCPUMillis: memberBound(c.Limits.MaxCPUMillis, c.memberSize().CPUMillis),
 		maxMemoryMiB: memberBound(c.Limits.MaxMemoryMiB, c.memberSize().MemoryMiB), adoEntra: ado, bedrock: bedrock, adoStanding: standing,
 		agentGuardrailLocks: c.Limits.AutonomyRubric != nil && c.Limits.AutonomyRubric.AgentGuardrailLocks,
+		recording:           c.Spec.Recording, recordingBound: !c.Operator,
 	}
 }
 

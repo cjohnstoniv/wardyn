@@ -369,6 +369,7 @@ export const DELIVERY = {
   FIXED_CLOUD_STS: "Never on a runner: needs attestation a laptop sandbox doesn't have.",
   BOUND_NO_VIA_ORG: "Can't stay in the organisation: the run reads it inside the sandbox.",
   BOUND_NO_RESIDENT_GITHUB: "Can't be stored on a runner: it would skip branch rules and push review.",
+  BOUND_NOT_BUILT: "Not available yet",
   SAVE: "Save",
   SAVED: "Saved. New runs use this; runs already going keep what they started with.",
   REFUSED_TITLE: "This can't be saved as written",
@@ -430,6 +431,7 @@ export const CHANGES = {
     runner_trust: "Runner trust class",
     run_node_record: "Node record",
     local_credential_delivery: DELIVERY.CHANGE_KIND,
+    governance_boundary: "Wardyn boundary",
   } as Record<string, string>,
   // By op. An op this console predates shows its raw name.
   OP: {

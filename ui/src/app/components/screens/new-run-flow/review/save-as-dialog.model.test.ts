@@ -15,10 +15,10 @@ const publish = (p: Partial<TemplatePublish>): TemplatePublish => ({ org: false,
 
 describe("the policy keys a policy may hold", () => {
   it("are the run-wide network, credential and access-rule keys the server pins", () => {
-    // internal/api TestTemplatePolicyKeysArePinned lists the same ten.
+    // internal/api TestTemplatePolicyKeysArePinned lists the same eleven.
     expect(Object.keys(POLICY_KEY_PART).sort()).toEqual([
       "allow_all_egress", "allowed_domains", "allowed_methods", "denied_domains", "eligible_grants",
-      "first_use_approval", "first_use_hold_seconds", "harness_inner_walls", "llm_inspection", "max_holds",
+      "first_use_approval", "first_use_hold_seconds", "harness_inner_walls", "llm_inspection", "max_holds", "recording",
     ]);
   });
 });

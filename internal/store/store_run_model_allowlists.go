@@ -13,7 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// RunModelAllowlists is the record of the model allowlists a run's proxy was handed (0200),
+// RunModelAllowlists is the record of the model allowlists a run's proxy was handed (0202),
 // optional like RunLocalFolders: a test double that embeds store.Store would route these calls
 // to a nil interface, so the api layer type-asserts.
 type RunModelAllowlists interface {
@@ -22,6 +22,8 @@ type RunModelAllowlists interface {
 	// SetRunModelAllowlists replaces run id's record; an empty map clears it.
 	SetRunModelAllowlists(ctx context.Context, id uuid.UUID, lists map[string][]string) error
 }
+
+var _ RunModelAllowlists = PG{}
 
 // RunModelAllowlists implements RunModelAllowlists.
 func (s PG) RunModelAllowlists(ctx context.Context, id uuid.UUID) (map[string][]string, error) {

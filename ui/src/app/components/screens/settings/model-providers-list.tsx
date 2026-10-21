@@ -13,6 +13,7 @@ import { AlertTriangle } from "lucide-react";
 import { modelProviders, type ModelProvider, type ModelProvidersList as Snapshot } from "../../../lib/api/model-providers";
 import { agentProviders, type AgentProvider } from "../../../lib/api/agent-providers";
 import type { SetupHarnessTool } from "../../../lib/types";
+import { LOCAL_MODEL_LIST } from "../../../lib/local-model-copy";
 import { MODEL_LEDE, MODEL_PROVIDERS as M, providesLine } from "../../../lib/model-providers-copy";
 import { ACCESS_STATE } from "../../../lib/people-access-copy";
 import { Button } from "../../ui/button";
@@ -110,6 +111,15 @@ export function ModelProvidersList({
   );
 }
 
+// host:port as the proxy sees it; the stored text when it does not parse.
+function hostOf(baseUrl = ""): string {
+  try {
+    return new URL(baseUrl).host || baseUrl;
+  } catch {
+    return baseUrl;
+  }
+}
+
 function Rows({
   data: { providers, connected, roster },
   label,
@@ -126,6 +136,7 @@ function Rows({
       <div className="rounded-lg border border-dashed border-border px-4 py-6 text-center">
         <h4 className="text-body font-medium text-foreground">{M.EMPTY_TITLE}</h4>
         <p className="mt-1 text-body text-muted-foreground">{M.EMPTY_BODY}</p>
+        <p className="mt-1 text-body text-muted-foreground">{LOCAL_MODEL_LIST.EMPTY_EXTRA}</p>
       </div>
     );
   }
@@ -150,12 +161,19 @@ function Rows({
     else if (used.length === 0) usage = <span className="text-info">{M.UNUSED}</span>;
     else usage = M.USED_BY(used);
 
+    // A local model server with no token has nothing for a person to connect (M9).
+    const noToken = p.kind === "local_model" && !p.auth;
     const facts = (
       <>
         <div className="text-body font-medium text-foreground">{name}</div>
         {name !== kind && <div className="text-meta text-muted-foreground">{kind}</div>}
-        <div className="text-meta text-muted-foreground">{providesLine(p.kind)}</div>
+        <div className="text-meta text-muted-foreground">{noToken ? LOCAL_MODEL_LIST.PROVIDES_NONE : providesLine(p.kind)}</div>
         <div className="text-meta text-muted-foreground">{usage}</div>
+        {p.kind === "local_model" && (
+          <div className="font-mono text-meta text-muted-foreground">
+            {LOCAL_MODEL_LIST.ADDRESS(hostOf(p.base_url), p.local?.models.length ?? 0)}
+          </div>
+        )}
       </>
     );
     return (
@@ -166,7 +184,7 @@ function Rows({
         </button>
         <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
           {chipDefaults.length > 0 && <Chip>{M.CHIP_DEFAULT_FOR(chipDefaults)}</Chip>}
-          <Chip>{p.disabled ? M.CHIP_OFF : M.CONNECTED(connected[p.id] ?? 0)}</Chip>
+          <Chip>{p.disabled ? M.CHIP_OFF : noToken ? LOCAL_MODEL_LIST.CHIP_NO_TOKEN : M.CONNECTED(connected[p.id] ?? 0)}</Chip>
         </div>
       </li>
     );
