@@ -146,7 +146,7 @@ func TestPG_InsertAuditEventDoesNotForkTheChainAtRepeatableRead(t *testing.T) {
 		var waiting int
 		if err := pool.QueryRow(ctx,
 			`SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted
-			AND classid::bigint = $1::bigint >> 32 AND objid::bigint = $1::bigint & 2147483647
+			AND objsubid = 1 AND classid::bigint = $1::bigint >> 32 AND objid::bigint = $1::bigint & 4294967295
 			AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`,
 			db.AuditChainLockKey).Scan(&waiting); err != nil {
 			t.Fatalf("poll pg_locks: %v", err)
