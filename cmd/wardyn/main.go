@@ -259,6 +259,13 @@ func (st *sessionState) resolve(serverURL string) {
 	})
 }
 
+// reset forgets the sign-in resolved so far, for a command that signs in itself: the next resolve reads it.
+func (st *sessionState) reset() {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.once, st.s, st.err = sync.Once{}, storedSession{}, nil
+}
+
 // bearer is the stored sign-in's bearer for the next request. The cached token is sent while it is outside
 // the renewal margin; inside it, loadSession reads the item again and renews it under the lock. An admin
 // step-up is never renewed: once it is spent, the ordinary access token is sent. A sign-in that has ended
@@ -270,7 +277,7 @@ func (st *sessionState) bearer(ctx context.Context) (token, origin string) {
 	if st.s.kind == "" {
 		return "", ""
 	}
-	if tok, kind := st.s.item.bearer(time.Now()); tok != "" {
+	if tok, kind := st.s.item.bearer(cliNow()); tok != "" {
 		st.s.token, st.s.tokenKind = tok, kind
 		return tok, st.s.origin
 	}
@@ -381,7 +388,7 @@ func rootCmd() *cobra.Command {
 		serviceIdentityCmd(client),
 		tokenCmd(client),
 		deviceCmd(client),
-		runnerCmd(client),
+		runnerCmd(client, sess),
 		supportBundleCmd(client),
 		doctorCmd(client),
 		caCmd(client),

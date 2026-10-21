@@ -55,7 +55,7 @@ func whoamiCmd(client func() *sdk.Client, sess *sessionState) *cobra.Command {
 			}
 			origin, role, from := c.BaseURL, me.Role, fmt.Sprintf(copyWhoToken, authHintFor.tokenFrom)
 			if authHintFor.tokenFrom == tokenFromLogin {
-				it, now := sess.s.item, time.Now()
+				it, now := sess.s.item, cliNow()
 				origin = sess.s.origin
 				switch {
 				case sess.s.tokenKind == types.APITokenKindCLIAdmin:

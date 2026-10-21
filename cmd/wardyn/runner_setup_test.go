@@ -52,6 +52,10 @@ type setupRig struct {
 	mintBearer        string
 	mintExpires       time.Time
 	assets            map[string][]byte // download path -> bytes
+	runnerdPath       string
+	signInOrigin      string                   // /healthz.cli_sign_in_origin
+	authorize         func(*http.Request) bool // when set, a request to /api/v1/ (but the anonymous CLI sign-in) it refuses is a 401
+	afterMint         func()                   // runs when a mint is authorised and answered
 }
 
 const setupTestToken = "wdr_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -101,10 +105,17 @@ func (r *setupRig) serve(w http.ResponseWriter, req *http.Request) {
 	defer r.mu.Unlock()
 	r.paths = append(r.paths, req.Method+" "+req.URL.Path)
 	me := "/api/v1/me/runners/" + r.runnerID.String()
+	if r.authorize != nil && strings.HasPrefix(req.URL.Path, "/api/v1/") && !strings.HasPrefix(req.URL.Path, "/api/v1/cli/") && !r.authorize(req) {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
 	switch p := req.URL.Path; {
 	case p == "/healthz":
-		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "cli_artifact_base": r.advertised, "cli_sign_in": r.signIn})
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "cli_artifact_base": r.advertised, "cli_sign_in": r.signIn, "cli_sign_in_origin": r.signInOrigin})
 	case req.Method == http.MethodPost && p == "/api/v1/me/runners/tokens":
+		if r.afterMint != nil {
+			defer r.afterMint()
+		}
 		r.mints++
 		r.mintBearer = strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer ")
 		if r.mintStatus != 0 {
@@ -661,5 +672,67 @@ func TestRunnerSetupRestoreLinePastesAsPrinted(t *testing.T) {
 				t.Fatalf("a plain path was quoted: %q", line)
 			}
 		})
+	}
+}
+
+// signInRig is a setup rig whose organisation also answers the CLI sign-in on the rig's own origin, with the
+// browser counted: the device proof is signed over the URL dialled.
+func signInRig(t *testing.T) (r *setupRig, f *signInOrg, opens *atomic.Int32) {
+	t.Helper()
+	r, f, opens = newSetupRig(t), newSignInOrg(t), new(atomic.Int32)
+	keyring.MockInit()
+	prevReady, prevOpen, prevCan := keychainReady, openBrowser, canOpenBrowser
+	t.Cleanup(func() { keychainReady, openBrowser, canOpenBrowser = prevReady, prevOpen, prevCan })
+	keychainReady = func() error { return nil }
+	canOpenBrowser = func() bool { return true }
+	browser := approveInBrowser(t, f, nil)
+	openBrowser = func(approve string) error { opens.Add(1); go browser(approve); return nil }
+	r.signIn, r.fallback, f.srv.URL = true, f.srv.Config.Handler, r.srv.URL
+	bin, sum := r.fakeRunnerd(r.binDir, 0)
+	pinnedRunnerdSHA256 = sum
+	r.runnerdPath = bin
+	return r, f, opens
+}
+
+// An organisation that signs CLIs in at another origin is refused with `wardyn login`'s own line, before a
+// browser opens, a sign-in is begun or a token is minted.
+func TestRunnerSetupRefusesAnotherSignInOrigin(t *testing.T) {
+	r, f, opens := signInRig(t)
+	f.origin = "https://sso.example.com"
+	r.signInOrigin = f.origin
+	out, err := r.run("--runnerd", r.runnerdPath)
+	if want := fmt.Sprintf(errOtherOrigin, f.origin, r.srv.URL, f.origin); err == nil || err.Error() != want {
+		t.Fatalf("setup: err = %v, want %q\n%s", err, want, out)
+	}
+	if n := opens.Load(); n != 0 {
+		t.Errorf("the browser was opened %d times", n)
+	}
+	if got := r.called("POST /api/v1/cli"); len(got) != 0 || r.mints != 0 {
+		t.Errorf("sign-in calls %v and %d mints, want none", got, r.mints)
+	}
+}
+
+// A sign-in made inside the command is renewed like a stored one: the mint moves the clock until the access
+// token is inside the renewal margin, so the claim goes out on a refreshed token, after exactly one refresh.
+func TestRunnerSetupRenewsItsOwnSignIn(t *testing.T) {
+	r, f, _ := signInRig(t)
+	advance := skewClock(t)
+	r.afterMint = func() { advance(intoMargin) }
+	f.expire = true
+	r.authorize = func(req *http.Request) bool {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		tok, _ := f.owner(req)
+		return tok != nil
+	}
+	out, err := r.run("--runnerd", r.runnerdPath)
+	if err != nil {
+		t.Fatalf("setup: %v\n%s", err, out)
+	}
+	f.mu.Lock()
+	refreshes := f.refreshes
+	f.mu.Unlock()
+	if refreshes != 1 || len(r.called("POST /api/v1/me/runners/"+r.runnerID.String()+"/claim")) != 1 {
+		t.Errorf("%d refreshes and claims %v, want one refresh and one claim", refreshes, r.called("POST /api/v1/me/runners/"))
 	}
 }

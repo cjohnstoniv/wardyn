@@ -58,7 +58,7 @@ type runnerSetupFlags struct {
 // person's runners, and running it again is the upgrade. The registration token is minted only for a
 // computer with no runner identity, held in memory and handed to wardyn-runnerd over a pipe; the CLI
 // credential never reaches wardyn-runnerd.
-func runnerSetupCmd(client clientFn) *cobra.Command {
+func runnerSetupCmd(client clientFn, sess *sessionState) *cobra.Command {
 	var f runnerSetupFlags
 	cmd := &cobra.Command{
 		Use:   "setup",
@@ -68,7 +68,10 @@ func runnerSetupCmd(client clientFn) *cobra.Command {
 			if f.makeDefault && f.pool == "" {
 				return errors.New(errSetupDefaultNoPool)
 			}
-			return runRunnerSetup(cmd, client(), f)
+			return runRunnerSetup(cmd, client(), f, func() *sdk.Client {
+				sess.reset()
+				return client()
+			})
 		},
 	}
 	fl := cmd.Flags()
@@ -80,7 +83,8 @@ func runnerSetupCmd(client clientFn) *cobra.Command {
 	return cmd
 }
 
-func runRunnerSetup(cmd *cobra.Command, c *sdk.Client, f runnerSetupFlags) error {
+// runRunnerSetup is the command; renewed builds the client again once it has signed in, as rootCmd's client does.
+func runRunnerSetup(cmd *cobra.Command, c *sdk.Client, f runnerSetupFlags, renewed clientFn) error {
 	ctx, out := cmd.Context(), cmd.OutOrStdout()
 	// Step 1: refusals before anything is read or written.
 	if setupGOOS == "windows" {
@@ -101,12 +105,14 @@ func runRunnerSetup(cmd *cobra.Command, c *sdk.Client, f runnerSetupFlags) error
 		return err
 	}
 	var health struct {
-		CLISignIn      bool   `json:"cli_sign_in"`
-		CLIPasteSignIn bool   `json:"cli_paste_sign_in"`
-		ArtifactBase   string `json:"cli_artifact_base"`
+		types.CLISignInHealthz
+		ArtifactBase string `json:"cli_artifact_base"`
 	}
 	if err := cliCall(ctx, org, http.MethodGet, "/healthz", "", nil, &health); err != nil {
 		return fmt.Errorf(errSetupUnreachable, org, err)
+	}
+	if err := signInOriginOK(c, health.CLISignInHealthz, org); err != nil {
+		return err
 	}
 	local, err := findRunnerIdentity()
 	if err != nil {
@@ -124,13 +130,8 @@ func runRunnerSetup(cmd *cobra.Command, c *sdk.Client, f runnerSetupFlags) error
 	}
 	defer cleanup()
 	// Step 1 again: with no --token or environment token, the stored sign-in, else a browser sign-in now.
-	if c.Token == "" {
-		if !health.CLISignIn {
-			return fmt.Errorf(errSetupNoCredential, noSignInLine)
-		}
-		if c.Token, err = signInForSetup(cmd, org, health.CLIPasteSignIn); err != nil {
-			return err
-		}
+	if c, err = credentialForSetup(cmd, c, org, health.CLISignInHealthz, renewed); err != nil {
+		return err
 	}
 	// Step 4: the registration token, only for a computer with no runner identity.
 	oldVersion := copySetupOldVersion
@@ -185,25 +186,43 @@ func runRunnerSetup(cmd *cobra.Command, c *sdk.Client, f runnerSetupFlags) error
 	return waitConnected(ctx, c, out, id, local.dir, org, oldVersion)
 }
 
+// signInOriginOK refuses, as `wardyn login` does, a sign-in that would be made at an origin other than the URL
+// dialled; it only applies when setup is to sign in.
+func signInOriginOK(c *sdk.Client, h types.CLISignInHealthz, org string) error {
+	if c.Token != "" {
+		return nil
+	}
+	return otherOrigin(h, org)
+}
+
+// credentialForSetup is the client to use: c when it has a credential, else the stored sign-in, else a browser
+// sign-in now. The client was built with no sign-in, so after one it is built again and every later request
+// carries the renewing bearer.
+func credentialForSetup(cmd *cobra.Command, c *sdk.Client, org string, h types.CLISignInHealthz, renewed clientFn) (*sdk.Client, error) {
+	if c.Token != "" {
+		return c, nil
+	}
+	if !h.CLISignIn {
+		return nil, fmt.Errorf(errSetupNoCredential, noSignInLine)
+	}
+	if err := signInForSetup(cmd, org, h.CLIPasteSignIn); err != nil {
+		return nil, err
+	}
+	return renewed(), nil
+}
+
 // signInForSetup is `wardyn login`'s browser sign-in for org, saving org as this CLI's organisation as
-// login does, and returns the bearer it stored.
-func signInForSetup(cmd *cobra.Command, org string, paste bool) (string, error) {
+// login does; the sign-in is stored for the client to use.
+func signInForSetup(cmd *cobra.Command, org string, paste bool) error {
 	dir, err := cliprofile.Dir()
 	if err != nil {
-		return "", err
+		return err
 	}
 	if err := cliprofile.Write(dir, org); err != nil {
-		return "", err
+		return err
 	}
 	l := &login{origin: org, dir: dir, out: cmd.OutOrStdout(), errOut: cmd.ErrOrStderr(), in: cmd.InOrStdin(), paste: paste}
-	if err := l.signIn(cmd.Context(), nil); err != nil {
-		return "", err
-	}
-	s, err := loadSession(cmd.Context(), org)
-	if err != nil {
-		return "", err
-	}
-	return s.token, nil
+	return l.signIn(cmd.Context(), nil)
 }
 
 // selfMintRefusal passes the server's own self_host_runner refusal through verbatim, with the step-up line
@@ -555,7 +574,7 @@ func installedRunnerdDir() string {
 var shellPlain = regexp.MustCompile(`^[A-Za-z0-9_./:@%+=,-]+$`)
 
 // shellArg is s as one POSIX shell word: unchanged when it needs no quoting, else single-quoted with each
-// ' written as '\''.
+// single quote written as a quote, a backslash and two quotes.
 func shellArg(s string) string {
 	if shellPlain.MatchString(s) {
 		return s
