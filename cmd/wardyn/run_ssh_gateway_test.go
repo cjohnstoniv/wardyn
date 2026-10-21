@@ -511,6 +511,27 @@ func TestUpsertSSHHost_KeepsTheModeAndWritesThroughASymlink(t *testing.T) {
 	}
 }
 
+func TestUpsertSSHHost_WritesThroughADanglingSymlink(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real", "ssh_config")
+	if err := os.MkdirAll(filepath.Dir(real), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(filepath.Join("real", "ssh_config"), link); err != nil {
+		t.Fatal(err)
+	}
+	if err := upsertSSHHost(link, "Host wardyn-new\n  Port 1\n"); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("the dangling symlink was replaced: %v, %v", fi, err)
+	}
+	if got, _ := os.ReadFile(real); !strings.Contains(string(got), "Host wardyn-new") {
+		t.Errorf("target = %q, want the new host block", got)
+	}
+}
+
 func TestRunEditor_IncludeLineKeepsASymlinkedSSHConfigAndItsMode(t *testing.T) {
 	home := homeWithKey(t, true)
 	fakeCode(t)

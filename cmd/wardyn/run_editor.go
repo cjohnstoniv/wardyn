@@ -126,11 +126,17 @@ func upsertSSHHost(path, block string) error {
 
 // writeFileAtomic replaces path with data through a temp file in the same
 // directory (target's mode if it exists, else mode), fsynced and renamed, so a
-// crash never leaves a half-written ssh config. A symlinked path is written
-// through to its target and stays a symlink.
+// crash never leaves a half-written ssh config. A symlinked path, dangling or
+// not, is written through to its target and stays a symlink.
 func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 	if resolved, err := filepath.EvalSymlinks(path); err == nil {
 		path = resolved
+	} else if dest, lerr := os.Readlink(path); lerr == nil {
+		// A dangling link: write the file it points at, never replace the link.
+		if !filepath.IsAbs(dest) {
+			dest = filepath.Join(filepath.Dir(path), dest)
+		}
+		path = dest
 	}
 	if fi, err := os.Stat(path); err == nil {
 		mode = fi.Mode().Perm()
