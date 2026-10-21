@@ -386,6 +386,16 @@ func onPath(byID map[uuid.UUID]types.GovernanceUnit, id, ancestor uuid.UUID) boo
 // cannot be read is an error, never the default, so a depth check fails closed.
 func (s *Server) unitDepthLimit(ctx context.Context) (int, error) {
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
+	return depthLimitOf(sc, err)
+}
+
+// unitDepthLimitQ is unitDepthLimit read on q, for a caller inside a transaction.
+func unitDepthLimitQ(ctx context.Context, q store.Querier) (int, error) {
+	sc, err := store.GetSiteConfigQ(ctx, q)
+	return depthLimitOf(sc, err)
+}
+
+func depthLimitOf(sc types.SiteConfig, err error) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("api: read the maximum governance unit depth: %w", err)
 	}

@@ -87,7 +87,7 @@ func TestGovCovOverlayMayNotRaiseTheMemberCap(t *testing.T) {
 		{"a maximum below it", types.LimitsOverlay{MaxCPUMillis: pi(500), MaxMemoryMiB: pi(1024)}, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			_, _, err := s.checkGraphWrite(child(govCovPID, "child", govCovBase, c.limits), []types.GovernanceUnit{base})
+			_, _, err := s.checkGraphWrite(child(govCovPID, "child", govCovBase, c.limits), []types.GovernanceUnit{base}, maxUnitDepthDefault)
 			var refusal *unitWriteError
 			switch {
 			case c.refused && (!errors.As(err, &refusal) || refusal.status != http.StatusBadRequest || refusal.reason != reasonGovernanceOverlayInvalid):
@@ -104,7 +104,7 @@ func TestGovCovOverlayMayNotRaiseTheMemberCap(t *testing.T) {
 		mid := child(govCovPID, "mid", govCovBase, types.LimitsOverlay{MaxCPUMillis: pi(6000), MaxMemoryMiB: pi(12288)})
 		leafID := uuid.MustParse("dddddddd-0000-0000-0000-0000000000bb")
 		leaf := govCovComposedOn(leafID, "leaf", govCovPID, "pypi.org")
-		if _, _, err := s.checkGraphWrite(mid, []types.GovernanceUnit{bounded}); err != nil {
+		if _, _, err := s.checkGraphWrite(mid, []types.GovernanceUnit{bounded}, maxUnitDepthDefault); err != nil {
 			t.Fatalf("the mid overlay is within its base when written: %v", err)
 		}
 		// The base is then written with no maximum, so its own member cap is the default size.

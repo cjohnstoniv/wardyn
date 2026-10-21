@@ -115,7 +115,7 @@ func (s *Server) unitWriteExempt(ctx context.Context, all []types.GovernanceUnit
 		sameJSON(cur.Overlay, p.Overlay) && sameJSON(cur.OverlayLimits, p.OverlayLimits) {
 		return true
 	}
-	chain, err := chainFromRows(byID, p.ID)
+	chain, err := chainFromRows(byID, p.ID, store.MaxUnitDepthCap)
 	if err != nil {
 		return false
 	}
@@ -218,7 +218,7 @@ func redactOverlayForRead(o *types.CeilingOverlay) *types.CeilingOverlay {
 
 // resolveForDiff is what the profile id composes to in all, or nil when it does not compose.
 func (s *Server) resolveForDiff(all []types.GovernanceUnit, id uuid.UUID) *ResolvedUnit {
-	chain, err := chainFromRows(unitsByID(all), id)
+	chain, err := chainFromRows(unitsByID(all), id, store.MaxUnitDepthCap)
 	if err != nil {
 		return nil
 	}
@@ -240,7 +240,7 @@ func unitBaseState(all []types.GovernanceUnit, id uuid.UUID, base *uuid.UUID) an
 	}
 	bases := []types.GovernanceUnit{}
 	seen := map[uuid.UUID]bool{id: true}
-	for cur := base; cur != nil && !seen[*cur] && len(bases) <= maxUnitDepth; {
+	for cur := base; cur != nil && !seen[*cur] && len(bases) <= store.MaxUnitDepthCap; {
 		row, ok := byID[*cur]
 		if !ok {
 			break
@@ -333,7 +333,11 @@ func applyUnitChange(s *Server, r *http.Request, q store.Querier, ch types.Gover
 		if computeETag(unitBaseState(all, id, base)) != ch.BaseHash {
 			return types.GovernanceUnit{}, store.ErrGovernanceChangeStale
 		}
-		p, res, err := s.buildGovernanceUnit(ch.ProposedBy, id, req, all)
+		limit, err := unitDepthLimitQ(ctx, q) // on the transaction, under the graph lock
+		if err != nil {
+			return types.GovernanceUnit{}, err
+		}
+		p, res, err := s.buildGovernanceUnit(ch.ProposedBy, id, req, all, limit)
 		effective = res
 		return p, err
 	})
@@ -381,14 +385,26 @@ func applyUnitDelete(ctx context.Context, q store.Querier, ch types.GovernanceCh
 
 // ── governance assignments ───────────────────────────────────────────────────
 
-// membershipKey is an assignment's natural key as target_key: the subject type, a colon, the subject.
-// A subject type never contains a colon, so the first one splits the two.
-func membershipKey(subjectType types.CapabilitySubjectType, subject string) string {
-	return string(subjectType) + ":" + subject
+// membershipKey is a membership's natural key as target_key: the unit id, a colon, the subject type,
+// a colon, the subject. Neither a unit id nor a subject type contains a colon, so the first two split
+// the three.
+func membershipKey(unitID uuid.UUID, subjectType types.CapabilitySubjectType, subject string) string {
+	return unitID.String() + ":" + string(subjectType) + ":" + subject
 }
 
-func splitMembershipKey(key string) (subjectType, subject string, ok bool) {
-	return strings.Cut(key, ":")
+// splitMembershipKey is membershipKey's inverse; false for a key of any other shape, including the
+// (subject_type, subject) keys held before migration 0208.
+func splitMembershipKey(key string) (unitID uuid.UUID, subjectType, subject string, ok bool) {
+	unit, rest, ok := strings.Cut(key, ":")
+	if !ok {
+		return uuid.Nil, "", "", false
+	}
+	id, err := uuid.Parse(unit)
+	if err != nil {
+		return uuid.Nil, "", "", false
+	}
+	subjectType, subject, ok = strings.Cut(rest, ":")
+	return id, subjectType, subject, ok
 }
 
 // membershipWriteAuditData is the governance.membership.write row's data, shared by a direct write
@@ -399,6 +415,7 @@ func membershipWriteAuditData(saved types.GovernanceMembership) map[string]any {
 		"subject":      saved.Subject,
 		"unit_id":      saved.UnitID,
 		"priority":     saved.Priority,
+		"home":         saved.Home,
 	}
 }
 
@@ -453,7 +470,7 @@ func (s *Server) newMembershipDiffView(a types.GovernanceMembership, chain []typ
 func unitChainQ(ctx context.Context, q store.Querier, id uuid.UUID, forUpdate bool) ([]types.GovernanceUnit, error) {
 	chain := []types.GovernanceUnit{}
 	seen := map[uuid.UUID]bool{}
-	for cur := &id; cur != nil && *cur != uuid.Nil && !seen[*cur] && len(chain) <= maxUnitDepth; {
+	for cur := &id; cur != nil && *cur != uuid.Nil && !seen[*cur] && len(chain) <= store.MaxUnitDepthCap; {
 		row, err := store.GetGovernanceUnitQ(ctx, q, *cur, forUpdate)
 		if errors.Is(err, store.ErrNotFound) {
 			break
@@ -489,19 +506,17 @@ func (st membershipState) state() any {
 
 func (st membershipState) hash() string { return computeETag(st.state()) }
 
-func readMembershipState(ctx context.Context, q store.Querier, subjectType, subject string, profileID uuid.UUID, forUpdate bool) (membershipState, error) {
+// readMembershipState reads the membership at (unitID, subjectType, subject) and the chain of unitID.
+func readMembershipState(ctx context.Context, q store.Querier, unitID uuid.UUID, subjectType, subject string, forUpdate bool) (membershipState, error) {
 	var st membershipState
-	row, err := store.GetGovernanceMembershipByKeyQ(ctx, q, subjectType, subject, forUpdate)
+	row, err := store.GetGovernanceMembershipByKeyQ(ctx, q, unitID, subjectType, subject, forUpdate)
 	switch {
 	case err == nil:
 		st.current = &row
-		if profileID == uuid.Nil {
-			profileID = row.UnitID
-		}
 	case !errors.Is(err, store.ErrNotFound):
 		return st, err
 	}
-	if st.chain, err = unitChainQ(ctx, q, profileID, forUpdate); err != nil {
+	if st.chain, err = unitChainQ(ctx, q, unitID, forUpdate); err != nil {
 		return st, err
 	}
 	return st, nil
@@ -515,15 +530,10 @@ func (s *Server) holdMembershipUpsert(w http.ResponseWriter, r *http.Request, a 
 	var beforeChain []types.GovernanceUnit
 	err := s.cfg.Store.DryRunGovernance(ctx, func(q store.Querier) error {
 		var err error
-		if st, err = readMembershipState(ctx, q, string(a.SubjectType), a.Subject, a.UnitID, false); err != nil {
+		if st, err = readMembershipState(ctx, q, a.UnitID, string(a.SubjectType), a.Subject, false); err != nil {
 			return err
 		}
 		beforeChain = st.chain
-		if st.current != nil && st.current.UnitID != a.UnitID {
-			if beforeChain, err = unitChainQ(ctx, q, st.current.UnitID, false); err != nil {
-				return err
-			}
-		}
 		_, err = store.UpsertGovernanceMembershipQ(ctx, q, a)
 		return err
 	})
@@ -536,8 +546,8 @@ func (s *Server) holdMembershipUpsert(w http.ResponseWriter, r *http.Request, a 
 	}
 	after := s.newMembershipDiffView(a, st.chain)
 	p := govProposal{
-		kind: govKindMembership, op: "upsert", key: membershipKey(a.SubjectType, a.Subject),
-		payload:   governanceMembershipRequest{SubjectType: a.SubjectType, Subject: a.Subject, UnitID: a.UnitID, Priority: a.Priority},
+		kind: govKindMembership, op: "upsert", key: membershipKey(a.UnitID, a.SubjectType, a.Subject),
+		payload:   governanceMembershipRequest{SubjectType: a.SubjectType, Subject: a.Subject, UnitID: a.UnitID, Priority: a.Priority, Home: a.Home},
 		after:     after,
 		baseState: st.state(),
 	}
@@ -559,7 +569,7 @@ func (s *Server) holdMembershipDelete(w http.ResponseWriter, r *http.Request, id
 		if err != nil {
 			return err
 		}
-		st, err = readMembershipState(ctx, q, string(row.SubjectType), row.Subject, uuid.Nil, false)
+		st, err = readMembershipState(ctx, q, row.UnitID, string(row.SubjectType), row.Subject, false)
 		return err
 	})
 	if notFoundIf(w, err, "governance assignment", reasonGovernanceMembershipNotFound) {
@@ -571,7 +581,7 @@ func (s *Server) holdMembershipDelete(w http.ResponseWriter, r *http.Request, id
 	}
 	before := s.newMembershipDiffView(*st.current, st.chain)
 	s.proposeGovernanceChange(w, r, govProposal{
-		kind: govKindMembership, op: "delete", key: membershipKey(st.current.SubjectType, st.current.Subject),
+		kind: govKindMembership, op: "delete", key: membershipKey(st.current.UnitID, st.current.SubjectType, st.current.Subject),
 		payload: map[string]any{"id": id}, before: before, changed: changedPaths(before, nil),
 		baseState: st.state(),
 	})
@@ -583,9 +593,11 @@ func (s *Server) holdMembershipDelete(w http.ResponseWriter, r *http.Request, id
 // the assignment and the profile it references FOR UPDATE.
 func applyMembershipChange(s *Server, r *http.Request, q store.Querier, ch types.GovernanceChange) (govApplied, error) {
 	ctx := r.Context()
-	subjectType, subject, ok := splitMembershipKey(ch.TargetKey)
+	unitID, subjectType, subject, ok := splitMembershipKey(ch.TargetKey)
 	if !ok {
-		return govApplied{}, fmt.Errorf("governance change %s: target key %q is not an assignment key", ch.ID, ch.TargetKey)
+		// A change held before migration 0208 keyed one assignment per subject; what its reviewer
+		// saw no longer exists in that shape, so it is stale, as a changed base is.
+		return govApplied{}, store.ErrGovernanceChangeStale
 	}
 	if err := store.LockGovernanceGraph(ctx, q); err != nil {
 		return govApplied{}, err
@@ -600,7 +612,7 @@ func applyMembershipChange(s *Server, r *http.Request, q store.Querier, ch types
 		if err := json.Unmarshal(ch.Payload, &p); err != nil {
 			return govApplied{}, fmt.Errorf("governance change %s: payload: %w", ch.ID, err)
 		}
-		st, err := readMembershipState(ctx, q, subjectType, subject, uuid.Nil, true)
+		st, err := readMembershipState(ctx, q, unitID, subjectType, subject, true)
 		if err != nil {
 			return govApplied{}, err
 		}
@@ -621,14 +633,17 @@ func applyMembershipChange(s *Server, r *http.Request, q store.Querier, ch types
 	if err := dec.Decode(&req); err != nil {
 		return govApplied{}, writeRefusal(http.StatusBadRequest, reasonGovernanceMembershipInvalid, "invalid assignment: %v", err)
 	}
-	a := types.GovernanceMembership{SubjectType: req.SubjectType, Subject: req.Subject, UnitID: req.UnitID, Priority: req.Priority}
+	a := types.GovernanceMembership{SubjectType: req.SubjectType, Subject: req.Subject, UnitID: req.UnitID, Priority: req.Priority, Home: req.Home}
 	if err := validateGovernanceMembership(&a); err != nil {
 		return govApplied{}, writeRefusal(http.StatusBadRequest, reasonGovernanceMembershipInvalid, "invalid assignment: %v", err)
 	}
 	if err := s.checkUserTypeSubject(ctx, q, a.SubjectType, a.Subject); err != nil {
 		return govApplied{}, err
 	}
-	st, err := readMembershipState(ctx, q, subjectType, subject, a.UnitID, true)
+	if a.UnitID != unitID || string(a.SubjectType) != subjectType || a.Subject != subject {
+		return govApplied{}, fmt.Errorf("governance change %s: the payload names another membership than its target key", ch.ID)
+	}
+	st, err := readMembershipState(ctx, q, unitID, subjectType, subject, true)
 	if err != nil {
 		return govApplied{}, err
 	}
