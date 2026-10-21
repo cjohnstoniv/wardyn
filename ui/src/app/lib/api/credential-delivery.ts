@@ -6,7 +6,7 @@
 // The credential delivery policy routes behind Governance -> Runner credentials. Both are securityOps;
 // the PUT is held for a second person on a deployment that requires one (202, thrown as
 // PendingChangeError by asJson) and takes the GET's ETag as If-Match, so a stale draft is a 412, not an overwrite.
-import type { CredentialDeliveryPolicyDoc, DeliveryClass, DeliveryMode, DeliveryPolicy } from "../types/credential-delivery";
+import type { CredentialDeliveryPolicyDoc, DeliveryClass, DeliveryMode, DeliveryPolicy, UnbuildableRow } from "../types/credential-delivery";
 import { asJson, wfetch } from "./core";
 
 /** The document with the ETag the response carried, which the next PUT sends back as If-Match. */
@@ -14,6 +14,8 @@ import { asJson, wfetch } from "./core";
 export type CredentialDeliverySnapshot = CredentialDeliveryPolicyDoc & {
   etag?: string | null;
   buildable_modes?: Partial<Record<DeliveryClass, DeliveryMode[]>>;
+  /** The stored rows whose mode the server cannot build, with what it can build; absent when there are none. */
+  unbuildable?: UnbuildableRow[];
 };
 
 export const credentialDelivery = {

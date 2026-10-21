@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
 	"github.com/cjohnstoniv/wardyn/internal/setup"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -764,6 +765,7 @@ var setupCheckNeverBlocks = map[string]bool{
 	"permissions_posture": true, "llm_provider": true, "bedrock_provider": true, "audit_partitions": true,
 	"agent_image":         true,
 	"runner_limits":       true,
+	"credential_delivery": true,
 	"runner_arch_images":  true,
 	"private_ip_refusals": true,
 	"recording":           true,
@@ -808,6 +810,9 @@ func TestSetupCheckBlocking(t *testing.T) {
 		assertSetupCheckBlocking(t, chk)
 	}
 	if chk, ok := runnerLimitsCheck(2); ok {
+		assertSetupCheckBlocking(t, chk)
+	}
+	if chk, ok := credentialDeliveryCheck([]placement.UnbuildableRow{{Class: placement.ClassAPIKey, Mode: placement.ModeRunnerResident}}); ok {
 		assertSetupCheckBlocking(t, chk)
 	}
 	assertSetupCheckBlocking(t, runnerCheck(SetupRunner{Driver: "docker", ConfinementClasses: []string{"CC1"}}))

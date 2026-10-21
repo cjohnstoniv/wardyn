@@ -333,10 +333,9 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		if chk, ok := s.substrateHealthRow(ctx); ok {
 			checks = append(checks, chk)
 		}
-		// runner_limits: runners that take no run until limits are set. Never Blocking.
-		if chk, ok := s.runnerLimitsRow(ctx); ok {
-			checks = append(checks, chk)
-		}
+		// runner_limits (runners that take no run until limits are set) and credential_delivery (stored
+		// delivery rows the server cannot build). Never Blocking.
+		checks = append(checks, s.runnerPolicyRows(ctx)...)
 		// recording: whether session recording is on, and how to turn it on. Never Blocking.
 		checks = append(checks, s.recordingRows()...)
 		// runner_arch_images: image keys with no image for a registered runner's architecture. Never Blocking.
