@@ -28,6 +28,20 @@ an operator follows to turn one on and run the queue.
 - Each switch governs only its own kind.
 - A run's attention state follows the setting, as it does for egress: it stops naming the creator as the person who can act.
 
+**Units and memberships (0.10.0).**
+
+- Units form a tree under one Default unit, whose walls are the deployment default. A unit built on the deployment default is Default's child; a standalone unit is top-level.
+- A membership is keyed by unit, subject type and subject, so a person can be a member of several units.
+  - Re-posting `POST /governance/memberships` for the same unit and subject updates its `priority` and `home`. It no longer moves the subject to another unit: add the new membership, then delete the old one.
+  - `home: true` marks the unit a person runs in when a run names none.
+  - A held membership change's `target_key` is `<unit_id>:<subject_type>:<subject>`. A membership change held before the upgrade reads as `stale` at approval: propose it again.
+- A unit with `mode` `pass_through` has its parent's walls exactly. It sends no `overlay` or `overlay_limits`, and it names its parent in `parent_id` (`400` `governance_unit_request_invalid` otherwise).
+- A unit path is at most `governance_max_depth` units deep, counting Default or a top-level unit as 1. It is set in the site config: 16 when unset, at most 64.
+  - A unit write past it is refused `409` `governance_unit_depth`.
+  - A site config that lowers it below the deepest path that exists is refused `400` `site_config_invalid`, naming that path.
+- `GET /governance` gives units `kind` (`default` for Default), `mode` and `depth`, memberships `home` and `legacy` (pre-0.10.0: only a person's first by precedence is a context), and `max_depth`. `ApplyGovernance` and `PlanGovernance` match memberships by unit name and never write Default or `legacy`.
+- A revive or admin restart is refused `409` `unit_membership_gone` once the owner's membership of the run's unit is gone (audit `arm` `owner_session`: the owner's own revive, checked against their memberships). Anyone else's passes while that unit, or one above it, has a membership that could match the owner: their sub, an email, their user type, `all` or any group (`arm` `row_can_match`).
+
 **Optional: four-eyes on governance writes.**
 
 - Set `WARDYN_GOVERNANCE_SECOND_HUMAN=1` and no single administrator can change a governance profile, an assignment, a capability grant, the enforcement map, a value's availability, a user type's priority, a role mapping or a key-domain assignment alone.
