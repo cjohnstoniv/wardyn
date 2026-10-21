@@ -141,6 +141,18 @@ func keptDriveRefusal(err error, k *keptWorkFolder, d types.UserDrive) *runRefus
 	return nil
 }
 
+// keepWorkFolderOrAbort is keepWorkFolder for create: a refusal aborts the
+// half-built run and is written, and false tells the caller to stop.
+func (s *Server) keepWorkFolderOrAbort(w http.ResponseWriter, r *http.Request, k *keptWorkFolder, run types.AgentRun, abort func(string)) bool {
+	refusal := s.keepWorkFolder(r, k, run)
+	if refusal == nil {
+		return true
+	}
+	abort(createRunKeepAbortHint)
+	refusal.write(s, w, r)
+	return false
+}
+
 // keepWorkFolder inserts the drive the fold admitted, owned by the run's
 // person and counted at their limit, once the run row exists. A run that asked
 // for nothing is a no-op. A queued run's drive is inserted with its queue row

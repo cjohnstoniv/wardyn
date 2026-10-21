@@ -284,9 +284,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 
 	// The kept work folder's drive, counted again at the insert: a race past the
 	// fold's count is refused here and the run is never started.
-	if refusal := s.keepWorkFolder(r, f.keep, created); refusal != nil {
-		abort(createRunKeepAbortHint)
-		refusal.write(s, w, r)
+	if !s.keepWorkFolderOrAbort(w, r, f.keep, created, abort) {
 		return
 	}
 
