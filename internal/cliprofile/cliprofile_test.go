@@ -110,3 +110,20 @@ func TestProfileArtifactBaseIsHTTPSOnly(t *testing.T) {
 		t.Errorf("NormalizeArtifactBase = %q, %v", got, err)
 	}
 }
+
+// TestNormalizeIsTheProofOrigin pins Normalize to the form a device proof signs over (types.CLIOrigin):
+// lower-case scheme and host, the default port dropped, no trailing slash.
+func TestNormalizeIsTheProofOrigin(t *testing.T) {
+	for in, want := range map[string]string{
+		"HTTPS://Wardyn.Example.COM:443/w/": "https://wardyn.example.com/w",
+		"http://LocalHost:80":               "http://localhost",
+		"https://wardyn.example.com:8443/":  "https://wardyn.example.com:8443",
+		"http://127.0.0.1:8080":             "http://127.0.0.1:8080",
+		"http://[::1]:80/":                  "http://[::1]",
+		"https://[FE80::1]:9443":            "https://[fe80::1]:9443",
+	} {
+		if got, err := Normalize(in); err != nil || got != want {
+			t.Errorf("Normalize(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+}
