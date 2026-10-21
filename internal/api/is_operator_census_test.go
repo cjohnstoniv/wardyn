@@ -71,6 +71,7 @@ var isOperatorCensus = map[string]int{
 	// Drive storage layout on the security-tier drive routes: the directory
 	// name, writability past the drive's posture, and the host path stay the
 	// super admin's.
+	"user_drives.go:handleGetUserDrives":            1, // a security admin reads the allow-listed projection
 	"user_drives_preview.go:handlePreviewUserDrive": 1,
 	"user_drives_tier.go:upsertUserDriveGrantAs":    1,
 	// The measured reason can carry a substrate's own error text, so only an operator reads it.

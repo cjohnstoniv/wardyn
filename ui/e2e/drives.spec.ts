@@ -682,7 +682,12 @@ test.describe("drives — the registry is SUPER's, and no super admin's nav list
     await expect(page.getByRole("heading", { name: DRIVES.TITLE, level: 1 })).toHaveCount(0);
     await expect(page.getByRole("button", { name: DRIVES.NEW_CTA, exact: true })).toHaveCount(0);
     expect(driveReads).toBe(0);
-    await expect(tealActions(page)).toHaveCount(0);
+    // The refusal card's one action is the way back to the member's own Runs
+    // (console-view.tsx ViewGate: navigate("/runs"), no request, no write). It
+    // is named and counted; no other primary action is on the page.
+    const back = page.getByRole("button", { name: VIEW_REFUSAL.CTA, exact: true });
+    await expect(back).toHaveCount(1);
+    await expect(tealActions(page).filter({ hasNotText: new RegExp(`^${VIEW_REFUSAL.CTA}$`) })).toHaveCount(0);
   });
 });
 
