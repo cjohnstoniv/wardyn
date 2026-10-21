@@ -12,6 +12,7 @@ import * as React from "react";
 import { myDrives, type MeDrive, type MeDriveCatalogue, type MemberDriveCreate, type MemberDriveCreateReason } from "../../../../../lib/api/me-drives";
 import { MEMBER } from "../../../../../lib/governance-copy";
 import { DRIVE_MEMBER } from "../../../../../lib/user-drives-copy";
+import { mountsFromInSentence } from "../../../../../lib/user-drives-display";
 import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
 import { NR_RUN } from "../../../../wardyn/copy/new-run/run";
 
@@ -23,15 +24,29 @@ const UNAVAILABLE_TEXT: Record<string, string | undefined> = {
   unavailable: DRIVE_MEMBER.NR_UNAVAILABLE,
 };
 
-const DRIVE_REASON: Record<NonNullable<MeDrive["unavailable_reason"]>, string> = {
+const DRIVE_REASON: Record<Exclude<NonNullable<MeDrive["unavailable_reason"]>, "bound_elsewhere">, string> = {
   paused: DRIVE_MEMBER.NR_PAUSED,
   unmountable: DRIVE_MEMBER.NR_UNAVAILABLE,
   placement_denied: NR_RUN.REASON_NOT_ALLOWED_PROFILE,
   not_in_pool: NR_FILES.NOT_IN_POOL,
 };
 
-/** Why one drive cannot be attached; absent when it can. */
-export const driveReason = (d: MeDrive): string | undefined => (d.unavailable_reason ? DRIVE_REASON[d.unavailable_reason] : undefined);
+/**
+ * Why one drive cannot be attached; absent when it can. An organisation drive the pool's runners cannot mount says so
+ * by name (M10): it mounts only from the organisation's runners, or it is bound to a runner this pool does not hold.
+ */
+export const driveReason = (d: MeDrive): string | undefined => {
+  if (d.unavailable_reason === "bound_elsewhere") return DRIVE_MEMBER.NR_BOUND_ELSEWHERE(d.name);
+  if (d.unavailable_reason === "not_in_pool" && d.source !== "personal") return DRIVE_MEMBER.NR_ORG_RUNNERS_ONLY(d.name);
+  return d.unavailable_reason ? DRIVE_REASON[d.unavailable_reason] : undefined;
+};
+
+/** Where an attachable drive mounts from (M10): the runner and path in this pool, else the server's phrase. */
+export const driveMountsLine = (d: MeDrive): string | undefined => {
+  if (d.unavailable_reason) return undefined;
+  if (d.mounted_from) return DRIVE_MEMBER.NR_MOUNTED_FROM(d.mounted_from.runner, d.mounted_from.path);
+  return d.mounts_from ? DRIVE_MEMBER.NR_MOUNTS_FROM(mountsFromInSentence(d.mounts_from)) : undefined;
+};
 
 /**
  * The sentence beside a closed door: the canon string for each reason of the server's closed set. `disabled` is the

@@ -22,7 +22,7 @@ import type { RunIntent } from "../../draft/run-intent";
 import { BranchPicker } from "./branch-picker";
 import { refTextKey } from "./typed-ref";
 import { driveChips, driveKind, driveSharedWith, fileItems, KIND_ORDER, pathError, saveChoice, choiceKey, type FileItem, type FileKind, type ItemChoice, type ItemSources } from "./file-items";
-import { driveReason } from "./file-sources";
+import { driveMountsLine, driveReason } from "./file-sources";
 import { KIND_INFO, KIND_LABEL, KindTile, PathText } from "./kind-visuals";
 import { LockedAccess } from "./locked-access";
 import { COMPUTER_DEFAULT_DIR, ComputerChoose, ComputerMount, setLocalFolder, type ComputerChoice } from "./computer-folder";
@@ -60,6 +60,8 @@ interface PickOption {
   defaultPath?: string;
   locked: boolean;
   reason?: string;
+  /** Where a drive mounts from (M10). */
+  mounts?: string;
   /** A kept work folder: the line naming its run, and whether its size is unenforced (a Docker volume). */
   kept?: { line: string; unenforced: boolean };
   ref?: string;
@@ -130,7 +132,7 @@ function optionsFor(kind: AttachKind, src: ItemSources): PickOption[] {
     key: d.id, name: d.name,
     // A team drive says its access as a chip, either way; any other says only when it is read-only.
     chips: d.team ? [NR_FILES.SOURCE_TEAM, d.writable ? NR_FILES.ACCESS_EDIT : NR_FILES.ACCESS_READ] : [...driveChips(d), ...(d.writable ? [] : [NR_FILES.ACCESS_READ])],
-    shownPath: d.target, defaultPath: d.target, locked: !d.writable, reason: driveReason(d),
+    shownPath: d.target, defaultPath: d.target, locked: !d.writable, reason: driveReason(d), mounts: driveMountsLine(d),
     kept: d.kept_from_run ? { line: d.kept_from_run_title ? NR_FILES.DRIVE_KEPT_FROM(d.kept_from_run_title) : NR_FILES.DRIVE_KEPT_FROM_UNTITLED, unenforced: d.enforcement === "none" } : undefined,
     sharedWith: driveSharedWith(d), othersSee: d.team === true && d.writable,
   }));
@@ -389,6 +391,7 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, computerA
                       </span>
                       {o.kept && <span className="text-xs text-muted-foreground">{o.kept.line}</span>}
                       {o.shownPath && <PathText path={o.shownPath} className="text-muted-foreground" />}
+                      {o.mounts && <span className="text-xs text-muted-foreground" data-testid="nr-drive-mounts">{o.mounts}</span>}
                       {o.sharedWith && <span className="text-xs">{o.sharedWith}</span>}
                       {o.othersSee && <span className="text-xs text-warning">{NR_FILES.TEAM_OTHERS_SEE}</span>}
                       {reason && (

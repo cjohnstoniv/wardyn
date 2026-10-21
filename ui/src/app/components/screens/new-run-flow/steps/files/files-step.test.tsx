@@ -15,6 +15,7 @@ import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { filesPreflight, MAIN_DRIVE_FACTS, REPO_ATTACHMENT, SCENARIO_FILES_WORKSPACES } from "../../../../../lib/new-run-fixtures/scenarios/files";
 import type { RepoBranches } from "../../../../../lib/api/repo-branches";
 import type { MeDrive, MeDriveCatalogue } from "../../../../../lib/api/me-drives";
+import { DRIVE_MEMBER } from "../../../../../lib/user-drives-copy";
 import type { Workspace } from "../../../../../lib/types/workspaces";
 import type { RunIntent } from "../../draft/run-intent";
 import { NewRunDraftProvider, useNewRunDispatch, useNewRunDraft } from "../../new-run-route";
@@ -385,12 +386,29 @@ describe("drives (GET /me/drives)", () => {
     expect(within(c).getByText(NR_FILES.FAMILY_DOCKER_VOLUME)).toBeInTheDocument();
   });
 
+  // M10: the server says where each shared drive mounts from; in a pool holding the runner a share is bound to, it
+  // says that runner and the path there, and a drive bound to another runner is closed with its own sentence.
+  it("says where a shared drive mounts from, the bound runner and path on it, and closes one bound elsewhere", async () => {
+    catalogue = { pool_checked: true, drives: [
+      { ...TEAM_SHARE, name: "team-share", mounts_from: "Organisation runners and mbp-dev", mounted_from: { runner: "mbp-dev", path: "/Volumes/team-share" } },
+      { ...FINANCE, mounts_from: "Organisation runners", unavailable_reason: "bound_elsewhere" },
+      { ...TEAM_SHARE, id: "44444444-4444-4444-8444-444444444444", name: "Docs share", target: "/home/agent/shared/docs", mounts_from: "Organisation runners and mbp-dev" },
+    ] };
+    show(BACKGROUND);
+    await openAdd();
+    await pickType(NR_FILES.KIND_SHARED_DRIVE);
+    const lines = await within(dialog()).findAllByTestId("nr-drive-mounts");
+    expect(lines.map((l) => l.textContent)).toEqual(["Mounted from mbp-dev, at /Volumes/team-share.", "Mounts from organisation runners and mbp-dev."]);
+    expect(within(dialog()).getByRole("radio", { name: /^Finance archive/ })).toBeDisabled();
+    expect(within(dialog()).getByText(DRIVE_MEMBER.NR_BOUND_ELSEWHERE("Finance archive"))).toBeInTheDocument();
+  });
+
   it("offers shared drives with their source and storage, a locked one as read-only by the admin, and one off this pool disabled", async () => {
     show(BACKGROUND);
     await openAdd();
     await pickType(NR_FILES.KIND_SHARED_DRIVE);
     expect(await within(dialog()).findByRole("radio", { name: /^Finance archive/ })).toBeDisabled();
-    expect(within(dialog()).getByText(NR_FILES.NOT_IN_POOL)).toBeInTheDocument();
+    expect(within(dialog()).getByText(DRIVE_MEMBER.NR_ORG_RUNNERS_ONLY("Finance archive"))).toBeInTheDocument();
     expect(within(dialog()).getByRole("button", { name: NR_FILES.CREATE_SHARED_DRIVE })).toBeDisabled();
     await pickSource("Data team share");
     await userEvent.click(dialogButton(/^Continue/));

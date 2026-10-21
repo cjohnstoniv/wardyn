@@ -237,6 +237,37 @@ export const DRIVES = {
   TEAM_CHIP: "Team drive",
   TEAM_ONE_HOST_CHIP: "One host only",
   TEAM_RECLAIM_CELL: "Kept (team drive)",
+  // ---- where a drive mounts from (M10, #113 + #112) ----
+  // COL_MOUNTS_FROM heads the table column and the preview line; both values
+  // are the server's mounts_from, printed as it is.
+  COL_MOUNTS_FROM: "Mounts from",
+  // The label under Backend: never a refusal, only what the backend allows.
+  LABEL_TWO_PLACES: "Can mount from two places",
+  LABEL_TWO_PLACES_BODY:
+    "A share lives outside Wardyn, so the same directories can also be reached from a person's own runner. Add it below.",
+  LABEL_ONE_PLACE: "Mounts from one place",
+  LABEL_ONE_PLACE_DOCKER:
+    "A Wardyn-managed volume lives on this Docker host, so only runs on the organisation's runners can mount it.",
+  LABEL_ONE_PLACE_K8S: "A Wardyn-managed volume lives in this cluster, so only runs on the organisation's runners can mount it.",
+  SECOND_PLACE_SHARE_ONLY: "Only a share can also be reachable from a second place.",
+  SECOND_PLACE_ADD: "Add a second place",
+  SECOND_PLACE_TITLE: "Also reachable from",
+  SECOND_PLACE_REMOVE: "Remove this place",
+  SECOND_PLACE_LEAD:
+    "The same drive and the same directories, mounted from a second place. Each person still sees only their own directory.",
+  FIELD_WHERE: "Where",
+  WHERE_OWN_RUNNER: "A person's own runner",
+  FIELD_RUNNER: "Runner",
+  RUNNER_OPTION: (runner: string) => `${runner} · a person's own runner`,
+  RUNNER_HINT: "Only runs on this runner can mount the drive there. A runner mounts only folders its owner allowed on it.",
+  RUNNER_PLACEHOLDER: "Choose a runner",
+  FIELD_ALT_HOST_ROOT: "Path on that runner",
+  ALT_HOST_ROOT_HINT: "The same share as above, as that runner sees it. Each person's directory is a subdirectory of it.",
+  // Shown only while the second place is being added (overseer ruling).
+  REACH_NOTE: "Binding a drive to a runner lets runs on that runner mount it.",
+  // The server's save refusal (internal/api/user_drives_second_place.go), wire text.
+  SECOND_PLACE_REFUSED: (name: string) =>
+    `user_drives: "${name}": the second place must also be a share, and somewhere the first is not`,
   SAVE_CTA: "Save drive",
   SAVE_ERROR: "Couldn't save this drive.",
   // SAVE_REFUSED_TITLE heads every 400 the editor can meet, over the server's
@@ -444,6 +475,16 @@ export const DRIVE_MEMBER = {
   GS_DRIVE_CHIP: (name: string, size: string, mode: string) => `Drive · ${name}, ${size}, ${mode}`,
   GS_DRIVE_CHIP_NOSIZE: (name: string, mode: string) => `Drive · ${name}, ${mode}`,
   GS_DRIVE_CHIP_PAUSED: (name: string) => `Drive · ${name} · Paused`,
+  // ---- where a drive mounts from (M10) ----
+  // {where} is the server's mounts_from with its first letter lowered for the
+  // sentence; {runner} and {path} are its mounted_from.
+  GS_MOUNTS_FROM: (where: string) => `Mounts from ${where}`,
+  NR_MOUNTS_FROM: (where: string) => `Mounts from ${where}.`,
+  NR_MOUNTED_FROM: (runner: string, path: string) => `Mounted from ${runner}, at ${path}.`,
+  NR_ORG_RUNNERS_ONLY: (name: string) =>
+    `"${name}" mounts only from the organisation's runners. Choose an organisation pool to mount it, or launch without it.`,
+  NR_BOUND_ELSEWHERE: (name: string) =>
+    `"${name}" is bound to a different runner. Choose an organisation pool to mount it, or launch without it.`,
   // Renders in the "Add your workspace" card, after WORKSPACE_BODY, only when
   // /me.user_drive is non-null.
   GS_DRIVE_BODY:

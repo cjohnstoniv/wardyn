@@ -259,6 +259,7 @@ export function DrivesScreen() {
                       <TableRow className="hover:bg-transparent">
                         <TableHead>{DRIVES.COL_NAME}</TableHead>
                         <TableHead>{DRIVES.COL_BACKEND}</TableHead>
+                        <TableHead>{DRIVES.COL_MOUNTS_FROM}</TableHead>
                         <TableHead>{DRIVES.COL_SIZE}</TableHead>
                         <TableHead>{DRIVES.COL_MODE}</TableHead>
                         <TableHead>{DRIVES.COL_RECLAIM}</TableHead>
@@ -294,6 +295,8 @@ export function DrivesScreen() {
                               {team && d.single_host && <Chip tone="warning">{DRIVES.TEAM_ONE_HOST_CHIP}</Chip>}
                             </span>
                           </TableCell>
+                          {/* The server's phrase, as it is (M10): the console names no runner itself. */}
+                          <TableCell data-testid="drives-mounts-from">{d.mounts_from}</TableCell>
                           <TableCell>
                             {sizeText(d.size_mib)}
                             {/* The gloss on every number, not only in the note. */}

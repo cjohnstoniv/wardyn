@@ -11,7 +11,7 @@ import { asJson, errText, HttpError, unwrapList, wfetch } from "./core";
 
 export type MeDriveSection = "user" | "shared";
 export type MeDriveSource = "personal" | "team" | "organisation";
-export type MeDriveUnavailableReason = "paused" | "unmountable" | "placement_denied" | "not_in_pool";
+export type MeDriveUnavailableReason = "paused" | "unmountable" | "placement_denied" | "not_in_pool" | "bound_elsewhere";
 
 /** One drive of the caller's catalogue (pkg/client.MeDrive). */
 export interface MeDrive {
@@ -38,6 +38,10 @@ export interface MeDrive {
   kept_from_run?: string;
   /** That run's title when the catalogue was read; absent when the run is gone or untitled. */
   kept_from_run_title?: string;
+  /** Where it mounts from, printed as it is (M10): "Organisation runners", and the bound runner when you own it. */
+  mounts_from?: string;
+  /** Set when the pool asked about holds the runner this drive is bound to: that runner, and its path there. */
+  mounted_from?: { runner: string; path: string };
 }
 
 /** GET /me/drives (pkg/client.MeDriveCatalogue). */

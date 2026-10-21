@@ -62,7 +62,7 @@ import { sshKeys as sshKeysApi } from "../../../lib/api/ssh-keys";
 import { useWorkspaceList } from "../../../lib/use-workspace-list";
 import { MEMBER } from "../../../lib/governance-copy";
 import { DRIVE_MEMBER } from "../../../lib/user-drives-copy";
-import { driveModeWord, driveSizeLabel } from "../../../lib/user-drives-display";
+import { driveModeWord, driveSizeLabel, mountsFromInSentence } from "../../../lib/user-drives-display";
 import { MEMBER_WORKSPACE } from "../../../lib/permissions-copy";
 import { EPISODES } from "../../../lib/demo-videos";
 import { EpisodeRow } from "./episode-card";
@@ -381,6 +381,12 @@ export function MemberGettingStarted() {
                     deployment, not a success. Absent when nothing is
                     allocated — no chip, no placeholder. */}
                 {userDrive && <Chip tone="neutral">{driveChipLabel(userDrive)}</Chip>}
+                {/* M10: where the drive mounts from, the server's phrase in the sentence. */}
+                {userDrive?.mounts_from && !userDrive.paused && (
+                  <span className="text-xs text-muted-foreground" data-testid="gs-drive-mounts-from">
+                    {DRIVE_MEMBER.GS_MOUNTS_FROM(mountsFromInSentence(userDrive.mounts_from))}
+                  </span>
+                )}
               </div>
               {/* #386: `not_configured`'s cause line + CONNECT_ADO — the fallback
                   states only (§2.2/§7.5); `live` (every source) and
