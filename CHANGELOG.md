@@ -10,6 +10,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 A small release on top of 0.9.6. An Azure DevOps token that the organisation mints for a run can now be delivered to a person's own runner, off by default, and a credential delivery write that the server could not build is refused when it is made. No migration.
 
+### Security
+
+- **Go 1.26.10.** The toolchain pin moves from go1.26.9, fixing a `crypto/x509` certificate verification advisory (GO-2026-6809). `make govulncheck` reports none.
+
 ### Added
 
 - An Azure DevOps connection with `token_mode: minted_pat` can now run on a person's own runner. Before, the run was refused at create. It is off by default and needs all three: a delivery policy that sends `ado_minted_pat` as `runner_resident` to the runner's trust class (a security admin's change, held for a second person under `WARDYN_GOVERNANCE_SECOND_HUMAN`), the connection's `entra.runner_resident` opt-in, and a runner of that trust class owned by a person.
