@@ -178,3 +178,44 @@ func TestPG_DriveSecondPlace_OrganisationRunnersMountTheFirstPlace(t *testing.T)
 		})
 	}
 }
+
+// In a pool holding her own runner and a remote-hosted one, a share bound to her runner holds the run to that
+// runner: it is placed there and mounts the second place, never sent to the remote-hosted runner.
+func TestPG_DriveSecondPlace_MixedPoolKeepsTheBoundRunner(t *testing.T) {
+	e := newPlacementEnv(t)
+	ctx := context.Background()
+	e.srv.cfg.RunnerTarget = "docker"
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "alice"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	e.srv.cfg.UserDriveHostRoots = []string{root}
+	pool, laptop := e.mixedPool("Mixed")
+	e.stream(laptop, types.CC1, types.CC2, types.CC3)
+	d := driveFixture(func(d *types.UserDrive) {
+		d.Name, d.Backend, d.HostRoot, d.HomeTemplate, d.SizeMiB = "team-share", types.DriveBackendHostPath, root, types.HomeTemplateSub, 0
+		d.AltBackend, d.AltHostRoot, d.AltRunnerID = types.DriveBackendHostPath, "/srv/dev/work/team", &laptop
+	})
+	drive, err := e.pg.UpsertUserDrive(ctx, *d, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.pg.UpsertUserDriveGrant(ctx, *grantFixture(drive.ID, func(g *types.UserDriveGrant) { g.Subject, g.HomeOverride = e.personP, "alice" }), true); err != nil {
+		t.Fatal(err)
+	}
+	w := e.call(e.person, http.MethodPost, "/api/v1/runs", runBody(`"drives":[{"drive_id":"`+drive.ID.String()+`"}],"runner_pool_id":"`+pool.ID.String()+`"`))
+	var out struct {
+		ID uuid.UUID `json:"id"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &out)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("launch = %d %s", w.Code, w.Body)
+	}
+	run, err := e.pg.GetRun(ctx, out.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Placement != types.PlacementLocal || run.RunnerID == nil || *run.RunnerID != laptop {
+		t.Fatalf("run placed %s on runner %v executor %q, want her laptop %s", run.Placement, run.RunnerID, run.RunnerPoolExecutor, laptop)
+	}
+}
