@@ -3057,7 +3057,9 @@ exactly these terms.
 
 - The proxy holds the key and signs only an SSH sign-in for it (`isUserauthRequest`, [`internal/egress/proxy/ssh_agent.go`](../internal/egress/proxy/ssh_agent.go)); `ssh` reaches it through a per-command socket from `wardyn-git-helper ssh-exec`.
 - The mint route withholds any `ssh_key` answer, the broker issues it once per run (`checkedMintRow`), and `close_ssh_agent` closes the agent after the clone.
-- Residual: until that close, a sandbox process can have the proxy sign a sign-in with it. An image that never closes it leaves that open for the run.
+- A host-bound sign-in must name a grant known_hosts or `pinnedSSHHostKeys` key; GitHub signs only host-bound. While a key is held, a CONNECT tunnel either side opens with an SSH identification goes only to grant endpoints.
+- Residual: Azure DevOps's plain sign-in names no host; that tunnel bound misses TLS-wrapped SSH and pre-banner lines.
+- Residual: until that close (all run, if an image skips it), sandbox code can have the proxy sign one.
 
 **Where this table is now stated to the person launching the run.**
 

@@ -79,6 +79,7 @@
 # threatmodel/THREAT-MODEL.md 65106 adds 17 over 65089, measured (OC-API1a): residual #25 gains the non-Linux env-as-code root re-check sentence.
 # threatmodel/THREAT-MODEL.md 65125 adds 19 over 65106, measured (OC-API1a review): the residual #25 line names the env-as-code write and the hosts without /proc/self/fd.
 # threatmodel/THREAT-MODEL.md 67959 = ours 67923 + theirs 65125 - base 65089 at the 0.10 W4c merge of OC-API1a 0f92145af onto the train.
-threatmodel/THREAT-MODEL.md=67959 share=20
+# threatmodel/THREAT-MODEL.md 68002 adds 43 at the 0.10 W4c merge of SEC-2e bf1448a14 onto the train, measured: the lane head measured 66573 against its own 66530 budget.
+threatmodel/THREAT-MODEL.md=68002 share=20
 # threatmodel/THREAT-MODEL.md 63171 adds 78 over 63093, measured: the console session under the role-stamp residual: renewal up to its cap, never moving the sign-in time, and the copied-cookie bound (0.9.3 console session lifetime).
 # threatmodel/THREAT-MODEL.md 63025 = 62948 + 77, measured: the laptop decision-sink crossing row and #77's sink and loss-row bullets.

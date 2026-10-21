@@ -964,6 +964,24 @@ func TestInternalMintForGrant(t *testing.T) {
 	}
 }
 
+// An ssh_key mint names its grant's SSH host, which the proxy's ssh agent
+// signs in to only; another kind's answer names none.
+func TestInternalMintSSHKeyNamesItsHost(t *testing.T) {
+	h := newHarness(t)
+	tok := h.mintRunToken(t, uuid.New())
+	for _, tc := range []struct {
+		kind types.GrantKind
+		want string
+	}{{types.GrantSSHKey, "github.com"}, {types.GrantGitPAT, ""}} {
+		h.broker.minted = broker.Minted{Kind: tc.kind, JTI: "jti-1", Token: "value", Metadata: map[string]string{"host": "github.com"}}
+		w := do(t, h.srv, http.MethodPost, "/api/v1/internal/credentials/mint", tok, `{"grant_id":"`+uuid.New().String()+`"}`)
+		var resp mintResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || w.Code != http.StatusOK || resp.Host != tc.want {
+			t.Errorf("%s mint: %d %+v (%v), want host %q", tc.kind, w.Code, resp, err, tc.want)
+		}
+	}
+}
+
 func TestInternalMintApprovalPending(t *testing.T) {
 	h := newHarness(t)
 	tok := h.mintRunToken(t, uuid.New())

@@ -30,6 +30,8 @@ type ResidentMint struct {
 	KnownHosts string          `json:"known_hosts,omitempty"`
 	Token      string          `json:"token"`
 	ExpiresAt  time.Time       `json:"expires_at"`
+	// Host is an ssh_key grant's SSH host: the agent signs in to it only.
+	Host string `json:"host,omitempty"`
 }
 
 // validResidentMints refuses a resident_mints entry with no grant, a kind

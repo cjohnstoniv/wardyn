@@ -45,7 +45,9 @@ const (
 // and git and the real wardyn-git-helper as GIT_SSH_COMMAND, signing in
 // through this proxy's ssh agent: the clone succeeds for an ed25519 and an RSA
 // grant, no file the sandbox user can write holds either key, the raw mint
-// relay hands no key back, and once the agent is closed a clone fails.
+// relay hands no key back, and once the agent is closed a clone fails. The
+// stand-in server offers only the plain sign-in, so those grants name Azure
+// DevOps, and a GitHub grant's clone fails: its sign-in must be host-bound.
 func TestSSHAgent_DockerClone(t *testing.T) {
 	if os.Getenv(sshAgentInContainerEnv) == "1" {
 		sshAgentCloneInContainer(t)
@@ -94,11 +96,12 @@ func sshAgentCloneInContainer(t *testing.T) {
 	t.Setenv("HOME", home)
 	repo := sshCloneSeedRepo(t, work)
 
-	// Two throwaway keys, minted once each by a stand-in control plane.
-	edGrant, rsaGrant := uuid.New(), uuid.New()
+	// Three throwaway keys, minted once each by a stand-in control plane.
+	edGrant, rsaGrant, ghGrant := uuid.New(), uuid.New(), uuid.New()
 	keys := map[uuid.UUID]string{}
+	hosts := map[uuid.UUID]string{edGrant: "dev.azure.com", rsaGrant: "dev.azure.com", ghGrant: "github.com"}
 	pubs := map[string]bool{}
-	for grant, rsaKey := range map[uuid.UUID]bool{edGrant: false, rsaGrant: true} {
+	for grant, rsaKey := range map[uuid.UUID]bool{edGrant: false, rsaGrant: true, ghGrant: false} {
 		pemKey, pub := testSSHKey(t, rsaKey)
 		keys[grant], pubs[string(pub.Marshal())] = pemKey, true
 	}
@@ -112,7 +115,7 @@ func sshAgentCloneInContainer(t *testing.T) {
 			GrantID uuid.UUID `json:"grant_id"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
-		_ = json.NewEncoder(w).Encode(map[string]string{"kind": "ssh_key", "token": keys[req.GrantID], "username": "git", "known_hosts": knownHostsLine + "\n"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"kind": "ssh_key", "token": keys[req.GrantID], "username": "git", "known_hosts": knownHostsLine + "\n", "host": hosts[req.GrantID]})
 	}))
 	t.Cleanup(cp.Close)
 	p := newProxy(Options{
@@ -153,7 +156,18 @@ func sshAgentCloneInContainer(t *testing.T) {
 			t.Fatalf("cloned README = %q", got)
 		}
 	}
-	if n := mints.Load(); n != 2 {
+	if out, err := clone(ghGrant, filepath.Join(work, "clone-github")); err == nil {
+		t.Fatalf("a GitHub grant's plain sign-in was signed:\n%s", out)
+	}
+	hostRefused := false
+	for len(p.sink.ch) > 0 {
+		d := <-p.sink.ch
+		hostRefused = hostRefused || (d.Decision == egress.Deny && d.Cause == errSSHAgentHost.Error())
+	}
+	if !hostRefused {
+		t.Fatalf("the GitHub grant's clone failed with no deny saying %q", errSSHAgentHost)
+	}
+	if n := mints.Load(); n != 3 {
 		t.Fatalf("control-plane mints = %d, want one per grant", n)
 	}
 

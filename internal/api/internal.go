@@ -629,4 +629,7 @@ type mintResponse struct {
 	// ssh_key grant (empty otherwise; agent-run falls back to the image-baked
 	// /etc/ssh/ssh_known_hosts). Public host-key data, not a secret.
 	KnownHosts string `json:"known_hosts,omitempty"`
+	// Host is an ssh_key grant's SSH host, which the proxy's ssh agent signs
+	// in to only (empty otherwise).
+	Host string `json:"host,omitempty"`
 }
