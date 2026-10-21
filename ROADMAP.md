@@ -50,6 +50,7 @@
 | **v0.9.4** | A stability and honesty release: runner and output-recovery fixes, hardening of credential erasure, stored secrets and member drives, a console polish pass, and corrected credential-claims text. | **Shipped (pre-alpha)** — `v0.9.4`, 2026-10-19 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.9.5** | A fix release: the sign-in dialog's code and steps, sign-in refusal reasons, setup status and teardown audit detail. | **Shipped (pre-alpha)** — `v0.9.5`, 2026-10-19 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.9.6** | A fix release: own Azure DevOps tokens on a person's own runner, clearer refusals, runner connection diagnostics, recordings without typed input. | **Shipped (pre-alpha)** — `v0.9.6`, 2026-10-20 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.9.7** | A fix release: minted Azure DevOps tokens on a person's own runner, and credential delivery writes the server cannot build are refused. | **Shipped (pre-alpha)** — `v0.9.7`, 2026-10-20 (see [CHANGELOG.md](CHANGELOG.md)) |
 
 ## Shipped detail
 
