@@ -468,16 +468,24 @@ func TestFinalizeRunEffects_AFolderPassPastTheCallersDeadlineLeavesTeardownItsTi
 	assertFolderBackTornDown(t, cs, audit, run, sb)
 }
 
-// A caller's ctx cancelled during the pass back still gets the sandbox stopped and the pass's
-// outcome recorded; the caller hears its ctx ended (#3466).
+// A caller's ctx cancelled before finalize, or during the pass back, still gets the sandbox
+// stopped and the pass's outcome recorded and audited; the caller hears its ctx ended (#3466).
 func TestFinalizeRunEffects_TeardownRunsAfterTheCallersCtxIsCancelled(t *testing.T) {
-	s, cs, audit, run, sb := hangingFolderBack(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	time.AfterFunc(200*time.Millisecond, cancel)
-	if err := s.finalizeRunEffects(ctx, run.ID, "sbx", "run.complete", nil, false, false); !errors.Is(err, context.Canceled) {
-		t.Errorf("finalize = %v, want the caller's cancel", err)
+	for name, after := range map[string]time.Duration{"before finalize": 0, "during the pass back": 200 * time.Millisecond} {
+		t.Run(name, func(t *testing.T) {
+			s, cs, audit, run, sb := hangingFolderBack(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			if after == 0 {
+				cancel()
+			} else {
+				time.AfterFunc(after, cancel)
+			}
+			if err := s.finalizeRunEffects(ctx, run.ID, "sbx", "run.complete", nil, false, false); !errors.Is(err, context.Canceled) {
+				t.Errorf("finalize = %v, want the caller's cancel", err)
+			}
+			assertFolderBackTornDown(t, cs, audit, run, sb)
+		})
 	}
-	assertFolderBackTornDown(t, cs, audit, run, sb)
 }
 
 // findAuditData is the first run event of action whose data holds want.
