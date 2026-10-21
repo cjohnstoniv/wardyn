@@ -172,7 +172,8 @@ func newQueuedStart(base, prep context.Context, p store.PromotedRun) (*queuedSta
 func (st *queuedStart) bind(a queueAuthority) error {
 	st.auth = a
 	st.base = a.context(st.daemon)
-	st.ctx = withPromotedStart(withCeilingMemo(withCapBatch(a.context(st.prep))), st.run.ID, st.run.RunnerID, st.run.RunnerPoolExecutor, st.launch.NoLocal)
+	choice := contextChoice{RunIn: st.launch.RunIn, OwningUnits: st.launch.OwningUnits}
+	st.ctx = withPromotedStart(withCeilingMemo(withCapBatch(withContextChoice(a.context(st.prep), choice))), st.run.ID, st.run.RunnerID, st.run.RunnerPoolExecutor, st.launch.NoLocal)
 	r, err := http.NewRequestWithContext(st.ctx, http.MethodPost, "/api/v1/runs", nil)
 	if err != nil {
 		return err

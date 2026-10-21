@@ -78,8 +78,12 @@ type queuedLaunch struct {
 	// Request is the decoded, validated request before the fold changed it (a workspace's base image or
 	// repo seeded onto it, say), so the start folds it afresh as the owner.
 	Request json.RawMessage `json:"request"`
-	// ProfileID is the governance profile the owner resolved to at launch; nil for none.
+	// UnitID is the unit the owner's run context resolved to at launch; nil for the Default unit.
 	UnitID *uuid.UUID `json:"unit_id,omitempty"`
+	// RunIn and OwningUnits are the launch's context choice (contextChoice), re-stamped on the start
+	// so its resolve selects the context the launch did, and sameUnit compares like with like.
+	RunIn       uuid.UUID   `json:"run_in,omitzero"`
+	OwningUnits []uuid.UUID `json:"owning_units,omitempty"`
 	// ProviderID is the model provider the launch chose; the start re-resolves this one, never another.
 	ProviderID string `json:"provider_id,omitempty"`
 	// ConfinementDefault says who chose the class of a launch that named none (the organisation or the
@@ -318,6 +322,8 @@ func (q queuedCreate) entry(s *Server, ctx context.Context, waitSec int) (store.
 		id := q.f.ceiling.Unit.ID
 		launch.UnitID = &id
 	}
+	choice := contextChoiceFrom(ctx)
+	launch.RunIn, launch.OwningUnits = choice.RunIn, choice.OwningUnits
 	raw, err := json.Marshal(launch)
 	if err != nil {
 		return store.RunQueueEntry{}, err
