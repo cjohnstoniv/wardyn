@@ -38,6 +38,7 @@ const (
 	// computerFolderListTimeout bounds one browse call, the runner's counting included.
 	computerFolderListTimeout = 10 * time.Second
 	// computerFolderBackTimeout bounds the pass that brings changes back, which holds the teardown.
+	// A caller with a nearer deadline gets less (bringComputerFolderBack).
 	computerFolderBackTimeout = 2 * time.Minute
 )
 
@@ -183,7 +184,9 @@ func (s *Server) seedComputerFolder(ctx context.Context, run types.AgentRun, fol
 
 // bringComputerFolderBack is the pass that brings the sandbox's changes back to the person's
 // computer when a "both" run ends: after the revoke cascade, before the sandbox is stopped. A run
-// whose folder never seeded, or that has no such folder, is left alone.
+// whose folder never seeded, or that has no such folder, is left alone. The pass ends
+// runTeardownBudget before ctx's deadline, so the teardown after it keeps its time, and its
+// outcome is recorded on teardownCtx, which outlives ctx's deadline and cancel.
 func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, ref string) {
 	st, ok := s.cfg.Store.(store.RunLocalFolders)
 	if !ok || ref == "" {
@@ -198,16 +201,27 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 		return
 	}
 	run.SandboxRef = ref
-	res, errText := s.computerFolderPassWithin(ctx, computerFolderBackTimeout, run, *folder, true)
-	s.recordComputerFolderPass(ctx, runID, func(st *types.RunLocalFolderStatus) { st.Back = folderPassRecord(s.cfg.Now(), res, errText, true) })
-	s.auditComputerFolderPass(ctx, runID, *folder, true, res, errText)
+	d := computerFolderBackTimeout
+	if dl, ok := ctx.Deadline(); ok {
+		d = min(d, time.Until(dl)-runTeardownBudget)
+	}
+	res, errText := s.computerFolderPassWithin(ctx, d, run, *folder, true)
+	rctx, cancel := teardownCtx(ctx)
+	defer cancel()
+	s.recordComputerFolderPass(rctx, runID, func(st *types.RunLocalFolderStatus) { st.Back = folderPassRecord(s.cfg.Now(), res, errText, true) })
+	s.auditComputerFolderPass(rctx, runID, *folder, true, res, errText)
 }
 
-// computerFolderPassWithin is computerFolderPass under its own deadline of d, derived from ctx, so
-// the caller records the outcome on ctx whether or not the pass ran out of time.
+// computerFolderPassWithin is computerFolderPass under a deadline of d derived from ctx: the pass
+// ends by d, or by ctx's own deadline or cancel when that comes first. A pass with no time left
+// does not start. The caller records the outcome: the seed on ctx (seedComputerFolder), the pass
+// back on teardownCtx, since a finalizing caller's ctx can end before d does (#3466).
 func (s *Server) computerFolderPassWithin(ctx context.Context, d time.Duration, run types.AgentRun, folder types.RunLocalFolder, pull bool) (runnerwire.FolderPass, string) {
 	passCtx, cancel := context.WithTimeout(ctx, d)
 	defer cancel()
+	if err := passCtx.Err(); err != nil {
+		return runnerwire.FolderPass{}, "no time was left for the sync: " + err.Error()
+	}
 	res, err := s.computerFolderPass(passCtx, run, folder, pull)
 	if err != nil {
 		return res, err.Error()

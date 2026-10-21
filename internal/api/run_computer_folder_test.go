@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -216,9 +217,13 @@ func (r *folderSandboxRunner) ExecStream(_ context.Context, _ string, spec runne
 	}, nil
 }
 
+// StopSandbox fails on a done ctx, as the Docker client does.
 func (r *folderSandboxRunner) StopSandbox(ctx context.Context, ref string) error {
 	if r.stopped != nil {
 		r.stopped()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	return r.execCountRunner.StopSandbox(ctx, ref)
 }
@@ -414,6 +419,65 @@ func TestSeedComputerFolder_APassThatTimesOutIsStillRecorded(t *testing.T) {
 	if ev == nil || !strings.Contains(string(ev.Data), `"direction":"seed"`) {
 		t.Fatalf("the timed-out pass is not audited: %v", ev)
 	}
+}
+
+// hangingFolderBack is a "both" run whose folder seeded and whose pass back never finishes.
+func hangingFolderBack(t *testing.T) (*Server, *computerFolderStore, *recRecorder, types.AgentRun, *folderSandboxRunner) {
+	t.Helper()
+	s, cs, audit, run, sb, _ := computerFolderFixture(t, types.ComputerFolderBoth)
+	if !s.holdForLocalFolder(context.Background(), run, "sbx") {
+		t.Fatal(cs.FailureHint())
+	}
+	sb.hang = true
+	return s, cs, audit, run, sb
+}
+
+// assertFolderBackTornDown checks the sandbox was stopped and the pass back recorded and audited.
+func assertFolderBackTornDown(t *testing.T, cs *computerFolderStore, audit *recRecorder, run types.AgentRun, sb *folderSandboxRunner) {
+	t.Helper()
+	if n := sb.stopCount(); n != 1 {
+		t.Errorf("StopSandbox succeeded %d times, want 1", n)
+	}
+	if ev := findAudit(audit.snapshot(), run.ID, "run.complete", "failure"); ev != nil {
+		t.Errorf("the teardown failed: %s", ev.Data)
+	}
+	cs.smu.Lock()
+	back := cs.status.Back
+	cs.smu.Unlock()
+	if back == nil || back.Error == "" {
+		t.Errorf("back record = %+v, want the cut-short pass with its error", back)
+	}
+	if ev := findAuditData(audit.snapshot(), run.ID, "run.folder.transfer", `"direction":"back"`); ev == nil || ev.Outcome != "failure" {
+		t.Errorf("the cut-short pass back is not audited: %v", ev)
+	}
+}
+
+// A pass back that would outlast the caller's deadline ends runTeardownBudget before it, so
+// the teardown still runs inside the caller's bound (#3466).
+func TestFinalizeRunEffects_AFolderPassPastTheCallersDeadlineLeavesTeardownItsTime(t *testing.T) {
+	s, cs, audit, run, sb := hangingFolderBack(t)
+	ctx, cancel := context.WithTimeout(context.Background(), runTeardownBudget+300*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if err := s.finalizeRunEffects(ctx, run.ID, "sbx", "run.complete", nil, false, false); err != nil {
+		t.Errorf("finalize: %v", err)
+	}
+	if took := time.Since(start); took >= runTeardownBudget {
+		t.Errorf("finalize took %s: the pass back used the teardown's time", took)
+	}
+	assertFolderBackTornDown(t, cs, audit, run, sb)
+}
+
+// A caller's ctx cancelled during the pass back still gets the sandbox stopped and the pass's
+// outcome recorded; the caller hears its ctx ended (#3466).
+func TestFinalizeRunEffects_TeardownRunsAfterTheCallersCtxIsCancelled(t *testing.T) {
+	s, cs, audit, run, sb := hangingFolderBack(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(200*time.Millisecond, cancel)
+	if err := s.finalizeRunEffects(ctx, run.ID, "sbx", "run.complete", nil, false, false); !errors.Is(err, context.Canceled) {
+		t.Errorf("finalize = %v, want the caller's cancel", err)
+	}
+	assertFolderBackTornDown(t, cs, audit, run, sb)
 }
 
 // findAuditData is the first run event of action whose data holds want.
