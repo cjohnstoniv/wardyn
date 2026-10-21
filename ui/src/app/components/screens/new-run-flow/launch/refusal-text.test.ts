@@ -5,6 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import { HttpError } from "../../../../lib/api/core";
+import { scheduleDaysAhead } from "../../../../lib/schedule";
 import { SCHEDULE_REASONS, SCHEDULE_REFUSAL } from "../../../../lib/schedule-refusals";
 import { NR_RUN } from "../../../wardyn/copy/new-run/run";
 import { refusalText } from "./refusal-text";
