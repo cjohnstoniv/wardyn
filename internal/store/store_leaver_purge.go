@@ -5,6 +5,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -13,6 +14,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // The store half of a purge: the tombstone mark, the two candidate reads the purge sweeper makes, and
@@ -163,8 +166,14 @@ func (s PG) DeleteUserSubjectRows(ctx context.Context, id uuid.UUID, principals,
 		return UserSubjectRowsDeleted{}, fmt.Errorf("store: delete user assignments: %w", err)
 	}
 	out.Assignments = tag.RowsAffected()
-	if out.PoolsNarrowed, out.PoolsEmptied, err = stripRunnerPoolUseSubjects(ctx, tx, subjects); err != nil {
+	if out.Pools, err = stripRunnerPoolUseSubjects(ctx, tx, subjects); err != nil {
 		return UserSubjectRowsDeleted{}, err
+	}
+	out.PoolsNarrowed = int64(len(out.Pools))
+	for _, p := range out.Pools {
+		if len(p.Subjects) == 0 {
+			out.PoolsEmptied++
+		}
 	}
 	if err = stripRemoteRunnerPeopleSubjects(ctx, tx, subjects); err != nil {
 		return UserSubjectRowsDeleted{}, err
@@ -185,18 +194,20 @@ func (s PG) DeleteUserSubjectRows(ctx context.Context, id uuid.UUID, principals,
 
 // UserSubjectRowsDeleted is what DeleteUserSubjectRows changed: the grants and assignments deleted, the
 // email-keyed rows kept, and the runner pools whose use policy lost a subject, of which PoolsEmptied
-// were left with none and so permit nobody until an administrator acts.
+// were left with none and so permit nobody until an administrator acts. Pools is those policies as the
+// purge left them, in pool id order: what was taken out is not kept, since it is the leaver's own name.
 type UserSubjectRowsDeleted struct {
 	Grants, Assignments, Kept   int64
 	PoolsNarrowed, PoolsEmptied int64
+	Pools                       []types.RunnerPoolUsePolicy
 }
 
 // stripRunnerPoolUseSubjects removes the user subjects (lower-cased forms) from every pool use policy
 // and raises each changed pool's revision, locking the pools in id order so two purges cannot deadlock.
 // The policy row is never deleted: a policy narrows a pool, so
 // deleting it would open the pool to everyone, while a list emptied by the purge permits nobody until
-// an administrator replaces or clears it. It says how many policies changed, and how many of them it emptied.
-func stripRunnerPoolUseSubjects(ctx context.Context, q Querier, subjects []string) (narrowed, emptied int64, err error) {
+// an administrator replaces or clears it. It returns each changed policy as it now stands, in pool id order.
+func stripRunnerPoolUseSubjects(ctx context.Context, q Querier, subjects []string) ([]types.RunnerPoolUsePolicy, error) {
 	const stmt = `
 		WITH hit AS MATERIALIZED (
 			SELECT p.id AS pool_id FROM runner_pools p WHERE EXISTS (
@@ -213,12 +224,16 @@ func stripRunnerPoolUseSubjects(ctx context.Context, q Querier, subjects []strin
 			                         WHERE NOT (e->>'subject_type' = 'user' AND lower(e->>'subject') = ANY($1::text[]))), '[]'::jsonb),
 			    revision = bumped.revision, updated_by = 'leaver purge', updated_at = now()
 			FROM bumped WHERE u.pool_id = bumped.id
-			RETURNING u.subjects = '[]'::jsonb AS emptied)
-		SELECT count(*), count(*) FILTER (WHERE emptied) FROM stripped`
-	if err := q.QueryRow(ctx, stmt, subjects).Scan(&narrowed, &emptied); err != nil {
-		return 0, 0, fmt.Errorf("store: strip runner pool use policy subjects: %w", err)
-	}
-	return narrowed, emptied, nil
+			RETURNING u.pool_id, u.subjects, u.revision, u.updated_at, u.updated_by)
+		SELECT pool_id, subjects, revision, updated_at, updated_by FROM stripped ORDER BY pool_id`
+	return collect(ctx, q, "strip", "runner pool use policy subjects", stmt, []any{subjects}, func(r pgx.Row) (types.RunnerPoolUsePolicy, error) {
+		var pol types.RunnerPoolUsePolicy
+		var raw []byte
+		if err := r.Scan(&pol.PoolID, &raw, &pol.Revision, &pol.UpdatedAt, &pol.UpdatedBy); err != nil {
+			return pol, err
+		}
+		return pol, json.Unmarshal(raw, &pol.Subjects)
+	})
 }
 
 // stripRemoteRunnerPeopleSubjects removes the user subjects (lower-cased forms) from every remote-hosted

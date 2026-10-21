@@ -56,6 +56,7 @@ type scimCovStore struct {
 	assignDeleted int64
 	poolsNarrowed int64
 	poolsEmptied  int64
+	pools         []types.RunnerPoolUsePolicy
 
 	// fails is how many more calls of a method fail (negative: every call); failErr is what they answer.
 	fails   map[string]int
@@ -706,7 +707,7 @@ func (s *scimCovStore) DeleteUserSubjectRows(_ context.Context, _ uuid.UUID, pri
 	if err := s.enter("DeleteUserSubjectRows"); err != nil {
 		return store.UserSubjectRowsDeleted{}, err
 	}
-	return store.UserSubjectRowsDeleted{Grants: s.grantsDeleted, Assignments: s.assignDeleted, PoolsNarrowed: s.poolsNarrowed, PoolsEmptied: s.poolsEmptied}, nil
+	return store.UserSubjectRowsDeleted{Grants: s.grantsDeleted, Assignments: s.assignDeleted, PoolsNarrowed: s.poolsNarrowed, PoolsEmptied: s.poolsEmptied, Pools: s.pools}, nil
 }
 
 // HeldEmails: no other principal holds an address in this fake.
