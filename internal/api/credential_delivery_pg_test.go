@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -358,5 +359,57 @@ func TestCredentialDeliveryWrite_ApprovalOfAnUnbuildableHeldChangeIsRefused(t *t
 	}
 	if got := e.changeState(held.ID); got != string(types.GovernanceChangePending) {
 		t.Errorf("change state = %q, want it still pending", got)
+	}
+}
+
+// GET lists the stored rows the server cannot build (a class, or a class under a trust class) as unbuildable,
+// each with what it can build, and omits the field for a buildable document. The document is left as stored.
+func TestCredentialDeliveryGET_ListsStoredUnbuildableRows(t *testing.T) {
+	e := newGovEnv(t)
+	get := func() (string, []placement.UnbuildableRow) {
+		t.Helper()
+		w := e.call(e.alice, http.MethodGet, credentialDeliveryPath, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET = %d %s", w.Code, w.Body)
+		}
+		var resp struct {
+			Unbuildable []placement.UnbuildableRow `json:"unbuildable"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		return w.Body.String(), resp.Unbuildable
+	}
+	seed := func(doc string) {
+		t.Helper()
+		if _, err := e.pg.PutCredentialDeliveryPolicy(context.Background(), json.RawMessage(doc), "seed", time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	seed(`{"classes":{"api_key":{"mode":"via_org"},"ado_minted_pat":{"mode":"runner_resident"}}}`)
+	if body, rows := get(); len(rows) != 0 || strings.Contains(body, `"unbuildable"`) {
+		t.Errorf("buildable document: unbuildable = %+v in %s, want the field absent", rows, body)
+	}
+
+	const stored = `{"classes":{"api_key":{"mode":"via_org"},"git_pat_broker":{"mode":"runner_resident"}},"by_trust":{"personal":{"classes":{"bedrock_role_credentials":{"mode":"runner_resident"}}}}}`
+	seed(stored)
+	_, rows := get()
+	want := []placement.UnbuildableRow{
+		{Class: placement.ClassGitPATBroker, Mode: placement.ModeRunnerResident, BuildableModes: []placement.Mode{placement.ModeRefuse}},
+		{Class: placement.ClassBedrockRoleCreds, TrustClass: types.RunnerTrustPersonal, Mode: placement.ModeRunnerResident, BuildableModes: []placement.Mode{placement.ModeRefuse}},
+	}
+	if !slices.EqualFunc(rows, want, func(a, b placement.UnbuildableRow) bool {
+		return a.Class == b.Class && a.TrustClass == b.TrustClass && a.Mode == b.Mode && slices.Equal(a.BuildableModes, b.BuildableModes)
+	}) {
+		t.Errorf("unbuildable = %+v, want %+v", rows, want)
+	}
+	doc, err := e.pg.GetCredentialDeliveryPolicy(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotDoc, wantDoc any
+	if json.Unmarshal(doc.Policy, &gotDoc) != nil || json.Unmarshal([]byte(stored), &wantDoc) != nil || !reflect.DeepEqual(gotDoc, wantDoc) {
+		t.Errorf("GET changed the stored document: %s", doc.Policy)
 	}
 }

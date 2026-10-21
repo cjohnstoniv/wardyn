@@ -433,7 +433,7 @@ func TestPrivateIPMemo_IdenticalRefusalsCostOneDecisionRow(t *testing.T) {
 			t.Errorf("attempt %d: %s = %q, want %q — the header is what lets a retry loop stop",
 				i+1, egressHeaderRetry, got, egressRetryNever)
 		}
-		if body := rec.Body.String(); !strings.Contains(body, egressInternalHostsRemedy) {
+		if body := rec.Body.String(); !strings.Contains(body, "with site_config.internal_hosts, scoped to 10.0.0.0/8") {
 			t.Errorf("attempt %d: 403 body = %q, want the remedy on every attempt, not only the first", i+1, body)
 		}
 		if i == 0 {
@@ -493,7 +493,7 @@ func TestPrivateIPMemo_BoundedAndFlushesTheStreakItEvicts(t *testing.T) {
 	}
 	// The first entry is the only one with repeats, and the least recently hit,
 	// so filling the memo past its ceiling evicts exactly it.
-	if evicted := mo.record(req("first.priv.internal"), blockPrivate); evicted != nil {
+	if evicted := mo.record(req("first.priv.internal"), blockPrivate, ""); evicted != nil {
 		t.Fatalf("recording into an empty memo evicted %+v", evicted)
 	}
 	if !mo.hit("first.priv.internal", 443, time.Now()) {
@@ -501,7 +501,7 @@ func TestPrivateIPMemo_BoundedAndFlushesTheStreakItEvicts(t *testing.T) {
 	}
 	var evictedRow *egress.DecisionLog
 	for i := range privateIPMemoMax {
-		if row := mo.record(req("h"+strconv.Itoa(i)+".priv.internal"), blockPrivate); row != nil {
+		if row := mo.record(req("h"+strconv.Itoa(i)+".priv.internal"), blockPrivate, ""); row != nil {
 			evictedRow = row
 		}
 	}
@@ -604,7 +604,7 @@ func TestApprovalPendingRefusalIsRetryableAndReEmits(t *testing.T) {
 // the pin is the composition, not a copy of the text a second time.
 func TestPrivateIPDenialDetailComposesTheFourSentences(t *testing.T) {
 	pol := CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"priv.example.test"}})
-	detail := literalIPDenialDetail("priv.example.test", 443, pol, blockPrivate)
+	detail := literalIPDenialDetail("priv.example.test", 443, pol, blockPrivate, "")
 	for _, want := range []string{
 		egressPrivateRangeCause,
 		egressInternalHostsRemedy,
@@ -625,7 +625,7 @@ func TestPrivateIPDenialDetailComposesTheFourSentences(t *testing.T) {
 	// A LITERAL private address is a policy problem (allowed_domains /
 	// egress_redirects), not a site-config one, so it must not carry site
 	// config's lifetime clause.
-	if got := literalIPDenialDetail("100.64.5.7", 443, pol, blockPrivate); strings.Contains(got, egressDenialSuffix) {
+	if got := literalIPDenialDetail("100.64.5.7", 443, pol, blockPrivate, ""); strings.Contains(got, egressDenialSuffix) {
 		t.Errorf("the literal-IP arm carries the site-config lifetime clause:\n\t%s", got)
 	}
 }
@@ -715,7 +715,7 @@ func TestMemoedFlagIsRequiredForTheMemoedRefusal(t *testing.T) {
 		t.Errorf("%s = %q, want %q — a memoed refusal is what the retry header exists for",
 			egressHeaderRetry, got, egressRetryNever)
 	}
-	if body := denyText(memoed); !strings.Contains(body, egressInternalHostsRemedy) {
+	if body := denyText(memoed); !strings.Contains(body, "with site_config.internal_hosts, scoped to 10.0.0.0/8") {
 		t.Errorf("body = %q, want the private-IP remedy", body)
 	}
 

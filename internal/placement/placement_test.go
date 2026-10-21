@@ -373,3 +373,45 @@ func TestDeliveryPolicyCheckBuildable(t *testing.T) {
 		}
 	}
 }
+
+// Unbuildable lists the stored rows CheckBuildable would refuse as new ones, with the same predicate: for
+// every class and every mode, a one-row policy is listed exactly when CheckBuildable refuses it.
+func TestDeliveryPolicyUnbuildableSharesThePredicate(t *testing.T) {
+	var none DeliveryPolicy
+	if got := none.Unbuildable(); got != nil {
+		t.Errorf("empty policy: %v, want none", got)
+	}
+	for _, class := range DeliveryClasses() {
+		for _, m := range []Mode{ModeOwn, ModeViaOrg, ModeRunnerResident, ModeRefuse} {
+			for name, p := range map[string]DeliveryPolicy{
+				"class": {Classes: map[string]ClassPolicy{class: {Mode: m}}},
+				"trust": {ByTrust: map[types.RunnerTrustClass]TrustPolicy{types.RunnerTrustPersonal: {Classes: map[string]ClassPolicy{class: {Mode: m}}}}},
+			} {
+				listed := len(p.Unbuildable()) == 1
+				refused := errors.Is(p.CheckBuildable(none), ErrUnbuildablePolicy)
+				if listed != refused || listed == Buildable(class, m) {
+					t.Errorf("%s %s as %s: listed=%v refused=%v buildable=%v", name, class, m, listed, refused, Buildable(class, m))
+				}
+			}
+		}
+	}
+}
+
+func TestDeliveryPolicyUnbuildableRows(t *testing.T) {
+	p := DeliveryPolicy{
+		Classes: map[string]ClassPolicy{ClassGitPATBroker: {Mode: ModeRunnerResident}, ClassAPIKey: {Mode: ModeViaOrg}, ClassAWSSSOBearer: {Mode: ModeViaOrg}},
+		ByTrust: map[types.RunnerTrustClass]TrustPolicy{types.RunnerTrustPersonal: {Classes: map[string]ClassPolicy{ClassBedrockRoleCreds: {Mode: ModeRunnerResident}, ClassEnvSecret: {Mode: ModeRunnerResident}}}},
+	}
+	got := p.Unbuildable()
+	want := []UnbuildableRow{
+		{Class: ClassAWSSSOBearer, Mode: ModeViaOrg, BuildableModes: []Mode{ModeRefuse}},
+		{Class: ClassGitPATBroker, Mode: ModeRunnerResident, BuildableModes: []Mode{ModeRefuse}},
+		{Class: ClassBedrockRoleCreds, TrustClass: types.RunnerTrustPersonal, Mode: ModeRunnerResident, BuildableModes: []Mode{ModeRefuse}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Unbuildable = %+v, want %+v", got, want)
+	}
+	if s := got[2].String(); s != `class "by_trust.personal.bedrock_role_credentials" cannot be delivered as "runner_resident" yet (the server can build: refuse)` {
+		t.Errorf("sentence = %s", s)
+	}
+}
