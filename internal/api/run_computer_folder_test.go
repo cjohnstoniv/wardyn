@@ -12,8 +12,10 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -189,6 +191,38 @@ type folderSandboxRunner struct {
 	// block is a file whose read never answers until its session closes, so a pass that reaches
 	// it runs out of time after the files before it.
 	block string
+	// proxyErr fails StopProxy. proxyStopped and agentKilled are a kept sandbox's quiesce: its
+	// proxy removed and its agent's processes killed.
+	proxyErr                  error
+	proxyStopped, agentKilled atomic.Bool
+}
+
+// StopProxy removes the sandbox's proxy, its agent's only way out.
+func (r *folderSandboxRunner) StopProxy(context.Context, string) error {
+	if r.proxyErr != nil {
+		return r.proxyErr
+	}
+	r.proxyStopped.Store(true)
+	return nil
+}
+
+// AgentStatus is the agent's exec: running until keptAgentKill reaches the sandbox.
+func (r *folderSandboxRunner) AgentStatus(context.Context, string, string) (runner.Status, error) {
+	if r.agentKilled.Load() {
+		return runner.Status{State: types.RunFailed}, nil
+	}
+	return runner.Status{State: types.RunRunning}, nil
+}
+
+// errNoEgress is an agent's connection refused: with its proxy gone it has no route out.
+var errNoEgress = errors.New("no route: the sandbox has no proxy")
+
+// agentEgress is the agent dialling out through its proxy.
+func (r *folderSandboxRunner) agentEgress() error {
+	if r.proxyStopped.Load() {
+		return errNoEgress
+	}
+	return nil
 }
 
 // blockingGet is a sandbox's file reads where the read of block waits for release.
@@ -206,6 +240,13 @@ func (b blockingGet) Fileread(r *sftp.Request) (io.ReaderAt, error) {
 }
 
 func (r *folderSandboxRunner) ExecStream(_ context.Context, _ string, spec runner.ExecSpec) (*runner.ExecSession, error) {
+	if slices.Equal(spec.Argv, keptAgentKill) {
+		r.agentKilled.Store(true)
+		return &runner.ExecSession{
+			Stdin: nopWriteCloser{io.Discard}, Stdout: strings.NewReader(""), Stderr: strings.NewReader(""),
+			Wait: func() (int, error) { return 0, nil }, Close: func() error { return nil },
+		}, nil
+	}
 	if r.hang {
 		stdout, quiet := io.Pipe()
 		return &runner.ExecSession{
@@ -279,6 +320,7 @@ func computerFolderFixture(t *testing.T, direction string) (*Server, *computerFo
 	row := types.Runner{ID: uuid.New(), Owner: run.CreatedBy, Name: "laptop", State: types.RunnerClaimed}
 	id := row.ID
 	ls.folder = &types.RunLocalFolder{Name: "my-app", RemoteDir: "/home/agent/work", RunnerID: &id, Path: app, Direction: direction}
+	ls.run.AgentExecID = "agent-exec"
 	cs := &computerFolderStore{localFolderStore: ls, runner: row}
 	s.cfg.Store = cs
 	s.cfg.ComputerFolders = true
@@ -499,6 +541,13 @@ func assertFolderBackKept(t *testing.T, err error, cs *computerFolderStore, sb *
 	if st.Resume == nil || *st.Resume != want || st.Back == nil || !strings.Contains(st.Back.Error, "a later sweep resumes the sync") {
 		t.Errorf("resume = %+v, back = %+v; want %+v and the cut pass's error", st.Resume, st.Back, want)
 	}
+	// Kept past the run's end, the sandbox runs only the pass back: no agent, no egress.
+	if agent, _ := sb.AgentStatus(context.Background(), "sbx", "agent-exec"); agent.State == types.RunRunning {
+		t.Error("the kept sandbox's agent is still running")
+	}
+	if err := sb.agentEgress(); !errors.Is(err, errNoEgress) {
+		t.Errorf("the kept sandbox's agent egress = %v, want it refused", err)
+	}
 }
 
 // boundedFinalize is a finalize whose caller allows its pass back stop seconds.
@@ -577,6 +626,41 @@ func TestFinalizeRunEffects_APassThatCompletesAfterACutOneStopsTheSandbox(t *tes
 	}
 	if b, _ := os.ReadFile(filepath.Join(app, "z.txt")); string(b) != "z.txt by the agent" {
 		t.Errorf("z.txt on the computer = %q, want the agent's", b)
+	}
+}
+
+// A sandbox that cannot be kept with its agent stopped and no egress is stopped after a cut pass
+// back that saved files, and the record says why and what it leaves behind: one on a runner, and
+// one whose substrate cannot stop its proxy alone (Kubernetes in server mode) (#3466).
+func TestFinalizeRunEffects_ASandboxThatCannotBeQuiescedIsStoppedWithTheRecord(t *testing.T) {
+	cases := map[string]struct {
+		setup func(*localFolderStore, *folderSandboxRunner)
+		want  string
+	}{
+		"on a runner": {func(ls *localFolderStore, _ *folderSandboxRunner) {
+			id := uuid.New()
+			ls.run.RunnerID = &id
+		}, "a sandbox on a runner is not kept"},
+		"its proxy cannot stop alone": {func(_ *localFolderStore, sb *folderSandboxRunner) {
+			sb.proxyErr = runner.ErrEndUnsupported
+		}, "its proxy did not stop"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			s, cs, audit, run, sb, _ := computerFolderFixture(t, types.ComputerFolderBoth)
+			if !s.holdForLocalFolder(context.Background(), run, "sbx") {
+				t.Fatal(cs.FailureHint())
+			}
+			tc.setup(cs.localFolderStore, sb)
+			agentWrites(t, sb, "a.txt", "z.txt")
+			sb.block = "z.txt"
+			if _, err := boundedFinalize(t, s, run, time.Second); err != nil {
+				t.Errorf("finalize: %v", err)
+			}
+			assertFolderBackTornDown(t, cs, audit, run, sb, tc.want)
+			assertFolderBackTornDown(t, cs, audit, run, sb, "it cannot be kept with its agent stopped and no egress")
+			assertFolderBackTornDown(t, cs, audit, run, sb, "changed files not brought back: 1")
+		})
 	}
 }
 

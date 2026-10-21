@@ -70,10 +70,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 ### Fixed
 
 - A computer folder's pass back no longer uses up the time a run's teardown has (#3466). A pass that completes, or
-  that has no time to start, is followed by the sandbox's stop. A pass that is cut short keeps the sandbox, and a
-  later sweep resumes it from what the folder's runner saved. After two cut passes in a row that save nothing, the
-  sandbox is stopped, and the pass's record and its `run.folder.transfer` audit name how many changed files were not
-  brought back. `wardyn sync` also saves what a cut pass finished, so its next pass starts after it.
+  that has no time to start, is followed by the sandbox's stop. A pass that is cut short keeps the sandbox on Docker:
+  agent stopped, no egress, only the folder pass back runs, and a later sweep resumes it from what the folder's runner
+  saved. A sandbox on a runner, or on Kubernetes, is stopped instead. After two cut passes in a row that save nothing,
+  or when a sandbox cannot be kept that way, the sandbox is stopped, and the pass's record and its
+  `run.folder.transfer` audit name how many changed files were not brought back. `wardyn sync` also saves what a cut
+  pass finished, so its next pass starts after it.
 
 ## [0.9.8] — 2026-10-21
 
