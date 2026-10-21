@@ -86,6 +86,18 @@ export const RUNS_FILTERS = {
   GROUP_TITLE: "Group · Title",
   // H-8.
   SAVED_VIEW_LABEL: "Saved view",
+  WORKSPACE_CHIP: (w: string) => `Workspace · ${w}`,
+} as const;
+
+// #3041, phone only: the search box keeps the row and everything else sits in
+// a bottom sheet. Strings are the approved R6 Run phone board's, except the
+// two aria names (the chips' remove button) and the singular "Show 1 run".
+export const RUNS_FILTERS_SHEET = {
+  TITLE: "Filters",
+  CLEAR: "Clear filters",
+  BUTTON: (n: number) => (n > 0 ? `Filters (${n})` : "Filters"),
+  SHOW: (n: number) => (n === 1 ? "Show 1 run" : `Show ${n} runs`),
+  CHIP_REMOVE_ARIA: (chip: string) => `Remove ${chip}`,
 } as const;
 
 // H-8: saved views (localStorage, up to 10). "Save view" names the current

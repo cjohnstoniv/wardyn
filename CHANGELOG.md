@@ -104,6 +104,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - The CLI's hint under a `401` follows the answer's reason. On a single-sign-on deployment with no admin token
   (`sign_in_required`) it says to use a personal API token in `WARDYN_TOKEN`, not the compose stack's admin token. For
   a token the organisation does not know (`admin_token_not_configured`) it names where the token came from.
+- On a phone, the Runs filter bar is a search box, a `Filters (n)` button and a row of removable chips, so the first run
+  is on the first screen instead of under five rows of controls (#3041). The button opens a sheet with every other
+  control and Save view. From the tablet breakpoint up the bar is unchanged.
 
 ## [0.9.7] — 2026-10-20
 
