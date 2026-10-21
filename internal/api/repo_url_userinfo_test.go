@@ -488,7 +488,7 @@ func TestLegacyRepoURLRedactedOnDocumentReads(t *testing.T) {
 		if st.policy.Spec.WorkspaceRepos[1].Repo != c.url {
 			t.Error("the policy read rewrote the stored row")
 		}
-		spec := redactSpecForRead(st.policy.Spec, false)
+		spec := redactSpecForRead(st.policy.Spec, specReadMember)
 		if spec.WorkspaceRepos[1].Repo == c.url || spec.WorkspaceRepos[0].Repo != "acme/one" {
 			t.Errorf("redactSpecForRead = %+v", spec.WorkspaceRepos)
 		}
@@ -538,7 +538,7 @@ func TestProviderModeRefusalComesFirst(t *testing.T) {
 func TestLegacyRepoURLRedactedOnSpecViews(t *testing.T) {
 	for _, c := range credentialedRepoURLs {
 		spec := types.RunPolicySpec{MinConfinementClass: types.CC2, WorkspaceRepos: []types.WorkspaceRepo{{Repo: c.url, Ref: "main"}}}
-		b, _ := json.Marshal(newProfileView(types.GovernanceProfile{Name: "g", Ceiling: spec}, nil, nil))
+		b, _ := json.Marshal(newProfileView(types.GovernanceProfile{Name: "g", Ceiling: spec}, nil, nil, specReadFull))
 		if strings.Contains(string(b), c.secret) {
 			t.Errorf("governance profile view serves %s: %s", c.secret, b)
 		}

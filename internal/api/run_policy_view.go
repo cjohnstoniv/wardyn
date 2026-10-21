@@ -210,8 +210,8 @@ func (s *Server) handleGetRunPolicy(w http.ResponseWriter, r *http.Request) {
 	resp.Provenance = envelope.Provenance.withContacts(s.runPolicyRef(ctx, run), sc.PolicyHelp)
 	resp.StoredPolicyNow = s.storedPolicyNowOf(ctx, run, create, &resp.Source)
 
-	secOp := s.isSecurityOperator(ctx)
-	out := redactSpecForRead(served, secOp)
+	tier := s.specReadTierFor(ctx)
+	out := redactSpecForRead(served, tier)
 	if out.LLMInspection != nil {
 		li := *out.LLMInspection
 		li.WorkspaceSecretValues = nil // a placeholder count would fail validatePolicySpec's no-raw-values rule
@@ -220,7 +220,8 @@ func (s *Server) handleGetRunPolicy(w http.ResponseWriter, r *http.Request) {
 	if out.AllowedDomains == nil {
 		out.AllowedDomains = []string{}
 	}
-	resp.Redacted = !secOp && !reflect.DeepEqual(specJSON(served), specJSON(redactSpecForUser(served)))
+	// Redacted: this tier was shown less than a super admin is (a mount's host path, a secret name).
+	resp.Redacted = !reflect.DeepEqual(specJSON(redactSpecForRead(served, specReadFull)), specJSON(redactSpecForRead(served, tier)))
 	resp.Spec = &out
 	writeJSON(w, http.StatusOK, resp)
 }

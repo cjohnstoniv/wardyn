@@ -116,10 +116,10 @@ func (m *meeter) meetMounts(base, ov []types.WorkspaceMount) []types.WorkspaceMo
 		i := slices.IndexFunc(base, func(b types.WorkspaceMount) bool { return mountKey{b.Source, b.Target} == k })
 		switch {
 		case i < 0:
-			m.widen("workspace_mounts", "%s:%s is not a mount of the base", o.Source, o.Target)
+			m.widen("workspace_mounts", "%s is not a mount of the base", o.Target) // the target only: a host path is the super admin's to read
 			continue
 		case base[i].ReadOnlyOrDefault() && !o.ReadOnlyOrDefault():
-			m.widen("workspace_mounts", "%s:%s is read-only in the base", o.Source, o.Target)
+			m.widen("workspace_mounts", "%s is read-only in the base", o.Target)
 		}
 		if seen[k] {
 			continue

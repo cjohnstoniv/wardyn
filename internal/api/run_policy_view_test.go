@@ -252,15 +252,18 @@ func TestRunPolicyView_RedactionPerReader(t *testing.T) {
 	resolved.LLMInspection.WorkspaceSecretValues = []string{"<2 value(s) redacted>"}
 	st.rows(run.ID, pvCreate(nil, pvSource(policyKindInline, nil, "", true, pvSecretSpec())), pvResolve(resolved, false))
 
+	// Flipped for the security admin: a mount's host path is now the super admin's alone, so that tier
+	// reads the mount source hidden (and the response says so) while it still reads the secret names.
 	for _, tc := range []struct {
 		name         string
 		reader       pvReader
-		hidden       bool
+		hideMount    bool
+		hideNames    bool
 		wantRedacted bool
 	}{
-		{"member owner", pvMember(t, pvOwner), true, true},
-		{"security admin", pvSecurity(t), false, false},
-		{"super admin", pvReader{}, false, false},
+		{"member owner", pvMember(t, pvOwner), true, true, true},
+		{"security admin", pvSecurity(t), true, false, true},
+		{"super admin", pvReader{}, false, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w, resp := tc.reader.get(t, srv, run.ID)
@@ -274,11 +277,13 @@ func TestRunPolicyView_RedactionPerReader(t *testing.T) {
 			if resp.Redacted != tc.wantRedacted {
 				t.Errorf("redacted = %v, want %v", resp.Redacted, tc.wantRedacted)
 			}
-			leaked := strings.Contains(body, "/srv/team-data") || strings.Contains(body, govCorpSecret)
-			if tc.hidden == leaked {
-				t.Errorf("mount path or secret name visible=%v for %s, want visible=%v: %s", leaked, tc.name, !tc.hidden, body)
+			if leaked := strings.Contains(body, "/srv/team-data"); tc.hideMount == leaked {
+				t.Errorf("mount path visible=%v for %s, want visible=%v: %s", leaked, tc.name, !tc.hideMount, body)
 			}
-			if tc.hidden && resp.Spec.WorkspaceMounts[0].Source != "<redacted>" {
+			if leaked := strings.Contains(body, govCorpSecret); tc.hideNames == leaked {
+				t.Errorf("secret name visible=%v for %s, want visible=%v: %s", leaked, tc.name, !tc.hideNames, body)
+			}
+			if tc.hideMount && resp.Spec.WorkspaceMounts[0].Source != "<redacted>" {
 				t.Errorf("mount source = %q, want <redacted>", resp.Spec.WorkspaceMounts[0].Source)
 			}
 			if resp.Spec.LLMInspection == nil || len(resp.Spec.LLMInspection.WorkspaceSecretNames) != 1 {
@@ -289,8 +294,10 @@ func TestRunPolicyView_RedactionPerReader(t *testing.T) {
 }
 
 // TestRunPolicyView_SpecReuse pins the reuse promise, scoped: the spec always
-// strict-decodes as a policy, passes the write validator for the security
-// tier, and does not for a reader whose hidden values were replaced.
+// strict-decodes as a policy, passes the write validator for the super admin
+// tier, and does not for a reader whose hidden values were replaced. Flipped
+// for the security tier: it reads a mount's host path as <redacted>, which is
+// not a path, so its copy no longer validates.
 func TestRunPolicyView_SpecReuse(t *testing.T) {
 	srv, st := pvFixture(t, &capStore{})
 	run := st.seedRun(pvOwner, types.RunRunning)
@@ -313,9 +320,13 @@ func TestRunPolicyView_SpecReuse(t *testing.T) {
 		}
 		return got
 	}
+	super, _ := pvReader{}.get(t, srv, run.ID)
+	if err := validatePolicySpec(strict(t, super.Body.Bytes())); err != nil {
+		t.Errorf("the super admin's spec does not pass validatePolicySpec: %v", err)
+	}
 	sec, _ := pvSecurity(t).get(t, srv, run.ID)
-	if err := validatePolicySpec(strict(t, sec.Body.Bytes())); err != nil {
-		t.Errorf("the security tier's spec does not pass validatePolicySpec: %v", err)
+	if err := validatePolicySpec(strict(t, sec.Body.Bytes())); err == nil {
+		t.Error("the security-tier spec passed validatePolicySpec; its <redacted> mount source must fail it")
 	}
 	member, _ := pvMember(t, pvOwner).get(t, srv, run.ID)
 	got := strict(t, member.Body.Bytes())

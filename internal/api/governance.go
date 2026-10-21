@@ -98,8 +98,9 @@ func (s *Server) handleGetGovernance(w http.ResponseWriter, r *http.Request) {
 	// invariant is ever broken by a migration or a direct DB edit. newProfileView
 	// redacts the effective ceiling the same way.
 	profiles := make([]governanceProfileView, len(resolved))
+	tier := s.specReadTierFor(r.Context())
 	for i, p := range resolved {
-		profiles[i] = newProfileView(p.Row, p.Resolved, p.Err)
+		profiles[i] = newProfileView(p.Row, p.Resolved, p.Err, tier)
 	}
 	writeJSON(w, http.StatusOK, governanceResponse{Profiles: profiles, Assignments: assignments})
 }

@@ -105,28 +105,30 @@ func presetReadView(p types.LaunchPreset) (client.Preset, error) {
 // member reaches. Launch and the write answers keep the unredacted view.
 func (s *Server) presetForRead(r *http.Request, p types.LaunchPreset) (client.Preset, error) {
 	v, err := presetReadView(p)
+	tier := s.specReadTierFor(r.Context())
 	if err == nil && v.Request.InlinePolicy != nil {
-		spec := redactSpecForRead(*v.Request.InlinePolicy, s.isSecurityOperator(r.Context()))
+		spec := redactSpecForRead(*v.Request.InlinePolicy, tier)
 		v.Request.InlinePolicy = &spec
 	}
 	if err == nil {
-		v.Request.PolicyOverlay = redactPresetOverlay(v.Request.PolicyOverlay, s.isSecurityOperator(r.Context()))
+		v.Request.PolicyOverlay = redactPresetOverlay(v.Request.PolicyOverlay, tier)
 	}
 	return v, err
 }
 
-// overlayOperatorKeys are the policy_overlay keys whose values redactSpecForUser strips for a reader
-// who is not a security operator: the same details, by the same code, as in an inline_policy.
+// overlayOperatorKeys are the policy_overlay keys whose values redactSpecForRead strips for a reader
+// below the super admin tier: the same details, by the same code, as in an inline_policy. A security
+// admin loses only the first (a mount's host path); a member loses all three.
 var overlayOperatorKeys = []string{"workspace_mounts", "eligible_grants", "llm_inspection"}
 
-// redactOverlayValue is one overlay value after redactSpecForUser, or nil when it does not decode.
-func redactOverlayValue(key string, raw json.RawMessage) json.RawMessage {
+// redactOverlayValue is one overlay value after redactSpecForRead at tier, or nil when it does not decode.
+func redactOverlayValue(key string, raw json.RawMessage, tier specReadTier) json.RawMessage {
 	var spec types.RunPolicySpec
 	one, err := json.Marshal(map[string]json.RawMessage{key: raw})
 	if err != nil || json.Unmarshal(one, &spec) != nil {
 		return nil
 	}
-	out, err := json.Marshal(redactSpecForUser(spec))
+	out, err := json.Marshal(redactSpecForRead(spec, tier))
 	var redacted map[string]json.RawMessage
 	if err != nil || json.Unmarshal(out, &redacted) != nil {
 		return nil
@@ -134,12 +136,12 @@ func redactOverlayValue(key string, raw json.RawMessage) json.RawMessage {
 	return redacted[key]
 }
 
-// redactPresetOverlay is a stored policy_overlay as a reader may see it. A security operator (the
-// preset's author among them) gets it as stored; anyone else gets the operator-only details of the
-// keys above redacted exactly as an inline_policy's would be. A value that does not decode as its
-// key's type is dropped rather than guessed at.
-func redactPresetOverlay(overlay json.RawMessage, securityOperator bool) json.RawMessage {
-	if securityOperator || len(overlay) == 0 {
+// redactPresetOverlay is a stored policy_overlay as a reader may see it. A super admin (the preset's
+// author) gets it as stored; anyone else gets the details of the keys above that their tier may not
+// read redacted exactly as an inline_policy's would be. A value that does not decode as its key's type
+// is dropped rather than guessed at.
+func redactPresetOverlay(overlay json.RawMessage, tier specReadTier) json.RawMessage {
+	if tier == specReadFull || len(overlay) == 0 {
 		return overlay
 	}
 	var fields map[string]json.RawMessage
@@ -148,10 +150,10 @@ func redactPresetOverlay(overlay json.RawMessage, securityOperator bool) json.Ra
 	}
 	for k, raw := range fields {
 		i := slices.IndexFunc(overlayOperatorKeys, func(o string) bool { return strings.EqualFold(k, o) })
-		if i < 0 {
+		if i < 0 || (tier == specReadSecurity && i != 0) {
 			continue
 		}
-		if v := redactOverlayValue(overlayOperatorKeys[i], raw); v != nil {
+		if v := redactOverlayValue(overlayOperatorKeys[i], raw, tier); v != nil {
 			fields[k] = v
 		} else {
 			delete(fields, k)
