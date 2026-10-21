@@ -46,6 +46,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   - Audit actions `cli.sign_in.request`, `cli.sign_in.approve`, `cli.sign_in.deny`, `cli.session.create`,
     `cli.session.revoke`, `cli.session.refresh_refused` and `cli.session.reuse_detected`. `token.create` rows carry
     `kind`; `session.revoke` rows carry `cli_sessions_ended`.
+- The runner's managed-settings lock. A macOS managed profile that sets `lock_security_settings` now outranks a flag for `OrgURL`, `ProxyImage`, `TrustedCAFile`, `OrgCAFile` and `RecordingStore`, and `wardyn-runnerd serve` refuses to start on a flag or environment variable that disagrees, naming the setting. It is off by default, so nothing changes until an administrator sets it.
 
 ### Changed
 

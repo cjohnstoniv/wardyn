@@ -44,7 +44,7 @@ func TestCarryProxyStripsTheUserNameAndPassword(t *testing.T) {
 }
 
 func TestCarryProxyCarriesOnlyWhatTheShellSetAndAddsNoNoProxy(t *testing.T) {
-	env := map[string]string{"http_proxy": "http://proxy.corp:3128", "NO_PROXY": "localhost, .corp,10.0.0.0/8", "ALL_PROXY": "http://all.corp:1"}
+	env := map[string]string{"https_proxy": "http://proxy.corp:3128", "NO_PROXY": "localhost, .corp,10.0.0.0/8", "ALL_PROXY": "http://all.corp:1", "HTTP_PROXY": "http://h.corp:1"}
 	got, _, err := carryProxy(func(k string) string { return env[k] })
 	if err != nil {
 		t.Fatal(err)
@@ -53,8 +53,8 @@ func TestCarryProxyCarriesOnlyWhatTheShellSetAndAddsNoNoProxy(t *testing.T) {
 	for _, c := range got {
 		names = append(names, c.name)
 	}
-	if strings.Join(names, " ") != "http_proxy NO_PROXY" {
-		t.Errorf("carried %v; want http_proxy and NO_PROXY, in that order, and nothing the shell did not set", names)
+	if strings.Join(names, " ") != "https_proxy NO_PROXY" {
+		t.Errorf("carried %v; want https_proxy and NO_PROXY, in that order, and nothing the shell did not set", names)
 	}
 	none, _, err := carryProxy(func(string) string { return "" })
 	if err != nil || len(none) != 0 {
@@ -102,7 +102,8 @@ func TestSetupCarriesTheShellProxyWithoutItsPassword(t *testing.T) {
 			clearProxyEnv(t)
 			logs := capturedLogs(t)
 			t.Setenv("HTTPS_PROXY", "http://"+user+":"+pw+"@proxy.corp:3128")
-			t.Setenv("http_proxy", "http://"+user+":"+pw+"@proxy.corp:3128")
+			t.Setenv("https_proxy", "http://"+user+":"+pw+"@proxy.corp:3128")
+			t.Setenv("HTTP_PROXY", "http://"+user+":"+pw+"@httpproxy.corp:8080")
 			t.Setenv("NO_PROXY", "localhost,.corp")
 			f := newSetupFixture(t, goos)
 			out, err := f.run(setupOptions{tokenFile: f.tokenFile})
@@ -110,28 +111,20 @@ func TestSetupCarriesTheShellProxyWithoutItsPassword(t *testing.T) {
 				t.Fatalf("%v\n%s", err, out)
 			}
 			p := mustPaths(t, f)
-			var service string
-			if goos == "linux" {
-				service = f.read(p.envFile)
-				for _, want := range []string{"HTTPS_PROXY=http://proxy.corp:3128\n", "http_proxy=http://proxy.corp:3128\n", "NO_PROXY=localhost,.corp\n"} {
-					if !strings.Contains(service, want) {
-						t.Errorf("the env file lacks %q:\n%s", want, service)
-					}
-				}
-			} else {
-				service = f.read(p.plistFile)
-				for _, want := range []string{"<key>HTTPS_PROXY</key>\n    <string>http://proxy.corp:3128</string>", "<key>http_proxy</key>\n    <string>http://proxy.corp:3128</string>", "<key>NO_PROXY</key>\n    <string>localhost,.corp</string>"} {
-					if !strings.Contains(service, want) {
-						t.Errorf("the LaunchAgent lacks %q:\n%s", want, service)
-					}
+			service := f.settings(p)
+			for _, want := range []string{"HTTPS_PROXY=http://proxy.corp:3128\n", "NO_PROXY=localhost,.corp\n"} {
+				if !strings.Contains(service, want) {
+					t.Errorf("runnerd.json lacks %q:\n%s", want, service)
 				}
 			}
-			for _, absent := range []string{"<key>HTTP_PROXY</key>", "<key>https_proxy</key>", "<key>no_proxy</key>", "\nHTTP_PROXY=", "\nhttps_proxy="} {
-				if strings.Contains(service, absent) {
-					t.Errorf("the service carries %q, which the shell did not set:\n%s", absent, service)
-				}
+			raw := f.read(p.configFile())
+			if strings.Contains(raw, "httpproxy.corp") {
+				t.Errorf("runnerd.json carries HTTP_PROXY, which the runner's connection does not read:\n%s", raw)
 			}
-			if strings.Count(out, "The runner service now carries HTTPS_PROXY, http_proxy, NO_PROXY from this shell") != 1 ||
+			if strings.Contains(out, "HTTP_PROXY") {
+				t.Errorf("setup warned about HTTP_PROXY although HTTPS_PROXY was carried:\n%s", out)
+			}
+			if strings.Count(out, "The runner service now carries HTTPS_PROXY, https_proxy, NO_PROXY from this shell") != 1 ||
 				!strings.Contains(out, "without the user name and password it held; a proxy that needs them will refuse it (wardyn doctor shows it). Wardyn does not store proxy passwords.") {
 				t.Errorf("setup did not print the one line about the proxy:\n%s", out)
 			}
@@ -163,7 +156,7 @@ func TestSetupCarriesNoProxyWhenTheShellHasNone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	env := f.read(mustPaths(t, f).envFile)
+	env := f.settings(mustPaths(t, f))
 	if strings.Contains(strings.ToUpper(env), "_PROXY=") || strings.Contains(out, "now carries") {
 		t.Errorf("setup carried a proxy the shell did not set:\n%s\n%s", env, out)
 	}
@@ -196,12 +189,7 @@ func TestSetupRerunKeepsTheCarriedProxyWhenTheShellSetsNone(t *testing.T) {
 				t.Fatalf("%v\n%s", err, out)
 			}
 			p := mustPaths(t, f)
-			service := func() string {
-				if goos == "linux" {
-					return f.read(p.envFile)
-				}
-				return f.read(p.plistFile)
-			}
+			service := func() string { return f.settings(p) }
 			first := service()
 			clearProxyEnv(t)
 			f.flagless = true
@@ -216,7 +204,7 @@ func TestSetupRerunKeepsTheCarriedProxyWhenTheShellSetsNone(t *testing.T) {
 				t.Errorf("the rerun did not name the kept variables, or leaked a value:\n%s", out)
 			}
 			// A shell that sets one replaces the earlier set, as on the first run.
-			t.Setenv("HTTP_PROXY", "http://other.corp:80")
+			t.Setenv("HTTPS_PROXY", "http://other.corp:80")
 			if out, err := f.run(setupOptions{}); err != nil {
 				t.Fatalf("%v\n%s", err, out)
 			}
@@ -224,5 +212,44 @@ func TestSetupRerunKeepsTheCarriedProxyWhenTheShellSetsNone(t *testing.T) {
 				t.Errorf("the shell's own set should replace the earlier one:\n%s", got)
 			}
 		})
+	}
+}
+
+// HTTP_PROXY alone reaches nothing: setup says so, by name. With an HTTPS_PROXY beside it, which a corporate
+// laptop usually has, there is nothing to say.
+func TestSetupWarnsAboutHTTPProxyOnlyWhenNoHTTPSProxyIsSet(t *testing.T) {
+	clearProxyEnv(t)
+	t.Setenv("HTTP_PROXY", "http://h.corp:8080")
+	f := newSetupFixture(t, "linux")
+	out, err := f.run(setupOptions{tokenFile: f.tokenFile})
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if !strings.Contains(out, "HTTP_PROXY is set in this shell, but setup does not carry it") || strings.Contains(out, "h.corp") {
+		t.Errorf("want a warning naming HTTP_PROXY and no value:\n%s", out)
+	}
+	t.Setenv("HTTPS_PROXY", "http://proxy.corp:3128")
+	g := newSetupFixture(t, "linux")
+	out, err = g.run(setupOptions{tokenFile: g.tokenFile})
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if strings.Contains(out, "HTTP_PROXY") || !strings.Contains(g.settings(mustPaths(t, g)), "HTTPS_PROXY=http://proxy.corp:3128\n") {
+		t.Errorf("want HTTPS_PROXY carried and no HTTP_PROXY warning:\n%s", out)
+	}
+}
+
+// A blank HTTPS_PROXY carries nothing, so it does not hide the warning that HTTP_PROXY alone reaches nothing.
+func TestSetupWarnsAboutHTTPProxyBesideABlankHTTPSProxy(t *testing.T) {
+	clearProxyEnv(t)
+	t.Setenv("HTTPS_PROXY", "   ")
+	t.Setenv("HTTP_PROXY", "http://h.corp:8080")
+	f := newSetupFixture(t, "linux")
+	out, err := f.run(setupOptions{tokenFile: f.tokenFile})
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if !strings.Contains(out, "HTTP_PROXY is set in this shell, but setup does not carry it") {
+		t.Errorf("want the HTTP_PROXY warning:\n%s", out)
 	}
 }

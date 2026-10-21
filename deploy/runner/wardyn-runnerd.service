@@ -9,10 +9,11 @@
 # `wardyn runner claim` looks for it, and the runner is bound to that one
 # person. A unit running as root would keep its identity under root's home.
 #
-# __WARDYN_RUNNERD__ is a placeholder — `wardyn-runnerd setup` (embedded from this
-# file) renders it into the user's systemd directory with the installed binary's
-# absolute path. Committed with the placeholder it is still a valid unit file;
-# scripts/test-runner-units.sh checks that the placeholder is still there.
+# __WARDYN_RUNNERD__ and __WARDYN_CONFIG__ are placeholders — `wardyn-runnerd setup` (embedded
+# from this file) renders them into the user's systemd directory with the installed binary's
+# and the settings file's absolute paths. Every setting is in that file (runnerd.json), none here.
+# Committed with the placeholders it is still a valid unit file; scripts/test-runner-units.sh
+# checks that they are still there.
 
 [Unit]
 Description=Wardyn runner (client mode)
@@ -21,11 +22,9 @@ After=network-online.target
 
 [Service]
 Type=simple
-# WARDYN_RUNNER_ORG_URL, WARDYN_RUNNER_STATE_DIR, WARDYN_INTERNAL_NETWORK and, optionally,
-# WARDYN_PROXY_IMAGE, DOCKER_HOST, WARDYN_RELAY_LISTEN, WARDYN_RELAY_HOST_TARGET and WARDYN_TRUSTED_CA_FILE. `--org` and `--state-dir`
-# are flag-only, hence the variables below.
-EnvironmentFile=%h/.config/wardyn/runnerd.env
-ExecStart=__WARDYN_RUNNERD__ serve --org ${WARDYN_RUNNER_ORG_URL} --state-dir ${WARDYN_RUNNER_STATE_DIR}
+# A proxy credential never goes in runnerd.json: add it with a systemd drop-in
+# (docs/runner-registration.md#a-runner-behind-a-corporate-proxy).
+ExecStart=__WARDYN_RUNNERD__ serve --config __WARDYN_CONFIG__
 # serve retries an unreachable organisation itself; this restarts a crash.
 Restart=on-failure
 RestartSec=10s

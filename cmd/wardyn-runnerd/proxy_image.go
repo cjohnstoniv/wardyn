@@ -9,8 +9,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/spf13/cobra"
-
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/version"
 )
@@ -35,9 +33,10 @@ func releaseProxyImage() string {
 }
 
 // proxyImageGiven is whether the proxy image was named for serve outside the environment: on the command
-// line, or in a managed profile, which an administrator pushed on purpose.
-func proxyImageGiven(cmd *cobra.Command) bool {
-	return cmd.Flags().Changed("proxy-image") || managedPref("ProxyImage") != ""
+// line, in a managed profile (which an administrator pushed on purpose) or in runnerd.json.
+func proxyImageGiven(cfg runnerConfig) bool {
+	src := cfg.field("proxy_image").Source
+	return strings.HasPrefix(src, sourceFlag) || strings.HasPrefix(src, sourceManaged) || strings.HasPrefix(src, sourceFile)
 }
 
 // proxyImagePinned says whether the image serve was given (--proxy-image or WARDYN_PROXY_IMAGE, "" when

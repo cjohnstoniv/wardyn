@@ -51,6 +51,17 @@ func newSetupCommand() *cobra.Command {
 	var o setupOptions
 	cmd := &cobra.Command{Use: "setup", Short: "Register this computer, install wardyn-runnerd as a login service and start it (or, with --no-service, only write its environment)", Args: cobra.NoArgs}
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
+		// Before any dial-out: a locked profile refuses a flag that disagrees. Setup reads no environment
+		// variable but the one --org-ca-file defaults from.
+		setupEnv := func(k string) string {
+			if k == "WARDYN_ORG_CA_FILE" {
+				return os.Getenv(k)
+			}
+			return ""
+		}
+		if err := checkSecurityLock(runnerInputs{flag: changedFlags(cmd), getenv: setupEnv, managed: managedPref, lockRead: managedLockRead}); err != nil {
+			return err
+		}
 		// On a Mac with the configuration profile, --org is optional.
 		if !cmd.Flags().Changed("org") {
 			o.org = cmp.Or(managedPref("OrgURL"), o.org)
@@ -87,6 +98,8 @@ func newSetupCommand() *cobra.Command {
 type setupPlan struct {
 	setupOptions
 	paths      setupPaths
+	existing   runnerFile
+	mirror     string
 	registered bool
 	// proxy is the shell's proxy variables as the service will carry them, without credentials.
 	proxy      []carriedProxy
@@ -156,6 +169,7 @@ func runSetup(cmd *cobra.Command, h setupHost, o setupOptions) error {
 // setup run again takes the registered path.
 func (h setupHost) settleImageAfterRegistering(cmd *cobra.Command, plan *setupPlan, answered string) error {
 	again := "\nThis computer is registered: " + h.imageHint(cmd.Context())
+	answered = mirrorProxyImage(plan.mirror, answered)
 	if answered != "" && plan.proxyImage != "" && (!safeSetting.MatchString(answered) || !types.SafeImageRef(answered)) {
 		// The image probed before the token works; an unusable answer does not unseat it.
 		fmt.Fprintf(cmd.OutOrStdout(), "The organisation named a proxy image setup cannot use (%q); keeping %s, which this engine reached.\n", answered, plan.proxyImage)
@@ -227,9 +241,27 @@ func checkedTrustedCAFile(given, kept, from string) (string, error) {
 		_, _, err = loadTrustedCA(abs)
 	}
 	if err != nil && given == "" {
-		return "", fmt.Errorf("%w: kept from the earlier setup (%s); pass --trusted-ca-file <new file> or remove WARDYN_TRUSTED_CA_FILE from it", err, from)
+		return "", fmt.Errorf("%w: kept from the earlier setup (%s); pass --trusted-ca-file <new file> or remove trusted_ca_file (WARDYN_TRUSTED_CA_FILE in a service file from before runnerd.json) from it", err, from)
 	}
 	return abs, err
+}
+
+// checkedKeptCA checks the CA bundle setup will write (the flag, else the one kept) and prints what is wrong with
+// it short of refusing it. A refusal names where a kept path came from.
+func checkedKeptCA(out io.Writer, given, kept string, paths setupPaths, existing runnerFile) (string, error) {
+	from := cmp.Or(paths.envFile, paths.plistFile)
+	if existing.TrustedCAFile != "" {
+		from = paths.configFile()
+	}
+	path, err := checkedTrustedCAFile(given, kept, from)
+	if err != nil {
+		return "", err
+	}
+	_, warnings := trustedCAFileCheck(path, time.Now())
+	for _, w := range warnings {
+		fmt.Fprintln(out, "warning: "+w)
+	}
+	return path, nil
 }
 
 // checkedOrgCAFile is checkedTrustedCAFile for --org-ca-file, with serve's own check (loadOrgCA).
@@ -243,7 +275,7 @@ func checkedOrgCAFile(given, kept, from string) (string, error) {
 		_, _, err = loadOrgCA(abs)
 	}
 	if err != nil && given == "" {
-		return "", fmt.Errorf("%w: kept from the earlier setup (%s); pass --org-ca-file <new file> or remove WARDYN_ORG_CA_FILE from it", err, from)
+		return "", fmt.Errorf("%w: kept from the earlier setup (%s); pass --org-ca-file <new file> or remove org_ca_file (WARDYN_ORG_CA_FILE in a service file from before runnerd.json) from it", err, from)
 	}
 	return abs, err
 }
@@ -294,10 +326,10 @@ func (h setupHost) checkSettings(plan setupPlan) error {
 	return nil
 }
 
-// proxyForService settles the proxy variables the service carries: the shell's, else the ones an earlier setup
+// proxyForService settles the proxy settings runnerd.json carries for the runner: the shell's, else the ones an earlier setup
 // carried. Only a proxy address in the shell replaces the earlier set; a shell that sets just NO_PROXY keeps the
 // earlier addresses and takes its own exclusion list.
-func proxyForService(out io.Writer, paths setupPaths) ([]carriedProxy, error) {
+func proxyForService(out io.Writer, paths setupPaths, existing runnerFile) ([]carriedProxy, error) {
 	carried, stripped, err := carryProxy(os.Getenv)
 	if err != nil {
 		return nil, err
@@ -309,9 +341,22 @@ func proxyForService(out io.Writer, paths setupPaths) ([]carriedProxy, error) {
 		}
 		return carried, nil
 	}
-	earlier, _, err := carryProxy(paths.setting)
+	// What an earlier setup carried is in runnerd.json (runner_proxy, runner_no_proxy), else in the service
+	// definition a setup before it wrote.
+	earlier, earlierStripped, err := carryProxy(func(name string) string {
+		switch name {
+		case "HTTPS_PROXY":
+			return cmp.Or(existing.RunnerProxy, paths.setting(name))
+		case "NO_PROXY":
+			return cmp.Or(existing.RunnerNoProxy, paths.setting(name))
+		}
+		return paths.setting(name)
+	})
 	if err != nil {
-		return nil, fmt.Errorf("%w (kept from the earlier setup, %s)", err, cmp.Or(paths.envFile, paths.plistFile))
+		return nil, fmt.Errorf("%w (kept from the earlier setup, %s)", err, paths.keptFrom(cmp.Or(existing.RunnerProxy, existing.RunnerNoProxy)))
+	}
+	if len(earlierStripped) > 0 {
+		fmt.Fprintln(out, earlierCredentialWarning(earlierStripped))
 	}
 	if len(carried) == 0 {
 		if len(earlier) > 0 {
@@ -331,7 +376,12 @@ func proxyForService(out io.Writer, paths setupPaths) ([]carriedProxy, error) {
 // may hold a credential. The runner's connection reads only the variables carryProxy carries.
 func proxyEnvNames(getenv func(string) string) []string {
 	var set []string
-	for _, k := range []string{"ALL_PROXY", "all_proxy"} {
+	// HTTP_PROXY only matters when no HTTPS_PROXY is carried in its place: the usual laptop sets both.
+	httpsSet := strings.TrimSpace(getenv("HTTPS_PROXY")) != "" || strings.TrimSpace(getenv("https_proxy")) != ""
+	for _, k := range []string{"ALL_PROXY", "all_proxy", "HTTP_PROXY", "http_proxy"} {
+		if httpsSet && strings.HasPrefix(strings.ToUpper(k), "HTTP_") {
+			continue
+		}
 		if getenv(k) != "" {
 			set = append(set, k)
 		}
@@ -340,14 +390,14 @@ func proxyEnvNames(getenv func(string) string) []string {
 }
 
 // shellProxyWarning says that a proxy variable setup does not carry reaches neither the service nor the
-// runner's own connection to the organisation, which reads HTTPS_PROXY, HTTP_PROXY and NO_PROXY.
+// runner's own connection to the organisation, which reads HTTPS_PROXY and NO_PROXY.
 func shellProxyWarning(names []string) string {
 	verb := "is"
 	if len(names) > 1 {
 		verb = "are"
 	}
 	return strings.Join(names, ", ") + " " + verb + " set in this shell, but setup does not carry it into the service, and the " +
-		"runner's own connection to the organisation reads only HTTPS_PROXY, HTTP_PROXY and NO_PROXY, so it will not use " +
+		"runner's own connection to the organisation reads only HTTPS_PROXY and NO_PROXY, so it will not use " +
 		"that proxy. Set HTTPS_PROXY in this shell and run setup again: see docs/runner-registration.md#a-runner-behind-a-corporate-proxy."
 }
 
@@ -355,6 +405,14 @@ func shellProxyWarning(names []string) string {
 // password, naming the variables only: the service gets the address without them.
 func proxyCredentialWarning(stripped []string) string {
 	return strings.Join(stripped, ", ") + " in this shell contains a credential; the service gets it without the credential. " +
+		"For a proxy that needs a password, use a systemd drop-in on Linux (systemctl --user edit wardyn-runnerd): see " +
+		"docs/runner-registration.md#a-runner-behind-a-corporate-proxy. Never put a proxy credential in the LaunchAgent: every local account can read it."
+}
+
+// earlierCredentialWarning is proxyCredentialWarning for a value the earlier service definition held: runnerd.json
+// gets the address without the credential, and the definition's copy goes when setup rewrites it.
+func earlierCredentialWarning(stripped []string) string {
+	return strings.Join(stripped, ", ") + " in the earlier service definition contained a credential; runnerd.json gets it without the credential. " +
 		"For a proxy that needs a password, use a systemd drop-in on Linux (systemctl --user edit wardyn-runnerd): see " +
 		"docs/runner-registration.md#a-runner-behind-a-corporate-proxy. Never put a proxy credential in the LaunchAgent: every local account can read it."
 }
@@ -390,42 +448,45 @@ func (h setupHost) preflight(cmd *cobra.Command, o setupOptions) (setupPlan, err
 		return setupPlan{}, err
 	}
 	// A rerun keeps what an earlier setup was told explicitly.
-	keptImage, keptCA, keptOrgCA := paths.keptPins()
+	existing, err := loadRunnerFile(paths.configFile(), false)
+	if err != nil {
+		return setupPlan{}, fmt.Errorf("%w (nothing was changed and no token was spent)", err)
+	}
+	keptImage, keptCA, keptOrgCA := paths.keptPins(existing)
 	printShellNotes(cmd.OutOrStdout(), o, keptCA, keptOrgCA)
-	if o.trustedCAFile, err = checkedTrustedCAFile(o.trustedCAFile, keptCA, cmp.Or(paths.envFile, paths.plistFile)); err != nil {
+	if o.trustedCAFile, err = checkedKeptCA(cmd.OutOrStdout(), o.trustedCAFile, keptCA, paths, existing); err != nil {
 		return setupPlan{}, err
 	}
-	if o.orgCAFile, err = checkedOrgCAFile(o.orgCAFile, keptOrgCA, cmp.Or(paths.envFile, paths.plistFile)); err != nil {
+	if o.orgCAFile, err = checkedOrgCAFile(o.orgCAFile, keptOrgCA, paths.keptFrom(existing.OrgCAFile)); err != nil {
 		return setupPlan{}, err
 	}
-	carried, err := proxyForService(cmd.OutOrStdout(), paths)
+	carried, err := proxyForService(cmd.OutOrStdout(), paths, existing)
 	if err != nil {
 		return setupPlan{}, err
 	}
-	_, caWarnings := trustedCAFileCheck(o.trustedCAFile, time.Now())
-	for _, w := range caWarnings {
-		fmt.Fprintln(cmd.OutOrStdout(), "warning: "+w)
+	plan := setupPlan{proxy: carried, setupOptions: o, paths: paths, existing: existing, mirror: existing.ProxyImageMirror, dockerHost: h.dockerHost, want: want, flagged: o.proxyImage != ""}
+	if err := checkRunnerFile(plan.runnerFile()); err != nil {
+		return setupPlan{}, fmt.Errorf("%w (nothing was changed and no token was spent)", err)
 	}
-	plan := setupPlan{proxy: carried, setupOptions: o, paths: paths, dockerHost: h.dockerHost, want: want, flagged: o.proxyImage != ""}
 	if _, err := os.Stat(plan.paths.identity()); err == nil {
 		id, err := runneridentity.Load(plan.paths.stateDir, o.org)
 		if err != nil {
 			return setupPlan{}, fmt.Errorf("this computer is registered, but not for this organisation or not intact: %w", err)
 		}
 		plan.registered = true
-		if o.proxyImage == "" && keptImage != id.ProxyImage {
+		if o.proxyImage == "" && (keptImage != id.ProxyImage || existing.ProxyImage != "") {
 			// An earlier --proxy-image, unless it is the organisation's own answer, saved anyway.
 			o.proxyImage = keptImage
 			plan.setupOptions.proxyImage, plan.flagged = keptImage, keptImage != ""
 		}
 		// --proxy-image, else the image the organisation named at registration, else this binary's own.
 		plan.fromIdentity = o.proxyImage == "" && id.ProxyImage != ""
-		if plan.proxyImage = cmp.Or(o.proxyImage, id.ProxyImage, releaseProxyImage()); plan.proxyImage == "" {
+		if plan.proxyImage = cmp.Or(o.proxyImage, mirrorProxyImage(plan.mirror, cmp.Or(id.ProxyImage, releaseProxyImage()))); plan.proxyImage == "" {
 			return setupPlan{}, fmt.Errorf("this wardyn-runnerd is a development build (%s): pass --proxy-image <ref>", buildVersion())
 		}
 	} else {
 		// A first registration without the flag probes the release image, which the answer may replace.
-		plan.proxyImage = cmp.Or(o.proxyImage, releaseProxyImage())
+		plan.proxyImage = cmp.Or(o.proxyImage, mirrorProxyImage(plan.mirror, releaseProxyImage()))
 		if o.tokenFile == "" {
 			return setupPlan{}, errors.New("no runner identity yet: pass --token-file <file> holding the wdr_ token an administrator minted for you")
 		}

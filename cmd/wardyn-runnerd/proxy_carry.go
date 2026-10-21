@@ -10,11 +10,12 @@ import (
 	"strings"
 )
 
-// carriedProxyVars are the proxy variables Go's HTTP clients read, in the order setup writes them.
-// Setup copies the ones set in the shell into the runner service, with no user name or password.
-var carriedProxyVars = []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy"}
+// carriedProxyVars are the proxy variables the runner's connection to the organisation reads, in the order
+// setup writes them. That connection is HTTPS, so HTTP_PROXY is not one. Setup copies the ones set in the
+// shell into runnerd.json (runner_proxy, runner_no_proxy), with no user name or password.
+var carriedProxyVars = []string{"HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy"}
 
-// carriedProxyValue is what a unit file, the environment file and a plist can all carry as written.
+// carriedProxyValue is what runnerd.json, a unit file and a plist can all carry as written.
 var carriedProxyValue = regexp.MustCompile(`^[A-Za-z0-9._:/%+=,* ~\[\]-]+$`)
 
 type carriedProxy struct{ name, value string }
