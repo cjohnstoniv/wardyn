@@ -140,6 +140,10 @@ type CreateRunRequest struct {
 	// deployment with no model providers, or on a run that calls no model, it
 	// is refused rather than ignored.
 	ModelProvider string `json:"model_provider,omitempty"`
+	// RunIn names the unit this run runs in: one of the caller's units, by id or exact name. Empty runs
+	// in the caller's home unit. A unit that is not one of theirs, or no unit at all, is refused 403
+	// unit_not_a_context.
+	RunIn string `json:"run_in,omitempty"`
 	// Drive opts this run into the member's USER DRIVE — the per-user storage
 	// an admin allocated them. Nil (the default) mounts nothing, byte for byte
 	// today. Nothing here names a path or a drive: the server resolves which
