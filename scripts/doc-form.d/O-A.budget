@@ -133,7 +133,8 @@
 # docs/OPERATIONS.md 57950 = ours 57754 + theirs 57697 - base 57501 at the 0.10 W4d merge of FEAT-2KEEP-UI onto the train.
 # docs/OPERATIONS.md 58360 = ours 58171 + theirs 57690 - base 57501 at the merge of main into FEAT-2TEAM-UI.
 # docs/OPERATIONS.md 58620 = ours 57950 + theirs 58360 - base 57690 at the 0.10 W4d merge of FEAT-2TEAM-UI onto the train.
-docs/OPERATIONS.md=58620 share=35
+# M10 (#113, #112): docs/OPERATIONS.md 58725 adds 105 over 58620, measured: the 0204 user_drives_second_place migration line and its Before you upgrade note.
+docs/OPERATIONS.md=58725 share=35
 # docs/OPERATIONS.md 55848 adds 132 over 55716: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
 # docs/OPERATIONS.md 55840 adds 124 over 55716, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # docs/OPERATIONS.md 55867 adds 27 over 55840, measured: a run whose runner cannot be asked falls back to this deployment's runner, the older-runner exception, pooled runs, and the runner_offline gap reason.
