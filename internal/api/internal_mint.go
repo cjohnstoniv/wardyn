@@ -115,7 +115,7 @@ func (s *Server) handleInternalMint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s.refuseWithheldGrant(w, r, claims, body.GrantID, reasonGrantWithheldUnread) {
+	if _, done := s.refuseWithheldGrant(w, r, claims, body.GrantID, mintWithheldUnread(w, r)); done {
 		return
 	}
 	minted, err := s.cfg.Broker.MintForGrant(r.Context(), claims, body.GrantID)
@@ -228,33 +228,49 @@ func (s *Server) brokeredForgeMintKind(ctx context.Context, runID, grantID uuid.
 	return "", "", false
 }
 
+// errRunUnread marks a withheld check that could not read the run itself: the injection door answers
+// it as the sink's own run_unreadable.
+var errRunUnread = errors.New("read the run")
+
+// liveGrant is liveGrantWithheld's reading of one grant: its spec, the run it was judged with (nil
+// when the run is not this store's), whether both are this store's and whether the run is kept from it.
+type liveGrant struct {
+	spec            types.GrantSpec
+	run             *types.AgentRun
+	found, withheld bool
+}
+
 // liveGrantWithheld reports whether the run is kept from grantID now (#3238): its captured profile as
 // it stands (runProfile: one that no longer exists adds nothing, as at the run's doors) or the Wardyn
 // boundary withholds the grant or a host it delivers to (withholding.credentialWithheld). A
 // credential is judged when it is delivered, so a boundary narrowed after dispatch reaches a running
 // run here. found=false: the run or the grant is not this store's, for the broker to refuse.
-func (s *Server) liveGrantWithheld(ctx context.Context, runID, grantID uuid.UUID) (spec types.GrantSpec, found, withheld bool, err error) {
+func (s *Server) liveGrantWithheld(ctx context.Context, runID, grantID uuid.UUID) (lg liveGrant, err error) {
 	grants, err := s.cfg.Store.ListGrantsByRun(ctx, runID)
 	if err != nil {
-		return spec, false, false, err
+		return lg, err
 	}
 	i := slices.IndexFunc(grants, func(g types.CredentialGrant) bool { return g.ID == grantID })
-	if i < 0 {
-		return spec, false, false, nil
+	if i >= 0 {
+		lg.spec = grants[i].Spec
 	}
-	spec = grants[i].Spec
 	run, err := s.cfg.Store.GetRun(ctx, runID)
 	if errors.Is(err, store.ErrNotFound) {
-		return spec, false, false, nil
+		return lg, nil
 	}
 	if err != nil {
-		return spec, true, false, err
+		return lg, errors.Join(errRunUnread, err)
+	}
+	lg.run = &run
+	if i < 0 {
+		return lg, nil
 	}
 	w, err := s.liveWithholding(ctx, run)
 	if err != nil {
-		return spec, true, false, err
+		return lg, err
 	}
-	return spec, true, w.credentialWithheld(spec), nil
+	lg.found, lg.withheld = true, w.credentialWithheld(lg.spec)
+	return lg, nil
 }
 
 // liveWithholding is a running run's withholding: its captured profile's current denies and the
@@ -277,32 +293,63 @@ func (s *Server) liveWithholding(ctx context.Context, run types.AgentRun) (withh
 }
 
 // refuseWithheldGrant answers a mint or a redeem of a grant liveGrantWithheld keeps from the run:
-// 403 credential_withheld with a credential.mint denied row, or 503 with the door's unread reason
-// (credential_withheld_unread at mint, the sink's store_unavailable at redeem) when it could not be
-// read (never answered unchecked). Before MintForGrant, so nothing is minted or
-// consumed. True when it has answered.
-func (s *Server) refuseWithheldGrant(w http.ResponseWriter, r *http.Request, claims *identity.Claims, grantID uuid.UUID, unread string) bool {
+// 403 credential_withheld with a credential.mint denied row, or the door's own 503 (unread) when it
+// could not be read (never answered unchecked). Before MintForGrant, so nothing is minted or
+// consumed. True when it has answered; otherwise the run it judged with (nil when none), for the
+// door to use rather than read again.
+func (s *Server) refuseWithheldGrant(w http.ResponseWriter, r *http.Request, claims *identity.Claims, grantID uuid.UUID,
+	unread func(liveGrant, error),
+) (*types.AgentRun, bool) {
 	if s.cfg.Store == nil {
-		return false
+		return nil, false
 	}
-	spec, found, withheld, err := s.liveGrantWithheld(r.Context(), claims.RunID, grantID)
+	lg, err := s.liveGrantWithheld(r.Context(), claims.RunID, grantID)
 	if err != nil {
-		writeErrorReason(w, http.StatusServiceUnavailable, unread,
-			loggedMsg(r.Context(), "read the run's grants, profile or Wardyn boundary to check the credential", err))
-		return true
+		unread(lg, err)
+		return nil, true
 	}
-	if !found || !withheld {
-		return false
+	if !lg.found || !lg.withheld {
+		return lg.run, false
 	}
 	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID, "credential.mint",
 		grantID.String(), "denied", mustJSON(map[string]any{
 			"grant_id": grantID.String(),
-			"kind":     string(spec.Kind),
+			"kind":     string(lg.spec.Kind),
 			"reason":   reasonGrantWithheld,
 		})))
 	writeErrorReason(w, http.StatusForbidden, reasonGrantWithheld,
 		"wardyn: this run is no longer given this credential: the run's governance profile or the Wardyn boundary withholds it or a host it reaches")
-	return true
+	return nil, true
+}
+
+// withheldUnreadMsg is the logged text of a withheld check that could not be read.
+const withheldUnreadMsg = "read the run's grants, profile or Wardyn boundary to check the credential"
+
+// mintWithheldUnread is the mint door's answer to an unread withheld check: 503
+// credential_withheld_unread, retried by the caller.
+func mintWithheldUnread(w http.ResponseWriter, r *http.Request) func(liveGrant, error) {
+	return func(_ liveGrant, err error) {
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonGrantWithheldUnread, loggedMsg(r.Context(), withheldUnreadMsg, err))
+	}
+}
+
+// sinkWithheldUnread is the injection door's: the sink's own audited refusal, a secret.read failure
+// row and 503 run_unreadable when the run could not be read (store_unavailable for its grants,
+// profile or the boundary), so no delivery is refused unaudited.
+func (s *Server) sinkWithheldUnread(w http.ResponseWriter, r *http.Request, claims *identity.Claims, grantID uuid.UUID) func(liveGrant, error) {
+	return func(lg liveGrant, err error) {
+		reason := reasonSinkStoreUnavailable
+		if errors.Is(err, errRunUnread) {
+			reason = reasonRunUnreadable
+		}
+		target := grantID.String()
+		if rule, rerr := injectionRuleFromScope(lg.spec.Scope); rerr == nil && rule.SecretName != "" {
+			target = rule.SecretName
+		}
+		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
+			"secret.read", target, "failure", mustJSON(map[string]any{"reason": reason, "grant_id": grantID})))
+		writeErrorReason(w, http.StatusServiceUnavailable, reason, loggedMsg(r.Context(), withheldUnreadMsg, err))
+	}
 }
 
 // Mint 409-conflict "code" values, bound to the ONE home both sides of the wire

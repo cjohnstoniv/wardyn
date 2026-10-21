@@ -386,6 +386,11 @@ func TestBoundaryMintRefusesWithheldGrants(t *testing.T) {
 				if h.broker.lastCall != nil {
 					t.Error("the broker was called for a refused grant")
 				}
+				if door == "injection" && code == http.StatusServiceUnavailable {
+					if ev := lastAuditEvent(t, h.audit.events, "secret.read"); ev.Outcome != "failure" || !strings.Contains(string(ev.Data), reason) {
+						t.Errorf("audit = %s %s, want the sink's secret.read failure naming %s", ev.Outcome, ev.Data, reason)
+					}
+				}
 			})
 		}
 	}

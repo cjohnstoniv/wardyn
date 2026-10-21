@@ -49,7 +49,7 @@ A revive whose git broker or Azure CLI the boundary no longer allows is refused 
 
 A captured AWS SSO session held in the sandbox (`WARDYN_AWS_SSO_PROXY_INJECT` off) is judged as the `api_key` grant the proxy-injected session gets: its portal host, `x-amz-sso_bearer_token` and `aws-sso-access-token`. So a boundary admits or withholds it alike under either setting. A withheld session's Bedrock lane is dropped and listed in `dropped_broker_lanes`.
 
-The mint and redeem doors check the same rules live, before anything is minted: a grant the boundary or the run's profile now withholds is refused with `403 credential_withheld` and a `credential.mint` denied row. If the run, its grants, its profile or the boundary cannot be read, the answer is `503` (`credential_withheld_unread` at mint, `store_unavailable` at redeem); retry. The AWS SSO renewer skips a grant it withholds.
+The mint and redeem doors check the same rules live, before anything is minted: a grant the boundary or the run's profile now withholds is refused with `403 credential_withheld` and a `credential.mint` denied row. If the run, its grants, its profile or the boundary cannot be read, the answer is `503` (`credential_withheld_unread` at mint; at redeem `run_unreadable` or `store_unavailable`, with a `secret.read` failure row); retry. The AWS SSO renewer skips a grant it withholds.
 
 ## Changing it
 

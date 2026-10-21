@@ -63,7 +63,7 @@ func TestProviderKeySink_ReadsTheRecordByUID(t *testing.T) {
 			st.siteErr = errors.New("db down")
 		}, http.StatusServiceUnavailable, "providers_unreadable"},
 		{"the run cannot be read", func(st *bearerGuardStore, _ *types.ModelProvider) {
-			st.failRunFromCall = st.runCalls + 2 // the /internal liveness gate's read passes; the sink's fails
+			st.failRunPastGate = true // the withheld check's read, the only one past the liveness gate, fails
 			st.runErr = errors.New("db down")
 		}, http.StatusServiceUnavailable, "run_unreadable"},
 	} {
@@ -90,12 +90,19 @@ func TestProviderKeySink_ReadsTheRecordByUID(t *testing.T) {
 			if st.site.ModelProviders != nil && len(st.site.ModelProviders.Providers) == 1 {
 				st.site.ModelProviders = providerBlock(changed)
 			}
+			st.pastGateReads = 0 // count this delivery's reads only, not dispatch's
 			before := time.Now()
 			rr := do(t, h.srv, http.MethodGet, "/api/v1/internal/injection/"+grants[0].ID.String(), h.mintRunToken(t, st.run.ID), "")
 			if rr.Code != tc.want {
 				t.Fatalf("sink = %d %s, want %d", rr.Code, rr.Body.String(), tc.want)
 			}
+			if st.pastGateReads != 1 {
+				t.Errorf("the run was read %d times past the liveness gate, want once: the sink judges with the withheld check's read", st.pastGateReads)
+			}
 			if tc.want != http.StatusOK {
+				if !strings.Contains(rr.Body.String(), tc.reason) {
+					t.Errorf("body %s, want reason %s on the wire", rr.Body.String(), tc.reason)
+				}
 				if strings.Contains(rr.Body.String(), mpOwnerKey) {
 					t.Fatalf("a refusal carried the key: %s", rr.Body.String())
 				}

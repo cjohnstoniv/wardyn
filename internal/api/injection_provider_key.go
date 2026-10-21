@@ -83,9 +83,11 @@ func providerStoreReadRefusal(name string, err error) (status int, reason, body 
 // provider is re-read by UID on every resolve and must still be the one the
 // run was launched with for the grant's harness (sinkHarnessProvider), on,
 // serving that harness and of a kind with a key; the host, header and format
-// it derives must equal the grant's. Every miss fails closed.
+// it derives must equal the grant's. Every miss fails closed. run is the one
+// the withheld check read on this delivery (mintInjectionGrant); nil is a run
+// it could not read.
 func (s *Server) resolveProviderKeyInjection(w http.ResponseWriter, r *http.Request,
-	claims *identity.Claims, minted broker.Minted, grantID uuid.UUID,
+	claims *identity.Claims, minted broker.Minted, grantID uuid.UUID, run *types.AgentRun,
 ) bool {
 	name := minted.Injection.SecretName
 	if !strings.HasPrefix(name, providerSecretPrefix) {
@@ -109,15 +111,14 @@ func (s *Server) resolveProviderKeyInjection(w http.ResponseWriter, r *http.Requ
 	if rec.OwnerSubject == "" || rec.OwnerSubject != claims.Sub {
 		return fail(http.StatusForbidden, "owner_mismatch", providerKeyNotOwn)
 	}
-	run, err := s.cfg.Store.GetRun(ctx, claims.RunID)
-	if err != nil {
+	if run == nil {
 		return fail(http.StatusServiceUnavailable, "run_unreadable", providerKeyRecordUnreadable)
 	}
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
 		return fail(http.StatusServiceUnavailable, "providers_unreadable", providerKeyRecordUnreadable)
 	}
-	harness, providerID, launched, err := s.sinkHarnessProvider(ctx, run, rec.Harness)
+	harness, providerID, launched, err := s.sinkHarnessProvider(ctx, *run, rec.Harness)
 	if err != nil {
 		return fail(http.StatusServiceUnavailable, "run_unreadable", providerKeyRecordUnreadable)
 	}
