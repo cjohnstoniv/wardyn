@@ -33,6 +33,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - A run on a workspace whose base image needs the image builder, on a control plane with none, is still refused `image_builder_unavailable`. The refusal now names the image and what works instead: an admin wires the builder, or sets the workspace's base image to recommended so a command that needs no model runs on the stock agent image (or the workspace's convention image where a builder is wired).
 - A background command that includes no harness, on a workspace with no base image of its own, now runs, from the stock agent image (or the workspace's convention image where a builder is wired). It was refused `workspace_seed_no_base_image` with advice to pass `--image` or `--agent`, which a run-mode command cannot carry. It evaluates no model provider and gets no model credential.
 
+### Security
+
+- The console's build tooling moves to vite 6.4.4, which carries the fixed launch-editor (GHSA-587h-7wmj-h5pm, GHSA-r825-w8mm-5pxw, GHSA-698v-4r3x-3vcv). Those flaws are in the development server's open-in-editor route; the built console Wardyn ships does not include it.
+
 ## [0.9.7] — 2026-10-20
 
 A small release on top of 0.9.6. An Azure DevOps token that the organisation mints for a run can now be delivered to a person's own runner, off by default, and a credential delivery write that the server could not build is refused when it is made. No migration.
