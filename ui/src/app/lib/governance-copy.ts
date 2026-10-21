@@ -430,6 +430,7 @@ export const CHANGES = {
     runner_trust: "Runner trust class",
     run_node_record: "Node record",
     local_credential_delivery: DELIVERY.CHANGE_KIND,
+    governance_boundary: "Wardyn boundary",
   } as Record<string, string>,
   // By op. An op this console predates shows its raw name.
   OP: {

@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "format": "novnc-playback",
+  "encoding": "base64",
+  "started_at": "2026-10-20T10:00:00.1Z",
+  "frames": [
+    "{UkZCIDAwMy4wMDgKAQEAAAAABAADACAYAAEAAAAAAAAAAAAAAAAAAAACd2Q=",
+    "{AAAAAQAAAAAAAQABAAAAAAkJCQk=",
+    "{AgI=",
+    "{AAAAAQAAAAAASwABAAAAAAcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBw=="
+  ],
+  "clipboard_omitted": 1
+}

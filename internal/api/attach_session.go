@@ -107,7 +107,9 @@ func (s *Server) newSessionRecorder(run types.AgentRun, sessionID string, opts r
 	noop := func(context.Context, types.ActorType, string) {}
 	// A run marked not_recorded is still recorded here: the mark is about the runner's own terminal
 	// session, and the organisation records the console and SSH sessions it opens (hybrid-laptops.md).
-	if s.cfg.RecordingStore == nil || runIsUnrecordable(run) {
+	// A run whose recording level resolved to off records none of them, by its level or its mark.
+	if s.cfg.RecordingStore == nil || runIsUnrecordable(run) || run.NotRecorded == types.NotRecordedPolicyOff ||
+		run.RecordingLevel == types.RecordingOff {
 		return nil, noop
 	}
 	runID := run.ID

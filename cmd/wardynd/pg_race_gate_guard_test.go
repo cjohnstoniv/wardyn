@@ -142,7 +142,7 @@ func TestPGConcurrencyProofsRunUnderRace(t *testing.T) {
 	// executing line swallows no failure (an exact line, so no `|| true`), and
 	// no step may continue on error: a leg whose profile did not upload has not
 	// done its job, since build unions those profiles.
-	const fullSuites = "        if: matrix.suite == 'lint' || needs.changes.outputs.backend != 'false'\n" +
+	const fullSuites = "        if: needs.changes.outputs.backend != 'false'\n" +
 		"        run: make ${{ matrix.target }}\n"
 	if !strings.Contains(goJob, fullSuites) {
 		t.Errorf("ci.yml's go job no longer runs `make ${{ matrix.target }}` unless the change is explicitly docs- or console-only:\n%s", goJob)
@@ -155,7 +155,7 @@ func TestPGConcurrencyProofsRunUnderRace(t *testing.T) {
 	// to swallow a failure), and a tagless leg that finds no guard package
 	// fails instead of passing empty.
 	for _, want := range []string{
-		"\n        if: matrix.suite != 'lint' && needs.changes.outputs.backend == 'false'\n",
+		"\n        if: needs.changes.outputs.backend == 'false'\n",
 		"\n" + `          WARDYN_TEST_PG='' go test -count=1 ${TAGS:+-tags "$TAGS"} $pkgs` + "\n",
 		"\n" + `            [ -n "$TAGS" ] || { echo "::error::no doc-reading guard test found; the discovery pattern regressed"; exit 1; }` + "\n",
 	} {
@@ -165,8 +165,9 @@ func TestPGConcurrencyProofsRunUnderRace(t *testing.T) {
 	}
 	build := ciJobBlock(t, string(wf), "build")
 	for _, want := range []string{
-		"needs: [changes, go]",
+		"needs: [changes, go, go-lint]",
 		"LEGS: ${{ needs.go.result }}",
+		"LINT: ${{ needs.go-lint.result }}",
 		"        if: needs.changes.outputs.backend != 'false'\n        run: make cover-union\n",
 	} {
 		if !strings.Contains(build, want) {

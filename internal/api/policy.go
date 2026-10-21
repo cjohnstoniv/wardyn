@@ -181,6 +181,9 @@ func validatePolicySpecMode(spec types.RunPolicySpec, strict, resolveMounts bool
 	if err := validateHarnessInnerWalls(spec.HarnessInnerWalls); err != nil {
 		return err
 	}
+	if err := validateRecordingLevel(spec.Recording); err != nil {
+		return err
+	}
 	if err := validateUIApps(spec.UIApps); err != nil {
 		return err
 	}

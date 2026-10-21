@@ -21,6 +21,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `SELECT, INSERT, UPDATE, DELETE` on `cli_sign_ins` (migration `0199_cli_sign_in`, which also adds `kind` and
   `cli_session_id` to `api_tokens`). Without it every API token read fails, because a token's liveness now reads
   `cli_sessions`.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
+  `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE` on
+  `governance_boundary` (migration `0200_governance_boundary`). Without it the Wardyn boundary cannot be read or
+  written. The same migration's `agent_runs.break_glass` column needs no grant.
 
 ### Added
 
@@ -46,6 +50,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   - Audit actions `cli.sign_in.request`, `cli.sign_in.approve`, `cli.sign_in.deny`, `cli.session.create`,
     `cli.session.revoke`, `cli.session.refresh_refused` and `cli.session.reuse_detected`. `token.create` rows carry
     `kind`; `session.revoke` rows carry `cli_sessions_ended`.
+- Recording is a level: a policy's `recording` is `off`, `terminal` or `screen_actions`, and
+  `site_config.recording` sets the organisation's level and can lock it as a minimum. Nothing set records terminal
+  sessions, as before. `WARDYN_RECORDING_STORE=off` still records nothing, and keystrokes are never recorded.
 
 ### Changed
 

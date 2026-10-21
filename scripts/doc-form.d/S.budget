@@ -191,11 +191,19 @@
 # 0.10 HYBB (#2982): docs/sdk.md 19696 adds 61, measured: the computer_folders_off, computer_runner_offline, computer_runner_no_folders and computer_folder_refused reason rows.
 # docs/sdk.md 19743 = ours 19696 + theirs 19682 - base 19635 at the 0.10 merge of main (W2) into HYBB.
 # docs/sdk.md 20060 = ours 19999 + theirs 19743 - base 19682 at the 0.10 W3 merge of HYBB onto the train.
+# docs/sdk.md 19726 = 19635 + 91 (0.10 LAY-A), measured after merging main into 0.10 LAY-A.
+# docs/sdk.md 19766 measured (0.10 BOUNDARY): the boundary reasons, boundary_hard_limits_gated added.
+# docs/sdk.md 19770 measured (0.10 BOUNDARY): break_glass_reason_required only when a profile exists.
+# docs/sdk.md 19409 adds 88 over 19321, measured (0.10 LAY-A): the four org walls and break-glass reasons.
+# docs/sdk.md 19481 measured after merging main into 0.10 LAY-A, with the preflight and preview doors on break_glass_reason_required.
+# docs/sdk.md 19817 = ours 19770 + theirs 19682 - base 19635 at the main merge into 0.10 BOUNDARY.
+# docs/sdk.md 20195 = ours 20060 + theirs 19817 - base 19682 at the 0.10 W4b merge of LAY-A onto the train.
 # docs/sdk.md 19706 = ours 19659 + theirs 19682 - base 19635 at the ATT-SRV merge of main (W2 train).
 # docs/sdk.md 20084 = ours 20060 + theirs 19706 - base 19682 at the 0.10 W4a merge of ATT-SRV onto the train.
 # 0.10 ATT-LOGIN-SRV: docs/sdk.md 19886 adds 204 over 19682: twelve CLI sign-in reasons, measured.
 # docs/sdk.md 20288 = ours 20084 + theirs 19886 - base 19682 at the 0.10 W4a merge of ATT-LOGIN-SRV onto the train.
-docs/sdk.md=20288 share=21
+# docs/sdk.md 20423 = ours 20195 + theirs 20288 - base 20060 at the 0.10 merge of main (W4a) into the W4b train.
+docs/sdk.md=20423 share=21
 # docs/sdk.md 18691 adds 28 over 18663, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.

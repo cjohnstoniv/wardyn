@@ -360,7 +360,8 @@ test.describe("a refusal names the policy and how to request a change (M10 S4)",
 
     await expect(naming.getByRole("alert")).toContainText(sentence);
     const remedy = naming.getByTestId("policy-remedy");
-    await expect(remedy).toHaveText("Owned by Platform Security · Request access ↗");
+    await expect(remedy).toContainText("Owner");
+    await expect(remedy).toContainText("Platform Security");
     await expect(remedy.getByRole("link", { name: "Request access" })).toHaveAttribute("href", "https://example.com/access");
   });
 
@@ -398,6 +399,8 @@ test.describe("a refusal names the policy and how to request a change (M10 S4)",
 
     await expect(page.getByText("pypi.org")).toBeVisible();
     await expect(page.getByText("Refused by policy")).toBeVisible();
-    await expect(page.getByTestId("policy-remedy")).toHaveText("Owned by Platform Security · Request access ↗");
+    const remedy = page.getByTestId("policy-remedy");
+    await expect(remedy).toContainText("Platform Security");
+    await expect(remedy.getByRole("link", { name: "Request access" })).toBeVisible();
   });
 });

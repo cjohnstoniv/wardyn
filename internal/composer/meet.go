@@ -164,6 +164,9 @@ func (m *meeter) validatePresence(ov Overlay) {
 			}
 		}
 	}
+	if c.Recording != nil && (*c.Recording == "" || !c.Recording.Valid()) {
+		m.fail(ReasonOverlayInvalid, "recording", "%q is not a recording level (off, terminal or screen_actions)", *c.Recording)
+	}
 	if w := c.HarnessInnerWalls; w != nil && !validInnerWalls(*w) {
 		m.fail(ReasonOverlayInvalid, "harness_inner_walls", "sandbox_mode %q or approvals %q is not a value a policy may choose", w.SandboxMode, w.Approvals)
 	}

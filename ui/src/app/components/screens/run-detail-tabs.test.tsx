@@ -674,8 +674,10 @@ describe("RunDetailScreen — Audit tab Request access remedy", () => {
     "renders the remedy beside a refused %s row",
     async (source) => {
       await open({ ...RUN, policy: POLICY }, [row("a", "egress.deny", source)]);
-      expect(await screen.findByText(/Owned by Platform Security/)).toBeInTheDocument();
+      expect(await screen.findByText("Platform Security")).toBeInTheDocument();
       expect(screen.getByRole("link", { name: /Request access/ })).toHaveAttribute("href", "https://example.com/access");
+      // The run's own policy reference has no layer, and a proxy refusal cannot know one: no wall is named.
+      expect(screen.getByTestId("policy-remedy")).not.toHaveTextContent("Set by");
     },
   );
 

@@ -777,6 +777,28 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
 });
 
 
+describe("Wardyn boundary wire (GET/PUT /governance/boundary, POST /governance/dry-run)", () => {
+  it("each boundary DTO's TypeScript keys are exactly its Go json tags", () => {
+    const root = repoRoot();
+    const types = readFileSync(join(root, "internal/types/boundary.go"), "utf8");
+    const api = readFileSync(join(root, "internal/api/boundary.go"), "utf8") + readFileSync(join(root, "internal/api/boundary_meet.go"), "utf8");
+    const ts = readFileSync(join(root, "ui/src/app/lib/api/boundary.ts"), "utf8");
+    const pairs: [string, string, string][] = [
+      [types, "Boundary", "Boundary"],
+      [types, "BoundaryWrite", "BoundaryWrite"],
+      [types, "BoundarySpec", "BoundarySpec"],
+      [types, "BoundaryLimits", "BoundaryLimits"],
+      [api, "boundaryReport", "BoundaryReport"],
+      [api, "boundaryReportRow", "BoundaryReportRow"],
+      [api, "boundaryReportAssign", "BoundaryReportAssign"],
+      [api, "boundaryChange", "BoundaryChange"],
+    ];
+    for (const [go, goName, tsName] of pairs) {
+      expect(tsInterfaceTopKeys(ts, tsName).sort(), tsName).toEqual(goJSONTags(go, goName).sort());
+    }
+  });
+});
+
 describe("SetupProviderAccess cause fields", () => {
   it("keeps the Go and TypeScript optional wire fields in parity", () => {
     const root = repoRoot();

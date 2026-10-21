@@ -3,8 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, vi } from "vitest";
+import { act, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { PolicyRemedy, safeRequestHref } from "./policy-remedy";
 
 const ref = (over: Record<string, string>) => ({ source: "profile", name: "Contractors", ...over });
@@ -15,7 +16,7 @@ describe("PolicyRemedy", () => {
     const a = screen.getByRole("link", { name: /Request access/ });
     expect(a).toHaveAttribute("href", "https://example.com/access");
     expect(a).toHaveAttribute("rel", "noopener noreferrer");
-    expect(screen.getByTestId("policy-remedy")).toHaveTextContent("Owned by Platform Security · Request access ↗");
+    expect(screen.getByTestId("policy-remedy")).toHaveTextContent("Platform Security");
   });
 
   it("renders a link for a mailto: request_url", () => {
@@ -42,7 +43,7 @@ describe("PolicyRemedy", () => {
     (bad) => {
       render(<PolicyRemedy policy={ref({ owner: "Platform Security", request_url: bad })} />);
       expect(screen.queryByRole("link")).toBeNull();
-      expect(screen.getByTestId("policy-remedy")).toHaveTextContent("Owned by Platform Security");
+      expect(screen.getByTestId("policy-remedy")).toHaveTextContent("Platform Security");
       expect(screen.getByTestId("policy-remedy")).not.toHaveTextContent(bad);
     },
   );
@@ -52,13 +53,96 @@ describe("PolicyRemedy", () => {
     expect(screen.queryByRole("link")).toBeNull();
   });
 
-  it("renders nothing without a policy, or when it has no owner, link, email or text", () => {
+  it("renders nothing without a policy", () => {
     const { container, rerender } = render(<PolicyRemedy policy={undefined} />);
     expect(container).toBeEmptyDOMElement();
     rerender(<PolicyRemedy policy={null} />);
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it("names the wall that set the limit from the refusal's layer", () => {
+    const { rerender } = render(<PolicyRemedy policy={{ source: "profile", layer: "deployment" }} />);
+    expect(screen.getByTestId("policy-remedy")).toHaveTextContent("Set byWardyn boundary");
+    rerender(<PolicyRemedy policy={{ source: "profile", layer: "profile", name: "Platform team" }} />);
+    expect(screen.getByTestId("policy-remedy")).toHaveTextContent("Set byPlatform team walls");
+    rerender(<PolicyRemedy policy={{ source: "profile", layer: "profile", name: "Platform team", overridden: true }} />);
+    expect(screen.getByTestId("policy-remedy")).toHaveTextContent("Set byThis run's policy");
+  });
+
+  it("draws no Set by row without a layer: a run's policy reference and a proxy refusal cannot name the wall", () => {
+    render(<PolicyRemedy policy={{ source: "profile", name: "Platform team", owner: "Platform Security" }} />);
+    const card = screen.getByTestId("policy-remedy");
+    expect(card).not.toHaveTextContent("Set by");
+    expect(card).not.toHaveTextContent("Platform team walls");
+    expect(card).toHaveTextContent("OwnerPlatform Security");
+  });
+
+  it("the card's Request access is a button-styled link", () => {
+    render(<PolicyRemedy policy={ref({ owner: "Platform Security", request_url: "https://example.com/access" })} />);
+    expect(screen.getByRole("link", { name: /Request access/ })).toHaveClass("border");
+  });
+
+  it("Copy details says Copied only after the write lands, then resets; a refused clipboard changes nothing", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const original = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      // After setup(): user-event installs its own clipboard stub there.
+      const write = vi.fn().mockRejectedValueOnce(new Error("denied")).mockResolvedValueOnce(undefined);
+      Object.defineProperty(navigator, "clipboard", { value: { writeText: write }, configurable: true });
+      render(<PolicyRemedy policy={ref({ owner: "Platform Security" })} copyable />);
+      await user.click(screen.getByRole("button", { name: "Copy details" }));
+      await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
+      expect(screen.getByRole("button", { name: "Copy details" })).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Copy details" }));
+      expect(await screen.findByRole("button", { name: "Copied" })).toBeInTheDocument();
+      act(() => {
+        vi.advanceTimersByTime(2500);
+      });
+      expect(screen.getByRole("button", { name: "Copy details" })).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+      if (original) Object.defineProperty(navigator, "clipboard", original);
+      else Reflect.deleteProperty(navigator, "clipboard");
+    }
+  });
+
+  it("the line form is one owner-and-ask line, never the card", () => {
+    render(<PolicyRemedy line policy={ref({ owner: "Platform Security", request_url: "https://example.com/access" })} />);
+    const line = screen.getByTestId("policy-remedy");
+    expect(line).toHaveTextContent("Owned by Platform Security · Request access");
+    expect(line.querySelector("dl")).toBeNull();
+    // Main's line form: an underlined link, not the card's button.
+    expect(screen.getByRole("link", { name: /Request access/ })).toHaveClass("underline");
+    expect(screen.getByRole("link", { name: /Request access/ })).not.toHaveClass("border");
+  });
+
+  it("says who to ask when the limit lists an owner but no way to ask, or neither", () => {
+    const { rerender } = render(<PolicyRemedy policy={ref({ owner: "Platform Security" })} />);
+    expect(screen.getByTestId("policy-remedy")).toHaveTextContent("No way to ask is listed. Contact Platform Security directly.");
     rerender(<PolicyRemedy policy={{ source: "deployment" }} />);
-    expect(container).toBeEmptyDOMElement();
+    const card = screen.getByTestId("policy-remedy");
+    expect(card).toHaveTextContent("OwnerNot listed");
+    expect(card).toHaveTextContent("This limit names no owner. Ask your Wardyn admin.");
+  });
+
+  it("shows Enforced, Can change and Copy details only when the surface asks", async () => {
+    const { rerender } = render(<PolicyRemedy policy={ref({ owner: "Platform Security" })} />);
+    expect(screen.queryByText("Enforced")).toBeNull();
+    expect(screen.queryByText("Can change")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Copy details" })).toBeNull();
+    rerender(
+      <PolicyRemedy
+        policy={ref({ owner: "Platform Security" })}
+        enforced="By Wardyn, before the terminal opens"
+        canChange="Not from here. The owner can."
+        copyable
+      />,
+    );
+    const card = screen.getByTestId("policy-remedy");
+    expect(card).toHaveTextContent("EnforcedBy Wardyn, before the terminal opens");
+    expect(card).toHaveTextContent("Can changeNot from here. The owner can.");
+    expect(screen.getByRole("button", { name: "Copy details" })).toBeInTheDocument();
   });
 });
 

@@ -166,6 +166,9 @@ type AgentRun struct {
 	// NotRecorded says why the run has no session recording, decided once at dispatch and kept for
 	// the run's life; empty when the run is recorded (or predates the field).
 	NotRecorded RunNotRecorded `json:"not_recorded,omitempty"`
+	// RecordingLevel is the level the run is recorded at, resolved once at dispatch with NotRecorded
+	// (RecordingChoice); empty for a run dispatched before the level existed, which reads as terminal.
+	RecordingLevel RecordingLevel `json:"recording_level,omitempty"`
 	// RunnerPoolID is the runner pool the run was admitted into, and the next three fields say how
 	// (all written once at create). A pool is a label for a choice and never admission: the run
 	// goes to the exact runner recorded in RunnerID (a self-hosted runner) or RunnerPoolExecutor (a
@@ -237,6 +240,8 @@ type AgentRun struct {
 	Preset          string `json:"preset,omitempty"`    // launch preset this run was expanded from; empty for an explicit-spec run
 	PresetVersion   int    `json:"preset_version,omitempty"`
 	OperatorOwned   bool   `json:"operator_owned,omitempty"` // mirrors identity.Claims.OperatorOwned so dispatch/revive re-mint read what create decided; the console reads it for the no-personal-owner entry carve-out
+	// BreakGlass marks an admin-token break-glass run (migration 0200).
+	BreakGlass bool `json:"break_glass,omitempty"`
 	// CreatedVia is the registered portal this run was launched through on the person's behalf; nil when self-launched. The owner is still the person.
 	CreatedVia *uuid.UUID `json:"created_via,omitempty"`
 	// HasRecording/RecordingBytes/RecordingDurationSec are derived, never stored, projected only with ?include=recording_meta; HasRecording is the only "no recording" signal.

@@ -23,8 +23,9 @@ import { HttpError } from "../../../lib/api/core";
 import { modelProviders, type ModelProvidersList } from "../../../lib/api/model-providers";
 import { AVAILABILITY } from "../../../lib/availability-copy";
 import { getErrorMessage } from "../../../lib/format";
+import { LOCAL_MODEL_EDITOR } from "../../../lib/local-model-copy";
 import { MODEL_PROVIDERS, PROVIDER_EDITOR, PROVIDERS } from "../../../lib/model-providers-copy";
-import type { ModelProvider } from "../../../lib/types/site";
+import { LOCAL_MODEL_DEFAULTS, type ModelProvider } from "../../../lib/types/site";
 import { AGENTS, AGENTS_EXTRA } from "../../../lib/workspace-providers-copy";
 import {
   AlertDialog,
@@ -47,12 +48,13 @@ import {
   type AvailabilityDraftValue,
 } from "../../wardyn/availability-control";
 import { Mono } from "../../wardyn/code-block";
-import { Field } from "../../wardyn/form-primitives";
+import { Field, Switch } from "../../wardyn/form-primitives";
 import { Chip } from "../../wardyn/primitives";
 import { SavedElsewhereBanner } from "../../wardyn/saved-elsewhere-banner";
 import { useDiscardReload } from "../../wardyn/use-discard-reload";
 import { useRovingRadio } from "../../wardyn/use-roving-radio";
 import { useDeferredBusy } from "../../../lib/use-deferred-busy";
+import { ModelChips } from "./model-chips";
 import {
   EDITOR_KINDS,
   addressChanged,
@@ -61,8 +63,12 @@ import {
   incompatibleReason,
   isBedrock,
   isEndpoint,
+  isLocal,
   newDraft,
   providerFrom,
+  refusedField,
+  refusedHarness,
+  refusedModel,
   vendorHost,
   type HarnessRow,
   type ProviderDraft,
@@ -122,7 +128,9 @@ export function ModelProviderEditor({
 
   const stored = list.providers.providers ?? [];
   const title = editing ? editing.name || MODEL_PROVIDERS.KIND[editing.kind] : MODEL_PROVIDERS.ADD_CTA;
-  const keyKind = !isEndpoint(editing?.kind ?? draft?.kind ?? "custom_endpoint");
+  // A local model server's person adds a token (or nothing), never a key.
+  const kind = editing?.kind ?? draft?.kind ?? "custom_endpoint";
+  const keyKind = !(isEndpoint(kind) || isLocal(kind));
 
   const write = async (next: ModelProvider[]) => {
     const doc = { providers: next };
@@ -214,7 +222,7 @@ export function ModelProviderEditor({
                 <span>{AVAILABILITY.CREATE_PARTIAL_EVERYONE}</span>
               </div>
             )}
-            <ProviderFields draft={draft} setDraft={setDraft} harnesses={harnesses} />
+            <ProviderFields draft={draft} setDraft={setDraft} harnesses={harnesses} refused={refused} />
             {/* After Use with, above the footer (#923 editors.html section 2). An
                 existing provider's list writes at once, never through Save. */}
             <div className="border-t border-border pt-4">
@@ -346,13 +354,18 @@ function ProviderFields({
   draft,
   setDraft,
   harnesses,
+  refused,
 }: {
   draft: ProviderDraft;
   setDraft: React.Dispatch<React.SetStateAction<ProviderDraft | null>>;
   harnesses: HarnessRow[];
+  // The last refused save's sentence: the field it is about is outlined.
+  refused: string | null;
 }) {
   const set = (patch: Partial<ProviderDraft>) => setDraft((d) => d && { ...d, ...patch });
   const endpoint = isEndpoint(draft.kind);
+  const local = isLocal(draft.kind);
+  const badField = refusedField(refused);
   const bedrock = isBedrock(draft.kind);
   const sso = draft.kind === "bedrock_sso";
   const routeThrough = draft.kind === "anthropic_api_key" || draft.kind === "openai_api_key";
@@ -449,6 +462,79 @@ function ProviderFields({
         </>
       )}
 
+      {local && (
+        <>
+          <Field label={PROVIDER_EDITOR.BASE_URL} htmlFor="mp-base-url" hint={LOCAL_MODEL_EDITOR.BASE_URL_HINT}>
+            <Input
+              id="mp-base-url"
+              className="font-mono"
+              aria-invalid={badField === "base_url" || undefined}
+              value={draft.baseUrl}
+              onChange={(e) => set({ baseUrl: e.target.value })}
+            />
+          </Field>
+          <div className="space-y-2">
+            <div className="flex items-center gap-2.5">
+              <Switch
+                checked={draft.useToken}
+                onChange={(useToken) => set({ useToken })}
+                label={LOCAL_MODEL_EDITOR.TOKEN_SWITCH}
+              />
+              <span className="text-body">{LOCAL_MODEL_EDITOR.TOKEN_SWITCH}</span>
+            </div>
+            {draft.useToken ? (
+              <>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <Field label={PROVIDER_EDITOR.AUTH_HEADER} htmlFor="mp-auth-header">
+                    <Input id="mp-auth-header" className="font-mono" value={draft.authHeader} onChange={(e) => set({ authHeader: e.target.value })} />
+                  </Field>
+                  <Field label={PROVIDER_EDITOR.VALUE_FORMAT} htmlFor="mp-auth-format">
+                    <Input id="mp-auth-format" className="font-mono" value={draft.authFormat} onChange={(e) => set({ authFormat: e.target.value })} />
+                  </Field>
+                </div>
+                <p className="text-xs leading-snug text-muted-foreground">{PROVIDER_EDITOR.PROVIDES_TOKEN}</p>
+              </>
+            ) : (
+              <p className="text-xs leading-snug text-muted-foreground">{LOCAL_MODEL_EDITOR.TOKEN_OFF_HINT}</p>
+            )}
+          </div>
+          <Field label={LOCAL_MODEL_EDITOR.MODELS} htmlFor="mp-models">
+            <ModelChips
+              id="mp-models"
+              value={draft.models}
+              onChange={(models) => set({ models })}
+              isBad={(name) => refusedModel(refused, name)}
+              invalid={badField === "models"}
+            />
+          </Field>
+          <fieldset className="space-y-2 border-t border-border pt-4">
+            <legend className="text-sm font-medium">{LOCAL_MODEL_EDITOR.LIMITS}</legend>
+            <div className="grid gap-3 sm:grid-cols-3">
+              {(
+                [
+                  ["maxContext", "mp-max-context", LOCAL_MODEL_EDITOR.CONTEXT, LOCAL_MODEL_DEFAULTS.max_context, "max_context"],
+                  ["maxOutput", "mp-max-output", LOCAL_MODEL_EDITOR.REPLY, LOCAL_MODEL_DEFAULTS.max_output, "max_output"],
+                  ["keepAlive", "mp-keep-alive", LOCAL_MODEL_EDITOR.KEEP_ALIVE, LOCAL_MODEL_DEFAULTS.keep_alive_seconds, "keep_alive_seconds"],
+                ] as const
+              ).map(([key, id, label, placeholder, wire]) => (
+                <Field key={id} label={label} htmlFor={id} className="space-y-1">
+                  <Input
+                    id={id}
+                    type="number"
+                    className="font-mono"
+                    placeholder={String(placeholder)}
+                    aria-invalid={badField === wire || undefined}
+                    value={draft[key]}
+                    onChange={(e) => set({ [key]: e.target.value })}
+                  />
+                </Field>
+              ))}
+            </div>
+            <p className="text-xs leading-snug text-muted-foreground">{LOCAL_MODEL_EDITOR.LIMITS_HINT}</p>
+          </fieldset>
+        </>
+      )}
+
       {endpoint ? (
         <>
           <Field label={PROVIDER_EDITOR.BASE_URL} htmlFor="mp-base-url" hint={PROVIDER_EDITOR.BASE_URL_HINT} required>
@@ -501,6 +587,7 @@ function ProviderFields({
             key={h.id}
             harness={h}
             draft={draft}
+            refused={refused}
             onChange={(patch) =>
               setDraft((d) => d && { ...d, harnesses: { ...d.harnesses, [h.id]: { ...d.harnesses[h.id], ...patch } } })
             }
@@ -517,10 +604,12 @@ function ProviderFields({
 function HarnessBlock({
   harness,
   draft,
+  refused,
   onChange,
 }: {
   harness: HarnessRow;
   draft: ProviderDraft;
+  refused: string | null;
   onChange: (patch: Partial<ProviderDraft["harnesses"][string]>) => void;
 }) {
   const row = draft.harnesses[harness.id];
@@ -532,7 +621,9 @@ function HarnessBlock({
   // "Model is required for Bedrock, so that harness's settings are open until
   // it is filled" (QB-2), the same rule already applied to an endpoint's Path.
   const needsModel = bedrock && row.ticked && !row.model.trim();
-  const [open, setOpen] = React.useState(needsPath || needsModel);
+  const local = isLocal(draft.kind);
+  // A local model's Model is a pick from the list, so it is always shown.
+  const [open, setOpen] = React.useState(needsPath || needsModel || local);
   React.useEffect(() => {
     if (needsPath || needsModel) setOpen(true);
   }, [needsPath, needsModel]);
@@ -540,6 +631,10 @@ function HarnessBlock({
   const base = `mp-h-${harness.id}`;
   const pathHint = harness.id === "codex-cli" ? PROVIDER_EDITOR.PATH_HINT_CODEX : PROVIDER_EDITOR.PATH_HINT_CLAUDE;
   const modelHint = bedrock ? PROVIDER_EDITOR.MODEL_HINT_BEDROCK : PROVIDER_EDITOR.MODEL_HINT;
+  // The pick shown is the one a save sends (providerFrom). A pick no longer in the list stays shown,
+  // so the server's refusal of it points at what is on screen.
+  const picked = row.model || draft.models[0] || "";
+  const models = picked && !draft.models.includes(picked) ? [...draft.models, picked] : draft.models;
 
   return (
     <div className="rounded-lg border border-border">
@@ -575,15 +670,37 @@ function HarnessBlock({
       </div>
       {expanded && (
         <div id={`${base}-body`} className={endpoint ? "grid gap-4 border-t border-border p-3 sm:grid-cols-2" : "border-t border-border p-3"}>
-          <Field label={PROVIDER_EDITOR.MODEL} htmlFor={`${base}-model`} hint={modelHint} required={bedrock}>
-            <Input
-              id={`${base}-model`}
-              required={bedrock}
-              className="font-mono"
-              value={row.model}
-              onChange={(e) => onChange({ model: e.target.value })}
-            />
-          </Field>
+          {local ? (
+            <Field
+              label={PROVIDER_EDITOR.MODEL}
+              htmlFor={`${base}-model`}
+              hint={harness.id === "claude-code" ? LOCAL_MODEL_EDITOR.MODEL_HINT_CLAUDE : LOCAL_MODEL_EDITOR.MODEL_HINT}
+            >
+              <select
+                id={`${base}-model`}
+                aria-invalid={refusedHarness(refused) === harness.id || undefined}
+                className="border-input bg-input-background aria-invalid:border-destructive h-9 w-full rounded-md border px-3 font-mono text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring"
+                value={picked}
+                onChange={(e) => onChange({ model: e.target.value })}
+              >
+                {models.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          ) : (
+            <Field label={PROVIDER_EDITOR.MODEL} htmlFor={`${base}-model`} hint={modelHint} required={bedrock}>
+              <Input
+                id={`${base}-model`}
+                required={bedrock}
+                className="font-mono"
+                value={row.model}
+                onChange={(e) => onChange({ model: e.target.value })}
+              />
+            </Field>
+          )}
           {endpoint && (
             <Field label={PROVIDER_EDITOR.PATH} htmlFor={`${base}-path`} hint={pathHint} required>
               <Input

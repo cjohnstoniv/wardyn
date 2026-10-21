@@ -180,9 +180,10 @@ func endSourceLabel(src types.LimitSource, pool string) string {
 // lifetime limits the end like the other sources.
 func (s *Server) resolveCreateEnd(r *http.Request, req createRunRequest, ceiling governanceCeiling, pool *types.RunnerPool) (createEnd, *runRefusal) {
 	in := createEndInput{
-		runType:   runTypeForEnd(req.Experience),
-		pool:      pool,
-		governed:  !s.runUngoverned(r.Context()),
+		runType: runTypeForEnd(req.Experience),
+		pool:    pool,
+		// The Wardyn boundary bounds an operator's or a break-glass run's end too, when it names a maximum.
+		governed:  !s.runUngoverned(r.Context()) || ceiling.boundaryBoundsEnd(),
 		gov:       ceiling.Limits.RunLimits,
 		maxAgeSec: max(0, int(s.cfg.RunMaxAge/time.Second)), // a negative WARDYN_RUN_MAX_AGE is off, as 0 is
 		noEnd:     req.NoEnd,

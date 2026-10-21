@@ -19,7 +19,7 @@
 # older than a repo's `go` directive does not degrade, it FAILS: "go.mod requires
 # go >= 1.26 (running go 1.23.5; GOTOOLCHAIN=local)". Keep this at or above the
 # `toolchain` line of the repos you build (this digest is go1.27.2; wardyn itself
-# pins toolchain go1.26.9). Bump the pin rather than relaxing GOTOOLCHAIN.
+# pins toolchain go1.26.10). Bump the pin rather than relaxing GOTOOLCHAIN.
 FROM golang:1.27.2@sha256:820153096fda4de6ac1b7194d12e416b7dd8f4e9a33d17e0345b111b945162d8 AS goroot
 FROM rust:1.99.0-slim-trixie@sha256:2752b332db73fdbb7dc576f06c82ed1f312005784ef913d7e04a28f5f55dc581 AS rustroot
 

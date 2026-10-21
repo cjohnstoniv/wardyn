@@ -38,7 +38,7 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[azureCLIDispatch]():      strings.Fields("ComponentID Azure"),
 	reflect.TypeFor[types.CLIAzure]():        strings.Fields("Subscriptions Access"),
 	reflect.TypeFor[types.CLIAWS]():          strings.Fields("StartURL SSORegion AccountID RoleName Region"),
-	reflect.TypeFor[dispatchCeiling]():       strings.Fields("localSelfDefinedComponents resolved deny profile maxEphemeralDiskMiB maxCPUMillis maxMemoryMiB adoEntra bedrock adoStanding agentGuardrailLocks denyPlacements"),
+	reflect.TypeFor[dispatchCeiling]():       strings.Fields("localSelfDefinedComponents resolved deny profile maxEphemeralDiskMiB maxCPUMillis maxMemoryMiB adoEntra bedrock adoStanding agentGuardrailLocks denyPlacements recording recordingBound"),
 	reflect.TypeFor[dispatchParams](): strings.Fields("TrustedOutput RunToken Image Policy FirstGitHubGrantID GitGrants PATBroker PATAPI GitPATGrants SSHGrants Injections Interactive TaskMode InteractiveStart SeedAutoTools ToolApprovals ApprovalExpiryAfter ExtraEnv Toolchains UserMounts EphemeralDirs Drives MemberDrives MainDrive Components " +
 		"PolicyOverridden Provenance PushRuleSets HarnessToolRules Harnesses ADOLaneRepo RedirectProbe"),
 	reflect.TypeFor[mainDriveDecision]():    strings.Fields("MiB Soft Basis DefaultSource"),
@@ -72,8 +72,9 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.RunnerSettings]():      strings.Fields("Enabled"),
 	reflect.TypeFor[types.SiteBranding]():        strings.Fields("LogoPath"),
 	reflect.TypeFor[types.SiteConfig](): strings.Fields("Runners UpstreamProxySecretRef UpstreamProxyURL UpstreamProxyNoProxy ArtifactOverrides EgressRedirects ScmHosts Integrations InternalHosts Egress " +
-		"WorkspaceProviders AgentProviders ModelProviders SignInHelpText SignInHelpURL PolicyHelp Branding Components EffectiveScmHosts WithheldScmHosts OnboardingCompletedAt"),
+		"WorkspaceProviders AgentProviders ModelProviders SignInHelpText SignInHelpURL PolicyHelp Branding Components Recording EffectiveScmHosts WithheldScmHosts OnboardingCompletedAt"),
 	reflect.TypeFor[types.SiteEgress]():         strings.Fields("BaselineHosts"),
+	reflect.TypeFor[types.SiteRecording]():      strings.Fields("Level Locked"),
 	reflect.TypeFor[types.StorageProviders]():   strings.Fields("Ephemeral UserDrive"),
 	reflect.TypeFor[types.UserDriveProvider]():  strings.Fields("Disabled MaxSizeMiB MemberCreate"),
 	reflect.TypeFor[types.WithheldScmHost]():    strings.Fields("Host ProviderID ProviderKind"),

@@ -326,7 +326,8 @@ func validateSiteConfig(cfg types.SiteConfig) error {
 	if err := validateUpstreamProxyNoProxy(cfg.UpstreamProxyNoProxy); err != nil {
 		return err
 	}
-	if err := cmp.Or(validateSignInHelp(cfg.SignInHelpText, cfg.SignInHelpURL), validatePolicyHelp(cfg.PolicyHelp), validateComponentSettings(cfg.Components)); err != nil {
+	if err := cmp.Or(validateSignInHelp(cfg.SignInHelpText, cfg.SignInHelpURL), validatePolicyHelp(cfg.PolicyHelp), validateComponentSettings(cfg.Components),
+		validateSiteRecording(cfg.Recording)); err != nil {
 		return err
 	}
 	// The workspace-provider block, when the body carries one: ONE validator for
@@ -522,6 +523,7 @@ func (s *Server) handleGetSiteConfig(w http.ResponseWriter, r *http.Request) {
 var siteConfigFieldsAfter066 = []string{
 	"upstream_proxy_no_proxy", "internal_hosts", "workspace_providers", "agent_providers",
 	"model_providers", "sign_in_help_text", "sign_in_help_url", "branding", "policy_help", "components",
+	"recording",
 }
 
 // carryForwardUnnamedSiteConfigFields preserves a stored value that the request
@@ -581,6 +583,7 @@ func carryForwardUnnamedSiteConfigFields(cfg *types.SiteConfig, existing types.S
 	}
 	carryForwardPolicyHelp(cfg, existing, present) // same terms as the sign-in help pair
 	carryForwardComponentSettings(cfg, existing, present)
+	carryForwardSiteRecording(cfg, existing, present)
 	// branding (#1215), on the same terms: a file written before the key existed
 	// must not drop the logo_path the org named (an absent key also leaves the
 	// stored logo untouched — only a body that names the block acts on it).
@@ -697,6 +700,9 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	providerWarnings, err := s.validateSiteConfigBody(cfg)
 	if err != nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigInvalid, "invalid site config: "+err.Error())
+		return
+	}
+	if s.refuseSiteRecordingWithoutStore(w, cfg.Recording) {
 		return
 	}
 	// The logo file (#1215) is read and checked BEFORE anything is written, so a
@@ -850,6 +856,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	auditPolicyHelp(datum, saved.PolicyHelp, present["policy_help"])
 	auditComponentSettings(datum, saved.Components, present["components"])
+	auditSiteRecording(datum, saved.Recording, present["recording"])
 	if redirectsTruncated {
 		datum["egress_redirects_truncated"] = true
 	}
@@ -869,21 +876,8 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("ETag", computeETag(saved))
-	// Projected onto the response for the same reason GET projects it — and
-	// AFTER the ETag above, which must hash the stored document.
-	saved.EffectiveScmHosts = effectiveScmHosts(saved)
-	saved.WithheldScmHosts = withheldScmHosts(saved)
-	// git_pat_broker_enabled (#381 F4): the SAME after-ETag projection, so a
-	// `site-config set` (or the console's own PUT round trip) sees the live
-	// switch immediately rather than a dropped field until the next GET. A
-	// COPY, never a mutation through the pointer — `saved` came straight back
-	// from the store and may be the same object a concurrent reader holds.
-	if providersConfigured(saved) {
-		wp := *saved.WorkspaceProviders
-		on := !s.cfg.DisableGitPATBroker
-		wp.GitPatBrokerEnabled = &on
-		saved.WorkspaceProviders = &wp
-	}
+	// Projected onto the response AFTER the ETag above, which must hash the stored document.
+	saved = s.projectPutSiteConfig(saved)
 	// dangling_secret_refs surfaces the "reset+apply came back green but every
 	// credentialed path is dead" gap: this document round-trips secret NAMES
 	// only, so an apply after a secret-store wipe (or a hand-edited file) can
@@ -899,6 +893,25 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		BrandingLogoPending:          logoPending,
 		ModelProviderWarnings:        providerWarnings,
 	})
+}
+
+// projectPutSiteConfig projects the PUT response's read-only fields onto the
+// saved document, for the same reason GET projects them.
+func (s *Server) projectPutSiteConfig(saved types.SiteConfig) types.SiteConfig {
+	saved.EffectiveScmHosts = effectiveScmHosts(saved)
+	saved.WithheldScmHosts = withheldScmHosts(saved)
+	// git_pat_broker_enabled (#381 F4): the SAME after-ETag projection, so a
+	// `site-config set` (or the console's own PUT round trip) sees the live
+	// switch immediately rather than a dropped field until the next GET. A
+	// COPY, never a mutation through the pointer — `saved` came straight back
+	// from the store and may be the same object a concurrent reader holds.
+	if providersConfigured(saved) {
+		wp := *saved.WorkspaceProviders
+		on := !s.cfg.DisableGitPATBroker
+		wp.GitPatBrokerEnabled = &on
+		saved.WorkspaceProviders = &wp
+	}
+	return saved
 }
 
 // siteConfigPutResponse is PUT /site-config's response body: the persisted

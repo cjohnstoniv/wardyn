@@ -209,10 +209,10 @@ function NameRunForm({ onOpenChange, onCreated, pending }: Pick<NameRunDialogPro
         </div>
 
         {sentence && !refusalIsAdoNote && (
-          <p id="name-run-sentence" role="alert" className="text-sm text-danger">
-            {sentence}
-            {create.refusal && <PolicyRemedy policy={create.policy} className="mt-1 block" />}
-          </p>
+          <div id="name-run-sentence" role="alert" className="text-sm text-danger">
+            <p>{sentence}</p>
+            {create.refusal && <PolicyRemedy policy={create.policy} className="mt-1" />}
+          </div>
         )}
         {/* Several organisations each take their own token: say which ones an Azure DevOps credential refusal is missing one for. */}
         {create.refusal && gitCredentialRefused && !adoNote && <AdoOwnTokenNote rows={ownRows} />}

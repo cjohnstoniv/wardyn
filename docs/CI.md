@@ -339,7 +339,7 @@ The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 **Where `build`'s time goes**, in one green run (35555137810, pre-#467): `make test-race` 537 s, `make cover-check` 395 s, `make lint` 120 s — two full passes over the same three tag sets (coverage, then race).
 
 - #467 merged them: `cover-check`'s three `test-report` suites now run under `-race -covermode=atomic` in one pass each, and the `build` job no longer runs `make test-race` or `make build-docker` as separate steps (`cover-check` already compiles and races those tag sets).
-- `make lint` has since gained the console's ESLint ([`ui/eslint.config.js`](../ui/eslint.config.js)), so the `go (lint)` leg also sets up pnpm and node; that install and lint pass are not in the 120 s above.
+- `make lint` has since gained the console's ESLint ([`ui/eslint.config.js`](../ui/eslint.config.js)), so the `go (lint)` job also sets up pnpm and node; that install and lint pass are not in the 120 s above.
 
 **Why `ui-e2e` runs as two shards.**
 
@@ -355,7 +355,14 @@ The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 | Check | Runs | Median | Max | Timeout |
 |---|---|---|---|---|
 | `changes` | – | pending | pending | 10 |
-| `go` (lint, unit, docker, k8s matrix) | – | pending | pending | 40 |
+| `go` (unit, docker, k8s matrix) | – | pending | pending | 40 |
+| `go-lint` (check `go (lint)`) | – | pending | pending | 40 |
+| `stop-early-go-lint` | – | pending | pending | 10 |
+| `stop-early-compose` | – | pending | pending | 10 |
+| `stop-early-gates` | – | pending | pending | 10 |
+| `stop-early-notices` | – | pending | pending | 10 |
+| `stop-early-diagrams` | – | pending | pending | 10 |
+| `stop-early-dco` | – | pending | pending | 10 |
 | `build` | – | pending | pending | 10 |
 | `conformance-k8s` | 58 | 11.2 | 12.8 | 35 |
 | `vm-conformance` (not required) | – | pending | pending | 30 |
@@ -434,9 +441,11 @@ gh run list -R cjohnstoniv/wardyn --workflow ci.yml --status completed --limit 6
 Three mechanisms (#932), on top of the per-job Go cache (#470) and the single race + coverage pass per tag set (#467):
 
 1. **Tag sets in parallel.**
-   - The `go` matrix job runs `go (lint)` (`make build tidy-check lint`), `go (unit)`, `go (docker)` and `go (k8s)` (`make test-report`, `-docker`, `-k8s`) on four runners instead of one after another.
+   - The `go-lint` job (reported as `go (lint)`: `make build tidy-check lint`) and the `go` matrix job's `go (unit)`, `go (docker)` and `go (k8s)` (`make test-report`, `-docker`, `-k8s`) run on four runners instead of one after another.
+   - `go (lint)` is a job of its own, not a matrix leg, so the stop-early jobs below can read its result before the test legs end.
+   - Its first step runs the whole-tree guard tests (below), its second `make lint`.
    - Each test leg uploads its reports as `go-test-reports-<suite>`.
-   - `build` waits for all four, downloads the three profiles and runs `make cover-union`, the same `COVER_MIN` floor over the same union that `make cover-check` enforces locally.
+   - `build` waits for all four (`go` and `go-lint`), downloads the three profiles and runs `make cover-union`, the same `COVER_MIN` floor over the same union that `make cover-check` enforces locally.
 2. **Skip what a change cannot affect.**
    - The `changes` job classifies the pull request's changed paths (`git diff --name-only --no-renames HEAD^1 HEAD` on GitHub's merge commit, so a moved file counts at both its old and its new path).
    - Each path gets one class, by the first rule that matches, so where a file lives decides before its extension does:
@@ -489,7 +498,7 @@ Three mechanisms (#932), on top of the per-job Go cache (#470) and the single ra
      - Today that is `./internal/runner/docker` for docker (`hardening_test.go` reads [`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md)) and none for k8s, so the k8s leg says so and passes.
      - If the tagless leg finds no guard file at all, it fails: that would mean the search pattern broke.
      - `build` then needs every leg green and skips the coverage union, since no profiles were written.
-     - `go (lint)` runs in full on every change: it carries the console's ESLint.
+     - `go (lint)` runs in full on every change: it carries the console's ESLint and the whole-tree guard tests.
    - **No console change: the vitest files that read outside `ui/` only.**
      - When `ui` is `false`, the `ui` job still installs, audits, typechecks and builds, but a vitest verdict can move only in a test that reads a file outside `ui/`: the Go wire-parity tests and the `docs/design` canon pins.
      - A test reads a file through `node:fs` (or `child_process`, a cwd- or module-relative path, a `?raw` or glob import),
@@ -523,7 +532,7 @@ Three mechanisms (#932), on top of the per-job Go cache (#470) and the single ra
 So:
 
 - `test-pg` (the aggregator over its `test-pg-shard` matrix, which fails unless every shard passed), `conformance`, `conformance-k8s`, `helm` and `envbuild-integration` skip on `backend == 'false'`, `notices` on `notices == 'false'`, the nine `trivy (<image>)` jobs on `images == 'false'`.
-- `build` needs every `go` leg and runs with `if: !cancelled()`.
+- `build` needs `go-lint` and every `go` leg and runs with `if: always()`.
   - Its first step fails unless every leg passed, so the `build` context is green only when all four legs and the union floor are.
   - The union steps carry `if: needs.changes.outputs.backend != 'false'`, so only an explicit docs- or console-only classification skips them.
   - A failed or missing classification runs the full suites in the legs and requires the union.
@@ -544,6 +553,26 @@ So:
 - Nothing reads `diagrams`' result: each of them runs on `!cancelled()`, whether it passed or failed.
 - The job they wait on has to start with the run: one that itself needs `changes` would send the short jobs through the queue a third time when the account is busy.
 - Before this, a nine-minute job could sit behind eight two-minute scans: in run 37403763766 `conformance` queued 98 s and `go (unit)` 90 s while four `trivy` jobs started at once.
+
+**Stop a red run early.**
+
+- A pull request run is cancelled once a cheap, deterministic gate has failed.
+  - Measured 2026-10-20: 44 red runs spent 2,761 of 7,751 runner-minutes after the first real failure; 1,309 of them followed a cheap gate.
+- `go (lint)` is a job of its own (`go-lint`), so its result is readable before the test legs end. Its first step runs the whole-tree guards, `python3 scripts/lib/candidate-tests.py guards`, the list `scripts/lane-preflight.sh --candidate` builds.
+  - Five runs had one guard red on all three test legs after about 14 minutes each.
+- `stop-early-go-lint`, `-compose`, `-gates`, `-notices`, `-diagrams` and `-dco` each need one gate and start when it fails.
+  - Each calls the run cancel endpoint with the workflow's `GITHUB_TOKEN` and `actions: write`, checks out nothing and runs nothing from the pull request.
+
+| What | Rule |
+|---|---|
+| Never fires on | `ui-e2e`, `test-pg-shard`, the `go` test legs: their reds can be flakes |
+| Events | `pull_request` from this repository; push, `merge_group`, `train/*` and `prep/*` pull requests, forks and Dependabot keep a full run |
+| Required checks | none renamed or added; `build` and `test-pg` run on `always()` and fail after a cancel |
+| Pinned by | [`cmd/wardynd/ci_stop_early_guard_test.go`](../cmd/wardynd/ci_stop_early_guard_test.go) |
+
+- A cancelled run cannot read green: the failed gate keeps `failure`, and every unfinished job ends `cancelled`, which branch protection rejects.
+  - `build` and `test-pg` run on `always()`, so they report `failure`, never `skipped`.
+- The cost: one failure shows at a time, a flaky gate stops the run too, and a stop job waits for a slot when the account is at its cap.
 
 **Before and after.**
 
@@ -603,14 +632,6 @@ Docker Hub rate-limited CI even after `docker/login-action`, so CI reads the Doc
 ### Go module cache for image builds
 
 `WARDYN_BUILD_GOMODCACHE` names a Go module cache directory. The e2e scripts pass its `cache/download` tree to the proxy and oracle builds as `--build-context gomodcache=<dir>`, so `go mod download` reads them. go.sum is checked against each module's recorded hash, as with any module cache. Unset, builds download.
-
-### Self-hosted canary
-
-- [`selfhosted-canary.yml`](../.github/workflows/selfhosted-canary.yml) (dispatch only) runs `make staticcheck` on a runner labelled `wardyn-ci`, before any `ci.yml` job moves to one.
-- Its `runs-on` picks that runner only for the owner's dispatch in this repository; any other dispatcher, or a fork's own run, gets `ubuntu-latest`.
-- Dispatch only: a job routed to a label no runner serves waits up to 24 hours, which would hold a pull request's checks.
-- On a self-hosted runner its first step fails unless the job is in gVisor, non-root with `no_new_privs` set and no working `sudo`, capped at `10 GiB`, with no Docker socket or bind mount.
-- `hosted: true` runs it on `ubuntu-latest` for comparison. It uses no secret and a `contents: read` token; required checks are unchanged.
 
 ## Driving an existing control plane instead
 
