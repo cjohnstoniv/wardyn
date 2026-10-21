@@ -414,3 +414,28 @@ func TestDriver_HasNoKeptEnd(t *testing.T) {
 		t.Fatal("the k8s driver keeps an ended sandbox now: wipe the AWS credential caches before that end, as the Docker driver does")
 	}
 }
+
+// TestTeardownWaitBound pins how long teardown waits for the kubelet to confirm the pods gone. A
+// kill (grace 0, lifted to 1 s) used to wait 16 s, and a slow node's runtime took 16.4 s once, so
+// the kill reported a containment failure for a delete that completed (#3182). It now waits past
+// that, and still ends inside the 30 s kill cascade (internal/api killCascadeTimeout) with room
+// left for the revocations. A stop keeps its bounds.
+func TestTeardownWaitBound(t *testing.T) {
+	zero, ten := int64(0), int64(10)
+	for _, c := range []struct {
+		name  string
+		grace *int64
+		want  time.Duration
+	}{
+		{"kill (grace 0)", &zero, 25 * time.Second},
+		{"stop with the pod's own grace", nil, 45 * time.Second},
+		{"stop with an explicit 10 s grace", &ten, 25 * time.Second},
+	} {
+		if got := teardownWaitBound(c.grace); got != c.want {
+			t.Errorf("%s: teardownWaitBound = %v, want %v", c.name, got, c.want)
+		}
+	}
+	if got := teardownWaitBound(&zero); got <= 17*time.Second || got >= 30*time.Second {
+		t.Errorf("a kill's wait %v must outlast the 16.4 s that failed and end inside the 30 s kill cascade", got)
+	}
+}

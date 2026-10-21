@@ -189,6 +189,7 @@ func (d *Driver) teardownByRunID(ctx context.Context, runID uuid.UUID, gracePeri
 	listOpts := metav1.ListOptions{LabelSelector: labelRun + "=" + runID.String()}
 	// Never a force delete here either: a zero grace removes the pods without
 	// the kubelet confirming, and the wait below would then prove nothing.
+	waitBound := teardownWaitBound(gracePeriodSeconds)
 	gracePeriodSeconds = runnerGrace(gracePeriodSeconds)
 
 	if err := d.clientset.CoreV1().Pods(ns).DeleteCollection(ctx, metav1.DeleteOptions{GracePeriodSeconds: gracePeriodSeconds}, listOpts); err != nil && !isNotFound(err) {
@@ -198,12 +199,8 @@ func (d *Driver) teardownByRunID(ctx context.Context, runID uuid.UUID, gracePeri
 	// H3: an unselected pod is default-allow, so dropping the NetworkPolicies
 	// while the pod is still Terminating would hand it open egress for that
 	// window. Wait for pods to actually be gone (not merely marked for
-	// deletion) first. Bounded at grace+slack.
-	grace := defaultPodGracePeriod
-	if gracePeriodSeconds != nil {
-		grace = time.Duration(*gracePeriodSeconds) * time.Second
-	}
-	if err := d.waitPodsGone(ctx, ns, listOpts, grace+teardownPollSlack); err != nil {
+	// deletion) first. Bounded at grace+slack (teardownWaitBound).
+	if err := d.waitPodsGone(ctx, ns, listOpts, waitBound); err != nil {
 		return fmt.Errorf("k8s: teardown: waiting for pods to terminate before dropping NetworkPolicies: %w", err)
 	}
 
@@ -226,7 +223,25 @@ func (d *Driver) teardownByRunID(ctx context.Context, runID uuid.UUID, gracePeri
 const (
 	defaultPodGracePeriod = 30 * time.Second
 	teardownPollSlack     = 15 * time.Second
+	// killPollSlack is the beat a kill (grace 0, run at the 1 s floor) allows the kubelet to
+	// SIGKILL and report the pod gone. A busy node's runtime took longer than teardownPollSlack once,
+	// and the kill then reported a containment failure for a delete that completed. 1 s + 24 s stays
+	// inside the 30 s kill cascade, leaving 4 s for the revocations after it.
+	killPollSlack = 24 * time.Second
 )
+
+// teardownWaitBound is how long teardown waits for the kubelet to confirm the pods gone, from the
+// grace the caller asked for (before runnerGrace lifts a 0 to 1 s). A nil grace keeps the pod's own.
+func teardownWaitBound(grace *int64) time.Duration {
+	if grace == nil {
+		return defaultPodGracePeriod + teardownPollSlack
+	}
+	slack := teardownPollSlack
+	if *grace < 1 {
+		slack = killPollSlack
+	}
+	return time.Duration(*runnerGrace(grace))*time.Second + slack
+}
 
 // waitPodsGone polls until no pod matches listOpts (the H3 ordering guard).
 // A timeout here is a real error, not best-effort: proceeding without this

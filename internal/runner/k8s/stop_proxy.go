@@ -497,12 +497,9 @@ func (d *Driver) removeFinalizer(ctx context.Context, runID uuid.UUID, component
 // both pods are proven stopped and gone. Without evidence it returns an error and drops nothing:
 // the run's hold stays, across restarts, until an arm holds.
 func (d *Driver) teardownRunner(ctx context.Context, runID uuid.UUID, grace *int64) error {
-	bound := defaultPodGracePeriod
-	if grace != nil {
-		bound = time.Duration(*runnerGrace(grace)) * time.Second
-	}
-	proxyDone, perr := d.containPod(ctx, runID, componentProxy, proxyPodName(runID), grace, bound+teardownPollSlack, true)
-	agentDone, aerr := d.containPod(ctx, runID, componentAgent, agentPodName(runID), grace, bound+teardownPollSlack, false)
+	bound := teardownWaitBound(grace)
+	proxyDone, perr := d.containPod(ctx, runID, componentProxy, proxyPodName(runID), grace, bound, true)
+	agentDone, aerr := d.containPod(ctx, runID, componentAgent, agentPodName(runID), grace, bound, false)
 	if !proxyDone || !agentDone {
 		if _, err := d.mutate(runID, func(ev *runEvidence) (bool, error) {
 			changed := !ev.Hold
@@ -524,7 +521,7 @@ func (d *Driver) teardownRunner(ctx context.Context, runID uuid.UUID, grace *int
 	}
 	ns := d.cfg.Namespace
 	listOpts := metav1.ListOptions{LabelSelector: labelRun + "=" + runID.String() + "," + runner.LabelRunnerID + "=" + d.cfg.RunnerID}
-	if err := d.waitPodsGone(ctx, ns, listOpts, bound+teardownPollSlack); err != nil {
+	if err := d.waitPodsGone(ctx, ns, listOpts, bound); err != nil {
 		return fmt.Errorf("k8s: teardown: waiting for pods to go before dropping NetworkPolicies: %w", err)
 	}
 	if err := d.clientset.CoreV1().Secrets(ns).DeleteCollection(ctx, metav1.DeleteOptions{}, listOpts); err != nil && !isNotFound(err) {
