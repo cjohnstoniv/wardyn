@@ -32,6 +32,26 @@ and does not yet follow semantic versioning (interfaces are not stable).
   Starting the agent again admits the run anew, and the erased row keeps only its harnesses, so it is refused in the
   organisation form ("Ask your admin"). An erased remote server is refused too, which a 0.9 revive accepted. A run
   that is still running keeps its server until it ends.
+- **`WARDYN_AWS_SSO_PROXY_INJECT=off` now stops `wardynd` from starting.** That value used to write the AWS sign-in
+  token into the sandbox. The token now stays at the proxy and the sandbox holds a placeholder. `off`, `false` and `0`
+  are all refused, in the environment, in the `-aws-sso-proxy-inject` flag and in the Helm value `awsSSOProxyInject`.
+  Unset it, or set it to `on`, before you start.
+- **The Go client's `CreatePolicy` and `UpdatePolicy` now return `PolicySaved`, not `types.RunPolicy`.** `PolicySaved`
+  holds the policy as its `RunPolicy` field and adds `Requirements`. Code that assigns the result to a
+  `types.RunPolicy` changes to read `.RunPolicy`.
+- **Workspace names are now unique per owner, not per install.** Two owners may use the same name (migration
+  `0192_workspace_name_per_owner` drops the install-wide unique constraint `workspaces_name_key`). A script that looks
+  a workspace up by name alone can now match more than one.
+- **The compose services drop `NET_RAW`, and the desktop tier no longer publishes ports 5432, 5010 and 8081 on the
+  host.** Use `docker exec` or your own override. A custom image on those services that needs raw sockets adds
+  `cap_add: [NET_RAW]`. Desktop packages need Docker Compose 2.24.4 or newer.
+- **`WARDYN_ATTACH_LOCAL` is off by default.** Set it to `on` on `wardynd` and `wardyn attach <run-id>` keeps the
+  terminal on this computer when the run is on your own runner here and the organisation allows it. The organisation
+  still admits, records and audits the session. Left off, attach goes through the organisation as before.
+- **`WARDYN_CLI_SIGN_IN` is off by default, and `wardyn login` needs it plus SSO.** Set it to `true` on `wardynd` and
+  `wardyn login` signs a CLI in through the console. The CLI keeps a session secret on the laptop, in the keychain or
+  a file only its owner can read, that renews a 1-hour access token. A computer with no browser signs in by pasting a
+  code only when `WARDYN_CLI_PASTE_SIGN_IN=true` is also set.
 
 ### Added
 
