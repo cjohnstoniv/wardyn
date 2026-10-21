@@ -121,7 +121,7 @@ func TestFreshSeedNeverSeedsAnUpgrade(t *testing.T) {
 	// Back to the schema before 0200: the table gone and both files un-applied.
 	if _, err := pool.Exec(t.Context(), `DROP TABLE governance_boundary;
 		ALTER TABLE agent_runs DROP COLUMN break_glass;
-		DELETE FROM schema_migrations WHERE filename IN ('0200_governance_boundary.sql', '0201_governance_boundary_seed.sql')`); err != nil {
+		DELETE FROM schema_migrations WHERE filename IN ('0200_governance_boundary.sql', '0209_governance_boundary_seed.sql')`); err != nil {
 		t.Fatal(err)
 	}
 	seedsBefore := readSeedCount(t, pool)
