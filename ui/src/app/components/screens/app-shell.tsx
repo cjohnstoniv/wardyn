@@ -175,11 +175,11 @@ const USER_NAV: NavItem[] = [
   { to: "/workspaces", label: "Workspaces", icon: FolderOpen },
   { to: "/templates", label: "Templates", icon: LayoutTemplate },
 ];
-// Under the divider (#217's slot): Setup and Settings in the Admin view, where
-// a security admin has neither; Getting started and Your account in the User
-// view.
+// Under the divider (#217's slot): Getting started and Settings in the Admin view,
+// where a security admin has neither; Getting started and Your account in the
+// User view. The page heading reads "Getting started" in both.
 const ADMIN_LOWER: NavItem[] = [
-  { to: "/admin/setup", label: "Setup", icon: Compass },
+  { to: "/admin/setup", label: "Getting started", icon: Compass },
   // Providers, Components and Drives are opened only from Settings' cards and have no entry of their own.
   { to: "/admin/settings", label: SETTINGS_NAV.SETTINGS, icon: Settings, also: ["/admin/providers", "/admin/components", "/admin/drives"] },
 ];

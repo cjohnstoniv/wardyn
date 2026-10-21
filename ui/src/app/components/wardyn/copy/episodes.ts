@@ -47,6 +47,8 @@ export const EPISODES_COPY = {
   OTHER_PATH_MULTI: (n: number) => `The multi-user path — ${n} episodes`,
   FOR_YOUR_MEMBERS: "For your members",
   MEMBER_YOUR_PATH: "Your path",
+  // The core group on the member page comes after "Your path" (Shape C), so it cannot read "Start here" there (#2845).
+  MEMBER_CORE: "The basics",
 } as const;
 
 // X4-F3 (runs-first-run-demos.tsx's "See it work"

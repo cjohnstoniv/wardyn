@@ -680,12 +680,12 @@ describe("SidebarNav — per view (M-2)", () => {
     return { sheet, labels };
   }
 
-  it("an admin's Admin view: the eyebrow, fourteen items under five headings, then Setup and Settings", async () => {
+  it("an admin's Admin view: the eyebrow, fourteen items under five headings, then Getting started and Settings", async () => {
     const { sheet, labels } = await open("admin");
     expect(within(sheet).getByText("Admin view", { selector: ".label-eyebrow" })).toBeInTheDocument();
     expect(labels).toEqual([
       "Runs", "Approvals", "Audit", "Recordings", "Workspaces", "Templates", "Runners", "People", "User types", "Permissions",
-      "Policies", "Governance", "Credentials", "Secrets", "Setup", "Settings",
+      "Policies", "Governance", "Credentials", "Secrets", "Getting started", "Settings",
     ]);
     expect(within(sheet).getAllByTestId(/^nav-group-/).map((el) => el.textContent)).toEqual([
       "Activity", "Build", "Access", "Limits", "Keys",
@@ -699,7 +699,7 @@ describe("SidebarNav — per view (M-2)", () => {
     expect(within(sheet).getByRole("link", { name: /^Runs/ })).toHaveAttribute("href", "/admin/runs");
   });
 
-  it("a security admin's Admin view: Credentials and User types join; Drives, Secrets, Recordings, Setup and Settings do not", async () => {
+  it("a security admin's Admin view: Credentials and User types join; Drives, Secrets, Recordings, Getting started and Settings do not", async () => {
     const { labels } = await open("security_admin");
     expect(labels).toEqual([
       "Runs", "Approvals", "Audit", "Workspaces", "Templates", "Runners", "People", "User types", "Permissions", "Policies",

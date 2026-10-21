@@ -13,7 +13,7 @@ import { VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
 //
 // The shell (app-shell.tsx) renders one sidebar per view (M-2, packet M-A) of
 // react-router <NavLink>s (role="link"). The Admin view groups them under
-// Activity, Build, Access, Limits and Keys (#3056), then Setup and Settings
+// Activity, Build, Access, Limits and Keys (#3056), then Getting started and Settings
 // under a divider (#217's slot). The User view: Runs, Approvals, Workspaces,
 // Templates, then Getting started and Your account. The harness is a single-operator install, so the URL is the
 // view: gotoConsole(page, "admin") lands in the Admin view. The avatar menu
@@ -163,15 +163,15 @@ test.describe("navigation + shell", () => {
   });
 
   // #217 — Settings sits last in the Admin view's rail, under a divider, with
-  // Setup above it (M-2, packet M-A).
-  test("#217 — Settings is last in the sidebar, after Setup and Secrets, and opens the real screen", async ({ page }) => {
+  // Getting started above it (M-2, packet M-A).
+  test("#217 — Settings is last in the sidebar, after Getting started and Secrets, and opens the real screen", async ({ page }) => {
     await gotoConsole(page, "admin");
     // Order is the contract: within the desktop rail, Settings is the LAST
-    // link, Setup above it, Secrets (the end of Keys) above that.
+    // link, Getting started above it, Secrets (the end of Keys) above that.
     const rail = page.locator("aside").getByRole("link");
     const names = await rail.allTextContents();
     expect(names[names.length - 1]).toMatch(/^Settings/);
-    expect(names[names.length - 2]).toMatch(/^Setup/);
+    expect(names[names.length - 2]).toMatch(/^Getting started/);
     expect(names[names.length - 3]).toMatch(/^Secrets/);
 
     await navTo(page, "Settings");
@@ -187,7 +187,7 @@ test.describe("navigation + shell", () => {
     const names = (await aside.getByRole("link").allTextContents()).map((n) => n.replace(/\d+$/, ""));
     expect(names).toEqual([
       "Runs", "Approvals", "Audit", "Recordings", "Workspaces", "Templates", "Runners", "People", "User types", "Permissions",
-      "Policies", "Governance", "Credentials", "Secrets", "Setup", "Settings",
+      "Policies", "Governance", "Credentials", "Secrets", "Getting started", "Settings",
     ]);
   });
 
@@ -234,7 +234,7 @@ test.describe("navigation + shell", () => {
     await expect(page.getByRole("status").filter({ hasText: SHELL.UNKNOWN_BODY })).toBeVisible();
     // #217 — the sidebar Settings link is gated on the same expression as the
     // account menu's own entry, so it disappears here too.
-    for (const label of [...SIDEBAR_LABELS, ...USER_SIDEBAR_LABELS, "Setup", "Settings"] as NavLabel[]) {
+    for (const label of [...SIDEBAR_LABELS, ...USER_SIDEBAR_LABELS, "Settings"] as NavLabel[]) {
       await expect(sidebarLink(page, label)).toHaveCount(0);
     }
   });

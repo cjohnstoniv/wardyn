@@ -30,6 +30,8 @@ test("Runners has one tab strip, and the tab is in the address", async ({ page }
   await expect(page.getByText(RUNNERS.LEAD)).toBeHidden();
   await layoutSettled(strip);
   const stripY = (await strip.boundingBox())!.y;
+  // #2895: the field name is quoted in prose, so it does not read as a typo.
+  expect(RUNNERS.LEAD).toContain('up to its "Runs at once" limit');
   // No remote-hosted runner is set up, and people's runners are off.
   await expect(page.getByRole("heading", { name: RUNNERS.OFF_TITLE })).toBeVisible();
   await expect(page.getByRole("list", { name: RUNNER_V6.LIST_LABEL })).toHaveCount(0);
