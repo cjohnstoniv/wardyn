@@ -417,7 +417,7 @@ func (s *Server) buildGovernanceUnit(createdBy string, super bool, id uuid.UUID,
 		// Only an overlay the request sent is judged: an absent one is the stored row's, unchanged.
 		if req.comp.overlaySet && overlay.WorkspaceMounts != nil {
 			// An empty host path is the author's 400 at every tier, judged before the keep step's tier
-			// refusal, as the ceiling's is at decode (finishGovernanceProfileRequest).
+			// refusal, as the ceiling's is at decode (finishGovernanceUnitRequest).
 			for i, m := range *overlay.WorkspaceMounts {
 				if m.Source == "" {
 					return p, nil, keep, writeRefusal(http.StatusBadRequest, reasonGovernanceOverlayInvalid,

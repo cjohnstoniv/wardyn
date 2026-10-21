@@ -66,11 +66,11 @@ func TestPolMount_F2_EmptySourceIs400AtEveryTier(t *testing.T) {
 	}{{"security admin", e.alice}, {"super admin", e.super}} {
 		for _, path := range []struct {
 			name string
-			row  types.GovernanceProfile
-			body func(governanceProfileView) map[string]any
+			row  types.GovernanceUnit
+			body func(governanceUnitView) map[string]any
 		}{
-			{"ceiling", standalone, func(v governanceProfileView) map[string]any { return standaloneBody(v, empty) }},
-			{"overlay", child, func(v governanceProfileView) map[string]any { return overlayBody(v, &empty) }},
+			{"ceiling", standalone, func(v governanceUnitView) map[string]any { return standaloneBody(v, empty) }},
+			{"overlay", child, func(v governanceUnitView) map[string]any { return overlayBody(v, &empty) }},
 		} {
 			before := rowJSON(t, e.profile(path.row.ID))
 			v, _ := e.view(tier.c, path.row.ID)

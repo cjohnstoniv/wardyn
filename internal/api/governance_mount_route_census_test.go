@@ -37,7 +37,7 @@ import (
 
 // specCensusRoots are the payload types the read tier withholds host paths from.
 var specCensusRoots = []string{
-	"types.RunPolicySpec", "types.CeilingOverlay", "types.GovernanceProfile", "types.GovernanceChange", "types.LaunchPreset",
+	"types.RunPolicySpec", "types.CeilingOverlay", "types.GovernanceUnit", "types.GovernanceChange", "types.LaunchPreset",
 }
 
 // specRouteExemptions are the GET routes whose response path handles spec data without reaching a
