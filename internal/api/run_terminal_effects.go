@@ -25,13 +25,18 @@ func (s *Server) finalizeRunEffects(ctx context.Context, runID uuid.UUID, ref, a
 		s.finishRunOutput(ctx, runID)
 	}
 	// A computer folder's changes come back while the sandbox still holds them (run_computer_folder.go).
-	s.bringComputerFolderBack(ctx, runID, ref)
+	// A pass cut short can keep the sandbox for a resume: it is then not stopped, its ref stays, and
+	// the caller hears errComputerFolderResumes, which keeps a runner exit's tail open for its retry.
+	keep := s.bringComputerFolderBack(ctx, runID, ref)
+	if keep {
+		errs = append(errs, errComputerFolderResumes)
+	}
 	// Teardown and the writes after it run on a ctx of their own, which the steps before it
 	// cannot use up or cancel (#3466).
 	tctx, cancel := teardownCtx(ctx)
 	defer cancel()
 	teardownOK := false
-	if ref != "" && s.cfg.Runner != nil {
+	if ref != "" && s.cfg.Runner != nil && !keep {
 		if serr := s.cfg.Runner.StopSandbox(tctx, ref); serr != nil {
 			errs = append(errs, serr)
 			td := make(map[string]any, len(data)+1)
@@ -64,6 +69,10 @@ func (s *Server) finalizeRunEffects(ctx context.Context, runID uuid.UUID, ref, a
 	}
 	return errors.Join(append(errs, cmp.Or(ctx.Err(), tctx.Err()))...)
 }
+
+// errComputerFolderResumes is finalizeRunEffects keeping a sandbox for its computer folder's pass
+// back to resume (bringComputerFolderBack).
+var errComputerFolderResumes = errors.New("the sandbox is kept: its computer folder's sync back resumes on a later sweep")
 
 // runTeardownBudget is the time a run's teardown keeps for itself: StopSandbox, whose graceful
 // stop alone is 10 s on Docker (the driver's stopTimeout), and the audit and status writes after

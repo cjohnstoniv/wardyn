@@ -197,3 +197,50 @@ func getSyncFile(t *testing.T, p string) string {
 	}
 	return string(b)
 }
+
+// cutAfter is a ctx that ends once done reports true: an interrupt at a chosen point of a pass.
+type cutAfter struct {
+	context.Context
+	done func() bool
+}
+
+func (c cutAfter) Err() error {
+	if c.done() {
+		return context.Canceled
+	}
+	return nil
+}
+
+// A --pull pass cut short saves the files it finished, reports them with the sandbox's changes it
+// had not brought back, and the next pass starts after them.
+func TestSync_ACutPassSavesWhatItFinished(t *testing.T) {
+	sy, box, root := pipeSyncer(t, true)
+	putSyncFile(t, filepath.Join(box, "a.txt"), "first", 0o644)
+	putSyncFile(t, filepath.Join(box, "b.txt"), "second", 0o644)
+	ctx := cutAfter{context.Background(), func() bool {
+		_, err := os.Stat(filepath.Join(root, "a.txt"))
+		return err == nil
+	}}
+	rep, err := sy.Pass(ctx)
+	if !errors.Is(err, context.Canceled) || rep == nil {
+		t.Fatalf("Pass = %+v, %v; want the cut pass's report and its error", rep, err)
+	}
+	if !slices.Equal(rep.Pulled, []string{"a.txt"}) || rep.Unsynced != 1 {
+		t.Errorf("cut report: pulled %v, unsynced %d; want [a.txt] and 1", rep.Pulled, rep.Unsynced)
+	}
+	st, err := LoadState(sy.StateFile, root, box)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, saved := st.Files["a.txt"]; !saved || len(st.Files) != 1 {
+		t.Fatalf("saved state = %v, want a.txt alone", keysOf(st.Files))
+	}
+	sy.State = st
+	rep, err = sy.Pass(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(rep.Pulled, []string{"b.txt"}) || len(rep.Pushed)+len(rep.Conflicts) != 0 {
+		t.Errorf("resumed pass = pulled %v, pushed %v, conflicts %v; want b.txt alone", rep.Pulled, rep.Pushed, rep.Conflicts)
+	}
+}

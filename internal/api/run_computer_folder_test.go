@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -185,6 +186,23 @@ type folderSandboxRunner struct {
 	stopped func()
 	// hang makes the sandbox's sftp-server never answer, so a pass runs out of time.
 	hang bool
+	// block is a file whose read never answers until its session closes, so a pass that reaches
+	// it runs out of time after the files before it.
+	block string
+}
+
+// blockingGet is a sandbox's file reads where the read of block waits for release.
+type blockingGet struct {
+	sftp.FileReader
+	block   string
+	release <-chan struct{}
+}
+
+func (b blockingGet) Fileread(r *sftp.Request) (io.ReaderAt, error) {
+	if path.Base(r.Filepath) == b.block {
+		<-b.release
+	}
+	return b.FileReader.Fileread(r)
 }
 
 func (r *folderSandboxRunner) ExecStream(_ context.Context, _ string, spec runner.ExecSpec) (*runner.ExecSession, error) {
@@ -204,16 +222,26 @@ func (r *folderSandboxRunner) ExecStream(_ context.Context, _ string, spec runne
 	}
 	toServer, stdin := io.Pipe()
 	stdout, fromServer := io.Pipe()
+	files, release := r.files, make(chan struct{})
+	if r.block != "" {
+		files.FileGet = blockingGet{FileReader: r.files.FileGet, block: r.block, release: release}
+	}
 	srv := sftp.NewRequestServer(struct {
 		io.Reader
 		io.WriteCloser
-	}{toServer, fromServer}, r.files, sftp.WithStartDirectory(dir))
+	}{toServer, fromServer}, files, sftp.WithStartDirectory(dir))
 	done := make(chan struct{})
 	go func() { _ = srv.Serve(); _ = fromServer.Close(); close(done) }()
+	var closed sync.Once
 	return &runner.ExecSession{
 		Stdin: stdin, Stdout: stdout, Stderr: strings.NewReader(""),
-		Wait:  func() (int, error) { <-done; return 0, nil },
-		Close: func() error { _ = stdin.Close(); _ = srv.Close(); return nil },
+		Wait: func() (int, error) { <-done; return 0, nil },
+		Close: func() error {
+			closed.Do(func() { close(release) })
+			_ = stdin.Close()
+			_ = srv.Close()
+			return nil
+		},
 	}, nil
 }
 
@@ -432,8 +460,16 @@ func hangingFolderBack(t *testing.T) (*Server, *computerFolderStore, *recRecorde
 	return s, cs, audit, run, sb
 }
 
-// assertFolderBackTornDown checks the sandbox was stopped and the pass back recorded and audited.
-func assertFolderBackTornDown(t *testing.T, cs *computerFolderStore, audit *recRecorder, run types.AgentRun, sb *folderSandboxRunner) {
+// folderStatus is the folder's pass records as the store holds them.
+func (s *computerFolderStore) folderStatus() types.RunLocalFolderStatus {
+	s.smu.Lock()
+	defer s.smu.Unlock()
+	return s.status
+}
+
+// assertFolderBackTornDown checks the sandbox was stopped and the pass back recorded, with want
+// in its error, and audited.
+func assertFolderBackTornDown(t *testing.T, cs *computerFolderStore, audit *recRecorder, run types.AgentRun, sb *folderSandboxRunner, want string) {
 	t.Helper()
 	if n := sb.stopCount(); n != 1 {
 		t.Errorf("StopSandbox succeeded %d times, want 1", n)
@@ -441,49 +477,148 @@ func assertFolderBackTornDown(t *testing.T, cs *computerFolderStore, audit *recR
 	if ev := findAudit(audit.snapshot(), run.ID, "run.complete", "failure"); ev != nil {
 		t.Errorf("the teardown failed: %s", ev.Data)
 	}
-	cs.smu.Lock()
-	back := cs.status.Back
-	cs.smu.Unlock()
-	if back == nil || back.Error == "" {
-		t.Errorf("back record = %+v, want the cut-short pass with its error", back)
+	st := cs.folderStatus()
+	if st.Back == nil || !strings.Contains(st.Back.Error, want) || st.Resume != nil {
+		t.Errorf("back record = %+v, resume = %+v; want the pass's error naming %q and no resume", st.Back, st.Resume, want)
 	}
-	if ev := findAuditData(audit.snapshot(), run.ID, "run.folder.transfer", `"direction":"back"`); ev == nil || ev.Outcome != "failure" {
-		t.Errorf("the cut-short pass back is not audited: %v", ev)
+	if ev := findAuditData(audit.snapshot(), run.ID, "run.folder.transfer", want); ev == nil || ev.Outcome != "failure" || !strings.Contains(string(ev.Data), `"direction":"back"`) {
+		t.Errorf("the pass back is not audited with %q: %v", want, ev)
 	}
 }
 
-// A pass back that would outlast the caller's deadline ends runTeardownBudget before it, so
-// the teardown still runs inside the caller's bound (#3466).
-func TestFinalizeRunEffects_AFolderPassPastTheCallersDeadlineLeavesTeardownItsTime(t *testing.T) {
-	s, cs, audit, run, sb := hangingFolderBack(t)
-	ctx, cancel := context.WithTimeout(context.Background(), runTeardownBudget+300*time.Millisecond)
+// assertFolderBackKept checks a finalize kept the sandbox for a resume, with want as its resume.
+func assertFolderBackKept(t *testing.T, err error, cs *computerFolderStore, sb *folderSandboxRunner, want types.FolderResume) {
+	t.Helper()
+	if !errors.Is(err, errComputerFolderResumes) {
+		t.Errorf("finalize = %v, want the kept sandbox's errComputerFolderResumes", err)
+	}
+	if n := sb.stopCount(); n != 0 {
+		t.Errorf("StopSandbox succeeded %d times, want the sandbox kept", n)
+	}
+	st := cs.folderStatus()
+	if st.Resume == nil || *st.Resume != want || st.Back == nil || !strings.Contains(st.Back.Error, "a later sweep resumes the sync") {
+		t.Errorf("resume = %+v, back = %+v; want %+v and the cut pass's error", st.Resume, st.Back, want)
+	}
+}
+
+// boundedFinalize is a finalize whose caller allows its pass back stop seconds.
+func boundedFinalize(t *testing.T, s *Server, run types.AgentRun, stop time.Duration) (time.Duration, error) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), runTeardownBudget+computerFolderAccountTime+stop)
 	defer cancel()
 	start := time.Now()
-	if err := s.finalizeRunEffects(ctx, run.ID, "sbx", "run.complete", nil, false, false); err != nil {
-		t.Errorf("finalize: %v", err)
-	}
-	if took := time.Since(start); took >= runTeardownBudget {
-		t.Errorf("finalize took %s: the pass back used the teardown's time", took)
-	}
-	assertFolderBackTornDown(t, cs, audit, run, sb)
+	err := s.finalizeRunEffects(ctx, run.ID, "sbx", "run.complete", nil, false, false)
+	return time.Since(start), err
 }
 
-// A caller's ctx cancelled before finalize, or during the pass back, still gets the sandbox
-// stopped and the pass's outcome recorded and audited; the caller hears its ctx ended (#3466).
+// A pass back that would outlast the caller's deadline is cut before it, inside the caller's
+// bound. The first cut that saves nothing keeps the sandbox for a resume; the second in a row
+// stops it, and the record and the audit say so (#3466).
+func TestFinalizeRunEffects_TwoCutPassesThatSaveNothingStopTheSandbox(t *testing.T) {
+	s, cs, audit, run, sb := hangingFolderBack(t)
+	took, err := boundedFinalize(t, s, run, 300*time.Millisecond)
+	if took >= runTeardownBudget {
+		t.Errorf("finalize took %s: the pass back used the teardown's time", took)
+	}
+	assertFolderBackKept(t, err, cs, sb, types.FolderResume{Stalled: 1})
+	if _, err := boundedFinalize(t, s, run, 300*time.Millisecond); err != nil {
+		t.Errorf("finalize: %v", err)
+	}
+	assertFolderBackTornDown(t, cs, audit, run, sb, "2 passes in a row brought nothing back, so the sandbox was stopped")
+}
+
+// A pass back cut short after it saved a file keeps the sandbox, and the next pass starts after
+// that file. Once it saves nothing twice in a row, the sandbox is stopped with the count of the
+// changed files it never brought back (#3466).
+func TestFinalizeRunEffects_ACutPassThatSavedFilesKeepsTheSandbox(t *testing.T) {
+	s, cs, audit, run, sb, app := computerFolderFixture(t, types.ComputerFolderBoth)
+	if !s.holdForLocalFolder(context.Background(), run, "sbx") {
+		t.Fatal(cs.FailureHint())
+	}
+	agentWrites(t, sb, "a.txt", "z.txt")
+	sb.block = "z.txt"
+	_, err := boundedFinalize(t, s, run, time.Second)
+	assertFolderBackKept(t, err, cs, sb, types.FolderResume{Unsynced: 1})
+	if b, _ := os.ReadFile(filepath.Join(app, "a.txt")); string(b) != "a.txt by the agent" {
+		t.Errorf("a.txt on the computer = %q, want the agent's", b)
+	}
+	if back := cs.folderStatus().Back; back == nil || back.Files != 1 {
+		t.Errorf("back record = %+v, want the one file the cut pass saved", back)
+	}
+	_, err = boundedFinalize(t, s, run, time.Second)
+	assertFolderBackKept(t, err, cs, sb, types.FolderResume{Stalled: 1, Unsynced: 1})
+	if _, err := boundedFinalize(t, s, run, time.Second); err != nil {
+		t.Errorf("finalize: %v", err)
+	}
+	assertFolderBackTornDown(t, cs, audit, run, sb, "changed files not brought back: 1")
+}
+
+// A pass back that completes after a cut one stops the sandbox, having brought back only what
+// the cut pass had not.
+func TestFinalizeRunEffects_APassThatCompletesAfterACutOneStopsTheSandbox(t *testing.T) {
+	s, cs, _, run, sb, app := computerFolderFixture(t, types.ComputerFolderBoth)
+	if !s.holdForLocalFolder(context.Background(), run, "sbx") {
+		t.Fatal(cs.FailureHint())
+	}
+	agentWrites(t, sb, "a.txt", "z.txt")
+	sb.block = "z.txt"
+	_, err := boundedFinalize(t, s, run, time.Second)
+	assertFolderBackKept(t, err, cs, sb, types.FolderResume{Unsynced: 1})
+	sb.block = ""
+	if err := s.finalizeRunEffects(context.Background(), run.ID, "sbx", "run.complete", nil, false, false); err != nil {
+		t.Errorf("finalize: %v", err)
+	}
+	if n := sb.stopCount(); n != 1 {
+		t.Errorf("StopSandbox succeeded %d times, want 1", n)
+	}
+	st := cs.folderStatus()
+	if st.Resume != nil || st.Back == nil || st.Back.Error != "" || st.Back.Files != 1 {
+		t.Errorf("resume = %+v, back = %+v; want the completed pass with z.txt alone and no resume", st.Resume, st.Back)
+	}
+	if b, _ := os.ReadFile(filepath.Join(app, "z.txt")); string(b) != "z.txt by the agent" {
+		t.Errorf("z.txt on the computer = %q, want the agent's", b)
+	}
+}
+
+// agentWrites has the agent write each name, new, in the sandbox's folder.
+func agentWrites(t *testing.T, sb *folderSandboxRunner, names ...string) {
+	t.Helper()
+	c := sb.client(t)
+	for _, name := range names {
+		f, err := c.Create("/home/agent/work/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = f.Write([]byte(name + " by the agent"))
+		_ = f.Close()
+	}
+}
+
+// A caller's ctx cancelled before finalize leaves no time to start the pass, which is recorded,
+// and the sandbox is stopped; one cancelled during a second cut pass in a row that saves nothing
+// stops it too. The pass's outcome is recorded and audited, and the caller hears its ctx ended.
 func TestFinalizeRunEffects_TeardownRunsAfterTheCallersCtxIsCancelled(t *testing.T) {
-	for name, after := range map[string]time.Duration{"before finalize": 0, "during the pass back": 200 * time.Millisecond} {
+	cases := map[string]struct {
+		after time.Duration
+		want  string
+	}{
+		"before finalize":      {0, "no time was left for the sync"},
+		"during the pass back": {200 * time.Millisecond, "2 passes in a row brought nothing back"},
+	}
+	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			s, cs, audit, run, sb := hangingFolderBack(t)
+			cs.status.Resume = &types.FolderResume{Stalled: 1}
 			ctx, cancel := context.WithCancel(context.Background())
-			if after == 0 {
+			if tc.after == 0 {
 				cancel()
 			} else {
-				time.AfterFunc(after, cancel)
+				time.AfterFunc(tc.after, cancel)
 			}
 			if err := s.finalizeRunEffects(ctx, run.ID, "sbx", "run.complete", nil, false, false); !errors.Is(err, context.Canceled) {
 				t.Errorf("finalize = %v, want the caller's cancel", err)
 			}
-			assertFolderBackTornDown(t, cs, audit, run, sb)
+			assertFolderBackTornDown(t, cs, audit, run, sb, tc.want)
 		})
 	}
 }

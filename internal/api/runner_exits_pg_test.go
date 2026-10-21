@@ -223,8 +223,9 @@ func (r *hangingSandboxProbe) StopSandbox(ctx context.Context, ref string) error
 	return r.runnerExitTailProbe.StopSandbox(ctx, ref)
 }
 
-// A runner exit whose computer folder's pass back would outlast the exit's bound still stops the
-// sandbox and completes, so the next sweep does not run the pass again (#3466).
+// A runner exit whose computer folder's pass back would outlast the exit's bound keeps its tail
+// open with the sandbox while a cut pass saves nothing once; the retried tail resumes the pass,
+// and the second such pass in a row stops the sandbox, records it and completes the exit (#3466).
 func TestRunnerExitPG_AFolderPassPastTheDeadlineStillCompletesTheExit(t *testing.T) {
 	pool, cfg, rn, run, exit, probe := runnerExitAPIFixture(t)
 	ctx := t.Context()
@@ -253,10 +254,23 @@ func TestRunnerExitPG_AFolderPassPastTheDeadlineStillCompletesTheExit(t *testing
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("exit work = %d rows, %v", len(rows), err)
 	}
-	bounded, cancel := context.WithTimeout(ctx, runTeardownBudget+500*time.Millisecond)
-	defer cancel()
-	if err := srv.applyRunnerExit(bounded, st, rows[0]); err != nil {
-		t.Fatalf("the exit did not complete: %v", err)
+	apply := func() error {
+		bounded, cancel := context.WithTimeout(ctx, runTeardownBudget+computerFolderAccountTime+500*time.Millisecond)
+		defer cancel()
+		return srv.applyRunnerExit(bounded, st, rows[0])
+	}
+	if err := apply(); !errors.Is(err, errComputerFolderResumes) {
+		t.Fatalf("first exit tail = %v, want the kept sandbox's errComputerFolderResumes", err)
+	}
+	assertRunnerExitPhase(t, pool, run.ID, true, false, 1)
+	if n := probe.calls.Load(); n != 0 {
+		t.Fatalf("StopSandbox reached %d times while the sandbox is kept", n)
+	}
+	if status, err := st.RunLocalFolderStatus(ctx, run.ID); err != nil || status.Resume == nil || status.Resume.Stalled != 1 {
+		t.Fatalf("resume = %+v, %v; want the first stalled pass", status.Resume, err)
+	}
+	if err := apply(); err != nil {
+		t.Fatalf("the retried exit tail did not complete: %v", err)
 	}
 	assertRunnerExitPhase(t, pool, run.ID, true, true, 1)
 	if err := srv.SweepRunnerExits(ctx); err != nil {
@@ -268,8 +282,9 @@ func TestRunnerExitPG_AFolderPassPastTheDeadlineStillCompletesTheExit(t *testing
 	if got, _ := st.GetRun(ctx, run.ID); got.SandboxRef != "" {
 		t.Error("the stopped sandbox's ref was not cleared")
 	}
-	if status, err := st.RunLocalFolderStatus(ctx, run.ID); err != nil || status.Back == nil || status.Back.Error == "" {
-		t.Errorf("back record = %+v, %v; want the cut-short pass with its error", status.Back, err)
+	status, err := st.RunLocalFolderStatus(ctx, run.ID)
+	if err != nil || status.Resume != nil || status.Back == nil || !strings.Contains(status.Back.Error, "2 passes in a row brought nothing back") {
+		t.Errorf("back record = %+v, resume = %+v, %v; want the second stalled pass's record and no resume", status.Back, status.Resume, err)
 	}
 	if !cfg.Audit.(*syncAudit).has(run.ID, "run.folder.transfer", "failure") {
 		t.Error("the cut-short pass back is not audited")

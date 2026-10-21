@@ -182,7 +182,8 @@ type SyncFolderWaitArgs struct {
 }
 
 // FolderPass is one pass's outcome, as the runner counts it. Refused holds at
-// most MaxFolderRefusals paths. Error is set when the pass did not complete.
+// most MaxFolderRefusals paths. Error is set when the pass did not complete; its
+// file counts are then what it finished, and saved in its state, before it stopped.
 type FolderPass struct {
 	Pushed    int             `json:"pushed"`
 	Pulled    int             `json:"pulled"`
@@ -191,7 +192,9 @@ type FolderPass struct {
 	Ignored   int             `json:"ignored"`
 	BytesOut  int64           `json:"bytes_out"`
 	BytesIn   int64           `json:"bytes_in"`
-	Error     string          `json:"error,omitempty"`
+	// Unsynced is, on a pass back cut short, the sandbox's changed files it had not brought back.
+	Unsynced int    `json:"unsynced,omitempty"`
+	Error    string `json:"error,omitempty"`
 }
 
 // FolderRefusal is one path a pass refused and why.
