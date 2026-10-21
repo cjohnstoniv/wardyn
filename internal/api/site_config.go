@@ -327,7 +327,7 @@ func validateSiteConfig(cfg types.SiteConfig) error {
 		return err
 	}
 	if err := cmp.Or(validateSignInHelp(cfg.SignInHelpText, cfg.SignInHelpURL), validatePolicyHelp(cfg.PolicyHelp), validateComponentSettings(cfg.Components),
-		validateSiteRecording(cfg.Recording)); err != nil {
+		validateSiteRecording(cfg.Recording), validGovernanceMaxDepth(cfg.GovernanceMaxDepth)); err != nil {
 		return err
 	}
 	// The workspace-provider block, when the body carries one: ONE validator for
@@ -523,7 +523,7 @@ func (s *Server) handleGetSiteConfig(w http.ResponseWriter, r *http.Request) {
 var siteConfigFieldsAfter066 = []string{
 	"upstream_proxy_no_proxy", "internal_hosts", "workspace_providers", "agent_providers",
 	"model_providers", "sign_in_help_text", "sign_in_help_url", "branding", "policy_help", "components",
-	"recording",
+	"recording", "governance_max_depth",
 }
 
 // carryForwardUnnamedSiteConfigFields preserves a stored value that the request
@@ -541,6 +541,9 @@ var siteConfigFieldsAfter066 = []string{
 // `{"internal_hosts": null}` both MENTION the field and both clear it, exactly
 // as a client intends. Only silence is treated as silence.
 func carryForwardUnnamedSiteConfigFields(cfg *types.SiteConfig, existing types.SiteConfig, present map[string]bool) {
+	if !present["governance_max_depth"] {
+		cfg.GovernanceMaxDepth = existing.GovernanceMaxDepth
+	}
 	if !present["upstream_proxy_no_proxy"] {
 		cfg.UpstreamProxyNoProxy = existing.UpstreamProxyNoProxy
 	}
@@ -765,6 +768,9 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	carryForwardUnnamedSiteConfigFields(&cfg, existing, present)
+	if !s.admitGovernanceMaxDepth(w, r, &cfg, existing) { // under the lock, after the carry-forward
+		return
+	}
 	// The egress baseline lowers grades, so it has a stricter writer than this door: the egress block
 	// and the set of baseline-marked internal hosts must come back as stored, whoever is asking.
 	carryForwardInternalHostMarks(&cfg, existing)
