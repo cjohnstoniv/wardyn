@@ -26,8 +26,8 @@ const (
 type Refusal struct {
 	By     string `json:"by"`
 	Reason string `json:"reason"`
-	// Layer and LayerName name the policy that refused: the layer kind ("profile" or
-	// "deployment") and the profile's name, the same two keys authz.denied rows carry.
+	// Layer and LayerName name the policy that refused: the layer kind ("unit" or
+	// "deployment") and the unit's name, the same two keys authz.denied rows carry.
 	// They ride a policy-decided refusal only (PolicyDecided); a guard refusal such as
 	// a private address names none, since the policy owner cannot change it. The
 	// contact stays on the run's own policy object.
@@ -99,7 +99,7 @@ func (r *Refusal) valid() bool {
 	if r.By != RefusedByWardyn && (r.Layer != "" || r.LayerName != "") {
 		return false
 	}
-	if r.Layer != "" && r.Layer != "profile" && r.Layer != "deployment" {
+	if r.Layer != "" && r.Layer != policyref.LayerUnit && r.Layer != "deployment" {
 		return false
 	}
 	return len(r.LayerName) <= 128 && utf8.ValidString(r.LayerName) &&

@@ -30,8 +30,8 @@ func postRefusalDeny(t *testing.T, h *harness, rule string, r *egress.Refusal) m
 // The classified refusal rides the egress.deny audit row, flat, beside rule_source.
 func TestEgressDenyAuditRowCarriesTheRefusal(t *testing.T) {
 	data := postRefusalDeny(t, newHarness(t), "policy:denied",
-		&egress.Refusal{By: egress.RefusedByWardyn, Reason: "policy_denied", Layer: "profile", LayerName: "Team A"})
-	if data["by"] != "wardyn" || data["refusal_reason"] != "policy_denied" || data["layer"] != "profile" || data["layer_name"] != "Team A" {
+		&egress.Refusal{By: egress.RefusedByWardyn, Reason: "policy_denied", Layer: "unit", LayerName: "Team A"})
+	if data["by"] != "wardyn" || data["refusal_reason"] != "policy_denied" || data["layer"] != "unit" || data["layer_name"] != "Team A" {
 		t.Fatalf("egress.deny data = %v", data)
 	}
 	out := postRefusalDeny(t, newHarness(t), "builtin:dial-failed", &egress.Refusal{By: egress.RefusedByOutside, Reason: "connection_refused"})
