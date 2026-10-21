@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -134,9 +135,22 @@ func (s *Server) handleGetPolicy(w http.ResponseWriter, r *http.Request) {
 // New Run ceiling line and the Getting Started governance row both need to name
 // WHICH profile bounds them, and the name is the only handle an admin and a
 // member share.
+//
+// contexts and unit_path are the policy tree's: the caller's own units (omitted for a caller no
+// ceiling binds) and the path of the unit answered, leaf first, names only (absent for the Default
+// unit). ?run_in= answers for another of the caller's units, as POST /runs' run_in does.
 type defaultPolicyResponse struct {
 	types.RunPolicySpec
-	UnitName string `json:"unit_name,omitempty"`
+	UnitName string                 `json:"unit_name,omitempty"`
+	UnitPath []unitPathLink         `json:"unit_path,omitempty"`
+	Contexts []defaultPolicyContext `json:"contexts,omitempty"`
+}
+
+// defaultPolicyContext is one unit the caller may run in; home is the one a run naming none runs in.
+type defaultPolicyContext struct {
+	UnitID   uuid.UUID `json:"unit_id"`
+	UnitName string    `json:"unit_name"`
+	Home     bool      `json:"home"`
 }
 
 // handleGetDefaultPolicy returns THE CALLER'S ceiling — the spec a run created
@@ -154,7 +168,16 @@ type defaultPolicyResponse struct {
 // defensible: the REAL ceiling is readable by the person it binds, rather than
 // being an inference only an admin can make.
 func (s *Server) handleGetDefaultPolicy(w http.ResponseWriter, r *http.Request) {
-	ceiling, err := s.effectiveCeiling(r.Context())
+	runIn, err := s.runInFromRequest(r.Context(), createRunRequest{RunIn: r.URL.Query().Get("run_in")})
+	ctx := withContextChoice(r.Context(), contextChoice{RunIn: runIn})
+	var ceiling governanceCeiling
+	if err == nil {
+		ceiling, err = s.effectiveCeiling(ctx)
+	}
+	if refusal := contextRunRefusal(err); refusal != nil {
+		refusal.write(s, w, r)
+		return
+	}
 	if err != nil {
 		writeCeilingError(w, r, err)
 		return
@@ -168,8 +191,44 @@ func (s *Server) handleGetDefaultPolicy(w http.ResponseWriter, r *http.Request) 
 	}
 	if ceiling.Unit != nil {
 		resp.UnitName = ceiling.Unit.Name
+		for _, l := range ceiling.Unit.Chain {
+			resp.UnitPath = append(resp.UnitPath, unitPathLink{ID: l.ID, Name: l.Name})
+		}
+	}
+	if !ceiling.Operator && s.cfg.Store != nil {
+		if resp.Contexts, err = s.callerContexts(r.Context()); err != nil {
+			writeCeilingError(w, r, err)
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// callerContexts is the caller's own contexts, as the check route lists them for an admin. With a
+// group snapshot that cannot be read, only the rows it cannot hide are listed (selectContext's rule).
+func (s *Server) callerContexts(ctx context.Context) ([]defaultPolicyContext, error) {
+	subj, err := s.callerSubjects(ctx)
+	if err != nil {
+		return nil, err
+	}
+	q := contextQuery{users: subj.users, groups: subj.groups, userType: subj.userType,
+		unusable: subj.stale || oidcGroupsTruncatedFromContext(ctx)}
+	home, err := s.selectContext(ctx, q, contextChoice{})
+	if err != nil {
+		return nil, err
+	}
+	if q.unusable {
+		q.groups = nil
+	}
+	all, _, err := s.checkContexts(ctx, q, home)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]defaultPolicyContext, len(all))
+	for i, c := range all {
+		out[i] = defaultPolicyContext{UnitID: c.UnitID, UnitName: c.UnitName, Home: c.Home}
+	}
+	return out, nil
 }
 
 // redactPolicyForRead returns p with any llm_inspection.workspace_secret_values

@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/composer"
@@ -79,6 +80,8 @@ type governanceResponse struct {
 	Memberships []types.GovernanceMembership `json:"memberships"`
 	// MaxDepth is the maximum unit depth in force (site_config.governance_max_depth, 16 when unset).
 	MaxDepth int `json:"max_depth"`
+	// Boundary is the Wardyn boundary as GET /governance/boundary returns it.
+	Boundary types.Boundary `json:"boundary"`
 }
 
 // handleGetGovernance returns the whole governance picture. operatorOnly
@@ -105,11 +108,43 @@ func (s *Server) handleGetGovernance(w http.ResponseWriter, r *http.Request) {
 	// should never carry one — but a read path must never re-expose it if that
 	// invariant is ever broken by a migration or a direct DB edit. newUnitView
 	// redacts the effective ceiling the same way.
+	boundary, err := s.governanceBoundary(r.Context())
+	if err != nil {
+		writeServerError(w, r, "read the Wardyn boundary", err)
+		return
+	}
+	people := unitPeople(resolved, assignments)
 	profiles := make([]governanceUnitView, len(resolved))
 	for i, p := range resolved {
 		profiles[i] = newUnitView(p.Row, p.Resolved, p.Err)
+		if p.Row.ID != store.DefaultUnitID {
+			n := len(people[p.Row.ID])
+			profiles[i].People = &n
+		}
 	}
-	writeJSON(w, http.StatusOK, governanceResponse{Units: profiles, Memberships: assignments, MaxDepth: limit})
+	writeJSON(w, http.StatusOK, governanceResponse{Units: profiles, Memberships: assignments, MaxDepth: limit, Boundary: boundary})
+}
+
+// unitPeople is, per unit, the membership subjects in it or in a unit below it. The Default unit's
+// people hold no rows, so it has none here.
+func unitPeople(units []unitResolution, ms []types.GovernanceMembership) map[uuid.UUID]map[string]bool {
+	parent := map[uuid.UUID]*uuid.UUID{}
+	for _, u := range units {
+		parent[u.Row.ID] = u.Row.ParentID
+	}
+	out := map[uuid.UUID]map[string]bool{}
+	for _, m := range ms {
+		key := string(m.SubjectType) + ":" + m.Subject
+		cur := &m.UnitID
+		for n := 0; cur != nil && n <= store.MaxUnitDepthCap; n++ {
+			if out[*cur] == nil {
+				out[*cur] = map[string]bool{}
+			}
+			out[*cur][key] = true
+			cur = parent[*cur]
+		}
+	}
+	return out
 }
 
 // governanceRefusedAllPlacements is the frozen sentence (GOVERNANCE.REFUSED_ALL_PLACEMENTS) the

@@ -80,6 +80,9 @@ type governanceUnitResponse struct {
 type governanceUnitView struct {
 	types.GovernanceUnit
 	Effective governanceEffective `json:"effective"`
+	// People counts, on GET /governance, the membership subjects (a user, a group, a user type or
+	// everyone) in this unit or a unit below it. Absent for the Default unit, whose people hold no rows.
+	People *int `json:"people,omitempty"`
 }
 
 // governanceEffective is a profile's composed content. Warnings and Error carry base-level detail
