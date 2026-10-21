@@ -469,8 +469,7 @@ test.describe("#214 no-barrier CTA: the to-admin click keeps ?step=environment",
     await noBarrierProbe(context);
     await gotoConsole(page);
 
-    // Scoped with .first(): the banner and the top bar both carry this CTA.
-    await page.getByRole("link", { name: NO_BARRIER.CTA }).first().click();
+    await page.getByRole("link", { name: NO_BARRIER.CTA }).click();
     // The client-side navigation already lands the URL bar here — ViewGate
     // renders the interstitial INSTEAD of the Outlet, not a redirect away.
     await expect(page).toHaveURL(/\/admin\/setup\?step=environment$/);
@@ -482,8 +481,7 @@ test.describe("#214 no-barrier CTA: the to-admin click keeps ?step=environment",
   });
 
   // #1335 — a security admin in the User view is a session-user too, but
-  // /admin/setup is super-admin-only: the reason shows with no link at either
-  // site (shell banner, top bar), and nothing sends them to the member recap.
+  // /admin/setup is super-admin-only: the reason shows with no link, and nothing sends them to the member recap.
   test("a security admin in the User view reads the reason with no link", async ({ page, context }) => {
     const session = await ssoAdminSession(context, {}, "security_admin");
     session.userView = true;

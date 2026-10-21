@@ -6,13 +6,12 @@
 import { test, expect, gotoConsole, navTo } from "./fixtures";
 import { AUTONOMY_META } from "../src/app/components/wardyn/autonomy-meta";
 import {
-  CHIP_IMAGE_PULL_FAILED,
-  CHIP_SETTING_UP,
-  CHIP_WAITING_FOR_MACHINE,
   PENDING_NO_DETAIL,
   STARTING_CONTAINER_CREATING,
+  STARTING_UNSCHEDULABLE,
   STUCK_IMAGE_PULL,
 } from "../src/app/components/screens/run-status-detail";
+import { RUN } from "../src/app/components/wardyn/copy";
 import type { Page } from "@playwright/test";
 
 // Split out of runs.spec.ts (#209): the run-detail command bar's own status
@@ -126,7 +125,7 @@ test.describe("Run header — the failure-hint chip survives a narrow viewport",
   // backend has no real substrate behind fixture 1, so the reason is injected on
   // the read the console actually makes — the same route-intercept shape the
   // failure_hint case above uses.
-  test("a STARTING run's header carries the substrate's reason, in the short register, with the sentence on its title", async ({
+  test("a STARTING run's header says what the substrate is waiting on, as visible text", async ({
     page,
   }) => {
     await page.route("**/api/v1/runs/*", async (route) => {
@@ -145,14 +144,11 @@ test.describe("Run header — the failure-hint chip survives a narrow viewport",
 
     const header = page.getByTestId("run-summary-header");
     await expect(header.getByText("Starting", { exact: true })).toBeVisible();
-    // The SHORT register on screen, the sentence on the title: at max-w-[160px]
-    // the sentence would truncate to a restatement of the badge beside it.
-    await expect(header.getByText(CHIP_SETTING_UP)).toBeVisible();
-    await expect(header.getByTitle(STARTING_CONTAINER_CREATING)).toBeVisible();
+    await expect(header.getByText(STARTING_CONTAINER_CREATING)).toBeVisible();
   });
 
   // The terminal arm, which is the one the 0.7.5 estate needed: the reason that
-  // will not resolve, in the register that survives the chip's width.
+  // will not resolve, with the registry's own words.
   test("a terminal startup reason reads as a failure, not as progress", async ({ page }) => {
     await page.route("**/api/v1/runs/*", async (route) => {
       if (route.request().method() !== "GET") return route.fallback();
@@ -169,19 +165,13 @@ test.describe("Run header — the failure-hint chip survives a narrow viewport",
     await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
 
     const header = page.getByTestId("run-summary-header");
-    await expect(header.getByText(CHIP_IMAGE_PULL_FAILED)).toBeVisible();
-    // The registry's own words are what name the fix, so they must survive to
-    // the title even though the chip cannot hold them.
-    await expect(header.getByTitle(new RegExp(`${STUCK_IMAGE_PULL} .*pull access denied`))).toBeVisible();
+    // The registry's own words are what name the fix, so they are on the page itself.
+    await expect(header.getByText(new RegExp(`${STUCK_IMAGE_PULL} .*pull access denied`))).toBeVisible();
   });
 
-  // #725/F3 — the header's status chip is max-w-[160px] shrink truncate
-  // exactly so a long sentence can never force the box wider than its own
-  // box (the sentence itself rides only the `title`, where width is free).
-  // An unrecognised reason token falls through statusDetailChip's default
-  // arm ("Waiting: <reason>") with no length limit of its own — the one
-  // arm that can still carry an arbitrarily long string into the chip.
-  test("an unrecognised, long startup reason never widens the chip past its own box", async ({ page }) => {
+  // #725/F3 — an unrecognised reason token carries an arbitrarily long string into the status sentence; it
+  // wraps inside the header and never widens the page.
+  test("an unrecognised, long startup reason wraps inside the header", async ({ page }) => {
     const longReason = "SomeVeryLongUnrecognisedSubstrateReasonTokenNeverSeenBeforeInThisRegistry";
     await page.route("**/api/v1/runs/*", async (route) => {
       if (route.request().method() !== "GET") return route.fallback();
@@ -196,25 +186,21 @@ test.describe("Run header — the failure-hint chip survives a narrow viewport",
     await openRuns(page);
     await page.getByText("e2e fixture 1").click();
     await expect(page).toHaveURL(/\/runs\/.+/);
+    await page.setViewportSize({ width: 420, height: 720 });
 
-    const header = page.getByTestId("run-summary-header");
-    // The chip's visible text is the SHORT register (statusDetailChip: just
-    // the reason token, "Waiting: <reason>") — its `title` carries the full
-    // SENTENCE register instead (statusDetailSentence: the raw "component:
-    // reason" line), which is why the two differ here.
-    await expect(header.getByText(`Waiting: ${longReason}`, { exact: true })).toBeVisible();
-    const chip = header.getByTitle(`Waiting: agent: ${longReason}`);
-    await expect(chip).toBeVisible();
-    const overflow = await chip.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }));
-    expect(overflow.scrollWidth, "status chip scrollWidth").toBeLessThanOrEqual(overflow.clientWidth);
-    // The box itself stays capped too: without max-w-[160px] the chip grows to
-    // fit the whole reason and the overflow check above still passes.
-    const chipBox = await chip.boundingBox();
-    expect(chipBox, "status chip boundingBox").not.toBeNull();
-    expect(chipBox!.width, "status chip width").toBeLessThanOrEqual(160);
+    const sentence = page.getByTestId("run-summary-header").getByTestId("run-status-sentence");
+    await expect(sentence).toContainText(longReason);
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const main = document.querySelector("main");
+          return (main?.scrollWidth ?? 0) - (main?.clientWidth ?? 0);
+        }),
+      )
+      .toBe(0);
   });
 
-  test("no horizontal overflow at 420px, Kill stays in the viewport, and the hint chip is still visible", async ({
+  test("no horizontal overflow at 420px, the primary action stays in the viewport, and the hint is still visible", async ({
     page,
   }) => {
     await openRuns(page);
@@ -252,13 +238,14 @@ test.describe("Run header — the failure-hint chip survives a narrow viewport",
       )
       .toBe(0);
 
-    const killBtn = page.getByRole("button", { name: "Kill", exact: true });
-    await expect(killBtn).toBeVisible();
-    const killBox = await killBtn.boundingBox();
-    expect(killBox, "Kill boundingBox at 420px").not.toBeNull();
-    expect(killBox!.x + killBox!.width, "Kill right edge at 420px").toBeLessThanOrEqual(420);
+    // A failed run has no Kill; the next step is the primary action and must be reachable.
+    const cloneBtn = page.getByRole("button", { name: RUN.CLONE_CTA });
+    await expect(cloneBtn).toBeVisible();
+    const cloneBox = await cloneBtn.boundingBox();
+    expect(cloneBox, "clone boundingBox at 420px").not.toBeNull();
+    expect(cloneBox!.x + cloneBox!.width, "clone right edge at 420px").toBeLessThanOrEqual(420);
 
-    // NEVER hidden — the chip may truncate, but it must still be on screen.
+    // NEVER hidden — the hint may truncate, but it must still be on screen.
     await expect(page.getByTitle(hint)).toBeVisible();
   });
 
@@ -328,59 +315,7 @@ test.describe("Run header — PENDING's own queued sentence (#125)", () => {
     // The next poll tick (DETAIL_POLL_MS) picks up a real stage line, which
     // supersedes the queued sentence.
     stage = { status_detail: "pod: Unschedulable: no room", status_reason: "Unschedulable" };
-    await expect(header.getByText(CHIP_WAITING_FOR_MACHINE)).toBeVisible({ timeout: 8_000 });
+    await expect(header.getByText(STARTING_UNSCHEDULABLE)).toBeVisible({ timeout: 8_000 });
     await expect(page.getByText(PENDING_NO_DETAIL, { exact: true })).toHaveCount(0);
   });
 });
-
-// h-h1: the run id is the 8-character short form and never paints under the
-// state badge, even with every shrink-0 chip beside it. Fixture 1 is STARTING.
-for (const [w, h] of [
-  [1536, 900],
-  [1920, 1080],
-]) {
-  test.describe(`Run header — the id stays clear of the state badge at ${w}px`, () => {
-    test.use({ viewport: { width: w, height: h } });
-    test("a STARTING run with a long title and every chip keeps the id intact", async ({ page }) => {
-      await page.route("**/api/v1/runs/*", async (route) => {
-        if (route.request().method() !== "GET") return route.fallback();
-        const response = await route.fetch();
-        const json = await response.json();
-        if (json.task === "e2e fixture 1") {
-          json.task = "e2e fixture 1 with a deliberately long title that competes with every chip for the row";
-          json.status_detail = "agent: ContainerCreating";
-          json.status_reason = "ContainerCreating";
-          json.autonomy_level = "L1";
-          json.interactive = true;
-        }
-        await route.fulfill({ response, json });
-      });
-      await openRuns(page);
-      await page.getByText(/^e2e fixture 1/).first().click();
-      await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
-
-      const header = page.getByTestId("run-summary-header");
-      const idSpan = header.locator("span[title]").filter({ hasText: /^· [0-9a-f]{8}$/ });
-      await expect(idSpan).toBeVisible();
-      const badge = header.getByText("Starting", { exact: true });
-      const copy = header.getByRole("button", { name: "Copy link to this run" });
-      const m = await page.evaluate(
-        ([idEl, badgeEl, copyEl]) => {
-          const r = (e: Element) => e.getBoundingClientRect();
-          const id = idEl as HTMLElement;
-          const group = id.parentElement as HTMLElement;
-          return {
-            idRight: r(id).right,
-            badgeLeft: r(badgeEl as Element).left,
-            overflow: id.scrollWidth > id.clientWidth,
-            copyInside: r(copyEl as Element).right <= r(group).right + 0.5 && r(copyEl as Element).left >= r(group).left,
-          };
-        },
-        [await idSpan.elementHandle(), await badge.elementHandle(), await copy.elementHandle()],
-      );
-      expect(m.idRight).toBeLessThanOrEqual(m.badgeLeft);
-      expect(m.overflow).toBe(false);
-      expect(m.copyInside).toBe(true);
-    });
-  });
-}

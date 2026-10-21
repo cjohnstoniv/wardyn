@@ -56,9 +56,8 @@ test.describe("Run detail (/runs/:id)", () => {
     await expect(page.getByText("Running", { exact: true })).toBeVisible();
 
     // The run's real identity fields still render — but the cockpit split them:
-    // the repo moved UP into the command bar's 52px single row at xl and up
-    // (wraps below — review R-16), because it is one of the facts that must
-    // be visible without scrolling, while the run id / SPIFFE id stayed in
+    // the repo sits in the header's facts row, because it is one of the facts that
+    // must be visible without scrolling, while the run id / SPIFFE id stayed in
     // the Identity widget on the evidence rail. Same facts, two homes.
     await expect(page.getByRole("heading", { name: "Identity" })).toBeVisible();
     await expect(page.getByText("acme/widgets")).toBeVisible();
@@ -128,7 +127,7 @@ test.describe("Run detail (/runs/:id)", () => {
     await dialog.getByRole("button", { name: "Cancel" }).click();
   });
 
-  test("detail of a COMPLETED run renders and has a disabled Kill button", async ({ page }) => {
+  test("detail of a COMPLETED run renders and offers no Kill", async ({ page }) => {
     await openRuns(page);
     await page.getByText("e2e fixture 4").click();
     await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
@@ -136,15 +135,14 @@ test.describe("Run detail (/runs/:id)", () => {
     await expect(page.getByRole("heading", { name: "e2e fixture 4", level: 1 })).toBeVisible();
     await expect(page.getByText("Completed", { exact: true })).toBeVisible();
 
-    // Terminal run => the Kill trigger is disabled.
-    const killBtn = page.getByRole("button", { name: "Kill", exact: true });
-    await expect(killBtn).toBeVisible();
-    await expect(killBtn).toBeDisabled();
+    // Terminal run => the dead Kill button is gone; the next step leads.
+    await expect(page.getByRole("button", { name: "Kill", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: RUN.CLONE_CTA })).toBeVisible();
   });
 
   // 0.7.3 F7: the clone door used to live only inside the failure block (a run
   // that ended BADLY) — it now sits on the header for every terminal state,
-  // COMPLETED included, beside the disabled Kill.
+  // COMPLETED included, in the place a dead Kill used to take.
   test("a COMPLETED run's header offers the clone door, and it lands on /runs/new prefilled", async ({
     page,
   }) => {
@@ -155,7 +153,7 @@ test.describe("Run detail (/runs/:id)", () => {
 
     const cloneBtn = page.getByRole("button", { name: RUN.CLONE_CTA });
     await expect(cloneBtn).toBeVisible();
-    await expect(page.getByRole("button", { name: "Kill", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Kill", exact: true })).toHaveCount(0);
 
     await cloneBtn.click();
     // A clone opens New Run on Review, with the run's setup already in the draft (title and description
@@ -181,22 +179,10 @@ test.describe("Run detail (/runs/:id)", () => {
   // way — so removing the second access path loses no coverage of the
   // underlying behaviour, only a door that no longer exists.
 
-  // review C-04/R-03/R-14/R-16: the new clone button must not come at the
-  // cost of the ONE thing the header's own comments call non-negotiable (the
-  // task h1) — and the fix must not hide the clone LABEL either (an
-  // icon-only door is the discoverability failure this whole finding is
-  // about). Worst REAL case, not a bare fixture: fixture 6 is seeded
-  // (scripts/e2e-backend.sh) as a FAILED run carrying a longer repo and an
-  // exit code — only `interactive` and `failure_hint` still need the route
-  // splice below (neither is a seed-script column). A PENDING approval was
-  // tried here too (R-03) and dropped again (R-14's live measurement): that
-  // combination cannot fit Kill on-screen alongside every OTHER thing worth
-  // protecting, and per R-13 it is not a state a real terminal run reaches
-  // anyway. review R-18: the seed also carries a workspace_path (still
-  // realistic, still renders at 2xl and elsewhere on the page), but review
-  // R-16 hid that span below 2xl, so it is inert for THIS test's 1024/1280
-  // widths and is not asserted here.
-  test("a FAILED interactive run's task title is never squeezed to nothing, and the clone door keeps its label, at every width the bar renders at", async ({
+  // The header is two rows: the title with its actions, then the facts. Worst REAL case, not a bare fixture:
+  // fixture 6 is seeded (scripts/e2e-backend.sh) as a FAILED run carrying a longer repo and an exit code; only
+  // `interactive` and `failure_hint` need the route splice below (neither is a seed-script column).
+  test("a FAILED interactive run keeps its title, its clone door with the label, and every fact, at every width", async ({
     page,
   }) => {
     await openRuns(page);
@@ -216,78 +202,40 @@ test.describe("Run detail (/runs/:id)", () => {
     await expect(page.getByText("Failed", { exact: true })).toBeVisible();
 
     const header = page.getByTestId("run-summary-header");
-    // Every sibling fact the seed now carries actually renders — the
-    // "everything rendered" re-measure R-03 asked for, not just the floor
-    // assertions below. Asserted once, at whatever viewport is active on
-    // entry (this suite's 1280 default) — the loop below only re-measures
-    // width-sensitive facts, not this one, which never gates on width.
     await expect(header.getByText("exit 137")).toBeVisible();
+    // Nothing the run says about itself lives in a tooltip: the failure hint and the sentence are visible text.
+    await expect(header.getByText("container exited with code 137: OOMKilled while installing dependencies")).toBeVisible();
+    await expect(header.getByTestId("run-status-sentence")).toBeVisible();
 
-    // review R-16: the bar has only two breakpoints (`lg:` 1024, `2xl:`
-    // 1536) plus the wrap threshold at `xl:` (1280) review R-16 itself
-    // added, so its content — and therefore whether it fits — genuinely
-    // differs across that range. One width proves nothing about the rest:
-    // `lg`'s own floor (1024, where the bar wraps to two lines), this
-    // suite's default (1280, the first single-line width), and `2xl` (1536,
-    // where the decorative/secondary waterfall reveals everything it was
-    // hiding).
-    // U2-10 (blind round 2, lens-U2): plus 800 — BELOW `lg`. That width used
-    // to render no tier and no attachability anywhere on the run page: the
-    // Confinement+Interactive block was `hidden … lg:flex`, survivable only
-    // while app-shell's global BarrierChip covered narrower viewports, and
-    // 0.7.3 F6 removed that chip. The gate is gone, and 800 is here so it
-    // cannot come back unnoticed. Same five invariants at all four.
-    for (const width of [800, 1024, 1280, 1536]) {
+    // 390 is a phone, 800 sits below lg, then the console's usual desktop widths.
+    for (const width of [390, 800, 1024, 1280, 1536]) {
       await page.setViewportSize({ width, height: 720 });
 
       const heading = page.getByRole("heading", { name: "e2e fixture 6", level: 1 });
       await expect(heading, `h1 at ${width}px`).toBeVisible();
       const box = await heading.boundingBox();
       expect(box, `h1 boundingBox at ${width}px`).not.toBeNull();
-      expect(box!.width, `h1 width at ${width}px`).toBeGreaterThanOrEqual(160);
+      expect(box!.width, `h1 width at ${width}px`).toBeGreaterThanOrEqual(120);
 
-      // review R-15: assert the repo floor directly rather than infer it
-      // from Kill's position — a green Kill assertion reads the same
-      // whether the bar has 200px of slack or 1px, so the floor itself
-      // needs its own pin.
       const repo = header.getByText(/^github\.com/);
       await expect(repo, `repo at ${width}px`).toBeVisible();
-      const repoBox = await repo.boundingBox();
-      expect(repoBox, `repo boundingBox at ${width}px`).not.toBeNull();
-      expect(repoBox!.width, `repo width at ${width}px`).toBeGreaterThanOrEqual(90);
 
-      // review R-14/R-16: the floors above prove h1/repo don't collapse,
-      // but not that the BAR fits — a row that keeps every element at its
-      // floor/cap and still overflows the viewport would clip Kill off the
-      // right edge (exactly what regression 1's screenshot showed, and what
-      // the pass-3 red proved at 1280 alone) while every OTHER assertion
-      // here stayed green. Kill's right edge must stay on-screen at every
-      // tested width, not just the suite's default.
-      const killBtn = page.getByRole("button", { name: "Kill", exact: true });
-      await expect(killBtn, `Kill visible at ${width}px`).toBeVisible();
-      const killBox = await killBtn.boundingBox();
-      expect(killBox, `Kill boundingBox at ${width}px`).not.toBeNull();
-      expect(killBox!.x + killBox!.width, `Kill right edge at ${width}px`).toBeLessThanOrEqual(width);
-
+      // The clone door keeps its words and stays on screen; an ended run has no Kill.
       const cloneBtn = page.getByRole("button", { name: RUN.CLONE_CTA });
       await expect(cloneBtn, `clone visible at ${width}px`).toBeVisible();
-      // regression 1 (review round 2): the clone LABEL must not collapse to
-      // an icon at ANY tested width — an icon-only door was the exact
-      // discoverability failure 0.7.3 F7 exists to fix, so its visible TEXT
-      // (not just its accessible name) has to equal RUN.CLONE_CTA here.
       await expect(cloneBtn, `clone label at ${width}px`).toHaveText(RUN.CLONE_CTA);
+      const cloneBox = await cloneBtn.boundingBox();
+      expect(cloneBox!.x + cloneBox!.width, `clone right edge at ${width}px`).toBeLessThanOrEqual(width);
+      await expect(page.getByRole("button", { name: "Kill", exact: true })).toHaveCount(0);
 
-      // regression 1's own root cause: "Interactive" (this run isn't
-      // RUNNING, so never "— attachable") is the security-visible fact
-      // governance.spec.ts:473 exists to pin, and the run's own
-      // ConfinementChip is now the ONLY place a run's tier shows anywhere
-      // (0.7.3 F6 removed the header's global chip) — neither may hide at
-      // ANY width this bar renders at (review U-04). review R-09: scoped to
-      // the header testid, not the whole page — plain text, so a future
-      // widget rendering either string elsewhere would otherwise turn this
-      // into a Playwright strict-mode failure rather than a clean miss.
       await expect(header.getByText("Interactive", { exact: true }), `Interactive at ${width}px`).toBeVisible();
       await expect(header.getByText("Fence", { exact: true }), `Fence at ${width}px`).toBeVisible();
+
+      const overflow = await page.evaluate(() => {
+        const main = document.querySelector("main");
+        return (main?.scrollWidth ?? 0) - (main?.clientWidth ?? 0);
+      });
+      expect(overflow, `main horizontal overflow at ${width}px`).toBe(0);
     }
   });
 });

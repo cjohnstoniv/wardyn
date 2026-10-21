@@ -155,6 +155,8 @@ test.describe("Tier B run header", () => {
     const chip = page.getByTestId("pending-approval-chip-text");
     await expect(chip).toBeVisible();
     expect(await chip.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+    // The chip is a link to the Approvals tab (#3032).
+    await expect(chip).toHaveText(/Review/);
   });
 });
 
@@ -299,6 +301,8 @@ test.describe("Tier B run tabs at 390px", () => {
     await page.setViewportSize(PHONE);
     await navToRoute(page, `/runs/${id}`);
     await page.getByRole("tab", { name: /^Approvals/ }).click();
+    // The scope is collapsed behind its own disclosure; opening it is what puts the command on screen.
+    await page.getByText("View requested scope").first().click();
     const pre = page.locator("pre", { hasText: "rm -rf node_modules" }).first();
     await expect(pre).toBeVisible();
     expect(await pre.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);

@@ -374,7 +374,7 @@ test.describe("setup gate — forced on access, never a prison", () => {
     const pressed = page.waitForRequest((r) =>
       r.url().includes("/api/v1/setup/status") && r.url().includes("recheck=1"),
     );
-    await page.getByRole("button", { name: "Re-check" }).first().click();
+    await page.locator("main").getByRole("button", { name: "Re-check" }).first().click();
     await pressed;
   });
 
@@ -407,10 +407,10 @@ test.describe("setup gate — forced on access, never a prison", () => {
     await page.goto("/admin/setup?step=corp_network");
 
     const evidence = page.getByText(PROXY);
-    await expect(page.getByRole("button", { name: "Re-check" }).first()).toBeVisible();
+    await expect(page.locator("main").getByRole("button", { name: "Re-check" }).first()).toBeVisible();
     await expect(evidence).toHaveCount(0);
 
-    await page.getByRole("button", { name: "Re-check" }).first().click();
+    await page.locator("main").getByRole("button", { name: "Re-check" }).first().click();
     await expect(evidence.first()).toBeVisible();
     // R-09: the payload MOVED, so the strip may say so.
     await expect(page.getByText("Checked just now")).toBeVisible();
@@ -436,7 +436,7 @@ test.describe("setup gate — forced on access, never a prison", () => {
     await skipHero(page);
     await page.goto("/admin/setup?step=corp_network");
 
-    const recheck = page.getByRole("button", { name: "Re-check" }).first();
+    const recheck = page.locator("main").getByRole("button", { name: "Re-check" }).first();
     await expect(recheck).toBeVisible();
     // Armed BEFORE the click — a waiter created afterwards misses the request
     // it is waiting for and simply times out.

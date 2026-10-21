@@ -152,7 +152,7 @@ describe("RunDetailScreen — the Approvals tab's push_content card (#181)", () 
 });
 
 describe("RunDetailScreen — a DECIDED push_content row on the Approvals tab (review finding 3)", () => {
-  it("renders a short summary (repo/branch/acts_as_label), never the raw-scope JsonBlock — no acts_as, no 'Commits' label", async () => {
+  it("renders a one-line History row, never the raw scope — no acts_as, no 'Commits' label", async () => {
     getRunMock.mockResolvedValue(RUN);
     listApprovalsMock.mockResolvedValue([
       { ...PUSH_ROW, state: "APPROVED", decided_by: "dana@acme.example" },
@@ -167,16 +167,12 @@ describe("RunDetailScreen — a DECIDED push_content row on the Approvals tab (r
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     await user.click(await screen.findByRole("tab", { name: /approvals/i }));
 
-    await screen.findByText(/Decided by/);
-    // Not the kind-specific card (it's a decided row, not PENDING) and not
-    // the generic branch's raw JSON dump either.
+    await screen.findByText(/by dana@acme.example/);
+    // A one-line History row: not the kind-specific card (it's decided, not PENDING) and no raw scope.
     expect(screen.queryByTestId("push-content-card")).not.toBeInTheDocument();
     expect(screen.queryByText("Requested scope")).not.toBeInTheDocument();
-    expect(screen.getByText("github.com/acme/payments-api")).toBeInTheDocument();
-    expect(screen.getByText("refs/heads/feature/checkout")).toBeInTheDocument();
-    // Appears twice: the summary's "Acts as" field and "Decided by" — both
-    // the run owner, both fine to say twice.
-    expect(screen.getAllByText("dana@acme.example").length).toBeGreaterThan(0);
+    expect(screen.getByText("History")).toBeInTheDocument();
+    expect(screen.getByText(/github.com\/acme\/payments-api/)).toBeInTheDocument();
     expect(document.body.innerHTML).not.toContain("github_token:11111111");
     expect(screen.queryByText(/^Commits?$/)).not.toBeInTheDocument();
   });

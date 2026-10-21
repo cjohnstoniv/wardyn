@@ -116,8 +116,6 @@ export const RUNS_SAVE_VIEW_CANCEL = "Cancel";
 // runs-model.ts's rowPresentation — this table only carries what D2 adds or
 // changes.
 export const RUNS_ROW_WORD = {
-  NEEDS_APPROVAL: "Needs your approval",
-  NEEDS_DECISION: "Needs a decision",
   WAITING_FOR_ADMIN: "Waiting for an admin",
   WAITING_SIGN_IN: "Waiting for sign-in",
   SANDBOX_STOPPED: "Sandbox stopped",

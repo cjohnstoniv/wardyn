@@ -1025,3 +1025,66 @@ test.describe("Approvals screen — escalation chips", () => {
     await expect(third.getByText(/^Escalat/)).toHaveCount(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// The run page says who a pending decision waits on, and where Review leads (#3030, #3032). A git credential
+// mint is not on the live strip, so the Overview bar is the only prompt there, and it is an admin's to decide.
+const MINT_SCOPE = { secret_name: "deploy-token", username: "ci" };
+
+test.describe("the run page: Waiting on you, History and the Overview bar", () => {
+  test("an admin sees it is their turn, Review leads to the Approvals tab sections, and so does the header chip", async ({ page }) => {
+    clearPending();
+    const runId = runningRunId();
+    const pendingId = seedPending({ kind: "credential", runId, scope: MINT_SCOPE });
+    const decidedId = randomUUID();
+    sql(
+      `INSERT INTO approvals (id, run_id, kind, requested_scope, state, requested_at, decided_at, decided_by, minted_jti, reason, decision_scope)
+       VALUES ('${decidedId}','${runId}','credential','{"audience":"history.example"}'::jsonb,'APPROVED',now()-interval '5 min',now()-interval '4 min','admin@wardyn','jti-hist','ok','run')`,
+    );
+    try {
+      await gotoConsole(page);
+      await page.goto(`/runs/${runId}`);
+      const header = page.getByTestId("run-summary-header");
+      await expect(header.getByTestId("run-status-sentence")).toHaveText("Waiting on you to decide.");
+
+      // Overview: the bar carries what the live strip cannot, and Review lands on the Approvals tab.
+      const bar = page.getByTestId("decision-bar");
+      await expect(bar).toContainText("1 decision needs you");
+      await bar.getByRole("button", { name: "Review" }).click();
+      await expect(page.getByRole("tab", { name: /^Approvals/ })).toHaveAttribute("aria-selected", "true");
+      await expect(page.getByRole("region", { name: "Waiting on you" })).toBeVisible();
+      await expect(page.getByRole("region", { name: "Waiting on you" }).getByRole("button", { name: "Approve" })).toBeVisible();
+      await expect(page.getByRole("region", { name: "History" })).toBeVisible();
+
+      // The header chip is a link to the same tab.
+      await page.getByRole("tab", { name: /^Overview/ }).click();
+      await expect(page.getByRole("tab", { name: /^Overview/ })).toHaveAttribute("aria-selected", "true");
+      await header.getByRole("button", { name: /Review/ }).click();
+      await expect(page.getByRole("tab", { name: /^Approvals/ })).toHaveAttribute("aria-selected", "true");
+    } finally {
+      deleteApproval(pendingId);
+      deleteApproval(decidedId);
+    }
+  });
+
+  test("a member sees Waiting for an admin, with no Review, the way the Runs list says it", async ({ page }) => {
+    clearPending();
+    const runId = await memberRunningRun(page);
+    const id = seedPending({ kind: "credential", runId, scope: MINT_SCOPE });
+    try {
+      await page.goto(`/runs/${runId}`);
+      await expect(page.getByTestId("run-summary-header").getByTestId("run-status-sentence")).toHaveText("Waiting for an admin.");
+      const bar = page.getByTestId("decision-bar");
+      await expect(bar).toContainText("Waiting for an admin");
+      await expect(bar.getByRole("button", { name: "Review" })).toHaveCount(0);
+      await expect(page.getByText("Waiting on you to decide.")).toHaveCount(0);
+      // The header chip offers no Review either, and the Approvals tab does not claim it is waiting on this viewer.
+      await expect(page.getByTestId("run-summary-header").getByRole("button", { name: /Review/ })).toHaveCount(0);
+      await page.getByRole("tab", { name: /^Approvals/ }).click();
+      await expect(page.getByRole("region", { name: "Waiting for an admin" })).toBeVisible();
+      await expect(page.getByRole("region", { name: "Waiting on you" })).toHaveCount(0);
+    } finally {
+      deleteApproval(id);
+    }
+  });
+});

@@ -202,7 +202,9 @@ test.describe("Admin settings: an older read cannot overwrite the newer one", ()
     await expect(page.getByRole("heading", { name: "Admin SSH keys" })).toBeVisible();
     await expandCard(page, "Host");
     await expect(page.getByTestId("host-tile-internet-pill")).toHaveText("Through the corporate proxy");
-    const recheck = page.getByRole("button", { name: "Re-check" });
+    // The shell's no-barrier notice also carries a Re-check; this pin is about the Host card's own.
+    const recheck = page.getByTestId("host-footer").getByRole("button", { name: "Re-check" });
+    await expect(recheck).toHaveCount(1);
     counting = true;
     await recheck.click();
     await expect.poll(() => reads).toBe(1);

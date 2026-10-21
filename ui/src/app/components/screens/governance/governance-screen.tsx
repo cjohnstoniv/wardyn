@@ -249,7 +249,7 @@ export function GovernanceScreen() {
       ) : (
         // Hidden, never unmounted, on the Changes tab: an open editor keeps what was typed in it.
         <div hidden={tab !== "profiles"}>
-          <section className="mt-6 overflow-hidden rounded-xl border border-border bg-card">
+          <section className="mt-6 overflow-clip rounded-xl border border-border bg-card">
             <div className="flex flex-wrap items-start justify-between gap-3 px-6 pt-5">
               <div>
                 <h2 className="text-sm font-medium text-foreground">{GOV.PROFILES_TITLE}</h2>

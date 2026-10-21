@@ -156,6 +156,64 @@ describe("PermissionsScreen — advisory, enforced, and the dangerous cell", () 
   });
 });
 
+describe("PermissionsScreen — the capability row (#3053)", () => {
+  it("says how many grants a row has, and warns on the row when it has none", async () => {
+    getPermissionsMock.mockResolvedValue({
+      grants: [grant(), grant({ id: "22222222-2222-2222-2222-222222222222", value: "*.npmjs.org" })],
+      enforcement: { egress_host: true },
+    });
+    renderScreen();
+    const egress = await screen.findByTestId("capability-row-egress_host");
+    expect(within(egress).getByText(PERM.ROW_GRANTS(2))).toBeInTheDocument();
+    expect(within(egress).getByText(PERM.CHIP_ON)).toBeInTheDocument();
+    const workspace = screen.getByTestId("capability-row-workspace");
+    expect(within(workspace).getByText(PERM.ROW_ZERO)).toBeInTheDocument();
+    expect(PERM.ROW_GRANTS(1)).toBe("1 grant");
+  });
+
+  it("a deny-only row counts as nothing granted, the same as the confirm dialog does", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    getPermissionsMock.mockResolvedValue({
+      grants: [grant({ capability: "workspace", value: "ws-1", effect: "deny" })],
+      enforcement: {},
+    });
+    renderScreen();
+    const workspace = await screen.findByTestId("capability-row-workspace");
+    expect(within(workspace).getByText(PERM.ROW_DENY_ONLY(1))).toBeInTheDocument();
+    expect(within(workspace).queryByText(PERM.ROW_ZERO)).toBeNull();
+    expect(workspace.className).toContain("bg-warning-subtle");
+    await user.click(within(workspace).getByRole("switch", { name: `${PERM.ENFORCEMENT_TITLE} ${KIND.workspace.label}` }));
+    expect(within(await screen.findByRole("alertdialog")).getByText(PERM.ENFORCE_ZERO_CONFIRM)).toBeInTheDocument();
+  });
+
+  it("Add grant on a row chooses that capability in the add form", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    window.HTMLElement.prototype.scrollIntoView = vi.fn();
+    renderScreen();
+    const row = await screen.findByTestId("capability-row-secret");
+    await user.click(within(row).getByRole("button", { name: `${PERM.ADD_CTA} ${KIND.secret.label}` }));
+    const form = document.getElementById("permissions-add-grant")!;
+    expect(within(form).getByLabelText(KIND.secret.valueLabel)).toBeInTheDocument();
+  });
+
+  it("enforcing with no grants asks to confirm with the owner's sentence", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+    await screen.findByTestId("capability-row-workspace");
+    await user.click(screen.getByRole("switch", { name: `${PERM.ENFORCEMENT_TITLE} ${KIND.workspace.label}` }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText(PERM.ENFORCE_ZERO_CONFIRM)).toBeInTheDocument();
+    expect(putEnforcementMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps the doctrine one click away in How permissions work", async () => {
+    renderScreen();
+    const disclosure = await screen.findByTestId("how-permissions-work");
+    expect(within(disclosure).getByText(PERM.HOW_TITLE)).toBeInTheDocument();
+    expect(within(disclosure).getByText(PERM.DOCTRINE)).toBeInTheDocument();
+  });
+});
+
 describe("PermissionsScreen — enforcement confirms", () => {
   it("turning a kind on names the affected member count and writes the FULL map", async () => {
     getPermissionsMock.mockResolvedValue({ grants: [grant()], enforcement: {} });
@@ -198,7 +256,9 @@ describe("PermissionsScreen — enforcement confirms", () => {
     await user.click(screen.getByRole("switch", { name: `${PERM.ENFORCEMENT_TITLE} ${KIND.workspace.label}` }));
 
     const dialog = await screen.findByRole("alertdialog");
-    expect(within(dialog).getByText(PERM.ENFORCE_ON_ZERO)).toBeInTheDocument();
+    expect(within(dialog).getByText(PERM.ENFORCE_ZERO_CONFIRM)).toBeInTheDocument();
+    // One lockout sentence in the dialog, not the ruled one plus a paraphrase of it.
+    expect(within(dialog).queryByText(PERM.ENFORCE_ON_ZERO)).toBeNull();
   });
 
   it("turning a kind off says denies still apply, and offers Stop enforcing", async () => {

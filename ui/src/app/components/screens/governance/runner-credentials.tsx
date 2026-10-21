@@ -14,7 +14,7 @@
 // an absent one; the server's 400 stays the gate. An absent class means Don't allow, so the editor writes
 // only the classes that are not set to it.
 import * as React from "react";
-import { AlertTriangle, Loader2 } from "lucide-react";
+import { AlertTriangle } from "lucide-react";
 import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import { credentialDelivery } from "../../../lib/api/credential-delivery";
 import { getErrorMessage } from "../../../lib/format";
@@ -35,6 +35,7 @@ import { useDeferredBusy } from "../../../lib/use-deferred-busy";
 import { useUnsavedGuard } from "../../../lib/use-unsaved-guard";
 import { SavedElsewhereBanner } from "../../wardyn/saved-elsewhere-banner";
 import { Button } from "../../ui/button";
+import { countChanged, FormActions } from "../../wardyn/form-actions";
 import { Checkbox } from "../../ui/checkbox";
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
@@ -197,7 +198,7 @@ export function RunnerCredentials({ onSubmitted }: { onSubmitted?: () => void })
   };
 
   return (
-    <section className="mt-6 overflow-hidden rounded-xl border border-border bg-card">
+    <section className="mt-6 overflow-clip rounded-xl border border-border bg-card">
       <div className="px-6 pt-5">
         <h2 className="text-sm font-medium text-foreground">{DELIVERY.TAB}</h2>
         <p className="mt-1 max-w-[82ch] text-body text-muted-foreground">{DELIVERY.LEAD}</p>
@@ -253,12 +254,17 @@ export function RunnerCredentials({ onSubmitted }: { onSubmitted?: () => void })
                 <span>{outcome.message}</span>
               </Note>
             )}
-            <div className="flex justify-end">
-              <Button disabled={!securityOperator || !dirty || invalid || busy} onClick={() => void save()}>
-                {showSpinner ? <Loader2 className="size-4 animate-spin" /> : null}
-                {DELIVERY.SAVE}
-              </Button>
-            </div>
+          </div>
+          <div className="px-6">
+            <FormActions
+              changeCount={dirty ? countChanged(draft, draftFrom(stored)) : 0}
+              onCancel={() => setDraft(draftFrom(stored))}
+              onSave={() => void save()}
+              saving={showSpinner}
+              saveDisabled={!securityOperator || !dirty || invalid || busy}
+              saveLabel={DELIVERY.SAVE}
+              className="mt-0"
+            />
           </div>
         </>
       )}

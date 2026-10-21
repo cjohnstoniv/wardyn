@@ -43,8 +43,7 @@ async function gotoDirtyProviders(page: Page): Promise<void> {
   await expect(page).toHaveURL(/\/settings$/);
   const card = page.getByTestId("providers-card");
   await expect(card).toBeVisible();
-  await expandCard(page, "Workspace providers");
-  await card.getByText(PROVIDERS.CARD_OPEN).click();
+  await card.getByRole("link").click();
   await expect(page).toHaveURL(/\/providers$/);
   await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toBeVisible();
 

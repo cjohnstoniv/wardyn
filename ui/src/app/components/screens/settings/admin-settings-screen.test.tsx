@@ -22,6 +22,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
+import { CARD_STATUS, SETTINGS_GROUPS } from "../../wardyn/copy/card-status";
 
 const getSetupStatusMock = vi.fn();
 vi.mock("../../../lib/api/setup", () => ({
@@ -151,6 +152,36 @@ describe("AdminSettingsScreen", () => {
     expect(positions).toEqual([...positions].sort((a, b) => a - b));
   });
 
+  // #3048: the nine cards read as three places, a blocking state stands out, and a card that only
+  // links elsewhere is a link.
+  it("groups the cards under This host, Connections and People and access", async () => {
+    renderScreen();
+    await screen.findByTestId("user-drives-card");
+    const labels = SETTINGS_GROUPS;
+    const groupOf = (testId: string) => screen.getByTestId(testId).closest("[role=group]")?.getAttribute("aria-label");
+    expect(groupOf("host-card")).toBe(labels.HOST);
+    expect(groupOf("model-providers-list")).toBe(labels.CONNECTIONS);
+    expect(groupOf("user-drives-card")).toBe(labels.CONNECTIONS);
+    expect(groupOf("approval-notify-card")).toBe(labels.PEOPLE);
+    expect(groupOf("scim-card")).toBe(labels.PEOPLE);
+  });
+
+  it("states the blocking Host condition as a pill, and links Workspace providers and User drives as rows", async () => {
+    getSetupStatusMock.mockResolvedValue(baseStatus({ runner: { driver: "none", confinement_classes: [] } }));
+    renderScreen();
+    await screen.findByTestId("user-drives-card");
+    expect(await screen.findByTestId("host-card-status")).toHaveTextContent(CARD_STATUS.CANT_LAUNCH);
+    expect(screen.getByTestId("model-providers-list-status")).toHaveTextContent(CARD_STATUS.NOT_SET_UP);
+    for (const [id, href] of [
+      ["providers-card", "/admin/providers"],
+      ["user-drives-card", "/admin/drives"],
+    ]) {
+      const card = screen.getByTestId(id);
+      expect(within(card).getByRole("link")).toHaveAttribute("href", href);
+      expect(within(card).queryByRole("button")).toBeNull();
+    }
+  });
+
   // M-5 (#636): Admin SSH keys (S-1) is drawn after User drives (§1a). notify-e4
   // (packet M6 S3) adds Approval notifications directly after it, and 0.8.6 scim-a7
   // (M5) puts SCIM provisioning after that, the LAST card. Your account has no Drives
@@ -163,16 +194,17 @@ describe("AdminSettingsScreen", () => {
     const sshCard = (await screen.findByRole("heading", { name: startsWith(ADMIN_SSH_KEYS.TITLE) })).closest("section")!;
     const drivesCard = await screen.findByTestId("user-drives-card");
     const scimCard = await screen.findByTestId("scim-card");
-    // Host, Branding, Model providers (list), Providers, Custom components, User drives,
-    // Admin SSH keys, Approval notifications, SCIM.
-    expect(card.parentElement?.children).toHaveLength(9);
+    // The cards sit in three groups, but their order down the page is the same.
+    const before = (a: Element, b: Element) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(before(drivesCard, sshCard)).toBe(true);
+    expect(before(sshCard, card)).toBe(true);
+    expect(before(card, scimCard)).toBe(true);
+    // SCIM is the last card on the page.
     expect(card.parentElement?.lastElementChild).toBe(scimCard);
-    expect(scimCard.previousElementSibling).toBe(card);
-    expect(card.previousElementSibling).toBe(sshCard);
-    expect(sshCard.previousElementSibling).toBe(drivesCard);
     // Custom components sits between the providers and the drives (0.8.9).
     const componentsCard = await screen.findByTestId("components-settings-card");
     expect(componentsCard.nextElementSibling).toBe(drivesCard);
+    expect(drivesCard.nextElementSibling).toBe(sshCard);
   });
 
   // The retired Model provider card is replaced by the Model providers list;
@@ -546,6 +578,6 @@ describe("AdminSettingsScreen — the Host card's status tiles", () => {
     await openHost();
     const footer = within(screen.getByTestId("host-footer"));
     expect(footer.getByRole("button", { name: /corporate proxy & egress/i })).toBeInTheDocument();
-    expect(footer.getByRole("button", { name: /^re-check$/i })).toBeInTheDocument();
+    expect(footer.queryAllByRole("button", { name: /^re-check$/i })).toHaveLength(1);
   });
 });

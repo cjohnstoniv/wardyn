@@ -49,7 +49,11 @@ export function ApprovalNotifyCard() {
           : COPY.SUMMARY_OK(channels.length);
 
   return (
-    <CollapsibleCard title={COPY.TITLE} summary={summary} testId="approval-notify-card">
+    <CollapsibleCard
+      title={COPY.TITLE}
+      summary={summary}
+      testId="approval-notify-card"
+    >
       {status === "loading" ? (
         <TableSkeleton rows={1} cols={6} />
       ) : status === "error" ? (

@@ -389,6 +389,82 @@ describe("RunDetailScreen — Approvals tab empty card", () => {
   });
 });
 
+// A pending git credential mint is admin-only: the Runs list says "Waiting for an admin", so the run page must
+// not tell a member it is their turn.
+describe("RunDetailScreen — who the pending decision waits on", () => {
+  const MINT = {
+    id: "a1",
+    run_id: "run-1",
+    kind: "credential",
+    state: "PENDING",
+    requested_at: new Date().toISOString(),
+    requested_scope: { secret_name: "deploy-token", username: "ci" },
+  };
+
+  function renderAs(operator: boolean) {
+    listApprovalsMock.mockResolvedValue([MINT]);
+    getRunMock.mockResolvedValue({ ...RUN, state: "RUNNING" });
+    return render(
+      <MemoryRouter initialEntries={["/runs/run-1"]}>
+        <OperatorProvider operator={operator} securityOperator={operator} principal="me">
+          <Routes>
+            <Route path="/runs/:id" element={<RunDetailScreen />} />
+          </Routes>
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  it("a member sees Waiting for an admin, and the Overview bar offers no Review", async () => {
+    renderAs(false);
+    expect(await screen.findByTestId("run-status-sentence")).toHaveTextContent("Waiting for an admin.");
+    const bar = await screen.findByTestId("decision-bar");
+    expect(bar).toHaveTextContent("Waiting for an admin");
+    expect(within(bar).queryByRole("button", { name: "Review" })).toBeNull();
+    expect(screen.queryByText("Waiting on you to decide.")).toBeNull();
+    // The header chip offers no Review, and the Approvals tab names an admin, not "Waiting on you".
+    expect(screen.getByTestId("pending-approval-chip-text")).not.toHaveTextContent("Review");
+    await userEvent.setup({ pointerEventsCheck: 0 }).click(await screen.findByRole("tab", { name: /approvals/i }));
+    expect(await screen.findByRole("region", { name: "Waiting for an admin" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Waiting on you" })).toBeNull();
+  });
+
+  it("an admin sees it is their turn, with Review", async () => {
+    renderAs(true);
+    expect(await screen.findByTestId("run-status-sentence")).toHaveTextContent("Waiting on you to decide.");
+    const bar = await screen.findByTestId("decision-bar");
+    expect(bar).toHaveTextContent("1 decision needs you");
+    expect(within(bar).getByRole("button", { name: "Review" })).toBeInTheDocument();
+    expect(screen.getByTestId("pending-approval-chip-text")).toHaveTextContent("Review");
+    await userEvent.setup({ pointerEventsCheck: 0 }).click(await screen.findByRole("tab", { name: /approvals/i }));
+    expect(await screen.findByRole("region", { name: "Waiting on you" })).toBeInTheDocument();
+  });
+});
+
+// The Runs list's Review button opens a run on its Approvals tab (?tab=approvals).
+describe("RunDetailScreen — ?tab= picks the opening tab", () => {
+  function renderAt(search: string) {
+    getRunMock.mockResolvedValue({ ...RUN, state: "RUNNING" });
+    return render(
+      <MemoryRouter initialEntries={[`/runs/run-1${search}`]}>
+        <Routes>
+          <Route path="/runs/:id" element={<RunDetailScreen />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+  }
+
+  it("opens on Approvals when asked", async () => {
+    renderAt("?tab=approvals");
+    expect(await screen.findByRole("tab", { name: /approvals/i })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("ignores a tab it does not know", async () => {
+    renderAt("?tab=nonsense");
+    expect(await screen.findByRole("tab", { name: /overview/i })).toHaveAttribute("aria-selected", "true");
+  });
+});
+
 // #2924: the requested scope of a pending tool call wraps, so the command being decided on is fully on screen.
 describe("RunDetailScreen — Approvals tab requested scope", () => {
   it("wraps a long command instead of scrolling it out of sight", async () => {

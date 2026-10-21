@@ -81,7 +81,7 @@ function renderShellAt(
             <Route
               path="*"
               element={
-                <AppShell pendingApprovals={0} attentionCount={0} onSignOut={() => {}} noBarrier={noBarrier} />
+                <AppShell pendingApprovals={0} attentionCount={0} onSignOut={() => {}} noBarrier={noBarrier} onRecheck={() => {}} />
               }
             >
               <Route path="*" element={<div>screen</div>} />
@@ -203,17 +203,21 @@ describe("the #214 no-barrier banner: present in both views, CTA gated on who ca
       true,
     );
     expect(await screen.findByText(NO_BARRIER.BANNER_TITLE)).toBeInTheDocument();
-    expect(screen.getByText(NO_BARRIER.BANNER_BODY)).toBeInTheDocument();
+    expect(screen.getByText(NO_BARRIER.BANNER_MEMBER)).toBeInTheDocument();
+    expect(screen.queryByText(NO_BARRIER.BANNER_BODY)).toBeNull();
     expect(screen.queryByRole("link", { name: NO_BARRIER.CTA })).toBeNull();
+    expect(screen.queryByRole("button", { name: NO_BARRIER.RECHECK })).toBeNull();
   });
 
-  it("an operator in the Admin view: the banner routes into /admin/setup, and the top-bar link is absent (no New run there)", async () => {
+  it("an operator in the Admin view: the notice carries the command, Re-check and the link into /admin/setup", async () => {
     renderShellAt("/admin/runs", ADMIN_ME, {}, true);
     expect(await screen.findByText(NO_BARRIER.BANNER_TITLE)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: NO_BARRIER.CTA })).toHaveAttribute(
       "href",
       "/admin/setup?step=environment",
     );
+    expect(screen.getByText(NO_BARRIER.SETUP_COMMAND)).toBeInTheDocument();
+    expect(screen.queryAllByRole("button", { name: NO_BARRIER.RECHECK })).toHaveLength(1);
     expect(screen.queryByRole("button", { name: "New run" })).toBeNull();
   });
 
@@ -224,7 +228,7 @@ describe("the #214 no-barrier banner: present in both views, CTA gated on who ca
   // routed at the SAME /admin/setup?step=environment — ViewGate answers with
   // the "to-admin" interstitial (never a refusal) the moment it's clicked,
   // and that click's own target already carries the query string.
-  it("an SSO admin who switched to the User view (session-user): the CTA still offers /admin/setup, from both the banner and the top bar", async () => {
+  it("an SSO admin who switched to the User view (session-user): the CTA still offers /admin/setup, once", async () => {
     renderShellAt(
       "/runs",
       { principal: "admin-in-member@corp.example", method: "sso", role: "user", operator: false, security_operator: false, user_view: true, user_view_super_admin: true },
@@ -233,15 +237,13 @@ describe("the #214 no-barrier banner: present in both views, CTA gated on who ca
     );
     expect(await screen.findByText(NO_BARRIER.BANNER_TITLE)).toBeInTheDocument();
     const links = screen.getAllByRole("link", { name: NO_BARRIER.CTA });
-    expect(links).toHaveLength(2);
-    for (const link of links) {
-      expect(link).toHaveAttribute("href", "/admin/setup?step=environment");
-    }
+    expect(links).toHaveLength(1);
+    expect(links[0]).toHaveAttribute("href", "/admin/setup?step=environment");
   });
 
   // #1335 — a security admin in the User view is session-user too, but
   // /admin/setup would refuse them: no link from the banner or the top bar.
-  it("a security admin in the User view: the reason shows, with no CTA at either site", async () => {
+  it("a security admin in the User view: the reason shows, with no CTA", async () => {
     renderShellAt(
       "/runs",
       { principal: "sec-in-view@corp.example", method: "sso", role: "user", operator: false, security_operator: false, user_view: true, user_view_super_admin: false },

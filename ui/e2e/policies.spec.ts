@@ -138,6 +138,19 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Policies", exact: true })).toBeVisible();
 });
 
+test("the policy dialog keeps Cancel and Create on screen however tall the form is (#3051)", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 480 });
+  await openCreate(page);
+  const dialog = editorDialog(page);
+  const create = dialog.getByRole("button", { name: "Create policy" });
+  await expect(create).toBeInViewport();
+  // Scrolling the body to its end must not move the footer off screen either.
+  await dialog.getByLabel(SPEC_LABEL).focus();
+  await page.keyboard.press("Control+End");
+  await expect(create).toBeInViewport();
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+});
+
 test("renders the Policies screen header, description and primary action", async ({ page }) => {
   await expect(
     page.getByText(

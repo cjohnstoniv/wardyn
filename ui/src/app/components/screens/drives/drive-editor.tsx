@@ -37,7 +37,6 @@
 //
 // Every product string comes from user-drives-copy.ts. This file adds none.
 import * as React from "react";
-import { Loader2 } from "lucide-react";
 import { HttpError } from "../../../lib/api/core";
 import {
   backendsFor,
@@ -60,7 +59,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "../../ui/alert-dialog";
-import { Button } from "../../ui/button";
+import { countChanged, FormActions } from "../../wardyn/form-actions";
 import { Input } from "../../ui/input";
 import { RadioGroup, RadioGroupItem } from "../../ui/radio-group";
 import { Label } from "../../ui/label";
@@ -351,17 +350,29 @@ export function DriveEditor({
         </Note>
       )}
 
-      <div className="mt-5 flex justify-end gap-2">
-        <Button variant="ghost" onClick={onCancel} disabled={saving}>
-          {PEOPLE.CANCEL}
-        </Button>
-        {/* The screen's one `default` button while the editor is open — the
-            allocation form below collapses and takes its teal with it. */}
-        <Button onClick={() => save()} disabled={disabled || saving || noBackend || !name.trim()}>
-          {saving ? <Loader2 className="size-4 animate-spin" /> : null}
-          {DRIVES.SAVE_CTA}
-        </Button>
-      </div>
+      {/* The screen's one `default` button while the editor is open — the allocation form below
+          collapses and takes its teal with it. */}
+      <FormActions
+        changeCount={countChanged(
+          { name, backend, hostRoot, storageClass, home, size, writable, reclaim },
+          {
+            name: drive?.name ?? "",
+            backend: drive?.backend ?? offered[0] ?? "docker_volume",
+            hostRoot: drive?.host_root ?? "",
+            storageClass: drive?.storage_class ?? "",
+            home: drive?.home_template ?? "hash",
+            size: String(drive?.size_mib ?? 0),
+            writable: !!drive?.writable,
+            reclaim: drive?.reclaim ?? "retain",
+          },
+        )}
+        onCancel={onCancel}
+        onSave={() => save()}
+        saving={saving}
+        saveDisabled={disabled || noBackend || !name.trim()}
+        saveLabel={DRIVES.SAVE_CTA}
+        cancelLabel={PEOPLE.CANCEL}
+      />
 
       {/* U3: driveRehomeGuard's 409 on an identity-affecting edit
           of an allocated drive. The body is the server's text verbatim; the

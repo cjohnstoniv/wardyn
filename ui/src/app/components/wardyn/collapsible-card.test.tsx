@@ -9,6 +9,7 @@
 // that spec's own comment for the other half of this proof.
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import userEvent from "@testing-library/user-event";
 import { CollapsibleCard } from "./collapsible-card";
 import { startsWith } from "../../lib/test-dom";
@@ -105,5 +106,29 @@ describe("CollapsibleCard", () => {
       </CollapsibleCard>,
     );
     expect(screen.getByText("Full detail")).toBeVisible();
+  });
+
+  it("shows a status pill beside the summary, in the tone it was given", () => {
+    render(
+      <CollapsibleCard title="Host" summary="No barrier installed" status={{ tone: "danger", label: "Can't launch" }} testId="c">
+        <p>Full detail</p>
+      </CollapsibleCard>,
+    );
+    const pill = screen.getByTestId("c-status");
+    expect(pill).toHaveTextContent("Can't launch");
+    expect(pill.className).toContain("text-danger");
+  });
+
+  it("with `to` it is a link row with no accordion and no body", () => {
+    render(
+      <MemoryRouter>
+        <CollapsibleCard title="User drives" summary="No drives yet" to="/admin/drives" testId="c">
+          <p>Never shown</p>
+        </CollapsibleCard>
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole("link")).toHaveAttribute("href", "/admin/drives");
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.queryByText("Never shown")).not.toBeInTheDocument();
   });
 });

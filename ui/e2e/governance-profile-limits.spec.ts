@@ -115,6 +115,29 @@ test.describe("governance — a profile bounding only a placement, a cap or the 
 // real save, real reload — is the only e2e proof either exists on the wire.
 test.describe("governance — the two storage ceilings round-trip through the editor", () => {
   // ticket: 0.7.2
+  test("the editor's action bar is pinned, counts unsaved changes, and the section links jump (#3051)", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 600 });
+    await gotoConsole(page, "admin");
+    await navTo(page, "Governance");
+    await page.getByRole("button", { name: GOV.NEW_CTA, exact: true }).click();
+
+    const bar = page.getByTestId("form-actions");
+    await expect(bar).toBeVisible();
+    await expect(page.getByTestId("form-actions-unsaved")).toBeEmpty();
+    await page.locator("#governance-profile-name").fill(`pinned-${randomUUID().slice(0, 8)}`);
+    await expect(page.getByTestId("form-actions-unsaved")).toHaveText("1 unsaved change");
+
+    // The bar stays inside the viewport while the long form scrolls under it.
+    const viewportHeight = page.viewportSize()!.height;
+    const box = (await bar.boundingBox())!;
+    expect(box.y + box.height).toBeLessThanOrEqual(viewportHeight + 1);
+
+    await page.getByTestId("section-anchors").getByRole("link", { name: GOV.CONTACT_TITLE }).click();
+    await expect(page.getByTestId("governance-profile-contact")).toBeInViewport();
+    const after = (await bar.boundingBox())!;
+    expect(after.y + after.height).toBeLessThanOrEqual(viewportHeight + 1);
+  });
+
   test("both LimitNumberRows write real integers, and 0 means unlimited on both", async ({ page }) => {
     const name = `storage-ceilings-${randomUUID().slice(0, 8)}`;
     await gotoConsole(page, "admin");

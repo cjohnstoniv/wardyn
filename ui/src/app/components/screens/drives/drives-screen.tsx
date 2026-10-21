@@ -198,7 +198,7 @@ export function DrivesScreen() {
         </section>
       ) : (
         <>
-          <section className="mt-6 overflow-hidden rounded-xl border border-border bg-card">
+          <section className="mt-6 overflow-clip rounded-xl border border-border bg-card">
             <div className="flex flex-wrap items-start justify-between gap-3 px-6 pt-5">
               <div>
                 <h2 className="text-sm font-medium text-foreground">{DRIVES.DRIVES_TITLE}</h2>

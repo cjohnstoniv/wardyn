@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { FORM_ACTIONS } from "../src/app/components/wardyn/copy/form-actions";
 import { randomUUID } from "node:crypto";
 import {
   test,
@@ -11,7 +12,6 @@ import {
   MEMBER_PRINCIPAL,
   asRealMember,
   ignoreMissingRunner,
-  expandCard,
   gotoConsole,
   mockMemberRole,
   mockSecurityAdminRole,
@@ -406,6 +406,12 @@ test.describe("drives — the editor offers what this deployment can mount, and 
     // Save waits for the one field that has no default.
     await expect(page.getByRole("button", { name: DRIVES.SAVE_CTA, exact: true })).toBeDisabled();
 
+    // The shared form bar: the count appears with the first edit, and Save is the bar's.
+    const bar = editor.getByTestId("form-actions");
+    await expect(bar.getByTestId("form-actions-unsaved")).toHaveText("");
+    await page.locator("#drive-name").fill("pinned-unsaved");
+    await expect(bar.getByTestId("form-actions-unsaved")).toHaveText(FORM_ACTIONS.UNSAVED(1));
+
     await page.getByRole("button", { name: PEOPLE.CANCEL, exact: true }).click();
     await expect(page.getByTestId("drives-drive-editor")).toHaveCount(0);
   });
@@ -595,12 +601,11 @@ test.describe("drives — the registry is SUPER's, and no super admin's nav list
     await navToRoute(page, "/admin/settings");
     const card = page.getByTestId("user-drives-card");
     await expect(card).toBeVisible();
-    await expandCard(page, DRIVES.TITLE);
-    await expect(card.getByText(DRIVES.CARD_LEAD)).toBeVisible();
+    // A link row (#3048), not an accordion: the count rides its face.
     // It counts ALLOCATIONS, never people — and with none it says so rather
     // than rendering a zero.
     await expect(card.getByText(DRIVES.CARD_EMPTY)).toBeVisible();
-    await card.getByText(DRIVES.CARD_OPEN).click();
+    await card.getByRole("link").click();
     await expect(page).toHaveURL(/\/admin\/drives$/);
   });
 
