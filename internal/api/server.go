@@ -578,10 +578,8 @@ type Config struct {
 	// the broker is off, a resident PAT on an operator's run too; a member's
 	// run is refused it either way (patNarrowingRefusal).
 	RefuseGitPATBrokerOff bool
-	// MultiAgentTasks (WARDYN_MULTI_AGENT_TASKS, off by default in 0.10.0) lets a
-	// background agent task run several agents side by side, each on its own
-	// tools[].task. Off, a request carrying one is refused multi_agent_tasks_off
-	// and every other request is unchanged.
+	// MultiAgentTasks (WARDYN_MULTI_AGENT_TASKS, off by default in 0.10.0): a background task
+	// may run several agents, each on its tools[].task. Off, that is refused multi_agent_tasks_off.
 	MultiAgentTasks bool
 	// ScrubProxyResponses (WARDYN_PROXY_RESPONSE_SCRUB) stamps
 	// proxy.Config.ScrubResponses on every new dispatch.
@@ -593,12 +591,9 @@ type Config struct {
 	// (runs_dispatch_placeholders.go). Off = the value in the sandbox, as before.
 	EnvSecretPlaceholders  bool
 	FileSecretPlaceholders bool
-	// RunnerSecretPlaceholders (WARDYN_RUNNER_SECRET_PLACEHOLDERS; off by
-	// default in 0.10.0): the same for a runner_resident env_secret or
-	// file_secret grant on a local run, with the value kept at the
-	// organisation: the runner gets the placeholder and a via_org route, and
-	// the organisation's egress fills it (placeResidentSecrets). Off = the
-	// value delivered runner_resident, as before.
+	// RunnerSecretPlaceholders (WARDYN_RUNNER_SECRET_PLACEHOLDERS; off by default in 0.10.0): a
+	// local run's runner_resident env_secret or file_secret grant keeps its value at the organisation;
+	// the runner gets a placeholder and a via_org route, filled by its egress (placeResidentSecrets).
 	RunnerSecretPlaceholders bool
 	// OIDCRoleMapConfigured reports whether WARDYN_OIDC_ROLE_MAP is non-empty —
 	// the sso_rbac /setup/status check's gate. Only the presence, never the
