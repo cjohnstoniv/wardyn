@@ -41,6 +41,8 @@ type GovernanceUnitRequest struct {
 	ParentID      json.RawMessage `json:"parent_id,omitempty"`
 	Overlay       json.RawMessage `json:"overlay,omitempty"`
 	OverlayLimits json.RawMessage `json:"overlay_limits,omitempty"`
+	// Mode is own_walls or pass_through; "" keeps the stored mode (own_walls on a create).
+	Mode string `json:"mode,omitempty"`
 }
 
 // withComposition sets the request's composition members from p. Nothing is sent when neither p nor
@@ -70,14 +72,15 @@ type GovernanceUnitResponse struct {
 }
 
 // GovernanceMembershipRequest is POST /governance/memberships's body. There is
-// no PUT for an assignment: the natural key (subject_type, subject) upserts,
-// repointing an existing binding rather than accumulating a second one, the
-// same shape DriveGrantRequest already takes for a drive allocation.
+// no PUT for a membership: the natural key (unit_id, subject_type, subject) upserts,
+// so a subject holds one membership per unit and re-posting one updates its
+// priority and home. Home marks the unit a person runs in when a run names none.
 type GovernanceMembershipRequest struct {
 	SubjectType CapabilitySubjectType `json:"subject_type"`
 	Subject     string                `json:"subject"`
 	UnitID      uuid.UUID             `json:"unit_id"`
 	Priority    int                   `json:"priority"`
+	Home        bool                  `json:"home,omitempty"`
 }
 
 // GovernanceDocument is GET /governance's body and ApplyGovernance's
@@ -86,6 +89,9 @@ type GovernanceMembershipRequest struct {
 type GovernanceDocument struct {
 	Units       []GovernanceUnit       `json:"units"`
 	Memberships []GovernanceMembership `json:"memberships"`
+	// MaxDepth is the server's maximum unit depth, as GET /governance reports it. An apply never
+	// sends it: the limit is site_config.governance_max_depth.
+	MaxDepth int `json:"max_depth,omitempty"`
 }
 
 // GovernanceChangeDiff is a pending change's server-rendered diff: the target's
@@ -171,10 +177,11 @@ func (c *Client) GetGovernance(ctx context.Context) (GovernanceDocument, error) 
 }
 
 // governanceMembershipKey is the natural key ApplyGovernance and
-// handleUpsertGovernanceMembership both upsert an assignment by. The subject is folded the way
+// handleUpsertGovernanceMembership both upsert a membership by: the unit (by name, as a document
+// moves between servers) and the subject. The subject is folded the way
 // validateGovernanceMembership stores it, so a document's "Alice@Corp.com" meets the stored
 // "alice@corp.com" instead of reading as one delete plus one create.
-func governanceMembershipKey(subjectType CapabilitySubjectType, subject string) string {
+func governanceMembershipKey(unit string, subjectType CapabilitySubjectType, subject string) string {
 	switch subjectType {
 	case types.CapabilitySubjectAll:
 		subject = ""
@@ -188,7 +195,38 @@ func governanceMembershipKey(subjectType CapabilitySubjectType, subject string) 
 	default:
 		subject = strings.TrimSpace(subject)
 	}
-	return string(subjectType) + "\x00" + subject
+	return unit + "\x00" + string(subjectType) + "\x00" + subject
+}
+
+// membershipUnitName is the name a membership's unit id has in the document (fileIDToName), else on
+// the server (currentIDToName), else the id itself.
+func membershipUnitName(id uuid.UUID, fileIDToName, currentIDToName map[uuid.UUID]string) string {
+	if name, ok := fileIDToName[id]; ok {
+		return name
+	}
+	if name, ok := currentIDToName[id]; ok {
+		return name
+	}
+	return id.String()
+}
+
+// defaultUnitOf is the Default unit in units (kind default), nil when there is none.
+func defaultUnitOf(units []GovernanceUnit) *GovernanceUnit {
+	for i := range units {
+		if units[i].Kind == types.UnitKindDefault {
+			return &units[i]
+		}
+	}
+	return nil
+}
+
+// normalizeComposedParent points a composed document unit with no base at the Default unit, as the
+// server stores it, so an older document compares equal to what it wrote.
+func normalizeComposedParent(p *GovernanceUnit, def *GovernanceUnit) {
+	if def != nil && p.Composed() && p.ParentID == nil {
+		id := def.ID
+		p.ParentID = &id
+	}
 }
 
 // governanceUnitChangedFields returns the JSON names of the fields that
@@ -214,7 +252,18 @@ func governanceUnitChangedFields(existing, p GovernanceUnit) []string {
 	if !reflect.DeepEqual(existing.OverlayLimits, p.OverlayLimits) {
 		fields = append(fields, "overlay_limits")
 	}
+	// An absent mode keeps the stored one, as the write does.
+	if p.Mode != "" && p.Mode != cmpOr(existing.Mode, types.UnitModeOwnWalls) {
+		fields = append(fields, "mode")
+	}
 	return fields
+}
+
+func cmpOr(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }
 
 // governanceUnitUnchanged reports whether writing p over existing would
@@ -429,8 +478,9 @@ func (c *Client) ApplyGovernanceResult(ctx context.Context, doc GovernanceDocume
 	}
 	assignmentByKey := make(map[string]GovernanceMembership, len(current.Memberships))
 	for _, a := range current.Memberships {
-		assignmentByKey[governanceMembershipKey(a.SubjectType, a.Subject)] = a
+		assignmentByKey[governanceMembershipKey(membershipUnitName(a.UnitID, nil, currentIDToName), a.SubjectType, a.Subject)] = a
 	}
+	def := defaultUnitOf(current.Units)
 
 	// fileIDToName/nameToRealID translate an assignment's ProfileID from
 	// "whatever id this SAME file's profile entry carried" to "the id that
@@ -453,6 +503,15 @@ func (c *Client) ApplyGovernanceResult(ctx context.Context, doc GovernanceDocume
 
 	for _, i := range order {
 		p := doc.Units[i]
+		if p.Kind == types.UnitKindDefault {
+			// The Default unit is the server's own: never written, its id the server's.
+			if def != nil {
+				doc.Units[i] = *def
+				nameToRealID[p.Name] = def.ID
+			}
+			continue
+		}
+		normalizeComposedParent(&p, def)
 		saved := p
 		// Every graph reference is rewritten to the id the base holds on THIS server; bases were
 		// written first, so nameToRealID has it. A base the document does not carry is sent as given.
@@ -510,15 +569,17 @@ func (c *Client) ApplyGovernanceResult(ctx context.Context, doc GovernanceDocume
 				a.UnitID = real
 			}
 		}
-		key := governanceMembershipKey(a.SubjectType, a.Subject)
-		if existing, ok := assignmentByKey[key]; ok &&
-			existing.UnitID == a.UnitID && existing.Priority == a.Priority {
+		key := governanceMembershipKey(membershipUnitName(a.UnitID, nil, currentIDToName), a.SubjectType, a.Subject)
+		if named {
+			key = governanceMembershipKey(name, a.SubjectType, a.Subject)
+		}
+		if existing, ok := assignmentByKey[key]; ok && existing.Priority == a.Priority && existing.Home == a.Home {
 			doc.Memberships[i] = existing
 			continue
 		}
 		req := GovernanceMembershipRequest{
 			SubjectType: a.SubjectType, Subject: a.Subject,
-			UnitID: a.UnitID, Priority: a.Priority,
+			UnitID: a.UnitID, Priority: a.Priority, Home: a.Home,
 		}
 		var saved GovernanceMembership
 		pending, err := c.doPending(ctx, http.MethodPost, "/api/v1/governance/memberships", req, &saved)
@@ -555,7 +616,7 @@ func (c *Client) ApplyGovernanceResult(ctx context.Context, doc GovernanceDocume
 // server raised on it. A write the server holds for approval comes back as the pending change and a
 // zero profile.
 func (c *Client) writeGovernanceUnit(ctx context.Context, p GovernanceUnit, replacing *GovernanceUnit) (GovernanceUnit, []string, *GovernanceChange, error) {
-	req := GovernanceUnitRequest{Name: p.Name, Ceiling: p.Ceiling, Limits: p.Limits, Contact: p.Contact}
+	req := GovernanceUnitRequest{Name: p.Name, Ceiling: p.Ceiling, Limits: p.Limits, Contact: p.Contact, Mode: p.Mode}
 	req.withComposition(p, replacing)
 	method, path := http.MethodPost, "/api/v1/governance/units"
 	if replacing != nil {
@@ -574,14 +635,22 @@ func (c *Client) writeGovernanceUnit(ctx context.Context, p GovernanceUnit, repl
 // (recording it in res.Pending) and reports that as skipped=true, because the
 // deletes after it would run against a state that is not final.
 func (c *Client) pruneGovernance(ctx context.Context, current, doc GovernanceDocument, res *GovernanceApplyResult) (skipped bool, err error) {
+	currentIDToName := make(map[uuid.UUID]string, len(current.Units))
+	for _, p := range current.Units {
+		currentIDToName[p.ID] = p.Name
+	}
+	docIDToName := make(map[uuid.UUID]string, len(doc.Units))
+	for _, p := range doc.Units {
+		docIDToName[p.ID] = p.Name
+	}
 	keepAssignment := make(map[string]bool, len(doc.Memberships))
 	for _, a := range doc.Memberships {
-		keepAssignment[governanceMembershipKey(a.SubjectType, a.Subject)] = true
+		keepAssignment[governanceMembershipKey(membershipUnitName(a.UnitID, docIDToName, currentIDToName), a.SubjectType, a.Subject)] = true
 	}
 	// Assignments before profiles: a profile doc drops still fails the FK
 	// restrict while a stale assignment of it survives.
 	for _, a := range current.Memberships {
-		if keepAssignment[governanceMembershipKey(a.SubjectType, a.Subject)] {
+		if keepAssignment[governanceMembershipKey(membershipUnitName(a.UnitID, nil, currentIDToName), a.SubjectType, a.Subject)] {
 			continue
 		}
 		pending, err := c.doPending(ctx, http.MethodDelete, "/api/v1/governance/memberships/"+a.ID.String(), nil, nil)
@@ -604,7 +673,7 @@ func (c *Client) pruneGovernance(ctx context.Context, current, doc GovernanceDoc
 		keepProfile[p.Name] = true
 	}
 	for _, p := range governancePruneOrder(current.Units) {
-		if keepProfile[p.Name] {
+		if keepProfile[p.Name] || p.Kind == types.UnitKindDefault {
 			continue
 		}
 		pending, err := c.doPending(ctx, http.MethodDelete, "/api/v1/governance/units/"+p.ID.String(), nil, nil)

@@ -106,7 +106,7 @@ func TestGovCovApplyProfileChange(t *testing.T) {
 
 func govCovAssignChange(t *testing.T, s *Server, op string, req governanceMembershipRequest) types.GovernanceChange {
 	t.Helper()
-	ch := types.GovernanceChange{ID: govCovChangeID, TargetKind: govKindMembership, Op: op, TargetKey: membershipKey(req.SubjectType, req.Subject), ProposedBy: "sub-alice"}
+	ch := types.GovernanceChange{ID: govCovChangeID, TargetKind: govKindMembership, Op: op, TargetKey: membershipKey(req.UnitID, req.SubjectType, req.Subject), ProposedBy: "sub-alice"}
 	if op == "delete" {
 		ch.Payload, _ = json.Marshal(map[string]any{"id": govCovAssignID})
 		ch.BaseHash = membershipState{chain: []types.GovernanceUnit{}}.hash()
