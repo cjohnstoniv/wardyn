@@ -583,9 +583,8 @@ test.describe("drives — the registry is SUPER's, and no super admin's nav list
     page,
   }) => {
     await gotoConsole(page, "admin");
-    // No Drives nav entry for a super admin, in either view (§6): the two entry
-    // points below are the whole door. Only a security admin's Admin view
-    // lists it, for its grants and preview (packet M-A, view-switch.spec.ts).
+    // No Drives nav entry for any admin tier, in either view (§6): the two entry
+    // points below are the whole door (#2827; view-switch.spec.ts pins the security tier).
     await expect(page.getByRole("link", { name: new RegExp(`^${DRIVES.TITLE}`) })).toHaveCount(0);
 
     await navTo(page, "Workspaces");

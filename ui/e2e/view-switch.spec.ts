@@ -363,13 +363,13 @@ test.describe("who sees the switch", () => {
     await expect(page.getByRole("button", { name: "New run" })).toHaveCount(0);
   });
 
-  test("a security admin's Admin view: Drives joins; Secrets, Recordings, Setup and Settings do not", async ({ page, context }) => {
+  test("a security admin's Admin view: no Drives (a super admin's page); Secrets, Recordings, Setup and Settings do not", async ({ page, context }) => {
     await ssoAdminSession(context, { role: "security_admin", operator: false, security_operator: true });
     await gotoConsole(page, "admin");
-    for (const label of ["Runs", "Approvals", "Workspaces", "Policies", "Governance", "Permissions", "Drives", "Audit"] as NavLabel[]) {
+    for (const label of ["Runs", "Approvals", "Workspaces", "Policies", "Governance", "Permissions", "Audit"] as NavLabel[]) {
       await expect(sidebarLink(page, label)).toBeVisible();
     }
-    for (const label of ["Secrets", "Recordings", "Setup", "Settings"] as NavLabel[]) {
+    for (const label of ["Drives", "Secrets", "Recordings", "Setup", "Settings"] as NavLabel[]) {
       await expect(sidebarLink(page, label)).toHaveCount(0);
     }
   });
