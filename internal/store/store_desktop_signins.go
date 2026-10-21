@@ -18,7 +18,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// DesktopSigninStore keeps desktop sign-ins and their shares (migration 0200).
+// DesktopSigninStore keeps desktop sign-ins and their shares (migration 0212).
 type DesktopSigninStore interface {
 	// BeginDesktopSignin inserts an open sign-in, or ErrConflict when the run already has one.
 	BeginDesktopSignin(ctx context.Context, s types.DesktopSignin) error

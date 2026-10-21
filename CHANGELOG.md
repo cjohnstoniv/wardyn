@@ -33,7 +33,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   Other apps are unchanged. To keep copy out, set `desktop.copy_out` to `allowed` on the policy, and on the ceiling of any
   member who should have it ([`desktop`](docs/POLICIES.md#desktop--desktopcontrols)).
 - Split-role installs as above: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `desktop_signins`,
-  `desktop_signin_shares` and `desktop_signin_runs` (migration `0200_desktop_signins`). Without it a desktop run starts
+  `desktop_signin_shares` and `desktop_signin_runs` (migration `0212_desktop_signins`). Without it a desktop run starts
   without sign-ins, a desktop sign-in cannot begin, and the sweep that ends one cannot read it.
 - **Desktop sign-ins are new and off** (`WARDYN_DESKTOP_SIGNINS`, default `off`). Turned on, a run's creator can sign
   in to websites inside the run's desktop while the agent is stopped, and share one site's login with the agent. The

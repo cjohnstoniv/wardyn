@@ -11,7 +11,7 @@ import (
 )
 
 // DesktopSignin is a person signing in to websites inside a run's desktop
-// (issue #2972, migration 0200). It holds no cookie and no credential: only
+// (issue #2972, migration 0212). It holds no cookie and no credential: only
 // the SHA-256 of the sign-in lane credential the proxy checks.
 type DesktopSignin struct {
 	ID             uuid.UUID       `json:"id"`
