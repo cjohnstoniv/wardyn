@@ -96,7 +96,7 @@ test.describe("New Run: Application / server, the Run step", () => {
     const server = page.getByRole("radio", { name: NR_RUN.APP_SERVER });
     await expect(server).toBeChecked();
     await expect(page.getByText(NR_RUN.APP_SERVER_BODY)).toBeVisible();
-    await expect(page.getByText(NR_RUN.APP_AUTOMATION_META)).toHaveCount(2);
+    await expect(page.getByText("Available now")).toHaveCount(0);
     await expect(page.getByText(NR_SHARED.COMING_SOON)).toHaveCount(0);
     await expect(page.getByLabel(new RegExp(NR_RUN.START_COMMAND_LABEL))).toBeVisible();
     await expect(page.getByText(NR_RUN.START_COMMAND_HELP)).toBeVisible();

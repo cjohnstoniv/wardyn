@@ -54,6 +54,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | A "(team)" suffix on a model provider | Providers show their record names. |
 | "Platform team" as an approver | No team routing exists. An approval sentence says "An admin decides each new host." |
 | "Custom harness" as a literal row | The harness roster comes from the server. |
+| "Available now" on the two application cards (the mock's `APP_AUTOMATION_META`) | Deviation (#3045: both kinds available; no availability meta). |
 | The mock's interactive "kept until its 72-hour maximum lifetime" line and "the main drive is kept until its lifetime ends" | False for runners that keep a drive for a grace period only. |
 
 ## 7. Frozen strings
@@ -129,7 +130,6 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `APP_LABEL` | mock | What should run? |
 | `APP_AUTOMATION` | mock | Automation / script |
 | `APP_AUTOMATION_BODY` | mock | A command or job that runs on its own. |
-| `APP_AUTOMATION_META` | mock | Available now |
 | `APP_SERVER` | mock | Application / server |
 | `APP_SERVER_BODY` | mock | A web app, API or dev server you open in your browser. |
 | `START_COMMAND_LABEL` | mock | Start command |

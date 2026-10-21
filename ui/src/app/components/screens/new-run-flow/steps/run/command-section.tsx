@@ -32,8 +32,8 @@ export function CommandSection({ kind, command, apps, onKind, onCommand, onApps 
   return (
     <QuestionBlock labelId={labelId} label={NR_RUN.APP_LABEL}>
       <RadioCardGroup name="nr-run-app" aria-labelledby={labelId} value={kind} onValueChange={(v) => onKind(v as AppKind)} className="grid gap-3 sm:grid-cols-2">
-        <RadioCard value="automation" title={NR_RUN.APP_AUTOMATION} description={NR_RUN.APP_AUTOMATION_BODY} meta={NR_RUN.APP_AUTOMATION_META} />
-        <RadioCard value="server" title={NR_RUN.APP_SERVER} description={NR_RUN.APP_SERVER_BODY} meta={NR_RUN.APP_AUTOMATION_META} />
+        <RadioCard value="automation" title={NR_RUN.APP_AUTOMATION} description={NR_RUN.APP_AUTOMATION_BODY} />
+        <RadioCard value="server" title={NR_RUN.APP_SERVER} description={NR_RUN.APP_SERVER_BODY} />
       </RadioCardGroup>
       <div className="mt-4 flex flex-col gap-[18px]">
         {/* Make's nested field (App.tsx:1669-1685): the label's asterisk is visual, aria-required says it. */}

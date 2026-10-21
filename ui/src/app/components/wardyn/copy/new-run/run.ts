@@ -30,7 +30,6 @@ export const NR_RUN = {
   APP_LABEL: "What should run?",
   APP_AUTOMATION: "Automation / script",
   APP_AUTOMATION_BODY: "A command or job that runs on its own.",
-  APP_AUTOMATION_META: "Available now",
   APP_SERVER: "Application / server",
   APP_SERVER_BODY: "A web app, API or dev server you open in your browser.",
   START_COMMAND_LABEL: "Start command",
