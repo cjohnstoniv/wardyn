@@ -66,7 +66,7 @@ vi.mock("../../../lib/api/directory", async () => {
 import { HttpError } from "../../../lib/api/core";
 import type { UserDriveListItem, UserDrivesSnapshot } from "../../../lib/api/drives";
 import { GOVERNANCE as GOV } from "../../../lib/governance-copy";
-import { ACCESS_STATE, DRIVES, PEOPLE, PREVIEW } from "../../../lib/user-drives-copy";
+import { ACCESS_STATE, DRIVES, PEOPLE, PERM, PREVIEW } from "../../../lib/user-drives-copy";
 import { OPERATOR_ONLY_REASON } from "../../wardyn/copy";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { DrivesScreen } from "./drives-screen";
@@ -640,39 +640,48 @@ describe("DrivesScreen — delete: the pre-fill and the race are different refus
 });
 
 describe("DrivesScreen — the write gate", () => {
-  it("a caller without the SUPER tier gets every write control disabled", async () => {
-    // OperatorProvider defaults operator TRUE (fail-open), so the restricted
-    // case is the one worth pinning: it must come from the provider.
-    //
-    // A fixture splice, and it claims no more than that. GET /drives is
-    // operatorOnly, so no REAL caller both reads this snapshot and lacks the
-    // tier — what is pinned here is the wiring, that every write control takes
-    // its `disabled` from the provider rather than from a local default. What a
-    // real security admin actually meets is the next test.
+  // #2827: a security admin reads the registry and its allocations, and no
+  // write control is on the page at all (absent, not disabled). The preview
+  // stays: it writes nothing. OperatorProvider defaults operator TRUE
+  // (fail-open), so the restricted case must come from the provider.
+  it("a security admin reads the drives and allocations with no write control rendered", async () => {
     getDrivesMock.mockResolvedValue(snapshot());
     render(
-      <OperatorProvider operator={false} securityOperator={false}>
+      <OperatorProvider operator={false} securityOperator={true}>
         <DrivesScreen />
       </OperatorProvider>,
     );
     await screen.findByText(HOMES.name);
+    expect(screen.getByText(DRIVES.ALLOC_TITLE)).toBeInTheDocument();
 
-    expect(screen.getByRole("button", { name: DRIVES.NEW_CTA })).toBeDisabled();
-    expect(screen.getByRole("button", { name: `${DRIVES.EDIT} ${HOMES.name}` })).toBeDisabled();
-    expect(screen.getByRole("button", { name: `${DRIVES.DELETE} ${HOMES.name}` })).toBeDisabled();
-    expect(screen.getByRole("button", { name: DRIVES.ADD_CTA })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: DRIVES.NEW_CTA })).toBeNull();
+    expect(screen.queryByRole("button", { name: `${DRIVES.EDIT} ${HOMES.name}` })).toBeNull();
+    expect(screen.queryByRole("button", { name: `${DRIVES.DELETE} ${HOMES.name}` })).toBeNull();
+    expect(screen.queryByRole("button", { name: DRIVES.ADD_CTA })).toBeNull();
+    expect(screen.queryByRole("button", { name: new RegExp(`^${PERM.REMOVE} `) })).toBeNull();
+    expect(screen.getByRole("button", { name: DRIVES.PREVIEW_CTA })).toBeInTheDocument();
   });
 
-  // The real one. /drives is operatorOnly and there is no nav item, no card and
-  // no header button for this tier (mock state 9's note, §5 #7) — but a URL is
-  // a URL, and the READ itself 403s. Answering that with FETCH_FAILED_* would
+  it("a security admin with no drives is offered no New drive", async () => {
+    getDrivesMock.mockResolvedValue(snapshot({ drives: [], grants: [] }));
+    render(
+      <OperatorProvider operator={false} securityOperator={true}>
+        <DrivesScreen />
+      </OperatorProvider>,
+    );
+    await screen.findByText(DRIVES.EMPTY_TITLE);
+    expect(screen.queryByRole("button", { name: DRIVES.NEW_CTA })).toBeNull();
+  });
+
+  // The read is securityOps now, so a security admin no longer meets this; a
+  // member who types the URL still does, and the READ itself 403s. Answering that with FETCH_FAILED_* would
   // call an authorization answer a network fault and offer a Retry that returns
   // the same 403 forever, so the 403 gets the tier's own sentence instead: the
   // one every operator-only control already carries.
-  it("a security admin's 403 read is the TIER refusal, not the transport one", async () => {
+  it("a 403 read is the TIER refusal, not the transport one", async () => {
     getDrivesMock.mockRejectedValue(new HttpError(403, "forbidden"));
     render(
-      <OperatorProvider operator={false} securityOperator={true}>
+      <OperatorProvider operator={false} securityOperator={false}>
         <DrivesScreen />
       </OperatorProvider>,
     );

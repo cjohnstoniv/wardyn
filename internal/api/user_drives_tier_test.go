@@ -375,3 +375,48 @@ func TestSecurityAdminReplaceOfSeveralRowsIsJudgedAgainstTheKeptRow(t *testing.T
 		t.Errorf("drive.grant.write rows = %v, want one naming the removed drive %s", got, a.ID)
 	}
 }
+
+// TestSecurityAdminReadsDrivesWithoutTheHost: the Drives page's list is a
+// security-tier read, and "never the host" stays the line between the tiers.
+// host_root and storage_class are blank for a security admin and shown to a
+// super admin, on the same stored drive.
+func TestSecurityAdminReadsDrivesWithoutTheHost(t *testing.T) {
+	st := newDriveCRUDStore()
+	srv, _ := driveAdminServer(st, []string{"/srv/homes"})
+	d := *driveFixture(func(d *types.UserDrive) {
+		d.Backend, d.HomeTemplate, d.HostRoot, d.StorageClass = types.DriveBackendHostPath, types.HomeTemplateEmailLocal, "/srv/homes", "fast-ssd"
+	})
+	st.drives[d.ID] = d
+	st.grants[uuid.New()] = *grantFixture(d.ID, nil)
+
+	read := func(ctx context.Context) types.UserDrive {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/drives", nil).WithContext(ctx)
+		w := httptest.NewRecorder()
+		srv.handleGetUserDrives(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET /drives = %d, want 200: %s", w.Code, w.Body.String())
+		}
+		var body struct {
+			Drives []types.UserDrive      `json:"drives"`
+			Grants []types.UserDriveGrant `json:"grants"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		if len(body.Drives) != 1 || len(body.Grants) != 1 {
+			t.Fatalf("drives/grants = %d/%d, want 1/1", len(body.Drives), len(body.Grants))
+		}
+		return body.Drives[0]
+	}
+	if got := read(driveSecurityAdminCtx()); got.HostRoot != "" || got.StorageClass != "" {
+		t.Errorf("security admin saw host_root %q / storage_class %q, want both blank", got.HostRoot, got.StorageClass)
+	}
+	if got := read(driveSuperAdminCtx()); got.HostRoot != "/srv/homes" || got.StorageClass != "fast-ssd" {
+		t.Errorf("super admin saw host_root %q / storage_class %q, want both shown", got.HostRoot, got.StorageClass)
+	}
+	// The blanking copies: the stored row still names its host.
+	if st.drives[d.ID].HostRoot != "/srv/homes" {
+		t.Errorf("stored host_root = %q, want it untouched", st.drives[d.ID].HostRoot)
+	}
+}

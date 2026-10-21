@@ -170,7 +170,7 @@ var docTierRows = []struct{ route, token string }{
 	// per route either way, so a route that leaves the family still has to be
 	// re-pointed here. (The other three /drives routes moved to their own
 	// tokens above in #168.)
-	{"GET /api/v1/drives", "`mountUserDriveRoutes`"},
+	{"GET /api/v1/drives", "`GET /drives`"},
 	{"PUT /api/v1/drives/{id}", "`mountUserDriveRoutes`"},
 	{"DELETE /api/v1/drives/{id}", "`mountUserDriveRoutes`"},
 	// The destroy verb gets its OWN token rather than riding the family's:
