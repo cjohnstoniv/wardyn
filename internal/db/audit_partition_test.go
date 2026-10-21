@@ -14,7 +14,7 @@ const (
 	auditReplayableFile = "0112_audit_chain_partitioned.sql"
 	auditRetentionFile  = "0123_audit_retention.sql"
 	auditDropActorFile  = "0146_audit_retention_drop_actor_type.sql"
-	auditChainHeadFile  = "0204_audit_chain_head_lazy.sql"
+	auditChainHeadFile  = "0205_audit_chain_head_lazy.sql"
 )
 
 // TestChainTriggerReplaySetExcludesTheConversion pins the property the whole conversion rests on.
