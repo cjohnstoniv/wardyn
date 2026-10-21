@@ -30,16 +30,16 @@ import (
 
 // composedPair is a standalone base and a child composed on it with an empty overlay: the child
 // carries no policy of its own, so everything it enforces is inherited.
-func composedPair(baseCeiling types.RunPolicySpec, baseLimits types.GovernanceLimits) (base, child types.GovernanceProfile) {
-	base = types.GovernanceProfile{ID: uuid.New(), Name: "company-baseline-secret-name", Ceiling: baseCeiling, Limits: baseLimits}
-	child = types.GovernanceProfile{ID: uuid.New(), Name: "team", BaseProfileID: &base.ID, Overlay: &types.CeilingOverlay{}}
+func composedPair(baseCeiling types.RunPolicySpec, baseLimits types.GovernanceLimits) (base, child types.GovernanceUnit) {
+	base = types.GovernanceUnit{ID: uuid.New(), Name: "company-baseline-secret-name", Ceiling: baseCeiling, Limits: baseLimits}
+	child = types.GovernanceUnit{ID: uuid.New(), Name: "team", ParentID: &base.ID, Overlay: &types.CeilingOverlay{}}
 	return base, child
 }
 
 // chainScenario is one state of the stored graph a door is asked under.
 type chainScenario struct {
 	name     string
-	profiles func(base, child types.GovernanceProfile) []types.GovernanceProfile
+	profiles func(base, child types.GovernanceUnit) []types.GovernanceUnit
 	listErr  error
 }
 
@@ -48,28 +48,28 @@ type chainScenario struct {
 func seededBadChains() []chainScenario {
 	return []chainScenario{
 		{name: "the base read fails", listErr: errors.New("conn closed by peer"),
-			profiles: func(b, c types.GovernanceProfile) []types.GovernanceProfile { return []types.GovernanceProfile{b, c} }},
+			profiles: func(b, c types.GovernanceUnit) []types.GovernanceUnit { return []types.GovernanceUnit{b, c} }},
 		{name: "the base is missing from the read",
-			profiles: func(_, c types.GovernanceProfile) []types.GovernanceProfile { return []types.GovernanceProfile{c} }},
-		{name: "two profiles are each other's base", profiles: func(b, c types.GovernanceProfile) []types.GovernanceProfile {
-			b.BaseProfileID, b.Overlay = &c.ID, &types.CeilingOverlay{}
-			return []types.GovernanceProfile{b, c}
+			profiles: func(_, c types.GovernanceUnit) []types.GovernanceUnit { return []types.GovernanceUnit{c} }},
+		{name: "two profiles are each other's base", profiles: func(b, c types.GovernanceUnit) []types.GovernanceUnit {
+			b.ParentID, b.Overlay = &c.ID, &types.CeilingOverlay{}
+			return []types.GovernanceUnit{b, c}
 		}},
-		{name: "a chain four deep", profiles: func(b, c types.GovernanceProfile) []types.GovernanceProfile {
-			mid := types.GovernanceProfile{ID: uuid.New(), Name: "division", BaseProfileID: &b.ID, Overlay: &types.CeilingOverlay{}}
-			top := types.GovernanceProfile{ID: uuid.New(), Name: "org", BaseProfileID: &mid.ID, Overlay: &types.CeilingOverlay{}}
-			c.BaseProfileID = &top.ID
-			return []types.GovernanceProfile{b, mid, top, c}
+		{name: "a chain four deep", profiles: func(b, c types.GovernanceUnit) []types.GovernanceUnit {
+			mid := types.GovernanceUnit{ID: uuid.New(), Name: "division", ParentID: &b.ID, Overlay: &types.CeilingOverlay{}}
+			top := types.GovernanceUnit{ID: uuid.New(), Name: "org", ParentID: &mid.ID, Overlay: &types.CeilingOverlay{}}
+			c.ParentID = &top.ID
+			return []types.GovernanceUnit{b, mid, top, c}
 		}},
 	}
 }
 
 // the attach door
 
-func attachClosed(t *testing.T, profiles []types.GovernanceProfile, listErr error, childID uuid.UUID) (closed bool, w doorAnswer) {
+func attachClosed(t *testing.T, profiles []types.GovernanceUnit, listErr error, childID uuid.UUID) (closed bool, w doorAnswer) {
 	t.Helper()
 	run := types.AgentRun{ID: uuid.New(), CreatedBy: "alice", State: types.RunRunning, SandboxRef: "sbx-1",
-		Task: "make test", GovernanceProfileID: &childID}
+		Task: "make test", UnitID: &childID}
 	st := &profileListStore{profiles: profiles, err: listErr, authzStore: newAuthzStore()}
 	st.authzStore.runs[run.ID] = run
 	h := newHarness(t)
@@ -87,12 +87,12 @@ func attachClosed(t *testing.T, profiles []types.GovernanceProfile, listErr erro
 
 func TestComposedChild_AttachInheritsTheBase(t *testing.T) {
 	base, child := composedPair(types.RunPolicySpec{}, types.GovernanceLimits{DenyInteractive: true})
-	closed, w := attachClosed(t, []types.GovernanceProfile{base, child}, nil, child.ID)
-	if !closed || w.rec.Code != http.StatusForbidden || w.reason() != string(authz.ReasonGovernanceProfile) {
-		t.Fatalf("attach under a child of a deny_interactive base = %d %s, want 403 governance_profile", w.rec.Code, w.rec.Body.String())
+	closed, w := attachClosed(t, []types.GovernanceUnit{base, child}, nil, child.ID)
+	if !closed || w.rec.Code != http.StatusForbidden || w.reason() != string(authz.ReasonGovernanceUnit) {
+		t.Fatalf("attach under a child of a deny_interactive base = %d %s, want 403 governance_unit", w.rec.Code, w.rec.Body.String())
 	}
-	if !recHasRefusal(w.audit, authz.ReasonGovernanceProfile, "runs.attach") {
-		t.Error("no authz.denied governance_profile row for runs.attach")
+	if !recHasRefusal(w.audit, authz.ReasonGovernanceUnit, "runs.attach") {
+		t.Error("no authz.denied governance_unit row for runs.attach")
 	}
 	// The refusal names the run's own profile and nothing about its base.
 	if strings.Contains(w.rec.Body.String(), base.Name) {
@@ -100,7 +100,7 @@ func TestComposedChild_AttachInheritsTheBase(t *testing.T) {
 	}
 
 	openBase, openChild := composedPair(types.RunPolicySpec{}, types.GovernanceLimits{})
-	if closed, w := attachClosed(t, []types.GovernanceProfile{openBase, openChild}, nil, openChild.ID); closed {
+	if closed, w := attachClosed(t, []types.GovernanceUnit{openBase, openChild}, nil, openChild.ID); closed {
 		t.Fatalf("attach under a child of an open base = %d %s, want it to pass the profile door", w.rec.Code, w.rec.Body.String())
 	}
 
@@ -132,7 +132,7 @@ func TestComposedChild_UnsatisfiableRefusesAttachWithTheAuthzReason(t *testing.T
 	base, child := composedPair(types.RunPolicySpec{AllowedMethods: []string{"GET"}}, types.GovernanceLimits{})
 	post := []string{"POST"}
 	child.Overlay = &types.CeilingOverlay{AllowedMethods: &post}
-	closed, w := attachClosed(t, []types.GovernanceProfile{base, child}, nil, child.ID)
+	closed, w := attachClosed(t, []types.GovernanceUnit{base, child}, nil, child.ID)
 	if !closed || w.rec.Code != http.StatusForbidden || w.reason() != string(authz.ReasonGovernanceOverlayUnsatisfiable) {
 		t.Fatalf("attach = %d %s, want 403 governance_overlay_unsatisfiable", w.rec.Code, w.rec.Body.String())
 	}
@@ -149,11 +149,11 @@ func TestComposedChild_UnsatisfiableRefusesAttachWithTheAuthzReason(t *testing.T
 // the SSH gateway
 
 func TestComposedChild_SSHInheritsTheBase(t *testing.T) {
-	dial := func(t *testing.T, profiles []types.GovernanceProfile, listErr error, childID uuid.UUID) error {
+	dial := func(t *testing.T, profiles []types.GovernanceUnit, listErr error, childID uuid.UUID) error {
 		st := newSSHMemStore()
 		st.profiles, st.profilesErr = profiles, listErr
 		runID := uuid.New()
-		st.putRun(types.AgentRun{ID: runID, CreatedBy: "alice@example.com", State: types.RunRunning, SandboxRef: "sbx-1", GovernanceProfileID: &childID})
+		st.putRun(types.AgentRun{ID: runID, CreatedBy: "alice@example.com", State: types.RunRunning, SandboxRef: "sbx-1", UnitID: &childID})
 		priv, pub := mustSSHKeypair(t)
 		st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(pub), Principal: "alice@example.com",
 			PublicKey: string(ssh.MarshalAuthorizedKey(pub))})
@@ -165,11 +165,11 @@ func TestComposedChild_SSHInheritsTheBase(t *testing.T) {
 		return err
 	}
 	base, child := composedPair(types.RunPolicySpec{}, types.GovernanceLimits{DenyInteractive: true})
-	if err := dial(t, []types.GovernanceProfile{base, child}, nil, child.ID); err == nil {
+	if err := dial(t, []types.GovernanceUnit{base, child}, nil, child.ID); err == nil {
 		t.Fatal("ssh into a child of a deny_interactive base succeeded, want refused")
 	}
 	openBase, openChild := composedPair(types.RunPolicySpec{}, types.GovernanceLimits{})
-	if err := dial(t, []types.GovernanceProfile{openBase, openChild}, nil, openChild.ID); err != nil {
+	if err := dial(t, []types.GovernanceUnit{openBase, openChild}, nil, openChild.ID); err != nil {
 		t.Fatalf("ssh into a child of an open base refused: %v", err)
 	}
 	for _, sc := range seededBadChains() {
@@ -185,20 +185,20 @@ func TestComposedChild_SSHInheritsTheBase(t *testing.T) {
 // the UI gateway
 
 func TestComposedChild_UIAppsInheritTheBase(t *testing.T) {
-	enter := func(profiles []types.GovernanceProfile, listErr error, childID uuid.UUID) (int, string) {
+	enter := func(profiles []types.GovernanceUnit, listErr error, childID uuid.UUID) (int, string) {
 		h := newUIHarness(t, okBackend())
 		h.store.profiles, h.store.profilesErr = profiles, listErr
-		h.run.GovernanceProfileID = &childID
+		h.run.UnitID = &childID
 		h.store.putRun(h.run)
 		rec := h.enter(url.Values{"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleUser)}})
 		return rec.Code, rec.Body.String()
 	}
 	base, child := composedPair(types.RunPolicySpec{}, types.GovernanceLimits{DenyUIApps: true})
-	if code, body := enter([]types.GovernanceProfile{base, child}, nil, child.ID); code != http.StatusForbidden || strings.Contains(body, base.Name) {
+	if code, body := enter([]types.GovernanceUnit{base, child}, nil, child.ID); code != http.StatusForbidden || strings.Contains(body, base.Name) {
 		t.Fatalf("UI gateway under a child of a deny_ui_apps base = %d %s, want 403 naming only the child", code, body)
 	}
 	openBase, openChild := composedPair(types.RunPolicySpec{}, types.GovernanceLimits{})
-	if code, body := enter([]types.GovernanceProfile{openBase, openChild}, nil, openChild.ID); code != http.StatusFound {
+	if code, body := enter([]types.GovernanceUnit{openBase, openChild}, nil, openChild.ID); code != http.StatusFound {
 		t.Fatalf("UI gateway under a child of an open base = %d %s, want 302", code, body)
 	}
 	for _, sc := range seededBadChains() {
@@ -215,11 +215,11 @@ func TestComposedChild_UIAppsInheritTheBase(t *testing.T) {
 
 func TestComposedChild_ReclampTightensToTheBase(t *testing.T) {
 	captured := types.RunLimits{MaxEndAheadSec: 30 * 86400, MaxWaitSec: 3600, UserChangesLimits: true}
-	setup := func(t *testing.T, base, child types.GovernanceProfile, extra ...types.GovernanceProfile) (*endWaitFixture, *reclampStore) {
+	setup := func(t *testing.T, base, child types.GovernanceUnit, extra ...types.GovernanceUnit) (*endWaitFixture, *reclampStore) {
 		f, st, _ := newReclampFixture(t, captured, 20*day, 3600)
 		id := child.ID
-		st.run.GovernanceProfileID = &id
-		st.profiles = append([]types.GovernanceProfile{base, child}, extra...)
+		st.run.UnitID = &id
+		st.profiles = append([]types.GovernanceUnit{base, child}, extra...)
 		return f, st
 	}
 	base, child := composedPair(types.RunPolicySpec{}, types.GovernanceLimits{RunLimits: types.RunLimits{MaxEndAheadSec: 2 * 86400, MaxWaitSec: 3600}})
@@ -241,7 +241,7 @@ func TestComposedChild_ReclampTightensToTheBase(t *testing.T) {
 
 	// A chain that cannot be composed leaves that profile's runs on what they captured.
 	b2, c2 := composedPair(types.RunPolicySpec{}, types.GovernanceLimits{RunLimits: types.RunLimits{MaxEndAheadSec: 86400}})
-	b2.BaseProfileID, b2.Overlay = &c2.ID, &types.CeilingOverlay{}
+	b2.ParentID, b2.Overlay = &c2.ID, &types.CeilingOverlay{}
 	f, st = setup(t, b2, c2)
 	sweepLimits(t, f)
 	if got := st.current().RunLimits; got != captured {
@@ -253,9 +253,9 @@ func TestComposedChild_ReclampTightensToTheBase(t *testing.T) {
 
 func TestComposedChild_EndExtensionReadsTheChain(t *testing.T) {
 	captured := types.RunLimits{MaxEndAheadSec: 2 * 86400, MaxWaitSec: 3600, UserChangesLimits: true}
-	run := func(t *testing.T, profiles []types.GovernanceProfile, err error, childID uuid.UUID, body func(*endWaitFixture) string) (int, map[string]any, string, *endWaitFixture) {
+	run := func(t *testing.T, profiles []types.GovernanceUnit, err error, childID uuid.UUID, body func(*endWaitFixture) string) (int, map[string]any, string, *endWaitFixture) {
 		f, st, _ := newReclampFixture(t, captured, day, 1800)
-		st.run.GovernanceProfileID = &childID
+		st.run.UnitID = &childID
 		st.profiles = profiles
 		f.srv.cfg.Store = profileErrStore{reclampStore: st, err: err}
 		code, m, raw := f.patchRaw(t, ownerSession(t), body(f))
@@ -266,7 +266,7 @@ func TestComposedChild_EndExtensionReadsTheChain(t *testing.T) {
 	// The cap flag compares against the child's EFFECTIVE max (the base's one day), so it is not
 	// "loosened"; the child's own raw limits are empty, which would read as no limit and say it was.
 	base, child := composedPair(types.RunPolicySpec{}, types.GovernanceLimits{RunLimits: types.RunLimits{MaxEndAheadSec: 86400}})
-	code, m, raw, _ := run(t, []types.GovernanceProfile{base, child}, nil, child.ID, week)
+	code, m, raw, _ := run(t, []types.GovernanceUnit{base, child}, nil, child.ID, week)
 	if code != http.StatusOK {
 		t.Fatalf("extend under a composed profile = %d %s, want 200 capped", code, raw)
 	}
@@ -274,7 +274,7 @@ func TestComposedChild_EndExtensionReadsTheChain(t *testing.T) {
 		t.Errorf("ends_cap_loosened set although the base's cap is tighter than the captured one: %s", raw)
 	}
 	looseBase, looseChild := composedPair(types.RunPolicySpec{}, types.GovernanceLimits{RunLimits: types.RunLimits{MaxEndAheadSec: 30 * 86400}})
-	if _, m, raw, _ := run(t, []types.GovernanceProfile{looseBase, looseChild}, nil, looseChild.ID, week); m["ends_cap_loosened"] != true {
+	if _, m, raw, _ := run(t, []types.GovernanceUnit{looseBase, looseChild}, nil, looseChild.ID, week); m["ends_cap_loosened"] != true {
 		t.Errorf("ends_cap_loosened missing although the base's cap is looser than the captured one: %s", raw)
 	}
 
@@ -296,7 +296,7 @@ func TestComposedChild_EndExtensionReadsTheChain(t *testing.T) {
 	ub, uc := composedPair(types.RunPolicySpec{AllowedMethods: []string{"GET"}}, types.GovernanceLimits{})
 	post := []string{"POST"}
 	uc.Overlay = &types.CeilingOverlay{AllowedMethods: &post}
-	code, _, raw, f := run(t, []types.GovernanceProfile{ub, uc}, nil, uc.ID, week)
+	code, _, raw, f := run(t, []types.GovernanceUnit{ub, uc}, nil, uc.ID, week)
 	if code != http.StatusForbidden {
 		t.Fatalf("extend = %d %s, want 403", code, raw)
 	}
@@ -309,8 +309,8 @@ func TestComposedChild_EndExtensionReadsTheChain(t *testing.T) {
 // revive
 
 func TestComposedChild_ReviveReassertsTheBaseDenies(t *testing.T) {
-	arrange := func(f *reviveFixture, profiles []types.GovernanceProfile, childID uuid.UUID) {
-		f.st.run.GovernanceProfileID = &childID
+	arrange := func(f *reviveFixture, profiles []types.GovernanceUnit, childID uuid.UUID) {
+		f.st.run.UnitID = &childID
 		f.rs.profiles = profiles
 		var cfg map[string]any
 		_ = json.Unmarshal(f.rs.cfg, &cfg)
@@ -321,7 +321,7 @@ func TestComposedChild_ReviveReassertsTheBaseDenies(t *testing.T) {
 	// standalone profile gives, reached through the child.
 	f := newReviveFixture(t)
 	base, child := composedPair(types.RunPolicySpec{DeniedDomains: []string{"github.com"}}, types.GovernanceLimits{})
-	arrange(f, []types.GovernanceProfile{base, child}, child.ID)
+	arrange(f, []types.GovernanceUnit{base, child}, child.ID)
 	if code := f.revive(t); code != http.StatusConflict || len(f.rr.replaced) != 0 {
 		t.Fatalf("revive under a child of a base that denies github.com = %d (replaced %d), want 409 and no proxy", code, len(f.rr.replaced))
 	}
@@ -351,6 +351,6 @@ type reviveErrStore struct {
 	err error
 }
 
-func (s *reviveErrStore) GetGovernanceProfileChain(context.Context, uuid.UUID) ([]types.GovernanceProfile, error) {
+func (s *reviveErrStore) GetGovernanceUnitChain(context.Context, uuid.UUID) ([]types.GovernanceUnit, error) {
 	return nil, s.err
 }

@@ -111,7 +111,7 @@ func (s *rubricSiteStore) GetSiteConfig(context.Context) (types.SiteConfig, erro
 
 // The write response carries the sentence beside the omission warnings, for a profile with a rubric
 // row and only then; self-hosted runners on make the barrier classes unknowable, so nothing is pinned.
-func TestGovernanceProfileWriteAdvisesTheRubricPosture(t *testing.T) {
+func TestGovernanceUnitWriteAdvisesTheRubricPosture(t *testing.T) {
 	provider := bedrockKeyTestProvider()
 	provider.Bedrock.BaseURL = "https://bedrock.llm.corp.example"
 	write := func(t *testing.T, site types.SiteConfig, body string) []string {
@@ -119,11 +119,11 @@ func TestGovernanceProfileWriteAdvisesTheRubricPosture(t *testing.T) {
 		h := newHarness(t)
 		cfg := baseTestConfig(h, &rubricSiteStore{govCrudStore: &govCrudStore{}, site: site})
 		cfg.Runner = &fakeRunner{capsClasses: []types.ConfinementClass{types.CC1}}
-		w := do(t, New(cfg), http.MethodPost, "/api/v1/governance/profiles", adminToken, body)
+		w := do(t, New(cfg), http.MethodPost, "/api/v1/governance/units", adminToken, body)
 		if w.Code != http.StatusCreated {
 			t.Fatalf("POST = %d %s, want 201", w.Code, w.Body.String())
 		}
-		var resp governanceProfileResponse
+		var resp governanceUnitResponse
 		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 			t.Fatal(err)
 		}

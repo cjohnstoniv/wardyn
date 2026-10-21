@@ -72,8 +72,8 @@ func TestPlan_RouteMatchingByKindProfileFirstMatchAndNoMatch(t *testing.T) {
 	other := uuid.New()
 	c := parseRoutes(t, `[
 		{"kinds":["push_content"],"tiers":[{"after":"0s","channels":["a"]},{"after":"30m","channels":["a","b"]}]},
-		{"profiles":["`+strings.ToUpper(prof.String())+`"],"tiers":[{"after":"5s","channels":["b"]}]},
-		{"kinds":["egress_domain"],"profiles":["`+prof.String()+`"],"tiers":[{"after":"0s","channels":["red"]}]}]`)
+		{"units":["`+strings.ToUpper(prof.String())+`"],"tiers":[{"after":"5s","channels":["b"]}]},
+		{"kinds":["egress_domain"],"units":["`+prof.String()+`"],"tiers":[{"after":"0s","channels":["red"]}]}]`)
 
 	// by kind (no profile needed)
 	if got, want := planFor(t, c, types.ApprovalPushContent, nil), []planned{{0, "a", 0}, {1, "a", 1800}, {1, "b", 1800}}; !eq(got, want) {
@@ -110,7 +110,7 @@ func TestParse_RouteRefusals(t *testing.T) {
 	}{
 		{"unknown channel", `[{"tiers":[` + tierJSON("0s", `"nope"`, "") + `]}]`, "names no configured channel"},
 		{"unknown kind", `[{"kinds":["teleport"],"tiers":[` + tierJSON("0s", `"a"`, "") + `]}]`, "unknown approval kind"},
-		{"profile by name", `[{"profiles":["payments"],"tiers":[` + tierJSON("0s", `"a"`, "") + `]}]`, "ids (uuids), not names"},
+		{"profile by name", `[{"units":["payments"],"tiers":[` + tierJSON("0s", `"a"`, "") + `]}]`, "ids (uuids), not names"},
 		{"equal after", `[{"tiers":[` + tierJSON("5m", `"a"`, "") + `,` + tierJSON("5m", `"a"`, "") + `]}]`, "strictly greater"},
 		{"descending after", `[{"tiers":[` + tierJSON("10m", `"a"`, "") + `,` + tierJSON("5m", `"a"`, "") + `]}]`, "strictly greater"},
 		{"negative after", `[{"tiers":[` + tierJSON("-1s", `"a"`, "") + `]}]`, "zero or more"},

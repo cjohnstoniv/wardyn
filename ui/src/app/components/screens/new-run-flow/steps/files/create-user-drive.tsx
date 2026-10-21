@@ -34,7 +34,7 @@ type ArmContext = Parameters<NonNullable<AddDialogProps["createUserDrive"]>>[0];
  */
 const REASON_TEXT: Record<MemberDriveCreateReason, ((c: MemberDriveCreate) => string | undefined) | undefined> = {
   disabled: undefined,
-  denied_by_profile: (c) => (c.denied_by_profile ? NR_FILES.CREATE_DENIED(c.denied_by_profile) : undefined),
+  denied_by_unit: (c) => (c.denied_by_unit ? NR_FILES.CREATE_DENIED(c.denied_by_unit) : undefined),
   limit_reached: (c) => NR_FILES.CREATE_LIMIT(c.count, c.limit),
   unsupported: () => NR_FILES.CREATE_UNSUPPORTED,
   delete_unavailable: () => NR_FILES.CREATE_NO_DELETE,

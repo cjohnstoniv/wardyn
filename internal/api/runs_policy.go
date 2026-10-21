@@ -481,8 +481,8 @@ func (s *Server) resolvePolicy(ctx context.Context, policyID *uuid.UUID, ceiling
 			spec.AzureDevOpsCapabilities, spec.GitHubCapabilities = nil, nil
 		}
 		origin := policyOrigin{kind: policyKindDefault}
-		if ceiling.Profile != nil {
-			origin = policyOrigin{kind: policyKindProfile, name: ceiling.Profile.Name}
+		if ceiling.Unit != nil {
+			origin = policyOrigin{kind: policyKindUnit, name: ceiling.Unit.Name}
 		}
 		return spec, nil, origin, nil
 	}

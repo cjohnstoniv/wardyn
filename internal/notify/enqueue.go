@@ -31,9 +31,9 @@ const RunBudget = 25
 // The broker's mint takes its grant row FOR UPDATE and never this lock, so no cycle can form.
 const BudgetLockSQL = `SELECT pg_advisory_xact_lock(hashtext('approval_notify:' || $1::text))`
 
-// ProfileSQL reads the run's leaf governance profile inside the approval's own transaction, so a
+// UnitSQL reads the run's leaf governance profile inside the approval's own transaction, so a
 // concurrent profile change cannot route this approval by stale data.
-const ProfileSQL = `SELECT governance_profile_id FROM agent_runs WHERE id = $1`
+const UnitSQL = `SELECT unit_id FROM agent_runs WHERE id = $1`
 
 var (
 	active atomic.Pointer[Config]

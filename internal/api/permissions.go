@@ -243,7 +243,7 @@ func validateCapabilityGrant(g *types.CapabilityGrant) error {
 		// while it matches nobody: a DENY that protects nothing (the failure
 		// the egress_host arm above added ValidDomainEntry to close, on the
 		// VALUE half of the identical record), and a group tier that
-		// HasGroupTierAssignments still counts as present.
+		// HasGroupTierMemberships still counts as present.
 		subject, ok := types.CanonicalGroupSubject(g.Subject)
 		if !ok {
 			return fmt.Errorf("subject: must be printable ASCII — a group subject is matched against the login-time group snapshot, which carries printable ASCII only, so this value can never match anyone")

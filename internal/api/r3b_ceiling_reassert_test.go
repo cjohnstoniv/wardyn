@@ -36,7 +36,7 @@ func r3bWalledRunWithPolicy(t *testing.T, profile string, deny []string, policy 
 
 	gc := governanceCeiling{Spec: types.RunPolicySpec{DeniedDomains: deny}}
 	if profile != "" {
-		gc.Profile = &ResolvedProfile{Name: profile}
+		gc.Unit = &ResolvedUnit{Name: profile}
 	}
 	srv.dispatchRun(context.Background(), run, ceilingForDispatch(gc, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest", Policy: policy,
@@ -63,7 +63,7 @@ func TestCeilingReassertAuditsEveryAssignedProfile(t *testing.T) {
 				"denies — its absence is supposed to mean \"no profile applies\"; events=%s", auditDump(events, runID))
 		}
 		var data struct {
-			Profile string `json:"profile"`
+			Profile string `json:"unit"`
 		}
 		if err := json.Unmarshal(ev.Data, &data); err != nil {
 			t.Fatalf("row data is not an object: %v (%s)", err, ev.Data)

@@ -83,8 +83,8 @@ func driveSeed(t *testing.T, srv *Server, req createRunRequest, ceiling governan
 // deniedCeiling is an ASSIGNED profile whose door is shut.
 func deniedCeiling() governanceCeiling {
 	return governanceCeiling{
-		Profile: &ResolvedProfile{Name: "contractors"},
-		Limits:  types.GovernanceLimits{DenyUserDrive: true},
+		Unit:   &ResolvedUnit{Name: "contractors"},
+		Limits: types.GovernanceLimits{DenyUserDrive: true},
 	}
 }
 
@@ -117,7 +117,7 @@ func TestSeedRequestDriveNoFlagIsANoOp(t *testing.T) {
 
 // TestSeedRequestDriveDoorIs403WithAudit pins the ONE arm that is an
 // authorization event: the profile refuses the door, so it answers 403 AND
-// writes authz.denied at target runs.drive with reason governance_profile — the
+// writes authz.denied at target runs.drive with reason governance_unit — the
 // existing closed enum, no new value.
 //
 // TWO CEILINGS, because the door's DECISION and its DISPLAY NAME are different
@@ -144,7 +144,7 @@ func TestSeedRequestDriveDoorIs403WithAudit(t *testing.T) {
 			// profile whose name happens to be empty as NO DOOR AT ALL and
 			// mounts the drive — with no 403 and no authz.denied row.
 			//
-			// And the row is reachable. governance_profiles.name is TEXT NOT
+			// And the row is reachable. governance_units.name is TEXT NOT
 			// NULL UNIQUE with no non-empty CHECK, so the HTTP API's own refusal
 			// of a blank name is not the last word: an out-of-band write, a
 			// restore, or an older binary produces exactly this row. A guard
@@ -153,8 +153,8 @@ func TestSeedRequestDriveDoorIs403WithAudit(t *testing.T) {
 			// would ever notice the revert.
 			name: "a blank-named profile shuts it too",
 			ceiling: governanceCeiling{
-				Profile: &ResolvedProfile{Name: ""},
-				Limits:  types.GovernanceLimits{DenyUserDrive: true},
+				Unit:   &ResolvedUnit{Name: ""},
+				Limits: types.GovernanceLimits{DenyUserDrive: true},
 			},
 			want: "mounting a user drive is not allowed by your governance profile \"\". Launch without drive.",
 		},
@@ -184,8 +184,8 @@ func TestSeedRequestDriveDoorIs403WithAudit(t *testing.T) {
 			if strings.Contains(refusalBody(t, w), "`") {
 				t.Errorf("the refusal ships a literal backtick: %s", refusalBody(t, w))
 			}
-			if r := auditReasons(t, srv, "authz.denied"); !slices.Contains(r, "governance_profile") {
-				t.Errorf("authz.denied reasons = %v, want a governance_profile row", r)
+			if r := auditReasons(t, srv, "authz.denied"); !slices.Contains(r, "governance_unit") {
+				t.Errorf("authz.denied reasons = %v, want a governance_unit row", r)
 			}
 			var target string
 			for _, ev := range rec.events {
@@ -809,7 +809,7 @@ func TestMeUserDriveRefusesAnUnreadableHome(t *testing.T) {
 		t.Errorf("user_drive = %v, want null — the allocation cannot be mounted", ud)
 	}
 	if denied != "" {
-		t.Errorf("user_drive_denied_by_profile = %q, want empty — this is not a governance door", denied)
+		t.Errorf("user_drive_denied_by_unit = %q, want empty — this is not a governance door", denied)
 	}
 	if unavailable != driveUnavailableUnmountable {
 		t.Errorf("user_drive_unavailable = %q, want %q", unavailable, driveUnavailableUnmountable)
@@ -1029,8 +1029,8 @@ func TestSeedRequestDriveDoorPrecedesTheResolver(t *testing.T) {
 			t.Errorf("audit row = %+v, want authz.denied at runs.drive, outcome denied", ev)
 		}
 		var data map[string]any
-		if err := json.Unmarshal(ev.Data, &data); err != nil || data["reason"] != "governance_profile" {
-			t.Errorf("audit data = %s (%v), want reason=governance_profile", ev.Data, err)
+		if err := json.Unmarshal(ev.Data, &data); err != nil || data["reason"] != "governance_unit" {
+			t.Errorf("audit data = %s (%v), want reason=governance_unit", ev.Data, err)
 		}
 	})
 
@@ -1108,9 +1108,9 @@ func meDriveBody(t *testing.T, srv *Server, ctx context.Context) (map[string]any
 	if _, ok := body["user_drive"]; !ok {
 		t.Fatal("/me has no user_drive key — nil-means-none needs the key PRESENT and null")
 	}
-	denied, ok := body["user_drive_denied_by_profile"]
+	denied, ok := body["user_drive_denied_by_unit"]
 	if !ok {
-		t.Fatal("/me has no user_drive_denied_by_profile key — always present, so an older daemon's MISSING key is distinguishable from an open door")
+		t.Fatal("/me has no user_drive_denied_by_unit key — always present, so an older daemon's MISSING key is distinguishable from an open door")
 	}
 	// The THIRD key, present for the same reason the door key is: an older
 	// daemon's missing key must be distinguishable from a daemon that answered
@@ -1137,7 +1137,7 @@ func TestMeUserDrive(t *testing.T) {
 			t.Errorf("user_drive = %v, want null", ud)
 		}
 		if denied != "" {
-			t.Errorf("user_drive_denied_by_profile = %q, want empty — an unassigned member has no door", denied)
+			t.Errorf("user_drive_denied_by_unit = %q, want empty — an unassigned member has no door", denied)
 		}
 	})
 
@@ -1157,11 +1157,11 @@ func TestMeUserDrive(t *testing.T) {
 		}
 		// The object means ONE thing — what is allocated — so the door is not
 		// in it. A field here would be the drift the split exists to prevent.
-		if _, ok := ud["denied_by_profile"]; ok {
-			t.Error("user_drive carries a denied_by_profile field; the door is the SIBLING key")
+		if _, ok := ud["denied_by_unit"]; ok {
+			t.Error("user_drive carries a denied_by_unit field; the door is the SIBLING key")
 		}
 		if denied != "" {
-			t.Errorf("user_drive_denied_by_profile = %q, want empty", denied)
+			t.Errorf("user_drive_denied_by_unit = %q, want empty", denied)
 		}
 	})
 
@@ -1188,7 +1188,7 @@ func TestMeUserDrive(t *testing.T) {
 		// A pause is not a door: the sibling key answers a different question
 		// and this member's profile has not shut anything.
 		if denied != "" {
-			t.Errorf("user_drive_denied_by_profile = %q, want empty", denied)
+			t.Errorf("user_drive_denied_by_unit = %q, want empty", denied)
 		}
 	})
 
@@ -1199,7 +1199,7 @@ func TestMeUserDrive(t *testing.T) {
 		d := driveFixture(nil)
 		cs := &capStore{
 			drive: d, driveGrant: grantFixture(d.ID, nil), driveTier: types.CapabilitySubjectUser,
-			govProfile: &types.GovernanceProfile{
+			govProfile: &types.GovernanceUnit{
 				Name: "contractors", Limits: types.GovernanceLimits{DenyUserDrive: true},
 			},
 			govTier: types.CapabilitySubjectUser,
@@ -1210,7 +1210,7 @@ func TestMeUserDrive(t *testing.T) {
 			t.Fatal("user_drive = null — a shut door does not un-allocate the drive")
 		}
 		if denied != "contractors" {
-			t.Errorf("user_drive_denied_by_profile = %q, want the profile NAME (the member sentence quotes it)", denied)
+			t.Errorf("user_drive_denied_by_unit = %q, want the profile NAME (the member sentence quotes it)", denied)
 		}
 	})
 
@@ -1219,7 +1219,7 @@ func TestMeUserDrive(t *testing.T) {
 		// sibling: this member's answer is not "ask an admin for an allocation"
 		// — an allocation would not help them until the profile changes.
 		cs := &capStore{
-			govProfile: &types.GovernanceProfile{
+			govProfile: &types.GovernanceUnit{
 				Name: "contractors", Limits: types.GovernanceLimits{DenyUserDrive: true},
 			},
 			govTier: types.CapabilitySubjectUser,
@@ -1230,7 +1230,7 @@ func TestMeUserDrive(t *testing.T) {
 			t.Errorf("user_drive = %v, want null", ud)
 		}
 		if denied != "contractors" {
-			t.Errorf("user_drive_denied_by_profile = %q, want the profile name", denied)
+			t.Errorf("user_drive_denied_by_unit = %q, want the profile name", denied)
 		}
 	})
 
@@ -1239,7 +1239,7 @@ func TestMeUserDrive(t *testing.T) {
 		// profile that happens to carry DenyUserDrive never renders a closed
 		// door for a caller it does not bind.
 		cs := &capStore{
-			govProfile: &types.GovernanceProfile{
+			govProfile: &types.GovernanceUnit{
 				Name: "contractors", Limits: types.GovernanceLimits{DenyUserDrive: true},
 			},
 			govTier: types.CapabilitySubjectUser,
@@ -1247,7 +1247,7 @@ func TestMeUserDrive(t *testing.T) {
 		srv := New(Config{Store: cs, Audit: &recRecorder{}, RunnerTarget: "docker"})
 		adminCtx := withOIDCGroups(operatorCtx("sub-drive-bob", "bob@corp.example", oidc.RoleAdmin), nil)
 		if _, denied, _ := meDriveBody(t, srv, adminCtx); denied != "" {
-			t.Errorf("user_drive_denied_by_profile = %q for an operator, want empty", denied)
+			t.Errorf("user_drive_denied_by_unit = %q for an operator, want empty", denied)
 		}
 	})
 
@@ -1295,7 +1295,7 @@ func TestMeUserDrive(t *testing.T) {
 					t.Errorf("user_drive = %v, want null — a display read still swallows the failure", ud)
 				}
 				if denied != "" {
-					t.Errorf("user_drive_denied_by_profile = %q, want empty — the DOOR is not what failed", denied)
+					t.Errorf("user_drive_denied_by_unit = %q, want empty — the DOOR is not what failed", denied)
 				}
 				if reason != tc.wantReason {
 					t.Errorf("user_drive_unavailable = %q, want %q — this state is not %q",
@@ -1333,7 +1333,7 @@ func TestMeUserDrive(t *testing.T) {
 			t.Errorf("user_drive_unavailable = %q, want %q — the door state is UNKNOWN", reason, driveUnavailableGovernance)
 		}
 		if denied != "" {
-			t.Errorf("user_drive_denied_by_profile = %q, want empty — no profile was read, so none may be named", denied)
+			t.Errorf("user_drive_denied_by_unit = %q, want empty — no profile was read, so none may be named", denied)
 		}
 		// THE LOAD-BEARING HALF. The allocation is suppressed WITH the door:
 		// offering a mount whose governance is unknown is the promise that
@@ -1539,7 +1539,7 @@ func TestSeedRequestDriveReadOnlyFold(t *testing.T) {
 // browser does.
 //
 // It is also where the ASYMMETRY is written down rather than discovered.
-// resolveMeUserDrive and userDriveDeniedByProfile map every failure to null and
+// resolveMeUserDrive and userDriveDeniedByUnit map every failure to null and
 // "": a display read must not 500 the console shell over a drive card. So this
 // member's console shows "no drive, open door" while their launch answers 403
 // with the one remedy that works — and the /me assertions below are the
@@ -1583,8 +1583,8 @@ func TestUnusableGroupSnapshotRefusesTheLaunchWhileMeStaysQuiet(t *testing.T) {
 	if meBody["user_drive"] != nil {
 		t.Errorf("/me.user_drive = %v under a truncated snapshot, want null — a display read swallows the refusal by design", meBody["user_drive"])
 	}
-	if meBody["user_drive_denied_by_profile"] != "" {
-		t.Errorf("/me.user_drive_denied_by_profile = %v, want empty — the door is open; it is the SNAPSHOT that is unreadable", meBody["user_drive_denied_by_profile"])
+	if meBody["user_drive_denied_by_unit"] != "" {
+		t.Errorf("/me.user_drive_denied_by_unit = %v, want empty — the door is open; it is the SNAPSHOT that is unreadable", meBody["user_drive_denied_by_unit"])
 	}
 
 	// The control, and the proof the 403 is about the snapshot rather than

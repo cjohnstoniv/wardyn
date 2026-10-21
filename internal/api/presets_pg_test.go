@@ -40,7 +40,7 @@ func newPresetFixture(t *testing.T) presetFixture {
 	pool := throwawayPGPool(t)
 	pg := store.NewPG(pool)
 	ctx := context.Background()
-	profile, err := pg.UpsertGovernanceProfile(ctx, types.GovernanceProfile{
+	profile, err := pg.UpsertGovernanceUnit(ctx, types.GovernanceUnit{
 		Name:      "walled",
 		Ceiling:   types.RunPolicySpec{AllowedDomains: []string{"pypi.org"}, MinConfinementClass: types.CC2},
 		Limits:    types.GovernanceLimits{DenyTaskModeExec: true},
@@ -49,8 +49,8 @@ func newPresetFixture(t *testing.T) presetFixture {
 	if err != nil {
 		t.Fatalf("seed profile: %v", err)
 	}
-	if _, err := pg.UpsertGovernanceAssignment(ctx, types.GovernanceAssignment{
-		SubjectType: types.CapabilitySubjectUserType, Subject: types.UserTypeStandard, ProfileID: profile.ID,
+	if _, err := pg.UpsertGovernanceMembership(ctx, types.GovernanceMembership{
+		SubjectType: types.CapabilitySubjectUserType, Subject: types.UserTypeStandard, UnitID: profile.ID,
 	}); err != nil {
 		t.Fatalf("seed assignment: %v", err)
 	}

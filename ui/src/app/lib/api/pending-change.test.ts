@@ -10,7 +10,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { access } from "./access";
 import { asJson, PendingChangeError } from "./core";
-import { governance, type GovernanceProfileInput } from "./governance";
+import { governance, type GovernanceUnitInput } from "./governance";
 import { permissions } from "./permissions";
 import { userTypes } from "./user-types";
 import { aheadByHours } from "../test-clock";
@@ -19,7 +19,7 @@ afterEach(() => vi.unstubAllGlobals());
 
 const CHANGE = {
   id: "c1",
-  target_kind: "governance_profile",
+  target_kind: "governance_unit",
   op: "update",
   target_key: "team-a",
   state: "pending",
@@ -55,7 +55,7 @@ describe("asJson on a 202", () => {
   });
 });
 
-const PROFILE_INPUT: GovernanceProfileInput = {
+const PROFILE_INPUT: GovernanceUnitInput = {
   name: "team-a",
   ceiling: { allowed_domains: [], first_use_approval: "deny_with_review", min_confinement_class: "CC2" },
   limits: {},
@@ -67,7 +67,7 @@ const SITES: [string, () => Promise<unknown>][] = [
   ["governance.deleteProfile", () => governance.deleteProfile("p1")],
   [
     "governance.upsertAssignment",
-    () => governance.upsertAssignment({ subject_type: "group", subject: "g", profile_id: "p1", priority: 0 }),
+    () => governance.upsertAssignment({ subject_type: "group", subject: "g", unit_id: "p1", priority: 0 }),
   ],
   ["governance.deleteAssignment", () => governance.deleteAssignment("a1")],
   [

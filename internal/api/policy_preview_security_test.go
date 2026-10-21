@@ -135,7 +135,7 @@ func TestPolicyPreviewDriveAuthorizationSkipsReadiness(t *testing.T) {
 				st.site.WorkspaceProviders = &types.WorkspaceProviders{Storage: &types.StorageProviders{UserDrive: &types.UserDriveProvider{Disabled: true}}}
 			}
 			if tc.profileDisabled {
-				st.profile = &types.GovernanceProfile{ID: uuid.New(), Name: "drive-denied", Ceiling: types.RunPolicySpec{MinConfinementClass: types.CC2}, Limits: types.GovernanceLimits{DenyUserDrive: true}}
+				st.profile = &types.GovernanceUnit{ID: uuid.New(), Name: "drive-denied", Ceiling: types.RunPolicySpec{MinConfinementClass: types.CC2}, Limits: types.GovernanceLimits{DenyUserDrive: true}}
 			}
 			if tc.noAllocation {
 				st.drive = nil

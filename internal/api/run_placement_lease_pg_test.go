@@ -731,7 +731,7 @@ func TestPG_RunnerLease_DispatchAdmittedRefusesADeniedPlacement(t *testing.T) {
 	}
 	run.State = types.RunPending
 	limits := types.GovernanceLimits{DenyPlacements: []types.Placement{types.PlacementLocal}}
-	denied := ceilingForDispatch(governanceCeiling{Profile: &ResolvedProfile{Name: "no-local", Limits: limits}, Limits: limits}, adoEntraUngraded(), bedrockCredUngraded())
+	denied := ceilingForDispatch(governanceCeiling{Unit: &ResolvedUnit{Name: "no-local", Limits: limits}, Limits: limits}, adoEntraUngraded(), bedrockCredUngraded())
 	if f.srv.dispatchAdmitted(f.ctx, run, denied) {
 		t.Fatal("dispatch admitted a placement its profile denies")
 	}
@@ -814,12 +814,12 @@ func TestPG_RunnerLease_ReviveThroughTheDoor(t *testing.T) {
 		t.Fatalf("execution after revive = %+v, want a new Start generation bound", cur)
 	}
 
-	profile, err := f.st.UpsertGovernanceProfile(f.ctx, types.GovernanceProfile{Name: "no-local", CreatedBy: "seed",
+	profile, err := f.st.UpsertGovernanceUnit(f.ctx, types.GovernanceUnit{Name: "no-local", CreatedBy: "seed",
 		Limits: types.GovernanceLimits{DenyPlacements: []types.Placement{types.PlacementLocal}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.st.Pool.Exec(f.ctx, `UPDATE agent_runs SET governance_profile_id = $2 WHERE id = $1`, run.ID, profile.ID); err != nil {
+	if _, err := f.st.Pool.Exec(f.ctx, `UPDATE agent_runs SET unit_id = $2 WHERE id = $1`, run.ID, profile.ID); err != nil {
 		t.Fatal(err)
 	}
 	if stored, err = f.st.GetRun(f.ctx, run.ID); err != nil {
@@ -838,7 +838,7 @@ func TestPG_RunnerLease_ReviveThroughTheDoor(t *testing.T) {
 		t.Fatal("the same run without the sign-in task was not denied")
 	}
 	// Dispatch holds the same profile to the run's placement.
-	denied := ceilingForDispatch(governanceCeiling{Profile: &ResolvedProfile{ID: profile.ID, Name: profile.Name, Limits: profile.Limits}, Limits: profile.Limits}, adoEntraUngraded(), bedrockCredUngraded())
+	denied := ceilingForDispatch(governanceCeiling{Unit: &ResolvedUnit{ID: profile.ID, Name: profile.Name, Limits: profile.Limits}, Limits: profile.Limits}, adoEntraUngraded(), bedrockCredUngraded())
 	if !f.srv.dispatchPlacementDenied(f.ctx, stored, denied) {
 		t.Fatal("dispatch let a denied placement through")
 	}

@@ -223,7 +223,7 @@ func TestMeAnswersFromMemoryWhileAShareProbeIsStranded(t *testing.T) {
 			"not answer", reason, driveUnavailableUnmountable)
 	}
 	if denied != "" {
-		t.Errorf("user_drive_denied_by_profile = %q, want empty — no profile is involved", denied)
+		t.Errorf("user_drive_denied_by_unit = %q, want empty — no profile is involved", denied)
 	}
 
 	// And the two doors still agree, asserted rather than assumed: /me withheld

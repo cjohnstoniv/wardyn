@@ -184,7 +184,7 @@ func TestSeedRequestDriveRefusesWhenDrivesAreDisabled(t *testing.T) {
 // 4 GiB, this principal's profile allows 2 GiB, and the allocation is 10 GiB.
 func TestDriveSizeIsClampedTheSameAtEveryDoor(t *testing.T) {
 	const deploymentMiB, profileMiB = 4096, 2048
-	profile := &types.GovernanceProfile{
+	profile := &types.GovernanceUnit{
 		Name: "contractors", Limits: types.GovernanceLimits{MaxDriveSizeMiB: profileMiB},
 	}
 	newStore := func() *driveStore {
@@ -198,7 +198,7 @@ func TestDriveSizeIsClampedTheSameAtEveryDoor(t *testing.T) {
 	// 1. LAUNCH — the mount the runner executes.
 	srv, _ := driveRunServer(newStore(), "docker")
 	mount, ok, w := driveSeed(t, srv, driveRunRequest(true, nil),
-		governanceCeiling{Profile: resolvedOf(profile), Limits: profile.Limits}, driveMemberCtx([]string{"eng"}, false))
+		governanceCeiling{Unit: resolvedOf(profile), Limits: profile.Limits}, driveMemberCtx([]string{"eng"}, false))
 	if !ok || mount == nil {
 		t.Fatalf("launch: mount = %+v, ok = %v: %s", mount, ok, w.Body.String())
 	}
@@ -308,7 +308,7 @@ func TestDrivesDisabledBeatsTheProfileDoorAtEverySurface(t *testing.T) {
 		d := driveFixture(nil)
 		return &driveStore{
 			drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser,
-			profile: &types.GovernanceProfile{
+			profile: &types.GovernanceUnit{
 				Name: "contractors", Limits: types.GovernanceLimits{DenyUserDrive: true},
 			},
 			site: providerSiteConfig(true, 0),

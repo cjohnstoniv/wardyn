@@ -216,8 +216,8 @@ type AgentRun struct {
 	LifetimeCapSource LimitSource `json:"-"`
 	WaitBudgetSec     int         `json:"wait_budget_sec,omitempty"` // how long an approval this run raises stays open; 0 = deployment default alone applies
 	// RunLimits are the owner's profile limits as they stood at create; later clamps use these captured bounds, never the profile's current ones.
-	RunLimits           RunLimits  `json:"run_limits"`
-	GovernanceProfileID *uuid.UUID `json:"governance_profile_id,omitempty"`
+	RunLimits RunLimits  `json:"run_limits"`
+	UnitID    *uuid.UUID `json:"unit_id,omitempty"`
 	// LostAt/LostReason mark a run that lost its sandbox but is kept (no proxy/network, files stay); stays RUNNING until a kill or the ended-run grace.
 	LostAt     *time.Time `json:"lost_at,omitempty"`
 	LostReason LostReason `json:"lost_reason,omitempty"`

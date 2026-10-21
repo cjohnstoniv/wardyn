@@ -123,9 +123,9 @@ func (s *govEscapeStore) GetWorkspace(_ context.Context, id uuid.UUID) (types.Wo
 	return types.Workspace{}, store.ErrNotFound
 }
 
-// ListGovernanceProfiles answers no profiles: dispatch reads the run's profile
+// ListGovernanceUnits answers no profiles: dispatch reads the run's profile
 // for its refusal attribution, and the embedded store is nil.
-func (s *govEscapeStore) ListGovernanceProfiles(context.Context) ([]types.GovernanceProfile, error) {
+func (s *govEscapeStore) ListGovernanceUnits(context.Context) ([]types.GovernanceUnit, error) {
 	return nil, nil
 }
 func (s *govEscapeStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
@@ -292,7 +292,7 @@ const (
 
 // the escape table
 
-// TestGovernanceProfileNonEscape is the escape table's create-time half (rows
+// TestGovernanceUnitNonEscape is the escape table's create-time half (rows
 // 1-10) plus row 16, asserted on the decoded run.policy.resolve envelope —
 // the DEFINED post-widening truth, not the spec the handler happened to hold at
 // some intermediate step. Asserting anywhere earlier would prove nothing: the
@@ -303,7 +303,7 @@ const (
 // (narrow), so every row asks the same question in a different door: can a
 // member reach something the DEPLOYMENT allows but their own PROFILE does not?
 //
-// Rows 11, 12 and 15 sit in TestGovernanceProfileNonEscape_Dispatch below:
+// Rows 11, 12 and 15 sit in TestGovernanceUnitNonEscape_Dispatch below:
 // their enforcement point is the dispatch re-assertion phase, so they are
 // driven at dispatchRun with the ceiling already resolved, which is the seam
 // each lane fills. Rows 13 and 14 are create-time and live here.
@@ -318,7 +318,7 @@ const (
 // confinement floor) and TestDispatchCeilingIsRequiredAtEveryLane +
 // TestDispatchCeilingZeroValueRefusesToLaunch (every door, by construction),
 // all in dispatch_ceiling_lanes_test.go.
-func TestGovernanceProfileNonEscape(t *testing.T) {
+func TestGovernanceUnitNonEscape(t *testing.T) {
 	profile := govProfile("walled")
 	profile.Ceiling.ToolRules = []types.ToolRule{{Tool: "Bash", Effect: types.ToolDeny}}
 	assigned := func() *capStore {
@@ -787,7 +787,7 @@ func TestGovernanceProfileNonEscape(t *testing.T) {
 	}
 }
 
-// TestGovernanceProfileNonEscape_Dispatch is the escape table's DISPATCH half —
+// TestGovernanceUnitNonEscape_Dispatch is the escape table's DISPATCH half —
 // rows 11, 12 and 15, the three whose enforcement point is inside dispatchRun
 // rather than at create.
 //
@@ -803,7 +803,7 @@ func TestGovernanceProfileNonEscape(t *testing.T) {
 // runWalledDispatch's own doc explains the split: resolving the ceiling onto
 // those fields is the create handler's job, consuming them is this phase's, and
 // each half is pinned where it lives.
-func TestGovernanceProfileNonEscape_Dispatch(t *testing.T) {
+func TestGovernanceUnitNonEscape_Dispatch(t *testing.T) {
 	walled := []string{govCorpDeny}
 
 	// Row 11 — ARTIFACT REDIRECT. The operator's corp mirror is added to this

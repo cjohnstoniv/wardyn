@@ -88,7 +88,7 @@ func TestResourcesOversizedInlineAskIsBoundedNotTrusted(t *testing.T) {
 func TestResourcesStoredPolicyBaselineIsTheResolvedSize(t *testing.T) {
 	id := uuid.New()
 	st := &memberBoundStore{
-		profile: &types.GovernanceProfile{ID: uuid.New(), Name: "three",
+		profile: &types.GovernanceUnit{ID: uuid.New(), Name: "three",
 			Ceiling: types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"},
 				Resources: &types.ResourceLimits{CPUMillis: 3000}}},
 		policy: types.RunPolicy{ID: id, Spec: types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"},
@@ -152,7 +152,7 @@ func TestResourcesOperatorBoundIsTheContractMax(t *testing.T) {
 func TestResourcesProfileMaximumRaisesTheCapNotTheDefault(t *testing.T) {
 	t.Cleanup(func() { runner.SetDefaultLimits(0, 0) })
 	runner.SetDefaultLimits(2000, 4096)
-	cfg := baseTestConfig(newHarness(t), resourceStore{&memberBoundStore{profile: &types.GovernanceProfile{ID: uuid.New(), Name: "max-eight",
+	cfg := baseTestConfig(newHarness(t), resourceStore{&memberBoundStore{profile: &types.GovernanceUnit{ID: uuid.New(), Name: "max-eight",
 		Ceiling: types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"}},
 		Limits:  types.GovernanceLimits{MaxCPUMillis: 8000}}}})
 	cfg.OIDC = &oidc.Authenticator{}
@@ -171,7 +171,7 @@ func TestResourcesProfileMaximumRaisesTheCapNotTheDefault(t *testing.T) {
 func TestResourcesDeploymentDefaultAbovePlatform(t *testing.T) {
 	t.Cleanup(func() { runner.SetDefaultLimits(0, 0) })
 	runner.SetDefaultLimits(2000, 4096)
-	cfg := baseTestConfig(newHarness(t), resourceStore{&memberBoundStore{profile: &types.GovernanceProfile{ID: uuid.New(), Name: "plain",
+	cfg := baseTestConfig(newHarness(t), resourceStore{&memberBoundStore{profile: &types.GovernanceUnit{ID: uuid.New(), Name: "plain",
 		Ceiling: types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"}}}}})
 	cfg.OIDC = &oidc.Authenticator{}
 	cfg.DefaultPolicy = types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"},
@@ -198,7 +198,7 @@ func TestResourcesDeploymentDefaultAbovePlatform(t *testing.T) {
 func TestResourcesPidsCutIsReportedWithTheGovernanceSource(t *testing.T) {
 	id := uuid.New()
 	st := &memberBoundStore{
-		profile: &types.GovernanceProfile{ID: uuid.New(), Name: "tight",
+		profile: &types.GovernanceUnit{ID: uuid.New(), Name: "tight",
 			Ceiling: types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"},
 				Resources: &types.ResourceLimits{PidsLimit: 256}}},
 		policy: types.RunPolicy{ID: id, Spec: types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"},
@@ -221,7 +221,7 @@ func TestResourcesPidsCutIsReportedWithTheGovernanceSource(t *testing.T) {
 // profile (which asks nothing of its own) and the ask is the overlay's. The cut still reads capped.
 func TestResourcesPidsOverlayAskIsReportedAsCut(t *testing.T) {
 	st := &memberBoundStore{
-		profile: &types.GovernanceProfile{ID: uuid.New(), Name: "tight",
+		profile: &types.GovernanceUnit{ID: uuid.New(), Name: "tight",
 			Ceiling: types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"},
 				Resources: &types.ResourceLimits{PidsLimit: 256}}},
 	}
@@ -240,7 +240,7 @@ func TestResourcesPidsOverlayAskIsReportedAsCut(t *testing.T) {
 func TestResourcesPidsCutUnderAProfileWithNoLimitIsTheDeployments(t *testing.T) {
 	id := uuid.New()
 	st := &memberBoundStore{
-		profile: &types.GovernanceProfile{ID: uuid.New(), Name: "noPids",
+		profile: &types.GovernanceUnit{ID: uuid.New(), Name: "noPids",
 			Ceiling: types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"}}},
 		policy: types.RunPolicy{ID: id, Spec: types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"},
 			Resources: &types.ResourceLimits{PidsLimit: 1 << 20}}},
@@ -270,7 +270,7 @@ func TestResourcesPidsWithinTheLimitIsNotCapped(t *testing.T) {
 func TestResourcesPidsCutAtTheDeploymentsValueIsTheProfiles(t *testing.T) {
 	id := uuid.New()
 	st := &memberBoundStore{
-		profile: &types.GovernanceProfile{ID: uuid.New(), Name: "same",
+		profile: &types.GovernanceUnit{ID: uuid.New(), Name: "same",
 			Ceiling: types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"},
 				Resources: &types.ResourceLimits{PidsLimit: int(runner.DefaultPidsLimit)}}},
 		policy: types.RunPolicy{ID: id, Spec: types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"},

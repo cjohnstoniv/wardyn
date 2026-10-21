@@ -466,7 +466,7 @@ func (s *Server) sshAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permiss
 	// only on their own run or an operator-owned one, so the exemption cannot
 	// reach a person's run.
 	if s.sshOverrideRefusal(rec) != "" || !s.adminDoorExempt(run) {
-		name, err := s.interactiveDeniedProfile(ctx, run)
+		name, err := s.interactiveDeniedUnit(ctx, run)
 		if err != nil {
 			s.sshAuditAuthFailure(ctx, conn, &runID, rec.Principal, fp, "governance profile unreadable")
 			return nil, errors.New("ssh: not authorized for this run")

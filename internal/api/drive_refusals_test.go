@@ -44,7 +44,7 @@ func TestDriveRefusalSentencesMatchGolden(t *testing.T) {
 
 		"MEMBER_REQUIRES_PERSON":           func([]string) string { return memberDriveRequiresPersonMsg() },
 		"MEMBER_DISABLED":                  func([]string) string { return memberDrivesDisabledMsg() },
-		"MEMBER_DENIED_BY_PROFILE":         func(a []string) string { return memberDrivesDeniedByProfileMsg(a[0]) },
+		"MEMBER_DENIED_BY_UNIT":            func(a []string) string { return memberDrivesDeniedByUnitMsg(a[0]) },
 		"MEMBER_LIMIT_REACHED":             func(a []string) string { return memberDriveLimitReachedMsg(atoi(a[0]), atoi(a[1])) },
 		"MEMBER_UNSUPPORTED":               func([]string) string { return memberDriveUnsupportedMsg() },
 		"MEMBER_UNSIZED":                   func([]string) string { return memberDriveUnsizedMsg() },

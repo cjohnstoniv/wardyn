@@ -10,7 +10,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// POST /governance/preview answers ONE question — "which profile would bind a
+// POST /governance/check answers ONE question — "which profile would bind a
 // principal presenting this claim" — so there has to be ONE answer. It
 // re-implemented the group fold as a plain strings.ToLower with no ASCII guard,
 // and that is not the snapshot's rule: oidc.sessionGroups applies the guard

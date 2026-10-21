@@ -35,7 +35,7 @@ export interface MeDrive {
 /** GET /me/drives (pkg/client.MeDriveCatalogue). */
 export interface MeDriveCatalogue {
   drives: MeDrive[];
-  denied_by_profile?: string;
+  denied_by_unit?: string;
   unavailable?: string;
   pool_checked: boolean;
   /** Whether the caller may create a drive now; absent when the caller is not a person. */
@@ -45,7 +45,7 @@ export interface MeDriveCatalogue {
 /** Why a person cannot create a drive now (pkg/client.MemberDriveCreateReason). */
 export type MemberDriveCreateReason =
   | "disabled"
-  | "denied_by_profile"
+  | "denied_by_unit"
   | "limit_reached"
   | "unsupported"
   | "delete_unavailable"
@@ -57,7 +57,7 @@ export interface MemberDriveCreate {
   allowed: boolean;
   /** Set exactly when allowed is false. */
   reason?: MemberDriveCreateReason;
-  denied_by_profile?: string;
+  denied_by_unit?: string;
   /** The caller's drives, one being deleted included. */
   count: number;
   /** Drives per person; 0 when the switch is off. */

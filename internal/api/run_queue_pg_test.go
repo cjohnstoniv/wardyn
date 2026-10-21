@@ -198,7 +198,7 @@ func TestPG_QueueAFullPoolWaitsHoldingNothing(t *testing.T) {
 		t.Errorf("warnings %q do not carry the wait sentence %q", first.Warnings, want)
 	}
 	for _, r := range []types.AgentRun{e.run(first.ID), e.run(second.ID)} {
-		if r.State != types.RunQueued || r.SPIFFEID != "" || r.AdmittedAt != nil || r.EndsAt != nil || r.LifetimeCapAt != nil || r.GovernanceProfileID != nil {
+		if r.State != types.RunQueued || r.SPIFFEID != "" || r.AdmittedAt != nil || r.EndsAt != nil || r.LifetimeCapAt != nil || r.UnitID != nil {
 			t.Errorf("a waiting run carries start-time facts: %+v", r)
 		}
 		if r.StatusDetail != "queue: runner_pool_at_capacity" {

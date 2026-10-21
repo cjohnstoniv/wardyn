@@ -38,7 +38,7 @@ func decodePolicyRequest(w http.ResponseWriter, r *http.Request, ado adoHostsLoa
 	if req.Name == "" {
 		return policyRequest{}, reasonPolicyRequestInvalid, "name is required"
 	}
-	if len(req.Name) > maxGovernanceProfileNameLen || !controlCharFree(req.Name) { // a handle, bounded like a profile's
+	if len(req.Name) > maxGovernanceUnitNameLen || !controlCharFree(req.Name) { // a handle, bounded like a profile's
 		return policyRequest{}, reasonPolicyRequestInvalid, "name is invalid"
 	}
 	repos := make([]string, len(req.Spec.WorkspaceRepos))
@@ -127,7 +127,7 @@ func (s *Server) handleGetPolicy(w http.ResponseWriter, r *http.Request) {
 // spec, EMBEDDED so the shape every existing consumer parses is unchanged, plus
 // the name of the governance profile it came from.
 //
-// governance_profile_name is ADDITIVE and omitted entirely for an unassigned
+// unit_name is ADDITIVE and omitted entirely for an unassigned
 // caller. "" would be a value the console then has to special-case, while an
 // absent key already decodes as "no profile" in the TS mirror. It exists
 // because the spec alone cannot answer the question a member actually has: the
@@ -136,7 +136,7 @@ func (s *Server) handleGetPolicy(w http.ResponseWriter, r *http.Request) {
 // member share.
 type defaultPolicyResponse struct {
 	types.RunPolicySpec
-	GovernanceProfileName string `json:"governance_profile_name,omitempty"`
+	UnitName string `json:"unit_name,omitempty"`
 }
 
 // handleGetDefaultPolicy returns THE CALLER'S ceiling — the spec a run created
@@ -166,8 +166,8 @@ func (s *Server) handleGetDefaultPolicy(w http.ResponseWriter, r *http.Request) 
 		// A run under this ceiling gets no UI apps, so the read lists none.
 		resp.UIApps = nil
 	}
-	if ceiling.Profile != nil {
-		resp.GovernanceProfileName = ceiling.Profile.Name
+	if ceiling.Unit != nil {
+		resp.UnitName = ceiling.Unit.Name
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

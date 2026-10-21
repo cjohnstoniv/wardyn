@@ -243,7 +243,7 @@ func requestIsInteractive(req createRunRequest) bool {
 // refusal deployment-wide, on an upgrade that changed no configuration. Absent
 // row, absent behaviour change.
 func governanceHoldRules(ceiling governanceCeiling) bool {
-	if ceiling.Profile == nil {
+	if ceiling.Unit == nil {
 		return false
 	}
 	for _, r := range ceiling.Spec.ToolRules {

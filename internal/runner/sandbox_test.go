@@ -259,7 +259,7 @@ func TestBuildProxyConfig_LocalModels(t *testing.T) {
 // TestBuildProxyConfig_Attribution: the attribution round-trips through the
 // sidecar's own strict decoder, and an absent one leaves no key behind.
 func TestBuildProxyConfig_Attribution(t *testing.T) {
-	want := &policyref.Ref{Source: policyref.SourceProfile, Name: "Team A", RequestURL: "https://help.example.com/access"}
+	want := &policyref.Ref{Source: policyref.SourceUnit, Name: "Team A", RequestURL: "https://help.example.com/access"}
 	pc := ProxyConfig{RunToken: "tok", ControlPlaneURL: "http://127.0.0.1:1", Attribution: want}
 	b, err := BuildProxyConfig(uuid.New(), pc, ProxyListenPort)
 	if err != nil {

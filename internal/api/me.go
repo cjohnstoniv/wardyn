@@ -175,8 +175,8 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	// one where the obvious advice — "ask an admin for an allocation" — is
 	// wrong. Always PRESENT (never omitted), so an older daemon's missing key is
 	// distinguishable from an open door.
-	deniedBy, doorReason := s.userDriveDeniedByProfile(r)
-	body["user_drive_denied_by_profile"] = deniedBy
+	deniedBy, doorReason := s.userDriveDeniedByUnit(r)
+	body["user_drive_denied_by_unit"] = deniedBy
 	// A ceiling that could not be resolved makes the DOOR unknown, not open, and
 	// an unknown door must not ship beside an allocation the card would then
 	// offer: the checkbox and its writable/read-only sentence would promise a
@@ -212,7 +212,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		// true when the drive is allocated by group — and silently false on a
 		// deployment that assigns governance by group while allocating drives
 		// per user, where the drive resolves fine and the CEILING is the half
-		// that could not answer. userDriveDeniedByProfile now returns that
+		// that could not answer. userDriveDeniedByUnit now returns that
 		// reason instead of a bool, so the token survives from whichever
 		// resolver actually met it.
 		// The unknown user type survives the same way, for the same reason: its

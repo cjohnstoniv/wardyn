@@ -111,8 +111,8 @@ func TestMemberDriveCatalogueCreateBlock(t *testing.T) {
 		{"switch off", func(st *memberDriveStore, _ *memberDriveRunner) { st.site = types.SiteConfig{} },
 			client.MemberDriveCreate{Reason: client.MemberDriveCreateDisabled}},
 		{"profile door", func(st *memberDriveStore, _ *memberDriveRunner) {
-			st.profile = &types.GovernanceProfile{Name: "contractors", Limits: types.GovernanceLimits{DenyMemberDrives: true}}
-		}, client.MemberDriveCreate{Reason: client.MemberDriveCreateDeniedByProfile, DeniedByProfile: "contractors", Limit: 3}},
+			st.profile = &types.GovernanceUnit{Name: "contractors", Limits: types.GovernanceLimits{DenyMemberDrives: true}}
+		}, client.MemberDriveCreate{Reason: client.MemberDriveCreateDeniedByUnit, DeniedByUnit: "contractors", Limit: 3}},
 		{"undeletable", func(_ *memberDriveStore, rn *memberDriveRunner) {
 			rn.lifecycleErr = runner.ErrDriveLifecycleUnavailable
 		},

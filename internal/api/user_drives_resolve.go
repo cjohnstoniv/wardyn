@@ -333,7 +333,7 @@ func isDisplayRead(ctx context.Context) bool {
 // the enforcement path above and by the preview endpoint below so the two
 // cannot answer differently for the same claims.
 //
-// Order matters, and it is the same rule ceilingFromProfile states: the
+// Order matters, and it is the same rule ceilingFromUnit states: the
 // REAL-ERROR check runs FIRST, ahead of the nil-row one, because a failed
 // resolve also returns nil rows — checking nil first would turn every store
 // failure into "no grant matched" and mount nothing, which is the fail-quiet
@@ -403,7 +403,7 @@ func (c driveSizeCeiling) bound() (int, string) {
 		// The profile wins a TIE, deliberately: the number is the same either
 		// way, and the per-principal half is the one an admin can change for this
 		// one member.
-		return bound, driveBoundByProfile
+		return bound, driveBoundByUnit
 	default:
 		return bound, driveBoundByDeployment
 	}
@@ -412,7 +412,7 @@ func (c driveSizeCeiling) bound() (int, string) {
 // The two values driveSizeCeiling.bound names, and the two the clamp's log line
 // carries — an operator filtering on `bound_by` is asking which ceiling to edit.
 const (
-	driveBoundByProfile    = "governance_profile"
+	driveBoundByUnit       = "governance_unit"
 	driveBoundByDeployment = "deployment"
 )
 
@@ -482,7 +482,7 @@ func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
 	tier types.CapabilitySubjectType, users []string, ceiling driveSizeCeiling) (*types.ResolvedDrive, error) {
 	// A store answering (nil, nil, "", nil) means the absent-row doctrine
 	// rather than a dereference, so no caller has to have checked on its
-	// behalf — the same guard ceilingFromProfile keeps for a nil profile.
+	// behalf — the same guard ceilingFromUnit keeps for a nil profile.
 	if d == nil || g == nil {
 		return nil, nil
 	}

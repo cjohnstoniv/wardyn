@@ -36,8 +36,8 @@ func facts() approvalFacts {
 		RunID:       uuid.MustParse("00000000-0000-4000-8000-000000000002"),
 		Principal:   "alice",
 		Email:       "alice@example.com",
-		ProfileID:   &pid,
-		ProfileName: "payments",
+		UnitID:      &pid,
+		UnitName:    "payments",
 	}
 }
 
@@ -51,7 +51,7 @@ func TestBuildPayload_Golden(t *testing.T) {
 	want := `{"schema":"wardyn.approval.v1","delivery_id":"00000000-0000-4000-8000-0000000000dd","event":"raised","tier":0,` +
 		`"approval":{"id":"00000000-0000-4000-8000-000000000001","kind":"egress_domain","requested_at":"` + f.RequestedAt.Format(time.RFC3339) + `"},` +
 		`"run":{"id":"00000000-0000-4000-8000-000000000002"},` +
-		`"profile":{"id":"00000000-0000-4000-8000-0000000000aa","name":"payments"},` +
+		`"unit":{"id":"00000000-0000-4000-8000-0000000000aa","name":"payments"},` +
 		`"requester":{"principal":"alice","email":"alice@example.com"},` +
 		`"console_url":"https://wardyn.example.com/approvals"}`
 	if string(got) != want {
@@ -126,7 +126,7 @@ func TestBuildPayload_MasksIdentifiersThatEqualASecret(t *testing.T) {
 
 func TestBuildPayload_StripsControlCharactersAndCaps(t *testing.T) {
 	f := facts()
-	f.ProfileName = "pay\x00ments\n\x1b[31m" + strings.Repeat("é", 300)
+	f.UnitName = "pay\x00ments\n\x1b[31m" + strings.Repeat("é", 300)
 	body, err := buildPayload(uuid.New(), 0, f, "", secretmask.Masker{})
 	if err != nil {
 		t.Fatal(err)
@@ -135,7 +135,7 @@ func TestBuildPayload_StripsControlCharactersAndCaps(t *testing.T) {
 	if err := json.Unmarshal(body, &p); err != nil {
 		t.Fatal(err)
 	}
-	name := p.Profile.Name
+	name := p.Unit.Name
 	if strings.ContainsAny(name, "\x00\n\x1b") || len(name) > maxFieldBytes || !strings.HasPrefix(name, "payments[31m") {
 		t.Fatalf("profile name %q (len %d) was not stripped and capped", name, len(name))
 	}

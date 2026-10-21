@@ -22,7 +22,7 @@ reason capability_policy
 reason capability_secret
 reason capability_workspace
 reason capability_workspace_provider
-reason governance_profile
+reason governance_unit
 reason grant_pairing_not_eligible
 reason groups_snapshot_stale
 reason run_not_found

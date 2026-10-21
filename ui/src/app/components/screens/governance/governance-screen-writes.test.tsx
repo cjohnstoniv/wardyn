@@ -36,14 +36,14 @@ vi.mock("../../../lib/api/directory", async () => {
 vi.mock("../../../lib/api/user-types", () => ({ userTypes: { listUserTypes: () => Promise.resolve([]) } }));
 
 import { HttpError } from "../../../lib/api/core";
-import type { GovernanceProfile, GovernanceSnapshot } from "../../../lib/api/governance";
+import type { GovernanceUnit, GovernanceSnapshot } from "../../../lib/api/governance";
 import { GOVERNANCE as GOV } from "../../../lib/governance-copy";
 import { PERM } from "../../../lib/permissions-copy";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { GovernanceScreen } from "./governance-screen";
 import { aheadByHours } from "../../../lib/test-clock";
 
-const profile = (id: string, name: string): GovernanceProfile => ({
+const profile = (id: string, name: string): GovernanceUnit => ({
   id,
   name,
   ceiling: { allowed_domains: ["api.anthropic.com"], first_use_approval: "deny_with_review", min_confinement_class: "CC2" },
@@ -55,7 +55,7 @@ const GREENFIELD = profile("p1", "Greenfield contractors");
 const PLATFORM = profile("p2", "Platform");
 const SNAPSHOT: GovernanceSnapshot = {
   profiles: [GREENFIELD, PLATFORM],
-  assignments: [{ id: "a1", subject_type: "group", subject: "wardyn.platform", profile_id: PLATFORM.id, priority: 10, created_at: aheadByHours(-1) }],
+  assignments: [{ id: "a1", subject_type: "group", subject: "wardyn.platform", unit_id: PLATFORM.id, priority: 10, created_at: aheadByHours(-1) }],
 };
 
 function renderScreen() {

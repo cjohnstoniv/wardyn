@@ -236,7 +236,7 @@ func Datum(d Decision, p Principal, method string) map[string]any {
 	// contact, which is a person's.
 	if ref := policyref.Layered(d.Policy); ref != nil && ref.Layer != "" {
 		m["layer"] = ref.Layer
-		if ref.Layer == policyref.LayerProfile && ref.Name != "" {
+		if ref.Layer == policyref.LayerUnit && ref.Name != "" {
 			m["layer_name"] = ref.Name
 		}
 	}

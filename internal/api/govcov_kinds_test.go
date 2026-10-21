@@ -30,12 +30,12 @@ var (
 	govCovTop  = uuid.MustParse("dddddddd-0000-0000-0000-000000000004")
 )
 
-func govCovStandalone(id uuid.UUID, name string, domains ...string) types.GovernanceProfile {
-	return types.GovernanceProfile{ID: id, Name: name, Ceiling: types.RunPolicySpec{AllowedDomains: domains, MinConfinementClass: types.CC2}}
+func govCovStandalone(id uuid.UUID, name string, domains ...string) types.GovernanceUnit {
+	return types.GovernanceUnit{ID: id, Name: name, Ceiling: types.RunPolicySpec{AllowedDomains: domains, MinConfinementClass: types.CC2}}
 }
 
-func govCovComposedOn(id uuid.UUID, name string, base uuid.UUID, domains ...string) types.GovernanceProfile {
-	return types.GovernanceProfile{ID: id, Name: name, BaseProfileID: &base, Overlay: &types.CeilingOverlay{AllowedDomains: &domains}}
+func govCovComposedOn(id uuid.UUID, name string, base uuid.UUID, domains ...string) types.GovernanceUnit {
+	return types.GovernanceUnit{ID: id, Name: name, ParentID: &base, Overlay: &types.CeilingOverlay{AllowedDomains: &domains}}
 }
 
 func govCovProfileBody(name string, domains ...string) string {
@@ -44,20 +44,20 @@ func govCovProfileBody(name string, domains ...string) string {
 }
 
 // govCovBuilt runs the real build over all for a request body, as the write door does.
-func govCovBuilt(t *testing.T, s *Server, all []types.GovernanceProfile, id uuid.UUID, body string) (types.GovernanceProfile, *ResolvedProfile) {
+func govCovBuilt(t *testing.T, s *Server, all []types.GovernanceUnit, id uuid.UUID, body string) (types.GovernanceUnit, *ResolvedUnit) {
 	t.Helper()
-	var req governanceProfileRequest
+	var req governanceUnitRequest
 	if err := json.Unmarshal([]byte(body), &req); err != nil {
 		t.Fatal(err)
 	}
-	req, msg := finishGovernanceProfileRequest(req)
+	req, msg := finishGovernanceUnitRequest(req)
 	if msg == "" {
 		msg = req.parseComposition()
 	}
 	if msg != "" {
 		t.Fatalf("fixture body refused: %s", msg)
 	}
-	p, res, err := s.buildGovernanceProfile("alice", id, req, all)
+	p, res, err := s.buildGovernanceUnit("alice", id, req, all)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -86,33 +86,33 @@ func TestGovCovSameJSON(t *testing.T) {
 }
 
 func TestGovCovProfilePayloadKeepsAbsentAndNullApart(t *testing.T) {
-	absent := governanceProfileRequest{Name: "p", Ceiling: types.RunPolicySpec{AllowedDomains: []string{"pypi.org"}, MinConfinementClass: types.CC2}}
-	raw, err := json.Marshal(profilePayloadOf(absent))
+	absent := governanceUnitRequest{Name: "p", Ceiling: types.RunPolicySpec{AllowedDomains: []string{"pypi.org"}, MinConfinementClass: types.CC2}}
+	raw, err := json.Marshal(unitPayloadOf(absent))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{`"contact"`, `"base_profile_id"`, `"overlay"`, `"overlay_limits"`} {
+	for _, key := range []string{`"contact"`, `"parent_id"`, `"overlay"`, `"overlay_limits"`} {
 		if strings.Contains(string(raw), key) {
 			t.Errorf("an absent member %s was written into the payload: %s", key, raw)
 		}
 	}
-	back, msg := profileRequestFromPayload(raw)
+	back, msg := unitRequestFromPayload(raw)
 	if msg != "" || back.contactSet || back.comp.baseSet || back.comp.overlaySet || back.comp.limitsSet {
 		t.Fatalf("replaying an absent-member payload = %q, set flags contact=%v comp=%+v; absent must keep the stored value", msg, back.contactSet, back.comp)
 	}
 
 	nulled := absent
-	nulled.Contact, nulled.BaseProfileID, nulled.Overlay, nulled.OverlayLimits = json.RawMessage(`null`), json.RawMessage(`null`), json.RawMessage(`null`), json.RawMessage(`null`)
-	raw, err = json.Marshal(profilePayloadOf(nulled))
+	nulled.Contact, nulled.ParentID, nulled.Overlay, nulled.OverlayLimits = json.RawMessage(`null`), json.RawMessage(`null`), json.RawMessage(`null`), json.RawMessage(`null`)
+	raw, err = json.Marshal(unitPayloadOf(nulled))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{`"contact":null`, `"base_profile_id":null`, `"overlay":null`, `"overlay_limits":null`} {
+	for _, key := range []string{`"contact":null`, `"parent_id":null`, `"overlay":null`, `"overlay_limits":null`} {
 		if !strings.Contains(string(raw), key) {
 			t.Errorf("an explicit null %s was lost from the payload: %s", key, raw)
 		}
 	}
-	back, msg = profileRequestFromPayload(raw)
+	back, msg = unitRequestFromPayload(raw)
 	if msg != "" || !back.contactSet || back.contact != nil || !back.comp.baseSet || back.comp.base != nil || !back.comp.overlaySet || back.comp.overlay != nil || !back.comp.limitsSet || back.comp.overlayLimits != nil {
 		t.Errorf("replaying nulls = %q contact set=%v comp=%+v; null must clear", msg, back.contactSet, back.comp)
 	}
@@ -132,15 +132,15 @@ func TestGovCovProfileRequestFromPayload(t *testing.T) {
 		{"an invalid ceiling", `{"name":"p","ceiling":{"allowed_domains":["not a domain!"],"min_confinement_class":"CC2"}}`, "invalid ceiling"},
 		{"negative limits", `{"name":"p","limits":{"max_concurrent_runs":-1}}`, "limits.max_concurrent_runs"},
 		{"an invalid contact", `{"name":"p","contact":{"email":"not-an-email"}}`, "email"},
-		{"a base that is not a string", `{"name":"p","base_profile_id":5,"overlay":{}}`, "base_profile_id: must be a profile id or null"},
-		{"a base that is not a profile id", `{"name":"p","base_profile_id":"nope","overlay":{}}`, "base_profile_id: not a profile id"},
-		{"the nil uuid as a base", `{"name":"p","base_profile_id":"00000000-0000-0000-0000-000000000000","overlay":{}}`, "base_profile_id: not a profile id"},
-		{"an overlay with an unknown key", `{"name":"p","base_profile_id":"` + baseID + `","overlay":{"nope":1}}`, "invalid overlay"},
-		{"overlay limits with an unknown key", `{"name":"p","base_profile_id":"` + baseID + `","overlay":{},"overlay_limits":{"nope":1}}`, "invalid overlay_limits"},
-		{"a valid composed write", `{"name":" p ","base_profile_id":"` + baseID + `","overlay":{"allowed_domains":["pypi.org"]},"overlay_limits":{"max_concurrent_runs":2}}`, ""},
+		{"a base that is not a string", `{"name":"p","parent_id":5,"overlay":{}}`, "parent_id: must be a profile id or null"},
+		{"a base that is not a profile id", `{"name":"p","parent_id":"nope","overlay":{}}`, "parent_id: not a profile id"},
+		{"the nil uuid as a base", `{"name":"p","parent_id":"00000000-0000-0000-0000-000000000000","overlay":{}}`, "parent_id: not a profile id"},
+		{"an overlay with an unknown key", `{"name":"p","parent_id":"` + baseID + `","overlay":{"nope":1}}`, "invalid overlay"},
+		{"overlay limits with an unknown key", `{"name":"p","parent_id":"` + baseID + `","overlay":{},"overlay_limits":{"nope":1}}`, "invalid overlay_limits"},
+		{"a valid composed write", `{"name":" p ","parent_id":"` + baseID + `","overlay":{"allowed_domains":["pypi.org"]},"overlay_limits":{"max_concurrent_runs":2}}`, ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			req, msg := profileRequestFromPayload(json.RawMessage(c.payload))
+			req, msg := unitRequestFromPayload(json.RawMessage(c.payload))
 			if c.wantMsg != "" {
 				if !strings.Contains(msg, c.wantMsg) {
 					t.Fatalf("message = %q, want it to contain %q", msg, c.wantMsg)
@@ -173,14 +173,14 @@ func TestGovCovContactHelpers(t *testing.T) {
 	if got := nonZeroContact(owner); got != owner {
 		t.Errorf("nonZeroContact(owner) = %v", got)
 	}
-	cur := types.GovernanceProfile{Contact: owner}
-	if got := profileContactAfter(cur, types.GovernanceProfile{Contact: other, ContactSet: true}); got != other {
+	cur := types.GovernanceUnit{Contact: owner}
+	if got := unitContactAfter(cur, types.GovernanceUnit{Contact: other, ContactSet: true}); got != other {
 		t.Errorf("a set contact replaces the stored one, got %v", got)
 	}
-	if got := profileContactAfter(cur, types.GovernanceProfile{ContactSet: true}); got != nil {
+	if got := unitContactAfter(cur, types.GovernanceUnit{ContactSet: true}); got != nil {
 		t.Errorf("a set nil contact clears it, got %v", got)
 	}
-	if got := profileContactAfter(cur, types.GovernanceProfile{Contact: other}); got != owner {
+	if got := unitContactAfter(cur, types.GovernanceUnit{Contact: other}); got != owner {
 		t.Errorf("an unset contact keeps the stored one, got %v", got)
 	}
 }
@@ -208,7 +208,7 @@ func TestGovCovRedactOverlayForRead(t *testing.T) {
 }
 
 func TestGovCovNewProfileDiffViewNeverCarriesASecretValue(t *testing.T) {
-	row := types.GovernanceProfile{
+	row := types.GovernanceUnit{
 		Name: "p",
 		Ceiling: types.RunPolicySpec{
 			MinConfinementClass: types.CC2,
@@ -217,12 +217,12 @@ func TestGovCovNewProfileDiffViewNeverCarriesASecretValue(t *testing.T) {
 		Contact: &policyref.Contact{},
 		Overlay: &types.CeilingOverlay{LLMInspection: &types.LLMInspectionSpec{WorkspaceSecretValues: []string{"overlay-secret-value"}}},
 	}
-	res := &ResolvedProfile{
+	res := &ResolvedUnit{
 		Ceiling:       types.RunPolicySpec{LLMInspection: &types.LLMInspectionSpec{WorkspaceSecretValues: []string{"effective-secret-value"}}},
 		Limits:        types.GovernanceLimits{},
 		AdminWarnings: []string{"warned"},
 	}
-	v := newProfileDiffView(row, res)
+	v := newUnitDiffView(row, res)
 	raw, err := json.Marshal(v)
 	if err != nil {
 		t.Fatal(err)
@@ -238,7 +238,7 @@ func TestGovCovNewProfileDiffViewNeverCarriesASecretValue(t *testing.T) {
 	if v.Effective == nil || !reflect.DeepEqual(v.Effective.Warnings, []string{"warned"}) {
 		t.Errorf("effective = %+v, want the composed view with its warnings", v.Effective)
 	}
-	if got := newProfileDiffView(row, nil); got.Effective != nil {
+	if got := newUnitDiffView(row, nil); got.Effective != nil {
 		t.Errorf("a profile that does not compose has no effective view, got %+v", got.Effective)
 	}
 }
@@ -247,15 +247,15 @@ func TestGovCovResolveForDiff(t *testing.T) {
 	s, _ := govCovServer(t, &govCovStore{})
 	base := govCovStandalone(govCovBase, "base", "pypi.org", "github.com")
 	child := govCovComposedOn(govCovPID, "child", govCovBase, "pypi.org")
-	if res := s.resolveForDiff([]types.GovernanceProfile{base, child}, govCovPID); res == nil || res.ID != govCovPID || !res.Composed {
+	if res := s.resolveForDiff([]types.GovernanceUnit{base, child}, govCovPID); res == nil || res.ID != govCovPID || !res.Composed {
 		t.Errorf("a composable profile resolved to %+v", res)
 	}
-	if res := s.resolveForDiff([]types.GovernanceProfile{base}, govCovPID); res != nil {
+	if res := s.resolveForDiff([]types.GovernanceUnit{base}, govCovPID); res != nil {
 		t.Errorf("an absent profile resolved to %+v", res)
 	}
 	a := govCovComposedOn(govCovPID, "a", govCovBase, "pypi.org")
 	b := govCovComposedOn(govCovBase, "b", govCovPID, "pypi.org")
-	if res := s.resolveForDiff([]types.GovernanceProfile{a, b}, govCovPID); res != nil {
+	if res := s.resolveForDiff([]types.GovernanceUnit{a, b}, govCovPID); res != nil {
 		t.Errorf("a cycle resolved to %+v", res)
 	}
 }
@@ -264,38 +264,38 @@ func TestGovCovProfileBaseState(t *testing.T) {
 	top := govCovStandalone(govCovTop, "top", "pypi.org")
 	mid := govCovComposedOn(govCovMid, "mid", govCovTop, "pypi.org")
 	leaf := govCovComposedOn(govCovPID, "leaf", govCovMid, "pypi.org")
-	all := []types.GovernanceProfile{top, mid, leaf}
+	all := []types.GovernanceUnit{top, mid, leaf}
 
-	state := profileBaseState(all, govCovPID, leaf.BaseProfileID).(map[string]any)
-	if state["self"].(types.GovernanceProfile).ID != govCovPID {
+	state := unitBaseState(all, govCovPID, leaf.ParentID).(map[string]any)
+	if state["self"].(types.GovernanceUnit).ID != govCovPID {
 		t.Errorf("self = %+v, want the row itself", state["self"])
 	}
-	bases := state["bases"].([]types.GovernanceProfile)
+	bases := state["bases"].([]types.GovernanceUnit)
 	if len(bases) != 2 || bases[0].ID != govCovMid || bases[1].ID != govCovTop {
 		t.Errorf("bases = %+v, want mid then top", bases)
 	}
 
-	state = profileBaseState(all, uuid.MustParse("dddddddd-0000-0000-0000-0000000000ff"), &govCovMid).(map[string]any)
-	if state["self"] != nil || len(state["bases"].([]types.GovernanceProfile)) != 2 {
-		t.Errorf("an absent row = self %v bases %d, want nil self and the chain it would compose on", state["self"], len(state["bases"].([]types.GovernanceProfile)))
+	state = unitBaseState(all, uuid.MustParse("dddddddd-0000-0000-0000-0000000000ff"), &govCovMid).(map[string]any)
+	if state["self"] != nil || len(state["bases"].([]types.GovernanceUnit)) != 2 {
+		t.Errorf("an absent row = self %v bases %d, want nil self and the chain it would compose on", state["self"], len(state["bases"].([]types.GovernanceUnit)))
 	}
 
 	missing := uuid.MustParse("dddddddd-0000-0000-0000-0000000000fe")
-	state = profileBaseState(all, govCovPID, &missing).(map[string]any)
-	if got := state["bases"].([]types.GovernanceProfile); got == nil || len(got) != 0 {
+	state = unitBaseState(all, govCovPID, &missing).(map[string]any)
+	if got := state["bases"].([]types.GovernanceUnit); got == nil || len(got) != 0 {
 		t.Errorf("a base that does not exist ends the chain with an empty, non-nil list, got %#v", got)
 	}
 
 	cyc := govCovComposedOn(govCovTop, "top", govCovPID, "pypi.org")
-	state = profileBaseState([]types.GovernanceProfile{cyc, mid, leaf}, govCovPID, leaf.BaseProfileID).(map[string]any)
-	if got := state["bases"].([]types.GovernanceProfile); len(got) != 2 {
+	state = unitBaseState([]types.GovernanceUnit{cyc, mid, leaf}, govCovPID, leaf.ParentID).(map[string]any)
+	if got := state["bases"].([]types.GovernanceUnit); len(got) != 2 {
 		t.Errorf("a cycle must end the walk at the row itself: %d bases", len(got))
 	}
 
 	// The hash a proposal stores moves when a base changes, which is what makes an approval stale.
-	changed := append([]types.GovernanceProfile(nil), all...)
+	changed := append([]types.GovernanceUnit(nil), all...)
 	changed[0].Name = "renamed"
-	if computeETag(profileBaseState(all, govCovPID, leaf.BaseProfileID)) == computeETag(profileBaseState(changed, govCovPID, leaf.BaseProfileID)) {
+	if computeETag(unitBaseState(all, govCovPID, leaf.ParentID)) == computeETag(unitBaseState(changed, govCovPID, leaf.ParentID)) {
 		t.Error("renaming a base left the base state unchanged")
 	}
 }
@@ -306,9 +306,9 @@ func TestGovCovProfileBaseState(t *testing.T) {
 func TestGovCovProfileWriteExemptComparesTheResolvedComposition(t *testing.T) {
 	s, _ := govCovServer(t, &govCovStore{})
 	base := govCovStandalone(govCovBase, "base", "pypi.org", "github.com")
-	all := []types.GovernanceProfile{base, govCovComposedOn(govCovPID, "p", govCovBase, "pypi.org", "github.com")}
+	all := []types.GovernanceUnit{base, govCovComposedOn(govCovPID, "p", govCovBase, "pypi.org", "github.com")}
 	body := func(inspection string) string {
-		return `{"name":"p","base_profile_id":"` + govCovBase.String() + `","overlay":{"allowed_domains":["pypi.org","github.com"],"llm_inspection":` + inspection + `}}`
+		return `{"name":"p","parent_id":"` + govCovBase.String() + `","overlay":{"allowed_domains":["pypi.org","github.com"],"llm_inspection":` + inspection + `}}`
 	}
 	for _, c := range []struct {
 		name, inspection string
@@ -322,8 +322,8 @@ func TestGovCovProfileWriteExemptComparesTheResolvedComposition(t *testing.T) {
 			if res.Ceiling.LLMInspection == nil {
 				t.Fatal("the resolved composition carries no inspection; the fixture is wrong")
 			}
-			if got := s.profileWriteExempt(context.Background(), all, p, res); got != c.want {
-				t.Errorf("profileWriteExempt = %v, want %v", got, c.want)
+			if got := s.unitWriteExempt(context.Background(), all, p, res); got != c.want {
+				t.Errorf("unitWriteExempt = %v, want %v", got, c.want)
 			}
 		})
 	}
@@ -335,15 +335,15 @@ func TestGovCovProfileWriteExemptComparesTheResolvedComposition(t *testing.T) {
 // a narrowing that keeps the name still applies, and an unreadable assignment list holds the rename.
 func TestGovCovProfileWriteExemptHoldsARenameThatMaySelect(t *testing.T) {
 	other := uuid.MustParse("dddddddd-0000-0000-0000-0000000000aa")
-	group := func(subject string, profile uuid.UUID, priority int) types.GovernanceAssignment {
-		return types.GovernanceAssignment{SubjectType: types.CapabilitySubjectGroup, Subject: subject, ProfileID: profile, Priority: priority}
+	group := func(subject string, profile uuid.UUID, priority int) types.GovernanceMembership {
+		return types.GovernanceMembership{SubjectType: types.CapabilitySubjectGroup, Subject: subject, UnitID: profile, Priority: priority}
 	}
-	tie := []types.GovernanceAssignment{group("eng", govCovPID, 5), group("ops", other, 5)}
+	tie := []types.GovernanceMembership{group("eng", govCovPID, 5), group("ops", other, 5)}
 	rename := `{"name":"renamed","ceiling":{"allowed_domains":["pypi.org","github.com"],"min_confinement_class":"CC2"}}`
 	renameNarrow := `{"name":"renamed","ceiling":{"allowed_domains":["pypi.org"],"min_confinement_class":"CC2"}}`
 	for _, c := range []struct {
 		name        string
-		assignments []types.GovernanceAssignment
+		assignments []types.GovernanceMembership
 		err         error
 		body        string
 		want        bool
@@ -351,19 +351,19 @@ func TestGovCovProfileWriteExemptHoldsARenameThatMaySelect(t *testing.T) {
 		{"a rename in an equal-priority group tie is held", tie, nil, rename, false},
 		{"a rename plus a narrowing in the tie is held", tie, nil, renameNarrow, false},
 		{"a narrowing that keeps the name still applies", tie, nil, govCovProfileBody("p", "pypi.org"), true},
-		{"a rename with the groups at different priorities applies", []types.GovernanceAssignment{group("eng", govCovPID, 5), group("ops", other, 4)}, nil, rename, true},
-		{"a rename whose tie is with a user row applies", []types.GovernanceAssignment{group("eng", govCovPID, 5),
-			{SubjectType: types.CapabilitySubjectUser, Subject: "u@corp.example", ProfileID: other, Priority: 5}}, nil, rename, true},
-		{"a rename when two groups share the profile itself applies", []types.GovernanceAssignment{group("eng", govCovPID, 5), group("ops", govCovPID, 5)}, nil, rename, true},
+		{"a rename with the groups at different priorities applies", []types.GovernanceMembership{group("eng", govCovPID, 5), group("ops", other, 4)}, nil, rename, true},
+		{"a rename whose tie is with a user row applies", []types.GovernanceMembership{group("eng", govCovPID, 5),
+			{SubjectType: types.CapabilitySubjectUser, Subject: "u@corp.example", UnitID: other, Priority: 5}}, nil, rename, true},
+		{"a rename when two groups share the profile itself applies", []types.GovernanceMembership{group("eng", govCovPID, 5), group("ops", govCovPID, 5)}, nil, rename, true},
 		{"a rename when the assignments cannot be read is held", nil, errors.New("boom"), rename, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s, _ := govCovServer(t, &govCovStore{assignments: c.assignments, assignErr: c.err})
-			all := []types.GovernanceProfile{govCovStandalone(govCovPID, "p", "pypi.org", "github.com"),
+			all := []types.GovernanceUnit{govCovStandalone(govCovPID, "p", "pypi.org", "github.com"),
 				govCovStandalone(other, "q", "pypi.org")}
 			p, res := govCovBuilt(t, s, all, govCovPID, c.body)
-			if got := s.profileWriteExempt(context.Background(), all, p, res); got != c.want {
-				t.Errorf("profileWriteExempt = %v, want %v", got, c.want)
+			if got := s.unitWriteExempt(context.Background(), all, p, res); got != c.want {
+				t.Errorf("unitWriteExempt = %v, want %v", got, c.want)
 			}
 		})
 	}
@@ -378,21 +378,21 @@ func TestGovCovProfileWriteExemptEmptiedUIApps(t *testing.T) {
 	docs := []types.UIApp{{Name: "docs", Port: 8000}}
 	own := govCovStandalone(govCovPID, "p", "pypi.org")
 	own.Ceiling.UIApps = docs
-	p, res := govCovBuilt(t, s, []types.GovernanceProfile{own}, govCovPID,
+	p, res := govCovBuilt(t, s, []types.GovernanceUnit{own}, govCovPID,
 		`{"name":"p","ceiling":{"allowed_domains":["pypi.org"],"min_confinement_class":"CC2","ui_apps":[]}}`)
-	if s.profileWriteExempt(context.Background(), []types.GovernanceProfile{own}, p, res) {
+	if s.unitWriteExempt(context.Background(), []types.GovernanceUnit{own}, p, res) {
 		t.Error("emptying a profile's own ui_apps applied without a second approver")
 	}
 
 	base := govCovStandalone(govCovBase, "base", "pypi.org")
 	base.Ceiling.UIApps = docs
-	all := []types.GovernanceProfile{base, govCovComposedOn(govCovPID, "p", govCovBase, "pypi.org")}
+	all := []types.GovernanceUnit{base, govCovComposedOn(govCovPID, "p", govCovBase, "pypi.org")}
 	p, res = govCovBuilt(t, s, all, govCovPID,
-		`{"name":"p","base_profile_id":"`+govCovBase.String()+`","overlay":{"allowed_domains":["pypi.org"],"ui_apps":[]}}`)
+		`{"name":"p","parent_id":"`+govCovBase.String()+`","overlay":{"allowed_domains":["pypi.org"],"ui_apps":[]}}`)
 	if !res.Limits.DenyUIApps || len(res.Ceiling.UIApps) != 1 {
 		t.Fatalf("resolved ui_apps = %+v, deny_ui_apps = %v; want the base's app and the denial", res.Ceiling.UIApps, res.Limits.DenyUIApps)
 	}
-	if !s.profileWriteExempt(context.Background(), all, p, res) {
+	if !s.unitWriteExempt(context.Background(), all, p, res) {
 		t.Error("an overlay that empties ui_apps, which resolves to a denial, was held")
 	}
 }
@@ -417,8 +417,8 @@ func TestGovCovBaseWriteStrandsOnlyADisjointUIAppsOverlay(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			child := govCovComposedOn(govCovPID, "child", govCovBase, "pypi.org")
 			child.Overlay.UIApps = &c.overlay
-			_, _, err := s.checkGraphWrite(edited, []types.GovernanceProfile{base, child})
-			var refusal *profileWriteError
+			_, _, err := s.checkGraphWrite(edited, []types.GovernanceUnit{base, child})
+			var refusal *unitWriteError
 			switch {
 			case c.wantCode == 0 && err != nil:
 				t.Fatalf("checkGraphWrite = %v, want no refusal", err)
@@ -433,11 +433,11 @@ func TestGovCovProfileWriteExempt(t *testing.T) {
 	s, _ := govCovServer(t, &govCovStore{})
 	cur := govCovStandalone(govCovPID, "p", "pypi.org", "github.com")
 	cur.Contact = &policyref.Contact{Owner: "platform"}
-	all := []types.GovernanceProfile{cur}
+	all := []types.GovernanceUnit{cur}
 	for _, c := range []struct {
 		name string
 		body string
-		all  []types.GovernanceProfile
+		all  []types.GovernanceUnit
 		want bool
 	}{
 		{"a metadata-only rename applies", `{"name":"renamed","ceiling":{"allowed_domains":["pypi.org","github.com"],"min_confinement_class":"CC2"}}`, all, true},
@@ -451,13 +451,13 @@ func TestGovCovProfileWriteExempt(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			p, res := govCovBuilt(t, s, c.all, govCovPID, c.body)
-			if got := s.profileWriteExempt(context.Background(), c.all, p, res); got != c.want {
-				t.Errorf("profileWriteExempt = %v, want %v", got, c.want)
+			if got := s.unitWriteExempt(context.Background(), c.all, p, res); got != c.want {
+				t.Errorf("unitWriteExempt = %v, want %v", got, c.want)
 			}
 		})
 	}
 	p, _ := govCovBuilt(t, s, all, govCovPID, govCovProfileBody("p", "pypi.org"))
-	if s.profileWriteExempt(context.Background(), all, p, nil) {
+	if s.unitWriteExempt(context.Background(), all, p, nil) {
 		t.Error("a write that did not resolve can never be exempt")
 	}
 }
@@ -486,7 +486,7 @@ func govCovDiff(t *testing.T, ch types.GovernanceChange) governanceDiffBody {
 func TestGovCovHoldProfileWriteStoresTheProposal(t *testing.T) {
 	t.Setenv(envGovernanceSecondHuman, "true")
 	super := govCovSession(t, "sub-super", "super@corp.example", oidc.RoleAdmin)
-	path := "/api/v1/governance/profiles/" + govCovPID.String()
+	path := "/api/v1/governance/units/" + govCovPID.String()
 	saved := types.GovernanceChange{ID: govCovChangeID, State: types.GovernanceChangePending}
 
 	t.Run("a create is held with only an after view", func(t *testing.T) {
@@ -494,14 +494,14 @@ func TestGovCovHoldProfileWriteStoresTheProposal(t *testing.T) {
 		s, h := govCovServer(t, st)
 		w := doSSO(t, s, http.MethodPut, path, super, govCovProfileBody("fresh", "pypi.org"))
 		ch := govCovHoldAnswer(t, w, st)
-		if ch.TargetKind != govKindProfile || ch.Op != "create" || ch.TargetKey != govCovPID.String() || ch.ProposedBy != "sub-super" {
+		if ch.TargetKind != govKindUnit || ch.Op != "create" || ch.TargetKey != govCovPID.String() || ch.ProposedBy != "sub-super" {
 			t.Errorf("stored change = %+v", ch)
 		}
-		if ch.BaseHash != computeETag(profileBaseState(nil, govCovPID, nil)) {
+		if ch.BaseHash != computeETag(unitBaseState(nil, govCovPID, nil)) {
 			t.Errorf("base hash = %s, want the empty graph's", ch.BaseHash)
 		}
 		d := govCovDiff(t, ch)
-		if d.Before != nil || d.After == nil || !reflect.DeepEqual(d.Changed, changedPaths(nil, profileDiffStored{Name: "fresh", Ceiling: types.RunPolicySpec{AllowedDomains: []string{"pypi.org"}, MinConfinementClass: types.CC2}})) {
+		if d.Before != nil || d.After == nil || !reflect.DeepEqual(d.Changed, changedPaths(nil, unitDiffStored{Name: "fresh", Ceiling: types.RunPolicySpec{AllowedDomains: []string{"pypi.org"}, MinConfinementClass: types.CC2}})) {
 			t.Errorf("diff = %s", ch.Diff)
 		}
 		// R1-0098: the omission warning a direct save returns rides in the diff, for the proposer and the approver.
@@ -519,7 +519,7 @@ func TestGovCovHoldProfileWriteStoresTheProposal(t *testing.T) {
 	t.Run("a widening update is held with before and after", func(t *testing.T) {
 		cur := govCovStandalone(govCovPID, "p", "pypi.org")
 		cur.Contact = &policyref.Contact{Owner: "platform"}
-		st := &govCovStore{proposeSaved: saved, profiles: []types.GovernanceProfile{cur}}
+		st := &govCovStore{proposeSaved: saved, profiles: []types.GovernanceUnit{cur}}
 		s, _ := govCovServer(t, st)
 		w := doSSO(t, s, http.MethodPut, path, super, govCovProfileBody("p", "pypi.org", "github.com"))
 		ch := govCovHoldAnswer(t, w, st)
@@ -537,13 +537,13 @@ func TestGovCovHoldProfileWriteStoresTheProposal(t *testing.T) {
 
 	t.Run("a narrowing update applies directly and holds nothing", func(t *testing.T) {
 		cur := govCovStandalone(govCovPID, "p", "pypi.org", "github.com")
-		st := &govCovStore{profiles: []types.GovernanceProfile{cur}}
+		st := &govCovStore{profiles: []types.GovernanceUnit{cur}}
 		s, h := govCovServer(t, st)
 		w := doSSO(t, s, http.MethodPut, path, super, govCovProfileBody("p", "pypi.org"))
 		if w.Code != http.StatusOK || len(st.proposed) != 0 {
 			t.Fatalf("narrowing = %d, proposals %d, want a direct 200", w.Code, len(st.proposed))
 		}
-		if got := govCovAuditActions(h); !reflect.DeepEqual(got, []string{"governance.profile.write"}) {
+		if got := govCovAuditActions(h); !reflect.DeepEqual(got, []string{"governance.unit.write"}) {
 			t.Errorf("audit rows = %v", got)
 		}
 	})
@@ -555,15 +555,15 @@ func TestGovCovHoldProfileWriteStoresTheProposal(t *testing.T) {
 		if w.Code != http.StatusOK || len(st.proposed) != 0 {
 			t.Fatalf("admin token write = %d, proposals %d", w.Code, len(st.proposed))
 		}
-		if got := govCovAuditActions(h); !reflect.DeepEqual(got, []string{"governance.profile.write", "governance.change.bypass"}) {
+		if got := govCovAuditActions(h); !reflect.DeepEqual(got, []string{"governance.unit.write", "governance.change.bypass"}) {
 			t.Errorf("audit rows = %v", got)
 		}
 	})
 }
 
 // govCovReplayPayload decodes a stored profile payload the way an approval does.
-func govCovReplayPayload(ch types.GovernanceChange) (governanceProfileRequest, error) {
-	req, msg := profileRequestFromPayload(ch.Payload)
+func govCovReplayPayload(ch types.GovernanceChange) (governanceUnitRequest, error) {
+	req, msg := unitRequestFromPayload(ch.Payload)
 	if msg != "" {
 		return req, errors.New(msg)
 	}
@@ -573,7 +573,7 @@ func govCovReplayPayload(ch types.GovernanceChange) (governanceProfileRequest, e
 func TestGovCovHoldProfileDelete(t *testing.T) {
 	t.Setenv(envGovernanceSecondHuman, "true")
 	super := govCovSession(t, "sub-super", "super@corp.example", oidc.RoleAdmin)
-	path := "/api/v1/governance/profiles/" + govCovPID.String()
+	path := "/api/v1/governance/units/" + govCovPID.String()
 	saved := types.GovernanceChange{ID: govCovChangeID}
 
 	t.Run("a delete is held as a delete of the id, and never reaches the direct delete (the dry run is skipped, so the before view is of the empty graph)", func(t *testing.T) {
@@ -599,9 +599,9 @@ func TestGovCovHoldProfileDelete(t *testing.T) {
 		wantReason string
 		wantBody   string
 	}{
-		{"an unknown profile is the direct delete's own 404", store.ErrNotFound, http.StatusNotFound, reasonGovernanceProfileNotFoundByID, ""},
-		{"a profile with children names them", &store.ErrProfileHasChildren{Names: []string{"b-child", "a-child"}}, http.StatusConflict, reasonGovernanceProfileInUse, "b-child, a-child"},
-		{"an assigned profile", store.ErrConflict, http.StatusConflict, reasonGovernanceProfileInUse, "still assigned"},
+		{"an unknown profile is the direct delete's own 404", store.ErrNotFound, http.StatusNotFound, reasonGovernanceUnitNotFoundByID, ""},
+		{"a profile with children names them", &store.ErrProfileHasChildren{Names: []string{"b-child", "a-child"}}, http.StatusConflict, reasonGovernanceUnitInUse, "b-child, a-child"},
+		{"an assigned profile", store.ErrConflict, http.StatusConflict, reasonGovernanceUnitInUse, "still assigned"},
 		{"a store failure", errors.New("pg: down"), http.StatusInternalServerError, reasonInternalError, ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -640,30 +640,30 @@ func TestGovCovHoldProfileDelete(t *testing.T) {
 
 func TestGovCovAssignmentKey(t *testing.T) {
 	for _, subject := range []string{"alice@corp.example", "", "has:colon:inside", "a b"} {
-		key := assignmentKey(types.CapabilitySubjectUser, subject)
-		st, sub, ok := splitAssignmentKey(key)
+		key := membershipKey(types.CapabilitySubjectUser, subject)
+		st, sub, ok := splitMembershipKey(key)
 		if !ok || st != "user" || sub != subject {
 			t.Errorf("key %q split into (%q, %q, %v), want (user, %q, true)", key, st, sub, ok, subject)
 		}
 	}
-	if _, _, ok := splitAssignmentKey("nocolon"); ok {
+	if _, _, ok := splitMembershipKey("nocolon"); ok {
 		t.Error("a key with no separator must not split")
 	}
 }
 
 func TestGovCovAssignmentDiffViewAndState(t *testing.T) {
 	s, _ := govCovServer(t, &govCovStore{})
-	a := types.GovernanceAssignment{SubjectType: types.CapabilitySubjectUser, Subject: "u@corp.example", ProfileID: govCovPID, Priority: 4}
+	a := types.GovernanceMembership{SubjectType: types.CapabilitySubjectUser, Subject: "u@corp.example", UnitID: govCovPID, Priority: 4}
 
-	if v := s.newAssignmentDiffView(a, nil); v.Profile != nil || v.Priority != 4 || v.Subject != "u@corp.example" || v.ProfileID != govCovPID {
+	if v := s.newMembershipDiffView(a, nil); v.Unit != nil || v.Priority != 4 || v.Subject != "u@corp.example" || v.UnitID != govCovPID {
 		t.Errorf("an assignment with no chain = %+v, want the assignment fields and no profile", v)
 	}
 
 	standalone := govCovStandalone(govCovPID, "p", "pypi.org")
 	standalone.Ceiling.LLMInspection = &types.LLMInspectionSpec{WorkspaceSecretValues: []string{"s3cret-value"}}
-	v := s.newAssignmentDiffView(a, []types.GovernanceProfile{standalone})
-	if v.Profile == nil || v.Profile.Name != "p" || v.Profile.Error != "" || v.Profile.ID != govCovPID {
-		t.Fatalf("profile view = %+v", v.Profile)
+	v := s.newMembershipDiffView(a, []types.GovernanceUnit{standalone})
+	if v.Unit == nil || v.Unit.Name != "p" || v.Unit.Error != "" || v.Unit.ID != govCovPID {
+		t.Fatalf("profile view = %+v", v.Unit)
 	}
 	if raw, _ := json.Marshal(v); strings.Contains(string(raw), "s3cret-value") {
 		t.Errorf("the assignment view carries a secret value: %s", raw)
@@ -671,23 +671,23 @@ func TestGovCovAssignmentDiffViewAndState(t *testing.T) {
 
 	// A chain that cannot compose still names the profile, with its stored ceiling and the reason.
 	broken := govCovComposedOn(govCovPID, "p", govCovBase, "pypi.org")
-	v = s.newAssignmentDiffView(a, []types.GovernanceProfile{broken})
-	if v.Profile == nil || v.Profile.Error == "" || v.Profile.Name != "p" {
-		t.Errorf("a chain that does not compose = %+v, want the profile with an error", v.Profile)
+	v = s.newMembershipDiffView(a, []types.GovernanceUnit{broken})
+	if v.Unit == nil || v.Unit.Error == "" || v.Unit.Name != "p" {
+		t.Errorf("a chain that does not compose = %+v, want the profile with an error", v.Unit)
 	}
 
-	none := assignmentState{}
+	none := membershipState{}
 	if got := none.state().(map[string]any); got["assignment"] != nil {
 		t.Errorf("state with no assignment = %v", got)
 	}
 	cur := a
-	withRow := assignmentState{current: &cur, chain: []types.GovernanceProfile{standalone}}
+	withRow := membershipState{current: &cur, chain: []types.GovernanceUnit{standalone}}
 	if withRow.hash() == none.hash() || withRow.hash() != computeETag(withRow.state()) {
 		t.Error("the state hash must differ with a row and equal the hash of its state")
 	}
 	renamed := standalone
 	renamed.Name = "q"
-	if (assignmentState{current: &cur, chain: []types.GovernanceProfile{renamed}}).hash() == withRow.hash() {
+	if (membershipState{current: &cur, chain: []types.GovernanceUnit{renamed}}).hash() == withRow.hash() {
 		t.Error("a rename of the referenced profile must change the base hash")
 	}
 }
@@ -696,7 +696,7 @@ func TestGovCovProfileChainQ(t *testing.T) {
 	ctx := httptest.NewRequest(http.MethodGet, "/", nil).Context()
 
 	q := &govCovQuerier{}
-	chain, err := profileChainQ(ctx, q, govCovPID, true)
+	chain, err := unitChainQ(ctx, q, govCovPID, true)
 	if err != nil || chain == nil || len(chain) != 0 {
 		t.Fatalf("a missing profile = %#v, %v; want an empty non-nil chain", chain, err)
 	}
@@ -705,13 +705,13 @@ func TestGovCovProfileChainQ(t *testing.T) {
 	}
 
 	q = &govCovQuerier{}
-	if chain, err := profileChainQ(ctx, q, uuid.Nil, false); err != nil || len(chain) != 0 || len(q.seen) != 0 {
+	if chain, err := unitChainQ(ctx, q, uuid.Nil, false); err != nil || len(chain) != 0 || len(q.seen) != 0 {
 		t.Errorf("the nil id read %v and returned %v, %v; want no read at all", q.seen, chain, err)
 	}
 
 	boom := errors.New("pg: down")
 	q = &govCovQuerier{rowErr: func(string) error { return boom }}
-	if _, err := profileChainQ(ctx, q, govCovPID, false); !errors.Is(err, boom) {
+	if _, err := unitChainQ(ctx, q, govCovPID, false); !errors.Is(err, boom) {
 		t.Errorf("a failing read = %v, want the injected error", err)
 	}
 }
@@ -721,26 +721,26 @@ func TestGovCovReadAssignmentState(t *testing.T) {
 	boom := errors.New("pg: down")
 
 	q := &govCovQuerier{}
-	st, err := readAssignmentState(ctx, q, "user", "u", govCovPID, false)
+	st, err := readMembershipState(ctx, q, "user", "u", govCovPID, false)
 	if err != nil || st.current != nil || st.chain == nil || len(st.chain) != 0 {
 		t.Fatalf("nothing stored = %+v, %v; want no assignment and an empty chain", st, err)
 	}
-	if len(q.seen) != 2 || !strings.Contains(q.seen[0], "governance_assignments") || !strings.Contains(q.seen[1], "governance_profiles") {
+	if len(q.seen) != 2 || !strings.Contains(q.seen[0], "governance_memberships") || !strings.Contains(q.seen[1], "governance_units") {
 		t.Errorf("statements = %v, want the assignment read then the profile read", q.seen)
 	}
 
 	q = &govCovQuerier{rowErr: func(string) error { return boom }}
-	if _, err := readAssignmentState(ctx, q, "user", "u", govCovPID, true); !errors.Is(err, boom) || len(q.seen) != 1 {
+	if _, err := readMembershipState(ctx, q, "user", "u", govCovPID, true); !errors.Is(err, boom) || len(q.seen) != 1 {
 		t.Errorf("a failed assignment read = %v after %d statements, want the error and no profile read", err, len(q.seen))
 	}
 
 	q = &govCovQuerier{rowErr: func(sql string) error {
-		if strings.Contains(sql, "governance_profiles") {
+		if strings.Contains(sql, "governance_units") {
 			return boom
 		}
 		return pgx.ErrNoRows
 	}}
-	if _, err := readAssignmentState(ctx, q, "user", "u", govCovPID, false); !errors.Is(err, boom) {
+	if _, err := readMembershipState(ctx, q, "user", "u", govCovPID, false); !errors.Is(err, boom) {
 		t.Errorf("a failed chain read = %v, want the injected error", err)
 	}
 }

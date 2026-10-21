@@ -602,7 +602,7 @@ func (s PG) ListUserDriveGrantsPage(ctx context.Context, p Page) ([]types.UserDr
 
 // ResolveUserDrive returns THE ONE drive that applies to a caller, the winning grant, and its tier
 // — or ErrNotFound. The whole precedence rule lives in the ORDER BY (subjectMatch/subjectPrecedence,
-// shared with ResolveGovernanceProfile since both rank the same subject vocabulary): one indexed
+// shared with ResolveGovernanceUnit since both rank the same subject vocabulary): one indexed
 // read on UNIQUE(subject_type, subject), so there's no second Go implementation to mis-order.
 //
 // Disabled grants stay in the query; the winner's own `enabled` decides PAUSED vs MOUNTED. Excluding
@@ -611,7 +611,7 @@ func (s PG) ListUserDriveGrantsPage(ctx context.Context, p Page) ([]types.UserDr
 // one stopping (DESIGN §2.2).
 //
 // userSubjects/groups are normalized from nil to empty: a nil Go slice binds as SQL NULL, and
-// `x = ANY(NULL)` is NULL rather than false — same reasoning as ResolveGovernanceProfile.
+// `x = ANY(NULL)` is NULL rather than false — same reasoning as ResolveGovernanceUnit.
 //
 // userType is the caller's one type id; "" matches no row.
 func (s PG) ResolveUserDrive(ctx context.Context, userSubjects, groups []string, userType string) (

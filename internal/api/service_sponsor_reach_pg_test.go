@@ -369,20 +369,20 @@ func TestServiceIdentity_SponsorAttachKeepsTheDoors(t *testing.T) {
 	if e.h.srv.cfg.GovernAdminRuns {
 		t.Fatal("the fixture must run with WARDYN_GOVERN_ADMIN_RUNS off")
 	}
-	profile, err := e.st.UpsertGovernanceProfile(context.Background(), types.GovernanceProfile{
+	profile, err := e.st.UpsertGovernanceUnit(context.Background(), types.GovernanceUnit{
 		ID: uuid.New(), Name: "walled", Ceiling: govProfileSpec(), Limits: types.GovernanceLimits{DenyInteractive: true},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	walled := func(r *types.AgentRun) { r.GovernanceProfileID = &profile.ID }
+	walled := func(r *types.AgentRun) { r.UnitID = &profile.ID }
 	e.grant(t, "user", "boss@corp.example", "allow", featureServiceAttach)
 	e.grant(t, "user", "sponsor@corp.example", "allow", featureServiceAttach)
 	attach := func(run types.AgentRun, tok string) *httptest.ResponseRecorder {
 		return do(t, e.h.srv, http.MethodGet, "/api/v1/runs/"+run.ID.String()+"/attach?ticket="+tok, "", "")
 	}
 	refusedByProfile := func(w *httptest.ResponseRecorder) bool {
-		return w.Code == http.StatusForbidden && errorReason(w) == string(authz.ReasonGovernanceProfile)
+		return w.Code == http.StatusForbidden && errorReason(w) == string(authz.ReasonGovernanceUnit)
 	}
 
 	for _, c := range []struct {
@@ -393,7 +393,7 @@ func TestServiceIdentity_SponsorAttachKeepsTheDoors(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			closed := e.seedRun(t, c.owner, walled)
 			if w := attach(closed, ticketOf(t, e.mintTicket(t, c.as, closed))); !refusedByProfile(w) {
-				t.Errorf("deny_interactive run: %d %s, want 403 governance_profile", w.Code, w.Body.String())
+				t.Errorf("deny_interactive run: %d %s, want 403 governance_unit", w.Code, w.Body.String())
 			}
 			open := e.seedRun(t, c.owner, nil)
 			if w := attach(open, ticketOf(t, e.mintTicket(t, c.as, open))); w.Code != http.StatusUpgradeRequired {

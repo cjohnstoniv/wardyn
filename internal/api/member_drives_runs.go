@@ -85,10 +85,10 @@ func (s *Server) memberDriveCreateState(r *http.Request) *client.MemberDriveCrea
 		out.Allowed = true
 	case refusal.body.Reason == reasonMemberDrivesDisabled:
 		out.Reason = client.MemberDriveCreateDisabled
-	case refusal.body.Reason == reasonMemberDrivesDeniedByProfile:
-		out.Reason = client.MemberDriveCreateDeniedByProfile
-		if c, err := s.effectiveCeiling(ctx); err == nil && c.Profile != nil {
-			out.DeniedByProfile = c.Profile.Name
+	case refusal.body.Reason == reasonMemberDrivesDeniedByUnit:
+		out.Reason = client.MemberDriveCreateDeniedByUnit
+		if c, err := s.effectiveCeiling(ctx); err == nil && c.Unit != nil {
+			out.DeniedByUnit = c.Unit.Name
 		}
 	case refusal.body.Reason == reasonMemberDriveUnsupported:
 		out.Reason = client.MemberDriveCreateUnsupported

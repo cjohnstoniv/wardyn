@@ -100,8 +100,8 @@ func TestGovernanceCeiling_TruncatedSnapshotRefusesNotWidens(t *testing.T) {
 			if tc.wantErr {
 				if !errors.Is(err, errGroupsSnapshotStale) {
 					prof := "<deployment>"
-					if err == nil && got.Profile != nil {
-						prof = got.Profile.Name
+					if err == nil && got.Unit != nil {
+						prof = got.Unit.Name
 					}
 					t.Fatalf("err = %v (ceiling=%s); want errGroupsSnapshotStale — a truncated snapshot was SERVED", err, prof)
 				}
@@ -126,8 +126,8 @@ func TestGovernanceCeiling_TruncatedSnapshotRefusesNotWidens(t *testing.T) {
 				t.Fatalf("effectiveCeiling: %v; want served", err)
 			}
 			gotProf := ""
-			if got.Profile != nil {
-				gotProf = got.Profile.Name
+			if got.Unit != nil {
+				gotProf = got.Unit.Name
 			}
 			if gotProf != tc.wantProf {
 				t.Errorf("profile = %q, want %q", gotProf, tc.wantProf)
@@ -215,7 +215,7 @@ func TestGovernanceCeiling_TruncatedSnapshotRefusedAtTheReadSite(t *testing.T) {
 		}
 		complete := false
 		st.token.GroupsTruncated = &complete
-		if w := call(); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"governance_profile_name":"everyone"`) {
+		if w := call(); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"unit_name":"everyone"`) {
 			t.Fatalf("complete token = %d, want 200 under profile everyone: %s", w.Code, w.Body.String())
 		}
 	})

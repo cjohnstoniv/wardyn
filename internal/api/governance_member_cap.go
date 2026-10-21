@@ -25,13 +25,13 @@ func (s *Server) memberCapOf(authored types.ResourceLimits, limits types.Governa
 }
 
 // resolvedMemberCap is memberCapOf for a resolved profile.
-func (s *Server) resolvedMemberCap(p *ResolvedProfile) types.ResourceLimits {
+func (s *Server) resolvedMemberCap(p *ResolvedUnit) types.ResourceLimits {
 	return s.memberCapOf(p.AuthoredResources, p.Limits, p.Ceiling.Resources)
 }
 
 // authoredAfter is the authored size once row's overlay is applied over a base that authored base:
 // a size the overlay names is authored by the chain, and the meet's answer for that field.
-func authoredAfter(base types.ResourceLimits, row types.GovernanceProfile, res composer.Authority) types.ResourceLimits {
+func authoredAfter(base types.ResourceLimits, row types.GovernanceUnit, res composer.Authority) types.ResourceLimits {
 	if row.Overlay == nil || row.Overlay.Resources == nil || res.Ceiling.Resources == nil {
 		return base
 	}

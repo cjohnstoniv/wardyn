@@ -238,9 +238,9 @@ type bootFlags struct {
 	// gated on (legacy, still boot-warned separately).
 	oidcAllowEmailMappings *bool
 	// Three default-off tightenings, each fed to the api.Config field of the same name.
-	capabilityGrantsVerifiedEmail    *bool
-	governanceProfilePutExistingOnly *bool
-	egressHostPortGrantsInert        *bool
+	capabilityGrantsVerifiedEmail *bool
+	governanceUnitPutExistingOnly *bool
+	egressHostPortGrantsInert     *bool
 
 	// Directory autocomplete (§I / PF-29), strictly OPT-IN. dirProvider empty is
 	// the whole feature off: no connector, no Graph reach, every "who" field
@@ -546,8 +546,8 @@ func parseBootFlags() *bootFlags {
 		oidcAllowEmailMappings:  flagBool("oidc-allow-email-mappings", "WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS", false, "allow an email-shaped value on a console People-step role mapping (POST /access/mappings); refused by default in favor of an App Role or group key (default false)"),
 		capabilityGrantsVerifiedEmail: flagBool("capability-grants-verified-email", "WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL", false,
 			"a capability allow grant written for a person's email matches them only when sign-in verifies the email (WARDYN_OIDC_EMAIL_DOMAINS or WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED) or WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS is on; deny grants match either way (default false: the match is kept and logged)"),
-		governanceProfilePutExistingOnly: flagBool("governance-profile-put-existing-only", "WARDYN_GOVERNANCE_PROFILE_PUT_EXISTING_ONLY", false,
-			"PUT /api/v1/governance/profiles/{id} replaces an existing profile only and answers 404 for an id no profile holds; create through POST (default false: a PUT creates at the id and is logged)"),
+		governanceUnitPutExistingOnly: flagBool("governance-unit-put-existing-only", "WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY", false,
+			"PUT /api/v1/governance/units/{id} replaces an existing profile only and answers 404 for an id no profile holds; create through POST (default false: a PUT creates at the id and is logged)"),
 		egressHostPortGrantsInert: flagBool("egress-host-port-grants-inert", "WARDYN_EGRESS_HOST_PORT_GRANTS_INERT", false,
 			"a stored egress_host allow grant whose value carries a :port is inert: marked on the Permissions read and never matched; deny grants keep matching (default false: matched by host and logged)"),
 

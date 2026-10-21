@@ -104,7 +104,7 @@ func TestSourceScanLaneResolvesTheActingPrincipalsCeiling(t *testing.T) {
 				auditDump(audit.events, run.ID))
 		}
 		var got struct {
-			Profile      string   `json:"profile"`
+			Profile      string   `json:"unit"`
 			DroppedLanes []string `json:"dropped_broker_lanes"`
 		}
 		if err := json.Unmarshal(ev.Data, &got); err != nil {

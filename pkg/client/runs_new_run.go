@@ -417,7 +417,7 @@ type ManagedSettingsFact struct {
 	// profile or organisation, and Profile names the profile.
 	Locked   bool   `json:"locked,omitempty"`
 	LockedBy string `json:"locked_by,omitempty"`
-	Profile  string `json:"profile,omitempty"`
+	Unit     string `json:"unit,omitempty"`
 }
 
 // TelemetryFact says whether agent telemetry is off and which variables Wardyn

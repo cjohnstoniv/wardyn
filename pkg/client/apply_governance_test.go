@@ -48,15 +48,15 @@ func (g *govServer) handler(t *testing.T) http.HandlerFunc {
 		switch {
 		case key == "GET /api/v1/governance":
 			writeJSON(w, http.StatusOK, g.doc)
-		case key == "POST /api/v1/governance/profiles":
-			writeJSON(w, http.StatusCreated, client.GovernanceProfileResponse{
-				Profile: client.GovernanceProfile{ID: uuid.New(), Name: "fresh"}})
-		case strings.HasPrefix(key, "PUT /api/v1/governance/profiles/"):
-			id := uuid.MustParse(strings.TrimPrefix(key, "PUT /api/v1/governance/profiles/"))
-			writeJSON(w, http.StatusOK, client.GovernanceProfileResponse{
-				Profile: client.GovernanceProfile{ID: id, Name: "kept"}})
-		case key == "POST /api/v1/governance/assignments":
-			writeJSON(w, http.StatusOK, client.GovernanceAssignment{ID: uuid.New()})
+		case key == "POST /api/v1/governance/units":
+			writeJSON(w, http.StatusCreated, client.GovernanceUnitResponse{
+				Unit: client.GovernanceUnit{ID: uuid.New(), Name: "fresh"}})
+		case strings.HasPrefix(key, "PUT /api/v1/governance/units/"):
+			id := uuid.MustParse(strings.TrimPrefix(key, "PUT /api/v1/governance/units/"))
+			writeJSON(w, http.StatusOK, client.GovernanceUnitResponse{
+				Unit: client.GovernanceUnit{ID: id, Name: "kept"}})
+		case key == "POST /api/v1/governance/memberships":
+			writeJSON(w, http.StatusOK, client.GovernanceMembership{ID: uuid.New()})
 		case r.Method == http.MethodDelete:
 			w.WriteHeader(http.StatusNoContent)
 		default:
@@ -76,12 +76,12 @@ func newGovServer(t *testing.T, doc client.GovernanceDocument) (*govServer, *cli
 func TestApplyGovernance_ContactRidesTheWriteAndKeepsAnUnchangedProfileAWriteOnlyWhenItDiffers(t *testing.T) {
 	id := uuid.New()
 	stored := client.PolicyContact{Owner: "platform", Email: "p@example.com"}
-	existing := client.GovernanceProfile{ID: id, Name: "kept", Contact: &stored}
+	existing := client.GovernanceUnit{ID: id, Name: "kept", Contact: &stored}
 
 	t.Run("nil contact leaves the stored one alone: no write", func(t *testing.T) {
-		g, c := newGovServer(t, client.GovernanceDocument{Profiles: []client.GovernanceProfile{existing}})
-		in := client.GovernanceProfile{Name: "kept"} // an older document that never sets Contact
-		if _, err := c.ApplyGovernance(context.Background(), client.GovernanceDocument{Profiles: []client.GovernanceProfile{in}}, false); err != nil {
+		g, c := newGovServer(t, client.GovernanceDocument{Units: []client.GovernanceUnit{existing}})
+		in := client.GovernanceUnit{Name: "kept"} // an older document that never sets Contact
+		if _, err := c.ApplyGovernance(context.Background(), client.GovernanceDocument{Units: []client.GovernanceUnit{in}}, false); err != nil {
 			t.Fatal(err)
 		}
 		if len(g.writes) != 0 {
@@ -90,10 +90,10 @@ func TestApplyGovernance_ContactRidesTheWriteAndKeepsAnUnchangedProfileAWriteOnl
 	})
 
 	t.Run("an identical contact is a no-op", func(t *testing.T) {
-		g, c := newGovServer(t, client.GovernanceDocument{Profiles: []client.GovernanceProfile{existing}})
+		g, c := newGovServer(t, client.GovernanceDocument{Units: []client.GovernanceUnit{existing}})
 		same := stored
-		in := client.GovernanceProfile{Name: "kept", Contact: &same}
-		if _, err := c.ApplyGovernance(context.Background(), client.GovernanceDocument{Profiles: []client.GovernanceProfile{in}}, false); err != nil {
+		in := client.GovernanceUnit{Name: "kept", Contact: &same}
+		if _, err := c.ApplyGovernance(context.Background(), client.GovernanceDocument{Units: []client.GovernanceUnit{in}}, false); err != nil {
 			t.Fatal(err)
 		}
 		if len(g.writes) != 0 {
@@ -102,13 +102,13 @@ func TestApplyGovernance_ContactRidesTheWriteAndKeepsAnUnchangedProfileAWriteOnl
 	})
 
 	t.Run("a different contact is PUT to the existing id with the contact in the body", func(t *testing.T) {
-		g, c := newGovServer(t, client.GovernanceDocument{Profiles: []client.GovernanceProfile{existing}})
+		g, c := newGovServer(t, client.GovernanceDocument{Units: []client.GovernanceUnit{existing}})
 		changed := client.PolicyContact{Owner: "security"}
-		in := client.GovernanceProfile{Name: "kept", Contact: &changed}
-		if _, err := c.ApplyGovernance(context.Background(), client.GovernanceDocument{Profiles: []client.GovernanceProfile{in}}, false); err != nil {
+		in := client.GovernanceUnit{Name: "kept", Contact: &changed}
+		if _, err := c.ApplyGovernance(context.Background(), client.GovernanceDocument{Units: []client.GovernanceUnit{in}}, false); err != nil {
 			t.Fatal(err)
 		}
-		key := "PUT /api/v1/governance/profiles/" + id.String()
+		key := "PUT /api/v1/governance/units/" + id.String()
 		body, ok := g.bodies[key]
 		if !ok {
 			t.Fatalf("writes = %v, want %s", g.writes, key)
@@ -125,13 +125,13 @@ func TestApplyGovernance_ContactRidesTheWriteAndKeepsAnUnchangedProfileAWriteOnl
 func TestApplyGovernance_FailuresNameTheStepAndStopThere(t *testing.T) {
 	profID, asgID := uuid.New(), uuid.New()
 	populated := client.GovernanceDocument{
-		Profiles:    []client.GovernanceProfile{{ID: profID, Name: "stale"}},
-		Assignments: []client.GovernanceAssignment{{ID: asgID, SubjectType: "user", Subject: "old@example.com", ProfileID: profID}},
+		Units:       []client.GovernanceUnit{{ID: profID, Name: "stale"}},
+		Memberships: []client.GovernanceMembership{{ID: asgID, SubjectType: "user", Subject: "old@example.com", UnitID: profID}},
 	}
 	incoming := func() client.GovernanceDocument {
 		return client.GovernanceDocument{
-			Profiles:    []client.GovernanceProfile{{Name: "fresh"}},
-			Assignments: []client.GovernanceAssignment{{SubjectType: "user", Subject: "new@example.com"}},
+			Units:       []client.GovernanceUnit{{Name: "fresh"}},
+			Memberships: []client.GovernanceMembership{{SubjectType: "user", Subject: "new@example.com"}},
 		}
 	}
 	cases := []struct {
@@ -141,13 +141,13 @@ func TestApplyGovernance_FailuresNameTheStepAndStopThere(t *testing.T) {
 	}{
 		{"read current state", "GET /api/v1/governance", "read current governance state", false,
 			[]string{"POST", "PUT", "DELETE"}},
-		{"profile write", "POST /api/v1/governance/profiles", `apply governance profile "fresh"`, false,
-			[]string{"POST /api/v1/governance/assignments", "DELETE"}},
-		{"assignment write", "POST /api/v1/governance/assignments", "apply governance assignment", true,
+		{"profile write", "POST /api/v1/governance/units", `apply governance profile "fresh"`, false,
+			[]string{"POST /api/v1/governance/memberships", "DELETE"}},
+		{"assignment write", "POST /api/v1/governance/memberships", "apply governance assignment", true,
 			[]string{"DELETE"}},
-		{"assignment prune", "DELETE /api/v1/governance/assignments/", "prune governance assignment", true,
-			[]string{"DELETE /api/v1/governance/profiles/"}},
-		{"profile prune", "DELETE /api/v1/governance/profiles/", `prune governance profile "stale"`, true, nil},
+		{"assignment prune", "DELETE /api/v1/governance/memberships/", "prune governance assignment", true,
+			[]string{"DELETE /api/v1/governance/units/"}},
+		{"profile prune", "DELETE /api/v1/governance/units/", `prune governance profile "stale"`, true, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -157,7 +157,7 @@ func TestApplyGovernance_FailuresNameTheStepAndStopThere(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err = %v, want it to contain %q", err, tc.want)
 			}
-			if len(got.Profiles) != 0 || len(got.Assignments) != 0 {
+			if len(got.Units) != 0 || len(got.Memberships) != 0 {
 				t.Fatalf("a failed apply returned a document: %+v", got)
 			}
 			for _, w := range g.writes {
@@ -174,22 +174,22 @@ func TestApplyGovernance_FailuresNameTheStepAndStopThere(t *testing.T) {
 func TestApplyGovernance_PruneDeletesAssignmentsBeforeProfilesAndOnlyWhatTheDocOmits(t *testing.T) {
 	keepID, dropID, asgKeep, asgDrop := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	g, c := newGovServer(t, client.GovernanceDocument{
-		Profiles: []client.GovernanceProfile{{ID: keepID, Name: "kept"}, {ID: dropID, Name: "dropped"}},
-		Assignments: []client.GovernanceAssignment{
-			{ID: asgKeep, SubjectType: "user", Subject: "a", ProfileID: keepID},
-			{ID: asgDrop, SubjectType: "user", Subject: "b", ProfileID: dropID},
+		Units: []client.GovernanceUnit{{ID: keepID, Name: "kept"}, {ID: dropID, Name: "dropped"}},
+		Memberships: []client.GovernanceMembership{
+			{ID: asgKeep, SubjectType: "user", Subject: "a", UnitID: keepID},
+			{ID: asgDrop, SubjectType: "user", Subject: "b", UnitID: dropID},
 		},
 	})
 	doc := client.GovernanceDocument{
-		Profiles:    []client.GovernanceProfile{{ID: keepID, Name: "kept"}},
-		Assignments: []client.GovernanceAssignment{{SubjectType: "user", Subject: "a", ProfileID: keepID}},
+		Units:       []client.GovernanceUnit{{ID: keepID, Name: "kept"}},
+		Memberships: []client.GovernanceMembership{{SubjectType: "user", Subject: "a", UnitID: keepID}},
 	}
 	if _, err := c.ApplyGovernance(context.Background(), doc, true); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{
-		"DELETE /api/v1/governance/assignments/" + asgDrop.String(),
-		"DELETE /api/v1/governance/profiles/" + dropID.String(),
+		"DELETE /api/v1/governance/memberships/" + asgDrop.String(),
+		"DELETE /api/v1/governance/units/" + dropID.String(),
 	}
 	if strings.Join(g.writes, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("writes = %v, want exactly %v (assignments first, nothing the doc names)", g.writes, want)
@@ -198,10 +198,10 @@ func TestApplyGovernance_PruneDeletesAssignmentsBeforeProfilesAndOnlyWhatTheDocO
 
 func TestApplyGovernanceResult_PartialFailureReportsStepsSoFar(t *testing.T) {
 	g, c := newGovServer(t, client.GovernanceDocument{})
-	g.failOn = "POST /api/v1/governance/assignments"
+	g.failOn = "POST /api/v1/governance/memberships"
 	doc := client.GovernanceDocument{
-		Profiles:    []client.GovernanceProfile{{Name: "fresh"}},
-		Assignments: []client.GovernanceAssignment{{SubjectType: "user", Subject: "alice@example.com", ProfileID: uuid.New()}},
+		Units:       []client.GovernanceUnit{{Name: "fresh"}},
+		Memberships: []client.GovernanceMembership{{SubjectType: "user", Subject: "alice@example.com", UnitID: uuid.New()}},
 	}
 	res, err := c.ApplyGovernanceResult(context.Background(), doc, false)
 	if err == nil {
@@ -211,10 +211,10 @@ func TestApplyGovernanceResult_PartialFailureReportsStepsSoFar(t *testing.T) {
 		t.Fatalf("steps = %+v, want the profile create then the failed assignment", res.Steps)
 	}
 	create, asg := res.Steps[0], res.Steps[1]
-	if create.Kind != "profile" || create.Op != "create" || create.Name != "fresh" || create.Outcome != "applied" {
+	if create.Kind != "unit" || create.Op != "create" || create.Name != "fresh" || create.Outcome != "applied" {
 		t.Fatalf("profile step = %+v, want an applied create of fresh", create)
 	}
-	if asg.Kind != "assignment" || asg.Op != "upsert" || asg.Outcome != "failed" || asg.Error == "" {
+	if asg.Kind != "membership" || asg.Op != "upsert" || asg.Outcome != "failed" || asg.Error == "" {
 		t.Fatalf("assignment step = %+v, want a failed upsert with its error", asg)
 	}
 }

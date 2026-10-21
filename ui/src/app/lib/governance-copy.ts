@@ -72,7 +72,7 @@ export { ACCESS_STATE, PEOPLE, PREVIEW } from "./people-access-copy";
 // freezes eleven Go format strings that this module does NOT carry, because
 // the console renders them FROM THE WIRE, verbatim, and a second copy here
 // would be a claim rather than canon:
-//   - the still-assigned delete refusal (409, handleDeleteGovernanceProfile)
+//   - the still-assigned delete refusal (409, handleDeleteGovernanceUnit)
 //     — GOVERNANCE.DELETE_RESTRICT_BODY below is the CLIENT-SIDE PRE-FILL
 //       only; it names a count, which is knowable only client-side. On the
 //       race path the client believed the count was zero, so it renders the
@@ -260,7 +260,7 @@ export const GOVERNANCE = {
   // assignment", "the everyone assignment" — but its TABLE freezes only the
   // template. They are the assignments table's own vocabulary and there is
   // exactly one correct set, so they are keyed here rather than retyped at the
-  // one call site (governance/assignments.tsx's MATCHED_LABEL). Noted as an
+  // one call site (governance/memberships.tsx's MATCHED_LABEL). Noted as an
   // addition in the campaign report, the same way permissions-copy.ts's
   // ENFORCE_OFF_TITLE was.
   MATCHED_USER: "a user assignment",
@@ -415,8 +415,8 @@ export const CHANGES = {
   COL_EXPIRES: "Expires",
   // By target_kind. A kind this console predates shows its raw name.
   KIND: {
-    governance_profile: "Profile",
-    governance_assignment: "Assignment",
+    governance_unit: "Profile",
+    governance_membership: "Assignment",
     capability_grant: "Capability grant",
     capability_enforcement: "Capability enforcement",
     capability_availability: "Capability availability",

@@ -294,8 +294,8 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	defer endClaimedRunnerCalls()
 	data := map[string]any{
 		"subject":                 run.CreatedBy,
-		"profile_id":              run.GovernanceProfileID,
-		"profile":                 c.profile,
+		"unit_id":                 run.UnitID,
+		"unit":                    c.profile,
 		"from":                    reviveFrom(run),
 		"denied_added":            re.added,
 		"denies_added":            len(re.added),

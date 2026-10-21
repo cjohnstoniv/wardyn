@@ -32,8 +32,8 @@ func TestPG_GovernanceChanges_ErasureClearsTheSubjectAndRetiresTheirPendingChang
 	bob := ssoSession(t, "bob-sub", "bob@corp.example", oidc.RoleSecurityAdmin)
 	sec := ssoSession(t, "sec-sub", "sec@corp.example", oidc.RoleSecurityAdmin)
 
-	seed := func(name string) types.GovernanceProfile {
-		p, err := pg.UpsertGovernanceProfile(ctx, types.GovernanceProfile{
+	seed := func(name string) types.GovernanceUnit {
+		p, err := pg.UpsertGovernanceUnit(ctx, types.GovernanceUnit{
 			Name: name, CreatedBy: "seed", Ceiling: types.RunPolicySpec{AllowedDomains: []string{"pypi.org"}, MinConfinementClass: types.CC2},
 		})
 		if err != nil {
@@ -41,9 +41,9 @@ func TestPG_GovernanceChanges_ErasureClearsTheSubjectAndRetiresTheirPendingChang
 		}
 		return p
 	}
-	propose := func(who *http.Cookie, p types.GovernanceProfile) uuid.UUID {
+	propose := func(who *http.Cookie, p types.GovernanceUnit) uuid.UUID {
 		t.Helper()
-		w := doSSO(t, a.srv, http.MethodPut, "/api/v1/governance/profiles/"+p.ID.String(), who, profileBody(p.Name, "pypi.org", "github.com"))
+		w := doSSO(t, a.srv, http.MethodPut, "/api/v1/governance/units/"+p.ID.String(), who, profileBody(p.Name, "pypi.org", "github.com"))
 		if w.Code != http.StatusAccepted {
 			t.Fatalf("propose %s = %d %s, want 202", p.Name, w.Code, w.Body)
 		}

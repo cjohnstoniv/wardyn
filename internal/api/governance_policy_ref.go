@@ -13,39 +13,39 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// profilePolicyRef is the member-safe reference to one governance profile: its
+// unitPolicyRef is the member-safe reference to one governance profile: its
 // name and the contact it published, each field re-validated on the way out
 // (policyref.Project), and nothing else about the profile. The ceiling of one
 // profile never reaches a person bound by another, because every caller passes
 // the profile that bound THIS person: a leaf, never a composed result.
-func profilePolicyRef(p *ResolvedProfile) *policyref.Ref {
+func unitPolicyRef(p *ResolvedUnit) *policyref.Ref {
 	if p == nil {
 		return nil
 	}
-	return policyref.Project(policyref.SourceProfile, p.Name, p.Contact)
+	return policyref.Project(policyref.SourceUnit, p.Name, p.Contact)
 }
 
-// profileRefOrSiteHelp is profilePolicyRef, except that a leaf with no contact of
+// unitRefOrSiteHelp is unitPolicyRef, except that a leaf with no contact of
 // its own borrows the site's policy_help (already in hand) for the "how to ask"
 // fields, keeping the leaf's identity: the ref still names the profile.
-func profileRefOrSiteHelp(p *ResolvedProfile, help *policyref.Contact) *policyref.Ref {
+func unitRefOrSiteHelp(p *ResolvedUnit, help *policyref.Contact) *policyref.Ref {
 	if p != nil && p.Contact == nil && help != nil {
-		return policyref.Project(policyref.SourceProfile, p.Name, help)
+		return policyref.Project(policyref.SourceUnit, p.Name, help)
 	}
-	return profilePolicyRef(p)
+	return unitPolicyRef(p)
 }
 
-// profileRefWithSiteHelp reads the site config for profileRefOrSiteHelp only
+// unitRefWithSiteHelp reads the site config for unitRefOrSiteHelp only
 // when the leaf has no contact, so a leaf that publishes one costs no read. An
 // unreadable site config leaves the bare profile reference.
-func (s *Server) profileRefWithSiteHelp(ctx context.Context, p *ResolvedProfile) *policyref.Ref {
+func (s *Server) unitRefWithSiteHelp(ctx context.Context, p *ResolvedUnit) *policyref.Ref {
 	if p == nil || p.Contact != nil {
-		return profilePolicyRef(p)
+		return unitPolicyRef(p)
 	}
 	if sc, ok := s.siteConfigSnapshot(ctx); ok {
-		return profileRefOrSiteHelp(p, sc.PolicyHelp)
+		return unitRefOrSiteHelp(p, sc.PolicyHelp)
 	}
-	return profilePolicyRef(p)
+	return unitPolicyRef(p)
 }
 
 // policyRef is the policy that bounds this principal, with no store read: the
@@ -57,8 +57,8 @@ func (c governanceCeiling) policyRef() *policyref.Ref {
 	switch {
 	case c.Operator:
 		return nil
-	case c.Profile != nil:
-		return profilePolicyRef(c.Profile)
+	case c.Unit != nil:
+		return unitPolicyRef(c.Unit)
 	default:
 		return policyref.Project(policyref.SourceDeployment, "", nil)
 	}
@@ -70,8 +70,8 @@ func (c governanceCeiling) policyRef() *policyref.Ref {
 // An unreadable site config leaves the bare deployment reference: a refusal is
 // never turned into an error by its own help text.
 func (s *Server) ceilingPolicy(ctx context.Context, c governanceCeiling) *policyref.Ref {
-	if c.Profile != nil {
-		return s.profileRefWithSiteHelp(ctx, c.Profile)
+	if c.Unit != nil {
+		return s.unitRefWithSiteHelp(ctx, c.Unit)
 	}
 	ref := c.policyRef()
 	if ref == nil || ref.Source != policyref.SourceDeployment {
@@ -90,13 +90,13 @@ func (s *Server) runPolicyRef(ctx context.Context, run types.AgentRun) *policyre
 	if s.cfg.Store == nil {
 		return nil
 	}
-	p, err := s.runProfile(ctx, run)
+	p, err := s.runUnit(ctx, run)
 	if err != nil {
 		slog.ErrorContext(ctx, "wardynd: run policy lookup failed", "run_id", run.ID, "err", err)
 		return nil
 	}
 	if p != nil {
-		return s.profileRefWithSiteHelp(ctx, p)
+		return s.unitRefWithSiteHelp(ctx, p)
 	}
 	if sc, ok := s.siteConfigSnapshot(ctx); ok && sc.PolicyHelp != nil {
 		return policyref.Project(policyref.SourceDeployment, "", sc.PolicyHelp)

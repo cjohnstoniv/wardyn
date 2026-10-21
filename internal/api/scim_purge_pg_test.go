@@ -59,12 +59,12 @@ func (e *scimEnv) seedPurgeSubject(sub, email, oid string) purgeFixture {
 			e.t.Fatal(err)
 		}
 	}
-	prof, err := e.st.UpsertGovernanceProfile(ctx, types.GovernanceProfile{ID: uuid.New(), Name: "walled-" + sub, Ceiling: govProfileSpec()})
+	prof, err := e.st.UpsertGovernanceUnit(ctx, types.GovernanceUnit{ID: uuid.New(), Name: "walled-" + sub, Ceiling: govProfileSpec()})
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	if _, err := e.st.UpsertGovernanceAssignment(ctx, types.GovernanceAssignment{
-		ID: uuid.New(), SubjectType: types.CapabilitySubjectUser, Subject: sub, ProfileID: prof.ID,
+	if _, err := e.st.UpsertGovernanceMembership(ctx, types.GovernanceMembership{
+		ID: uuid.New(), SubjectType: types.CapabilitySubjectUser, Subject: sub, UnitID: prof.ID,
 	}); err != nil {
 		e.t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func (e *scimEnv) userRows(subject string) (grants, assignments int) {
 	if err := e.pool.QueryRow(ctx, `SELECT count(*) FROM capability_grants WHERE subject_type = 'user' AND lower(subject) = lower($1)`, subject).Scan(&grants); err != nil {
 		e.t.Fatal(err)
 	}
-	if err := e.pool.QueryRow(ctx, `SELECT count(*) FROM governance_assignments WHERE subject_type = 'user' AND lower(subject) = lower($1)`, subject).Scan(&assignments); err != nil {
+	if err := e.pool.QueryRow(ctx, `SELECT count(*) FROM governance_memberships WHERE subject_type = 'user' AND lower(subject) = lower($1)`, subject).Scan(&assignments); err != nil {
 		e.t.Fatal(err)
 	}
 	return grants, assignments

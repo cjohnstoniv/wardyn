@@ -132,10 +132,10 @@ func TestMeGovernanceContact(t *testing.T) {
 // route matrix is built on, whose every other answer is the empty one.
 type profileMatrixStore struct {
 	*authzStore
-	bySub map[string]*types.GovernanceProfile
+	bySub map[string]*types.GovernanceUnit
 }
 
-func (s *profileMatrixStore) ResolveGovernanceProfile(_ context.Context, users, _ []string, _ string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+func (s *profileMatrixStore) ResolveGovernanceUnit(_ context.Context, users, _ []string, _ string) (*types.GovernanceUnit, types.CapabilitySubjectType, error) {
 	for _, u := range users {
 		if p := s.bySub[u]; p != nil {
 			return p, types.CapabilitySubjectUser, nil
@@ -144,18 +144,18 @@ func (s *profileMatrixStore) ResolveGovernanceProfile(_ context.Context, users, 
 	return nil, "", store.ErrNotFound
 }
 
-// GetGovernanceProfileChain is the run-door read: each profile here is standalone, so its chain is itself.
-func (s *profileMatrixStore) GetGovernanceProfileChain(_ context.Context, id uuid.UUID) ([]types.GovernanceProfile, error) {
+// GetGovernanceUnitChain is the run-door read: each profile here is standalone, so its chain is itself.
+func (s *profileMatrixStore) GetGovernanceUnitChain(_ context.Context, id uuid.UUID) ([]types.GovernanceUnit, error) {
 	for _, p := range s.bySub {
 		if p.ID == id {
-			return []types.GovernanceProfile{*p}, nil
+			return []types.GovernanceUnit{*p}, nil
 		}
 	}
 	return nil, store.ErrNotFound
 }
 
-func (s *profileMatrixStore) ListGovernanceProfiles(context.Context) ([]types.GovernanceProfile, error) {
-	var out []types.GovernanceProfile
+func (s *profileMatrixStore) ListGovernanceUnits(context.Context) ([]types.GovernanceUnit, error) {
+	var out []types.GovernanceUnit
 	for _, p := range s.bySub {
 		out = append(out, *p)
 	}
@@ -185,7 +185,7 @@ func TestNeitherMemberSeesTheOtherProfile(t *testing.T) {
 
 	srv, ast, _, _ := newAuthzMatrixServer(t, func(cfg *Config) {
 		cfg.Store = &profileMatrixStore{authzStore: cfg.Store.(*authzStore),
-			bySub: map[string]*types.GovernanceProfile{subA: profA, subB: profB}}
+			bySub: map[string]*types.GovernanceUnit{subA: profA, subB: profB}}
 	})
 	profileIDs := map[string]*uuid.UUID{subA: &profA.ID, subB: &profB.ID}
 	runs := map[string]uuid.UUID{}
@@ -194,7 +194,7 @@ func TestNeitherMemberSeesTheOtherProfile(t *testing.T) {
 		runs[sub] = id
 		ast.mu.Lock()
 		ast.runs[id] = types.AgentRun{ID: id, CreatedBy: sub, State: types.RunRunning, Agent: "claude-code",
-			GovernanceProfileID: profileIDs[sub]}
+			UnitID: profileIDs[sub]}
 		ast.mu.Unlock()
 	}
 	cookies := map[string]*http.Cookie{

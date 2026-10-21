@@ -108,8 +108,8 @@ func selfComponent(capLevel types.AutonomyLevel) runComponents {
 
 func profileCeiling(rubric *types.AutonomyRubric) governanceCeiling {
 	return governanceCeiling{
-		Profile: &ResolvedProfile{ID: uuid.New(), Name: "autonomy"},
-		Limits:  types.GovernanceLimits{AutonomyRubric: rubric},
+		Unit:   &ResolvedUnit{ID: uuid.New(), Name: "autonomy"},
+		Limits: types.GovernanceLimits{AutonomyRubric: rubric},
 	}
 }
 
@@ -269,8 +269,8 @@ func TestAutonomyComponentCapFoldsWithARubric(t *testing.T) {
 	})
 	t.Run("a tie: both named, refused as the profile", func(t *testing.T) {
 		got := callComponentCap(t, profileCeiling(autonomyRubric(types.AutonomyL1)), selfComponent(types.AutonomyL1), exec)
-		if got.ok || got.body.Reason != "governance_profile" {
-			t.Fatalf("got ok=%v reason %q, want refused as governance_profile", got.ok, got.body.Reason)
+		if got.ok || got.body.Reason != "governance_unit" {
+			t.Fatalf("got ok=%v reason %q, want refused as governance_unit", got.ok, got.body.Reason)
 		}
 		const want = "`task_mode=exec` is not allowed by your governance profile \"autonomy\" at this run's posture: it permits autonomy level L1 " +
 			"(bound by egress_sealed, secrets_none, confinement_cc2 and custom_component), and an exec run carries no agent and no tool approvals, " +
@@ -278,7 +278,7 @@ func TestAutonomyComponentCapFoldsWithARubric(t *testing.T) {
 		if got.body.Error != want {
 			t.Errorf("sentence =\n  %q\nwant\n  %q", got.body.Error, want)
 		}
-		if got.body.Policy == nil || got.body.Policy.Source != policyref.SourceProfile {
+		if got.body.Policy == nil || got.body.Policy.Source != policyref.SourceUnit {
 			t.Errorf("policy = %+v, want the profile", got.body.Policy)
 		}
 		ok := callComponentCap(t, profileCeiling(autonomyRubric(types.AutonomyL1)), selfComponent(types.AutonomyL1), auto)
@@ -291,7 +291,7 @@ func TestAutonomyComponentCapFoldsWithARubric(t *testing.T) {
 		want := callComponentCap(t, ceiling, runComponents{}, auto)
 		got := callComponentCap(t, ceiling, selfComponent(types.AutonomyL1), auto)
 		sameOutcome(t, got, want)
-		if got.body.Reason != "governance_profile" || !slices.Equal(got.res.BoundBy, rubricCauses) {
+		if got.body.Reason != "governance_unit" || !slices.Equal(got.res.BoundBy, rubricCauses) {
 			t.Errorf("got reason %q bound_by %v, want the profile's refusal unchanged", got.body.Reason, got.res.BoundBy)
 		}
 	})

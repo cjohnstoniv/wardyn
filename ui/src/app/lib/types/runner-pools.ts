@@ -316,7 +316,7 @@ export interface PoolCapacity {
 export interface PersonAllowance {
   active: number;
   max?: number;
-  profile_name?: string;
+  unit_name?: string;
 }
 
 /** Go: client.PoolDefault. The pool an untouched run resolves to, or the default that no longer applies. */

@@ -144,8 +144,8 @@ func TestPG_CreateUserTypeNamesAnOrphanedReference(t *testing.T) {
 	ctx := context.Background()
 	uniq := uuid.NewString()
 	id := seedSubjectUserType(t, st, "orphan")
-	seedGovernanceAssignment(t, st, types.GovernanceAssignment{
-		SubjectType: types.CapabilitySubjectUserType, Subject: id, ProfileID: seedGovernanceProfile(t, st, "orphan-profile-"+uniq).ID})
+	seedGovernanceMembership(t, st, types.GovernanceMembership{
+		SubjectType: types.CapabilitySubjectUserType, Subject: id, UnitID: seedGovernanceUnit(t, st, "orphan-profile-"+uniq).ID})
 	if _, err := st.Pool.Exec(ctx, `DELETE FROM user_types WHERE id = $1`, id); err != nil {
 		t.Fatal(err)
 	}

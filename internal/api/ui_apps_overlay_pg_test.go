@@ -32,19 +32,19 @@ func TestPG_ComposedEmptyUIAppsOverlayDeniesUIApps(t *testing.T) {
 	srv := New(cfg)
 
 	docs := types.UIApp{Name: "docs", Port: 8000}
-	base, err := pg.UpsertGovernanceProfile(ctx, types.GovernanceProfile{Name: "base", CreatedBy: "seed",
+	base, err := pg.UpsertGovernanceUnit(ctx, types.GovernanceUnit{Name: "base", CreatedBy: "seed",
 		Ceiling: types.RunPolicySpec{AllowedDomains: []string{"pypi.org"}, MinConfinementClass: types.CC2, UIApps: []types.UIApp{docs}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Written straight to the store, as a row from before this rule would be.
-	team, err := pg.UpsertGovernanceProfile(ctx, types.GovernanceProfile{Name: "team", CreatedBy: "seed",
-		BaseProfileID: &base.ID, Overlay: &types.CeilingOverlay{UIApps: &[]types.UIApp{}}})
+	team, err := pg.UpsertGovernanceUnit(ctx, types.GovernanceUnit{Name: "team", CreatedBy: "seed",
+		ParentID: &base.ID, Overlay: &types.CeilingOverlay{UIApps: &[]types.UIApp{}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pg.UpsertGovernanceAssignment(ctx, types.GovernanceAssignment{SubjectType: types.CapabilitySubjectUser,
-		Subject: "member@corp.example", ProfileID: team.ID, Priority: 1, CreatedBy: "seed"}); err != nil {
+	if _, err := pg.UpsertGovernanceMembership(ctx, types.GovernanceMembership{SubjectType: types.CapabilitySubjectUser,
+		Subject: "member@corp.example", UnitID: team.ID, Priority: 1, CreatedBy: "seed"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -67,14 +67,14 @@ func TestPG_ComposedEmptyUIAppsOverlayDeniesUIApps(t *testing.T) {
 	w := httptest.NewRecorder()
 	srv.handleGetDefaultPolicy(w, httptest.NewRequest(http.MethodGet, "/api/v1/policies/default", nil).WithContext(mctx))
 	var def defaultPolicyResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &def); w.Code != http.StatusOK || err != nil || len(def.UIApps) != 0 || def.GovernanceProfileName != "team" {
+	if err := json.Unmarshal(w.Body.Bytes(), &def); w.Code != http.StatusOK || err != nil || len(def.UIApps) != 0 || def.UnitName != "team" {
 		t.Errorf("GET /policies/default as the member = %d %s, want 200 with no ui_apps under \"team\"", w.Code, w.Body)
 	}
 	w = httptest.NewRecorder()
 	actx := operatorCtx("sub-admin", "admin@corp.example", oidc.RoleAdmin)
 	srv.handleGetGovernance(w, httptest.NewRequest(http.MethodGet, "/api/v1/governance", nil).WithContext(actx))
 	var view struct {
-		Profiles []governanceProfileView `json:"profiles"`
+		Profiles []governanceUnitView `json:"units"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &view); w.Code != http.StatusOK || err != nil {
 		t.Fatalf("GET /governance = %d %s (%v)", w.Code, w.Body, err)
@@ -94,7 +94,7 @@ func TestPG_ComposedEmptyUIAppsOverlayDeniesUIApps(t *testing.T) {
 	}
 
 	w = httptest.NewRecorder()
-	run := types.AgentRun{ID: uuid.New(), GovernanceProfileID: &team.ID}
+	run := types.AgentRun{ID: uuid.New(), UnitID: &team.ID}
 	if !srv.refuseUIAppsDenied(w, r, run) || w.Code != http.StatusForbidden {
 		t.Errorf("the UI-session door into a run under the profile = %d %s, want 403", w.Code, w.Body)
 	}

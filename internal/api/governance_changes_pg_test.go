@@ -109,9 +109,9 @@ func profileBody(name string, domains ...string) string {
 	return string(b)
 }
 
-func (e *govEnv) seedProfile(name string, domains ...string) types.GovernanceProfile {
+func (e *govEnv) seedProfile(name string, domains ...string) types.GovernanceUnit {
 	e.t.Helper()
-	p, err := e.pg.UpsertGovernanceProfile(context.Background(), types.GovernanceProfile{
+	p, err := e.pg.UpsertGovernanceUnit(context.Background(), types.GovernanceUnit{
 		Name: name, CreatedBy: "seed",
 		Ceiling: types.RunPolicySpec{AllowedDomains: domains, MinConfinementClass: types.CC2},
 	})
@@ -121,10 +121,10 @@ func (e *govEnv) seedProfile(name string, domains ...string) types.GovernancePro
 	return p
 }
 
-func (e *govEnv) seedAssignment(profile types.GovernanceProfile, subject string) types.GovernanceAssignment {
+func (e *govEnv) seedAssignment(profile types.GovernanceUnit, subject string) types.GovernanceMembership {
 	e.t.Helper()
-	a, err := e.pg.UpsertGovernanceAssignment(context.Background(), types.GovernanceAssignment{
-		SubjectType: types.CapabilitySubjectUser, Subject: subject, ProfileID: profile.ID, Priority: 1, CreatedBy: "seed",
+	a, err := e.pg.UpsertGovernanceMembership(context.Background(), types.GovernanceMembership{
+		SubjectType: types.CapabilitySubjectUser, Subject: subject, UnitID: profile.ID, Priority: 1, CreatedBy: "seed",
 	})
 	if err != nil {
 		e.t.Fatalf("seed assignment: %v", err)
@@ -132,9 +132,9 @@ func (e *govEnv) seedAssignment(profile types.GovernanceProfile, subject string)
 	return a
 }
 
-func (e *govEnv) profile(id uuid.UUID) types.GovernanceProfile {
+func (e *govEnv) profile(id uuid.UUID) types.GovernanceUnit {
 	e.t.Helper()
-	p, err := e.pg.GetGovernanceProfile(context.Background(), id)
+	p, err := e.pg.GetGovernanceUnit(context.Background(), id)
 	if err != nil {
 		e.t.Fatalf("read profile %s: %v", id, err)
 	}
@@ -218,14 +218,14 @@ func TestPG_GovernanceChanges_SwitchOffIsUnchanged(t *testing.T) {
 		want                     int
 	}
 	steps := []step{
-		{"create profile", http.MethodPost, "/api/v1/governance/profiles", profileBody("fresh", "pypi.org"), http.StatusCreated},
-		{"widen profile", http.MethodPut, "/api/v1/governance/profiles/" + p.ID.String(), profileBody("existing", "pypi.org", "github.com"), http.StatusOK},
-		{"delete profile", http.MethodDelete, "/api/v1/governance/profiles/" + doomed.ID.String(), "", http.StatusNoContent},
-		{"upsert assignment", http.MethodPost, "/api/v1/governance/assignments",
-			fmt.Sprintf(`{"subject_type":"user","subject":"dave@corp.example","profile_id":%q,"priority":2}`, subj.ID), http.StatusCreated},
-		{"repoint assignment", http.MethodPost, "/api/v1/governance/assignments",
-			fmt.Sprintf(`{"subject_type":"user","subject":"dave@corp.example","profile_id":%q,"priority":3}`, p.ID), http.StatusOK},
-		{"delete assignment", http.MethodDelete, "/api/v1/governance/assignments/" + a.ID.String(), "", http.StatusNoContent},
+		{"create profile", http.MethodPost, "/api/v1/governance/units", profileBody("fresh", "pypi.org"), http.StatusCreated},
+		{"widen profile", http.MethodPut, "/api/v1/governance/units/" + p.ID.String(), profileBody("existing", "pypi.org", "github.com"), http.StatusOK},
+		{"delete profile", http.MethodDelete, "/api/v1/governance/units/" + doomed.ID.String(), "", http.StatusNoContent},
+		{"upsert assignment", http.MethodPost, "/api/v1/governance/memberships",
+			fmt.Sprintf(`{"subject_type":"user","subject":"dave@corp.example","unit_id":%q,"priority":2}`, subj.ID), http.StatusCreated},
+		{"repoint assignment", http.MethodPost, "/api/v1/governance/memberships",
+			fmt.Sprintf(`{"subject_type":"user","subject":"dave@corp.example","unit_id":%q,"priority":3}`, p.ID), http.StatusOK},
+		{"delete assignment", http.MethodDelete, "/api/v1/governance/memberships/" + a.ID.String(), "", http.StatusNoContent},
 	}
 	for _, s := range steps {
 		w := e.call(e.alice, s.method, s.path, s.body)
@@ -256,7 +256,7 @@ func TestPG_GovernanceChanges_SwitchOffIsUnchanged(t *testing.T) {
 func TestPG_GovernanceChanges_RepeatCreateNamesTheHeldOne(t *testing.T) {
 	e := newGovEnv(t)
 	body := profileBody("repeat-new", "github.com")
-	first := e.pending(e.call(e.alice, http.MethodPost, "/api/v1/governance/profiles", body))
+	first := e.pending(e.call(e.alice, http.MethodPost, "/api/v1/governance/units", body))
 	if first.Op != "create" {
 		t.Fatalf("first create held as %q", first.Op)
 	}
@@ -276,14 +276,14 @@ func TestPG_GovernanceChanges_RepeatCreateNamesTheHeldOne(t *testing.T) {
 		matches = held.Matches
 		return held.Pending.ID
 	}
-	if id := heldBy(e.call(e.alice, http.MethodPost, "/api/v1/governance/profiles", body)); id != first.ID {
+	if id := heldBy(e.call(e.alice, http.MethodPost, "/api/v1/governance/units", body)); id != first.ID {
 		t.Errorf("a repeat POST names %s, want the held create %s", id, first.ID)
 	}
 	if matches == nil || !*matches {
 		t.Errorf("a repeat of the same create: pending_change_matches = %v, want true", matches)
 	}
 	// A create at a caller-chosen id is the same name, so the same held create, with other content.
-	if id := heldBy(e.call(e.carol, http.MethodPut, "/api/v1/governance/profiles/"+uuid.NewString(), profileBody("repeat-new", "pypi.org"))); id != first.ID {
+	if id := heldBy(e.call(e.carol, http.MethodPut, "/api/v1/governance/units/"+uuid.NewString(), profileBody("repeat-new", "pypi.org"))); id != first.ID {
 		t.Errorf("a create by PUT of the same name names %s, want %s", id, first.ID)
 	}
 	if matches == nil || *matches {
@@ -293,13 +293,13 @@ func TestPG_GovernanceChanges_RepeatCreateNamesTheHeldOne(t *testing.T) {
 		t.Fatalf("%d pending changes after repeat creates, want 1", n)
 	}
 	// Another name is another create.
-	other := e.pending(e.call(e.alice, http.MethodPost, "/api/v1/governance/profiles", profileBody("repeat-other", "github.com")))
+	other := e.pending(e.call(e.alice, http.MethodPost, "/api/v1/governance/units", profileBody("repeat-other", "github.com")))
 
 	// A lapsed create of the name holds nothing: the next create expires it and is held itself.
 	if _, err := e.pool.Exec(context.Background(), `UPDATE governance_changes SET expires_at = now() - interval '1 second' WHERE id = $1`, first.ID); err != nil {
 		t.Fatal(err)
 	}
-	again := e.pending(e.call(e.alice, http.MethodPost, "/api/v1/governance/profiles", body))
+	again := e.pending(e.call(e.alice, http.MethodPost, "/api/v1/governance/units", body))
 	if again.ID == first.ID || e.changeState(first.ID) != types.GovernanceChangeExpired {
 		t.Fatalf("after the first lapsed: new change %s, first %s; want a new change and the first expired", again.ID, e.changeState(first.ID))
 	}
@@ -324,7 +324,7 @@ func TestPG_GovernanceChanges_RepeatCreateNamesTheHeldOne(t *testing.T) {
 func TestPG_GovernanceChanges_RefusalSaysWhetherTheHeldChangeIsTheProposal(t *testing.T) {
 	e := newGovEnv(t)
 	prof := e.seedProfile("held-target", "pypi.org")
-	path := "/api/v1/governance/profiles/" + prof.ID.String()
+	path := "/api/v1/governance/units/" + prof.ID.String()
 	widened := func(extra string) string { return profileBody("held-target", "pypi.org", extra) }
 	held := e.pending(e.call(e.alice, http.MethodPut, path, widened("github.com")))
 	for _, c := range []struct {
@@ -368,14 +368,14 @@ func TestPG_GovernanceChanges_QueuedWritesAnswer202(t *testing.T) {
 	cases := []struct {
 		name, method, path, body string
 	}{
-		{"create", http.MethodPost, "/api/v1/governance/profiles", profileBody("fresh", "pypi.org")},
-		{"update", http.MethodPut, "/api/v1/governance/profiles/" + upd.ID.String(), profileBody("to-update", "pypi.org", "github.com")},
-		{"delete", http.MethodDelete, "/api/v1/governance/profiles/" + del.ID.String(), ""},
-		{"assignment upsert", http.MethodPost, "/api/v1/governance/assignments",
-			fmt.Sprintf(`{"subject_type":"user","subject":"dave@corp.example","profile_id":%q,"priority":2}`, subj.ID)},
-		{"assignment repoint", http.MethodPost, "/api/v1/governance/assignments",
-			fmt.Sprintf(`{"subject_type":"user","subject":"carol@corp.example","profile_id":%q,"priority":2}`, repoint.ID)},
-		{"assignment delete", http.MethodDelete, "/api/v1/governance/assignments/" + a2.ID.String(), ""},
+		{"create", http.MethodPost, "/api/v1/governance/units", profileBody("fresh", "pypi.org")},
+		{"update", http.MethodPut, "/api/v1/governance/units/" + upd.ID.String(), profileBody("to-update", "pypi.org", "github.com")},
+		{"delete", http.MethodDelete, "/api/v1/governance/units/" + del.ID.String(), ""},
+		{"assignment upsert", http.MethodPost, "/api/v1/governance/memberships",
+			fmt.Sprintf(`{"subject_type":"user","subject":"dave@corp.example","unit_id":%q,"priority":2}`, subj.ID)},
+		{"assignment repoint", http.MethodPost, "/api/v1/governance/memberships",
+			fmt.Sprintf(`{"subject_type":"user","subject":"carol@corp.example","unit_id":%q,"priority":2}`, repoint.ID)},
+		{"assignment delete", http.MethodDelete, "/api/v1/governance/memberships/" + a2.ID.String(), ""},
 	}
 	for _, c := range cases {
 		ch := e.pending(e.call(e.alice, c.method, c.path, c.body))
@@ -398,16 +398,16 @@ func TestPG_GovernanceChanges_QueuedWritesAnswer202(t *testing.T) {
 	if got := e.profile(upd.ID); len(got.Ceiling.AllowedDomains) != 1 {
 		t.Errorf("a held update changed the stored profile: %+v", got.Ceiling.AllowedDomains)
 	}
-	if _, err := e.pg.GetGovernanceProfile(context.Background(), del.ID); err != nil {
+	if _, err := e.pg.GetGovernanceUnit(context.Background(), del.ID); err != nil {
 		t.Errorf("a held delete removed the profile: %v", err)
 	}
-	if got, _ := e.pg.ListGovernanceAssignments(context.Background()); len(got) != 2 {
+	if got, _ := e.pg.ListGovernanceMemberships(context.Background()); len(got) != 2 {
 		t.Errorf("%d assignments after held writes, want the 2 seeded", len(got))
 	}
 	_ = a
 
 	// A second change to a target that already has a live one is a 409 naming it.
-	w := e.call(e.alice, http.MethodPut, "/api/v1/governance/profiles/"+upd.ID.String(), profileBody("to-update", "pypi.org", "npmjs.org"))
+	w := e.call(e.alice, http.MethodPut, "/api/v1/governance/units/"+upd.ID.String(), profileBody("to-update", "pypi.org", "npmjs.org"))
 	if w.Code != http.StatusConflict || wireReason(t, w) != reasonGovernanceChangePending {
 		t.Errorf("a second change to a held target = %d %s, want 409 %s", w.Code, w.Body, reasonGovernanceChangePending)
 	}
@@ -418,18 +418,18 @@ func TestPG_GovernanceChanges_QueuedWritesAnswer202(t *testing.T) {
 		t.Errorf("the 409 carries no held change for %s: %s (%v)", upd.ID, w.Body, err)
 	}
 	// A write the store would refuse is refused as it always was, not held.
-	if w := e.call(e.alice, http.MethodPost, "/api/v1/governance/profiles", `{"name":""}`); w.Code != http.StatusBadRequest {
+	if w := e.call(e.alice, http.MethodPost, "/api/v1/governance/units", `{"name":""}`); w.Code != http.StatusBadRequest {
 		t.Errorf("an invalid body = %d %s, want the direct 400", w.Code, w.Body)
 	}
-	if w := e.call(e.alice, http.MethodDelete, "/api/v1/governance/profiles/"+subj.ID.String(), ""); w.Code != http.StatusConflict ||
-		wireReason(t, w) != reasonGovernanceProfileInUse {
-		t.Errorf("deleting an assigned profile = %d %s, want the direct 409 %s", w.Code, w.Body, reasonGovernanceProfileInUse)
+	if w := e.call(e.alice, http.MethodDelete, "/api/v1/governance/units/"+subj.ID.String(), ""); w.Code != http.StatusConflict ||
+		wireReason(t, w) != reasonGovernanceUnitInUse {
+		t.Errorf("deleting an assigned profile = %d %s, want the direct 409 %s", w.Code, w.Body, reasonGovernanceUnitInUse)
 	}
-	if w := e.call(e.alice, http.MethodDelete, "/api/v1/governance/assignments/"+uuid.NewString(), ""); w.Code != http.StatusNotFound {
+	if w := e.call(e.alice, http.MethodDelete, "/api/v1/governance/memberships/"+uuid.NewString(), ""); w.Code != http.StatusNotFound {
 		t.Errorf("deleting an unknown assignment = %d, want the direct 404", w.Code)
 	}
-	if w := e.call(e.alice, http.MethodPost, "/api/v1/governance/assignments",
-		fmt.Sprintf(`{"subject_type":"user","subject":"x@corp.example","profile_id":%q}`, uuid.New())); w.Code != http.StatusNotFound {
+	if w := e.call(e.alice, http.MethodPost, "/api/v1/governance/memberships",
+		fmt.Sprintf(`{"subject_type":"user","subject":"x@corp.example","unit_id":%q}`, uuid.New())); w.Code != http.StatusNotFound {
 		t.Errorf("an assignment to an unknown profile = %d %s, want the direct 404", w.Code, w.Body)
 	}
 	if n := e.pendingCount(); n != len(cases) {
@@ -444,7 +444,7 @@ func TestPG_GovernanceChanges_QueuedWritesAnswer202(t *testing.T) {
 func TestPG_GovernanceChanges_SelfApprovalRefused(t *testing.T) {
 	e := newGovEnv(t)
 	p := e.seedProfile("p", "pypi.org")
-	ch := e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/profiles/"+p.ID.String(), profileBody("p", "pypi.org", "github.com")))
+	ch := e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/units/"+p.ID.String(), profileBody("p", "pypi.org", "github.com")))
 
 	for name, who := range map[string]*http.Cookie{"same principal": e.alice, "same mailbox, other principal": e.twin} {
 		w := e.call(who, http.MethodPost, approvePath(ch.ID), "")
@@ -487,9 +487,9 @@ func TestPG_GovernanceChanges_DistinctAdminApplies(t *testing.T) {
 	e := newGovEnv(t)
 	p := e.seedProfile("p", "pypi.org")
 	subj := e.seedProfile("for-subject", "pypi.org")
-	ch := e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/profiles/"+p.ID.String(), profileBody("p", "pypi.org", "github.com")))
-	asg := e.pending(e.call(e.alice, http.MethodPost, "/api/v1/governance/assignments",
-		fmt.Sprintf(`{"subject_type":"user","subject":"dave@corp.example","profile_id":%q,"priority":4}`, subj.ID)))
+	ch := e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/units/"+p.ID.String(), profileBody("p", "pypi.org", "github.com")))
+	asg := e.pending(e.call(e.alice, http.MethodPost, "/api/v1/governance/memberships",
+		fmt.Sprintf(`{"subject_type":"user","subject":"dave@corp.example","unit_id":%q,"priority":4}`, subj.ID)))
 
 	if w := e.call(e.user, http.MethodPost, approvePath(ch.ID), ""); w.Code != http.StatusForbidden {
 		t.Errorf("a member approving = %d, want 403", w.Code)
@@ -517,12 +517,12 @@ func TestPG_GovernanceChanges_DistinctAdminApplies(t *testing.T) {
 	if got := e.profile(p.ID); len(got.Ceiling.AllowedDomains) != 2 {
 		t.Errorf("the approved update did not apply: %v", got.Ceiling.AllowedDomains)
 	}
-	as, _ := e.pg.ListGovernanceAssignments(context.Background())
+	as, _ := e.pg.ListGovernanceMemberships(context.Background())
 	if len(as) != 1 || as[0].Subject != "dave@corp.example" || as[0].Priority != 4 || as[0].CreatedBy != govSubAlice {
 		t.Errorf("the approved assignment = %+v, want dave's, created_by the proposer", as)
 	}
 
-	for action, target := range map[string]string{"governance.profile.write": p.ID.String(), "governance.assignment.write": as[0].ID.String()} {
+	for action, target := range map[string]string{"governance.unit.write": p.ID.String(), "governance.membership.write": as[0].ID.String()} {
 		rows := e.audits(action)
 		if len(rows) != 1 || rows[0].Actor != govSubBob || rows[0].Target != target {
 			t.Fatalf("%s rows = %+v, want one by %s naming %s", action, rows, govSubBob, target)
@@ -547,10 +547,10 @@ func TestPG_GovernanceChanges_DistinctAdminApplies(t *testing.T) {
 func TestPG_GovernanceChanges_BypassBetweenProposalAndApprovalIsStale(t *testing.T) {
 	e := newGovEnv(t)
 	p := e.seedProfile("p", "pypi.org")
-	ch := e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/profiles/"+p.ID.String(), profileBody("p", "pypi.org", "github.com", "npmjs.org")))
+	ch := e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/units/"+p.ID.String(), profileBody("p", "pypi.org", "github.com", "npmjs.org")))
 
 	// The admin token writes the same target directly; it is the break-glass and leaves its own row.
-	if w := e.admin(http.MethodPut, "/api/v1/governance/profiles/"+p.ID.String(), profileBody("p", "github.com")); w.Code != http.StatusOK {
+	if w := e.admin(http.MethodPut, "/api/v1/governance/units/"+p.ID.String(), profileBody("p", "github.com")); w.Code != http.StatusOK {
 		t.Fatalf("the admin-token write = %d %s, want 200 (applied directly)", w.Code, w.Body)
 	}
 	bypass := e.audits("governance.change.bypass")
@@ -581,7 +581,7 @@ func TestPG_GovernanceChanges_BypassBetweenProposalAndApprovalIsStale(t *testing
 	if w := e.call(e.carol, http.MethodPost, approvePath(ch.ID), ""); w.Code != http.StatusConflict || wireReason(t, w) != reasonGovernanceChangeNotPending {
 		t.Errorf("approving a stale change = %d %s, want 409 %s", w.Code, w.Body, reasonGovernanceChangeNotPending)
 	}
-	e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/profiles/"+p.ID.String(), profileBody("p", "github.com", "pypi.org")))
+	e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/units/"+p.ID.String(), profileBody("p", "github.com", "pypi.org")))
 }
 
 // TestPG_GovernanceChanges_AdminTokenApprovalIsBreakGlass: the admin token approves a change and
@@ -589,7 +589,7 @@ func TestPG_GovernanceChanges_BypassBetweenProposalAndApprovalIsStale(t *testing
 func TestPG_GovernanceChanges_AdminTokenApprovalIsBreakGlass(t *testing.T) {
 	e := newGovEnv(t)
 	p := e.seedProfile("p", "pypi.org")
-	ch := e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/profiles/"+p.ID.String(), profileBody("p", "pypi.org", "github.com")))
+	ch := e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/units/"+p.ID.String(), profileBody("p", "pypi.org", "github.com")))
 	if w := e.admin(http.MethodPost, approvePath(ch.ID), ""); w.Code != http.StatusOK {
 		t.Fatalf("the admin token approving = %d %s, want 200", w.Code, w.Body)
 	}
@@ -607,7 +607,7 @@ func TestPG_GovernanceChanges_AdminTokenApprovalIsBreakGlass(t *testing.T) {
 func TestPG_GovernanceChanges_DeploymentPolicyChangeIsStale(t *testing.T) {
 	e := newGovEnv(t)
 	p := e.seedProfile("p", "pypi.org")
-	ch := e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/profiles/"+p.ID.String(), profileBody("p", "pypi.org", "github.com")))
+	ch := e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/units/"+p.ID.String(), profileBody("p", "pypi.org", "github.com")))
 
 	restarted := e.otherServer(func(c *Config) {
 		c.DefaultPolicy.AllowedDomains = append([]string{"extra.example.com"}, c.DefaultPolicy.AllowedDomains...)
@@ -626,7 +626,7 @@ func TestPG_GovernanceChanges_DeploymentPolicyChangeIsStale(t *testing.T) {
 func TestPG_GovernanceChanges_LapsedChangeAndReproposal(t *testing.T) {
 	e := newGovEnv(t)
 	p := e.seedProfile("p", "pypi.org")
-	ch := e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/profiles/"+p.ID.String(), profileBody("p", "pypi.org", "github.com")))
+	ch := e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/units/"+p.ID.String(), profileBody("p", "pypi.org", "github.com")))
 	if _, err := e.pool.Exec(context.Background(), `UPDATE governance_changes SET expires_at = now() - interval '1 minute' WHERE id = $1`, ch.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -654,15 +654,15 @@ func TestPG_GovernanceChanges_LapsedChangeAndReproposal(t *testing.T) {
 	if got := e.profile(p.ID); len(got.Ceiling.AllowedDomains) != 1 {
 		t.Errorf("a lapsed approval applied the change: %v", got.Ceiling.AllowedDomains)
 	}
-	e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/profiles/"+p.ID.String(), profileBody("p", "pypi.org", "github.com")))
+	e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/units/"+p.ID.String(), profileBody("p", "pypi.org", "github.com")))
 
 	// A lapsed row that nobody has touched is also expired by the next proposal at its target.
 	q := e.seedProfile("q", "pypi.org")
-	old := e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/profiles/"+q.ID.String(), profileBody("q", "pypi.org", "github.com")))
+	old := e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/units/"+q.ID.String(), profileBody("q", "pypi.org", "github.com")))
 	if _, err := e.pool.Exec(context.Background(), `UPDATE governance_changes SET expires_at = now() - interval '1 minute' WHERE id = $1`, old.ID); err != nil {
 		t.Fatal(err)
 	}
-	e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/profiles/"+q.ID.String(), profileBody("q", "pypi.org", "npmjs.org")))
+	e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/units/"+q.ID.String(), profileBody("q", "pypi.org", "npmjs.org")))
 	if st := e.changeState(old.ID); st != types.GovernanceChangeExpired {
 		t.Errorf("the re-proposal left the lapsed change %q, want expired", st)
 	}
@@ -674,7 +674,7 @@ func TestPG_GovernanceChanges_ConcurrentApprovalsApplyOnce(t *testing.T) {
 	e := newGovEnv(t)
 	for round := 0; round < 5; round++ {
 		p := e.seedProfile(fmt.Sprintf("p%d", round), "pypi.org")
-		ch := e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/profiles/"+p.ID.String(), profileBody(fmt.Sprintf("p%d", round), "pypi.org", "github.com")))
+		ch := e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/units/"+p.ID.String(), profileBody(fmt.Sprintf("p%d", round), "pypi.org", "github.com")))
 		codes := make([]int, 2)
 		var wg sync.WaitGroup
 		for i, who := range []*http.Cookie{e.bob, e.carol} {
@@ -698,13 +698,13 @@ func TestPG_GovernanceChanges_ConcurrentApprovalsApplyOnce(t *testing.T) {
 			t.Fatalf("round %d: concurrent approvals answered %v, want exactly one 200 and one 409", round, codes)
 		}
 		writes := 0
-		for _, ev := range e.audits("governance.profile.write") {
+		for _, ev := range e.audits("governance.unit.write") {
 			if ev.Target == p.ID.String() {
 				writes++
 			}
 		}
 		if writes != 1 {
-			t.Fatalf("round %d: %d governance.profile.write rows for the profile, want 1", round, writes)
+			t.Fatalf("round %d: %d governance.unit.write rows for the profile, want 1", round, writes)
 		}
 	}
 }
@@ -738,9 +738,9 @@ func TestPG_GovernanceChanges_RollbackAfterApplyLeavesTargetAndChangeUntouched(t
 	})
 	p := e.seedProfile("p", "pypi.org")
 	subj := e.seedProfile("for-subject", "pypi.org")
-	ch := e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/profiles/"+p.ID.String(), profileBody("p", "pypi.org", "github.com")))
-	asg := e.pending(e.call(e.alice, http.MethodPost, "/api/v1/governance/assignments",
-		fmt.Sprintf(`{"subject_type":"user","subject":"dave@corp.example","profile_id":%q}`, subj.ID)))
+	ch := e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/units/"+p.ID.String(), profileBody("p", "pypi.org", "github.com")))
+	asg := e.pending(e.call(e.alice, http.MethodPost, "/api/v1/governance/memberships",
+		fmt.Sprintf(`{"subject_type":"user","subject":"dave@corp.example","unit_id":%q}`, subj.ID)))
 
 	for _, id := range []uuid.UUID{ch.ID, asg.ID} {
 		if w := e.call(e.bob, http.MethodPost, approvePath(id), ""); w.Code != http.StatusInternalServerError {
@@ -753,10 +753,10 @@ func TestPG_GovernanceChanges_RollbackAfterApplyLeavesTargetAndChangeUntouched(t
 	if got := e.profile(p.ID); len(got.Ceiling.AllowedDomains) != 1 {
 		t.Errorf("the target row kept an apply that was rolled back: %v", got.Ceiling.AllowedDomains)
 	}
-	if as, _ := e.pg.ListGovernanceAssignments(context.Background()); len(as) != 0 {
+	if as, _ := e.pg.ListGovernanceMemberships(context.Background()); len(as) != 0 {
 		t.Errorf("the assignment kept an apply that was rolled back: %+v", as)
 	}
-	for _, action := range []string{"governance.profile.write", "governance.assignment.write"} {
+	for _, action := range []string{"governance.unit.write", "governance.membership.write"} {
 		if n := len(e.audits(action)); n != 0 {
 			t.Errorf("a rolled-back approval recorded %s", action)
 		}
@@ -808,7 +808,7 @@ func TestPG_GovernanceChanges_ApproverRevokedInsideTheTransactionIsRefused(t *te
 	})
 	p := e.seedProfile("p", "pypi.org")
 	propose := func(domains ...string) types.GovernanceChange {
-		return e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/profiles/"+p.ID.String(), profileBody("p", domains...)))
+		return e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/units/"+p.ID.String(), profileBody("p", domains...)))
 	}
 	assertRefused := func(name string, ch types.GovernanceChange, w *httptest.ResponseRecorder, wantStatus int) {
 		t.Helper()
@@ -867,14 +867,14 @@ func TestPG_GovernanceChanges_ApproverRevokedInsideTheTransactionIsRefused(t *te
 func TestPG_GovernanceChanges_AssignmentGoesStaleWhenItsProfileChanges(t *testing.T) {
 	e := newGovEnv(t)
 	prof := e.seedProfile("contractors", "pypi.org")
-	ch := e.pending(e.call(e.alice, http.MethodPost, "/api/v1/governance/assignments",
-		fmt.Sprintf(`{"subject_type":"group","subject":"contractors","profile_id":%q,"priority":1}`, prof.ID)))
+	ch := e.pending(e.call(e.alice, http.MethodPost, "/api/v1/governance/memberships",
+		fmt.Sprintf(`{"subject_type":"group","subject":"contractors","unit_id":%q,"priority":1}`, prof.ID)))
 	var diff struct {
 		After struct {
 			Profile struct {
 				ID   uuid.UUID `json:"id"`
 				Name string    `json:"name"`
-			} `json:"profile"`
+			} `json:"unit"`
 		} `json:"after"`
 	}
 	if err := json.Unmarshal(ch.Diff, &diff); err != nil || diff.After.Profile.ID != prof.ID || diff.After.Profile.Name != "contractors" {
@@ -882,14 +882,14 @@ func TestPG_GovernanceChanges_AssignmentGoesStaleWhenItsProfileChanges(t *testin
 	}
 
 	// A rename is metadata, so it applies directly, and it is exactly what the reviewer did not see.
-	if w := e.call(e.carol, http.MethodPut, "/api/v1/governance/profiles/"+prof.ID.String(), profileBody("renamed", "pypi.org")); w.Code != http.StatusOK {
+	if w := e.call(e.carol, http.MethodPut, "/api/v1/governance/units/"+prof.ID.String(), profileBody("renamed", "pypi.org")); w.Code != http.StatusOK {
 		t.Fatalf("the rename = %d %s, want 200 (metadata is exempt)", w.Code, w.Body)
 	}
 	w := e.call(e.bob, http.MethodPost, approvePath(ch.ID), "")
 	if w.Code != http.StatusConflict || wireReason(t, w) != reasonGovernanceChangeStale {
 		t.Fatalf("approving after the profile was renamed = %d %s, want 409 %s", w.Code, w.Body, reasonGovernanceChangeStale)
 	}
-	if as, _ := e.pg.ListGovernanceAssignments(context.Background()); len(as) != 0 {
+	if as, _ := e.pg.ListGovernanceMemberships(context.Background()); len(as) != 0 {
 		t.Errorf("the stale approval wrote the assignment: %+v", as)
 	}
 }
@@ -901,15 +901,15 @@ func TestPG_GovernanceChanges_RenameSeesAnAssignmentApprovedWhileItWaits(t *test
 	ctx := context.Background()
 	mike := e.seedProfile("mike", "pypi.org")
 	zulu := e.seedProfile("zulu", "pypi.org")
-	group := func(subject string, p types.GovernanceProfile) types.GovernanceAssignment {
-		return types.GovernanceAssignment{SubjectType: types.CapabilitySubjectGroup, Subject: subject, ProfileID: p.ID, Priority: 5, CreatedBy: "seed"}
+	group := func(subject string, p types.GovernanceUnit) types.GovernanceMembership {
+		return types.GovernanceMembership{SubjectType: types.CapabilitySubjectGroup, Subject: subject, UnitID: p.ID, Priority: 5, CreatedBy: "seed"}
 	}
-	if _, err := e.pg.UpsertGovernanceAssignment(ctx, group("eng", mike)); err != nil {
+	if _, err := e.pg.UpsertGovernanceMembership(ctx, group("eng", mike)); err != nil {
 		t.Fatal(err)
 	}
 	resolved := func() string {
 		t.Helper()
-		p, _, err := e.pg.ResolveGovernanceProfile(ctx, []string{"sub-both"}, []string{"eng", "ops"}, "")
+		p, _, err := e.pg.ResolveGovernanceUnit(ctx, []string{"sub-both"}, []string{"eng", "ops"}, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -935,16 +935,16 @@ func TestPG_GovernanceChanges_RenameSeesAnAssignmentApprovedWhileItWaits(t *test
 	if err := store.LockGovernanceGraph(ctx, tx); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.LockGovernanceAssignmentKey(ctx, tx, string(types.CapabilitySubjectGroup), "ops"); err != nil {
+	if err := store.LockGovernanceMembershipKey(ctx, tx, string(types.CapabilitySubjectGroup), "ops"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.UpsertGovernanceAssignmentQ(ctx, tx, group("ops", zulu)); err != nil {
+	if _, err := store.UpsertGovernanceMembershipQ(ctx, tx, group("ops", zulu)); err != nil {
 		t.Fatal(err)
 	}
 
 	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
-		done <- doSSO(t, e.srv, http.MethodPut, "/api/v1/governance/profiles/"+zulu.ID.String(), e.alice, profileBody("aaa", "pypi.org"))
+		done <- doSSO(t, e.srv, http.MethodPut, "/api/v1/governance/units/"+zulu.ID.String(), e.alice, profileBody("aaa", "pypi.org"))
 	}()
 	waitFor(t, "the rename to wait for the profile graph", func() bool { return blockedBy(t, e.pool, holder, "%") })
 	if err := tx.Commit(ctx); err != nil {
@@ -972,18 +972,18 @@ func TestPG_GovernanceChanges_AssignmentWritesWaitForTheProfileGraph(t *testing.
 	e := newGovEnv(t)
 	ctx := context.Background()
 	prof := e.seedProfile("mike", "pypi.org")
-	seeded, err := e.pg.UpsertGovernanceAssignment(ctx, types.GovernanceAssignment{SubjectType: types.CapabilitySubjectGroup,
-		Subject: "eng", ProfileID: prof.ID, Priority: 5, CreatedBy: "seed"})
+	seeded, err := e.pg.UpsertGovernanceMembership(ctx, types.GovernanceMembership{SubjectType: types.CapabilitySubjectGroup,
+		Subject: "eng", UnitID: prof.ID, Priority: 5, CreatedBy: "seed"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for name, write := range map[string]func() error{
 		"an upsert": func() error {
-			_, err := e.pg.UpsertGovernanceAssignment(ctx, types.GovernanceAssignment{SubjectType: types.CapabilitySubjectGroup,
-				Subject: "ops", ProfileID: prof.ID, Priority: 5, CreatedBy: "seed"})
+			_, err := e.pg.UpsertGovernanceMembership(ctx, types.GovernanceMembership{SubjectType: types.CapabilitySubjectGroup,
+				Subject: "ops", UnitID: prof.ID, Priority: 5, CreatedBy: "seed"})
 			return err
 		},
-		"a delete": func() error { _, err := e.pg.DeleteGovernanceAssignment(ctx, seeded.ID); return err },
+		"a delete": func() error { _, err := e.pg.DeleteGovernanceMembership(ctx, seeded.ID); return err },
 	} {
 		t.Run(name, func(t *testing.T) {
 			// The hold is on a pool of its own: this goroutine probes e.pool while it holds the graph
@@ -1024,7 +1024,7 @@ func TestPG_GovernanceChanges_AssignmentWritesWaitForTheProfileGraph(t *testing.
 func TestPG_GovernanceChanges_RejectReasonIsBounded(t *testing.T) {
 	e := newGovEnv(t)
 	p := e.seedProfile("p", "pypi.org")
-	ch := e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/profiles/"+p.ID.String(), profileBody("p", "pypi.org", "github.com")))
+	ch := e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/units/"+p.ID.String(), profileBody("p", "pypi.org", "github.com")))
 
 	for name, reason := range map[string]string{
 		"too long":          strings.Repeat("x", 513),
@@ -1068,27 +1068,27 @@ func TestPG_GovernanceChanges_ExemptionsApplyDirectly(t *testing.T) {
 	base := e.seedProfile("base", "pypi.org", "github.com", "npmjs.org")
 	composedBody := func(name string, domains ...string) string {
 		b, _ := json.Marshal(map[string]any{
-			"name": name, "base_profile_id": base.ID.String(), "overlay": map[string]any{"allowed_domains": domains},
+			"name": name, "parent_id": base.ID.String(), "overlay": map[string]any{"allowed_domains": domains},
 		})
 		return string(b)
 	}
 	// Created through the admin token: the break-glass applies directly.
-	composedRes := e.admin(http.MethodPost, "/api/v1/governance/profiles", composedBody("composed", "pypi.org"))
-	var created governanceProfileResponse
-	if err := json.Unmarshal(composedRes.Body.Bytes(), &created); err != nil || created.Profile.ID == uuid.Nil {
+	composedRes := e.admin(http.MethodPost, "/api/v1/governance/units", composedBody("composed", "pypi.org"))
+	var created governanceUnitResponse
+	if err := json.Unmarshal(composedRes.Body.Bytes(), &created); err != nil || created.Unit.ID == uuid.Nil {
 		t.Fatalf("seed composed profile: %d %s (%v)", composedRes.Code, composedRes.Body, err)
 	}
-	composedPath := "/api/v1/governance/profiles/" + created.Profile.ID.String()
+	composedPath := "/api/v1/governance/units/" + created.Unit.ID.String()
 
 	// Narrowing: fewer domains.
-	if w := e.call(e.alice, http.MethodPut, "/api/v1/governance/profiles/"+narrow.ID.String(), profileBody("narrowing", "pypi.org")); w.Code != http.StatusOK {
+	if w := e.call(e.alice, http.MethodPut, "/api/v1/governance/units/"+narrow.ID.String(), profileBody("narrowing", "pypi.org")); w.Code != http.StatusOK {
 		t.Errorf("a Leq-proven narrowing = %d %s, want 200 applied directly", w.Code, w.Body)
 	}
 	if got := e.profile(narrow.ID); len(got.Ceiling.AllowedDomains) != 1 {
 		t.Errorf("the narrowing did not apply: %v", got.Ceiling.AllowedDomains)
 	}
 	// Pure rename.
-	if w := e.call(e.alice, http.MethodPut, "/api/v1/governance/profiles/"+rename.ID.String(), profileBody("renamed", "pypi.org")); w.Code != http.StatusOK {
+	if w := e.call(e.alice, http.MethodPut, "/api/v1/governance/units/"+rename.ID.String(), profileBody("renamed", "pypi.org")); w.Code != http.StatusOK {
 		t.Errorf("a pure rename = %d %s, want 200", w.Code, w.Body)
 	}
 	if got := e.profile(rename.ID); got.Name != "renamed" {
@@ -1097,25 +1097,25 @@ func TestPG_GovernanceChanges_ExemptionsApplyDirectly(t *testing.T) {
 	if n := e.pendingCount(); n != 0 {
 		t.Fatalf("exempt writes left %d pending changes", n)
 	}
-	if rows := e.audits("governance.profile.write"); len(rows) < 3 {
+	if rows := e.audits("governance.unit.write"); len(rows) < 3 {
 		t.Errorf("exempt writes are audited as ever: %d rows", len(rows))
 	}
 
 	// Held: widening, contact-only, rename + widen, delete.
-	e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/profiles/"+narrow.ID.String(), profileBody("narrowing", "pypi.org", "github.com")))
+	e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/units/"+narrow.ID.String(), profileBody("narrowing", "pypi.org", "github.com")))
 	withContact := `{"name":"contact-only","ceiling":{"allowed_domains":["pypi.org"],"min_confinement_class":"CC2"},"contact":{"owner":"Sec","email":"sec@example.com"}}`
-	e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/profiles/"+contact.ID.String(), withContact))
+	e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/units/"+contact.ID.String(), withContact))
 	if got := e.profile(contact.ID); got.Contact != nil {
 		t.Errorf("a contact-only PUT was applied: %+v", got.Contact)
 	}
 	e.pending(e.call(e.alice, http.MethodPut, composedPath, composedBody("composed-renamed", "pypi.org", "github.com")))
-	e.pending(e.call(e.alice, http.MethodDelete, "/api/v1/governance/profiles/"+del.ID.String(), ""))
-	if _, err := e.pg.GetGovernanceProfile(context.Background(), del.ID); err != nil {
+	e.pending(e.call(e.alice, http.MethodDelete, "/api/v1/governance/units/"+del.ID.String(), ""))
+	if _, err := e.pg.GetGovernanceUnit(context.Background(), del.ID); err != nil {
 		t.Errorf("a held delete removed the profile: %v", err)
 	}
 
 	// A narrowing overlay on the composed profile is exempt too (it is Leq the current effective).
-	if w := e.call(e.carol, http.MethodPut, "/api/v1/governance/profiles/"+base.ID.String(), profileBody("base", "pypi.org", "github.com")); w.Code != http.StatusOK {
+	if w := e.call(e.carol, http.MethodPut, "/api/v1/governance/units/"+base.ID.String(), profileBody("base", "pypi.org", "github.com")); w.Code != http.StatusOK {
 		// base was narrowed from three domains to two: Leq, so applied directly.
 		t.Errorf("narrowing the base = %d %s, want 200", w.Code, w.Body)
 	}
@@ -1129,16 +1129,16 @@ func TestPG_GovernanceChanges_RenameInAGroupTieIsHeld(t *testing.T) {
 	ctx := context.Background()
 	wide := e.seedProfile("aaa-wide", "pypi.org", "github.com")
 	narrow := e.seedProfile("mmm-narrow", "pypi.org")
-	for subject, p := range map[string]types.GovernanceProfile{"eng": wide, "ops": narrow} {
-		if _, err := e.pg.UpsertGovernanceAssignment(ctx, types.GovernanceAssignment{
-			SubjectType: types.CapabilitySubjectGroup, Subject: subject, ProfileID: p.ID, Priority: 5, CreatedBy: "seed",
+	for subject, p := range map[string]types.GovernanceUnit{"eng": wide, "ops": narrow} {
+		if _, err := e.pg.UpsertGovernanceMembership(ctx, types.GovernanceMembership{
+			SubjectType: types.CapabilitySubjectGroup, Subject: subject, UnitID: p.ID, Priority: 5, CreatedBy: "seed",
 		}); err != nil {
 			t.Fatalf("seed group assignment: %v", err)
 		}
 	}
 	selected := func() string {
 		t.Helper()
-		p, _, err := e.pg.ResolveGovernanceProfile(ctx, []string{"someone@corp.example"}, []string{"eng", "ops"}, "")
+		p, _, err := e.pg.ResolveGovernanceUnit(ctx, []string{"someone@corp.example"}, []string{"eng", "ops"}, "")
 		if err != nil {
 			t.Fatalf("resolve: %v", err)
 		}
@@ -1148,18 +1148,18 @@ func TestPG_GovernanceChanges_RenameInAGroupTieIsHeld(t *testing.T) {
 		t.Fatalf("a person in both groups resolves to %q, want aaa-wide", got)
 	}
 
-	held := e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/profiles/"+wide.ID.String(), profileBody("zzz-wide", "pypi.org", "github.com")))
+	held := e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/units/"+wide.ID.String(), profileBody("zzz-wide", "pypi.org", "github.com")))
 	if w := e.call(e.bob, http.MethodPost, rejectPath(held.ID), ""); w.Code != http.StatusOK {
 		t.Fatalf("reject = %d %s", w.Code, w.Body)
 	}
 	// A rename plus an otherwise narrowing edit is held too.
-	e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/profiles/"+wide.ID.String(), profileBody("zzz-wide", "pypi.org")))
+	e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/units/"+wide.ID.String(), profileBody("zzz-wide", "pypi.org")))
 	if got := selected(); got != "aaa-wide" {
 		t.Fatalf("a held rename moved the selection to %q", got)
 	}
 
 	// The same rename through the break-glass shows what the hold protects.
-	if w := e.admin(http.MethodPut, "/api/v1/governance/profiles/"+wide.ID.String(), profileBody("zzz-wide", "pypi.org", "github.com")); w.Code != http.StatusOK {
+	if w := e.admin(http.MethodPut, "/api/v1/governance/units/"+wide.ID.String(), profileBody("zzz-wide", "pypi.org", "github.com")); w.Code != http.StatusOK {
 		t.Fatalf("break-glass rename = %d %s", w.Code, w.Body)
 	}
 	if got := selected(); got != "mmm-narrow" {
@@ -1173,7 +1173,7 @@ func TestPG_GovernanceChanges_RenameInAGroupTieIsHeld(t *testing.T) {
 func TestPG_GovernanceChanges_DiffIsRedactedAndPayloadHoldsNoSecret(t *testing.T) {
 	e := newGovEnv(t)
 	const raw = "raw-secret-value-must-never-appear"
-	p, err := e.pg.UpsertGovernanceProfile(context.Background(), types.GovernanceProfile{
+	p, err := e.pg.UpsertGovernanceUnit(context.Background(), types.GovernanceUnit{
 		Name: "inspected", CreatedBy: "seed",
 		Ceiling: types.RunPolicySpec{
 			AllowedDomains: []string{"pypi.org"}, MinConfinementClass: types.CC2,
@@ -1183,7 +1183,7 @@ func TestPG_GovernanceChanges_DiffIsRedactedAndPayloadHoldsNoSecret(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := e.call(e.alice, http.MethodPut, "/api/v1/governance/profiles/"+p.ID.String(), profileBody("inspected", "pypi.org", "github.com"))
+	w := e.call(e.alice, http.MethodPut, "/api/v1/governance/units/"+p.ID.String(), profileBody("inspected", "pypi.org", "github.com"))
 	ch := e.pending(w)
 	if strings.Contains(w.Body.String(), raw) {
 		t.Errorf("the 202 carries the raw secret value: %s", w.Body)
@@ -1222,10 +1222,10 @@ func TestPG_GovernanceChanges_LocalModeRefuses(t *testing.T) {
 		return w
 	}
 	for name, w := range map[string]*httptest.ResponseRecorder{
-		"create profile": local(http.MethodPost, "/api/v1/governance/profiles", profileBody("n", "pypi.org")),
-		"update profile": local(http.MethodPut, "/api/v1/governance/profiles/"+p.ID.String(), profileBody("p", "pypi.org")),
-		"delete profile": local(http.MethodDelete, "/api/v1/governance/profiles/"+p.ID.String(), ""),
-		"assignment":     local(http.MethodPost, "/api/v1/governance/assignments", fmt.Sprintf(`{"subject_type":"all","profile_id":%q}`, p.ID)),
+		"create profile": local(http.MethodPost, "/api/v1/governance/units", profileBody("n", "pypi.org")),
+		"update profile": local(http.MethodPut, "/api/v1/governance/units/"+p.ID.String(), profileBody("p", "pypi.org")),
+		"delete profile": local(http.MethodDelete, "/api/v1/governance/units/"+p.ID.String(), ""),
+		"assignment":     local(http.MethodPost, "/api/v1/governance/memberships", fmt.Sprintf(`{"subject_type":"all","unit_id":%q}`, p.ID)),
 		"approve":        local(http.MethodPost, approvePath(uuid.New()), ""),
 		"reject":         local(http.MethodPost, rejectPath(uuid.New()), ""),
 	} {
@@ -1247,8 +1247,8 @@ func TestPG_GovernanceChanges_ChangeListHonoursState(t *testing.T) {
 	e := newGovEnv(t)
 	p := e.seedProfile("p", "pypi.org")
 	q := e.seedProfile("q", "pypi.org")
-	a := e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/profiles/"+p.ID.String(), profileBody("p", "pypi.org", "github.com")))
-	b := e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/profiles/"+q.ID.String(), profileBody("q", "pypi.org", "github.com")))
+	a := e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/units/"+p.ID.String(), profileBody("p", "pypi.org", "github.com")))
+	b := e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/units/"+q.ID.String(), profileBody("q", "pypi.org", "github.com")))
 	if w := e.call(e.bob, http.MethodPost, rejectPath(a.ID), ""); w.Code != http.StatusOK {
 		t.Fatalf("reject = %d %s", w.Code, w.Body)
 	}

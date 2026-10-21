@@ -72,7 +72,7 @@ func (s *Server) userDriveDoorRefusal(r *http.Request, ceiling governanceCeiling
 	}
 	// The mock round's frozen member copy, reproduced byte-exact: the console
 	// never rewords a server refusal, so this line is where that string ships.
-	return runDenied(authz.Deny(authz.ReasonGovernanceProfile, "runs.drive", driveDeniedByProfileMsg(profile)).WithPolicy(s.ceilingPolicy(r.Context(), ceiling)))
+	return runDenied(authz.Deny(authz.ReasonGovernanceUnit, "runs.drive", driveDeniedByUnitMsg(profile)).WithPolicy(s.ceilingPolicy(r.Context(), ceiling)))
 }
 
 func runDriveRefusal(status int, reason, member string, attrs ...any) *runRefusal {

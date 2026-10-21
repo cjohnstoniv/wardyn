@@ -39,54 +39,54 @@ func sameJSON(a, b any) bool {
 
 // ── governance profiles ──────────────────────────────────────────────────────
 
-// profileChangePayload is a held profile write: the validated request body, with each optional member
+// unitChangePayload is a held profile write: the validated request body, with each optional member
 // present only when the caller sent it (absent keeps the stored value, null clears it, so the two must
 // stay distinguishable when the payload is replayed).
-type profileChangePayload struct {
+type unitChangePayload struct {
 	Name          string                 `json:"name"`
 	Ceiling       types.RunPolicySpec    `json:"ceiling"`
 	Limits        types.GovernanceLimits `json:"limits"`
 	Contact       json.RawMessage        `json:"contact,omitempty"`
-	BaseProfileID json.RawMessage        `json:"base_profile_id,omitempty"`
+	ParentID      json.RawMessage        `json:"parent_id,omitempty"`
 	Overlay       json.RawMessage        `json:"overlay,omitempty"`
 	OverlayLimits json.RawMessage        `json:"overlay_limits,omitempty"`
 }
 
-func profilePayloadOf(req governanceProfileRequest) profileChangePayload {
-	return profileChangePayload{
+func unitPayloadOf(req governanceUnitRequest) unitChangePayload {
+	return unitChangePayload{
 		Name: req.Name, Ceiling: req.Ceiling, Limits: req.Limits,
-		Contact: req.Contact, BaseProfileID: req.BaseProfileID, Overlay: req.Overlay, OverlayLimits: req.OverlayLimits,
+		Contact: req.Contact, ParentID: req.ParentID, Overlay: req.Overlay, OverlayLimits: req.OverlayLimits,
 	}
 }
 
-// profileRequestFromPayload decodes a held profile write and validates it by the rules a direct write
+// unitRequestFromPayload decodes a held profile write and validates it by the rules a direct write
 // is judged by. A message is why it no longer validates.
-func profileRequestFromPayload(raw json.RawMessage) (governanceProfileRequest, string) {
-	var req governanceProfileRequest
+func unitRequestFromPayload(raw json.RawMessage) (governanceUnitRequest, string) {
+	var req governanceUnitRequest
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
-		return governanceProfileRequest{}, "invalid JSON body: " + err.Error()
+		return governanceUnitRequest{}, "invalid JSON body: " + err.Error()
 	}
-	req, msg := finishGovernanceProfileRequest(req)
+	req, msg := finishGovernanceUnitRequest(req)
 	if msg != "" {
-		return governanceProfileRequest{}, msg
+		return governanceUnitRequest{}, msg
 	}
 	if msg := req.parseComposition(); msg != "" {
-		return governanceProfileRequest{}, msg
+		return governanceUnitRequest{}, msg
 	}
 	return req, ""
 }
 
-// heldProfileWrite is what a profile build proved before it was abandoned: every profile as the
+// heldUnitWrite is what a profile build proved before it was abandoned: every profile as the
 // transaction read them, the row it would have stored and what that composes to.
-type heldProfileWrite struct {
-	all []types.GovernanceProfile
-	row types.GovernanceProfile
-	res *ResolvedProfile
+type heldUnitWrite struct {
+	all []types.GovernanceUnit
+	row types.GovernanceUnit
+	res *ResolvedUnit
 }
 
-// profileWriteExempt reports whether a human's profile update applies without a second human. Only an
+// unitWriteExempt reports whether a human's profile update applies without a second human. Only an
 // UPDATE of an existing profile can be exempt, and only by one of two proofs:
 //
 //   - metadata only: every stored field other than the name is equal to the current row, including the
@@ -99,19 +99,19 @@ type heldProfileWrite struct {
 // told to ask, and nothing proves a new one is not a redirect. So is a rename that can change which
 // profile a person is given (renameMaySelect), whichever proof would otherwise admit it. Nothing else
 // is exempt.
-func (s *Server) profileWriteExempt(ctx context.Context, all []types.GovernanceProfile, p types.GovernanceProfile, res *ResolvedProfile) bool {
-	byID := profilesByID(all)
+func (s *Server) unitWriteExempt(ctx context.Context, all []types.GovernanceUnit, p types.GovernanceUnit, res *ResolvedUnit) bool {
+	byID := unitsByID(all)
 	cur, exists := byID[p.ID]
 	if !exists || res == nil {
 		return false
 	}
-	if !sameJSON(nonZeroContact(cur.Contact), nonZeroContact(profileContactAfter(cur, p))) {
+	if !sameJSON(nonZeroContact(cur.Contact), nonZeroContact(unitContactAfter(cur, p))) {
 		return false
 	}
 	if cur.Name != p.Name && s.renameMaySelect(ctx, p.ID) {
 		return false
 	}
-	if sameJSON(cur.Ceiling, p.Ceiling) && sameJSON(cur.Limits, p.Limits) && sameJSON(cur.BaseProfileID, p.BaseProfileID) &&
+	if sameJSON(cur.Ceiling, p.Ceiling) && sameJSON(cur.Limits, p.Limits) && sameJSON(cur.ParentID, p.ParentID) &&
 		sameJSON(cur.Overlay, p.Overlay) && sameJSON(cur.OverlayLimits, p.OverlayLimits) {
 		return true
 	}
@@ -137,16 +137,16 @@ func (s *Server) profileWriteExempt(ctx context.Context, all []types.GovernanceP
 // rename actually reorders the pair: the database's collation decides that order, not Go's. A list
 // that cannot be read answers true, so the write is held.
 func (s *Server) renameMaySelect(ctx context.Context, id uuid.UUID) bool {
-	all, err := governanceAssignmentsFor(ctx, s)
+	all, err := governanceMembershipsFor(ctx, s)
 	if err != nil {
 		return true
 	}
 	for _, a := range all {
-		if a.SubjectType != types.CapabilitySubjectGroup || a.ProfileID != id {
+		if a.SubjectType != types.CapabilitySubjectGroup || a.UnitID != id {
 			continue
 		}
-		if slices.ContainsFunc(all, func(b types.GovernanceAssignment) bool {
-			return b.SubjectType == types.CapabilitySubjectGroup && b.ProfileID != id && b.Priority == a.Priority
+		if slices.ContainsFunc(all, func(b types.GovernanceMembership) bool {
+			return b.SubjectType == types.CapabilitySubjectGroup && b.UnitID != id && b.Priority == a.Priority
 		}) {
 			return true
 		}
@@ -154,8 +154,8 @@ func (s *Server) renameMaySelect(ctx context.Context, id uuid.UUID) bool {
 	return false
 }
 
-// profileContactAfter is the contact the row holds once p is written over cur.
-func profileContactAfter(cur, p types.GovernanceProfile) *policyref.Contact {
+// unitContactAfter is the contact the row holds once p is written over cur.
+func unitContactAfter(cur, p types.GovernanceUnit) *policyref.Contact {
 	if p.ContactSet {
 		return p.Contact
 	}
@@ -170,29 +170,29 @@ func nonZeroContact(c *policyref.Contact) *policyref.Contact {
 	return c
 }
 
-// profileDiffStored is the stored fields of a profile the reviewer compares, without its identity or
+// unitDiffStored is the stored fields of a profile the reviewer compares, without its identity or
 // provenance (which do not change what the profile permits).
-type profileDiffStored struct {
+type unitDiffStored struct {
 	Name          string                 `json:"name"`
 	Ceiling       types.RunPolicySpec    `json:"ceiling"`
 	Limits        types.GovernanceLimits `json:"limits"`
 	Contact       *policyref.Contact     `json:"contact,omitempty"`
-	BaseProfileID *uuid.UUID             `json:"base_profile_id,omitempty"`
+	ParentID      *uuid.UUID             `json:"parent_id,omitempty"`
 	Overlay       *types.CeilingOverlay  `json:"overlay,omitempty"`
 	OverlayLimits *types.LimitsOverlay   `json:"overlay_limits,omitempty"`
 }
 
-// profileDiffView is a profile as the reviewer reads it: the stored fields and what composing them
+// unitDiffView is a profile as the reviewer reads it: the stored fields and what composing them
 // gives. Every ceiling in it passes the read-redaction every other read of a ceiling does.
-type profileDiffView struct {
-	profileDiffStored
+type unitDiffView struct {
+	unitDiffStored
 	Effective *governanceEffective `json:"effective,omitempty"`
 }
 
-func newProfileDiffView(row types.GovernanceProfile, res *ResolvedProfile) *profileDiffView {
-	v := &profileDiffView{profileDiffStored: profileDiffStored{
+func newUnitDiffView(row types.GovernanceUnit, res *ResolvedUnit) *unitDiffView {
+	v := &unitDiffView{unitDiffStored: unitDiffStored{
 		Name: row.Name, Ceiling: redactSpecForRead(row.Ceiling, true), Limits: row.Limits,
-		Contact: nonZeroContact(row.Contact), BaseProfileID: row.BaseProfileID,
+		Contact: nonZeroContact(row.Contact), ParentID: row.ParentID,
 		Overlay: redactOverlayForRead(row.Overlay), OverlayLimits: row.OverlayLimits,
 	}}
 	if res != nil {
@@ -217,8 +217,8 @@ func redactOverlayForRead(o *types.CeilingOverlay) *types.CeilingOverlay {
 }
 
 // resolveForDiff is what the profile id composes to in all, or nil when it does not compose.
-func (s *Server) resolveForDiff(all []types.GovernanceProfile, id uuid.UUID) *ResolvedProfile {
-	chain, err := chainFromRows(profilesByID(all), id)
+func (s *Server) resolveForDiff(all []types.GovernanceUnit, id uuid.UUID) *ResolvedUnit {
+	chain, err := chainFromRows(unitsByID(all), id)
 	if err != nil {
 		return nil
 	}
@@ -229,52 +229,52 @@ func (s *Server) resolveForDiff(all []types.GovernanceProfile, id uuid.UUID) *Re
 	return res
 }
 
-// profileBaseState is the profile graph as a change to profile id depends on it: the row itself (nil
+// unitBaseState is the profile graph as a change to profile id depends on it: the row itself (nil
 // when absent) and the chain of bases above base. An approval that finds either changed refuses as
 // stale, so the profile the reviewer saw, and what it composes on, is what is written.
-func profileBaseState(all []types.GovernanceProfile, id uuid.UUID, base *uuid.UUID) any {
-	byID := profilesByID(all)
+func unitBaseState(all []types.GovernanceUnit, id uuid.UUID, base *uuid.UUID) any {
+	byID := unitsByID(all)
 	state := map[string]any{"self": nil}
 	if row, ok := byID[id]; ok {
 		state["self"] = row
 	}
-	bases := []types.GovernanceProfile{}
+	bases := []types.GovernanceUnit{}
 	seen := map[uuid.UUID]bool{id: true}
-	for cur := base; cur != nil && !seen[*cur] && len(bases) <= maxProfileDepth; {
+	for cur := base; cur != nil && !seen[*cur] && len(bases) <= maxUnitDepth; {
 		row, ok := byID[*cur]
 		if !ok {
 			break
 		}
 		seen[*cur] = true
 		bases = append(bases, row)
-		cur = row.BaseProfileID
+		cur = row.ParentID
 	}
 	state["bases"] = bases
 	return state
 }
 
-// holdProfileWrite stores a profile create or update that build accepted as a pending change.
-func (s *Server) holdProfileWrite(w http.ResponseWriter, r *http.Request, id uuid.UUID, req governanceProfileRequest, h heldProfileWrite) {
-	cur, exists := profilesByID(h.all)[id]
+// holdUnitWrite stores a profile create or update that build accepted as a pending change.
+func (s *Server) holdUnitWrite(w http.ResponseWriter, r *http.Request, id uuid.UUID, req governanceUnitRequest, h heldUnitWrite) {
+	cur, exists := unitsByID(h.all)[id]
 	row := h.row
 	op := "create"
-	var before *profileDiffView
+	var before *unitDiffView
 	if exists {
 		op = "update"
-		before = newProfileDiffView(cur, s.resolveForDiff(h.all, id))
-		row.Contact = profileContactAfter(cur, h.row)
+		before = newUnitDiffView(cur, s.resolveForDiff(h.all, id))
+		row.Contact = unitContactAfter(cur, h.row)
 	}
-	after := newProfileDiffView(row, h.res)
+	after := newUnitDiffView(row, h.res)
 	p := govProposal{
-		kind: govKindProfile, op: op, key: id.String(), payload: profilePayloadOf(req),
-		after: after, baseState: profileBaseState(h.all, id, h.row.BaseProfileID),
+		kind: govKindUnit, op: op, key: id.String(), payload: unitPayloadOf(req),
+		after: after, baseState: unitBaseState(h.all, id, h.row.ParentID),
 	}
-	var beforeStored *profileDiffStored
+	var beforeStored *unitDiffStored
 	if before != nil {
-		p.before, beforeStored = before, &before.profileDiffStored
+		p.before, beforeStored = before, &before.unitDiffStored
 	}
-	p.changed = changedPaths(beforeStored, after.profileDiffStored)
-	// The notes a direct write returns as warnings (writeGovernanceProfile), kept with the change so the
+	p.changed = changedPaths(beforeStored, after.unitDiffStored)
+	// The notes a direct write returns as warnings (writeGovernanceUnit), kept with the change so the
 	// proposer and the approver read what the person who saved it directly would have.
 	if !row.Composed() {
 		p.notes = governanceOmissionWarnings(row.Ceiling, s.cfg.DefaultPolicy, row.Limits)
@@ -286,118 +286,118 @@ func (s *Server) holdProfileWrite(w http.ResponseWriter, r *http.Request, id uui
 	s.proposeGovernanceChange(w, r, p)
 }
 
-// holdProfileDelete stores a profile delete as a pending change, after a dry run of the delete has
+// holdUnitDelete stores a profile delete as a pending change, after a dry run of the delete has
 // shown the store would accept it (so the refusals are the direct delete's own).
-func (s *Server) holdProfileDelete(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
+func (s *Server) holdUnitDelete(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
 	ctx := r.Context()
-	var all []types.GovernanceProfile
+	var all []types.GovernanceUnit
 	err := s.cfg.Store.DryRunGovernance(ctx, func(q store.Querier) error {
 		if err := store.LockGovernanceGraph(ctx, q); err != nil {
 			return err
 		}
 		var err error
-		if all, err = store.ListGovernanceProfilesQ(ctx, q); err != nil {
+		if all, err = store.ListGovernanceUnitsQ(ctx, q); err != nil {
 			return err
 		}
-		return store.DeleteGovernanceProfileQ(ctx, q, id)
+		return store.DeleteGovernanceUnitQ(ctx, q, id)
 	})
-	if s.writeProfileDeleteError(w, r, err) {
+	if s.writeUnitDeleteError(w, r, err) {
 		return
 	}
-	cur := profilesByID(all)[id]
-	before := newProfileDiffView(cur, s.resolveForDiff(all, id))
+	cur := unitsByID(all)[id]
+	before := newUnitDiffView(cur, s.resolveForDiff(all, id))
 	s.proposeGovernanceChange(w, r, govProposal{
-		kind: govKindProfile, op: "delete", key: id.String(), payload: map[string]any{"id": id},
-		before: before, changed: changedPaths(before.profileDiffStored, nil),
-		baseState: profileBaseState(all, id, cur.BaseProfileID),
+		kind: govKindUnit, op: "delete", key: id.String(), payload: map[string]any{"id": id},
+		before: before, changed: changedPaths(before.unitDiffStored, nil),
+		baseState: unitBaseState(all, id, cur.ParentID),
 	})
 }
 
-// applyProfileChange applies a held profile change inside the decision transaction.
-func applyProfileChange(s *Server, r *http.Request, q store.Querier, ch types.GovernanceChange) (govApplied, error) {
+// applyUnitChange applies a held profile change inside the decision transaction.
+func applyUnitChange(s *Server, r *http.Request, q store.Querier, ch types.GovernanceChange) (govApplied, error) {
 	ctx := r.Context()
 	id, err := uuid.Parse(ch.TargetKey)
 	if err != nil {
 		return govApplied{}, fmt.Errorf("governance change %s: target key %q is not a profile id", ch.ID, ch.TargetKey)
 	}
 	if ch.Op == "delete" {
-		return applyProfileDelete(ctx, q, ch, id)
+		return applyUnitDelete(ctx, q, ch, id)
 	}
-	req, msg := profileRequestFromPayload(ch.Payload)
+	req, msg := unitRequestFromPayload(ch.Payload)
 	if msg != "" {
-		return govApplied{}, writeRefusal(http.StatusBadRequest, reasonGovernanceProfileRequestInvalid, "%s", msg)
+		return govApplied{}, writeRefusal(http.StatusBadRequest, reasonGovernanceUnitRequestInvalid, "%s", msg)
 	}
-	var effective *ResolvedProfile
-	saved, err := store.WriteGovernanceProfileQ(ctx, q, id, func(all []types.GovernanceProfile, _ []types.GovernanceAssignment) (types.GovernanceProfile, error) {
+	var effective *ResolvedUnit
+	saved, err := store.WriteGovernanceUnitQ(ctx, q, id, func(all []types.GovernanceUnit, _ []types.GovernanceMembership) (types.GovernanceUnit, error) {
 		base, _, _ := composedFrom(all, id, req.comp)
-		if computeETag(profileBaseState(all, id, base)) != ch.BaseHash {
-			return types.GovernanceProfile{}, store.ErrGovernanceChangeStale
+		if computeETag(unitBaseState(all, id, base)) != ch.BaseHash {
+			return types.GovernanceUnit{}, store.ErrGovernanceChangeStale
 		}
-		p, res, err := s.buildGovernanceProfile(ch.ProposedBy, id, req, all)
+		p, res, err := s.buildGovernanceUnit(ch.ProposedBy, id, req, all)
 		effective = res
 		return p, err
 	})
 	if errors.Is(err, store.ErrConflict) {
-		return govApplied{}, writeRefusal(http.StatusConflict, reasonGovernanceProfileNameConflict,
+		return govApplied{}, writeRefusal(http.StatusConflict, reasonGovernanceUnitNameConflict,
 			"a governance profile named %q already exists", req.Name)
 	}
 	if err != nil {
 		return govApplied{}, err
 	}
-	return govApplied{action: "governance.profile.write", target: saved.ID.String(), data: profileWriteAuditData(saved, effective)}, nil
+	return govApplied{action: "governance.unit.write", target: saved.ID.String(), data: unitWriteAuditData(saved, effective)}, nil
 }
 
-func applyProfileDelete(ctx context.Context, q store.Querier, ch types.GovernanceChange, id uuid.UUID) (govApplied, error) {
+func applyUnitDelete(ctx context.Context, q store.Querier, ch types.GovernanceChange, id uuid.UUID) (govApplied, error) {
 	if err := store.LockGovernanceGraph(ctx, q); err != nil {
 		return govApplied{}, err
 	}
-	all, err := store.ListGovernanceProfilesQ(ctx, q)
+	all, err := store.ListGovernanceUnitsQ(ctx, q)
 	if err != nil {
 		return govApplied{}, err
 	}
 	var base *uuid.UUID
-	if cur, ok := profilesByID(all)[id]; ok {
-		base = cur.BaseProfileID
+	if cur, ok := unitsByID(all)[id]; ok {
+		base = cur.ParentID
 	}
-	if computeETag(profileBaseState(all, id, base)) != ch.BaseHash {
+	if computeETag(unitBaseState(all, id, base)) != ch.BaseHash {
 		return govApplied{}, store.ErrGovernanceChangeStale
 	}
-	err = store.DeleteGovernanceProfileQ(ctx, q, id)
+	err = store.DeleteGovernanceUnitQ(ctx, q, id)
 	var children *store.ErrProfileHasChildren
 	switch {
 	case errors.Is(err, store.ErrNotFound):
-		return govApplied{}, writeRefusal(http.StatusNotFound, reasonGovernanceProfileNotFoundByID, "governance profile not found")
+		return govApplied{}, writeRefusal(http.StatusNotFound, reasonGovernanceUnitNotFoundByID, "governance profile not found")
 	case errors.As(err, &children):
-		return govApplied{}, writeRefusal(http.StatusConflict, reasonGovernanceProfileInUse,
+		return govApplied{}, writeRefusal(http.StatusConflict, reasonGovernanceUnitInUse,
 			"this governance profile is the base of %s — delete or re-base them first", strings.Join(children.Names, ", "))
 	case errors.Is(err, store.ErrConflict):
-		return govApplied{}, writeRefusal(http.StatusConflict, reasonGovernanceProfileInUse,
+		return govApplied{}, writeRefusal(http.StatusConflict, reasonGovernanceUnitInUse,
 			"this governance profile is still assigned — delete its assignments first")
 	case err != nil:
 		return govApplied{}, err
 	}
-	return govApplied{action: "governance.profile.delete", target: id.String()}, nil
+	return govApplied{action: "governance.unit.delete", target: id.String()}, nil
 }
 
 // ── governance assignments ───────────────────────────────────────────────────
 
-// assignmentKey is an assignment's natural key as target_key: the subject type, a colon, the subject.
+// membershipKey is an assignment's natural key as target_key: the subject type, a colon, the subject.
 // A subject type never contains a colon, so the first one splits the two.
-func assignmentKey(subjectType types.CapabilitySubjectType, subject string) string {
+func membershipKey(subjectType types.CapabilitySubjectType, subject string) string {
 	return string(subjectType) + ":" + subject
 }
 
-func splitAssignmentKey(key string) (subjectType, subject string, ok bool) {
+func splitMembershipKey(key string) (subjectType, subject string, ok bool) {
 	return strings.Cut(key, ":")
 }
 
-// assignmentWriteAuditData is the governance.assignment.write row's data, shared by a direct write
+// membershipWriteAuditData is the governance.membership.write row's data, shared by a direct write
 // and an approved one.
-func assignmentWriteAuditData(saved types.GovernanceAssignment) map[string]any {
+func membershipWriteAuditData(saved types.GovernanceMembership) map[string]any {
 	return map[string]any{
 		"subject_type": saved.SubjectType,
 		"subject":      saved.Subject,
-		"profile_id":   saved.ProfileID,
+		"unit_id":      saved.UnitID,
 		"priority":     saved.Priority,
 	}
 }
@@ -412,7 +412,7 @@ func (s *Server) readDeleteAudit(ctx context.Context, read func(q store.Querier)
 	return data, err
 }
 
-type assignmentProfileView struct {
+type membershipUnitView struct {
 	ID      uuid.UUID              `json:"id"`
 	Name    string                 `json:"name"`
 	Ceiling types.RunPolicySpec    `json:"ceiling"`
@@ -420,41 +420,41 @@ type assignmentProfileView struct {
 	Error   string                 `json:"error,omitempty"`
 }
 
-// assignmentDiffView is an assignment as the reviewer reads it, with the profile it points at as that
+// membershipDiffView is an assignment as the reviewer reads it, with the profile it points at as that
 // profile stood at proposal: what the assignment grants is that profile's content, not its name.
-type assignmentDiffView struct {
+type membershipDiffView struct {
 	SubjectType types.CapabilitySubjectType `json:"subject_type"`
 	Subject     string                      `json:"subject"`
-	ProfileID   uuid.UUID                   `json:"profile_id"`
+	UnitID      uuid.UUID                   `json:"unit_id"`
 	Priority    int                         `json:"priority"`
-	Profile     *assignmentProfileView      `json:"profile,omitempty"`
+	Unit        *membershipUnitView         `json:"unit,omitempty"`
 }
 
-// newAssignmentDiffView renders a with the profile chain (leaf first) it points at. The profile's
+// newMembershipDiffView renders a with the profile chain (leaf first) it points at. The profile's
 // ceiling and limits are its EFFECTIVE ones, and the ceiling passes read-redaction.
-func (s *Server) newAssignmentDiffView(a types.GovernanceAssignment, chain []types.GovernanceProfile) *assignmentDiffView {
-	v := &assignmentDiffView{SubjectType: a.SubjectType, Subject: a.Subject, ProfileID: a.ProfileID, Priority: a.Priority}
+func (s *Server) newMembershipDiffView(a types.GovernanceMembership, chain []types.GovernanceUnit) *membershipDiffView {
+	v := &membershipDiffView{SubjectType: a.SubjectType, Subject: a.Subject, UnitID: a.UnitID, Priority: a.Priority}
 	if len(chain) == 0 {
 		return v
 	}
-	pv := &assignmentProfileView{ID: chain[0].ID, Name: chain[0].Name}
+	pv := &membershipUnitView{ID: chain[0].ID, Name: chain[0].Name}
 	res, err := s.composeChain(chain)
 	if err != nil {
 		pv.Ceiling, pv.Limits, pv.Error = redactSpecForRead(chain[0].Ceiling, true), chain[0].Limits, adminResolveError(err)
 	} else {
 		pv.Ceiling, pv.Limits = redactSpecForRead(res.Ceiling, true), res.Limits
 	}
-	v.Profile = pv
+	v.Unit = pv
 	return v
 }
 
-// profileChainQ reads profile id and the bases above it, leaf first, stopping at a missing profile or
+// unitChainQ reads profile id and the bases above it, leaf first, stopping at a missing profile or
 // a repeat. forUpdate locks each row for the transaction.
-func profileChainQ(ctx context.Context, q store.Querier, id uuid.UUID, forUpdate bool) ([]types.GovernanceProfile, error) {
-	chain := []types.GovernanceProfile{}
+func unitChainQ(ctx context.Context, q store.Querier, id uuid.UUID, forUpdate bool) ([]types.GovernanceUnit, error) {
+	chain := []types.GovernanceUnit{}
 	seen := map[uuid.UUID]bool{}
-	for cur := &id; cur != nil && *cur != uuid.Nil && !seen[*cur] && len(chain) <= maxProfileDepth; {
-		row, err := store.GetGovernanceProfileQ(ctx, q, *cur, forUpdate)
+	for cur := &id; cur != nil && *cur != uuid.Nil && !seen[*cur] && len(chain) <= maxUnitDepth; {
+		row, err := store.GetGovernanceUnitQ(ctx, q, *cur, forUpdate)
 		if errors.Is(err, store.ErrNotFound) {
 			break
 		}
@@ -463,134 +463,134 @@ func profileChainQ(ctx context.Context, q store.Querier, id uuid.UUID, forUpdate
 		}
 		seen[*cur] = true
 		chain = append(chain, row)
-		cur = row.BaseProfileID
+		cur = row.ParentID
 	}
 	return chain, nil
 }
 
-// assignmentState is the target of an assignment change as it stands: the assignment at its natural
+// membershipState is the target of an assignment change as it stands: the assignment at its natural
 // key (nil when none) and the profile chain it points at (profileID, or the stored row's when
 // profileID is nil).
-type assignmentState struct {
-	current *types.GovernanceAssignment
-	chain   []types.GovernanceProfile
+type membershipState struct {
+	current *types.GovernanceMembership
+	chain   []types.GovernanceUnit
 }
 
 // state is what a change's base_hash is computed over. It covers the assignment row AND the profile it
 // references, so a rename or a ceiling change to that profile after proposal makes the change stale.
 // A proposal and its approval compute one and the same thing.
-func (st assignmentState) state() any {
+func (st membershipState) state() any {
 	var cur any
 	if st.current != nil {
 		cur = *st.current
 	}
-	return map[string]any{"assignment": cur, "profile_chain": st.chain}
+	return map[string]any{"membership": cur, "unit_chain": st.chain}
 }
 
-func (st assignmentState) hash() string { return computeETag(st.state()) }
+func (st membershipState) hash() string { return computeETag(st.state()) }
 
-func readAssignmentState(ctx context.Context, q store.Querier, subjectType, subject string, profileID uuid.UUID, forUpdate bool) (assignmentState, error) {
-	var st assignmentState
-	row, err := store.GetGovernanceAssignmentByKeyQ(ctx, q, subjectType, subject, forUpdate)
+func readMembershipState(ctx context.Context, q store.Querier, subjectType, subject string, profileID uuid.UUID, forUpdate bool) (membershipState, error) {
+	var st membershipState
+	row, err := store.GetGovernanceMembershipByKeyQ(ctx, q, subjectType, subject, forUpdate)
 	switch {
 	case err == nil:
 		st.current = &row
 		if profileID == uuid.Nil {
-			profileID = row.ProfileID
+			profileID = row.UnitID
 		}
 	case !errors.Is(err, store.ErrNotFound):
 		return st, err
 	}
-	if st.chain, err = profileChainQ(ctx, q, profileID, forUpdate); err != nil {
+	if st.chain, err = unitChainQ(ctx, q, profileID, forUpdate); err != nil {
 		return st, err
 	}
 	return st, nil
 }
 
-// holdAssignmentUpsert stores a validated assignment upsert as a pending change, after a dry run of
+// holdMembershipUpsert stores a validated assignment upsert as a pending change, after a dry run of
 // the upsert has shown the store would accept it (an unknown profile is the direct write's own 404).
-func (s *Server) holdAssignmentUpsert(w http.ResponseWriter, r *http.Request, a types.GovernanceAssignment) {
+func (s *Server) holdMembershipUpsert(w http.ResponseWriter, r *http.Request, a types.GovernanceMembership) {
 	ctx := r.Context()
-	var st assignmentState
-	var beforeChain []types.GovernanceProfile
+	var st membershipState
+	var beforeChain []types.GovernanceUnit
 	err := s.cfg.Store.DryRunGovernance(ctx, func(q store.Querier) error {
 		var err error
-		if st, err = readAssignmentState(ctx, q, string(a.SubjectType), a.Subject, a.ProfileID, false); err != nil {
+		if st, err = readMembershipState(ctx, q, string(a.SubjectType), a.Subject, a.UnitID, false); err != nil {
 			return err
 		}
 		beforeChain = st.chain
-		if st.current != nil && st.current.ProfileID != a.ProfileID {
-			if beforeChain, err = profileChainQ(ctx, q, st.current.ProfileID, false); err != nil {
+		if st.current != nil && st.current.UnitID != a.UnitID {
+			if beforeChain, err = unitChainQ(ctx, q, st.current.UnitID, false); err != nil {
 				return err
 			}
 		}
-		_, err = store.UpsertGovernanceAssignmentQ(ctx, q, a)
+		_, err = store.UpsertGovernanceMembershipQ(ctx, q, a)
 		return err
 	})
-	if notFoundIf(w, err, "governance profile", reasonGovernanceProfileNotFoundByID) {
+	if notFoundIf(w, err, "governance profile", reasonGovernanceUnitNotFoundByID) {
 		return
 	}
 	if err != nil {
 		writeServerError(w, r, "hold governance assignment", err)
 		return
 	}
-	after := s.newAssignmentDiffView(a, st.chain)
+	after := s.newMembershipDiffView(a, st.chain)
 	p := govProposal{
-		kind: govKindAssignment, op: "upsert", key: assignmentKey(a.SubjectType, a.Subject),
-		payload:   governanceAssignmentRequest{SubjectType: a.SubjectType, Subject: a.Subject, ProfileID: a.ProfileID, Priority: a.Priority},
+		kind: govKindMembership, op: "upsert", key: membershipKey(a.SubjectType, a.Subject),
+		payload:   governanceMembershipRequest{SubjectType: a.SubjectType, Subject: a.Subject, UnitID: a.UnitID, Priority: a.Priority},
 		after:     after,
 		baseState: st.state(),
 	}
-	var before *assignmentDiffView
+	var before *membershipDiffView
 	if st.current != nil {
-		before = s.newAssignmentDiffView(*st.current, beforeChain)
+		before = s.newMembershipDiffView(*st.current, beforeChain)
 		p.before = before
 	}
 	p.changed = changedPaths(before, after)
 	s.proposeGovernanceChange(w, r, p)
 }
 
-// holdAssignmentDelete stores an assignment delete as a pending change.
-func (s *Server) holdAssignmentDelete(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
+// holdMembershipDelete stores an assignment delete as a pending change.
+func (s *Server) holdMembershipDelete(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
 	ctx := r.Context()
-	var st assignmentState
+	var st membershipState
 	err := s.cfg.Store.DryRunGovernance(ctx, func(q store.Querier) error {
-		row, err := store.GetGovernanceAssignmentQ(ctx, q, id, false)
+		row, err := store.GetGovernanceMembershipQ(ctx, q, id, false)
 		if err != nil {
 			return err
 		}
-		st, err = readAssignmentState(ctx, q, string(row.SubjectType), row.Subject, uuid.Nil, false)
+		st, err = readMembershipState(ctx, q, string(row.SubjectType), row.Subject, uuid.Nil, false)
 		return err
 	})
-	if notFoundIf(w, err, "governance assignment", reasonGovernanceAssignmentNotFound) {
+	if notFoundIf(w, err, "governance assignment", reasonGovernanceMembershipNotFound) {
 		return
 	}
 	if err != nil || st.current == nil {
 		writeServerError(w, r, "hold governance assignment delete", errors.Join(err, errors.New("assignment vanished")))
 		return
 	}
-	before := s.newAssignmentDiffView(*st.current, st.chain)
+	before := s.newMembershipDiffView(*st.current, st.chain)
 	s.proposeGovernanceChange(w, r, govProposal{
-		kind: govKindAssignment, op: "delete", key: assignmentKey(st.current.SubjectType, st.current.Subject),
+		kind: govKindMembership, op: "delete", key: membershipKey(st.current.SubjectType, st.current.Subject),
 		payload: map[string]any{"id": id}, before: before, changed: changedPaths(before, nil),
 		baseState: st.state(),
 	})
 }
 
-// applyAssignmentChange applies a held assignment change inside the decision transaction. It takes
+// applyMembershipChange applies a held assignment change inside the decision transaction. It takes
 // the profile-graph lock first (the order a profile delete takes its own locks in, so the two cannot
 // deadlock on the assignment rows a delete's foreign-key check wants), then the key lock, then reads
 // the assignment and the profile it references FOR UPDATE.
-func applyAssignmentChange(s *Server, r *http.Request, q store.Querier, ch types.GovernanceChange) (govApplied, error) {
+func applyMembershipChange(s *Server, r *http.Request, q store.Querier, ch types.GovernanceChange) (govApplied, error) {
 	ctx := r.Context()
-	subjectType, subject, ok := splitAssignmentKey(ch.TargetKey)
+	subjectType, subject, ok := splitMembershipKey(ch.TargetKey)
 	if !ok {
 		return govApplied{}, fmt.Errorf("governance change %s: target key %q is not an assignment key", ch.ID, ch.TargetKey)
 	}
 	if err := store.LockGovernanceGraph(ctx, q); err != nil {
 		return govApplied{}, err
 	}
-	if err := store.LockGovernanceAssignmentKey(ctx, q, subjectType, subject); err != nil {
+	if err := store.LockGovernanceMembershipKey(ctx, q, subjectType, subject); err != nil {
 		return govApplied{}, err
 	}
 	if ch.Op == "delete" {
@@ -600,35 +600,35 @@ func applyAssignmentChange(s *Server, r *http.Request, q store.Querier, ch types
 		if err := json.Unmarshal(ch.Payload, &p); err != nil {
 			return govApplied{}, fmt.Errorf("governance change %s: payload: %w", ch.ID, err)
 		}
-		st, err := readAssignmentState(ctx, q, subjectType, subject, uuid.Nil, true)
+		st, err := readMembershipState(ctx, q, subjectType, subject, uuid.Nil, true)
 		if err != nil {
 			return govApplied{}, err
 		}
 		if st.hash() != ch.BaseHash {
 			return govApplied{}, store.ErrGovernanceChangeStale
 		}
-		if err := store.DeleteGovernanceAssignmentQ(ctx, q, p.ID); err != nil {
+		if err := store.DeleteGovernanceMembershipQ(ctx, q, p.ID); err != nil {
 			if errors.Is(err, store.ErrNotFound) {
-				return govApplied{}, writeRefusal(http.StatusNotFound, reasonGovernanceAssignmentNotFound, "governance assignment not found")
+				return govApplied{}, writeRefusal(http.StatusNotFound, reasonGovernanceMembershipNotFound, "governance assignment not found")
 			}
 			return govApplied{}, err
 		}
-		return govApplied{action: "governance.assignment.delete", target: p.ID.String()}, nil
+		return govApplied{action: "governance.membership.delete", target: p.ID.String()}, nil
 	}
-	var req governanceAssignmentRequest
+	var req governanceMembershipRequest
 	dec := json.NewDecoder(bytes.NewReader(ch.Payload))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
-		return govApplied{}, writeRefusal(http.StatusBadRequest, reasonGovernanceAssignmentInvalid, "invalid assignment: %v", err)
+		return govApplied{}, writeRefusal(http.StatusBadRequest, reasonGovernanceMembershipInvalid, "invalid assignment: %v", err)
 	}
-	a := types.GovernanceAssignment{SubjectType: req.SubjectType, Subject: req.Subject, ProfileID: req.ProfileID, Priority: req.Priority}
-	if err := validateGovernanceAssignment(&a); err != nil {
-		return govApplied{}, writeRefusal(http.StatusBadRequest, reasonGovernanceAssignmentInvalid, "invalid assignment: %v", err)
+	a := types.GovernanceMembership{SubjectType: req.SubjectType, Subject: req.Subject, UnitID: req.UnitID, Priority: req.Priority}
+	if err := validateGovernanceMembership(&a); err != nil {
+		return govApplied{}, writeRefusal(http.StatusBadRequest, reasonGovernanceMembershipInvalid, "invalid assignment: %v", err)
 	}
 	if err := s.checkUserTypeSubject(ctx, q, a.SubjectType, a.Subject); err != nil {
 		return govApplied{}, err
 	}
-	st, err := readAssignmentState(ctx, q, subjectType, subject, a.ProfileID, true)
+	st, err := readMembershipState(ctx, q, subjectType, subject, a.UnitID, true)
 	if err != nil {
 		return govApplied{}, err
 	}
@@ -637,14 +637,14 @@ func applyAssignmentChange(s *Server, r *http.Request, q store.Querier, ch types
 	}
 	a.ID = uuid.New()
 	a.CreatedBy = ch.ProposedBy
-	saved, err := store.UpsertGovernanceAssignmentQ(ctx, q, a)
+	saved, err := store.UpsertGovernanceMembershipQ(ctx, q, a)
 	if errors.Is(err, store.ErrNotFound) {
-		return govApplied{}, writeRefusal(http.StatusNotFound, reasonGovernanceProfileNotFoundByID, "governance profile not found")
+		return govApplied{}, writeRefusal(http.StatusNotFound, reasonGovernanceUnitNotFoundByID, "governance profile not found")
 	}
 	if err != nil {
 		return govApplied{}, err
 	}
-	return govApplied{action: "governance.assignment.write", target: saved.ID.String(), data: assignmentWriteAuditData(saved)}, nil
+	return govApplied{action: "governance.membership.write", target: saved.ID.String(), data: membershipWriteAuditData(saved)}, nil
 }
 
 // checkUserTypeSubject is userTypeSubjectExists for a replayed write: the refusal as an error.
@@ -659,20 +659,20 @@ func (s *Server) checkUserTypeSubject(ctx context.Context, q store.Querier, subj
 	return err
 }
 
-// assignmentsSnapshotKey carries the governance assignments a profile write's transaction read under
+// membershipsSnapshotKey carries the governance assignments a profile write's transaction read under
 // the graph lock, which every assignment write takes too: the exemption proof judges a rename on the
 // assignments the write commits beside.
-type assignmentsSnapshotKey struct{}
+type membershipsSnapshotKey struct{}
 
-// withGovernanceAssignments carries all for a later renameMaySelect on the returned context.
-func withGovernanceAssignments(ctx context.Context, all []types.GovernanceAssignment) context.Context {
-	return context.WithValue(ctx, assignmentsSnapshotKey{}, all)
+// withGovernanceMemberships carries all for a later renameMaySelect on the returned context.
+func withGovernanceMemberships(ctx context.Context, all []types.GovernanceMembership) context.Context {
+	return context.WithValue(ctx, membershipsSnapshotKey{}, all)
 }
 
-// governanceAssignmentsFor is the snapshot withGovernanceAssignments carries, or a fresh read.
-func governanceAssignmentsFor(ctx context.Context, s *Server) ([]types.GovernanceAssignment, error) {
-	if all, ok := ctx.Value(assignmentsSnapshotKey{}).([]types.GovernanceAssignment); ok {
+// governanceMembershipsFor is the snapshot withGovernanceMemberships carries, or a fresh read.
+func governanceMembershipsFor(ctx context.Context, s *Server) ([]types.GovernanceMembership, error) {
+	if all, ok := ctx.Value(membershipsSnapshotKey{}).([]types.GovernanceMembership); ok {
 		return all, nil
 	}
-	return s.cfg.Store.ListGovernanceAssignments(ctx)
+	return s.cfg.Store.ListGovernanceMemberships(ctx)
 }

@@ -51,7 +51,7 @@ func TestGovernanceSet_FailurePrintsStepsOnStderr(t *testing.T) {
 	fake := newFakeGovernanceServer()
 	inner := fake.handler()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && r.URL.Path == "/api/v1/governance/assignments" {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/v1/governance/memberships" {
 			writeErrorJSON(w, http.StatusInternalServerError, "boom")
 			return
 		}
@@ -59,8 +59,8 @@ func TestGovernanceSet_FailurePrintsStepsOnStderr(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	path := writeDocFile(t, sdk.GovernanceDocument{
-		Profiles:    []sdk.GovernanceProfile{{Name: "fresh"}},
-		Assignments: []sdk.GovernanceAssignment{{SubjectType: sdk.CapabilitySubjectUser, Subject: "alice", ProfileID: uuid.New()}},
+		Units:       []sdk.GovernanceUnit{{Name: "fresh"}},
+		Memberships: []sdk.GovernanceMembership{{SubjectType: sdk.CapabilitySubjectUser, Subject: "alice", UnitID: uuid.New()}},
 	})
 	stdout, stderr, err := runCaptured(t, "governance", "set", path, "--url", srv.URL, "--token", "tok")
 	if err == nil {
@@ -71,8 +71,8 @@ func TestGovernanceSet_FailurePrintsStepsOnStderr(t *testing.T) {
 	}
 	for _, want := range []string{
 		"applied: 1, pending: 0, failed: 1\n",
-		"  applied profile create fresh\n",
-		"  failed assignment upsert user alice: ",
+		"  applied unit create fresh\n",
+		"  failed membership upsert user alice: ",
 	} {
 		if !strings.Contains(stderr, want) {
 			t.Fatalf("stderr = %q, want it to contain %q", stderr, want)
@@ -121,7 +121,7 @@ func TestGovernanceSet_PrintsTheServersWarningsOnStderr(t *testing.T) {
 	const warning = "the deployment default denies evil.example and this ceiling does not"
 	inner := newFakeGovernanceServer().handler()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/governance/profiles" {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/governance/units" {
 			inner(w, r)
 			return
 		}
@@ -137,12 +137,12 @@ func TestGovernanceSet_PrintsTheServersWarningsOnStderr(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(body)
 	}))
 	t.Cleanup(srv.Close)
-	path := writeDocFile(t, sdk.GovernanceDocument{Profiles: []sdk.GovernanceProfile{{Name: "fresh"}}})
+	path := writeDocFile(t, sdk.GovernanceDocument{Units: []sdk.GovernanceUnit{{Name: "fresh"}}})
 	stdout, stderr, err := runCaptured(t, "governance", "set", path, "--url", srv.URL, "--token", "tok")
 	if err != nil {
 		t.Fatalf("governance set: %v\n%s", err, stderr)
 	}
-	if want := "warning: profile fresh: " + warning + "\n"; !strings.Contains(stderr, want) {
+	if want := "warning: unit fresh: " + warning + "\n"; !strings.Contains(stderr, want) {
 		t.Errorf("stderr = %q, want it to contain %q", stderr, want)
 	}
 	if strings.Contains(stdout, warning) {

@@ -154,7 +154,7 @@ func TestGovCovApplyGrantChange(t *testing.T) {
 	}
 	asError := func(t *testing.T, err error) {
 		t.Helper()
-		var ref *profileWriteError
+		var ref *unitWriteError
 		if err == nil || errors.As(err, &ref) {
 			t.Errorf("error = %v, want a plain error", err)
 		}
@@ -497,7 +497,7 @@ func TestGovCovHoldAndApplyUserType(t *testing.T) {
 		boom := errors.New("pg: down")
 		q := &govCovQuerier{rowErr: func(string) error { return boom }}
 		_, err := applyUserTypeChange(s, r, q, types.GovernanceChange{TargetKey: "contractor", Payload: json.RawMessage(`{"name":"x"}`)})
-		var ref *profileWriteError
+		var ref *unitWriteError
 		if !errors.Is(err, boom) || errors.As(err, &ref) || len(q.writes()) != 0 {
 			t.Errorf("error = %v, writes %v", err, q.writes())
 		}

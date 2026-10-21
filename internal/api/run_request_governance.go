@@ -98,16 +98,16 @@ func (s *Server) runRequestGovernance(r *http.Request, req createRunRequest) (go
 }
 
 func (s *Server) runGovernancePosture(r *http.Request, req createRunRequest, ceiling governanceCeiling, complete bool) *runRefusal {
-	if ceiling.Profile == nil {
+	if ceiling.Unit == nil {
 		return nil
 	}
-	name := ceiling.Profile.Name
+	name := ceiling.Unit.Name
 	policy := s.ceilingPolicy(r.Context(), ceiling)
 	// exec runs a bare command: no agent, no toolgate, nothing for tool_rules to
 	// bind. A profile that wants supervised tool use has to be able to close the
 	// door that routes around the gate entirely.
 	if ceiling.Limits.DenyTaskModeExec && req.TaskMode == "exec" {
-		return runDenied(authz.Deny(authz.ReasonGovernanceProfile, "runs.task_mode", fmt.Sprintf(
+		return runDenied(authz.Deny(authz.ReasonGovernanceUnit, "runs.task_mode", fmt.Sprintf(
 			"`task_mode=exec` is not allowed by your governance profile %q — an exec run carries no agent and no tool approvals, so nothing supervises it. Launch with an agent instead.", name)).WithPolicy(policy))
 	}
 	// The same door through an interactive run: a task with interactive_start
@@ -115,7 +115,7 @@ func (s *Server) runGovernancePosture(r *http.Request, req createRunRequest, cei
 	// attaches. Same predicate as the autonomy gate and dispatch, so the limit
 	// and the seed cannot disagree; `!= "agent"` keeps an unknown value refused.
 	if ceiling.Limits.DenyTaskModeExec && req.InteractiveStart != "agent" && interactiveBootSeed(requestIsInteractive(req), req.Task) != "" {
-		return runDenied(authz.Deny(authz.ReasonGovernanceProfile, "runs.interactive_start", fmt.Sprintf(
+		return runDenied(authz.Deny(authz.ReasonGovernanceUnit, "runs.interactive_start", fmt.Sprintf(
 			"a shell startup command is not allowed by your governance profile %q — with `interactive_start` unset or `shell` the task runs as a shell command at sandbox boot, before anyone attaches, unattended the way exec does. Launch with `interactive_start=agent`, or without a task.", name)).WithPolicy(policy))
 	}
 	// Post-coercion, and that is the whole gate. req.Interactive is still the RAW
@@ -123,17 +123,17 @@ func (s *Server) runGovernancePosture(r *http.Request, req createRunRequest, cei
 	// — so reading it directly would be evaded by simply omitting the task, which
 	// is the one request shape a deny_interactive profile most needs to refuse.
 	if ceiling.Limits.DenyInteractive && (req.Interactive || (complete && requestIsInteractive(req))) {
-		return runDenied(authz.Deny(authz.ReasonGovernanceProfile, "runs.interactive", fmt.Sprintf(
+		return runDenied(authz.Deny(authz.ReasonGovernanceUnit, "runs.interactive", fmt.Sprintf(
 			"interactive runs are not allowed by your governance profile %q, and a request with no task comes up interactive too. Launch with a task, and without `--interactive`.", name)).WithPolicy(policy))
 	}
 	return nil
 }
 
 func (s *Server) runGovernanceSupervision(r *http.Request, req createRunRequest, ceiling governanceCeiling) *runRefusal {
-	if ceiling.Profile == nil {
+	if ceiling.Unit == nil {
 		return nil
 	}
-	name := ceiling.Profile.Name
+	name := ceiling.Unit.Name
 	policy := s.ceilingPolicy(r.Context(), ceiling)
 	if !governanceHoldRules(ceiling) {
 		return nil
@@ -143,7 +143,7 @@ func (s *Server) runGovernanceSupervision(r *http.Request, req createRunRequest,
 	// rationale above is explicitly false for it — which is why this refusal is NOT
 	// scoped to the derivation's non-interactive lane the way the codex one is.
 	if req.SeedAutoTools {
-		return runDenied(authz.Deny(authz.ReasonGovernanceProfile, "runs.seed_auto_tools", fmt.Sprintf(
+		return runDenied(authz.Deny(authz.ReasonGovernanceUnit, "runs.seed_auto_tools", fmt.Sprintf(
 			"`seed_auto_tools` is not allowed by your governance profile %q: its tool rules hold or deny, and the pre-attach seed runs before any human is at the pane. Launch without it.", name)).WithPolicy(policy))
 	}
 	// A command run can start any harness it includes, and nothing pauses a
@@ -151,7 +151,7 @@ func (s *Server) runGovernanceSupervision(r *http.Request, req createRunRequest,
 	// lane. Before the codex arm, which a command naming codex-cli would meet too.
 	if req.TaskMode == "exec" {
 		if t, ok := primaryHarness(req); ok {
-			return runDenied(authz.Deny(authz.ReasonGovernanceProfile, "runs.tools", fmt.Sprintf(
+			return runDenied(authz.Deny(authz.ReasonGovernanceUnit, "runs.tools", fmt.Sprintf(
 				"A harness your command can start is not allowed under your governance profile %q: its tool rules hold or deny, and nothing can pause a harness a command starts. Remove the harness, or choose an interactive environment.", name)).WithPolicy(policy).With("tool", t.ID))
 		}
 	}
@@ -161,7 +161,7 @@ func (s *Server) runGovernanceSupervision(r *http.Request, req createRunRequest,
 	// exists to reject — the same contradiction, arriving through a
 	// field the caller never set.
 	if req.Agent == "codex-cli" && !requestIsInteractive(req) {
-		return runDenied(authz.Deny(authz.ReasonGovernanceProfile, "runs.agent", fmt.Sprintf(
+		return runDenied(authz.Deny(authz.ReasonGovernanceUnit, "runs.agent", fmt.Sprintf(
 			"codex-cli is not supported under your governance profile %q: its tool rules hold or deny, and codex-cli has no external tool-approval contract. Launch a different agent.", name)).WithPolicy(policy))
 	}
 	return nil
@@ -169,7 +169,7 @@ func (s *Server) runGovernanceSupervision(r *http.Request, req createRunRequest,
 
 func (s *Server) runQuotaRefusal(r *http.Request, ceiling governanceCeiling) *runRefusal {
 	limit := ceiling.Limits.MaxConcurrentRuns
-	if ceiling.Profile == nil || limit <= 0 {
+	if ceiling.Unit == nil || limit <= 0 {
 		return nil
 	}
 	active, err := s.cfg.Store.CountActiveRunsBy(r.Context(), principalFromRequest(r))
@@ -181,5 +181,5 @@ func (s *Server) runQuotaRefusal(r *http.Request, ceiling governanceCeiling) *ru
 	}
 	return runDenied(authz.Deny(authz.ReasonRunQuota, "runs.quota", fmt.Sprintf(
 		"too many runs at once (max %d) — your governance profile %q caps how many runs you can have going, and %d are still active. Stop one first.",
-		limit, ceiling.Profile.Name, active)).WithPolicy(s.ceilingPolicy(r.Context(), ceiling)))
+		limit, ceiling.Unit.Name, active)).WithPolicy(s.ceilingPolicy(r.Context(), ceiling)))
 }

@@ -352,11 +352,11 @@ type profileErrStore struct {
 	err error
 }
 
-func (s profileErrStore) ListGovernanceProfiles(ctx context.Context) ([]types.GovernanceProfile, error) {
+func (s profileErrStore) ListGovernanceUnits(ctx context.Context) ([]types.GovernanceUnit, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
-	return s.reclampStore.ListGovernanceProfiles(ctx)
+	return s.reclampStore.ListGovernanceUnits(ctx)
 }
 
 // patchRaw is patch with the response body as sent, for what it must not carry.
@@ -457,7 +457,7 @@ func TestSetRunEnd_CapLoosenedIsToldNotApplied(t *testing.T) {
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				f, st, profileID := newReclampFixture(t, captured, 2*day, 1800)
-				st.profiles = []types.GovernanceProfile{
+				st.profiles = []types.GovernanceUnit{
 					{ID: uuid.New(), Name: "owner's current", Limits: types.GovernanceLimits{RunLimits: types.RunLimits{MaxEndAheadSec: tc.nowB}}},
 					{ID: profileID, Name: "launch", Limits: types.GovernanceLimits{RunLimits: types.RunLimits{MaxEndAheadSec: tc.launch}}},
 				}

@@ -30,7 +30,7 @@ var kindLabels = map[types.ApprovalKind]string{
 type message struct {
 	Title      string
 	RunShort   string
-	Profile    string
+	Unit       string
 	Requester  string
 	Requested  string
 	ConsoleURL string
@@ -53,8 +53,8 @@ func newMessage(tier int16, f approvalFacts, consoleURL string, m secretmask.Mas
 		RunShort:  strings.SplitN(f.RunID.String(), "-", 2)[0],
 		Requested: f.RequestedAt.UTC().Format("2006-01-02 15:04") + " UTC",
 	}
-	if f.ProfileID != nil {
-		msg.Profile = clean(f.ProfileName)
+	if f.UnitID != nil {
+		msg.Unit = clean(f.UnitName)
 	}
 	if f.Principal != "" {
 		msg.Requester = clean(f.Principal)
@@ -93,8 +93,8 @@ func (ch Channel) render(deliveryID uuid.UUID, tier int16, f approvalFacts, cons
 // sandbox-adjacent rows only.
 func (msg message) lines(escape func(string) string) [][2]string {
 	rows := [][2]string{{"Run", msg.RunShort}}
-	if msg.Profile != "" {
-		rows = append(rows, [2]string{"Profile", escape(msg.Profile)})
+	if msg.Unit != "" {
+		rows = append(rows, [2]string{"Profile", escape(msg.Unit)})
 	}
 	if msg.Requester != "" {
 		rows = append(rows, [2]string{"Requester", escape(msg.Requester)})

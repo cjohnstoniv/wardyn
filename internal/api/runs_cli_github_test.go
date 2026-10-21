@@ -264,7 +264,7 @@ func TestGitHubCLI_FamilyDenyRefusesTheRow(t *testing.T) {
 			if deny == nil {
 				deny = []string{"example.org"}
 			}
-			f.cs.govProfile = &types.GovernanceProfile{ID: uuid.New(), Name: "no-github", Ceiling: types.RunPolicySpec{EligibleGrants: f.srv.cfg.DefaultPolicy.EligibleGrants, DeniedDomains: deny}}
+			f.cs.govProfile = &types.GovernanceUnit{ID: uuid.New(), Name: "no-github", Ceiling: types.RunPolicySpec{EligibleGrants: f.srv.cfg.DefaultPolicy.EligibleGrants, DeniedDomains: deny}}
 			body := componentBody(ref)
 			body["repo"] = "acme/app"
 			if tc.deny == nil {
@@ -298,7 +298,7 @@ func TestGitHubCLI_FamilyDenyRefusesTheRow(t *testing.T) {
 // row can carry a CLI credential, so every door refuses it as a definition first, deny or not.
 func TestGitHubCLI_InlineRowIsRefusedBeforeTheFamilyDeny(t *testing.T) {
 	f, _ := githubCLIFixture(t)
-	f.cs.govProfile = &types.GovernanceProfile{ID: uuid.New(), Name: "no-github", Ceiling: types.RunPolicySpec{EligibleGrants: f.srv.cfg.DefaultPolicy.EligibleGrants, DeniedDomains: []string{"github.com"}}}
+	f.cs.govProfile = &types.GovernanceUnit{ID: uuid.New(), Name: "no-github", Ceiling: types.RunPolicySpec{EligibleGrants: f.srv.cfg.DefaultPolicy.EligibleGrants, DeniedDomains: []string{"github.com"}}}
 	inline := map[string]any{"inline": map[string]any{"cli": map[string]any{"kind": types.CLIKindGitHub,
 		"github": map[string]any{"capabilities": []ghscope.Capability{ghscope.CapIssuesRead}}}}}
 	body := componentBody(inline)

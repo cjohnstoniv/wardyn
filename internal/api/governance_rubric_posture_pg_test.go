@@ -17,7 +17,7 @@ import (
 func TestPG_HeldProfileWriteNotesCarryTheRubricPosture(t *testing.T) {
 	e := newGovEnv(t, func(c *Config) { c.Runner = &fakeRunner{capsClasses: []types.ConfinementClass{types.CC1}} })
 	const body = `{"name":"held-rubric","ceiling":{"min_confinement_class":"CC1"},"limits":{"autonomy_rubric":{"secrets_powerful":"L1"}}}`
-	ch := e.pending(e.call(e.alice, http.MethodPost, "/api/v1/governance/profiles", body))
+	ch := e.pending(e.call(e.alice, http.MethodPost, "/api/v1/governance/units", body))
 	var diff struct {
 		Notes []string `json:"notes"`
 	}

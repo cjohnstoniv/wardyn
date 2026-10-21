@@ -157,25 +157,25 @@ func TestDesktopDocSecretTierMatchesTheRouter(t *testing.T) {
 	)
 }
 
-// TestAuthzDeniedGovernanceProfileRowNamesEveryTarget closes the level
+// TestAuthzDeniedGovernanceUnitRowNamesEveryTarget closes the level
 // the reason-set guard cannot see.
 //
 // docs/operations/denials.md's denial table declares itself the source of record for
 // authz.denied's reason vocabulary, and internal/api's own guard pins the set
-// of REASONS. Nothing pinned the CAUSES inside a row: the governance_profile
+// of REASONS. Nothing pinned the CAUSES inside a row: the governance_unit
 // row enumerated four, and 0.7 added a fifth emitter — the user-drive door —
 // that the row never learned about, so a runs.drive denial had no documented
 // cause. The targets are derived from the emit sites, so the next cause that
 // lands undocumented fails here.
-func TestAuthzDeniedGovernanceProfileRowNamesEveryTarget(t *testing.T) {
-	targets := refusalTargets(t, "ReasonGovernanceProfile")
+func TestAuthzDeniedGovernanceUnitRowNamesEveryTarget(t *testing.T) {
+	targets := refusalTargets(t, "ReasonGovernanceUnit")
 	if len(targets) < 5 {
-		t.Fatalf("found %d authz.Deny targets for governance_profile (%v) — the matcher needs updating, it is checking almost nothing", len(targets), targets)
+		t.Fatalf("found %d authz.Deny targets for governance_unit (%v) — the matcher needs updating, it is checking almost nothing", len(targets), targets)
 	}
-	row := opsTableRow(t, readDoc(t, "docs/operations/denials.md"), "governance_profile")
+	row := opsTableRow(t, readDoc(t, "docs/operations/denials.md"), "governance_unit")
 	for _, target := range targets {
 		if !strings.Contains(row, "`"+target+"`") {
-			t.Errorf("docs/operations/denials.md's `governance_profile` row does not name the target %q, so a denial with that target has no documented cause in the section that calls itself the source of record", target)
+			t.Errorf("docs/operations/denials.md's `governance_unit` row does not name the target %q, so a denial with that target has no documented cause in the section that calls itself the source of record", target)
 		}
 	}
 }
@@ -350,7 +350,7 @@ func TestMembersDocStatesTheThreeKeyDriveContract(t *testing.T) {
 	// The key is always written, so "" is a real answer and a MISSING key means
 	// an older daemon. The doc's "always present" claim rests on that.
 	me := methodBody(t, readSrc(t, "internal", "api", "me.go"), "handleMe")
-	for _, key := range []string{`body["user_drive"]`, `body["user_drive_denied_by_profile"]`, `body["user_drive_unavailable"]`} {
+	for _, key := range []string{`body["user_drive"]`, `body["user_drive_denied_by_unit"]`, `body["user_drive_unavailable"]`} {
 		if !strings.Contains(me, key) {
 			t.Errorf("GET /me no longer writes %s — USERS.md documents a three-key contract", key)
 		}
@@ -361,7 +361,7 @@ func TestMembersDocStatesTheThreeKeyDriveContract(t *testing.T) {
 		"`GET /me` carries `user_drive` (`null` when none is allocated to you) and is the ground truth for what you have.",
 	)
 	mustSay(t, doc, "docs/USERS.md",
-		"`user_drive_denied_by_profile`",
+		"`user_drive_denied_by_unit`",
 		"`user_drive_unavailable`",
 		"no longer means",
 	)

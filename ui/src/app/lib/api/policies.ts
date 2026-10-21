@@ -12,11 +12,11 @@ import { asJson, errText, HttpError, unwrapList, wfetch, withLimit } from "./cor
 // every existing consumer parses is unchanged, plus the name of the governance
 // profile it came from.
 //
-// governance_profile_name is ADDITIVE and OMITTED ENTIRELY for a caller with no
+// unit_name is ADDITIVE and OMITTED ENTIRELY for a caller with no
 // assignment — absent, never "". That is what lets the member surfaces follow
 // the absent-row doctrine: no profile ⇒ no chip, no line, no placeholder, and
 // today's screens byte for byte.
-export type DefaultPolicy = RunPolicySpec & { governance_profile_name?: string };
+export type DefaultPolicy = RunPolicySpec & { unit_name?: string };
 
 // One thing a saved policy needs before a run can use it: the same row a
 // component save answers (pkg/client's ComponentRequirement), a stored secret its

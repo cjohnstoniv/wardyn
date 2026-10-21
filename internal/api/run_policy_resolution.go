@@ -270,7 +270,7 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 		var warns []string
 		source.knobs.step(ceiling.provenance(), &spec, func() {
 			switch {
-			case policyID != nil && ceiling.Profile != nil:
+			case policyID != nil && ceiling.Unit != nil:
 				spec, warns, refusal = s.boundRunUserSpec(ctx, r, spec, ceiling, "invalid policy: ", dryRun)
 			default:
 				spec, warns, refusal = s.boundOverrideAdds(ctx, r, spec, edits, ceiling, dryRun)

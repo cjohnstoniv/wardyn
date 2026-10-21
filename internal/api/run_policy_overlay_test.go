@@ -105,7 +105,7 @@ func TestPolicyOverlayKeysAreBoundedLikeInline(t *testing.T) {
 			t.Errorf("%s allowed = %v, want the outside host bounded and the replaced one gone", door, spec.AllowedDomains)
 		}
 	}
-	person, def := provSource{Kind: provKindPerson}, policyProvSource(policySourceRecord{Kind: policyKindProfile, Name: "walled"})
+	person, def := provSource{Kind: provKindPerson}, policyProvSource(policySourceRecord{Kind: policyKindUnit, Name: "walled"})
 	for _, want := range []provenanceRow{
 		{fieldAllowed, "api.anthropic.com", person, provEffectAdded},
 		{fieldAllowed, ovHostOutside, person, provEffectClamped},
@@ -342,7 +342,7 @@ func TestRunPolicyViewOverlayCause(t *testing.T) {
 		DeniedDomains: []string{"x.example"}}
 	srv, st := pvFixture(t, &capStore{})
 	run := st.seedRun(pvOwner, types.RunRunning)
-	src := pvSource(policyKindProfile, nil, "walled", true, base)
+	src := pvSource(policyKindUnit, nil, "walled", true, base)
 	src.Overlay = []string{"allowed_domains", "min_confinement_class"}
 	st.rows(run.ID, pvCreate(nil, src), pvResolve(resolved, false))
 	_, resp := pvMember(t, pvOwner).get(t, srv, run.ID)

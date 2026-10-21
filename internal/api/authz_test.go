@@ -542,9 +542,9 @@ var routeMatrix = map[string]classifiedRoute{
 	// self-exemption — effectiveCeiling short-circuits on isOperator, so a
 	// security admin's own runs stay bound by whichever profile applies to them.
 	//
-	// The seventh, POST /governance/preview, was BORN on this tier. It is a
+	// The seventh, POST /governance/check, was BORN on this tier. It is a
 	// READ that answers "which profile would bind these claims" by running
-	// Store.ResolveGovernanceProfile — the enforcement path's own call — and it
+	// Store.ResolveGovernanceUnit — the enforcement path's own call — and it
 	// is classSecurity for the reason the whole family is: the answer discloses
 	// how the org's ceilings are assigned. A member is refused here and reads
 	// their own ceiling from /policies/default instead, exactly as above.
@@ -552,12 +552,12 @@ var routeMatrix = map[string]classifiedRoute{
 	// The two profile writes probe with a COMPOSED body (an overlay on the deployment default): what
 	// the security tier admits is the composition members too, and a member is refused it by the
 	// tier before the body is read.
-	"POST /api/v1/governance/profiles":           {class: classSecurity, body: composedProfileProbeBody},
-	"PUT /api/v1/governance/profiles/{id}":       {class: classSecurity, body: composedProfileProbeBody},
-	"DELETE /api/v1/governance/profiles/{id}":    {class: classSecurity},
-	"POST /api/v1/governance/assignments":        {class: classSecurity},
-	"DELETE /api/v1/governance/assignments/{id}": {class: classSecurity},
-	"POST /api/v1/governance/preview":            {class: classSecurity},
+	"POST /api/v1/governance/units":              {class: classSecurity, body: composedProfileProbeBody},
+	"PUT /api/v1/governance/units/{id}":          {class: classSecurity, body: composedProfileProbeBody},
+	"DELETE /api/v1/governance/units/{id}":       {class: classSecurity},
+	"POST /api/v1/governance/memberships":        {class: classSecurity},
+	"DELETE /api/v1/governance/memberships/{id}": {class: classSecurity},
+	"POST /api/v1/governance/check":              {class: classSecurity},
 	// The four-eyes routes (gov4-b1): the queue, one change, and the two decisions. All security tier
 	// at the door; which kinds of change a caller may see or decide is the approver table's, inside
 	// the handler (governance_changes_pg_test.go).
@@ -2477,32 +2477,32 @@ func (s *authzStore) DeleteLaunchPreset(context.Context, string) (types.LaunchPr
 // absent-row doctrine behaves byte-for-byte as it did before this feature
 // existed. So every route this matrix walks resolves as it always has, and the
 // only thing under test on the /governance rows is the authorization boundary.
-// ResolveGovernanceProfile returns ErrNotFound for the same reason — "no
+// ResolveGovernanceUnit returns ErrNotFound for the same reason — "no
 // assignment matched", which the resolver reads as the deployment ceiling.
 // The precedence matrix itself is a store-level test against a real Postgres
 // (internal/store/governance_pg_test.go), where rows can actually exist.
-func (s *authzStore) UpsertGovernanceProfile(_ context.Context, p types.GovernanceProfile) (types.GovernanceProfile, error) {
+func (s *authzStore) UpsertGovernanceUnit(_ context.Context, p types.GovernanceUnit) (types.GovernanceUnit, error) {
 	return p, nil
 }
-func (s *authzStore) DeleteGovernanceProfile(context.Context, uuid.UUID) error {
+func (s *authzStore) DeleteGovernanceUnit(context.Context, uuid.UUID) error {
 	return store.ErrNotFound
 }
-func (s *authzStore) ListGovernanceProfiles(context.Context) ([]types.GovernanceProfile, error) {
+func (s *authzStore) ListGovernanceUnits(context.Context) ([]types.GovernanceUnit, error) {
 	return nil, nil
 }
-func (s *authzStore) UpsertGovernanceAssignment(_ context.Context, a types.GovernanceAssignment) (types.GovernanceAssignment, error) {
+func (s *authzStore) UpsertGovernanceMembership(_ context.Context, a types.GovernanceMembership) (types.GovernanceMembership, error) {
 	return a, nil
 }
-func (s *authzStore) DeleteGovernanceAssignment(context.Context, uuid.UUID) (types.GovernanceAssignment, error) {
-	return types.GovernanceAssignment{}, store.ErrNotFound
+func (s *authzStore) DeleteGovernanceMembership(context.Context, uuid.UUID) (types.GovernanceMembership, error) {
+	return types.GovernanceMembership{}, store.ErrNotFound
 }
-func (s *authzStore) ListGovernanceAssignments(context.Context) ([]types.GovernanceAssignment, error) {
+func (s *authzStore) ListGovernanceMemberships(context.Context) ([]types.GovernanceMembership, error) {
 	return nil, nil
 }
-func (s *authzStore) ResolveGovernanceProfile(context.Context, []string, []string, string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+func (s *authzStore) ResolveGovernanceUnit(context.Context, []string, []string, string) (*types.GovernanceUnit, types.CapabilitySubjectType, error) {
 	return nil, "", store.ErrNotFound
 }
-func (s *authzStore) HasGroupTierAssignments(context.Context) (bool, error) {
+func (s *authzStore) HasGroupTierMemberships(context.Context) (bool, error) {
 	return false, nil
 }
 

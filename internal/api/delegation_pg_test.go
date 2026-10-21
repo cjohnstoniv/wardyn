@@ -663,14 +663,14 @@ func TestDelegation_CeilingResolvesOnThePerson(t *testing.T) {
 	e := newDelegationPG(t)
 	ctx := context.Background()
 	portal, cred := e.registerPortal(t, delegGroup)
-	p, err := e.st.UpsertGovernanceProfile(ctx, types.GovernanceProfile{
+	p, err := e.st.UpsertGovernanceUnit(ctx, types.GovernanceUnit{
 		ID: uuid.New(), Name: "walled", Ceiling: govProfileSpec(), Limits: types.GovernanceLimits{DenyInteractive: true},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.st.UpsertGovernanceAssignment(ctx, types.GovernanceAssignment{
-		ID: uuid.New(), SubjectType: types.CapabilitySubjectGroup, Subject: "walled", ProfileID: p.ID, Priority: 1,
+	if _, err := e.st.UpsertGovernanceMembership(ctx, types.GovernanceMembership{
+		ID: uuid.New(), SubjectType: types.CapabilitySubjectGroup, Subject: "walled", UnitID: p.ID, Priority: 1,
 	}); err != nil {
 		t.Fatal(err)
 	}

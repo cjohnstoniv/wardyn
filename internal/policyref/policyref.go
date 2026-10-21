@@ -28,8 +28,8 @@ const (
 	requestURLMax  = 2048 // bytes
 	requestTextMax = 1000 // characters, the sign-in help cap
 
-	// SourceProfile and SourceDeployment say what bound the person.
-	SourceProfile    = "profile"
+	// SourceUnit and SourceDeployment say what bound the person.
+	SourceUnit       = "unit"
 	SourceDeployment = "deployment"
 
 	// The layer kinds: which layer set a limit (Ref.Layer) or a value of a run's
@@ -37,7 +37,7 @@ const (
 	// layer; member is the run's own policy and operator a run no ceiling binds;
 	// boundary is the Wardyn boundary, the outermost layer (types.Boundary).
 	LayerDeployment = SourceDeployment
-	LayerProfile    = SourceProfile
+	LayerUnit       = SourceUnit
 	LayerMember     = "member"
 	LayerOperator   = "operator"
 	LayerBoundary   = "boundary"
@@ -85,7 +85,7 @@ type Ref struct {
 	// as changed, so the person is not sent to the owner of a policy they edited.
 	Overridden bool `json:"overridden,omitempty"`
 	// Layer is the kind of layer that set the limit (LayerDeployment or
-	// LayerProfile today). Layered stamps it on a refusal's policy; the
+	// LayerUnit today). Layered stamps it on a refusal's policy; the
 	// proxy's attribution never carries it, because its wire predates the key.
 	Layer string `json:"layer,omitempty"`
 }
@@ -113,7 +113,7 @@ func Layered(ref *Ref) *Ref {
 	}
 	cp := *ref
 	cp.Layer = ""
-	if cp.Source == SourceProfile || cp.Source == SourceDeployment {
+	if cp.Source == SourceUnit || cp.Source == SourceDeployment {
 		cp.Layer = cp.Source
 	}
 	return &cp
@@ -149,11 +149,11 @@ func Validate(c Contact) error {
 // returns nil for a source that is neither profile nor deployment. name is kept
 // for a profile only, and a nil contact yields a Ref that names the policy alone.
 func Project(source, name string, c *Contact) *Ref {
-	if source != SourceProfile && source != SourceDeployment {
+	if source != SourceUnit && source != SourceDeployment {
 		return nil
 	}
 	ref := &Ref{Source: source}
-	if source == SourceProfile {
+	if source == SourceUnit {
 		ref.Name = name
 	}
 	if c == nil {
@@ -193,8 +193,8 @@ func (r Ref) RequestRoute() string {
 // percent-encoded.
 func (r Ref) HeaderValues() (policy, request string) {
 	policy = SourceDeployment
-	if r.Source == SourceProfile {
-		policy = SourceProfile
+	if r.Source == SourceUnit {
+		policy = SourceUnit
 		if r.Name != "" {
 			policy += `; name="` + url.PathEscape(r.Name) + `"`
 		}

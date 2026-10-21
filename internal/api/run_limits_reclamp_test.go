@@ -22,16 +22,16 @@ const day = 24 * time.Hour
 // list, with the PG conditions of ReclampRunLimits.
 type reclampStore struct {
 	*leaseStore
-	profiles []types.GovernanceProfile
+	profiles []types.GovernanceUnit
 }
 
-func (s *reclampStore) ListGovernanceProfiles(context.Context) ([]types.GovernanceProfile, error) {
+func (s *reclampStore) ListGovernanceUnits(context.Context) ([]types.GovernanceUnit, error) {
 	return s.profiles, nil
 }
 
 func (s *reclampStore) ListProfiledLiveRuns(ctx context.Context) ([]types.AgentRun, error) {
 	run, _ := s.GetRun(ctx, s.run.ID)
-	if run.GovernanceProfileID == nil || (run.LostAt != nil && run.LostReason == types.LostEnded) || run.State.IsTerminal() {
+	if run.UnitID == nil || (run.LostAt != nil && run.LostReason == types.LostEnded) || run.State.IsTerminal() {
 		return nil, nil
 	}
 	return []types.AgentRun{run}, nil
@@ -58,7 +58,7 @@ func newReclampFixture(t *testing.T, limits types.RunLimits, endsIn time.Duratio
 	now := time.Now().UTC().Truncate(time.Second)
 	profileID := uuid.New()
 	run := newFinalizeRun()
-	run.CreatedBy, run.WaitBudgetSec, run.RunLimits, run.GovernanceProfileID = endWaitOwner, wait, limits, &profileID
+	run.CreatedBy, run.WaitBudgetSec, run.RunLimits, run.UnitID = endWaitOwner, wait, limits, &profileID
 	if endsIn != 0 {
 		end := now.Add(endsIn)
 		run.EndsAt = &end
@@ -73,7 +73,7 @@ func newReclampFixture(t *testing.T, limits types.RunLimits, endsIn time.Duratio
 }
 
 func (s *reclampStore) setProfile(id uuid.UUID, l types.RunLimits) {
-	s.profiles = []types.GovernanceProfile{{ID: id, Name: "members", Limits: types.GovernanceLimits{RunLimits: l}}}
+	s.profiles = []types.GovernanceUnit{{ID: id, Name: "members", Limits: types.GovernanceLimits{RunLimits: l}}}
 }
 
 func (s *reclampStore) current() types.AgentRun {
@@ -124,7 +124,7 @@ func TestRunLimitsReclamp_TighteningReachesALiveRun(t *testing.T) {
 	data := leaseAuditData(t, rows[0])
 	if rows[0].ActorType != types.ActorSystem || data["reason"] != "limits_tightened" ||
 		data["from"] != from.Format(time.RFC3339) || data["to"] != cut.Format(time.RFC3339) ||
-		data["max"] != float64(2*86400) || data["profile_id"] != profile.String() {
+		data["max"] != float64(2*86400) || data["unit_id"] != profile.String() {
 		t.Errorf("run.end.set = actor %q data %v; want the system, limits_tightened, from %v to %v, max",
 			rows[0].ActorType, data, from, cut)
 	}

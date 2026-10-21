@@ -231,12 +231,12 @@ type (
 	// Written via DriveGrantRequest.
 	UserDriveGrant = types.UserDriveGrant
 
-	// GovernanceProfile is one named, assignable ceiling (migration 0052's
-	// governance_profiles row), carried in GovernanceDocument.Profiles.
+	// GovernanceUnit is one named, assignable ceiling (migration 0052's
+	// governance_units row), carried in GovernanceDocument.Profiles.
 	// Returned by GetGovernance and ApplyGovernance.
-	GovernanceProfile = types.GovernanceProfile
+	GovernanceUnit = types.GovernanceUnit
 
-	// PolicyContact is the contact a GovernanceProfile (and SiteConfig.PolicyHelp)
+	// PolicyContact is the contact a GovernanceUnit (and SiteConfig.PolicyHelp)
 	// publishes: owner, email, request_url and request_text, validated by the
 	// server on write.
 	PolicyContact = policyref.Contact
@@ -250,15 +250,15 @@ type (
 	// (RunPolicyView.Provenance).
 	PolicyProvenance = policyref.Provenance
 
-	// GovernanceAssignment binds one profile to one subject
+	// GovernanceMembership binds one profile to one subject
 	// (GovernanceDocument.Assignments). Returned by GetGovernance and
 	// ApplyGovernance.
-	GovernanceAssignment = types.GovernanceAssignment
+	GovernanceMembership = types.GovernanceMembership
 
 	// GovernanceLimits carries the request-shape autonomy switches a
-	// GovernanceProfile bounds a principal by, carried in
-	// GovernanceProfile.Limits. Aliased so a caller can author one through
-	// GovernanceProfileRequest.
+	// GovernanceUnit bounds a principal by, carried in
+	// GovernanceUnit.Limits. Aliased so a caller can author one through
+	// GovernanceUnitRequest.
 	GovernanceLimits = types.GovernanceLimits
 
 	// AutonomyRubric is GovernanceLimits.AutonomyRubric's pointed-to type.

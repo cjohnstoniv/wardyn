@@ -46,10 +46,10 @@ type sshMemStore struct {
 	mu   sync.Mutex
 	runs map[uuid.UUID]types.AgentRun
 	keys map[string]types.SSHPublicKey // by fingerprint
-	// profiles answers ListGovernanceProfiles: the limits of the profile a
+	// profiles answers ListGovernanceUnits: the limits of the profile a
 	// run was created under (governance_run_doors_test.go).
-	profiles []types.GovernanceProfile
-	// profilesErr, when set, is ListGovernanceProfiles' answer instead.
+	profiles []types.GovernanceUnit
+	// profilesErr, when set, is ListGovernanceUnits' answer instead.
 	profilesErr error
 }
 
@@ -85,7 +85,7 @@ func (s *sshMemStore) putRun(r types.AgentRun) {
 	s.runs[r.ID] = r
 }
 
-func (s *sshMemStore) ListGovernanceProfiles(context.Context) ([]types.GovernanceProfile, error) {
+func (s *sshMemStore) ListGovernanceUnits(context.Context) ([]types.GovernanceUnit, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.profilesErr != nil {

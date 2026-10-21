@@ -110,10 +110,10 @@ docs/operations/custom-components.md=1269 share=35
 docs/operations/api-tokens.md=5948 share=35
 # G-1423 r1: docs/operations/denials.md 4709 adds 32 over 4677 for the audit-only delegation_scope source.
 # docs/operations/denials.md 4786 adds 77 (0.9 G-sec-rest): the exec relay rows (#1976) and the audit_retention_actor_reserved row.
-# D-108-114 merge: docs/operations/denials.md 4806 adds 20 over 4786 for the runs.placement cause of governance_profile.
+# D-108-114 merge: docs/operations/denials.md 4806 adds 20 over 4786 for the runs.placement cause of governance_unit.
 # docs/operations/denials.md 4836 adds 50 over 4786 (0.9 F-1508 C2): the `service_scope` reason row.
 # docs/operations/denials.md 4856 measured after train 5 merge.
-# docs/operations/denials.md 4877 adds 21 over 4856 (0.9 DS1-S1b): the governance_profile row's runs.tools cause, a New Run command that includes a harness.
+# docs/operations/denials.md 4877 adds 21 over 4856 (0.9 DS1-S1b): the governance_unit row's runs.tools cause, a New Run command that includes a harness.
 # docs/operations/denials.md 4882 adds 5 over 4877 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
 # docs/operations/denials.md 4889 adds 7 (0.9 R1-0082): the DELETE of a user assignment that would leave the person in two group domains, in the key_domain_ambiguous_membership row.
 # docs/operations/denials.md 4931 adds 49 over 4882 (0.9 member drives): the drive refusals a person's own drive adds; measured at merge.

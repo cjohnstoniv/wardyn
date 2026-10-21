@@ -40,7 +40,7 @@ func sourceSize(source policySourceRecord, ceiling governanceCeiling) types.Reso
 		}
 		return types.ResourceLimits{}
 	}
-	if source.Kind == policyKindProfile {
+	if source.Kind == policyKindUnit {
 		return ceiling.authoredSize()
 	}
 	if r := source.Spec.Resources; r != nil {
@@ -78,7 +78,7 @@ func (s *Server) runSize(ctx context.Context, in placementInput, pool *types.Run
 	if pool != nil {
 		names[types.LimitSourcePool] = pool.Name
 	}
-	if p := in.ceiling.Profile; p != nil {
+	if p := in.ceiling.Unit; p != nil {
 		names[types.LimitSourceGovernance] = p.Name
 	}
 	return eff, client.AppliedResources{
@@ -114,13 +114,13 @@ func appliedPids(source policySourceRecord, ceiling governanceCeiling, applied i
 		if r := source.overlaid.Resources; r != nil {
 			asked = r.PidsLimit
 		}
-	case source.Kind != policyKindProfile && source.Spec.Resources != nil:
+	case source.Kind != policyKindUnit && source.Spec.Resources != nil:
 		asked = source.Spec.Resources.PidsLimit
 	}
 	out := client.AppliedAmount{Requested: asked, Applied: applied}
 	if asked > 0 && applied > 0 && applied < asked {
 		out.Capped, out.Source = true, types.LimitSourceDeployment
-		if p := ceiling.Profile; p != nil && p.AuthoredResources.PidsLimit > 0 {
+		if p := ceiling.Unit; p != nil && p.AuthoredResources.PidsLimit > 0 {
 			out.Source, out.SourceName = types.LimitSourceGovernance, p.Name
 		}
 	}

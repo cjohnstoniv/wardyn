@@ -50,13 +50,13 @@ func lockedL2Rubric(locks bool) *types.AutonomyRubric {
 // GovernanceLimits field refuses a request shape this gate also refuses, so
 // leaving one set would let a row pass for the wrong reason — the refusal it
 // asserts would be the older gate's.
-func autonomyProfile(level types.AutonomyLevel) *types.GovernanceProfile {
+func autonomyProfile(level types.AutonomyLevel) *types.GovernanceUnit {
 	p := govProfile("autonomy")
 	p.Limits = types.GovernanceLimits{AutonomyRubric: autonomyRubric(level)}
 	return p
 }
 
-func autonomyCapStore(p *types.GovernanceProfile) *capStore {
+func autonomyCapStore(p *types.GovernanceUnit) *capStore {
 	return &capStore{govProfile: p, govTier: types.CapabilitySubjectGroup, govHasGroupTier: true}
 }
 

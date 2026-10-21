@@ -53,7 +53,7 @@ function renderMobileNav(role: Role = "admin", memberMode = false) {
             sessionExpiresAt: null,
             memberLocalDirRoot: null,
             userDrive: null,
-            userDriveDeniedByProfile: "",
+            userDriveDeniedByUnit: "",
             userDriveUnavailable: "",
             userViewPreselectType: "",
             userViewDropped: null,
@@ -102,7 +102,7 @@ function renderTopBar(role: Role, tier?: "local-only" | "runner" | "org") {
               sessionExpiresAt: null,
               memberLocalDirRoot: null,
               userDrive: null,
-              userDriveDeniedByProfile: "",
+              userDriveDeniedByUnit: "",
               userDriveUnavailable: "",
               userViewPreselectType: "",
               userViewDropped: null,
@@ -281,11 +281,11 @@ describe("AppShell — /me's drive bits reach useUserDrive()", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   function DriveProbe() {
-    const { drive, deniedByProfile, unavailable } = useUserDrive();
+    const { drive, deniedByUnit, unavailable } = useUserDrive();
     return (
       <>
         <span data-testid="drive-probe">
-          {JSON.stringify({ drive, deniedByProfile })}
+          {JSON.stringify({ drive, deniedByUnit })}
         </span>
         {/* R4/F091 — read as its OWN element rather than folded into the JSON
             above, so the three cases that predate the third key keep asserting
@@ -343,17 +343,17 @@ describe("AppShell — /me's drive bits reach useUserDrive()", () => {
       operator: false,
       role: "user",
       user_drive: drive,
-      user_drive_denied_by_profile: "",
+      user_drive_denied_by_unit: "",
     });
 
     // Negative control: the fail-CLOSED seed is what paints first, so a green
     // assertion below cannot be a constant.
     expect(screen.getByTestId("drive-probe")).toHaveTextContent(
-      JSON.stringify({ drive: null, deniedByProfile: "" }),
+      JSON.stringify({ drive: null, deniedByUnit: "" }),
     );
     await waitFor(() =>
       expect(screen.getByTestId("drive-probe")).toHaveTextContent(
-        JSON.stringify({ drive, deniedByProfile: "" }),
+        JSON.stringify({ drive, deniedByUnit: "" }),
       ),
     );
   });
@@ -365,14 +365,14 @@ describe("AppShell — /me's drive bits reach useUserDrive()", () => {
       operator: false,
       role: "user",
       user_drive: null,
-      user_drive_denied_by_profile: "Greenfield contractors",
+      user_drive_denied_by_unit: "Greenfield contractors",
     });
 
     await waitFor(() =>
       expect(screen.getByTestId("drive-probe")).toHaveTextContent(
         JSON.stringify({
           drive: null,
-          deniedByProfile: "Greenfield contractors",
+          deniedByUnit: "Greenfield contractors",
         }),
       ),
     );
@@ -390,7 +390,7 @@ describe("AppShell — /me's drive bits reach useUserDrive()", () => {
     // not the seed it happens to equal.
     await screen.findByText("alice");
     expect(screen.getByTestId("drive-probe")).toHaveTextContent(
-      JSON.stringify({ drive: null, deniedByProfile: "" }),
+      JSON.stringify({ drive: null, deniedByUnit: "" }),
     );
     // …and the third key reads as "nothing is wrong", not as a reason invented
     // out of an absent field.
@@ -421,7 +421,7 @@ describe("AppShell — /me's drive bits reach useUserDrive()", () => {
         operator: false,
         role: "user",
         user_drive: null,
-        user_drive_denied_by_profile: "",
+        user_drive_denied_by_unit: "",
         user_drive_unavailable: reason,
       });
 
@@ -438,7 +438,7 @@ describe("AppShell — /me's drive bits reach useUserDrive()", () => {
       // The allocation stays null — the reason REPLACES the offer, it does not
       // ride beside one.
       expect(screen.getByTestId("drive-probe")).toHaveTextContent(
-        JSON.stringify({ drive: null, deniedByProfile: "" }),
+        JSON.stringify({ drive: null, deniedByUnit: "" }),
       );
     },
   );
@@ -450,7 +450,7 @@ describe("AppShell — /me's drive bits reach useUserDrive()", () => {
       operator: false,
       role: "user",
       user_drive: null,
-      user_drive_denied_by_profile: "Greenfield contractors",
+      user_drive_denied_by_unit: "Greenfield contractors",
       user_drive_unavailable: "",
     });
 
@@ -458,7 +458,7 @@ describe("AppShell — /me's drive bits reach useUserDrive()", () => {
       expect(screen.getByTestId("drive-probe")).toHaveTextContent(
         JSON.stringify({
           drive: null,
-          deniedByProfile: "Greenfield contractors",
+          deniedByUnit: "Greenfield contractors",
         }),
       ),
     );

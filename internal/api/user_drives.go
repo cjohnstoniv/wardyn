@@ -309,7 +309,7 @@ func (s *Server) userDriveWriteRefusal(ctx context.Context, sizeMiB int) (status
 // userDriveRequest is the POST/PUT body. ID/CreatedAt/UpdatedAt/CreatedBy are
 // never accepted from the wire: the id comes from the path (PUT) or the server
 // (POST), and provenance is always server-assigned — the same rule
-// governanceProfileRequest states. An ALIAS of the public SDK's
+// governanceUnitRequest states. An ALIAS of the public SDK's
 // client.DriveRequest, not a hand-maintained copy — the alias discipline the
 // other request DTOs already follow (dto_alias_test.go pins it at compile
 // time); the full field documentation lives there.
@@ -760,7 +760,7 @@ type userDriveGrantRequest = client.DriveGrantRequest
 // instead (writeUserDriveGrant; migration 0169 keys on subject and drive).
 //
 // 201 for a genuinely new allocation, 200 when an existing one was repointed —
-// the same created/updated signal handleUpsertGovernanceAssignment gives,
+// the same created/updated signal handleUpsertGovernanceMembership gives,
 // derived the same way (the store returns the EXISTING row's id on a conflict,
 // never the candidate's). operatorOnly (routes.go).
 func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Request) {
@@ -799,7 +799,7 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	// The group subject, held to the SAME rule as the other two tables written
-	// against one (validateCapabilityGrant, validateGovernanceAssignment). It is
+	// against one (validateCapabilityGrant, validateGovernanceMembership). It is
 	// applied HERE rather than inside types.ValidateUserDriveGrant because
 	// internal/types must not import internal/auth/oidc, and a hand-copied
 	// second spelling of the snapshot rule is exactly the drift these three

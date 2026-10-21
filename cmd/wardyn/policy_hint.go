@@ -23,7 +23,7 @@ func policyHint(err error) string {
 	}
 	p := ae.Policy
 	by := "this deployment's policy"
-	if p.Source == policyref.SourceProfile && p.Name != "" {
+	if p.Source == policyref.SourceUnit && p.Name != "" {
 		by = `profile "` + p.Name + `"`
 	}
 	if p.Owner != "" {

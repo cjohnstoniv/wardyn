@@ -34,8 +34,8 @@ func TestRunLimitsRefusal(t *testing.T) {
 		{govLimitsBody(`"max_end_ahead_sec":3600,"default_end_sec":7200`), "limits.default_end_sec: 7200 is past limits.max_end_ahead_sec (3600)"},
 		{govLimitsBody(`"max_wait_sec":600,"default_wait_sec":601`), "limits.default_wait_sec: 601 is past limits.max_wait_sec (600)"},
 	} {
-		r := httptest.NewRequest(http.MethodPost, "/api/v1/governance/profiles", strings.NewReader(tc.body))
-		if _, msg := decodeGovernanceProfileRequest(httptest.NewRecorder(), r); !strings.Contains(msg, tc.want) {
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/governance/units", strings.NewReader(tc.body))
+		if _, msg := decodeGovernanceUnitRequest(httptest.NewRecorder(), r); !strings.Contains(msg, tc.want) {
 			t.Errorf("body %s: msg = %q, want it to contain %q", tc.body, msg, tc.want)
 		}
 	}
@@ -49,8 +49,8 @@ func TestRunLimitsRefusal(t *testing.T) {
 		govLimitsBody(`"max_end_ahead_sec":2592000,"default_end_sec":86400,"allow_no_end":true,` +
 			`"max_wait_sec":28800,"default_wait_sec":28800,"user_changes_limits":true,"pause_idle_after_sec":1800`),
 	} {
-		r := httptest.NewRequest(http.MethodPost, "/api/v1/governance/profiles", strings.NewReader(body))
-		req, msg := decodeGovernanceProfileRequest(httptest.NewRecorder(), r)
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/governance/units", strings.NewReader(body))
+		req, msg := decodeGovernanceUnitRequest(httptest.NewRecorder(), r)
 		if msg != "" {
 			t.Errorf("body %s refused with %q", body, msg)
 		}
@@ -150,8 +150,8 @@ func TestCreateRunCapturesRunLimits(t *testing.T) {
 		if run.RunLimits != limits {
 			t.Errorf("run_limits = %+v, want the profile's %+v", run.RunLimits, limits)
 		}
-		if run.GovernanceProfileID == nil || *run.GovernanceProfileID != profile.ID {
-			t.Errorf("governance_profile_id = %v, want %s", run.GovernanceProfileID, profile.ID)
+		if run.UnitID == nil || *run.UnitID != profile.ID {
+			t.Errorf("unit_id = %v, want %s", run.UnitID, profile.ID)
 		}
 		if want := run.CreatedAt.Add(24 * time.Hour); run.EndsAt == nil || !run.EndsAt.Equal(want) {
 			t.Errorf("ends_at = %v, want created_at + default_end_sec = %v", run.EndsAt, want)
@@ -162,9 +162,9 @@ func TestCreateRunCapturesRunLimits(t *testing.T) {
 	}
 	wantDeploymentOnly := func(t *testing.T, run types.AgentRun) {
 		t.Helper()
-		if run.EndsAt != nil || run.GovernanceProfileID != nil || run.RunLimits != (types.RunLimits{}) {
+		if run.EndsAt != nil || run.UnitID != nil || run.RunLimits != (types.RunLimits{}) {
 			t.Errorf("run = ends %v profile %v limits %+v; want no end, no profile, no limits",
-				run.EndsAt, run.GovernanceProfileID, run.RunLimits)
+				run.EndsAt, run.UnitID, run.RunLimits)
 		}
 		if run.WaitBudgetSec != 86400 {
 			t.Errorf("wait_budget_sec = %d, want the deployment's approval expiry (86400)", run.WaitBudgetSec)

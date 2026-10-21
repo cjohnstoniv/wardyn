@@ -246,8 +246,8 @@ type PersonAllowance struct {
 	// Active is every non-terminal run the caller created, in any pool.
 	Active int `json:"active"`
 	// Max is the profile's max_concurrent_runs; absent means no personal limit.
-	Max         *int   `json:"max,omitempty"`
-	ProfileName string `json:"profile_name,omitempty"`
+	Max      *int   `json:"max,omitempty"`
+	UnitName string `json:"unit_name,omitempty"`
 }
 
 // PoolDefault is the pool a run that names none resolves to (runnerpool.Resolve),

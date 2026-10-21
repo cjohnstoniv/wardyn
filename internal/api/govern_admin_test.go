@@ -90,7 +90,7 @@ type governSite struct {
 
 func governSites() []governSite {
 	walled := func(l types.GovernanceLimits) governanceCeiling {
-		return governanceCeiling{Limits: l, Profile: &ResolvedProfile{ID: uuid.New(), Name: "walled", Limits: l}}
+		return governanceCeiling{Limits: l, Unit: &ResolvedUnit{ID: uuid.New(), Name: "walled", Limits: l}}
 	}
 	wide := types.RunPolicySpec{
 		MinConfinementClass: types.CC1,
@@ -107,7 +107,7 @@ func governSites() []governSite {
 	activeSrv := func(*testing.T) *Server {
 		return New(Config{Store: governActiveStore{&capStore{}}, Audit: &recRecorder{}})
 	}
-	driveProfile := &types.GovernanceProfile{ID: uuid.New(), Name: "walled", Limits: types.GovernanceLimits{DenyUserDrive: true}}
+	driveProfile := &types.GovernanceUnit{ID: uuid.New(), Name: "walled", Limits: types.GovernanceLimits{DenyUserDrive: true}}
 	ownerLaunch := func(s *Server, ctx context.Context) bool {
 		run := types.AgentRun{ID: uuid.New(), CreatedBy: governAdminSub, Agent: "claude-code"}
 		ref, err := s.ownerCapabilityRefusal(ctx, run, true, nil)
@@ -118,7 +118,7 @@ func governSites() []governSite {
 		{"governance.go resolveEffectiveCeiling", capSrv(&capStore{govProfile: govProfile("walled"), govTier: types.CapabilitySubjectUser}),
 			func(t *testing.T, s *Server, ctx context.Context) bool {
 				got, err := s.effectiveCeiling(ctx)
-				return err == nil && got.Profile != nil
+				return err == nil && got.Unit != nil
 			}},
 		{"runs_create_validate.go denyUserRequest", capSrv(&capStore{enf: map[string]bool{capAgent: true}}),
 			func(t *testing.T, s *Server, ctx context.Context) bool {
@@ -179,9 +179,9 @@ func governSites() []governSite {
 				_, shut := s.driveDoorProfile(ctx, walled(types.GovernanceLimits{DenyUserDrive: true}))
 				return shut
 			}},
-		{"user_drives_me.go userDriveDeniedByProfile", capSrv(&capStore{govProfile: driveProfile, govTier: types.CapabilitySubjectUser}),
+		{"user_drives_me.go userDriveDeniedByUnit", capSrv(&capStore{govProfile: driveProfile, govTier: types.CapabilitySubjectUser}),
 			func(t *testing.T, s *Server, ctx context.Context) bool {
-				name, _ := s.userDriveDeniedByProfile(governReq(ctx))
+				name, _ := s.userDriveDeniedByUnit(governReq(ctx))
 				return name != ""
 			}},
 		{"workspace_providers.go denyUserWorkspaceProviders", capSrv(&capStore{site: capProviderSite(), enf: capProviderEnforced()}),

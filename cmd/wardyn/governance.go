@@ -30,7 +30,7 @@ import (
 //	wardyn governance set governance.json      # restore, or hand-authored additions
 //
 // `set` UPSERTS every profile and assignment the file names, over the
-// existing POST/PUT /governance/profiles and POST /governance/assignments
+// existing POST/PUT /governance/units and POST /governance/memberships
 // routes — there is no bulk-write route, and this command adds none. A
 // PROFILE is upserted BY NAME (its unique human handle), not by id — see
 // ApplyGovernance's doc comment for why that, not id-routing, is what makes a
@@ -157,7 +157,7 @@ func printGovernancePlanSummary(w io.Writer, plan sdk.GovernancePlan) {
 		if s.Op != "delete" {
 			continue
 		}
-		if s.Kind == "profile" {
+		if s.Kind == "unit" {
 			fmt.Fprintf(w, "  profile %q\n", s.Name)
 		} else {
 			fmt.Fprintf(w, "  assignment %s %q\n", s.SubjectType, s.Subject)
@@ -215,13 +215,13 @@ func printGovernancePending(w io.Writer, res sdk.GovernanceApplyResult) {
 	if len(profiles) > 0 {
 		fmt.Fprintf(w, "deferred: %d profile(s) not sent, the profile they compose on is pending; apply again once it is approved\n", len(profiles))
 		for _, d := range profiles {
-			fmt.Fprintf(w, "  profile %q -> base %q\n", d.Profile, d.Base)
+			fmt.Fprintf(w, "  profile %q -> base %q\n", d.Unit, d.Base)
 		}
 	}
 	if len(assignments) > 0 {
 		fmt.Fprintf(w, "deferred: %d assignment(s) not sent, their profile is pending; apply again once it is approved\n", len(assignments))
 		for _, d := range assignments {
-			fmt.Fprintf(w, "  %s %q -> profile %q\n", d.SubjectType, d.Subject, d.Profile)
+			fmt.Fprintf(w, "  %s %q -> profile %q\n", d.SubjectType, d.Subject, d.Unit)
 		}
 	}
 	if res.PruneSkipped {

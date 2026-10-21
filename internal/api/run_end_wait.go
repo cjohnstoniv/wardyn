@@ -236,10 +236,10 @@ func (s *Server) endsCapLoosenedFor(ctx context.Context, run types.AgentRun, exe
 // would have without this, never a 500 and never a looser check.
 func (s *Server) endsCapLoosened(ctx context.Context, run types.AgentRun) bool {
 	captured := run.RunLimits.MaxEndAheadSec
-	if run.GovernanceProfileID == nil || captured <= 0 {
+	if run.UnitID == nil || captured <= 0 {
 		return false
 	}
-	p, err := s.resolveProfileByID(ctx, *run.GovernanceProfileID)
+	p, err := s.resolveUnitByID(ctx, *run.UnitID)
 	if err != nil {
 		if !errors.Is(err, store.ErrNotFound) {
 			slog.WarnContext(ctx, "wardynd: reading a run's launch profile for its end cap failed",

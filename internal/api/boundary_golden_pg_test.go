@@ -29,7 +29,7 @@ const (
 // boundaryCorpus is the seeded rows: a profile wider than the boundary assigned to one member, and a
 // stored policy that allows all egress.
 type boundaryCorpus struct {
-	profile types.GovernanceProfile
+	profile types.GovernanceUnit
 	open    types.RunPolicy
 }
 

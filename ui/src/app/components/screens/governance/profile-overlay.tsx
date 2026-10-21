@@ -15,7 +15,7 @@
 // Every product string comes from governance-copy.ts. The only literals here
 // are the field names themselves (wire keys, rendered mono) and On/Off.
 import * as React from "react";
-import type { CeilingOverlay, GovernanceLimits, GovernanceProfile } from "../../../lib/api/governance";
+import type { CeilingOverlay, GovernanceLimits, GovernanceUnit } from "../../../lib/api/governance";
 import { GOVERNANCE as GOV, MEMBER_DRIVE_DOOR } from "../../../lib/governance-copy";
 import type { ConfinementClass } from "../../../lib/types";
 import { CC_ORDER } from "../../../lib/types";
@@ -33,14 +33,14 @@ export const MAX_DEPTH = 3;
 export const BASE_NONE = "none";
 export const BASE_DEPLOYMENT = "deployment";
 
-const byId = (profiles: GovernanceProfile[]) => new Map(profiles.map((p) => [p.id, p]));
+const byId = (profiles: GovernanceUnit[]) => new Map(profiles.map((p) => [p.id, p]));
 
 // Profiles on the path from p to the deployment, p included. A visited guard
 // keeps a corrupt cycle from looping the render.
-function depthOf(p: GovernanceProfile, all: Map<string, GovernanceProfile>): number {
+function depthOf(p: GovernanceUnit, all: Map<string, GovernanceUnit>): number {
   const seen = new Set<string>();
   let n = 0;
-  for (let cur: GovernanceProfile | undefined = p; cur && !seen.has(cur.id); cur = cur.base_profile_id ? all.get(cur.base_profile_id) : undefined) {
+  for (let cur: GovernanceUnit | undefined = p; cur && !seen.has(cur.id); cur = cur.parent_id ? all.get(cur.parent_id) : undefined) {
     seen.add(cur.id);
     n++;
   }
@@ -48,19 +48,19 @@ function depthOf(p: GovernanceProfile, all: Map<string, GovernanceProfile>): num
 }
 
 // Profiles on the longest path from `id` down through its children, itself included.
-function heightOf(id: string, profiles: GovernanceProfile[], seen = new Set<string>()): number {
+function heightOf(id: string, profiles: GovernanceUnit[], seen = new Set<string>()): number {
   if (seen.has(id)) return 0;
   seen.add(id);
-  const kids = profiles.filter((p) => p.base_profile_id === id);
+  const kids = profiles.filter((p) => p.parent_id === id);
   return 1 + Math.max(0, ...kids.map((k) => heightOf(k.id, profiles, seen)));
 }
 
-export type BaseOption = { profile: GovernanceProfile; hint?: string };
+export type BaseOption = { profile: GovernanceUnit; hint?: string };
 
 // Every profile but self as a candidate base. One that is based on self (a
 // descendant) or would push the chain past MAX_DEPTH is listed but carries its
 // hint and is disabled.
-export function baseOptions(self: GovernanceProfile | null, profiles: GovernanceProfile[]): BaseOption[] {
+export function baseOptions(self: GovernanceUnit | null, profiles: GovernanceUnit[]): BaseOption[] {
   const all = byId(profiles);
   const selfHeight = self ? heightOf(self.id, profiles) : 1;
   return profiles
@@ -68,7 +68,7 @@ export function baseOptions(self: GovernanceProfile | null, profiles: Governance
     .map((profile) => {
       const seen = new Set<string>();
       let descendant = false;
-      for (let cur: GovernanceProfile | undefined = profile; cur && !seen.has(cur.id); cur = cur.base_profile_id ? all.get(cur.base_profile_id) : undefined) {
+      for (let cur: GovernanceUnit | undefined = profile; cur && !seen.has(cur.id); cur = cur.parent_id ? all.get(cur.parent_id) : undefined) {
         seen.add(cur.id);
         if (self && cur.id === self.id) descendant = true;
       }
@@ -78,18 +78,18 @@ export function baseOptions(self: GovernanceProfile | null, profiles: Governance
     });
 }
 
-export function childrenOf(id: string, profiles: GovernanceProfile[]): GovernanceProfile[] {
-  return profiles.filter((p) => p.base_profile_id === id);
+export function childrenOf(id: string, profiles: GovernanceUnit[]): GovernanceUnit[] {
+  return profiles.filter((p) => p.parent_id === id);
 }
 
 // What the list's chip names: the base profile, or the deployment ceiling.
-export function baseName(p: GovernanceProfile, profiles: GovernanceProfile[]): string | null {
+export function baseName(p: GovernanceUnit, profiles: GovernanceUnit[]): string | null {
   if (!p.overlay) return null;
-  if (!p.base_profile_id) return GOV.BASE_DEPLOYMENT;
-  return profiles.find((x) => x.id === p.base_profile_id)?.name ?? GOV.BASE_DEPLOYMENT;
+  if (!p.parent_id) return GOV.BASE_DEPLOYMENT;
+  return profiles.find((x) => x.id === p.parent_id)?.name ?? GOV.BASE_DEPLOYMENT;
 }
 
-export function BaseChip({ profile, profiles }: { profile: GovernanceProfile; profiles: GovernanceProfile[] }) {
+export function BaseChip({ profile, profiles }: { profile: GovernanceUnit; profiles: GovernanceUnit[] }) {
   const name = baseName(profile, profiles);
   if (name === null) return null;
   return (
@@ -357,7 +357,7 @@ function ListValue({
 
 // Read-only: the API's `effective`, as of the last save. Where the profile is
 // composed, what binds is the base narrowed here.
-export function EffectiveView({ profile }: { profile: GovernanceProfile }) {
+export function EffectiveView({ profile }: { profile: GovernanceUnit }) {
   const eff = profile.effective;
   if (!eff) return null;
   const ceiling = eff.ceiling as unknown as Bag;
@@ -405,9 +405,9 @@ export function composeRefusalTitle(reason: string): string | undefined {
   switch (reason) {
     case "governance_overlay_invalid":
       return GOV.REFUSED_OVERLAY_INVALID;
-    case "governance_profile_cycle":
+    case "governance_unit_cycle":
       return GOV.REFUSED_CYCLE;
-    case "governance_profile_depth":
+    case "governance_unit_depth":
       return GOV.REFUSED_DEPTH;
     case "governance_overlay_unsatisfiable":
       return GOV.REFUSED_UNSATISFIABLE;

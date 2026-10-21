@@ -75,7 +75,7 @@ func (s *syncStore) GetSSHKeyByFingerprint(_ context.Context, fp string) (types.
 	}
 	return k, nil
 }
-func (s *syncStore) ListGovernanceProfiles(context.Context) ([]types.GovernanceProfile, error) {
+func (s *syncStore) ListGovernanceUnits(context.Context) ([]types.GovernanceUnit, error) {
 	return nil, nil
 }
 

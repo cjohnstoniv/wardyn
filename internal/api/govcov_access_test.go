@@ -304,7 +304,7 @@ func TestGovCovApplyRoleMappingDelete(t *testing.T) {
 		boom := errors.New("pg: down")
 		q := &govCovQuerier{execFn: func(string) (pgconn.CommandTag, error) { return pgconn.CommandTag{}, boom }}
 		_, err := s.applyRoleMappingDelete(approver("ops-group"), q, govCovDeleteChange(false), rows, userTypes)
-		var ref *profileWriteError
+		var ref *unitWriteError
 		if !errors.Is(err, boom) || errors.As(err, &ref) {
 			t.Errorf("error = %v", err)
 		}

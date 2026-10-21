@@ -87,7 +87,7 @@ services:
 # admin
 cat > ci-governance.json <<EOF
 {
-  "profiles": [
+  "units": [
     {
       "id": "6f0f4f0e-2c6b-4b1e-9d53-0c1c1c1c1c1c",
       "name": "ci-jobs",
@@ -110,11 +110,11 @@ cat > ci-governance.json <<EOF
       }
     }
   ],
-  "assignments": [
+  "memberships": [
     {
       "subject_type": "user",
       "subject": "${CI_USER}",
-      "profile_id": "6f0f4f0e-2c6b-4b1e-9d53-0c1c1c1c1c1c",
+      "unit_id": "6f0f4f0e-2c6b-4b1e-9d53-0c1c1c1c1c1c",
       "priority": 0
     }
   ]

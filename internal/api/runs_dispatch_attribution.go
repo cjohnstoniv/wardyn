@@ -33,13 +33,13 @@ func (s *Server) runAttribution(ctx context.Context, run types.AgentRun, site ty
 }
 
 func (s *Server) baseRunAttribution(ctx context.Context, run types.AgentRun, site types.SiteConfig) *policyref.Ref {
-	p, err := s.runProfile(ctx, run)
+	p, err := s.runUnit(ctx, run)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: the run's governance profile could not be read for its refusal attribution",
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))
 	}
 	if p != nil {
-		return profileRefOrSiteHelp(p, site.PolicyHelp)
+		return unitRefOrSiteHelp(p, site.PolicyHelp)
 	}
 	if site.PolicyHelp != nil {
 		return policyref.Project(policyref.SourceDeployment, "", site.PolicyHelp)

@@ -538,7 +538,7 @@ func TestProviderModeRefusalComesFirst(t *testing.T) {
 func TestLegacyRepoURLRedactedOnSpecViews(t *testing.T) {
 	for _, c := range credentialedRepoURLs {
 		spec := types.RunPolicySpec{MinConfinementClass: types.CC2, WorkspaceRepos: []types.WorkspaceRepo{{Repo: c.url, Ref: "main"}}}
-		b, _ := json.Marshal(newProfileView(types.GovernanceProfile{Name: "g", Ceiling: spec}, nil, nil))
+		b, _ := json.Marshal(newUnitView(types.GovernanceUnit{Name: "g", Ceiling: spec}, nil, nil))
 		if strings.Contains(string(b), c.secret) {
 			t.Errorf("governance profile view serves %s: %s", c.secret, b)
 		}

@@ -335,7 +335,7 @@ func (s *Server) queueGovernance(st *queuedStart, req createRunRequest) (governa
 		ceilingRunRefusal(err).write(s, st.cw, st.r)
 		return governanceCeiling{}, st.refusalEnd()
 	}
-	if !sameProfile(cur, st.launch.ProfileID) {
+	if !sameUnit(cur, st.launch.UnitID) {
 		return governanceCeiling{}, &queueEnd{token: string(types.RunEndQueueProfileChanged), hint: types.RunEndQueueProfileChanged.Sentence()}
 	}
 	ceiling, refusal := s.runRequestGovernance(st.r, req)
@@ -358,12 +358,12 @@ func (s *Server) queueGovernance(st *queuedStart, req createRunRequest) (governa
 	return ceiling, nil
 }
 
-// sameProfile reports whether ceiling resolved to the profile the launch recorded (nil for none).
-func sameProfile(ceiling governanceCeiling, recorded *uuid.UUID) bool {
-	if ceiling.Profile == nil || recorded == nil {
-		return ceiling.Profile == nil && recorded == nil
+// sameUnit reports whether ceiling resolved to the profile the launch recorded (nil for none).
+func sameUnit(ceiling governanceCeiling, recorded *uuid.UUID) bool {
+	if ceiling.Unit == nil || recorded == nil {
+		return ceiling.Unit == nil && recorded == nil
 	}
-	return ceiling.Profile.ID == *recorded
+	return ceiling.Unit.ID == *recorded
 }
 
 // queuePolicyUnchanged is step 5 (Q7-A): the stored policy or launch preset the run was reviewed under
@@ -428,7 +428,7 @@ func (s *Server) queueLaunch(st *queuedStart, req createRunRequest, ceiling gove
 	}
 	started, ok, err := qs.StartQueuedRun(st.ctx, run.ID, store.QueueStart{
 		SPIFFEID: id.SPIFFEID, ConfinementClass: f.enforced, ModelProviderID: f.mpChoice.provider.ID, AutonomyLevel: f.autonomy.Level, InnerWalls: f.innerWalls,
-		EndsAt: anchor.EndsAt, WaitBudgetSec: anchor.WaitBudgetSec, RunLimits: anchor.RunLimits, GovernanceProfileID: anchor.GovernanceProfileID,
+		EndsAt: anchor.EndsAt, WaitBudgetSec: anchor.WaitBudgetSec, RunLimits: anchor.RunLimits, UnitID: anchor.UnitID,
 		LifetimeCapAt: anchor.LifetimeCapAt, LifetimeCapSource: anchor.LifetimeCapSource,
 		Placement: placed.Placement, PlacementFilled: placed.PlacementFilled, RunnerID: placed.RunnerID,
 		EvidenceSource: placed.EvidenceSource, RunnerPoolExecutor: placed.RunnerPoolExecutor, RunnerFallbacks: f.place.otherRunners(f.enforced, placed.RunnerID),

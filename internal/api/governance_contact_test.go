@@ -14,7 +14,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-func TestDecodeGovernanceProfileRequest_Contact(t *testing.T) {
+func TestDecodeGovernanceUnitRequest_Contact(t *testing.T) {
 	const prefix = `{"name":"p","ceiling":{"min_confinement_class":"CC2"}`
 	tests := []struct {
 		name    string
@@ -37,8 +37,8 @@ func TestDecodeGovernanceProfileRequest_Contact(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			r := httptest.NewRequest(http.MethodPut, "/api/v1/governance/profiles/x", strings.NewReader(tc.body))
-			req, msg := decodeGovernanceProfileRequest(httptest.NewRecorder(), r)
+			r := httptest.NewRequest(http.MethodPut, "/api/v1/governance/units/x", strings.NewReader(tc.body))
+			req, msg := decodeGovernanceUnitRequest(httptest.NewRecorder(), r)
 			if tc.wantErr != "" {
 				if !strings.Contains(msg, tc.wantErr) {
 					t.Fatalf("msg = %q, want it to contain %q", msg, tc.wantErr)

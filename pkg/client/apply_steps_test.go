@@ -16,15 +16,15 @@ import (
 
 func TestApplyGovernanceResult_ProfileWriteFailureReportsItsStep(t *testing.T) {
 	g, c := newGovServer(t, client.GovernanceDocument{})
-	g.failOn = "POST /api/v1/governance/profiles"
-	res, err := c.ApplyGovernanceResult(context.Background(), client.GovernanceDocument{Profiles: []client.GovernanceProfile{{Name: "fresh"}}}, false)
+	g.failOn = "POST /api/v1/governance/units"
+	res, err := c.ApplyGovernanceResult(context.Background(), client.GovernanceDocument{Units: []client.GovernanceUnit{{Name: "fresh"}}}, false)
 	if err == nil {
 		t.Fatal("want the profile failure")
 	}
 	if len(res.Steps) != 1 {
 		t.Fatalf("steps = %+v, want the one failed profile create", res.Steps)
 	}
-	if s := res.Steps[0]; s.Kind != "profile" || s.Op != "create" || s.Name != "fresh" || s.Outcome != "failed" || s.Error == "" {
+	if s := res.Steps[0]; s.Kind != "unit" || s.Op != "create" || s.Name != "fresh" || s.Outcome != "failed" || s.Error == "" {
 		t.Fatalf("step = %+v, want a failed create of fresh with its error", s)
 	}
 }
@@ -32,10 +32,10 @@ func TestApplyGovernanceResult_ProfileWriteFailureReportsItsStep(t *testing.T) {
 func TestApplyGovernanceResult_PruneRecordsEveryDeleteStep(t *testing.T) {
 	keepID, dropID, asgDrop := uuid.New(), uuid.New(), uuid.New()
 	_, c := newGovServer(t, client.GovernanceDocument{
-		Profiles:    []client.GovernanceProfile{{ID: keepID, Name: "kept"}, {ID: dropID, Name: "dropped"}},
-		Assignments: []client.GovernanceAssignment{{ID: asgDrop, SubjectType: "user", Subject: "b", ProfileID: dropID}},
+		Units:       []client.GovernanceUnit{{ID: keepID, Name: "kept"}, {ID: dropID, Name: "dropped"}},
+		Memberships: []client.GovernanceMembership{{ID: asgDrop, SubjectType: "user", Subject: "b", UnitID: dropID}},
 	})
-	doc := client.GovernanceDocument{Profiles: []client.GovernanceProfile{{ID: keepID, Name: "kept"}}}
+	doc := client.GovernanceDocument{Units: []client.GovernanceUnit{{ID: keepID, Name: "kept"}}}
 	res, err := c.ApplyGovernanceResult(context.Background(), doc, true)
 	if err != nil {
 		t.Fatal(err)
@@ -44,10 +44,10 @@ func TestApplyGovernanceResult_PruneRecordsEveryDeleteStep(t *testing.T) {
 		t.Fatalf("steps = %+v, want the assignment delete then the profile delete", res.Steps)
 	}
 	a, p := res.Steps[0], res.Steps[1]
-	if a.Kind != "assignment" || a.Op != "delete" || a.Outcome != "applied" || a.ID == nil || *a.ID != asgDrop {
+	if a.Kind != "membership" || a.Op != "delete" || a.Outcome != "applied" || a.ID == nil || *a.ID != asgDrop {
 		t.Fatalf("assignment step = %+v, want an applied delete of the omitted assignment", a)
 	}
-	if p.Kind != "profile" || p.Op != "delete" || p.Name != "dropped" || p.Outcome != "applied" || p.ID == nil || *p.ID != dropID {
+	if p.Kind != "unit" || p.Op != "delete" || p.Name != "dropped" || p.Outcome != "applied" || p.ID == nil || *p.ID != dropID {
 		t.Fatalf("profile step = %+v, want an applied delete of dropped", p)
 	}
 }
@@ -57,7 +57,7 @@ func TestApplyGovernanceResult_PruneRecordsEveryDeleteStep(t *testing.T) {
 func TestApplyGovernanceResult_HeldWriteIsPendingNotApplied(t *testing.T) {
 	f := &pendingFake{holdProfiles: map[string]bool{"held": true}}
 	res, err := f.server(t).ApplyGovernanceResult(context.Background(),
-		client.GovernanceDocument{Profiles: []client.GovernanceProfile{{Name: "held"}, {Name: "open"}}}, false)
+		client.GovernanceDocument{Units: []client.GovernanceUnit{{Name: "held"}, {Name: "open"}}}, false)
 	if err != nil {
 		t.Fatal(err)
 	}

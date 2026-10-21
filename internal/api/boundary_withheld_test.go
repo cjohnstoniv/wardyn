@@ -120,7 +120,7 @@ func TestBrokeredLanesWithheldByBoundary(t *testing.T) {
 		t.Errorf("component MITMHosts = %v, want the withheld host's entry gone", p.Components.MITMHosts)
 	}
 	ev := findAudit(audit.snapshot(), run.ID, "run.ceiling.reassert", "success")
-	if ev == nil || !strings.Contains(string(ev.Data), `"boundary":true`) || !strings.Contains(string(ev.Data), `"profile":""`) {
+	if ev == nil || !strings.Contains(string(ev.Data), `"boundary":true`) || !strings.Contains(string(ev.Data), `"unit":""`) {
 		t.Fatalf("run.ceiling.reassert = %v, want a row naming the boundary for a run no profile applies to", ev)
 	}
 }

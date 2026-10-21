@@ -18,8 +18,8 @@ package api
 // before #656 slice 3; declared here, not beside ownerRefusal, for the same
 // reason the driveRefusal* set is declared here rather than beside refuseDrive.
 const (
-	reasonOwnerProfileUnreadable = "profile_unreadable" // the owner's captured governance profile could not be read back
-	reasonOwnerProfileGone       = "profile_gone"       // the governance profile captured at launch no longer exists
+	reasonOwnerUnitUnreadable = "unit_unreadable" // the owner's captured governance profile could not be read back
+	reasonOwnerUnitGone       = "unit_gone"       // the governance profile captured at launch no longer exists
 	// reasonOwnerCapability* names the launch door persistedLaunchDoors found
 	// closed: the SAME six capability kinds capabilities.go's own cap* consts
 	// enumerate, so the reason names the kind rather than repeating a run's
@@ -80,21 +80,21 @@ const (
 // reasonRunNotFound is likewise the SAME literal auditRenewDenied
 // (internal.go) already wrote for a renewal on a run that no longer exists.
 const (
-	reasonWorkspaceNotFound             = "workspace_not_found"
-	reasonUserDriveNotFound             = "user_drive_not_found"
-	reasonUserDriveAllocationNotFound   = "user_drive_allocation_not_found"
-	reasonSSHKeyNotFoundEntity          = "ssh_key_not_found"
-	reasonPresetNotFound                = "preset_not_found" // the admin preset-management route named no such preset — reasonPresetUnknown covers a RUN naming one instead
-	reasonPolicyNotFound                = "policy_not_found"
-	reasonCapabilityGrantNotFound       = "capability_grant_not_found"
-	reasonRunNotFound                   = "run_not_found"
-	reasonGovernanceAssignmentNotFound  = "governance_assignment_not_found"
-	reasonGovernanceProfileNotFoundByID = "governance_profile_not_found" // governance.go's own by-id GET/PUT/DELETE — distinct from reviveCeiling's reasonOwnerProfileGone (a run's CAPTURED profile going missing later)
-	reasonEnrolmentTokenNotFound        = "enrolment_token_not_found"
-	reasonDeviceNotFound                = "device_not_found"
-	reasonDelegateNotFound              = "delegate_not_found"
-	reasonAPITokenNotFoundEntity        = "api_token_not_found"
-	reasonRoleMappingNotFound           = "role_mapping_not_found"
+	reasonWorkspaceNotFound            = "workspace_not_found"
+	reasonUserDriveNotFound            = "user_drive_not_found"
+	reasonUserDriveAllocationNotFound  = "user_drive_allocation_not_found"
+	reasonSSHKeyNotFoundEntity         = "ssh_key_not_found"
+	reasonPresetNotFound               = "preset_not_found" // the admin preset-management route named no such preset — reasonPresetUnknown covers a RUN naming one instead
+	reasonPolicyNotFound               = "policy_not_found"
+	reasonCapabilityGrantNotFound      = "capability_grant_not_found"
+	reasonRunNotFound                  = "run_not_found"
+	reasonGovernanceMembershipNotFound = "governance_membership_not_found"
+	reasonGovernanceUnitNotFoundByID   = "governance_unit_not_found" // governance.go's own by-id GET/PUT/DELETE — distinct from reviveCeiling's reasonOwnerUnitGone (a run's CAPTURED profile going missing later)
+	reasonEnrolmentTokenNotFound       = "enrolment_token_not_found"
+	reasonDeviceNotFound               = "device_not_found"
+	reasonDelegateNotFound             = "delegate_not_found"
+	reasonAPITokenNotFoundEntity       = "api_token_not_found"
+	reasonRoleMappingNotFound          = "role_mapping_not_found"
 )
 
 // helpers.go's own shared foundational refusals (#656 slice 3): one path

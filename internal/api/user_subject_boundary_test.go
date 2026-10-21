@@ -108,11 +108,11 @@ func TestUserSubjectWriteBoundariesShareTheReadRule(t *testing.T) {
 					"ASCII; folding first lets a crafted spelling land on another human's row", grant.Subject, tc.want)
 			}
 
-			assign := types.GovernanceAssignment{
-				SubjectType: types.CapabilitySubjectUser, Subject: tc.subject, ProfileID: uuid.New(),
+			assign := types.GovernanceMembership{
+				SubjectType: types.CapabilitySubjectUser, Subject: tc.subject, UnitID: uuid.New(),
 			}
-			if err := validateGovernanceAssignment(&assign); err != nil {
-				t.Fatalf("validateGovernanceAssignment(%+q) = %v", tc.subject, err)
+			if err := validateGovernanceMembership(&assign); err != nil {
+				t.Fatalf("validateGovernanceMembership(%+q) = %v", tc.subject, err)
 			}
 			if assign.Subject != tc.want {
 				t.Errorf("governance assignment subject = %+q, want %+q", assign.Subject, tc.want)

@@ -8,12 +8,12 @@ import (
 	"log/slog"
 )
 
-// WarnUnresolvableProfiles logs, once at boot, each composed governance profile whose chain no
+// WarnUnresolvableUnits logs, once at boot, each composed governance profile whose chain no
 // longer composes (governance_overlay_unsatisfiable: a base was narrowed after it was written).
 // Runs under such a profile are refused at launch; this names the profile before the first one is.
 // Best-effort: a failed read is logged and the walk ends.
-func (s *Server) WarnUnresolvableProfiles(ctx context.Context) {
-	all, err := s.resolveAllProfiles(ctx)
+func (s *Server) WarnUnresolvableUnits(ctx context.Context) {
+	all, err := s.resolveAllUnits(ctx)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: governance profile walk deferred", slog.Any("err", err))
 		return

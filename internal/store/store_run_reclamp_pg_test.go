@@ -30,7 +30,7 @@ func TestPG_ReclampRunLimits(t *testing.T) {
 
 	profiled := func(state types.RunState) types.AgentRun {
 		r := newRun(state)
-		r.EndsAt, r.WaitBudgetSec, r.RunLimits, r.GovernanceProfileID = &end, 3600, limits, &profile
+		r.EndsAt, r.WaitBudgetSec, r.RunLimits, r.UnitID = &end, 3600, limits, &profile
 		return r
 	}
 	live, pending, kept, finished, rebootLost := profiled(types.RunRunning), profiled(types.RunPending),

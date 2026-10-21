@@ -90,7 +90,7 @@ const hostile = "*bold* _it_ `code` [click](https://evil.example.com) <a href=\"
 // Adaptive Card every control character is escaped and the only url in the body is console_url.
 func TestRender_HostileTextIsInert(t *testing.T) {
 	f := fixedFacts(types.ApprovalPushContent)
-	f.Principal, f.ProfileName = hostile, hostile
+	f.Principal, f.UnitName = hostile, hostile
 
 	t.Run("slack", func(t *testing.T) {
 		got, err := chatChannel(TypeSlack).render(uuid.New(), 0, f, consoleURL, secretmask.Masker{})
@@ -202,7 +202,7 @@ func TestRender_RegisteredSecretNeverReachesAChatBody(t *testing.T) {
 		RequestedScope: json.RawMessage(`{"host":"evil.example.com","note":"` + secret + `"}`),
 		Reason:         "please approve, token " + secret,
 	}
-	f.ProfileName = secret // an admin-authored name that equals a secret is masked too
+	f.UnitName = secret // an admin-authored name that equals a secret is masked too
 	for _, typ := range []string{TypeTeams, TypeSlack} {
 		got, err := chatChannel(typ).render(uuid.New(), 1, f, consoleURL, reg.Masker(f.RunID))
 		if err != nil {
@@ -245,7 +245,7 @@ func TestRender_RedactRequesterDropsTheOwnerOnEveryType(t *testing.T) {
 
 func TestRender_CapsAndStripsLongNames(t *testing.T) {
 	f := fixedFacts(types.ApprovalCredential)
-	f.ProfileName = "pay\x00ments" + strings.Repeat("é", 300)
+	f.UnitName = "pay\x00ments" + strings.Repeat("é", 300)
 	for _, typ := range []string{TypeTeams, TypeSlack} {
 		got, err := chatChannel(typ).render(uuid.New(), 0, f, consoleURL, secretmask.Masker{})
 		if err != nil {

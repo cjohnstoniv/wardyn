@@ -229,7 +229,7 @@ func (s *Server) brokeredForgeMintKind(ctx context.Context, runID, grantID uuid.
 }
 
 // liveGrantWithheld reports whether the run is kept from grantID now (#3238): its captured profile as
-// it stands (runProfile: one that no longer exists adds nothing, as at the run's doors) or the Wardyn
+// it stands (runUnit: one that no longer exists adds nothing, as at the run's doors) or the Wardyn
 // boundary withholds the grant or a host it delivers to (withholding.credentialWithheld). A
 // credential is judged when it is delivered, so a boundary narrowed after dispatch reaches a running
 // run here. found=false: the run or the grant is not this store's, for the broker to refuse.
@@ -260,7 +260,7 @@ func (s *Server) liveGrantWithheld(ctx context.Context, runID, grantID uuid.UUID
 // liveWithholding is a running run's withholding: its captured profile's current denies and the
 // outer layers as the seal reads them now.
 func (s *Server) liveWithholding(ctx context.Context, run types.AgentRun) (withholding, error) {
-	p, err := s.runProfile(ctx, run)
+	p, err := s.runUnit(ctx, run)
 	if err != nil {
 		return withholding{}, err
 	}

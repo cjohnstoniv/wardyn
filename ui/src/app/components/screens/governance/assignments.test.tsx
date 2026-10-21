@@ -84,7 +84,7 @@ describe("AssignmentsBlock — the resolved preview", () => {
   // group's resolved profile sits under new, unrun input as if it were the
   // new group's answer.
   it("typing new claims clears the previous group's stale preview result", async () => {
-    previewGovernanceMock.mockResolvedValue({ profile_id: "p1", profile_name: "Platform", matched_tier: "group" });
+    previewGovernanceMock.mockResolvedValue({ unit_id: "p1", unit_name: "Platform", matched_tier: "group" });
     renderBlock();
 
     await userEvent.type(screen.getByLabelText(PREVIEW.FIELD_CLAIMS), "wardyn.platform");
@@ -104,7 +104,7 @@ describe("AssignmentsBlock — the resolved preview", () => {
     await userEvent.type(screen.getByLabelText(PREVIEW.FIELD_CLAIMS), "wardyn.platform");
     await userEvent.click(screen.getByRole("button", { name: GOV.PREVIEW_RUN_CTA }));
     await userEvent.type(screen.getByLabelText(PREVIEW.FIELD_CLAIMS), "x");
-    await act(async () => resolve({ profile_id: "p1", profile_name: "Platform", matched_tier: "group" }));
+    await act(async () => resolve({ unit_id: "p1", unit_name: "Platform", matched_tier: "group" }));
     expect(screen.queryByText(GOV.PREVIEW_RESULT("Platform", GOV.MATCHED_GROUP))).not.toBeInTheDocument();
   });
 
@@ -126,7 +126,7 @@ describe("AssignmentsBlock — the resolved preview", () => {
 
   it("offers the types, sends the picked id, and clears the last answer when it changes", async () => {
     listUserTypesMock.mockResolvedValue([STANDARD, CONTRACTOR]);
-    previewGovernanceMock.mockResolvedValue({ profile_id: "p1", profile_name: "Platform", matched_tier: "user_type" });
+    previewGovernanceMock.mockResolvedValue({ unit_id: "p1", unit_name: "Platform", matched_tier: "user_type" });
     renderBlock();
     const picker = await screen.findByRole("combobox", { name: GOV.PREVIEW_USER_TYPE_LABEL });
     expect(picker).toHaveTextContent("Standard user");

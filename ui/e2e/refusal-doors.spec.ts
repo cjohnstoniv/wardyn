@@ -337,7 +337,7 @@ test.describe("the approvals reauth card names and opens the hold's own provider
 // the wire (the seeded daemon has no governance profile with a contact); the
 // strings are M10's, written out here rather than imported so a copy edit fails.
 const POLICY_REF = {
-  source: "profile",
+  source: "unit",
   name: "Contractors",
   owner: "Platform Security",
   request_url: "https://example.com/access",

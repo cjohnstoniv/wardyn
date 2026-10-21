@@ -261,7 +261,7 @@ describe("Name this run: a create the check did not foresee", () => {
   });
 
   it("a refusal that names its policy says who owns it and where to ask, under the sentence", async () => {
-    const policy = { source: "profile", name: "Contractors", owner: "Platform Security", request_url: "https://example.com/access" };
+    const policy = { source: "unit", name: "Contractors", owner: "Platform Security", request_url: "https://example.com/access" };
     create.mockRejectedValueOnce(Object.assign(refusal(422, BREACH, "run_quota"), { policy }));
     open();
     const box = await dialog();

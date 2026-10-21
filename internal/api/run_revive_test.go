@@ -33,7 +33,7 @@ import (
 // MarkRunRevived's PG condition.
 type reviveStore struct {
 	*lostStore
-	profiles []types.GovernanceProfile
+	profiles []types.GovernanceUnit
 	release  string
 	// cfg is the run's stored proxy config in the clear; the store.RunProxyConfigs
 	// methods below seal and open it under key as a PG row would hold it
@@ -127,7 +127,7 @@ func (s *reviveStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun,
 	return s.lostStore.GetRun(ctx, id)
 }
 
-func (s *reviveStore) ListGovernanceProfiles(context.Context) ([]types.GovernanceProfile, error) {
+func (s *reviveStore) ListGovernanceUnits(context.Context) ([]types.GovernanceUnit, error) {
 	return s.profiles, nil
 }
 
@@ -206,7 +206,7 @@ type reviveFixture struct {
 	*lostFixture
 	rs      *reviveStore
 	rr      *reviveRunner
-	profile types.GovernanceProfile
+	profile types.GovernanceUnit
 	// currentCAPEM is the internal (hoptls) CA the fixture's control plane
 	// hands out NOW, distinct from the CA baked into the run's rendered
 	// (pre-revive) proxy config — a revive must replace it, never keep it.
@@ -221,12 +221,12 @@ type reviveFixture struct {
 func newReviveFixture(t *testing.T) *reviveFixture {
 	t.Helper()
 	f := &reviveFixture{lostFixture: newLostFixture(t)}
-	f.profile = types.GovernanceProfile{ID: uuid.New(), Name: "contractors",
+	f.profile = types.GovernanceUnit{ID: uuid.New(), Name: "contractors",
 		Ceiling: types.RunPolicySpec{DeniedDomains: []string{"api.openai.com", "pat.example"}}}
-	f.st.run.GovernanceProfileID = &f.profile.ID
+	f.st.run.UnitID = &f.profile.ID
 	f.st.run.SandboxRef = "wardyn-agent-" + f.st.run.ID.String()
 	f.run = f.st.run
-	f.rs = &reviveStore{lostStore: f.ls, profiles: []types.GovernanceProfile{f.profile}}
+	f.rs = &reviveStore{lostStore: f.ls, profiles: []types.GovernanceUnit{f.profile}}
 	oldCA := testHopCA(t)
 	currentCA := testHopCA(t)
 	cfg, err := runner.BuildProxyConfig(f.run.ID, runner.ProxyConfig{

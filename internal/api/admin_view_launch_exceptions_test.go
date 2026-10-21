@@ -48,16 +48,16 @@ func recordSrvWithOIDC(t *testing.T, fake store.Store) *Server {
 // (capabilities_test.go) to the same call.
 type noProfileProbeStore struct{ *probeStore }
 
-func (noProfileProbeStore) ResolveGovernanceProfile(context.Context, []string, []string, string) (
-	*types.GovernanceProfile, types.CapabilitySubjectType, error,
+func (noProfileProbeStore) ResolveGovernanceUnit(context.Context, []string, []string, string) (
+	*types.GovernanceUnit, types.CapabilitySubjectType, error,
 ) {
 	return nil, "", nil
 }
 
-// HasGroupTierAssignments is the ceiling resolver's second read on a
+// HasGroupTierMemberships is the ceiling resolver's second read on a
 // security_admin's group snapshot (governance.go's ceilingWithUnusableGroups) —
 // "no group carries a tier assignment", capStore's own no-groups answer.
-func (noProfileProbeStore) HasGroupTierAssignments(context.Context) (bool, error) {
+func (noProfileProbeStore) HasGroupTierMemberships(context.Context) (bool, error) {
 	return false, nil
 }
 

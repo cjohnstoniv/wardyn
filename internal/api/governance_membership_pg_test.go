@@ -16,18 +16,18 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestPG_GovernanceAssignmentWritesAreAudited: an assignment changes a
+// TestPG_GovernanceMembershipWritesAreAudited: an assignment changes a
 // person's ceiling and autonomy, so every write that lands must leave its own
 // audit row, and one that does not land (an unknown profile, refused by the
 // foreign key) must leave neither a row nor an assignment. Against Postgres,
 // because the 201/200 split and the 404 are the store's upsert and FK answers.
 //
 // Guarded by WARDYN_TEST_PG: skipped cleanly when unset, must PASS when set.
-func TestPG_GovernanceAssignmentWritesAreAudited(t *testing.T) {
+func TestPG_GovernanceMembershipWritesAreAudited(t *testing.T) {
 	pool := throwawayPGPool(t)
 	ctx := context.Background()
 	pg := store.NewPG(pool)
-	profile, err := pg.UpsertGovernanceProfile(ctx, types.GovernanceProfile{
+	profile, err := pg.UpsertGovernanceUnit(ctx, types.GovernanceUnit{
 		Name:      "contractors",
 		Ceiling:   types.RunPolicySpec{AllowedDomains: []string{"pypi.org"}, MinConfinementClass: types.CC2},
 		CreatedBy: "seed",
@@ -48,23 +48,23 @@ func TestPG_GovernanceAssignmentWritesAreAudited(t *testing.T) {
 		return out
 	}
 	assign := func(profileID uuid.UUID, subject string, priority int) *httptest.ResponseRecorder {
-		body, _ := json.Marshal(governanceAssignmentRequest{
-			SubjectType: types.CapabilitySubjectUser, Subject: subject, ProfileID: profileID, Priority: priority,
+		body, _ := json.Marshal(governanceMembershipRequest{
+			SubjectType: types.CapabilitySubjectUser, Subject: subject, UnitID: profileID, Priority: priority,
 		})
-		return do(t, srv, http.MethodPost, "/api/v1/governance/assignments", adminToken, string(body))
+		return do(t, srv, http.MethodPost, "/api/v1/governance/memberships", adminToken, string(body))
 	}
 
 	w := assign(profile.ID, "alice@corp.example", 3)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("first upsert: %d %s, want 201", w.Code, w.Body.String())
 	}
-	var saved types.GovernanceAssignment
+	var saved types.GovernanceMembership
 	if err := json.Unmarshal(w.Body.Bytes(), &saved); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	writes := rows("governance.assignment.write")
+	writes := rows("governance.membership.write")
 	if len(writes) != 1 {
-		t.Fatalf("first upsert wrote %d governance.assignment.write rows, want 1", len(writes))
+		t.Fatalf("first upsert wrote %d governance.membership.write rows, want 1", len(writes))
 	}
 	var data map[string]any
 	if err := json.Unmarshal(writes[0].Data, &data); err != nil {
@@ -72,25 +72,25 @@ func TestPG_GovernanceAssignmentWritesAreAudited(t *testing.T) {
 	}
 	if writes[0].Target != saved.ID.String() || writes[0].Outcome != "success" ||
 		data["subject"] != "alice@corp.example" || data["subject_type"] != "user" ||
-		data["profile_id"] != profile.ID.String() || data["priority"] != float64(3) {
-		t.Fatalf("audit row = %+v data=%v; want target %s naming subject, profile_id and priority", writes[0], data, saved.ID)
+		data["unit_id"] != profile.ID.String() || data["priority"] != float64(3) {
+		t.Fatalf("audit row = %+v data=%v; want target %s naming subject, unit_id and priority", writes[0], data, saved.ID)
 	}
 
 	// Same subject again: an update of the one row, not a second assignment.
 	if w := assign(profile.ID, "alice@corp.example", 5); w.Code != http.StatusOK {
 		t.Fatalf("re-upsert: %d %s, want 200", w.Code, w.Body.String())
 	}
-	if n := len(rows("governance.assignment.write")); n != 2 {
+	if n := len(rows("governance.membership.write")); n != 2 {
 		t.Fatalf("re-upsert left %d write rows, want 2", n)
 	}
 
 	if w := assign(uuid.New(), "bob@corp.example", 1); w.Code != http.StatusNotFound {
 		t.Fatalf("unknown profile: %d %s, want 404", w.Code, w.Body.String())
 	}
-	if n := len(rows("governance.assignment.write")); n != 2 {
+	if n := len(rows("governance.membership.write")); n != 2 {
 		t.Fatalf("a refused upsert wrote an audit row (%d rows, want 2)", n)
 	}
-	all, err := pg.ListGovernanceAssignments(ctx)
+	all, err := pg.ListGovernanceMemberships(ctx)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -98,18 +98,18 @@ func TestPG_GovernanceAssignmentWritesAreAudited(t *testing.T) {
 		t.Fatalf("%d assignments stored, want only alice's", len(all))
 	}
 
-	del := "/api/v1/governance/assignments/" + saved.ID.String()
+	del := "/api/v1/governance/memberships/" + saved.ID.String()
 	if w := do(t, srv, http.MethodDelete, del, adminToken, ""); w.Code != http.StatusNoContent {
 		t.Fatalf("delete: %d %s, want 204", w.Code, w.Body.String())
 	}
-	deletes := rows("governance.assignment.delete")
+	deletes := rows("governance.membership.delete")
 	if len(deletes) != 1 || deletes[0].Target != saved.ID.String() || deletes[0].Outcome != "success" {
 		t.Fatalf("delete rows = %+v, want one naming %s", deletes, saved.ID)
 	}
 	if w := do(t, srv, http.MethodDelete, del, adminToken, ""); w.Code != http.StatusNotFound {
 		t.Fatalf("second delete: %d, want 404", w.Code)
 	}
-	if n := len(rows("governance.assignment.delete")); n != 1 {
+	if n := len(rows("governance.membership.delete")); n != 1 {
 		t.Fatalf("a delete of nothing wrote an audit row (%d rows, want 1)", n)
 	}
 }

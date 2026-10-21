@@ -661,7 +661,7 @@ func TestAzureCLI_CeilingDenyClosesTheHostsTheLaneOpened(t *testing.T) {
 					LoginClientID: "console-app", LoginTenantID: "tenant-1"}
 			}
 			f.srv.cfg.DefaultPolicy.AllowedDomains = append(slices.Clone(f.srv.cfg.DefaultPolicy.AllowedDomains), tc.own...)
-			f.cs.govProfile = &types.GovernanceProfile{ID: uuid.New(), Name: "no-azure",
+			f.cs.govProfile = &types.GovernanceUnit{ID: uuid.New(), Name: "no-azure",
 				Ceiling: types.RunPolicySpec{AllowedDomains: tc.own, DeniedDomains: []string{armscope.Host}}}
 			ref := f.org(id, azCLIRowDef(types.ComponentAccessRead, azCLISubA))
 			blob := adoEntraBlob{RefreshToken: "refresh", Scopes: []string{azARMScope}, TenantID: "tenant-1", ClientID: "console-app",

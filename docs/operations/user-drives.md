@@ -341,7 +341,7 @@ so a submount under the share's home could be writable inside the sandbox
 - A governance profile's `max_drive_size_mib` is the **per-principal** one.
 - And it cannot be refused at a write at all: the profile binding a subject is resolved from their claims, and a group or `all` allocation names no single principal.
 - It is CLAMPED when the drive is resolved (`newResolvedDrive`), folded with the deployment's in one expression —
-  - the smaller of the two wins, the daemon logs which one bit (`bound_by=deployment` or `bound_by=governance_profile`),
+  - the smaller of the two wins, the daemon logs which one bit (`bound_by=deployment` or `bound_by=governance_unit`),
   - and the run, `GET /me` and `POST /drives/preview` all report the clamped number,
   - so the card cannot offer a size the run will not give.
 - Lowering the deployment ceiling after drives exist refuses no run and rewrites no row; it clamps from the next resolve onward.

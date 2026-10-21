@@ -119,8 +119,8 @@ func (c governanceCeiling) provenance() policyref.Provenance {
 	switch {
 	case c.Operator:
 		return operatorProvenance
-	case c.Profile != nil:
-		return policyref.Provenance{Layer: policyref.LayerProfile, Name: c.Profile.Name}
+	case c.Unit != nil:
+		return policyref.Provenance{Layer: policyref.LayerUnit, Name: c.Unit.Name}
 	default:
 		return deploymentProvenance
 	}
@@ -135,7 +135,7 @@ func (k knobProvenance) withContacts(ref *policyref.Ref, help *policyref.Contact
 		return nil
 	}
 	var leaf *policyref.Contact
-	if ref != nil && ref.Source == policyref.SourceProfile {
+	if ref != nil && ref.Source == policyref.SourceUnit {
 		c := policyref.Contact{Owner: ref.Owner, Email: ref.Email, RequestURL: ref.RequestURL, RequestText: ref.RequestText}
 		if !c.IsZero() {
 			leaf = &c
@@ -150,7 +150,7 @@ func (k knobProvenance) withContacts(ref *policyref.Ref, help *policyref.Contact
 	out := make(knobProvenance, len(k))
 	for name, rec := range k {
 		switch {
-		case rec.Layer == policyref.LayerProfile && leaf != nil && rec.Name == ref.Name:
+		case rec.Layer == policyref.LayerUnit && leaf != nil && rec.Name == ref.Name:
 			rec.Contact = leaf
 		case rec.Layer == policyref.LayerDeployment:
 			rec.Contact = site

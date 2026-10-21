@@ -29,7 +29,7 @@ import (
 // carrying the drive flag).
 //
 // It has to embed store.Store rather than sit beside it: two embeds at the same
-// depth would both offer ResolveGovernanceProfile, the selector would be
+// depth would both offer ResolveGovernanceUnit, the selector would be
 // ambiguous, and the double would silently stop implementing store.Store.
 //
 // Answering rather than panicking is the RIGHT default here — a nil-interface
@@ -38,11 +38,11 @@ import (
 // ⇒ Config.DefaultPolicy" is exactly what that deployment does.
 type noGovernanceStore struct{ store.Store }
 
-func (noGovernanceStore) ResolveGovernanceProfile(context.Context, []string, []string, string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+func (noGovernanceStore) ResolveGovernanceUnit(context.Context, []string, []string, string) (*types.GovernanceUnit, types.CapabilitySubjectType, error) {
 	return nil, "", store.ErrNotFound
 }
 
-func (noGovernanceStore) HasGroupTierAssignments(context.Context) (bool, error) { return false, nil }
+func (noGovernanceStore) HasGroupTierMemberships(context.Context) (bool, error) { return false, nil }
 
 // seededUserTypes is the user_types table as the migration leaves it: the
 // built-in type alone. The two methods below answer from it for the base
@@ -173,23 +173,23 @@ type capStore struct {
 
 	// govProfile, when set, is the profile the resolver returns for ANY caller
 	// — the store's own ORDER BY has its own pg test (TestPG_Resolve
-	// GovernanceProfile); what the api-side tests need to drive is the ANSWER.
-	govProfile *types.GovernanceProfile
+	// GovernanceUnit); what the api-side tests need to drive is the ANSWER.
+	govProfile *types.GovernanceUnit
 	// govGraph is every stored profile, for the chain a composed govProfile reads;
 	// govChainErr fails that read (governance_compose_disclosure_test.go).
-	govGraph    []types.GovernanceProfile
+	govGraph    []types.GovernanceUnit
 	govChainErr error
 	// govTier is the tier that answer matched at. Load-bearing for the
 	// stale/truncated scoping: a user-tier winner is served, an all-tier one is
 	// refused when a group row exists.
 	govTier types.CapabilitySubjectType
-	// govHasGroupTier is HasGroupTierAssignments' answer — the gate that keeps
+	// govHasGroupTier is HasGroupTierMemberships' answer — the gate that keeps
 	// the stale-snapshot 403 off deployments that never adopted group profiles.
 	govHasGroupTier bool
-	// govErr fails ResolveGovernanceProfile — the FIRST of the two governance
+	// govErr fails ResolveGovernanceUnit — the FIRST of the two governance
 	// reads ceilingWithUnusableGroups makes.
 	govErr error
-	// govHasGroupTierErr fails HasGroupTierAssignments ALONE, and it exists
+	// govHasGroupTierErr fails HasGroupTierMemberships ALONE, and it exists
 	// because one shared error field made the second read's fail-closed branch
 	// untestable. ceilingWithUnusableGroups returns on a failed resolve before
 	// it ever asks the gate, so a double that failed both could only ever
@@ -268,7 +268,7 @@ func (s *capStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	return s.site, nil
 }
 
-func (s *capStore) ResolveGovernanceProfile(_ context.Context, _, _ []string, _ string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+func (s *capStore) ResolveGovernanceUnit(_ context.Context, _, _ []string, _ string) (*types.GovernanceUnit, types.CapabilitySubjectType, error) {
 	if s.govErr != nil {
 		return nil, "", s.govErr
 	}
@@ -278,11 +278,11 @@ func (s *capStore) ResolveGovernanceProfile(_ context.Context, _, _ []string, _ 
 	return s.govProfile, s.govTier, nil
 }
 
-func (s *capStore) GetGovernanceProfileChain(_ context.Context, id uuid.UUID) ([]types.GovernanceProfile, error) {
-	return profileChainOf(s.govGraph, s.govChainErr, id)
+func (s *capStore) GetGovernanceUnitChain(_ context.Context, id uuid.UUID) ([]types.GovernanceUnit, error) {
+	return unitChainOf(s.govGraph, s.govChainErr, id)
 }
 
-func (s *capStore) HasGroupTierAssignments(context.Context) (bool, error) {
+func (s *capStore) HasGroupTierMemberships(context.Context) (bool, error) {
 	if s.govHasGroupTierErr != nil {
 		return false, s.govHasGroupTierErr
 	}

@@ -24,7 +24,7 @@ const userTypeCols = `id, name, description, priority, built_in, created_at, upd
 // predicate cannot disagree.
 const userTypeRowRefs = `(
 	(SELECT count(*) FROM capability_grants      WHERE subject_type = 'user_type' AND subject = $1) +
-	(SELECT count(*) FROM governance_assignments WHERE subject_type = 'user_type' AND subject = $1) +
+	(SELECT count(*) FROM governance_memberships WHERE subject_type = 'user_type' AND subject = $1) +
 	(SELECT count(*) FROM user_drive_grants      WHERE subject_type = 'user_type' AND subject = $1) +
 	(SELECT count(*) FROM service_identities     WHERE user_type = $1 AND retired_at IS NULL))`
 
@@ -32,7 +32,7 @@ const userTypeRowRefs = `(
 // it to refuse recreating an id that an orphaned subject row still names.
 const userTypeRowRefsExist = `(
 	EXISTS (SELECT 1 FROM capability_grants      WHERE subject_type = 'user_type' AND subject = $1) OR
-	EXISTS (SELECT 1 FROM governance_assignments WHERE subject_type = 'user_type' AND subject = $1) OR
+	EXISTS (SELECT 1 FROM governance_memberships WHERE subject_type = 'user_type' AND subject = $1) OR
 	EXISTS (SELECT 1 FROM user_drive_grants      WHERE subject_type = 'user_type' AND subject = $1) OR
 	EXISTS (SELECT 1 FROM service_identities     WHERE user_type = $1 AND retired_at IS NULL))`
 

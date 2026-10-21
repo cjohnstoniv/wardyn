@@ -59,7 +59,7 @@ func validateBoundary(b *types.BoundaryWrite) error {
 
 // boundaryHardLimitsGated refuses a write into hard_limits: the boundary cannot be switched on until
 // it bounds every brokered credential path a run is given (#3238).
-func boundaryHardLimitsGated(b types.BoundaryWrite) *profileWriteError {
+func boundaryHardLimitsGated(b types.BoundaryWrite) *unitWriteError {
 	if b.Mode != types.BoundaryHardLimits {
 		return nil
 	}
@@ -206,9 +206,9 @@ func applyBoundaryChange(_ *Server, r *http.Request, q store.Querier, ch types.G
 // Rows the boundary leaves as they are are not listed.
 type boundaryReport struct {
 	Deployment     []boundaryChange       `json:"deployment"`
-	Profiles       []boundaryReportRow    `json:"profiles"`
+	Units          []boundaryReportRow    `json:"units"`
 	StoredPolicies []boundaryReportRow    `json:"stored_policies"`
-	Assignments    []boundaryReportAssign `json:"assignments"`
+	Memberships    []boundaryReportAssign `json:"memberships"`
 }
 
 type boundaryReportRow struct {
@@ -221,8 +221,8 @@ type boundaryReportAssign struct {
 	ID          uuid.UUID        `json:"id"`
 	SubjectType string           `json:"subject_type"`
 	Subject     string           `json:"subject"`
-	ProfileID   uuid.UUID        `json:"profile_id"`
-	ProfileName string           `json:"profile_name"`
+	UnitID      uuid.UUID        `json:"unit_id"`
+	UnitName    string           `json:"unit_name"`
 	Changes     []boundaryChange `json:"changes"`
 }
 
@@ -255,7 +255,7 @@ func (s *Server) boundaryDryRun(ctx context.Context, b types.Boundary) (boundary
 		}
 		return boundaryChanges(redactSpecForRead(spec, true), redactSpecForRead(after, true), limits, afterLimits), nil
 	}
-	report := boundaryReport{Profiles: []boundaryReportRow{}, StoredPolicies: []boundaryReportRow{}, Assignments: []boundaryReportAssign{}}
+	report := boundaryReport{Units: []boundaryReportRow{}, StoredPolicies: []boundaryReportRow{}, Memberships: []boundaryReportAssign{}}
 	var err error
 	if report.Deployment, err = meet(s.cfg.DefaultPolicy, types.GovernanceLimits{}); err != nil {
 		return boundaryReport{}, err
@@ -263,7 +263,7 @@ func (s *Server) boundaryDryRun(ctx context.Context, b types.Boundary) (boundary
 	if s.cfg.Store == nil {
 		return report, nil
 	}
-	profiles, err := s.resolveAllProfiles(ctx)
+	profiles, err := s.resolveAllUnits(ctx)
 	if err != nil {
 		return boundaryReport{}, fmt.Errorf("list governance profiles: %w", err)
 	}
@@ -278,7 +278,7 @@ func (s *Server) boundaryDryRun(ctx context.Context, b types.Boundary) (boundary
 		}
 		if len(changes) > 0 {
 			row := boundaryReportRow{ID: p.Row.ID, Name: p.Row.Name, Changes: changes}
-			report.Profiles = append(report.Profiles, row)
+			report.Units = append(report.Units, row)
 			byProfile[p.Row.ID] = row
 		}
 	}
@@ -295,14 +295,14 @@ func (s *Server) boundaryDryRun(ctx context.Context, b types.Boundary) (boundary
 			report.StoredPolicies = append(report.StoredPolicies, boundaryReportRow{ID: p.ID, Name: p.Name, Changes: changes})
 		}
 	}
-	assignments, err := s.cfg.Store.ListGovernanceAssignments(ctx)
+	assignments, err := s.cfg.Store.ListGovernanceMemberships(ctx)
 	if err != nil {
 		return boundaryReport{}, fmt.Errorf("list governance assignments: %w", err)
 	}
 	for _, a := range assignments {
-		if row, ok := byProfile[a.ProfileID]; ok {
-			report.Assignments = append(report.Assignments, boundaryReportAssign{ID: a.ID, SubjectType: string(a.SubjectType),
-				Subject: a.Subject, ProfileID: a.ProfileID, ProfileName: row.Name, Changes: row.Changes})
+		if row, ok := byProfile[a.UnitID]; ok {
+			report.Memberships = append(report.Memberships, boundaryReportAssign{ID: a.ID, SubjectType: string(a.SubjectType),
+				Subject: a.Subject, UnitID: a.UnitID, UnitName: row.Name, Changes: row.Changes})
 		}
 	}
 	return report, nil
@@ -353,7 +353,7 @@ func (s *Server) breakGlassLifts(ctx context.Context) (bool, error) {
 	if err != nil || !b.HardLimits() {
 		return false, err
 	}
-	profiles, err := s.resolveAllProfiles(ctx)
+	profiles, err := s.resolveAllUnits(ctx)
 	return len(profiles) > 0, err
 }
 

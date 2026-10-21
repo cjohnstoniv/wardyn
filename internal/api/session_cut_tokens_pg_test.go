@@ -38,7 +38,7 @@ func TestPG_GovernanceChanges_SessionsOnlyLeavesTheApproverTokenAbleToCommit(t *
 		c.SessionRevocations = &pgTestRevocations{pool: pool, st: store.NewPG(pool)}
 	})
 	p := e.seedProfile("p", "pypi.org")
-	ch := e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/profiles/"+p.ID.String(), profileBody("p", "pypi.org", "github.com")))
+	ch := e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/units/"+p.ID.String(), profileBody("p", "pypi.org", "github.com")))
 	_, raw := e.mintToken(govSubBob, "bob@corp.example", oidc.RoleSecurityAdmin)
 	time.Sleep(10 * time.Millisecond)
 	if w := e.call(e.carol, http.MethodPost, "/api/v1/sessions/revoke", `{"sub":"`+govSubBob+`","sessions_only":true}`); w.Code != http.StatusNoContent {

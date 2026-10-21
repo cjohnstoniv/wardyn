@@ -178,7 +178,7 @@ describe("PolicyTab — the source line for each kind (S-3..S-10)", () => {
     ["saved, deleted, no name", { kind: "stored", deleted: true }, "Started from a saved policy that has since been deleted."],
     ["inline", { kind: "inline" }, "Started from a policy written for this run."],
     ["default", { kind: "default" }, "Started from your organization's default policy."],
-    ["profile", { kind: "profile", name: "walled" }, "Started from the walled governance profile."],
+    ["profile", { kind: "unit", name: "walled" }, "Started from the walled governance profile."],
     ["unknown", { kind: "unknown" }, "Wardyn set this policy for this run."],
   ];
   it.each(cases)("%s", async (_n, source, text) => {
@@ -277,8 +277,8 @@ describe("PolicyTab — changes grouped by cause", () => {
     show(
       view({
         changes: [
-          change({ cause: "profile", field: "denied_domains", added: ["corp.example"], profile: "walled" }),
-          change({ cause: "profile", field: "denied_domains", added: ["paste.example"], profile: "strict" }),
+          change({ cause: "unit", field: "denied_domains", added: ["corp.example"], unit: "walled" }),
+          change({ cause: "unit", field: "denied_domains", added: ["paste.example"], unit: "strict" }),
         ],
       }),
     );

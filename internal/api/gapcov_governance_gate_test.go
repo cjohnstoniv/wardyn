@@ -23,27 +23,27 @@ func TestGapCovAssignmentWritesByTheAdminTokenLeaveABreakGlassRow(t *testing.T) 
 
 	t.Run("upsert", func(t *testing.T) {
 		srv, h := govCrudServer(t, &govCrudStore{})
-		body := `{"subject_type":"group","subject":"eng","profile_id":"` + pid.String() + `","priority":3}`
-		w := do(t, srv, http.MethodPost, "/api/v1/governance/assignments", adminToken, body)
+		body := `{"subject_type":"group","subject":"eng","unit_id":"` + pid.String() + `","priority":3}`
+		w := do(t, srv, http.MethodPost, "/api/v1/governance/memberships", adminToken, body)
 		if w.Code != http.StatusCreated {
 			t.Fatalf("POST = %d %s, want 201", w.Code, w.Body)
 		}
-		rows := govCovAudits(h, "governance.assignment.write")
+		rows := govCovAudits(h, "governance.membership.write")
 		if len(rows) != 1 {
 			t.Fatalf("%d assignment audit rows, want 1", len(rows))
 		}
-		if row := gapCovBypassRow(t, h, govKindAssignment); row.Target != rows[0].Target {
+		if row := gapCovBypassRow(t, h, govKindMembership); row.Target != rows[0].Target {
 			t.Errorf("break-glass target = %q, want the assignment's %q", row.Target, rows[0].Target)
 		}
 	})
 	t.Run("delete", func(t *testing.T) {
 		srv, h := govCrudServer(t, &govCrudStore{})
 		id := uuid.MustParse("00000000-0000-0000-0000-00000000a002")
-		w := do(t, srv, http.MethodDelete, "/api/v1/governance/assignments/"+id.String(), adminToken, "")
+		w := do(t, srv, http.MethodDelete, "/api/v1/governance/memberships/"+id.String(), adminToken, "")
 		if w.Code != http.StatusNoContent {
 			t.Fatalf("DELETE = %d %s, want 204", w.Code, w.Body)
 		}
-		if row := gapCovBypassRow(t, h, govKindAssignment); row.Target != id.String() {
+		if row := gapCovBypassRow(t, h, govKindMembership); row.Target != id.String() {
 			t.Errorf("break-glass target = %q, want %s", row.Target, id)
 		}
 	})
@@ -58,8 +58,8 @@ func TestGapCovAssignmentWritesAreRefusedInLocalModeWithTheSwitchOn(t *testing.T
 		name, method string
 		handler      func(*Server) http.HandlerFunc
 	}{
-		{"upsert", http.MethodPost, func(s *Server) http.HandlerFunc { return s.handleUpsertGovernanceAssignment }},
-		{"delete", http.MethodDelete, func(s *Server) http.HandlerFunc { return s.handleDeleteGovernanceAssignment }},
+		{"upsert", http.MethodPost, func(s *Server) http.HandlerFunc { return s.handleUpsertGovernanceMembership }},
+		{"delete", http.MethodDelete, func(s *Server) http.HandlerFunc { return s.handleDeleteGovernanceMembership }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t)

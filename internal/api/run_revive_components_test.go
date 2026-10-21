@@ -166,7 +166,7 @@ func TestRevive_RefusesARunWhoseOrganisationComponentIsGone(t *testing.T) {
 			// Still granted by name, and the kind is open: only the row is gone.
 			f.st.caps = []types.CapabilityGrant{grant(types.CapabilitySubjectAll, "", capComponent, reviveOrgComponent.String(), types.CapabilityAllow)}
 			if tc.name == "owner who is an admin" {
-				f.st.run.GovernanceProfileID = nil // a super admin captures none
+				f.st.run.UnitID = nil // a super admin captures none
 			}
 			code, body := tc.caller(t, f)
 			if code != http.StatusConflict || !strings.Contains(body, reasonOwnerComponentGone) {

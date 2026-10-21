@@ -94,7 +94,7 @@ func TestPolicyPreviewDraftDoesNotImplyInteractive(t *testing.T) {
 	member := ssoSession(t, "member", "m@example.com", oidc.RoleUser)
 	previewResult(t, doSSO(t, srv, http.MethodPost, policyPreviewPath, member, `{"agent":"claude-code"}`))
 	w := doSSO(t, srv, http.MethodPost, policyPreviewPath, member, `{"agent":"claude-code","interactive":true}`)
-	if w.Code != 403 || errorReason(w) != "governance_profile" {
+	if w.Code != 403 || errorReason(w) != "governance_unit" {
 		t.Fatalf("explicit interactive posture escaped: %d %s", w.Code, w.Body.String())
 	}
 }

@@ -63,7 +63,7 @@ test.describe("governance — a member sees none of it (mocked /me role)", () =>
 
 // ---------------------------------------------------------------------------
 // The member's view of a ceiling. The splice cases below patch
-// governance_profile_name onto the REAL /policies/default response —
+// unit_name onto the REAL /policies/default response —
 // route.fetch() + patch + refulfill, the same technique fixtures.ts's
 // mockMemberRole documents, so the shape around it stays genuine. The mocked
 // role keeps the operator bearer, and effectiveCeiling short-circuits for an
@@ -76,14 +76,14 @@ async function mockAssignedCeiling(page: Page, name: string): Promise<void> {
   await page.route("**/api/v1/policies/default", async (route) => {
     const response = await route.fetch();
     const json = await response.json();
-    json.governance_profile_name = name;
+    json.unit_name = name;
     await route.fulfill({ response, json });
   });
   // The Run step reads the same profile off the pool list's allowance, so it is spliced there too.
   await page.route("**/api/v1/runner-pools*", (route) =>
     route.request().method() !== "GET"
       ? route.fallback()
-      : route.fulfill({ json: { ...POOLS, allowance: { active: 0, ...POOLS.allowance, profile_name: name } } }),
+      : route.fulfill({ json: { ...POOLS, allowance: { active: 0, ...POOLS.allowance, unit_name: name } } }),
   );
 }
 
@@ -135,7 +135,7 @@ test.describe("governance — a real member is told which ceiling bounds them", 
   const REAL_NAME = "real-member-wall";
 
   test("a profile assigned to the member's principal reaches the member's own Getting Started card", async ({ page }) => {
-    const prof = await page.request.post("/api/v1/governance/profiles", {
+    const prof = await page.request.post("/api/v1/governance/units", {
       headers: auth,
       data: {
         name: REAL_NAME,
@@ -152,11 +152,11 @@ test.describe("governance — a real member is told which ceiling bounds them", 
       },
     });
     expect(prof.status(), await prof.text()).toBe(201);
-    const profileID = (await prof.json()).profile.id;
+    const profileID = (await prof.json()).unit.id;
     try {
-      const assigned = await page.request.post("/api/v1/governance/assignments", {
+      const assigned = await page.request.post("/api/v1/governance/memberships", {
         headers: auth,
-        data: { subject_type: "user", subject: MEMBER_PRINCIPAL, profile_id: profileID, priority: 0 },
+        data: { subject_type: "user", subject: MEMBER_PRINCIPAL, unit_id: profileID, priority: 0 },
       });
       expect(assigned.ok(), await assigned.text()).toBeTruthy();
 
@@ -168,10 +168,10 @@ test.describe("governance — a real member is told which ceiling bounds them", 
       await expect(page.getByText(MEMBER.GS_BODY(REAL_NAME))).toBeVisible();
     } finally {
       const snap = await (await page.request.get("/api/v1/governance", { headers: auth })).json();
-      for (const a of snap.assignments ?? []) {
-        if (a.profile_id === profileID) await page.request.delete(`/api/v1/governance/assignments/${a.id}`, { headers: auth });
+      for (const a of snap.memberships ?? []) {
+        if (a.unit_id === profileID) await page.request.delete(`/api/v1/governance/memberships/${a.id}`, { headers: auth });
       }
-      await page.request.delete(`/api/v1/governance/profiles/${profileID}`, { headers: auth });
+      await page.request.delete(`/api/v1/governance/units/${profileID}`, { headers: auth });
     }
   });
 });

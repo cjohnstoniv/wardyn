@@ -20,24 +20,24 @@ import (
 
 // fakeGovernanceServer models just enough of the real /governance family
 // (internal/api/governance.go) to make a round trip through it MEAN
-// something: POST /governance/profiles refuses a name another profile already
-// holds (409, the real UNIQUE(name) behavior); POST /governance/assignments
+// something: POST /governance/units refuses a name another profile already
+// holds (409, the real UNIQUE(name) behavior); POST /governance/memberships
 // upserts by the natural key (subject_type, subject) rather than accumulating
-// a row per call; DELETE /governance/profiles/{id} refuses (409) while the
+// a row per call; DELETE /governance/units/{id} refuses (409) while the
 // profile is still assigned, the real ON DELETE RESTRICT behavior. writeCount
 // is incremented on every successful mutating call — the real server audits
 // exactly once per such call, so writeCount is the audit-row proxy #1108's
 // no-op contract is measured against.
 type fakeGovernanceServer struct {
-	profiles    map[uuid.UUID]sdk.GovernanceProfile
-	assignments map[uuid.UUID]sdk.GovernanceAssignment
+	profiles    map[uuid.UUID]sdk.GovernanceUnit
+	assignments map[uuid.UUID]sdk.GovernanceMembership
 	writeCount  int
 }
 
 func newFakeGovernanceServer() *fakeGovernanceServer {
 	return &fakeGovernanceServer{
-		profiles:    map[uuid.UUID]sdk.GovernanceProfile{},
-		assignments: map[uuid.UUID]sdk.GovernanceAssignment{},
+		profiles:    map[uuid.UUID]sdk.GovernanceUnit{},
+		assignments: map[uuid.UUID]sdk.GovernanceMembership{},
 	}
 }
 
@@ -50,18 +50,18 @@ func (f *fakeGovernanceServer) nameConflict(id uuid.UUID, name string) bool {
 	return false
 }
 
-func (f *fakeGovernanceServer) assignmentByKey(subjectType sdk.CapabilitySubjectType, subject string) (sdk.GovernanceAssignment, bool) {
+func (f *fakeGovernanceServer) assignmentByKey(subjectType sdk.CapabilitySubjectType, subject string) (sdk.GovernanceMembership, bool) {
 	for _, a := range f.assignments {
 		if a.SubjectType == subjectType && a.Subject == subject {
 			return a, true
 		}
 	}
-	return sdk.GovernanceAssignment{}, false
+	return sdk.GovernanceMembership{}, false
 }
 
 func (f *fakeGovernanceServer) profileAssigned(id uuid.UUID) bool {
 	for _, a := range f.assignments {
-		if a.ProfileID == id {
+		if a.UnitID == id {
 			return true
 		}
 	}
@@ -71,20 +71,20 @@ func (f *fakeGovernanceServer) profileAssigned(id uuid.UUID) bool {
 func (f *fakeGovernanceServer) document() sdk.GovernanceDocument {
 	doc := sdk.GovernanceDocument{}
 	for _, p := range f.profiles {
-		doc.Profiles = append(doc.Profiles, p)
+		doc.Units = append(doc.Units, p)
 	}
 	for _, a := range f.assignments {
-		doc.Assignments = append(doc.Assignments, a)
+		doc.Memberships = append(doc.Memberships, a)
 	}
-	sortGovernanceProfiles(doc.Profiles)
-	sortGovernanceAssignments(doc.Assignments)
+	sortGovernanceUnits(doc.Units)
+	sortGovernanceMemberships(doc.Memberships)
 	return doc
 }
 
-// sortGovernanceProfiles/sortGovernanceAssignments give a stable order so two
+// sortGovernanceUnits/sortGovernanceMemberships give a stable order so two
 // documents built from the same map state compare equal regardless of Go's
 // randomized map iteration (sortDrives/sortGrants, drive_test.go).
-func sortGovernanceProfiles(p []sdk.GovernanceProfile) {
+func sortGovernanceUnits(p []sdk.GovernanceUnit) {
 	for i := 1; i < len(p); i++ {
 		for j := i; j > 0 && p[j].Name < p[j-1].Name; j-- {
 			p[j], p[j-1] = p[j-1], p[j]
@@ -92,7 +92,7 @@ func sortGovernanceProfiles(p []sdk.GovernanceProfile) {
 	}
 }
 
-func sortGovernanceAssignments(a []sdk.GovernanceAssignment) {
+func sortGovernanceMemberships(a []sdk.GovernanceMembership) {
 	for i := 1; i < len(a); i++ {
 		for j := i; j > 0 && a[j].Subject < a[j-1].Subject; j-- {
 			a[j], a[j-1] = a[j-1], a[j]
@@ -112,38 +112,38 @@ func (f *fakeGovernanceServer) handler() http.HandlerFunc {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/governance":
 			_ = json.NewEncoder(w).Encode(f.document())
 
-		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/governance/profiles":
-			var req sdk.GovernanceProfileRequest
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/governance/units":
+			var req sdk.GovernanceUnitRequest
 			_ = json.NewDecoder(r.Body).Decode(&req)
 			if f.nameConflict(uuid.Nil, req.Name) {
 				writeErrorJSON(w, http.StatusConflict, "a governance profile named "+req.Name+" already exists")
 				return
 			}
-			p := sdk.GovernanceProfile{ID: uuid.New(), Name: req.Name, Ceiling: req.Ceiling, Limits: req.Limits}
+			p := sdk.GovernanceUnit{ID: uuid.New(), Name: req.Name, Ceiling: req.Ceiling, Limits: req.Limits}
 			f.profiles[p.ID] = p
 			f.writeCount++
 			w.WriteHeader(http.StatusCreated)
-			_ = json.NewEncoder(w).Encode(sdk.GovernanceProfileResponse{Profile: p})
+			_ = json.NewEncoder(w).Encode(sdk.GovernanceUnitResponse{Unit: p})
 
-		case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/api/v1/governance/profiles/"):
-			id, err := uuid.Parse(strings.TrimPrefix(r.URL.Path, "/api/v1/governance/profiles/"))
+		case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/api/v1/governance/units/"):
+			id, err := uuid.Parse(strings.TrimPrefix(r.URL.Path, "/api/v1/governance/units/"))
 			if err != nil {
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
-			var req sdk.GovernanceProfileRequest
+			var req sdk.GovernanceUnitRequest
 			_ = json.NewDecoder(r.Body).Decode(&req)
 			if f.nameConflict(id, req.Name) {
 				writeErrorJSON(w, http.StatusConflict, "a governance profile named "+req.Name+" already exists")
 				return
 			}
-			p := sdk.GovernanceProfile{ID: id, Name: req.Name, Ceiling: req.Ceiling, Limits: req.Limits}
+			p := sdk.GovernanceUnit{ID: id, Name: req.Name, Ceiling: req.Ceiling, Limits: req.Limits}
 			f.profiles[id] = p
 			f.writeCount++
-			_ = json.NewEncoder(w).Encode(sdk.GovernanceProfileResponse{Profile: p})
+			_ = json.NewEncoder(w).Encode(sdk.GovernanceUnitResponse{Unit: p})
 
-		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/v1/governance/profiles/"):
-			id, err := uuid.Parse(strings.TrimPrefix(r.URL.Path, "/api/v1/governance/profiles/"))
+		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/v1/governance/units/"):
+			id, err := uuid.Parse(strings.TrimPrefix(r.URL.Path, "/api/v1/governance/units/"))
 			if err != nil {
 				w.WriteHeader(http.StatusBadRequest)
 				return
@@ -160,16 +160,16 @@ func (f *fakeGovernanceServer) handler() http.HandlerFunc {
 			f.writeCount++
 			w.WriteHeader(http.StatusNoContent)
 
-		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/governance/assignments":
-			var req sdk.GovernanceAssignmentRequest
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/governance/memberships":
+			var req sdk.GovernanceMembershipRequest
 			_ = json.NewDecoder(r.Body).Decode(&req)
-			if _, ok := f.profiles[req.ProfileID]; !ok {
+			if _, ok := f.profiles[req.UnitID]; !ok {
 				writeErrorJSON(w, http.StatusNotFound, "governance profile not found")
 				return
 			}
 			existing, had := f.assignmentByKey(req.SubjectType, req.Subject)
-			a := sdk.GovernanceAssignment{SubjectType: req.SubjectType, Subject: req.Subject,
-				ProfileID: req.ProfileID, Priority: req.Priority}
+			a := sdk.GovernanceMembership{SubjectType: req.SubjectType, Subject: req.Subject,
+				UnitID: req.UnitID, Priority: req.Priority}
 			if had {
 				a.ID = existing.ID
 				w.WriteHeader(http.StatusOK)
@@ -181,8 +181,8 @@ func (f *fakeGovernanceServer) handler() http.HandlerFunc {
 			f.writeCount++
 			_ = json.NewEncoder(w).Encode(a)
 
-		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/v1/governance/assignments/"):
-			id, err := uuid.Parse(strings.TrimPrefix(r.URL.Path, "/api/v1/governance/assignments/"))
+		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/v1/governance/memberships/"):
+			id, err := uuid.Parse(strings.TrimPrefix(r.URL.Path, "/api/v1/governance/memberships/"))
 			if err != nil {
 				w.WriteHeader(http.StatusBadRequest)
 				return
@@ -239,10 +239,10 @@ func runGovernanceApply(t *testing.T, url string, doc sdk.GovernanceDocument, pr
 	return out.String(), err
 }
 
-// seedGovernanceProfiles exercises a real ceiling and non-zero limits, not
+// seedGovernanceUnits exercises a real ceiling and non-zero limits, not
 // just the zero value.
-func seedGovernanceProfiles() []sdk.GovernanceProfile {
-	return []sdk.GovernanceProfile{
+func seedGovernanceUnits() []sdk.GovernanceUnit {
+	return []sdk.GovernanceUnit{
 		{Name: "contractor", Ceiling: sdk.RunPolicySpec{MinConfinementClass: sdk.CC2},
 			Limits: sdk.GovernanceLimits{DenyTaskModeExec: true, MaxConcurrentRuns: 2}},
 		{Name: "eng-default", Ceiling: sdk.RunPolicySpec{MinConfinementClass: sdk.CC1, AllowAllEgress: true},
@@ -250,21 +250,21 @@ func seedGovernanceProfiles() []sdk.GovernanceProfile {
 	}
 }
 
-// seedGovernanceAssignments exercises every types.CapabilitySubjectType.
+// seedGovernanceMemberships exercises every types.CapabilitySubjectType.
 // profileByName resolves a seed profile's real (post-write) id.
-func seedGovernanceAssignments(profileByName map[string]uuid.UUID) []sdk.GovernanceAssignment {
-	return []sdk.GovernanceAssignment{
-		{SubjectType: sdk.CapabilitySubjectUser, Subject: "alice", ProfileID: profileByName["contractor"]},
-		{SubjectType: sdk.CapabilitySubjectGroup, Subject: "eng", ProfileID: profileByName["eng-default"], Priority: 5},
+func seedGovernanceMemberships(profileByName map[string]uuid.UUID) []sdk.GovernanceMembership {
+	return []sdk.GovernanceMembership{
+		{SubjectType: sdk.CapabilitySubjectUser, Subject: "alice", UnitID: profileByName["contractor"]},
+		{SubjectType: sdk.CapabilitySubjectGroup, Subject: "eng", UnitID: profileByName["eng-default"], Priority: 5},
 	}
 }
 
-// bootstrapGovernance applies seedGovernanceProfiles and
-// seedGovernanceAssignments to a fresh fake server and returns the profile
+// bootstrapGovernance applies seedGovernanceUnits and
+// seedGovernanceMemberships to a fresh fake server and returns the profile
 // name -> real id map the assignments were written against.
 func bootstrapGovernance(t *testing.T, url string) map[string]uuid.UUID {
 	t.Helper()
-	if _, err := runGovernanceApply(t, url, sdk.GovernanceDocument{Profiles: seedGovernanceProfiles()}, false); err != nil {
+	if _, err := runGovernanceApply(t, url, sdk.GovernanceDocument{Units: seedGovernanceUnits()}, false); err != nil {
 		t.Fatalf("bootstrap profiles: %v", err)
 	}
 	getOut, err := runGovernanceGet(t, url)
@@ -276,10 +276,10 @@ func bootstrapGovernance(t *testing.T, url string) map[string]uuid.UUID {
 		t.Fatalf("unmarshal bootstrap get: %v", err)
 	}
 	byName := map[string]uuid.UUID{}
-	for _, p := range doc.Profiles {
+	for _, p := range doc.Units {
 		byName[p.Name] = p.ID
 	}
-	if _, err := runGovernanceApply(t, url, sdk.GovernanceDocument{Assignments: seedGovernanceAssignments(byName)}, false); err != nil {
+	if _, err := runGovernanceApply(t, url, sdk.GovernanceDocument{Memberships: seedGovernanceMemberships(byName)}, false); err != nil {
 		t.Fatalf("bootstrap assignments: %v", err)
 	}
 	return byName
@@ -329,10 +329,10 @@ func TestGovernanceApply_GetApplyRoundTripIsANoOp(t *testing.T) {
 	if err := json.Unmarshal([]byte(afterOut), &after); err != nil {
 		t.Fatalf("unmarshal post-round-trip get output: %v", err)
 	}
-	sortGovernanceProfiles(before.Profiles)
-	sortGovernanceProfiles(after.Profiles)
-	sortGovernanceAssignments(before.Assignments)
-	sortGovernanceAssignments(after.Assignments)
+	sortGovernanceUnits(before.Units)
+	sortGovernanceUnits(after.Units)
+	sortGovernanceMemberships(before.Memberships)
+	sortGovernanceMemberships(after.Memberships)
 	beforeJSON, _ := json.Marshal(before)
 	afterJSON, _ := json.Marshal(after)
 	if string(beforeJSON) != string(afterJSON) {
@@ -374,7 +374,7 @@ func TestGovernanceApply_EmptyInstallReproducesState(t *testing.T) {
 	if len(target.assignments) != 2 {
 		t.Fatalf("target has %d assignments, want 2", len(target.assignments))
 	}
-	byName := map[string]sdk.GovernanceProfile{}
+	byName := map[string]sdk.GovernanceUnit{}
 	for _, p := range target.profiles {
 		byName[p.Name] = p
 	}
@@ -391,7 +391,7 @@ func TestGovernanceApply_EmptyInstallReproducesState(t *testing.T) {
 	if sourceContractorID == contractor.ID {
 		t.Fatalf("target's contractor profile reused the source install's id %s — the empty install must mint its own", contractor.ID)
 	}
-	var aliceAssignment *sdk.GovernanceAssignment
+	var aliceAssignment *sdk.GovernanceMembership
 	for _, a := range target.assignments {
 		if a.SubjectType == sdk.CapabilitySubjectUser && a.Subject == "alice" {
 			cp := a
@@ -401,9 +401,9 @@ func TestGovernanceApply_EmptyInstallReproducesState(t *testing.T) {
 	if aliceAssignment == nil {
 		t.Fatal("target has no assignment for user alice")
 	}
-	if aliceAssignment.ProfileID != contractor.ID {
+	if aliceAssignment.UnitID != contractor.ID {
 		t.Errorf("alice's assignment points at profile id %s, want the target's own contractor id %s",
-			aliceAssignment.ProfileID, contractor.ID)
+			aliceAssignment.UnitID, contractor.ID)
 	}
 }
 
@@ -447,11 +447,11 @@ func TestGovernanceApply_Prune(t *testing.T) {
 	// A file naming only "eng-default" and its own assignment — "contractor"
 	// and alice's assignment to it are both absent.
 	reduced := sdk.GovernanceDocument{
-		Profiles: []sdk.GovernanceProfile{{Name: "eng-default",
+		Units: []sdk.GovernanceUnit{{Name: "eng-default",
 			Ceiling: sdk.RunPolicySpec{MinConfinementClass: sdk.CC1, AllowAllEgress: true},
 			Limits:  sdk.GovernanceLimits{MaxEphemeralDiskMiB: 4096}}},
-		Assignments: []sdk.GovernanceAssignment{
-			{SubjectType: sdk.CapabilitySubjectGroup, Subject: "eng", ProfileID: byName["eng-default"], Priority: 5},
+		Memberships: []sdk.GovernanceMembership{
+			{SubjectType: sdk.CapabilitySubjectGroup, Subject: "eng", UnitID: byName["eng-default"], Priority: 5},
 		},
 	}
 
@@ -507,9 +507,9 @@ func countingServer(t *testing.T) (*httptest.Server, func() []string) {
 // state is empty", and --prune then deleted every profile and assignment. The
 // input is now refused before ANY request, a read included.
 func TestOperatorGovernanceTrailingDocumentPrunes(t *testing.T) {
-	p := sdk.GovernanceProfile{ID: uuid.New(), Name: "retain-this"}
-	a := sdk.GovernanceAssignment{ID: uuid.New(), SubjectType: "all", Subject: "*", ProfileID: p.ID}
-	desired, err := json.Marshal(sdk.GovernanceDocument{Profiles: []sdk.GovernanceProfile{p}, Assignments: []sdk.GovernanceAssignment{a}})
+	p := sdk.GovernanceUnit{ID: uuid.New(), Name: "retain-this"}
+	a := sdk.GovernanceMembership{ID: uuid.New(), SubjectType: "all", Subject: "*", UnitID: p.ID}
+	desired, err := json.Marshal(sdk.GovernanceDocument{Units: []sdk.GovernanceUnit{p}, Memberships: []sdk.GovernanceMembership{a}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -535,7 +535,7 @@ func TestOperatorGovernanceTrailingDocumentPrunes(t *testing.T) {
 // semantics); null and empty input are refused with no request.
 func TestOperatorGovernanceSingleDocumentStillApplies(t *testing.T) {
 	fake := newFakeGovernanceServer()
-	p := sdk.GovernanceProfile{ID: uuid.New(), Name: "retain-this"}
+	p := sdk.GovernanceUnit{ID: uuid.New(), Name: "retain-this"}
 	fake.profiles[p.ID] = p
 	srv := httptest.NewServer(fake.handler())
 	t.Cleanup(srv.Close)

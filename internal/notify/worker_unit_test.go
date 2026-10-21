@@ -60,7 +60,7 @@ func (r *keepRecorder) actions() []string {
 func routedConfig(t *testing.T, tiers string) (*Config, uuid.UUID) {
 	t.Helper()
 	profile := uuid.New()
-	c, err := Parse(`{` + routeChannels + `,"routes":[{"kinds":["egress_domain"],"profiles":["` + profile.String() + `"],"tiers":` + tiers + `}]}`)
+	c, err := Parse(`{` + routeChannels + `,"routes":[{"kinds":["egress_domain"],"units":["` + profile.String() + `"],"tiers":` + tiers + `}]}`)
 	if err != nil {
 		t.Fatalf("config refused: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestRecipientsResolveTheTiersTargetsAndSkipWhatHasNoAddress(t *testing.T) {
 		tierJSON("0s", `"a"`, `,"notify":["run_owner","profile_contact"]`)+`,`+
 		tierJSON("1m", `"b"`, `,"notify":["profile_contact"]`)+`]`)
 	w := &Worker{cfg: c}
-	facts := approvalFacts{Kind: types.ApprovalEgressDomain, ProfileID: &profile, ProfileName: "interns", Email: "owner@corp.example"}
+	facts := approvalFacts{Kind: types.ApprovalEgressDomain, UnitID: &profile, UnitName: "interns", Email: "owner@corp.example"}
 	contact := []byte(`{"owner":"Platform team","email":"platform@corp.example"}`)
 
 	got := w.recipients(claimed{tier: 0, channel: "a"}, facts, contact)
@@ -142,7 +142,7 @@ func TestRecipientsResolveTheTiersTargetsAndSkipWhatHasNoAddress(t *testing.T) {
 	}
 	// No route matches an approval of another profile or kind: the fixed config answers no one.
 	other := uuid.New()
-	if got := w.recipients(claimed{tier: 0, channel: "a"}, approvalFacts{Kind: facts.Kind, ProfileID: &other}, contact); got != nil {
+	if got := w.recipients(claimed{tier: 0, channel: "a"}, approvalFacts{Kind: facts.Kind, UnitID: &other}, contact); got != nil {
 		t.Errorf("an unrouted profile resolved %+v", got)
 	}
 

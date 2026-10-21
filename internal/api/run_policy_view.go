@@ -31,7 +31,7 @@ const (
 	policyKindStored  = "stored"
 	policyKindInline  = "inline"
 	policyKindDefault = "default"
-	policyKindProfile = "profile"
+	policyKindUnit    = "unit"
 	policyKindUnknown = "unknown"
 )
 
@@ -126,9 +126,9 @@ type runPolicyChange struct {
 	Added   []string `json:"added,omitempty"`
 	Removed []string `json:"removed,omitempty"`
 	// Detail is the clamp_warnings lines, verbatim (cause limits only).
-	Detail  []string   `json:"detail,omitempty"`
-	Profile string     `json:"profile,omitempty"`
-	At      *time.Time `json:"at,omitempty"` // restart time
+	Detail []string   `json:"detail,omitempty"`
+	Unit   string     `json:"unit,omitempty"`
+	At     *time.Time `json:"at,omitempty"` // restart time
 }
 
 type storedPolicyNow struct {
@@ -261,10 +261,10 @@ func (s *Server) runPolicySourceOf(ctx context.Context, run types.AgentRun, c cr
 		}
 	case c.InlinePolicy != nil && *c.InlinePolicy:
 		out.Kind = policyKindInline
-	case c.InlinePolicy != nil && run.GovernanceProfileID != nil:
-		out.Kind = policyKindProfile
+	case c.InlinePolicy != nil && run.UnitID != nil:
+		out.Kind = policyKindUnit
 		// The leaf's own name: a base's never reaches a member's policy view.
-		if name, err := s.profileLeafName(ctx, *run.GovernanceProfileID); err == nil {
+		if name, err := s.unitLeafName(ctx, *run.UnitID); err == nil {
 			out.Name = name
 		}
 	case c.InlinePolicy != nil:
@@ -349,7 +349,7 @@ type evidenceRow struct {
 	Hosts          []string `json:"hosts"`
 	Host           string   `json:"host"`
 	Port           int      `json:"port"`
-	Profile        string   `json:"profile"`
+	Unit           string   `json:"unit"`
 	DeniedAdded    []string `json:"denied_added"`
 	MaxEphemeralMB int      `json:"max_ephemeral_disk_mib"`
 }
@@ -398,7 +398,7 @@ func collectEvidence(events, revives []types.AuditEvent) auditEvidence {
 		case "run.egress.confine":
 			add(ev.confine, row.Hosts...)
 		case "run.ceiling.reassert":
-			ev.profile, ev.profileMaxDisk = row.Profile, row.MaxEphemeralMB
+			ev.profile, ev.profileMaxDisk = row.Unit, row.MaxEphemeralMB
 			add(ev.profileDenied, row.DeniedAdded...)
 		case "run.revive":
 			for _, h := range row.DeniedAdded {

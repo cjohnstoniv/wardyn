@@ -11,11 +11,11 @@
 //
 // Both columns are matched by exact string equality against Session.Groups
 // (store_capabilities.go's `subject = ANY($2::text[])`, and the same shape in
-// ResolveGovernanceProfile), and that snapshot is strictly narrower than
+// ResolveGovernanceUnit), and that snapshot is strictly narrower than
 // "lowercase it" — oidc.sessionGroups carries printable ASCII only, checked
 // BEFORE the Unicode fold. A subject outside that set is a row that matches
 // nobody: a group DENY that protects nothing while the Permissions screen
-// renders it as active, and a group-tier assignment that HasGroupTierAssignments
+// renders it as active, and a group-tier assignment that HasGroupTierMemberships
 // still counts as present (so every unanswerable-snapshot caller is refused
 // 403 groups_snapshot_stale on account of an assignment that could never have
 // applied to them).
@@ -70,11 +70,11 @@ func TestGroupSubjectWriteBoundariesShareTheSnapshotRule(t *testing.T) {
 			}
 			grantErr := validateCapabilityGrant(&grant)
 
-			assign := types.GovernanceAssignment{
+			assign := types.GovernanceMembership{
 				SubjectType: types.CapabilitySubjectGroup, Subject: tc.subject,
-				ProfileID: uuid.New(),
+				UnitID: uuid.New(),
 			}
-			assignErr := validateGovernanceAssignment(&assign)
+			assignErr := validateGovernanceMembership(&assign)
 
 			drive := types.UserDriveGrant{
 				SubjectType: types.CapabilitySubjectGroup, Subject: tc.subject,

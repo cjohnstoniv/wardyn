@@ -139,7 +139,7 @@ func (s PG) ProposeGovernanceChange(ctx context.Context, ch types.GovernanceChan
 // renames a profile to it (its payload name differs from the stored profile's, so a same-name update
 // and an update of a profile that is gone hold nothing). $1 is the target kind, $2 the name.
 const pendingNameHolders = `target_kind = $1 AND state = 'pending' AND payload->>'name' = $2 AND (
-	op = 'create' OR (op = 'update' AND payload->>'name' <> (SELECT p.name FROM governance_profiles p WHERE p.id::text = target_key)))`
+	op = 'create' OR (op = 'update' AND payload->>'name' <> (SELECT p.name FROM governance_units p WHERE p.id::text = target_key)))`
 
 // claimCreateName holds the name a create or a rename takes: a create's target key is the id it mints,
 // so a second create of the same name would otherwise be a second target, and a rename of another
@@ -159,7 +159,7 @@ func claimCreateName(ctx context.Context, tx pgx.Tx, ch types.GovernanceChange) 
 		return nil, err
 	}
 	if ch.Op == "update" {
-		renames, err := renamesProfile(ctx, tx, ch, p.Name)
+		renames, err := renamesUnit(ctx, tx, ch, p.Name)
 		if err != nil || !renames {
 			return nil, err
 		}
@@ -187,13 +187,13 @@ func claimCreateName(ctx context.Context, tx pgx.Tx, ch types.GovernanceChange) 
 	return nil, &ErrGovernanceChangePending{ID: live}
 }
 
-// renamesProfile reports whether an update of a profile carries a name other than the stored one.
-func renamesProfile(ctx context.Context, tx pgx.Tx, ch types.GovernanceChange, name string) (bool, error) {
-	if ch.TargetKind != types.GovernanceTargetProfile {
+// renamesUnit reports whether an update of a profile carries a name other than the stored one.
+func renamesUnit(ctx context.Context, tx pgx.Tx, ch types.GovernanceChange, name string) (bool, error) {
+	if ch.TargetKind != types.GovernanceTargetUnit {
 		return false, nil
 	}
 	var cur string
-	err := tx.QueryRow(ctx, `SELECT name FROM governance_profiles WHERE id::text = $1`, ch.TargetKey).Scan(&cur)
+	err := tx.QueryRow(ctx, `SELECT name FROM governance_units WHERE id::text = $1`, ch.TargetKey).Scan(&cur)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		return false, nil

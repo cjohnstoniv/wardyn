@@ -96,8 +96,8 @@ describe("errEnvelope / asJson — the envelope's machine-readable reason", () =
 // deny-f4: a governance refusal's `policy` rides the envelope into the HttpError.
 describe("errEnvelope / asJson — the envelope's policy reference", () => {
   it("parses policy into the HttpError", async () => {
-    const policy = { source: "profile", name: "Contractors", owner: "Platform Security", request_url: "https://example.com/a" };
-    const res = new Response(JSON.stringify({ error: "x", reason: "governance_profile", policy }), { status: 403 });
+    const policy = { source: "unit", name: "Contractors", owner: "Platform Security", request_url: "https://example.com/a" };
+    const res = new Response(JSON.stringify({ error: "x", reason: "governance_unit", policy }), { status: 403 });
     const err = (await asJson(res).catch((e: unknown) => e)) as HttpError;
     expect(err.policy).toEqual(policy);
   });

@@ -21,8 +21,8 @@ import (
 func TestMemberSandboxSizeNeverEscapesTheDeployment(t *testing.T) {
 	deployment := &types.ResourceLimits{CPUMillis: 1000, MemoryMiB: 2048}
 	wide := &types.ResourceLimits{CPUMillis: 64000, MemoryMiB: 1 << 20}
-	profile := func(res *types.ResourceLimits, lim types.GovernanceLimits) *types.GovernanceProfile {
-		return &types.GovernanceProfile{
+	profile := func(res *types.ResourceLimits, lim types.GovernanceLimits) *types.GovernanceUnit {
+		return &types.GovernanceUnit{
 			ID: uuid.New(), Name: "p",
 			Ceiling: types.RunPolicySpec{MinConfinementClass: types.CC2, Resources: res},
 			Limits:  lim,
@@ -31,7 +31,7 @@ func TestMemberSandboxSizeNeverEscapesTheDeployment(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
 		operator     bool
-		profile      *types.GovernanceProfile
+		profile      *types.GovernanceUnit
 		wantCPU, mem int
 	}{
 		{"admin", true, nil, 1000, 2048},
@@ -87,7 +87,7 @@ func TestMemberSandboxSizeNeverEscapesTheDeployment(t *testing.T) {
 // profile omits resources, and a profile maximum below that size does not cut
 // below it (#1949: the member cap is max(untouched, size)).
 func TestMemberInlineRequestBoundByInheritedSize(t *testing.T) {
-	prof := &types.GovernanceProfile{
+	prof := &types.GovernanceUnit{
 		ID: uuid.New(), Name: "p",
 		Ceiling: types.RunPolicySpec{MinConfinementClass: types.CC2},
 		Limits:  types.GovernanceLimits{MaxMemoryMiB: 1024},
@@ -115,7 +115,7 @@ func TestMemberInlineRequestBoundByInheritedSize(t *testing.T) {
 // workspace mounts, and the member who sent no policy is the commonest launch.
 func TestNoPolicyMemberKeepsProfileMountsUnderSizeCap(t *testing.T) {
 	mount := types.WorkspaceMount{Source: "/srv/data", Target: "/data"}
-	prof := &types.GovernanceProfile{
+	prof := &types.GovernanceUnit{
 		ID: uuid.New(), Name: "p",
 		Ceiling: types.RunPolicySpec{MinConfinementClass: types.CC2, WorkspaceMounts: []types.WorkspaceMount{mount}},
 		Limits:  types.GovernanceLimits{MaxCPUMillis: 500},

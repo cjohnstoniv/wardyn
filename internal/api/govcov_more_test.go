@@ -21,7 +21,7 @@ import (
 // A graph the proof of narrowing cannot read is held for approval, never exempted.
 func TestGovCovProfileWriteExemptIsRefusedOnAGraphItCannotRead(t *testing.T) {
 	s, _ := govCovServer(t, &govCovStore{})
-	res := &ResolvedProfile{}
+	res := &ResolvedUnit{}
 	domains := []string{"pypi.org"}
 	other := []string{"github.com"}
 
@@ -29,7 +29,7 @@ func TestGovCovProfileWriteExemptIsRefusedOnAGraphItCannotRead(t *testing.T) {
 		cur := govCovComposedOn(govCovPID, "p", govCovBase, "pypi.org")
 		next := cur
 		next.Overlay = &types.CeilingOverlay{AllowedDomains: &other}
-		if s.profileWriteExempt(context.Background(), []types.GovernanceProfile{cur}, next, res) {
+		if s.unitWriteExempt(context.Background(), []types.GovernanceUnit{cur}, next, res) {
 			t.Error("a write over a chain with a missing base was exempted")
 		}
 	})
@@ -37,13 +37,13 @@ func TestGovCovProfileWriteExemptIsRefusedOnAGraphItCannotRead(t *testing.T) {
 	t.Run("a stored profile that has a base but no overlay", func(t *testing.T) {
 		base := govCovStandalone(govCovBase, "base", "pypi.org")
 		cur := govCovStandalone(govCovPID, "p", "pypi.org")
-		cur.BaseProfileID = &base.ID
+		cur.ParentID = &base.ID
 		next := cur
 		next.Ceiling.AllowedDomains = domains[:0]
-		if s.profileWriteExempt(context.Background(), []types.GovernanceProfile{base, cur}, next, res) {
+		if s.unitWriteExempt(context.Background(), []types.GovernanceUnit{base, cur}, next, res) {
 			t.Error("a write over a chain that does not compose was exempted")
 		}
-		if got := s.resolveForDiff([]types.GovernanceProfile{base, cur}, govCovPID); got != nil {
+		if got := s.resolveForDiff([]types.GovernanceUnit{base, cur}, govCovPID); got != nil {
 			t.Errorf("a chain that does not compose resolved to %+v, want no effective view", got)
 		}
 	})
@@ -52,13 +52,13 @@ func TestGovCovProfileWriteExemptIsRefusedOnAGraphItCannotRead(t *testing.T) {
 func TestGovCovCheckGraphWriteOnDamagedGraphs(t *testing.T) {
 	s, _ := govCovServer(t, &govCovStore{})
 	composeOn := func(id string) string {
-		return `{"name":"p","base_profile_id":"` + id + `","overlay":{}}`
+		return `{"name":"p","parent_id":"` + id + `","overlay":{}}`
 	}
 
 	t.Run("a base whose own base is missing is an error, not a refusal", func(t *testing.T) {
 		x := govCovComposedOn(govCovMid, "x", govCovTop, "pypi.org") // govCovTop is not in the list
-		err := govCovBuildErr(t, s, []types.GovernanceProfile{x}, govCovPID, composeOn(govCovMid.String()))
-		var ref *profileWriteError
+		err := govCovBuildErr(t, s, []types.GovernanceUnit{x}, govCovPID, composeOn(govCovMid.String()))
+		var ref *unitWriteError
 		if err == nil || errors.As(err, &ref) || !strings.Contains(err.Error(), "names a base that does not exist") {
 			t.Errorf("error = %v", err)
 		}
@@ -68,8 +68,8 @@ func TestGovCovCheckGraphWriteOnDamagedGraphs(t *testing.T) {
 		m := govCovStandalone(govCovBase, "m", "pypi.org")
 		m.Ceiling.AllowedMethods = []string{"GET"}
 		post := []string{"POST"}
-		x := types.GovernanceProfile{ID: govCovMid, Name: "x", BaseProfileID: &m.ID, Overlay: &types.CeilingOverlay{AllowedMethods: &post}}
-		err := govCovBuildErr(t, s, []types.GovernanceProfile{m, x}, govCovPID, composeOn(govCovMid.String()))
+		x := types.GovernanceUnit{ID: govCovMid, Name: "x", ParentID: &m.ID, Overlay: &types.CeilingOverlay{AllowedMethods: &post}}
+		err := govCovBuildErr(t, s, []types.GovernanceUnit{m, x}, govCovPID, composeOn(govCovMid.String()))
 		if ref := govCovAsRefusal(t, err); ref.status != http.StatusConflict || ref.reason != reasonGovernanceOverlayUnsatisfiable ||
 			!strings.Contains(ref.msg, "the profile this one builds on cannot be applied") {
 			t.Errorf("refusal = %+v", ref)
@@ -79,10 +79,10 @@ func TestGovCovCheckGraphWriteOnDamagedGraphs(t *testing.T) {
 	t.Run("a descendant that does not compose for another reason is an error", func(t *testing.T) {
 		top := govCovStandalone(govCovTop, "top", "pypi.org")
 		broken := govCovStandalone(govCovMid, "broken", "pypi.org")
-		broken.BaseProfileID = &top.ID // a base with no overlay
+		broken.ParentID = &top.ID // a base with no overlay
 		body := govCovProfileBody("top", "pypi.org")
-		err := govCovBuildErr(t, s, []types.GovernanceProfile{top, broken}, govCovTop, body)
-		var ref *profileWriteError
+		err := govCovBuildErr(t, s, []types.GovernanceUnit{top, broken}, govCovTop, body)
+		var ref *unitWriteError
 		if err == nil || errors.As(err, &ref) || !strings.Contains(err.Error(), "has a base but no overlay") {
 			t.Errorf("error = %v", err)
 		}
@@ -93,16 +93,16 @@ func TestGovCovApplyAssignmentProfileReadFailure(t *testing.T) {
 	boom := errors.New("pg: down")
 	s, _ := govCovServer(t, &govCovStore{})
 	q := &govCovQuerier{rowErr: func(sql string) error {
-		if strings.Contains(sql, "governance_profiles") {
+		if strings.Contains(sql, "governance_units") {
 			return boom
 		}
 		return pgx.ErrNoRows
 	}}
-	req := govCovAssignChange(t, s, "upsert", governanceAssignmentRequest{
-		SubjectType: types.CapabilitySubjectUser, Subject: "u@corp.example", ProfileID: govCovPID,
+	req := govCovAssignChange(t, s, "upsert", governanceMembershipRequest{
+		SubjectType: types.CapabilitySubjectUser, Subject: "u@corp.example", UnitID: govCovPID,
 	})
 	r := govCovHumanReq(http.MethodPost, "/x", "sub-bob", "bob@corp.example", oidc.RoleSecurityAdmin)
-	if _, err := applyAssignmentChange(s, r, q, req); !errors.Is(err, boom) || len(q.writes()) != 0 {
+	if _, err := applyMembershipChange(s, r, q, req); !errors.Is(err, boom) || len(q.writes()) != 0 {
 		t.Errorf("error = %v, writes %v; want the read failure and no write", err, q.writes())
 	}
 }

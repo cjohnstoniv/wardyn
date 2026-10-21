@@ -43,7 +43,7 @@ func requestRunnerID(req createRunRequest) uuid.UUID {
 // denies: absent (nil) for a member with no assigned profile, and for a caller
 // whose runs stand outside governance. A deny list, so absent means permitted.
 func (s *Server) deniedPlacements(ctx context.Context, ceiling governanceCeiling) []types.Placement {
-	if ceiling.Profile == nil || s.runUngoverned(ctx) {
+	if ceiling.Unit == nil || s.runUngoverned(ctx) {
 		return nil
 	}
 	return ceiling.Limits.DenyPlacements
@@ -57,7 +57,7 @@ func (s *Server) placementDeniedRefusal(ctx context.Context, p types.Placement, 
 	if !slices.Contains(s.deniedPlacements(ctx, ceiling), p) {
 		return nil
 	}
-	d := authz.Deny(authz.ReasonGovernanceProfile, "runs.placement", placementDeniedMsg(p, ceiling.Profile.Name)).WithPolicy(s.ceilingPolicy(ctx, ceiling))
+	d := authz.Deny(authz.ReasonGovernanceUnit, "runs.placement", placementDeniedMsg(p, ceiling.Unit.Name)).WithPolicy(s.ceilingPolicy(ctx, ceiling))
 	f := runError(placement.ReasonPlacementDenied.Status(), string(placement.ReasonPlacementDenied), d.Sentence)
 	f.decision = &d
 	return f

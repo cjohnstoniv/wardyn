@@ -200,7 +200,7 @@ func TestPG_PlacementRouting_RefusedBeforeCreateNeverSubstituted(t *testing.T) {
 // assignProfile gives the person a governance profile with the limits and no other constraint.
 func (e *placementEnv) assignProfile(name string, limits types.GovernanceLimits) {
 	e.t.Helper()
-	p, err := e.pg.UpsertGovernanceProfile(context.Background(), types.GovernanceProfile{Name: name, CreatedBy: "seed", Limits: limits})
+	p, err := e.pg.UpsertGovernanceUnit(context.Background(), types.GovernanceUnit{Name: name, CreatedBy: "seed", Limits: limits})
 	if err != nil {
 		e.t.Fatalf("seed profile %q: %v", name, err)
 	}

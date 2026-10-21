@@ -218,14 +218,14 @@ func TestRoutes_ProfileContactResolvesFromTheLeafProfileAndDropsWhatProjectDrops
 		// a direct write that the write path would have refused: a display name and a query
 		{bad, "legacy", `{"owner":"Legacy","email":"Evil <x@example.com>?cc=y@example.com"}`},
 	} {
-		if _, err := h.pool.Exec(ctx, `INSERT INTO governance_profiles (id, name, ceiling, contact) VALUES ($1, $2, '{}', $3)`, p.id, p.name, p.contact); err != nil {
+		if _, err := h.pool.Exec(ctx, `INSERT INTO governance_units (id, name, ceiling, contact) VALUES ($1, $2, '{}', $3)`, p.id, p.name, p.contact); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	send := func(profile uuid.UUID) []any {
 		runID := h.run(t)
-		if _, err := h.pool.Exec(ctx, `UPDATE agent_runs SET governance_profile_id = $1 WHERE id = $2`, profile, runID); err != nil {
+		if _, err := h.pool.Exec(ctx, `UPDATE agent_runs SET unit_id = $1 WHERE id = $2`, profile, runID); err != nil {
 			t.Fatal(err)
 		}
 		a := h.raise(t, runID, `{"host":"`+uuid.NewString()+`.example"}`, "")

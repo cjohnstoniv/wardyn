@@ -39,7 +39,7 @@ func adoStandingLaunch(t *testing.T, c adoStandingCase, defaults, ceiling []ados
 	spec := types.RunPolicySpec{MinConfinementClass: types.CC2, FirstUseApproval: types.FirstUseAlwaysDeny, AzureDevOpsCapabilities: c.picked}
 	st := &memberBoundStore{policy: types.RunPolicy{ID: uuid.New(), Spec: spec}}
 	if c.source != "saved-unassigned" {
-		st.profile = &types.GovernanceProfile{ID: uuid.New(), Name: "ado", Ceiling: types.RunPolicySpec{
+		st.profile = &types.GovernanceUnit{ID: uuid.New(), Name: "ado", Ceiling: types.RunPolicySpec{
 			MinConfinementClass: types.CC2, FirstUseApproval: types.FirstUseAlwaysDeny, AzureDevOpsCapabilities: c.governance}}
 	}
 	cfg := baseTestConfig(newHarness(t), st)

@@ -136,11 +136,11 @@ type dispatchCeiling struct {
 // same lanes.
 func ceilingForDispatch(c governanceCeiling, ado adoEntraGrade, bedrock bedrockCredGrade) dispatchCeiling {
 	standing := adoStandingFor(c)
-	if c.Profile == nil {
+	if c.Unit == nil {
 		return dispatchCeiling{resolved: true, adoEntra: ado, bedrock: bedrock, adoStanding: standing}
 	}
 	return dispatchCeiling{
-		resolved: true, deny: c.Spec.DeniedDomains, profile: c.Profile.Name, denyPlacements: c.Limits.DenyPlacements,
+		resolved: true, deny: c.Spec.DeniedDomains, profile: c.Unit.Name, denyPlacements: c.Limits.DenyPlacements,
 		localSelfDefinedComponents: c.Limits.LocalSelfDefinedComponents,
 		maxEphemeralDiskMiB:        c.Limits.MaxEphemeralDiskMiB, maxCPUMillis: memberBound(c.Limits.MaxCPUMillis, c.memberSize().CPUMillis),
 		maxMemoryMiB: memberBound(c.Limits.MaxMemoryMiB, c.memberSize().MemoryMiB), adoEntra: ado, bedrock: bedrock, adoStanding: standing,
@@ -334,7 +334,7 @@ func (s *Server) boundResources(ctx context.Context, r *http.Request, spec *type
 // takes as an untouched run's, so the two answer one size. Anyone not under a profile is unchanged.
 func (s *Server) memberResources(ctx context.Context, res *types.ResourceLimits, ceiling governanceCeiling) (*types.ResourceLimits, bool) {
 	var limits types.GovernanceLimits
-	if ceiling.Profile != nil && !s.runUngoverned(ctx) {
+	if ceiling.Unit != nil && !s.runUngoverned(ctx) {
 		limits = types.GovernanceLimits{MaxCPUMillis: ceiling.Limits.MaxCPUMillis, MaxMemoryMiB: ceiling.Limits.MaxMemoryMiB}
 	}
 	return composer.CapResources(res, limits, ceiling.memberSize())
@@ -639,7 +639,7 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 	// report of action taken. The lists marshal as [], never null, for readers
 	// that decode them into []string.
 	data := map[string]any{
-		"profile":                 c.profile,
+		"unit":                    c.profile,
 		"denied_added":            nonNilStrings(added),
 		"dropped_injection_hosts": nonNilStrings(droppedInjection),
 		"dropped_broker_lanes":    nonNilStrings(droppedLane),

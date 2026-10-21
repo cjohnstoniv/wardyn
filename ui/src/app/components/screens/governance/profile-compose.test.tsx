@@ -39,7 +39,7 @@ vi.mock("../../../lib/api/setup", () => ({
 }));
 
 import { HttpError } from "../../../lib/api/core";
-import type { GovernanceProfile } from "../../../lib/api/governance";
+import type { GovernanceUnit } from "../../../lib/api/governance";
 import { GOVERNANCE as GOV, LIMITS_CHIP } from "../../../lib/governance-copy";
 import { baseStatus } from "../../../lib/test-fixtures";
 import type { RunPolicySpec } from "../../../lib/types";
@@ -53,7 +53,7 @@ const SPEC: RunPolicySpec = {
   min_confinement_class: "CC2",
 };
 
-const row = (over: Partial<GovernanceProfile>): GovernanceProfile => ({
+const row = (over: Partial<GovernanceUnit>): GovernanceUnit => ({
   id: "p",
   name: "P",
   ceiling: SPEC,
@@ -69,7 +69,7 @@ const BASE = row({
   effective: { ceiling: SPEC, limits: { deny_interactive: true } },
 });
 
-function renderEditor(profile: GovernanceProfile | null, profiles: GovernanceProfile[] = [BASE]) {
+function renderEditor(profile: GovernanceUnit | null, profiles: GovernanceUnit[] = [BASE]) {
   const onSaved = vi.fn();
   render(<ProfileEditor profile={profile} profiles={profiles} disabled={false} onCancel={vi.fn()} onSaved={onSaved} onSubmitted={vi.fn()} />);
   return { onSaved };
@@ -115,7 +115,7 @@ describe("ProfileEditor — authoring an overlay", { timeout: 20_000 }, () => {
       name: "Team A",
       ceiling: {},
       limits: {},
-      base_profile_id: "pb",
+      parent_id: "pb",
       overlay: {},
       overlay_limits: null,
     });
@@ -132,7 +132,7 @@ describe("ProfileEditor — authoring an overlay", { timeout: 20_000 }, () => {
     );
   });
 
-  it("on the deployment base: the inherited value is the deployment's, and base_profile_id is null", async () => {
+  it("on the deployment base: the inherited value is the deployment's, and parent_id is null", async () => {
     renderEditor(null);
     typeValue(GOV.FIELD_NAME, "Division");
     await pickBase(GOV.BASE_DEPLOYMENT);
@@ -143,7 +143,7 @@ describe("ProfileEditor — authoring an overlay", { timeout: 20_000 }, () => {
     expect(screen.getByLabelText("allowed_methods")).toHaveValue("GET\nPOST");
     await userEvent.click(screen.getByRole("button", { name: GOV.SAVE }));
     expect(createProfileMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({ base_profile_id: null, overlay: { allowed_methods: ["GET", "POST"] } }),
+      expect.objectContaining({ parent_id: null, overlay: { allowed_methods: ["GET", "POST"] } }),
     );
   });
 
@@ -152,7 +152,7 @@ describe("ProfileEditor — authoring an overlay", { timeout: 20_000 }, () => {
       id: "pc",
       name: "Team A",
       ceiling: {} as RunPolicySpec,
-      base_profile_id: "pb",
+      parent_id: "pb",
       overlay: { allowed_domains: ["*.corp"], some_future_field: 1 } as never,
       overlay_limits: { deny_interactive: true },
     });
@@ -171,7 +171,7 @@ describe("ProfileEditor — authoring an overlay", { timeout: 20_000 }, () => {
       name: "Team A",
       ceiling: {},
       limits: {},
-      base_profile_id: "pb",
+      parent_id: "pb",
       overlay: { some_future_field: 1 },
       overlay_limits: null,
     });
@@ -251,13 +251,13 @@ describe("ProfileEditor — authoring an overlay", { timeout: 20_000 }, () => {
   });
 
   it("choosing None on a composed profile clears the composition and sends a full ceiling", async () => {
-    const child = row({ id: "pc", name: "Team A", ceiling: {} as RunPolicySpec, base_profile_id: "pb", overlay: {} });
+    const child = row({ id: "pc", name: "Team A", ceiling: {} as RunPolicySpec, parent_id: "pb", overlay: {} });
     renderEditor(child, [BASE, child]);
     await pickBase("None");
     await userEvent.click(screen.getByRole("button", { name: GOV.SAVE }));
     expect(updateProfileMock).toHaveBeenCalledWith(
       "pc",
-      expect.objectContaining({ base_profile_id: null, overlay: null, overlay_limits: null }),
+      expect.objectContaining({ parent_id: null, overlay: null, overlay_limits: null }),
     );
     expect(updateProfileMock.mock.calls[0][1].ceiling.min_confinement_class).toBeTruthy();
   });
@@ -267,7 +267,7 @@ describe("ProfileEditor — authoring an overlay", { timeout: 20_000 }, () => {
       id: "pc",
       name: "Team A",
       ceiling: {} as RunPolicySpec,
-      base_profile_id: "pb",
+      parent_id: "pb",
       overlay: {},
       overlay_limits: { max_cpu_millis: 2000, deny_ui_apps: true },
       effective: {
@@ -293,10 +293,10 @@ describe("ProfileEditor — authoring an overlay", { timeout: 20_000 }, () => {
 
 describe("ProfileEditor — the base picker", () => {
   it("disables a descendant and a base that would make the chain too deep, each with its hint", async () => {
-    const self = row({ id: "s", name: "Self", ceiling: {} as RunPolicySpec, base_profile_id: "pb", overlay: {} });
-    const kid = row({ id: "k", name: "Kid", base_profile_id: "s", overlay: {} });
-    const mid = row({ id: "m", name: "Mid", base_profile_id: "pb", overlay: {} });
-    const deep = row({ id: "d", name: "Deep", base_profile_id: "m", overlay: {} });
+    const self = row({ id: "s", name: "Self", ceiling: {} as RunPolicySpec, parent_id: "pb", overlay: {} });
+    const kid = row({ id: "k", name: "Kid", parent_id: "s", overlay: {} });
+    const mid = row({ id: "m", name: "Mid", parent_id: "pb", overlay: {} });
+    const deep = row({ id: "d", name: "Deep", parent_id: "m", overlay: {} });
     renderEditor(self, [BASE, self, kid, mid, deep]);
     await userEvent.click(screen.getByRole("combobox", { name: GOV.FIELD_BASE }));
 
@@ -318,7 +318,7 @@ describe("ProfileEditor — the effective view", () => {
       id: "pc",
       name: "Team A",
       ceiling: {} as RunPolicySpec,
-      base_profile_id: "pb",
+      parent_id: "pb",
       overlay: {},
       effective: {
         ceiling: { ...SPEC, allowed_domains: ["*.corp"] },
@@ -342,7 +342,7 @@ describe("ProfileEditor — the effective view", () => {
       id: "pc",
       name: "Team A",
       ceiling: {} as RunPolicySpec,
-      base_profile_id: "pb",
+      parent_id: "pb",
       overlay: {},
       effective: { ceiling: SPEC, limits: { max_memory_mib: 2048, deny_placements: ["remote"] } },
     });
@@ -362,8 +362,8 @@ describe("ProfileEditor — the effective view", () => {
 describe("ProfileEditor — the server's refusals", { timeout: 20_000 }, () => {
   it.each([
     ["governance_overlay_invalid", 400, GOV.REFUSED_OVERLAY_INVALID],
-    ["governance_profile_cycle", 409, GOV.REFUSED_CYCLE],
-    ["governance_profile_depth", 409, GOV.REFUSED_DEPTH],
+    ["governance_unit_cycle", 409, GOV.REFUSED_CYCLE],
+    ["governance_unit_depth", 409, GOV.REFUSED_DEPTH],
     ["governance_overlay_unsatisfiable", 409, GOV.REFUSED_UNSATISFIABLE],
   ])("%s heads the server's sentence, verbatim", async (reason, status, title) => {
     const sentence = `server says ${reason} here`;

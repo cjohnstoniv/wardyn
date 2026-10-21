@@ -20,7 +20,7 @@ const profile = (id: string, name: string) => ({
 const PLATFORM = profile("p-platform", "Platform");
 const GREENFIELD = profile("p-greenfield", "Greenfield contractors");
 const ASSIGNMENT = {
-  id: "a-platform", subject_type: "group", subject: "wardyn.platform", profile_id: PLATFORM.id, priority: 10, created_at: aheadByHours(-1),
+  id: "a-platform", subject_type: "group", subject: "wardyn.platform", unit_id: PLATFORM.id, priority: 10, created_at: aheadByHours(-1),
 };
 
 async function openGovernance(page: Page, state: { profiles: unknown[]; assignments: unknown[] }): Promise<{ reads: () => number }> {
@@ -28,7 +28,7 @@ async function openGovernance(page: Page, state: { profiles: unknown[]; assignme
   await page.route("**/api/v1/governance", (route) => {
     if (route.request().method() !== "GET") return route.fallback();
     reads += 1;
-    return route.fulfill({ json: state });
+    return route.fulfill({ json: { units: state.profiles, memberships: state.assignments } });
   });
   await page.route("**/api/v1/governance/changes", (route) => route.fulfill({ json: [] }));
   await gotoConsole(page, "admin");
@@ -42,7 +42,7 @@ test.describe("Governance: an answer or a refusal is acted on once, and only for
     let release!: () => void;
     const held = new Promise<void>((resolve) => (release = resolve));
     let deletes = 0;
-    await page.route("**/api/v1/governance/assignments/a-platform", async (route) => {
+    await page.route("**/api/v1/governance/memberships/a-platform", async (route) => {
       deletes += 1;
       await held;
       await route.fulfill({ status: 204, body: "" });
@@ -58,8 +58,8 @@ test.describe("Governance: an answer or a refusal is acted on once, and only for
   });
 
   test("a refused profile delete re-reads the list", async ({ page }) => {
-    await page.route("**/api/v1/governance/profiles/p-greenfield", (route) =>
-      route.fulfill({ status: 409, json: { error: "this governance profile is still assigned", reason: "governance_profile_in_use" } }),
+    await page.route("**/api/v1/governance/units/p-greenfield", (route) =>
+      route.fulfill({ status: 409, json: { error: "this governance profile is still assigned", reason: "governance_unit_in_use" } }),
     );
     const governance = await openGovernance(page, { profiles: [GREENFIELD], assignments: [] });
     const before = governance.reads();
@@ -74,15 +74,15 @@ test.describe("Governance: an answer or a refusal is acted on once, and only for
   test("an answer to claims that were edited while it was in flight is not shown under the new claims", async ({ page }) => {
     let release!: () => void;
     const held = new Promise<void>((resolve) => (release = resolve));
-    await page.route("**/api/v1/governance/preview", async (route) => {
+    await page.route("**/api/v1/governance/check", async (route) => {
       await held;
-      await route.fulfill({ json: { profile_id: PLATFORM.id, profile_name: PLATFORM.name, matched_tier: "group" } });
+      await route.fulfill({ json: { unit_id: PLATFORM.id, unit_name: PLATFORM.name, matched_tier: "group" } });
     });
     await openGovernance(page, { profiles: [PLATFORM], assignments: [] });
 
     const claims = page.getByLabel(PREVIEW.FIELD_CLAIMS);
     await claims.fill("wardyn.platform");
-    const answered = page.waitForResponse((r) => r.url().includes("/governance/preview"));
+    const answered = page.waitForResponse((r) => r.url().includes("/governance/check"));
     await page.getByRole("button", { name: GOV.PREVIEW_RUN_CTA }).click();
     await claims.fill("wardyn.other");
     release();
@@ -143,12 +143,12 @@ test.describe("Session expiry: answers are ordered by when their request started
     const held = new Promise<void>((resolve) => (release = resolve));
     let started!: () => void;
     const previewStarted = new Promise<void>((resolve) => (started = resolve));
-    await page.route("**/api/v1/governance/preview", async (route) => {
+    await page.route("**/api/v1/governance/check", async (route) => {
       started();
       await held;
       await route.fulfill({
         headers: { [SESSION_EXPIRES_HEADER.toLowerCase()]: inMinutes(2) },
-        json: { profile_id: PLATFORM.id, profile_name: PLATFORM.name, matched_tier: "group" },
+        json: { unit_id: PLATFORM.id, unit_name: PLATFORM.name, matched_tier: "group" },
       });
     });
     await page.route("**/api/v1/permissions*", async (route) => {
@@ -160,7 +160,7 @@ test.describe("Session expiry: answers are ordered by when their request started
     await openGovernance(page, { profiles: [PLATFORM], assignments: [] });
 
     await page.getByLabel(PREVIEW.FIELD_CLAIMS).fill("wardyn.platform");
-    const previewAnswered = page.waitForResponse((r) => r.url().includes("/governance/preview"));
+    const previewAnswered = page.waitForResponse((r) => r.url().includes("/governance/check"));
     await page.getByRole("button", { name: GOV.PREVIEW_RUN_CTA }).click();
     await previewStarted;
     const permissionsAnswered = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/v1/permissions");

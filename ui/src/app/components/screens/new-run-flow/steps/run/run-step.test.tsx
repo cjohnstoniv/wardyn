@@ -266,7 +266,7 @@ describe("Run step: pool summary", () => {
   });
 
   it.each([
-    ["a named profile", { active: 0, max: 5, profile_name: "Platform team" }, NR_RUN.LIMITS_NOTE("Platform team")],
+    ["a named profile", { active: 0, max: 5, unit_name: "Platform team" }, NR_RUN.LIMITS_NOTE("Platform team")],
     ["no profile name", { active: 0, max: 5 }, NR_RUN.LIMITS_NOTE_ORG],
     ["no allowance", undefined, NR_RUN.LIMITS_NOTE_UNGOVERNED],
   ])("heads the per-run limits for %s", async (_name, allowance, note) => {
@@ -281,7 +281,7 @@ describe("Run step: pool summary", () => {
       lifetime_sec: { default: { value: 0, unlimited: true }, cap: { value: 0, unlimited: true } },
       disk_mib: { default: { value: 5120 }, cap: { value: 10240 }, cap_source: "pool" },
     });
-    show(AGENT, list([{ ...SHARED, limits: [limits] }], { allowance: { active: 0, max: 5, profile_name: "Platform team" } }));
+    show(AGENT, list([{ ...SHARED, limits: [limits] }], { allowance: { active: 0, max: 5, unit_name: "Platform team" } }));
     await screen.findByText(NR_RUN.LIMITS_LABEL);
     const cell = (key: string) => document.querySelector(`[data-limit="${key}"]`) as HTMLElement;
     expect(within(cell("cpu")).getByText("2 CPU")).toBeInTheDocument();

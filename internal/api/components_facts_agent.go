@@ -55,9 +55,9 @@ func agentComponentFact(f componentFactInputs) (componentFact, bool) {
 	// Preview deliberately skips autonomy. Only an unbound run's zero level
 	// is provable there; it must not publish a guessed managed document.
 	resolved := f.autonomyResolved || (componentAutonomyCap(f.comps) == "" &&
-		(f.ceiling.Profile == nil || f.ceiling.Limits.AutonomyRubric == nil))
+		(f.ceiling.Unit == nil || f.ceiling.Limits.AutonomyRubric == nil))
 	if resolved {
-		locked := f.ceiling.Profile != nil && f.ceiling.Limits.AutonomyRubric != nil && f.ceiling.Limits.AutonomyRubric.AgentGuardrailLocks
+		locked := f.ceiling.Unit != nil && f.ceiling.Limits.AutonomyRubric != nil && f.ceiling.Limits.AutonomyRubric.AgentGuardrailLocks
 		// The document dispatch writes, built as the 201's warning builds it: the
 		// harness-set fallback and an interactive run's attended tool rules included.
 		interactive := requestIsInteractive(req)
@@ -67,7 +67,7 @@ func agentComponentFact(f componentFactInputs) (componentFact, bool) {
 		if doc, err := agentPolicyDocument(req.Agent, f.autonomy.Level, f.harnesses, hold, locked, attended); err == nil && doc.ok {
 			a.ManagedSettings = &client.ManagedSettingsFact{Path: doc.path, Document: string(doc.content), Harness: doc.harness, Locked: doc.locked}
 			if a.ManagedSettings.Locked {
-				a.ManagedSettings.LockedBy, a.ManagedSettings.Profile = "profile", f.ceiling.Profile.Name
+				a.ManagedSettings.LockedBy, a.ManagedSettings.Unit = "unit", f.ceiling.Unit.Name
 			}
 		}
 	}

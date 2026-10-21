@@ -36,7 +36,7 @@ func (s quotaRecordStore) CountActiveRunsBy(context.Context, string) (int, error
 // TestLaunchRecordRun_ThreadsActingPrincipalCeiling launched a record run under
 // govProfile("walled"), whose Limits carry DenyInteractive:true, and passed.
 func TestRecordRunHonorsCeilingLimits(t *testing.T) {
-	newSrv := func(t *testing.T, profile *types.GovernanceProfile, active int) (*Server, *fakeRunner) {
+	newSrv := func(t *testing.T, profile *types.GovernanceUnit, active int) (*Server, *fakeRunner) {
 		t.Helper()
 		h := newHarness(t)
 		ws := types.Workspace{ID: uuid.New(), Status: types.WorkspaceScanned}

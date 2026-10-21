@@ -85,8 +85,8 @@ var (
 	_ client.ComponentConfigSchema
 	_ client.ComponentConfigValues
 	_ client.GovernanceDocument
-	_ client.GovernanceProfile
-	_ client.GovernanceAssignment
+	_ client.GovernanceUnit
+	_ client.GovernanceMembership
 	_ client.GovernanceLimits
 	_ client.AutonomyRubric
 	_ client.AutonomyLevel

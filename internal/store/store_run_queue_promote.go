@@ -516,20 +516,20 @@ func (s PG) StalePromotedRuns(ctx context.Context, staleAfter time.Duration) ([]
 // QueueStart is the columns the start of a promoted run writes: everything a QUEUED run left empty
 // (the identity, the end and its cap, the governance capture) and the placement the start settled.
 type QueueStart struct {
-	SPIFFEID            string
-	ConfinementClass    types.ConfinementClass
-	ModelProviderID     string
-	AutonomyLevel       types.AutonomyLevel
-	InnerWalls          *types.HarnessInnerWalls
-	EndsAt              *time.Time
-	WaitBudgetSec       int
-	RunLimits           types.RunLimits
-	GovernanceProfileID *uuid.UUID
-	LifetimeCapAt       *time.Time
-	LifetimeCapSource   types.LimitSource
-	Placement           types.Placement
-	PlacementFilled     bool
-	RunnerID            *uuid.UUID
+	SPIFFEID          string
+	ConfinementClass  types.ConfinementClass
+	ModelProviderID   string
+	AutonomyLevel     types.AutonomyLevel
+	InnerWalls        *types.HarnessInnerWalls
+	EndsAt            *time.Time
+	WaitBudgetSec     int
+	RunLimits         types.RunLimits
+	UnitID            *uuid.UUID
+	LifetimeCapAt     *time.Time
+	LifetimeCapSource types.LimitSource
+	Placement         types.Placement
+	PlacementFilled   bool
+	RunnerID          *uuid.UUID
 	// RunnerFallbacks are the run's other runners, in order: when RunnerID has no room under its lock the
 	// start takes the first of these that has, so a run is never ended for one full runner while another
 	// can take it.
@@ -588,13 +588,13 @@ func startQueuedRun(ctx context.Context, q Querier, id uuid.UUID, st QueueStart,
 	}
 	run, err := scanRun(q.QueryRow(ctx, `
 		UPDATE agent_runs SET spiffe_id=$2, confinement_class=$3, model_provider_id=$4, autonomy_level=$5, ends_at=$6,
-			wait_budget_sec=$7, run_limits=$8, governance_profile_id=$9, lifetime_cap_at=$10, lifetime_cap_source=$11,
+			wait_budget_sec=$7, run_limits=$8, unit_id=$9, lifetime_cap_at=$10, lifetime_cap_source=$11,
 			placement=$12, placement_filled=$13, runner_id=$14, evidence_source=$15, runner_pool_executor=$16, updated_at=now(),
 			reserved_cpu_millis=$18, reserved_memory_mib=$19, reserved_disk_mib=$20, inner_walls=$21
 		WHERE id=$1 AND state=$17 AND admitted_at IS NOT NULL AND sandbox_ref = ''
 		RETURNING `+runCols,
 		id, st.SPIFFEID, string(st.ConfinementClass), st.ModelProviderID, string(st.AutonomyLevel), st.EndsAt,
-		st.WaitBudgetSec, limits, st.GovernanceProfileID, st.LifetimeCapAt, string(st.LifetimeCapSource),
+		st.WaitBudgetSec, limits, st.UnitID, st.LifetimeCapAt, string(st.LifetimeCapSource),
 		string(st.Placement), st.PlacementFilled, st.RunnerID, string(st.EvidenceSource), st.RunnerPoolExecutor,
 		string(types.RunPending), st.Reserved.CPUMillis, st.Reserved.MemoryMiB, st.Reserved.DiskMiB, walls))
 	if errors.Is(err, ErrNotFound) {

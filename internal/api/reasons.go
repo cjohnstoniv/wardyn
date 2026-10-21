@@ -303,21 +303,21 @@ const (
 	reasonEgressRedirectNotFound        = "egress_redirect_not_found"         // no egress_redirects entry matches `from`
 
 	// PUT/POST /governance/{profiles,assignments} and the preview routes.
-	reasonGovernanceProfileRequestInvalid = "governance_profile_request_invalid" // the profile body did not decode
-	reasonGovernanceCeilingInvalid        = "governance_ceiling_invalid"         // the ceiling names a grant outside the deployment's own EligibleGrants
-	reasonGovernanceProfileNameConflict   = "governance_profile_name_conflict"   // a profile by that name already exists
-	reasonGovernanceProfileInUse          = "governance_profile_in_use"          // the profile is still assigned; delete its assignments first
-	reasonGovernanceAssignmentInvalid     = "governance_assignment_invalid"      // the assignment fails validation
+	reasonGovernanceUnitRequestInvalid = "governance_unit_request_invalid" // the profile body did not decode
+	reasonGovernanceCeilingInvalid     = "governance_ceiling_invalid"      // the ceiling names a grant outside the deployment's own EligibleGrants
+	reasonGovernanceUnitNameConflict   = "governance_unit_name_conflict"   // a profile by that name already exists
+	reasonGovernanceUnitInUse          = "governance_unit_in_use"          // the profile is still assigned; delete its assignments first
+	reasonGovernanceMembershipInvalid  = "governance_membership_invalid"   // the assignment fails validation
 	// Composed profiles (migration 0125). The first three are write refusals. The fourth is the SAME
 	// string as authz's registered reason of that name: a 409 at a profile write that would leave a
 	// descendant with a policy nothing satisfies, and the 403 at every launch and live door when a
 	// composition cannot be applied (see adHocReasonLiterals["reasons.go:governance_overlay_unsatisfiable"]
 	// in refusal_test.go, and documentedDuplicateReasonValues).
 	reasonGovernanceOverlayInvalid       = "governance_overlay_invalid"       // the overlay names something its base does not permit, or does not decode
-	reasonGovernanceProfileCycle         = "governance_profile_cycle"         // the write would make a profile its own base
-	reasonGovernanceProfileDepth         = "governance_profile_depth"         // the write would put a profile more than three deep
+	reasonGovernanceUnitCycle            = "governance_unit_cycle"            // the write would make a profile its own base
+	reasonGovernanceUnitDepth            = "governance_unit_depth"            // the write would put a profile more than three deep
 	reasonGovernanceOverlayUnsatisfiable = "governance_overlay_unsatisfiable" // nothing satisfies a profile and its base together
-	// reasonGovernancePreviewClaimsInvalid is shared by GET /governance/preview
+	// reasonGovernancePreviewClaimsInvalid is shared by GET /governance/check
 	// and the user-drive naming preview (user_drives_preview.go): both feed the
 	// same normalizeGovernancePreviewClaims validator over user_subjects/groups.
 	reasonGovernancePreviewClaimsInvalid = "governance_preview_claims_invalid"
@@ -464,7 +464,7 @@ const (
 	reasonUserDriveReclaimUnsupported      = "user_drive_reclaim_unsupported"       // this deployment's runner cannot reclaim drive storage
 	reasonUserDriveReclaimConflict         = "user_drive_reclaim_conflict"          // the reclaim was refused at the storage layer
 	reasonUserDrivePreviewNoClaims         = "user_drive_preview_no_claims"         // the naming preview named no user_subjects
-	reasonUserDriveDeniedByProfile         = "user_drive_denied_by_profile"         // the caller's governance profile shuts the drive door
+	reasonUserDriveDeniedByUnit            = "user_drive_denied_by_unit"            // the caller's governance profile shuts the drive door
 
 	reasonUserDriveCeilingUnavailable     = "user_drive_ceiling_unavailable"       // the drive write's deployment ceiling could not be answered: the drive-size ceiling (site config) could not be read, or a host_path share did not answer in time (503)
 	reasonUserDriveRehomeListUnavailable  = "user_drive_rehome_list_unavailable"   // the drive list could not be read to run the re-home guard or the host_path nesting check (500)
@@ -526,7 +526,7 @@ const (
 const (
 	reasonMemberDriveRequiresPerson    = "member_drive_requires_person"    // not a person's session or own token
 	reasonMemberDrivesDisabled         = "member_drives_disabled"          // the organisation switch is off
-	reasonMemberDrivesDeniedByProfile  = "member_drives_denied_by_profile" // the caller's governance profile shuts creating
+	reasonMemberDrivesDeniedByUnit     = "member_drives_denied_by_unit"    // the caller's governance profile shuts creating
 	reasonMemberDriveLimitReached      = "member_drive_limit_reached"      // the person already holds the most drives allowed
 	reasonMemberDriveUnsupported       = "member_drive_unsupported"        // this deployment has no managed backend, or no drive size
 	reasonMemberDriveDeleteUnavailable = "member_drive_delete_unavailable" // the substrate could not delete what it would create

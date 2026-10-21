@@ -93,12 +93,12 @@ func truncProbeServer(t *testing.T) (*Server, store.PG, *pgxpool.Pool) {
 
 // truncProbeSeedGroupProfile writes one profile and binds it to
 // truncProbeGroupWalled at the GROUP tier — the deployment shape the refusal
-// is gated on (ceilingWithUnusableGroups's HasGroupTierAssignments call in
+// is gated on (ceilingWithUnusableGroups's HasGroupTierMemberships call in
 // governance.go).
-func truncProbeSeedGroupProfile(t *testing.T, pg store.PG) types.GovernanceProfile {
+func truncProbeSeedGroupProfile(t *testing.T, pg store.PG) types.GovernanceUnit {
 	t.Helper()
 	ctx := context.Background()
-	p, err := pg.UpsertGovernanceProfile(ctx, types.GovernanceProfile{
+	p, err := pg.UpsertGovernanceUnit(ctx, types.GovernanceUnit{
 		ID:   uuid.New(),
 		Name: "walled-" + uuid.NewString()[:8],
 		Ceiling: types.RunPolicySpec{
@@ -111,9 +111,9 @@ func truncProbeSeedGroupProfile(t *testing.T, pg store.PG) types.GovernanceProfi
 	if err != nil {
 		t.Fatalf("seed profile: %v", err)
 	}
-	if _, err := pg.UpsertGovernanceAssignment(ctx, types.GovernanceAssignment{
+	if _, err := pg.UpsertGovernanceMembership(ctx, types.GovernanceMembership{
 		ID: uuid.New(), SubjectType: types.CapabilitySubjectGroup,
-		Subject: truncProbeGroupWalled, ProfileID: p.ID, CreatedBy: "probe",
+		Subject: truncProbeGroupWalled, UnitID: p.ID, CreatedBy: "probe",
 	}); err != nil {
 		t.Fatalf("seed group assignment: %v", err)
 	}
@@ -121,15 +121,15 @@ func truncProbeSeedGroupProfile(t *testing.T, pg store.PG) types.GovernanceProfi
 }
 
 // truncProbeCeiling GETs /policies/default as the bearer and returns status,
-// raw body and the resolved governance_profile_name ("" for the deployment).
+// raw body and the resolved unit_name ("" for the deployment).
 func truncProbeCeiling(t *testing.T, srv *Server, bearer string) (int, string, string) {
 	t.Helper()
 	w := do(t, srv, http.MethodGet, "/api/v1/policies/default", bearer, "")
 	var resp struct {
-		GovernanceProfileName string `json:"governance_profile_name"`
+		GovernanceUnitName string `json:"unit_name"`
 	}
 	_ = json.Unmarshal(w.Body.Bytes(), &resp)
-	return w.Code, w.Body.String(), resp.GovernanceProfileName
+	return w.Code, w.Body.String(), resp.GovernanceUnitName
 }
 
 // truncProbeInsertLegacyRow inserts an api_tokens row EXACTLY as a pre-0052
@@ -239,9 +239,9 @@ func TestPG_APIToken_TruncatedSnapshot(t *testing.T) {
 		t.Fatalf("complete token, not in the walled group: code=%d profile=%q body=%s; want 200 deployment", code, name, body)
 	}
 	// 5c. PF-25: a USER-tier row names the truncated human — served, not refused.
-	if _, err := pg.UpsertGovernanceAssignment(ctx, types.GovernanceAssignment{
+	if _, err := pg.UpsertGovernanceMembership(ctx, types.GovernanceMembership{
 		ID: uuid.New(), SubjectType: types.CapabilitySubjectUser,
-		Subject: truncProbeSub, ProfileID: profile.ID, CreatedBy: "probe",
+		Subject: truncProbeSub, UnitID: profile.ID, CreatedBy: "probe",
 	}); err != nil {
 		t.Fatalf("seed user assignment: %v", err)
 	}

@@ -120,7 +120,7 @@ func TestEveryRegisteredReasonIsEmitted(t *testing.T) {
 // adHocReasonLiterals are the places a registered reason's STRING appears in
 // this package's code as some other vocabulary's value. May only shrink.
 var adHocReasonLiterals = map[string]string{
-	"user_drives_resolve.go:governance_profile":    "a drive's bound_by value on /me",
+	"user_drives_resolve.go:governance_unit":       "a drive's bound_by value on /me",
 	"user_drives_resolve.go:groups_snapshot_stale": "a drive's unavailable reason on /me",
 	"reasons.go:groups_snapshot_stale":             "#656 slice 2: the wire reason for PUT/POST governance and the drive resolver, deliberately the SAME string as authz's own registered reason, not a second vocabulary",
 	"reasons.go:governance_overlay_unsatisfiable":  "the 409 at a profile write that would strand a descendant, deliberately the SAME string as authz's registered launch refusal",

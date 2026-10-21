@@ -4,12 +4,12 @@
 // F2-sso-to-ceiling PROBE 4 — destination: internal/store/governance_resolve_tier_pg_probe_test.go
 //
 // Package store_test, guarded by WARDYN_TEST_PG like governance_pg_test.go
-// (reuses its seedGovernanceProfile / seedGovernanceAssignment / runsPGPool).
+// (reuses its seedGovernanceUnit / seedGovernanceMembership / runsPGPool).
 //
-// Invariant under test: the tier value ResolveGovernanceProfile returns is the
+// Invariant under test: the tier value ResolveGovernanceUnit returns is the
 // matched row's subject_type — the value internal/api's ceilingWithUnusableGroups
 // (internal/api/governance.go) trusts to tell "serve" from "refuse" on a
-// truncated snapshot. TestPG_ResolveGovernanceProfile discards the tier on every
+// truncated snapshot. TestPG_ResolveGovernanceUnit discards the tier on every
 // case (its resolveName helper in governance_pg_test.go), and internal/api's
 // precedence test drives it through a FAKE store (capStore.govTier), so nothing
 // today pins that the real SQL returns the right tier. It also pins the
@@ -21,7 +21,7 @@
 //
 //	cd <repo root> && \
 //	WARDYN_TEST_PG='postgres://<user>:<pass>@127.0.0.1:55432/<db>?sslmode=disable' \
-//	nice -n 10 GOMAXPROCS=8 go test ./internal/store/ -run 'TestPG_ResolveGovernanceProfile_Tier' -count=1 -p 4 -v ; \
+//	nice -n 10 GOMAXPROCS=8 go test ./internal/store/ -run 'TestPG_ResolveGovernanceUnit_Tier' -count=1 -p 4 -v ; \
 //	rm -f internal/store/governance_resolve_tier_pg_probe_test.go
 package store_test
 
@@ -36,16 +36,16 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-func TestPG_ResolveGovernanceProfile_TierIsTheMatchedRow(t *testing.T) {
+func TestPG_ResolveGovernanceUnit_TierIsTheMatchedRow(t *testing.T) {
 	// ticket: F2
 	pool := runsPGPool(t)
 	ctx := context.Background()
 	st := store.NewPG(pool)
 	uniq := uuid.NewString()
 
-	pUser := seedGovernanceProfile(t, st, "aaa-f2-user-"+uniq)
-	pGroup := seedGovernanceProfile(t, st, "mmm-f2-group-"+uniq)
-	pAll := seedGovernanceProfile(t, st, "zzz-f2-all-"+uniq)
+	pUser := seedGovernanceUnit(t, st, "aaa-f2-user-"+uniq)
+	pGroup := seedGovernanceUnit(t, st, "mmm-f2-group-"+uniq)
+	pAll := seedGovernanceUnit(t, st, "zzz-f2-all-"+uniq)
 
 	sub := "f2sub-" + uniq
 	email := "f2-" + uniq + "@example.com"
@@ -55,12 +55,12 @@ func TestPG_ResolveGovernanceProfile_TierIsTheMatchedRow(t *testing.T) {
 	// stale snapshot on this substrate would 403 for rows this test never wrote.
 	// (Other tests may have left group rows; only assert the TRUE direction
 	// after our own insert.)
-	seedGovernanceAssignment(t, st, types.GovernanceAssignment{SubjectType: types.CapabilitySubjectAll, ProfileID: pAll.ID})
-	seedGovernanceAssignment(t, st, types.GovernanceAssignment{SubjectType: types.CapabilitySubjectGroup, Subject: group, ProfileID: pGroup.ID, Priority: 100})
+	seedGovernanceMembership(t, st, types.GovernanceMembership{SubjectType: types.CapabilitySubjectAll, UnitID: pAll.ID})
+	seedGovernanceMembership(t, st, types.GovernanceMembership{SubjectType: types.CapabilitySubjectGroup, Subject: group, UnitID: pGroup.ID, Priority: 100})
 
 	resolve := func(t *testing.T, users, groups []string) (string, types.CapabilitySubjectType) {
 		t.Helper()
-		p, tier, err := st.ResolveGovernanceProfile(ctx, users, groups, "")
+		p, tier, err := st.ResolveGovernanceUnit(ctx, users, groups, "")
 		if errors.Is(err, store.ErrNotFound) {
 			return "", ""
 		}
@@ -84,14 +84,14 @@ func TestPG_ResolveGovernanceProfile_TierIsTheMatchedRow(t *testing.T) {
 		if name != pAll.Name || tier != types.CapabilitySubjectAll {
 			t.Errorf("= (%q, %q), want (%q, all)", name, tier, pAll.Name)
 		}
-		has, err := st.HasGroupTierAssignments(ctx)
+		has, err := st.HasGroupTierMemberships(ctx)
 		if err != nil || !has {
-			t.Errorf("HasGroupTierAssignments = (%v, %v), want true — the refusal gate must see our group row", has, err)
+			t.Errorf("HasGroupTierMemberships = (%v, %v), want true — the refusal gate must see our group row", has, err)
 		}
 	})
 
 	t.Run("truncated shape with an EMAIL-keyed user row: user wins over the priority-100 group row, REPORTED as user", func(t *testing.T) {
-		seedGovernanceAssignment(t, st, types.GovernanceAssignment{SubjectType: types.CapabilitySubjectUser, Subject: email, ProfileID: pUser.ID})
+		seedGovernanceMembership(t, st, types.GovernanceMembership{SubjectType: types.CapabilitySubjectUser, Subject: email, UnitID: pUser.ID})
 		name, tier := resolve(t, []string{sub, email}, nil)
 		if name != pUser.Name || tier != types.CapabilitySubjectUser {
 			t.Errorf("= (%q, %q), want (%q, user)", name, tier, pUser.Name)
@@ -105,7 +105,7 @@ func TestPG_ResolveGovernanceProfile_TierIsTheMatchedRow(t *testing.T) {
 
 	t.Run("subject case: an UNFOLDED user row never matches the folded sub the api sends", func(t *testing.T) {
 		// capabilitySubjects lowercases the sub (internal/api/capabilities.go) and
-		// validateGovernanceAssignment lowercases the subject
+		// validateGovernanceMembership lowercases the subject
 		// (internal/api/governance.go);
 		// the store itself stores what it is given. If a row bypassed the api
 		// boundary with an upper-case subject it must be INERT, never matched
@@ -113,11 +113,11 @@ func TestPG_ResolveGovernanceProfile_TierIsTheMatchedRow(t *testing.T) {
 		// resolve each way, so the store and the api cannot disagree on WHO a
 		// user row names.
 		sub2 := "f2sub2-" + uniq
-		seedGovernanceAssignment(t, st, types.GovernanceAssignment{SubjectType: types.CapabilitySubjectUser, Subject: "F2SUB2-" + uniq, ProfileID: pUser.ID})
+		seedGovernanceMembership(t, st, types.GovernanceMembership{SubjectType: types.CapabilitySubjectUser, Subject: "F2SUB2-" + uniq, UnitID: pUser.ID})
 		if name, tier := resolve(t, []string{sub2}, nil); tier == types.CapabilitySubjectUser {
 			t.Errorf("an upper-case user row matched the folded sub (%q, %q) — the store folds where the api does not", name, tier)
 		}
-		seedGovernanceAssignment(t, st, types.GovernanceAssignment{SubjectType: types.CapabilitySubjectUser, Subject: sub2, ProfileID: pUser.ID})
+		seedGovernanceMembership(t, st, types.GovernanceMembership{SubjectType: types.CapabilitySubjectUser, Subject: sub2, UnitID: pUser.ID})
 		if name, tier := resolve(t, []string{sub2}, nil); name != pUser.Name || tier != types.CapabilitySubjectUser {
 			t.Errorf("folded sub = (%q, %q), want the lowercase user row", name, tier)
 		}

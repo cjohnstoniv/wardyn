@@ -40,7 +40,7 @@ func govCovGrantDelete(s *Server, proposedBy, email string) types.GovernanceChan
 }
 
 func TestGovCovListChangesFiltersByKindAndValidatesState(t *testing.T) {
-	profile := types.GovernanceChange{ID: uuid.MustParse("aaaaaaaa-0000-0000-0000-0000000000a1"), TargetKind: govKindProfile}
+	profile := types.GovernanceChange{ID: uuid.MustParse("aaaaaaaa-0000-0000-0000-0000000000a1"), TargetKind: govKindUnit}
 	mapping := types.GovernanceChange{ID: uuid.MustParse("aaaaaaaa-0000-0000-0000-0000000000a2"), TargetKind: govKindRoleMapping}
 	newer := types.GovernanceChange{ID: uuid.MustParse("aaaaaaaa-0000-0000-0000-0000000000a3"), TargetKind: "from_a_newer_binary"}
 	st := &govCovStore{changes: []types.GovernanceChange{profile, mapping, newer}}
@@ -63,12 +63,12 @@ func TestGovCovListChangesFiltersByKindAndValidatesState(t *testing.T) {
 	if w.Code != http.StatusOK || st.listState != types.GovernanceChangePending {
 		t.Fatalf("super admin list = %d, asked the store for state %q, want 200 and pending by default", w.Code, st.listState)
 	}
-	if got := ids(w); !reflect.DeepEqual(got, []string{govKindProfile, govKindRoleMapping}) {
+	if got := ids(w); !reflect.DeepEqual(got, []string{govKindUnit, govKindRoleMapping}) {
 		t.Errorf("super admin sees %v, want the profile and role-mapping changes but not the unknown kind", got)
 	}
 
 	w = doSSO(t, s, http.MethodGet, govCovChangesPath, govCovSession(t, "sub-alice", "alice@corp.example", oidc.RoleSecurityAdmin), "")
-	if got := ids(w); !reflect.DeepEqual(got, []string{govKindProfile}) {
+	if got := ids(w); !reflect.DeepEqual(got, []string{govKindUnit}) {
 		t.Errorf("security admin sees %v, want only the profile change (a role mapping is a super admin's)", got)
 	}
 
@@ -102,7 +102,7 @@ func TestGovCovListChangesStoreFailure(t *testing.T) {
 }
 
 func TestGovCovGetChange(t *testing.T) {
-	visible := types.GovernanceChange{ID: govCovChangeID, TargetKind: govKindProfile, Op: "create", TargetKey: "k", Diff: json.RawMessage(`{"changed":["name"]}`)}
+	visible := types.GovernanceChange{ID: govCovChangeID, TargetKind: govKindUnit, Op: "create", TargetKey: "k", Diff: json.RawMessage(`{"changed":["name"]}`)}
 	hidden := types.GovernanceChange{ID: govCovChangeID, TargetKind: govKindRoleMapping}
 	alice := govCovSession(t, "sub-alice", "alice@corp.example", oidc.RoleSecurityAdmin)
 	path := govCovChangesPath + "/" + govCovChangeID.String()
@@ -128,7 +128,7 @@ func TestGovCovGetChange(t *testing.T) {
 			}
 			if c.wantCode == http.StatusOK {
 				m := govCovDecode(t, w)
-				if m["target_kind"] != govKindProfile || m["op"] != "create" || m["diff"] == nil {
+				if m["target_kind"] != govKindUnit || m["op"] != "create" || m["diff"] == nil {
 					t.Errorf("body = %v", m)
 				}
 			}
@@ -550,7 +550,7 @@ func TestGovCovDenyApproverAndRefusalError(t *testing.T) {
 func TestGovCovListChangesSaysWhenTheStoreHitItsCap(t *testing.T) {
 	full := make([]types.GovernanceChange, store.MaxGovernanceChangeList+1)
 	for i := range full {
-		full[i] = types.GovernanceChange{ID: uuid.New(), TargetKind: govKindProfile}
+		full[i] = types.GovernanceChange{ID: uuid.New(), TargetKind: govKindUnit}
 	}
 	st := &govCovStore{changes: full}
 	s, _ := govCovServer(t, st)

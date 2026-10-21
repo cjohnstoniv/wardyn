@@ -109,7 +109,7 @@ var ungovernedCallerCensus = map[string]struct {
 	"setup_integrations.go:handleListIntegrations":             {1, "authz-only: a list"},
 	"sshkeys.go:handleAddSSHKey":                               {1, "authz-only: key reach"},
 	"template_list.go:templateCallerOf":                        {1, "authz-only: template reach"},
-	"user_drives_me.go:userDriveDeniedByProfile":               {1, "authz-only: a display flag"},
+	"user_drives_me.go:userDriveDeniedByUnit":                  {1, "authz-only: a display flag"},
 	"user_drives_preview.go:handlePreviewUserDrive":            {1, "authz-only: drive storage layout"},
 	"user_drives_run.go:driveDoorProfile":                      {1, "R: a drive door the boundary holds no knob for; the run it admits meets the boundary at resolve"},
 	"user_drives_tier.go:upsertUserDriveGrantAs":               {1, "authz-only: drive storage layout"},

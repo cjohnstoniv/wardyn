@@ -68,7 +68,7 @@ func (p *Proxy) attributeRefusal(w http.ResponseWriter) string {
 	// "policy", not "default policy": a run attributed to the deployment may have started from a
 	// stored policy, which the proxy does not know.
 	who := "this deployment's policy"
-	if ref.Source == policyref.SourceProfile {
+	if ref.Source == policyref.SourceUnit {
 		who = "a governance profile"
 		if ref.Name != "" {
 			who = fmt.Sprintf("the profile %q", ref.Name)

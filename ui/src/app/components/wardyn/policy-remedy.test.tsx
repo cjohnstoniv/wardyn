@@ -7,7 +7,7 @@ import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { PolicyRemedy, safeRequestHref } from "./policy-remedy";
 
-const ref = (over: Record<string, string>) => ({ source: "profile", name: "Contractors", ...over });
+const ref = (over: Record<string, string>) => ({ source: "unit", name: "Contractors", ...over });
 
 describe("PolicyRemedy", () => {
   it("renders a link for an https: request_url, beside the owner", () => {

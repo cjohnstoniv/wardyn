@@ -21,7 +21,7 @@ import (
 // default, 2000 millicores and 4096 MiB.
 func TestGovCovProfileWriteExemptComparesTheMemberCap(t *testing.T) {
 	s, _ := govCovServer(t, &govCovStore{})
-	profile := func(res *types.ResourceLimits, limits types.GovernanceLimits) types.GovernanceProfile {
+	profile := func(res *types.ResourceLimits, limits types.GovernanceLimits) types.GovernanceUnit {
 		p := govCovStandalone(govCovPID, "p", "pypi.org")
 		p.Ceiling.Resources, p.Limits = res, limits
 		return p
@@ -39,7 +39,7 @@ func TestGovCovProfileWriteExemptComparesTheMemberCap(t *testing.T) {
 	}
 	for _, c := range []struct {
 		name string
-		cur  types.GovernanceProfile
+		cur  types.GovernanceUnit
 		body string
 		want bool
 	}{
@@ -55,10 +55,10 @@ func TestGovCovProfileWriteExemptComparesTheMemberCap(t *testing.T) {
 			profile(&types.ResourceLimits{CPUMillis: 3000}, types.GovernanceLimits{MaxCPUMillis: 4000}), body(`{"cpu_millis":2500}`, `{"max_cpu_millis":4000}`), true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			all := []types.GovernanceProfile{c.cur}
+			all := []types.GovernanceUnit{c.cur}
 			p, res := govCovBuilt(t, s, all, govCovPID, c.body)
-			if got := s.profileWriteExempt(context.Background(), all, p, res); got != c.want {
-				t.Errorf("profileWriteExempt = %v, want %v (member cap %+v)", got, c.want, s.resolvedMemberCap(res))
+			if got := s.unitWriteExempt(context.Background(), all, p, res); got != c.want {
+				t.Errorf("unitWriteExempt = %v, want %v (member cap %+v)", got, c.want, s.resolvedMemberCap(res))
 			}
 		})
 	}
@@ -72,7 +72,7 @@ func TestGovCovOverlayMayNotRaiseTheMemberCap(t *testing.T) {
 	s, _ := govCovServer(t, &govCovStore{})
 	pi := func(v int) *int { return &v }
 	base := govCovStandalone(govCovBase, "base", "pypi.org")
-	child := func(id uuid.UUID, name string, on uuid.UUID, limits types.LimitsOverlay) types.GovernanceProfile {
+	child := func(id uuid.UUID, name string, on uuid.UUID, limits types.LimitsOverlay) types.GovernanceUnit {
 		p := govCovComposedOn(id, name, on, "pypi.org")
 		p.OverlayLimits = &limits
 		return p
@@ -87,8 +87,8 @@ func TestGovCovOverlayMayNotRaiseTheMemberCap(t *testing.T) {
 		{"a maximum below it", types.LimitsOverlay{MaxCPUMillis: pi(500), MaxMemoryMiB: pi(1024)}, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			_, _, err := s.checkGraphWrite(child(govCovPID, "child", govCovBase, c.limits), []types.GovernanceProfile{base})
-			var refusal *profileWriteError
+			_, _, err := s.checkGraphWrite(child(govCovPID, "child", govCovBase, c.limits), []types.GovernanceUnit{base})
+			var refusal *unitWriteError
 			switch {
 			case c.refused && (!errors.As(err, &refusal) || refusal.status != http.StatusBadRequest || refusal.reason != reasonGovernanceOverlayInvalid):
 				t.Fatalf("checkGraphWrite = %v, want 400 governance_overlay_invalid", err)
@@ -104,11 +104,11 @@ func TestGovCovOverlayMayNotRaiseTheMemberCap(t *testing.T) {
 		mid := child(govCovPID, "mid", govCovBase, types.LimitsOverlay{MaxCPUMillis: pi(6000), MaxMemoryMiB: pi(12288)})
 		leafID := uuid.MustParse("dddddddd-0000-0000-0000-0000000000bb")
 		leaf := govCovComposedOn(leafID, "leaf", govCovPID, "pypi.org")
-		if _, _, err := s.checkGraphWrite(mid, []types.GovernanceProfile{bounded}); err != nil {
+		if _, _, err := s.checkGraphWrite(mid, []types.GovernanceUnit{bounded}); err != nil {
 			t.Fatalf("the mid overlay is within its base when written: %v", err)
 		}
 		// The base is then written with no maximum, so its own member cap is the default size.
-		res, err := s.composeChain([]types.GovernanceProfile{leaf, mid, base})
+		res, err := s.composeChain([]types.GovernanceUnit{leaf, mid, base})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -119,7 +119,7 @@ func TestGovCovOverlayMayNotRaiseTheMemberCap(t *testing.T) {
 			t.Errorf("admin warnings = %q, want the lowering named", res.AdminWarnings)
 		}
 		// While the base still bounds them, the overlay's maximums stand.
-		res, err = s.composeChain([]types.GovernanceProfile{leaf, mid, bounded})
+		res, err = s.composeChain([]types.GovernanceUnit{leaf, mid, bounded})
 		if err != nil {
 			t.Fatal(err)
 		}

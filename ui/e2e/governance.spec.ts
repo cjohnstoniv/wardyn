@@ -58,13 +58,13 @@ import { SPEC_LABEL } from "./policy-source";
 //   1. A RUN BOUND BY A PROFILE. effectiveCeiling (internal/api/governance.go)
 //      short-circuits at step 1: "OPERATOR ⇒ DefaultPolicy, with NO store
 //      read". The operator token used by this authoring walk takes that arm,
-//      so its GET /policies/default omits governance_profile_name. The none
+//      so its GET /policies/default omits unit_name. The none
 //      runner cannot dispatch a profile-bound sandbox; the
 //      walls are asserted at the API level instead (the resolver, the stored
 //      ceiling, the two write refusals), and the run-level enforcement is
-//      proven in Go — TestGovernanceProfileNonEscape's 16-row escape table on
+//      proven in Go — TestGovernanceUnitNonEscape's 16-row escape table on
 //      the decoded run.policy.resolve envelope, and
-//      governance_ceiling_test.go's governance_profile_name pin.
+//      governance_ceiling_test.go's unit_name pin.
 //
 //   2. THE MEMBER'S TWO DISPLAY MOMENTS. Same cause: the field New Run's Run step and
 //      the Getting Started card read is the one the operator short-circuit
@@ -613,7 +613,7 @@ test.describe("governance — the walls, asserted where this harness can reach t
     const res = await page.request.get("/api/v1/governance", { headers: auth });
     expect(res.status()).toBe(200);
     const snap = await res.json();
-    const profile = snap.profiles.find((p: { name: string }) => p.name === NAME);
+    const profile = snap.units.find((p: { name: string }) => p.name === NAME);
     expect(profile, `profile ${NAME} missing — did the authoring walk run?`).toBeTruthy();
 
     // Autonomous: every tool call is allowed, nothing parks for a human.
@@ -631,21 +631,21 @@ test.describe("governance — the walls, asserted where this harness can reach t
 
   test("the resolver binds the group to it — and a user assignment beats the group", async ({ page }) => {
     const preview = async (body: unknown) => {
-      const res = await page.request.post("/api/v1/governance/preview", { headers: auth, data: body });
+      const res = await page.request.post("/api/v1/governance/check", { headers: auth, data: body });
       expect(res.status()).toBe(200);
       return res.json();
     };
 
-    // THE SAME CALL every real run makes: handlePreviewGovernanceProfile runs
-    // Store.ResolveGovernanceProfile, which is what effectiveCeiling takes on
+    // THE SAME CALL every real run makes: handleGovernanceCheck runs
+    // Store.ResolveGovernanceUnit, which is what effectiveCeiling takes on
     // the enforcement path. There is no second implementation of precedence.
     expect(await preview({ user_subjects: [], groups: [GROUP] })).toMatchObject({
-      profile_name: NAME,
+      unit_name: NAME,
       matched_tier: "group",
     });
 
     // Give the same person a user-tier row pointing at a second profile.
-    const wide = await page.request.post("/api/v1/governance/profiles", {
+    const wide = await page.request.post("/api/v1/governance/units", {
       headers: auth,
       data: {
         name: "less-walled",
@@ -654,22 +654,22 @@ test.describe("governance — the walls, asserted where this harness can reach t
       },
     });
     expect(wide.status()).toBe(201);
-    const wideID = (await wide.json()).profile.id;
-    const assigned = await page.request.post("/api/v1/governance/assignments", {
+    const wideID = (await wide.json()).unit.id;
+    const assigned = await page.request.post("/api/v1/governance/memberships", {
       headers: auth,
-      data: { subject_type: "user", subject: USER, profile_id: wideID, priority: 0 },
+      data: { subject_type: "user", subject: USER, unit_id: wideID, priority: 0 },
     });
     expect(assigned.ok()).toBeTruthy();
 
     // The most specific assignment wins — a person beats a group, whatever the
     // group's priority. This is GOV.PRECEDENCE, enforced rather than described.
     expect(await preview({ user_subjects: [USER], groups: [GROUP] })).toMatchObject({
-      profile_name: "less-walled",
+      unit_name: "less-walled",
       matched_tier: "user",
     });
     // …and the group row still binds everyone else in it.
     expect(await preview({ user_subjects: ["other@corp.example"], groups: [GROUP] })).toMatchObject({
-      profile_name: NAME,
+      unit_name: NAME,
       matched_tier: "group",
     });
   });
@@ -678,7 +678,7 @@ test.describe("governance — the walls, asserted where this harness can reach t
     // A profile may force approval ON, never off — the monotone-⊆ bound
     // (governance_grantbound.go). This is the same refusal the editor renders,
     // asserted here on the WIRE so the discriminator prefix itself is pinned.
-    const refused = await page.request.post("/api/v1/governance/profiles", {
+    const refused = await page.request.post("/api/v1/governance/units", {
       headers: auth,
       data: { name: "loosened", ceiling: OVERWIDE_CEILING, limits: {} },
     });
@@ -688,8 +688,8 @@ test.describe("governance — the walls, asserted where this harness can reach t
     // And the supported way OUT of a ceiling is removing the assignment, never
     // deleting the profile out from under its subjects: ON DELETE RESTRICT.
     const snap = await (await page.request.get("/api/v1/governance", { headers: auth })).json();
-    const id = snap.profiles.find((p: { name: string }) => p.name === NAME).id;
-    const del = await page.request.delete(`/api/v1/governance/profiles/${id}`, { headers: auth });
+    const id = snap.units.find((p: { name: string }) => p.name === NAME).id;
+    const del = await page.request.delete(`/api/v1/governance/units/${id}`, { headers: auth });
     expect(del.status()).toBe(409);
     const body = (await del.json()).error as string;
     expect(body).toContain("still assigned");
@@ -751,10 +751,10 @@ test.describe("governance — a profile that narrows a base", () => {
 
     // A real write: only the narrowed fields are stored.
     const snap = await (await page.request.get("/api/v1/governance", { headers: auth })).json();
-    const child = snap.profiles.find((p: { name: string }) => p.name === CHILD_NAME);
+    const child = snap.units.find((p: { name: string }) => p.name === CHILD_NAME);
     expect(child.overlay).toEqual({ allowed_domains: ["a.example.com"] });
     expect(child.overlay_limits).toEqual({ max_concurrent_runs: 2 });
-    expect(child.base_profile_id).toBeTruthy();
+    expect(child.parent_id).toBeTruthy();
 
     // Reopened, the effective view is the base narrowed: one domain, a quota of two.
     await row.getByRole("button", { name: `${GOV.EDIT} ${CHILD_NAME}` }).click();
@@ -785,15 +785,15 @@ test.describe("governance — the resolved preview asks as a chosen user type", 
   test("a user type assignment matches only after that type is picked", async ({ page }) => {
     const type = await page.request.post("/api/v1/user-types", { headers: auth, data: { id: TYPE_ID, name: "E2E preview type" } });
     expect(type.status(), await type.text()).toBe(201);
-    const prof = await page.request.post("/api/v1/governance/profiles", {
+    const prof = await page.request.post("/api/v1/governance/units", {
       headers: auth,
       data: { name: PROFILE, ceiling: YOLO_CEILING, limits: {} },
     });
     expect(prof.status(), await prof.text()).toBe(201);
-    const profileID = (await prof.json()).profile.id;
-    const assigned = await page.request.post("/api/v1/governance/assignments", {
+    const profileID = (await prof.json()).unit.id;
+    const assigned = await page.request.post("/api/v1/governance/memberships", {
       headers: auth,
-      data: { subject_type: "user_type", subject: TYPE_ID, profile_id: profileID, priority: 0 },
+      data: { subject_type: "user_type", subject: TYPE_ID, unit_id: profileID, priority: 0 },
     });
     expect(assigned.ok(), await assigned.text()).toBeTruthy();
 
@@ -815,10 +815,10 @@ test.describe("governance — the resolved preview asks as a chosen user type", 
       await expect(page.getByText(GOV.PREVIEW_RESULT(PROFILE, GOV.MATCHED_USER_TYPE))).toBeVisible();
     } finally {
       const snap = await (await page.request.get("/api/v1/governance", { headers: auth })).json();
-      for (const a of snap.assignments ?? []) {
-        if (a.subject === TYPE_ID) await page.request.delete(`/api/v1/governance/assignments/${a.id}`, { headers: auth });
+      for (const a of snap.memberships ?? []) {
+        if (a.subject === TYPE_ID) await page.request.delete(`/api/v1/governance/memberships/${a.id}`, { headers: auth });
       }
-      await page.request.delete(`/api/v1/governance/profiles/${profileID}`, { headers: auth });
+      await page.request.delete(`/api/v1/governance/units/${profileID}`, { headers: auth });
       await page.request.delete(`/api/v1/user-types/${TYPE_ID}`, { headers: auth });
     }
   });

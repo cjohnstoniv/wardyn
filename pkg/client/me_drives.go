@@ -17,12 +17,12 @@ import (
 // Nothing here names a host path, a storage object or another person.
 type MeDriveCatalogue struct {
 	// Drives is never null. It is empty when nothing is granted, when a
-	// profile shuts the door (DeniedByProfile) or when the catalogue could not
+	// profile shuts the door (DeniedByUnit) or when the catalogue could not
 	// be answered (Unavailable).
 	Drives []MeDrive `json:"drives"`
-	// DeniedByProfile names the governance profile whose deny_user_drive
+	// DeniedByUnit names the governance profile whose deny_user_drive
 	// shuts the door for the caller.
-	DeniedByProfile string `json:"denied_by_profile,omitempty"`
+	DeniedByUnit string `json:"denied_by_unit,omitempty"`
 	// Unavailable is why the catalogue could not be answered:
 	// groups_snapshot_stale, user_type_unknown, drive_subject_unsupported,
 	// unavailable or governance_unavailable (the /me.user_drive_unavailable tokens).
@@ -43,8 +43,8 @@ type MemberDriveCreate struct {
 	Allowed bool `json:"allowed"`
 	// Reason is set exactly when Allowed is false.
 	Reason MemberDriveCreateReason `json:"reason,omitempty"`
-	// DeniedByProfile names the profile, with reason denied_by_profile.
-	DeniedByProfile string `json:"denied_by_profile,omitempty"`
+	// DeniedByUnit names the profile, with reason denied_by_unit.
+	DeniedByUnit string `json:"denied_by_unit,omitempty"`
 	// Count is the caller's drives, one being deleted included.
 	Count int `json:"count"`
 	// Limit is the switch's drives per person; 0 when the switch is off.
@@ -58,8 +58,8 @@ type MemberDriveCreateReason string
 const (
 	// MemberDriveCreateDisabled: the org switch is off, or drives are off.
 	MemberDriveCreateDisabled MemberDriveCreateReason = "disabled"
-	// MemberDriveCreateDeniedByProfile: deny_member_drives or deny_user_drive.
-	MemberDriveCreateDeniedByProfile MemberDriveCreateReason = "denied_by_profile"
+	// MemberDriveCreateDeniedByUnit: deny_member_drives or deny_user_drive.
+	MemberDriveCreateDeniedByUnit MemberDriveCreateReason = "denied_by_unit"
 	// MemberDriveCreateLimitReached: Count has reached Limit.
 	MemberDriveCreateLimitReached MemberDriveCreateReason = "limit_reached"
 	// MemberDriveCreateUnsupported: no managed backend for this deployment.

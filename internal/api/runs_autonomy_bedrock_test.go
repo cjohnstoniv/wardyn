@@ -69,7 +69,7 @@ func storeBedrockCredential(t *testing.T, s *Server, lane bedrockLane, owner str
 // Bedrock provider, with credOwner's own credential for it stored when set.
 // The clock is the SSO tests' fixed one, so a captured session is live and the
 // create-time refresh is a no-op on the wire.
-func bedrockAutonomyFixture(t *testing.T, p *types.GovernanceProfile, lane bedrockLane, credOwner string, proxyInject bool,
+func bedrockAutonomyFixture(t *testing.T, p *types.GovernanceUnit, lane bedrockLane, credOwner string, proxyInject bool,
 ) (*Server, *govEscapeStore, *recRecorder) {
 	t.Helper()
 	srv, st, audit := govEscapeFixture(t, autonomyCapStore(p))

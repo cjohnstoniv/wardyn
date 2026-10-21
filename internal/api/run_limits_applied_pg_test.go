@@ -61,7 +61,7 @@ func (e *placementEnv) sizedPool(name string, cpu types.RunnerPoolAmount) types.
 // assignSizedProfile gives the person a governance profile with this ceiling size and these limits.
 func (e *placementEnv) assignSizedProfile(name string, size *types.ResourceLimits, limits types.GovernanceLimits) {
 	e.t.Helper()
-	p, err := e.pg.UpsertGovernanceProfile(context.Background(), types.GovernanceProfile{Name: name, CreatedBy: "seed",
+	p, err := e.pg.UpsertGovernanceUnit(context.Background(), types.GovernanceUnit{Name: name, CreatedBy: "seed",
 		Ceiling: types.RunPolicySpec{Resources: size}, Limits: limits})
 	if err != nil {
 		e.t.Fatalf("seed profile %q: %v", name, err)

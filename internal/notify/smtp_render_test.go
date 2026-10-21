@@ -68,7 +68,7 @@ func TestRenderMail_RegisteredSecretIsMasked(t *testing.T) {
 	reg := secretmask.NewRegistry()
 	f := fixedFacts(types.ApprovalEgressDomain)
 	reg.Add(f.RunID, []byte(secret))
-	f.ProfileName, f.Principal = secret, secret
+	f.UnitName, f.Principal = secret, secret
 	got, err := renderMailFor(t, mailChan(), f, 1, reg.Masker(f.RunID))
 	if err != nil {
 		t.Fatal(err)

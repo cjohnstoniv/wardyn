@@ -55,8 +55,8 @@ export function useDriveCatalogue(poolId: string | undefined): DriveCatalogue {
   const c = state.catalogue;
   const reason = state.failed
     ? DRIVE_MEMBER.NR_UNAVAILABLE
-    : c?.denied_by_profile
-      ? DRIVE_MEMBER.NR_DENIED(c.denied_by_profile)
+    : c?.denied_by_unit
+      ? DRIVE_MEMBER.NR_DENIED(c.denied_by_unit)
       : c?.unavailable ? UNAVAILABLE_TEXT[c.unavailable] ?? DRIVE_MEMBER.NR_UNAVAILABLE : undefined;
   const reload = React.useCallback(() => setGeneration((g) => g + 1), []);
   return { catalogue: c, reason, reload };

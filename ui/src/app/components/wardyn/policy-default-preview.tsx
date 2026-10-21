@@ -19,7 +19,7 @@ import { STATES } from "./states";
 export interface DefaultPolicyView {
   status: "loading" | "ready" | "error";
   spec?: RunPolicySpec;
-  /** GET /policies/default's governance_profile_name; names the mode's card. */
+  /** GET /policies/default's unit_name; names the mode's card. */
   profileName?: string;
   onRetry: () => void;
 }

@@ -24,7 +24,7 @@ import (
 // select by id, and the capability reads narrowUserInlinePolicy performs.
 type memberBoundStore struct {
 	store.Store
-	profile *types.GovernanceProfile
+	profile *types.GovernanceUnit
 	policy  types.RunPolicy
 	// site is the org storage block (limitSources reads it for the main drive): zero means no
 	// default_disk_mib and no max_disk_mib, which is every test here that is not about the size.
@@ -35,10 +35,10 @@ func (s *memberBoundStore) GetSiteConfig(context.Context) (types.SiteConfig, err
 	return s.site, nil
 }
 
-func (s *memberBoundStore) ResolveGovernanceProfile(context.Context, []string, []string, string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+func (s *memberBoundStore) ResolveGovernanceUnit(context.Context, []string, []string, string) (*types.GovernanceUnit, types.CapabilitySubjectType, error) {
 	return s.profile, types.CapabilitySubjectUser, nil
 }
-func (s *memberBoundStore) HasGroupTierAssignments(context.Context) (bool, error) { return false, nil }
+func (s *memberBoundStore) HasGroupTierMemberships(context.Context) (bool, error) { return false, nil }
 func (s *memberBoundStore) GetPolicy(context.Context, uuid.UUID) (types.RunPolicy, error) {
 	return s.policy, nil
 }
@@ -87,7 +87,7 @@ func memberBoundFixture(t *testing.T, memberSpec types.RunPolicySpec) (*Server, 
 		}},
 	}
 	st := &memberBoundStore{
-		profile: &types.GovernanceProfile{ID: uuid.New(), Name: "walled", Ceiling: ceiling},
+		profile: &types.GovernanceUnit{ID: uuid.New(), Name: "walled", Ceiling: ceiling},
 		policy:  types.RunPolicy{ID: policyID, Name: "wide", Spec: memberSpec},
 	}
 	cfg := baseTestConfig(h, st)

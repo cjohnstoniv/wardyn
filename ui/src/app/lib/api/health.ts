@@ -18,7 +18,7 @@ import { appURL } from "../base-path";
 //
 // It carries NO DOOR FIELD, deliberately: the door is a property of the
 // caller's PROFILE, not of the allocation, and rides beside it as
-// Me.user_drive_denied_by_profile. Folding them would make the two states the
+// Me.user_drive_denied_by_unit. Folding them would make the two states the
 // member surfaces exist to tell apart — "denied AND unallocated" vs "simply
 // unallocated" — inexpressible.
 export interface MeUserDrive {
@@ -74,7 +74,7 @@ export interface Me {
   // open door. Non-empty is the whole bit — and it renders even when
   // user_drive is null, the state where "ask an admin for an allocation" is
   // the wrong advice.
-  user_drive_denied_by_profile?: string;
+  user_drive_denied_by_unit?: string;
   // The user view (0.7.4; renamed in 0.8 from member_mode/"view as member" —
   // docs/OPERATIONS.md's "Renamed in 0.8" appendix): this session is an ADMIN
   // who asked to be treated as a user. Every tier field above is already
@@ -571,7 +571,7 @@ export const health = {
   // permissions, governance profiles). `operator` deliberately stays
   // super-admin-only — the two are NOT complementary now that role has three
   // values, so gate each control on the one that matches its route.
-  // `user_drive` / `user_drive_denied_by_profile` are the 0.7 member-drive
+  // `user_drive` / `user_drive_denied_by_unit` are the 0.7 member-drive
   // pair — see MeUserDrive above for why the door is a sibling field and not
   // a property of the allocation.
   async whoami(): Promise<Me | null> {

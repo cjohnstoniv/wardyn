@@ -25,16 +25,16 @@ import (
 // Store, which would flag a handler reaching past what these tests set up.
 type govCrudStore struct {
 	store.Store
-	profiles    []types.GovernanceProfile
-	assignments []types.GovernanceAssignment
+	profiles    []types.GovernanceUnit
+	assignments []types.GovernanceMembership
 
 	listProfilesErr, listAssignmentsErr  error
 	upsertProfileErr, deleteProfileErr   error
 	upsertAssignmentErr, deleteAssignErr error
 
-	// lastProfile is what UpsertGovernanceProfile was last asked to store.
-	lastProfile types.GovernanceProfile
-	// existing makes UpsertGovernanceAssignment answer an already-stored row's id,
+	// lastProfile is what UpsertGovernanceUnit was last asked to store.
+	lastProfile types.GovernanceUnit
+	// existing makes UpsertGovernanceMembership answer an already-stored row's id,
 	// which is how the real store says "repointed, not created".
 	existing uuid.UUID
 }
@@ -44,43 +44,43 @@ type govCrudStore struct {
 // governance_delete_audit_pg_test pins what it records.
 func (s *govCrudStore) DryRunGovernance(context.Context, func(store.Querier) error) error { return nil }
 
-func (s *govCrudStore) ListGovernanceProfiles(context.Context) ([]types.GovernanceProfile, error) {
+func (s *govCrudStore) ListGovernanceUnits(context.Context) ([]types.GovernanceUnit, error) {
 	return s.profiles, s.listProfilesErr
 }
 
-func (s *govCrudStore) ListGovernanceAssignments(context.Context) ([]types.GovernanceAssignment, error) {
+func (s *govCrudStore) ListGovernanceMemberships(context.Context) ([]types.GovernanceMembership, error) {
 	return s.assignments, s.listAssignmentsErr
 }
 
-func (s *govCrudStore) UpsertGovernanceProfile(_ context.Context, p types.GovernanceProfile) (types.GovernanceProfile, error) {
+func (s *govCrudStore) UpsertGovernanceUnit(_ context.Context, p types.GovernanceUnit) (types.GovernanceUnit, error) {
 	s.lastProfile = p
 	return p, s.upsertProfileErr
 }
 
-// WriteGovernanceProfile is the composed-profile write: build decides the row from every stored
+// WriteGovernanceUnit is the composed-profile write: build decides the row from every stored
 // profile, as the real store does under its graph lock, and the row is then stored at id.
-func (s *govCrudStore) WriteGovernanceProfile(ctx context.Context, id uuid.UUID, build store.GovernanceProfileBuild) (types.GovernanceProfile, error) {
+func (s *govCrudStore) WriteGovernanceUnit(ctx context.Context, id uuid.UUID, build store.GovernanceUnitBuild) (types.GovernanceUnit, error) {
 	p, err := build(s.profiles, s.assignments)
 	if err != nil {
-		return types.GovernanceProfile{}, err
+		return types.GovernanceUnit{}, err
 	}
 	p.ID = id
-	return s.UpsertGovernanceProfile(ctx, p)
+	return s.UpsertGovernanceUnit(ctx, p)
 }
 
-func (s *govCrudStore) DeleteGovernanceProfile(context.Context, uuid.UUID) error {
+func (s *govCrudStore) DeleteGovernanceUnit(context.Context, uuid.UUID) error {
 	return s.deleteProfileErr
 }
 
-func (s *govCrudStore) UpsertGovernanceAssignment(_ context.Context, a types.GovernanceAssignment) (types.GovernanceAssignment, error) {
+func (s *govCrudStore) UpsertGovernanceMembership(_ context.Context, a types.GovernanceMembership) (types.GovernanceMembership, error) {
 	if s.existing != uuid.Nil {
 		a.ID = s.existing
 	}
 	return a, s.upsertAssignmentErr
 }
 
-func (s *govCrudStore) DeleteGovernanceAssignment(context.Context, uuid.UUID) (types.GovernanceAssignment, error) {
-	return types.GovernanceAssignment{}, s.deleteAssignErr
+func (s *govCrudStore) DeleteGovernanceMembership(context.Context, uuid.UUID) (types.GovernanceMembership, error) {
+	return types.GovernanceMembership{}, s.deleteAssignErr
 }
 
 func govCrudServer(t *testing.T, st *govCrudStore) (*Server, *harness) {
@@ -100,8 +100,8 @@ func govAuditActions(h *harness) []string {
 func TestGovernanceCRUD_GetAnswersBothListsAndNamesTheFailingRead(t *testing.T) {
 	pid := uuid.New()
 	st := &govCrudStore{
-		profiles:    []types.GovernanceProfile{{ID: pid, Name: "interns"}},
-		assignments: []types.GovernanceAssignment{{ID: uuid.New(), SubjectType: types.CapabilitySubjectAll, ProfileID: pid}},
+		profiles:    []types.GovernanceUnit{{ID: pid, Name: "interns"}},
+		assignments: []types.GovernanceMembership{{ID: uuid.New(), SubjectType: types.CapabilitySubjectAll, UnitID: pid}},
 	}
 	srv, _ := govCrudServer(t, st)
 
@@ -113,7 +113,7 @@ func TestGovernanceCRUD_GetAnswersBothListsAndNamesTheFailingRead(t *testing.T) 
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Profiles) != 1 || got.Profiles[0].Name != "interns" || len(got.Assignments) != 1 || got.Assignments[0].ProfileID != pid {
+	if len(got.Units) != 1 || got.Units[0].Name != "interns" || len(got.Memberships) != 1 || got.Memberships[0].UnitID != pid {
 		t.Errorf("body = %+v, want the one profile and the one assignment pointing at it", got)
 	}
 
@@ -138,7 +138,7 @@ func TestGovernanceCRUD_GetAnswersBothListsAndNamesTheFailingRead(t *testing.T) 
 
 func TestGovernanceCRUD_ProfileWriteRefusals(t *testing.T) {
 	srv, h := govCrudServer(t, &govCrudStore{})
-	long := strings.Repeat("n", maxGovernanceProfileNameLen+1)
+	long := strings.Repeat("n", maxGovernanceUnitNameLen+1)
 	for _, c := range []struct{ name, body string }{
 		{"an unknown field", `{"name":"x","surprise":1}`},
 		{"a blank name", `{"name":"   "}`},
@@ -147,7 +147,7 @@ func TestGovernanceCRUD_ProfileWriteRefusals(t *testing.T) {
 		{"an eligible grant the deployment never provisioned", `{"name":"x","ceiling":{"min_confinement_class":"CC2","eligible_grants":[{"kind":"github_token"}]}}`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			w := do(t, srv, http.MethodPost, "/api/v1/governance/profiles", adminToken, c.body)
+			w := do(t, srv, http.MethodPost, "/api/v1/governance/units", adminToken, c.body)
 			if w.Code != http.StatusBadRequest {
 				t.Fatalf("POST = %d %s, want 400", w.Code, w.Body.String())
 			}
@@ -155,7 +155,7 @@ func TestGovernanceCRUD_ProfileWriteRefusals(t *testing.T) {
 	}
 	// The grant bound has its own reason: it is the one refusal a caller fixes
 	// by changing the deployment, not the body.
-	w := do(t, srv, http.MethodPost, "/api/v1/governance/profiles", adminToken, `{"name":"x","ceiling":{"min_confinement_class":"CC2","eligible_grants":[{"kind":"github_token"}]}}`)
+	w := do(t, srv, http.MethodPost, "/api/v1/governance/units", adminToken, `{"name":"x","ceiling":{"min_confinement_class":"CC2","eligible_grants":[{"kind":"github_token"}]}}`)
 	if got := errorReason(w); got != reasonGovernanceCeilingInvalid {
 		t.Errorf("reason = %q, want %q", got, reasonGovernanceCeilingInvalid)
 	}
@@ -168,16 +168,16 @@ func TestGovernanceCRUD_ProfileWriteCreatesUpdatesAndAudits(t *testing.T) {
 	st := &govCrudStore{}
 	srv, h := govCrudServer(t, st)
 
-	w := do(t, srv, http.MethodPost, "/api/v1/governance/profiles", adminToken, `{"name":"  interns  ","ceiling":{"min_confinement_class":"CC2"},"limits":{"max_concurrent_runs":2}}`)
+	w := do(t, srv, http.MethodPost, "/api/v1/governance/units", adminToken, `{"name":"  interns  ","ceiling":{"min_confinement_class":"CC2"},"limits":{"max_concurrent_runs":2}}`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("POST = %d %s, want 201", w.Code, w.Body.String())
 	}
-	var created governanceProfileResponse
+	var created governanceUnitResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
 		t.Fatal(err)
 	}
-	if created.Profile.Name != "interns" || created.Profile.Limits.MaxConcurrentRuns != 2 || created.Profile.ID == uuid.Nil {
-		t.Errorf("created = %+v, want the trimmed name, the cap and a server-minted id", created.Profile)
+	if created.Unit.Name != "interns" || created.Unit.Limits.MaxConcurrentRuns != 2 || created.Unit.ID == uuid.Nil {
+		t.Errorf("created = %+v, want the trimmed name, the cap and a server-minted id", created.Unit)
 	}
 	if st.lastProfile.CreatedBy == "" {
 		t.Error("the store was not told who wrote the profile")
@@ -185,25 +185,25 @@ func TestGovernanceCRUD_ProfileWriteCreatesUpdatesAndAudits(t *testing.T) {
 
 	// PUT names its id in the path: the row stored is that id, answered 200.
 	id := uuid.New()
-	w = do(t, srv, http.MethodPut, "/api/v1/governance/profiles/"+id.String(), adminToken, `{"name":"interns-2","ceiling":{"min_confinement_class":"CC2"}}`)
+	w = do(t, srv, http.MethodPut, "/api/v1/governance/units/"+id.String(), adminToken, `{"name":"interns-2","ceiling":{"min_confinement_class":"CC2"}}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("PUT = %d %s, want 200", w.Code, w.Body.String())
 	}
 	if st.lastProfile.ID != id || st.lastProfile.Name != "interns-2" {
 		t.Errorf("stored %+v, want id %s renamed interns-2", st.lastProfile, id)
 	}
-	if w := do(t, srv, http.MethodPut, "/api/v1/governance/profiles/not-a-uuid", adminToken, `{"name":"x"}`); w.Code != http.StatusBadRequest || errorReason(w) != reasonInvalidIDParam {
+	if w := do(t, srv, http.MethodPut, "/api/v1/governance/units/not-a-uuid", adminToken, `{"name":"x"}`); w.Code != http.StatusBadRequest || errorReason(w) != reasonInvalidIDParam {
 		t.Errorf("PUT with a bad id = %d %s, want 400 %s", w.Code, w.Body.String(), reasonInvalidIDParam)
 	}
 
 	var wrote int
 	for _, ev := range h.audit.snapshot() {
-		if ev.Action == "governance.profile.write" && ev.Outcome == "success" {
+		if ev.Action == "governance.unit.write" && ev.Outcome == "success" {
 			wrote++
 		}
 	}
 	if wrote != 2 {
-		t.Errorf("governance.profile.write rows = %d, want one per successful write (2)", wrote)
+		t.Errorf("governance.unit.write rows = %d, want one per successful write (2)", wrote)
 	}
 }
 
@@ -218,12 +218,12 @@ func TestGovernanceCRUD_ProfileWriteStoreFailures(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			srv, h := govCrudServer(t, &govCrudStore{upsertProfileErr: c.err})
-			w := do(t, srv, http.MethodPost, "/api/v1/governance/profiles", adminToken, `{"name":"x","ceiling":{"min_confinement_class":"CC2"}}`)
+			w := do(t, srv, http.MethodPost, "/api/v1/governance/units", adminToken, `{"name":"x","ceiling":{"min_confinement_class":"CC2"}}`)
 			if w.Code != c.want {
 				t.Errorf("POST = %d %s, want %d", w.Code, w.Body.String(), c.want)
 			}
-			if c.want == http.StatusConflict && errorReason(w) != reasonGovernanceProfileNameConflict {
-				t.Errorf("reason = %q, want %q", errorReason(w), reasonGovernanceProfileNameConflict)
+			if c.want == http.StatusConflict && errorReason(w) != reasonGovernanceUnitNameConflict {
+				t.Errorf("reason = %q, want %q", errorReason(w), reasonGovernanceUnitNameConflict)
 			}
 			if a := govAuditActions(h); len(a) != 0 {
 				t.Errorf("a failed write left audit rows %v", a)
@@ -234,7 +234,7 @@ func TestGovernanceCRUD_ProfileWriteStoreFailures(t *testing.T) {
 
 func TestGovernanceCRUD_ProfileDelete(t *testing.T) {
 	id := uuid.New()
-	path := "/api/v1/governance/profiles/" + id.String()
+	path := "/api/v1/governance/units/" + id.String()
 	for _, c := range []struct {
 		name   string
 		err    error
@@ -243,8 +243,8 @@ func TestGovernanceCRUD_ProfileDelete(t *testing.T) {
 		audit  bool
 	}{
 		{"deleted", nil, http.StatusNoContent, "", true},
-		{"unknown", store.ErrNotFound, http.StatusNotFound, reasonGovernanceProfileNotFoundByID, false},
-		{"still assigned", store.ErrConflict, http.StatusConflict, reasonGovernanceProfileInUse, false},
+		{"unknown", store.ErrNotFound, http.StatusNotFound, reasonGovernanceUnitNotFoundByID, false},
+		{"still assigned", store.ErrConflict, http.StatusConflict, reasonGovernanceUnitInUse, false},
 		{"store failure", errors.New("boom"), http.StatusInternalServerError, "", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -254,13 +254,13 @@ func TestGovernanceCRUD_ProfileDelete(t *testing.T) {
 				t.Errorf("DELETE = %d %s, want %d %s", w.Code, w.Body.String(), c.want, c.reason)
 			}
 			got := strings.Join(govAuditActions(h), ",")
-			if c.audit != (got == "governance.profile.delete") {
+			if c.audit != (got == "governance.unit.delete") {
 				t.Errorf("audit rows = %q, want delete row: %v", got, c.audit)
 			}
 		})
 	}
 	srv, _ := govCrudServer(t, &govCrudStore{})
-	if w := do(t, srv, http.MethodDelete, "/api/v1/governance/profiles/nope", adminToken, ""); w.Code != http.StatusBadRequest {
+	if w := do(t, srv, http.MethodDelete, "/api/v1/governance/units/nope", adminToken, ""); w.Code != http.StatusBadRequest {
 		t.Errorf("DELETE with a bad id = %d, want 400", w.Code)
 	}
 }
@@ -268,14 +268,14 @@ func TestGovernanceCRUD_ProfileDelete(t *testing.T) {
 func TestGovernanceCRUD_AssignmentWrites(t *testing.T) {
 	pid := uuid.New()
 	body := func(subjectType, subject string) string {
-		b, _ := json.Marshal(map[string]any{"subject_type": subjectType, "subject": subject, "profile_id": pid, "priority": 3})
+		b, _ := json.Marshal(map[string]any{"subject_type": subjectType, "subject": subject, "unit_id": pid, "priority": 3})
 		return string(b)
 	}
 
 	t.Run("refusals", func(t *testing.T) {
 		srv, h := govCrudServer(t, &govCrudStore{})
 		for name, b := range map[string]string{
-			"an unknown field":                      `{"subject_type":"user","subject":"a@b.example","profile_id":"` + pid.String() + `","x":1}`,
+			"an unknown field":                      `{"subject_type":"user","subject":"a@b.example","unit_id":"` + pid.String() + `","x":1}`,
 			"a subject type outside the vocabulary": body("planet", "mars"),
 			"no profile":                            `{"subject_type":"user","subject":"a@b.example"}`,
 			"a user with no subject":                body("user", "   "),
@@ -283,7 +283,7 @@ func TestGovernanceCRUD_AssignmentWrites(t *testing.T) {
 			"an over-long subject":                  body("user", strings.Repeat("a", maxCapabilityGrantFieldLen+1)),
 			"a malformed user type id":              body("user_type", "Not A Type!"),
 		} {
-			w := do(t, srv, http.MethodPost, "/api/v1/governance/assignments", adminToken, b)
+			w := do(t, srv, http.MethodPost, "/api/v1/governance/memberships", adminToken, b)
 			if w.Code != http.StatusBadRequest {
 				t.Errorf("%s: POST = %d %s, want 400", name, w.Code, w.Body.String())
 			}
@@ -295,46 +295,46 @@ func TestGovernanceCRUD_AssignmentWrites(t *testing.T) {
 
 	t.Run("all drops a caller-supplied subject", func(t *testing.T) {
 		srv, h := govCrudServer(t, &govCrudStore{})
-		w := do(t, srv, http.MethodPost, "/api/v1/governance/assignments", adminToken, body("all", "everyone-but-really-nobody"))
+		w := do(t, srv, http.MethodPost, "/api/v1/governance/memberships", adminToken, body("all", "everyone-but-really-nobody"))
 		if w.Code != http.StatusCreated {
 			t.Fatalf("POST = %d %s, want 201", w.Code, w.Body.String())
 		}
-		var got types.GovernanceAssignment
+		var got types.GovernanceMembership
 		_ = json.Unmarshal(w.Body.Bytes(), &got)
 		if got.Subject != "" || got.SubjectType != types.CapabilitySubjectAll {
 			t.Errorf("saved %+v, want the all type with an empty subject", got)
 		}
-		if a := govAuditActions(h); len(a) != 1 || a[0] != "governance.assignment.write" {
-			t.Errorf("audit = %v, want one governance.assignment.write", a)
+		if a := govAuditActions(h); len(a) != 1 || a[0] != "governance.membership.write" {
+			t.Errorf("audit = %v, want one governance.membership.write", a)
 		}
 	})
 
 	t.Run("a new binding is 201 and a repointed one is 200", func(t *testing.T) {
 		srv, _ := govCrudServer(t, &govCrudStore{})
-		if w := do(t, srv, http.MethodPost, "/api/v1/governance/assignments", adminToken, body("group", "Eng")); w.Code != http.StatusCreated {
+		if w := do(t, srv, http.MethodPost, "/api/v1/governance/memberships", adminToken, body("group", "Eng")); w.Code != http.StatusCreated {
 			t.Errorf("new = %d %s, want 201", w.Code, w.Body.String())
 		}
 		srv, _ = govCrudServer(t, &govCrudStore{existing: uuid.New()})
-		if w := do(t, srv, http.MethodPost, "/api/v1/governance/assignments", adminToken, body("group", "Eng")); w.Code != http.StatusOK {
+		if w := do(t, srv, http.MethodPost, "/api/v1/governance/memberships", adminToken, body("group", "Eng")); w.Code != http.StatusOK {
 			t.Errorf("repoint = %d %s, want 200", w.Code, w.Body.String())
 		}
 	})
 
 	t.Run("store failures", func(t *testing.T) {
 		srv, _ := govCrudServer(t, &govCrudStore{upsertAssignmentErr: store.ErrNotFound})
-		w := do(t, srv, http.MethodPost, "/api/v1/governance/assignments", adminToken, body("group", "Eng"))
-		if w.Code != http.StatusNotFound || errorReason(w) != reasonGovernanceProfileNotFoundByID {
-			t.Errorf("unknown profile = %d %s, want 404 %s", w.Code, w.Body.String(), reasonGovernanceProfileNotFoundByID)
+		w := do(t, srv, http.MethodPost, "/api/v1/governance/memberships", adminToken, body("group", "Eng"))
+		if w.Code != http.StatusNotFound || errorReason(w) != reasonGovernanceUnitNotFoundByID {
+			t.Errorf("unknown profile = %d %s, want 404 %s", w.Code, w.Body.String(), reasonGovernanceUnitNotFoundByID)
 		}
 		srv, _ = govCrudServer(t, &govCrudStore{upsertAssignmentErr: errors.New("boom")})
-		if w := do(t, srv, http.MethodPost, "/api/v1/governance/assignments", adminToken, body("group", "Eng")); w.Code != http.StatusInternalServerError {
+		if w := do(t, srv, http.MethodPost, "/api/v1/governance/memberships", adminToken, body("group", "Eng")); w.Code != http.StatusInternalServerError {
 			t.Errorf("store failure = %d, want 500", w.Code)
 		}
 	})
 }
 
 func TestGovernanceCRUD_AssignmentDelete(t *testing.T) {
-	path := "/api/v1/governance/assignments/" + uuid.New().String()
+	path := "/api/v1/governance/memberships/" + uuid.New().String()
 	for _, c := range []struct {
 		name  string
 		err   error
@@ -350,13 +350,13 @@ func TestGovernanceCRUD_AssignmentDelete(t *testing.T) {
 			if w := do(t, srv, http.MethodDelete, path, adminToken, ""); w.Code != c.want {
 				t.Errorf("DELETE = %d %s, want %d", w.Code, w.Body.String(), c.want)
 			}
-			if got := strings.Join(govAuditActions(h), ","); c.audit != (got == "governance.assignment.delete") {
+			if got := strings.Join(govAuditActions(h), ","); c.audit != (got == "governance.membership.delete") {
 				t.Errorf("audit rows = %q, want delete row: %v", got, c.audit)
 			}
 		})
 	}
 	srv, _ := govCrudServer(t, &govCrudStore{})
-	if w := do(t, srv, http.MethodDelete, "/api/v1/governance/assignments/nope", adminToken, ""); w.Code != http.StatusBadRequest {
+	if w := do(t, srv, http.MethodDelete, "/api/v1/governance/memberships/nope", adminToken, ""); w.Code != http.StatusBadRequest {
 		t.Errorf("DELETE with a bad id = %d, want 400", w.Code)
 	}
 }
@@ -365,15 +365,15 @@ func TestGovernanceCRUD_AssignmentDelete(t *testing.T) {
 // the overlay empties ui_apps, which resolves to the base's list together with deny_ui_apps.
 type composedUIAppsStore struct {
 	govCrudStore
-	base, leaf types.GovernanceProfile
+	base, leaf types.GovernanceUnit
 }
 
-func (s *composedUIAppsStore) ResolveGovernanceProfile(context.Context, []string, []string, string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+func (s *composedUIAppsStore) ResolveGovernanceUnit(context.Context, []string, []string, string) (*types.GovernanceUnit, types.CapabilitySubjectType, error) {
 	return &s.leaf, types.CapabilitySubjectAll, nil
 }
 
-func (s *composedUIAppsStore) GetGovernanceProfileChain(context.Context, uuid.UUID) ([]types.GovernanceProfile, error) {
-	return []types.GovernanceProfile{s.leaf, s.base}, nil
+func (s *composedUIAppsStore) GetGovernanceUnitChain(context.Context, uuid.UUID) ([]types.GovernanceUnit, error) {
+	return []types.GovernanceUnit{s.leaf, s.base}, nil
 }
 
 // TestComposedUIAppsDenial_ReadSurfacesShowTheDenial pins what the two ceiling read surfaces say
@@ -382,14 +382,14 @@ func (s *composedUIAppsStore) GetGovernanceProfileChain(context.Context, uuid.UU
 // ceiling gets none (boundUIApps).
 func TestComposedUIAppsDenial_ReadSurfacesShowTheDenial(t *testing.T) {
 	docs := []types.UIApp{{Name: "docs", Port: 8000}}
-	base := types.GovernanceProfile{ID: uuid.New(), Name: "base", Ceiling: types.RunPolicySpec{
+	base := types.GovernanceUnit{ID: uuid.New(), Name: "base", Ceiling: types.RunPolicySpec{
 		AllowedDomains: []string{"pypi.org"}, MinConfinementClass: types.CC2, UIApps: docs}}
 	empty := []types.UIApp{}
 	domains := []string{"pypi.org"}
-	leaf := types.GovernanceProfile{ID: uuid.New(), Name: "leaf", BaseProfileID: &base.ID,
+	leaf := types.GovernanceUnit{ID: uuid.New(), Name: "leaf", ParentID: &base.ID,
 		Overlay: &types.CeilingOverlay{AllowedDomains: &domains, UIApps: &empty}}
 	st := &composedUIAppsStore{base: base, leaf: leaf}
-	st.profiles = []types.GovernanceProfile{base, leaf}
+	st.profiles = []types.GovernanceUnit{base, leaf}
 
 	h := newHarness(t)
 	w := do(t, New(baseTestConfig(h, st)), http.MethodGet, "/api/v1/governance", adminToken, "")
@@ -401,7 +401,7 @@ func TestComposedUIAppsDenial_ReadSurfacesShowTheDenial(t *testing.T) {
 		t.Fatal(err)
 	}
 	var seen bool
-	for _, p := range got.Profiles {
+	for _, p := range got.Units {
 		if p.ID != leaf.ID {
 			continue
 		}
@@ -425,8 +425,8 @@ func TestComposedUIAppsDenial_ReadSurfacesShowTheDenial(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &def); err != nil {
 		t.Fatal(err)
 	}
-	if def.GovernanceProfileName != "leaf" || len(def.UIApps) != 0 {
-		t.Errorf("/policies/default = profile %q, ui_apps %+v; want the composed profile and no UI apps", def.GovernanceProfileName, def.UIApps)
+	if def.UnitName != "leaf" || len(def.UIApps) != 0 {
+		t.Errorf("/policies/default = profile %q, ui_apps %+v; want the composed profile and no UI apps", def.UnitName, def.UIApps)
 	}
 }
 
@@ -436,7 +436,7 @@ type namedDeleteStore struct {
 	name string
 }
 
-func (s namedDeleteStore) DeleteGovernanceProfileNamed(context.Context, uuid.UUID) (string, error) {
+func (s namedDeleteStore) DeleteGovernanceUnitNamed(context.Context, uuid.UUID) (string, error) {
 	return s.name, nil
 }
 
@@ -446,12 +446,12 @@ func TestGovernanceCRUD_ProfileDeleteAuditNamesTheRowTheDeleteRemoved(t *testing
 	id := uuid.New()
 	h := newHarness(t)
 	srv := New(baseTestConfig(h, namedDeleteStore{govCrudStore: &govCrudStore{}, name: "interns"}))
-	if w := do(t, srv, http.MethodDelete, "/api/v1/governance/profiles/"+id.String(), adminToken, ""); w.Code != http.StatusNoContent {
+	if w := do(t, srv, http.MethodDelete, "/api/v1/governance/units/"+id.String(), adminToken, ""); w.Code != http.StatusNoContent {
 		t.Fatalf("DELETE = %d %s, want 204", w.Code, w.Body.String())
 	}
 	var data string
 	for _, ev := range h.audit.snapshot() {
-		if ev.Action == "governance.profile.delete" {
+		if ev.Action == "governance.unit.delete" {
 			data = string(ev.Data)
 		}
 	}

@@ -68,7 +68,7 @@ export const SCENARIO_POOLS: ByScenario<RunnerPoolList> = everyScenario(MEMBER, 
       CC1: { available: false, reason_code: "below_floor", floor: "CC2" },
       CC2: { default: true, default_source: "organisation" },
     }) }],
-    allowance: { active: 2, max: 5, profile_name: "Platform team" },
+    allowance: { active: 2, max: 5, unit_name: "Platform team" },
     default: { pool_id: SHARED.id, selection: "organisation_default" },
   },
   full: {

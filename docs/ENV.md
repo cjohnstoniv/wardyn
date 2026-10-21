@@ -286,7 +286,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_CAPABILITY_SECOND_HUMAN` | bool | (unset) | four-eyes on Azure DevOps capability escalations: the human who DECIDES one must not be the human who created the run. **Local mode REFUSES it**, and the `admin-token` principal BYPASSES it. [Details](#wardyn_capability_second_human) |
 | `WARDYN_GOVERNANCE_SECOND_HUMAN` | bool | (unset) | four-eyes on governance writes: a human's write to a governance profile, a capability grant, a key-domain assignment or `local_credential_delivery` is stored as a pending change. A second, distinct human must approve it. [Details](#wardyn_governance_second_human) |
 | `WARDYN_GOVERNANCE_CHANGE_TTL` | duration | `72h` | how long a governance change held for a second human waits for approval (flag `-governance-change-ttl`); past it the change reads as `expired` and cannot be approved. [Details](#wardyn_governance_change_ttl) |
-| `WARDYN_GOVERNANCE_PROFILE_PUT_EXISTING_ONLY` | bool | `false` | `PUT /governance/profiles/{id}` updates an existing profile only; an id no profile holds answers `404` (flag `-governance-profile-put-existing-only`). [Details](#wardyn_governance_profile_put_existing_only) |
+| `WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY` | bool | `false` | `PUT /governance/units/{id}` updates an existing profile only; an id no profile holds answers `404` (flag `-governance-unit-put-existing-only`). [Details](#wardyn_governance_unit_put_existing_only) |
 | `WARDYN_EGRESS_HOST_PORT_GRANTS_INERT` | bool | `false` | a stored `egress_host` allow grant whose value carries a port is inert: marked so and never matched (flag `-egress-host-port-grants-inert`). [Details](#wardyn_egress_host_port_grants_inert) |
 | `WARDYN_HA` | bool | `false` | multi-replica mode (flag `-ha`): skip the single-instance lock so several wardynd replicas can serve one database; refused at boot unless the runner is the Kubernetes substrate. [Details](#wardyn_ha) |
 | `WARDYN_GOVERN_ADMIN_RUNS` | bool | (unset) | constrained-admin mode: govern every run an SSO admin or an admin-role personal API token launches, like a member's (flag `-govern-admin-runs`). **With OIDC unset the switch binds nobody**, and boot WARNs it (`warnGovernAdminRunsUnbound`, [`cmd/wardynd/boot_posture.go`](../cmd/wardynd/boot_posture.go)). [Details](#wardyn_govern_admin_runs) |
@@ -1466,7 +1466,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - **The `admin-token` principal BYPASSES it**, the break-glass, writing `governance.change.bypass`; **local mode REFUSES it** with a `503` `governance_second_human_local_mode`.
 - With it unset every covered route answers exactly as before.
 - Upgrade the CLI and any SDK callers before turning it on.
-- A client older than 0.8.6 decodes the `202` as an empty profile, its next assignment write is refused `profile_id: required` (or is itself held), and its prune deletes are each held rather than applied.
+- A client older than 0.8.6 decodes the `202` as an empty profile, its next assignment write is refused `unit_id: required` (or is itself held), and its prune deletes are each held rather than applied.
 - Turning it off leaves pending changes approvable and rejectable under the same rules, self-approval included.
 - The console lists the held changes on the Governance screen's Changes tab.
 - A value that is not a bool exits 2 at boot in every mode.
@@ -1479,10 +1479,10 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - A value that does not parse, or is not positive, exits 2 at boot.
 - Read only while `WARDYN_GOVERNANCE_SECOND_HUMAN` is on.
 
-### `WARDYN_GOVERNANCE_PROFILE_PUT_EXISTING_ONLY`
+### `WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY`
 
-- Off (the default): `PUT /api/v1/governance/profiles/{id}` naming an id no profile holds creates one there, logged at INFO as a create the switch would refuse.
-- On: that PUT answers `404 governance_profile_not_found`; create a profile with `POST /api/v1/governance/profiles`, which mints the id (flag `-governance-profile-put-existing-only`).
+- Off (the default): `PUT /api/v1/governance/units/{id}` naming an id no profile holds creates one there, logged at INFO as a create the switch would refuse.
+- On: that PUT answers `404 governance_unit_not_found`; create a profile with `POST /api/v1/governance/units`, which mints the id (flag `-governance-unit-put-existing-only`).
 
 ### `WARDYN_EGRESS_HOST_PORT_GRANTS_INERT`
 

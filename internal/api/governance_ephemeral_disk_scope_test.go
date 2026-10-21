@@ -25,7 +25,7 @@ func TestEphemeralDiskMaximum_BindsAMemberAndNotAnUngovernedAdmin(t *testing.T) 
 	}{"an admin": {oidc.RoleAdmin, asked}, "a member": {oidc.RoleUser, limit}} {
 		t.Run(name, func(t *testing.T) {
 			h := newHarness(t)
-			cfg := baseTestConfig(h, &memberBoundStore{profile: &types.GovernanceProfile{
+			cfg := baseTestConfig(h, &memberBoundStore{profile: &types.GovernanceUnit{
 				ID: uuid.New(), Name: "sized", Ceiling: types.RunPolicySpec{MinConfinementClass: types.CC2},
 				Limits: types.GovernanceLimits{MaxEphemeralDiskMiB: limit},
 			}})

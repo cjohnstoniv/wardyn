@@ -268,7 +268,7 @@ type UserDrive struct {
 
 // UserDriveGrant allocates one drive to one subject (migration 0054's
 // user_drive_grants row). SubjectType REUSES CapabilitySubjectType, the same
-// vocabulary capability_grants/governance_assignments use. Every override is
+// vocabulary capability_grants/governance_memberships use. Every override is
 // a column on the BINDING row, since it has no meaning apart from the
 // (subject, drive) pair.
 type UserDriveGrant struct {

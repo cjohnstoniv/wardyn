@@ -46,8 +46,8 @@ func govProfileSpec() types.RunPolicySpec {
 	}
 }
 
-func govProfile(name string) *types.GovernanceProfile {
-	return &types.GovernanceProfile{
+func govProfile(name string) *types.GovernanceUnit {
+	return &types.GovernanceUnit{
 		ID: uuid.New(), Name: name, Ceiling: govProfileSpec(),
 		Limits: types.GovernanceLimits{DenyInteractive: true},
 	}
@@ -80,7 +80,7 @@ func govMemberCtx(groups []string, truncated bool) context.Context {
 //
 // The store's own ORDER BY (user > group > all, sub over email, priority, name)
 // is NOT re-tested here: it is SQL, and internal/store's
-// TestPG_ResolveGovernanceProfile owns it. What this owns is everything the
+// TestPG_ResolveGovernanceUnit owns it. What this owns is everything the
 // resolver decides AROUND that read — who skips it, what a failure means, and
 // the one shape in which an unanswerable group snapshot is a refusal.
 func TestEffectiveCeilingPrecedence(t *testing.T) {
@@ -95,8 +95,8 @@ func TestEffectiveCeilingPrecedence(t *testing.T) {
 		if err != nil {
 			t.Fatalf("effectiveCeiling(admin): %v", err)
 		}
-		if got.Profile != nil {
-			t.Errorf("an operator resolved to profile %q; the ceiling-setting authority is not bounded by one", got.Profile.Name)
+		if got.Unit != nil {
+			t.Errorf("an operator resolved to profile %q; the ceiling-setting authority is not bounded by one", got.Unit.Name)
 		}
 		if len(got.Spec.AllowedDomains) != len(govDeployment().AllowedDomains) {
 			t.Errorf("operator ceiling = %v, want the deployment's %v", got.Spec.AllowedDomains, govDeployment().AllowedDomains)
@@ -114,8 +114,8 @@ func TestEffectiveCeilingPrecedence(t *testing.T) {
 		if err != nil {
 			t.Fatalf("effectiveCeiling(admin): %v", err)
 		}
-		if got.Profile != nil {
-			t.Errorf("an `all` assignment bound the super admin (profile %q)", got.Profile.Name)
+		if got.Unit != nil {
+			t.Errorf("an `all` assignment bound the super admin (profile %q)", got.Unit.Name)
 		}
 	})
 
@@ -127,7 +127,7 @@ func TestEffectiveCeilingPrecedence(t *testing.T) {
 		if err != nil {
 			t.Fatalf("effectiveCeiling(nil store): %v", err)
 		}
-		if got.Profile != nil || len(got.Spec.AllowedDomains) != 3 {
+		if got.Unit != nil || len(got.Spec.AllowedDomains) != 3 {
 			t.Errorf("nil store resolved to %+v, want the deployment ceiling", got.Spec.AllowedDomains)
 		}
 	})
@@ -173,8 +173,8 @@ func TestEffectiveCeilingPrecedence(t *testing.T) {
 			if err != nil {
 				t.Fatalf("effectiveCeiling: %v", err)
 			}
-			if got.Profile != nil {
-				t.Errorf("no assignment produced profile %q; it must read as the deployment ceiling", got.Profile.Name)
+			if got.Unit != nil {
+				t.Errorf("no assignment produced profile %q; it must read as the deployment ceiling", got.Unit.Name)
 			}
 			if len(got.Spec.AllowedDomains) != 3 {
 				t.Errorf("ceiling = %v, want the deployment's", got.Spec.AllowedDomains)
@@ -193,8 +193,8 @@ func TestEffectiveCeilingPrecedence(t *testing.T) {
 		if err != nil {
 			t.Fatalf("effectiveCeiling: %v", err)
 		}
-		if a.Profile == nil || a.Profile.Name != "walled" {
-			t.Fatalf("profile = %+v, want the assigned one", a.Profile)
+		if a.Unit == nil || a.Unit.Name != "walled" {
+			t.Fatalf("profile = %+v, want the assigned one", a.Unit)
 		}
 		if !a.Limits.DenyInteractive {
 			t.Error("limits did not ride along with the profile")
@@ -283,8 +283,8 @@ func TestEffectiveCeilingPrecedence(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%s: a user-tier match was refused: %v", tc.name, err)
 			}
-			if got.Profile == nil || got.Profile.Name != "bob-only" {
-				t.Errorf("%s: profile = %+v, want the user-tier assignment", tc.name, got.Profile)
+			if got.Unit == nil || got.Unit.Name != "bob-only" {
+				t.Errorf("%s: profile = %+v, want the user-tier assignment", tc.name, got.Unit)
 			}
 		}
 	})
@@ -312,15 +312,15 @@ func TestEffectiveCeilingPrecedence(t *testing.T) {
 		// would break "no assignment ⇒ byte-for-byte today" for every
 		// pre-upgrade session on every deployment that never adopted group
 		// profiles — which, on the day this ships, is all of them.
-		// Counterfactual: drop the HasGroupTierAssignments gate and every
+		// Counterfactual: drop the HasGroupTierMemberships gate and every
 		// pre-0.6 cookie 403s deployment-wide.
 		st := &capStore{govHasGroupTier: false}
 		got, err := govServer(st).effectiveCeiling(govMemberCtx(nil, false))
 		if err != nil {
 			t.Fatalf("a deployment with no group assignments refused a stale snapshot: %v", err)
 		}
-		if got.Profile != nil {
-			t.Errorf("profile = %+v, want the deployment ceiling", got.Profile)
+		if got.Unit != nil {
+			t.Errorf("profile = %+v, want the deployment ceiling", got.Unit)
 		}
 	})
 
@@ -330,7 +330,7 @@ func TestEffectiveCeilingPrecedence(t *testing.T) {
 	// errors and returns before the gate is ever asked, so the case named
 	// for the gate re-tests the resolver, and deleting the gate's error
 	// check leaves the entire package green.
-	t.Run("ResolveGovernanceProfile failing is an error, not a pass", func(t *testing.T) {
+	t.Run("ResolveGovernanceUnit failing is an error, not a pass", func(t *testing.T) {
 		boom := errors.New("pg: connection refused")
 		st := &capStore{govErr: boom}
 		if _, err := govServer(st).effectiveCeiling(govMemberCtx(nil, false)); !errors.Is(err, boom) {
@@ -339,7 +339,7 @@ func TestEffectiveCeilingPrecedence(t *testing.T) {
 
 		// And it must not be masked as a refusal. Deleting
 		// ceilingWithUnusableGroups' own resolve-error check does NOT fail-open
-		// — ceilingFromProfile re-checks the same error downstream, which is
+		// — ceilingFromUnit re-checks the same error downstream, which is
 		// why the arm above passes without it — but with a group-tier row
 		// present the flow reaches the stale refusal FIRST and answers
 		// groups_snapshot_stale: a 403 telling the human to sign in again for
@@ -355,7 +355,7 @@ func TestEffectiveCeilingPrecedence(t *testing.T) {
 		}
 	})
 
-	t.Run("HasGroupTierAssignments failing is an error, not a pass", func(t *testing.T) {
+	t.Run("HasGroupTierMemberships failing is an error, not a pass", func(t *testing.T) {
 		// The gate itself, reached at last: an unreadable "does a group row
 		// exist" is not evidence that none does. The fixture is the ordinary
 		// production shape this branch exists for — the resolver answers
@@ -527,8 +527,8 @@ func TestGovernanceRoutedReadSites(t *testing.T) {
 		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 			t.Fatalf("decode: %v; body=%s", err, w.Body.String())
 		}
-		if got.GovernanceProfileName != "walled" {
-			t.Errorf("governance_profile_name = %q, want %q — the member cannot see which profile bounds them", got.GovernanceProfileName, "walled")
+		if got.UnitName != "walled" {
+			t.Errorf("unit_name = %q, want %q — the member cannot see which profile bounds them", got.UnitName, "walled")
 		}
 		if slices.Contains(got.AllowedDomains, "wide.example") {
 			t.Errorf("allowed_domains = %v — the endpoint reported the DEPLOYMENT ceiling to a walled member", got.AllowedDomains)
@@ -546,7 +546,7 @@ func TestGovernanceRoutedReadSites(t *testing.T) {
 		if w.Code != http.StatusOK {
 			t.Fatalf("GET /policies/default (unassigned) = %d: %s", w.Code, w.Body.String())
 		}
-		if strings.Contains(w.Body.String(), "governance_profile_name") {
+		if strings.Contains(w.Body.String(), "unit_name") {
 			t.Errorf("an unassigned member's body carries the key: %s", w.Body.String())
 		}
 		if !strings.Contains(w.Body.String(), "wide.example") {

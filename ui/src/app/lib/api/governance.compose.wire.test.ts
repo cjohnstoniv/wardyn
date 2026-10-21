@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// 0.8.6 profile composition: the stored row grew base_profile_id, overlay and overlay_limits, and the
+// 0.8.6 profile composition: the stored row grew parent_id, overlay and overlay_limits, and the
 // admin responses grew `effective`. Full parity between the Go structs and the TS mirror, read as text
 // like runs.wire.fields.test.ts does: a Go rename of any of them would otherwise surface only as a
 // runtime `undefined` in the editor.
@@ -45,15 +45,15 @@ function tsInterfaceKeys(src: string, name: string): string[] {
 describe("source parity — composed governance profile wire types", () => {
   const root = repoRoot();
   const typesGo = readFileSync(join(root, "internal/types/governance.go"), "utf8");
-  const writeGo = readFileSync(join(root, "internal/api/governance_profile_write.go"), "utf8");
+  const writeGo = readFileSync(join(root, "internal/api/governance_unit_write.go"), "utf8");
   const governanceTs = readFileSync(join(root, "ui/src/app/lib/api/governance.ts"), "utf8");
 
-  it("GovernanceProfile: every Go tag is mirrored, plus the view's own `effective`", () => {
-    const goTags = goJSONTags(typesGo, "GovernanceProfile");
-    expect(goTags).toEqual(expect.arrayContaining(["base_profile_id", "overlay", "overlay_limits"]));
-    const view = goJSONTags(writeGo, "governanceProfileView");
+  it("GovernanceUnit: every Go tag is mirrored, plus the view's own `effective`", () => {
+    const goTags = goJSONTags(typesGo, "GovernanceUnit");
+    expect(goTags).toEqual(expect.arrayContaining(["parent_id", "overlay", "overlay_limits"]));
+    const view = goJSONTags(writeGo, "governanceUnitView");
     expect(view).toEqual(["effective"]);
-    const tsKeys = tsInterfaceKeys(governanceTs, "GovernanceProfile");
+    const tsKeys = tsInterfaceKeys(governanceTs, "GovernanceUnit");
     expect(new Set(tsKeys)).toEqual(new Set([...goTags, ...view]));
   });
 

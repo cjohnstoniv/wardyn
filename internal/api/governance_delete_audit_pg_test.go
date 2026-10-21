@@ -25,12 +25,12 @@ func TestPG_DirectDeletesRecordWhatTheyRemoved(t *testing.T) {
 	h := newHarness(t)
 	srv := New(baseTestConfig(h, pg))
 
-	loose, err := pg.UpsertGovernanceProfile(ctx, types.GovernanceProfile{Name: "loose", CreatedBy: "seed"})
+	loose, err := pg.UpsertGovernanceUnit(ctx, types.GovernanceUnit{Name: "loose", CreatedBy: "seed"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	asg, err := pg.UpsertGovernanceAssignment(ctx, types.GovernanceAssignment{
-		SubjectType: types.CapabilitySubjectUser, Subject: "alice@corp.example", ProfileID: loose.ID, Priority: 2,
+	asg, err := pg.UpsertGovernanceMembership(ctx, types.GovernanceMembership{
+		SubjectType: types.CapabilitySubjectUser, Subject: "alice@corp.example", UnitID: loose.ID, Priority: 2,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -61,15 +61,15 @@ func TestPG_DirectDeletesRecordWhatTheyRemoved(t *testing.T) {
 		return nil
 	}
 
-	got := delAudit("/api/v1/governance/assignments/"+asg.ID.String(), "governance.assignment.delete")
-	if got["subject_type"] != "user" || got["subject"] != "alice@corp.example" || got["profile_id"] != loose.ID.String() || got["priority"] != float64(2) {
+	got := delAudit("/api/v1/governance/memberships/"+asg.ID.String(), "governance.membership.delete")
+	if got["subject_type"] != "user" || got["subject"] != "alice@corp.example" || got["unit_id"] != loose.ID.String() || got["priority"] != float64(2) {
 		t.Errorf("assignment delete data = %v, want the subject, profile and priority it removed", got)
 	}
 	got = delAudit("/api/v1/permissions/grants/"+grant.ID.String(), "capability.grant.delete")
 	if got["subject"] != "bob@corp.example" || got["capability"] != capAgent || got["value"] != govAgentVal || got["effect"] != "deny" {
 		t.Errorf("grant delete data = %v, want the subject, capability, value and effect it removed", got)
 	}
-	got = delAudit("/api/v1/governance/profiles/"+loose.ID.String(), "governance.profile.delete")
+	got = delAudit("/api/v1/governance/units/"+loose.ID.String(), "governance.unit.delete")
 	if got["name"] != "loose" {
 		t.Errorf("profile delete data = %v, want the profile name", got)
 	}

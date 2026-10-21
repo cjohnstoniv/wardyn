@@ -150,17 +150,17 @@ func TestResolveEnvSecretGrants(t *testing.T) {
 // deployment upgrading into it.
 type envSecretCeilingStore struct {
 	store.Store
-	profile *types.GovernanceProfile
+	profile *types.GovernanceUnit
 	policy  types.RunPolicy
 }
 
-func (s *envSecretCeilingStore) ResolveGovernanceProfile(context.Context, []string, []string, string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+func (s *envSecretCeilingStore) ResolveGovernanceUnit(context.Context, []string, []string, string) (*types.GovernanceUnit, types.CapabilitySubjectType, error) {
 	if s.profile == nil {
 		return nil, types.CapabilitySubjectUser, store.ErrNotFound
 	}
 	return s.profile, types.CapabilitySubjectUser, nil
 }
-func (s *envSecretCeilingStore) HasGroupTierAssignments(context.Context) (bool, error) {
+func (s *envSecretCeilingStore) HasGroupTierMemberships(context.Context) (bool, error) {
 	return false, nil
 }
 func (s *envSecretCeilingStore) GetPolicy(context.Context, uuid.UUID) (types.RunPolicy, error) {
@@ -189,7 +189,7 @@ func (s *envSecretCeilingStore) ListCapabilityRestrictions(context.Context) (map
 	return map[string]map[string]bool{}, nil
 }
 
-// TestEnvSecretPosture_BindsWithoutAGovernanceAssignment is the pin for the
+// TestEnvSecretPosture_BindsWithoutAGovernanceMembership is the pin for the
 // admin-only posture at the seam that decides a real run, not at
 // filterUserGrants' front door.
 //
@@ -206,7 +206,7 @@ func (s *envSecretCeilingStore) ListCapabilityRestrictions(context.Context) (map
 // Four arms over the two axes that gate it — assignment (the bug) and the route
 // the spec arrived by — plus the opt-in arm, which is what stops the test from
 // being satisfied by deleting env_secret support outright.
-func TestEnvSecretPosture_BindsWithoutAGovernanceAssignment(t *testing.T) {
+func TestEnvSecretPosture_BindsWithoutAGovernanceMembership(t *testing.T) {
 	grant := envSecretGrant("CORP_API_TOKEN", "corp-api-key")
 	// The ceiling LISTS the pairing: "dropped even for a ceiling-listed
 	// pairing" is the documented claim, so a fixture the ceiling refuses on
@@ -231,7 +231,7 @@ func TestEnvSecretPosture_BindsWithoutAGovernanceAssignment(t *testing.T) {
 		policyID := uuid.New()
 		st := &envSecretCeilingStore{policy: types.RunPolicy{ID: policyID, Name: "wide", Spec: wide}}
 		if assigned {
-			st.profile = &types.GovernanceProfile{ID: uuid.New(), Name: "walled", Ceiling: ceiling}
+			st.profile = &types.GovernanceUnit{ID: uuid.New(), Name: "walled", Ceiling: ceiling}
 		}
 		cfg := baseTestConfig(h, st)
 		cfg.OIDC = &oidc.Authenticator{}

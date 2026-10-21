@@ -60,9 +60,9 @@ const (
 // Route is one routing rule. An absent Kinds or Profiles matches anything; the first matching route
 // wins.
 type Route struct {
-	Kinds    []types.ApprovalKind `json:"kinds"`
-	Profiles []string             `json:"profiles"` // governance profile ids, never names
-	Tiers    []Tier               `json:"tiers"`
+	Kinds []types.ApprovalKind `json:"kinds"`
+	Units []string             `json:"units"` // governance profile ids, never names
+	Tiers []Tier               `json:"tiers"`
 }
 
 // Tier is one escalation step: its channels are sent After the approval was raised, while it is
@@ -194,12 +194,12 @@ func (c *Config) validateRoute(i int) error {
 			return fmt.Errorf("approval notify config: route #%d: kinds names an unknown approval kind (value withheld)", i+1)
 		}
 	}
-	for j, p := range r.Profiles {
+	for j, p := range r.Units {
 		id, err := uuid.Parse(p)
 		if err != nil {
 			return fmt.Errorf("approval notify config: route #%d: profiles must be governance profile ids (uuids), not names (value withheld)", i+1)
 		}
-		r.Profiles[j] = id.String()
+		r.Units[j] = id.String()
 	}
 	if len(r.Tiers) == 0 || len(r.Tiers) > MaxTiers {
 		return fmt.Errorf("approval notify config: route #%d: tiers must hold 1 to %d tiers", i+1, MaxTiers)
@@ -263,7 +263,7 @@ func (c *Config) route(kind types.ApprovalKind, profileID *uuid.UUID) *Route {
 		if len(r.Kinds) > 0 && !slices.Contains(r.Kinds, kind) {
 			continue
 		}
-		if len(r.Profiles) > 0 && (profileID == nil || !slices.Contains(r.Profiles, profileID.String())) {
+		if len(r.Units) > 0 && (profileID == nil || !slices.Contains(r.Units, profileID.String())) {
 			continue
 		}
 		return r

@@ -57,16 +57,16 @@ const RecordingLockClass int32 = 0x57524344 // ASCII "WRCD"
 const RunCapLockClass int32 = 0x57525243 // ASCII "WRRC"
 
 // GovernanceGraphLockClass is the classid of the TRANSACTION-scoped two-argument lock
-// store.PG.WriteGovernanceProfile and DeleteGovernanceProfile take (second key 0): one write to the
+// store.PG.WriteGovernanceUnit and DeleteGovernanceUnit take (second key 0): one write to the
 // governance profile graph at a time, so the cycle and depth checks they make are the ones the
 // stored graph keeps.
 const GovernanceGraphLockClass int32 = 0x57474750 // ASCII "WGGP"
 
-// GovernanceAssignmentLockClass is the classid of the TRANSACTION-scoped two-argument lock keyed to one
+// GovernanceMembershipLockClass is the classid of the TRANSACTION-scoped two-argument lock keyed to one
 // governance assignment's natural key (hashtext of subject_type and subject). The assignment upsert and
 // the approval of a held assignment change both take it, so a create that was absent when it was
 // proposed cannot be overwritten by an upsert that landed in between.
-const GovernanceAssignmentLockClass int32 = 0x57474153 // ASCII "WGAS"
+const GovernanceMembershipLockClass int32 = 0x57474153 // ASCII "WGAS"
 
 // GovernanceTargetLockClass is the classid of the TRANSACTION-scoped two-argument lock keyed to one
 // target of a held governance change (hashtext of the kind and its natural key), for the kinds whose

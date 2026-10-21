@@ -127,18 +127,18 @@ type govCovStore struct {
 	listRolesErr error
 	userType     types.UserType
 	getTypeErr   error
-	profiles     []types.GovernanceProfile
+	profiles     []types.GovernanceUnit
 	deleteErr    error
 	writeErr     error
 	apiTokens    []types.APIToken
 	apiTokensErr error
 	apiToken     types.APIToken
 	deleted      []uuid.UUID
-	assignments  []types.GovernanceAssignment
+	assignments  []types.GovernanceMembership
 	assignErr    error
 }
 
-func (s *govCovStore) ListGovernanceAssignments(context.Context) ([]types.GovernanceAssignment, error) {
+func (s *govCovStore) ListGovernanceMemberships(context.Context) ([]types.GovernanceMembership, error) {
 	return s.assignments, s.assignErr
 }
 
@@ -193,25 +193,25 @@ func (s *govCovStore) GetUserType(context.Context, string) (types.UserType, erro
 	return s.userType, s.getTypeErr
 }
 
-func (s *govCovStore) ListGovernanceProfiles(context.Context) ([]types.GovernanceProfile, error) {
+func (s *govCovStore) ListGovernanceUnits(context.Context) ([]types.GovernanceUnit, error) {
 	return s.profiles, nil
 }
 
-// WriteGovernanceProfile runs build over the stored profiles and, like the real store, returns what
+// WriteGovernanceUnit runs build over the stored profiles and, like the real store, returns what
 // build returned without storing anything when build refuses.
-func (s *govCovStore) WriteGovernanceProfile(_ context.Context, id uuid.UUID, build store.GovernanceProfileBuild) (types.GovernanceProfile, error) {
+func (s *govCovStore) WriteGovernanceUnit(_ context.Context, id uuid.UUID, build store.GovernanceUnitBuild) (types.GovernanceUnit, error) {
 	p, err := build(s.profiles, s.assignments)
 	if err != nil {
-		return types.GovernanceProfile{}, err
+		return types.GovernanceUnit{}, err
 	}
 	if s.writeErr != nil {
-		return types.GovernanceProfile{}, s.writeErr
+		return types.GovernanceUnit{}, s.writeErr
 	}
 	p.ID = id
 	return p, nil
 }
 
-func (s *govCovStore) DeleteGovernanceProfile(_ context.Context, id uuid.UUID) error {
+func (s *govCovStore) DeleteGovernanceUnit(_ context.Context, id uuid.UUID) error {
 	s.deleted = append(s.deleted, id)
 	return s.deleteErr
 }

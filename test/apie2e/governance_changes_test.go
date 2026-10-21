@@ -133,18 +133,18 @@ func TestGovernanceChanges_SDKAgainstTheRealHandler(t *testing.T) {
 		}
 		return len(pending)
 	}
-	profileNamed := func(name string) (client.GovernanceProfile, bool) {
+	profileNamed := func(name string) (client.GovernanceUnit, bool) {
 		t.Helper()
 		doc, err := bob.GetGovernance(ctx)
 		if err != nil {
 			t.Fatalf("GetGovernance: %v", err)
 		}
-		for _, p := range doc.Profiles {
+		for _, p := range doc.Units {
 			if p.Name == name {
 				return p, true
 			}
 		}
-		return client.GovernanceProfile{}, false
+		return client.GovernanceUnit{}, false
 	}
 
 	// CREATE: a new profile and an assignment that names it by a file-local id. The profile write is
@@ -152,22 +152,22 @@ func TestGovernanceChanges_SDKAgainstTheRealHandler(t *testing.T) {
 	// sent, and in particular never sent with the zero id a mis-decoded 202 would give it.
 	fileID := uuid.New()
 	doc := client.GovernanceDocument{
-		Profiles: []client.GovernanceProfile{{ID: fileID, Name: "contractors", Ceiling: spec("pypi.org")}},
-		Assignments: []client.GovernanceAssignment{{
-			SubjectType: client.CapabilitySubjectUser, Subject: "dev@corp.example", ProfileID: fileID, Priority: 1,
+		Units: []client.GovernanceUnit{{ID: fileID, Name: "contractors", Ceiling: spec("pypi.org")}},
+		Memberships: []client.GovernanceMembership{{
+			SubjectType: client.CapabilitySubjectUser, Subject: "dev@corp.example", UnitID: fileID, Priority: 1,
 		}},
 	}
 	res, err := alice.ApplyGovernanceResult(ctx, doc, true)
 	if err != nil {
 		t.Fatalf("ApplyGovernanceResult(create): %v", err)
 	}
-	if len(res.Pending) != 1 || res.Pending[0].TargetKind != "governance_profile" || res.Pending[0].State != "pending" {
-		t.Fatalf("create: pending = %+v, want one pending governance_profile change", res.Pending)
+	if len(res.Pending) != 1 || res.Pending[0].TargetKind != "governance_unit" || res.Pending[0].State != "pending" {
+		t.Fatalf("create: pending = %+v, want one pending governance_unit change", res.Pending)
 	}
-	if len(res.Deferred) != 1 || res.Deferred[0].Profile != "contractors" || !res.PruneSkipped {
+	if len(res.Deferred) != 1 || res.Deferred[0].Unit != "contractors" || !res.PruneSkipped {
 		t.Fatalf("create: deferred = %+v prune_skipped = %v, want the assignment deferred and prune skipped", res.Deferred, res.PruneSkipped)
 	}
-	if n := rec.sent("POST /api/v1/governance/assignments"); n != 0 {
+	if n := rec.sent("POST /api/v1/governance/memberships"); n != 0 {
 		t.Fatalf("an assignment was sent %d time(s) while its profile was pending", n)
 	}
 	if n := rec.sent("DELETE "); n != 0 {
@@ -181,7 +181,7 @@ func TestGovernanceChanges_SDKAgainstTheRealHandler(t *testing.T) {
 	}
 	// The plain method keeps its signature and fails loudly with a typed error.
 	_, err = alice.ApplyGovernance(ctx, client.GovernanceDocument{
-		Profiles: []client.GovernanceProfile{{Name: "interns", Ceiling: spec("pypi.org")}},
+		Units: []client.GovernanceUnit{{Name: "interns", Ceiling: spec("pypi.org")}},
 	}, false)
 	var pend *client.PendingApprovalError
 	if !errors.As(err, &pend) || len(pend.Changes) != 1 {
@@ -215,27 +215,27 @@ func TestGovernanceChanges_SDKAgainstTheRealHandler(t *testing.T) {
 	// Now the profile exists, so the same document sends its assignment: held too (an assignment
 	// write is never exempt), and approved by the second human.
 	rec.reset()
-	doc.Profiles[0].ID = contractors.ID
-	doc.Assignments[0].ProfileID = contractors.ID
+	doc.Units[0].ID = contractors.ID
+	doc.Memberships[0].UnitID = contractors.ID
 	res, err = alice.ApplyGovernanceResult(ctx, doc, false)
-	if err != nil || len(res.Pending) != 1 || res.Pending[0].TargetKind != "governance_assignment" || len(res.Deferred) != 0 {
-		t.Fatalf("assignment apply = %+v, %v; want one pending governance_assignment change and nothing deferred", res, err)
+	if err != nil || len(res.Pending) != 1 || res.Pending[0].TargetKind != "governance_membership" || len(res.Deferred) != 0 {
+		t.Fatalf("assignment apply = %+v, %v; want one pending governance_membership change and nothing deferred", res, err)
 	}
-	if n := rec.sent("PUT /api/v1/governance/profiles/") + rec.sent("POST /api/v1/governance/profiles"); n != 0 {
+	if n := rec.sent("PUT /api/v1/governance/units/") + rec.sent("POST /api/v1/governance/units"); n != 0 {
 		t.Fatalf("an unchanged profile was written %d time(s)", n)
 	}
 	if n := approveAll(); n != 1 {
 		t.Fatalf("approved %d changes, want the assignment", n)
 	}
 	after, err := bob.GetGovernance(ctx)
-	if err != nil || len(after.Assignments) != 1 || after.Assignments[0].ProfileID != contractors.ID || after.Assignments[0].ProfileID == uuid.Nil {
-		t.Fatalf("the approved assignment = %+v, %v", after.Assignments, err)
+	if err != nil || len(after.Memberships) != 1 || after.Memberships[0].UnitID != contractors.ID || after.Memberships[0].UnitID == uuid.Nil {
+		t.Fatalf("the approved assignment = %+v, %v", after.Memberships, err)
 	}
 
 	// UPDATE, mixed: widen "contractors" (held) and narrow a second profile (exempt: applied at once).
 	// A second profile, proposed by bob and approved by alice: neither is the admin token.
 	if _, err := bob.ApplyGovernance(ctx, client.GovernanceDocument{
-		Profiles: []client.GovernanceProfile{{Name: "wide-set", Ceiling: spec("pypi.org", "github.com")}},
+		Units: []client.GovernanceUnit{{Name: "wide-set", Ceiling: spec("pypi.org", "github.com")}},
 	}, false); !errors.As(err, &pend) {
 		t.Fatalf("creating the second profile = %v, want pending", err)
 	}
@@ -249,12 +249,12 @@ func TestGovernanceChanges_SDKAgainstTheRealHandler(t *testing.T) {
 
 	rec.reset()
 	mixed := client.GovernanceDocument{
-		Profiles: []client.GovernanceProfile{
+		Units: []client.GovernanceUnit{
 			{Name: "contractors", Ceiling: spec("pypi.org", "github.com")}, // widening: held
 			{Name: "wide-set", Ceiling: spec("pypi.org")},                  // narrowing: applied
 		},
-		Assignments: []client.GovernanceAssignment{{
-			SubjectType: client.CapabilitySubjectUser, Subject: "dev@corp.example", ProfileID: contractors.ID, Priority: 1,
+		Memberships: []client.GovernanceMembership{{
+			SubjectType: client.CapabilitySubjectUser, Subject: "dev@corp.example", UnitID: contractors.ID, Priority: 1,
 		}},
 	}
 	res, err = alice.ApplyGovernanceResult(ctx, mixed, true)
@@ -284,24 +284,24 @@ func TestGovernanceChanges_SDKAgainstTheRealHandler(t *testing.T) {
 	// DELETE: prune. With nothing else pending it runs, and each delete it issues is itself held.
 	rec.reset()
 	res, err = alice.ApplyGovernanceResult(ctx, client.GovernanceDocument{
-		Profiles: []client.GovernanceProfile{{Name: "contractors", Ceiling: spec("pypi.org", "github.com")}},
+		Units: []client.GovernanceUnit{{Name: "contractors", Ceiling: spec("pypi.org", "github.com")}},
 	}, true)
 	if err != nil {
 		t.Fatalf("prune apply: %v", err)
 	}
-	if len(res.Pending) != 1 || res.Pending[0].TargetKind != "governance_assignment" || res.Pending[0].Op != "delete" || !res.PruneSkipped {
+	if len(res.Pending) != 1 || res.Pending[0].TargetKind != "governance_membership" || res.Pending[0].Op != "delete" || !res.PruneSkipped {
 		t.Fatalf("prune: %+v, want the assignment delete held and the rest of the prune skipped", res)
 	}
 	if n := approveAll(); n != 1 {
 		t.Fatalf("approved %d changes, want the assignment delete", n)
 	}
-	if doc, _ := bob.GetGovernance(ctx); len(doc.Assignments) != 0 {
-		t.Fatalf("the approved delete left %+v", doc.Assignments)
+	if doc, _ := bob.GetGovernance(ctx); len(doc.Memberships) != 0 {
+		t.Fatalf("the approved delete left %+v", doc.Memberships)
 	}
 	res, err = alice.ApplyGovernanceResult(ctx, client.GovernanceDocument{
-		Profiles: []client.GovernanceProfile{{Name: "contractors", Ceiling: spec("pypi.org", "github.com")}},
+		Units: []client.GovernanceUnit{{Name: "contractors", Ceiling: spec("pypi.org", "github.com")}},
 	}, true)
-	if err != nil || len(res.Pending) != 1 || res.Pending[0].TargetKind != "governance_profile" || res.Pending[0].Op != "delete" {
+	if err != nil || len(res.Pending) != 1 || res.Pending[0].TargetKind != "governance_unit" || res.Pending[0].Op != "delete" {
 		t.Fatalf("second prune = %+v, %v; want the wide-set profile delete held", res, err)
 	}
 	if n := approveAll(); n != 1 {
@@ -313,7 +313,7 @@ func TestGovernanceChanges_SDKAgainstTheRealHandler(t *testing.T) {
 
 	// The whole run never sent an assignment with the zero id.
 	var nilAssignments int
-	if err := h.pool.QueryRow(ctx, `SELECT count(*) FROM governance_assignments WHERE profile_id = $1`, uuid.Nil).Scan(&nilAssignments); err != nil || nilAssignments != 0 {
+	if err := h.pool.QueryRow(ctx, `SELECT count(*) FROM governance_memberships WHERE unit_id = $1`, uuid.Nil).Scan(&nilAssignments); err != nil || nilAssignments != 0 {
 		t.Fatalf("%d assignments carry the nil profile id (%v)", nilAssignments, err)
 	}
 	if h.pendingChanges() != 0 {

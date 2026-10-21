@@ -63,14 +63,14 @@ derives its role.
 - *Standalone and composed.*
   - A standalone profile replaces the deployment ceiling for its subjects, exactly as on 0.8.5.
   - A composed profile stores no ceiling of its own.
-  - It names a **base**, which is another profile (`base_profile_id`) or, when that is null, the deployment default, and an **overlay** (`overlay`, plus `overlay_limits` for the limits) that can only narrow that base.
+  - It names a **base**, which is another profile (`parent_id`) or, when that is null, the deployment default, and an **overlay** (`overlay`, plus `overlay_limits` for the limits) that can only narrow that base.
   - The ceiling that binds is `ApplyOverlay(effective(base), overlay)`, computed whenever authority is read and never stored, so a change to a base reaches every profile built on it.
   - A composed row's own `ceiling` and `limits` columns are `{}`, and the API adds a read-only `effective: {ceiling, limits}` beside them.
   - In `GET /api/v1/governance` a composed profile's own `ceiling` holds only what it stores, so read the resolved answer under `effective.ceiling`.
 - *Authoring.*
   - A profile names at most one base.
   - A chain is at most three profiles deep, counting the profile itself (a baseline, a division and a team), and a chain cannot loop.
-  - A write that would make a cycle or push any existing descendant past three is a `409` (`governance_profile_cycle`, `governance_profile_depth`).
+  - A write that would make a cycle or push any existing descendant past three is a `409` (`governance_unit_cycle`, `governance_unit_depth`).
   - An overlay lists only the fields it narrows.
   - An absent field inherits the base unchanged, and a present empty list is a value (`allowed_domains: []` narrows to no domains), except where empty would mean "everything" or "the default": `allowed_methods: []`, `azure_devops_capabilities: []` and `github_capabilities: []` are refused.
   - The write is strict.
@@ -78,7 +78,7 @@ derives its role.
     - a domain the base's `allowed_domains` does not cover under the proxy's own matcher, a method the base excludes,
     - `allow_all_egress` on a base without it, a grant the base's grants do not dominate.
   - Such an overlay is `400 governance_overlay_invalid`, and so is an overlay whose meet with the base would be empty rather than narrow.
-  - A `PUT` that omits `base_profile_id`, `overlay`, `overlay_limits` or `contact` keeps the stored value, so an older client cannot flatten a profile by accident.
+  - A `PUT` that omits `parent_id`, `overlay`, `overlay_limits` or `contact` keeps the stored value, so an older client cannot flatten a profile by accident.
   - Only an explicit `null` clears one, and `overlay: null` turns the profile back into a standalone one (the request must then carry a valid `ceiling`).
 - *Resolution, and what the meet does.*
   - Resolution reads the chain once and composes from the deployment down.
@@ -152,13 +152,13 @@ derives its role.
   - A member sees their own profile's name and contact, and the effective content: `GET /policies/default`, `/me` and denial bodies serve the profile that binds them, never the chain.
   - A base's name, overlay and contact are not disclosed, and a profile with no `contact` falls back to the site's `policy_help` rather than inherit a base's contact, since that would name the base.
   - Only an admin or a `security_admin` can read the graph (`GET /governance`).
-  - `GET /governance` returns every profile and every assignment. `/governance/profiles` and `/governance/profiles/{id}` take writes only, so a `GET` on either answers `405`.
+  - `GET /governance` returns every profile and every assignment. `/governance/units` and `/governance/units/{id}` take writes only, so a `GET` on either answers `405`.
   - When you write an example for a member, show the effective result and the profile's own name; do not describe the structure behind it.
 - *Deleting and unassigning.*
   - Deleting a profile requires unassigning it first, and a base that still has profiles built on it is a `409` naming them (never a silent widening).
 - *Exporting a graph (CLI and SDK).*
   - `wardyn governance get` exports a composed graph and `wardyn governance set` applies it to another install; the Go client's `ApplyGovernance` does the same ([`docs/sdk.md`](../sdk.md), "Composed profile graphs").
-  - Profiles are written bases first, every graph reference (`base_profile_id`, an assignment's `profile_id`) is remapped through the target's names to ids, the read-only `effective` view is never written back, and prune deletes descendants before bases.
+  - Profiles are written bases first, every graph reference (`parent_id`, an assignment's `unit_id`) is remapped through the target's names to ids, the read-only `effective` view is never written back, and prune deletes descendants before bases.
   - Under second-person approval (four-eyes) a write may return `202`: a child whose base is still pending, and an assignment whose profile is pending, are deferred and reported, not sent with a dangling id.
   - Apply again once the base is approved.
 - *Upgrade and rollback.*
@@ -194,7 +194,7 @@ Stated honestly: profiles narrow by omission — a profile that omits secret gra
   - Two limits bind past create, keyed on the profile the run was created under as it stands now, so a limit set later reaches runs already going (a deleted profile binds nothing).
   - `deny_interactive` also refuses a terminal attach (`wardyn attach` and the console terminal) and every SSH-gateway connection into any run under the profile, exec runs and the run's owner included.
   - (A super admin enters only a run of their own or one with no personal owner, so the exemption below reaches no person's run.)
-  - The attach is an `authz.denied` row (`governance_profile`, target `runs.attach`), the SSH refusal an `ssh.authenticate` failure naming the profile.
+  - The attach is an `authz.denied` row (`governance_unit`, target `runs.attach`), the SSH refusal an `ssh.authenticate` failure naming the profile.
   - The harness sign-in run is exempt, as it is at create.
   - `deny_ui_apps` strips `ui_apps` from a run at create, with a `clamp_warnings` sentence and a `dropped` row at target `runs.ui_apps`, and the UI gateway refuses a session into a run created under the profile.
   - An empty ceiling `ui_apps` is still no opinion, so a profile without the limit behaves as before.
@@ -211,7 +211,7 @@ Stated honestly: profiles narrow by omission — a profile that omits secret gra
   - `resolveRunAutonomy` ([`internal/api/runs_autonomy.go`](../../internal/api/runs_autonomy.go)) grades the run's real posture — egress reach graded on the same union `unionRunEgress` builds, secret power, and the already-enforced confinement class — against the assigned profile's rubric and folds every field the posture matches to its **minimum** level.
   - A nil rubric, or a posture none of the nine fields caps, binds nothing (today's behaviour, unchanged).
   - The same function backs both `POST /runs` and `POST /runs/preflight`, so the level Review shows is the level launch enforces.
-  - A run whose declared shape exceeds its resolved level is refused `governance_profile` (see [§ Every denial that isn't a 404](denials.md#every-denial-that-isnt-a-404) for its `target`s).
+  - A run whose declared shape exceeds its resolved level is refused `governance_unit` (see [§ Every denial that isn't a 404](denials.md#every-denial-that-isnt-a-404) for its `target`s).
   - A non-interactive run resolved to exactly `L1` is not refused when its agent has a tool-approval lane (claude-code): it launches with its tool approvals derived to `hold`, and the 201 carries a warning saying so.
   - Any other agent — codex-cli, a BYOA image — has no lane to derive a hold into, so the same run is refused with target `runs.agent`.
   - The resolution — level, posture, and every rubric field that tied at that level (`bound_by`) — rides the create audit row's `autonomy` field and is frozen on `agent_runs.autonomy_level`.

@@ -345,7 +345,7 @@ func TestMeDrivesCatalogue(t *testing.T) {
 func TestMeDrivesCatalogue_DoorAndStale(t *testing.T) {
 	ds := newDriveSet()
 	srv, st := multiDriveServer(ds.personal, ds.share)
-	st.profile = &types.GovernanceProfile{Name: "contractors", Limits: types.GovernanceLimits{DenyUserDrive: true}}
+	st.profile = &types.GovernanceUnit{Name: "contractors", Limits: types.GovernanceLimits{DenyUserDrive: true}}
 	get := func(ctx context.Context) client.MeDriveCatalogue {
 		w := httptest.NewRecorder()
 		srv.handleListMeDrives(w, httptest.NewRequest(http.MethodGet, "/api/v1/me/drives", nil).WithContext(ctx))
@@ -355,7 +355,7 @@ func TestMeDrivesCatalogue_DoorAndStale(t *testing.T) {
 		}
 		return out
 	}
-	if got := get(driveMemberCtx(nil, false)); got.DeniedByProfile != "contractors" || len(got.Drives) != 0 {
+	if got := get(driveMemberCtx(nil, false)); got.DeniedByUnit != "contractors" || len(got.Drives) != 0 {
 		t.Errorf("denied = %+v", got)
 	}
 	st.profile = nil

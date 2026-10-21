@@ -23,11 +23,11 @@ func TestApplyGovernance_FailureAfterAHeldWriteKeepsTheHeldChange(t *testing.T) 
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/governance":
 			writeJSON(w, http.StatusOK, client.GovernanceDocument{})
-		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/governance/profiles":
-			var req client.GovernanceProfileRequest
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/governance/units":
+			var req client.GovernanceUnitRequest
 			_ = json.NewDecoder(r.Body).Decode(&req)
 			if req.Name == "held" {
-				writeJSON(w, http.StatusAccepted, pendingChange("create", "governance_profile", req.Name))
+				writeJSON(w, http.StatusAccepted, pendingChange("create", "governance_unit", req.Name))
 				return
 			}
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "boom"})
@@ -38,7 +38,7 @@ func TestApplyGovernance_FailureAfterAHeldWriteKeepsTheHeldChange(t *testing.T) 
 	t.Cleanup(srv.Close)
 
 	_, err := client.New(srv.URL, "tok").ApplyGovernance(context.Background(), client.GovernanceDocument{
-		Profiles: []client.GovernanceProfile{{Name: "held"}, {Name: "broken"}}}, false)
+		Units: []client.GovernanceUnit{{Name: "held"}, {Name: "broken"}}}, false)
 	var pe *client.PendingApprovalError
 	if !errors.As(err, &pe) || len(pe.Changes) != 1 || pe.Changes[0].TargetKey != "held" {
 		t.Fatalf("ApplyGovernance err = %v, want the failure joined with the held change", err)
@@ -53,7 +53,7 @@ func TestApplyGovernance_FailureAfterAHeldWriteKeepsTheHeldChange(t *testing.T) 
 func TestGovernanceChange_KeepsTheDecision(t *testing.T) {
 	decided := time.Now().UTC().Truncate(time.Second)
 	at := func(d time.Duration) string { return decided.Add(d).Format(time.RFC3339) }
-	in := `{"id":"00000000-0000-0000-0000-000000000001","target_kind":"governance_profile","op":"create",` +
+	in := `{"id":"00000000-0000-0000-0000-000000000001","target_kind":"governance_unit","op":"create",` +
 		`"target_key":"p","state":"rejected","proposed_by":"alice","proposed_at":"` + at(-24*time.Hour) + `",` +
 		`"expires_at":"` + at(48*time.Hour) + `","diff":{},"decided_by":"bob","decided_at":"` + at(0) + `","reason":"too wide"}`
 	var c client.GovernanceChange

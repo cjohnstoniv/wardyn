@@ -102,7 +102,7 @@ func TestPreviousProxyRefusesWhatItCannotHonour(t *testing.T) {
 	adoGrant := base
 	adoGrant.ADOGrant = &proxy.ADOGrantConfig{Organization: "acme", Capabilities: []adoscope.Capability{adoscope.CapCodeRead}, Hosts: []string{"dev.azure.com"}}
 	attributed := base
-	attributed.Attribution = &policyref.Ref{Source: policyref.SourceProfile, Name: "Team A"}
+	attributed.Attribution = &policyref.Ref{Source: policyref.SourceUnit, Name: "Team A"}
 	adoCaps := base
 	adoCaps.Policy.AzureDevOpsCapabilities = []adoscope.Capability{adoscope.CapCodeRead}
 	ghCaps := base

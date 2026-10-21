@@ -131,7 +131,7 @@ func TestPolicyProvSource(t *testing.T) {
 		{policySourceRecord{Kind: policyKindStored, PolicyID: &id, Name: "ci"}, provSource{Kind: provKindPolicy, ID: id.String(), Name: "ci"}},
 		{policySourceRecord{Kind: policyKindDefault}, provSource{Kind: provKindPolicy, Name: "default"}},
 		{policySourceRecord{Kind: policyKindInline}, provSource{Kind: provKindPolicy, Name: "custom"}},
-		{policySourceRecord{Kind: policyKindProfile, Name: "walled"}, provSource{Kind: provKindPolicy, Name: "walled"}},
+		{policySourceRecord{Kind: policyKindUnit, Name: "walled"}, provSource{Kind: provKindPolicy, Name: "walled"}},
 	} {
 		if got := policyProvSource(tc.rec); got != tc.want {
 			t.Errorf("%+v -> %+v, want %+v", tc.rec, got, tc.want)

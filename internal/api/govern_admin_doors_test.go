@@ -54,15 +54,15 @@ func governAdminTokenRow() (string, types.APIToken) {
 }
 
 func TestGovernAdminRuns_TerminalAttachDoors(t *testing.T) {
-	profile := types.GovernanceProfile{ID: uuid.New(), Name: "ci", Limits: types.GovernanceLimits{DenyInteractive: true}}
+	profile := types.GovernanceUnit{ID: uuid.New(), Name: "ci", Limits: types.GovernanceLimits{DenyInteractive: true}}
 	run := func(createdBy string, operatorOwned bool) types.AgentRun {
 		return types.AgentRun{ID: uuid.New(), CreatedBy: createdBy, OperatorOwned: operatorOwned, State: types.RunRunning,
-			SandboxRef: "sbx-1", Task: "make test", GovernanceProfileID: &profile.ID}
+			SandboxRef: "sbx-1", Task: "make test", UnitID: &profile.ID}
 	}
 	raw, row := governAdminTokenRow()
 	setup := func(t *testing.T, on bool, r types.AgentRun) (*Server, *profileTokenStore) {
 		h := newHarness(t)
-		st := &profileTokenStore{profileListStore: &profileListStore{authzStore: newAuthzStore(), profiles: []types.GovernanceProfile{profile}}, raw: raw, row: row}
+		st := &profileTokenStore{profileListStore: &profileListStore{authzStore: newAuthzStore(), profiles: []types.GovernanceUnit{profile}}, raw: raw, row: row}
 		st.authzStore.runs[r.ID] = r
 		cfg := baseTestConfig(h, st)
 		cfg.Runner = &fakeRunner{}
@@ -73,7 +73,7 @@ func TestGovernAdminRuns_TerminalAttachDoors(t *testing.T) {
 	refused := func(w *httptest.ResponseRecorder) bool {
 		var body errorBody
 		_ = json.Unmarshal(w.Body.Bytes(), &body)
-		return w.Code == http.StatusForbidden && body.Reason == string(authz.ReasonGovernanceProfile)
+		return w.Code == http.StatusForbidden && body.Reason == string(authz.ReasonGovernanceUnit)
 	}
 	// Past the profile door a plain GET (no WebSocket handshake) is answered 426.
 	const attached = http.StatusUpgradeRequired
@@ -91,7 +91,7 @@ func TestGovernAdminRuns_TerminalAttachDoors(t *testing.T) {
 		own := run(governDoorAdmin, false)
 		srv, st := setup(t, true, own)
 		if w := ticketAttach(t, srv, st, own, governDoorAdmin); !refused(w) {
-			t.Errorf("a governed admin's own run, switch on: %d %s, want 403 governance_profile", w.Code, w.Body.String())
+			t.Errorf("a governed admin's own run, switch on: %d %s, want 403 governance_unit", w.Code, w.Body.String())
 		}
 		breakGlass := run("root", true)
 		srv, st = setup(t, true, breakGlass)
@@ -146,15 +146,15 @@ func bearerAttach(path func(types.AgentRun) string, bearer string) func(*testing
 }
 
 func TestGovernAdminRuns_SSHDoor(t *testing.T) {
-	profile := types.GovernanceProfile{ID: uuid.New(), Name: "ci", Limits: types.GovernanceLimits{DenyInteractive: true}}
+	profile := types.GovernanceUnit{ID: uuid.New(), Name: "ci", Limits: types.GovernanceLimits{DenyInteractive: true}}
 	now := time.Now()
 	priv, pub := mustSSHKeypair(t)
 	build := func(on bool) (*sshTestHarness, uuid.UUID, uuid.UUID) {
 		st := newSSHMemStore()
-		st.profiles = []types.GovernanceProfile{profile}
+		st.profiles = []types.GovernanceUnit{profile}
 		own, breakGlass := uuid.New(), uuid.New()
-		st.putRun(types.AgentRun{ID: own, CreatedBy: "root@example.com", State: types.RunRunning, SandboxRef: "sbx-1", GovernanceProfileID: &profile.ID})
-		st.putRun(types.AgentRun{ID: breakGlass, CreatedBy: "alice@example.com", OperatorOwned: true, State: types.RunRunning, SandboxRef: "sbx-2", GovernanceProfileID: &profile.ID})
+		st.putRun(types.AgentRun{ID: own, CreatedBy: "root@example.com", State: types.RunRunning, SandboxRef: "sbx-1", UnitID: &profile.ID})
+		st.putRun(types.AgentRun{ID: breakGlass, CreatedBy: "alice@example.com", OperatorOwned: true, State: types.RunRunning, SandboxRef: "sbx-2", UnitID: &profile.ID})
 		st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(pub), Principal: "root@example.com",
 			PublicKey: string(ssh.MarshalAuthorizedKey(pub)), Role: oidc.RoleAdmin, RoleCheckedAt: &now})
 		return newSSHTestHarness(t, st, &sshFakeRunner{}, func(c *Config) { c.GovernAdminRuns = on }), own, breakGlass
@@ -189,12 +189,12 @@ func TestGovernAdminRuns_SSHDoor(t *testing.T) {
 }
 
 func TestGovernAdminRuns_UIGatewayDoor(t *testing.T) {
-	profile := types.GovernanceProfile{ID: uuid.New(), Name: "no-ui", Limits: types.GovernanceLimits{DenyUIApps: true}}
+	profile := types.GovernanceUnit{ID: uuid.New(), Name: "no-ui", Limits: types.GovernanceLimits{DenyUIApps: true}}
 	enter := func(t *testing.T, on, operatorOwned bool) *httptest.ResponseRecorder {
 		h := newUIHarness(t, okBackend())
 		h.srv.cfg.GovernAdminRuns = on
-		h.store.profiles = []types.GovernanceProfile{profile}
-		h.run.GovernanceProfileID = &profile.ID
+		h.store.profiles = []types.GovernanceUnit{profile}
+		h.run.UnitID = &profile.ID
 		h.run.OperatorOwned = operatorOwned
 		h.store.putRun(h.run)
 		return h.enter(url.Values{"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleAdmin)}})

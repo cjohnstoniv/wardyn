@@ -48,8 +48,8 @@ func TestPG_CeilingAndDriveRankOneWay(t *testing.T) {
 		{"all", types.CapabilitySubjectAll, "", 0, "aa-all-"},
 	}
 	for _, r := range rows {
-		p := seedGovernanceProfile(t, st, r.name+uniq)
-		seedGovernanceAssignment(t, st, types.GovernanceAssignment{SubjectType: r.st, Subject: r.subj, ProfileID: p.ID, Priority: r.prio})
+		p := seedGovernanceUnit(t, st, r.name+uniq)
+		seedGovernanceMembership(t, st, types.GovernanceMembership{SubjectType: r.st, Subject: r.subj, UnitID: p.ID, Priority: r.prio})
 		d := seedUserDrive(t, st, r.name+uniq)
 		seedUserDriveGrant(t, st, types.UserDriveGrant{SubjectType: r.st, Subject: r.subj, DriveID: d.ID, Priority: r.prio})
 	}
@@ -81,7 +81,7 @@ func TestPG_CeilingAndDriveRankOneWay(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			p, ptier, err := st.ResolveGovernanceProfile(ctx, tc.users, tc.groups, tc.utype)
+			p, ptier, err := st.ResolveGovernanceUnit(ctx, tc.users, tc.groups, tc.utype)
 			if err != nil {
 				t.Fatalf("ceiling: %v", err)
 			}
@@ -100,7 +100,7 @@ func TestPG_CeilingAndDriveRankOneWay(t *testing.T) {
 
 	t.Run("group-tier gate sees both tables", func(t *testing.T) {
 		for name, has := range map[string]func(context.Context) (bool, error){
-			"assignments": st.HasGroupTierAssignments, "drive grants": st.HasGroupTierDriveGrants,
+			"assignments": st.HasGroupTierMemberships, "drive grants": st.HasGroupTierDriveGrants,
 		} {
 			if ok, err := has(ctx); err != nil || !ok {
 				t.Errorf("group-tier %s = (%v, %v), want true", name, ok, err)
@@ -110,9 +110,9 @@ func TestPG_CeilingAndDriveRankOneWay(t *testing.T) {
 
 	t.Run("no match is ErrNotFound on both", func(t *testing.T) {
 		// Remove the all rows this test seeded, then ask for nobody.
-		for _, a := range mustList(t, st.ListGovernanceAssignments) {
+		for _, a := range mustList(t, st.ListGovernanceMemberships) {
 			if a.SubjectType == types.CapabilitySubjectAll {
-				if _, err := st.DeleteGovernanceAssignment(ctx, a.ID); err != nil {
+				if _, err := st.DeleteGovernanceMembership(ctx, a.ID); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -124,7 +124,7 @@ func TestPG_CeilingAndDriveRankOneWay(t *testing.T) {
 				}
 			}
 		}
-		if _, _, err := st.ResolveGovernanceProfile(ctx, []string{"nobody-" + uniq}, nil, ""); !errors.Is(err, store.ErrNotFound) {
+		if _, _, err := st.ResolveGovernanceUnit(ctx, []string{"nobody-" + uniq}, nil, ""); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("ceiling err = %v, want ErrNotFound", err)
 		}
 		if _, _, _, err := st.ResolveUserDrive(ctx, []string{"nobody-" + uniq}, nil, ""); !errors.Is(err, store.ErrNotFound) {

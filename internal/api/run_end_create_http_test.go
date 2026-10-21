@@ -43,7 +43,7 @@ type endCreate struct {
 
 // createWithEnd posts a create as a member under profile and returns what came
 // back, the stored run and the audit rows.
-func createWithEnd(t *testing.T, profile *types.GovernanceProfile, maxAge time.Duration, body string) endCreate {
+func createWithEnd(t *testing.T, profile *types.GovernanceUnit, maxAge time.Duration, body string) endCreate {
 	t.Helper()
 	srv, st := runLimitsFixture(t, assignedStore(profile))
 	srv.cfg.AgentImages = composeAgentImages
@@ -130,7 +130,7 @@ func TestCreateEnd_ARefusalWritesNoRowAndNoAudit(t *testing.T) {
 	gated := limitsProfile("gated", types.GovernanceLimits{RunLimits: types.RunLimits{MaxEndAheadSec: 7 * secDay, AllowNoEnd: true}})
 	for _, tc := range []struct {
 		name    string
-		profile *types.GovernanceProfile
+		profile *types.GovernanceUnit
 		extra   string
 		code    int
 		reason  string
@@ -258,7 +258,7 @@ func TestPatchEnd_PastTheMaxLifetimeIsRefused(t *testing.T) {
 
 // endAtEveryDoor posts body to create, preflight and the policy preview as a member under profile with
 // WARDYN_RUN_MAX_AGE at maxAge, and returns each door's status and the created run.
-func endAtEveryDoor(t *testing.T, profile *types.GovernanceProfile, maxAge time.Duration, body string) (map[string]int, types.AgentRun) {
+func endAtEveryDoor(t *testing.T, profile *types.GovernanceUnit, maxAge time.Duration, body string) (map[string]int, types.AgentRun) {
 	t.Helper()
 	codes := map[string]int{}
 	for _, door := range []string{"/api/v1/runs/preflight", "/api/v1/runs/policy-preview"} {

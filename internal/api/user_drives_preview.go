@@ -126,7 +126,7 @@ func drivePreviewWarning(tmpl types.HomeTemplate, users []string) string {
 //     is about a member: with drives off nobody was denied, so a 403 here would
 //     tell an admin a profile refused somebody it did not.
 //  1. THE DOOR, resolved for the PREVIEWED claims rather than for the admin
-//     doing the previewing (driveDoorShut over ResolveGovernanceProfile).
+//     doing the previewing (driveDoorShut over ResolveGovernanceUnit).
 //     seedRequestDrives runs it after the switch and before the resolver, so a
 //     403 beats a 500 or an allocation-shaped 422; so does this.
 //  2. The unanswerable group tier. A request that carries no `groups` at all
@@ -298,11 +298,11 @@ func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) 
 // ceiling is resolved for the PREVIEWED claims and only the shared predicate
 // (driveDoorShut) is asked.
 //
-// SAME BYTES as the launch refusal (driveDeniedByProfileMsg): an admin checking
+// SAME BYTES as the launch refusal (driveDeniedByUnitMsg): an admin checking
 // why a member cannot mount a drive should read the sentence that member reads,
 // not a paraphrase they then have to match up with a support ticket.
 //
-// A store failure is a 500 and never "the door is open" — ceilingFromProfile's
+// A store failure is a 500 and never "the door is open" — ceilingFromUnit's
 // own ordering rule, reused rather than restated: a resolve that failed also
 // returns a nil profile, and treating that as no-door would fail open on
 // exactly the deployment whose database is unhappy.
@@ -336,15 +336,15 @@ func (s *Server) drivePreviewDoorIsOpen(w http.ResponseWriter, r *http.Request, 
 	if len(groups) == 0 {
 		ceiling, err = s.ceilingWithUnusableGroups(r.Context(), users, userType, deployment)
 	} else {
-		p, _, rerr := s.resolveAssignedProfile(r.Context(), users, groups, userType)
-		ceiling, err = s.ceilingFromProfile(r.Context(), p, rerr, deployment)
+		p, _, rerr := s.resolveAssignedUnit(r.Context(), users, groups, userType)
+		ceiling, err = s.ceilingFromUnit(r.Context(), p, rerr, deployment)
 	}
 	if err != nil {
 		writeCeilingError(w, r, err)
 		return governanceCeiling{}, false
 	}
 	if name, shut := driveDoorShut(ceiling); shut {
-		writeErrorReason(w, http.StatusForbidden, reasonUserDriveDeniedByProfile, driveDeniedByProfileMsg(name))
+		writeErrorReason(w, http.StatusForbidden, reasonUserDriveDeniedByUnit, driveDeniedByUnitMsg(name))
 		return governanceCeiling{}, false
 	}
 	return ceiling, true

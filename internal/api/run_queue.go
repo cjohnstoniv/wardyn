@@ -78,7 +78,7 @@ type queuedLaunch struct {
 	// repo seeded onto it, say), so the start folds it afresh as the owner.
 	Request json.RawMessage `json:"request"`
 	// ProfileID is the governance profile the owner resolved to at launch; nil for none.
-	ProfileID *uuid.UUID `json:"profile_id,omitempty"`
+	UnitID *uuid.UUID `json:"unit_id,omitempty"`
 	// ProviderID is the model provider the launch chose; the start re-resolves this one, never another.
 	ProviderID string `json:"provider_id,omitempty"`
 	// ConfinementDefault says who chose the class of a launch that named none (the organisation or the
@@ -286,9 +286,9 @@ func (q queuedCreate) entry(s *Server, ctx context.Context, waitSec int) (store.
 		Barrier: q.f.enforced, Drives: len(q.f.drives) > 0, NoLocal: q.f.place.noLocal,
 	}
 	launch.Repos = append(launch.Repos, repoLocatorsOf(q.f.spec.WorkspaceRepos)...)
-	if q.f.ceiling.Profile != nil {
-		id := q.f.ceiling.Profile.ID
-		launch.ProfileID = &id
+	if q.f.ceiling.Unit != nil {
+		id := q.f.ceiling.Unit.ID
+		launch.UnitID = &id
 	}
 	raw, err := json.Marshal(launch)
 	if err != nil {

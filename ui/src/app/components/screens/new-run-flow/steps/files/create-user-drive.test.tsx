@@ -125,7 +125,7 @@ describe("the create door", () => {
   });
 
   it.each<[MemberDriveCreateReason, string]>([
-    ["denied_by_profile", NR_FILES.CREATE_DENIED("Contractors")],
+    ["denied_by_unit", NR_FILES.CREATE_DENIED("Contractors")],
     ["limit_reached", NR_FILES.CREATE_LIMIT(3, 3)],
     ["unsupported", NR_FILES.CREATE_UNSUPPORTED],
     ["delete_unavailable", NR_FILES.CREATE_NO_DELETE],

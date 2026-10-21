@@ -29,7 +29,7 @@ type pvStore struct {
 	*govEscapeStore
 	audit    *recRecorder
 	grants   []types.CredentialGrant
-	profiles []types.GovernanceProfile
+	profiles []types.GovernanceUnit
 }
 
 func (s *pvStore) QueryAuditEvents(_ context.Context, runID uuid.UUID, _ int) ([]types.AuditEvent, error) {
@@ -46,7 +46,7 @@ func (s *pvStore) ListGrantsByRun(context.Context, uuid.UUID) ([]types.Credentia
 	return s.grants, nil
 }
 
-func (s *pvStore) ListGovernanceProfiles(context.Context) ([]types.GovernanceProfile, error) {
+func (s *pvStore) ListGovernanceUnits(context.Context) ([]types.GovernanceUnit, error) {
 	return s.profiles, nil
 }
 
@@ -166,7 +166,7 @@ func TestRunPolicyView_SourceKinds(t *testing.T) {
 	polID := uuid.New()
 	st.policies[polID] = types.RunPolicy{ID: polID, Name: "ci-now", Spec: base}
 	profID := uuid.New()
-	st.profiles = []types.GovernanceProfile{{ID: profID, Name: "walled"}}
+	st.profiles = []types.GovernanceUnit{{ID: profID, Name: "walled"}}
 
 	cases := []struct {
 		name     string
@@ -179,11 +179,11 @@ func TestRunPolicyView_SourceKinds(t *testing.T) {
 		{"recorded stored", nil, pvCreate(&polID, pvSource(policyKindStored, &polID, "ci-at-launch", false, base)), policyKindStored, "ci-at-launch", true},
 		{"recorded inline", nil, pvCreate(nil, pvSource(policyKindInline, nil, "", true, base)), policyKindInline, "", true},
 		{"recorded default", nil, pvCreate(nil, pvSource(policyKindDefault, nil, "", false, base)), policyKindDefault, "", true},
-		{"recorded profile", nil, pvCreate(nil, pvSource(policyKindProfile, nil, "walled", true, base)), policyKindProfile, "walled", true},
+		{"recorded profile", nil, pvCreate(nil, pvSource(policyKindUnit, nil, "walled", true, base)), policyKindUnit, "walled", true},
 		{"older stored takes the live name", nil, pvCreate(&polID, nil), policyKindStored, "ci-now", false},
 		{"older inline", nil, pvCreate(nil, nil), policyKindInline, "", false},
-		{"older profile", func(r *types.AgentRun) { r.GovernanceProfileID = &profID },
-			pvRow{action: "run.create", data: map[string]any{"inline_policy": false}}, policyKindProfile, "walled", false},
+		{"older profile", func(r *types.AgentRun) { r.UnitID = &profID },
+			pvRow{action: "run.create", data: map[string]any{"inline_policy": false}}, policyKindUnit, "walled", false},
 		{"older default", nil, pvRow{action: "run.create", data: map[string]any{"inline_policy": false}}, policyKindDefault, "", false},
 		{"a lane that writes its own row", nil, pvRow{action: "run.create", data: map[string]any{"agent": "claude-code"}}, policyKindUnknown, "", false},
 	}
@@ -674,11 +674,11 @@ func TestExplainRunPolicy_OneCasePerCause(t *testing.T) {
 			causeGitBroker, fieldDenied, []string{"github.com"}, nil},
 		{"profile: denied_added", ptr(pvSpec(nil, nil)), pvSpec(nil, deleted("corp.example")),
 			evidenceOf(func(e *auditEvidence) { e.profileDenied["corp.example"] = true; e.profile = "walled" }), types.SiteConfig{}, types.AgentRun{},
-			causeProfile, fieldDenied, []string{"corp.example"}, nil},
+			causeUnit, fieldDenied, []string{"corp.example"}, nil},
 		{"profile: disk clamped to its max", ptr(pvSpec(nil, func(s *types.RunPolicySpec) { s.Resources = &types.ResourceLimits{DiskMiB: 9000} })),
 			pvSpec(nil, func(s *types.RunPolicySpec) { s.Resources = &types.ResourceLimits{DiskMiB: 4096} }),
 			evidenceOf(func(e *auditEvidence) { e.profile, e.profileMaxDisk = "walled", 4096 }), types.SiteConfig{}, types.AgentRun{},
-			causeProfile, fieldDisk, []string{"4096"}, []string{"9000"}},
+			causeUnit, fieldDisk, []string{"4096"}, []string{"9000"}},
 		{"org_disk: filled from the default", ptr(pvSpec(nil, nil)),
 			pvSpec(nil, func(s *types.RunPolicySpec) { s.Resources = &types.ResourceLimits{DiskMiB: 8192} }),
 			evidenceOf(func(e *auditEvidence) { e.diskFilled = true }), types.SiteConfig{}, types.AgentRun{},
@@ -716,8 +716,8 @@ func TestExplainRunPolicy_OneCasePerCause(t *testing.T) {
 			if tc.cause == causeRestart && (c.At == nil || !c.At.Equal(restartAt)) {
 				t.Errorf("restart change at = %v, want %v", c.At, restartAt)
 			}
-			if tc.cause == causeProfile && tc.field == fieldDenied && c.Profile != "walled" {
-				t.Errorf("profile = %q, want walled", c.Profile)
+			if tc.cause == causeUnit && tc.field == fieldDenied && c.Unit != "walled" {
+				t.Errorf("profile = %q, want walled", c.Unit)
 			}
 			for _, other := range got {
 				if other.Cause != tc.cause && other.Cause == causeLaunch && tc.cause != causeLaunch {
@@ -735,7 +735,7 @@ func TestExplainRunPolicy_RuleOrder(t *testing.T) {
 	t.Run("(a) no git grants and a profile that walls off github.com reads profile", func(t *testing.T) {
 		got := explainRunPolicy(ptr(pvSpec(nil, nil)), pvSpec(nil, deny),
 			evidenceOf(func(e *auditEvidence) { e.profileDenied["github.com"] = true; e.profile = "walled" }), types.SiteConfig{}, types.AgentRun{})
-		if c := pvChange(got, causeProfile, fieldDenied); c == nil || pvChange(got, causeGitBroker, fieldDenied) != nil {
+		if c := pvChange(got, causeUnit, fieldDenied); c == nil || pvChange(got, causeGitBroker, fieldDenied) != nil {
 			t.Errorf("changes = %+v, want profile and no git_broker", got)
 		}
 	})
@@ -746,7 +746,7 @@ func TestExplainRunPolicy_RuleOrder(t *testing.T) {
 				e.profile = "walled"
 				e.legacyGitBroker = true
 			}), types.SiteConfig{}, types.AgentRun{})
-		if pvChange(got, causeProfile, fieldDenied) == nil || pvChange(got, causeGitBroker, fieldDenied) != nil {
+		if pvChange(got, causeUnit, fieldDenied) == nil || pvChange(got, causeGitBroker, fieldDenied) != nil {
 			t.Errorf("changes = %+v, want profile and no git_broker", got)
 		}
 	})

@@ -53,7 +53,7 @@ test.describe("governance — a quota-only profile is not 'None'", () => {
       [capped, { max_concurrent_runs: 3 }],
       [free, {}],
     ] as const) {
-      const res = await page.request.post("/api/v1/governance/profiles", {
+      const res = await page.request.post("/api/v1/governance/units", {
         headers: auth,
         data: { name, ceiling: YOLO_CEILING, limits },
       });
@@ -86,7 +86,7 @@ test.describe("governance — a profile bounding only a placement, a cap or the 
       [placement, { deny_placements: ["remote"] }],
       [caps, { max_memory_mib: 2048, deny_ui_apps: true, max_ephemeral_disk_mib: 4096 }],
     ] as const) {
-      const res = await page.request.post("/api/v1/governance/profiles", {
+      const res = await page.request.post("/api/v1/governance/units", {
         headers: auth,
         data: { name, ceiling: YOLO_CEILING, limits },
       });
@@ -145,7 +145,7 @@ test.describe("governance — the two storage ceilings round-trip through the ed
     // The stored row, read back from the server — not local component state.
     const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
     const snap = await (await page.request.get("/api/v1/governance", { headers: auth })).json();
-    const stored = snap.profiles.find((p: { name: string }) => p.name === name);
+    const stored = snap.units.find((p: { name: string }) => p.name === name);
     expect(stored, `profile ${name} missing — did the save land?`).toBeTruthy();
     expect(stored.limits.max_ephemeral_disk_mib).toBe(4096);
     expect(stored.limits.max_drive_size_mib).toBe(102400);
@@ -166,7 +166,7 @@ test.describe("governance — the two storage ceilings round-trip through the ed
     await expect(page.getByTestId("governance-profile-editor")).toHaveCount(0);
 
     const snap2 = await (await page.request.get("/api/v1/governance", { headers: auth })).json();
-    const cleared = snap2.profiles.find((p: { name: string }) => p.name === name);
+    const cleared = snap2.units.find((p: { name: string }) => p.name === name);
     expect(cleared.limits.max_ephemeral_disk_mib ?? 0).toBe(0);
     expect(cleared.limits.max_drive_size_mib ?? 0).toBe(0);
   });
@@ -184,7 +184,7 @@ test.describe("governance — the run limits round-trip through the editor (RL-1
     const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
     const stored = async () => {
       const snap = await (await page.request.get("/api/v1/governance", { headers: auth })).json();
-      const p = snap.profiles.find((x: { name: string }) => x.name === name);
+      const p = snap.units.find((x: { name: string }) => x.name === name);
       expect(p, `profile ${name} missing — did the save land?`).toBeTruthy();
       return p.limits;
     };
@@ -266,18 +266,18 @@ test.describe("governance — a composed profile set to None folds in what binds
     const suffix = randomUUID().slice(0, 8);
     const baseName = `fold-base-${suffix}`;
     const childName = `fold-child-${suffix}`;
-    const base = await page.request.post("/api/v1/governance/profiles", {
+    const base = await page.request.post("/api/v1/governance/units", {
       headers: auth,
       data: { name: baseName, ceiling: YOLO_CEILING, limits: { max_concurrent_runs: 5 } },
     });
     expect(base.status(), await base.text()).toBe(201);
-    const baseId = (await base.json()).profile.id as string;
-    const child = await page.request.post("/api/v1/governance/profiles", {
+    const baseId = (await base.json()).unit.id as string;
+    const child = await page.request.post("/api/v1/governance/units", {
       headers: auth,
-      data: { name: childName, base_profile_id: baseId, overlay: { allowed_domains: ["api.anthropic.com"] }, overlay_limits: { max_concurrent_runs: 2 } },
+      data: { name: childName, parent_id: baseId, overlay: { allowed_domains: ["api.anthropic.com"] }, overlay_limits: { max_concurrent_runs: 2 } },
     });
     expect(child.status(), await child.text()).toBe(201);
-    const childId = (await child.json()).profile.id as string;
+    const childId = (await child.json()).unit.id as string;
     try {
       await gotoConsole(page, "admin");
       await navTo(page, "Governance");
@@ -288,8 +288,8 @@ test.describe("governance — a composed profile set to None folds in what binds
       await page.getByRole("option", { name: GOV.BASE_NONE }).click();
       await expect(editor.getByTestId("governance-limits-folded")).toHaveText(GOV.PROFILE_FOLDED);
     } finally {
-      await page.request.delete(`/api/v1/governance/profiles/${childId}`, { headers: auth });
-      await page.request.delete(`/api/v1/governance/profiles/${baseId}`, { headers: auth });
+      await page.request.delete(`/api/v1/governance/units/${childId}`, { headers: auth });
+      await page.request.delete(`/api/v1/governance/units/${baseId}`, { headers: auth });
     }
   });
 });

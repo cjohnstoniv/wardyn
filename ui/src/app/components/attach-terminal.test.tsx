@@ -342,7 +342,7 @@ describe("AttachTerminal — role-aware attach", () => {
   // deny-f4: the refused state carries the run's own policy contact, from
   // GET /runs/{id}, beside the sentence it never rewords.
   it("refused state shows the Request access remedy from the run's policy, and none without one", async () => {
-    const policy = { source: "profile", owner: "Platform Security", request_url: "https://example.com/access" };
+    const policy = { source: "unit", owner: "Platform Security", request_url: "https://example.com/access" };
     const { unmount } = render(
       <OperatorProvider operator={false} principal="alice@example.com">
         <AttachTerminal runId="run_1" createdBy="bob@example.com" policy={policy} />

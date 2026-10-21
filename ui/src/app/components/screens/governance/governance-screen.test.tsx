@@ -75,7 +75,7 @@ vi.mock("../../../lib/api/user-types", () => ({
 
 import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import type { DirectoryEntry } from "../../../lib/api/directory";
-import type { GovernanceProfile, GovernanceSnapshot } from "../../../lib/api/governance";
+import type { GovernanceUnit, GovernanceSnapshot } from "../../../lib/api/governance";
 import { CHANGES, DIRECTORY, GOVERNANCE as GOV } from "../../../lib/governance-copy";
 import { ACCESS_STATE, PEOPLE, PREVIEW } from "../../../lib/people-access-copy";
 import { PERM } from "../../../lib/permissions-copy";
@@ -95,7 +95,7 @@ const SPEC: RunPolicySpec = {
   min_confinement_class: "CC2",
 };
 
-function profile(over: Partial<GovernanceProfile> = {}): GovernanceProfile {
+function profile(over: Partial<GovernanceUnit> = {}): GovernanceUnit {
   return {
     id: "p1",
     name: "Greenfield contractors",
@@ -118,7 +118,7 @@ function snapshot(over: Partial<GovernanceSnapshot> = {}): GovernanceSnapshot {
         id: "a1",
         subject_type: "group",
         subject: "wardyn.platform",
-        profile_id: PLATFORM.id,
+        unit_id: PLATFORM.id,
         priority: 10,
         created_at: aheadByHours(-1),
       },
@@ -436,7 +436,7 @@ describe("GovernanceScreen — assignments and the resolved preview", () => {
             id: "a2",
             subject_type: "user",
             subject: "alice@corp.example",
-            profile_id: GREENFIELD.id,
+            unit_id: GREENFIELD.id,
             priority: 7,
             created_at: aheadByHours(-1),
           },
@@ -494,7 +494,7 @@ describe("GovernanceScreen — assignments and the resolved preview", () => {
     expect(upsertAssignmentMock).toHaveBeenCalledWith({
       subject_type: "group",
       subject: GROUP.claim_value,
-      profile_id: PLATFORM.id,
+      unit_id: PLATFORM.id,
       priority: 0,
     });
   });
@@ -505,7 +505,7 @@ describe("GovernanceScreen — assignments and the resolved preview", () => {
     renderScreen(
       snapshot({
         assignments: [
-          { id: "a2", subject_type: "user_type", subject: "portfolio-manager", profile_id: PLATFORM.id, priority: 0, created_at: aheadByHours(-1) },
+          { id: "a2", subject_type: "user_type", subject: "portfolio-manager", unit_id: PLATFORM.id, priority: 0, created_at: aheadByHours(-1) },
         ],
       }),
     );
@@ -528,14 +528,14 @@ describe("GovernanceScreen — assignments and the resolved preview", () => {
     await userEvent.click(screen.getByRole("button", { name: GOV.ADD_CTA }));
 
     expect(upsertAssignmentMock).toHaveBeenCalledWith(
-      expect.objectContaining({ subject_type: "user_type", subject: "portfolio-manager", profile_id: PLATFORM.id }),
+      expect.objectContaining({ subject_type: "user_type", subject: "portfolio-manager", unit_id: PLATFORM.id }),
     );
   });
 
   it("the preview takes CLAIMS (the People step's own field) and names the matching row's tier", async () => {
     previewGovernanceMock.mockResolvedValue({
-      profile_id: PLATFORM.id,
-      profile_name: PLATFORM.name,
+      unit_id: PLATFORM.id,
+      unit_name: PLATFORM.name,
       matched_tier: "group",
     });
     renderScreen();
@@ -554,7 +554,7 @@ describe("GovernanceScreen — assignments and the resolved preview", () => {
   // THE thing that replaced a client-side ORDER BY: this screen ships claims
   // and renders an answer. The precedence itself is pinned server-side, against
   // a real Postgres, in internal/api/governance_preview_test.go — where every
-  // case is asserted equal to a direct ResolveGovernanceProfile call.
+  // case is asserted equal to a direct ResolveGovernanceUnit call.
   //
   // What is still THIS file's to pin is the one mapping the client owns: a
   // kind-less textarea onto two typed wire lists. Every line reaches BOTH (the
@@ -596,17 +596,17 @@ describe("GovernanceScreen — assignments and the resolved preview", () => {
 });
 
 // No precedence table lives here, deliberately: a TypeScript mirror of
-// ResolveGovernanceProfile's ORDER BY would be a second implementation of the
-// answer. The preview POSTs /governance/preview and the server runs the real
+// ResolveGovernanceUnit's ORDER BY would be a second implementation of the
+// answer. The preview POSTs /governance/check and the server runs the real
 // resolver. The four ranks — tier, sub-over-email, priority DESC, name ASC —
 // are pinned in internal/api/governance_preview_test.go against a real
-// Postgres, every case asserted equal to a direct ResolveGovernanceProfile
+// Postgres, every case asserted equal to a direct ResolveGovernanceUnit
 // call, plus the store's own governance_pg_test.go. Re-adding a client-side
 // table here would re-create exactly that second matcher.
 
 describe("GovernanceScreen — composed profiles", () => {
   const BASE = profile({ id: "pb", name: "Baseline" });
-  const CHILD = profile({ id: "pc", name: "Team A", ceiling: {} as RunPolicySpec, base_profile_id: "pb", overlay: {} });
+  const CHILD = profile({ id: "pc", name: "Team A", ceiling: {} as RunPolicySpec, parent_id: "pb", overlay: {} });
   const ON_DEPLOYMENT = profile({ id: "pd", name: "Division", ceiling: {} as RunPolicySpec, overlay: {} });
   const composed = () => snapshot({ profiles: [BASE, CHILD, ON_DEPLOYMENT], assignments: [] });
 
@@ -631,7 +631,7 @@ describe("GovernanceScreen — composed profiles", () => {
   });
 
   it("the race: a 409 on a profile the list saw no children for keeps the restrict heading", async () => {
-    deleteProfileMock.mockRejectedValue(new HttpError(409, "this governance profile is the base of X", "governance_profile_in_use"));
+    deleteProfileMock.mockRejectedValue(new HttpError(409, "this governance profile is the base of X", "governance_unit_in_use"));
     renderScreen(composed());
     await screen.findByText(ON_DEPLOYMENT.name);
     await userEvent.click(screen.getByRole("button", { name: `${GOV.DELETE} ${ON_DEPLOYMENT.name}` }));
@@ -675,7 +675,7 @@ describe("question — the confirm split", () => {
 
   // R4/F035 — the split must take the LAST "? ", not the first: a profile /
   // drive name is validated only as non-empty, <=128 bytes and
-  // control-char-free (maxGovernanceProfileNameLen and controlCharFree, internal/api), so "? " is a
+  // control-char-free (maxGovernanceUnitNameLen and controlCharFree, internal/api), so "? " is a
   // legal substring of one. Every one of these templates interpolates a name
   // BEFORE its question mark, so splitting on the first "? " in a name that
   // carries one would truncate the dialog title mid-name and start the
@@ -885,7 +885,7 @@ describe("GovernanceScreen — a 403 is a tier, not an outage", () => {
 // 0.8.6 four-eyes: a covered write the server holds for a second person (202) is "submitted", never saved.
 const HELD = new PendingChangeError({
   id: "c1",
-  target_kind: "governance_profile",
+  target_kind: "governance_unit",
   op: "update",
   target_key: "x",
   state: "pending",

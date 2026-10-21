@@ -33,12 +33,12 @@ export const CREATE_ALLOWED: MemberDriveCreate = { allowed: true, count: 1, limi
 
 /** One closed door per reason, so every disabled line is drawn. */
 const REASONS: Record<MemberDriveCreateReason, true> = {
-  disabled: true, denied_by_profile: true, limit_reached: true, unsupported: true, delete_unavailable: true, governance_unavailable: true, groups_snapshot_stale: true,
+  disabled: true, denied_by_unit: true, limit_reached: true, unsupported: true, delete_unavailable: true, governance_unavailable: true, groups_snapshot_stale: true,
 };
 export const CREATE_DOORS: Record<MemberDriveCreateReason, MemberDriveCreate> = Object.fromEntries(
   (Object.keys(REASONS) as MemberDriveCreateReason[]).map((reason) => [reason, {
     allowed: false, reason, count: reason === "limit_reached" ? 3 : 0, limit: reason === "limit_reached" ? 3 : 0,
-    ...(reason === "denied_by_profile" ? { denied_by_profile: "Contractors" } : {}),
+    ...(reason === "denied_by_unit" ? { denied_by_unit: "Contractors" } : {}),
   }]),
 ) as Record<MemberDriveCreateReason, MemberDriveCreate>;
 
@@ -48,7 +48,7 @@ const catalogue = (drives: MeDrive[], create?: MemberDriveCreate): MeDriveCatalo
 export const SCENARIO_DRIVE_CATALOGUE: ByScenario<MeDriveCatalogue> = everyScenario(
   catalogue([DRIVE_LEGACY, DRIVE_OWNED, DRIVE_LOCKED, DRIVE_NOT_IN_POOL, DRIVE_SHARED], CREATE_ALLOWED),
   {
-    governed: catalogue([DRIVE_LEGACY, DRIVE_LOCKED], CREATE_DOORS.denied_by_profile),
+    governed: catalogue([DRIVE_LEGACY, DRIVE_LOCKED], CREATE_DOORS.denied_by_unit),
     offline: catalogue([DRIVE_LEGACY], CREATE_DOORS.disabled),
     admin: catalogue([DRIVE_OWNED], CREATE_ALLOWED),
   },

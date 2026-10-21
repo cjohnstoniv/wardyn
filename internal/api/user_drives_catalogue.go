@@ -112,12 +112,12 @@ func (s *Server) reachableDrives(ctx context.Context, profileMaxDriveMiB int) ([
 func (s *Server) handleListMeDrives(w http.ResponseWriter, r *http.Request) {
 	ctx := withDisplayRead(r.Context())
 	out := client.MeDriveCatalogue{Drives: []client.MeDrive{}}
-	name, unresolved := s.userDriveDeniedByProfile(r)
+	name, unresolved := s.userDriveDeniedByUnit(r)
 	switch {
 	case unresolved != "":
 		out.Unavailable = unresolved
 	case name != "":
-		out.DeniedByProfile = name
+		out.DeniedByUnit = name
 	default:
 		out.Drives, out.PoolChecked, out.Unavailable = s.meDrives(ctx, r.URL.Query().Get("runner_pool_id"))
 	}

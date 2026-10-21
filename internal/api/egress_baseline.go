@@ -122,7 +122,7 @@ func undeclaredSuffixes(sc types.SiteConfig, suffixes []string) []string {
 }
 
 // egressBaselineRefusal is the 400 a body gets when a suffix names no stored entry.
-func egressBaselineRefusal(missing []string) *profileWriteError {
+func egressBaselineRefusal(missing []string) *unitWriteError {
 	return writeRefusal(http.StatusBadRequest, reasonEgressBaselineInvalid,
 		"invalid egress baseline: internal_host_suffixes %s name no internal_hosts entry; declare it in site config first", strings.Join(missing, ", "))
 }

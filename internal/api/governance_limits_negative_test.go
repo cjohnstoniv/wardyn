@@ -57,8 +57,8 @@ func TestGovernanceLimitsRefuseNegatives(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			r := httptest.NewRequest(http.MethodPost, "/api/v1/governance/profiles", strings.NewReader(tc.body))
-			_, msg := decodeGovernanceProfileRequest(httptest.NewRecorder(), r)
+			r := httptest.NewRequest(http.MethodPost, "/api/v1/governance/units", strings.NewReader(tc.body))
+			_, msg := decodeGovernanceUnitRequest(httptest.NewRecorder(), r)
 			if !strings.Contains(msg, tc.want) {
 				t.Errorf("msg = %q, want it to NAME the field (%s) — an admin told only \"invalid\" has three "+
 					"numbers to guess between", msg, tc.want)
@@ -75,8 +75,8 @@ func TestGovernanceLimitsRefuseNegatives(t *testing.T) {
 		govLimitsBody(`"max_concurrent_runs":0,"max_ephemeral_disk_mib":0,"max_drive_size_mib":0`),
 		govLimitsBody(`"max_concurrent_runs":3,"max_ephemeral_disk_mib":4096,"max_drive_size_mib":2048`),
 	} {
-		r := httptest.NewRequest(http.MethodPost, "/api/v1/governance/profiles", strings.NewReader(body))
-		if _, msg := decodeGovernanceProfileRequest(httptest.NewRecorder(), r); msg != "" {
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/governance/units", strings.NewReader(body))
+		if _, msg := decodeGovernanceUnitRequest(httptest.NewRecorder(), r); msg != "" {
 			t.Errorf("body %s refused with %q; 0 is unlimited and a positive number is a cap", body, msg)
 		}
 	}
@@ -90,16 +90,16 @@ func TestGovernanceLimitsRefuseNegatives(t *testing.T) {
 // block and the one bad field out of nine.
 func TestGovernanceLimitsAutonomyRubricRefusal(t *testing.T) {
 	body := govLimitsBody(`"autonomy_rubric":{"egress_open":"bogus"}`)
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/governance/profiles", strings.NewReader(body))
-	_, msg := decodeGovernanceProfileRequest(httptest.NewRecorder(), r)
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/governance/units", strings.NewReader(body))
+	_, msg := decodeGovernanceUnitRequest(httptest.NewRecorder(), r)
 	if !strings.Contains(msg, "limits.autonomy_rubric") || !strings.Contains(msg, "egress_open") {
 		t.Errorf("msg = %q, want it to name both the block (limits.autonomy_rubric) and the field (egress_open)", msg)
 	}
 
 	// THE CONTROL: a rubric authored entirely with defined levels is writable.
 	valid := govLimitsBody(`"autonomy_rubric":{"egress_open":"L2","secrets_none":"L3","confinement_cc1":"L0"}`)
-	r = httptest.NewRequest(http.MethodPost, "/api/v1/governance/profiles", strings.NewReader(valid))
-	if _, msg := decodeGovernanceProfileRequest(httptest.NewRecorder(), r); msg != "" {
+	r = httptest.NewRequest(http.MethodPost, "/api/v1/governance/units", strings.NewReader(valid))
+	if _, msg := decodeGovernanceUnitRequest(httptest.NewRecorder(), r); msg != "" {
 		t.Errorf("body %s refused with %q; every level named is defined", valid, msg)
 	}
 }

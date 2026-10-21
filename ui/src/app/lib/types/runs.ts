@@ -282,7 +282,7 @@ export interface AgentRun {
   queue?: RunQueue;
   wait_budget_sec?: number;
   run_limits?: RunLimits;
-  governance_profile_id?: string;
+  unit_id?: string;
   // Set when the run lost its sandbox but is kept (migration 0073, #568):
   // "ended" = its end passed, so it is stopped with no network and its files
   // stay for the ended-run grace. "reboot" = its container exited under it
@@ -525,7 +525,7 @@ export interface RunFolderPass {
 // run_policy_view.go). `spec` strict-decodes as a RunPolicySpec, with values
 // the reader may not see already blanked ("<redacted>") server-side.
 export type RunPolicyState = "recorded" | "not_yet" | "never";
-export type RunPolicySourceKind = "stored" | "inline" | "default" | "profile" | "unknown";
+export type RunPolicySourceKind = "stored" | "inline" | "default" | "unit" | "unknown";
 
 export interface RunPolicySource {
   kind: RunPolicySourceKind | (string & {});
@@ -550,7 +550,7 @@ export type RunPolicyCause =
   | "model_access"
   | "git_broker"
   | "overlay"
-  | "profile"
+  | "unit"
   | "org_disk"
   | "pool_disk"
   | "restart"
@@ -565,7 +565,7 @@ export interface RunPolicyChange {
   removed?: string[];
   // clamp_warnings lines, verbatim (cause "limits" only).
   detail?: string[];
-  profile?: string;
+  unit?: string;
   // Restart time (cause "restart" only).
   at?: string;
 }
@@ -594,7 +594,7 @@ export interface RunPolicyView {
 }
 
 // internal/policyref.Provenance: the layer that set one value of a run's policy
-// ("deployment", "profile" with the leaf's name, "member" or "operator"), the
+// ("deployment", "unit" with the leaf's name, "member" or "operator"), the
 // contact to ask, and locked once a layer forbids lower layers to change it
 // (never set until walls or delegation can lock a knob).
 export interface PolicyProvenance {

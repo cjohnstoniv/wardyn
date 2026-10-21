@@ -22,6 +22,7 @@ const NOT_A_DRAFT: Record<string, string> = {
   '"/site-config/test-redirect"': "probe, saves nothing",
   '"/setup/onboarding-complete"': "one-click marker, no body",
   "/preview": "preview of a draft, writes nothing",
+  '"/governance/check"': "dry run of a claim set, writes nothing",
   '"/runs/preflight"': "preview of a launch, writes nothing",
   '"/templates/import"': "reads one document and says what is wrong with it, stores nothing",
   '"/runs/policy-preview"': "preview of a policy, writes nothing",

@@ -30,8 +30,8 @@ import (
 // told to hold and applies the rest, recording every request it receives.
 type pendingFake struct {
 	mu          sync.Mutex
-	profiles    []client.GovernanceProfile
-	assignments []client.GovernanceAssignment
+	profiles    []client.GovernanceUnit
+	assignments []client.GovernanceMembership
 
 	holdProfiles    map[string]bool      // profile names whose create/update is held
 	holdAssignments map[string]bool      // assignment subjects whose write is held
@@ -41,7 +41,7 @@ type pendingFake struct {
 	heldDiffers     bool                 // the held change is not the refused write (pending_change_matches false)
 
 	reqs        []string // "METHOD path", in arrival order
-	assignSent  []client.GovernanceAssignmentRequest
+	assignSent  []client.GovernanceMembershipRequest
 	changes     []client.GovernanceChange
 	approveCall string
 	rejectBody  string
@@ -65,57 +65,57 @@ func (f *pendingFake) server(t *testing.T) *client.Client {
 		p := r.URL.Path
 		switch {
 		case r.Method == http.MethodGet && p == "/api/v1/governance":
-			writeJSON(w, http.StatusOK, client.GovernanceDocument{Profiles: f.profiles, Assignments: f.assignments})
+			writeJSON(w, http.StatusOK, client.GovernanceDocument{Units: f.profiles, Memberships: f.assignments})
 
-		case r.Method == http.MethodPost && p == "/api/v1/governance/profiles":
-			var req client.GovernanceProfileRequest
+		case r.Method == http.MethodPost && p == "/api/v1/governance/units":
+			var req client.GovernanceUnitRequest
 			_ = json.NewDecoder(r.Body).Decode(&req)
 			if f.answerHeld(w, req.Name) {
 				return
 			}
 			if f.holdProfiles[req.Name] {
-				writeJSON(w, http.StatusAccepted, pendingChange("create", "governance_profile", req.Name))
+				writeJSON(w, http.StatusAccepted, pendingChange("create", "governance_unit", req.Name))
 				return
 			}
-			prof := client.GovernanceProfile{ID: uuid.New(), Name: req.Name, Ceiling: req.Ceiling, Limits: req.Limits}
+			prof := client.GovernanceUnit{ID: uuid.New(), Name: req.Name, Ceiling: req.Ceiling, Limits: req.Limits}
 			f.profiles = append(f.profiles, prof)
-			writeJSON(w, http.StatusCreated, client.GovernanceProfileResponse{Profile: prof})
+			writeJSON(w, http.StatusCreated, client.GovernanceUnitResponse{Unit: prof})
 
-		case r.Method == http.MethodPut && strings.HasPrefix(p, "/api/v1/governance/profiles/"):
-			var req client.GovernanceProfileRequest
+		case r.Method == http.MethodPut && strings.HasPrefix(p, "/api/v1/governance/units/"):
+			var req client.GovernanceUnitRequest
 			_ = json.NewDecoder(r.Body).Decode(&req)
 			if f.answerHeld(w, req.Name) {
 				return
 			}
 			if f.holdProfiles[req.Name] {
-				writeJSON(w, http.StatusAccepted, pendingChange("update", "governance_profile", req.Name))
+				writeJSON(w, http.StatusAccepted, pendingChange("update", "governance_unit", req.Name))
 				return
 			}
-			id, _ := uuid.Parse(strings.TrimPrefix(p, "/api/v1/governance/profiles/"))
-			prof := client.GovernanceProfile{ID: id, Name: req.Name, Ceiling: req.Ceiling, Limits: req.Limits}
+			id, _ := uuid.Parse(strings.TrimPrefix(p, "/api/v1/governance/units/"))
+			prof := client.GovernanceUnit{ID: id, Name: req.Name, Ceiling: req.Ceiling, Limits: req.Limits}
 			for i := range f.profiles {
 				if f.profiles[i].ID == id {
 					f.profiles[i] = prof
 				}
 			}
-			writeJSON(w, http.StatusOK, client.GovernanceProfileResponse{Profile: prof})
+			writeJSON(w, http.StatusOK, client.GovernanceUnitResponse{Unit: prof})
 
-		case r.Method == http.MethodPost && p == "/api/v1/governance/assignments":
-			var req client.GovernanceAssignmentRequest
+		case r.Method == http.MethodPost && p == "/api/v1/governance/memberships":
+			var req client.GovernanceMembershipRequest
 			_ = json.NewDecoder(r.Body).Decode(&req)
 			f.assignSent = append(f.assignSent, req)
 			if f.holdAssignments[req.Subject] {
-				writeJSON(w, http.StatusAccepted, pendingChange("upsert", "governance_assignment", req.Subject))
+				writeJSON(w, http.StatusAccepted, pendingChange("upsert", "governance_membership", req.Subject))
 				return
 			}
-			a := client.GovernanceAssignment{ID: uuid.New(), SubjectType: req.SubjectType, Subject: req.Subject,
-				ProfileID: req.ProfileID, Priority: req.Priority}
+			a := client.GovernanceMembership{ID: uuid.New(), SubjectType: req.SubjectType, Subject: req.Subject,
+				UnitID: req.UnitID, Priority: req.Priority}
 			f.assignments = append(f.assignments, a)
 			writeJSON(w, http.StatusCreated, a)
 
 		case r.Method == http.MethodDelete && strings.HasPrefix(p, "/api/v1/governance/"):
 			if f.holdDeletes {
-				writeJSON(w, http.StatusAccepted, pendingChange("delete", "governance_profile", p))
+				writeJSON(w, http.StatusAccepted, pendingChange("delete", "governance_unit", p))
 				return
 			}
 			w.WriteHeader(http.StatusNoContent)
@@ -154,7 +154,7 @@ func (f *pendingFake) answerHeld(w http.ResponseWriter, name string) bool {
 	if !ok {
 		return false
 	}
-	held := pendingChange("update", "governance_profile", name)["pending_change"].(map[string]any)
+	held := pendingChange("update", "governance_unit", name)["pending_change"].(map[string]any)
 	held["id"] = id
 	if f.bigDiff {
 		held["payload"] = map[string]any{"pad": strings.Repeat("x", 8192)}
@@ -180,7 +180,7 @@ func (f *pendingFake) writes() []string {
 func (f *pendingFake) noNilAssignment(t *testing.T) {
 	t.Helper()
 	for _, a := range f.assignSent {
-		if a.ProfileID == uuid.Nil {
+		if a.UnitID == uuid.Nil {
 			t.Errorf("assignment %q was sent with a nil profile id", a.Subject)
 		}
 	}
@@ -191,7 +191,7 @@ func (f *pendingFake) noNilAssignment(t *testing.T) {
 // never read into the caller's output.
 func TestDo_PendingChangeIsNeverDecodedAsSuccess(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusAccepted, pendingChange("update", "governance_profile", "p"))
+		writeJSON(w, http.StatusAccepted, pendingChange("update", "governance_unit", "p"))
 	}))
 	t.Cleanup(srv.Close)
 	c := newTestClient(srv)
@@ -272,38 +272,38 @@ func TestApplyGovernance_CreateUpdateDeleteEachPending(t *testing.T) {
 		f := &pendingFake{holdProfiles: map[string]bool{"new": true}}
 		c := f.server(t)
 		res, err := c.ApplyGovernanceResult(ctx, client.GovernanceDocument{
-			Profiles: []client.GovernanceProfile{{Name: "new"}}}, false)
+			Units: []client.GovernanceUnit{{Name: "new"}}}, false)
 		if err != nil {
 			t.Fatalf("ApplyGovernanceResult: %v", err)
 		}
 		if len(res.Pending) != 1 || res.Pending[0].Op != "create" {
 			t.Fatalf("pending = %+v, want one create", res.Pending)
 		}
-		if len(res.Document.Profiles) != 0 {
-			t.Errorf("document holds %d profiles, want 0 (the create is not applied)", len(res.Document.Profiles))
+		if len(res.Document.Units) != 0 {
+			t.Errorf("document holds %d profiles, want 0 (the create is not applied)", len(res.Document.Units))
 		}
 	})
 
 	t.Run("update", func(t *testing.T) {
-		existing := client.GovernanceProfile{ID: uuid.New(), Name: "p", Limits: client.GovernanceLimits{MaxConcurrentRuns: 1}}
-		f := &pendingFake{profiles: []client.GovernanceProfile{existing}, holdProfiles: map[string]bool{"p": true}}
+		existing := client.GovernanceUnit{ID: uuid.New(), Name: "p", Limits: client.GovernanceLimits{MaxConcurrentRuns: 1}}
+		f := &pendingFake{profiles: []client.GovernanceUnit{existing}, holdProfiles: map[string]bool{"p": true}}
 		c := f.server(t)
 		res, err := c.ApplyGovernanceResult(ctx, client.GovernanceDocument{
-			Profiles: []client.GovernanceProfile{{Name: "p", Limits: client.GovernanceLimits{MaxConcurrentRuns: 9}}}}, false)
+			Units: []client.GovernanceUnit{{Name: "p", Limits: client.GovernanceLimits{MaxConcurrentRuns: 9}}}}, false)
 		if err != nil {
 			t.Fatalf("ApplyGovernanceResult: %v", err)
 		}
 		if len(res.Pending) != 1 || res.Pending[0].Op != "update" {
 			t.Fatalf("pending = %+v, want one update", res.Pending)
 		}
-		if got := res.Document.Profiles[0].Limits.MaxConcurrentRuns; got != 1 {
+		if got := res.Document.Units[0].Limits.MaxConcurrentRuns; got != 1 {
 			t.Errorf("document shows limit %d, want the unchanged 1", got)
 		}
 	})
 
 	t.Run("delete", func(t *testing.T) {
-		existing := client.GovernanceProfile{ID: uuid.New(), Name: "gone"}
-		f := &pendingFake{profiles: []client.GovernanceProfile{existing}, holdDeletes: true}
+		existing := client.GovernanceUnit{ID: uuid.New(), Name: "gone"}
+		f := &pendingFake{profiles: []client.GovernanceUnit{existing}, holdDeletes: true}
 		c := f.server(t)
 		res, err := c.ApplyGovernanceResult(ctx, client.GovernanceDocument{}, true)
 		if err != nil {
@@ -319,13 +319,13 @@ func TestApplyGovernance_MixedAppliedAndPending(t *testing.T) {
 	f := &pendingFake{holdProfiles: map[string]bool{"held": true}}
 	c := f.server(t)
 	_, err := c.ApplyGovernanceResult(context.Background(), client.GovernanceDocument{
-		Profiles: []client.GovernanceProfile{{Name: "free"}, {Name: "held"}, {Name: "also-free"}}}, false)
+		Units: []client.GovernanceUnit{{Name: "free"}, {Name: "held"}, {Name: "also-free"}}}, false)
 	if err != nil {
 		t.Fatalf("ApplyGovernanceResult: %v", err)
 	}
 	res, _ := c.ApplyGovernanceResult(context.Background(), client.GovernanceDocument{}, false)
 	var names []string
-	for _, p := range res.Document.Profiles {
+	for _, p := range res.Document.Units {
 		names = append(names, p.Name)
 	}
 	if strings.Join(names, ",") != "free,also-free" {
@@ -335,13 +335,13 @@ func TestApplyGovernance_MixedAppliedAndPending(t *testing.T) {
 	// ApplyGovernance reports the same document plus the typed error.
 	f2 := &pendingFake{holdProfiles: map[string]bool{"held": true}}
 	doc, err := f2.server(t).ApplyGovernance(context.Background(), client.GovernanceDocument{
-		Profiles: []client.GovernanceProfile{{Name: "free"}, {Name: "held"}}}, false)
+		Units: []client.GovernanceUnit{{Name: "free"}, {Name: "held"}}}, false)
 	var pe *client.PendingApprovalError
 	if !errors.As(err, &pe) || len(pe.Changes) != 1 {
 		t.Fatalf("ApplyGovernance err = %v, want *PendingApprovalError with one change", err)
 	}
-	if len(doc.Profiles) != 1 || doc.Profiles[0].Name != "free" {
-		t.Errorf("ApplyGovernance document = %+v, want only the applied profile", doc.Profiles)
+	if len(doc.Units) != 1 || doc.Units[0].Name != "free" {
+		t.Errorf("ApplyGovernance document = %+v, want only the applied profile", doc.Units)
 	}
 }
 
@@ -353,14 +353,14 @@ func TestApplyGovernance_AssignmentToPendingProfileIsDeferred(t *testing.T) {
 		f := &pendingFake{holdProfiles: map[string]bool{"new": true}}
 		c := f.server(t)
 		res, err := c.ApplyGovernanceResult(ctx, client.GovernanceDocument{
-			Profiles: []client.GovernanceProfile{{ID: fileID, Name: "new"}},
-			Assignments: []client.GovernanceAssignment{
-				{SubjectType: client.CapabilitySubjectUser, Subject: "bob", ProfileID: fileID}},
+			Units: []client.GovernanceUnit{{ID: fileID, Name: "new"}},
+			Memberships: []client.GovernanceMembership{
+				{SubjectType: client.CapabilitySubjectUser, Subject: "bob", UnitID: fileID}},
 		}, false)
 		if err != nil {
 			t.Fatalf("ApplyGovernanceResult: %v", err)
 		}
-		if len(res.Deferred) != 1 || res.Deferred[0].Subject != "bob" || res.Deferred[0].Profile != "new" {
+		if len(res.Deferred) != 1 || res.Deferred[0].Subject != "bob" || res.Deferred[0].Unit != "new" {
 			t.Errorf("deferred = %+v, want bob -> new", res.Deferred)
 		}
 		if len(f.assignSent) != 0 {
@@ -370,13 +370,13 @@ func TestApplyGovernance_AssignmentToPendingProfileIsDeferred(t *testing.T) {
 	})
 
 	t.Run("pending update of an existing profile named by its real id", func(t *testing.T) {
-		existing := client.GovernanceProfile{ID: uuid.New(), Name: "p"}
-		f := &pendingFake{profiles: []client.GovernanceProfile{existing}, holdProfiles: map[string]bool{"p": true}}
+		existing := client.GovernanceUnit{ID: uuid.New(), Name: "p"}
+		f := &pendingFake{profiles: []client.GovernanceUnit{existing}, holdProfiles: map[string]bool{"p": true}}
 		c := f.server(t)
 		res, err := c.ApplyGovernanceResult(ctx, client.GovernanceDocument{
-			Profiles: []client.GovernanceProfile{{Name: "p", Limits: client.GovernanceLimits{MaxConcurrentRuns: 3}}},
-			Assignments: []client.GovernanceAssignment{
-				{SubjectType: client.CapabilitySubjectGroup, Subject: "eng", ProfileID: existing.ID}},
+			Units: []client.GovernanceUnit{{Name: "p", Limits: client.GovernanceLimits{MaxConcurrentRuns: 3}}},
+			Memberships: []client.GovernanceMembership{
+				{SubjectType: client.CapabilitySubjectGroup, Subject: "eng", UnitID: existing.ID}},
 		}, false)
 		if err != nil {
 			t.Fatalf("ApplyGovernanceResult: %v", err)
@@ -391,10 +391,10 @@ func TestApplyGovernance_AssignmentToPendingProfileIsDeferred(t *testing.T) {
 		c := f.server(t)
 		freeID, heldID := uuid.New(), uuid.New()
 		res, err := c.ApplyGovernanceResult(ctx, client.GovernanceDocument{
-			Profiles: []client.GovernanceProfile{{ID: freeID, Name: "free"}, {ID: heldID, Name: "held"}},
-			Assignments: []client.GovernanceAssignment{
-				{SubjectType: client.CapabilitySubjectUser, Subject: "u1", ProfileID: freeID},
-				{SubjectType: client.CapabilitySubjectUser, Subject: "u2", ProfileID: heldID}},
+			Units: []client.GovernanceUnit{{ID: freeID, Name: "free"}, {ID: heldID, Name: "held"}},
+			Memberships: []client.GovernanceMembership{
+				{SubjectType: client.CapabilitySubjectUser, Subject: "u1", UnitID: freeID},
+				{SubjectType: client.CapabilitySubjectUser, Subject: "u2", UnitID: heldID}},
 		}, false)
 		if err != nil {
 			t.Fatalf("ApplyGovernanceResult: %v", err)
@@ -409,35 +409,35 @@ func TestApplyGovernance_AssignmentToPendingProfileIsDeferred(t *testing.T) {
 	})
 
 	t.Run("a pending assignment write is recorded, not decoded", func(t *testing.T) {
-		existing := client.GovernanceProfile{ID: uuid.New(), Name: "p"}
-		f := &pendingFake{profiles: []client.GovernanceProfile{existing}, holdAssignments: map[string]bool{"carol": true}}
+		existing := client.GovernanceUnit{ID: uuid.New(), Name: "p"}
+		f := &pendingFake{profiles: []client.GovernanceUnit{existing}, holdAssignments: map[string]bool{"carol": true}}
 		c := f.server(t)
 		res, err := c.ApplyGovernanceResult(ctx, client.GovernanceDocument{
-			Assignments: []client.GovernanceAssignment{
-				{SubjectType: client.CapabilitySubjectUser, Subject: "carol", ProfileID: existing.ID}},
+			Memberships: []client.GovernanceMembership{
+				{SubjectType: client.CapabilitySubjectUser, Subject: "carol", UnitID: existing.ID}},
 		}, false)
-		if err != nil || len(res.Pending) != 1 || res.Pending[0].TargetKind != "governance_assignment" {
+		if err != nil || len(res.Pending) != 1 || res.Pending[0].TargetKind != "governance_membership" {
 			t.Errorf("result = %+v, err = %v; want one pending assignment change", res, err)
 		}
-		if len(res.Document.Assignments) != 0 {
-			t.Errorf("document holds %d assignments, want 0", len(res.Document.Assignments))
+		if len(res.Document.Memberships) != 0 {
+			t.Errorf("document holds %d assignments, want 0", len(res.Document.Memberships))
 		}
 	})
 }
 
 func TestApplyGovernance_PruneNeverFollowsAPendingWrite(t *testing.T) {
 	ctx := context.Background()
-	stale := client.GovernanceProfile{ID: uuid.New(), Name: "stale"}
-	staleAssign := client.GovernanceAssignment{ID: uuid.New(), SubjectType: client.CapabilitySubjectUser, Subject: "old", ProfileID: stale.ID}
+	stale := client.GovernanceUnit{ID: uuid.New(), Name: "stale"}
+	staleAssign := client.GovernanceMembership{ID: uuid.New(), SubjectType: client.CapabilitySubjectUser, Subject: "old", UnitID: stale.ID}
 
 	t.Run("a pending write before prune skips it", func(t *testing.T) {
 		f := &pendingFake{
-			profiles: []client.GovernanceProfile{stale}, assignments: []client.GovernanceAssignment{staleAssign},
+			profiles: []client.GovernanceUnit{stale}, assignments: []client.GovernanceMembership{staleAssign},
 			holdProfiles: map[string]bool{"new": true},
 		}
 		c := f.server(t)
 		res, err := c.ApplyGovernanceResult(ctx, client.GovernanceDocument{
-			Profiles: []client.GovernanceProfile{{Name: "new"}}}, true)
+			Units: []client.GovernanceUnit{{Name: "new"}}}, true)
 		if err != nil {
 			t.Fatalf("ApplyGovernanceResult: %v", err)
 		}
@@ -453,7 +453,7 @@ func TestApplyGovernance_PruneNeverFollowsAPendingWrite(t *testing.T) {
 
 	t.Run("prune stops at its first pending delete", func(t *testing.T) {
 		f := &pendingFake{
-			profiles: []client.GovernanceProfile{stale}, assignments: []client.GovernanceAssignment{staleAssign},
+			profiles: []client.GovernanceUnit{stale}, assignments: []client.GovernanceMembership{staleAssign},
 			holdDeletes: true,
 		}
 		c := f.server(t)
@@ -473,7 +473,7 @@ func TestApplyGovernance_PruneNeverFollowsAPendingWrite(t *testing.T) {
 	})
 
 	t.Run("no pending write: prune runs", func(t *testing.T) {
-		f := &pendingFake{profiles: []client.GovernanceProfile{stale}}
+		f := &pendingFake{profiles: []client.GovernanceUnit{stale}}
 		c := f.server(t)
 		res, err := c.ApplyGovernanceResult(ctx, client.GovernanceDocument{}, true)
 		if err != nil || res.PruneSkipped || len(res.Pending) != 0 {
@@ -487,7 +487,7 @@ func TestApplyGovernance_PruneNeverFollowsAPendingWrite(t *testing.T) {
 
 func TestGovernanceChanges_ListGetApproveReject(t *testing.T) {
 	ctx := context.Background()
-	ch := client.GovernanceChange{ID: uuid.New(), TargetKind: "governance_profile", Op: "update",
+	ch := client.GovernanceChange{ID: uuid.New(), TargetKind: "governance_unit", Op: "update",
 		TargetKey: "k", State: "pending", ProposedBy: "alice"}
 	f := &pendingFake{changes: []client.GovernanceChange{ch}}
 	c := f.server(t)
@@ -527,22 +527,22 @@ func TestGovernanceChanges_ListGetApproveReject(t *testing.T) {
 func TestApplyGovernance_RepeatApplyDuringTheWindowIsStillPending(t *testing.T) {
 	for _, big := range []bool{false, true} {
 		heldID := uuid.New()
-		held := client.GovernanceProfile{ID: uuid.New(), Name: "held", Limits: client.GovernanceLimits{MaxConcurrentRuns: 1}}
+		held := client.GovernanceUnit{ID: uuid.New(), Name: "held", Limits: client.GovernanceLimits{MaxConcurrentRuns: 1}}
 		f := &pendingFake{
-			profiles:     []client.GovernanceProfile{held},
+			profiles:     []client.GovernanceUnit{held},
 			heldProfiles: map[string]uuid.UUID{"held": heldID},
 			bigDiff:      big,
 		}
 		c := f.server(t)
 		heldFileID, laterFileID := uuid.New(), uuid.New()
 		res, err := c.ApplyGovernanceResult(context.Background(), client.GovernanceDocument{
-			Profiles: []client.GovernanceProfile{
+			Units: []client.GovernanceUnit{
 				{ID: heldFileID, Name: "held", Limits: client.GovernanceLimits{MaxConcurrentRuns: 9}},
 				{ID: laterFileID, Name: "later"},
 			},
-			Assignments: []client.GovernanceAssignment{
-				{SubjectType: client.CapabilitySubjectUser, Subject: "bob", ProfileID: heldFileID},
-				{SubjectType: client.CapabilitySubjectUser, Subject: "carol", ProfileID: laterFileID},
+			Memberships: []client.GovernanceMembership{
+				{SubjectType: client.CapabilitySubjectUser, Subject: "bob", UnitID: heldFileID},
+				{SubjectType: client.CapabilitySubjectUser, Subject: "carol", UnitID: laterFileID},
 			},
 		}, false)
 		if err != nil {
@@ -566,12 +566,12 @@ func TestApplyGovernance_RepeatApplyDuringTheWindowIsStillPending(t *testing.T) 
 func TestApplyGovernance_HeldChangeThatIsNotThisWriteFails(t *testing.T) {
 	heldID := uuid.New()
 	f := &pendingFake{
-		profiles:     []client.GovernanceProfile{{ID: uuid.New(), Name: "held", Limits: client.GovernanceLimits{MaxConcurrentRuns: 1}}},
+		profiles:     []client.GovernanceUnit{{ID: uuid.New(), Name: "held", Limits: client.GovernanceLimits{MaxConcurrentRuns: 1}}},
 		heldProfiles: map[string]uuid.UUID{"held": heldID},
 		heldDiffers:  true,
 	}
 	res, err := f.server(t).ApplyGovernanceResult(context.Background(), client.GovernanceDocument{
-		Profiles: []client.GovernanceProfile{{ID: uuid.New(), Name: "held", Limits: client.GovernanceLimits{MaxConcurrentRuns: 9}}},
+		Units: []client.GovernanceUnit{{ID: uuid.New(), Name: "held", Limits: client.GovernanceLimits{MaxConcurrentRuns: 9}}},
 	}, false)
 	if err == nil || !strings.Contains(err.Error(), heldID.String()) {
 		t.Fatalf("apply = %+v, %v; want an error naming the held change %s", res, err, heldID)

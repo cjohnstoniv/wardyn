@@ -249,7 +249,7 @@ func (s PG) createRunArgs(r types.AgentRun) ([]any, error) {
 		r.PolicyID, string(r.ConfinementClass), string(r.State),
 		r.SPIFFEID, r.RunnerTarget, r.SandboxRef, r.Interactive, r.WorkspacePath, r.WorkspaceID, r.SourceID, r.Image, r.AutoStopAfterSec,
 		r.AgentExecID, r.Title, r.Description, r.WorkspaceIDs, string(r.AutonomyLevel),
-		r.EndsAt, r.WaitBudgetSec, limitsJSON, r.GovernanceProfileID, r.ModelProviderID, r.UserType,
+		r.EndsAt, r.WaitBudgetSec, limitsJSON, r.UnitID, r.ModelProviderID, r.UserType,
 		r.Preset, r.PresetVersion, r.OperatorOwned, r.CreatedVia, r.DiskMiB,
 		string(r.Placement), r.PlacementFilled, r.RunnerID, string(r.EvidenceSource), string(r.Experience),
 		r.LifetimeCapAt, string(r.LifetimeCapSource), r.RunnerPoolID, r.RunnerPoolRevision, string(r.RunnerPoolSelection), r.RunnerPoolExecutor, r.HumanAuthor, walls, r.BreakGlass,
@@ -422,7 +422,7 @@ func (s PG) TouchRun(ctx context.Context, id uuid.UUID) error {
 // The read list is the write list plus the columns only a scoped UPDATE writes,
 // so a column appended to runInsertCols reaches both lists at once.
 const runInsertCols = `id, created_at, updated_at, created_by, agent, repo, task, policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids, autonomy_level, ` +
-	`ends_at, wait_budget_sec, run_limits, governance_profile_id, model_provider_id, user_type, preset, preset_version, operator_owned, created_via, disk_mib, placement, placement_filled, runner_id, ` +
+	`ends_at, wait_budget_sec, run_limits, unit_id, model_provider_id, user_type, preset, preset_version, operator_owned, created_via, disk_mib, placement, placement_filled, runner_id, ` +
 	`evidence_source, experience, lifetime_cap_at, lifetime_cap_source, runner_pool_id, runner_pool_revision, runner_pool_selection, runner_pool_executor, human_author, inner_walls, break_glass`
 
 // runReservedCols are what a run holds on its runner (0174, types.AgentRun.Reserved): written at
@@ -448,7 +448,7 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 		&r.PolicyID, &cc, &state,
 		&r.SPIFFEID, &r.RunnerTarget, &r.SandboxRef, &r.Interactive, &r.WorkspacePath, &r.WorkspaceID, &r.SourceID, &r.Image, &r.AutoStopAfterSec,
 		&r.AgentExecID, &r.Title, &r.Description, &r.WorkspaceIDs, &autonomyLevel,
-		&r.EndsAt, &r.WaitBudgetSec, &limitsRaw, &r.GovernanceProfileID, &r.ModelProviderID, &r.UserType,
+		&r.EndsAt, &r.WaitBudgetSec, &limitsRaw, &r.UnitID, &r.ModelProviderID, &r.UserType,
 		&r.Preset, &r.PresetVersion, &r.OperatorOwned, &r.CreatedVia, &r.DiskMiB,
 		&placement, &r.PlacementFilled, &r.RunnerID, &evidenceSource, &experience, &r.LifetimeCapAt, &capSource,
 		&r.RunnerPoolID, &r.RunnerPoolRevision, &poolSelection, &r.RunnerPoolExecutor, &r.HumanAuthor, &wallsRaw, &r.BreakGlass,
@@ -652,7 +652,7 @@ func (s PG) CreateApproval(ctx context.Context, a types.ApprovalRequest) (types.
 			return types.ApprovalRequest{}, fmt.Errorf("store: lock the run's notification budget: %w", err)
 		}
 		// Read in the approval's own transaction, so a concurrent profile change cannot route it by stale data.
-		if err := tx.QueryRow(ctx, notify.ProfileSQL, a.RunID).Scan(&profileID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		if err := tx.QueryRow(ctx, notify.UnitSQL, a.RunID).Scan(&profileID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return types.ApprovalRequest{}, fmt.Errorf("store: read run profile: %w", err)
 		}
 	}

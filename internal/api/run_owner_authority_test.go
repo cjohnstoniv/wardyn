@@ -574,10 +574,10 @@ func TestRevive_DoesNotReuseAStaleRenderedConfig(t *testing.T) {
 // profileStore gives the end-wait fixture's store a profile list.
 type profileStore struct {
 	*leaseStore
-	profiles []types.GovernanceProfile
+	profiles []types.GovernanceUnit
 }
 
-func (s *profileStore) ListGovernanceProfiles(context.Context) ([]types.GovernanceProfile, error) {
+func (s *profileStore) ListGovernanceUnits(context.Context) ([]types.GovernanceUnit, error) {
 	return s.profiles, nil
 }
 
@@ -614,7 +614,7 @@ func TestPatchRunEnds_RechecksOwnerStillResolves(t *testing.T) {
 		code    int
 		reason  string
 	}{
-		{"extend, profile gone", ownerSessionAs, week, profileGone, http.StatusConflict, "profile_gone"},
+		{"extend, profile gone", ownerSessionAs, week, profileGone, http.StatusConflict, "unit_gone"},
 		{"extend, agent denied", ownerSessionAs, week, agentDenied, http.StatusForbidden, "capability_agent"},
 		{"extend by a super admin, agent denied", admin, week, agentDenied, http.StatusForbidden, "capability_agent"},
 		{"no end, agent denied", ownerSessionAs, noEnd, agentDenied, http.StatusForbidden, "capability_agent"},
@@ -626,9 +626,9 @@ func TestPatchRunEnds_RechecksOwnerStillResolves(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newEndWaitFixture(t, types.RunLimits{MaxEndAheadSec: 30 * 86400, AllowNoEnd: true, UserChangesLimits: true})
-			profile := types.GovernanceProfile{ID: uuid.New(), Name: "contractors"}
-			f.st.run.GovernanceProfileID = &profile.ID
-			st := &profileStore{leaseStore: f.st, profiles: []types.GovernanceProfile{profile}}
+			profile := types.GovernanceUnit{ID: uuid.New(), Name: "contractors"}
+			f.st.run.UnitID = &profile.ID
+			st := &profileStore{leaseStore: f.st, profiles: []types.GovernanceUnit{profile}}
 			f.srv.cfg.Store = st
 			tc.arrange(f, st)
 			code, _ := f.patch(t, tc.as(t), tc.body(f))
@@ -732,7 +732,7 @@ func TestRecheck_AnAdminOwnedRunIsHeldToItsOwnersSubRows(t *testing.T) {
 		}
 		t.Run("revive "+tc.name, func(t *testing.T) {
 			f, _ := newOwnerFixture(t)
-			f.st.run.GovernanceProfileID = nil // a super admin captures none
+			f.st.run.UnitID = nil // a super admin captures none
 			f.st.caps, f.st.enf = caps(f.run.CreatedBy), map[string]bool{capAgent: true}
 			as := otherAdmin
 			if tc.byOwner {
@@ -760,7 +760,7 @@ func TestRecheck_AnAdminOwnedRunIsHeldToItsOwnersSubRows(t *testing.T) {
 	}
 	t.Run("restart with current limits by another admin", func(t *testing.T) {
 		f, _ := newOwnerFixture(t)
-		f.st.run.LostAt, f.st.run.LostReason, f.st.run.GovernanceProfileID = nil, "", nil
+		f.st.run.LostAt, f.st.run.LostReason, f.st.run.UnitID = nil, "", nil
 		f.st.enf = map[string]bool{capAgent: true}
 		w := doSSO(t, f.srv, http.MethodPost, "/api/v1/admin/runs/restart", otherAdmin, `{"run_ids":["`+f.run.ID.String()+`"]}`)
 		var out struct {
@@ -795,7 +795,7 @@ func TestRecheck_OperatorOwnedIsTheRecordedFlagNotTheName(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f, _ := newOwnerFixture(t)
 			f.st.run.CreatedBy, f.st.run.OperatorOwned = adminTokenPrincipal, tc.operatorOwned
-			f.st.run.GovernanceProfileID = nil
+			f.st.run.UnitID = nil
 			f.st.enf = map[string]bool{capAgent: true}
 			w := doSSO(t, f.srv, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/revive", otherAdmin, "")
 			if w.Code != tc.code {
