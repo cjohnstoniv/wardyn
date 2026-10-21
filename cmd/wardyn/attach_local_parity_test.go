@@ -129,6 +129,9 @@ func runnerioSocket(t *testing.T, runID string, answer func(net.Conn)) (string, 
 
 func TestLocalFrameParity_HelloAndEnd(t *testing.T) {
 	f := newLocalFixture(t, grantLocal)
+	// The fixture points os.Stdout and os.Stderr at pipes until they are drained; these tests never
+	// attach, so drain them here, or every later test and the coverage report write into the pipes.
+	t.Cleanup(func() { f.stdout(); f.stderr() })
 	sock, conns := runnerioSocket(t, f.org.runID, func(c net.Conn) {
 		_ = runnerio.WriteLocalJSON(c, runnerio.LocalHelloOK, runnerio.LocalHelloOKMsg{RunnerID: f.org.runnerID, Nonce: "N9"})
 	})
@@ -155,6 +158,7 @@ func TestLocalFrameParity_HelloAndEnd(t *testing.T) {
 
 func TestLocalFrameParity_Refusal(t *testing.T) {
 	f := newLocalFixture(t, grantLocal)
+	t.Cleanup(func() { f.stdout(); f.stderr() })
 	sock, _ := runnerioSocket(t, f.org.runID, func(c net.Conn) {
 		_ = runnerio.WriteLocalJSON(c, runnerio.LocalRefuse, runnerio.LocalReasonMsg{Reason: runnerio.LocalReasonBusy})
 	})
