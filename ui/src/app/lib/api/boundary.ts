@@ -65,17 +65,17 @@ export interface BoundaryReportAssign {
   id: string;
   subject_type: string;
   subject: string;
-  profile_id: string;
-  profile_name: string;
+  unit_id: string;
+  unit_name: string;
   changes: BoundaryChange[];
 }
 
 /** boundaryReport: only the rows the drafted boundary would narrow are listed. */
 export interface BoundaryReport {
   deployment: BoundaryChange[];
-  profiles: BoundaryReportRow[];
+  units: BoundaryReportRow[];
   stored_policies: BoundaryReportRow[];
-  assignments: BoundaryReportAssign[];
+  memberships: BoundaryReportAssign[];
 }
 
 const withEtag = async (res: Response): Promise<BoundarySnapshot> => ({ ...(await asJson<Boundary>(res)), etag: res.headers.get("ETag") });
@@ -101,6 +101,6 @@ export const boundary = {
   async dryRun(body: Pick<BoundaryWrite, "spec" | "limits">): Promise<BoundaryReport> {
     const res = await wfetch("/governance/dry-run", { method: "POST", asPerson: true, body: JSON.stringify(body) });
     const r = await asJson<Partial<BoundaryReport>>(res);
-    return { deployment: r.deployment ?? [], profiles: r.profiles ?? [], stored_policies: r.stored_policies ?? [], assignments: r.assignments ?? [] };
+    return { deployment: r.deployment ?? [], units: r.units ?? [], stored_policies: r.stored_policies ?? [], memberships: r.memberships ?? [] };
   },
 };
