@@ -20,7 +20,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   on `runner_health` (migration `0206_runner_health`). Without `INSERT` or `UPDATE` a runner's offline summary and
   relay status are not kept; without `SELECT` every one-runner read (`GET /api/v1/runners/{id}`,
   `GET /api/v1/me/runners/{id}`) answers 500. Grant it also
-  `SELECT, INSERT, UPDATE` on `launch_preset_version_floor` (migration `0216_launch_preset_version_floor`).
+  `SELECT, INSERT, UPDATE` on `launch_preset_version_floor` (migration `0220_launch_preset_version_floor`).
   Without it, creating or deleting a launch preset fails.
 - **`wardyn run attach` is now `wardyn attach`.** The old spelling is an unknown command, with no alias. A script
   that calls `wardyn run attach <run-id>` changes to `wardyn attach <run-id>`. `wardyn run ssh` is unchanged.
