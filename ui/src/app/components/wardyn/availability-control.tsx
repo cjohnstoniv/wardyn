@@ -233,7 +233,8 @@ function Control({ kind, value, ...family }: AvailabilityControlProps) {
 
 // AvailabilityDraft is the control on a creation form (decision 4): the same
 // fields, held locally until the resource exists. writeAvailability writes it.
-export type AvailabilityDraftValue = { restricted: boolean; audiences: Audience[] };
+// pending: "Only these" picked with nobody listed yet. The form must not save while it is set (#2593).
+export type AvailabilityDraftValue = { restricted: boolean; audiences: Audience[]; pending?: boolean };
 
 export function AvailabilityDraft({
   draft,
@@ -242,34 +243,32 @@ export function AvailabilityDraft({
   ...family
 }: FamilyProps & { draft: AvailabilityDraftValue; onChange: (d: AvailabilityDraftValue) => void; disabled?: boolean }) {
   const typeName = useUserTypeNames();
-  // "Only these" picked with nobody listed: held here, never put in the draft, because the server
-  // refuses an empty Only list and a creation form writes it after the resource exists. The first
-  // Add commits the audience and Only these together (#2593).
-  const [pendingOnly, setPendingOnly] = React.useState(false);
+  // "Only these" picked with nobody listed is held as draft.pending, never as restricted, because the
+  // server refuses an empty Only list and a creation form writes it after the resource exists. The
+  // first Add commits the audience and Only these together (#2593); the form's Save waits for it.
+  const { pending, ...settled } = draft;
   return (
     <AvailabilityFields
       {...family}
       restricted={draft.restricted}
-      pendingOnly={pendingOnly && !draft.restricted}
+      pendingOnly={!!pending && !draft.restricted}
       audiences={draft.audiences}
       typeName={typeName}
       busy={disabled ? "choice" : null}
       onRestrictedChange={(restricted) => {
         if (restricted && draft.audiences.length === 0) {
-          setPendingOnly(true);
+          if (!pending && !draft.restricted) onChange({ ...settled, pending: true });
           return;
         }
-        setPendingOnly(false);
-        if (restricted !== draft.restricted) onChange({ ...draft, restricted });
+        if (pending || restricted !== draft.restricted) onChange({ ...settled, restricted });
       }}
       onAdd={async (subject_type, subject) => {
         const listed = draft.audiences.some((a) => a.subject_type === subject_type && a.subject === subject);
         const audiences = listed ? draft.audiences : [...draft.audiences, { subject_type, subject }];
-        onChange({ ...draft, audiences, restricted: draft.restricted || pendingOnly });
-        setPendingOnly(false);
+        onChange({ ...settled, audiences, restricted: draft.restricted || !!pending });
         return true;
       }}
-      onRemove={(i) => onChange({ ...draft, audiences: draft.audiences.filter((_, j) => j !== i) })}
+      onRemove={(i) => onChange({ ...settled, audiences: draft.audiences.filter((_, j) => j !== i) })}
     />
   );
 }
