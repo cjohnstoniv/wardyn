@@ -15,6 +15,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire/runnertest"
 	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
+	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent/guestagenttest"
 )
 
 // guestSubstrate serves ExecStream from a real guest-agent session, wired as the docker driver's
@@ -54,7 +55,7 @@ func TestStoppedExecReaderGivesItsSlotBack(t *testing.T) {
 			flush()
 		}
 	})}
-	go func() { _ = hs.Serve(l) }()
+	go func() { _ = hs.Serve(guestagenttest.Listener(l)) }()
 	t.Cleanup(func() { _ = hs.Close() })
 	agent := guestagent.NewClient(func(context.Context) (net.Conn, error) { return net.Dial("tcp", l.Addr().String()) })
 	t.Cleanup(agent.Close)

@@ -30,6 +30,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
+	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent/guestagenttest"
 	"github.com/cjohnstoniv/wardyn/internal/vm/qemu"
 )
 
@@ -159,7 +160,7 @@ func (r *vmRig) serveAgent(t *testing.T, path string) {
 	p.SetUnencryptedHTTP2(true)
 	hs := &http.Server{Handler: spy, Protocols: &p, ReadHeaderTimeout: 5 * time.Second}
 	if ln := r.listen(t, path); ln != nil {
-		go func() { _ = hs.Serve(ln) }()
+		go func() { _ = hs.Serve(guestagenttest.Listener(ln)) }()
 	}
 }
 
