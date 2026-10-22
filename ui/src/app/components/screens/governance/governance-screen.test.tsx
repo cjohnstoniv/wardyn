@@ -83,6 +83,7 @@ import { PERM } from "../../../lib/permissions-copy";
 // hostile-name pin covers all four here rather than in two half-suites.
 import { DRIVES } from "../../../lib/user-drives-copy";
 import type { RunPolicySpec } from "../../../lib/types";
+import { DEFAULT_GOVERNANCE_UNIT_ID } from "../../../lib/types/governance";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { SECURITY_ONLY_REASON } from "../../wardyn/copy";
 import { question } from "./display";
@@ -191,6 +192,20 @@ describe("GovernanceScreen — states", () => {
     getGovernanceMock.mockResolvedValue(snapshot());
     await userEvent.click(screen.getByRole("button", { name: ACCESS_STATE.FETCH_FAILED_RETRY }));
     expect(await screen.findByText(GREENFIELD.name)).toBeInTheDocument();
+  });
+
+  it("a snapshot holding only the Default unit is the empty state: the console hides Default", async () => {
+    const DEFAULT_UNIT: GovernanceUnit = {
+      ...GREENFIELD,
+      id: DEFAULT_GOVERNANCE_UNIT_ID,
+      name: "Default",
+      kind: "default",
+      depth: 1,
+    };
+    renderScreen({ profiles: [DEFAULT_UNIT], assignments: [] });
+    expect(await screen.findByText(GOV.EMPTY_TITLE)).toBeInTheDocument();
+    expect(screen.queryByText("Default")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: GOV.NEW_CTA })).toBeInTheDocument();
   });
 
   it("no profiles: the empty state carries New profile, and it is the ONE teal", async () => {
