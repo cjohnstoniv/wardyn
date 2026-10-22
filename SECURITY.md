@@ -54,7 +54,6 @@ Some kinds do enter the sandbox:
 - `env_secret` and `file_secret` grants, and component secrets delivered as a variable or a file. These stay for the whole run and cannot be revoked.
 - `ssh_key` grants: the key file exists in the sandbox during the clone.
 - `git_pat` with `WARDYN_GIT_PAT_BROKER=off`.
-- The AWS sign-in token with `WARDYN_AWS_SSO_PROXY_INJECT=off`.
 - The short-lived AWS role credentials that every `bedrock_sso` run and every AWS CLI component derives inside the sandbox.
 - The Wardyn-minted toolgate credential file, a local credential the sandbox's own tool gate reads.
 - The new credential inside a provider sign-in sandbox, which exists to create it.

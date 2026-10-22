@@ -569,7 +569,7 @@ spec:
               value: {{ printf "%s/%s" ($dps.mountPath | default "/etc/wardyn/daemon-proxy-secret") ($dps.existingSecretKey | default "proxy-url") | quote }}
             {{- end }}
             {{- if and .Values.awsSSOProxyInject (not (hasKey .Values.env "WARDYN_AWS_SSO_PROXY_INJECT")) }}
-            # Phase B kill switch (docs/OPERATIONS.md "Turning the lane off").
+            # AWS SSO proxy-inject posture (docs/OPERATIONS.md "Removed in 0.10.0").
             # An .Values.env entry overrides — scripts/kind-sso-walk.sh pins
             # its posture with `--set env.WARDYN_AWS_SSO_PROXY_INJECT=...`,
             # which must keep winning over this named value.

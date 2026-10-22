@@ -63,6 +63,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   Starting the agent again admits the run anew, and the erased row keeps only its harnesses, so it is refused in the
   organisation form ("Ask your admin"). An erased remote server is refused too, which a 0.9 revive accepted. A run
   that is still running keeps its server until it ends.
+- **`WARDYN_AWS_SSO_PROXY_INJECT=off` is removed, and `wardynd` refuses to start with it** (also `false` and `0`, in
+  the flag or the Helm value `awsSSOProxyInject`). Unset it or set it to `on`. For a TLS-intercepting corporate proxy,
+  stage the proxy's CA with `WARDYN_TRUSTED_CA_FILE` instead.
 
 ### Added
 
