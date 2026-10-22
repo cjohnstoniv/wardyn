@@ -29,7 +29,7 @@ an operator follows to turn one on and run the queue.
 
 - Units form a tree under one Default unit, whose walls are the deployment default: a unit built on the deployment default is its child; a standalone unit is top-level.
 - Memberships are keyed by unit, subject type and subject, so a person can belong to several units.
-  - Re-posting `POST /governance/memberships` for the same unit and subject updates its `priority` and `home`, and never moves the subject to another unit.
+  - Re-posting `POST /governance/memberships` for the same unit and subject updates `priority` and `home`, and never moves the subject to another unit.
   - `home: true` marks the unit a person runs in when a run names none.
   - With a stale group list, a run naming no unit is refused `groups_snapshot_stale` while any group home exists, unless the person's user membership is their home.
   - A held membership change's `target_key` is `<unit_id>:<subject_type>:<subject>`; one held before the upgrade reads `stale` at approval: propose it again.
