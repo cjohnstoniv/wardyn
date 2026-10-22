@@ -66,6 +66,7 @@
 - A run's image is an ordinary OCI image. The reference image is [`deploy/images/vm-linux`](../../deploy/images/vm-linux/Dockerfile) (Debian 13, no desktop).
 - It holds exactly one `/boot/vmlinuz-*` and one `/boot/initrd.img-*`, with virtio, ext4 and `qemu_fw_cfg` available. The root filesystem is `/dev/vda`.
 - It runs systemd, `qemu-guest-agent` (with `hwclock`, which sets the guest clock), and the Wardyn guest agent at `/usr/local/bin/wardyn-guest-agent` with its unit enabled.
+- Rebuild the image, and so its guest agent, with each runner upgrade: an image older than the runner fails to boot, because its guest agent does not answer the runner's session handshake.
 - It has the user `agent` (uid 1000, home `/home/agent`), as a container agent image does.
 - It installs the run's CA from `/sys/firmware/qemu_fw_cfg/by_name/opt/org.wardyn/ca.pem/raw` on every boot, so a VM trusts its own run's CA and never another's.
 
