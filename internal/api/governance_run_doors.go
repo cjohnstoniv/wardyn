@@ -37,17 +37,19 @@ import (
 // deleted profile instead, since a revive re-issues authority while a door only narrows a session;
 // the two are left apart on purpose.
 func (s *Server) runUnit(ctx context.Context, run types.AgentRun) (*ResolvedUnit, error) {
-	if run.UnitID == nil {
-		return nil, nil
+	var p *ResolvedUnit
+	if run.UnitID != nil {
+		var err error
+		p, err = s.resolveUnitByID(ctx, *run.UnitID)
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			p = nil
+		case err != nil:
+			return nil, fmt.Errorf("resolve the run's governance profile: %w", err)
+		}
 	}
-	p, err := s.resolveUnitByID(ctx, *run.UnitID)
-	switch {
-	case errors.Is(err, store.ErrNotFound):
-		return nil, nil
-	case err != nil:
-		return nil, fmt.Errorf("resolve the run's governance profile: %w", err)
-	}
-	return p, nil
+	// The run's captured restrictions are met into its limits at their current spec (restrictions.go).
+	return s.foldRestrictionLimits(ctx, run, p)
 }
 
 // refuseRunUnitError answers a door whose profile read failed: a composition nothing satisfies is

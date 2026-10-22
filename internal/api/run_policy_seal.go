@@ -41,7 +41,7 @@ type sealDecision struct {
 }
 
 // outerLayers is the ordered outer layers a run is sealed against, outermost
-// first: the Wardyn boundary, then the owner's restrictions (still to come).
+// first: the Wardyn boundary, then the restrictions the run captured (restrictionSealLayers).
 // Unit walls are inner layers, applied at resolve, never here. In no_limits there
 // is no layer, so the seal is the identity. A boundary that cannot be read seals
 // the run to no egress and no credential at all: an unread boundary is never no
@@ -55,10 +55,11 @@ func (s *Server) outerLayers(ctx context.Context, run types.AgentRun) []sealLaye
 		return []sealLayer{{rec: boundaryProvenance, egress: types.CeilingOverlay{AllowedDomains: &[]string{}, AllowAllEgress: &off},
 			grants: &[]types.GrantSpec{}}}
 	}
-	if !b.HardLimits() {
-		return nil
+	var layers []sealLayer
+	if b.HardLimits() {
+		layers = append(layers, sealLayer{rec: boundaryProvenance, egress: boundarySealEgress(b.Spec), grants: b.Spec.EligibleGrants})
 	}
-	return []sealLayer{{rec: boundaryProvenance, egress: boundarySealEgress(b.Spec), grants: b.Spec.EligibleGrants}}
+	return append(layers, s.restrictionSealLayers(ctx, run)...)
 }
 
 // boundarySealEgress is the boundary's egress as a seal layer: its allowlist when it names one and

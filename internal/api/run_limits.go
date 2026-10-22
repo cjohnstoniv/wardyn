@@ -7,6 +7,7 @@ import (
 	"cmp"
 	"fmt"
 	"math"
+	"slices"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -66,6 +67,7 @@ func (s *Server) captureRunLimits(run *types.AgentRun, ceiling governanceCeiling
 		id := ceiling.Unit.ID
 		run.UnitID = &id
 	}
+	run.RestrictionIDs = slices.Clone(ceiling.RestrictionIDs)
 	if end != nil {
 		if end.endSec != nil {
 			endsAt := run.CreatedAt.Add(time.Duration(*end.endSec) * time.Second)

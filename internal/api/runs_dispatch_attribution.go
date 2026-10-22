@@ -38,6 +38,12 @@ func (s *Server) baseRunAttribution(ctx context.Context, run types.AgentRun, sit
 		slog.WarnContext(ctx, "wardynd: the run's governance profile could not be read for its refusal attribution",
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))
 	}
+	if restrictionDefaultUnit(p) {
+		// No unit walls bind this run, only its restrictions: the first one names who to ask.
+		if ref := s.restrictionAttribution(ctx, run); ref != nil {
+			return ref
+		}
+	}
 	if p != nil {
 		return unitRefOrSiteHelp(p, site.PolicyHelp)
 	}

@@ -391,6 +391,10 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 		if run, haveRun, ok = s.boundaryAdmitApproval(w, r, ap, run, haveRun); !ok {
 			return
 		}
+		// A restriction on the run's owner bounds it the same way (governance_restrictions.go).
+		if run, haveRun, ok = s.restrictionAdmitApproval(w, r, ap, run, haveRun); !ok {
+			return
+		}
 	}
 
 	// Rule 4 — a scope must MEAN something on the kind it is written to, and the
