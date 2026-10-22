@@ -281,9 +281,7 @@ func TestUIGateway_ClipboardDefaultsBlockCopyOutAndAuditBoth(t *testing.T) {
 			t.Errorf("ui.clipboard.transfer row %s/%s %s, want %+v", row.Outcome, row.Target, row.Data, w)
 		}
 	}
-	h.audit.mu.Lock()
-	all, _ := json.Marshal(h.audit.events)
-	h.audit.mu.Unlock()
+	all, _ := json.Marshal(h.audit.snapshot())
 	if bytes.Contains(all, []byte(copySentinel)) || bytes.Contains(all, []byte(pasteSentinel)) {
 		t.Fatal("clipboard content reached an audit row")
 	}

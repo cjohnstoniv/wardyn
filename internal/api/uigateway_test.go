@@ -156,6 +156,13 @@ func (r *safeRecorder) Record(_ context.Context, ev types.AuditEvent) error {
 	return nil
 }
 
+// snapshot is the locked read of events a handler may still be appending to.
+func (r *safeRecorder) snapshot() []types.AuditEvent {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]types.AuditEvent(nil), r.events...)
+}
+
 // hasDataValue reports whether any recorded event's Data carries key=want, and
 // dataReasons lists the reasons it did carry — enough to say which arm wrote
 // the row without decoding the whole event in every assertion.

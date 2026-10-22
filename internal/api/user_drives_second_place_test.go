@@ -38,8 +38,8 @@ func TestDriveSecondPlaceSaveRefusal(t *testing.T) {
 			if w.Code != http.StatusBadRequest || out.Error != want {
 				t.Fatalf("create = %d %q, want 400 %q", w.Code, out.Error, want)
 			}
-			if len(st.drives) != 0 || len(rec.events) != 0 {
-				t.Fatalf("a refused second place wrote %d drive(s), %d audit row(s)", len(st.drives), len(rec.events))
+			if len(st.drives) != 0 || len(rec.snapshot()) != 0 {
+				t.Fatalf("a refused second place wrote %d drive(s), %d audit row(s)", len(st.drives), len(rec.snapshot()))
 			}
 		})
 	}
