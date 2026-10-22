@@ -39,14 +39,14 @@ an operator follows to turn one on and run the queue.
   - Lowering it below the deepest path: `400` `site_config_invalid`, naming that path.
 - `GET /governance` gives units `kind` (`default` for Default), `mode` and `depth`, memberships `home` and `legacy` (pre-0.10.0: only a person's first by precedence is a context), and `max_depth`. `ApplyGovernance` and `PlanGovernance` match memberships by unit name and never write Default or `legacy`.
 - A revive, admin restart or run-end extension (`run.end.set`) is refused `409` `unit_membership_gone` once the owner holds no membership of the run's unit or one above it. The owner's own checks their memberships (audit `arm` `owner_session`). Anyone else's passes while such a unit has a membership the owner could hold: their sub, user type, `all` or any group, never an email row (`arm` `row_can_match`).
-- The Default unit is read-only (`PUT` and `DELETE` are `409` `governance_unit_default_readonly`; its walls are `WARDYN_DEFAULT_POLICY`) and memberless: adding or moving a membership into it is `409` `governance_membership_default_unit`, before any hold.
+- The Default unit is read-only (`PUT` and `DELETE` are `409` `governance_unit_default_readonly`; its walls are `WARDYN_DEFAULT_POLICY`) and memberless: adding or moving a membership into it is `409` `governance_membership_default_unit`.
 - `PUT /governance/memberships/{id}` `{"unit_id"}` moves a membership, keeping its id, `priority`, `home` and `legacy` (audit `governance.membership.write`, with `from_unit_id`). An unknown unit is `404` `governance_unit_not_found`; one the subject is in, `409` `governance_membership_invalid`.
 - `POST /governance/memberships/{id}/promote` makes a legacy membership a context (already one: `409` `governance_membership_invalid`); audit `governance.membership.promote`. Both follow the switch below, held as ops `move`/`promote`.
-- Deleting a legacy membership can let a lower legacy one become someone's context. `activates: [{unit_id, unit_name}]` lists those units (a group one matches anyone) in the held change's diff, or the direct delete's `governance.membership.delete` row.
+- Deleting a legacy membership can let a lower legacy one become someone's context. `activates: [{unit_id, unit_name}]` lists those units in the held change's diff, or the direct delete's `governance.membership.delete` row.
 
 **Restrictions.**
 
-- A restriction (`/governance/restrictions`) is a deny-only list that follows its members; a workspace's unit pin is `PUT /workspaces/{id}/owning-unit`.
+- A restriction (`/governance/restrictions`) is a deny-only list (with `withheld_grants`, credentials kept from the run) that follows its members; a workspace's unit pin is `PUT /workspaces/{id}/owning-unit`.
 
 **Optional: four-eyes on governance writes.**
 

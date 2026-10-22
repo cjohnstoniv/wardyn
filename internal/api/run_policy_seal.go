@@ -32,6 +32,8 @@ type sealLayer struct {
 	rec    policyref.Provenance
 	egress types.CeilingOverlay
 	grants *[]types.GrantSpec
+	// withheldGrants is the credentials the layer keeps from a run (a restriction's withheld_grants).
+	withheldGrants []types.GrantSpec
 }
 
 // sealDecision is one knob a layer narrowed.

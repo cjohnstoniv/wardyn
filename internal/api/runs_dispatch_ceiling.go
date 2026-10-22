@@ -418,7 +418,7 @@ type withholding struct {
 // binds reports whether anything can be withheld at all.
 func (w withholding) binds() bool {
 	return len(w.deny) > 0 || slices.ContainsFunc(w.layers, func(l sealLayer) bool {
-		return l.grants != nil || l.egress.AllowedDomains != nil || (l.egress.DeniedDomains != nil && len(*l.egress.DeniedDomains) > 0)
+		return l.grants != nil || len(l.withheldGrants) > 0 || l.egress.AllowedDomains != nil || (l.egress.DeniedDomains != nil && len(*l.egress.DeniedDomains) > 0)
 	})
 }
 
@@ -428,7 +428,16 @@ func (w withholding) binds() bool {
 // provider, workspace, integration and source-control credentials) included.
 func (w withholding) grantWithheld(g types.GrantSpec) bool {
 	return slices.ContainsFunc(w.layers, func(l sealLayer) bool {
-		return l.grants != nil && governanceGrantWithinCeiling(g, *l.grants) != nil
+		return (l.grants != nil && governanceGrantWithinCeiling(g, *l.grants) != nil) || grantWithheldBy(g, l.withheldGrants)
+	})
+}
+
+// grantWithheldBy reports whether a layer's withheld list names g: an entry with no scope names every
+// grant of its kind, one with a scope the grants of the same pairing (composer.CeilingGrantsCovering).
+// Identity only: unlike the ceiling comparator, a longer TTL or a dropped approval never lets g past.
+func grantWithheldBy(g types.GrantSpec, list []types.GrantSpec) bool {
+	return slices.ContainsFunc(list, func(w types.GrantSpec) bool {
+		return w.Kind == g.Kind && (len(w.Scope) == 0 || len(composer.CeilingGrantsCovering(g, []types.GrantSpec{w})) > 0)
 	})
 }
 

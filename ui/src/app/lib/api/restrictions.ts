@@ -21,6 +21,8 @@ export interface RestrictionSpec {
   min_confinement_class?: ConfinementClass;
   auto_stop_after_sec?: number;
   git_push_any_branch?: boolean;
+  /** Credentials the run is not given: a scope-less entry names every grant of its kind. */
+  withheld_grants?: GrantSpec[];
 }
 
 /** types.RestrictionLimits: the deny_* switches only turn on; the other bools can only be false. */

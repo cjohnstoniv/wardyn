@@ -113,6 +113,14 @@ func validateRestriction(b *types.RestrictionWrite) error {
 	if err := validatePolicySpec(restrictionAsSpec(b.Spec)); err != nil {
 		return err
 	}
+	for i, g := range b.Spec.WithheldGrants {
+		if _, ok := withheldGrantKinds[g.Kind]; !ok {
+			return fmt.Errorf("withheld_grants[%d]: unknown grant kind %q", i, g.Kind)
+		}
+		if len(g.Scope) > 0 && !validWithheldScope(g) {
+			return fmt.Errorf("withheld_grants[%d]: the scope does not decode into a usable pairing", i)
+		}
+	}
 	eff, err := restrictionEffective(b.Spec, b.Limits)
 	if err != nil {
 		return err
@@ -134,6 +142,17 @@ func validateRestriction(b *types.RestrictionWrite) error {
 	sortRestrictionMembers(members)
 	b.Members = members
 	return nil
+}
+
+var withheldGrantKinds = map[types.GrantKind]struct{}{
+	types.GrantAPIKey: {}, types.GrantGitPAT: {}, types.GrantSSHKey: {}, types.GrantEnvSecret: {},
+	types.GrantFileSecret: {}, types.GrantGitHubToken: {}, types.GrantCloudSTS: {},
+}
+
+// validWithheldScope reports whether a scoped withheld entry names a pairing that decodes.
+func validWithheldScope(g types.GrantSpec) bool {
+	_, _, _, _, err := storedSecretGrantPairing(g)
+	return err == nil
 }
 
 // restrictionEffective is a restriction's spec and limits met into the unbounded authority: what it
@@ -162,6 +181,11 @@ func restrictionAtLeastAsStrict(old types.Restriction, next types.RestrictionWri
 	}
 	if !composer.Leq(a.Ceiling, b.Ceiling, a.Limits, b.Limits) || !sameJSON(old.Contact, next.Contact) {
 		return false
+	}
+	for _, g := range old.Spec.WithheldGrants {
+		if !grantWithheldBy(g, next.Spec.WithheldGrants) {
+			return false
+		}
 	}
 	if slices.Contains(next.Members, types.RestrictionMember{SubjectType: types.CapabilitySubjectAll}) {
 		return true

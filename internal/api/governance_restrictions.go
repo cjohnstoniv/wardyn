@@ -168,7 +168,8 @@ func (s *Server) restrictionSealLayers(ctx context.Context, run types.AgentRun) 
 	layers := make([]sealLayer, 0, len(list))
 	for _, r := range list {
 		layers = append(layers, sealLayer{rec: restrictionProvenance(r),
-			egress: types.CeilingOverlay{DeniedDomains: r.Spec.DeniedDomains, AllowAllEgress: r.Spec.AllowAllEgress}})
+			egress:         types.CeilingOverlay{DeniedDomains: r.Spec.DeniedDomains, AllowAllEgress: r.Spec.AllowAllEgress},
+			withheldGrants: r.Spec.WithheldGrants})
 	}
 	return layers
 }
