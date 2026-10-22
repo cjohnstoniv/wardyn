@@ -150,3 +150,8 @@ export function describeEvent(e: AuditEvent): string {
 export function describeAction(e: AuditEvent): string {
   return describeParts(e).lead;
 }
+
+/** The target for its own column: the row's target as it is, or the sentence's stand-in ("an unknown host"). */
+export function describeObject(e: AuditEvent): string {
+  return e.target || describeParts(e).object;
+}

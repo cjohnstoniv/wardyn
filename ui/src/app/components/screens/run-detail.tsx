@@ -39,7 +39,7 @@ import { LIST_LIMIT } from "../../lib/api/core";
 import { appURL } from "../../lib/base-path";
 import { useCopyToClipboard } from "../../lib/use-copy-to-clipboard";
 import { absoluteTime, clockTime, getErrorMessage } from "../../lib/format";
-import { describeAction } from "../../lib/audit-copy";
+import { describeAction, describeEvent, describeObject } from "../../lib/audit-copy";
 import { Button } from "../ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import { ActorTypeChip } from "../wardyn/primitives";
@@ -511,7 +511,7 @@ function AuditTab({
                 <span
                   data-testid="run-audit-action"
                   className="min-w-0 grow basis-[120px] truncate text-xs text-foreground sm:w-[190px] sm:grow-0 sm:basis-auto sm:shrink-0"
-                  title={e.action}
+                  title={`${describeEvent(e)}\n${e.action}`}
                 >
                   {describeAction(e)}
                 </span>
@@ -528,8 +528,8 @@ function AuditTab({
                       </span>
                     ) : (
                       // #3035: the viewed run's own id says nothing the page does not.
-                      <span className="min-w-0 flex-1 truncate text-xs text-foreground" title={e.target}>
-                        {e.target === runId ? "" : e.target || "—"}
+                      <span className="min-w-0 flex-1 truncate text-xs text-foreground" title={e.target === runId ? undefined : e.target}>
+                        {e.target === runId ? "" : describeObject(e) || "—"}
                       </span>
                     )}
                     <RuleSourceChip event={e} />

@@ -396,13 +396,19 @@ describe("RunDetailScreen — Audit tab wording", () => {
     ]);
     const action = within(own).getByTestId("run-audit-action");
     expect(action).toHaveTextContent("Created the run");
-    expect(action).toHaveAttribute("title", "run.create");
-    expect(within(own).getByTestId("run-audit-target")).not.toHaveTextContent("run-1");
-    expect(within(own).getByTestId("run-audit-target")).toHaveTextContent("");
+    expect(action).toHaveAttribute("title", "Created the run\nrun.create");
+    expect(within(own).getByTestId("run-audit-target").textContent).toBe("");
+    expect(within(own).getByTestId("run-audit-target").querySelector("[title]")).toBeNull();
 
     expect(within(other).getByTestId("run-audit-action")).toHaveTextContent("Allowed egress to");
-    expect(within(other).getByTestId("run-audit-action")).toHaveAttribute("title", "egress.allow");
+    expect(within(other).getByTestId("run-audit-action")).toHaveAttribute("title", "Allowed egress to pypi.org\negress.allow");
     expect(within(other).getByTestId("run-audit-target")).toHaveTextContent("pypi.org");
+  });
+
+  it("reads an egress row with no target as the Audit screen does", async () => {
+    const [row] = await openAuditTab([{ ...base, id: "e3", action: "egress.deny", target: "", actor_type: "proxy", outcome: "deny" }]);
+    expect(within(row).getByTestId("run-audit-action")).toHaveTextContent("Denied egress to");
+    expect(within(row).getByTestId("run-audit-target")).toHaveTextContent("an unknown host");
   });
 });
 
@@ -835,7 +841,7 @@ describe("RunDetailScreen — erased values on the Audit tab (M4 D)", () => {
       "Erased on request. The event and its place in the log remain.",
     );
     expect(screen.queryByText("[erased]")).toBeNull();
-    expect(screen.getByText("Decided an approval request")).toHaveAttribute("title", "approval.decide");
+    expect(screen.getByText("Decided an approval request")).toHaveAttribute("title", "Decided an approval request — Erased\napproval.decide");
   });
 
   it("a row with nothing erased shows no Erased note", async () => {

@@ -107,8 +107,9 @@ test.describe("Tier B run pages", () => {
     const id = await seedRun(page);
     await navToRoute(page, `/runs/${id}`);
     await page.getByRole("tab", { name: /^Audit/ }).click();
-    const row = page.getByTestId("run-audit-row").filter({ has: page.locator('[title="run.create"]') }).first();
+    const row = page.getByTestId("run-audit-row").filter({ has: page.locator('[data-testid="run-audit-action"][title$="run.create"]') }).first();
     await expect(row.getByTestId("run-audit-action")).toHaveText("Created the run");
+    await expect(row.getByTestId("run-audit-action")).toHaveAttribute("title", /^Created the run[\s\S]*\nrun\.create$/);
     await expect(row.getByTestId("run-audit-target")).not.toContainText(id);
   });
 });
