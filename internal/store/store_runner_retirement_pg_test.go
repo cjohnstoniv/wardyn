@@ -43,6 +43,18 @@ func (f actionFixture) endedRetirementRun(t *testing.T, capture bool) (types.Age
 }
 
 // candidates checks the producer's candidate runs are exactly want.
+// reportRetireCapable is the caps report of a runner that settles retire_run, in its one inventory session.
+func (f actionFixture) reportRetireCapable(t *testing.T) {
+	t.Helper()
+	session := f.rn.ID.String()
+	if err := f.st.BeginRunnerInventory(t.Context(), f.rn.ID, session); err != nil {
+		t.Fatal(err)
+	}
+	if current, err := f.st.RecordRunnerCaps(t.Context(), f.rn.ID, session, store.RunnerCapsReport{RetireCapable: true}, time.Now()); err != nil || !current {
+		t.Fatalf("caps report: current = %v, %v", current, err)
+	}
+}
+
 func (f actionFixture) candidates(t *testing.T, want ...uuid.UUID) {
 	t.Helper()
 	got, err := f.st.RunnerRetirementCandidates(t.Context())
@@ -143,9 +155,7 @@ func TestPG_QueueRunnerRetirement_RequiresSnapshotWatermarkCursor(t *testing.T) 
 	// A runner whose caps never said retire (older than 0.9.3) has no
 	// candidates; once it says so, the run is one.
 	f.candidates(t)
-	if err := f.st.SetRunnerRetireCapable(t.Context(), f.rn.ID, true); err != nil {
-		t.Fatal(err)
-	}
+	f.reportRetireCapable(t)
 	f.candidates(t, run.ID)
 	f.advance(t, run.ID, store.RetirementKill)
 	f.candidates(t) // the kill waits for the runner: not selected again until answered
@@ -219,9 +229,7 @@ func TestPG_Retirement_RetireQueuedOnlyAfterKillSuccess(t *testing.T) {
 	if has, err := f.st.RunHasPendingRunnerAction(t.Context(), run.ID); err != nil || has {
 		t.Fatalf("fence after settlement = %v %v", has, err)
 	}
-	if err := f.st.SetRunnerRetireCapable(t.Context(), f.rn.ID, true); err != nil {
-		t.Fatal(err)
-	}
+	f.reportRetireCapable(t)
 	f.candidates(t) // a settled run is never a candidate
 }
 

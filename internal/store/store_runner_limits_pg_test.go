@@ -572,6 +572,16 @@ func TestPG_RemoteStartKeepsItsOwnPlaceAndReservesItsStartSize(t *testing.T) {
 	}
 }
 
+// reportArch records a caps report carrying arch for session and checks whether the store took it as the
+// runner's current session's.
+func reportArch(t *testing.T, pg store.PG, id uuid.UUID, session, arch string, wantCurrent bool) {
+	t.Helper()
+	got, err := pg.RecordRunnerCaps(context.Background(), id, session, store.RunnerCapsReport{Arch: arch}, time.Now())
+	if err != nil || got != wantCurrent {
+		t.Fatalf("caps report for arch %q: current = %v, %v; want %v", arch, got, err, wantCurrent)
+	}
+}
+
 // A runner's architecture is stored at registration, kept per connect (the latest winning), left alone
 // by a revoked runner, and the database refuses one the runner images are not built for.
 func TestPG_RunnerArchIsStoredAndUpdated(t *testing.T) {
@@ -584,9 +594,14 @@ func TestPG_RunnerArchIsStoredAndUpdated(t *testing.T) {
 	if err != nil || got.Arch != "amd64" {
 		t.Fatalf("a runner registered with arch amd64 = %q, %v", got.Arch, err)
 	}
-	if err := pg.SetRunnerArch(ctx, r.ID, "arm64"); err != nil {
+	if _, err := pg.ClaimRunner(ctx, r.ID, r.Owner, r.KeyFingerprint, time.Now()); err != nil {
 		t.Fatal(err)
 	}
+	session := uuid.NewString()
+	if err := pg.BeginRunnerInventory(ctx, r.ID, session); err != nil {
+		t.Fatal(err)
+	}
+	reportArch(t, pg, r.ID, session, "arm64", true)
 	if got, err = pg.GetRunner(ctx, r.ID); err != nil || got.Arch != "arm64" {
 		t.Fatalf("after a connect reporting arm64 = %q, %v", got.Arch, err)
 	}
@@ -600,9 +615,7 @@ func TestPG_RunnerArchIsStoredAndUpdated(t *testing.T) {
 	if _, err := pg.RevokeRunner(ctx, r.ID, time.Now().UTC(), "alice", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := pg.SetRunnerArch(ctx, r.ID, "amd64"); err != nil {
-		t.Fatal(err)
-	}
+	reportArch(t, pg, r.ID, session, "amd64", true)
 	if got, err = pg.GetRunner(ctx, r.ID); err != nil || got.Arch != "arm64" {
 		t.Fatalf("a revoked runner's arch = %q, %v; want the one it had", got.Arch, err)
 	}
