@@ -359,13 +359,17 @@ func TestTakeover_DeclineThawsAPausedRunAndCounts(t *testing.T) {
 	}
 }
 
-// TestTakeover_TakeOverThawsAPausedRunAndCountsOnce: the first take over answers the request (counted,
-// run thawed); a second person replacing the holder decides nothing, and a hand back closes no request.
+// TestTakeover_TakeOverThawsAPausedRunAndCountsOnce: the first take over answers the request (counted, run
+// thawed, row APPROVED and held by the taker); a later take over that replaces the holder decides nothing, and
+// a hand back closes no request.
 func TestTakeover_TakeOverThawsAPausedRunAndCountsOnce(t *testing.T) {
-	f, _, id, owner := pausedTakeover(t)
+	f, aap, id, owner := pausedTakeover(t)
 	w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/take-over", owner, "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("take over = %d %s", w.Code, w.Body.String())
+	}
+	if got, err := aap.Get(context.Background(), id); err != nil || got.State != types.ApprovalApproved || got.TakeoverHolder != pauseOwner {
+		t.Errorf("taken-over request = %v held by %q (%v), want APPROVED held by %q", got.State, got.TakeoverHolder, err, pauseOwner)
 	}
 	if _, thaws := f.rn.counts(); thaws != 1 {
 		t.Errorf("thaws = %d after the first take over, want 1", thaws)
@@ -373,11 +377,29 @@ func TestTakeover_TakeOverThawsAPausedRunAndCountsOnce(t *testing.T) {
 	if n := approvalsCounted(f, "approved"); n != 1 {
 		t.Errorf("approved decisions counted = %d, want 1", n)
 	}
+	// A second person takes over, then the owner takes it back: each replaces a holder and decides nothing.
+	if _, prev, err := aap.TakeOver(context.Background(), id, "sub-second"); err != nil || prev != pauseOwner {
+		t.Fatalf("second person's take over: replaced %q (%v), want %q", prev, err, pauseOwner)
+	}
+	w = doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/take-over", owner, "")
+	var back takeoverResponse
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &back) != nil || back.TakeoverHolder != pauseOwner {
+		t.Fatalf("replacing take over = %d %s", w.Code, w.Body.String())
+	}
+	if _, thaws := f.rn.counts(); thaws != 1 {
+		t.Errorf("thaws = %d after a replacing take over, want still 1", thaws)
+	}
+	if n := approvalsCounted(f, "approved"); n != 1 {
+		t.Errorf("approved decisions counted = %d after a replacing take over, want still 1", n)
+	}
 	if w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/hand-back", owner, ""); w.Code != http.StatusOK {
 		t.Fatalf("hand back = %d %s", w.Code, w.Body.String())
 	}
 	if n := approvalsCounted(f, "approved") + approvalsCounted(f, "denied"); n != 1 {
 		t.Errorf("decisions counted = %d after a hand back, want still 1", n)
+	}
+	if _, thaws := f.rn.counts(); thaws != 1 {
+		t.Errorf("thaws = %d after a hand back, want still 1", thaws)
 	}
 }
 

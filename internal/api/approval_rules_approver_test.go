@@ -622,8 +622,9 @@ func TestPolicyDeciderIsNeverTheAdminToken(t *testing.T) {
 	}
 }
 
-// TestApprovalsDecideHasOneCaller: Approvals.Decide is called only in decide(), and decide() only by the approve and
-// deny handlers and the approval-rule approver.
+// TestApprovalsDecideHasOneCaller: Approvals.Decide is called only in decide() and in handleDeclineTakeover (a
+// takeover request is declined under the takeover entry rule), and decide() only by the approve and deny handlers
+// and the approval-rule approver. The test keeps its name.
 func TestApprovalsDecideHasOneCaller(t *testing.T) {
 	entries, err := os.ReadDir(".")
 	if err != nil {
