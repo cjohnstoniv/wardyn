@@ -240,7 +240,9 @@ func (r *folderSandboxRunner) agentEgress() error {
 	return nil
 }
 
-// blockingGet is a sandbox's file reads where the read of block waits for release.
+// blockingGet is a sandbox's file reads where the read of block waits for release. A pass's
+// sftp-server is its own process, so a pass that ends with a file open leaves that file whole for
+// the next: the read hides the in-memory file's TransferError, which would poison it for good.
 type blockingGet struct {
 	sftp.FileReader
 	block   string
@@ -251,7 +253,8 @@ func (b blockingGet) Fileread(r *sftp.Request) (io.ReaderAt, error) {
 	if path.Base(r.Filepath) == b.block {
 		<-b.release
 	}
-	return b.FileReader.Fileread(r)
+	ra, err := b.FileReader.Fileread(r)
+	return struct{ io.ReaderAt }{ra}, err
 }
 
 func (r *folderSandboxRunner) ExecStream(_ context.Context, _ string, spec runner.ExecSpec) (*runner.ExecSession, error) {
@@ -288,9 +291,7 @@ func (r *folderSandboxRunner) ExecStream(_ context.Context, _ string, spec runne
 	toServer, stdin := io.Pipe()
 	stdout, fromServer := io.Pipe()
 	files, release := r.files, make(chan struct{})
-	if r.block != "" {
-		files.FileGet = blockingGet{FileReader: r.files.FileGet, block: r.block, release: release}
-	}
+	files.FileGet = blockingGet{FileReader: r.files.FileGet, block: r.block, release: release}
 	srv := sftp.NewRequestServer(struct {
 		io.Reader
 		io.WriteCloser
