@@ -507,6 +507,7 @@ export default function App() {
     let alive = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let attempt = 0;
+    const hadToken = getToken() !== null;
     const stop = () => {
       alive = false;
       clearTimeout(timer);
@@ -527,7 +528,7 @@ export default function App() {
           }
           stop();
           setColdUnreachable(false);
-          if (probe === "unauthed") noteEnded(reason);
+          if (probe === "unauthed") noteEnded(reason, hadToken);
           if (probe === "authed") setAuth("authed");
         });
       }, COLD_PROBE_RETRY_MS[Math.min(attempt, COLD_PROBE_RETRY_MS.length - 1)]);
@@ -555,6 +556,7 @@ export default function App() {
       // Another tab's announcement always asks again: a probe already out was sent before that sign-in and
       // would answer 401 (#3368). It takes over from that probe, whose answer is then dropped.
       if (probingRef.current && !fromOtherTab) return;
+      const hadToken = getToken() !== null;
       const { current, answer } = startProbe();
       void answer.then(({ probe, reason, transient }) => {
         if (!current()) return;
@@ -564,7 +566,7 @@ export default function App() {
         if (alive && probe === "unauthed") {
           // The person signed out in another tab: that, not the server's reason, is what happened to them.
           if (heardSignOut) setNotice((prev) => (prev?.kind === "own" ? prev : { kind: "elsewhere" }));
-          else noteEnded(reason);
+          else noteEnded(reason, hadToken);
         }
         if (!alive || probe !== "authed" || authRef.current !== "unauthed") return;
         // Back in, by another tab's sign-in: a later sign-out here starts from a clean slate.

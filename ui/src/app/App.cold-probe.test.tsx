@@ -49,7 +49,7 @@ vi.mock("./lib/use-poll", async (importOriginal) => ({
 vi.mock("./components/wardyn/needs-you-notices", () => ({ NeedsYouNotices: () => null }));
 
 import App from "./App";
-import { SESSION_ENDED_REASON } from "./lib/api/core";
+import { SESSION_ENDED_REASON, setToken } from "./lib/api/core";
 import { SESSION_ENDED } from "./lib/session-continuity-copy";
 
 const gate = () => screen.queryByRole("heading", { name: "Sign in" });
@@ -75,6 +75,7 @@ describe("a cold load that cannot reach the daemon", () => {
   });
   afterEach(() => {
     cleanup();
+    setToken(null);
     vi.useRealTimers();
   });
 
@@ -190,6 +191,28 @@ describe("a cold load that cannot reach the daemon", () => {
     await tick(1000);
     expect(gate()).toBeInTheDocument();
     expect(screen.getByText(SESSION_ENDED.EXPIRED)).toBeInTheDocument();
+  });
+
+  it("a 401 with no reason on a retry, with a stored token, shows the fallback notice", async () => {
+    probes.results = ["unreachable", "unauthed"];
+    setToken("stored-token");
+    await mount();
+    await tick(1000);
+    expect(gate()).toBeInTheDocument();
+    expect(screen.getByText(SESSION_ENDED_REASON)).toBeInTheDocument();
+  });
+
+  it("a focus re-probe 401 with no reason, with a stored token, shows the fallback notice", async () => {
+    probes.results = ["unreachable", "unauthed"];
+    setToken("stored-token");
+    await mount();
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await tick(0);
+    expect(probes.calls).toBe(2);
+    expect(gate()).toBeInTheDocument();
+    expect(screen.getByText(SESSION_ENDED_REASON)).toBeInTheDocument();
   });
 
   it("neg: a 401 on a retry with no reason and no stored token shows no notice", async () => {
