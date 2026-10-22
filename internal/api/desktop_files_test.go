@@ -230,6 +230,35 @@ func TestDesktopFiles_RefusalsBeforeTheSandbox(t *testing.T) {
 	}
 }
 
+// noSandboxRefStore answers the run with no sandbox_ref, as the seeded e2e run has.
+type noSandboxRefStore struct{ store.Store }
+
+func (s *noSandboxRefStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
+	run, err := s.Store.GetRun(ctx, id)
+	run.SandboxRef = ""
+	return run, err
+}
+
+// A RUNNING run with no sandbox_ref has no desktop to move files to: list, upload and download
+// all answer 409 attach_not_running, and nothing reaches the sandbox.
+func TestDesktopFiles_NoSandboxRefRefusesEveryEndpoint(t *testing.T) {
+	e := newDesktopFilesEnv(t, nil)
+	e.srv.cfg.Store = &noSandboxRefStore{Store: e.srv.cfg.Store}
+	for _, c := range []struct{ method, name, body string }{
+		{http.MethodGet, "", ""},
+		{http.MethodPut, "notes.csv", "x"},
+		{http.MethodGet, "agent-report.csv", ""},
+	} {
+		w := doSSO(t, e.srv, c.method, e.path(c.name), e.ses["owner"], c.body)
+		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), reasonAttachNotRunning) {
+			t.Fatalf("%s %q with no sandbox_ref: %d %s", c.method, c.name, w.Code, w.Body.String())
+		}
+	}
+	if e.folder.execs != 0 {
+		t.Fatalf("%d execs reached the sandbox", e.folder.execs)
+	}
+}
+
 // sponsorFilesStore makes the env's run a service identity's, sponsored by sub-sponsor.
 type sponsorFilesStore struct {
 	*envelopeStore
