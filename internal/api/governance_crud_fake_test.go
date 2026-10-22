@@ -48,6 +48,10 @@ func (s *govCrudStore) ListGovernanceUnits(context.Context) ([]types.GovernanceU
 	return s.profiles, s.listProfilesErr
 }
 
+func (s *govCrudStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return types.SiteConfig{}, nil
+}
+
 func (s *govCrudStore) ListGovernanceMemberships(context.Context) ([]types.GovernanceMembership, error) {
 	return s.assignments, s.listAssignmentsErr
 }
@@ -458,4 +462,8 @@ func TestGovernanceCRUD_ProfileDeleteAuditNamesTheRowTheDeleteRemoved(t *testing
 	if !strings.Contains(data, `"name":"interns"`) {
 		t.Fatalf("delete audit data = %q, want the name the delete returned", data)
 	}
+}
+
+func (s *composedUIAppsStore) ListMembershipsFor(ctx context.Context, users, groups []string, userType string) ([]store.MembershipMatch, error) {
+	return membershipsFromResolve(s.ResolveGovernanceUnit(ctx, users, groups, userType))
 }

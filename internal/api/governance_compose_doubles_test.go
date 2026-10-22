@@ -13,7 +13,7 @@ import (
 )
 
 // unitChainOf serves GetGovernanceUnitChain from a double's own profile list the way the one
-// recursive statement does in Postgres: the profile first, then each base, stopping at three rows or
+// recursive statement does in Postgres: the profile first, then each base, stopping at MaxUnitDepthCap rows or
 // at a row with no base. err is the double's own list error, so a double that fails its list read
 // fails its chain read too.
 func unitChainOf(profiles []types.GovernanceUnit, err error, id uuid.UUID) ([]types.GovernanceUnit, error) {
@@ -22,7 +22,7 @@ func unitChainOf(profiles []types.GovernanceUnit, err error, id uuid.UUID) ([]ty
 	}
 	byID := unitsByID(profiles)
 	var chain []types.GovernanceUnit
-	for cur := &id; cur != nil && len(chain) < maxUnitDepth; {
+	for cur := &id; cur != nil && len(chain) < store.MaxUnitDepthCap; {
 		row, ok := byID[*cur]
 		if !ok {
 			break

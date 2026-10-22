@@ -40,6 +40,9 @@ func ceilingRunRefusal(err error) *runRefusal {
 	if u, ok := isOverlayUnsatisfiable(err); ok {
 		return runError(http.StatusForbidden, reasonGovernanceOverlayUnsatisfiable, u.Error())
 	}
+	if refusal := contextRunRefusal(err); refusal != nil {
+		return refusal
+	}
 	return runServerError("resolve governance ceiling", err)
 }
 

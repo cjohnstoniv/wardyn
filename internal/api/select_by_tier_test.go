@@ -185,3 +185,7 @@ func TestSelectByTierOneRuleTwoEntrances(t *testing.T) {
 		}
 	}
 }
+
+func (s *tierStore) ListMembershipsFor(ctx context.Context, users, groups []string, userType string) ([]store.MembershipMatch, error) {
+	return membershipsFromResolve(s.ResolveGovernanceUnit(ctx, users, groups, userType))
+}

@@ -39,6 +39,9 @@ func (s *memberBoundStore) ResolveGovernanceUnit(context.Context, []string, []st
 	return s.profile, types.CapabilitySubjectUser, nil
 }
 func (s *memberBoundStore) HasGroupTierMemberships(context.Context) (bool, error) { return false, nil }
+func (s *memberBoundStore) ListGovernanceMemberships(context.Context) ([]types.GovernanceMembership, error) {
+	return nil, nil
+}
 func (s *memberBoundStore) GetPolicy(context.Context, uuid.UUID) (types.RunPolicy, error) {
 	return s.policy, nil
 }
@@ -247,4 +250,8 @@ func jsonErrorHasPrefix(t *testing.T, body, prefix string) bool {
 		t.Fatalf("decode error body %q: %v", body, err)
 	}
 	return len(e.Error) >= len(prefix) && e.Error[:len(prefix)] == prefix
+}
+
+func (s *memberBoundStore) ListMembershipsFor(ctx context.Context, users, groups []string, userType string) ([]store.MembershipMatch, error) {
+	return membershipsFromResolve(s.ResolveGovernanceUnit(ctx, users, groups, userType))
 }

@@ -35,6 +35,9 @@ func (s *flakyCeilingStore) ResolveGovernanceUnit(context.Context, []string, []s
 	return nil, "", context.DeadlineExceeded
 }
 func (s *flakyCeilingStore) HasGroupTierMemberships(context.Context) (bool, error) { return false, nil }
+func (s *flakyCeilingStore) ListGovernanceMemberships(context.Context) ([]types.GovernanceMembership, error) {
+	return nil, nil
+}
 func (s *flakyCeilingStore) ListCapabilityGrants(context.Context) ([]types.CapabilityGrant, error) {
 	return nil, nil
 }
@@ -171,4 +174,8 @@ func TestCeilingRefusalCarriesItsRemedy(t *testing.T) {
 		t.Errorf("list secrets 403 body = %s\nwant it to name the remedy — the refusal is correct, the message was "+
 			"the defect: a human told only \"groups_snapshot_stale\" opens a support ticket", got.Body.String())
 	}
+}
+
+func (s *flakyCeilingStore) ListMembershipsFor(ctx context.Context, users, groups []string, userType string) ([]store.MembershipMatch, error) {
+	return membershipsFromResolve(s.ResolveGovernanceUnit(ctx, users, groups, userType))
 }

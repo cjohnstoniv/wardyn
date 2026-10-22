@@ -604,7 +604,7 @@ start.
   which three and why.
 - Every OTHER reason is drawn from one of two sources:
   - the
-    closed set in [`internal/api/reasons.go`](../internal/api/reasons.go), `reasons_routes.go` and `reasons_revive.go` (a reason two
+    closed set in [`internal/api/reasons.go`](../internal/api/reasons.go), `reasons_routes.go`, `reasons_revive.go` and `reasons_governance.go` (a reason two
     routes share — the dispatch-time-snapshot family below, the hold-chain
     terminal/exhausted pair — means the same whichever
     sent it),
@@ -759,7 +759,10 @@ start.
 | `governance_unit_request_invalid` / `governance_ceiling_invalid` / `governance_unit_name_conflict` / `governance_unit_in_use` / `governance_membership_invalid` / `governance_preview_claims_invalid` | `PUT/POST /governance/units` and `/governance/memberships`, and the preview routes — `governance_preview_claims_invalid` is shared with the user-drive naming preview (`user_drives_preview.go`), which feeds the same `normalizeGovernancePreviewClaims` validator. `governance_unit_in_use` is a `409` when a profile is still assigned or still the base of another profile (the body names those profiles). A composed profile read by an SDK that predates composition shows `ceiling: {}` and `limits: {}` and ignores `effective`; a `PUT` from it omits the composition fields, which are kept, so it cannot flatten the profile. |
 | `governance_overlay_invalid` | `PUT/POST /governance/units` (400): a composed profile's `overlay` or `overlay_limits` does not decode, names something its base does not permit (a domain outside the base, a method the base excludes, `allow_all_egress` on a base without it, a looser bound, a grant the base does not hold), would mean "everything" by being empty (`allowed_methods: []`), names a base that does not exist, or sits beside a non-empty `ceiling` or `limits` (a composed profile states its policy only in the overlay). |
 | `governance_unit_cycle` | `PUT/POST /governance/units` (409): the write would make a profile, through its base, its own base. |
-| `governance_unit_depth` | `PUT/POST /governance/units` (409): the write would put a profile, or one built on it, more than three profiles deep. |
+| `governance_unit_depth` | `PUT/POST /governance/units` (409): the write would put a unit or one below it deeper than `governance_max_depth` (16 unset or `0`; `null` keeps it). |
+| `unit_not_a_context` | `POST /runs`, preflight and the policy preview (403): the unit asked for is not one of the caller's. |
+| `workspace_unit_not_yours` | `POST /runs`, preflight and the policy preview (403): an attached workspace's unit is on no path of the caller's units; `policy` names it. |
+| `unit_membership_gone` | Revive, admin restart, run-end extension (409): the run's owner holds no membership placing them in the run's unit ([governance writes](operations/governance-writes.md)). |
 | `governance_overlay_unsatisfiable` | `PUT/POST /governance/units` (409): a base change would leave a profile built on it with a policy nothing satisfies (the body names that profile). The SAME value as authz's own registered launch refusal ([`internal/authz/registry.go`](../internal/authz/registry.go), `403` on create, preflight and every live door), a literal in `reasons.go` for the same reason `groups_snapshot_stale` is. |
 | `governance_second_human_local_mode` | `WARDYN_GOVERNANCE_SECOND_HUMAN` cannot be enforced in local mode (`503`): nobody is authenticated there, so the proposer and the approver are both client-supplied. Every covered governance write (profile, assignment, grant, enforcement, availability, user-type priority, role mapping, egress baseline) and every `/governance/changes` approve or reject answers it. |
 | `governance_change_pending` | A covered write (`/governance/units`, `/governance/memberships`, `/permissions/grants`, `/permissions/enforcement`, `/permissions/availability`, `PUT /user-types/{id}`, `/access/mappings`, `PUT /governance/egress-baseline`) with `WARDYN_GOVERNANCE_SECOND_HUMAN` on (409): a live change already waits for approval at this target; the message names it. Approve or reject that one first, or let it expire. |
@@ -1027,7 +1030,7 @@ applied until a different approver approves it. The SDK never reads that body as
   make, as a `GovernancePlan`, and writes nothing: one `GET /api/v1/governance`, no write request.
   Its matching rules are `ApplyGovernance`'s. A plan is a snapshot: the server can change before an
   apply runs.
-- `GET /governance` returns every profile and every assignment; a composed profile's own `ceiling` holds only what it stores, so read the resolved one under `effective.ceiling`. `/governance/units` and `/governance/units/{id}` take writes only, so a `GET` on either answers `405`.
+- `GET /governance` returns every profile and every assignment; a composed profile's own `ceiling` holds only what it stores, so read the resolved one under `effective.ceiling`. Units carry `kind`, `mode` and `depth`, memberships `home` and `legacy`, and the document `max_depth` ([governance writes](operations/governance-writes.md)). `/governance/units` and `/governance/units/{id}` take writes only, so a `GET` on either answers `405`.
 - `GovernanceApplyResult.Steps` lists the writes an apply issued, in order, each `applied`, `pending`
   or `failed`. On a failed write `ApplyGovernanceResult` returns the steps so far with the error.
 - `ApplyDrivesResult` is `ApplyDrives` with the same steps, as `DrivesApplyResult.Steps`; `ApplyDrives`

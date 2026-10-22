@@ -217,12 +217,11 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	ctx := r.Context()
-	var req createRunRequest
-	if !s.decodeRunRequest(w, r, &req) {
+	r, req, ok := s.decodeStampedRunRequest(w, r)
+	if !ok {
 		return
 	}
-	canonicalizeRunRepos(&req, s.adoHostsLoader(r.Context()))
+	ctx := r.Context()
 	// The order of the five gates below is create's own order, and it is
 	// load-bearing rather than tidy. The structural parity guard
 	// (TestPreflightMirrorsLaunchGates) can see the gate SET but not the

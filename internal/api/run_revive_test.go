@@ -54,6 +54,10 @@ type reviveStore struct {
 
 var _ store.RunProxyConfigs = (*reviveStore)(nil)
 
+func (s *reviveStore) ListGovernanceMemberships(context.Context) ([]types.GovernanceMembership, error) {
+	return allRowsFor(s.profiles), nil
+}
+
 func (s *reviveStore) PutRunProxyConfig(_ context.Context, id uuid.UUID, sealed []byte) error {
 	plain, err := kek.Open(s.key, sealed, runProxyConfigAAD(id))
 	if err != nil {

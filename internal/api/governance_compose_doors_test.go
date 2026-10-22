@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -44,7 +45,7 @@ type chainScenario struct {
 }
 
 // seededBadChains are the graphs every door must refuse: a base that cannot be read, a base the
-// read left out (never a partial chain), a loop, and a chain four deep.
+// read left out (never a partial chain), a loop, and a chain past the maximum depth.
 func seededBadChains() []chainScenario {
 	return []chainScenario{
 		{name: "the base read fails", listErr: errors.New("conn closed by peer"),
@@ -55,11 +56,14 @@ func seededBadChains() []chainScenario {
 			b.ParentID, b.Overlay = &c.ID, &types.CeilingOverlay{}
 			return []types.GovernanceUnit{b, c}
 		}},
-		{name: "a chain four deep", profiles: func(b, c types.GovernanceUnit) []types.GovernanceUnit {
-			mid := types.GovernanceUnit{ID: uuid.New(), Name: "division", ParentID: &b.ID, Overlay: &types.CeilingOverlay{}}
-			top := types.GovernanceUnit{ID: uuid.New(), Name: "org", ParentID: &mid.ID, Overlay: &types.CeilingOverlay{}}
-			c.ParentID = &top.ID
-			return []types.GovernanceUnit{b, mid, top, c}
+		{name: "a chain past the maximum depth", profiles: func(b, c types.GovernanceUnit) []types.GovernanceUnit {
+			out := []types.GovernanceUnit{b}
+			for len(out) < maxUnitDepthDefault { // b, 15 more, then c: 17 deep
+				out = append(out, types.GovernanceUnit{ID: uuid.New(), Name: fmt.Sprintf("level-%d", len(out)+1),
+					ParentID: &out[len(out)-1].ID, Overlay: &types.CeilingOverlay{}})
+			}
+			c.ParentID = &out[len(out)-1].ID
+			return append(out, c)
 		}},
 	}
 }

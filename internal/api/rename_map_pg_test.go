@@ -20,11 +20,13 @@ import (
 	"os"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 type renameMapFile struct {
@@ -168,7 +170,7 @@ func TestRenameMap(t *testing.T) {
 		}
 		audit = append(audit, auditRow{ev.Action, data})
 	}
-	got := rekey(decodeAny(t, mustJSONString(t, map[string]any{"steps": steps, "audit": audit})), renameMapFile{})
+	got := withoutTreeFields(rekey(decodeAny(t, mustJSONString(t, map[string]any{"steps": steps, "audit": audit})), renameMapFile{}))
 
 	if path := os.Getenv("RENAME_CAPTURE_ORIGIN"); path != "" {
 		if err := os.WriteFile(path, []byte(mustJSONString(t, got)+"\n"), 0o644); err != nil {
@@ -181,12 +183,39 @@ func TestRenameMap(t *testing.T) {
 	if err := json.Unmarshal(mustReadFile(t, "testdata/rename/map.json"), &m); err != nil {
 		t.Fatal(err)
 	}
-	want := rekey(decodeAny(t, string(mustReadFile(t, "testdata/rename/corpus.origin.json"))), m)
+	want := withoutTreeFields(rekey(decodeAny(t, string(mustReadFile(t, "testdata/rename/corpus.origin.json"))), m))
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("the branch's governance surface differs from the origin corpus re-keyed by testdata/rename/map.json\n got: %s\nwant: %s",
 			mustJSONString(t, got), mustJSONString(t, want))
 	}
 	_ = ctx
+}
+
+// treeFields are what the unit tree (unit-tree migration) added to the governance surface; this pin
+// covers the rename only, so they and the Default unit's row are left out of the comparison.
+var treeFields = []string{"kind", "mode", "depth", "home", "legacy", "max_depth"}
+
+func withoutTreeFields(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, val := range x {
+			if !slices.Contains(treeFields, k) {
+				out[k] = withoutTreeFields(val)
+			}
+		}
+		return out
+	case []any:
+		out := make([]any, 0, len(x))
+		for _, e := range x {
+			if m, ok := e.(map[string]any); ok && m["kind"] == types.UnitKindDefault {
+				continue
+			}
+			out = append(out, withoutTreeFields(e))
+		}
+		return out
+	}
+	return v
 }
 
 func mustJSONString(t *testing.T, v any) string {

@@ -54,7 +54,16 @@ func TestGapCovAssignedProfileIdentity(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := &Server{cfg: Config{Store: tc.st}}
-			id, name, tier, err := s.assignedUnitIdentity(t.Context(), []string{"a@corp.example"}, []string{"eng"}, "dev")
+			pick, err := s.selectContext(t.Context(), contextQuery{users: []string{"a@corp.example"}, groups: []string{"eng"}, userType: "dev"}, contextChoice{})
+			var id uuid.UUID
+			var name string
+			var tier types.CapabilitySubjectType
+			if err == nil && !pick.isDefault() {
+				id, name, tier = pick.unit.ID, pick.unit.Name, pick.row.Membership.SubjectType
+			}
+			if errors.Is(tc.wantErr, store.ErrNotFound) && err == nil && pick.isDefault() {
+				err = store.ErrNotFound // no membership selects the Default unit
+			}
 			if id != tc.wantID || name != tc.wantName || tier != tc.wantTier || !errors.Is(err, tc.wantErr) {
 				t.Fatalf("= %s %q %q %v; want %s %q %q %v", id, name, tier, err, tc.wantID, tc.wantName, tc.wantTier, tc.wantErr)
 			}
@@ -121,4 +130,8 @@ func TestGapCovApplyStepRefusesAnOverlayWithInvalidLimits(t *testing.T) {
 	if u.Leaf != "contractors" || !strings.Contains(u.Detail, "max_cpu_millis") {
 		t.Errorf("unsatisfiable = %+v, want the leaf and the limit named", u)
 	}
+}
+
+func (s *gapCovResolveStore) ListMembershipsFor(ctx context.Context, users, groups []string, userType string) ([]store.MembershipMatch, error) {
+	return membershipsFromResolve(s.ResolveGovernanceUnit(ctx, users, groups, userType))
 }

@@ -324,7 +324,7 @@ const (
 	// in refusal_test.go, and documentedDuplicateReasonValues).
 	reasonGovernanceOverlayInvalid       = "governance_overlay_invalid"       // the overlay names something its base does not permit, or does not decode
 	reasonGovernanceUnitCycle            = "governance_unit_cycle"            // the write would make a profile its own base
-	reasonGovernanceUnitDepth            = "governance_unit_depth"            // the write would put a profile more than three deep
+	reasonGovernanceUnitDepth            = "governance_unit_depth"            // the write would put a unit deeper than the maximum unit depth
 	reasonGovernanceOverlayUnsatisfiable = "governance_overlay_unsatisfiable" // nothing satisfies a profile and its base together
 	// reasonGovernancePreviewClaimsInvalid is shared by GET /governance/check
 	// and the user-drive naming preview (user_drives_preview.go): both feed the

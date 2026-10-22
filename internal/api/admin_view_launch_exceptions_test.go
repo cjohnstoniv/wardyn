@@ -160,3 +160,7 @@ func TestLocalMode_LaunchesNeverAdminView(t *testing.T) {
 		})
 	}
 }
+
+func (f noProfileProbeStore) ListMembershipsFor(ctx context.Context, users, groups []string, userType string) ([]store.MembershipMatch, error) {
+	return membershipsFromResolve(f.ResolveGovernanceUnit(ctx, users, groups, userType))
+}
