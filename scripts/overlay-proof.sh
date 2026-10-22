@@ -19,6 +19,9 @@
 #       to a throwaway proofs/<lane>-<sha12> branch, never to main.
 #   overlay-proof.sh plan <bundle-dir> <keyed_sha>
 #       Prints the workflow matrix as one JSON line: proofs grouped by package.
+#   overlay-proof.sh paths      (NUL-separated paths on stdin)
+#       Normalises them, one per line; exit 2 for any that is absolute, not already
+#       clean, or has an empty, '.', '..' or '.git' component.
 #   overlay-proof.sh run <bundle-dir> <checkout-dir> [--only <name>...]
 #       Runs the selected proofs one after another, each in a clean tree.
 #       Exit 0 only if every one PASSes, 1 if any FAILs, 2 if the bundle or the
@@ -28,6 +31,11 @@
 #   { "keyed_sha": "<40-hex>", "proofs": [ { "name", "package", "run", "tags",
 #     "files": { "<repo path>": ".proofs/files/<name>/<repo path>" },
 #     "want_fail": "--- FAIL: <Name>" } ] }
+#
+# A proof also FAILs, each with its own reason, when the run says "no tests to
+# run", when the named test is skipped (so go test runs with -v), or when any
+# line starts with "panic:". A target path that resolves outside the checkout or
+# into .git (a tracked link, say) fails before anything is copied.
 #
 # want_fail is matched against whole output lines, after dropping leading
 # whitespace (nested subtests are indented) and go's trailing " (0.01s)", so
@@ -46,8 +54,7 @@ PROOF_MIN=${OVERLAY_PROOF_PROOF_MIN:-2}
 die() { echo "overlay-proof.sh: $*" >&2; exit 2; }
 
 # helper <subcommand> args...: manifest parsing, validation, bundle packing.
-helper() {
-python3 -I - "$@" <<'PYEOF'
+read -r -d '' PY <<'PYEOF' || true
 import json, os, posixpath, re, shutil, sys
 
 NAME = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]*$')
@@ -172,10 +179,22 @@ elif cmd == 'pack':
         f.write('\n')
     load(out)
     print(f"packed {len(proofs)} proofs into {out}/.proofs")
+elif cmd == 'paths':  # NUL-separated paths on stdin -> sorted, normalised, one per line
+    items = [p for p in sys.stdin.buffer.read().split(b'\0') if p]
+    out = []
+    for raw in items:
+        try:
+            p = raw.decode('utf-8')
+        except UnicodeDecodeError:
+            bad("a path is not UTF-8")
+        if not safe(p):
+            bad(f"unsafe path {p!r}")
+        out.append(p)
+    print('\n'.join(sorted(set(out))))
 else:
     bad(f"unknown helper command {cmd}")
 PYEOF
-}
+helper() { python3 -I -c "$PY" "$@"; }
 
 # prove_one <src> <bundle> <name> <package> <run> <tags> <want> <repo>... -- <bundlefile>...
 # Prints the PROOF line; returns 0 on PASS, 1 on FAIL.
@@ -189,30 +208,53 @@ prove_one() {
   local out rc='-' reason=ok t0=$SECONDS
   out=$(mktemp)
 
+  # Resolve every target, links included, before anything is written: it must stay
+  # inside the checkout and out of .git.
+  local real target
+  real=$(realpath -- "$src")
   for i in "${!repos[@]}"; do
-    mkdir -p "$src/$(dirname "${repos[$i]}")"
-    cp "$bundle/${bfiles[$i]}" "$src/${repos[$i]}"
+    target=$(realpath -m -- "$src/${repos[$i]}")
+    case "$target" in
+      "$real/.git" | "$real/.git/"*) reason="path ${repos[$i]} resolves into .git" ;;
+      "$real/"*) ;;
+      *) reason="path ${repos[$i]} resolves outside the repo" ;;
+    esac
   done
-  local got exp
-  got=$(git -C "$src" diff --name-only | LC_ALL=C sort)
-  exp=$(printf '%s\n' "${repos[@]}" | LC_ALL=C sort)
-  if [ -z "$got" ] || [ "$got" != "$exp" ]; then
+  local got='' exp=''
+  if [ "$reason" = ok ]; then
+    for i in "${!repos[@]}"; do
+      mkdir -p "$src/$(dirname "${repos[$i]}")"
+      cp "$bundle/${bfiles[$i]}" "$src/${repos[$i]}"
+    done
+    # Both sides go through the same normalisation; a changed path that is not a
+    # plain relative one (outside the repo, in .git) fails the proof.
+    got=$(git -C "$src" diff --name-only -z | helper paths 2>/dev/null) || reason="a changed path is outside the repo or inside .git"
+    exp=$(printf '%s\0' "${repos[@]}" | helper paths)
+  fi
+  if [ "$reason" != ok ]; then
+    :
+  elif [ -z "$got" ] || [ "$got" != "$exp" ]; then
     reason="changed files differ from the manifest: git diff has [$(tr '\n' ' ' <<<"$got")]"
   else
     rc=0
-    (cd "$src" && go test -count=1 ${tags:+-tags "$tags"} -run "$run" "$pkg") >"$out" 2>&1 || rc=$?
-    local norm wl pl
+    (cd "$src" && go test -v -count=1 ${tags:+-tags "$tags"} -run "$run" "$pkg") >"$out" 2>&1 || rc=$?
+    local norm wl pl name_ skipl
     norm=$(sed -E -e 's/^[[:space:]]+//' -e 's/ \([0-9.]+s\)$//' "$out")
     wl=$(grep -Fxn -- "$want" <<<"$norm" | head -n 1 | cut -d: -f1 || true)
     pl=$(grep -m1 "^panic:" <<<"$norm" || true)
+    # The named test, or one of its subtests, reported as skipped.
+    name_=${want#--- FAIL: }
+    skipl=$(grep -Fx -e "--- SKIP: $name_" <<<"$norm" || grep -F -e "--- SKIP: $name_/" <<<"$norm" || true)
     if grep -Fq '[build failed]' "$out"; then reason="build failed"
     elif grep -Fq '[setup failed]' "$out"; then reason="setup failed"
+    elif grep -Fq 'no tests to run' "$out"; then reason="no tests to run"
+    elif [ -n "$skipl" ]; then reason="skipped"
+    elif [ -n "$pl" ]; then reason="panic"
     elif [ "$rc" = 0 ]; then reason="overlay green"
     elif [ "$rc" != 1 ]; then reason="rc $rc, want 1"
-    elif [ -n "$pl" ]; then reason="panic"
     elif [ -z "$wl" ]; then reason="no output line equals the want_fail"
     fi
-    grep -E '^[[:space:]]*(--- FAIL|FAIL|ok|panic:)|\[(build|setup) failed\]' "$out" | head -n 20 | sed 's/^/  | /'
+    grep -E '^[[:space:]]*(--- (FAIL|SKIP)|FAIL|ok|panic:)|\[(build|setup) failed\]|no tests to run' "$out" | head -n 20 | sed 's/^/  | /'
     [ "$reason" = ok ] || { echo "  | tail of the go test output:"; tail -n 25 "$out" | sed 's/^/  | /'; }
   fi
   rm -f "$out"
@@ -294,8 +336,9 @@ main() {
       [ $# -eq 2 ] || die "usage: plan <bundle-dir> <keyed_sha>"
       helper plan "$1" "$2" "$COLD_MIN" "$PROOF_MIN"
       ;;
+    paths) helper paths ;;
     run) cmd_run "$@" ;;
-    *) die "usage: overlay-proof.sh pack|plan|run ... (see the header)" ;;
+    *) die "usage: overlay-proof.sh pack|plan|run|paths ... (see the header)" ;;
   esac
 }
 main "$@"

@@ -52,6 +52,10 @@ func TestAddBar(t *testing.T) {
 EOF
 export GIT_CONFIG_COUNT=3 GIT_CONFIG_KEY_0=maintenance.auto GIT_CONFIG_VALUE_0=false GIT_CONFIG_KEY_1=gc.auto GIT_CONFIG_VALUE_1=0 GIT_CONFIG_KEY_2=gc.autoDetach GIT_CONFIG_VALUE_2=false
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com
+# Two tracked links: one to a directory outside the checkout, one into .git.
+mkdir "$TMP/outside"
+ln -s "$TMP/outside" "$REPO/lnk"
+ln -s .git "$REPO/glnk"
 git -C "$REPO" init -q
 git -C "$REPO" add -A
 git -C "$REPO" commit -q -m fixture
@@ -123,6 +127,39 @@ B="$TMP/panic"; put_file "$B" panic internal/p/p.go < <(panics)
 manifest "$B" "$SHA" "$(pj panic 'TestAdd$' '--- FAIL: TestAdd' internal/p/p.go)"
 expect "a panic in the named test FAILs" 1 "result=FAIL reason=panic" "$SCRIPT" run "$B" "$REPO"
 clean "panic"
+
+# The named test is skipped while another test in the run fails, so rc is 1.
+skiptest() { printf 'package p\n\nimport "testing"\n\nfunc TestAdd(t *testing.T)    { t.Skip("skipped") }\nfunc TestAddBar(t *testing.T) { t.Fatal("bar") }\n'; }
+B="$TMP/skip"; put_file "$B" skip internal/p/p_test.go < <(skiptest)
+manifest "$B" "$SHA" "$(pj skip 'TestAdd' '--- FAIL: TestAdd' internal/p/p_test.go)"
+expect "a skipped named test FAILs" 1 "result=FAIL reason=skipped" "$SCRIPT" run "$B" "$REPO"
+clean "skip"
+
+# The -run regex matches nothing.
+B="$TMP/notests"; put_file "$B" notests internal/p/p.go < <(addbug)
+manifest "$B" "$SHA" "$(pj notests 'TestNoSuchTest' '--- FAIL: TestNoSuchTest' internal/p/p.go)"
+expect "no tests to run FAILs" 1 "result=FAIL reason=no tests to run" "$SCRIPT" run "$B" "$REPO"
+clean "notests"
+
+# A target that resolves through a tracked link, outside the checkout or into .git.
+cp "$REPO/.git/config" "$TMP/gitconfig.before"
+B="$TMP/lnk"; put_file "$B" lnk lnk/p.go < <(addbug)
+manifest "$B" "$SHA" "$(pj lnk 'TestAdd' '--- FAIL: TestAdd' lnk/p.go)"
+expect "a link out of the repo FAILs" 1 "reason=path lnk/p.go resolves outside the repo" "$SCRIPT" run "$B" "$REPO"
+[ ! -e "$TMP/outside/p.go" ] || fail "a file was written outside the checkout"
+B="$TMP/glnk"; put_file "$B" glnk glnk/config < <(addbug)
+manifest "$B" "$SHA" "$(pj glnk 'TestAdd' '--- FAIL: TestAdd' glnk/config)"
+expect "a link into .git FAILs" 1 "reason=path glnk/config resolves into .git" "$SCRIPT" run "$B" "$REPO"
+cmp -s "$REPO/.git/config" "$TMP/gitconfig.before" || fail "a file in .git was written"
+clean "links"
+
+# The path normaliser used for the manifest and for git's changed names.
+for bad in './x' 'a/../b' '.git/config' 'x/.git/y' '/abs' 'a//b' 'a/./b'; do
+  out=0; printf 'internal/p/p.go\0%s\0' "$bad" | "$SCRIPT" paths >/dev/null 2>&1 || out=$?
+  [ "$out" = 2 ] || fail "paths accepted $bad (rc $out)"
+done
+[ "$(printf 'b/y\0a/x\0b/y\0' | "$SCRIPT" paths)" = $'a/x\nb/y' ] || fail "paths did not sort and dedupe"
+echo "ok   path normaliser"
 
 # TestAddBar fails; "--- FAIL: TestAdd" is only a prefix of that line.
 B="$TMP/substr"; put_file "$B" substr internal/p/p.go < <(barbug)
