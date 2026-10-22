@@ -10,9 +10,10 @@ import { RUN_AGENTS } from "../../wardyn/copy";
 import { AgentBadge, RunStateBadge } from "../../wardyn/primitives";
 import { useAgentName } from "../../wardyn/use-agent-name";
 
-/** An agent's status word as a run state: absent while it is unknown on a run that has ended. */
+/** An agent's status word as a run state; an absent state is still unknown while a run is live. */
 export function agentStatus(s: RunAgentState | undefined, live: boolean): RunState | undefined {
-  if (!s || s.state === "running") return live ? "RUNNING" : undefined;
+  if (!s) return undefined;
+  if (s.state === "running") return live ? "RUNNING" : undefined;
   return s.exit_code === 0 ? "COMPLETED" : "FAILED";
 }
 
