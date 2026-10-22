@@ -44,6 +44,7 @@ func sameJSON(a, b any) bool {
 // stay distinguishable when the payload is replayed).
 type unitChangePayload struct {
 	Name          string                 `json:"name"`
+	Mode          string                 `json:"mode,omitempty"`
 	Ceiling       types.RunPolicySpec    `json:"ceiling"`
 	Limits        types.GovernanceLimits `json:"limits"`
 	Contact       json.RawMessage        `json:"contact,omitempty"`
@@ -54,7 +55,7 @@ type unitChangePayload struct {
 
 func unitPayloadOf(req governanceUnitRequest) unitChangePayload {
 	return unitChangePayload{
-		Name: req.Name, Ceiling: req.Ceiling, Limits: req.Limits,
+		Name: req.Name, Mode: req.Mode, Ceiling: req.Ceiling, Limits: req.Limits,
 		Contact: req.Contact, ParentID: req.ParentID, Overlay: req.Overlay, OverlayLimits: req.OverlayLimits,
 	}
 }
