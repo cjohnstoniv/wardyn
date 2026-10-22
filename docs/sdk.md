@@ -1194,11 +1194,10 @@ curl -sN -H 'Authorization: Bearer demo-admin-token' \
 - `include_killed=1` (a KILLED run older than 24h is hidden by default), `no_end=1`
   (only live runs with no end), `workspace`
   (exact match on the run's repo/workspace-path label) and `q` (a case-insensitive
-  substring search over title/task/repo/created_by),
-- `sponsored=exclude`: a person's own list (`owner=me`) also carries the runs of the service identities they
-  sponsor; `sponsored=exclude` turns only that widening off, so the list is their own runs alone. It filters
-  nothing else, and does nothing where the widening is already off (`owner=all`, or a delegated token). Any other
-  value is refused `400` `invalid_sponsored_param`.
+  substring search over title/task/repo/created_by).
+- `sponsored=exclude` turns off only the addition of a sponsor's service identities' runs to their own list
+  (`owner=me`), and does nothing where that addition is already off (`owner=all`, or a delegated token). It
+  filters nothing else. Any other value is `400` `invalid_sponsored_param`.
 
 - With any of them present the
   response is ordered live runs first, then ended runs by end time, and two headers
