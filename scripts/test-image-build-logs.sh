@@ -21,15 +21,17 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "${TMP}"' EXIT
 mkdir -p "${TMP}/bin" "${TMP}/seed/cache/download" "${TMP}/tmpdir"
 ERR_LINE="go: example.com/m@v1.0.0: Get proxy.golang.org: dial tcp: i/o timeout"
+OK_LINE="#1 [fake step] progress line of a build that succeeds"
 
-# A docker that records its argv and fails (or, FAKE_DOCKER_OK=1, passes) a build.
+# A docker that records its argv and fails (or, FAKE_DOCKER_OK=1, passes, printing a
+# progress line) a build.
 # Like the real one, `-q` hides the failed step's output (the go error) and leaves
 # only the terse summary; without it the step's output is printed.
 cat >"${TMP}/bin/docker" <<STUB
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >>"${TMP}/docker.args"
 if [[ "\${1:-}" == build ]]; then
-  [[ "\${FAKE_DOCKER_OK:-}" == 1 ]] && exit 0
+  [[ "\${FAKE_DOCKER_OK:-}" == 1 ]] && { echo "${OK_LINE}"; exit 0; }
   [[ " \$* " == *" -q "* ]] || echo "${ERR_LINE}"
   echo "ERROR: failed to solve: process go mod download did not complete successfully" >&2
   exit 1
@@ -62,6 +64,21 @@ grep -qF -- "${ERR_LINE}" <<<"${out}" || fail "wardyn_docker_build dropped the e
 # 3. A clean build prints nothing.
 out="$(FAKE_DOCKER_OK=1 wardyn_docker_build -t x . 2>&1)" || fail "a clean build returned non-zero"
 [[ -z "${out}" ]] || fail "a clean build printed output: ${out}"
+
+# 3a. Under GitHub Actions the build's output streams to stderr (the job log), a failed
+#     build still returns its status, and --progress=plain is passed.
+: >"${TMP}/docker.args"
+out="$(GITHUB_ACTIONS=true wardyn_docker_build -t x . 2>&1)"
+rc=$?
+[[ ${rc} -ne 0 ]] || fail "streaming wardyn_docker_build returned 0 for a failed build"
+grep -qF -- "${ERR_LINE}" <<<"${out}" || fail "streaming wardyn_docker_build dropped the build output"
+grep -qF -- "build --progress=plain -t x ." "${TMP}/docker.args" || fail "streaming wardyn_docker_build did not pass --progress=plain"
+out="$(GITHUB_ACTIONS=true FAKE_DOCKER_OK=1 wardyn_docker_build -t x . 2>&1)" || fail "a clean streamed build returned non-zero"
+[[ "${out}" == "${OK_LINE}" ]] || fail "a clean streamed build did not stream its progress line (output: ${out})"
+out="$(GITHUB_ACTIONS=true PATH="${TMP}/bin:${PATH}" bash -e -c 'source "$1"; wardyn_docker_build -t x .; echo UNREACHED' _ "${REPO_ROOT}/scripts/lib/image-build.sh" 2>&1)"
+rc=$?
+[[ ${rc} -ne 0 ]] || fail "streaming wardyn_docker_build under bash -e exited 0 on a failed build"
+grep -q UNREACHED <<<"${out}" && fail "bash -e ran on past a failed streamed build"
 
 # 3b. Bare under `bash -e` (a workflow step's default shell): the tail is still printed,
 #     and no log is left behind.

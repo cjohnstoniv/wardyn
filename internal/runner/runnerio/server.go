@@ -45,6 +45,8 @@ type Server struct {
 	execSlots     chan struct{}
 	outputs       map[uuid.UUID]*outputBuffer
 	holds         func(localRef string) bool
+	// markRefused, when set, marks a refused output OPEN in place of unacknowledgedSince: a test seam.
+	markRefused func(b *outputBuffer, acks uint64)
 }
 
 // New opens private output storage beneath the runner's state directory.

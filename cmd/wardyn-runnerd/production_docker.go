@@ -447,7 +447,7 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		if arch == "" {
 			arch = engineArch(ctx)
 		}
-		caps := runnerwire.Caps{Support: support, Version: version.String(), MachineName: machine, Arch: arch, Capacity: capacity(ctx), BYOISelftest: dispatcher.Selftests(), Retire: true, Resident: dispatcher.Residents(), EndsUnkept: !keeps}
+		caps := runnerwire.Caps{Support: support, Version: version.String(), MachineName: machine, Arch: arch, Capacity: capacity(ctx), BYOISelftest: dispatcher.Selftests(), Retire: true, Resident: dispatcher.Residents(), EndsUnkept: !keeps, ProxySettings: runnerwire.ProxySettings}
 		if !extra.report.fill(ctx, &caps, reprobe) && !always {
 			return nil
 		}

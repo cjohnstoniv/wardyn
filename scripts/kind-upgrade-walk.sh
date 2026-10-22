@@ -122,6 +122,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT}"
 # shellcheck source=scripts/lib/common.sh
 source "${ROOT}/scripts/lib/common.sh"
+# shellcheck source=scripts/lib/image-build.sh
+source "${ROOT}/scripts/lib/image-build.sh"
 
 if [[ "${WARDYN_TEST_K8S:-}" != "1" ]]; then
   skip_lane "kind-upgrade-walk: set WARDYN_TEST_K8S=1 to run the kind upgrade/rollback walk (skipping)."
@@ -231,10 +233,8 @@ git rev-parse -q --verify "refs/tags/v${FROM_VERSION}" >/dev/null \
   || die "could not fetch tag v${FROM_VERSION}"
 mkdir -p "${WORK}/from-src"
 git archive "v${FROM_VERSION}" | tar -x -C "${WORK}/from-src" || die "could not export the v${FROM_VERSION} tree"
-docker build -f "${WORK}/from-src/deploy/compose/Dockerfile.proxy" -t "${FROM_PROXY_IMAGE}" "${WORK}/from-src" >"${WORK}/build-from-proxy.log" 2>&1 \
-  || { tail -40 "${WORK}/build-from-proxy.log" >&2; die "building the v${FROM_VERSION} proxy image failed"; }
-docker build -f "${WORK}/from-src/deploy/images/claude-code/Dockerfile" -t "${FROM_AGENT_IMAGE}" "${WORK}/from-src" >"${WORK}/build-from-agent.log" 2>&1 \
-  || { tail -40 "${WORK}/build-from-agent.log" >&2; die "building the v${FROM_VERSION} claude-code agent image failed"; }
+wardyn_docker_build -f "${WORK}/from-src/deploy/compose/Dockerfile.proxy" -t "${FROM_PROXY_IMAGE}" "${WORK}/from-src" || die "building the v${FROM_VERSION} proxy image failed"
+wardyn_docker_build -f "${WORK}/from-src/deploy/images/claude-code/Dockerfile" -t "${FROM_AGENT_IMAGE}" "${WORK}/from-src" || die "building the v${FROM_VERSION} claude-code agent image failed"
 kind load docker-image "${FROM_PROXY_IMAGE}" --name "${CLUSTER}" >/dev/null
 kind load docker-image "${FROM_AGENT_IMAGE}" --name "${CLUSTER}" >/dev/null
 
@@ -370,10 +370,8 @@ pass "run ${CARRIED_RUN_ID} RUNNING on v${FROM_VERSION}, agent and proxy pods Ru
 # ── upgrade to tip ───────────────────────────────────────────────────────────
 step "building this tree's own tip images (wardynd + proxy) and loading them"
 TIP_PROXY_IMAGE="wardyn/wardyn-proxy:kind-upgrade-walk"
-docker build -f deploy/compose/Dockerfile.wardynd -t "${TIP_IMAGE}" . >"${WORK}/build-tip.log" 2>&1 \
-  || { tail -40 "${WORK}/build-tip.log" >&2; die "building the tip wardynd image failed"; }
-docker build -f deploy/compose/Dockerfile.proxy -t "${TIP_PROXY_IMAGE}" . >"${WORK}/build-tip-proxy.log" 2>&1 \
-  || { tail -40 "${WORK}/build-tip-proxy.log" >&2; die "building the tip proxy image failed"; }
+wardyn_docker_build -f deploy/compose/Dockerfile.wardynd -t "${TIP_IMAGE}" . || die "building the tip wardynd image failed"
+wardyn_docker_build -f deploy/compose/Dockerfile.proxy -t "${TIP_PROXY_IMAGE}" . || die "building the tip proxy image failed"
 kind load docker-image "${TIP_IMAGE}" --name "${CLUSTER}" >/dev/null
 kind load docker-image "${TIP_PROXY_IMAGE}" --name "${CLUSTER}" >/dev/null
 

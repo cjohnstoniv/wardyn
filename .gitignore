@@ -201,6 +201,8 @@ ds-bundle/
 # answers, cited by the push_content approval card — ships like any other
 # frozen copy table above.
 !/docs/design/held-push-canon.md
+# runs-filters-canon.md freezes the phone Filters sheet strings (#3041); runs-filters-copy.test.ts parses it.
+!/docs/design/runs-filters-canon.md
 /test/e2e/campaign/
 /test/e2e/RESULTS.md
 
