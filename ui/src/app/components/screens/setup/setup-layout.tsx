@@ -226,7 +226,7 @@ export function SetupLayout({
               a run is offered but optional). */}
           {isOptional ? (
             <footer className={cn(FOOTER, "justify-end")}>
-              <Button variant="outline" onClick={() => returnTo && onSelect(returnTo)}>
+              <Button variant="outline" onClick={() => returnTo && onSelect(returnTo)} disabled={!!returnRefusal}>
                 <ArrowLeft className="size-4" aria-hidden />
                 Back to required steps
               </Button>

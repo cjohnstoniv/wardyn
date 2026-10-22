@@ -145,6 +145,26 @@ describe("the provider editor's Available to", () => {
     ]);
   });
 
+  it("Only these with nobody listed disables Save, so nothing saves open to Everyone; the first Add enables it (#2593)", async () => {
+    const { onSaved } = renderEditor(null);
+    await userEvent.click(screen.getByRole("button", { name: MODEL_PROVIDERS.KIND.anthropic_api_key }));
+    const d = screen.getByRole("dialog");
+    const save = within(d).getByRole("button", { name: E.SAVE });
+    expect(save).toBeEnabled();
+
+    await userEvent.click(within(d).getByRole("radio", { name: AVAILABILITY.ONLY }));
+    expect(within(d).getByTestId("availability-pending")).toHaveTextContent(AVAILABILITY.PENDING_NOTE);
+    expect(save).toBeDisabled();
+    await userEvent.click(save);
+    expect(putMock).not.toHaveBeenCalled();
+    expect(onSaved).not.toHaveBeenCalled();
+
+    await userEvent.type(within(d).getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER), "portfolio-manager");
+    await userEvent.click(within(d).getByRole("button", { name: AVAILABILITY.ADD_CTA }));
+    expect(await within(d).findByText("Portfolio manager")).toBeInTheDocument();
+    expect(save).toBeEnabled();
+  });
+
   it("the provider saved but the list didn't: stays open on the saved provider, with the server's sentence", async () => {
     upsertGrantMock.mockRejectedValue(new HttpError(400, UNKNOWN_TYPE));
     getAvailabilityMock.mockResolvedValue({ kind: "model_provider", value: "bloomberg-gateway", restricted: false, allowed_by: [] });

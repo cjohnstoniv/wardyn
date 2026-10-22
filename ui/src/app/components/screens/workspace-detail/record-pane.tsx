@@ -49,6 +49,7 @@ import {
   orphanedVerifySessions,
   isRecording,
   lastCleanReplay,
+  sessionKeyOf,
   sessionStage,
   verifyKeyOf,
 } from "./session-helpers";
@@ -320,8 +321,13 @@ function NewSessionForm({
   const operator = useOperator();
   const [name, setName] = React.useState(existing.length === 0 ? "build & test" : "");
   const trimmed = name.trim();
+  // The server overwrites a session recorded under the same name, so a name that matches one is the
+  // same Re-record the session's own card confirms.
+  const [confirming, setConfirming] = React.useState(false);
   const start = () => {
-    if (trimmed) onRecord(trimmed);
+    if (!trimmed || disabled || !operator) return;
+    if (existing.some((label) => sessionKeyOf(label) === sessionKeyOf(trimmed))) setConfirming(true);
+    else onRecord(trimmed);
   };
   return (
     <div className="space-y-2 rounded-lg border border-dashed border-border p-3" data-testid="record-new-session">
@@ -331,7 +337,10 @@ function NewSessionForm({
           value={name}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") start();
+            if (e.key !== "Enter") return;
+            // The confirm below takes focus; without this the same keypress lands on its Cancel.
+            e.preventDefault();
+            start();
           }}
           placeholder="name this session — e.g. build & test"
           className="h-9 max-w-xs flex-1"
@@ -347,6 +356,20 @@ function NewSessionForm({
         Opens an attached terminal with the repo + your model provider ready. Do the real thing, then
         click Done recording to capture what it used. You can replay it confined once it settles.
       </p>
+      <AlertDialog open={confirming} onOpenChange={setConfirming}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Re-record &quot;{trimmed}&quot;?</AlertDialogTitle>
+            <AlertDialogDescription>
+              The current recorded review for this session will be replaced once the new recording settles.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => onRecord(trimmed)}>Re-record</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

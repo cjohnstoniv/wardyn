@@ -307,6 +307,37 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
     await screen.findByText("Fix flaky auth tests");
   });
 
+  it("'Your runs · N' stays the total while a search narrows the rows (#2552)", async () => {
+    listRunsFilteredMock.mockImplementation((f: { q?: string }) =>
+      Promise.resolve(
+        f.q
+          ? { runs: [run()], truncated: false, hiddenOlder: 0, hiddenKilled: 0 }
+          : { runs: [run(), run({ id: "run-2" }), run({ id: "run-3" })], truncated: false, hiddenOlder: 4, hiddenKilled: 1 },
+      ),
+    );
+    renderScreen();
+    await screen.findByText("Your runs · 8");
+    fireEvent.change(await screen.findByLabelText("Search runs"), { target: { value: "auth" } });
+    await waitFor(() => expect(listRunsFilteredMock).toHaveBeenLastCalledWith(expect.objectContaining({ q: "auth" })));
+    await waitFor(() => expect(screen.queryByLabelText("Loading runs")).not.toBeInTheDocument());
+    expect(screen.getByText("Your runs · 8")).toBeInTheDocument();
+  });
+
+  it("the Workspace filter offers a folder run's path, and the active value even when no row matches (#2544)", async () => {
+    listRunsFilteredMock.mockResolvedValue({
+      runs: [run({ repo: "", workspace_path: "/home/me/proj" })],
+      truncated: false,
+      hiddenOlder: 0,
+      hiddenKilled: 0,
+    });
+    renderScreen("user", "/runs?workspace=acme%2Fgone");
+    const trigger = within(await screen.findByRole("search")).getByRole("combobox", { name: "Workspace" });
+    expect(trigger).toHaveTextContent("acme/gone");
+    fireEvent.click(trigger);
+    expect(await screen.findByRole("option", { name: "/home/me/proj" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "acme/gone" })).toBeInTheDocument();
+  });
+
   it("a refetch (search) keeps the filter bar mounted and its input focused — only the rows region shows a skeleton", async () => {
     listRunsFilteredMock.mockResolvedValueOnce({
       runs: [run()],

@@ -209,7 +209,7 @@ function AddImageDialog({
             </div>
             <DialogFooter>
               {cancel}
-              <Button type="submit" disabled={saving || !ref.trim()}>
+              <Button type="submit" disabled={saving || !ref.trim() || draft.pending}>
                 {showSpinner && <Loader2 className="size-3.5 animate-spin" />}
                 {IMAGES.ADD_CTA}
               </Button>

@@ -274,7 +274,7 @@ export function ModelProviderEditor({
               <Button type="button" variant="ghost" onClick={close}>
                 {PROVIDER_EDITOR.CANCEL}
               </Button>
-              <Button type="submit" disabled={busy}>
+              <Button type="submit" disabled={busy || audience.pending}>
                 {showSpinner && <Loader2 className="size-4 animate-spin" aria-hidden="true" />}
                 {PROVIDER_EDITOR.SAVE}
               </Button>

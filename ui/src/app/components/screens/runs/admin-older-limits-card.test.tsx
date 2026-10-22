@@ -9,6 +9,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import * as RL from "../../wardyn/copy/run-lifetime";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { AdminOlderLimitsCard } from "./admin-older-limits-card";
 
@@ -81,6 +82,31 @@ describe("AdminOlderLimitsCard", () => {
     expect(await screen.findByText(/Restarted/)).toBeInTheDocument();
     // Re-lists after a restart (best-effort refresh).
     await waitFor(() => expect(getAdminProxyWindowMock).toHaveBeenCalledTimes(2));
+  });
+
+  it("a restarted run that now has hosts blocked says so on its row (#2546)", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    getAdminProxyWindowMock.mockResolvedValue({
+      release: "0.8.0",
+      window: ["0.8"],
+      outside: [
+        { run_id: "r1", created_by: "u1", state: "RUNNING", proxy_release: "0.6" },
+        { run_id: "r2", created_by: "u1", state: "RUNNING", proxy_release: "0.6" },
+      ],
+    });
+    restartAdminRunsMock.mockResolvedValue({
+      results: [
+        { run_id: "r1", ok: true, denied_added: ["x.example.com", "y.example.com"] },
+        { run_id: "r2", ok: true, denied_added: [] },
+      ],
+    });
+    renderCard();
+    await screen.findByText("Older limits · 2");
+    await user.click(screen.getByRole("button", { name: "Restart with current limits" }));
+    expect(await screen.findByText(/r1: Restarted/)).toHaveTextContent(
+      `r1: Restarted ${RL.revivePolicy(2)}`,
+    );
+    expect(screen.getByText(/r2: Restarted/)).toHaveTextContent(/^r2: Restarted$/);
   });
 
   it("FR-0163: shows the restart in flight: the button is disabled, busy and spinning until it settles", async () => {
