@@ -125,7 +125,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   moment could lose the part not yet read back.
 - Building the wardynd image no longer waits without limit on a stalled npm registry (#3472). Installing pnpm and
   fetching the console's packages each get three tries with a time limit, so an unreachable registry fails the build
-  in about ten minutes. The lockfile is still enforced.
+  in about ten minutes, and a package fetch that stalls fails it in under twenty. The lockfile is still enforced.
 
 ## [0.9.8] — 2026-10-21
 
