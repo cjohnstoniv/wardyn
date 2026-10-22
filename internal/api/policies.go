@@ -192,7 +192,7 @@ func (s *Server) handleGetDefaultPolicy(w http.ResponseWriter, r *http.Request) 
 	if ceiling.Unit != nil {
 		resp.UnitName = ceiling.Unit.Name
 		for _, l := range ceiling.Unit.Chain {
-			resp.UnitPath = append(resp.UnitPath, unitPathLink{ID: l.ID, Name: l.Name})
+			resp.UnitPath = append(resp.UnitPath, unitPathLink(l))
 		}
 	}
 	if !ceiling.Operator && s.cfg.Store != nil {
