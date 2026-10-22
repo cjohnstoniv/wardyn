@@ -34,7 +34,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
   `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE` on
   `governance_boundary` (migration `0200_governance_boundary`). Without it the Wardyn boundary cannot be read or
-  written. The same migration's `agent_runs.break_glass` column needs no grant.
+  written. The same migration's `agent_runs.break_glass` column needs no grant. Grant it `SELECT, INSERT, UPDATE,
+  DELETE` on `governance_restrictions` and `governance_restriction_members` (migration `0210_governance_restrictions`).
+  Without it restrictions cannot be read or written.
 - **Governance profiles are now units, and assignments are now memberships.** The routes are
   `/governance/units`, `/governance/memberships` and `/governance/check` (was `/governance/preview`), and the keys
   are `units`, `memberships`, `unit_id` and `parent_id`. The old routes answer 404 or 405 and are not aliased; a
@@ -63,6 +65,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   Starting the agent again admits the run anew, and the erased row keeps only its harnesses, so it is refused in the
   organisation form ("Ask your admin"). An erased remote server is refused too, which a 0.9 revive accepted. A run
   that is still running keeps its server until it ends.
+- **The first restriction changes how admin-token runs are recorded.** With the Wardyn boundary in `hard_limits`, an
+  admin-token run is a break-glass run once any unit with its own walls exists, and now also once any restriction
+  exists. A deployment that has only pass-through units or none sees no change until someone writes its first
+  restriction. From that write on, an admin-token `POST /runs`, `/runs/preflight` or `/runs/policy-preview` without an
+  `X-Wardyn-Break-Glass-Reason` header (`wardyn run --break-glass-reason`; at most 512 characters) is refused `400
+  break_glass_reason_required`, so a script or CI job that starts runs with the admin token and sends no reason stops
+  working. Runs it starts with a reason carry `break_glass: true` and a `run.break_glass.open` audit row holding the
+  reason. The boundary still binds them, including its run-length maximum (`limits.max_end_ahead_sec`). Restrictions
+  themselves never apply to those runs. Deleting the last restriction (and having no unit with walls) ends this.
 
 ### Added
 
@@ -104,6 +115,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - The CLI's hint under a `401` follows the answer's reason. On a single-sign-on deployment with no admin token
   (`sign_in_required`) it says to use a personal API token in `WARDYN_TOKEN`, not the compose stack's admin token. For
   a token the organisation does not know (`admin_token_not_configured`) it names where the token came from.
+- Runs started with the admin token are recorded as break-glass runs once any restriction exists under
+  `hard_limits`, as they already are once a unit with its own walls exists. That changes their audit class: they need
+  `X-Wardyn-Break-Glass-Reason`, carry `break_glass: true` and write a `run.break_glass.open` row, and the boundary's
+  run-length maximum still caps them.
 
 ## [0.9.8] — 2026-10-21
 
