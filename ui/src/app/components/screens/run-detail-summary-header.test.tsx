@@ -756,13 +756,16 @@ describe("SummaryHeader — Rename draft seeding and empty-submit", () => {
 });
 
 describe("SummaryHeader: total run time of an ended run (#2521)", () => {
+  // Dated from the clock, so no literal date sits in the file (scripts/check-fixture-dates.sh).
+  const t0 = Math.floor(Date.now() / 1000) * 1000 - 3 * 86_400_000;
+  const at = (offsetMs: number) => new Date(t0 + offsetMs).toISOString();
   it("is measured to ended_at, not to a later updated_at from teardown or the boot sweep", () => {
     const run = {
       ...runningInteractive,
       state: "COMPLETED",
-      created_at: "2026-01-01T10:00:00Z",
-      ended_at: "2026-01-01T10:05:00Z",
-      updated_at: "2026-01-03T10:00:00Z",
+      created_at: at(0),
+      ended_at: at(5 * 60_000),
+      updated_at: at(2 * 86_400_000),
     } as RunDetail;
     renderHeader(
       <OperatorProvider operator={false} principal="me">
@@ -776,8 +779,8 @@ describe("SummaryHeader: total run time of an ended run (#2521)", () => {
     const run = {
       ...runningInteractive,
       state: "COMPLETED",
-      created_at: "2026-01-01T10:00:00Z",
-      updated_at: "2026-01-01T10:07:00Z",
+      created_at: at(0),
+      updated_at: at(7 * 60_000),
     } as RunDetail;
     renderHeader(
       <OperatorProvider operator={false} principal="me">
