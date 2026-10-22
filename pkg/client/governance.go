@@ -553,47 +553,18 @@ func (c *Client) ApplyGovernanceResult(ctx context.Context, doc GovernanceDocume
 		nameToRealID[p.Name] = saved.ID
 	}
 
+	plan := membershipPlan{
+		fileIDToName: fileIDToName, currentIDToName: currentIDToName, nameToRealID: nameToRealID,
+		pendingProfile: pendingProfile, byKey: assignmentByKey,
+	}
 	for i, a := range doc.Memberships {
-		name, named := fileIDToName[a.UnitID]
-		if !named {
-			name, named = currentIDToName[a.UnitID]
-		}
-		if named && pendingProfile[name] {
-			res.Deferred = append(res.Deferred, GovernanceDeferredWrite{
-				SubjectType: a.SubjectType, Subject: a.Subject, Unit: name,
-			})
-			continue
-		}
-		if name, ok := fileIDToName[a.UnitID]; ok {
-			if real, ok := nameToRealID[name]; ok {
-				a.UnitID = real
-			}
-		}
-		key := governanceMembershipKey(membershipUnitName(a.UnitID, nil, currentIDToName), a.SubjectType, a.Subject)
-		if named {
-			key = governanceMembershipKey(name, a.SubjectType, a.Subject)
-		}
-		if existing, ok := assignmentByKey[key]; ok && existing.Priority == a.Priority && existing.Home == a.Home {
-			doc.Memberships[i] = existing
-			continue
-		}
-		req := GovernanceMembershipRequest{
-			SubjectType: a.SubjectType, Subject: a.Subject,
-			UnitID: a.UnitID, Priority: a.Priority, Home: a.Home,
-		}
-		var saved GovernanceMembership
-		pending, err := c.doPending(ctx, http.MethodPost, "/api/v1/governance/memberships", req, &saved)
-		err = governanceMembershipErr(a, err)
-		step := governanceMembershipStep(a, name)
-		res.Steps = append(res.Steps, step.withOutcome(pending != nil, err))
+		saved, store, err := c.applyMembership(ctx, plan, a, &res)
 		if err != nil {
 			return res, err
 		}
-		if pending != nil {
-			res.Pending = append(res.Pending, *pending)
-			continue
+		if store {
+			doc.Memberships[i] = saved
 		}
-		doc.Memberships[i] = saved
 	}
 
 	if prune {
@@ -610,6 +581,59 @@ func (c *Client) ApplyGovernanceResult(ctx context.Context, doc GovernanceDocume
 
 	res.Document, err = c.GetGovernance(ctx)
 	return res, err
+}
+
+// membershipPlan is what applyMembership reads: the unit names and ids the document and the server
+// carry, the units whose write was held, and the memberships the server already has.
+type membershipPlan struct {
+	fileIDToName, currentIDToName map[uuid.UUID]string
+	nameToRealID                  map[string]uuid.UUID
+	pendingProfile                map[string]bool
+	byKey                         map[string]GovernanceMembership
+}
+
+// applyMembership sends one membership of an apply. store is true when the document entry becomes
+// the returned membership: the server's own when it is unchanged, or the one just saved. A deferred
+// or held membership is recorded in res and stores nothing.
+func (c *Client) applyMembership(ctx context.Context, plan membershipPlan, a GovernanceMembership, res *GovernanceApplyResult) (saved GovernanceMembership, store bool, err error) {
+	name, named := plan.fileIDToName[a.UnitID]
+	if !named {
+		name, named = plan.currentIDToName[a.UnitID]
+	}
+	if named && plan.pendingProfile[name] {
+		res.Deferred = append(res.Deferred, GovernanceDeferredWrite{
+			SubjectType: a.SubjectType, Subject: a.Subject, Unit: name,
+		})
+		return saved, false, nil
+	}
+	if name, ok := plan.fileIDToName[a.UnitID]; ok {
+		if real, ok := plan.nameToRealID[name]; ok {
+			a.UnitID = real
+		}
+	}
+	key := governanceMembershipKey(membershipUnitName(a.UnitID, nil, plan.currentIDToName), a.SubjectType, a.Subject)
+	if named {
+		key = governanceMembershipKey(name, a.SubjectType, a.Subject)
+	}
+	if existing, ok := plan.byKey[key]; ok && existing.Priority == a.Priority && existing.Home == a.Home {
+		return existing, true, nil
+	}
+	req := GovernanceMembershipRequest{
+		SubjectType: a.SubjectType, Subject: a.Subject,
+		UnitID: a.UnitID, Priority: a.Priority, Home: a.Home,
+	}
+	pending, err := c.doPending(ctx, http.MethodPost, "/api/v1/governance/memberships", req, &saved)
+	err = governanceMembershipErr(a, err)
+	step := governanceMembershipStep(a, name)
+	res.Steps = append(res.Steps, step.withOutcome(pending != nil, err))
+	if err != nil {
+		return saved, false, err
+	}
+	if pending != nil {
+		res.Pending = append(res.Pending, *pending)
+		return saved, false, nil
+	}
+	return saved, true, nil
 }
 
 // writeGovernanceUnit creates p, or replaces the stored profile it names, with the warnings the
