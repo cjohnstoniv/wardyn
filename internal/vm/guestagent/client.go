@@ -28,7 +28,8 @@ type Client struct {
 	conns []net.Conn
 }
 
-// NewClient returns a client that reaches the agent through dial.
+// NewClient returns a client that reaches the agent through dial. Each connection opens a session
+// with the agent's hello before HTTP/2 has it (dialSession).
 func NewClient(dial func(ctx context.Context) (net.Conn, error)) *Client {
 	c := &Client{}
 	var protocols http.Protocols
@@ -37,7 +38,7 @@ func NewClient(dial func(ctx context.Context) (net.Conn, error)) *Client {
 		Protocols:       &protocols,
 		MaxConnsPerHost: 1,
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			conn, err := dial(ctx)
+			conn, err := dialSession(ctx, dial, hostHello)
 			if err != nil {
 				return nil, err
 			}

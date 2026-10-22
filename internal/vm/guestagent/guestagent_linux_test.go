@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -19,40 +20,54 @@ import (
 )
 
 // fakePort stands in for a guest's virtio-serial port: it reads end-of-file while no host is
-// connected, and each connect is a new host session on the same port. A host that dials is
-// connected at the agent's next read, after it has seen the previous host go: the byte stream does
-// not say which host is which, so the agent cannot keep apart a host that comes back faster.
+// connected, and each connect is a new host session on the same port, connected at once. A host
+// that connects before the agent's read has seen the last one go leaves no end-of-file between the
+// two, as a host that redials at once can on the real port; the hello is what keeps them apart.
 // A write made while no host is connected, or that the host left in the middle of, is held, as the
 // kernel holds it, and goes to the next host; only a past write deadline ends it.
 type fakePort struct {
 	mu      sync.Mutex
 	cur     net.Conn      // the connected host's end
-	next    net.Conn      // a host that dialled, connected at the agent's next read
 	dead    bool          // the write deadline has passed
 	changed chan struct{} // closed and replaced when cur or dead changes
 	held    chan struct{} // if set, told when a write is held
+	eofs    int           // end-of-files the agent has read
 }
 
 func (p *fakePort) Read(b []byte) (int, error) {
-	p.mu.Lock()
-	if p.cur == nil && p.next != nil {
-		p.cur, p.next = p.next, nil
-		p.signal()
-	}
-	c := p.cur
-	p.mu.Unlock()
-	if c == nil {
-		return 0, io.EOF
-	}
-	n, err := c.Read(b)
-	if err != nil {
+	for {
 		p.mu.Lock()
-		p.cur = nil
-		p.signal()
+		c := p.cur
+		if c == nil {
+			p.eofs++
+		}
 		p.mu.Unlock()
-		return n, io.EOF
+		if c == nil {
+			return 0, io.EOF
+		}
+		n, err := c.Read(b)
+		if err == nil {
+			return n, nil
+		}
+		p.mu.Lock()
+		gone := p.cur == c
+		if gone {
+			p.cur = nil
+			p.eofs++
+			p.signal()
+		}
+		p.mu.Unlock()
+		if gone {
+			return n, io.EOF
+		}
+		// The next host connected before this read saw its host go: the agent reads on from it.
 	}
-	return n, nil
+}
+
+func (p *fakePort) eofCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.eofs
 }
 
 func (p *fakePort) Write(b []byte) (int, error) {
@@ -106,7 +121,8 @@ func (p *fakePort) signal() {
 func (p *fakePort) connect() net.Conn {
 	host, guest := net.Pipe()
 	p.mu.Lock()
-	p.next = guest
+	p.cur = guest
+	p.signal()
 	p.mu.Unlock()
 	return host
 }
@@ -260,8 +276,16 @@ func TestDetachedExecSurvivesAHostReconnect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c1.Close() // the host goes away; the port reads end-of-file
+	// The next host connects before the agent's read has seen the first go, so the port reads no
+	// end-of-file between the two: the window only the hello closes.
+	eofs := r.port.eofCount()
 	c2 := r.client(t)
+	c1.Close()
+	defer func() {
+		if n := r.port.eofCount() - eofs; n != 0 {
+			t.Errorf("the agent read %d end-of-files between the hosts: the redial was not in the window", n)
+		}
+	}()
 	var st ExecState
 	for st, err = c2.Agent(ctxT(t)); err == nil && st.Running; st, err = c2.Agent(ctxT(t)) {
 		if st.ID != id {
@@ -294,23 +318,61 @@ func TestDetachedExecSurvivesAHostReconnect(t *testing.T) {
 	}
 }
 
-// nextHost connects a host and returns it with what it reads first.
+// helloOf is a host's hello whose nonce is n repeated. The agent's echo of it is the same bytes:
+// it carries the agent's version, which is the host's.
+func helloOf(n byte) []byte {
+	return slices.Concat(sessionMagic, []byte{helloVersion}, bytes.Repeat([]byte{n}, nonceLen))
+}
+
+// open sends host h's hello and reads the agent's echo of it, as a host does before its session's
+// first byte.
+func open(t *testing.T, h net.Conn, n byte) {
+	t.Helper()
+	if _, err := h.Write(helloOf(n)); err != nil {
+		t.Fatal(err)
+	}
+	b := make([]byte, helloLen)
+	if _, err := io.ReadFull(h, b); err != nil || !bytes.Equal(b, helloOf(n)) {
+		t.Fatalf("host %d read %q, %v; want its echo", n, b, err)
+	}
+}
+
+// readN reads n bytes from r, failing the test if they do not come before ctx ends.
+func readN(ctx context.Context, t *testing.T, r io.Reader, n int) string {
+	t.Helper()
+	got := make(chan string, 1)
+	go func() {
+		b := make([]byte, n)
+		m, _ := io.ReadFull(r, b)
+		got <- string(b[:m])
+	}()
+	select {
+	case s := <-got:
+		return s
+	case <-ctx.Done():
+		t.Fatalf("%d bytes never came", n)
+		return ""
+	}
+}
+
+// nextHost connects a host and returns it with what it reads first, as many bytes as its echo and
+// its session's "hello".
 func nextHost(port *fakePort) (net.Conn, <-chan string) {
 	h := port.connect()
 	first := make(chan string, 1)
 	go func() {
-		b := make([]byte, 64)
-		n, _ := h.Read(b)
+		b := make([]byte, helloLen+len("hello"))
+		n, _ := io.ReadFull(h, b)
 		first <- string(b[:n])
 	}()
 	return h, first
 }
 
-// handOver ends session c and starts host h's, whose first write is "hello"; it fails unless that is
-// the first thing h reads.
+// handOver ends session c and starts host h's, whose first write after its echo is "hello"; it fails
+// unless h reads its echo and then that, before anything else.
 func handOver(ctx context.Context, t *testing.T, l *portListener, c, h net.Conn, first <-chan string) {
 	t.Helper()
-	go func() { _, _ = h.Write([]byte("two")) }()
+	go func() { _, _ = h.Write(helloOf(2)); _, _ = h.Write([]byte("two")) }()
 	_ = c.Close()
 	next, err := l.Accept()
 	if err != nil {
@@ -319,8 +381,8 @@ func handOver(ctx context.Context, t *testing.T, l *portListener, c, h net.Conn,
 	go func() { _, _ = next.Write([]byte("hello")) }()
 	select {
 	case got := <-first:
-		if got != "hello" {
-			t.Fatalf("the next host read %q first, not its own session's %q", got, "hello")
+		if got != string(helloOf(2))+"hello" {
+			t.Fatalf("the next host read %q first, not its echo and its own session's %q", got, "hello")
 		}
 	case <-ctx.Done():
 		t.Fatal("the next host read nothing")
@@ -335,9 +397,12 @@ func TestALateWriteNeverReachesTheNextHost(t *testing.T) {
 	port := &fakePort{}
 	l := newPortListener(ctx, port, time.Millisecond)
 	h1 := port.connect()
-	go func() { _, _ = h1.Write([]byte("one")) }()
+	open(t, h1, 1)
 	c1, err := l.Accept()
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h1.Write([]byte("one")); err != nil {
 		t.Fatal(err)
 	}
 	_ = h1.Close()
@@ -358,13 +423,13 @@ func TestAWriteThePortHoldsEndsWithItsHost(t *testing.T) {
 	port := &fakePort{held: make(chan struct{}, 1)}
 	l := newPortListener(ctx, port, time.Millisecond)
 	h1 := port.connect()
-	go func() { _, _ = h1.Write([]byte("one")) }()
+	open(t, h1, 1)
 	c1, err := l.Accept()
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The reader keeps "x" until c1 reads it, so it sees h1 go only after the write is held.
-	if _, err := h1.Write([]byte("x")); err != nil {
+	// The reader keeps "onex" until c1 reads it, so it sees h1 go only after the write is held.
+	if _, err := h1.Write([]byte("onex")); err != nil {
 		t.Fatal(err)
 	}
 	late := make(chan error, 1)
@@ -412,44 +477,148 @@ func TestAClosedSessionTakesNoChunk(t *testing.T) {
 }
 
 // The HTTP/2 server closes a session from its own goroutine while its reader may be taking the
-// end-of-file; Accept must see that, or it drains the next session's bytes waiting for another.
-// Under -race this also checks the two goroutines' sawEOF accesses are ordered.
+// end-of-file, or the next host's hello; Accept must see which, or it drops the next session's bytes
+// waiting for another hello. Under -race this also checks the two goroutines' accesses to the
+// session's end are ordered.
 func TestAcceptSeesTheEOFAClosingSessionTook(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		end  chunk
+	}{{"end-of-file", chunk{eof: true}}, {"hello", chunk{start: true}}} {
+		ctx := ctxT(t)
+		l := &portListener{ctx: ctx, chunks: make(chan chunk), done: make(chan struct{})}
+		go func() { l.chunks <- chunk{start: true}; l.chunks <- chunk{data: []byte("one")} }()
+		c1, err := l.Accept()
+		if err != nil {
+			t.Fatal(err)
+		}
+		b := make([]byte, 8)
+		if n, err := c1.Read(b); err != nil || string(b[:n]) != "one" {
+			t.Fatalf("%s: first session read %q, %v", tc.name, b[:n], err)
+		}
+		read := make(chan error, 1)
+		go func() { _, err := c1.Read(make([]byte, 8)); read <- err }()
+		next := make(chan net.Conn, 1)
+		go func() {
+			c, _ := l.Accept()
+			next <- c
+		}()
+		l.chunks <- tc.end // only c1's Read takes it: Accept waits for c1 to close
+		_ = c1.Close()     // unordered with that Read setting c1's end
+		if err := <-read; err != io.EOF {
+			t.Fatalf("%s: c1 read %v, want io.EOF", tc.name, err)
+		}
+		if tc.end.eof {
+			select {
+			case l.chunks <- chunk{start: true}:
+			case <-ctx.Done():
+				t.Fatalf("%s: Accept took no chunk", tc.name)
+			}
+		}
+		go func() { l.chunks <- chunk{data: []byte("two")} }()
+		select {
+		case c2 := <-next:
+			if b, _ := io.ReadAll(io.LimitReader(c2, 3)); string(b) != "two" {
+				t.Fatalf("%s: next session read %q", tc.name, b)
+			}
+		case <-ctx.Done():
+			t.Fatalf("%s: Accept dropped the next session's first chunk, waiting for a hello c1 took", tc.name)
+		}
+	}
+}
+
+// A host that connects before the agent has read the last one's end-of-file leaves none between the
+// two sessions: its hello ends the last one. What the ended session wrote before the hello reaches
+// the new host ahead of its echo, where the host drops it; nothing it writes after does, and it
+// reads none of the new host's bytes.
+func TestARedialInTheWindowKeepsSessionsApart(t *testing.T) {
 	ctx := ctxT(t)
-	l := &portListener{ctx: ctx, chunks: make(chan chunk), done: make(chan struct{})}
-	go func() { l.chunks <- chunk{data: []byte("one")} }()
+	port := &fakePort{}
+	l := newPortListener(ctx, port, time.Millisecond)
+	h1 := port.connect()
+	open(t, h1, 1)
 	c1, err := l.Accept()
 	if err != nil {
 		t.Fatal(err)
 	}
-	b := make([]byte, 8)
-	if n, err := c1.Read(b); err != nil || string(b[:n]) != "one" {
-		t.Fatalf("first session read %q, %v", b[:n], err)
+	h2 := port.connect() // the agent's read still waits on h1
+	go func() { _, _ = c1.Write([]byte("late")) }()
+	if b := readN(ctx, t, h2, 4); b != "late" {
+		t.Fatalf("the new host read %q; want the old session's last bytes, which the port gives it", b)
 	}
-	read := make(chan error, 1)
-	go func() { _, err := c1.Read(make([]byte, 8)); read <- err }()
-	next := make(chan net.Conn, 1)
-	go func() {
-		c, _ := l.Accept()
-		next <- c
-	}()
-	l.chunks <- chunk{eof: true} // only c1's Read takes it: Accept waits for c1 to close
-	_ = c1.Close()               // unordered with that Read setting sawEOF
-	if err := <-read; err != io.EOF {
-		t.Fatalf("c1 read %v, want io.EOF", err)
+	go func() { _, _ = h2.Write(helloOf(2)); _, _ = h2.Write([]byte("preface")) }()
+	_ = h1.Close() // the agent reads on from h2, with no end-of-file between
+	if b := readN(ctx, t, h2, helloLen); b != string(helloOf(2)) {
+		t.Fatalf("the new host read %q; want its echo", b)
 	}
+	old := make(chan string, 1)
+	go func() { b, _ := io.ReadAll(c1); old <- string(b) }()
 	select {
-	case l.chunks <- chunk{data: []byte("two")}:
-	case <-ctx.Done():
-		t.Fatal("Accept took no chunk")
-	}
-	select {
-	case c2 := <-next:
-		if b, _ := io.ReadAll(io.LimitReader(c2, 3)); string(b) != "two" {
-			t.Fatalf("next session read %q", b)
+	case b := <-old:
+		if b != "" {
+			t.Fatalf("the old session read %q of the new host's bytes", b)
 		}
 	case <-ctx.Done():
-		t.Fatal("Accept dropped the next session's first chunk, waiting for an end-of-file c1 took")
+		t.Fatal("the old session did not end at the new host's hello")
+	}
+	next := make(chan string, 1) // what h2 reads after its echo; read from now, so a write that gets through does not block
+	go func() {
+		b := make([]byte, len("hello"))
+		n, _ := io.ReadFull(h2, b)
+		next <- string(b[:n])
+	}()
+	if n, err := c1.Write([]byte("later")); !errors.Is(err, net.ErrClosed) {
+		t.Errorf("the old session's write after the hello = %d, %v; want net.ErrClosed", n, err)
+	}
+	_ = c1.Close()
+	c2, err := l.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b := readN(ctx, t, c2, len("preface")); b != "preface" {
+		t.Fatalf("the new session read %q", b)
+	}
+	go func() { _, _ = c2.Write([]byte("hello")) }()
+	select {
+	case b := <-next:
+		if b != "hello" {
+			t.Fatalf("the new host read %q after its echo, not its own session's %q", b, "hello")
+		}
+	case <-ctx.Done():
+		t.Fatal("the new host read nothing after its echo")
+	}
+}
+
+// A session starts at its host's hello wherever the port's reads cut it, and nothing before a hello
+// starts one. The agent answers with its own version, so a host of another can tell.
+func TestASessionStartsAtItsHello(t *testing.T) {
+	ctx := ctxT(t)
+	port := &fakePort{}
+	l := newPortListener(ctx, port, time.Millisecond)
+	h := port.connect()
+	hello := helloOf(1)
+	hello[magicLen] = helloVersion + 1
+	go func() {
+		for _, b := range [][]byte{[]byte("stray"), hello[:5], hello[5:]} {
+			_, _ = h.Write(b)
+		}
+	}()
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		c, _ := l.Accept()
+		accepted <- c
+	}()
+	if b := readN(ctx, t, h, helloLen); b != string(helloOf(1)) {
+		t.Fatalf("the host read %q; want its nonce echoed with the agent's version", b)
+	}
+	go func() { _, _ = h.Write([]byte("one")) }()
+	select {
+	case c := <-accepted:
+		if b := readN(ctx, t, c, 3); b != "one" {
+			t.Fatalf("the session read %q; want only what followed the hello", b)
+		}
+	case <-ctx.Done():
+		t.Fatal("no session started at the hello")
 	}
 }
 

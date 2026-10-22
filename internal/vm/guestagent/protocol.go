@@ -5,7 +5,8 @@
 // VM sandbox. The agent serves HTTP/2 with prior knowledge over one virtio-serial port
 // (PortName); runnerd reaches it through the QEMU chardev socket in the run's ctl directory. One byte
 // stream carries every session (the harness, terminals, exec streams) with HTTP/2's own flow
-// control per session; there is no network listener in the guest.
+// control per session; there is no network listener in the guest. Each host connection opens with
+// a hello the agent echoes (sessionMagic), which marks where its bytes start on the port.
 //
 // Requests:
 //
