@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { FORM_ACTIONS } from "../src/app/components/wardyn/copy/form-actions";
 import { randomUUID } from "node:crypto";
 import {
   test,
@@ -11,7 +12,6 @@ import {
   MEMBER_PRINCIPAL,
   asRealMember,
   ignoreMissingRunner,
-  expandCard,
   gotoConsole,
   mockMemberRole,
   mockSecurityAdminRole,
@@ -136,10 +136,10 @@ const SIZE = DRIVES.SIZE_GIB(10);
 // CONSOLE-RULES §6 — exactly ONE `default`-variant (teal) button on the screen
 // at any moment. The default variant is `bg-primary` (ui/button.tsx), and the
 // editor's Writable / the form's Enabled switches paint bg-primary too when
-// checked (form-primitives.tsx) — excluded, because a toggle is not an action.
+// checked (form-primitives.tsx), and a selected Segmented option does (aria-pressed, #2832) — excluded, because a toggle is not an action.
 // Scoped to <main>: the app shell's own "New run" in the top bar is a default
 // button on every screen and is not this surface's.
-const tealActions = (page: Page) => page.locator("main").locator('button.bg-primary:not([role="switch"])');
+const tealActions = (page: Page) => page.locator("main").locator('button.bg-primary:not([role="switch"]):not([aria-pressed])');
 
 // The screen draws TWO tables once there is anything in them — the drives
 // list's Name column and the allocations list's Drive column — and a drive
@@ -206,11 +206,11 @@ async function mockMemberDrive(page: Page, drive: MeUserDrive | null, deniedBy =
     json.operator = false;
     json.security_operator = false;
     json.user_drive = drive;
-    json.user_drive_denied_by_profile = deniedBy;
+    json.user_drive_denied_by_unit = deniedBy;
     await route.fulfill({ response, json });
   });
   // New Run's Files step reads the same allocation as a row of the person's drive catalogue.
-  await mockDriveCatalogue(page, deniedBy ? { drives: [], denied_by_profile: deniedBy } : { drives: drive ? [catalogueRow(drive)] : [] });
+  await mockDriveCatalogue(page, deniedBy ? { drives: [], denied_by_unit: deniedBy } : { drives: drive ? [catalogueRow(drive)] : [] });
 }
 
 // A catalogue id the real server has no drive for: an attach is then refused in the server's own words.
@@ -312,12 +312,12 @@ test.describe("drives — an empty registry says what it is, not what went wrong
     // element carrying all of it.
     await expect(page.getByText(DRIVES.LEAD)).toBeVisible();
     await expect(page.getByText(DRIVES.DRIVES_TITLE, { exact: true })).toBeVisible();
-    await expect(page.getByText(DRIVES.DRIVES_LEAD)).toBeVisible();
+    await expect(page.getByText(/A drive is one place storage comes from/)).toHaveCount(0);
 
     // Empty, not unconfigured: there is deliberately no "drives not configured"
     // state (§7.4), so a fresh install reads as a feature nobody has filled in.
     await expect(page.getByText(DRIVES.EMPTY_TITLE)).toBeVisible();
-    await expect(page.getByText(DRIVES.EMPTY_BODY)).toBeVisible();
+    await expect(page.getByText(/Runs keep nothing between them/)).toHaveCount(0);
     await expect(page.getByText(DRIVES.FETCH_FAILED_TITLE)).toHaveCount(0);
 
     // AND NOTHING ELSE. Mock state 1 is the header and this empty state: the
@@ -405,6 +405,12 @@ test.describe("drives — the editor offers what this deployment can mount, and 
     await expect(page.getByRole("button", { name: DRIVES.NEW_CTA, exact: true })).not.toHaveClass(/bg-primary/);
     // Save waits for the one field that has no default.
     await expect(page.getByRole("button", { name: DRIVES.SAVE_CTA, exact: true })).toBeDisabled();
+
+    // The shared form bar: the count appears with the first edit, and Save is the bar's.
+    const bar = editor.getByTestId("form-actions");
+    await expect(bar.getByTestId("form-actions-unsaved")).toHaveText("");
+    await page.locator("#drive-name").fill("pinned-unsaved");
+    await expect(bar.getByTestId("form-actions-unsaved")).toHaveText(FORM_ACTIONS.UNSAVED(1));
 
     await page.getByRole("button", { name: PEOPLE.CANCEL, exact: true }).click();
     await expect(page.getByTestId("drives-drive-editor")).toHaveCount(0);
@@ -559,7 +565,7 @@ test.describe("drives — the door is a governance limit, not a drives control",
 
   test("the stored limit is the door: deny_user_drive on the profile itself", async ({ page }) => {
     const snap = await (await page.request.get("/api/v1/governance", { headers: auth })).json();
-    const profile = snap.profiles.find((p: { name: string }) => p.name === DOOR);
+    const profile = snap.units.find((p: { name: string }) => p.name === DOOR);
     expect(profile, `profile ${DOOR} missing — did the door test run?`).toBeTruthy();
     // The limits object is the whole statement: the drive door shut, and
     // neither launch mode touched by it.
@@ -577,9 +583,8 @@ test.describe("drives — the registry is SUPER's, and no super admin's nav list
     page,
   }) => {
     await gotoConsole(page, "admin");
-    // No Drives nav entry for a super admin, in either view (§6): the two entry
-    // points below are the whole door. Only a security admin's Admin view
-    // lists it, for its grants and preview (packet M-A, view-switch.spec.ts).
+    // No Drives nav entry for any admin tier, in either view (§6): the two entry
+    // points below are the whole door (#2827; view-switch.spec.ts pins the security tier).
     await expect(page.getByRole("link", { name: new RegExp(`^${DRIVES.TITLE}`) })).toHaveCount(0);
 
     await navTo(page, "Workspaces");
@@ -595,12 +600,11 @@ test.describe("drives — the registry is SUPER's, and no super admin's nav list
     await navToRoute(page, "/admin/settings");
     const card = page.getByTestId("user-drives-card");
     await expect(card).toBeVisible();
-    await expandCard(page, DRIVES.TITLE);
-    await expect(card.getByText(DRIVES.CARD_LEAD)).toBeVisible();
+    // A link row (#3048), not an accordion: the count rides its face.
     // It counts ALLOCATIONS, never people — and with none it says so rather
     // than rendering a zero.
     await expect(card.getByText(DRIVES.CARD_EMPTY)).toBeVisible();
-    await card.getByText(DRIVES.CARD_OPEN).click();
+    await card.getByRole("link").click();
     await expect(page).toHaveURL(/\/admin\/drives$/);
   });
 

@@ -11,7 +11,7 @@ import type { AutonomyLevel, RunLimits } from "../api/governance";
 import type { PolicyRef } from "../api/health";
 import type { PolicyContact } from "./site";
 import type { Experience, RunOverrides } from "./new-run-contract";
-import type { HarnessInnerWalls, RunPolicySpec } from "./policy";
+import type { HarnessInnerWalls, RecordingLevel, RunPolicySpec } from "./policy";
 import type { RunnerPoolSelection } from "./runner-pools";
 
 // The backend emits dotted agent ids like "claude-code" / "codex-cli".
@@ -63,7 +63,7 @@ export type RunPlacement = "" | "local" | "remote";
 export type RunEvidenceSource = "" | "substrate" | "runner_asserted";
 
 /** Go: types.RunNotRecorded. */
-export type RunNotRecorded = "org_off" | "runner_declined";
+export type RunNotRecorded = "org_off" | "runner_declined" | "policy_off";
 
 export type RunState =
   // QUEUED: waiting for a slot in a capped runner pool; it holds no slot, identity or sandbox.
@@ -87,8 +87,11 @@ export interface RunQueue {
   queued_at: string;
   deadline_at: string;
   position: number;
-  /** runner_pool_at_capacity, runner_pool_no_runner_free, runner_pool_runners_at_capacity or runner_pool_recording_store_off (RUN_WAIT_REASON). */
+  /** runner_pool_at_capacity, runner_pool_no_runner_free, runner_pool_runners_at_capacity, runner_pool_recording_store_off (RUN_WAIT_REASON), scheduled or owner_sign_in. */
   reason: string;
+  /** A scheduled run's start time and the IANA zone it was given in; absent for any other waiting run. */
+  start_at?: string;
+  time_zone?: string;
 }
 
 export interface AgentRun {
@@ -142,6 +145,9 @@ export interface AgentRun {
   // "org_off" (the organisation keeps none) or "runner_declined" (its runner does not record). Absent:
   // recorded, or a run from before 0.9.3.
   not_recorded?: RunNotRecorded;
+  // The level the run is recorded at (Go: AgentRun.RecordingLevel), resolved with not_recorded.
+  // Absent: terminal, or a run dispatched before levels.
+  recording_level?: RecordingLevel;
   // The runner pool the run was admitted into, and how it was chosen (Go:
   // AgentRun.RunnerPool*), written once at create. A pool is a label, never
   // admission: the run goes to the exact runner in runner_id (self-hosted) or
@@ -282,7 +288,7 @@ export interface AgentRun {
   queue?: RunQueue;
   wait_budget_sec?: number;
   run_limits?: RunLimits;
-  governance_profile_id?: string;
+  unit_id?: string;
   // Set when the run lost its sandbox but is kept (migration 0073, #568):
   // "ended" = its end passed, so it is stopped with no network and its files
   // stay for the ended-run grace. "reboot" = its container exited under it
@@ -495,6 +501,14 @@ export interface RunDetail extends AgentRun {
   sync?: RunSync;
   // The run's folder from the person's computer and its passes (GET /runs/{id} only); see RunComputerFolder.
   computer_folder?: RunComputerFolder;
+  // Every agent of a background run with several, the run's own first; absent otherwise.
+  agents?: RunDetailAgent[];
+}
+
+// One agent of a run with several agents (runDetailAgent, internal/api/run_multi_agent.go).
+export interface RunDetailAgent {
+  agent: string;
+  task?: string;
 }
 
 // GET /runs/{id}'s computer_folder (internal/api/run_computer_folder.go computerFolderRunView): the run's
@@ -525,7 +539,7 @@ export interface RunFolderPass {
 // run_policy_view.go). `spec` strict-decodes as a RunPolicySpec, with values
 // the reader may not see already blanked ("<redacted>") server-side.
 export type RunPolicyState = "recorded" | "not_yet" | "never";
-export type RunPolicySourceKind = "stored" | "inline" | "default" | "profile" | "unknown";
+export type RunPolicySourceKind = "stored" | "inline" | "default" | "unit" | "unknown";
 
 export interface RunPolicySource {
   kind: RunPolicySourceKind | (string & {});
@@ -550,7 +564,7 @@ export type RunPolicyCause =
   | "model_access"
   | "git_broker"
   | "overlay"
-  | "profile"
+  | "unit"
   | "org_disk"
   | "pool_disk"
   | "restart"
@@ -565,7 +579,7 @@ export interface RunPolicyChange {
   removed?: string[];
   // clamp_warnings lines, verbatim (cause "limits" only).
   detail?: string[];
-  profile?: string;
+  unit?: string;
   // Restart time (cause "restart" only).
   at?: string;
 }
@@ -594,7 +608,7 @@ export interface RunPolicyView {
 }
 
 // internal/policyref.Provenance: the layer that set one value of a run's policy
-// ("deployment", "profile" with the leaf's name, "member" or "operator"), the
+// ("deployment", "unit" with the leaf's name, "member" or "operator"), the
 // contact to ask, and locked once a layer forbids lower layers to change it
 // (never set until walls or delegation can lock a knob).
 export interface PolicyProvenance {

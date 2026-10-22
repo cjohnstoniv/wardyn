@@ -10,6 +10,8 @@
 //
 // Pools and the preflight are stubbed from the New Run scenario fixtures: the
 // seeded backend runs no runner and holds no pool.
+import { RUN_REF } from "../src/app/components/wardyn/copy/run-ref";
+import { shortRunId } from "../src/app/components/wardyn/run-ref";
 import type { Page } from "@playwright/test";
 import { test, expect, fillMainDriveSize, gotoConsole, navToRoute } from "./fixtures";
 import { NR_DOCUMENT } from "../src/app/components/wardyn/copy/new-run/document";
@@ -130,7 +132,7 @@ test.describe("New Run, placement: a full pool and an offline pool", () => {
 
     // Cancel goes through the same kill dialog the Runs board uses.
     await press(page, NR_LAUNCH.CANCEL_RUN);
-    const confirm = page.getByRole("alertdialog", { name: `Kill ${RUN_ID}?` });
+    const confirm = page.getByRole("alertdialog", { name: RUN_REF.killRun(shortRunId(RUN_ID)) });
     await expect(confirm).toBeVisible();
     await confirm.getByRole("button", { name: "Kill run" }).click();
     await expect.poll(() => seen.killed).toEqual([RUN_ID]);

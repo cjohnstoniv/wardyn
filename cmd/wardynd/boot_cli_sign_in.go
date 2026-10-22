@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/api"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // cliSignInFlags are CLI sign-in's settings (docs/ENV.md), off by default; see api.CLISignInConfig. A
@@ -48,11 +49,13 @@ func (c cliSignInFlags) validate() error {
 }
 
 // config is the api.CLISignInConfig these flags set. The proof origin is the SSO redirect URL without
-// its /auth/callback: the scheme, host and base path the CLI signed in at.
+// its /auth/callback: the scheme, host and base path the CLI signed in at, in types.CLIOrigin form, which
+// is the form the CLI signs over.
 func (c cliSignInFlags) config(oidcRedirectURL string) api.CLISignInConfig {
 	origin := ""
 	if u, err := url.Parse(oidcRedirectURL); err == nil && u.Host != "" {
-		origin = u.Scheme + "://" + u.Host + strings.TrimSuffix(strings.TrimSuffix(u.Path, "/auth/callback"), "/")
+		u.Path, u.RawPath = strings.TrimSuffix(strings.TrimSuffix(u.Path, "/"), "/auth/callback"), ""
+		origin = types.CLIOrigin(u)
 	}
 	return api.CLISignInConfig{Enabled: orZero(c.enabled), Paste: orZero(c.paste),
 		FileStoreOff: c.fileStore != nil && !*c.fileStore, SessionTTL: orZero(c.ttl), SessionIdle: orZero(c.idle), Origin: origin}

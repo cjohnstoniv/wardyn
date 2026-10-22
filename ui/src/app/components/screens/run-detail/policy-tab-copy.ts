@@ -66,7 +66,7 @@ export const CHANGE_HEADING = {
   git_broker: "Routed through Wardyn's GitHub connection", // S-17
   model_access: "Added so the agent can reach its model", // S-18
   mirror: "Switched to your organization's package mirror", // S-19
-  profile: (name: string) => `Limited by the ${name} governance profile`, // S-20
+  unit: (name: string) => `Limited by the ${name} governance profile`, // S-20
   restart: (date: string) => `Blocked when the run was restarted on ${date}`, // S-21
   org_disk: "Disk size set from your organization's default", // S-22
   pool_disk: "Disk size set from this pool's default",
@@ -75,7 +75,7 @@ export const CHANGE_HEADING = {
   overlay: "Set by the policy you chose for this run",
 } as const;
 
-export type PlainCause = Exclude<RunPolicyCause, "limits" | "profile" | "restart">;
+export type PlainCause = Exclude<RunPolicyCause, "limits" | "unit" | "restart">;
 
 // S-34 .. S-47: the Summary view.
 export const SUMMARY = {

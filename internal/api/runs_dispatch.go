@@ -460,6 +460,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	grantRows = s.reassertCeilingDenies(ctx, run, &policy, &injections, ceiling, layers, grantRows, &p, sandboxEnv, &llm, &plan.bedrockMITMHosts, &p.Components.MITMHosts)
 	plan.withdrawSigV4(signsBedrock, llm)
 	azureARM := plan.azureCLI.closeWithheld(&policy, injections) // the door, decided once; one the ceiling withheld takes its hosts with it
+	kubeAPI := plan.kubectlCLI.closeWithheld(&policy, injections)
 
 	// Host bind mounts (policy WorkspaceMounts + the host-mode Bedrock ~/.aws
 	// read-only mount) — operator-authored, never agent-chosen; see buildRunMounts.
@@ -500,6 +501,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// Last of the env writers' credential work, after every injection above is
 	// authored, so its one-credential-per-host check sees them all.
 	placeholderMITM := s.placeEnvSecrets(ctx, run, policy, p, grantRows, secretEnvKeys, sandboxEnv, &injections)
+	resident = s.placeResidentEnvSecrets(ctx, run, policy, p, sandboxEnv, &injections, resident)
 	secretEnv := splitSecretEnv(sandboxEnv, dispatchSecretEnvKeys(secretEnvKeys, llm))
 
 	resources := resourceLimitsToRunner(policy.Resources)
@@ -594,6 +596,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// The re-signed AWS lane's grant (runs_dispatch_aws_sigv4.go): nil while
 			// WARDYN_AWS_SIGV4_AT_PROXY is off and on every lane it does not re-sign.
 			AWSSigV4: plan.awsSigV4,
+			// The kubectl door's grant (cli_kubectl.go), on the same terms.
+			KubeAPI: kubeAPI,
 			// The azure_foundry lane's route gate (provider_azure.go), and the hosts inspected as a model host without being a
 			// brokered upstream: that lane's endpoint and a Claude subscription's route-through host. Empty on every other run.
 			AzureGates:      plan.azure.gates,
@@ -717,7 +721,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	if !s.sandboxCreateAdmitted(ctx, run, ceiling, siteCfg, &spec, orgConfigKeys, llm, p) {
 		return
 	}
-	if !s.applyRunRecording(ctx, &run, &spec) {
+	if !s.applyRunRecording(ctx, &run, &spec, recordingChoice(run, policy, ceiling, siteCfg, siteCfgErr)) {
 		return
 	}
 	spec.ExecOutput = s.openExecOutput(run, p.Interactive)
@@ -753,7 +757,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// that the very next event — `run.create` `failure` — contradicted. Nothing
 	// downstream of here can refuse the drive, so this row is now true when it
 	// is written.
-	s.auditDriveMount(ctx, run.ID, p.Drives)
+	s.auditDriveMount(ctx, run.ID, run.CreatedBy, p.Drives)
 	auditAgentPolicy := func() { s.auditAgentPolicy(ctx, run, agentPolicy, spec) }
 	if !agentPolicy.execLess {
 		auditAgentPolicy()
@@ -806,7 +810,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	s.metrics.sandboxLaunched(s.cfg.Now().Sub(run.CreatedAt))
 
 	// INTERACTIVE vs task exec vs BYOI selftest — see startAgentOrIdle.
-	s.startAgentOrIdle(ctx, run, sb.Ref, p.Image, p.Interactive, execution, auditAgentPolicy)
+	s.startAgentsOrIdle(ctx, run, p.Harnesses, sb.Ref, p.Image, p.Interactive, execution, auditAgentPolicy)
 }
 
 // auditablePolicy returns a Clone of policy safe to write to the append-only

@@ -150,6 +150,9 @@ func driveWriteAuditData(saved types.UserDrive, rehome driveRehome) map[string]a
 		// row and the orphaning is invisible in the log.
 		"rehomed": rehome.confirmed,
 	}
+	if saved.Team {
+		data["team"] = true
+	}
 	if rehome.confirmed {
 		data["rehomed_fields"] = rehome.fields
 		data["rehomed_subjects"] = rehome.subjects

@@ -77,4 +77,29 @@ export const recordings = {
     const text = await fetchCast(runId, key);
     return text === undefined ? undefined : parseRecording(runId, text);
   },
+
+  // A desktop's screen recording (#2968), stored under the composite key desktop.recording.write
+  // names: noVNC playback frames and the pause gaps (Go: recording.RFBPlayback). undefined is 404.
+  async getDesktopRecording(runId: string, key: string): Promise<{ playback: DesktopPlayback; raw: string } | undefined> {
+    const text = await fetchCast(runId, key);
+    return text === undefined ? undefined : { playback: JSON.parse(text) as DesktopPlayback, raw: text };
+  },
 };
+
+/** Go: recording.RFBGap. */
+export interface DesktopGap {
+  start_ms: number;
+  end_ms?: number;
+  reason: string;
+}
+
+/** Go: recording.RFBPlayback. */
+export interface DesktopPlayback {
+  version: number;
+  format: string;
+  encoding: string;
+  started_at: string;
+  frames: string[];
+  gaps?: DesktopGap[];
+  truncated?: boolean;
+}

@@ -5,6 +5,7 @@ package db
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -37,6 +38,8 @@ func TestMigration0157_TokensAndRunsUnchanged(t *testing.T) {
 			WHERE table_schema = current_schema() AND table_name = '`+table+`'`)
 	}
 	tokenCols, runCols := columns("api_tokens"), columns("agent_runs")
+	// 0201 renames governance_profile_id to unit_id; it is not what 0157 may change either.
+	runCols = slices.DeleteFunc(runCols, func(c string) bool { return c == "governance_profile_id" })
 	snapshot := func(table string, cols []string) string {
 		t.Helper()
 		var parts []string

@@ -62,6 +62,7 @@ export function DirectoryCombobox({
   onChange,
   kind = "any",
   disabled,
+  placeholder,
   "aria-describedby": describedBy,
 }: {
   /** Ties the control to a <Field htmlFor>. */
@@ -73,6 +74,7 @@ export function DirectoryCombobox({
   /** Which class of subject the field holds; a kind-less field takes "any". */
   kind?: DirectorySearchKind;
   disabled?: boolean;
+  placeholder?: string;
   /** Field clones this onto its child; the wrapper forwards it to the input. */
   "aria-describedby"?: string;
 }) {
@@ -132,6 +134,7 @@ export function DirectoryCombobox({
         id={id}
         aria-label={label}
         aria-describedby={describedBy}
+        placeholder={placeholder}
         value={value}
         // Typing invalidates a pick: the field no longer holds that group's id,
         // so the chip explaining it must go with it.

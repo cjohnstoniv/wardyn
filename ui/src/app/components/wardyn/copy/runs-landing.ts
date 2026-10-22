@@ -13,7 +13,8 @@ export const RUNS_SECTION = {
   NEEDS_ADMIN: "Needs a decision",
   // H-3, Admin view only: owners' sign-ins and lost runs — no admin can act.
   OWNER: "Waiting on the owner",
-  RUNNING: "Running",
+  // #3039: Starting and Queued rows sit here too, so the section is not named for one state.
+  RUNNING: "Active",
   ENDED_TODAY: "Ended today",
   EARLIER: "Earlier this week",
   EARLIER_MONTH: "Earlier this month",
@@ -116,8 +117,6 @@ export const RUNS_SAVE_VIEW_CANCEL = "Cancel";
 // runs-model.ts's rowPresentation — this table only carries what D2 adds or
 // changes.
 export const RUNS_ROW_WORD = {
-  NEEDS_APPROVAL: "Needs your approval",
-  NEEDS_DECISION: "Needs a decision",
   WAITING_FOR_ADMIN: "Waiting for an admin",
   WAITING_SIGN_IN: "Waiting for sign-in",
   SANDBOX_STOPPED: "Sandbox stopped",

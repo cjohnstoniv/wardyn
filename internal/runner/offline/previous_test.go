@@ -220,3 +220,23 @@ func TestReRegistrationSetAsideIsBoundedOnAHungEngine(t *testing.T) {
 		t.Fatalf("state moved while its proxies were not stopped: %v", err)
 	}
 }
+
+// TestReRegistrationSetAsideAStopThatSucceedsAtTheBoundIsASuccess: a stop that returns nil after the call's bound
+// has run out stopped the proxy, so the pass neither fails nor wraps a nil error, and the state moves.
+func TestReRegistrationSetAsideAStopThatSucceedsAtTheBoundIsASuccess(t *testing.T) {
+	m, sub, _, org := managerFixture(t)
+	dir := m.dir
+	createLocal(t, m, org)
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+	defer func(b time.Duration) { setAsideCallBound = b }(setAsideCallBound)
+	setAsideCallBound = 50 * time.Millisecond
+	sub.lateStop = true
+	if err := SetAsidePrevious(t.Context(), dir, uuid.New(), sub, uuid.UUID.String); err != nil {
+		t.Fatalf("SetAsidePrevious = %v, want success: the stop answered nil", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "offline", "state.json")); !os.IsNotExist(err) {
+		t.Fatalf("state.json still in place after a successful set-aside: %v", err)
+	}
+}

@@ -36,7 +36,7 @@ vi.mock("../../../lib/api/setup", () => ({
   setup: { getSetupStatus: vi.fn() },
 }));
 
-import type { GovernanceProfile } from "../../../lib/api/governance";
+import type { GovernanceUnit } from "../../../lib/api/governance";
 import { GOVERNANCE as GOV, MEMBER_DRIVE_DOOR } from "../../../lib/governance-copy";
 import { baseStatus } from "../../../lib/test-fixtures";
 import { setup } from "../../../lib/api/setup";
@@ -45,7 +45,7 @@ import { limitChips } from "./limit-chips";
 import { LIMIT_FIELDS } from "./profile-overlay";
 import { ProfileEditor } from "./profile-editor";
 
-const row = (over: Partial<GovernanceProfile>): GovernanceProfile => ({
+const row = (over: Partial<GovernanceUnit>): GovernanceUnit => ({
   id: "p",
   name: "P",
   ceiling: { allowed_domains: ["git.x"], first_use_approval: "deny_with_review", min_confinement_class: "CC2" },
@@ -62,7 +62,7 @@ beforeEach(() => {
   vi.mocked(setup.getSetupStatus).mockResolvedValue(baseStatus());
 });
 
-const mount = (profile: GovernanceProfile, profiles: GovernanceProfile[] = [profile]) =>
+const mount = (profile: GovernanceUnit, profiles: GovernanceUnit[] = [profile]) =>
   render(<ProfileEditor profile={profile} profiles={profiles} disabled={false} onCancel={vi.fn()} onSaved={vi.fn()} onSubmitted={vi.fn()} />);
 
 describe("the member-drive door", () => {

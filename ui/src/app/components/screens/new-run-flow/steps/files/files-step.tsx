@@ -33,6 +33,7 @@ import { fileItems, folderSources, legacyIdOf, removeItem, startIn, type FileIte
 import { useDriveCatalogue } from "./file-sources";
 import { readMainDrive, repoRows, useFilesPreflight } from "./files-seams";
 import { FilesSummary, summaryText } from "./files-summary";
+import { keepDoor } from "./keep-work-folder";
 import { FilesGroup } from "./kind-visuals";
 import { lifecycleOf, MainDriveSection, useMainDriveSize } from "./main-drive-section";
 import { MountMap } from "./mount-map";
@@ -198,7 +199,7 @@ export function FilesStep({ go, createUserDrive }: NewRunScreenProps & Pick<AddD
       issues={issues}
     >
       <div className="flex flex-col gap-3">
-        <MainDriveSection view={view} size={size} />
+        <MainDriveSection view={view} size={size} keep={keepDoor(drives.catalogue?.create, intent.keep_work_folder === true)} />
         {loaded.status === "error" && <p role="alert" className="text-sm text-danger">{loaded.message}</p>}
         <FilesGroup
           titleId="nr-attach-title"
@@ -292,6 +293,7 @@ export function FilesStep({ go, createUserDrive }: NewRunScreenProps & Pick<AddD
             startsName: start && `${start.name}${sub.value && !sub.bad ? `/${sub.value}` : ""}`,
             keptDrives: items.filter((i) => i.kind !== "repo").map((i) => i.name),
             life,
+            keepsWork: intent.keep_work_folder === true,
           })}
         />
       </div>

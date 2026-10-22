@@ -66,7 +66,9 @@ RUN if [ -f /corp-ca/corp-ca.pem ]; then \
     fi
 
 COPY go.mod go.sum ./
-RUN go mod download
+# Bounded retry of the module FETCH only (a proxy stream error is transient); go.sum still
+# verifies every module, and no build or test step is ever retried.
+RUN for i in 1 2 3; do go mod download && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done
 
 COPY . .
 

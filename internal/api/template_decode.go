@@ -52,7 +52,12 @@ var (
 )
 
 // templateDecoder collects the diagnostics of one document.
-type templateDecoder struct{ diags []client.TemplateDiagnostic }
+type templateDecoder struct {
+	diags []client.TemplateDiagnostic
+	// run is set for a kind Run document, which is a launch: it keeps each
+	// agent's own task, which a template leaves for use time.
+	run bool
+}
 
 func (d *templateDecoder) add(path, reason, message string) {
 	d.diags = append(d.diags, client.TemplateDiagnostic{Path: path, Reason: reason, Message: message})
@@ -264,7 +269,7 @@ func (d *templateDecoder) walkStruct(t reflect.Type, raw json.RawMessage, path s
 			d.unknownKey(path, key)
 			continue
 		}
-		if rule, isExcluded := templateExclusion(t, key); isExcluded {
+		if rule, isExcluded := templateExclusion(t, key); isExcluded && !(d.run && t.Name() == "IncludedTool" && key == "task") {
 			d.excluded(keyPath, rule)
 			continue
 		}

@@ -256,7 +256,7 @@ https://<your-wardyn-address>/api/v1/scm/azure-devops/callback
   - the console's sign-in asks for the two token permissions and for `offline_access`, never for a capability permission,
   - and Wardyn stores the grant sealed in that person's own namespace.
 - Where consent was not captured there, the **Connect Azure DevOps** door in Settings does the same through a redirect to Azure DevOps' own login.
-- From then on, their clones and their Azure DevOps REST calls (a pull request, a work-item update, a build queued from a pipeline task) are authorised as *them*, not as a shared account.
+- From then on, their clones and their Azure DevOps REST calls are authorised as *them*, not as a shared account.
 - A run's credential covers an onboarded workspace's repositories and the run's own `repo` alike.
   - It never covers `devcontainer_repo`, which the server clones.
   - `inline_policy.workspace_repos` naming a repository that is not onboarded is still refused.
@@ -265,7 +265,7 @@ https://<your-wardyn-address>/api/v1/scm/azure-devops/callback
 - A person who has not connected cannot launch against the row:
   - the launch is refused ("you are not connected to Azure DevOps — connect and start the run again"),
   - and a run that reaches dispatch without a stored connection fails with "Connect Azure DevOps once before launching; Wardyn creates the run's token from that connection."
-- Their state (connected, sign in again, blocked by the organisation, permissions missing) shows in Settings and in `/me/scm-access`, and a launch is refused with the sentence for the state they are in.
+- Their state shows in Settings and in `/me/scm-access`, and a launch is refused with the sentence for the state they are in.
 - Every sign-in that captures a connection on a `minted_pat` row is audited as `ado_pat.connect`.
 - **Disconnecting revokes the tokens of the person's runs in progress**, and those runs lose Azure DevOps access.
 - The Settings card asks first: "Disconnecting revokes the tokens of any of your runs in progress. They lose Azure DevOps access."
@@ -276,20 +276,19 @@ https://<your-wardyn-address>/api/v1/scm/azure-devops/callback
 - `DELETE /people/{principal}/credentials` revokes every live token created in their name (each audited `ado_pat.revoke`, reason `offboarding`), then deletes the stored grant.
 - `/me/scm-access` adds, on a row that creates tokens, `token_mode: minted_pat`, `last_token` (when the newest token was created and, once its record is closed, when that was) and `default_profile`.
 
-That has two consequences worth knowing before you hit them:
+That has two consequences:
 
 - **Azure DevOps' own audit and push history name the person**, not a shared service account.
-  - There is nothing Wardyn-side to reconcile — ask Azure DevOps who pushed a commit and it answers with the real person.
+  - There is nothing Wardyn-side to reconcile: Azure DevOps answers with the real person.
   - In `minted_pat` mode the organisation's audit log also records a token create and a token revoke for each token,
-    - and the person gets an email when each token is created and before it expires,
-    - so expect mail for every run.
+    - and the person gets an email when each token is created and before it expires.
 - **A repository they cannot read answers `TF401019`** — Azure DevOps' own "you do not have permission" response, not a Wardyn refusal.
-  - Per-user authorization is enforced by the forge itself, for free, the moment the credential belongs to a real person instead of an admin's shared token.
+  - The forge enforces per-user authorization once the credential belongs to a real person instead of an admin's shared token.
 
 ## How a run's token lives (`minted_pat`)
 
 - One PAT per run, in the person's name. The sandbox holds an inert placeholder, not the PAT ([how a credential reaches a run](CREDENTIALS.md)).
-- A run can hold more than one live token over its life (renewal and widening add one and leave the older to expire), each no wider than the newest.
+- A run can hold several live tokens over its life (renewal and widening add one and leave the older to expire), none wider than the newest.
 - **At launch**, Wardyn redeems an access token from the person's stored grant and creates a PAT named `Wardyn run <first eight characters of the run id>`.
   - It is scoped to this organisation only,
   - names only the scopes the run's capabilities map to (the tables above),
@@ -359,9 +358,10 @@ That has two consequences worth knowing before you hit them:
 
 - A super admin opts a connection in with `entra.runner_resident` on `PUT /workspace-providers`. It is off by default and audited on `workspace_provider.write`.
   - Under `WARDYN_GOVERNANCE_SECOND_HUMAN` a policy change waits for a second person.
-- **Where the token is.** The runner's proxy fetches it from the organisation over the runner's relay, as on the cluster, and renews it before expiry. It is held only in the proxy's memory, at most `pat_max_hours` (default 8): never on disk, in the keystore, in env or in the sandbox.
-  - The sandbox holds only the inert placeholder; the proxy injects the token. Root on the laptop can read the proxy's memory.
-  - `entra.runner_resident_sandbox` is stored and audited but changes no run.
+- **Where the token is.** The runner's proxy fetches it from the organisation over the runner's relay, as on the cluster, and renews it before expiry. It is held only in the memory of the runner's proxy, on the person's own computer, at most `pat_max_hours` (default 8): never on disk or in the keystore. Root on that computer can read it.
+  - The sandbox's environment holds only the inert placeholder (`AZURE_DEVOPS_EXT_PAT`); the proxy adds the token to requests on the way out. A host that echoes request headers can return it to the sandbox ([residuals](CREDENTIALS.md#residuals)).
+  - `entra.runner_resident_sandbox` (needs `runner_resident`) has no effect in this version. It is stored and audited, and no run reads it: off or on, the sandbox sees the same placeholder and the token is not put in it.
+  - Posture: the class has no requirement of its own. The `ado_minted_pat` row of the delivery policy, global or per `by_trust`, may carry `require_posture` with `mdm_managed`, `disk_encrypted` and `os_min` per OS. Every fetch judges it against the posture the runner reports. A runner that reports no posture fails every posture requirement. A run with a confinement floor is refused (`runner_posture_unmet`).
 - Write access is as on the cluster: read by default; `code_write` and pull requests through the capability approval.
 - **Each fetch is judged again** against the policy, the runner's owner, trust class and posture, and the opt-in. A refusal answers `delivery_runner_resident` and revokes the run's token at Azure DevOps (`drift`).
   - The proxy fetches at most 15 minutes apart, so a withdrawn opt-in or a policy, trust or posture change cuts the run within 15 minutes. To cut it at once, end or pause it.
@@ -376,7 +376,7 @@ That has two consequences worth knowing before you hit them:
 
 - On a `minted_pat` row, an administrator runs **Check organisation settings**.
 - It is admin only (`POST /workspace-providers/git/{id}/org-check`), it needs a signed-in browser session, and it works only on the enabled row that is the deployment's sign-in row: any other row answers as an unknown one.
-- It uses the administrator's own connection, so it follows the [setup order](#for-per-run-tokens-minted_pat) (enable, sign in, check).
+- It uses the administrator's own connection, so it follows the [setup order](#for-per-run-tokens-minted_pat).
 - It does three things:
 
 1. It tries to redeem the administrator's connection and requires both token permissions. Missing: "Your app registration doesn't have the Azure DevOps token permissions yet. Add vso.pats and vso.pats_manage and grant admin consent." Present: "Your app registration has both Azure DevOps token permissions."
@@ -388,8 +388,7 @@ That has two consequences worth knowing before you hit them:
    - **off**, when the token was created: "Maximum token lifespan is off in Azure DevOps. A stolen connection could create tokens that last up to a year. Turn it on under Organization settings → Microsoft Entra."
    - **unknown**, on any other answer (`invalidValidTo` included), never read as on: "Wardyn couldn't tell whether your organisation's maximum token lifespan is on. Azure DevOps answered: {error}." The answer carries `lifespan_error`, Azure DevOps' own error name or `HTTP <status>`.
 
-- Wardyn cannot read the organisation's policies directly.
-- The check infers them from what Azure DevOps accepts, and costs the administrator two token-created emails.
+- Wardyn cannot read the organisation's policies; the check infers them from what Azure DevOps accepts, and costs the administrator two token-created emails.
 - Both canaries are revoked at once, on a context that outlives the request;
   - one that cannot be revoked is named in the answer (`unrevoked`) and audited as `ado_pat.revoke.failed`, and the administrator revokes it under **Personal access tokens**.
 - The result is shown on the row and recorded as `ado_pat.org_check`.
@@ -403,13 +402,12 @@ That has two consequences worth knowing before you hit them:
 - When the administrator's own **Check organisation settings** is refused by the policy,
   - the row shows a banner naming them
   - ("Azure DevOps refused to create a token for {person}: your organisation restricts who can create personal access tokens. Add the people who use Wardyn to that policy's allow list, or switch to Entra sign-in.") with a button that switches the row to Entra sign-in.
-- The row shows the same banner, with no check run, naming the person whose launch the organisation refused in the last seven days:
-  - the administrator sees it when the row opens, after a member's mint is refused and not only after their own check.
-- The simplest fix is the allow list: one Project Collection Administrator action, adding the people who use Wardyn or their group.
-- Switching the row to `bearer` is the alternative, and it needs the Entra changes above (the app must drop the token permissions), which is why the allow list comes first.
+- The row shows the same banner, with no check run, naming the person whose launch the organisation refused in the last seven days.
+  - The administrator sees it when the row opens after a member's mint is refused, not only after their own check.
+- The simplest fix is the allow list: one Project Collection Administrator action adding the people who use Wardyn or their group.
+- Switching the row to `bearer` is the alternative; it needs the Entra changes above (the app must drop the token permissions).
 - Nothing falls back silently to another credential.
-- Whether the creation policy blocks creation through the API, and in what shape it answers, is a fact of your organisation that Wardyn could not measure ahead of time:
-  - it reads an `accessDenied` answer as the policy.
+- Wardyn could not measure ahead of time how your organisation's creation policy answers through the API; it reads an `accessDenied` answer as the policy.
 - The refusal reasons a launch or a check can carry:
 
 | Reason | Meaning |
@@ -444,7 +442,7 @@ That has two consequences worth knowing before you hit them:
 - The `ado_pat.own.store` audit row says which basis bound the token (`bound_by`: `object_id` or `name`), never the id.
 - The token is stored sealed in the person's own namespace, readable only by them, with no fallback to an administrator's or another person's copy.
 - Wardyn cannot read a pasted token's scopes or its expiry, so it trusts the date the person entered, and stops using the token from the start of that day (UTC).
-- The run's capabilities are held by the proxy's request check exactly as in every other mode.
+- The proxy's request check holds the run's capabilities, as in every other mode.
 - **A token Azure DevOps refuses before its expiry** is noted, not stopped.
   - When the proxy has to ask for the token again because Azure DevOps answered it with a 401 and the date the person entered is still ahead,
     - Wardyn asks Azure DevOps once whether it still accepts the token (the check a paste runs);
@@ -642,7 +640,7 @@ sequenceDiagram
 
 ## Two layers of enforcement
 
-Two different things bound what a run can do:
+Two things bound what a run can do:
 
 1. **The credential, enforced by Azure DevOps and Entra.** What it holds depends on the mode.
    - In `minted_pat` mode it is the run's PAT: organisation-only, and only the scopes of the run's capabilities.
@@ -678,11 +676,10 @@ Two different things bound what a run can do:
 
 - Wardyn's Azure DevOps sign-in is an ordinary browser redirect, never the device-code flow.
 
-Two reasons, both load-bearing:
+Two reasons:
 
 - **Microsoft's own Conditional Access guidance recommends blocking device-code sign-in** by default across an estate, precisely because it is a favored phishing vector
   - the flow gives an attacker a code to relay to a real user with no way for that user to see what they are actually approving.
-  - Building a feature that leans on a flow Microsoft tells its own customers to block is not a trade worth making.
 - **A device code cannot be bound to the Wardyn session that requests it.**
   - The identity binding this lane relies on ties the Azure DevOps capture to the same browser session that is already signed in to Wardyn
     - (so a sign-in provably belongs to the person driving it,
@@ -707,7 +704,7 @@ What the refresh token is redeemed for depends on the mode:
 
 When a redemption is refused — the refresh token has been revoked or has expired, or a Conditional Access policy requires the person to sign in interactively — what happens depends on when:
 
-- **While a run is working**, the request that needed the credential is held, and the person is asked to sign in to Azure DevOps again (the run's approvals show the request).
+- **While a run is working**, the request that needed the credential is held, and the person is asked to sign in to Azure DevOps again.
   - Signing in — through the Wardyn sign-in or the separate Azure DevOps connection — answers it, and the held request goes through.
   - Nothing is substituted.
   - If nobody signs in before the hold's time runs out (`WARDYN_CREDENTIAL_REAUTH_TIMEOUT`, ten minutes by default), the request is refused, and the run's next Azure DevOps request goes through once the person has signed in.
@@ -722,7 +719,7 @@ When a redemption is refused — the refresh token has been revoked or has expir
 ## What bounds a token-creating credential
 
 - In `minted_pat` mode the stored refresh token can create PATs, not only read.
-- That is a deliberately larger power than the `bearer` lane's stored token, and it is worth being exact about what limits it.
+- That is a deliberately larger power than the `bearer` lane's stored token, so be exact about what limits it.
 
 > [!WARNING]
 > **What a token that can create PATs can do.**
@@ -769,7 +766,7 @@ When a redemption is refused — the refresh token has been revoked or has expir
 ## Azure DevOps Server
 
 - Per-run tokens and Entra sign-in are for Azure DevOps Services (`dev.azure.com` / `*.visualstudio.com`) only.
-- A self-hosted Azure DevOps Server does not accept Microsoft Entra tokens — Microsoft's own documentation limits OAuth 2.0 to Azure DevOps Services and directs on-premises installations to personal access tokens or Windows authentication instead.
+- A self-hosted Azure DevOps Server does not accept Microsoft Entra tokens; Microsoft limits OAuth 2.0 to Azure DevOps Services.
 - A Server organisation uses the `pat` lane with `credential_source: per_user` and no `entra` block:
   - each person pastes their own PAT, as in [Your own token](#your-own-token-own_pat), and a shared administrator PAT is no longer an option on a Server row either.
 

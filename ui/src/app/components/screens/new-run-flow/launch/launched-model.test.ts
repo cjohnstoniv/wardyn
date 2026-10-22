@@ -53,4 +53,10 @@ describe("why it waits", () => {
     expect(waitingBody("runner_pool_at_capacity", undefined)).toBeUndefined();
     expect(waitingBody("runner_pool_at_capacity", { name: "CI jobs" })).toBeUndefined();
   });
+
+  it("gives a scheduled run's two waits no pool sentence: the scheduled-run heroes say them", () => {
+    const pool = { name: "CI jobs", max: 40 };
+    expect(waitingBody("scheduled", pool)).toBeUndefined();
+    expect(waitingBody("owner_sign_in", pool)).toBeUndefined();
+  });
 });

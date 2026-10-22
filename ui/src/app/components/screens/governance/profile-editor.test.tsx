@@ -35,7 +35,7 @@ vi.mock("../../../lib/api/setup", () => ({
   setup: { getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a) },
 }));
 
-import type { GovernanceProfile } from "../../../lib/api/governance";
+import type { GovernanceUnit } from "../../../lib/api/governance";
 import { GOVERNANCE as GOV, RUBRIC, RUN_LIMITS as RL } from "../../../lib/governance-copy";
 import { baseStatus } from "../../../lib/test-fixtures";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
@@ -43,7 +43,7 @@ import { AUTONOMY_META } from "../../wardyn/autonomy-meta";
 import { ProfileEditor } from "./profile-editor";
 import { aheadByHours } from "../../../lib/test-clock";
 
-const GREENFIELD: GovernanceProfile = {
+const GREENFIELD: GovernanceUnit = {
   id: "p1",
   name: "Greenfield contractors",
   ceiling: { allowed_domains: ["api.anthropic.com"], first_use_approval: "deny_with_review", min_confinement_class: "CC2" },
@@ -52,11 +52,40 @@ const GREENFIELD: GovernanceProfile = {
   updated_at: aheadByHours(-1),
 };
 
-function renderEditor(profile: GovernanceProfile | null = GREENFIELD) {
+function renderEditor(profile: GovernanceUnit | null = GREENFIELD) {
   const onSaved = vi.fn();
   render(<ProfileEditor profile={profile} disabled={false} onCancel={vi.fn()} onSaved={onSaved} onSubmitted={vi.fn()} />);
   return { onSaved };
 }
+
+describe("ProfileEditor — the pinned action bar and section anchors", () => {
+  beforeEach(() => {
+    getSetupStatusMock.mockReset();
+    getSetupStatusMock.mockResolvedValue(baseStatus());
+    gradePolicyMock.mockReset();
+    gradePolicyMock.mockResolvedValue({ overall_risk: "medium", risk_assessment: [] });
+  });
+
+  it("counts the sections that changed, and says nothing before an edit", async () => {
+    renderEditor();
+    expect(screen.getByTestId("form-actions-unsaved")).toBeEmptyDOMElement();
+
+    await userEvent.type(screen.getByLabelText(GOV.LIMIT_CONCURRENT_LABEL), "5");
+    expect(screen.getByTestId("form-actions-unsaved")).toHaveTextContent("1 unsaved change");
+
+    await userEvent.type(screen.getByLabelText(GOV.FIELD_NAME, { exact: false }), " two");
+    expect(screen.getByTestId("form-actions-unsaved")).toHaveTextContent("2 unsaved changes");
+  });
+
+  it("links to each section by an anchor that exists", () => {
+    renderEditor();
+    const nav = within(screen.getByTestId("section-anchors"));
+    for (const label of [GOV.CEILING_TITLE, GOV.LIMITS_TITLE, GOV.CONTACT_TITLE]) {
+      const href = nav.getByRole("link", { name: label }).getAttribute("href")!.slice(1);
+      expect(document.getElementById(href)).not.toBeNull();
+    }
+  });
+});
 
 describe("ProfileEditor — the three integer LimitNumberRows", () => {
   beforeEach(() => {
@@ -430,14 +459,14 @@ describe("ProfileEditor — the Access requests section", { timeout: 20_000 }, (
     updateProfileMock.mockResolvedValue({ profile: GREENFIELD, warnings: [] });
   });
 
-  const WITH_CONTACT: GovernanceProfile = {
+  const WITH_CONTACT: GovernanceUnit = {
     ...GREENFIELD,
     contact: { owner: "Platform Security", email: "access@example.com", request_url: "https://example.com/access", request_text: "Include the run id." },
   };
 
   it("shows the stored contact under M3's labels", () => {
     renderEditor(WITH_CONTACT);
-    expect(screen.getByText(GOV.CONTACT_TITLE)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: GOV.CONTACT_TITLE })).toBeInTheDocument();
     expect(screen.getByText(GOV.CONTACT_LEAD)).toBeInTheDocument();
     expect(screen.getByLabelText(GOV.CONTACT_OWNER)).toHaveValue("Platform Security");
     expect(screen.getByLabelText(GOV.CONTACT_EMAIL)).toHaveValue("access@example.com");

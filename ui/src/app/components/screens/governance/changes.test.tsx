@@ -40,7 +40,7 @@ import { SubmittedNote } from "./submitted-note";
 function change(over: Partial<GovernanceChange> = {}): GovernanceChange {
   return {
     id: "c1",
-    target_kind: "governance_profile",
+    target_kind: "governance_unit",
     op: "update",
     target_key: "team-a",
     state: "pending",
@@ -132,7 +132,7 @@ describe("the Changes tab", () => {
   });
 
   it("keeps the key as the target for a kind whose key is already natural", () => {
-    renderTab([change({ target_kind: "governance_assignment", op: "upsert", target_key: "group:eng", diff: { changed: [] } })]);
+    renderTab([change({ target_kind: "governance_membership", op: "upsert", target_key: "group:eng", diff: { changed: [] } })]);
     expect(screen.getByText("group:eng")).toBeInTheDocument();
   });
 
@@ -200,11 +200,11 @@ describe("the change drawer", () => {
     const notes = ["first note"];
     renderTab([
       change({
-        target_kind: "governance_assignment",
+        target_kind: "governance_membership",
         op: "upsert",
         diff: {
-          after: { subject_type: "group", subject: "g", profile_id: "p9", priority: 0, profile: { id: "p9", name: "Embedded profile", ceiling: {}, limits: {} } },
-          changed: ["profile_id"],
+          after: { subject_type: "group", subject: "g", unit_id: "p9", priority: 0, unit: { id: "p9", name: "Embedded profile", ceiling: {}, limits: {} } },
+          changed: ["unit_id"],
           notes,
         },
       }),
@@ -239,17 +239,17 @@ describe("the change drawer", () => {
   it("renders an assignment's embedded profile summary from the diff, and looks nothing up", async () => {
     renderTab([
       change({
-        target_kind: "governance_assignment",
+        target_kind: "governance_membership",
         op: "upsert",
         diff: {
           after: {
             subject_type: "group",
             subject: "g",
-            profile_id: "p9",
+            unit_id: "p9",
             priority: 0,
-            profile: { id: "p9", name: "Embedded profile", ceiling: { allowed_domains: ["a.example"] }, limits: {} },
+            unit: { id: "p9", name: "Embedded profile", ceiling: { allowed_domains: ["a.example"] }, limits: {} },
           },
-          changed: ["profile_id"],
+          changed: ["unit_id"],
         },
       }),
     ]);

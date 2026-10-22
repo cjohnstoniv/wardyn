@@ -53,14 +53,17 @@ import { PolicyRemedy } from "../wardyn/policy-remedy";
 import { newRunHref } from "./new-run-flow/draft/new-run-url";
 import { AUDIT } from "./audit-copy";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
+import { Refusal } from "../wardyn/refusal";
+import { REFUSAL, RUN_NOT_FOUND } from "../wardyn/copy/refusal";
 import { isHeld } from "../wardyn/live-approvals";
 import { ReasonDialog } from "../wardyn/reason-dialog";
 import { APPROVALS } from "../../lib/approvals-copy";
-import { useSecurityOperator } from "../wardyn/operator-context";
+import { usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
 import { useConsoleMode } from "../wardyn/console-view";
 import { RUN_COCKPIT, RUN_OUTPUT } from "../wardyn/copy";
 import { ProfileReview } from "./profile-review";
 import { SummaryHeader } from "./run-detail-summary-header";
+import { viewerBlockedOnDecision } from "./run-detail/viewer-blocked";
 import { ApprovalsTab } from "./run-detail-approvals-tab";
 import { RunDetailCommandBar } from "./run-detail-command-bar";
 import { LaunchWarningsNote } from "./run-detail/launch-warnings-note";
@@ -94,6 +97,8 @@ export function RunDetailScreen() {
 function RunDetailPage({ id }: { id: string }) {
   const navigate = useNavigate();
   const view = useConsoleMode(); // M-7: no relaunch/SSH/credential door in admin view.
+  const securityOperator = useSecurityOperator();
+  const principal = usePrincipal();
 
   const {
     run, grants, egress, approvals, audit, auditGap, recordingAudit, status, tab, setTab,
@@ -109,7 +114,7 @@ function RunDetailPage({ id }: { id: string }) {
   // own "Save as policy" persists it via POST /policies. Local open-state only.
   const [profileRunId, setProfileRunId] = React.useState<string | null>(null);
 
-  const { copied, copyAsync } = useCopyToClipboard(1400);
+  const { copyAsync } = useCopyToClipboard(1400);
   const [decide, setDecide] = React.useState<{
     id: string;
     action: "approve" | "deny";
@@ -252,17 +257,22 @@ function RunDetailPage({ id }: { id: string }) {
           />
         </div>
       ) : !run ? (
-        <div className="m-6 rounded-xl border border-border bg-card">
-          <EmptyState
-            icon={ScrollText}
-            title="Run not found"
-            description="This run may have been archived or deleted, the link is stale, or you don't have access to it."
-            action={
-              <Button variant="outline" onClick={() => navigate("/runs")}>
-                Back to Runs
-              </Button>
-            }
-          />
+        <div className="flex justify-center p-6">
+          <Refusal
+            tone="absent"
+            ariaLabel={RUN_NOT_FOUND.TITLE}
+            title={RUN_NOT_FOUND.TITLE}
+            chip={RUN_NOT_FOUND.CHIP}
+            body={RUN_NOT_FOUND.BODY}
+            rows={[
+              { label: REFUSAL.WALL, value: RUN_NOT_FOUND.WALL, muted: true },
+              { label: REFUSAL.CAN_CHANGE, value: RUN_NOT_FOUND.CAN_CHANGE },
+            ]}
+          >
+            <Button size="sm" onClick={() => navigate("/runs")}>
+              {RUN_NOT_FOUND.CTA}
+            </Button>
+          </Refusal>
         </div>
       ) : (
         <Tabs
@@ -275,13 +285,14 @@ function RunDetailPage({ id }: { id: string }) {
             terminal={terminal}
             exitCode={exitCodeFromAudit(endingEvents)}
             pendingApprovalCount={pending.length}
+            viewerBlocked={viewerBlockedOnDecision(pending, securityOperator, run.created_by === principal)}
             sandboxHeld={pending.some(isHeld)}
             // F13 — split, so the AWS-named chip never fires for an Azure
             // DevOps consent row (isAdoConsentRequest is also credential_reauth).
             awaitingReauth={pending.some((p) => p.kind === "credential_reauth" && !isAdoConsentRequest(p))}
             awaitingAdoConsent={pending.some(isAdoConsentRequest)}
+            onGoApprovals={() => setTab("approvals")}
             onCopyLink={copyLink}
-            linkCopied={copied}
             onKill={kill}
             canKillAgain={killAgain}
             onClone={view === "user" ? () => void onClone() : undefined}
@@ -346,6 +357,7 @@ function RunDetailPage({ id }: { id: string }) {
               onGoAudit={() => setTab("audit")}
               onGoPolicy={() => setTab("policy")}
               onGoRecording={() => setTab("recording")}
+              onGoApprovals={() => setTab("approvals")}
             />
           </TabsContent>
 
@@ -353,6 +365,7 @@ function RunDetailPage({ id }: { id: string }) {
             <ApprovalsTab
               approvals={approvals}
               run={run}
+              viewerBlocked={viewerBlockedOnDecision(pending, securityOperator, run.created_by === principal)}
               onDecide={(approvalId, action, kind) => setDecide({ id: approvalId, action, kind })}
               onAdoDecide={decideAdoDirect}
               onPushDecide={decidePushDirect}
@@ -374,6 +387,9 @@ function RunDetailPage({ id }: { id: string }) {
               recordingDisabled={recordingDisabled}
               runId={id}
               sessions={attachSessions(recordingAudit)}
+              recordingAudit={recordingAudit}
+              level={run.recording_level}
+              notRecorded={run.not_recorded}
               selected={recKey || id}
               onSelect={(key) => {
                 setRecKey(key);
@@ -389,6 +405,9 @@ function RunDetailPage({ id }: { id: string }) {
               live={!terminal}
               state={run.state}
               endedAt={run.ended_at}
+              agents={run.agents}
+              runAgent={run.agent}
+              runTask={run.task}
               onGoRecording={() => setTab("recording")}
             />
           </TabsContent>
@@ -476,7 +495,7 @@ function AuditTab({
           <div className="divide-y divide-border">
             {events.map((e) => (
               // One line from sm up; below sm the target drops to a second line of its own (#2917).
-              <div key={e.id} data-testid="run-audit-row" className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 sm:flex-nowrap">
+              <div key={e.id} data-testid="run-audit-row" className={`flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 ${isAttributedRefusal(e) && !toolRuleDecision(e) ? "sm:flex-wrap" : "sm:flex-nowrap"}`}>
                 <span
                   data-testid="run-audit-time"
                   className="w-[84px] shrink-0 whitespace-nowrap font-mono text-meta text-muted-foreground"
@@ -511,10 +530,10 @@ function AuditTab({
                       </span>
                     )}
                     <RuleSourceChip event={e} />
-                    {isAttributedRefusal(e) && <PolicyRemedy policy={policy} className="shrink-0" />}
                     <ErasedFields event={e} className="shrink-0 text-xs" />
                   </span>
                 )}
+                {!toolRuleDecision(e) && isAttributedRefusal(e) && <PolicyRemedy policy={policy} className="basis-full" />}
               </div>
             ))}
           </div>

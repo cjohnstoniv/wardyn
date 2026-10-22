@@ -28,7 +28,7 @@ import (
 
 type graphFake struct {
 	mu       sync.Mutex
-	profiles []client.GovernanceProfile
+	profiles []client.GovernanceUnit
 	hold     map[string]bool // profile names whose create/update is answered 202
 	writes   []string        // "METHOD name-or-id", in arrival order
 	deleted  []string        // profile names, in delete order
@@ -50,11 +50,11 @@ func (g *graphFake) client(t *testing.T) *client.Client {
 		p := r.URL.Path
 		switch {
 		case r.Method == http.MethodGet && p == "/api/v1/governance":
-			writeJSON(w, http.StatusOK, client.GovernanceDocument{Profiles: g.profiles, Assignments: []client.GovernanceAssignment{}})
-		case (r.Method == http.MethodPost && p == "/api/v1/governance/profiles") ||
-			(r.Method == http.MethodPut && strings.HasPrefix(p, "/api/v1/governance/profiles/")):
+			writeJSON(w, http.StatusOK, client.GovernanceDocument{Units: g.profiles, Memberships: []client.GovernanceMembership{}})
+		case (r.Method == http.MethodPost && p == "/api/v1/governance/units") ||
+			(r.Method == http.MethodPut && strings.HasPrefix(p, "/api/v1/governance/units/")):
 			var req struct {
-				client.GovernanceProfileRequest
+				client.GovernanceUnitRequest
 				Effective json.RawMessage `json:"effective"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -65,12 +65,12 @@ func (g *graphFake) client(t *testing.T) *client.Client {
 			}
 			g.writes = append(g.writes, r.Method+" "+req.Name)
 			if g.hold[req.Name] {
-				writeJSON(w, http.StatusAccepted, pendingChange("upsert", "governance_profile", req.Name))
+				writeJSON(w, http.StatusAccepted, pendingChange("upsert", "governance_unit", req.Name))
 				return
 			}
-			prof := client.GovernanceProfile{ID: uuid.New(), Name: req.Name, Ceiling: req.Ceiling, Limits: req.Limits}
+			prof := client.GovernanceUnit{ID: uuid.New(), Name: req.Name, Ceiling: req.Ceiling, Limits: req.Limits}
 			if r.Method == http.MethodPut {
-				id, _ := uuid.Parse(strings.TrimPrefix(p, "/api/v1/governance/profiles/"))
+				id, _ := uuid.Parse(strings.TrimPrefix(p, "/api/v1/governance/units/"))
 				i, ok := g.byID(id)
 				if !ok {
 					w.WriteHeader(http.StatusNotFound)
@@ -79,16 +79,16 @@ func (g *graphFake) client(t *testing.T) *client.Client {
 				prof.ID = id
 				defer func(i int) { g.profiles[i] = prof }(i)
 			}
-			if string(req.BaseProfileID) != "" && string(req.BaseProfileID) != "null" {
+			if string(req.ParentID) != "" && string(req.ParentID) != "null" {
 				var id uuid.UUID
-				if err := json.Unmarshal(req.BaseProfileID, &id); err != nil {
-					t.Errorf("base_profile_id: %v", err)
+				if err := json.Unmarshal(req.ParentID, &id); err != nil {
+					t.Errorf("parent_id: %v", err)
 				}
 				if _, ok := g.byID(id); !ok {
 					writeJSON(w, http.StatusBadRequest, map[string]string{"error": "base does not exist"})
 					return
 				}
-				prof.BaseProfileID = &id
+				prof.ParentID = &id
 			}
 			if string(req.Overlay) != "" && string(req.Overlay) != "null" {
 				prof.Overlay = &types.CeilingOverlay{}
@@ -101,16 +101,16 @@ func (g *graphFake) client(t *testing.T) *client.Client {
 			if r.Method == http.MethodPost {
 				g.profiles = append(g.profiles, prof)
 			}
-			writeJSON(w, http.StatusOK, client.GovernanceProfileResponse{Profile: prof})
-		case r.Method == http.MethodDelete && strings.HasPrefix(p, "/api/v1/governance/profiles/"):
-			id, _ := uuid.Parse(strings.TrimPrefix(p, "/api/v1/governance/profiles/"))
+			writeJSON(w, http.StatusOK, client.GovernanceUnitResponse{Unit: prof})
+		case r.Method == http.MethodDelete && strings.HasPrefix(p, "/api/v1/governance/units/"):
+			id, _ := uuid.Parse(strings.TrimPrefix(p, "/api/v1/governance/units/"))
 			i, ok := g.byID(id)
 			if !ok {
 				w.WriteHeader(http.StatusNotFound)
 				return
 			}
 			for _, c := range g.profiles {
-				if c.BaseProfileID != nil && *c.BaseProfileID == id {
+				if c.ParentID != nil && *c.ParentID == id {
 					writeJSON(w, http.StatusConflict, map[string]string{"error": "profile is a base"})
 					return
 				}
@@ -134,10 +134,10 @@ func ptr[T any](v T) *T { return &v }
 func sourceGraph() client.GovernanceDocument {
 	rootID, midID, leafID := uuid.New(), uuid.New(), uuid.New()
 	ts := time.Time{}
-	return client.GovernanceDocument{Profiles: []client.GovernanceProfile{
-		{ID: leafID, Name: "leaf", BaseProfileID: &midID, Overlay: &types.CeilingOverlay{AutoStopAfterSec: ptr(60)},
+	return client.GovernanceDocument{Units: []client.GovernanceUnit{
+		{ID: leafID, Name: "leaf", ParentID: &midID, Overlay: &types.CeilingOverlay{AutoStopAfterSec: ptr(60)},
 			OverlayLimits: &types.LimitsOverlay{MaxConcurrentRuns: ptr(1)}, CreatedAt: ts},
-		{ID: midID, Name: "mid", BaseProfileID: &rootID, Overlay: &types.CeilingOverlay{AutoStopAfterSec: ptr(120)}},
+		{ID: midID, Name: "mid", ParentID: &rootID, Overlay: &types.CeilingOverlay{AutoStopAfterSec: ptr(120)}},
 		{ID: rootID, Name: "root", Limits: client.GovernanceLimits{MaxConcurrentRuns: 4}},
 	}}
 }
@@ -145,14 +145,14 @@ func sourceGraph() client.GovernanceDocument {
 // shape strips the per-install ids so two exports compare by name.
 func shape(doc client.GovernanceDocument) map[string][4]any {
 	name := map[uuid.UUID]string{}
-	for _, p := range doc.Profiles {
+	for _, p := range doc.Units {
 		name[p.ID] = p.Name
 	}
 	out := map[string][4]any{}
-	for _, p := range doc.Profiles {
+	for _, p := range doc.Units {
 		base := ""
-		if p.BaseProfileID != nil {
-			base = name[*p.BaseProfileID]
+		if p.ParentID != nil {
+			base = name[*p.ParentID]
 		}
 		out[p.Name] = [4]any{base, p.Overlay, p.OverlayLimits, p.Limits}
 	}
@@ -180,9 +180,9 @@ func TestApplyGovernance_GraphReversedOrderRoundTripsAndRepeatsAsNoop(t *testing
 	if !reflect.DeepEqual(shape(got), wantShape) {
 		t.Errorf("re-exported graph = %+v, want %+v", shape(got), wantShape)
 	}
-	for _, p := range got.Profiles {
-		for _, s := range srcCopy.Profiles {
-			if p.BaseProfileID != nil && *p.BaseProfileID == s.ID {
+	for _, p := range got.Units {
+		for _, s := range srcCopy.Units {
+			if p.ParentID != nil && *p.ParentID == s.ID {
 				t.Errorf("%q kept the source install's base id %s", p.Name, s.ID)
 			}
 		}
@@ -216,7 +216,7 @@ func TestApplyGovernance_PendingBaseDefersItsChildren(t *testing.T) {
 	if len(res.Pending) != 1 {
 		t.Fatalf("pending = %d, want 1", len(res.Pending))
 	}
-	want := []client.GovernanceDeferredWrite{{Profile: "mid", Base: "root"}, {Profile: "leaf", Base: "mid"}}
+	want := []client.GovernanceDeferredWrite{{Unit: "mid", Base: "root"}, {Unit: "leaf", Base: "mid"}}
 	if !reflect.DeepEqual(res.Deferred, want) {
 		t.Errorf("deferred = %+v, want %+v", res.Deferred, want)
 	}

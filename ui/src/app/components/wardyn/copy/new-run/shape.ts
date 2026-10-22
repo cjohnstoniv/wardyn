@@ -33,12 +33,12 @@ export const NR_SHAPE = {
   AGAIN_LOADING: "Loading previous runs…",
   AGENT_TITLE: "Agent task",
   AGENT_BODY: "A one-time coding task, driven by you or running autonomously.",
-  AGENT_SUB: "Interactive · Autonomous · Repeat / schedule coming soon",
+  AGENT_SUB: "Interactive · Autonomous",
   ENV_TITLE: "Environment sandbox",
   ENV_BODY: "A reusable workspace for development, analysis or investigation.",
   /** pending A18: the recommended text until the owner answers. */
   ENV_SUB: "Interactive · Your drive is attached when you have one",
   APP_TITLE: "Application sandbox",
   APP_BODY: "Run a sandboxed command, automation or script on its own.",
-  APP_SUB: "Automation / script · Application / server coming soon",
+  APP_SUB: "Automation / script",
 } as const;

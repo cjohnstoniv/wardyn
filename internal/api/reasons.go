@@ -168,6 +168,8 @@ const (
 	reasonRunModeConflict    = "run_mode_conflict"    // run-mode carriers contradict each other, or an older field that replaced them
 	reasonStartFolderInvalid = "start_folder_invalid" // start_folder is malformed, names an attachment the run lacks, or escapes its mount
 	reasonRunBackgroundOnly  = "run_background_only"  // a background run has no interactive door: attach, exec, SSH, UI gateway, desktop
+	// Several agents in one background run (run_multi_agent.go).
+	reasonMultiAgentTasksOff = "multi_agent_tasks_off" // tools[].task while WARDYN_MULTI_AGENT_TASKS is off
 	// The main drive (run_main_drive.go). The sentence is mainDriveUnenforceableMsg's, with a TypeScript twin.
 	reasonMainDriveUnenforceable = "main_drive_unenforceable" // the run's policy writes a disk size the runner it lands on cannot cap
 	// The run shape (run_shape.go): New Run's choice, checked against the carriers.
@@ -217,6 +219,13 @@ const (
 	reasonRunKillStateChanged                  = "run_kill_state_changed"                   // the run moved to another state between the read and the write
 	reasonRunMaxWaitInvalid                    = "run_max_wait_invalid"                     // max_wait_sec is below 1
 	reasonRunQueued                            = "run_queued"                               // the run is waiting for a slot in its pool: its end is set when it starts
+	// One-time scheduled runs (run_schedule.go): start_at on a create. Kept out of the run-mode block above,
+	// which ui/src/app/lib/run-mode-refusals.test.ts reads as the run-mode set.
+	reasonScheduledRunsOff         = "scheduled_runs_off"         // start_at sent while WARDYN_SCHEDULED_RUNS is off
+	reasonScheduledRunsUnavailable = "scheduled_runs_unavailable" // start_at on a deployment that places no runs, so no queue can hold it
+	reasonStartAtInvalid           = "start_at_invalid"           // start_at or start_time_zone is malformed, or one is sent without the other
+	reasonStartAtPast              = "start_at_past"              // start_at is not in the future
+	reasonStartAtTooFar            = "start_at_too_far"           // start_at is later than 7 days less the run's wait
 
 	// POST /runs/{id}/revive and each run's result in POST /admin/runs/restart
 	// (#1342): the run's substrate cannot replace a proxy in place
@@ -291,7 +300,7 @@ const (
 	reasonBreakGlassReasonRequired = "break_glass_reason_required" // an admin-token break-glass run without a usable reason
 
 	// PUT /governance/credential-delivery.
-	reasonCredentialDeliveryInvalid     = "credential_delivery_invalid"     // an unknown or fixed class, a mode outside the class's bounds, or require_posture without runner_resident
+	reasonCredentialDeliveryInvalid     = "credential_delivery_invalid"     // an unknown or fixed class, a mode outside the class's bounds or one the server cannot build (422), or require_posture without runner_resident
 	reasonCredentialDeliveryUnavailable = "credential_delivery_unavailable" // the store keeps no delivery policy (not the Postgres store)
 	reasonCredentialDeliveryStale       = "credential_delivery_stale"       // If-Match does not match the current policy ETag
 
@@ -302,21 +311,21 @@ const (
 	reasonEgressRedirectNotFound        = "egress_redirect_not_found"         // no egress_redirects entry matches `from`
 
 	// PUT/POST /governance/{profiles,assignments} and the preview routes.
-	reasonGovernanceProfileRequestInvalid = "governance_profile_request_invalid" // the profile body did not decode
-	reasonGovernanceCeilingInvalid        = "governance_ceiling_invalid"         // the ceiling names a grant outside the deployment's own EligibleGrants
-	reasonGovernanceProfileNameConflict   = "governance_profile_name_conflict"   // a profile by that name already exists
-	reasonGovernanceProfileInUse          = "governance_profile_in_use"          // the profile is still assigned; delete its assignments first
-	reasonGovernanceAssignmentInvalid     = "governance_assignment_invalid"      // the assignment fails validation
+	reasonGovernanceUnitRequestInvalid = "governance_unit_request_invalid" // the profile body did not decode
+	reasonGovernanceCeilingInvalid     = "governance_ceiling_invalid"      // the ceiling names a grant outside the deployment's own EligibleGrants
+	reasonGovernanceUnitNameConflict   = "governance_unit_name_conflict"   // a profile by that name already exists
+	reasonGovernanceUnitInUse          = "governance_unit_in_use"          // the profile is still assigned; delete its assignments first
+	reasonGovernanceMembershipInvalid  = "governance_membership_invalid"   // the assignment fails validation
 	// Composed profiles (migration 0125). The first three are write refusals. The fourth is the SAME
 	// string as authz's registered reason of that name: a 409 at a profile write that would leave a
 	// descendant with a policy nothing satisfies, and the 403 at every launch and live door when a
 	// composition cannot be applied (see adHocReasonLiterals["reasons.go:governance_overlay_unsatisfiable"]
 	// in refusal_test.go, and documentedDuplicateReasonValues).
 	reasonGovernanceOverlayInvalid       = "governance_overlay_invalid"       // the overlay names something its base does not permit, or does not decode
-	reasonGovernanceProfileCycle         = "governance_profile_cycle"         // the write would make a profile its own base
-	reasonGovernanceProfileDepth         = "governance_profile_depth"         // the write would put a profile more than three deep
+	reasonGovernanceUnitCycle            = "governance_unit_cycle"            // the write would make a profile its own base
+	reasonGovernanceUnitDepth            = "governance_unit_depth"            // the write would put a profile more than three deep
 	reasonGovernanceOverlayUnsatisfiable = "governance_overlay_unsatisfiable" // nothing satisfies a profile and its base together
-	// reasonGovernancePreviewClaimsInvalid is shared by GET /governance/preview
+	// reasonGovernancePreviewClaimsInvalid is shared by GET /governance/check
 	// and the user-drive naming preview (user_drives_preview.go): both feed the
 	// same normalizeGovernancePreviewClaims validator over user_subjects/groups.
 	reasonGovernancePreviewClaimsInvalid = "governance_preview_claims_invalid"
@@ -463,7 +472,7 @@ const (
 	reasonUserDriveReclaimUnsupported      = "user_drive_reclaim_unsupported"       // this deployment's runner cannot reclaim drive storage
 	reasonUserDriveReclaimConflict         = "user_drive_reclaim_conflict"          // the reclaim was refused at the storage layer
 	reasonUserDrivePreviewNoClaims         = "user_drive_preview_no_claims"         // the naming preview named no user_subjects
-	reasonUserDriveDeniedByProfile         = "user_drive_denied_by_profile"         // the caller's governance profile shuts the drive door
+	reasonUserDriveDeniedByUnit            = "user_drive_denied_by_unit"            // the caller's governance profile shuts the drive door
 
 	reasonUserDriveCeilingUnavailable     = "user_drive_ceiling_unavailable"       // the drive write's deployment ceiling could not be answered: the drive-size ceiling (site config) could not be read, or a host_path share did not answer in time (503)
 	reasonUserDriveRehomeListUnavailable  = "user_drive_rehome_list_unavailable"   // the drive list could not be read to run the re-home guard or the host_path nesting check (500)
@@ -525,7 +534,7 @@ const (
 const (
 	reasonMemberDriveRequiresPerson    = "member_drive_requires_person"    // not a person's session or own token
 	reasonMemberDrivesDisabled         = "member_drives_disabled"          // the organisation switch is off
-	reasonMemberDrivesDeniedByProfile  = "member_drives_denied_by_profile" // the caller's governance profile shuts creating
+	reasonMemberDrivesDeniedByUnit     = "member_drives_denied_by_unit"    // the caller's governance profile shuts creating
 	reasonMemberDriveLimitReached      = "member_drive_limit_reached"      // the person already holds the most drives allowed
 	reasonMemberDriveUnsupported       = "member_drive_unsupported"        // this deployment has no managed backend, or no drive size
 	reasonMemberDriveDeleteUnavailable = "member_drive_delete_unavailable" // the substrate could not delete what it would create
@@ -536,6 +545,7 @@ const (
 	reasonMemberDriveDeleteFailed      = "member_drive_delete_failed"      // the substrate failed; nothing was removed
 	reasonMemberDriveRateLimited       = "member_drive_rate_limited"       // too many creates and deletes in a minute
 	reasonUserDriveMemberOwned         = "user_drive_member_owned"         // an admin drive route named a person's drive
+	reasonKeepWorkFolderDisabled       = "keep_work_folder_disabled"       // member drives or the keep_main_drive switch is off
 )
 
 // git_pat narrowing (runs_dispatch_pat_scope.go): a run is refused when a

@@ -34,7 +34,10 @@
 ## Resident credentials and posture
 
 > [!NOTE]
-> A runner holds four classes as `runner_resident` in its OS keystore: `env_secret`, `file_secret`, `ssh_key` and `git_pat_helper`. Its proxy holds a fifth, `ado_minted_pat`, in memory only. Any other class set to `runner_resident` is still refused.
+> A runner holds four classes as `runner_resident` in its OS keystore: `env_secret`, `file_secret`, `ssh_key` and `git_pat_helper`. Its proxy holds a fifth, `ado_minted_pat`, in memory only; it is not put in the sandbox. Others are refused as `runner_resident`.
+>
+> With `WARDYN_RUNNER_SECRET_PLACEHOLDERS` on (off by default), a host-bound `env_secret` or `file_secret` is not held when it meets the placeholder limits (see [POLICIES.md](../POLICIES.md)); otherwise it is held as before. When it is not held, the runner gets a placeholder, which the organisation fills (`via_org`).
+>
 > A refusal is `runner_posture_unmet` when the run's confinement floor or the runner's posture misses the class's requirement, otherwise `placement_credential`. Whoever controls the laptop as root can read a value while the runner holds it, so erasure is best-effort and never promised.
 
 | Credential class | Modes |
@@ -70,7 +73,7 @@
 - A `require_posture` class is refused at launch until per-runner placement lands.
 - On Linux the Secret Service needs a login session bus (`DBUS_SESSION_BUS_ADDRESS`, or the user bus socket under `/run/user/<uid>`), so a system service with no login session has no keystore.
 - Posture is self-reported, and a run with a CC3 floor never takes a resident credential.
-- Placement judges the posture on record, the runner's last report, however old it is. A change on the laptop counts once the runner reports it, which it does at every connect and within 15 minutes of a change.
+- Placement judges the posture on record, the runner's last report, however old. A change on the laptop counts once the runner reports it: at every connect and within 15 minutes of a change.
 - A runner that has not reported posture misses every `require_posture` (`runner_posture_unmet`). A class with no `require_posture` places on any runner, one that has never reported posture included; to demand a report, set at least one requirement.
 - `os_min` must name every OS a runner may run: a runner on an OS it leaves out misses it.
 
@@ -148,13 +151,13 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 
 ### Running without a service
 
-- `wardyn-runnerd setup --no-service` registers, installs the binary and writes the environment file, then prints the command that runs the runner. It installs no systemd unit or LaunchAgent and runs no service command.
+- `wardyn-runnerd setup --no-service` registers, installs the binary and writes `runnerd.json`, then prints the command that runs the runner. It installs no systemd unit or LaunchAgent and runs no service command.
 - Use it where you run the runner yourself, or device management installs the unit.
 - It is refused while a systemd unit or LaunchAgent for this runner is installed: running both would be two processes with one identity, which the organisation refuses. Remove the service first (`systemctl --user disable --now wardyn-runnerd` or `launchctl bootout`, then delete its file), then run setup again.
-- The environment file is `~/.config/wardyn/runnerd.env` on Linux and `runnerd.env` beside the runner's state directory on macOS, mode `0600`.
+- The settings file is `runnerd.json` in `<user configuration directory>/wardyn`, mode `0600`: see [the runner's settings file](../runner-registration.md#the-runners-settings-file).
 
 1. Run `wardyn-runnerd setup --org https://wardyn.example --token-file <file> --no-service`.
-2. Run the printed command from a shell that stays open: `set -a; . '<env file>'; set +a; '<binary>' serve --org <url> --state-dir '<dir>'`. Setup prints it with the quoting your shell needs; on macOS the paths hold a space (`Application Support`), so copy the printed line rather than retyping it.
+2. Run the printed command from a shell that stays open: `'<binary>' serve --config '<path>'`. Setup prints it with the quoting your shell needs; on macOS the paths hold a space (`Application Support`), so copy the printed line rather than retyping it.
 3. Claim the runner as for a service: see below.
 
 ### How audit decisions reach the organisation
@@ -188,7 +191,7 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 2. An admin can mint one for a named person (`--owner`). It lasts 72 hours so MDM can deliver it, and needs no grant.
 3. On the laptop, `wardyn-runnerd setup --org <url> --token-file <file>` generates an Ed25519 key pair locally, installs the service and prints the key fingerprint.
 4. The org records an `unclaimed` runner. It is offered no run and relays nothing, and it expires after 24 hours.
-5. The owner, signed in as themselves, claims it in *Your account → My runner*, or on the laptop with `WARDYN_TOKEN=<own API token> wardyn runner claim --pool NAME --default`. `setup --claim` does both steps.
+5. The owner, signed in as themselves, claims it in *Your account → My runner*, or locally with `WARDYN_TOKEN=<own API token> wardyn runner claim --pool NAME --default`. `wardyn runner setup` does every step.
 6. The runner is now `claimed` and takes runs owned by its owner, once it is in one of the owner's pools (`placement_unavailable` otherwise).
 
 - An admin can mint a token for a person but can never complete the claim.
@@ -219,14 +222,14 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 4. As that person, run `wardyn-runnerd register --org <url> --token-file <file>`, then `launchctl kickstart gui/$(id -u)/com.wardyn.runnerd.managed` (or log out and in).
 5. The person claims the runner as usual, then runs `wardyn login <url>` once (`setup` does that itself).
 
-- **Without MDM** install the package, then run `wardyn-runnerd setup --token-file <file>`, adding `--org <url>` when no profile is installed.
+- **Without MDM** install the package, then run [`wardyn runner setup`](../runner-registration.md#wardyn-runner-setup), or `wardyn-runnerd setup --token-file <file>` (`--org <url>` without a profile).
   - `setup` stops the managed agent, writes the agent `com.wardyn.runnerd` in the person's own `~/Library/LaunchAgents`, and the managed agent stays idle. `serve` also takes a lock in the runner state directory, so a second `serve` for one identity exits with a message.
 - Logs go to `~/Library/Logs/wardyn/runnerd.log` either way.
 
 ### Managed preferences
 
 - The profile's preference domain is `com.wardyn.runnerd`, which macOS writes to `/Library/Managed Preferences/com.wardyn.runnerd.plist`. A user-scoped profile lands in `/Library/Managed Preferences/<user>/com.wardyn.runnerd.plist` and wins over the device-wide file for that user.
-- `wardyn-runnerd serve` reads it as the default of a flag. A flag wins over the profile, and the profile wins over the environment variable `setup` writes. An empty key is unset.
+- `wardyn-runnerd serve` reads it as the default of a flag. A flag wins over the profile, and the profile wins over the environment variable `setup` writes, unless the profile sets `lock_security_settings` (below). An empty key is unset.
 
 | Key | Same as | Notes |
 |---|---|---|
@@ -236,8 +239,14 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 | `RelayHostTarget` | `--relay-host-target` | left out, found by a probe container |
 | `InternalNetwork` | `--internal-network` | default `wardyn-internal` |
 | `TrustedCAFile` | `--trusted-ca-file` | a PEM bundle path; deliver the file with a separate MDM file payload ([A corporate CA](#a-corporate-ca-on-a-laptop-runner)) |
+| `OrgCAFile` | `--org-ca-file` | a PEM file of extra roots for the runner's own connection to the organisation only; root-owned, not writable by group or others |
 | `RecordingStore` | `--recording-store` | `pg`, `fs` or `off` |
 | `DockerHost` | `DOCKER_HOST` | the engine's socket, when it is not the default |
+| `lock_security_settings` | none: profile only | a boolean, off by default; `true` locks the five security keys, as the bullets below say |
+
+- With the lock on, `OrgURL`, `ProxyImage`, `TrustedCAFile`, `OrgCAFile` and `RecordingStore` in the profile win over a flag, and `serve` and `setup` refuse a flag or environment variable that disagrees, naming `lock_security_settings`.
+- A value other than true, false, 1 or 0, or a profile that cannot be read, refuses start. Only a macOS profile can set it: there is no flag, variable or file twin.
+- A key the profile leaves empty, and every other key, keeps the order above.
 
 ## A folder on your computer for a remote sandbox
 

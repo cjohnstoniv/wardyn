@@ -39,9 +39,12 @@ import {
   drives as api,
   enforcementFor,
   isManagedBackend,
+  teamWritable,
+  type UserDriveGrant,
   type UserDriveListItem,
   type UserDrivesSnapshot,
 } from "../../../lib/api/drives";
+import { providers as providersApi } from "../../../lib/api/providers";
 import { getErrorMessage } from "../../../lib/format";
 import { ACCESS_STATE, DRIVES, PEOPLE } from "../../../lib/user-drives-copy";
 import {
@@ -59,11 +62,20 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { Mono } from "../../wardyn/code-block";
 import { useOperator } from "../../wardyn/operator-context";
 import { PageHeader } from "../../wardyn/page-header";
+import { PageContainer } from "../../wardyn/page-container";
 import { Chip, OperatorOnlyHint } from "../../wardyn/primitives";
 import { EmptyState, TableSkeleton, loadFailStatus } from "../../wardyn/states";
 import { AllocationsBlock } from "./allocations";
 import { DriveEditor } from "./drive-editor";
 import { Note, enforcementGloss, modeText, modeTone, noteClass, question, sizeText, withMono } from "./display";
+
+// A team drive's group names, as the Allocated to cell shows them: only when this
+// page of allocations holds every one, else the count the list already knows.
+function allocatedText(d: UserDriveListItem, grants: UserDriveGrant[]): string {
+  if (d.grant_count === 0) return DRIVES.ALLOCATED_NONE;
+  const names = grants.filter((g) => g.drive_id === d.id).map((g) => g.subject);
+  return names.length === d.grant_count ? names.join(", ") : DRIVES.ALLOCATED_COUNT(d.grant_count);
+}
 
 const EMPTY: UserDrivesSnapshot = {
   drives: [],
@@ -86,6 +98,15 @@ export function DrivesScreen() {
   const [toDelete, setToDelete] = React.useState<UserDriveListItem | null>(null);
   const [deleteError, setDeleteError] = React.useState<{ title?: string; message: string } | null>(null);
   const [busy, setBusy] = React.useState(false);
+  // storage.user_drive.team_drives, read from the same site config the Storage
+  // tab edits. Off (or unreadable) is today's screen.
+  const [teamDrives, setTeamDrives] = React.useState(false);
+  React.useEffect(() => {
+    providersApi
+      .getWorkspaceProviders()
+      .then((s) => setTeamDrives(!!s.providers.storage?.user_drive?.team_drives))
+      .catch(() => setTeamDrives(false));
+  }, []);
 
   // ponytail: no setStatus("loading") here. `load` is also the post-write
   // refresh, and flipping back to loading would unmount the add form under
@@ -158,7 +179,7 @@ export function DrivesScreen() {
   const [deleteHead, deleteBody] = question(toDelete ? DRIVES.DELETE_CONFIRM(toDelete.name) : "");
 
   return (
-    <div className="mx-auto max-w-[1120px] px-6 py-6">
+    <PageContainer width="list">
       <PageHeader title={DRIVES.TITLE} description={withMono(DRIVES.LEAD)} />
 
       {/* The ORG SWITCH (GET /drives's `disabled`, S2/0.7.2) — one notice
@@ -198,11 +219,10 @@ export function DrivesScreen() {
         </section>
       ) : (
         <>
-          <section className="mt-6 overflow-hidden rounded-xl border border-border bg-card">
+          <section className="mt-6 overflow-clip rounded-xl border border-border bg-card">
             <div className="flex flex-wrap items-start justify-between gap-3 px-6 pt-5">
               <div>
                 <h2 className="text-sm font-medium text-foreground">{DRIVES.DRIVES_TITLE}</h2>
-                <p className="mt-1 max-w-[82ch] text-body text-muted-foreground">{DRIVES.DRIVES_LEAD}</p>
               </div>
               {/* With no drives the empty state carries this action instead, so
                   the screen never offers two New drive buttons. */}
@@ -221,7 +241,6 @@ export function DrivesScreen() {
                   size="compact"
                   icon={HardDrive}
                   title={DRIVES.EMPTY_TITLE}
-                  description={DRIVES.EMPTY_BODY}
                   action={
                     <Button
                       variant={newIsTeal ? "default" : "outline"}
@@ -247,10 +266,21 @@ export function DrivesScreen() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {snap.drives.map((d) => (
+                      {snap.drives.map((d) => {
+                        const team = teamDrives && !!d.team;
+                        return (
                         <TableRow key={d.id}>
                           {/* A drive name is a human-chosen label, never mono. */}
-                          <TableCell className="font-medium">{d.name}</TableCell>
+                          <TableCell className="font-medium">
+                            {team ? (
+                              <span className="flex flex-col items-start gap-1.5">
+                                {d.name}
+                                <Chip tone="neutral">{DRIVES.TEAM_CHIP}</Chip>
+                              </span>
+                            ) : (
+                              d.name
+                            )}
+                          </TableCell>
                           <TableCell>
                             {/* The kind chip over the backend's wire value: the
                                 WHO-over-WHAT two-glyph rule, applied to an
@@ -260,6 +290,7 @@ export function DrivesScreen() {
                                 {isManagedBackend(d.backend) ? DRIVES.KIND_MANAGED : DRIVES.KIND_SHARE}
                               </Chip>
                               <Mono>{d.backend}</Mono>
+                              {team && d.single_host && <Chip tone="warning">{DRIVES.TEAM_ONE_HOST_CHIP}</Chip>}
                             </span>
                           </TableCell>
                           <TableCell>
@@ -270,13 +301,20 @@ export function DrivesScreen() {
                             </span>
                           </TableCell>
                           <TableCell>
-                            <Chip tone={modeTone(d.writable)}>{modeText(d.writable)}</Chip>
+                            {/* A team drive is writable only where its allocations say so too. */}
+                            <Chip tone={modeTone(team ? teamWritable(d, snap.grants) : d.writable)}>
+                              {modeText(team ? teamWritable(d, snap.grants) : d.writable)}
+                            </Chip>
+                          </TableCell>
+                          <TableCell className={team ? "text-muted-foreground" : undefined}>
+                            {team ? DRIVES.TEAM_RECLAIM_CELL : d.reclaim === "delete" ? DRIVES.RECLAIM_DELETE : DRIVES.RECLAIM_RETAIN}
                           </TableCell>
                           <TableCell>
-                            {d.reclaim === "delete" ? DRIVES.RECLAIM_DELETE : DRIVES.RECLAIM_RETAIN}
-                          </TableCell>
-                          <TableCell>
-                            {d.grant_count === 0 ? DRIVES.ALLOCATED_NONE : DRIVES.ALLOCATED_COUNT(d.grant_count)}
+                            {team
+                              ? allocatedText(d, snap.grants)
+                              : d.grant_count === 0
+                                ? DRIVES.ALLOCATED_NONE
+                                : DRIVES.ALLOCATED_COUNT(d.grant_count)}
                           </TableCell>
                           <TableCell>
                             <div className="flex justify-end gap-1">
@@ -301,7 +339,8 @@ export function DrivesScreen() {
                             </div>
                           </TableCell>
                         </TableRow>
-                      ))}
+                        );
+                      })}
                     </TableBody>
                   </Table>
                   {/* Once, under the table (Q1) — never a per-number warning and
@@ -331,6 +370,8 @@ export function DrivesScreen() {
               <DriveEditor
                 key={editing.drive?.id ?? ""}
                 drive={editing.drive}
+                grants={snap.grants}
+                teamDrives={teamDrives}
                 runnerTarget={snap.runner_target}
                 hostRootsConfigured={snap.host_roots_configured}
                 onCancel={() => setEditing(null)}
@@ -354,6 +395,7 @@ export function DrivesScreen() {
               grants={snap.grants}
               grantTotal={snap.grant_total ?? 0}
               collapsed={editorOpen}
+              teamDrives={teamDrives}
               onChanged={load}
             />
           )}
@@ -405,6 +447,6 @@ export function DrivesScreen() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </PageContainer>
   );
 }

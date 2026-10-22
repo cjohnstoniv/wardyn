@@ -307,7 +307,7 @@ func TestSealGovernanceRejectReason(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			data, _ := json.Marshal(map[string]any{"proposed_by": "proposer", "reason": reason, "target_key": "p", "target_kind": "governance_profile"})
+			data, _ := json.Marshal(map[string]any{"proposed_by": "proposer", "reason": reason, "target_key": "p", "target_kind": "governance_unit"})
 			ev := types.AuditEvent{
 				ID: uuid.New(), Time: time.Now().UTC(), ActorType: types.ActorHuman, Actor: "reviewer",
 				Action: "governance.change.reject", Target: uuid.NewString(), Outcome: "success", Data: data,

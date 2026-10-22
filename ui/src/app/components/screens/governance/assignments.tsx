@@ -30,9 +30,9 @@ import { PendingChangeError } from "../../../lib/api/core";
 import {
   governance as api,
   previewClaims,
-  type GovernanceAssignment,
+  type GovernanceMembership,
   type GovernancePreview,
-  type GovernanceProfile,
+  type GovernanceUnit,
   type GovernanceSnapshot,
 } from "../../../lib/api/governance";
 import { absoluteTime, getErrorMessage, relativeTime } from "../../../lib/format";
@@ -58,6 +58,7 @@ import { Textarea } from "../../ui/textarea";
 import { useUserTypeName } from "../../../lib/use-user-types";
 import { DirectoryCombobox } from "../../wardyn/directory-combobox";
 import { Field } from "../../wardyn/form-primitives";
+import { HowItWorks } from "../../wardyn/how-it-works";
 import { PreviewUserTypeField, usePreviewUserTypes } from "../../wardyn/preview-user-type-field";
 import { USER_TYPE_STANDARD } from "../../../lib/types/user-types";
 import { Chip } from "../../wardyn/primitives";
@@ -95,7 +96,7 @@ export function AssignmentsBlock({
   collapsed: boolean;
   onChanged: () => void;
 }) {
-  const [toRemove, setToRemove] = React.useState<GovernanceAssignment | null>(null);
+  const [toRemove, setToRemove] = React.useState<GovernanceMembership | null>(null);
   const [busy, setBusy] = React.useState(false);
   // A write the server held for a second person (202): nothing changed, and the note says so.
   const [submitted, setSubmitted] = React.useState(false);
@@ -106,7 +107,7 @@ export function AssignmentsBlock({
   const profileName = (id: string) => snapshot.profiles.find((p) => p.id === id)?.name ?? id;
   const typeName = useUserTypeName();
 
-  const remove = async (a: GovernanceAssignment) => {
+  const remove = async (a: GovernanceMembership) => {
     setBusy(true);
     try {
       await api.deleteAssignment(a.id);
@@ -125,7 +126,7 @@ export function AssignmentsBlock({
     }
   };
 
-  const confirm = toRemove ? GOV.UNASSIGN_CONFIRM(subjectText(toRemove, typeName), profileName(toRemove.profile_id)) : "";
+  const confirm = toRemove ? GOV.UNASSIGN_CONFIRM(subjectText(toRemove, typeName), profileName(toRemove.unit_id)) : "";
   const [confirmHead, confirmBody] = question(confirm);
 
   return (
@@ -133,8 +134,7 @@ export function AssignmentsBlock({
       <section className="mt-6 overflow-hidden rounded-xl border border-border bg-card">
         <div className="px-6 pt-5">
           <h2 className="text-sm font-medium text-foreground">{GOV.ASSIGN_TITLE}</h2>
-          <p className="mt-1 text-body text-muted-foreground">{GOV.ASSIGN_LEAD}</p>
-          <Note>{GOV.PRECEDENCE}</Note>
+          {snapshot.assignments.length > 0 && <p className="mt-1 text-body text-muted-foreground">{GOV.ASSIGN_LEAD}</p>}
           {submitted && <SubmittedNote />}
         </div>
         <div className="mt-4">
@@ -163,7 +163,7 @@ export function AssignmentsBlock({
                         <SubjectName g={a} typeName={typeName} />
                       </span>
                     </TableCell>
-                    <TableCell>{profileName(a.profile_id)}</TableCell>
+                    <TableCell>{profileName(a.unit_id)}</TableCell>
                     {/* Priority is meaningful only inside the group tier. */}
                     <TableCell>{a.subject_type === "group" ? a.priority : GOV.PRIORITY_NA}</TableCell>
                     <TableCell className="whitespace-nowrap text-muted-foreground" title={absoluteTime(a.created_at)}>
@@ -210,6 +210,13 @@ export function AssignmentsBlock({
             onSubmitted={held}
           />
         )}
+
+        <HowItWorks id="governance-assignments" title={GOV.COMBINE_TITLE} className="border-t border-border px-6 py-3">
+          <p>{GOV.PRECEDENCE}</p>
+          {/* Two halves of one fact — see this file's header. */}
+          <p>{GOV.EFFECT_NOTE}</p>
+          <p>{GOV.SIGNIN_NOTE}</p>
+        </HowItWorks>
       </section>
 
       <ResolvedPreview snapshot={snapshot} />
@@ -250,7 +257,7 @@ function AddAssignmentForm({
   onAdded,
   onSubmitted,
 }: {
-  profiles: GovernanceProfile[];
+  profiles: GovernanceUnit[];
   disabled: boolean;
   teal: boolean;
   onAdded: () => void;
@@ -271,7 +278,7 @@ function AddAssignmentForm({
       await api.upsertAssignment({
         subject_type: subjectType,
         subject: subjectType === "all" ? "" : subject.trim(),
-        profile_id: profileID,
+        unit_id: profileID,
         priority: Number(priority) || 0,
       });
       setSubject("");
@@ -291,9 +298,6 @@ function AddAssignmentForm({
   return (
     <div className="mt-4 border-t border-border px-6 py-5">
       <h3 className="text-sm font-medium text-foreground">{GOV.ADD_TITLE}</h3>
-      {/* Two halves of one fact — see this file's header. */}
-      <p className="mt-1 max-w-[82ch] text-body text-muted-foreground">{GOV.EFFECT_NOTE}</p>
-      <p className="mt-1 max-w-[82ch] text-body text-muted-foreground">{GOV.SIGNIN_NOTE}</p>
 
       <div className="mt-4 grid gap-4 md:grid-cols-2 lg:grid-cols-[auto_1fr_1fr]">
         <Field label={PERM.FIELD_WHO} hint={whoHint}>
@@ -374,8 +378,8 @@ function AddAssignmentForm({
 
 // The resolved preview: a claims dry run, saving nothing.
 //
-// It asks the SERVER (POST /governance/preview), which runs
-// Store.ResolveGovernanceProfile — the same call every real run makes. So the
+// It asks the SERVER (POST /governance/check), which runs
+// Store.ResolveGovernanceUnit — the same call every real run makes. So the
 // answer is against the server's current rows rather than whatever this screen
 // loaded minutes ago, AND it is produced by the one implementation of the
 // precedence rule. A failed request is the one honest cause of
@@ -455,8 +459,8 @@ function ResolvedPreview({ snapshot }: { snapshot: GovernanceSnapshot }) {
       {result &&
         ("error" in result ? (
           <Note tone="red">{GOV.PREVIEW_RESULT_UNKNOWN}</Note>
-        ) : result.answer.profile_name && result.answer.matched_tier ? (
-          <Note>{GOV.PREVIEW_RESULT(result.answer.profile_name, MATCHED_LABEL[result.answer.matched_tier])}</Note>
+        ) : result.answer.unit_name && result.answer.matched_tier ? (
+          <Note>{GOV.PREVIEW_RESULT(result.answer.unit_name, MATCHED_LABEL[result.answer.matched_tier])}</Note>
         ) : (
           <Note>{GOV.PREVIEW_RESULT_DEFAULT}</Note>
         ))}

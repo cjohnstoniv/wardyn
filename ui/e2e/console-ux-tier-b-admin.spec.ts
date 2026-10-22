@@ -11,7 +11,6 @@ import { KIND, PERM } from "../src/app/lib/permissions-copy";
 import { CHANGES, GOVERNANCE as GOV } from "../src/app/lib/governance-copy";
 import { PROVIDERS_SUPER_ONLY } from "../src/app/components/wardyn/copy/console-view";
 import { AVAILABILITY, IMAGES } from "../src/app/lib/availability-copy";
-import { PROVIDERS } from "../src/app/lib/workspace-providers-copy";
 import { HOST_CARD } from "../src/app/components/wardyn/copy/host-card";
 import { POOL_FORM } from "../src/app/components/wardyn/copy/runner-pools";
 
@@ -112,7 +111,7 @@ test.describe("Tier B layout rulings at desktop width", () => {
     await page.setViewportSize(WIDE);
     await gotoConsole(page, "admin");
     await navTo(page, "Governance");
-    const grid = page.getByText(GOV.SIGNIN_NOTE).locator("xpath=following-sibling::div[1]");
+    const grid = page.getByRole("heading", { name: GOV.ADD_TITLE }).locator("xpath=following-sibling::div[1]");
     await expect(grid).toBeVisible();
     await expectWhoColumnFitsSwitch(grid.locator("xpath=./*[1]"));
   });
@@ -249,9 +248,8 @@ test.describe("Quiet empty states inside cards (#2873)", () => {
     );
     await gotoConsole(page, "admin");
     await navToRoute(page, "/admin/settings");
-    await expandCard(page, "Workspace providers");
-    await page.getByTestId("providers-card").getByText(PROVIDERS.CARD_OPEN).click();
-    await page.getByRole("button", { name: IMAGES.TAB, exact: true }).click();
+    await page.getByTestId("providers-card").getByRole("link").click();
+    await page.getByRole("tab", { name: IMAGES.TAB, exact: true }).click();
     const tile = page.getByTestId("empty-state-tile");
     await expect(tile).toBeVisible();
     expect(await tile.evaluate((el) => getComputedStyle(el).color)).toBe(await tokenColour(page, "color", "--muted-foreground"));
@@ -296,7 +294,9 @@ test.describe("Tier B computed styles", () => {
     await gotoConsole(page, "admin");
     await navTo(page, "Policies");
     await page.getByRole("button", { name: "New policy" }).first().click();
-    const input = page.getByRole("dialog").filter({ hasText: "New policy" }).getByPlaceholder(AVAILABILITY.ADD_PLACEHOLDER);
+    const dialog = page.getByRole("dialog").filter({ hasText: "New policy" });
+    await dialog.getByRole("radio", { name: AVAILABILITY.ONLY }).click();
+    const input = dialog.getByPlaceholder(AVAILABILITY.ADD_PLACEHOLDER);
     await expect(input).toBeVisible();
     const faces = await input.evaluate((el) => ({
       value: getComputedStyle(el).fontFamily,

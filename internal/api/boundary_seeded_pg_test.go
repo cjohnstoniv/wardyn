@@ -136,7 +136,7 @@ func TestSeededAdminLaunchWithAProfileNeedsNoBreakGlass(t *testing.T) {
 	answer := func(noLimits bool) string {
 		e := newGovEnvOn(t, throwawayPGPool(t))
 		seededOrNoLimits(t, e, noLimits)
-		if _, err := e.pg.UpsertGovernanceProfile(context.Background(), types.GovernanceProfile{Name: "walled", CreatedBy: "seed"}); err != nil {
+		if _, err := e.pg.UpsertGovernanceUnit(context.Background(), types.GovernanceUnit{Name: "walled", CreatedBy: "seed"}); err != nil {
 			t.Fatal(err)
 		}
 		pf := e.admin(http.MethodPost, "/api/v1/runs/preflight", body)

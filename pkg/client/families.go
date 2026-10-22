@@ -652,6 +652,18 @@ type RunOutput struct {
 	MaskScope string `json:"mask_scope,omitempty"`
 	// CapturedAt is when the final row was written; nil while the run is live.
 	CapturedAt *time.Time `json:"captured_at,omitempty"`
+	// Agents is each agent's state in a background run with several agents, as
+	// the last status line in Output reads; absent on any other run, and when no
+	// status line is in Output.
+	Agents []RunAgentState `json:"agents,omitempty"`
+}
+
+// RunAgentState is one agent of a run with several agents: State "running", or
+// "exited" with its ExitCode. The run succeeds only when every agent exits 0.
+type RunAgentState struct {
+	Agent    string `json:"agent"`
+	State    string `json:"state"`
+	ExitCode *int   `json:"exit_code,omitempty"`
 }
 
 // RunOutput reads the last tail bytes of a non-interactive run's output
@@ -699,6 +711,10 @@ type DriveRequest struct {
 	// Reclaim is the declared intent for the drive's storage objects once an
 	// allocation is removed. "" means the server's default (DriveReclaimRetain).
 	Reclaim DriveReclaim `json:"reclaim,omitempty"`
+	// Team makes the drive ONE folder shared by the groups it is allocated to,
+	// instead of a folder per person. Refused unless storage.user_drive.team_drives
+	// is on, and it cannot change while the drive is allocated.
+	Team bool `json:"team,omitempty"`
 }
 
 // DriveGrantRequest is the POST /drives/grants body — one allocation of a
@@ -733,6 +749,9 @@ type DriveGrantRequest struct {
 	// is a deliberate act, so omitting the field means "give it to them", not
 	// "pause it". An explicit false pauses the allocation without deleting it.
 	Enabled *bool `json:"enabled,omitempty"`
+	// MembersCanWrite lets the group's runs write a team drive's folder; false
+	// (the default) mounts it read-only. Team drives only.
+	MembersCanWrite bool `json:"members_can_write,omitempty"`
 }
 
 // DrivesDocument is GET /drives's body and ApplyDrives's parameter: every
@@ -828,7 +847,7 @@ func (c *Client) ApplyDrivesResult(ctx context.Context, doc DrivesDocument) (Dri
 		req := DriveRequest{
 			Name: d.Name, Backend: d.Backend, HostRoot: d.HostRoot,
 			StorageClass: d.StorageClass, HomeTemplate: d.HomeTemplate,
-			SizeMiB: d.SizeMiB, Writable: d.Writable, Reclaim: d.Reclaim,
+			SizeMiB: d.SizeMiB, Writable: d.Writable, Reclaim: d.Reclaim, Team: d.Team,
 		}
 		var saved UserDrive
 		var err error
@@ -853,7 +872,7 @@ func (c *Client) ApplyDrivesResult(ctx context.Context, doc DrivesDocument) (Dri
 		req := DriveGrantRequest{
 			SubjectType: g.SubjectType, Subject: g.Subject, DriveID: g.DriveID,
 			Priority: g.Priority, SizeMiBOverride: g.SizeMiBOverride,
-			WritableOverride: g.WritableOverride,
+			WritableOverride: g.WritableOverride, MembersCanWrite: g.MembersCanWrite,
 			// Always stated, never nil: HomeOverride and Enabled are the two
 			// fields the server treats "the client said nothing" as
 			// meaningfully different from "the client said this exact value"

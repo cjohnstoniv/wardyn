@@ -57,9 +57,11 @@ docs/operations/who-gets-in.md=1938 share=35
 # K4 (0.9.3): docs/operations/admin-only-writes.md 3548 measured after merging K3-rest, +15 for organization runners in one pool on the /runner-pools writes row.
 # docs/operations/admin-only-writes.md 3645 = 3630 + 15 (K4), measured at the wave-B merge.
 # docs/operations/admin-only-writes.md 3698 adds 53, measured: the POST /runs/{id}/node-record row.
+# docs/operations/admin-only-writes.md 3709 adds 11 over 3698 (0.10 FEAT-1KUBE): the kubectl token write in the components row.
 # docs/operations/admin-only-writes.md 3730 adds 32 over 3698, measured (0.10 LAY-A): the /governance/walls tier row.
 # docs/operations/admin-only-writes.md 3727 measured (0.10 BOUNDARY): the /governance/boundary tier row.
-docs/operations/admin-only-writes.md=3727 share=35
+# docs/operations/admin-only-writes.md 3738 = ours 3709 + theirs 3727 - base 3698 at the 0.10 W4d merge of W4b-main onto the train.
+docs/operations/admin-only-writes.md=3731 share=35 # tightened from 3738 to the measured count at the 0.10 W4d merge
 # docs/operations/three-roles.md 4024 measured after G-090-cleanup slice F: docs rows that contradicted the code.
 # docs/operations/three-roles.md 4063 adds 39 over 4024: 0.9 final docs pass 3, measured: a profile maximum never cuts below an untouched run's size.
 # docs/operations/three-roles.md 4194 adds 21 over 4173, measured (0.9.3 ADO): GET /governance is the read; the profile routes answer 405 to GET.
@@ -86,7 +88,8 @@ docs/operations/member-runs.md=1054 share=35
 # docs/operations/user-drives.md 4818 adds 14 over 4804 (0.9 release text for the fix sets merged at release); measured.
 # docs/operations/user-drives.md 4823 adds 5 over 4818 (0.9.3 RV5), measured: nested-root race has no database guard yet.
 # docs/operations/user-drives.md 4823 = 4818 + 5 (RV5), measured at the wave-A merge.
-docs/operations/user-drives.md=4823 share=35
+# docs/operations/user-drives.md 4877 adds 54 over 4823, measured: a person's reclaim refuses a team drive; a leaver's team-drive writes are kept (0.10 FEAT-2TEAM).
+docs/operations/user-drives.md=4877 share=35
 # docs/operations/capabilities.md 4169 = 4169 + 0 (RV5), measured at the wave-A merge.
 # docs/operations/capabilities.md 4205 adds 36: the withdrawn component grant line (0.9.3 FIN-B2).
 # docs/operations/capabilities.md 4383 = 4205 + 178, measured: a restricted value is closed whatever the switch says, the explain cross-reference and the exact self_host_runner grant.
@@ -110,10 +113,10 @@ docs/operations/custom-components.md=1269 share=35
 docs/operations/api-tokens.md=5948 share=35
 # G-1423 r1: docs/operations/denials.md 4709 adds 32 over 4677 for the audit-only delegation_scope source.
 # docs/operations/denials.md 4786 adds 77 (0.9 G-sec-rest): the exec relay rows (#1976) and the audit_retention_actor_reserved row.
-# D-108-114 merge: docs/operations/denials.md 4806 adds 20 over 4786 for the runs.placement cause of governance_profile.
+# D-108-114 merge: docs/operations/denials.md 4806 adds 20 over 4786 for the runs.placement cause of governance_unit.
 # docs/operations/denials.md 4836 adds 50 over 4786 (0.9 F-1508 C2): the `service_scope` reason row.
 # docs/operations/denials.md 4856 measured after train 5 merge.
-# docs/operations/denials.md 4877 adds 21 over 4856 (0.9 DS1-S1b): the governance_profile row's runs.tools cause, a New Run command that includes a harness.
+# docs/operations/denials.md 4877 adds 21 over 4856 (0.9 DS1-S1b): the governance_unit row's runs.tools cause, a New Run command that includes a harness.
 # docs/operations/denials.md 4882 adds 5 over 4877 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
 # docs/operations/denials.md 4889 adds 7 (0.9 R1-0082): the DELETE of a user assignment that would leave the person in two group domains, in the key_domain_ambiguous_membership row.
 # docs/operations/denials.md 4931 adds 49 over 4882 (0.9 member drives): the drive refusals a person's own drive adds; measured at merge.
@@ -128,8 +131,11 @@ docs/operations/api-tokens.md=5948 share=35
 # docs/operations/denials.md 5304 adds 113 (0.10 LAY-C, #2951): the refusal `layer` and the run policy `provenance`.
 # docs/operations/denials.md 5318 adds 14 (0.10 LAY-C r2): the authz.denied layer keys and the operator cap naming the deployment.
 # 0.10: docs/operations/denials.md 5200 adds 9, measured: user_view_preview names the security admin case.
+# docs/operations/denials.md 5473 adds 146 over 5327, measured (0.10 WHY-EGRESS): the egress refusal bullet and its reason tokens.
+# docs/operations/denials.md 5488 adds 15 over 5473, measured (0.10 WHY-EGRESS): layer rides a policy-decided refusal only.
 # docs/operations/denials.md 5331 measured (0.10 BOUNDARY): the boundary provenance layer.
-docs/operations/denials.md=5331 share=35
+# docs/operations/denials.md 5492 = ours 5488 + theirs 5331 - base 5327 at the 0.10 W4d merge of W4b-main onto the train.
+docs/operations/denials.md=5492 share=35
 # Round 1: docs/operations/who-gets-in.md measured 1453 after the split banner and heading cleanup.
 # Round 1: docs/operations/admin-only-writes.md measured 2869 after the split banner and heading cleanup.
 # Round 1: docs/operations/three-roles.md measured 4012 after the split banner and heading cleanup.

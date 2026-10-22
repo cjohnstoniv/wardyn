@@ -162,8 +162,8 @@ func TestBoundaryDryRunEqualsTheOnSwitch(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &report); err != nil {
 		t.Fatal(err)
 	}
-	if len(report.Profiles) != 1 || report.Profiles[0].ID != c.profile.ID || len(report.StoredPolicies) != 1 ||
-		report.StoredPolicies[0].ID != c.open.ID || len(report.Assignments) != 1 || report.Assignments[0].Subject != boundaryMemberSub {
+	if len(report.Units) != 1 || report.Units[0].ID != c.profile.ID || len(report.StoredPolicies) != 1 ||
+		report.StoredPolicies[0].ID != c.open.ID || len(report.Memberships) != 1 || report.Memberships[0].Subject != boundaryMemberSub {
 		t.Fatalf("report rows = %s", w.Body)
 	}
 	cases := map[string]boundaryCase{}
@@ -195,7 +195,7 @@ func TestBoundaryDryRunEqualsTheOnSwitch(t *testing.T) {
 		}
 	}
 	on := resolveBoundaryCase(t, e.srv, c, cases["profile_chain_default"])
-	check("profile", report.Profiles[0].Changes, off["profile_chain_default"].CeilingSpec, on.CeilingSpec)
+	check("profile", report.Units[0].Changes, off["profile_chain_default"].CeilingSpec, on.CeilingSpec)
 	on = resolveBoundaryCase(t, e.srv, c, cases["deployment_default_unassigned"])
 	check("deployment", report.Deployment, off["deployment_default_unassigned"].CeilingSpec, on.CeilingSpec)
 	on = resolveBoundaryCase(t, e.srv, c, cases["stored_policy_unassigned"])

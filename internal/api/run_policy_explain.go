@@ -28,7 +28,7 @@ const (
 	causeModelAccess   = "model_access"
 	causeGitBroker     = "git_broker"
 	causeOverlay       = "overlay"
-	causeProfile       = "profile"
+	causeUnit          = "unit"
 	causeOrgDisk       = "org_disk"
 	causePoolDisk      = "pool_disk" // the console heading is policy-tab-copy.ts pool_disk
 	causeRestart       = "restart"
@@ -38,7 +38,7 @@ const (
 
 var causeOrder = []string{
 	causeWorkspace, causeSourceControl, causeComponent, causeMirror, causeModelAccess, causeGitBroker,
-	causeOverlay, causeProfile, causeOrgDisk, causePoolDisk, causeRestart, causeLimits, causeLaunch,
+	causeOverlay, causeUnit, causeOrgDisk, causePoolDisk, causeRestart, causeLimits, causeLaunch,
 }
 
 // The RunPolicySpec fields a change can name, as their JSON names. The list
@@ -129,7 +129,7 @@ func explainRunPolicy(base *types.RunPolicySpec, resolved types.RunPolicySpec, e
 		}
 		c := groups[k]
 		if c == nil {
-			c = &runPolicyChange{Cause: cause, Field: field, Profile: profile, At: at}
+			c = &runPolicyChange{Cause: cause, Field: field, Unit: profile, At: at}
 			groups[k] = c
 		}
 		if added {
@@ -289,7 +289,7 @@ func (x *explainer) evidenceCause(field, entry string, added bool) (cause, profi
 	case ev.confine[entry] && (denyAdded || field == fieldAllowed && !added):
 		return causeGitBroker, "", nil, true
 	case denyAdded && ev.profileDenied[entry], field == fieldDisk && x.profileClampedDisk():
-		return causeProfile, ev.profile, nil, true
+		return causeUnit, ev.profile, nil, true
 	case field == fieldDisk && x.diskOutsidePolicy() && ev.diskBasis != client.MainDriveBasisRequest:
 		if ev.diskDefaultSource == types.LimitSourcePool {
 			return causePoolDisk, "", nil, true

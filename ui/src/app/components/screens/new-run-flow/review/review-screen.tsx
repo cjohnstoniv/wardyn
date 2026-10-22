@@ -12,18 +12,23 @@ import { Button } from "../../../ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../../ui/dropdown-menu";
 import { Chip } from "../../../wardyn/primitives";
 import { Segmented } from "../../../wardyn/segmented";
+import { NR_FILES } from "../../../wardyn/copy/new-run/files";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { NR_SAVE } from "../../../wardyn/copy/new-run/save";
 import { NR_SHAPE } from "../../../wardyn/copy/new-run/shape";
 import { NR_TEMPLATES } from "../../../wardyn/copy/new-run/templates";
 import type { PreflightResult } from "../../../../lib/types/preflight";
 import type { Template, TemplateKind, TemplatePublish } from "../../../../lib/types/templates";
+import { harnessIds } from "../lenses/lens-keys";
 import { intentToWire } from "../draft/intent-to-wire";
 import { launchGateOpen } from "../draft/launch-gate";
 import type { NewRunLocation } from "../draft/new-run-url";
 import { useDraftIdentity, useIntentChecks } from "../draft/use-intent-checks";
 import { useLocalIssues, useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../new-run-route";
+import { combinationReason, loadRoster } from "../steps/harnesses/roster";
+import { useDriveCatalogue } from "../steps/files/file-sources";
 import { templateSource } from "../steps/shape/shape-sources";
+import { useLoaded } from "../steps/shape/use-loaded";
 import { StepShell, useAnnounce } from "../steps/step-shell";
 import { BLOCKERS_ID, BlockerList } from "./blocker-list";
 import { buildBlockers, groupsBlockedBy, missingSetup } from "./blockers";
@@ -85,12 +90,22 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
   });
   const pre = checks.preflightResult as PreflightResult | null as ReviewPreflight | null;
   const template = useTemplateNeeds(draft.origin, draft.intent);
+  // Harnesses no declared image carries together: the Harnesses step refuses them, and a draft that got here another way is held too.
+  const roster = useLoaded(loadRoster);
+  const ids = harnessIds(draft.intent);
+  const combination = roster.status === "ready" ? combinationReason(roster.value, ids, ids[0]) : undefined;
 
   const gate = (blockers: number) =>
     launchGateOpen({ blockers, preflight: checks.preflightRead, generation: checks.generation, now: Date.now() });
+  // The tick is on the draft: the catalogue says whether the person is at their drive limit.
+  const keepAsked = draft.intent.keep_work_folder === true;
+  const keepDrives = useDriveCatalogue(pre?.runner_pool?.id ?? draft.intent.runner_pool_id, keepAsked);
+  const create = keepDrives.catalogue?.create;
   const inputs = {
     issues,
+    keepLimit: keepAsked && create?.reason === "limit_reached" ? { text: NR_FILES.KEEP_LIMIT(create.count, create.limit), hint: NR_FILES.KEEP_LIMIT_HINT } : undefined,
     unsupported: wire.unsupported,
+    combination,
     templateNeeds: template.needs,
     templateUnread: template.unread,
     // A credential refusal is not a blocker: Launch's own refusal opens the provider's sign-in door.
@@ -169,7 +184,7 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
       }}
     >
       <Notices poolName={pool} slots={pre?.runner_pool_slots} applied={pre?.resources_applied} askedByYou={changedFromOrigin(draft, ["resources"])} warnings={pre?.warnings} diskCut={!!pre?.main_drive?.clamped_by && pre.main_drive.clamped_by !== "policy"} />
-      <BlockerList blockers={blockers} go={(loc: NewRunLocation) => go(loc)} />
+      <BlockerList blockers={blockers} go={(loc: NewRunLocation) => go(loc)} onCheckAgain={issues.length ? undefined : checkAgain} />
       {view === "pretty" ? (
         <div className="grid items-start gap-3.5 lg:grid-cols-[minmax(0,1.7fr)_minmax(280px,0.8fr)]">
           <section className="flex flex-col overflow-hidden rounded-xl border border-border bg-card">
@@ -178,7 +193,10 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
                 <h2 className="font-medium">{NR_REVIEW.SETUP_TITLE}</h2>
                 <p className="text-sm text-muted-foreground">{setupTitle(draft.intent)}</p>
               </div>
-              <Chip tone={blockers.length ? "danger" : "success"}>{blockers.length ? NR_REVIEW.BADGE_ATTENTION : NR_REVIEW.BADGE_COMPLETE}</Chip>
+              {/* A blocker that names a group is red; a stale result alone blames none, so it is amber (#3043). */}
+              <Chip tone={hard.length ? "danger" : blockers.length ? "warning" : "success"}>
+                {hard.length ? NR_REVIEW.BADGE_ATTENTION : blockers.length ? NR_REVIEW.BADGE_CHECK : NR_REVIEW.BADGE_COMPLETE}
+              </Chip>
             </header>
             <BlockedGroups.Provider value={groupsBlockedBy(hard)}>
               <RunGroup {...group} docRows={docRows.run} />

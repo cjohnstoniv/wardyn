@@ -1,15 +1,6 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package api wires Wardyn's control-plane REST surface (the wardynd binary).
-// It contains ZERO target-specific code (the parity rule): it talks to runners
-// only through the runner.Runner interface, and to identity/secrets/broker only
-// through their contract interfaces. Every security decision fails closed.
-//
-// Routes: see routes.go for the table. The authoritative, always-current
-// classification of every one of them — which role gate each sits behind — is
-// authz_test.go's chi.Walk-enumerated matrix, which cannot go stale because it
-// walks the router itself.
 package api
 
 import (
@@ -290,10 +281,10 @@ type Config struct {
 	// sign-in vouches for the email (unverifiedEmailSubject). Default false keeps
 	// the match and logs it. Deny rows match the email either way.
 	CapabilityGrantsVerifiedEmail bool
-	// GovernanceProfilePutExistingOnly is WARDYN_GOVERNANCE_PROFILE_PUT_EXISTING_ONLY:
-	// PUT /governance/profiles/{id} replaces an existing profile only, and a
+	// GovernanceUnitPutExistingOnly is WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY:
+	// PUT /governance/units/{id} replaces an existing profile only, and a
 	// new one is created through POST. Default false keeps create-at-id and logs it.
-	GovernanceProfilePutExistingOnly bool
+	GovernanceUnitPutExistingOnly bool
 	// EgressHostPortGrantsInert is WARDYN_EGRESS_HOST_PORT_GRANTS_INERT: a stored
 	// egress_host ALLOW row whose value carries a ":port" (written before the
 	// write boundary stored the host alone) is inert, marked and never matched.
@@ -587,6 +578,9 @@ type Config struct {
 	// the broker is off, a resident PAT on an operator's run too; a member's
 	// run is refused it either way (patNarrowingRefusal).
 	RefuseGitPATBrokerOff bool
+	// MultiAgentTasks (WARDYN_MULTI_AGENT_TASKS, off by default in 0.10.0): a background task
+	// may run several agents, each on its tools[].task. Off, that is refused multi_agent_tasks_off.
+	MultiAgentTasks bool
 	// ScrubProxyResponses (WARDYN_PROXY_RESPONSE_SCRUB) stamps
 	// proxy.Config.ScrubResponses on every new dispatch.
 	ScrubProxyResponses bool
@@ -597,6 +591,10 @@ type Config struct {
 	// (runs_dispatch_placeholders.go). Off = the value in the sandbox, as before.
 	EnvSecretPlaceholders  bool
 	FileSecretPlaceholders bool
+	// RunnerSecretPlaceholders (WARDYN_RUNNER_SECRET_PLACEHOLDERS; off by default in 0.10.0): a
+	// local run's runner_resident env_secret or file_secret grant keeps its value at the organisation;
+	// the runner gets a placeholder and a via_org route, filled by its egress (placeResidentSecrets).
+	RunnerSecretPlaceholders bool
 	// OIDCRoleMapConfigured reports whether WARDYN_OIDC_ROLE_MAP is non-empty —
 	// the sso_rbac /setup/status check's gate. Only the presence, never the
 	// mapping itself: the API layer has no use for individual entries, only
@@ -777,13 +775,13 @@ type Server struct {
 	revokedEndRetry revokedEndRetry
 	// inventoryHoldAudit spaces one runner's runner.inventory.hold rows (runner_state.go).
 	inventoryHoldAudit inventoryHoldAudit
-	// capRowsScanned counts capability-grant rows compared inside capBatch (see
-	// capabilities.go). It is INSTRUMENTATION, read by nothing on any request
-	// path: the per-request cost of the capability seam is chosen partly by the
-	// member's own request body (spec.AllowedDomains), so "how much work did one
-	// request buy" is a claim that has to be assertable rather than asserted —
-	// capability_batch_test.go's growth law reads it. One atomic add per row
-	// already being compared. Zero value is ready to use.
+	// privIPRefusals caches the private_ip_refusals row's audit read (setup_private_ip_refusals.go).
+	privIPRefusals privateIPRefusalCache
+	// capRowsScanned counts capability-grant rows compared inside capBatch (see capabilities.go). It is
+	// INSTRUMENTATION, read by nothing on any request path: the per-request cost of the capability seam is
+	// chosen partly by the member's own request body (spec.AllowedDomains), so "how much work did one request
+	// buy" is a claim that has to be assertable rather than asserted — capability_batch_test.go's growth law
+	// reads it. One atomic add per row already being compared. Zero value is ready to use.
 	capRowsScanned atomic.Int64
 	// siteConfigSeed is the boot-time WARDYN_SITE_CONFIG_SEED_FILE (nil when
 	// unset), kept for the /setup/status row (site_config_seed.go).
@@ -891,6 +889,10 @@ type Server struct {
 	uiReassert   map[string]time.Time
 	uiProxyOnce  sync.Once
 	uiProxy      *httputil.ReverseProxy
+
+	// desktopRecs are the live desktop recordings and each run's pause (uigateway_record.go).
+	desktopRecs desktopRecordings
+
 	// attachIgnoredSeen holds the sub+person pairs whose sub_known person.attach row this process already
 	// wrote (people.go attachIgnored); ponytail: per process, so a restart or another replica writes it
 	// once more. A durable mark on the person row would need a migration.

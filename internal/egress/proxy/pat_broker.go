@@ -230,7 +230,11 @@ func (p *Proxy) forwardBrokeredGit(w http.ResponseWriter, r *http.Request, host,
 	// broker is a credential path, not a bypass of the IP guard.
 	target, _, err := p.egressTarget(host, 443)
 	if err != nil {
-		p.emitPATDecision(r, host, egress.Deny, denySrc)
+		if p.sink != nil {
+			dl := decisionLog(p.reqOf(r, host, 443), egress.Deny, denySrc)
+			dl.Cause = liftHintOf(err) // the remedy on the row: a git client shows the 403 body, a console reader the row
+			p.sink.emit(dl)
+		}
 		p.httpError(w, "vet git host", err, http.StatusForbidden)
 		return nil, false
 	}

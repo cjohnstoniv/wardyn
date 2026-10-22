@@ -64,6 +64,11 @@ export interface CreateRunInput {
    * Chosen at each launch: never in a template.
    */
   local_folder?: RunLocalFolderInput;
+  /**
+   * Keeps the run's work folder (/home/agent/work only) as the caller's own drive
+   * (pkg/client.CreateRunRequest.KeepWorkFolder). Chosen at each launch: never in a template.
+   */
+  keep_work_folder?: boolean;
 }
 
 /** types.RunLocalFolder as a request names it. `direction`: "both" brings the sandbox's changes back when the run ends. */

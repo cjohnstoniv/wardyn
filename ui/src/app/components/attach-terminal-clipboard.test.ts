@@ -321,6 +321,22 @@ describe("who may be offered", () => {
     expect(current()).toBeNull();
   });
 
+  // #2491 (WCAG 2.2.1): a person reading or reaching the card must not lose it, and gets the full time again after.
+  it("a held offer is kept, and the full time starts again when it is let go", async () => {
+    vi.useFakeTimers();
+    drag([0, 0], [4, 0]);
+    term.write(tmuxCopy("hello"));
+    await vi.advanceTimersByTimeAsync(50);
+    gate.hold(true);
+    await vi.advanceTimersByTimeAsync(OFFER_TTL_MS * 3);
+    expect(current()).not.toBeNull();
+    gate.hold(false);
+    await vi.advanceTimersByTimeAsync(OFFER_TTL_MS - 100);
+    expect(current()).not.toBeNull();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(current()).toBeNull();
+  });
+
   it("a new offer never silently replaces a pending one", async () => {
     drag([0, 0], [4, 0]);
     await write(tmuxCopy("hello"));

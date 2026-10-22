@@ -62,6 +62,12 @@ describe("intentToWire (U1)", () => {
     expect(sent[0].body.devcontainer_repo).toBe("org/app");
   });
 
+  it("sends keep_work_folder: a launch-time choice the registry excludes from templates, carried and never reported", () => {
+    const { body, unsupported } = intentToWire({ ...INTENT, keep_work_folder: true });
+    expect(body.keep_work_folder).toBe(true);
+    expect(unsupported).toEqual([]);
+  });
+
   it("sends the document's inline_policy as the policy overlay, never as a whole policy", () => {
     const { body } = intentToWire(INTENT);
     expect(body.policy_overlay).toEqual({ allowed_domains: [], auto_stop_after_sec: 0 });
@@ -141,5 +147,21 @@ describe("the overlay's registry row, under either name", () => {
   it("reports the overlay when the registry carries neither", () => {
     const without = rows((n) => (n === "inline_policy" ? undefined : n));
     expect(wireSerializer(without, TEMPLATE_POLICY_FIELDS)(overlay)).toEqual({ body: { mode_contract: "0.9" }, unsupported: ["inline_policy"] });
+  });
+});
+
+describe("intentToWire: a start later", () => {
+  it("adds start_at and start_time_zone to the create only, beside the Name dialog's fields", () => {
+    const start = { start_at: "2026-10-21T02:00", start_time_zone: "Europe/London" };
+    const create = intentToWire(INTENT, { title: "Nightly", description: "", start }).body;
+    expect(create).toMatchObject({ title: "Nightly", ...start });
+    const plain = intentToWire(INTENT, { title: "Nightly", description: "" }).body;
+    expect(plain).not.toHaveProperty("start_at");
+    expect(plain).not.toHaveProperty("start_time_zone");
+    expect(intentToWire(INTENT).body).not.toHaveProperty("start_at");
+  });
+
+  it("reports a start in the document as unsupported: the registry leaves it to each launch", () => {
+    expect(intentToWire({ ...INTENT, start_at: "2026-10-21T02:00" } as RunIntent).unsupported).toContain("start_at");
   });
 });

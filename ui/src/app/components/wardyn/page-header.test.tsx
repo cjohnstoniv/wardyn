@@ -22,6 +22,14 @@ describe("PageHeader", () => {
     expect(description.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  it("draws the page title on the page-title rung (#3080), and a nested pane's h3 on the body rung", () => {
+    const { unmount } = render(<PageHeader title="Policies" />);
+    expect(screen.getByRole("heading", { level: 1, name: "Policies" })).toHaveClass("text-page");
+    unmount();
+    render(<PageHeader title="SSH keys" as="h3" />);
+    expect(screen.getByRole("heading", { level: 3, name: "SSH keys" })).not.toHaveClass("text-page");
+  });
+
   it("draws no description or actions slot when it has none", () => {
     render(<PageHeader title="Policies" />);
     expect(screen.queryByTestId("page-header-description")).toBeNull();

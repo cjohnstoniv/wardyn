@@ -10,6 +10,7 @@
 import type { NewRunReason, PlacementReason, WorkspaceDoorReason } from "../../../../lib/new-run-refusals";
 import type { RunModeReason } from "../../../../lib/run-mode-refusals";
 import type { RunnerPoolReason } from "../../../../lib/runner-pool-refusals";
+import type { ScheduleReason } from "../../../../lib/schedule-refusals";
 import type { TemplateReason } from "../../../../lib/template-refusals";
 import type { NewRunStep } from "../lenses/step-issues";
 
@@ -24,7 +25,7 @@ const policy = (names: string) => names.split(" ").map((n) => `inline_policy.${n
 
 const POLICY_REVIEW = "allowed_domains denied_domains allow_all_egress first_use_approval first_use_hold_seconds max_holds " +
   "allowed_methods eligible_grants tool_rules harness_inner_walls git_push_any_branch push_rules azure_devops_capabilities github_capabilities";
-const POLICY_DOCUMENT = "auto_stop_after_sec ui_apps llm_inspection min_confinement_class workspace_mounts workspace_repos resources";
+const POLICY_DOCUMENT = "auto_stop_after_sec ui_apps llm_inspection recording min_confinement_class workspace_mounts workspace_repos resources";
 
 /**
  * Policy rows go to Review, never to Tools and access: that step writes only
@@ -40,7 +41,7 @@ export const FIELD_HOME: Record<string, FieldHome> = {
   ...homes("document", "ends_after_sec no_end image allowed_image devcontainer_repo devcontainer_ref placement runner_id " +
     "policy_id preset preset_version agent task repo workspace_id interactive task_mode interactive_start seed_auto_tools " +
     "tool_approvals integration_id model_provider"),
-  ...homes("excluded", "title description mode_contract max_wait_sec policy_overlay local_folder"),
+  ...homes("excluded", "title description mode_contract max_wait_sec start_at start_time_zone policy_overlay local_folder keep_work_folder"),
   ...homes("review", policy(POLICY_REVIEW)),
   ...homes("document", policy(POLICY_DOCUMENT)),
 };
@@ -57,17 +58,17 @@ export const FIELD_HOME_OVERRIDES: Record<string, FieldHome> = {
 };
 
 export const REVIEW_GROUP_OF_FIELD: Record<string, ReviewGroupId> = {
-  ...groups("run", "shape experience workload interactive task_mode interactive_start agent task preset preset_version title description mode_contract max_wait_sec policy_overlay local_folder"),
+  ...groups("run", "shape experience workload interactive task_mode interactive_start agent task preset preset_version title description mode_contract max_wait_sec start_at start_time_zone policy_overlay local_folder"),
   ...groups("where", "runner_pool_id confinement_class placement runner_id image allowed_image devcontainer_repo devcontainer_ref " +
     policy("min_confinement_class")),
-  ...groups("work", "workspaces drive drives start_folder no_repositories_or_drives repo workspace_id " + policy("workspace_mounts workspace_repos")),
+  ...groups("work", "workspaces drive drives start_folder no_repositories_or_drives keep_work_folder repo workspace_id " + policy("workspace_mounts workspace_repos")),
   ...groups("tools", "tools startup components model_provider integration_id seed_auto_tools tool_approvals " + policy("ui_apps")),
-  ...groups("access", "overrides policy_id inline_policy " + policy(`${POLICY_REVIEW} llm_inspection`)),
+  ...groups("access", "overrides policy_id inline_policy " + policy(`${POLICY_REVIEW} llm_inspection recording`)),
   ...groups("limits", "resources ends_after_sec no_end " + policy("resources auto_stop_after_sec")),
 };
 
 /** Every reason a preflight or create refusal can carry that the console names. */
-export type KnownLaunchReason = NewRunReason | PlacementReason | RunModeReason | RunnerPoolReason | TemplateReason | WorkspaceDoorReason;
+export type KnownLaunchReason = NewRunReason | PlacementReason | RunModeReason | RunnerPoolReason | ScheduleReason | TemplateReason | WorkspaceDoorReason;
 
 /** Written out key by key, so a new reason without a home fails typecheck. */
 export const HOME_OF_REASON: Record<KnownLaunchReason, FieldHome> = {
@@ -94,6 +95,7 @@ export const HOME_OF_REASON: Record<KnownLaunchReason, FieldHome> = {
   runner_pool_default_unavailable: "run", runner_pool_stale: "run", runner_pool_no_eligible_member: "run",
   runner_pool_member_mismatch: "run", runner_pools_unavailable: "run", runner_pool_run_type_not_allowed: "run", runner_pool_run_type_missing: "run",
   runner_pool_barrier_not_allowed: "run", runner_pool_queue_full: "run", runner_pool_full: "run",
+  scheduled_runs_off: "run", scheduled_runs_unavailable: "run", start_at_invalid: "run", start_at_past: "run", start_at_too_far: "run",
   template_document_invalid: "document", template_version_unsupported: "document", template_field_unknown: "document",
   template_field_invalid: "document", template_field_excluded: "document", template_secret_refused: "document",
   template_run_state_refused: "document", template_metadata_in_content: "document", template_field_unavailable: "document",
@@ -103,7 +105,7 @@ export const HOME_OF_REASON: Record<KnownLaunchReason, FieldHome> = {
   template_not_found: "review", template_revision_conflict: "review", templates_unavailable: "review",
   template_name_taken: "review", template_limit_reached: "review", template_policy_field_refused: "review",
   harness_not_installed: "harnesses", harness_set_no_image: "harnesses", harness_set_custom_image: "harnesses",
-  harness_providers_conflict: "harnesses",
+  harness_providers_conflict: "harnesses", multi_agent_tasks_off: "harnesses",
 };
 
 /** The one field a refusal names, where it names one: the run's runner, chosen through its pool. */

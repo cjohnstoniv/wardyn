@@ -36,7 +36,7 @@ type payload struct {
 	Tier       int16              `json:"tier"`
 	Approval   payloadApproval    `json:"approval"`
 	Run        payloadRun         `json:"run"`
-	Profile    *payloadProfile    `json:"profile,omitempty"`
+	Unit       *payloadProfile    `json:"unit,omitempty"`
 	Requester  *payloadRequester  `json:"requester,omitempty"`
 	Recipients []payloadRecipient `json:"recipients,omitempty"`
 	ConsoleURL string             `json:"console_url,omitempty"`
@@ -80,8 +80,8 @@ type approvalFacts struct {
 	RunID         uuid.UUID
 	Principal     string
 	Email         string
-	ProfileID     *uuid.UUID
-	ProfileName   string
+	UnitID        *uuid.UUID
+	UnitName      string
 	// Recipients are the addresses the tier's notify targets resolved to at send time; RedactRequester
 	// is the sending channel's setting.
 	Recipients      []recipient
@@ -117,8 +117,8 @@ func buildPayload(deliveryID uuid.UUID, tier int16, f approvalFacts, consoleURL 
 	if f.NextTierDueAt != nil {
 		p.Approval.SLADueAt = clean(f.NextTierDueAt.UTC().Format(time.RFC3339))
 	}
-	if f.ProfileID != nil {
-		p.Profile = &payloadProfile{ID: clean(f.ProfileID.String()), Name: clean(f.ProfileName)}
+	if f.UnitID != nil {
+		p.Unit = &payloadProfile{ID: clean(f.UnitID.String()), Name: clean(f.UnitName)}
 	}
 	if f.Principal != "" && !f.RedactRequester {
 		p.Requester = &payloadRequester{Principal: clean(f.Principal), Email: clean(f.Email)}

@@ -146,6 +146,33 @@ type SetupStatus struct {
 	// pinned account and role appear (SetupProviderAccess's doc). Absent with
 	// no provider block.
 	ProviderAccess []SetupProviderAccess `json:"provider_access,omitempty"`
+	// Features are the switches the console reads to offer what they turn on, for every signed-in caller
+	// (here, not on the anonymous /healthz, since they say which credential paths are on). Kept for members:
+	// redactSetupStatusForUser leaves them alone, so a member's console never reads a switch as off.
+	Features SetupFeatures `json:"features"`
+}
+
+// SetupFeatures holds one boolean per switch, each its env toggle as read now.
+type SetupFeatures struct {
+	// ScheduledRuns is WARDYN_SCHEDULED_RUNS: a run may be scheduled to start later.
+	ScheduledRuns bool `json:"scheduled_runs"`
+	// KubectlCLI is WARDYN_KUBECTL_CLI: the kubectl component kind is on.
+	KubectlCLI bool `json:"kubectl_cli"`
+	// MultiAgentTasks is WARDYN_MULTI_AGENT_TASKS: a background agent task may give
+	// each agent its own task (#1987).
+	MultiAgentTasks bool `json:"multi_agent_tasks"`
+	// MCPLocalServers is WARDYN_MCP_LOCAL_SERVERS: a component may define an
+	// MCP server that runs in the run's sandbox.
+	MCPLocalServers bool `json:"mcp_local_servers"`
+}
+
+func setupFeatures(multiAgentTasks bool) SetupFeatures {
+	return SetupFeatures{
+		ScheduledRuns:   envEnabled(envScheduledRuns),
+		KubectlCLI:      kubectlCLIOn(),
+		MultiAgentTasks: multiAgentTasks,
+		MCPLocalServers: envEnabled(envMCPLocalServers),
+	}
 }
 
 // SetupCheck is defined in setup_checks.go — setup.go is at its allowlisted
@@ -321,10 +348,9 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		if chk, ok := s.substrateHealthRow(ctx); ok {
 			checks = append(checks, chk)
 		}
-		// runner_limits: runners that take no run until limits are set. Never Blocking.
-		if chk, ok := s.runnerLimitsRow(ctx); ok {
-			checks = append(checks, chk)
-		}
+		// runner_limits (runners that take no run until limits are set) and credential_delivery (stored
+		// delivery rows the server cannot build). Never Blocking.
+		checks = append(checks, s.runnerPolicyRows(ctx)...)
 		// recording: whether session recording is on, and how to turn it on. Never Blocking.
 		checks = append(checks, s.recordingRows()...)
 		// runner_arch_images: image keys with no image for a registered runner's architecture. Never Blocking.
@@ -335,6 +361,8 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		// configuration. Never Blocking. Both need the site config; a failed read leaves them out.
 		if siteCfgOK {
 			checks = append(checks, s.upgradeChecks(ctx, siteCfg)...)
+			// private_ip_refusals: hosts a run's proxy refused for resolving into liftable private space. Never Blocking.
+			checks = append(checks, s.privateIPRefusalsRows(ctx, siteCfg)...)
 		}
 		// High availability rows: present only while WARDYN_HA is on, and read
 		// Postgres, so they share this operator-only gate.
@@ -443,6 +471,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		// A count derived from the SAME PEM string TrustedCAPEM's doc comment
 		// describes — no second boot-time field to keep in sync. 0 when unset.
 		TrustedCACerts: strings.Count(s.cfg.TrustedCAPEM, "-----BEGIN CERTIFICATE-----"),
+		Features:       setupFeatures(s.cfg.MultiAgentTasks),
 	}
 	resp.HarnessSets = visibleHarnessSets(s.cfg.AgentImages, resp.Harnesses)
 	// DELIBERATELY isOperator (three-tier doctrine, internal/auth/oidc's

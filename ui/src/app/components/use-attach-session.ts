@@ -24,6 +24,7 @@ import { createCopyGate, isMacPlatform, type CopyGate, type CopyOffer, type Gate
 import { runs } from "../lib/api/runs";
 import { wsURL } from "../lib/base-path";
 import { HttpError, TIMEOUT_STATUS } from "../lib/api/core";
+import type { PolicyRef } from "../lib/api/health";
 import { sessionExpiry } from "../lib/api/session-activity";
 import { ATTACH_CAP_REASON, entryErrorMessage } from "../lib/run-entry";
 import { attachWheelCoalescer } from "./attach-terminal-wheel";
@@ -40,9 +41,11 @@ export type ConnState = "connecting" | "open" | "reconnecting" | "closed" | "err
 export const MAX_RECONNECT_ATTEMPTS = 4;
 
 // Only a refusal that will not change ends a ticket mint for good (owner-only, the session cap, signed out, not
-// found). No answer at all, a 5xx and a 429 are the network or the daemon coming back.
+// found). No answer at all, a 5xx and a 429 are the network or the daemon coming back, except the session cap:
+// the server answers it with a 503 that names its reason, and it will not change by asking again.
 const mintMayRecover = (e: unknown): boolean =>
-  !(e instanceof HttpError) || e.status === TIMEOUT_STATUS || e.status === 429 || e.status >= 500;
+  !(e instanceof HttpError) ||
+  (e.reason !== ATTACH_CAP_REASON && (e.status === TIMEOUT_STATUS || e.status === 429 || e.status >= 500));
 const RECONNECT_BASE_DELAY_MS = 600;
 const RECONNECT_MAX_DELAY_MS = 5000;
 
@@ -133,6 +136,8 @@ export interface UseAttachSessionArgs {
   observerPinRef: React.MutableRefObject<{ cols: number; rows: number } | null>;
   setConnState: React.Dispatch<React.SetStateAction<ConnState>>;
   setErrorMsg: React.Dispatch<React.SetStateAction<string>>;
+  /** Set only for a refusal that is a governance limit (the session cap, or an envelope carrying a policy): the why card shows for it. */
+  setRefusalCard: React.Dispatch<React.SetStateAction<{ policy?: PolicyRef } | null>>;
   setMode: React.Dispatch<React.SetStateAction<{ readOnly: boolean; holder?: AttachHolder } | null>>;
   setTakenOverBy: React.Dispatch<React.SetStateAction<string | null>>;
   setReconnectAttempt: React.Dispatch<React.SetStateAction<number>>;
@@ -175,6 +180,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
     observerPinRef,
     setConnState,
     setErrorMsg,
+    setRefusalCard,
     setMode,
     setTakenOverBy,
     setReconnectAttempt,
@@ -394,6 +400,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
               return;
             }
             setConnState("error");
+            setRefusalCard(e instanceof HttpError && (e.policy || e.reason === ATTACH_CAP_REASON) ? { policy: e.policy } : null);
             setErrorMsg(
               entryErrorMessage(e, (err) => `Could not mint an attach ticket: ${err instanceof Error ? err.message : String(err)}`, { created_by: createdBy }),
             );
@@ -597,6 +604,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
             if (e instanceof HttpError && e.reason === ATTACH_CAP_REASON) {
               setMode(null);
               setConnState("error");
+              setRefusalCard({ policy: e.policy });
               setErrorMsg(e.message);
               onCloseRef.current?.();
               return;
@@ -704,11 +712,13 @@ export function useAttachSession(args: UseAttachSessionArgs) {
       setMode(null);
       setConnState("closed");
       setErrorMsg("");
+      setRefusalCard(null);
     };
 
     if (suspended) {
       setConnState("closed");
       setErrorMsg("");
+      setRefusalCard(null);
     } else {
       connect();
     }

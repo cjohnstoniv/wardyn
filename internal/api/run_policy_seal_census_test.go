@@ -43,6 +43,7 @@ var lateAddCensus = map[string]int{
 	"run_policy_seal.go boundarySealEgress":                     2, // the seal's own overlay: it narrows, never adds
 	"boundary.go validateBoundarySpec":                          1,
 	"inline_policy_bounds.go narrowUserInlinePolicy":            1,
+	"cli_kubectl.go authorKubectlCLI":                           1,
 	"profile.go handleSynthesizeProfile":                        1,
 	"run_policy_resolution.go boundRunUserSpecDrops":            1,
 	"runs_dispatch_gitbroker.go confineGitBrokerEgress":         1,

@@ -23,11 +23,11 @@ import (
 // governance site never fires, and without the drive site's own row the
 // drives door refuses with an entirely empty denial stream.
 func TestDriveStaleSnapshotRefusalIsAudited(t *testing.T) {
-	// hasGroupTier is HasGroupTierDriveGrants; hasGroupTierAssignments stays
+	// hasGroupTier is HasGroupTierDriveGrants; hasGroupTierMemberships stays
 	// FALSE, which is the whole point — it is what keeps the governance twin
 	// silent and leaves this seam as the only one that could have spoken.
 	t.Run("the drive seam writes authz.denied with the documented reason", func(t *testing.T) {
-		st := &driveStore{hasGroupTier: true, userTierOnly: true, hasGroupTierAssignments: false}
+		st := &driveStore{hasGroupTier: true, userTierOnly: true, hasGroupTierMemberships: false}
 		srv, rec := driveRunServer(st, "docker")
 		ctx := driveMemberCtx(nil, false)
 
@@ -81,7 +81,7 @@ func TestDriveStaleSnapshotRefusalIsAudited(t *testing.T) {
 	// been hiding), so it must write no denial either. Without this arm the new
 	// row would be noise on every pre-0.6 cookie rather than signal.
 	t.Run("a deployment with no group-tier drive grant writes no denial", func(t *testing.T) {
-		st := &driveStore{hasGroupTier: false, userTierOnly: true, hasGroupTierAssignments: false}
+		st := &driveStore{hasGroupTier: false, userTierOnly: true, hasGroupTierMemberships: false}
 		srv, rec := driveRunServer(st, "docker")
 		before := len(rec.events)
 		if _, _, w := driveSeed(t, srv, driveRunRequest(true, nil), governanceCeiling{}, driveMemberCtx(nil, false)); w.Code == http.StatusForbidden {
@@ -108,7 +108,7 @@ func TestDriveStaleSnapshotRefusalIsAudited(t *testing.T) {
 //
 // GET /me reaches both groups_snapshot_stale deciding sites — the drive
 // resolver for user_drive, the governance resolver for
-// user_drive_denied_by_profile — so without this rule a member with an
+// user_drive_denied_by_unit — so without this rule a member with an
 // unanswerable group snapshot would write denial rows on a timer (two per
 // poll), for a request that refuses nobody.
 //
@@ -118,7 +118,7 @@ func TestDriveStaleSnapshotRefusalIsAudited(t *testing.T) {
 func TestMePollsAreNotDenials(t *testing.T) {
 	// Both group-tier reads true, so both deciding sites are live and both would
 	// fire — the deployment shape where the amplification is worst.
-	st := &driveStore{hasGroupTier: true, userTierOnly: true, hasGroupTierAssignments: true}
+	st := &driveStore{hasGroupTier: true, userTierOnly: true, hasGroupTierMemberships: true}
 	srv, rec := driveRunServer(st, "docker")
 	ctx := driveMemberCtx(nil, true)
 
@@ -164,7 +164,7 @@ func TestMePollsAreNotDenials(t *testing.T) {
 	// refusal is decided at the drives door. This is the deployment
 	// where an unaudited drive seam left the denial stream entirely empty.
 	t.Run("the drive seam records for an enforcement caller", func(t *testing.T) {
-		st := &driveStore{hasGroupTier: true, userTierOnly: true, hasGroupTierAssignments: false}
+		st := &driveStore{hasGroupTier: true, userTierOnly: true, hasGroupTierMemberships: false}
 		srv, rec := driveRunServer(st, "docker")
 		ctx := driveMemberCtx(nil, true)
 		if _, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), governanceCeiling{}, ctx); ok || w.Code != http.StatusForbidden {

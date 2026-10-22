@@ -23,10 +23,24 @@ export const USER_TYPES_NAV_TITLE = "User types";
 // wardyn/copy/credentials.ts) is the same string.
 export const CREDENTIALS_NAV_TITLE = "Credentials";
 
+// The Drives nav label (a security admin's Admin view): the registry page's own title, so the highlighted
+// nav entry and the heading agree (#3057). user-drives-copy.ts's DRIVES.TITLE reads this constant.
+export const DRIVES_NAV_TITLE = "User drives";
+
 // The Runners nav label, kept here for the entry-chunk reason above (the sidebar is eager,
 // wardyn/copy/runners.ts is lazy). copy/runners.ts's RUNNERS.NAV reads this constant, so the nav
 // label and the page heading stay one string.
 export const RUNNERS_NAV_TITLE = "Runners";
+
+// The Admin view's sidebar group headings (#3056), eager for the same entry-chunk reason.
+export const ADMIN_NAV_GROUPS = {
+  activity: "Activity",
+  build: "Build",
+  access: "Access",
+  limits: "Limits",
+  keys: "Keys",
+} as const;
+export type AdminNavGroup = keyof typeof ADMIN_NAV_GROUPS;
 
 // The Runs board is in the entry chunk and names a local run's computer in each row's meta line (0.9,
 // M-RN-3 RS8), so the three small things that row needs live here, for the same entry-chunk reason, and the

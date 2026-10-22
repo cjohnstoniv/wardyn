@@ -25,10 +25,10 @@ type r3PlainStore struct {
 	store.Store
 }
 
-func (r3PlainStore) ResolveGovernanceProfile(context.Context, []string, []string, string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+func (r3PlainStore) ResolveGovernanceUnit(context.Context, []string, []string, string) (*types.GovernanceUnit, types.CapabilitySubjectType, error) {
 	return nil, "", nil
 }
-func (r3PlainStore) HasGroupTierAssignments(context.Context) (bool, error) { return false, nil }
+func (r3PlainStore) HasGroupTierMemberships(context.Context) (bool, error) { return false, nil }
 func (r3PlainStore) ListCapabilityGrants(context.Context) ([]types.CapabilityGrant, error) {
 	return nil, nil
 }

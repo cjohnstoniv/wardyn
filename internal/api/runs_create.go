@@ -184,7 +184,9 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 	// in, and now that base_image has had its one chance to supply req.Image,
 	// still having neither is the caller's request, resolved. Never "attach a
 	// workspace" — one already is attached; what it lacks is a base image.
-	if req.TaskMode == "exec" && req.Agent == "" && req.Image == "" {
+	// A run-mode command has its image already: with no harness it starts from
+	// the agent base image (harnessSetImage), as it does with no workspace.
+	if req.TaskMode == "exec" && req.Agent == "" && req.Image == "" && !req.UsesRunMode() {
 		return workspaceSeed{}, seedErr(http.StatusBadRequest, reasonWorkspaceSeedNoBaseImage, fmt.Errorf(
 			"workspace %s has no base image to run a command in: pass --image or --agent", ids[0]))
 	}
@@ -509,7 +511,7 @@ func wiredLaneGrants(grants []types.GrantSpec, gw grantWiring) []types.GrantSpec
 // ceiling than the run was gated under would name a profile that is not the one
 // bounding the run.
 func warnCeilingDeniedWorkspaceEgress(ceiling governanceCeiling, wsRefs []types.Workspace) []string {
-	if len(wsRefs) == 0 || ceiling.Profile == nil || len(ceiling.Spec.DeniedDomains) == 0 {
+	if len(wsRefs) == 0 || ceiling.Unit == nil || len(ceiling.Spec.DeniedDomains) == 0 {
 		return nil
 	}
 	var warns []string
@@ -526,7 +528,7 @@ func warnCeilingDeniedWorkspaceEgress(ceiling governanceCeiling, wsRefs []types.
 			}
 			warns = append(warns, fmt.Sprintf(
 				"workspace host %q is denied by your governance profile %q — the run launches, but that host is refused at the proxy",
-				host, ceiling.Profile.Name))
+				host, ceiling.Unit.Name))
 		}
 	}
 	return warns

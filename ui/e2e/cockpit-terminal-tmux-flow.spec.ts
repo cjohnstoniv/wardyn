@@ -189,6 +189,10 @@ test("50 MB of output keeps the page responsive and ends on the right screen", a
   // so the harness's own round trips to it are not counted. The answer
   // (flow-echo-42) differs from what the typed line shows, so only it counts.
   await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 });
+  // The echo is timed on a shell that is taking keys. Straight after the stream the writer can still be settling
+  // (the same window waitForShell covers on a fresh attach), and a line typed into it is dropped, not delayed: the
+  // 5 s wait below then measures a lost keystroke. The readiness line retries until the shell answers.
+  await waitForShell(page, screen, "flow-post");
   const echoMs = await timeEcho(page, "flow-echo");
   test.info().annotations.push({ type: "input-to-echo", description: `${Math.round(echoMs)} ms` });
   test.info().annotations.push({ type: "input-to-echo baseline", description: `${Math.round(baselineMs)} ms` });

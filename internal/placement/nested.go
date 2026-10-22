@@ -20,7 +20,7 @@ import (
 // exempts a newly added child: both the table and this closed schema must cover it.
 var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[proxy.Config](): strings.Fields("RunID ControlPlaneURL ControlPlaneCAPEM RunToken Policy Injection Listen DecisionBufferSize SelfLapse DecisionSink HardDeny MITMCACertPEM MITMCAKeyPEM MITMHosts GitGrants PATGrants " +
-		"BrokeredPATGrantIDs ResidentMints ADOGrant AzureGates GitHubAPI AzureARM AWSSigV4 MITMLLM UpstreamProxyURL UpstreamProxyNoProxy AllowedPeers " +
+		"BrokeredPATGrantIDs ResidentMints ADOGrant AzureGates GitHubAPI AzureARM AWSSigV4 KubeAPI MITMLLM UpstreamProxyURL UpstreamProxyNoProxy AllowedPeers " +
 		"TrustedCAPEM InternalHosts LLMUpstreams LLMChannelHosts LLMUnavailableDetail LocalModels Unattended ScrubResponses Attribution DecisionSpoolDir PushRuleSets PushRuleBase HarnessToolRules HarnessCredentials ViaOrgRoutes MCPServers MCPBindings " +
 		"VM PortRule"),
 	reflect.TypeFor[proxy.InjectionConfig]():      strings.Fields("InjectionRule GrantID"),
@@ -47,20 +47,21 @@ var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[proxy.GitHubAPIGrant]():       strings.Fields("Capabilities Repos Grants"),
 	reflect.TypeFor[proxy.AzureARMGrant]():        strings.Fields("TenantID Subscriptions Write"),
 	reflect.TypeFor[proxy.AWSSigV4Config]():       strings.Fields("GrantID PortalHost AccountID RoleName Hosts"),
+	reflect.TypeFor[proxy.KubeAPIGrant]():         strings.Fields("Host Port CAPEM Namespaces Write"),
 	reflect.TypeFor[proxy.PATGrant]():             strings.Fields("GrantID Username Repos Access Forge API"),
 	reflect.TypeFor[runner.InjectionGrant]():      strings.Fields("GrantID Rule"),
 	reflect.TypeFor[runner.ManagedFile]():         strings.Fields("Path Mode AgentOwned WipeAfterRead Content"),
 	reflect.TypeFor[runner.Mount]():               strings.Fields("Source Target ReadOnly MemberAuthored DriveAuthored"),
 	reflect.TypeFor[runner.UserWritableCeiling](): strings.Fields("Roots Deny"),
 	reflect.TypeFor[runner.Resources]():           strings.Fields("CPUMillis MemoryMiB CPURequestMillis MemoryRequestMiB PidsLimit DiskMiB DiskMiBSoft LifetimeCap ProxyAzure"),
-	reflect.TypeFor[types.DriveMount]():           strings.Fields("DriveID Backend ObjectName HostRoot DriveName StorageClass HomeName SubjectHash Target ReadOnly SizeMiB Enforcement"),
+	reflect.TypeFor[types.DriveMount]():           strings.Fields("DriveID Backend ObjectName HostRoot DriveName StorageClass HomeName SubjectHash Target ReadOnly SizeMiB Enforcement Team"),
 	reflect.TypeFor[types.GrantSpec]():            strings.Fields("Kind Scope TTLSeconds RequiresApproval OwnerOnly OwnerOnlyRefs"),
 	reflect.TypeFor[types.InternalHost]():         strings.Fields("HostSuffix CIDRs Baseline"),
 	reflect.TypeFor[types.LLMInspectionSpec]():    strings.Fields("Mode WorkspaceSecretNames WorkspaceSecretValues DetectSecrets DetectSecretPatterns DetectEntropy DetectPII DetectorSidecarURL ClassifiedMarkers ScanAttachments InspectForwardEgress MaxScanBytes OnScannerError RequireInspectableLLM InterceptTLS BlockMinSeverity"),
 	reflect.TypeFor[types.PushRulesSpec]():        strings.Fields("DenyPaths MaxInspectPackMiB RequireReviewPaths HoldSeconds DenyNewExecutables MaxFileSizeMiB"),
 	reflect.TypeFor[types.ResourceLimits]():       strings.Fields("CPUMillis MemoryMiB PidsLimit DiskMiB"),
 	reflect.TypeFor[types.RunPolicySpec](): strings.Fields("AllowedDomains DeniedDomains AllowAllEgress FirstUseApproval FirstUseHoldSeconds MaxHolds AllowedMethods MinConfinementClass EligibleGrants AutoStopAfterSec " +
-		"WorkspaceMounts WorkspaceRepos LLMInspection UIApps Resources ToolRules GitPushAnyBranch PushRules AzureDevOpsCapabilities GitHubCapabilities HarnessInnerWalls"),
+		"WorkspaceMounts WorkspaceRepos LLMInspection UIApps Resources ToolRules GitPushAnyBranch PushRules AzureDevOpsCapabilities GitHubCapabilities HarnessInnerWalls Recording"),
 	reflect.TypeFor[types.ToolRule]():          strings.Fields("Tool Effect"),
 	reflect.TypeFor[types.PushRuleSet]():       strings.Fields("Provider Host Org BasePath Rules"),
 	reflect.TypeFor[types.HarnessToolRules]():  strings.Fields("Harness Default Rules"),

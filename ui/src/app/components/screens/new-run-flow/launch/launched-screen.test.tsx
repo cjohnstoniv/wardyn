@@ -5,12 +5,14 @@
 
 import * as React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { runnerPools } from "../../../../lib/api/runner-pools";
 import { runs } from "../../../../lib/api/runs";
 import { shortTime } from "../../../../lib/format";
+import { whenText } from "../../../../lib/schedule";
+import { SCHEDULED_RUN } from "../../../wardyn/copy/scheduled-runs";
 import type { RunnerPoolList } from "../../../../lib/types/runner-pools";
 import { NR_LAUNCH } from "../../../wardyn/copy/new-run/launch";
 import { OperatorProvider } from "../../../wardyn/operator-context";
@@ -108,8 +110,23 @@ describe("Launched: Waiting (U13)", () => {
     await userEvent.click(await screen.findByRole("button", { name: NR_LAUNCH.CANCEL_RUN }));
     const confirm = await screen.findByRole("alertdialog", { name: 'Kill "nightly build"?' });
     expect(killRun).not.toHaveBeenCalled();
-    await userEvent.click(confirm.querySelector("button:last-of-type") as HTMLElement);
+    await userEvent.click(within(confirm).getByRole("button", { name: "Kill run" }));
     await waitFor(() => expect(killRun).toHaveBeenCalledWith(ID));
+  });
+});
+
+describe("Launched: a scheduled run", () => {
+  const START = new Date(Date.now() + 12 * HOUR).toISOString();
+
+  it("says when it starts and what is checked then, with no place in line, and can still be cancelled", async () => {
+    getRun.mockResolvedValue(run({ state: "QUEUED", queue: queue({ reason: "scheduled", start_at: START, time_zone: "UTC", position: 0 }) }));
+    open();
+    const body = await screen.findByTestId("launched-scheduled");
+    expect(body).toHaveTextContent(SCHEDULED_RUN.PAGE_STARTS(whenText(START, "UTC"), "12h"));
+    expect(body).toHaveTextContent(SCHEDULED_RUN.PAGE_NOTE);
+    expect(screen.queryByText(NR_LAUNCH.POSITION)).not.toBeInTheDocument();
+    expect(screen.queryByText(NR_LAUNCH.WAITING_BODY("CI jobs", 40))).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: NR_LAUNCH.CANCEL_RUN })).toBeInTheDocument();
   });
 });
 
@@ -170,7 +187,7 @@ describe("Launched: reload and identity", () => {
     open();
     await userEvent.click(await screen.findByRole("button", { name: NR_LAUNCH.CANCEL_RUN }));
     const confirm = await screen.findByRole("alertdialog", { name: 'Kill "nightly build"?' });
-    await userEvent.click(confirm.querySelector("button:last-of-type") as HTMLElement);
+    await userEvent.click(within(confirm).getByRole("button", { name: "Kill run" }));
     await waitFor(() => expect(screen.queryByRole("button", { name: NR_LAUNCH.CANCEL_RUN })).not.toBeInTheDocument());
     await waitFor(() => expect(screen.getByRole("heading", { level: 1, name: "nightly build" })).toHaveFocus());
   });

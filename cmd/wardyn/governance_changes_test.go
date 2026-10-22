@@ -25,7 +25,7 @@ import (
 // a 202 pending_change (docs/design/0.8/0.8.6-gov4.md, D2), and the /changes
 // routes list, approve and reject one stored change.
 type fakePendingGovernance struct {
-	existing []sdk.GovernanceProfile
+	existing []sdk.GovernanceUnit
 	change   sdk.GovernanceChange
 	writes   []string
 	calls    []string
@@ -64,13 +64,13 @@ func (f *fakePendingGovernance) handler() http.HandlerFunc {
 		}
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/governance":
-			_ = json.NewEncoder(w).Encode(sdk.GovernanceDocument{Profiles: f.existing})
-		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/governance/profiles":
-			pend("governance_profile")
-		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/governance/assignments":
-			pend("governance_assignment")
+			_ = json.NewEncoder(w).Encode(sdk.GovernanceDocument{Units: f.existing})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/governance/units":
+			pend("governance_unit")
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/governance/memberships":
+			pend("governance_membership")
 		case r.Method == http.MethodDelete:
-			pend("governance_profile")
+			pend("governance_unit")
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/governance/changes":
 			_ = json.NewEncoder(w).Encode([]sdk.GovernanceChange{f.change})
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/approve"):
@@ -121,9 +121,9 @@ func TestGovernanceSet_PendingExitsZeroAndListsPendingAndDeferred(t *testing.T) 
 
 	fileID := uuid.New()
 	path := writeGovernanceFile(t, sdk.GovernanceDocument{
-		Profiles: []sdk.GovernanceProfile{{ID: fileID, Name: "contractor"}},
-		Assignments: []sdk.GovernanceAssignment{
-			{SubjectType: sdk.CapabilitySubjectUser, Subject: "bob", ProfileID: fileID}},
+		Units: []sdk.GovernanceUnit{{ID: fileID, Name: "contractor"}},
+		Memberships: []sdk.GovernanceMembership{
+			{SubjectType: sdk.CapabilitySubjectUser, Subject: "bob", UnitID: fileID}},
 	})
 	stdout, stderr, err := runGovernance(t, srv.URL, "set", path)
 	if err != nil {
@@ -138,17 +138,17 @@ func TestGovernanceSet_PendingExitsZeroAndListsPendingAndDeferred(t *testing.T) 
 	if err := decodeOneJSONStrict(bytes.NewReader([]byte(stdout)), &doc); err != nil {
 		t.Errorf("stdout is not a strict-decodable document: %v\n%s", err, stdout)
 	}
-	if got := strings.Join(f.writes, ","); got != "POST /api/v1/governance/profiles" {
+	if got := strings.Join(f.writes, ","); got != "POST /api/v1/governance/units" {
 		t.Errorf("writes = %q, want only the profile create (the dependent assignment is deferred)", got)
 	}
 }
 
 func TestGovernanceSet_PrunePendingSkipsPrune(t *testing.T) {
-	f := &fakePendingGovernance{existing: []sdk.GovernanceProfile{{ID: uuid.New(), Name: "stale"}}}
+	f := &fakePendingGovernance{existing: []sdk.GovernanceUnit{{ID: uuid.New(), Name: "stale"}}}
 	srv := httptest.NewServer(f.handler())
 	t.Cleanup(srv.Close)
 
-	path := writeGovernanceFile(t, sdk.GovernanceDocument{Profiles: []sdk.GovernanceProfile{{Name: "new"}}})
+	path := writeGovernanceFile(t, sdk.GovernanceDocument{Units: []sdk.GovernanceUnit{{Name: "new"}}})
 	_, stderr, err := runGovernance(t, srv.URL, "set", path, "--prune")
 	if err != nil {
 		t.Fatalf("set --prune exited non-zero: %v", err)
@@ -165,7 +165,7 @@ func TestGovernanceSet_PrunePendingSkipsPrune(t *testing.T) {
 
 func TestGovernanceChanges_ListApproveReject(t *testing.T) {
 	f := &fakePendingGovernance{change: sdk.GovernanceChange{
-		ID: uuid.New(), TargetKind: "governance_profile", Op: "update", TargetKey: "k",
+		ID: uuid.New(), TargetKind: "governance_unit", Op: "update", TargetKey: "k",
 		State: "pending", ProposedBy: "alice",
 	}}
 	srv := httptest.NewServer(f.handler())
@@ -212,8 +212,8 @@ func TestGovernanceSet_PendingBaseListsDeferredChildProfile(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	baseID := uuid.New()
-	path := writeGovernanceFile(t, sdk.GovernanceDocument{Profiles: []sdk.GovernanceProfile{
-		{Name: "child", BaseProfileID: &baseID},
+	path := writeGovernanceFile(t, sdk.GovernanceDocument{Units: []sdk.GovernanceUnit{
+		{Name: "child", ParentID: &baseID},
 		{ID: baseID, Name: "base"},
 	}})
 	_, stderr, err := runGovernance(t, srv.URL, "set", path)
@@ -223,7 +223,7 @@ func TestGovernanceSet_PendingBaseListsDeferredChildProfile(t *testing.T) {
 	if !strings.Contains(stderr, `profile "child" -> base "base"`) {
 		t.Errorf("stderr missing the deferred child:\n%s", stderr)
 	}
-	if got := strings.Join(f.writes, ","); got != "POST /api/v1/governance/profiles" {
+	if got := strings.Join(f.writes, ","); got != "POST /api/v1/governance/units" {
 		t.Errorf("writes = %q, want only the base create", got)
 	}
 }
@@ -235,7 +235,7 @@ func TestGovernanceSet_RepeatApplyDuringTheWindowExitsZero(t *testing.T) {
 	srv := httptest.NewServer(f.handler())
 	t.Cleanup(srv.Close)
 
-	path := writeGovernanceFile(t, sdk.GovernanceDocument{Profiles: []sdk.GovernanceProfile{{Name: "contractor"}}})
+	path := writeGovernanceFile(t, sdk.GovernanceDocument{Units: []sdk.GovernanceUnit{{Name: "contractor"}}})
 	_, stderr, err := runGovernance(t, srv.URL, "set", path)
 	if err != nil {
 		t.Fatalf("a repeat set during the approval window exited non-zero: %v", err)

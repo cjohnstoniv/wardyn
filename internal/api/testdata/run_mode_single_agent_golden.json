@@ -1,0 +1,403 @@
+[
+  {
+    "name": "background agent task, no tools",
+    "request": {
+      "agent": "claude-code",
+      "repo": "",
+      "task": "fix the build",
+      "experience": "background",
+      "workload": {
+        "kind": "agent_task",
+        "agent": "claude-code",
+        "task": "fix the build"
+      },
+      "no_repositories_or_drives": true
+    },
+    "harnesses": [
+      {
+        "harness": "claude-code",
+        "starts": true
+      }
+    ],
+    "tool_rules": [
+      {
+        "tool": "Write",
+        "effect": "hold"
+      },
+      {
+        "tool": "*",
+        "effect": "allow"
+      }
+    ],
+    "tool_approvals": "hold"
+  },
+  {
+    "name": "background agent task, its own tool",
+    "request": {
+      "agent": "claude-code",
+      "repo": "",
+      "task": "fix the build",
+      "experience": "background",
+      "workload": {
+        "kind": "agent_task",
+        "agent": "claude-code",
+        "task": "fix the build"
+      },
+      "tools": [
+        {
+          "id": "claude-code",
+          "kind": "harness"
+        }
+      ],
+      "no_repositories_or_drives": true
+    },
+    "harnesses": [
+      {
+        "harness": "claude-code",
+        "starts": true
+      }
+    ],
+    "tool_rules": [
+      {
+        "tool": "Write",
+        "effect": "hold"
+      },
+      {
+        "tool": "*",
+        "effect": "allow"
+      }
+    ],
+    "tool_approvals": "hold"
+  },
+  {
+    "name": "background agent task, its tool with rules",
+    "request": {
+      "agent": "claude-code",
+      "repo": "",
+      "task": "fix the build",
+      "model_provider": "anthropic-team",
+      "experience": "background",
+      "workload": {
+        "kind": "agent_task",
+        "agent": "claude-code",
+        "task": "fix the build"
+      },
+      "tools": [
+        {
+          "id": "claude-code",
+          "kind": "harness",
+          "model_provider": "anthropic-team",
+          "tool_rules": [
+            {
+              "tool": "Read",
+              "effect": "allow"
+            },
+            {
+              "tool": "Bash",
+              "effect": "deny"
+            }
+          ],
+          "default_effect": "hold"
+        }
+      ],
+      "no_repositories_or_drives": true
+    },
+    "harnesses": [
+      {
+        "harness": "claude-code",
+        "model_provider_id": "anthropic-team",
+        "starts": true
+      }
+    ],
+    "tool_rules": [
+      {
+        "tool": "Write",
+        "effect": "hold"
+      },
+      {
+        "tool": "Read",
+        "effect": "allow"
+      },
+      {
+        "tool": "Bash",
+        "effect": "deny"
+      },
+      {
+        "tool": "*",
+        "effect": "hold"
+      }
+    ],
+    "tool_approvals": "hold"
+  },
+  {
+    "name": "background agent task, a second harness",
+    "refusal": {
+      "status": 422,
+      "reason": "run_mode_conflict",
+      "error": "tools cannot be sent with the run-mode fields. A background agent task includes only the harness it runs, which is workload.agent."
+    }
+  },
+  {
+    "name": "background agent task, only another harness",
+    "refusal": {
+      "status": 422,
+      "reason": "run_mode_conflict",
+      "error": "tools cannot be sent with the run-mode fields. A background agent task includes only the harness it runs, which is workload.agent."
+    }
+  },
+  {
+    "name": "background codex task with rules",
+    "request": {
+      "agent": "codex-cli",
+      "repo": "",
+      "task": "write the tests",
+      "experience": "background",
+      "workload": {
+        "kind": "agent_task",
+        "agent": "codex-cli",
+        "task": "write the tests"
+      },
+      "tools": [
+        {
+          "id": "codex-cli",
+          "kind": "harness",
+          "tool_rules": [
+            {
+              "tool": "mcp__gh__create_issue",
+              "effect": "deny"
+            }
+          ]
+        }
+      ],
+      "no_repositories_or_drives": true
+    },
+    "harnesses": [
+      {
+        "harness": "codex-cli",
+        "starts": true
+      }
+    ],
+    "tool_rules": [
+      {
+        "tool": "Write",
+        "effect": "hold"
+      },
+      {
+        "tool": "mcp__gh__create_issue",
+        "effect": "deny"
+      }
+    ]
+  },
+  {
+    "name": "background command, two harnesses",
+    "request": {
+      "agent": "claude-code",
+      "repo": "",
+      "task": "make test",
+      "task_mode": "exec",
+      "experience": "background",
+      "workload": {
+        "kind": "command",
+        "command": "make test"
+      },
+      "tools": [
+        {
+          "id": "claude-code",
+          "kind": "harness"
+        },
+        {
+          "id": "codex-cli",
+          "kind": "harness"
+        }
+      ],
+      "no_repositories_or_drives": true
+    },
+    "harnesses": [
+      {
+        "harness": "claude-code"
+      },
+      {
+        "harness": "codex-cli"
+      }
+    ],
+    "tool_rules": [
+      {
+        "tool": "Write",
+        "effect": "hold"
+      }
+    ],
+    "harness_tool_rules": [
+      {
+        "harness": "claude-code",
+        "rules": [
+          {
+            "tool": "Write",
+            "effect": "hold"
+          }
+        ]
+      },
+      {
+        "harness": "codex-cli",
+        "rules": [
+          {
+            "tool": "Write",
+            "effect": "hold"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "interactive, two harnesses",
+    "refusal": {
+      "status": 422,
+      "reason": "request_field_unavailable",
+      "error": "tools[1]: tool rules in an interactive run is not available on this server yet, so the run was not created."
+    }
+  },
+  {
+    "name": "interactive, claude's own rules beside codex",
+    "request": {
+      "agent": "claude-code",
+      "repo": "",
+      "interactive": true,
+      "interactive_start": "agent",
+      "model_provider": "anthropic-team",
+      "experience": "interactive",
+      "tools": [
+        {
+          "id": "claude-code",
+          "kind": "harness",
+          "model_provider": "anthropic-team",
+          "tool_rules": [
+            {
+              "tool": "Read",
+              "effect": "allow"
+            },
+            {
+              "tool": "Bash",
+              "effect": "deny"
+            }
+          ],
+          "default_effect": "hold"
+        },
+        {
+          "id": "codex-cli",
+          "kind": "harness"
+        }
+      ],
+      "startup": {
+        "kind": "harness",
+        "tool": "claude-code"
+      },
+      "no_repositories_or_drives": true
+    },
+    "harnesses": [
+      {
+        "harness": "claude-code",
+        "model_provider_id": "anthropic-team",
+        "starts": true
+      },
+      {
+        "harness": "codex-cli"
+      }
+    ],
+    "tool_rules": [
+      {
+        "tool": "Write",
+        "effect": "hold"
+      }
+    ],
+    "harness_tool_rules": [
+      {
+        "harness": "claude-code",
+        "default": "hold",
+        "rules": [
+          {
+            "tool": "Write",
+            "effect": "hold"
+          },
+          {
+            "tool": "Read",
+            "effect": "hold"
+          },
+          {
+            "tool": "Bash",
+            "effect": "deny"
+          }
+        ]
+      },
+      {
+        "harness": "codex-cli",
+        "rules": [
+          {
+            "tool": "Write",
+            "effect": "hold"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "interactive, two harnesses, codex starts",
+    "request": {
+      "agent": "codex-cli",
+      "repo": "",
+      "task": "hi",
+      "interactive": true,
+      "interactive_start": "agent",
+      "experience": "interactive",
+      "tools": [
+        {
+          "id": "claude-code",
+          "kind": "harness"
+        },
+        {
+          "id": "codex-cli",
+          "kind": "harness"
+        }
+      ],
+      "startup": {
+        "kind": "harness",
+        "tool": "codex-cli",
+        "prompt": "hi"
+      },
+      "no_repositories_or_drives": true
+    },
+    "harnesses": [
+      {
+        "harness": "claude-code"
+      },
+      {
+        "harness": "codex-cli",
+        "starts": true
+      }
+    ],
+    "tool_rules": [
+      {
+        "tool": "Write",
+        "effect": "hold"
+      }
+    ],
+    "harness_tool_rules": [
+      {
+        "harness": "claude-code",
+        "rules": [
+          {
+            "tool": "Write",
+            "effect": "hold"
+          }
+        ]
+      },
+      {
+        "harness": "codex-cli",
+        "rules": [
+          {
+            "tool": "Write",
+            "effect": "hold"
+          }
+        ]
+      }
+    ]
+  }
+]

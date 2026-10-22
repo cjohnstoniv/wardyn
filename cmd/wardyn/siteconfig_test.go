@@ -373,7 +373,7 @@ func TestSiteConfigSet_NoOmittedFieldsNoteIsSilent(t *testing.T) {
 
 	_, stderr, err := runSiteConfigSet(t, srv.URL,
 		`{"scm_hosts":["gitlab.corp"],"upstream_proxy_no_proxy":[],"internal_hosts":[],"workspace_providers":{},"agent_providers":{},`+
-			`"model_providers":{},"sign_in_help_text":"","sign_in_help_url":"","branding":{},"policy_help":{},"components":{}}`)
+			`"model_providers":{},"sign_in_help_text":"","sign_in_help_url":"","branding":{},"policy_help":{},"components":{},"recording":{}}`)
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}

@@ -1,0 +1,9 @@
+skip  trusted-ca   no extra CA bundle is set: the system roots only
+ok    org-url      https://ORG (from WARDYN_RUNNER_ORG_URL)
+ok    dns          127.0.0.1 is an address: nothing to resolve
+ok    proxy        direct (no proxy applies to this address)
+ok    tls          ORG presented a certificate for (Acme Co) issued by (Acme Co); verified by the system trust store
+ok    healthz      status ok, server version 0.10.0
+ok    engine       unix:///var/run/docker.sock answers: Docker Engine 27.1.0, "Ubuntu" (box) (native)
+ok    proxy-image  ghcr.io/cjohnstoniv/wardyn-proxy:0.10.0 is on this engine
+FAIL  relay        relay: no container on Docker engine "Ubuntu" (box) (native) reached this runner: listen 172.17.0.1, reach at host-gateway: refused Set --relay-listen (WARDYN_RELAY_LISTEN) and --relay-host-target (WARDYN_RELAY_HOST_TARGET); see docs/runner-registration.md#requirements.; set WARDYN_RELAY_LISTEN to an address of this host that the engine's containers reach (WARDYN_RELAY_HOST_TARGET is what they reach it at: host-gateway or an IP address)

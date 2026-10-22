@@ -101,6 +101,8 @@ type componentAdmission struct {
 	awsCLI bool
 	// azureCLI: an Azure CLI row was admitted already.
 	azureCLI bool
+	// kubectlCLI: a kubectl row was admitted already.
+	kubectlCLI bool
 	// githubCLI: a GitHub CLI row was admitted already, and its door's host is
 	// in bounds.credentialed.
 	githubCLI bool
@@ -293,6 +295,9 @@ func (s *Server) admitComponent(r *http.Request, adm *componentAdmission, i int,
 	if refused := s.componentAzureCLIAdmitted(r, adm, &c, i); refused != nil {
 		return attachedComponent{}, refused
 	}
+	if refused := s.componentKubectlCLIAdmitted(r, adm, &c, i); refused != nil {
+		return attachedComponent{}, refused
+	}
 	if si := componentResidentSecret(def); si >= 0 && adm.settings.DenyResidentDelivery {
 		return attachedComponent{}, componentRefused(c, i, reasonComponentResidentDeliveryDenied,
 			fmt.Sprintf("secrets[%d].delivery.mode: your organisation has turned off delivering a secret into the sandbox as a variable or a file; deliver it as a header", si),
@@ -461,7 +466,7 @@ func (c *runComponents) expand(spec *types.RunPolicySpec) {
 		for _, sec := range def.Secrets {
 			spec.EligibleGrants = append(spec.EligibleGrants, componentGrant(sec))
 			switch {
-			case def.MCP != nil:
+			case def.RemoteMCP():
 				c.mcpHosts = append(c.mcpHosts, sec.Delivery.Host)
 			case sec.Delivery.Mode == types.ComponentDeliveryHeader:
 				c.mitmHosts = append(c.mitmHosts, sec.Delivery.Host)

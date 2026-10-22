@@ -30,7 +30,7 @@ func govContactForTest() *policyref.Contact {
 
 // rawProfileRead is a call to the store's raw profile reads: a stored composed row carries no
 // authority of its own, so only governance_compose.go may turn one into authority.
-var rawProfileRead = regexp.MustCompile(`\.(Get|List|Resolve)GovernanceProfile(s|Chain)?\(`)
+var rawProfileRead = regexp.MustCompile(`\.(Get|List|Resolve)GovernanceUnit(s|Chain)?\(`)
 
 // rawProfileReadsOutsideTheResolver is every file of this package (tests excluded) that calls a raw
 // profile read, comments stripped, other than the resolver's own.
@@ -73,11 +73,11 @@ func TestCensusGuardFlagsARawRead(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	write("sneaky.go", "package api\nfunc f(s *Server) { _, _ = s.cfg.Store.ListGovernanceProfiles(nil) }\n")
-	write("chain.go", "package api\nfunc g(s *Server) { _, _ = s.cfg.Store.GetGovernanceProfileChain(nil, nil) }\n")
-	write("commented.go", "package api\n// s.cfg.Store.GetGovernanceProfile(ctx, id) is what not to call\n")
-	write("governance_compose.go", "package api\nfunc h(s *Server) { _, _ = s.cfg.Store.ListGovernanceProfiles(nil) }\n")
-	write("raw_test.go", "package api\nfunc i(s *Server) { _, _ = s.cfg.Store.ListGovernanceProfiles(nil) }\n")
+	write("sneaky.go", "package api\nfunc f(s *Server) { _, _ = s.cfg.Store.ListGovernanceUnits(nil) }\n")
+	write("chain.go", "package api\nfunc g(s *Server) { _, _ = s.cfg.Store.GetGovernanceUnitChain(nil, nil) }\n")
+	write("commented.go", "package api\n// s.cfg.Store.GetGovernanceUnit(ctx, id) is what not to call\n")
+	write("governance_compose.go", "package api\nfunc h(s *Server) { _, _ = s.cfg.Store.ListGovernanceUnits(nil) }\n")
+	write("raw_test.go", "package api\nfunc i(s *Server) { _, _ = s.cfg.Store.ListGovernanceUnits(nil) }\n")
 	got := rawProfileReadsOutsideTheResolver(t, dir)
 	slices.Sort(got)
 	if want := []string{"chain.go", "sneaky.go"}; !slices.Equal(got, want) {
@@ -87,21 +87,21 @@ func TestCensusGuardFlagsARawRead(t *testing.T) {
 
 // the resolved type is not the row
 
-func TestResolvedProfileIsNotTheStoredRow(t *testing.T) {
-	if reflect.TypeOf(ResolvedProfile{}) == reflect.TypeOf(types.GovernanceProfile{}) {
-		t.Fatal("ResolvedProfile and types.GovernanceProfile are one type: a reader left on the raw row would compile")
+func TestResolvedUnitIsNotTheStoredRow(t *testing.T) {
+	if reflect.TypeOf(ResolvedUnit{}) == reflect.TypeOf(types.GovernanceUnit{}) {
+		t.Fatal("ResolvedUnit and types.GovernanceUnit are one type: a reader left on the raw row would compile")
 	}
-	if _, ok := reflect.TypeOf(governanceCeiling{}).FieldByName("Profile"); !ok ||
-		reflect.TypeOf(governanceCeiling{}.Profile) != reflect.TypeOf(&ResolvedProfile{}) {
-		t.Error("governanceCeiling.Profile is not a *ResolvedProfile")
+	if _, ok := reflect.TypeOf(governanceCeiling{}).FieldByName("Unit"); !ok ||
+		reflect.TypeOf(governanceCeiling{}.Unit) != reflect.TypeOf(&ResolvedUnit{}) {
+		t.Error("governanceCeiling.Unit is not a *ResolvedUnit")
 	}
 }
 
 // byte for byte
 
-// legacyCeilingFromProfile is ceilingFromProfile's body as 0.8.5 shipped it: the standalone path the
+// legacyCeilingFromUnit is ceilingFromUnit's body as 0.8.5 shipped it: the standalone path the
 // resolver must reproduce exactly.
-func (s *Server) legacyCeilingFromProfile(p *types.GovernanceProfile) governanceCeiling {
+func (s *Server) legacyCeilingFromUnit(p *types.GovernanceUnit) governanceCeiling {
 	spec := p.Ceiling.Clone()
 	spec.Resources = s.inheritDeploymentResources(spec.Resources)
 	kept, warns := reintersectGovernanceGrants(spec.EligibleGrants, s.cfg.DefaultPolicy.EligibleGrants, p.Name)
@@ -131,15 +131,15 @@ func TestStandaloneProfilesResolveByteForByte(t *testing.T) {
 	sized.Ceiling.Resources = &types.ResourceLimits{CPUMillis: 500}
 	limited := limitsProfile("limited", types.GovernanceLimits{
 		DenyInteractive: true, MaxConcurrentRuns: 3, RunLimits: types.RunLimits{MaxEndAheadSec: 3600, AllowNoEnd: true}})
-	for _, p := range []*types.GovernanceProfile{
+	for _, p := range []*types.GovernanceUnit{
 		{ID: uuid.New(), Name: "empty"}, govProfile("plain"), holdProfile("holds"), withGrants, withPush, sized, limited,
 	} {
 		t.Run(p.Name, func(t *testing.T) {
-			got, err := srv.composeChain([]types.GovernanceProfile{*p})
+			got, err := srv.composeChain([]types.GovernanceUnit{*p})
 			if err != nil {
 				t.Fatalf("compose: %v", err)
 			}
-			want := srv.legacyCeilingFromProfile(p)
+			want := srv.legacyCeilingFromUnit(p)
 			if !reflect.DeepEqual(got.Ceiling, want.Spec) || !reflect.DeepEqual(got.Limits, want.Limits) ||
 				!slices.Equal(got.Warnings, want.Warnings) {
 				t.Errorf("standalone profile %q no longer resolves as on 0.8.5\n got  %+v %+v %v\n want %+v %+v %v",
@@ -161,22 +161,22 @@ func TestStandaloneProfilesResolveByteForByte(t *testing.T) {
 
 func TestResolverRefusesAChainThatIsNotACleanLine(t *testing.T) {
 	srv := &Server{cfg: Config{DefaultPolicy: govDeployment()}}
-	a := types.GovernanceProfile{ID: uuid.New(), Name: "a", Overlay: &types.CeilingOverlay{}}
-	b := types.GovernanceProfile{ID: uuid.New(), Name: "b", Overlay: &types.CeilingOverlay{}}
-	a.BaseProfileID, b.BaseProfileID = &b.ID, &a.ID
-	root := types.GovernanceProfile{ID: uuid.New(), Name: "root"}
-	mk := func(name string, base *types.GovernanceProfile) types.GovernanceProfile {
-		return types.GovernanceProfile{ID: uuid.New(), Name: name, BaseProfileID: &base.ID, Overlay: &types.CeilingOverlay{}}
+	a := types.GovernanceUnit{ID: uuid.New(), Name: "a", Overlay: &types.CeilingOverlay{}}
+	b := types.GovernanceUnit{ID: uuid.New(), Name: "b", Overlay: &types.CeilingOverlay{}}
+	a.ParentID, b.ParentID = &b.ID, &a.ID
+	root := types.GovernanceUnit{ID: uuid.New(), Name: "root"}
+	mk := func(name string, base *types.GovernanceUnit) types.GovernanceUnit {
+		return types.GovernanceUnit{ID: uuid.New(), Name: name, ParentID: &base.ID, Overlay: &types.CeilingOverlay{}}
 	}
 	l1 := mk("l1", &root)
 	l2 := mk("l2", &l1)
 	l3 := mk("l3", &l2)
 	orphan := mk("orphan", &root)
-	noOverlay := types.GovernanceProfile{ID: uuid.New(), Name: "bad", BaseProfileID: &root.ID}
-	for name, chain := range map[string][]types.GovernanceProfile{
+	noOverlay := types.GovernanceUnit{ID: uuid.New(), Name: "bad", ParentID: &root.ID}
+	for name, chain := range map[string][]types.GovernanceUnit{
 		"empty":                  nil,
 		"a loop":                 {a, b, a},
-		"a self loop":            {{ID: a.ID, Name: "a", BaseProfileID: &a.ID, Overlay: &types.CeilingOverlay{}}},
+		"a self loop":            {{ID: a.ID, Name: "a", ParentID: &a.ID, Overlay: &types.CeilingOverlay{}}},
 		"depth four":             {l3, l2, l1, root},
 		"cut short by the bound": {l3, l2, l1},
 		"a missing base":         {orphan},
@@ -187,7 +187,7 @@ func TestResolverRefusesAChainThatIsNotACleanLine(t *testing.T) {
 			t.Errorf("%s composed to %+v, want a refusal (never a chain composed on the deployment)", name, res)
 		}
 	}
-	if _, err := srv.composeChain([]types.GovernanceProfile{l2, l1, root}); err != nil {
+	if _, err := srv.composeChain([]types.GovernanceUnit{l2, l1, root}); err != nil {
 		t.Errorf("a clean three-deep chain refused: %v", err)
 	}
 }
@@ -196,13 +196,13 @@ func TestResolverRefusesAChainThatIsNotACleanLine(t *testing.T) {
 // member's 201, so it names the leaf profile and never a base's name, id or overlay.
 func TestResolverWarningsNameTheLeafOnly(t *testing.T) {
 	srv := &Server{cfg: Config{DefaultPolicy: govDeployment()}}
-	base := types.GovernanceProfile{ID: uuid.New(), Name: "company-baseline-secret-name", Ceiling: types.RunPolicySpec{
+	base := types.GovernanceUnit{ID: uuid.New(), Name: "company-baseline-secret-name", Ceiling: types.RunPolicySpec{
 		AllowedDomains: []string{"api.anthropic.com"}, MinConfinementClass: types.CC2}}
-	mid := types.GovernanceProfile{ID: uuid.New(), Name: "division-secret-name", BaseProfileID: &base.ID, Overlay: &types.CeilingOverlay{
+	mid := types.GovernanceUnit{ID: uuid.New(), Name: "division-secret-name", ParentID: &base.ID, Overlay: &types.CeilingOverlay{
 		AllowedDomains: &[]string{"api.anthropic.com", "dropped.example"}}}
-	leaf := types.GovernanceProfile{ID: uuid.New(), Name: "team", BaseProfileID: &mid.ID, Overlay: &types.CeilingOverlay{
+	leaf := types.GovernanceUnit{ID: uuid.New(), Name: "team", ParentID: &mid.ID, Overlay: &types.CeilingOverlay{
 		AllowedDomains: &[]string{"api.anthropic.com", "other.example"}}}
-	got, err := srv.composeChain([]types.GovernanceProfile{leaf, mid, base})
+	got, err := srv.composeChain([]types.GovernanceUnit{leaf, mid, base})
 	if err != nil {
 		t.Fatalf("compose: %v", err)
 	}
@@ -230,10 +230,10 @@ func TestResolverWarningsNameTheLeafOnly(t *testing.T) {
 // TestResolverNeverInheritsAContact: a base's contact would disclose the base.
 func TestResolverNeverInheritsAContact(t *testing.T) {
 	srv := &Server{cfg: Config{DefaultPolicy: govDeployment()}}
-	base := types.GovernanceProfile{ID: uuid.New(), Name: "base"}
+	base := types.GovernanceUnit{ID: uuid.New(), Name: "base"}
 	base.Contact = govContactForTest()
-	leaf := types.GovernanceProfile{ID: uuid.New(), Name: "leaf", BaseProfileID: &base.ID, Overlay: &types.CeilingOverlay{}}
-	got, err := srv.composeChain([]types.GovernanceProfile{leaf, base})
+	leaf := types.GovernanceUnit{ID: uuid.New(), Name: "leaf", ParentID: &base.ID, Overlay: &types.CeilingOverlay{}}
+	got, err := srv.composeChain([]types.GovernanceUnit{leaf, base})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,10 +251,10 @@ func TestResolverReintersectsGrantsAgainstEachBase(t *testing.T) {
 	deployment := govDeployment()
 	deployment.EligibleGrants = []types.GrantSpec{grant("a.example"), grant("b.example")}
 	srv := &Server{cfg: Config{DefaultPolicy: deployment}}
-	base := types.GovernanceProfile{ID: uuid.New(), Name: "base", Ceiling: types.RunPolicySpec{EligibleGrants: []types.GrantSpec{grant("a.example")}}}
-	leaf := types.GovernanceProfile{ID: uuid.New(), Name: "leaf", BaseProfileID: &base.ID, Overlay: &types.CeilingOverlay{
+	base := types.GovernanceUnit{ID: uuid.New(), Name: "base", Ceiling: types.RunPolicySpec{EligibleGrants: []types.GrantSpec{grant("a.example")}}}
+	leaf := types.GovernanceUnit{ID: uuid.New(), Name: "leaf", ParentID: &base.ID, Overlay: &types.CeilingOverlay{
 		EligibleGrants: &[]types.GrantSpec{grant("a.example"), grant("b.example")}}}
-	got, err := srv.composeChain([]types.GovernanceProfile{leaf, base})
+	got, err := srv.composeChain([]types.GovernanceUnit{leaf, base})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,9 +271,9 @@ func TestResolverReintersectsGrantsAgainstEachBase(t *testing.T) {
 func TestResolverComposesOnTheDeploymentDefault(t *testing.T) {
 	deployment := govDeployment()
 	srv := &Server{cfg: Config{DefaultPolicy: deployment}}
-	leaf := types.GovernanceProfile{ID: uuid.New(), Name: "leaf", Overlay: &types.CeilingOverlay{
+	leaf := types.GovernanceUnit{ID: uuid.New(), Name: "leaf", Overlay: &types.CeilingOverlay{
 		AllowedDomains: &[]string{deployment.AllowedDomains[0]}}}
-	got, err := srv.composeChain([]types.GovernanceProfile{leaf})
+	got, err := srv.composeChain([]types.GovernanceUnit{leaf})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,9 +289,9 @@ func TestResolverComposesOnTheDeploymentDefault(t *testing.T) {
 
 func TestUnsatisfiableCompositionRefusesCreateAndPreflight(t *testing.T) {
 	post := []string{"POST"}
-	child := &types.GovernanceProfile{ID: uuid.New(), Name: "team", Overlay: &types.CeilingOverlay{AllowedMethods: &post}}
+	child := &types.GovernanceUnit{ID: uuid.New(), Name: "team", Overlay: &types.CeilingOverlay{AllowedMethods: &post}}
 	cs := assignedStore(child)
-	cs.govGraph = []types.GovernanceProfile{*child}
+	cs.govGraph = []types.GovernanceUnit{*child}
 	srv, _, audit := govEscapeFixture(t, cs)
 	// The deployment-borne base narrowed under the overlay: its methods and the overlay's are disjoint.
 	srv.cfg.DefaultPolicy.AllowedMethods = []string{"GET"}
@@ -309,17 +309,17 @@ func TestUnsatisfiableCompositionRefusesCreateAndPreflight(t *testing.T) {
 	}
 }
 
-// profileChainOfRows backs the doubles with a graph, for a test of the resolver's store reads.
+// unitChainOfRows backs the doubles with a graph, for a test of the resolver's store reads.
 func TestProfileChainDoubleMatchesTheRecursiveStatement(t *testing.T) {
-	root := types.GovernanceProfile{ID: uuid.New(), Name: "root"}
-	c1 := types.GovernanceProfile{ID: uuid.New(), Name: "c1", BaseProfileID: &root.ID, Overlay: &types.CeilingOverlay{}}
-	c2 := types.GovernanceProfile{ID: uuid.New(), Name: "c2", BaseProfileID: &c1.ID, Overlay: &types.CeilingOverlay{}}
-	c3 := types.GovernanceProfile{ID: uuid.New(), Name: "c3", BaseProfileID: &c2.ID, Overlay: &types.CeilingOverlay{}}
-	chain, err := profileChainOf([]types.GovernanceProfile{root, c1, c2, c3}, nil, c3.ID)
-	if err != nil || len(chain) != maxProfileDepth || chain[0].ID != c3.ID {
+	root := types.GovernanceUnit{ID: uuid.New(), Name: "root"}
+	c1 := types.GovernanceUnit{ID: uuid.New(), Name: "c1", ParentID: &root.ID, Overlay: &types.CeilingOverlay{}}
+	c2 := types.GovernanceUnit{ID: uuid.New(), Name: "c2", ParentID: &c1.ID, Overlay: &types.CeilingOverlay{}}
+	c3 := types.GovernanceUnit{ID: uuid.New(), Name: "c3", ParentID: &c2.ID, Overlay: &types.CeilingOverlay{}}
+	chain, err := unitChainOf([]types.GovernanceUnit{root, c1, c2, c3}, nil, c3.ID)
+	if err != nil || len(chain) != maxUnitDepth || chain[0].ID != c3.ID {
 		t.Fatalf("chain = %d rows err %v, want the leaf and two bases (bounded at 3)", len(chain), err)
 	}
-	if _, err := profileChainOf(nil, nil, c3.ID); err == nil {
+	if _, err := unitChainOf(nil, nil, c3.ID); err == nil {
 		t.Error("an unknown leaf read as a chain")
 	}
 	_ = context.Background()

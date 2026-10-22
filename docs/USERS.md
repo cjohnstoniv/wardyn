@@ -53,7 +53,7 @@ sandboxes inside the ceiling your admin set. There is nothing to install.
 - The agent you picked does not change the level, though at `L1` it can get a
   non-interactive run refused (below).
 - A run whose shape exceeds what your resolved level permits is refused
-  `governance_profile`, the same refusal a denied `task_mode` or interactive flag
+  `governance_unit`, the same refusal a denied `task_mode` or interactive flag
   already gives you — see
   [denials.md § Every denial that isn't a 404](operations/denials.md#every-denial-that-isnt-a-404).
 - A non-interactive claude-code run at `L1` is not refused for lacking
@@ -123,7 +123,7 @@ Three things worth naming here, because they read as bugs otherwise:
 - The last two are **always present**, so a missing key means an older daemon
   rather than "nothing is wrong":
   - `user_drive` — your allocation, or `null`.
-  - `user_drive_denied_by_profile` — the **door**: the name of the governance
+  - `user_drive_denied_by_unit` — the **door**: the name of the governance
     profile that refuses to mount a drive for you, or `""` when none does.
   - `user_drive_unavailable` — `""` when Wardyn could answer. Any other value is
     one of six tokens saying it could **not**, and which remedy that implies:

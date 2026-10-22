@@ -154,7 +154,7 @@ func (d *Driver) driveMount(ctx context.Context, drive *types.DriveMount, runID 
 	// has no other validating boundary. Named by DriveSubject, never
 	// drive.ObjectName: this refusal becomes the run's failure_hint verbatim,
 	// and on a SHARE the object name is the operator's absolute share path.
-	if err := runner.ValidateDriveTarget(drive.Target, drive.Backend); err != nil {
+	if err := runner.ValidateDriveTarget(drive); err != nil {
 		return nil, fmt.Errorf("docker: denied user drive (%s) -> %q: %w (%v)",
 			runner.DriveSubject(drive), drive.Target, errDriveTargetInvalid, err)
 	}
@@ -173,16 +173,22 @@ func (d *Driver) driveMount(ctx context.Context, drive *types.DriveMount, runID 
 		if err := ensureDriveVolume(ctx, d.cli, drive); err != nil {
 			return nil, err
 		}
+		// A volume at a derived path is seeded first (seedDriveVolume): a
+		// person's from the image's own drive directory, a team volume with
+		// nothing from the image. A team volume's final mount carries NoCopy
+		// too (teamDriveVolumeOptions), so no allocation, read-only or
+		// writable, copies the run's image into what the group shares.
 		if drive.Target != runner.DriveTarget {
 			if err := d.seedDriveVolume(ctx, runID, image, drive); err != nil {
 				return nil, err
 			}
 		}
 		return []mount.Mount{{
-			Type:     mount.TypeVolume,
-			Source:   drive.ObjectName,
-			Target:   drive.Target,
-			ReadOnly: drive.ReadOnly,
+			Type:          mount.TypeVolume,
+			Source:        drive.ObjectName,
+			Target:        drive.Target,
+			ReadOnly:      drive.ReadOnly,
+			VolumeOptions: teamDriveVolumeOptions(drive),
 		}}, nil
 
 	case types.DriveBackendHostPath:

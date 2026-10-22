@@ -45,14 +45,15 @@ done
 
 grep -q '^Restart=on-failure$' "$UNIT" || fail "the unit lost Restart=on-failure"
 ! grep -q '^User=' "$UNIT" || fail "the unit sets User=: it is a user unit"
-grep -q '^ExecStart=__WARDYN_RUNNERD__ serve --org ' "$UNIT" || fail "the unit does not run 'serve --org'"
+grep -q '^ExecStart=__WARDYN_RUNNERD__ serve --config __WARDYN_CONFIG__$' "$UNIT" || fail "the unit does not run 'serve --config'"
+! grep -q 'EnvironmentFile\|Environment=' "$UNIT" || fail "the unit carries settings: they are in runnerd.json"
 
 # The unit is valid once its one placeholder is replaced.
 if command -v systemd-analyze >/dev/null 2>&1; then
   # A hosted runner sets no XDG_RUNTIME_DIR and the user manager cannot start without one. Keep the path short: a long one breaks socket-unit parsing.
   RT="${XDG_RUNTIME_DIR:-}"
   [ -n "$RT" ] || { RT="$(mktemp -d /tmp/wardyn-rt.XXXXXX)"; RT_TMP="$RT"; }
-  sed 's|__WARDYN_RUNNERD__|/bin/true|g' "$UNIT" >"$WORK/rendered.service"
+  sed 's|__WARDYN_RUNNERD__|/bin/true|g; s|__WARDYN_CONFIG__|/nonexistent/runnerd.json|g' "$UNIT" >"$WORK/rendered.service"
   XDG_RUNTIME_DIR="$RT" systemd-analyze verify --user "$WORK/rendered.service" >"$WORK/verify.out" 2>&1 || fail "systemd-analyze rejected the unit: $(cat "$WORK/verify.out")"
 fi
 
@@ -107,13 +108,13 @@ STUB_EXIT=3 run_install exit --org https://wardyn.example --binary "$WORK/wardyn
 stub uname 'echo Linux'
 H="$WORK/home-linux"
 mkdir -p "$H/.config/systemd/user" "$H/.config/wardyn/runner" "$H/.local/share/wardyn/bin"
-: >"$H/.config/systemd/user/wardyn-runnerd.service"; : >"$H/.config/wardyn/runnerd.env"
+: >"$H/.config/systemd/user/wardyn-runnerd.service"; : >"$H/.config/wardyn/runnerd.env"; : >"$H/.config/wardyn/runnerd.json"
 : >"$H/.local/share/wardyn/bin/wardyn-runnerd"; : >"$H/.config/wardyn/runner/runner.json"
 : >"$H/.local/share/wardyn/bin/wardyn"; : >"$H/.config/wardyn/cli.json"
 : >"$H/.local/share/wardyn/bin/wardyn-runnerd.previous"
 run_install linux --uninstall
 [ "$RC" -eq 0 ] || fail "Linux uninstall failed (rc=$RC): $OUT"
-for gone in .config/systemd/user/wardyn-runnerd.service .config/wardyn/runnerd.env .local/share/wardyn/bin/wardyn-runnerd .local/share/wardyn/bin/wardyn-runnerd.previous; do
+for gone in .config/systemd/user/wardyn-runnerd.service .config/wardyn/runnerd.env .config/wardyn/runnerd.json .local/share/wardyn/bin/wardyn-runnerd .local/share/wardyn/bin/wardyn-runnerd.previous; do
   [ ! -e "$H/$gone" ] || fail "uninstall left $gone"
 done
 [ -e "$H/.config/wardyn/runner/runner.json" ] || fail "uninstall removed the runner identity"
@@ -127,6 +128,13 @@ mkdir -p "$X/.config/wardyn"
 printf 'WARDYN_RUNNER_STATE_DIR=%s\n' "$X/xdg/wardyn/runner" >"$X/.config/wardyn/runnerd.env"
 run_install xdgid --uninstall
 [ "$RC" -eq 0 ] && grep -qF "Kept the runner identity in: $X/xdg/wardyn/runner" <<<"$OUT" || fail "uninstall did not name the identity directory from runnerd.env (rc=$RC): $OUT"
+
+# runnerd.json names the identity directory too, and outranks the env file an earlier setup left.
+X="$WORK/home-jsonid"
+mkdir -p "$X/.config/wardyn"
+printf '{\n  "org_url": "https://wardyn.example",\n  "state_dir": "%s",\n  "internal_network": "wardyn-internal"\n}\n' "$X/xdg/wardyn/runner" >"$X/.config/wardyn/runnerd.json"
+run_install jsonid --uninstall
+[ "$RC" -eq 0 ] && grep -qF "Kept the runner identity in: $X/xdg/wardyn/runner" <<<"$OUT" && [ ! -e "$X/.config/wardyn/runnerd.json" ] || fail "uninstall did not name the identity directory from runnerd.json or left it (rc=$RC): $OUT"
 
 # A unit setup put under a custom XDG_CONFIG_HOME, because the user manager searches it, goes too.
 X="$WORK/home-xdg"
@@ -142,11 +150,11 @@ set -e
 stub uname 'echo Darwin'
 M="$WORK/home-mac"
 mkdir -p "$M/Library/LaunchAgents" "$M/Library/Application Support/wardyn/bin"
-: >"$M/Library/LaunchAgents/com.wardyn.runnerd.plist"; : >"$M/Library/Application Support/wardyn/bin/wardyn-runnerd"
+: >"$M/Library/LaunchAgents/com.wardyn.runnerd.plist"; : >"$M/Library/Application Support/wardyn/runnerd.json"; : >"$M/Library/Application Support/wardyn/bin/wardyn-runnerd"
 : >"$M/Library/Application Support/wardyn/bin/wardyn"; : >"$M/Library/Application Support/wardyn/cli.json"
 : >"$M/Library/Application Support/wardyn/bin/wardyn-runnerd.previous"
 run_install mac --uninstall
-[ "$RC" -eq 0 ] && [ ! -e "$M/Library/LaunchAgents/com.wardyn.runnerd.plist" ] && [ ! -e "$M/Library/Application Support/wardyn/bin/wardyn-runnerd" ] && [ ! -e "$M/Library/Application Support/wardyn/bin/wardyn-runnerd.previous" ] || fail "macOS uninstall left the agent, binary or rollback copy (rc=$RC): $OUT"
+[ "$RC" -eq 0 ] && [ ! -e "$M/Library/LaunchAgents/com.wardyn.runnerd.plist" ] && [ ! -e "$M/Library/Application Support/wardyn/bin/wardyn-runnerd" ] && [ ! -e "$M/Library/Application Support/wardyn/bin/wardyn-runnerd.previous" ] && [ ! -e "$M/Library/Application Support/wardyn/runnerd.json" ] || fail "macOS uninstall left the agent, binary, rollback copy or runnerd.json (rc=$RC): $OUT"
 [ -e "$M/Library/Application Support/wardyn/bin/wardyn" ] && [ -e "$M/Library/Application Support/wardyn/cli.json" ] || fail "macOS uninstall removed the person's wardyn CLI or cli.json"
 
 echo "test-runner-units: PASS"
