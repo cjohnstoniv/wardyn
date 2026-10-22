@@ -343,7 +343,11 @@ func applyUnitChange(s *Server, r *http.Request, q store.Querier, ch types.Gover
 		if err != nil {
 			return types.GovernanceUnit{}, err
 		}
-		p, res, err := s.buildGovernanceUnit(ctx, ch.ProposedBy, id, req, all, limit)
+		b, err := s.boundaryQ(ctx, q)
+		if err != nil {
+			return types.GovernanceUnit{}, err
+		}
+		p, res, err := s.buildGovernanceUnit(ch.ProposedBy, id, req, all, b, limit)
 		effective = res
 		return p, err
 	})

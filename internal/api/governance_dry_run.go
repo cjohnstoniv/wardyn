@@ -196,11 +196,15 @@ func (s *Server) applyUnitWriteQ(r *http.Request, q store.Querier, id uuid.UUID,
 	if refusal := defaultUnitWriteRefusal(id); refusal != nil {
 		return refusal
 	}
-	_, err := store.WriteGovernanceUnitQ(r.Context(), q, id, s.scopedUnitBuild(r.Context(), q, id, func(all []types.GovernanceUnit, _ []types.GovernanceMembership) (types.GovernanceUnit, error) {
+	b, err := s.boundaryQ(r.Context(), q)
+	if err != nil {
+		return err
+	}
+	_, err = store.WriteGovernanceUnitQ(r.Context(), q, id, s.scopedUnitBuild(r.Context(), q, id, func(all []types.GovernanceUnit, _ []types.GovernanceMembership) (types.GovernanceUnit, error) {
 		if refusal := s.unitPutCreateRefusal(r, id, status, all); refusal != nil {
 			return types.GovernanceUnit{}, refusal
 		}
-		p, _, err := s.buildGovernanceUnit(r.Context(), principalFromRequest(r), id, req, all, limit)
+		p, _, err := s.buildGovernanceUnit(principalFromRequest(r), id, req, all, b, limit)
 		return p, err
 	}))
 	if errors.Is(err, store.ErrConflict) {

@@ -277,6 +277,13 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 		writeServerError(w, r, "write governance profile", err)
 		return
 	}
+	// The boundary's locks, read before the write's transaction: they bind only in hard_limits, and
+	// the boundary's walls meet every run whatever a unit states.
+	b, err := s.governanceBoundary(r.Context())
+	if err != nil {
+		writeServerError(w, r, "write governance profile", err)
+		return
+	}
 	var effective *ResolvedUnit
 	var held *heldUnitWrite
 	createdBy := principalFromRequest(r)
@@ -285,7 +292,7 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 			if refusal := s.unitPutCreateRefusal(r, id, status, all); refusal != nil {
 				return types.GovernanceUnit{}, refusal
 			}
-			p, res, err := s.buildGovernanceUnit(r.Context(), createdBy, id, req, all, limit)
+			p, res, err := s.buildGovernanceUnit(createdBy, id, req, all, b, limit)
 			effective = res
 			exemptCtx := withGovernanceMemberships(r.Context(), assignments)
 			// A unit admin's new unit is empty, so it binds nobody and applies directly (DESIGN-TREE §5.2).
@@ -424,7 +431,7 @@ func composedFrom(all []types.GovernanceUnit, id uuid.UUID, comp compositionRequ
 // buildGovernanceUnit decides the row one write stores and what it resolves to, from every
 // profile as the write transaction reads them (all). Anything it returns as *unitWriteError is a
 // refusal the caller can fix; the row is stored only if it returns nil.
-func (s *Server) buildGovernanceUnit(ctx context.Context, createdBy string, id uuid.UUID, req governanceUnitRequest, all []types.GovernanceUnit, limit int) (types.GovernanceUnit, *ResolvedUnit, error) {
+func (s *Server) buildGovernanceUnit(createdBy string, id uuid.UUID, req governanceUnitRequest, all []types.GovernanceUnit, b types.Boundary, limit int) (types.GovernanceUnit, *ResolvedUnit, error) {
 	p := types.GovernanceUnit{
 		ID: id, Name: req.Name, CreatedBy: createdBy, Contact: req.contact, ContactSet: req.contactSet,
 		Mode: cmp.Or(req.Mode, storedUnitMode(all, id)), LockedKnobs: unitsByID(all)[id].LockedKnobs,
@@ -490,11 +497,7 @@ func (s *Server) buildGovernanceUnit(ctx context.Context, createdBy string, id u
 		return p, res, err
 	}
 	// Locks bind every writer, a narrowing included (governance_locks.go).
-	b, err := s.governanceBoundary(ctx)
-	if err == nil {
-		err = s.checkUnitLocks(p, res, all, b, limit)
-	}
-	return p, res, err
+	return p, res, s.checkUnitLocks(p, res, all, b, limit)
 }
 
 // storedUnitMode is the mode of the stored row id, own_walls when there is none.

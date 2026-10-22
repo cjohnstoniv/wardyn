@@ -215,7 +215,7 @@ func (s *Server) recheckApprover(ctx context.Context, r *http.Request, q store.Q
 			s.refuseStaleRoleStamp(w, r, t)
 		}}
 	}
-	fresh := withHumanIdentity(ctx, t.Principal, t.Email, t.Role, t.UserType, t.Groups, t.GroupsTruncated == nil || *t.GroupsTruncated)
+	fresh := withUnitScopeTx(withHumanIdentity(ctx, t.Principal, t.Email, t.Role, t.UserType, t.Groups, t.GroupsTruncated == nil || *t.GroupsTruncated), q)
 	if !kind.approver.allowed(s, r.WithContext(fresh)) {
 		return s.denyApprover(kind)
 	}

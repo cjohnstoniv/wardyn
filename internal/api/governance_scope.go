@@ -46,6 +46,15 @@ func (s *Server) unitAdminSubjects(ctx context.Context) (users, groups []string)
 	return users, groups
 }
 
+// unitScopeTxKey carries a transaction the unit-scope reads must use (withUnitScopeTx).
+type unitScopeTxKey struct{}
+
+// withUnitScopeTx is ctx whose unitScope reads run on q: an approver re-checked inside the decision's
+// transaction (recheckApprover) reads its scope there, not on a second connection.
+func withUnitScopeTx(ctx context.Context, q store.Querier) context.Context {
+	return context.WithValue(ctx, unitScopeTxKey{}, q)
+}
+
 // unitScopeMemoKey carries the per-request unit-scope memo (requireUnitScope installs it).
 type unitScopeMemoKey struct{}
 
@@ -78,6 +87,9 @@ func (s *Server) unitAdminStore() store.UnitAdminStore {
 // they hold a grant on unit or a unit above it (strict: above it only). It reads one recursive
 // statement per (unit, strict, identity), memoized for the request.
 func (s *Server) unitScope(ctx context.Context, unit uuid.UUID, strict bool) (bool, error) {
+	if q, ok := ctx.Value(unitScopeTxKey{}).(store.Querier); ok {
+		return s.unitScopeQ(ctx, q, unit, strict)
+	}
 	if s.isSecurityOperator(ctx) {
 		return true, nil
 	}

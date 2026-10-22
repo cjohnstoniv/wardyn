@@ -10,6 +10,7 @@ package api
 
 import (
 	"cmp"
+	"context"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -21,6 +22,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -136,6 +138,19 @@ func (s *Server) locksOver(all []types.GovernanceUnit, parent *uuid.UUID, b type
 		}
 	}
 	return out
+}
+
+// boundaryQ is the boundary read on q, a write's own transaction (governanceBoundary reads it on
+// another connection): the no_limits boundary for a store that keeps none.
+func (s *Server) boundaryQ(ctx context.Context, q store.Querier) (types.Boundary, error) {
+	if _, ok := s.cfg.Store.(store.BoundaryStore); !ok {
+		return types.Boundary{Mode: types.BoundaryNoLimits}, nil
+	}
+	b, err := store.GetBoundaryQ(ctx, q)
+	if err != nil {
+		return types.Boundary{}, fmt.Errorf("api: read the Wardyn boundary: %w", err)
+	}
+	return b, nil
 }
 
 // lockedRefusal is the 409 for a write that changes knob, locked by l.

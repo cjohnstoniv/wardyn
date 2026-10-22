@@ -94,7 +94,7 @@ func (s *Server) handleGrantUnitAdmin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r), "governance.unit_admin.granted",
-		saved.ID.String(), "success", mustJSON(s.unitAdminAuditData(r.Context(), saved, principalFromRequest(r), ""))))
+		saved.ID.String(), "success", mustJSON(s.directUnitAdminAudit(r, saved))))
 	if mode == govBypass {
 		s.recordGovernanceBypass(r, govKindUnitAdmin, saved.ID.String(), "success", nil)
 	}
@@ -144,7 +144,7 @@ func (s *Server) handleRevokeUnitAdmin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r), "governance.unit_admin.revoked",
-		removed.ID.String(), "success", mustJSON(s.unitAdminAuditData(r.Context(), removed, principalFromRequest(r), ""))))
+		removed.ID.String(), "success", mustJSON(s.directUnitAdminAudit(r, removed))))
 	if mode == govBypass {
 		s.recordGovernanceBypass(r, govKindUnitAdmin, removed.ID.String(), "success", nil)
 	}
@@ -265,7 +265,7 @@ func applyUnitAdminChange(s *Server, r *http.Request, q store.Querier, ch types.
 			return govApplied{}, err
 		}
 		return govApplied{action: "governance.unit_admin.revoked", target: removed.ID.String(),
-			data: s.unitAdminAuditData(ctx, removed, ch.ProposedBy, approver)}, nil
+			data: unitAdminAuditData(removed, ch.ProposedBy, approver)}, nil
 	}
 	saved, err := store.GrantUnitAdminQ(ctx, q, types.GovernanceUnitAdmin{
 		UnitID: p.UnitID, SubjectType: p.SubjectType, Subject: p.Subject, GrantedBy: ch.ProposedBy, ApprovedBy: approver})
@@ -276,16 +276,24 @@ func applyUnitAdminChange(s *Server, r *http.Request, q store.Querier, ch types.
 		return govApplied{}, err
 	}
 	return govApplied{action: "governance.unit_admin.granted", target: saved.ID.String(),
-		data: s.unitAdminAuditData(ctx, saved, ch.ProposedBy, approver)}, nil
+		data: unitAdminAuditData(saved, ch.ProposedBy, approver)}, nil
 }
 
-// unitAdminAuditData is a grant or revoke row's data: the grant, the actor who proposed it, the scope
-// they acted in and who approved it ("" when it applied directly).
-func (s *Server) unitAdminAuditData(ctx context.Context, g types.GovernanceUnitAdmin, actor, approver string) map[string]any {
+// unitAdminAuditData is a grant or revoke row's data: the grant, the actor who proposed it and who
+// approved it ("" when it applied directly). unit_scope, the scope it was decided in, is read outside
+// the write's transaction: by directUnitAdminAudit, and by the decision for an approved change.
+func unitAdminAuditData(g types.GovernanceUnitAdmin, actor, approver string) map[string]any {
 	return map[string]any{
-		"unit_id": g.UnitID, "subject_type": g.SubjectType, "subject": g.Subject,
-		"actor": actor, "unit_scope": s.auditUnitScope(ctx, g.UnitID, true), "approver": approver,
+		"unit_id": g.UnitID, "subject_type": g.SubjectType, "subject": g.Subject, "actor": actor, "approver": approver,
 	}
+}
+
+// directUnitAdminAudit is the row data of a grant or revoke that applied directly: the caller is its
+// actor, in the scope strictly above the granted unit, and no one approved it.
+func (s *Server) directUnitAdminAudit(r *http.Request, g types.GovernanceUnitAdmin) map[string]any {
+	data := unitAdminAuditData(g, principalFromRequest(r), "")
+	data["unit_scope"] = s.auditUnitScope(r.Context(), g.UnitID, true)
+	return data
 }
 
 // auditUnitScope is the scope a caller writes a unit in, for its audit row: "security" for a security
