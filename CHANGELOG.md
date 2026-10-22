@@ -48,6 +48,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **The compose services drop `NET_RAW`, and the desktop tier no longer publishes ports 5432, 5010 and 8081 on the
   host.** Use `docker exec` or your own override. A custom image on those services that needs raw sockets adds
   `cap_add: [NET_RAW]`. Desktop packages need Docker Compose 2.24.4 or newer.
+- **Rebuild the Linux VM guest image (`vm-linux`) with each runner upgrade.** A guest image older than the runner fails
+  to boot, because its guest agent does not answer the runner's session handshake. Linux VM runs stay off unless
+  `WARDYN_RUNNER_LINUX_VM` is set.
 - **`WARDYN_ATTACH_LOCAL` is off by default.** Set it to `on` on `wardynd` and `wardyn attach <run-id>` keeps the
   terminal on this computer when the run is on your own runner here and the organisation allows it. The organisation
   still admits, records and audits the session. Left off, attach goes through the organisation as before.
