@@ -59,6 +59,9 @@ export const NR_REVIEW = {
     "The web app gateway is off on this server, so this run's apps can't be opened. Ask your admin to turn it on.",
   TIMING_INTERACTIVE: "Interactive · Starts when launched",
   TIMING_NOW: "Autonomous · Run now",
+  TIMING_STARTS: (when: string | number) => `Autonomous · Starts ${when}`,
+  TIMING_CHOOSE: "Autonomous · Choose a start time",
+  TIMING_CHECKED: "Checked again when it starts.",
   WHERE_VALUE: (pool: string | number) => `${pool} pool`,
   /** The Where row when no pool is chosen: the pool-required blocker points at it (#3043). */
   WHERE_NONE: "No pool chosen yet",

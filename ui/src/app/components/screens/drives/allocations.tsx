@@ -102,6 +102,7 @@ export function AllocationsBlock({
   grants,
   grantTotal = 0,
   collapsed,
+  teamDrives = false,
   onChanged,
 }: {
   drives: UserDriveListItem[];
@@ -121,6 +122,8 @@ export function AllocationsBlock({
   grantTotal?: number;
   /** The drive editor is open: the add form collapses for exactly that span. */
   collapsed: boolean;
+  /** storage.user_drive.team_drives: an allocation of a team drive carries its write bit. */
+  teamDrives?: boolean;
   onChanged: () => void;
 }) {
   // The tier gate off the context this block already sits inside, not drilled
@@ -234,7 +237,7 @@ export function AllocationsBlock({
             </Button>
           </div>
         ) : (
-          <AddAllocationForm drives={drives} onChanged={onChanged} />
+          <AddAllocationForm drives={drives} teamDrives={teamDrives} onChanged={onChanged} />
         )}
       </section>
 
@@ -314,7 +317,15 @@ function Overrides({ grant: g }: { grant: UserDriveGrant }) {
 // whole block renders only once a drive exists to allocate (drives-screen.tsx),
 // so the case the teal had to be handed back for — an empty registry, where the
 // drives empty state's New drive carries it — never reaches this form.
-function AddAllocationForm({ drives, onChanged }: { drives: UserDriveListItem[]; onChanged: () => void }) {
+function AddAllocationForm({
+  drives,
+  teamDrives,
+  onChanged,
+}: {
+  drives: UserDriveListItem[];
+  teamDrives: boolean;
+  onChanged: () => void;
+}) {
   const disabled = !useOperator();
   /** The last upsert repointed an existing row (a 200, not a 201). Lives HERE,
    *  with the fields it is a note about: the form unmounts wholesale while the
@@ -346,6 +357,11 @@ function AddAllocationForm({ drives, onChanged }: { drives: UserDriveListItem[];
   const whoHint = SUBJECTS.find((s) => s.value === subjectType)?.hint ?? "";
   const userTier = subjectType === "user";
   const ready = !!driveID && (subjectType === "all" || !!subject.trim());
+  // A team drive's allocation carries the drive's write bit (the editor's one
+  // toggle) and sits beside the group's other drives; the server refuses any
+  // subject but a group, in its own words.
+  const team = teamDrives && !!drives.find((d) => d.id === driveID)?.team;
+  const teamWrite = !!drives.find((d) => d.id === driveID)?.writable;
 
   const submit = async () => {
     setSaving(true);
@@ -363,6 +379,7 @@ function AddAllocationForm({ drives, onChanged }: { drives: UserDriveListItem[];
         // tier, which may not carry one at all — see homeTouched above.
         ...(userTier && homeTouched ? { home_override: homeOverride.trim() } : {}),
         enabled,
+        ...(team ? { additional: true, members_can_write: teamWrite } : {}),
       });
       // F4-F7 (Appendix A V8): only `subject` was reset — sizeOverride/
       // writable/homeOverride/homeTouched/enabled persisted across submits,

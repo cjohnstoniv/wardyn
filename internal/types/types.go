@@ -90,13 +90,16 @@ var SlotHoldingRunStates = []RunState{RunPending, RunStarting, RunRunning, RunWa
 
 // RunQueue is what a QUEUED run says about its wait: the pool, when it joined, when its wait ends,
 // how many runs are ahead of it in that pool (a count, never whose) and the wait reason token
-// (runner_pool_at_capacity, runner_pool_no_runner_free, runner_pool_runners_at_capacity or runner_pool_recording_store_off).
+// (runner_pool_at_capacity, runner_pool_no_runner_free, runner_pool_runners_at_capacity, runner_pool_recording_store_off,
+// scheduled or owner_sign_in). A scheduled run also carries its start time and the time zone it was given in.
 type RunQueue struct {
-	PoolID     uuid.UUID `json:"pool_id"`
-	QueuedAt   time.Time `json:"queued_at"`
-	DeadlineAt time.Time `json:"deadline_at"`
-	Position   int       `json:"position"`
-	Reason     string    `json:"reason"`
+	PoolID     uuid.UUID  `json:"pool_id"`
+	QueuedAt   time.Time  `json:"queued_at"`
+	DeadlineAt time.Time  `json:"deadline_at"`
+	Position   int        `json:"position"`
+	Reason     string     `json:"reason"`
+	StartAt    *time.Time `json:"start_at,omitempty"`
+	TimeZone   string     `json:"time_zone,omitempty"`
 }
 
 // PauseReason says why a run's agent is frozen (AgentRun.PausedReason).
@@ -225,8 +228,8 @@ type AgentRun struct {
 	LifetimeCapSource LimitSource `json:"-"`
 	WaitBudgetSec     int         `json:"wait_budget_sec,omitempty"` // how long an approval this run raises stays open; 0 = deployment default alone applies
 	// RunLimits are the owner's profile limits as they stood at create; later clamps use these captured bounds, never the profile's current ones.
-	RunLimits           RunLimits  `json:"run_limits"`
-	GovernanceProfileID *uuid.UUID `json:"governance_profile_id,omitempty"`
+	RunLimits RunLimits  `json:"run_limits"`
+	UnitID    *uuid.UUID `json:"unit_id,omitempty"`
 	// LostAt/LostReason mark a run that lost its sandbox but is kept (no proxy/network, files stay); stays RUNNING until a kill or the ended-run grace.
 	LostAt     *time.Time `json:"lost_at,omitempty"`
 	LostReason LostReason `json:"lost_reason,omitempty"`

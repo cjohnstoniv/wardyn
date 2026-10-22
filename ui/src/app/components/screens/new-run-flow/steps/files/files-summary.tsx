@@ -30,6 +30,8 @@ export interface SummaryFacts {
   /** Names of the included drives and folders: the ones whose changes are kept. */
   keptDrives: readonly string[];
   life: Lifecycle;
+  /** The run keeps its work folder as a drive (keep_work_folder). */
+  keepsWork?: boolean;
 }
 
 /** "A", "A and B", "A, B and C", from the canon's two joiners. */
@@ -39,7 +41,11 @@ export function listNames(names: readonly string[]): string {
 }
 
 export function summaryText(f: SummaryFacts): string {
-  const life = lifeFragment(f.life);
+  const own = lifeFragment(f.life);
+  // Keeping the work folder replaces "deleted when the run ends"; any other lifecycle is told as it was, with the keep after it.
+  const keep = !f.keepsWork ? undefined : own && f.life.kind !== "deleted" ? NR_SHARED.JOIN(own, NR_FILES.KEEP_SUMMARY) : NR_FILES.KEEP_SUMMARY;
+  const life = keep ?? own;
+  if (f.noExtra && keep) return [NR_FILES.SUMMARY_MAIN(f.size), NR_FILES.SUMMARY_STARTS(NR_FILES.KEEP_STARTS_MAIN), keep].reduce((all, p) => NR_SHARED.JOIN(all, p));
   if (f.noExtra) return life ? NR_FILES.SUMMARY_NO_EXTRA(f.size, life) : NR_FILES.SUMMARY_MAIN(f.size);
   if (!f.chosen || !f.startsName) return NR_FILES.CHOOSE_FILES;
   const parts = [

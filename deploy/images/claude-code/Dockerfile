@@ -53,7 +53,9 @@ RUN if [ -f /corp-ca/corp-ca.pem ]; then \
 
 # Cache module downloads before the full source copy (layer cache friendly).
 COPY go.mod go.sum ./
-RUN go mod download
+# Bounded retry of the module FETCH only (a proxy stream error is transient); go.sum still
+# verifies every module, and no build or test step is ever retried.
+RUN for i in 1 2 3; do go mod download && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done
 
 # Full source tree needed to build the two binaries.
 COPY . .

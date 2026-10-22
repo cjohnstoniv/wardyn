@@ -391,8 +391,8 @@ func rootCmd() *cobra.Command {
 		deviceCmd(client),
 		runnerCmd(client, sess),
 		supportBundleCmd(client),
-		doctorCmd(client),
 		caCmd(client),
+		doctorCmd(client),
 	)
 	return root
 }

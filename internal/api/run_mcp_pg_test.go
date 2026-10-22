@@ -38,7 +38,7 @@ func TestRunComponents_MCPHarnessesPersistAndRevive(t *testing.T) {
 		{snapshot: types.RunComponent{SelfDefined: true, Owner: "sub-pg-mcp-other", Name: "Beta", Definition: mcp("mcp.beta.test"),
 			MCPHarnesses: []string{"claude-code", "codex-cli"}}},
 	}}
-	out := dispatchMCP(comps.dispatch().MCP, &[]runner.InjectionGrant{}, "http://wardyn-proxy:3128", false, map[string]string{})
+	out := dispatchMCP(comps.dispatch().MCP, withholding{}, &[]runner.InjectionGrant{}, "http://wardyn-proxy:3128", false, map[string]string{})
 	cfgJSON, err := runner.BuildProxyConfig(run.ID, runner.ProxyConfig{RunToken: "old", ControlPlaneURL: "http://127.0.0.1:8081",
 		MCPServers: out.servers, MCPBindings: out.bindings}, runner.ProxyListenPort)
 	if err != nil {

@@ -34,12 +34,16 @@ export interface MeDrive {
   team: boolean;
   /** On a team drive, the caller's own groups that carry its allocation. */
   shared_with?: string[];
+  /** The run whose work folder this drive kept (keep_work_folder); absent on a drive made by hand. */
+  kept_from_run?: string;
+  /** That run's title when the catalogue was read; absent when the run is gone or untitled. */
+  kept_from_run_title?: string;
 }
 
 /** GET /me/drives (pkg/client.MeDriveCatalogue). */
 export interface MeDriveCatalogue {
   drives: MeDrive[];
-  denied_by_profile?: string;
+  denied_by_unit?: string;
   unavailable?: string;
   pool_checked: boolean;
   /** Whether the caller may create a drive now; absent when the caller is not a person. */
@@ -49,7 +53,7 @@ export interface MeDriveCatalogue {
 /** Why a person cannot create a drive now (pkg/client.MemberDriveCreateReason). */
 export type MemberDriveCreateReason =
   | "disabled"
-  | "denied_by_profile"
+  | "denied_by_unit"
   | "limit_reached"
   | "unsupported"
   | "delete_unavailable"
@@ -61,11 +65,15 @@ export interface MemberDriveCreate {
   allowed: boolean;
   /** Set exactly when allowed is false. */
   reason?: MemberDriveCreateReason;
-  denied_by_profile?: string;
+  denied_by_unit?: string;
   /** The caller's drives, one being deleted included. */
   count: number;
   /** Drives per person; 0 when the switch is off. */
   limit: number;
+  /** The keep_main_drive switch, reported whether or not allowed. */
+  keep_work_folder: boolean;
+  /** What binds a new drive's size here; "none" on Docker. */
+  enforcement?: StorageEnforcement;
 }
 
 /** Reads the caller's drive catalogue, checked against runnerPoolId when given. */

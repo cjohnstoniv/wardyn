@@ -773,7 +773,8 @@ var attachCloseGrace = 3 * time.Second
 // server just closed the session), it waits up to grace for the output half,
 // which reads the close, and prefers that close: the reason the server gave
 // (session ended, taken over, lease lost, 4409) is what the person sees, as
-// DESIGN-ATTACH 4.4 rows 18-19 require.
+// DESIGN-ATTACH 4.4 rows 18-19 require. An output half that ended cleanly (the
+// local pipe, which has no close frame) means the shell exited first, so that is the end shown.
 func settleAttachEnd(first error, out <-chan error, grace time.Duration) error {
 	if first == nil || websocket.CloseStatus(first) != -1 {
 		return first
@@ -782,7 +783,7 @@ func settleAttachEnd(first error, out <-chan error, grace time.Duration) error {
 	defer t.Stop()
 	select {
 	case err := <-out:
-		if websocket.CloseStatus(err) != -1 {
+		if err == nil || websocket.CloseStatus(err) != -1 {
 			return err
 		}
 	case <-t.C:

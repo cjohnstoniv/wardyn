@@ -25,11 +25,11 @@ func TestMeUnavailableReasonPrecedence(t *testing.T) {
 		// matches on user subjects alone": the group snapshot is unreadable AND
 		// a group-tier grant exists, so the drive resolver refuses rather than
 		// serving an answer that was decided by which groups happened to fit.
-		// hasGroupTierAssignments makes the CEILING resolve fail for the same
+		// hasGroupTierMemberships makes the CEILING resolve fail for the same
 		// reason, which is what makes this the one state where the two failures
 		// carry different tokens.
 		st := &driveStore{
-			hasGroupTier: true, userTierOnly: true, hasGroupTierAssignments: true,
+			hasGroupTier: true, userTierOnly: true, hasGroupTierMemberships: true,
 		}
 		srv, _ := driveRunServer(st, "docker")
 		ud, denied, reason := meDriveBody(t, srv, driveMemberCtx(nil, true))
@@ -45,7 +45,7 @@ func TestMeUnavailableReasonPrecedence(t *testing.T) {
 			t.Errorf("user_drive = %v, want null — an unknown door must not ship beside an allocation", ud)
 		}
 		if denied != "" {
-			t.Errorf("user_drive_denied_by_profile = %q, want empty — no profile was read", denied)
+			t.Errorf("user_drive_denied_by_unit = %q, want empty — no profile was read", denied)
 		}
 	})
 
@@ -58,7 +58,7 @@ func TestMeUnavailableReasonPrecedence(t *testing.T) {
 	// operator) while POST /runs said 403 groups_snapshot_stale (sign in
 	// again). Executed on both the old and the new tree with identical output
 	// before this fix: the layer was wrong, not the comparison. The ceiling's
-	// error is the only component that knows, and userDriveDeniedByProfile
+	// error is the only component that knows, and userDriveDeniedByUnit
 	// returned a bare bool that discarded it.
 	t.Run("a per-user drive on a group-governed deployment keeps the launch path's token", func(t *testing.T) {
 		d := driveFixture(nil)
@@ -68,7 +68,7 @@ func TestMeUnavailableReasonPrecedence(t *testing.T) {
 			drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser,
 			// …while governance IS assigned by group, so the ceiling cannot be
 			// resolved for a snapshot that was truncated at the cookie cap.
-			hasGroupTierAssignments: true,
+			hasGroupTierMemberships: true,
 		}
 		srv, _ := driveRunServer(st, "docker")
 		ctx := driveMemberCtx(nil, true)
@@ -83,7 +83,7 @@ func TestMeUnavailableReasonPrecedence(t *testing.T) {
 			t.Errorf("user_drive = %v beside an unknown door, want null — the suppression is unconditional", ud)
 		}
 		if denied != "" {
-			t.Errorf("user_drive_denied_by_profile = %q, want empty — no profile was read", denied)
+			t.Errorf("user_drive_denied_by_unit = %q, want empty — no profile was read", denied)
 		}
 
 		// And the launch really does say that, asserted rather than assumed:
@@ -114,9 +114,9 @@ func TestMeUnavailableReasonPrecedence(t *testing.T) {
 	})
 }
 
-// governance_profiles.name is TEXT NOT NULL UNIQUE with no non-empty CHECK, so a
+// governance_units.name is TEXT NOT NULL UNIQUE with no non-empty CHECK, so a
 // profile with DenyUserDrive set and a blank name reports ("", true) from
-// driveDoorProfile. userDriveDeniedByProfile discarded the bool, so the name key
+// driveDoorProfile. userDriveDeniedByUnit discarded the bool, so the name key
 // shipped "" — which the documented contract reads as "no profile denies you" —
 // beside a fully populated, WRITABLE user_drive, while POST /runs with
 // drive.enabled answered 403 'mounting a user drive is not allowed by your
@@ -128,7 +128,7 @@ func TestMeBlankNamedDenyProfile(t *testing.T) {
 	t.Run("a shut door with no name to quote does not read as open", func(t *testing.T) {
 		st := &driveStore{
 			drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser,
-			profile: &types.GovernanceProfile{Name: "", Limits: types.GovernanceLimits{DenyUserDrive: true}},
+			profile: &types.GovernanceUnit{Name: "", Limits: types.GovernanceLimits{DenyUserDrive: true}},
 		}
 		srv, _ := driveRunServer(st, "docker")
 		ud, denied, _ := meDriveBody(t, srv, driveMemberCtx([]string{"eng"}, false))
@@ -138,7 +138,7 @@ func TestMeBlankNamedDenyProfile(t *testing.T) {
 				"the card draws a checkbox for a mount POST /runs answers 403 for", ud)
 		}
 		if denied != "" {
-			t.Errorf("user_drive_denied_by_profile = %q, want empty — there is no name to quote, which is "+
+			t.Errorf("user_drive_denied_by_unit = %q, want empty — there is no name to quote, which is "+
 				"exactly why this state takes the door-unknown path instead", denied)
 		}
 	})
@@ -150,12 +150,12 @@ func TestMeBlankNamedDenyProfile(t *testing.T) {
 	t.Run("a named deny still names the profile and keeps the allocation", func(t *testing.T) {
 		st := &driveStore{
 			drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser,
-			profile: &types.GovernanceProfile{Name: "contractors", Limits: types.GovernanceLimits{DenyUserDrive: true}},
+			profile: &types.GovernanceUnit{Name: "contractors", Limits: types.GovernanceLimits{DenyUserDrive: true}},
 		}
 		srv, _ := driveRunServer(st, "docker")
 		ud, denied, _ := meDriveBody(t, srv, driveMemberCtx([]string{"eng"}, false))
 		if denied != "contractors" {
-			t.Errorf("user_drive_denied_by_profile = %q, want %q", denied, "contractors")
+			t.Errorf("user_drive_denied_by_unit = %q, want %q", denied, "contractors")
 		}
 		if ud == nil {
 			t.Error("a named deny suppressed the allocation — the two keys are deliberately independent, and a " +

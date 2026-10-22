@@ -43,7 +43,7 @@ describe("Policy tab copy (S-1..S-48)", () => {
     expect(CHANGE_HEADING.git_broker).toBe("Routed through Wardyn's GitHub connection");
     expect(CHANGE_HEADING.model_access).toBe("Added so the agent can reach its model");
     expect(CHANGE_HEADING.mirror).toBe("Switched to your organization's package mirror");
-    expect(CHANGE_HEADING.profile("walled")).toBe("Limited by the walled governance profile");
+    expect(CHANGE_HEADING.unit("walled")).toBe("Limited by the walled governance profile");
     expect(CHANGE_HEADING.restart("Sep 29, 2026")).toBe("Blocked when the run was restarted on Sep 29, 2026");
     expect(CHANGE_HEADING.org_disk).toBe("Disk size set from your organization's default");
     expect(CHANGE_HEADING.pool_disk).toBe("Disk size set from this pool's default");

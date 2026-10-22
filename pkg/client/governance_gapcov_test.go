@@ -20,18 +20,18 @@ func TestApplyGovernanceGapCovRefusesABaseCycleBeforeWriting(t *testing.T) {
 	aID := uuid.MustParse("00000000-0000-0000-0000-00000000c0a1")
 	bID := uuid.MustParse("00000000-0000-0000-0000-00000000c0b2")
 	for name, doc := range map[string]client.GovernanceDocument{
-		"two profiles on each other": {Profiles: []client.GovernanceProfile{
-			{ID: aID, Name: "alpha", BaseProfileID: &bID},
-			{ID: bID, Name: "beta", BaseProfileID: &aID},
+		"two profiles on each other": {Units: []client.GovernanceUnit{
+			{ID: aID, Name: "alpha", ParentID: &bID},
+			{ID: bID, Name: "beta", ParentID: &aID},
 		}},
-		"a profile on itself": {Profiles: []client.GovernanceProfile{
-			{ID: aID, Name: "alpha", BaseProfileID: &aID},
+		"a profile on itself": {Units: []client.GovernanceUnit{
+			{ID: aID, Name: "alpha", ParentID: &aID},
 		}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			g := &graphFake{}
 			res, err := g.client(t).ApplyGovernanceResult(context.Background(), doc, false)
-			if err == nil || !strings.Contains(err.Error(), "is part of a base_profile_id cycle") {
+			if err == nil || !strings.Contains(err.Error(), "is part of a parent_id cycle") {
 				t.Fatalf("ApplyGovernanceResult err = %v, want the cycle refusal", err)
 			}
 			if len(g.writes) != 0 || len(res.Pending) != 0 {
@@ -44,11 +44,11 @@ func TestApplyGovernanceGapCovRefusesABaseCycleBeforeWriting(t *testing.T) {
 // Prune deletes a stored profile whose base is not among the stored profiles, rather than stalling on
 // the missing base.
 func TestApplyGovernanceGapCovPruneDeletesAProfileWhoseBaseIsGone(t *testing.T) {
-	orphan := client.GovernanceProfile{
+	orphan := client.GovernanceUnit{
 		ID: uuid.MustParse("00000000-0000-0000-0000-00000000c0c3"), Name: "orphan",
-		BaseProfileID: ptr(uuid.MustParse("00000000-0000-0000-0000-00000000c0d4")),
+		ParentID: ptr(uuid.MustParse("00000000-0000-0000-0000-00000000c0d4")),
 	}
-	g := &graphFake{profiles: []client.GovernanceProfile{orphan}}
+	g := &graphFake{profiles: []client.GovernanceUnit{orphan}}
 
 	if _, err := g.client(t).ApplyGovernance(context.Background(), client.GovernanceDocument{}, true); err != nil {
 		t.Fatalf("prune: %v", err)

@@ -76,3 +76,29 @@ func TestValidateDriveTarget_RefusesWhatIsNotDerived(t *testing.T) {
 		}
 	}
 }
+
+// TestValidateDriveTarget_WorkFolderManagedOnly: a managed drive that is not a team
+// drive may mount at the work folder (keep_work_folder); a share never may, nor anywhere above it.
+func TestValidateDriveTarget_WorkFolderManagedOnly(t *testing.T) {
+	for _, b := range []types.DriveBackend{types.DriveBackendDockerVolume, types.DriveBackendK8sPVC} {
+		if err := ValidateDriveTarget(&types.DriveMount{Target: "/home/agent/work", Backend: b}); err != nil {
+			t.Errorf("ValidateDriveTarget(/home/agent/work, %s) = %v, want nil", b, err)
+		}
+	}
+	for _, c := range []struct {
+		target  string
+		backend types.DriveBackend
+		team    bool
+	}{
+		{"/home/agent/work", types.DriveBackendHostPath, false},
+		{"/home/agent/work", types.DriveBackendK8sPVCStatic, false},
+		{"/home/agent/work", types.DriveBackendDockerVolume, true},
+		{"/home/agent", types.DriveBackendDockerVolume, false},
+		{"/tmp", types.DriveBackendDockerVolume, false},
+		{"/home/agent/.claude", types.DriveBackendK8sPVC, false},
+	} {
+		if err := ValidateDriveTarget(&types.DriveMount{Target: c.target, Backend: c.backend, Team: c.team}); err == nil {
+			t.Errorf("ValidateDriveTarget(%q, %s, team=%v) = nil, want a refusal", c.target, c.backend, c.team)
+		}
+	}
+}

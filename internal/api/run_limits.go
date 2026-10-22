@@ -62,9 +62,9 @@ func runLimitsRefusal(l types.RunLimits) string {
 func (s *Server) captureRunLimits(run *types.AgentRun, ceiling governanceCeiling, end *createEnd) {
 	l := ceiling.Limits.RunLimits
 	run.RunLimits = l
-	if ceiling.Profile != nil {
-		id := ceiling.Profile.ID
-		run.GovernanceProfileID = &id
+	if ceiling.Unit != nil {
+		id := ceiling.Unit.ID
+		run.UnitID = &id
 	}
 	if end != nil {
 		if end.endSec != nil {

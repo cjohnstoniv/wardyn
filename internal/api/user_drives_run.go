@@ -138,7 +138,7 @@ func (s *Server) refuseDrive(w http.ResponseWriter, status int, reason, member s
 // driveDoorProfile names the governance profile whose DenyUserDrive DOOR is
 // shut for this caller, or "" when the door is open. ONE predicate, read by
 // the enforcement path (userDriveDoorRefusal's 403) and the display path
-// (userDriveDeniedByProfile, the /me field) alike: this is an authz rule, and
+// (userDriveDeniedByUnit, the /me field) alike: this is an authz rule, and
 // two spellings of one authz rule is one place a widening can hide.
 //
 // Keyed on ceiling.Profile != nil, the scoping rule every limit in
@@ -167,17 +167,17 @@ func (s *Server) driveDoorProfile(ctx context.Context, ceiling governanceCeiling
 // every previewed principal. Two spellings of one authz rule is one place a
 // widening can hide, so the rule stays here and only the exemption moves.
 func driveDoorShut(ceiling governanceCeiling) (string, bool) {
-	if ceiling.Profile == nil || !ceiling.Limits.DenyUserDrive {
+	if ceiling.Unit == nil || !ceiling.Limits.DenyUserDrive {
 		return "", false
 	}
 	// The DECISION is the bool, never the name: a profile row's name is TEXT NOT
 	// NULL UNIQUE with no non-empty CHECK, so returning the name alone made a
 	// blank-named profile with DenyUserDrive set read as "no door" and fail OPEN
 	// at the enforcement site. The name is display only.
-	return ceiling.Profile.Name, true
+	return ceiling.Unit.Name, true
 }
 
-// driveDeniedByProfileMsg is the door's frozen member sentence
+// driveDeniedByUnitMsg is the door's frozen member sentence
 // (DRIVE_MEMBER.DENIED_DRIVE), composed once because two surfaces ship it: the
 // enforcement 403 below and the admin preview, which answers a claim set the
 // door would refuse with the same bytes rather than a paraphrase.
@@ -187,7 +187,7 @@ func driveDoorShut(ceiling governanceCeiling) (string, bool) {
 // the rule ValidateAuthoredTarget's reserved-target refusal already follows, and
 // the canon module (ui/src/app/lib/user-drives-copy.ts) carries none. The wire
 // bytes are the canon's bytes; the console renders `drive` as mono itself.
-func driveDeniedByProfileMsg(profile string) string {
+func driveDeniedByUnitMsg(profile string) string {
 	return fmt.Sprintf("mounting a user drive is not allowed by your governance profile %q. Launch without drive.", profile)
 }
 

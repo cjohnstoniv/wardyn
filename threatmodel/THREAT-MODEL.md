@@ -1,6 +1,6 @@
 # Wardyn Published Threat Model
 
-**Version:** v2 (tracks the shipped codebase; last reviewed at v0.9.7)
+**Version:** v2 (tracks the shipped codebase; last reviewed at v0.9.8)
 **Status:** published alongside the codebase.
 
 **Implementation status markers.** Controls are tagged inline: **[shipped]**
@@ -211,7 +211,7 @@ coverage verdict pointing back into this document.
 7. **The delegation chain** (`sub=human`, `act=agent-run-SPIFFE-ID`) —
    attribution integrity; target of the IETF delegation-chain-splicing attack
    class (March 2026).
-8. **The authorization source itself — `role_mappings` and `governance_profiles`**
+8. **The authorization source itself — `role_mappings` and `governance_units`**
    (migrations `0051_role_mappings.sql`, `0052_governance_profiles.sql`,
    `0053_role_mappings_security_admin.sql`).
    - Ranked LAST by immediacy and near the top by consequence: since v0.7 the role a session
@@ -1194,7 +1194,7 @@ ADMIN pre-authorized** —
   - A governance profile can shut the door outright: `GovernanceLimits.DenyUserDrive`
     ([`internal/types/governance.go`](../internal/types/governance.go)) refuses the mount for every
     member under that profile as an audited `403` (`userDriveDoorRefusal` — `authz.denied`, reason
-    `governance_profile`, target `runs.drive`, no new `reason` enum value).
+    `governance_unit`, target `runs.drive`, no new `reason` enum value).
 - **Read-only is TOP-LEVEL on a runtime that does not declare `rro`.**
   - A bind's `ro` reaches SUBMOUNTS only where the runtime declares the OCI recursive read-only
     mount option, and the daemon refuses the create outright for one that does not.
@@ -1391,6 +1391,16 @@ ADMIN pre-authorized** —
   - It resolves through an in-memory user-tier grant to its owner, so the home, object name and subject hash are the ones delete reclaims.
   - A drive being deleted (tombstoned) is not reachable.
   - A member drive is never the legacy drive.
+- **Keeping a run's work folder (`keep_work_folder`, #1991).** Off by default: it needs member drives on and `storage.user_drive.member_create.keep_main_drive`.
+  - The run's person gets a new member drive, counted at their limit, mounted at the harness's working directory, `/home/agent/work`, in place of scratch.
+  - Home, agent settings and `/tmp` stay the sandbox's and are not kept.
+  - Whatever the agent writes in the work folder persists in that drive and comes back on every later run that mounts it.
+  - That includes any token, key or script the agent wrote there, such as an `env_secret` value it copied into a file; the later run's agent can read or run it.
+  - That includes harness project files such as `.claude/settings.json` hooks, `.mcp.json` and `CLAUDE.md`: a later run's harness loads them itself, so what one run writes there can steer the next. Turning keep off stops new keeps only: a drive already kept comes back whenever it is attached, until it is emptied or deleted.
+  - Wardyn doesn't put secrets on the kept drive, but anything the run can read and writes into the work folder stays on it.
+  - Delivered file secrets land only in `/run/wardyn/secrets` (`ComponentSecretDir`), which no mount can cover, and managed settings only in `/etc/claude-code`.
+  - Git credentials are brokered by default: the proxy mints them, and a repo cloned into the work folder holds none in its config. With `WARDYN_GIT_PAT_BROKER=off`, a `git_pat` reaches git through the helper, in memory, never in a file. SSH keys stay in the proxy.
+  - A queued keep run's drive commits with its queue row, so a promotion never starts the run without its drive.
 - (a) Erasure now reaches a person's own drives.
   - The delete goes through the member delete path (tombstone, lifecycle check, in-use check, row last), so an erasure cannot leave a stranded volume or skip the check.
 - (b) A SCIM purge only lists a leaver's drives.
@@ -1409,7 +1419,7 @@ ADMIN pre-authorized** —
     - `newResolvedDrive` treats a row as team only when the row says `team` AND the switch is on; otherwise it resolves per person, as before ([`internal/api/user_drives_resolve.go`](../internal/api/user_drives_resolve.go)).
     - With the switch off, a `team: true` drive write is a `422` (`driveTeamWriteRefusal`, [`internal/api/user_drives_team.go`](../internal/api/user_drives_team.go)).
   - It is admin-made and allocated to groups only.
-    - Drive writes are super-admin routes. Postgres keeps a team row an admin share with no owner (`user_drives_team_shape`, migration `0212_user_drives_team.sql`).
+    - Drive writes are super-admin routes. Postgres keeps a team row an admin share with no owner (`user_drives_team_shape`, migration `0205_user_drives_team.sql`).
     - `types.ValidateTeamDriveGrant` refuses any subject type but `group`, and any `home_override`, at the grant write (`teamDriveGrantAllowed`), and `teamResolvedDrive` runs it again at resolution, so a row written around the boundary mounts nothing.
   - It is read-only unless a super admin sets `members_can_write`, and the drive itself must be writable.
     - `newResolvedDrive` folds a team allocation to `writable && members_can_write && drive.writable`, so an allocation's `writable_override` cannot open a read-only team drive.
@@ -2583,7 +2593,7 @@ hiding them would repeat the failure mode we are designed to avoid.
       - Its traffic still leaves through the run's proxy and egress policy. Its hosts join the run's allowlist as raw egress (so the agent can reach them too), with no broker route in front of them (`rawEgressHosts`).
       - The broker never sees its tool calls, so the harness applies the run's rules to them, and the in-sandbox relay that asks is cooperative.
       - Hold or block rules on its tools are refused at create where the harness can't apply them: Codex CLI in any mode, and any harness a command starts (`localMCPRulesRefusal`, [`internal/api/run_harness_tool_rules.go`](../internal/api/run_harness_tool_rules.go)).
-      - The person chooses which package runs. An `npx` package must pin one exact version (`validateLocal`, [`internal/types/component.go`](../internal/types/component.go)), which bounds that supply-chain risk but does not remove it; an absolute program in the image is trusted as the image is.
+      - The person chooses which package runs. An `npx` package must pin one exact version (`validateLocal`, [`internal/types/component_mcp.go`](../internal/types/component_mcp.go)), which bounds that supply-chain risk but does not remove it; an absolute program in the image is trusted as the image is.
 
 65. **Behind a shared ingress every runner connection shares one pre-auth address, so one unauthenticated peer can hold that address's handshake bound (0.9; bounded in 0.10).**
     - `handleRunnerStream` ([`internal/api/runner_stream.go`](../internal/api/runner_stream.go)) limits handshakes in progress per peer address (`WARDYN_RUNNER_STREAM_HANDSHAKES_PER_ADDRESS`, default 32) before any read, and refuses a peer whose rate bucket is empty. Behind an ingress that address is the ingress's own.
@@ -2748,7 +2758,8 @@ hiding them would repeat the failure mode we are designed to avoid.
     - Harnesses share the agent uid. A per-harness tool-approval credential stops only body claims and honest cross-attribution (B3). Per-harness uids are not planned: the gate is cooperative, so they would not stop a process that skips it.
     - Create and dispatch refuse two different providers that share an injection host, an AWS sign-in's portal host included, and a second Azure Foundry provider (`harness_providers_conflict`).
     - An AWS sign-in is admitted only on the primary harness. Elsewhere it is refused at create and at dispatch, never launched without a credential.
-    - The `run_harnesses` rows hold harness and provider ids only. Renew, revive and a queued start re-check each harness's agent and model-provider doors against them.
+    - The `run_harnesses` rows hold harness and provider ids, and in a background run with several agents (`WARDYN_MULTI_AGENT_TASKS`) each agent's own task, which person erasure blanks. Renew, revive and a queued start re-check each harness's agent and model-provider doors against them.
+    - Several agents in one background run share one sandbox, policy and proxy, with their rules met (strictest wins), and each meets the doors its own run would. One agent can be served another's model credential of the same person, as above. Per-agent state is read from the shared output, so an agent can forge it; the run's result is the supervisor's exit.
 
 81. **A run waiting for a pool slot holds no credential, and its owner's group membership is as of launch [0.9].**
     - Nothing is minted, renewed or delivered while a run is `QUEUED`, and the internal routes refuse that state.
@@ -2758,6 +2769,10 @@ hiding them would repeat the failure mode we are designed to avoid.
     - Residual: a group removed at the identity provider is not seen before the wait ends: `24h` for a background run, `1h` for an interactive one, at most `7d` when the launch asks.
     - The queue row holds the owner's snapshot and request, names and references with no secret value, and every exit deletes it. A person may hold `100` waiting runs per pool.
     - Slot counts and `queue.position` are aggregate counts over the pool. They name no run, owner or runner, and `queue` is visible only where the run is.
+    - A run can be booked to start once, later, with nobody present at its start (`WARDYN_SCHEDULED_RUNS`, off by default) [0.10]. The 7-day cap holds: it starts no later than 7 days after the request less its wait, and nothing holds it past 7 days from the request.
+    - Its start is the queue's start, so the queue's renewal-at-start rule applies ([docs/design/0.9/pool-queue.md](../docs/design/0.9/pool-queue.md) section 7, step 8): the person's stored model sign-in (an AWS SSO refresh token, a subscription OAuth token, an Azure credential) is read and may be renewed unattended. At the start, Wardyn renews your model sign-in if it can; if it can't, the run waits for you. An unattended wait of up to 7 days is the accepted Q8-B (`pool-queue.md` Q8).
+    - A change made in Wardyn after booking is checked at the start: which profile the person is on, through a group's assignment too (`queue_profile_changed`), the current profile's rules, and the run's policy (`queue_policy_changed`, `queuePolicyUnchanged`). A group removed only at the identity provider is not seen, as above.
+    - `WARDYN_SCHEDULED_RUNS` turned off now refuses booked runs at their start too: each ends `FAILED` `scheduled_runs_off`.
 
 82. **A run template is content, never authority, and its secret scan is not proof [0.9].**
     - Using a template re-resolves the launcher's own policy, credentials, components, pools and drives. A template holds references, never values, and its audience sees those names.

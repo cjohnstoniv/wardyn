@@ -40,18 +40,39 @@ type RunQueueEntry struct {
 	PolicyRef  json.RawMessage
 	Authority  json.RawMessage
 	Launch     json.RawMessage
+	// StartAt is a scheduled run's not-before time, nil for a run that waits from its create. QueuedAt
+	// stays the create time, the issue time of the authority the row holds, which the start's
+	// revocation check reads.
+	StartAt *time.Time
 	// Components and Harnesses are the run's authorised snapshots, which CreateQueuedRun writes in
 	// the queue row's own transaction, so no promotable row exists without them. Write-only: a
 	// queue row read back never carries them.
 	Components []types.RunComponent
 	Harnesses  []types.RunHarness
+	// KeptDrive is the member drive a keep_work_folder run keeps its work folder in, which
+	// CreateQueuedRun inserts in the same transaction under CreateMemberDrive's lock and count
+	// (KeptDriveLimit), so no promotion sees a waiting keep run without its drive. Write-only.
+	KeptDrive      *types.UserDrive
+	KeptDriveLimit int
 }
 
-const runQueueCols = `run_id, pool_id, owner, queued_at, deadline_at, policy_ref, authority, launch`
+const runQueueCols = `run_id, pool_id, owner, queued_at, deadline_at, policy_ref, authority, launch, start_at`
+
+// runQueueLine is where a row stands in its pool's line: a scheduled run joins at its start time, so
+// booking ahead never jumps the runs that queued before that time.
+const runQueueLine = `COALESCE(start_at, queued_at)`
+
+// lineAt is e's runQueueLine.
+func (e RunQueueEntry) lineAt() time.Time {
+	if e.StartAt != nil {
+		return *e.StartAt
+	}
+	return e.QueuedAt
+}
 
 func scanRunQueueEntry(row pgx.Row) (RunQueueEntry, error) {
 	var e RunQueueEntry
-	if err := row.Scan(&e.RunID, &e.PoolID, &e.Owner, &e.QueuedAt, &e.DeadlineAt, &e.PolicyRef, &e.Authority, &e.Launch); err != nil {
+	if err := row.Scan(&e.RunID, &e.PoolID, &e.Owner, &e.QueuedAt, &e.DeadlineAt, &e.PolicyRef, &e.Authority, &e.Launch, &e.StartAt); err != nil {
 		return RunQueueEntry{}, fmt.Errorf("store: scan run queue entry: %w", err)
 	}
 	return e, nil
@@ -66,7 +87,7 @@ func jsonOrEmpty(raw json.RawMessage) json.RawMessage {
 }
 
 // CreateQueuedRun inserts r (state QUEUED, bound to a pool), its launch intent when it carries one,
-// its queue row and e's component and harness snapshots in one transaction that holds the pool row FOR NO KEY UPDATE, the lock promotion
+// its queue row, e's component and harness snapshots and its kept drive in one transaction that holds the pool row FOR NO KEY UPDATE, the lock promotion
 // takes first, so the owner's waiting count and the insert cannot interleave with a promotion.
 // maxPerOwner <= 0 is unlimited; otherwise an owner with that many runs already waiting for the pool
 // gets ErrRunQueueFull and nothing is written. The queue row's pool and owner are the run's own.
@@ -134,10 +155,15 @@ func (s PG) CreateQueuedRun(ctx context.Context, r types.AgentRun, e RunQueueEnt
 			return types.AgentRun{}, err
 		}
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO run_queue (`+runQueueCols+`) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+	if _, err := tx.Exec(ctx, `INSERT INTO run_queue (`+runQueueCols+`) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
 		created.ID, *r.RunnerPoolID, r.CreatedBy, e.QueuedAt, e.DeadlineAt,
-		jsonOrEmpty(e.PolicyRef), jsonOrEmpty(e.Authority), jsonOrEmpty(e.Launch)); err != nil {
+		jsonOrEmpty(e.PolicyRef), jsonOrEmpty(e.Authority), jsonOrEmpty(e.Launch), e.StartAt); err != nil {
 		return types.AgentRun{}, fmt.Errorf("store: insert run queue row: %w", err)
+	}
+	if e.KeptDrive != nil {
+		if _, err := insertMemberDrive(ctx, tx, *e.KeptDrive, e.KeptDriveLimit); err != nil {
+			return types.AgentRun{}, err
+		}
 	}
 	if len(e.Components) > 0 {
 		if err := insertRunComponents(ctx, tx, created.ID, e.Components); err != nil {
@@ -174,12 +200,12 @@ func (s PG) LeaveRunQueue(ctx context.Context, id uuid.UUID, to types.RunState, 
 	return moved > 0, nil
 }
 
-// RunQueuePosition is how many runs wait ahead of run id in its pool (a count, never whose), or
+// RunQueuePosition is how many runs stand ahead of run id in its pool's line (a count, never whose), or
 // ErrNotFound when the run is not waiting.
 func (s PG) RunQueuePosition(ctx context.Context, id uuid.UUID) (int, error) {
 	var ahead int
 	err := s.Pool.QueryRow(ctx, `
-		SELECT (SELECT count(*) FROM run_queue p WHERE p.pool_id = q.pool_id AND (p.queued_at, p.run_id) < (q.queued_at, q.run_id))
+		SELECT (SELECT count(*) FROM run_queue p WHERE p.pool_id = q.pool_id AND (COALESCE(p.start_at, p.queued_at), p.run_id) < (COALESCE(q.start_at, q.queued_at), q.run_id))
 		FROM run_queue q WHERE q.run_id = $1`, id).Scan(&ahead)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, ErrNotFound

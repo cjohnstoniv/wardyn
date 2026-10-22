@@ -44,6 +44,8 @@ export type RunEndReason =
   | "max_lifetime_reached"
   | "end_reached"
   | "queue_timeout"
+  | "queue_sign_in_timeout"
+  | "scheduled_runs_off"
   | "queue_profile_changed"
   | "queue_policy_changed"
   | "queue_portal_revoked"
@@ -316,7 +318,7 @@ export interface PoolCapacity {
 export interface PersonAllowance {
   active: number;
   max?: number;
-  profile_name?: string;
+  unit_name?: string;
 }
 
 /** Go: client.PoolDefault. The pool an untouched run resolves to, or the default that no longer applies. */

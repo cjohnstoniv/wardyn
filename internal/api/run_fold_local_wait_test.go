@@ -44,13 +44,13 @@ func TestRunRefusal_AddRemoteInstead_A4xxAndADenial(t *testing.T) {
 			}
 		})
 	}
-	denied := runDenied(authz.Deny(authz.ReasonGovernanceProfile, "runs.placement", "Your profile keeps this run off your computer."))
+	denied := runDenied(authz.Deny(authz.ReasonGovernanceUnit, "runs.placement", "Your profile keeps this run off your computer."))
 	denied.addRemoteInstead("Mixed")
 	if want := "Your profile keeps this run off your computer. " + hint; denied.decision.Sentence != want {
 		t.Errorf("the denial says %q, want %q", denied.decision.Sentence, want)
 	}
-	hidden := authz.Deny(authz.ReasonGovernanceProfile, "runs.placement", "kept")
-	hidden.WireReason = authz.ReasonGovernanceProfile
+	hidden := authz.Deny(authz.ReasonGovernanceUnit, "runs.placement", "kept")
+	hidden.WireReason = authz.ReasonGovernanceUnit
 	masked := runDenied(hidden)
 	masked.addRemoteInstead("Mixed")
 	if masked.decision.Sentence != "kept" {

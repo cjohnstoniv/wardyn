@@ -111,7 +111,6 @@ export const NR_TOOLS = {
   /** pending W-30: the recommended text until the owner answers. */
   PROFILE_REQUIRES: (profile: string | number) =>
     `${profile} requires Ask first or stricter for tools with no rule.`,
-  CODEX_HOLD_TIP: "Codex CLI can't pause a tool call for approval.",
   /** pending W-32: the recommended text until the owner answers. */
   CODEX_NOTE:
     "Rules for Codex CLI's MCP tools are enforced by the proxy.",

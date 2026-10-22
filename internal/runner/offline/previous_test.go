@@ -222,25 +222,22 @@ func TestReRegistrationSetAsideIsBoundedOnAHungEngine(t *testing.T) {
 	}
 }
 
-// lateStop answers the proxy stop successfully, but only once its bound has run out.
-type lateStop struct{ *localSub }
-
-func (lateStop) StopProxy(ctx context.Context, _ string) error {
-	<-ctx.Done()
-	return nil
-}
-
-// TestReRegistrationStopAnsweredAtTheBoundEdgeSucceeds stops a proxy whose success arrives with the
-// call's bound already spent: the stop worked, so the start neither fails (wrapping a nil error) nor
-// refuses to move the state.
-func TestReRegistrationStopAnsweredAtTheBoundEdgeSucceeds(t *testing.T) {
-	sub, dir, _, earlier, registered := earlierRegistration(t)
-	defer func(b time.Duration) { setAsideCallBound = b }(setAsideCallBound)
-	setAsideCallBound = 50 * time.Millisecond
-	if err := SetAsidePrevious(t.Context(), dir, registered, lateStop{sub}, uuid.UUID.String); err != nil {
+// TestReRegistrationSetAsideAStopThatSucceedsAtTheBoundIsASuccess: a stop that returns nil after the call's bound
+// has run out stopped the proxy, so the pass neither fails nor wraps a nil error, and the state moves.
+func TestReRegistrationSetAsideAStopThatSucceedsAtTheBoundIsASuccess(t *testing.T) {
+	m, sub, _, org := managerFixture(t)
+	dir := m.dir
+	createLocal(t, m, org)
+	if err := m.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "previous", earlier.String(), "offline", "state.json")); err != nil {
-		t.Fatalf("the state was not set aside: %v", err)
+	defer func(b time.Duration) { setAsideCallBound = b }(setAsideCallBound)
+	setAsideCallBound = 50 * time.Millisecond
+	sub.lateStop = true
+	if err := SetAsidePrevious(t.Context(), dir, uuid.New(), sub, uuid.UUID.String); err != nil {
+		t.Fatalf("SetAsidePrevious = %v, want success: the stop answered nil", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "offline", "state.json")); !os.IsNotExist(err) {
+		t.Fatalf("state.json still in place after a successful set-aside: %v", err)
 	}
 }

@@ -141,6 +141,11 @@ type Caps struct {
 	// gives them. Present only when its operator turned VMs on and its start-up probe passed; an older
 	// runner never sends it, and the org asks no runner without it for a VM.
 	LinuxVM *VMCaps `json:"linux_vm,omitempty"`
+	// OfflineSummary is why the runner could not connect (or start) since its last session, sent once
+	// on the first connect after; Relay is a Docker runner's latest run relay check, sent again when it
+	// changes. Both 0.10 on; an older organisation ignores them, and an older runner sends neither.
+	OfflineSummary *types.RunnerOfflineSummary `json:"offline_summary,omitempty"`
+	Relay          *types.RunnerRelayStatus    `json:"relay,omitempty"`
 }
 
 // VMCaps is the machine a runner's Linux VM sandboxes get: the versioned machine type, the named CPU

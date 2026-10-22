@@ -46,10 +46,11 @@ import (
 // Phase order is the contract: the policy phases below narrow `policy` in
 // sequence, and confineGitBrokerEgress runs LAST of the phases that touch the
 // ALLOWLIST so nothing above it can re-add a broker-managed host;
-// reassertCeilingDenies then runs after it (it only adds denies and only
+// the final seal then meets the result with the outer layers, and
+// reassertCeilingDenies runs after the seal (it only adds denies and only
 // removes credentials, so it cannot un-confine anything, and it has to sit
-// below every WIDENING phase — see its own ordering argument), and the final
-// seal after both meets the result with the outer layers. The ProxyConfig
+// below every WIDENING phase — see its own ordering argument), withholding
+// every credential the ceiling or a sealed layer walls off. The ProxyConfig
 // snapshot then captures that final policy, and the run.policy.resolve audit
 // event discloses it. Keep new phases inside this sequence, in the right place
 // — a phase hoisted into a caller silently loses the ordering guarantee.
@@ -306,7 +307,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 
 	// Governance ceiling re-assertion: union the acting principal's assigned
 	// profile's denies into the policy, drop every injection rule and BROKERED
-	// credential lane that reaches a denied host. Placed here, after
+	// credential lane that reaches a denied host (and, after the seal below, one
+	// the boundary withholds). Placed after
 	// confineGitBrokerEgress and after every widening phase above, because a
 	// create-time deny is defeated by those widenings — the artifact-redirect
 	// phase adds corp hosts AND authors token injections for them mid-dispatch.
@@ -325,11 +327,16 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	s.recordRunDiskCap(ctx, run.ID, policy.Resources)
 	// Record the reservation the driver will apply (best-effort, like the disk cap above).
 	s.recordRunSizing(ctx, run, resourceLimitsToRunner(policy.Resources), len(plan.azure.gates) > 0)
-	s.reassertCeilingDenies(ctx, run, &policy, &injections, ceiling, &p, sandboxEnv, &llm, &plan.bedrockMITMHosts, &p.Components.MITMHosts)
+	// The final seal, after every phase that adds a host: nothing below may widen
+	// policy (run_policy_seal.go). The ceiling's re-assertion follows it and reads
+	// the layers it sealed against, so a credential for a host the Wardyn boundary
+	// denies or does not allow is withheld as one the profile denies is (#3238).
+	layers := s.sealRunPolicy(ctx, run, &policy, p.Provenance)
+	signsBedrock := llm.signsBedrock()
+	grantRows = s.reassertCeilingDenies(ctx, run, &policy, &injections, ceiling, layers, grantRows, &p, sandboxEnv, &llm, &plan.bedrockMITMHosts, &p.Components.MITMHosts)
+	plan.withdrawSigV4(signsBedrock, llm)
 	azureARM := plan.azureCLI.closeWithheld(&policy, injections) // the door, decided once; one the ceiling withheld takes its hosts with it
-	// The final seal, after every phase that adds a host and after the ceiling's
-	// re-assertion: nothing below may widen policy (run_policy_seal.go).
-	s.sealRunPolicy(ctx, run, &policy, p.Provenance)
+	kubeAPI := plan.kubectlCLI.closeWithheld(&policy, injections)
 
 	// Host bind mounts (policy WorkspaceMounts + the host-mode Bedrock ~/.aws
 	// read-only mount) — operator-authored, never agent-chosen; see buildRunMounts.
@@ -361,7 +368,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// started harness's plaintext as a file only its own launch reads, never env.
 	// MCP servers: their credentials move to the broker and each harness's
 	// token goes into its own configuration (run_mcp.go).
-	mcp := dispatchMCP(p.Components.MCP, &injections, proxyURL, p.Interactive, sandboxEnv)
+	mcp := dispatchMCP(p.Components.MCP, withholding{deny: ceiling.deny, layers: layers}, &injections, proxyURL, p.Interactive, sandboxEnv)
 	harnessCreds, credFiles, merr := s.holdLaneHarnessCredentials(ctx, run, p)
 	if merr != nil {
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "the run's tool-approval credential could not be made")
@@ -370,6 +377,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// Last of the env writers' credential work, after every injection above is
 	// authored, so its one-credential-per-host check sees them all.
 	placeholderMITM := s.placeEnvSecrets(ctx, run, policy, p, grantRows, secretEnvKeys, sandboxEnv, &injections)
+	resident = s.placeResidentEnvSecrets(ctx, run, policy, p, sandboxEnv, &injections, resident)
 	secretEnv := splitSecretEnv(sandboxEnv, dispatchSecretEnvKeys(secretEnvKeys, llm))
 
 	resources := resourceLimitsToRunner(policy.Resources)
@@ -472,6 +480,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// The re-signed AWS lane's grant (runs_dispatch_aws_sigv4.go): nil while
 			// WARDYN_AWS_SIGV4_AT_PROXY is off and on every lane it does not re-sign.
 			AWSSigV4: plan.awsSigV4,
+			// The kubectl door's grant (cli_kubectl.go), on the same terms.
+			KubeAPI: kubeAPI,
 			// The azure_foundry lane's route gate (provider_azure.go), and the hosts inspected as a model host without being a
 			// brokered upstream: that lane's endpoint and a Claude subscription's route-through host. Empty on every other run.
 			AzureGates:      plan.azure.gates,
@@ -688,7 +698,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	s.metrics.sandboxLaunched(s.cfg.Now().Sub(run.CreatedAt))
 
 	// INTERACTIVE vs task exec vs BYOI selftest — see startAgentOrIdle.
-	s.startAgentOrIdle(ctx, run, sb.Ref, p.Image, p.Interactive, execution, auditAgentPolicy)
+	s.startAgentsOrIdle(ctx, run, p.Harnesses, sb.Ref, p.Image, p.Interactive, execution, auditAgentPolicy)
 }
 
 // auditablePolicy returns a Clone of policy safe to write to the append-only

@@ -60,6 +60,8 @@ type componentDispatch struct {
 	AWSCLI *awsCLIDispatch
 	// AzureCLI is the run's Azure CLI row, nil when it attached none (authorAzureCLI).
 	AzureCLI *azureCLIDispatch
+	// KubectlCLI is the run's kubectl row, nil when it attached none (authorKubectlCLI).
+	KubectlCLI *kubectlCLIDispatch
 	// MCP is each MCP server, which the broker route alone reaches (run_mcp.go).
 	MCP []componentMCP
 }
@@ -89,7 +91,7 @@ type componentConfig struct {
 // sets it on the request it re-originates. A local server's header is any
 // component's.
 func (c runComponents) dispatch() componentDispatch {
-	d := componentDispatch{AWSCLI: c.awsCLI(), AzureCLI: c.azureCLI()}
+	d := componentDispatch{AWSCLI: c.awsCLI(), AzureCLI: c.azureCLI(), KubectlCLI: c.kubectlCLI()}
 	keys := mcpServerKeys(c.attached)
 	row := -1 // the run_components ordinal: a built-in writes no row (persistRunComponents)
 	for i, a := range c.attached {

@@ -5,6 +5,10 @@
 
 import { Chip } from "../../../../wardyn/primitives";
 import { NR_REVIEW } from "../../../../wardyn/copy/new-run/review";
+import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
+import { useShellSetupStatus } from "../../../../wardyn/model-access-context";
+import { scheduledRunsOn, startInstant, whenText } from "../../../../../lib/schedule";
+import { launchStart, type LaunchStart } from "../../draft/launch-start";
 import type { RunIntent } from "../../draft/run-intent";
 import { appsOf, isServer } from "../../lenses/apps-lens";
 import { ReviewGroup } from "../review-group";
@@ -13,15 +17,20 @@ import { JumpButton } from "./jump-button";
 
 const VALUE = { agent_task: NR_REVIEW.VALUE_AGENT, application: NR_REVIEW.VALUE_APPLICATION, environment: NR_REVIEW.VALUE_ENVIRONMENT } as const;
 
-function timing(intent: RunIntent): string | undefined {
+function timing(intent: RunIntent, start?: LaunchStart): string | undefined {
   if (isServer(intent)) return NR_REVIEW.TIMING_APPLICATION_SERVER;
   if (intent.shape === "application") return NR_REVIEW.TIMING_APPLICATION;
+  if (start) {
+    const at = start.problem ? null : startInstant(start.choice);
+    return at === null ? NR_REVIEW.TIMING_CHOOSE : NR_SHARED.JOIN(NR_REVIEW.TIMING_STARTS(whenText(at, start.choice.zone)), NR_REVIEW.TIMING_CHECKED);
+  }
   if (intent.experience === "background") return NR_REVIEW.TIMING_NOW;
   return intent.experience === "interactive" ? NR_REVIEW.TIMING_INTERACTIVE : undefined;
 }
 
 export function RunGroup({ draft, preview, docRows, go }: GroupProps) {
-  const detail = timing(draft.intent);
+  const { status } = useShellSetupStatus();
+  const detail = timing(draft.intent, launchStart(draft, scheduledRunsOn(status), Date.now()));
   // The ports the server will actually keep: once the policy preview answers, what governance left of them.
   const apps = isServer(draft.intent) ? (preview ? (preview.spec.ui_apps ?? []) : appsOf(draft.intent)) : [];
   return (

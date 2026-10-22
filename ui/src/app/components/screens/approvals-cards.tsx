@@ -5,7 +5,7 @@
 
 import * as React from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Check, ChevronRight, Code2, ShieldCheck, X } from "lucide-react";
+import { Bot, Check, ChevronRight, Code2, ShieldCheck, X } from "lucide-react";
 import {
   canDecideApproval,
   isAdoCapabilityRequest,
@@ -33,7 +33,8 @@ import { usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
 import { OpenInUserView, runPath, useConsoleMode } from "../wardyn/console-view";
 import { PUSH } from "../wardyn/copy/push";
 import { APPROVAL, APPROVAL_BANNER_LABEL, SECURITY_ONLY_REASON, approvalScopeBadge } from "../wardyn/copy";
-import { APPROVAL_ESCALATION } from "../wardyn/copy/approvals";
+import { APPROVAL_ASKED, APPROVAL_ESCALATION } from "../wardyn/copy/approvals";
+import { useAgentName } from "../wardyn/use-agent-name";
 import { KIND_ICON, capabilityLabel, deriveTitle, deriveBanner, str } from "./approvals";
 
 /**
@@ -139,6 +140,11 @@ export function ApprovalCard({
       reauth.provider
     : "";
   const runEnded = !!run && isTerminalRunState(run.state);
+  // Only a tool or MCP call on a run with two or more agents says which one asked; plain network
+  // egress has no per-harness credential, so an egress row never names an agent.
+  const agentName = useAgentName();
+  const agentCount = run?.agents?.length ?? 0;
+  const asker = item.kind === "tool_call" && agentCount >= 2 && typeof scope.harness === "string" && scope.harness ? scope.harness : undefined;
   const canDecide = kindDecidable && !hostUngranted && !runEnded;
 
   // S10 — an Azure DevOps escalation (or the Entra-consent chain it can
@@ -271,7 +277,15 @@ export function ApprovalCard({
         <p className="mt-1 text-xs text-muted-foreground">{REAUTH_ROW.PROVIDER(reauthProvider)}</p>
       )}
 
-      {runRow}
+      {runProp ? null : <RunContextRow runId={item.run_id} onRun={setRun} askedBy={asker} />}
+      {asker && (
+        <p className="mt-2 flex items-center gap-2 text-sm">
+          <Bot className="size-3.5 shrink-0 text-info" aria-hidden="true" />
+          <span>
+            {APPROVAL_ASKED.LINE_PRE}<strong>{agentName(asker)}</strong>{APPROVAL_ASKED.LINE_POST(agentCount)}
+          </span>
+        </p>
+      )}
 
       {/* Blast-radius banner (D1) — derived from the real scope above. */}
       <div className="mt-3 space-y-1 rounded-lg border border-border bg-background px-3 py-2.5 text-sm leading-relaxed">

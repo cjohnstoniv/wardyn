@@ -53,6 +53,8 @@ type serveOptions struct {
 	// localAttach is --local-attach, the runner's own ceiling on local attach; orgURL is --org, which
 	// the local attach pointer file names.
 	localAttach, orgURL string
+	// offline is what the next connect reports about why this runner could not connect or start.
+	offline *offlineLog
 }
 
 func (o serveOptions) recordingEnabled() (bool, error) {
@@ -163,10 +165,13 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 		if build == nil {
 			return errors.New("runner execution and durable offline handlers are unavailable")
 		}
+		opts.offline = newOfflineLog(stateDir, urlSecrets(opts.upstreamProxy))
 		runtime, err := build(cmd.Context(), identity, stateDir, opts)
 		if err != nil {
+			opts.offline.startFailed(err)
 			return err
 		}
+		runtime.hooks.ConnectFailed = opts.offline.connectFailed
 		if runtime.close != nil {
 			defer func() { retErr = errors.Join(retErr, runtime.close()) }()
 		}
@@ -214,11 +219,15 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 // serveConfig resolves every setting for serve: the flags the command line gave, the managed preferences,
 // the environment, then runnerd.json. Read here, not when the command is built, so only serve pays for it.
 func serveConfig(cmd *cobra.Command, configPath string) (runnerConfig, error) {
-	flag := func(name string) (string, bool) {
+	return effectiveRunnerConfig(configPath, changedFlags(cmd))
+}
+
+// changedFlags reads a string flag the person gave on cmd's command line; a flag cmd lacks, or left alone, is not given.
+func changedFlags(cmd *cobra.Command) func(string) (string, bool) {
+	return func(name string) (string, bool) {
 		v, err := cmd.Flags().GetString(name)
 		return v, err == nil && cmd.Flags().Changed(name)
 	}
-	return effectiveRunnerConfig(configPath, flag)
 }
 
 // applyTo copies the effective settings into serve's own variables.

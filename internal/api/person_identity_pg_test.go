@@ -578,7 +578,7 @@ func crossClaimedChange(t *testing.T, pg store.PG, attacker, claimed string) uui
 
 func crossProposedChange(t *testing.T, pg store.PG, by, email string) uuid.UUID {
 	t.Helper()
-	ch := types.GovernanceChange{TargetKind: "governance_profile", Op: "update", TargetKey: uuid.NewString(),
+	ch := types.GovernanceChange{TargetKind: "governance_unit", Op: "update", TargetKey: uuid.NewString(),
 		Payload: json.RawMessage(`{"name":"p"}`), Diff: json.RawMessage(`{"changed":["name"]}`), ProposedBy: by, ProposedByEmail: email}
 	saved, _, err := pg.ProposeGovernanceChange(t.Context(), ch, time.Hour)
 	if err != nil {

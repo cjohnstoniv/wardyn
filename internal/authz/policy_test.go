@@ -14,18 +14,18 @@ import (
 // refused and the leaf profile's name (#2951), so a contact's owner or email can
 // never reach an authz.denied row through a Decision.
 func TestWithPolicyStampsTheLayerAndKeepsTheContactOutOfTheDatum(t *testing.T) {
-	ref := &policyref.Ref{Source: policyref.SourceProfile, Name: "walled", Owner: "Platform team", Email: "platform@example.com"}
-	d := Deny(ReasonGovernanceProfile, "runs.task_mode", "no")
+	ref := &policyref.Ref{Source: policyref.SourceUnit, Name: "walled", Owner: "Platform team", Email: "platform@example.com"}
+	d := Deny(ReasonGovernanceUnit, "runs.task_mode", "no")
 	withPolicy := d.WithPolicy(ref)
-	if withPolicy.Policy == nil || withPolicy.Policy.Layer != policyref.LayerProfile || d.Policy != nil || ref.Layer != "" {
+	if withPolicy.Policy == nil || withPolicy.Policy.Layer != policyref.LayerUnit || d.Policy != nil || ref.Layer != "" {
 		t.Fatalf("WithPolicy must return a copy stamped with the layer: got %+v, original %+v, ref %+v", withPolicy.Policy, d.Policy, ref)
 	}
-	if want := (policyref.Ref{Source: ref.Source, Name: ref.Name, Owner: ref.Owner, Email: ref.Email, Layer: policyref.LayerProfile}); *withPolicy.Policy != want {
+	if want := (policyref.Ref{Source: ref.Source, Name: ref.Name, Owner: ref.Owner, Email: ref.Email, Layer: policyref.LayerUnit}); *withPolicy.Policy != want {
 		t.Errorf("policy = %+v, want %+v", *withPolicy.Policy, want)
 	}
 	p := Principal{Subject: "sub-1"}
 	base, got := Datum(d, p, "POST"), Datum(withPolicy, p, "POST")
-	base["layer"], base["layer_name"] = "profile", "walled"
+	base["layer"], base["layer_name"] = "unit", "walled"
 	if !reflect.DeepEqual(base, got) {
 		t.Errorf("datum = %v, want the bare datum plus layer and layer_name: %v", got, base)
 	}

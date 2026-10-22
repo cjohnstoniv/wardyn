@@ -62,13 +62,13 @@ func TestValidate(t *testing.T) {
 }
 
 func TestProjectDropsOnlyTheBadFields(t *testing.T) {
-	got := Project(SourceProfile, "Team A", &Contact{
+	got := Project(SourceUnit, "Team A", &Contact{
 		Owner:       "Platform",
 		Email:       "x?cc=evil@example.com",
 		RequestURL:  "javascript:alert(1)",
 		RequestText: "ask\nnow",
 	})
-	want := Ref{Source: SourceProfile, Name: "Team A", Owner: "Platform"}
+	want := Ref{Source: SourceUnit, Name: "Team A", Owner: "Platform"}
 	if got == nil || *got != want {
 		t.Fatalf("Project = %+v, want %+v", got, want)
 	}
@@ -107,8 +107,8 @@ func TestRequestRoute(t *testing.T) {
 }
 
 func TestHeaderValues(t *testing.T) {
-	p, r := Ref{Source: SourceProfile, Name: `Équipe "A"`, Email: "a@example.com"}.HeaderValues()
-	if p != `profile; name="%C3%89quipe%20%22A%22"` || r != "mailto:a@example.com" {
+	p, r := Ref{Source: SourceUnit, Name: `Équipe "A"`, Email: "a@example.com"}.HeaderValues()
+	if p != `unit; name="%C3%89quipe%20%22A%22"` || r != "mailto:a@example.com" {
 		t.Errorf("profile headers = %q, %q", p, r)
 	}
 	if p, r := (Ref{Source: SourceDeployment}).HeaderValues(); p != "deployment" || r != "" {

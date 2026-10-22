@@ -142,10 +142,10 @@ export function MemberGettingStarted() {
   // omitted on the wire) and for a read that failed — either way §7.6's two
   // moments do not render, which is the absent-row doctrine: no assignment, no
   // chip, no line, today's card byte-for-byte.
-  const [governanceProfile, setGovernanceProfile] = React.useState<string | undefined>(undefined);
+  const [governanceUnit, setGovernanceUnit] = React.useState<string | undefined>(undefined);
   // #1200 — the SAME read's min_confinement_class: the floor this member's
   // barrier chip must respect. Undefined for the same two reasons
-  // governanceProfile is (no assignment, or a read that failed), in which
+  // governanceUnit is (no assignment, or a read that failed), in which
   // case the chip below falls back to every installed tier, unrestricted.
   const [govFloor, setGovFloor] = React.useState<ConfinementClass | undefined>(undefined);
   React.useEffect(() => {
@@ -154,7 +154,7 @@ export function MemberGettingStarted() {
       .getDefaultPolicy()
       .then((p) => {
         if (!active) return;
-        setGovernanceProfile(p.governance_profile_name);
+        setGovernanceUnit(p.unit_name);
         const f = p.min_confinement_class;
         setGovFloor(f && (CC_ORDER as string[]).includes(f) ? (f as ConfinementClass) : undefined);
       })
@@ -182,7 +182,7 @@ export function MemberGettingStarted() {
   // is, on the New Run card — this page never had a mount to refuse, only one
   // to stop advertising. A DENIED chip of its own would be new copy (§7.6
   // freezes a PAUSED twin and no denied one): FILED, not invented here.
-  const { drive: allocatedDrive, deniedByProfile: driveDeniedBy } = useUserDrive();
+  const { drive: allocatedDrive, deniedByUnit: driveDeniedBy } = useUserDrive();
   const userDrive = driveDeniedBy ? null : allocatedDrive;
 
   const [sshKeyCount, setSshKeyCount] = React.useState<number | null>(null);
@@ -373,8 +373,8 @@ export function MemberGettingStarted() {
                 {/* §7.6, and neutral like BARRIER_CHIP beside it: which
                     profile bounds you is a fact about this deployment, not a
                     success or a risk. */}
-                {governanceProfile && (
-                  <Chip tone="neutral">{MEMBER.GS_CHIP(governanceProfile)}</Chip>
+                {governanceUnit && (
+                  <Chip tone="neutral">{MEMBER.GS_CHIP(governanceUnit)}</Chip>
                 )}
                 {/* §7.6, and neutral for the same reason as the two before
                     it: which drive is allocated to you is a fact about this
@@ -453,9 +453,9 @@ export function MemberGettingStarted() {
               )}
               {/* The chip names the profile; this says what having one means.
                   Both render only when there IS one. */}
-              {governanceProfile && (
+              {governanceUnit && (
                 <p className="mt-1 text-sm text-muted-foreground">
-                  {MEMBER.GS_BODY(governanceProfile)}
+                  {MEMBER.GS_BODY(governanceUnit)}
                 </p>
               )}
               {/* Packet M-B (modes-b.html): your model connections live in

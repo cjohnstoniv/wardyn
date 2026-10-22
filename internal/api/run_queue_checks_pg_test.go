@@ -45,58 +45,70 @@ func (e *queueEnv) waitingPerson(pool types.RunnerPool, extra string) (types.Age
 	return e.run(e.queuedLaunch(e.person, pool, extra).ID), occupant
 }
 
+// queueStartRecheck is one start re-check of section 7: what changes while the run waits, and the end
+// it must meet. A scheduled start is held to the same table (TestPG_ScheduledStartRunsTheQueueStartsChecks).
+type queueStartRecheck struct {
+	name   string
+	reason string
+	sent   string
+	change func(e *queueEnv, pool types.RunnerPool, run types.AgentRun)
+	extra  string
+}
+
+var queueStartRechecks = []queueStartRecheck{
+	{name: "owner deactivated", reason: string(types.RunEndIdentityDeactivated), sent: types.RunEndIdentityDeactivated.Sentence(),
+		change: func(e *queueEnv, _ types.RunnerPool, _ types.AgentRun) {
+			if _, err := e.pg.IssueLoginIdentity(context.Background(), store.LoginIdentity{Principal: e.personP, Issuer: "https://idp.example", TenantID: "t", ObjectID: "o-1", Email: "person@corp.example"}, time.Now()); err != nil {
+				e.t.Fatal(err)
+			}
+			e.exec(`UPDATE principal_identities SET deactivated_at = now() WHERE principal = $1`, e.personP)
+		}},
+	{name: "profile reassigned", reason: string(types.RunEndQueueProfileChanged), sent: types.RunEndQueueProfileChanged.Sentence(),
+		change: func(e *queueEnv, _ types.RunnerPool, _ types.AgentRun) {
+			e.seedAssignment(e.seedProfile("Later", "api.anthropic.com", "github.com"), e.personP)
+		}},
+	{name: "launch door closed", reason: "capability_agent", sent: "",
+		change: func(e *queueEnv, _ types.RunnerPool, _ types.AgentRun) {
+			if _, err := e.pg.UpsertCapabilityGrant(context.Background(), types.CapabilityGrant{SubjectType: types.CapabilitySubjectUser,
+				Subject: e.personP, Capability: capAgent, Value: "claude-code", Effect: types.CapabilityDeny, CreatedBy: "seed"}); err != nil {
+				e.t.Fatal(err)
+			}
+		}},
+	{name: "pool refuses the barrier", reason: string(runnerpool.ReasonBarrierNotAllowed), sent: "", extra: `,"confinement_class":"CC3"`,
+		change: narrowPool},
+}
+
+// ended checks the end tc must meet: FAILED with its reason in status_detail, the sentence in
+// failure_hint, one run.queue.start failure row, and nothing minted.
+func (e *queueEnv) ended(id uuid.UUID, tc queueStartRecheck) {
+	e.t.Helper()
+	got := e.waitFailed(id)
+	if got.StatusDetail != "queue: "+tc.reason {
+		e.t.Errorf("status_detail = %q, want queue: %s", got.StatusDetail, tc.reason)
+	}
+	if tc.sent != "" && got.FailureHint != tc.sent {
+		e.t.Errorf("failure_hint = %q, want %q", got.FailureHint, tc.sent)
+	}
+	if got.SPIFFEID != "" || len(e.audits(got.ID, "identity.mint")) != 0 {
+		e.t.Error("a refused start minted an identity")
+	}
+	rows := e.waitAudit(got.ID, "run.queue.start")
+	if len(rows) != 1 || rows[0].Outcome != "failure" || queueAuditData(e.t, rows[0])["reason"] != tc.reason {
+		e.t.Errorf("run.queue.start rows = %+v; want one failure naming %s", rows, tc.reason)
+	}
+}
+
 // Each start re-check of section 7 ends a promoted run FAILED with its own reason in status_detail, the
 // sentence in failure_hint, and a run.queue.start failure row; nothing is minted for it.
 func TestPG_QueueStartRechecks(t *testing.T) {
-	cases := []struct {
-		name   string
-		reason string
-		sent   string
-		change func(e *queueEnv, pool types.RunnerPool, run types.AgentRun)
-		extra  string
-	}{
-		{name: "owner deactivated", reason: string(types.RunEndIdentityDeactivated), sent: types.RunEndIdentityDeactivated.Sentence(),
-			change: func(e *queueEnv, _ types.RunnerPool, _ types.AgentRun) {
-				if _, err := e.pg.IssueLoginIdentity(context.Background(), store.LoginIdentity{Principal: e.personP, Issuer: "https://idp.example", TenantID: "t", ObjectID: "o-1", Email: "person@corp.example"}, time.Now()); err != nil {
-					e.t.Fatal(err)
-				}
-				e.exec(`UPDATE principal_identities SET deactivated_at = now() WHERE principal = $1`, e.personP)
-			}},
-		{name: "profile reassigned", reason: string(types.RunEndQueueProfileChanged), sent: types.RunEndQueueProfileChanged.Sentence(),
-			change: func(e *queueEnv, _ types.RunnerPool, _ types.AgentRun) {
-				e.seedAssignment(e.seedProfile("Later", "api.anthropic.com", "github.com"), e.personP)
-			}},
-		{name: "launch door closed", reason: "capability_agent", sent: "",
-			change: func(e *queueEnv, _ types.RunnerPool, _ types.AgentRun) {
-				if _, err := e.pg.UpsertCapabilityGrant(context.Background(), types.CapabilityGrant{SubjectType: types.CapabilitySubjectUser,
-					Subject: e.personP, Capability: capAgent, Value: "claude-code", Effect: types.CapabilityDeny, CreatedBy: "seed"}); err != nil {
-					e.t.Fatal(err)
-				}
-			}},
-		{name: "pool refuses the barrier", reason: string(runnerpool.ReasonBarrierNotAllowed), sent: "", extra: `,"confinement_class":"CC3"`,
-			change: narrowPool},
-	}
-	for _, tc := range cases {
+	for _, tc := range queueStartRechecks {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newQueueEnv(t)
 			pool := e.cappedPool("Busy", 1)
 			waiting, occupant := e.waitingPerson(pool, tc.extra)
 			tc.change(e, pool, waiting)
 			e.free(occupant)
-			got := e.waitFailed(waiting.ID)
-			if got.StatusDetail != "queue: "+tc.reason {
-				t.Errorf("status_detail = %q, want queue: %s", got.StatusDetail, tc.reason)
-			}
-			if tc.sent != "" && got.FailureHint != tc.sent {
-				t.Errorf("failure_hint = %q, want %q", got.FailureHint, tc.sent)
-			}
-			if got.SPIFFEID != "" || len(e.audits(got.ID, "identity.mint")) != 0 {
-				t.Error("a refused start minted an identity")
-			}
-			rows := e.waitAudit(got.ID, "run.queue.start")
-			if len(rows) != 1 || rows[0].Outcome != "failure" || queueAuditData(t, rows[0])["reason"] != tc.reason {
-				t.Errorf("run.queue.start rows = %+v; want one failure naming %s", rows, tc.reason)
-			}
+			e.ended(waiting.ID, tc)
 		})
 	}
 }

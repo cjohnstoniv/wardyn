@@ -161,6 +161,7 @@ func k8sRunnerHooks(ctx context.Context, identity runneridentity.Identity, state
 		started:   started,
 		closeAlso: sink.Close,
 		linuxVM:   linuxVM,
+		report:    connectReport{log: opts.offline},
 	})
 	if err != nil {
 		return runnerRuntime{}, errors.Join(err, relay.Close(), sink.Close())

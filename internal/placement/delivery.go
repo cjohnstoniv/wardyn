@@ -105,6 +105,10 @@ func BuildableModes(class string) []Mode {
 	return out
 }
 
+// Buildable reports whether a local run can be delivered class under mode: the one predicate the write-time
+// check (CheckBuildable) and the read of a stored document (Unbuildable) both use.
+func Buildable(class string, m Mode) bool { return slices.Contains(BuildableModes(class), m) }
+
 // Writable reports whether a policy may configure the class.
 func Writable(class string) bool {
 	_, known := classModes[class]
@@ -290,9 +294,8 @@ func (p DeliveryPolicy) CheckBuildable(before DeliveryPolicy) error {
 			if old, stored := was[class]; stored && reflect.DeepEqual(old, m) {
 				continue
 			}
-			if !slices.Contains(BuildableModes(class), m.Mode) {
-				return unbuildableError{fmt.Sprintf("class %q cannot be delivered as %q yet (the server can build: %s)",
-					prefix+class, m.Mode, joinModes(BuildableModes(class)))}
+			if !Buildable(class, m.Mode) {
+				return unbuildableError{unbuildableSentence(prefix+class, m.Mode, class)}
 			}
 		}
 		return nil
@@ -306,6 +309,50 @@ func (p DeliveryPolicy) CheckBuildable(before DeliveryPolicy) error {
 		}
 	}
 	return nil
+}
+
+// UnbuildableRow is one entry of a stored policy that sets a mode outside BuildableModes(Class): TrustClass
+// is empty for a row of Classes and names the trust class for a row of ByTrust. The document is never changed.
+type UnbuildableRow struct {
+	Class          string                 `json:"class"`
+	TrustClass     types.RunnerTrustClass `json:"trust_class,omitempty"`
+	Mode           Mode                   `json:"mode"`
+	BuildableModes []Mode                 `json:"buildable_modes"`
+}
+
+// Path is the row's place in the document, as CheckBuildable's refusal names it.
+func (r UnbuildableRow) Path() string {
+	if r.TrustClass == "" {
+		return r.Class
+	}
+	return "by_trust." + string(r.TrustClass) + "." + r.Class
+}
+
+// String is CheckBuildable's sentence for the row.
+func (r UnbuildableRow) String() string { return unbuildableSentence(r.Path(), r.Mode, r.Class) }
+
+func unbuildableSentence(path string, m Mode, class string) string {
+	return fmt.Sprintf("class %q cannot be delivered as %q yet (the server can build: %s)", path, m, joinModes(BuildableModes(class)))
+}
+
+// Unbuildable lists every row of the policy, in Classes or in a trust class's overrides, whose mode is outside
+// BuildableModes(class): Classes first, then ByTrust, each in sorted order. It judges the whole document
+// with Buildable, as CheckBuildable judges a write, but without the allowance for a row the stored document
+// already holds. Nil when every row is buildable.
+func (p DeliveryPolicy) Unbuildable() []UnbuildableRow {
+	var out []UnbuildableRow
+	add := func(classes map[string]ClassPolicy, trust types.RunnerTrustClass) {
+		for _, class := range sortedKeys(classes) {
+			if m := classes[class].Mode; !Buildable(class, m) {
+				out = append(out, UnbuildableRow{Class: class, TrustClass: trust, Mode: m, BuildableModes: append([]Mode{}, BuildableModes(class)...)})
+			}
+		}
+	}
+	add(p.Classes, "")
+	for _, trust := range slices.Sorted(maps.Keys(p.ByTrust)) {
+		add(p.ByTrust[trust].Classes, trust)
+	}
+	return out
 }
 
 // ForTrust is a class's policy on a runner of trust class trust: the trust class's
@@ -362,6 +409,20 @@ func ResidentPlaceholder(grantID uuid.UUID) string {
 // ResidentGrantID reads a placeholder back; false when v is not one.
 func ResidentGrantID(v string) (uuid.UUID, bool) {
 	rest, ok := strings.CutPrefix(v, residentPlaceholderPrefix)
+	if !ok {
+		return uuid.Nil, false
+	}
+	id, err := uuid.Parse(rest)
+	return id, err == nil
+}
+
+// FillPlaceholderPrefix starts an env or file secret placeholder a proxy fills
+// at egress; the rest is the id of the injection grant that fills it.
+const FillPlaceholderPrefix = "wardyn-placeholder:"
+
+// FillGrantID reads a fill placeholder back; false when v is not one.
+func FillGrantID(v string) (uuid.UUID, bool) {
+	rest, ok := strings.CutPrefix(v, FillPlaceholderPrefix)
 	if !ok {
 		return uuid.Nil, false
 	}

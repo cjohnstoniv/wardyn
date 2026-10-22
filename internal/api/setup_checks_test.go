@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
 	"github.com/cjohnstoniv/wardyn/internal/setup"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -765,11 +766,13 @@ var setupCheckNeverBlocks = map[string]bool{
 	"site_config": true, "site_config_seed": true, "internal_hosts": true, "tls_cookie_posture": true, "approval_notify": true,
 	"scm_provider": true, "host_proxy": true, "artifact_repo": true,
 	"permissions_posture": true, "llm_provider": true, "bedrock_provider": true, "audit_partitions": true,
-	"agent_image":        true,
-	"runner_limits":      true,
-	"runner_arch_images": true,
-	"recording":          true,
-	"github_ref_ruleset": true, "platform_wsl": true, "platform_macos": true, "self_host_runner_grant": true, "defaults_changed": true,
+	"agent_image":         true,
+	"runner_limits":       true,
+	"credential_delivery": true,
+	"runner_arch_images":  true,
+	"private_ip_refusals": true,
+	"recording":           true,
+	"github_ref_ruleset":  true, "platform_wsl": true, "platform_macos": true, "self_host_runner_grant": true, "defaults_changed": true,
 	// providerAccessCheck's llm_provider:<provider id>, as its test names it.
 	"llm_provider:corp-gateway": true,
 }
@@ -810,6 +813,9 @@ func TestSetupCheckBlocking(t *testing.T) {
 		assertSetupCheckBlocking(t, chk)
 	}
 	if chk, ok := runnerLimitsCheck(2); ok {
+		assertSetupCheckBlocking(t, chk)
+	}
+	if chk, ok := credentialDeliveryCheck([]placement.UnbuildableRow{{Class: placement.ClassAPIKey, Mode: placement.ModeRunnerResident}}); ok {
 		assertSetupCheckBlocking(t, chk)
 	}
 	assertSetupCheckBlocking(t, runnerCheck(SetupRunner{Driver: "docker", ConfinementClasses: []string{"CC1"}}))

@@ -284,7 +284,7 @@ func TestDispatchWiring_CeilingNarrowingClearsTheSSOFlag(t *testing.T) {
 	llm := plan.llm
 	var mitm []string
 	lanes, _ := narrowCeilingBedrockLane(
-		dispatchCeiling{deny: llm.bedrock.egressHosts}, &llm, &mitm, nil, map[string]string{})
+		withholding{deny: llm.bedrock.egressHosts}, &llm, &mitm, nil, map[string]string{})
 	if len(lanes) == 0 {
 		t.Fatal("the ceiling did not narrow a denied Bedrock lane")
 	}

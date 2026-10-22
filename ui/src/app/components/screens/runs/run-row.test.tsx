@@ -21,13 +21,14 @@ import { RunRow } from "./run-row";
 const signInMock = vi.fn();
 vi.mock("../../../lib/api/run-sign-in", () => ({ runSignIn: { get: (...a: unknown[]) => signInMock(...a) } }));
 const reviveRunMock = vi.fn();
+const killRunMock = vi.fn();
 vi.mock("../../../lib/api/runs", () => ({
-  runs: { reviveRun: (...a: unknown[]) => reviveRunMock(...a) },
+  runs: { reviveRun: (...a: unknown[]) => reviveRunMock(...a), killRun: (...a: unknown[]) => killRunMock(...a) },
 }));
 const toastErrorMock = vi.fn();
 const toastInfoMock = vi.fn();
 vi.mock("sonner", () => ({
-  toast: { error: (...a: unknown[]) => toastErrorMock(...a), info: (...a: unknown[]) => toastInfoMock(...a) },
+  toast: { error: (...a: unknown[]) => toastErrorMock(...a), info: (...a: unknown[]) => toastInfoMock(...a), success: vi.fn() },
 }));
 
 function renderRow(run: AgentRun) {
@@ -188,5 +189,48 @@ describe("RunRow — a local run's meta line (RS8)", () => {
   it("leaves a remote run's meta line as it was", () => {
     renderRow(makeRun({ repo: "acme/payments", state: "RUNNING", placement: "remote", runner_online: false }));
     expect(metaOf()).toMatch(/^acme\/payments · started /);
+  });
+});
+
+describe("RunRow — a scheduled run", () => {
+  const queued = (reason: string, over: Partial<AgentRun> = {}) =>
+    makeRun({
+      id: "run-9", state: "QUEUED", title: "Nightly dependency bump", repo: "acme/web-app", created_by: "me",
+      queue: { pool_id: "p", queued_at: "", deadline_at: "", position: 0, reason, start_at: "2026-10-21T02:00:00Z", time_zone: "UTC" },
+      ...over,
+    });
+
+  it("reads Scheduled with starts {when} in its meta line, and Cancel run asks before it kills", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    killRunMock.mockResolvedValue(undefined);
+    renderRow(queued("scheduled"));
+    expect(screen.getByText("Scheduled")).toBeInTheDocument();
+    expect(screen.getByTitle(/· starts Wed 21 Oct, 02:00 \(UTC\)$/)).toBeInTheDocument();
+    expect(screen.queryByText(/started/)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Cancel run" }));
+    expect(killRunMock).not.toHaveBeenCalled();
+    await user.click(await screen.findByRole("button", { name: "Kill run" }));
+    await waitFor(() => expect(killRunMock).toHaveBeenCalledWith("run-9"));
+  });
+
+  it("reads Waiting for sign-in with was due {when}, and a Sign in button that goes to the run", async () => {
+    renderRow(queued("owner_sign_in"));
+    expect(screen.getByText(RUNS_ROW_WORD.WAITING_SIGN_IN)).toBeInTheDocument();
+    expect(screen.getByTitle(/· was due Wed 21 Oct, 02:00 \(UTC\)$/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: RUNS_ROW_ACTION.SIGN_IN })).toBeInTheDocument();
+  });
+
+  it("says a run that waited out its sign-in was not started, in place of its times", () => {
+    renderRow(makeRun({ state: "FAILED", title: "Nightly dependency bump", repo: "acme/web-app", status_reason: "queue_sign_in_timeout" }));
+    expect(screen.getByText("Failed")).toBeInTheDocument();
+    expect(screen.getByTitle(/This run waited too long for your sign-in and was not started\.$/)).toBeInTheDocument();
+    expect(screen.queryByTitle(/ran /)).not.toBeInTheDocument();
+  });
+
+  it("keeps started … for a run that is only queued for a slot", () => {
+    renderRow(queued("runner_pool_at_capacity"));
+    expect(screen.getByText("Queued")).toBeInTheDocument();
+    expect(screen.getByTitle(/· started /)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancel run" })).not.toBeInTheDocument();
   });
 });

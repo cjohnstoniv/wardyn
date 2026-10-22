@@ -6,11 +6,11 @@ package client
 import "testing"
 
 func TestNewAPIErrorParsesPolicy(t *testing.T) {
-	body := `{"error":"no","reason":"governance_profile","policy":{"source":"profile","name":"walled","owner":"Platform team","email":"platform@example.com","request_url":"https://help.example.com/request","request_text":"File a ticket."}}`
+	body := `{"error":"no","reason":"governance_unit","policy":{"source":"unit","name":"walled","owner":"Platform team","email":"platform@example.com","request_url":"https://help.example.com/request","request_text":"File a ticket."}}`
 	e := NewAPIError(403, []byte(body))
-	want := PolicyRef{Source: "profile", Name: "walled", Owner: "Platform team", Email: "platform@example.com",
+	want := PolicyRef{Source: "unit", Name: "walled", Owner: "Platform team", Email: "platform@example.com",
 		RequestURL: "https://help.example.com/request", RequestText: "File a ticket."}
-	if e.Reason != "governance_profile" || e.Policy == nil || *e.Policy != want {
+	if e.Reason != "governance_unit" || e.Policy == nil || *e.Policy != want {
 		t.Errorf("Reason = %q, Policy = %+v, want %+v", e.Reason, e.Policy, want)
 	}
 	if got := e.Error(); got != "API error 403: no" {

@@ -9,7 +9,7 @@ Every string the New Run flow shows lives once in this file and once in the lazy
 | Approved mock | The owner-approved New Run mock: Start, the Guided steps, the run document editor, Review, Save as, Name and Launched. |
 | Tools and access prototype | The approved step 5 prototype. |
 | Templates prototype | The approved Templates screen prototype. |
-| Deviation tables | The owner-approved changes to the mock's wording: the Files wording W1-W5, the placement wording package, the harness and scheduling copy, the run document format, the pool words (organization and user pools; self-hosted and remote-hosted runners). |
+| Deviation tables | The owner-approved changes to the mock's wording: the Files wording W1-W5, the placement wording package, the harness and scheduling copy, the run document format, the pool words (organization and user pools; self-hosted and remote-hosted runners), and the FEAT-2 boards (F2SCHED-1 to -3, approved 2026-10-20), whose "Copy not on today's console" boxes are the source of the start-time rows. |
 | Pending wording | The recommended text for each new wording row, behind one constant until the owner answers. |
 
 ## 2. Behaviour summary
@@ -43,6 +43,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 - `NR_TOOLS.PROVIDER_PROXY` shows only when the provider credential's delivery is `proxy`: key, token and subscription kinds. A provider whose delivery is `sandbox_short_lived` (Bedrock SSO, whose role credentials sit in the sandbox) shows `NR_TOOLS.DELIVERY_SHORT_LIVED` and `NR_TOOLS.DELIVERY_AWS` instead.
 - `NR_SHARED.CONTINUE_TO` writes the step name in lower case ("Continue to harnesses", "Continue to files": Make `App.tsx`:1928, 2144). Every Guided step's primary button, `NR_SHARED.CONTINUE` and the document's `NR_DOCUMENT.CONTINUE_REVIEW` end in an arrow shown to sight only (Make `App.tsx`:1293, 1928, 2144, 2577, 2695); `NR_REVIEW.LAUNCH_RUN` has none.
 - `NR_LAUNCH.CANCEL_RUN` opens the console's kill confirm before it cancels the waiting run; the confirm's own strings are the shared kill dialog's. Deviation (owner 2026-10-13: keep the Cancel-run confirm); Make cancels at once (`App.tsx`:3335-3343).
+- `NR_RUN.START_DATE`, `NR_RUN.START_TIME`, `NR_RUN.START_ZONE` and `NR_RUN.START_HELP(n)` open under "Schedule for later" only when the setup status carries `features.scheduled_runs`; with it off or absent "Schedule for later" keeps its `NR_SHARED.COMING_SOON` and the Review and Name rows say nothing of a start. Only an Autonomous run can be scheduled. `{when}` reads "Wed 21 Oct, 02:00 (UTC)": the start in the zone it was given in, with that zone's name. `{n}` is the whole days in 7 days less the run type's lead wait (6 for an Autonomous run), read as "1 day" when it is one. The time zone starts at the browser's. No Repeat choice: that is 0.10.x (FEAT-2 board F2SCHED-1).
 - `NR_TOOLS.EFFECT_ALLOW` is both the default option and a rule effect ("Run it" stays, per the tool-rule ruling): offered when the policy allows it, otherwise disabled with the server's reason.
 
 ## 4. Never shown
@@ -127,6 +128,16 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `TIMING_LABEL` | mock | When should it run? |
 | `TIMING_NOW` | mock | Run now |
 | `TIMING_NOW_BODY` | mock | Start as soon as you launch the run. |
+| `TIMING_LATER` | mock | Schedule for later |
+| `TIMING_LATER_BODY` | mock | Choose a future date and time for this run to start. |
+| `START_DATE` | deviation (FEAT-2 board F2SCHED-1) | Date |
+| `START_TIME` | deviation (FEAT-2 board F2SCHED-1) | Time |
+| `START_ZONE` | deviation (FEAT-2 board F2SCHED-1) | Time zone |
+| `START_HELP(n)` | deviation (computed from the server's lead wait; overseer ruling 2026-10-21) | Up to {n} days ahead. Policy and your access are checked again when it starts. |
+| `START_MISSING` | deviation (FEAT-2 board F2SCHED-1) | Choose a date and time. |
+| `START_PAST` | deviation (FEAT-2 board F2SCHED-1) | Choose a time in the future. |
+| `START_FAR(n)` | deviation (computed from the server's lead wait; overseer ruling 2026-10-21) | Choose a time up to {n} days ahead. |
+| `STARTS(when)` | deviation (FEAT-2 board F2SCHED-1) | Starts {when} |
 | `APP_LABEL` | mock | What should run? |
 | `APP_AUTOMATION` | mock | Automation / script |
 | `APP_AUTOMATION_BODY` | mock | A command or job that runs on its own. |
@@ -264,6 +275,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `LEDE_OPTIONAL` | mock | Harnesses are optional for this workload. Add one only when the sandbox should include an agent tool. |
 | `LEDE_INTERACTIVE` | mock | Add one or more harnesses. At most one can start with the run and receive an optional starting prompt. |
 | `LEDE_AUTONOMOUS` | mock | Pick the agent and give it its task. |
+| `LEDE_AUTONOMOUS_MULTI` | mock | Each agent works on its own task, side by side in one sandbox, with no SSH or terminal. |
 | `EMPTY_TITLE` | mock | No harnesses added |
 | `EMPTY_BODY` | mock | This workload can continue without one. |
 | `LOADING` | deviation (lead wording 2026-10-18, #2861) | Loading harnesses… |
@@ -285,6 +297,8 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `TASK_PLACEHOLDER` | mock | What should this agent accomplish? |
 | `TASK_HELP` | mock | This harness starts automatically when it has a task. |
 | `TASK_ERROR` | mock | An autonomous run needs at least one task to perform. |
+| `AGENT_TASK_ERROR` | mock | Give this agent a task, or remove it. |
+| `MULTI_NOTE` | mock | The agents share this sandbox, its files and your model sign-ins. Every agent's rules apply to all of them, so adding an agent can only narrow what the run may do. The run ends when every agent has finished; it fails if any agent fails. |
 | `HARNESS_REQUIRED` | deviation (lead wording 2026-10-17, FR-0099) | A run needs at least one harness. |
 | `ADD_HARNESS` | mock | Add a harness |
 | `ADD_ANOTHER` | mock | Add another harness |
@@ -321,6 +335,9 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `LIFE_KEPT(max, grace)` | deviation (DS-3 W2) | Kept after its end time so you can extend and resume it, up to its {max} maximum lifetime. Deleted when you end the run, or {grace} after its end time. |
 | `LIFE_KEPT_UNLIMITED(grace)` | pending (W-12) | Kept after its end time so you can extend and resume it. Deleted when you end the run, or {grace} after its end time. |
 | `LIFE_NO_END` | deviation (DS-3 W2) | Kept until you end the run. |
+| `REUSE_LABEL` | mock | Reuse it across runs |
+| `REUSE_ARIA` | mock | About reusing this drive |
+| `REUSE_TIP` | mock | Save this disk when the run ends and start another run from it. |
 | `REPOS_TITLE` | mock | Repositories |
 | `REPOS_BODY` | deviation (DS-3 W4) | Copied onto the main drive. Changes leave only as commits you push. |
 | `REPOSITORY_BADGE` | mock | Repository |
@@ -343,6 +360,8 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `FAMILY_HOST_FOLDER` | deviation (DS-3 W5) | Host folder |
 | `FAMILY_CLUSTER_VOLUME` | deviation (DS-3 W5) | Cluster volume |
 | `ACCESS_EDIT` | mock | Can edit |
+| `SHARED_WITH(groups)` | mock | Shared with: {groups} |
+| `TEAM_OTHERS_SEE` | mock | Others in this group see what your runs write here. |
 | `ACCESS_READ` | mock | Read-only |
 | `ACCESS_ARIA(name)` | mock | Access for {name} |
 | `LOCKED_ARIA` | mock | Why this drive is read-only |
@@ -417,6 +436,20 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `SUMMARY_KEPT(grace)` | pending (W-12) | the main drive is kept {grace} after its end time |
 | `SUMMARY_NO_END` | pending (W-12) | the main drive is kept until you end the run |
 | `SUMMARY_NO_EXTRA(size, life)` | mock | Main drive {size} · no extra files · {life}. |
+| `KEEP_WHAT` | mock | Keeps the work folder, /home/agent/work, as your own drive named after this run. Your home folder, harness settings and /tmp are not kept. |
+| `KEEP_WARNING` | mock | Anything an agent leaves in the folder comes back in the next run that uses it, including files you didn't ask for. Check it before you reuse it. |
+| `KEEP_COUNTS(n, limit)` | mock | Counts toward your drives. You have {n} of {limit} drives. Kept until you delete it. |
+| `KEEP_UNENFORCED` | mock | On this runner its size is not enforced. |
+| `KEEP_LIFE` | mock | The work folder is kept as a drive. The rest is deleted when the run ends. |
+| `KEEP_SUMMARY` | mock | the work folder is kept as a drive after the run |
+| `KEEP_STARTS_MAIN` | mock | the main drive |
+| `KEEP_LIMIT(n, limit)` | mock | You have {n} of {limit} drives. Delete one to keep this run's work folder. |
+| `KEEP_DISABLED` | deviation (lead wording 2026-10-20, #1991) | Your organisation doesn't let runs keep their work folder as a drive. Ask an admin. |
+| `KEEP_LIMIT_HINT` | mock | Or untick “Reuse it across runs” to launch without keeping it. |
+| `DRIVE_KEPT_FROM(run)` | mock | From run {run} · Kept until you delete it. |
+| `DRIVE_KEPT_FROM_UNTITLED` | deviation (lead wording 2026-10-20, #1991) | From an earlier run · Kept until you delete it. |
+| `DRIVE_SIZE_NOT_ENFORCED` | mock | Size not enforced |
+| `DRIVE_SIZE_NOT_ENFORCED_TIP` | mock | A Docker volume has no size cap. |
 | `ATTACH_TITLE` | deviation (owner-approved Files prototype 2026-10-13) | Repositories, drives and folders |
 | `ATTACH_BODY` | deviation (owner-approved Files prototype 2026-10-13) | Each one appears in the sandbox at its mount path. |
 | `ADD` | deviation (owner-approved Files prototype 2026-10-13) | + Add |
@@ -795,6 +828,9 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `BLOCKER_GATEWAY_OFF` | mock | The web app gateway is off on this server, so this run's apps can't be opened. Ask your admin to turn it on. |
 | `TIMING_INTERACTIVE` | mock | Interactive · Starts when launched |
 | `TIMING_NOW` | mock | Autonomous · Run now |
+| `TIMING_STARTS(when)` | deviation (FEAT-2 board F2SCHED-1) | Autonomous · Starts {when} |
+| `TIMING_CHOOSE` | deviation (derived from board F2SCHED-1's logic, not its copy box; approved 2026-10-20) | Autonomous · Choose a start time |
+| `TIMING_CHECKED` | deviation (FEAT-2 board F2SCHED-1) | Checked again when it starts. |
 | `WHERE_VALUE(pool)` | mock | {pool} pool |
 | `WHERE_NONE` | mock | No pool chosen yet |
 | `WHERE_DETAIL(kind, used, max)` | deviation (pool words) | {kind} · {used} of {max} running |

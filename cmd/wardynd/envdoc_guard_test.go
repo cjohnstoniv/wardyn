@@ -132,6 +132,9 @@ var envDocShellOnly = map[string]bool{
 	// sibling, and a mapping only: what enables the gateway is
 	// WARDYN_UI_SANDBOX_LISTEN, which Go does read.
 	"WARDYN_UI_SANDBOX_PORT": true,
+	// The harnesses image hands each agent of a background run with several its own
+	// prep mark (deploy/images/common/agent-run-set); set and read by shell only.
+	"WARDYN_TASK_PREPPED": true,
 	// The store-mode and Transit compose overlays' host directory holding the
 	// Vault token (deploy/compose/docker-compose.{vault,transit}.yaml); Go reads
 	// the mounted file.

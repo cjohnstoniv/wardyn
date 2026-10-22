@@ -15,6 +15,7 @@ import { NR_RUN } from "../../../wardyn/copy/new-run/run";
 import { NR_SHAPE } from "../../../wardyn/copy/new-run/shape";
 import { NR_TOOLS } from "../../../wardyn/copy/new-run/tools";
 import { NR_TEMPLATES } from "../../../wardyn/copy/new-run/templates";
+import { DRIVE_REFUSAL_REASON } from "../../../../lib/drive-refusals";
 import type { SetupItem } from "../../../../lib/types/preflight";
 import type { TemplateSetupNeed } from "../../../../lib/types/templates";
 import {
@@ -35,6 +36,8 @@ export interface Blocker {
   to?: NewRunLocation;
   /** The one field it names, when it names one: only that field's Review group shows it. */
   field?: string;
+  /** A second line under the text: what else the person can do. */
+  hint?: string;
 }
 
 /** The screen a field's fix lives on. Review and excluded fields have none to link to. */
@@ -48,6 +51,7 @@ const ISSUE_TEXT: Record<Exclude<StepIssueCode, AppProblemCode>, string> = {
   shape_required: NR_SHAPE.SHAPE_REQUIRED,
   harness_required: NR_HARNESSES.HARNESS_REQUIRED,
   task_required: NR_HARNESSES.TASK_ERROR,
+  agent_task_required: NR_HARNESSES.AGENT_TASK_ERROR,
   command_required: NR_RUN.COMMAND_REQUIRED,
   pool_required: NR_RUN.POOL_HELP,
   app_required: NR_RUN.PORT_REQUIRED,
@@ -74,7 +78,11 @@ export function specifies(intent: RunIntent, field: string): boolean {
 
 export interface BlockerInput {
   issues: readonly StepIssue[];
+  /** The draft keeps its work folder as a drive and the person is at their drive limit (#1991). */
+  keepLimit?: { text: string; hint: string };
   unsupported: readonly string[];
+  /** The refusal for harnesses no one declared image carries together (combinationReason), when the draft has them. */
+  combination?: string;
   templateNeeds: readonly TemplateSetupNeed[];
   /** The template's needs are unread or could not be read: fail closed with the stale line. */
   templateUnread?: boolean;
@@ -96,6 +104,8 @@ export function buildBlockers(input: BlockerInput): Blocker[] {
   for (const i of input.issues) {
     out.push({ id: `local:${i.code}`, kind: "local", text: isAppProblem(i.code) ? appIssueText({ ...i, code: i.code }) : ISSUE_TEXT[i.code], to: locationOfHome(i.home) });
   }
+  if (input.combination) out.push({ id: "local:combination", kind: "local", text: input.combination, to: locationOfHome("harnesses") });
+  if (input.keepLimit) out.push({ id: "keep:limit", kind: "local", ...input.keepLimit, to: locationOfHome("files"), field: "keep_work_folder" });
   for (const path of input.unsupported) {
     out.push({ id: `unsupported:${path}`, kind: "unsupported", text: NR_REVIEW.BLOCKER_UNSUPPORTED(path), to: locationOfHome(homeOfPath(path) ?? "document"), field: path });
   }
@@ -107,8 +117,13 @@ export function buildBlockers(input: BlockerInput): Blocker[] {
     const name = input.harnessLabel?.(c.harness) ?? c.harness;
     out.push({ id: `local_mcp:${c.harness}:${c.server}`, kind: "refusal", text: NR_TOOLS.MCP_REFUSED(name, c.server), to: { screen: "step", step: "tools" } });
   }
-  // The server's own refusal of the same conflict says it in other words; the one above stands for it.
-  if (input.refusal && !(input.localMcp?.length && input.refusal.reason === "request_field_unavailable")) {
+  // The server's own refusal of the same conflict says it in other words; the blocker above stands for it. The keep
+  // blocker likewise says the member limit.
+  if (
+    input.refusal &&
+    !(input.localMcp?.length && input.refusal.reason === "request_field_unavailable") &&
+    !(input.keepLimit && input.refusal.reason === DRIVE_REFUSAL_REASON.MEMBER_LIMIT_REACHED)
+  ) {
     const field = (FIELD_OF_REASON as Record<string, string | undefined>)[input.refusal.reason];
     out.push({ id: "refusal", kind: "refusal", text: input.refusal.text, to: locationOfHome(homeOfReason(input.refusal.reason)), ...(field && { field }) });
   }

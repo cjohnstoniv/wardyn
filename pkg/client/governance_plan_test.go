@@ -18,15 +18,15 @@ import (
 // and a document that keeps "keep", changes "edit" and adds "fresh".
 func governancePlanFixture() (current, doc client.GovernanceDocument) {
 	keepID, editID := uuid.New(), uuid.New()
-	keep := client.GovernanceProfile{ID: keepID, Name: "keep",
+	keep := client.GovernanceUnit{ID: keepID, Name: "keep",
 		Ceiling: client.RunPolicySpec{MinConfinementClass: client.CC1}}
-	edit := client.GovernanceProfile{ID: editID, Name: "edit",
+	edit := client.GovernanceUnit{ID: editID, Name: "edit",
 		Ceiling: client.RunPolicySpec{MinConfinementClass: client.CC1},
 		Limits:  client.GovernanceLimits{MaxConcurrentRuns: 1}}
-	current = client.GovernanceDocument{Profiles: []client.GovernanceProfile{keep, edit}}
+	current = client.GovernanceDocument{Units: []client.GovernanceUnit{keep, edit}}
 	wanted := edit
 	wanted.Limits = client.GovernanceLimits{MaxConcurrentRuns: 4}
-	doc = client.GovernanceDocument{Profiles: []client.GovernanceProfile{
+	doc = client.GovernanceDocument{Units: []client.GovernanceUnit{
 		keep,
 		wanted,
 		{Name: "fresh"},
@@ -45,11 +45,11 @@ func TestPlanGovernance_ListsCreatesUpdatesAndUnchangedWithoutWriting(t *testing
 		t.Fatalf("steps = %+v, want the edit update then the fresh create (apply's order)", plan.Steps)
 	}
 	update, create := plan.Steps[0], plan.Steps[1]
-	if update.Kind != "profile" || update.Op != "update" || update.Name != "edit" ||
-		!slices.Equal(update.Fields, []string{"limits"}) || update.ID == nil || *update.ID != current.Profiles[1].ID {
+	if update.Kind != "unit" || update.Op != "update" || update.Name != "edit" ||
+		!slices.Equal(update.Fields, []string{"limits"}) || update.ID == nil || *update.ID != current.Units[1].ID {
 		t.Fatalf("update step = %+v, want profile update of edit changing limits", update)
 	}
-	if create.Kind != "profile" || create.Op != "create" || create.Name != "fresh" {
+	if create.Kind != "unit" || create.Op != "create" || create.Name != "fresh" {
 		t.Fatalf("create step = %+v, want profile create of fresh", create)
 	}
 	if plan.Unchanged != 1 || plan.Destructive {
@@ -63,15 +63,15 @@ func TestPlanGovernance_ListsCreatesUpdatesAndUnchangedWithoutWriting(t *testing
 func TestPlanGovernance_PruneNamesEveryDeleteAndMarksDestructive(t *testing.T) {
 	keepID, dropID, asgKeep, asgDrop := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	current := client.GovernanceDocument{
-		Profiles: []client.GovernanceProfile{{ID: keepID, Name: "kept"}, {ID: dropID, Name: "dropped"}},
-		Assignments: []client.GovernanceAssignment{
-			{ID: asgKeep, SubjectType: "user", Subject: "a", ProfileID: keepID},
-			{ID: asgDrop, SubjectType: "user", Subject: "b", ProfileID: dropID},
+		Units: []client.GovernanceUnit{{ID: keepID, Name: "kept"}, {ID: dropID, Name: "dropped"}},
+		Memberships: []client.GovernanceMembership{
+			{ID: asgKeep, SubjectType: "user", Subject: "a", UnitID: keepID},
+			{ID: asgDrop, SubjectType: "user", Subject: "b", UnitID: dropID},
 		},
 	}
 	doc := client.GovernanceDocument{
-		Profiles:    []client.GovernanceProfile{{ID: keepID, Name: "kept"}},
-		Assignments: []client.GovernanceAssignment{{SubjectType: "user", Subject: "a", ProfileID: keepID}},
+		Units:       []client.GovernanceUnit{{ID: keepID, Name: "kept"}},
+		Memberships: []client.GovernanceMembership{{SubjectType: "user", Subject: "a", UnitID: keepID}},
 	}
 	g, c := newGovServer(t, current)
 
@@ -83,11 +83,11 @@ func TestPlanGovernance_PruneNamesEveryDeleteAndMarksDestructive(t *testing.T) {
 		t.Fatalf("steps = %+v, want exactly the assignment delete then the profile delete", plan.Steps)
 	}
 	asg, prof := plan.Steps[0], plan.Steps[1]
-	if asg.Kind != "assignment" || asg.Op != "delete" || asg.Subject != "b" || asg.ID == nil || *asg.ID != asgDrop ||
-		asg.Profile != "dropped" {
+	if asg.Kind != "membership" || asg.Op != "delete" || asg.Subject != "b" || asg.ID == nil || *asg.ID != asgDrop ||
+		asg.Unit != "dropped" {
 		t.Fatalf("assignment delete = %+v, want user b on dropped", asg)
 	}
-	if prof.Kind != "profile" || prof.Op != "delete" || prof.Name != "dropped" || prof.ID == nil || *prof.ID != dropID {
+	if prof.Kind != "unit" || prof.Op != "delete" || prof.Name != "dropped" || prof.ID == nil || *prof.ID != dropID {
 		t.Fatalf("profile delete = %+v, want dropped", prof)
 	}
 	if !plan.Destructive {
@@ -118,19 +118,19 @@ func TestPlanGovernance_PruneNamesEveryDeleteAndMarksDestructive(t *testing.T) {
 func TestGovernance_CanonicalSubjectIsUnchangedUnderPrune(t *testing.T) {
 	pid := uuid.New()
 	current := client.GovernanceDocument{
-		Profiles: []client.GovernanceProfile{{ID: pid, Name: "p"}},
-		Assignments: []client.GovernanceAssignment{
-			{ID: uuid.New(), SubjectType: "user", Subject: "alice@corp.com", ProfileID: pid},
-			{ID: uuid.New(), SubjectType: "group", Subject: "engineering", ProfileID: pid},
-			{ID: uuid.New(), SubjectType: "all", ProfileID: pid},
+		Units: []client.GovernanceUnit{{ID: pid, Name: "p"}},
+		Memberships: []client.GovernanceMembership{
+			{ID: uuid.New(), SubjectType: "user", Subject: "alice@corp.com", UnitID: pid},
+			{ID: uuid.New(), SubjectType: "group", Subject: "engineering", UnitID: pid},
+			{ID: uuid.New(), SubjectType: "all", UnitID: pid},
 		},
 	}
 	doc := client.GovernanceDocument{
-		Profiles: []client.GovernanceProfile{{ID: pid, Name: "p"}},
-		Assignments: []client.GovernanceAssignment{
-			{SubjectType: "user", Subject: "Alice@Corp.com", ProfileID: pid},
-			{SubjectType: "group", Subject: "Engineering ", ProfileID: pid},
-			{SubjectType: "all", Subject: "stray", ProfileID: pid},
+		Units: []client.GovernanceUnit{{ID: pid, Name: "p"}},
+		Memberships: []client.GovernanceMembership{
+			{SubjectType: "user", Subject: "Alice@Corp.com", UnitID: pid},
+			{SubjectType: "group", Subject: "Engineering ", UnitID: pid},
+			{SubjectType: "all", Subject: "stray", UnitID: pid},
 		},
 	}
 
@@ -157,8 +157,8 @@ func TestGovernance_CanonicalSubjectIsUnchangedUnderPrune(t *testing.T) {
 // same method and kind, in the same order.
 func TestPlanGovernance_AgreesWithApply(t *testing.T) {
 	current, doc := governancePlanFixture()
-	doc.Assignments = []client.GovernanceAssignment{
-		{SubjectType: "user", Subject: "alice", ProfileID: doc.Profiles[1].ID},
+	doc.Memberships = []client.GovernanceMembership{
+		{SubjectType: "user", Subject: "alice", UnitID: doc.Units[1].ID},
 	}
 	planServer, planClient := newGovServer(t, current)
 	plan, err := planClient.PlanGovernance(context.Background(), doc, false)
@@ -177,23 +177,23 @@ func TestPlanGovernance_AgreesWithApply(t *testing.T) {
 	var planned []string
 	for _, s := range plan.Steps {
 		switch {
-		case s.Kind == "profile" && s.Op == "create":
-			planned = append(planned, "POST profile")
-		case s.Kind == "profile" && s.Op == "update":
-			planned = append(planned, "PUT profile")
-		case s.Kind == "assignment":
-			planned = append(planned, "POST assignment")
+		case s.Kind == "unit" && s.Op == "create":
+			planned = append(planned, "POST unit")
+		case s.Kind == "unit" && s.Op == "update":
+			planned = append(planned, "PUT unit")
+		case s.Kind == "membership":
+			planned = append(planned, "POST membership")
 		}
 	}
 	var applied []string
 	for _, w := range applyServer.writes {
 		switch {
-		case strings.HasPrefix(w, "POST /api/v1/governance/profiles"):
-			applied = append(applied, "POST profile")
-		case strings.HasPrefix(w, "PUT /api/v1/governance/profiles/"):
-			applied = append(applied, "PUT profile")
-		case w == "POST /api/v1/governance/assignments":
-			applied = append(applied, "POST assignment")
+		case strings.HasPrefix(w, "POST /api/v1/governance/units"):
+			applied = append(applied, "POST unit")
+		case strings.HasPrefix(w, "PUT /api/v1/governance/units/"):
+			applied = append(applied, "PUT unit")
+		case w == "POST /api/v1/governance/memberships":
+			applied = append(applied, "POST membership")
 		default:
 			t.Fatalf("apply issued an unexpected write %q", w)
 		}
@@ -208,13 +208,13 @@ func TestPlanGovernance_AgreesWithApply(t *testing.T) {
 // write too, and the two agree.
 func TestPlanGovernance_RenamedBaseRepointsTheComposedProfile(t *testing.T) {
 	baseID, composedID := uuid.New(), uuid.New()
-	renamed := client.GovernanceProfile{ID: baseID, Name: "platform-base", Ceiling: client.RunPolicySpec{MinConfinementClass: client.CC1}}
-	composed := client.GovernanceProfile{ID: composedID, Name: "team", BaseProfileID: &baseID}
-	current := client.GovernanceDocument{Profiles: []client.GovernanceProfile{renamed, composed}}
+	renamed := client.GovernanceUnit{ID: baseID, Name: "platform-base", Ceiling: client.RunPolicySpec{MinConfinementClass: client.CC1}}
+	composed := client.GovernanceUnit{ID: composedID, Name: "team", ParentID: &baseID}
+	current := client.GovernanceDocument{Units: []client.GovernanceUnit{renamed, composed}}
 	// The exported file still calls the base by its old name.
 	oldName := renamed
 	oldName.Name = "base"
-	doc := client.GovernanceDocument{Profiles: []client.GovernanceProfile{oldName, composed}}
+	doc := client.GovernanceDocument{Units: []client.GovernanceUnit{oldName, composed}}
 
 	planServer, planClient := newGovServer(t, current)
 	plan, err := planClient.PlanGovernance(context.Background(), doc, false)
@@ -223,11 +223,11 @@ func TestPlanGovernance_RenamedBaseRepointsTheComposedProfile(t *testing.T) {
 	}
 	var team *client.ApplyStep
 	for i, s := range plan.Steps {
-		if s.Kind == "profile" && s.Name == "team" {
+		if s.Kind == "unit" && s.Name == "team" {
 			team = &plan.Steps[i]
 		}
 	}
-	if team == nil || team.Op != "update" || !slices.Equal(team.Fields, []string{"base_profile_id"}) {
+	if team == nil || team.Op != "update" || !slices.Equal(team.Fields, []string{"parent_id"}) {
 		t.Fatalf("plan = %+v, want an update of team re-pointing its base", plan)
 	}
 	if plan.Unchanged != 0 || len(planServer.writes) != 0 {
@@ -238,7 +238,7 @@ func TestPlanGovernance_RenamedBaseRepointsTheComposedProfile(t *testing.T) {
 	if _, err := applyClient.ApplyGovernanceResult(context.Background(), doc, false); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(applyServer.writes, "PUT /api/v1/governance/profiles/"+composedID.String()) {
+	if !slices.Contains(applyServer.writes, "PUT /api/v1/governance/units/"+composedID.String()) {
 		t.Fatalf("apply writes = %v, want the PUT of team the plan listed", applyServer.writes)
 	}
 }

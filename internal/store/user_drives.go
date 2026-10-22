@@ -26,7 +26,7 @@ const userDriveCols = `id, name, backend, host_root, storage_class, home_templat
 // driveRowCols is userDriveCols plus the member-drive columns: every read that
 // can return a member drive scans these, so the owner always travels with it.
 // The resolvers keep userDriveCols, since a member drive has no grant to win.
-const driveRowCols = userDriveCols + `, owner_subject, delete_started_at`
+const driveRowCols = userDriveCols + `, owner_subject, delete_started_at, kept_from_run`
 
 const userDriveGrantCols = `id, subject_type, subject, drive_id, priority, ` +
 	`size_mib_override, writable_override, home_override, enabled, created_at, created_by, members_can_write`
@@ -87,7 +87,7 @@ func userDriveDest(d *types.UserDrive) []any {
 
 // driveRowDest is the scan target list for driveRowCols.
 func driveRowDest(d *types.UserDrive) []any {
-	return append(userDriveDest(d), &d.OwnerSubject, &d.DeleteStartedAt)
+	return append(userDriveDest(d), &d.OwnerSubject, &d.DeleteStartedAt, &d.KeptFromRun)
 }
 
 // userDriveGrantDest is the same for userDriveGrantCols. writable_override
@@ -275,7 +275,7 @@ func (s PG) DeleteUserDrive(ctx context.Context, id uuid.UUID) error {
 func (s PG) ListUserDrives(ctx context.Context) ([]types.UserDriveListItem, error) {
 	const q = `SELECT d.id, d.name, d.backend, d.host_root, d.storage_class, d.home_template,
 			d.size_mib, d.writable, d.reclaim, d.created_at, d.updated_at, d.created_by, d.object_scheme, d.team,
-			d.owner_subject, d.delete_started_at, COALESCE(c.n, 0)
+			d.owner_subject, d.delete_started_at, d.kept_from_run, COALESCE(c.n, 0)
 		FROM user_drives d
 		LEFT JOIN (SELECT drive_id, COUNT(*) AS n FROM user_drive_grants GROUP BY drive_id) c
 			ON c.drive_id = d.id
@@ -603,7 +603,7 @@ func (s PG) ListUserDriveGrantsPage(ctx context.Context, p Page) ([]types.UserDr
 
 // ResolveUserDrive returns THE ONE drive that applies to a caller, the winning grant, and its tier
 // — or ErrNotFound. The whole precedence rule lives in the ORDER BY (subjectMatch/subjectPrecedence,
-// shared with ResolveGovernanceProfile since both rank the same subject vocabulary): one indexed
+// shared with ResolveGovernanceUnit since both rank the same subject vocabulary): one indexed
 // read on UNIQUE(subject_type, subject), so there's no second Go implementation to mis-order.
 //
 // Disabled grants stay in the query; the winner's own `enabled` decides PAUSED vs MOUNTED. Excluding
@@ -612,7 +612,7 @@ func (s PG) ListUserDriveGrantsPage(ctx context.Context, p Page) ([]types.UserDr
 // one stopping (DESIGN §2.2).
 //
 // userSubjects/groups are normalized from nil to empty: a nil Go slice binds as SQL NULL, and
-// `x = ANY(NULL)` is NULL rather than false — same reasoning as ResolveGovernanceProfile.
+// `x = ANY(NULL)` is NULL rather than false — same reasoning as ResolveGovernanceUnit.
 //
 // userType is the caller's one type id; "" matches no row.
 func (s PG) ResolveUserDrive(ctx context.Context, userSubjects, groups []string, userType string) (

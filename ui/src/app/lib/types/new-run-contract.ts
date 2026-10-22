@@ -195,8 +195,8 @@ export interface ManagedSettingsFact {
   /** Whose document this is: the started agent's, else the first harness of the set that brings one. */
   harness?: string;
   locked?: boolean;
-  locked_by?: "profile" | "organisation";
-  profile?: string;
+  locked_by?: "unit" | "organisation";
+  unit?: string;
 }
 
 export interface TelemetryFact {
@@ -300,6 +300,8 @@ export interface IncludedTool {
   component?: ComponentRef;
   tool_rules?: ToolRule[];
   default_effect?: "allow" | "hold" | "deny";
+  /** This harness's own prompt in a background run with several agents; not on workload.agent. */
+  task?: string;
 }
 
 export type StartupKind = "none" | "harness" | "command";

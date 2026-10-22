@@ -27,11 +27,11 @@ const (
 
 // disclosureGraph is a base that now allows only api.anthropic.com, and a leaf whose overlay still
 // names a host the base used to allow.
-func disclosureGraph() (base, leaf types.GovernanceProfile) {
+func disclosureGraph() (base, leaf types.GovernanceUnit) {
 	spec := govProfileSpec()
 	spec.AllowedDomains = []string{"api.anthropic.com"}
-	base = types.GovernanceProfile{ID: uuid.New(), Name: secretBaseName, Ceiling: spec}
-	leaf = types.GovernanceProfile{ID: uuid.New(), Name: "team", BaseProfileID: &base.ID, Overlay: &types.CeilingOverlay{
+	base = types.GovernanceUnit{ID: uuid.New(), Name: secretBaseName, Ceiling: spec}
+	leaf = types.GovernanceUnit{ID: uuid.New(), Name: "team", ParentID: &base.ID, Overlay: &types.CeilingOverlay{
 		AllowedDomains: &[]string{"api.anthropic.com", secretBaseHost}}}
 	return base, leaf
 }
@@ -48,7 +48,7 @@ func assertNoBase(t *testing.T, where, text string) {
 func TestComposedProfileDisclosesNothingOfItsBaseToAMember(t *testing.T) {
 	base, leaf := disclosureGraph()
 	cs := assignedStore(&leaf)
-	cs.govGraph = []types.GovernanceProfile{base, leaf}
+	cs.govGraph = []types.GovernanceUnit{base, leaf}
 	srv, st := pvFixture(t, cs)
 	st.profiles = cs.govGraph
 	const owner = "sub-walled"
@@ -113,12 +113,12 @@ func TestComposedProfileDisclosesNothingOfItsBaseToAMember(t *testing.T) {
 func TestComposedProfileLaunchRefusalNamesOnlyTheLeaf(t *testing.T) {
 	baseSpec := govProfileSpec()
 	baseSpec.AllowedMethods = []string{"GET"}
-	base := types.GovernanceProfile{ID: uuid.New(), Name: secretBaseName, Ceiling: baseSpec}
+	base := types.GovernanceUnit{ID: uuid.New(), Name: secretBaseName, Ceiling: baseSpec}
 	post := []string{"POST"}
-	leaf := types.GovernanceProfile{ID: uuid.New(), Name: "team", BaseProfileID: &base.ID,
+	leaf := types.GovernanceUnit{ID: uuid.New(), Name: "team", ParentID: &base.ID,
 		Overlay: &types.CeilingOverlay{AllowedMethods: &post}}
 	cs := assignedStore(&leaf)
-	cs.govGraph = []types.GovernanceProfile{base, leaf}
+	cs.govGraph = []types.GovernanceUnit{base, leaf}
 	srv, _, audit := govEscapeFixture(t, cs)
 
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", govSession(t, "sub-walled", []string{"eng"}, false), `{"agent":"claude-code","task":"t"}`)
@@ -149,7 +149,7 @@ func TestComposedProfileSeededBadChainsFailTheLaunchClosed(t *testing.T) {
 			base, leaf := composedPair(types.RunPolicySpec{}, types.GovernanceLimits{})
 			graph := sc.profiles(base, leaf)
 			// The leaf the resolver picks is the one in the graph that names the base the scenario seeded.
-			i := slices.IndexFunc(graph, func(p types.GovernanceProfile) bool { return p.ID == leaf.ID })
+			i := slices.IndexFunc(graph, func(p types.GovernanceUnit) bool { return p.ID == leaf.ID })
 			cs := assignedStore(&graph[i])
 			cs.govGraph, cs.govChainErr = graph, sc.listErr
 			srv, st, _ := govEscapeFixture(t, cs)

@@ -58,6 +58,17 @@ func newSetupCommand() *cobra.Command {
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
 		// First: a token handed over as /dev/fd/N is never inherited by a child.
 		markTokenFD(o.tokenFile)
+		// Before any dial-out: a locked profile refuses a flag that disagrees. Setup reads no environment
+		// variable but the one --org-ca-file defaults from.
+		setupEnv := func(k string) string {
+			if k == "WARDYN_ORG_CA_FILE" {
+				return os.Getenv(k)
+			}
+			return ""
+		}
+		if err := checkSecurityLock(runnerInputs{flag: changedFlags(cmd), getenv: setupEnv, managed: managedPref, lockRead: managedLockRead}); err != nil {
+			return err
+		}
 		// On a Mac with the configuration profile, --org is optional.
 		if !cmd.Flags().Changed("org") {
 			o.org = cmp.Or(managedPref("OrgURL"), o.org)

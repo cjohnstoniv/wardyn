@@ -62,6 +62,7 @@ type queueStore interface {
 	SetQueueWait(ctx context.Context, id uuid.UUID, detail string) error
 	SetHeldQueueWaits(ctx context.Context, poolID uuid.UUID, details map[uuid.UUID]string) error
 	SetPromotedStatusDetail(ctx context.Context, id uuid.UUID, detail string) error
+	RequeuePromotedRun(ctx context.Context, e store.RunQueueEntry, detail string) (bool, error)
 	ExitQueuedRun(ctx context.Context, id uuid.UUID, to types.RunState, detail, hint string) (bool, error)
 }
 
@@ -79,7 +80,7 @@ type queuedLaunch struct {
 	// repo seeded onto it, say), so the start folds it afresh as the owner.
 	Request json.RawMessage `json:"request"`
 	// ProfileID is the governance profile the owner resolved to at launch; nil for none.
-	ProfileID *uuid.UUID `json:"profile_id,omitempty"`
+	UnitID *uuid.UUID `json:"unit_id,omitempty"`
 	// ProviderID is the model provider the launch chose; the start re-resolves this one, never another.
 	ProviderID string `json:"provider_id,omitempty"`
 	// ConfinementDefault says who chose the class of a launch that named none (the organisation or the
@@ -168,6 +169,10 @@ func queueSHA256(b []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// queuedRunCommitted runs once a queued run and its queue row have committed, before the rest of its
+// answer. Tests set it to promote in that window.
+var queuedRunCommitted = func(context.Context, uuid.UUID) {}
+
 // queuedCreate is a create that waits: the door's facts, handed to answer in place of the mint.
 // answer is a method on this type, not on the Server, so the structural guard on the create/preflight
 // parity (preflight_launch_gate_parity_test.go) sees the handler's gates and not this branch.
@@ -203,7 +208,20 @@ func (q queuedCreate) answer(s *Server, w http.ResponseWriter, r *http.Request) 
 	// The snapshots revive, extend and the run.create row read commit with the queue row: a creator
 	// that dies after the commit leaves no promotable run without its authority.
 	entry.Components, entry.Harnesses = q.f.comps.snapshotRows(), q.f.harnesses
+	// The kept work folder's drive commits with the queue row too: a promotion never finds a waiting
+	// keep run without it, and a drive refused at the store's count leaves no run behind.
+	var kept types.UserDrive
+	if k := q.f.keep; k != nil {
+		kept = keptDrive(r, k, q.run)
+		entry.KeptDrive, entry.KeptDriveLimit = &kept, k.limit
+	}
 	created, err := s.createQueuedRun(ctx, q.run, entry)
+	if q.f.keep != nil {
+		if refusal := keptDriveRefusal(err, q.f.keep, kept); refusal != nil {
+			refusal.write(s, w, r)
+			return
+		}
+	}
 	switch {
 	case errors.Is(err, store.ErrRunQueueFull):
 		writePoolRefusal(w, runnerpool.Refusal{Reason: runnerpool.ReasonQueueFull, Name: pool.Name, Count: queueMaxPerOwner})
@@ -215,7 +233,11 @@ func (q queuedCreate) answer(s *Server, w http.ResponseWriter, r *http.Request) 
 		writeServerError(w, r, "create run", err)
 		return
 	}
+	queuedRunCommitted(ctx, created.ID)
 	s.recordPolicyApplyAudits(ctx, q.f.source)
+	if q.f.keep != nil {
+		s.auditKeptDrive(r, q.f.keep, created, kept)
+	}
 	if rows := entry.Components; len(rows) > 0 {
 		err := errors.New("api: the store cannot record run components")
 		if st, ok := s.cfg.Store.(store.ComponentStore); ok {
@@ -249,7 +271,10 @@ func (q queuedCreate) answer(s *Server, w http.ResponseWriter, r *http.Request) 
 	}
 	if created.State == types.RunQueued {
 		sentence := runnerpool.WaitAtCapacityMsg(pool.Name, capMax)
-		if q.f.place.waitsForRoom {
+		switch {
+		case q.f.schedule != nil:
+			sentence = scheduledWaitMsg(q.f.schedule)
+		case q.f.place.waitsForRoom:
 			sentence = runnerpool.WaitRunnersAtCapacityMsg(pool.Name)
 		}
 		warnings = append(warnings, sentence)
@@ -261,9 +286,12 @@ func (q queuedCreate) answer(s *Server, w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings, ResourcesApplied: &q.f.place.applied})
 }
 
-// waitReason is why the launch waits: the pool is at its own cap, or (a pool with none) every runner
-// that could take the run is at one of its limits.
+// waitReason is why the launch waits: it is scheduled for later, the pool is at its own cap, or (a pool
+// with none) every runner that could take the run is at one of its limits.
 func (q queuedCreate) waitReason() runnerpool.WaitReason {
+	if q.f.schedule != nil {
+		return runnerpool.WaitScheduled
+	}
 	if q.f.place.waitsForRoom {
 		return runnerpool.WaitRunnersAtCapacity
 	}
@@ -284,22 +312,27 @@ func (q queuedCreate) entry(s *Server, ctx context.Context, waitSec int) (store.
 		Request: q.original, ProviderID: q.f.mpChoice.provider.ID, MaxWaitSec: waitSec, ConfinementDefault: q.f.confinementDefault,
 		Repos: runRepos(types.AgentRun{Repo: q.req.Repo}, nil), LifetimeCapSec: q.f.end.capSec,
 		Resources: s.runFitSpec(q.f.spec, q.f.mainDrive).Resources, Unbound: q.f.place.unbound,
-		Barrier: q.f.enforced, Drives: len(q.f.drives) > 0, NoLocal: q.f.place.noLocal,
+		Barrier: q.f.enforced, Drives: mountsDrives(q.f.drives, q.f.keep), NoLocal: q.f.place.noLocal,
 	}
 	launch.Repos = append(launch.Repos, repoLocatorsOf(q.f.spec.WorkspaceRepos)...)
-	if q.f.ceiling.Profile != nil {
-		id := q.f.ceiling.Profile.ID
-		launch.ProfileID = &id
+	if q.f.ceiling.Unit != nil {
+		id := q.f.ceiling.Unit.ID
+		launch.UnitID = &id
 	}
 	raw, err := json.Marshal(launch)
 	if err != nil {
 		return store.RunQueueEntry{}, err
 	}
 	now := q.run.CreatedAt
-	return store.RunQueueEntry{
+	e := store.RunQueueEntry{
 		PoolID: *q.run.RunnerPoolID, Owner: q.run.CreatedBy, QueuedAt: now, DeadlineAt: now.Add(time.Duration(waitSec) * time.Second),
 		PolicyRef: ref, Authority: auth, Launch: raw,
-	}, nil
+	}
+	if sch := q.f.schedule; sch != nil {
+		at := sch.at
+		e.StartAt, e.DeadlineAt = &at, scheduledDeadline(now, at, waitSec)
+	}
+	return e, nil
 }
 
 // auditQueuedCreate is the run.create row of a launch that waits: the queue facts and no jti, since
@@ -313,12 +346,16 @@ func (s *Server) auditQueuedCreate(ctx context.Context, q queuedCreate, created 
 	stampConfinementDefault(createData, q.reqCC, q.f.confinementDefault)
 	createData["end"] = q.f.end.audit(created)
 	q.intent.stamp(createData, created.LaunchIntent != nil)
-	stampDriveAudit(createData, q.f.drives)
+	stampDriveAudit(createData, q.f.drives, q.f.keep != nil, created.ID)
 	stampHarnessSet(createData, q.f.harnesses, q.f.image)
-	createData["queue"] = map[string]any{
+	queue := map[string]any{
 		"pool_id": e.PoolID, "position": position, "max_wait_sec": waitSec, "deadline_at": e.DeadlineAt, "capped": !q.f.place.waitsForRoom,
 		"reason": string(q.waitReason()),
 	}
+	if sch := q.f.schedule; sch != nil {
+		queue["start_at"], queue["time_zone"] = sch.at, sch.zone
+	}
+	createData["queue"] = queue
 	q.f.comps.stampRunCreate(createData)
 	maps.Copy(createData, q.f.place.auditFields(created, s.runnerNameOf(ctx, created)))
 	s.markGovernanceExempt(ctx, createData)

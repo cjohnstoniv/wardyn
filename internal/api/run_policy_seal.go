@@ -21,13 +21,17 @@ import (
 // fails on a new one, or on a widening that runs after the seal.
 
 // sealLayer is one outer limit on a run's egress, and the record a knob it
-// decides carries in the run's provenance. spec is read as the layer's whole
-// egress: with AllowAllEgress false its AllowedDomains is the allowlist, so a nil
-// one allows nothing. A layer that only denies (names no allowlist) passes
-// AllowAllEgress true and its denies.
+// decides carries in the run's provenance. egress holds only the three egress
+// knobs, each nil when the layer does not bound it: AllowedDomains is an
+// allowlist (an empty one allows nothing), AllowAllEgress false turns open
+// egress off and keeps the run's own allowlist, and DeniedDomains is added. A
+// layer that only denies leaves the first two nil. grants is the credential
+// grants the layer lets a run be given, nil for no limit (an empty list allows
+// none); the seal never reads it, the withholding after it does.
 type sealLayer struct {
-	rec  policyref.Provenance
-	spec types.RunPolicySpec
+	rec    policyref.Provenance
+	egress types.CeilingOverlay
+	grants *[]types.GrantSpec
 }
 
 // sealDecision is one knob a layer narrowed.
@@ -40,32 +44,49 @@ type sealDecision struct {
 // first: the Wardyn boundary, then the owner's restrictions (still to come).
 // Unit walls are inner layers, applied at resolve, never here. In no_limits there
 // is no layer, so the seal is the identity. A boundary that cannot be read seals
-// the run to no egress at all: an unread boundary is never no boundary.
+// the run to no egress and no credential at all: an unread boundary is never no
+// boundary.
 func (s *Server) outerLayers(ctx context.Context, run types.AgentRun) []sealLayer {
 	b, err := s.governanceBoundary(ctx)
 	if err != nil {
 		slog.ErrorContext(ctx, "wardynd: read the Wardyn boundary at the seal; the run is sealed to no egress",
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))
-		return []sealLayer{{rec: boundaryProvenance, spec: types.RunPolicySpec{AllowedDomains: []string{}}}}
+		off := false
+		return []sealLayer{{rec: boundaryProvenance, egress: types.CeilingOverlay{AllowedDomains: &[]string{}, AllowAllEgress: &off},
+			grants: &[]types.GrantSpec{}}}
 	}
 	if !b.HardLimits() {
 		return nil
 	}
-	return []sealLayer{{rec: boundaryProvenance, spec: boundarySealSpec(b.Spec)}}
+	return []sealLayer{{rec: boundaryProvenance, egress: boundarySealEgress(b.Spec), grants: b.Spec.EligibleGrants}}
 }
 
-// boundarySealSpec is the boundary's egress as a seal layer, read as the resolve
-// meet reads it (types.BoundarySpec.Overlay): its allowlist when it names one and
-// does not also allow all egress, otherwise a deny-only layer (AllowAllEgress
-// true); its denies either way. allow_all_egress named false with no allowlist
-// turns open egress off at resolve; at the seal it bounds nothing beyond the denies.
-func boundarySealSpec(sp types.BoundarySpec) types.RunPolicySpec {
-	out := types.RunPolicySpec{AllowAllEgress: sp.AllowedDomains == nil || (sp.AllowAllEgress != nil && *sp.AllowAllEgress)}
-	if !out.AllowAllEgress {
-		out.AllowedDomains = slices.Clone(*sp.AllowedDomains)
+// boundarySealEgress is the boundary's egress as a seal layer: its allowlist when it names one and
+// does not also allow all egress; allow_all_egress as named, or false beside an allowlist, as the
+// resolve meet reads it (types.BoundarySpec.Overlay); its denies either way. An explicit false with
+// no allowlist turns open egress off and keeps the run's own allowlist, so a run that was open when
+// it was frozen is closed at its revive. Naming neither leaves a deny-only layer.
+func boundarySealEgress(sp types.BoundarySpec) types.CeilingOverlay {
+	var out types.CeilingOverlay
+	open := sp.AllowAllEgress != nil && *sp.AllowAllEgress
+	if sp.AllowedDomains != nil && !open {
+		list := slices.Clone(*sp.AllowedDomains)
+		if list == nil {
+			list = []string{}
+		}
+		out.AllowedDomains = &list
 	}
-	if sp.DeniedDomains != nil {
-		out.DeniedDomains = slices.Clone(*sp.DeniedDomains)
+	switch {
+	case sp.AllowAllEgress != nil:
+		v := *sp.AllowAllEgress
+		out.AllowAllEgress = &v
+	case out.AllowedDomains != nil:
+		off := false
+		out.AllowAllEgress = &off
+	}
+	if sp.DeniedDomains != nil && len(*sp.DeniedDomains) > 0 {
+		deny := slices.Clone(*sp.DeniedDomains)
+		out.DeniedDomains = &deny
 	}
 	return out
 }
@@ -73,15 +94,19 @@ func boundarySealSpec(sp types.BoundarySpec) types.RunPolicySpec {
 // sealRunPolicy seals policy against the run's outer layers and records which
 // layer decided each knob it narrowed: in prov when the path keeps a provenance
 // record (dispatch; nil on a revive), and in the log. Where several layers narrow
-// one knob, the last of them, the innermost, is the one recorded.
-func (s *Server) sealRunPolicy(ctx context.Context, run types.AgentRun, policy *types.RunPolicySpec, prov knobProvenance) {
-	for _, d := range sealPolicy(policy, s.outerLayers(ctx, run)) {
+// one knob, the last of them, the innermost, is the one recorded. It returns the
+// layers it read, so the credentials the path withholds next are judged against
+// the same read (withholding).
+func (s *Server) sealRunPolicy(ctx context.Context, run types.AgentRun, policy *types.RunPolicySpec, prov knobProvenance) []sealLayer {
+	layers := s.outerLayers(ctx, run)
+	for _, d := range sealPolicy(policy, layers) {
 		if prov != nil {
 			prov[d.knob] = d.layer
 		}
 		slog.InfoContext(ctx, "wardynd: the final seal narrowed the run's policy",
 			slog.String("run_id", run.ID.String()), slog.String("knob", d.knob), slog.String("layer", d.layer.Layer))
 	}
+	return layers
 }
 
 // sealPolicy meets spec with each layer in order, by the governance meet
@@ -92,15 +117,8 @@ func (s *Server) sealRunPolicy(ctx context.Context, run types.AgentRun, policy *
 func sealPolicy(spec *types.RunPolicySpec, layers []sealLayer) []sealDecision {
 	var decided []sealDecision
 	for _, l := range layers {
-		ov := types.CeilingOverlay{AllowAllEgress: &l.spec.AllowAllEgress}
-		if !l.spec.AllowAllEgress {
-			ov.AllowedDomains = &l.spec.AllowedDomains
-		}
-		if len(l.spec.DeniedDomains) > 0 {
-			ov.DeniedDomains = &l.spec.DeniedDomains
-		}
 		in := types.RunPolicySpec{AllowedDomains: spec.AllowedDomains, DeniedDomains: spec.DeniedDomains, AllowAllEgress: spec.AllowAllEgress}
-		met, _, err := composer.ApplyOverlay(composer.Authority{Ceiling: in}, composer.Overlay{Ceiling: ov})
+		met, _, err := composer.ApplyOverlay(composer.Authority{Ceiling: in}, composer.Overlay{Ceiling: l.egress})
 		if err != nil {
 			// The egress knobs alone have no unsatisfiable meet; should one appear, nothing is reachable.
 			met.Ceiling = types.RunPolicySpec{AllowedDomains: []string{}, DeniedDomains: spec.DeniedDomains}

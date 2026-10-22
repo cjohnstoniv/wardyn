@@ -88,8 +88,8 @@ func runWalledDispatch(t *testing.T, d walledDispatch) (types.RunPolicySpec, run
 	ceiling := ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded())
 	if len(d.deny) > 0 {
 		ceiling = ceilingForDispatch(governanceCeiling{
-			Spec:    types.RunPolicySpec{DeniedDomains: d.deny},
-			Profile: &ResolvedProfile{Name: "walled"},
+			Spec: types.RunPolicySpec{DeniedDomains: d.deny},
+			Unit: &ResolvedUnit{Name: "walled"},
 		}, adoEntraUngraded(), bedrockCredUngraded())
 	}
 	srv.dispatchRun(context.Background(), run, ceiling, dispatchParams{
@@ -308,25 +308,25 @@ func TestCeilingDenies(t *testing.T) {
 // operator short-circuits at effectiveCeiling's step 1 and never gets here).
 type ceilingRecordStore struct {
 	*recordLLMModeStore
-	profile *types.GovernanceProfile
+	profile *types.GovernanceUnit
 }
 
-func (s ceilingRecordStore) ResolveGovernanceProfile(context.Context, []string, []string, string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+func (s ceilingRecordStore) ResolveGovernanceUnit(context.Context, []string, []string, string) (*types.GovernanceUnit, types.CapabilitySubjectType, error) {
 	return s.profile, types.CapabilitySubjectUser, nil
 }
 
-// ListGovernanceProfiles answers none: dispatch reads the run's profile for its
+// ListGovernanceUnits answers none: dispatch reads the run's profile for its
 // refusal attribution, and the embedded store has no such table.
-func (s ceilingRecordStore) ListGovernanceProfiles(context.Context) ([]types.GovernanceProfile, error) {
+func (s ceilingRecordStore) ListGovernanceUnits(context.Context) ([]types.GovernanceUnit, error) {
 	return nil, nil
 }
 
-// GetGovernanceProfileChain finds none, for the same reason.
-func (s ceilingRecordStore) GetGovernanceProfileChain(context.Context, uuid.UUID) ([]types.GovernanceProfile, error) {
+// GetGovernanceUnitChain finds none, for the same reason.
+func (s ceilingRecordStore) GetGovernanceUnitChain(context.Context, uuid.UUID) ([]types.GovernanceUnit, error) {
 	return nil, store.ErrNotFound
 }
 
-func (s ceilingRecordStore) HasGroupTierAssignments(context.Context) (bool, error) {
+func (s ceilingRecordStore) HasGroupTierMemberships(context.Context) (bool, error) {
 	return false, nil
 }
 

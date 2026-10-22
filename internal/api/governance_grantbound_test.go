@@ -38,7 +38,7 @@ func apiKeyScope(t *testing.T, host, secret string) json.RawMessage {
 	return b
 }
 
-// TestGovernanceProfileGrantBound is the PF-22/PF-28 pin: a governance profile
+// TestGovernanceUnitGrantBound is the PF-22/PF-28 pin: a governance profile
 // may NARROW the deployment's credential eligibility and may never MINT new
 // eligibility.
 //
@@ -54,7 +54,7 @@ func apiKeyScope(t *testing.T, host, secret string) json.RawMessage {
 // MONOTONE rather than membership (which would let approval be stripped) or
 // equality (which would refuse a legitimately stricter profile, i.e. the whole
 // point of authoring one).
-func TestGovernanceProfileGrantBound(t *testing.T) {
+func TestGovernanceUnitGrantBound(t *testing.T) {
 	const (
 		corpHost   = "api.corp.example"
 		corpSecret = "corp-api-key"

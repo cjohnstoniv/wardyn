@@ -80,6 +80,9 @@ type attachHolder struct {
 	// a person typing is presence, and a paused run is thawed first
 	// (run_pause.go). An observer's input is dropped, so it never counts.
 	onInput func()
+	// onDrop, when set, is told how many bytes of a writer's input canWrite refused
+	// (dropInput); the web pump tells its client (attach_pump.go tellDropped).
+	onDrop func(n int)
 	// via is the portal a delegated attach ticket was minted through (#1142),
 	// nil otherwise: a promotion is written long after the attach, on the
 	// daemon's context, so the holder carries it to session.promote (#1234).
@@ -238,7 +241,8 @@ func (h *attachHolder) writeGated(sess runner.Session, p []byte) error {
 	}
 	for len(p) > 0 {
 		if !h.canWrite() {
-			return nil // evicted, or an observer: drop the rest, server-side
+			h.dropInput(len(p))
+			return nil // evicted, an observer or fenced: drop the rest, server-side
 		}
 		n := min(len(p), attachWriteChunk)
 		if _, err := sess.Write(p[:n]); err != nil {
@@ -247,6 +251,16 @@ func (h *attachHolder) writeGated(sess runner.Session, p []byte) error {
 		p = p[n:]
 	}
 	return nil
+}
+
+// dropInput reports n bytes of input canWrite refused. A holder that is the writer here and not
+// evicted was told it drives, so its client is told the input did not land (onDrop): a lease fence
+// check that errors or finds the row lapsed (attachLease.live) refuses input and moves neither.
+// An observer's or a displaced client's input is dropped unannounced, as its client already knows.
+func (h *attachHolder) dropInput(n int) {
+	if h.onDrop != nil && n > 0 && h.writable.Load() && !h.evicted.Load() {
+		h.onDrop(n)
+	}
 }
 
 // promote hands this observer the write slot. The caller holds the registry
@@ -303,7 +317,7 @@ func (h *attachHolder) view() attachHolderView {
 	}
 }
 
-// attachModeMsg is the ONE server->client control frame on the attach
+// attachModeMsg is the server->client control frame that carries the mode on the attach
 // WebSocket, sent as a TEXT frame the instant the socket opens — the mirror of
 // the client->server resize frame, using the same split the protocol already
 // has (binary = raw PTY bytes, text = control JSON). The client MUST learn it
@@ -329,6 +343,17 @@ type attachModeMsg struct {
 	// Transport is "local" on every frame of a transport=local socket (attach_local.go), absent on
 	// the relay, so a CLI that asked for local and reads no "local" here runs the socket as a relay.
 	Transport string `json:"transport,omitempty"`
+}
+
+// attachInputDroppedMsg is the server->client control frame that tells a client which believes it
+// drives that input it sent did not reach the shell (attachHolder.dropInput): Bytes is how much since
+// the last such frame. A client that does not know the type ignores it, as it ignores any text frame
+// but attach-mode.
+//
+//	{"type":"input-dropped","bytes":12}
+type attachInputDroppedMsg struct {
+	Type  string `json:"type"` // always "input-dropped"
+	Bytes int64  `json:"bytes"`
 }
 
 // writeAttachMode sends the attach-mode frame. Called from the handler

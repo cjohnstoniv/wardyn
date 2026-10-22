@@ -35,6 +35,9 @@
 
 > [!NOTE]
 > A runner holds four classes as `runner_resident` in its OS keystore: `env_secret`, `file_secret`, `ssh_key` and `git_pat_helper`. Its proxy holds a fifth, `ado_minted_pat`, in memory only; it is not put in the sandbox. Others are refused as `runner_resident`.
+>
+> With `WARDYN_RUNNER_SECRET_PLACEHOLDERS` on (off by default), a host-bound `env_secret` or `file_secret` is not held when it meets the placeholder limits (see [POLICIES.md](../POLICIES.md)); otherwise it is held as before. When it is not held, the runner gets a placeholder, which the organisation fills (`via_org`).
+>
 > A refusal is `runner_posture_unmet` when the run's confinement floor or the runner's posture misses the class's requirement, otherwise `placement_credential`. Whoever controls the laptop as root can read a value while the runner holds it, so erasure is best-effort and never promised.
 
 | Credential class | Modes |
@@ -226,7 +229,7 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 ### Managed preferences
 
 - The profile's preference domain is `com.wardyn.runnerd`, which macOS writes to `/Library/Managed Preferences/com.wardyn.runnerd.plist`. A user-scoped profile lands in `/Library/Managed Preferences/<user>/com.wardyn.runnerd.plist` and wins over the device-wide file for that user.
-- `wardyn-runnerd serve` reads it as the default of a flag. A flag wins over the profile, and the profile wins over the environment variable `setup` writes. An empty key is unset.
+- `wardyn-runnerd serve` reads it as the default of a flag. A flag wins over the profile, and the profile wins over the environment variable `setup` writes, unless the profile sets `lock_security_settings` (below). An empty key is unset.
 
 | Key | Same as | Notes |
 |---|---|---|
@@ -239,6 +242,11 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 | `OrgCAFile` | `--org-ca-file` | a PEM file of extra roots for the runner's own connection to the organisation only; root-owned, not writable by group or others |
 | `RecordingStore` | `--recording-store` | `pg`, `fs` or `off` |
 | `DockerHost` | `DOCKER_HOST` | the engine's socket, when it is not the default |
+| `lock_security_settings` | none: profile only | a boolean, off by default; `true` locks the five security keys, as the bullets below say |
+
+- With the lock on, `OrgURL`, `ProxyImage`, `TrustedCAFile`, `OrgCAFile` and `RecordingStore` in the profile win over a flag, and `serve` and `setup` refuse a flag or environment variable that disagrees, naming `lock_security_settings`.
+- A value other than true, false, 1 or 0, or a profile that cannot be read, refuses start. Only a macOS profile can set it: there is no flag, variable or file twin.
+- A key the profile leaves empty, and every other key, keeps the order above.
 
 ## A folder on your computer for a remote sandbox
 

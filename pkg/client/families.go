@@ -652,6 +652,18 @@ type RunOutput struct {
 	MaskScope string `json:"mask_scope,omitempty"`
 	// CapturedAt is when the final row was written; nil while the run is live.
 	CapturedAt *time.Time `json:"captured_at,omitempty"`
+	// Agents is each agent's state in a background run with several agents, as
+	// the last status line in Output reads; absent on any other run, and when no
+	// status line is in Output.
+	Agents []RunAgentState `json:"agents,omitempty"`
+}
+
+// RunAgentState is one agent of a run with several agents: State "running", or
+// "exited" with its ExitCode. The run succeeds only when every agent exits 0.
+type RunAgentState struct {
+	Agent    string `json:"agent"`
+	State    string `json:"state"`
+	ExitCode *int   `json:"exit_code,omitempty"`
 }
 
 // RunOutput reads the last tail bytes of a non-interactive run's output

@@ -49,7 +49,7 @@
 import * as React from "react";
 import { Link } from "react-router-dom";
 import { Check, CheckCircle2, ChevronDown, Loader2, X } from "lucide-react";
-import type { AgentRun, ApprovalRequest, DecisionOptions } from "../../lib/types";
+import type { AgentRun, ApprovalRequest, DecisionOptions, RunDetail } from "../../lib/types";
 import {
   canDecideAdoCapability,
   isAdoConsentRequest,
@@ -154,7 +154,7 @@ function relativeAbsolute(iso: string): string {
 // The run this card needs to know about — created_by (who it acts as / owns
 // the decision) and state (has it ended). Every real caller passes a real
 // AgentRun/RunDetail; this Pick is what the two shapes have in common.
-export type AdoCardRun = Pick<AgentRun, "created_by" | "state">;
+export type AdoCardRun = Pick<AgentRun, "created_by" | "state"> & Pick<RunDetail, "agents">;
 
 export function AdoCapabilityCard({
   item,

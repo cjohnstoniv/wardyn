@@ -23,11 +23,11 @@ func withManagedPrefs(t *testing.T, goos string, prefs map[string]string) {
 	oldOS, oldExtract := prefsOS, prefsExtract
 	t.Cleanup(func() { prefsOS, prefsExtract = oldOS, oldExtract })
 	prefsOS = goos
-	prefsExtract = func(file, key string) string {
+	prefsExtract = func(file, key string) (string, error) {
 		if filepath.Base(file) != prefsDomain+".plist" {
 			t.Errorf("read %s, not the profile's preference file", file)
 		}
-		return prefs[key]
+		return prefs[key], nil
 	}
 }
 
@@ -99,7 +99,7 @@ func TestManagedPreferencesAreReadOnlyWhenServeRuns(t *testing.T) {
 	reads := 0
 	withManagedPrefs(t, "darwin", map[string]string{"OrgURL": "https://wardyn.example"})
 	counted := prefsExtract
-	prefsExtract = func(file, key string) string { reads++; return counted(file, key) }
+	prefsExtract = func(file, key string) (string, error) { reads++; return counted(file, key) }
 	newServeCommand(nil)
 	newSetupCommand()
 	if reads != 0 {
