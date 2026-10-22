@@ -35,7 +35,8 @@ import (
 // PROFILE is upserted BY NAME (its unique human handle), not by id — see
 // ApplyGovernance's doc comment for why that, not id-routing, is what makes a
 // hand-maintained, version-controlled file re-apply as a no-op. An
-// ASSIGNMENT is upserted by its own natural key (subject_type, subject).
+// MEMBERSHIP is upserted by its own natural key (its unit's name, subject_type,
+// subject), so one subject can be a member of several units.
 // Nothing the file omits is touched, and nothing is deleted, unless --prune is
 // passed — so `get` immediately followed by `set` is a no-op, the same round
 // trip drive get/set's pair promises.
@@ -54,8 +55,9 @@ func governanceCmd(client clientFn) *cobra.Command {
 			"    wardyn governance get > governance.json\n" +
 			"    wardyn governance set governance.json\n\n" +
 			"`set` upserts every profile and assignment the file names — a profile is\n" +
-			"upserted BY NAME (its unique handle), an assignment by its own natural key\n" +
-			"(subject_type, subject). A profile in the file but absent server-side is\n" +
+			"upserted BY NAME (its unique handle), a membership by its own natural key\n" +
+			"(its unit's name, subject_type, subject); a unit's `mode` and a membership's\n" +
+			"`home` are written, the Default unit never is. A profile in the file but absent server-side is\n" +
 			"created; one present server-side but absent from the file is left alone unless\n" +
 			"--prune is passed, which also deletes any server-side assignment the file omits.\n" +
 			"`wardyn governance get > f && wardyn governance set f` is a no-op.\n\n" +

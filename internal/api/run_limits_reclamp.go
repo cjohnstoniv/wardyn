@@ -58,7 +58,7 @@ func (s *Server) reclampProfiledRuns(ctx context.Context, rc store.RunLimitsRecl
 		return err
 	}
 	// The EFFECTIVE limits: a child is tightened to what its base carries today. A profile that
-	// cannot be composed (a loop, a chain past three, a composition nothing satisfies) has no
+	// cannot be composed (a loop, a path past the maximum depth, a composition nothing satisfies) has no
 	// current limits to tighten to, as for a deleted one; its runs keep the limits they captured.
 	current := make(map[uuid.UUID]types.RunLimits, len(profiles))
 	for _, p := range profiles {

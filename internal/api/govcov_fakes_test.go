@@ -138,6 +138,11 @@ type govCovStore struct {
 	assignErr    error
 }
 
+// GetSiteConfig is an empty site config: the default unit depth limit.
+func (s *govCovStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return types.SiteConfig{}, nil
+}
+
 func (s *govCovStore) ListGovernanceMemberships(context.Context) ([]types.GovernanceMembership, error) {
 	return s.assignments, s.assignErr
 }

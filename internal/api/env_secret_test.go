@@ -163,6 +163,9 @@ func (s *envSecretCeilingStore) ResolveGovernanceUnit(context.Context, []string,
 func (s *envSecretCeilingStore) HasGroupTierMemberships(context.Context) (bool, error) {
 	return false, nil
 }
+func (s *envSecretCeilingStore) ListGovernanceMemberships(context.Context) ([]types.GovernanceMembership, error) {
+	return nil, nil
+}
 func (s *envSecretCeilingStore) GetPolicy(context.Context, uuid.UUID) (types.RunPolicy, error) {
 	return s.policy, nil
 }
@@ -439,4 +442,8 @@ func TestEnvAllowMemberEnvSecret_Name(t *testing.T) {
 	if envAllowMemberEnvSecret != "WARDYN_ALLOW_USER_ENV_SECRET" {
 		t.Errorf("envAllowMemberEnvSecret = %q, want WARDYN_ALLOW_USER_ENV_SECRET", envAllowMemberEnvSecret)
 	}
+}
+
+func (s *envSecretCeilingStore) ListMembershipsFor(ctx context.Context, users, groups []string, userType string) ([]store.MembershipMatch, error) {
+	return membershipsFromResolve(s.ResolveGovernanceUnit(ctx, users, groups, userType))
 }

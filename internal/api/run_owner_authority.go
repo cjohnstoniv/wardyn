@@ -50,6 +50,7 @@ type ownerRefusal struct {
 	status int
 	reason string
 	msg    string
+	arm    string // unit_membership_gone only: which check refused (ownerMembershipRefusal)
 }
 
 // ownerCapabilityRefusal re-checks the run's launch-door capabilities for its
@@ -367,8 +368,9 @@ func (s *Server) capAllowedForSub(ctx context.Context, sub, userType, kind, valu
 
 // ownerUnit is the run's captured profile, composed from its chain as it stands now, refusing
 // when it no longer exists (its walls cannot be known), when it cannot be read (a base included:
-// never a partial chain) and when a composition nothing satisfies leaves it with no valid policy. A
-// run that captured none (an unassigned or super-admin owner) passes.
+// never a partial chain), when a composition nothing satisfies leaves it with no valid policy, and
+// when the owner no longer holds a membership placing them in it (ownerMembershipRefusal). A run
+// that captured none (an owner in the Default unit, or a super admin) passes.
 func (s *Server) ownerUnit(ctx context.Context, run types.AgentRun) (*ResolvedUnit, *ownerRefusal) {
 	if run.UnitID == nil {
 		return nil, nil
@@ -384,6 +386,14 @@ func (s *Server) ownerUnit(ctx context.Context, run types.AgentRun) (*ResolvedUn
 	if err != nil {
 		return nil, &ownerRefusal{status: http.StatusServiceUnavailable, reason: reasonOwnerUnitUnreadable,
 			msg: loggedMsg(ctx, "resolve the owner's governance profile", err)}
+	}
+	ref, err := s.ownerMembershipRefusal(ctx, run, p)
+	if err != nil {
+		return nil, &ownerRefusal{status: http.StatusServiceUnavailable, reason: reasonOwnerUnitUnreadable,
+			msg: loggedMsg(ctx, "re-check the owner's unit memberships", err)}
+	}
+	if ref != nil {
+		return nil, ref
 	}
 	return p, nil
 }

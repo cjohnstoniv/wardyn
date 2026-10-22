@@ -268,8 +268,20 @@ REL_TAG="${WARDYN_COMPAT_RELEASED:-}"
 if [[ -z "${REL_TAG}" ]]; then
   auth=()
   [[ -n "${GH_TOKEN:-}" ]] && auth=(-H "Authorization: Bearer ${GH_TOKEN}")
-  REL_TAG="$(curl -fsSL "${auth[@]}" "https://api.github.com/repos/${REPO}/releases?per_page=100" \
-    | jq -r '.[] | select(.draft == false) | .tag_name' | grep -E "^v${SERIES//./\\.}\.[0-9]+$" | sort -V | tail -1)"
+  # The read is retried: once (nightly run 39800484102) it came back with no
+  # matching tag and no curl error, and a later read of the same API found v0.9.8.
+  # The cause is unknown, so a read with no matching tag says what it got.
+  resolve_release() {
+    local hdr="${TMP}/releases.headers" body="${TMP}/releases.json"
+    curl -fsSL -D "${hdr}" -o "${body}" "${auth[@]}" "https://api.github.com/repos/${REPO}/releases?per_page=100" || return 1
+    REL_TAG="$(jq -r '.[] | select(.draft == false) | .tag_name' "${body}" | grep -E "^v${SERIES//./\\.}\.[0-9]+$" | sort -V | tail -1)"
+    [[ "${REL_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && return 0
+    warn "the releases read held no ${SERIES}.Z tag: $(grep -E '^HTTP/' "${hdr}" | tail -1 | sed 's/[[:space:]]*$//')," \
+      "$(jq length "${body}" 2>&1) items, first tags $(jq -r '[.[:3][].tag_name] | join(",")' "${body}" 2>&1)," \
+      "request id $(grep -i '^x-github-request-id:' "${hdr}" | tail -1 | cut -d' ' -f2 | tr -d '\r')"
+    return 1
+  }
+  retry resolve_release
 fi
 [[ "${REL_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "no published ${SERIES}.Z release found (got '${REL_TAG}')"
 REL_VER="${REL_TAG#v}"
@@ -282,7 +294,7 @@ log "downloading the released CLI and wardyn-runnerd, checked against SHA256SUMS
 arch="$(go env GOARCH)"
 mkdir -p "${TMP}/rel"
 for f in SHA256SUMS "wardyn-linux-${arch}" "wardyn-runnerd-linux-${arch}"; do
-  curl -fsSL -o "${TMP}/rel/${f}" "https://github.com/${REPO}/releases/download/${REL_TAG}/${f}" || die "downloading ${f} from ${REL_TAG} failed"
+  retry curl -fsSL -o "${TMP}/rel/${f}" "https://github.com/${REPO}/releases/download/${REL_TAG}/${f}" || die "downloading ${f} from ${REL_TAG} failed"
 done
 for f in "wardyn-linux-${arch}" "wardyn-runnerd-linux-${arch}"; do
   grep -q "[ /]${f}\$" "${TMP}/rel/SHA256SUMS" || die "${f} is not listed in ${REL_TAG}'s SHA256SUMS"
@@ -293,7 +305,7 @@ REL_CLI="${TMP}/rel/wardyn-linux-${arch}" REL_RUNNERD="${TMP}/rel/wardyn-runnerd
 
 log "pulling the released images"
 for img in "${REL_WARDYND}" "${REL_PROXY}" "${AGENT_IMAGE}"; do
-  docker pull -q "${img}" >/dev/null || die "docker pull ${img} failed"
+  retry docker pull -q "${img}" >/dev/null || die "docker pull ${img} failed"
 done
 
 log "building the candidate CLI, wardyn-runnerd and images from this tree"

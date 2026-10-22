@@ -169,7 +169,7 @@ ARG CODEX_VERSION=0.149.1
 # that image.
 ARG NPM_VERSION=11.19.1
 RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi \
- && npm install -g "npm@${NPM_VERSION}" \
+ && for i in 1 2 3; do timeout -k 10 180 npm install -g "npm@${NPM_VERSION}" && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done \
  && npm --version
 # A staged binary built for the other arch (see stage-agent-binary.sh --arch) is refused by its ELF
 # machine type (byte 18: 0x3e amd64, 0xb7 arm64), as claude-code's is. Anything else (not ELF, such as
@@ -188,7 +188,7 @@ RUN set -eu; \
         if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi; \
         if [ -n "$HTTP_PROXY" ]; then npm config set proxy "$HTTP_PROXY"; fi; \
         if [ -n "$HTTPS_PROXY" ]; then npm config set https-proxy "$HTTPS_PROXY"; fi; \
-        npm install -g "@openai/codex@$CODEX_VERSION"; \
+        for i in 1 2 3; do timeout -k 10 180 npm install -g "@openai/codex@$CODEX_VERSION" && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done; \
         npm config delete proxy https-proxy; \
         echo "installed codex $CODEX_VERSION via npm"; \
     fi

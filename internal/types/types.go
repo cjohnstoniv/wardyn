@@ -669,6 +669,17 @@ const (
 type RunLocalFolderStatus struct {
 	Seed *FolderPassRecord `json:"seed,omitempty"`
 	Back *FolderPassRecord `json:"back,omitempty"`
+	// Resume is set while a pass back that was cut short keeps the run's sandbox for a later
+	// sweep to resume it.
+	Resume *FolderResume `json:"resume,omitempty"`
+}
+
+// FolderResume is a pass back kept for a resume: Stalled counts the cut passes in a row that
+// saved nothing, and Unsynced is the sandbox's changed files the latest pass that counted them
+// had not brought back.
+type FolderResume struct {
+	Stalled  int `json:"stalled"`
+	Unsynced int `json:"unsynced,omitempty"`
 }
 
 // FolderPassRecord is one pass as the runner counted it. Error is set when it did not complete.

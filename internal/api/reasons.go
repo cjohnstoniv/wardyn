@@ -324,7 +324,7 @@ const (
 	// in refusal_test.go, and documentedDuplicateReasonValues).
 	reasonGovernanceOverlayInvalid       = "governance_overlay_invalid"       // the overlay names something its base does not permit, or does not decode
 	reasonGovernanceUnitCycle            = "governance_unit_cycle"            // the write would make a profile its own base
-	reasonGovernanceUnitDepth            = "governance_unit_depth"            // the write would put a profile more than three deep
+	reasonGovernanceUnitDepth            = "governance_unit_depth"            // the write would put a unit deeper than the maximum unit depth
 	reasonGovernanceOverlayUnsatisfiable = "governance_overlay_unsatisfiable" // nothing satisfies a profile and its base together
 	// reasonGovernancePreviewClaimsInvalid is shared by GET /governance/check
 	// and the user-drive naming preview (user_drives_preview.go): both feed the
@@ -595,6 +595,10 @@ const (
 	reasonNodeRecordRefused     = "node_record_refused"     // the run is not held pending, its record changed, or the attestation does not fit it
 	reasonNodeRecordHumanOnly   = "node_record_human_only"  // the admin token, an API token, or local mode, which cannot show who the people were
 )
+
+// A run refused at create because it sets a run proxy setting its runner's wardyn-runnerd does not
+// carry (sandboxCreateFailure, remote.ProxySettingError): the run.create failure row's reason.
+const reasonRunnerProxySetting = "runner_proxy_setting_unsupported"
 
 // A request with no session and no bearer on a deployment with single sign-on and no admin token
 // (sessionRejectionResponse): the caller has to sign in.

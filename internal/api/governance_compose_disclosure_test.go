@@ -142,7 +142,7 @@ func TestComposedProfileLaunchRefusalNamesOnlyTheLeaf(t *testing.T) {
 }
 
 // A chain that cannot be read or composed fails the launch closed with the generic 500 and creates no
-// run: an unreadable base, a base the read left out, a loop and a chain four deep.
+// run: an unreadable base, a base the read left out, a loop and a chain past the maximum depth.
 func TestComposedProfileSeededBadChainsFailTheLaunchClosed(t *testing.T) {
 	for _, sc := range seededBadChains() {
 		t.Run(sc.name, func(t *testing.T) {

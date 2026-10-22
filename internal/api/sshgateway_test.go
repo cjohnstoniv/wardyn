@@ -85,6 +85,10 @@ func (s *sshMemStore) putRun(r types.AgentRun) {
 	s.runs[r.ID] = r
 }
 
+func (s *sshMemStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return types.SiteConfig{}, nil
+}
+
 func (s *sshMemStore) ListGovernanceUnits(context.Context) ([]types.GovernanceUnit, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

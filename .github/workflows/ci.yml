@@ -257,7 +257,7 @@ jobs:
             tags: docker
           - suite: k8s
             target: test-report-k8s
-            tags: k8s
+            tags: docker,k8s
     steps:
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
         run: |
@@ -315,8 +315,8 @@ jobs:
           PUPPETEER_SKIP_DOWNLOAD: '1'
       # The guard packages: the directories of every test file that names a docs
       # path, threatmodel/, ui/, .github/ or a .md file. A tag leg keeps only the
-      # files built under its tag (their packages run with -tags; the rest ran in
-      # the tagless leg), so it may legitimately find none. The tagless leg
+      # files built under one of its tags (their packages run with -tags; the rest
+      # ran in the tagless leg), so it may legitimately find none. The tagless leg
       # finding none means the pattern broke, and fails rather than pass empty.
       - name: Docs- or console-only change — the guard packages only (no race, no coverage)
         if: needs.changes.outputs.backend == 'false'
@@ -328,8 +328,8 @@ jobs:
           files="$(git grep -l -E '"(\.\./)*(docs|threatmodel|ui|\.github)[/"]|CHANGELOG\.md|RELEASING\.md|AGENTS\.md|\.md["`]' -- '*_test.go')" || rc=$?
           [ "$rc" -le 1 ] || exit "$rc"
           if [ -n "$TAGS" ]; then
-            # The tag as a positive term: `//go:build !docker` is not a docker file.
-            files="$(for f in $files; do grep -l -E "^//go:build (.*[^!a-z0-9_])?${TAGS}\b" "$f" || true; done)"
+            # Each tag as a positive term: `//go:build !docker` is not a docker file.
+            files="$(for f in $files; do grep -l -E "^//go:build (.*[^!a-z0-9_])?(${TAGS//,/|})\b" "$f" || true; done)"
           fi
           pkgs="$(for f in $files; do dirname "$f"; done | sort -u | sed 's|^|./|')"
           if [ -z "$pkgs" ]; then
@@ -2110,7 +2110,7 @@ jobs:
   #
   #   govulncheck / staticcheck / licenses — run ALL THREE tag sets, so the
   #     ACTUAL shipped builds (-tags docker: runner/docker + envbuild; -tags
-  #     k8s: the k8s confinement substrate) are covered, not just the tagless
+  #     docker,k8s: the k8s substrate and runnerd's k8s path) are covered, not just the tagless
   #     subset that a default build sees.
   #   gitleaks — scans this branch's own FULL git history (hence fetch-depth: 0,
   #     which the other gates simply ignore). `make gitleaks` runs the gitleaks

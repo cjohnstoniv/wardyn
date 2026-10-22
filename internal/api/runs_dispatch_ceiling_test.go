@@ -420,3 +420,7 @@ func TestApplySandboxSize_CutsARunThatSetNoSize(t *testing.T) {
 		t.Errorf("resources = %+v, want none: the default sits under the maximum", policy.Resources)
 	}
 }
+
+func (s ceilingRecordStore) ListMembershipsFor(ctx context.Context, users, groups []string, userType string) ([]store.MembershipMatch, error) {
+	return membershipsFromResolve(s.ResolveGovernanceUnit(ctx, users, groups, userType))
+}

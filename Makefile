@@ -303,20 +303,21 @@ test-report-docker: ## -tags docker suite with reports (fakeDocker; no daemon ne
 	@echo "Running docker-tagged suite with reports (-race; fakeDocker; WARDYN_TEST_DOCKER=1 adds the real-daemon cases)..."
 	WARDYN_TEST_PG= ./scripts/test-report.sh docker -race -tags docker ./...
 
-# The whole tree under -tags k8s, so the k8s confinement substrate
-# (internal/runner/k8s) and the wardynd wiring that calls it — none of which
-# the tagless build can even compile — are actually tested and measured, under
+# The whole tree under -tags docker,k8s (the production image's tags), so the
+# k8s confinement substrate (internal/runner/k8s), the wardynd wiring that calls
+# it and wardyn-runnerd's `docker && k8s` files (production_k8s.go) — none of
+# which the tagless build can even compile — are actually tested and measured, under
 # -race (drive provisioning, the teardown wait-for-gone poll and the orphan
 # sweep all run concurrently against the apiserver). No cluster needed: the real-cluster case (test/conformance's TestConformanceK8s)
 # self-skips unless WARDYN_TEST_K8S=1, leaving the fake-clientset-backed unit
 # tests (internal/runner/k8s/*_test.go) to run anywhere.
-test-report-k8s: ## -tags k8s suite with reports (fake clientset; no cluster needed), under the race detector
-	@echo "Running k8s-tagged suite with reports (-race; fake clientset; WARDYN_TEST_K8S=1 + a kubeconfig adds the real-cluster conformance case)..."
-	WARDYN_TEST_PG= ./scripts/test-report.sh k8s -race -tags k8s ./...
+test-report-k8s: ## -tags docker,k8s suite with reports (fake clientset; no cluster needed), under the race detector
+	@echo "Running docker,k8s-tagged suite with reports (-race; fake clientset; WARDYN_TEST_K8S=1 + a kubeconfig adds the real-cluster conformance case)..."
+	WARDYN_TEST_PG= ./scripts/test-report.sh k8s -race -tags docker,k8s ./...
 
 # Coverage floor gate. Override with `make cover-check COVER_MIN=NN`.
 # Enforced over the UNION of all three shipped builds (tagless + -tags docker +
-# -tags k8s), not the tagless subset alone — measuring only the tagless build
+# -tags docker,k8s), not the tagless subset alone — measuring only the tagless build
 # reported a number for code that is not what ships. Pulling the excluded
 # packages in moved the honest total from 67.1% (tagless-only) to 66.1%
 # (docker union); the floor sits under that measurement with a margin for
@@ -601,17 +602,17 @@ test-provider-seed: ## Model-providers seeding path: UID-keyed credential captur
 	@echo "Running model-providers seeding path test (headless; requires Docker for Postgres)..."
 	WARDYN_TEST_DOCKER=1 ./scripts/test-kind-sso-provider-seed.sh
 
-govulncheck: ## Scan for known vulnerabilities (tagless + -tags docker + -tags k8s)
-	@echo "Running govulncheck (tagless + -tags docker + -tags k8s, the shipped builds)..."
+govulncheck: ## Scan for known vulnerabilities (tagless + -tags docker + -tags docker,k8s)
+	@echo "Running govulncheck (tagless + -tags docker + -tags docker,k8s, the shipped builds)..."
 	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
 	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) -tags docker ./...
-	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) -tags k8s ./...
+	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) -tags docker,k8s ./...
 
-staticcheck: ## Static analysis (tagless + -tags docker + -tags k8s)
-	@echo "Running staticcheck (tagless + -tags docker + -tags k8s)..."
+staticcheck: ## Static analysis (tagless + -tags docker + -tags docker,k8s)
+	@echo "Running staticcheck (tagless + -tags docker + -tags docker,k8s)..."
 	go run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) ./...
 	go run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) -tags docker ./...
-	go run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) -tags k8s ./...
+	go run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) -tags docker,k8s ./...
 
 # go.mod/go.sum must stay tidy: `go mod tidy` produces no diff. A stray require,
 # or an indirect that a test/code now imports directly (e.g. moby/docker-image-spec
@@ -623,10 +624,10 @@ tidy-check: ## Fail if go.mod/go.sum are untidy (go mod tidy -diff)
 	go mod tidy -diff
 
 lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size + migration-numbering + script-hazard + actionlint gates + console ESLint
-	@echo "Running go vet (default + docker + k8s tags)..."
+	@echo "Running go vet (default + docker + docker,k8s tags)..."
 	go vet ./...
 	go vet -tags docker ./...
-	go vet -tags k8s ./...
+	go vet -tags docker,k8s ./...
 	@echo "Running golangci-lint $(GOLANGCI_LINT_VERSION) (function-size/complexity gate, .golangci.yml)..."
 	GOLANGCI_LINT_CACHE=$(CURDIR)/.golangci-cache go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run ./...
 	@echo "Running file-size gate (scripts/check-file-size.sh)..."

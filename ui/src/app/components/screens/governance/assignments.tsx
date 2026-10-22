@@ -104,7 +104,7 @@ export function AssignmentsBlock({
     setSubmitted(true);
     onChanged();
   };
-  const profileName = (id: string) => snapshot.profiles.find((p) => p.id === id)?.name ?? id;
+  const profileName = (id: string) => snapshot.unit_names?.[id] ?? snapshot.profiles.find((p) => p.id === id)?.name ?? id;
   const typeName = useUserTypeName();
 
   const remove = async (a: GovernanceMembership) => {

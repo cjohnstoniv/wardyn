@@ -86,6 +86,22 @@ export const RUNS_FILTERS = {
   GROUP_TITLE: "Group · Title",
   // H-8.
   SAVED_VIEW_LABEL: "Saved view",
+  WORKSPACE_CHIP: (w: string) => `Workspace · ${w}`,
+} as const;
+
+// #3041, phone only: the search box keeps the row and everything else sits in
+// a bottom sheet. Strings are the approved R6 Run phone board's or derived from
+// it; docs/design/runs-filters-canon.md freezes them.
+export const RUNS_FILTERS_SHEET = {
+  TITLE: "Filters",
+  CLEAR: "Clear filters",
+  BUTTON_COUNT: (n: number) => `Filters (${n})`,
+  // "Show N runs" is a plural pair: SHOW_ONE is the one form. SHOW_MORE is for a
+  // list cut at its limit, N+ as the page header reads it.
+  SHOW_ONE: "Show 1 run",
+  SHOW: (n: number) => `Show ${n} runs`,
+  SHOW_MORE: (n: number) => `Show ${n}+ runs`,
+  CHIP_REMOVE_ARIA: (chip: string) => `Remove ${chip}`,
 } as const;
 
 // H-8: saved views (localStorage, up to 10). "Save view" names the current

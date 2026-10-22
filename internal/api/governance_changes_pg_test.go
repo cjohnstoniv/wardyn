@@ -223,8 +223,10 @@ func TestPG_GovernanceChanges_SwitchOffIsUnchanged(t *testing.T) {
 		{"delete profile", http.MethodDelete, "/api/v1/governance/units/" + doomed.ID.String(), "", http.StatusNoContent},
 		{"upsert assignment", http.MethodPost, "/api/v1/governance/memberships",
 			fmt.Sprintf(`{"subject_type":"user","subject":"dave@corp.example","unit_id":%q,"priority":2}`, subj.ID), http.StatusCreated},
-		{"repoint assignment", http.MethodPost, "/api/v1/governance/memberships",
-			fmt.Sprintf(`{"subject_type":"user","subject":"dave@corp.example","unit_id":%q,"priority":3}`, p.ID), http.StatusOK},
+		{"membership of a second unit", http.MethodPost, "/api/v1/governance/memberships",
+			fmt.Sprintf(`{"subject_type":"user","subject":"dave@corp.example","unit_id":%q,"priority":3}`, p.ID), http.StatusCreated},
+		{"re-post the first unit's membership", http.MethodPost, "/api/v1/governance/memberships",
+			fmt.Sprintf(`{"subject_type":"user","subject":"dave@corp.example","unit_id":%q,"priority":4}`, subj.ID), http.StatusOK},
 		{"delete assignment", http.MethodDelete, "/api/v1/governance/memberships/" + a.ID.String(), "", http.StatusNoContent},
 	}
 	for _, s := range steps {

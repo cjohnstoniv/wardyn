@@ -9,6 +9,8 @@ import (
 	"slices"
 
 	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // PlanGovernance returns the writes ApplyGovernance(ctx, doc, prune) would make
@@ -37,8 +39,9 @@ func planGovernance(current, doc GovernanceDocument, prune bool) (GovernancePlan
 	}
 	assignmentByKey := make(map[string]GovernanceMembership, len(current.Memberships))
 	for _, a := range current.Memberships {
-		assignmentByKey[governanceMembershipKey(a.SubjectType, a.Subject)] = a
+		assignmentByKey[governanceMembershipKey(membershipUnitName(a.UnitID, nil, currentIDToName), a.SubjectType, a.Subject)] = a
 	}
+	def := defaultUnitOf(current.Units)
 	fileIDToName := make(map[uuid.UUID]string, len(doc.Units))
 	for _, p := range doc.Units {
 		if p.ID != uuid.Nil {
@@ -52,6 +55,10 @@ func planGovernance(current, doc GovernanceDocument, prune bool) (GovernancePlan
 
 	for _, i := range order {
 		p := doc.Units[i]
+		if p.Kind == types.UnitKindDefault {
+			continue // the server's own: never written
+		}
+		normalizeComposedParent(&p, def)
 		existing, ok := profileByName[p.Name]
 		if !ok {
 			plan.Steps = append(plan.Steps, ApplyStep{Kind: "unit", Op: "create", Name: p.Name})
@@ -87,20 +94,18 @@ func planGovernance(current, doc GovernanceDocument, prune bool) (GovernancePlan
 		if profile == "" {
 			profile = a.UnitID.String()
 		}
-		existing, ok := assignmentByKey[governanceMembershipKey(a.SubjectType, a.Subject)]
+		existing, ok := assignmentByKey[governanceMembershipKey(profile, a.SubjectType, a.Subject)]
 		if !ok {
 			plan.Steps = append(plan.Steps, ApplyStep{Kind: "membership", Op: "create",
 				SubjectType: a.SubjectType, Subject: a.Subject, Unit: profile})
 			continue
 		}
-		sameUnit := (name != "" && currentIDToName[existing.UnitID] == name) ||
-			(name == "" && existing.UnitID == a.UnitID)
 		var fields []string
-		if !sameUnit {
-			fields = append(fields, "unit")
-		}
 		if existing.Priority != a.Priority {
 			fields = append(fields, "priority")
+		}
+		if existing.Home != a.Home {
+			fields = append(fields, "home")
 		}
 		if len(fields) == 0 {
 			plan.Unchanged++
@@ -114,10 +119,10 @@ func planGovernance(current, doc GovernanceDocument, prune bool) (GovernancePlan
 	if prune {
 		keepAssignment := make(map[string]bool, len(doc.Memberships))
 		for _, a := range doc.Memberships {
-			keepAssignment[governanceMembershipKey(a.SubjectType, a.Subject)] = true
+			keepAssignment[governanceMembershipKey(membershipUnitName(a.UnitID, fileIDToName, currentIDToName), a.SubjectType, a.Subject)] = true
 		}
 		for _, a := range current.Memberships {
-			if keepAssignment[governanceMembershipKey(a.SubjectType, a.Subject)] {
+			if keepAssignment[governanceMembershipKey(membershipUnitName(a.UnitID, nil, currentIDToName), a.SubjectType, a.Subject)] {
 				continue
 			}
 			id := a.ID
@@ -129,7 +134,7 @@ func planGovernance(current, doc GovernanceDocument, prune bool) (GovernancePlan
 			keepProfile[p.Name] = true
 		}
 		for _, p := range governancePruneOrder(current.Units) {
-			if keepProfile[p.Name] {
+			if keepProfile[p.Name] || p.Kind == types.UnitKindDefault {
 				continue
 			}
 			id := p.ID

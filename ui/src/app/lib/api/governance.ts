@@ -214,6 +214,11 @@ export interface GovernanceUnit {
   parent_id?: string;
   overlay?: CeilingOverlay;
   overlay_limits?: LimitsOverlay;
+  // The policy tree (0.10.0): kind "default" is the one Default unit (the deployment default);
+  // mode "pass_through" is its parent's walls exactly; depth counts from the top (Default is 1).
+  kind?: "unit" | "default";
+  mode?: "own_walls" | "pass_through";
+  depth?: number;
   // governanceUnitView.Effective: on GET /governance and the write responses.
   effective?: GovernanceEffective;
 }
@@ -227,12 +232,20 @@ export interface GovernanceMembership {
   priority: number;
   created_at: string;
   created_by?: string;
+  // home: the unit a person runs in when a run names none. legacy: a membership that existed
+  // before the policy tree; only a person's first legacy membership by precedence is a context.
+  home?: boolean;
+  legacy?: boolean;
 }
 
 // GET /governance's body: the whole picture in one read.
 export interface GovernanceSnapshot {
   profiles: GovernanceUnit[];
   assignments: GovernanceMembership[];
+  // The maximum unit depth in force (site_config.governance_max_depth, 16 when unset).
+  max_depth?: number;
+  // Console only, never on the wire: every unit's name by id, Default included, for a membership on a unit the list hides.
+  unit_names?: Record<string, string>;
 }
 
 // The POST/PUT body. id/created_at/updated_at/created_by are never sent — the
@@ -248,6 +261,8 @@ export interface GovernanceUnitInput {
   parent_id?: string | null;
   overlay?: CeilingOverlay | null;
   overlay_limits?: LimitsOverlay | null;
+  // Absent keeps the stored mode on a PUT (own_walls on a POST).
+  mode?: "own_walls" | "pass_through";
 }
 
 // governanceUnitResponse: the saved row plus the OMISSION warnings the
@@ -268,6 +283,7 @@ export interface GovernanceMembershipInput {
   subject: string;
   unit_id: string;
   priority: number;
+  home?: boolean;
 }
 
 // The POST /governance/check body — the two claim lists
@@ -343,10 +359,11 @@ export const governance = {
   // null, so both halves are coerced and every caller can map over them.
   async getGovernance(): Promise<GovernanceSnapshot> {
     const res = await wfetch("/governance", { method: "GET" });
-    const body = await asJson<{ units?: unknown; memberships?: unknown }>(res);
+    const body = await asJson<{ units?: unknown; memberships?: unknown; max_depth?: number }>(res);
     return {
       profiles: unwrapList<GovernanceUnit>(body.units),
       assignments: unwrapList<GovernanceMembership>(body.memberships),
+      max_depth: body.max_depth,
     };
   },
 

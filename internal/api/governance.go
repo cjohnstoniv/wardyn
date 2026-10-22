@@ -76,12 +76,19 @@ func (s *Server) mountGovernanceRoutes(operatorOnly chi.Router) {
 type governanceResponse struct {
 	Units       []governanceUnitView         `json:"units"`
 	Memberships []types.GovernanceMembership `json:"memberships"`
+	// MaxDepth is the maximum unit depth in force (site_config.governance_max_depth, 16 when unset).
+	MaxDepth int `json:"max_depth"`
 }
 
 // handleGetGovernance returns the whole governance picture. operatorOnly
 // (routes.go).
 func (s *Server) handleGetGovernance(w http.ResponseWriter, r *http.Request) {
 	resolved, err := s.resolveAllUnits(r.Context())
+	if err != nil {
+		writeServerError(w, r, "list governance profiles", err)
+		return
+	}
+	limit, err := s.unitDepthLimit(r.Context())
 	if err != nil {
 		writeServerError(w, r, "list governance profiles", err)
 		return
@@ -101,7 +108,7 @@ func (s *Server) handleGetGovernance(w http.ResponseWriter, r *http.Request) {
 	for i, p := range resolved {
 		profiles[i] = newUnitView(p.Row, p.Resolved, p.Err)
 	}
-	writeJSON(w, http.StatusOK, governanceResponse{Units: profiles, Memberships: assignments})
+	writeJSON(w, http.StatusOK, governanceResponse{Units: profiles, Memberships: assignments, MaxDepth: limit})
 }
 
 // governanceRefusedAllPlacements is the frozen sentence (GOVERNANCE.REFUSED_ALL_PLACEMENTS) the
@@ -158,13 +165,14 @@ func governanceLimitsRefusal(l types.GovernanceLimits) string {
 // assignment writes
 
 // governanceMembershipRequest is POST /governance/memberships's body. The
-// natural key (subject_type, subject) is what a caller names; the row's id and
-// provenance are server-assigned.
+// natural key (unit_id, subject_type, subject) is what a caller names; the row's id and
+// provenance are server-assigned. Home marks the unit a person runs in when a run names none.
 type governanceMembershipRequest struct {
 	SubjectType types.CapabilitySubjectType `json:"subject_type"`
 	Subject     string                      `json:"subject"`
 	UnitID      uuid.UUID                   `json:"unit_id"`
 	Priority    int                         `json:"priority"`
+	Home        bool                        `json:"home,omitempty"`
 }
 
 // validateGovernanceMembership normalizes a in place and validates it, applying
@@ -230,10 +238,10 @@ func validateGovernanceMembership(a *types.GovernanceMembership) error {
 	return nil
 }
 
-// handleUpsertGovernanceMembership binds one subject to one profile, keyed on
-// the natural (subject_type, subject): re-assigning a subject REPOINTS its
-// single row rather than accumulating a second. 201 for a genuinely new
-// binding, 200 when an existing one was repointed — the same created/updated
+// handleUpsertGovernanceMembership makes one subject a member of one unit, keyed on
+// the natural (unit_id, subject_type, subject): a subject may be a member of several
+// units, and re-posting one updates its priority and home. 201 for a genuinely new
+// membership, 200 when an existing one was updated — the same created/updated
 // signal handleUpsertCapabilityGrant gives, derived the same way (the store
 // returns the EXISTING row's id on a conflict, never the candidate's).
 // operatorOnly (routes.go).
@@ -251,6 +259,7 @@ func (s *Server) handleUpsertGovernanceMembership(w http.ResponseWriter, r *http
 		Subject:     req.Subject,
 		UnitID:      req.UnitID,
 		Priority:    req.Priority,
+		Home:        req.Home,
 	}
 	if err := validateGovernanceMembership(&a); err != nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonGovernanceMembershipInvalid, "invalid assignment: "+err.Error())
@@ -334,7 +343,7 @@ func (s *Server) handleDeleteGovernanceMembership(w http.ResponseWriter, r *http
 const maxGovernancePreviewClaims = 256
 
 // governancePreviewRequest is POST /governance/check's body: the SAME two
-// claim lists ResolveGovernanceUnit itself takes, so this endpoint has
+// claim lists ListMembershipsFor itself takes, so this endpoint has
 // nothing to derive and nothing to re-order.
 //
 // The ambiguity, and how this endpoint treats it. The console's preview field
@@ -380,10 +389,10 @@ type governancePreviewResponse struct {
 	MatchedTier types.CapabilitySubjectType `json:"matched_tier,omitempty"`
 }
 
-// handleGovernanceCheck answers "which profile would bind a principal
-// carrying these claims" by running THE resolver — the identical
-// Store.ResolveGovernanceUnit call effectiveCeiling takes on the enforcement
-// path. securityOps (routes.go).
+// handleGovernanceCheck answers "which unit would bind a principal
+// carrying these claims, with no unit asked for" by running THE selection — the identical
+// selectContext call effectiveCeiling makes on the enforcement path (the home context).
+// securityOps (routes.go).
 //
 // That single call is the whole point: the ranking order — tier,
 // sub-over-email, priority DESC, name ASC — must not be re-implemented
@@ -417,17 +426,17 @@ func (s *Server) handleGovernanceCheck(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusBadRequest, reasonGovernancePreviewClaimsInvalid, msg)
 		return
 	}
-	id, name, tier, err := s.assignedUnitIdentity(r.Context(), users, groups, strings.TrimSpace(req.UserType))
-	if errors.Is(err, store.ErrNotFound) {
-		writeJSON(w, http.StatusOK, governancePreviewResponse{})
-		return
-	}
+	pick, err := s.selectContext(r.Context(), contextQuery{users: users, groups: groups, userType: strings.TrimSpace(req.UserType)}, contextChoice{})
 	if err != nil {
 		writeServerError(w, r, "resolve governance profile", err)
 		return
 	}
+	if pick.isDefault() || pick.row == nil {
+		writeJSON(w, http.StatusOK, governancePreviewResponse{})
+		return
+	}
 	writeJSON(w, http.StatusOK, governancePreviewResponse{
-		UnitID: id, UnitName: name, MatchedTier: tier,
+		UnitID: pick.unit.ID, UnitName: pick.unit.Name, MatchedTier: pick.row.Membership.SubjectType,
 	})
 }
 
@@ -714,43 +723,17 @@ func (s *Server) resolveChainCeiling(ctx context.Context) (governanceCeiling, er
 		return deployment, nil
 	}
 
-	subj, err := s.callerSubjects(ctx)
-	if err != nil {
-		return governanceCeiling{}, err
-	}
-	// Truncated counts as stale. sessionGroups sorts the snapshot and
-	// drops its alphabetically-last entries at the cookie byte cap, so a member
-	// in enough groups holds a snapshot that is present, non-nil and INCOMPLETE
-	// — and the group whose assignment walls them is exactly as likely to be
-	// missing as any other. Without this the tier evaporates in silence: no
-	// refusal, no audit, just the deployment ceiling.
-	if subj.stale || oidcGroupsTruncatedFromContext(ctx) {
-		// The unusable half must not be MATCHED against. Passing a truncated
-		// list would still let a surviving group's row win, which is not wrong
-		// on its own — but it makes the refusal below depend on which groups
-		// happened to fit, so the same human with the same claims could be
-		// refused or served depending on alphabetical luck. Resolve on the
-		// answerable identity only, and let the refusal cover the rest.
-		return s.ceilingWithUnusableGroups(ctx, subj.users, subj.userType, deployment)
-	}
-
-	p, _, err := s.resolveAssignedUnit(ctx, subj.users, subj.groups, subj.userType)
-	return s.ceilingFromUnit(ctx, p, err, deployment)
+	// The caller's one context, its path composed (governance_context.go). Restrictions on the
+	// context are applied after it (the RESTRICT-PIN lane).
+	return s.resolveContext(ctx, deployment)
 }
 
-// ceilingWithUnusableGroups is effectiveCeiling's step 4: the caller's group
-// identity cannot be evaluated, so resolve on their user subjects and type alone
-// and let selectByTier's one stale rule decide whether that answer is
-// trustworthy (target governance.ceiling). The drive preview enters here too.
+// ceilingWithUnusableGroups is the context resolve when the caller's group identity cannot be
+// evaluated: the context is selected on their user subjects and type alone, and selectByTier's
+// one stale rule decides whether that answer is trustworthy (target governance.ceiling). The
+// drive preview enters here too.
 func (s *Server) ceilingWithUnusableGroups(ctx context.Context, users []string, userType string, deployment governanceCeiling) (governanceCeiling, error) {
-	p, _, err := selectByTier(ctx, s, authz.Deny(authz.ReasonGroupsSnapshotStale, "governance.ceiling", ""),
-		func() (*ResolvedUnit, types.CapabilitySubjectType, error) {
-			return s.resolveAssignedUnit(ctx, users, nil, userType)
-		}, s.cfg.Store.HasGroupTierMemberships)
-	if errors.Is(err, errGroupsSnapshotStale) {
-		return governanceCeiling{}, err
-	}
-	return s.ceilingFromUnit(ctx, p, err, deployment)
+	return s.contextCeiling(ctx, contextQuery{users: users, userType: userType, unusable: true}, contextChoiceFrom(ctx), deployment)
 }
 
 // ceilingFromUnit turns one resolver answer into a ceiling: ErrNotFound (or

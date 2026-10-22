@@ -303,3 +303,78 @@ func TestKillSignInRunAfterCapture_LostSwap(t *testing.T) {
 		}
 	})
 }
+
+// windowHoldStore holds the kill's read-to-swap window open: its first swap parks until the test
+// releases it, so the test can move the run forward the way the launch does between the read and
+// the write.
+type windowHoldStore struct {
+	*killableLoginRunStore
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+	swaps   []types.RunState // the from state of each swap the kill attempted
+}
+
+func (s *windowHoldStore) UpdateRunStateIf(ctx context.Context, id uuid.UUID, from, to types.RunState) (bool, error) {
+	if to == types.RunKilled {
+		s.mu.Lock()
+		s.swaps = append(s.swaps, from)
+		s.mu.Unlock()
+		s.once.Do(func() {
+			close(s.entered)
+			<-s.release
+		})
+	}
+	return s.killableLoginRunStore.UpdateRunStateIf(ctx, id, from, to)
+}
+
+// TestKillSignInRunAfterCapture_LaunchMovesInsideTheWindow (#3450) pins the retry with the launch in
+// the window itself: the kill has read PENDING and is about to swap when the launch moves the run
+// PENDING->STARTING->RUNNING. The first swap loses; the run must still end KILLED, from the state
+// the re-read finds.
+func TestKillSignInRunAfterCapture_LaunchMovesInsideTheWindow(t *testing.T) {
+	runID := uuid.New()
+	st := &windowHoldStore{
+		killableLoginRunStore: &killableLoginRunStore{
+			ssoLoginRunStore: ssoLoginRunStore{run: types.AgentRun{
+				ID: runID, Task: harnessLoginTask, Agent: awsSSOAgent,
+				CreatedBy: "alice@example.com", UpdatedAt: time.Now().UTC(),
+			}},
+			state: types.RunPending,
+		},
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	audit := &memAudit{}
+	cfg := baseTestConfig(newHarness(t), st)
+	cfg.Audit = audit
+	srv := New(cfg)
+	srv.signInCaptureKillGrace = 0
+
+	srv.killSignInRunAfterCapture(context.Background(), runID, "alice@example.com")
+	select {
+	case <-st.entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the kill never attempted its first swap")
+	}
+	for _, step := range []struct{ from, to types.RunState }{{types.RunPending, types.RunStarting}, {types.RunStarting, types.RunRunning}} {
+		if ok, err := st.killableLoginRunStore.UpdateRunStateIf(context.Background(), runID, step.from, step.to); !ok || err != nil {
+			t.Fatalf("the launch could not move %s->%s inside the window: %v, %v", step.from, step.to, ok, err)
+		}
+	}
+	close(st.release)
+	srv.WaitBackground()
+
+	if got := st.stateNow(); got != types.RunKilled {
+		t.Fatalf("sign-in run state = %s after the launch moved inside the kill's window, want KILLED", got)
+	}
+	st.mu.Lock()
+	swaps := append([]types.RunState(nil), st.swaps...)
+	st.mu.Unlock()
+	if len(swaps) != 2 || swaps[0] != types.RunPending || swaps[1] != types.RunRunning {
+		t.Errorf("kill swaps came from %v, want [PENDING RUNNING]: the first read PENDING, the retry found RUNNING", swaps)
+	}
+	if rows := audit.find("run.kill"); len(rows) != 1 {
+		t.Errorf("run.kill rows = %d, want exactly 1", len(rows))
+	}
+}

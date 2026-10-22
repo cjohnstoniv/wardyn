@@ -13,6 +13,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - New, off by default: `storage.user_drive.member_create.keep_main_drive` (#1991). Turned on, a run can keep its work
   folder as its person's own drive; whatever an agent leaves there, a planted script or a harness project file included,
   comes back in the next run that attaches it.
+- Upgrade wardyn-runnerd before you rely on a newer proxy feature: a run that sets one (`aws_sigv4`,
+  `scrub_responses`, `vm`, `port_rule`, `local_models` or `kube_api`) is refused on an older wardyn-runnerd.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
   `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on
   `aws_sso_refused_tokens` (migration `0194_aws_sso_refused_tokens`). Without it an AWS SSO session whose renewal
@@ -101,9 +103,41 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- A run that needs a proxy setting its runner cannot honour is refused before its sandbox starts, naming the setting
+  (reason `runner_proxy_setting_unsupported`).
 - The CLI's hint under a `401` follows the answer's reason. On a single-sign-on deployment with no admin token
   (`sign_in_required`) it says to use a personal API token in `WARDYN_TOKEN`, not the compose stack's admin token. For
   a token the organisation does not know (`admin_token_not_configured`) it names where the token came from.
+- On a phone, the Runs filter bar is a search box, a `Filters (n)` button and a row of removable chips, so the first run
+  is on the first screen instead of under five rows of controls (#3041). The button opens a sheet with every other
+  control and Save view. From the tablet breakpoint up the bar is unchanged.
+
+### Fixed
+
+- Sign-in and probe runs under a boundary (#3446): a member whose profile denies every placement, under a hard-limits
+  boundary, can again run the sign-in and probe runs the placement rule always exempted (it answered 500).
+- The Approvals page cards and the run's Approvals tab now turn Approve and Deny off, and say why, once the server refuses a person with `capability_egress_host` (an admin withholds that host). Before, they kept live buttons and only showed an error after each click. The live approvals strip already did this.
+- A sign-in sandbox whose token is pasted before the sandbox is running now ends once the token is stored. Before, the
+  launch could move the run on between the server's read of it and the kill, and the sandbox stayed up until its
+  30-minute idle cap. That sandbox never held the pasted token.
+- A run's recorded output is no longer lost after the organisation's server restarts when the runner hears of the
+  restart only after the server has begun reading that output back. Before, a run writing a lot of output at that
+  moment could lose the part not yet read back.
+- Building the wardynd image no longer waits without limit on a stalled npm registry (#3472). Installing pnpm and
+  fetching the console's packages each get three tries with a time limit, so an unreachable registry fails the build
+  in about ten minutes, and a package fetch that stalls fails it in under twenty. The lockfile is still enforced.
+
+### Fixed
+
+- A computer folder's pass back no longer uses up the time a run's teardown has (#3466). On Docker, every pass back
+  runs with the agent stopped and no egress: only the folder pass back runs. If the agent cannot be stopped first, no
+  pass runs, and the sandbox is stopped with the record. That includes an exec-less (krun) sandbox, whose agent is the
+  sandbox itself, and one a lease end has already stopped. A pass that completes, or that has no time to start, is
+  followed by the sandbox's stop. A pass that is cut short keeps the sandbox on Docker, and a later sweep resumes it
+  from what the folder's runner saved. On a runner, or on Kubernetes, the first pass runs with the agent still up, for
+  at most the pass's 2 minutes, and a cut pass stops the sandbox. After two cut passes in a row that save nothing, the
+  sandbox is stopped, and the pass's record and its `run.folder.transfer` audit name how many changed files were not
+  brought back. `wardyn sync` also saves what a cut pass finished, so its next pass starts after it.
 
 ## [0.9.8] — 2026-10-21
 

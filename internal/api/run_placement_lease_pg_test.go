@@ -819,6 +819,10 @@ func TestPG_RunnerLease_ReviveThroughTheDoor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The owner still holds a membership placing them in the unit, so the revive reaches the placement check.
+	if _, err := f.st.UpsertGovernanceMembership(f.ctx, types.GovernanceMembership{SubjectType: types.CapabilitySubjectAll, UnitID: profile.ID}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := f.st.Pool.Exec(f.ctx, `UPDATE agent_runs SET unit_id = $2 WHERE id = $1`, run.ID, profile.ID); err != nil {
 		t.Fatal(err)
 	}
