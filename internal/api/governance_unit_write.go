@@ -81,6 +81,9 @@ type governanceUnitResponse struct {
 type governanceUnitView struct {
 	types.GovernanceUnit
 	Effective governanceEffective `json:"effective"`
+	// People counts, on GET /governance, the membership subjects (a user, a group, a user type or
+	// everyone) in this unit or a unit below it. Absent for the Default unit, whose people hold no rows.
+	People *int `json:"people,omitempty"`
 }
 
 // governanceEffective is a profile's composed content. Warnings and Error carry base-level detail
@@ -669,7 +672,7 @@ func (s *Server) handleCreateGovernanceUnit(w http.ResponseWriter, r *http.Reque
 // operatorOnly (routes.go).
 func (s *Server) handleUpdateGovernanceUnit(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "governance profile")
-	if !ok {
+	if !ok || refuseDefaultUnitWrite(w, id) {
 		return
 	}
 	s.writeGovernanceUnit(w, r, id, http.StatusOK)
@@ -691,7 +694,7 @@ func (s *Server) handleDeleteGovernanceUnit(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	id, ok := parseIDParam(w, r, "id", "governance profile")
-	if !ok {
+	if !ok || refuseDefaultUnitWrite(w, id) {
 		return
 	}
 	if mode == govQueue {
@@ -727,6 +730,27 @@ func (s *Server) handleDeleteGovernanceUnit(w http.ResponseWriter, r *http.Reque
 		s.recordGovernanceBypass(r, govKindUnit, id.String(), "success", nil)
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// defaultUnitReadonlyMsg is the refusal of a write to the Default unit.
+const defaultUnitReadonlyMsg = "the Default unit is set by WARDYN_DEFAULT_POLICY; change that and redeploy"
+
+// defaultUnitWriteRefusal is the 409 for a write to id when id is the Default unit, else nil. Its walls
+// are the deployment default, read at resolve, so no stored write could change them.
+func defaultUnitWriteRefusal(id uuid.UUID) *unitWriteError {
+	if id != store.DefaultUnitID {
+		return nil
+	}
+	return writeRefusal(http.StatusConflict, reasonGovernanceUnitDefaultReadonly, "%s", defaultUnitReadonlyMsg)
+}
+
+// refuseDefaultUnitWrite writes defaultUnitWriteRefusal and reports true when there is one.
+func refuseDefaultUnitWrite(w http.ResponseWriter, id uuid.UUID) bool {
+	if e := defaultUnitWriteRefusal(id); e != nil {
+		writeErrorReason(w, e.status, e.reason, e.msg)
+		return true
+	}
+	return false
 }
 
 // writeUnitDeleteError answers a failed profile delete (or a dry run of one) and reports true, or

@@ -559,12 +559,14 @@ var routeMatrix = map[string]classifiedRoute{
 	// The two profile writes probe with a COMPOSED body (an overlay on the deployment default): what
 	// the security tier admits is the composition members too, and a member is refused it by the
 	// tier before the body is read.
-	"POST /api/v1/governance/units":              {class: classSecurity, body: composedProfileProbeBody},
-	"PUT /api/v1/governance/units/{id}":          {class: classSecurity, body: composedProfileProbeBody},
-	"DELETE /api/v1/governance/units/{id}":       {class: classSecurity},
-	"POST /api/v1/governance/memberships":        {class: classSecurity},
-	"DELETE /api/v1/governance/memberships/{id}": {class: classSecurity},
-	"POST /api/v1/governance/check":              {class: classSecurity},
+	"POST /api/v1/governance/units":                    {class: classSecurity, body: composedProfileProbeBody},
+	"PUT /api/v1/governance/units/{id}":                {class: classSecurity, body: composedProfileProbeBody},
+	"DELETE /api/v1/governance/units/{id}":             {class: classSecurity},
+	"POST /api/v1/governance/memberships":              {class: classSecurity},
+	"DELETE /api/v1/governance/memberships/{id}":       {class: classSecurity},
+	"PUT /api/v1/governance/memberships/{id}":          {class: classSecurity},
+	"POST /api/v1/governance/memberships/{id}/promote": {class: classSecurity},
+	"POST /api/v1/governance/check":                    {class: classSecurity},
 	// The four-eyes routes (gov4-b1): the queue, one change, and the two decisions. All security tier
 	// at the door; which kinds of change a caller may see or decide is the approver table's, inside
 	// the handler (governance_changes_pg_test.go).
@@ -1838,11 +1840,12 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// 0.9.3 K4 adds an organization runner to an organization pool and takes it out, on the SUPER tier (= 72 SUPER).
 	// 0.9.3 adds a held Kubernetes run's node record, POST /runs/{id}/node-record, on the security tier (= 89 SEC).
 	// 0.10 adds the Wardyn boundary read, write and dry run on the security tier (= 92 SEC).
+	// 0.10 TREE-API adds PUT /governance/memberships/{id} (move) and its promote route on the security tier (= 94 SEC).
 	// 0.10 FEAT-1KUBE adds PUT /components/{id}/kubectl-token beside the component writes (= 73 SUPER).
 	// 0.10 approval rules add their list, write, delete and dry run on the security tier (= 96 SEC).
 	// 0.10 moves GET /drives to the security tier for a read-only Drives page (= 97 SEC, 72 SUPER).
-	if sec != 97 || super != 72 {
-		t.Errorf("tier split = %d security / %d admin, want 97 / 72 (the 4 approval-rule routes + the 3 Wardyn boundary routes + the node record + the 2 organization pool runner routes + the 4 organization runner routes + the SUPER list and delete of people's drives + the 2 /remote-runners reads and the people-policy pair + the 2 /governance/credential-delivery routes + the token move + the 5 service-identity routes + the 4 invitation routes + the runner revoke + the runners list, detail, token list and revoke and switch read + the 2 /governance/egress-baseline routes + the 3 /key-domains routes + §B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke + the fleet capacity read + GET /people + the audit retention read and drop + the person erasure + the 4 /governance/changes routes + GET /approval-notify/status + the SCIM status read, MINUS record, PLUS #168's 3 moved /drives routes and the moved GET /drives; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes and the moved GET /drives, MINUS #548's retired paste and disconnect, PLUS the identity unbind, runner registration token mint, the runners switch write, 0.9's 6 runner-pool writes and the 3 template-group-admins routes and the 3 /shared-secrets routes and the remote-hosted runner rename)", sec, super)
+	if sec != 99 || super != 72 {
+		t.Errorf("tier split = %d security / %d admin, want 99 / 72 (the membership move and promote + the 4 approval-rule routes + the 3 Wardyn boundary routes + the node record + the 2 organization pool runner routes + the 4 organization runner routes + the SUPER list and delete of people's drives + the 2 /remote-runners reads and the people-policy pair + the 2 /governance/credential-delivery routes + the token move + the 5 service-identity routes + the 4 invitation routes + the runner revoke + the runners list, detail, token list and revoke and switch read + the 2 /governance/egress-baseline routes + the 3 /key-domains routes + §B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke + the fleet capacity read + GET /people + the audit retention read and drop + the person erasure + the 4 /governance/changes routes + GET /approval-notify/status + the SCIM status read, MINUS record, PLUS #168's 3 moved /drives routes and the moved GET /drives; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes and the moved GET /drives, MINUS #548's retired paste and disconnect, PLUS the identity unbind, runner registration token mint, the runners switch write, 0.9's 6 runner-pool writes and the 3 template-group-admins routes and the 3 /shared-secrets routes and the remote-hosted runner rename)", sec, super)
 	}
 }
 

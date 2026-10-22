@@ -634,6 +634,11 @@
       "keyed_by": "harness"
     },
     {
+      "name": "run_in",
+      "excluded": "launch",
+      "why": "The unit a run runs in is one of the launching person's own, chosen at each launch; a template's runs run in the home unit of whoever uses it."
+    },
+    {
       "name": "drive",
       "part": "drives",
       "omitted": "unset_optional",

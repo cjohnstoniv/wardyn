@@ -53,10 +53,12 @@ var specRouteExemptions = map[string]struct{ why, via string }{
 		"changeForRead"},
 	"GET /api/v1/governance/changes/{id}": {"a held change's diff is stored rendered and re-withheld for the reader's tier by changeForRead",
 		"changeForRead"},
-	"GET /api/v1/runner-pools":     {"the caller's effective ceiling decides which pools are listed (listRunnerPools); the list carries no spec", ""},
-	"GET /api/v1/me/runner-pools":  {"the caller's effective ceiling decides which pools are listed (listRunnerPools); the list carries no spec", ""},
-	"GET /api/v1/runs/{id}/attach": {"the run's profile decides whether attaching is allowed (refuseInteractiveAttach); the refusal names the profile only", ""},
-	"GET /api/v1/setup/status":     {"the deployment default's minimum confinement class decides one check row; no spec is served", ""},
+	"GET /api/v1/runner-pools":                   {"the caller's effective ceiling decides which pools are listed (listRunnerPools); the list carries no spec", ""},
+	"GET /api/v1/me/runner-pools":                {"the caller's effective ceiling decides which pools are listed (listRunnerPools); the list carries no spec", ""},
+	"GET /api/v1/runs/{id}/desktop/files":        {"the run's resolved desktop rules decide the transfer defaults it reports; the answer carries file names and sizes, never a spec", ""},
+	"GET /api/v1/runs/{id}/desktop/files/{name}": {"the run's resolved desktop rules decide whether a download is allowed; the body is the file, never a spec", ""},
+	"GET /api/v1/runs/{id}/attach":               {"the run's profile decides whether attaching is allowed (refuseInteractiveAttach); the refusal names the profile only", ""},
+	"GET /api/v1/setup/status":                   {"the deployment default's minimum confinement class decides one check row; no spec is served", ""},
 }
 
 // specCensus is the parsed source the route census reads.

@@ -84,7 +84,7 @@ func contextChoiceFrom(ctx context.Context) contextChoice {
 
 // contextChoiceForRequest is a create, preflight or preview request's choice.
 func (s *Server) contextChoiceForRequest(ctx context.Context, req createRunRequest) (contextChoice, error) {
-	runIn, err := runInFromRequest(req)
+	runIn, err := s.runInFromRequest(ctx, req)
 	if err != nil {
 		return contextChoice{}, err
 	}
@@ -95,9 +95,30 @@ func (s *Server) contextChoiceForRequest(ctx context.Context, req createRunReque
 	return contextChoice{RunIn: runIn, OwningUnits: owning}, nil
 }
 
-// runInFromRequest is the unit the request names to run in; the TREE-API lane fills it.
-func runInFromRequest(createRunRequest) (uuid.UUID, error) {
-	return uuid.Nil, nil
+// runInFromRequest is the unit the request names to run in: Nil for none, else the id it gives, else
+// the unit holding that exact name. A name no unit holds is errUnitNotAContext, the answer for a unit
+// the person is not in, so the refusal tells no one which units exist.
+func (s *Server) runInFromRequest(ctx context.Context, req createRunRequest) (uuid.UUID, error) {
+	name := strings.TrimSpace(req.RunIn)
+	if name == "" {
+		return uuid.Nil, nil
+	}
+	if id, err := uuid.Parse(name); err == nil {
+		return id, nil
+	}
+	if s.cfg.Store == nil {
+		return uuid.Nil, errUnitNotAContext
+	}
+	units, err := s.cfg.Store.ListGovernanceUnits(ctx)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	for _, u := range units {
+		if u.Name == name {
+			return u.ID, nil
+		}
+	}
+	return uuid.Nil, errUnitNotAContext
 }
 
 // decodeStampedRunRequest is preflight's decode: the body, its repositories canonicalized, then its

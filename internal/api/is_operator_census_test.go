@@ -96,6 +96,7 @@ var isOperatorCensus = map[string]int{
 	"policies.go:specReadTierFor":                  1,
 	"governance_unit_write.go:writeGovernanceUnit": 1,
 	"governance_change_kinds.go:applyUnitChange":   1,
+	"governance_dry_run.go:applyUnitWriteQ":        1,
 	// The measured reason can carry a substrate's own error text, so only an operator reads it.
 	"runner_usage.go:remoteUsage": 1,
 	// Operators host their own runner without the self_host_runner grant (capabilities.md).

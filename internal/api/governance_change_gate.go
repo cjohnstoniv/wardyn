@@ -226,6 +226,8 @@ type govProposal struct {
 	notes []string
 	// baseState is the target as the proposal saw it; its hash is what an approval compares.
 	baseState any
+	// activates are the units a legacy membership delete may make someone's context (H3).
+	activates []unitActivation
 }
 
 // proposeGovernanceChange stores p as pending and answers 202 with the pending change. A live change
@@ -240,7 +242,7 @@ func (s *Server) proposeGovernanceChange(w http.ResponseWriter, r *http.Request,
 	ch := types.GovernanceChange{
 		TargetKind: p.kind, Op: p.op, TargetKey: p.key,
 		Payload:         payload,
-		Diff:            renderGovernanceDiff(p.before, p.after, p.changed, p.notes),
+		Diff:            renderGovernanceDiff(p.before, p.after, p.changed, p.notes, p.activates...),
 		BaseHash:        computeETag(p.baseState),
 		DeploymentHash:  computeETag(s.cfg.DefaultPolicy),
 		ProposedBy:      proposer,
@@ -291,12 +293,14 @@ type governanceDiffBody struct {
 	Changed []string        `json:"changed"`
 	// Notes are advisory, never a refusal: what a write would have returned as warnings had it not been held.
 	Notes []string `json:"notes,omitempty"`
+	// Activates lists the units a legacy membership delete may make someone's context.
+	Activates []unitActivation `json:"activates,omitempty"`
 }
 
 // renderGovernanceDiff is the diff stored with a change: the redacted before and after views and the
 // changed field paths, rendered by the server so the console and the CLI never compute their own.
-func renderGovernanceDiff(before, after any, changed, notes []string) json.RawMessage {
-	body := governanceDiffBody{Changed: changed, Notes: notes}
+func renderGovernanceDiff(before, after any, changed, notes []string, activates ...unitActivation) json.RawMessage {
+	body := governanceDiffBody{Changed: changed, Notes: notes, Activates: activates}
 	if body.Changed == nil {
 		body.Changed = []string{}
 	}

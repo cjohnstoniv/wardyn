@@ -760,3 +760,99 @@ func (c *Client) RejectGovernanceChange(ctx context.Context, id uuid.UUID, reaso
 	err := c.do(ctx, http.MethodPost, "/api/v1/governance/changes/"+id.String()+"/reject", body, &out)
 	return out, err
 }
+
+// MoveGovernanceMembership moves membership id to the unit unitID. PUT
+// /api/v1/governance/memberships/{id}. A move the server holds for approval
+// comes back as the pending change and a zero membership.
+func (c *Client) MoveGovernanceMembership(ctx context.Context, id, unitID uuid.UUID) (GovernanceMembership, *GovernanceChange, error) {
+	var out GovernanceMembership
+	body := struct {
+		UnitID uuid.UUID `json:"unit_id"`
+	}{UnitID: unitID}
+	pending, err := c.doPending(ctx, http.MethodPut, "/api/v1/governance/memberships/"+id.String(), body, &out)
+	return out, pending, err
+}
+
+// PromoteGovernanceMembership makes the legacy membership id a context, so
+// the person may run in its unit beside their others. POST
+// /api/v1/governance/memberships/{id}/promote. A promotion the server holds
+// for approval comes back as the pending change and a zero membership.
+func (c *Client) PromoteGovernanceMembership(ctx context.Context, id uuid.UUID) (GovernanceMembership, *GovernanceChange, error) {
+	var out GovernanceMembership
+	pending, err := c.doPending(ctx, http.MethodPost, "/api/v1/governance/memberships/"+id.String()+"/promote", nil, &out)
+	return out, pending, err
+}
+
+// GovernanceCheckRequest is POST /api/v1/governance/check's body: a person's
+// claims, and optionally one of their units (by id or exact name) to answer
+// Effective for instead of the home one.
+type GovernanceCheckRequest struct {
+	UserSubjects []string `json:"user_subjects,omitempty"`
+	Groups       []string `json:"groups,omitempty"`
+	UserType     string   `json:"user_type,omitempty"`
+	RunIn        string   `json:"run_in,omitempty"`
+}
+
+// GovernanceUnitLink is one unit of a path.
+type GovernanceUnitLink struct {
+	ID   uuid.UUID `json:"id"`
+	Name string    `json:"name"`
+}
+
+// GovernanceCheckContext is one unit the person may run in; Path is the unit
+// and those above it, leaf first.
+type GovernanceCheckContext struct {
+	UnitID   uuid.UUID            `json:"unit_id"`
+	UnitName string               `json:"unit_name"`
+	Home     bool                 `json:"home"`
+	Legacy   bool                 `json:"legacy"`
+	Path     []GovernanceUnitLink `json:"path"`
+}
+
+// GovernanceDormantMembership is a legacy membership another one outranks for
+// the person: it places them nowhere.
+type GovernanceDormantMembership struct {
+	MembershipID uuid.UUID `json:"membership_id"`
+	UnitID       uuid.UUID `json:"unit_id"`
+	UnitName     string    `json:"unit_name"`
+}
+
+// GovernanceEffectiveWalls is one context's resolved walls and which layer set
+// each knob.
+type GovernanceEffectiveWalls struct {
+	Ceiling    types.RunPolicySpec         `json:"ceiling"`
+	Limits     GovernanceLimits            `json:"limits"`
+	Provenance map[string]PolicyProvenance `json:"provenance"`
+}
+
+// GovernanceCheckResult is POST /api/v1/governance/check's answer: the home
+// unit (zero for the Default unit) and the tier that matched it, every context,
+// the dormant memberships, and the walls of the context asked for or the home
+// one.
+type GovernanceCheckResult struct {
+	UnitID      uuid.UUID                     `json:"unit_id,omitzero"`
+	UnitName    string                        `json:"unit_name,omitempty"`
+	MatchedTier CapabilitySubjectType         `json:"matched_tier,omitempty"`
+	Contexts    []GovernanceCheckContext      `json:"contexts"`
+	Dormant     []GovernanceDormantMembership `json:"dormant"`
+	Effective   *GovernanceEffectiveWalls     `json:"effective"`
+}
+
+// CheckGovernance answers which units a person with req's claims may run in,
+// and the walls of one. POST /api/v1/governance/check.
+func (c *Client) CheckGovernance(ctx context.Context, req GovernanceCheckRequest) (GovernanceCheckResult, error) {
+	var out GovernanceCheckResult
+	err := c.do(ctx, http.MethodPost, "/api/v1/governance/check", req, &out)
+	return out, err
+}
+
+// GovernanceDryRun reports what a drafted write would change, writing nothing.
+// body carries a target: boundary (the boundary document; also a body with no
+// target), unit (a unit write body plus its id) or membership_move ({id,
+// unit_id}). The report's shape follows the target. POST
+// /api/v1/governance/dry-run.
+func (c *Client) GovernanceDryRun(ctx context.Context, body json.RawMessage) (json.RawMessage, error) {
+	var out json.RawMessage
+	err := c.do(ctx, http.MethodPost, "/api/v1/governance/dry-run", body, &out)
+	return out, err
+}

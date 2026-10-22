@@ -198,6 +198,8 @@ var docTierRows = []struct{ route, token string }{
 	{"DELETE /api/v1/governance/units/{id}", "`/governance` profile and assignment routes"},
 	{"POST /api/v1/governance/memberships", "`/governance` profile and assignment routes"},
 	{"DELETE /api/v1/governance/memberships/{id}", "`/governance` profile and assignment routes"},
+	{"PUT /api/v1/governance/memberships/{id}", "`/governance` profile and assignment routes"},
+	{"POST /api/v1/governance/memberships/{id}/promote", "`/governance` profile and assignment routes"},
 	{"POST /api/v1/governance/check", "`/governance` profile and assignment routes"},
 	{"GET /api/v1/governance/changes", "`/governance` profile and assignment routes"},
 	{"GET /api/v1/governance/changes/{id}", "`/governance` profile and assignment routes"},

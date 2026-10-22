@@ -170,6 +170,8 @@ var templateRequestRules = []TemplateFieldRule{
 	carriedField("model_provider", partCreds, templateOmitBaseline, templateEmptySame,
 		"The run uses the model provider the person's defaults give.").
 		in(templateSectionHarness, "harness"),
+	excludedField("run_in", templateExcludeLaunch,
+		"The unit a run runs in is one of the launching person's own, chosen at each launch; a template's runs run in the home unit of whoever uses it."),
 	carriedField("drive", partDrives, templateOmitOptional, templateEmptyValue,
 		"No drive is attached or declined. enabled false is a choice to leave the drive out."),
 	carriedField("drives", partDrives, templateOmitOptional, templateEmptyValue,

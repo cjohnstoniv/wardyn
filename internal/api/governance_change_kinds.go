@@ -343,6 +343,9 @@ func applyUnitChange(s *Server, r *http.Request, q store.Querier, ch types.Gover
 	if err != nil {
 		return govApplied{}, fmt.Errorf("governance change %s: target key %q is not a profile id", ch.ID, ch.TargetKey)
 	}
+	if refusal := defaultUnitWriteRefusal(id); refusal != nil {
+		return govApplied{}, refusal
+	}
 	if ch.Op == "delete" {
 		return applyUnitDelete(ctx, q, ch, id)
 	}
@@ -594,12 +597,21 @@ func (s *Server) holdMembershipUpsert(w http.ResponseWriter, r *http.Request, a 
 func (s *Server) holdMembershipDelete(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
 	ctx := r.Context()
 	var st membershipState
+	var activates []unitActivation
 	err := s.cfg.Store.DryRunGovernance(ctx, func(q store.Querier) error {
 		row, err := store.GetGovernanceMembershipQ(ctx, q, id, false)
 		if err != nil {
 			return err
 		}
-		st, err = readMembershipState(ctx, q, row.UnitID, string(row.SubjectType), row.Subject, false)
+		if st, err = readMembershipState(ctx, q, row.UnitID, string(row.SubjectType), row.Subject, false); err != nil || !row.Legacy {
+			return err
+		}
+		all, err := store.ListGovernanceMembershipsQ(ctx, q)
+		if err != nil {
+			return err
+		}
+		units, err := store.ListGovernanceUnitsQ(ctx, q)
+		activates = legacyActivations(row, all, units)
 		return err
 	})
 	if notFoundIf(w, err, "governance assignment", reasonGovernanceMembershipNotFound) {
@@ -613,7 +625,7 @@ func (s *Server) holdMembershipDelete(w http.ResponseWriter, r *http.Request, id
 	s.proposeGovernanceChange(w, r, govProposal{
 		kind: govKindMembership, op: "delete", key: membershipKey(st.current.UnitID, st.current.SubjectType, st.current.Subject),
 		payload: map[string]any{"id": id}, before: before, changed: changedPaths(before, nil),
-		baseState: st.state(),
+		baseState: st.state(), activates: activates,
 	})
 }
 
@@ -634,6 +646,9 @@ func applyMembershipChange(s *Server, r *http.Request, q store.Querier, ch types
 	}
 	if err := store.LockGovernanceMembershipKey(ctx, q, subjectType, subject); err != nil {
 		return govApplied{}, err
+	}
+	if ch.Op == "move" || ch.Op == "promote" {
+		return applyMembershipTreeChange(ctx, q, ch)
 	}
 	if ch.Op == "delete" {
 		var p struct {
@@ -666,6 +681,9 @@ func applyMembershipChange(s *Server, r *http.Request, q store.Querier, ch types
 	a := types.GovernanceMembership{SubjectType: req.SubjectType, Subject: req.Subject, UnitID: req.UnitID, Priority: req.Priority, Home: req.Home}
 	if err := validateGovernanceMembership(&a); err != nil {
 		return govApplied{}, writeRefusal(http.StatusBadRequest, reasonGovernanceMembershipInvalid, "invalid assignment: %v", err)
+	}
+	if err := defaultMembershipRefusal(a.UnitID, defaultTakesNoMembershipsMsg); err != nil {
+		return govApplied{}, err
 	}
 	if err := s.checkUserTypeSubject(ctx, q, a.SubjectType, a.Subject); err != nil {
 		return govApplied{}, err
