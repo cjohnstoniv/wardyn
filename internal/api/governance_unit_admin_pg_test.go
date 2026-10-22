@@ -447,7 +447,7 @@ func TestUnitAdminAuditFields(t *testing.T) {
 		actor, scope, approver string
 	}{
 		{"governance.unit.write", uaSubAdminA, e.a.ID.String(), ""},
-		{"governance.unit_admin.granted", uaSubAdminA, "security", govSubAlice},
+		{"governance.unit_admin.grant", uaSubAdminA, "security", govSubAlice},
 	} {
 		rows := e.audits(tc.action)
 		if len(rows) == 0 {

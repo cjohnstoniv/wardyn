@@ -5,7 +5,7 @@
 - A unit admin is a person or an IdP group granted on one unit. They govern that unit and every unit below it, and nothing else.
 - It is a grant on a unit, not a fourth role: the session role stays `user`, `security_admin` or `admin` ([three roles](three-roles.md)).
 - A security admin is never narrowed by a grant. Super and security admins reach every unit, as before.
-- The audit contract is [`docs/AUDIT-ACTIONS.md`](../AUDIT-ACTIONS.md)'s `governance.unit_admin.granted` and `governance.unit_admin.revoked` rows.
+- The audit contract is [`docs/AUDIT-ACTIONS.md`](../AUDIT-ACTIONS.md)'s `governance.unit_admin.grant` and `governance.unit_admin.revoke` rows.
 
 ## Who holds a grant
 

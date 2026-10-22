@@ -117,7 +117,8 @@ func (s *Server) runGovernancePosture(r *http.Request, req createRunRequest, cei
 	// and the seed cannot disagree; `!= "agent"` keeps an unknown value refused.
 	if ceiling.Limits.DenyTaskModeExec && req.InteractiveStart != "agent" && interactiveBootSeed(requestIsInteractive(req), req.Task) != "" {
 		return runDenied(authz.Deny(authz.ReasonGovernanceUnit, "runs.interactive_start", fmt.Sprintf(
-			"a shell startup command is not allowed by your governance profile %q — with `interactive_start` unset or `shell` the task runs as a shell command at sandbox boot, before anyone attaches, unattended the way exec does. Launch with `interactive_start=agent`, or without a task.", name)).WithPolicy(policy).OnKnob(ceiling.lockOf("deny_task_mode_exec")))
+			"a shell startup command is not allowed by your governance profile %q — with `interactive_start` unset or `shell` the task runs as a shell command at sandbox boot, before anyone attaches, unattended the way exec does. Launch with `interactive_start=agent`, or without a task.", name)).WithPolicy(policy).
+			OnKnob(ceiling.lockOf("deny_task_mode_exec")))
 	}
 	// Post-coercion, and that is the whole gate. req.Interactive is still the RAW
 	// field here — this function runs before the empty-task→interactive coercion

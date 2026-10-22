@@ -93,7 +93,7 @@ func (s *Server) handleGrantUnitAdmin(w http.ResponseWriter, r *http.Request) {
 	if s.writeUnitAdminError(w, r, err) {
 		return
 	}
-	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r), "governance.unit_admin.granted",
+	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r), "governance.unit_admin.grant",
 		saved.ID.String(), "success", mustJSON(s.directUnitAdminAudit(r, saved))))
 	if mode == govBypass {
 		s.recordGovernanceBypass(r, govKindUnitAdmin, saved.ID.String(), "success", nil)
@@ -143,7 +143,7 @@ func (s *Server) handleRevokeUnitAdmin(w http.ResponseWriter, r *http.Request) {
 	if s.writeUnitAdminError(w, r, err) {
 		return
 	}
-	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r), "governance.unit_admin.revoked",
+	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r), "governance.unit_admin.revoke",
 		removed.ID.String(), "success", mustJSON(s.directUnitAdminAudit(r, removed))))
 	if mode == govBypass {
 		s.recordGovernanceBypass(r, govKindUnitAdmin, removed.ID.String(), "success", nil)
@@ -264,7 +264,7 @@ func applyUnitAdminChange(s *Server, r *http.Request, q store.Querier, ch types.
 		if err != nil {
 			return govApplied{}, err
 		}
-		return govApplied{action: "governance.unit_admin.revoked", target: removed.ID.String(),
+		return govApplied{action: "governance.unit_admin.revoke", target: removed.ID.String(),
 			data: unitAdminAuditData(removed, ch.ProposedBy, approver)}, nil
 	}
 	saved, err := store.GrantUnitAdminQ(ctx, q, types.GovernanceUnitAdmin{
@@ -275,7 +275,7 @@ func applyUnitAdminChange(s *Server, r *http.Request, q store.Querier, ch types.
 	if err != nil {
 		return govApplied{}, err
 	}
-	return govApplied{action: "governance.unit_admin.granted", target: saved.ID.String(),
+	return govApplied{action: "governance.unit_admin.grant", target: saved.ID.String(),
 		data: unitAdminAuditData(saved, ch.ProposedBy, approver)}, nil
 }
 
