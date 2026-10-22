@@ -149,6 +149,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `runner.offline_summary.record` audit row. A refusal at start is shown only once a later start connects.
 - A Docker runner checks its relay on every reconnect and every 5 minutes, logs `run relay unreachable` when the relay
   stops answering, and reports it as `relay_status` on the runner's read.
+- A runner's `status.json` now records the stage a failed connect or start stopped at (`stage`, `stage_at`) and whether
+  the run relay answers (`relay`), so the file shows why the runner is down (Refs #3296).
 
 ### Changed
 
