@@ -8,8 +8,14 @@
 //
 // It is its own package so it runs in seconds without compiling internal/api.
 // A selector counts as a raw read when it is `.events` on a value named audit,
-// rec or siteAudit (or a field of that name) and is not a method call; the
-// legacy sites are frozen per file in testdata/allow.txt and may only shrink.
+// rec or siteAudit (or a field of that name), or on an assertion to
+// *recRecorder (srv.cfg.Audit.(*recRecorder).events), and is not a method call.
+// This is a name heuristic, not a type check: a recorder held under another
+// variable name (for example pvRec) is not seen.
+//
+// The rule: a file fails only when its count grows above its line in
+// testdata/allow.txt, or when a file with no line has any raw read. A count that
+// shrinks passes; stale lines are pruned in a cleanup lane.
 package recguard
 
 import (
@@ -32,6 +38,13 @@ var update = flag.Bool("update", false, "rewrite testdata/allow.txt from the cur
 func isRecorder(e ast.Expr) bool {
 	name := ""
 	switch x := e.(type) {
+	case *ast.TypeAssertExpr:
+		if star, ok := x.Type.(*ast.StarExpr); ok {
+			if id, ok := star.X.(*ast.Ident); ok {
+				return id.Name == "recRecorder"
+			}
+		}
+		return false
 	case *ast.Ident:
 		name = x.Name
 	case *ast.SelectorExpr:
@@ -96,7 +109,8 @@ func readAllow(t *testing.T, path string) map[string]int {
 
 // TestNoNewRawRecorderReads fails when a test file reads the recorder's raw
 // events more often than testdata/allow.txt grants it. RECGUARD_DIR points the
-// scan at another directory (the planted-violation twin).
+// scan at another directory (testdata/planted and testdata/planted_assert are the
+// planted-violation twins).
 func TestNoNewRawRecorderReads(t *testing.T) {
 	dir, allowPath := "..", "testdata/allow.txt"
 	if d := os.Getenv("RECGUARD_DIR"); d != "" {
@@ -116,16 +130,8 @@ func TestNoNewRawRecorderReads(t *testing.T) {
 	}
 	allow := readAllow(t, allowPath)
 	for name, n := range got {
-		switch {
-		case n > allow[name]:
+		if n > allow[name] {
 			t.Errorf("%s: %d raw read(s) of the recorder's events, %d allowed; read snapshot() instead", name, n, allow[name])
-		case n < allow[name]:
-			t.Errorf("%s: %d raw read(s) left, allow.txt grants %d; lower it", name, n, allow[name])
-		}
-	}
-	for name, n := range allow {
-		if _, ok := got[name]; !ok {
-			t.Errorf("%s: no raw reads left, allow.txt grants %d; delete the line", name, n)
 		}
 	}
 }

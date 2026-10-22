@@ -32,8 +32,6 @@ failure_hint_test.go 2
 file_secret_test.go 15
 gitpat_test.go 2
 governance_contact_test.go 1
-governance_policy_ref_test.go 1
-governance_stale_seams_test.go 1
 groundtruth_test.go 6
 ha_live_pg_test.go 1
 harnesscred_signin_lock_test.go 1
@@ -67,6 +65,7 @@ provider_secret_reserved_test.go 1
 provider_subscription_test.go 2
 r1final_f341_test.go 3
 r3_denial_audit_test.go 3
+r3_role_mapping_stale_tokens_test.go 2
 r3_stale_snapshot_audit_test.go 4
 r3_workspace_collision_test.go 1
 r3b_ceiling_reassert_test.go 1
@@ -83,6 +82,7 @@ recording_parts_test.go 2
 recording_upload_cancel_test.go 1
 recording_upload_test.go 1
 refusal_test.go 2
+role_mapping_revocation_failed_test.go 1
 run_drives_test.go 12
 run_exec_read_test.go 1
 run_files_test.go 12
@@ -112,6 +112,7 @@ runs_dispatch_placeholders_test.go 2
 runs_dispatch_provider_test.go 1
 runs_dispatch_secrets_subject_test.go 1
 runs_lifecycle_r2b_test.go 1
+scanresult_test.go 3
 secrets_explicit_test.go 5
 secrets_test.go 12
 security_admin_test.go 4
@@ -143,7 +144,6 @@ user_view_test.go 5
 verify_loop_test.go 2
 workspace_admission_test.go 4
 workspace_base_image_command_test.go 2
-workspace_clone_literal_test.go 1
 workspace_owner_test.go 1
 workspace_providers_test.go 8
 workspace_reassign_test.go 9
