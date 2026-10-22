@@ -101,5 +101,5 @@
 
 ## The run record
 
-- Migration `0210_run_machine_kind` adds `agent_runs.machine_kind` (empty for every container run, as before) and `agent_runs.vm_machine`.
+- Migration `0216_run_machine_kind` adds `agent_runs.machine_kind` (empty for every container run, as before) and `agent_runs.vm_machine`.
 - A Linux VM run whose runner does not say which machine it started is stopped and fails; it never runs unrecorded.
