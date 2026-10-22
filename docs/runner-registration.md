@@ -253,8 +253,12 @@ Both run `serve --config <path to runnerd.json>` and hold no setting themselves.
 - A computer that is already a runner for another organisation is refused, naming both.
 - On Windows it refuses: run it inside your WSL2 distribution.
 - A failed run leaves nothing to undo: run it again. An unused token expires within the hour; an unclaimed runner lapses after 24 hours.
-- To upgrade, run `wardyn runner setup` again or install the new package. Never copy over the binary.
+- To upgrade, see [Upgrading a runner](#upgrading-a-runner).
 - Org runners keep the operator's `--token-file` path.
+
+### Upgrading a runner
+
+Upgrade the organisation before its runners. A runner installed with `setup` upgrades by running `wardyn runner setup` again, or the new release's `wardyn-runnerd setup` with the same flags: it renames a new file over its own copy and restarts the service. Installing a new `wardyn-runnerd.pkg` upgrades only a runner the package's managed agent runs (one set up with `register`); it stops that agent first. A `setup`-installed runner keeps its own copy, so a new package alone leaves it on the old version. Never copy a new binary over the running one: on macOS the system can stop a process whose binary is overwritten in place.
 
 ## The runner's settings file
 
