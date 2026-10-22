@@ -210,7 +210,7 @@ export function OnboardingScreen({
       <span className="inline-flex size-11 items-center justify-center rounded-xl bg-primary/15 text-primary">
         <Shield className="size-6" aria-hidden />
       </span>
-      <h1 className="mt-5 text-[2rem] font-semibold leading-tight tracking-tight text-foreground">
+      <h1 className="mt-5 text-display text-foreground">
         Sandboxed. Governed. Self-hosted. Free.
       </h1>
       <p className="mt-3 max-w-[640px] text-base leading-relaxed text-muted-foreground">

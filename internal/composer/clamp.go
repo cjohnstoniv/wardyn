@@ -85,6 +85,8 @@ func clamp(proposed, ceiling types.RunPolicySpec, limits types.GovernanceLimits,
 
 	warns = clampOperatorSwitches(&out, ceiling, warns)
 	warns = clampInnerWalls(&out, ceiling, warns)
+	warns = clampDesktop(&out, ceiling, warns)
+	warns = clampRecording(&out, ceiling, warns)
 
 	// Per-tool effects: a proposal may narrow the operator's rules, never widen.
 	warns = clampToolRules(&out, ceiling, warns)
@@ -253,9 +255,7 @@ func clampResources(out *types.RunPolicySpec, ceiling types.RunPolicySpec, limit
 // IsSet treats an all-zero-but-non-nil PushRulesSpec (push_rules: {} on the wire) as "no opinion"
 // like nil, so an empty ceiling doesn't get inherited wholesale and false-warn.
 func clampPushRules(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns []string) []string {
-	// deny_new_executables is not in IsSet (nothing enforces it yet) but a ceiling's true must
-	// still reach the merged spec, so a proposal can never switch it off.
-	if !ceiling.PushRules.IsSet() && (ceiling.PushRules == nil || !ceiling.PushRules.DenyNewExecutables) {
+	if !ceiling.PushRules.IsSet() {
 		return warns
 	}
 	if out.PushRules == nil {
@@ -347,6 +347,10 @@ func cloneProposal(s types.RunPolicySpec) types.RunPolicySpec {
 	if s.HarnessInnerWalls != nil {
 		w := *s.HarnessInnerWalls
 		out.HarnessInnerWalls = &w
+	}
+	if s.Desktop != nil {
+		d := *s.Desktop
+		out.Desktop = &d
 	}
 	if s.PushRules != nil {
 		pr := *s.PushRules
@@ -876,6 +880,28 @@ func clampInnerWalls(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warn
 	if p != (types.HarnessInnerWalls{}) {
 		out.HarnessInnerWalls = &p
 	}
+	return warns
+}
+
+// clampDesktop blocks every desktop direction the ceiling blocks, its defaults included: a member may
+// block more, never open what the operator keeps shut. A proposal already within is left as written.
+func clampDesktop(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns []string) []string {
+	if leqDesktop(out.Desktop, ceiling.Desktop) {
+		return warns
+	}
+	m := out.Desktop.Meet(ceiling.Desktop)
+	out.Desktop = &m
+	return append(warns, "desktop narrowed: operator policy blocks a direction the proposal allowed")
+}
+
+// clampRecording raises a proposal's recording level to the ceiling's: a ceiling's level is a minimum,
+// so a policy under it may record more, never less. An unset proposal takes the ceiling's level.
+func clampRecording(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns []string) []string {
+	raised := out.Recording.AtLeast(ceiling.Recording)
+	if raised != out.Recording && out.Recording != "" {
+		warns = append(warns, fmt.Sprintf("recording raised from %q to operator minimum %q", out.Recording, raised))
+	}
+	out.Recording = raised
 	return warns
 }
 

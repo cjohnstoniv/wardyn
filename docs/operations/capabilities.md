@@ -150,7 +150,7 @@ the ADMIN pre-authorized.
 2. Re-point each one at something the new claim will still carry:
    - a group the member is a **direct** member of and that is assigned to the application, or the member themselves (`subject_type=user`, or a user-tier assignment).
 3. Then change the claim configuration.
-4. Verify with a real login, not by reading the IdP's UI: have an affected member sign in again and read `GET /me/capabilities`, whose `session_groups` is the snapshot their token actually produced. Every group your re-keyed rows name must appear in it. `POST /governance/preview` with that exact list says which profile now resolves for them.
+4. Verify with a real login, not by reading the IdP's UI: have an affected member sign in again and read `GET /me/capabilities`, whose `session_groups` is the snapshot their token actually produced. Every group your re-keyed rows name must appear in it. `POST /governance/check` with that exact list says which profile now resolves for them.
 
 - If the groups cannot be flattened and the rows cannot be re-keyed, user subjects are the only shape in this release that a claim-configuration change cannot break without telling you ([`threatmodel/THREAT-MODEL.md`](../../threatmodel/THREAT-MODEL.md) §5).
 

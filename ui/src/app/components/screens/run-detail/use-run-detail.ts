@@ -4,6 +4,7 @@
  */
 
 import * as React from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   type ApprovalRequest,
   type AuditEvent,
@@ -20,6 +21,7 @@ import { heldCredentials } from "../../../lib/held-credentials";
 import { recordings as recordingsApi } from "../../../lib/api/recordings";
 import { useRecordingDisabled } from "../../../lib/hooks/use-recording-disabled";
 import { usePoll } from "../../../lib/use-poll";
+import { LIST_LIMIT } from "../../../lib/api/core";
 import { withNewestEvents } from "./audit-window";
 
 // Live refresh cadence for a non-terminal run's detail.
@@ -28,6 +30,7 @@ const DETAIL_POLL_MS = 4000;
 const KILL_SETTLE_MS = 120_000;
 
 export type Tab = "overview" | "approvals" | "policy" | "audit" | "recording" | "output";
+const TABS: readonly string[] = ["overview", "approvals", "policy", "audit", "recording", "output"];
 
 export function useRunDetail(id: string) {
   const [run, setRun] = React.useState<RunDetail | null | undefined>(undefined);
@@ -37,6 +40,9 @@ export function useRunDetail(id: string) {
   const [audit, setAudit] = React.useState<AuditEvent[]>([]);
   // The oldest and newest pages of a very long trail did not meet: counts read off `audit` are a floor.
   const [auditGap, setAuditGap] = React.useState(false);
+  // A full oldest page cannot change (the trail is append-only), so it is read once per run id and
+  // only the newest page is fetched again on later polls.
+  const oldestPage = React.useRef<{ id: string; events: AuditEvent[] } | null>(null);
   // The run's session.recording(.write) events (RECORDING_ACTIONS), via a
   // SEPARATE action_prefix fetch so the general trail's cap can't crowd them out.
   const [recordingAudit, setRecordingAudit] = React.useState<AuditEvent[]>([]);
@@ -53,7 +59,12 @@ export function useRunDetail(id: string) {
   const [mintAudit, setMintAudit] = React.useState<AuditEvent[] | null | undefined>(undefined);
   const [grantsReadable, setGrantsReadable] = React.useState(false);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
-  const [tab, setTab] = React.useState<Tab>("overview");
+  // ?tab= opens the page on that tab (the Runs list's Review button lands on Approvals).
+  const [searchParams] = useSearchParams();
+  const [tab, setTab] = React.useState<Tab>(() => {
+    const asked = searchParams.get("tab") ?? "";
+    return TABS.includes(asked) ? (asked as Tab) : "overview";
+  });
   // Recording is fetched lazily the first time the Recording tab opens.
   const [recording, setRecording] = React.useState<Recording | null>(null);
   const [recState, setRecState] = React.useState<"idle" | "loading" | "error" | "ready">("idle");
@@ -127,12 +138,14 @@ export function useRunDetail(id: string) {
         // LIST_LIMIT lifetime rows — see approvals.ts's listApprovals comment
         // and internal/api/approvals.go:56-61.
         approvalsApi.listApprovals("", id),
-        auditApi.listAudit(id),
+        oldestPage.current?.id === id ? Promise.resolve(oldestPage.current.events) : auditApi.listAudit(id),
         // "session.recording" names the ACTION FAMILY, prefixing both the old
         // and new action names — not itself a legacy action name (Conductor ruling, #1062).
         auditApi.listAudit(id, { actionPrefix: "session.recording" }),
+        // A desktop's screen recordings and their pause gaps (#2968), on the same terms.
+        auditApi.listAudit(id, { actionPrefix: "desktop.recording" }),
       ])
-        .then(async ([r, g, runApprovals, a, recA]) => {
+        .then(async ([r, g, runApprovals, a, recA, deskA]) => {
           // A run answer for a different id than this page shows is dropped:
           // the page never renders, or acts on, a run it was not asked for.
           // Case-insensitive: a non-canonical UUID in the URL is still this run.
@@ -148,6 +161,7 @@ export function useRunDetail(id: string) {
           }
           // The first page is the OLDEST 1000 rows; a run past that joins its newest page on, so the live
           // evidence (egress, mints) keeps moving instead of freezing at row 1000.
+          if (a.status === "fulfilled" && a.value.length >= LIST_LIMIT) oldestPage.current = { id, events: a.value };
           const trail = a.status === "fulfilled" ? await withNewestEvents(id, a.value) : undefined;
           setRun(r.value ?? null);
           setGrantsReadable(g.status === "fulfilled");
@@ -162,7 +176,8 @@ export function useRunDetail(id: string) {
           // predicate cannot leak another run's rows onto this page.
           if (runApprovals.status === "fulfilled")
             setApprovals(runApprovals.value.filter((x) => x.run_id.toLowerCase() === id.toLowerCase()));
-          if (recA.status === "fulfilled") setRecordingAudit(recA.value);
+          if (recA.status === "fulfilled")
+            setRecordingAudit(deskA.status === "fulfilled" ? [...recA.value, ...deskA.value] : recA.value);
           setStatus("ready");
           // R-5: run.complete/run.kill/run.autostop cannot exist for a run that
           // ISN'T terminal — fetching them every DETAIL_POLL_MS tick on a live

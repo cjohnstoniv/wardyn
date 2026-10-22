@@ -11,12 +11,13 @@
 // operator would otherwise see a live terminal in the browser with nothing
 // anywhere saying a real terminal could reach the same session.
 //
-// `wardyn run attach <run-id>` needs no gateway and no operator configuration: it
+// `wardyn attach <run-id>` needs no gateway and no operator configuration: it
 // dials the same WebSocket this page's terminal uses, lands in the SAME tmux
 // session, and works on every deployment. Verified against a live run — a file
 // written from one attach was read back by a second, and by the browser
-// terminal. So the CLI lane is always shown, and SSH is the second lane: rich
-// when enabled, one honest line about what turns it on when not.
+// terminal. So the CLI lane is always shown, then "Get the CLI" (get-the-cli.tsx);
+// SSH is a folded lane below them: rich when enabled, one honest line about what
+// turns it on when not (M-ATT-1).
 //
 // Shown to the run's OWNER or to an admin, matching the server rather than
 // merely hiding a control it would refuse — all three lanes are owner-or-admin
@@ -37,11 +38,15 @@ import { basePath } from "../../lib/base-path";
 import { proxyCommandIsSafe } from "../../lib/ssh-proxy-command";
 import { entryErrorMessage, mayEnterRunOrUnknown, sponsorOnlyEntry } from "../../lib/run-entry";
 import { CodeBlock, Mono } from "../wardyn/code-block";
-import { RUN_SSH, UI_APPS_LANE, UI_APPS_LAUNCHER_MISSING_PREFIX } from "../wardyn/copy";
+import { RUN_CLI, RUN_SSH, UI_APPS_LANE, UI_APPS_LAUNCHER_MISSING_PREFIX } from "../wardyn/copy";
 import { RUN_SYNC } from "../wardyn/copy/runners";
+import { DESKTOP } from "../wardyn/copy/desktop";
 import { useOperator, useOperatorResolved, usePrincipal } from "../wardyn/operator-context";
-import { WidgetCard } from "../wardyn/primitives";
+import { Chip, WidgetCard } from "../wardyn/primitives";
+import { DesktopFilesPanel } from "./run-detail/desktop-files-panel";
 import { cn } from "../ui/utils";
+import { CliLane, GetTheCli } from "./run-detail/get-the-cli";
+import { orgCAFingerprints } from "../../lib/cli-install";
 
 // Exported for run-detail-ssh.test.tsx: standalone-testable without mounting
 // the whole screen's run/grants/egress/approvals/audit/recording fetch graph.
@@ -95,6 +100,14 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
   // the control-plane-unreachable banner. Same principle the sibling
   // listKeys().catch states: never assert a fact the fetch did not confirm.
   const [healthAnswered, setHealthAnswered] = React.useState(false);
+  // Get the CLI's inputs, from the same /healthz read: the deployment's release
+  // version, the operator's advertised mirror and the org CA fingerprints. `attempt`
+  // re-asks when the person taps Try again after a /healthz that never answered.
+  const [cliFacts, setCLIFacts] = React.useState<{ version?: string; artifactBase?: string; fingerprints: ReturnType<typeof orgCAFingerprints> }>({
+    fingerprints: [],
+  });
+  const [cliLoaded, setCLILoaded] = React.useState(false);
+  const [attempt, setAttempt] = React.useState(0);
   // Which declared app's ticket-mint/open is in flight, and the last failure
   // (scoped to one app — the other rows stay untouched per the mock's S5).
   const [openingApp, setOpeningApp] = React.useState<string | null>(null);
@@ -110,6 +123,12 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
       // Only a real answer licenses the OFF copy; a swallowed failure ({})
       // leaves both lanes as their heading alone.
       setHealthAnswered(h.status === "ok");
+      setCLILoaded(true);
+      setCLIFacts({
+        version: h.version,
+        artifactBase: h.cli_artifact_base,
+        fingerprints: orgCAFingerprints((h as { org_ca_fingerprints?: unknown }).org_ca_fingerprints),
+      });
     });
     sshKeysApi
       .listKeys()
@@ -126,7 +145,7 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
     return () => {
       alive = false;
     };
-  }, [mayAttach, running]);
+  }, [mayAttach, running, attempt]);
 
   if (!mayAttach || !running) return null;
 
@@ -181,28 +200,7 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
     setAppError(null);
     setOpeningApp(app.name);
     try {
-      const ticket = await runsApi.attachTicket(run.id, "ui");
-      // #1241: the gateway refuses a ticket this browser did not bind first,
-      // so a ticket minted elsewhere cannot be pushed into this browser.
-      if (uiSandbox?.bind_url) {
-        await bindTicket(uiSandbox.bind_url.split("{run}").join(encodeURIComponent(run.id)), ticket);
-      }
-      // Host mode (WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE) still puts {run} in the
-      // HOST half of enter_post_url ("https://run-{run}.ui.example.com/
-      // __wardyn/enter", no query) — split/join replaces every occurrence
-      // (replaceAll is ES2021; this tsconfig's lib is ES2020).
-      if (uiSandbox?.enter_post_url) {
-        const action = uiSandbox.enter_post_url.split("{run}").join(encodeURIComponent(run.id));
-        submitEnterForm(action, { run: run.id, app: app.name, ticket });
-      } else if (uiSandbox?.enter_url_template) {
-        const url = Object.entries({ run: run.id, app: app.name, ticket }).reduce(
-          (tpl, [key, value]) => tpl.split(`{${key}}`).join(encodeURIComponent(value)),
-          uiSandbox.enter_url_template,
-        );
-        window.open(url, "_blank", "noopener");
-      } else {
-        throw new Error("This deployment's UI-sandbox gateway published no enter URL for the console to use.");
-      }
+      await enterUIApp(run.id, app.name, uiSandbox);
     } catch (err) {
       setAppError({ app: app.name, message: entryErrorMessage(err, (e) => (e instanceof Error ? e.message : String(e)), run) });
     } finally {
@@ -210,14 +208,11 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
     }
   }
 
-  // The console already knows the address it is served from, so the env line is
-  // this deployment's real URL rather than a placeholder the operator has to
-  // translate. Omitted when it matches the CLI's own default. The base path
-  // rides along: the API is served beneath it, and a bare origin would aim
-  // the CLI's bearer token at whatever else owns the host root.
-  const wardynURL = typeof window !== "undefined" ? window.location.origin + basePath() : "";
-  const cliEnv = wardynURL && wardynURL !== "http://localhost:8080" ? `WARDYN_URL=${wardynURL} ` : "";
-  const cliCommand = `${cliEnv}wardyn run attach ${run.id}`;
+  // The one address the CLI needs once: this console's own, base path included
+  // (the API is served beneath it, and a bare origin would aim the CLI's bearer
+  // token at whatever else owns the host root). It rides `wardyn login <url>`;
+  // the attach command itself carries no prefix.
+  const consoleURL = typeof window !== "undefined" ? window.location.origin + basePath() : "";
   const syncLane = sshOn && run.placement !== "local" && !!run.agent_exec_id;
 
   return (
@@ -229,6 +224,32 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
       grow
       bodyClassName="scroll-thin overflow-y-auto p-4"
     >
+      {/* Mock M6: a desktop VM's desktop comes first, in its own block. It is the gateway's ticket ->
+          bind -> enter hand-off for the built-in desktop app, never a declared ui_app. */}
+      {run.machine_kind === "linux_vm" && (
+        <section aria-label={DESKTOP.title} className="mb-4 rounded-[10px] border border-border p-3">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs font-medium text-foreground">{DESKTOP.title}</p>
+            {healthAnswered && <Chip tone={uiSandboxOn ? "success" : "neutral"}>{uiSandboxOn ? DESKTOP.ready : DESKTOP.statusOff}</Chip>}
+          </div>
+          <p className="mt-0.5 text-meta text-muted-foreground">{DESKTOP.kind}</p>
+          {healthAnswered && !uiSandboxOn && (
+            <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{monoTokens(DESKTOP.off, "WARDYN_UI_SANDBOX_LISTEN")}</p>
+          )}
+          {uiSandboxOn && (
+            <>
+              <Button size="sm" className="mt-2" disabled={openingApp === DESKTOP_APP.name} onClick={() => openApp(DESKTOP_APP)}>
+                {openingApp === DESKTOP_APP.name ? UI_APPS_LANE.ctaBusy : UI_APPS_LANE.cta("desktop")}
+              </Button>
+              {appError?.app === DESKTOP_APP.name && (
+                <p role="alert" className="mt-2 font-mono text-meta leading-relaxed text-muted-foreground">{appError.message}</p>
+              )}
+              <p className="mt-2 text-meta leading-relaxed text-muted-foreground sm:hidden">{DESKTOP.phoneBefore}</p>
+              <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{UI_APPS_LANE.newTab}</p>
+            </>
+          )}
+        </section>
+      )}
       {externalTool && (
         <p className="mb-2 text-meta leading-relaxed text-muted-foreground">
           Managed by an external tool — killing this run tears down that tool's workspace.
@@ -240,22 +261,23 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
         detaching never ends the run.
       </p>
 
-      <p className="text-xs font-medium text-foreground">Wardyn CLI</p>
-      <p className="mt-0.5 mb-1.5 text-meta leading-relaxed text-muted-foreground">
-        Works on every deployment — no gateway to enable, no key to register. Mints a one-time ticket with{" "}
-        <Mono className="text-foreground">WARDYN_TOKEN</Mono> (your own token) or{" "}
-        <Mono className="text-foreground">WARDYN_ADMIN_TOKEN</Mono>, same as this page's own terminal. Ctrl-C or
-        closing the session detaches.
-      </p>
-      <CodeBlock text={cliCommand} copyLabel={RUN_SSH.COPY_CLI} />
-      <p className="mt-1.5 text-meta leading-relaxed text-muted-foreground">
-        Started with <Mono className="text-foreground">make setup</Mono>? The binary is at{" "}
-        <Mono className="text-foreground">./bin/wardyn</Mono> in the repo.
-      </p>
+      <CliLane runId={run.id} consoleURL={consoleURL} />
+      <GetTheCli
+        version={cliFacts.version}
+        artifactBase={cliFacts.artifactBase}
+        fingerprints={cliFacts.fingerprints}
+        healthAnswered={healthAnswered}
+        loaded={cliLoaded}
+        onRetry={() => setAttempt((n) => n + 1)}
+      />
 
       {!sponsorOnly && (
-      <div className="mt-4 border-t border-border pt-3">
-        <p className="text-xs font-medium text-foreground">SSH</p>
+      <details className="group mt-4 border-t border-border pt-3">
+        <summary className="flex cursor-pointer items-center gap-2">
+          <span className="flex-1 text-xs font-medium text-foreground">{RUN_CLI.SSH_TITLE}</span>
+          <span className="text-xs text-muted-foreground group-open:hidden">{RUN_CLI.SHOW}</span>
+          <span className="hidden text-xs text-muted-foreground group-open:inline">{RUN_CLI.HIDE}</span>
+        </summary>
         {healthAnswered && !sshOn && (
           <p className="mt-0.5 text-meta leading-relaxed text-muted-foreground">
             Off on this deployment. It gives you <Mono className="text-foreground">ssh</Mono>, scp and VS Code
@@ -264,8 +286,6 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
             <Mono className="text-foreground">WARDYN_SSH_ADVERTISE</Mono> where wardynd starts.
           </p>
         )}
-      </div>
-      )}
 
       {sshOn && !hasKeys && (
         <div className="mb-3 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2.5">
@@ -355,6 +375,8 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
           Manage SSH keys
         </Link>
       )}
+      </details>
+      )}
 
       {/* RS2 (M-RN-3): the Sync lane rides the SSH gateway's sftp channel, so it needs SSH on and a
           sandbox with exec; a local run's disk link is the bind through its runner. */}
@@ -364,7 +386,7 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
           <p className="mt-0.5 mb-1.5 text-meta leading-relaxed text-muted-foreground">
             {monoTokens(RUN_SYNC.LANE_BODY, "--pull", "wardyn sync")}
           </p>
-          <CodeBlock text={`${cliEnv}${RUN_SYNC.LANE_COMMAND(run.id)}`} copyLabel={RUN_SYNC.COPY} />
+          <CodeBlock text={RUN_SYNC.LANE_COMMAND(run.id)} copyLabel={RUN_SYNC.COPY} />
         </div>
       )}
 
@@ -434,12 +456,17 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
             ))}
             <p className="mt-3 text-meta leading-relaxed text-muted-foreground">{UI_APPS_LANE.newTab}</p>
             <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{UI_APPS_LANE.noRecording}</p>
+            {mayAttach && !sponsorOnly && running && <DesktopFilesPanel runId={run.id} />}
           </>
         )}
       </div>
     </WidgetCard>
   );
 }
+
+// DESKTOP_APP is the gateway's built-in desktop app (internal/api/uigateway_desktop.go uiDesktopApp):
+// no policy declares it and no declared app can share its name.
+const DESKTOP_APP: UIApp = { name: "__desktop", port: 0 };
 
 // monoTokens renders one frozen copy string with its env-var / policy-field /
 // file-path tokens in <Mono>, per the mock's visual rule §6 (and matching the
@@ -468,6 +495,37 @@ function monoTokens(text: string, ...tokens: string[]): (string | React.ReactEle
     );
   }
   return parts;
+}
+
+/** The UI-sandbox enter facts /healthz publishes (internal/api/healthz.go ui_sandbox). */
+export type UISandboxEnter = { enabled?: boolean; enter_url_template?: string; enter_post_url?: string; bind_url?: string } | null;
+
+// enterUIApp opens a declared UI app of the run in a new tab: a single-use ticket, bound to this
+// browser, handed to the gateway by POST. ConnectSSHCard's Open button and a "Needs you" desktop
+// takeover (needs-you-banner.tsx) both go through it.
+export async function enterUIApp(runId: string, app: string, uiSandbox: UISandboxEnter) {
+  const ticket = await runsApi.attachTicket(runId, "ui");
+  // #1241: the gateway refuses a ticket this browser did not bind first,
+  // so a ticket minted elsewhere cannot be pushed into this browser.
+  if (uiSandbox?.bind_url) {
+    await bindTicket(uiSandbox.bind_url.split("{run}").join(encodeURIComponent(runId)), ticket);
+  }
+  // Host mode (WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE) still puts {run} in the
+  // HOST half of enter_post_url ("https://run-{run}.ui.example.com/
+  // __wardyn/enter", no query) — split/join replaces every occurrence
+  // (replaceAll is ES2021; this tsconfig's lib is ES2020).
+  if (uiSandbox?.enter_post_url) {
+    const action = uiSandbox.enter_post_url.split("{run}").join(encodeURIComponent(runId));
+    submitEnterForm(action, { run: runId, app, ticket });
+  } else if (uiSandbox?.enter_url_template) {
+    const url = Object.entries({ run: runId, app, ticket }).reduce(
+      (tpl, [key, value]) => tpl.split(`{${key}}`).join(encodeURIComponent(value)),
+      uiSandbox.enter_url_template,
+    );
+    window.open(url, "_blank", "noopener");
+  } else {
+    throw new Error("This deployment's UI-sandbox gateway published no enter URL for the console to use.");
+  }
 }
 
 // bindTicket is the pre-enter step (#1241): one credentialed fetch to the

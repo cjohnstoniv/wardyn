@@ -27,11 +27,12 @@
 //     place that can tell "the client said false" from "the client said
 //     nothing" — see userDriveGrantRequest.Enabled.
 //
-// Four routes stay super-only: the ones that name a host path (host_root) or
-// a cluster storage class — creating, listing, updating, and removing the
-// drive itself. The other three — granting an allocation, revoking one, and
-// previewing whose drive resolves — moved to securityOps in 0.8 (issue #168):
-// none of the three names a host path. The tier argument for each route is
+// Three routes stay super-only: the ones that write a host path (host_root) or
+// a cluster storage class — creating, updating, and removing the drive itself.
+// The other three — granting an allocation, revoking one, and previewing whose
+// drive resolves — moved to securityOps in 0.8 (issue #168): none of the three
+// names a host path. The list is securityOps too (0.10, issue #2827), READ-ONLY,
+// with host_root and storage_class withheld from a security admin. The tier argument for each route is
 // written at the mountUserDriveRoutes call that decides it (routes.go).
 package api
 
@@ -52,9 +53,10 @@ import (
 )
 
 // mountUserDriveRoutes registers the /drives family — SEVEN routes split
-// across two admin tiers. Four name a HOST PATH (host_root) or a cluster
-// storage class and stay on operatorOnly (SUPER): creating, listing,
-// updating, and removing the drive itself. The other three — granting an
+// across two admin tiers. Three write a HOST PATH (host_root) or a cluster
+// storage class and stay on operatorOnly (SUPER): creating, updating, and
+// removing the drive itself. The list is on securityOps, with those two fields
+// withheld from a caller who is not a super admin. The other three — granting an
 // allocation, revoking one, and previewing whose drive resolves — sit on
 // securityOps: a security admin already reaches drives through the
 // DenyUserDrive door on a governance profile, and none of the three names a
@@ -71,7 +73,7 @@ import (
 // arrange for, and the every-conditional-route-mounted doctrine exists so it
 // never has to.
 func (s *Server) mountUserDriveRoutes(operatorOnly, securityOps chi.Router) {
-	operatorOnly.Get("/drives", s.handleGetUserDrives)
+	securityOps.Get("/drives", s.handleGetUserDrives)
 	operatorOnly.Post("/drives", s.handleCreateUserDrive)
 	operatorOnly.Put("/drives/{id}", s.handleUpdateUserDrive)
 	operatorOnly.Delete("/drives/{id}", s.handleDeleteUserDrive)
@@ -139,7 +141,8 @@ type userDrivesResponse struct {
 }
 
 // handleGetUserDrives returns the whole drives picture: every drive, and a
-// BOUNDED page of the allocations. operatorOnly (routes.go).
+// BOUNDED page of the allocations. securityOps (routes.go), with host fields
+// withheld from a caller who is not a super admin.
 //
 // The two reads have different costs and only one needed fixing. ListUserDrives
 // is an index-only scan over user_drive_grants_drive_id_idx and stays whole —
@@ -183,8 +186,11 @@ func (s *Server) handleGetUserDrives(w http.ResponseWriter, r *http.Request) {
 	}
 	drives = adminDrivesOnly(drives)
 	total := 0
-	for _, d := range drives {
-		total += d.GrantCount
+	for i := range drives {
+		total += drives[i].GrantCount
+		drives[i].SingleHost = drives[i].TeamSingleHost()
+		drives[i].PlacementEligible = types.PlacementEligible(drives[i].Backend)
+		drives[i].MountsFrom = s.driveMountsFrom(r.Context(), drives[i].UserDrive)
 	}
 
 	var grants []types.UserDriveGrant
@@ -212,14 +218,21 @@ func (s *Server) handleGetUserDrives(w http.ResponseWriter, r *http.Request) {
 	if truncated {
 		w.Header().Set("X-Wardyn-Truncated", "true")
 	}
-	writeJSON(w, http.StatusOK, userDrivesResponse{
+	resp := userDrivesResponse{
 		Drives:              drives,
 		Grants:              grants,
 		HostRootsConfigured: s.userDriveHostRootsUsableWithin(r.Context()),
 		RunnerTarget:        s.cfg.RunnerTarget,
 		Disabled:            provider.Disabled,
 		GrantTotal:          total,
-	})
+	}
+	// "Never the host" is the line between the two admin tiers: anyone but a
+	// super admin gets the allow-listed projection, built by name into fresh
+	// values (user_drives_security_view.go).
+	if !s.isOperator(r.Context()) {
+		resp = securityAdminDrivesView(resp)
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // the org switch and the deployment's drive ceiling
@@ -309,7 +322,7 @@ func (s *Server) userDriveWriteRefusal(ctx context.Context, sizeMiB int) (status
 // userDriveRequest is the POST/PUT body. ID/CreatedAt/UpdatedAt/CreatedBy are
 // never accepted from the wire: the id comes from the path (PUT) or the server
 // (POST), and provenance is always server-assigned — the same rule
-// governanceProfileRequest states. An ALIAS of the public SDK's
+// governanceUnitRequest states. An ALIAS of the public SDK's
 // client.DriveRequest, not a hand-maintained copy — the alias discipline the
 // other request DTOs already follow (dto_alias_test.go pins it at compile
 // time); the full field documentation lives there.
@@ -352,10 +365,17 @@ func (s *Server) decodeUserDriveRequest(w http.ResponseWriter, r *http.Request, 
 		SizeMiB:      req.SizeMiB,
 		Writable:     req.Writable,
 		Reclaim:      req.Reclaim,
+		Team:         req.Team,
 		CreatedBy:    principalFromRequest(r),
+		AltBackend:   req.AltBackend,
+		AltHostRoot:  req.AltHostRoot,
+		AltRunnerID:  req.AltRunnerID,
 	}
 	if err := types.ValidateUserDrive(&d, s.cfg.RunnerTarget); err != nil {
 		return types.UserDrive{}, http.StatusBadRequest, "", "invalid drive: " + err.Error()
+	}
+	if code, msg := s.driveSecondPlaceRefusal(r.Context(), &d); msg != "" {
+		return types.UserDrive{}, code, "", msg
 	}
 	// The org switch and the deployment ceiling, in the same arm as the env
 	// host_root ceiling below and for the same reason — both are facts about the
@@ -364,6 +384,9 @@ func (s *Server) decodeUserDriveRequest(w http.ResponseWriter, r *http.Request, 
 	// settled.
 	// Its own reason survives to the wire: the three causes have three remedies.
 	if code, reason, msg := s.userDriveWriteRefusal(r.Context(), d.SizeMiB); msg != "" {
+		return types.UserDrive{}, code, reason, msg
+	}
+	if code, reason, msg := s.driveTeamWriteRefusal(r.Context(), d); msg != "" {
 		return types.UserDrive{}, code, reason, msg
 	}
 	if d.Backend == types.DriveBackendHostPath {
@@ -613,6 +636,10 @@ func (s *Server) driveRehomeGuard(r *http.Request, d types.UserDrive) (code int,
 	if before == nil {
 		return 0, "", "", driveRehome{}, false
 	}
+	if before.Team != d.Team {
+		code, reason, msg := driveTeamFlipRefusal(before.GrantCount)
+		return code, reason, msg, driveRehome{}, msg == ""
+	}
 	changes := driveIdentityFields(before.UserDrive, d)
 	if len(changes) == 0 {
 		return 0, "", "", driveRehome{}, false
@@ -691,18 +718,6 @@ func driveGrantConflictMsg(g types.UserDriveGrant, homeOverrideStated bool) stri
 		"carry one; pick a different name or remove the allocation that holds it", g.HomeOverride)
 }
 
-// pluralDriveSubjects counts a drive's allocations the way the console's
-// ALLOCATED_COUNT does — "1 subject" / "n subjects" — so the wire and the screen
-// count the same things in the same words. ALLOCATIONS, never people: a group
-// allocation is one row and Wardyn holds no directory read, so "14 people" would
-// be a claim rather than a count.
-func pluralDriveSubjects(n int) string {
-	if n == 1 {
-		return "1 subject"
-	}
-	return fmt.Sprintf("%d subjects", n)
-}
-
 // handleDeleteUserDrive removes a drive (204), or 409 when it is still
 // ALLOCATED.
 //
@@ -760,7 +775,7 @@ type userDriveGrantRequest = client.DriveGrantRequest
 // instead (writeUserDriveGrant; migration 0169 keys on subject and drive).
 //
 // 201 for a genuinely new allocation, 200 when an existing one was repointed —
-// the same created/updated signal handleUpsertGovernanceAssignment gives,
+// the same created/updated signal handleUpsertGovernanceMembership gives,
 // derived the same way (the store returns the EXISTING row's id on a conflict,
 // never the candidate's). operatorOnly (routes.go).
 func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Request) {
@@ -776,6 +791,7 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 		Priority:         req.Priority,
 		SizeMiBOverride:  req.SizeMiBOverride,
 		WritableOverride: req.WritableOverride,
+		MembersCanWrite:  req.MembersCanWrite,
 		Enabled:          req.Enabled == nil || *req.Enabled,
 	}
 	if homeOverrideStated {
@@ -799,7 +815,7 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	// The group subject, held to the SAME rule as the other two tables written
-	// against one (validateCapabilityGrant, validateGovernanceAssignment). It is
+	// against one (validateCapabilityGrant, validateGovernanceMembership). It is
 	// applied HERE rather than inside types.ValidateUserDriveGrant because
 	// internal/types must not import internal/auth/oidc, and a hand-copied
 	// second spelling of the snapshot rule is exactly the drift these three
@@ -823,7 +839,7 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 		}
 		g.Subject = subject
 	}
-	if !s.userTypeSubjectExists(w, r, g.SubjectType, g.Subject) {
+	if !s.userTypeSubjectExists(w, r, g.SubjectType, g.Subject) || !s.teamDriveGrantAllowed(w, r, g) {
 		return
 	}
 	// The backend-aware home check, run at the moment the admin types it rather
@@ -910,6 +926,9 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 		"writable_override": saved.WritableOverride,
 		"home_override_set": saved.HomeOverride != "",
 		"enabled":           saved.Enabled,
+	}
+	if saved.MembersCanWrite {
+		data["members_can_write"] = true
 	}
 	// A replacing write that took drives away from the subject says which.
 	if len(removed) > 0 {

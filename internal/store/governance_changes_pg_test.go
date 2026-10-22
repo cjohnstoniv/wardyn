@@ -22,7 +22,7 @@ import (
 
 func newChange(key string) types.GovernanceChange {
 	return types.GovernanceChange{
-		TargetKind: "governance_profile", Op: "update", TargetKey: key,
+		TargetKind: "governance_unit", Op: "update", TargetKey: key,
 		Payload: json.RawMessage(`{"name":"p"}`), Diff: json.RawMessage(`{"changed":["name"]}`),
 		BaseHash: `"base"`, DeploymentHash: `"dep"`,
 		ProposedBy: "alice-" + key, ProposedByEmail: "Alice@Corp.Example",
@@ -74,12 +74,12 @@ func TestPG_GovernanceChange_DecideTransaction(t *testing.T) {
 	st := store.NewPG(pool)
 	approve := store.GovernanceDecision{To: types.GovernanceChangeApplied, By: "bob", ByEmail: "bob@corp.example"}
 	scratch := func(q store.Querier, name string) error {
-		_, err := q.Exec(ctx, `INSERT INTO governance_profiles (id, name, ceiling, limits, created_by) VALUES ($1,$2,'{}','{}','t')`, uuid.New(), name)
+		_, err := q.Exec(ctx, `INSERT INTO governance_units (id, name, ceiling, limits, created_by) VALUES ($1,$2,'{}','{}','t')`, uuid.New(), name)
 		return err
 	}
 	exists := func(name string) bool {
 		var n int
-		if err := pool.QueryRow(ctx, `SELECT count(*) FROM governance_profiles WHERE name = $1`, name).Scan(&n); err != nil {
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM governance_units WHERE name = $1`, name).Scan(&n); err != nil {
 			t.Fatal(err)
 		}
 		return n == 1
@@ -95,7 +95,7 @@ func TestPG_GovernanceChange_DecideTransaction(t *testing.T) {
 	// Committed: fn's write and the state move land together, stamped with the decider.
 	ch := propose()
 	name := "decided-" + uuid.NewString()
-	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM governance_profiles WHERE name = $1`, name) })
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM governance_units WHERE name = $1`, name) })
 	out, err := st.DecideGovernanceChange(ctx, ch.ID, approve, func(q store.Querier, got types.GovernanceChange) error {
 		if got.ID != ch.ID || got.State != types.GovernanceChangePending || got.ProposedByEmail != "Alice@Corp.Example" {
 			t.Errorf("fn saw %+v, want the locked pending change with its server-side fields", got)
@@ -174,13 +174,13 @@ func TestPG_GovernanceChange_DryRunAlwaysRollsBack(t *testing.T) {
 	st := store.NewPG(pool)
 	name := "dry-" + uuid.NewString()
 	if err := st.DryRunGovernance(ctx, func(q store.Querier) error {
-		_, err := q.Exec(ctx, `INSERT INTO governance_profiles (id, name, ceiling, limits, created_by) VALUES ($1,$2,'{}','{}','t')`, uuid.New(), name)
+		_, err := q.Exec(ctx, `INSERT INTO governance_units (id, name, ceiling, limits, created_by) VALUES ($1,$2,'{}','{}','t')`, uuid.New(), name)
 		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
 	var n int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM governance_profiles WHERE name = $1`, name).Scan(&n); err != nil || n != 0 {
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM governance_units WHERE name = $1`, name).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("a dry run left %d rows (%v)", n, err)
 	}
 }
@@ -284,10 +284,10 @@ func TestProposeGovernanceChange_ARenameHoldsItsNewName(t *testing.T) {
 	st := store.NewPG(pool)
 	newProfile := func(t *testing.T, name string) uuid.UUID {
 		id := uuid.New()
-		if _, err := pool.Exec(ctx, `INSERT INTO governance_profiles (id, name, ceiling, limits, created_by) VALUES ($1,$2,'{}','{}','t')`, id, name); err != nil {
+		if _, err := pool.Exec(ctx, `INSERT INTO governance_units (id, name, ceiling, limits, created_by) VALUES ($1,$2,'{}','{}','t')`, id, name); err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { pool.Exec(ctx, `DELETE FROM governance_profiles WHERE id = $1`, id) }) //nolint:errcheck // best-effort
+		t.Cleanup(func() { pool.Exec(ctx, `DELETE FROM governance_units WHERE id = $1`, id) }) //nolint:errcheck // best-effort
 		return id
 	}
 	refused := func(t *testing.T, err error, want uuid.UUID) {
@@ -364,4 +364,45 @@ func TestProposeGovernanceChange_ARenameHoldsItsNewName(t *testing.T) {
 			t.Fatalf("create over a lapsed rename = expired %v, %v; want the rename expired", expired, err)
 		}
 	})
+}
+
+// TestPG_GovernanceChange_EraseClearsTheProposersTrustReason pins #2305: a runner trust change keeps
+// the reason its proposer typed in its payload, and erasing the proposer blanks it there; another
+// kind's payload and another person's trust change are untouched.
+func TestPG_GovernanceChange_EraseClearsTheProposersTrustReason(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	who := "erase-" + uuid.NewString()
+	propose := func(kind, by string, payload string) uuid.UUID {
+		c := newChange(uuid.NewString())
+		c.TargetKind, c.ProposedBy, c.Payload = kind, by, json.RawMessage(payload)
+		saved, _, err := st.ProposeGovernanceChange(ctx, c, time.Hour)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return saved.ID
+	}
+	const trust = `{"runner_id":"r","trust_class":"org_cluster","reason":"typed by the proposer"}`
+	mine := propose(types.GovernanceTargetRunnerTrust, who, trust)
+	theirs := propose(types.GovernanceTargetRunnerTrust, "someone-else", trust)
+	other := propose("governance_unit", who, `{"name":"p","reason":"a field of another kind"}`)
+	if _, err := st.EraseGovernanceChangePersonalFields(ctx, []string{who}, nil); err != nil {
+		t.Fatal(err)
+	}
+	reason := func(id uuid.UUID) (r string) {
+		if err := pool.QueryRow(ctx, `SELECT payload->>'reason' FROM governance_changes WHERE id = $1`, id).Scan(&r); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	if r := reason(mine); r != "" {
+		t.Errorf("the erased proposer's trust reason = %q, want it blanked", r)
+	}
+	if r := reason(theirs); r != "typed by the proposer" {
+		t.Errorf("another proposer's trust reason = %q, want it untouched", r)
+	}
+	if r := reason(other); r != "a field of another kind" {
+		t.Errorf("another kind's payload = %q, want it untouched", r)
+	}
 }

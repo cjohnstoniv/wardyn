@@ -67,6 +67,8 @@ const rendered: Record<string, string> = {
   // ---- §7.2 ----
   TITLE: GOVERNANCE.TITLE,
   LEAD: GOVERNANCE.LEAD,
+  HOW_TITLE: GOVERNANCE.HOW_TITLE,
+  HOW_BODY: GOVERNANCE.HOW_BODY,
   PROFILES_TITLE: GOVERNANCE.PROFILES_TITLE,
   PROFILES_LEAD: GOVERNANCE.PROFILES_LEAD,
   COL_NAME: GOVERNANCE.COL_NAME,
@@ -87,6 +89,7 @@ const rendered: Record<string, string> = {
   NAME_HINT: GOVERNANCE.NAME_HINT,
   CEILING_TITLE: GOVERNANCE.CEILING_TITLE,
   CEILING_LEAD: GOVERNANCE.CEILING_LEAD,
+  CEILING_MOUNTS_LOCKED: GOVERNANCE.CEILING_MOUNTS_LOCKED,
   LIMITS_TITLE: GOVERNANCE.LIMITS_TITLE,
   LIMITS_LEAD: GOVERNANCE.LIMITS_LEAD,
   LIMIT_EXEC_LABEL: GOVERNANCE.LIMIT_EXEC_LABEL,
@@ -109,6 +112,7 @@ const rendered: Record<string, string> = {
   ASSIGN_TITLE: GOVERNANCE.ASSIGN_TITLE,
   ASSIGN_LEAD: GOVERNANCE.ASSIGN_LEAD,
   PRECEDENCE: GOVERNANCE.PRECEDENCE,
+  COMBINE_TITLE: GOVERNANCE.COMBINE_TITLE,
   EFFECT_NOTE: GOVERNANCE.EFFECT_NOTE,
   SIGNIN_NOTE: GOVERNANCE.SIGNIN_NOTE,
   COL_PROFILE: GOVERNANCE.COL_PROFILE,
@@ -217,8 +221,8 @@ const rendered: Record<string, string> = {
 const NUMERIC_TEMPLATE = ["RUBRIC.SET_NOTE(n, level)"];
 
 describe("governance-copy — §7.2-§7.13 parsed out of the prompt doc", () => {
-  it("finds all 146 frozen keys in the doc", () => {
-    expect(doc.size).toBe(146);
+  it("finds all 150 frozen keys in the doc", () => {
+    expect(doc.size).toBe(150);
   });
 
   it("covers every doc key, and freezes no key the doc doesn't", () => {

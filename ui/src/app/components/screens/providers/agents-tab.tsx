@@ -35,6 +35,7 @@ import { ACCESS_STATE } from "../../../lib/people-access-copy";
 import { AGENTS, PROVIDERS, PROVIDERS_EXTRA } from "../../../lib/workspace-providers-copy";
 import { Button } from "../../ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
+import { AVAILABILITY } from "../../../lib/availability-copy";
 import { AvailabilityControl } from "../../wardyn/availability-control";
 import { Field, fieldHintId, Switch } from "../../wardyn/form-primitives";
 import { Chip, OperatorOnlyHint } from "../../wardyn/primitives";
@@ -206,14 +207,14 @@ function Row({
             slicing AGENT_ROW_DISABLED_HINT at its colon made the chip a
             side-effect of that sentence's punctuation, so a reworded hint
             silently reworded (or emptied) the chip. */}
-        <Chip tone="neutral">{enabled ? PROVIDERS.FIELD_ENABLED : AGENTS.AGENT_ROW_DISABLED_CHIP}</Chip>
+        {!enabled && <Chip tone="neutral">{AGENTS.AGENT_ROW_DISABLED_CHIP}</Chip>}
       </div>
 
       {/* UT-7b: kind agent, value = harness.id — present whether the row is
           on or off, the git-tab.tsx precedent (a disabled agent can still
           carry a stale audience list). */}
       <div className="border-b border-border p-3">
-        <AvailabilityControl kind="agent" value={harness.id} />
+        <AvailabilityControl kind="agent" value={harness.id} pendingNote={AVAILABILITY.PENDING_NOTE_AGENT} />
       </div>
 
       {!enabled ? (

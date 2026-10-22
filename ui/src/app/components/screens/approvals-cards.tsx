@@ -4,8 +4,8 @@
  */
 
 import * as React from "react";
-import { Link } from "react-router-dom";
-import { Check, ChevronRight, Code2, ShieldCheck, X } from "lucide-react";
+import { Link, useNavigate } from "react-router-dom";
+import { Bot, Check, ChevronRight, Code2, ShieldCheck, X } from "lucide-react";
 import {
   canDecideApproval,
   isAdoCapabilityRequest,
@@ -25,6 +25,7 @@ import { RunContextRow } from "../wardyn/run-context-row";
 import { JsonBlock } from "../wardyn/yaml-block";
 import { AdoCapabilityCard } from "../wardyn/ado-capability-card";
 import { isPushContentRequest, PushContentCard } from "../wardyn/push-content-card";
+import { isTakeoverRequest, TakeoverCard } from "../wardyn/takeover-card";
 import { REAUTH_ROW, reauthAudience } from "../wardyn/model-access-copy";
 import { useClaimModelAccessDoor, useModelAccessDoor, useShellSetupStatus } from "../wardyn/model-access-context";
 import { resolveDoor } from "../../lib/model-access";
@@ -32,17 +33,31 @@ import { usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
 import { OpenInUserView, runPath, useConsoleMode } from "../wardyn/console-view";
 import { PUSH } from "../wardyn/copy/push";
 import { APPROVAL, APPROVAL_BANNER_LABEL, SECURITY_ONLY_REASON, approvalScopeBadge } from "../wardyn/copy";
-import { APPROVAL_ESCALATION } from "../wardyn/copy/approvals";
+import { APPROVAL_ASKED, APPROVAL_ESCALATION } from "../wardyn/copy/approvals";
+import { useAgentName } from "../wardyn/use-agent-name";
 import { KIND_ICON, capabilityLabel, deriveTitle, deriveBanner, str } from "./approvals";
 
-export function PendingCard({
+/**
+ * The one card for a request waiting on a person: the Approvals screen and a run's Approvals tab both render it.
+ * `run` is passed by a caller that already holds the run (the run page); the card then drops its run row and
+ * reads the ended-run rule off it instead of fetching.
+ */
+export function ApprovalCard({
   item,
   caps,
+  run: runProp,
+  tokenWidens,
   onAct,
   onAdoDecide,
   onPushDecide,
+  onTakeOver,
+  onDecline,
+  refused = false,
 }: {
   item: ApprovalRequest;
+  run?: RunDetail;
+  // A run that holds Azure DevOps tokens widens one when access is approved.
+  tokenWidens?: boolean;
   // The viewer's own capability set, or null when the question doesn't apply
   // (an admin, or an answer still in flight).
   caps: MeCapabilities | null;
@@ -53,6 +68,13 @@ export function PendingCard({
   // #181 — the push_content card's own decide path; see decidePushDirect's
   // doc above for why it bypasses onAct/ReasonDialog too, minus the scope.
   onPushDecide: (id: string, approve: boolean) => Promise<void>;
+  // #2963 — a "Needs you" request's Decline (Take over opens the run instead).
+  onDecline?: (id: string) => Promise<void>;
+  // A caller on the run's own page opens its Overview for Take over instead of navigating.
+  onTakeOver?: () => void;
+  // The server refused this viewer's decision with capability_egress_host: the caps read cannot see it
+  // (the run page passes none), so the refusal itself turns the buttons off.
+  refused?: boolean;
 }) {
   const scope = item.requested_scope ?? {};
   const KindIcon = KIND_ICON[item.kind] ?? ShieldCheck;
@@ -97,7 +119,7 @@ export function PendingCard({
   // early return happens BEFORE this capability leg, so a security admin is
   // never bounded by it.
   const host = item.kind === "egress_domain" ? str(scope, "host", "domain") : undefined;
-  const hostUngranted = !securityOperator && !!host && !capabilityAllowed(caps, "egress_host", host);
+  const hostUngranted = refused || (!securityOperator && !!host && !capabilityAllowed(caps, "egress_host", host));
   // B4 — the run this approval gates, from the context row below's OWN fetch.
   // A run that has ended cancels its PENDING approvals (types.ApprovalCancelled;
   // the finalizeRunTail / handleKillRun cascade), so Approve and Deny here
@@ -110,7 +132,9 @@ export function PendingCard({
   // both leave the controls exactly as they were: the screen withdraws them on
   // a KNOWN terminal state, never on a guess, which is the same direction the
   // rest of this card errs in.
-  const [run, setRun] = React.useState<RunDetail | null | undefined>(undefined);
+  const [fetchedRun, setRun] = React.useState<RunDetail | null | undefined>(undefined);
+  const run = runProp ?? fetchedRun;
+  const runRow = runProp ? null : <RunContextRow runId={item.run_id} onRun={setRun} />;
   // The hold's provider is the run's own, so its name rides the run read (#996,
   // model_provider_name) for a viewer whose setup status does not list it. It is
   // not on the hold: that scope is the dedup key, identity only.
@@ -120,6 +144,11 @@ export function PendingCard({
       reauth.provider
     : "";
   const runEnded = !!run && isTerminalRunState(run.state);
+  // Only a tool or MCP call on a run with two or more agents says which one asked; plain network
+  // egress has no per-harness credential, so an egress row never names an agent.
+  const agentName = useAgentName();
+  const agentCount = run?.agents?.length ?? 0;
+  const asker = item.kind === "tool_call" && agentCount >= 2 && typeof scope.harness === "string" && scope.harness ? scope.harness : undefined;
   const canDecide = kindDecidable && !hostUngranted && !runEnded;
 
   // S10 — an Azure DevOps escalation (or the Entra-consent chain it can
@@ -140,7 +169,9 @@ export function PendingCard({
   // enough to spin only the pressed button. The push card follows the same rule.
   const [adoBusy, setAdoBusy] = React.useState<"approve" | "deny" | null>(null);
   const [pushBusy, setPushBusy] = React.useState<"approve" | "deny" | null>(null);
-  // N1 (round 2): PendingCard only ever receives PENDING rows today
+  const [takeoverBusy, setTakeoverBusy] = React.useState(false);
+  const navigate = useNavigate();
+  // N1 (round 2): ApprovalCard only ever receives PENDING rows today
   // (pendingItems is fetched via api.listApprovals("PENDING")), but the
   // state check is explicit here too — defense-in-depth against this
   // component ever being reused for a broader list, and the single rule
@@ -150,12 +181,13 @@ export function PendingCard({
   if ((isAdoCapabilityRequest(item) || isAdoConsentRequest(item)) && item.state === "PENDING") {
     return (
       <div className="space-y-2">
-        <RunContextRow runId={item.run_id} onRun={setRun} />
+        {runRow}
         <AdoCapabilityCard
           item={item}
           securityOperator={securityOperator}
           viewerPrincipal={principal}
           run={run}
+          tokenWidens={tokenWidens}
           busy={adoBusy}
           onApprove={async (opts) => {
             setAdoBusy("approve");
@@ -176,10 +208,30 @@ export function PendingCard({
   // branch, the paths under review) this generic card has no slot for, and
   // an admin-only decide with no scope menu (see push-content-card.tsx's own
   // doc). Same "PENDING only" defense-in-depth as the ADO branch above.
+  // #2963 — a "Needs you" request is answered on its run: Take over opens it there, where the
+  // banner drives the takeover; Decline answers it here.
+  if (isTakeoverRequest(item) && item.state === "PENDING") {
+    return (
+      <div className="space-y-2">
+        {runRow}
+        <TakeoverCard
+          item={item}
+          busy={takeoverBusy}
+          onTakeOver={() => (onTakeOver ? onTakeOver() : void navigate(runPath(view, item.run_id)))}
+          onDecline={async () => {
+            setTakeoverBusy(true);
+            await onDecline?.(item.id);
+            setTakeoverBusy(false);
+          }}
+        />
+      </div>
+    );
+  }
+
   if (isPushContentRequest(item) && item.state === "PENDING") {
     return (
       <div className="space-y-2">
-        <RunContextRow runId={item.run_id} onRun={setRun} />
+        {runRow}
         <PushContentCard
           item={item}
           securityOperator={securityOperator}
@@ -229,7 +281,15 @@ export function PendingCard({
         <p className="mt-1 text-xs text-muted-foreground">{REAUTH_ROW.PROVIDER(reauthProvider)}</p>
       )}
 
-      <RunContextRow runId={item.run_id} onRun={setRun} />
+      {runProp ? null : <RunContextRow runId={item.run_id} onRun={setRun} askedBy={asker} />}
+      {asker && (
+        <p className="mt-2 flex items-center gap-2 text-sm">
+          <Bot className="size-3.5 shrink-0 text-info" aria-hidden="true" />
+          <span>
+            {APPROVAL_ASKED.LINE_PRE}<strong>{agentName(asker)}</strong>{APPROVAL_ASKED.LINE_POST(agentCount)}
+          </span>
+        </p>
+      )}
 
       {/* Blast-radius banner (D1) — derived from the real scope above. */}
       <div className="mt-3 space-y-1 rounded-lg border border-border bg-background px-3 py-2.5 text-sm leading-relaxed">
@@ -258,7 +318,8 @@ export function PendingCard({
           <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" />
           <Code2 className="size-3.5" /> View requested scope
         </summary>
-        <JsonBlock value={scope} className="mt-2" />
+        {/* Wrapped, never cut off: the command is what the person is deciding on (#2924). */}
+        <JsonBlock value={scope} className="mt-2 [&_pre]:whitespace-pre-wrap [&_pre]:break-all" />
       </details>
 
       {/* P0.3 (R3-F001/F108/F145) — an egress_domain approval is host-wide, and
@@ -325,7 +386,8 @@ export function PendingCard({
   );
 }
 
-export function DecidedRow({ item }: { item: ApprovalRequest }) {
+// `showRun` is false on a run's own page, where the run is the context and a link back to it is noise.
+export function DecidedRow({ item, showRun = true }: { item: ApprovalRequest; showRun?: boolean }) {
   const scope = item.requested_scope ?? {};
   // A CANCELLED row carries decided_by="system" (the terminal-run cascade wrote
   // it), so it reads with the same "by …" prefix an expiry-with-a-writer does —
@@ -343,13 +405,15 @@ export function DecidedRow({ item }: { item: ApprovalRequest }) {
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-border px-4 py-3 first:border-t-0">
       <ApprovalKindChip kind={item.kind} />
       <span className="min-w-0 flex-1 truncate text-sm text-foreground">{deriveTitle(item.kind, scope)}</span>
-      <Link
-        to={runPath(view, item.run_id)}
-        className="font-mono text-xs text-muted-foreground hover:text-foreground"
-        title={`Open run ${item.run_id}`}
-      >
-        {item.run_id.slice(0, 8)}
-      </Link>
+      {showRun && (
+        <Link
+          to={runPath(view, item.run_id)}
+          className="font-mono text-xs text-muted-foreground hover:text-foreground"
+          title={`Open run ${item.run_id}`}
+        >
+          {item.run_id.slice(0, 8)}
+        </Link>
+      )}
       <ApprovalStateBadge state={item.state} />
       {scopeBadge && <Chip tone="neutral">{scopeBadge}</Chip>}
       <span className="whitespace-nowrap text-xs text-muted-foreground">{meta}</span>

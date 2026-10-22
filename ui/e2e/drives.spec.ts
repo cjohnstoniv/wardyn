@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { FORM_ACTIONS } from "../src/app/components/wardyn/copy/form-actions";
 import { randomUUID } from "node:crypto";
 import {
   test,
@@ -11,7 +12,6 @@ import {
   MEMBER_PRINCIPAL,
   asRealMember,
   ignoreMissingRunner,
-  expandCard,
   gotoConsole,
   mockMemberRole,
   mockSecurityAdminRole,
@@ -37,6 +37,7 @@ import { DRIVE_REFUSAL } from "../src/app/lib/drive-refusals";
 import { DRIVES, DRIVE_MEMBER, PEOPLE, PERM, PREVIEW } from "../src/app/lib/user-drives-copy";
 import { GOVERNANCE as GOV, MEMBER } from "../src/app/lib/governance-copy";
 import { OPERATOR_ONLY_REASON } from "../src/app/components/wardyn/copy";
+import { VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
 import type { MeUserDrive } from "../src/app/lib/api/health";
 import type { Locator, Page } from "@playwright/test";
 
@@ -136,10 +137,10 @@ const SIZE = DRIVES.SIZE_GIB(10);
 // CONSOLE-RULES §6 — exactly ONE `default`-variant (teal) button on the screen
 // at any moment. The default variant is `bg-primary` (ui/button.tsx), and the
 // editor's Writable / the form's Enabled switches paint bg-primary too when
-// checked (form-primitives.tsx) — excluded, because a toggle is not an action.
+// checked (form-primitives.tsx), and a selected Segmented option does (aria-pressed, #2832) — excluded, because a toggle is not an action.
 // Scoped to <main>: the app shell's own "New run" in the top bar is a default
 // button on every screen and is not this surface's.
-const tealActions = (page: Page) => page.locator("main").locator('button.bg-primary:not([role="switch"])');
+const tealActions = (page: Page) => page.locator("main").locator('button.bg-primary:not([role="switch"]):not([aria-pressed])');
 
 // The screen draws TWO tables once there is anything in them — the drives
 // list's Name column and the allocations list's Drive column — and a drive
@@ -206,11 +207,11 @@ async function mockMemberDrive(page: Page, drive: MeUserDrive | null, deniedBy =
     json.operator = false;
     json.security_operator = false;
     json.user_drive = drive;
-    json.user_drive_denied_by_profile = deniedBy;
+    json.user_drive_denied_by_unit = deniedBy;
     await route.fulfill({ response, json });
   });
   // New Run's Files step reads the same allocation as a row of the person's drive catalogue.
-  await mockDriveCatalogue(page, deniedBy ? { drives: [], denied_by_profile: deniedBy } : { drives: drive ? [catalogueRow(drive)] : [] });
+  await mockDriveCatalogue(page, deniedBy ? { drives: [], denied_by_unit: deniedBy } : { drives: drive ? [catalogueRow(drive)] : [] });
 }
 
 // A catalogue id the real server has no drive for: an attach is then refused in the server's own words.
@@ -312,12 +313,12 @@ test.describe("drives — an empty registry says what it is, not what went wrong
     // element carrying all of it.
     await expect(page.getByText(DRIVES.LEAD)).toBeVisible();
     await expect(page.getByText(DRIVES.DRIVES_TITLE, { exact: true })).toBeVisible();
-    await expect(page.getByText(DRIVES.DRIVES_LEAD)).toBeVisible();
+    await expect(page.getByText(/A drive is one place storage comes from/)).toHaveCount(0);
 
     // Empty, not unconfigured: there is deliberately no "drives not configured"
     // state (§7.4), so a fresh install reads as a feature nobody has filled in.
     await expect(page.getByText(DRIVES.EMPTY_TITLE)).toBeVisible();
-    await expect(page.getByText(DRIVES.EMPTY_BODY)).toBeVisible();
+    await expect(page.getByText(/Runs keep nothing between them/)).toHaveCount(0);
     await expect(page.getByText(DRIVES.FETCH_FAILED_TITLE)).toHaveCount(0);
 
     // AND NOTHING ELSE. Mock state 1 is the header and this empty state: the
@@ -405,6 +406,12 @@ test.describe("drives — the editor offers what this deployment can mount, and 
     await expect(page.getByRole("button", { name: DRIVES.NEW_CTA, exact: true })).not.toHaveClass(/bg-primary/);
     // Save waits for the one field that has no default.
     await expect(page.getByRole("button", { name: DRIVES.SAVE_CTA, exact: true })).toBeDisabled();
+
+    // The shared form bar: the count appears with the first edit, and Save is the bar's.
+    const bar = editor.getByTestId("form-actions");
+    await expect(bar.getByTestId("form-actions-unsaved")).toHaveText("");
+    await page.locator("#drive-name").fill("pinned-unsaved");
+    await expect(bar.getByTestId("form-actions-unsaved")).toHaveText(FORM_ACTIONS.UNSAVED(1));
 
     await page.getByRole("button", { name: PEOPLE.CANCEL, exact: true }).click();
     await expect(page.getByTestId("drives-drive-editor")).toHaveCount(0);
@@ -559,7 +566,7 @@ test.describe("drives — the door is a governance limit, not a drives control",
 
   test("the stored limit is the door: deny_user_drive on the profile itself", async ({ page }) => {
     const snap = await (await page.request.get("/api/v1/governance", { headers: auth })).json();
-    const profile = snap.profiles.find((p: { name: string }) => p.name === DOOR);
+    const profile = snap.units.find((p: { name: string }) => p.name === DOOR);
     expect(profile, `profile ${DOOR} missing — did the door test run?`).toBeTruthy();
     // The limits object is the whole statement: the drive door shut, and
     // neither launch mode touched by it.
@@ -595,46 +602,52 @@ test.describe("drives — the registry is SUPER's, and no super admin's nav list
     await navToRoute(page, "/admin/settings");
     const card = page.getByTestId("user-drives-card");
     await expect(card).toBeVisible();
-    await expandCard(page, DRIVES.TITLE);
-    await expect(card.getByText(DRIVES.CARD_LEAD)).toBeVisible();
+    // A link row (#3048), not an accordion: the count rides its face.
     // It counts ALLOCATIONS, never people — and with none it says so rather
     // than rendering a zero.
     await expect(card.getByText(DRIVES.CARD_EMPTY)).toBeVisible();
-    await card.getByText(DRIVES.CARD_OPEN).click();
+    await card.getByRole("link").click();
     await expect(page).toHaveURL(/\/admin\/drives$/);
   });
 
-  test("a security admin is offered neither door, and every write on the screen is parked", async ({ page }) => {
-    await mockSecurityAdminRole(page);
-    await gotoConsole(page);
-
-    // Their authority over drives is the governance door above, not the
-    // registry — so they see no entry point at all.
-    await navTo(page, "Workspaces");
-    await expect(page.getByRole("button", { name: DRIVES.TITLE, exact: true })).toHaveCount(0);
-    await navToRoute(page, "/admin/settings");
-    await expect(page.getByTestId("user-drives-card")).toHaveCount(0);
-
-    // Reaching /drives directly: GET /drives is operatorOnly, so a real
-    // security admin's read answers 403 — and the screen renders that as the
-    // TIER refusal (PageHeader + OperatorOnlyHint), never as the transport
-    // sentence with a Retry that would 403 forever. The role splice above
-    // leaves the bearer the admin's, so the 403 is routed here to be the real
-    // server's shape, not a fixture's.
-    await page.route("**/api/v1/drives", async (route) => {
-      if (route.request().method() !== "GET") return route.fallback();
-      await route.fulfill({
-        status: 403,
-        contentType: "application/json",
-        body: JSON.stringify({ error: "forbidden" }),
-      });
+  // #2827 (b): the nav item is a security admin's own, and the page behind it is
+  // a read: the drives and allocations list, the preview, and no write control.
+  test("a security admin is offered neither door, but reads the Drives page with no write control", async ({ page }) => {
+    const name = `secadmin-read-${randomUUID().slice(0, 8)}`;
+    const res = await page.request.post("/api/v1/drives", {
+      headers: auth,
+      data: { name, backend: "docker_volume", home_template: "hash", reclaim: "retain" },
     });
-    await navToRoute(page, "/admin/drives");
-    await expect(page.getByRole("heading", { name: DRIVES.TITLE, level: 1 })).toBeVisible();
-    await expect(page.getByText(OPERATOR_ONLY_REASON)).toBeVisible();
-    await expect(page.getByRole("button", { name: DRIVES.NEW_CTA, exact: true })).toHaveCount(0);
-    await expect(page.getByText(DRIVES.FETCH_FAILED_TITLE)).toHaveCount(0);
-    await expect(tealActions(page)).toHaveCount(0);
+    expect(res.status(), await res.text()).toBe(201);
+    const driveId = (await res.json()).id as string;
+    try {
+      await mockSecurityAdminRole(page);
+      await gotoConsole(page, "admin");
+
+      // The registry's two doors are the super admin's.
+      await navTo(page, "Workspaces");
+      await expect(page.getByRole("button", { name: DRIVES.TITLE, exact: true })).toHaveCount(0);
+      await navToRoute(page, "/admin/settings");
+      await expect(page.getByTestId("user-drives-card")).toHaveCount(0);
+
+      // Their own door is the sidebar item.
+      await sidebarLink(page, "User drives").click();
+      await expect(page).toHaveURL(/\/admin\/drives$/);
+      await expect(page.getByRole("heading", { name: DRIVES.TITLE, level: 1 })).toBeVisible();
+      await expect(page.getByRole("cell", { name, exact: true })).toBeVisible();
+      await expect(page.getByText(OPERATOR_ONLY_REASON)).toHaveCount(0);
+      await expect(page.getByText(DRIVES.FETCH_FAILED_TITLE)).toHaveCount(0);
+
+      // Read-only: none of the writes is on the page, disabled or otherwise.
+      await expect(page.getByRole("button", { name: DRIVES.NEW_CTA, exact: true })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: `${DRIVES.EDIT} ${name}` })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: `${DRIVES.DELETE} ${name}` })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: DRIVES.ADD_CTA, exact: true })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: new RegExp(`^${PERM.REMOVE} `) })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: DRIVES.PREVIEW_CTA, exact: true })).toBeVisible();
+    } finally {
+      await page.request.delete(`/api/v1/drives/${driveId}`, { headers: auth });
+    }
   });
 
   test("a member is offered neither door either", async ({ page }) => {
@@ -646,6 +659,35 @@ test.describe("drives — the registry is SUPER's, and no super admin's nav list
     // Governance is not theirs either — the door that could shut their drive
     // is a screen they never see.
     await expect(sidebarLink(page, "Governance")).toHaveCount(0);
+
+    // Reaching /admin/drives directly: a member is refused by VIEW, before the
+    // Drives screen mounts. The tier refusal (PageHeader + OperatorOnlyHint on a
+    // 403 read) is the screen's own and is pinned in drives-screen.test.tsx;
+    // the member never gets that far, and nothing behind the refusal is
+    // fetched. The role splice leaves the bearer the admin's, so a GET /drives
+    // is routed to the real server's 403 shape and counted: it must not happen.
+    let driveReads = 0;
+    await page.route("**/api/v1/drives", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      driveReads++;
+      await route.fulfill({
+        status: 403,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "forbidden" }),
+      });
+    });
+    await navToRoute(page, "/admin/drives");
+    await expect(page.getByRole("heading", { name: VIEW_REFUSAL.TITLE })).toBeVisible();
+    await expect(page.getByText(VIEW_REFUSAL.BODY)).toBeVisible();
+    await expect(page.getByRole("heading", { name: DRIVES.TITLE, level: 1 })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: DRIVES.NEW_CTA, exact: true })).toHaveCount(0);
+    expect(driveReads).toBe(0);
+    // The refusal card's one action is the way back to the member's own Runs
+    // (console-view.tsx ViewGate: navigate("/runs"), no request, no write). It
+    // is named and counted; no other primary action is on the page.
+    const back = page.getByRole("button", { name: VIEW_REFUSAL.CTA, exact: true });
+    await expect(back).toHaveCount(1);
+    await expect(tealActions(page).filter({ hasNotText: new RegExp(`^${VIEW_REFUSAL.CTA}$`) })).toHaveCount(0);
   });
 });
 

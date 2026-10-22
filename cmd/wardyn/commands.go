@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -102,7 +101,7 @@ func normalizeConfinement(s string) string {
 // interactiveLine says what the new interactive sandbox does at start: it is idle
 // only when no startup was asked for or the startup is none.
 func interactiveLine(startup *sdk.RunStartup, id string) string {
-	attach := "attach with `wardyn run attach " + id + "`"
+	attach := "attach with `wardyn attach " + id + "`"
 	switch {
 	case startup == nil || startup.Kind == sdk.StartupNone:
 		return "  interactive: sandbox is idle; " + attach
@@ -112,39 +111,19 @@ func interactiveLine(startup *sdk.RunStartup, id string) string {
 	return "  interactive: starts " + startup.Command + "; " + attach
 }
 
-// readRunPolicyFile reads --policy-file as the inline RunPolicySpec.
-func readRunPolicyFile(policyFile string) (types.RunPolicySpec, error) {
-	data, err := os.ReadFile(policyFile)
-	if err != nil {
-		return types.RunPolicySpec{}, fmt.Errorf("read --policy-file: %w", err)
-	}
-	// Accept JSON or YAML: bridge to canonical JSON, then unmarshal the
-	// same json-tagged spec the server validates.
-	if data, err = policyToJSON(data); err != nil {
-		return types.RunPolicySpec{}, fmt.Errorf("parse --policy-file %s: %w", policyFile, err)
-	}
-	// Strict decode (DisallowUnknownFields, shared with `policy set`/
-	// `policy render`): a misspelled spec field fails here, not as a
-	// silently-dropped setting the server never sees.
-	spec, err := decodeSpecStrict(data)
-	if err != nil {
-		return types.RunPolicySpec{}, fmt.Errorf("parse --policy-file %s: %w", policyFile, err)
-	}
-	return spec, nil
-}
-
 // runCmd is the single "run" noun: a bare invocation creates a run, and the
 // subcommands inspect, stop and export runs. "runs" stays as an alias so
 // `wardyn runs list` keeps working.
 func runCmd(client clientFn) *cobra.Command {
 	var repo, agent, task, policyID, confinement, policyFile, image, taskMode, workspaceID string
 	var title, description, file string
-	var devcontainerRepo, devcontainerRef, modelProvider, localFolder, localFolderRemote string
+	var devcontainerRepo, devcontainerRef, modelProvider, localFolder, localFolderRemote, runIn string
 	var interactive, wait, createJSON, dryRun bool
 	var timeout, maxWait time.Duration
 	var mode runModeFlags
 	var where runPlacementFlags
 	var ends runEndFlags
+	var sched runScheduleFlags
 	cmd := &cobra.Command{
 		Use:     "run",
 		Aliases: []string{"runs"},
@@ -172,7 +151,7 @@ func runCmd(client clientFn) *cobra.Command {
 				ConfinementClass: normalizeConfinement(confinement), Interactive: interactive,
 				Image: image, TaskMode: taskMode,
 				DevcontainerRepo: devcontainerRepo, DevcontainerRef: devcontainerRef,
-				ModelProvider: modelProvider,
+				ModelProvider: modelProvider, RunIn: runIn,
 			}
 			// --policy is a policy UUID; --workspace attaches an onboarded
 			// workspace by id (see setOptionalID for the parse-here rationale).
@@ -209,6 +188,9 @@ func runCmd(client clientFn) *cobra.Command {
 				return err
 			}
 			if err := applyQueueWait(&body, cmd.Flags().Changed("max-wait"), maxWait, wait, timeout); err != nil {
+				return err
+			}
+			if err := sched.apply(&body, wait); err != nil {
 				return err
 			}
 			if wait && body.Experience == sdk.ExperienceInteractive {
@@ -260,7 +242,7 @@ func runCmd(client clientFn) *cobra.Command {
 			return seedThenWait(cmd, client(), run.ID, localFolder, localFolderRemote, wait, timeout)
 		},
 	}
-	cmd.Flags().StringVar(&file, "file", "", "launch a kind: Run document (JSON or YAML, or '-' for stdin) instead of the flags below; only --title, --description, --wait, --timeout, --max-wait, --json and --dry-run go with it. A document's inline_policy is sent as an overlay on your default policy, not as a replacement")
+	cmd.Flags().StringVar(&file, "file", "", "launch a kind: Run document (JSON or YAML, or '-' for stdin) instead of the flags below; only --title, --description, --wait, --timeout, --max-wait, --start-at, --time-zone, --json and --dry-run go with it. A document's inline_policy is sent as an overlay on your default policy, not as a replacement")
 	cmd.Flags().StringVar(&repo, "repo", "", "repository (org/name; optional — omit for an ephemeral scratch run)")
 	cmd.Flags().StringVar(&agent, "agent", "", "agent name (e.g. claude-code)")
 	cmd.Flags().StringVar(&task, "task", "", "human task description")
@@ -272,7 +254,7 @@ func runCmd(client clientFn) *cobra.Command {
 	cmd.Flags().StringVar(&workspaceID, "workspace", "", "onboarded workspace id to launch against (optional; seeds its source, egress, image and bound model creds — composes with --policy/--policy-file)")
 	cmd.Flags().StringVar(&policyFile, "policy-file", "", "path to a JSON or YAML RunPolicySpec applied inline (optional; mutually exclusive with --policy, enforced server-side)")
 	cmd.Flags().StringVar(&confinement, "confinement", "", "confinement class (CC1|CC2|CC3, or fence|wall|vault; optional — unset defaults to the strongest class the runner advertises at or above the policy minimum, never the bare minimum itself)")
-	cmd.Flags().BoolVar(&interactive, "interactive", false, "interactive run: come up idle for 'wardyn run attach'; --task, if set, seeds the session's startup shell command at boot instead (empty --task stays idle, today's default); use a never-reap policy (auto_stop_after_sec <= 0)")
+	cmd.Flags().BoolVar(&interactive, "interactive", false, "interactive run: come up idle for 'wardyn attach'; --task, if set, seeds the session's startup shell command at boot instead (empty --task stays idle, today's default); use a never-reap policy (auto_stop_after_sec <= 0)")
 	cmd.Flags().StringVar(&image, "image", "", "user-supplied base image (Bring Your Own Image; requires the server's image builder, mutually exclusive with devcontainer builds — enforced server-side; wraps the image only — nothing runs until inside the run's confinement tier, unlike --devcontainer-repo, which builds unconfined on the host)")
 	cmd.Flags().StringVar(&devcontainerRepo, "devcontainer-repo", "", "git repo whose .devcontainer is built into the sandbox image (requires the server's image builder — WITHOUT it the run silently uses the convention image, so check 'wardyn run get <id>'; mutually exclusive with --image; builds/runs on the host, unconfined — trust the repo)")
 	cmd.Flags().StringVar(&devcontainerRef, "devcontainer-ref", "", "git ref (branch/tag/sha) to build for --devcontainer-repo")
@@ -281,16 +263,19 @@ func runCmd(client clientFn) *cobra.Command {
 	mode.bind(cmd.Flags())
 	cmd.Flags().StringVar(&localFolder, "local-folder", "", "a folder on this computer to seed into the sandbox with 'wardyn sync': the agent starts only once this first sync completes (a task run whose SSH access is open; needs 'wardyn ssh-key ensure')")
 	cmd.Flags().StringVar(&localFolderRemote, "local-folder-remote-dir", "", "where --local-folder lands in the sandbox, under /home/agent/ (default /home/agent/work)")
+	client = breakGlassReasonFlag(cmd, client)
+	runInFlag(cmd, &runIn)
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "resolve and check the run without launching it: prints the setup checklist and the confinement class that would be enforced")
 	cmd.Flags().BoolVar(&wait, "wait", false, "block until the run reaches a terminal state and exit with the run's outcome (COMPLETED=0, FAILED=agent exit code, KILLED/STOPPED=2, timeout=124)")
 	cmd.Flags().DurationVar(&maxWait, "max-wait", 0, "how long the run may wait for a free slot in a pool at its run limit (at least 1s; over 7 days is cut to 7). "+
 		"With --wait and no --max-wait the request carries --timeout minus 60s for a --timeout of 2m or more, and half of --timeout for a shorter one, so a run that waits too long should end queue_timeout (exit 1) before --timeout (exit 124); that is the limit asked of the server, not a guarantee")
 	cmd.Flags().DurationVar(&timeout, "timeout", 30*time.Minute, "give up waiting after this long (with --wait; exit 124). Bounds the requests too, and does not stop the run: it keeps running, and holds its sandbox and credentials until it ends (kill it with 'wardyn run kill'). Must be positive")
+	sched.register(cmd)
 	cmd.Flags().BoolVar(&createJSON, "json", false, "emit the created run (or the --dry-run checklist) as JSON (progress goes to stderr)")
 
 	cmd.AddCommand(runListCmd(client), runGetCmd(client), runKillCmd(client),
 		runGrantsCmd(client), runRecordingCmd(client), runWaitReadyCmd(client), runPolicyCmd(client),
-		runLogsCmd(client), runOutputCmd(client), runSignInCmd(client), attachCmd(client), sshCmd(client))
+		runLogsCmd(client), runOutputCmd(client), runSignInCmd(client), sshCmd(client), runExecCmd(client), runForwardCmd(client), runEditorCmd(client))
 	return cmd
 }
 
@@ -314,39 +299,6 @@ func printPreflight(ctx context.Context, w io.Writer, c *sdk.Client, body sdk.Cr
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", it.Status, orDash(it.Label), it.Kind, orDash(it.RequiredBy), orDash(it.Detail))
 	}
 	return tw.Flush()
-}
-
-// applyQueueWait sets the request's max_wait_sec from --max-wait or, with --wait, from --timeout. A
-// --max-wait under a second is refused; a document's own max_wait_sec stands unless --max-wait is given.
-func applyQueueWait(body *sdk.CreateRunRequest, given bool, maxWait time.Duration, wait bool, timeout time.Duration) error {
-	if given && maxWait < time.Second {
-		return fmt.Errorf("--max-wait must be at least 1s, got %s", maxWait)
-	}
-	if sec := queueWaitSec(maxWait, wait, timeout); sec != nil && (given || body.MaxWaitSec == nil) {
-		body.MaxWaitSec = sec
-	}
-	return nil
-}
-
-// queueWaitSec is the max_wait_sec to send: --max-wait when given, else with --wait the --timeout minus
-// 60s for a --timeout of 2m or more (so never under 60s), and half of --timeout (at least 1s) for a
-// shorter one. The aim is for the server to end a run that waits too long (queue_timeout, exit 1)
-// before the CLI gives up on it (exit 124); it is only the limit asked of the server. nil sends
-// nothing and leaves the server's default.
-func queueWaitSec(maxWait time.Duration, wait bool, timeout time.Duration) *int {
-	d := maxWait
-	switch {
-	case d > 0:
-	case wait:
-		d = max(timeout-time.Minute, time.Minute)
-		if timeout > 0 && timeout < 2*time.Minute {
-			d = max(timeout/2, time.Second)
-		}
-	default:
-		return nil
-	}
-	sec := int(d / time.Second)
-	return &sec
 }
 
 // waitPollInterval is how often --wait polls the run state (var for tests).

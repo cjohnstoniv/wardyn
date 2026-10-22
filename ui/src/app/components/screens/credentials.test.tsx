@@ -14,10 +14,15 @@ import { MemoryRouter } from "react-router-dom";
 
 const listInventoryMock = vi.fn();
 const eraseMock = vi.fn();
+const erasePersonMock = vi.fn();
 const listMintedMock = vi.fn();
 const revokeTokenMock = vi.fn();
-vi.mock("../../lib/api/credentials", () => ({
+const listPeopleMock = vi.fn();
+vi.mock("../../lib/api/people", () => ({ people: { list: (...a: unknown[]) => listPeopleMock(...a) } }));
+vi.mock("../../lib/api/credentials", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../lib/api/credentials")>()),
   credentials: {
+    erasePerson: (...a: unknown[]) => erasePersonMock(...a),
     listInventory: (...a: unknown[]) => listInventoryMock(...a),
     erase: (...a: unknown[]) => eraseMock(...a),
     listAdminMintedTokens: (...a: unknown[]) => listMintedMock(...a),
@@ -40,7 +45,7 @@ import type { CredentialInventory } from "../../lib/api/credentials";
 import type { SetupStatus } from "../../lib/types";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { ModelAccessProvider } from "../wardyn/model-access-context";
-import { INVENTORY, ERASE, MINTED, KEY_DOMAINS } from "../wardyn/copy/credentials";
+import { INVENTORY, ERASE, ERASE_DATA, MINTED, KEY_DOMAINS } from "../wardyn/copy/credentials";
 import { CredentialsScreen } from "./credentials";
 import { aheadByHours } from "../../lib/test-clock";
 
@@ -76,6 +81,8 @@ const aliceRow = {
 beforeEach(() => {
   listInventoryMock.mockReset();
   eraseMock.mockReset();
+  erasePersonMock.mockReset();
+  listPeopleMock.mockReset().mockResolvedValue({ people: [] });
   listMintedMock.mockReset();
   listMintedMock.mockResolvedValue([]);
   listKeyDomainsMock.mockReset();
@@ -202,7 +209,7 @@ describe("erasing a listed person (design F-5)", () => {
     eraseMock.mockResolvedValue({ count: 4 });
     renderScreen();
     await userEvent.click(await screen.findByRole("button", { name: INVENTORY.ERASE_ROW }));
-    const confirmBtn = screen.getByRole("button", { name: ERASE.CONFIRM });
+    const confirmBtn = screen.getByRole("button", { name: ERASE_DATA.CONFIRM });
     expect(confirmBtn).toBeDisabled();
     const field = screen.getByLabelText(ERASE.CONFIRM_LABEL("alice@corp.example"));
     await userEvent.type(field, "ALICE@corp.example");
@@ -221,7 +228,7 @@ describe("erasing a listed person (design F-5)", () => {
     renderScreen();
     await userEvent.click(await screen.findByRole("button", { name: INVENTORY.ERASE_ROW }));
     await userEvent.type(screen.getByLabelText(ERASE.CONFIRM_LABEL("alice@corp.example")), "alice@corp.example");
-    await userEvent.click(screen.getByRole("button", { name: ERASE.CONFIRM }));
+    await userEvent.click(screen.getByRole("button", { name: ERASE_DATA.CONFIRM }));
     await userEvent.keyboard("{Escape}");
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     await act(async () => finish({ count: 4 }));
@@ -234,7 +241,7 @@ describe("erasing a listed person (design F-5)", () => {
     renderScreen();
     await userEvent.click(await screen.findByRole("button", { name: INVENTORY.ERASE_ROW }));
     await userEvent.type(screen.getByLabelText(ERASE.CONFIRM_LABEL("alice@corp.example")), "alice@corp.example");
-    await userEvent.click(screen.getByRole("button", { name: ERASE.CONFIRM }));
+    await userEvent.click(screen.getByRole("button", { name: ERASE_DATA.CONFIRM }));
     expect(await screen.findByText("Nothing was stored for alice@corp.example, so nothing was erased.")).toBeInTheDocument();
   });
 
@@ -244,7 +251,7 @@ describe("erasing a listed person (design F-5)", () => {
     renderScreen();
     await userEvent.click(await screen.findByRole("button", { name: INVENTORY.ERASE_ROW }));
     await userEvent.type(screen.getByLabelText(ERASE.CONFIRM_LABEL("alice@corp.example")), "alice@corp.example");
-    await userEvent.click(screen.getByRole("button", { name: ERASE.CONFIRM }));
+    await userEvent.click(screen.getByRole("button", { name: ERASE_DATA.CONFIRM }));
     expect(await screen.findByText(ERASE.KEY_VAULT_RECOVERABLE(90))).toBeInTheDocument();
   });
 
@@ -261,7 +268,7 @@ describe("erasing a listed person (design F-5)", () => {
     renderScreen();
     await userEvent.click(await screen.findByRole("button", { name: INVENTORY.ERASE_ROW }));
     await userEvent.type(screen.getByLabelText(ERASE.CONFIRM_LABEL("alice@corp.example")), "alice@corp.example");
-    await userEvent.click(screen.getByRole("button", { name: ERASE.CONFIRM }));
+    await userEvent.click(screen.getByRole("button", { name: ERASE_DATA.CONFIRM }));
     await screen.findByText(ERASE.KEY_VAULT_RECOVERABLE(90));
     const dialog = screen.getByRole("dialog");
     const order = Array.from(dialog.querySelectorAll("p")).map((el) => el.textContent);
@@ -277,19 +284,24 @@ describe("erasing a listed person (design F-5)", () => {
     renderScreen();
     await userEvent.click(await screen.findByRole("button", { name: INVENTORY.ERASE_ROW }));
     await userEvent.type(screen.getByLabelText(ERASE.CONFIRM_LABEL("alice@corp.example")), "alice@corp.example");
-    await userEvent.click(screen.getByRole("button", { name: ERASE.CONFIRM }));
+    await userEvent.click(screen.getByRole("button", { name: ERASE_DATA.CONFIRM }));
     expect(await screen.findByRole("alert")).toHaveTextContent(ERASE.FAILED("alice@corp.example"));
     expect(screen.queryByText("erase credentials")).toBeNull();
   });
 });
 
+async function openMenuItem(name: string) {
+  await userEvent.click(await screen.findByRole("button", { name: INVENTORY.MORE }));
+  await userEvent.click(await screen.findByRole("menuitem", { name }));
+}
+
 describe("erasing someone not listed (design F-5)", () => {
   it("by email or subject: Erase is enabled once something is typed, no second field", async () => {
     listInventoryMock.mockResolvedValue(inventory([aliceRow], { "corp-gw": 1 }));
     eraseMock.mockResolvedValue({ count: 1 });
-    renderScreen();
-    await userEvent.click(await screen.findByRole("button", { name: INVENTORY.ERASE_BY_EMAIL }));
-    const confirmBtn = screen.getByRole("button", { name: ERASE.CONFIRM });
+    renderScreen({ securityOperator: false });
+    await openMenuItem(INVENTORY.ERASE_MENU_CREDS);
+    const confirmBtn = screen.getByRole("button", { name: ERASE_DATA.CONFIRM });
     expect(confirmBtn).toBeDisabled();
     await userEvent.type(screen.getByLabelText(ERASE.FIELD), "eli@example.com");
     expect(confirmBtn).toBeEnabled();
@@ -304,12 +316,135 @@ describe("erasing someone not listed (design F-5)", () => {
     const msg =
       "That email address doesn't match anyone this deployment knows, so nothing was erased. Use the person's subject, as the Audit log shows it.";
     eraseMock.mockRejectedValue(new HttpError(422, msg));
-    renderScreen();
-    await userEvent.click(await screen.findByRole("button", { name: INVENTORY.ERASE_BY_EMAIL }));
+    renderScreen({ securityOperator: false });
+    await openMenuItem(INVENTORY.ERASE_MENU_CREDS);
     await userEvent.type(screen.getByLabelText(ERASE.FIELD), "former@example.com");
-    await userEvent.click(screen.getByRole("button", { name: ERASE.CONFIRM }));
+    await userEvent.click(screen.getByRole("button", { name: ERASE_DATA.CONFIRM }));
     expect(await screen.findByRole("alert")).toHaveTextContent(msg);
-    expect(screen.getByRole("button", { name: ERASE.CONFIRM })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: ERASE_DATA.CONFIRM })).toBeInTheDocument();
+  });
+});
+
+describe("one erase dialog (#3054)", () => {
+  const box = (dialog: HTMLElement, label: string) => within(dialog).getByRole("checkbox", { name: new RegExp(`^${label}`) });
+
+  it("the header has one More menu with one item: the data erase for the security tier, the credentials erase below it", async () => {
+    listInventoryMock.mockResolvedValue(inventory([aliceRow], { "corp-gw": 1 }));
+    const { unmount } = renderScreen();
+    await screen.findByText("alice@corp.example");
+    expect(screen.queryByRole("button", { name: INVENTORY.ERASE_BY_EMAIL })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: INVENTORY.MORE }));
+    expect(await screen.findAllByRole("menuitem")).toHaveLength(1);
+    expect(screen.getByRole("menuitem", { name: "Erase someone's data…" })).toBeInTheDocument();
+    unmount();
+    renderScreen({ securityOperator: false });
+    await screen.findByText("alice@corp.example");
+    await userEvent.click(screen.getByRole("button", { name: INVENTORY.MORE }));
+    expect(await screen.findAllByRole("menuitem")).toHaveLength(1);
+    expect(screen.getByRole("menuitem", { name: "Erase someone's credentials…" })).toBeInTheDocument();
+  });
+
+  it("a row opens the one dialog with the person fixed, Credentials only ticked, the warning under it and the drawer's sentence above the button", async () => {
+    listInventoryMock.mockResolvedValue(inventory([aliceRow], { "corp-gw": 1 }));
+    renderScreen();
+    await userEvent.click(await screen.findByRole("button", { name: INVENTORY.ERASE_ROW }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText("Erase someone's data", { selector: "h2" })).toBeInTheDocument();
+    expect(within(dialog).getByText("alice@corp.example")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: ERASE_DATA.CHANGE })).toBeInTheDocument();
+    expect(box(dialog, "Credentials")).toBeChecked();
+    for (const other of ["Personal details in audit events", "Run tasks", "Run output", "Copies kept for masking"]) {
+      expect(box(dialog, other)).not.toBeChecked();
+    }
+    expect(within(dialog).getByText(ERASE.BODY)).toBeInTheDocument();
+    expect(within(dialog).getByText("Erase every credential alice@corp.example has stored? This can't be undone.")).toBeInTheDocument();
+  });
+
+  it("from a row, Credentials alone goes through the credentials route and keeps its count line", async () => {
+    listInventoryMock.mockResolvedValue(inventory([aliceRow], { "corp-gw": 1 }));
+    eraseMock.mockResolvedValue({ count: 3 });
+    renderScreen();
+    await userEvent.click(await screen.findByRole("button", { name: INVENTORY.ERASE_ROW }));
+    await userEvent.type(screen.getByLabelText(ERASE.CONFIRM_LABEL("alice@corp.example")), "alice@corp.example");
+    await userEvent.click(screen.getByRole("button", { name: ERASE_DATA.CONFIRM }));
+    expect(eraseMock).toHaveBeenCalledWith("sub-alice");
+    expect(erasePersonMock).not.toHaveBeenCalled();
+    expect(await screen.findByText("Erased 3 credentials for alice@corp.example.")).toBeInTheDocument();
+    expect(screen.getByText("Recorded in the Audit log as credential.erase.")).toBeInTheDocument();
+  });
+
+  it("from a row, ticking another scope goes through the by-scope route with the principal", async () => {
+    listInventoryMock.mockResolvedValue(inventory([aliceRow], { "corp-gw": 1 }));
+    erasePersonMock.mockResolvedValue({ person: "sub-alice", scopes: [], outcome: {} });
+    renderScreen();
+    await userEvent.click(await screen.findByRole("button", { name: INVENTORY.ERASE_ROW }));
+    const dialog = screen.getByRole("dialog");
+    await userEvent.click(box(dialog, "Run tasks"));
+    await userEvent.type(screen.getByLabelText(ERASE.CONFIRM_LABEL("alice@corp.example")), "alice@corp.example");
+    await userEvent.click(screen.getByRole("button", { name: ERASE_DATA.CONFIRM }));
+    expect(erasePersonMock).toHaveBeenCalledWith("sub-alice", ["credentials", "run_tasks"]);
+    expect(eraseMock).not.toHaveBeenCalled();
+  });
+
+  it("Change turns the fixed person into the search, and the typed-name confirm goes with it", async () => {
+    listInventoryMock.mockResolvedValue(inventory([aliceRow], { "corp-gw": 1 }));
+    renderScreen();
+    await userEvent.click(await screen.findByRole("button", { name: INVENTORY.ERASE_ROW }));
+    await userEvent.click(screen.getByRole("button", { name: ERASE_DATA.CHANGE }));
+    expect(screen.getByLabelText(ERASE.FIELD)).toHaveValue("");
+    expect(screen.queryByLabelText(ERASE.CONFIRM_LABEL("alice@corp.example"))).toBeNull();
+    expect(screen.getByRole("button", { name: ERASE_DATA.CONFIRM })).toBeDisabled();
+  });
+
+  it("the header search lists people, a pick asks for the name, and a typed address is offered as not listed", async () => {
+    listInventoryMock.mockResolvedValue(inventory([aliceRow], { "corp-gw": 1 }));
+    listPeopleMock.mockResolvedValue({
+      people: [{ principal: "sub-alex", email: "alex@corp.example", issuer_kind: "oidc", pre_created: false, active_sessions: 0, api_tokens: 0, ssh_keys: 0, credentials: 1, active_runs: 0 }],
+    });
+    erasePersonMock.mockResolvedValue({ person: "sub-alex", scopes: [], outcome: {} });
+    renderScreen();
+    await openMenuItem("Erase someone's data…");
+    const dialog = screen.getByRole("dialog");
+    await userEvent.type(within(dialog).getByLabelText(ERASE.FIELD), "alex");
+    expect(await within(dialog).findByRole("button", { name: /alex@corp\.example/ })).toBeInTheDocument();
+    expect(within(dialog).getByText("Use “alex”")).toBeInTheDocument();
+    expect(within(dialog).getByText(ERASE_DATA.NOT_LISTED)).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: /alex@corp\.example/ }));
+    expect(listPeopleMock).toHaveBeenCalledWith({ q: "alex", limit: 6 });
+    expect(box(dialog, "Credentials")).toBeChecked();
+    expect(box(dialog, "Run tasks")).toBeChecked();
+    expect(within(dialog).getByRole("button", { name: ERASE_DATA.CONFIRM })).toBeDisabled();
+    await userEvent.type(within(dialog).getByLabelText(ERASE.CONFIRM_LABEL("alex@corp.example")), "alex@corp.example");
+    await userEvent.click(within(dialog).getByRole("button", { name: ERASE_DATA.CONFIRM }));
+    expect(erasePersonMock.mock.calls[0][0]).toBe("sub-alex");
+  });
+
+  it("says so when nobody matches, and the typed address still works with no second field", async () => {
+    listInventoryMock.mockResolvedValue(inventory([aliceRow], { "corp-gw": 1 }));
+    erasePersonMock.mockResolvedValue({ person: "x", scopes: [], outcome: {} });
+    renderScreen();
+    await openMenuItem("Erase someone's data…");
+    const dialog = screen.getByRole("dialog");
+    await userEvent.type(within(dialog).getByLabelText(ERASE.FIELD), "nobody@corp.example");
+    expect(await within(dialog).findByText(ERASE_DATA.PICK_NONE)).toBeInTheDocument();
+    expect(within(dialog).queryByLabelText(/type .* to confirm/i)).toBeNull();
+    await userEvent.click(within(dialog).getByRole("button", { name: ERASE_DATA.CONFIRM }));
+    expect(erasePersonMock.mock.calls[0][0]).toBe("nobody@corp.example");
+  });
+
+  it("below the security tier the dialog shows Credentials only, and never the by-scope route", async () => {
+    listInventoryMock.mockResolvedValue(inventory([aliceRow], { "corp-gw": 1 }));
+    eraseMock.mockResolvedValue({ count: 1 });
+    renderScreen({ securityOperator: false });
+    await openMenuItem("Erase someone's credentials…");
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getAllByRole("checkbox")).toHaveLength(1);
+    expect(box(dialog, "Credentials")).toBeChecked();
+    expect(within(dialog).getByText(ERASE.HINT)).toBeInTheDocument();
+    await userEvent.type(within(dialog).getByLabelText(ERASE.FIELD), "nobody.listed@corp.example");
+    await userEvent.click(within(dialog).getByRole("button", { name: ERASE_DATA.CONFIRM }));
+    expect(eraseMock).toHaveBeenCalledWith("nobody.listed@corp.example");
+    expect(erasePersonMock).not.toHaveBeenCalled();
   });
 });
 

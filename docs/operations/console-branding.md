@@ -42,7 +42,7 @@
 | `PUT /branding/settings` | Admin only. Replaces the record; a body without `logo` keeps the stored logo, `"remove_logo": true` drops it. `remove_logo` on a logo the site configuration delivers is refused with a 400 |
 | `DELETE /branding/settings` | Admin only. Back to unbranded |
 
-- A refused save names its rule in `reason`: `invalid_org_name`, `invalid_name_format`, `invalid_colour`, `low_contrast` (the message carries the ratio), `link_not_https`, `invalid_link`, `logo_too_large`, `invalid_logo`, `logo_from_site_config` (`remove_logo` on a logo the site configuration delivers).
+- A refused save names its rule in `reason`: `invalid_org_name`, `invalid_name_format`, `invalid_colour`, `low_contrast` (the message carries the ratio), `link_not_https`, `invalid_link`, `logo_too_large`, `invalid_logo`, `logo_from_site_config` (`remove_logo`, or a new `logo`, on a logo the site configuration delivers).
 
 ## Removing a logo, or all of it
 

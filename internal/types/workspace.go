@@ -109,10 +109,14 @@ type WorkspaceSource struct {
 type WorkspaceBaseImage struct {
 	// Kind is "recommended" (convention image for the detected stack),
 	// "registry" (operator-picked, named by Image), "custom" (Image is a base,
-	// see Steps), or "byo" (Image used verbatim).
+	// see Steps), or "byo" (Image as written, no build of its own). All three
+	// non-recommended kinds are wrapped the same way before a run uses them: the
+	// image builder adds Wardyn's runner tools (FinalizeBase), so a control plane
+	// with no image builder refuses a run on them (image_builder_unavailable).
 	Kind string `json:"kind"`
 	// Image is the base image reference. Meaning depends on Kind: the FROM for
-	// "custom", the image itself for "registry"/"byo", unused for "recommended".
+	// "custom" and the base the wrap starts from for "registry"/"byo", unused for
+	// "recommended".
 	Image string `json:"image,omitempty"`
 	// Steps is CATALOG IDENTITY ONLY, never applied to an image. SECURITY:
 	// running operator-authored RUN lines would be host-side RCE

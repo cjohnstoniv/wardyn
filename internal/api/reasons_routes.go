@@ -9,57 +9,8 @@ package api
 // pushed reasons.go past scripts/check-file-size.sh's 1000-line gate — not a
 // second vocabulary or a different rule. TestReasonDocsMatchReasonsGo and
 // TestNoAdHocAuthz both read this file too, so a value declared here is exactly
-// as visible to the guards as one declared in reasons.go itself.
-
-// POST /runs/{id}/revive and the admin bulk restart (run_revive.go):
-// reviveError's own status+reason+msg replaces its former bare (status, msg)
-// pair, so the SAME reason recordAudit already wrote to the audit row for a
-// revive refusal (#656 slice 3) now also reaches the wire. One reason per
-// distinct revive-refusal cause; a few call sites answer the SAME cause two
-// ways (the runner substrate cannot revive at all) and share one on purpose.
-const (
-	reasonPolicyPreviewRateLimited    = "policy_preview_rate_limited"
-	reasonReviveLocalModeNotOwner     = "local_mode_not_owner"          // local mode mints for the run's own owner; nobody else may revive it — the SAME literal this refusal's own audit row already carried
-	reasonReviveUnsupportedDeployment = "revive_unsupported_deployment" // this deployment's store has no RunReviver, or configures no runner at all
-	// reasonReviveUnsupportedRunner covers three arms that all answer the
-	// identical runner.ErrReviveUnsupported fact: the runner does not
-	// implement ProxyReviver, a rebooted run's runner does not also implement
-	// SandboxStarter, and the run's own CanReplaceProxy check refused with
-	// this same sentinel.
-	reasonReviveUnsupportedRunner           = "revive_unsupported_runner"
-	reasonReviveBulkCannotStartAgent        = "revive_bulk_cannot_start_agent"        // a bulk restart cannot start a stopped agent; only the run's own page can
-	reasonReviveAlreadyInProgress           = "revive_already_in_progress"            // another revive of this run is already running
-	reasonReviveLiveTooSoon                 = "revive_live_too_soon"                  // a live run's proxy was replaced less than reviveLiveEvery ago
-	reasonReviveContainmentRecovering       = "revive_containment_recovering"         // the run's runner held it contained; a recovery is queued for its next session
-	reasonReviveMintIdentityFailed          = "revive_mint_identity_failed"           // minting the fresh run token failed
-	reasonReviveEncodeConfigFailed          = "revive_encode_config_failed"           // the rewritten proxy config would not marshal to JSON
-	reasonRevivePullImageFailed             = "revive_pull_image_failed"              // the proxy image could not be pulled
-	reasonReviveClaimFailed                 = "revive_claim_failed"                   // the claim that marks the run revived failed
-	reasonReviveRunChanged                  = "revive_run_changed"                    // the run ended, was lost again, or was revived elsewhere mid-request
-	reasonReviveProxyKeptCurrent            = "revive_proxy_kept_current"             // the old proxy was never touched; a still-live run keeps it after a failed replace
-	reasonReviveProxyReplaceFailedLost      = "revive_proxy_replace_failed_lost"      // the proxy could not be replaced, so the run has no egress and is lost again
-	reasonReviveAgentStartFailedLost        = "revive_agent_start_failed_lost"        // the agent could not be started behind the new proxy, so the run is lost again
-	reasonReviveRecoveryUnresolved          = "revive_recovery_unresolved"            // the revive failed and the run could not be recorded as lost; its proxy is stopped and a sweep recovers it
-	reasonReviveSubstrateUnreadable         = "revive_substrate_unreadable"           // the run's substrate could not answer whether it can replace a proxy
-	reasonReviveConfigNotStored             = "revive_config_not_stored"              // no proxy config is stored for this run (it predates this release, or none is kept)
-	reasonReviveConfigUnreadable            = "revive_config_unreadable"              // the stored proxy config could not be read
-	reasonReviveConfigDoesNotLoad           = "revive_config_does_not_load"           // the stored proxy config, or the one the revive would start the new proxy with, failed to parse or validate
-	reasonReviveNotRunning                  = "revive_not_running"                    // the run is not in the RUNNING state, or has no sandbox
-	reasonReviveEndedFilesGone              = "revive_ended_files_gone"               // the run ended and its files are no longer kept
-	reasonRevivePastEnd                     = "revive_past_end"                       // the run has passed its scheduled end; extend it first
-	reasonReviveEndedTaskRun                = "revive_ended_task_run"                 // a task run's agent cannot be started again once it has ended
-	reasonReviveRebootAgentStopped          = "revive_reboot_agent_stopped"           // the run was lost to a reboot; only its own page can start its agent again
-	reasonReviveEndedAgentStopped           = "revive_ended_agent_stopped"            // the run has ended and its agent is stopped; only its own page can start it again
-	reasonReviveUnknownLostReason           = "revive_unknown_lost_reason"            // the run's lost_reason is not one revive recognizes
-	reasonReviveAgentStatusUnreadable       = "revive_agent_status_unreadable"        // the run's agent status could not be probed
-	reasonReviveConfigRunMismatch           = "revive_config_run_mismatch"            // the stored proxy config names a different run than the one being revived
-	reasonReviveCeilingDeniesGitBroker      = "revive_ceiling_denies_git_broker"      // the owner's current governance profile now denies GitHub, which the run's git broker needs
-	reasonReviveCeilingDeniesAzureCLI       = "revive_ceiling_denies_azure_cli"       // the owner's current governance profile now denies Azure Resource Manager, which the run's Azure CLI door needs
-	reasonReviveOwnerAuthorityUnreadable    = "revive_owner_authority_unreadable"     // the owner's launch-door or model-credential re-check, or the read of the run's git_pat grants for its brokered set, could not be completed
-	reasonReviveAdminRestartCountInvalid    = "revive_admin_restart_count_invalid"    // run_ids named none, or more than the bulk maximum
-	reasonReviveProxyWindowStoreUnavailable = "revive_proxy_window_store_unavailable" // this store cannot list run proxy releases
-	reasonRunCapacityStoreUnavailable       = "run_capacity_store_unavailable"        // this store cannot report fleet capacity
-)
+// as visible to the guards as one declared in reasons.go itself. The revive
+// block lives in reasons_revive.go, split out for the same size gate.
 
 // ownerRefusal's own reason values (run_owner_authority.go): a revive's and a
 // run-end-extension's shared re-check of the owner's launch-door capabilities,
@@ -67,8 +18,8 @@ const (
 // before #656 slice 3; declared here, not beside ownerRefusal, for the same
 // reason the driveRefusal* set is declared here rather than beside refuseDrive.
 const (
-	reasonOwnerProfileUnreadable = "profile_unreadable" // the owner's captured governance profile could not be read back
-	reasonOwnerProfileGone       = "profile_gone"       // the governance profile captured at launch no longer exists
+	reasonOwnerUnitUnreadable = "unit_unreadable" // the owner's captured governance profile could not be read back
+	reasonOwnerUnitGone       = "unit_gone"       // the governance profile captured at launch no longer exists
 	// reasonOwnerCapability* names the launch door persistedLaunchDoors found
 	// closed: the SAME six capability kinds capabilities.go's own cap* consts
 	// enumerate, so the reason names the kind rather than repeating a run's
@@ -129,21 +80,21 @@ const (
 // reasonRunNotFound is likewise the SAME literal auditRenewDenied
 // (internal.go) already wrote for a renewal on a run that no longer exists.
 const (
-	reasonWorkspaceNotFound             = "workspace_not_found"
-	reasonUserDriveNotFound             = "user_drive_not_found"
-	reasonUserDriveAllocationNotFound   = "user_drive_allocation_not_found"
-	reasonSSHKeyNotFoundEntity          = "ssh_key_not_found"
-	reasonPresetNotFound                = "preset_not_found" // the admin preset-management route named no such preset — reasonPresetUnknown covers a RUN naming one instead
-	reasonPolicyNotFound                = "policy_not_found"
-	reasonCapabilityGrantNotFound       = "capability_grant_not_found"
-	reasonRunNotFound                   = "run_not_found"
-	reasonGovernanceAssignmentNotFound  = "governance_assignment_not_found"
-	reasonGovernanceProfileNotFoundByID = "governance_profile_not_found" // governance.go's own by-id GET/PUT/DELETE — distinct from reviveCeiling's reasonOwnerProfileGone (a run's CAPTURED profile going missing later)
-	reasonEnrolmentTokenNotFound        = "enrolment_token_not_found"
-	reasonDeviceNotFound                = "device_not_found"
-	reasonDelegateNotFound              = "delegate_not_found"
-	reasonAPITokenNotFoundEntity        = "api_token_not_found"
-	reasonRoleMappingNotFound           = "role_mapping_not_found"
+	reasonWorkspaceNotFound            = "workspace_not_found"
+	reasonUserDriveNotFound            = "user_drive_not_found"
+	reasonUserDriveAllocationNotFound  = "user_drive_allocation_not_found"
+	reasonSSHKeyNotFoundEntity         = "ssh_key_not_found"
+	reasonPresetNotFound               = "preset_not_found" // the admin preset-management route named no such preset — reasonPresetUnknown covers a RUN naming one instead
+	reasonPolicyNotFound               = "policy_not_found"
+	reasonCapabilityGrantNotFound      = "capability_grant_not_found"
+	reasonRunNotFound                  = "run_not_found"
+	reasonGovernanceMembershipNotFound = "governance_membership_not_found"
+	reasonGovernanceUnitNotFoundByID   = "governance_unit_not_found" // governance.go's own by-id GET/PUT/DELETE — distinct from reviveCeiling's reasonOwnerUnitGone (a run's CAPTURED profile going missing later)
+	reasonEnrolmentTokenNotFound       = "enrolment_token_not_found"
+	reasonDeviceNotFound               = "device_not_found"
+	reasonDelegateNotFound             = "delegate_not_found"
+	reasonAPITokenNotFoundEntity       = "api_token_not_found"
+	reasonRoleMappingNotFound          = "role_mapping_not_found"
 )
 
 // helpers.go's own shared foundational refusals (#656 slice 3): one path
@@ -200,48 +151,6 @@ const (
 	reasonModelProviderIDInvalid         = "model_provider_id_invalid"          // model_provider is not a plain provider id
 	reasonModelProviderNotApplicable     = "model_provider_not_applicable"      // model_provider was set on a run that calls no model
 	reasonModelProviderNoBlockConfigured = "model_provider_no_block_configured" // model_provider was named but this deployment has no model providers
-)
-
-// PATCH /runs/{id}/title (run_title.go).
-const (
-	reasonRunTitleStoreUnavailable = "run_title_store_unavailable" // this store cannot rename a run
-)
-
-// GET /runs/{id}/resources and GET /runs/{id}/files (run_resources.go,
-// run_files.go): the two widgets read the identical run-state facts, so they
-// share a reason per cause rather than each inventing its own synonym.
-const (
-	reasonRunInspectNoRunner              = "run_inspect_no_runner"               // this deployment configures no runner at all
-	reasonRunInspectTerminal              = "run_inspect_terminal"                // the run has finished; its sandbox is gone
-	reasonRunInspectNoSandbox             = "run_inspect_no_sandbox"              // the run never dispatched (or recorded no sandbox ref)
-	reasonRunInspectPaused                = "run_inspect_paused"                  // the run is paused
-	reasonRunInspectAgentStopped          = "run_inspect_agent_stopped"           // the run is kept with its agent stopped; there is no running sandbox to read
-	reasonRunInspectExecStreamUnsupported = "run_inspect_exec_stream_unsupported" // the runner does not support exec streaming
-	reasonRunResourcesReadFailed          = "run_resources_read_failed"           // the sandbox resource usage script failed
-	reasonRunFilesNoExecSession           = "run_files_no_exec_session"           // the runner returned no exec session
-)
-
-// GET /runs/{id}/output (run_output.go).
-const (
-	reasonRunOutputTailInvalid = "run_output_tail_invalid" // ?tail= is not a positive number of bytes
-	reasonRunOutputInteractive = "run_output_interactive"  // the run is interactive and has no pane snapshot to serve
-	reasonRunOutputOff         = "run_output_off"          // WARDYN_EXEC_OUTPUT_TAIL=off
-	reasonRunOutputNotKept     = "run_output_not_kept"     // no output is kept for the run (one never captured, or one still being captured)
-	reasonRunOutputExpired     = "run_output_expired"      // the tail outlived WARDYN_EXEC_OUTPUT_TAIL_TTL, or the run ended past WARDYN_RUN_OUTPUT_RETENTION_DAYS
-	reasonRunOutputErased      = "run_output_erased"       // the run's output was erased (404)
-	reasonRunOutputNotCaptured = "run_output_not_captured" // the runner cannot capture a run's output (Kubernetes under the recorder); the recording has it
-)
-
-// GET /runs/{id}/sign-in (run_sign_in.go).
-const (
-	reasonRunSignInNotAWS     = "run_sign_in_not_aws"    // the run is not an AWS sign-in run
-	reasonRunSignInUnreadable = "run_sign_in_unreadable" // the pane, or the capture's audit row, could not be read in time
-)
-
-// POST /runs/{id}/resume (run_pause.go).
-const (
-	reasonRunResumeNotRunning = "run_resume_not_running" // the run is not in a resumable state
-	reasonRunResumeFailed     = "run_resume_failed"      // thawForExec failed
 )
 
 // POST /internal/* (internal.go, internal_live_run.go): the sidecar/proxy
@@ -360,7 +269,7 @@ const (
 	reasonUIGatewayExecFailed                 = "ui_gateway_exec_failed"                  // starting the relay's own exec session failed
 	reasonUIGatewayLauncherExecFailed         = "ui_gateway_launcher_exec_failed"         // starting the in-sandbox launcher probe failed
 	reasonUIGatewayLauncherMissing            = "ui_gateway_launcher_missing"             // the image has no launcher script for this app
-	reasonUIGatewayLauncherNotListening       = "ui_gateway_launcher_not_listening"       // the launcher ran but nothing bound the app's port in time
+	reasonUIGatewayLauncherNotListening       = "ui_gateway_launcher_not_listening"       // the launcher ran but nothing bound the app's port in time, or an application run's startup command is not listening on the port
 	reasonUIGatewayLauncherProbeFailed        = "ui_gateway_launcher_probe_failed"        // the launcher probe exited with an unrecognized code
 	reasonUIGatewayConnectionClosed           = "ui_gateway_connection_closed"            // the sandbox closed the relay connection unexpectedly
 	reasonUIGatewayBindMissingTicket          = "ui_gateway_bind_missing_ticket"          // POST /__wardyn/bind's form carried no ticket
@@ -853,7 +762,7 @@ const (
 	brandReasonLinkShape  = "invalid_link"
 	brandReasonLogoSize   = "logo_too_large"
 	brandReasonLogo       = "invalid_logo"
-	// brandReasonLogoFromFile: remove_logo on a logo the site config delivers (#1215).
+	// brandReasonLogoFromFile: remove_logo or a new logo on a logo the site config delivers (#1215).
 	brandReasonLogoFromFile = "logo_from_site_config"
 )
 
@@ -997,4 +906,24 @@ const (
 // GET /runs/{id}/launch-intent (launch_intent.go).
 const (
 	reasonLaunchIntentNotFound = "launch_intent_not_found" // the run kept no setup, or the caller may not see it
+)
+
+// Desktop sign-ins (run_desktop_signin.go).
+const (
+	reasonDesktopSigninsOff              = "desktop_signins_off"               // WARDYN_DESKTOP_SIGNINS is not on
+	reasonDesktopSigninNotRunning        = "desktop_signin_not_running"        // the run is not running in a sandbox
+	reasonDesktopSigninNoDesktop         = "desktop_signin_no_desktop"         // the run's policy declares no novnc app
+	reasonDesktopSigninRunnerUnsupported = "desktop_signin_runner_unsupported" // the run started without sign-ins: another runner, another desktop image, or sign-ins were off
+	reasonDesktopSigninImageNotGranted   = "desktop_signin_image_not_granted"  // the run's image was its person's choice, and its sign-in variant is not granted to them
+	reasonDesktopSigninOpen              = "desktop_signin_open"               // a sign-in is already open on the run
+	reasonDesktopSigninNotOpen           = "desktop_signin_not_open"           // no sign-in is open on the run
+	reasonDesktopSigninNotHolder         = "desktop_signin_not_holder"         // the open sign-in was begun by someone else
+	reasonDesktopSigninPauseFailed       = "desktop_signin_pause_failed"       // the agent could not be stopped and proven stopped
+	reasonDesktopSigninStartFailed       = "desktop_signin_start_failed"       // the person's display did not start
+	reasonDesktopSigninEndFailed         = "desktop_signin_end_failed"         // the display could not be proven closed; the agent stays stopped
+	reasonDesktopSigninSiteInvalid       = "desktop_signin_site_invalid"       // a share's site is not a registrable host name
+	reasonDesktopSigninShareFailed       = "desktop_signin_share_failed"       // a share's export or import failed; nothing was shared
+	reasonDesktopSigninUnavailable       = "desktop_signin_unavailable"        // the sign-in store could not be read or written
+	reasonDesktopSigninCredentialRefused = "desktop_signin_credential_refused" // the proxy's check: not an open sign-in's credential
+	reasonDesktopSigninResumeFailed      = "desktop_signin_resume_failed"      // run.kill: a failed begin's agent could not be continued, so the run was killed
 )

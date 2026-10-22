@@ -62,6 +62,12 @@ describe("intentToWire (U1)", () => {
     expect(sent[0].body.devcontainer_repo).toBe("org/app");
   });
 
+  it("sends keep_work_folder: a launch-time choice the registry excludes from templates, carried and never reported", () => {
+    const { body, unsupported } = intentToWire({ ...INTENT, keep_work_folder: true });
+    expect(body.keep_work_folder).toBe(true);
+    expect(unsupported).toEqual([]);
+  });
+
   it("sends the document's inline_policy as the policy overlay, never as a whole policy", () => {
     const { body } = intentToWire(INTENT);
     expect(body.policy_overlay).toEqual({ allowed_domains: [], auto_stop_after_sec: 0 });
@@ -120,6 +126,18 @@ describe("intentToWire unsupported fields (U2)", () => {
   });
 });
 
+describe("launch-excluded rows", () => {
+  it("carries machine_kind and the chosen local_folder, and still reports max_wait_sec", () => {
+    const folder = { name: "f", remote_dir: "/w" };
+    const launch = { machine_kind: "linux_vm", local_folder: folder, max_wait_sec: 60 } as unknown as RunIntent;
+    const { body, unsupported } = intentToWire(launch);
+    expect(body.machine_kind).toBe("linux_vm");
+    expect(unsupported).toEqual(["max_wait_sec"]);
+    expect(body).toHaveProperty("local_folder", folder);
+    expect(body).not.toHaveProperty("max_wait_sec");
+  });
+});
+
 describe("the overlay's registry row, under either name", () => {
   const overlay = { inline_policy: { allowed_domains: ["a.example"] } } satisfies RunIntent;
   const rows = (rename: (name: string) => string | undefined) =>
@@ -141,5 +159,29 @@ describe("the overlay's registry row, under either name", () => {
   it("reports the overlay when the registry carries neither", () => {
     const without = rows((n) => (n === "inline_policy" ? undefined : n));
     expect(wireSerializer(without, TEMPLATE_POLICY_FIELDS)(overlay)).toEqual({ body: { mode_contract: "0.9" }, unsupported: ["inline_policy"] });
+  });
+});
+
+describe("launch-only fields", () => {
+  it("sends the machine kind each launch names, which a template never carries", () => {
+    const { body, unsupported } = intentToWire({ machine_kind: "linux_vm" });
+    expect(unsupported).toEqual([]);
+    expect(body).toEqual({ mode_contract: "0.9", machine_kind: "linux_vm" });
+  });
+});
+
+describe("intentToWire: a start later", () => {
+  it("adds start_at and start_time_zone to the create only, beside the Name dialog's fields", () => {
+    const start = { start_at: "2026-10-21T02:00", start_time_zone: "Europe/London" };
+    const create = intentToWire(INTENT, { title: "Nightly", description: "", start }).body;
+    expect(create).toMatchObject({ title: "Nightly", ...start });
+    const plain = intentToWire(INTENT, { title: "Nightly", description: "" }).body;
+    expect(plain).not.toHaveProperty("start_at");
+    expect(plain).not.toHaveProperty("start_time_zone");
+    expect(intentToWire(INTENT).body).not.toHaveProperty("start_at");
+  });
+
+  it("reports a start in the document as unsupported: the registry leaves it to each launch", () => {
+    expect(intentToWire({ ...INTENT, start_at: "2026-10-21T02:00" } as RunIntent).unsupported).toContain("start_at");
   });
 });

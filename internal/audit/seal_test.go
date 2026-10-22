@@ -307,7 +307,7 @@ func TestSealGovernanceRejectReason(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			data, _ := json.Marshal(map[string]any{"proposed_by": "proposer", "reason": reason, "target_key": "p", "target_kind": "governance_profile"})
+			data, _ := json.Marshal(map[string]any{"proposed_by": "proposer", "reason": reason, "target_key": "p", "target_kind": "governance_unit"})
 			ev := types.AuditEvent{
 				ID: uuid.New(), Time: time.Now().UTC(), ActorType: types.ActorHuman, Actor: "reviewer",
 				Action: "governance.change.reject", Target: uuid.NewString(), Outcome: "success", Data: data,
@@ -458,5 +458,43 @@ func TestIsPendingParsesTheRowNotItsText(t *testing.T) {
 		if !IsPending(ev) {
 			t.Errorf("%s: %s does not read as pending", name, ev.Data)
 		}
+	}
+}
+
+// The text a person types on a runner trust change (#2305) and a run's title on either side of a
+// rename (#2306) are sealed under the typing actor's key, and read [erased] once that key is destroyed.
+func TestSealTypedTextOfTrustChangesAndRunTitles(t *testing.T) {
+	for _, tc := range []struct {
+		action string
+		data   map[string]any
+		paths  []string
+	}{
+		{"runner.trust.write", map[string]any{"before": "personal", "after": "org_cluster", "reason": "laptop handed to IT"}, []string{"reason"}},
+		{"run.title.set", map[string]any{"from": "Reconcile payroll for a named person", "to": "renamed"}, []string{"from", "to"}},
+	} {
+		t.Run(tc.action, func(t *testing.T) {
+			s, mk := newSealer(t)
+			data, _ := json.Marshal(tc.data)
+			got, pending, err := s.Seal(t.Context(), types.AuditEvent{ID: uuid.New(), Time: time.Now().UTC(), ActorType: types.ActorHuman,
+				Actor: "bob", Action: tc.action, Target: uuid.NewString(), Outcome: "success", Data: data})
+			if err != nil || pending {
+				t.Fatalf("Seal = pending %v, %v", pending, err)
+			}
+			for _, p := range tc.paths {
+				if v, _ := field(t, got, p).(string); !strings.HasPrefix(v, "seal2.") {
+					t.Fatalf("%s.%s = %q, want it sealed", tc.action, p, v)
+				}
+			}
+			mk.destroy("bob")
+			back, err := s.Unseal(t.Context(), []types.AuditEvent{got})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, p := range tc.paths {
+				if v := field(t, back[0], p); v != ErasedValue {
+					t.Errorf("%s after bob's erasure = %v, want %q", p, v, ErasedValue)
+				}
+			}
+		})
 	}
 }

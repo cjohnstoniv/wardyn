@@ -30,7 +30,7 @@ func TestPG_RunLimitsRoundTrip(t *testing.T) {
 		MaxWaitSec: 8 * 3600, DefaultWaitSec: 3600, UserChangesLimits: true, PauseIdleAfterSec: 1800,
 	}
 	r := newRun(types.RunRunning)
-	r.EndsAt, r.WaitBudgetSec, r.RunLimits, r.GovernanceProfileID = &endsAt, 3600, limits, &profileID
+	r.EndsAt, r.WaitBudgetSec, r.RunLimits, r.UnitID = &endsAt, 3600, limits, &profileID
 	persistRun(t, ctx, pool, r)
 
 	got, err := pg.GetRun(ctx, r.ID)
@@ -43,14 +43,14 @@ func TestPG_RunLimitsRoundTrip(t *testing.T) {
 	if got.WaitBudgetSec != 3600 || got.RunLimits != limits {
 		t.Errorf("wait = %d, limits = %+v; want 3600, %+v", got.WaitBudgetSec, got.RunLimits, limits)
 	}
-	if got.GovernanceProfileID == nil || *got.GovernanceProfileID != profileID {
-		t.Errorf("governance_profile_id = %v, want %s", got.GovernanceProfileID, profileID)
+	if got.UnitID == nil || *got.UnitID != profileID {
+		t.Errorf("unit_id = %v, want %s", got.UnitID, profileID)
 	}
 
 	legacy := persistRun(t, ctx, pool, newRun(types.RunRunning))
-	if legacy.EndsAt != nil || legacy.WaitBudgetSec != 0 || legacy.RunLimits != (types.RunLimits{}) || legacy.GovernanceProfileID != nil {
+	if legacy.EndsAt != nil || legacy.WaitBudgetSec != 0 || legacy.RunLimits != (types.RunLimits{}) || legacy.UnitID != nil {
 		t.Errorf("legacy run = ends %v wait %d limits %+v profile %v; want none of them",
-			legacy.EndsAt, legacy.WaitBudgetSec, legacy.RunLimits, legacy.GovernanceProfileID)
+			legacy.EndsAt, legacy.WaitBudgetSec, legacy.RunLimits, legacy.UnitID)
 	}
 }
 

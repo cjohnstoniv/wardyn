@@ -85,6 +85,13 @@ describe("ScimCard", () => {
     expect(await screen.findByRole("button", { name: /^SCIM provisioning\s*200\+ deactivated · 0 unfinished/ })).toBeInTheDocument();
   });
 
+  it("a full 200-row pending page reads 'N+' people unfinished: the server stops listing there and sends no total", async () => {
+    const page = Array.from({ length: 200 }, (_, i) => ({ person: `p${i % 3}@example.com`, step: "sweep", last_error: `e${i}` }));
+    getStatusMock.mockReset().mockResolvedValue(status({ pending: page }));
+    render(<ScimCard />);
+    expect(await screen.findByRole("button", { name: /^SCIM provisioning\s*0 deactivated · 3\+ unfinished/ })).toBeInTheDocument();
+  });
+
   it("set up with work to show: the three lists, their hints, the summary counts", async () => {
     const card = await open(
       status({

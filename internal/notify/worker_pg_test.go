@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
@@ -485,6 +486,66 @@ func TestWorker_PurgesOldTerminalRows(t *testing.T) {
 	}
 }
 
+// lastStatement records the SQL and arguments of the last statement a pool ran.
+type lastStatement struct {
+	sql  string
+	args []any
+}
+
+func (l *lastStatement) TraceQueryStart(ctx context.Context, _ *pgx.Conn, d pgx.TraceQueryStartData) context.Context {
+	l.sql, l.args = d.SQL, d.Args
+	return ctx
+}
+func (l *lastStatement) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+// TestWorker_PurgeUsesThePurgeIndex: an idle tick's purge reads only the terminal rows by last_attempt_at,
+// not the whole outbox, which every replica runs every 15 s.
+func TestWorker_PurgeUsesThePurgeIndex(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer srv.Close()
+	h := newHarness(t, chanJSON(srv.URL, ""))
+	ctx := context.Background()
+	a := h.raise(t, h.run(t), `{"host":"seed.example"}`, "")
+	if _, err := h.pool.Exec(ctx, `
+		INSERT INTO approval_notifications (id, approval_id, tier, channel, due_at, state, next_attempt_at, last_attempt_at)
+		SELECT gen_random_uuid(), $1, 0, 'c' || g, now(), (ARRAY['sent', 'cancelled', 'dead', 'pending'])[1 + g % 4],
+		       now() + interval '1 day', now() - g * interval '1 second'
+		FROM generate_series(1, 40000) g`, a.ID); err != nil {
+		t.Fatalf("seed outbox: %v", err)
+	}
+	if _, err := h.pool.Exec(ctx, `ANALYZE approval_notifications`); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := h.pool.Config().Copy()
+	last := &lastStatement{}
+	cfg.ConnConfig.Tracer = last
+	traced, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatalf("traced pool: %v", err)
+	}
+	defer traced.Close()
+	if _, err := notify.NewWorker(notify.Deps{Pool: traced, Config: h.cfg, Client: nil}).Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(last.sql, "DELETE FROM approval_notifications") {
+		t.Fatalf("the tick's last statement is not the purge: %q", last.sql)
+	}
+	rows, err := h.pool.Query(ctx, "EXPLAIN (COSTS OFF) "+last.sql, last.args...)
+	if err != nil {
+		t.Fatalf("explain: %v", err)
+	}
+	lines, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatalf("explain: %v", err)
+	}
+	plan := strings.Join(lines, "\n")
+	t.Logf("purge plan:\n%s", plan)
+	if strings.Contains(plan, "Seq Scan on approval_notifications") || !strings.Contains(plan, "approval_notifications_purge_idx") {
+		t.Errorf("the purge does not use approval_notifications_purge_idx:\n%s", plan)
+	}
+}
+
 // TestWorker_SignedBodyCarriesNoSandboxText is the end-to-end golden check over TLS with an HMAC secret:
 // a secret planted in the approval's requested_scope and reason, and the run's task title, reach the
 // receiver in neither the body nor a header, and the signature verifies over the exact bytes.
@@ -510,9 +571,9 @@ func TestWorker_SignedBodyCarriesNoSandboxText(t *testing.T) {
 		sql  string
 		args []any
 	}{
-		{`INSERT INTO governance_profiles (id, name, ceiling) VALUES ($1, 'payments', '{}')`, []any{profileID}},
+		{`INSERT INTO governance_units (id, name, ceiling) VALUES ($1, 'payments', '{}')`, []any{profileID}},
 		{`INSERT INTO people (principal, email, created_by) VALUES ('alice', 'alice@example.com', 'admin')`, nil},
-		{`UPDATE agent_runs SET governance_profile_id = $1 WHERE id = $2`, []any{profileID, runID}},
+		{`UPDATE agent_runs SET unit_id = $1 WHERE id = $2`, []any{profileID, runID}},
 	} {
 		if _, err := h.pool.Exec(context.Background(), q.sql, q.args...); err != nil {
 			t.Fatalf("%s: %v", q.sql, err)
@@ -550,7 +611,7 @@ func TestWorker_SignedBodyCarriesNoSandboxText(t *testing.T) {
 	if err := json.Unmarshal(gotBody, &p); err != nil || p["schema"] != "wardyn.approval.v1" || p["event"] != "raised" {
 		t.Fatalf("body = %s, err %v", gotBody, err)
 	}
-	profile, _ := p["profile"].(map[string]any)
+	profile, _ := p["unit"].(map[string]any)
 	requester, _ := p["requester"].(map[string]any)
 	if profile["id"] != profileID.String() || profile["name"] != "payments" || requester["principal"] != "alice" || requester["email"] != "alice@example.com" {
 		t.Fatalf("profile and requester were not joined in: %s", gotBody)

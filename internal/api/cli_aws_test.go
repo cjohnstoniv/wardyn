@@ -142,7 +142,7 @@ func TestAWSCLI_KillSwitchRefusesNotDegrades(t *testing.T) {
 	st := &cliRefuseStore{}
 	s := &Server{cfg: Config{Store: st, Audit: &recRecorder{}, Now: time.Now}}
 	env, policy := map[string]string{}, types.RunPolicySpec{}
-	injections, mitm, ok := s.authorAWSCLI(context.Background(), types.AgentRun{ID: uuid.New()},
+	injections, mitm, _, ok := s.authorAWSCLI(context.Background(), types.AgentRun{ID: uuid.New()},
 		&awsCLIDispatch{ComponentID: cliAWSID, AWS: *cliAWSRow()}, &policy, env, nil)
 	if ok || len(injections) != 0 || len(mitm) != 0 {
 		t.Fatalf("dispatch with the switch off = (%v, %v, %t), want a refusal", injections, mitm, ok)
@@ -175,7 +175,7 @@ func TestAWSCLI_WithBedrockSignInRefused(t *testing.T) {
 	st := &cliRefuseStore{}
 	s := &Server{cfg: Config{Store: st, Audit: &recRecorder{}, AWSSSOProxyInject: true, Now: time.Now}}
 	env := map[string]string{awsSSOConfigEnvVar: "bedrock's"}
-	if _, _, ok := s.authorAWSCLI(context.Background(), types.AgentRun{ID: uuid.New()},
+	if _, _, _, ok := s.authorAWSCLI(context.Background(), types.AgentRun{ID: uuid.New()},
 		&awsCLIDispatch{ComponentID: cliAWSID, AWS: *cliAWSRow()}, &types.RunPolicySpec{}, env, nil); ok || st.failed != 1 {
 		t.Fatalf("ok = %t, failed = %d; want a refusal", ok, st.failed)
 	}

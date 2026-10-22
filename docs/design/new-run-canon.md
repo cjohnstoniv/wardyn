@@ -9,7 +9,7 @@ Every string the New Run flow shows lives once in this file and once in the lazy
 | Approved mock | The owner-approved New Run mock: Start, the Guided steps, the run document editor, Review, Save as, Name and Launched. |
 | Tools and access prototype | The approved step 5 prototype. |
 | Templates prototype | The approved Templates screen prototype. |
-| Deviation tables | The owner-approved changes to the mock's wording: the Files wording W1-W5, the placement wording package, the harness and scheduling copy, the run document format, the pool words (organization and user pools; self-hosted and remote-hosted runners). |
+| Deviation tables | The owner-approved changes to the mock's wording: the Files wording W1-W5, the placement wording package, the harness and scheduling copy, the run document format, the pool words (organization and user pools; self-hosted and remote-hosted runners), and the FEAT-2 boards (F2SCHED-1 to -3, approved 2026-10-20), whose "Copy not on today's console" boxes are the source of the start-time rows. |
 | Pending wording | The recommended text for each new wording row, behind one constant until the owner answers. |
 
 ## 2. Behaviour summary
@@ -17,7 +17,7 @@ Every string the New Run flow shows lives once in this file and once in the lazy
 | Area | Rule |
 |---|---|
 | Steps | Shape, Run, Harnesses, Files, Tools and access, then Review. The eyebrow reads "Guided setup · N of 5". |
-| Start | Three paths meet at Review: AI composer (Coming soon), Guided setup, and the YAML or JSON run document. |
+| Start | Two paths meet at Review: Guided setup, and the YAML or JSON run document. One muted roadmap line names what is not built, with no version number. |
 | Template and Run again | Choosing one loads the saved setup and opens Review. Anything missing is a blocker that links to its step. |
 | Review | Blockers come first: local issues, unsupported document fields, template setup items, the server refusal, missing setup items, then a stale check. Launch stays shut until a check under 60 seconds old matches the draft. |
 | Name dialog | Opening it runs a fresh check. "Checked just now" shows only from that result; "Checking…" shows while it runs. A check that fails or is rate-limited leaves Launch available, since the create is the authority. |
@@ -43,6 +43,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 - `NR_TOOLS.PROVIDER_PROXY` shows only when the provider credential's delivery is `proxy`: key, token and subscription kinds. A provider whose delivery is `sandbox_short_lived` (Bedrock SSO, whose role credentials sit in the sandbox) shows `NR_TOOLS.DELIVERY_SHORT_LIVED` and `NR_TOOLS.DELIVERY_AWS` instead.
 - `NR_SHARED.CONTINUE_TO` writes the step name in lower case ("Continue to harnesses", "Continue to files": Make `App.tsx`:1928, 2144). Every Guided step's primary button, `NR_SHARED.CONTINUE` and the document's `NR_DOCUMENT.CONTINUE_REVIEW` end in an arrow shown to sight only (Make `App.tsx`:1293, 1928, 2144, 2577, 2695); `NR_REVIEW.LAUNCH_RUN` has none.
 - `NR_LAUNCH.CANCEL_RUN` opens the console's kill confirm before it cancels the waiting run; the confirm's own strings are the shared kill dialog's. Deviation (owner 2026-10-13: keep the Cancel-run confirm); Make cancels at once (`App.tsx`:3335-3343).
+- `NR_RUN.START_DATE`, `NR_RUN.START_TIME`, `NR_RUN.START_ZONE` and `NR_RUN.START_HELP(n)` open under "Schedule for later" only when the setup status carries `features.scheduled_runs`; with it off or absent "Schedule for later" keeps its `NR_SHARED.COMING_SOON` and the Review and Name rows say nothing of a start. Only an Autonomous run can be scheduled. `{when}` reads "Wed 21 Oct, 02:00 (UTC)": the start in the zone it was given in, with that zone's name. `{n}` is the whole days in 7 days less the run type's lead wait (6 for an Autonomous run), read as "1 day" when it is one. The time zone starts at the browser's. No Repeat choice: that is 0.10.x (FEAT-2 board F2SCHED-1).
 - `NR_TOOLS.EFFECT_ALLOW` is both the default option and a rule effect ("Run it" stays, per the tool-rule ruling): offered when the policy allows it, otherwise disabled with the server's reason.
 
 ## 4. Never shown
@@ -54,6 +55,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | A "(team)" suffix on a model provider | Providers show their record names. |
 | "Platform team" as an approver | No team routing exists. An approval sentence says "An admin decides each new host." |
 | "Custom harness" as a literal row | The harness roster comes from the server. |
+| "Available now" on the two application cards (the mock's `APP_AUTOMATION_META`) | Deviation (#3045: both kinds available; no availability meta). |
 | The mock's interactive "kept until its 72-hour maximum lifetime" line and "the main drive is kept until its lifetime ends" | False for runners that keep a drive for a grace period only. |
 
 ## 7. Frozen strings
@@ -65,9 +67,6 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `EYEBROW` | mock | Launch a governed workload |
 | `TITLE` | mock | New run |
 | `LEDE` | mock | Choose how you want to shape this run. Every path creates the same draft and meets again at review. |
-| `AI_TITLE` | mock | AI composer |
-| `AI_BODY` | mock | Create policies, sandboxes and runs with an agent's help. |
-| `AI_FOOT` | mock | Describe what you need |
 | `GUIDED_TITLE` | mock | Guided setup |
 | `GUIDED_BADGE` | mock | Fastest |
 | `GUIDED_BODY` | mock | Answer a few plain questions. Your organisation's defaults take care of the rest. |
@@ -78,6 +77,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `DOC_YAML` | mock | YAML |
 | `DOC_JSON` | mock | JSON |
 | `TRUST_LINE` | mock | Policy and availability are checked again when you launch. |
+| `ROADMAP` | mock | On the roadmap: scheduled runs and multi-agent runs. |
 
 ### 7.2 Shape
 
@@ -101,13 +101,13 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `AGAIN_LOADING` | deviation (lead wording 2026-10-17, FUG-L771) | Loading previous runs… |
 | `AGENT_TITLE` | mock | Agent task |
 | `AGENT_BODY` | mock | A one-time coding task, driven by you or running autonomously. |
-| `AGENT_SUB` | mock | Interactive · Autonomous · Repeat / schedule coming soon |
+| `AGENT_SUB` | mock | Interactive · Autonomous |
 | `ENV_TITLE` | mock | Environment sandbox |
 | `ENV_BODY` | mock | A reusable workspace for development, analysis or investigation. |
 | `ENV_SUB` | pending (A18) | Interactive · Your drive is attached when you have one |
 | `APP_TITLE` | mock | Application sandbox |
 | `APP_BODY` | mock | Run a sandboxed command, automation or script on its own. |
-| `APP_SUB` | mock | Automation / script · Application / server coming soon |
+| `APP_SUB` | mock | Automation / script · Application / server |
 
 ### 7.3 Run
 
@@ -116,6 +116,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `TITLE_AGENT` | mock | Choose how and where it runs |
 | `TITLE_ENV` | mock | Choose where the environment runs |
 | `TITLE_APP` | mock | Choose where the automation runs |
+| `TITLE_APP_SERVER` | mock | Choose where the application runs |
 | `LEDE_ORG` | pending (W-05) | Your organisation's defaults are selected. |
 | `LEDE_PERSONAL` | pending (W-05) | Your defaults are selected. |
 | `LEDE_NONE` | pending (W-05) | Choose where it runs. |
@@ -129,12 +130,40 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `TIMING_NOW_BODY` | mock | Start as soon as you launch the run. |
 | `TIMING_LATER` | mock | Schedule for later |
 | `TIMING_LATER_BODY` | mock | Choose a future date and time for this run to start. |
+| `START_DATE` | deviation (FEAT-2 board F2SCHED-1) | Date |
+| `START_TIME` | deviation (FEAT-2 board F2SCHED-1) | Time |
+| `START_ZONE` | deviation (FEAT-2 board F2SCHED-1) | Time zone |
+| `START_HELP(n)` | deviation (computed from the server's lead wait; overseer ruling 2026-10-21) | Up to {n} days ahead. Policy and your access are checked again when it starts. |
+| `START_MISSING` | deviation (FEAT-2 board F2SCHED-1) | Choose a date and time. |
+| `START_PAST` | deviation (FEAT-2 board F2SCHED-1) | Choose a time in the future. |
+| `START_FAR(n)` | deviation (computed from the server's lead wait; overseer ruling 2026-10-21) | Choose a time up to {n} days ahead. |
+| `STARTS(when)` | deviation (FEAT-2 board F2SCHED-1) | Starts {when} |
 | `APP_LABEL` | mock | What should run? |
 | `APP_AUTOMATION` | mock | Automation / script |
 | `APP_AUTOMATION_BODY` | mock | A command or job that runs on its own. |
-| `APP_AUTOMATION_META` | mock | Available now |
 | `APP_SERVER` | mock | Application / server |
-| `APP_SERVER_BODY` | mock | App servers and MCP servers. |
+| `APP_SERVER_BODY` | mock | A web app, API or dev server you open in your browser. |
+| `START_COMMAND_LABEL` | mock | Start command |
+| `START_COMMAND_HELP` | mock | Run verbatim in the sandbox when it starts. The run keeps going until you end it or it reaches its lifetime limit. |
+| `PORTS_LABEL` | mock | Ports |
+| `PORTS_HELP` | mock | Each port opens from the run page through Wardyn's web app gateway. Only people who may enter this run can open it. |
+| `PORT_COL_NAME` | mock | Name |
+| `PORT_COL_PORT` | mock | Port |
+| `PORT_COL_PATH` | mock | Path |
+| `PORT_ADD` | mock | Add a port |
+| `PORTS_FULL` | mock | A run can open up to 8 ports. |
+| `PORT_INVALID` | mock | Enter a port from 1 to 65535. |
+| `PORT_DUPLICATE(port)` | mock | Two apps can't share port {port}. |
+| `PORT_REQUIRED` | deviation (lead wording 2026-10-20, FEAT-1APP-UI) | An application needs at least one port to open. |
+| `APP_NAME_DUPLICATE(name)` | deviation (lead wording 2026-10-20, APP-UI-2) | Two applications are named {name}. Give each its own name. |
+| `APP_NAME_INVALID` | deviation (lead wording 2026-10-20, APP-UI-2) | Use lower-case letters, numbers and dashes, up to 32 characters, starting and ending with a letter or number. |
+| `APP_PATH_INVALID` | deviation (lead wording 2026-10-20, APP-UI-2) | Start the path with a single /, with no host and no "..". |
+| `APP_ROW(n)` | deviation (lead wording 2026-10-20, APP-UI-2) | row {n} |
+| `APP_NAME_ARIA(n)` | deviation (lead wording 2026-10-20, APP-UI-2) | Name for row {n} |
+| `APP_PORT_ARIA(who)` | deviation (lead wording 2026-10-20, APP-UI-2) | Port for {who} |
+| `APP_PATH_ARIA(who)` | deviation (lead wording 2026-10-20, APP-UI-2) | Path for {who} |
+| `APP_REMOVE_ARIA(who)` | deviation (lead wording 2026-10-20, APP-UI-2) | Remove {who} |
+| `APP_TERMINAL_NOTE` | mock | The sandbox also has a terminal, as an Environment sandbox does. |
 | `COMMAND_LABEL` | mock | Command |
 | `COMMAND_HELP` | mock | Run verbatim in the sandbox. The run ends when the command exits. |
 | `COMMAND_REQUIRED` | deviation (lead wording 2026-10-17, FR-0099) | A command run needs a command to run. |
@@ -245,7 +274,8 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `TITLE` | mock | Choose the harnesses |
 | `LEDE_OPTIONAL` | mock | Harnesses are optional for this workload. Add one only when the sandbox should include an agent tool. |
 | `LEDE_INTERACTIVE` | mock | Add one or more harnesses. At most one can start with the run and receive an optional starting prompt. |
-| `LEDE_AUTONOMOUS` | deviation (DS-1 truthful copy) | An agent runs on its own, with no SSH or terminal. |
+| `LEDE_AUTONOMOUS` | mock | Pick the agent and give it its task. |
+| `LEDE_AUTONOMOUS_MULTI` | mock | Each agent works on its own task, side by side in one sandbox, with no SSH or terminal. |
 | `EMPTY_TITLE` | mock | No harnesses added |
 | `EMPTY_BODY` | mock | This workload can continue without one. |
 | `LOADING` | deviation (lead wording 2026-10-18, #2861) | Loading harnesses… |
@@ -267,6 +297,8 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `TASK_PLACEHOLDER` | mock | What should this agent accomplish? |
 | `TASK_HELP` | mock | This harness starts automatically when it has a task. |
 | `TASK_ERROR` | mock | An autonomous run needs at least one task to perform. |
+| `AGENT_TASK_ERROR` | mock | Give this agent a task, or remove it. |
+| `MULTI_NOTE` | mock | The agents share this sandbox, its files and your model sign-ins. Every agent's rules apply to all of them, so adding an agent can only narrow what the run may do. The run ends when every agent has finished; it fails if any agent fails. |
 | `HARNESS_REQUIRED` | deviation (lead wording 2026-10-17, FR-0099) | A run needs at least one harness. |
 | `ADD_HARNESS` | mock | Add a harness |
 | `ADD_ANOTHER` | mock | Add another harness |
@@ -328,13 +360,14 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `FAMILY_HOST_FOLDER` | deviation (DS-3 W5) | Host folder |
 | `FAMILY_CLUSTER_VOLUME` | deviation (DS-3 W5) | Cluster volume |
 | `ACCESS_EDIT` | mock | Can edit |
+| `SHARED_WITH(groups)` | mock | Shared with: {groups} |
+| `TEAM_OTHERS_SEE` | mock | Others in this group see what your runs write here. |
 | `ACCESS_READ` | mock | Read-only |
 | `ACCESS_ARIA(name)` | mock | Access for {name} |
 | `LOCKED_ARIA` | mock | Why this drive is read-only |
 | `LOCKED_TIP` | mock | Set by your admin |
 | `NOT_IN_POOL` | mock | Not available in this pool's runners. |
 | `CREATE_USER_DRIVE` | mock | + Create user drive |
-| `CREATE_SHARED_DRIVE` | mock | + Create shared drive |
 | `MANAGE_DRIVES` | mock | Manage drives → |
 | `CREATE_DISABLED` | pending (W-17) | Your organisation doesn't let people create drives. Ask an admin. |
 | `CREATE_DENIED(profile)` | pending (W-17) | Not allowed by {profile}. |
@@ -352,7 +385,38 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `DRIVE_CREATED(name)` | mock | {name} created and added to this run. |
 | `COMPUTER_TITLE` | mock | Your computer |
 | `COMPUTER_BODY` | mock | Folders on your laptop, desktop or VDI. |
-| `COMPUTER_SOON` | mock | A sandbox can't use folders on your computer yet. |
+| `COMPUTER_BLOCKED` | mock | Your organisation doesn't allow folders from personal computers. |
+| `COMPUTER_NO_RUNNER` | mock | No runner on your computer yet. |
+| `COMPUTER_NO_RUNNER_BODY` | mock | A runner connects out to Wardyn and shares only the folders you pick. Nothing connects in to your computer. |
+| `COMPUTER_SET_UP` | mock | Set up a runner |
+| `COMPUTER_NOT_NOW` | mock | Not now |
+| `COMPUTER_OFFLINE` | mock | Runner offline |
+| `COMPUTER_LAST_SEEN(name, when)` | mock | {name} · last seen {when} |
+| `COMPUTER_OFFLINE_BODY(name)` | mock | Start the runner on {name}, then try again. A run that uses this folder can't start until it is back. |
+| `COMPUTER_LABEL` | mock | Computer |
+| `COMPUTER_OPEN(name)` | deviation (lead 2026-10-19: the folder browser's open control needs a name) | Open {name} |
+| `COMPUTER_COL_NAME` | mock | Name |
+| `COMPUTER_COL_FILES` | mock | Files |
+| `COMPUTER_COL_SIZE` | mock | Size |
+| `COMPUTER_WILL_SEE` | mock | The sandbox will see |
+| `COMPUTER_GITIGNORE` | mock | Leave out what .gitignore lists |
+| `COMPUTER_BROWSE_NOTE` | mock | Only folder names and sizes reach Wardyn while you browse. No file is sent until the run starts. |
+| `COMPUTER_NEXT` | mock | Next |
+| `COMPUTER_FROM` | mock | From |
+| `COMPUTER_ON(name)` | mock | on {name} |
+| `COMPUTER_ONLINE` | mock | Runner online |
+| `COMPUTER_CHANGES` | mock | Changes |
+| `COMPUTER_BOTH` | mock | Both ways |
+| `COMPUTER_COPY_IN` | mock | Copy in only |
+| `COMPUTER_BOTH_BODY` | deviation (owner ruling M4 2026-10-19: one side edits at a time) | Edits in the sandbox come back to your computer when the run ends. |
+| `COMPUTER_COPY_IN_BODY` | mock | A copy from your computer. Changes stay in the sandbox. |
+| `COMPUTER_SEES` | mock | The sandbox sees |
+| `COMPUTER_COUNT(files, size)` | mock | {files} files · {size} |
+| `COMPUTER_LEFT_OUT` | mock | Left out |
+| `COMPUTER_IGNORED(count)` | mock | {count} paths in .gitignore |
+| `COMPUTER_CHANGE` | mock | Change |
+| `COMPUTER_FIRST_SYNC` | mock | First sync |
+| `COMPUTER_FIRST_SYNC_BODY` | mock | Starts when you launch. The run waits until it finishes. |
 | `NO_EXTRA` | mock | No extra files — only the main drive |
 | `NO_EXTRA_DELETED` | mock | Only the main drive. Nothing from this run is kept. |
 | `NO_EXTRA_KEPT(grace)` | pending (W-12) | Only the main drive. It is deleted {grace} after the run's end time. |
@@ -372,6 +436,20 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `SUMMARY_KEPT(grace)` | pending (W-12) | the main drive is kept {grace} after its end time |
 | `SUMMARY_NO_END` | pending (W-12) | the main drive is kept until you end the run |
 | `SUMMARY_NO_EXTRA(size, life)` | mock | Main drive {size} · no extra files · {life}. |
+| `KEEP_WHAT` | mock | Keeps the work folder, /home/agent/work, as your own drive named after this run. Your home folder, harness settings and /tmp are not kept. |
+| `KEEP_WARNING` | mock | Anything an agent leaves in the folder comes back in the next run that uses it, including files you didn't ask for. Check it before you reuse it. |
+| `KEEP_COUNTS(n, limit)` | mock | Counts toward your drives. You have {n} of {limit} drives. Kept until you delete it. |
+| `KEEP_UNENFORCED` | mock | On this runner its size is not enforced. |
+| `KEEP_LIFE` | mock | The work folder is kept as a drive. The rest is deleted when the run ends. |
+| `KEEP_SUMMARY` | mock | the work folder is kept as a drive after the run |
+| `KEEP_STARTS_MAIN` | mock | the main drive |
+| `KEEP_LIMIT(n, limit)` | mock | You have {n} of {limit} drives. Delete one to keep this run's work folder. |
+| `KEEP_DISABLED` | deviation (lead wording 2026-10-20, #1991) | Your organisation doesn't let runs keep their work folder as a drive. Ask an admin. |
+| `KEEP_LIMIT_HINT` | mock | Or untick “Reuse it across runs” to launch without keeping it. |
+| `DRIVE_KEPT_FROM(run)` | mock | From run {run} · Kept until you delete it. |
+| `DRIVE_KEPT_FROM_UNTITLED` | deviation (lead wording 2026-10-20, #1991) | From an earlier run · Kept until you delete it. |
+| `DRIVE_SIZE_NOT_ENFORCED` | mock | Size not enforced |
+| `DRIVE_SIZE_NOT_ENFORCED_TIP` | mock | A Docker volume has no size cap. |
 | `ATTACH_TITLE` | deviation (owner-approved Files prototype 2026-10-13) | Repositories, drives and folders |
 | `ATTACH_BODY` | deviation (owner-approved Files prototype 2026-10-13) | Each one appears in the sandbox at its mount path. |
 | `ADD` | deviation (owner-approved Files prototype 2026-10-13) | + Add |
@@ -475,6 +553,28 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `DETAIL_NOTE` | mock | Note |
 | `DETAIL_NONE` | mock | None |
 | `DETAIL_MCP_BODY` | mock | Turn it on for a harness under Harness setup. |
+| `BRINGS_FOR(name)` | mock | What {name} brings |
+| `DETAIL_FILES` | mock | Files and drives |
+| `DETAIL_OTHER` | mock | Other |
+| `DETAIL_WHERE` | mock | Where it runs |
+| `MORE(n)` | mock | +{n} more |
+| `MCP_REMOTE` | mock | Remote (HTTPS) |
+| `GITHUB_APP` | mock | Wardyn GitHub App |
+| `GITHUB_REPOS(repos)` | mock | This run's repositories: {repos} |
+| `GITHUB_REPOS_LABEL` | mock | This run's repositories: |
+| `KUBE_CREDENTIAL(cluster)` | mock | {cluster} service account |
+| `KUBE_CREDENTIAL_NOTE` | mock | Acts as the service account your organisation set for this cluster, not as you. The cluster's audit log names that account. |
+| `KUBE_NAMESPACES(namespaces)` | mock | Namespaces: {namespaces} |
+| `KUBE_READ_ONLY` | mock | Read only |
+| `KUBE_READ_WRITE` | mock | Read and write |
+| `KUBE_NO_EXEC` | mock | No exec |
+| `KUBE_CLUSTER` | mock | Cluster |
+| `KUBE_NAMESPACES_LABEL` | mock | Namespaces |
+| `KUBE_ACCESS` | mock | Access |
+| `KUBE_EXEC` | mock | Exec |
+| `KUBE_READ_DETAIL` | mock | Read only: get, list and watch. |
+| `KUBE_WRITE_DETAIL` | mock | Read and write: also create, update, patch and delete. |
+| `KUBE_EXEC_DETAIL` | mock | Exec, attach and port-forward aren't allowed. |
 | `IMAGE_NO` | pending (W-34) | Not in this sandbox's image. The access still works if the tool is installed another way. |
 | `IMAGE_UNKNOWN` | pending (W-34) | Wardyn can't tell whether this sandbox's image has it. |
 | `NO_HARNESSES` | mock | No harnesses in this run. Add one on the Harnesses step if the sandbox should include an agent tool. |
@@ -491,8 +591,8 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `DEFAULT_HELP_OPERATOR` | pending (W-30) | Ask first holds the call until you or another admin approves it. |
 | `DEFAULT_HELP_ATTENDED` | pending (W-30) | Ask first: Claude Code asks you in the terminal before it runs the tool. |
 | `PROFILE_REQUIRES(profile)` | pending (W-30) | {profile} requires Ask first or stricter for tools with no rule. |
-| `CODEX_HOLD_TIP` | mock | Codex CLI can't pause a tool call for approval. |
-| `CODEX_NOTE` | pending (W-32) | Codex CLI can't pause a tool call for approval, and Wardyn can't block its own tools. Rules for its MCP tools are enforced by the proxy. |
+| `CODEX_NOTE` | pending (W-32) | Rules for Codex CLI's MCP tools are enforced by the proxy. |
+| `CODEX_NOTE_REMOTE` | mock | Rules for Codex CLI's remote MCP tools are enforced by the proxy. |
 | `RULES_LABEL` | mock | Tool rules |
 | `ROW_LOCKED` | deviation (lead wording 2026-10-17, FUG-L771) | Set by your organisation's policy |
 | `ADD_RULE` | mock | Add a tool rule |
@@ -557,6 +657,25 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `MCP_NO_TOKEN` | mock | No token |
 | `MCP_LOCAL_SOON` | mock | Servers that run inside the sandbox (a local command) are Coming soon. |
 | `MCP_ERR_URL` | mock | Enter the server URL. |
+| `MCP_CARD_BODY_LOCAL` | mock | Connect a remote MCP server by URL, or start one in a sandbox. A remote server's token stays with the proxy. |
+| `MCP_TAB_LOCAL` | mock | Runs in a sandbox |
+| `MCP_WHERE_RUN` | mock | This run's sandbox |
+| `MCP_WHERE_RUN_HINT` | mock | A server Wardyn starts as a command inside this run's sandbox. It runs with the agent's access: anything the agent can read or reach, the server can too, and the agent can use the server's secrets. |
+| `MCP_WHERE_OWN` | mock | Its own sandbox |
+| `MCP_WHERE_OWN_HINT` | mock | Runs the server in a sandbox of its own, apart from the agent, with its own access. |
+| `MCP_LOCAL_NAME_PLACEHOLDER` | mock | e.g. docs-search |
+| `MCP_COMMAND_HELP` | mock | The command and its arguments, started in the sandbox and spoken to over stdio. Pin the package version, for example @1.4.2. |
+| `MCP_ERR_COMMAND` | mock | Enter the command. |
+| `MCP_ERR_PIN` | mock | Pin the package version, for example @example/mcp-server@1.4.2. |
+| `MCP_ERR_PROGRAM(command)` | deviation (lead 2026-10-20: the server's own sentence, validateLocal) | "{command}" must be npx or the absolute path of a program in the image. |
+| `MCP_ERR_NPX_FLAG` | deviation (lead 2026-10-20: the server's own sentence, validateLocal) | npx takes only -y before the package here; name the package as its first argument. |
+| `MCP_HOSTS_PLACEHOLDER` | mock | e.g. api.example.com |
+| `MCP_HOSTS_HELP` | mock | The hosts the server reaches. Your organisation's ceiling still applies. |
+| `MCP_DELIVERY_NOTE` | mock | A request header is added by the proxy and never enters the sandbox. An environment variable or a file is placed in the sandbox. |
+| `MCP_HARNESS_RULES` | mock | Rules for this server's tools are applied by the harness, not by Wardyn's proxy. |
+| `MCP_RUNS_HERE` | mock | Runs in this run's sandbox |
+| `MCP_SANDBOX_READABLE` | mock | Any process in the sandbox can read it, the agent included. |
+| `MCP_REFUSED(harness, server)` | mock | {harness} can't apply rules for {server}'s tools, so this run would be refused. Turn {server} off for {harness}, or remove its rules for {harness}. |
 | `CC_INTRO` | mock | Bundle the hosts and secrets one tool needs, so you can reuse it. Saved components appear under Add tools and access next time. |
 | `CC_NAME` | mock | Name |
 | `CC_NAME_PLACEHOLDER` | mock | e.g. Billing service API |
@@ -687,9 +806,11 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `SETUP_AGENT_AUTONOMOUS` | mock | Autonomous agent task |
 | `SETUP_AGENT_INTERACTIVE` | mock | Interactive agent task |
 | `SETUP_APPLICATION` | mock | Background automation |
+| `SETUP_APPLICATION_SERVER` | mock | Application server |
 | `SETUP_ENVIRONMENT` | mock | Interactive environment |
 | `BADGE_ATTENTION` | mock | Needs attention |
 | `BADGE_COMPLETE` | mock | Complete |
+| `BADGE_CHECK` | mock | Check needed |
 | `GROUP_RUN` | mock | Run and timing |
 | `GROUP_WHERE` | mock | Where it runs |
 | `GROUP_WORK` | mock | What it works on |
@@ -700,9 +821,17 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `VALUE_APPLICATION` | mock | Application sandbox |
 | `VALUE_ENVIRONMENT` | mock | Environment sandbox |
 | `TIMING_APPLICATION` | mock | Background automation · Runs when launched |
+| `TIMING_APPLICATION_SERVER` | mock | Application server · Starts when launched |
+| `APP_PORT(port)` | mock | Port {port} |
+| `APP_OPENS(path)` | mock | {path} · Opens through the web app gateway |
+| `BLOCKER_GATEWAY_OFF` | mock | The web app gateway is off on this server, so this run's apps can't be opened. Ask your admin to turn it on. |
 | `TIMING_INTERACTIVE` | mock | Interactive · Starts when launched |
 | `TIMING_NOW` | mock | Autonomous · Run now |
+| `TIMING_STARTS(when)` | deviation (FEAT-2 board F2SCHED-1) | Autonomous · Starts {when} |
+| `TIMING_CHOOSE` | deviation (derived from board F2SCHED-1's logic, not its copy box; approved 2026-10-20) | Autonomous · Choose a start time |
+| `TIMING_CHECKED` | deviation (FEAT-2 board F2SCHED-1) | Checked again when it starts. |
 | `WHERE_VALUE(pool)` | mock | {pool} pool |
+| `WHERE_NONE` | mock | No pool chosen yet |
 | `WHERE_DETAIL(kind, used, max)` | deviation (pool words) | {kind} · {used} of {max} running |
 | `WHERE_ONLINE(n)` | pending (W-03) | {n} of your runners online |
 | `PROV_ADDED` | mock | Added by you |
@@ -716,6 +845,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `WORK_ITEMS(n)` | mock | {n} items attached |
 | `MAIN_DRIVE(size)` | mock | Main drive · {size} |
 | `NO_HARNESSES` | mock | No harnesses |
+| `TOOLS_START_COMMAND` | mock | Start command · no harness |
 | `TOOLS_COMMAND_ONE` | mock | Command · 1 optional harness |
 | `TOOLS_COMMAND(n)` | mock | Command · {n} optional harnesses |
 | `TOOLS_NONE` | mock | Optional · none added |
@@ -768,6 +898,9 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `POLICY_ACCEPTS_EDITS` | deviation (qualified for tools no rule names, #2428; proposed wording awaiting approval) | For tools without a named rule, Claude Code accepts file edits without asking and asks before other tools. Named rules still apply. |
 | `POLICY_AUTOMATIC` | mock | Run automatically |
 | `POLICY_TOOLS_OF(harness, effect)` | mock | {harness}: {effect} |
+| `POLICY_IN_SANDBOX(secret, server)` | mock | In the sandbox: {secret} for {server} |
+| `POLICY_IN_SANDBOX_UNNAMED(server)` | deviation (lead wording, cleared by the overseer 2026-10-20, FEAT-1MCP-UI) | In the sandbox: a secret for {server} |
+| `POLICY_HARNESS_RULES(server)` | mock | {server}: rules applied by the harness |
 | `INNER_WALLS(sandbox, approvals)` | deviation (approved 2026-10-19, overseer, #2822) | Harness walls: {sandbox}, {approvals} |
 | `INNER_SANDBOX_OFF` | deviation (approved 2026-10-19, overseer, #2822) | harness sandbox off |
 | `INNER_SANDBOX_OWN` | deviation (approved 2026-10-19, overseer, #2822) | the harness's own sandbox |
@@ -863,7 +996,6 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 
 | Key | Source | Frozen string |
 |---|---|---|
-| `EYEBROW` | mock | Saved starting points |
 | `TITLE` | mock | Templates |
 | `LEDE` | mock | Start a new run from a saved setup. Using a template opens New run at review, where your organization's current policy and availability are checked again. A template never stores a run's title. |
 | `NEW_FROM_SCRATCH` | mock | New run from scratch |

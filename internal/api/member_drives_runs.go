@@ -65,6 +65,9 @@ func (s *Server) memberDriveCreateState(r *http.Request) *client.MemberDriveCrea
 		return nil
 	}
 	out := &client.MemberDriveCreate{}
+	if provider, err := s.userDriveProvider(ctx); err == nil && provider.MemberCreate != nil {
+		out.KeepWorkFolder = provider.MemberCreate.KeepMainDrive
+	}
 	ms, ok := s.cfg.Store.(store.MemberDriveStore)
 	if !ok {
 		out.Reason = client.MemberDriveCreateUnsupported
@@ -76,19 +79,19 @@ func (s *Server) memberDriveCreateState(r *http.Request) *client.MemberDriveCrea
 		return out
 	}
 	out.Count = len(mine)
-	_, policy, refusal := s.memberDriveCreateDoors(r)
+	row, policy, refusal := s.memberDriveCreateDoors(r)
 	out.Limit = policy.MaxPerPerson
 	switch {
 	case refusal == nil && out.Count >= out.Limit:
 		out.Reason = client.MemberDriveCreateLimitReached
 	case refusal == nil:
-		out.Allowed = true
+		out.Allowed, out.Enforcement = true, types.EnforcementFor(row.Backend)
 	case refusal.body.Reason == reasonMemberDrivesDisabled:
 		out.Reason = client.MemberDriveCreateDisabled
-	case refusal.body.Reason == reasonMemberDrivesDeniedByProfile:
-		out.Reason = client.MemberDriveCreateDeniedByProfile
-		if c, err := s.effectiveCeiling(ctx); err == nil && c.Profile != nil {
-			out.DeniedByProfile = c.Profile.Name
+	case refusal.body.Reason == reasonMemberDrivesDeniedByUnit:
+		out.Reason = client.MemberDriveCreateDeniedByUnit
+		if c, err := s.effectiveCeiling(ctx); err == nil && c.Unit != nil {
+			out.DeniedByUnit = c.Unit.Name
 		}
 	case refusal.body.Reason == reasonMemberDriveUnsupported:
 		out.Reason = client.MemberDriveCreateUnsupported

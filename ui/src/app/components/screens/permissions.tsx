@@ -52,6 +52,7 @@ import { Field, Switch } from "../wardyn/form-primitives";
 import { Mono } from "../wardyn/code-block";
 import { SubmittedNote } from "./governance/submitted-note";
 import { PageHeader } from "../wardyn/page-header";
+import { PageContainer } from "../wardyn/page-container";
 import { PreviewAsNewUser } from "../wardyn/user-preview";
 import { DefineOwnComponentsRow } from "./components/define-own-row";
 import { SelfHostRunnerRow } from "./self-host-runner-row";
@@ -215,6 +216,7 @@ export function PermissionsScreen() {
   // to retry.
   const [status, setStatus] = React.useState<ScreenStatus>("loading");
   const [confirm, setConfirm] = React.useState<{ kind: CapabilityKind; next: boolean } | null>(null);
+  const [presetKind, setPresetKind] = React.useState<CapabilityKind | undefined>(undefined);
   const [toRemove, setToRemove] = React.useState<CapabilityGrant | null>(null);
   const [busy, setBusy] = React.useState(false);
   // A write the server held for a second person (202): nothing has changed yet.
@@ -289,13 +291,8 @@ export function PermissionsScreen() {
   const nothingEnforced = !!snap && CAPABILITY_KINDS.every((k) => !snap.enforcement[k]);
 
   return (
-    <div className="mx-auto max-w-[1120px] px-6 py-6">
+    <PageContainer width="list">
       <PageHeader title={PERM.TITLE} description={PERM.LEAD} actions={<PreviewAsNewUser />} />
-
-      <div className="space-y-2">
-        <Fact icon={ShieldCheck}>{PERM.DOCTRINE}</Fact>
-        <Fact icon={Info}>{PERM.EXEMPT}</Fact>
-      </div>
 
       {submitted && <SubmittedNote />}
 
@@ -329,6 +326,10 @@ export function PermissionsScreen() {
                   grants={grantsFor(kind)}
                   disabled={!securityOperator}
                   onToggle={(next) => setConfirm({ kind, next })}
+                  onAddGrant={() => {
+                    setPresetKind(kind);
+                    document.getElementById("permissions-add-grant")?.scrollIntoView({ block: "center" });
+                  }}
                 />
               ))}
               {/* The `custom_component` feature value: default on, so its switch is "no deny row". */}
@@ -362,6 +363,15 @@ export function PermissionsScreen() {
           )}
         </div>
       </section>
+
+      {/* The doctrine is the most common misread of the feature, so it stays one click away right under the rows. */}
+      <details data-testid="how-permissions-work" className="mt-2 rounded-xl border border-border bg-card px-6 py-3">
+        <summary className="cursor-pointer text-body text-foreground">{PERM.HOW_TITLE}</summary>
+        <div className="mt-3 space-y-2">
+          <Fact icon={ShieldCheck}>{PERM.DOCTRINE}</Fact>
+          <Fact icon={Info}>{PERM.EXEMPT}</Fact>
+        </div>
+      </details>
 
       <section className="mt-6 overflow-hidden rounded-xl border border-border bg-card">
         <div className="px-6 pt-5">
@@ -452,11 +462,14 @@ export function PermissionsScreen() {
           load();
         }}
         onSubmitted={load}
+        presetKind={presetKind}
       />
 
       <section className="mt-6 rounded-xl border border-border bg-card px-6 py-5">
         <h2 className="text-sm font-medium text-foreground">{PERM.SNAPSHOT_TITLE}</h2>
-        <p className="mt-1 max-w-[80ch] text-body text-muted-foreground">{PERM.SNAPSHOT_BODY}</p>
+        <p className="mt-1 max-w-[80ch] text-body text-muted-foreground">
+          {PERM.SNAPSHOT_BODY} {PERM.SNAPSHOT_EFFECT}
+        </p>
       </section>
 
       <ConfirmEnforcement
@@ -491,7 +504,7 @@ export function PermissionsScreen() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </PageContainer>
   );
 }
 
@@ -504,26 +517,40 @@ function KindRow({
   grants,
   disabled,
   onToggle,
+  onAddGrant,
 }: {
   kind: CapabilityKind;
   enforced: boolean;
   grants: CapabilityGrant[];
   disabled: boolean;
   onToggle: (next: boolean) => void;
+  /** Jumps to the add form with this capability already chosen. */
+  onAddGrant: () => void;
 }) {
   const copy = KIND[kind];
   const hasDeny = grants.some((g) => g.effect === "deny");
   const hasAllow = grants.some((g) => g.effect === "allow");
   return (
-    <div className="grid grid-cols-[1fr_auto] items-start gap-4 border-t border-border px-6 py-4 first:border-t-0">
+    <div
+      data-testid={`capability-row-${kind}`}
+      className={cn(
+        "grid grid-cols-[1fr_auto] items-start gap-4 border-t border-border px-6 py-4 first:border-t-0",
+        !hasAllow && "bg-warning-subtle",
+      )}
+    >
       <div>
         <div className="flex flex-wrap items-center gap-2">
           <h3 className="text-body font-medium text-foreground">{copy.label}</h3>
-          <Chip tone={enforced ? "warning" : "neutral"} dot>
+          <Chip tone={enforced ? "success" : "neutral"} dot>
             {enforced ? PERM.CHIP_ON : PERM.CHIP_OFF}
           </Chip>
         </div>
         <p className="mt-0.5 text-xs text-muted-foreground">{copy.blurb}</p>
+        {/* Nothing granted (no allow grant; a deny-only list counts as none, as in the confirm dialog) is the risky
+            cell, so it says why in the row before the switch is touched. */}
+        <p className={cn("mt-1 text-body", !hasAllow ? "text-warning" : "text-foreground")}>
+          {hasAllow ? PERM.ROW_GRANTS(grants.length) : grants.length === 0 ? PERM.ROW_ZERO : PERM.ROW_DENY_ONLY(grants.length)}
+        </p>
         <p className={cn("mt-2 max-w-[76ch] text-body", enforced ? "text-foreground" : "text-muted-foreground")}>
           {enforced ? copy.enforced : copy.unenforced}
         </p>
@@ -534,12 +561,23 @@ function KindRow({
         {/* The dangerous cell: enforced with nothing granted. A widening kind was refused before the switch, so nothing changes there. */}
         {enforced && !hasAllow && copy.direction === "narrows" && <Note tone="red">{PERM.ENFORCE_ON_ZERO}</Note>}
       </div>
-      <Switch
-        checked={enforced}
-        disabled={disabled}
-        onChange={onToggle}
-        label={`${PERM.ENFORCEMENT_TITLE} ${copy.label}`}
-      />
+      <div className="flex items-center gap-3">
+        <Button
+          size="sm"
+          variant={grants.length === 0 ? "default" : "outline"}
+          disabled={disabled}
+          onClick={onAddGrant}
+          aria-label={`${PERM.ADD_CTA} ${copy.label}`}
+        >
+          {PERM.ADD_CTA}
+        </Button>
+        <Switch
+          checked={enforced}
+          disabled={disabled}
+          onChange={onToggle}
+          label={`${PERM.ENFORCEMENT_TITLE} ${copy.label}`}
+        />
+      </div>
     </div>
   );
 }
@@ -579,7 +617,9 @@ function ConfirmEnforcement({
               : PERM.ENFORCE_OFF_BODY}
           </AlertDialogDescription>
         </AlertDialogHeader>
-        {lockout && <Note tone="red">{PERM.ENFORCE_ON_ZERO}</Note>}
+        {lockout && (
+          <Note tone="red">{PERM.ENFORCE_ZERO_CONFIRM}</Note>
+        )}
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
           <AlertDialogAction
@@ -627,6 +667,7 @@ export function AddGrantForm({
   onSubmitted,
   fixed,
   hideTitle,
+  presetKind,
 }: {
   disabled: boolean;
   onAdded: () => void;
@@ -634,6 +675,8 @@ export function AddGrantForm({
   onSubmitted?: () => void;
   fixed?: FixedGrantSubject;
   hideTitle?: boolean;
+  /** A capability's own Add grant button chooses its kind here (ignored once `fixed`). */
+  presetKind?: CapabilityKind;
 }) {
   const [subjectType, setSubjectType] = React.useState<PickableSubjectType>(fixed?.subjectType ?? "user");
   const [subject, setSubject] = React.useState(fixed?.subject ?? "");
@@ -649,6 +692,10 @@ export function AddGrantForm({
   const [error, setError] = React.useState<string | null>(null);
   // The 202 branch: held for a second person, so not added, and said in the form the caller is looking at.
   const [submitted, setSubmitted] = React.useState(false);
+
+  React.useEffect(() => {
+    if (presetKind && !fixed) setKind(presetKind);
+  }, [presetKind, fixed]);
 
   const copy = KIND[kind];
   const whoHint = SUBJECTS.find((s) => s.value === subjectType)?.hint ?? "";
@@ -816,7 +863,7 @@ export function AddGrantForm({
 
   if (hideTitle) return body;
   return (
-    <section className="mt-6 rounded-xl border border-border bg-card px-6 py-5">
+    <section id="permissions-add-grant" className="mt-6 rounded-xl border border-border bg-card px-6 py-5">
       <h2 className="text-sm font-medium text-foreground">{PERM.ADD_TITLE}</h2>
       {body}
     </section>
@@ -825,15 +872,20 @@ export function AddGrantForm({
 
 // How many members the enforcement confirm says are about to be bounded.
 //
-// ponytail: this counts DISTINCT run creators on the newest page of the runs
-// list, minus the signed-in admin (exempt) and minus the admin-token machine
-// lane. It over-counts if another ADMIN has launched a run (the safe
-// direction) and cannot see a member who has never launched one. When the runs
-// page is truncated the count is not a count of anyone, so it is UNKNOWN.
-// Upgrade path: count GET /people (active, non-admin) instead.
-// `null` is UNKNOWN, not zero: listRuns() can be refused (403), fail or be
-// truncated, and a dialog that then reads "0 members are bounded" (or a short
-// count as fact) understates the lockout risk it exists to communicate.
+// ponytail: there is no member registry to count — Wardyn keeps no user table,
+// and OIDC identities exist only inside a session cookie. The console's one
+// durable record of who has used this deployment is the runs list, so this
+// counts DISTINCT run creators, minus the signed-in admin (exempt) and minus
+// the admin-token machine lane. Ceiling: it over-counts if another ADMIN has
+// launched a run (the safe direction — a louder warning), and it cannot see a
+// member who has never launched one. Upgrade path: a server-side principal
+// roster (or a count on GET /permissions), at which point this hook reads it
+// instead of deriving it.
+// `null` is UNKNOWN, not zero: listRuns() can be refused (403) or fail, and a
+// dialog that then reads "0 members are bounded" states the opposite of the
+// lockout risk it exists to communicate. It is also unknown when the server
+// cut the runs page short (X-Wardyn-Truncated): the creators in the newest
+// page are then only some of the members, and a number would under-count them.
 function useAffectedMemberCount(): number | null {
   const principal = usePrincipal();
   const [count, setCount] = React.useState<number | null>(null);
@@ -843,10 +895,7 @@ function useAffectedMemberCount(): number | null {
       .listRuns({ limit: LIST_LIMIT, offset: 0 })
       .then(({ runs: rs, truncated }) => {
         if (!live) return;
-        if (truncated) {
-          setCount(null);
-          return;
-        }
+        if (truncated) return setCount(null);
         const people = new Set(
           rs
             .map((r) => r.created_by)

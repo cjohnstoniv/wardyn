@@ -3,9 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { FORM_ACTIONS } from "../src/app/components/wardyn/copy/form-actions";
 import { randomBytes } from "node:crypto";
 import type { Page } from "@playwright/test";
-import { test, expect, asRealMember, consoleAPI, gotoConsole, navTo } from "./fixtures";
+import { test, expect, asRealMember, consoleAPI, gotoConsole, layoutSettled, navTo } from "./fixtures";
 import { POOLS, POOL_DRAWER, POOL_FORM, RUNNER_V6 } from "../src/app/components/wardyn/copy/runner-pools";
 import { MY_RUNNER, RUNNERS } from "../src/app/components/wardyn/copy/runners";
 import { entry, member, pool, remoteRunner } from "../src/app/components/screens/runners/pools/pool-test-fixtures";
@@ -19,21 +20,33 @@ import { aheadByHours } from "../src/app/lib/test-clock";
 test("Runners has one tab strip, and the tab is in the address", async ({ page }) => {
   await gotoConsole(page, "admin");
   await page.goto("/admin/runners");
-  const strip = page.getByRole("navigation", { name: RUNNER_V6.TABS_LABEL });
-  await expect(strip.getByRole("button", { name: RUNNER_V6.TAB_RUNNERS })).toHaveAttribute("aria-current", "page");
-  await expect(page.getByText(RUNNERS.LEAD)).toBeVisible();
-  await expect(page.getByText(RUNNER_V6.TAB_PURPOSE)).toBeVisible();
+  const strip = page.getByRole("tablist", { name: RUNNER_V6.TABS_LABEL });
+  await expect(strip.getByRole("tab", { name: RUNNER_V6.TAB_RUNNERS })).toHaveAttribute("aria-selected", "true");
+  // #3060: one sentence on both tabs, the rest closed under How runners work, and the tabs never move.
+  const lede = page.getByTestId("page-header-description");
+  await expect(lede).toHaveText(RUNNERS.PAGE_LEDE);
+  const how = page.getByTestId("how-runners");
+  await expect(how).not.toHaveAttribute("open");
+  await expect(page.getByText(RUNNERS.LEAD)).toBeHidden();
+  await layoutSettled(strip);
+  const stripY = (await strip.boundingBox())!.y;
+  // #2895: the field name is quoted in prose, so it does not read as a typo.
+  expect(RUNNERS.LEAD).toContain('up to its "Runs at once" limit');
   // No remote-hosted runner is set up, and people's runners are off.
   await expect(page.getByRole("heading", { name: RUNNERS.OFF_TITLE })).toBeVisible();
   await expect(page.getByRole("list", { name: RUNNER_V6.LIST_LABEL })).toHaveCount(0);
 
-  await strip.getByRole("button", { name: RUNNER_V6.TAB_POOLS }).click();
+  await strip.getByRole("tab", { name: RUNNER_V6.TAB_POOLS }).click();
   await expect(page).toHaveURL(/\/admin\/runners\?tab=pools$/);
-  await expect(strip.getByRole("button", { name: RUNNER_V6.TAB_POOLS })).toHaveAttribute("aria-current", "page");
-  await expect(page.getByText(POOLS.LEAD)).toBeVisible();
-  await expect(page.getByText(RUNNER_V6.TAB_PURPOSE)).toHaveCount(0);
+  await expect(strip.getByRole("tab", { name: RUNNER_V6.TAB_POOLS })).toHaveAttribute("aria-selected", "true");
+  await expect(lede).toHaveText(RUNNERS.PAGE_LEDE);
+  await layoutSettled(strip);
+  expect((await strip.boundingBox())!.y).toBe(stripY);
+  await how.getByText(RUNNERS.HOW_TITLE).click();
+  await expect(how.getByText(RUNNER_V6.TAB_PURPOSE, { exact: false })).toBeVisible();
+  await expect(how.getByText(POOLS.LEAD, { exact: false })).toBeVisible();
 
-  await strip.getByRole("button", { name: RUNNER_V6.TAB_RUNNERS }).click();
+  await strip.getByRole("tab", { name: RUNNER_V6.TAB_RUNNERS }).click();
   await expect(page).toHaveURL(/\/admin\/runners$/);
   await expect(page.getByRole("heading", { name: RUNNERS.OFF_TITLE })).toBeVisible();
 });
@@ -42,9 +55,13 @@ test("the Pools tab says how an organization pool is made and that there are non
   await gotoConsole(page, "admin");
   await page.goto("/admin/runners?tab=pools");
   await expect(page.getByRole("heading", { name: POOLS.ORG_TITLE, exact: true })).toBeVisible();
-  await expect(page.getByText(POOLS.ORG_LEDE)).toBeVisible();
-  await expect(page.getByText(POOLS.ORG_CLI_COMMAND)).toBeVisible();
-  await expect(page.getByRole("group", { name: POOLS.ORG_EMPTY_TITLE })).toContainText(POOLS.ORG_EMPTY_BODY);
+  const empty = page.getByRole("group", { name: POOLS.ORG_EMPTY_TITLE });
+  await expect(empty).toContainText(POOLS.ORG_CLI);
+  await expect(empty.getByText(POOLS.ORG_CLI_COMMAND)).toBeVisible();
+  await expect(empty.getByRole("button", { name: POOLS.ORG_CLI_COPY })).toBeVisible();
+  await expect(empty).toContainText(POOLS.ORG_EMPTY_THEN);
+  await expect(page.getByText(POOLS.ORG_LEDE)).toHaveCount(0);
+  await expect(page.getByText(POOLS.ORG_CLI_EDIT)).toHaveCount(0);
   await expect(page.getByRole("heading", { name: POOLS.USER_TITLE, exact: true })).toBeVisible();
   await expect(page.getByRole("main").getByRole("link", { name: POOLS.GOVERNANCE_LINK })).toHaveAttribute("href", /\/admin\/governance$/);
   await expect(page.getByRole("group", { name: POOLS.USER_EMPTY_TITLE })).toContainText(POOLS.USER_EMPTY_BODY);
@@ -72,6 +89,19 @@ const pickUnit = async (page: Page, caption: string, unit: string) => {
   await page.getByRole("option", { name: unit, exact: true }).click();
 };
 
+// #3062: the strip is the shared underline Tabs, so an arrow key moves selection and the address follows.
+test("ArrowRight on the Runners tab moves to Pools and the address follows", async ({ page }) => {
+  await gotoConsole(page, "admin");
+  await page.goto("/admin/runners");
+  const strip = page.getByRole("tablist", { name: RUNNER_V6.TABS_LABEL });
+  const runners = strip.getByRole("tab", { name: RUNNER_V6.TAB_RUNNERS });
+  await runners.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(strip.getByRole("tab", { name: RUNNER_V6.TAB_POOLS })).toHaveAttribute("aria-selected", "true");
+  await expect(strip.getByRole("tab", { name: RUNNER_V6.TAB_POOLS })).toBeFocused();
+  await expect(page).toHaveURL(/\/admin\/runners\?tab=pools$/);
+});
+
 test.describe("user pools against the real server", () => {
   test("a user pool is created, then edited, through the form (FUG-L409)", async ({ page }) => {
     const first = uniqueName("Desk");
@@ -79,7 +109,10 @@ test.describe("user pools against the real server", () => {
     await asRealMember(page);
     await page.goto("/account/pools/new");
     await expect(page.getByRole("heading", { name: POOL_FORM.TITLE_NEW })).toBeVisible();
+    // The shared form bar counts what changed since the form opened.
+    await expect(page.getByTestId("form-actions-unsaved")).toHaveText("");
     await page.locator("#f-name").fill(first);
+    await expect(page.getByTestId("form-actions-unsaved")).toHaveText(FORM_ACTIONS.UNSAVED(1));
     await page.getByRole("button", { name: POOL_FORM.CREATE }).click();
     await expect(page.getByText(POOL_FORM.CREATED(first))).toBeVisible();
     const created = await poolNamed(page, first);
@@ -133,6 +166,16 @@ test.describe("user pools against the real server", () => {
     await expect(page.locator("#f-bg-lifeMn")).toHaveAttribute("aria-invalid", "true");
     await expect(page.locator("#f-bg-lifeDn")).not.toHaveAttribute("aria-invalid", "true");
     await expect(page).toHaveURL(/\/account\/pools\/new$/);
+  });
+
+  test("the qualifier is said once per fieldset, not under every resource field (#3063)", async ({ page }) => {
+    await asRealMember(page);
+    await page.goto("/account/pools/new");
+    await expect(page.getByRole("heading", { name: POOL_FORM.TITLE_NEW })).toBeVisible();
+    for (const rt of ["bg", "it"]) {
+      await expect(page.getByTestId(`f-${rt}-qualifier`)).toHaveText(`${POOL_FORM.QUALIFIER} ${POOL_FORM.RUNNERS_NOT_CHOSEN}`);
+    }
+    await expect(page.getByText(POOL_FORM.NARROWER)).toHaveCount(1);
   });
 
   test("when Reload cannot re-read the pool, the form says so in its own words and keeps Reload (FR-0116)", async ({ page }) => {
@@ -273,4 +316,23 @@ test("Your account: My pools says administrators can see the pools and the cap i
   await page.getByRole("button", { name: /^My runner/ }).click();
   await expect(page.getByText("Only you can change these. Administrators can see them.", { exact: true })).toBeVisible();
   await expect(page.getByText("You can have up to 10 pools, for example Laptop and Home server.")).toBeVisible();
+});
+
+// Board D2a: a runner that registered but never connected names the service and its log on My runner, with no
+// limits set. The e2e server keeps runners off, so the person's runner list is answered here.
+test("My runner: a runner that registered but never connected names the service and its log", async ({ page }) => {
+  const none = { runs: 0, cpu_millis: 0, memory_mib: 0, disk_mib: 0 };
+  const never = {
+    id: "r-dev", name: "mbp-dev", state: "claimed", online: false, key_fingerprint: "SHA256:3Jd1d8…k2Q9", key_fingerprint_abbreviated: true,
+    version: "0.9.6", created_at: aheadByHours(-1), claimed_at: aheadByHours(-0.5), kind: "self_hosted", pools: [],
+    usage: { online: false, in_use: none, available: none, disk_capped: true },
+  };
+  await page.route("**/api/v1/me/runners*", (route) => (route.request().method() === "GET" ? route.fulfill({ json: [never] }) : route.fallback()));
+  await gotoConsole(page, "user");
+  await navTo(page, "Your account");
+  await page.getByRole("button", { name: /^My runner/ }).click();
+  await expect(page.getByText("Never connected", { exact: true })).toBeVisible();
+  await expect(page.locator("[data-offline-note]")).toHaveText(
+    "This runner registered but has never connected to this server. On that computer, check that wardyn-runnerd runs as a service (wardyn-runnerd setup installs one) and read its log: ~/Library/Logs/wardyn/runnerd.log on macOS, journalctl --user -u wardyn-runnerd on Linux. Behind a proxy, the service needs its own HTTPS_PROXY.",
+  );
 });

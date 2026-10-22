@@ -13,6 +13,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // PrincipalIdentity is one human identity Wardyn has seen sign in. An Entra identity is
@@ -247,6 +249,9 @@ func (s PG) UnbindIdentity(ctx context.Context, id uuid.UUID, principal string) 
 		INSERT INTO oidc_session_revocations (sub, revoked_at) VALUES ($1, clock_timestamp())
 		ON CONFLICT (sub) DO UPDATE SET revoked_at = EXCLUDED.revoked_at`, principal); err != nil {
 		return fmt.Errorf("store: session cutoff: %w", err)
+	}
+	if err = endCLISessionsOf(ctx, tx, principal, types.CLISessionEndRevoked); err != nil {
+		return err
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return fmt.Errorf("store: commit identity unbind: %w", err)

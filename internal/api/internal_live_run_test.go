@@ -71,6 +71,7 @@ func internalDoors(runID, grantID uuid.UUID) []struct {
 		{"credentials mint", http.MethodPost, "/api/v1/internal/credentials/mint",
 			`{"grant_id":"` + grantID.String() + `"}`},
 		{"injection resolve", http.MethodGet, "/api/v1/internal/injection/" + grantID.String(), ""},
+		{"desktop sign-in check", http.MethodPost, "/api/v1/internal/desktop-signin/check", `{"credential":"x"}`},
 		{"recording upload", http.MethodPut, "/api/v1/internal/recordings/" + runID.String(), "cast"},
 		{"recording part upload", http.MethodPut, "/api/v1/internal/recordings/" + runID.String() + "/parts/2", "cast"},
 		{"scan-result upload", http.MethodPut, "/api/v1/internal/scan-results/" + runID.String(), `{}`},

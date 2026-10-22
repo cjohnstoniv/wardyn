@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/domainmatch"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -64,9 +65,8 @@ func (s *Server) handleSetApprovedEgress(w http.ResponseWriter, r *http.Request)
 			// write: the proxy still applies the deny, so this check only keeps the answer honest.
 			if id, err := uuid.Parse(chi.URLParam(r, "id")); err == nil && len(set) > 0 {
 				if ws, err := s.cfg.Store.GetWorkspace(r.Context(), id); err == nil {
-					for _, d := range ws.DeniedEgress {
-						d = strings.ToLower(strings.TrimSpace(d))
-						if _, approving := set[d]; approving {
+					for _, d := range sortedKeys(set) {
+						if deniedForEveryPort(ws.DeniedEgress, d) {
 							return nil, reasonWorkspaceApprovedEgressDenied, "host " + d + " is on this workspace's denied egress list, and a deny beats an approval — remove it from the denied list first"
 						}
 					}
@@ -130,4 +130,21 @@ func (s *Server) handleSetDeniedEgress(w http.ResponseWriter, r *http.Request) {
 			return s.cfg.Store.SetWorkspaceDeniedEgress(ctx, id, doms)
 		},
 		func(domains []string) map[string]any { return map[string]any{"domains": domains} })
+}
+
+// deniedForEveryPort reports whether the denied list blocks host on every port, read the way the proxy reads
+// a deny (domainmatch): an exact entry or a "*." wildcard entry with no port. A port-qualified entry blocks one
+// port only, so it never makes the approval of the whole host a no-op.
+func deniedForEveryPort(denied []string, host string) bool {
+	host = domainmatch.CanonHost(host)
+	for _, d := range denied {
+		exact, wild, port := domainmatch.Classify(d)
+		if port > 0 {
+			continue
+		}
+		if exact == host || (wild != "" && domainmatch.MatchWild(host, []string{wild})) {
+			return true
+		}
+	}
+	return false
 }

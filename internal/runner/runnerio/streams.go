@@ -69,7 +69,48 @@ func (s *Server) attach(ctx context.Context, peer *runnerwire.Peer, id uint32, r
 		cancel()
 		return nil, err
 	}
-	st, err := peer.Open(ctx, runnerwire.Open{Kind: runnerwire.KindPTY, Target: ref, Call: id})
+	return s.serveSession(ctx, peer, id, runnerwire.KindPTY, ref, sess, life, cancel, stop)
+}
+
+// dialDesktop opens a VM's display (runner.DesktopDialer) and carries it on a `desktop` stream,
+// exactly as attach carries a terminal.
+func (s *Server) dialDesktop(ctx context.Context, peer *runnerwire.Peer, id uint32, raw json.RawMessage) (any, error) {
+	args, err := decode[runnerwire.DialDesktopArgs](raw)
+	if err != nil {
+		return nil, err
+	}
+	ref, err := s.local(args.Ref)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.held(ref); err != nil {
+		return nil, err
+	}
+	dd, ok := s.sub.(runner.DesktopDialer)
+	if !ok {
+		return nil, runner.ErrDesktopUnsupported
+	}
+	life, cancel := context.WithCancel(s.life(peer))
+	stop := context.AfterFunc(ctx, cancel)
+	defer stop()
+	conn, err := dd.DialDesktop(life, ref)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	return s.serveSession(ctx, peer, id, runnerwire.KindDesktop, ref, desktopSession{conn}, life, cancel, stop)
+}
+
+// desktopSession is a display connection as a runner.Session: a display has no terminal to resize.
+type desktopSession struct{ io.ReadWriteCloser }
+
+func (desktopSession) Resize(context.Context, uint16, uint16) error {
+	return errors.New("runnerio: a desktop stream has no terminal to resize")
+}
+
+// serveSession opens the stream a call asked for and copies sess over it until either side ends.
+func (s *Server) serveSession(ctx context.Context, peer *runnerwire.Peer, id uint32, kind, ref string, sess runner.Session, life context.Context, cancel context.CancelFunc, stop func() bool) (any, error) {
+	st, err := peer.Open(ctx, runnerwire.Open{Kind: kind, Target: ref, Call: id})
 	if err != nil {
 		cancel()
 		_ = sess.Close()

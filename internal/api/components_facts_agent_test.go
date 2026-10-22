@@ -164,13 +164,13 @@ func TestComponentFacts_NoHarnessNoAgentFact(t *testing.T) {
 func TestComponentFacts_ManagedPolicyResolutionAndTelemetry(t *testing.T) {
 	for _, locked := range []bool{false, true} {
 		req := createRunRequest{Agent: "claude-code", Task: "facts"}
-		fold := componentFactInputs{credentialChecked: true, autonomyResolved: true, req: &req, autonomy: types.AutonomyResolution{Level: types.AutonomyL2}, ceiling: governanceCeiling{Profile: &ResolvedProfile{Name: "Approved leaf"}, Limits: types.GovernanceLimits{AutonomyRubric: &types.AutonomyRubric{AgentGuardrailLocks: locked}}}}
+		fold := componentFactInputs{credentialChecked: true, autonomyResolved: true, req: &req, autonomy: types.AutonomyResolution{Level: types.AutonomyL2}, ceiling: governanceCeiling{Unit: &ResolvedUnit{Name: "Approved leaf"}, Limits: types.GovernanceLimits{AutonomyRubric: &types.AutonomyRubric{AgentGuardrailLocks: locked}}}}
 		fact, ok := agentComponentFact(fold)
 		path, content, _ := agentpolicy.ForAgent(req.Agent, fold.autonomy.Level, false, locked)
 		if !ok || fact.Agent.ManagedSettings == nil || fact.Agent.ManagedSettings.Path != path || fact.Agent.ManagedSettings.Document != string(content) || fact.Agent.ManagedSettings.Locked != locked {
 			t.Fatalf("frozen L2 policy differs: %+v", fact)
 		}
-		if locked && (fact.Agent.ManagedSettings.LockedBy != "profile" || fact.Agent.ManagedSettings.Profile != "Approved leaf") {
+		if locked && (fact.Agent.ManagedSettings.LockedBy != "unit" || fact.Agent.ManagedSettings.Unit != "Approved leaf") {
 			t.Fatal("lock source must name the admitted leaf only")
 		}
 		fold.credentialChecked, fold.autonomyResolved = false, false
@@ -199,7 +199,7 @@ func TestComponentFacts_ActualPreflightDispatchManagedDocument(t *testing.T) {
 			t.Fatal("preview did not resolve autonomy")
 		}
 		preflight := decodedAgentFact(t, doSSO(t, srv, http.MethodPost, componentDoors[1], member, body))
-		ceiling := governanceCeiling{Profile: &ResolvedProfile{Name: profile.Name}, Limits: profile.Limits}
+		ceiling := governanceCeiling{Unit: &ResolvedUnit{Name: profile.Name}, Limits: profile.Limits}
 		dispatched, _, _ := agentPolicyDispatchCeiling(t, &fakeRunner{}, "claude-code", types.AutonomyL2, "", dispatchParams{}, ceiling)
 		if len(dispatched.ManagedFiles) != 1 || preflight.Agent.ManagedSettings == nil || preflight.Agent.ManagedSettings.Path != dispatched.ManagedFiles[0].Path || preflight.Agent.ManagedSettings.Document != string(dispatched.ManagedFiles[0].Content) || preflight.Agent.ManagedSettings.Locked != locks {
 			t.Fatalf("actual preflight/dispatch policy mismatch: %+v vs %+v", preflight.Agent.ManagedSettings, dispatched.ManagedFiles)
@@ -312,7 +312,7 @@ func TestComponentFacts_GovernanceHoldMatchesDispatch(t *testing.T) {
 			profile.Ceiling.ToolRules = tc.rules
 			srv, _, _ := govEscapeFixture(t, autonomyCapStore(profile))
 			member := govSession(t, govMemberSub, []string{"eng"}, false)
-			ceiling := governanceCeiling{Profile: &ResolvedProfile{Name: profile.Name}, Limits: profile.Limits, Spec: profile.Ceiling}
+			ceiling := governanceCeiling{Unit: &ResolvedUnit{Name: profile.Name}, Limits: profile.Limits, Spec: profile.Ceiling}
 			// The value create dispatches with, from create's own derivation rather than set by hand.
 			params := dispatchParams{ToolApprovals: effectiveToolApprovals(createRunRequest{Agent: "claude-code", Task: "facts"}, ceiling)}
 			if (params.ToolApprovals == "hold") != tc.hold {

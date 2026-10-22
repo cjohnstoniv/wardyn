@@ -88,4 +88,8 @@ paths = [
     # meant a fresh commit fingerprint every run too (SF-15) — path-scoped
     # instead of chased with .gitleaksignore entries.
     '''internal/egress/proxy/pat_broker_mask_test\.go''',
+    # Published SigV4 test vectors (see that directory's NOTICE): the AWS
+    # documentation example key pair, session token and the signatures made
+    # with them, so the signer can be checked against them byte for byte.
+    '''internal/egress/proxy/testdata/sigv4/''',
 ]

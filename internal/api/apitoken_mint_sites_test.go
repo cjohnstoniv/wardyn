@@ -20,7 +20,8 @@ import (
 // and both run the one mint core (mintGuards, prepareMint), so the caller's own
 // session decides who the token belongs to. Each core function has exactly those two
 // callers; insertAPIToken has exactly one, handleCreateAPIToken; ClaimInvitation
-// exactly one, handleClaimInvitation; CreateAPIToken exactly one, insertAPIToken;
+// exactly one, handleClaimInvitation; CreateAPIToken exactly one, insertAPIToken; a CLI sign-in's
+// approval runs mintGuards and its tokens are built by mintCLIToken, prepareMint's third caller;
 // and no non-test code in this package sets MintedBy on a types.APIToken (the
 // minted_by column is read here, never written).
 func TestAPITokenMintSites_OnlyTheSelfServiceMint(t *testing.T) {
@@ -30,7 +31,8 @@ func TestAPITokenMintSites_OnlyTheSelfServiceMint(t *testing.T) {
 	}
 	fset := token.NewFileSet()
 	calls := map[string]map[string]int{}
-	for _, name := range []string{"insertAPIToken", "CreateAPIToken", "ClaimInvitation", "CreateServiceToken", "mintGuards", "prepareMint"} {
+	for _, name := range []string{"insertAPIToken", "CreateAPIToken", "ClaimInvitation", "CreateServiceToken", "mintGuards", "prepareMint",
+		"CreateCLISession", "RotateCLISession", "CreateCLIAdminToken", "mintCLIToken"} {
 		calls[name] = map[string]int{}
 	}
 	for _, f := range files {
@@ -75,9 +77,15 @@ func TestAPITokenMintSites_OnlyTheSelfServiceMint(t *testing.T) {
 		"insertAPIToken":     {"handleCreateAPIToken"},
 		"CreateAPIToken":     {"insertAPIToken"},
 		"ClaimInvitation":    {"handleClaimInvitation"},
-		"mintGuards":         {"handleClaimInvitation", "handleCreateAPIToken", "handleMintServiceToken"},
+		"mintGuards":         {"handleApproveCLISignIn", "handleClaimInvitation", "handleCreateAPIToken", "handleMintServiceToken"},
 		"CreateServiceToken": {"handleMintServiceToken"}, // the sponsor's mint of a service identity's token (#1508)
-		"prepareMint":        {"handleClaimInvitation", "handleCreateAPIToken"},
+		"prepareMint":        {"handleClaimInvitation", "handleCreateAPIToken", "mintCLIToken"},
+		// CLI sign-in (cli_sessions.go): the approval runs mintGuards; every CLI token is built by
+		// mintCLIToken through prepareMint from the approver's snapshot, and each store write has one door.
+		"mintCLIToken":        {"createCLISession", "mintCLIAdmin", "rotateCLISession"},
+		"CreateCLISession":    {"createCLISession"},
+		"RotateCLISession":    {"rotateCLISession"},
+		"CreateCLIAdminToken": {"mintCLIAdmin"},
 	} {
 		got := slices.Sorted(maps.Keys(calls[name]))
 		if !slices.Equal(got, want) {

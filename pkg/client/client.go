@@ -42,6 +42,7 @@
 //     ImportTemplate — and, on /api/v1/admin/template-group-admins, ListTemplateGroupAdmins, GrantTemplateGroupAdmin,
 //     RevokeTemplateGroupAdmin. The server answers 501 templates_unavailable when its store holds no templates
 //   - governance (/api/v1/governance):   GetGovernance, PlanGovernance, ApplyGovernance, ApplyGovernanceResult
+//     — and MoveGovernanceMembership, PromoteGovernanceMembership, CheckGovernance, GovernanceDryRun
 //   - governance changes (/api/v1/governance/changes): ListGovernanceChanges, GetGovernanceChange,
 //     ApproveGovernanceChange, RejectGovernanceChange
 //   - setup (/api/v1/setup):             SetupStatus, ConnectManagedSubscription, DisconnectManagedSubscription
@@ -244,6 +245,12 @@ type Client struct {
 	// bearer, not a JWT — there is no subject to extract); under OIDC the
 	// verified subject wins. Use OIDC for real per-human attribution.
 	Principal string
+
+	// BreakGlassReason, when non-empty, is sent as the X-Wardyn-Break-Glass-Reason
+	// header: the reason an admin-token run gives when it is a break-glass run
+	// (it would lift a governance profile's walls while the Wardyn boundary is in
+	// hard_limits). The server reads it on POST /runs, preflight and policy preview.
+	BreakGlassReason string
 }
 
 // New returns a Client configured with baseURL and token.
@@ -575,6 +582,9 @@ func (c *Client) newRequest(ctx context.Context, method, path string, body io.Re
 	}
 	if c.Principal != "" {
 		req.Header.Set("X-Wardyn-Principal", c.Principal)
+	}
+	if c.BreakGlassReason != "" {
+		req.Header.Set("X-Wardyn-Break-Glass-Reason", c.BreakGlassReason)
 	}
 	return req, nil
 }

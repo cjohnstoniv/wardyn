@@ -31,6 +31,7 @@ bin="${dir}/bin"; mkdir -p "${bin}"
 WANT="$(sed -n '/for want in/,/; do/p' "${RELEASE_YML}" | sed -e 's/.*for want in//' -e 's/; do.*//' -e 's/\\$//' | tr -s ' \n' '\n\n' | grep .)"
 IMAGES="$(grep -oE '^[[:space:]]+- name: [a-z0-9-]+$' "${RELEASE_YML}" | awk '{print $3}' | sort -u)"
 [ -n "${WANT}" ] && [ -n "${IMAGES}" ] || fail "could not derive the image/asset lists from release.yml"
+grep -qx 'install-cli.sh' <<<"${WANT}" && grep -qx 'install-cli.ps1' <<<"${WANT}" || fail "the CLI installers are not on release.yml's required-asset list, so verify-release would not check them"
 grep -qx 'wardyn-runnerd.pkg' <<<"${WANT}" || fail "the macOS runner package is not on release.yml's required-asset list, so verify-release would not check it"
 printf '%s\n' "${WANT}" > "${dir}/want.txt"; printf '%s\n' "${IMAGES}" > "${dir}/images.txt"
 
@@ -72,7 +73,9 @@ case "$1 $2" in
     while read -r i; do echo "sbom-$i.cdx.json"; done < "${DIR}/images.txt"
     # The package exists from 0.9.3 (and a test can leave it out).
     # The licence tarball exists from 0.9.4.
-    if [ "$(printf '%s\n' "${VER%%-*}" 0.9.4 | sort -V | head -1)" = 0.9.4 ]; then cat "${DIR}/want.txt"; else grep -vx 'wardyn-licenses.tar.gz' "${DIR}/want.txt"; fi > "${DIR}/want-ver.txt"
+    if [ "$(printf '%s\n' "${VER%%-*}" 0.9.4 | sort -V | head -1)" = 0.9.4 ]; then cat "${DIR}/want.txt"; else grep -vx 'wardyn-licenses.tar.gz' "${DIR}/want.txt"; fi > "${DIR}/want-ver0.txt"
+    # The CLI installers exist from 0.10.0 (and a test can leave them out).
+    if [ -n "${NO_INSTALL_CLI:-}" ] || [ "$(printf '%s\n' "${VER%%-*}" 0.10.0 | sort -V | head -1)" != 0.10.0 ]; then grep -v '^install-cli\.' "${DIR}/want-ver0.txt"; else cat "${DIR}/want-ver0.txt"; fi > "${DIR}/want-ver.txt"
     if [ -n "${NO_PKG:-}" ] || [ "$(printf '%s\n' "${VER%%-*}" 0.9.3 | sort -V | head -1)" != 0.9.3 ] || [ "${VER}" = 0.9.3-rc.1 ] || [ "${VER}" = 0.9.3-rc.2 ]; then grep -vx 'wardyn-runnerd.pkg' "${DIR}/want-ver.txt"; else cat "${DIR}/want-ver.txt"; fi
     echo "wardyn-${VER}.tgz" ;;
   "release download")
@@ -101,7 +104,7 @@ chmod +x "${bin}"/*
 run() {
   : > "${dir}/log"
   rc=0
-  out="$(PATH="${bin}:${PATH}" NO_PKG="${NO_PKG:-}" CHART_UNSIGNED="${CHART_UNSIGNED:-}" APP_VER="${APP_VER:-}" IMG_ERR="${IMG_ERR:-}" LOG="${dir}/log" DIR="${dir}" VER="$1" SIGNER_TAG="$2" SIGFORM="$3" "${VERIFY}" "$1" 2>&1)" || rc=$?
+  out="$(PATH="${bin}:${PATH}" NO_PKG="${NO_PKG:-}" NO_INSTALL_CLI="${NO_INSTALL_CLI:-}" CHART_UNSIGNED="${CHART_UNSIGNED:-}" APP_VER="${APP_VER:-}" IMG_ERR="${IMG_ERR:-}" LOG="${dir}/log" DIR="${dir}" VER="$1" SIGNER_TAG="$2" SIGFORM="$3" "${VERIFY}" "$1" 2>&1)" || rc=$?
 }
 
 for form in bundle sigpem; do
@@ -160,6 +163,18 @@ pass "wardyn-runnerd.pkg is required from 0.9.3 on"
 run 0.9.4 v0.9.4 bundle
 [ "${rc}" = 0 ] || fail "V=0.9.4 with the licence tarball exited ${rc}: $(printf '%s' "${out}" | tail -3)"
 pass "wardyn-licenses.tar.gz is required from 0.9.4 on, and not before"
+
+# 3b2. the CLI installers are required from 0.10.0 and not before.
+run 0.10.0 v0.10.0 bundle
+[ "${rc}" = 0 ] || fail "V=0.10.0 with the CLI installers exited ${rc}: $(printf '%s' "${out}" | tail -3)"
+run 0.10.0-rc.1 v0.10.0-rc.1 bundle
+[ "${rc}" = 0 ] || fail "V=0.10.0-rc.1 with the CLI installers exited ${rc}: $(printf '%s' "${out}" | tail -3)"
+NO_INSTALL_CLI=1 run 0.10.0 v0.10.0 bundle
+[ "${rc}" != 0 ] && printf '%s' "${out}" | grep 'FAIL missing asset: install-cli.sh' >/dev/null && printf '%s' "${out}" | grep 'FAIL missing asset: install-cli.ps1' >/dev/null \
+  || fail "V=0.10.0 without install-cli.sh and install-cli.ps1 was accepted"
+run 0.9.5 v0.9.5 bundle
+[ "${rc}" = 0 ] || fail "V=0.9.5 (no CLI installers in that release) exited ${rc}: $(printf '%s' "${out}" | tail -3)"
+pass "install-cli.sh and install-cli.ps1 are required from 0.10.0 on, and not before"
 
 # 3c. a failed imagetools call says why, instead of only "no index digest".
 IMG_ERR='ERROR: docker: unknown command: docker buildx' run 0.8.3 v0.8.3 bundle

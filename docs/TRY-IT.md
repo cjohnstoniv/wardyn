@@ -104,7 +104,7 @@ wardyn approval approve <approval-id> --reason "reviewed scope, looks correct"
 # exclusive with --wait). The idle reaper still applies: sandbox.yaml stops the
 # run after 900s idle — set auto_stop_after_sec <= 0 for a never-reap session.
 wardyn run --agent claude-code --interactive --policy-file examples/policies/sandbox.yaml
-wardyn run attach <id>
+wardyn attach <id>
 ```
 
 - Prefer clicking?
@@ -124,7 +124,7 @@ wardyn run attach <id>
 - The **Secrets** group is eight cards covering a stored *value* rather than a destination —
   - the write-only store itself, proxy-side header injection, an approval-gated single-use mint, and then one card per credential KIND,
   - because what a credential's own protocol accepts is what decides how far out of the sandbox it can be kept:
-    - an `api_key` never enters the box, a `git_pat` stays at the proxy by default (it enters only as a pipe to git with `WARDYN_GIT_PAT_BROKER=off`), an `ssh_key` is the documented resident exception,
+    - an `api_key` never enters the box, a `git_pat` stays at the proxy by default (it enters only with `WARDYN_GIT_PAT_BROKER=off`), an `ssh_key` is signed for by the proxy,
     - a `github_token` is minted proxy-side and refused if the sandbox asks for it, and a `cloud_sts` grant is refused at run-create outright without a SPIRE identity provider.
 
 <!-- Regenerated with `make screenshots` (docs.spec.ts) for 0.7.4. Freshness is
@@ -173,7 +173,7 @@ wardyn run --agent claude-code --model-provider anthropic --repo octocat/Hello-W
     wardyn-agent-<id> env | grep ANTHROPIC_API_KEY` prints the literal sentinel `wardyn-proxy-injected`, never your key);
   - Claude Code talks to `ANTHROPIC_BASE_URL=http://wardyn-proxy:3128/wardyn/llm/anthropic`, where the proxy injects `x-api-key` and logs every model call as a `brokered:llm` decision in the audit trail
   - (an admin can re-point that brokered dial at an internal gateway through the provider's base URL under Settings → Model providers, with no sandbox-visible change at all).
-- Watch the session live via Attach (`wardyn run attach
+- Watch the session live via Attach (`wardyn attach
 <id>`, or the console's Live terminal) — the **Recording** tab plays back the captured cast only after the fact, it has no live view.
 
 - For real GitHub pushes: create a GitHub App (contents+PR write), then `wardyn secret set github-app-id` and `wardyn secret set github-app-key` (PEM), restart, and approve the agent's credential request —
@@ -225,7 +225,7 @@ subscription` is gone, `wardyn secret set` refuses the model-credential names, a
   - The model is a cross-region *inference-profile* id, or the profile's full ARN — `arn:aws:bedrock:<region>:<acct>:inference-profile/<id>` or `…:application-inference-profile/<id>` — not a bare model id.
   - A `bedrock_sso` run holds that person's short-lived role credentials in its own sandbox (see [`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md) §5.1a).
 
-## Level 2.5 — record a session, rerun it as a governed profile
+## Level 2.5 — record a session, rerun it as a governed unit
 
 - The primary way to onboard your own work: in a workspace, **record** a named interactive session (with model access), then rerun it governed —
   - the New Run dialog's Basics step offers the workspace's recorded sessions as **profiles**;
@@ -265,7 +265,7 @@ subscription` is gone, `wardyn secret set` refuses the model-credential names, a
 - **From the CLI:** `wardyn record task <workspace-id> <task-key>` records a single named session —
   - `task-key` is a free-form name you choose ("build & test", "agent dev loop", anything), not picked from a derived taxonomy —
   - in an OPEN (allow-all egress) sandbox, so you can learn exactly what that session actually uses.
-- The session idles for `wardyn run attach`; when it ends, the capture lands on the workspace, and `wardyn record synthesize <run-id>` previews the least-privilege profile (or promote the observed egress from the workspace page's recorded-session pane — **Approve N observed hosts**).
+- The session idles for `wardyn attach`; when it ends, the capture lands on the workspace, and `wardyn record synthesize <run-id>` previews the least-privilege profile (or promote the observed egress from the workspace page's recorded-session pane — **Approve N observed hosts**).
 
 ## Stop / Reset
 

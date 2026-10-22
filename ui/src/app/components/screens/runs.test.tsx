@@ -4,9 +4,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
-import type { AgentRun } from "../../lib/types";
+import type { AgentRun, SetupStatus } from "../../lib/types";
 
 const listRunsFilteredMock = vi.fn();
 vi.mock("../../lib/api/runs", () => ({
@@ -30,6 +30,8 @@ vi.mock("../../lib/use-workspace-list", () => ({
 
 import { RunsScreen } from "./runs";
 import { RoleProvider, type Role } from "../wardyn/operator-context";
+import { ModelAccessProvider } from "../wardyn/model-access-context";
+import { CC_META } from "../wardyn/cc-meta";
 import { baseStatus } from "../../lib/test-fixtures";
 
 const run = (over: Partial<AgentRun> = {}): AgentRun => ({
@@ -117,11 +119,48 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
     expect(screen.getByRole("form", { name: "Start a run" })).toBeInTheDocument();
   });
 
+  // The shell's Re-check re-reads /setup/status for the app; the page must follow that answer, not keep its own.
+  it("first run, admin: follows the shell's setup status when a Re-check changes it", async () => {
+    getSetupStatusMock.mockResolvedValue(baseStatus({ has_runs: false }));
+    const noBarrier = baseStatus({ has_runs: false, runner: { driver: "none", confinement_classes: [] } });
+    const withBarrier = baseStatus({ has_runs: false, runner: { driver: "docker", confinement_classes: ["CC2"] } });
+    const tree = (status: SetupStatus) => (
+      <MemoryRouter initialEntries={["/runs"]}>
+        <ModelAccessProvider status={status} onRefresh={() => {}}>
+          <RoleProvider role="admin">
+            <RunsScreen />
+          </RoleProvider>
+        </ModelAccessProvider>
+      </MemoryRouter>
+    );
+    const { rerender } = render(tree(noBarrier));
+    await screen.findByText("No runs yet");
+    expect(screen.queryByText(CC_META.CC2.label)).not.toBeInTheDocument();
+    rerender(tree(withBarrier));
+    expect(await screen.findByText(CC_META.CC2.label, { exact: false })).toBeInTheDocument();
+    // The page took the shell's answer, so it never asked for a second one.
+    expect(getSetupStatusMock).not.toHaveBeenCalled();
+  });
+
   it("first run, Admin view: the inline empty state, no composer", async () => {
     getSetupStatusMock.mockResolvedValue(baseStatus({ has_runs: false }));
     renderScreen(undefined, "/admin/runs");
     await screen.findByText("No runs yet");
     expect(screen.queryByRole("form", { name: "Start a run" })).not.toBeInTheDocument();
+  });
+
+  it("Admin view: a decision this admin can make sits under Needs you, with the R6 row's held count", async () => {
+    listRunsFilteredMock.mockResolvedValue({
+      runs: [run({ id: "d1", task: "Held for me", attention: { kind: "approval", by: "you", pending: 1 } })],
+      truncated: false,
+      hiddenOlder: 0,
+      hiddenKilled: 0,
+    });
+    renderScreen(undefined, "/admin/runs");
+    expect(await screen.findByRole("heading", { name: "Needs you" })).toBeInTheDocument();
+    const row = screen.getByText("Held for me").closest('[data-testid="run-row"]') as HTMLElement;
+    expect(within(row).getByText("Needs you")).toBeInTheDocument();
+    expect(within(row).getByText("1 held")).toBeInTheDocument();
   });
 
   it("all quiet: nothing needs you and nothing is running, Ended sections still show", async () => {
@@ -165,7 +204,8 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
     // filters/ageing — the shown rows plus the two hidden counts, not just
     // runsList.length (home-runs-1197-packet.html:672, design §2.1).
     expect(screen.getByText("Your runs · 8")).toBeInTheDocument();
-    expect(screen.getByText("Needs your approval")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Needs you" })).toBeInTheDocument();
+    expect(screen.getByText("1 decision needs you")).toBeInTheDocument();
     expect(screen.getByText("Still running")).toBeInTheDocument();
     expect(screen.getAllByText("Running", { exact: true }).length).toBeGreaterThan(0);
     expect(screen.getByText("All done")).toBeInTheDocument();
@@ -179,9 +219,12 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
     // none checked order.
     const headings = screen.getAllByRole("heading").map((h) => h.textContent);
     const needsIdx = headings.findIndex((t) => t?.includes("Needs you"));
-    const runningIdx = headings.findIndex((t) => t === "Running");
+    const runningIdx = headings.findIndex((t) => t === "Active");
     const endedIdx = headings.findIndex((t) => t?.includes("Ended today"));
     expect(needsIdx).toBeGreaterThanOrEqual(0);
+    // #3039: the section holds Starting and Queued rows too, so it is "Active", not "Running".
+    expect(headings).toContain("Active");
+    expect(headings).not.toContain("Running");
     expect(needsIdx).toBeLessThan(runningIdx);
     expect(runningIdx).toBeLessThan(endedIdx);
   });

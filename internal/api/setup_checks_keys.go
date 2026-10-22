@@ -107,12 +107,12 @@ func keyChangeWhen(now, t time.Time) string {
 	}
 }
 
-// keyCustodyRows reads the key-custody inputs for a security-tier caller: a member's checks are
-// discarded, so they are not read for one. A read that fails leaves its row out rather than showing a
-// guess.
+// keyCustodyRows reads the key-custody inputs for an operator: handleSetupStatus redacts every check
+// for anyone else, so they are not read for one. A read that fails leaves its row out rather than
+// showing a guess.
 func (s *Server) keyCustodyRows(ctx context.Context) []SetupCheck {
 	svc := s.cfg.KeyDomains
-	if svc == nil || !s.isSecurityOperator(ctx) {
+	if svc == nil || !s.isOperator(ctx) {
 		return nil
 	}
 	now := s.cfg.Now()

@@ -153,7 +153,7 @@ func (s *Server) completeMaskManifestWithFileSecrets(ctx context.Context, run ty
 	if !ok {
 		return false
 	}
-	*resident = append(*resident, values...)
+	*resident = append(*resident, s.placeResidentFileSecrets(ctx, run, files, spec, values)...)
 	if s.cfg.FileSecretPlaceholders {
 		s.placeFileSecrets(ctx, run, policy, rows, files, spec)
 	}

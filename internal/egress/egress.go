@@ -68,7 +68,10 @@ type DecisionLog struct {
 	// policy:tool-allow/policy:tool-deny row carries the quoted tool name the
 	// run's tool_rules answered. A brokered:llm deny whose credential could
 	// not be refreshed carries that masked refusal. A brokered:recording deny
-	// carries the organisation's refusal reason token (recording_off). Empty
+	// carries the organisation's refusal reason token (recording_off). A
+	// private-address refusal that site_config.internal_hosts can lift
+	// (builtin:private-ip, or a brokered git lane's vet) carries the lift
+	// sentence naming the host and the range block, never the address. Empty
 	// on every other decision.
 	Cause string `json:"cause,omitempty"`
 	// Via names the CLASS of hop that carried the request, or that a refusal
@@ -101,6 +104,13 @@ type DecisionLog struct {
 	// it been on (WARDYN_EGRESS_PORT_RULE=dry_run): the dry run's list of the
 	// non-web ports runs use. Empty on every other row.
 	PortRule string `json:"port_rule,omitempty"`
+	// Refusal, on a deny row, says whose refusal it was: Wardyn's, a peer outside it, or
+	// unknown. Nil on every allow and on every deny the proxy does not classify.
+	Refusal *Refusal `json:"refusal,omitempty"`
+	// MatchedRule is the tool_rules key that answered a policy:tool-allow or
+	// policy:tool-deny row: the tool or "*", prefixed "<harness>:" under
+	// per-harness rules. Empty on every other row.
+	MatchedRule string `json:"matched_rule,omitempty"`
 }
 
 // ScanSummary is the CONTENT-FREE summary of one LLM content-inspection pass.
@@ -114,7 +124,7 @@ type ScanSummary struct {
 	Action     string        `json:"action"`                // "alert" | "block" | "skip" | "bypass" | "fail"
 	Channel    string        `json:"channel,omitempty"`     // e.g. "anthropic.messages"
 	Skipped    bool          `json:"skipped,omitempty"`     // a span/the body was not fully scanned
-	SkipReason string        `json:"skip_reason,omitempty"` // "span_oversize" | "parse_error" | "sidecar_error" | "body_oversize" | "uninspected_channel" | "findings_capped"
+	SkipReason string        `json:"skip_reason,omitempty"` // "span_oversize" | "parse_error" | "sidecar_error" | "sidecar_call_cap" | "body_oversize" | "uninspected_channel" | "findings_capped"
 	Findings   []ScanFinding `json:"findings,omitempty"`
 	// FindingsCapped and FindingsPastCap put the per-request findings cap ON
 	// THE WIRE, since Findings above carries at most the cap's worth of rows

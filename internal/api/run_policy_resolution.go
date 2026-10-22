@@ -144,6 +144,9 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 		if code, err := s.validateRunSecretRefs(ctx, s.secretOwnerFromRequest(r), runIdentitySubject(ctx, principalFromRequest(r)), spec, credentials); err != nil {
 			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, runSecretRefsRefusal("invalid inline_policy: ", code, err)
 		}
+		if refusal := s.applicationUIAppsRefusal(r, *req, spec, ceiling); refusal != nil {
+			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
+		}
 		// The CPU and memory half for the inline arm, the same helper the stored arm
 		// calls below. The main drive is sized by stepMainDrive, for every door.
 		source.knobs.step(ceiling.provenance(), &spec, func() {
@@ -152,9 +155,12 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 		})
 		// The Background experience the person chose drops the idle stop.
 		source.knobs.step(ceiling.ownProvenance(), &spec, func() { clampWarnings = append(clampWarnings, boundBackgroundIdleStop(*req, &spec)...) })
-		if refusal := noRepositoriesResolvedRefusal(*req, spec); refusal != nil {
+		// The Wardyn boundary, last, over whatever the steps above left (boundary_meet.go).
+		wallWarns, refusal := s.boundaryThenNoRepositories(ceiling, *req, &spec, &source)
+		if refusal != nil {
 			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
 		}
+		clampWarnings = append(clampWarnings, wallWarns...)
 		// Audit the use of an inline (non-stored) policy. The run id is not yet
 		// minted at this point, so this event carries a nil run id (like the
 		// secret.* admin events); the subsequent run.create event records
@@ -264,7 +270,7 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 		var warns []string
 		source.knobs.step(ceiling.provenance(), &spec, func() {
 			switch {
-			case policyID != nil && ceiling.Profile != nil:
+			case policyID != nil && ceiling.Unit != nil:
 				spec, warns, refusal = s.boundRunUserSpec(ctx, r, spec, ceiling, "invalid policy: ", dryRun)
 			default:
 				spec, warns, refusal = s.boundOverrideAdds(ctx, r, spec, edits, ceiling, dryRun)
@@ -274,6 +280,9 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
 		}
 		storedWarns = append(storedWarns, warns...)
+	}
+	if refusal := s.applicationUIAppsRefusal(r, *req, spec, ceiling); refusal != nil {
+		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
 	}
 	// The CPU and memory half, for the arm composer.Clamp never reaches. The block
 	// above runs only for a member who SELECTED a stored row (policyID != nil), but
@@ -286,9 +295,13 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 		storedWarns = append(storedWarns, s.boundUIApps(ctx, r, &spec, ceiling, dryRun)...)
 	})
 	source.knobs.step(ceiling.ownProvenance(), &spec, func() { storedWarns = append(storedWarns, boundBackgroundIdleStop(*req, &spec)...) })
-	if refusal := noRepositoriesResolvedRefusal(*req, spec); refusal != nil {
+	// The Wardyn boundary, last: the one bound a stored row an unassigned member or an operator
+	// selects meets, and the outer limit on every other spec (boundary_meet.go).
+	wallWarns, refusal := s.boundaryThenNoRepositories(ceiling, *req, &spec, &source)
+	if refusal != nil {
 		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
 	}
+	storedWarns = append(storedWarns, wallWarns...)
 	if refusal := patDuplicatesRunRefusal("invalid policy: ", spec); refusal != nil {
 		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
 	}
@@ -300,6 +313,18 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 	}
 	edits.finish(&source, spec)
 	return spec, policyID, storedWarns, source, nil
+}
+
+// boundaryThenNoRepositories is the last two steps of both arms of resolveRunPolicyFacts: the Wardyn
+// boundary over whatever the earlier steps left (boundaryRunStep), then the refusal of a run asked
+// for with no repositories or drives whose resolved policy still attaches some
+// (noRepositoriesResolvedRefusal).
+func (s *Server) boundaryThenNoRepositories(ceiling governanceCeiling, req createRunRequest, spec *types.RunPolicySpec, source *policySourceRecord) ([]string, *runRefusal) {
+	warns, refusal := s.boundaryRunStep(ceiling, spec, source)
+	if refusal != nil {
+		return nil, refusal
+	}
+	return warns, noRepositoriesResolvedRefusal(req, *spec)
 }
 
 // Stored policies may predate write-time validation; duplicate narrowed PATs

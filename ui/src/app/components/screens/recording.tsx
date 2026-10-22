@@ -56,6 +56,7 @@ import {
   RECORDINGS_PAGE_ERROR_TITLE,
 } from "./recording-copy";
 import { PageHeader } from "../wardyn/page-header";
+import { PageContainer } from "../wardyn/page-container";
 import { TerminalPlayer } from "../wardyn/terminal-player";
 
 // #159: the server-side page size. `?limit=&offset=` has been supported by
@@ -254,7 +255,7 @@ export function RecordingScreen() {
   );
 
   return (
-    <div className="mx-auto max-w-[1200px] px-6 py-6">
+    <PageContainer width="list">
       <PageHeader
         title="Recordings"
         description={RECORDINGS.LEDE}
@@ -422,7 +423,7 @@ export function RecordingScreen() {
           </DialogContent>
         </Dialog>
       )}
-    </div>
+    </PageContainer>
   );
 }
 

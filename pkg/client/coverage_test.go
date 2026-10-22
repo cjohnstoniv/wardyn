@@ -85,8 +85,8 @@ var (
 	_ client.ComponentConfigSchema
 	_ client.ComponentConfigValues
 	_ client.GovernanceDocument
-	_ client.GovernanceProfile
-	_ client.GovernanceAssignment
+	_ client.GovernanceUnit
+	_ client.GovernanceMembership
 	_ client.GovernanceLimits
 	_ client.AutonomyRubric
 	_ client.AutonomyLevel
@@ -112,19 +112,20 @@ var (
 // parity in both directions.
 func routeFamilies() map[string][]string {
 	return map[string][]string{
-		"runs":            {"CreateRun", "Preflight", "GetRun", "ListGrants", "ListGrantsPage", "KillRun", "SynthesizeProfile", "GetRecording", "RunFiles", "RunEvents", "RunOutput", "RunSignIn", "GetRunPolicy", "GetRunSyncRules", "RunContainment", "RecordRunNode"},
-		"runs.list":       {"ListRuns", "ListRunsPage"},
-		"approvals":       {"ListApprovals", "ListApprovalsPage", "Approve", "Deny"},
-		"policies":        {"CreatePolicy", "GetPolicy", "GetDefaultPolicy", "ListPolicies", "ListPoliciesPage", "UpdatePolicy", "DeletePolicy"},
-		"workspaces":      {"CreateWorkspace", "GetWorkspace", "ListWorkspaces", "ListWorkspacesPage", "UpdateWorkspace", "DeleteWorkspace", "ScanWorkspace", "RecordWorkspaceTask", "GetWorkspaceBuild", "BuildWorkspace"},
-		"sources":         {"ListSources", "CreateSource", "GetSource", "ScanSource", "DeleteSource"},
-		"audit":           {"AuditEvents", "AuditEventsPage", "RecentAuditEvents", "ExportAuditPartition", "AuditRetention", "DropAuditPartition"},
-		"secrets":         {"ListSecrets", "ListSecretsPage", "ListSecretsScoped", "ListSecretsScopedPage", "SetSecret", "DeleteSecret", "ListMySecrets", "ListMySecretsPage", "SetMySecret", "DeleteMySecret", "ListSharedSecrets", "ListSharedSecretsPage", "SetSharedSecret", "DeleteSharedSecret"},
-		"site-config":     {"GetSiteConfig", "PutSiteConfig", "PutSiteConfigResult", "PutSiteConfigClearing"},
-		"drives":          {"GetDrives", "ApplyDrives", "ApplyDrivesResult", "ListMemberDrives", "DeleteMemberDrive", "CreateMyDrive", "DeleteMyDrive"},
-		"templates":       {"ListTemplates", "GetTemplate", "SaveTemplate", "DeleteTemplate", "CopyTemplate", "ImportTemplate", "ListTemplateGroupAdmins", "GrantTemplateGroupAdmin", "RevokeTemplateGroupAdmin"},
-		"presets":         {"ListPresets", "GetPreset", "PutPreset", "DeletePreset", "ApplyPresets"},
-		"governance":      {"GetGovernance", "ApplyGovernance", "ApplyGovernanceResult", "PlanGovernance"},
+		"runs":        {"CreateRun", "Preflight", "GetRun", "ListGrants", "ListGrantsPage", "KillRun", "SynthesizeProfile", "GetRecording", "RunFiles", "RunEvents", "RunOutput", "RunSignIn", "GetRunPolicy", "GetRunSyncRules", "RunContainment", "RecordRunNode"},
+		"runs.list":   {"ListRuns", "ListRunsPage"},
+		"approvals":   {"ListApprovals", "ListApprovalsPage", "Approve", "Deny"},
+		"policies":    {"CreatePolicy", "GetPolicy", "GetDefaultPolicy", "ListPolicies", "ListPoliciesPage", "UpdatePolicy", "DeletePolicy"},
+		"workspaces":  {"CreateWorkspace", "GetWorkspace", "ListWorkspaces", "ListWorkspacesPage", "UpdateWorkspace", "DeleteWorkspace", "ScanWorkspace", "RecordWorkspaceTask", "GetWorkspaceBuild", "BuildWorkspace"},
+		"sources":     {"ListSources", "CreateSource", "GetSource", "ScanSource", "DeleteSource"},
+		"audit":       {"AuditEvents", "AuditEventsPage", "RecentAuditEvents", "ExportAuditPartition", "AuditRetention", "DropAuditPartition"},
+		"secrets":     {"ListSecrets", "ListSecretsPage", "ListSecretsScoped", "ListSecretsScopedPage", "SetSecret", "DeleteSecret", "ListMySecrets", "ListMySecretsPage", "SetMySecret", "DeleteMySecret", "ListSharedSecrets", "ListSharedSecretsPage", "SetSharedSecret", "DeleteSharedSecret"},
+		"site-config": {"GetSiteConfig", "PutSiteConfig", "PutSiteConfigResult", "PutSiteConfigClearing"},
+		"drives":      {"GetDrives", "ApplyDrives", "ApplyDrivesResult", "ListMemberDrives", "DeleteMemberDrive", "CreateMyDrive", "DeleteMyDrive"},
+		"templates":   {"ListTemplates", "GetTemplate", "SaveTemplate", "DeleteTemplate", "CopyTemplate", "ImportTemplate", "ListTemplateGroupAdmins", "GrantTemplateGroupAdmin", "RevokeTemplateGroupAdmin"},
+		"presets":     {"ListPresets", "GetPreset", "PutPreset", "DeletePreset", "ApplyPresets"},
+		"governance": {"GetGovernance", "ApplyGovernance", "ApplyGovernanceResult", "PlanGovernance",
+			"MoveGovernanceMembership", "PromoteGovernanceMembership", "CheckGovernance", "GovernanceDryRun"},
 		"gov.changes":     {"ListGovernanceChanges", "GetGovernanceChange", "ApproveGovernanceChange", "RejectGovernanceChange"},
 		"setup":           {"SetupStatus"},
 		"identity":        {"Me"},

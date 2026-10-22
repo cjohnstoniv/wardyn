@@ -10,6 +10,7 @@ import userEvent from "@testing-library/user-event";
 import { adoCapName } from "../../../../../lib/ado-access-copy";
 import { ADO_PAT } from "../../../../../lib/ado-pat-copy";
 import { secrets } from "../../../../../lib/api/secrets";
+import { MY_COMPONENTS, ORG_GITHUB } from "../../../../../lib/new-run-fixtures/scenarios/catalogue";
 import { SCENARIO_ACCESS, SETUP_ITEMS } from "../../../../../lib/new-run-fixtures/scenarios/tools";
 import { CLAUDE_UNGATED, withFacts } from "../../../../../lib/new-run-fixtures/scenarios/tools-harness";
 import type { AccessFacts } from "../../../../../lib/types/new-run-access";
@@ -30,6 +31,7 @@ const h = vi.hoisted(() => ({
   scm: undefined as unknown,
   refresh: vi.fn(),
   connect: vi.fn(),
+  mine: vi.fn(),
 }));
 vi.mock("../../draft/use-intent-checks", async (orig) => ({
   ...(await orig<typeof import("../../draft/use-intent-checks")>()),
@@ -44,7 +46,7 @@ vi.mock("../../../../wardyn/model-access-context", () => ({
   }),
 }));
 // The catalogue's own read is its tests' (catalogue.test.tsx): here it stays unanswered.
-vi.mock("../../../../../lib/api/components", () => ({ components: { mine: () => new Promise(() => {}), saveMine: vi.fn() } }));
+vi.mock("../../../../../lib/api/components", () => ({ components: { mine: () => h.mine(), saveMine: vi.fn() } }));
 vi.mock("../../../../../lib/hooks/use-ado-connect", () => ({
   useAdoConnect: () => ({ connecting: false, connect: h.connect, connectFallback: h.connect, cancel: () => {}, blockedUrl: null }),
 }));
@@ -81,6 +83,7 @@ beforeEach(() => {
   h.refresh.mockReset();
   h.connect.mockReset().mockResolvedValue(true);
   answer(undefined, false);
+  h.mine.mockReturnValue(new Promise(() => {}));
   vi.spyOn(secrets, "setSecret").mockResolvedValue(undefined);
 });
 afterEach(() => {
@@ -92,6 +95,20 @@ afterEach(() => {
 });
 
 describe("Tools and access step", () => {
+  it("gives the GitHub CLI card the repositories the preview says go through the GitHub App", async () => {
+    h.mine.mockResolvedValue({ ...MY_COMPONENTS, org: [ORG_GITHUB], clis: MY_COMPONENTS.clis.map((c) => (c.kind === "github" ? { ...c, state: "available", rows: [ORG_GITHUB.id] } : c)) });
+    h.checks.preview = {
+      result: {
+        access: SCENARIO_ACCESS.member,
+        components: [{ kind: "git_provider", provider: "github", lane: "app", id: "git_provider:github:app:acme", reason: "workspace", status: "ready", requirements: [], repos: ["github.com/acme/web-app"] }],
+      },
+      current: true,
+    };
+    show();
+    const card = (await screen.findByRole("heading", { name: ORG_GITHUB.name })).closest("li") as HTMLElement;
+    expect(within(card).getByText(NR_TOOLS.GITHUB_REPOS("acme/web-app"))).toBeTruthy();
+  });
+
   const SENTENCE = "This tool cannot be added to this run.";
 
   it("an added inline component's row removes that component through the answer it came from", async () => {

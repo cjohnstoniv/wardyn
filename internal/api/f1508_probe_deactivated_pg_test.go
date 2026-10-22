@@ -45,6 +45,7 @@ func TestF1508Probe_DeactivatedPersonMintsNothing(t *testing.T) {
 			e := newProbeEnv(t)
 			e.bind(t, leaverSub, "https://idp.example", "", "")
 			e.mustCreate(t, leaverBot, leaverSub)
+			ageFreshSponsorships(t, e.pool) // the control mint below comes straight after the create; see svcEnv.mintReq
 			leaver := accessSession(t, leaverSub, "leaver@corp.example", oidc.RoleUser, []string{})
 			inv := inviteEnv{peoplePG: e.peoplePG}
 

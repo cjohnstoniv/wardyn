@@ -52,6 +52,7 @@ export function EffectivePolicyCard({ draft, pre, preview }: { draft: NewRunDraf
                 {r.barrier && <BarrierChip cc={r.barrier} caps />}
                 {r.value && <strong className="font-medium">{r.value}</strong>}
                 {r.detail && <small className="text-muted-foreground">{r.detail}</small>}
+                {r.notes?.map((n) => <small key={n.text} className={n.muted ? "text-muted-foreground" : undefined}>{n.text}</small>)}
               </dd>
             </div>
           ))}

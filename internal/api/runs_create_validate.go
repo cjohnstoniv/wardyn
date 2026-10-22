@@ -70,6 +70,9 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 		return req, noCeiling, "", "", false
 	}
 	canonicalizeRunRepos(&req, s.adoHostsLoader(r.Context()))
+	if _, ok := s.stampContextChoice(w, r, req); !ok {
+		return req, noCeiling, "", "", false
+	}
 	// Only agent is hard-required. Repo is OPTIONAL: an inline-policy run that
 	// mounts a local host folder (WorkspaceMount target /work) has no git repo to
 	// clone, so requiring a repo would block the local-folder wizard path. The
@@ -112,6 +115,10 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	// independently defend itself.
 	if reservedRunTasks[req.Task] {
 		writeErrorReason(w, http.StatusBadRequest, reasonRunTaskReserved, fmt.Sprintf("task %q is set by the server and cannot be requested directly", req.Task))
+		return req, noCeiling, "", "", false
+	}
+	if err := types.MachineKind(req.MachineKind).Validate(); err != nil {
+		writeErrorReason(w, http.StatusBadRequest, reasonMachineKindUnknown, err.Error())
 		return req, noCeiling, "", "", false
 	}
 
@@ -170,7 +177,7 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	if refusal.write(s, w, r) {
 		return req, noCeiling, "", "", false
 	}
-	if s.localFolderRefusal(&req).write(s, w, r) {
+	if s.localFolderRefusal(r.Context(), &req).write(s, w, r) {
 		return req, noCeiling, "", "", false
 	}
 
@@ -200,7 +207,7 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	var warning string
 	if !req.Interactive && strings.TrimSpace(req.Task) == "" {
 		req.Interactive = true
-		warning = "no task and not --interactive: the sandbox comes up idle instead of running nothing forever; attach with `wardyn run attach <run-id>` or pass a task"
+		warning = "no task and not --interactive: the sandbox comes up idle instead of running nothing forever; attach with `wardyn attach <run-id>` or pass a task"
 	}
 	if msg := interactiveToolApprovalsError(req); msg != "" {
 		writeErrorReason(w, http.StatusBadRequest, reasonToolApprovalsHoldInteractiveConflict, msg)
@@ -243,7 +250,7 @@ func requestIsInteractive(req createRunRequest) bool {
 // refusal deployment-wide, on an upgrade that changed no configuration. Absent
 // row, absent behaviour change.
 func governanceHoldRules(ceiling governanceCeiling) bool {
-	if ceiling.Profile == nil {
+	if ceiling.Unit == nil {
 		return false
 	}
 	for _, r := range ceiling.Spec.ToolRules {

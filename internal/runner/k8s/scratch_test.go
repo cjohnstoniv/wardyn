@@ -46,9 +46,9 @@ var wantScratch = map[string]string{
 // disk, and disk_mib would still bound nothing. Empty medium is the disk-backed
 // one, and it is the only one this fix can be built on.
 func TestEphemeralScratchVolumes_ThreeWholeVolumeEmptyDirsAtTheBudget(t *testing.T) {
-	vols, mounts := ephemeralScratchVolumes(64)
+	vols, mounts := ephemeralScratchVolumes(64, false)
 	if len(vols) != len(wantScratch) || len(mounts) != len(wantScratch) {
-		t.Fatalf("ephemeralScratchVolumes(64) = %d volumes / %d mounts, want %d of each (%v)",
+		t.Fatalf("ephemeralScratchVolumes(64, false) = %d volumes / %d mounts, want %d of each (%v)",
 			len(vols), len(mounts), len(wantScratch), wantScratch)
 	}
 	want := resource.MustParse("64Mi")
@@ -98,7 +98,7 @@ func TestEphemeralScratchVolumes_ThreeWholeVolumeEmptyDirsAtTheBudget(t *testing
 // zero-sized emptyDir, which would be a sandbox that cannot write at all.
 func TestEphemeralScratchVolumes_NoBudgetAddsNothing(t *testing.T) {
 	for _, diskMiB := range []int64{0, -1} {
-		vols, mounts := ephemeralScratchVolumes(diskMiB)
+		vols, mounts := ephemeralScratchVolumes(diskMiB, false)
 		if len(vols) != 0 || len(mounts) != 0 {
 			t.Errorf("ephemeralScratchVolumes(%d) = %v / %v, want nothing at all", diskMiB, vols, mounts)
 		}
@@ -154,6 +154,55 @@ func TestCreateSandbox_ScratchReachesTheAgentsOwnContainer(t *testing.T) {
 	for name, path := range wantScratch {
 		if got := mountFor(pod.Spec.EphemeralContainers[0].VolumeMounts, name); got == nil || got.MountPath != path {
 			t.Errorf("exec container mount for %q = %+v, want MountPath %q — the agent runs HERE, so a scratch volume it does not mount bounds nothing", name, got, path)
+		}
+	}
+}
+
+// TestCreateSandbox_KeptWorkFolderReplacesOnlyTheWorkScratch: a drive at the work folder
+// (keep_work_folder) takes the workdir's place, so the pod mounts the claim there and carries no
+// workdir emptyDir to collide with it, while /tmp and the cache stay scratch: only the work folder
+// is kept. The exec container gets the same mounts.
+func TestCreateSandbox_KeptWorkFolderReplacesOnlyTheWorkScratch(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	installProxyIPReactor(t, cs, "10.244.0.13")
+	installAgentRunningReactor(t, cs)
+
+	spec := testSandboxSpec()
+	spec.Resources.DiskMiB = 64
+	kept := testDriveMount()
+	kept.Target = "/home/agent/work"
+	spec.Drives = []types.DriveMount{*kept}
+	sb, err := d.CreateSandbox(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	if _, err := d.Exec(context.Background(), sb.Ref, []string{"agent-run"}); err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+	pod, err := cs.CoreV1().Pods(testNamespace).Get(context.Background(), sb.Ref, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get agent pod: %v", err)
+	}
+	if volumeFor(pod.Spec.Volumes, "wardyn-work") != nil {
+		t.Errorf("pod carries the workdir emptyDir beside the kept work folder; volumes=%+v", pod.Spec.Volumes)
+	}
+	for _, c := range []struct {
+		where  string
+		mounts []corev1.VolumeMount
+	}{{"main", containerByName(pod.Spec.Containers, mainContainerName).VolumeMounts}, {"exec", pod.Spec.EphemeralContainers[0].VolumeMounts}} {
+		var atWork []string
+		for _, m := range c.mounts {
+			if m.MountPath == "/home/agent/work" {
+				atWork = append(atWork, m.Name)
+			}
+		}
+		if len(atWork) != 1 || atWork[0] != driveVolumeNameAt(0) {
+			t.Errorf("%s container mounts at /home/agent/work = %v, want only the drive %q", c.where, atWork, driveVolumeNameAt(0))
+		}
+		for _, name := range []string{"wardyn-tmp", "wardyn-cache"} {
+			if got := mountFor(c.mounts, name); got == nil || got.MountPath != wantScratch[name] {
+				t.Errorf("%s container mount for %q = %+v, want scratch at %q", c.where, name, got, wantScratch[name])
+			}
 		}
 	}
 }

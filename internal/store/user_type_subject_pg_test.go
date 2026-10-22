@@ -8,6 +8,7 @@ package store_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
 	"testing"
@@ -30,7 +31,7 @@ func seedSubjectUserType(t *testing.T, st store.PG, prefix string) string {
 	t.Cleanup(func() {
 		for _, q := range []string{
 			`DELETE FROM capability_grants WHERE subject_type = 'user_type' AND subject = $1`,
-			`DELETE FROM governance_assignments WHERE subject_type = 'user_type' AND subject = $1`,
+			`DELETE FROM governance_memberships WHERE subject_type = 'user_type' AND subject = $1`,
 			`DELETE FROM user_drive_grants WHERE subject_type = 'user_type' AND subject = $1`,
 			`DELETE FROM user_types WHERE id = $1`,
 		} {
@@ -51,16 +52,16 @@ func TestPG_UserTypeTier_Governance(t *testing.T) {
 
 	// Alphabetical order is the OPPOSITE of the tier order, so name ASC can
 	// never be why a case passes.
-	pUser := seedGovernanceProfile(t, st, "zzz-user-"+uniq)
-	pGroup := seedGovernanceProfile(t, st, "yyy-group-"+uniq)
-	pType := seedGovernanceProfile(t, st, "xxx-type-"+uniq)
-	pAll := seedGovernanceProfile(t, st, "aaa-all-"+uniq)
+	pUser := seedGovernanceUnit(t, st, "zzz-user-"+uniq)
+	pGroup := seedGovernanceUnit(t, st, "yyy-group-"+uniq)
+	pType := seedGovernanceUnit(t, st, "xxx-type-"+uniq)
+	pAll := seedGovernanceUnit(t, st, "aaa-all-"+uniq)
 	sub, group := "sub-"+uniq, "group-"+uniq
 
-	seedGovernanceAssignment(t, st, types.GovernanceAssignment{SubjectType: types.CapabilitySubjectAll, ProfileID: pAll.ID})
-	seedGovernanceAssignment(t, st, types.GovernanceAssignment{SubjectType: types.CapabilitySubjectUserType, Subject: pm, ProfileID: pType.ID})
-	seedGovernanceAssignment(t, st, types.GovernanceAssignment{SubjectType: types.CapabilitySubjectGroup, Subject: group, ProfileID: pGroup.ID, Priority: -1000})
-	seedGovernanceAssignment(t, st, types.GovernanceAssignment{SubjectType: types.CapabilitySubjectUser, Subject: sub, ProfileID: pUser.ID})
+	seedGovernanceMembership(t, st, types.GovernanceMembership{SubjectType: types.CapabilitySubjectAll, UnitID: pAll.ID})
+	seedGovernanceMembership(t, st, types.GovernanceMembership{SubjectType: types.CapabilitySubjectUserType, Subject: pm, UnitID: pType.ID})
+	seedGovernanceMembership(t, st, types.GovernanceMembership{SubjectType: types.CapabilitySubjectGroup, Subject: group, UnitID: pGroup.ID, Priority: -1000})
+	seedGovernanceMembership(t, st, types.GovernanceMembership{SubjectType: types.CapabilitySubjectUser, Subject: sub, UnitID: pUser.ID})
 
 	for _, tc := range []struct {
 		name          string
@@ -76,7 +77,7 @@ func TestPG_UserTypeTier_Governance(t *testing.T) {
 		{"no type matches no type row", []string{"nobody-" + uniq}, nil, "", pAll.Name, types.CapabilitySubjectAll},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			p, tier, err := st.ResolveGovernanceProfile(ctx, tc.users, tc.groups, tc.userType)
+			p, tier, err := st.ResolveGovernanceUnit(ctx, tc.users, tc.groups, tc.userType)
 			if err != nil {
 				t.Fatalf("resolve: %v", err)
 			}
@@ -169,7 +170,7 @@ func TestPG_DeleteUserType_RefusedWhileASubjectRowNamesIt(t *testing.T) {
 	st := store.NewPG(runsPGPool(t))
 	ctx := context.Background()
 	uniq := uuid.NewString()
-	for _, table := range []string{"capability_grants", "governance_assignments", "user_drive_grants"} {
+	for _, table := range []string{"capability_grants", "governance_memberships", "user_drive_grants"} {
 		t.Run(table, func(t *testing.T) {
 			id := seedSubjectUserType(t, st, "del")
 			switch table {
@@ -180,9 +181,9 @@ func TestPG_DeleteUserType_RefusedWhileASubjectRowNamesIt(t *testing.T) {
 				}); err != nil {
 					t.Fatal(err)
 				}
-			case "governance_assignments":
-				p := seedGovernanceProfile(t, st, "del-"+id+"-"+uniq)
-				seedGovernanceAssignment(t, st, types.GovernanceAssignment{SubjectType: types.CapabilitySubjectUserType, Subject: id, ProfileID: p.ID})
+			case "governance_memberships":
+				p := seedGovernanceUnit(t, st, "del-"+id+"-"+uniq)
+				seedGovernanceMembership(t, st, types.GovernanceMembership{SubjectType: types.CapabilitySubjectUserType, Subject: id, UnitID: p.ID})
 			case "user_drive_grants":
 				d := seedUserDrive(t, st, "del-"+id+"-"+uniq)
 				seedUserDriveGrant(t, st, types.UserDriveGrant{SubjectType: types.CapabilitySubjectUserType, Subject: id, DriveID: d.ID})
@@ -220,5 +221,30 @@ func TestPG_CreateUserType_RefusedWhileAnOrphanedSubjectRowNamesTheID(t *testing
 	}
 	if _, err := st.CreateUserType(ctx, types.UserType{ID: id, Name: "Reborn " + id}); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("recreate orphaned id = %v, want ErrConflict", err)
+	}
+}
+
+// TestPG_UserType_NamedByALaunchPreset: a launch preset restricted to a type holds it like any other
+// subject row, and an orphan of it keeps the id from being recreated (the preset carries no foreign key).
+func TestPG_UserType_NamedByALaunchPreset(t *testing.T) {
+	st := store.NewPG(runsPGPool(t))
+	ctx := context.Background()
+	id := seedSubjectUserType(t, st, "preset")
+	name := "preset-" + id
+	if _, _, err := st.PutLaunchPreset(ctx, types.LaunchPreset{Name: name, UserTypes: []string{id}, Request: json.RawMessage(`{}`), CreatedBy: "u"}); err != nil {
+		t.Fatalf("put preset: %v", err)
+	}
+	t.Cleanup(func() { _, _ = st.DeleteLaunchPreset(ctx, name) })
+	if n, err := st.UserTypeReferences(ctx, id); err != nil || n != 1 {
+		t.Fatalf("references = %d, %v; want 1", n, err)
+	}
+	if err := st.DeleteUserType(ctx, id); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("delete while a preset names it = %v, want ErrConflict", err)
+	}
+	if _, err := st.Pool.Exec(ctx, `DELETE FROM user_types WHERE id = $1`, id); err != nil {
+		t.Fatalf("force-delete: %v", err)
+	}
+	if _, err := st.CreateUserType(ctx, types.UserType{ID: id, Name: "Reborn " + id}); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("recreate an id a preset names = %v, want ErrConflict", err)
 	}
 }

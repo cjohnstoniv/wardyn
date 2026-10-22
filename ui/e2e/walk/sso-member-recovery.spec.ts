@@ -94,7 +94,6 @@ import { NR_SHARED } from "../../src/app/components/wardyn/copy/new-run/shared";
 import { NR_START } from "../../src/app/components/wardyn/copy/new-run/start";
 import { NR_TOOLS } from "../../src/app/components/wardyn/copy/new-run/tools";
 import { AGENTS, PROVIDERS } from "../../src/app/lib/workspace-providers-copy";
-import { expandCard } from "../fixtures";
 import {
   ADMIN_EMAIL,
   LOGIN_DONE,
@@ -349,11 +348,10 @@ async function gotoAgentsTab(page: Page): Promise<void> {
     }
     await expect(page.getByTestId("providers-card")).toBeVisible({ timeout: 5_000 });
   }).toPass({ timeout: 90_000 });
-  // #1200: the Settings cards start collapsed; the "Open" link is in the body.
-  await expandCard(page, PROVIDERS.TITLE);
-  await page.getByTestId("providers-card").getByText(PROVIDERS.CARD_OPEN).click();
+  // Workspace providers is a link row on Settings, not a collapsed card.
+  await page.getByTestId("providers-card").getByRole("link").click();
   await expect(page).toHaveURL(/\/admin\/providers$/);
-  await page.getByRole("button", { name: AGENTS.AGENTS_TITLE }).click();
+  await page.getByRole("tab", { name: AGENTS.AGENTS_TITLE }).click();
 }
 
 /** Puts this SSO admin's session in the named view with the console's own switch; the session cookie holds the
@@ -590,7 +588,7 @@ test("C (login-sandbox-selfrun): the sign-in sandbox runs the pair itself and th
   // Before 0.7.5 the console typed the chained command into the pane
   // and a Runs-list attach got a bare prompt; now the IMAGE creates the `wardyn`
   // tmux session on signin-pane.sh and runs the pair once, and every attach path
-  // — this pane, the Runs list, `wardyn run attach`, ssh — joins that one session
+  // — this pane, the Runs list, `wardyn attach`, ssh — joins that one session
   // (attaching is `tmux new-session -A`). If this case ever needs a keystroke to
   // pass, the feature is not there.
   await dexSignIn(page, MEMBER_EMAIL);

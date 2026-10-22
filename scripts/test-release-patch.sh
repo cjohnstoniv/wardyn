@@ -25,6 +25,11 @@
 # and, over every push any case made: no --force, no `+` refspec.
 # Daemon-free, network-free.
 set -u
+
+# Throwaway repos get no background git: a commit or fetch can leave detached
+# auto-maintenance writing under .git when the EXIT trap runs rm -rf (#3328).
+export GIT_CONFIG_COUNT=3 GIT_CONFIG_KEY_0=maintenance.auto GIT_CONFIG_VALUE_0=false GIT_CONFIG_KEY_1=gc.auto GIT_CONFIG_VALUE_1=0 GIT_CONFIG_KEY_2=gc.autoDetach GIT_CONFIG_VALUE_2=false
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT="${SCRIPT:-"$ROOT/scripts/release-patch.sh"}"
 [ -x "$SCRIPT" ] || { echo "FAIL: $SCRIPT is missing or not executable"; exit 1; }
@@ -175,6 +180,7 @@ mkfix() {  # mkfix <name>: sets FIX WK OR; origin has main, release/0.8 (+tags v
     cd "$WK" || exit 1
     mkdir -p scripts .github/workflows
     cp "$SCRIPT" scripts/release-patch.sh
+    cp "$ROOT/scripts/forward-port-check.sh" scripts/forward-port-check.sh
     write_stubs
     g add -A && g commit -q -s -m base
     g remote add origin "$OR"
@@ -254,6 +260,7 @@ check "A: release edit came after the run watch" bash -c "[ \$(grep -n '^run wat
 check "A: verify-release ran for 0.8.4" log_has verify.log '^V=0\.8\.4$'
 check "A: prints the table with the total from T0" out_has 'total from T0'
 check "A: prints the forward-port commands without running them" out_has 'forward-port'
+check "A: prints the forward-port check against the previous tag" out_has 'forward-port-check\.sh --version 0\.8\.4 v0\.8\.3 origin/main HEAD'
 check "A: no push to main" log_lacks push.log 'refs/heads/main'
 keep_pushes
 

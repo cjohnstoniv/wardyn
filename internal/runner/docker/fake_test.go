@@ -69,6 +69,13 @@ func (r fakePullResponse) Wait(context.Context) error {
 // container joined through NetworkConnect.
 const fakeJoinedNetIP = "172.30.0.9"
 
+// fakeExec records one ExecCreate.
+type fakeExec struct {
+	cmd     []string
+	user    string
+	running bool
+}
+
 // createdContainer records a ContainerCreate call for assertions.
 type createdContainer struct {
 	name string
@@ -92,6 +99,8 @@ type fakeDocker struct {
 
 	// inspectFailures is how many more ContainerInspect calls fail outright.
 	inspectFailures int
+	// stopFailures is how many more ContainerStop calls on a container fail with a cancelled context.
+	stopFailures map[string]int
 
 	info system.Info
 	// pingErr is what Ping answers; pingBlock makes it wait for ctx instead.
@@ -152,6 +161,12 @@ type fakeDocker struct {
 	// runDir is the /run entry CopyFromContainer reports (nil: absent, as in
 	// an image that ships no /run).
 	runDir *tar.Header
+	// teamSeedVolume is what CopyFromContainer reports at teamDriveSeedTarget
+	// (nil: one empty directory, as a fresh volume reads).
+	teamSeedVolume []*tar.Header
+	// onCopyFrom, when set, runs at the start of every CopyFromContainer
+	// (outside the lock), so a test can hold concurrent readers at a barrier.
+	onCopyFrom func(id, path string)
 	// imageVolumes is each image's VOLUME declarations: merged into a created
 	// container's Config.Volumes and reported in its Mounts, as the daemon
 	// does when it backs each with an anonymous volume.
@@ -204,6 +219,10 @@ type fakeDocker struct {
 	execGone string
 
 	lastExecCmd []string // argv of the most recent exec
+	// execLog records every exec created, in order, with whether its container was running then.
+	execLog []fakeExec
+	// execCreateErr, when set, is every ExecCreate's answer for a container that exists.
+	execCreateErr error
 	// lastExecOpts records the full ExecCreateOptions of the most recent exec
 	// (lastExecCmd predates this and stays as the narrow, common-case reader),
 	// so a test can also assert TTY/Env were passed through correctly.
@@ -258,6 +277,11 @@ type fakeDocker struct {
 	lastListFilters client.Filters
 	lastListAll     bool
 
+	// failRemove makes ContainerRemove of a name fail that many times first; inspectCalls counts
+	// ContainerInspect calls per name.
+	failRemove   map[string]int
+	inspectCalls map[string]int
+
 	// probeExitCode is the exit code ContainerWait reports for a container
 	// whose name carries the drive-probe prefix ("wardyn-drive-probe-") —
 	// there is no real command interpreter here to run `test -r/-x` against a
@@ -304,6 +328,23 @@ type fakeDocker struct {
 	// settle window from the watch's own start, never from a skewed
 	// StartedAt (driver_proxy_revive.go's proxySettleSince).
 	startedAtOverride map[string]time.Time
+
+	// exportTar is what ContainerExport streams (a VM image's filesystem); exports counts the calls.
+	exportTar []byte
+	exports   int
+	// onStart, when set, runs as a container starts (outside the lock): a VM test's fake QEMU and
+	// prep steps act on the run directory the container's mounts name.
+	onStart func(c *createdContainer)
+}
+
+func (f *fakeDocker) ContainerExport(_ context.Context, id string, _ client.ContainerExportOptions) (client.ContainerExportResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.containers[id] == nil {
+		return nil, fakeNotFound{msg: "no such container: " + id}
+	}
+	f.exports++
+	return io.NopCloser(bytes.NewReader(f.exportTar)), nil
 }
 
 // ContainerList makes this fake a containerListerAPI, the narrow seam
@@ -658,6 +699,12 @@ func (f *fakeDocker) ContainerStatPath(ctx context.Context, id string, opts clie
 
 func (f *fakeDocker) CopyFromContainer(ctx context.Context, id string, opts client.CopyFromContainerOptions) (client.CopyFromContainerResult, error) {
 	f.mu.Lock()
+	hook := f.onCopyFrom
+	f.mu.Unlock()
+	if hook != nil {
+		hook(id, opts.SourcePath)
+	}
+	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.containers[id] == nil {
 		return client.CopyFromContainerResult{}, fakeNotFound{msg: "no such container: " + id}
@@ -673,6 +720,14 @@ func (f *fakeDocker) CopyFromContainer(ctx context.Context, id string, opts clie
 		_ = tw.WriteHeader(hdr)
 	case opts.SourcePath == "/run" && f.runDir != nil:
 		_ = tw.WriteHeader(f.runDir)
+	case opts.SourcePath == teamDriveSeedTarget:
+		hdrs := f.teamSeedVolume
+		if hdrs == nil {
+			hdrs = []*tar.Header{{Name: "wardyn-drive-seed/", Typeflag: tar.TypeDir, Mode: 0o755}}
+		}
+		for _, h := range hdrs {
+			_ = tw.WriteHeader(h)
+		}
 	case opts.SourcePath == "/etc/passwd" && f.passwd != "":
 		_ = tw.WriteHeader(&tar.Header{Name: "passwd", Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(f.passwd))})
 		_, _ = tw.Write([]byte(f.passwd))
@@ -683,7 +738,18 @@ func (f *fakeDocker) CopyFromContainer(ctx context.Context, id string, opts clie
 	return client.CopyFromContainerResult{Content: io.NopCloser(&buf)}, nil
 }
 
-func (f *fakeDocker) ContainerStart(ctx context.Context, id string, _ client.ContainerStartOptions) (client.ContainerStartResult, error) {
+func (f *fakeDocker) ContainerStart(_ context.Context, id string, _ client.ContainerStartOptions) (client.ContainerStartResult, error) {
+	res, err := f.containerStart(id)
+	f.mu.Lock()
+	c, hook := f.containers[id], f.onStart
+	f.mu.Unlock()
+	if err == nil && hook != nil {
+		hook(c)
+	}
+	return res, err
+}
+
+func (f *fakeDocker) containerStart(id string) (client.ContainerStartResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	c := f.containers[id]
@@ -742,6 +808,10 @@ func (f *fakeDocker) ContainerStart(ctx context.Context, id string, _ client.Con
 func (f *fakeDocker) ContainerInspect(ctx context.Context, id string, _ client.ContainerInspectOptions) (client.ContainerInspectResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.inspectCalls == nil {
+		f.inspectCalls = map[string]int{}
+	}
+	f.inspectCalls[id]++
 	if f.inspectFailures > 0 {
 		f.inspectFailures--
 		return client.ContainerInspectResult{}, errors.New("fake: inspect: daemon busy")
@@ -833,6 +903,10 @@ func (f *fakeDocker) ContainerLogs(ctx context.Context, id string, opts client.C
 func (f *fakeDocker) ContainerStop(ctx context.Context, id string, _ client.ContainerStopOptions) (client.ContainerStopResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.stopFailures[id] > 0 {
+		f.stopFailures[id]--
+		return client.ContainerStopResult{}, context.Canceled
+	}
 	c := f.containers[id]
 	if c == nil || c.removed {
 		return client.ContainerStopResult{}, fakeNotFound{msg: "no such container: " + id}
@@ -908,6 +982,10 @@ func (f *fakeDocker) ContainerUnpause(ctx context.Context, id string, _ client.C
 func (f *fakeDocker) ContainerRemove(ctx context.Context, id string, opts client.ContainerRemoveOptions) (client.ContainerRemoveResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failRemove[id] > 0 {
+		f.failRemove[id]--
+		return client.ContainerRemoveResult{}, errors.New("fake: remove: daemon busy")
+	}
 	c := f.containers[id]
 	if c == nil {
 		return client.ContainerRemoveResult{}, fakeNotFound{msg: "no such container: " + id}
@@ -957,9 +1035,14 @@ func (f *fakeDocker) ContainerWait(ctx context.Context, id string, _ client.Cont
 func (f *fakeDocker) ExecCreate(ctx context.Context, id string, opts client.ExecCreateOptions) (client.ExecCreateResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if c := f.containers[id]; c == nil || c.removed {
+	c := f.containers[id]
+	if c == nil || c.removed {
 		return client.ExecCreateResult{}, fakeNotFound{msg: "no such container: " + id}
 	}
+	if f.execCreateErr != nil {
+		return client.ExecCreateResult{}, f.execCreateErr
+	}
+	f.execLog = append(f.execLog, fakeExec{cmd: opts.Cmd, user: opts.User, running: c.state != nil && c.state.Running})
 	execID := "exec-" + id
 	// stash last exec opts for assertion
 	f.lastExecCmd = opts.Cmd

@@ -133,9 +133,9 @@ describe("ImagesTab", () => {
     expect(within(dialog).getByText(AVAILABILITY.IMAGE_HINT)).toBeInTheDocument();
 
     await userEvent.type(ref, "ghcr.io/acme/dev-toolbox:1.4");
+    await userEvent.click(within(dialog).getByRole("radio", { name: AVAILABILITY.ONLY }));
     await userEvent.type(within(dialog).getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER), "portfolio-manager");
     await userEvent.click(within(dialog).getByRole("button", { name: AVAILABILITY.ADD_CTA }));
-    await userEvent.click(within(dialog).getByRole("radio", { name: AVAILABILITY.ONLY }));
     await userEvent.click(within(dialog).getByRole("button", { name: IMAGES.ADD_CTA }));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
@@ -171,9 +171,9 @@ describe("ImagesTab", () => {
     const dialog = await screen.findByRole("dialog");
 
     await userEvent.type(within(dialog).getByLabelText(IMAGES.REF), TOOLBOX.image);
+    await userEvent.click(within(dialog).getByRole("radio", { name: AVAILABILITY.ONLY }));
     await userEvent.type(within(dialog).getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER), "portfolio-mgr");
     await userEvent.click(within(dialog).getByRole("button", { name: AVAILABILITY.ADD_CTA }));
-    await userEvent.click(within(dialog).getByRole("radio", { name: AVAILABILITY.ONLY }));
     await userEvent.click(within(dialog).getByRole("button", { name: IMAGES.ADD_CTA }));
 
     expect(await within(dialog).findByText(AVAILABILITY.CREATE_PARTIAL_TITLE)).toBeInTheDocument();

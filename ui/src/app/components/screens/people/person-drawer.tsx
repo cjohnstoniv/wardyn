@@ -11,7 +11,6 @@ import * as React from "react";
 import { Link } from "react-router-dom";
 import { Loader2, RotateCw } from "lucide-react";
 import { toast } from "sonner";
-import { credentials as credentialsApi } from "../../../lib/api/credentials";
 import { people as peopleApi } from "../../../lib/api/people";
 import { getErrorMessage, relativeTime } from "../../../lib/format";
 import type { PersonSummary, PersonToken } from "../../../lib/types";
@@ -29,9 +28,10 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "../../ui/alert-dialog";
+import { EraseDataDialog } from "../erase-data-dialog";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "../../ui/sheet";
 
-type Action = "sign_out" | "ssh" | "creds";
+type Action = "sign_out" | "ssh";
 
 // The directory's API-token count (store_people_directory.go) counts the same rows: neither revoked nor expired.
 const isActiveToken = (t: PersonToken) => !t.revoked_at && (!t.expires_at || Date.parse(t.expires_at) > Date.now());
@@ -58,6 +58,7 @@ export function PersonDrawer({
   onChanged: () => void;
 }) {
   const [confirm, setConfirm] = React.useState<Action | null>(null);
+  const [eraseOpen, setEraseOpen] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   const [tokens, setTokens] = React.useState<PersonToken[]>([]);
   // A swallowed rejection left the section showing the server's count with no names under it, which
@@ -71,6 +72,7 @@ export function PersonDrawer({
 
   React.useEffect(() => {
     setConfirm(null);
+    setEraseOpen(false);
     setTokens([]);
     if (!principal) return;
     let live = true;
@@ -93,7 +95,6 @@ export function PersonDrawer({
   const message: Record<Action, { confirm: string; run: () => Promise<unknown>; button: string }> = {
     sign_out: { confirm: P.SIGN_OUT_CONFIRM(label), run: () => peopleApi.signOutEverywhere(person.principal), button: P.SIGN_OUT },
     ssh: { confirm: P.SSH_REMOVE_CONFIRM(label), run: () => peopleApi.removeSSHKeys(person.principal), button: P.SSH_REMOVE },
-    creds: { confirm: P.CREDS_ERASE_CONFIRM(label), run: () => credentialsApi.erase(person.principal), button: P.CREDS_ERASE },
   };
 
   const run = async (action: Action) => {
@@ -159,7 +160,7 @@ export function PersonDrawer({
               </Button>
             </Section>
             <Section label={P.CREDS} value={person.credentials}>
-              <Button size="sm" variant="outline" disabled={person.credentials === 0} onClick={() => setConfirm("creds")}>
+              <Button size="sm" variant="outline" disabled={person.credentials === 0} onClick={() => setEraseOpen(true)}>
                 {P.CREDS_ERASE}
               </Button>
             </Section>
@@ -171,6 +172,13 @@ export function PersonDrawer({
           </div>
         </SheetContent>
       </Sheet>
+
+      <EraseDataDialog
+        open={eraseOpen}
+        person={{ principal: person.principal, label }}
+        onOpenChange={setEraseOpen}
+        onErased={onChanged}
+      />
 
       <AlertDialog open={confirm !== null} onOpenChange={(o) => !o && !busy && setConfirm(null)}>
         <AlertDialogContent>

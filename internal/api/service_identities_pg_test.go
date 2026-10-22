@@ -114,7 +114,17 @@ func (e svcEnv) mustCreate(t *testing.T, name, sponsor string) types.ServiceIden
 	return si
 }
 
+// mintReq has as ask for a token. A sponsorship written moments ago is aged first (ageFreshSponsorships): the store
+// refuses a token whose translated issue time is not after sponsor_since, and under load a create-then-mint
+// that close inverts the two, a flake that says nothing about the test. A test whose point is that ordering
+// calls mintReqUnaged.
 func (e svcEnv) mintReq(t *testing.T, as *http.Cookie, name, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	ageFreshSponsorships(t, e.pool)
+	return e.mintReqUnaged(t, as, name, body)
+}
+
+func (e svcEnv) mintReqUnaged(t *testing.T, as *http.Cookie, name, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	return doSSO(t, e.h.srv, http.MethodPost, "/api/v1/me/service-identities/"+name+"/tokens", as, body)
 }
@@ -122,7 +132,18 @@ func (e svcEnv) mintReq(t *testing.T, as *http.Cookie, name, body string) *httpt
 // mustMint has the sponsor mint a token and returns its plaintext.
 func (e svcEnv) mustMint(t *testing.T, as *http.Cookie, name string) types.APIToken {
 	t.Helper()
-	w := e.mintReq(t, as, name, `{"name":"ci","ttl_seconds":3600}`)
+	return e.mustMintWith(t, e.mintReq, as, name)
+}
+
+// mustMintUnaged is mustMint without aging the sponsorship, for a test that asserts the create/mint ordering.
+func (e svcEnv) mustMintUnaged(t *testing.T, as *http.Cookie, name string) types.APIToken {
+	t.Helper()
+	return e.mustMintWith(t, e.mintReqUnaged, as, name)
+}
+
+func (e svcEnv) mustMintWith(t *testing.T, req func(*testing.T, *http.Cookie, string, string) *httptest.ResponseRecorder, as *http.Cookie, name string) types.APIToken {
+	t.Helper()
+	w := req(t, as, name, `{"name":"ci","ttl_seconds":3600}`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("mint service token: %d %s, want 201", w.Code, w.Body.String())
 	}
@@ -307,9 +328,11 @@ func TestServiceIdentity_AllowListRouteWalk(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantAllowed := []string{
-		"DELETE /api/v1/model-providers/{id}/credential", "GET /api/v1/me", "GET /api/v1/runs", "GET /api/v1/runs/{id}",
-		"GET /api/v1/runs/{id}/events", "GET /api/v1/runs/{id}/output", "GET /api/v1/setup/status", "PATCH /api/v1/runs/{id}",
-		"POST /api/v1/runs", "POST /api/v1/runs/preflight", "POST /api/v1/runs/{id}/kill", "PUT /api/v1/model-providers/{id}/credential",
+		"DELETE /api/v1/model-providers/{id}/credential", "GET /api/v1/audit", "GET /api/v1/me", "GET /api/v1/presets",
+		"GET /api/v1/presets/{name}", "GET /api/v1/runs", "GET /api/v1/runs/{id}",
+		"GET /api/v1/runs/{id}/events", "GET /api/v1/runs/{id}/output", "GET /api/v1/setup/status", "GET /api/v1/workspaces",
+		"PATCH /api/v1/runs/{id}", "POST /api/v1/runs", "POST /api/v1/runs/preflight", "POST /api/v1/runs/{id}/kill",
+		"PUT /api/v1/model-providers/{id}/credential",
 	}
 	if got := slices.Sorted(maps.Keys(serviceAllowed)); !slices.Equal(got, wantAllowed) {
 		t.Errorf("the service allow-list = %v, want exactly %v", got, wantAllowed)

@@ -22,6 +22,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -207,7 +208,14 @@ func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 			fallback.ServeHTTP(w, r)
 			return
 		}
-		ctx := withHumanIdentity(r.Context(), t.Principal, t.Email, t.Role, t.UserType, t.Groups,
+		// A cli_access token publishes the role user whatever the person's role: the same downward-only
+		// clamp the user view applies (oidc contextWithPrincipal). Admin reach from the CLI is the 1-hour
+		// cli_admin step-up (wardyn login --admin).
+		role := t.Role
+		if t.Kind == types.APITokenKindCLIAccess {
+			role = oidc.RoleUser
+		}
+		ctx := withHumanIdentity(r.Context(), t.Principal, t.Email, role, t.UserType, t.Groups,
 			t.GroupsTruncated == nil || *t.GroupsTruncated)
 		next.ServeHTTP(w, r.WithContext(withAPITokenID(oidc.WithRevocationSeq(ctx, t.Principal, t.RevSeq), t.ID)))
 	})
@@ -493,7 +501,8 @@ func (s *Server) mintSessionLive(w http.ResponseWriter, r *http.Request, sub str
 
 // mintAuditDetail is the data of a token.create row; an invitation's claim adds the invitation id.
 func mintAuditDetail(created types.APIToken, clampedFrom time.Duration, invitation *uuid.UUID) map[string]any {
-	detail := map[string]any{"name": created.Name, "role": created.Role, "user_type": created.UserType}
+	detail := map[string]any{"name": created.Name, "role": created.Role, "user_type": created.UserType,
+		"kind": cmp.Or(created.Kind, types.APITokenKindAPI)}
 	if created.ExpiresAt != nil {
 		detail["expires_at"] = created.ExpiresAt
 	}
@@ -528,7 +537,7 @@ func (s *Server) apiTokenCapReached(w http.ResponseWriter, r *http.Request, prin
 	}
 	live := 0
 	for _, e := range existing {
-		if e.RevokedAt == nil && (e.ExpiresAt == nil || e.ExpiresAt.After(s.cfg.Now())) {
+		if e.RevokedAt == nil && (e.ExpiresAt == nil || e.ExpiresAt.After(s.cfg.Now())) && !replacedByRotation(r.Context(), e) {
 			live++
 		}
 	}
@@ -592,7 +601,17 @@ func (s *Server) listAPITokensFor(w http.ResponseWriter, r *http.Request, princi
 // authority over the verdict, not reach into a run, which is the line that puts
 // a route on that tier; it names other humans, so it is not a member surface.
 func (s *Server) handleListAllAPITokens(w http.ResponseWriter, r *http.Request) {
-	tokens, err := s.cfg.Store.ListAPITokens(r.Context())
+	mintedForOthers := r.URL.Query().Get("minted_for_others") == "true"
+	withRevoked := r.URL.Query().Get("include_revoked") == "true"
+	now := s.cfg.Now()
+	var tokens []types.APIToken
+	var err error
+	lister, sqlFilter := s.cfg.Store.(store.APITokensMintedForOthersLister)
+	if mintedForOthers && sqlFilter {
+		tokens, err = lister.ListAPITokensMintedForOthers(r.Context(), withRevoked, now)
+	} else {
+		tokens, err = s.cfg.Store.ListAPITokens(r.Context())
+	}
 	if err != nil {
 		writeServerError(w, r, "list api tokens", err)
 		return
@@ -602,13 +621,13 @@ func (s *Server) handleListAllAPITokens(w http.ResponseWriter, r *http.Request) 
 	// ones too with &include_revoked=true, so a finished move or claim stays
 	// visible, as an expired one does. The route that created them is gone; they keep working until
 	// revoked or expired. Each admin-minted row carries its disposition (#1508).
-	if r.URL.Query().Get("minted_for_others") == "true" {
-		withRevoked := r.URL.Query().Get("include_revoked") == "true"
-		now := s.cfg.Now()
-		tokens = slices.DeleteFunc(tokens, func(t types.APIToken) bool {
-			finished := t.RevokedAt != nil || (t.ExpiresAt != nil && !t.ExpiresAt.After(now))
-			return t.MintedBy == "" || t.MintedBy == t.Principal || (finished && !withRevoked)
-		})
+	if mintedForOthers {
+		if !sqlFilter {
+			tokens = slices.DeleteFunc(tokens, func(t types.APIToken) bool {
+				finished := t.RevokedAt != nil || (t.ExpiresAt != nil && !t.ExpiresAt.After(now))
+				return t.MintedBy == "" || t.MintedBy == t.Principal || (finished && !withRevoked)
+			})
+		}
 		// Only the still-work view: include_revoked lists every row, finished or not, whoever owns it.
 		if !withRevoked {
 			if tokens, err = s.dropDeactivatedOwners(r.Context(), tokens); err != nil {

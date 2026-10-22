@@ -31,7 +31,13 @@ vi.mock("../../lib/api/permissions", () => ({
 }));
 
 const listRunsMock = vi.fn();
-vi.mock("../../lib/api/runs", () => ({ runs: { listRuns: (...a: unknown[]) => listRunsMock(...a) } }));
+// The paged overload (limit + offset) answers { runs, truncated }; the plain one a bare array.
+vi.mock("../../lib/api/runs", () => ({
+  runs: {
+    listRuns: (o?: { limit?: number }) =>
+      listRunsMock().then((page: { runs: unknown[] }) => (o?.limit != null ? page : page.runs)),
+  },
+}));
 
 // UT-7a: the add form's "User type" branch — a closed picker of the org's
 // types (UserTypeSubjectSelect), never free text.
@@ -41,6 +47,7 @@ vi.mock("../../lib/api/user-types", () => ({
 }));
 
 import { CAPABILITY_KINDS, KIND, PERM, PERM_EXTRA } from "../../lib/permissions-copy";
+import { GROUPS_READ_AT_SIGNIN } from "../../lib/groups-copy";
 import type { CapabilityGrant } from "../../lib/types";
 import { PermissionsScreen } from "./permissions";
 import { OperatorProvider } from "../wardyn/operator-context";
@@ -156,6 +163,64 @@ describe("PermissionsScreen — advisory, enforced, and the dangerous cell", () 
   });
 });
 
+describe("PermissionsScreen — the capability row (#3053)", () => {
+  it("says how many grants a row has, and warns on the row when it has none", async () => {
+    getPermissionsMock.mockResolvedValue({
+      grants: [grant(), grant({ id: "22222222-2222-2222-2222-222222222222", value: "*.npmjs.org" })],
+      enforcement: { egress_host: true },
+    });
+    renderScreen();
+    const egress = await screen.findByTestId("capability-row-egress_host");
+    expect(within(egress).getByText(PERM.ROW_GRANTS(2))).toBeInTheDocument();
+    expect(within(egress).getByText(PERM.CHIP_ON)).toBeInTheDocument();
+    const workspace = screen.getByTestId("capability-row-workspace");
+    expect(within(workspace).getByText(PERM.ROW_ZERO)).toBeInTheDocument();
+    expect(PERM.ROW_GRANTS(1)).toBe("1 grant");
+  });
+
+  it("a deny-only row counts as nothing granted, the same as the confirm dialog does", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    getPermissionsMock.mockResolvedValue({
+      grants: [grant({ capability: "workspace", value: "ws-1", effect: "deny" })],
+      enforcement: {},
+    });
+    renderScreen();
+    const workspace = await screen.findByTestId("capability-row-workspace");
+    expect(within(workspace).getByText(PERM.ROW_DENY_ONLY(1))).toBeInTheDocument();
+    expect(within(workspace).queryByText(PERM.ROW_ZERO)).toBeNull();
+    expect(workspace.className).toContain("bg-warning-subtle");
+    await user.click(within(workspace).getByRole("switch", { name: `${PERM.ENFORCEMENT_TITLE} ${KIND.workspace.label}` }));
+    expect(within(await screen.findByRole("alertdialog")).getByText(PERM.ENFORCE_ZERO_CONFIRM)).toBeInTheDocument();
+  });
+
+  it("Add grant on a row chooses that capability in the add form", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    window.HTMLElement.prototype.scrollIntoView = vi.fn();
+    renderScreen();
+    const row = await screen.findByTestId("capability-row-secret");
+    await user.click(within(row).getByRole("button", { name: `${PERM.ADD_CTA} ${KIND.secret.label}` }));
+    const form = document.getElementById("permissions-add-grant")!;
+    expect(within(form).getByLabelText(KIND.secret.valueLabel)).toBeInTheDocument();
+  });
+
+  it("enforcing with no grants asks to confirm with the owner's sentence", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+    await screen.findByTestId("capability-row-workspace");
+    await user.click(screen.getByRole("switch", { name: `${PERM.ENFORCEMENT_TITLE} ${KIND.workspace.label}` }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText(PERM.ENFORCE_ZERO_CONFIRM)).toBeInTheDocument();
+    expect(putEnforcementMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps the doctrine one click away in How permissions work", async () => {
+    renderScreen();
+    const disclosure = await screen.findByTestId("how-permissions-work");
+    expect(within(disclosure).getByText(PERM.HOW_TITLE)).toBeInTheDocument();
+    expect(within(disclosure).getByText(PERM.DOCTRINE)).toBeInTheDocument();
+  });
+});
+
 describe("PermissionsScreen — enforcement confirms", () => {
   it("turning a kind on names the affected member count and writes the FULL map", async () => {
     getPermissionsMock.mockResolvedValue({ grants: [grant()], enforcement: {} });
@@ -201,7 +266,9 @@ describe("PermissionsScreen — enforcement confirms", () => {
     await user.click(screen.getByRole("switch", { name: `${PERM.ENFORCEMENT_TITLE} ${KIND.workspace.label}` }));
 
     const dialog = await screen.findByRole("alertdialog");
-    expect(within(dialog).getByText(PERM.ENFORCE_ON_ZERO)).toBeInTheDocument();
+    expect(within(dialog).getByText(PERM.ENFORCE_ZERO_CONFIRM)).toBeInTheDocument();
+    // One lockout sentence in the dialog, not the ruled one plus a paraphrase of it.
+    expect(within(dialog).queryByText(PERM.ENFORCE_ON_ZERO)).toBeNull();
   });
 
   it("#2512: turning a widening kind on with nothing granted states no lockout — members were already refused", async () => {
@@ -299,12 +366,10 @@ describe("PermissionsScreen — an affected-member count that could not be read"
     expect(within(dialog).getByText(PERM.ENFORCE_ON_BODY_UNKNOWN)).toBeInTheDocument();
   });
 
-  it("#2515: a truncated runs page names no count — the creators on it are not the members", async () => {
+  // #2515: the runs page is the newest 1000; past that the creators it shows are only some of the members.
+  it("says members are bounded WITHOUT a number when the runs page is truncated", async () => {
     getPermissionsMock.mockResolvedValue({ grants: [grant()], enforcement: {} });
-    // Only the paged form carries X-Wardyn-Truncated; the bare form hands back the rows alone.
-    listRunsMock.mockImplementation((opts?: unknown) =>
-      Promise.resolve(opts ? { runs: [{ created_by: "bob@corp.example" }], truncated: true } : [{ created_by: "bob@corp.example" }]),
-    );
+    listRunsMock.mockResolvedValue({ runs: [{ created_by: "bob@corp.example" }, { created_by: "dana@corp.example" }], truncated: true });
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderScreen();
 
@@ -312,7 +377,7 @@ describe("PermissionsScreen — an affected-member count that could not be read"
     await user.click(screen.getByRole("switch", { name: `${PERM.ENFORCEMENT_TITLE} ${KIND.egress_host.label}` }));
 
     const dialog = await screen.findByRole("alertdialog");
-    expect(within(dialog).queryByText(PERM.ENFORCE_ON_BODY(1))).toBeNull();
+    expect(within(dialog).queryByText(PERM.ENFORCE_ON_BODY(2))).toBeNull();
     expect(within(dialog).getByText(PERM.ENFORCE_ON_BODY_UNKNOWN)).toBeInTheDocument();
   });
 });
@@ -614,7 +679,9 @@ describe("PermissionsScreen — the group-snapshot ceiling", () => {
   it("states that groups are read at sign-in and grants resolve per request", async () => {
     renderScreen();
     await screen.findByText(PERM.SNAPSHOT_TITLE);
-    expect(screen.getByText(PERM.SNAPSHOT_BODY)).toBeInTheDocument();
+    // #3060: the groups sentence is the shared one; the per-request half stays beside it.
+    expect(PERM.SNAPSHOT_BODY).toBe(GROUPS_READ_AT_SIGNIN);
+    expect(screen.getByText(`${PERM.SNAPSHOT_BODY} ${PERM.SNAPSHOT_EFFECT}`)).toBeInTheDocument();
   });
 });
 

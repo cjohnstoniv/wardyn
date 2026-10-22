@@ -191,7 +191,7 @@ describe("UserTypesScreen — edit reads Ceiling and What this type gets", () =>
     getGovernanceMock.mockResolvedValue({
       profiles: [{ id: "prof-1", name: "Portfolio", ceiling: {}, limits: {}, created_at: "", updated_at: "" }],
       assignments: [
-        { id: "a1", subject_type: "user_type", subject: t.id, profile_id: "prof-1", priority: 0, created_at: "" },
+        { id: "a1", subject_type: "user_type", subject: t.id, unit_id: "prof-1", priority: 0, created_at: "" },
       ],
     });
     renderScreen([t]);
@@ -214,7 +214,7 @@ describe("UserTypesScreen — edit reads Ceiling and What this type gets", () =>
         },
       ],
       assignments: [
-        { id: "a1", subject_type: "user_type", subject: t.id, profile_id: "prof-1", priority: 0, created_at: "" },
+        { id: "a1", subject_type: "user_type", subject: t.id, unit_id: "prof-1", priority: 0, created_at: "" },
       ],
     });
     renderScreen([t]);
@@ -232,7 +232,7 @@ describe("UserTypesScreen — edit reads Ceiling and What this type gets", () =>
     getGovernanceMock.mockResolvedValue({
       profiles: [{ id: "prof-1", name: "Portfolio", ceiling: {}, limits: {}, created_at: "", updated_at: "" }],
       assignments: [
-        { id: "a1", subject_type: "user_type", subject: t.id, profile_id: "prof-1", priority: 0, created_at: "" },
+        { id: "a1", subject_type: "user_type", subject: t.id, unit_id: "prof-1", priority: 0, created_at: "" },
       ],
     });
     renderScreen([t]);
@@ -249,7 +249,7 @@ describe("UserTypesScreen — edit reads Ceiling and What this type gets", () =>
       getGovernanceMock.mockResolvedValue({
         profiles: [{ id: "prof-1", name: "Portfolio", ceiling: {}, limits, created_at: "", updated_at: "" }],
         assignments: [
-          { id: "a1", subject_type: "user_type", subject: t.id, profile_id: "prof-1", priority: 0, created_at: "" },
+          { id: "a1", subject_type: "user_type", subject: t.id, unit_id: "prof-1", priority: 0, created_at: "" },
         ],
       });
     bind({ max_end_ahead_sec: 30 * 86400, max_wait_sec: 8 * 3600, user_changes_limits: true });

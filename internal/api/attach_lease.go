@@ -70,9 +70,10 @@ type attachLease struct {
 	runID uuid.UUID
 	h     *attachHolder
 	// held: this holder took the lease and has not seen it end. verified is when it was last
-	// confirmed, unix nanoseconds.
+	// confirmed, nil before the first: a time.Time for its monotonic reading, since on the wall
+	// clock a step back of N seconds (an NTP or VM time sync) would trust it N seconds longer.
 	held     atomic.Bool
-	verified atomic.Int64
+	verified atomic.Pointer[time.Time]
 	// mu orders the moves of held, gen and suspect. gen moves each time the holder takes the
 	// lease or stops holding it, so a renew, fence check or recovery begun before the move can
 	// neither confirm, end nor recover the holder after it. suspect: the store last said the row
@@ -92,8 +93,14 @@ func (l *attachLease) take() {
 	defer l.mu.Unlock()
 	l.gen++
 	l.suspect.Store(false)
-	l.verified.Store(time.Now().UnixNano())
+	l.stamp()
 	l.held.Store(true)
+}
+
+// stamp records a confirmation of the lease now.
+func (l *attachLease) stamp() {
+	now := time.Now()
+	l.verified.Store(&now)
 }
 
 // drop records that this holder no longer holds the lease.
@@ -125,12 +132,12 @@ func (l *attachLease) at(gen uint64, fn func()) bool {
 
 // confirmed refreshes the confirmation of generation gen; restored also lifts the fence.
 func (l *attachLease) confirmed(gen uint64) bool {
-	return l.at(gen, func() { l.verified.Store(time.Now().UnixNano()) })
+	return l.at(gen, l.stamp)
 }
 
 func (l *attachLease) restored(gen uint64) bool {
 	return l.at(gen, func() {
-		l.verified.Store(time.Now().UnixNano())
+		l.stamp()
 		l.suspect.Store(false)
 	})
 }
@@ -144,8 +151,8 @@ func (l *attachLease) fail(ctx context.Context, msg string, err error) {
 
 // live reports whether the holder still has the lease, asking Postgres when the last
 // confirmation is older than attachLeaseFenceEvery. It fails closed: a database that does not
-// answer is false for this call, and a lease found gone is false until the holder has taken it
-// back (recoverAttachLease), which runs on its own goroutine.
+// answer is false for this call (logged once per run of failures), and a lease found gone is false
+// until the holder has taken it back (recoverAttachLease), which runs on its own goroutine.
 func (l *attachLease) live() bool {
 	if l == nil {
 		return true
@@ -158,7 +165,7 @@ func (l *attachLease) live() bool {
 		l.s.startAttachLeaseRecovery(l.runID, l.h, gen)
 		return false
 	}
-	if time.Since(time.Unix(0, l.verified.Load())) < attachLeaseFenceEvery {
+	if v := l.verified.Load(); v != nil && time.Since(*v) < attachLeaseFenceEvery {
 		return true
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), attachLeaseCallTimeout)
@@ -166,6 +173,7 @@ func (l *attachLease) live() bool {
 	ok, err := l.st.HoldsAttachLease(ctx, l.runID, l.h.id)
 	switch {
 	case err != nil:
+		l.fail(ctx, "wardynd: could not check a run's attach lease; the client's input is discarded until the database answers", err)
 		return false
 	case !ok:
 		if l.at(gen, func() { l.suspect.Store(true) }) {
@@ -280,6 +288,12 @@ func (s *Server) demoteWriter(runID uuid.UUID, h *attachHolder) {
 	h.waitRemote.Store(true)
 	if h.lease != nil {
 		h.lease.drop()
+	}
+	if h.demoted != nil {
+		select {
+		case h.demoted <- struct{}{}:
+		default:
+		}
 	}
 	if ra := reg.attaches[runID]; ra != nil && ra.writer == h {
 		ra.writer = nil

@@ -110,7 +110,7 @@ function renderPage() {
           operator={false}
           securityOperator={false}
           userDrive={me.user_drive}
-          userDriveDeniedByProfile={me.user_drive_denied_by_profile}
+          userDriveDeniedByUnit={me.user_drive_denied_by_unit}
           userType={me.user_type ?? null}
         >
           <MemberGettingStarted />
@@ -138,7 +138,7 @@ describe("MemberGettingStarted — the barrier chip respects the governance floo
     getSetupStatusMock.mockResolvedValue(
       status({ runner: { driver: "docker", confinement_classes: ["CC1", "CC2"] } }),
     );
-    getDefaultPolicyMock.mockResolvedValue({ min_confinement_class: "CC2", governance_profile_name: "walled" });
+    getDefaultPolicyMock.mockResolvedValue({ min_confinement_class: "CC2", unit_name: "walled" });
     renderPage();
     expect(await screen.findByText("Barrier · Wall")).toBeInTheDocument();
     expect(screen.queryByText("Barrier · Fence")).not.toBeInTheDocument();
@@ -152,7 +152,7 @@ describe("MemberGettingStarted — the barrier chip respects the governance floo
     getSetupStatusMock.mockResolvedValue(
       status({ runner: { driver: "docker", confinement_classes: ["CC1", "CC2"] } }),
     );
-    getDefaultPolicyMock.mockResolvedValue({ min_confinement_class: "CC3", governance_profile_name: "vault-required" });
+    getDefaultPolicyMock.mockResolvedValue({ min_confinement_class: "CC3", unit_name: "vault-required" });
     renderPage();
     expect(
       await screen.findByText(/Your admin requires Vault, and this host can't run it/),
@@ -171,7 +171,7 @@ describe("MemberGettingStarted — the barrier chip respects the governance floo
         platform: { os: "linux", wsl: false, kvm: false },
       }),
     );
-    getDefaultPolicyMock.mockResolvedValue({ min_confinement_class: "CC3", governance_profile_name: "vault-required" });
+    getDefaultPolicyMock.mockResolvedValue({ min_confinement_class: "CC3", unit_name: "vault-required" });
     renderPage();
     expect(await screen.findByText(/Your admin requires Vault, and this host can't run it: .*\/dev\/kvm/)).toBeInTheDocument();
     expect(screen.queryByText(/Vault isn't installed on this host/)).not.toBeInTheDocument();
@@ -186,7 +186,7 @@ describe("MemberGettingStarted — the barrier chip respects the governance floo
         platform: { os: "linux", wsl: false, kvm: false },
       }),
     );
-    getDefaultPolicyMock.mockResolvedValue({ min_confinement_class: "CC3", governance_profile_name: "vault-required" });
+    getDefaultPolicyMock.mockResolvedValue({ min_confinement_class: "CC3", unit_name: "vault-required" });
     renderPage();
     expect(
       await screen.findByText("Your admin requires Vault, and this host can't run it: Vault isn't installed on this host."),

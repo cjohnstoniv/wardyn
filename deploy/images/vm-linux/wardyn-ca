@@ -1,0 +1,17 @@
+#!/bin/sh
+# Copyright 2026 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# wardyn-ca: trusts this run's CA certificate, which QEMU hands the guest over fw_cfg (readable by
+# root only). Read live on every boot, so a restored or forked VM trusts its own run's CA, never its
+# parent's. No CA (a run without one) removes any earlier one.
+set -eu
+src=/sys/firmware/qemu_fw_cfg/by_name/opt/org.wardyn/ca.pem/raw
+dst=/usr/local/share/ca-certificates/wardyn-run.crt
+if [ -r "$src" ]; then
+	cat "$src" > "$dst.tmp"
+	mv "$dst.tmp" "$dst"
+else
+	rm -f "$dst"
+fi
+update-ca-certificates --fresh > /dev/null

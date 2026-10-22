@@ -61,7 +61,7 @@ func TestMeWithholdsAnUnbindableDrive(t *testing.T) {
 				reason, driveUnavailableUnmountable)
 		}
 		if denied != "" {
-			t.Errorf("user_drive_denied_by_profile = %q, want empty — no profile is involved", denied)
+			t.Errorf("user_drive_denied_by_unit = %q, want empty — no profile is involved", denied)
 		}
 
 		// And the launch really does refuse it, asserted here rather than

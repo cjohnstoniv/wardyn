@@ -82,10 +82,10 @@ func TestJudgeAtTrust_FirstAdmittingClassElseTheFirstRefusal(t *testing.T) {
 			types.RunnerTrustManagedDevice: {Classes: map[string]placement.ClassPolicy{placement.ClassEnvSecret: {Mode: placement.ModeRunnerResident}}}}},
 		Posture: &types.RunnerPosture{OS: "linux"},
 	}
-	if c, ref := judgeAtTrust(p, placement.TrustClassesByRank()); ref != nil || c != types.RunnerTrustManagedDevice {
+	if c, ref := judgeAtTrust(p, placement.TrustClassesByRank(), nil); ref != nil || c != types.RunnerTrustManagedDevice {
 		t.Errorf("every class: %q %v, want managed_device", c, ref)
 	}
-	c, ref := judgeAtTrust(p, []types.RunnerTrustClass{types.RunnerTrustPersonal})
+	c, ref := judgeAtTrust(p, []types.RunnerTrustClass{types.RunnerTrustPersonal}, nil)
 	if c != "" || ref == nil || ref.Reason != placement.ReasonPlacementCredential || !strings.Contains(ref.Detail, "trust class personal") {
 		t.Errorf("personal only: %q %+v, want refused naming personal", c, ref)
 	}
@@ -101,7 +101,7 @@ func TestWaitingLocalTrusts_NeverOrgCluster(t *testing.T) {
 			types.RunnerTrustOrgCluster: {Classes: map[string]placement.ClassPolicy{placement.ClassEnvSecret: {Mode: placement.ModeRunnerResident}}}}},
 		Posture: &types.RunnerPosture{OS: "linux"},
 	}
-	if c, ref := judgeAtTrust(p, waitingLocalTrusts()); c != "" || ref == nil {
+	if c, ref := judgeAtTrust(p, waitingLocalTrusts(), nil); c != "" || ref == nil {
 		t.Errorf("a plan only org_cluster admits, judged for the person's own runners: %q %v, want refused", c, ref)
 	}
 }

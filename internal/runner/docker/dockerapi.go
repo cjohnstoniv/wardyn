@@ -61,6 +61,7 @@ type dockerAPI interface {
 	ContainerStatPath(ctx context.Context, containerID string, options client.ContainerStatPathOptions) (client.ContainerStatPathResult, error) // checks a managed file's target directory exists before copy
 	CopyFromContainer(ctx context.Context, containerID string, options client.CopyFromContainerOptions) (client.CopyFromContainerResult, error) // reads /etc, /etc/passwd to vet an image without running anything
 	ContainerLogs(ctx context.Context, containerID string, options client.ContainerLogsOptions) (client.ContainerLogsResult, error)             // last lines of a proxy that exited at boot, so a config-load failure reports its cause
+	ContainerExport(ctx context.Context, containerID string, options client.ContainerExportOptions) (client.ContainerExportResult, error)       // a VM image's filesystem, converted to its ext4 base
 
 	ExecCreate(ctx context.Context, containerID string, options client.ExecCreateOptions) (client.ExecCreateResult, error)
 	ExecAttach(ctx context.Context, execID string, options client.ExecAttachOptions) (client.ExecAttachResult, error)

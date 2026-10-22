@@ -474,6 +474,7 @@ func TestRunSSH_ProxyCommandPrintConfigJSON(t *testing.T) {
 }
 
 func TestRunSSH_ProxyCommandExecNeedsTheFlag(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // no ~/.wardyn key, so no -i in the argv
 	argsFile := filepath.Join(t.TempDir(), "args")
 	fakeBinOnPath(t, "ssh", "#!/bin/sh\nprintf '%s\\n' \"$@\" > "+argsFile+"\n")
 

@@ -7,14 +7,21 @@
 # The scripts built images with `-q ... >/dev/null`, so a failed build said only
 # "build failed" and the tool's own error (a `go mod download` network fault in a
 # hosted run) was thrown away. wardyn_docker_build logs to a temp file and prints
-# its tail on failure; a clean build prints nothing, as before.
+# its tail on failure; a clean build prints nothing, as before. Under GitHub Actions
+# (GITHUB_ACTIONS=true) it also streams the build's progress (--progress=plain) to
+# stderr, so a hosted job log shows which step a stalled build is in (#3472).
 
 # wardyn_docker_build ARGS... — `docker build ARGS...`, returning docker's status.
 # Safe under `bash -e`: the failure is captured, the tail printed, the log removed.
 wardyn_docker_build() {
   local blog rc=0
   blog="$(mktemp "${TMPDIR:-/tmp}/wardyn-image-build.XXXXXX.log")" || return 1
-  docker build "$@" >"${blog}" 2>&1 || rc=$?
+  if [[ "${GITHUB_ACTIONS:-}" == true ]]; then
+    # pipefail in a subshell: docker's status, not tee's, whatever the caller's shell options.
+    ( set -o pipefail; docker build --progress=plain "$@" 2>&1 | tee "${blog}" >&2 ) || rc=$?
+  else
+    docker build "$@" >"${blog}" 2>&1 || rc=$?
+  fi
   if [[ ${rc} -ne 0 ]]; then
     printf '[image build failed (rc=%s); last 40 lines of its log]\n' "${rc}" >&2
     tail -n 40 "${blog}" >&2

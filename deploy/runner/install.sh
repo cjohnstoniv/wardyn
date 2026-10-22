@@ -24,7 +24,7 @@ Usage: install.sh --org <url> [--binary <path>] [--token-file <file>] [setup fla
        install.sh --uninstall
 
   --binary <path>   wardyn-runnerd to install (default: beside this script, else on PATH)
-  --uninstall       stop and remove the service and the installed binary; keeps the runner identity
+  --uninstall       stop and remove the service, the installed wardyn-runnerd and its .previous rollback copy; keeps the runner identity, and the wardyn CLI and its cli.json (they are yours)
 
 Everything else is passed to `wardyn-runnerd setup` (--org, --token-file, --proxy-image, --internal-network, --trusted-ca-file,
 --relay-listen, --relay-host-target, --claim, --pool, --default and the limit flags); run `wardyn-runnerd setup --help`.
@@ -50,25 +50,28 @@ uninstall() {
     Linux)
       data_dir="${XDG_DATA_HOME:-$HOME/.local/share}/wardyn"
       identity_dir="$HOME/.config/wardyn/runner"
-      # Setup names the identity directory in the env file, which can be under a custom XDG_CONFIG_HOME; read it before the file goes.
-      kept="$(sed -n 's/^WARDYN_RUNNER_STATE_DIR=//p' "$HOME/.config/wardyn/runnerd.env" 2>/dev/null | tail -n 1)" || true
+      # Setup names the identity directory in runnerd.json (an earlier setup, in the env file), which can be under a custom XDG_CONFIG_HOME; read it before the file goes.
+      config="${XDG_CONFIG_HOME:-$HOME/.config}/wardyn/runnerd.json"
+      kept="$(sed -n 's/^ *"state_dir": *"\(.*[^,]\),\{0,1\}$/\1/p' "$config" 2>/dev/null | tail -n 1)" || true
+      kept="${kept%\"}"
+      [ -n "$kept" ] || kept="$(sed -n 's/^WARDYN_RUNNER_STATE_DIR=//p' "$HOME/.config/wardyn/runnerd.env" 2>/dev/null | tail -n 1)" || true
       kept="${kept#\'}"; kept="${kept%\'}"
       [ -z "$kept" ] || identity_dir="$kept"
       systemctl --user disable --now "$UNIT" 2>/dev/null || true
       # Setup puts the unit where the user manager looks, which can be a custom XDG_CONFIG_HOME.
-      rm -f "$HOME/.config/systemd/user/$UNIT" "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$UNIT" "$HOME/.config/wardyn/runnerd.env"
+      rm -f "$HOME/.config/systemd/user/$UNIT" "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$UNIT" "$HOME/.config/wardyn/runnerd.env" "$config"
       systemctl --user daemon-reload 2>/dev/null || true
       ;;
     Darwin)
       data_dir="$HOME/Library/Application Support/wardyn"
       identity_dir="$data_dir/runner"
       launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
-      rm -f "$HOME/Library/LaunchAgents/$LABEL.plist"
+      rm -f "$HOME/Library/LaunchAgents/$LABEL.plist" "$data_dir/runnerd.json"
       ;;
     *) die "unsupported OS: $(uname -s)" ;;
   esac
-  rm -f "$data_dir/bin/wardyn-runnerd"
-  echo "Removed the wardyn-runnerd service and binary."
+  rm -f "$data_dir/bin/wardyn-runnerd" "$data_dir/bin/wardyn-runnerd.previous"
+  echo "Removed the wardyn-runnerd service and binary. The wardyn CLI and its cli.json are yours and stay."
   echo "Kept the runner identity in: $identity_dir"
   echo "To revoke this runner, run: wardyn runner revoke <runner id or name>   (or use My runner in the Wardyn console)."
 }

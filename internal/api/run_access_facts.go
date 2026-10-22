@@ -81,26 +81,31 @@ const (
 // How a credential reaches the run, whose it is and what is left of it once
 // the run ends.
 const (
-	deliveryProxy        = "proxy"
-	deliveryGitBroker    = "git_broker"
-	deliveryGitHelper    = "git_helper"
-	deliverySandboxEnv   = "sandbox_env"
-	deliverySandboxFile  = "sandbox_file"
-	deliveryShortLived   = "sandbox_short_lived"
-	credOwnerOwn         = "own"
-	credOwnerShared      = "shared"
-	credOwnerOrgApp      = "org_app"
-	afterEndGone         = "gone"
-	afterEndExpires      = "expires"
-	afterEndStays        = "stays"
-	credKindModel        = "model_provider"
-	credKindGitHubApp    = "github_app"
-	credKindADOSignIn    = "ado_signin"
-	credKindGitPAT       = "git_pat"
-	credKindSSHKey       = "ssh_key"
-	credKindSecret       = "secret"
-	credKindAWSRole      = "aws_role"
-	credKindAzureARM     = "azure_arm"
+	deliveryProxy       = "proxy"
+	deliveryGitBroker   = "git_broker"
+	deliveryGitHelper   = "git_helper"
+	deliverySandboxEnv  = "sandbox_env"
+	deliverySandboxFile = "sandbox_file"
+	deliveryShortLived  = "sandbox_short_lived"
+	credOwnerOwn        = "own"
+	credOwnerShared     = "shared"
+	credOwnerOrgApp     = "org_app"
+	afterEndGone        = "gone"
+	afterEndExpires     = "expires"
+	afterEndStays       = "stays"
+	credKindModel       = "model_provider"
+	credKindGitHubApp   = "github_app"
+	credKindADOSignIn   = "ado_signin"
+	credKindGitPAT      = "git_pat"
+	credKindSSHKey      = "ssh_key"
+	credKindSecret      = "secret"
+	credKindAWSRole     = "aws_role"
+	credKindAzureARM    = "azure_arm"
+	credKindKubeAPI     = "kube_api"
+
+	// A kube_api credential's access, from its row's read or write.
+	kubeAccessReadOnly   = "read_only"
+	kubeAccessReadWrite  = "read_write"
 	signInModelProvider  = "model_provider"
 	signInAWSCLI         = "aws_cli"
 	signInAzureCLI       = "azure_cli"
@@ -148,11 +153,19 @@ type accessInputs struct {
 	providerStored bool
 	// ssoProxyInject is WARDYN_AWS_SSO_PROXY_INJECT as dispatch reads it.
 	ssoProxyInject bool
+	// awsReSigned reports whether dispatch would re-sign an AWS lane with these hosts at the
+	// proxy (Server.awsSigV4Hosts, WARDYN_AWS_SIGV4_AT_PROXY); nil is never.
+	awsReSigned func(hosts []string) bool
 	// imageKey is the convention image the run starts from (accessImageKey).
 	imageKey string
 	// level is the autonomy level the fold resolved, which picks an
 	// interactive run's managed settings (attendedDefaultReasons).
 	level types.AutonomyLevel
+}
+
+// reSigned is awsReSigned, false when unset.
+func (in accessInputs) reSigned(hosts []string) bool {
+	return in.awsReSigned != nil && in.awsReSigned(hosts)
 }
 
 // accessFor adds the reads accessFacts needs beyond the fold and builds the
@@ -164,6 +177,7 @@ func (s *Server) accessFor(r *http.Request, in accessInputs) (*accessBlock, erro
 		return nil, err
 	}
 	in.providerStored, in.ssoProxyInject = s.accessProviderStored(r, in.mpChoice), s.cfg.AWSSSOProxyInject
+	in.awsReSigned = func(hosts []string) bool { _, ok := s.awsSigV4Hosts(hosts); return ok }
 	in.imageKey = accessImageKey(*in.req, s.cfg.AgentImages)
 	out := accessFacts(in)
 	return &out, nil
@@ -295,6 +309,8 @@ func credentialLabel(kind, owner string) string {
 		return "Your AWS sign-in"
 	case credKindAzureARM:
 		return "Your Azure sign-in"
+	case credKindKubeAPI:
+		return "Your organisation's cluster account"
 	case credKindGitPAT:
 		if shared {
 			return "A Git token your organisation provides"
@@ -359,7 +375,7 @@ func (b *accessBuilder) harnessRow(fact componentFact) {
 	for _, h := range row.Hosts {
 		b.addHost(h, viaModelLane, row.ID)
 	}
-	for _, c := range modelCredentials(row.ID, in.mpChoice, in.ssoProxyInject) {
+	for _, c := range modelCredentials(row.ID, in.mpChoice, in.ssoProxyInject, in.reSigned(providerBedrockHosts(in.mpChoice.provider))) {
 		b.addCredential(c)
 	}
 	b.addSetup(setup...)
@@ -385,8 +401,9 @@ func (b *accessBuilder) toolPolicyFact(harness string) client.ToolPolicyFact {
 	switch {
 	case harness == codexHarness:
 		fact.RuleTools = "mcp_only"
-		// Its MCP tools' rules are enforced by the broker the servers sit behind.
-		if len(fact.MCPServers) > 0 {
+		// Its remote MCP tools' rules are enforced by the broker the servers sit
+		// behind; nothing enforces a local server's (localMCPRulesRefusal).
+		if mcpRemoteServerFor(b.in.comps, harness) {
 			fact.Enforcer = toolEnforcerMCPBroker
 		}
 		forDefault = map[types.ToolEffect]string{types.ToolHold: "harness_no_hold", types.ToolDeny: "harness_no_block_builtin"}
@@ -484,8 +501,10 @@ func (b *accessBuilder) toolRuleSource(r types.ToolRule) client.ProvenanceSource
 // there; with WARDYN_AWS_SSO_PROXY_INJECT off the session's access token is
 // in the sandbox too, as a file, and the role credentials last only as long
 // as it does (no refresh token is staged). Both expire at their own lifetime,
-// which AWS sets, not the run's end: lifetime_sec stays 0.
-func modelCredentials(rowID string, choice runProviderChoice, ssoProxyInject bool) []client.AccessCredential {
+// which AWS sets, not the run's end: lifetime_sec stays 0. A lane the proxy
+// re-signs (reSigned) holds a placeholder key pair: the proxy gets and renews
+// the role credentials, and nothing of them is left in the sandbox.
+func modelCredentials(rowID string, choice runProviderChoice, ssoProxyInject, reSigned bool) []client.AccessCredential {
 	if !choice.chosen {
 		return nil
 	}
@@ -494,6 +513,9 @@ func modelCredentials(rowID string, choice runProviderChoice, ssoProxyInject boo
 		return []client.AccessCredential{c}
 	}
 	c.Delivery, c.AfterEnd, c.Renewed = deliveryShortLived, afterEndExpires, ssoProxyInject
+	if reSigned {
+		c.Delivery, c.AfterEnd = deliveryProxy, afterEndGone
+	}
 	if ssoProxyInject {
 		return []client.AccessCredential{c}
 	}
@@ -617,10 +639,18 @@ func (b *accessBuilder) componentRow(fact componentFact) {
 	if cli != nil && cli.Kind == types.CLIKindAWS && cli.AWS != nil {
 		// The portal the proxy sets the person's session on, and the role
 		// credentials AWS issues into the sandbox there, renewed while the run
-		// lives and valid at AWS until they expire.
-		b.addHost(ssoPortalHost(cli.AWS.SSORegion, ""), viaInjected, row.ID)
-		b.addCredential(client.AccessCredential{ID: row.ID + ":aws_role", Kind: credKindAWSRole, Owner: credOwnerOwn,
-			Delivery: deliveryShortLived, Renewed: true, AfterEnd: afterEndExpires})
+		// lives and valid at AWS until they expire. A row the proxy re-signs
+		// keeps them at the proxy and opens no portal route.
+		reSigned := b.in.reSigned(fact.Hosts) // the definition's hosts, as dispatch reads them
+		if !reSigned {
+			b.addHost(ssoPortalHost(cli.AWS.SSORegion, ""), viaInjected, row.ID)
+		}
+		role := client.AccessCredential{ID: row.ID + ":aws_role", Kind: credKindAWSRole, Owner: credOwnerOwn,
+			Delivery: deliveryShortLived, Renewed: true, AfterEnd: afterEndExpires}
+		if reSigned {
+			role.Delivery, role.AfterEnd = deliveryProxy, afterEndGone
+		}
+		b.addCredential(role)
 	}
 	if cli != nil && cli.Kind == types.CLIKindAzure {
 		// The two hosts the proxy opens for the CLI: Resource Manager, where it
@@ -630,6 +660,21 @@ func (b *accessBuilder) componentRow(fact componentFact) {
 		b.addHost(proxy.AzureLoginHost, viaInjected, row.ID)
 		b.addCredential(client.AccessCredential{ID: row.ID + ":azure_arm", Kind: credKindAzureARM, Owner: credOwnerOwn,
 			Delivery: deliveryProxy, Renewed: true, AfterEnd: afterEndGone})
+	}
+	if cli != nil && cli.Kind == types.CLIKindKubectl && cli.Kubectl != nil {
+		// The API server, where the proxy adds a ten-minute token it has the
+		// cluster mint for the organisation's service account. Neither that token
+		// nor the registered one enters the sandbox.
+		if host, _, ok := cli.Kubectl.HostPort(); ok {
+			b.addHost(host, viaInjected, row.ID)
+		}
+		access := kubeAccessReadOnly
+		if cli.Kubectl.Access == types.ComponentAccessWrite {
+			access = kubeAccessReadWrite
+		}
+		b.addCredential(client.AccessCredential{ID: row.ID + ":kube_api", Kind: credKindKubeAPI, Owner: credOwnerShared,
+			Delivery: deliveryProxy, Renewed: true, AfterEnd: afterEndGone,
+			Namespaces: append([]string{}, cli.Kubectl.Namespaces...), Access: access})
 	}
 	for i, sec := range fact.Secrets {
 		c := client.AccessCredential{ID: row.ID + ":secret:" + strconv.Itoa(i), Kind: credKindSecret, Owner: credOwnerOwn,

@@ -222,23 +222,12 @@ const approvalRunEndedBody = "the run ended before anyone decided this; the appr
 // into the workspace allowlist (approvals_reconcile.go) on behalf of a
 // sandbox that is gone, which is exactly the widening CANCELLED exists to
 // stop. So CAS-cancel it here and answer 409, rather than a question whose
-// asker no longer exists. It costs at most two reads, and only on the paths
-// that had not already loaded the rows (the member gate loads both; an
-// explicit scope loads the approval); the rows it loads are handed back so
-// the caller never reads them twice. ok=false means the response is written, and the last
-// return names why (not_found or run_ended) for the break-glass failure row.
+// asker no longer exists. decide has loaded the approval by here; the run is read
+// only when the member gate had not. false means the response is written.
 func (s *Server) refuseIfRunEnded(
-	w http.ResponseWriter, r *http.Request, id uuid.UUID,
-	ap types.ApprovalRequest, run types.AgentRun, haveAP, haveRun bool,
-) (types.ApprovalRequest, types.AgentRun, bool, bool, bool, string) {
-	if !haveAP {
-		var err error
-		if ap, err = s.cfg.Approvals.Get(r.Context(), id); err != nil {
-			writeErrorReason(w, http.StatusNotFound, reasonApprovalNotFound, "approval not found")
-			return ap, run, haveAP, haveRun, false, "not_found"
-		}
-		haveAP = true
-	}
+	w http.ResponseWriter, r *http.Request,
+	ap types.ApprovalRequest, run types.AgentRun, haveRun bool,
+) bool {
 	if !haveRun && ap.RunID != uuid.Nil && s.cfg.Store != nil {
 		if got, gerr := s.cfg.Store.GetRun(r.Context(), ap.RunID); gerr == nil {
 			run, haveRun = got, true
@@ -248,11 +237,24 @@ func (s *Server) refuseIfRunEnded(
 	// row falls through to Decide, whose already_decided answer is the true one. (An empty state is a
 	// row no store writes; treated as open.)
 	if haveRun && isTerminalRunState(run.State) && (ap.State == "" || ap.State == types.ApprovalPending || ap.State == types.ApprovalCancelled) {
-		s.cancelRunApprovals(r.Context(), ap.RunID)
+		if d, isPolicy := policyDeciderFrom(r.Context()); !isPolicy || !d.report { // a rule's report-only dry run moves no row
+			s.cancelRunApprovals(r.Context(), ap.RunID)
+		}
 		writeErrorReason(w, http.StatusConflict, reasonApprovalRunEnded, approvalRunEndedBody)
-		return ap, run, haveAP, haveRun, false, "run_ended"
+		return false
 	}
-	return ap, run, haveAP, haveRun, true, ""
+	return true
+}
+
+// decisionScopeFitsKind refuses a decision_scope on a kind that takes none: only an egress_domain approval takes one,
+// and a credential approval takes "run" (a per-run lease). An Azure DevOps escalation has its own rule (adoDecisionRule).
+func decisionScopeFitsKind(w http.ResponseWriter, kind types.ApprovalKind, scope types.ApprovalScope) bool {
+	if scope == "" || kind == types.ApprovalEgressDomain || (kind == types.ApprovalCredential && scope == types.ScopeRun) {
+		return true
+	}
+	writeErrorReason(w, http.StatusBadRequest, reasonDecisionScopeInvalidForKind,
+		"decision_scope is only valid on an egress_domain approval (or \"run\" on a credential approval, for a per-run lease)")
+	return false
 }
 
 // recordBypassFailure writes the break-glass failure row when the admin token spent the four-eyes
@@ -279,6 +281,38 @@ func writeDecideError(w http.ResponseWriter, r *http.Request, err error) {
 	default:
 		writeServerError(w, r, "decide approval", err)
 	}
+}
+
+// refuseUndecidableKind is decide's rule 3b: a credential_reauth row, or a "Needs you" request
+// (answered by taking over or declining, approvals_takeover.go, so an Approve cannot mark it taken
+// with nobody holding control), answers 409 to every tier that can see it. True when it has answered.
+func (s *Server) refuseUndecidableKind(w http.ResponseWriter, r *http.Request, id uuid.UUID) bool {
+	ap, err := s.cfg.Approvals.Get(r.Context(), id)
+	if err != nil {
+		return false
+	}
+	var reason, body string
+	switch ap.Kind {
+	case types.ApprovalCredentialReauth:
+		reason, body = reasonCredentialReauthNotDecidable, credentialReauthNotDecidableBody
+	case types.ApprovalHumanTakeover:
+		reason, body = reasonTakeoverNotDecidable, takeoverNotDecidableBody
+	default:
+		return false
+	}
+	if !s.canSeeApproval(r, ap) {
+		return false
+	}
+	writeErrorReason(w, http.StatusConflict, reason, body)
+	return true
+}
+
+// approvalResolved is what follows a request's move out of PENDING, after the write committed: the
+// decision counted, and a run paused waiting on the request thawed. Every handler that decides or
+// takes over a request ends in it, so no path leaves a run frozen on an answered request.
+func (s *Server) approvalResolved(ctx context.Context, approved bool, runID uuid.UUID) {
+	s.metrics.approvalDecided(approved)
+	s.approvalClosed(ctx, runID)
 }
 
 func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
@@ -316,12 +350,9 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	//
 	// It costs one store read on a path that is about to do a write, and it is
 	// the same read the scope rules below need anyway.
-	if reauthAP, rerr := s.cfg.Approvals.Get(r.Context(), id); rerr == nil &&
-		reauthAP.Kind == types.ApprovalCredentialReauth && s.canSeeApproval(r, reauthAP) {
-		writeErrorReason(w, http.StatusConflict, reasonCredentialReauthNotDecidable, credentialReauthNotDecidableBody)
+	if s.refuseUndecidableKind(w, r, id) {
 		return
 	}
-
 	ap, run, loaded, ok := s.authorizeUserDecision(w, r, id)
 	if !ok {
 		return
@@ -385,6 +416,17 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 		writeErrorReason(w, http.StatusConflict, reasonCredentialReauthNotDecidable, credentialReauthNotDecidableBody)
 		return
 	}
+	if ap.Kind == types.ApprovalHumanTakeover { // the belt to the early refusal above, for the same reason
+		writeErrorReason(w, http.StatusConflict, reasonTakeoverNotDecidable, takeoverNotDecidableBody)
+		return
+	}
+	// The Wardyn boundary bounds every decider's approve (boundary_meet.go), after the member gate so the
+	// refusal is never an existence oracle.
+	if approve && ap.Kind == types.ApprovalEgressDomain {
+		if run, haveRun, ok = s.boundaryAdmitApproval(w, r, ap, run, haveRun); !ok {
+			return
+		}
+	}
 
 	// Rule 4 — a scope must MEAN something on the kind it is written to, and the
 	// two kinds differ in what "something" is.
@@ -409,12 +451,8 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	if scope, isADO, ok = s.adoDecisionRule(w, r, ap, scope, approve); !ok {
 		return
 	}
-	if !isADO && scope != "" && ap.Kind != types.ApprovalEgressDomain {
-		if !(ap.Kind == types.ApprovalCredential && scope == types.ScopeRun) {
-			writeErrorReason(w, http.StatusBadRequest, reasonDecisionScopeInvalidForKind,
-				"decision_scope is only valid on an egress_domain approval (or \"run\" on a credential approval, for a per-run lease)")
-			return
-		}
+	if !isADO && !decisionScopeFitsKind(w, ap.Kind, scope) {
+		return
 	}
 
 	// target is the workspace an `always` decision persists to — resolved by
@@ -445,16 +483,16 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	// Defence in depth: the run may have ENDED while this approval sat in
 	// the queue (refuseIfRunEnded). Placed with the other pre-Decide() rules, and
 	// for their reason: PENDING -> decided is one-way.
-	// The run row it loads is only consulted for the terminal check itself;
-	// nothing below reads it, so only the approval is taken back.
-	var refusal string
-	if ap, _, haveAP, _, ok, refusal = s.refuseIfRunEnded(w, r, id, ap, run, haveAP, haveRun); !ok {
+	if !s.refuseIfRunEnded(w, r, ap, run, haveRun) {
 		// The admin token got past the four-eyes gate above before this refusal, so the break-glass
 		// leaves its failure row here as it does when Decide fails (docs/ENV.md: every bypass writes one).
-		s.recordBypassFailure(r, id, ap, haveAP, bypassSwitch, refusal)
+		s.recordBypassFailure(r, id, ap, haveAP, bypassSwitch, "run_ended")
 		return
 	}
 
+	if s.policyDryRunStop(w, r, ap, scope) { // an approval rule's dry run stops here, before the one-way line
+		return
+	}
 	decidedByType, decidedBy := actorFromRequest(r)
 
 	// approve -> State is the translation this line performs because
@@ -470,6 +508,7 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 		Reason:    body.Reason,
 		Scope:     scope,
 		ExpiresAt: body.ExpiresAt,
+		Policy:    policyMatchFrom(r.Context()),
 	})
 	if err != nil {
 		// The break-glass leaves a row even when the decision fails, because
@@ -495,9 +534,9 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	// decision path) funnel through — never in handleApprove/handleDeny, which
 	// would each need their own increment. The counter cannot live in
 	// approval.Decide itself: internal/api imports internal/approval, so the
-	// dependency only runs this way.
-	s.metrics.approvalDecided(approve)
-	s.approvalClosed(r.Context(), result.RunID) // thaw a run paused waiting on it
+	// dependency only runs this way. A takeover request's decline decides through
+	// Approvals.Decide too, and ends in the same approvalResolved.
+	s.approvalResolved(r.Context(), approve, result.RunID)
 	// The four-eyes break-glass on a decision that WAS made — the success half
 	// of the pair, the failure half being the emit on Decide's error path
 	// above. Recorded HERE and not inside the gate that detected it, so this
@@ -625,6 +664,9 @@ func (s *Server) authorizeUserDecision(w http.ResponseWriter, r *http.Request, i
 		ap  types.ApprovalRequest
 		run types.AgentRun
 	)
+	if d, isPolicy := policyDeciderFrom(r.Context()); isPolicy { // an approval rule: approval_rules_approver.go
+		return s.authorizePolicyDecision(w, r, id, d)
+	}
 	if s.isSecurityOperator(r.Context()) { // security tier decides any kind on any run; LOCKSTEP pair, see http.go
 		return ap, run, false, true
 	}

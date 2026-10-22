@@ -19,13 +19,17 @@ import { SECURITY_ONLY_REASON } from "../../wardyn/copy";
 import { POOLS, RUNNER_V6 } from "../../wardyn/copy/runner-pools";
 import { RUNNERS } from "../../wardyn/copy/runners";
 import { useOperator } from "../../wardyn/operator-context";
+import { AddComputerBlock } from "../../wardyn/add-computer-block";
 import { useRovingRadio } from "../../wardyn/use-roving-radio";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
 import { PageHeader } from "../../wardyn/page-header";
+import { PageContainer } from "../../wardyn/page-container";
+import { PageTabs } from "../../wardyn/page-tabs";
+import { HowItWorks } from "../../wardyn/how-it-works";
 import { EmptyState, STATES, TableSkeleton } from "../../wardyn/states";
-import { MintTokenDialog } from "./mint-token-dialog";
+import { MintTokenPanel } from "./mint-token-panel";
 import { PoolsTab } from "./pools/pools-tab";
 import { RemoteRunnerDrawer } from "./remote-runner-drawer";
 import { fleetOf, RunnerCard, searchText, type FleetRunner } from "./runner-card";
@@ -93,25 +97,6 @@ function FilterGroup({ filter, onChange }: { filter: Filter; onChange: (f: Filte
 
 type Tab = "runners" | "pools";
 
-function Tabs({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
-  const item = (id: Tab, label: string) => (
-    <button
-      type="button"
-      aria-current={tab === id ? "page" : "false"}
-      onClick={() => onChange(id)}
-      className={`rounded-lg px-3 py-1 text-body font-medium ${tab === id ? "bg-background text-foreground ring-1 ring-border" : "text-muted-foreground hover:text-foreground"}`}
-    >
-      {label}
-    </button>
-  );
-  return (
-    <nav aria-label={RUNNER_V6.TABS_LABEL} className="mb-4 inline-flex max-w-full gap-0.5 rounded-xl border border-border bg-surface-2 p-0.5">
-      {item("runners", RUNNER_V6.TAB_RUNNERS)}
-      {item("pools", RUNNER_V6.TAB_POOLS)}
-    </nav>
-  );
-}
-
 export function RunnersScreen() {
   const superAdmin = useOperator();
   const { status, enabled, rows, remote, tokens, reload } = useRunnersData();
@@ -122,7 +107,6 @@ export function RunnersScreen() {
   const [search, setSearch] = React.useState("");
   const [q, setQ] = React.useState("");
   const [selected, setSelected] = React.useState<{ kind: RunnerKind; id: string } | null>(null);
-  const [minting, setMinting] = React.useState(false);
   const [switching, setSwitching] = React.useState<"on" | "off" | null>(null);
 
   // The box debounces into q, so each keystroke is not a pass over the rows.
@@ -161,17 +145,13 @@ export function RunnersScreen() {
   const selectedRunner = selected?.kind === "self_hosted" ? (rows.find((r) => r.id === selected.id) ?? null) : null;
   const selectedRemote = selected?.kind === "remote_hosted" ? (remote.find((r) => r.id === selected.id) ?? null) : null;
 
-  const createToken = superAdmin && enabled && status === "ready";
+  const addComputer = superAdmin && enabled && status === "ready";
   const empty = rows.length === 0 && remote.length === 0;
   const actions =
-    createToken && tab === "runners" ? (
-      <div className="flex items-center gap-2">
-        <Button variant="outline" onClick={() => setSwitching("off")}>
-          {RUNNERS.TURN_OFF}
-        </Button>
-        {/* The page's one default. */}
-        <Button onClick={() => setMinting(true)}>{RUNNERS.MINT_CTA}</Button>
-      </div>
+    addComputer && tab === "runners" ? (
+      <Button variant="outline" onClick={() => setSwitching("off")}>
+        {RUNNERS.TURN_OFF}
+      </Button>
     ) : undefined;
 
   const off = (
@@ -222,8 +202,7 @@ export function RunnersScreen() {
         <EmptyState
           icon={Laptop}
           title={RUNNERS.EMPTY_TITLE}
-          description={RUNNERS.EMPTY_BODY}
-          action={superAdmin ? <Button onClick={() => setMinting(true)}>{RUNNERS.MINT_CTA}</Button> : undefined}
+          description={addComputer ? `${RUNNERS.EMPTY_BODY} ${RUNNERS.EMPTY_BODY_MDM}` : RUNNERS.EMPTY_BODY}
         />
       </Framed>
     ) : (
@@ -241,10 +220,35 @@ export function RunnersScreen() {
 
   const ready = status === "ready";
   return (
-    <div className="mx-auto max-w-[1200px] px-6 py-6">
-      <PageHeader title={RUNNERS.NAV} description={<span className="block max-w-[68ch]">{tab === "pools" ? POOLS.LEAD : RUNNERS.LEAD}</span>} actions={actions} />
-      {tab === "runners" && <p className="-mt-2 mb-3 max-w-[80ch] text-body text-muted-foreground">{RUNNER_V6.TAB_PURPOSE}</p>}
-      {ready && <Tabs tab={tab} onChange={(t) => go(t)} />}
+    <PageContainer width="list">
+      <PageHeader title={RUNNERS.NAV} description={RUNNERS.PAGE_LEDE} actions={actions} />
+      <HowItWorks id="runners" title={RUNNERS.HOW_TITLE} className="-mt-2 mb-4">
+        <p>{RUNNERS.LEAD}</p>
+        <p>
+          <span className="font-medium text-foreground">{RUNNERS.HOW_RUNNERS_TAB}</span> {RUNNER_V6.TAB_PURPOSE}
+        </p>
+        <p>
+          <span className="font-medium text-foreground">{RUNNERS.HOW_POOLS_TAB}</span> {POOLS.LEAD}
+        </p>
+      </HowItWorks>
+      {/* Kept mounted (hidden) on the Pools tab, so a minted token that was not copied survives a tab switch. */}
+      {addComputer && (
+        <div className="mb-4" hidden={tab !== "runners"}>
+          <AddComputerBlock mdm={<MintTokenPanel onMinted={reload} />} />
+        </div>
+      )}
+      {ready && (
+        <PageTabs
+          className="mb-4"
+          label={RUNNER_V6.TABS_LABEL}
+          value={tab}
+          onValueChange={(t) => go(t)}
+          tabs={[
+            { value: "runners", label: RUNNER_V6.TAB_RUNNERS },
+            { value: "pools", label: RUNNER_V6.TAB_POOLS },
+          ]}
+        />
+      )}
       {body}
       {ready && tab === "runners" && <UnusedTokens tokens={tokens} onChanged={reload} />}
       <RunnerDrawer runner={selectedRunner} onClose={() => setSelected(null)} onChanged={reload} onOpenPool={openPool} />
@@ -255,9 +259,8 @@ export function RunnersScreen() {
         onOpenPool={openPool}
         onSaveLimits={(r, limits) => remoteRunners.update(r.id, { revision: r.revision, limits })}
       />
-      <MintTokenDialog open={minting} onOpenChange={setMinting} onMinted={reload} />
       <RunnersSwitchDialog mode={switching} onOpenChange={(o) => !o && setSwitching(null)} onChanged={reload} />
-    </div>
+    </PageContainer>
   );
 }
 

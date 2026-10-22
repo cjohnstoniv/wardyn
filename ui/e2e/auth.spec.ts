@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page, type Route } from "@playwright/test";
 import { ADMIN_TOKEN, MEMBER_TOKEN, MEMBER_PRINCIPAL, consoleAPI } from "./fixtures";
 import { SHELL } from "../src/app/components/wardyn/copy";
 import { GOVERNANCE as GOV } from "../src/app/lib/governance-copy";
@@ -581,6 +581,28 @@ test.describe("outage vs. rejection", () => {
     await expect(page.getByText(/admin token was rejected/i)).toHaveCount(0);
   });
 
+  // The cold-load retry (App.tsx COLD_PROBE_RETRY_MS) meets a 401 that names an ended session: the gate
+  // says so, as it does when the mount probe gets that answer.
+  test("a cold 503 whose retry is a 401 naming an ended session shows the signed-out notice", async ({ page }) => {
+    let probes = 0;
+    await page.route("**/api/v1/runs?limit=1", (route) => {
+      probes++;
+      return probes === 1
+        ? route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "database unavailable" }) })
+        : route.fulfill({
+            status: 401,
+            contentType: "application/json",
+            body: JSON.stringify({ error: "unauthorized", reason: "expired_session" }),
+          });
+    });
+    await clearTokenInit(page);
+    await page.goto("/");
+
+    await expect(signInToken(page)).toBeVisible();
+    await expect(page.getByRole("status").filter({ hasText: SESSION_ENDED_REASON })).toBeVisible();
+    await expect(page.getByRole("alert")).toHaveCount(0);
+  });
+
   test("the gate keeps asking /healthz, so an SSO-only deployment is not left with no way in", async ({ page }) => {
     // /healthz is down until `healthy` flips. The one-shot mount fetch this
     // replaced read the outage as sso:false and never asked again.
@@ -854,5 +876,45 @@ test.describe("a failed sign-out is surfaced, not swallowed", () => {
     await expect(page.getByText(SHELL.SIGN_OUT_FAILED_BODY)).toBeVisible();
     // A retry from this tab has no cookie left to end, so the advice is to sign in and out again.
     await expect(page.getByText(/Sign in again, then sign out/)).toBeVisible();
+  });
+});
+
+// #3368 — another tab's sign-in is heard even while this tab's own session check is still out. That check was sent
+// before the other tab signed in, so it answers 401; the announcement must still lead to a fresh check.
+test.describe("auth / another tab signs in", () => {
+  test("a tab on the sign-in screen enters the console while its own re-check is still out", async ({ page }) => {
+    await clearTokenInit(page);
+    await page.goto("/");
+    await expect(signInToken(page)).toBeVisible();
+
+    // Hold this tab's next session check (the focus re-check below) unanswered.
+    let held: Route | null = null;
+    let heldSeen!: () => void;
+    const heldArrived = new Promise<void>((resolve) => (heldSeen = resolve));
+    await page.route(
+      (url) => url.pathname === "/api/v1/runs" && url.searchParams.get("limit") === "1",
+      async (route) => {
+        if (held) return route.fallback();
+        held = route;
+        heldSeen();
+      },
+    );
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await heldArrived;
+
+    // The other tab signs in and remembers the token on this device.
+    const other = await page.context().newPage();
+    await other.goto("/");
+    await signInToken(other).fill(ADMIN_TOKEN);
+    await other.getByRole("checkbox", { name: "Remember on this device" }).click();
+    await useTokenButton(other).click();
+    await expect(runsNav(other)).toBeVisible();
+
+    await expect(runsNav(page)).toBeVisible({ timeout: 15_000 });
+    // Let the stale check go; it changes nothing: no "session ended" dialog over the console.
+    await (held as unknown as Route).fulfill({ status: 401, json: { error: "unauthorized" } });
+    await page.waitForTimeout(1_000);
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(runsNav(page)).toBeVisible();
   });
 });

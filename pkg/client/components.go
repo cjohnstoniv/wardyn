@@ -74,6 +74,12 @@ type CLIView struct {
 	Region    string `json:"region,omitempty"`
 	// GitHub: what the CLI may do.
 	Capabilities []ghscope.Capability `json:"capabilities,omitempty"`
+	// kubectl: the API server's host, its URL with scheme and port, and the
+	// namespaces it may reach (Access: read or write). The row's name is the
+	// cluster's display name; the row holds no other.
+	Cluster    string   `json:"cluster,omitempty"`
+	Server     string   `json:"server,omitempty"`
+	Namespaces []string `json:"namespaces,omitempty"`
 }
 
 // MCPView is the non-secret face of an MCP server row.

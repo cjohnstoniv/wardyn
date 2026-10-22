@@ -292,6 +292,13 @@ type fakeSiteConfigStore struct {
 	getErr  error
 	putErr  error
 	putSeen *types.SiteConfig
+	// maxDepth and maxPath answer MaxUnitDepth: the deepest unit path that exists.
+	maxDepth int
+	maxPath  []string
+}
+
+func (s *fakeSiteConfigStore) MaxUnitDepth(context.Context) (int, []string, error) {
+	return s.maxDepth, s.maxPath, nil
 }
 
 func (s *fakeSiteConfigStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
@@ -969,4 +976,51 @@ func TestHandlePutSiteConfig_HostOnRowsOfOneKindOnly(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("one kind = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
+}
+
+// governance_max_depth on PUT: 0 is the explicit reset to the default, null or absent keeps the stored value.
+func TestHandlePutSiteConfig_GovernanceMaxDepth(t *testing.T) {
+	four := 4
+	put := func(t *testing.T, fake *fakeSiteConfigStore, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		srv, _ := newSiteConfigHarness(t, fake)
+		return do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, body)
+	}
+	t.Run("0 over a stored value resets to the default", func(t *testing.T) {
+		fake := &fakeSiteConfigStore{cfg: types.SiteConfig{GovernanceMaxDepth: &four}, maxDepth: 3}
+		if w := put(t, fake, `{"governance_max_depth":0}`); w.Code != http.StatusOK {
+			t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+		got := fake.putSeen.GovernanceMaxDepth
+		if got == nil || *got != 0 {
+			t.Fatalf("stored governance_max_depth = %v, want 0", got)
+		}
+		if limit := governanceMaxDepthOf(got); limit != maxUnitDepthDefault {
+			t.Errorf("effective limit = %d, want %d", limit, maxUnitDepthDefault)
+		}
+	})
+	for _, body := range []string{`{"governance_max_depth":null}`, `{}`} {
+		t.Run("keeps the stored value on "+body, func(t *testing.T) {
+			fake := &fakeSiteConfigStore{cfg: types.SiteConfig{GovernanceMaxDepth: &four}, maxDepth: 3}
+			if w := put(t, fake, body); w.Code != http.StatusOK {
+				t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+			}
+			if got := fake.putSeen.GovernanceMaxDepth; got == nil || *got != 4 {
+				t.Errorf("stored governance_max_depth = %v, want 4 carried forward", got)
+			}
+		})
+	}
+	t.Run("0 is refused below the deepest existing path, naming what was sent", func(t *testing.T) {
+		fake := &fakeSiteConfigStore{cfg: types.SiteConfig{GovernanceMaxDepth: &four}, maxDepth: 20, maxPath: []string{"a", "b"}}
+		w := put(t, fake, `{"governance_max_depth":0}`)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("code = %d, want 400; body=%s", w.Code, w.Body.String())
+		}
+		if !strings.Contains(w.Body.String(), "0 (the default, 16) is below the deepest unit path, 20 deep") {
+			t.Errorf("body = %s, want it to name the 0 sent and the default", w.Body.String())
+		}
+		if fake.putSeen != nil {
+			t.Error("a refused depth reached the store")
+		}
+	})
 }

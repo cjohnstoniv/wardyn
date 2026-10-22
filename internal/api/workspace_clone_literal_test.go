@@ -186,7 +186,7 @@ func TestWorkspaceCloneHost_TheRunsOwnSpecIsNotAuthorityAtTheDoors(t *testing.T)
 	if spec := govCreateAndDispatch(t, srv, st, audit, cookie, body); !slices.Contains(spec.AllowedDomains, "10.0.0.5") {
 		t.Errorf("create: the stored policy's own entry went: %q", spec.AllowedDomains)
 	}
-	for _, ev := range audit.events {
+	for _, ev := range audit.snapshot() {
 		if ev.Action == "run.egress.add" && strings.Contains(string(ev.Data), `"workspace_clone"`) && strings.Contains(string(ev.Data), `"10.0.0.5"`) {
 			t.Errorf("create: the clone lane is audited as adding the address: %s", ev.Data)
 		}

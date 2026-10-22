@@ -234,7 +234,7 @@ func (s localClassifyStore) ListRunComponents(context.Context, uuid.UUID) ([]typ
 func TestLocalDispatchP3RidesTheCeilingAndNamesNoPersonalComponent(t *testing.T) {
 	const personal = "Private Personal Tool"
 	for _, allowed := range []bool{false, true} {
-		c := ceilingForDispatch(governanceCeiling{Profile: &ResolvedProfile{Name: "p"}, Limits: types.GovernanceLimits{LocalSelfDefinedComponents: allowed}}, adoEntraUngraded(), bedrockCredUngraded())
+		c := ceilingForDispatch(governanceCeiling{Unit: &ResolvedUnit{Name: "p"}, Limits: types.GovernanceLimits{LocalSelfDefinedComponents: allowed}}, adoEntraUngraded(), bedrockCredUngraded())
 		if c.localSelfDefinedComponents != allowed {
 			t.Fatalf("ceiling carried %v for %v", c.localSelfDefinedComponents, allowed)
 		}

@@ -94,11 +94,14 @@ export function RunsLine({ max, active }: { max: number; active: number }) {
   );
 }
 
-export function OfflineNote() {
+/** Today's offline note, or for a runner that registered but never connected, where to look on its computer. */
+export function OfflineNote({ neverConnected = false }: { neverConnected?: boolean }) {
   return (
     <div className="mt-2" data-offline-note>
       <Notice tone="warning" live>
-        {RES.OFFLINE_NOTE}
+        {neverConnected
+          ? RES.NEVER_CONNECTED_NOTE.map((part, i) => (i % 2 ? <code key={i} className="font-mono">{part}</code> : part))
+          : RES.OFFLINE_NOTE}
       </Notice>
     </div>
   );

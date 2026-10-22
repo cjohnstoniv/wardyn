@@ -42,3 +42,26 @@ func TestPG_ListWorkspacesOrderIsTotal(t *testing.T) {
 		}
 	}
 }
+
+// TestPG_OwnsWorkspaceMatchesTheListedOwners: OwnsWorkspace answers what a scan of the listed
+// workspaces' owners answers, exact case and the shared owner "" included.
+func TestPG_OwnsWorkspaceMatchesTheListedOwners(t *testing.T) {
+	ctx := context.Background()
+	s := hydrateStore(t)
+	now := time.Now().UTC()
+	for i, owner := range []string{"", "pairwise-a", "Pairwise-B"} {
+		if _, err := s.CreateWorkspace(ctx, types.Workspace{ID: uuid.New(), Name: "ws-" + string(rune('a'+i)), OwnedBy: owner, Status: types.WorkspaceScanned, CreatedAt: now, UpdatedAt: now}); err != nil {
+			t.Fatalf("CreateWorkspace: %v", err)
+		}
+	}
+	all, err := s.ListWorkspaces(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, owner := range []string{"", "pairwise-a", "pairwise-b", "Pairwise-B", "nobody"} {
+		want := slices.ContainsFunc(all, func(w types.Workspace) bool { return w.OwnedBy == owner })
+		if got, err := s.OwnsWorkspace(ctx, owner); err != nil || got != want {
+			t.Errorf("OwnsWorkspace(%q) = (%v, %v), want %v", owner, got, err, want)
+		}
+	}
+}

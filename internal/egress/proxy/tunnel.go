@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"regexp"
+	"strings"
 	"sync/atomic"
 	"syscall"
 
@@ -144,6 +145,37 @@ type tunnelWatch struct {
 	relayed atomic.Int64 // upstream bytes handed on to the client
 	alert   atomic.Int32 // alertNone, alertUnread, or the first record's alert description
 	refused atomic.Pointer[tunnelRefusal]
+
+	// onSSH, when set, is told once either side opens with an SSH
+	// identification; its error ends the tunnel before those bytes are relayed.
+	onSSH      func() error
+	clientHead []byte // Write's goroutine only: the client's first bytes, up to len(sshIdent)
+	sshRefused atomic.Bool
+}
+
+// sshIdent opens every SSH identification string (RFC 4253 §4.2).
+const sshIdent = "SSH-"
+
+// sawSSH tells onSSH, recording a refusal.
+func (w *tunnelWatch) sawSSH() error {
+	if err := w.onSSH(); err != nil {
+		w.sshRefused.Store(true)
+		return err
+	}
+	return nil
+}
+
+// clientSSH gathers the client's first bytes across writes and tells onSSH,
+// before they leave, when they are an SSH identification.
+func (w *tunnelWatch) clientSSH(b []byte) error {
+	if w.onSSH == nil || len(w.clientHead) >= len(sshIdent) || !strings.HasPrefix(sshIdent, string(w.clientHead)) {
+		return nil
+	}
+	w.clientHead = append(w.clientHead, b[:min(len(b), len(sshIdent)-len(w.clientHead))]...)
+	if string(w.clientHead) != sshIdent {
+		return nil
+	}
+	return w.sawSSH()
 }
 
 func newTunnelWatch(upstream net.Conn) *tunnelWatch {
@@ -163,6 +195,9 @@ func (w *tunnelWatch) Write(b []byte) (int, error) {
 			opened = clientTLS
 		}
 		w.client.Store(opened)
+	}
+	if err := w.clientSSH(b); err != nil {
+		return 0, err
 	}
 	return w.Conn.Write(b)
 }
@@ -193,6 +228,17 @@ func (w *tunnelWatch) Read(b []byte) (int, error) {
 func (w *tunnelWatch) vet() error {
 	if _, err := w.br.Peek(1); err != nil {
 		return err
+	}
+	if w.onSSH != nil && w.client.Load() != clientTLS {
+		flight, _ := w.br.Peek(w.br.Buffered())
+		if len(flight) < len(sshIdent) && strings.HasPrefix(sshIdent, string(flight)) {
+			flight, _ = w.br.Peek(len(sshIdent))
+		}
+		if bytes.HasPrefix(flight, []byte(sshIdent)) {
+			if err := w.sawSSH(); err != nil {
+				return err
+			}
+		}
 	}
 	switch w.client.Load() {
 	case clientTLS:
@@ -257,6 +303,23 @@ func (w *tunnelWatch) refuse(armed bool) error {
 // operator's proxy without sending a byte, so the phrase is never known to be
 // the operator's wording.
 func (w *tunnelWatch) failure(upstreamFirst bool, err error) string {
+	cause, _ := w.failureClass(upstreamFirst, err)
+	return cause
+}
+
+// failureClass is failure's sentence beside whose refusal it was: a peer that answered
+// the hello with something other than TLS, or with an alert, or reset, refused it
+// (outside); a plain close says nothing Wardyn can read (unknown). The SSH guard's own
+// refusal is classified by nobody here: its row carries no refusal, as it did before
+// refusals were classified.
+func (w *tunnelWatch) failureClass(upstreamFirst bool, err error) (string, *egress.Refusal) {
+	if w.sshRefused.Load() {
+		return "tunnel ssh: while the run's ssh agent holds a key, SSH goes only to its grants' own SSH hosts; nothing more was relayed", nil
+	}
+	outside := func(reason string) *egress.Refusal {
+		return &egress.Refusal{By: egress.RefusedByOutside, Reason: reason}
+	}
+	closed := &egress.Refusal{By: egress.RefusedByUnknown, Reason: "connection_closed"}
 	if r := w.refused.Load(); r != nil {
 		got := "bytes that are not a TLS record"
 		switch {
@@ -266,27 +329,27 @@ func (w *tunnelWatch) failure(upstreamFirst bool, err error) string {
 			got = "an HTTP response"
 		}
 		if r.armed {
-			return "tunnel first bytes: the upstream answered a TLS hello with " + got + ", not TLS; nothing was relayed"
+			return "tunnel first bytes: the upstream answered a TLS hello with " + got + ", not TLS; nothing was relayed", outside("upstream_not_tls")
 		}
-		return "tunnel first bytes: the upstream sent " + got + " before the client sent anything; nothing was relayed"
+		return "tunnel first bytes: the upstream sent " + got + " before the client sent anything; nothing was relayed", outside("upstream_not_tls")
 	}
 	relayed := w.relayed.Load()
 	if alert := w.alert.Load(); alert != alertNone && relayed <= tlsAlertRecordLen {
 		if alert == alertUnread {
-			return "tunnel tls handshake: the upstream answered the TLS hello with an alert and nothing else"
+			return "tunnel tls handshake: the upstream answered the TLS hello with an alert and nothing else", outside("tls_alert")
 		}
-		return fmt.Sprintf("tunnel tls handshake: the upstream answered the TLS hello with alert %d and nothing else", alert)
+		return fmt.Sprintf("tunnel tls handshake: the upstream answered the TLS hello with alert %d and nothing else", alert), outside("tls_alert")
 	}
 	if w.client.Load() == clientSilent || relayed > 0 {
-		return ""
+		return "", nil
 	}
 	switch {
 	case upstreamFirst && errors.Is(err, syscall.ECONNRESET):
-		return "tunnel first bytes: the upstream reset the connection without answering"
+		return "tunnel first bytes: the upstream reset the connection without answering", outside("connection_reset")
 	case upstreamFirst:
-		return "tunnel first bytes: the upstream closed without answering"
+		return "tunnel first bytes: the upstream closed without answering", closed
 	}
-	return "tunnel first bytes: the client closed before any reply"
+	return "tunnel first bytes: the client closed before any reply", closed
 }
 
 // tunnelEnded writes the one egress.deny a tunnel that died after its 200
@@ -298,13 +361,14 @@ func (p *Proxy) tunnelEnded(seen *egress.DecisionLog, host string, w *tunnelWatc
 	if seen == nil || p.sink == nil {
 		return
 	}
-	cause := w.failure(first == net.Conn(w), err)
+	cause, refusal := w.failureClass(first == net.Conn(w), err)
 	if cause == "" {
 		return
 	}
 	dl := decisionLog(seen.Request, egress.Deny, ruleSourceTunnelFailed)
 	dl.Cause = p.redactTopology(string(maskDecisionBytes([]byte(cause))))
 	dl.Via = p.viaHop(host)
+	dl.Refusal = refusal
 	p.sink.emit(dl)
 }
 

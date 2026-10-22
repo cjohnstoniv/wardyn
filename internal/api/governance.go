@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Governance-profile CRUD (migration 0052): the admin-facing surface over
-// governance_profiles + governance_assignments — named, assignable ceilings and
+// governance_units + governance_memberships — named, assignable ceilings and
 // the rows binding them to a user, a group, or everyone.
 //
 // Modeled on access.go / permissions.go: one read that shows the whole picture,
@@ -19,15 +19,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"net/http"
-	"slices"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -35,12 +32,12 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// maxGovernanceProfileNameLen bounds a profile name on write. A name is a
+// maxGovernanceUnitNameLen bounds a profile name on write. A name is a
 // human handle rendered in a picker and used as the resolver's deterministic
 // tie-break, not a description.
-const maxGovernanceProfileNameLen = 128
+const maxGovernanceUnitNameLen = 128
 
-// mountGovernanceRoutes registers the /governance family — SEVEN routes, all on
+// mountGovernanceRoutes registers the /governance family — NINE routes, all on
 // the SECURITY tier.
 //
 // The parameter is still spelled `operatorOnly` because the six CRUD routes
@@ -51,17 +48,22 @@ const maxGovernanceProfileNameLen = 128
 // routes.go says so at the call, and authz_test.go's chi.Walk matrix is what
 // enforces it.
 //
-// The seventh, POST /governance/preview, was born on this tier: a READ that
+// The seventh, POST /governance/check, was born on this tier: a READ that
 // answers "which profile would bind these claims" by running the resolver
 // itself, so the console never re-implements the precedence rule to show it.
+//
+// The membership move (PUT) and promotion (POST …/promote) are the policy tree's: they follow the
+// second-human switch as every assignment write does.
 func (s *Server) mountGovernanceRoutes(operatorOnly chi.Router) {
 	operatorOnly.Get("/governance", s.handleGetGovernance)
-	operatorOnly.Post("/governance/profiles", s.handleCreateGovernanceProfile)
-	operatorOnly.Put("/governance/profiles/{id}", s.handleUpdateGovernanceProfile)
-	operatorOnly.Delete("/governance/profiles/{id}", s.handleDeleteGovernanceProfile)
-	operatorOnly.Post("/governance/assignments", s.handleUpsertGovernanceAssignment)
-	operatorOnly.Delete("/governance/assignments/{id}", s.handleDeleteGovernanceAssignment)
-	operatorOnly.Post("/governance/preview", s.handlePreviewGovernanceProfile)
+	operatorOnly.Post("/governance/units", s.handleCreateGovernanceUnit)
+	operatorOnly.Put("/governance/units/{id}", s.handleUpdateGovernanceUnit)
+	operatorOnly.Delete("/governance/units/{id}", s.handleDeleteGovernanceUnit)
+	operatorOnly.Post("/governance/memberships", s.handleUpsertGovernanceMembership)
+	operatorOnly.Put("/governance/memberships/{id}", s.handleMoveGovernanceMembership)
+	operatorOnly.Delete("/governance/memberships/{id}", s.handleDeleteGovernanceMembership)
+	operatorOnly.Post("/governance/memberships/{id}/promote", s.handlePromoteGovernanceMembership)
+	operatorOnly.Post("/governance/check", s.handleGovernanceCheck)
 	s.mountGovernanceChangeRoutes(operatorOnly)
 }
 
@@ -74,19 +76,28 @@ func (s *Server) mountGovernanceRoutes(operatorOnly chi.Router) {
 // profile it points at, and nesting profiles under assignments would duplicate
 // a ceiling per binding while hiding an unassigned profile entirely.
 type governanceResponse struct {
-	Profiles    []governanceProfileView      `json:"profiles"`
-	Assignments []types.GovernanceAssignment `json:"assignments"`
+	Units       []governanceUnitView         `json:"units"`
+	Memberships []types.GovernanceMembership `json:"memberships"`
+	// MaxDepth is the maximum unit depth in force (site_config.governance_max_depth, 16 when unset).
+	MaxDepth int `json:"max_depth"`
+	// Boundary is the Wardyn boundary as GET /governance/boundary returns it.
+	Boundary types.Boundary `json:"boundary"`
 }
 
 // handleGetGovernance returns the whole governance picture. operatorOnly
 // (routes.go).
 func (s *Server) handleGetGovernance(w http.ResponseWriter, r *http.Request) {
-	resolved, err := s.resolveAllProfiles(r.Context())
+	resolved, err := s.resolveAllUnits(r.Context())
 	if err != nil {
 		writeServerError(w, r, "list governance profiles", err)
 		return
 	}
-	assignments, err := s.cfg.Store.ListGovernanceAssignments(r.Context())
+	limit, err := s.unitDepthLimit(r.Context())
+	if err != nil {
+		writeServerError(w, r, "list governance profiles", err)
+		return
+	}
+	assignments, err := s.cfg.Store.ListGovernanceMemberships(r.Context())
 	if err != nil {
 		writeServerError(w, r, "list governance assignments", err)
 		return
@@ -95,13 +106,46 @@ func (s *Server) handleGetGovernance(w http.ResponseWriter, r *http.Request) {
 	// stored-policy read path: validatePolicySpec already refuses a WRITE that
 	// puts a raw llm_inspection secret VALUE in a spec, so a stored ceiling
 	// should never carry one — but a read path must never re-expose it if that
-	// invariant is ever broken by a migration or a direct DB edit. newProfileView
+	// invariant is ever broken by a migration or a direct DB edit. newUnitView
 	// redacts the effective ceiling the same way.
-	profiles := make([]governanceProfileView, len(resolved))
-	for i, p := range resolved {
-		profiles[i] = newProfileView(p.Row, p.Resolved, p.Err)
+	boundary, err := s.governanceBoundary(r.Context())
+	if err != nil {
+		writeServerError(w, r, "read the Wardyn boundary", err)
+		return
 	}
-	writeJSON(w, http.StatusOK, governanceResponse{Profiles: profiles, Assignments: assignments})
+	people := unitPeople(resolved, assignments)
+	profiles := make([]governanceUnitView, len(resolved))
+	tier := s.specReadTierFor(r.Context())
+	for i, p := range resolved {
+		profiles[i] = newUnitView(p.Row, p.Resolved, p.Err, tier)
+		if p.Row.ID != store.DefaultUnitID {
+			n := len(people[p.Row.ID])
+			profiles[i].People = &n
+		}
+	}
+	writeJSON(w, http.StatusOK, governanceResponse{Units: profiles, Memberships: assignments, MaxDepth: limit, Boundary: boundary})
+}
+
+// unitPeople is, per unit, the membership subjects in it or in a unit below it. The Default unit's
+// people hold no rows, so it has none here.
+func unitPeople(units []unitResolution, ms []types.GovernanceMembership) map[uuid.UUID]map[string]bool {
+	parent := map[uuid.UUID]*uuid.UUID{}
+	for _, u := range units {
+		parent[u.Row.ID] = u.Row.ParentID
+	}
+	out := map[uuid.UUID]map[string]bool{}
+	for _, m := range ms {
+		key := string(m.SubjectType) + ":" + m.Subject
+		cur := &m.UnitID
+		for n := 0; cur != nil && n <= store.MaxUnitDepthCap; n++ {
+			if out[*cur] == nil {
+				out[*cur] = map[string]bool{}
+			}
+			out[*cur][key] = true
+			cur = parent[*cur]
+		}
+	}
+	return out
 }
 
 // governanceRefusedAllPlacements is the frozen sentence (GOVERNANCE.REFUSED_ALL_PLACEMENTS) the
@@ -155,354 +199,6 @@ func governanceLimitsRefusal(l types.GovernanceLimits) string {
 	return runLimitsRefusal(l.RunLimits)
 }
 
-// assignment writes
-
-// governanceAssignmentRequest is POST /governance/assignments's body. The
-// natural key (subject_type, subject) is what a caller names; the row's id and
-// provenance are server-assigned.
-type governanceAssignmentRequest struct {
-	SubjectType types.CapabilitySubjectType `json:"subject_type"`
-	Subject     string                      `json:"subject"`
-	ProfileID   uuid.UUID                   `json:"profile_id"`
-	Priority    int                         `json:"priority"`
-}
-
-// validateGovernanceAssignment normalizes a in place and validates it, applying
-// the SAME field hygiene validateCapabilityGrant applies to a capability grant
-// subject — trim, length, no control characters, and for a GROUP subject the
-// shared types.CanonicalGroupSubject the login-time snapshot itself uses —
-// because these two tables are written against the identical subject vocabulary
-// and are resolved through the identical capabilitySubjects call. A subject
-// normalized one way here and another way there is a row that silently never
-// matches.
-func validateGovernanceAssignment(a *types.GovernanceAssignment) error {
-	if !a.SubjectType.Valid() {
-		return fmt.Errorf("subject_type: invalid %q", a.SubjectType)
-	}
-	if a.ProfileID == uuid.Nil {
-		return fmt.Errorf("profile_id: required")
-	}
-	if a.Priority < math.MinInt32 || a.Priority > math.MaxInt32 { // the column is INT
-		return fmt.Errorf("priority: out of range")
-	}
-	if a.SubjectType == types.CapabilitySubjectAll {
-		// "all" names every signed-in human; the migration is explicit that
-		// subject is '' for this type, so a caller-supplied value is dropped
-		// rather than trusted — there is nothing for it to legitimately name,
-		// and honouring it would create a second, unreachable 'all' row.
-		a.Subject = ""
-		return nil
-	}
-	a.Subject = strings.TrimSpace(a.Subject)
-	if a.Subject == "" {
-		return fmt.Errorf("subject: required for subject_type %q", a.SubjectType)
-	}
-	if a.SubjectType == types.CapabilitySubjectGroup {
-		// The group half of that hygiene is types.CanonicalGroupSubject, not a
-		// lowercase — see validateCapabilityGrant. A group-tier assignment is
-		// the sharper case of the two: HasGroupTierAssignments counts the dead
-		// row as "a group tier exists", so a subject no snapshot can carry both
-		// fails to wall the member it names AND refuses every caller with an
-		// unanswerable snapshot on account of an assignment that could never
-		// have applied to them.
-		subject, ok := types.CanonicalGroupSubject(a.Subject)
-		if !ok {
-			return fmt.Errorf("subject: must be printable ASCII — a group subject is matched against the login-time group snapshot, which carries printable ASCII only, so this value can never match anyone")
-		}
-		a.Subject = subject
-	} else if a.SubjectType == types.CapabilitySubjectUserType {
-		// Verbatim, as validateCapabilityGrant keeps it: a type id is never
-		// folded, and existence is the handler's check.
-		if !oidc.UserTypeIDWellFormed(a.Subject) {
-			return fmt.Errorf("subject: %q is not a user type id", a.Subject)
-		}
-	} else {
-		// The USER half is types.CanonicalUserSubject for the same guard-before-fold
-		// reason (capabilities.go): a bare ToLower folds U+212A onto ASCII 'k'
-		// and U+0130 onto 'i', so a crafted spelling of a real human's address
-		// was stored as THAT human's subject — an assignment binding someone
-		// else's ceiling to them.
-		a.Subject = types.CanonicalUserSubject(a.Subject)
-	}
-	if len(a.Subject) > maxCapabilityGrantFieldLen || !controlCharFree(a.Subject) {
-		return fmt.Errorf("subject: invalid")
-	}
-	return nil
-}
-
-// handleUpsertGovernanceAssignment binds one subject to one profile, keyed on
-// the natural (subject_type, subject): re-assigning a subject REPOINTS its
-// single row rather than accumulating a second. 201 for a genuinely new
-// binding, 200 when an existing one was repointed — the same created/updated
-// signal handleUpsertCapabilityGrant gives, derived the same way (the store
-// returns the EXISTING row's id on a conflict, never the candidate's).
-// operatorOnly (routes.go).
-func (s *Server) handleUpsertGovernanceAssignment(w http.ResponseWriter, r *http.Request) {
-	mode, ok := s.governanceWriteMode(w, r)
-	if !ok {
-		return
-	}
-	var req governanceAssignmentRequest
-	if !decodeStrict(w, r, &req) {
-		return
-	}
-	a := types.GovernanceAssignment{
-		SubjectType: req.SubjectType,
-		Subject:     req.Subject,
-		ProfileID:   req.ProfileID,
-		Priority:    req.Priority,
-	}
-	if err := validateGovernanceAssignment(&a); err != nil {
-		writeErrorReason(w, http.StatusBadRequest, reasonGovernanceAssignmentInvalid, "invalid assignment: "+err.Error())
-		return
-	}
-	if !s.userTypeSubjectExists(w, r, a.SubjectType, a.Subject) {
-		return
-	}
-	a.ID = uuid.New()
-	a.CreatedBy = principalFromRequest(r)
-	if mode == govQueue {
-		// Every assignment change is held: a repoint can widen its subjects, and nothing here is
-		// proven narrowing.
-		s.holdAssignmentUpsert(w, r, a)
-		return
-	}
-	saved, err := s.cfg.Store.UpsertGovernanceAssignment(r.Context(), a)
-	// ErrNotFound here is the FK refusing an unknown profile_id — a 404 naming
-	// the profile, not a 500, and not a silent no-op.
-	if notFoundIf(w, err, "governance profile", reasonGovernanceProfileNotFoundByID) {
-		return
-	}
-	if err != nil {
-		writeServerError(w, r, "upsert governance assignment", err)
-		return
-	}
-	status := http.StatusCreated
-	if saved.ID != a.ID {
-		status = http.StatusOK
-	}
-	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"governance.assignment.write", saved.ID.String(), "success", mustJSON(assignmentWriteAuditData(saved))))
-	if mode == govBypass {
-		s.recordGovernanceBypass(r, govKindAssignment, saved.ID.String(), "success", nil)
-	}
-	writeJSON(w, status, saved)
-}
-
-// handleDeleteGovernanceAssignment removes one assignment by id (204), 404 when
-// unknown. This is the SUPPORTED way to widen a principal back to the
-// deployment ceiling, which is why it is audited on its own line rather than
-// riding a profile delete. operatorOnly (routes.go).
-func (s *Server) handleDeleteGovernanceAssignment(w http.ResponseWriter, r *http.Request) {
-	mode, ok := s.governanceWriteMode(w, r)
-	if !ok {
-		return
-	}
-	id, ok := parseIDParam(w, r, "id", "governance assignment")
-	if !ok {
-		return
-	}
-	if mode == govQueue {
-		// Deleting an assignment widens its subjects back to the deployment ceiling: never exempt.
-		s.holdAssignmentDelete(w, r, id)
-		return
-	}
-	// The audit names the row the delete removed, not one read beside it.
-	removed, err := s.cfg.Store.DeleteGovernanceAssignment(r.Context(), id)
-	if notFoundIf(w, err, "governance assignment", reasonGovernanceAssignmentNotFound) {
-		return
-	}
-	if err != nil {
-		writeServerError(w, r, "delete governance assignment", err)
-		return
-	}
-	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"governance.assignment.delete", id.String(), "success", mustJSON(assignmentWriteAuditData(removed))))
-	if mode == govBypass {
-		s.recordGovernanceBypass(r, govKindAssignment, id.String(), "success", nil)
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-// POST /governance/preview
-
-// maxGovernancePreviewClaims bounds ONE preview's claim lists. The body cap
-// (decodeStrict's maxJSONBody) already bounds the request, but a 1 MiB body of
-// one-character claims is ~250k array elements handed to `= ANY($1::text[])`
-// and to the dedupe below — so the list gets its own ceiling, well past the few
-// dozen claims a real token carries.
-const maxGovernancePreviewClaims = 256
-
-// governancePreviewRequest is POST /governance/preview's body: the SAME two
-// claim lists ResolveGovernanceProfile itself takes, so this endpoint has
-// nothing to derive and nothing to re-order.
-//
-// The ambiguity, and how this endpoint treats it. The console's preview field
-// is one kind-LESS claims box (the People step's own, PREVIEW.FIELD_CLAIMS) —
-// a pasted line may be a sign-in subject, an email, or a group, and the wire
-// cannot tell. So the console sends EVERY typed claim in BOTH lists, and this
-// endpoint offers each to both tiers exactly as given. That is the same shape
-// POST /access/preview already takes ({roles: lines, groups: lines}), and it is
-// honest because the response says which tier matched: matched_tier names the
-// row that won, which is what the console renders ("matched by a group
-// assignment"). An answer that could only have come from a group assignment
-// says so, and one that could only have come from a user assignment says that.
-//
-// What this endpoint deliberately does NOT do is inspect the SHAPE of a claim.
-// There is no "@ makes it an email" rule here, because that would be a second
-// opinion about identity living beside the resolver's. Within the user tier the
-// resolver ranks by array_position — the caller's own ordering IS the
-// precedence — so the console sends user_subjects in the order capabilitySubjects
-// would build them (sign-in subject before email), and the ranking stays the
-// SQL's.
-type governancePreviewRequest struct {
-	UserSubjects []string `json:"user_subjects,omitempty"`
-	Groups       []string `json:"groups,omitempty"`
-	// UserType is the previewed person's type id; "" previews no type tier.
-	UserType string `json:"user_type,omitempty"`
-}
-
-// governancePreviewResponse names the profile that would bind a principal
-// presenting those claims, and the TIER of the assignment that won.
-//
-// Every field is omitempty, and an empty object is the answer for "no
-// assignment matched" — the deployment ceiling. That is the same additive/
-// absent doctrine defaultPolicyResponse.GovernanceProfileName follows: an
-// absent key already decodes as "no profile" in the TS mirror, while "" would
-// be a value the console then has to special-case.
-//
-// ProfileID uses `omitzero`, not `omitempty`: uuid.UUID is an ARRAY type, and
-// omitempty never elides one — the nil uuid would ship as "00000000-…" on
-// exactly the answer that has no profile.
-type governancePreviewResponse struct {
-	ProfileID   uuid.UUID                   `json:"profile_id,omitzero"`
-	ProfileName string                      `json:"profile_name,omitempty"`
-	MatchedTier types.CapabilitySubjectType `json:"matched_tier,omitempty"`
-}
-
-// handlePreviewGovernanceProfile answers "which profile would bind a principal
-// carrying these claims" by running THE resolver — the identical
-// Store.ResolveGovernanceProfile call effectiveCeiling takes on the enforcement
-// path. securityOps (routes.go).
-//
-// That single call is the whole point: the ranking order — tier,
-// sub-over-email, priority DESC, name ASC — must not be re-implemented
-// anywhere else. A
-// second implementation of the precedence rule is a second implementation of
-// the answer, and a preview that drifts from enforcement is worse than no
-// preview: it is confidently wrong at the moment an admin is deciding whether a
-// ceiling is right. So there is no ORDER BY in Go here and none in TS; the
-// ranking exists once, as the indexed read in internal/store/governance.go.
-//
-// Not audited, for the reason handleDirectorySearch states about searches: this
-// is typed into, mints nothing and changes nothing, and a row per keystroke
-// would turn the append-only log into a record of every claim an admin tried.
-//
-// ErrNotFound is a RESULT, not a failure — the absent-row doctrine, answered as
-// the empty object. Only a real store failure is a 500, and it must be: a
-// preview that silently reported "no assignment matches" on a database hiccup
-// would tell an admin their profile does not bind someone it does.
-func (s *Server) handlePreviewGovernanceProfile(w http.ResponseWriter, r *http.Request) {
-	var req governancePreviewRequest
-	if !decodeStrict(w, r, &req) {
-		return
-	}
-	users, msg := normalizeGovernancePreviewClaims(req.UserSubjects, "user_subjects")
-	if msg != "" {
-		writeErrorReason(w, http.StatusBadRequest, reasonGovernancePreviewClaimsInvalid, msg)
-		return
-	}
-	groups, msg := normalizeGovernancePreviewGroups(req.Groups)
-	if msg != "" {
-		writeErrorReason(w, http.StatusBadRequest, reasonGovernancePreviewClaimsInvalid, msg)
-		return
-	}
-	id, name, tier, err := s.assignedProfileIdentity(r.Context(), users, groups, strings.TrimSpace(req.UserType))
-	if errors.Is(err, store.ErrNotFound) {
-		writeJSON(w, http.StatusOK, governancePreviewResponse{})
-		return
-	}
-	if err != nil {
-		writeServerError(w, r, "resolve governance profile", err)
-		return
-	}
-	writeJSON(w, http.StatusOK, governancePreviewResponse{
-		ProfileID: id, ProfileName: name, MatchedTier: tier,
-	})
-}
-
-// normalizeGovernancePreviewClaims lowercases, trims and de-duplicates one
-// claim list, preserving ORDER — which matters, because order is the user
-// tier's tie-break (array_position).
-//
-// User subjects only. The normalization is not a nicety: assignments are stored
-// lowercased (validateGovernanceAssignment) and the enforcement path's user
-// input arrives already folded — capabilitySubjects lowercases the sub and the
-// email. A preview that skipped it would answer "no assignment matches" for a
-// claim typed `Eng` against a row the real run matches, which is the drift this
-// endpoint exists to remove.
-//
-// Neither half is a plain ToLower. It is the whole rule for an ASCII subject only: strings.ToLower is
-// a UNICODE fold, so U+212A becomes ASCII 'k' and U+0130 becomes 'i', and a
-// preview claim typed in either spelling would answer for a DIFFERENT human's
-// row than the run resolves. Both halves therefore ask the match surface's own
-// canonicalizer — users through types.CanonicalUserSubject (the same function
-// capabilitySubjects and the two write boundaries use), groups through
-// normalizeGovernancePreviewGroups below (types.CanonicalGroupSubject).
-func normalizeGovernancePreviewClaims(in []string, field string) ([]string, string) {
-	if len(in) > maxGovernancePreviewClaims {
-		return nil, fmt.Sprintf("%s: at most %d claims", field, maxGovernancePreviewClaims)
-	}
-	out := make([]string, 0, len(in))
-	for _, v := range in {
-		if c := types.CanonicalUserSubject(v); c != "" && !slices.Contains(out, c) {
-			out = append(out, c)
-		}
-	}
-	return out, ""
-}
-
-// normalizeGovernancePreviewGroups is the GROUP half, and it calls the snapshot's
-// own normalizer rather than restating it.
-//
-// The divergence this closes. The preview answers one question — "which profile
-// would bind a principal presenting this claim" — and there has to be one
-// answer. A plain ToLower with no ASCII guard FOLDS: U+212A KELVIN SIGN becomes
-// ASCII 'k', so a crafted "Kubernetes-admins" normalized onto the real,
-// operator-authored group "kubernetes-admins" and the endpoint reported that the
-// profile BINDS it. The enforcement path refuses the same claim outright
-// (CanonicalGroupSubject ok=false), drops it from the snapshot and stamps the
-// snapshot truncated. Preview said yes; enforcement said no.
-//
-// Dropped, not refused with a 400, because dropping is exactly what the
-// enforcement path does with the same claim — a preview that 400s where a login
-// silently drops would be a second, different answer rather than the same one.
-// The count cap and the de-duplication stay identical to the user half.
-//
-// Residual, named rather than hidden: enforcement ALSO stamps the snapshot
-// truncated when it drops a group, and a truncated snapshot makes
-// effectiveCeiling answer errGroupsSnapshotStale (403) for that member whenever
-// a group-tier assignment exists. The preview has no field for "and this claim
-// would make your snapshot incomplete", so it reports the dropped claim as
-// simply unmatched. That is strictly closer to enforcement than the fold was,
-// and the gap is filed rather than invented as a new response field here.
-func normalizeGovernancePreviewGroups(in []string) ([]string, string) {
-	if len(in) > maxGovernancePreviewClaims {
-		return nil, fmt.Sprintf("groups: at most %d claims", maxGovernancePreviewClaims)
-	}
-	out := make([]string, 0, len(in))
-	for _, v := range in {
-		c, ok := types.CanonicalGroupSubject(v)
-		if !ok {
-			continue // no login snapshot can carry it; enforcement drops it too
-		}
-		if !slices.Contains(out, c) {
-			out = append(out, c)
-		}
-	}
-	return out, ""
-}
-
 // the resolver
 
 // governanceCeiling is ONE principal's resolved ceiling: the RunPolicySpec they
@@ -515,7 +211,7 @@ func normalizeGovernancePreviewGroups(in []string) ([]string, string) {
 type governanceCeiling struct {
 	Spec     types.RunPolicySpec
 	Limits   types.GovernanceLimits
-	Profile  *ResolvedProfile
+	Unit     *ResolvedUnit
 	Warnings []string
 	// MemberDefault is a governed member's size before any ask (composer.MemberDefault from the
 	// deployment's own size, lowered by this ceiling), set when the ceiling is resolved. Read it
@@ -526,6 +222,10 @@ type governanceCeiling struct {
 	// member, so a ceiling built without asking stays bounded. Dispatch reads it
 	// for the Azure DevOps standing rule (adoStandingBound).
 	Operator bool
+	// boundary is the Wardyn boundary this ceiling resolved under (nil in no_limits); boundaryKnobs
+	// are the knobs it narrowed here (boundary_meet.go).
+	boundary      *types.Boundary
+	boundaryKnobs []string
 }
 
 // errGroupsSnapshotStale is the 403-class resolver failure: this caller's group
@@ -687,9 +387,20 @@ func (s *Server) effectiveCeiling(ctx context.Context) (governanceCeiling, error
 }
 
 // resolveEffectiveCeiling is effectiveCeiling's uncached body — the resolution
-// order its doc comment describes. Split out so the memo above wraps it exactly
-// once and no call site can reach the raw resolve by accident.
+// order its doc comment describes, then the Wardyn boundary over whatever it resolved
+// (boundaryCeiling), the outermost layer, operators included. Split out so the memo
+// above wraps it exactly once and no call site can reach the raw resolve by accident.
 func (s *Server) resolveEffectiveCeiling(ctx context.Context) (governanceCeiling, error) {
+	c, err := s.resolveChainCeiling(ctx)
+	if err != nil {
+		return c, err
+	}
+	return s.boundaryCeiling(ctx, c)
+}
+
+// resolveChainCeiling is the ceiling below the boundary: the operator's, the
+// deployment's, or the caller's profile chain.
+func (s *Server) resolveChainCeiling(ctx context.Context) (governanceCeiling, error) {
 	deployment := governanceCeiling{Spec: s.cfg.DefaultPolicy.Clone(), MemberDefault: s.memberDefaultFor(s.cfg.DefaultPolicy.Resources)}
 	if s.runUngoverned(ctx) {
 		deployment.Operator = true
@@ -699,46 +410,20 @@ func (s *Server) resolveEffectiveCeiling(ctx context.Context) (governanceCeiling
 		return deployment, nil
 	}
 
-	subj, err := s.callerSubjects(ctx)
-	if err != nil {
-		return governanceCeiling{}, err
-	}
-	// Truncated counts as stale. sessionGroups sorts the snapshot and
-	// drops its alphabetically-last entries at the cookie byte cap, so a member
-	// in enough groups holds a snapshot that is present, non-nil and INCOMPLETE
-	// — and the group whose assignment walls them is exactly as likely to be
-	// missing as any other. Without this the tier evaporates in silence: no
-	// refusal, no audit, just the deployment ceiling.
-	if subj.stale || oidcGroupsTruncatedFromContext(ctx) {
-		// The unusable half must not be MATCHED against. Passing a truncated
-		// list would still let a surviving group's row win, which is not wrong
-		// on its own — but it makes the refusal below depend on which groups
-		// happened to fit, so the same human with the same claims could be
-		// refused or served depending on alphabetical luck. Resolve on the
-		// answerable identity only, and let the refusal cover the rest.
-		return s.ceilingWithUnusableGroups(ctx, subj.users, subj.userType, deployment)
-	}
-
-	p, _, err := s.resolveAssignedProfile(ctx, subj.users, subj.groups, subj.userType)
-	return s.ceilingFromProfile(ctx, p, err, deployment)
+	// The caller's one context, its path composed (governance_context.go). Restrictions on the
+	// context are applied after it (the RESTRICT-PIN lane).
+	return s.resolveContext(ctx, deployment)
 }
 
-// ceilingWithUnusableGroups is effectiveCeiling's step 4: the caller's group
-// identity cannot be evaluated, so resolve on their user subjects and type alone
-// and let selectByTier's one stale rule decide whether that answer is
-// trustworthy (target governance.ceiling). The drive preview enters here too.
+// ceilingWithUnusableGroups is the context resolve when the caller's group identity cannot be
+// evaluated: the context is selected on their user subjects and type alone, and selectByTier's
+// one stale rule decides whether that answer is trustworthy (target governance.ceiling). The
+// drive preview enters here too.
 func (s *Server) ceilingWithUnusableGroups(ctx context.Context, users []string, userType string, deployment governanceCeiling) (governanceCeiling, error) {
-	p, _, err := selectByTier(ctx, s, authz.Deny(authz.ReasonGroupsSnapshotStale, "governance.ceiling", ""),
-		func() (*ResolvedProfile, types.CapabilitySubjectType, error) {
-			return s.resolveAssignedProfile(ctx, users, nil, userType)
-		}, s.cfg.Store.HasGroupTierAssignments)
-	if errors.Is(err, errGroupsSnapshotStale) {
-		return governanceCeiling{}, err
-	}
-	return s.ceilingFromProfile(ctx, p, err, deployment)
+	return s.contextCeiling(ctx, contextQuery{users: users, userType: userType, unusable: true}, contextChoiceFrom(ctx), deployment)
 }
 
-// ceilingFromProfile turns one resolver answer into a ceiling: ErrNotFound (or
+// ceilingFromUnit turns one resolver answer into a ceiling: ErrNotFound (or
 // a nil profile) is the deployment's, anything else is the profile's, already composed from its
 // chain (governance_compose.go) with its grants re-intersected at every step.
 //
@@ -754,7 +439,7 @@ func (s *Server) ceilingWithUnusableGroups(ctx context.Context, users []string, 
 // A composition nothing satisfies is the explicit deny-all state: it is refused with the authz
 // reason governance_overlay_unsatisfiable and audited here, once per resolve, unless the read only
 // displays a state. It is never read as the deployment's ceiling or as either side of the meet.
-func (s *Server) ceilingFromProfile(ctx context.Context, p *ResolvedProfile, err error, deployment governanceCeiling) (governanceCeiling, error) {
+func (s *Server) ceilingFromUnit(ctx context.Context, p *ResolvedUnit, err error, deployment governanceCeiling) (governanceCeiling, error) {
 	if u, ok := isOverlayUnsatisfiable(err); ok {
 		if !isDisplayRead(ctx) {
 			s.recordRefusal(ctx, nil, authz.Deny(authz.ReasonGovernanceOverlayUnsatisfiable, "governance.ceiling", u.Error()))
@@ -767,7 +452,7 @@ func (s *Server) ceilingFromProfile(ctx context.Context, p *ResolvedProfile, err
 	if p == nil {
 		return deployment, nil
 	}
-	return governanceCeiling{Spec: p.Ceiling.Clone(), Limits: p.Limits, Profile: p, Warnings: p.Warnings,
+	return governanceCeiling{Spec: p.Ceiling.Clone(), Limits: p.Limits, Unit: p, Warnings: p.Warnings,
 		MemberDefault: s.memberDefaultFor(p.Ceiling.Resources)}, nil
 }
 
@@ -776,8 +461,8 @@ func (s *Server) ceilingFromProfile(ctx context.Context, p *ResolvedProfile, err
 // own is the size; any other ceiling (the deployment's, an operator's) inherits nothing, so its spec
 // is its own.
 func (c governanceCeiling) authoredSize() types.ResourceLimits {
-	if c.Profile != nil {
-		return c.Profile.AuthoredResources
+	if c.Unit != nil {
+		return c.Unit.AuthoredResources
 	}
 	if r := c.Spec.Resources; r != nil {
 		return types.ResourceLimits{CPUMillis: r.CPUMillis, MemoryMiB: r.MemoryMiB}
@@ -825,7 +510,7 @@ func (s *Server) inheritDeploymentResources(r *types.ResourceLimits) *types.Reso
 	return &out
 }
 
-// droppedPushRulesWarning is ceilingFromProfile's push_rules mirror of
+// droppedPushRulesWarning is ceilingFromUnit's push_rules mirror of
 // reintersectGovernanceGrants's grant-kind drop: when the deployment default
 // carries push_rules and this profile's own ceiling does not, the deployment's
 // content rules silently stop applying to this profile's members.

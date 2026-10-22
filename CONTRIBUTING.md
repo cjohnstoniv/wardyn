@@ -40,7 +40,7 @@ Features are not done until they pass the conformance suite (`test/conformance`)
 
 - `go build` and `go vet` — both plain and `-tags docker`
 - Go unit suites with a coverage floor: `make cover-check` (enforces COVER_MIN=74 over the
-  UNION of all three shipped builds — tagless + `-tags docker` + `-tags k8s`),
+  UNION of all three shipped builds — tagless + `-tags docker` + `-tags docker,k8s`),
   `make test-report-docker` (fakeDocker), `make test-report-k8s`,
   `make test-report-pg` (real Postgres), and `make test-race-pg` — the race
   pass over the Postgres-gated concurrency proofs, which `make test-race` cannot

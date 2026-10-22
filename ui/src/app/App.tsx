@@ -12,10 +12,11 @@ import { Toaster } from "./components/ui/sonner";
 import { SHELL } from "./components/wardyn/copy";
 import { ThemeProvider } from "./components/wardyn/theme-provider";
 import { SignIn } from "./components/screens/sign-in";
+import { noticeView, type GateNotice } from "./lib/session-continuity-copy";
 import { AppShell } from "./components/screens/app-shell";
 import { RunsScreen } from "./components/screens/runs";
 import { WardynMark } from "./components/wardyn/logo";
-import { getToken, isSessionEnded, listenForOtherTabs, onUnauthorized, probeAuth, probeAuthWithReason, safeReturnPath, SESSION_ENDED_REASON, setSignedOutHold, setToken } from "./lib/api/core";
+import { getToken, isSessionEnded, listenForOtherTabs, onUnauthorized, probeAuthWithReason, safeReturnPath, setSignedOutHold, setToken } from "./lib/api/core";
 import { listenForInput } from "./lib/api/session-activity";
 import { onRemoteAuthChange } from "./lib/api/auth-sync";
 import { health } from "./lib/api/health";
@@ -78,6 +79,11 @@ const ApprovalsScreen = React.lazy(() =>
 const PoliciesScreen = React.lazy(() =>
   import("./components/screens/policies").then((m) => ({
     default: m.PoliciesScreen,
+  })),
+);
+const BoundaryScreen = React.lazy(() =>
+  import("./components/screens/boundary/boundary-screen").then((m) => ({
+    default: m.BoundaryScreen,
   })),
 );
 const GovernanceScreen = React.lazy(() =>
@@ -171,6 +177,13 @@ const AdminSettingsScreen = React.lazy(() =>
 const YourAccountScreen = React.lazy(() =>
   import("./components/screens/settings/your-account-screen").then((m) => ({
     default: m.YourAccountScreen,
+  })),
+);
+// /cli/sign-in: the approve page `wardyn login` opens (ATT-LOGIN-UI). Outside the setup gate, like /setup: a
+// person finishing a sign-in must reach it whatever the setup checks say.
+const CliSignInScreen = React.lazy(() =>
+  import("./components/screens/cli-sign-in").then((m) => ({
+    default: m.CliSignInScreen,
   })),
 );
 const WorkspacesScreen = React.lazy(() =>
@@ -371,6 +384,9 @@ const ATTENTION_POLL_MS = 5000;
 // A named module constant on purpose: a field report moves one number here.
 const MODEL_ACCESS_POLL_MS = 300_000;
 
+// Waits between re-probes of a cold load that could not reach the daemon; the last one repeats.
+const COLD_PROBE_RETRY_MS = [1000, 2000, 4000, 8000, 15000];
+
 export default function App() {
   const [auth, setAuth] = React.useState<AuthStatus>("checking");
   const [pendingApprovals, setPendingApprovals] = React.useState(0);
@@ -382,11 +398,17 @@ export default function App() {
   // for a session this browser held that was refused on load (a stored
   // token the mount probe sent and got a 401 for) — never a first visit,
   // never a deliberate sign-out.
-  const [signedOut, setSignedOut] = React.useState(false);
+  const [notice, setNotice] = React.useState<GateNotice | null>(null);
   const signingOutRef = React.useRef(false);
   // This tab signed out on purpose, so a focus or visibility re-probe must not walk back in (a failed logout leaves
   // the cookie live). Another tab announcing a sign-in is still believed. Cleared by signing in here.
   const signedOutHereRef = React.useRef(false);
+  // A 401 on any probe path says why the session ended (M12): the cold load, its retries and the re-probes
+  // all read it the same way. This tab's own sign-out is never overwritten by a probe; a stored token
+  // refused with no reason named is the generic sentence.
+  const noteEnded = React.useCallback((reason: string, hadToken = false) => {
+    setNotice((prev) => (prev?.kind === "own" ? prev : isSessionEnded(reason) ? { kind: "reason", reason } : hadToken ? { kind: "fallback" } : prev));
+  }, []);
   // Someone else signed in over the page: nothing of it may survive, so the
   // tree unmounts first (dropping every draft and its beforeunload guard)
   // and the document then loads fresh as them.
@@ -444,17 +466,80 @@ export default function App() {
   React.useEffect(() => {
     let active = true;
     const hadToken = getToken() !== null;
-    void probeAuthWithReason().then(({ probe, reason }) => {
+    void probeAuthWithReason().then(({ probe, reason, transient }) => {
       if (!active) return;
-      if (probe === "unreachable") setUnreachable(true);
+      if (probe === "unreachable") {
+        setUnreachable(true);
+        if (transient) setColdUnreachable(true);
+      }
       // A cold load whose session ended says so, as a rejected stored token does.
-      if (probe === "unauthed" && (hadToken || isSessionEnded(reason))) setSignedOut(true);
+      if (probe === "unauthed") noteEnded(reason, hadToken);
       setAuth(probe === "authed" ? "authed" : "unauthed");
     });
     return () => {
       active = false;
     };
+  }, [noteEnded]);
+
+  // A cold load whose probe hit a transient failure (a network error, a timeout, a 5xx or a 429) is not a
+  // signed-out person, but it parks on the sign-in gate, and nothing else asks again until a focus or
+  // another tab's event. So ask again on a backoff until it answers: "authed" enters the console as the
+  // mount probe would have. Any other answer is final and the gate stays, as it always has: a 401, and
+  // a 403 or another 4xx, which a retry cannot change. One probe at a time, shared with the re-probe below.
+  // Stops on any answer, on sign-in (auth leaves "unauthed"), on the person typing into the gate, and on
+  // unmount.
+  const [coldUnreachable, setColdUnreachable] = React.useState(false);
+  const probingRef = React.useRef(false);
+  // Each session probe from the sign-in screen takes the next number. Only the latest may change anything: an
+  // older probe was sent before whatever made the newer one, so its answer (a 401 included) is dropped (#3368).
+  const probeSeqRef = React.useRef(0);
+  const startProbe = React.useCallback(() => {
+    const mine = ++probeSeqRef.current;
+    probingRef.current = true;
+    const current = () => mine === probeSeqRef.current;
+    return { current, answer: probeAuthWithReason(() => !current()) };
   }, []);
+  React.useEffect(() => {
+    if (auth === "authed") setColdUnreachable(false);
+  }, [auth]);
+  React.useEffect(() => {
+    if (auth !== "unauthed" || !coldUnreachable) return;
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let attempt = 0;
+    const hadToken = getToken() !== null;
+    const stop = () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+    const schedule = () => {
+      timer = setTimeout(() => {
+        // The focus re-probe has one out: wait for it rather than stack a second.
+        if (probingRef.current) return schedule();
+        const { current, answer } = startProbe();
+        void answer.then(({ probe, reason, transient }) => {
+          if (!current()) return alive ? schedule() : undefined;
+          probingRef.current = false;
+          if (!alive) return;
+          if (probe === "unreachable" && transient) {
+            attempt++;
+            schedule();
+            return;
+          }
+          stop();
+          setColdUnreachable(false);
+          if (probe === "unauthed") noteEnded(reason, hadToken);
+          if (probe === "authed") setAuth("authed");
+        });
+      }, COLD_PROBE_RETRY_MS[Math.min(attempt, COLD_PROBE_RETRY_MS.length - 1)]);
+    };
+    document.addEventListener("input", stop, true);
+    schedule();
+    return () => {
+      stop();
+      document.removeEventListener("input", stop, true);
+    };
+  }, [auth, coldUnreachable, startProbe, noteEnded]);
 
   // DR-0020: the other tabs of this browser signed out, signed in or switched mode. Every signed-in tab
   // re-asks /me (the shell's reauth layer); a tab on the sign-in screen asks here, and enters the
@@ -465,20 +550,34 @@ export default function App() {
   React.useEffect(() => {
     if (auth !== "unauthed") return;
     let alive = true;
-    const reprobe = (fromOtherTab: boolean) => {
+    const reprobe = (fromOtherTab: boolean, heardSignOut = false) => {
       if (signingOutRef.current) return;
       if (!fromOtherTab && signedOutHereRef.current) return;
-      void probeAuth().then((probe) => {
+      // Another tab's announcement always asks again: a probe already out was sent before that sign-in and
+      // would answer 401 (#3368). It takes over from that probe, whose answer is then dropped.
+      if (probingRef.current && !fromOtherTab) return;
+      const hadToken = getToken() !== null;
+      const { current, answer } = startProbe();
+      void answer.then(({ probe, reason, transient }) => {
+        if (!current()) return;
+        probingRef.current = false;
+        // An answer that is final ends the cold-load retries; a transient failure leaves them running.
+        if (alive && !(probe === "unreachable" && transient)) setColdUnreachable(false);
+        if (alive && probe === "unauthed") {
+          // The person signed out in another tab: that, not the server's reason, is what happened to them.
+          if (heardSignOut) setNotice((prev) => (prev?.kind === "own" ? prev : { kind: "elsewhere" }));
+          else noteEnded(reason, hadToken);
+        }
         if (!alive || probe !== "authed" || authRef.current !== "unauthed") return;
         // Back in, by another tab's sign-in: a later sign-out here starts from a clean slate.
         signedOutHereRef.current = false;
-        setSignedOut(false);
+        setNotice(null);
         setAuth("authed");
       });
     };
     const onFocus = () => reprobe(false);
     const onVisible = () => document.visibilityState === "visible" && reprobe(false);
-    const stop = onRemoteAuthChange(() => reprobe(true));
+    const stop = onRemoteAuthChange((kind) => reprobe(true, kind === "signed_out"));
     window.addEventListener("focus", onFocus);
     document.addEventListener("visibilitychange", onVisible);
     return () => {
@@ -487,7 +586,7 @@ export default function App() {
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [auth]);
+  }, [auth, startProbe, noteEnded]);
 
   // Any HTTP 401. H1: it also fires for the cold mount probe (no session ever
   // established this tab), which is the gate's business, not the dialog's.
@@ -536,9 +635,10 @@ export default function App() {
   // RETURNED, like refreshHealth below: usePoll's in-flight guard is
   // promise-based, so a void return would let a slow /setup/status — the
   // expensive endpoint — stack a second read on top of the first every tick.
-  const refreshSetupStatus = React.useCallback(() => {
+  const refreshSetupStatus = React.useCallback((forceSweep?: boolean) => {
     return setupApi
-      .getSetupStatus()
+      // `=== true`: usePoll and the model-access door call this with no or foreign arguments.
+      .getSetupStatus(forceSweep === true ? { recheck: true } : undefined)
       .then((status) => {
         // authRef, not a closed-over `auth` (the same ref H1's 401 handler
         // reads): /setup/status is the expensive endpoint and can still be in
@@ -645,14 +745,14 @@ export default function App() {
     return (
       <ThemeProvider>
         <SignIn
-          reason={signedOut ? SESSION_ENDED_REASON : undefined}
+          notice={notice ? noticeView(notice) : undefined}
           onSignIn={() => {
             // The gate does not mount the Routes, so the URL the person arrived on is still current; after
             // a deliberate sign-out it is the previous person's last page, so the next one starts at /runs.
             const returnTo = signedOutHereRef.current ? "/runs" : safeReturnPath(location.pathname + location.search);
             signingOutRef.current = false;
             signedOutHereRef.current = false;
-            setSignedOut(false);
+            setNotice(null);
             setAuth("authed");
             void navigate(returnTo, { replace: true });
           }}
@@ -685,6 +785,7 @@ export default function App() {
               // (undefined -> false) while setupStatus hasn't landed yet,
               // never a guess painted off no data.
               noBarrier={setupStatus ? !deriveReadiness(setupStatus).barrierReady : false}
+              onRecheck={() => void refreshSetupStatus(true)}
               tier={setupStatus?.tier}
               onSignOut={async (sso) => {
                 // HIGH fix (sign-out): tell the server to clear the OIDC session
@@ -711,17 +812,17 @@ export default function App() {
                 signingOutRef.current = true;
                 signedOutHereRef.current = true;
                 setSignedOutHold(true);
-                if (!(await health.logout())) {
+                const confirmed = await health.logout();
+                if (!confirmed) {
                   toast.error(SHELL.SIGN_OUT_FAILED_TITLE, {
                     description: SHELL.SIGN_OUT_FAILED_BODY,
                   });
-                } else if (sso) {
-                  // #2100: only the Wardyn session ended; the identity provider's is still live.
-                  toast.info(SHELL.SIGN_OUT_SSO_TITLE, { description: SHELL.SIGN_OUT_SSO_BODY });
                 }
                 setToken(null);
                 resetReauth();
-                setSignedOut(false);
+                // #2100, M12: only the Wardyn session ended; the identity provider's is still live, and the
+                // gate says so once the server has confirmed the sign-out.
+                setNotice(confirmed && sso ? { kind: "own", sso: true } : null);
                 setAuth("unauthed");
               }}
             />
@@ -758,6 +859,7 @@ export default function App() {
             path="/admin/setup"
             element={<SetupRoute onDone={() => navigate("/runs")} status={setupStatus} />}
           />
+          <Route path="/cli/sign-in" element={suspend(<CliSignInScreen />)} />
           <Route element={<RequireSetup status={setupStatus} />}>
             <Route
               path="/"
@@ -778,6 +880,7 @@ export default function App() {
             <Route path="/admin/workspaces" element={suspend(<WorkspacesScreen />)} />
             <Route path="/admin/workspaces/:id" element={suspend(<WorkspaceDetailScreen />)} />
             <Route path="/admin/policies" element={suspend(<PoliciesScreen />)} />
+            <Route path="/admin/policies/boundary" element={suspend(<BoundaryScreen />)} />
             <Route path="/admin/templates" element={suspend(<TemplatesScreen />)} />
             <Route path="/admin/governance" element={suspend(<GovernanceScreen />)} />
             <Route path="/admin/permissions" element={suspend(<PermissionsScreen />)} />

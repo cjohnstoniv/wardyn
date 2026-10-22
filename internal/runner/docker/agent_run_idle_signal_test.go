@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -68,7 +69,7 @@ func TestAgentRunIdle_ExitsOnSignal(t *testing.T) {
 
 // runIdleAndSignal starts the real agent-run --idle script as its own process
 // group leader, waits for it to reach the hold-open point (prepDone written —
-// same signal ccRunIdle/runIdle/cxRunIdle wait for, via `timeout`, in the
+// same signal ccRunIdle/runIdle/cxRunIdle wait for in the
 // sibling boot-ordering tests) and then for the idle loop's `sleep` child,
 // sends sig to the LEADER ONLY (matching docker stop / the kubelet), and
 // returns the exit code.
@@ -94,7 +95,15 @@ func runIdleAndSignal(t *testing.T, script string, env []string, prepDone string
 		b, _ := os.ReadFile(outFile.Name())
 		return string(b)
 	}
-	if err := cmd.Start(); err != nil {
+	// A signal ignored when this test binary started (a background job of a
+	// non-interactive shell ignores SIGINT) stays ignored across exec, and bash
+	// cannot trap a signal it starts with ignored, so the INT cases would sit
+	// out the wait below. Handling it here makes exec hand bash the default.
+	ignored := make(chan os.Signal, 1)
+	signal.Notify(ignored, sig)
+	err = cmd.Start()
+	signal.Stop(ignored)
+	if err != nil {
 		t.Fatalf("start agent-run --idle: %v", err)
 	}
 	// Reaches every process in the group, including the orphaned `sleep` the
@@ -159,7 +168,7 @@ func hasSleepChild(pid int) bool {
 
 // ccEnvIdleSignalSetup reuses the real-script plumbing (ccRunnableAgentRun or
 // cxRunnableAgentRun) over the claude-code fake tmux (ccIdleEnv) — the same env
-// ccRunIdle and cxRunIdle build, minus the `timeout` wrapper this test replaces
+// ccRunIdle and cxRunIdle build, minus the prep-done wait this test replaces
 // with a signal.
 func ccEnvIdleSignalSetup(runnable func(*testing.T) string) func(*testing.T) (string, []string, string) {
 	return func(t *testing.T) (script string, env []string, prepDone string) {
@@ -181,7 +190,7 @@ func ccEnvIdleSignalSetup(runnable func(*testing.T) string) func(*testing.T) (st
 
 // awsSSOIdleSignalSetup reuses awssso_agent_run_idle_test.go's real-script and
 // fake-tmux plumbing (runnableAgentRun, fakeTmuxBin, mitmNonce) — the same env
-// runIdle builds, minus the `timeout` wrapper.
+// runIdle builds, minus the prep-done wait.
 func awsSSOIdleSignalSetup(t *testing.T) (script string, env []string, prepDone string) {
 	home, binDir, tmuxLog := fakeTmuxBin(t)
 	nonce := mitmNonce(t)

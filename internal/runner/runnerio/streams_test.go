@@ -16,6 +16,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
+	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire/runnertest"
 )
@@ -32,13 +33,19 @@ func (f contextSubstrate) ExecStream(ctx context.Context, ref string, spec runne
 
 func streamRig(t *testing.T) (*Server, *remote.Substrate, *runnertest.Fake, *runnerwire.Peer, string) {
 	t.Helper()
+	return streamRigWith(t, func(f *runnertest.Fake) substrate.Substrate { return contextSubstrate{f} })
+}
+
+// streamRigWith is streamRig over the substrate wrap makes from the fake.
+func streamRigWith(t *testing.T, wrap func(*runnertest.Fake) substrate.Substrate) (*Server, *remote.Substrate, *runnertest.Fake, *runnerwire.Peer, string) {
+	t.Helper()
 	fake := runnertest.NewFake()
 	fake.ExitCode = 7
 	local, err := fake.CreateSandbox(t.Context(), runner.SandboxSpec{RunID: uuid.New()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	server, err := New(contextSubstrate{fake}, "laptop", t.TempDir())
+	server, err := New(wrap(fake), "laptop", t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -100,7 +100,7 @@ func Classify(req Request) (Verdict, error) {
 	if method == http.MethodOptions {
 		return locationDiscovery(r), nil
 	}
-	if slices.Contains(readMethods, method) || readWrite(r) {
+	if slices.Contains(readMethods, method) || readWrite(method, r) {
 		if a, ok := readAreaOf(r); ok {
 			return Verdict{Capability: a.cap}, nil
 		}
@@ -416,8 +416,12 @@ var deniedAreas = map[string]Capability{
 // DevOps uses POST for queries whose input is too big for a query string;
 // treating method as intent would charge a work-item query the same
 // capability as an edit. Closed, short, and POSITIONAL: every entry is a
-// documented query endpoint matched where the route puts it.
-func readWrite(r route) bool {
+// documented query endpoint matched where the route puts it. Only a POST is
+// one: a PUT, PATCH or DELETE to the same path is not a documented query.
+func readWrite(method string, r route) bool {
+	if method != http.MethodPost {
+		return false
+	}
 	switch r.area {
 	case "wit":
 		// wiql, workitemsbatch, and reporting/workitemrevisions (Read Reporting Revisions Post).

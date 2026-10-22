@@ -65,7 +65,7 @@ func recordedView() sdk.RunPolicyView {
 		},
 		Changes: []sdk.RunPolicyChange{
 			{Cause: "workspace", Field: "allowed_domains", Added: []string{"registry.npmjs.org"}},
-			{Cause: "profile", Field: "denied_domains", Added: []string{"corp.example"}, Profile: "walled"},
+			{Cause: "unit", Field: "denied_domains", Added: []string{"corp.example"}, Unit: "walled"},
 			{Cause: "restart", Field: "denied_domains", Added: []string{"paste.example"}, At: &at},
 		},
 	}
@@ -117,7 +117,7 @@ func TestRunPolicy_HeaderLines(t *testing.T) {
 			"# Changed when the run started\n",
 			"# Added for the workspace: registry.npmjs.org\n",
 			"# Added for an attached component: api.stripe.com\n",
-			"# Limited by the walled governance profile: corp.example\n",
+			"# Limited by the walled governance unit: corp.example\n",
 			"# Blocked when the run was restarted on " + restartedOn + ": paste.example\n",
 			"# Narrowed to fit your limits: pastebin.com\n",
 			"# Values shown as <redacted> are hidden from you. Fill them in before using this as a policy.\n",
@@ -155,8 +155,8 @@ func TestRunPolicy_HeaderLines(t *testing.T) {
 			{Kind: "stored", Deleted: true}:                       "Started from a saved policy that has since been deleted.",
 			{Kind: "inline"}:                                      "Started from a policy written for this run.",
 			{Kind: "default"}:                                     "Started from your organization's default policy.",
-			{Kind: "profile", Name: "walled"}:                     "Started from the walled governance profile.",
-			{Kind: "profile"}:                                     "Started from your organization's default policy.",
+			{Kind: "unit", Name: "walled"}:                        "Started from the walled governance unit.",
+			{Kind: "unit"}:                                        "Started from your organization's default policy.",
 			{Kind: "unknown"}:                                     "Wardyn set this policy for this run.",
 			{Kind: "inline", Preset: "nightly", PresetVersion: 3}: "Started from a policy written for this run.\n# Launched from the preset \"nightly\", version 3.",
 		} {

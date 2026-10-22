@@ -237,7 +237,7 @@ would refuse every member run on every deployment that has not enforced it.
 | Key | String |
 |---|---|
 | `TITLE` | Permissions |
-| `LEAD` | Grant members and groups specific Wardyn capabilities. Each capability is enforced on its own — until you enforce one, nothing about it changes. |
+| `LEAD` | Grant members and groups specific Wardyn capabilities. A capability refuses nothing until you enforce it. |
 | `DOCTRINE` | A capability bounds what a member chose, never what an admin pre-authorized. Egress a workspace, a stored policy, or a scan already carries is never narrowed by a grant. |
 | `EXEMPT` | Super admins, the admin token, and local mode are never bounded by these rules, except by service_attach grants. A security admin is bounded like a member. *(0.7.4 CORRECTION — Appendix A F4-F6: the old sentence said "Admins" over a screen `useSecurityOperator()` also lets in, so a security admin read themselves as exempt and then hit their own grants at launch; `capAllowed` exempts `RoleAdmin` only.)* |
 | `ENFORCEMENT_TITLE` | Enforcement |
@@ -282,7 +282,8 @@ would refuse every member run on every deployment that has not enforced it.
 | `HINT_ALL` | Every signed-in member. Super admins are exempt, except for service_attach; a security admin is not. |
 | `DUPLICATE` | That grant already exists — its effect was updated. |
 | `SNAPSHOT_TITLE` | Groups are read at sign-in |
-| `SNAPSHOT_BODY` | Group membership is recorded once, when a member signs in. A group added in your identity provider reaches Wardyn on their next sign-in. Grants themselves take effect on the next request. |
+| `SNAPSHOT_BODY` | Groups are read when someone signs in. A change in your identity provider reaches Wardyn at their next sign-in, or when their API token is re-minted. |
+| `SNAPSHOT_EFFECT` | Grants themselves take effect on the next request. |
 | `SNAPSHOT_STALE` | This member signed in before Wardyn recorded groups, so group grants can't reach them. Grant their user directly, or ask them to sign in again. |
 | `SNAPSHOT_TRUNCATED` | This member is in more groups than fit in their session. Grants on the groups shown work; prefer granting an app role or their user directly. |
 | `GRANT_IS_NOT_SUCCESS` | Every allow below is something a member can reach that they otherwise couldn't. |

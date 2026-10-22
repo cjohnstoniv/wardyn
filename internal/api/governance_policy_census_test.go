@@ -17,7 +17,7 @@ import (
 // ceiling must name the policy, and a list of today's doors cannot promise that:
 // this scan can. It fails when
 //
-//   - authz.Deny is called with ReasonGovernanceProfile, ReasonRunQuota or
+//   - authz.Deny is called with ReasonGovernanceUnit, ReasonRunQuota or
 //     ReasonComponentAutonomy — or with the autonomy ladder's reason, `<x>.reason`
 //     for an x the function declares as an autonomySource, which is one of the
 //     first and the third by construction — and the decision never goes
@@ -84,7 +84,7 @@ func ceilingRefusals(f *ast.File) []*ast.CallExpr {
 			return true
 		}
 		reason := call.Args[0]
-		if isQualified(reason, "authz", "ReasonGovernanceProfile") || isQualified(reason, "authz", "ReasonRunQuota") ||
+		if isQualified(reason, "authz", "ReasonGovernanceUnit") || isQualified(reason, "authz", "ReasonRunQuota") ||
 			isQualified(reason, "authz", "ReasonComponentAutonomy") || ladder[reason] {
 			out = append(out, call)
 		}
@@ -126,7 +126,7 @@ func policyCensusViolations(fset *token.FileSet, name string, f *ast.File) []str
 	}
 	for _, call := range ceilingRefusals(f) {
 		if !wrapped[call] {
-			at(call, "a governance_profile, run_quota or component_autonomy refusal that never reaches .WithPolicy(...)")
+			at(call, "a governance_unit, run_quota or component_autonomy refusal that never reaches .WithPolicy(...)")
 		}
 	}
 	ast.Inspect(f, func(n ast.Node) bool {
@@ -221,7 +221,7 @@ func TestEveryCeilingRefusalNamesThePolicy(t *testing.T) {
 	if scanned == 0 {
 		t.Fatal("scanned no source files")
 	}
-	// The autonomy ladder refuses through autonomySource (governance_profile or
+	// The autonomy ladder refuses through autonomySource (governance_unit or
 	// component_autonomy): five doors. Fewer seen means the guard went blind
 	// to them, not that they went away.
 	if ladder < 5 {
@@ -237,14 +237,14 @@ func TestPolicyCensusGuardFiresOnAPlantedDoor(t *testing.T) {
 		name, src string
 		want      int
 	}{
-		{"an unwrapped governance_profile refusal", `package api
-func f(s *Server) { s.refuse(w, r, authz.Deny(authz.ReasonGovernanceProfile, "runs.x", "no")) }`, 1},
+		{"an unwrapped governance_unit refusal", `package api
+func f(s *Server) { s.refuse(w, r, authz.Deny(authz.ReasonGovernanceUnit, "runs.x", "no")) }`, 1},
 		{"an unwrapped run_quota refusal", `package api
 func f(s *Server) { s.refuse(w, r, authz.Deny(authz.ReasonRunQuota, "runs.quota", "no").OnRun(id)) }`, 1},
 		{"reasonRecordCeilingLimit through writeErrorReason", `package api
 func f() { writeErrorReason(w, http.StatusForbidden, reasonRecordCeilingLimit, "no") }`, 1},
-		{"a wrapped governance_profile refusal passes", `package api
-func f(s *Server) { s.refuse(w, r, authz.Deny(authz.ReasonGovernanceProfile, "runs.x", "no").OnRun(id).WithPolicy(p)) }`, 0},
+		{"a wrapped governance_unit refusal passes", `package api
+func f(s *Server) { s.refuse(w, r, authz.Deny(authz.ReasonGovernanceUnit, "runs.x", "no").OnRun(id).WithPolicy(p)) }`, 0},
 		{"reasonRecordCeilingLimit through writeErrorReasonPolicy passes", `package api
 func f() { writeErrorReasonPolicy(w, http.StatusForbidden, reasonRecordCeilingLimit, "no", ref) }`, 0},
 		{"an unwrapped component_autonomy refusal", `package api
@@ -261,7 +261,7 @@ func f(s *Server, k capKind) { s.refuse(w, r, authz.Deny(k.reason, "runs.x", "no
 func f(s *Server) { s.refuse(w, r, authz.Deny(authz.ReasonNotOwner, "run", "no")) }`, 0},
 		// #2951: a refusal must not ship its policy without the layer that refused.
 		{"a ceiling refusal wrapped with no policy", `package api
-func f(s *Server) { s.refuse(w, r, authz.Deny(authz.ReasonGovernanceProfile, "runs.x", "no").WithPolicy(nil)) }`, 1},
+func f(s *Server) { s.refuse(w, r, authz.Deny(authz.ReasonGovernanceUnit, "runs.x", "no").WithPolicy(nil)) }`, 1},
 		{"reasonRecordCeilingLimit with no policy", `package api
 func f() { writeErrorReasonPolicy(w, http.StatusForbidden, reasonRecordCeilingLimit, "no", nil) }`, 1},
 		{"a hand-built policy ref", `package api

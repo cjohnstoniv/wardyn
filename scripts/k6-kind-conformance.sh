@@ -37,6 +37,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=scripts/lib/common.sh disable=SC1091  # followed under shellcheck -x
 source "$ROOT/scripts/lib/common.sh"
+# shellcheck source=scripts/lib/image-build.sh disable=SC1091
+source "$ROOT/scripts/lib/image-build.sh"
 cd "$ROOT"
 
 [ "${WARDYN_TEST_K8S:-}" = "1" ] || skip_lane "k6-kind-conformance: WARDYN_TEST_K8S=1 not set; skipping"
@@ -141,8 +143,7 @@ docker compose -f deploy/compose/docker-compose.yaml --profile build-only build 
   || { tail -40 "$WORK/build.log"; die "proxy image build failed"; }
 docker tag wardyn/wardyn-runnerd:local "$RUNNERD_IMAGE"
 docker tag wardyn/wardyn-proxy:local "$PROXY_IMAGE"
-docker build -q -f deploy/compose/Dockerfile.wardynd -t "$WARDYND_IMAGE" . >>"$WORK/build.log" 2>&1 \
-  || { tail -40 "$WORK/build.log"; die "wardynd image build failed"; }
+wardyn_docker_build -f deploy/compose/Dockerfile.wardynd -t "$WARDYND_IMAGE" . || die "wardynd image build failed"
 # The agent and postgres are rebuilt as single-platform local images: kind load cannot import a
 # pulled multi-platform index from Docker Desktop's containerd store (content digest not found).
 mkdir -p "$WORK/agent"
@@ -154,10 +155,8 @@ CGO_ENABLED=0 go build -o "$WORK/agent/agentprobe" ./test/k6/agentprobe || die "
 printf '#!/bin/sh\n[ "$1" = --idle ] && exec sleep 2147483647\nexec sh -c "$1"\n' >"$WORK/agent/agent-run"
 chmod 0755 "$WORK/agent/agent-run"
 printf 'FROM busybox:1.36\nCOPY wardyn-rec agentprobe agent-run /usr/local/bin/\n' >"$WORK/agent/Dockerfile"
-docker build -q -t "$AGENT_IMAGE" "$WORK/agent" >>"$WORK/build.log" 2>&1 \
-  || { tail -20 "$WORK/build.log"; die "agent image build failed"; }
-printf 'FROM postgres:17\n' | docker build -q -t "$PG_IMAGE" - >>"$WORK/build.log" 2>&1 \
-  || { tail -20 "$WORK/build.log"; die "postgres image build failed"; }
+wardyn_docker_build -t "$AGENT_IMAGE" "$WORK/agent" || die "agent image build failed"
+printf 'FROM postgres:17\n' | wardyn_docker_build -t "$PG_IMAGE" - || die "postgres image build failed"
 
 docker pull -q "$RUNNER_IMAGE" >/dev/null
 CGO_ENABLED=0 go test -c -tags k8s -o "$WORK/k6.test" ./test/k6/ || die "building test/k6 failed"

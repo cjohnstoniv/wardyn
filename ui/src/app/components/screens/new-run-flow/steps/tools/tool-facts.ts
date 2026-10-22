@@ -21,6 +21,8 @@ interface ReasonVars {
   tool?: string;
   /** The policy's effect for the thing the sentence is about. */
   policy?: ToolEffect;
+  /** Local MCP servers are on, so "its MCP tools" is "its remote MCP tools" (F1MCP-3; the golden is the server's, unchanged). */
+  remote?: boolean;
 }
 
 /** The sentence for a closed reason code; undefined for a code this console does not know. */
@@ -30,7 +32,8 @@ export function reasonText(code: string | undefined, vars: ReasonVars = {}): str
   return raw
     .replace("{asks first for|blocks}", vars.policy === "deny" ? "blocks" : "asks first for")
     .replace("{harness}", vars.harness ?? "this harness")
-    .replace("{tool}", vars.tool ?? "this tool");
+    .replace("{tool}", vars.tool ?? "this tool")
+    .replace("its MCP tools", vars.remote ? "its remote MCP tools" : "its MCP tools");
 }
 
 /** What the lane does with a tool no rule names: it runs on the ungated lane, otherwise a person is asked. */
@@ -57,12 +60,12 @@ const fromFact = (options: readonly EffectOption[]): EffectOption[] =>
   EFFECTS.map((effect) => options.find((o) => o.effect === effect) ?? { effect, available: false });
 
 /** The default's three options as the server offers them, each greyed with its sentence. */
-export function defaultChoices(fact: ToolPolicyFact, harnessName: string): ChoiceState[] {
+export function defaultChoices(fact: ToolPolicyFact, harnessName: string, remote?: boolean): ChoiceState[] {
   const policy = effectiveToolEffect(fact.policy_rules, laneDefault(fact), "*");
   return fromFact(fact.default.options).map((o) => ({
     effect: o.effect as ToolEffect,
     available: o.available,
-    reason: o.available ? undefined : reasonText(o.reason, { harness: harnessName, policy }),
+    reason: o.available ? undefined : reasonText(o.reason, { harness: harnessName, policy, remote }),
   }));
 }
 
@@ -71,10 +74,10 @@ export function defaultChoices(fact: ToolPolicyFact, harnessName: string): Choic
  * as the policy's for that tool; beyond that the harness decides what it can
  * honour (Codex rules for its own tools, a custom harness, an attended run).
  */
-export function ruleChoices(fact: ToolPolicyFact, harnessName: string, tool: string): ChoiceState[] {
+export function ruleChoices(fact: ToolPolicyFact, harnessName: string, tool: string, remote?: boolean): ChoiceState[] {
   // Until a tool is named there is nothing of the policy's to compare: only what the harness can honour.
   if (!tool) {
-    return fromFact(fact.rule_effects).map((o) => ({ effect: o.effect as ToolEffect, available: o.available, reason: o.available ? undefined : reasonText(o.reason, { harness: harnessName }) }));
+    return fromFact(fact.rule_effects).map((o) => ({ effect: o.effect as ToolEffect, available: o.available, reason: o.available ? undefined : reasonText(o.reason, { harness: harnessName, remote }) }));
   }
   const policy = effectiveToolEffect(fact.policy_rules, unnamedToolEffect(fact), tool);
   const builtinOnly = fact.rule_tools === "mcp_only" && !tool.startsWith("mcp__");
@@ -84,7 +87,7 @@ export function ruleChoices(fact: ToolPolicyFact, harnessName: string, tool: str
     // The server grades policy_stricter_tool against the policy's "*"; a named tool is graded against its own rule here.
     const harnessRefusal = !o.available && o.reason !== "policy_stricter_tool" ? o.reason : undefined;
     const code = builtinOnly ? "harness_no_block_builtin" : harnessRefusal ?? (RANK[effect] < RANK[policy] ? "policy_stricter_tool" : undefined);
-    return { effect, available: !code, reason: reasonText(code, { harness: harnessName, tool, policy }) };
+    return { effect, available: !code, reason: reasonText(code, { harness: harnessName, tool, policy, remote }) };
   });
 }
 

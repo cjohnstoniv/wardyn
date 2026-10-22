@@ -129,10 +129,66 @@ type Caps struct {
 	// (it is no runner.SandboxEnder: Kubernetes deletes a stopped pod). Absent
 	// (a runner older than 0.9.4) reads as keeps, as before.
 	EndsUnkept bool `json:"ends_unkept,omitempty"`
+	// Folders says the runner serves list_folders and sync_folder: a folder-only
+	// runner (0.10 on). Absent (an older runner) reads as none, so a person sees
+	// "no runner on your computer" rather than a refused call.
+	Folders bool `json:"folders,omitempty"`
 	// LocalAttach says the runner serves MethodLocalAttach, MethodLocalAttachMode and
 	// MethodLocalAttachTeeAck. The org sends them only to a runner that says so; an older runner
 	// reads as absent and the org refuses a local attach before any call.
 	LocalAttach bool `json:"local_attach,omitempty"`
+	// LinuxVM says the runner starts Linux VM sandboxes (create_vm) and names the virtual machine it
+	// gives them. Present only when its operator turned VMs on and its start-up probe passed; an older
+	// runner never sends it, and the org asks no runner without it for a VM.
+	LinuxVM *VMCaps `json:"linux_vm,omitempty"`
+	// OfflineSummary is why the runner could not connect (or start) since its last session, sent once
+	// on the first connect after; Relay is a Docker runner's latest run relay check, sent again when it
+	// changes. Both 0.10 on; an older organisation ignores them, and an older runner sends neither.
+	OfflineSummary *types.RunnerOfflineSummary `json:"offline_summary,omitempty"`
+	Relay          *types.RunnerRelayStatus    `json:"relay,omitempty"`
+	// ProxySettings names the run proxy settings (ProxySetting*) the runner carries through to its
+	// proxy (0.10 on). An older runner rebuilds the proxy config without them, so the org refuses a
+	// create that sets one the runner does not name; absent reads as none.
+	ProxySettings []string `json:"proxy_settings,omitempty"`
+}
+
+// The run proxy settings a runner names in Caps.ProxySettings, each its proxy.Config key.
+const (
+	ProxySettingAWSSigV4       = "aws_sigv4"
+	ProxySettingScrubResponses = "scrub_responses"
+	ProxySettingVM             = "vm"
+	ProxySettingPortRule       = "port_rule"
+	ProxySettingLocalModels    = "local_models"
+	ProxySettingKubeAPI        = "kube_api"
+)
+
+// ProxySettings is every run proxy setting this build's runner carries through to its proxy, in the
+// order ProxySettingsSet tests them.
+var ProxySettings = []string{ProxySettingAWSSigV4, ProxySettingScrubResponses, ProxySettingVM, ProxySettingPortRule, ProxySettingLocalModels, ProxySettingKubeAPI}
+
+// ProxySettingsSet names each of ProxySettings that pc sets, in that order; none for an unset config.
+// Nothing sets VM yet (the Docker driver will, where the desktop relay starts), so the org leaves it false; its gate stays.
+func ProxySettingsSet(pc runner.ProxyConfig) []string {
+	var out []string
+	for i, on := range []bool{pc.AWSSigV4 != nil, pc.ScrubResponses, pc.VM, pc.PortRule != "", len(pc.LocalModels) != 0, pc.KubeAPI != nil} {
+		if on {
+			out = append(out, ProxySettings[i])
+		}
+	}
+	return out
+}
+
+// VMCaps is the machine a runner's Linux VM sandboxes get: the versioned machine type, the named CPU
+// model and the QEMU version its probe measured. Virtiofs says its probe found virtiofsd, so a VM
+// can share a run's folder mounts; a runner without it (or older than the flag) takes no VM run that
+// carries one.
+type VMCaps struct {
+	MachineType string `json:"machine_type"`
+	CPUModel    string `json:"cpu_model"`
+	QEMUVersion string `json:"qemu_version"`
+	Virtiofs    bool   `json:"virtiofs,omitempty"`
+	// Desktop says the runner opens a VM's display (dial_desktop). A runner without it is never asked.
+	Desktop bool `json:"desktop,omitempty"`
 }
 
 // Waiting is the `waiting` event's data.
@@ -234,6 +290,9 @@ const (
 	KindExecStderr = "exec_stderr"
 	KindRelay      = "relay"
 	KindOutput     = "output"
+	KindDesktop    = "desktop"
+	// KindFolder is the sftp stream of one sync_folder pass.
+	KindFolder = "folder"
 	// KindPTYTee carries a local attach session's output from the runner to the org's recorder. It is
 	// opened only by the runner, only as the reply stream of a local_attach call, and carries bytes
 	// in that one direction: the org's writes are reset. The org ends the session by resetting it.
@@ -253,7 +312,7 @@ type Open struct {
 // Validate refuses a kind outside the closed list.
 func (o Open) Validate() error {
 	switch o.Kind {
-	case KindPTY, KindExec, KindExecStderr, KindRelay, KindOutput, KindPTYTee:
+	case KindPTY, KindExec, KindExecStderr, KindRelay, KindOutput, KindFolder, KindDesktop, KindPTYTee:
 		return nil
 	}
 	return fmt.Errorf("%w: unknown stream kind %q", ErrBadFrame, o.Kind)

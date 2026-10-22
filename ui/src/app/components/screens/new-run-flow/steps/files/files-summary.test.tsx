@@ -20,6 +20,17 @@ describe("summaryText", () => {
       .toBe("Main drive 4 GiB · starts in payments · A, B and C are kept · the main drive is deleted when the run ends");
   });
 
+  it("tells a kept work folder in place of the deleted main drive, and after any other lifecycle", () => {
+    expect(summaryText({ ...BASE, noExtra: true, keepsWork: true }))
+      .toBe("Main drive 4 GiB · starts in the main drive · the work folder is kept as a drive after the run");
+    expect(summaryText({ ...BASE, keepsWork: true }))
+      .toBe("Main drive 4 GiB · starts in payments · the work folder is kept as a drive after the run");
+    expect(summaryText({ ...BASE, keepsWork: true, life: { kind: "kept", grace: "24 hours" } }))
+      .toBe("Main drive 4 GiB · starts in payments · the main drive is kept 24 hours after its end time · the work folder is kept as a drive after the run");
+    expect(summaryText({ ...BASE, noExtra: true, keepsWork: true, life: { kind: "unknown" } }))
+      .toBe("Main drive 4 GiB · starts in the main drive · the work folder is kept as a drive after the run");
+  });
+
   it("asks for a choice until something is chosen and marked as the start", () => {
     expect(summaryText({ ...BASE, chosen: false })).toBe("Add what it needs, or choose No extra files.");
     expect(summaryText({ ...BASE, startsName: undefined })).toBe("Add what it needs, or choose No extra files.");

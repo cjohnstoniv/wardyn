@@ -29,7 +29,7 @@ type pvStore struct {
 	*govEscapeStore
 	audit    *recRecorder
 	grants   []types.CredentialGrant
-	profiles []types.GovernanceProfile
+	profiles []types.GovernanceUnit
 }
 
 func (s *pvStore) QueryAuditEvents(_ context.Context, runID uuid.UUID, _ int) ([]types.AuditEvent, error) {
@@ -46,7 +46,7 @@ func (s *pvStore) ListGrantsByRun(context.Context, uuid.UUID) ([]types.Credentia
 	return s.grants, nil
 }
 
-func (s *pvStore) ListGovernanceProfiles(context.Context) ([]types.GovernanceProfile, error) {
+func (s *pvStore) ListGovernanceUnits(context.Context) ([]types.GovernanceUnit, error) {
 	return s.profiles, nil
 }
 
@@ -166,7 +166,7 @@ func TestRunPolicyView_SourceKinds(t *testing.T) {
 	polID := uuid.New()
 	st.policies[polID] = types.RunPolicy{ID: polID, Name: "ci-now", Spec: base}
 	profID := uuid.New()
-	st.profiles = []types.GovernanceProfile{{ID: profID, Name: "walled"}}
+	st.profiles = []types.GovernanceUnit{{ID: profID, Name: "walled"}}
 
 	cases := []struct {
 		name     string
@@ -179,11 +179,11 @@ func TestRunPolicyView_SourceKinds(t *testing.T) {
 		{"recorded stored", nil, pvCreate(&polID, pvSource(policyKindStored, &polID, "ci-at-launch", false, base)), policyKindStored, "ci-at-launch", true},
 		{"recorded inline", nil, pvCreate(nil, pvSource(policyKindInline, nil, "", true, base)), policyKindInline, "", true},
 		{"recorded default", nil, pvCreate(nil, pvSource(policyKindDefault, nil, "", false, base)), policyKindDefault, "", true},
-		{"recorded profile", nil, pvCreate(nil, pvSource(policyKindProfile, nil, "walled", true, base)), policyKindProfile, "walled", true},
+		{"recorded profile", nil, pvCreate(nil, pvSource(policyKindUnit, nil, "walled", true, base)), policyKindUnit, "walled", true},
 		{"older stored takes the live name", nil, pvCreate(&polID, nil), policyKindStored, "ci-now", false},
 		{"older inline", nil, pvCreate(nil, nil), policyKindInline, "", false},
-		{"older profile", func(r *types.AgentRun) { r.GovernanceProfileID = &profID },
-			pvRow{action: "run.create", data: map[string]any{"inline_policy": false}}, policyKindProfile, "walled", false},
+		{"older profile", func(r *types.AgentRun) { r.UnitID = &profID },
+			pvRow{action: "run.create", data: map[string]any{"inline_policy": false}}, policyKindUnit, "walled", false},
 		{"older default", nil, pvRow{action: "run.create", data: map[string]any{"inline_policy": false}}, policyKindDefault, "", false},
 		{"a lane that writes its own row", nil, pvRow{action: "run.create", data: map[string]any{"agent": "claude-code"}}, policyKindUnknown, "", false},
 	}
@@ -252,15 +252,18 @@ func TestRunPolicyView_RedactionPerReader(t *testing.T) {
 	resolved.LLMInspection.WorkspaceSecretValues = []string{"<2 value(s) redacted>"}
 	st.rows(run.ID, pvCreate(nil, pvSource(policyKindInline, nil, "", true, pvSecretSpec())), pvResolve(resolved, false))
 
+	// Flipped for the security admin: a mount's host path is now the super admin's alone, so that tier
+	// reads the mount source hidden (and the response says so) while it still reads the secret names.
 	for _, tc := range []struct {
 		name         string
 		reader       pvReader
-		hidden       bool
+		hideMount    bool
+		hideNames    bool
 		wantRedacted bool
 	}{
-		{"member owner", pvMember(t, pvOwner), true, true},
-		{"security admin", pvSecurity(t), false, false},
-		{"super admin", pvReader{}, false, false},
+		{"member owner", pvMember(t, pvOwner), true, true, true},
+		{"security admin", pvSecurity(t), true, false, true},
+		{"super admin", pvReader{}, false, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w, resp := tc.reader.get(t, srv, run.ID)
@@ -274,11 +277,13 @@ func TestRunPolicyView_RedactionPerReader(t *testing.T) {
 			if resp.Redacted != tc.wantRedacted {
 				t.Errorf("redacted = %v, want %v", resp.Redacted, tc.wantRedacted)
 			}
-			leaked := strings.Contains(body, "/srv/team-data") || strings.Contains(body, govCorpSecret)
-			if tc.hidden == leaked {
-				t.Errorf("mount path or secret name visible=%v for %s, want visible=%v: %s", leaked, tc.name, !tc.hidden, body)
+			if leaked := strings.Contains(body, "/srv/team-data"); tc.hideMount == leaked {
+				t.Errorf("mount path visible=%v for %s, want visible=%v: %s", leaked, tc.name, !tc.hideMount, body)
 			}
-			if tc.hidden && resp.Spec.WorkspaceMounts[0].Source != "<redacted>" {
+			if leaked := strings.Contains(body, govCorpSecret); tc.hideNames == leaked {
+				t.Errorf("secret name visible=%v for %s, want visible=%v: %s", leaked, tc.name, !tc.hideNames, body)
+			}
+			if tc.hideMount && resp.Spec.WorkspaceMounts[0].Source != "<redacted>" {
 				t.Errorf("mount source = %q, want <redacted>", resp.Spec.WorkspaceMounts[0].Source)
 			}
 			if resp.Spec.LLMInspection == nil || len(resp.Spec.LLMInspection.WorkspaceSecretNames) != 1 {
@@ -289,8 +294,10 @@ func TestRunPolicyView_RedactionPerReader(t *testing.T) {
 }
 
 // TestRunPolicyView_SpecReuse pins the reuse promise, scoped: the spec always
-// strict-decodes as a policy, passes the write validator for the security
-// tier, and does not for a reader whose hidden values were replaced.
+// strict-decodes as a policy, passes the write validator for the super admin
+// tier, and does not for a reader whose hidden values were replaced. Flipped
+// for the security tier: it reads a mount's host path as <redacted>, which is
+// not a path, so its copy no longer validates.
 func TestRunPolicyView_SpecReuse(t *testing.T) {
 	srv, st := pvFixture(t, &capStore{})
 	run := st.seedRun(pvOwner, types.RunRunning)
@@ -313,9 +320,13 @@ func TestRunPolicyView_SpecReuse(t *testing.T) {
 		}
 		return got
 	}
+	super, _ := pvReader{}.get(t, srv, run.ID)
+	if err := validatePolicySpec(strict(t, super.Body.Bytes())); err != nil {
+		t.Errorf("the super admin's spec does not pass validatePolicySpec: %v", err)
+	}
 	sec, _ := pvSecurity(t).get(t, srv, run.ID)
-	if err := validatePolicySpec(strict(t, sec.Body.Bytes())); err != nil {
-		t.Errorf("the security tier's spec does not pass validatePolicySpec: %v", err)
+	if err := validatePolicySpec(strict(t, sec.Body.Bytes())); err == nil {
+		t.Error("the security-tier spec passed validatePolicySpec; its <redacted> mount source must fail it")
 	}
 	member, _ := pvMember(t, pvOwner).get(t, srv, run.ID)
 	got := strict(t, member.Body.Bytes())
@@ -328,10 +339,12 @@ func TestRunPolicyView_SpecReuse(t *testing.T) {
 }
 
 // TestRunPolicyView_SharedComponentExportIsARecord pins the reuse boundary for a
-// run launched with an organisation component's shared header secret. The
-// security tier reads that grant as recorded, with `shared: true` in its scope,
-// and every authored door refuses `shared`: the export is a record of the run,
-// not a policy to run again. The component is selected again on the new run.
+// run launched with an organisation component's shared header secret. A super
+// admin reads that grant as recorded, with `shared: true` in its scope, and every
+// authored door refuses `shared`: the export is a record of the run, not a
+// policy to run again. The component is selected again on the new run. Read as
+// the super admin: the security tier's copy withholds the mount host path, so it
+// fails validation on that before it reaches the shared mark.
 func TestRunPolicyView_SharedComponentExportIsARecord(t *testing.T) {
 	srv, st := pvFixture(t, &capStore{})
 	run := st.seedRun(pvOwner, types.RunRunning)
@@ -342,12 +355,12 @@ func TestRunPolicyView_SharedComponentExportIsARecord(t *testing.T) {
 	})
 	st.rows(run.ID, pvResolve(spec, true))
 
-	w, resp := pvSecurity(t).get(t, srv, run.ID)
+	w, resp := pvReader{}.get(t, srv, run.ID)
 	if w.Code != http.StatusOK || resp.Spec == nil {
 		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
 	}
 	if n := len(resp.Spec.EligibleGrants); n != 2 || !apiKeyScopeShared(resp.Spec.EligibleGrants[1].Scope) {
-		t.Fatalf("the security tier's export lost the shared mark: %s", w.Body.String())
+		t.Fatalf("the super admin's export lost the shared mark: %s", w.Body.String())
 	}
 	const want = "shared is set by Wardyn for an org component, never authored"
 	for door, err := range map[string]error{
@@ -674,11 +687,11 @@ func TestExplainRunPolicy_OneCasePerCause(t *testing.T) {
 			causeGitBroker, fieldDenied, []string{"github.com"}, nil},
 		{"profile: denied_added", ptr(pvSpec(nil, nil)), pvSpec(nil, deleted("corp.example")),
 			evidenceOf(func(e *auditEvidence) { e.profileDenied["corp.example"] = true; e.profile = "walled" }), types.SiteConfig{}, types.AgentRun{},
-			causeProfile, fieldDenied, []string{"corp.example"}, nil},
+			causeUnit, fieldDenied, []string{"corp.example"}, nil},
 		{"profile: disk clamped to its max", ptr(pvSpec(nil, func(s *types.RunPolicySpec) { s.Resources = &types.ResourceLimits{DiskMiB: 9000} })),
 			pvSpec(nil, func(s *types.RunPolicySpec) { s.Resources = &types.ResourceLimits{DiskMiB: 4096} }),
 			evidenceOf(func(e *auditEvidence) { e.profile, e.profileMaxDisk = "walled", 4096 }), types.SiteConfig{}, types.AgentRun{},
-			causeProfile, fieldDisk, []string{"4096"}, []string{"9000"}},
+			causeUnit, fieldDisk, []string{"4096"}, []string{"9000"}},
 		{"org_disk: filled from the default", ptr(pvSpec(nil, nil)),
 			pvSpec(nil, func(s *types.RunPolicySpec) { s.Resources = &types.ResourceLimits{DiskMiB: 8192} }),
 			evidenceOf(func(e *auditEvidence) { e.diskFilled = true }), types.SiteConfig{}, types.AgentRun{},
@@ -716,8 +729,8 @@ func TestExplainRunPolicy_OneCasePerCause(t *testing.T) {
 			if tc.cause == causeRestart && (c.At == nil || !c.At.Equal(restartAt)) {
 				t.Errorf("restart change at = %v, want %v", c.At, restartAt)
 			}
-			if tc.cause == causeProfile && tc.field == fieldDenied && c.Profile != "walled" {
-				t.Errorf("profile = %q, want walled", c.Profile)
+			if tc.cause == causeUnit && tc.field == fieldDenied && c.Unit != "walled" {
+				t.Errorf("profile = %q, want walled", c.Unit)
 			}
 			for _, other := range got {
 				if other.Cause != tc.cause && other.Cause == causeLaunch && tc.cause != causeLaunch {
@@ -735,7 +748,7 @@ func TestExplainRunPolicy_RuleOrder(t *testing.T) {
 	t.Run("(a) no git grants and a profile that walls off github.com reads profile", func(t *testing.T) {
 		got := explainRunPolicy(ptr(pvSpec(nil, nil)), pvSpec(nil, deny),
 			evidenceOf(func(e *auditEvidence) { e.profileDenied["github.com"] = true; e.profile = "walled" }), types.SiteConfig{}, types.AgentRun{})
-		if c := pvChange(got, causeProfile, fieldDenied); c == nil || pvChange(got, causeGitBroker, fieldDenied) != nil {
+		if c := pvChange(got, causeUnit, fieldDenied); c == nil || pvChange(got, causeGitBroker, fieldDenied) != nil {
 			t.Errorf("changes = %+v, want profile and no git_broker", got)
 		}
 	})
@@ -746,7 +759,7 @@ func TestExplainRunPolicy_RuleOrder(t *testing.T) {
 				e.profile = "walled"
 				e.legacyGitBroker = true
 			}), types.SiteConfig{}, types.AgentRun{})
-		if pvChange(got, causeProfile, fieldDenied) == nil || pvChange(got, causeGitBroker, fieldDenied) != nil {
+		if pvChange(got, causeUnit, fieldDenied) == nil || pvChange(got, causeGitBroker, fieldDenied) != nil {
 			t.Errorf("changes = %+v, want profile and no git_broker", got)
 		}
 	})

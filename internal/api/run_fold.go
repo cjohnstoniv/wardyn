@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -53,10 +54,16 @@ type runFold struct {
 	// mounts at create and preflight; the preview resolves no mount.
 	drives      []runDrive
 	driveMounts []types.DriveMount
+	// keep is the drive keep_work_folder makes at create (stepDrive); nil when not asked.
+	keep *keptWorkFolder
 	// seed is what seeding the request's workspaces decided (attached first,
 	// the primary leading); wsRefs adds every other one the spec references.
 	seed   workspaceSeed
 	wsRefs []types.Workspace
+	// signinImageUngranted: the person's own image keeps its desktop sign-ins
+	// off at dispatch (signinVariantUngranted), decided here with the caller's
+	// identity, which the detached launch does not hold.
+	signinImageUngranted bool
 	// attachments is the run's mount map and startFolder its one working
 	// directory (WARDYN_START_FOLDER), both from stepWorkspaces.
 	attachments        []client.RunAttachment
@@ -90,6 +97,9 @@ type runFold struct {
 	// capacity or deployment slot, and is refused for its size only when it can never fit; promotion
 	// applies the rest when a slot frees.
 	queued bool
+	// schedule is a scheduled launch's start (start_at), set by stepPlacement; such a run always waits.
+	// nil on the queue's start, which replays the request after its time.
+	schedule *runSchedule
 	// promoted says the fold is the queue's start replaying a promoted run: promotion has already
 	// admitted it against the host, the deployment cap and the fit, so those steps stand down.
 	promoted bool
@@ -209,6 +219,7 @@ var runFoldSteps = []runFoldStep{
 func (s *Server) foldRunRequest(w http.ResponseWriter, r *http.Request, mode foldMode,
 	req *createRunRequest, ceiling governanceCeiling, reqCC types.ConfinementClass,
 ) (runFold, bool) {
+	r = r.WithContext(context.WithValue(r.Context(), workspaceListKey{}, &workspaceListMemo{}))
 	f := runFold{mode: mode, w: w, r: r, req: req, ceiling: ceiling, reqCC: reqCC, promoted: startingPromoted(r.Context())}
 	rec := &foldRecorder{}
 	for _, step := range runFoldSteps {
@@ -218,4 +229,9 @@ func (s *Server) foldRunRequest(w http.ResponseWriter, r *http.Request, mode fol
 	}
 	f.prov = rec.result()
 	return f, true
+}
+
+// mountsDrives reports whether a run mounts any drive, the kept work folder included.
+func mountsDrives(drives []runDrive, keep *keptWorkFolder) bool {
+	return len(drives) > 0 || keep != nil
 }

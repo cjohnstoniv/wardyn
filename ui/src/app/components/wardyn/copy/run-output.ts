@@ -62,3 +62,14 @@ export const RUN_OUTPUT = {
   maskUnavailable:
     "This server can't show the live output safely right now. It shows here once the run ends.",
 } as const;
+
+// F2MULTI-3: the Agents panel and the output filter on a run with two or more agents.
+export const RUN_AGENTS = {
+  title: "Agents",
+  summaryRunning: (n: number, running: number, finished: number) => `${n} agents · ${running} running, ${finished} finished`,
+  summaryFailed: (n: number, failed: number) => `${failed} of ${n} agents failed, so the run failed.`,
+  summaryAllFinished: (n: number) => (n === 2 ? "Both agents finished." : `All ${n} agents finished.`),
+  exitRule: "The run ends when every agent has finished; it fails if any agent fails.",
+  filterLabel: "Show output from",
+  filterAll: "All agents",
+} as const;

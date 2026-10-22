@@ -17,6 +17,7 @@ import { innerWallsText } from "./format";
 import type { NewRunDraft, RunIntent } from "../draft/run-intent";
 import { changedFromOrigin, draftSource, intentAt, originSource, serverSource } from "./provenance";
 import type { ReviewPreflight } from "./review-seams";
+import { isLocalMcp, sandboxSecrets } from "../steps/tools/local-mcp";
 
 export type PolicyRowId = "barrier" | "network" | "credentials" | "files" | "tools";
 
@@ -26,6 +27,8 @@ export interface PolicyRow {
   value?: string;
   barrier?: ConfinementClass;
   detail?: string;
+  /** Further lines under the detail; a credential in the sandbox is plain text, a rule note is muted. */
+  notes?: { text: string; muted?: boolean }[];
 }
 
 /** The tool default's effect in the canon's words: Hold and Run automatically as Review has them, Block it as the tool rules do. */
@@ -42,7 +45,7 @@ const ROW_KEYS: Record<PolicyRowId, string[]> = {
   barrier: ["confinement_class", "runner_pool_id"],
   network: ["overrides.hosts", "inline_policy.allowed_domains", "inline_policy.denied_domains", "inline_policy.allow_all_egress", "inline_policy.first_use_approval"],
   credentials: ["model_provider", "integration_id", "overrides.agent.add_secrets", "overrides.agent.remove_secrets", "overrides.git_pat", "overrides.azure_devops"],
-  files: ["workspaces", "drive", "start_folder", "no_repositories_or_drives", "resources.disk_mib"],
+  files: ["workspaces", "drive", "start_folder", "no_repositories_or_drives", "keep_work_folder", "resources.disk_mib"],
   tools: ["tool_approvals", "overrides.agent.tool_rules", "overrides.push_rules", "inline_policy.tool_rules", "inline_policy.push_rules"],
 };
 
@@ -91,11 +94,13 @@ export function policyRows(
 
   const kinds = (access?.credentials ?? []).map((c) => access?.rows.find((r) => r.id === c.row)?.name).filter((n): n is string => !!n);
   const provider = pre?.model_credential?.provider;
+  const inSandbox = sandboxSecrets(access, intent);
   rows.push({
     id: "credentials",
     label: NR_REVIEW.POLICY_CREDENTIALS,
     value: joined(provider, ...kinds),
     detail: provider ? NR_REVIEW.POLICY_HIDDEN : kinds.length ? undefined : NR_REVIEW.POLICY_NO_CREDENTIALS,
+    ...(inSandbox.length > 0 && { notes: inSandbox.map((s) => ({ text: s.secret ? NR_REVIEW.POLICY_IN_SANDBOX(s.secret, s.server) : NR_REVIEW.POLICY_IN_SANDBOX_UNNAMED(s.server) })) }),
   });
 
   const names = joined(...(pre?.attachments ?? []).map((a) => a.name));
@@ -116,6 +121,7 @@ export function policyRows(
   const wallTexts = [...new Set(walls.map((w) => w.text))];
   const wallsDetail = wallTexts.length > 1 ? joined(...walls.map((w) => NR_REVIEW.POLICY_TOOLS_OF(harnessLabel(w.harness), w.text))) : wallTexts[0];
   const toolsDetail = effects.length === 1 ? joined(defaults[0].default.source.name, defaults[0].default.source.id === ACCEPT_EDITS_SOURCE ? NR_REVIEW.POLICY_ACCEPTS_EDITS : undefined) : undefined;
-  rows.push({ id: "tools", label: NR_REVIEW.POLICY_TOOLS, value, detail: joined(toolsDetail, wallsDetail) });
+  const harnessRules = (access?.rows ?? []).filter(isLocalMcp).map((r) => ({ text: NR_REVIEW.POLICY_HARNESS_RULES(r.name), muted: true }));
+  rows.push({ id: "tools", label: NR_REVIEW.POLICY_TOOLS, value, detail: joined(toolsDetail, wallsDetail), ...(harnessRules.length > 0 && { notes: harnessRules }) });
   return rows;
 }

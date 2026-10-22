@@ -237,16 +237,16 @@ func TestRun_TailUploadsWhileAsciinemaRecords(t *testing.T) {
 	ps := newPartServer(t)
 	ps.onFirst = func() { _ = os.WriteFile(seen, nil, 0o600) }
 
-	// argv: rec --stdin -q -c <cmd> <cast>
+	// argv: rec -q -c <cmd> <cast>
 	stub := filepath.Join(dir, "asciinema")
 	script := `#!/bin/sh
-cast="$6"
+cast="$5"
 printf '%s' '` + tailHeader + `' > "$cast"
 for i in 0 1 2; do printf '[%s.5,"o","event"]\n' "$i" >> "$cast"; done
 n=0
 while [ ! -f '` + seen + `' ] && [ $n -lt 200 ]; do sleep 0.05; n=$((n+1)); done
 if [ -f '` + seen + `' ]; then printf '[8.5,"o","after-part-1"]\n' >> "$cast"; fi
-sh -c "$5"
+sh -c "$4"
 `
 	if err := os.WriteFile(stub, []byte(script), 0o700); err != nil {
 		t.Fatal(err)

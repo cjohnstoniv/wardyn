@@ -304,9 +304,11 @@ func buildAsciinemaArgv(asciinemaPath, cast string, agentArgv []string) []string
 	inner := strings.Join(quoteArgs(agentArgv), " ")
 	rec := inner + "; __wrec_ec=$?; printf %s \"$__wrec_ec\" > " + shellQuote(agentExitFile(cast)) +
 		" 2>/dev/null; exit $__wrec_ec"
+	// No --stdin: a cast holds terminal output only. Every client attached to the
+	// agent's terminal types into this pane, so input capture would store what a
+	// person types, passwords at hidden prompts included; nothing reads "i" events.
 	return []string{
 		asciinemaPath, "rec",
-		"--stdin",
 		"-q",
 		"-c", rec,
 		cast,

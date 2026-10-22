@@ -166,6 +166,17 @@ func (s *Server) runApprovals(ctx context.Context, runID uuid.UUID, state types.
 	return out, nil
 }
 
+// pendingReauths reads the PENDING credential_reauth approvals fleet-wide for a capture-time
+// resolver. The by-kind store read keeps a run's thousands of pending tool_call and egress rows out
+// of the sign-in lock; without it the fleet-wide list is returned and the caller's own kind test
+// selects the same rows.
+func (s *Server) pendingReauths(ctx context.Context) ([]types.ApprovalRequest, error) {
+	if pager, ok := s.cfg.Store.(store.PendingApprovalsByKindPager); ok {
+		return pager.ListPendingApprovalsByKind(ctx, types.ApprovalCredentialReauth)
+	}
+	return s.cfg.Approvals.List(ctx, types.ApprovalPending)
+}
+
 // resolveAWSSSOInjection is the captured-AWS-SSO arm of handleInternalInjection.
 // handled=false means this grant is not ours and the generic path must run;
 // handled=true means a response has been written.
@@ -569,7 +580,7 @@ func (s *Server) resolvePendingReauth(ctx context.Context, scope awsSSOScope, ca
 	if s.cfg.Approvals == nil {
 		return nil
 	}
-	rows, err := s.cfg.Approvals.List(ctx, types.ApprovalPending)
+	rows, err := s.pendingReauths(ctx)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: could not list pending AWS sign-in requests after a capture; the next poll will resolve them",
 			slog.Any("err", err))

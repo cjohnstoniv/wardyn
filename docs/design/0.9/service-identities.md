@@ -56,6 +56,7 @@ Table `service_identities`, in migration 0157.
 | `PATCH /runs/{id}`, `POST /runs/{id}/kill` | Manage its own runs |
 | `GET /me`, `GET /setup/status` | Who am I; `ci-run.sh` reads `provider_access` |
 | `PUT`, `DELETE /model-providers/{id}/credential` | Its own model key, in its own namespace (D13) |
+| `GET /audit?run_id=`, `GET /presets`, `GET /presets/{name}`, `GET /workspaces` | 0.10.0: its own runs' audit rows; the presets and workspaces it may launch with |
 
 - Everything else answers `403` `service_scope`, including any route added later (D9).
 - Absent on purpose: attach, approvals, secrets, tokens, SSH keys, invitations, runner claims, every admin route.

@@ -18,14 +18,17 @@
 import type { AgentRun, RunState } from "../../../lib/types";
 import { isTerminalRunState } from "../../../lib/types";
 import { waitingAdoConsent, waitingReauth } from "../../../lib/reauth-waiting-copy";
+import { RUN_HEADER } from "../../wardyn/copy/run-header";
 import { RUN_WAIT } from "../../wardyn/copy/run-wait";
 import { RUNS_ROW_WORD } from "../../wardyn/copy/runs-landing";
 import { endsWarningStage, endsWarningWord } from "../../wardyn/copy/run-lifetime";
+import { SCHEDULED_RUN } from "../../wardyn/copy/scheduled-runs";
 import { statusDetailSentence } from "../run-status-detail";
+import { scheduledWait } from "./scheduled-state";
 import { ordinal } from "../../../lib/ordinal";
 
 export type RowHue = "blue" | "amber" | "red" | "grey";
-export type RowAction = "review" | "sign-in" | "revive" | null;
+export type RowAction = "review" | "sign-in" | "revive" | "take-over" | "cancel" | null;
 
 export interface RowPresentation {
   hue: RowHue;
@@ -57,7 +60,7 @@ export function isLiveRunState(state: RunState): boolean {
  * offers Review either way, and the decision card underneath is where the
  * real ceiling is enforced — same as today).
  */
-export function rowPresentation(run: AgentRun, adminView: boolean): RowPresentation {
+export function rowPresentation(run: AgentRun, adminView = false): RowPresentation {
   // a lease-ended run (lost_reason "ended") stays RUNNING until
   // the ended-run grace stops it, but it has no network and is already OVER
   // — the server excludes it from the live set (store_runs_filtered.go's
@@ -73,15 +76,28 @@ export function rowPresentation(run: AgentRun, adminView: boolean): RowPresentat
     const you = a.by === "you";
     switch (a.kind) {
       case "approval":
+        // by=admin is a wait this viewer cannot clear: neutral wait copy, never a "needs you".
+        if (!you) {
+          return {
+            hue: "amber",
+            word: RUNS_ROW_WORD.WAITING_FOR_ADMIN,
+            subword: RUN_WAIT.waitingHeld(a.pending),
+            action: null,
+            needsYou: false,
+          };
+        }
         return {
           hue: "amber",
-          word: you
-            ? adminView
-              ? RUNS_ROW_WORD.NEEDS_DECISION
-              : RUNS_ROW_WORD.NEEDS_APPROVAL
-            : RUNS_ROW_WORD.WAITING_FOR_ADMIN,
-          subword: RUN_WAIT.waitingHeld(a.pending),
-          action: you ? "review" : null,
+          word: adminView ? RUNS_ROW_WORD.NEEDS_YOU : RUN_HEADER.DECISIONS_NEED_YOU(Math.max(1, a.pending)),
+          subword: adminView ? RUNS_ROW_WORD.HELD(a.pending) : RUN_WAIT.waitingHeld(a.pending),
+          action: "review",
+          needsYou: true,
+        };
+      case "takeover":
+        return {
+          hue: "amber",
+          word: you ? RUNS_ROW_WORD.NEEDS_TAKEOVER : RUNS_ROW_WORD.WAITING_FOR_TAKEOVER,
+          action: you ? "take-over" : null,
           needsYou: you,
         };
       case "reauth":
@@ -145,7 +161,12 @@ export function rowPresentation(run: AgentRun, adminView: boolean): RowPresentat
         action: null,
         needsYou: false,
       };
-    case "QUEUED":
+    case "QUEUED": {
+      // A scheduled run waits for its time, not for a slot: its own word, and the owner may cancel it from the row. Once
+      // due it can wait for the owner's sign-in, which the owner answers from the run page. The Admin view acts on neither.
+      const wait = scheduledWait(run);
+      if (wait === "scheduled") return { hue: "blue", word: SCHEDULED_RUN.WORD, action: adminView ? null : "cancel", needsYou: false };
+      if (wait === "sign_in") return { hue: "amber", word: RUNS_ROW_WORD.WAITING_SIGN_IN, action: adminView ? null : "sign-in", needsYou: !adminView };
       // Waiting for a slot in a capped pool: the same word the run page's badge says, and the place in line the
       // Launched screen tells the person.
       return {
@@ -155,6 +176,7 @@ export function rowPresentation(run: AgentRun, adminView: boolean): RowPresentat
         action: null,
         needsYou: false,
       };
+    }
     case "WAITING_FOR_CONFIRMATION":
       // Row 4 (run_attention.go) — "reserved, no producer today": a state
       // reaching here with no attention projected is not currently possible,

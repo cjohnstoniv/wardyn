@@ -48,8 +48,8 @@ func (s *Server) governanceChangeTTL() time.Duration {
 // The closed set of target kinds (the table is governanceChangeKinds). A later lane adds a kind here
 // and a row there, with no DDL: migration 0126 puts no CHECK on target_kind.
 const (
-	govKindProfile      = types.GovernanceTargetProfile
-	govKindAssignment   = types.GovernanceTargetAssignment
+	govKindUnit         = types.GovernanceTargetUnit
+	govKindMembership   = types.GovernanceTargetMembership
 	govKindGrant        = types.GovernanceTargetCapabilityGrant
 	govKindEnforcement  = types.GovernanceTargetCapabilityEnforcement
 	govKindAvailability = types.GovernanceTargetCapabilityAvailability
@@ -166,8 +166,8 @@ type govApplied struct {
 // mapping is written on the operatorOnly tier, so only a super admin approves it; every other kind is
 // written on securityOps.
 var governanceChangeKinds = map[string]govKind{
-	govKindProfile:             {approver: securityApprover, apply: applyProfileChange},
-	govKindAssignment:          {approver: securityApprover, apply: applyAssignmentChange},
+	govKindUnit:                {approver: securityApprover, apply: applyUnitChange},
+	govKindMembership:          {approver: securityApprover, apply: applyMembershipChange},
 	govKindGrant:               {approver: securityApprover, apply: applyGrantChange},
 	govKindEnforcement:         {approver: securityApprover, apply: applyEnforcementChange},
 	govKindAvailability:        {approver: securityApprover, apply: applyAvailabilityChange},
@@ -181,15 +181,24 @@ var governanceChangeKinds = map[string]govKind{
 	govKindServiceIdentity:     {approver: securityApprover, apply: applyServiceIdentityChange},
 	govKindRunnerTrust:         {approver: securityApprover, apply: applyRunnerTrustChange},
 	govKindRunNodeRecord:       {approver: securityApprover, apply: applyRunNodeRecordChange},
+	govKindBoundary:            {approver: securityApprover, apply: applyBoundaryChange},
+	govKindApprovalRule:        {approver: securityApprover, apply: applyApprovalRuleChange},
 }
 
 // forChange is the kind as it decides one held change. A remote-hosted runner add to or removal from an
 // organization pool is held under the use-policy kind but written on the operatorOnly tier, so only a
-// super admin decides it; a payload that does not decode is given the stricter tier.
+// super admin decides it; a payload that does not decode is given the stricter tier. So is a profile
+// change whose payload names a mount's host path (a kept mount is held as the sentinel, so only a
+// change that adds a mount, changes a host path or makes a kept mount writable names one).
 func (k govKind) forChange(ch types.GovernanceChange) govKind {
-	if ch.TargetKind == govKindRunnerPoolUsePolicy {
+	switch ch.TargetKind {
+	case govKindRunnerPoolUsePolicy:
 		var held runnerPoolHeldChange
 		if decodeHeldPayload(ch.Payload, &held) != nil || held.Executor != "" {
+			k.approver = operatorApprover
+		}
+	case govKindUnit:
+		if profilePayloadSetsHostPath(ch.Payload) {
 			k.approver = operatorApprover
 		}
 	}
@@ -217,6 +226,8 @@ type govProposal struct {
 	notes []string
 	// baseState is the target as the proposal saw it; its hash is what an approval compares.
 	baseState any
+	// activates are the units a legacy membership delete may make someone's context (H3).
+	activates []unitActivation
 }
 
 // proposeGovernanceChange stores p as pending and answers 202 with the pending change. A live change
@@ -231,7 +242,7 @@ func (s *Server) proposeGovernanceChange(w http.ResponseWriter, r *http.Request,
 	ch := types.GovernanceChange{
 		TargetKind: p.kind, Op: p.op, TargetKey: p.key,
 		Payload:         payload,
-		Diff:            renderGovernanceDiff(p.before, p.after, p.changed, p.notes),
+		Diff:            renderGovernanceDiff(p.before, p.after, p.changed, p.notes, p.activates...),
 		BaseHash:        computeETag(p.baseState),
 		DeploymentHash:  computeETag(s.cfg.DefaultPolicy),
 		ProposedBy:      proposer,
@@ -248,6 +259,7 @@ func (s *Server) proposeGovernanceChange(w http.ResponseWriter, r *http.Request,
 		// plain refusal, as does a held change the caller's role may not read.
 		if held, gerr := s.cfg.Store.GetGovernanceChange(r.Context(), pending.ID); gerr == nil && held.State == types.GovernanceChangePending && s.canSeeGovernanceChange(r, held) {
 			matches := held.Op == p.op && samePayload(held.Payload, payload)
+			held = s.changeForRead(r, held)
 			body.PendingChange, body.PendingChangeMatches = &held, &matches
 		}
 		writeJSON(w, http.StatusConflict, body)
@@ -264,7 +276,7 @@ func (s *Server) proposeGovernanceChange(w http.ResponseWriter, r *http.Request,
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor, "governance.change.propose", saved.ID.String(), "success",
 		mustJSON(map[string]any{"target_kind": p.kind, "op": p.op, "target_key": p.key, "expires_at": saved.ExpiresAt})))
 	w.Header().Set("Location", "/api/v1/governance/changes/"+saved.ID.String())
-	writeJSON(w, http.StatusAccepted, map[string]any{"pending_change": saved})
+	writeJSON(w, http.StatusAccepted, map[string]any{"pending_change": s.changeForRead(r, saved)})
 }
 
 // samePayload reports whether two change payloads encode the same JSON value, whatever their key
@@ -281,12 +293,14 @@ type governanceDiffBody struct {
 	Changed []string        `json:"changed"`
 	// Notes are advisory, never a refusal: what a write would have returned as warnings had it not been held.
 	Notes []string `json:"notes,omitempty"`
+	// Activates lists the units a legacy membership delete may make someone's context.
+	Activates []unitActivation `json:"activates,omitempty"`
 }
 
 // renderGovernanceDiff is the diff stored with a change: the redacted before and after views and the
 // changed field paths, rendered by the server so the console and the CLI never compute their own.
-func renderGovernanceDiff(before, after any, changed, notes []string) json.RawMessage {
-	body := governanceDiffBody{Changed: changed, Notes: notes}
+func renderGovernanceDiff(before, after any, changed, notes []string, activates ...unitActivation) json.RawMessage {
+	body := governanceDiffBody{Changed: changed, Notes: notes, Activates: activates}
 	if body.Changed == nil {
 		body.Changed = []string{}
 	}

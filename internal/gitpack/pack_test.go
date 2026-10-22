@@ -680,14 +680,14 @@ func TestPackTree_UncarriedDirectoryIsReportedNotSkipped(t *testing.T) {
 		idx := newIndex(sha1Format)
 		root := idx.put(objTree, mkTree(treeLine{"40000", "infra", forgeHeld}))
 		w := newWalker(idx)
-		if err := w.walk("", root, 0); err != nil {
+		if err := w.walk("", root, 0, ""); err != nil {
 			t.Fatalf("walk: %v", err)
 		}
 		wantChanges(t, w.out, "infra "+ModeUncarried+" -1")
 	})
 	t.Run("enumerated: a whole root tree the pack does not carry", func(t *testing.T) {
 		w := newWalker(newIndex(sha1Format))
-		if err := w.walk("", forgeHeld, 0); err != nil {
+		if err := w.walk("", forgeHeld, 0, ""); err != nil {
 			t.Fatalf("walk: %v", err)
 		}
 		if len(w.out) != 1 || w.out[0].Path != "" || w.out[0].Mode != ModeUncarried {
@@ -905,7 +905,7 @@ func TestPackTree_FanOutDAGIsChargedAgainstMaxTreeNodes(t *testing.T) {
 			root := fanOut(idx, bottom, maxTreeDepth-1, "a", "b")
 
 			w := newWalker(idx)
-			err := w.walk("", root, 0)
+			err := w.walk("", root, 0, "")
 			if !errors.Is(err, ErrTooLarge) {
 				t.Fatalf("walk = %v, want ErrTooLarge", err)
 			}
@@ -946,7 +946,7 @@ func TestPackTree_WidthIsChargedNotJustDepth(t *testing.T) {
 	root := idx.put(objTree, absentSubtrees(width))
 
 	w := newWalker(idx)
-	if err := w.walk("", root, 0); err != nil {
+	if err := w.walk("", root, 0, ""); err != nil {
 		t.Fatalf("walk: %v", err)
 	}
 	if w.nodes != width {
@@ -973,7 +973,7 @@ func TestPackTree_RepeatedSubtreeIsExpandedOnce(t *testing.T) {
 		treeLine{"40000", "one", subOID}, treeLine{"40000", "two", subOID}))
 
 	w := newWalker(idx)
-	if err := w.walk("", root, 0); err != nil {
+	if err := w.walk("", root, 0, ""); err != nil {
 		t.Fatalf("walk: %v", err)
 	}
 	wantChanges(t, w.out, "one/f.txt 100644 2", "two/f.txt 100644 2")
@@ -984,7 +984,7 @@ func TestPackTree_RepeatedSubtreeIsExpandedOnce(t *testing.T) {
 		t.Errorf("walked %d entries, want %d", w.nodes, want)
 	}
 	// The memo, which is the whole point: the second walk charges nothing.
-	if err := w.walk("", root, 0); err != nil || w.nodes != want {
+	if err := w.walk("", root, 0, ""); err != nil || w.nodes != want {
 		t.Errorf("re-walking the same root: err=%v, walked %d entries, want %d", err, w.nodes, want)
 	}
 }
@@ -1008,7 +1008,7 @@ func TestPackTree_MaxTreeDepthIsEnforced(t *testing.T) {
 				tc.levels, "d")
 
 			w := newWalker(idx)
-			err := w.walk("", root, 0)
+			err := w.walk("", root, 0, "")
 			if !tc.refused {
 				if err != nil {
 					t.Fatalf("walk: %v", err)
@@ -1040,7 +1040,7 @@ func TestPackTree_MaxChangesIsEnforced(t *testing.T) {
 		16, "a", "b")
 
 	w := newWalker(idx)
-	err := w.walk("", root, 0)
+	err := w.walk("", root, 0, "")
 	if !errors.Is(err, ErrTooLarge) || !strings.Contains(err.Error(), "paths") {
 		t.Fatalf("walk = %v, want the maxChanges refusal", err)
 	}
@@ -1247,7 +1247,7 @@ func TestPackTree_LongNamesAreChargedByBytes(t *testing.T) {
 	bottom := mkTree(treeLine{"100644", "f", hashObject("blob", blob)})
 	root := fanOut(idx, bottom, 15, long+"a", long+"b")
 	w := newWalker(idx)
-	if err := w.walk("", root, 0); !errors.Is(err, ErrTooLarge) {
+	if err := w.walk("", root, 0, ""); !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("walk = %v (%d paths kept), want ErrTooLarge", err, len(w.out))
 	}
 	if w.pathBytes > maxPathBytes+16*256+64 {
@@ -1266,7 +1266,7 @@ func TestPackTree_EntryNameIsBounded(t *testing.T) {
 		idx := newIndex(sha1Format)
 		idx.put(objBlob, blob)
 		root := idx.put(objTree, mkTree(treeLine{"100644", strings.Repeat("n", c.n), hashObject("blob", blob)}))
-		if err := newWalker(idx).walk("", root, 0); !errors.Is(err, c.want) {
+		if err := newWalker(idx).walk("", root, 0, ""); !errors.Is(err, c.want) {
 			t.Errorf("a %d-byte name: walk = %v, want %v", c.n, err, c.want)
 		}
 	}
@@ -1288,7 +1288,7 @@ func TestPackTree_TreeOverTheNodeCeilingIsNotMaterialised(t *testing.T) {
 	allocs := testing.AllocsPerRun(5, func() {
 		w := newWalker(idx)
 		w.nodes = maxTreeNodes - 63
-		err = w.walk("", root, 0)
+		err = w.walk("", root, 0, "")
 	})
 	if !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("walk = %v, want ErrTooLarge", err)

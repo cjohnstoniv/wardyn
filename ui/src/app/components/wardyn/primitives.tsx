@@ -207,11 +207,15 @@ export const runStateLabel = (s: string): string => metaFor(runStateMeta, s, { t
 export function RunStateBadge({
   state,
   variant = "chip",
+  word,
 }: {
   state: RunState;
   variant?: "chip" | "label";
+  /** Says the state in other words (a scheduled run's "Scheduled"); the tone and icon stay the state's. */
+  word?: string;
 }) {
-  const m = metaFor(runStateMeta, state as string, { tone: "neutral", label: String(state) });
+  const found = metaFor(runStateMeta, state as string, { tone: "neutral", label: String(state) });
+  const m = word ? { ...found, label: word } : found;
   if (variant === "label" && !m.solid) {
     return <span className={cn("whitespace-nowrap text-meta", toneText[m.tone])}>{m.label}</span>;
   }
@@ -388,6 +392,8 @@ const kindTone: Record<ApprovalKind, Tone> = {
   // Same reasoning: a held push parks the sandbox exactly like a re-auth
   // request does (isHeld treats both the same way — lib/types/approvals.ts).
   push_content: "warning",
+  // The agent is waiting on a person, like the two above.
+  human_takeover: "warning",
 };
 export function ApprovalKindChip({ kind }: { kind: ApprovalKind }) {
   const tone = metaFor(kindTone, kind as string, "neutral" as Tone);

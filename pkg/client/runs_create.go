@@ -40,10 +40,13 @@ type CreateRunRequest struct {
 	ConfinementClass string `json:"confinement_class,omitempty"`
 	// Interactive requests an interactive run: the sandbox comes up idle — or,
 	// with a non-empty Task, runs that boot seed in a persistent session — so a
-	// human can attach to it (wardyn run attach <id>) either way. Pair with a
+	// human can attach to it (wardyn attach <id>) either way. Pair with a
 	// never-reap policy (AutoStopAfterSec < 0) or the idle reaper will stop the
 	// idle sandbox.
 	Interactive bool `json:"interactive,omitempty"`
+	// MachineKind is the kind of sandbox: "" or "container" (the default) or "linux_vm", a Linux
+	// guest under QEMU/KVM that only a registered runner offering it starts.
+	MachineKind string `json:"machine_kind,omitempty"`
 	// WorkspaceID, when set, launches the run against that ONBOARDED workspace:
 	// the server prepends the workspace's stored source onto the resolved policy
 	// (a repo as a workspace_repos entry, a local dir as a read-only-by-default
@@ -140,6 +143,10 @@ type CreateRunRequest struct {
 	// deployment with no model providers, or on a run that calls no model, it
 	// is refused rather than ignored.
 	ModelProvider string `json:"model_provider,omitempty"`
+	// RunIn names the unit this run runs in: one of the caller's units, by id or exact name. Empty runs
+	// in the caller's home unit. A unit that is not one of theirs, or no unit at all, is refused 403
+	// unit_not_a_context.
+	RunIn string `json:"run_in,omitempty"`
 	// Drive opts this run into the member's USER DRIVE — the per-user storage
 	// an admin allocated them. Nil (the default) mounts nothing, byte for byte
 	// today. Nothing here names a path or a drive: the server resolves which
@@ -153,6 +160,13 @@ type CreateRunRequest struct {
 	// Drives is 400 drive_selection_conflict. One drive that cannot be mounted
 	// refuses the run; none is dropped.
 	Drives []DriveAttachment `json:"drives,omitempty"`
+	// KeepWorkFolder keeps the run's work folder (/home/agent/work, and nothing
+	// else: not home, agent settings or /tmp) as the caller's own drive, which
+	// stays until they delete it and counts toward their drive limit. A later
+	// run attaches it through Drives. Refused unless the organisation allows
+	// member drives and storage.user_drive.member_create.keep_main_drive is on.
+	// Whatever the agent leaves in the folder comes back in that later run.
+	KeepWorkFolder bool `json:"keep_work_folder,omitempty"`
 	// Components attaches custom components to this run: each entry names a
 	// stored component by id or carries a run-only definition inline. Nil and
 	// empty are the same and attach nothing, byte for byte today.
@@ -199,6 +213,17 @@ type CreateRunRequest struct {
 	// the run is FAILED with the reason queue_timeout. Ignored by a pool with no limit. A pointer, so
 	// a 0 is sent and refused rather than read as absent.
 	MaxWaitSec *int `json:"max_wait_sec,omitempty"`
+	// StartAt schedules a one-time start: an RFC 3339 time ("2026-10-21T02:00:00Z"), or a wall-clock
+	// time with no offset ("2026-10-21T02:00") read in StartTimeZone. It must be in the future and no
+	// later than 7 days less the run's default wait (24 hours Background, 1 hour Interactive). The run
+	// waits as QUEUED with queue.reason "scheduled" and starts no earlier, re-checked as its owner at
+	// the start like any queued run; MaxWaitSec then counts from StartAt,
+	// and nothing waits more than 7 days from the request. Refused with scheduled_runs_off unless the
+	// server sets WARDYN_SCHEDULED_RUNS; a booked run whose start comes with it off ends FAILED
+	// scheduled_runs_off.
+	StartAt string `json:"start_at,omitempty"`
+	// StartTimeZone is the IANA time zone StartAt is given in ("Europe/London"); required with StartAt.
+	StartTimeZone string `json:"start_time_zone,omitempty"`
 	// LocalFolder names a folder on this computer that `wardyn sync` seeds into the sandbox: the
 	// agent does not start until the first sync of it into RemoteDir (default /home/agent/work)
 	// has completed, and a failed or late one fails the run with a reason naming the folder. For a

@@ -14,6 +14,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 var (
@@ -174,19 +175,20 @@ func (r *pgSessionRevocations) sessionStatus(ctx context.Context, querier store.
 }
 
 // RevokeSub stamps sub's cutoff at now, invalidating every current session
-// for that principal. Idempotent (repeat revokes just move the cutoff later).
+// for that principal, CLI sessions included. Idempotent (repeat revokes just move the cutoff later).
 func (r *pgSessionRevocations) RevokeSub(ctx context.Context, sub string) error {
 	return r.upsertCutoff(ctx, sub)
 }
 
 // CutSessions stamps sub's session-only cutoff at now (oidc.SessionCutter): current browser sessions
-// stop, API tokens and SSH keys are not read against it. Idempotent, like RevokeSub.
+// stop, API tokens and SSH keys are not read against it. A CLI session stands in for a browser session,
+// so the same transaction ends sub's CLI sessions and their tokens. Idempotent, like RevokeSub.
 func (r *pgSessionRevocations) CutSessions(ctx context.Context, sub string) error {
 	const q = `
 		INSERT INTO oidc_session_cuts (sub, cut_at)
 		VALUES ($1, now())
 		ON CONFLICT (sub) DO UPDATE SET cut_at = EXCLUDED.cut_at`
-	if err := store.ExecRevocationCut(ctx, r.pool, q, sub); err != nil {
+	if err := store.ExecRevocationCut(ctx, r.pool, q, sub, types.CLISessionEndSessionsCut); err != nil {
 		return fmt.Errorf("wardynd: cut sessions: %w", err)
 	}
 	return nil
@@ -203,7 +205,7 @@ func (r *pgSessionRevocations) upsertCutoff(ctx context.Context, sub string) err
 		INSERT INTO oidc_session_revocations (sub, revoked_at)
 		VALUES ($1, now())
 		ON CONFLICT (sub) DO UPDATE SET revoked_at = EXCLUDED.revoked_at`
-	if err := store.ExecRevocationCut(ctx, r.pool, q, sub); err != nil {
+	if err := store.ExecRevocationCut(ctx, r.pool, q, sub, types.CLISessionEndRevoked); err != nil {
 		return fmt.Errorf("wardynd: revoke session cutoff: %w", err)
 	}
 	return nil

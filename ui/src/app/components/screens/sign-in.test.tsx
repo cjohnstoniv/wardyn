@@ -22,6 +22,7 @@ import { SignIn } from "./sign-in";
 import { SIGNIN } from "../../lib/sign-in-copy";
 import { STATES } from "../wardyn/states";
 import { SESSION_ENDED_REASON } from "../../lib/api/core";
+import { noticeView, SESSION_ENDED } from "../../lib/session-continuity-copy";
 
 function renderSignIn() {
   return render(
@@ -548,7 +549,7 @@ describe("SignIn — renders the OIDC callback's ?auth_error=<code> inline", () 
 });
 
 // A session this browser held that was refused on load — App.tsx hands
-// SignIn a `reason`, rendered as an amber warning (role=status), not in the
+// SignIn a `notice`, rendered as an amber warning (role=status), not in the
 // error box submitToken's own failures use.
 describe("SignIn — the signed-out notice", () => {
   // ticket: #483
@@ -557,7 +558,7 @@ describe("SignIn — the signed-out notice", () => {
     healthMock.mockResolvedValue({});
     render(
       <ThemeProvider>
-        <SignIn onSignIn={() => {}} reason={SESSION_ENDED_REASON} />
+        <SignIn onSignIn={() => {}} notice={noticeView({ kind: "fallback" })} />
       </ThemeProvider>,
     );
     // Not findByRole("status") alone: the #457 "checking" row is a status too.
@@ -573,6 +574,68 @@ describe("SignIn — the signed-out notice", () => {
     renderSignIn();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.queryByText(SESSION_ENDED_REASON)).not.toBeInTheDocument();
+  });
+});
+
+// M12 (#1995): the notice per reason, the shared-computer line, the quieter Sign in and the return line.
+describe("SignIn — the session-ended notice (M12)", () => {
+  const sso = { sso: true, sso_provider: "microsoft", status: "ok", version: "t" };
+  function renderWith(notice?: ReturnType<typeof noticeView>) {
+    return render(
+      <ThemeProvider>
+        <SignIn onSignIn={() => {}} notice={notice} />
+      </ThemeProvider>,
+    );
+  }
+
+  it("a lapsed session reads as a warning with the reason's sentence", async () => {
+    window.history.pushState({}, "", "/");
+    healthMock.mockResolvedValue(sso);
+    renderWith(noticeView({ kind: "reason", reason: "expired_session" }));
+    const box = (await screen.findByText(SESSION_ENDED.EXPIRED)).closest('[role="status"]');
+    expect(box?.className).toContain("text-warning");
+  });
+
+  it("a deactivated person reads as a danger, and the Sign in button is quieter", async () => {
+    window.history.pushState({}, "", "/");
+    healthMock.mockResolvedValue(sso);
+    renderWith(noticeView({ kind: "reason", reason: "identity_deactivated" }));
+    const box = (await screen.findByText(SESSION_ENDED.DEACTIVATED)).closest('[role="status"]');
+    expect(box?.className).toContain("text-danger");
+    expect(screen.getByRole("link", { name: /Sign in with Microsoft/ }).className).toContain("opacity-70");
+  });
+
+  it("own Sign out on SSO names the shared-computer step; another tab's does not", async () => {
+    window.history.pushState({}, "", "/");
+    healthMock.mockResolvedValue(sso);
+    const { unmount } = renderWith(noticeView({ kind: "own", sso: true }));
+    expect(await screen.findByText(SESSION_ENDED.OWN)).toBeInTheDocument();
+    expect(screen.getByText(SESSION_ENDED.OWN_SHARED)).toBeInTheDocument();
+    unmount();
+    renderWith(noticeView({ kind: "elsewhere" }));
+    expect(await screen.findByText(SESSION_ENDED.ELSEWHERE)).toBeInTheDocument();
+    expect(screen.queryByText(SESSION_ENDED.OWN_SHARED)).not.toBeInTheDocument();
+  });
+
+  it("names the run the sign-in returns to, on a run's page with SSO", async () => {
+    window.history.pushState({}, "", "/runs/run_7f3c9a41-aaaa-bbbb-cccc-ddddeeeeffff");
+    healthMock.mockResolvedValue(sso);
+    renderWith(noticeView({ kind: "reason", reason: "revoked_session" }));
+    expect(await screen.findByText(SESSION_ENDED.RETURN("7f3c9a41"))).toBeInTheDocument();
+  });
+
+  it("neg: no return line off a run's page, or without SSO", async () => {
+    window.history.pushState({}, "", "/runs");
+    healthMock.mockResolvedValue(sso);
+    const { unmount } = renderWith(noticeView({ kind: "reason", reason: "revoked_session" }));
+    await screen.findByText(SESSION_ENDED.REVOKED);
+    expect(screen.queryByTestId("signin-return-line")).not.toBeInTheDocument();
+    unmount();
+    window.history.pushState({}, "", "/runs/run_7f3c9a41-aaaa");
+    healthMock.mockResolvedValue({ sso: false, status: "ok", version: "t" });
+    renderWith(noticeView({ kind: "reason", reason: "revoked_session" }));
+    await screen.findByText(SESSION_ENDED.REVOKED);
+    expect(screen.queryByTestId("signin-return-line")).not.toBeInTheDocument();
   });
 });
 

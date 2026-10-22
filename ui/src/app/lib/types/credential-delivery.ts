@@ -92,3 +92,14 @@ export interface CredentialDeliveryPolicyDoc {
   updated_at: string;
   updated_by: string;
 }
+
+/**
+ * Go: placement.UnbuildableRow — a stored row (a class, or a class under `trust_class`) whose mode the server
+ * cannot build for it; `buildable_modes` is what it can. GET lists them as `unbuildable`, absent when none.
+ */
+export interface UnbuildableRow {
+  class: DeliveryClass;
+  trust_class?: RunnerTrustClass;
+  mode: DeliveryMode;
+  buildable_modes: DeliveryMode[];
+}

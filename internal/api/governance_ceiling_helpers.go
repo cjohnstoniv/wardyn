@@ -162,7 +162,8 @@ func missingGrantKinds(have, want []types.GrantSpec) []string {
 // the fact and the memo has to be FILLED by whichever site asks first.
 type ceilingMemoKey struct{}
 
-// ceilingMemo is one request's resolved ceiling, resolved at most once.
+// ceilingMemo is one request's resolved ceiling, resolved at most once per context choice
+// (contextChoiceFrom): two choices in one request are two resolves, each answered once.
 //
 // It stores the ERROR too, deliberately: a resolver failure must be answered
 // identically by every site in the request. Re-resolving after a failure could
@@ -174,8 +175,12 @@ type ceilingMemoKey struct{}
 // but on a WithoutCancel copy that shares these values), and a memo that raced
 // would reintroduce exactly the divergence it removes.
 type ceilingMemo struct {
-	mu    sync.Mutex
-	done  bool
+	mu      sync.Mutex
+	answers map[string]ceilingAnswer
+}
+
+// ceilingAnswer is one resolve's result, error included.
+type ceilingAnswer struct {
 	value governanceCeiling
 	err   error
 }
@@ -193,14 +198,19 @@ type ceilingMemo struct {
 // most a couple of goroutines, resolveEffectiveCeiling never re-enters this
 // method, and a memoized failure dies with the request.
 func (m *ceilingMemo) do(ctx context.Context, resolve func(context.Context) (governanceCeiling, error)) (governanceCeiling, error) {
+	key := contextChoiceFrom(ctx).key()
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.done {
-		return m.value, m.err
+	if a, ok := m.answers[key]; ok {
+		return a.value, a.err
 	}
-	m.value, m.err = resolve(ctx)
-	m.done = true
-	return m.value, m.err
+	var a ceilingAnswer
+	a.value, a.err = resolve(ctx)
+	if m.answers == nil {
+		m.answers = map[string]ceilingAnswer{}
+	}
+	m.answers[key] = a
+	return a.value, a.err
 }
 
 // withCeilingMemo installs an empty memo. Called once per authenticated request

@@ -1,0 +1,84 @@
+{
+  "env": {
+    "ANTHROPIC_API_KEY": "wardyn-proxy-injected",
+    "AWS_CA_BUNDLE": "/tmp/wardyn/ca-bundle.pem",
+    "AWS_CONFIG_FILE": "/home/agent/.aws/config",
+    "AWS_PROFILE": "wardyn",
+    "AWS_SHARED_CREDENTIALS_FILE": "/home/agent/.aws/credentials",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "CURL_CA_BUNDLE": "/tmp/wardyn/ca-bundle.pem",
+    "DISABLE_TELEMETRY": "1",
+    "GIT_ASKPASS": "",
+    "GIT_AUTHOR_EMAIL": "sub-bob@wardyn.local",
+    "GIT_AUTHOR_NAME": "sub-bob",
+    "GIT_COMMITTER_EMAIL": "\u003cuuid\u003e@agent.wardyn.local",
+    "GIT_COMMITTER_NAME": "wardyn-agent:claude-code",
+    "GIT_TERMINAL_PROMPT": "0",
+    "GOCACHE": "/home/agent/.cache/go-build",
+    "GOMODCACHE": "/home/agent/.cache/go/mod",
+    "GOTMPDIR": "/home/agent/.cache/gotmp",
+    "GRADLE_OPTS": "-Dhttp.proxyHost=wardyn-proxy -Dhttp.proxyPort=3128 -Dhttps.proxyHost=wardyn-proxy -Dhttps.proxyPort=3128 -Dhttp.nonProxyHosts=localhost|127.0.0.1|::1|wardyn-proxy",
+    "HTTPS_PROXY": "http://wardyn-proxy:3128",
+    "HTTP_PROXY": "http://wardyn-proxy:3128",
+    "MAVEN_OPTS": "-Dhttp.proxyHost=wardyn-proxy -Dhttp.proxyPort=3128 -Dhttps.proxyHost=wardyn-proxy -Dhttps.proxyPort=3128 -Dhttp.nonProxyHosts=localhost|127.0.0.1|::1|wardyn-proxy",
+    "NODE_EXTRA_CA_CERTS": "/tmp/wardyn/mitm-ca.pem",
+    "NO_PROXY": "wardyn-proxy,localhost,127.0.0.1,::1",
+    "REQUESTS_CA_BUNDLE": "/tmp/wardyn/ca-bundle.pem",
+    "SSH_ASKPASS": "",
+    "SSL_CERT_FILE": "/tmp/wardyn/ca-bundle.pem",
+    "WARDYN_AWS_SSO_CONFIG_B64": {
+      ".aws/config": "[sso-session wardyn]\nsso_start_url = https://acme.awsapps.com/start\nsso_region = eu-west-1\nsso_registration_scopes = sso:account:access\n\n[profile wardyn]\nsso_session = wardyn\nsso_account_id = 123456789012\nsso_role_name = ReadOnly\noutput = json\nregion = eu-west-2\n",
+      ".aws/sso/cache/ed312478287f89a712b8130e60a9eadc09b4215f.json": "{\"accessToken\":\"wardyn-proxy-injected\",\"expiresAt\":\"\u003ctime\u003e\",\"region\":\"eu-west-1\",\"startUrl\":\"https://acme.awsapps.com/start\"}"
+    },
+    "WARDYN_MITM_CA_PEM": "\u003cpem\u003e",
+    "WARDYN_PROXY_URL": "http://wardyn-proxy:3128",
+    "WARDYN_RUN_ID": "\u003cuuid\u003e",
+    "http_proxy": "http://wardyn-proxy:3128",
+    "https_proxy": "http://wardyn-proxy:3128",
+    "no_proxy": "wardyn-proxy,localhost,127.0.0.1,::1",
+    "npm_config_cache": "/home/agent/.cache/npm"
+  },
+  "proxy_config": {
+    "control_plane_url": "http://wardynd:8080",
+    "injection": [
+      {
+        "format": "%s",
+        "grant_id": "\u003cuuid\u003e",
+        "header": "x-amz-sso_bearer_token",
+        "host": "portal.sso.eu-west-1.amazonaws.com",
+        "pin_path": "/federation/credentials",
+        "pin_query": {
+          "account_id": "123456789012",
+          "role_name": "ReadOnly"
+        },
+        "require_tls": true,
+        "secret_name": "aws-sso-access-token"
+      }
+    ],
+    "listen": ":3128",
+    "llm_unavailable_detail": "no model provider serves this agent on this deployment — an admin adds one under Settings → Model providers",
+    "mitm_ca_cert_pem": "\u003cpem\u003e",
+    "mitm_ca_key_pem": "\u003cpem\u003e",
+    "mitm_hosts": [
+      "portal.sso.eu-west-1.amazonaws.com:443"
+    ],
+    "policy": {
+      "allowed_domains": [
+        "api.anthropic.com",
+        "pypi.org",
+        "wide.example",
+        "sts.eu-west-2.amazonaws.com",
+        "portal.sso.eu-west-1.amazonaws.com"
+      ],
+      "first_use_approval": "wait_for_review",
+      "min_confinement_class": "CC1",
+      "resources": {
+        "cpu_millis": 2000,
+        "memory_mib": 4096
+      }
+    },
+    "run_id": "\u003cuuid\u003e",
+    "run_token": "\u003cjwt\u003e"
+  },
+  "secret_env_keys": []
+}

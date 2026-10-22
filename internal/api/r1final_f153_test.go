@@ -40,7 +40,7 @@ import (
 
 // f153RecordSrv drives launchRecordRun over a store that hands `profile` to
 // whoever asks, with `active` runs already going.
-func f153RecordSrv(t *testing.T, profile *types.GovernanceProfile, active int) (*Server, *fakeRunner) {
+func f153RecordSrv(t *testing.T, profile *types.GovernanceUnit, active int) (*Server, *fakeRunner) {
 	t.Helper()
 	h := newHarness(t)
 	ws := types.Workspace{ID: uuid.New(), Status: types.WorkspaceScanned}
@@ -65,7 +65,7 @@ func (s *f153ScanStore) CountActiveRunsBy(context.Context, string) (int, error) 
 
 // f153Scan drives the real launchSourceScanRun for a member with `active` runs
 // already going, under `profile`.
-func f153Scan(t *testing.T, profile *types.GovernanceProfile, active int) (*Server, error) {
+func f153Scan(t *testing.T, profile *types.GovernanceUnit, active int) (*Server, error) {
 	t.Helper()
 	cs := &capStore{}
 	if profile != nil {

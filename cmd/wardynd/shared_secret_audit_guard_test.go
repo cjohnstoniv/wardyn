@@ -67,9 +67,10 @@ var declaredSecretNameWrites = map[string]declaredSecretNameWrite{
 	// Not rows at all: broker.Minted.Metadata. The mint row is built from the
 	// grant's own scope (mintEvent), withSecretScope copies secret_scope alone
 	// out of this map, and the mint answer does not serialise it.
-	"internal/broker/broker_mint_kinds.go:Broker.mintAPIKey": {1, "Minted.Metadata of an api_key mint"},
-	"internal/broker/broker_mint_kinds.go:Broker.mintGitPAT": {1, "Minted.Metadata of a git_pat mint"},
-	"internal/broker/broker_mint_kinds.go:Broker.mintSSHKey": {1, "Minted.Metadata of an ssh_key mint"},
+	"internal/broker/broker_mint_kinds.go:Broker.mintAPIKey":         {1, "Minted.Metadata of an api_key mint"},
+	"internal/broker/broker_mint_kinds.go:Broker.mintGitPAT":         {1, "Minted.Metadata of a git_pat mint"},
+	"internal/broker/broker_mint_kinds.go:Broker.mintGitHubOwnToken": {1, "Minted.Metadata of a git_pat mint reading a person's own GitHub token; that sealed name is never a component's shared grant"},
+	"internal/broker/broker_mint_kinds.go:Broker.mintSSHKey":         {1, "Minted.Metadata of an ssh_key mint"},
 }
 
 // secretNameWrite is one write of a secret-naming key into a map.

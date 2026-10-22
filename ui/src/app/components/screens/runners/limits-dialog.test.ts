@@ -25,8 +25,8 @@ describe("limits the dialog refuses", () => {
   it("refuses a total above what the computer reports, a per-run above the total, and a Runs at once that is not a whole number of 1 or more", () => {
     expect(validateLimits(vals({ tm: "64" }), reported)).toEqual({ tm: "Not allowed: this computer reports 16 GB memory." });
     expect(validateLimits(vals({ pm: "20" }), reported)).toEqual({ pm: "Per run can't be more than the total." });
-    expect(validateLimits(vals({ rn: "0" }))).toEqual({ rn: "Runs at once is a whole number, 1 or more." });
-    expect(validateLimits(vals({ rn: "2.5" }))).toEqual({ rn: "Runs at once is a whole number, 1 or more." });
+    expect(validateLimits(vals({ rn: "0" }))).toEqual({ rn: "\"Runs at once\" is a whole number, 1 or more." });
+    expect(validateLimits(vals({ rn: "2.5" }))).toEqual({ rn: "\"Runs at once\" is a whole number, 1 or more." });
     expect(validateLimits(vals({ tc: "", pc: "0" }))).toEqual({ tc: "Set a number above 0.", pc: "Set a number above 0." });
     // A remote-hosted runner reports nothing to hold its totals to.
     expect(validateLimits(vals({ tm: "640", td: "9000" }))).toEqual({});
