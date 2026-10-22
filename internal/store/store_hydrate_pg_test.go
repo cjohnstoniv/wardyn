@@ -354,6 +354,9 @@ func TestPG_MergeWorkspaceRequirements_AtomicAndCapped(t *testing.T) {
 	for i := 0; i < 254; i++ {
 		big["egress:h"+strconv.Itoa(i)+".example"] = types.WorkspaceRequirement{Level: "optional", Provenance: "operator_set"}
 	}
+	if len(big) != 254 {
+		t.Fatalf("built %d bulk keys, want 254 distinct", len(big))
+	}
 	got, err = s.MergeWorkspaceRequirements(ctx, ws.ID, big)
 	if err != nil {
 		t.Fatalf("bulk merge up to the cap: %v", err)
