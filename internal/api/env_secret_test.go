@@ -163,6 +163,9 @@ func (s *envSecretCeilingStore) ResolveGovernanceUnit(context.Context, []string,
 func (s *envSecretCeilingStore) HasGroupTierMemberships(context.Context) (bool, error) {
 	return false, nil
 }
+func (s *envSecretCeilingStore) ListGovernanceMemberships(context.Context) ([]types.GovernanceMembership, error) {
+	return nil, nil
+}
 func (s *envSecretCeilingStore) GetPolicy(context.Context, uuid.UUID) (types.RunPolicy, error) {
 	return s.policy, nil
 }

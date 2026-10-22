@@ -539,9 +539,10 @@ var siteConfigFieldsAfter066 = []string{
 // A bare carry-forward would make them unclearable, which is why this keys on
 // the body's own keys rather than on emptiness: `{"internal_hosts": []}` and
 // `{"internal_hosts": null}` both MENTION the field and both clear it, exactly
-// as a client intends. Only silence is treated as silence.
+// as a client intends. Only silence is treated as silence. The exception is
+// governance_max_depth, a pointer: null and absent both keep the stored value, and 0 is the reset.
 func carryForwardUnnamedSiteConfigFields(cfg *types.SiteConfig, existing types.SiteConfig, present map[string]bool) {
-	if !present["governance_max_depth"] {
+	if cfg.GovernanceMaxDepth == nil { // null or absent keeps it; 0 is the explicit reset
 		cfg.GovernanceMaxDepth = existing.GovernanceMaxDepth
 	}
 	if !present["upstream_proxy_no_proxy"] {

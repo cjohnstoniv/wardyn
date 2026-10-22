@@ -383,6 +383,83 @@ func TestUnitDepthLimit(t *testing.T) {
 	}
 }
 
+// TestUnitSaveWithNullParentStaysUnderDefault: the console shows a unit under Default as having no
+// parent, so its no-op save sends parent_id null (with overlay {}) and, for a pass-through unit, no
+// mode. For each unit mode, with the mode left out and with it sent, the write must keep Default as the
+// parent and the unit must compose byte-identically before and after.
+func TestUnitSaveWithNullParentStaysUnderDefault(t *testing.T) {
+	def := store.DefaultUnitID.String()
+	for _, c := range []struct {
+		mode, create, save string
+	}{
+		{types.UnitModeOwnWalls, `"overlay":{},"overlay_limits":{"deny_interactive":true}`, `"overlay":{},"overlay_limits":{"deny_interactive":true}`},
+		{types.UnitModePassThrough, `"mode":"pass_through"`, `"overlay":{}`},
+	} {
+		for _, sendMode := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/mode sent=%v", c.mode, sendMode), func(t *testing.T) {
+				e := newGovEnvOn(t, throwawayPGPool(t))
+				u := treeChild(t, e, `{"name":"under-default","parent_id":"`+def+`",`+c.create+`}`)
+				before, err := e.srv.resolveUnitByID(context.Background(), u.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				body := `{"name":"under-default","parent_id":null,` + c.save
+				if sendMode {
+					body += `,"mode":"` + c.mode + `"`
+				}
+				w := e.admin(http.MethodPut, "/api/v1/governance/units/"+u.ID.String(), body+`}`)
+				if w.Code != http.StatusOK {
+					t.Fatalf("no-op save = %d %s, want 200", w.Code, w.Body)
+				}
+				rows, err := e.pg.ListGovernanceUnits(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, r := range rows {
+					if r.ID == u.ID && (r.ParentID == nil || *r.ParentID != store.DefaultUnitID || r.Mode != c.mode) {
+						t.Errorf("stored parent_id %v mode %q after the save, want %s %q", r.ParentID, r.Mode, def, c.mode)
+					}
+				}
+				after, err := e.srv.resolveUnitByID(context.Background(), u.ID)
+				if err != nil || !sameAsJSON(t, before.Ceiling, after.Ceiling) || !sameAsJSON(t, before.Limits, after.Limits) ||
+					!sameAsJSON(t, before.AuthoredResources, after.AuthoredResources) {
+					t.Errorf("composed after the save = %+v (%v), want %+v", after, err, before)
+				}
+			})
+		}
+	}
+}
+
+// TestPassThroughSaveKeepsItsRealBase: moving the null-parent mapping ahead of the pass-through check
+// changes nothing for a pass-through unit with a real base, a missing one, or no base at all.
+func TestPassThroughSaveKeepsItsRealBase(t *testing.T) {
+	e := newGovEnvOn(t, throwawayPGPool(t))
+	base := e.seedProfile("pt-base", "pypi.org")
+	u := treeChild(t, e, `{"name":"pt-kept","mode":"pass_through","parent_id":"`+base.ID.String()+`"}`)
+	w := e.admin(http.MethodPut, "/api/v1/governance/units/"+u.ID.String(), `{"name":"pt-kept","parent_id":"`+base.ID.String()+`","overlay":{},"mode":"pass_through"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("a pass-through save naming its base = %d %s, want 200", w.Code, w.Body)
+	}
+	rows, err := e.pg.ListGovernanceUnits(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range rows {
+		if r.ID == u.ID && (r.ParentID == nil || *r.ParentID != base.ID) {
+			t.Errorf("stored parent_id = %v, want the named base %s", r.ParentID, base.ID)
+		}
+	}
+	for name, c := range map[string]struct{ body, reason string }{
+		"missing base": {`{"name":"pt-orphan","mode":"pass_through","parent_id":"` + uuid.New().String() + `","overlay":{}}`, reasonGovernanceOverlayInvalid},
+		"no base":      {`{"name":"pt-top","mode":"pass_through"}`, reasonGovernanceUnitRequestInvalid},
+	} {
+		w := e.admin(http.MethodPost, "/api/v1/governance/units", c.body)
+		if w.Code != http.StatusBadRequest || wireReason(t, w) != c.reason {
+			t.Errorf("%s: POST = %d %s, want 400 %s", name, w.Code, w.Body, c.reason)
+		}
+	}
+}
+
 // TestUnitPassThrough: a pass-through child has its parent's walls exactly, and a pass-through unit
 // that names no parent is refused.
 func TestUnitPassThrough(t *testing.T) {

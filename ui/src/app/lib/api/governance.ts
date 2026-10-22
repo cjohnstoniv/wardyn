@@ -250,6 +250,8 @@ export interface GovernanceSnapshot {
   max_depth?: number;
   // The Wardyn boundary, as GET /governance/boundary returns it.
   boundary?: Boundary;
+  // Console only, never on the wire: every unit's name by id, Default included, for a membership on a unit the list hides.
+  unit_names?: Record<string, string>;
 }
 
 // The POST/PUT body. id/created_at/updated_at/created_by are never sent — the

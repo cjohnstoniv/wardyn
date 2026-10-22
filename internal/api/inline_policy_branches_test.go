@@ -39,6 +39,9 @@ func (s *memberBoundStore) ResolveGovernanceUnit(context.Context, []string, []st
 	return s.profile, types.CapabilitySubjectUser, nil
 }
 func (s *memberBoundStore) HasGroupTierMemberships(context.Context) (bool, error) { return false, nil }
+func (s *memberBoundStore) ListGovernanceMemberships(context.Context) ([]types.GovernanceMembership, error) {
+	return nil, nil
+}
 func (s *memberBoundStore) GetPolicy(context.Context, uuid.UUID) (types.RunPolicy, error) {
 	return s.policy, nil
 }

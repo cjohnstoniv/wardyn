@@ -36,6 +36,7 @@ import { useSearchParams } from "react-router-dom";
 import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import { governance as api, type GovernanceUnit, type GovernanceSnapshot } from "../../../lib/api/governance";
 import type { GovernanceChange } from "../../../lib/types";
+import { DEFAULT_GOVERNANCE_UNIT_ID } from "../../../lib/types/governance";
 import { absoluteTime, getErrorMessage, relativeTime } from "../../../lib/format";
 import { BASELINE, CHANGES, DELIVERY, GOVERNANCE as GOV } from "../../../lib/governance-copy";
 import { ACCESS_STATE, PEOPLE } from "../../../lib/people-access-copy";
@@ -118,7 +119,16 @@ export function GovernanceScreen() {
     api
       .getGovernance()
       .then((s) => {
-        setSnap(s);
+        // The console hides the Default unit until the tree screen lands: it is the deployment root, not a
+        // profile. A unit based on it reads as based on the deployment (no parent), as before the tree; the
+        // names keep Default for a membership that points at it.
+        setSnap({
+          ...s,
+          profiles: s.profiles
+            .filter((p) => p.id !== DEFAULT_GOVERNANCE_UNIT_ID)
+            .map((p) => (p.parent_id === DEFAULT_GOVERNANCE_UNIT_ID ? { ...p, parent_id: undefined } : p)),
+          unit_names: Object.fromEntries(s.profiles.map((p) => [p.id, p.name])),
+        });
         setStatus("ready");
       })
       .catch((e) => setStatus(loadFailStatus(e)));

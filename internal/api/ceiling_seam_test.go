@@ -35,6 +35,9 @@ func (s *flakyCeilingStore) ResolveGovernanceUnit(context.Context, []string, []s
 	return nil, "", context.DeadlineExceeded
 }
 func (s *flakyCeilingStore) HasGroupTierMemberships(context.Context) (bool, error) { return false, nil }
+func (s *flakyCeilingStore) ListGovernanceMemberships(context.Context) ([]types.GovernanceMembership, error) {
+	return nil, nil
+}
 func (s *flakyCeilingStore) ListCapabilityGrants(context.Context) ([]types.CapabilityGrant, error) {
 	return nil, nil
 }

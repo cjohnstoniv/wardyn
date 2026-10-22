@@ -78,6 +78,7 @@ var preflightInlinedWrappers = map[string]string{
 	"authorizePreviewRequest":     "policy_preview.go",
 	"runRequestGovernance":        "run_request_governance.go",
 	"resolveRunPolicyFacts":       "run_policy_resolution.go",
+	"decodeStampedRunRequest":     "governance_context.go",
 	"boundRunUserSpec":            "run_policy_resolution.go",
 	"seedAuthorizedWorkspace":     "run_workspace_authorization.go",
 	"authorizeRequestDrive":       "run_drive_authorization.go",
