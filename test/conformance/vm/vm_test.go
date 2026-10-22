@@ -87,7 +87,7 @@ func run(t *testing.T, d *docker.Driver, ref, script string) (int, string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	es, err := d.ExecStream(ctx, ref, runner.ExecSpec{Argv: []string{"sh", "-c", script}})
+	es, err := d.ExecStream(ctx, ref, runner.ExecSpec{Argv: []string{"bash", "-c", script}})
 	if err != nil {
 		t.Fatalf("exec %q: %v", script, err)
 	}
