@@ -246,7 +246,11 @@ RUN set -eu; \
             rm -f /tmp/claude-manifest.json; \
             echo "installed native claude $ver ($plat), checksum-verified"; \
         fi; \
-    else \
+    fi
+# The npm path is its own RUN: check-image-pins.sh accepts only checked
+# downloads in a RUN that runs curl, and the retry loop is neither.
+RUN set -eu; \
+    if [ "$CLAUDE_INSTALL" != "native" ]; then \
         if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi; \
         if [ -n "$HTTP_PROXY" ]; then npm config set proxy "$HTTP_PROXY"; fi; \
         if [ -n "$HTTPS_PROXY" ]; then npm config set https-proxy "$HTTPS_PROXY"; fi; \
