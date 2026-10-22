@@ -4,6 +4,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -432,12 +433,18 @@ func (w withholding) grantWithheld(g types.GrantSpec) bool {
 	})
 }
 
+// withheldScopeless is a withheld entry with no scope: absent, or the null a stored spec round-trips to.
+func withheldScopeless(s json.RawMessage) bool {
+	t := bytes.TrimSpace(s)
+	return len(t) == 0 || string(t) == "null"
+}
+
 // grantWithheldBy reports whether a layer's withheld list names g: an entry with no scope names every
 // grant of its kind, one with a scope the grants of the same pairing (composer.CeilingGrantsCovering).
 // Identity only: unlike the ceiling comparator, a longer TTL or a dropped approval never lets g past.
 func grantWithheldBy(g types.GrantSpec, list []types.GrantSpec) bool {
 	return slices.ContainsFunc(list, func(w types.GrantSpec) bool {
-		return w.Kind == g.Kind && (len(w.Scope) == 0 || len(composer.CeilingGrantsCovering(g, []types.GrantSpec{w})) > 0)
+		return w.Kind == g.Kind && (withheldScopeless(w.Scope) || len(composer.CeilingGrantsCovering(g, []types.GrantSpec{w})) > 0)
 	})
 }
 

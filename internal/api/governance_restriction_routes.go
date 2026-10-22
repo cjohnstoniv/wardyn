@@ -117,7 +117,7 @@ func validateRestriction(b *types.RestrictionWrite) error {
 		if _, ok := withheldGrantKinds[g.Kind]; !ok {
 			return fmt.Errorf("withheld_grants[%d]: unknown grant kind %q", i, g.Kind)
 		}
-		if len(g.Scope) > 0 && !validWithheldScope(g) {
+		if !withheldScopeless(g.Scope) && !validWithheldScope(g) {
 			return fmt.Errorf("withheld_grants[%d]: the scope does not decode into a usable pairing", i)
 		}
 	}
