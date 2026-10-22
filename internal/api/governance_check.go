@@ -5,6 +5,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/http"
@@ -114,6 +115,13 @@ func (s *Server) handleGovernanceCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := contextQuery{users: users, groups: groups, userType: strings.TrimSpace(req.UserType)}
+	var scope map[uuid.UUID]bool // a unit admin's: the units of the person's memberships they govern
+	if s.isUnitAdminCaller(r.Context()) {
+		var ok bool
+		if scope, ok = s.checkScope(w, r, q); !ok {
+			return
+		}
+	}
 	pick, err := s.selectContext(r.Context(), q, contextChoice{})
 	if err != nil {
 		writeServerError(w, r, "resolve governance profile", err)
@@ -137,7 +145,53 @@ func (s *Server) handleGovernanceCheck(w http.ResponseWriter, r *http.Request) {
 		ceilingRunRefusal(err).write(s, w, r)
 		return
 	}
+	if scope != nil {
+		resp = resp.within(scope, runIn, pick)
+	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// checkScope is a unit admin's scope over a check: the person the claims describe holds a membership
+// in a unit the caller governs. It answers the in-scope units among the person's memberships, or
+// writes the refusal (ok false).
+func (s *Server) checkScope(w http.ResponseWriter, r *http.Request, q contextQuery) (map[uuid.UUID]bool, bool) {
+	ctx := r.Context()
+	ms, err := s.cfg.Store.ListMembershipsFor(ctx, q.users, q.groups, q.userType)
+	if err != nil {
+		writeServerError(w, r, "read unit scope", err)
+		return nil, false
+	}
+	scope := map[uuid.UUID]bool{}
+	for _, m := range ms {
+		in, err := s.unitScope(ctx, m.Unit.ID, false)
+		if err != nil {
+			writeServerError(w, r, "read unit scope", err)
+			return nil, false
+		}
+		if in {
+			scope[m.Unit.ID] = true
+		}
+	}
+	if len(scope) == 0 {
+		s.refuseOutsideScope(w, r, "governance.check")
+		return nil, false
+	}
+	return scope, true
+}
+
+// within is a check's answer as a unit admin may read it: the contexts and dormant memberships in the
+// units they govern, the home context's fields only when it is one of those, and the effective walls
+// only of a context that is.
+func (c governanceCheckResponse) within(scope map[uuid.UUID]bool, runIn uuid.UUID, home contextPick) governanceCheckResponse {
+	if !scope[c.UnitID] {
+		c.governancePreviewResponse = governancePreviewResponse{}
+	}
+	c.Contexts = slices.DeleteFunc(c.Contexts, func(x checkContext) bool { return !scope[x.UnitID] })
+	c.Dormant = slices.DeleteFunc(c.Dormant, func(x checkDormant) bool { return !scope[x.UnitID] })
+	if asked := cmp.Or(runIn, home.unit.ID); !scope[asked] {
+		c.Effective = nil
+	}
+	return c
 }
 
 // governanceCheckResponse is POST /governance/check's body: the home context's fields above (empty

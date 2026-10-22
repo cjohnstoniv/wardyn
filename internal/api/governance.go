@@ -37,8 +37,8 @@ import (
 // tie-break, not a description.
 const maxGovernanceUnitNameLen = 128
 
-// mountGovernanceRoutes registers the /governance family — NINE routes, all on
-// the SECURITY tier.
+// mountGovernanceRoutes registers the /governance family: the promotion on the SECURITY tier, the
+// rest on the unit-admin tier (below).
 //
 // The parameter is still spelled `operatorOnly` because the six CRUD routes
 // were born there, before oidc.RoleSecurityAdmin existed; routes.go now hands
@@ -54,17 +54,25 @@ const maxGovernanceUnitNameLen = 128
 //
 // The membership move (PUT) and promotion (POST …/promote) are the policy tree's: they follow the
 // second-human switch as every assignment write does.
-func (s *Server) mountGovernanceRoutes(operatorOnly chi.Router) {
-	operatorOnly.Get("/governance", s.handleGetGovernance)
-	operatorOnly.Post("/governance/units", s.handleCreateGovernanceUnit)
-	operatorOnly.Put("/governance/units/{id}", s.handleUpdateGovernanceUnit)
-	operatorOnly.Delete("/governance/units/{id}", s.handleDeleteGovernanceUnit)
-	operatorOnly.Post("/governance/memberships", s.handleUpsertGovernanceMembership)
-	operatorOnly.Put("/governance/memberships/{id}", s.handleMoveGovernanceMembership)
-	operatorOnly.Delete("/governance/memberships/{id}", s.handleDeleteGovernanceMembership)
+//
+// Unit admins (governance_scope.go): every route a unit admin may use is mounted on the member router
+// behind requireUnitScope instead, and checks its own target's scope first; a security caller passes
+// both untouched. The promotion stays on securityOps, as do the boundary and the restrictions.
+func (s *Server) mountGovernanceRoutes(operatorOnly, member chi.Router) {
+	unit := member.With(s.requireUnitScope)
+	unit.Get("/governance", s.handleGetGovernance)
+	unit.Post("/governance/units", s.handleCreateGovernanceUnit)
+	unit.Put("/governance/units/{id}", s.handleUpdateGovernanceUnit)
+	unit.Delete("/governance/units/{id}", s.handleDeleteGovernanceUnit)
+	unit.Post("/governance/units/{id}/admins", s.handleGrantUnitAdmin)
+	unit.Delete("/governance/units/{id}/admins/{admin}", s.handleRevokeUnitAdmin)
+	unit.Post("/governance/memberships", s.handleUpsertGovernanceMembership)
+	unit.Put("/governance/memberships/{id}", s.handleMoveGovernanceMembership)
+	unit.Delete("/governance/memberships/{id}", s.handleDeleteGovernanceMembership)
 	operatorOnly.Post("/governance/memberships/{id}/promote", s.handlePromoteGovernanceMembership)
-	operatorOnly.Post("/governance/check", s.handleGovernanceCheck)
-	s.mountGovernanceChangeRoutes(operatorOnly)
+	unit.Post("/governance/check", s.handleGovernanceCheck)
+	unit.Post("/governance/dry-run", s.handleBoundaryDryRun)
+	s.mountGovernanceChangeRoutes(unit)
 }
 
 // GET /governance
@@ -80,12 +88,16 @@ type governanceResponse struct {
 	Memberships []types.GovernanceMembership `json:"memberships"`
 	// MaxDepth is the maximum unit depth in force (site_config.governance_max_depth, 16 when unset).
 	MaxDepth int `json:"max_depth"`
-	// Boundary is the Wardyn boundary as GET /governance/boundary returns it.
-	Boundary types.Boundary `json:"boundary"`
+	// Boundary is the Wardyn boundary as GET /governance/boundary returns it; absent for a unit admin.
+	Boundary *types.Boundary `json:"boundary,omitempty"`
+	// UnitAdmins is the unit-admin grants (governance_unit_admin.go).
+	UnitAdmins []types.GovernanceUnitAdmin `json:"unit_admins"`
+	// ParentWalls is, for a unit admin, the walls each of their subtrees hangs from (scopeGovernanceRead).
+	ParentWalls []unitParentWalls `json:"parent_walls,omitempty"`
 }
 
-// handleGetGovernance returns the whole governance picture. operatorOnly
-// (routes.go).
+// handleGetGovernance returns the whole governance picture to a security caller, and a unit admin's
+// subtrees to a unit admin (scopeGovernanceRead).
 func (s *Server) handleGetGovernance(w http.ResponseWriter, r *http.Request) {
 	resolved, err := s.resolveAllUnits(r.Context())
 	if err != nil {
@@ -122,7 +134,23 @@ func (s *Server) handleGetGovernance(w http.ResponseWriter, r *http.Request) {
 			profiles[i].People = &n
 		}
 	}
-	writeJSON(w, http.StatusOK, governanceResponse{Units: profiles, Memberships: assignments, MaxDepth: limit, Boundary: boundary})
+	admins := []types.GovernanceUnitAdmin{}
+	if st := s.unitAdminStore(); st != nil {
+		got, err := st.ListUnitAdmins(r.Context())
+		if err != nil {
+			writeServerError(w, r, "list unit admins", err)
+			return
+		}
+		admins = append(admins, got...)
+	}
+	resp := governanceResponse{Units: profiles, Memberships: assignments, MaxDepth: limit, Boundary: &boundary, UnitAdmins: admins}
+	if !s.isSecurityOperator(r.Context()) {
+		if resp, err = s.scopeGovernanceRead(r.Context(), resp, resolved, boundary, limit); err != nil {
+			writeServerError(w, r, "read unit admin grants", err)
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // unitPeople is, per unit, the membership subjects in it or in a unit below it. The Default unit's

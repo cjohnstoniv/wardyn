@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -38,7 +39,32 @@ const (
 
 // boundaryState is the part of the boundary a write replaces and an approval compares.
 func boundaryState(b types.Boundary) types.BoundaryWrite {
-	return types.BoundaryWrite{Mode: b.Mode, Spec: b.Spec, Limits: b.Limits, Contact: b.Contact}
+	w := types.BoundaryWrite{Mode: b.Mode, Spec: b.Spec, Limits: b.Limits, Contact: b.Contact}
+	if len(b.LockedKnobs) > 0 {
+		locks := slices.Clone(b.LockedKnobs)
+		w.LockedKnobs = &locks
+	}
+	return w
+}
+
+// boundaryLocksRefusal checks a boundary write's locks against the units as they stand: an unknown
+// knob is a 422, and a lock newly binding a knob a unit states with another value is a 409 naming
+// them (clearing their values would widen them). body's list is normalized in place.
+func boundaryLocksRefusal(body *types.BoundaryWrite, cur types.Boundary, units []types.GovernanceUnit) *unitWriteError {
+	if body.LockedKnobs == nil {
+		return nil
+	}
+	locks, msg := normalizeLockedKnobs(*body.LockedKnobs)
+	if msg != "" {
+		return writeRefusal(http.StatusUnprocessableEntity, reasonBoundaryInvalid, "invalid Wardyn boundary: %s", msg)
+	}
+	body.LockedKnobs = &locks
+	after := types.Boundary{Mode: body.Mode, Spec: body.Spec, Limits: body.Limits, LockedKnobs: locks}
+	if conflicts := boundaryLockConflicts(units, cur, after); len(conflicts) > 0 {
+		return writeRefusal(http.StatusConflict, reasonUnitKnobLocked,
+			"these units set a knob this boundary locks to another value; change them first: %s", strings.Join(conflicts, ", "))
+	}
+	return nil
 }
 
 // validateBoundary refuses a write the boundary cannot hold: a missing or unknown mode, a bad
@@ -60,7 +86,8 @@ func validateBoundary(b *types.BoundaryWrite) error {
 
 // boundaryHardLimitsGated refuses a write into hard_limits: the boundary cannot be switched on until
 // it bounds every brokered credential path a run is given (#3238).
-// Ungating it must update docs/sdk.md's line that nothing locks a knob yet.
+// Ungating it also makes the boundary's locks bind (governance_locks.go), as docs/sdk.md's line on
+// locked knobs says.
 func boundaryHardLimitsGated(b types.BoundaryWrite) *unitWriteError {
 	if b.Mode != types.BoundaryHardLimits {
 		return nil
@@ -147,6 +174,20 @@ func (s *Server) handlePutBoundary(w http.ResponseWriter, r *http.Request) {
 			"If-Match does not match the current Wardyn boundary — GET /governance/boundary again and retry")
 		return
 	}
+	if body.LockedKnobs == nil {
+		body.LockedKnobs = before.LockedKnobs // absent keeps the stored locks, and the diff says so
+	}
+	if body.LockedKnobs != nil {
+		units, err := s.unitTreeRows(r.Context())
+		if err != nil {
+			writeServerError(w, r, "read governance units", err)
+			return
+		}
+		if ref := boundaryLocksRefusal(&body, cur, units); ref != nil {
+			writeErrorReason(w, ref.status, ref.reason, ref.msg)
+			return
+		}
+	}
 	if mode == govQueue {
 		s.proposeGovernanceChange(w, r, govProposal{
 			kind: govKindBoundary, op: "replace", key: govBoundaryKey, payload: body,
@@ -197,6 +238,15 @@ func applyBoundaryChange(_ *Server, r *http.Request, q store.Querier, ch types.G
 	if computeETag(before) != ch.BaseHash {
 		return govApplied{}, store.ErrGovernanceChangeStale
 	}
+	if held.LockedKnobs != nil {
+		units, err := store.ListGovernanceUnitsQ(ctx, q)
+		if err != nil {
+			return govApplied{}, err
+		}
+		if ref := boundaryLocksRefusal(&held, cur, units); ref != nil {
+			return govApplied{}, ref
+		}
+	}
 	if _, err := store.PutBoundaryQ(ctx, q, held, principalFromRequest(r)); err != nil {
 		return govApplied{}, err
 	}
@@ -240,6 +290,11 @@ func (s *Server) handleBoundaryDryRun(w http.ResponseWriter, r *http.Request) {
 	_ = json.Unmarshal(raw, &head) // the strict decode of its target refuses a body that does not parse
 	if head.Target != "" && head.Target != dryRunTargetBoundary {
 		s.treeDryRun(w, r, head.Target, raw)
+		return
+	}
+	if s.isUnitAdminCaller(r.Context()) {
+		// The route is on the unit-admin tier for its unit targets; the boundary is never a unit admin's.
+		s.refuseOutsideScope(w, r, "governance.boundary")
 		return
 	}
 	var body struct {

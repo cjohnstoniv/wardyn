@@ -91,6 +91,20 @@ func GetUnitAdminQ(ctx context.Context, q Querier, unit, id uuid.UUID) (types.Go
 	return a, nil
 }
 
+// GetUnitAdminByKeyQ is the grant naming subject on unit, read for update when forUpdate. ErrNotFound
+// when none.
+func GetUnitAdminByKeyQ(ctx context.Context, q Querier, unit uuid.UUID, subjectType, subject string, forUpdate bool) (types.GovernanceUnitAdmin, error) {
+	stmt := `SELECT ` + unitAdminCols + ` FROM governance_unit_admins WHERE unit_id = $1 AND subject_type = $2 AND subject = $3` + lockSuffix(forUpdate)
+	a, err := scanUnitAdmin(q.QueryRow(ctx, stmt, unit, subjectType, subject))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return types.GovernanceUnitAdmin{}, ErrNotFound
+	}
+	if err != nil {
+		return types.GovernanceUnitAdmin{}, fmt.Errorf("store: get unit admin: %w", err)
+	}
+	return a, nil
+}
+
 // GrantUnitAdminQ stores a grant on q (a nil id gets a fresh one). ErrConflict when the subject already
 // holds one on the unit, ErrNotFound when the unit is unknown.
 func GrantUnitAdminQ(ctx context.Context, q Querier, a types.GovernanceUnitAdmin) (types.GovernanceUnitAdmin, error) {

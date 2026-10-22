@@ -452,7 +452,7 @@
   {
     "reason": "second_human_required",
     "target": "govChangeTarget",
-    "sentence": "envGovernanceSecondHuman + \" is set: a second human must approve this — you proposed it, so someone else approves it (you may reject it)\""
+    "sentence": "secondApproverSentence()"
   },
   {
     "reason": "second_human_required",
