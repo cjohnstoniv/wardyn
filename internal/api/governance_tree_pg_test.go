@@ -449,13 +449,13 @@ func TestPassThroughSaveKeepsItsRealBase(t *testing.T) {
 			t.Errorf("stored parent_id = %v, want the named base %s", r.ParentID, base.ID)
 		}
 	}
-	for name, body := range map[string]string{
-		"missing base": `{"name":"pt-orphan","mode":"pass_through","parent_id":"` + uuid.New().String() + `","overlay":{}}`,
-		"no base":      `{"name":"pt-top","mode":"pass_through"}`,
+	for name, c := range map[string]struct{ body, reason string }{
+		"missing base": {`{"name":"pt-orphan","mode":"pass_through","parent_id":"` + uuid.New().String() + `","overlay":{}}`, reasonGovernanceOverlayInvalid},
+		"no base":      {`{"name":"pt-top","mode":"pass_through"}`, reasonGovernanceUnitRequestInvalid},
 	} {
-		w := e.admin(http.MethodPost, "/api/v1/governance/units", body)
-		if w.Code != http.StatusBadRequest || wireReason(t, w) != reasonGovernanceUnitRequestInvalid {
-			t.Errorf("%s: POST = %d %s, want 400 %s", name, w.Code, w.Body, reasonGovernanceUnitRequestInvalid)
+		w := e.admin(http.MethodPost, "/api/v1/governance/units", c.body)
+		if w.Code != http.StatusBadRequest || wireReason(t, w) != c.reason {
+			t.Errorf("%s: POST = %d %s, want 400 %s", name, w.Code, w.Body, c.reason)
 		}
 	}
 }
