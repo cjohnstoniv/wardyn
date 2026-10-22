@@ -3278,7 +3278,7 @@ Naming these is the point of the walk, not a caveat on it:
 
 ### Removed in 0.10.0
 
-- `WARDYN_AWS_SSO_PROXY_INJECT=off` is gone: `wardynd` refuses to start on `off`, `false` or `0`, whether it comes from the environment, the `-aws-sso-proxy-inject` flag or the Helm value `awsSSOProxyInject`.
+- `WARDYN_AWS_SSO_PROXY_INJECT=off` is gone: `wardynd` refuses to start on `off`, `false` or `0` (`refuseAWSSSOProxyInjectOff` in [`cmd/wardynd/boot_posture.go`](../cmd/wardynd/boot_posture.go)), whether it comes from the environment, the `-aws-sso-proxy-inject` flag or the Helm value `awsSSOProxyInject`. To start again, unset it or set it to `on`. The default `on` applies to new dispatches only: a run already running keeps the lane it was authored with, a held run included.
 - The AWS sign-in token now always stays at the proxy, and the sandbox's token cache holds a placeholder.
 - `off` was the stopgap for a TLS-intercepting corporate proxy. Stage that proxy's CA instead:
   1. Put the proxy's root CA in a PEM bundle.

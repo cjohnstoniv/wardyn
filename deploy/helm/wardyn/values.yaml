@@ -570,8 +570,8 @@ daemonProxySecret:
   defaultMode: 0440
 
 # AWS sign-in lane (WARDYN_AWS_SSO_PROXY_INJECT): "on" (proxy-side AWS SSO
-# session injection, the daemon's own default) or empty. "off" was removed in
-# 0.10.0 and wardynd refuses to boot on it; see docs/OPERATIONS.md "Removed in
+# session injection, the daemon's own default) or empty. "off", "false" and "0" were
+# removed in 0.10.0 and wardynd refuses to boot on them; see docs/OPERATIONS.md "Removed in
 # 0.10.0". Empty (default) => no named env
 # entry rendered, so wardynd's own compiled default ("on") applies — byte-
 # identical to today. Wires WARDYN_AWS_SSO_PROXY_INJECT unless

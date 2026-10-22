@@ -357,6 +357,8 @@ resolves your drive the same way, in a dry run too:
     sandbox for the run — see
     [../threatmodel/THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md) ("Derived
     AWS role credentials").
+  - The SSO access token itself stays at the proxy; see [ENV.md](ENV.md)
+    (`WARDYN_AWS_SSO_PROXY_INJECT`).
 
 ## Your model connections
 
