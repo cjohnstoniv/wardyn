@@ -147,9 +147,9 @@ jobs:
           echo "code=$code backend=$backend ui=$ui images=$images notices=$notices"
           printf 'code=%s\nbackend=%s\nui=%s\nimages=%s\nnotices=%s\n' "$code" "$backend" "$ui" "$images" "$notices" >> "$GITHUB_OUTPUT"
 
-  # ── image-scope: which of the nine trivy scans does this change need? ──────
+  # ── image-scope: which of the ten trivy scans does this change need? ──────
   # `changes` sets images=true for any non-test backend path, which is nearly
-  # every pull request, so all nine images were built and scanned each time.
+  # every pull request, so all ten images were built and scanned each time.
   # scripts/image-scope.sh answers per image instead: a changed path reaches an
   # image when it is the Dockerfile, a path the Dockerfile copies, go.mod/go.sum,
   # deploy/base-images.txt, .trivyignore, this workflow, or a non-test file of a
@@ -184,6 +184,7 @@ jobs:
       agent-aws-sso: ${{ steps.scope.outputs.agent-aws-sso }}
       agent-vscode: ${{ steps.scope.outputs.agent-vscode }}
       agent-novnc: ${{ steps.scope.outputs.agent-novnc }}
+      agent-novnc-signin: ${{ steps.scope.outputs.agent-novnc-signin }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -561,7 +562,8 @@ jobs:
           needs.image-scope.outputs.agent-codex-cli == 'true' &&
           needs.image-scope.outputs.agent-aws-sso == 'true' &&
           needs.image-scope.outputs.agent-vscode == 'true' &&
-          needs.image-scope.outputs.agent-novnc == 'true'
+          needs.image-scope.outputs.agent-novnc == 'true' &&
+          needs.image-scope.outputs.agent-novnc-signin == 'true'
         run: |
           set -euo pipefail
           t="$(git rev-parse 'HEAD^{tree}')"; printf '%s\n' "$t" > tested-tree.txt; echo "tree=$t" >> "$GITHUB_OUTPUT"
@@ -2160,8 +2162,8 @@ jobs:
     steps: *trivy_steps
   trivy-agent-novnc-signin:
     name: trivy (agent-novnc-signin)
-    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
-    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
+    needs: [changes, diagrams, image-scope] # diagrams only for the start order: see `changes`
+    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' && needs.image-scope.outputs.agent-novnc-signin != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 50
     env:
