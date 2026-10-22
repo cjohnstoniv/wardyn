@@ -860,6 +860,27 @@ describe("Wardyn boundary wire (GET/PUT /governance/boundary, POST /governance/d
   });
 });
 
+describe("Restriction wire (GET /governance restrictions, POST/PUT /governance/restrictions)", () => {
+  it("each restriction DTO's TypeScript keys are exactly its Go json tags", () => {
+    const root = repoRoot();
+    const types = readFileSync(join(root, "internal/types/restriction.go"), "utf8");
+    const policies = readFileSync(join(root, "internal/api/policies.go"), "utf8");
+    const ts = readFileSync(join(root, "ui/src/app/lib/api/restrictions.ts"), "utf8");
+    const pairs: [string, string, string][] = [
+      [types, "Restriction", "Restriction"],
+      [types, "RestrictionMember", "RestrictionMember"],
+      [types, "RestrictionWrite", "RestrictionWrite"],
+      [types, "RestrictionSpec", "RestrictionSpec"],
+      [types, "RestrictionLimits", "RestrictionLimits"],
+    ];
+    for (const [go, goName, tsName] of pairs) {
+      expect(tsInterfaceTopKeys(ts, tsName).sort(), tsName).toEqual(goJSONTags(go, goName).sort());
+    }
+    const pol = readFileSync(join(root, "ui/src/app/lib/api/policies.ts"), "utf8");
+    expect(tsInterfaceTopKeys(pol, "DefaultPolicyRestriction").sort()).toEqual(goJSONTags(policies, "defaultPolicyRestriction").sort());
+  });
+});
+
 describe("SetupProviderAccess cause fields", () => {
   it("keeps the Go and TypeScript optional wire fields in parity", () => {
     const root = repoRoot();

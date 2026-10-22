@@ -437,6 +437,8 @@ export const CHANGES = {
     run_node_record: "Node record",
     local_credential_delivery: DELIVERY.CHANGE_KIND,
     governance_boundary: "Wardyn boundary",
+    governance_restriction: "Restriction",
+    workspace_owning_unit: "Workspace unit",
   } as Record<string, string>,
   // By op. An op this console predates shows its raw name.
   OP: {

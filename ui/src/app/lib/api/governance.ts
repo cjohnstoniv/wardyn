@@ -24,6 +24,7 @@ import type {
 import type { PlacementValue } from "../types/new-run-contract";
 import type { PolicyProvenance } from "../types/runs";
 import type { Boundary, BoundaryChange } from "./boundary";
+import type { RestrictionLimits, RestrictionSpec, RestrictionView } from "./restrictions";
 import { USER_TYPE_STANDARD } from "../types/user-types";
 import { asJson, errEnvelope, errText, HttpError, throwIfPending, unwrapList, wfetch } from "./core";
 
@@ -250,6 +251,8 @@ export interface GovernanceSnapshot {
   max_depth?: number;
   // The Wardyn boundary, as GET /governance/boundary returns it.
   boundary?: Boundary;
+  // The deny-only lists that follow people, each with how many people it names.
+  restrictions?: RestrictionView[];
   // Console only, never on the wire: every unit's name by id, Default included, for a membership on a unit the list hides.
   unit_names?: Record<string, string>;
 }
@@ -366,9 +369,26 @@ export interface GovernanceDormantMembership {
   unit_id: string;
   unit_name: string;
 }
+// A restriction covering the person (checkRestriction), and their workspaces grouped by owning unit
+// (checkWorkspaceGroup; a null unit_id is the group pinned to none).
+export interface GovernanceCheckRestriction {
+  id: string;
+  name: string;
+  spec: RestrictionSpec;
+  limits: RestrictionLimits;
+  contact?: PolicyContact;
+}
+export interface GovernanceCheckWorkspaceGroup {
+  unit_id: string | null;
+  unit_name?: string;
+  count: number;
+  names: string[];
+}
 export interface GovernanceCheck extends GovernancePreview {
   contexts: GovernanceCheckContext[];
   dormant: GovernanceDormantMembership[];
+  restrictions: GovernanceCheckRestriction[];
+  workspaces: GovernanceCheckWorkspaceGroup[];
   effective: { ceiling: RunPolicySpec; limits: GovernanceLimits; provenance: Record<string, PolicyProvenance> } | null;
 }
 
@@ -414,10 +434,11 @@ export const governance = {
   // null, so both halves are coerced and every caller can map over them.
   async getGovernance(): Promise<GovernanceSnapshot> {
     const res = await wfetch("/governance", { method: "GET" });
-    const body = await asJson<{ units?: unknown; memberships?: unknown; max_depth?: number }>(res);
+    const body = await asJson<{ units?: unknown; memberships?: unknown; max_depth?: number; restrictions?: unknown }>(res);
     return {
       profiles: unwrapList<GovernanceUnit>(body.units),
       assignments: unwrapList<GovernanceMembership>(body.memberships),
+      restrictions: unwrapList<RestrictionView>(body.restrictions),
       max_depth: body.max_depth,
     };
   },
