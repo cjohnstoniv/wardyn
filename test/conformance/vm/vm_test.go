@@ -331,6 +331,7 @@ func TestLinuxVMSandbox(t *testing.T) {
 		host, _ := req["Host"].(string)
 		src, _ := r["rule_source"].(string)
 		flow, _ := r["flow"].(string)
+		t.Logf("%v %s host=%q port=%v flow=%q", r["decision"], src, host, req["Port"], flow)
 		switch {
 		case r["decision"] == "allow" && host != "origin.test":
 			t.Errorf("allow row for %q: only the origin is allowed", host)
