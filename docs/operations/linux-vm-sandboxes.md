@@ -18,7 +18,7 @@
 | Synced folders | A folder synced from another computer lands in the guest as in a container: through the guest agent and the image's `sftp-server`, as `agent`. The agent waits for the first sync |
 | Confinement | The VM boundary, which the runner treats as the `CC3` family (hardware virtualisation). The run's recorded `confinement_class` stays the one it asked for |
 | Network | On a Docker runner, QEMU's only link is the network relay (`wardyn-vmnet`), which hands connections to allowed hosts to the run's proxy. A Kubernetes VM pod has no relay yet |
-| Refused traffic | A port or host the policy does not allow, a raw IP address, a DNS query to an outside resolver, and IPv6. The proxy records each refusal as a deny decision |
+| Refused traffic | A port or host not allowed, a raw IP or an outside DNS resolver: a deny decision each. Dropped IPv6 and ICMP frames: one row a second per kind, with a repeat count. Global IPv6 connects find no route |
 
 - Not in this release: drives, session recording, reviving a stopped VM, replacing its proxy, and recovering its output after the VM is gone. Each is refused with a reason.
 - A VM's terminal is a plain shell. Opening it in the agent CLI (`interactive_start: agent`) and watching or taking over the agent's terminal are refused too.

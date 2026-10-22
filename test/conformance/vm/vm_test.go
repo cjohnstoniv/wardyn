@@ -83,6 +83,33 @@ func decisions(t *testing.T, cli *dockerclient.Client, runID uuid.UUID) []map[st
 	return out
 }
 
+// ipv6Drops counts the IPv6 frames the relay reported dropping: a batched row stands for its repeat count.
+func ipv6Drops(rows []map[string]any) int {
+	n := 0
+	for _, r := range rows {
+		if cause, _ := r["cause"].(string); r["rule_source"] == "vmnet:dropped-frame" && strings.Contains(cause, "(ipv6)") {
+			rep, _ := r["repeat"].(float64)
+			n += max(1, int(rep))
+		}
+	}
+	return n
+}
+
+// settledIPv6Drops is ipv6Drops once it has held still for three seconds (at most 30 seconds).
+func settledIPv6Drops(t *testing.T, cli *dockerclient.Client, runID uuid.UUID) int {
+	t.Helper()
+	n, still := ipv6Drops(decisions(t, cli, runID)), 0
+	for deadline := time.Now().Add(30 * time.Second); still < 3 && time.Now().Before(deadline); {
+		time.Sleep(time.Second)
+		if m := ipv6Drops(decisions(t, cli, runID)); m == n {
+			still++
+		} else {
+			n, still = m, 0
+		}
+	}
+	return n
+}
+
 func run(t *testing.T, d *docker.Driver, ref, script string) (int, string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -295,10 +322,23 @@ func TestLinuxVMSandbox(t *testing.T) {
 		"an outside address":        `timeout 15 bash -c '</dev/tcp/1.1.1.1/80' && exit 0; exit 7`,
 		// One A query for example.com to an outside resolver: no answer comes back.
 		"an outside resolver": `exec 3<>/dev/udp/8.8.8.8/53 && printf '\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x07example\x03com\x00\x00\x01\x00\x01' >&3 && timeout 5 head -c1 <&3 >/dev/null && exit 0; exit 7`,
-		"IPv6":                `for i in $(ls /sys/class/net); do if [ "$i" != lo ] && timeout 5 bash -c "</dev/tcp/fe80::1%$i/80"; then exit 0; fi; done; timeout 10 bash -c '</dev/tcp/2001:4860:4860::8888/443' && exit 0; exit 7`,
 	} {
 		if code, o := run(t, d, sb.Ref, script); code != 7 {
 			t.Errorf("%s from the guest = %d %q, want refused", name, code, o)
+		}
+	}
+	// IPv6: a link-local connect puts frames on the link, which the relay drops and reports
+	// (batched, one row a second per kind, with a repeat count); a global one has no route in the
+	// guest. The guest's own IPv6 chatter is reported the same way, so the probe must add to a
+	// count that has settled.
+	before := settledIPv6Drops(t, cli, spec.RunID)
+	if code, o := run(t, d, sb.Ref, `for i in $(ls /sys/class/net); do if [ "$i" != lo ] && timeout 5 bash -c "</dev/tcp/fe80::1%$i/80"; then exit 0; fi; done; timeout 10 bash -c '</dev/tcp/2001:4860:4860::8888/443' && exit 0; exit 7`); code != 7 {
+		t.Errorf("IPv6 from the guest = %d %q, want refused", code, o)
+	}
+	for deadline := time.Now().Add(15 * time.Second); ipv6Drops(decisions(t, cli, spec.RunID)) <= before; time.Sleep(time.Second) {
+		if time.Now().After(deadline) {
+			t.Errorf("no vmnet:dropped-frame (ipv6) row after the IPv6 probe: %d dropped before it, none since", before)
+			break
 		}
 	}
 	// The proxy's rows: the port rule refused port 22 (the run's proxy is marked vm, as nothing else
@@ -331,7 +371,7 @@ func TestLinuxVMSandbox(t *testing.T) {
 		host, _ := req["Host"].(string)
 		src, _ := r["rule_source"].(string)
 		flow, _ := r["flow"].(string)
-		t.Logf("%v %s host=%q port=%v flow=%q", r["decision"], src, host, req["Port"], flow)
+		t.Logf("%v %s host=%q port=%v flow=%q repeat=%v cause=%q", r["decision"], src, host, req["Port"], flow, r["repeat"], r["cause"])
 		switch {
 		case r["decision"] == "allow" && host != "origin.test":
 			t.Errorf("allow row for %q: only the origin is allowed", host)
