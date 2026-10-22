@@ -10,6 +10,7 @@ allowed_peers
 attribution
 attribution.email
 attribution.layer
+attribution.locked
 attribution.name
 attribution.overridden
 attribution.owner
