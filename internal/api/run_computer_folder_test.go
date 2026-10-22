@@ -6,12 +6,17 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -184,9 +189,95 @@ type folderSandboxRunner struct {
 	stopped func()
 	// hang makes the sandbox's sftp-server never answer, so a pass runs out of time.
 	hang bool
+	// block is a file whose read never answers until its session closes, so a pass that reaches
+	// it runs out of time after the files before it.
+	block string
+	// proxyErr fails StopProxy. proxyStopped and agentKilled are a kept sandbox's quiesce: its
+	// proxy removed and its agent's processes killed.
+	proxyErr                  error
+	proxyStopped, agentKilled atomic.Bool
+	// killErr fails the agent kill's exec; agentLives keeps the agent running through it; ended is
+	// a sandbox already stopped, as a lease end's EndSandbox leaves it.
+	killErr           error
+	agentLives, ended bool
+	// proxyEnds is Docker's StopProxy failing closed: it stops the agent's container and still
+	// returns proxyErr.
+	proxyEnds bool
+	// onPass runs as a pass's sftp-server starts in the sandbox's folder.
+	onPass func()
+}
+
+// StopProxy removes the sandbox's proxy, its agent's only way out.
+func (r *folderSandboxRunner) StopProxy(context.Context, string) error {
+	if r.proxyErr != nil {
+		r.ended = r.ended || r.proxyEnds
+		return r.proxyErr
+	}
+	r.proxyStopped.Store(true)
+	return nil
+}
+
+// AgentStatus is the agent's exec: running until keptAgentKill reaches the sandbox.
+func (r *folderSandboxRunner) AgentStatus(context.Context, string, string) (runner.Status, error) {
+	if r.ended || r.agentKilled.Load() && !r.agentLives {
+		return runner.Status{State: types.RunFailed}, nil
+	}
+	return runner.Status{State: types.RunRunning}, nil
+}
+
+// Status is the sandbox's container: running unless ended.
+func (r *folderSandboxRunner) Status(context.Context, string) (runner.Status, error) {
+	if r.ended {
+		return runner.Status{State: types.RunStopped}, nil
+	}
+	return runner.Status{State: types.RunRunning}, nil
+}
+
+// errNoEgress is an agent's connection refused: with its proxy gone it has no route out.
+var errNoEgress = errors.New("no route: the sandbox has no proxy")
+
+// agentEgress is the agent dialling out through its proxy.
+func (r *folderSandboxRunner) agentEgress() error {
+	if r.proxyStopped.Load() {
+		return errNoEgress
+	}
+	return nil
+}
+
+// blockingGet is a sandbox's file reads where the read of block waits for release. A pass's
+// sftp-server is its own process, so a pass that ends with a file open leaves that file whole for
+// the next: the read hides the in-memory file's TransferError, which would poison it for good.
+type blockingGet struct {
+	sftp.FileReader
+	block   string
+	release <-chan struct{}
+}
+
+func (b blockingGet) Fileread(r *sftp.Request) (io.ReaderAt, error) {
+	if path.Base(r.Filepath) == b.block {
+		<-b.release
+	}
+	ra, err := b.FileReader.Fileread(r)
+	return struct{ io.ReaderAt }{ra}, err
 }
 
 func (r *folderSandboxRunner) ExecStream(_ context.Context, _ string, spec runner.ExecSpec) (*runner.ExecSession, error) {
+	if r.ended {
+		return nil, errors.New("container is not running")
+	}
+	if slices.Equal(spec.Argv, keptAgentKill) {
+		if r.killErr != nil {
+			return nil, r.killErr
+		}
+		r.agentKilled.Store(true)
+		return &runner.ExecSession{
+			Stdin: nopWriteCloser{io.Discard}, Stdout: strings.NewReader(""), Stderr: strings.NewReader(""),
+			Wait: func() (int, error) { return 0, nil }, Close: func() error { return nil },
+		}, nil
+	}
+	if slices.Contains(spec.Argv, "-d") && r.onPass != nil {
+		r.onPass()
+	}
 	if r.hang {
 		stdout, quiet := io.Pipe()
 		return &runner.ExecSession{
@@ -203,22 +294,34 @@ func (r *folderSandboxRunner) ExecStream(_ context.Context, _ string, spec runne
 	}
 	toServer, stdin := io.Pipe()
 	stdout, fromServer := io.Pipe()
+	files, release := r.files, make(chan struct{})
+	files.FileGet = blockingGet{FileReader: r.files.FileGet, block: r.block, release: release}
 	srv := sftp.NewRequestServer(struct {
 		io.Reader
 		io.WriteCloser
-	}{toServer, fromServer}, r.files, sftp.WithStartDirectory(dir))
+	}{toServer, fromServer}, files, sftp.WithStartDirectory(dir))
 	done := make(chan struct{})
 	go func() { _ = srv.Serve(); _ = fromServer.Close(); close(done) }()
+	var closed sync.Once
 	return &runner.ExecSession{
 		Stdin: stdin, Stdout: stdout, Stderr: strings.NewReader(""),
-		Wait:  func() (int, error) { <-done; return 0, nil },
-		Close: func() error { _ = stdin.Close(); _ = srv.Close(); return nil },
+		Wait: func() (int, error) { <-done; return 0, nil },
+		Close: func() error {
+			closed.Do(func() { close(release) })
+			_ = stdin.Close()
+			_ = srv.Close()
+			return nil
+		},
 	}, nil
 }
 
+// StopSandbox fails on a done ctx, as the Docker client does.
 func (r *folderSandboxRunner) StopSandbox(ctx context.Context, ref string) error {
 	if r.stopped != nil {
 		r.stopped()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	return r.execCountRunner.StopSandbox(ctx, ref)
 }
@@ -246,6 +349,7 @@ func computerFolderFixture(t *testing.T, direction string) (*Server, *computerFo
 	row := types.Runner{ID: uuid.New(), Owner: run.CreatedBy, Name: "laptop", State: types.RunnerClaimed}
 	id := row.ID
 	ls.folder = &types.RunLocalFolder{Name: "my-app", RemoteDir: "/home/agent/work", RunnerID: &id, Path: app, Direction: direction}
+	ls.run.AgentExecID = "agent-exec"
 	cs := &computerFolderStore{localFolderStore: ls, runner: row}
 	s.cfg.Store = cs
 	s.cfg.ComputerFolders = true
@@ -413,6 +517,303 @@ func TestSeedComputerFolder_APassThatTimesOutIsStillRecorded(t *testing.T) {
 	ev := findAudit(audit.snapshot(), run.ID, "run.folder.transfer", "failure")
 	if ev == nil || !strings.Contains(string(ev.Data), `"direction":"seed"`) {
 		t.Fatalf("the timed-out pass is not audited: %v", ev)
+	}
+}
+
+// hangingFolderBack is a "both" run whose folder seeded and whose pass back never finishes.
+func hangingFolderBack(t *testing.T) (*Server, *computerFolderStore, *recRecorder, types.AgentRun, *folderSandboxRunner) {
+	t.Helper()
+	s, cs, audit, run, sb, _ := computerFolderFixture(t, types.ComputerFolderBoth)
+	if !s.holdForLocalFolder(context.Background(), run, "sbx") {
+		t.Fatal(cs.FailureHint())
+	}
+	sb.hang = true
+	return s, cs, audit, run, sb
+}
+
+// folderStatus is the folder's pass records as the store holds them.
+func (s *computerFolderStore) folderStatus() types.RunLocalFolderStatus {
+	s.smu.Lock()
+	defer s.smu.Unlock()
+	return s.status
+}
+
+// assertFolderBackTornDown checks the sandbox was stopped and the pass back recorded, with want
+// in its error, and audited.
+func assertFolderBackTornDown(t *testing.T, cs *computerFolderStore, audit *recRecorder, run types.AgentRun, sb *folderSandboxRunner, want string) {
+	t.Helper()
+	if n := sb.stopCount(); n != 1 {
+		t.Errorf("StopSandbox succeeded %d times, want 1", n)
+	}
+	if ev := findAudit(audit.snapshot(), run.ID, "run.complete", "failure"); ev != nil {
+		t.Errorf("the teardown failed: %s", ev.Data)
+	}
+	st := cs.folderStatus()
+	if st.Back == nil || !strings.Contains(st.Back.Error, want) || st.Resume != nil {
+		t.Errorf("back record = %+v, resume = %+v; want the pass's error naming %q and no resume", st.Back, st.Resume, want)
+	}
+	if ev := findAuditData(audit.snapshot(), run.ID, "run.folder.transfer", want); ev == nil || ev.Outcome != "failure" || !strings.Contains(string(ev.Data), `"direction":"back"`) {
+		t.Errorf("the pass back is not audited with %q: %v", want, ev)
+	}
+}
+
+// assertFolderBackKept checks a finalize kept the sandbox for a resume, with want as its resume.
+func assertFolderBackKept(t *testing.T, err error, cs *computerFolderStore, sb *folderSandboxRunner, want types.FolderResume) {
+	t.Helper()
+	if !errors.Is(err, errComputerFolderResumes) {
+		t.Errorf("finalize = %v, want the kept sandbox's errComputerFolderResumes", err)
+	}
+	if n := sb.stopCount(); n != 0 {
+		t.Errorf("StopSandbox succeeded %d times, want the sandbox kept", n)
+	}
+	st := cs.folderStatus()
+	if st.Resume == nil || *st.Resume != want || st.Back == nil || !strings.Contains(st.Back.Error, "a later sweep resumes the sync") {
+		t.Errorf("resume = %+v, back = %+v; want %+v and the cut pass's error", st.Resume, st.Back, want)
+	}
+	// Kept past the run's end, the sandbox runs only the pass back: no agent, no egress.
+	if agent, _ := sb.AgentStatus(context.Background(), "sbx", "agent-exec"); agent.State == types.RunRunning {
+		t.Error("the kept sandbox's agent is still running")
+	}
+	if err := sb.agentEgress(); !errors.Is(err, errNoEgress) {
+		t.Errorf("the kept sandbox's agent egress = %v, want it refused", err)
+	}
+}
+
+// boundedFinalize is a finalize whose caller allows its pass back stop seconds.
+func boundedFinalize(t *testing.T, s *Server, run types.AgentRun, stop time.Duration) (time.Duration, error) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), runTeardownBudget+computerFolderAccountTime+stop)
+	defer cancel()
+	start := time.Now()
+	err := s.finalizeRunEffects(ctx, run.ID, "sbx", "run.complete", nil, false, false)
+	return time.Since(start), err
+}
+
+// A pass back that would outlast the caller's deadline is cut before it, inside the caller's
+// bound. The first cut that saves nothing keeps the sandbox for a resume; the second in a row
+// stops it, and the record and the audit say so (#3466).
+func TestFinalizeRunEffects_TwoCutPassesThatSaveNothingStopTheSandbox(t *testing.T) {
+	s, cs, audit, run, sb := hangingFolderBack(t)
+	took, err := boundedFinalize(t, s, run, 300*time.Millisecond)
+	if took >= runTeardownBudget {
+		t.Errorf("finalize took %s: the pass back used the teardown's time", took)
+	}
+	assertFolderBackKept(t, err, cs, sb, types.FolderResume{Stalled: 1})
+	if _, err := boundedFinalize(t, s, run, 300*time.Millisecond); err != nil {
+		t.Errorf("finalize: %v", err)
+	}
+	assertFolderBackTornDown(t, cs, audit, run, sb, "2 passes in a row brought nothing back, so the sandbox was stopped")
+}
+
+// A pass back cut short after it saved a file keeps the sandbox, and the next pass starts after
+// that file. Once it saves nothing twice in a row, the sandbox is stopped with the count of the
+// changed files it never brought back (#3466).
+func TestFinalizeRunEffects_ACutPassThatSavedFilesKeepsTheSandbox(t *testing.T) {
+	s, cs, audit, run, sb, app := computerFolderFixture(t, types.ComputerFolderBoth)
+	if !s.holdForLocalFolder(context.Background(), run, "sbx") {
+		t.Fatal(cs.FailureHint())
+	}
+	agentWrites(t, sb, "a.txt", "z.txt")
+	sb.block = "z.txt"
+	_, err := boundedFinalize(t, s, run, time.Second)
+	assertFolderBackKept(t, err, cs, sb, types.FolderResume{Unsynced: 1})
+	if b, _ := os.ReadFile(filepath.Join(app, "a.txt")); string(b) != "a.txt by the agent" {
+		t.Errorf("a.txt on the computer = %q, want the agent's", b)
+	}
+	if back := cs.folderStatus().Back; back == nil || back.Files != 1 {
+		t.Errorf("back record = %+v, want the one file the cut pass saved", back)
+	}
+	_, err = boundedFinalize(t, s, run, time.Second)
+	assertFolderBackKept(t, err, cs, sb, types.FolderResume{Stalled: 1, Unsynced: 1})
+	if _, err := boundedFinalize(t, s, run, time.Second); err != nil {
+		t.Errorf("finalize: %v", err)
+	}
+	assertFolderBackTornDown(t, cs, audit, run, sb, "changed files not brought back: 1")
+}
+
+// A pass back that completes after a cut one stops the sandbox, having brought back only what
+// the cut pass had not.
+func TestFinalizeRunEffects_APassThatCompletesAfterACutOneStopsTheSandbox(t *testing.T) {
+	s, cs, _, run, sb, app := computerFolderFixture(t, types.ComputerFolderBoth)
+	if !s.holdForLocalFolder(context.Background(), run, "sbx") {
+		t.Fatal(cs.FailureHint())
+	}
+	agentWrites(t, sb, "a.txt", "z.txt")
+	sb.block = "z.txt"
+	_, err := boundedFinalize(t, s, run, time.Second)
+	assertFolderBackKept(t, err, cs, sb, types.FolderResume{Unsynced: 1})
+	sb.block = ""
+	if err := s.finalizeRunEffects(context.Background(), run.ID, "sbx", "run.complete", nil, false, false); err != nil {
+		t.Errorf("finalize: %v", err)
+	}
+	if n := sb.stopCount(); n != 1 {
+		t.Errorf("StopSandbox succeeded %d times, want 1", n)
+	}
+	st := cs.folderStatus()
+	if st.Resume != nil || st.Back == nil || st.Back.Error != "" || st.Back.Files != 1 {
+		t.Errorf("resume = %+v, back = %+v; want the completed pass with z.txt alone and no resume", st.Resume, st.Back)
+	}
+	if b, _ := os.ReadFile(filepath.Join(app, "z.txt")); string(b) != "z.txt by the agent" {
+		t.Errorf("z.txt on the computer = %q, want the agent's", b)
+	}
+}
+
+// A sandbox that cannot be kept with its agent stopped and no egress is stopped after a cut pass
+// back that saved files, and the record says why and what it leaves behind: one on a runner, and
+// one whose substrate cannot stop its proxy alone (Kubernetes in server mode) (#3466).
+func TestFinalizeRunEffects_ASandboxThatCannotBeQuiescedIsStoppedWithTheRecord(t *testing.T) {
+	cases := map[string]struct {
+		setup func(*localFolderStore, *folderSandboxRunner)
+		want  string
+	}{
+		"on a runner": {func(ls *localFolderStore, _ *folderSandboxRunner) {
+			id := uuid.New()
+			ls.run.RunnerID = &id
+		}, "a sandbox on a runner is not kept"},
+		"its proxy cannot stop alone": {func(_ *localFolderStore, sb *folderSandboxRunner) {
+			sb.proxyErr = runner.ErrEndUnsupported
+		}, "its substrate cannot stop its proxy alone"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			s, cs, audit, run, sb, _ := computerFolderFixture(t, types.ComputerFolderBoth)
+			if !s.holdForLocalFolder(context.Background(), run, "sbx") {
+				t.Fatal(cs.FailureHint())
+			}
+			tc.setup(cs.localFolderStore, sb)
+			agentWrites(t, sb, "a.txt", "z.txt")
+			sb.block = "z.txt"
+			if _, err := boundedFinalize(t, s, run, time.Second); err != nil {
+				t.Errorf("finalize: %v", err)
+			}
+			assertFolderBackTornDown(t, cs, audit, run, sb, tc.want)
+			assertFolderBackTornDown(t, cs, audit, run, sb, "it cannot be kept with its agent stopped and no egress")
+			assertFolderBackTornDown(t, cs, audit, run, sb, "changed files not brought back: 1")
+		})
+	}
+}
+
+// At a lease end the first pass back starts with the agent already stopped and no egress, and
+// still brings the agent's work home (#3466).
+func TestFinalizeRunEffects_TheFirstPassBackRunsWithTheAgentStoppedAndNoEgress(t *testing.T) {
+	s, cs, _, run, sb, app := computerFolderFixture(t, types.ComputerFolderBoth)
+	if !s.holdForLocalFolder(context.Background(), run, "sbx") {
+		t.Fatal(cs.FailureHint())
+	}
+	agentWrites(t, sb, "a.txt")
+	var running atomic.Bool
+	var egress atomic.Value
+	sb.onPass = func() {
+		agent, _ := sb.AgentStatus(context.Background(), "sbx", "agent-exec")
+		running.Store(agent.State == types.RunRunning)
+		egress.Store(fmt.Sprint(sb.agentEgress()))
+	}
+	if err := s.finalizeRunEffects(context.Background(), run.ID, "sbx", "run.stop", nil, false, true); err != nil {
+		t.Errorf("finalize: %v", err)
+	}
+	if running.Load() || egress.Load() != errNoEgress.Error() {
+		t.Errorf("as the pass back started: agent running %v, agent egress %v; want stopped and refused", running.Load(), egress.Load())
+	}
+	if b, _ := os.ReadFile(filepath.Join(app, "a.txt")); string(b) != "a.txt by the agent" || sb.stopCount() != 1 {
+		t.Errorf("a.txt on the computer = %q, stops = %d; want the agent's file and the sandbox stopped", b, sb.stopCount())
+	}
+}
+
+// A sandbox whose substrate can stop its agent and egress, but where that fails, runs no pass
+// back: it is stopped, and the record says why (#3466). An exec-less sandbox, whose agent is its
+// main process, is refused before any kill, and one already stopped is named as that.
+func TestFinalizeRunEffects_ASandboxWhoseAgentCannotBeStoppedRunsNoPass(t *testing.T) {
+	cases := map[string]struct {
+		setup func(*localFolderStore, *folderSandboxRunner)
+		want  string
+	}{
+		"its proxy is wedged": {func(_ *localFolderStore, sb *folderSandboxRunner) {
+			sb.proxyErr = errors.New("the proxy is wedged")
+		}, "no pass ran; its agent and egress could not be stopped first: its proxy did not stop: the proxy is wedged"},
+		"its proxy stop fails closed": {func(_ *localFolderStore, sb *folderSandboxRunner) {
+			sb.proxyErr, sb.proxyEnds = errors.New("the proxy is wedged"), true
+		}, "no pass ran; its agent and egress could not be stopped first: its proxy did not stop: the proxy is wedged"},
+		"its agent is the main process": {func(ls *localFolderStore, _ *folderSandboxRunner) {
+			ls.run.AgentExecID = runner.MainProcessExecID
+		}, "no pass ran; its agent and egress could not be stopped first: its agent is the sandbox's main process, which cannot be stopped without stopping the sandbox"},
+		"its kill cannot reach it": {func(_ *localFolderStore, sb *folderSandboxRunner) {
+			sb.killErr = errors.New("exec refused")
+		}, "no pass ran; its agent and egress could not be stopped first: its agent could not be stopped: exec refused"},
+		"its agent outlives the kill": {func(_ *localFolderStore, sb *folderSandboxRunner) {
+			sb.agentLives = true
+		}, "no pass ran; its agent and egress could not be stopped first: its agent still reads as running,"},
+		// A lease end's EndSandbox stopped it: its proxy stop succeeds, and the kill's exec fails.
+		"it had already stopped": {func(_ *localFolderStore, sb *folderSandboxRunner) {
+			sb.ended = true
+		}, "no pass ran; the sandbox had already stopped, with its changes not brought back yet, uncounted"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			s, cs, audit, run, sb, _ := computerFolderFixture(t, types.ComputerFolderBoth)
+			if !s.holdForLocalFolder(context.Background(), run, "sbx") {
+				t.Fatal(cs.FailureHint())
+			}
+			tc.setup(cs.localFolderStore, sb)
+			var passed atomic.Bool
+			sb.onPass = func() { passed.Store(true) }
+			if err := s.finalizeRunEffects(context.Background(), run.ID, "sbx", "run.complete", nil, false, false); err != nil {
+				t.Errorf("finalize: %v", err)
+			}
+			if passed.Load() {
+				t.Error("a pass back ran with the agent and its egress not stopped")
+			}
+			if name == "its agent is the main process" && sb.agentKilled.Load() {
+				t.Error("an exec-less sandbox's agent kill ran; want it refused before any kill")
+			}
+			assertFolderBackTornDown(t, cs, audit, run, sb, tc.want)
+			assertFolderBackTornDown(t, cs, audit, run, sb, "its changes not brought back yet, uncounted")
+			if st := cs.folderStatus(); st.Back != nil && sb.proxyErr != nil && strings.Contains(st.Back.Error, "already stopped") {
+				t.Errorf("back record = %q; want the proxy's failure, not an already stopped sandbox", st.Back.Error)
+			}
+		})
+	}
+}
+
+// agentWrites has the agent write each name, new, in the sandbox's folder.
+func agentWrites(t *testing.T, sb *folderSandboxRunner, names ...string) {
+	t.Helper()
+	c := sb.client(t)
+	for _, name := range names {
+		f, err := c.Create("/home/agent/work/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = f.Write([]byte(name + " by the agent"))
+		_ = f.Close()
+	}
+}
+
+// A caller's ctx cancelled before finalize leaves no time to start the pass, which is recorded,
+// and the sandbox is stopped; one cancelled during a second cut pass in a row that saves nothing
+// stops it too. The pass's outcome is recorded and audited, and the caller hears its ctx ended.
+func TestFinalizeRunEffects_TeardownRunsAfterTheCallersCtxIsCancelled(t *testing.T) {
+	cases := map[string]struct {
+		after time.Duration
+		want  string
+	}{
+		"before finalize":      {0, "no time was left for the sync"},
+		"during the pass back": {200 * time.Millisecond, "2 passes in a row brought nothing back"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			s, cs, audit, run, sb := hangingFolderBack(t)
+			cs.status.Resume = &types.FolderResume{Stalled: 1}
+			ctx, cancel := context.WithCancel(context.Background())
+			if tc.after == 0 {
+				cancel()
+			} else {
+				time.AfterFunc(tc.after, cancel)
+			}
+			if err := s.finalizeRunEffects(ctx, run.ID, "sbx", "run.complete", nil, false, false); !errors.Is(err, context.Canceled) {
+				t.Errorf("finalize = %v, want the caller's cancel", err)
+			}
+			assertFolderBackTornDown(t, cs, audit, run, sb, tc.want)
+		})
 	}
 }
 

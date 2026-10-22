@@ -127,6 +127,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
   fetching the console's packages each get three tries with a time limit, so an unreachable registry fails the build
   in about ten minutes, and a package fetch that stalls fails it in under twenty. The lockfile is still enforced.
 
+### Fixed
+
+- A computer folder's pass back no longer uses up the time a run's teardown has (#3466). On Docker, every pass back
+  runs with the agent stopped and no egress: only the folder pass back runs. If the agent cannot be stopped first, no
+  pass runs, and the sandbox is stopped with the record. That includes an exec-less (krun) sandbox, whose agent is the
+  sandbox itself, and one a lease end has already stopped. A pass that completes, or that has no time to start, is
+  followed by the sandbox's stop. A pass that is cut short keeps the sandbox on Docker, and a later sweep resumes it
+  from what the folder's runner saved. On a runner, or on Kubernetes, the first pass runs with the agent still up, for
+  at most the pass's 2 minutes, and a cut pass stops the sandbox. After two cut passes in a row that save nothing, the
+  sandbox is stopped, and the pass's record and its `run.folder.transfer` audit name how many changed files were not
+  brought back. `wardyn sync` also saves what a cut pass finished, so its next pass starts after it.
+
 ## [0.9.8] — 2026-10-21
 
 ### Before you upgrade

@@ -52,6 +52,9 @@ type Report struct {
 	Ignored  int   `json:"ignored"`
 	BytesOut int64 `json:"bytes_to_sandbox"`
 	BytesIn  int64 `json:"bytes_from_sandbox"`
+	// Unsynced is set on a --pull pass that was cut short: the sandbox's changed files it had not
+	// brought back yet. The folder runner reports it; `wardyn sync` prints no report for such a pass.
+	Unsynced int `json:"unsynced,omitempty"`
 	seenSet  map[string]bool
 }
 
@@ -255,7 +258,9 @@ type passView struct {
 }
 
 // pass syncs once: it lists both sides, then pushes, and under --pull pulls.
-// Nothing is ever deleted on either side.
+// Nothing is ever deleted on either side. A pass that ends early once both
+// sides are listed still saves what it finished, so the next pass resumes from
+// there, and returns its report with the error (cut).
 func (sy *Syncer) Pass(ctx context.Context) (*Report, error) {
 	rep := NewReport()
 	sy.ig = newSyncIgnore(sy.Opts.OrgDeny)
@@ -287,13 +292,13 @@ func (sy *Syncer) Pass(ctx context.Context) (*Report, error) {
 	}
 	renamed, err := sy.renames(ctx, rels, v, eligible, rep)
 	if err != nil {
-		return nil, err
+		return sy.cut(rep, rels, v, err)
 	}
 
 	pulled := int64(0)
-	for _, rel := range rels {
+	for i, rel := range rels {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return sy.cut(rep, rels[i:], v, err)
 		}
 		switch {
 		case renamed[rel]:
@@ -302,12 +307,12 @@ func (sy *Syncer) Pass(ctx context.Context) (*Report, error) {
 		case syncCollides(remote.blocked, rel):
 		default:
 			if err := sy.decide(ctx, rel, v, rep, &pulled); err != nil {
-				return nil, err
+				return sy.cut(rep, rels[i:], v, err)
 			}
 		}
 	}
 	if err := sy.deleteLocal(ctx, v, rep); err != nil {
-		return nil, err
+		return sy.cut(rep, nil, v, err)
 	}
 	// A path both sides have lost needs no record.
 	for rel := range sy.State.Files {
@@ -319,6 +324,25 @@ func (sy *Syncer) Pass(ctx context.Context) (*Report, error) {
 		return nil, fmt.Errorf("save sync state: %w", err)
 	}
 	return rep, nil
+}
+
+// cut ends a pass that stopped at left, the paths it had not finished. Every
+// path it finished is already in State, which records a path only once both
+// sides hold it, so State is saved and the report says what was done. Under
+// --pull it also counts the sandbox's changes among left.
+func (sy *Syncer) cut(rep *Report, left []string, v *passView, err error) (*Report, error) {
+	if serr := sy.State.Save(sy.StateFile); serr != nil {
+		return nil, errors.Join(err, fmt.Errorf("save sync state: %w", serr))
+	}
+	if sy.Opts.Pull {
+		for _, rel := range left {
+			r, onRemote := v.remote.files[rel]
+			if seen, known := sy.State.Files[rel]; onRemote && (!known || remoteSide(r) != seen.Remote) {
+				rep.Unsynced++
+			}
+		}
+	}
+	return rep, err
 }
 
 func syncCollides(collide map[string]bool, rel string) bool {

@@ -4,10 +4,12 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -23,27 +25,36 @@ func (s *Server) finalizeRunEffects(ctx context.Context, runID uuid.UUID, ref, a
 		s.finishRunOutput(ctx, runID)
 	}
 	// A computer folder's changes come back while the sandbox still holds them (run_computer_folder.go).
-	s.bringComputerFolderBack(ctx, runID, ref)
+	// A pass cut short can keep the sandbox for a resume, its agent stopped and its egress closed:
+	// it is then not stopped, its ref stays, and the caller hears errComputerFolderResumes.
+	keep := s.bringComputerFolderBack(ctx, runID, ref)
+	if keep {
+		errs = append(errs, errComputerFolderResumes)
+	}
+	// Teardown and the writes after it run on a ctx of their own, which the steps before it
+	// cannot use up or cancel (#3466).
+	tctx, cancel := teardownCtx(ctx)
+	defer cancel()
 	teardownOK := false
-	if ref != "" && s.cfg.Runner != nil {
-		if serr := s.cfg.Runner.StopSandbox(ctx, ref); serr != nil {
+	if ref != "" && s.cfg.Runner != nil && !keep {
+		if serr := s.cfg.Runner.StopSandbox(tctx, ref); serr != nil {
 			errs = append(errs, serr)
 			td := make(map[string]any, len(data)+1)
 			for k, v := range data {
 				td[k] = v
 			}
 			td["teardown_error"] = serr.Error()
-			s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", action,
+			s.recordAudit(tctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", action,
 				ref, "failure", mustJSON(td)))
 		} else {
 			teardownOK = true
 		}
 	}
 	if finishAfterStop {
-		s.FinishRunOutput(ctx, runID)
+		s.FinishRunOutput(tctx, runID)
 	}
-	s.reconcileWorkspaceRun(ctx, runID)
-	s.reconcileRecordRun(ctx, runID)
+	s.reconcileWorkspaceRun(tctx, runID)
+	s.reconcileRecordRun(tctx, runID)
 	// Clear the ref LAST, and only when this call's own StopSandbox succeeded.
 	// LAST because reconcileRecordRun above still reads run.SandboxRef to tell
 	// "the sandbox never started" from "capture was empty". Success-only because
@@ -54,9 +65,30 @@ func (s *Server) finalizeRunEffects(ctx context.Context, runID uuid.UUID, ref, a
 	// deliberately ignored: it degrades to the pre-clear behavior the boot
 	// sweep already retries.
 	if teardownOK && s.cfg.Store != nil {
-		errs = append(errs, s.clearSandboxRef(ctx, runID))
+		errs = append(errs, s.clearSandboxRef(tctx, runID))
 	}
-	return errors.Join(append(errs, ctx.Err())...)
+	return errors.Join(append(errs, cmp.Or(ctx.Err(), tctx.Err()))...)
+}
+
+// errComputerFolderResumes is finalizeRunEffects keeping a sandbox for its computer folder's pass
+// back to resume (bringComputerFolderBack).
+var errComputerFolderResumes = errors.New("the sandbox is kept: its computer folder's sync back resumes on a later sweep")
+
+// runTeardownBudget is the time a run's teardown keeps for itself: StopSandbox, whose graceful
+// stop alone is 10 s on Docker (the driver's stopTimeout), and the audit and status writes after
+// it. The folder pass before teardown ends this long before the caller's deadline
+// (bringComputerFolderBack).
+const runTeardownBudget = 15 * time.Second
+
+// teardownCtx is ctx's values with none of its cancellation, on a deadline of its own: ctx's
+// deadline or runTeardownBudget from now, whichever is later. A ctx with no deadline gets
+// reconcileFinalizeTimeout, the bound the sweeps give the whole finalize tail.
+func teardownCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	d := reconcileFinalizeTimeout
+	if dl, ok := ctx.Deadline(); ok {
+		d = max(time.Until(dl), runTeardownBudget)
+	}
+	return context.WithTimeout(context.WithoutCancel(ctx), d)
 }
 
 // clearSandboxRef clears a terminal run's ref. On Postgres a runner run's

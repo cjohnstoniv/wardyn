@@ -328,12 +328,16 @@ func (s *Server) run(stream duplex, dir, remote string, st *foldersync.State, st
 		Remote: remote, Pull: args.Pull, MaxPullBytes: foldersync.DefaultMaxPullBytes, OrgDeny: args.Deny,
 		Credential: credentialPath,
 	}}
+	// A pass cut short (its stream closed) still reports what it finished and saved in its state.
 	rep, err := sy.Pass(ctx)
-	if err != nil {
+	if rep == nil {
 		return failed(err)
 	}
 	out := runnerwire.FolderPass{Pushed: len(rep.Pushed), Pulled: len(rep.Pulled), Conflicts: len(rep.Conflicts),
-		Ignored: rep.Ignored, BytesOut: rep.BytesOut, BytesIn: rep.BytesIn, Refused: []runnerwire.FolderRefusal{}}
+		Ignored: rep.Ignored, BytesOut: rep.BytesOut, BytesIn: rep.BytesIn, Unsynced: rep.Unsynced, Refused: []runnerwire.FolderRefusal{}}
+	if err != nil {
+		out.Error = foldersync.Shown(err.Error())
+	}
 	for _, r := range rep.Refused[:min(len(rep.Refused), runnerwire.MaxFolderRefusals)] {
 		out.Refused = append(out.Refused, runnerwire.FolderRefusal{Path: foldersync.Shown(r.Path), Reason: r.Reason})
 	}
