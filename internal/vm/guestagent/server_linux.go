@@ -33,6 +33,9 @@ type Server struct {
 	OutDir string
 	// Mount mounts one virtiofs share; nil refuses an Init that names one.
 	Mount func(Mount) error
+	// MarkerDir holds the marker of this boot's Init. In a guest it is /run, a tmpfs: the marker
+	// outlives an agent restart and a reboot clears it.
+	MarkerDir string
 
 	mu      sync.Mutex
 	inited  bool
@@ -120,6 +123,12 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "the sandbox is already initialised", http.StatusConflict)
 		return
 	}
+	marker, err := os.OpenFile(filepath.Join(s.MarkerDir, "wardyn-guest-init"), os.O_WRONLY|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0o600)
+	if err != nil {
+		http.Error(w, "the sandbox is already initialised", http.StatusConflict)
+		return
+	}
+	_ = marker.Close()
 	for _, f := range in.Files {
 		if err := s.writeFile(f); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)

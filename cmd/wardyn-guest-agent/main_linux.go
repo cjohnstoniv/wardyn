@@ -54,7 +54,7 @@ func run(port, out string) error {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	srv := &guestagent.Server{Version: version.String(), Cred: cred, Home: guestagent.AgentHome, OutDir: out, Mount: guestagent.MountVirtiofs}
+	srv := &guestagent.Server{Version: version.String(), Cred: cred, Home: guestagent.AgentHome, OutDir: out, Mount: guestagent.MountVirtiofs, MarkerDir: "/run"}
 	slog.Info("wardyn-guest-agent serving", "port", port, "version", version.String())
 	return guestagent.ServePort(ctx, port, srv.Handler())
 }
