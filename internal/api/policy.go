@@ -642,11 +642,12 @@ func validateEligibleGrantMode(i int, g types.GrantSpec, strict bool) error {
 			return err
 		}
 	}
-	// An ssh_key grant materializes a RESIDENT private key (see GrantSSHKey).
+	// An ssh_key grant's private key is held by the run's proxy, whose ssh agent signs
+	// the clone's sign-in (see GrantSSHKey); the sandbox gets no key file.
 	// Require host + key_secret_ref, reject a reserved platform-internal secret
 	// as either the key or the known_hosts ref, and require the host to be one
 	// of the SSH-over-443 providers Wardyn supports (github.com / dev.azure.com)
-	// so the run never asks for a resident key for an unroutable host. Fail
+	// so the run never asks for a key for an unroutable host. Fail
 	// closed at WRITE time; the broker sink (mintSSHKey) re-checks the secrets.
 	//
 	// nameSinkReservedSecret, not sinkReservedSecret (#1048) — same reasoning

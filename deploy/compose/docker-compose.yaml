@@ -343,10 +343,10 @@ services:
       WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS: "${WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS:-}"
       WARDYN_CREDENTIAL_REAUTH_TIMEOUT: "${WARDYN_CREDENTIAL_REAUTH_TIMEOUT:-}"
       WARDYN_GIT_APPROVAL_TIMEOUT: "${WARDYN_GIT_APPROVAL_TIMEOUT:-}"
-      # Phase B kill switch (docs/OPERATIONS.md "Turning the lane off"): "off"
-      # restores the pre-0.7.6 behaviour for NEW dispatches only. Empty
-      # default lands on flagEnv's own compiled default ("on") like every
-      # other empty passthrough above.
+      # AWS sign-in lane: "on" or empty. "off" was removed in 0.10.0 and
+      # refuses boot (docs/OPERATIONS.md "Removed in 0.10.0"). Empty lands on
+      # flagEnv's own compiled default ("on") like every other empty
+      # passthrough above.
       WARDYN_AWS_SSO_PROXY_INJECT: "${WARDYN_AWS_SSO_PROXY_INJECT:-}"
       # Every run's proxy reaches wardynd on its internal TLS listener
       # (WARDYN_INTERNAL_LISTEN, :8443 — never published to the host), pinned

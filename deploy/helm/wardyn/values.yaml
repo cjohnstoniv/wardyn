@@ -569,10 +569,10 @@ daemonProxySecret:
   mountPath: /etc/wardyn/daemon-proxy-secret
   defaultMode: 0440
 
-# Phase B kill switch (WARDYN_AWS_SSO_PROXY_INJECT): "on" (proxy-side AWS SSO
-# session injection, the daemon's own default) or "off" (the pre-0.7.6
-# behaviour — the SSO token is written into the sandbox). See
-# docs/OPERATIONS.md "Turning the lane off". Empty (default) => no named env
+# AWS sign-in lane (WARDYN_AWS_SSO_PROXY_INJECT): "on" (proxy-side AWS SSO
+# session injection, the daemon's own default) or empty. "off" was removed in
+# 0.10.0 and wardynd refuses to boot on it; see docs/OPERATIONS.md "Removed in
+# 0.10.0". Empty (default) => no named env
 # entry rendered, so wardynd's own compiled default ("on") applies — byte-
 # identical to today. Wires WARDYN_AWS_SSO_PROXY_INJECT unless
 # env.WARDYN_AWS_SSO_PROXY_INJECT is already set (which always wins) —
