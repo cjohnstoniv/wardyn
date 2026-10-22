@@ -84,7 +84,9 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 		return runnerRuntime{}, errors.Join(err, sink.Close())
 	}
 	extras := sink.extras(sub, ev)
-	extras.report = connectReport{log: opts.offline, relay: newRelayWatch(relayReprobe(relay), opts.offline.secretsOrNil())}
+	watch := newRelayWatch(relayReprobe(relay), opts.offline.secretsOrNil())
+	watch.onChange = opts.offline.relayChanged
+	extras.report = connectReport{log: opts.offline, relay: watch}
 	// The runtime first: its startup containment pass stops lapsed runs even when the check below fails.
 	rt, err := localRunnerRuntime(ctx, identity, stateDir, sub, docker.SandboxRef, relay, dockerCapacity, extras)
 	if err != nil {
@@ -99,6 +101,7 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 		return runnerRuntime{}, errors.Join(fmt.Errorf("decision sink: %w", err), rt.close())
 	}
 	relay.use(pair)
+	opts.offline.relayChanged(types.RelayReachable)
 	slog.InfoContext(ctx, "run relay reachable", "engine", eng.desc, "listen", pair.bind, "target", pair.target)
 	return rt, nil
 }

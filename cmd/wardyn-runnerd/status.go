@@ -18,16 +18,24 @@ import (
 // serve is the only writer.
 const statusFile = "status.json"
 
-// runnerStatus is what statusFile holds: the link state, when it began, and the last error with its
-// time. It holds no token, key or proxy credential: the error text is cleaned of any user name and
-// password (cleanStatusError), and nothing else comes from the environment.
+// runnerStatus is what statusFile holds: the link state, when it began, the last error with its
+// time, the stage the last failed connect or start stopped at and whether the run relay answers. It
+// holds no token, key or proxy credential: the error text is cleaned of any user name and password
+// (cleanStatusError), a failure's reason is scrubbed as the offline summary's is, and nothing else
+// comes from the environment.
 type runnerStatus struct {
 	State       string     `json:"state"` // starting, connected, offline or stopped
 	PID         int        `json:"pid"`
 	Since       time.Time  `json:"since"`
 	LastError   string     `json:"last_error,omitempty"`
 	LastErrorAt *time.Time `json:"last_error_at,omitempty"`
-	UpdatedAt   time.Time  `json:"updated_at"`
+	// Stage is the doctor stage (types.RunnerStage*) of the last failed connect or start, and StageAt
+	// when. Both are empty once connected, and after a clean shutdown unless a refusal at start set them.
+	Stage   string     `json:"stage,omitempty"`
+	StageAt *time.Time `json:"stage_at,omitempty"`
+	// Relay is types.RelayReachable or types.RelayUnreachable; empty when no relay is probed.
+	Relay     string    `json:"relay,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // statusWriter keeps statusFile current. A write that fails is logged once and never stops the runner.
@@ -37,6 +45,9 @@ type statusWriter struct {
 	now    func() time.Time
 	cur    runnerStatus
 	warned bool
+	// refused is set while Stage came from a refusal at start: the process exits on one, so its own
+	// shutdown must not clear what the next start keeps until a connect succeeds.
+	refused bool
 }
 
 func newStatusWriter(stateDir string) *statusWriter {
@@ -76,16 +87,49 @@ func (w *statusWriter) linkChanged(up bool, reason string) {
 		w.cur.LastError, w.cur.LastErrorAt = cleanStatusError(reason), &at
 	}
 	if up {
+		w.cur.Stage, w.cur.StageAt, w.refused = "", nil, false
 		w.set("connected")
 	} else {
 		w.set("offline")
 	}
 }
 
-// stopped is written when serve returns.
+// failed records the stage a connect or a start stopped at, with its scrubbed reason (the offline
+// summary's), at the time the summary dates it. A refusal at start (refusal) outlives a clean shutdown.
+// A nil writer records nothing.
+func (w *statusWriter) failed(stage, reason string, at time.Time, refusal bool) {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	at = at.UTC()
+	w.cur.LastError, w.cur.LastErrorAt = reason, &at
+	w.cur.Stage, w.cur.StageAt, w.refused = stage, &at, refusal
+	w.cur.UpdatedAt = w.now()
+	w.write()
+}
+
+// relayChanged records whether the run relay answers (types.RelayReachable or types.RelayUnreachable).
+// A nil writer records nothing.
+func (w *statusWriter) relayChanged(state string) {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.cur.Relay, w.cur.UpdatedAt = state, w.now()
+	w.write()
+}
+
+// stopped is written when serve returns. A runner's own shutdown records no stage and clears the
+// one a failed connect left; a refusal at start stays.
 func (w *statusWriter) stopped() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if !w.refused {
+		w.cur.Stage, w.cur.StageAt = "", nil
+	}
 	w.set("stopped")
 }
 

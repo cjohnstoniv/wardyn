@@ -149,6 +149,10 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 			return errors.New("runner execution and durable offline handlers are unavailable")
 		}
 		opts.offline = newOfflineLog(stateDir, urlSecrets(opts.upstreamProxy))
+		// The status file from here, so a refusal at start is on record in it before serve exits.
+		status := newStatusWriter(stateDir)
+		defer status.stopped()
+		opts.offline.reportTo(status)
 		runtime, err := build(cmd.Context(), identity, stateDir, opts)
 		if err != nil {
 			opts.offline.startFailed(err)
@@ -165,8 +169,6 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 		if err != nil {
 			return err
 		}
-		status := newStatusWriter(stateDir)
-		defer status.stopped()
 		client, err := runnerwire.NewClient(runnerwire.ClientConfig{OrgURL: org, RunnerID: identity.RunnerID.String(), PrivateKey: identity.PrivateKey, Hooks: runtime.hooks, HTTPClient: httpClient, LinkChanged: status.linkChanged})
 		if err != nil {
 			return err
