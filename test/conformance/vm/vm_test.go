@@ -260,8 +260,8 @@ func TestLinuxVMSandbox(t *testing.T) {
 		})
 	}
 	t.Run("RunMarkerNotCreatable", func(t *testing.T) {
-		if code, o := run(t, d, sb.Ref, "touch /run/wardyn-guest-init && exit 3; [ -w /run ] && exit 4; exit 0"); code != 0 {
-			t.Errorf("as the agent user = %d %q: 3 created the init marker, 4 /run is writable", code, o)
+		if code, o := run(t, d, sb.Ref, "touch /run/wardyn-guest-init.probe && exit 3; [ -w /run ] && exit 4; exit 0"); code != 0 {
+			t.Errorf("as the agent user = %d %q: 3 created a file in /run, 4 /run is writable", code, o)
 		}
 	})
 
