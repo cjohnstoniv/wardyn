@@ -73,6 +73,7 @@ var ungovernedCallerCensus = map[string]struct {
 	"me.go:handleMe":                                           {5, "authz-only: what GET /me shows"},
 	"member_drives.go:memberDriveDoorRefusal":                  {1, "authz-only: a drive door the boundary holds no knob for"},
 	"membermode.go:refuseAdminViewLaunch":                      {1, "authz-only: the User view launch door"},
+	"policies.go:handleGetDefaultPolicy":                       {1, "authz-only: the unit_path of the default policy is a security admin's; a member reads the leaf's name alone"},
 	"policies.go:handleGetPolicy":                              {1, "authz-only: a policy read"},
 	"policies.go:specReadTierFor":                              {2, "authz-only: the spec read tier, what a reader is shown of a policy"},
 	"policies.go:handleListPolicies":                           {1, "authz-only: a policy read"},
