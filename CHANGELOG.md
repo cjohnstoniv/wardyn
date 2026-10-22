@@ -123,6 +123,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - A run's recorded output is no longer lost after the organisation's server restarts when the runner hears of the
   restart only after the server has begun reading that output back. Before, a run writing a lot of output at that
   moment could lose the part not yet read back.
+- Building the wardynd image no longer waits without limit on a stalled npm registry (#3472). Installing pnpm and
+  fetching the console's packages each get three tries with a time limit, so an unreachable registry fails the build
+  in about ten minutes. The lockfile is still enforced.
 
 ## [0.9.8] — 2026-10-21
 
