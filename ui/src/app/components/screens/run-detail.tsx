@@ -39,6 +39,7 @@ import { LIST_LIMIT } from "../../lib/api/core";
 import { appURL } from "../../lib/base-path";
 import { useCopyToClipboard } from "../../lib/use-copy-to-clipboard";
 import { absoluteTime, clockTime, getErrorMessage } from "../../lib/format";
+import { describeAction } from "../../lib/audit-copy";
 import { Button } from "../ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import { ActorTypeChip } from "../wardyn/primitives";
@@ -508,10 +509,11 @@ function AuditTab({
                   <ActorTypeChip type={e.actor_type} />
                 </span>
                 <span
-                  className="min-w-0 grow basis-[120px] truncate font-mono text-xs text-muted-foreground sm:w-[190px] sm:grow-0 sm:basis-auto sm:shrink-0"
+                  data-testid="run-audit-action"
+                  className="min-w-0 grow basis-[120px] truncate text-xs text-foreground sm:w-[190px] sm:grow-0 sm:basis-auto sm:shrink-0"
                   title={e.action}
                 >
-                  {e.action}
+                  {describeAction(e)}
                 </span>
                 {/* A tool call the policy's own tool_rules answered rides an
                     egress.allow/deny row whose target is the CONTROL PLANE —
@@ -525,8 +527,9 @@ function AuditTab({
                         {AUDIT.ERASED}
                       </span>
                     ) : (
+                      // #3035: the viewed run's own id says nothing the page does not.
                       <span className="min-w-0 flex-1 truncate text-xs text-foreground" title={e.target}>
-                        {e.target || "—"}
+                        {e.target === runId ? "" : e.target || "—"}
                       </span>
                     )}
                     <RuleSourceChip event={e} />
