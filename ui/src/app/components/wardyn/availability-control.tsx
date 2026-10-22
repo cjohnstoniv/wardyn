@@ -29,7 +29,6 @@ import { PendingChangeError } from "../../lib/api/core";
 import { permissions as api } from "../../lib/api/permissions";
 import { getErrorMessage } from "../../lib/format";
 import { AVAILABILITY } from "../../lib/availability-copy";
-import { COMPONENTS_ADMIN } from "./copy/components-admin";
 import { useDeferredBusy } from "../../lib/use-deferred-busy";
 import { SubmittedNote } from "../screens/governance/submitted-note";
 import { SUBJECT_LABEL } from "../screens/permissions";
@@ -243,29 +242,31 @@ export function AvailabilityDraft({
   ...family
 }: FamilyProps & { draft: AvailabilityDraftValue; onChange: (d: AvailabilityDraftValue) => void; disabled?: boolean }) {
   const typeName = useUserTypeNames();
-  const [choiceError, setChoiceError] = React.useState<string | null>(null);
+  // "Only these" picked with nobody listed: held here, never put in the draft, because the server
+  // refuses an empty Only list and a creation form writes it after the resource exists. The first
+  // Add commits the audience and Only these together (#2593).
+  const [pendingOnly, setPendingOnly] = React.useState(false);
   return (
     <AvailabilityFields
       {...family}
       restricted={draft.restricted}
+      pendingOnly={pendingOnly && !draft.restricted}
       audiences={draft.audiences}
       typeName={typeName}
       busy={disabled ? "choice" : null}
-      choiceError={choiceError}
-      // The server refuses "Only these" with nobody listed, and a creation form writes it after the
-      // resource exists, so a refused choice would leave the resource open to Everyone.
       onRestrictedChange={(restricted) => {
         if (restricted && draft.audiences.length === 0) {
-          setChoiceError(family.nobodyYet?.addFirst ?? COMPONENTS_ADMIN.ADD_FIRST);
+          setPendingOnly(true);
           return;
         }
-        setChoiceError(null);
-        onChange({ ...draft, restricted });
+        setPendingOnly(false);
+        if (restricted !== draft.restricted) onChange({ ...draft, restricted });
       }}
       onAdd={async (subject_type, subject) => {
         const listed = draft.audiences.some((a) => a.subject_type === subject_type && a.subject === subject);
-        if (!listed) onChange({ ...draft, audiences: [...draft.audiences, { subject_type, subject }] });
-        setChoiceError(null);
+        const audiences = listed ? draft.audiences : [...draft.audiences, { subject_type, subject }];
+        onChange({ ...draft, audiences, restricted: draft.restricted || pendingOnly });
+        setPendingOnly(false);
         return true;
       }}
       onRemove={(i) => onChange({ ...draft, audiences: draft.audiences.filter((_, j) => j !== i) })}
