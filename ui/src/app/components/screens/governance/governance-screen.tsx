@@ -119,8 +119,16 @@ export function GovernanceScreen() {
     api
       .getGovernance()
       .then((s) => {
-        // The console hides the Default unit until the tree screen lands: it is the deployment root, not a profile.
-        setSnap({ ...s, profiles: s.profiles.filter((p) => p.id !== DEFAULT_GOVERNANCE_UNIT_ID) });
+        // The console hides the Default unit until the tree screen lands: it is the deployment root, not a
+        // profile. A unit based on it reads as based on the deployment (no parent), as before the tree; the
+        // names keep Default for a membership that points at it.
+        setSnap({
+          ...s,
+          profiles: s.profiles
+            .filter((p) => p.id !== DEFAULT_GOVERNANCE_UNIT_ID)
+            .map((p) => (p.parent_id === DEFAULT_GOVERNANCE_UNIT_ID ? { ...p, parent_id: undefined } : p)),
+          unit_names: Object.fromEntries(s.profiles.map((p) => [p.id, p.name])),
+        });
         setStatus("ready");
       })
       .catch((e) => setStatus(loadFailStatus(e)));

@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -477,9 +478,13 @@ func (s *Server) admitGovernanceMaxDepth(w http.ResponseWriter, r *http.Request,
 		return false
 	}
 	if depth > limit {
+		sent := strconv.Itoa(limit)
+		if cfg.GovernanceMaxDepth != nil && *cfg.GovernanceMaxDepth == 0 {
+			sent = fmt.Sprintf("0 (the default, %d)", limit)
+		}
 		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigInvalid, fmt.Sprintf(
-			"invalid site config: governance_max_depth: %d is below the deepest unit path, %d deep (%s) — move or remove units first",
-			limit, depth, strings.Join(path, " > ")))
+			"invalid site config: governance_max_depth: %s is below the deepest unit path, %d deep (%s) — move or remove units first",
+			sent, depth, strings.Join(path, " > ")))
 		return false
 	}
 	return true

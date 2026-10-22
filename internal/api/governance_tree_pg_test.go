@@ -383,6 +383,36 @@ func TestUnitDepthLimit(t *testing.T) {
 	}
 }
 
+// TestUnitSaveWithNullParentStaysUnderDefault: the console shows a unit under Default as having no
+// parent, so its no-op save sends parent_id null; the write must keep Default as the parent and the unit
+// must compose byte-identically before and after.
+func TestUnitSaveWithNullParentStaysUnderDefault(t *testing.T) {
+	e := newGovEnvOn(t, throwawayPGPool(t))
+	u := treeChild(t, e, `{"name":"under-default","parent_id":"`+store.DefaultUnitID.String()+`","overlay":{"allowed_domains":["a.example"]},"overlay_limits":{"deny_interactive":true}}`)
+	before, err := e.srv.resolveUnitByID(context.Background(), u.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := e.admin(http.MethodPut, "/api/v1/governance/units/"+u.ID.String(),
+		`{"name":"under-default","parent_id":null,"overlay":{"allowed_domains":["a.example"]},"overlay_limits":{"deny_interactive":true}}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("no-op save = %d %s, want 200", w.Code, w.Body)
+	}
+	rows, err := e.pg.ListGovernanceUnits(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range rows {
+		if r.ID == u.ID && (r.ParentID == nil || *r.ParentID != store.DefaultUnitID) {
+			t.Errorf("stored parent_id after the save = %v, want %s (Default)", r.ParentID, store.DefaultUnitID)
+		}
+	}
+	after, err := e.srv.resolveUnitByID(context.Background(), u.ID)
+	if err != nil || !sameAsJSON(t, before.Ceiling, after.Ceiling) || !sameAsJSON(t, before.Limits, after.Limits) {
+		t.Errorf("composed after the save = %+v (%v), want %+v", after, err, before)
+	}
+}
+
 // TestUnitPassThrough: a pass-through child has its parent's walls exactly, and a pass-through unit
 // that names no parent is refused.
 func TestUnitPassThrough(t *testing.T) {

@@ -244,6 +244,8 @@ export interface GovernanceSnapshot {
   assignments: GovernanceMembership[];
   // The maximum unit depth in force (site_config.governance_max_depth, 16 when unset).
   max_depth?: number;
+  // Console only, never on the wire: every unit's name by id, Default included, for a membership on a unit the list hides.
+  unit_names?: Record<string, string>;
 }
 
 // The POST/PUT body. id/created_at/updated_at/created_by are never sent — the
