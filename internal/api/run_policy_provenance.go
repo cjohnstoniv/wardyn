@@ -4,6 +4,8 @@
 package api
 
 import (
+	"context"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -94,10 +96,8 @@ func canonicalKnobs(s types.RunPolicySpec) types.RunPolicySpec {
 	return s
 }
 
-// The records a resolution writes. None is locked: a lock is a layer forbidding
-// the layers below it to change a knob (lower_may_change false), and no layer
-// can lock one until per-knob locks arrive. The name is the
-// leaf profile's, never a profile it is built from.
+// The records a resolution writes. None is locked here: markLocked marks the knobs a lock above the
+// run's unit fixes. The name is the leaf profile's, never a profile it is built from.
 var (
 	memberProvenance     = policyref.Provenance{Layer: policyref.LayerMember}
 	operatorProvenance   = policyref.Provenance{Layer: policyref.LayerOperator}
@@ -123,6 +123,70 @@ func (c governanceCeiling) provenance() policyref.Provenance {
 		return policyref.Provenance{Layer: policyref.LayerUnit, Name: c.Unit.Name}
 	default:
 		return deploymentProvenance
+	}
+}
+
+// markLocked records, on each knob the boundary (in hard_limits) or a strict ancestor of the run's unit
+// lists in locked_knobs, that it is locked, named for the nearest such locker (DESIGN-TREE §4.3). It
+// is derived at every resolve and never stored on a unit; the locker's contact is added on read
+// (withLockerContacts), as every record's is. A run no ceiling binds has no locks.
+func (k knobProvenance) markLocked(c governanceCeiling) {
+	if k == nil || c.Operator {
+		return
+	}
+	held := map[string]bool{}
+	mark := func(rec policyref.Provenance, knobs []string) {
+		for _, name := range knobs {
+			if _, ok := k[name]; ok && !held[name] {
+				held[name], k[name] = true, rec
+			}
+		}
+	}
+	if c.Unit != nil && len(c.Unit.Chain) > 1 {
+		for _, l := range c.Unit.Chain[1:] {
+			mark(policyref.Provenance{Layer: policyref.LayerUnit, Name: l.Name, Locked: true}, l.Locked)
+		}
+	}
+	if c.boundary != nil && c.boundary.HardLimits() {
+		mark(policyref.Provenance{Layer: policyref.LayerBoundary, Name: boundaryLocker, Locked: true}, c.boundary.LockedKnobs)
+	}
+}
+
+// fillLockerContacts fills the contact of each locked record of k, a run's provenance as read now: a
+// unit locker's from the run's unit chain now, the boundary's from the boundary. A locker no longer on
+// the chain keeps none. Nothing more is read for a run with no locked knob.
+func (s *Server) fillLockerContacts(ctx context.Context, run types.AgentRun, k knobProvenance) {
+	if !slices.ContainsFunc(slices.Collect(maps.Values(k)), func(p policyref.Provenance) bool { return p.Locked }) {
+		return
+	}
+	var chain []unitLink
+	if p, err := s.runUnit(ctx, run); err == nil && p != nil {
+		chain = p.Chain
+	}
+	var contact *policyref.Contact
+	if b, err := s.governanceBoundary(ctx); err == nil {
+		contact = b.Contact
+	}
+	k.withLockerContacts(chain, contact)
+}
+
+// withLockerContacts sets each locked record's contact: a unit locker's from chain (leaf first; the
+// leaf itself never locks its own run), the boundary's from boundary.
+func (k knobProvenance) withLockerContacts(chain []unitLink, boundary *policyref.Contact) {
+	for name, rec := range k {
+		if !rec.Locked {
+			continue
+		}
+		rec.Contact = nil
+		switch {
+		case rec.Layer == policyref.LayerBoundary:
+			rec.Contact = nonZeroContact(boundary)
+		case rec.Layer == policyref.LayerUnit:
+			if i := slices.IndexFunc(chain, func(l unitLink) bool { return l.Name == rec.Name }); i > 0 {
+				rec.Contact = nonZeroContact(chain[i].Contact)
+			}
+		}
+		k[name] = rec
 	}
 }
 

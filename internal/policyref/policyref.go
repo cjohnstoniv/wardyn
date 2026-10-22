@@ -110,9 +110,9 @@ func AttributedTo(ref *Ref, p Provenance) *Ref {
 // the leaf profile's name, or "deployment", and never a profile it is built
 // from; a member, operator or boundary record has none. Contact is the leaf's (or
 // the deployment's policy_help), filled on read and never written to the audit.
-// Locked says a layer forbids the layers below it to change the value
-// (lower_may_change false). The boundary locks nothing, since a lower layer may
-// still narrow what it allows, so it stays false until per-knob delegation.
+// Locked says a layer above the run's unit forbids the units below it to change the
+// value, a narrowing included (locked_knobs); Name and Contact are then that
+// nearest locker's: a unit above the leaf, or "the Wardyn boundary".
 type Provenance struct {
 	Layer   string   `json:"layer"`
 	Name    string   `json:"name,omitempty"`

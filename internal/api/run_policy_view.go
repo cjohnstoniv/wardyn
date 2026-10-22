@@ -209,6 +209,7 @@ func (s *Server) handleGetRunPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 	resp.Changes = explainRunPolicy(base, served, ev, sc, run)
 	resp.Provenance = envelope.Provenance.withContacts(s.runPolicyRef(ctx, run), sc.PolicyHelp)
+	s.fillLockerContacts(ctx, run, resp.Provenance)
 	resp.StoredPolicyNow = s.storedPolicyNowOf(ctx, run, create, &resp.Source)
 
 	secOp := s.isSecurityOperator(ctx)

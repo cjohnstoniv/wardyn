@@ -157,6 +157,7 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 		if refusal != nil {
 			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
 		}
+		source.knobs.markLocked(ceiling)
 		clampWarnings = append(clampWarnings, wallWarns...)
 		if refusal := noRepositoriesResolvedRefusal(*req, spec); refusal != nil {
 			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
@@ -298,6 +299,7 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 	if refusal != nil {
 		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
 	}
+	source.knobs.markLocked(ceiling)
 	storedWarns = append(storedWarns, wallWarns...)
 	if refusal := noRepositoriesResolvedRefusal(*req, spec); refusal != nil {
 		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
