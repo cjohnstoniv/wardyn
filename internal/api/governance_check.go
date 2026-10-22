@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -129,6 +130,13 @@ func (s *Server) handleGovernanceCheck(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "list governance contexts", err)
 		return
 	}
+	if resp.Restrictions, err = s.checkRestrictions(r.Context(), q); err == nil {
+		resp.Workspaces, err = s.checkWorkspaces(r.Context(), q)
+	}
+	if err != nil {
+		writeServerError(w, r, "list restrictions and workspaces", err)
+		return
+	}
 	runIn, err := s.runInFromRequest(r.Context(), createRunRequest{RunIn: req.RunIn})
 	if err == nil {
 		resp.Effective, err = s.checkEffective(r.Context(), q, contextChoice{RunIn: runIn})
@@ -148,6 +156,28 @@ type governanceCheckResponse struct {
 	Contexts  []checkContext  `json:"contexts"`
 	Dormant   []checkDormant  `json:"dormant"`
 	Effective *checkEffective `json:"effective"`
+	// Restrictions are the deny-only lists that cover the person, in every unit they run in.
+	Restrictions []checkRestriction `json:"restrictions"`
+	// Workspaces are the workspaces the person owns, grouped by the unit each is pinned to (a nil
+	// unit_id is the group pinned to none).
+	Workspaces []checkWorkspaceGroup `json:"workspaces"`
+}
+
+// checkRestriction is one restriction covering the person.
+type checkRestriction struct {
+	ID      uuid.UUID               `json:"id"`
+	Name    string                  `json:"name"`
+	Spec    types.RestrictionSpec   `json:"spec"`
+	Limits  types.RestrictionLimits `json:"limits"`
+	Contact *policyref.Contact      `json:"contact,omitempty"`
+}
+
+// checkWorkspaceGroup is the person's workspaces pinned to one unit.
+type checkWorkspaceGroup struct {
+	UnitID   *uuid.UUID `json:"unit_id"`
+	UnitName string     `json:"unit_name,omitempty"`
+	Count    int        `json:"count"`
+	Names    []string   `json:"names"`
 }
 
 // unitPathLink is one unit of a path.
@@ -236,12 +266,19 @@ func unitPath(byID map[uuid.UUID]types.GovernanceUnit, id uuid.UUID) []unitPathL
 // deployment, then the context's unit on each knob it changed, then the boundary.
 func (s *Server) checkEffective(ctx context.Context, q contextQuery, choice contextChoice) (*checkEffective, error) {
 	deployment := governanceCeiling{Spec: s.cfg.DefaultPolicy.Clone(), MemberDefault: s.memberDefaultFor(s.cfg.DefaultPolicy.Resources)}
-	c, err := s.contextCeiling(ctx, q, choice, deployment)
+	base, err := s.contextCeilingBelowRestrictions(ctx, q, choice, deployment)
+	if err != nil {
+		return nil, err
+	}
+	c, err := s.applyRestrictions(ctx, q, base)
 	if err != nil {
 		return nil, err
 	}
 	prov := startProvenance(deploymentProvenance)
-	prov.setBy(c.provenance(), deployment.Spec, c.Spec)
+	prov.setBy(base.provenance(), deployment.Spec, base.Spec)
+	for name, by := range c.restrictionKnobs {
+		prov[name] = by
+	}
 	bounded, err := s.boundaryCeiling(ctx, c)
 	if err != nil {
 		return nil, err
@@ -320,4 +357,57 @@ func normalizeGovernancePreviewGroups(in []string) ([]string, string) {
 		}
 	}
 	return out, ""
+}
+
+// checkRestrictions lists the restrictions covering q, in name order.
+func (s *Server) checkRestrictions(ctx context.Context, q contextQuery) ([]checkRestriction, error) {
+	list, err := s.restrictionsFor(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]checkRestriction, 0, len(list))
+	for _, r := range list {
+		out = append(out, checkRestriction{ID: r.ID, Name: r.Name, Spec: r.Spec, Limits: r.Limits, Contact: r.Contact})
+	}
+	return out, nil
+}
+
+// checkWorkspaces groups the workspaces q's users own by owning unit: the pinned groups in unit-name
+// order, then the unpinned one.
+func (s *Server) checkWorkspaces(ctx context.Context, q contextQuery) ([]checkWorkspaceGroup, error) {
+	out := []checkWorkspaceGroup{}
+	if s.cfg.Store == nil || len(q.users) == 0 {
+		return out, nil
+	}
+	all, err := s.cfg.Store.ListWorkspaces(ctx)
+	if err != nil {
+		return nil, err
+	}
+	byUnit := map[uuid.UUID]*checkWorkspaceGroup{}
+	var unpinned checkWorkspaceGroup
+	for _, ws := range all {
+		if ws.OwnedBy == "" || !slices.Contains(q.users, ws.OwnedBy) {
+			continue
+		}
+		g := &unpinned
+		if ws.OwningUnitID != nil {
+			if byUnit[*ws.OwningUnitID] == nil {
+				id := *ws.OwningUnitID
+				byUnit[id] = &checkWorkspaceGroup{UnitID: &id, UnitName: ws.OwningUnitName}
+			}
+			g = byUnit[*ws.OwningUnitID]
+		}
+		g.Count++
+		g.Names = append(g.Names, ws.Name)
+	}
+	for _, g := range byUnit {
+		slices.Sort(g.Names)
+		out = append(out, *g)
+	}
+	slices.SortFunc(out, func(a, b checkWorkspaceGroup) int { return strings.Compare(a.UnitName, b.UnitName) })
+	if unpinned.Count > 0 {
+		slices.Sort(unpinned.Names)
+		out = append(out, unpinned)
+	}
+	return out, nil
 }
