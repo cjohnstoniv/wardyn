@@ -49,6 +49,8 @@ type Server struct {
 	nonces        map[string]*localClient // local attach grants waiting for the org
 	locals        map[streamKey]*localSession
 	times         localTimes
+	// markRefused, when set, marks a refused output OPEN in place of unacknowledgedSince: a test seam.
+	markRefused func(b *outputBuffer, acks uint64)
 }
 
 // New opens private output storage beneath the runner's state directory.

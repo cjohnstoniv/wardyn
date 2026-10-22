@@ -166,7 +166,9 @@
 # docs/OPERATIONS.md 57531 adds 30 over 57501, measured (0.10 RDIAG-B): the 0206_runner_health migration row.
 # docs/OPERATIONS.md 58711 = ours 58681 + theirs 57531 - base 57501 at the 0.10 W4d merge of RDIAG-B onto the train.
 # docs/OPERATIONS.md 59906 = ours 58872 + theirs 58785 - base 57751 at the 0.10 W4c merge of origin/main 7e33976ca onto the train.
-docs/OPERATIONS.md=59906 share=35
+# docs/OPERATIONS.md=58785 adds 63 (0.10 TREE-MODEL): the unit-tree migration row.
+# docs/OPERATIONS.md 59969 = ours 59906 + theirs 58848 - base 58785 at the 0.10 W4c merge of W4h 2ccd426db into the W4X train.
+docs/OPERATIONS.md=59969 share=35
 # docs/OPERATIONS.md 57751 = ours 57562 + theirs 57690 - base 57501 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/OPERATIONS.md 57722 = ours + theirs - base at the 0.10 HYB-C merge of main onto VM-A, measured.
 # docs/OPERATIONS.md 55848 adds 132 over 55716: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).

@@ -204,7 +204,7 @@ ARG TARGETARCH
 # bumped deliberately, like every other version here.
 ARG NPM_VERSION=11.19.1
 RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi \
- && npm install -g "npm@${NPM_VERSION}" \
+ && for i in 1 2 3; do timeout -k 10 180 npm install -g "npm@${NPM_VERSION}" && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done \
  && npm --version
 # Host-staged native binary (opt-in, gitignored). The README.md decoy makes the
 # COPY succeed when the corp-bin glob matches nothing (the npm default path).
@@ -246,11 +246,15 @@ RUN set -eu; \
             rm -f /tmp/claude-manifest.json; \
             echo "installed native claude $ver ($plat), checksum-verified"; \
         fi; \
-    else \
+    fi
+# The npm path is its own RUN: check-image-pins.sh accepts only checked
+# downloads in a RUN that runs curl, and the retry loop is neither.
+RUN set -eu; \
+    if [ "$CLAUDE_INSTALL" != "native" ]; then \
         if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi; \
         if [ -n "$HTTP_PROXY" ]; then npm config set proxy "$HTTP_PROXY"; fi; \
         if [ -n "$HTTPS_PROXY" ]; then npm config set https-proxy "$HTTPS_PROXY"; fi; \
-        npm install -g "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"; \
+        for i in 1 2 3; do timeout -k 10 180 npm install -g "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION" && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done; \
         npm config delete proxy https-proxy; \
         echo "installed claude $CLAUDE_CODE_VERSION via npm"; \
     fi

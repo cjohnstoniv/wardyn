@@ -106,7 +106,7 @@ func TestGovCovApplyProfileChange(t *testing.T) {
 
 func govCovAssignChange(t *testing.T, s *Server, op string, req governanceMembershipRequest) types.GovernanceChange {
 	t.Helper()
-	ch := types.GovernanceChange{ID: govCovChangeID, TargetKind: govKindMembership, Op: op, TargetKey: membershipKey(req.SubjectType, req.Subject), ProposedBy: "sub-alice"}
+	ch := types.GovernanceChange{ID: govCovChangeID, TargetKind: govKindMembership, Op: op, TargetKey: membershipKey(req.UnitID, req.SubjectType, req.Subject), ProposedBy: "sub-alice"}
 	if op == "delete" {
 		ch.Payload, _ = json.Marshal(map[string]any{"id": govCovAssignID})
 		ch.BaseHash = membershipState{chain: []types.GovernanceUnit{}}.hash()
@@ -122,11 +122,11 @@ func TestGovCovApplyAssignmentChange(t *testing.T) {
 	userReq := governanceMembershipRequest{SubjectType: types.CapabilitySubjectUser, Subject: "u@corp.example", UnitID: govCovPID, Priority: 3}
 	r := govCovHumanReq(http.MethodPost, "/x", "sub-bob", "bob@corp.example", oidc.RoleSecurityAdmin)
 
-	t.Run("a malformed key is an error before any statement", func(t *testing.T) {
+	t.Run("a key of another shape (held before the unit tree) is stale before any statement", func(t *testing.T) {
 		s, _ := govCovServer(t, &govCovStore{})
 		q := &govCovQuerier{}
-		_, err := applyMembershipChange(s, r, q, types.GovernanceChange{ID: govCovChangeID, TargetKey: "nocolon"})
-		if err == nil || !strings.Contains(err.Error(), "is not an assignment key") || len(q.seen) != 0 {
+		_, err := applyMembershipChange(s, r, q, types.GovernanceChange{ID: govCovChangeID, TargetKey: "user:u@corp.example"})
+		if !errors.Is(err, store.ErrGovernanceChangeStale) || len(q.seen) != 0 {
 			t.Errorf("error = %v after %v", err, q.seen)
 		}
 	})
@@ -252,7 +252,7 @@ func TestGovCovApplyAssignmentUpsertRefusals(t *testing.T) {
 		}},
 		{name: "a user type deleted since the proposal", mutate: func(ch *types.GovernanceChange) {
 			ch.Payload = json.RawMessage(`{"subject_type":"user_type","subject":"ghost","unit_id":"` + govCovPID.String() + `"}`)
-			ch.TargetKey = "user_type:ghost"
+			ch.TargetKey = membershipKey(govCovPID, types.CapabilitySubjectUserType, "ghost")
 		}, st: &govCovStore{getTypeErr: store.ErrNotFound}, check: func(t *testing.T, err error) {
 			if ref := govCovAsRefusal(t, err); ref.status != http.StatusBadRequest || ref.reason != reasonAccessUnknownUserType || !strings.Contains(ref.msg, `"ghost"`) {
 				t.Errorf("refusal = %+v", ref)
@@ -260,7 +260,7 @@ func TestGovCovApplyAssignmentUpsertRefusals(t *testing.T) {
 		}},
 		{name: "a user type lookup that fails", mutate: func(ch *types.GovernanceChange) {
 			ch.Payload = json.RawMessage(`{"subject_type":"user_type","subject":"ghost","unit_id":"` + govCovPID.String() + `"}`)
-			ch.TargetKey = "user_type:ghost"
+			ch.TargetKey = membershipKey(govCovPID, types.CapabilitySubjectUserType, "ghost")
 		}, rowErr: func(sql string) error {
 			if strings.Contains(sql, "FROM user_types") {
 				return boom
@@ -381,7 +381,7 @@ func TestGovCovHoldAssignment(t *testing.T) {
 		s, _ := govCovServer(t, st)
 		w := doSSO(t, s, http.MethodPost, "/api/v1/governance/memberships", super, body)
 		ch := govCovHoldAnswer(t, w, st)
-		if ch.TargetKind != govKindMembership || ch.Op != "upsert" || ch.TargetKey != "user:u@corp.example" {
+		if ch.TargetKind != govKindMembership || ch.Op != "upsert" || ch.TargetKey != membershipKey(govCovPID, types.CapabilitySubjectUser, "u@corp.example") {
 			t.Errorf("stored change = %+v", ch)
 		}
 		var payload governanceMembershipRequest

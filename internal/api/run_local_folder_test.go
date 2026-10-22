@@ -31,10 +31,21 @@ type localFolderStore struct {
 	sets   int
 }
 
-func (s *localFolderStore) RunLocalFolderSeed(context.Context, uuid.UUID) (*types.RunLocalFolder, store.LocalFolderSeed, error) {
+// The seed and run reads fail on a done ctx, as Postgres does.
+func (s *localFolderStore) RunLocalFolderSeed(ctx context.Context, _ uuid.UUID) (*types.RunLocalFolder, store.LocalFolderSeed, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, store.LocalFolderSeed{}, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.folder, s.seed, nil
+}
+
+func (s *localFolderStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
+	if err := ctx.Err(); err != nil {
+		return types.AgentRun{}, err
+	}
+	return s.dispatchTestStore.GetRun(ctx, id)
 }
 
 func (s *localFolderStore) SetRunLocalFolderSeed(_ context.Context, _ uuid.UUID, errText string) (bool, error) {

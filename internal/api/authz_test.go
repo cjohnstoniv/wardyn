@@ -2528,6 +2528,8 @@ func (s *authzStore) ResolveGovernanceUnit(context.Context, []string, []string, 
 func (s *authzStore) HasGroupTierMemberships(context.Context) (bool, error) {
 	return false, nil
 }
+func (s *authzStore) CountOwnWallsUnits(context.Context) (int, error)     { return 0, nil }
+func (s *authzStore) MaxUnitDepth(context.Context) (int, []string, error) { return 0, nil, nil }
 
 // user drives (migration 0054)
 //
@@ -2808,4 +2810,8 @@ func TestRunOutput_PaneSnapshotIsReadOnTheRecordingsRule(t *testing.T) {
 	if none.Code != w.Code || none.Body.String() != w.Body.String() {
 		t.Errorf("no snapshot: %d %s\nwith one:    %d %s", none.Code, none.Body, w.Code, w.Body)
 	}
+}
+
+func (s *authzStore) ListMembershipsFor(ctx context.Context, users, groups []string, userType string) ([]store.MembershipMatch, error) {
+	return membershipsFromResolve(s.ResolveGovernanceUnit(ctx, users, groups, userType))
 }

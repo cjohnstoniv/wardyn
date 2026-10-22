@@ -45,6 +45,10 @@
 # docs/operations/admin-only-writes.md 3733 = ours 3729 + theirs 3731 - base 3727 at the 0.10 W4c merge of origin/main 7e33976ca onto the train.
 # docs/operations/user-drives.md 4931 = ours 4877 + theirs 4877 - base 4823 at the 0.10 W4c merge of origin/main 7e33976ca onto the train.
 # docs/operations/denials.md 5492 = ours 5331 + theirs 5492 - base 5331 at the 0.10 W4c merge of origin/main 7e33976ca onto the train.
+# docs/operations/governance-writes.md=3171 adds 307 (0.10 TREE-MODEL): the Units and memberships section.
+# docs/operations/denials.md 5520 = ours 5492 + theirs 5359 - base 5331 at the W4g merge of PROXYCAP.
+# docs/operations/governance-writes.md 3478 = ours 3171 + theirs 3478 - base 3171 at the 0.10 W4c merge of W4h 2ccd426db into the W4X train.
+# docs/operations/denials.md 5520 = ours 5492 + theirs 5520 - base 5492 at the 0.10 W4c merge of W4h 2ccd426db into the W4X train.
 docs/operations/who-gets-in.md=1938 share=35
 # docs/operations/admin-only-writes.md 3173 measured after F-1511-1510 merge.
 # docs/operations/admin-only-writes.md 3182 measured after the F-1508-author merge (human_author; four-eyes on service-identity create and sponsor change).
@@ -92,7 +96,7 @@ docs/operations/ownership-and-offboarding.md=2414 share=35
 # 0.9.4 W4-DOCS-1: docs/operations/governance-writes.md 3158 adds 26 over 3132, measured: #2369: the run node record row.
 # docs/operations/governance-writes.md 3170 adds 12 over 3158, measured (0.10 LAY-A): the org walls row in the covered-writes table.
 # docs/operations/governance-writes.md 3171 measured (0.10 BOUNDARY): the org walls renamed the Wardyn boundary, with modes.
-docs/operations/governance-writes.md=3171 share=35
+docs/operations/governance-writes.md=3478 share=35
 # 0.9.4 L8: docs/operations/member-runs.md 1054 adds 10 over 1044: ssh_key delivery claims bounded.
 docs/operations/member-runs.md=1054 share=35
 # docs/operations/user-drives.md 4818 adds 14 over 4804 (0.9 release text for the fix sets merged at release); measured.
@@ -142,7 +146,7 @@ docs/operations/api-tokens.md=5948 share=35
 # docs/operations/denials.md 5318 adds 14 (0.10 LAY-C r2): the authz.denied layer keys and the operator cap naming the deployment.
 # 0.10: docs/operations/denials.md 5200 adds 9, measured: user_view_preview names the security admin case.
 # docs/operations/denials.md 5331 measured (0.10 BOUNDARY): the boundary provenance layer.
-docs/operations/denials.md=5492 share=35
+docs/operations/denials.md=5520 share=35
 # Round 1: docs/operations/who-gets-in.md measured 1453 after the split banner and heading cleanup.
 # Round 1: docs/operations/admin-only-writes.md measured 2869 after the split banner and heading cleanup.
 # Round 1: docs/operations/three-roles.md measured 4012 after the split banner and heading cleanup.

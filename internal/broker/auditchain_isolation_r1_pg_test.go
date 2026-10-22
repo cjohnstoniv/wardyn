@@ -175,11 +175,13 @@ func TestPG_BrokerMintDoesNotForkTheChainAtRepeatableRead(t *testing.T) {
 	// Wait until the broker's transaction is genuinely parked on the lock. If it
 	// never parks, the race the test needs did not happen and the result would
 	// be meaningless.
+	// pg_locks lists the whole server, so count only this test's database.
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		var waiting int
 		if err := base.QueryRow(ctx,
-			`SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND objid = $1::bigint & 2147483647 AND NOT granted`,
+			`SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND objsubid = 1 AND classid::bigint = $1::bigint >> 32 AND objid::bigint = $1::bigint & 4294967295 AND NOT granted
+			AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`,
 			db.AuditChainLockKey).Scan(&waiting); err != nil {
 			t.Fatalf("poll pg_locks: %v", err)
 		}

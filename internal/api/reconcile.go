@@ -230,7 +230,9 @@ func (s *Server) sweepOrphanedSandboxes(ctx context.Context) error {
 			return true // no run row owns these containers — pure leak
 		}
 		if isTerminalRunState(run.State) {
-			return true // the run ended; its containers should already be gone
+			// The run ended; its containers should already be gone, unless its computer folder's
+			// pass back keeps them for resumeComputerFolderBacks, which runs before this sweep.
+			return !s.computerFolderKept(ctx, runID)
 		}
 		if run.SandboxRef != "" {
 			return false // live and tracked — its own lifecycle owns teardown
@@ -297,6 +299,9 @@ func (s *Server) reconcileOrphanedSandbox(ctx context.Context) error {
 	}
 	for _, run := range runs {
 		s.revokeRunCascade(ctx, run.ID)
+		if s.computerFolderKept(ctx, run.ID) {
+			continue // kept for its computer folder's pass back, which resumeComputerFolderBacks resumes
+		}
 		kind, outcome, answered := s.lastRunnerTeardown(ctx, run)
 		torn := false
 		switch {
@@ -650,6 +655,7 @@ func (s *Server) runWatcherTick(ctx context.Context, lastUndispatched *time.Time
 		// ref-empty run's leaked containers are swept the same tick.
 		// ponytail: no separate ticker — piggy-backing this cadence keeps
 		// one ContainerList per grace period, free next to what it reclaims.
+		pass("computer folder resume", s.resumeComputerFolderBacks(ctx))
 		pass("orphaned sandbox sweep", s.sweepOrphanedSandboxes(ctx))
 		pass("terminal run proxy config purge", s.purgeTerminalRunProxyConfigs(ctx))
 		pass("asserted runner subject purge", s.purgeAssertedRunnerSubjects(ctx))

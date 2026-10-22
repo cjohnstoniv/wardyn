@@ -577,6 +577,10 @@ type profileStore struct {
 	profiles []types.GovernanceUnit
 }
 
+func (s *profileStore) ListGovernanceMemberships(context.Context) ([]types.GovernanceMembership, error) {
+	return allRowsFor(s.profiles), nil
+}
+
 func (s *profileStore) ListGovernanceUnits(context.Context) ([]types.GovernanceUnit, error) {
 	return s.profiles, nil
 }

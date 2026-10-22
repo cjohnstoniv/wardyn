@@ -375,6 +375,28 @@ func TestOutputBufferReplayBelowAckParks(t *testing.T) {
 	synctest.Test(t, outputReplayBelowAckParks)
 }
 
+// A refusal read before an ACK marks nothing, even when that ACK is a replay's, at or below the
+// buffer's ACK: the ACK, not its offset, shows that a consumer is back.
+func TestOutputRefusalReadBeforeAnAckMarksNothing(t *testing.T) {
+	b := outputFixture(t)
+	if _, err := b.Write(bytes.Repeat([]byte("x"), 4*outputChunk)); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.ack(2 * outputChunk); err != nil {
+		t.Fatal(err)
+	}
+	acks := b.acks
+	if err := b.ack(outputChunk); err != nil {
+		t.Fatal(err)
+	}
+	if b.unacknowledgedSince(acks); b.lossy {
+		t.Fatal("a refusal read before the replay's ACK marked the output lossy")
+	}
+	if b.unacknowledgedSince(b.acks); !b.lossy {
+		t.Fatal("a refusal with no ACK since did not mark the output lossy")
+	}
+}
+
 // After a refused OPEN the org recovers the run from offset 0 and ACKs each
 // replayed chunk, so its ACKs sit at or below the buffer's ACK until the
 // replay passes it. Those ACKs show a consumer is back: a full buffer then
@@ -387,7 +409,7 @@ func outputReplayBelowAckParks(t *testing.T) {
 	if err := b.ack(2 * outputChunk); err != nil {
 		t.Fatal(err)
 	}
-	b.unacknowledged()
+	b.unacknowledgedSince(b.acks)
 	if err := b.ack(2 * outputChunk); err != nil {
 		t.Fatal(err)
 	}

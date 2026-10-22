@@ -170,7 +170,9 @@
 # docs/OPERATIONS.md 58681 = ours 58681 + theirs 57722 - lane's pre-LANES value 57722 (the lane stacked LAY-A, which main already carries) at the 0.10 W4d merge of LANES onto the train.
 # docs/OPERATIONS.md 58711 = ours 58681 + theirs 57531 - base 57501 at the 0.10 W4d merge of RDIAG-B onto the train.
 # docs/OPERATIONS.md 59906 = ours 58872 + theirs 58785 - base 57751 at the 0.10 W4c merge of origin/main 7e33976ca onto the train.
-docs/OPERATIONS.md=59906
+# docs/OPERATIONS.md=58785 adds 63 (0.10 TREE-MODEL): the unit-tree migration row.
+# docs/OPERATIONS.md 59969 = ours 59906 + theirs 58848 - base 58785 at the 0.10 W4c merge of W4h 2ccd426db into the W4X train.
+docs/OPERATIONS.md=59969
 # docs/OPERATIONS.md 57751 = ours 57562 + theirs 57690 - base 57501 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/OPERATIONS.md 57722 = ours + theirs - base at the 0.10 HYB-C merge of main onto VM-A, measured.
 # docs/OPERATIONS.md 55840 adds 124 over 55716, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.

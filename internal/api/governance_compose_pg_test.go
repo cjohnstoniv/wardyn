@@ -6,6 +6,8 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"reflect"
 	"slices"
@@ -175,12 +177,12 @@ func TestPG_ComposedProfileWrites(t *testing.T) {
 		if got := e.stored(child.ID); got.OverlayLimits != nil || got.Overlay == nil {
 			t.Errorf("after overlay_limits null: %+v, want limits cleared and the overlay kept", got)
 		}
-		// null parent_id re-bases on the deployment default.
+		// null parent_id re-bases on the deployment default: the Default unit (0.10.0).
 		if a := e.put(child.ID, `{"name":"keeper-renamed","parent_id":null,"overlay":{}}`); a.code != http.StatusOK {
 			t.Fatalf("PUT base null = %d %s", a.code, a.body)
 		}
-		if got := e.stored(child.ID); got.ParentID != nil || got.Overlay == nil {
-			t.Errorf("after base null: %+v, want the deployment as the base", got)
+		if got := e.stored(child.ID); got.ParentID == nil || *got.ParentID != store.DefaultUnitID || got.Overlay == nil {
+			t.Errorf("after base null: %+v, want the Default unit as the base", got)
 		}
 		// null overlay flattens it to a standalone profile carrying its own ceiling.
 		if a := e.put(child.ID, `{"name":"keeper-renamed","overlay":null,"ceiling":{"min_confinement_class":"CC2"}}`); a.code != http.StatusOK {
@@ -231,6 +233,10 @@ func TestPG_ComposedProfileWrites(t *testing.T) {
 	})
 
 	t.Run("a cycle and a depth overflow are refused", func(t *testing.T) {
+		if _, err := e.pg.PutSiteConfig(e.ctx, types.SiteConfig{GovernanceMaxDepth: new(4)}); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _, _ = e.pg.PutSiteConfig(e.ctx, types.SiteConfig{}) })
 		a := e.mustCreate(`{"name":"cyc-a","overlay":{}}`)
 		b := e.mustCreate(`{"name":"cyc-b","parent_id":"` + a.ID.String() + `","overlay":{}}`)
 		if r := e.put(a.ID, `{"name":"cyc-a","parent_id":"`+b.ID.String()+`","overlay":{}}`); r.code != http.StatusConflict || r.errb.Reason != reasonGovernanceUnitCycle {
@@ -239,14 +245,15 @@ func TestPG_ComposedProfileWrites(t *testing.T) {
 		if r := e.put(a.ID, `{"name":"cyc-a","parent_id":"`+a.ID.String()+`","overlay":{}}`); r.code != http.StatusConflict || r.errb.Reason != reasonGovernanceUnitCycle {
 			t.Errorf("a profile as its own base = %d %s, want 409 %s", r.code, r.body, reasonGovernanceUnitCycle)
 		}
-		// cyc-a <- cyc-b <- cyc-c is three deep; a fourth refuses.
+		// Default <- cyc-a <- cyc-b <- cyc-c is four deep, the configured maximum; a fifth refuses.
 		c := e.mustCreate(`{"name":"cyc-c","parent_id":"` + b.ID.String() + `","overlay":{}}`)
 		if r := e.post(`{"name":"cyc-d","parent_id":"` + c.ID.String() + `","overlay":{}}`); r.code != http.StatusConflict || r.errb.Reason != reasonGovernanceUnitDepth {
-			t.Errorf("a fourth level = %d %s, want 409 %s", r.code, r.body, reasonGovernanceUnitDepth)
+			t.Errorf("a fifth level = %d %s, want 409 %s", r.code, r.body, reasonGovernanceUnitDepth)
 		}
-		// Re-basing the ROOT under another profile pushes its descendants past three.
+		// Re-basing cyc-a under a unit two deep pushes its descendants past four.
 		top := e.mustCreate(`{"name":"cyc-top","ceiling":{"min_confinement_class":"CC2"}}`)
-		if r := e.put(a.ID, `{"name":"cyc-a","parent_id":"`+top.ID.String()+`","overlay":{}}`); r.code != http.StatusConflict || r.errb.Reason != reasonGovernanceUnitDepth {
+		mid := e.mustCreate(`{"name":"cyc-mid","parent_id":"` + top.ID.String() + `","overlay":{}}`)
+		if r := e.put(a.ID, `{"name":"cyc-a","parent_id":"`+mid.ID.String()+`","overlay":{}}`); r.code != http.StatusConflict || r.errb.Reason != reasonGovernanceUnitDepth {
 			t.Errorf("re-basing a root under cyc-top = %d %s, want 409 %s for its descendants", r.code, r.body, reasonGovernanceUnitDepth)
 		}
 	})
@@ -316,23 +323,25 @@ func TestPG_ConcurrentGraphWritesNeverMakeACycleOrADepthFourChain(t *testing.T) 
 		}
 		byID := unitsByID(all)
 		for _, id := range []uuid.UUID{a.ID, b.ID, c.ID, d.ID} {
-			if _, err := chainFromRows(byID, id); err != nil {
+			if _, err := chainFromRows(byID, id, store.MaxUnitDepthCap); err != nil {
 				t.Fatalf("round %d: after concurrent writes %s has no clean chain: %v", round, byID[id].Name, err)
 			}
 		}
 	}
 }
 
-// TestPG_ChainReadIsOneStatementBoundedAtThree: the store hands back at most three rows however deep a
-// seeded graph runs, and the resolver refuses what the bound cut short.
-func TestPG_ChainReadIsOneStatementBoundedAtThree(t *testing.T) {
+// TestPG_ChainReadIsOneStatementBoundedAtTheCap: the store hands back at most MaxUnitDepthCap rows
+// however deep a seeded graph runs, the resolver refuses what the bound cut short, and the
+// configured maximum (16 when unset) refuses a path past it.
+func TestPG_ChainReadIsOneStatementBoundedAtTheCap(t *testing.T) {
 	e := newComposedWriteEnv(t)
 	root := e.mustCreate(`{"name":"chain-root","ceiling":{"min_confinement_class":"CC2"}}`)
 	prev := root
-	var chain []types.GovernanceUnit
-	for _, name := range []string{"chain-1", "chain-2", "chain-3"} {
+	var chain []types.GovernanceUnit // chain[i] is depth i+2
+	for i := range store.MaxUnitDepthCap {
 		// Seeded below the handler's own depth check, as a direct write or a bug would leave it.
 		id := uuid.New()
+		name := fmt.Sprintf("chain-%d", i+1)
 		if _, err := e.pg.Pool.Exec(e.ctx, `INSERT INTO governance_units (id, name, ceiling, limits, parent_id, overlay) VALUES ($1,$2,'{}','{}',$3,'{}')`,
 			id, name, prev.ID); err != nil {
 			t.Fatal(err)
@@ -340,18 +349,19 @@ func TestPG_ChainReadIsOneStatementBoundedAtThree(t *testing.T) {
 		prev = types.GovernanceUnit{ID: id, Name: name}
 		chain = append(chain, prev)
 	}
-	got, err := e.pg.GetGovernanceUnitChain(e.ctx, chain[2].ID)
-	if err != nil || len(got) != 3 {
-		t.Fatalf("chain read = %d rows err %v, want 3 (bounded)", len(got), err)
+	deepest := chain[len(chain)-1]
+	got, err := e.pg.GetGovernanceUnitChain(e.ctx, deepest.ID)
+	if err != nil || len(got) != store.MaxUnitDepthCap {
+		t.Fatalf("chain read = %d rows err %v, want %d (bounded)", len(got), err, store.MaxUnitDepthCap)
 	}
 	if _, err := e.srv.composeChain(got); err == nil {
 		t.Error("the resolver composed a chain the bound cut short")
 	}
-	if _, err := e.srv.resolveUnitByID(e.ctx, chain[2].ID); err == nil {
-		t.Error("resolveUnitByID composed a depth-four chain")
+	if _, err := e.srv.resolveUnitByID(e.ctx, chain[15].ID); !errors.Is(err, errUnitDepth) {
+		t.Errorf("a 17-deep path under the default maximum: %v, want errUnitDepth", err)
 	}
-	if ok, err := e.srv.resolveUnitByID(e.ctx, chain[1].ID); err != nil || !ok.Composed {
-		t.Errorf("a three-deep chain: %v %v, want composed", ok, err)
+	if ok, err := e.srv.resolveUnitByID(e.ctx, chain[14].ID); err != nil || !ok.Composed {
+		t.Errorf("a 16-deep path: %v %v, want composed", ok, err)
 	}
 	if _, err := e.pg.GetGovernanceUnitChain(e.ctx, uuid.New()); err == nil {
 		t.Error("an unknown profile read as a chain")
@@ -392,8 +402,8 @@ func TestPG_GovernanceListShowsEffective(t *testing.T) {
 	// A seeded loop, written below the handler.
 	loopA, loopB := uuid.New(), uuid.New()
 	for _, q := range []string{
-		`INSERT INTO governance_units (id, name, ceiling, limits, overlay) VALUES ('` + loopA.String() + `','loop-a','{}','{}','{}')`,
-		`INSERT INTO governance_units (id, name, ceiling, limits, overlay) VALUES ('` + loopB.String() + `','loop-b','{}','{}','{}')`,
+		`INSERT INTO governance_units (id, name, ceiling, limits, overlay, parent_id) VALUES ('` + loopA.String() + `','loop-a','{}','{}','{}','` + store.DefaultUnitID.String() + `')`,
+		`INSERT INTO governance_units (id, name, ceiling, limits, overlay, parent_id) VALUES ('` + loopB.String() + `','loop-b','{}','{}','{}','` + store.DefaultUnitID.String() + `')`,
 		`UPDATE governance_units SET parent_id = '` + loopB.String() + `' WHERE id = '` + loopA.String() + `'`,
 		`UPDATE governance_units SET parent_id = '` + loopA.String() + `' WHERE id = '` + loopB.String() + `'`,
 	} {

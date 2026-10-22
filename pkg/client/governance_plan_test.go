@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
@@ -240,5 +241,45 @@ func TestPlanGovernance_RenamedBaseRepointsTheComposedProfile(t *testing.T) {
 	}
 	if !slices.Contains(applyServer.writes, "PUT /api/v1/governance/units/"+composedID.String()) {
 		t.Fatalf("apply writes = %v, want the PUT of team the plan listed", applyServer.writes)
+	}
+}
+
+// TestPlanGovernance_MembershipsPerUnitAndDefaultLeftAlone: one subject's memberships of two units
+// are two memberships, matched by unit name, so a document naming both changes nothing and prunes
+// nothing; the Default unit is the server's own and a document that omits it never deletes it.
+func TestPlanGovernance_MembershipsPerUnitAndDefaultLeftAlone(t *testing.T) {
+	defID, aID, bID := uuid.New(), uuid.New(), uuid.New()
+	composed := &types.CeilingOverlay{}
+	current := client.GovernanceDocument{
+		Units: []client.GovernanceUnit{{ID: defID, Name: "Default", Kind: "default"},
+			{ID: aID, Name: "a", ParentID: &defID, Overlay: composed}, {ID: bID, Name: "b"}},
+		Memberships: []client.GovernanceMembership{
+			{ID: uuid.New(), SubjectType: "user", Subject: "sam", UnitID: aID},
+			{ID: uuid.New(), SubjectType: "user", Subject: "sam", UnitID: bID, Home: true},
+		},
+	}
+	fileA, fileB := uuid.New(), uuid.New()
+	doc := client.GovernanceDocument{
+		Units: []client.GovernanceUnit{{ID: fileA, Name: "a", Overlay: composed}, {ID: fileB, Name: "b"}},
+		Memberships: []client.GovernanceMembership{
+			{SubjectType: "user", Subject: "sam", UnitID: fileA},
+			{SubjectType: "user", Subject: "sam", UnitID: fileB, Home: true},
+		},
+	}
+	_, c := newGovServer(t, current)
+	plan, err := c.PlanGovernance(context.Background(), doc, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Steps) != 0 || plan.Unchanged != 4 {
+		t.Fatalf("plan = %+v, want nothing to do (two units, two memberships unchanged; Default not pruned)", plan)
+	}
+	doc.Memberships[1].Home = false
+	plan, err = c.PlanGovernance(context.Background(), doc, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Steps) != 1 || plan.Steps[0].Op != "update" || plan.Steps[0].Unit != "b" || !slices.Equal(plan.Steps[0].Fields, []string{"home"}) {
+		t.Fatalf("plan = %+v, want one update of sam's membership of b (home)", plan.Steps)
 	}
 }

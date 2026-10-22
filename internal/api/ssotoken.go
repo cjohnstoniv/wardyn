@@ -330,8 +330,9 @@ const signInCaptureKillGrace = 5 * time.Second
 // signInCaptureReadTimeout bounds killSignInRunAfterCapture's own post-grace
 // run read (below) — a plain single-row read, nowhere near as long as the kill
 // cascade that may follow it. background.go's backgroundShutdownBudget is
-// built from this PLUS killCascadeTimeout: that sum is this goroutine's own
-// worst-case internal bound, the one WaitBackground must actually cover.
+// built from this PLUS killCascadeTimeout: that sum is one pass of this
+// goroutine's retry loop, the one WaitBackground must actually cover (see there
+// for the whole-loop ceiling).
 // Before this existed the read shared killCascadeTimeout's own 30s budget, so
 // the read-then-cascade could together take up to 60s against a 35s shutdown
 // budget — a shutdown landing between the two would abandon a live kill

@@ -198,6 +198,9 @@ func (s *Substrate) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) 
 	if err := s.checkClass(ctx, spec.ConfinementClass); err != nil {
 		return runner.Sandbox{}, err
 	}
+	if err := s.checkProxySettings(spec.ProxyConfig); err != nil {
+		return runner.Sandbox{}, err
+	}
 	args := runnerwire.CreateSandboxArgs{Spec: spec, ExecOutput: spec.ExecOutput != nil}
 	if err := s.refuseResident(spec.RunID, spec); err != nil {
 		return runner.Sandbox{}, err
@@ -274,6 +277,27 @@ func (s *Substrate) checkClass(ctx context.Context, class types.ConfinementClass
 		}
 	}
 	return fmt.Errorf("remote: %s does not advertise class %q", s.Name(), class)
+}
+
+// ProxySettingError refuses a CreateSandbox whose spec sets a run proxy setting
+// the runner does not name in Caps.ProxySettings: an older runner would start
+// the run's proxy without it.
+type ProxySettingError struct{ Setting string }
+
+func (e *ProxySettingError) Error() string {
+	return "this runner's wardyn-runnerd is too old for " + e.Setting + "; upgrade it"
+}
+
+// checkProxySettings refuses, before anything is sent, a spec that sets a run
+// proxy setting the runner did not advertise. An unset setting is never checked.
+func (s *Substrate) checkProxySettings(pc runner.ProxyConfig) error {
+	c, _ := s.Caps()
+	for _, setting := range runnerwire.ProxySettingsSet(pc) {
+		if !slices.Contains(c.ProxySettings, setting) {
+			return &ProxySettingError{Setting: setting}
+		}
+	}
+	return nil
 }
 
 // refuseResident fails the create when any leaf of the spec (a string, a

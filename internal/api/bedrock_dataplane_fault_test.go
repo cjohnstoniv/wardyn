@@ -190,7 +190,7 @@ func TestBedrockDataPlaneFault_AuditRowCarriesTheClass(t *testing.T) {
 		t.Fatalf("post decision: %d", w.Code)
 	}
 	var data map[string]any
-	_ = json.Unmarshal(lastAuditEvent(t, h.audit.events, "egress.allow").Data, &data)
+	_ = json.Unmarshal(lastAuditEvent(t, h.audit.snapshot(), "egress.allow").Data, &data)
 	if data["upstream_fault"] != "ThrottlingException" {
 		t.Fatalf("egress.allow data = %v, want upstream_fault", data)
 	}

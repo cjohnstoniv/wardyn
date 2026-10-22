@@ -53,7 +53,7 @@ RUN set -eu; \
         if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi; \
         if [ -n "$HTTP_PROXY" ]; then npm config set proxy "$HTTP_PROXY"; fi; \
         if [ -n "$HTTPS_PROXY" ]; then npm config set https-proxy "$HTTPS_PROXY"; fi; \
-        npm install -g "@openai/codex@$CODEX_VERSION"; \
+        for i in 1 2 3; do timeout -k 10 180 npm install -g "@openai/codex@$CODEX_VERSION" && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done; \
         npm config delete proxy https-proxy; \
         echo "installed codex $CODEX_VERSION via npm"; \
     fi

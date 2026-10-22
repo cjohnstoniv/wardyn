@@ -57,7 +57,7 @@ func govCovBuilt(t *testing.T, s *Server, all []types.GovernanceUnit, id uuid.UU
 	if msg != "" {
 		t.Fatalf("fixture body refused: %s", msg)
 	}
-	p, res, err := s.buildGovernanceUnit("alice", id, req, all)
+	p, res, err := s.buildGovernanceUnit("alice", id, req, all, maxUnitDepthDefault)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -417,7 +417,7 @@ func TestGovCovBaseWriteStrandsOnlyADisjointUIAppsOverlay(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			child := govCovComposedOn(govCovPID, "child", govCovBase, "pypi.org")
 			child.Overlay.UIApps = &c.overlay
-			_, _, err := s.checkGraphWrite(edited, []types.GovernanceUnit{base, child})
+			_, _, err := s.checkGraphWrite(edited, []types.GovernanceUnit{base, child}, maxUnitDepthDefault)
 			var refusal *unitWriteError
 			switch {
 			case c.wantCode == 0 && err != nil:
@@ -640,14 +640,16 @@ func TestGovCovHoldProfileDelete(t *testing.T) {
 
 func TestGovCovAssignmentKey(t *testing.T) {
 	for _, subject := range []string{"alice@corp.example", "", "has:colon:inside", "a b"} {
-		key := membershipKey(types.CapabilitySubjectUser, subject)
-		st, sub, ok := splitMembershipKey(key)
-		if !ok || st != "user" || sub != subject {
-			t.Errorf("key %q split into (%q, %q, %v), want (user, %q, true)", key, st, sub, ok, subject)
+		key := membershipKey(govCovPID, types.CapabilitySubjectUser, subject)
+		unit, st, sub, ok := splitMembershipKey(key)
+		if !ok || unit != govCovPID || st != "user" || sub != subject {
+			t.Errorf("key %q split into (%s, %q, %q, %v), want (%s, user, %q, true)", key, unit, st, sub, ok, govCovPID, subject)
 		}
 	}
-	if _, _, ok := splitMembershipKey("nocolon"); ok {
-		t.Error("a key with no separator must not split")
+	for _, key := range []string{"nocolon", "user:alice@corp.example", govCovPID.String()} {
+		if _, _, _, ok := splitMembershipKey(key); ok {
+			t.Errorf("key %q split, want no split (no unit, or no subject)", key)
+		}
 	}
 }
 
@@ -721,7 +723,7 @@ func TestGovCovReadAssignmentState(t *testing.T) {
 	boom := errors.New("pg: down")
 
 	q := &govCovQuerier{}
-	st, err := readMembershipState(ctx, q, "user", "u", govCovPID, false)
+	st, err := readMembershipState(ctx, q, govCovPID, "user", "u", false)
 	if err != nil || st.current != nil || st.chain == nil || len(st.chain) != 0 {
 		t.Fatalf("nothing stored = %+v, %v; want no assignment and an empty chain", st, err)
 	}
@@ -730,7 +732,7 @@ func TestGovCovReadAssignmentState(t *testing.T) {
 	}
 
 	q = &govCovQuerier{rowErr: func(string) error { return boom }}
-	if _, err := readMembershipState(ctx, q, "user", "u", govCovPID, true); !errors.Is(err, boom) || len(q.seen) != 1 {
+	if _, err := readMembershipState(ctx, q, govCovPID, "user", "u", true); !errors.Is(err, boom) || len(q.seen) != 1 {
 		t.Errorf("a failed assignment read = %v after %d statements, want the error and no profile read", err, len(q.seen))
 	}
 
@@ -740,7 +742,7 @@ func TestGovCovReadAssignmentState(t *testing.T) {
 		}
 		return pgx.ErrNoRows
 	}}
-	if _, err := readMembershipState(ctx, q, "user", "u", govCovPID, false); !errors.Is(err, boom) {
+	if _, err := readMembershipState(ctx, q, govCovPID, "user", "u", false); !errors.Is(err, boom) {
 		t.Errorf("a failed chain read = %v, want the injected error", err)
 	}
 }

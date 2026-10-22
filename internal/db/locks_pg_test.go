@@ -137,7 +137,8 @@ func TestPGLocker_LostConnectionCancelsTheGuardedContext(t *testing.T) {
 	var killed int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM (
 		SELECT pg_terminate_backend(pid) FROM pg_locks
-		WHERE locktype = 'advisory' AND objsubid = 2 AND classid::bigint = $1 AND objid::bigint = $2) t`,
+		WHERE locktype = 'advisory' AND objsubid = 2 AND classid::bigint = $1 AND objid::bigint = $2
+		AND database = (SELECT oid FROM pg_database WHERE datname = current_database())) t`,
 		int64(uint32(k.Class)), int64(uint32(k.Obj))).Scan(&killed); err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +182,8 @@ func TestPGLocker_LockHeldAsksTheSessionNotTheContext(t *testing.T) {
 		t.Fatalf("a lock still held reads as lost once its parent context ended: %v", err)
 	}
 	if _, err := pool.Exec(context.Background(), `SELECT pg_terminate_backend(pid) FROM pg_locks
-		WHERE locktype = 'advisory' AND objsubid = 2 AND classid::bigint = $1 AND objid::bigint = $2`,
+		WHERE locktype = 'advisory' AND objsubid = 2 AND classid::bigint = $1 AND objid::bigint = $2
+		AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`,
 		int64(uint32(k.Class)), int64(uint32(k.Obj))); err != nil {
 		t.Fatal(err)
 	}

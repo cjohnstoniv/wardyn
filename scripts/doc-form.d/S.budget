@@ -261,7 +261,9 @@
 # docs/sdk.md 20469 measured: the credential_withheld reasons
 # docs/sdk.md 21227 = ours 21181 + theirs 20469 - lane's pre-LANES value 20423 (the lane stacked LAY-A, which main already carries) at the 0.10 W4d merge of LANES onto the train.
 # docs/sdk.md 21947 = ours 21146 + theirs 21224 - base 20423 at the 0.10 W4c merge of origin/main 7e33976ca onto the train.
-docs/sdk.md=21947 share=21 # tightened from 21227 to the measured count at the 0.10 W4d merge
+# docs/sdk.md=21224 adds 86 (0.10 TREE-MODEL): three unit-context reasons and the GET /governance tree fields.
+# docs/sdk.md 22033 = ours 21947 + theirs 21310 - base 21224 at the 0.10 W4c merge of W4h 2ccd426db into the W4X train.
+docs/sdk.md=22033 share=21 # tightened from 21227 to the measured count at the 0.10 W4d merge
 # docs/sdk.md 20423 = ours 20195 + theirs 20288 - base 20060 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/sdk.md 20315 = ours + theirs - base at the 0.10 HYB-C merge of main onto VM-A, measured.
 # 0.10 HYB-C: docs/sdk.md 20343 adds 28 over 20315, measured: the placement_capability refusal of a linux_vm run with a folder on a runner that cannot share one.

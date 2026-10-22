@@ -373,12 +373,35 @@ func TestSiteConfigSet_NoOmittedFieldsNoteIsSilent(t *testing.T) {
 
 	_, stderr, err := runSiteConfigSet(t, srv.URL,
 		`{"scm_hosts":["gitlab.corp"],"upstream_proxy_no_proxy":[],"internal_hosts":[],"workspace_providers":{},"agent_providers":{},`+
-			`"model_providers":{},"sign_in_help_text":"","sign_in_help_url":"","branding":{},"policy_help":{},"components":{},"recording":{}}`)
+			`"model_providers":{},"sign_in_help_text":"","sign_in_help_url":"","branding":{},"policy_help":{},"components":{},"recording":{},"governance_max_depth":16}`)
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	if strings.Contains(stderr, "left as the server already has it") {
 		t.Errorf("stderr = %q, want no omitted-fields note when the file omits nothing", stderr)
+	}
+}
+
+// TestSiteConfigSet_GovernanceMaxDepthZeroStaysOnTheWire: governance_max_depth 0 is the explicit
+// reset to the default, so the re-marshalled document must keep the key (an int with omitempty
+// dropped it, and the server then carried the stored depth forward instead).
+func TestSiteConfigSet_GovernanceMaxDepthZeroStaysOnTheWire(t *testing.T) {
+	var body []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte("{}"))
+	}))
+	t.Cleanup(srv.Close)
+	if _, _, err := runSiteConfigSet(t, srv.URL, `{"governance_max_depth":0}`); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(body, &wire); err != nil {
+		t.Fatalf("wire body %q: %v", body, err)
+	}
+	if v, ok := wire["governance_max_depth"]; !ok || v != float64(0) {
+		t.Errorf("wire = %s, want governance_max_depth present as 0", body)
 	}
 }
 

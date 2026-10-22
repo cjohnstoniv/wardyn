@@ -102,7 +102,7 @@ func (s *Server) lockRevive(ctx context.Context, run types.AgentRun) (context.Co
 
 // reviveCeilingAdmitting is the owner's ceiling, once it still admits the run where it is.
 func (s *Server) reviveCeilingAdmitting(ctx context.Context, run types.AgentRun, actorType types.ActorType, actor string) (ownerCeiling, *reviveError) {
-	c, rerr := s.reviveCeiling(ctx, run)
+	c, rerr := s.reviveCeiling(ctx, run, actorType, actor)
 	if rerr == nil {
 		rerr = s.revivePlacementDenied(ctx, run, c, actorType, actor)
 	}
@@ -149,8 +149,12 @@ type ownerCeiling struct {
 // (an unassigned or super-admin owner) has no profile denies, as at dispatch.
 // A captured profile that no longer exists is refused: its walls cannot be
 // known.
-func (s *Server) reviveCeiling(ctx context.Context, run types.AgentRun) (ownerCeiling, *reviveError) {
+func (s *Server) reviveCeiling(ctx context.Context, run types.AgentRun, actorType types.ActorType, actor string) (ownerCeiling, *reviveError) {
 	p, ref := s.ownerUnit(ctx, run)
+	if ref != nil && ref.reason == reasonUnitMembershipGone {
+		s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "denied",
+			mustJSON(map[string]any{"subject": run.CreatedBy, "reason": ref.reason, "unit_id": run.UnitID, "arm": ref.arm})))
+	}
 	switch {
 	case ref != nil:
 		return ownerCeiling{}, reviveRefused(ref.status, ref.reason, ref.msg)

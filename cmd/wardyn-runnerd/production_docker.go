@@ -491,6 +491,7 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 			return err
 		}
 		caps.Capacity, caps.BYOISelftest, caps.Retire, caps.Resident = capacity(ctx), dispatcher.Selftests(), true, dispatcher.Residents()
+		caps.ProxySettings = runnerwire.ProxySettings
 		caps.LinuxVM, caps.LocalAttach = extra.linuxVM, local != nil
 		if !extra.report.fill(ctx, &caps, reprobe) && !always {
 			return nil

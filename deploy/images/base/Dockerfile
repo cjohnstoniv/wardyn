@@ -219,7 +219,7 @@ ARG TARGETARCH
 # bumped deliberately, like every other version here.
 ARG NPM_VERSION=11.19.1
 RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi \
- && npm install -g "npm@${NPM_VERSION}" \
+ && for i in 1 2 3; do timeout -k 10 180 npm install -g "npm@${NPM_VERSION}" && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done \
  && npm --version
 
 # ── GitHub CLI (gh) ──────────────────────────────────────────────────────────
