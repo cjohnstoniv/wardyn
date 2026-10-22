@@ -100,18 +100,6 @@ func runInFromRequest(createRunRequest) (uuid.UUID, error) {
 	return uuid.Nil, nil
 }
 
-// decodeStampedRunRequest is preflight's decode: the body, its repositories canonicalized, then its
-// context choice stamped on the request it returns (false when it wrote a refusal).
-func (s *Server) decodeStampedRunRequest(w http.ResponseWriter, r *http.Request) (*http.Request, createRunRequest, bool) {
-	var req createRunRequest
-	if !s.decodeRunRequest(w, r, &req) {
-		return r, req, false
-	}
-	canonicalizeRunRepos(&req, s.adoHostsLoader(r.Context()))
-	r, ok := s.stampContextChoice(w, r, req)
-	return r, req, ok
-}
-
 // stampContextChoice sets the decoded request's choice on r's slot (the create path) and on the
 // request it returns (preflight and preview), or writes the refusal a resolve error would get and
 // returns false.

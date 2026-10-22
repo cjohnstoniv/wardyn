@@ -199,6 +199,8 @@ func (s *Server) advertisedConfinement(ctx context.Context, req createRunRequest
 // TestPreflightMirrorsLaunchGates now scans THROUGH decodeAndValidateCreateRun
 // rather than excepting the whole wrapper, so this inventory is executable gate
 // by gate instead of wrapper by wrapper.
+//
+//nolint:gocyclo // Deliberate: the gates run in create's own order, one branch each, and the parity guard reads them in this body; splitting the sequence would hide them from it. The context stamp is the 31st branch.
 func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// Marked before any gate runs, refuseAdminViewLaunch included: every audit row
 	// written under this request carries dry_run (audit.DryRunRecorder).
@@ -217,8 +219,12 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	r, req, ok := s.decodeStampedRunRequest(w, r)
-	if !ok {
+	var req createRunRequest
+	if !s.decodeRunRequest(w, r, &req) {
+		return
+	}
+	canonicalizeRunRepos(&req, s.adoHostsLoader(r.Context()))
+	if r, ok = s.stampContextChoice(w, r, req); !ok {
 		return
 	}
 	ctx := r.Context()
