@@ -226,9 +226,9 @@ func TestDesktopDoorObeysDenyInteractiveAndDenyUIApps(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			h, _ := newDesktopHarness(t)
-			p := types.GovernanceProfile{ID: uuid.New(), Name: "p", Limits: limits}
-			h.store.profiles = []types.GovernanceProfile{p}
-			h.run.GovernanceProfileID = &p.ID
+			p := types.GovernanceUnit{ID: uuid.New(), Name: "p", Limits: limits}
+			h.store.profiles = []types.GovernanceUnit{p}
+			h.run.UnitID = &p.ID
 			h.store.putRun(h.run)
 			rec := h.enterDesktop(h.ticket(h.run.ID, h.owner, oidc.RoleUser))
 			want := http.StatusForbidden

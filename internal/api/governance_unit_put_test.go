@@ -40,13 +40,13 @@ func TestGovernanceUnitPut_CreatesOnlyWithTheSwitchOff(t *testing.T) {
 
 // A PUT that creates a profile is logged once the write has stored it, not before: a write the store fails
 // created nothing, and an update to an existing id was never a create.
-func TestGovernanceProfilePut_CreateIsLoggedOnlyOnceStored(t *testing.T) {
+func TestGovernanceUnitPut_CreateIsLoggedOnlyOnceStored(t *testing.T) {
 	const logLine = "a PUT created a governance profile"
-	existing := types.GovernanceProfile{ID: uuid.New(), Name: "interns"}
+	existing := types.GovernanceUnit{ID: uuid.New(), Name: "interns"}
 	body := `{"name":"new","ceiling":{"min_confinement_class":"CC2"}}`
 	run := func(t *testing.T, id uuid.UUID, failStore bool) (int, string) {
 		t.Helper()
-		st := &govCrudStore{profiles: []types.GovernanceProfile{existing}}
+		st := &govCrudStore{profiles: []types.GovernanceUnit{existing}}
 		if failStore {
 			st.upsertProfileErr = errors.New("store: down")
 		}
@@ -55,7 +55,7 @@ func TestGovernanceProfilePut_CreateIsLoggedOnlyOnceStored(t *testing.T) {
 		prev := slog.Default()
 		slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
 		t.Cleanup(func() { slog.SetDefault(prev) })
-		w := do(t, srv, http.MethodPut, "/api/v1/governance/profiles/"+id.String(), adminToken, body)
+		w := do(t, srv, http.MethodPut, "/api/v1/governance/units/"+id.String(), adminToken, body)
 		return w.Code, logged.String()
 	}
 
